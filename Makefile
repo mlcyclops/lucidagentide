@@ -102,6 +102,10 @@ demo-P3.1: ## P3.1: verification engine; security scan is a fail-closed completi
 demo-P3.2: ## P3.2: ingest telemetry JSONL into DuckDB (idempotent) + sample security queries
 	$(BUN) run harness/scripts/demo06_telemetry_ingest.ts
 
+.PHONY: demo-P4.1
+demo-P4.1: ## P4.1: memory layers (working/archive/semantic) + state artifacts
+	$(BUN) run harness/scripts/demo07_memory.ts
+
 # ---------------------------------------------------------------------------
 # Hygiene
 # ---------------------------------------------------------------------------

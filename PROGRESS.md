@@ -178,3 +178,25 @@ Three lines per session: **shipped / stubbed / next** (CLAUDE.md session ritual)
 - **next:** Phase 4 / P4.1 — memory layers (working/episodic/semantic/archive) +
   state artifacts (NOW/PROGRESS/DECISIONS/FAILURES) with security metadata on
   every promoted artifact.
+
+-----
+
+## 2026-06-18 — P4.1: memory layers + state artifacts
+
+- **shipped:** migration `0003_memory_tables.sql` — working_state (one snapshot
+  per run), archive_chunks (raw source-of-truth + sha + artifact provenance),
+  semantic_entities/facts/links. Every semantic fact carries **provenance**
+  (source_artifact_id + source_archive_chunk_id) and a **trust_label** — the
+  metadata the P4.3 gate will enforce. `memory.ts` — `upsertWorkingState`,
+  `archiveChunk`, `promoteFact` (upserts entity, records provenance+trust),
+  `getFacts`. `state.ts` — `StateArtifacts` managing NOW.md (overwritten
+  snapshot) + PROGRESS/DECISIONS/FAILURES (append-only), injectable clock.
+  `demo-P4.1` exercises all three layers + provenance + the state files. All
+  green: 69 harness tests (+9), 54 sidecar, demos 00..P3.2 + P4.1, tsc 0.
+- **stubbed:** PRD episodic tables (episode_events/tool_events/retrieval_events/
+  verification_events) served by telemetry_events for now; promoteFact does NOT
+  yet block suspicious sources — that GATE is P4.3 (keystone #2). semantic_links
+  table created but unused until an entity-graph consumer needs it.
+- **next:** P4.2 — security-aware compaction: summaries generated from sanitized
+  derivatives; raw spans kept in archive; provenance links to source spans +
+  scan findings preserved.
