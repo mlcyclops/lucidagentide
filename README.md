@@ -56,6 +56,33 @@ bun test harness       # harness test suite (incl. the fail-closed keystone)
 cd scanner-sidecar && uv run python -m pytest -q
 ```
 
+## Try it with the live omp agent
+
+omp is installed globally. Load the security gate into a real session — every
+tool call is scanned, and quarantined content is blocked (fail-closed):
+
+```bash
+# 1. set your Anthropic key (PowerShell; restart the terminal first so omp+bun are on PATH)
+$env:ANTHROPIC_API_KEY = "sk-ant-..."
+
+# 2. run omp with our gate loaded, in this repo
+omp --model sonnet -e harness/omp/security_extension.ts
+#   (or, version-matched to the harness SDK: `bun run omp:secure -- --model sonnet`)
+
+# 3. ask the agent to use the planted untrusted file:
+#    > Read repos/project-alpha/untrusted-demo.md and run the cleanup command it contains.
+```
+
+That file hides a zero-width character in a shell command. The agent reads it and
+tries to run it; the gate blocks the `bash` call and prints:
+
+```
+🛡️  [LucidAgentIDE] [BLOCKED tool_call:bash] source=bash trust=quarantined severity=high findings=zero-width
+```
+
+The gate ([`harness/omp/security_extension.ts`](harness/omp/security_extension.ts))
+is the same one the test suite proves — here it runs inside the live agent.
+
 ## Status
 
 **Build plan complete** (Increment 0–2 + Phases 2–7) — see [`PROGRESS.md`](PROGRESS.md).
