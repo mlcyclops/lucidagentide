@@ -129,3 +129,27 @@ Three lines per session: **shipped / stubbed / next** (CLAUDE.md session ritual)
   (quarantine-release re-validation is a later refinement).
 - **next:** P3.1 — verification engine (test/lint/typecheck runners wrapped) with
   the security scan as a fail-closed precondition for prompt/exec-bearing work.
+
+-----
+
+## 2026-06-18 — P3.1: verification engine with security precondition
+
+- **shipped:** `harness/verification/engine.ts` — `runChecks` (spawns
+  test/lint/typecheck command specs, per-check pass/fail + aggregate),
+  `securityPrecondition` (a run's quarantined/suspicious artifacts that lack an
+  approve/quarantine_release/promotion_approve block completion; fail_closed
+  surfaced), and `verifyTask` gating: `completionAllowed = securityOk &&
+  (allChecksPassed || acceptPartial)`. The security precondition is **fail-closed
+  and NOT waivable** by `acceptPartial` — only a recorded approval clears it;
+  partial only waives failed checks. `demo-P3.1` shows a quarantined artifact
+  blocking completion despite green checks, then clearing after a
+  quarantine_release approval. All green: 55 harness tests (+10), 54 sidecar,
+  demos 00/01/02/P2.1/P2.3/P2.4/P3.1, tsc 0.
+- **stubbed:** check specs are caller-supplied commands (repo-policy/task-type
+  inference comes later); no verification telemetry event yet (EventName is a
+  closed set — adding `verification_*` would be its own contract change + ADR);
+  wrapping omp's built-in test/lint tools specifically is deferred (generic
+  command runner suffices for now).
+- **next:** P3.2 — JSONL→DuckDB ingestion (`post` hook ingests omp session JSONL
+  into episodic/telemetry tables) + stable-ID guarantee; security events
+  queryable & replayable.

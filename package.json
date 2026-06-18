@@ -18,7 +18,8 @@
     "demo-02": "bun run harness/scripts/demo02_prefix_hash.ts",
     "demo-P2.1": "python scanner-sidecar/demo_p2_1.py",
     "demo-P2.3": "bun run harness/scripts/demo03_ingest.ts",
-    "demo-P2.4": "bun run harness/scripts/demo04_quarantine_hook.ts"
+    "demo-P2.4": "bun run harness/scripts/demo04_quarantine_hook.ts",
+    "demo-P3.1": "bun run harness/scripts/demo05_verification.ts"
   },
   "dependencies": {
     "@duckdb/node-api": "1.5.4-r.1",

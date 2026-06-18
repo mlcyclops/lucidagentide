@@ -94,6 +94,10 @@ demo-P2.3: ## P2.3: ingest a poisoned artifact -> artifact/scan/findings/sanitiz
 demo-P2.4: ## P2.4: poisoned tool call blocked by the omp pre-hook + approval workflow
 	$(BUN) run harness/scripts/demo04_quarantine_hook.ts
 
+.PHONY: demo-P3.1
+demo-P3.1: ## P3.1: verification engine; security scan is a fail-closed completion precondition
+	$(BUN) run harness/scripts/demo05_verification.ts
+
 # ---------------------------------------------------------------------------
 # Hygiene
 # ---------------------------------------------------------------------------
