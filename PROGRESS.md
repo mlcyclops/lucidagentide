@@ -297,3 +297,29 @@ Three lines per session: **shipped / stubbed / next** (CLAUDE.md session ritual)
 - **next:** Phase 6 / P6.1 — remote runner gate: payload scanned BEFORE a run is
   created; suspicious → blocked or routed to security-review; findings + approval
   lineage on the run record.
+
+-----
+
+## 2026-06-18 — P6.1: remote runner gate (pre-dispatch scan)
+
+- **shipped:** `runs/remote_gate.ts` — `dispatchRemoteRun` creates the run RECORD
+  (not execution), runs the **pre-dispatch scan** by ingesting+scanning the
+  comment/API payload under that run, then disposes: clean → `dispatched`
+  (remote-runner); suspicious/quarantined → `blocked` (status=blocked,
+  profile=quarantine) and, by default, **routed to a read-only security-review
+  subagent**; fail-closed (unscannable payload → quarantined → blocked). Emits
+  `remote_run_blocked`. Findings + approval lineage live on the run record
+  (run_id-scoped). `lineage.ts` gained `setRunDisposition` + `blocked`/`dispatched`
+  statuses. `demo-P6.1` shows clean-dispatch, poison→review, the P3.1 precondition
+  blocking the build until a `quarantine_release` approval clears it, and hard
+  no-route block. All green: 110 harness tests (+5), 54 sidecar, demos 00..P5.2 +
+  P6.1, tsc 0. **PRD remote-runner reqs met:** payload scanned before dispatch;
+  suspicious blocked/routed; run record stores findings + approval lineage; no
+  privileged execution until reviewed.
+- **stubbed:** the actual GitHub/Actions trigger wiring is omp's; this gate is the
+  pre-dispatch policy that omp's comment/CI entrypoint would call. Re-dispatch of
+  an approved run is modeled via the cleared securityPrecondition (no separate
+  re-dispatch API yet).
+- **next:** P6.2 — safe export + incident bundles: escaped MD report, sanitized-
+  only CSV, JSON evidence bundle (raw flagged + separate), export metadata +
+  payload hash; raw dangerous content never rendered by default.

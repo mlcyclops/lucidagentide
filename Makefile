@@ -122,6 +122,10 @@ demo-P5.1: ## P5.1: parent/child run lineage + subagent dispatch with per-run sc
 demo-P5.2: ## P5.2: sandbox profiles auto-downgrade + read-only security-review subagent
 	$(BUN) run harness/scripts/demo11_sandbox.ts
 
+.PHONY: demo-P6.1
+demo-P6.1: ## P6.1: remote-runner gate scans payload before dispatch; routes suspicious to review
+	$(BUN) run harness/scripts/demo12_remote_gate.ts
+
 # ---------------------------------------------------------------------------
 # Hygiene
 # ---------------------------------------------------------------------------

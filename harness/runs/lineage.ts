@@ -11,7 +11,7 @@ import type { Db } from "./../memory/db.ts";
 import type { Telemetry } from "../telemetry/events.ts";
 
 export type RunKind = "root" | "subagent" | "security-review";
-export type RunStatus = "running" | "completed" | "failed";
+export type RunStatus = "running" | "completed" | "failed" | "blocked" | "dispatched";
 
 export interface StartRunInput {
   runId?: string;
@@ -45,6 +45,17 @@ export async function startRun(db: Db, input: StartRunInput, tel?: Telemetry): P
 export async function endRun(db: Db, runId: string, status: RunStatus, tel?: Telemetry): Promise<void> {
   await db.run("UPDATE runs SET status=$2, ended_at=$3 WHERE run_id=$1", [runId, status, new Date().toISOString()]);
   tel?.emit("run_finished", { status });
+}
+
+/** Update a run's status and/or sandbox profile in place (e.g. after a gate
+ *  decision). Does not set ended_at. */
+export async function setRunDisposition(
+  db: Db,
+  runId: string,
+  d: { status?: RunStatus; sandboxProfile?: ExecutionProfile },
+): Promise<void> {
+  if (d.status !== undefined) await db.run("UPDATE runs SET status=$2 WHERE run_id=$1", [runId, d.status]);
+  if (d.sandboxProfile !== undefined) await db.run("UPDATE runs SET sandbox_profile=$2 WHERE run_id=$1", [runId, d.sandboxProfile]);
 }
 
 export interface SpawnSubagentOptions {
