@@ -25,18 +25,27 @@ with real findings as you use it (demo data until the first block).
 | `/lucid:help` | quickstart for the security harness + commands |
 | `/lucid:scan <text>` | scan text for hidden-Unicode prompt injection; the agent reads the findings |
 | `/lucid:dashboard` | show the security dashboard in the TUI |
-| `!bun run dashboard:tui` | instant dashboard, no agent turn |
+| `/lucid:memory` | show the **memory & context** dashboard (context window, KV-cache, compaction, semantic memory) |
+| `!bun run dashboard:tui` | instant security dashboard, no agent turn |
+| `!bun run memory:tui` | instant memory & context dashboard, no agent turn |
 | `!bun run demo-P2.4` | live demo: a poisoned tool call is blocked |
 | `!bun test harness` | run the test suite |
-| `Ctrl+P` | cycle models · `/usage` token usage · `?` shortcuts |
+| `Ctrl+P` | **switch model live** (cycles `--models`) · `/usage` token usage · `?` shortcuts |
 
 The gate is always on (`-e harness/omp/security_extension.ts`): every tool call
 is scanned, and quarantined content is blocked fail-closed.
 
 ## Switching model / provider
 
-In the control-panel window: **2** switch model, **3** switch provider, **1**
-relaunch omp. Or relaunch omp directly:
+omp's model is fixed when the process starts (`--model`). Two ways to change it:
+
+- **Live, inside omp:** press **Ctrl+P** to cycle the models passed via `--models`
+  (the launcher seeds `claude-opus-4-8,claude-sonnet-4-6,claude-haiku-4-5`).
+- **From the control panel:** **2** switch model / **3** switch provider — it then
+  offers to **relaunch omp** so the new `--model` actually takes effect (a running
+  session keeps its old model until relaunched). **1** relaunches any time.
+
+Or relaunch omp directly:
 
 ```powershell
 omp --model claude-opus-4-8   -e harness/omp/security_extension.ts   # most capable

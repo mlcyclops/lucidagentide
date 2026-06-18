@@ -11,7 +11,7 @@
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Db, type Row } from "../harness/memory/db.ts";
+import { Db } from "../harness/memory/db.ts";
 import {
   approvalQueue,
   exportAudit,
@@ -21,17 +21,7 @@ import {
   unicodeAnalysis,
   activeRuns,
 } from "../harness/dashboards/views.ts";
-
-const C = {
-  reset: "\x1b[0m",
-  dim: "\x1b[2m",
-  bold: "\x1b[1m",
-  cyan: "\x1b[36m",
-  magenta: "\x1b[35m",
-  green: "\x1b[32m",
-  yellow: "\x1b[33m",
-  red: "\x1b[31m",
-};
+import { C, table } from "./_tui.ts";
 
 const BANNER = `${C.magenta}${C.bold}
    ┌─────────────────────────────────────────────────────────────┐
@@ -41,33 +31,6 @@ const BANNER = `${C.magenta}${C.bold}
    │   ███████╗╚██████╔╝╚██████╗██║██████╔╝   └───┘                │
    │   ╚══════╝ ╚═════╝  ╚═════╝╚═╝╚═════╝    scan · gate · audit  │
    └─────────────────────────────────────────────────────────────┘${C.reset}`;
-
-function cell(v: unknown): string {
-  if (v == null) return "";
-  return typeof v === "object" ? JSON.stringify(v) : String(v);
-}
-
-/** Render a box-drawn table. */
-function table(title: string, headers: string[], rows: Row[], color = C.cyan): string {
-  const cols = headers;
-  const data = rows.map((r) => cols.map((c) => cell(r[c])));
-  const w = cols.map((h, i) => Math.max(h.length, ...data.map((d) => d[i]!.length), 1));
-  const sep = (l: string, m: string, r: string) => l + w.map((x) => "─".repeat(x + 2)).join(m) + r;
-  const fmt = (vals: string[]) => "│" + vals.map((v, i) => " " + v.padEnd(w[i]!) + " ").join("│") + "│";
-
-  const lines: string[] = [];
-  lines.push(`${color}${C.bold}▸ ${title}${C.reset}`);
-  if (rows.length === 0) {
-    lines.push(`${C.dim}  (no rows)${C.reset}`);
-    return lines.join("\n");
-  }
-  lines.push(color + sep("┌", "┬", "┐") + C.reset);
-  lines.push(color + fmt(cols).replace(/[^│]+/g, (s) => C.bold + s + C.reset + color) + C.reset);
-  lines.push(color + sep("├", "┼", "┤") + C.reset);
-  for (const d of data) lines.push(color + "│" + C.reset + d.map((v, i) => " " + v.padEnd(w[i]!) + " ").join(C.dim + "│" + C.reset) + C.dim + "│" + C.reset);
-  lines.push(color + sep("└", "┴", "┘") + C.reset);
-  return lines.join("\n");
-}
 
 async function buildDemoDb(): Promise<{ db: Db; cleanup: () => void; demo: true }> {
   const { ingestArtifact } = await import("../harness/memory/ingest.ts");

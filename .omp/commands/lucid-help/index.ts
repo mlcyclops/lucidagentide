@@ -8,8 +8,8 @@ export default function lucidHelp() {
       return [
         "Give me a short, practical quickstart for the LucidAgentIDE security harness active in this session. Cover, concisely:",
         "- It loads via `-e harness/omp/security_extension.ts` and scans EVERY tool call (bash, write, etc.) for prompt-injection — hidden zero-width characters, Unicode tag-block smuggling, bidi tricks, and Cyrillic/Greek homoglyphs — and BLOCKS quarantined content fail-closed (if the scanner is unavailable, it still blocks).",
-        "- Slash commands: `/lucid:help`, `/lucid:scan <text>` (scan text for injection), `/lucid:dashboard` (show the security dashboard).",
-        "- Instant shortcuts (type these with a leading `!`): `!bun run dashboard:tui` shows the security dashboard; `!bun run demo-P2.4` demonstrates a live injection block; `!bun test harness` runs the test suite.",
+        "- Slash commands: `/lucid:help`, `/lucid:scan <text>` (scan text for injection), `/lucid:dashboard` (security dashboard), `/lucid:memory` (memory & context dashboard: context-window fill, KV-cache hit-rate, compaction policy, semantic memory).",
+        "- Instant shortcuts (type these with a leading `!`): `!bun run dashboard:tui` shows the security dashboard; `!bun run memory:tui` shows the memory & context dashboard; `!bun run demo-P2.4` demonstrates a live injection block; `!bun test harness` runs the test suite.",
         "- The guarantee: untrusted content can't reach a tool call, durable semantic memory, or a remote dispatch without passing the scan or being human-reviewed.",
         "Keep it to a tight quickstart — what I can type and what it does. No lecture.",
       ].join("\n");

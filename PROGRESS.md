@@ -395,3 +395,14 @@ Three lines per session: **shipped / stubbed / next** (CLAUDE.md session ritual)
 - **next:** BUILD PLAN complete (Increment 0–2, Phases 2–7). Optional follow-ups:
   real-model providers, live Observable build in CI, richer confusables set,
   compaction-quality/verification-failure dashboard pages.
+
+## DX: memory dashboard + launcher model handoff (post-build)
+- **shipped:** `/lucid:memory` + `bun run memory:tui` — a MEMORY & CONTEXT dashboard
+  reading omp's own session jsonl (context-window gauge, KV-cache hit-rate proving
+  invariant #6, token-growth sparkline, cost), `omp config` compaction policy,
+  `agent.db` rate-limit budget, and the Lucid memory layers + promotion gate;
+  shared `tools/_tui.ts` (gauges/sparklines/tables) now backs both dashboards.
+- **shipped:** launcher passes `--models` (Ctrl+P live switch) and offers to
+  relaunch omp after a model/provider switch, so panel choices actually reach omp.
+- **next:** optional — persist last model across launches; per-turn compaction-event
+  markers in the memory view once omp emits them to the session log.

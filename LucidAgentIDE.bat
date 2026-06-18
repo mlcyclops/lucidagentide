@@ -26,6 +26,8 @@ rem --- defaults ---
 set "PROVIDER=Anthropic"
 set "MODEL=claude-opus-4-8"
 set "KEYVAR=ANTHROPIC_API_KEY"
+rem  Models offered to omp's live Ctrl+P switcher (--models). Kept in sync with MODEL.
+set "MODELS=claude-opus-4-8,claude-sonnet-4-6,claude-haiku-4-5"
 
 rem --- arg dispatch (non-interactive helpers) ---
 if /i "%~1"=="doctor"    ( call :doctor & exit /b 0 )
@@ -111,7 +113,7 @@ echo  ---------------------------------------------------------------------
 echo     1^)  Launch / relaunch omp  ^(with the security gate^)
 echo     2^)  Switch model
 echo     3^)  Switch provider
-echo     4^)  Security dashboard  ^(in this window^)
+echo     4^)  Dashboards  ^(security  /  memory ^& context^)
 echo     5^)  Status check  ^(is omp running?^)
 echo     6^)  Live injection demo  ^(blocks a poisoned tool call^)
 echo     7^)  Re-run dependency doctor
@@ -123,7 +125,7 @@ set /p "CH=    select: "
 if "%CH%"=="1" goto :launch
 if "%CH%"=="2" goto :pickmodel
 if "%CH%"=="3" goto :pickprovider
-if "%CH%"=="4" ( call :dashboard & goto :menu )
+if "%CH%"=="4" ( call :dashboardmenu & goto :menu )
 if "%CH%"=="5" ( call :statuscheck & goto :menu )
 if "%CH%"=="6" ( call :demo & goto :menu )
 if "%CH%"=="7" ( call :doctor & goto :menu )
@@ -137,8 +139,8 @@ rem ===========================================================================
 :launch
 echo.
 echo    Launching omp with model "%MODEL%" + the security gate in a new window...
-start "LucidAgentIDE %MODEL%" cmd /k "chcp 65001>nul & cd /d "%REPO%" & set "ANTHROPIC_API_KEY=%ANTHROPIC_API_KEY%" & omp --model %MODEL% -e harness/omp/security_extension.ts"
-echo    Done. Try in omp:  /lucid:help   |   !bun run dashboard:tui
+start "LucidAgentIDE %MODEL%" cmd /k "chcp 65001>nul & cd /d "%REPO%" & set "ANTHROPIC_API_KEY=%ANTHROPIC_API_KEY%" & omp --model %MODEL% --models %MODELS% -e harness/omp/security_extension.ts"
+echo    Done.  In omp:  /lucid:help  .  /lucid:memory  .  Ctrl+P switches model live
 echo.
 timeout /t 2 >nul
 goto :menu
@@ -157,9 +159,10 @@ if "%M%"=="1" set "MODEL=claude-opus-4-8"
 if "%M%"=="2" set "MODEL=claude-sonnet-4-6"
 if "%M%"=="3" set "MODEL=claude-haiku-4-5"
 if "%M%"=="4" ( set /p "MODEL=    enter model id: " )
+rem  put the chosen model at the head of the Ctrl+P cycle list
+set "MODELS=%MODEL%,claude-opus-4-8,claude-sonnet-4-6,claude-haiku-4-5"
 echo    model is now: %MODEL%
-echo.
-goto :menu
+goto :applychange
 
 rem ===========================================================================
 :pickprovider
@@ -174,16 +177,50 @@ if "%P%"=="1" ( set "PROVIDER=Anthropic"  & set "MODEL=claude-opus-4-8" )
 if "%P%"=="2" ( set "PROVIDER=OpenAI"     & set "MODEL=gpt-5.2" )
 if "%P%"=="3" ( set "PROVIDER=OpenRouter" & set "MODEL=anthropic/claude-opus-4-8" )
 if "%P%"=="4" ( set /p "PROVIDER=    provider name: " )
+set "MODELS=%MODEL%,claude-opus-4-8,claude-sonnet-4-6,claude-haiku-4-5"
 echo    provider: %PROVIDER%   default model: %MODEL%
-echo    (omp resolves the provider from the model id + the matching API key env var)
+echo    (omp resolves the provider from the model id + its OAuth login or API key)
+goto :applychange
+
+rem ===========================================================================
+rem  A model/provider choice only reaches omp at LAUNCH (--model) or live via
+rem  Ctrl+P inside omp. The control panel can't reach into a running process, so
+rem  we offer to relaunch with the new selection.
+:applychange
+echo.
+call :ompstatus
+if "%OMP%"=="running" (
+  echo    A running omp session keeps its CURRENT model until you relaunch it.
+  echo    Tip: inside omp, Ctrl+P switches between: %MODELS%
+)
+set /p "RL=    Relaunch omp now with %MODEL%? (Y/N): "
+if /i "%RL%"=="Y" goto :launch
 echo.
 goto :menu
 
 rem ===========================================================================
+:dashboardmenu
+echo.
+echo       1^)  Security dashboard       findings / quarantine / approvals / exports
+echo       2^)  Memory ^& context         context window / KV-cache / compaction / semantic memory
+echo.
+set /p "D=    select: "
+if "%D%"=="1" ( call :dashboard & goto :eof )
+if "%D%"=="2" ( call :memdash & goto :eof )
+echo    ^(unrecognized^)
+goto :eof
+
 :dashboard
 echo.
 where bun >nul 2>&1 || ( echo    bun not found - cannot render dashboard. & goto :eof )
 bun run "%REPO%\tools\dashboard_tui.ts"
+echo.
+goto :eof
+
+:memdash
+echo.
+where bun >nul 2>&1 || ( echo    bun not found - cannot render dashboard. & goto :eof )
+bun run "%REPO%\tools\memory_tui.ts"
 echo.
 goto :eof
 
@@ -216,14 +253,15 @@ echo    ============================  CHEATSHEET  ===========================
 echo    Inside omp (the agent window):
 echo       /lucid:help          quickstart for the security harness + commands
 echo       /lucid:scan TEXT     scan text for hidden-unicode prompt injection
-echo       /lucid:dashboard     show the security dashboard in the TUI
-echo       !bun run dashboard:tui   instant dashboard (no agent turn)
-echo       !bun run demo-P2.4       live injection-block demo
-echo       Ctrl+P               cycle models     /usage   token usage
+echo       /lucid:dashboard     security dashboard (findings / quarantine / exports)
+echo       /lucid:memory        memory ^& context dashboard (context / cache / semantic)
+echo       !bun run dashboard:tui   instant security dashboard (no agent turn)
+echo       !bun run memory:tui      instant memory ^& context dashboard
+echo       Ctrl+P               switch model live      /usage   token usage
 echo.
 echo    In THIS control panel:
 echo       1 launch omp   2 switch model   3 switch provider
-echo       4 dashboard    5 status         6 demo   7 doctor
+echo       4 dashboards   5 status         6 demo   7 doctor
 echo.
 echo    Models (current):  claude-opus-4-8 . claude-sonnet-4-6 . claude-haiku-4-5
 echo    Keys (env var):    ANTHROPIC_API_KEY . OPENAI_API_KEY . OPENROUTER_API_KEY

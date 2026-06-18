@@ -62,8 +62,10 @@ cd scanner-sidecar && uv run python -m pytest -q
 dependencies + PATH + provider keys, lets you pick a model, launches omp with the
 security gate in its own window, and stays open as a control panel (switch
 model/provider, view dashboards, check status). See [`CHEATSHEET.md`](CHEATSHEET.md).
-Inside omp: `/lucid:help`, `/lucid:scan <text>`, `/lucid:dashboard`, or
-`!bun run dashboard:tui` for an instant in-terminal security dashboard.
+Inside omp: `/lucid:help`, `/lucid:scan <text>`, `/lucid:dashboard` (security), and
+`/lucid:memory` (memory & context: context-window fill, KV-cache hit-rate,
+compaction policy, semantic memory) — or `!bun run dashboard:tui` /
+`!bun run memory:tui` for instant in-terminal dashboards.
 
 Or do it by hand — omp is installed globally; load the security gate into a real
 session (every tool call is scanned, quarantined content blocked fail-closed):
