@@ -26,7 +26,8 @@
     "demo-P4.3": "bun run harness/scripts/demo09_promotion_gate.ts",
     "demo-P5.1": "bun run harness/scripts/demo10_lineage.ts",
     "demo-P5.2": "bun run harness/scripts/demo11_sandbox.ts",
-    "demo-P6.1": "bun run harness/scripts/demo12_remote_gate.ts"
+    "demo-P6.1": "bun run harness/scripts/demo12_remote_gate.ts",
+    "demo-P6.2": "bun run harness/scripts/demo13_safe_export.ts"
   },
   "dependencies": {
     "@duckdb/node-api": "1.5.4-r.1",

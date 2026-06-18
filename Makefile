@@ -126,6 +126,10 @@ demo-P5.2: ## P5.2: sandbox profiles auto-downgrade + read-only security-review 
 demo-P6.1: ## P6.1: remote-runner gate scans payload before dispatch; routes suspicious to review
 	$(BUN) run harness/scripts/demo12_remote_gate.ts
 
+.PHONY: demo-P6.2
+demo-P6.2: ## P6.2: safe export (MD/CSV/JSON); raw never rendered by default; export audited
+	$(BUN) run harness/scripts/demo13_safe_export.ts
+
 # ---------------------------------------------------------------------------
 # Hygiene
 # ---------------------------------------------------------------------------

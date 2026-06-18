@@ -323,3 +323,27 @@ Three lines per session: **shipped / stubbed / next** (CLAUDE.md session ritual)
 - **next:** P6.2 — safe export + incident bundles: escaped MD report, sanitized-
   only CSV, JSON evidence bundle (raw flagged + separate), export metadata +
   payload hash; raw dangerous content never rendered by default.
+
+-----
+
+## 2026-06-18 — P6.2: safe export + incident bundles (Phase 6 COMPLETE)
+
+- **shipped:** `export/safe_export.ts` — `exportMarkdownReport` (escaped MD,
+  finding metadata + sanitized excerpt, raw referenced by sha only),
+  `exportCsv` (sanitized-only finding rows), `exportJsonBundle` (raw OMITTED by
+  default; when `includeRaw`, isolated under `raw_evidence` + flagged
+  DANGEROUS_RAW_DO_NOT_RENDER). Defense in depth: `escapeMarkdown`/`csvField`
+  neutralize ANY zero-width/tag/bidi/control codepoint to `\u{..}` notation, so
+  an export can't emit an invisible even from unsanitized input. Every export
+  writes an `export_events` audit row (type, sanitization_status, included_raw,
+  reviewer, payload sha256) and emits safe_export_created / incident_bundle_
+  created. `demo-P6.2` proves MD/CSV/default-JSON are invisible-free + raw-free
+  while the raw bundle isolates+flags. All green: 117 harness tests (+7), 54
+  sidecar, demos 00..P6.1 + P6.2, tsc 0. **PRD safe-export reqs met:** raw never
+  rendered by default; sanitized/escaped derivatives only; export audit complete.
+- **stubbed:** the dashboard-feed table is the CSV/finding-metadata shape here;
+  rendering it as a live Observable page is Phase 7. Exports return content +
+  audit row; writing files to disk is the caller's choice (custom-tool wrapper
+  later).
+- **next:** Phase 7 / P7.1 — Observable dashboards from DuckDB exports
+  (operational + the six security dashboard views).
