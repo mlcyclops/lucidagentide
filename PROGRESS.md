@@ -82,3 +82,26 @@ Three lines per session: **shipped / stubbed / next** (CLAUDE.md session ritual)
   homoglyph check is context-free (PRD's "sensitive fields" scoping comes later).
 - **next:** P2.2+P2.3 — DuckDB bootstrap + security DDL, NFKC sanitation +
   sanitized-derivative + trust labeling; write artifact/scan/finding rows.
+
+-----
+
+## 2026-06-18 — P2.2 + P2.3: DuckDB bootstrap + sanitation + trust labeling
+
+- **shipped:** `@duckdb/node-api` brought in (ADR-0005). `harness/memory/db.ts`
+  — DuckDB wrapper + numbered-migration runner (`schema_migrations`-tracked,
+  frozen-on-first-write, idempotent reopen). `migrations/0001_security_tables.sql`
+  — the 7 PRD security tables (FKs within the security family; `run_id` a soft
+  ref, deferred to P3.2). `sanitize.ts` — NFKC + strip zero-width/tag/bidi
+  (homoglyph/PUA flagged-not-stripped). `ingest.ts` — scan → trust-label →
+  sanitize → persist artifact/scan/findings/sanitized rows, **fail-closed**
+  (dead scanner ⇒ artifact recorded quarantined), external-clean ⇒ `untrusted`
+  (never auto-trusted), emits the P2 telemetry events. `demo-P2.3` ingests a
+  multi-vector poisoned artifact and shows the rows. All green: 36 harness tests
+  (+14), 54 sidecar, demos 00/01/02/P2.1/P2.3, tsc 0.
+- **stubbed:** identity tables (`projects/sessions/runs`) deferred to P3.2 (hence
+  soft `run_id`); approval/export/alert tables created but not yet written by a
+  workflow (P2.4 approvals, P6 export); no JSONL→DuckDB telemetry ingestion yet
+  (P3.2 reads the events.jsonl into tables).
+- **next:** P2.4 — quarantine gate as an omp `pre`-hook on `tool_call` +
+  approval workflow (notification payload, `approval_events` rows); prove
+  blocked content cannot reach a tool call end-to-end through omp.

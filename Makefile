@@ -86,6 +86,10 @@ demo-02: ## Cache-optimized prompt assembly: prefix bytes identical across tasks
 demo-P2.1: ## P2.1: scan adversarial fixtures; each finding fires, clean corpus is FP-free
 	$(PY) $(SIDECAR_DIR)/demo_p2_1.py
 
+.PHONY: demo-P2.3
+demo-P2.3: ## P2.3: ingest a poisoned artifact -> artifact/scan/findings/sanitized rows
+	$(BUN) run harness/scripts/demo03_ingest.ts
+
 # ---------------------------------------------------------------------------
 # Hygiene
 # ---------------------------------------------------------------------------

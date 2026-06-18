@@ -306,3 +306,44 @@ in task, cwd, git branch, and retrieved content.
 - Provider-specific cache markers (e.g. Anthropic `cache_control`) are handled by
   omp/provider plumbing; our contribution is the byte-stable ordering, which is
   what every provider's longest-stable-prefix detection keys on.
+-----
+
+## ADR-0005 — DuckDB schema: numbered migrations, frozen on first write; soft run_id
+
+**Date:** 2026-06-18
+**Status:** Accepted
+**Context increment:** P2.2 / P2.3
+
+### Decision
+
+The DuckDB schema (invariant #10) is managed by numbered SQL migrations under
+`harness/memory/migrations/NNNN_name.sql`, applied in order and tracked in a
+`schema_migrations(version, name, applied_at)` table that `db.ts` bootstraps.
+Migration `0001_security_tables.sql` creates the seven PRD security tables. An
+applied migration file is FROZEN — never edited in place; schema changes are new
+numbered files only.
+
+### Load-bearing choices
+
+- **`run_id` is a soft reference, not a FK.** The identity tables
+  (`projects`/`sessions`/`runs`) land later (P3.2). The PRD DDL FK'd
+  `content_artifacts.run_id -> runs(run_id)`, but creating `runs` now would
+  prematurely commit the identity schema, and DuckDB cannot cleanly add a FK to
+  an existing table afterward. So `run_id` is a plain `VARCHAR` column;
+  referential integrity is enforced only WITHIN the security family
+  (scans→artifacts, findings→scans, sanitized→artifacts), where P2.3 ingestion
+  needs it. Event run_ids being soft references is normal telemetry practice.
+- **Raw original is stored verbatim** (`content_artifacts.raw_content` +
+  `raw_sha256`) for forensics; the sanitized derivative lives in
+  `sanitized_artifacts`. Raw and safe copies never share a column.
+- **Statement splitting:** migrations are split on `;` (our DDL has no semicolons
+  inside literals/comments). If a future migration needs them, switch to a real
+  parser in that migration's era, documented then.
+
+### Binding
+
+`@duckdb/node-api@1.5.4-r.1` (the `-r.N` suffix is DuckDB's normal release
+convention, not a prerelease signal). API used: `DuckDBInstance.create(path)` →
+`connect()` → `run(sql, params)` (positional `$1` array or named `$id` object) →
+`runAndReadAll(sql).getRowObjects()`; `closeSync()` on conn + instance. This is
+the localized DuckDB-Node risk ADR-0001 flagged; no blocker hit so far.
