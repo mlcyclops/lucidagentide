@@ -78,6 +78,10 @@ export interface RunNode {
   status: string;
   /** Quarantined/suspicious artifacts ingested under this run (scan lineage). */
   suspiciousArtifacts: number;
+  /** Security findings under this run (injection lineage for replay). */
+  findingCount: number;
+  /** Approval decisions under this run (approval lineage for replay). */
+  approvalCount: number;
   children: RunNode[];
 }
 
@@ -93,7 +97,14 @@ export async function getRunTree(db: Db, rootRunId: string): Promise<RunNode | u
      )
      SELECT t.*,
             (SELECT count(*)::INT FROM content_artifacts a
-               WHERE a.run_id = t.run_id AND a.trust_label IN ('quarantined','suspicious')) AS suspicious_artifacts
+               WHERE a.run_id = t.run_id AND a.trust_label IN ('quarantined','suspicious')) AS suspicious_artifacts,
+            (SELECT count(*)::INT FROM content_artifacts a
+               JOIN content_scans sc ON sc.artifact_id = a.artifact_id
+               JOIN security_findings f ON f.scan_id = sc.scan_id
+               WHERE a.run_id = t.run_id) AS finding_count,
+            (SELECT count(*)::INT FROM content_artifacts a
+               JOIN approval_events e ON e.artifact_id = a.artifact_id
+               WHERE a.run_id = t.run_id) AS approval_count
      FROM tree t`,
     [rootRunId],
   );
@@ -109,6 +120,8 @@ export async function getRunTree(db: Db, rootRunId: string): Promise<RunNode | u
       sandboxProfile: r.sandbox_profile == null ? null : String(r.sandbox_profile),
       status: String(r.status),
       suspiciousArtifacts: Number(r.suspicious_artifacts ?? 0),
+      findingCount: Number(r.finding_count ?? 0),
+      approvalCount: Number(r.approval_count ?? 0),
       children: [],
     });
   }

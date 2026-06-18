@@ -118,6 +118,10 @@ demo-P4.3: ## P4.3: semantic-promotion gate blocks suspicious-source promotions 
 demo-P5.1: ## P5.1: parent/child run lineage + subagent dispatch with per-run scan lineage
 	$(BUN) run harness/scripts/demo10_lineage.ts
 
+.PHONY: demo-P5.2
+demo-P5.2: ## P5.2: sandbox profiles auto-downgrade + read-only security-review subagent
+	$(BUN) run harness/scripts/demo11_sandbox.ts
+
 # ---------------------------------------------------------------------------
 # Hygiene
 # ---------------------------------------------------------------------------

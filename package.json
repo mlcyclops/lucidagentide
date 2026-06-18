@@ -24,7 +24,8 @@
     "demo-P4.1": "bun run harness/scripts/demo07_memory.ts",
     "demo-P4.2": "bun run harness/scripts/demo08_compaction.ts",
     "demo-P4.3": "bun run harness/scripts/demo09_promotion_gate.ts",
-    "demo-P5.1": "bun run harness/scripts/demo10_lineage.ts"
+    "demo-P5.1": "bun run harness/scripts/demo10_lineage.ts",
+    "demo-P5.2": "bun run harness/scripts/demo11_sandbox.ts"
   },
   "dependencies": {
     "@duckdb/node-api": "1.5.4-r.1",

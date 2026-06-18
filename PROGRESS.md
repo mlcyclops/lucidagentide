@@ -272,3 +272,28 @@ Three lines per session: **shipped / stubbed / next** (CLAUDE.md session ritual)
   consumes the same getRunTree).
 - **next:** P5.2 — sandbox profiles mapped onto omp isolation backends;
   suspicious tasks auto-downgrade; security-review subagent is read-only/quarantine.
+
+-----
+
+## 2026-06-18 — P5.2: sandbox profiles + security-review subagent (Phase 5 COMPLETE)
+
+- **shipped:** `runs/profiles.ts` — the 5 profiles as a policy layer over omp
+  isolation: `PROFILE_CAPS` (write/exec/network + omp backend none/worktree/
+  overlay) and `chooseProfile` **auto-downgrade** (suspicious → container-local,
+  quarantined → quarantine, security-review/replay → read-only-audit, remote →
+  remote-runner; approval lifts the downgrade; never upgrades past requested).
+  `runs/security_review.ts` — `spawnSecurityReview` spawns a read-only child and
+  **rejects any write-capable profile** (enforced, not convention). Extended
+  `getRunTree` with per-run `findingCount` + `approvalCount` so replay renders
+  injection + approval lineage. `demo-P5.2` shows the downgrade table, the
+  capability matrix, the read-only security-review enforcement, and the run tree
+  with injection/approval lineage. All green: 105 harness tests (+13), 54
+  sidecar, demos 00..P5.1 + P5.2, tsc 0. **PRD Phase 5 acceptance met:** lineage
+  stored; security-review read-only; replay renders injection/approval lineage.
+- **stubbed:** profiles select the omp backend conceptually; binding
+  `chooseProfile`'s output to omp's actual isolation at session-spawn time is the
+  Phase-6 remote-runner integration; "overlay" resolves to fuse-overlay/ProjFS by
+  platform inside omp (not re-implemented here).
+- **next:** Phase 6 / P6.1 — remote runner gate: payload scanned BEFORE a run is
+  created; suspicious → blocked or routed to security-review; findings + approval
+  lineage on the run record.
