@@ -1,0 +1,23 @@
+[project]
+name = "scanner-sidecar"
+version = "0.0.0"
+description = "Pure Unicode prompt-injection scanner. The ONLY Python in the harness (CLAUDE.md invariant #2). Stateless: text in -> findings out. No network, no I/O beyond stdin/stdout NDJSON."
+requires-python = ">=3.11"
+# Runtime deps must stay ZERO-network and minimal. stdlib unicodedata covers the
+# Increment 0 / P2.1 baseline. Homoglyph/confusables (P2.1) may add a pinned,
+# offline-capable dep later via its own ADR.
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+]
+
+# The sidecar is a script runner (scanner.py + server.py), not a distributable
+# package. Tell uv not to build/install it as one.
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

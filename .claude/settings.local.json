@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls -la)",
+      "Bash(git status *)",
+      "Bash(python -m pip install --user uv)",
+      "Bash(bun --version)",
+      "Bash(uv --version)",
+      "Bash(python -m uv --version)",
+      "Bash(command -v bun)",
+      "Bash(command -v uv)",
+      "Read(//c/Users/neorc/AppData/Roaming/Python/**)",
+      "Bash(python -m pip show -f uv)",
+      "Bash(powershell.exe -NoProfile -Command ' *)",
+      "Bash(echo \"fresh-shell uv: $\\(uv --version 2>&1 || echo MISSING\\)\")",
+      "Bash(echo \"fresh-shell bun: $\\(bun --version 2>&1 || echo MISSING\\)\")",
+      "Bash(npm view *)",
+      "Bash(bun install *)",
+      "Bash(git clone *)"
+    ]
+  }
+}

@@ -1,0 +1,22 @@
+# --- harness (Bun/TypeScript) ---
+node_modules/
+.bun/
+*.tsbuildinfo
+
+# --- scanner sidecar (Python/uv) ---
+scanner-sidecar/.venv/
+**/__pycache__/
+*.pyc
+.pytest_cache/
+
+# --- vendored omp reference clone (read-only, not part of our source) ---
+vendor/
+
+# --- telemetry / databases (raw forensic data stays local, never committed) ---
+**/*.duckdb
+**/telemetry/raw/
+repos/project-alpha/.agent/telemetry/
+
+# --- OS / editor ---
+.DS_Store
+Thumbs.db

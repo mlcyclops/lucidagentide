@@ -1,0 +1,4 @@
+# Normalize line endings: LF in the repo for all text (cross-platform TS+Python).
+* text=auto eol=lf
+*.png binary
+*.duckdb binary
