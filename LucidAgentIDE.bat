@@ -20,9 +20,7 @@ if "%REPO:~-1%"=="\" set "REPO=%REPO:~0,-1%"
 cd /d "%REPO%"
 
 rem --- make sure bun / uv / omp are reachable even before a terminal restart ---
-if exist "%USERPROFILE%\.bun\bin" set "PATH=%USERPROFILE%\.bun\bin;%PATH%"
-if exist "%APPDATA%\Python\Python314\Scripts" set "PATH=%APPDATA%\Python\Python314\Scripts;%PATH%"
-if exist "%REPO%\node_modules\.bin" set "PATH=%REPO%\node_modules\.bin;%PATH%"
+call :ensurepath
 
 rem --- defaults ---
 set "PROVIDER=Anthropic"
@@ -109,6 +107,7 @@ echo     5^)  Status check  ^(is omp running?^)
 echo     6^)  Live injection demo  ^(blocks a poisoned tool call^)
 echo     7^)  Re-run dependency doctor
 echo     8^)  Cheatsheet
+echo     9^)  Setup / install missing dependencies
 echo     0^)  Quit
 echo.
 set /p "CH=    select: "
@@ -120,6 +119,7 @@ if "%CH%"=="5" ( call :statuscheck & goto :menu )
 if "%CH%"=="6" ( call :demo & goto :menu )
 if "%CH%"=="7" ( call :doctor & goto :menu )
 if "%CH%"=="8" ( call :cheatsheet & goto :menu )
+if "%CH%"=="9" ( call :install & goto :menu )
 if "%CH%"=="0" goto :bye
 echo    ^(unrecognized^)
 goto :menu
@@ -220,6 +220,38 @@ echo    Models (current):  claude-opus-4-8 . claude-sonnet-4-6 . claude-haiku-4-
 echo    Keys (env var):    ANTHROPIC_API_KEY . OPENAI_API_KEY . OPENROUTER_API_KEY
 echo    =====================================================================
 echo.
+goto :eof
+
+rem ===========================================================================
+:ensurepath
+if exist "%USERPROFILE%\.bun\bin"                 set "PATH=%USERPROFILE%\.bun\bin;%PATH%"
+if exist "%USERPROFILE%\.local\bin"               set "PATH=%USERPROFILE%\.local\bin;%PATH%"
+if exist "%APPDATA%\Python\Python314\Scripts"     set "PATH=%APPDATA%\Python\Python314\Scripts;%PATH%"
+if exist "%REPO%\node_modules\.bin"               set "PATH=%REPO%\node_modules\.bin;%PATH%"
+goto :eof
+
+rem ===========================================================================
+:install
+echo.
+echo    [ setup / install missing dependencies ]
+echo    Installs only what's missing: bun, uv, omp, then the project deps.
+echo    (downloads from bun.sh / astral.sh / npm; needs internet)
+set /p "GO=    Proceed? (Y/N): "
+if /i not "%GO%"=="Y" goto :eof
+echo.
+where bun >nul 2>&1 || ( echo    -- installing bun ... & powershell -NoProfile -ExecutionPolicy Bypass -Command "irm bun.sh/install.ps1 | iex" )
+call :ensurepath
+where uv >nul 2>&1 || ( echo    -- installing uv ... & powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://astral.sh/uv/install.ps1 | iex" )
+call :ensurepath
+where omp >nul 2>&1 || ( echo    -- installing omp ^(bun add -g^) ... & bun add -g @oh-my-pi/pi-coding-agent )
+call :ensurepath
+echo    -- installing harness deps ^(bun install^) ...
+where bun >nul 2>&1 && bun install
+echo    -- syncing scanner sidecar ^(uv sync^) ...
+where uv >nul 2>&1 && ( pushd "%REPO%\scanner-sidecar" & uv sync & popd )
+echo.
+echo    setup complete. Note: a NEW terminal may be needed for global PATH changes.
+call :doctor
 goto :eof
 
 rem ===========================================================================

@@ -7,21 +7,61 @@
 //
 // It scans every string in each tool_call (bash command, write content, custom
 // tool args, …) through the Python Unicode scanner and BLOCKS the call when the
-// content is quarantined — fail-closed if the scanner is unavailable. This is the
-// same gate the test suite proves; here it runs inside the live agent.
+// content is quarantined — fail-closed if the scanner is unavailable. Each block
+// is logged to <repo>/agent_obs.duckdb so it shows up in the dashboard
+// (`bun run dashboard:tui`). DB logging is best-effort and never breaks the gate.
 //
 // Intentionally omp-import-free (typed `any`) so it loads under any omp version —
 // it only depends on our own scanner/gate/notification modules.
 
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { ScannerClient } from "../security/scanner_client.ts";
 import { DEFAULT_POLICY, scanAndDecide } from "../security/gate.ts";
 import { buildNotification, summarizeNotification } from "../security/notification.ts";
+import type { Db } from "../memory/db.ts";
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+const DB_PATH = join(HERE, "..", "..", "agent_obs.duckdb");
+const LIVE_RUN = "omp-live";
 
 const scanner = new ScannerClient();
 scanner.start();
-process.on("exit", () => scanner.stop());
-process.on("SIGINT", () => {
+
+let dbHandle: Db | undefined;
+let dbInit: Promise<Db | null> | undefined;
+
+/** Lazily open (and migrate) the project DuckDB on first block. Best-effort:
+ *  returns null if it can't open (e.g. another session holds the write lock). */
+async function getDb(): Promise<Db | null> {
+  if (!dbInit) {
+    dbInit = (async () => {
+      try {
+        const { Db } = await import("../memory/db.ts");
+        const { startRun } = await import("../runs/lineage.ts");
+        const db = await Db.open(DB_PATH);
+        await startRun(db, { runId: LIVE_RUN, kind: "root", mode: "build", sandboxProfile: "trusted-local" }).catch(() => {});
+        dbHandle = db;
+        return db;
+      } catch {
+        return null;
+      }
+    })();
+  }
+  return dbInit;
+}
+
+function shutdown(): void {
   scanner.stop();
+  try {
+    dbHandle?.close();
+  } catch {
+    /* ignore */
+  }
+}
+process.on("exit", shutdown);
+process.on("SIGINT", () => {
+  shutdown();
   process.exit(130);
 });
 
@@ -35,6 +75,18 @@ function collectStrings(value: unknown, skip: ReadonlySet<string> = new Set(["ty
   };
   walk(value);
   return parts.join("\n");
+}
+
+/** Persist a blocked tool call to the project DB so it shows in the dashboard. */
+async function logBlock(toolName: string, text: string): Promise<void> {
+  try {
+    const db = await getDb();
+    if (!db) return;
+    const { ingestArtifact } = await import("../memory/ingest.ts");
+    await ingestArtifact(db, scanner, { runId: LIVE_RUN, sourceType: `omp:${toolName}`, rawContent: text }, {});
+  } catch {
+    /* logging is best-effort; the block already happened */
+  }
 }
 
 // omp extensions are `(pi) => void` and register handlers via pi.on(...).
@@ -54,6 +106,7 @@ export default function securityExtension(pi: any): void {
       failClosed: decision.failClosed,
     });
     process.stderr.write(`\n🛡️  [LucidAgentIDE] ${summarizeNotification(notification)}\n`);
+    void logBlock(toolName, text); // fire-and-forget; never blocks the gate
     return { block: true, reason: `Blocked by LucidAgentIDE security gate: ${decision.reason}` };
   });
 }

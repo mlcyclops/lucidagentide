@@ -13,6 +13,11 @@ LucidAgentIDE.bat doctor     # just run the dependency check
 LucidAgentIDE.bat dashboard  # just render the security dashboard
 ```
 
+On a fresh machine, pick **9) Setup / install missing dependencies** — it
+installs bun, uv, omp, and the project deps (only what's missing). Every block
+the gate makes in omp is logged to `agent_obs.duckdb`, so the dashboard fills in
+with real findings as you use it (demo data until the first block).
+
 ## Inside omp (the agent window)
 
 | You type | What happens |

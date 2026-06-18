@@ -105,12 +105,16 @@ async function buildDemoDb(): Promise<{ db: Db; cleanup: () => void; demo: true 
 }
 
 async function main() {
+  // explicit arg > the live project DB (populated by the omp gate) > demo workload
+  const liveDb = join(import.meta.dir, "..", "agent_obs.duckdb");
   const arg = process.argv[2];
+  const source = arg && existsSync(arg) ? arg : existsSync(liveDb) ? liveDb : undefined;
+
   let db: Db;
   let cleanup = () => {};
   let demo = false;
-  if (arg && existsSync(arg)) {
-    db = await Db.open(arg);
+  if (source) {
+    db = await Db.open(source);
     cleanup = () => db.close();
   } else {
     const d = await buildDemoDb();
@@ -120,8 +124,8 @@ async function main() {
   }
 
   console.log(BANNER);
-  if (demo) console.log(`${C.dim}  (no DB supplied — showing a generated demo workload)${C.reset}\n`);
-  else console.log(`${C.dim}  source: ${arg}${C.reset}\n`);
+  if (demo) console.log(`${C.dim}  (no live DB yet — showing a generated demo workload)${C.reset}\n`);
+  else console.log(`${C.dim}  source: ${source}${C.reset}\n`);
 
   try {
     console.log(table("Findings overview", ["finding_type", "severity", "source", "n"], await findingsOverview(db)));
