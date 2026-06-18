@@ -20,3 +20,22 @@ Three lines per session: **shipped / stubbed / next** (CLAUDE.md session ritual)
   `bun test harness` (Makefile remains the canonical spec).
 - **next:** Increment 1 — boundary contracts demo (`demo-01`): `emit()` events to
   JSONL + `ToolResult` round-trips through the adapter both ways.
+
+-----
+
+## 2026-06-18 — Increment 1: boundary contracts
+
+- **shipped:** `harness/telemetry/events.ts` — `Telemetry.emit()` writes the typed
+  JSONL envelope (ts/run_id/session_id/artifact_id?), validates the name against
+  the `EventName` enum and **raises `UnknownEventError`** on an off-enum name
+  (invariant #8); file or custom sink; injectable clock. `demo-01` proves the
+  emitter + the `result_adapter` round-trip BOTH ways (PRD→omp→PRD keeps
+  tool_name/success/summary/duration; omp→PRD→omp keeps text + isError). IDs minted
+  via omp `Snowflake` (invariant #9). All green: `demo-01`, 15 harness tests
+  (+10: events + adapter), 12 sidecar, tsc 0; demo-00 regression OK.
+- **stubbed:** events.ts uses `appendFileSync` (fine at this volume; a stream is a
+  later perf concern); no DuckDB ingestion yet (P3.2 reads this JSONL); finding/
+  approval ID minting helper deferred until those entities exist (P2.x).
+- **next:** Increment 2 — cache-optimized prompt assembly (`demo-02`): 9-layer
+  composer with a byte-stable frozen prefix; push omp's auto-injected env/git/date
+  into the tail; prefix-hash test identical across tasks/cwd/branch.

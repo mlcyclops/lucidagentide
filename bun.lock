@@ -8,6 +8,7 @@
         "@oh-my-pi/pi-agent-core": "^16.0.6",
         "@oh-my-pi/pi-ai": "^16.0.6",
         "@oh-my-pi/pi-coding-agent": "^16.0.6",
+        "@oh-my-pi/pi-utils": "^16.0.6",
       },
       "devDependencies": {
         "@types/bun": "latest",
