@@ -15,7 +15,8 @@
     "demo-00:scanner": "bun run harness/scripts/demo00_scanner.ts",
     "demo-00:failclosed": "bun run harness/scripts/demo00_failclosed.ts",
     "demo-01": "bun run harness/scripts/demo01_contracts.ts",
-    "demo-02": "bun run harness/scripts/demo02_prefix_hash.ts"
+    "demo-02": "bun run harness/scripts/demo02_prefix_hash.ts",
+    "demo-P2.1": "python scanner-sidecar/demo_p2_1.py"
   },
   "dependencies": {
     "@oh-my-pi/pi-agent-core": "^16.0.6",

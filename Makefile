@@ -82,6 +82,10 @@ demo-01: ## Boundary contracts: emit events + ToolResult round-trip
 demo-02: ## Cache-optimized prompt assembly: prefix bytes identical across tasks
 	$(BUN) run harness/scripts/demo02_prefix_hash.ts
 
+.PHONY: demo-P2.1
+demo-P2.1: ## P2.1: scan adversarial fixtures; each finding fires, clean corpus is FP-free
+	$(PY) $(SIDECAR_DIR)/demo_p2_1.py
+
 # ---------------------------------------------------------------------------
 # Hygiene
 # ---------------------------------------------------------------------------

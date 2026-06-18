@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import unicodedata
 
-SCANNER_VERSION = "0.1.0"
+SCANNER_VERSION = "0.2.0"
 
 # Bidirectional control / override characters by canonical name.
 BIDI_NAMES = {
@@ -49,9 +49,18 @@ _SEVERITY = {
     "unicode-tag-block": "critical",
     "bidi-control": "high",
     "zero-width": "high",
+    "mixed-script-homoglyph": "high",
     "private-use-area": "medium",
     "unicode-category-cf": "medium",
 }
+
+# Scripts that are visually confusable with Latin and are the classic homoglyph
+# spoofing vectors. We flag a token ONLY when Latin is mixed with one of these
+# WITHIN a single word. This is deliberately narrow: legitimate multilingual text
+# (Japanese mixing Hiragana/Katakana/Kanji, Arabic+Latin, pure-Cyrillic Russian)
+# mixes scripts too, but not Latin-with-Cyrillic/Greek inside one token. Widening
+# the confusable set (Cherokee, Coptic, fullwidth, ...) is a future enhancement.
+_HOMOGLYPH_PRONE = {"CYRILLIC", "GREEK"}
 
 
 def _classify(code: int, name: str, cat: str) -> str | None:
@@ -71,13 +80,66 @@ def _classify(code: int, name: str, cat: str) -> str | None:
     return None
 
 
+def _script_of(ch: str) -> str | None:
+    """Best-effort script tag for a letter, derived from its Unicode name
+    (e.g. "CYRILLIC SMALL LETTER IE" -> "CYRILLIC"). Non-letters return None."""
+    if not unicodedata.category(ch).startswith("L"):
+        return None
+    name = unicodedata.name(ch, "")
+    if not name:
+        return None
+    return name.split(" ", 1)[0]
+
+
+def _iter_letter_tokens(text: str):
+    """Yield (start_index, token_str) for maximal runs of letters/marks."""
+    start = None
+    for i, ch in enumerate(text):
+        is_wordch = unicodedata.category(ch)[0] in ("L", "M")
+        if is_wordch and start is None:
+            start = i
+        elif not is_wordch and start is not None:
+            yield start, text[start:i]
+            start = None
+    if start is not None:
+        yield start, text[start:]
+
+
+def _detect_homoglyphs(text: str) -> list[dict]:
+    """Flag tokens that mix Latin with a homoglyph-prone script (Cyrillic/Greek).
+    One finding per smuggled (non-Latin, prone-script) character."""
+    findings: list[dict] = []
+    for start, token in _iter_letter_tokens(text):
+        scripts: dict[str, list[int]] = {}
+        for j, ch in enumerate(token):
+            s = _script_of(ch)
+            if s:
+                scripts.setdefault(s, []).append(start + j)
+        if "LATIN" not in scripts:
+            continue
+        for prone in _HOMOGLYPH_PRONE & scripts.keys():
+            for idx in scripts[prone]:
+                ch = text[idx]
+                findings.append(
+                    {
+                        "type": "mixed-script-homoglyph",
+                        "codepoint": f"U+{ord(ch):04X}",
+                        "index": idx,
+                        "severity": _SEVERITY["mixed-script-homoglyph"],
+                        "name": unicodedata.name(ch, "<unnamed>"),
+                    }
+                )
+    return findings
+
+
 def inspect_text(text: str) -> list[dict]:
-    """Scan `text`; return a list of finding dicts.
+    """Scan `text`; return a list of finding dicts, sorted by index.
 
     Each finding: {type, codepoint, index, severity, name}.
     `index` is the Python character offset; `codepoint` is "U+XXXX".
     """
     findings: list[dict] = []
+    # pass 1: per-character classification (invisible / control / out-of-band)
     for i, ch in enumerate(text):
         code = ord(ch)
         cat = unicodedata.category(ch)
@@ -94,4 +156,7 @@ def inspect_text(text: str) -> list[dict]:
                 "name": name,
             }
         )
+    # pass 2: token-level mixed-script / homoglyph spoofing
+    findings.extend(_detect_homoglyphs(text))
+    findings.sort(key=lambda f: f["index"])
     return findings

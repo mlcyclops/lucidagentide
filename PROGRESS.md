@@ -61,3 +61,24 @@ Three lines per session: **shipped / stubbed / next** (CLAUDE.md session ritual)
   later increment); tool-schema stability is omp-managed (noted, not yet asserted).
 - **next:** Phase 2 / P2.1 — expand the scanner with mixed-script + homoglyph
   detection and build the adversarial fixture corpus (keystone #1, over-test).
+
+-----
+
+## 2026-06-18 — P2.1: Unicode scanner + adversarial fixtures (keystone #1)
+
+- **shipped:** scanner `0.2.0` adds **mixed-script-homoglyph** detection — a
+  token-level pass flagging Latin mixed with Cyrillic/Greek inside one word (the
+  classic look-alike attack: Cyrillic `е` in `edit_file`, `pаypаl`, Greek omicron
+  in `login`). Deliberately narrow so legit multilingual text (Japanese, Arabic,
+  pure Cyrillic, Hangul, accented Latin) is NOT flagged. Adversarial corpus
+  `fixtures/adversarial.py` (14 poisoned fixtures w/ expected types + 13 clean
+  controls), all built via `chr()` (no literal invisibles). `test_fixtures.py`
+  over-tests: every fixture fires its expected types, clean corpus is
+  false-positive-free, every finding type exercised. `demo-P2.1`
+  (`demo_p2_1.py`, UTF-8 stdout) prints the scan report + asserts. All green:
+  54 sidecar tests (was 12), 22 harness, demos 00/01/02/P2.1, tsc 0.
+- **stubbed:** confusable set is Cyrillic+Greek only (Cherokee/Coptic/fullwidth +
+  a full confusables table = future, possibly a pinned offline dep per ADR-0001);
+  homoglyph check is context-free (PRD's "sensitive fields" scoping comes later).
+- **next:** P2.2+P2.3 — DuckDB bootstrap + security DDL, NFKC sanitation +
+  sanitized-derivative + trust labeling; write artifact/scan/finding rows.
