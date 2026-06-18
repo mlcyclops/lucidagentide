@@ -17,14 +17,16 @@
     "demo-01": "bun run harness/scripts/demo01_contracts.ts",
     "demo-02": "bun run harness/scripts/demo02_prefix_hash.ts",
     "demo-P2.1": "python scanner-sidecar/demo_p2_1.py",
-    "demo-P2.3": "bun run harness/scripts/demo03_ingest.ts"
+    "demo-P2.3": "bun run harness/scripts/demo03_ingest.ts",
+    "demo-P2.4": "bun run harness/scripts/demo04_quarantine_hook.ts"
   },
   "dependencies": {
     "@duckdb/node-api": "1.5.4-r.1",
     "@oh-my-pi/pi-agent-core": "^16.0.6",
     "@oh-my-pi/pi-ai": "^16.0.6",
     "@oh-my-pi/pi-coding-agent": "^16.0.6",
-    "@oh-my-pi/pi-utils": "^16.0.6"
+    "@oh-my-pi/pi-utils": "^16.0.6",
+    "arktype": "^2.2.1"
   },
   "devDependencies": {
     "@types/bun": "latest",

@@ -11,13 +11,20 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createMockModel, registerMockApi, type MockModel } from "@oh-my-pi/pi-ai/providers/mock";
+import {
+  createMockModel,
+  registerMockApi,
+  type MockModel,
+  type MockModelOptions,
+} from "@oh-my-pi/pi-ai/providers/mock";
 import type { Context } from "@oh-my-pi/pi-ai";
 import { createAgentSession } from "@oh-my-pi/pi-coding-agent";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 
 const ECHO_PROVIDER = "echo";
+
+type SessionOpts = NonNullable<Parameters<typeof createAgentSession>[0]>;
 
 let registered = false;
 
@@ -77,6 +84,13 @@ export interface EchoSessionOptions {
   prefix?: string;
   /** System prompt to pass through to omp (e.g. an assembled [prefix, tail]). */
   systemPrompt?: string | string[];
+  /** Script the model with explicit responses (e.g. a tool call then text)
+   *  instead of the default echo handler. */
+  responses?: MockModelOptions["responses"];
+  /** Custom tools to register on the session. */
+  customTools?: SessionOpts["customTools"];
+  /** Extensions (incl. tool_call hooks) to register on the session. */
+  extensions?: SessionOpts["extensions"];
 }
 
 /**
@@ -86,7 +100,10 @@ export interface EchoSessionOptions {
  * the network.
  */
 export async function createEchoSession(opts: EchoSessionOptions = {}): Promise<EchoSession> {
-  const model = createEchoModel(opts.prefix ?? "echo: ");
+  ensureMockApi();
+  const model = opts.responses
+    ? createMockModel({ id: "echo-model", provider: ECHO_PROVIDER, responses: opts.responses })
+    : createEchoModel(opts.prefix ?? "echo: ");
   const cwd = mkdtempSync(join(tmpdir(), "omp-echo-"));
 
   const authStorage = await AuthStorage.create(join(cwd, "auth.db"));
@@ -102,6 +119,8 @@ export async function createEchoSession(opts: EchoSessionOptions = {}): Promise<
     authStorage,
     modelRegistry,
     ...(opts.systemPrompt !== undefined ? { systemPrompt: opts.systemPrompt } : {}),
+    ...(opts.customTools !== undefined ? { customTools: opts.customTools } : {}),
+    ...(opts.extensions !== undefined ? { extensions: opts.extensions } : {}),
   });
 
   return {

@@ -105,3 +105,27 @@ Three lines per session: **shipped / stubbed / next** (CLAUDE.md session ritual)
 - **next:** P2.4 — quarantine gate as an omp `pre`-hook on `tool_call` +
   approval workflow (notification payload, `approval_events` rows); prove
   blocked content cannot reach a tool call end-to-end through omp.
+
+-----
+
+## 2026-06-18 — P2.4: quarantine pre-hook + approval workflow (Phase 2 COMPLETE)
+
+- **shipped:** `harness/hooks/quarantine_hook.ts` — `makeQuarantineExtension`, a
+  real omp `ExtensionFactory` registering `pi.on("tool_call", …)` that scans the
+  tool input via `scanAndDecide` and returns `{block, reason}` when quarantined,
+  fail-closed. Proven through omp's OWN runtime: a poisoned tool call's
+  `execute()` never runs (keystone test + `demo-P2.4`). `notification.ts`
+  (`buildNotification`/`summarizeNotification`: source, trust, max severity,
+  finding types, what's blocked — no raw content inline). `approvals.ts`
+  (`recordApproval` → `approval_events`, emits approval_granted/denied).
+  `testing/echo.ts` extended with scripted `responses`/`customTools`/`extensions`
+  (mock tool-call → block → text). Replaced the Increment-0 gate stub. All green:
+  45 harness tests (+9), 54 sidecar, demos 00/01/02/P2.1/P2.3/**P2.4**, tsc 0.
+  **PRD Phase 2 acceptance met:** suspicious Unicode detected+classified; user
+  sees finding type + severity before privileged execution; blocked content
+  provably cannot reach a tool call.
+- **stubbed:** notification raw/sanitized diff handles are artifact-id stubs (UI
+  diff view is Phase 7); approvals are recorded but no release-re-scan loop yet
+  (quarantine-release re-validation is a later refinement).
+- **next:** P3.1 — verification engine (test/lint/typecheck runners wrapped) with
+  the security scan as a fail-closed precondition for prompt/exec-bearing work.

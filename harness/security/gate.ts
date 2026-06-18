@@ -85,19 +85,5 @@ export async function scanAndDecide(
   }
 }
 
-// ── omp pre-hook seam (full wiring is P2.4). Shape confirmed in ADR-0003:
-//    `pi.on("tool_call", handler)` may return `{ block, reason }`. We scan the
-//    stringified tool input and block fail-closed. Typed loosely here to avoid
-//    coupling Increment 0 to omp's internal hook types ahead of P2.4. ─────────
-export interface ToolCallLike {
-  toolName: string;
-  input: Record<string, unknown>;
-}
-
-export function makeQuarantineHook(client: ScannerClient, policy: GatePolicy = DEFAULT_POLICY) {
-  return async (event: ToolCallLike): Promise<{ block: boolean; reason?: string }> => {
-    const text = JSON.stringify(event.input ?? {});
-    const decision = await scanAndDecide(client, text, policy);
-    return decision.block ? { block: true, reason: decision.reason } : { block: false };
-  };
-}
+// The omp pre-hook that consumes scanAndDecide lives in
+// harness/hooks/quarantine_hook.ts (P2.4) — registered as an extension.

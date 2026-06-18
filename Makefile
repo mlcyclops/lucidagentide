@@ -90,6 +90,10 @@ demo-P2.1: ## P2.1: scan adversarial fixtures; each finding fires, clean corpus 
 demo-P2.3: ## P2.3: ingest a poisoned artifact -> artifact/scan/findings/sanitized rows
 	$(BUN) run harness/scripts/demo03_ingest.ts
 
+.PHONY: demo-P2.4
+demo-P2.4: ## P2.4: poisoned tool call blocked by the omp pre-hook + approval workflow
+	$(BUN) run harness/scripts/demo04_quarantine_hook.ts
+
 # ---------------------------------------------------------------------------
 # Hygiene
 # ---------------------------------------------------------------------------
