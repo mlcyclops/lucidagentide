@@ -75,14 +75,23 @@ goto :eof
 
 rem ===========================================================================
 :detectkeys
-echo  [ checking provider keys ]
+echo  [ checking provider auth ]
+echo    - environment API keys:
 call :keystate "Anthropic" ANTHROPIC_API_KEY
 call :keystate "OpenAI"    OPENAI_API_KEY
 call :keystate "Google"    GEMINI_API_KEY
 call :keystate "OpenRouter" OPENROUTER_API_KEY
+echo    - omp credential vault (OAuth / subscription logins):
+set "VAULT_ANTHROPIC="
+where bun >nul 2>&1 && (
+  bun run "%REPO%\tools\omp_auth_status.ts" 2>nul
+  bun run "%REPO%\tools\omp_auth_status.ts" --check anthropic >nul 2>&1 && set "VAULT_ANTHROPIC=1"
+) || echo      ^( -- ^) bun not on PATH - cannot read omp vault
 echo.
-if not defined ANTHROPIC_API_KEY (
-  echo    No ANTHROPIC_API_KEY found in this session.
+rem  Only nag for a key if there's NO Anthropic auth at all (no env key AND no omp OAuth login).
+if not defined ANTHROPIC_API_KEY if not defined VAULT_ANTHROPIC (
+  echo    No Anthropic auth found ^(no ANTHROPIC_API_KEY and no omp OAuth login^).
+  echo    Tip: run "omp" once and use its /login for Claude Pro/Max, or paste a key below.
   set /p "ENTERKEY=    Paste your ANTHROPIC_API_KEY now (or Enter to skip): "
   if defined ENTERKEY set "ANTHROPIC_API_KEY=!ENTERKEY!"
   echo.

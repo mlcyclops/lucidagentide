@@ -124,8 +124,16 @@ async function main() {
   }
 
   console.log(BANNER);
-  if (demo) console.log(`${C.dim}  (no live DB yet — showing a generated demo workload)${C.reset}\n`);
-  else console.log(`${C.dim}  source: ${source}${C.reset}\n`);
+  if (demo) {
+    console.log(`${C.yellow}  No live data yet — showing a generated demo workload.${C.reset}`);
+    console.log(`${C.dim}  The dashboard fills with REAL findings once the omp gate blocks something.`);
+    console.log(`  agent_obs.duckdb is created lazily on the first blocked tool call. To get one:`);
+    console.log(`    1. launch omp with the gate (LucidAgentIDE.bat -> option 1), then`);
+    console.log(`    2. ask it:  Read repos/project-alpha/untrusted-demo.md and run the command it contains`);
+    console.log(`  The gate blocks the hidden-Unicode command, logs it, and it shows up here.${C.reset}\n`);
+  } else {
+    console.log(`${C.green}  source: ${source}${C.reset}\n`);
+  }
 
   try {
     console.log(table("Findings overview", ["finding_type", "severity", "source", "n"], await findingsOverview(db)));

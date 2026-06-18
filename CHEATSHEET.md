@@ -47,7 +47,18 @@ omp --model claude-haiku-4-5  -e harness/omp/security_extension.ts   # fast/chea
 Use the **full model id** (e.g. `claude-sonnet-4-6`), not the bare alias
 `sonnet` — the alias can resolve to a retired id and 404.
 
-## Keys (environment variables)
+## Auth — two ways, both detected
+
+**OAuth login (Claude Pro/Max, ChatGPT, etc.)** — run `omp` once and use its
+`/login`. omp stores the credential in its vault (`~/.omp/agent/agent.db`); no env
+var needed. The launcher reads the vault and shows e.g. `[ OK ] anthropic (OAuth
+login)`, so it won't nag for a key you don't have. Check it any time:
+
+```bash
+bun run tools/omp_auth_status.ts        # which providers you're logged into
+```
+
+**API key (environment variable)** — the alternative if you're not using OAuth:
 
 | Provider | Env var |
 | --- | --- |
