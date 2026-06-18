@@ -11,10 +11,13 @@
 
 import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
+import { Snowflake } from "@oh-my-pi/pi-utils";
 import { type EventName, isEventName } from "../contracts.ts";
 
 /** The stable JSONL envelope. Extra caller fields are spread in alongside. */
 export interface TelemetryEvent {
+  /** Stable per-event id (invariant #9); the idempotent key for DuckDB ingestion. */
+  event_id: string;
   /** ISO-8601 UTC timestamp. */
   ts: string;
   event: EventName;
@@ -81,6 +84,7 @@ export class Telemetry {
       throw new UnknownEventError(event);
     }
     const record: TelemetryEvent = {
+      event_id: Snowflake.next(),
       ts: this.#now(),
       event,
       run_id: this.#runId,

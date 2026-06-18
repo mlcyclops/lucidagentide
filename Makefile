@@ -98,6 +98,10 @@ demo-P2.4: ## P2.4: poisoned tool call blocked by the omp pre-hook + approval wo
 demo-P3.1: ## P3.1: verification engine; security scan is a fail-closed completion precondition
 	$(BUN) run harness/scripts/demo05_verification.ts
 
+.PHONY: demo-P3.2
+demo-P3.2: ## P3.2: ingest telemetry JSONL into DuckDB (idempotent) + sample security queries
+	$(BUN) run harness/scripts/demo06_telemetry_ingest.ts
+
 # ---------------------------------------------------------------------------
 # Hygiene
 # ---------------------------------------------------------------------------

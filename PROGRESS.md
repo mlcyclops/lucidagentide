@@ -153,3 +153,28 @@ Three lines per session: **shipped / stubbed / next** (CLAUDE.md session ritual)
 - **next:** P3.2 — JSONL→DuckDB ingestion (`post` hook ingests omp session JSONL
   into episodic/telemetry tables) + stable-ID guarantee; security events
   queryable & replayable.
+
+-----
+
+## 2026-06-18 — P3.2: JSONL→DuckDB ingestion + stable IDs (Phase 3 COMPLETE)
+
+- **shipped:** every telemetry event now carries a stable `event_id` (Snowflake,
+  invariant #9). Migration `0002_telemetry_tables.sql` adds `telemetry_events`
+  (envelope columns promoted; rest kept in a `fields` JSON). `ingest_jsonl.ts`
+  — `ingestTelemetryJsonl` reads events.jsonl into DuckDB, **idempotent** via
+  `INSERT OR IGNORE` on `event_id`; malformed/incomplete/insert-failing lines are
+  counted-skipped, never silently dropped. `queries.ts` — event-counts-by-type,
+  findings-by-type, blocked-tool-calls, approvals-by-action, run-timeline
+  (replay). `demo-P3.2` runs a task → ingests → re-ingests (0 new) → sample
+  queries. Also fixed a real bug: the migration splitter broke on a `;` inside a
+  comment → now strips line comments before splitting (the ADR-0005 caveat, hit
+  for real). All green: 60 harness tests (+5), 54 sidecar, demos
+  00/01/02/P2.1/P2.3/P2.4/P3.1/P3.2, tsc 0. **Phase 3 acceptance met:** stable
+  IDs; security events queryable & replayable; export table audited.
+- **stubbed:** ingests OUR telemetry JSONL (the security events); ingesting omp's
+  own session JSONL into PRD episodic tables (tool_events/retrieval_events) is a
+  later mapping task; auto-trigger via an omp session-end post-hook deferred
+  (ingestion is an explicit call for now — the demo wires the full loop).
+- **next:** Phase 4 / P4.1 — memory layers (working/episodic/semantic/archive) +
+  state artifacts (NOW/PROGRESS/DECISIONS/FAILURES) with security metadata on
+  every promoted artifact.

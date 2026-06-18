@@ -32,13 +32,15 @@ function loadMigrations(): Migration[] {
   });
 }
 
-/** Split a migration file into individual statements. Our DDL contains no
- *  semicolons inside string/identifier literals, so a naive split is safe. */
+/** Split a migration file into individual statements. Line comments are stripped
+ *  FIRST so a semicolon inside a comment can't split a statement; our DDL has no
+ *  string literals containing ';' or '--', so this is safe (ADR-0005). */
 function splitStatements(sql: string): string[] {
-  return sql
+  const withoutLineComments = sql.replace(/--[^\n]*/g, "");
+  return withoutLineComments
     .split(";")
     .map((s) => s.trim())
-    .filter((s) => s.length > 0 && !/^(--.*\s*)+$/.test(s));
+    .filter((s) => s.length > 0);
 }
 
 export class Db {

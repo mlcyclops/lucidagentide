@@ -38,9 +38,9 @@ test("migration 0001 creates the security tables", async () => {
   });
 });
 
-test("schema_migrations records the applied version", async () => {
+test("schema_migrations records the applied versions in order", async () => {
   await withDb(async (db) => {
-    expect(await db.appliedVersions()).toEqual([1]);
+    expect(await db.appliedVersions()).toEqual([1, 2]);
   });
 });
 
@@ -49,10 +49,10 @@ test("reopening an existing db does not re-apply migrations", async () => {
   const path = join(dir, "t.duckdb");
   try {
     const a = await Db.open(path);
-    expect(await a.appliedVersions()).toEqual([1]);
+    expect(await a.appliedVersions()).toEqual([1, 2]);
     a.close();
     const b = await Db.open(path);
-    expect(await b.appliedVersions()).toEqual([1]); // still just [1], not [1,1]
+    expect(await b.appliedVersions()).toEqual([1, 2]); // unchanged, not re-applied
     b.close();
   } finally {
     rmSync(dir, { recursive: true, force: true });
