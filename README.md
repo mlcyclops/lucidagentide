@@ -58,8 +58,15 @@ cd scanner-sidecar && uv run python -m pytest -q
 
 ## Try it with the live omp agent
 
-omp is installed globally. Load the security gate into a real session — every
-tool call is scanned, and quarantined content is blocked (fail-closed):
+**Easiest: double-click [`LucidAgentIDE.bat`](LucidAgentIDE.bat).** It checks
+dependencies + PATH + provider keys, lets you pick a model, launches omp with the
+security gate in its own window, and stays open as a control panel (switch
+model/provider, view dashboards, check status). See [`CHEATSHEET.md`](CHEATSHEET.md).
+Inside omp: `/lucid:help`, `/lucid:scan <text>`, `/lucid:dashboard`, or
+`!bun run dashboard:tui` for an instant in-terminal security dashboard.
+
+Or do it by hand — omp is installed globally; load the security gate into a real
+session (every tool call is scanned, quarantined content blocked fail-closed):
 
 ```bash
 # 1. set your Anthropic key (PowerShell; restart the terminal first so omp+bun are on PATH)

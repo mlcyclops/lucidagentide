@@ -1,0 +1,231 @@
+@echo off
+chcp 65001 >nul 2>&1
+setlocal enabledelayedexpansion
+title Lucid Control Panel
+
+rem ===========================================================================
+rem  LucidAgentIDE.bat  -  double-click control panel for omp + the security
+rem  harness. Checks dependencies / PATH / provider keys, lets you pick a model,
+rem  launches omp (in its own window) with the security gate, and stays open as a
+rem  cheatsheet to switch model/provider, view dashboards, and check status.
+rem
+rem  Hidden modes (for scripting / testing):
+rem     LucidAgentIDE.bat doctor      - run dependency check and exit
+rem     LucidAgentIDE.bat dashboard   - render the security dashboard and exit
+rem ===========================================================================
+
+rem --- repo root = this file's directory (works wherever the repo lives) ---
+set "REPO=%~dp0"
+if "%REPO:~-1%"=="\" set "REPO=%REPO:~0,-1%"
+cd /d "%REPO%"
+
+rem --- make sure bun / uv / omp are reachable even before a terminal restart ---
+if exist "%USERPROFILE%\.bun\bin" set "PATH=%USERPROFILE%\.bun\bin;%PATH%"
+if exist "%APPDATA%\Python\Python314\Scripts" set "PATH=%APPDATA%\Python\Python314\Scripts;%PATH%"
+if exist "%REPO%\node_modules\.bin" set "PATH=%REPO%\node_modules\.bin;%PATH%"
+
+rem --- defaults ---
+set "PROVIDER=Anthropic"
+set "MODEL=claude-opus-4-8"
+set "KEYVAR=ANTHROPIC_API_KEY"
+
+rem --- arg dispatch (non-interactive helpers) ---
+if /i "%~1"=="doctor"    ( call :doctor & exit /b 0 )
+if /i "%~1"=="dashboard" ( call :dashboard & exit /b 0 )
+
+call :banner
+call :doctor
+call :detectkeys
+goto :menu
+
+rem ===========================================================================
+:banner
+echo.
+echo    =====================================================================
+echo        L  U  C  I  D     A  G  E  N  T     I  D  E
+echo    ---------------------------------------------------------------------
+echo         .---.        scan   every tool call checked for hidden-unicode
+echo        /  _  \              prompt injection + homoglyph spoofing
+echo       :  /_\  :      gate   quarantined content blocked, fail-closed
+echo        \  #  /       audit  findings / approvals / exports all logged
+echo         '---'        omp    security harness  -  extend, never fork
+echo    =====================================================================
+echo.
+goto :eof
+
+rem ===========================================================================
+:doctor
+echo  [ checking dependencies + PATH ]
+call :check "bun"    bun
+call :check "uv"     uv
+call :check "python" python
+call :check "omp"    omp
+call :checkfile "security extension" "%REPO%\harness\omp\security_extension.ts"
+call :checkfile "scanner sidecar venv" "%REPO%\scanner-sidecar\.venv"
+echo.
+goto :eof
+
+:check
+set "_ok="
+for /f "delims=" %%P in ('where %2 2^>nul') do set "_ok=1"
+if defined _ok ( echo    [ OK ]  %~1 ) else ( echo    [MISS]  %~1   ^<- not on PATH )
+goto :eof
+
+:checkfile
+if exist "%~2" ( echo    [ OK ]  %~1 ) else ( echo    [MISS]  %~1 )
+goto :eof
+
+rem ===========================================================================
+:detectkeys
+echo  [ checking provider keys ]
+call :keystate "Anthropic" ANTHROPIC_API_KEY
+call :keystate "OpenAI"    OPENAI_API_KEY
+call :keystate "Google"    GEMINI_API_KEY
+call :keystate "OpenRouter" OPENROUTER_API_KEY
+echo.
+if not defined ANTHROPIC_API_KEY (
+  echo    No ANTHROPIC_API_KEY found in this session.
+  set /p "ENTERKEY=    Paste your ANTHROPIC_API_KEY now (or Enter to skip): "
+  if defined ENTERKEY set "ANTHROPIC_API_KEY=!ENTERKEY!"
+  echo.
+)
+goto :eof
+
+:keystate
+if defined %2 ( echo    [ SET ]  %~1 ^(%2^) ) else ( echo    [ -- ]   %~1 ^(%2 not set^) )
+goto :eof
+
+rem ===========================================================================
+:menu
+echo  ---------------------------------------------------------------------
+call :ompstatus
+echo    provider : %PROVIDER%        model : %MODEL%
+echo  ---------------------------------------------------------------------
+echo     1^)  Launch / relaunch omp  ^(with the security gate^)
+echo     2^)  Switch model
+echo     3^)  Switch provider
+echo     4^)  Security dashboard  ^(in this window^)
+echo     5^)  Status check  ^(is omp running?^)
+echo     6^)  Live injection demo  ^(blocks a poisoned tool call^)
+echo     7^)  Re-run dependency doctor
+echo     8^)  Cheatsheet
+echo     0^)  Quit
+echo.
+set /p "CH=    select: "
+if "%CH%"=="1" goto :launch
+if "%CH%"=="2" goto :pickmodel
+if "%CH%"=="3" goto :pickprovider
+if "%CH%"=="4" ( call :dashboard & goto :menu )
+if "%CH%"=="5" ( call :statuscheck & goto :menu )
+if "%CH%"=="6" ( call :demo & goto :menu )
+if "%CH%"=="7" ( call :doctor & goto :menu )
+if "%CH%"=="8" ( call :cheatsheet & goto :menu )
+if "%CH%"=="0" goto :bye
+echo    ^(unrecognized^)
+goto :menu
+
+rem ===========================================================================
+:launch
+echo.
+echo    Launching omp with model "%MODEL%" + the security gate in a new window...
+start "LucidAgentIDE %MODEL%" cmd /k "chcp 65001>nul & cd /d "%REPO%" & set "ANTHROPIC_API_KEY=%ANTHROPIC_API_KEY%" & omp --model %MODEL% -e harness/omp/security_extension.ts"
+echo    Done. Try in omp:  /lucid:help   |   !bun run dashboard:tui
+echo.
+timeout /t 2 >nul
+goto :menu
+
+rem ===========================================================================
+:pickmodel
+echo.
+echo    Anthropic models (current):
+echo       1^)  claude-opus-4-8     most capable
+echo       2^)  claude-sonnet-4-6   balanced speed/intelligence
+echo       3^)  claude-haiku-4-5    fastest / cheapest
+echo       4^)  custom  (type any id, e.g. openai/gpt-5.2)
+echo.
+set /p "M=    select: "
+if "%M%"=="1" set "MODEL=claude-opus-4-8"
+if "%M%"=="2" set "MODEL=claude-sonnet-4-6"
+if "%M%"=="3" set "MODEL=claude-haiku-4-5"
+if "%M%"=="4" ( set /p "MODEL=    enter model id: " )
+echo    model is now: %MODEL%
+echo.
+goto :menu
+
+rem ===========================================================================
+:pickprovider
+echo.
+echo       1^)  Anthropic   (ANTHROPIC_API_KEY)
+echo       2^)  OpenAI      (OPENAI_API_KEY)
+echo       3^)  OpenRouter  (OPENROUTER_API_KEY)
+echo       4^)  custom
+echo.
+set /p "P=    select: "
+if "%P%"=="1" ( set "PROVIDER=Anthropic"  & set "MODEL=claude-opus-4-8" )
+if "%P%"=="2" ( set "PROVIDER=OpenAI"     & set "MODEL=gpt-5.2" )
+if "%P%"=="3" ( set "PROVIDER=OpenRouter" & set "MODEL=anthropic/claude-opus-4-8" )
+if "%P%"=="4" ( set /p "PROVIDER=    provider name: " )
+echo    provider: %PROVIDER%   default model: %MODEL%
+echo    (omp resolves the provider from the model id + the matching API key env var)
+echo.
+goto :menu
+
+rem ===========================================================================
+:dashboard
+echo.
+where bun >nul 2>&1 || ( echo    bun not found - cannot render dashboard. & goto :eof )
+bun run "%REPO%\tools\dashboard_tui.ts"
+echo.
+goto :eof
+
+rem ===========================================================================
+:demo
+echo.
+where bun >nul 2>&1 || ( echo    bun not found. & goto :eof )
+echo    Running demo-P2.4: a poisoned tool call is blocked by the gate...
+bun run "%REPO%\harness\scripts\demo04_quarantine_hook.ts"
+echo.
+goto :eof
+
+rem ===========================================================================
+:ompstatus
+set "OMP=stopped"
+for /f "tokens=*" %%T in ('tasklist /v /fo csv 2^>nul ^| findstr /i "LucidAgentIDE" ^| findstr /v /i "Control"') do set "OMP=running"
+echo    omp session : %OMP%
+goto :eof
+
+:statuscheck
+call :ompstatus
+if "%OMP%"=="running" ( echo    [ OK ] an omp / LucidAgentIDE window is open. ) else ( echo    [ -- ] no omp window detected. Use option 1 to launch. )
+echo.
+goto :eof
+
+rem ===========================================================================
+:cheatsheet
+echo.
+echo    ============================  CHEATSHEET  ===========================
+echo    Inside omp (the agent window):
+echo       /lucid:help          quickstart for the security harness + commands
+echo       /lucid:scan TEXT     scan text for hidden-unicode prompt injection
+echo       /lucid:dashboard     show the security dashboard in the TUI
+echo       !bun run dashboard:tui   instant dashboard (no agent turn)
+echo       !bun run demo-P2.4       live injection-block demo
+echo       Ctrl+P               cycle models     /usage   token usage
+echo.
+echo    In THIS control panel:
+echo       1 launch omp   2 switch model   3 switch provider
+echo       4 dashboard    5 status         6 demo   7 doctor
+echo.
+echo    Models (current):  claude-opus-4-8 . claude-sonnet-4-6 . claude-haiku-4-5
+echo    Keys (env var):    ANTHROPIC_API_KEY . OPENAI_API_KEY . OPENROUTER_API_KEY
+echo    =====================================================================
+echo.
+goto :eof
+
+rem ===========================================================================
+:bye
+echo.
+echo    Bye. (omp windows you launched keep running.)
+echo.
+endlocal
+exit /b 0

@@ -31,7 +31,8 @@
     "demo-P7.1": "bun run harness/scripts/demo14_dashboards.ts",
     "demo-P7.2": "bun run harness/scripts/demo15_replay_bench.ts",
     "dashboards": "bun run harness/scripts/materialize_dashboards.ts",
-    "omp:secure": "omp -e harness/omp/security_extension.ts"
+    "omp:secure": "omp -e harness/omp/security_extension.ts",
+    "dashboard:tui": "bun run tools/dashboard_tui.ts"
   },
   "dependencies": {
     "@duckdb/node-api": "1.5.4-r.1",
