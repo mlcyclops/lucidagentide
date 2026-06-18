@@ -130,6 +130,14 @@ demo-P6.1: ## P6.1: remote-runner gate scans payload before dispatch; routes sus
 demo-P6.2: ## P6.2: safe export (MD/CSV/JSON); raw never rendered by default; export audited
 	$(BUN) run harness/scripts/demo13_safe_export.ts
 
+.PHONY: demo-P7.1
+demo-P7.1: ## P7.1: materialize the six security dashboard views to safe CSVs
+	$(BUN) run harness/scripts/demo14_dashboards.ts
+
+.PHONY: dashboards
+dashboards: ## Materialize dashboard CSVs from a DuckDB into observable/docs/data (DB=path)
+	$(BUN) run harness/scripts/materialize_dashboards.ts $(DB) observable/docs/data
+
 # ---------------------------------------------------------------------------
 # Hygiene
 # ---------------------------------------------------------------------------

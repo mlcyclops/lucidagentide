@@ -17,6 +17,10 @@ vendor/
 **/telemetry/raw/
 repos/project-alpha/.agent/telemetry/
 
+# --- generated dashboard data (materialized from DuckDB) ---
+observable/docs/data/
+observable/.observablehq/cache/
+
 # --- OS / editor ---
 .DS_Store
 Thumbs.db

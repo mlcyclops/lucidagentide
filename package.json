@@ -27,7 +27,9 @@
     "demo-P5.1": "bun run harness/scripts/demo10_lineage.ts",
     "demo-P5.2": "bun run harness/scripts/demo11_sandbox.ts",
     "demo-P6.1": "bun run harness/scripts/demo12_remote_gate.ts",
-    "demo-P6.2": "bun run harness/scripts/demo13_safe_export.ts"
+    "demo-P6.2": "bun run harness/scripts/demo13_safe_export.ts",
+    "demo-P7.1": "bun run harness/scripts/demo14_dashboards.ts",
+    "dashboards": "bun run harness/scripts/materialize_dashboards.ts"
   },
   "dependencies": {
     "@duckdb/node-api": "1.5.4-r.1",

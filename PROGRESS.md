@@ -347,3 +347,27 @@ Three lines per session: **shipped / stubbed / next** (CLAUDE.md session ritual)
   later).
 - **next:** Phase 7 / P7.1 — Observable dashboards from DuckDB exports
   (operational + the six security dashboard views).
+
+-----
+
+## 2026-06-18 — P7.1: Observable dashboards from DuckDB exports
+
+- **shipped:** `dashboards/views.ts` — the six PRD security views (findings
+  overview, Unicode analysis, approval queue, quarantine review, memory-promotion
+  risk, export audit) + operational (active runs), all selecting **metadata only**
+  (no raw_content column is ever read). `dashboards/materialize.ts` —
+  `materializeDashboards` runs every view and writes `<name>.csv` through the
+  safe-export `csvField`, so the feed can never carry an invisible/control char.
+  `observable/` — Framework config + `docs/{index,security}.md` pages (tables +
+  Plot) consuming the CSVs, README, generated `docs/data/` gitignored.
+  `materialize_dashboards.ts` CLI + `make dashboards`. `demo-P7.1` builds a
+  workload, materializes all 7 views, and asserts no invisibles + expected
+  contents. All green: 122 harness tests (+5), 54 sidecar, demos 00..P6.2 + P7.1,
+  tsc 0. **PRD dashboard reqs met:** six security views; feed exposes metadata,
+  never raw.
+- **stubbed:** Observable Framework is not a harness dep (kept Bun install lean) —
+  run on demand via `npx @observablehq/framework`; the materialized CSVs are the
+  tested contract. Compaction-quality / verification-failures operational pages
+  are future view additions on the same pipeline.
+- **next:** P7.2 — replay + benchmark + prompt-version comparison; tie cache-hit
+  rate / token consumption per prompt-prefix version back to Increment 2.
