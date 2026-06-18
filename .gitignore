@@ -24,3 +24,6 @@ observable/.observablehq/cache/
 # --- OS / editor ---
 .DS_Store
 Thumbs.db
+
+# --- local Claude Code settings (personal; shared config lives in settings.json) ---
+.claude/settings.local.json
