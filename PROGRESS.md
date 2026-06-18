@@ -39,3 +39,25 @@ Three lines per session: **shipped / stubbed / next** (CLAUDE.md session ritual)
 - **next:** Increment 2 — cache-optimized prompt assembly (`demo-02`): 9-layer
   composer with a byte-stable frozen prefix; push omp's auto-injected env/git/date
   into the tail; prefix-hash test identical across tasks/cwd/branch.
+
+-----
+
+## 2026-06-18 — Increment 2: cache-optimized prompt assembly
+
+- **shipped:** `harness/prompt/assembler.ts` (FROZEN CONTRACT) — 9 PRD layers split
+  hard at the cache breakpoint: byte-stable `FROZEN_PREFIX` (layers 1–4:
+  identity/safety, tool-use/permission, coding rules, security/trust-boundary),
+  volatile tail (5–9). Untrusted retrieved content enters only via `wrapUntrusted`
+  (delimited, labeled, tail-only, invariant #5). `PREFIX_VERSION` gates any prefix
+  change; sha256 `prefixHash` is the cache fingerprint. `demo-02` proves the prefix
+  is byte-identical (2203 B, hash `e077d6fc…`) across two requests differing in
+  task/cwd/branch/retrieved, AND that omp threads our prefix through as system
+  block[0] (task lands in the tail). **ADR-0004** records the integration:
+  passing `systemPrompt: [prefix, tail]` replaces omp's default wholesale
+  (resolves ADR-0003 #5). All green: 22 harness tests (+7), 12 sidecar, demos
+  00/01/02, tsc 0.
+- **stubbed:** Layer-5 instruction-file loading + layer-8 volatile-context
+  gathering are caller-supplied inputs (real omp instruction discovery wired in a
+  later increment); tool-schema stability is omp-managed (noted, not yet asserted).
+- **next:** Phase 2 / P2.1 — expand the scanner with mixed-script + homoglyph
+  detection and build the adversarial fixture corpus (keystone #1, over-test).

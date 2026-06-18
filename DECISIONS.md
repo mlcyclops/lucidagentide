@@ -255,3 +255,54 @@ load-bearing.
 - `result_adapter.ts` targets `AgentToolResult` (with `isError`/image content),
   not the simplified README shape.
 - ADR-0002's scanner IPC contract is unaffected (it never touched omp types).
+
+-----
+
+## ADR-0004 — Frozen-prefix integration: explicit `systemPrompt` array replaces omp's default
+
+**Date:** 2026-06-18
+**Status:** Accepted
+**Context increment:** Increment 2
+**Supersedes the open question in:** ADR-0003 #5
+
+### Decision
+
+The harness owns the entire system prompt. We assemble it ourselves
+(`harness/prompt/assembler.ts`) as a two-block array `[FROZEN_PREFIX, tail]` and
+pass it to `createAgentSession({ systemPrompt: blocks })`. omp uses that array
+**verbatim** and does **not** prepend or interleave its own auto-injected
+env/git/date context. Our frozen prefix (layers 1–4) is therefore byte-stable;
+all volatile context (layers 5–9, incl. session state) lives in the tail, after
+the cache breakpoint.
+
+### Why this resolves ADR-0003 #5
+
+ADR-0003 flagged that omp injects volatile context inside `buildSystemPrompt()`
+with no clean split seam, and predicted we'd have to "replace systemPrompt
+wholesale." Increment 2 confirms that is exactly the right move and that it
+works cleanly: passing an explicit `systemPrompt` **string[]** overrides omp's
+default system prompt entirely. We do not need to relocate omp's blocks — we
+simply don't use them, and gather whatever volatile context we want into our own
+tail layer 8.
+
+### Evidence (demo-02 / `demo02_prefix_hash.ts`)
+
+Driving a real headless omp session (echo model) with `systemPrompt: [prefix,
+tail]`, the model received exactly **2** system blocks; `systemPrompt[0]` was our
+`FROZEN_PREFIX` byte-for-byte (index 0), and the volatile task text appeared only
+later, in the tail. Prefix sha256 was identical across two requests that differed
+in task, cwd, git branch, and retrieved content.
+
+### Consequences / scope
+
+- `harness/prompt/assembler.ts` (the `FROZEN_PREFIX` constants, layers 1–4) is a
+  **frozen contract**: changing any byte bumps `PREFIX_VERSION` + needs an ADR.
+- Because we replace omp's default prompt, any omp-default guidance we still want
+  (e.g. its tool-usage preamble) must be re-supplied by us deliberately — it is
+  not inherited. Acceptable: the prefix is meant to be authored, not borrowed.
+- Verified in an isolated headless session with no skills/context files. If a
+  future increment re-enables omp's skill/context discovery, re-confirm that
+  discovery output lands in the tail region, not ahead of the prefix.
+- Provider-specific cache markers (e.g. Anthropic `cache_control`) are handled by
+  omp/provider plumbing; our contribution is the byte-stable ordering, which is
+  what every provider's longest-stable-prefix detection keys on.

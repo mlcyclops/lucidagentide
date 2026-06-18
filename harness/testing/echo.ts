@@ -66,8 +66,17 @@ export function createEchoModel(prefix = "echo: "): MockModel {
 
 export interface EchoSession {
   session: Awaited<ReturnType<typeof createAgentSession>>["session"];
+  /** The underlying mock model; inspect `model.calls` for the Context it saw. */
+  model: MockModel;
   /** Tear down auth storage and the isolated temp cwd. */
   cleanup: () => void;
+}
+
+export interface EchoSessionOptions {
+  /** Prefix the echo handler prepends to the echoed user text. */
+  prefix?: string;
+  /** System prompt to pass through to omp (e.g. an assembled [prefix, tail]). */
+  systemPrompt?: string | string[];
 }
 
 /**
@@ -76,8 +85,8 @@ export interface EchoSession {
  * per-provider auth check passes. Offline fetch so model discovery never hits
  * the network.
  */
-export async function createEchoSession(prefix = "echo: "): Promise<EchoSession> {
-  const model = createEchoModel(prefix);
+export async function createEchoSession(opts: EchoSessionOptions = {}): Promise<EchoSession> {
+  const model = createEchoModel(opts.prefix ?? "echo: ");
   const cwd = mkdtempSync(join(tmpdir(), "omp-echo-"));
 
   const authStorage = await AuthStorage.create(join(cwd, "auth.db"));
@@ -87,10 +96,17 @@ export async function createEchoSession(prefix = "echo: "): Promise<EchoSession>
     Promise.reject(new Error("network disabled in echo session"))) as unknown as typeof fetch;
   const modelRegistry = new ModelRegistry(authStorage, join(cwd, "models.yml"), { fetch: offlineFetch });
 
-  const { session } = await createAgentSession({ model, cwd, authStorage, modelRegistry });
+  const { session } = await createAgentSession({
+    model,
+    cwd,
+    authStorage,
+    modelRegistry,
+    ...(opts.systemPrompt !== undefined ? { systemPrompt: opts.systemPrompt } : {}),
+  });
 
   return {
     session,
+    model,
     cleanup: () => {
       try {
         authStorage.close();
