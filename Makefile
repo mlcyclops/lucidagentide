@@ -110,6 +110,10 @@ demo-P4.1: ## P4.1: memory layers (working/archive/semantic) + state artifacts
 demo-P4.2: ## P4.2: security-aware compaction (summaries from sanitized; raw preserved)
 	$(BUN) run harness/scripts/demo08_compaction.ts
 
+.PHONY: demo-P4.3
+demo-P4.3: ## P4.3: semantic-promotion gate blocks suspicious-source promotions (keystone #2)
+	$(BUN) run harness/scripts/demo09_promotion_gate.ts
+
 # ---------------------------------------------------------------------------
 # Hygiene
 # ---------------------------------------------------------------------------

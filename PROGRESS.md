@@ -223,3 +223,28 @@ Three lines per session: **shipped / stubbed / next** (CLAUDE.md session ritual)
 - **next:** P4.3 — semantic-promotion gate (keystone #2, over-test):
   suspicious-source promotions blocked until reviewed; resume-from-durable-state
   works; `demo-P4.3` proves a poisoned promotion is blocked.
+
+-----
+
+## 2026-06-18 — P4.3: semantic-promotion gate + safe resume (keystone #2, Phase 4 COMPLETE)
+
+- **shipped:** `promotion_gate.ts` — `promoteFactGated` resolves a promotion's
+  effective trust from its **source artifact's** trust (provenance wins; a caller
+  CANNOT lie about trust), blocks suspicious/quarantined sources until a recorded
+  approval (approve/quarantine_release/promotion_approve), and is **fail-closed**
+  on unverifiable provenance (unknown source → block). Writes nothing to
+  semantic memory on block; emits `memory_promotion_blocked`. `resume.ts` —
+  `resumeRun` reconstructs working state + fact count and surfaces the security
+  posture (unreviewed quarantined/suspicious artifacts) via the P3.1 precondition;
+  `safe=false` until reviewed. `demo-P4.3` proves a poisoned promotion is blocked,
+  fails closed on unknown provenance, unblocks after approval, and resumes safely.
+  Over-tested (keystone #2): 11 gate+resume tests incl. the caller-cant-lie case.
+  All green: 86 harness tests (+11), 54 sidecar, demos 00..P4.2 + P4.3, tsc 0.
+  **PRD Phase 4 acceptance met:** suspicious artifacts can't auto-promote;
+  compaction preserves provenance; a run resumes safely. Both correctness
+  keystones (scanner P2.1, promotion gate P4.3) are in and over-tested.
+- **stubbed:** promoteFactGated is the enforced path; compaction's
+  promotion-eligibility flags (P4.2) are advisory and would feed this gate when
+  compaction auto-promotes (not yet wired to auto-promote).
+- **next:** Phase 5 / P5.1 — parent/child runs + subagent dispatch; each child
+  run carries its own trace, sandbox, and scan lineage; store lineage.
