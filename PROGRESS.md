@@ -371,3 +371,27 @@ Three lines per session: **shipped / stubbed / next** (CLAUDE.md session ritual)
   are future view additions on the same pipeline.
 - **next:** P7.2 — replay + benchmark + prompt-version comparison; tie cache-hit
   rate / token consumption per prompt-prefix version back to Increment 2.
+
+-----
+
+## 2026-06-18 — P7.2: replay + benchmark + prompt-version comparison (Phase 7 + BUILD PLAN COMPLETE)
+
+- **shipped:** `runs/replay.ts` — `buildReplay` reconstructs the run tree +
+  telemetry timeline across the subtree + suspicious/injection/approval totals;
+  `renderReplay` prints it. `bench/benchmark.ts` (+ migration `0006_benchmark_
+  tables.sql`) — `runBenchmark` classifies each request as a prefix-cache hit/miss
+  by the assembler's prefix hash, recording token splits + security outcomes;
+  `cacheByPrefixVersion` + `outcomesByDimension(source|mode|model)` compare across
+  versions/dimensions. `stablePrefixBuilder` vs `volatilePrefixBuilder` make the
+  Increment-2 point concrete. `demo-P7.2`: stable prefix = **0.90 hit-rate / 4959
+  cache-read tokens** vs the volatile anti-pattern = **0.00 / 5670 rewritten** —
+  proof the KV-cache discipline holds. All green: **130 harness tests (+8)**, 54
+  sidecar, **all 17 demos (00..P7.2)**, tsc 0. **PRD Phase 7 acceptance met:**
+  finding-type trends inspectable; incidents comparable by model/source/mode;
+  prompt changes evaluable against BOTH security outcomes and cache/token metrics.
+- **stubbed:** token counts are a chars/4 estimate (swap a real tokenizer when a
+  live model is wired); benchmark requests are synthetic (the framework records
+  real runs once a non-echo provider is configured).
+- **next:** BUILD PLAN complete (Increment 0–2, Phases 2–7). Optional follow-ups:
+  real-model providers, live Observable build in CI, richer confusables set,
+  compaction-quality/verification-failure dashboard pages.

@@ -58,5 +58,20 @@ cd scanner-sidecar && uv run python -m pytest -q
 
 ## Status
 
-**Increment 0 complete** — see [`PROGRESS.md`](PROGRESS.md). Everything green:
-`demo-00`, 5 harness tests, 12 sidecar tests, `tsc --noEmit` clean.
+**Build plan complete** (Increment 0–2 + Phases 2–7) — see [`PROGRESS.md`](PROGRESS.md).
+Everything green: **17 demos** (`demo-00` … `demo-P7.2`), **130 harness tests**,
+**54 sidecar tests**, `tsc --noEmit` clean.
+
+The full security lifecycle holds end-to-end: untrusted text enters → scanned →
+trust-labeled → sanitized → persisted → **blocked at the tool / promotion /
+dispatch boundaries** → human-reviewed → and exits only as safe, audited
+evidence; with provenance-tracked recursive runs, replay, and a cache-optimized
+prompt prefix proven by benchmark.
+
+Run any stage:
+
+```bash
+bun run demo-P2.4   # quarantine pre-hook blocks a poisoned tool call
+bun run demo-P4.3   # poisoned memory can't auto-promote (keystone #2)
+bun run demo-P7.2   # cache-hit benchmark by prompt-prefix version
+```
