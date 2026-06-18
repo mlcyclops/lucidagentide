@@ -114,6 +114,10 @@ demo-P4.2: ## P4.2: security-aware compaction (summaries from sanitized; raw pre
 demo-P4.3: ## P4.3: semantic-promotion gate blocks suspicious-source promotions (keystone #2)
 	$(BUN) run harness/scripts/demo09_promotion_gate.ts
 
+.PHONY: demo-P5.1
+demo-P5.1: ## P5.1: parent/child run lineage + subagent dispatch with per-run scan lineage
+	$(BUN) run harness/scripts/demo10_lineage.ts
+
 # ---------------------------------------------------------------------------
 # Hygiene
 # ---------------------------------------------------------------------------

@@ -248,3 +248,27 @@ Three lines per session: **shipped / stubbed / next** (CLAUDE.md session ritual)
   compaction auto-promotes (not yet wired to auto-promote).
 - **next:** Phase 5 / P5.1 — parent/child runs + subagent dispatch; each child
   run carries its own trace, sandbox, and scan lineage; store lineage.
+
+-----
+
+## 2026-06-18 — P5.1: parent/child run lineage + subagent dispatch
+
+- **shipped:** migration `0005_runs_lineage.sql` — the `runs` table (the deferred
+  identity table), with `parent_run_id` as a soft self-reference + kind / mode /
+  sandbox_profile / status. `runs/lineage.ts` — `startRun` / `endRun` /
+  `spawnSubagent` (links parent, inherits session), `getRunTree` (recursive CTE →
+  nested tree with **per-run suspicious-artifact counts** = scan lineage), and
+  `getLineage` (root-to-node chain). Each child carries its own trace (run_id-
+  scoped telemetry), sandbox (column), and scan lineage (run_id-scoped artifacts).
+  `demo-P5.1` spawns a root + 2 children + a grandchild, renders the run tree
+  flagging where suspicious content entered, and shows a child's poisoned
+  artifact being blocked from promotion into shared semantic memory (P4.3 gate
+  across the child→parent boundary). All green: 92 harness tests (+6), 54
+  sidecar, demos 00..P4.3 + P5.1, tsc 0.
+- **stubbed:** sandbox_profile is recorded but not yet enforced (P5.2 maps
+  profiles onto omp isolation backends + auto-downgrade); real omp subagent
+  dispatch is modeled by our lineage records (wiring to omp's task system is the
+  P5.2 integration); replay rendering here is a CLI tree (the Phase-7 dashboard
+  consumes the same getRunTree).
+- **next:** P5.2 — sandbox profiles mapped onto omp isolation backends;
+  suspicious tasks auto-downgrade; security-review subagent is read-only/quarantine.
