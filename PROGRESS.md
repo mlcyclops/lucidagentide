@@ -200,3 +200,26 @@ Three lines per session: **shipped / stubbed / next** (CLAUDE.md session ritual)
 - **next:** P4.2 — security-aware compaction: summaries generated from sanitized
   derivatives; raw spans kept in archive; provenance links to source spans +
   scan findings preserved.
+
+-----
+
+## 2026-06-18 — P4.2: security-aware compaction
+
+- **shipped:** migration `0004_compaction_tables.sql` — compaction_spans,
+  compaction_summaries, compaction_promotions. `compaction.ts` — `compactSpan`
+  generates the summary from **sanitized derivatives only** (the module never
+  reads content_artifacts.raw_content; SQL selects sanitized_content), records
+  `generated_from='sanitized'`, preserves the span's aggregate finding_count +
+  artifact-id provenance, keeps raw spans in archive, and marks
+  suspicious/quarantined sources promotion-INELIGIBLE (trusted/untrusted
+  eligible). Injectable summarizer (LLM later); default is deterministic.
+  `demo-P4.2` proves the summary has no invisibles while raw is preserved. All
+  green: 75 harness tests (+6, incl. the keystone "summary from sanitized"), 54
+  sidecar, demos 00..P4.1 + P4.2, tsc 0.
+- **stubbed:** wiring `compactSpan` to omp's own compaction trigger is deferred
+  (the transform is the security-bearing part; trigger is mechanism);
+  compaction_promotions records ELIGIBILITY only — the enforced semantic-write
+  gate is P4.3.
+- **next:** P4.3 — semantic-promotion gate (keystone #2, over-test):
+  suspicious-source promotions blocked until reviewed; resume-from-durable-state
+  works; `demo-P4.3` proves a poisoned promotion is blocked.

@@ -106,6 +106,10 @@ demo-P3.2: ## P3.2: ingest telemetry JSONL into DuckDB (idempotent) + sample sec
 demo-P4.1: ## P4.1: memory layers (working/archive/semantic) + state artifacts
 	$(BUN) run harness/scripts/demo07_memory.ts
 
+.PHONY: demo-P4.2
+demo-P4.2: ## P4.2: security-aware compaction (summaries from sanitized; raw preserved)
+	$(BUN) run harness/scripts/demo08_compaction.ts
+
 # ---------------------------------------------------------------------------
 # Hygiene
 # ---------------------------------------------------------------------------
