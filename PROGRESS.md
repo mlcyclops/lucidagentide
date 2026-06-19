@@ -4,6 +4,16 @@ Three lines per session: **shipped / stubbed / next** (CLAUDE.md session ritual)
 
 -----
 
+## P9.1: encrypted personalization store + crypto (ADR-0010)
+- **shipped:** harness/personal/crypto.ts (AES-256-GCM + PBKDF2-HMAC-SHA256, all FIPS-approved) and
+  harness/personal/store.ts — the encrypted KG store (`personal-kg.v1`): entities/facts/links, DEK in
+  memory only, two custody paths (passphrase-wrapped DEK; OS-keystore via an externally-unsealed key).
+  New EventName `personal_store_unlocked`; `personalizationEnabled` opt-in flag (default OFF) +
+  personalStorePath(). 10 new tests (round-trips, wrong-key/tamper fail-closed, forget, the event). 140 green.
+- **stubbed:** desktop wiring — the Settings "Personalization" toggle UI, the Electron safeStorage IPC for
+  OS-keystore custody, and the passphrase-unlock flow (the harness foundation is done + tested).
+- **next:** P9.1 desktop integration (toggle + unlock + safeStorage seam), then P9.2 (distiller + recall).
+
 ## P10.0: context-window fix + observability roadmap (ADR-0011)
 - **shipped:** fixed the context-window display (status bar + Memory panel showed 256k/200k for a 1M
   Gemini) via a per-model MODEL_CTX/CTX_WINDOW map keyed by short id. ADR-0011 captures the

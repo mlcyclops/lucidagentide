@@ -38,9 +38,20 @@ export interface GuiSettings {
   asksagePersona?: string;
   // headroom token-compression proxy (opt-in, on-device). See ADR-0008.
   headroomEnabled?: boolean;
+  // Personalization knowledge graph (ADR-0010, P9.x): opt-in, encrypted-at-rest.
+  // OFF by default — no user-fact distillation, recall, or store until enabled.
+  personalizationEnabled?: boolean;
 }
 
 export const ASKSAGE_DEFAULT_LIMIT = 200_000;
+
+/** Default on-disk location of the encrypted personalization store (P9.1). */
+export function personalStorePath(): string {
+  return join(homedir(), ".omp", "lucid-personal.kg.enc");
+}
+export function setPersonalization(enabled: boolean): GuiSettings {
+  const s = load(); s.personalizationEnabled = enabled; save(s); return s;
+}
 
 export function load(): GuiSettings {
   try { return existsSync(FILE) ? JSON.parse(readFileSync(FILE, "utf8")) : {}; } catch { return {}; }
