@@ -55,6 +55,7 @@ function buildShell(): void {
 
     <div class="body">
       <nav class="rail">
+        <button class="rail-btn" id="sideToggle" data-tip="Sessions panel|Show / hide" data-tip-side="right">${icon("sidebar", 20)}</button>
         <button class="rail-btn active" data-rail="chat" data-tip="Conversation" data-tip-icon="chat">${icon("chat", 20)}</button>
         <button class="rail-btn" data-rail="security" data-tip="Security|Findings, quarantine & approvals" data-tip-icon="shield">${icon("shield", 20)}<span class="badge" id="railBadge" hidden>0</span></button>
         <button class="rail-btn" data-rail="memory" data-tip="Memory & context|Context window, KV-cache, semantic memory" data-tip-icon="brain">${icon("brain", 20)}</button>
@@ -66,7 +67,10 @@ function buildShell(): void {
 
       <aside class="sidebar" id="sidebar">
         <div class="side-head"><span>Sessions</span>
-          <button class="side-new" id="newSession" data-tip="New session">${icon("plus", 15)}</button></div>
+          <div class="side-actions">
+            <button class="side-new" id="newSession" data-tip="New session">${icon("plus", 15)}</button>
+            <button class="side-new" id="sideCollapse" data-tip="Collapse panel" data-tip-side="bottom">${icon("collapse", 15)}</button>
+          </div></div>
         <div class="side-list" id="sessList"></div>
       </aside>
 
@@ -114,9 +118,10 @@ function relTime(ms: number): string {
   return `${Math.floor(h / 24)}d ago`;
 }
 async function renderSessions(): Promise<void> {
-  const sessions = await bridge.sessions().catch(() => [] as SessionInfo[]);
+  const sessions = await bridge.sessions().catch(() => null);
   const list = $("#sessList");
   if (!list) return;
+  if (sessions === null) { list.innerHTML = `<div class="side-empty">Couldn't load history — the GUI server looks out of date. Relaunch it (launcher → <b>G</b>), or restart <code>bun run desktop:web</code>.</div>`; return; }
   if (!sessions.length) { list.innerHTML = `<div class="side-empty">No sessions yet — send a prompt to start one. They persist here across runs.</div>`; return; }
   list.innerHTML = sessions.map((s, i) => `
     <div class="sess ${i === 0 ? "active" : ""}" data-sid="${esc(s.id)}" data-tip="${esc(s.title)}|${esc(prettyModel(s.model))} · ${s.turns} turn${s.turns === 1 ? "" : "s"} · ${relTime(s.updatedAt)}" data-tip-side="right">
@@ -135,9 +140,9 @@ function seedThread(): void {
 function addMessage(role: "user" | "assistant", text: string): HTMLElement {
   $("#chatHint")?.remove();
   const node = el(`<div class="msg ${role}">
-    <div class="av">${role === "user" ? "you" : piMark}</div>
-    <div class="body"><div class="who">${role === "user" ? "You" : "LucidAgent"}</div>
-    <div class="text"></div></div></div>`);
+    <div class="who">${role === "user" ? "You" : "LucidAgent"}</div>
+    <div class="av">${role === "user" ? icon("user", 16) : piMark}</div>
+    <div class="text"></div></div>`);
   ($(".text", node) as HTMLElement).innerHTML = mdInline(text);
   $("#thread")!.appendChild(node);
   scrollChat();
@@ -423,10 +428,10 @@ function wire(): void {
   $("#inspCollapse")!.addEventListener("click", () => setInspectorRail(true));
   $("#railExpand")!.addEventListener("click", () => setInspectorRail(false));
 
-  // composer agent controls → the model · mode · thinking picker
-  $("#ctModel")!.addEventListener("click", () => openConfigPopover($("#ctModel")!));
-  $("#ctMode")!.addEventListener("click", () => openConfigPopover($("#ctMode")!));
-  $("#ctThink")!.addEventListener("click", () => openConfigPopover($("#ctThink")!));
+  // composer agent controls → focused per-control dropdowns
+  $("#ctModel")!.addEventListener("click", () => openOptionDropdown($("#ctModel")!, "model"));
+  $("#ctMode")!.addEventListener("click", () => openOptionDropdown($("#ctMode")!, "mode"));
+  $("#ctThink")!.addEventListener("click", () => openOptionDropdown($("#ctThink")!, "thinking"));
 
   // inspector tabs
   $$(".insp-tab").forEach((t) => t.addEventListener("click", () => focusInspector((t as HTMLElement).dataset.insp as Tab)));
@@ -448,7 +453,9 @@ function wire(): void {
   ta.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } });
   $("#send")!.addEventListener("click", () => send());
 
-  // sidebar collapse via brand click; window controls
+  // sidebar collapse (rail toggle + header collapse), mirroring the right panel
+  $("#sideToggle")!.addEventListener("click", () => toggleSidebar());
+  $("#sideCollapse")!.addEventListener("click", () => toggleSidebar(true));
   $(".brand")!.addEventListener("click", () => toggleSidebar());
   $("#newSession")!.addEventListener("click", () => newSession());
   const w = (window as any).lucid?.win;
@@ -600,6 +607,30 @@ function openConfigPopover(anchor: HTMLElement): void {
       applyConfig("thinking", it.dataset.val!);
     });
   }
+}
+
+/** A focused single-option dropdown (used by the composer chips) — one config at
+ *  a time. omp exposes exactly two modes: Default (Agent) and Plan. */
+function openOptionDropdown(anchor: HTMLElement, configId: string): void {
+  cfgClose?.();
+  const c = state.config.find((x) => x.id === configId);
+  if (!c) return;
+  const opts = configId === "model" ? curatedModels(c) : c.options;
+  const labelOf = (o: { value: string; name: string }) =>
+    configId === "model" ? o.name : configId === "thinking" ? prettyLevel(o.name) : o.value === "plan" ? "Plan" : "Agent";
+  const rows = (list: { value: string; name: string }[]) => list.map((o) =>
+    `<div class="cfg-opt ${o.value === c.currentValue ? "on" : ""}" data-val="${esc(o.value)}"><span class="tick">${icon("check", 13)}</span><span class="nm">${esc(labelOf(o))}</span>${configId === "model" ? `<span class="id">${esc(bareModel(o.value))}</span>` : ""}</div>`).join("");
+  const search = configId === "model" ? `<div class="cfg-search">${icon("search", 15)}<input id="miniSearch" placeholder="Search ${opts.length} models…" /></div>` : "";
+  const { node, close } = popover(anchor, `<div class="cfg-sec"><div class="cfg-lbl">${esc(c.name)}</div>${search}<div class="cfg-list" id="miniList">${rows(opts)}</div></div>`, () => { cfgClose = null; });
+  cfgClose = close;
+  const listEl = $("#miniList", node)!;
+  if (configId === "model") {
+    ($("#miniSearch", node) as HTMLInputElement).addEventListener("input", (e) => {
+      const q = (e.target as HTMLInputElement).value.toLowerCase();
+      listEl.innerHTML = rows(opts.filter((o) => o.name.toLowerCase().includes(q) || o.value.toLowerCase().includes(q)));
+    });
+  }
+  listEl.addEventListener("click", (e) => { const it = (e.target as HTMLElement).closest("[data-val]") as HTMLElement | null; if (it) { applyConfig(configId, it.dataset.val!); close(); } });
 }
 
 // ───────────────────────── text zoom ─────────────────────────

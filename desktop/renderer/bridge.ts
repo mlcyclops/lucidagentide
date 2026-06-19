@@ -48,7 +48,7 @@ export interface LucidBridge {
   config(): Promise<ConfigOption[]>;
   setConfig(configId: string, value: string): Promise<ConfigOption[]>;
   commands(): Promise<OmpCommand[]>;
-  sessions(): Promise<SessionInfo[]>;
+  sessions(): Promise<SessionInfo[] | null>;
   newSession(): Promise<void>;
   setZoom(factor: number): void;
 }
@@ -113,7 +113,19 @@ export const bridge: LucidBridge = {
   config: async () => (await getData("/api/config")) ?? FALLBACK_CONFIG,
   setConfig: async (id, value) => (await post("/api/setConfig", { configId: id, value })) ?? FALLBACK_CONFIG,
   commands: async () => (await getData("/api/commands")) ?? [],
-  sessions: async () => (await getData("/api/sessions")) ?? [],
+  sessions: async () => {
+    try {
+      const r = await fetch("/api/sessions", { cache: "no-store" });
+      if (r.status === 404) return null; // server predates the sessions route → out of date
+      return (await r.json())?.data ?? [];
+    } catch { return null; }
+  },
   newSession: async () => { await post("/api/newSession", {}); },
-  setZoom: (f) => { if (shell?.setZoom) shell.setZoom(f); else (document.body.style as any).zoom = String(f); },
+  setZoom: (f) => {
+    if (shell?.setZoom) { shell.setZoom(f); return; } // Electron: crisp native zoom
+    // Browser: zoom #app and counter-scale its height so it still fills the viewport
+    // exactly (so the layout reflows and the chat keeps its own scroll).
+    const app = document.getElementById("app");
+    if (app) { (app.style as any).zoom = String(f); app.style.height = `calc(100vh / ${f})`; }
+  },
 };

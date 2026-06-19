@@ -37,6 +37,9 @@ const RAW: Record<string, string> = {
   // collapse-right / expand-left (inspector ↔ metrics rail)
   collapse: P("M7 6l5 6-5 6") + P("M13 6l5 6-5 6"),
   expand: P("M17 6l-5 6 5 6") + P("M11 6l-5 6 5 6"),
+  // person (user avatar) + sidebar toggle
+  user: P("M12 12.5a3.4 3.4 0 1 0 0-6.8 3.4 3.4 0 0 0 0 6.8z") + P("M5.5 19a6.5 6.5 0 0 1 13 0"),
+  sidebar: P("M4 5.5h16v13H4z") + P("M9.5 5.5v13"),
   // command
   command: P("M9 6a1.8 1.8 0 1 0 1.8 1.8V6zM9 18a1.8 1.8 0 1 1 1.8-1.8V18zM15 6a1.8 1.8 0 1 1-1.8 1.8H15zM15 18a1.8 1.8 0 1 0-1.8-1.8H15z") + P("M9.2 7.8h5.6v8.4H9.2z"),
   // eye (review)
