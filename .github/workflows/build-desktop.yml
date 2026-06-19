@@ -1,0 +1,86 @@
+# Build the LucidAgentIDE desktop installers (macOS .dmg/.zip + Windows .exe).
+#
+# electron-builder can't cross-build/sign a mac .dmg from Windows, so this runs
+# the real packaging on native runners: macOS for the .dmg/.zip, Windows for the
+# NSIS installer + portable .exe. Both bundle the repo into the app
+# (extraResources) per desktop/package.json.
+#
+# Triggers:
+#   - Manual:  Actions -> "Build desktop installers" -> Run workflow.
+#   - On tag:  push a tag like v0.1.0 and the installers are attached to the
+#              GitHub Release for that tag.
+#
+# Output: downloadable artifacts on every run; release assets on tag builds.
+# Builds are UNSIGNED (no Apple/Windows code-signing certs needed) — see
+# desktop/README.md for how to add signing/notarization later.
+
+name: Build desktop installers
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write # needed to attach installers to the tag's Release
+
+jobs:
+  build:
+    name: ${{ matrix.label }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            label: macOS (.dmg/.zip, arm64+x64)
+            script: dist:mac
+          - os: windows-latest
+            label: Windows (NSIS + portable, x64)
+            script: dist:win
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      # Root deps are bundled into the app (extraResources copies node_modules/**),
+      # so they must exist before electron-builder packages.
+      - name: Install repo dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Install desktop dependencies
+        run: bun install
+        working-directory: desktop
+
+      - name: Build installer (${{ matrix.script }})
+        run: bun run ${{ matrix.script }}
+        working-directory: desktop
+        env:
+          # Build unsigned: don't let electron-builder hunt for a mac identity.
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+
+      - name: Upload installers as artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: LucidAgentIDE-${{ runner.os }}
+          if-no-files-found: warn
+          path: |
+            desktop/release/*.dmg
+            desktop/release/*.zip
+            desktop/release/*Setup*.exe
+            desktop/release/*portable*.exe
+            desktop/release/*.blockmap
+            desktop/release/latest*.yml
+
+      - name: Attach installers to the Release (tag builds only)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            desktop/release/*.dmg
+            desktop/release/*.zip
+            desktop/release/*Setup*.exe
+            desktop/release/*portable*.exe

@@ -1,0 +1,60 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <!-- LucidAgentIDE app icon — glowing π core inside a "lucid lens" agent orbit.
+       Brand: magenta #c64bd6 / #e07bf0, cyan #46c8dc, near-black #0a0b0f.
+       Source of truth; build/make-icons.ts rasterizes this to icon.png/.ico. -->
+  <defs>
+    <radialGradient id="tile" cx="68%" cy="14%" r="95%">
+      <stop offset="0%" stop-color="#1a1430"/>
+      <stop offset="42%" stop-color="#11131b"/>
+      <stop offset="100%" stop-color="#08090d"/>
+    </radialGradient>
+    <linearGradient id="brand" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#e07bf0"/>
+      <stop offset="52%" stop-color="#c64bd6"/>
+      <stop offset="100%" stop-color="#46c8dc"/>
+    </linearGradient>
+    <linearGradient id="ring" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#46c8dc"/>
+      <stop offset="55%" stop-color="#c64bd6"/>
+      <stop offset="100%" stop-color="#e07bf0"/>
+    </linearGradient>
+    <radialGradient id="bloom" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#c64bd6" stop-opacity="0.55"/>
+      <stop offset="45%" stop-color="#c64bd6" stop-opacity="0.20"/>
+      <stop offset="100%" stop-color="#c64bd6" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="sheen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.10"/>
+      <stop offset="22%" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+
+  <!-- tile -->
+  <rect x="96" y="96" width="832" height="832" rx="196" fill="url(#tile)"/>
+  <rect x="96" y="96" width="832" height="832" rx="196" fill="url(#sheen)"/>
+  <rect x="98.5" y="98.5" width="827" height="827" rx="193.5" fill="none" stroke="#3a2150" stroke-opacity="0.55" stroke-width="3"/>
+
+  <!-- bloom behind the core -->
+  <circle cx="512" cy="520" r="300" fill="url(#bloom)"/>
+
+  <!-- agent orbit: a near-full lens ring with a travelling node -->
+  <circle cx="512" cy="520" r="248" fill="none" stroke="#241a33" stroke-width="14"/>
+  <path d="M512 272
+           a248 248 0 1 1 -175.4 72.6"
+        fill="none" stroke="url(#ring)" stroke-width="16" stroke-linecap="round"/>
+  <!-- inner faint guide ring -->
+  <circle cx="512" cy="520" r="208" fill="none" stroke="#46c8dc" stroke-opacity="0.16" stroke-width="3"/>
+  <!-- travelling node -->
+  <circle cx="336.6" cy="344.6" r="20" fill="#e07bf0"/>
+  <circle cx="336.6" cy="344.6" r="34" fill="#e07bf0" opacity="0.28"/>
+
+  <!-- π glyph (vector, legible at 16px) -->
+  <g fill="url(#brand)">
+    <!-- top bar (overhangs the legs, as in a real π) -->
+    <rect x="360" y="428" width="304" height="50" rx="22"/>
+    <!-- left leg -->
+    <rect x="416" y="478" width="50" height="152" rx="18"/>
+    <!-- right leg -->
+    <rect x="558" y="478" width="50" height="152" rx="18"/>
+  </g>
+</svg>

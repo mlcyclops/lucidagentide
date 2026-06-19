@@ -14,6 +14,7 @@ vendor/
 
 # --- telemetry / databases (raw forensic data stays local, never committed) ---
 **/*.duckdb
+**/*.duckdb.wal
 **/telemetry/raw/
 repos/project-alpha/.agent/telemetry/
 
@@ -46,3 +47,9 @@ lucid-gui.json
 
 # desktop electron-builder output
 desktop/release/
+
+# generated app icons (source of truth is desktop/build/icon.svg;
+# the `icons` script / CI regenerates these from it)
+desktop/build/icon.png
+desktop/build/icon.ico
+desktop/build/icon.icns

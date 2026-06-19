@@ -6,16 +6,22 @@
   "main": "dist/main.js",
   "scripts": {
     "build": "bun build main.ts --target=node --format=cjs --external electron --outfile dist/main.js && bun build preload.ts --target=node --format=cjs --external electron --outfile dist/preload.js",
+    "icons": "bun run build/make-icons.ts",
     "start": "bun run build && electron .",
     "web": "bun run dev.ts",
     "typecheck": "tsc --noEmit",
-    "dist:mac": "bun run build && electron-builder --mac",
-    "dist": "bun run build && electron-builder"
+    "dist:mac": "bun run icons && bun run build && electron-builder --mac",
+    "dist:win": "bun run icons && bun run build && electron-builder --win",
+    "dist:linux": "bun run icons && bun run build && electron-builder --linux",
+    "dist": "bun run icons && bun run build && electron-builder"
   },
   "build": {
     "appId": "com.lucidagentide.desktop",
     "productName": "LucidAgentIDE",
-    "directories": { "output": "release", "buildResources": "build" },
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
     "files": ["dist/**", "renderer/**", "package.json"],
     "asarUnpack": [],
     "extraResources": [
@@ -39,19 +45,64 @@
     "mac": {
       "category": "public.app-category.developer-tools",
       "target": [
-        { "target": "dmg", "arch": ["arm64", "x64"] },
-        { "target": "zip", "arch": ["arm64", "x64"] }
+        {
+          "target": "dmg",
+          "arch": ["arm64", "x64"]
+        },
+        {
+          "target": "zip",
+          "arch": ["arm64", "x64"]
+        }
       ],
       "hardenedRuntime": true,
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.plist",
       "gatekeeperAssess": false
     },
-    "dmg": { "title": "LucidAgentIDE ${version}" }
+    "dmg": {
+      "title": "LucidAgentIDE ${version}",
+      "icon": "build/icon.icns"
+    },
+    "win": {
+      "icon": "build/icon.ico",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        },
+        {
+          "target": "portable",
+          "arch": ["x64"]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowElevation": true,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "LucidAgentIDE",
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico",
+      "installerHeaderIcon": "build/icon.ico",
+      "artifactName": "${productName}-${version}-Setup.${ext}"
+    },
+    "portable": {
+      "artifactName": "${productName}-${version}-portable.${ext}"
+    },
+    "linux": {
+      "icon": "build/icon.png",
+      "category": "Development",
+      "target": ["AppImage"]
+    }
   },
   "devDependencies": {
+    "@resvg/resvg-js": "^2.6.2",
     "electron": "^33.0.0",
     "electron-builder": "^25.1.8",
+    "png-to-ico": "^3.0.1",
     "typescript": "^5.6.0"
   }
 }

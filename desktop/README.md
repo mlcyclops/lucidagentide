@@ -86,45 +86,92 @@ native-only bits are crisp text zoom (`webFrame`) and window controls, from
 See [`../DECISIONS.md`](../DECISIONS.md) ADR-0006 for why the gate stays
 in-process and the GUI is a front end only.
 
-## Build a macOS installer (.dmg)
+## Installers (.dmg / .exe) and the app icon
 
 The app is packaged with **electron-builder** (config in `package.json` → `build`,
-mac entitlements in `build/entitlements.mac.plist`). A `.dmg`/`.zip` is produced
-for both Apple Silicon (`arm64`) and Intel (`x64`).
+mac entitlements in `build/entitlements.mac.plist`).
 
-> **Must be built on macOS.** electron-builder can't produce/sign a mac `.dmg`
-> from Windows or Linux. Run this on a Mac (or mac CI runner).
+| Platform | Targets | Arch |
+| --- | --- | --- |
+| macOS | `.dmg` + `.zip` | `arm64`, `x64` |
+| Windows | NSIS `…-Setup.exe` + `…-portable.exe` | `x64` |
+| Linux | `.AppImage` | `x64` |
+
+### The icon
+
+The brand icon's single source of truth is [`build/icon.svg`](build/icon.svg) — a
+glowing **π** core inside a magenta→cyan "agent orbit." `bun run icons`
+(`build/make-icons.ts`, run automatically by every `dist:*` script) rasterizes it
+to `build/icon.png` (1024², → macOS `.icns`) and `build/icon.ico` (16–256 px, →
+the Windows `.exe`, installer, and taskbar). The generated PNG/ICO/ICNS are
+git-ignored — only the SVG is committed.
+
+### Recommended: build via GitHub Actions (no Mac/Windows box needed)
+
+[`.github/workflows/build-desktop.yml`](../.github/workflows/build-desktop.yml)
+builds **both** installers on native runners (macOS for the `.dmg`, Windows for
+the `.exe`) — the only way to produce a mac `.dmg` without a Mac.
+
+- **Manual:** GitHub → **Actions → "Build desktop installers" → Run workflow**.
+  Installers download as run **artifacts**.
+- **On a release:** push a tag and the installers attach to that tag's Release:
+  ```bash
+  git tag v0.1.0 && git push origin v0.1.0
+  ```
+
+Builds are **unsigned** — no Apple/Windows certificates required to run the
+workflow.
+
+### Build locally
 
 ```bash
 cd desktop
 bun install            # pulls electron + electron-builder
-bun run dist:mac       # → desktop/release/LucidAgentIDE-<ver>-{arm64,x64}.dmg (+ .zip)
+bun run dist:mac       # → release/LucidAgentIDE-<ver>-{arm64,x64}.dmg (+ .zip)   (on macOS)
+bun run dist:win       # → release/LucidAgentIDE-<ver>-Setup.exe (+ portable.exe) (on Windows)
 ```
+
+> **A mac `.dmg` must be built on macOS** — electron-builder can't produce/sign
+> one from Windows or Linux. Use the workflow above, or a Mac.
+>
+> **Building the Windows installer locally needs Developer Mode** (or an elevated
+> shell): electron-builder extracts a signing toolchain that contains symlinks,
+> which Windows blocks for unprivileged processes (`A required privilege is not
+> held by the client`). The packaged app itself (`release/win-unpacked/`) builds
+> fine without it — only the final `Setup.exe` step needs the privilege. The CI
+> `windows-latest` runner has it, so the workflow is the friction-free path.
 
 ### What the installer bundles vs. requires
 
-The `.app` bundles the **renderer + the LucidAgentIDE repo** it runs (harness,
-tools, scanner-sidecar, desktop sources, and `node_modules`) into
-`Contents/Resources/repo` (`extraResources`), and the main process resolves paths
-from there when packaged.
+Both installers bundle the **renderer + the LucidAgentIDE repo** they run
+(harness, tools, scanner-sidecar, desktop sources, and `node_modules`) into
+`Resources/repo` (`Contents/Resources/repo` on macOS) via `extraResources`, and
+the main process resolves paths from there when packaged. (Verified on Windows:
+`release/win-unpacked/resources/repo/` contains harness + scanner-sidecar +
+the in-process security gate.)
 
-It still **orchestrates tools on the user's Mac** (it spawns them, it doesn't
-embed them) — so the target Mac needs:
+It still **orchestrates tools on the user's machine** (it spawns them, it doesn't
+embed them) — so the target machine needs:
 
-- **Bun** (`~/.bun/bin/bun`) — runs the in-app server + bundles the renderer.
-- **omp** (`~/.bun/bin/omp`, `bun add -g @oh-my-pi/pi-coding-agent`) — the agent.
+- **Bun** — runs the in-app server + bundles the renderer.
+- **omp** (`bun add -g @oh-my-pi/pi-coding-agent`) — the agent.
 - **Python + uv** for the Unicode scanner sidecar — once, in the bundled repo:
-  `cd "<App>/Contents/Resources/repo/scanner-sidecar" && uv sync`.
+  `cd "<App>/…/Resources/repo/scanner-sidecar" && uv sync`.
 
-(Embedding bun/omp/python into the `.app` is a future step.)
+(Embedding bun/omp/python into the installer is a future step.)
 
 ### Signing / notarization
 
-The config builds **unsigned** by default. Unsigned apps hit Gatekeeper — first
-launch via right-click → **Open**. To ship it, set an Apple Developer identity
-(`CSC_LINK`/`CSC_KEY_PASSWORD` env or `mac.identity`) and add notarization
-(`afterSign` + `@electron/notarize`); the hardened-runtime entitlements are
-already in place.
+The config builds **unsigned** by default.
 
-> Note: this packaging is **configured but not built/tested from this Windows
-> host** — run `dist:mac` on a Mac and tell me anything that needs adjusting.
+- **macOS:** unsigned apps hit Gatekeeper — first launch via right-click →
+  **Open**. To ship it, set an Apple Developer identity (`CSC_LINK` /
+  `CSC_KEY_PASSWORD` env or `mac.identity`) and add notarization (`afterSign` +
+  `@electron/notarize`); the hardened-runtime entitlements are already in place.
+- **Windows:** SmartScreen warns on unsigned `.exe` — click **More info → Run
+  anyway**. To ship it, set an Authenticode cert (`CSC_LINK` / `CSC_KEY_PASSWORD`).
+
+> Status: the **Windows** packaging is verified on this host up to the unpacked
+> app (`win-unpacked` builds with the icon embedded + repo bundled); the final
+> `Setup.exe` and the **macOS** `.dmg` are produced by the GitHub Actions workflow
+> on native runners (run it and grab the artifacts).

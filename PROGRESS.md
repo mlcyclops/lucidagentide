@@ -452,3 +452,14 @@ Three lines per session: **shipped / stubbed / next** (CLAUDE.md session ritual)
   usage; /api/config = 26 models, /api/commands = 39, screenshot of real reply.
 - **next:** confirm tool_call event shapes on a tool-using turn; per-session model
   persistence; package installers.
+
+## Packaging: cross-platform installers + brand icon + CI
+- **shipped:** Windows NSIS installer + portable .exe (electron-builder `win`/`nsis`),
+  a brand app icon (build/icon.svg → make-icons.ts rasterizes icon.png/.ico/.icns),
+  and .github/workflows/build-desktop.yml (mac .dmg + win .exe on native runners,
+  attaches to Releases on tags). Verified on Windows: win-unpacked builds with the
+  icon embedded + repo bundled into resources/repo (harness + scanner + gate).
+- **stubbed:** code signing/notarization (config builds unsigned; cert env hooks
+  documented); the final Setup.exe locally needs Developer Mode — CI does it.
+- **next:** run the workflow / tag a release to publish the first installers;
+  optionally embed bun/omp/python for a zero-prerequisite install.
