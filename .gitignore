@@ -41,6 +41,10 @@ lucid-gui.json
 *.env
 **/*.key
 **/*.pem
+**/*.pfx
+**/*.p12
+**/*.cer
+**/*.mobileprovision
 *secret*
 *credentials*
 **/auth.json

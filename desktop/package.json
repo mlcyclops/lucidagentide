@@ -96,7 +96,17 @@
       "icon": "build/icon.png",
       "category": "Development",
       "target": ["AppImage"]
-    }
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "mlcyclops",
+        "repo": "lucidagentide"
+      }
+    ]
+  },
+  "dependencies": {
+    "electron-updater": "^6.3.9"
   },
   "devDependencies": {
     "@resvg/resvg-js": "^2.6.2",

@@ -12,6 +12,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { initAutoUpdate } from "./updater.ts";
 
 const PORT = Number(process.env.LUCID_PORT ?? 5319);
 let REPO = "";
@@ -75,6 +76,7 @@ app.whenReady().then(async () => {
   startDevServer();
   await waitForServer();
   createWindow();
+  initAutoUpdate(() => win); // packaged-only; checks GitHub Releases, prompts on download
   app.on("activate", () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 });
 app.on("window-all-closed", () => { if (process.platform !== "darwin") app.quit(); });

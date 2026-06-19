@@ -463,3 +463,13 @@ Three lines per session: **shipped / stubbed / next** (CLAUDE.md session ritual)
   documented); the final Setup.exe locally needs Developer Mode — CI does it.
 - **next:** run the workflow / tag a release to publish the first installers;
   optionally embed bun/omp/python for a zero-prerequisite install.
+
+## Packaging: code signing + in-app auto-update
+- **shipped:** electron-updater wired (desktop/updater.ts; packaged-only, checks
+  GitHub Releases, prompts Restart-now/Later) + a `publish:github` provider; the CI
+  workflow now maps per-OS signing secrets (WIN_/MAC_CSC_*, APPLE_*) gracefully
+  (absent ⇒ unsigned) and attaches the update feed (latest*.yml + .blockmap) to
+  releases on tags. desktop/SIGNING.md documents the secrets + release flow.
+- **stubbed:** actual signing (no certs in repo — opt-in via GitHub secrets); mac
+  auto-update needs a signed build (Squirrel.Mac), documented.
+- **next:** embed bun/omp/python so installs need zero prerequisites.

@@ -59,8 +59,18 @@ jobs:
         run: bun run ${{ matrix.script }}
         working-directory: desktop
         env:
-          # Build unsigned: don't let electron-builder hunt for a mac identity.
-          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+          # --- Code signing (all optional; absent secrets ⇒ unsigned build) ---
+          # Per-OS Authenticode / Apple Developer cert as base64-encoded PKCS#12.
+          CSC_LINK: ${{ runner.os == 'macOS' && secrets.MAC_CSC_LINK || secrets.WIN_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ runner.os == 'macOS' && secrets.MAC_CSC_KEY_PASSWORD || secrets.WIN_CSC_KEY_PASSWORD }}
+          # Only hunt the keychain for a mac identity when a mac cert is provided.
+          CSC_IDENTITY_AUTO_DISCOVERY: ${{ runner.os == 'macOS' && secrets.MAC_CSC_LINK != '' }}
+          # macOS notarization (electron-builder runs notarytool when these are set).
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # softprops attaches the release; don't let electron-builder also upload.
+          GH_TOKEN: ""
 
       - name: Upload installers as artifacts
         uses: actions/upload-artifact@v4
@@ -79,8 +89,12 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
+          # Installers + the electron-updater feed (latest*.yml + .blockmap) so
+          # in-app auto-update can find new versions.
           files: |
             desktop/release/*.dmg
             desktop/release/*.zip
             desktop/release/*Setup*.exe
             desktop/release/*portable*.exe
+            desktop/release/*.blockmap
+            desktop/release/latest*.yml

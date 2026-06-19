@@ -160,16 +160,24 @@ embed them) — so the target machine needs:
 
 (Embedding bun/omp/python into the installer is a future step.)
 
+### Auto-update
+
+Packaged builds check **GitHub Releases** on launch and prompt to restart when a
+newer version is downloaded ([`updater.ts`](updater.ts) + the `publish` provider
+in `package.json`). To ship an update: bump `version`, then `git tag vX.Y.Z &&
+git push origin vX.Y.Z` — the workflow builds installers and uploads the update
+feed (`latest*.yml` + `.blockmap`) to that Release.
+
 ### Signing / notarization
 
-The config builds **unsigned** by default.
+The config builds **unsigned** by default; signing is **opt-in via GitHub
+secrets** and the workflow signs + notarizes automatically when they're present.
+Full secret list and setup: [`SIGNING.md`](SIGNING.md).
 
-- **macOS:** unsigned apps hit Gatekeeper — first launch via right-click →
-  **Open**. To ship it, set an Apple Developer identity (`CSC_LINK` /
-  `CSC_KEY_PASSWORD` env or `mac.identity`) and add notarization (`afterSign` +
-  `@electron/notarize`); the hardened-runtime entitlements are already in place.
-- **Windows:** SmartScreen warns on unsigned `.exe` — click **More info → Run
-  anyway**. To ship it, set an Authenticode cert (`CSC_LINK` / `CSC_KEY_PASSWORD`).
+- **Unsigned macOS:** Gatekeeper — first launch via right-click → **Open**.
+  (macOS *auto-update* needs a signed build.)
+- **Unsigned Windows:** SmartScreen — **More info → Run anyway**. Windows
+  auto-updates fine while unsigned.
 
 > Status: the **Windows** packaging is verified on this host up to the unpacked
 > app (`win-unpacked` builds with the icon embedded + repo bundled); the final
