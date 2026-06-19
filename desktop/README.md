@@ -43,8 +43,12 @@ desktop/
                   dashboards AND the real chat/config backend
   acp_backend.ts  singleton omp-ACP session (chat, config, commands) — gate loaded
   acp.ts          minimal Agent Client Protocol client (JSON-RPC over stdio)
-  main.ts         Electron main: spawns dev.ts, opens it in a frameless window
+  main.ts         Electron main: bootstrap runtimes, spawn dev.ts, open the window
   preload.ts      window.lucid = native shell only (crisp zoom + window controls)
+  runtime.ts      runtime resolution + first-run bootstrap (bundled bun/uv → omp + scanner)
+  splash.ts       first-run setup window (shown only when bootstrap has work to do)
+  updater.ts      in-app auto-update via electron-updater (GitHub Releases)
+  build/          icon.svg (brand mark) + make-icons.ts + mac entitlements
   renderer/       the UI (vanilla TS, no framework) — identical in browser & Electron
     app.ts · styles.css · dom.ts · ui.ts · icons.ts · bridge.ts · format.ts
 ```
@@ -141,24 +145,33 @@ bun run dist:win       # → release/LucidAgentIDE-<ver>-Setup.exe (+ portable.e
 > fine without it — only the final `Setup.exe` step needs the privilege. The CI
 > `windows-latest` runner has it, so the workflow is the friction-free path.
 
-### What the installer bundles vs. requires
+### Zero-prerequisite install (bundled runtimes + first-run setup)
 
-Both installers bundle the **renderer + the LucidAgentIDE repo** they run
-(harness, tools, scanner-sidecar, desktop sources, and `node_modules`) into
-`Resources/repo` (`Contents/Resources/repo` on macOS) via `extraResources`, and
-the main process resolves paths from there when packaged. (Verified on Windows:
-`release/win-unpacked/resources/repo/` contains harness + scanner-sidecar +
-the in-process security gate.)
+The installer is designed so the user installs **nothing** beforehand:
 
-It still **orchestrates tools on the user's machine** (it spawns them, it doesn't
-embed them) — so the target machine needs:
+1. **Bundled** into the app (`Resources/runtimes`): the static **`bun`** and
+   **`uv`** binaries — downloaded per-OS by the CI workflow, named
+   `<tool>-<platform>-<arch>` to match [`runtime.ts`](runtime.ts).
+2. **Bundled** into `Resources/repo` (`extraResources`): the renderer + the
+   LucidAgentIDE repo it runs (harness, tools, scanner-sidecar, desktop sources,
+   `node_modules`). The main process resolves paths from there when packaged.
+   (Verified on Windows: `win-unpacked/resources/repo/` contains harness +
+   scanner-sidecar + the in-process security gate.)
+3. **Provisioned on first launch** ([`runtime.ts`](runtime.ts) →
+   [`splash.ts`](splash.ts)) using the bundled bun/uv, into the app's userData:
+   - **omp** — `bun add -g @oh-my-pi/pi-coding-agent` into a managed global dir.
+   - **the scanner interpreter** — `uv venv … --python 3.12` (the sidecar has
+     zero pip deps, so any 3.11+ interpreter works; uv downloads one if needed).
 
-- **Bun** — runs the in-app server + bundles the renderer.
-- **omp** (`bun add -g @oh-my-pi/pi-coding-agent`) — the agent.
-- **Python + uv** for the Unicode scanner sidecar — once, in the bundled repo:
-  `cd "<App>/…/Resources/repo/scanner-sidecar" && uv sync`.
+   A small setup splash appears only when there's work to do, then `LUCID_OMP_BIN`
+   / `SCANNER_PYTHON` are passed down to the dev server and its omp + scanner
+   children. On a machine that already has bun/omp/uv (e.g. a dev box), nothing
+   is installed and no splash appears — resolution falls back to the user's own
+   tools, then `PATH`.
 
-(Embedding bun/omp/python into the installer is a future step.)
+If first-run setup fails (offline, etc.), the app still launches; the fail-closed
+gate blocks tool calls until the scanner is available — it never treats a missing
+scanner as "safe" (CLAUDE.md invariant #3).
 
 ### Auto-update
 

@@ -17,6 +17,10 @@ const REPO = join(import.meta.dir, "..");
 // Absolute so the gate loads from THIS repo even when omp runs in another workspace.
 const GATE = join(REPO, "harness", "omp", "security_extension.ts");
 function ompBin(): string {
+  // Prefer the path the Electron main process resolved (bundled or app-managed
+  // install); fall back to the user's bun bin, then PATH.
+  const fromMain = process.env.LUCID_OMP_BIN;
+  if (fromMain && existsSync(fromMain)) return fromMain;
   for (const c of [join(homedir(), ".bun", "bin", "omp.exe"), join(homedir(), ".bun", "bin", "omp")]) if (existsSync(c)) return c;
   return "omp";
 }

@@ -12,6 +12,6 @@
     "verbatimModuleSyntax": false
   },
   "comment": "Electron/Node + DOM surface. dev.ts is a Bun-runtime server (checked by the root project), excluded here so Bun globals don't error under Node types.",
-  "include": ["main.ts", "preload.ts", "acp.ts", "updater.ts", "renderer/**/*.ts"],
+  "include": ["main.ts", "preload.ts", "acp.ts", "updater.ts", "runtime.ts", "splash.ts", "renderer/**/*.ts"],
   "exclude": ["dist", "node_modules", "dev.ts"]
 }

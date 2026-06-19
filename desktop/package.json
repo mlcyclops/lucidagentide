@@ -26,6 +26,11 @@
     "asarUnpack": [],
     "extraResources": [
       {
+        "from": "runtimes",
+        "to": "runtimes",
+        "filter": ["**/*", "!README.md", "!.gitkeep"]
+      },
+      {
         "from": "..",
         "to": "repo",
         "filter": [

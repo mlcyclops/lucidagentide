@@ -473,3 +473,16 @@ Three lines per session: **shipped / stubbed / next** (CLAUDE.md session ritual)
 - **stubbed:** actual signing (no certs in repo — opt-in via GitHub secrets); mac
   auto-update needs a signed build (Squirrel.Mac), documented.
 - **next:** embed bun/omp/python so installs need zero prerequisites.
+
+## Packaging: embed runtimes (zero-prerequisite install)
+- **shipped:** desktop/runtime.ts (resolve bundled bun/uv → app-managed → user →
+  PATH; first-run bootstrap installs omp via bun + provisions the scanner
+  interpreter via `uv venv --python 3.12` into userData) + splash.ts (setup window
+  shown only when needed). main.ts runs bootstrap before the dev server and passes
+  LUCID_OMP_BIN/SCANNER_PYTHON/PATH down; acp_backend honors LUCID_OMP_BIN. CI
+  downloads bun+uv per-OS into desktop/runtimes/ (extraResources). Verified: dev
+  server boots, omp returns live config via the new resolver; 130 harness tests green.
+- **stubbed:** packaged-app first-run bootstrap is wired but only exercised on a
+  real install/CI (can't run the Electron bundle from this host); mac arch picks
+  the right bundled bun/uv at runtime.
+- **next:** cut a tag to produce signed installers + smoke-test first-run on a Mac.

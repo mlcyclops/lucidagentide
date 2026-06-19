@@ -10,25 +10,29 @@
 import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { initAutoUpdate } from "./updater.ts";
+import { ensureRuntimes, findBun, needsBootstrap } from "./runtime.ts";
+import { createSplash, setSplashStatus } from "./splash.ts";
 
 const PORT = Number(process.env.LUCID_PORT ?? 5319);
 let REPO = "";
 const preloadPath = () => join(app.getAppPath(), "dist", "preload.js");
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-function bin(name: string): string {
-  for (const c of [join(homedir(), ".bun", "bin", `${name}.exe`), join(homedir(), ".bun", "bin", name)]) if (existsSync(c)) return c;
-  return name;
-}
-
 let win: BrowserWindow | null = null;
 let dev: ChildProcess | null = null;
+let runtimeEnv: Record<string, string> = {};
 
 function startDevServer(): void {
-  dev = spawn(bin("bun"), ["run", "desktop/dev.ts"], { cwd: REPO, env: { ...process.env, PORT: String(PORT) }, stdio: "inherit" });
+  // findBun() prefers the bundled runtime in packaged builds, falling back to the
+  // user's bun. runtimeEnv carries LUCID_OMP_BIN / SCANNER_PYTHON / PATH down to
+  // the dev server and its omp + scanner children.
+  dev = spawn(findBun(), ["run", "desktop/dev.ts"], {
+    cwd: REPO,
+    env: { ...process.env, ...runtimeEnv, PORT: String(PORT) },
+    stdio: "inherit",
+  });
 }
 async function waitForServer(timeoutMs = 12000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
@@ -73,9 +77,21 @@ app.whenReady().then(async () => {
   // Dev: repo is the parent of desktop/. Packaged: the repo is bundled into
   // Resources/repo (electron-builder extraResources) so bun/omp can run it.
   REPO = app.isPackaged ? join(process.resourcesPath, "repo") : join(app.getAppPath(), "..");
+
+  // First-run setup: install omp + provision the scanner interpreter using the
+  // bundled bun/uv. Only shows a splash when there's actually work to do, so a
+  // provisioned/dev machine launches straight through.
+  const splash = needsBootstrap() ? createSplash() : null;
+  try {
+    runtimeEnv = await ensureRuntimes((s) => setSplashStatus(splash, s));
+  } catch (e) {
+    console.warn("[main] runtime bootstrap failed (continuing):", (e as Error).message);
+  }
+
   startDevServer();
   await waitForServer();
   createWindow();
+  splash?.close();
   initAutoUpdate(() => win); // packaged-only; checks GitHub Releases, prompts on download
   app.on("activate", () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 });
