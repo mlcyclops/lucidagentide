@@ -125,8 +125,7 @@ function buildShell(): void {
             <button class="ctool" id="ctThink" data-tip="Thinking depth|How hard the model reasons">${icon("brain", 14)}<span id="ctThinkName">High</span>${icon("chevron", 11)}</button>
             <button class="ctool" id="ctPersona" data-tip="AskSage persona|Server-supplied role guidance - scanned before use" hidden>${icon("user", 14)}<span id="ctPersonaName">Persona</span>${icon("chevron", 11)}</button>
             <button class="ctool" id="ctSkill" data-tip="Skills|omp skills the agent can run - adds /skill:<name> to your message" hidden>${icon("bolt", 14)}<span>Skills</span>${icon("chevron", 11)}</button>
-            <div class="ctool-spacer"></div>
-            <span class="ctool-hint"><kbd>Enter</kbd> send · <kbd>⇧↵</kbd> newline · <kbd>⌘K</kbd> commands</span>
+            <span class="ctool-hint"><span class="kh"><kbd>↵</kbd> send</span><span class="kh"><kbd>⇧↵</kbd> newline</span><span class="kh"><kbd>⌘K</kbd> commands</span></span>
           </div>
         </div>
       </main>
