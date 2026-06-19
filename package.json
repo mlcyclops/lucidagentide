@@ -33,7 +33,9 @@
     "dashboards": "bun run harness/scripts/materialize_dashboards.ts",
     "omp:secure": "omp -e harness/omp/security_extension.ts",
     "dashboard:tui": "bun run tools/dashboard_tui.ts",
-    "memory:tui": "bun run tools/memory_tui.ts"
+    "memory:tui": "bun run tools/memory_tui.ts",
+    "dashboard:web": "bun run tools/web/server.ts",
+    "acp:probe": "bun run tools/acp_probe.ts"
   },
   "dependencies": {
     "@duckdb/node-api": "1.5.4-r.1",

@@ -406,3 +406,14 @@ Three lines per session: **shipped / stubbed / next** (CLAUDE.md session ritual)
   relaunch omp after a model/provider switch, so panel choices actually reach omp.
 - **next:** optional — persist last model across launches; per-turn compaction-event
   markers in the memory view once omp emits them to the session log.
+
+## DX: web dashboard + ACP proof (Electron front-end spike)
+- **shipped:** `bun run dashboard:web` — a live, auto-refreshing browser dashboard
+  (tools/web/) serving the security + memory views from agent_obs.duckdb + omp,
+  READ-ONLY (security reuses views.ts SQL via a READ_ONLY DuckDB adapter; memory
+  via the new shared tools/memory_data.ts). Screenshotted rendering real data.
+- **shipped:** `bun run acp:probe` proves omp speaks Agent Client Protocol
+  (initialize handshake → caps + ~/.omp auth) — the seam an Electron/desktop shell
+  (or acp-ui/Zed/JetBrains) uses. Gate stays in-process; invariants intact. ADR-0006.
+- **next:** Electron shell embedding the web page + an omp `acp` chat panel;
+  click-to-approve quarantine actions; SSE push instead of 4s polling.

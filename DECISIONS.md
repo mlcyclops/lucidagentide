@@ -347,3 +347,49 @@ convention, not a prerelease signal). API used: `DuckDBInstance.create(path)` �
 `connect()` → `run(sql, params)` (positional `$1` array or named `$id` object) →
 `runAndReadAll(sql).getRowObjects()`; `closeSync()` on conn + instance. This is
 the localized DuckDB-Node risk ADR-0001 flagged; no blocker hit so far.
+
+-----
+
+## ADR-0006 — GUI/desktop front end: read-only web surface + omp ACP, gate stays in-process
+
+**Status:** accepted (spike proven). **Date:** 2026-06-18.
+
+### Context
+
+We want a graphical (eventually Electron/desktop) front end for LucidAgentIDE +
+omp, instead of only the terminal TUIs. The risk is that a GUI becomes a *second*
+place that touches the security path and quietly weakens an invariant (esp. #4
+"the quarantine gate runs in-process" and fail-closed law #3).
+
+### Decision
+
+The GUI is a **front end only**. Two independent surfaces, neither of which moves
+the security boundary:
+
+1. **Agent loop → omp ACP.** omp ships `omp acp` (Agent Client Protocol, JSON-RPC
+   over stdio). `tools/acp_probe.ts` confirms the `initialize` handshake against
+   the installed omp 16.0.8: protocol v1, `loadSession`, session list/fork/resume/
+   close, prompt embeddedContext/image, MCP http/sse, and **auth via existing
+   `~/.omp` credentials** (no re-login). A desktop shell (custom, or existing ACP
+   clients like acp-ui / Zed / JetBrains) drives omp over this channel. The gate
+   still loads as the in-process omp hook (`-e harness/omp/security_extension.ts`),
+   so invariant #4 and fail-closed (#3) are untouched — the GUI never decides
+   "safe."
+
+2. **Dashboards → local web server.** `tools/web/server.ts` (Bun.serve) serves a
+   live, auto-refreshing page (`tools/web/index.html`) backed by JSON endpoints
+   `/api/security` and `/api/memory`. The data layer is shared with the TUIs:
+   security reuses the exact `harness/dashboards/views.ts` SQL via a **READ_ONLY**
+   DuckDB adapter; memory reuses `tools/memory_data.ts`. Read-only by construction
+   means the page can never contend with the live gate's writer and can never see
+   `raw_content` (the views only ever select metadata — consistent with P7.1).
+
+### Consequences
+
+- An Electron app is now a thin shell: embed the web page, add an ACP chat panel.
+  No security logic migrates into the GUI; this ADR is the guardrail if it ever
+  tries to.
+- New shared data module `tools/memory_data.ts` (extracted from `memory_tui.ts`)
+  is the single source of truth for the memory/context view across TUI + web.
+- `tools/web/` and `tools/acp_probe.ts` are front-end/proof code, not on the
+  security path; they hold no frozen contracts.

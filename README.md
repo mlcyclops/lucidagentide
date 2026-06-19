@@ -67,6 +67,20 @@ Inside omp: `/lucid:help`, `/lucid:scan <text>`, `/lucid:dashboard` (security), 
 compaction policy, semantic memory) — or `!bun run dashboard:tui` /
 `!bun run memory:tui` for instant in-terminal dashboards.
 
+### Browser dashboard (the desktop/Electron path)
+
+```bash
+bun run dashboard:web    # http://localhost:4317 — security + memory, live, read-only
+bun run acp:probe        # proves omp speaks Agent Client Protocol (the GUI seam)
+```
+
+`dashboard:web` serves the same security + memory views as a live, auto-refreshing
+web page (the data layer is shared with the TUIs). It's the front-end proof for a
+desktop app: an Electron shell would embed this page and add an omp chat panel via
+`omp acp` — which `acp:probe` confirms omp serves (reusing your `~/.omp`
+credentials). The security gate stays an in-process omp hook either way, so the
+fail-closed invariants are untouched by the GUI. See [`DECISIONS.md`](DECISIONS.md) ADR-0006.
+
 Or do it by hand — omp is installed globally; load the security gate into a real
 session (every tool call is scanned, quarantined content blocked fail-closed):
 

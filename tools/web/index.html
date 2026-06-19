@@ -1,0 +1,276 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>LucidAgentIDE — security + memory</title>
+<style>
+  :root{
+    --bg:#0a0a0f; --panel:#13131c; --panel2:#191926; --line:#262635;
+    --txt:#e8e8f2; --dim:#8b8b9e; --mut:#5d5d70;
+    --magenta:#d24bd2; --magenta2:#ef6bef;
+    --cyan:#3fc7da; --green:#46d369; --yellow:#e6b13a; --red:#e85555; --blue:#5b8bf0;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg);color:var(--txt);
+    font:14px/1.5 ui-sans-serif,-apple-system,"Segoe UI",Roboto,sans-serif}
+  code,.mono{font-family:ui-monospace,"Cascadia Code","SF Mono",Menlo,Consolas,monospace}
+  a{color:var(--magenta2);text-decoration:none}
+  .wrap{max-width:1280px;margin:0 auto;padding:20px}
+
+  header{display:flex;align-items:center;gap:18px;flex-wrap:wrap;
+    padding:16px 20px;border:1px solid var(--line);border-radius:14px;
+    background:linear-gradient(135deg,#16101f,#0e0e16);margin-bottom:18px}
+  .logo{font-family:ui-monospace,monospace;font-weight:800;font-size:24px;letter-spacing:3px;
+    color:var(--magenta);text-shadow:0 0 18px rgba(210,75,210,.45)}
+  .logo .pi{color:var(--cyan)}
+  .tagline{color:var(--dim);font-size:13px}
+  .tagline b{color:var(--txt)}
+  .status{margin-left:auto;display:flex;align-items:center;gap:10px;color:var(--dim);font-size:12.5px}
+  .dot{width:9px;height:9px;border-radius:50%;background:var(--mut);box-shadow:0 0 0 0 rgba(70,211,105,.6)}
+  .dot.live{background:var(--green);animation:pulse 2s infinite}
+  .dot.err{background:var(--red)}
+  @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(70,211,105,.5)}70%{box-shadow:0 0 0 7px rgba(70,211,105,0)}100%{box-shadow:0 0 0 0 rgba(70,211,105,0)}}
+
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+  @media(max-width:920px){.grid{grid-template-columns:1fr}}
+  .col h2{margin:6px 2px 12px;font-size:13px;letter-spacing:1.5px;text-transform:uppercase;color:var(--dim);
+    display:flex;align-items:center;gap:8px}
+  .col.sec h2{color:var(--magenta2)} .col.mem h2{color:var(--cyan)}
+
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin-bottom:14px}
+  .card h3{margin:0 0 10px;font-size:12.5px;font-weight:600;color:var(--txt);letter-spacing:.3px;
+    display:flex;align-items:center;justify-content:space-between;gap:8px}
+  .card h3 .sub{color:var(--mut);font-weight:400;font-size:11.5px}
+
+  .chips{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px}
+  .chip{flex:1;min-width:120px;background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:10px 12px}
+  .chip .n{font-size:22px;font-weight:700;font-family:ui-monospace,monospace}
+  .chip .l{font-size:11px;color:var(--dim);margin-top:2px}
+  .chip.q .n{color:var(--red)} .chip.a .n{color:var(--yellow)} .chip.f .n{color:var(--cyan)} .chip.g .n{color:var(--green)}
+
+  table{width:100%;border-collapse:collapse;font-size:12.5px}
+  th{text-align:left;color:var(--dim);font-weight:600;padding:5px 8px;border-bottom:1px solid var(--line);white-space:nowrap}
+  td{padding:5px 8px;border-bottom:1px solid #1d1d2a;vertical-align:top}
+  tr:last-child td{border-bottom:none}
+  td.mono{font-family:ui-monospace,monospace;color:var(--dim)}
+  .pill{display:inline-block;padding:1px 8px;border-radius:999px;font-size:11px;font-weight:600}
+  .pill.quarantined{background:rgba(232,85,85,.16);color:#ff8a8a}
+  .pill.suspicious{background:rgba(230,177,58,.16);color:#f3cf7a}
+  .pill.trusted{background:rgba(70,211,105,.14);color:#7ee59a}
+  .pill.untrusted{background:rgba(91,139,240,.16);color:#9bb6f7}
+  .pill.high{background:rgba(232,85,85,.16);color:#ff8a8a}
+  .pill.medium{background:rgba(230,177,58,.16);color:#f3cf7a}
+  .pill.low{background:rgba(139,139,158,.16);color:#bdbdcd}
+
+  .gauge-row{display:flex;align-items:center;gap:12px;margin:8px 0}
+  .gauge-row .lab{width:70px;color:var(--dim);font-size:12px}
+  .gauge{flex:1;height:14px;background:#0e0e16;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+  .gauge .fill{height:100%;border-radius:7px;transition:width .5s ease}
+  .gauge-row .val{width:118px;text-align:right;font-family:ui-monospace,monospace;font-size:12px;color:var(--dim)}
+  .pctn{font-weight:700}
+
+  .spark{display:block;width:100%;height:46px}
+  .kvs{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+  .kv{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:6px 10px;font-size:12px}
+  .kv b{font-family:ui-monospace,monospace}
+
+  .empty{color:var(--dim);font-size:12.5px;background:var(--panel2);border:1px dashed var(--line);
+    border-radius:10px;padding:14px}
+  .empty code{color:var(--magenta2)}
+  footer{margin-top:20px;color:var(--mut);font-size:12px;text-align:center;line-height:1.7}
+  .muted{color:var(--mut)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="logo">LUCID<span class="pi"> π</span></div>
+    <div>
+      <div style="font-weight:600">Agent IDE — security + memory</div>
+      <div class="tagline">live from <b>agent_obs.duckdb</b> + <b>omp</b> · read-only · <span id="srcModel" class="muted"></span></div>
+    </div>
+    <div class="status">
+      <span id="updated">connecting…</span>
+      <span id="dot" class="dot"></span>
+    </div>
+  </header>
+
+  <div class="grid">
+    <!-- ───────── SECURITY ───────── -->
+    <section class="col sec">
+      <h2>🛡 Security</h2>
+      <div id="secChips" class="chips"></div>
+      <div id="secBody"></div>
+    </section>
+
+    <!-- ───────── MEMORY & CONTEXT ───────── -->
+    <section class="col mem">
+      <h2>🧠 Memory &amp; context</h2>
+      <div id="memBody"></div>
+    </section>
+  </div>
+
+  <footer>
+    Dashboards render the same queries as <code class="mono">/lucid:dashboard</code> &amp; <code class="mono">/lucid:memory</code>.<br/>
+    Next step for a full desktop app: embed this page in Electron and add an omp chat panel via <code class="mono">omp acp</code>
+    (proven by <code class="mono">bun run acp:probe</code>) — reusing your existing <code class="mono">~/.omp</code> credentials.
+  </footer>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+const fmtNum = (n) => { n=Number(n); if(!isFinite(n)) return "?"; const a=Math.abs(n);
+  return a>=1e6?(n/1e6).toFixed(2)+"M":a>=1e3?(n/1e3).toFixed(1)+"k":String(Math.round(n)); };
+const fmtUSD = (n) => "$"+(Number(n)||0).toFixed(Number(n)<1?4:2);
+const pct = (f) => Math.round(Math.max(0,Math.min(1,f||0))*100);
+const col = (f) => f>=.9?"var(--red)":f>=.7?"var(--yellow)":"var(--green)";
+
+function gauge(label, frac, valHtml){
+  const p = pct(frac);
+  return `<div class="gauge-row"><span class="lab">${esc(label)}</span>
+    <span class="gauge"><span class="fill" style="width:${p}%;background:${col(frac)}"></span></span>
+    <span class="val"><span class="pctn" style="color:${col(frac)}">${p}%</span> ${valHtml||""}</span></div>`;
+}
+function pill(v){ const k=String(v||"").toLowerCase(); return `<span class="pill ${esc(k)}">${esc(v)}</span>`; }
+function tableHtml(cols, rows, pillCols={}){
+  if(!rows || !rows.length) return `<div class="empty">no rows</div>`;
+  const head = cols.map(c=>`<th>${esc(c.label)}</th>`).join("");
+  const body = rows.map(r=>"<tr>"+cols.map(c=>{
+    let v = r[c.key];
+    if(pillCols[c.key]) return `<td>${v!=null?pill(v):""}</td>`;
+    if(c.mono) return `<td class="mono">${esc(v)}</td>`;
+    return `<td>${esc(v)}</td>`;
+  }).join("")+"</tr>").join("");
+  return `<table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
+}
+function card(title, sub, inner){
+  return `<div class="card"><h3>${esc(title)}${sub?`<span class="sub">${esc(sub)}</span>`:""}</h3>${inner}</div>`;
+}
+function sparkSvg(vals){
+  if(!vals || !vals.length) return `<div class="empty">no turns yet</div>`;
+  const w=520,h=46,max=Math.max(...vals,1),n=vals.length;
+  const x=i=> n<=1?0:(i/(n-1))*w;
+  const y=v=> h-2-(v/max)*(h-6);
+  const pts=vals.map((v,i)=>`${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
+  const area=`0,${h} `+pts+` ${w},${h}`;
+  return `<svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">
+    <polygon points="${area}" fill="rgba(63,199,218,.12)"/>
+    <polyline points="${pts}" fill="none" stroke="var(--cyan)" stroke-width="2"/>
+  </svg>`;
+}
+function ageStr(ms){ if(!ms) return "—"; const s=Math.round((ms-Date.now())/1000);
+  if(s<=0) return "now"; const h=Math.floor(s/3600),m=Math.floor((s%3600)/60);
+  return h>0?`in ${h}h ${m}m`:`in ${m}m`; }
+
+// ───────── SECURITY ─────────
+function renderSecurity(d){
+  if(!d){
+    $("secChips").innerHTML="";
+    $("secBody").innerHTML = `<div class="empty">No live security DB yet — <code>agent_obs.duckdb</code> is created on the
+      first blocked tool call.<br/>Launch omp with the gate, then ask it to read a planted untrusted file,
+      or run <code>bun run demo-P4.3</code>.</div>`;
+    return;
+  }
+  const totFind = d.findings.reduce((a,r)=>a+Number(r.n||0),0);
+  const quar = d.quarantine.length, await_ = d.approvals.length;
+  const promoted = (d.promotion.find(r=>r.outcome==="promoted")||{}).n||0;
+  $("secChips").innerHTML =
+    `<div class="chip q"><div class="n">${quar}</div><div class="l">quarantined</div></div>
+     <div class="chip a"><div class="n">${await_}</div><div class="l">awaiting review</div></div>
+     <div class="chip f"><div class="n">${totFind}</div><div class="l">findings</div></div>
+     <div class="chip g"><div class="n">${promoted}</div><div class="l">promoted facts</div></div>`;
+
+  let h = "";
+  h += card("Findings overview","by type · severity · source",
+    tableHtml([{key:"finding_type",label:"type"},{key:"severity",label:"severity"},{key:"source",label:"source"},{key:"n",label:"n",mono:true}],
+      d.findings,{severity:1}));
+  h += card("Quarantine review","isolated, fail-closed",
+    tableHtml([{key:"artifact_id",label:"artifact",mono:true},{key:"source",label:"source"},{key:"trust_label",label:"trust"},{key:"risk_score",label:"risk",mono:true},{key:"finding_count",label:"#",mono:true}],
+      d.quarantine,{trust_label:1}));
+  h += card("Approval queue","blocked, awaiting a human",
+    tableHtml([{key:"artifact_id",label:"artifact",mono:true},{key:"source",label:"source"},{key:"trust_label",label:"trust"},{key:"verdict",label:"verdict"}],
+      d.approvals,{trust_label:1,verdict:1}));
+  h += card("Memory-promotion gate","keystone #2",
+    tableHtml([{key:"outcome",label:"outcome"},{key:"n",label:"n",mono:true}], d.promotion));
+  h += card("Export audit","what left, sanitized, by whom",
+    tableHtml([{key:"export_type",label:"type"},{key:"sanitization_status",label:"sanitization"},{key:"included_raw",label:"raw?"},{key:"reviewer",label:"reviewer"}], d.exports));
+  h += card("Active runs","provenance lineage",
+    tableHtml([{key:"kind",label:"kind"},{key:"mode",label:"mode"},{key:"sandbox_profile",label:"sandbox"},{key:"status",label:"status"}], d.runs));
+  $("secBody").innerHTML = h;
+}
+
+// ───────── MEMORY & CONTEXT ─────────
+function renderMemory(d){
+  let h = "";
+  const s = d.session;
+  $("srcModel").textContent = s ? `model ${s.model}` : "";
+  if(s){
+    const ctx = gauge("current", s.current/s.window, `${fmtNum(s.current)} / ${fmtNum(s.window)}`)
+              + gauge("peak", s.peak/s.window, `${fmtNum(s.peak)} / ${fmtNum(s.window)}`);
+    h += card("Context window", `${s.model} · ${s.turns} turns`, ctx + sparkSvg(s.prompts)
+        + `<div class="muted" style="font-size:11px;margin-top:4px">prompt tokens per turn</div>`);
+    const c = s.cache;
+    h += card("KV-cache efficiency","frozen prefix → cache hits (invariant #6)",
+      gauge("cache hit", c.hit, "")
+      + `<div class="kvs"><span class="kv">read <b>${fmtNum(c.read)}</b></span>
+         <span class="kv">written <b>${fmtNum(c.write)}</b></span>
+         <span class="kv">fresh <b>${fmtNum(c.fresh)}</b></span>
+         <span class="kv">cost <b>${fmtUSD(s.cost)}</b></span></div>`);
+  } else {
+    h += `<div class="empty">No omp session transcript yet — launch omp and send a message.</div>`;
+  }
+
+  if(d.compaction){
+    const rows = Object.entries(d.compaction).map(([k,v])=>({setting:k,value:v}));
+    h += card("Compaction policy","how omp keeps context bounded",
+      tableHtml([{key:"setting",label:"setting"},{key:"value",label:"value",mono:true}], rows));
+  }
+  if(d.budgets && d.budgets.length){
+    const g = d.budgets.map(b=>gauge(b.label, b.used, `<span class="muted">${esc(b.status)}, ${ageStr(b.resetsAt)}</span>`)).join("");
+    h += card("Provider budget","rate-limit windows", g);
+  }
+  if(d.harness){
+    const hm = d.harness;
+    h += card("Lucid memory layers","working · archive · semantic",
+      tableHtml([{key:"layer",label:"layer"},{key:"rows",label:"rows",mono:true},{key:"detail",label:"detail"}], hm.layers)
+      + `<div class="kvs"><span class="kv">promoted <b style="color:var(--green)">${hm.gate.promoted}</b></span>
+         <span class="kv">blocked <b style="color:var(--red)">${hm.gate.blocked}</b></span></div>`);
+    if(hm.facts && hm.facts.length){
+      h += card("Semantic facts","most recent (provenance-tracked)",
+        tableHtml([{key:"entity",label:"entity"},{key:"statement",label:"statement"},{key:"trust_label",label:"trust"}], hm.facts,{trust_label:1}));
+    }
+  } else {
+    h += `<div class="empty">No harness memory yet — appears once the gate runs (or run <code>bun run demo-P4.3</code>).</div>`;
+  }
+  $("memBody").innerHTML = h;
+}
+
+// ───────── refresh loop ─────────
+let lastOk = 0;
+async function refresh(){
+  try{
+    const [sec, mem] = await Promise.all([
+      fetch("/api/security").then(r=>r.json()),
+      fetch("/api/memory").then(r=>r.json()),
+    ]);
+    renderSecurity(sec.data);
+    renderMemory(mem.data);
+    lastOk = Date.now();
+    $("dot").className = "dot live";
+  }catch(e){
+    $("dot").className = "dot err";
+  }
+  tick();
+}
+function tick(){
+  const ago = lastOk ? Math.round((Date.now()-lastOk)/1000) : null;
+  $("updated").textContent = ago==null ? "connecting…" : ago<2 ? "updated just now" : `updated ${ago}s ago`;
+}
+refresh();
+setInterval(refresh, 4000);
+setInterval(tick, 1000);
+</script>
+</body>
+</html>

@@ -28,6 +28,7 @@ with real findings as you use it (demo data until the first block).
 | `/lucid:memory` | show the **memory & context** dashboard (context window, KV-cache, compaction, semantic memory) |
 | `!bun run dashboard:tui` | instant security dashboard, no agent turn |
 | `!bun run memory:tui` | instant memory & context dashboard, no agent turn |
+| `!bun run dashboard:web` | live **browser** dashboard (security + memory) at http://localhost:4317 |
 | `!bun run demo-P2.4` | live demo: a poisoned tool call is blocked |
 | `!bun test harness` | run the test suite |
 | `Ctrl+P` | **switch model live** (cycles `--models`) · `/usage` token usage · `?` shortcuts |
