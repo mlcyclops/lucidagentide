@@ -811,10 +811,34 @@ function updateComposerTools(): void {
 
 // AskSage persona picker (composer). Selecting one scans it server-side; a clean
 // persona becomes delimited guidance, a flagged one is blocked (fail-closed).
+// AskSage personas come as a numeric id + a description (no friendly name). Derive a
+// readable short title from the description (stripping the boilerplate prefixes), keep the
+// id as a small badge, and surface the FULL description in a premium hover tooltip.
+function personaTitle(desc: string, id: string): string {
+  let d = (desc || "").trim()
+    // strip ONLY the known boilerplate prefix (don't eat the useful content after it)
+    .replace(/^use this persona\s+(?:when\s+exploring|when|to|for|if)\s+/i, "")
+    .replace(/^this persona\s+acts as if\s+(?:they are|you are|it'?s|it is)\s+a?n?\s*/i, "")
+    .replace(/^this persona\s+(?:is|acts as)\s+a?n?\s*/i, "")
+    .replace(/^this is\s+a?n?\s+/i, "")
+    .trim();
+  d = (d.split(/[.\n]/)[0] ?? "").trim(); // first sentence (keep internal commas)
+  if (!d) return `Persona ${id}`;
+  const words = d.split(/\s+/).slice(0, 6).join(" ");
+  const t = words.length > 36 ? words.slice(0, 35).trimEnd() + "…" : words;
+  return t.charAt(0).toUpperCase() + t.slice(1);
+}
+function personaRow(p: { id: string; description: string }, selected: string, attr: "data-pid" | "data-ragpid"): string {
+  const none = !p.id;
+  const title = none ? "None" : personaTitle(p.description, p.id);
+  const tip = none ? esc(p.description) : `${esc(title)} · #${esc(p.id)}|${esc(p.description || "No description provided.")}`;
+  return `<div class="cfg-opt persona-opt ${selected === p.id ? "on" : ""}" ${attr}="${esc(p.id)}" data-tip="${tip}" data-tip-side="left"><span class="tick">${icon("check", 13)}</span><span class="nm">${esc(title)}</span>${none ? "" : `<span class="id">#${esc(p.id)}</span>`}</div>`;
+}
+
 async function openPersonaDropdown(anchor: HTMLElement): Promise<void> {
   cfgClose?.();
   const items = [{ id: "", description: "No persona - default behavior" }, ...state.personas];
-  const rows = items.map((p) => `<div class="cfg-opt ${(state.persona ?? "") === p.id ? "on" : ""}" data-pid="${esc(p.id)}"><span class="tick">${icon("check", 13)}</span><span class="nm">${esc(p.id || "None")}</span><span class="id">${esc((p.description || "").slice(0, 44))}</span></div>`).join("");
+  const rows = items.map((p) => personaRow(p, state.persona ?? "", "data-pid")).join("");
   const { node, close } = popover(anchor, `<div class="cfg-sec"><div class="cfg-lbl">Persona <span class="cur">scanned before use</span></div><div class="cfg-list" id="personaList">${rows || `<div class="empty">No personas - check your AskSage key.</div>`}</div></div>`, () => { cfgClose = null; });
   cfgClose = close;
   $("#personaList", node)?.addEventListener("click", (e) => {
@@ -842,7 +866,7 @@ function openRagPersonaDropdown(anchor: HTMLElement): void {
   cfgClose?.();
   const cur = state.asksage?.persona ?? "";
   const items = [{ id: "", description: "No persona - plain grounded RAG" }, ...state.personas];
-  const rows = items.map((p) => `<div class="cfg-opt ${cur === p.id ? "on" : ""}" data-ragpid="${esc(p.id)}"><span class="tick">${icon("check", 13)}</span><span class="nm">${esc(p.id ? `#${p.id}` : "None")}</span><span class="id">${esc((p.description || "").slice(0, 46))}</span></div>`).join("");
+  const rows = items.map((p) => personaRow(p, cur, "data-ragpid")).join("");
   const { node, close } = popover(anchor, `<div class="cfg-sec"><div class="cfg-lbl">RAG persona <span class="cur">native · /query</span></div><div class="cfg-list" id="ragPersonaList">${rows || `<div class="empty">No personas - check your AskSage key.</div>`}</div></div>`, () => { cfgClose = null; });
   cfgClose = close;
   $("#ragPersonaList", node)?.addEventListener("click", async (e) => {
