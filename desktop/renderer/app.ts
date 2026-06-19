@@ -22,6 +22,7 @@ const state = {
   model: "claude-opus-4-8",
   security: null as SecuritySnapshot | null,
   memory: null as MemorySnapshot | null,
+  ledger: null as import("./bridge.ts").UsageLedger | null, // P10.2 cross-model usage ledger
   config: [] as ConfigOption[],
   commands: [] as OmpCommand[],
   skills: [] as { name: string; description: string; source: string }[],
@@ -761,8 +762,12 @@ function securityHtml(d: SecuritySnapshot | null): string {
 }
 
 function memoryHtml(d: MemorySnapshot | null): string {
-  if (!d) return `<div class="empty">No omp session yet - launch omp and send a message.</div>`;
   let h = "";
+  // P10.2: the cross-model cost & savings ledger sits on top (it spans ALL sessions, so
+  // it shows even when the current workspace has no live omp transcript).
+  const led = state.ledger;
+  if (led && led.models.length) h += accordion("mem.ledger", "Cost & savings ledger", "all models · estimated cache savings", ledgerBody(led), OPEN.has("mem.ledger"), `${led.models.length}`);
+  if (!d) return h || `<div class="empty">No omp session yet - launch omp and send a message.</div>`;
   const s = d.session;
   if (s) {
     h += accordion("mem.context", "Context window", `${s.model} · ${s.turns} turns`,
@@ -774,7 +779,7 @@ function memoryHtml(d: MemorySnapshot | null): string {
       gauge("cached input", s.cache.hit, "", true)
       + `<div class="kvs"><span class="kv" data-tip="Input tokens served from cache, billed at ~10% of full price">cached <b>${fmtNum(s.cache.read)}</b></span><span class="kv" data-tip="New tokens written into the cache (full price once, then reused)">cache-build <b>${fmtNum(s.cache.write)}</b></span><span class="kv" data-tip="Uncached input, billed at full price">full-price <b>${fmtNum(s.cache.fresh)}</b></span><span class="kv">spend <b>${fmtUSD(s.cost)}</b></span></div>`,
       OPEN.has("mem.cache"));
-  } else {
+  } else if (!h) {
     h += `<div class="empty">No omp session transcript yet - launch omp and send a message.</div>`;
   }
   if (d.compaction) {
@@ -797,6 +802,34 @@ function memoryHtml(d: MemorySnapshot | null): string {
     h += `<div class="empty">No harness memory yet - appears once the gate runs, or run <code>bun run demo-P4.3</code>.</div>`;
   }
   return h;
+}
+
+// P10.2: the cross-model cost & savings ledger body — a summary card + a per-model table
+// (sorted by spend, so the top rows are where the tokens go). Savings is estimated from the
+// data (cache reads billed at ~10% of input → est. savings = cost.cacheRead × 9).
+function ledgerBody(led: import("./bridge.ts").UsageLedger): string {
+  const t = led.totals;
+  const savedPct = t.cost + t.savings > 0 ? t.savings / (t.cost + t.savings) : 0;
+  const local = led.bySource.local;
+  const card = `<div class="ledger-card">
+    <div class="lc-row"><span class="lc-k">spend · all models</span><b>${fmtUSD(t.cost)}</b></div>
+    <div class="lc-row ok"><span class="lc-k">est. cache savings</span><b>${fmtUSD(t.savings)} <span class="lc-pct">${Math.round(savedPct * 100)}% off full price</span></b></div>
+    <div class="lc-row"><span class="lc-k">cache hit-rate</span><b style="color:${goodColor(t.cacheHitRate)}">${Math.round(t.cacheHitRate * 100)}%</b></div>
+    <div class="lc-foot">${fmtNum(t.tokens)} tokens · ${t.turns} turns · ${led.models.length} models · ${t.sessions} sessions${local.cost > 0 ? ` · <span class="lc-local">local ${fmtUSD(local.cost)}</span>` : " · all provider/subscription"}</div>
+    ${led.truncated ? `<div class="lc-foot warn">${icon("info", 11)} showing the ${led.files} most recent sessions</div>` : ""}
+  </div>`;
+  const rows = led.models.map((m) => ({
+    model: cleanModelName(prettyModel(m.model)),
+    turns: String(m.turns),
+    tokens: fmtNum(m.tokens.total),
+    cost: fmtUSD(m.cost.total),
+    saved: m.savings > 0 ? fmtUSD(m.savings) : "—",
+    cache: `${Math.round(m.cacheHitRate * 100)}%`,
+  }));
+  return card + table([
+    { key: "model", label: "model" }, { key: "turns", label: "turns", mono: true }, { key: "tokens", label: "tokens", mono: true },
+    { key: "cost", label: "cost", mono: true }, { key: "saved", label: "saved", mono: true }, { key: "cache", label: "cache", mono: true },
+  ], rows);
 }
 
 /** Provider keywords for the active model, so we can highlight the budget that
@@ -868,8 +901,8 @@ function renderStatus(): void {
 // ───────────────────────── data polling ─────────────────────────
 async function refresh(): Promise<void> {
   try {
-    const [sec, mem] = await Promise.all([bridge.security(), bridge.memory()]);
-    state.security = sec; state.memory = mem;
+    const [sec, mem, led] = await Promise.all([bridge.security(), bridge.memory(), bridge.usage()]);
+    state.security = sec; state.memory = mem; state.ledger = led;
     // the badge reflects the live session CONFIG model (loadConfig), not the
     // historical snapshot - so it shows what the next turn will actually use.
     state.lastOk = Date.now();

@@ -117,6 +117,128 @@ export function parseSession(path: string): Session {
   return s;
 }
 
+// ── cross-model usage & cost ledger (P10.2, ADR-0011) ─────────────────────────
+// Aggregate per-model tokens + cost across ALL omp sessions, with an estimated
+// prompt-cache savings. Read-only; a per-file mtime cache keeps repeat calls cheap.
+//
+// Savings is derived purely from the data (no price table → no drift): omp bills a
+// cache READ at ~10% of the input rate, so the full no-cache price would have been
+// ~10× what was paid, i.e. estimated savings ≈ cost.cacheRead × 9.
+
+export interface ModelUsage {
+  model: string; // short id (provider prefix stripped)
+  provider: string; // anthropic | openai | google | asksage-rag | local | other
+  source: "subscription" | "local";
+  sessions: number;
+  turns: number;
+  tokens: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
+  cost: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
+  savings: number; // estimated, = cost.cacheRead × 9
+  cacheHitRate: number; // cacheRead / (cacheRead + cacheWrite + input)
+}
+export interface UsageLedger {
+  models: ModelUsage[]; // sorted by cost.total desc
+  totals: { sessions: number; turns: number; tokens: number; cost: number; savings: number; cacheHitRate: number };
+  bySource: { subscription: { cost: number; tokens: number }; local: { cost: number; tokens: number } };
+  files: number; // session files scanned
+  truncated: boolean; // true if a file cap was applied
+  generatedAt: string;
+}
+
+interface Acc { turns: number; input: number; output: number; cacheRead: number; cacheWrite: number; total: number; cInput: number; cOutput: number; cRead: number; cWrite: number; cTotal: number }
+const newAcc = (): Acc => ({ turns: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0, cInput: 0, cOutput: 0, cRead: 0, cWrite: 0, cTotal: 0 });
+
+export function ledgerProvider(modelShort: string): string {
+  const m = modelShort.toLowerCase();
+  if (/rag/.test(m)) return "asksage-rag";
+  if (/ollama|llama|qwen|mistral|deepseek|local/.test(m)) return "local";
+  if (/claude|anthropic/.test(m)) return "anthropic";
+  if (/gpt|openai|^o[0-9]/.test(m)) return "openai";
+  if (/gemini|google/.test(m)) return "google";
+  return "other";
+}
+
+/** Per-model accumulators for ONE session file (a session may switch models mid-way). */
+function ledgerFromFile(path: string): Map<string, Acc> {
+  const out = new Map<string, Acc>();
+  let model = "?";
+  let text: string;
+  try { text = readFileSync(path, "utf8"); } catch { return out; }
+  for (const line of text.split("\n")) {
+    if (!line) continue;
+    let o: any;
+    try { o = JSON.parse(line); } catch { continue; }
+    if (o.type === "model_change" && o.model) model = o.model;
+    else if (o.type === "message" && o.message?.usage) {
+      if (o.message.model) model = o.message.model;
+      const u = o.message.usage, c = u.cost ?? {};
+      const key = shortModelId(String(model));
+      const a = out.get(key) ?? out.set(key, newAcc()).get(key)!;
+      a.turns++;
+      a.input += u.input ?? 0; a.output += u.output ?? 0; a.cacheRead += u.cacheRead ?? 0; a.cacheWrite += u.cacheWrite ?? 0;
+      a.total += u.totalTokens ?? ((u.input ?? 0) + (u.output ?? 0) + (u.cacheRead ?? 0) + (u.cacheWrite ?? 0));
+      a.cInput += c.input ?? 0; a.cOutput += c.output ?? 0; a.cRead += c.cacheRead ?? 0; a.cWrite += c.cacheWrite ?? 0; a.cTotal += c.total ?? 0;
+    }
+  }
+  return out;
+}
+
+const fileCache = new Map<string, { mtime: number; per: Map<string, Acc> }>();
+
+/** Aggregate per-model usage + cost across all omp sessions. `root`/`maxFiles` are for tests. */
+export function usageLedger(opts: { root?: string; maxFiles?: number } = {}): UsageLedger {
+  const root = opts.root ?? join(homedir(), ".omp", "agent", "sessions");
+  const cap = opts.maxFiles ?? 1500;
+  const generatedAt = new Date().toISOString();
+  const empty: UsageLedger = { models: [], totals: { sessions: 0, turns: 0, tokens: 0, cost: 0, savings: 0, cacheHitRate: 0 }, bySource: { subscription: { cost: 0, tokens: 0 }, local: { cost: 0, tokens: 0 } }, files: 0, truncated: false, generatedAt };
+  if (!existsSync(root)) return empty;
+
+  const files: { p: string; mtime: number }[] = [];
+  for (const d of readdirSync(root)) {
+    const dir = join(root, d);
+    try { if (!statSync(dir).isDirectory()) continue; for (const f of readdirSync(dir)) if (f.endsWith(".jsonl")) files.push({ p: join(dir, f), mtime: statSync(join(dir, f)).mtimeMs }); }
+    catch { /* skip */ }
+  }
+  files.sort((a, b) => b.mtime - a.mtime);
+  const truncated = files.length > cap;
+  const scan = truncated ? files.slice(0, cap) : files;
+
+  const byModel = new Map<string, Acc & { sessions: number }>();
+  for (const { p, mtime } of scan) {
+    let per = fileCache.get(p);
+    if (!per || per.mtime !== mtime) { per = { mtime, per: ledgerFromFile(p) }; fileCache.set(p, per); }
+    for (const [model, a] of per.per) {
+      const m = byModel.get(model) ?? byModel.set(model, { ...newAcc(), sessions: 0 }).get(model)!;
+      m.sessions++; m.turns += a.turns;
+      m.input += a.input; m.output += a.output; m.cacheRead += a.cacheRead; m.cacheWrite += a.cacheWrite; m.total += a.total;
+      m.cInput += a.cInput; m.cOutput += a.cOutput; m.cRead += a.cRead; m.cWrite += a.cWrite; m.cTotal += a.cTotal;
+    }
+  }
+
+  const models: ModelUsage[] = [...byModel.entries()].map(([model, a]) => {
+    const provider = ledgerProvider(model);
+    const denom = a.cacheRead + a.cacheWrite + a.input;
+    return {
+      model, provider, source: (provider === "local" ? "local" : "subscription") as "subscription" | "local",
+      sessions: a.sessions, turns: a.turns,
+      tokens: { input: a.input, output: a.output, cacheRead: a.cacheRead, cacheWrite: a.cacheWrite, total: a.total },
+      cost: { input: a.cInput, output: a.cOutput, cacheRead: a.cRead, cacheWrite: a.cWrite, total: a.cTotal },
+      savings: a.cRead * 9, cacheHitRate: denom > 0 ? a.cacheRead / denom : 0,
+    };
+  }).sort((x, y) => y.cost.total - x.cost.total);
+
+  const totals = { sessions: 0, turns: 0, tokens: 0, cost: 0, savings: 0, cacheHitRate: 0 };
+  const bySource = { subscription: { cost: 0, tokens: 0 }, local: { cost: 0, tokens: 0 } };
+  let dRead = 0, dDenom = 0;
+  for (const m of models) {
+    totals.sessions += m.sessions; totals.turns += m.turns; totals.tokens += m.tokens.total; totals.cost += m.cost.total; totals.savings += m.savings;
+    bySource[m.source].cost += m.cost.total; bySource[m.source].tokens += m.tokens.total;
+    dRead += m.tokens.cacheRead; dDenom += m.tokens.cacheRead + m.tokens.cacheWrite + m.tokens.input;
+  }
+  totals.cacheHitRate = dDenom > 0 ? dRead / dDenom : 0;
+  return { models, totals, bySource, files: scan.length, truncated, generatedAt };
+}
+
 // ── omp compaction policy ─────────────────────────────────────────────────────
 /** Resolve the omp binary: PATH (inside an omp session) or the global bun bin. */
 export function ompBin(): string {

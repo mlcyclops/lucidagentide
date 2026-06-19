@@ -4,6 +4,21 @@ Three lines per session: **shipped / stubbed / next** (CLAUDE.md session ritual)
 
 -----
 
+## P10.2: cross-model usage & cost ledger (ADR-0011)
+- **shipped:** usageLedger() in tools/memory_data.ts aggregates per-model tokens + cost across ALL
+  omp session .jsonl (with a per-file mtime cache so repeat calls are cheap). Savings is DERIVED from
+  the data (cache reads billed at ~10% of input → est. savings = cost.cacheRead × 9 — no price table,
+  no drift). Exposed via GET /api/usage; rendered as a "Cost & savings ledger" accordion in the Memory
+  inspector — a summary card (all-models spend, est. cache savings + "% off full price", cache
+  hit-rate, sessions/turns/models, provider-vs-local split) + a per-model table sorted by spend (where
+  the tokens go). 5 new tests (175 harness green); root+desktop tsc clean. Verified live against the
+  real ~/.omp data: 439 sessions, 11 models, $12.62 spend, $26.29 est. savings, 82% hit-rate.
+- **stubbed:** local-vs-gateway split is structurally present but always subscription until a local
+  runtime exists (P10.4); the savings ratio assumes Anthropic's 10% cache-read pricing for all
+  providers (a reasonable estimate, labeled "est."); no per-turn/by-provider flip toggle yet.
+- **next:** P10.3 — live provider rate-limit probes (replace the lagging "Claude 5 Hour" with a 5-min
+  header probe); then P10.4 — local-vs-gateway attribution.
+
 ## P10.1: response activity HUD + per-model context window (ADR-0011)
 - **shipped:** a live per-response HUD on the streaming assistant message — MM:SS timer counting up,
   a semantic phase label (opening guess from the user's ask, then driven by REAL tool events on the

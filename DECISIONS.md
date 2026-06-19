@@ -861,8 +861,9 @@ prerequisite for everything, has the smallest surface, needs no DuckDB migration
 ## ADR-0011 — Observability & cost intelligence (roadmap)
 
 **Date:** 2026-06-19
-**Status:** Accepted as a roadmap. **P10.1 is BUILT** (the response activity HUD + per-model context
-window in the picker). Phases **P10.2–P10.4 remain Proposed**.
+**Status:** Accepted as a roadmap. **P10.1 BUILT** (response activity HUD + per-model context window
+in the picker) and **P10.2 BUILT** (cross-model usage & cost ledger with derived cache savings).
+Phases **P10.3–P10.4 remain Proposed**.
 **Context increment:** P10.0 (planning; the related context-window display bug was fixed inline).
 
 ### Context

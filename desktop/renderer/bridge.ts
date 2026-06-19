@@ -26,6 +26,20 @@ export interface MemorySnapshot {
     gate: { promoted: number; blocked: number };
   };
 }
+// P10.2 cross-model usage & cost ledger
+export interface ModelUsage {
+  model: string; provider: string; source: "subscription" | "local";
+  sessions: number; turns: number;
+  tokens: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
+  cost: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
+  savings: number; cacheHitRate: number;
+}
+export interface UsageLedger {
+  models: ModelUsage[];
+  totals: { sessions: number; turns: number; tokens: number; cost: number; savings: number; cacheHitRate: number };
+  bySource: { subscription: { cost: number; tokens: number }; local: { cost: number; tokens: number } };
+  files: number; truncated: boolean; generatedAt: string;
+}
 export interface ConfigOption {
   id: string; name: string; category: string; type: string;
   currentValue: string; options: { value: string; name: string }[];
@@ -80,6 +94,7 @@ export interface LucidBridge {
   security(): Promise<SecuritySnapshot | null>;
   memory(): Promise<MemorySnapshot | null>;
   budget(): Promise<{ label: string; used: number; status: string; resetsAt: number | null }[] | null>;
+  usage(): Promise<UsageLedger | null>;
   sendPrompt(text: string, onEvent: (e: ChatEvent) => void): Promise<void>;
   config(): Promise<ConfigOption[]>;
   setConfig(configId: string, value: string): Promise<ConfigOption[]>;
@@ -192,6 +207,7 @@ export const bridge: LucidBridge = {
   security: () => getData("/api/security"),
   memory: () => getData("/api/memory"),
   budget: () => getData("/api/budget"),
+  usage: () => getData("/api/usage"),
   sendPrompt: streamChat,
   config: async () => (await getData("/api/config")) ?? FALLBACK_CONFIG,
   setConfig: async (id, value) => (await post("/api/setConfig", { configId: id, value })) ?? FALLBACK_CONFIG,
