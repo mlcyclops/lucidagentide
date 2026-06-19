@@ -83,11 +83,12 @@ async function streamChat(text: string, onEvent: (e: ChatEvent) => void): Promis
   try {
     res = await fetch("/api/chat", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text }) });
   } catch {
-    onEvent({ type: "token", text: "[chat backend unavailable — is the dev server running?]" });
+    onEvent({ type: "token", text: "[chat backend unreachable — is the GUI server running?]" });
     onEvent({ type: "done" });
     return;
   }
-  if (!res.ok || !res.body) { onEvent({ type: "token", text: "[chat backend error]" }); onEvent({ type: "done" }); return; }
+  if (res.status === 404) { onEvent({ type: "token", text: "[chat backend is out of date — close the GUI server window and relaunch (launcher → G)]" }); onEvent({ type: "done" }); return; }
+  if (!res.ok || !res.body) { onEvent({ type: "token", text: `[chat backend error ${res.status}]` }); onEvent({ type: "done" }); return; }
   const reader = res.body.getReader();
   const dec = new TextDecoder();
   let buf = "";

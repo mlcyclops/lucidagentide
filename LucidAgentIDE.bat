@@ -156,6 +156,8 @@ rem  if its binary is installed; otherwise opens the browser GUI and the browser
 echo.
 echo    [ Lucid desktop GUI ]
 where bun >nul 2>&1 || ( echo    bun not found - cannot start the GUI. & goto :eof )
+rem  Kill any stale GUI server on the port so a fresh one (with the chat backend) starts.
+for /f "tokens=5" %%P in ('netstat -ano ^| findstr ":5319" ^| findstr LISTENING') do taskkill /F /PID %%P >nul 2>&1
 if exist "%REPO%\desktop\node_modules\electron\dist\electron.exe" (
   echo    Launching the native Electron app in a new window...
   start "LucidAgentIDE GUI" cmd /k "chcp 65001>nul & cd /d "%REPO%\desktop" & set "ANTHROPIC_API_KEY=%ANTHROPIC_API_KEY%" & bun run start"
