@@ -4,6 +4,24 @@ Three lines per session: **shipped / stubbed / next** (CLAUDE.md session ritual)
 
 -----
 
+## P8.0: memory/KG/observability roadmap (planning only — ADR-0009)
+- **shipped:** ADR-0009 in DECISIONS.md — a phased roadmap for the four user asks (cross-session
+  memory, Obsidian KG export, prompt/response traceability, dev/admin logging). Locked decisions:
+  auto-distill through the existing fail-closed gate; dev view behind a "Developer mode" toggle;
+  sanitized-by-default with an audited "reveal raw (dangerous)" gate. No functional code this session.
+- **stubbed:** all four phases (P8.1–P8.4) are designed but unbuilt; the auto-distiller half of
+  cross-session memory already exists (rememberActivity in security_extension.ts) — the gap is recall.
+- **next:** build **P8.1 memory-recall** first (migration 0007_memory_session.sql + EventName
+  memory_recalled + harness/memory/recall.ts + backend.setRecall via the persona seam), per ADR-0009.
+
+Roadmap phases (each its own future increment + ADR for its frozen-contract delta):
+- **P8.1 memory-recall** — recall distilled facts into new sessions, delimited + post-cache. (first)
+- **P8.2 traceability** — capture per-turn prompt/response (sanitized; raw by sha) in the ACP stream.
+- **P8.3 vault-export** — Obsidian KG vault (note-per-entity, [[wikilinks]], provenance, escaped).
+- **P8.4 dev-logging** — Developer-mode Logs tab over telemetry/lineage/turns + audited raw-reveal.
+
+-----
+
 ## P-ASKSAGE.6: expandable RAG citations + premium model tooltips
 - **shipped:** (a) RAG citations are now expandable — the adapter splits the trailing
   "References\n[n] …" block AskSage inlines in /query replies into a collapsed

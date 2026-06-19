@@ -606,3 +606,120 @@ Same session also fixed the model-dropdown layout (names were clipping to "C…"
 scrollbar): name gets priority and the redundant "· AskSage Gov" suffix became a compact Gov
 pill. Separately, both slide-out panels (left sessions sidebar, right inspector) now START
 collapsed on boot (`toggleSidebar(true)` + `setInspectorRail(true)`) for a calmer first view.
+
+-----
+
+## ADR-0009 — Memory continuity, knowledge-graph export, and developer observability (roadmap)
+
+**Date:** 2026-06-19
+**Status:** Accepted as a roadmap. Phases P8.1–P8.4 are **Proposed** — each is built in
+its own future increment with its own confirming ADR (or an addendum here) when the
+frozen-contract changes land.
+**Context increment:** P8.0 (planning only — no functional code shipped this session).
+
+### Context
+
+The user asked for four related capabilities: (1) better memory **across and between
+sessions**, (2) an **Obsidian knowledge-graph** export option, (3) **more prompt/response
+traceability**, and (4) an **optional admin/dev logging view**. Two of these touch FROZEN
+contracts — the `EventName` enum (invariant #8) and the DuckDB schema (invariant #10) — so
+under the one-increment-per-session rule they cannot all land at once. This ADR records the
+agreed design and a phased build order so each future session ships one clean phase.
+
+A planning sweep confirmed the **auto-distiller already exists**: `rememberActivity()` in
+`harness/omp/security_extension.ts` already runs `ingestArtifact → promoteFactGated` on every
+allowed tool call (best-effort, never affecting the block decision). So the *persist* half of
+cross-session memory is partly built; the gap is **recall**.
+
+### Decisions locked (with the user)
+
+1. **Memory facts come from auto-distillation**, and every candidate fact passes through the
+   existing **fail-closed promotion gate** (`harness/memory/promotion_gate.ts`, keystone #2)
+   before entering semantic memory. Effective trust is re-derived from the *source artifact*,
+   never the caller's claim; suspicious/quarantined sources are blocked.
+2. **The dev/admin logging view is gated by a Settings "Developer mode" toggle**, persisted
+   exactly like `headroomEnabled` (`desktop/settings_store.ts`). Gating is enforced
+   **server-side**, not just by hiding UI.
+3. **Content is sanitized + escaped by default** everywhere (reuse `escapeMarkdown` from
+   `harness/export/safe_export.ts`; raw referenced by `sha256`). An admin may **explicitly
+   "reveal raw (dangerous)"** behind a loud, **audited** gate (writes an `export_events` row +
+   emits a `raw_revealed` event; raw is returned transient-only, never persisted anew).
+
+### Decision — the four phases
+
+Reuse-first: every phase leans on existing utilities — `promoteFactGated`,
+`wrapUntrusted`/`FROZEN_PREFIX` (`harness/prompt/assembler.ts`),
+`escapeMarkdown`/`export_events` (`harness/export/safe_export.ts`), `Telemetry.emit`
+(`harness/telemetry/events.ts`), `getRunTree` (`harness/runs/lineage.ts`), the
+`setPersona`/`personaDelivered` injection seam (`desktop/acp_backend.ts`), and the
+`headroomEnabled` toggle pattern.
+
+**Phase A — `P8.1-memory-recall` (cross-session memory) — recommended FIRST.** Satisfies #1.
+Persist distilled facts per session (already happening) and **recall** them into later
+sessions as delimited, post-cache context. New `harness/memory/recall.ts`
+`buildRecall(db,{sessionId?,limit})` (read-only; `escapeMarkdown` each statement; only
+`trusted`/`untrusted` facts — never suspicious/quarantined); inject via a new
+`backend.setRecall(wrapped)` mirroring `setPersona` (first user turn, AFTER the cache
+breakpoint, never the frozen prefix). *Frozen-contract impacts (own ADR when built):*
+migration `0007_memory_session.sql` — sidecar `fact_sessions(fact_id, session_id, run_id,
+recalled_at)`, never ALTER frozen `semantic_facts`; new `EventName` `memory_recalled`.
+
+**Phase B — `P8.2-traceability` (prompt/response capture).** Satisfies #3. Capture each
+turn's prompt + response with stable ids + provenance. Hook point is the **desktop-layer
+`acp_backend.ts` `prompt()` stream** (the omp tool-call hook only sees tool calls, not the
+user prompt or free-text reply); best-effort, buffered, flushed on `done`. Sanitized via
+`escapeMarkdown`; raw preserved in `archive_chunks` by `content_sha256`. *Frozen-contract
+impacts:* migration `0008_turn_transcripts.sql` — `turns(turn_id, run_id, session_id, seq,
+role, sanitized_text, raw_sha256, archive_chunk_id, trust_label, created_at)`; new `EventName`
+`turn_captured` (metadata only — ids/role/sha/blocked-count, no content).
+
+**Phase C — `P8.3-vault-export` (Obsidian KG).** Satisfies #2. Depends on A; reuses B.
+Export the semantic graph as an Obsidian vault: note-per-entity (`semantic_entities`) with
+YAML frontmatter (kind, trust_label, entity_id); facts as bullets with trust badges +
+`[[run/<id>]]` provenance backlinks; `[[wikilinks]]` from `semantic_links`; an `_index.md`
+MOC; `run/<id>.md` + `session/<id>.md` provenance notes. All text via `escapeMarkdown`;
+frontmatter via a small YAML-safe escaper (export the currently-private `isDangerousCodepoint`
+— additive, not a frozen contract). Raw spans only under a `> [!danger] RAW` callout, gated
+by Developer mode, with a mandatory `export_events` row + emitted event. *Frozen-contract
+impacts:* **no migration** for the sanitized path (reuses `semantic_*`, `archive_chunks`,
+`export_events`); reuse `safe_export_created`; raw path shares `raw_revealed` (Phase D). New
+`harness/export/vault_export.ts`; `POST /api/vault/export` in `dev.ts`.
+
+**Phase D — `P8.4-dev-logging` (Developer-mode admin view).** Satisfies #4. Depends on B.
+A Settings-gated, read-only view of telemetry, run lineage, and per-turn transcripts, with the
+audited raw-reveal. Add `developerMode?: boolean` to `settings_store.ts` (+ `setDeveloperMode`)
+and a Settings checkbox copying `headroomToggle`; when ON, reveal a new **Logs** rail tab.
+Surfaces (READ_ONLY, gated server-side on `developerMode`): `telemetry_events` stream,
+`getRunTree` lineage, `turns` transcripts (sanitized). Endpoints `GET
+/api/dev/{telemetry,lineage,turns}` and `POST /api/dev/reveal` (the audited raw path).
+*Frozen-contract impacts:* no migration; `raw_revealed` (shared with C); recommended
+`developer_mode_toggled` (flipping the gate's posture is auditable).
+
+### Recommended build order
+
+`A → B → C`, with `D` reading over A/B/C. **First build (future session): Phase A** — smallest
+frozen surface (one migration, one event), reuses the existing distiller + the persona-injection
+seam, and is fully testable against the keystone-#2 fixtures and the prefix-hash test.
+
+### Security guardrails (must hold in every phase)
+
+- Recall/persona enters as delimited untrusted content in the **user turn**, never the frozen
+  prefix (invariants #5/#6; the prefix-hash test must stay green).
+- Distillation never bypasses `promoteFactGated`; suspicious/quarantined sources never become
+  recallable (keystone #2; the scanner-kill test must stay green).
+- Raw-reveal is a deliberate, isolated weakening of the sanitized-only posture: Developer-mode
+  only, explicit confirm, mandatory `raw_revealed` audit, transient return, enforced server-side.
+- DuckDB is single-writer: all GUI/vault/dev reads use the READ_ONLY adapter and degrade to
+  `null` under write-lock contention; **sidecar tables only**, never ALTER a frozen table;
+  migration filenames strictly `0007_*`/`0008_*`.
+- Every new `EventName` is added to `harness/contracts.ts` in the **same** increment that emits
+  it (else `Telemetry.emit` throws `UnknownEventError`).
+
+### Consequences
+
+- No code shipped this session; the planning ADR is the artifact. `bun test harness` stays green.
+- Four future increments are now pre-scoped with their exact frozen-contract deltas, so each can
+  be a clean, isolated, ADR-backed change rather than a sprawling one.
+- The raw-reveal decision (allow raw behind an audited gate) is the one place this roadmap
+  deliberately relaxes "sanitized-only"; it is constrained to Developer mode + audit so the
+  default deployment posture is unchanged.
