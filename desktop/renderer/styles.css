@@ -331,7 +331,7 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .pal-empty{padding:18px;text-align:center;color:var(--txt-4);font-size:13px}
 
 /* ───────────────────────── config popover (model / mode / thinking) ───────────────────────── */
-.popover{position:fixed;z-index:95;width:344px;background:var(--bg-1);border:1px solid var(--line-strong);
+.popover{position:fixed;z-index:95;width:366px;background:var(--bg-1);border:1px solid var(--line-strong);
   border-radius:14px;box-shadow:var(--shadow);opacity:0;transform:translateY(-6px) scale(.985);
   transition:opacity var(--t),transform var(--t-slow) var(--ease-out);overflow:hidden}
 .popover.show{opacity:1;transform:none}
@@ -342,14 +342,17 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .cfg-search{display:flex;align-items:center;gap:8px;background:var(--bg-2);border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin-bottom:8px}
 .cfg-search .ic{color:var(--txt-4)}
 .cfg-search input{flex:1;background:transparent;border:0;outline:none;color:var(--txt);font-size:13px;font-family:inherit}
-.cfg-list{max-height:224px;overflow:auto;display:flex;flex-direction:column;gap:2px}
-.cfg-opt{display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:8px;cursor:pointer;color:var(--txt-2);font-size:13px}
+.cfg-list{max-height:224px;overflow-y:auto;overflow-x:hidden;display:flex;flex-direction:column;gap:2px}
+.cfg-opt{display:flex;align-items:center;gap:9px;padding:9px 10px;border-radius:8px;cursor:pointer;color:var(--txt-2);font-size:13px;min-width:0}
 .cfg-opt:hover{background:var(--bg-2);color:var(--txt)}
 .cfg-opt.on{background:var(--accent-dim);color:var(--txt)}
 .cfg-opt .tick{width:14px;flex:none;color:var(--accent-2);opacity:0}
 .cfg-opt.on .tick{opacity:1}
-.cfg-opt .nm{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.cfg-opt .id{flex:none;font-family:var(--mono);font-size:10.5px;color:var(--txt-4)}
+.cfg-opt .nm{flex:1 1 auto;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cfg-opt .gov-pill{flex:none;font-size:9px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;
+  color:var(--accent-2);background:var(--accent-dim);border:1px solid var(--line-soft);border-radius:5px;padding:1px 5px;line-height:1.6}
+.cfg-opt .id{flex:0 1 auto;min-width:0;max-width:38%;text-align:right;font-family:var(--mono);font-size:10px;
+  color:var(--txt-4);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 /* thinking dropdown */
 .cfg-dd{position:relative}
 .cfg-dd-btn{width:100%;display:flex;align-items:center;justify-content:space-between;gap:8px;background:var(--bg-2);

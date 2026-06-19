@@ -35,6 +35,17 @@ const state = {
   streaming: false,
 };
 const prettyModel = (v: string) => v.replace(/^anthropic\//, "");
+// Strip the redundant "· AskSage Gov" / "· Gov" suffix from a model's display name
+// (the gov origin is shown by a compact pill instead); shorten the technical id by
+// dropping the asksage-<provider>/ prefix the name already conveys.
+const cleanModelName = (name: string) => name.replace(/\s*·\s*(?:AskSage(?:\s+Gov)?|Gov)\s*$/i, "").trim() || name;
+const shortModelId = (v: string) => v.replace(/^anthropic\//, "").replace(/^asksage-[a-z]+\//, "");
+// Friendly label for the CURRENTLY-selected model — resolve its name from config,
+// falling back to the bare value before config has loaded.
+function modelLabel(value: string): string {
+  const opt = state.config.find((c) => c.id === "model")?.options.find((o) => o.value === value);
+  return opt ? cleanModelName(opt.name) : prettyModel(value);
+}
 const OPEN = new Set<string>(["sec.quarantine", "sec.approvals", "mem.context", "mem.cache"]);
 let lastInspHash = "";
 
@@ -45,7 +56,7 @@ function buildShell(): void {
     <div class="titlebar">
       <div class="brand"><span class="lucid-word">LUCID</span><span class="pi">${piMark}</span></div>
       <button class="model-badge" id="modelBadge" data-tip="Model · mode · thinking|Click to choose" data-tip-icon="spark">
-        <span class="dot"></span><span id="modelName">${esc(prettyModel(state.model))}</span>${icon("chevron", 13)}
+        <span class="dot"></span><span id="modelName">${esc(modelLabel(state.model))}</span>${icon("chevron", 13)}
       </button>
       <div class="tb-spacer"></div>
       <div class="zoom" role="group" aria-label="Text zoom">
@@ -92,7 +103,7 @@ function buildShell(): void {
             <button class="send-btn" id="send" data-tip="Send|Enter" disabled>${icon("send", 18)}</button>
           </div>
           <div class="composer-tools" id="composerTools">
-            <button class="ctool" id="ctModel" data-tip="Model|Click to change the model">${icon("spark", 14)}<span id="ctModelName">${esc(prettyModel(state.model))}</span>${icon("chevron", 11)}</button>
+            <button class="ctool" id="ctModel" data-tip="Model|Click to change the model">${icon("spark", 14)}<span id="ctModelName">${esc(modelLabel(state.model))}</span>${icon("chevron", 11)}</button>
             <button class="ctool" id="ctMode" data-tip="Mode|Agent edits files · Plan drafts read-only">${icon("bolt", 14)}<span id="ctModeName">Agent</span>${icon("chevron", 11)}</button>
             <button class="ctool" id="ctThink" data-tip="Thinking depth|How hard the model reasons">${icon("brain", 14)}<span id="ctThinkName">High</span>${icon("chevron", 11)}</button>
             <button class="ctool" id="ctPersona" data-tip="AskSage persona|Server-supplied role guidance — scanned before use" hidden>${icon("user", 14)}<span id="ctPersonaName">Persona</span>${icon("chevron", 11)}</button>
@@ -145,9 +156,9 @@ async function renderSessions(): Promise<void> {
   if (sessions === null) { list.innerHTML = `<div class="side-empty">Couldn't load history — the GUI server looks out of date. Relaunch it (launcher → <b>G</b>), or restart <code>bun run desktop:web</code>.</div>`; return; }
   if (!sessions.length) { list.innerHTML = `<div class="side-empty">No sessions yet — send a prompt to start one. They persist here across runs.</div>`; return; }
   list.innerHTML = sessions.map((s, i) => `
-    <div class="sess ${i === 0 ? "active" : ""}" data-sid="${esc(s.id)}" data-tip="${esc(s.title)}|${esc(prettyModel(s.model))} · ${s.turns} turn${s.turns === 1 ? "" : "s"} · ${relTime(s.updatedAt)}" data-tip-side="right">
+    <div class="sess ${i === 0 ? "active" : ""}" data-sid="${esc(s.id)}" data-tip="${esc(s.title)}|${esc(modelLabel(s.model))} · ${s.turns} turn${s.turns === 1 ? "" : "s"} · ${relTime(s.updatedAt)}" data-tip-side="right">
       <div class="t">${esc(s.title)}</div>
-      <div class="m"><b>${esc(prettyModel(s.model))}</b> · ${s.turns} turn${s.turns === 1 ? "" : "s"} · ${relTime(s.updatedAt)}</div>
+      <div class="m"><b>${esc(modelLabel(s.model))}</b> · ${s.turns} turn${s.turns === 1 ? "" : "s"} · ${relTime(s.updatedAt)}</div>
     </div>`).join("");
 }
 
@@ -569,7 +580,7 @@ function renderStatus(): void {
   const budget = m?.budgets?.[0];
   const ago = state.lastOk ? Math.round((Date.now() - state.lastOk) / 1000) : null;
   $("#statusbar")!.innerHTML = `
-    <div class="seg" data-tip="Active model|Click the badge to change">${icon("spark", 14)} <b>${esc(prettyModel(state.model))}</b></div>
+    <div class="seg" data-tip="Active model|Click the badge to change">${icon("spark", 14)} <b>${esc(modelLabel(state.model))}</b></div>
     <div class="seg" data-tip="Context window|How full the model's context is${lu ? " (live this session)" : ""}">${icon("brain", 14)}
       <span class="mini"><span class="fill" style="width:${Math.round(ctx * 100)}%;background:${loadColor(ctx)}"></span></span>
       <b>${fmtNum(curTok)}</b>/${fmtNum(winTok)}</div>
@@ -655,7 +666,7 @@ function updateComposerTools(): void {
   const mode = state.config.find((c) => c.id === "mode");
   const think = state.config.find((c) => c.id === "thinking");
   const set = (sel: string, v: string) => { const e = $(sel); if (e) e.textContent = v; };
-  if (model) set("#ctModelName", prettyModel(model.currentValue));
+  if (model) set("#ctModelName", modelLabel(model.currentValue));
   if (mode) set("#ctModeName", mode.currentValue === "plan" ? "Plan" : "Agent");
   if (think) { const cur = think.options.find((o) => o.value === think.currentValue); set("#ctThinkName", prettyLevel(cur?.name ?? think.currentValue)); }
   const pBtn = $("#ctPersona"); if (pBtn) (pBtn as HTMLElement).hidden = !state.asksage?.configured;
@@ -960,7 +971,7 @@ async function loadConfig(): Promise<void> {
     state.config = await bridge.config();
     state.commands = await bridge.commands();
     const model = state.config.find((c) => c.id === "model");
-    if (model) { state.model = model.currentValue; const mn = $("#modelName"); if (mn) mn.textContent = prettyModel(model.currentValue); }
+    if (model) { state.model = model.currentValue; const mn = $("#modelName"); if (mn) mn.textContent = modelLabel(model.currentValue); }
     updateComposerTools();
   } catch { /* browser/no-session: keep defaults */ }
 }
@@ -970,7 +981,7 @@ async function applyConfig(configId: string, value: string): Promise<void> {
   const label = opt?.options.find((o) => o.value === value)?.name ?? value;
   try { state.config = await bridge.setConfig(configId, value); } catch { /* keep optimistic */ }
   const o = state.config.find((c) => c.id === configId); if (o) o.currentValue = value;
-  if (configId === "model") { state.model = value; const mn = $("#modelName"); if (mn) mn.textContent = prettyModel(value); renderStatus(); }
+  if (configId === "model") { state.model = value; const mn = $("#modelName"); if (mn) mn.textContent = modelLabel(value); renderStatus(); }
   updateComposerTools();
   showToast({ title: `${opt?.name ?? configId} → ${label}`, desc: configId === "model" ? "New turns use this model." : "Applied to the active session.", actions: [{ label: "OK" }], timeout: 2400 });
 }
@@ -983,6 +994,10 @@ const MODEL_ORDER = [
 ];
 const bareModel = (v: string) => v.replace(/^anthropic\//, "");
 const isAsksage = (v: string) => /asksage/i.test(v);
+// One row in a model dropdown: clean name (priority) · a Gov pill for gateway models ·
+// the shortened id (truncates). Shared so both pickers render identically.
+const modelRow = (o: { value: string; name: string }, sel: string) =>
+  `<div class="cfg-opt ${o.value === sel ? "on" : ""}" data-val="${esc(o.value)}"><span class="tick">${icon("check", 13)}</span><span class="nm">${esc(cleanModelName(o.name))}</span>${isAsksage(o.value) ? `<span class="gov-pill">Gov</span>` : ""}<span class="id">${esc(shortModelId(o.value))}</span></div>`;
 function curatedModels(opt: ConfigOption): { value: string; name: string }[] {
   const asksage = opt.options.filter((o) => isAsksage(o.value));
   const ensureCurrent = (list: { value: string; name: string }[]) => {
@@ -1023,7 +1038,7 @@ function openConfigPopover(anchor: HTMLElement): void {
   const models = model ? curatedModels(model) : [];
 
   const modelSec = model ? `<div class="cfg-sec">
-      <div class="cfg-lbl">Model <span class="cur">${esc(prettyModel(model.currentValue))}</span></div>
+      <div class="cfg-lbl">Model <span class="cur">${esc(modelLabel(model.currentValue))}</span></div>
       <div class="cfg-search">${icon("search", 15)}<input id="cfgModelSearch" placeholder="Search ${models.length} models…" /></div>
       <div class="cfg-list" id="cfgModelList"></div></div>` : "";
   const modeSec = mode ? `<div class="cfg-sec"><div class="cfg-lbl">Mode</div>
@@ -1046,8 +1061,7 @@ function openConfigPopover(anchor: HTMLElement): void {
     const draw = (q = "") => {
       const ql = q.toLowerCase();
       list.innerHTML = models.filter((o) => o.name.toLowerCase().includes(ql) || o.value.toLowerCase().includes(ql))
-        .map((o) => `<div class="cfg-opt ${o.value === model.currentValue ? "on" : ""}" data-val="${esc(o.value)}">
-          <span class="tick">${icon("check", 13)}</span><span class="nm">${esc(o.name)}</span><span class="id">${esc(bareModel(o.value))}</span></div>`).join("");
+        .map((o) => modelRow(o, model.currentValue)).join("");
     };
     draw();
     ($("#cfgModelSearch", node) as HTMLInputElement).addEventListener("input", (e) => draw((e.target as HTMLInputElement).value));
@@ -1086,7 +1100,9 @@ function openOptionDropdown(anchor: HTMLElement, configId: string): void {
   const labelOf = (o: { value: string; name: string }) =>
     configId === "model" ? o.name : configId === "thinking" ? prettyLevel(o.name) : o.value === "plan" ? "Plan" : "Agent";
   const rows = (list: { value: string; name: string }[]) => list.map((o) =>
-    `<div class="cfg-opt ${o.value === c.currentValue ? "on" : ""}" data-val="${esc(o.value)}"><span class="tick">${icon("check", 13)}</span><span class="nm">${esc(labelOf(o))}</span>${configId === "model" ? `<span class="id">${esc(bareModel(o.value))}</span>` : ""}</div>`).join("");
+    configId === "model"
+      ? modelRow(o, c.currentValue)
+      : `<div class="cfg-opt ${o.value === c.currentValue ? "on" : ""}" data-val="${esc(o.value)}"><span class="tick">${icon("check", 13)}</span><span class="nm">${esc(labelOf(o))}</span></div>`).join("");
   const search = configId === "model" ? `<div class="cfg-search">${icon("search", 15)}<input id="miniSearch" placeholder="Search ${opts.length} models…" /></div>` : "";
   const { node, close } = popover(anchor, `<div class="cfg-sec"><div class="cfg-lbl">${esc(c.name)}</div>${search}<div class="cfg-list" id="miniList">${rows(opts)}</div></div>`, () => { cfgClose = null; });
   cfgClose = close;
