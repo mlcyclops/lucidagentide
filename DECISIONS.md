@@ -1271,10 +1271,45 @@ preference for **hybrid** (classical + PQC) during any transition. When a valida
 PQC primitives, we populate the `kem`/`sig` slots — no schema rewrite. Same discipline as the FIPS
 posture in ADR-0010: approved algorithms now, an honest, documented path to the next bar.
 
+### Accreditation impact (NIPR / SIPR / TS) — and how the design stays clean
+
+Does shipping the non-FIPS **Argon2id** option jeopardize a future ATO? Answer: **only if it is
+*reachable to protect the data* in the accredited configuration.** Mere presence in the binary is not
+automatically disqualifying; assessors evaluate the **as-deployed configuration** against NIST SP
+800-53 **SC-13** (Cryptographic Protection) + **IA-7** (Cryptographic Module Authentication).
+
+- **NIPR (incl. CUI):** FISMA / FIPS 140-3. If Argon2id is *selectable* to key data in scope → an
+  SC-13 finding. "Present but provably unreachable in the FIPS/gov configuration, documented" is
+  defensible; **excluding it from the gov build** is cleaner.
+- **SIPR (Secret) / TS (Top Secret):** National Security Systems — **CNSSP-15 / CNSA** (and **CNSA 2.0**
+  for the PQC transition: ML-KEM, ML-DSA, AES-256, SHA-384/512, LMS/XMSS — i.e. the FIPS 203/204/205 +
+  SP 800-208 set above), NSA-approved. Argon2id is **excluded, full stop**; FIPS validation is
+  necessary but not sufficient on classified domains.
+
+**The dominant gate is the module, not the algorithm.** Today the crypto runs on Bun/BoringSSL, which
+is **not a CMVP-validated module** (ADR-0010). Using approved *algorithms* ≠ FIPS-compliant until the
+calls execute inside a **validated module** (a validated OpenSSL, the OS module, or an HSM/validated
+keystore). For any real NIPR/SIPR/TS ATO that module swap is the major work; Argon2id is a footnote.
+
+**Resolution — three guards make "keeping Argon2id" a non-issue:**
+1. **A `gov`/`fips` build profile** that excludes non-approved algorithms (Argon2id, scrypt) from the
+   bundle entirely — minimal attack surface, nothing for an assessor to flag.
+2. **An enforced runtime FIPS mode** (defense in depth): the algorithm registry **fails closed** on any
+   non-approved suite when FIPS mode is on — never silently downgrades — and refuses to start unless
+   backed by a validated module / self-test.
+3. **Argon2id stays a clearly-labeled option only in the non-gov build** (for non-accreditation-bound
+   users who want memory-hardness).
+
+Honest caveat: final authority rests with the AO + the assessment; this is the posture assessors
+expect, designed in now (a small registry guard) rather than bolted on later (a refactor).
+
 ### Frozen-contract deltas (for the future build increment)
 
 - Extend the store/export envelopes with the **`suite` descriptor** (additive; absent ⇒ the documented
   P9.1/P9.4 defaults — back-compatible, no version bump unless a slot's *meaning* changes).
+- **FIPS-mode flag + `gov`/`fips` build profile**: the algorithm registry is constrained to
+  approved-only when set; non-approved algorithms are excluded from the gov bundle and unselectable at
+  runtime (fail-closed). New EventName candidate `crypto_fips_mode` (added only when emitted).
 - `crypto.ts` grows an internal **algorithm registry** (kdf/aead/hash/kem/sig) gating which suites are
   selectable in this runtime; selecting an unavailable algorithm fails loud, never silently downgrades.
 - New EventName candidate `crypto_suite_selected` (added only when emitted).

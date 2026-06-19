@@ -16,8 +16,15 @@ Three lines per session: **shipped / stubbed / next** (CLAUDE.md session ritual)
 - **stubbed:** PQC is READY not IMPLEMENTED — Bun/BoringSSL + node:crypto don't yet expose
   FIPS-validated ML-KEM/ML-DSA/SLH-DSA; slots populated when a validated module ships. Suite
   descriptor + Argon2id opt-in land with P9.5 crypto work.
-- **next:** P9.6 — add the `suite` descriptor + algorithm registry (additive, back-compatible) and the
-  Argon2id non-FIPS KDF opt-in; wire KEM/sig slots when the connector + a validated PQC module arrive.
+- **accreditation (NIPR/SIPR/TS):** Argon2id is safe to keep ONLY if unreachable in the accredited
+  config (SC-13/IA-7 judge the as-deployed configuration). Resolution: a `gov`/`fips` build profile
+  excludes non-approved algorithms from the bundle + an enforced runtime FIPS mode fails closed on any
+  non-approved suite (never downgrades). SIPR/TS → CNSA/CNSA 2.0, NSA-approved, Argon2id excluded.
+  Dominant gate is the un-validated BoringSSL MODULE, not the algorithm — a validated module is the
+  real ATO work.
+- **next:** P9.6 — add the `suite` descriptor + algorithm registry + FIPS-mode/gov-build guard
+  (additive, back-compatible) and the Argon2id non-FIPS KDF opt-in (non-gov build only); wire KEM/sig
+  slots when the connector + a validated PQC module arrive.
 
 ## P9.5.0: hard CUI isolation roadmap (planning only — ADR-0014)
 - **shipped:** ADR-0014 — resolves ADR-0012's open "CUI isolation strength" question. Decision:
