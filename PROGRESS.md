@@ -12,9 +12,14 @@ Three lines per session: **shipped / stubbed / next** (CLAUDE.md session ritual)
   one-file-two-DEKs (couples lifecycle) + HKDF-from-one-master (master KEK could derive both — defeats
   the goal). Phases P9.5a (store+dual-custody+routing) → P9.5b (audited migration + destroy) → P9.5c
   (UI). New EventNames + new frozen format reserved for the build increments; no code this session.
-- **stubbed:** all of P9.5a–c (designed, unbuilt). Three open questions flagged for confirmation:
-  separate-CUI-passphrase recommend-vs-require, Combined-view-with-CUI-locked behavior, migration
-  trigger (explicit+audited recommended).
+- **stubbed:** all of P9.5a–c (designed, unbuilt). Open questions now RESOLVED (2026-06-19):
+  (1) separate CUI passphrase = recommend-not-force, with first-time setup UX = confirm-match +
+  Caps Lock indicator + show/reveal (also retrofit the existing main-store field); (2) CUI auto-locks
+  the moment it's not the selected compartment — re-auth to return; Combined never silently includes
+  CUI (shows a "CUI locked" marker); (3) migration = explicit + audited, and align CUI markings/metadata
+  to federal standards (ISOO CUI Registry, NARA schedules, NIEM-conformant interchange to evaluate).
+  KDF decided: PBKDF2-HMAC-SHA256 STAYS (FIPS-approved; Argon2id/bcrypt are memory-hard but NOT
+  FIPS-approved → not the CUI default; Argon2id reserved as a future explicit non-FIPS opt-in).
 - **next:** build P9.5a — the personal-cui.v1 store + independent unlock + two-store routing (main
   store refuses cui writes; cui learning/recall/graph/export route to the CUI store).
 

@@ -1125,10 +1125,34 @@ A small manager holds up to two stores (`main` = work+personal, `cui`). Routing 
 - `scopeCounts()` reports `cui` from the CUI store when unlocked, else a "locked" sentinel (count
   hidden, not zero — zero would mislead).
 
+### KDF choice — PBKDF2 stays for the CUI path (Argon2/bcrypt rejected here, on purpose)
+
+A fair challenge was raised: **Argon2id / bcrypt are memory-hard and resist GPU/ASIC cracking, so
+why PBKDF2?** The answer is the federal/FIPS requirement, which inverts the usual recommendation:
+
+| KDF | Memory-hard | FIPS-approved | Available |
+|:--|:--|:--|:--|
+| **PBKDF2-HMAC-SHA256** | no | **yes** (NIST SP 800-132) | `node:crypto` |
+| Argon2id | yes (PHC winner) | **no** | Bun.password only → PHC string, **not** raw KEK bytes |
+| scrypt | yes | **no** | `crypto.scryptSync` |
+| bcrypt | partial | **no** | + 72-byte truncation; a password-storage hash, not a KDF |
+
+For CUI / "max federal-platform integration," an **unapproved KDF is a compliance non-starter even
+though it is cryptographically stronger** against GPUs. FIPS-approval wins for this data class.
+bcrypt is additionally disqualified: not a key-derivation function (we need raw 32-byte KEK output
+to wrap the DEK; bcrypt/`Bun.password` yield a verification hash) and it truncates at 72 bytes.
+
+**Resolution:** PBKDF2-HMAC-SHA256 remains the **default and the only CUI-path KDF**, with the
+iteration count compensating for the lack of memory-hardness — currently **600k**, at OWASP's
+present recommendation; revisit upward over time. The envelope's version-tagged `kdf.algo` field was
+built for exactly this, so **Argon2id may be added later as an explicitly-labeled NON-FIPS hardening
+option** for non-federal deployments — never the CUI default. (Same honest posture as ADR-0010: the
+strongest *approved* algorithms by default; document where a stronger-but-unapproved option exists.)
+
 ### Frozen-contract deltas (for the future build increments)
 
 - **New store format `personal-cui.v1`** — its own frozen contract (envelope identical in shape to
-  `personal-kg.v1`; the algorithm layer is unchanged).
+  `personal-kg.v1`; the algorithm layer is unchanged, PBKDF2-HMAC-SHA256).
 - **New EventNames** (added in the increment that emits them, invariant #8):
   `personal_cui_store_unlocked`, `personal_cui_migrated`, `personal_cui_destroyed`.
 - **No DuckDB migration** (the stores are separate encrypted files).
@@ -1154,12 +1178,28 @@ A small manager holds up to two stores (`main` = work+personal, `cui`). Routing 
 Hard isolation strengthens **key separation** and **records destruction**; it does **not** change the
 BoringSSL/approved-algorithms-not-FIPS-*mode* caveat from ADR-0010. Same algorithms, two keys.
 
-### Open questions (flagged for confirmation before building P9.5a)
+### Resolved decisions (confirmed 2026-06-19) — these are now design requirements
 
-- **Separate CUI passphrase — recommend or require?** Forcing a distinct secret maximizes isolation
-  but adds friction for a single-user dev workflow. *Recommended: allow same, strongly suggest
-  separate; never silently reuse without telling the user.*
-- **Combined view with CUI locked** — show non-CUI + a "CUI locked" marker (recommended) vs. block
-  Combined entirely.
-- **Migration trigger** — automatic-on-first-CUI-store-setup vs. an explicit "Move my CUI data into
-  the isolated store" button. *Recommended: explicit + audited (it moves controlled data).*
+1. **Separate CUI passphrase — recommend, do not force.** The CUI store may use the same or a
+   distinct secret; the UI strongly suggests separate and never silently reuses. The **first-time
+   passphrase setup** (for the CUI store, and retrofitted to the existing main-store setup field)
+   MUST include: a **confirm-match** field (type the passphrase twice; create is disabled until they
+   match), a **Caps Lock indicator** shown when Caps Lock is on, and a **show/reveal toggle** so the
+   user can verify what they typed. (Folded into P9.5c; the main-store retrofit is a small, separable
+   UI follow-up.)
+2. **CUI auto-locks the moment it is not the selected compartment.** Switching the active compartment
+   away from CUI immediately **zeroizes the CUI DEK + drops the CUI store**; returning to CUI requires
+   re-entering the CUI passphrase/code. Consequence (decided): the **Combined** view therefore never
+   silently includes CUI — when CUI isn't the active compartment it is locked, so Combined shows
+   non-CUI facts + an explicit **"CUI locked"** marker. This is stricter than always-unlocked Combined
+   and is the chosen behavior. (Supersedes the earlier "show non-CUI + marker vs. block" question.)
+3. **Migration is explicit + audited**, and the broader goal is **maximum portability/integration with
+   federal platforms and standards** for this data class. So beyond the explicit "Move my CUI data
+   into the isolated store" action (audited, idempotent — see P9.5b), the CUI store + its ADR-0013
+   archive should **align markings + metadata to federal standards in use**: the ISOO **CUI Registry**
+   categories (32 CFR 2002), **NARA records schedules**, and a **federal-conformant interchange** for
+   the future connector (ADR-0012 layer 3) — candidates to evaluate: NIEM-conformant export, and the
+   relevant DoD/agency records-management metadata. Honest caveat (unchanged): the tool marks,
+   packages, and structures to these standards; an authorized CUI/records officer still completes and
+   certifies designations. Capturing the *specific* federal interchange target is its own scoping pass
+   before the connector increment.
