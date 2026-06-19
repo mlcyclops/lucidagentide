@@ -507,3 +507,14 @@ Three lines per session: **shipped / stubbed / next** (CLAUDE.md session ritual)
   tokens, returned no text); both land next via a custom streamSimple adapter.
 - **next:** build the streamSimple adapter (AskSage native non-streaming endpoints → one
   delta) to re-enable Claude and add Gemini.
+
+## P-ASKSAGE.2: Claude + Gemini via streamSimple adapter
+- **shipped:** harness/omp/asksage_stream.ts — a custom streamSimple that calls
+  AskSage's non-streaming Anthropic + Google endpoints and replays the reply through
+  omp's AssistantMessageEventStream. Re-enabled Claude (opus-4/sonnet-4) and added
+  Gemini (2.5 pro/flash) via pi.registerProvider({api, streamSimple}). Verified live:
+  claude-sonnet-4 → "CLAUDE OK", gemini-2.5-flash → "GEMINI OK", with usage; gate
+  still fail-closed on these turns. 130/130 harness tests green.
+- **stubbed:** adapter is non-streaming (one delta per reply) — fine for AskSage,
+  which doesn't stream these routes anyway; thinking/tools not surfaced for them.
+- **next:** (optional) per-model thinking for gemini/claude if AskSage exposes it.

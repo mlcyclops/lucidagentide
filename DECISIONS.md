@@ -492,3 +492,18 @@ Smoke-tested against a real CIV account:
   console with no API to read it back. So the limit is a local, user-adjustable value
   (default **200k**) with +50K / +250K / +1M / Reset increments in Settings and a
   tooltip pointing to AskSage → Settings → Usage & Billing. `used` is live from the API.
+
+### Addendum (streamSimple adapter — Claude + Gemini)
+
+AskSage serves Claude and Gemini **non-streamed**, so omp's built-in
+`anthropic-messages` / google providers (which expect SSE) returned no text. Rather
+than fork, `harness/omp/asksage_stream.ts` provides a custom `streamSimple` (the
+documented `pi.registerProvider({ api, streamSimple })` path): it flattens omp's
+Context, POSTs AskSage's native non-streaming endpoints (`/anthropic/v1/messages`
+with `anthropic-version`; `/google/v1beta/models/<id>:generateContent`), and replays
+the full reply through omp's `AssistantMessageEventStream` (start → text_start →
+text_delta → text_end → done). It is the one place the extension imports an omp type
+(the event-stream class), imported from the package subpath so it resolves as a
+value. Verified live: `claude-sonnet-4` → "CLAUDE OK", `gemini-2.5-flash` →
+"GEMINI OK", both with usage. Claude (opus-4, sonnet-4) and Gemini (2.5 pro/flash)
+re-enabled; the security gate still wraps these turns fail-closed.

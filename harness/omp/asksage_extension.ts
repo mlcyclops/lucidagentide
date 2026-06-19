@@ -15,9 +15,15 @@
 // from env (the desktop passes them from ~/.omp/lucid-gui.json via applyEnv; keys
 // are never committed). No key → registers nothing (quiet no-op).
 //
-// Intentionally omp-import-free (typed `any`) so it loads under any omp version.
-// URL construction is verified against the installed omp: openai-completions hits
-// `${baseUrl}/chat/completions`, anthropic-messages hits `${baseUrl}/v1/messages`.
+// Routes:
+//   - OpenAI (gpt/o-series): native omp `openai-completions` — AskSage streams it.
+//   - Anthropic (claude) + Google (gemini): AskSage serves these NON-streamed, so
+//     they use a custom `streamSimple` adapter (asksage_stream.ts) that calls
+//     AskSage's non-streaming endpoints and replays the reply as one delta.
+// The OpenAI path stays omp-import-free (typed `any`); the adapter is the one place
+// that imports an omp type (AssistantMessageEventStream), which streamSimple requires.
+
+import { makeAsksageStream } from "./asksage_stream.ts";
 
 const DEFAULT_BASE = "https://api.civ.asksage.ai/server";
 
@@ -47,11 +53,16 @@ const OPENAI_MODELS: ModelSpec[] = [
   { id: "gpt-o4-mini", name: "o4-mini · AskSage Gov", reasoning: true, contextWindow: 200_000, maxTokens: 100_000 },
 ];
 
-const ANTHROPIC_THINKING = { mode: "anthropic-adaptive", efforts: ["minimal", "low", "medium", "high"] };
+// Claude + Gemini go through the streamSimple adapter (AskSage serves them
+// non-streamed). reasoning:false — the adapter delivers a complete reply and does
+// not implement provider thinking, so we don't surface a thinking control for them.
 const ANTHROPIC_MODELS: ModelSpec[] = [
-  { id: "claude-opus-4", name: "Claude Opus 4 · AskSage Gov", reasoning: true, contextWindow: 200_000, maxTokens: 32_000, thinking: ANTHROPIC_THINKING },
-  { id: "claude-sonnet-4", name: "Claude Sonnet 4 · AskSage Gov", reasoning: true, contextWindow: 200_000, maxTokens: 64_000, thinking: ANTHROPIC_THINKING },
-  { id: "claude-haiku-3.5", name: "Claude Haiku 3.5 · AskSage Gov", reasoning: false, contextWindow: 200_000, maxTokens: 8_192 },
+  { id: "claude-opus-4", name: "Claude Opus 4 · AskSage Gov", reasoning: false, contextWindow: 200_000, maxTokens: 32_000 },
+  { id: "claude-sonnet-4", name: "Claude Sonnet 4 · AskSage Gov", reasoning: false, contextWindow: 200_000, maxTokens: 64_000 },
+];
+const GOOGLE_MODELS: ModelSpec[] = [
+  { id: "google-gemini-2.5-pro", name: "Gemini 2.5 Pro · AskSage Gov", reasoning: false, contextWindow: 1_000_000, maxTokens: 64_000 },
+  { id: "google-gemini-2.5-flash", name: "Gemini 2.5 Flash · AskSage Gov", reasoning: false, contextWindow: 1_000_000, maxTokens: 64_000 },
 ];
 
 const COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
@@ -85,13 +96,25 @@ export default function asksageExtension(pi: any): void {
       models: toProviderModels(OPENAI_MODELS),
     });
 
-    // Anthropic route: DISABLED for now. AskSage's /anthropic passthrough does not
-    // stream the way omp's anthropic-messages parser expects — a live turn consumed
-    // tokens but returned no text. Claude (and Gemini, same root cause: AskSage
-    // serves them non-streamed) will be re-enabled via a custom `streamSimple`
-    // adapter that calls AskSage's non-streaming endpoints. See ADR-0007 / PROGRESS.
-    void ANTHROPIC_MODELS; // retained for the adapter increment
-    // pi.registerProvider("asksage-anthropic", { baseUrl: `${base}/anthropic`, api: "anthropic-messages", apiKey: "ASKSAGE_API_KEY", headers: { "x-access-tokens": key }, models: toProviderModels(ANTHROPIC_MODELS) });
+    // Anthropic (claude) + Google (gemini): AskSage serves these non-streamed, so a
+    // custom streamSimple adapter calls the native endpoints and replays the reply.
+    const getCfg = () => ({ base: (process.env.ASKSAGE_BASE_URL ?? DEFAULT_BASE).replace(/\/+$/, ""), key: process.env.ASKSAGE_API_KEY ?? "" });
+    pi.registerProvider("asksage-anthropic", {
+      baseUrl: `${base}/anthropic`,
+      api: "asksage-anthropic",
+      apiKey: "ASKSAGE_API_KEY",
+      headers: { "x-access-tokens": key },
+      streamSimple: makeAsksageStream("anthropic", getCfg),
+      models: toProviderModels(ANTHROPIC_MODELS),
+    });
+    pi.registerProvider("asksage-google", {
+      baseUrl: `${base}/google/v1beta`,
+      api: "asksage-google",
+      apiKey: "ASKSAGE_API_KEY",
+      headers: { "x-access-tokens": key },
+      streamSimple: makeAsksageStream("google", getCfg),
+      models: toProviderModels(GOOGLE_MODELS),
+    });
 
     process.stderr.write(`\n🏛️  [LucidAgentIDE] AskSage gov gateway registered (${base})\n`);
   } catch (e) {
