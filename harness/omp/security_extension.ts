@@ -77,15 +77,23 @@ function collectStrings(value: unknown, skip: ReadonlySet<string> = new Set(["ty
   return parts.join("\n");
 }
 
-/** Persist a blocked tool call to the project DB so it shows in the dashboard. */
-async function logBlock(toolName: string, text: string): Promise<void> {
+/** Persist a tool call to the project DB (provenance + scan) and gate-promote a
+ *  fact from it — so memory fills from ORDINARY turns, with provenance, across
+ *  sessions. Suspicious/quarantined sources are blocked from promotion (keystone
+ *  #2). Best-effort and fire-and-forget: it never affects the security decision. */
+async function rememberActivity(toolName: string, text: string): Promise<void> {
   try {
     const db = await getDb();
     if (!db) return;
     const { ingestArtifact } = await import("../memory/ingest.ts");
-    await ingestArtifact(db, scanner, { runId: LIVE_RUN, sourceType: `omp:${toolName}`, rawContent: text }, {});
+    const { promoteFactGated } = await import("../memory/promotion_gate.ts");
+    const art = await ingestArtifact(db, scanner, { runId: LIVE_RUN, sourceType: `omp:${toolName}`, rawContent: text }, {});
+    const statement = text.replace(/\s+/g, " ").trim().slice(0, 160);
+    if (statement.length >= 12) {
+      await promoteFactGated(db, { entityName: `omp:${toolName}`, statement, trustLabel: art.trustLabel, sourceArtifactId: art.artifactId }, {}).catch(() => {});
+    }
   } catch {
-    /* logging is best-effort; the block already happened */
+    /* best-effort; the security decision already stands */
   }
 }
 
@@ -95,7 +103,10 @@ export default function securityExtension(pi: any): void {
     const toolName: string = event?.toolName ?? "tool";
     const text = collectStrings(event);
     const decision = await scanAndDecide(scanner, text, DEFAULT_POLICY);
-    if (!decision.block) return; // allow
+    if (!decision.block) {
+      if (text.trim()) void rememberActivity(toolName, text); // allow + remember (provenance/memory)
+      return;
+    }
 
     const notification = buildNotification({
       source: toolName,
@@ -106,7 +117,7 @@ export default function securityExtension(pi: any): void {
       failClosed: decision.failClosed,
     });
     process.stderr.write(`\n🛡️  [LucidAgentIDE] ${summarizeNotification(notification)}\n`);
-    void logBlock(toolName, text); // fire-and-forget; never blocks the gate
+    void rememberActivity(toolName, text); // fire-and-forget; never blocks the gate
     return { block: true, reason: `Blocked by LucidAgentIDE security gate: ${decision.reason}` };
   });
 }

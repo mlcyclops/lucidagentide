@@ -99,9 +99,15 @@ button{font-family:inherit}
 
 /* ───────────────────────── sidebar (collapsible) ───────────────────────── */
 .sidebar{
-  width:236px;background:var(--bg-1);border-right:1px solid var(--line-soft);
+  position:relative;width:var(--sidebar-w,236px);background:var(--bg-1);border-right:1px solid var(--line-soft);
   display:flex;flex-direction:column;overflow:hidden;
   transition:width var(--t-slow) var(--ease),opacity var(--t);}
+.resizer{position:absolute;top:0;width:6px;height:100%;cursor:col-resize;z-index:7}
+.resizer-r{right:0} .resizer-l{left:0}
+.resizer:hover{background:linear-gradient(90deg,transparent,var(--accent-dim))}
+.resizer-l:hover{background:linear-gradient(270deg,transparent,var(--accent-dim))}
+body.resizing{cursor:col-resize;user-select:none}
+body.resizing .sidebar,body.resizing .inspector{transition:none}
 .sidebar.collapsed{width:0;opacity:0;border-right:0}
 .side-head{display:flex;align-items:center;justify-content:space-between;
   padding:13px 14px 8px;font-size:11px;letter-spacing:1.4px;text-transform:uppercase;color:var(--txt-3)}
@@ -172,7 +178,7 @@ button{font-family:inherit}
 
 /* ───────────────────────── inspector (right) ───────────────────────── */
 .inspector{
-  width:372px;background:var(--bg-1);border-left:1px solid var(--line-soft);
+  position:relative;width:var(--inspector-w,372px);background:var(--bg-1);border-left:1px solid var(--line-soft);
   display:flex;flex-direction:column;overflow:hidden;
   transition:width var(--t-slow) var(--ease)}
 .inspector.collapsed{width:0;border-left:0}

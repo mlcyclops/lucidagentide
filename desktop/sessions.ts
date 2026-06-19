@@ -62,3 +62,40 @@ export function listSessions(cwd: string = currentWorkspace()): SessionInfo[] {
   out.sort((a, b) => b.updatedAt - a.updatedAt);
   return out.slice(0, 40);
 }
+
+function msgText(message: any): string {
+  const c = message?.content;
+  if (typeof c === "string") return c;
+  if (Array.isArray(c)) return c.filter((x: any) => x?.type === "text").map((x: any) => x.text).join("");
+  return "";
+}
+
+/** Read a session's user/assistant transcript (for resuming into the chat). */
+export function sessionMessages(id: string): { role: string; text: string }[] {
+  const root = join(homedir(), ".omp", "agent", "sessions");
+  if (!existsSync(root)) return [];
+  for (const d of readdirSync(root)) {
+    const dir = join(root, d);
+    try {
+      if (!statSync(dir).isDirectory()) continue;
+      for (const f of readdirSync(dir)) {
+        if (!f.endsWith(".jsonl")) continue;
+        const content = readFileSync(join(dir, f), "utf8");
+        let sid = f;
+        try { sid = JSON.parse(content.split("\n", 1)[0] ?? "")?.id ?? f; } catch { /* keep f */ }
+        if (sid !== id && f !== id) continue;
+        const out: { role: string; text: string }[] = [];
+        for (const ln of content.split("\n")) {
+          if (!ln) continue;
+          let o: any; try { o = JSON.parse(ln); } catch { continue; }
+          if (o.type === "message" && (o.message?.role === "user" || o.message?.role === "assistant")) {
+            const t = msgText(o.message);
+            if (t.trim()) out.push({ role: o.message.role, text: t });
+          }
+        }
+        return out;
+      }
+    } catch { /* skip */ }
+  }
+  return [];
+}

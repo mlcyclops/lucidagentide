@@ -75,6 +75,7 @@ function buildShell(): void {
             <button class="side-new" id="sideCollapse" data-tip="Collapse panel" data-tip-side="bottom">${icon("collapse", 15)}</button>
           </div></div>
         <div class="side-list" id="sessList"></div>
+        <div class="resizer resizer-r" data-resize="sidebar" data-tip="Drag to resize" data-tip-side="right"></div>
       </aside>
 
       <main class="center">
@@ -95,6 +96,7 @@ function buildShell(): void {
       </main>
 
       <aside class="inspector" id="inspector">
+        <div class="resizer resizer-l" data-resize="inspector" data-tip="Drag to resize" data-tip-side="left"></div>
         <div class="insp-tabs">
           <button class="insp-tab sec active" data-insp="security">${icon("shield", 15)} Security</button>
           <button class="insp-tab mem" data-insp="memory">${icon("brain", 15)} Memory</button>
@@ -345,6 +347,17 @@ async function loadWorkspace(): Promise<void> {
   state.workspace = await bridge.workspace();
   renderWorkspaceBar();
 }
+async function resumeSession(id: string): Promise<void> {
+  closeSettings();
+  const msgs = await bridge.sessionMessages(id);
+  $("#thread")!.innerHTML = "";
+  if (msgs && msgs.length) for (const m of msgs) addMessage(m.role === "user" ? "user" : "assistant", m.text);
+  else seedThread();
+  $$(".sess").forEach((s) => s.classList.toggle("active", (s as HTMLElement).dataset.sid === id));
+  await bridge.resumeSession(id);
+  $("#input")?.focus();
+}
+
 async function applyWorkspace(path: string): Promise<void> {
   const info = await bridge.setWorkspace(path);
   if (info) { state.workspace = info; renderWorkspaceBar(); }
@@ -615,6 +628,7 @@ function wire(): void {
   $("#sideToggle")!.addEventListener("click", () => toggleSidebar());
   $("#sideCollapse")!.addEventListener("click", () => toggleSidebar(true));
   $("#wsBar")!.addEventListener("click", () => openSettings());
+  $("#sessList")!.addEventListener("click", (e) => { const s = (e.target as HTMLElement).closest(".sess") as HTMLElement | null; if (s?.dataset.sid) void resumeSession(s.dataset.sid); });
   $(".brand")!.addEventListener("click", () => toggleSidebar());
   $("#newSession")!.addEventListener("click", () => newSession());
   const w = (window as any).lucid?.win;
@@ -806,12 +820,47 @@ function initZoom(): void {
   applyZoom();
 }
 
+// ───────────────────────── drag-to-resize panels ─────────────────────────
+function initResize(): void {
+  const root = document.documentElement;
+  const setW = (which: string, w: number) => root.style.setProperty(`--${which}-w`, `${Math.round(w)}px`);
+  try {
+    const sw = Number(localStorage.getItem("lucid.sidebar-w")); if (sw) setW("sidebar", sw);
+    const iw = Number(localStorage.getItem("lucid.inspector-w")); if (iw) setW("inspector", iw);
+  } catch { /* ignore */ }
+  let active: { which: "sidebar" | "inspector"; el: HTMLElement } | null = null;
+  for (const r of $$(".resizer")) {
+    r.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      const which = (r as HTMLElement).dataset.resize as "sidebar" | "inspector";
+      active = { which, el: $(`#${which}`)! };
+      document.body.classList.add("resizing");
+    });
+  }
+  window.addEventListener("mousemove", (e) => {
+    if (!active) return;
+    const rect = active.el.getBoundingClientRect();
+    const w = active.which === "sidebar"
+      ? Math.max(180, Math.min(520, e.clientX - rect.left))
+      : Math.max(300, Math.min(720, rect.right - e.clientX));
+    setW(active.which, w);
+  });
+  window.addEventListener("mouseup", () => {
+    if (!active) return;
+    const v = parseInt(getComputedStyle(root).getPropertyValue(`--${active.which}-w`));
+    if (v) try { localStorage.setItem(`lucid.${active.which}-w`, String(v)); } catch { /* ignore */ }
+    document.body.classList.remove("resizing");
+    active = null;
+  });
+}
+
 // ───────────────────────── boot ─────────────────────────
 buildShell();
 void renderSessions();
 initTooltips();
 wire();
 initZoom();
+initResize();
 seedThread();
 renderStatus();
 void loadConfig().then(renderStatus);

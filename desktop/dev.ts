@@ -12,7 +12,7 @@ import { join } from "node:path";
 import { securitySnapshot } from "../tools/web/data.ts";
 import { memorySnapshot } from "../tools/memory_data.ts";
 import { backend } from "./acp_backend.ts";
-import { listSessions } from "./sessions.ts";
+import { listSessions, sessionMessages } from "./sessions.ts";
 import { providerAuth } from "./auth_status.ts";
 import { cloneRepo, setWorkspace, workspaceInfo } from "./workspace.ts";
 import { applyEnv, load as loadSettings, setKey, setUsername } from "./settings_store.ts";
@@ -61,6 +61,8 @@ const server = Bun.serve({
 
       // real omp ACP backend (genuine model replies + live session config)
       if (p === "/api/sessions") return json({ ok: true, data: listSessions() });
+      if (p === "/api/session" && url.searchParams.get("id")) return json({ ok: true, data: sessionMessages(url.searchParams.get("id")!) });
+      if (p === "/api/session/load" && req.method === "POST") { const { id } = await req.json(); await backend.loadSession(String(id)); return json({ ok: true }); }
 
       // workspace (the folder the agent works in; local or cloned remote)
       if (p === "/api/workspace") {

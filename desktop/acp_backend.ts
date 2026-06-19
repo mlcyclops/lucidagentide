@@ -95,6 +95,13 @@ class Backend {
     if (Array.isArray(r?.configOptions)) this.configOptions = r.configOptions;
     return this.configOptions;
   }
+  /** Resume a past session so the next prompt continues it. */
+  async loadSession(id: string): Promise<void> {
+    await this.start();
+    await this.acp!.request("session/load", { sessionId: id, cwd: currentWorkspace(), mcpServers: [] }).catch(() => {});
+    this.sessionId = id;
+  }
+
   async newSession(): Promise<void> {
     await this.start();
     if (this.sessionId) await this.acp!.request("session/close", { sessionId: this.sessionId }).catch(() => {});

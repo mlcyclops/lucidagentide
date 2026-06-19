@@ -59,6 +59,8 @@ export interface LucidBridge {
   setConfig(configId: string, value: string): Promise<ConfigOption[]>;
   commands(): Promise<OmpCommand[]>;
   sessions(): Promise<SessionInfo[] | null>;
+  sessionMessages(id: string): Promise<{ role: string; text: string }[] | null>;
+  resumeSession(id: string): Promise<void>;
   newSession(): Promise<void>;
   setZoom(factor: number): void;
   // settings + provider auth
@@ -143,6 +145,8 @@ export const bridge: LucidBridge = {
       return (await r.json())?.data ?? [];
     } catch { return null; }
   },
+  sessionMessages: (id) => getData(`/api/session?id=${encodeURIComponent(id)}`),
+  resumeSession: async (id) => { await post("/api/session/load", { id }); },
   newSession: async () => { await post("/api/newSession", {}); },
   getSettings: () => getData("/api/settings"),
   saveUsername: (username) => post("/api/settings", { username }),
