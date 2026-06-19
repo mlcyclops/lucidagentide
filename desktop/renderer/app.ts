@@ -40,6 +40,23 @@ const prettyModel = (v: string) => v.replace(/^anthropic\//, "");
 // dropping the asksage-<provider>/ prefix the name already conveys.
 const cleanModelName = (name: string) => name.replace(/\s*·\s*(?:AskSage(?:\s+Gov)?|Gov)\s*$/i, "").trim() || name;
 const shortModelId = (v: string) => v.replace(/^anthropic\//, "").replace(/^asksage-[a-z]+\//, "");
+// Context-window sizes (tokens) per model, keyed by the SHORT id (provider prefix
+// stripped). The source of truth for the status-bar + Memory-panel denominators:
+// omp's reported usage `size` is unreliable for the AskSage gateway models (it reports
+// 256k for a 1M Gemini), so we prefer this. Keep in sync with tools/memory_data.ts CTX_WINDOW.
+const MODEL_CTX: Record<string, number> = {
+  "claude-fable-5": 1_000_000, "claude-opus-4-8": 1_000_000, "claude-opus-4-7": 1_000_000,
+  "claude-opus-4-6": 1_000_000, "claude-sonnet-4-6": 1_000_000, "claude-sonnet-4-5": 1_000_000,
+  "claude-haiku-4-5": 200_000,
+  "gpt-5.2": 256_000, "gpt-5.5": 256_000, "gpt-5.4": 256_000, "gpt-5.1": 256_000, "gpt-5": 256_000,
+  "gpt-5-mini": 256_000, "gpt-4.1": 1_000_000, "gpt-o3": 200_000, "gpt-o3-mini": 200_000, "gpt-o4-mini": 200_000,
+  "google-claude-45-opus": 200_000, "google-claude-45-sonnet": 200_000,
+  "aws-bedrock-claude-45-sonnet-gov": 200_000, "claude-opus-4": 200_000, "claude-sonnet-4": 200_000,
+  "google-gemini-3.1-pro-com": 1_000_000, "google-gemini-3.5-flash-gov": 1_000_000,
+  "google-gemini-2.5-pro": 1_000_000, "google-gemini-2.5-flash": 1_000_000,
+  "rag": 256_000,
+};
+const modelCtx = (v: string): number | undefined => MODEL_CTX[shortModelId(v)];
 // Friendly label for the CURRENTLY-selected model — resolve its name from config,
 // falling back to the bare value before config has loaded.
 function modelLabel(value: string): string {
@@ -573,7 +590,9 @@ function renderStatus(): void {
   const m = state.memory, s = m?.session;
   const lu = state.liveUsage;
   const curTok = lu ? lu.used : (s?.current ?? 0);
-  const winTok = lu ? lu.size : (s?.window ?? 0);
+  // Prefer the selected model's real context window over omp's reported size
+  // (which is wrong for the AskSage gateway models); fall back for unknown models.
+  const winTok = modelCtx(state.model) ?? (lu ? lu.size : (s?.window ?? 0));
   const ctx = winTok ? curTok / winTok : 0;
   const cost = lu ? lu.cost : (s?.cost ?? 0);
   const hit = s?.cache.hit ?? 0;

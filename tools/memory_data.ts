@@ -17,15 +17,23 @@ import { Database as Sqlite } from "bun:sqlite";
 import { DuckDBInstance } from "@duckdb/node-api";
 
 // ── model context windows (tokens) ────────────────────────────────────────────
+// Keyed by the SHORT model id (provider prefix stripped). Keep in sync with
+// desktop/renderer/app.ts MODEL_CTX. omp's reported window is unreliable for the
+// AskSage gateway models, so this map is the source of truth for the denominator.
 export const CTX_WINDOW: Record<string, number> = {
-  "claude-opus-4-8": 1_000_000,
-  "claude-opus-4-7": 1_000_000,
-  "claude-opus-4-6": 1_000_000,
-  "claude-sonnet-4-6": 1_000_000,
+  "claude-fable-5": 1_000_000, "claude-opus-4-8": 1_000_000, "claude-opus-4-7": 1_000_000,
+  "claude-opus-4-6": 1_000_000, "claude-sonnet-4-6": 1_000_000, "claude-sonnet-4-5": 1_000_000,
   "claude-haiku-4-5": 200_000,
-  "claude-fable-5": 1_000_000,
+  "gpt-5.2": 256_000, "gpt-5.5": 256_000, "gpt-5.4": 256_000, "gpt-5.1": 256_000, "gpt-5": 256_000,
+  "gpt-5-mini": 256_000, "gpt-4.1": 1_000_000, "gpt-o3": 200_000, "gpt-o3-mini": 200_000, "gpt-o4-mini": 200_000,
+  "google-claude-45-opus": 200_000, "google-claude-45-sonnet": 200_000,
+  "aws-bedrock-claude-45-sonnet-gov": 200_000, "claude-opus-4": 200_000, "claude-sonnet-4": 200_000,
+  "google-gemini-3.1-pro-com": 1_000_000, "google-gemini-3.5-flash-gov": 1_000_000,
+  "google-gemini-2.5-pro": 1_000_000, "google-gemini-2.5-flash": 1_000_000,
+  "rag": 256_000,
 };
-export const ctxWindow = (model: string): number => CTX_WINDOW[model] ?? 200_000;
+const shortModelId = (m: string): string => m.replace(/^anthropic\//, "").replace(/^asksage-[a-z]+\//, "");
+export const ctxWindow = (model: string): number => CTX_WINDOW[shortModelId(model)] ?? CTX_WINDOW[model] ?? 200_000;
 
 // ── omp session transcript ────────────────────────────────────────────────────
 export interface Turn {
