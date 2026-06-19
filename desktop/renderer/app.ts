@@ -521,7 +521,7 @@ function secPersonal(p: import("./bridge.ts").PersonalStatus | null): string {
         <div class="psc"><b class="psc-work">${c.work}</b><span>work</span></div>
         <div class="psc"><b class="psc-cui">${p.cuiUnlocked ? c.cui : "—"}</b><span>cui${p.cuiUnlocked ? "" : " (locked)"}</span></div></div>
       ${cur === "cui" ? secCui(p) : ""}
-      ${p.legacyCuiInMain > 0 ? `<div class="set-note warn">${icon("info", 12)} ${p.legacyCuiInMain} legacy CUI fact(s) remain in the main store from before isolation. They are not recalled or exported; a future update migrates them into the isolated CUI store.</div>` : ""}
+      ${p.legacyCuiInMain > 0 ? `<div class="set-note warn">${icon("info", 12)} <span>${p.legacyCuiInMain} legacy CUI fact(s) sit in the main store from before isolation - not recalled or exported. ${p.cuiUnlocked ? `<button class="btn-mini" id="cuiMigrate" data-tip="Move into the isolated store|Relocates these cui facts (ids + timestamps preserved) into the separate CUI store, then removes them from the main store. Audited.">${icon("shield", 11)} Move into the CUI store</button>` : "Select CUI and unlock its store to move them into isolation."}</span></div>` : ""}
       <button class="btn-mini pscope-lock" id="personalLock" data-tip="Lock everything|Wipes BOTH in-memory keys (main + CUI). You'll re-enter your passphrase to use personalization again this session - nothing is learned or recalled while locked." data-tip-side="top">${icon("shield", 12)} Lock</button>`;
   }
   return card(toggle + inner);
@@ -530,6 +530,8 @@ function secPersonal(p: import("./bridge.ts").PersonalStatus | null): string {
 // + DEK, so one key never decrypts both CUI and non-CUI. Auto-locks when CUI is deselected.
 function secCui(p: import("./bridge.ts").PersonalStatus): string {
   const shield = icon("shield", 12);
+  // Records destruction is available whenever a CUI store file exists (P9.5b, NARA-aligned).
+  const destroy = p.cuiConfigured ? `<button class="btn-mini danger" id="cuiDestroy" data-tip="Destroy CUI records|Irreversibly deletes the encrypted CUI store file and wipes its key. NARA-aligned records destruction - this cannot be undone.">${icon("close", 12)} Destroy CUI records</button>` : "";
   if (!p.cuiConfigured) {
     return `<div class="pscope-cui">
       <div class="set-note danger">${shield} The CUI compartment uses a <b>separate encrypted store</b> with its <b>own passphrase</b> (recommended distinct from your main one). Create it to start storing CUI in isolation.</div>
@@ -540,11 +542,14 @@ function secCui(p: import("./bridge.ts").PersonalStatus): string {
     return `<div class="pscope-cui">
       <div class="set-note danger">${shield} The CUI store is <b>locked</b> (it locks whenever CUI isn't selected). Enter its passphrase to unlock it for this session.</div>
       <div class="prov-row"><input id="cuiPass" class="prov-key" type="password" placeholder="CUI passphrase" autocomplete="current-password" />
-        <button class="btn-mini danger" id="cuiUnlock">${shield} Unlock CUI</button></div></div>`;
+        <button class="btn-mini danger" id="cuiUnlock">${shield} Unlock CUI</button></div>
+      <div class="pscope-cui-actions">${destroy}</div></div>`;
   }
   return `<div class="pscope-cui">
     <div class="set-note ok">${icon("check", 12)} CUI store unlocked for this session. It auto-locks when you switch away from CUI.</div>
-    <button class="btn-mini" id="cuiLock" data-tip="Lock the CUI store|Wipes only the CUI key. Your main store stays unlocked.">${shield} Lock CUI</button></div>`;
+    <div class="pscope-cui-actions">
+      <button class="btn-mini" id="cuiLock" data-tip="Lock the CUI store|Wipes only the CUI key. Your main store stays unlocked.">${shield} Lock CUI</button>
+      ${destroy}</div></div>`;
 }
 function openSettings(): void {
   closeKnowledge();
@@ -1200,6 +1205,31 @@ function wire(): void {
       await bridge.personalCuiLock();
       showToast({ title: "CUI locked", desc: "Only the CUI key was wiped; your main store stays unlocked.", actions: [{ label: "OK" }], timeout: 2400 });
       void hydratePersonal();
+      return;
+    }
+    if (t.closest("#cuiMigrate")) {
+      const r = await bridge.personalCuiMigrate();
+      if (!r?.ok) showToast({ title: "Migration not done", desc: r?.error ?? "Unlock both stores first.", actions: [{ label: "OK" }], timeout: 5000 });
+      else showToast({ title: r.moved ? "CUI moved into isolation" : "Nothing to move", desc: r.moved ? `${r.moved} fact(s) across ${r.entities} entit${r.entities === 1 ? "y" : "ies"} relocated into the isolated CUI store and removed from the main store.` : "No legacy CUI facts remained in the main store.", meta: "audited", actions: [{ label: "OK" }], timeout: 5000 });
+      void hydratePersonal();
+      return;
+    }
+    if (t.closest("#cuiDestroy")) {
+      showToast({
+        title: "Destroy CUI records?",
+        desc: "This irreversibly DELETES the encrypted CUI store and wipes its key. NARA-aligned records destruction - it cannot be undone. Export a CUI archive first if you need a retained copy.",
+        meta: "irreversible · audited",
+        actions: [
+          { label: "Cancel" },
+          { label: "Destroy CUI records", kind: "danger", run: async () => {
+            const r = await bridge.personalCuiDestroy();
+            if (!r?.ok) showToast({ title: "Not destroyed", desc: r?.error ?? "Try again.", actions: [{ label: "OK" }], timeout: 5000 });
+            else showToast({ title: r.destroyed ? "CUI records destroyed" : "Nothing to destroy", desc: r.destroyed ? `The encrypted CUI store was deleted${r.facts != null ? ` (${r.facts} fact(s))` : ""} and its key wiped.` : "There was no CUI store on disk.", actions: [{ label: "OK" }], timeout: 5000 });
+            void hydratePersonal();
+          } },
+        ],
+        timeout: 0,
+      });
       return;
     }
     const pscope = t.closest("[data-pscope]") as HTMLElement | null;

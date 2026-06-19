@@ -5,7 +5,7 @@
 // for the moment of derivation; it is NEVER persisted and NEVER returned over the API.
 // Only booleans + compartment counts ever leave the server.
 
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, normalize, sep } from "node:path";
 import { CUI_STORE_VERSION, PersonalStore, type PersonalGraph, type PersonalScope, type ScopeView } from "../harness/personal/store.ts";
 import { load, personalAuditPath, personalCuiArchiveDir, personalCuiStorePath, personalStorePath, personalVaultDir, setPersonalization, setPersonalScope } from "./settings_store.ts";
@@ -176,7 +176,7 @@ function writeFiles(destDir: string, files: VaultFile[]): number {
 }
 
 /** Emit a metadata-only audit event (counts + hashes; never content, never dest). */
-function auditExport(event: "personal_vault_exported" | "personal_cui_archived", fields: Record<string, unknown>): void {
+function auditExport(event: "personal_vault_exported" | "personal_cui_archived" | "personal_cui_migrated" | "personal_cui_destroyed", fields: Record<string, unknown>): void {
   try { new Telemetry({ runId: Snowflake.next(), sessionId: "personal", sink: personalAuditPath() }).emit(event, fields); }
   catch { /* audit is best-effort; the encrypted in-store trail is the source of truth */ }
 }
@@ -244,6 +244,47 @@ export function exportHistory(): ReturnType<PersonalStore["exportLog"]> | null {
   if (!store) return null;
   const merged = [...store.exportLog(), ...(cuiStore?.exportLog() ?? [])];
   return merged.sort((a, b) => b.at.localeCompare(a.at));
+}
+
+// ── P9.5b: audited migration + records destruction (ADR-0014) ──────────────────────
+/** MOVE legacy cui facts out of the main store into the isolated CUI store. Explicit +
+ *  audited (it relocates controlled data). Idempotent: re-running after a complete move is a
+ *  no-op. Requires BOTH stores unlocked (the destination must be open to receive). */
+export function migrateCuiIntoStore(): { ok: boolean; error?: string; moved?: number; entities?: number } {
+  if (!load().personalizationEnabled) return { ok: false, error: "Personalization is off." };
+  if (!store) return { ok: false, error: "Unlock your main store first." };
+  if (!cuiStore) return { ok: false, error: "Unlock the CUI store first (select CUI and enter its passphrase)." };
+  try {
+    const active = store.graph({ scope: "cui" }); // active cui facts + entities + links
+    const cuiFacts = active.facts;
+    if (!cuiFacts.length) return { ok: true, moved: 0, entities: 0 };
+    const entityIds = new Set(cuiFacts.map((f) => f.entity_id));
+    // 1) copy the cui subgraph into the isolated store (ids + timestamps preserved)
+    for (const e of active.entities) if (entityIds.has(e.id)) cuiStore.importEntity(e);
+    for (const f of cuiFacts) cuiStore.importFact(f);
+    for (const l of active.links) if (entityIds.has(l.from_entity_id) && entityIds.has(l.to_entity_id)) cuiStore.importLink(l);
+    cuiStore.save();
+    // 2) only after the destination is durably saved, remove ALL cui facts (incl. forgotten)
+    //    from the main store so no cui data lingers in the wrong place.
+    const allCui = store.graph({ includeForgotten: true, scope: "cui" }).facts;
+    for (const f of allCui) store.removeFact(f.id);
+    store.save();
+    auditExport("personal_cui_migrated", { facts: cuiFacts.length, entities: entityIds.size });
+    return { ok: true, moved: cuiFacts.length, entities: entityIds.size };
+  } catch (e) { return { ok: false, error: String((e as Error)?.message ?? e) }; }
+}
+
+/** Destroy the CUI records: zeroize the in-memory key and DELETE the encrypted CUI file.
+ *  IRREVERSIBLE — the NARA-aligned records-destruction action. Audited. */
+export function destroyCui(): { ok: boolean; error?: string; destroyed?: boolean; facts?: number } {
+  if (!load().personalizationEnabled) return { ok: false, error: "Personalization is off." };
+  const existed = PersonalStore.exists(personalCuiStorePath());
+  const facts = cuiStore ? cuiStore.scopeCounts().cui : undefined; // known only if unlocked
+  lockCui(); // zeroize the DEK + drop the store first
+  try { if (existed) rmSync(personalCuiStorePath()); }
+  catch (e) { return { ok: false, error: String((e as Error)?.message ?? e) }; }
+  auditExport("personal_cui_destroyed", { existed, facts: facts ?? null });
+  return { ok: true, destroyed: existed, facts };
 }
 
 // ── P9.2: learn from / recall into conversations ───────────────────────────────────

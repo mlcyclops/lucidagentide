@@ -77,3 +77,40 @@ test("opening the CUI store emits personal_cui_store_unlocked (not personal_stor
   expect(events.some((e) => e.event === "personal_cui_store_unlocked")).toBe(true);
   expect(events.some((e) => e.event === "personal_store_unlocked")).toBe(false);
 });
+
+// ── migration primitives (P9.5b): the move mechanism ────────────────────────────
+test("migration: move a cui subgraph (import to dest, remove from source) preserves ids", () => {
+  const srcPath = tmp(), dstPath = tmp();
+  const src = PersonalStore.createWithPassphrase(srcPath, "p1", { version: CUI_STORE_VERSION });
+  const e = src.upsertEntity("Program", "user:behavior", "trusted");
+  const f1 = src.addFact({ entityId: e, statement: "a", trustLabel: "trusted", scope: "cui" });
+  const f2 = src.addFact({ entityId: e, statement: "b", trustLabel: "trusted", scope: "cui" });
+  const dst = PersonalStore.createWithPassphrase(dstPath, "p2", { version: CUI_STORE_VERSION });
+  const g = src.graph({ scope: "cui" });
+  for (const en of g.entities) dst.importEntity(en);
+  for (const ft of g.facts) dst.importFact(ft);
+  for (const ft of g.facts) src.removeFact(ft.id);
+  dst.save(); src.save();
+  expect(dst.scopeCounts().cui).toBe(2);
+  expect(src.scopeCounts().cui).toBe(0); // moved OUT of the source
+  expect(dst.graph({ scope: "cui" }).facts.map((f) => f.id).sort()).toEqual([f1, f2].sort()); // ids preserved
+  for (const ft of g.facts) dst.importFact(ft); // idempotent re-import
+  expect(dst.scopeCounts().cui).toBe(2);
+  expect(PersonalStore.openWithPassphrase(dstPath, "p2", { version: CUI_STORE_VERSION }).scopeCounts().cui).toBe(2); // durable
+});
+
+test("importFact enforces isolation: a cui fact can't be imported into a main store", () => {
+  const main = PersonalStore.createWithPassphrase(tmp(), "pw");
+  const cui = PersonalStore.createWithPassphrase(tmp(), "pw", { version: CUI_STORE_VERSION });
+  cui.addFact({ entityId: cui.upsertEntity("x", "user:goal", "trusted"), statement: "s", trustLabel: "trusted", scope: "cui" });
+  const f = cui.graph({ scope: "cui" }).facts[0]!;
+  expect(() => main.importFact(f)).toThrow();
+});
+
+test("removeFact removes by id and returns false for an unknown id", () => {
+  const s = PersonalStore.createWithPassphrase(tmp(), "pw");
+  const id = s.addFact({ entityId: s.upsertEntity("t", "user:interest", "trusted"), statement: "x", trustLabel: "trusted" });
+  expect(s.removeFact(id)).toBe(true);
+  expect(s.graph().facts.length).toBe(0);
+  expect(s.removeFact("nope")).toBe(false);
+});

@@ -180,6 +180,30 @@ export class PersonalStore {
     f.status = "forgotten";
     return true;
   }
+
+  // ── migration primitives (P9.5b): MOVE the cui subgraph between stores, preserving
+  //    ids + timestamps. importFact re-checks the isolation invariant; dedup is by id. ──
+  /** Import an entity verbatim (preserve id). No-op if the id already exists. */
+  importEntity(e: PersonalEntity): void {
+    if (!this.#graph.entities.some((x) => x.id === e.id)) this.#graph.entities.push(structuredClone(e));
+  }
+  /** Import a fact verbatim (preserve id + timestamps). Enforces the isolation invariant. */
+  importFact(f: PersonalFact): void {
+    if (this.isCui && f.scope !== "cui") throw new Error("the CUI store holds only cui-scoped facts");
+    if (!this.isCui && f.scope === "cui") throw new Error("cui-scoped facts must go in the isolated CUI store");
+    if (!this.#graph.facts.some((x) => x.id === f.id)) this.#graph.facts.push(structuredClone(f));
+  }
+  /** Import a link verbatim (preserve id). No-op if the id already exists. */
+  importLink(l: PersonalLink): void {
+    if (!this.#graph.links.some((x) => x.id === l.id)) this.#graph.links.push(structuredClone(l));
+  }
+  /** Hard-remove a fact (used by migration to MOVE it out of the source store). */
+  removeFact(factId: string): boolean {
+    const i = this.#graph.facts.findIndex((x) => x.id === factId);
+    if (i < 0) return false;
+    this.#graph.facts.splice(i, 1);
+    return true;
+  }
   /** A copy of the current graph (active facts only by default), optionally filtered to
    *  one compartment. `scope: "combined"` (the default) returns every compartment. */
   graph(opts: { includeForgotten?: boolean; scope?: ScopeView } = {}): PersonalGraph {

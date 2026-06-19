@@ -19,7 +19,7 @@ import { applyEnv, load as loadSettings, setAsksage, setKey, setUsername } from 
 import { asksageConfig, listDatasets, listPersonas, monthlyTokens, scanPersona, wrapPersona } from "./asksage.ts";
 import { listSkills } from "./skills_data.ts";
 import { headroomStatus, setHeadroomEnabled, startHeadroom } from "./headroom.ts";
-import { enablePersonal, exportCuiArchive, exportHistory, exportVault, forgetFact, lockCui, lockPersonal, personalGraph, personalStatus, setScope, setupCui, setupPersonal, unlockCui, unlockPersonal } from "./personal.ts";
+import { destroyCui, enablePersonal, exportCuiArchive, exportHistory, exportVault, forgetFact, lockCui, lockPersonal, migrateCuiIntoStore, personalGraph, personalStatus, setScope, setupCui, setupPersonal, unlockCui, unlockPersonal } from "./personal.ts";
 import { homedir } from "node:os";
 import { existsSync } from "node:fs";
 
@@ -168,6 +168,9 @@ const server = Bun.serve({
       if (p === "/api/personal/cui/setup" && req.method === "POST") { const b = await req.json(); return json({ ok: true, data: setupCui(String(b.passphrase ?? "")) }); }
       if (p === "/api/personal/cui/unlock" && req.method === "POST") { const b = await req.json(); return json({ ok: true, data: unlockCui(String(b.passphrase ?? "")) }); }
       if (p === "/api/personal/cui/lock" && req.method === "POST") return json({ ok: true, data: lockCui() });
+      // P9.5b: audited migration (move legacy cui out of the main store) + records destruction.
+      if (p === "/api/personal/cui/migrate" && req.method === "POST") return json({ ok: true, data: migrateCuiIntoStore() });
+      if (p === "/api/personal/cui/destroy" && req.method === "POST") return json({ ok: true, data: destroyCui() });
       if (p === "/api/personal/graph") return json({ ok: true, data: personalGraph((url.searchParams.get("scope") ?? undefined) as any) });
       if (p === "/api/personal/forget" && req.method === "POST") { const b = await req.json(); return json({ ok: true, data: forgetFact(String(b.factId ?? "")) }); }
       // P9.4: audited decrypt→export. Vault excludes CUI unless explicitly listed; the

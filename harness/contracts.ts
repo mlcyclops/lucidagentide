@@ -68,6 +68,10 @@ export const EVENT_NAMES = [
   "personal_cui_archived",
   // P9.5a — hard CUI isolation: the separate, independently-unlocked CUI store (ADR-0014).
   "personal_cui_store_unlocked",
+  // P9.5b — audited migration of legacy cui facts into the isolated store, and the loud,
+  // NARA-aligned records-destruction action (zeroize key + delete the cui file).
+  "personal_cui_migrated",
+  "personal_cui_destroyed",
 ] as const;
 export type EventName = (typeof EVENT_NAMES)[number];
 

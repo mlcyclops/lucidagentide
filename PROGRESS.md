@@ -4,6 +4,22 @@ Three lines per session: **shipped / stubbed / next** (CLAUDE.md session ritual)
 
 -----
 
+## P9.5b: audited CUI migration + NARA records destruction (ADR-0014)
+- **shipped:** the migration that MOVES legacy cui facts out of a pre-isolation main store into the
+  isolated CUI store — store.ts migration primitives (importEntity/importFact/importLink preserve
+  ids+timestamps and re-check the isolation guard; removeFact hard-deletes from the source);
+  migrateCuiIntoStore() copies the cui subgraph to the cui store, saves it, THEN clears all cui
+  (incl. forgotten) from the main store (crash-safe order, idempotent). Plus destroyCui() — the
+  irreversible NARA-aligned records destruction (zeroize key + delete the encrypted cui file). New
+  events personal_cui_migrated / personal_cui_destroyed (metadata-only audit); routes POST
+  /api/personal/cui/{migrate,destroy}; UI = a "Move into the CUI store" button on the legacy note +
+  a danger "Destroy CUI records" button (confirm gate). 3 new tests (170 harness green); root+desktop
+  tsc clean; verified live: routes reachable + gated, all CUI action buttons render, no stray files.
+- **stubbed:** OS-keystore custody for the cui store (passphrase path wired); pre-filling the CUI
+  designation fields for the archive (still REQUIRED placeholders, ADR-0013).
+- **next:** P9.6 — crypto-agility `suite` descriptor + algorithm registry + FIPS-mode/gov-build guard
+  + Argon2id non-gov opt-in (ADR-0015); or the ADR-0012 layer-3 scope-declaring connector.
+
 ## P9.5a: hard CUI isolation — separate encrypted CUI store (ADR-0014)
 - **shipped:** CUI now lives in its OWN encrypted store (personal-cui.v1) with its own DEK +
   passphrase, so one key never decrypts both CUI and non-CUI. store.ts gained a version-parameterized

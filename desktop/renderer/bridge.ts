@@ -118,6 +118,9 @@ export interface LucidBridge {
   personalCuiSetup(passphrase: string): Promise<{ ok: boolean; error?: string } | null>;
   personalCuiUnlock(passphrase: string): Promise<{ ok: boolean; error?: string } | null>;
   personalCuiLock(): Promise<PersonalStatus | null>;
+  // P9.5b: audited migration of legacy cui out of the main store + records destruction
+  personalCuiMigrate(): Promise<{ ok: boolean; error?: string; moved?: number; entities?: number } | null>;
+  personalCuiDestroy(): Promise<{ ok: boolean; error?: string; destroyed?: boolean; facts?: number } | null>;
   personalGraph(scope?: PersonalScopeView): Promise<PersonalGraphData | null>;
   personalForget(factId: string): Promise<{ ok: boolean } | null>;
   // P9.4: audited Obsidian vault export + NARA-aligned CUI archive
@@ -227,6 +230,8 @@ export const bridge: LucidBridge = {
   personalCuiSetup: (passphrase) => post("/api/personal/cui/setup", { passphrase }),
   personalCuiUnlock: (passphrase) => post("/api/personal/cui/unlock", { passphrase }),
   personalCuiLock: () => post("/api/personal/cui/lock", {}),
+  personalCuiMigrate: () => post("/api/personal/cui/migrate", {}),
+  personalCuiDestroy: () => post("/api/personal/cui/destroy", {}),
   personalGraph: (scope) => getData(`/api/personal/graph${scope ? `?scope=${encodeURIComponent(scope)}` : ""}`),
   personalForget: (factId) => post("/api/personal/forget", { factId }),
   personalExportVault: (opts) => post("/api/personal/vault", opts),
