@@ -85,9 +85,12 @@ call :keystate "Google"    GEMINI_API_KEY
 call :keystate "OpenRouter" OPENROUTER_API_KEY
 echo    - omp credential vault (OAuth / subscription logins):
 set "VAULT_ANTHROPIC="
+rem  One bun call: write the vault report to a temp file, print it, derive the flag.
 where bun >nul 2>&1 && (
-  bun run "%REPO%\tools\omp_auth_status.ts" 2>nul
-  bun run "%REPO%\tools\omp_auth_status.ts" --check anthropic >nul 2>&1 && set "VAULT_ANTHROPIC=1"
+  bun run "%REPO%\tools\omp_auth_status.ts" > "%TEMP%\lucid_auth.txt" 2>nul
+  type "%TEMP%\lucid_auth.txt" 2>nul
+  findstr /i "anthropic" "%TEMP%\lucid_auth.txt" >nul 2>&1 && set "VAULT_ANTHROPIC=1"
+  del "%TEMP%\lucid_auth.txt" >nul 2>&1
 ) || echo      ^( -- ^) bun not on PATH - cannot read omp vault
 echo.
 rem  Only nag for a key if there's NO Anthropic auth at all (no env key AND no omp OAuth login).
@@ -107,10 +110,10 @@ goto :eof
 rem ===========================================================================
 :menu
 echo  ---------------------------------------------------------------------
-call :ompstatus
 echo    provider : %PROVIDER%        model : %MODEL%
 echo  ---------------------------------------------------------------------
-echo     1^)  Launch / relaunch omp  ^(with the security gate^)
+echo     1^)  Launch / relaunch omp   ^(terminal, with the security gate^)
+echo     G^)  Desktop GUI             ^(chat + dashboards in a window^)
 echo     2^)  Switch model
 echo     3^)  Switch provider
 echo     4^)  Dashboards  ^(security  /  memory ^& context^)
@@ -123,6 +126,7 @@ echo     0^)  Quit
 echo.
 set /p "CH=    select: "
 if "%CH%"=="1" goto :launch
+if /i "%CH%"=="G" ( call :gui & goto :menu )
 if "%CH%"=="2" goto :pickmodel
 if "%CH%"=="3" goto :pickprovider
 if "%CH%"=="4" ( call :dashboardmenu & goto :menu )
@@ -144,6 +148,27 @@ echo    Done.  In omp:  /lucid:help  .  /lucid:memory  .  Ctrl+P switches model 
 echo.
 timeout /t 2 >nul
 goto :menu
+
+rem ===========================================================================
+rem  Launch the desktop GUI (chat + dashboards). Prefers the native Electron app
+rem  if its binary is installed; otherwise opens the browser GUI and the browser.
+:gui
+echo.
+echo    [ Lucid desktop GUI ]
+where bun >nul 2>&1 || ( echo    bun not found - cannot start the GUI. & goto :eof )
+if exist "%REPO%\desktop\node_modules\electron\dist\electron.exe" (
+  echo    Launching the native Electron app in a new window...
+  start "LucidAgentIDE GUI" cmd /k "chcp 65001>nul & cd /d "%REPO%\desktop" & set "ANTHROPIC_API_KEY=%ANTHROPIC_API_KEY%" & bun run start"
+) else (
+  echo    Electron isn't installed yet - opening the browser GUI instead.
+  echo    ^(For the native app:  cd desktop  ^&^&  bun install  ^&^&  bun run start^)
+  start "LucidAgentIDE GUI (web)" cmd /k "chcp 65001>nul & cd /d "%REPO%" & set "ANTHROPIC_API_KEY=%ANTHROPIC_API_KEY%" & bun run desktop:web"
+  timeout /t 3 >nul
+  start "" "http://localhost:4318"
+)
+echo    Done.
+echo.
+goto :eof
 
 rem ===========================================================================
 :pickmodel
@@ -260,8 +285,8 @@ echo       !bun run memory:tui      instant memory ^& context dashboard
 echo       Ctrl+P               switch model live      /usage   token usage
 echo.
 echo    In THIS control panel:
-echo       1 launch omp   2 switch model   3 switch provider
-echo       4 dashboards   5 status         6 demo   7 doctor
+echo       1 launch omp   G desktop GUI    2 switch model   3 switch provider
+echo       4 dashboards   5 status         6 demo   7 doctor   9 install
 echo.
 echo    Models (current):  claude-opus-4-8 . claude-sonnet-4-6 . claude-haiku-4-5
 echo    Keys (env var):    ANTHROPIC_API_KEY . OPENAI_API_KEY . OPENROUTER_API_KEY

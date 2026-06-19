@@ -13,6 +13,10 @@ LucidAgentIDE.bat doctor     # just run the dependency check
 LucidAgentIDE.bat dashboard  # just render the security dashboard
 ```
 
+Pick **G) Desktop GUI** to launch the windowed app (gated chat + live security &
+memory dashboards) — the native Electron app if it's installed, otherwise the
+browser GUI (it opens automatically at http://localhost:4318).
+
 On a fresh machine, pick **9) Setup / install missing dependencies** — it
 installs bun, uv, omp, and the project deps (only what's missing). Every block
 the gate makes in omp is logged to `agent_obs.duckdb`, so the dashboard fills in
