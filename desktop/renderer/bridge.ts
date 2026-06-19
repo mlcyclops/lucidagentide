@@ -46,6 +46,16 @@ export interface PersonalStatus {
   enabled: boolean; configured: boolean; unlocked: boolean;
   scope: PersonalScopeView; counts: { work: number; personal: number; cui: number } | null;
 }
+export interface ExportSummary {
+  ok: boolean; error?: string; dest?: string;
+  entities?: number; facts?: number; files?: number; bytes?: number;
+  scopes?: string[]; includedCui?: boolean; payloadSha256?: string; manifestSha256?: string;
+}
+export interface ExportEvent {
+  id: string; kind: "vault" | "cui-archive"; scopes: string[];
+  entity_count: number; fact_count: number; file_count: number;
+  payload_sha256: string; manifest_sha256?: string; dest?: string; included_cui: boolean; at: string;
+}
 export interface GraphNode { id: string; name: string; kind: string; trust: string; count: number }
 export interface GraphEdge { from: string; to: string; relation: string }
 export interface GraphFact { id: string; entity_id: string; statement: string; scope: string; trust: string; confidence: number; session?: string; at: string }
@@ -104,6 +114,10 @@ export interface LucidBridge {
   personalScope(scope: PersonalScopeView): Promise<PersonalStatus | null>;
   personalGraph(scope?: PersonalScopeView): Promise<PersonalGraphData | null>;
   personalForget(factId: string): Promise<{ ok: boolean } | null>;
+  // P9.4: audited Obsidian vault export + NARA-aligned CUI archive
+  personalExportVault(opts: { scopes?: string[]; dest?: string; reviewer?: string }): Promise<ExportSummary | null>;
+  personalCuiArchive(opts: { dest?: string; reviewer?: string }): Promise<ExportSummary | null>;
+  personalExports(): Promise<ExportEvent[] | null>;
   // workspace (folder the agent works in; local or cloned remote)
   workspace(): Promise<WorkspaceInfo | null>;
   setWorkspace(path: string): Promise<WorkspaceInfo | null>;
@@ -206,6 +220,9 @@ export const bridge: LucidBridge = {
   personalScope: (scope) => post("/api/personal/scope", { scope }),
   personalGraph: (scope) => getData(`/api/personal/graph${scope ? `?scope=${encodeURIComponent(scope)}` : ""}`),
   personalForget: (factId) => post("/api/personal/forget", { factId }),
+  personalExportVault: (opts) => post("/api/personal/vault", opts),
+  personalCuiArchive: (opts) => post("/api/personal/cui-archive", opts),
+  personalExports: () => getData("/api/personal/exports"),
   workspace: () => getData("/api/workspace"),
   setWorkspace: (path) => post("/api/workspace", { path }),
   cloneWorkspace: (url) => post("/api/workspace/clone", { url }),

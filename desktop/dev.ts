@@ -19,7 +19,7 @@ import { applyEnv, load as loadSettings, setAsksage, setKey, setUsername } from 
 import { asksageConfig, listDatasets, listPersonas, monthlyTokens, scanPersona, wrapPersona } from "./asksage.ts";
 import { listSkills } from "./skills_data.ts";
 import { headroomStatus, setHeadroomEnabled, startHeadroom } from "./headroom.ts";
-import { enablePersonal, forgetFact, lockPersonal, personalGraph, personalStatus, setScope, setupPersonal, unlockPersonal } from "./personal.ts";
+import { enablePersonal, exportCuiArchive, exportHistory, exportVault, forgetFact, lockPersonal, personalGraph, personalStatus, setScope, setupPersonal, unlockPersonal } from "./personal.ts";
 import { homedir } from "node:os";
 import { existsSync } from "node:fs";
 
@@ -166,6 +166,18 @@ const server = Bun.serve({
       if (p === "/api/personal/scope" && req.method === "POST") { const b = await req.json(); return json({ ok: true, data: setScope(String(b.scope ?? "personal") as any) }); }
       if (p === "/api/personal/graph") return json({ ok: true, data: personalGraph((url.searchParams.get("scope") ?? undefined) as any) });
       if (p === "/api/personal/forget" && req.method === "POST") { const b = await req.json(); return json({ ok: true, data: forgetFact(String(b.factId ?? "")) }); }
+      // P9.4: audited decrypt→export. Vault excludes CUI unless explicitly listed; the
+      // CUI archive is a separate, loud, NARA-aligned records-management path.
+      if (p === "/api/personal/vault" && req.method === "POST") {
+        const b = await req.json();
+        const scopes = Array.isArray(b.scopes) ? b.scopes.map(String).filter((x: string) => x === "personal" || x === "work" || x === "cui") : undefined;
+        return json({ ok: true, data: exportVault({ scopes, dest: typeof b.dest === "string" ? b.dest : undefined, reviewer: typeof b.reviewer === "string" ? b.reviewer : undefined }) });
+      }
+      if (p === "/api/personal/cui-archive" && req.method === "POST") {
+        const b = await req.json();
+        return json({ ok: true, data: exportCuiArchive({ dest: typeof b.dest === "string" ? b.dest : undefined, reviewer: typeof b.reviewer === "string" ? b.reviewer : undefined, designation: typeof b.designation === "object" && b.designation ? b.designation : undefined }) });
+      }
+      if (p === "/api/personal/exports") return json({ ok: true, data: exportHistory() });
       if (p === "/api/setConfig" && req.method === "POST") { const { configId, value } = await req.json(); return json({ ok: true, data: await backend.setConfig(configId, value) }); }
       if (p === "/api/newSession" && req.method === "POST") { await backend.newSession(); return json({ ok: true }); }
       if (p === "/api/chat" && req.method === "POST") {

@@ -162,6 +162,8 @@ function buildShell(): void {
             <div class="seg kg-lens" data-kg-lens>
               <button class="on" data-lens="kind">Kind</button><button data-lens="trust">Trust</button>
             </div>
+            <button class="btn-mini" id="kgExport" data-tip="Export Obsidian vault|Decrypt and write your Personal + Work knowledge to a portable Obsidian vault (notes, [[wikilinks]], escaped). CUI is excluded by design. The export is audited.">${icon("folder", 13)} Export vault</button>
+            <button class="btn-mini danger" id="kgCui" data-tip="CUI archive · National Archives|Export ONLY the CUI compartment into a CUI-marked, records-managed package with a SHA-256 manifest (32 CFR 2002 · NARA). For archive/records requirements. Audited.">${icon("shield", 13)} CUI archive</button>
             <button class="set-close" id="kgClose" data-tip="Close">${icon("close", 16)}</button>
           </div>
         </div>
@@ -995,8 +997,30 @@ function wire(): void {
     else if (r === "knowledge") openKnowledge();
     else palette.show();
   }));
-  // Knowledge graph: close, lens toggle, forget-fact
+  // Knowledge graph: close, lens toggle, forget-fact, export (P9.4)
   $("#kgClose")!.addEventListener("click", () => closeKnowledge());
+  $("#kgExport")!.addEventListener("click", async () => {
+    showToast({ title: "Exporting vault…", desc: "Decrypting and writing your Obsidian notes.", timeout: 1400 });
+    const r = await bridge.personalExportVault({});
+    if (!r?.ok) showToast({ title: "Vault not exported", desc: r?.error ?? "Personalization is off or locked.", actions: [{ label: "OK" }], timeout: 5000 });
+    else showToast({ title: "Vault exported", desc: `${r.files} files · ${r.entities} notes · ${r.facts} facts → ${r.dest}`, meta: "Personal + Work · CUI excluded by design · audited", actions: [{ label: "OK" }], timeout: 7000 });
+  });
+  $("#kgCui")!.addEventListener("click", () => {
+    showToast({
+      title: "CUI archive · National Archives",
+      desc: "Exports ONLY the CUI compartment into a CUI-marked, records-managed package (SHA-256 manifest). Designation and records-schedule fields are scaffolded for an authorized CUI/records officer to complete. Continue?",
+      meta: "32 CFR 2002 · NARA records management · audited",
+      actions: [
+        { label: "Cancel" },
+        { label: "Export CUI archive", kind: "danger", run: async () => {
+          const r = await bridge.personalCuiArchive({});
+          if (!r?.ok) showToast({ title: "CUI archive not written", desc: r?.error ?? "Personalization is off or locked.", actions: [{ label: "OK" }], timeout: 6000 });
+          else showToast({ title: "CUI archive written", desc: `${r.files} files · ${r.facts} facts → ${r.dest}`, meta: `manifest sha256 ${(r.manifestSha256 ?? "").slice(0, 12)}… · complete the designation before transfer`, actions: [{ label: "OK" }], timeout: 9000 });
+        } },
+      ],
+      timeout: 0,
+    });
+  });
   $("#knowledge")!.addEventListener("click", async (e) => {
     const t = e.target as HTMLElement;
     const lens = t.closest("[data-lens]") as HTMLElement | null;

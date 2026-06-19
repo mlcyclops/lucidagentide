@@ -4,6 +4,24 @@ Three lines per session: **shipped / stubbed / next** (CLAUDE.md session ritual)
 
 -----
 
+## P9.4: audited Obsidian vault export + NARA-aligned CUI archive (ADR-0013 / ADR-0010/0012)
+- **shipped:** harness/export/vault_export.ts — pure buildVault (note-per-entity, YAML frontmatter,
+  sanitized-but-working links, [[wikilinks]], _index.md MOC; scope-filtered, CUI EXCLUDED by default)
+  + buildCuiArchive (cui-only; CUI banner + (CUI) portion marks, SF-901-style cover sheet, NARA
+  records-management manifest with a SHA-256 inventory + manifest_sha256). All text escapeMarkdown'd.
+  Store gains an encrypted, in-store export audit trail (PersonalExportEvent, additive to personal-kg.v1).
+  Desktop exportVault/exportCuiArchive (decrypt→write→audit, path-escape-safe) + metadata-only telemetry
+  (new EventNames personal_vault_exported / personal_cui_archived). Routes POST /api/personal/{vault,
+  cui-archive} + GET /api/personal/exports. UI: "Export vault" + danger "CUI archive" buttons on the
+  Knowledge toolbar (CUI behind a NARA confirm). 11 new tests (171 total path); verified live: routes
+  reachable + fail-safe gated when off, on-disk vault excludes CUI, CUI archive marks + manifests with
+  no cross-compartment leak.
+- **stubbed:** native folder picker for the destination (browser falls back to ~/.omp/lucid-{vault,
+  cui-archive}); a designation form to pre-fill CUI category/agency/decontrol (today they're flagged
+  REQUIRED placeholders); the scope-declaring MCP connector (ADR-0012 portability layer 3).
+- **next:** ADR-0012 layer-3 connector (read-only, scope-declaring) OR hard CUI isolation
+  (separate store / per-compartment DEK) if an accreditation requires it.
+
 ## P9.3: in-app SVG Knowledge Graph view (ADR-0010/0012)
 - **shipped:** a hand-rolled, dependency-free force-directed SVG graph (desktop/renderer/graph.ts) on a
   new "Knowledge" rail tab. Nodes = entities (sized by fact count, coloured by a Kind/Trust lens),

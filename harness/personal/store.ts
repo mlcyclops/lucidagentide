@@ -35,7 +35,20 @@ export interface PersonalFact {
   status: "active" | "forgotten"; promoted_at: string;
 }
 export interface PersonalLink { id: string; from_entity_id: string; to_entity_id: string; relation: string; created_at: string }
-export interface PersonalGraph { entities: PersonalEntity[]; facts: PersonalFact[]; links: PersonalLink[] }
+// An audited decrypt→export action (P9.4). Kept INSIDE the encrypted store so the export
+// trail is as private + tamper-evident as the data it concerns. Metadata only — never
+// fact content. `kind: "cui-archive"` is the loud, NARA-aligned CUI migration path.
+export interface PersonalExportEvent {
+  id: string; kind: "vault" | "cui-archive"; scopes: PersonalScope[];
+  entity_count: number; fact_count: number; file_count: number;
+  payload_sha256: string; manifest_sha256?: string; dest?: string; reviewer?: string;
+  included_cui: boolean; at: string;
+}
+export interface PersonalGraph {
+  entities: PersonalEntity[]; facts: PersonalFact[]; links: PersonalLink[];
+  /** Append-only audit of decrypt→export actions (P9.4). Optional for back-compat. */
+  exports?: PersonalExportEvent[];
+}
 
 type Custody = "passphrase" | "keystore";
 interface Envelope {
@@ -127,6 +140,18 @@ export class PersonalStore {
     this.#graph.links.push({ id, from_entity_id: fromEntityId, to_entity_id: toEntityId, relation, created_at: now() });
     return id;
   }
+  /** Record an audited export (P9.4). Appends to the encrypted, in-store trail and
+   *  returns the event id. The caller persists with save(). Metadata only. */
+  recordExport(ev: Omit<PersonalExportEvent, "id" | "at">): string {
+    const id = Snowflake.next();
+    (this.#graph.exports ??= []).push({ ...ev, id, at: now() });
+    return id;
+  }
+  /** The decrypt→export audit trail (most recent first). */
+  exportLog(): PersonalExportEvent[] {
+    return structuredClone([...(this.#graph.exports ?? [])].reverse());
+  }
+
   /** Soft-delete a fact (the user "forgets" it). */
   forgetFact(factId: string): boolean {
     const f = this.#graph.facts.find((x) => x.id === factId);
@@ -168,5 +193,5 @@ function readEnvelope(path: string): Envelope {
 }
 function decodeGraph(buf: Buffer): PersonalGraph {
   const g = JSON.parse(buf.toString("utf8")) as Partial<PersonalGraph>;
-  return { entities: g.entities ?? [], facts: g.facts ?? [], links: g.links ?? [] };
+  return { entities: g.entities ?? [], facts: g.facts ?? [], links: g.links ?? [], exports: g.exports ?? [] };
 }

@@ -978,3 +978,83 @@ an accreditation requires it.
 - CUI is never auto-exported, auto-recalled into shared contexts, or sent to external consumers without an
   explicit, audited consent step.
 - The compartment model is forward-compatible (added to the fresh store before any data existed).
+
+-----
+
+## ADR-0013 — P9.4: audited Obsidian vault export + NARA-aligned CUI archive
+
+**Date:** 2026-06-19
+**Status:** Accepted. Built this increment (P9.4). Realizes ADR-0012 portability **layer 2**
+(the portable interchange) and adds the **CUI-compartment migration for archive requirements**
+the user asked for ("CUI migration option for archive requirements (National Archive Requirements)").
+**Relationship:** implements ADR-0010 P9.4 and ADR-0012 §portability; the connector contract
+(layer 3) remains future work.
+
+### Context
+
+The personalization KG is the system of record (encrypted, private). Users need a **portable,
+human-readable** copy (Obsidian vault), and CUI-compartment data has **records-management** duties
+(US National Archives / NARA) distinct from ordinary export. P9.4 delivers both as **explicit,
+audited decrypt→write actions** — never automatic.
+
+### Decision — two distinct export paths
+
+1. **Obsidian vault export** (`buildVault`) — note-per-entity with YAML frontmatter, facts as
+   bullets (trust + confidence + session provenance), sanitized-but-working links, `[[wikilinks]]`
+   from KG links, and an `_index.md` MOC grouped by kind. **Scope-filtered**: defaults to
+   `personal + work`; **CUI is excluded unless explicitly listed in `scopes`** (and then the index
+   carries a loud warning). The portable, freely-shareable interchange.
+2. **CUI archive** (`buildCuiArchive`) — a **separate, loud, danger-styled** action that exports
+   **only** the `cui` scope into a records-managed package: a `_CUI_COVER_SHEET.md` (SF-901-style
+   banner cover sheet), CUI **banner markings** top/bottom of every note + **`(CUI)` portion marks**
+   on every fact, and a `_CUI_MANIFEST.json` carrying CUI designation fields (category, designating
+   agency, controlled-by, dissemination controls, decontrol) and **NARA records-management** fields
+   (records schedule, disposition, retention) plus a **SHA-256 inventory** of every file and a
+   `manifest_sha256` that attests to that inventory.
+
+### Honest posture (mirrors the FIPS posture in ADR-0010)
+
+The tool **marks and packages**; it does **not certify a designation**. CUI/NARA fields that the
+user does not supply are emitted as an explicit `REQUIRED — complete per your CUI/records program`
+placeholder (never silently blank), and the manifest carries a notice that an authorized
+CUI/records officer must complete and verify the designation (32 CFR Part 2002; NARA records
+schedule). Honest scaffolding, not a compliance claim.
+
+### Security guarantees (tested)
+
+- **Scope isolation:** CUI never appears in the ordinary vault unless explicitly requested; the CUI
+  archive contains only CUI (no personal/work leak). Both directions are unit-tested.
+- **No invisible bytes:** every emitted string passes `escapeMarkdown` (defense in depth) — a
+  zero-width/bidi/control codepoint becomes `\u{XXXX}`, never a raw invisible. Tested.
+- **Links sanitized but working:** only a strict `https?://` URL with no dangerous codepoints
+  becomes a clickable `[display](href)`; anything else degrades to escaped text. `isSafeUrl` rejects
+  `javascript:`, embedded zero-width, and whitespace. Tested.
+- **Path safety:** the writer refuses any file path that escapes the chosen destination directory.
+- **Audited, two ways:** (1) an **encrypted, in-store** append-only trail (`PersonalExportEvent`) —
+  as private and tamper-evident as the data it concerns; (2) a **metadata-only** telemetry event
+  (`personal_vault_exported` / `personal_cui_archived`) to a local NDJSON audit log — counts +
+  hashes + scopes only, **never** fact content and **never** the destination path.
+
+### Frozen-contract deltas (this increment)
+
+- **`contracts.ts` EventName** (closed enum): added `personal_vault_exported`,
+  `personal_cui_archived`. Added in the same increment that emits them (invariant #8).
+- **`personal-kg.v1` store contract:** **additive** — optional `PersonalGraph.exports?:
+  PersonalExportEvent[]` (the audit trail). Backward compatible: a store written before P9.4
+  decodes with `exports: []`. **No version bump** (old stores still open).
+- **No DuckDB migration** — the personalization store is a separate encrypted file; the vault is
+  written to a plain directory.
+
+### Reuse / non-fork
+
+`escapeMarkdown` is reused from `safe_export.ts` (its frozen surface untouched). `buildVault` /
+`buildCuiArchive` are **pure** (no I/O, caller passes `now`) so the security-sensitive rendering is
+fully unit-testable; the desktop layer (`desktop/personal.ts`) does decrypt → write → audit. New
+endpoints `POST /api/personal/vault`, `POST /api/personal/cui-archive`, `GET /api/personal/exports`.
+
+### Open items (unchanged from ADR-0012)
+
+- **Connector contract (layer 3)** — the scope-declaring read-only MCP connector — remains future.
+- **Hard CUI isolation** (separate store / per-compartment DEK) remains the documented hardening
+  upgrade if an accreditation requires it; P9.4 keeps tag-based separation + the loud, audited,
+  CUI-only archive path.

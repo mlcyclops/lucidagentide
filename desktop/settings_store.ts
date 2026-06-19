@@ -51,6 +51,14 @@ export const ASKSAGE_DEFAULT_LIMIT = 200_000;
 export function personalStorePath(): string {
   return join(homedir(), ".omp", "lucid-personal.kg.enc");
 }
+/** Metadata-only audit log for personalization exports (P9.4). NDJSON; counts + hashes
+ *  only, never fact content (the full, private trail lives encrypted inside the store). */
+export function personalAuditPath(): string {
+  return join(homedir(), ".omp", "lucid-personal-audit.ndjson");
+}
+/** Default export destinations (P9.4). The CUI archive is deliberately separate. */
+export function personalVaultDir(): string { return join(homedir(), ".omp", "lucid-vault"); }
+export function personalCuiArchiveDir(): string { return join(homedir(), ".omp", "lucid-cui-archive"); }
 export function setPersonalization(enabled: boolean): GuiSettings {
   const s = load(); s.personalizationEnabled = enabled; save(s); return s;
 }

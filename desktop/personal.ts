@@ -5,11 +5,16 @@
 // for the moment of derivation; it is NEVER persisted and NEVER returned over the API.
 // Only booleans + compartment counts ever leave the server.
 
+import { mkdirSync, writeFileSync } from "node:fs";
+import { dirname, join, normalize, sep } from "node:path";
 import { PersonalStore, type PersonalScope, type ScopeView } from "../harness/personal/store.ts";
-import { load, personalStorePath, setPersonalization, setPersonalScope } from "./settings_store.ts";
+import { load, personalAuditPath, personalCuiArchiveDir, personalStorePath, personalVaultDir, setPersonalization, setPersonalScope } from "./settings_store.ts";
 import { buildRecall } from "../harness/personal/recall.ts";
 import { distillTurn, heuristicExtractor } from "../harness/personal/distiller.ts";
 import { ScannerClient } from "../harness/security/scanner_client.ts";
+import { buildCuiArchive, buildVault, type CuiDesignation, type VaultFile } from "../harness/export/vault_export.ts";
+import { Telemetry } from "../harness/telemetry/events.ts";
+import { Snowflake } from "@oh-my-pi/pi-utils";
 
 let store: PersonalStore | null = null; // the unlocked store, DEK in memory
 
@@ -99,6 +104,92 @@ export function forgetFact(factId: string): { ok: boolean } {
   const ok = store.forgetFact(factId);
   if (ok) store.save();
   return { ok };
+}
+
+// ── P9.4: audited Obsidian vault export + NARA-aligned CUI archive ─────────────────
+export interface ExportSummary {
+  ok: boolean; error?: string; dest?: string;
+  entities?: number; facts?: number; files?: number; bytes?: number;
+  scopes?: PersonalScope[]; includedCui?: boolean; payloadSha256?: string; manifestSha256?: string;
+}
+
+/** Write the export's files under destDir, refusing any path that escapes it. Returns bytes. */
+function writeFiles(destDir: string, files: VaultFile[]): number {
+  const root = normalize(destDir);
+  let bytes = 0;
+  for (const f of files) {
+    const target = normalize(join(root, f.path));
+    if (target !== root && !target.startsWith(root + sep)) throw new Error(`unsafe export path: ${f.path}`);
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, f.content, "utf8");
+    bytes += Buffer.byteLength(f.content, "utf8");
+  }
+  return bytes;
+}
+
+/** Emit a metadata-only audit event (counts + hashes; never content, never dest). */
+function auditExport(event: "personal_vault_exported" | "personal_cui_archived", fields: Record<string, unknown>): void {
+  try { new Telemetry({ runId: Snowflake.next(), sessionId: "personal", sink: personalAuditPath() }).emit(event, fields); }
+  catch { /* audit is best-effort; the encrypted in-store trail is the source of truth */ }
+}
+
+/** Export the portable Obsidian vault. CUI is EXCLUDED unless explicitly requested
+ *  (ADR-0012). Decrypt→write→audit: writes files, records the action inside the
+ *  encrypted store, and emits a metadata-only telemetry event. */
+export function exportVault(opts: { scopes?: PersonalScope[]; dest?: string; reviewer?: string } = {}): ExportSummary {
+  const s = load();
+  if (!s.personalizationEnabled || !store) return { ok: false, error: "Personalization is off or locked." };
+  // Default to the portable compartments; CUI must be opted in by name.
+  const scopes = (opts.scopes && opts.scopes.length ? opts.scopes : (["personal", "work"] as PersonalScope[]))
+    .filter((x): x is PersonalScope => x === "personal" || x === "work" || x === "cui");
+  const dest = opts.dest?.trim() || personalVaultDir();
+  try {
+    const build = buildVault(store.graph({ scope: "combined" }), { scopes, now: new Date().toISOString() });
+    if (build.summary.entities === 0) return { ok: false, error: "Nothing to export in the selected compartment(s) yet." };
+    const bytes = writeFiles(dest, build.files);
+    store.recordExport({
+      kind: "vault", scopes, entity_count: build.summary.entities, fact_count: build.summary.facts,
+      file_count: build.summary.files, payload_sha256: build.summary.payloadSha256, dest,
+      reviewer: opts.reviewer, included_cui: build.summary.includedCui,
+    });
+    store.save();
+    auditExport("personal_vault_exported", {
+      scopes, included_cui: build.summary.includedCui, entities: build.summary.entities,
+      facts: build.summary.facts, files: build.summary.files, payload_sha256: build.summary.payloadSha256,
+    });
+    return { ok: true, dest, entities: build.summary.entities, facts: build.summary.facts, files: build.summary.files, bytes, scopes, includedCui: build.summary.includedCui, payloadSha256: build.summary.payloadSha256 };
+  } catch (e) { return { ok: false, error: String((e as Error)?.message ?? e) }; }
+}
+
+/** The loud, audited CUI-compartment migration for archive requirements (National
+ *  Archives / NARA records management). Exports ONLY the cui scope into a CUI-marked,
+ *  records-managed package with a SHA-256 manifest. Never bundled into the normal vault. */
+export function exportCuiArchive(opts: { dest?: string; designation?: CuiDesignation; reviewer?: string } = {}): ExportSummary {
+  const s = load();
+  if (!s.personalizationEnabled || !store) return { ok: false, error: "Personalization is off or locked." };
+  if (store.scopeCounts().cui === 0) return { ok: false, error: "No CUI-compartment facts to archive." };
+  const dest = opts.dest?.trim() || personalCuiArchiveDir();
+  const designation = { ...opts.designation, reviewer: opts.reviewer ?? opts.designation?.reviewer };
+  try {
+    const build = buildCuiArchive(store.graph({ scope: "cui" }), { now: new Date().toISOString(), designation });
+    const bytes = writeFiles(dest, build.files);
+    store.recordExport({
+      kind: "cui-archive", scopes: ["cui"], entity_count: build.summary.entities, fact_count: build.summary.facts,
+      file_count: build.summary.files, payload_sha256: build.summary.payloadSha256, manifest_sha256: build.summary.manifestSha256,
+      dest, reviewer: designation.reviewer, included_cui: true,
+    });
+    store.save();
+    auditExport("personal_cui_archived", {
+      scopes: ["cui"], included_cui: true, entities: build.summary.entities, facts: build.summary.facts,
+      files: build.summary.files, payload_sha256: build.summary.payloadSha256, manifest_sha256: build.summary.manifestSha256,
+    });
+    return { ok: true, dest, entities: build.summary.entities, facts: build.summary.facts, files: build.summary.files, bytes, scopes: ["cui"], includedCui: true, payloadSha256: build.summary.payloadSha256, manifestSha256: build.summary.manifestSha256 };
+  } catch (e) { return { ok: false, error: String((e as Error)?.message ?? e) }; }
+}
+
+/** The decrypt→export audit trail (metadata only), most-recent first; null when locked. */
+export function exportHistory(): ReturnType<PersonalStore["exportLog"]> | null {
+  return store ? store.exportLog() : null;
 }
 
 // ── P9.2: learn from / recall into conversations ───────────────────────────────────

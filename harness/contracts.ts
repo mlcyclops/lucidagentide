@@ -62,6 +62,10 @@ export const EVENT_NAMES = [
   "personal_recall_injected",
   // P9.3 — user edits the knowledge graph
   "personal_fact_forgotten",
+  // P9.4 — audited decrypt→export of the personalization KG to an Obsidian vault,
+  // plus the loud, NARA-aligned CUI-compartment archive (records-management) path.
+  "personal_vault_exported",
+  "personal_cui_archived",
 ] as const;
 export type EventName = (typeof EVENT_NAMES)[number];
 
