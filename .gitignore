@@ -31,3 +31,15 @@ Thumbs.db
 # desktop electron app
 desktop/node_modules/
 desktop/dist/
+
+# --- secrets / credentials (NEVER commit keys or tokens) ---
+lucid-gui.json
+**/lucid-gui.json
+.env
+.env.*
+*.env
+**/*.key
+**/*.pem
+*secret*
+*credentials*
+**/auth.json
