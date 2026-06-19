@@ -54,6 +54,7 @@ export interface LucidBridge {
   isElectron: boolean;
   security(): Promise<SecuritySnapshot | null>;
   memory(): Promise<MemorySnapshot | null>;
+  budget(): Promise<{ label: string; used: number; status: string; resetsAt: number | null }[] | null>;
   sendPrompt(text: string, onEvent: (e: ChatEvent) => void): Promise<void>;
   config(): Promise<ConfigOption[]>;
   setConfig(configId: string, value: string): Promise<ConfigOption[]>;
@@ -134,6 +135,7 @@ export const bridge: LucidBridge = {
   isElectron: !!shell?.isElectron,
   security: () => getData("/api/security"),
   memory: () => getData("/api/memory"),
+  budget: () => getData("/api/budget"),
   sendPrompt: streamChat,
   config: async () => (await getData("/api/config")) ?? FALLBACK_CONFIG,
   setConfig: async (id, value) => (await post("/api/setConfig", { configId: id, value })) ?? FALLBACK_CONFIG,

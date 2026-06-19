@@ -45,8 +45,8 @@ async function main(): Promise<void> {
     console.log(`    peak      ${gauge(peak / win)}  ${fmtNum(peak)} / ${fmtNum(win)}`);
     console.log(`    growth    ${sparkline(prompts)}  ${C.dim}(prompt tokens per turn)${C.reset}`);
     console.log();
-    console.log(`${C.cyan}${C.bold}▸ KV-cache efficiency${C.reset}  ${C.dim}(frozen prefix → cache hits; invariant #6)${C.reset}`);
-    console.log(`    cache hit ${gauge(hit)}  ${fmtNum(sumRead)} read vs ${fmtNum(sumWrite)} written, ${fmtNum(sumInput)} fresh`);
+    console.log(`${C.cyan}${C.bold}▸ Prompt-cache savings${C.reset}  ${C.dim}(more reuse = lower token cost)${C.reset}`);
+    console.log(`    cached input ${gauge(hit)}  ${fmtNum(sumRead)} cached vs ${fmtNum(sumWrite)} cache-build, ${fmtNum(sumInput)} full-price`);
     console.log(`    ${C.dim}session cost so far: ${fmtUSD(sumCost)}${C.reset}`);
     console.log(`    ${C.dim}source: ${sessionPath.replace(homedir(), "~")}${C.reset}`);
     console.log();

@@ -44,7 +44,9 @@
     "@oh-my-pi/pi-ai": "^16.0.6",
     "@oh-my-pi/pi-coding-agent": "^16.0.6",
     "@oh-my-pi/pi-utils": "^16.0.6",
-    "arktype": "^2.2.1"
+    "arktype": "^2.2.1",
+    "dompurify": "^3.4.11",
+    "marked": "^18.0.5"
   },
   "devDependencies": {
     "@types/bun": "latest",

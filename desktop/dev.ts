@@ -10,7 +10,7 @@
 
 import { join } from "node:path";
 import { securitySnapshot } from "../tools/web/data.ts";
-import { memorySnapshot } from "../tools/memory_data.ts";
+import { memorySnapshot, rateLimits } from "../tools/memory_data.ts";
 import { backend } from "./acp_backend.ts";
 import { listSessions, sessionMessages } from "./sessions.ts";
 import { providerAuth } from "./auth_status.ts";
@@ -57,6 +57,9 @@ const server = Bun.serve({
       }
       if (p === "/api/security") return json({ ok: true, data: await securitySnapshot() });
       if (p === "/api/memory") return json({ ok: true, data: await memorySnapshot() });
+      // Light, fast re-read of the provider rate-limit budget (omp's agent.db).
+      // Used by the front-end's manual refresh + 5-minute auto-poll.
+      if (p === "/api/budget") return json({ ok: true, data: rateLimits() });
       if (p === "/api/health") return json({ ok: true });
 
       // real omp ACP backend (genuine model replies + live session config)

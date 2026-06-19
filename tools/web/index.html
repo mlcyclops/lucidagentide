@@ -212,8 +212,8 @@ function renderMemory(d){
     h += card("Context window", `${s.model} · ${s.turns} turns`, ctx + sparkSvg(s.prompts)
         + `<div class="muted" style="font-size:11px;margin-top:4px">prompt tokens per turn</div>`);
     const c = s.cache;
-    h += card("KV-cache efficiency","frozen prefix → cache hits (invariant #6)",
-      gauge("cache hit", c.hit, "")
+    h += card("Prompt-cache savings","more reuse = lower token cost",
+      gauge("cached input", c.hit, "")
       + `<div class="kvs"><span class="kv">read <b>${fmtNum(c.read)}</b></span>
          <span class="kv">written <b>${fmtNum(c.write)}</b></span>
          <span class="kv">fresh <b>${fmtNum(c.fresh)}</b></span>

@@ -9,6 +9,7 @@ import { bridge, type ChatEvent, type ConfigOption, type MemorySnapshot, type Om
 import { $, $$, accordion, el, fmtNum, gauge, spark, table } from "./dom.ts";
 import { ageStr, esc, fmtUSD, goodColor, loadColor } from "./format.ts";
 import { icon, piMark } from "./icons.ts";
+import { renderMarkdown } from "./markdown.ts";
 import { type Action, attachRichTip, createPalette, initTooltips, popover, showToast } from "./ui.ts";
 
 type Tab = "security" | "memory";
@@ -60,7 +61,7 @@ function buildShell(): void {
         <button class="rail-btn" id="sideToggle" data-tip="Sessions panel|Show / hide" data-tip-side="right">${icon("sidebar", 20)}</button>
         <button class="rail-btn active" data-rail="chat" data-tip="Conversation" data-tip-icon="chat">${icon("chat", 20)}</button>
         <button class="rail-btn" data-rail="security" data-tip="Security|Findings, quarantine & approvals" data-tip-icon="shield">${icon("shield", 20)}<span class="badge" id="railBadge" hidden>0</span></button>
-        <button class="rail-btn" data-rail="memory" data-tip="Memory & context|Context window, KV-cache, semantic memory" data-tip-icon="brain">${icon("brain", 20)}</button>
+        <button class="rail-btn" data-rail="memory" data-tip="Memory & context|Context window, prompt-cache savings, semantic memory" data-tip-icon="brain">${icon("brain", 20)}</button>
         <button class="rail-btn" data-rail="runs" data-tip="Runs|Provenance lineage" data-tip-icon="runs">${icon("runs", 20)}</button>
         <div class="spacer"></div>
         <button class="rail-btn" id="railCmd" data-tip="Commands|Ctrl / ⌘ K" data-tip-icon="command">${icon("command", 20)}</button>
@@ -72,7 +73,7 @@ function buildShell(): void {
         <div class="side-head"><span>Sessions</span>
           <div class="side-actions">
             <button class="side-new" id="newSession" data-tip="New session">${icon("plus", 15)}</button>
-            <button class="side-new" id="sideCollapse" data-tip="Collapse panel" data-tip-side="bottom">${icon("collapse", 15)}</button>
+            <button class="side-new" id="sideCollapse" data-tip="Collapse panel" data-tip-side="bottom">${icon("expand", 15)}</button>
           </div></div>
         <div class="side-list" id="sessList"></div>
         <div class="resizer resizer-r" data-resize="sidebar" data-tip="Drag to resize" data-tip-side="right"></div>
@@ -156,7 +157,7 @@ function addMessage(role: "user" | "assistant", text: string): HTMLElement {
     <div class="who">${role === "user" ? "You" : "LucidAgent"}</div>
     <div class="av">${role === "user" ? icon("user", 16) : piMark}</div>
     <div class="text"></div></div>`);
-  ($(".text", node) as HTMLElement).innerHTML = mdInline(text);
+  ($(".text", node) as HTMLElement).innerHTML = renderMarkdown(text);
   $("#thread")!.appendChild(node);
   scrollChat();
   return node;
@@ -167,7 +168,6 @@ function addEvent(html: string): HTMLElement {
   scrollChat();
   return node;
 }
-const mdInline = (t: string) => esc(t).replace(/`([^`]+)`/g, "<code>$1</code>");
 const scrollChat = () => { const c = $("#chat")!; requestAnimationFrame(() => (c.scrollTop = c.scrollHeight)); };
 
 async function send(): Promise<void> {
@@ -183,14 +183,14 @@ async function send(): Promise<void> {
   textEl.innerHTML = `<span class="cursor"></span>`;
   let buf = "";
   const onEvent = (e: ChatEvent) => {
-    if (e.type === "token") { buf += e.text; textEl.innerHTML = mdInline(buf) + `<span class="cursor"></span>`; scrollChat(); }
+    if (e.type === "token") { buf += e.text; textEl.innerHTML = renderMarkdown(buf) + `<span class="cursor"></span>`; scrollChat(); }
     else if (e.type === "tool") addEvent(`<div class="evt tool">${icon("eye", 15)}<span class="k">${esc(e.name)}</span><span>${esc(e.detail)}</span></div>`);
     else if (e.type === "block") onBlock(e);
     else if (e.type === "usage") { state.liveUsage = { used: e.used, size: e.size, cost: e.cost }; renderStatus(); renderMetricsRail(); }
-    else if (e.type === "done") { textEl.innerHTML = mdInline(buf); state.streaming = false; setSendEnabled(); }
+    else if (e.type === "done") { textEl.innerHTML = renderMarkdown(buf); state.streaming = false; setSendEnabled(); }
   };
   try { await bridge.sendPrompt(text, onEvent); }
-  finally { if (state.streaming) { textEl.innerHTML = mdInline(buf); state.streaming = false; setSendEnabled(); } void renderSessions(); }
+  finally { if (state.streaming) { textEl.innerHTML = renderMarkdown(buf); state.streaming = false; setSendEnabled(); } void renderSessions(); void refreshBudget(false); }
 }
 
 function onBlock(e: Extract<ChatEvent, { type: "block" }>): void {
@@ -252,7 +252,7 @@ function renderMetricsRail(): void {
   const tile = (n: string, label: string, cls: string, tip: string) =>
     `<div class="tile ${cls}" data-tip="${esc(label)}|${esc(tip)}" data-tip-side="left"><div class="n">${esc(n)}</div><div class="l">${esc(label)}</div></div>`;
   tiles.innerHTML =
-    tile(`${Math.round(hit * 100)}%`, "cache", "g", "KV-cache hit rate — higher means the frozen prefix is paying off") +
+    tile(`${Math.round(hit * 100)}%`, "cache", "g", "Prompt-cache hit rate — share of input billed at the discounted cached rate (~10% of full price). Higher = lower spend per turn.") +
     tile(fmtNum(avg), "avg/turn", "c", "Average tokens per turn") +
     tile(fmtNum(cur), "context", "b", "Context tokens in use this turn") +
     tile(String(turns), "turns", "b2", "Agent turns in this session") +
@@ -399,7 +399,7 @@ function securityHtml(d: SecuritySnapshot | null): string {
   h += accordion("sec.findings", "Findings overview", "by type · severity · source",
     table([{ key: "finding_type", label: "type" }, { key: "severity", label: "sev", pill: true }, { key: "source", label: "source" }, { key: "n", label: "n", mono: true }], d.findings),
     OPEN.has("sec.findings"));
-  h += accordion("sec.gate", "Memory-promotion gate", "keystone #2",
+  h += accordion("sec.gate", "Memory-promotion gate", "untrusted content can't auto-save",
     gauge("blocked", blocked + promoted ? blocked / (blocked + promoted) : 0, `<b>${blocked}</b>&nbsp;blocked / ${promoted} ok`),
     OPEN.has("sec.gate"));
   h += accordion("sec.exports", "Export audit", "what left, sanitized",
@@ -421,9 +421,9 @@ function memoryHtml(d: MemorySnapshot | null): string {
       + gauge("peak", s.peak / s.window, `${fmtNum(s.peak)} / ${fmtNum(s.window)}`)
       + spark(s.prompts) + `<div class="kv" style="margin-top:6px;border:0;background:transparent;padding-left:0">prompt tokens per turn</div>`,
       OPEN.has("mem.context"));
-    h += accordion("mem.cache", "KV-cache efficiency", "frozen prefix → cache hits",
-      gauge("hit rate", s.cache.hit, "", true)
-      + `<div class="kvs"><span class="kv">read <b>${fmtNum(s.cache.read)}</b></span><span class="kv">written <b>${fmtNum(s.cache.write)}</b></span><span class="kv">fresh <b>${fmtNum(s.cache.fresh)}</b></span><span class="kv">cost <b>${fmtUSD(s.cost)}</b></span></div>`,
+    h += accordion("mem.cache", "Prompt-cache savings", "more reuse = lower token cost",
+      gauge("cached input", s.cache.hit, "", true)
+      + `<div class="kvs"><span class="kv" data-tip="Input tokens served from cache, billed at ~10% of full price">cached <b>${fmtNum(s.cache.read)}</b></span><span class="kv" data-tip="New tokens written into the cache (full price once, then reused)">cache-build <b>${fmtNum(s.cache.write)}</b></span><span class="kv" data-tip="Uncached input, billed at full price">full-price <b>${fmtNum(s.cache.fresh)}</b></span><span class="kv">spend <b>${fmtUSD(s.cost)}</b></span></div>`,
       OPEN.has("mem.cache"));
   } else {
     h += `<div class="empty">No omp session transcript yet — launch omp and send a message.</div>`;
@@ -434,9 +434,8 @@ function memoryHtml(d: MemorySnapshot | null): string {
       OPEN.has("mem.compaction"));
   }
   if (d.budgets?.length) {
-    h += accordion("mem.budget", "Provider budget", "omp's last-seen snapshot",
-      d.budgets.map((b) => gauge(b.label.replace(/^Claude /, ""), b.used, `<span style="color:var(--txt-4)">${esc(b.status)} · ${ageStr(b.resetsAt)}</span>`)).join(""),
-      OPEN.has("mem.budget"), `${d.budgets.length}`);
+    h += accordion("mem.budget", "Provider budget", "usage for your current model",
+      budgetBody(d.budgets), OPEN.has("mem.budget"), `${d.budgets.length}`);
   }
   if (d.harness) {
     const hm = d.harness;
@@ -449,6 +448,31 @@ function memoryHtml(d: MemorySnapshot | null): string {
     h += `<div class="empty">No harness memory yet — appears once the gate runs, or run <code>bun run demo-P4.3</code>.</div>`;
   }
   return h;
+}
+
+/** Provider keywords for the active model, so we can highlight the budget that
+ *  actually governs the next turn. */
+function providerKeywords(model: string): string[] {
+  const m = model.toLowerCase();
+  if (m.includes("claude") || m.includes("anthropic")) return ["claude", "anthropic"];
+  if (m.includes("gpt") || m.includes("openai") || /\bo[0-9]/.test(m)) return ["openai", "gpt"];
+  if (m.includes("gemini") || m.includes("google")) return ["gemini", "google"];
+  if (m.includes("grok") || m.includes("xai")) return ["grok", "xai"];
+  if (m.includes("deepseek")) return ["deepseek"];
+  return [m.split(/[-/]/)[0] ?? m];
+}
+function budgetBody(budgets: NonNullable<MemorySnapshot["budgets"]>): string {
+  const kws = providerKeywords(state.model);
+  const active = (label: string) => kws.some((k) => label.toLowerCase().includes(k));
+  const rows = budgets.map((b) => {
+    const on = active(b.label);
+    return `<div class="bgt${on ? " on" : ""}">${on ? `<span class="bgt-tag" data-tip="Provider for your current model">current model</span>` : ""}${
+      gauge(b.label.replace(/^Claude /, ""), b.used, `<span style="color:var(--txt-4)">${esc(b.status)} · resets ${ageStr(b.resetsAt)}</span>`)}</div>`;
+  }).join("");
+  return `<div class="bgt-head">
+      <button class="btn-mini" data-budget-refresh data-tip="Re-check provider usage now">${icon("refresh", 13)} Refresh</button>
+      <span class="bgt-note">auto every 5 min</span>
+    </div>${rows}`;
 }
 
 const RICHTIP_DUCKDB = `<div class="rt-h">${icon("shield", 14)} Where this is stored</div>
@@ -471,8 +495,8 @@ function renderStatus(): void {
     <div class="seg" data-tip="Context window|How full the model's context is${lu ? " (live this session)" : ""}">${icon("brain", 14)}
       <span class="mini"><span class="fill" style="width:${Math.round(ctx * 100)}%;background:${loadColor(ctx)}"></span></span>
       <b>${fmtNum(curTok)}</b>/${fmtNum(winTok)}</div>
-    <div class="seg" data-tip="KV-cache hit rate|Higher = the frozen prefix is paying off (invariant #6)">${icon("bolt", 14)} cache <b style="color:${goodColor(hit)}">${Math.round(hit * 100)}%</b></div>
-    ${budget ? `<div class="seg" data-tip="${esc(budget.label)} usage|omp's last-seen value — updates when omp makes a call, so it can lag the official Claude usage.">${esc(budget.label)} <b>${Math.round(budget.used * 100)}%</b></div>` : ""}
+    <div class="seg" data-tip="Prompt-cache hit rate|Share of input served from cache at the discounted rate — higher means lower cost per turn">${icon("bolt", 14)} cache <b style="color:${goodColor(hit)}">${Math.round(hit * 100)}%</b></div>
+    ${budget ? `<div class="seg seg-btn" data-budget-refresh data-tip="${esc(budget.label)} usage|Click to re-check now · auto every 5 min. omp's last-seen value, so it can lag the official usage.">${esc(budget.label)} <b>${Math.round(budget.used * 100)}%</b> ${icon("refresh", 11)}</div>` : ""}
     <div class="seg" data-tip="Session cost">${fmtUSD(cost)}</div>
     <div class="right">
       <div class="seg" data-tip="Security gate|In-process, fail-closed">${icon("shield", 13)} gate active</div>
@@ -495,6 +519,28 @@ async function refresh(): Promise<void> {
   } catch {
     renderStatus();
   }
+}
+
+// Provider budget — manual refresh + a 5-minute auto-poll for the current model.
+// The figure is omp's last-seen value; a turn updates it, so we also re-pull after
+// each turn. Manual refresh resets the 5-minute timer.
+let budgetTimer: ReturnType<typeof setInterval> | null = null;
+const BUDGET_POLL_MS = 5 * 60 * 1000;
+async function refreshBudget(manual = false): Promise<void> {
+  const budgets = await bridge.budget();
+  if (budgets && state.memory) state.memory.budgets = budgets;
+  if (state.inspectorTab === "memory" && !state.inspectorRail) renderInspector();
+  renderStatus();
+  if (manual) showToast({
+    title: budgets?.length ? "Budget refreshed" : "No usage yet",
+    desc: budgets?.length ? "Latest provider usage pulled for your current model." : "Nothing recorded yet — send a turn, then refresh.",
+    actions: [{ label: "OK" }], timeout: 2200,
+  });
+  scheduleBudgetPoll();
+}
+function scheduleBudgetPoll(): void {
+  if (budgetTimer) clearInterval(budgetTimer);
+  budgetTimer = setInterval(() => void refreshBudget(false), BUDGET_POLL_MS);
 }
 
 // ───────────────────────── interactions ─────────────────────────
@@ -609,6 +655,7 @@ function wire(): void {
 
   // accordion toggles (delegated; flips OPEN + .open without a full re-render)
   $("#inspBody")!.addEventListener("click", (e) => {
+    if ((e.target as HTMLElement).closest("[data-budget-refresh]")) { void refreshBudget(true); return; }
     const head = (e.target as HTMLElement).closest("[data-acc-toggle]") as HTMLElement | null;
     if (head) { const k = head.dataset.accToggle!; const acc = head.closest(".acc")!; const open = acc.classList.toggle("open"); open ? OPEN.add(k) : OPEN.delete(k); return; }
     const act = (e.target as HTMLElement).closest("[data-act]") as HTMLElement | null;
@@ -630,6 +677,11 @@ function wire(): void {
   $("#wsBar")!.addEventListener("click", () => openSettings());
   $("#sessList")!.addEventListener("click", (e) => { const s = (e.target as HTMLElement).closest(".sess") as HTMLElement | null; if (s?.dataset.sid) void resumeSession(s.dataset.sid); });
   $(".brand")!.addEventListener("click", () => toggleSidebar());
+
+  // status bar: click the budget chip to re-check provider usage now
+  $("#statusbar")!.addEventListener("click", (e) => {
+    if ((e.target as HTMLElement).closest("[data-budget-refresh]")) void refreshBudget(true);
+  });
   $("#newSession")!.addEventListener("click", () => newSession());
   const w = (window as any).lucid?.win;
   $("#winMin")!.addEventListener("click", () => w?.minimize?.());
@@ -866,6 +918,7 @@ renderStatus();
 void loadConfig().then(renderStatus);
 void loadWorkspace();
 refresh();
+scheduleBudgetPoll(); // provider budget: re-check every 5 min for the current model
 setInterval(refresh, 4000);
 setInterval(renderStatus, 1000);
 setInterval(() => void renderSessions(), 15000);
