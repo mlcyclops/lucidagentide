@@ -28,10 +28,13 @@ export function initTooltips(): void {
     let side: "top" | "bottom" | "right" = "top";
     let x = r.left + r.width / 2 - tr.width / 2;
     let y = r.top - tr.height - 9;
-    if (y < 8) { side = "bottom"; y = r.bottom + 9; }
-    if (r.left < 130 && r.width < 60) { // rail-style narrow target → show to the right
+    const forced = target.getAttribute("data-tip-side");
+    if (forced === "right" || (!forced && r.left < 130 && r.width < 60)) { // explicit, or rail-style narrow target
       side = "right"; x = r.right + 9; y = r.top + r.height / 2 - tr.height / 2;
+    } else if (forced === "bottom" || (!forced && y < 8)) {
+      side = "bottom"; y = r.bottom + 9;
     }
+    y = Math.max(8, Math.min(y, window.innerHeight - tr.height - 8));
     x = Math.max(8, Math.min(x, window.innerWidth - tr.width - 8));
     tip.dataset.side = side;
     tip.style.setProperty("--ax", `${r.left + r.width / 2 - x}px`);

@@ -260,7 +260,7 @@ function memoryHtml(d: MemorySnapshot | null): string {
       OPEN.has("mem.compaction"));
   }
   if (d.budgets?.length) {
-    h += accordion("mem.budget", "Provider budget", "rate-limit windows",
+    h += accordion("mem.budget", "Provider budget", "omp's last-seen snapshot",
       d.budgets.map((b) => gauge(b.label.replace(/^Claude /, ""), b.used, `<span style="color:var(--txt-4)">${esc(b.status)} · ${ageStr(b.resetsAt)}</span>`)).join(""),
       OPEN.has("mem.budget"), `${d.budgets.length}`);
   }
@@ -297,7 +297,7 @@ function renderStatus(): void {
       <span class="mini"><span class="fill" style="width:${Math.round(ctx * 100)}%;background:${loadColor(ctx)}"></span></span>
       <b>${fmtNum(curTok)}</b>/${fmtNum(winTok)}</div>
     <div class="seg" data-tip="KV-cache hit rate|Higher = the frozen prefix is paying off (invariant #6)">${icon("bolt", 14)} cache <b style="color:${goodColor(hit)}">${Math.round(hit * 100)}%</b></div>
-    ${budget ? `<div class="seg" data-tip="Provider rate-limit">${esc(budget.label)} <b>${Math.round(budget.used * 100)}%</b></div>` : ""}
+    ${budget ? `<div class="seg" data-tip="${esc(budget.label)} usage|omp's last-seen value — updates when omp makes a call, so it can lag the official Claude usage.">${esc(budget.label)} <b>${Math.round(budget.used * 100)}%</b></div>` : ""}
     <div class="seg" data-tip="Session cost">${fmtUSD(cost)}</div>
     <div class="right">
       <div class="seg" data-tip="Security gate|In-process, fail-closed">${icon("shield", 13)} gate active</div>
@@ -437,43 +437,95 @@ async function applyConfig(configId: string, value: string): Promise<void> {
   showToast({ title: `${opt?.name ?? configId} → ${label}`, desc: configId === "model" ? "New turns use this model." : "Applied to the active session.", actions: [{ label: "OK" }], timeout: 2400 });
 }
 
+// current, non-deprecated models, newest → oldest (omp also lists stale/dated
+// ones — those are filtered out; the live current model is always shown).
+const MODEL_ORDER = [
+  "claude-fable-5", "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6",
+  "claude-sonnet-4-6", "claude-sonnet-4-5", "claude-haiku-4-5",
+];
+const bareModel = (v: string) => v.replace(/^anthropic\//, "");
+function curatedModels(opt: ConfigOption): { value: string; name: string }[] {
+  const byBare = new Map(opt.options.map((o) => [bareModel(o.value), o]));
+  const list = MODEL_ORDER.map((id) => byBare.get(id)).filter(Boolean) as { value: string; name: string }[];
+  if (!list.some((o) => o.value === opt.currentValue)) {
+    const cur = opt.options.find((o) => o.value === opt.currentValue);
+    if (cur) list.unshift(cur); // never hide what's actually selected
+  }
+  return list;
+}
+const THINK_DESC: Record<string, string> = {
+  off: "Fastest replies — simple edits, lookups, and quick chat.",
+  auto: "Lets the model choose how hard to think — a balanced default.",
+  minimal: "Light reasoning for quick, well-scoped tasks.",
+  low: "Small multi-step tasks and straightforward debugging.",
+  medium: "Everyday coding, refactors, and code review.",
+  high: "Hard bugs, architecture, and multi-file changes.",
+  xhigh: "Deepest reasoning for the most complex, novel problems.",
+};
+const MODE_DESC: Record<string, string> = {
+  default: "Standard agent mode — reads and edits as needed.",
+  plan: "Read-only — drafts a plan to a file before any code changes.",
+};
+const prettyLevel = (name: string) => { const v = String(name).toLowerCase(); return v === "xhigh" ? "X-High" : v.charAt(0).toUpperCase() + v.slice(1); };
+let cfgClose: (() => void) | null = null;
+
 function openConfigPopover(anchor: HTMLElement): void {
+  cfgClose?.(); // close any popover already open
   const model = state.config.find((c) => c.id === "model");
   const mode = state.config.find((c) => c.id === "mode");
   const think = state.config.find((c) => c.id === "thinking");
-  const seg = (c: ConfigOption | undefined, accent = false) => !c ? "" :
-    `<div class="cfg-sec"><div class="cfg-lbl">${esc(c.name)}</div><div class="seg" data-cfg="${esc(c.id)}">${c.options.map((o) =>
-      `<button class="${o.value === c.currentValue ? "on" + (accent ? " acc" : "") : ""}" data-val="${esc(o.value)}">${esc(o.name)}</button>`).join("")}</div></div>`;
+  const models = model ? curatedModels(model) : [];
+
   const modelSec = model ? `<div class="cfg-sec">
       <div class="cfg-lbl">Model <span class="cur">${esc(prettyModel(model.currentValue))}</span></div>
-      <div class="cfg-search">${icon("search", 15)}<input id="cfgModelSearch" placeholder="Search ${model.options.length} models…" /></div>
+      <div class="cfg-search">${icon("search", 15)}<input id="cfgModelSearch" placeholder="Search ${models.length} models…" /></div>
       <div class="cfg-list" id="cfgModelList"></div></div>` : "";
-  const { node, close } = popover(anchor, modelSec + seg(mode) + seg(think, true));
+  const modeSec = mode ? `<div class="cfg-sec"><div class="cfg-lbl">Mode</div>
+      <div class="seg" data-cfg="mode">${mode.options.map((o) =>
+        `<button class="${o.value === mode.currentValue ? "on" : ""}" data-val="${esc(o.value)}" data-tip="${esc(o.name)}|${esc(MODE_DESC[o.value] ?? "")}" data-tip-side="top">${esc(o.name)}</button>`).join("")}</div></div>` : "";
+  const thinkCur = think?.options.find((o) => o.value === think.currentValue);
+  const thinkSec = think ? `<div class="cfg-sec"><div class="cfg-lbl">Thinking</div>
+      <div class="cfg-dd" data-dd="thinking">
+        <button class="cfg-dd-btn" type="button"><span>${esc(prettyLevel(thinkCur?.name ?? think.currentValue))}</span>${icon("chevron", 14)}</button>
+        <div class="cfg-dd-menu">${think.options.map((o) =>
+          `<div class="cfg-dd-item ${o.value === think.currentValue ? "on" : ""}" data-val="${esc(o.value)}" data-tip="${esc(prettyLevel(o.name))} thinking|${esc(THINK_DESC[o.value] ?? "")}" data-tip-side="right"><span class="tick">${icon("check", 13)}</span><span>${esc(prettyLevel(o.name))}</span></div>`).join("")}</div>
+      </div></div>` : "";
 
-  // model list (searchable)
+  const { node, close } = popover(anchor, modelSec + modeSec + thinkSec, () => { cfgClose = null; });
+  cfgClose = close;
+
+  // searchable model list
   if (model) {
     const list = $("#cfgModelList", node)!;
     const draw = (q = "") => {
       const ql = q.toLowerCase();
-      list.innerHTML = model.options.filter((o) => o.name.toLowerCase().includes(ql) || o.value.toLowerCase().includes(ql))
+      list.innerHTML = models.filter((o) => o.name.toLowerCase().includes(ql) || o.value.toLowerCase().includes(ql))
         .map((o) => `<div class="cfg-opt ${o.value === model.currentValue ? "on" : ""}" data-val="${esc(o.value)}">
-          <span class="tick">${icon("check", 13)}</span><span>${esc(o.name)}</span><span class="id">${esc(prettyModel(o.value))}</span></div>`).join("");
+          <span class="tick">${icon("check", 13)}</span><span class="nm">${esc(o.name)}</span><span class="id">${esc(bareModel(o.value))}</span></div>`).join("");
     };
     draw();
     ($("#cfgModelSearch", node) as HTMLInputElement).addEventListener("input", (e) => draw((e.target as HTMLInputElement).value));
-    list.addEventListener("click", (e) => {
-      const it = (e.target as HTMLElement).closest("[data-val]") as HTMLElement | null;
-      if (it) { applyConfig("model", it.dataset.val!); close(); }
-    });
+    list.addEventListener("click", (e) => { const it = (e.target as HTMLElement).closest("[data-val]") as HTMLElement | null; if (it) { applyConfig("model", it.dataset.val!); close(); } });
   }
-  // segmented mode / thinking
-  for (const segEl of $$(".seg[data-cfg]", node)) {
-    segEl.addEventListener("click", (e) => {
-      const b = (e.target as HTMLElement).closest("[data-val]") as HTMLElement | null;
-      if (!b) return;
-      const cfgId = (segEl as HTMLElement).dataset.cfg!;
-      for (const c of segEl.children) c.classList.toggle("on", c === b);
-      applyConfig(cfgId, b.dataset.val!);
+  // mode segmented
+  const modeEl = $(".seg[data-cfg='mode']", node);
+  modeEl?.addEventListener("click", (e) => {
+    const b = (e.target as HTMLElement).closest("[data-val]") as HTMLElement | null;
+    if (!b) return;
+    for (const c of modeEl.children) c.classList.toggle("on", c === b);
+    applyConfig("mode", b.dataset.val!);
+  });
+  // thinking dropdown
+  const dd = $(".cfg-dd[data-dd='thinking']", node) as HTMLElement | null;
+  if (dd && think) {
+    $(".cfg-dd-btn", dd)!.addEventListener("click", (e) => { e.stopPropagation(); dd.classList.toggle("open"); });
+    $(".cfg-dd-menu", dd)!.addEventListener("click", (e) => {
+      const it = (e.target as HTMLElement).closest("[data-val]") as HTMLElement | null;
+      if (!it) return;
+      ($(".cfg-dd-btn span", dd) as HTMLElement).textContent = prettyLevel(think.options.find((o) => o.value === it.dataset.val)?.name ?? it.dataset.val!);
+      for (const c of $$(".cfg-dd-item", dd)) c.classList.toggle("on", c === it);
+      dd.classList.remove("open");
+      applyConfig("thinking", it.dataset.val!);
     });
   }
 }
