@@ -25,7 +25,7 @@ const state = {
   skills: [] as { name: string; description: string; source: string }[],
   liveUsage: null as { used: number; size: number; cost: number } | null,
   workspace: null as WorkspaceInfo | null,
-  asksage: null as { configured: boolean; base: string; only: boolean; limit: number; datasets: string[]; queryModel: string } | null,
+  asksage: null as { configured: boolean; base: string; only: boolean; limit: number; datasets: string[]; queryModel: string; persona: string } | null,
   asksageTokens: null as { used: number; limit: number } | null,
   persona: null as string | null, // active persona id (AskSage)
   personas: [] as { id: string; description: string }[],
@@ -322,8 +322,18 @@ function datasetsSection(list: string[] | null): string {
   const sel = new Set(state.asksage?.datasets ?? []);
   const tidy = (d: string) => d.replace(/^user_custom_\d+_/, "").replace(/_content$/, "").replace(/[_-]+/g, " ").trim();
   const items = list.map((d) => `<span class="ds-chip${sel.has(d) ? " on" : ""}" data-ds="${esc(d)}" data-tip="${esc(d)}|Click to ${sel.has(d) ? "remove from" : "use for"} RAG grounding">${sel.has(d) ? icon("check", 11) : ""}${esc(tidy(d))}</span>`).join("");
-  return accordion("set.datasets", "Gov datasets", `${sel.size}/${list.length} selected`,
-    `<div class="ds-note">Pick knowledge bases to ground answers on, then chat with the <b>AskSage RAG</b> model.</div><div class="ds-list">${items || `<div class="empty">No datasets on this account.</div>`}</div>`,
+  // Native AskSage persona for the RAG route: AskSage applies it server-side on
+  // /query (persona:<id>) — an id, not injected text, so no scan is needed here
+  // (distinct from the composer persona, which delimits scanned text into any model).
+  const pid = state.asksage?.persona ?? "";
+  const pdesc = state.personas.find((x) => x.id === pid)?.description ?? "";
+  const plabel = pid ? `#${pid}${pdesc ? " · " + tidy(pdesc).slice(0, 28) : ""}` : "None";
+  const personaRow = `<div class="ds-prow">
+    <span class="ds-plbl">${icon("user", 12)} RAG persona
+      <button class="info-dot" data-tip="RAG persona|Applied server-side by AskSage on grounded /query turns (persona id). Unlike the composer persona — which adds scanned, delimited guidance to any model — no text enters your prompt here, so no scan is needed.">${icon("info", 11)}</button></span>
+    <button class="ds-pbtn${pid ? " on" : ""}" id="ragPersonaBtn">${esc(plabel)} ${icon("chevron", 12)}</button></div>`;
+  return accordion("set.datasets", "Gov datasets & persona", `${sel.size}/${list.length} selected`,
+    `<div class="ds-note">Pick knowledge bases to ground answers on, then chat with the <b>AskSage RAG</b> model.</div><div class="ds-list">${items || `<div class="empty">No datasets on this account.</div>`}</div>${personaRow}`,
     OPEN.has("set.datasets"), `${sel.size || ""}`);
 }
 
@@ -332,8 +342,9 @@ async function renderSettings(): Promise<void> {
   const [settings, auth, ws, asksage, hr] = await Promise.all([bridge.getSettings(), bridge.auth(), bridge.workspace(), bridge.asksage(), bridge.headroom()]);
   if (ws) { state.workspace = ws; renderWorkspaceBar(); }
   if (asksage) state.asksage = asksage;
-  // Datasets are surfaced in gov-only (lockdown) mode.
+  // Datasets + the RAG-persona picker are surfaced in gov-only (lockdown) mode.
   const datasets = asksage?.configured && asksage.only ? await bridge.asksageDatasets() : null;
+  if (asksage?.configured && asksage.only && !state.personas.length) state.personas = (await bridge.asksagePersonas()) ?? [];
   body.innerHTML = `
     ${ws ? workspaceSection(ws) : ""}
     <div class="set-sec"><div class="set-lbl">Profile</div>
@@ -678,6 +689,26 @@ async function applyPersona(id: string | null): Promise<void> {
   }
 }
 
+// RAG persona picker (Settings → gov datasets). Sets AskSage's NATIVE persona id
+// for the /query route — applied server-side, so no scan (no text enters the prompt).
+function openRagPersonaDropdown(anchor: HTMLElement): void {
+  cfgClose?.();
+  const cur = state.asksage?.persona ?? "";
+  const items = [{ id: "", description: "No persona — plain grounded RAG" }, ...state.personas];
+  const rows = items.map((p) => `<div class="cfg-opt ${cur === p.id ? "on" : ""}" data-ragpid="${esc(p.id)}"><span class="tick">${icon("check", 13)}</span><span class="nm">${esc(p.id ? `#${p.id}` : "None")}</span><span class="id">${esc((p.description || "").slice(0, 46))}</span></div>`).join("");
+  const { node, close } = popover(anchor, `<div class="cfg-sec"><div class="cfg-lbl">RAG persona <span class="cur">native · /query</span></div><div class="cfg-list" id="ragPersonaList">${rows || `<div class="empty">No personas — check your AskSage key.</div>`}</div></div>`, () => { cfgClose = null; });
+  cfgClose = close;
+  $("#ragPersonaList", node)?.addEventListener("click", async (e) => {
+    const it = (e.target as HTMLElement).closest("[data-ragpid]") as HTMLElement | null;
+    if (!it) return;
+    close();
+    const persona = it.dataset.ragpid || "";
+    state.asksage = (await bridge.saveAsksage({ persona })) ?? state.asksage;
+    showToast({ title: persona ? `RAG persona #${persona}` : "RAG persona cleared", desc: persona ? "AskSage applies it server-side on grounded /query (RAG) turns." : "Grounded queries run without a persona.", actions: [{ label: "OK" }], timeout: 2600 });
+    void renderSettings();
+  });
+}
+
 // omp skills (discovered from project/user/agent dirs) — invokable via /skill:<name>.
 async function loadSkills(): Promise<void> {
   state.skills = (await bridge.skills()) ?? [];
@@ -788,7 +819,7 @@ function wire(): void {
     if (t.closest("#asksageOnly")) {
       const only = ($("#asksageOnly", $("#setBody")!) as HTMLInputElement)?.checked ?? false;
       await bridge.saveAsksage({ only });
-      state.asksage = { ...(state.asksage ?? { configured: false, base: "", only: false, limit: 200_000, datasets: [], queryModel: "gpt-5.2" }), only };
+      state.asksage = { ...(state.asksage ?? { configured: false, base: "", only: false, limit: 200_000, datasets: [], queryModel: "gpt-5.2", persona: "" }), only };
       // Lockdown must guarantee gateway routing: if we're on a direct model, switch
       // to a gov one so no turn can bypass AskSage.
       if (only) {
@@ -820,6 +851,8 @@ function wire(): void {
       void renderSettings();
       return;
     }
+    const ragP = t.closest("#ragPersonaBtn") as HTMLElement | null;
+    if (ragP) { openRagPersonaDropdown(ragP); return; }
     const ds = t.closest("[data-ds]") as HTMLElement | null;
     if (ds) {
       const name = ds.dataset.ds!;

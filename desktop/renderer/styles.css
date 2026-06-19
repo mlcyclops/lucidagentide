@@ -502,6 +502,14 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .ds-chip:hover{border-color:var(--cyan);color:var(--txt)}
 .ds-chip.on{border-color:var(--accent);color:var(--txt);background:var(--accent-dim)}
 .ds-chip.on .ic{color:var(--accent-2)}
+.ds-prow{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:11px;padding-top:10px;border-top:1px solid var(--line-soft)}
+.ds-plbl{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;color:var(--txt-3)}
+.ds-plbl .info-dot{color:var(--txt-4)}
+.ds-pbtn{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;color:var(--txt-2);background:var(--bg-3);
+  border:1px solid var(--line-soft);border-radius:7px;padding:4px 9px;cursor:pointer;max-width:60%;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;transition:border-color var(--t),color var(--t),background var(--t)}
+.ds-pbtn:hover{border-color:var(--cyan);color:var(--txt)}
+.ds-pbtn.on{border-color:var(--accent);color:var(--txt);background:var(--accent-dim)}
 .prov{background:var(--bg-2);border:1px solid var(--line);border-radius:11px;padding:12px 13px;margin-bottom:10px}
 .prov-h{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px}
 .prov-name{font-size:13.5px;font-weight:600;color:var(--txt)}

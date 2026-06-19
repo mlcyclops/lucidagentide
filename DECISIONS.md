@@ -563,3 +563,20 @@ cited answer. The gov-datasets list in Settings is now SELECTABLE (toggle chips)
 chosen sets ground the RAG model. Verified live: a NIST_NVD_CVE-grounded turn returned a
 cited Log4Shell answer. (Personas also have no systemPrompt field server-side; the proper
 application is /query's persona id — wired as env ASKSAGE_PERSONA, selectable next.)
+
+### Addendum (RAG persona-id picker)
+
+The /query route's native `persona: <int>` is now user-selectable. The Settings
+"Gov datasets & persona" section (gov-only mode) gained a persona picker — a dropdown of
+the account's personas (`POST /get-personas`) — persisted as `asksagePersona` and exported
+as `ASKSAGE_PERSONA`; the streamSimple "query" route already reads it and sends
+`persona: <int>` on grounded `/query` turns. This is deliberately distinct from the
+**composer** persona (ADR-0007): that one injects server-supplied persona *text* into the
+prompt, so it is SCANNED and UNTRUSTED_CONTENT-delimited (invariant #5). The RAG persona is
+just an *id* AskSage applies server-side — no untrusted text enters our prompt, so no scan
+is required (and none would have content to act on). Two personas, two trust postures.
+
+Also fixed a latent bug surfaced while wiring this: `listPersonas` posted to
+`${base}/server/get-personas`, but `base` already ends in `/server` (so it hit
+`.../server/server/get-personas` → 404 → null). Corrected to `${base}/get-personas`, matching
+the sibling calls (`/get-datasets`, `/count-monthly-tokens`) and the docs; 39 personas now load.

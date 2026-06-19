@@ -32,6 +32,10 @@ export interface GuiSettings {
   asksageDatasets?: string[];
   // Underlying model the "AskSage RAG" (/query) route uses. Default gpt-5.2.
   asksageQueryModel?: string;
+  // Native AskSage persona id applied server-side on the /query (RAG) route. Unlike
+  // the composer persona (scanned + delimited into the prompt), this is just an id
+  // passed to AskSage — no untrusted text enters our prompt, so no scan is needed.
+  asksagePersona?: string;
   // headroom token-compression proxy (opt-in, on-device). See ADR-0008.
   headroomEnabled?: boolean;
 }
@@ -54,8 +58,9 @@ export function applyEnv(): void {
   if (s.asksageBaseUrl) process.env.ASKSAGE_BASE_URL = s.asksageBaseUrl;
   if (s.asksageDatasets?.length) process.env.ASKSAGE_DATASETS = s.asksageDatasets.join(",");
   if (s.asksageQueryModel) process.env.ASKSAGE_QUERY_MODEL = s.asksageQueryModel;
+  if (s.asksagePersona) process.env.ASKSAGE_PERSONA = s.asksagePersona;
 }
-export function setAsksage(opts: { baseUrl?: string; only?: boolean; limit?: number; datasets?: string[]; queryModel?: string }): GuiSettings {
+export function setAsksage(opts: { baseUrl?: string; only?: boolean; limit?: number; datasets?: string[]; queryModel?: string; persona?: string }): GuiSettings {
   const s = load();
   if (opts.baseUrl !== undefined) {
     s.asksageBaseUrl = opts.baseUrl || undefined;
@@ -73,6 +78,11 @@ export function setAsksage(opts: { baseUrl?: string; only?: boolean; limit?: num
     s.asksageQueryModel = opts.queryModel || undefined;
     if (opts.queryModel) process.env.ASKSAGE_QUERY_MODEL = opts.queryModel;
     else delete process.env.ASKSAGE_QUERY_MODEL;
+  }
+  if (opts.persona !== undefined) {
+    s.asksagePersona = opts.persona || undefined;
+    if (opts.persona) process.env.ASKSAGE_PERSONA = opts.persona;
+    else delete process.env.ASKSAGE_PERSONA;
   }
   save(s); return s;
 }

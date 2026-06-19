@@ -548,3 +548,12 @@ Three lines per session: **shipped / stubbed / next** (CLAUDE.md session ritual)
 - **stubbed:** native persona-by-id on /query (env ASKSAGE_PERSONA) wired in the adapter
   but no persona-id picker yet; references shown as a count note (not expandable).
 - **next:** persona-id picker for the RAG route; expandable reference citations.
+
+## P-ASKSAGE.5: RAG persona-id picker
+- **shipped:** Settings "Gov datasets & persona" section now has a native RAG-persona
+  picker (dropdown of the 39 AskSage personas) → persisted as asksagePersona → exported
+  as ASKSAGE_PERSONA → adapter passes persona:<int> to /query. No scan needed (an id, not
+  injected text — distinct from the scanned/delimited composer persona). Also FIXED a
+  double-/server bug in listPersonas (base already ends in /server) that returned null.
+- **stubbed:** expandable reference citations on RAG replies (still a count note).
+- **next:** expandable reference citations; OR headroom request-routing + gov security review.

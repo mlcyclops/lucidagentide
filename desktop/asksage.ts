@@ -14,14 +14,14 @@ import { UNTRUSTED_END, UNTRUSTED_START } from "../harness/prompt/assembler.ts";
 
 const DEFAULT_BASE = "https://api.civ.asksage.ai/server";
 
-export interface AsksageCfg { key: string; base: string; only: boolean; configured: boolean; limit: number; datasets: string[]; queryModel: string }
+export interface AsksageCfg { key: string; base: string; only: boolean; configured: boolean; limit: number; datasets: string[]; queryModel: string; persona: string }
 export function asksageConfig(): AsksageCfg {
   const s = load();
   const key = s.keys?.ASKSAGE_API_KEY ?? process.env.ASKSAGE_API_KEY ?? "";
   const base = (s.asksageBaseUrl ?? process.env.ASKSAGE_BASE_URL ?? DEFAULT_BASE).replace(/\/+$/, "");
   return {
     key, base, only: !!s.asksageOnly, configured: !!key, limit: s.asksageLimit ?? ASKSAGE_DEFAULT_LIMIT,
-    datasets: s.asksageDatasets ?? [], queryModel: s.asksageQueryModel ?? "gpt-5.2",
+    datasets: s.asksageDatasets ?? [], queryModel: s.asksageQueryModel ?? "gpt-5.2", persona: s.asksagePersona ?? "",
   };
 }
 
@@ -62,12 +62,12 @@ export async function listDatasets(): Promise<string[] | null> {
 }
 
 export interface Persona { id: string; description: string; text: string }
-/** Persona list (POST /server/get-personas). */
+/** Persona list (POST /get-personas; `base` already ends in /server). */
 export async function listPersonas(): Promise<Persona[] | null> {
   const { key, base, configured } = asksageConfig();
   if (!configured) return null;
   try {
-    const r = await fetch(`${base}/server/get-personas`, { method: "POST", headers: headers(key), body: "{}", signal: AbortSignal.timeout(8000) });
+    const r = await fetch(`${base}/get-personas`, { method: "POST", headers: headers(key), body: "{}", signal: AbortSignal.timeout(8000) });
     if (!r.ok) return null;
     const j: any = await r.json();
     const arr: any[] = j.response ?? j.personas ?? (Array.isArray(j) ? j : []);
