@@ -28,6 +28,8 @@ export interface GuiSettings {
   // the ceiling (admins grant more in the AskSage console — no API to read it), so
   // the limit is a local, user-adjustable value. Everyone starts at 200k.
   asksageLimit?: number;
+  // headroom token-compression proxy (opt-in, on-device). See ADR-0008.
+  headroomEnabled?: boolean;
 }
 
 export const ASKSAGE_DEFAULT_LIMIT = 200_000;

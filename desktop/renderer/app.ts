@@ -327,7 +327,7 @@ function datasetsSection(list: string[] | null): string {
 
 async function renderSettings(): Promise<void> {
   const body = $("#setBody"); if (!body) return;
-  const [settings, auth, ws, asksage] = await Promise.all([bridge.getSettings(), bridge.auth(), bridge.workspace(), bridge.asksage()]);
+  const [settings, auth, ws, asksage, hr] = await Promise.all([bridge.getSettings(), bridge.auth(), bridge.workspace(), bridge.asksage(), bridge.headroom()]);
   if (ws) { state.workspace = ws; renderWorkspaceBar(); }
   if (asksage) state.asksage = asksage;
   // Datasets are surfaced in gov-only (lockdown) mode.
@@ -347,6 +347,12 @@ async function renderSettings(): Promise<void> {
         <span><b>AskSage-only (lockdown)</b> — route every turn through the gov gateway and hide direct providers in the model picker.</span></label>
       ${asksage?.only ? datasetsSection(datasets) : ""}
       ${asksage?.configured ? `<div class="set-note ok">${icon("check", 12)} Gov gateway active — AskSage models appear in the picker, with monthly-usage and scanned personas.</div>` : `<div class="set-note">${icon("info", 12)} Add an <code>ASKSAGE_API_KEY</code> above (AskSage · Gov gateway) to enable gov models, usage, and personas.</div>`}</div>
+    <div class="set-sec"><div class="set-lbl">Token compression <span class="set-sub">headroom · on-device · opt-in</span></div>
+      ${hr?.installed
+        ? `<label class="set-toggle"><input type="checkbox" id="headroomToggle" ${hr.enabled ? "checked" : ""}/>
+            <span><b>Compress context with headroom</b> — fewer tokens before they reach the model. ${hr.running ? `<span class="abadge ok">running · :${hr.port}</span>` : ""}</span></label>
+          <div class="set-note">${icon("info", 12)} Runs entirely on your machine (${esc(hr.version ?? "installed")}). Request-routing + a gov-deployment security review are the next step — see ADR-0008.</div>`
+        : `<div class="set-note">${icon("info", 12)} Optional: install <b>headroom</b> to compress context on-device (60–95% fewer tokens) — great for stretching your AskSage quota. Run <code>${esc(hr?.installHint ?? "pip install headroom-ai[proxy]")}</code>, then this toggle appears.</div>`}</div>
     ${accordion("set.others", "More providers", "", (auth?.others ?? []).map(provCard).join(""), OPEN.has("set.others"))}
     <div class="set-note">${icon("shield", 12)} Keys are stored on this machine and passed to omp as env vars — never sent anywhere else. OAuth uses omp's own secure credential vault.</div>`;
 }
@@ -803,6 +809,13 @@ function wire(): void {
       state.asksageTokens = state.asksage?.configured ? await bridge.asksageTokens() : state.asksageTokens;
       renderStatus(); void renderSettings();
       showToast({ title: v === "reset" ? "Reset to 200K" : `+${fmtNum(Number(v))} tokens`, desc: `Monthly allowance is now ${fmtNum(next)} tokens.`, actions: [{ label: "OK" }], timeout: 2200 });
+      return;
+    }
+    if (t.closest("#headroomToggle")) {
+      const enabled = ($("#headroomToggle", $("#setBody")!) as HTMLInputElement)?.checked ?? false;
+      const st = await bridge.setHeadroom(enabled);
+      showToast({ title: enabled ? "Compression on" : "Compression off", desc: enabled ? (st?.running ? `headroom proxy running on :${st.port}.` : "headroom enabled — proxy will start.") : "headroom proxy stopped.", actions: [{ label: "OK" }], timeout: 2800 });
+      void renderSettings();
       return;
     }
     const clear = t.closest("[data-clearkey]") as HTMLElement | null;

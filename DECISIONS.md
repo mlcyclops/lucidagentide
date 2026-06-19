@@ -507,3 +507,45 @@ text_delta → text_end → done). It is the one place the extension imports an 
 value. Verified live: `claude-sonnet-4` → "CLAUDE OK", `gemini-2.5-flash` →
 "GEMINI OK", both with usage. Claude (opus-4, sonnet-4) and Gemini (2.5 pro/flash)
 re-enabled; the security gate still wraps these turns fail-closed.
+
+-----
+
+## ADR-0008 — headroom token-compression proxy (opt-in, on-device)
+
+### Context
+
+AskSage users have a monthly token quota; cutting tokens directly stretches it.
+`headroom` (github.com/chopratejas/headroom) is an on-device, OpenAI-compatible
+proxy that compresses tool outputs / context before the LLM (claimed 60–95%
+reduction). The user asked to prototype it as an opt-in proxy.
+
+### Decision
+
+Ship the **opt-in lifecycle + detection** now, NOT a blind request-routing wire-up.
+`desktop/headroom.ts` detects the `headroom` CLI, starts/stops `headroom proxy
+--port 8787`, and reports status; a Settings toggle drives it (`/api/headroom`).
+It is OFF by default and a pure no-op until the user installs headroom AND enables
+it — a default install is unaffected. When headroom isn't present, Settings shows
+the install hint (`pip install "headroom-ai[proxy]"`).
+
+### Deliberately deferred (joint next step, needs headroom installed)
+
+Request-routing (point omp's OpenAI-compatible providers' baseUrl at the proxy) and
+the **gov-deployment security review** are NOT wired blind, because they can't be
+verified without the dependency and carry real risk:
+- **On-device:** headroom is documented local-first; must be CONFIRMED no context
+  leaves the machine before any gov use.
+- **Gate ordering:** the scanner gate must still see content before headroom
+  compresses (the gate is on tool calls; headroom is on the model request path —
+  orthogonal, but the ordering must be verified).
+- **AskSage upstream:** the proxy must forward AskSage's custom host AND the
+  non-standard `x-access-tokens` header (headroom forwards `Authorization`; the
+  custom header needs confirming). Claude/Gemini go through our streamSimple
+  adapter (not OpenAI-format), so only the OpenAI route is a candidate initially.
+
+### Consequences
+
+- No impact on the default app or the security invariants (off by default, no
+  Python added to the harness — headroom runs as the user's own external process).
+- A clean install-and-enable path; the high-value routing lands once headroom is
+  installed and the three checks above pass.

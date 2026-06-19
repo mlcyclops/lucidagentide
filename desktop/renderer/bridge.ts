@@ -37,6 +37,10 @@ export interface ProviderAuth {
   oauthActive: boolean; oauthIdentity?: string; keySet: boolean; keyLast4?: string;
 }
 export interface AuthStatus { majors: ProviderAuth[]; others: ProviderAuth[] }
+export interface HeadroomStatus {
+  installed: boolean; version: string | null; running: boolean; enabled: boolean;
+  port: number; url: string; installHint: string;
+}
 export interface WorkspaceInfo {
   current: string; name: string; isGit: boolean;
   recent: { path: string; name: string; isGit: boolean }[];
@@ -79,6 +83,9 @@ export interface LucidBridge {
   asksageDatasets(): Promise<string[] | null>;
   asksagePersonas(): Promise<{ id: string; description: string }[] | null>;
   applyPersona(id: string | null): Promise<{ applied?: boolean; cleared?: boolean; scan?: { ok: boolean; reason?: string; findings: number } } | null>;
+  // headroom token-compression proxy (opt-in, on-device)
+  headroom(): Promise<HeadroomStatus | null>;
+  setHeadroom(enabled: boolean): Promise<HeadroomStatus | null>;
   // workspace (folder the agent works in; local or cloned remote)
   workspace(): Promise<WorkspaceInfo | null>;
   setWorkspace(path: string): Promise<WorkspaceInfo | null>;
@@ -171,6 +178,8 @@ export const bridge: LucidBridge = {
   asksageDatasets: () => getData("/api/asksage/datasets"),
   asksagePersonas: () => getData("/api/asksage/personas"),
   applyPersona: (id) => post("/api/asksage/persona", id ? { id } : { clear: true }),
+  headroom: () => getData("/api/headroom"),
+  setHeadroom: (enabled) => post("/api/headroom", { enabled }),
   workspace: () => getData("/api/workspace"),
   setWorkspace: (path) => post("/api/workspace", { path }),
   cloneWorkspace: (url) => post("/api/workspace/clone", { url }),

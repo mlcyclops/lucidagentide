@@ -18,10 +18,12 @@ import { cloneRepo, setWorkspace, workspaceInfo } from "./workspace.ts";
 import { applyEnv, load as loadSettings, setAsksage, setKey, setUsername } from "./settings_store.ts";
 import { asksageConfig, listDatasets, listPersonas, monthlyTokens, scanPersona, wrapPersona } from "./asksage.ts";
 import { listSkills } from "./skills_data.ts";
+import { headroomStatus, setHeadroomEnabled, startHeadroom } from "./headroom.ts";
 import { homedir } from "node:os";
 import { existsSync } from "node:fs";
 
 applyEnv(); // make stored API keys available to a spawned omp acp
+if (loadSettings().headroomEnabled) startHeadroom(); // resume the opt-in compression proxy
 
 function ompBin(): string {
   for (const c of [join(homedir(), ".bun", "bin", "omp.exe"), join(homedir(), ".bun", "bin", "omp")]) if (existsSync(c)) return c;
@@ -144,6 +146,10 @@ const server = Bun.serve({
       if (p === "/api/config") return json({ ok: true, data: await backend.getConfig() });
       if (p === "/api/commands") return json({ ok: true, data: await backend.getCommands() });
       if (p === "/api/skills") return json({ ok: true, data: await listSkills() });
+      if (p === "/api/headroom") {
+        if (req.method === "POST") { const b = await req.json(); return json({ ok: true, data: setHeadroomEnabled(!!b.enabled) }); }
+        return json({ ok: true, data: headroomStatus() });
+      }
       if (p === "/api/setConfig" && req.method === "POST") { const { configId, value } = await req.json(); return json({ ok: true, data: await backend.setConfig(configId, value) }); }
       if (p === "/api/newSession" && req.method === "POST") { await backend.newSession(); return json({ ok: true }); }
       if (p === "/api/chat" && req.method === "POST") {

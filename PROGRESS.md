@@ -528,3 +528,13 @@ Three lines per session: **shipped / stubbed / next** (CLAUDE.md session ritual)
   `dataset` selector. AskSage has NO skills API (/get-skills 404) — the prototype's
   "skills" were local, not an AskSage feature.
 - **next:** (optional) dataset-grounded queries; decide on headroom integration.
+
+## P-HEADROOM.0: opt-in compression proxy scaffold
+- **shipped:** desktop/headroom.ts (detect CLI, start/stop `headroom proxy :8787`,
+  status) + /api/headroom + a Settings "Token compression" toggle. Off by default,
+  no-op until installed+enabled; shows the install hint when absent. ADR-0008.
+- **stubbed:** request-routing through the proxy + the gov security review (on-device
+  confirm, gate-ordering, AskSage custom-upstream + x-access-tokens forwarding) —
+  deliberately not wired blind; needs headroom actually installed.
+- **next:** install headroom together, verify the three security checks, then route
+  the OpenAI-compatible providers through it behind the toggle.
