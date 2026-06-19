@@ -16,7 +16,13 @@ import type { Telemetry } from "../telemetry/events.ts";
 import type { TrustLabel } from "../contracts.ts";
 import { decrypt, deriveKey, encrypt, KDF_ITERS, randomKey, randomSalt, type Sealed } from "./crypto.ts";
 
-export const STORE_VERSION = "personal-kg.v1" as const;
+export const STORE_VERSION = "personal-kg.v1" as const; // main store: work + personal
+// Hard CUI isolation (ADR-0014, P9.5a): the CUI compartment lives in its OWN encrypted
+// document with its OWN DEK + custody, so a single key never decrypts both CUI and non-CUI.
+// Same envelope shape + algorithm layer; a distinct format string so a CUI file can never be
+// loaded as a main store (or vice versa).
+export const CUI_STORE_VERSION = "personal-cui.v1" as const;
+export type StoreVersion = typeof STORE_VERSION | typeof CUI_STORE_VERSION;
 export type UserKind =
   | "user:preference" | "user:decision" | "user:interest" | "user:behavior"
   | "user:personality" | "user:link" | "user:skill" | "user:goal" | "user:relationship";
@@ -52,7 +58,7 @@ export interface PersonalGraph {
 
 type Custody = "passphrase" | "keystore";
 interface Envelope {
-  v: typeof STORE_VERSION;
+  v: StoreVersion;
   custody: Custody;
   kdf?: { algo: "pbkdf2-hmac-sha256"; iters: number; salt: string };
   wrappedDek?: Sealed; // passphrase custody only
@@ -69,50 +75,60 @@ export class PersonalStore {
   #kdf?: { algo: "pbkdf2-hmac-sha256"; iters: number; salt: string };
   #wrappedDek?: Sealed;
   #graph: PersonalGraph;
+  #version: StoreVersion;
 
-  private constructor(path: string, dek: Buffer, custody: Custody, graph: PersonalGraph, kdf?: Envelope["kdf"], wrappedDek?: Sealed) {
-    this.#path = path; this.#dek = dek; this.#custody = custody; this.#graph = graph; this.#kdf = kdf; this.#wrappedDek = wrappedDek;
+  private constructor(path: string, dek: Buffer, custody: Custody, graph: PersonalGraph, version: StoreVersion, kdf?: Envelope["kdf"], wrappedDek?: Sealed) {
+    this.#path = path; this.#dek = dek; this.#custody = custody; this.#graph = graph; this.#version = version; this.#kdf = kdf; this.#wrappedDek = wrappedDek;
   }
 
+  /** This store's format variant. CUI_STORE_VERSION ⇒ the isolated CUI store. */
+  get version(): StoreVersion { return this.#version; }
+  get isCui(): boolean { return this.#version === CUI_STORE_VERSION; }
+
   // ── passphrase custody ──────────────────────────────────────────────────────
-  /** Create a brand-new encrypted store sealed by a passphrase. */
-  static createWithPassphrase(path: string, passphrase: string): PersonalStore {
+  /** Create a brand-new encrypted store sealed by a passphrase. `version` selects the
+   *  variant (default = the main work/personal store; CUI_STORE_VERSION = the CUI store). */
+  static createWithPassphrase(path: string, passphrase: string, opts: { version?: StoreVersion } = {}): PersonalStore {
+    const version = opts.version ?? STORE_VERSION;
     const salt = randomSalt();
     const kek = deriveKey(passphrase, salt, KDF_ITERS);
     const dek = randomKey();
     const wrappedDek = encrypt(dek, kek);
     const kdf = { algo: "pbkdf2-hmac-sha256" as const, iters: KDF_ITERS, salt: salt.toString("base64") };
-    const s = new PersonalStore(path, dek, "passphrase", structuredClone(EMPTY), kdf, wrappedDek);
+    const s = new PersonalStore(path, dek, "passphrase", structuredClone(EMPTY), version, kdf, wrappedDek);
     s.save();
     return s;
   }
 
-  /** Open + unlock a passphrase-sealed store. THROWS on a wrong passphrase or tampering. */
-  static openWithPassphrase(path: string, passphrase: string, opts: { telemetry?: Telemetry } = {}): PersonalStore {
-    const env = readEnvelope(path);
+  /** Open + unlock a passphrase-sealed store. THROWS on a wrong passphrase, tampering, or a
+   *  format-variant mismatch (a CUI file can't be opened as a main store, or vice versa). */
+  static openWithPassphrase(path: string, passphrase: string, opts: { telemetry?: Telemetry; version?: StoreVersion } = {}): PersonalStore {
+    const version = opts.version ?? STORE_VERSION;
+    const env = readEnvelope(path, version);
     if (env.custody !== "passphrase" || !env.kdf || !env.wrappedDek) throw new Error("store is not passphrase-sealed");
     const kek = deriveKey(passphrase, Buffer.from(env.kdf.salt, "base64"), env.kdf.iters);
     const dek = decrypt(env.wrappedDek, kek); // throws if passphrase is wrong (GCM auth)
     const graph = decodeGraph(decrypt(env.data, dek));
-    opts.telemetry?.emit("personal_store_unlocked", { custody: "passphrase", entities: graph.entities.length, facts: graph.facts.length });
-    return new PersonalStore(path, dek, "passphrase", graph, env.kdf, env.wrappedDek);
+    opts.telemetry?.emit(version === CUI_STORE_VERSION ? "personal_cui_store_unlocked" : "personal_store_unlocked", { custody: "passphrase", entities: graph.entities.length, facts: graph.facts.length });
+    return new PersonalStore(path, dek, "passphrase", graph, version, env.kdf, env.wrappedDek);
   }
 
   // ── OS-keystore custody (DEK sealed externally by Electron safeStorage) ──────
   /** Create a store whose DEK is custodied by the OS keystore (caller persists the
    *  sealed DEK separately). `dek` is a fresh key from crypto.randomKey(). */
-  static createWithKey(path: string, dek: Buffer): PersonalStore {
-    const s = new PersonalStore(path, dek, "keystore", structuredClone(EMPTY));
+  static createWithKey(path: string, dek: Buffer, opts: { version?: StoreVersion } = {}): PersonalStore {
+    const s = new PersonalStore(path, dek, "keystore", structuredClone(EMPTY), opts.version ?? STORE_VERSION);
     s.save();
     return s;
   }
   /** Open a keystore-custodied store with the DEK the OS keystore unsealed. */
-  static openWithKey(path: string, dek: Buffer, opts: { telemetry?: Telemetry } = {}): PersonalStore {
-    const env = readEnvelope(path);
+  static openWithKey(path: string, dek: Buffer, opts: { telemetry?: Telemetry; version?: StoreVersion } = {}): PersonalStore {
+    const version = opts.version ?? STORE_VERSION;
+    const env = readEnvelope(path, version);
     if (env.custody !== "keystore") throw new Error("store is not keystore-sealed");
     const graph = decodeGraph(decrypt(env.data, dek)); // throws on a wrong key
-    opts.telemetry?.emit("personal_store_unlocked", { custody: "keystore", entities: graph.entities.length, facts: graph.facts.length });
-    return new PersonalStore(path, dek, "keystore", graph);
+    opts.telemetry?.emit(version === CUI_STORE_VERSION ? "personal_cui_store_unlocked" : "personal_store_unlocked", { custody: "keystore", entities: graph.entities.length, facts: graph.facts.length });
+    return new PersonalStore(path, dek, "keystore", graph, version);
   }
 
   static exists(path: string): boolean { return existsSync(path); }
@@ -127,9 +143,14 @@ export class PersonalStore {
     return id;
   }
   addFact(input: { entityId: string; statement: string; trustLabel: TrustLabel; scope?: PersonalScope; confidence?: number; sourceSessionId?: string; sourceRunId?: string; provenanceArtifactId?: string }): string {
+    // Hard isolation invariant (ADR-0014): cui facts live ONLY in the cui store, and the
+    // cui store holds ONLY cui facts. Enforced at the data layer — fail loud, never coerce.
+    const scope = input.scope ?? "personal";
+    if (this.isCui && scope !== "cui") throw new Error("the CUI store holds only cui-scoped facts");
+    if (!this.isCui && scope === "cui") throw new Error("cui-scoped facts must go in the isolated CUI store");
     const id = Snowflake.next();
     this.#graph.facts.push({
-      id, entity_id: input.entityId, statement: input.statement, scope: input.scope ?? "personal", trust_label: input.trustLabel,
+      id, entity_id: input.entityId, statement: input.statement, scope, trust_label: input.trustLabel,
       confidence: input.confidence ?? 1, source_session_id: input.sourceSessionId, source_run_id: input.sourceRunId,
       provenance_artifact_id: input.provenanceArtifactId, status: "active", promoted_at: now(),
     });
@@ -176,7 +197,7 @@ export class PersonalStore {
   /** Re-encrypt the graph and write it to disk (user-only perms, best-effort). */
   save(): void {
     const env: Envelope = {
-      v: STORE_VERSION, custody: this.#custody, kdf: this.#kdf, wrappedDek: this.#wrappedDek,
+      v: this.#version, custody: this.#custody, kdf: this.#kdf, wrappedDek: this.#wrappedDek,
       data: encrypt(JSON.stringify(this.#graph), this.#dek),
     };
     writeFileSync(this.#path, JSON.stringify(env), "utf8");
@@ -186,9 +207,9 @@ export class PersonalStore {
   lock(): void { this.#dek.fill(0); }
 }
 
-function readEnvelope(path: string): Envelope {
+function readEnvelope(path: string, expected: StoreVersion): Envelope {
   const env = JSON.parse(readFileSync(path, "utf8")) as Envelope;
-  if (env.v !== STORE_VERSION) throw new Error(`unsupported store version ${env.v}`);
+  if (env.v !== expected) throw new Error(`store format mismatch: file is ${env.v}, expected ${expected}`);
   return env;
 }
 function decodeGraph(buf: Buffer): PersonalGraph {

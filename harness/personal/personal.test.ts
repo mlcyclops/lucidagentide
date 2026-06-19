@@ -85,20 +85,18 @@ test("store: forgetFact soft-deletes (hidden by default, visible with includeFor
   expect(s.graph({ includeForgotten: true }).facts.length).toBe(1);
 });
 
-// ── compartments / scope (ADR-0012) ──────────────────────────────────────────────
-test("store: facts are scoped (work/personal/cui); graph filters; combined is the union", () => {
+// ── compartments / scope (ADR-0012; CUI isolation ADR-0014) ──────────────────────
+test("store: work/personal facts are scoped; graph filters; combined is the union", () => {
   const path = tmp();
   const s = PersonalStore.createWithPassphrase(path, "pw");
   const e = s.upsertEntity("topic", "user:interest", "trusted");
   s.addFact({ entityId: e, statement: "personal default", trustLabel: "trusted" });
   s.addFact({ entityId: e, statement: "at work", trustLabel: "trusted", scope: "work" });
-  s.addFact({ entityId: e, statement: "controlled", trustLabel: "trusted", scope: "cui" });
   expect(s.graph({ scope: "personal" }).facts.length).toBe(1);
   expect(s.graph({ scope: "work" }).facts.length).toBe(1);
-  expect(s.graph({ scope: "cui" }).facts.length).toBe(1);
-  expect(s.graph({ scope: "combined" }).facts.length).toBe(3);
-  expect(s.graph().facts.length).toBe(3); // default = combined
-  expect(s.scopeCounts()).toEqual({ work: 1, personal: 1, cui: 1 });
+  expect(s.graph({ scope: "combined" }).facts.length).toBe(2);
+  expect(s.graph().facts.length).toBe(2); // default = combined (work + personal)
+  expect(s.scopeCounts()).toEqual({ work: 1, personal: 1, cui: 0 });
 });
 
 // ── keystore-custody store (OS keystore hands us the unsealed DEK) ────────────────

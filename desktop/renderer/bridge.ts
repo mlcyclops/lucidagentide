@@ -45,6 +45,8 @@ export type PersonalScopeView = "work" | "personal" | "cui" | "combined";
 export interface PersonalStatus {
   enabled: boolean; configured: boolean; unlocked: boolean;
   scope: PersonalScopeView; counts: { work: number; personal: number; cui: number } | null;
+  // P9.5a hard CUI isolation: the CUI store is a separate file with its own passphrase.
+  cuiConfigured: boolean; cuiUnlocked: boolean; legacyCuiInMain: number;
 }
 export interface ExportSummary {
   ok: boolean; error?: string; dest?: string;
@@ -112,6 +114,10 @@ export interface LucidBridge {
   personalUnlock(passphrase: string): Promise<{ ok: boolean; error?: string } | null>;
   personalLock(): Promise<PersonalStatus | null>;
   personalScope(scope: PersonalScopeView): Promise<PersonalStatus | null>;
+  // P9.5a: the isolated CUI store's own setup / unlock / lock
+  personalCuiSetup(passphrase: string): Promise<{ ok: boolean; error?: string } | null>;
+  personalCuiUnlock(passphrase: string): Promise<{ ok: boolean; error?: string } | null>;
+  personalCuiLock(): Promise<PersonalStatus | null>;
   personalGraph(scope?: PersonalScopeView): Promise<PersonalGraphData | null>;
   personalForget(factId: string): Promise<{ ok: boolean } | null>;
   // P9.4: audited Obsidian vault export + NARA-aligned CUI archive
@@ -218,6 +224,9 @@ export const bridge: LucidBridge = {
   personalUnlock: (passphrase) => post("/api/personal/unlock", { passphrase }),
   personalLock: () => post("/api/personal/lock", {}),
   personalScope: (scope) => post("/api/personal/scope", { scope }),
+  personalCuiSetup: (passphrase) => post("/api/personal/cui/setup", { passphrase }),
+  personalCuiUnlock: (passphrase) => post("/api/personal/cui/unlock", { passphrase }),
+  personalCuiLock: () => post("/api/personal/cui/lock", {}),
   personalGraph: (scope) => getData(`/api/personal/graph${scope ? `?scope=${encodeURIComponent(scope)}` : ""}`),
   personalForget: (factId) => post("/api/personal/forget", { factId }),
   personalExportVault: (opts) => post("/api/personal/vault", opts),

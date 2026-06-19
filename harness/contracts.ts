@@ -66,6 +66,8 @@ export const EVENT_NAMES = [
   // plus the loud, NARA-aligned CUI-compartment archive (records-management) path.
   "personal_vault_exported",
   "personal_cui_archived",
+  // P9.5a — hard CUI isolation: the separate, independently-unlocked CUI store (ADR-0014).
+  "personal_cui_store_unlocked",
 ] as const;
 export type EventName = (typeof EVENT_NAMES)[number];
 

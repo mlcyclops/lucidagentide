@@ -47,9 +47,14 @@ export interface GuiSettings {
 
 export const ASKSAGE_DEFAULT_LIMIT = 200_000;
 
-/** Default on-disk location of the encrypted personalization store (P9.1). */
+/** Default on-disk location of the encrypted personalization store (P9.1) — work + personal. */
 export function personalStorePath(): string {
   return join(homedir(), ".omp", "lucid-personal.kg.enc");
+}
+/** The SEPARATE encrypted CUI store (P9.5a, ADR-0014) — its own file, DEK, and passphrase, so
+ *  one key never decrypts both CUI and non-CUI. */
+export function personalCuiStorePath(): string {
+  return join(homedir(), ".omp", "lucid-cui.kg.enc");
 }
 /** Metadata-only audit log for personalization exports (P9.4). NDJSON; counts + hashes
  *  only, never fact content (the full, private trail lives encrypted inside the store). */

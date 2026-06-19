@@ -19,7 +19,7 @@ import { applyEnv, load as loadSettings, setAsksage, setKey, setUsername } from 
 import { asksageConfig, listDatasets, listPersonas, monthlyTokens, scanPersona, wrapPersona } from "./asksage.ts";
 import { listSkills } from "./skills_data.ts";
 import { headroomStatus, setHeadroomEnabled, startHeadroom } from "./headroom.ts";
-import { enablePersonal, exportCuiArchive, exportHistory, exportVault, forgetFact, lockPersonal, personalGraph, personalStatus, setScope, setupPersonal, unlockPersonal } from "./personal.ts";
+import { enablePersonal, exportCuiArchive, exportHistory, exportVault, forgetFact, lockCui, lockPersonal, personalGraph, personalStatus, setScope, setupCui, setupPersonal, unlockCui, unlockPersonal } from "./personal.ts";
 import { homedir } from "node:os";
 import { existsSync } from "node:fs";
 
@@ -164,6 +164,10 @@ const server = Bun.serve({
       if (p === "/api/personal/unlock" && req.method === "POST") { const b = await req.json(); return json({ ok: true, data: unlockPersonal(String(b.passphrase ?? "")) }); }
       if (p === "/api/personal/lock" && req.method === "POST") return json({ ok: true, data: lockPersonal() });
       if (p === "/api/personal/scope" && req.method === "POST") { const b = await req.json(); return json({ ok: true, data: setScope(String(b.scope ?? "personal") as any) }); }
+      // P9.5a: the isolated CUI store has its OWN setup/unlock/lock (separate file + passphrase).
+      if (p === "/api/personal/cui/setup" && req.method === "POST") { const b = await req.json(); return json({ ok: true, data: setupCui(String(b.passphrase ?? "")) }); }
+      if (p === "/api/personal/cui/unlock" && req.method === "POST") { const b = await req.json(); return json({ ok: true, data: unlockCui(String(b.passphrase ?? "")) }); }
+      if (p === "/api/personal/cui/lock" && req.method === "POST") return json({ ok: true, data: lockCui() });
       if (p === "/api/personal/graph") return json({ ok: true, data: personalGraph((url.searchParams.get("scope") ?? undefined) as any) });
       if (p === "/api/personal/forget" && req.method === "POST") { const b = await req.json(); return json({ ok: true, data: forgetFact(String(b.factId ?? "")) }); }
       // P9.4: audited decrypt→export. Vault excludes CUI unless explicitly listed; the

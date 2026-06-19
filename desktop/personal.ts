@@ -7,43 +7,58 @@
 
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join, normalize, sep } from "node:path";
-import { PersonalStore, type PersonalScope, type ScopeView } from "../harness/personal/store.ts";
-import { load, personalAuditPath, personalCuiArchiveDir, personalStorePath, personalVaultDir, setPersonalization, setPersonalScope } from "./settings_store.ts";
-import { buildRecall } from "../harness/personal/recall.ts";
+import { CUI_STORE_VERSION, PersonalStore, type PersonalGraph, type PersonalScope, type ScopeView } from "../harness/personal/store.ts";
+import { load, personalAuditPath, personalCuiArchiveDir, personalCuiStorePath, personalStorePath, personalVaultDir, setPersonalization, setPersonalScope } from "./settings_store.ts";
+import { buildRecall, buildRecallFromGraph } from "../harness/personal/recall.ts";
 import { distillTurn, heuristicExtractor } from "../harness/personal/distiller.ts";
 import { ScannerClient } from "../harness/security/scanner_client.ts";
 import { buildCuiArchive, buildVault, type CuiDesignation, type VaultFile } from "../harness/export/vault_export.ts";
 import { Telemetry } from "../harness/telemetry/events.ts";
 import { Snowflake } from "@oh-my-pi/pi-utils";
 
-let store: PersonalStore | null = null; // the unlocked store, DEK in memory
+// Hard CUI isolation (ADR-0014, P9.5a): TWO independent encrypted stores, each with its own
+// DEK in memory. `store` holds work + personal; `cuiStore` holds ONLY cui. A single key never
+// decrypts both. The CUI store auto-locks the moment CUI is not the selected compartment.
+let store: PersonalStore | null = null; // main: work + personal
+let cuiStore: PersonalStore | null = null; // isolated CUI store
 
 export interface PersonalStatus {
   enabled: boolean;
-  configured: boolean; // an encrypted store file exists on disk
+  configured: boolean; // the main store file exists on disk
   unlocked: boolean;
   scope: ScopeView; // the active compartment (view)
   counts: { work: number; personal: number; cui: number } | null;
+  // CUI store (separate file + passphrase). cui counts come from HERE, not the main store.
+  cuiConfigured: boolean;
+  cuiUnlocked: boolean;
+  // Legacy cui facts still sitting in the main store from before isolation (pending P9.5b
+  // migration). Surfaced so the UI can prompt; they are NOT recalled or exported meanwhile.
+  legacyCuiInMain: number;
 }
 
 export function personalStatus(): PersonalStatus {
   const s = load();
+  const main = store ? store.scopeCounts() : null;
+  const cuiUnlocked = !!cuiStore;
   return {
     enabled: !!s.personalizationEnabled,
     configured: PersonalStore.exists(personalStorePath()),
     unlocked: !!store,
     scope: (s.personalScope ?? "personal") as ScopeView,
-    counts: store ? store.scopeCounts() : null,
+    counts: main ? { work: main.work, personal: main.personal, cui: cuiStore ? cuiStore.scopeCounts().cui : 0 } : null,
+    cuiConfigured: PersonalStore.exists(personalCuiStorePath()),
+    cuiUnlocked,
+    legacyCuiInMain: main ? main.cui : 0,
   };
 }
 
 export function enablePersonal(enabled: boolean): PersonalStatus {
   setPersonalization(enabled);
-  if (!enabled) lockPersonal(); // disabling locks + drops the in-memory key
+  if (!enabled) lockPersonal(); // disabling locks + drops BOTH in-memory keys
   return personalStatus();
 }
 
-/** First-run: create the encrypted store under a new passphrase. */
+/** First-run: create the main (work+personal) encrypted store under a new passphrase. */
 export function setupPersonal(passphrase: string): { ok: boolean; error?: string } {
   if (!passphrase || passphrase.length < 8) return { ok: false, error: "Passphrase must be at least 8 characters." };
   if (PersonalStore.exists(personalStorePath())) return { ok: false, error: "A store already exists - unlock it instead." };
@@ -51,7 +66,7 @@ export function setupPersonal(passphrase: string): { ok: boolean; error?: string
   catch (e) { return { ok: false, error: String((e as Error)?.message ?? e) }; }
 }
 
-/** Unlock an existing store. Generic error on failure (don't distinguish wrong-pass). */
+/** Unlock the main store. Generic error on failure (don't distinguish wrong-pass). */
 export function unlockPersonal(passphrase: string): { ok: boolean; error?: string } {
   if (!PersonalStore.exists(personalStorePath())) return { ok: false, error: "No store yet - set a passphrase to create one." };
   try { store = PersonalStore.openWithPassphrase(personalStorePath(), passphrase); return { ok: true }; }
@@ -59,19 +74,48 @@ export function unlockPersonal(passphrase: string): { ok: boolean; error?: strin
 }
 
 export function lockPersonal(): PersonalStatus {
-  store?.lock();
-  store = null;
+  store?.lock(); store = null;
+  lockCui();
   return personalStatus();
 }
 
-/** Switch the active compartment (persisted; used to scope future learning + recall). */
+// ── CUI store: separate file, separate passphrase, separate DEK (P9.5a) ─────────────
+/** First-run for the isolated CUI store. A DISTINCT passphrase is recommended (not forced). */
+export function setupCui(passphrase: string): { ok: boolean; error?: string } {
+  if (!load().personalizationEnabled) return { ok: false, error: "Enable personalization first." };
+  if (!passphrase || passphrase.length < 8) return { ok: false, error: "Passphrase must be at least 8 characters." };
+  if (PersonalStore.exists(personalCuiStorePath())) return { ok: false, error: "A CUI store already exists - unlock it instead." };
+  try { cuiStore = PersonalStore.createWithPassphrase(personalCuiStorePath(), passphrase, { version: CUI_STORE_VERSION }); return { ok: true }; }
+  catch (e) { return { ok: false, error: String((e as Error)?.message ?? e) }; }
+}
+
+/** Unlock the isolated CUI store for this session (until CUI is deselected). */
+export function unlockCui(passphrase: string): { ok: boolean; error?: string } {
+  if (!PersonalStore.exists(personalCuiStorePath())) return { ok: false, error: "No CUI store yet - set a passphrase to create one." };
+  try { cuiStore = PersonalStore.openWithPassphrase(personalCuiStorePath(), passphrase, { version: CUI_STORE_VERSION }); return { ok: true }; }
+  catch { return { ok: false, error: "Wrong passphrase, or the CUI store could not be read." }; }
+}
+
+/** Lock the CUI store: zero its DEK + drop it. Called on deselect, lock, and disable. */
+export function lockCui(): PersonalStatus {
+  cuiStore?.lock(); cuiStore = null;
+  return personalStatus();
+}
+
+/** Switch the active compartment. ADR-0014 decision: the CUI store AUTO-LOCKS the moment CUI
+ *  is not the selected compartment — returning to CUI requires re-entering its passphrase. */
 export function setScope(scope: ScopeView): PersonalStatus {
   setPersonalScope(scope);
+  if (scope !== "cui") lockCui();
   return personalStatus();
 }
 
-/** The unlocked store, or null. */
+/** The unlocked main store, or null. */
 export function currentStore(): PersonalStore | null { return store; }
+/** Drop the cui-scoped facts from a main-store graph (legacy pre-migration facts never surface). */
+function nonCui(g: PersonalGraph): PersonalGraph { return { ...g, facts: g.facts.filter((f) => f.scope !== "cui") }; }
+/** Which unlocked store backs the active scope: cui → the CUI store, everything else → main. */
+function storeForScope(scope: ScopeView): PersonalStore | null { return scope === "cui" ? cuiStore : store; }
 
 // ── P9.3: knowledge-graph view data + edits ───────────────────────────────────────
 export interface GraphNode { id: string; name: string; kind: string; trust: string; count: number }
@@ -79,12 +123,15 @@ export interface GraphEdge { from: string; to: string; relation: string }
 export interface GraphFact { id: string; entity_id: string; statement: string; scope: string; trust: string; confidence: number; session?: string; at: string }
 export interface PersonalGraphData { nodes: GraphNode[]; edges: GraphEdge[]; facts: GraphFact[] }
 
-/** The node/edge graph for the active (or given) compartment, or null when off/locked. */
+/** The node/edge graph for the active (or given) compartment, or null when off/locked.
+ *  Routes cui → the isolated CUI store; everything else → main (cui facts never surface). */
 export function personalGraph(scopeArg?: ScopeView): PersonalGraphData | null {
   const s = load();
   if (!s.personalizationEnabled || !store) return null;
   const scope = scopeArg ?? ((s.personalScope ?? "personal") as ScopeView);
-  const g = store.graph({ scope });
+  const src = storeForScope(scope);
+  if (!src) return { nodes: [], edges: [], facts: [] }; // cui selected but its store is locked
+  const g = scope === "cui" ? src.graph({ scope: "cui" }) : nonCui(src.graph({ scope }));
   const byEntity = new Map<string, typeof g.facts>();
   for (const f of g.facts) (byEntity.get(f.entity_id) ?? byEntity.set(f.entity_id, []).get(f.entity_id)!).push(f);
   const nodes: GraphNode[] = g.entities
@@ -98,12 +145,13 @@ export function personalGraph(scopeArg?: ScopeView): PersonalGraphData | null {
   return { nodes, edges, facts };
 }
 
-/** Forget (soft-delete) a fact the user no longer wants remembered. */
+/** Forget (soft-delete) a fact the user no longer wants remembered. Looks in whichever store
+ *  currently holds it (main, then the CUI store if unlocked). */
 export function forgetFact(factId: string): { ok: boolean } {
-  if (!store) return { ok: false };
-  const ok = store.forgetFact(factId);
-  if (ok) store.save();
-  return { ok };
+  for (const src of [store, cuiStore]) {
+    if (src?.forgetFact(factId)) { src.save(); return { ok: true }; }
+  }
+  return { ok: false };
 }
 
 // ── P9.4: audited Obsidian vault export + NARA-aligned CUI archive ─────────────────
@@ -139,9 +187,11 @@ function auditExport(event: "personal_vault_exported" | "personal_cui_archived",
 export function exportVault(opts: { scopes?: PersonalScope[]; dest?: string; reviewer?: string } = {}): ExportSummary {
   const s = load();
   if (!s.personalizationEnabled || !store) return { ok: false, error: "Personalization is off or locked." };
-  // Default to the portable compartments; CUI must be opted in by name.
+  // The portable vault reads the MAIN store only — CUI lives in its own isolated store and is
+  // never in the vault (P9.5a). CUI is exported solely via the audited CUI-archive path.
   const scopes = (opts.scopes && opts.scopes.length ? opts.scopes : (["personal", "work"] as PersonalScope[]))
-    .filter((x): x is PersonalScope => x === "personal" || x === "work" || x === "cui");
+    .filter((x): x is PersonalScope => x === "personal" || x === "work");
+  if (!scopes.length) return { ok: false, error: "Select Personal and/or Work to export. CUI uses the CUI archive." };
   const dest = opts.dest?.trim() || personalVaultDir();
   try {
     const build = buildVault(store.graph({ scope: "combined" }), { scopes, now: new Date().toISOString() });
@@ -166,19 +216,20 @@ export function exportVault(opts: { scopes?: PersonalScope[]; dest?: string; rev
  *  records-managed package with a SHA-256 manifest. Never bundled into the normal vault. */
 export function exportCuiArchive(opts: { dest?: string; designation?: CuiDesignation; reviewer?: string } = {}): ExportSummary {
   const s = load();
-  if (!s.personalizationEnabled || !store) return { ok: false, error: "Personalization is off or locked." };
-  if (store.scopeCounts().cui === 0) return { ok: false, error: "No CUI-compartment facts to archive." };
+  if (!s.personalizationEnabled) return { ok: false, error: "Personalization is off." };
+  if (!cuiStore) return { ok: false, error: "Unlock the CUI store first (select the CUI compartment and enter its passphrase)." };
+  if (cuiStore.scopeCounts().cui === 0) return { ok: false, error: "No CUI-compartment facts to archive." };
   const dest = opts.dest?.trim() || personalCuiArchiveDir();
   const designation = { ...opts.designation, reviewer: opts.reviewer ?? opts.designation?.reviewer };
   try {
-    const build = buildCuiArchive(store.graph({ scope: "cui" }), { now: new Date().toISOString(), designation });
+    const build = buildCuiArchive(cuiStore.graph({ scope: "cui" }), { now: new Date().toISOString(), designation });
     const bytes = writeFiles(dest, build.files);
-    store.recordExport({
+    cuiStore.recordExport({
       kind: "cui-archive", scopes: ["cui"], entity_count: build.summary.entities, fact_count: build.summary.facts,
       file_count: build.summary.files, payload_sha256: build.summary.payloadSha256, manifest_sha256: build.summary.manifestSha256,
       dest, reviewer: designation.reviewer, included_cui: true,
     });
-    store.save();
+    cuiStore.save();
     auditExport("personal_cui_archived", {
       scopes: ["cui"], included_cui: true, entities: build.summary.entities, facts: build.summary.facts,
       files: build.summary.files, payload_sha256: build.summary.payloadSha256, manifest_sha256: build.summary.manifestSha256,
@@ -187,9 +238,12 @@ export function exportCuiArchive(opts: { dest?: string; designation?: CuiDesigna
   } catch (e) { return { ok: false, error: String((e as Error)?.message ?? e) }; }
 }
 
-/** The decrypt→export audit trail (metadata only), most-recent first; null when locked. */
+/** The decrypt→export audit trail (metadata only), most-recent first; null when locked.
+ *  Merges the main store's vault exports with the CUI store's archive exports (when unlocked). */
 export function exportHistory(): ReturnType<PersonalStore["exportLog"]> | null {
-  return store ? store.exportLog() : null;
+  if (!store) return null;
+  const merged = [...store.exportLog(), ...(cuiStore?.exportLog() ?? [])];
+  return merged.sort((a, b) => b.at.localeCompare(a.at));
 }
 
 // ── P9.2: learn from / recall into conversations ───────────────────────────────────
@@ -204,8 +258,12 @@ function getScanner(): ScannerClient {
 export function recallPreamble(): string {
   const s = load();
   if (!s.personalizationEnabled || !store) return "";
-  try { return buildRecall(store, { scope: (s.personalScope ?? "personal") as ScopeView }).block; }
-  catch { return ""; }
+  const scope = (s.personalScope ?? "personal") as ScopeView;
+  try {
+    if (scope === "cui") return cuiStore ? buildRecall(cuiStore, { scope: "cui" }).block : "";
+    if (scope === "combined") return buildRecallFromGraph(nonCui(store.graph({ scope: "combined" }))).block; // never CUI (it's locked)
+    return buildRecall(store, { scope }).block;
+  } catch { return ""; }
 }
 
 /** Learn durable user-facts from one finished turn (best-effort). Fail-closed: only a
@@ -215,9 +273,13 @@ export function recallPreamble(): string {
  *  (Combined view defaults them to Personal). */
 export async function learnFromTurn(userText: string, assistantText: string): Promise<void> {
   const s = load();
-  if (!s.personalizationEnabled || !store || !userText.trim()) return; // off, locked, or empty
+  if (!s.personalizationEnabled || !userText.trim()) return; // off or empty
   const view = (s.personalScope ?? "personal") as ScopeView;
+  // Route cui learning to the isolated CUI store; if it's locked, learn NOTHING (fail-closed —
+  // a cui-scoped fact must never be written into the main store). Combined defaults to Personal.
   const scope: PersonalScope = view === "combined" ? "personal" : view;
-  try { await distillTurn(store, getScanner(), { userText, assistantText, scope, extract: heuristicExtractor }); }
+  const target = scope === "cui" ? cuiStore : store;
+  if (!target) return; // main locked, or cui selected but its store is locked
+  try { await distillTurn(target, getScanner(), { userText, assistantText, scope, extract: heuristicExtractor }); }
   catch { /* best-effort; the turn already happened */ }
 }

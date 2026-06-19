@@ -595,6 +595,10 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .psc b.psc-cui{color:var(--red)}
 .psc span{font-size:9px;text-transform:uppercase;letter-spacing:.05em;color:var(--txt-4)}
 .pscope-lock{margin-top:12px}
+/* isolated CUI store sub-panel (P9.5a) */
+.pscope-cui{margin-top:11px;padding-top:11px;border-top:1px dashed color-mix(in srgb,var(--red) 30%,var(--line-soft))}
+.pscope-cui .prov-row{margin-top:8px}
+.pscope-cui .btn-mini{margin-top:0}
 /* AskSage monthly-token allowance */
 .aq{background:var(--bg-2);border:1px solid var(--line);border-radius:11px;padding:12px 13px;margin:10px 0}
 .aq-head{display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--txt-2);margin-bottom:8px}

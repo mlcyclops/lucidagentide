@@ -4,6 +4,23 @@ Three lines per session: **shipped / stubbed / next** (CLAUDE.md session ritual)
 
 -----
 
+## P9.5a: hard CUI isolation — separate encrypted CUI store (ADR-0014)
+- **shipped:** CUI now lives in its OWN encrypted store (personal-cui.v1) with its own DEK +
+  passphrase, so one key never decrypts both CUI and non-CUI. store.ts gained a version-parameterized
+  variant + a data-layer guard (main store REFUSES cui facts; the cui store refuses work/personal).
+  desktop/personal.ts holds two stores + scope routing: cui learning/recall/graph/export route to the
+  cui store; the main store never sees cui; the CUI store AUTO-LOCKS the moment CUI is deselected
+  (re-auth to return); Combined never includes cui. New EventName personal_cui_store_unlocked; routes
+  POST /api/personal/cui/{setup,unlock,lock}; a CUI sub-panel in the compartment selector (Create/
+  Unlock/Lock, count shows "—" when locked) + a legacy-cui-in-main migration note. 8 new isolation
+  tests (167 harness green); root+desktop tsc clean; verified live: new routes reachable + gated, all
+  four CUI UI states render, no stray store files created.
+- **stubbed:** legacy cui facts already in a pre-isolation main store are hidden (not recalled/exported)
+  but not yet MOVED — that audited migration + the "destroy CUI records" action are P9.5b. OS-keystore
+  custody for the cui store still a documented seam (passphrase path wired).
+- **next:** P9.5b — audited migration (move legacy cui out of the main store into the isolated store)
+  + records-destruction action (zeroize DEK + delete file); new events personal_cui_migrated/_destroyed.
+
 ## P9.6.0: crypto-agility + PQC readiness roadmap (planning only — ADR-0015)
 - **shipped:** ADR-0015 — LucidAgentIDE is algorithm-agile + post-quantum-READY. Honest headline:
   data at rest is ALREADY quantum-resistant (AES-256-GCM + PBKDF2/SHA-256 are symmetric/hash-based;

@@ -513,16 +513,38 @@ function secPersonal(p: import("./bridge.ts").PersonalStatus | null): string {
     const info = SCOPE_INFO[cur] ?? SCOPE_INFO.personal!;
     const c = p.counts ?? { work: 0, personal: 0, cui: 0 };
     inner = `<div class="set-note ok">${icon("check", 12)} Unlocked. New facts pass the security gate before they're remembered; you stay in control.</div>
-      <div class="pscope-lbl">Compartment <span class="info-dot" data-tip="Data compartments|Keep Work, Personal, and CUI knowledge separate. The active compartment scopes what is learned and recalled; Combined is a union view. Portability is compartment-aware - see ADR-0012.">${icon("info", 11)}</span></div>
+      <div class="pscope-lbl">Compartment <span class="info-dot" data-tip="Data compartments|Keep Work, Personal, and CUI knowledge separate. CUI lives in its OWN encrypted store with its own passphrase (ADR-0014) and auto-locks when not selected. The active compartment scopes what is learned and recalled; Combined is a union view (never CUI).">${icon("info", 11)}</span></div>
       <div class="seg pscope-seg">${seg}</div>
       <div class="pscope-note ${info.tone}">${icon(info.tone === "danger" ? "shield" : "info", 13)} <span>${esc(info.note)}</span></div>
       <div class="pscope-counts">
         <div class="psc"><b class="psc-personal">${c.personal}</b><span>personal</span></div>
         <div class="psc"><b class="psc-work">${c.work}</b><span>work</span></div>
-        <div class="psc"><b class="psc-cui">${c.cui}</b><span>cui</span></div></div>
-      <button class="btn-mini pscope-lock" id="personalLock" data-tip="Lock the store|Wipes the in-memory encryption key. You'll re-enter your passphrase to use personalization again this session - nothing is learned or recalled while locked." data-tip-side="top">${icon("shield", 12)} Lock</button>`;
+        <div class="psc"><b class="psc-cui">${p.cuiUnlocked ? c.cui : "—"}</b><span>cui${p.cuiUnlocked ? "" : " (locked)"}</span></div></div>
+      ${cur === "cui" ? secCui(p) : ""}
+      ${p.legacyCuiInMain > 0 ? `<div class="set-note warn">${icon("info", 12)} ${p.legacyCuiInMain} legacy CUI fact(s) remain in the main store from before isolation. They are not recalled or exported; a future update migrates them into the isolated CUI store.</div>` : ""}
+      <button class="btn-mini pscope-lock" id="personalLock" data-tip="Lock everything|Wipes BOTH in-memory keys (main + CUI). You'll re-enter your passphrase to use personalization again this session - nothing is learned or recalled while locked." data-tip-side="top">${icon("shield", 12)} Lock</button>`;
   }
   return card(toggle + inner);
+}
+// The isolated CUI store's own setup/unlock/lock (P9.5a, ADR-0014). Its own file + passphrase
+// + DEK, so one key never decrypts both CUI and non-CUI. Auto-locks when CUI is deselected.
+function secCui(p: import("./bridge.ts").PersonalStatus): string {
+  const shield = icon("shield", 12);
+  if (!p.cuiConfigured) {
+    return `<div class="pscope-cui">
+      <div class="set-note danger">${shield} The CUI compartment uses a <b>separate encrypted store</b> with its <b>own passphrase</b> (recommended distinct from your main one). Create it to start storing CUI in isolation.</div>
+      <div class="prov-row"><input id="cuiPass" class="prov-key" type="password" placeholder="New CUI passphrase (min 8)" autocomplete="new-password" />
+        <button class="btn-mini danger" id="cuiSetup">${shield} Create CUI store</button></div></div>`;
+  }
+  if (!p.cuiUnlocked) {
+    return `<div class="pscope-cui">
+      <div class="set-note danger">${shield} The CUI store is <b>locked</b> (it locks whenever CUI isn't selected). Enter its passphrase to unlock it for this session.</div>
+      <div class="prov-row"><input id="cuiPass" class="prov-key" type="password" placeholder="CUI passphrase" autocomplete="current-password" />
+        <button class="btn-mini danger" id="cuiUnlock">${shield} Unlock CUI</button></div></div>`;
+  }
+  return `<div class="pscope-cui">
+    <div class="set-note ok">${icon("check", 12)} CUI store unlocked for this session. It auto-locks when you switch away from CUI.</div>
+    <button class="btn-mini" id="cuiLock" data-tip="Lock the CUI store|Wipes only the CUI key. Your main store stays unlocked.">${shield} Lock CUI</button></div>`;
 }
 function openSettings(): void {
   closeKnowledge();
@@ -1160,7 +1182,23 @@ function wire(): void {
     }
     if (t.closest("#personalLock")) {
       await bridge.personalLock();
-      showToast({ title: "Locked", desc: "The in-memory key was wiped; unlock again to use it.", actions: [{ label: "OK" }], timeout: 2400 });
+      showToast({ title: "Locked", desc: "Both in-memory keys (main + CUI) were wiped; unlock again to use it.", actions: [{ label: "OK" }], timeout: 2400 });
+      void hydratePersonal();
+      return;
+    }
+    // ── Isolated CUI store (P9.5a): its own setup / unlock / lock ──
+    if (t.closest("#cuiSetup") || t.closest("#cuiUnlock")) {
+      const setup = !!t.closest("#cuiSetup");
+      const pass = ($("#cuiPass", $("#setBody")!) as HTMLInputElement)?.value ?? "";
+      const r = setup ? await bridge.personalCuiSetup(pass) : await bridge.personalCuiUnlock(pass);
+      if (r?.ok) showToast({ title: setup ? "CUI store created" : "CUI unlocked", desc: setup ? "Your isolated, separately-keyed CUI store is ready." : "Unlocked until you switch away from CUI.", meta: "separate file + passphrase + key from your main store", actions: [{ label: "OK" }], timeout: 3000 });
+      else showToast({ title: setup ? "Couldn't create CUI store" : "Couldn't unlock CUI", desc: r?.error ?? "Try again.", meta: "passphrase is never stored or sent anywhere", actions: [{ label: "OK" }], timeout: 5000 });
+      void hydratePersonal();
+      return;
+    }
+    if (t.closest("#cuiLock")) {
+      await bridge.personalCuiLock();
+      showToast({ title: "CUI locked", desc: "Only the CUI key was wiped; your main store stays unlocked.", actions: [{ label: "OK" }], timeout: 2400 });
       void hydratePersonal();
       return;
     }
