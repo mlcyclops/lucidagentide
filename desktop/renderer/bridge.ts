@@ -37,6 +37,11 @@ export interface ProviderAuth {
   oauthActive: boolean; oauthIdentity?: string; keySet: boolean; keyLast4?: string;
 }
 export interface AuthStatus { majors: ProviderAuth[]; others: ProviderAuth[] }
+export interface WorkspaceInfo {
+  current: string; name: string; isGit: boolean;
+  recent: { path: string; name: string; isGit: boolean }[];
+  cloned?: boolean; error?: string;
+}
 
 export type ChatEvent =
   | { type: "token"; text: string }
@@ -63,12 +68,18 @@ export interface LucidBridge {
   saveKey(env: string, key: string): Promise<AuthStatus | null>;
   oauthLogin(oauthId: string): Promise<{ started: boolean; url: string; output: string } | null>;
   oauthLogout(oauthId: string): Promise<AuthStatus | null>;
+  // workspace (folder the agent works in; local or cloned remote)
+  workspace(): Promise<WorkspaceInfo | null>;
+  setWorkspace(path: string): Promise<WorkspaceInfo | null>;
+  cloneWorkspace(url: string): Promise<WorkspaceInfo | null>;
+  pickFolder(): Promise<string | null>; // native dialog in Electron; null in browser
 }
 
 /** Native shell injected by the Electron preload (window controls + crisp zoom). */
 interface NativeShell {
   isElectron?: boolean;
   setZoom?(factor: number): void;
+  pickFolder?(): Promise<string | null>;
   win?: { minimize(): void; toggleMaximize(): void; close(): void };
 }
 declare global { interface Window { lucid?: NativeShell } }
@@ -139,6 +150,10 @@ export const bridge: LucidBridge = {
   saveKey: (env, key) => post("/api/auth/key", { env, key }),
   oauthLogin: (oauthId) => post("/api/auth/oauth", { oauthId }),
   oauthLogout: (oauthId) => post("/api/auth/logout", { oauthId }),
+  workspace: () => getData("/api/workspace"),
+  setWorkspace: (path) => post("/api/workspace", { path }),
+  cloneWorkspace: (url) => post("/api/workspace/clone", { url }),
+  pickFolder: () => (shell?.pickFolder ? shell.pickFolder() : Promise.resolve(null)),
   setZoom: (f) => {
     if (shell?.setZoom) { shell.setZoom(f); return; } // Electron: crisp native zoom
     // Browser: zoom #app and counter-scale its height so it still fills the viewport

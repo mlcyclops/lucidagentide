@@ -5,7 +5,7 @@
 // agent turn. Same renderer in Electron (real omp ACP via window.lucid) and in
 // the browser dev server (simulated). Pure DOM, no framework.
 
-import { bridge, type ChatEvent, type ConfigOption, type MemorySnapshot, type OmpCommand, type ProviderAuth, type SecuritySnapshot, type SessionInfo } from "./bridge.ts";
+import { bridge, type ChatEvent, type ConfigOption, type MemorySnapshot, type OmpCommand, type ProviderAuth, type SecuritySnapshot, type SessionInfo, type WorkspaceInfo } from "./bridge.ts";
 import { $, $$, accordion, el, fmtNum, gauge, spark, table } from "./dom.ts";
 import { ageStr, esc, fmtUSD, goodColor, loadColor } from "./format.ts";
 import { icon, piMark } from "./icons.ts";
@@ -22,6 +22,7 @@ const state = {
   config: [] as ConfigOption[],
   commands: [] as OmpCommand[],
   liveUsage: null as { used: number; size: number; cost: number } | null,
+  workspace: null as WorkspaceInfo | null,
   zoom: 1,
   settingsOpen: false,
   lastOk: 0,
@@ -67,6 +68,7 @@ function buildShell(): void {
       </nav>
 
       <aside class="sidebar" id="sidebar">
+        <button class="ws-bar" id="wsBar" data-tip="Workspace · click to change" data-tip-side="right" hidden></button>
         <div class="side-head"><span>Sessions</span>
           <div class="side-actions">
             <button class="side-new" id="newSession" data-tip="New session">${icon("plus", 15)}</button>
@@ -284,8 +286,10 @@ function provCard(p: ProviderAuth): string {
 }
 async function renderSettings(): Promise<void> {
   const body = $("#setBody"); if (!body) return;
-  const [settings, auth] = await Promise.all([bridge.getSettings(), bridge.auth()]);
+  const [settings, auth, ws] = await Promise.all([bridge.getSettings(), bridge.auth(), bridge.workspace()]);
+  if (ws) { state.workspace = ws; renderWorkspaceBar(); }
   body.innerHTML = `
+    ${ws ? workspaceSection(ws) : ""}
     <div class="set-sec"><div class="set-lbl">Profile</div>
       <div class="prov-row"><input id="setUsername" class="prov-key" placeholder="Your name" value="${esc(settings?.username ?? "")}" />
         <button class="btn-mini ok" id="saveUsername">${icon("check", 12)} Save</button></div></div>
@@ -308,6 +312,45 @@ function closeSettings(): void {
   $("#inspector")!.hidden = false;
   $$(".rail-btn").forEach((b) => b.classList.remove("active"));
   $('.rail-btn[data-rail="chat"]')?.classList.add("active");
+}
+
+// ───────────────────────── workspace ─────────────────────────
+function workspaceSection(ws: WorkspaceInfo): string {
+  return `<div class="set-sec"><div class="set-lbl">Workspace <span class="set-sub">the folder the agent works in</span></div>
+    <div class="ws-current">
+      <div class="ws-name">${icon(ws.isGit ? "git" : "folder", 15)} ${esc(ws.name)} ${ws.isGit ? `<span class="abadge ok">git</span>` : ""}</div>
+      <div class="ws-path">${esc(ws.current)}</div>
+    </div>
+    <div class="prov-row">
+      <input class="prov-key" id="wsPath" placeholder="Paste a folder path…" />
+      <button class="btn-mini ok" id="wsBrowse">${icon("folder", 13)} Browse</button>
+      <button class="btn-mini" id="wsSet">Open</button>
+    </div>
+    <div class="prov-row">
+      <input class="prov-key" id="wsCloneUrl" placeholder="Clone a git repo — https://github.com/… or gitlab.com/…" />
+      <button class="btn-mini ok" id="wsClone">${icon("git", 13)} Clone</button>
+    </div>
+    ${ws.recent.length ? `<div class="ws-recent">${ws.recent.map((r) => `<button class="ws-recent-item" data-ws="${esc(r.path)}" title="${esc(r.path)}">${icon(r.isGit ? "git" : "folder", 12)} ${esc(r.name)}</button>`).join("")}</div>` : ""}
+  </div>`;
+}
+function renderWorkspaceBar(): void {
+  const bar = $("#wsBar") as HTMLButtonElement | null;
+  const w = state.workspace;
+  if (!bar) return;
+  if (!w) { bar.hidden = true; return; }
+  bar.hidden = false;
+  bar.innerHTML = `${icon(w.isGit ? "git" : "folder", 14)}<span class="ws-bar-name">${esc(w.name)}</span>${icon("sliders", 12, "dim")}`;
+}
+async function loadWorkspace(): Promise<void> {
+  state.workspace = await bridge.workspace();
+  renderWorkspaceBar();
+}
+async function applyWorkspace(path: string): Promise<void> {
+  const info = await bridge.setWorkspace(path);
+  if (info) { state.workspace = info; renderWorkspaceBar(); }
+  seedThread(); state.liveUsage = null; renderStatus(); renderMetricsRail();
+  void renderSessions(); void renderSettings();
+  showToast({ title: "Workspace set", desc: `Agent now works in ${info?.name ?? path}.`, actions: [{ label: "OK" }], timeout: 2600 });
 }
 
 function chips(items: { cls: string; n: number | string; l: string }[]): string {
@@ -499,6 +542,25 @@ function wire(): void {
     const t = e.target as HTMLElement;
     const head = t.closest("[data-acc-toggle]") as HTMLElement | null;
     if (head) { const k = head.dataset.accToggle!; (head.closest(".acc")!.classList.toggle("open")) ? OPEN.add(k) : OPEN.delete(k); return; }
+    // workspace
+    if (t.closest("#wsBrowse")) {
+      const path = await bridge.pickFolder();
+      if (path) await applyWorkspace(path);
+      else showToast({ title: "Browse needs the desktop app", desc: "In the browser build, paste a folder path instead.", actions: [{ label: "OK" }], timeout: 3400 });
+      return;
+    }
+    if (t.closest("#wsSet")) { const v = ($("#wsPath", $("#setBody")!) as HTMLInputElement)?.value.trim(); if (v) await applyWorkspace(v); return; }
+    if (t.closest("#wsClone")) {
+      const url = ($("#wsCloneUrl", $("#setBody")!) as HTMLInputElement)?.value.trim();
+      if (!url) return;
+      showToast({ title: "Cloning…", desc: "Fetching the repo — this can take a moment.", timeout: 2500 });
+      const info = await bridge.cloneWorkspace(url);
+      if (info?.cloned) { state.workspace = info; renderWorkspaceBar(); seedThread(); void renderSessions(); void renderSettings(); showToast({ title: "Cloned & opened", desc: `Agent now works in ${info.name}.`, actions: [{ label: "OK" }], timeout: 3000 }); }
+      else showToast({ title: "Clone failed", desc: (info?.error ?? "Check the URL and your git access.").slice(0, 180), actions: [{ label: "OK" }], timeout: 6000 });
+      return;
+    }
+    const wsr = t.closest("[data-ws]") as HTMLElement | null;
+    if (wsr) { await applyWorkspace(wsr.dataset.ws!); return; }
     const save = t.closest("[data-savekey]") as HTMLElement | null;
     if (save) {
       const env = save.dataset.savekey!;
@@ -552,6 +614,7 @@ function wire(): void {
   // sidebar collapse (rail toggle + header collapse), mirroring the right panel
   $("#sideToggle")!.addEventListener("click", () => toggleSidebar());
   $("#sideCollapse")!.addEventListener("click", () => toggleSidebar(true));
+  $("#wsBar")!.addEventListener("click", () => openSettings());
   $(".brand")!.addEventListener("click", () => toggleSidebar());
   $("#newSession")!.addEventListener("click", () => newSession());
   const w = (window as any).lucid?.win;
@@ -752,6 +815,7 @@ initZoom();
 seedThread();
 renderStatus();
 void loadConfig().then(renderStatus);
+void loadWorkspace();
 refresh();
 setInterval(refresh, 4000);
 setInterval(renderStatus, 1000);

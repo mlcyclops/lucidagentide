@@ -8,8 +8,8 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { currentWorkspace } from "./workspace.ts";
 
-const REPO = join(import.meta.dir, "..");
 const norm = (p: string) => p.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
 
 export interface SessionInfo {
@@ -27,7 +27,7 @@ function firstUserText(message: any): string {
   return "";
 }
 
-export function listSessions(cwd: string = REPO): SessionInfo[] {
+export function listSessions(cwd: string = currentWorkspace()): SessionInfo[] {
   const root = join(homedir(), ".omp", "agent", "sessions");
   if (!existsSync(root)) return [];
   const want = norm(cwd);

@@ -15,7 +15,12 @@ import { join } from "node:path";
 
 const FILE = join(homedir(), ".omp", "lucid-gui.json");
 
-export interface GuiSettings { username?: string; keys?: Record<string, string> }
+export interface GuiSettings {
+  username?: string;
+  keys?: Record<string, string>;
+  workspace?: string;
+  recentWorkspaces?: string[];
+}
 
 export function load(): GuiSettings {
   try { return existsSync(FILE) ? JSON.parse(readFileSync(FILE, "utf8")) : {}; } catch { return {}; }

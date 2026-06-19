@@ -11,8 +11,11 @@ import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { ACPClient } from "./acp.ts";
+import { currentWorkspace } from "./workspace.ts";
 
 const REPO = join(import.meta.dir, "..");
+// Absolute so the gate loads from THIS repo even when omp runs in another workspace.
+const GATE = join(REPO, "harness", "omp", "security_extension.ts");
 function ompBin(): string {
   for (const c of [join(homedir(), ".bun", "bin", "omp.exe"), join(homedir(), ".bun", "bin", "omp")]) if (existsSync(c)) return c;
   return "omp";
@@ -40,7 +43,7 @@ class Backend {
     if (this.acp) return;
     if (!this.starting) {
       this.starting = (async () => {
-        const acp = new ACPClient(ompBin(), ["acp", "-e", "harness/omp/security_extension.ts"], REPO);
+        const acp = new ACPClient(ompBin(), ["acp", "-e", GATE], currentWorkspace());
         acp.onNotify = (method, params) => {
           if (method !== "session/update") return;
           const u = params?.update ?? params;
@@ -78,7 +81,7 @@ class Backend {
   private async ensureSession(): Promise<void> {
     await this.start();
     if (this.sessionId) return;
-    const s: any = await this.acp!.request("session/new", { cwd: REPO, mcpServers: [] });
+    const s: any = await this.acp!.request("session/new", { cwd: currentWorkspace(), mcpServers: [] });
     this.sessionId = s?.sessionId ?? s?.id ?? null;
     if (Array.isArray(s?.configOptions)) this.configOptions = s.configOptions;
     await sleep(350); // let available_commands_update arrive

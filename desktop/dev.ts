@@ -14,6 +14,7 @@ import { memorySnapshot } from "../tools/memory_data.ts";
 import { backend } from "./acp_backend.ts";
 import { listSessions } from "./sessions.ts";
 import { providerAuth } from "./auth_status.ts";
+import { cloneRepo, setWorkspace, workspaceInfo } from "./workspace.ts";
 import { applyEnv, load as loadSettings, setKey, setUsername } from "./settings_store.ts";
 import { homedir } from "node:os";
 import { existsSync } from "node:fs";
@@ -60,6 +61,18 @@ const server = Bun.serve({
 
       // real omp ACP backend (genuine model replies + live session config)
       if (p === "/api/sessions") return json({ ok: true, data: listSessions() });
+
+      // workspace (the folder the agent works in; local or cloned remote)
+      if (p === "/api/workspace") {
+        if (req.method === "POST") { const b = await req.json(); setWorkspace(String(b.path ?? "")); backend.restart(); }
+        return json({ ok: true, data: workspaceInfo() });
+      }
+      if (p === "/api/workspace/clone" && req.method === "POST") {
+        const { url } = await req.json();
+        const r = await cloneRepo(String(url ?? ""));
+        if (r.ok && r.path) { setWorkspace(r.path); backend.restart(); }
+        return json({ ok: r.ok, data: { ...workspaceInfo(), cloned: r.ok, error: r.error } });
+      }
 
       // settings + provider auth
       if (p === "/api/settings") {

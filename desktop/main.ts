@@ -7,7 +7,7 @@
 // browser build and the desktop app share one real backend. The preload only
 // adds native window controls + crisp zoom.
 
-import { app, BrowserWindow, ipcMain, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
@@ -49,6 +49,12 @@ function createWindow(): void {
   win.loadURL(`http://localhost:${PORT}`);
   win.on("closed", () => (win = null));
 }
+
+ipcMain.handle("lucid:pickFolder", async (e) => {
+  const w = BrowserWindow.fromWebContents(e.sender) ?? undefined;
+  const r = await dialog.showOpenDialog(w!, { properties: ["openDirectory"], title: "Choose a workspace folder" });
+  return r.canceled || !r.filePaths[0] ? null : r.filePaths[0];
+});
 
 ipcMain.on("lucid:win", (e, action: string) => {
   const w = BrowserWindow.fromWebContents(e.sender);
