@@ -6,14 +6,15 @@ renderer as the browser build, with real `omp acp` wired in.
 
 ## Run
 
-**Just the UI (no Electron, screenshot-able in a browser):**
+**Browser build — real chat, no Electron (screenshot-able):**
 
 ```bash
 bun run desktop:web        # from repo root → http://localhost:5319
 ```
 
-The browser build uses live dashboards (`/api/security`, `/api/memory`) and a
-*simulated* chat that demonstrates the gate blocking a poisoned command.
+The dev server drives a **real `omp acp` session** (with the gate loaded), so
+prompts produce genuine model replies in a plain browser — same backend the
+desktop app uses. Dashboards are the live read-only `/api/security|memory`.
 
 **The full desktop app:**
 
@@ -33,19 +34,26 @@ It reuses your existing `~/.omp` credentials (OAuth or API key) — no re-login.
 
 ## Architecture
 
+One real backend serves both the browser build and the desktop app; Electron is
+a thin native shell on top.
+
 ```
 desktop/
-  main.ts        Electron main: frameless window, spawns the two children, ACP↔IPC bridge
-  preload.ts     contextBridge → window.lucid (dashboards via HTTP, chat via IPC, window ctrls)
-  acp.ts         minimal Agent Client Protocol client (JSON-RPC over stdio)
-  dev.ts         Bun server: bundles renderer/app.ts and serves /api data
-  renderer/      the UI (vanilla TS, no framework) — identical in browser & Electron
+  dev.ts          Bun server: bundles renderer/app.ts, serves the read-only /api
+                  dashboards AND the real chat/config backend
+  acp_backend.ts  singleton omp-ACP session (chat, config, commands) — gate loaded
+  acp.ts          minimal Agent Client Protocol client (JSON-RPC over stdio)
+  main.ts         Electron main: spawns dev.ts, opens it in a frameless window
+  preload.ts      window.lucid = native shell only (crisp zoom + window controls)
+  renderer/       the UI (vanilla TS, no framework) — identical in browser & Electron
     app.ts · styles.css · dom.ts · ui.ts · icons.ts · bridge.ts · format.ts
 ```
 
-`renderer/bridge.ts` prefers `window.lucid` (Electron) and falls back to
-`fetch('/api/*')` + a simulated stream in a plain browser, so the exact same
-renderer is developed and screenshot-verified without Electron.
+`renderer/bridge.ts` talks to the dev server over HTTP for everything —
+`/api/security|memory` (dashboards), `/api/chat` (streaming NDJSON), `/api/config`,
+`/api/commands` — so chat + config are **real in the browser too**. The only
+native-only bits are crisp text zoom (`webFrame`) and window controls, from
+`window.lucid`; in a plain browser those fall back to CSS zoom.
 
 ## Features
 

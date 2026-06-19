@@ -126,6 +126,12 @@ button{font-family:inherit}
 .msg .text{font-size:15px;line-height:1.66;color:var(--txt);user-select:text;white-space:pre-wrap}
 .msg .text code{font-family:var(--mono);font-size:13px;background:var(--bg-2);
   border:1px solid var(--line-soft);padding:1px 6px;border-radius:5px;color:var(--cyan)}
+.chat-hint{display:flex;flex-direction:column;align-items:center;text-align:center;gap:9px;
+  padding:64px 20px 20px;color:var(--txt-3);animation:rise var(--t-slow) var(--ease-out)}
+.chat-hint .bs{width:46px;height:46px;border-radius:14px;display:grid;place-items:center;
+  background:linear-gradient(150deg,var(--accent),#7d39c4);color:#fff;box-shadow:0 0 22px rgba(198,75,214,.4);transform:scale(1.5)}
+.chat-hint .h{font-size:18px;font-weight:600;color:var(--txt);margin-top:8px}
+.chat-hint .d{font-size:13.5px;max-width:340px;line-height:1.6}
 .cursor{display:inline-block;width:7px;height:16px;vertical-align:-2px;background:var(--accent-2);
   border-radius:2px;animation:blink 1s steps(2) infinite}
 @keyframes blink{50%{opacity:0}}

@@ -11,6 +11,7 @@
 import { join } from "node:path";
 import { securitySnapshot } from "../tools/web/data.ts";
 import { memorySnapshot } from "../tools/memory_data.ts";
+import { backend } from "./acp_backend.ts";
 
 const ROOT = join(import.meta.dir, "renderer");
 const PORT = Number(process.env.PORT ?? 5319);
@@ -44,6 +45,23 @@ const server = Bun.serve({
       if (p === "/api/security") return json({ ok: true, data: await securitySnapshot() });
       if (p === "/api/memory") return json({ ok: true, data: await memorySnapshot() });
       if (p === "/api/health") return json({ ok: true });
+
+      // real omp ACP backend (genuine model replies + live session config)
+      if (p === "/api/config") return json({ ok: true, data: await backend.getConfig() });
+      if (p === "/api/commands") return json({ ok: true, data: await backend.getCommands() });
+      if (p === "/api/setConfig" && req.method === "POST") { const { configId, value } = await req.json(); return json({ ok: true, data: await backend.setConfig(configId, value) }); }
+      if (p === "/api/newSession" && req.method === "POST") { await backend.newSession(); return json({ ok: true }); }
+      if (p === "/api/chat" && req.method === "POST") {
+        const { text } = await req.json();
+        const enc = new TextEncoder();
+        const stream = new ReadableStream({
+          async start(controller) {
+            await backend.prompt(String(text ?? ""), (e) => { try { controller.enqueue(enc.encode(JSON.stringify(e) + "\n")); } catch { /* stream closed */ } });
+            try { controller.close(); } catch { /* already closed */ }
+          },
+        });
+        return new Response(stream, { headers: { "content-type": "application/x-ndjson; charset=utf-8", "cache-control": "no-store" } });
+      }
 
       const rel = p === "/" ? "index.html" : p.replace(/^\/+/, "");
       const file = Bun.file(join(ROOT, rel));

@@ -78,8 +78,9 @@ bun run acp:probe        # proves omp speaks Agent Client Protocol (the GUI's ch
 The **desktop GUI** lives in [`desktop/`](desktop/) — a polished Electron shell:
 a gated agent chat, plus a live Security and Memory & Context inspector (collapsible
 sections, custom tooltips, ⌘K command palette, a non-modal fly-in toast when the
-gate quarantines a tool call). `desktop:web` runs the exact same renderer in a
-plain browser (simulated chat) so it needs no Electron to try. For the real app:
+gate quarantines a tool call). `desktop:web` runs the exact same renderer with a
+**real omp chat backend** (the dev server drives `omp acp`), so you get genuine
+model replies in a plain browser — no Electron needed. For the packaged app:
 
 ```bash
 cd desktop && bun install && bun run start

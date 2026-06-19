@@ -394,15 +394,26 @@ the security boundary:
 - `tools/web/` and `tools/acp_probe.ts` are front-end/proof code, not on the
   security path; they hold no frozen contracts.
 
-### Addendum (Electron realization)
+### Addendum (Electron realization — single HTTP backend)
 
-The desktop shell in `desktop/` implements decision #1+#2 above:
-`desktop/main.ts` (Electron) spawns the Bun content/dashboard server **and**
-`omp acp -e harness/omp/security_extension.ts`, bridging ACP↔renderer over IPC
-(`desktop/acp.ts`, `desktop/preload.ts`). The renderer (`desktop/renderer/`,
-vanilla TS) is identical in Electron and in a plain browser — `bridge.ts` prefers
-`window.lucid` (real ACP) and falls back to `fetch('/api/*')` + a simulated chat,
-so the UI is screenshot-verifiable without Electron. Confirmed that `omp acp`
-accepts the `-e` gate (initialize still succeeds), so the gate runs in-process on
-the GUI chat path. The ACP `session/update`→chat-event mapping follows the spec
-but is the one piece not exercisable headlessly; flagged for first-run confirmation.
+The desktop shell in `desktop/` implements decision #1+#2 above, but with the ACP
+session living in the **Bun dev server**, not in Electron — one real backend for
+both the browser build and the packaged app:
+
+- `desktop/acp_backend.ts` is a singleton that spawns
+  `omp acp -e harness/omp/security_extension.ts` (gate in-process) and exposes
+  chat/config/commands. `desktop/dev.ts` serves it over HTTP: `/api/chat`
+  (streaming NDJSON), `/api/config`, `/api/setConfig`, `/api/commands`, plus the
+  read-only `/api/security|memory` dashboards.
+- `desktop/renderer/bridge.ts` talks only HTTP, so prompts produce genuine model
+  replies in a plain browser — no simulation. `desktop/main.ts` is a thin Electron
+  shell (spawn dev server → frameless window → window-control IPC); `preload.ts`
+  exposes only native zoom (`webFrame`) + window controls.
+
+The exact ACP wire format was captured from a **live omp 16.0.8 turn** (no longer
+spec-inferred): `session/new`→`configOptions`, `agent_message_chunk`,
+`usage_update`, `available_commands_update`, `config_option_update`, and the setter
+`session/set_config_option {sessionId,configId,value}`. Verified end-to-end: a real
+`/api/chat` prompt returned a correct model reply with live usage. Still
+unexercised: `tool_call`/`tool_call_update` shapes (the verifying turns used no
+tools); the gate's stderr `[BLOCKED …]` line is the reliable block signal regardless.

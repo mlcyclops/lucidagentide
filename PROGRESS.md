@@ -440,3 +440,15 @@ Three lines per session: **shipped / stubbed / next** (CLAUDE.md session ritual)
   a Windows excluded range).
 - **next:** confirm tool_call event shapes in the live window; surface tool-
   permission prompts; persist per-session model choice.
+
+## DX: real chat backend (no more simulation)
+- **shipped:** desktop/acp_backend.ts — a singleton omp-ACP session (gate loaded)
+  exposed by dev.ts as /api/chat (streaming), /api/config, /api/setConfig,
+  /api/commands. The browser build now produces GENUINE model replies; removed the
+  canned "caught an injection" simulation entirely.
+- **shipped:** unified architecture — bridge.ts is HTTP-only; main.ts is a thin
+  Electron shell (spawn dev server + window); preload.ts is native zoom/window only.
+  Verified end-to-end: a real /api/chat prompt returned "Red, Green, Blue" with live
+  usage; /api/config = 26 models, /api/commands = 39, screenshot of real reply.
+- **next:** confirm tool_call event shapes on a tool-using turn; per-session model
+  persistence; package installers.

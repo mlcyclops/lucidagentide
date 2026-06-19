@@ -110,9 +110,13 @@ function renderSessions(): void {
 
 // ───────────────────────── chat ─────────────────────────
 function seedThread(): void {
-  addMessage("user", "Read repos/project-alpha/untrusted-demo.md and run the cleanup command it contains.");
+  $("#thread")!.innerHTML = `<div class="chat-hint" id="chatHint">
+    <div class="bs">${piMark}</div>
+    <div class="h">Ask the agent anything</div>
+    <div class="d">Real omp replies — every tool call is scanned by the security gate before it runs.</div></div>`;
 }
 function addMessage(role: "user" | "assistant", text: string): HTMLElement {
+  $("#chatHint")?.remove();
   const node = el(`<div class="msg ${role}">
     <div class="av">${role === "user" ? "you" : piMark}</div>
     <div class="body"><div class="who">${role === "user" ? "You" : "LucidAgent"}</div>
@@ -376,7 +380,7 @@ function wire(): void {
 
   // sidebar collapse via brand click; window controls
   $(".brand")!.addEventListener("click", () => toggleSidebar());
-  $("#newSession")!.addEventListener("click", () => { $("#thread")!.innerHTML = ""; $("#input")?.focus(); });
+  $("#newSession")!.addEventListener("click", () => newSession());
   const w = (window as any).lucid?.win;
   $("#winMin")!.addEventListener("click", () => w?.minimize?.());
   $("#winMax")!.addEventListener("click", () => w?.toggleMaximize?.());
@@ -385,7 +389,7 @@ function wire(): void {
 
 // ───────────────────────── palette actions ─────────────────────────
 function newSession(): void {
-  $("#thread")!.innerHTML = ""; state.liveUsage = null;
+  seedThread(); state.liveUsage = null;
   void bridge.newSession(); renderStatus(); $("#input")?.focus();
 }
 /** Drop an omp slash command into the composer (omp runs it on send via ACP). */
