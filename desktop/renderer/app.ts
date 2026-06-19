@@ -367,7 +367,7 @@ function datasetsSection(list: string[] | null): string {
 
 async function renderSettings(): Promise<void> {
   const body = $("#setBody"); if (!body) return;
-  const [settings, auth, ws, asksage, hr] = await Promise.all([bridge.getSettings(), bridge.auth(), bridge.workspace(), bridge.asksage(), bridge.headroom()]);
+  const [settings, auth, ws, asksage, hr, personal] = await Promise.all([bridge.getSettings(), bridge.auth(), bridge.workspace(), bridge.asksage(), bridge.headroom(), bridge.personal()]);
   if (ws) { state.workspace = ws; renderWorkspaceBar(); }
   if (asksage) state.asksage = asksage;
   // Datasets + the RAG-persona picker are surfaced in gov-only (lockdown) mode.
@@ -394,8 +394,53 @@ async function renderSettings(): Promise<void> {
             <span><b>Compress context with headroom</b> — fewer tokens before they reach the model. ${hr.running ? `<span class="abadge ok">running · :${hr.port}</span>` : ""}</span></label>
           <div class="set-note">${icon("info", 12)} Runs entirely on your machine (${esc(hr.version ?? "installed")}). Request-routing + a gov-deployment security review are the next step — see ADR-0008.</div>`
         : `<div class="set-note">${icon("info", 12)} Optional: install <b>headroom</b> to compress context on-device (60–95% fewer tokens) — great for stretching your AskSage quota. Run <code>${esc(hr?.installHint ?? "pip install headroom-ai[proxy]")}</code>, then this toggle appears.</div>`}</div>
+    ${personalizationSection(personal)}
     ${accordion("set.others", "More providers", "", (auth?.others ?? []).map(provCard).join(""), OPEN.has("set.others"))}
     <div class="set-note">${icon("shield", 12)} Keys are stored on this machine and passed to omp as env vars — never sent anywhere else. OAuth uses omp's own secure credential vault.</div>`;
+}
+
+// Per-compartment security posture + risk-mitigation notice (ADR-0012). `combined` is a
+// union view; new facts still default to Personal.
+const SCOPE_INFO: Record<string, { label: string; tone: "ok" | "warn" | "danger"; note: string }> = {
+  personal: { label: "Personal Life", tone: "ok", note: "Private to you and encrypted on this device. Used only to tailor responses. New facts are stored here by default." },
+  work: { label: "Work", tone: "warn", note: "May include employer-confidential context. Don't store secrets or credentials here; review before exporting or sharing across tools." },
+  combined: { label: "Combined", tone: "warn", note: "A union view of Personal + Work + CUI. This crosses boundaries — take care when exporting or sharing. New facts still default to Personal." },
+  cui: { label: "CUI", tone: "danger", note: "Controlled Unclassified Information handling. Encrypted at rest and NEVER auto-exported or shared with external consumers/harnesses. Follow your organization's CUI policy (e.g. NIST SP 800-171). Do NOT enter classified information." },
+};
+const SCOPE_ORDER = ["personal", "work", "combined", "cui"] as const;
+
+// Settings → Personalization (ADR-0010/0012): opt-in, encrypted-at-rest user knowledge
+// graph + the Work/Personal/Combined/CUI compartment selector with risk notices.
+function personalizationSection(p: import("./bridge.ts").PersonalStatus | null): string {
+  const sub = `private · encrypted · opt-in`;
+  const head = (inner: string) => `<div class="set-sec"><div class="set-lbl">Personalization <span class="set-sub">${sub}</span></div>${inner}</div>`;
+  if (!p) return head(`<div class="set-note">${icon("info", 12)} Personalization is unavailable — update the GUI server.</div>`);
+  const toggle = `<label class="set-toggle"><input type="checkbox" id="personalToggle" ${p.enabled ? "checked" : ""}/>
+      <span><b>Learn about me to tailor responses</b> — a private knowledge graph of your preferences, decisions, interests &amp; style, encrypted on this device (AES-256-GCM). Off by default.</span></label>`;
+  if (!p.enabled) return head(toggle + `<div class="set-note">${icon("shield", 12)} Nothing is learned, stored, or recalled until you enable this. Everything stays local; you can forget or export it anytime.</div>`);
+
+  let body: string;
+  if (!p.configured) {
+    body = `<div class="set-note">${icon("info", 12)} Set a passphrase to create your encrypted store. It protects your data and <b>cannot be recovered</b> if lost.</div>
+      <div class="prov-row"><input id="personalPass" class="prov-key" type="password" placeholder="New passphrase (min 8 chars)" autocomplete="new-password" />
+        <button class="btn-mini ok" id="personalSetup">${icon("shield", 12)} Create</button></div>`;
+  } else if (!p.unlocked) {
+    body = `<div class="set-note">${icon("info", 12)} Your store is locked. Enter your passphrase to unlock it this session.</div>
+      <div class="prov-row"><input id="personalPass" class="prov-key" type="password" placeholder="Passphrase" autocomplete="current-password" />
+        <button class="btn-mini ok" id="personalUnlock">${icon("shield", 12)} Unlock</button></div>`;
+  } else {
+    const cur = p.scope;
+    const seg = SCOPE_ORDER.map((sc) => `<button class="seg-btn pscope${sc === cur ? " on" : ""}" data-pscope="${sc}" data-tip="${esc(SCOPE_INFO[sc]!.label)}|${esc(SCOPE_INFO[sc]!.note)}" data-tip-side="top">${esc(SCOPE_INFO[sc]!.label)}</button>`).join("");
+    const info = SCOPE_INFO[cur] ?? SCOPE_INFO.personal!;
+    const c = p.counts ?? { work: 0, personal: 0, cui: 0 };
+    body = `<div class="set-note ok">${icon("check", 12)} Unlocked. New facts pass the security gate before they're remembered; you stay in control.</div>
+      <div class="pscope-lbl">Compartment <span class="info-dot" data-tip="Data compartments|Keep Work, Personal, and CUI knowledge separate. The active compartment scopes what is learned and recalled; Combined is a union view. Portability is compartment-aware — see ADR-0012.">${icon("info", 11)}</span></div>
+      <div class="seg pscope-seg">${seg}</div>
+      <div class="pscope-note ${info.tone}">${icon(info.tone === "danger" ? "shield" : "info", 13)} <span>${esc(info.note)}</span></div>
+      <div class="kvs"><span class="kv">personal <b>${c.personal}</b></span><span class="kv">work <b>${c.work}</b></span><span class="kv">cui <b>${c.cui}</b></span></div>
+      <button class="btn-mini" id="personalLock">${icon("shield", 12)} Lock</button>`;
+  }
+  return head(toggle + body);
 }
 function openSettings(): void {
   state.settingsOpen = true;
@@ -878,6 +923,36 @@ function wire(): void {
       const enabled = ($("#headroomToggle", $("#setBody")!) as HTMLInputElement)?.checked ?? false;
       const st = await bridge.setHeadroom(enabled);
       showToast({ title: enabled ? "Compression on" : "Compression off", desc: enabled ? (st?.running ? `headroom proxy running on :${st.port}.` : "headroom enabled — proxy will start.") : "headroom proxy stopped.", actions: [{ label: "OK" }], timeout: 2800 });
+      void renderSettings();
+      return;
+    }
+    // ── Personalization (ADR-0010/0012) ──
+    if (t.closest("#personalToggle")) {
+      const enabled = ($("#personalToggle", $("#setBody")!) as HTMLInputElement)?.checked ?? false;
+      await bridge.personalEnable(enabled);
+      showToast({ title: enabled ? "Personalization on" : "Personalization off", desc: enabled ? "Set a passphrase to create your encrypted store." : "Locked and disabled — nothing is learned or recalled.", actions: [{ label: "OK" }], timeout: 2800 });
+      void renderSettings();
+      return;
+    }
+    if (t.closest("#personalSetup") || t.closest("#personalUnlock")) {
+      const setup = !!t.closest("#personalSetup");
+      const pass = ($("#personalPass", $("#setBody")!) as HTMLInputElement)?.value ?? "";
+      const r = setup ? await bridge.personalSetup(pass) : await bridge.personalUnlock(pass);
+      if (r?.ok) showToast({ title: setup ? "Store created" : "Unlocked", desc: setup ? "Your encrypted personalization store is ready." : "Unlocked for this session.", actions: [{ label: "OK" }], timeout: 2600 });
+      else showToast({ title: setup ? "Couldn't create store" : "Couldn't unlock", desc: r?.error ?? "Try again.", meta: "passphrase is never stored or sent anywhere", actions: [{ label: "OK" }], timeout: 5000 });
+      void renderSettings();
+      return;
+    }
+    if (t.closest("#personalLock")) {
+      await bridge.personalLock();
+      showToast({ title: "Locked", desc: "The in-memory key was wiped; unlock again to use it.", actions: [{ label: "OK" }], timeout: 2400 });
+      void renderSettings();
+      return;
+    }
+    const pscope = t.closest("[data-pscope]") as HTMLElement | null;
+    if (pscope) {
+      const scope = pscope.dataset.pscope as "work" | "personal" | "cui" | "combined";
+      await bridge.personalScope(scope);
       void renderSettings();
       return;
     }

@@ -21,9 +21,16 @@ export type UserKind =
   | "user:preference" | "user:decision" | "user:interest" | "user:behavior"
   | "user:personality" | "user:link" | "user:skill" | "user:goal" | "user:relationship";
 
+// Compartment a fact belongs to (ADR-0012). A fact is in exactly one scope; "combined"
+// is a VIEW (the union), never a stored value. CUI = Controlled Unclassified Information
+// — heightened handling: never auto-exported / shared with external consumers.
+export type PersonalScope = "work" | "personal" | "cui";
+export type ScopeView = PersonalScope | "combined";
+export const SCOPES: readonly PersonalScope[] = ["work", "personal", "cui"];
+
 export interface PersonalEntity { id: string; name: string; kind: UserKind; trust_label: TrustLabel; confidence: number; created_at: string }
 export interface PersonalFact {
-  id: string; entity_id: string; statement: string; trust_label: TrustLabel; confidence: number;
+  id: string; entity_id: string; statement: string; scope: PersonalScope; trust_label: TrustLabel; confidence: number;
   source_session_id?: string; source_run_id?: string; provenance_artifact_id?: string;
   status: "active" | "forgotten"; promoted_at: string;
 }
@@ -106,10 +113,10 @@ export class PersonalStore {
     this.#graph.entities.push({ id, name, kind, trust_label: trustLabel, confidence, created_at: now() });
     return id;
   }
-  addFact(input: { entityId: string; statement: string; trustLabel: TrustLabel; confidence?: number; sourceSessionId?: string; sourceRunId?: string; provenanceArtifactId?: string }): string {
+  addFact(input: { entityId: string; statement: string; trustLabel: TrustLabel; scope?: PersonalScope; confidence?: number; sourceSessionId?: string; sourceRunId?: string; provenanceArtifactId?: string }): string {
     const id = Snowflake.next();
     this.#graph.facts.push({
-      id, entity_id: input.entityId, statement: input.statement, trust_label: input.trustLabel,
+      id, entity_id: input.entityId, statement: input.statement, scope: input.scope ?? "personal", trust_label: input.trustLabel,
       confidence: input.confidence ?? 1, source_session_id: input.sourceSessionId, source_run_id: input.sourceRunId,
       provenance_artifact_id: input.provenanceArtifactId, status: "active", promoted_at: now(),
     });
@@ -127,10 +134,18 @@ export class PersonalStore {
     f.status = "forgotten";
     return true;
   }
-  /** A copy of the current graph (active facts only by default). */
-  graph(opts: { includeForgotten?: boolean } = {}): PersonalGraph {
-    const facts = opts.includeForgotten ? this.#graph.facts : this.#graph.facts.filter((f) => f.status === "active");
+  /** A copy of the current graph (active facts only by default), optionally filtered to
+   *  one compartment. `scope: "combined"` (the default) returns every compartment. */
+  graph(opts: { includeForgotten?: boolean; scope?: ScopeView } = {}): PersonalGraph {
+    let facts = opts.includeForgotten ? this.#graph.facts : this.#graph.facts.filter((f) => f.status === "active");
+    if (opts.scope && opts.scope !== "combined") facts = facts.filter((f) => f.scope === opts.scope);
     return structuredClone({ entities: this.#graph.entities, facts, links: this.#graph.links });
+  }
+  /** Active-fact counts per compartment — for the UI selector + risk surfacing. */
+  scopeCounts(): Record<PersonalScope, number> {
+    const c: Record<PersonalScope, number> = { work: 0, personal: 0, cui: 0 };
+    for (const f of this.#graph.facts) if (f.status === "active") c[f.scope]++;
+    return c;
   }
 
   /** Re-encrypt the graph and write it to disk (user-only perms, best-effort). */

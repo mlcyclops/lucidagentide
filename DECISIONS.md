@@ -912,3 +912,69 @@ savings card.
 - All read-only and additive; no change to the security gate or frozen prompt prefix.
 - Provider probes are opt-in and only fire with a configured key; no telemetry leaves the machine.
 - This is sequenced **after** the P9 personalization work; P9.1 (encrypted store) is the immediate next build.
+
+-----
+
+## ADR-0012 — Personalization compartments (Work / Personal / Combined / CUI) + portability
+
+**Date:** 2026-06-19
+**Status:** Accepted. The compartment data model + the Settings selector with risk notices shipped with
+P9.1; the scope-aware portability/export and the CUI hardening option are **Proposed** (P9.4 / future).
+**Relationship:** extends ADR-0010. Answers "can this connect to other harnesses/consumers for max
+portability, with a Work/Personal/Combined/CUI slider and per-mode risk notices?" — **yes, scope-aware**.
+
+### Context
+
+The personalization knowledge graph should be **portable** to other harnesses / consumers / providers
+(maximum reuse), AND **compartmentalized** so the user controls *what* is portable. Different categories of
+personal knowledge carry very different handling duties — especially **CUI** (Controlled Unclassified
+Information), which has formal handling rules (e.g. NIST SP 800-171). Portability and compartments are the
+same design: you make Personal freely portable, gate Work, and never auto-export CUI.
+
+### Decision — compartments
+
+A fact belongs to exactly one **scope**: `work | personal | cui`. **Combined** is a VIEW (the union), never
+a stored value. The active compartment scopes what is learned and recalled; new facts default to
+**Personal**. Each compartment surfaces a security posture + a risk-mitigation notice in the UI:
+
+| Compartment | Posture | Notice (shown to the user) |
+|:--|:--|:--|
+| **Personal Life** | private/default | Private to you, encrypted on device; used only to tailor responses. |
+| **Work** | caution | May include employer-confidential context; don't store secrets/credentials; review before sharing. |
+| **Combined** | caution | Union of all scopes; crosses boundaries — take care when exporting/sharing. New facts still default to Personal. |
+| **CUI** | restricted | CUI handling: encrypted at rest, **never auto-exported / shared** with external consumers; follow org CUI policy; no classified info. |
+
+Implemented in P9.1: `PersonalFact.scope`, `graph({scope})`, `scopeCounts()`, the `personalScope` setting,
+and the Settings selector with the colored per-mode notice (green/amber/red).
+
+### Decision — portability (the answer)
+
+Three layers, **scope-aware**:
+
+1. **The encrypted store is private by design** (`personal-kg.v1`, AES-256-GCM) — not portable without the
+   DEK. This is the system of record, not the interchange format.
+2. **Obsidian vault export = the portable, human-readable interchange** (P9.4): Markdown + `[[wikilinks]]`,
+   readable by any tool. Export is **scope-filtered + audited**: Personal exports freely; Work/Combined warn;
+   **CUI is excluded by default** and requires explicit, audited acknowledgment (mirrors the raw-reveal gate).
+3. **A versioned interchange + connector contract** (future): a plaintext `personal-kg-export.v1` JSON
+   schema (entities/facts/links + scope + provenance) and a **scope-declaring connector** so another harness
+   can request a compartment it's permitted to read — e.g. exposed read-only over MCP. A consumer declares
+   the scopes it may receive; **CUI never leaves without explicit per-export consent + an audit row**.
+
+Honest caveat: any cross-tool sharing widens the trust boundary. The compartments + notices + scope-aware,
+audited export ARE the mitigation; portability is **off by default for Work and CUI**.
+
+### Open question (flagged for confirmation)
+
+**CUI isolation strength.** P9.1 stores all compartments in one encrypted store, separated by the `scope`
+tag + UI/export rules. A stronger future option is **hard isolation** — a separate encrypted store (or a
+separate per-compartment DEK) for CUI, so a single key never decrypts both CUI and non-CUI. Recommended:
+ship tag-based separation + the CUI notices now; treat hard isolation as a documented hardening upgrade if
+an accreditation requires it.
+
+### Consequences / guardrails
+
+- New facts default to Personal; CUI must be chosen deliberately.
+- CUI is never auto-exported, auto-recalled into shared contexts, or sent to external consumers without an
+  explicit, audited consent step.
+- The compartment model is forward-compatible (added to the fresh store before any data existed).

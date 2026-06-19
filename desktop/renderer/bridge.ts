@@ -41,6 +41,11 @@ export interface HeadroomStatus {
   installed: boolean; version: string | null; running: boolean; enabled: boolean;
   port: number; url: string; installHint: string;
 }
+export type PersonalScopeView = "work" | "personal" | "cui" | "combined";
+export interface PersonalStatus {
+  enabled: boolean; configured: boolean; unlocked: boolean;
+  scope: PersonalScopeView; counts: { work: number; personal: number; cui: number } | null;
+}
 export interface WorkspaceInfo {
   current: string; name: string; isGit: boolean;
   recent: { path: string; name: string; isGit: boolean }[];
@@ -86,6 +91,13 @@ export interface LucidBridge {
   // headroom token-compression proxy (opt-in, on-device)
   headroom(): Promise<HeadroomStatus | null>;
   setHeadroom(enabled: boolean): Promise<HeadroomStatus | null>;
+  // personalization knowledge graph (opt-in, encrypted — ADR-0010/0012)
+  personal(): Promise<PersonalStatus | null>;
+  personalEnable(enabled: boolean): Promise<PersonalStatus | null>;
+  personalSetup(passphrase: string): Promise<{ ok: boolean; error?: string } | null>;
+  personalUnlock(passphrase: string): Promise<{ ok: boolean; error?: string } | null>;
+  personalLock(): Promise<PersonalStatus | null>;
+  personalScope(scope: PersonalScopeView): Promise<PersonalStatus | null>;
   // workspace (folder the agent works in; local or cloned remote)
   workspace(): Promise<WorkspaceInfo | null>;
   setWorkspace(path: string): Promise<WorkspaceInfo | null>;
@@ -180,6 +192,12 @@ export const bridge: LucidBridge = {
   applyPersona: (id) => post("/api/asksage/persona", id ? { id } : { clear: true }),
   headroom: () => getData("/api/headroom"),
   setHeadroom: (enabled) => post("/api/headroom", { enabled }),
+  personal: () => getData("/api/personal"),
+  personalEnable: (enabled) => post("/api/personal/enable", { enabled }),
+  personalSetup: (passphrase) => post("/api/personal/setup", { passphrase }),
+  personalUnlock: (passphrase) => post("/api/personal/unlock", { passphrase }),
+  personalLock: () => post("/api/personal/lock", {}),
+  personalScope: (scope) => post("/api/personal/scope", { scope }),
   workspace: () => getData("/api/workspace"),
   setWorkspace: (path) => post("/api/workspace", { path }),
   cloneWorkspace: (url) => post("/api/workspace/clone", { url }),

@@ -19,6 +19,7 @@ import { applyEnv, load as loadSettings, setAsksage, setKey, setUsername } from 
 import { asksageConfig, listDatasets, listPersonas, monthlyTokens, scanPersona, wrapPersona } from "./asksage.ts";
 import { listSkills } from "./skills_data.ts";
 import { headroomStatus, setHeadroomEnabled, startHeadroom } from "./headroom.ts";
+import { enablePersonal, lockPersonal, personalStatus, setScope, setupPersonal, unlockPersonal } from "./personal.ts";
 import { homedir } from "node:os";
 import { existsSync } from "node:fs";
 
@@ -155,6 +156,14 @@ const server = Bun.serve({
         if (req.method === "POST") { const b = await req.json(); return json({ ok: true, data: setHeadroomEnabled(!!b.enabled) }); }
         return json({ ok: true, data: headroomStatus() });
       }
+      // Personalization knowledge graph (ADR-0010 P9.1 / ADR-0012). Passphrase custody;
+      // the passphrase never leaves this handler and is never persisted.
+      if (p === "/api/personal") return json({ ok: true, data: personalStatus() });
+      if (p === "/api/personal/enable" && req.method === "POST") { const b = await req.json(); return json({ ok: true, data: enablePersonal(!!b.enabled) }); }
+      if (p === "/api/personal/setup" && req.method === "POST") { const b = await req.json(); return json({ ok: true, data: setupPersonal(String(b.passphrase ?? "")) }); }
+      if (p === "/api/personal/unlock" && req.method === "POST") { const b = await req.json(); return json({ ok: true, data: unlockPersonal(String(b.passphrase ?? "")) }); }
+      if (p === "/api/personal/lock" && req.method === "POST") return json({ ok: true, data: lockPersonal() });
+      if (p === "/api/personal/scope" && req.method === "POST") { const b = await req.json(); return json({ ok: true, data: setScope(String(b.scope ?? "personal") as any) }); }
       if (p === "/api/setConfig" && req.method === "POST") { const { configId, value } = await req.json(); return json({ ok: true, data: await backend.setConfig(configId, value) }); }
       if (p === "/api/newSession" && req.method === "POST") { await backend.newSession(); return json({ ok: true }); }
       if (p === "/api/chat" && req.method === "POST") {

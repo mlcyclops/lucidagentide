@@ -4,6 +4,17 @@ Three lines per session: **shipped / stubbed / next** (CLAUDE.md session ritual)
 
 -----
 
+## P9.1b: personalization desktop wiring + compartments (ADR-0010/0012)
+- **shipped:** Settings "Personalization" section — enable toggle (default OFF), passphrase create/unlock/lock
+  flow (`desktop/personal.ts` + `/api/personal/*`), and the **Work/Personal/Combined/CUI compartment
+  selector with per-mode risk notices** (green/amber/red). Store gains a `scope` field + `graph({scope})` +
+  `scopeCounts()`. ADR-0012 documents compartments + scope-aware portability (Obsidian vault = portable;
+  encrypted store = private; CUI never auto-exported). Verified live: enable→create→switch CUI(red)/Personal
+  (green)→lock→wrong-pass fails→right-pass unlocks; test store cleaned up. 141 green, tsc clean.
+- **stubbed:** OS-keystore (Electron safeStorage) custody IPC (passphrase path is wired + verified); the
+  scope-aware export/connector + the CUI hard-isolation option (ADR-0012 open question).
+- **next:** P9.2 — conversation distiller (model-based, auto-gated) + recall into the prompt tail, scope-aware.
+
 ## P9.1: encrypted personalization store + crypto (ADR-0010)
 - **shipped:** harness/personal/crypto.ts (AES-256-GCM + PBKDF2-HMAC-SHA256, all FIPS-approved) and
   harness/personal/store.ts — the encrypted KG store (`personal-kg.v1`): entities/facts/links, DEK in

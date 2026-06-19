@@ -524,6 +524,23 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .set-toggle input{margin-top:2px;accent-color:var(--accent);width:15px;height:15px;flex:none;cursor:pointer}
 .set-toggle b{color:var(--txt);font-weight:650}
 .lock-tag{font-size:11px}
+/* personalization — compartment selector + per-mode risk notice (ADR-0012) */
+.pscope-lbl{display:flex;align-items:center;gap:5px;font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--txt-4);margin:12px 0 6px}
+.pscope-lbl .info-dot{color:var(--txt-4)}
+.seg.pscope-seg{display:flex;gap:4px;background:var(--bg-2);border:1px solid var(--line);border-radius:9px;padding:3px}
+.seg-btn.pscope{flex:1;border:0;background:transparent;color:var(--txt-3);font-size:12px;font-weight:600;
+  padding:6px 8px;border-radius:7px;cursor:pointer;transition:background var(--t),color var(--t)}
+.seg-btn.pscope:hover{color:var(--txt)}
+.seg-btn.pscope.on{background:var(--bg-4);color:var(--txt);box-shadow:0 1px 3px rgba(0,0,0,.3)}
+.pscope-note{display:flex;gap:8px;align-items:flex-start;margin-top:9px;padding:9px 11px;border-radius:9px;
+  font-size:12px;line-height:1.55;border:1px solid var(--line-soft);background:var(--bg-2)}
+.pscope-note .ic{flex:none;margin-top:1px}
+.pscope-note.ok{border-color:color-mix(in srgb,var(--green) 32%,var(--line-soft));background:var(--green-dim);color:#bfe9cf}
+.pscope-note.ok .ic{color:var(--green)}
+.pscope-note.warn{border-color:color-mix(in srgb,var(--amber) 38%,var(--line-soft));background:var(--amber-dim);color:#f0d79a}
+.pscope-note.warn .ic{color:var(--amber)}
+.pscope-note.danger{border-color:color-mix(in srgb,var(--red) 45%,var(--line-soft));background:var(--red-dim);color:#f3b7b7}
+.pscope-note.danger .ic{color:var(--red)}
 /* AskSage monthly-token allowance */
 .aq{background:var(--bg-2);border:1px solid var(--line);border-radius:11px;padding:12px 13px;margin:10px 0}
 .aq-head{display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--txt-2);margin-bottom:8px}

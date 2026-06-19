@@ -41,6 +41,8 @@ export interface GuiSettings {
   // Personalization knowledge graph (ADR-0010, P9.x): opt-in, encrypted-at-rest.
   // OFF by default — no user-fact distillation, recall, or store until enabled.
   personalizationEnabled?: boolean;
+  // Active compartment (ADR-0012): work | personal | cui | combined (view). Default personal.
+  personalScope?: "work" | "personal" | "cui" | "combined";
 }
 
 export const ASKSAGE_DEFAULT_LIMIT = 200_000;
@@ -51,6 +53,9 @@ export function personalStorePath(): string {
 }
 export function setPersonalization(enabled: boolean): GuiSettings {
   const s = load(); s.personalizationEnabled = enabled; save(s); return s;
+}
+export function setPersonalScope(scope: GuiSettings["personalScope"]): GuiSettings {
+  const s = load(); s.personalScope = scope; save(s); return s;
 }
 
 export function load(): GuiSettings {
