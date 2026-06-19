@@ -57,6 +57,9 @@ export const EVENT_NAMES = [
   "tool_call_blocked",
   // personalization knowledge graph (ADR-0010, P9.1) — opt-in, encrypted-at-rest
   "personal_store_unlocked",
+  // P9.2 — auto-distilled user facts + scope-aware recall
+  "personal_fact_learned",
+  "personal_recall_injected",
 ] as const;
 export type EventName = (typeof EVENT_NAMES)[number];
 

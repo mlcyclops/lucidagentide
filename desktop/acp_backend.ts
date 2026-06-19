@@ -12,6 +12,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { ACPClient } from "./acp.ts";
 import { currentWorkspace } from "./workspace.ts";
+import { learnFromTurn, recallPreamble } from "./personal.ts";
 
 const REPO = join(import.meta.dir, "..");
 // Absolute so the gate loads from THIS repo even when omp runs in another workspace.
@@ -45,6 +46,9 @@ class Backend {
   // inside the first user turn - never the frozen prefix (ADR-0007 / invariant #5).
   private persona: string | null = null;
   private personaDelivered = false;
+  // Personalization recall (P9.2): a <user-profile> block delivered once per session in
+  // the user turn (never the frozen prefix). Off unless personalization is enabled+unlocked.
+  private recallDelivered = false;
   configOptions: any[] = [];
   commands: any[] = [];
 
@@ -121,6 +125,7 @@ class Backend {
     if (this.sessionId) await this.acp!.request("session/close", { sessionId: this.sessionId }).catch(() => {});
     this.sessionId = null;
     this.personaDelivered = false; // re-deliver the persona in the fresh session
+    this.recallDelivered = false;
     await this.ensureSession();
   }
 
@@ -130,22 +135,30 @@ class Backend {
     try { this.acp?.stop(); } catch { /* ignore */ }
     this.acp = null; this.starting = null; this.sessionId = null; this.listener = null;
     this.personaDelivered = false; // keep the chosen persona; re-deliver after respawn
+    this.recallDelivered = false;
   }
 
-  /** Run one turn, streaming events to onEvent; resolves after `done`. */
+  /** Run one turn, streaming events to onEvent; resolves after `done`. Captures the
+   *  assistant reply so the personalization distiller can learn from the turn (P9.2). */
   async prompt(text: string, onEvent: (e: ChatEvent) => void): Promise<void> {
-    this.listener = onEvent;
+    let assistant = "";
+    const sink = (e: ChatEvent) => { if (e.type === "token") assistant += e.text; onEvent(e); };
+    this.listener = sink;
     try {
       await this.ensureSession();
-      // Deliver the approved persona once, as a delimited preamble in the user turn.
-      let body = text;
-      if (this.persona && !this.personaDelivered) { body = `${this.persona}\n\n${text}`; this.personaDelivered = true; }
+      // Deliver, once per session in the user turn (never the frozen prefix): the approved
+      // persona (delimited untrusted) + the personalization recall (<user-profile> guidance).
+      let preamble = "";
+      if (this.persona && !this.personaDelivered) { preamble += `${this.persona}\n\n`; this.personaDelivered = true; }
+      if (!this.recallDelivered) { const r = recallPreamble(); if (r) preamble += `${r}\n\n`; this.recallDelivered = true; }
+      const body = preamble + text;
       await this.acp!.request("session/prompt", { sessionId: this.sessionId, prompt: [{ type: "text", text: body }] });
     } catch (e) {
       onEvent({ type: "token", text: `\n[agent unavailable: ${String((e as any)?.message ?? e)}]` });
     }
-    onEvent({ type: "done" });
     this.listener = null;
+    onEvent({ type: "done" });
+    void learnFromTurn(text, assistant); // best-effort, after the turn — fail-closed inside
   }
 }
 

@@ -4,6 +4,20 @@ Three lines per session: **shipped / stubbed / next** (CLAUDE.md session ritual)
 
 -----
 
+## P9.2: conversation distiller + scope-aware recall (ADR-0010/0012)
+- **shipped:** harness/personal/distiller.ts — learn durable user-facts from a turn, FAIL-CLOSED:
+  the user's text is scanned and only a clean+trusted source contributes facts (suspicious/
+  quarantined/unscannable learn NOTHING — keystone #2 on the personal path). Pluggable extractor:
+  heuristicExtractor (offline, the desktop default) + modelExtractor(callModel) (the production
+  seam). harness/personal/recall.ts — buildRecall() makes a scoped <user-profile> block (trusted/
+  untrusted facts only, escaped). New EventNames personal_fact_learned / personal_recall_injected.
+  Wired into desktop: acp_backend captures the assistant reply, injects recall once per session in
+  the user turn (never the frozen prefix), and runs the distiller after each turn (enabled+unlocked
+  only). 8 new distiller tests (incl. quarantined/suspicious → learns nothing); 149 harness green.
+- **stubbed:** desktop uses the heuristic extractor by default (no per-turn model cost); the model
+  extractor is implemented + tested but needs an opt-in + a callModel wiring to avoid surprise spend.
+- **next:** P9.3 — the in-app SVG Knowledge Graph view (nodes/edges, drill-down, edit/forget).
+
 ## P9.1c: Settings UX — snappy progressive load + compartment switch fix
 - **shipped:** Settings now paints a shell instantly (~2ms) and hydrates each section independently —
   a slow omp/AskSage fetch no longer blocks the page (root cause of both "Settings slow" and the
