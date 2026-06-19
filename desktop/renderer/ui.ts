@@ -119,6 +119,32 @@ export function createPalette(getActions: () => Action[]) {
   return { show, hide };
 }
 
+// ───────────────────────── anchored popover ─────────────────────────
+// A managed floating card anchored to an element; closes on outside-click / Esc.
+export function popover(anchor: HTMLElement, inner: string, onClose?: () => void): { node: HTMLElement; close: () => void } {
+  const node = el(`<div class="popover" role="dialog">${inner}</div>`);
+  document.body.appendChild(node);
+  const r = anchor.getBoundingClientRect();
+  const pr = node.getBoundingClientRect();
+  let x = Math.min(r.left, window.innerWidth - pr.width - 10);
+  let y = r.bottom + 8;
+  if (y + pr.height > window.innerHeight - 10) y = Math.max(10, r.top - pr.height - 8);
+  node.style.left = `${Math.max(10, x)}px`;
+  node.style.top = `${y}px`;
+  requestAnimationFrame(() => node.classList.add("show"));
+  const close = () => {
+    node.classList.remove("show");
+    setTimeout(() => node.remove(), 160);
+    document.removeEventListener("mousedown", outside, true);
+    document.removeEventListener("keydown", onKey, true);
+    onClose?.();
+  };
+  const outside = (e: MouseEvent) => { if (!node.contains(e.target as Node) && !anchor.contains(e.target as Node)) close(); };
+  const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") close(); };
+  setTimeout(() => { document.addEventListener("mousedown", outside, true); document.addEventListener("keydown", onKey, true); }, 0);
+  return { node, close };
+}
+
 // ───────────────────────── toast / popover ─────────────────────────
 export interface ToastAction { label: string; kind?: "ok" | "danger"; run?: () => void }
 export interface ToastOpts { title: string; desc: string; meta?: string; actions?: ToastAction[]; timeout?: number }

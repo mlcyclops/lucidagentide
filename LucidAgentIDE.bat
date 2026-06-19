@@ -164,7 +164,7 @@ if exist "%REPO%\desktop\node_modules\electron\dist\electron.exe" (
   echo    ^(For the native app:  cd desktop  ^&^&  bun install  ^&^&  bun run start^)
   start "LucidAgentIDE GUI (web)" cmd /k "chcp 65001>nul & cd /d "%REPO%" & set "ANTHROPIC_API_KEY=%ANTHROPIC_API_KEY%" & bun run desktop:web"
   timeout /t 3 >nul
-  start "" "http://localhost:4318"
+  start "" "http://localhost:5319"
 )
 echo    Done.
 echo.

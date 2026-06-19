@@ -5,11 +5,11 @@
 // agent turn. Same renderer in Electron (real omp ACP via window.lucid) and in
 // the browser dev server (simulated). Pure DOM, no framework.
 
-import { bridge, type ChatEvent, type MemorySnapshot, type SecuritySnapshot } from "./bridge.ts";
+import { bridge, type ChatEvent, type ConfigOption, type MemorySnapshot, type OmpCommand, type SecuritySnapshot } from "./bridge.ts";
 import { $, $$, accordion, el, fmtNum, gauge, spark, table } from "./dom.ts";
 import { ageStr, esc, fmtUSD, goodColor, loadColor } from "./format.ts";
 import { icon, piMark } from "./icons.ts";
-import { createPalette, initTooltips, showToast } from "./ui.ts";
+import { type Action, createPalette, initTooltips, popover, showToast } from "./ui.ts";
 
 type Tab = "security" | "memory";
 const state = {
@@ -19,9 +19,14 @@ const state = {
   model: "claude-opus-4-8",
   security: null as SecuritySnapshot | null,
   memory: null as MemorySnapshot | null,
+  config: [] as ConfigOption[],
+  commands: [] as OmpCommand[],
+  liveUsage: null as { used: number; size: number; cost: number } | null,
+  zoom: 1,
   lastOk: 0,
   streaming: false,
 };
+const prettyModel = (v: string) => v.replace(/^anthropic\//, "");
 const OPEN = new Set<string>(["sec.quarantine", "sec.approvals", "mem.context", "mem.cache"]);
 let lastInspHash = "";
 
@@ -31,10 +36,15 @@ function buildShell(): void {
   <div id="app-inner" style="display:contents">
     <div class="titlebar">
       <div class="brand">LUCID<span class="pi">${piMark}</span></div>
-      <button class="model-badge" id="modelBadge" data-tip="Active model|Click to switch (⌘K → “model”)" data-tip-icon="spark">
-        <span class="dot"></span><span id="modelName">${esc(state.model)}</span>${icon("chevron", 13)}
+      <button class="model-badge" id="modelBadge" data-tip="Model · mode · thinking|Click to choose" data-tip-icon="spark">
+        <span class="dot"></span><span id="modelName">${esc(prettyModel(state.model))}</span>${icon("chevron", 13)}
       </button>
       <div class="tb-spacer"></div>
+      <div class="zoom" role="group" aria-label="Text zoom">
+        <button id="zoomOut" data-tip="Zoom out|Ctrl −">${icon("minus", 15)}</button>
+        <span class="lvl" id="zoomLvl" data-tip="Reset zoom|Ctrl 0">100%</span>
+        <button id="zoomIn" data-tip="Zoom in|Ctrl +">${icon("plus", 15)}</button>
+      </div>
       <button class="model-badge" id="cmdkBtn" data-tip="Command palette|Ctrl / ⌘ K" data-tip-icon="command">${icon("command", 14)}<span>Commands</span></button>
       <div class="win-ctrls">
         <button id="winMin" data-tip="Minimise">${icon("minus", 15)}</button>
@@ -137,6 +147,7 @@ async function send(): Promise<void> {
     if (e.type === "token") { buf += e.text; textEl.innerHTML = mdInline(buf) + `<span class="cursor"></span>`; scrollChat(); }
     else if (e.type === "tool") addEvent(`<div class="evt tool">${icon("eye", 15)}<span class="k">${esc(e.name)}</span><span>${esc(e.detail)}</span></div>`);
     else if (e.type === "block") onBlock(e);
+    else if (e.type === "usage") { state.liveUsage = { used: e.used, size: e.size, cost: e.cost }; renderStatus(); }
     else if (e.type === "done") { textEl.innerHTML = mdInline(buf); state.streaming = false; setSendEnabled(); }
   };
   try { await bridge.sendPrompt(text, onEvent); }
@@ -268,18 +279,22 @@ const emptyDb = () => `<div class="empty">No live security DB yet — <code>agen
 // ───────────────────────── status bar ─────────────────────────
 function renderStatus(): void {
   const m = state.memory, s = m?.session;
-  const ctx = s ? s.current / s.window : 0;
+  const lu = state.liveUsage;
+  const curTok = lu ? lu.used : (s?.current ?? 0);
+  const winTok = lu ? lu.size : (s?.window ?? 0);
+  const ctx = winTok ? curTok / winTok : 0;
+  const cost = lu ? lu.cost : (s?.cost ?? 0);
   const hit = s?.cache.hit ?? 0;
   const budget = m?.budgets?.[0];
   const ago = state.lastOk ? Math.round((Date.now() - state.lastOk) / 1000) : null;
   $("#statusbar")!.innerHTML = `
-    <div class="seg" data-tip="Active model">${icon("spark", 14)} <b>${esc(state.model)}</b></div>
-    <div class="seg" data-tip="Context window|How full the model's context is this turn">${icon("brain", 14)}
+    <div class="seg" data-tip="Active model|Click the badge to change">${icon("spark", 14)} <b>${esc(prettyModel(state.model))}</b></div>
+    <div class="seg" data-tip="Context window|How full the model's context is${lu ? " (live this session)" : ""}">${icon("brain", 14)}
       <span class="mini"><span class="fill" style="width:${Math.round(ctx * 100)}%;background:${loadColor(ctx)}"></span></span>
-      <b>${fmtNum(s?.current ?? 0)}</b>/${fmtNum(s?.window ?? 0)}</div>
+      <b>${fmtNum(curTok)}</b>/${fmtNum(winTok)}</div>
     <div class="seg" data-tip="KV-cache hit rate|Higher = the frozen prefix is paying off (invariant #6)">${icon("bolt", 14)} cache <b style="color:${goodColor(hit)}">${Math.round(hit * 100)}%</b></div>
     ${budget ? `<div class="seg" data-tip="Provider rate-limit">${esc(budget.label)} <b>${Math.round(budget.used * 100)}%</b></div>` : ""}
-    <div class="seg" data-tip="Session cost">${s ? fmtUSD(s.cost) : "$0"}</div>
+    <div class="seg" data-tip="Session cost">${fmtUSD(cost)}</div>
     <div class="right">
       <div class="seg" data-tip="Security gate|In-process, fail-closed">${icon("shield", 13)} gate active</div>
       <div class="seg"><span class="live-dot"></span> ${ago == null ? "connecting…" : ago < 2 ? "live" : `updated ${ago}s ago`}</div>
@@ -291,7 +306,8 @@ async function refresh(): Promise<void> {
   try {
     const [sec, mem] = await Promise.all([bridge.security(), bridge.memory()]);
     state.security = sec; state.memory = mem;
-    if (mem?.session?.model) { state.model = mem.session.model; const mn = $("#modelName"); if (mn) mn.textContent = state.model; }
+    // the badge reflects the live session CONFIG model (loadConfig), not the
+    // historical snapshot — so it shows what the next turn will actually use.
     state.lastOk = Date.now();
     const awaiting = sec?.approvals.length ?? 0;
     const badge = $("#railBadge")!;
@@ -324,6 +340,20 @@ function wire(): void {
   $("#railCmd")!.addEventListener("click", () => palette.show());
   $("#cmdkBtn")!.addEventListener("click", () => palette.show());
 
+  // model / mode / thinking picker
+  $("#modelBadge")!.addEventListener("click", () => openConfigPopover($("#modelBadge")!));
+
+  // text zoom
+  $("#zoomIn")!.addEventListener("click", () => nudgeZoom(0.1));
+  $("#zoomOut")!.addEventListener("click", () => nudgeZoom(-0.1));
+  $("#zoomLvl")!.addEventListener("click", () => resetZoom());
+  window.addEventListener("keydown", (e) => {
+    if (!(e.ctrlKey || e.metaKey)) return;
+    if (e.key === "=" || e.key === "+") { e.preventDefault(); nudgeZoom(0.1); }
+    else if (e.key === "-" || e.key === "_") { e.preventDefault(); nudgeZoom(-0.1); }
+    else if (e.key === "0") { e.preventDefault(); resetZoom(); }
+  });
+
   // inspector tabs
   $$(".insp-tab").forEach((t) => t.addEventListener("click", () => focusInspector((t as HTMLElement).dataset.insp as Tab)));
 
@@ -354,24 +384,108 @@ function wire(): void {
 }
 
 // ───────────────────────── palette actions ─────────────────────────
-const palette = createPalette(() => [
-  { id: "sec", title: "Open Security panel", icon: "shield", hint: "inspector", run: () => focusInspector("security") },
-  { id: "mem", title: "Open Memory & context panel", icon: "brain", hint: "inspector", run: () => focusInspector("memory") },
-  { id: "opus", title: "Model: claude-opus-4-8 (most capable)", icon: "spark", run: () => setModel("claude-opus-4-8") },
-  { id: "sonnet", title: "Model: claude-sonnet-4-6 (balanced)", icon: "spark", run: () => setModel("claude-sonnet-4-6") },
-  { id: "haiku", title: "Model: claude-haiku-4-5 (fast)", icon: "spark", run: () => setModel("claude-haiku-4-5") },
-  { id: "scan", title: "Scan clipboard text for hidden-Unicode injection", icon: "search", run: () => showToast({ title: "Scan", desc: "Paste text in the composer prefixed with /lucid:scan — the gate scans it before any tool runs.", actions: [{ label: "OK" }], timeout: 4000 }) },
-  { id: "side", title: "Toggle sidebar", icon: "layout", run: () => toggleSidebar() },
-  { id: "insp", title: "Toggle inspector panel", icon: "layout", run: () => toggleInspector() },
-  { id: "refresh", title: "Refresh dashboards now", icon: "refresh", run: () => refresh() },
-]);
+function newSession(): void {
+  $("#thread")!.innerHTML = ""; state.liveUsage = null;
+  void bridge.newSession(); renderStatus(); $("#input")?.focus();
+}
+/** Drop an omp slash command into the composer (omp runs it on send via ACP). */
+function runCommand(c: OmpCommand): void {
+  const ta = $("#input") as HTMLTextAreaElement;
+  ta.value = `/${c.name} `; autosize(ta); setSendEnabled(); ta.focus();
+  showToast({ title: `/${c.name}`, desc: `${c.description ?? "omp command"} — press Enter to run${c.hint ? ` (args: ${c.hint})` : ""}.`, actions: [{ label: "OK" }], timeout: 3400 });
+}
 
-function setModel(m: string): void {
-  state.model = m;
-  const mn = $("#modelName"); if (mn) mn.textContent = m;
-  renderStatus();
-  (window as any).lucid?.setModel?.(m);
-  showToast({ title: "Model switched", desc: `New turns use ${m}.`, actions: [{ label: "OK" }], timeout: 2600 });
+const palette = createPalette(() => {
+  const acts: Action[] = [
+    { id: "cfg", title: "Choose model · mode · thinking…", icon: "spark", hint: "config", run: () => openConfigPopover($("#modelBadge")!) },
+    { id: "sec", title: "Open Security panel", icon: "shield", hint: "panel", run: () => focusInspector("security") },
+    { id: "mem", title: "Open Memory & context panel", icon: "brain", hint: "panel", run: () => focusInspector("memory") },
+    { id: "zin", title: "Zoom in", icon: "plus", hint: "Ctrl +", run: () => nudgeZoom(0.1) },
+    { id: "zout", title: "Zoom out", icon: "minus", hint: "Ctrl −", run: () => nudgeZoom(-0.1) },
+    { id: "zreset", title: "Reset text zoom to 100%", icon: "refresh", hint: "Ctrl 0", run: () => resetZoom() },
+    { id: "new", title: "New session", icon: "plus", run: () => newSession() },
+    { id: "side", title: "Toggle sidebar", icon: "layout", run: () => toggleSidebar() },
+    { id: "insp", title: "Toggle inspector", icon: "layout", run: () => toggleInspector() },
+    { id: "refresh", title: "Refresh dashboards now", icon: "refresh", run: () => refresh() },
+  ];
+  const model = state.config.find((c) => c.id === "model");
+  if (model) for (const o of model.options.slice(0, 10)) acts.push({ id: "m:" + o.value, title: `Model: ${o.name}`, icon: "spark", hint: o.value === model.currentValue ? "current" : "", run: () => applyConfig("model", o.value) });
+  for (const c of state.commands) acts.push({ id: "cmd:" + c.name, title: `/${c.name}${c.hint ? " " + c.hint : ""}`, icon: "command", hint: (c.description ?? "omp").slice(0, 26), run: () => runCommand(c) });
+  return acts;
+});
+
+// ───────────────────────── session config (model / mode / thinking) ─────────────────────────
+async function loadConfig(): Promise<void> {
+  try {
+    state.config = await bridge.config();
+    state.commands = await bridge.commands();
+    const model = state.config.find((c) => c.id === "model");
+    if (model) { state.model = model.currentValue; const mn = $("#modelName"); if (mn) mn.textContent = prettyModel(model.currentValue); }
+  } catch { /* browser/no-session: keep defaults */ }
+}
+
+async function applyConfig(configId: string, value: string): Promise<void> {
+  const opt = state.config.find((c) => c.id === configId);
+  const label = opt?.options.find((o) => o.value === value)?.name ?? value;
+  try { state.config = await bridge.setConfig(configId, value); } catch { /* keep optimistic */ }
+  const o = state.config.find((c) => c.id === configId); if (o) o.currentValue = value;
+  if (configId === "model") { state.model = value; const mn = $("#modelName"); if (mn) mn.textContent = prettyModel(value); renderStatus(); }
+  showToast({ title: `${opt?.name ?? configId} → ${label}`, desc: configId === "model" ? "New turns use this model." : "Applied to the active session.", actions: [{ label: "OK" }], timeout: 2400 });
+}
+
+function openConfigPopover(anchor: HTMLElement): void {
+  const model = state.config.find((c) => c.id === "model");
+  const mode = state.config.find((c) => c.id === "mode");
+  const think = state.config.find((c) => c.id === "thinking");
+  const seg = (c: ConfigOption | undefined, accent = false) => !c ? "" :
+    `<div class="cfg-sec"><div class="cfg-lbl">${esc(c.name)}</div><div class="seg" data-cfg="${esc(c.id)}">${c.options.map((o) =>
+      `<button class="${o.value === c.currentValue ? "on" + (accent ? " acc" : "") : ""}" data-val="${esc(o.value)}">${esc(o.name)}</button>`).join("")}</div></div>`;
+  const modelSec = model ? `<div class="cfg-sec">
+      <div class="cfg-lbl">Model <span class="cur">${esc(prettyModel(model.currentValue))}</span></div>
+      <div class="cfg-search">${icon("search", 15)}<input id="cfgModelSearch" placeholder="Search ${model.options.length} models…" /></div>
+      <div class="cfg-list" id="cfgModelList"></div></div>` : "";
+  const { node, close } = popover(anchor, modelSec + seg(mode) + seg(think, true));
+
+  // model list (searchable)
+  if (model) {
+    const list = $("#cfgModelList", node)!;
+    const draw = (q = "") => {
+      const ql = q.toLowerCase();
+      list.innerHTML = model.options.filter((o) => o.name.toLowerCase().includes(ql) || o.value.toLowerCase().includes(ql))
+        .map((o) => `<div class="cfg-opt ${o.value === model.currentValue ? "on" : ""}" data-val="${esc(o.value)}">
+          <span class="tick">${icon("check", 13)}</span><span>${esc(o.name)}</span><span class="id">${esc(prettyModel(o.value))}</span></div>`).join("");
+    };
+    draw();
+    ($("#cfgModelSearch", node) as HTMLInputElement).addEventListener("input", (e) => draw((e.target as HTMLInputElement).value));
+    list.addEventListener("click", (e) => {
+      const it = (e.target as HTMLElement).closest("[data-val]") as HTMLElement | null;
+      if (it) { applyConfig("model", it.dataset.val!); close(); }
+    });
+  }
+  // segmented mode / thinking
+  for (const segEl of $$(".seg[data-cfg]", node)) {
+    segEl.addEventListener("click", (e) => {
+      const b = (e.target as HTMLElement).closest("[data-val]") as HTMLElement | null;
+      if (!b) return;
+      const cfgId = (segEl as HTMLElement).dataset.cfg!;
+      for (const c of segEl.children) c.classList.toggle("on", c === b);
+      applyConfig(cfgId, b.dataset.val!);
+    });
+  }
+}
+
+// ───────────────────────── text zoom ─────────────────────────
+function applyZoom(): void {
+  state.zoom = Math.max(0.7, Math.min(1.8, Math.round(state.zoom * 100) / 100));
+  bridge.setZoom(state.zoom);
+  const lvl = $("#zoomLvl"); if (lvl) lvl.textContent = `${Math.round(state.zoom * 100)}%`;
+  try { localStorage.setItem("lucid.zoom", String(state.zoom)); } catch { /* ignore */ }
+}
+function nudgeZoom(delta: number): void { state.zoom += delta; applyZoom(); }
+function resetZoom(): void { state.zoom = 1; applyZoom(); }
+function initZoom(): void {
+  try { const z = Number(localStorage.getItem("lucid.zoom")); if (z) state.zoom = z; } catch { /* ignore */ }
+  applyZoom();
 }
 
 // ───────────────────────── boot ─────────────────────────
@@ -379,8 +493,10 @@ buildShell();
 renderSessions();
 initTooltips();
 wire();
+initZoom();
 seedThread();
 renderStatus();
+void loadConfig().then(renderStatus);
 refresh();
 setInterval(refresh, 4000);
 setInterval(renderStatus, 1000);

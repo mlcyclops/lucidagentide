@@ -9,7 +9,7 @@ renderer as the browser build, with real `omp acp` wired in.
 **Just the UI (no Electron, screenshot-able in a browser):**
 
 ```bash
-bun run desktop:web        # from repo root → http://localhost:4318
+bun run desktop:web        # from repo root → http://localhost:5319
 ```
 
 The browser build uses live dashboards (`/api/security`, `/api/memory`) and a
@@ -47,14 +47,33 @@ desktop/
 `fetch('/api/*')` + a simulated stream in a plain browser, so the exact same
 renderer is developed and screenshot-verified without Electron.
 
+## Features
+
+- **Functional chat** over real omp ACP (`session/new` → `session/prompt`,
+  streaming `agent_message_chunk`), with the gate loaded so blocked tool calls
+  surface as a fly-in toast.
+- **Model · Mode · Thinking picker** — click the titlebar model badge. The list,
+  current values, and switching all use omp's live `configOptions`
+  (`session/set_config_option`); no need to drop into omp.
+- **Text zoom** — titlebar − / 100% / +, plus Ctrl ± / Ctrl 0 (Electron
+  `webFrame.setZoomFactor`; CSS `zoom` in the browser build). Persisted.
+- **omp commands** — the 39 ACP slash commands (`/context`, `/usage`, `/tools`,
+  `/compact`, `/memory`, …) appear in the ⌘K palette; selecting one drops it in
+  the composer to run.
+- **Live telemetry** — the status bar's context gauge + cost update from the
+  session's `usage_update` stream.
+
 ## Verified vs. to confirm on first run
 
-- **Verified:** the renderer (screenshotted), the dashboards on live data, the
-  ACP `initialize` handshake (`bun run acp:probe`), and that the gate loads under
-  `omp acp -e …`.
-- **Confirm on first real model turn:** the ACP `session/update` → chat-event
-  mapping in `main.ts` follows the ACP spec but could not be exercised headlessly;
-  field names may need a small tweak against a live stream.
+- **Verified:** the renderer (screenshotted: chat stream, toast, palette, config
+  picker, zoom), the dashboards on live data, and — captured from a **live omp
+  16.0.8 ACP turn** — the exact wire format now used by `main.ts`/`acp.ts`:
+  `session/new` config options, `agent_message_chunk`/`usage_update`/
+  `available_commands_update`/`config_option_update`, and
+  `session/set_config_option {sessionId, configId, value}`.
+- **Confirm in the running window:** tool-call event shapes (`tool_call` /
+  `tool_call_update`) weren't exercised (the probe turn used no tools); the gate's
+  stderr `[BLOCKED …]` line is the reliable block signal regardless.
 
 See [`../DECISIONS.md`](../DECISIONS.md) ADR-0006 for why the gate stays
 in-process and the GUI is a front end only.

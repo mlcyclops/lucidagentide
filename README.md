@@ -70,7 +70,7 @@ compaction policy, semantic memory) — or `!bun run dashboard:tui` /
 ### Desktop app + browser dashboards
 
 ```bash
-bun run desktop:web      # http://localhost:4318 — the full GUI (chat + dashboards) in a browser
+bun run desktop:web      # http://localhost:5319 — the full GUI (chat + dashboards) in a browser
 bun run dashboard:web    # http://localhost:4317 — just the dashboards, live, read-only
 bun run acp:probe        # proves omp speaks Agent Client Protocol (the GUI's chat seam)
 ```

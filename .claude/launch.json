@@ -11,7 +11,7 @@
       "name": "lucid-desktop",
       "runtimeExecutable": "bun",
       "runtimeArgs": ["run", "desktop/dev.ts"],
-      "port": 4318
+      "port": 5319
     }
   ]
 }

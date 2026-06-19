@@ -1,16 +1,17 @@
 // desktop/preload.ts — the only bridge exposed to the renderer (contextIsolated).
-// Implements the LucidBridge shape (see renderer/bridge.ts): dashboards over the
-// local HTTP API (read-only), chat over real omp ACP via IPC, native window
-// controls. When this is present the renderer uses it; in a plain browser it
-// falls back to fetch + a simulated chat.
+// Implements the LucidBridge shape (renderer/bridge.ts): dashboards over the local
+// HTTP API (read-only), chat + live session config over real omp ACP via IPC,
+// native text zoom via webFrame, and window controls. When present the renderer
+// uses it; in a plain browser it falls back to fetch + a simulated chat.
 
-import { contextBridge, ipcRenderer } from "electron";
+import { contextBridge, ipcRenderer, webFrame } from "electron";
 import { randomUUID } from "node:crypto";
 
 type ChatEvent =
   | { type: "token"; text: string }
   | { type: "tool"; name: string; detail: string }
   | { type: "block"; tool: string; reason: string; severity: string; findings: string }
+  | { type: "usage"; used: number; size: number; cost: number }
   | { type: "done" };
 
 const getData = (path: string) =>
@@ -20,7 +21,11 @@ contextBridge.exposeInMainWorld("lucid", {
   isElectron: true,
   security: () => getData("/api/security"),
   memory: () => getData("/api/memory"),
-  setModel: (m: string) => ipcRenderer.send("lucid:setModel", m),
+  config: () => ipcRenderer.invoke("lucid:config"),
+  setConfig: (configId: string, value: string) => ipcRenderer.invoke("lucid:setConfig", { configId, value }),
+  commands: () => ipcRenderer.invoke("lucid:commands"),
+  newSession: () => ipcRenderer.invoke("lucid:newSession"),
+  setZoom: (factor: number) => { try { webFrame.setZoomFactor(factor); } catch { /* ignore */ } },
   win: {
     minimize: () => ipcRenderer.send("lucid:win", "minimize"),
     toggleMaximize: () => ipcRenderer.send("lucid:win", "toggleMaximize"),

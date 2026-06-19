@@ -15,7 +15,7 @@ LucidAgentIDE.bat dashboard  # just render the security dashboard
 
 Pick **G) Desktop GUI** to launch the windowed app (gated chat + live security &
 memory dashboards) — the native Electron app if it's installed, otherwise the
-browser GUI (it opens automatically at http://localhost:4318).
+browser GUI (it opens automatically at http://localhost:5319).
 
 On a fresh machine, pick **9) Setup / install missing dependencies** — it
 installs bun, uv, omp, and the project deps (only what's missing). Every block

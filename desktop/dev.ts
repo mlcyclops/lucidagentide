@@ -6,14 +6,14 @@
 // Electron loads this exact renderer; this server makes it runnable + screenshot-
 // able in a plain browser (the bridge falls back to simulated chat there).
 //
-//   bun run desktop:web        # http://localhost:4318
+//   bun run desktop:web        # http://localhost:5319
 
 import { join } from "node:path";
 import { securitySnapshot } from "../tools/web/data.ts";
 import { memorySnapshot } from "../tools/memory_data.ts";
 
 const ROOT = join(import.meta.dir, "renderer");
-const PORT = Number(process.env.PORT ?? 4318);
+const PORT = Number(process.env.PORT ?? 5319);
 const CT: Record<string, string> = { ".html": "text/html", ".css": "text/css", ".js": "text/javascript", ".svg": "image/svg+xml" };
 
 async function bundleApp(): Promise<{ js: string; ok: boolean }> {

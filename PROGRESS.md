@@ -428,3 +428,15 @@ Three lines per session: **shipped / stubbed / next** (CLAUDE.md session ritual)
   in-process on the chat path) + read-only dashboards; reuses ~/.omp credentials.
 - **next:** confirm ACP session/update→event field shapes on a live model turn;
   surface tool-permission prompts in the UI; package installers (electron-builder).
+
+## DX: desktop GUI — functional chat, model picker, zoom, omp commands
+- **shipped:** captured the live omp ACP wire format and wired real chat
+  (session/new → session/prompt, agent_message_chunk streaming, usage_update →
+  live context/cost). main.ts/preload.ts/acp.ts use the exact shapes.
+- **shipped (renderer, screenshot-verified):** titlebar Model·Mode·Thinking picker
+  driven by omp configOptions (set via session/set_config_option); text-zoom
+  controls (− 100% +, Ctrl ±/0; webFrame in Electron, CSS zoom in browser); the 39
+  ACP slash commands surfaced in the ⌘K palette. Desktop dev port → 5319 (4318 hit
+  a Windows excluded range).
+- **next:** confirm tool_call event shapes in the live window; surface tool-
+  permission prompts; persist per-session model choice.
