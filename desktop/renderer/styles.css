@@ -513,11 +513,11 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .set-close{-webkit-app-region:no-drag;border:0;background:transparent;color:var(--txt-3);width:30px;height:30px;border-radius:8px;display:grid;place-items:center;cursor:pointer;transition:background var(--t),color var(--t)}
 .set-close:hover{background:var(--bg-3);color:var(--txt)}
 .set-body{flex:1;min-height:0;overflow:auto;padding:14px 16px 24px}
-.set-sec{margin-bottom:18px}
+.set-sec{margin-bottom:14px}
 .set-lbl{font-size:11px;letter-spacing:1.3px;text-transform:uppercase;color:var(--txt-3);margin-bottom:10px;display:flex;align-items:center;gap:8px}
 .set-sub{text-transform:none;letter-spacing:0;font-size:11px;color:var(--txt-4)}
 /* collapsible settings section (keeps the panel short) */
-.set-coll{margin-bottom:12px;border:1px solid var(--line-soft);border-radius:11px;background:var(--bg-1);overflow:hidden}
+.set-coll{margin-bottom:14px;border:1px solid var(--line-soft);border-radius:11px;background:var(--bg-1);overflow:hidden}
 .set-coll-h{width:100%;display:flex;align-items:center;justify-content:space-between;gap:10px;background:transparent;
   border:0;cursor:pointer;padding:12px 13px;color:inherit;text-align:left}
 .set-coll-h .set-lbl{margin-bottom:0}
@@ -557,6 +557,15 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .pscope-note.warn .ic{color:var(--amber)}
 .pscope-note.danger{border-color:color-mix(in srgb,var(--red) 45%,var(--line-soft));background:var(--red-dim);color:#f3b7b7}
 .pscope-note.danger .ic{color:var(--red)}
+/* uniform, auto-spanning compartment count cards */
+.pscope-counts{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:11px}
+.psc{display:flex;flex-direction:column;align-items:center;gap:2px;min-width:0;background:var(--bg-2);border:1px solid var(--line);border-radius:8px;padding:8px 6px}
+.psc b{font-family:var(--mono);font-size:16px;font-weight:700;line-height:1;color:var(--txt-2)}
+.psc b.psc-personal{color:var(--green)}
+.psc b.psc-work{color:var(--amber)}
+.psc b.psc-cui{color:var(--red)}
+.psc span{font-size:9px;text-transform:uppercase;letter-spacing:.05em;color:var(--txt-4)}
+.pscope-lock{margin-top:12px}
 /* AskSage monthly-token allowance */
 .aq{background:var(--bg-2);border:1px solid var(--line);border-radius:11px;padding:12px 13px;margin:10px 0}
 .aq-head{display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--txt-2);margin-bottom:8px}

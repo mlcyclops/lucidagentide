@@ -496,8 +496,11 @@ function secPersonal(p: import("./bridge.ts").PersonalStatus | null): string {
       <div class="pscope-lbl">Compartment <span class="info-dot" data-tip="Data compartments|Keep Work, Personal, and CUI knowledge separate. The active compartment scopes what is learned and recalled; Combined is a union view. Portability is compartment-aware — see ADR-0012.">${icon("info", 11)}</span></div>
       <div class="seg pscope-seg">${seg}</div>
       <div class="pscope-note ${info.tone}">${icon(info.tone === "danger" ? "shield" : "info", 13)} <span>${esc(info.note)}</span></div>
-      <div class="kvs"><span class="kv">personal <b>${c.personal}</b></span><span class="kv">work <b>${c.work}</b></span><span class="kv">cui <b>${c.cui}</b></span></div>
-      <button class="btn-mini" id="personalLock">${icon("shield", 12)} Lock</button>`;
+      <div class="pscope-counts">
+        <div class="psc"><b class="psc-personal">${c.personal}</b><span>personal</span></div>
+        <div class="psc"><b class="psc-work">${c.work}</b><span>work</span></div>
+        <div class="psc"><b class="psc-cui">${c.cui}</b><span>cui</span></div></div>
+      <button class="btn-mini pscope-lock" id="personalLock" data-tip="Lock the store|Wipes the in-memory encryption key. You'll re-enter your passphrase to use personalization again this session — nothing is learned or recalled while locked." data-tip-side="top">${icon("shield", 12)} Lock</button>`;
   }
   return card(toggle + inner);
 }
