@@ -643,7 +643,11 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .prov-key:focus{border-color:var(--accent)}
 .prov-key::placeholder{color:var(--txt-4)}
 
-.inspector[hidden],.settings[hidden]{display:none!important}
+/* An author rule that sets an explicit `display` overrides the UA `[hidden]{display:none}`
+   (author beats user-agent), leaving "hidden" elements visible — this stranded the Knowledge
+   panel (its close button couldn't dismiss it), and would do the same to the persona/skill
+   chips and the workspace bar. Make [hidden] authoritative everywhere. */
+[hidden]{display:none!important}
 
 /* ───────────────────────── workspace ───────────────────────── */
 .ws-bar{-webkit-app-region:no-drag;display:flex;align-items:center;gap:8px;width:calc(100% - 16px);margin:10px 8px 2px;
