@@ -4,6 +4,26 @@ Three lines per session: **shipped / stubbed / next** (CLAUDE.md session ritual)
 
 -----
 
+## P9.0: personalization knowledge-graph roadmap (planning only — ADR-0010)
+- **shipped:** ADR-0010 in DECISIONS.md — a detailed design for a private, FIPS-grade,
+  inspectable **personalization** knowledge graph (a Karpathy-style "second brain" about the user
+  that the agent learns/remembers/recalls to tailor responses). Refines ADR-0009 Phase C. Locked
+  decisions: hand-rolled SVG graph (zero deps); dedicated AES-256-GCM encrypted store; OS-keystore
+  (Electron safeStorage) + passphrase (PBKDF2) key custody; model-based auto-gated distiller. No code.
+- **stubbed:** all four phases (P9.1–P9.4) designed but unbuilt. Honest FIPS posture documented
+  (FIPS-approved algorithms + OS-keystore custody + a deployment checklist; Bun uses BoringSSL, so
+  no FIPS *mode* in-runtime). The project's first encryption-at-rest surface.
+- **next:** build **P9.1** (encrypted store + crypto + key custody + opt-in toggle; new EventName
+  personal_store_unlocked; no DuckDB migration — the store is a separate encrypted file).
+
+Roadmap phases (each its own future increment + ADR for its frozen-contract delta):
+- **P9.1 store+crypto+keys+opt-in** — encrypted personal store, AES-256-GCM, OS-keystore/passphrase. (first)
+- **P9.2 distiller+recall** — model-based auto-gated user-fact distiller; recall into prompt tail layer 9.
+- **P9.3 KG view** — hand-rolled SVG node/edge graph, drill-down, edit/forget, security-lens toggle.
+- **P9.4 vault-export** — personalization-focused Obsidian vault (audited decrypt→write, escaped).
+
+-----
+
 ## P8.0: memory/KG/observability roadmap (planning only — ADR-0009)
 - **shipped:** ADR-0009 in DECISIONS.md — a phased roadmap for the four user asks (cross-session
   memory, Obsidian KG export, prompt/response traceability, dev/admin logging). Locked decisions:

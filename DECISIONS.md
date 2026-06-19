@@ -723,3 +723,133 @@ seam, and is fully testable against the keystone-#2 fixtures and the prefix-hash
 - The raw-reveal decision (allow raw behind an audited gate) is the one place this roadmap
   deliberately relaxes "sanitized-only"; it is constrained to Developer mode + audit so the
   default deployment posture is unchanged.
+
+-----
+
+## ADR-0010 — Personalization Knowledge Graph (private, FIPS-grade, inspectable) (roadmap)
+
+**Date:** 2026-06-19
+**Status:** Accepted as a roadmap. Phases P9.1–P9.4 are **Proposed** — each is built in its
+own future increment with its own confirming ADR/addendum when its frozen-contract delta lands.
+**Context increment:** P9.0 (planning only — no functional code shipped this session).
+**Relationship:** **Refines ADR-0009 Phase C** (which was a security-export vault) into a full
+personalization feature, and reframes the memory layer's primary purpose. ADR-0009 phases A
+(recall), B (traceability), and D (dev-logging) still stand and integrate with this.
+
+### Context
+
+The user reframed the Obsidian/knowledge-graph idea: it is **primarily a private model OF THE
+USER** for tailoring responses — a Karpathy-style "second brain" of the user's preferences,
+decisions, behaviors, interests, personality, and (sanitized-but-working) links — that the agent
+**learns, remembers, and recalls** to personalize the experience. The security/provenance angle
+is demoted to a **secondary toggle/lens**. It must be **opt-in**, **FIPS-grade encrypted at
+rest**, and **inspectable as an interactive node/edge Knowledge Graph with drill-down**.
+
+### Decisions locked (with the user)
+
+1. **Graph view:** a hand-rolled **SVG force-directed graph, zero dependencies** (matches the
+   pure-DOM renderer; airgap/gov-friendly). Built with the existing `dom.ts`/`icons.ts` SVG helpers
+   + CSS variables — not a vendored graph library.
+2. **Store:** a **dedicated encrypted store** for user-profile facts (AES-256-GCM), separate from
+   the shared observability `agent_obs.duckdb` (whose Bun DuckDB binding cannot be transparently
+   encrypted). The Obsidian vault export + secrets are encrypted too.
+3. **Key custody:** **OS keystore + passphrase fallback** — Electron `safeStorage` (Windows DPAPI /
+   macOS Keychain / Linux libsecret) in the packaged app; PBKDF2-HMAC-SHA256 from a user passphrase
+   in the plain-Bun dev/preview runtime.
+4. **Distiller:** **model-based, auto-gated** — an LLM pass distills candidate user-facts each
+   session; each passes the fail-closed scanner gate; clean facts are auto-remembered (the user can
+   edit/forget later in the KG view).
+
+### Honest FIPS posture (important)
+
+The harness + dev server run on **Bun (BoringSSL), not Node/OpenSSL**, so a true **FIPS-140
+*mode*** is unavailable in that runtime. This ADR therefore commits to **FIPS-*approved*
+algorithms** — AES-256-GCM (authenticated), SHA-256, PBKDF2-HMAC-SHA256 (≥600k iters) — with the
+data-encryption key (DEK) **custodied by the OS keystore** and held only in memory. True FIPS-140-3
+validation is an OS/module concern the application cannot self-certify; it is captured as a
+**FIPS-140-3 deployment checklist** (run on a FIPS-mode OS, use a validated cryptographic module,
+enforce disk encryption, restrict file ACLs). We do not oversell "FIPS validated"; we provide
+FIPS-approved algorithms + key custody + the operational checklist.
+
+### Decision — architecture
+
+Reuse-first: `promoteFactGated` / trust semantics (`harness/memory/promotion_gate.ts`),
+`escapeMarkdown`+`export_events` (`harness/export/safe_export.ts`), `wrapUntrusted` + the tail
+layer-9 home (`harness/prompt/assembler.ts`), `Telemetry.emit` (`harness/telemetry/events.ts`),
+the `setPersona` seam + `prompt()` stream (`desktop/acp_backend.ts`), `node:crypto`
+AES-256-GCM/PBKDF2, Electron `safeStorage` (main process), and the `headroomEnabled` toggle pattern.
+
+- **Encrypted personal store** — new `harness/personal/store.ts` + `harness/personal/crypto.ts`.
+  A separate encrypted document (e.g. `~/.omp/lucid-personal.kg.enc`) holding the KG: `entities`
+  {id, name, kind ∈ `user:preference|decision|interest|behavior|personality|link|skill|goal|
+  relationship`, trust_label, confidence, created_at}; `facts` {id, entity_id, statement,
+  trust_label, confidence, source_session_id/run_id, provenance_artifact_id?, status
+  active|forgotten, promoted_at}; `links` {id, from, to, relation}. The KG is small → decrypt into
+  memory, mutate, re-encrypt on write. Envelope: AES-256-GCM (random 96-bit IV per write, GCM auth
+  tag = tamper-evident); 256-bit DEK sealed by the OS keystore or wrapped by a PBKDF2 KEK; DEK in
+  memory only; passphrase never stored. Versioned `personal-kg.v1` (its own frozen contract; schema
+  bumps re-encrypt).
+- **Conversation distiller** — new `harness/personal/distiller.ts`. Hooks the `acp_backend.ts`
+  `prompt()` stream (user message + assistant reply); per session, off the critical path, a model
+  pass extracts durable user-facts as JSON {kind, entity, statement, confidence, relations[]}. Each
+  candidate's **source is the user's own turn → scanned via `scanAndDecide`** (a malicious pasted
+  link/snippet quarantines and blocks that fact, fail-closed). Clean facts auto-remembered;
+  suspicious/quarantined blocked. Links are extracted, the URL scanned, then stored **sanitized but
+  working** (invisibles escaped, real href preserved).
+- **Recall** — new `harness/personal/recall.ts`. Builds a compact `<user-profile>` block (top-N
+  salient facts grouped by kind) and injects it into the **system-prompt tail, layer 9** (after the
+  cache breakpoint, never the frozen prefix); untrusted-labeled facts delimited via `wrapUntrusted`.
+  Only when personalization is enabled + unlocked.
+- **Knowledge Graph view** — new `desktop/renderer/graph.ts` + a new **"Knowledge"** rail tab. A
+  self-contained SVG force-directed graph (simple O(n²) sim — user KGs are small): nodes = entities
+  (colored by kind, sized by fact count/confidence), edges = links (relation labels); pan/zoom/drag;
+  click a node → drill-down panel (facts with trust badges, source session, confidence; edit/forget;
+  clickable sanitized links). A **security/provenance lens toggle** overlays trust labels + source
+  sessions (the demoted secondary view). Endpoint `GET /api/personal/graph` (decrypted in-memory,
+  gated on enabled+unlocked); `POST /api/personal/fact` to edit/forget (audited).
+- **Obsidian export (refined ADR-0009 Phase C)** — `harness/export/vault_export.ts`. Exports the
+  personalization KG: note-per-entity (user:* kinds) with YAML frontmatter, facts as bullets with
+  sanitized working links + trust badges, `[[wikilinks]]` from links, an `_index.md` MOC grouped by
+  kind (Preferences / Interests / Decisions / Personality / Links…). An explicit **decrypt→write**
+  action (audited like a raw-reveal); all text `escapeMarkdown`-escaped (no invisibles; links work).
+- **Settings / opt-in** — `personalizationEnabled?: boolean` in `settings_store.ts` (default OFF). A
+  "Personalization" Settings section: enable + key/passphrase setup, lock/unlock, "Open Knowledge
+  Graph", "Export Obsidian vault", and data-subject controls (forget-all / export-all / lock).
+
+### Phases (each its own future increment + ADR for its frozen-contract delta)
+
+- **P9.1 — encrypted store + crypto + key custody + opt-in toggle.** Foundation: `store.ts`,
+  `crypto.ts`, OS-keystore/passphrase, the Settings section. New `EventName` `personal_store_unlocked`.
+  No DuckDB migration (the store is a separate encrypted file).
+- **P9.2 — conversation distiller (model-based, auto-gated) + recall into the prompt tail.** New
+  `EventName`s `personal_fact_learned`, `personal_recall_injected`.
+- **P9.3 — in-app SVG Knowledge Graph view** (nodes/edges, drill-down, edit/forget, security-lens
+  toggle). New `EventName` `personal_fact_forgotten`.
+- **P9.4 — Obsidian vault export** (personalization-focused, audited decrypt-export). New `EventName`
+  `personal_vault_exported`; reuse `export_events` for the audit row.
+
+### Recommended build order
+
+P9.1 → P9.2 → P9.3 → P9.4. **First build: P9.1** — the encrypted store + key custody is the
+prerequisite for everything, has the smallest surface, needs no DuckDB migration, and adds one event.
+
+### Security & privacy guardrails (must hold)
+
+- Distillation respects the fail-closed gate (keystone #2): suspicious/quarantined sources never
+  auto-remember; the scanner-kill test stays green.
+- Recall enters the tail (layer 9) after the cache breakpoint, never the frozen prefix; untrusted
+  facts delimited — the prefix-hash test stays green.
+- Crypto: AES-256-GCM (auth-tagged, tamper-evident), PBKDF2-HMAC-SHA256 ≥600k iters, DEK sealed in the
+  OS keystore and held only in memory; passphrase never persisted.
+- Opt-in OFF by default; explicit enable + key setup; **forget / export-all / lock** controls so the
+  user owns and can purge their data; everything is local-first (personal facts only ever enter the
+  model context the user's own turns already feed — never sent anywhere else).
+- Each new `EventName` is added to `harness/contracts.ts` in the same increment that emits it.
+
+### Consequences
+
+- No code shipped this session; the planning ADR is the artifact. `bun test harness` stays green.
+- The four phases are pre-scoped with their exact `EventName` deltas and the new encrypted-store
+  contract, so each future increment is clean and isolated.
+- The personalization store is the project's first **encryption-at-rest** surface — a deliberate new
+  capability, scoped to opt-in personal data, with an honest (not oversold) FIPS posture.
