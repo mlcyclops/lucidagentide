@@ -529,7 +529,8 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .kg-empty .ic{opacity:.55}
 .kg-side-empty{display:flex;flex-direction:column;align-items:center;gap:9px;color:var(--txt-4);font-size:12px;margin-top:34px;text-align:center}
 .kg-svg{display:block}
-.kg-edge{stroke:var(--line-strong);stroke-width:1.2;opacity:.5}
+.kg-edge{fill:none;stroke:var(--line-strong);stroke-width:1.2;opacity:.45;stroke-linecap:round}
+.kg-part{opacity:.9;filter:drop-shadow(0 0 2px currentColor)}
 .kg-node circle{stroke:var(--bg-0);stroke-width:1.5;transition:stroke var(--t)}
 .kg-node:hover circle{stroke:var(--txt-2)}
 .kg-node.sel circle{stroke:#fff;stroke-width:2.5}
