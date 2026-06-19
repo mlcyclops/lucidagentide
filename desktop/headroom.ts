@@ -1,18 +1,18 @@
 // desktop/headroom.ts
 //
-// Opt-in integration of `headroom` (https://github.com/chopratejas/headroom) — an
+// Opt-in integration of `headroom` (https://github.com/chopratejas/headroom) - an
 // on-device token-compression proxy (60–95% fewer tokens). ADR-0008.
 //
 // This is the lifecycle + detection layer: detect whether the user has installed
 // the `headroom` CLI, start/stop `headroom proxy --port 8787`, and report status.
 // It is OFF by default and a pure no-op until the user (a) installs headroom and
-// (b) flips the Settings toggle — so it never affects a default install.
+// (b) flips the Settings toggle - so it never affects a default install.
 //
 // SCOPE / SAFETY (see ADR-0008): request-routing through the proxy and the
 // gov-deployment security review (confirm compression stays on-device; confirm the
 // scanner gate still sees content first; confirm AskSage's custom upstream +
 // `x-access-tokens` forward correctly) are a JOINT next step that needs headroom
-// actually installed — intentionally NOT wired blind here.
+// actually installed - intentionally NOT wired blind here.
 
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";

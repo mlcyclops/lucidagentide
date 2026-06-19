@@ -129,7 +129,7 @@ const server = Bun.serve({
             persona: typeof b.persona === "string" ? b.persona : undefined,
           });
           const next = asksageConfig();
-          // The omp child reads datasets/model/persona/base from env at spawn — restart to apply.
+          // The omp child reads datasets/model/persona/base from env at spawn - restart to apply.
           if ((typeof b.baseUrl === "string" && next.base !== prev.base) || (b.datasets !== undefined && next.datasets.join(",") !== prev.datasets.join(",")) || (b.queryModel !== undefined && next.queryModel !== prev.queryModel) || (b.persona !== undefined && next.persona !== prev.persona)) backend.restart();
         }
         const c = asksageConfig();
@@ -144,7 +144,7 @@ const server = Bun.serve({
         const personas = (await listPersonas()) ?? [];
         const persona = personas.find((x) => x.id === String(id));
         if (!persona) return json({ ok: false, error: "persona not found" });
-        const scan = await scanPersona(persona.text); // SAME scanner as tool calls — fail-closed
+        const scan = await scanPersona(persona.text); // SAME scanner as tool calls - fail-closed
         if (!scan.ok) { backend.setPersona(null); return json({ ok: true, data: { applied: false, scan } }); }
         backend.setPersona(wrapPersona(persona.id, persona.text)); // delimited, delivered in the user turn
         return json({ ok: true, data: { applied: true, scan } });

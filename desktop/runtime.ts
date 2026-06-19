@@ -1,4 +1,4 @@
-// desktop/runtime.ts — runtime resolution + first-run bootstrap (main process).
+// desktop/runtime.ts - runtime resolution + first-run bootstrap (main process).
 //
 // Goal: a zero-prerequisite install. The installer bundles the small static
 // `bun` and `uv` binaries (CI downloads them per-OS into resources/runtimes);
@@ -9,11 +9,11 @@
 // Resolution order for each tool: bundled (packaged) → app-managed (userData) →
 // the user's own install (~/.bun, ~/.local) → bare name on PATH. So a developer
 // box with bun/omp/uv already installed behaves exactly as before (no bootstrap,
-// no splash) — the bundle only kicks in for packaged end-user installs.
+// no splash) - the bundle only kicks in for packaged end-user installs.
 //
 // Everything here is best-effort: a failed bootstrap never blocks launch. If the
 // scanner interpreter is missing, the fail-closed gate (CLAUDE.md #3) simply
-// blocks tool calls — it never silently treats "no scanner" as "safe".
+// blocks tool calls - it never silently treats "no scanner" as "safe".
 
 import { app } from "electron";
 import { spawn } from "node:child_process";
@@ -70,7 +70,7 @@ function findScannerPython(): string | null {
 }
 
 /** True when first-run setup has real work to do (so the caller can show a
- *  splash only when needed — a fully-provisioned box skips it entirely). */
+ *  splash only when needed - a fully-provisioned box skips it entirely). */
 export function needsBootstrap(): boolean {
   return !findOmp() || !findScannerPython();
 }
@@ -85,14 +85,14 @@ function run(cmd: string, args: string[], extraEnv: Record<string, string> = {})
 
 /** Provision missing runtimes, then return the env additions the dev server (and
  *  its omp/scanner children) need: LUCID_OMP_BIN, SCANNER_PYTHON, an augmented
- *  PATH, and LUCID_BUN_BIN. Safe to call every launch — it only acts on what's
+ *  PATH, and LUCID_BUN_BIN. Safe to call every launch - it only acts on what's
  *  missing. `onStatus` receives human-readable progress for the splash. */
 export async function ensureRuntimes(onStatus: (s: string) => void = () => {}): Promise<Record<string, string>> {
   const env: Record<string, string> = {};
   const bun = findBun();
   env.LUCID_BUN_BIN = bun;
 
-  // 1) omp agent — install with bun into a managed global dir if absent.
+  // 1) omp agent - install with bun into a managed global dir if absent.
   let omp = findOmp();
   if (!omp) {
     try {
@@ -106,7 +106,7 @@ export async function ensureRuntimes(onStatus: (s: string) => void = () => {}): 
   }
   if (omp) env.LUCID_OMP_BIN = omp;
 
-  // 2) scanner Python — the sidecar has zero pip deps, so any 3.11+ interpreter
+  // 2) scanner Python - the sidecar has zero pip deps, so any 3.11+ interpreter
   //    works. uv provisions one (downloading a managed Python if needed).
   let py = findScannerPython();
   if (!py) {

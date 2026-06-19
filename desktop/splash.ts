@@ -1,4 +1,4 @@
-// desktop/splash.ts — tiny first-run setup window.
+// desktop/splash.ts - tiny first-run setup window.
 //
 // Shown only when ensureRuntimes() has work to do (installing omp / provisioning
 // the scanner interpreter), so a provisioned machine never sees it. Reuses the

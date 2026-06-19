@@ -1,8 +1,8 @@
-// desktop/main.ts — Electron main process for LucidAgentIDE.
+// desktop/main.ts - Electron main process for LucidAgentIDE.
 //
-// Thin shell: it spawns the Bun dev server (desktop/dev.ts) — which serves the
+// Thin shell: it spawns the Bun dev server (desktop/dev.ts) - which serves the
 // renderer, the read-only dashboards, AND a real omp-ACP chat backend
-// (desktop/acp_backend.ts, with the security gate loaded) — then loads it in a
+// (desktop/acp_backend.ts, with the security gate loaded) - then loads it in a
 // frameless window. Chat/config/data all flow over HTTP from that server, so the
 // browser build and the desktop app share one real backend. The preload only
 // adds native window controls + crisp zoom.

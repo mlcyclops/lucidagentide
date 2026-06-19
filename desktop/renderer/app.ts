@@ -1,4 +1,4 @@
-// desktop/renderer/app.ts — the LucidAgentIDE renderer.
+// desktop/renderer/app.ts - the LucidAgentIDE renderer.
 //
 // Assembles the shell (titlebar · rail · sidebar · chat · inspector · status),
 // wires interaction, polls the live security/memory snapshots, and streams the
@@ -57,7 +57,7 @@ const MODEL_CTX: Record<string, number> = {
   "rag": 256_000,
 };
 const modelCtx = (v: string): number | undefined => MODEL_CTX[shortModelId(v)];
-// Friendly label for the CURRENTLY-selected model — resolve its name from config,
+// Friendly label for the CURRENTLY-selected model - resolve its name from config,
 // falling back to the bare value before config has loaded.
 function modelLabel(value: string): string {
   const opt = state.config.find((c) => c.id === "model")?.options.find((o) => o.value === value);
@@ -123,8 +123,8 @@ function buildShell(): void {
             <button class="ctool" id="ctModel" data-tip="Model|Click to change the model">${icon("spark", 14)}<span id="ctModelName">${esc(modelLabel(state.model))}</span>${icon("chevron", 11)}</button>
             <button class="ctool" id="ctMode" data-tip="Mode|Agent edits files · Plan drafts read-only">${icon("bolt", 14)}<span id="ctModeName">Agent</span>${icon("chevron", 11)}</button>
             <button class="ctool" id="ctThink" data-tip="Thinking depth|How hard the model reasons">${icon("brain", 14)}<span id="ctThinkName">High</span>${icon("chevron", 11)}</button>
-            <button class="ctool" id="ctPersona" data-tip="AskSage persona|Server-supplied role guidance — scanned before use" hidden>${icon("user", 14)}<span id="ctPersonaName">Persona</span>${icon("chevron", 11)}</button>
-            <button class="ctool" id="ctSkill" data-tip="Skills|omp skills the agent can run — adds /skill:<name> to your message" hidden>${icon("bolt", 14)}<span>Skills</span>${icon("chevron", 11)}</button>
+            <button class="ctool" id="ctPersona" data-tip="AskSage persona|Server-supplied role guidance - scanned before use" hidden>${icon("user", 14)}<span id="ctPersonaName">Persona</span>${icon("chevron", 11)}</button>
+            <button class="ctool" id="ctSkill" data-tip="Skills|omp skills the agent can run - adds /skill:<name> to your message" hidden>${icon("bolt", 14)}<span>Skills</span>${icon("chevron", 11)}</button>
             <div class="ctool-spacer"></div>
             <span class="ctool-hint"><kbd>Enter</kbd> send · <kbd>⇧↵</kbd> newline · <kbd>⌘K</kbd> commands</span>
           </div>
@@ -170,8 +170,8 @@ async function renderSessions(): Promise<void> {
   const sessions = await bridge.sessions().catch(() => null);
   const list = $("#sessList");
   if (!list) return;
-  if (sessions === null) { list.innerHTML = `<div class="side-empty">Couldn't load history — the GUI server looks out of date. Relaunch it (launcher → <b>G</b>), or restart <code>bun run desktop:web</code>.</div>`; return; }
-  if (!sessions.length) { list.innerHTML = `<div class="side-empty">No sessions yet — send a prompt to start one. They persist here across runs.</div>`; return; }
+  if (sessions === null) { list.innerHTML = `<div class="side-empty">Couldn't load history - the GUI server looks out of date. Relaunch it (launcher → <b>G</b>), or restart <code>bun run desktop:web</code>.</div>`; return; }
+  if (!sessions.length) { list.innerHTML = `<div class="side-empty">No sessions yet - send a prompt to start one. They persist here across runs.</div>`; return; }
   list.innerHTML = sessions.map((s, i) => `
     <div class="sess ${i === 0 ? "active" : ""}" data-sid="${esc(s.id)}" data-tip="${esc(s.title)}|${esc(modelLabel(s.model))} · ${s.turns} turn${s.turns === 1 ? "" : "s"} · ${relTime(s.updatedAt)}" data-tip-side="right">
       <div class="t">${esc(s.title)}</div>
@@ -184,7 +184,7 @@ function seedThread(): void {
   $("#thread")!.innerHTML = `<div class="chat-hint" id="chatHint">
     <div class="bs">${piMark}</div>
     <div class="h">Ask the agent anything</div>
-    <div class="d">Real omp replies — every tool call is scanned by the security gate before it runs.</div></div>`;
+    <div class="d">Real omp replies - every tool call is scanned by the security gate before it runs.</div></div>`;
 }
 function addMessage(role: "user" | "assistant", text: string): HTMLElement {
   $("#chatHint")?.remove();
@@ -287,7 +287,7 @@ function renderMetricsRail(): void {
   const tile = (n: string, label: string, cls: string, tip: string) =>
     `<div class="tile ${cls}" data-tip="${esc(label)}|${esc(tip)}" data-tip-side="left"><div class="n">${esc(n)}</div><div class="l">${esc(label)}</div></div>`;
   tiles.innerHTML =
-    tile(`${Math.round(hit * 100)}%`, "cache", "g", "Prompt-cache hit rate — share of input billed at the discounted cached rate (~10% of full price). Higher = lower spend per turn.") +
+    tile(`${Math.round(hit * 100)}%`, "cache", "g", "Prompt-cache hit rate - share of input billed at the discounted cached rate (~10% of full price). Higher = lower spend per turn.") +
     tile(fmtNum(avg), "avg/turn", "c", "Average tokens per turn") +
     tile(fmtNum(cur), "context", "b", "Context tokens in use this turn") +
     tile(String(turns), "turns", "b2", "Agent turns in this session") +
@@ -316,20 +316,20 @@ function provCard(p: ProviderAuth): string {
     <div class="prov-h"><span class="prov-name">${esc(p.name)}</span><span class="prov-status">${status}</span></div>
     <div class="prov-body">${oauthRow}
       <div class="prov-row">
-        <input type="password" class="prov-key" data-env="${esc(p.env)}" placeholder="${p.keySet ? `saved ••${last4} — type to replace` : `Paste ${esc(p.env)}…`}" />
+        <input type="password" class="prov-key" data-env="${esc(p.env)}" placeholder="${p.keySet ? `saved ••${last4} - type to replace` : `Paste ${esc(p.env)}…`}" />
         <button class="btn-mini ok" data-savekey="${esc(p.env)}">${icon("check", 12)} Save</button>
         ${p.keySet ? `<button class="btn-mini" data-clearkey="${esc(p.env)}">Clear</button>` : ""}
       </div></div></div>`;
 }
 // AskSage monthly-token allowance. AskSage reports tokens USED but not the ceiling
-// (admins raise it in the AskSage console — no API), so the limit is local + the
+// (admins raise it in the AskSage console - no API), so the limit is local + the
 // user tops it up in increments to match what they were approved.
 function quotaControls(limit: number): string {
   const used = state.asksageTokens?.used ?? 0;
   const pct = limit > 0 ? Math.min(100, (used / limit) * 100) : 0;
   return `<div class="aq">
     <div class="aq-head"><span>Monthly token limit</span>
-      <button class="info-dot aq-info" data-tip="Token allowance|You start at 200,000 tokens. AskSage reports how many you've USED but not your ceiling — your org admin grants more in the AskSage console. Set this to match what you were approved under AskSage → Settings → Usage &amp; Billing (Inference Tokens)." data-tip-side="top">${icon("info", 12)}</button>
+      <button class="info-dot aq-info" data-tip="Token allowance|You start at 200,000 tokens. AskSage reports how many you've USED but not your ceiling - your org admin grants more in the AskSage console. Set this to match what you were approved under AskSage → Settings → Usage &amp; Billing (Inference Tokens)." data-tip-side="top">${icon("info", 12)}</button>
       <b class="aq-val">${fmtNum(used)} / ${fmtNum(limit)}</b></div>
     <div class="aq-bar"><i style="width:${pct.toFixed(1)}%;background:${loadColor(pct / 100)}"></i></div>
     <div class="aq-pct">${Math.round(pct)}% used</div>
@@ -342,7 +342,7 @@ function quotaControls(limit: number): string {
   </div>`;
 }
 
-// Gov datasets (knowledge bases) — shown in gov-only mode. Selectable: the chosen
+// Gov datasets (knowledge bases) - shown in gov-only mode. Selectable: the chosen
 // ones ground the "AskSage RAG" model's answers via /query. Names are tidied for
 // display (the raw `user_custom_<n>_<name>_content` form is kept in the tooltip).
 function datasetsSection(list: string[] | null): string {
@@ -351,14 +351,14 @@ function datasetsSection(list: string[] | null): string {
   const tidy = (d: string) => d.replace(/^user_custom_\d+_/, "").replace(/_content$/, "").replace(/[_-]+/g, " ").trim();
   const items = list.map((d) => `<span class="ds-chip${sel.has(d) ? " on" : ""}" data-ds="${esc(d)}" data-tip="${esc(d)}|Click to ${sel.has(d) ? "remove from" : "use for"} RAG grounding">${sel.has(d) ? icon("check", 11) : ""}${esc(tidy(d))}</span>`).join("");
   // Native AskSage persona for the RAG route: AskSage applies it server-side on
-  // /query (persona:<id>) — an id, not injected text, so no scan is needed here
+  // /query (persona:<id>) - an id, not injected text, so no scan is needed here
   // (distinct from the composer persona, which delimits scanned text into any model).
   const pid = state.asksage?.persona ?? "";
   const pdesc = state.personas.find((x) => x.id === pid)?.description ?? "";
   const plabel = pid ? `#${pid}${pdesc ? " · " + tidy(pdesc).slice(0, 28) : ""}` : "None";
   const personaRow = `<div class="ds-prow">
     <span class="ds-plbl">${icon("user", 12)} RAG persona
-      <button class="info-dot" data-tip="RAG persona|Applied server-side by AskSage on grounded /query turns (persona id). Unlike the composer persona — which adds scanned, delimited guidance to any model — no text enters your prompt here, so no scan is needed.">${icon("info", 11)}</button></span>
+      <button class="info-dot" data-tip="RAG persona|Applied server-side by AskSage on grounded /query turns (persona id). Unlike the composer persona - which adds scanned, delimited guidance to any model - no text enters your prompt here, so no scan is needed.">${icon("info", 11)}</button></span>
     <button class="ds-pbtn${pid ? " on" : ""}" id="ragPersonaBtn">${esc(plabel)} ${icon("chevron", 12)}</button></div>`;
   return accordion("set.datasets", "Gov datasets & persona", `${sel.size}/${list.length} selected`,
     `<div class="ds-note">Pick knowledge bases to ground answers on, then chat with the <b>AskSage RAG</b> model.</div><div class="ds-list">${items || `<div class="empty">No datasets on this account.</div>`}</div>${personaRow}`,
@@ -366,7 +366,7 @@ function datasetsSection(list: string[] | null): string {
 }
 
 // ── Settings: progressive (snappy) rendering ────────────────────────────────
-// The panel paints a shell instantly, then each section hydrates independently — so a
+// The panel paints a shell instantly, then each section hydrates independently - so a
 // slow omp/AskSage fetch never blocks the whole page (the old renderSettings awaited
 // every fetch + 8s dataset/persona timeouts before painting anything). Heavy/optional
 // sections collapse to keep the panel short.
@@ -392,23 +392,23 @@ function secProfile(s: { username: string } | null): string {
 }
 function secProviders(auth: import("./bridge.ts").AuthStatus | null): string {
   return setCard("providers", "Providers", "key or OAuth · majors first",
-    (auth?.majors ?? []).map(provCard).join("") || `<div class="empty">couldn't read auth — is the server up to date?</div>`, false);
+    (auth?.majors ?? []).map(provCard).join("") || `<div class="empty">couldn't read auth - is the server up to date?</div>`, false);
 }
 function secAsksage(a: typeof state.asksage, datasets: string[] | null): string {
   const body = `<div class="prov-row"><input id="asksageBase" class="prov-key" placeholder="https://api.civ.asksage.ai/server" value="${esc(a?.base ?? "")}" />
       <button class="btn-mini ok" id="asksageSaveBase">${icon("check", 12)} Save URL</button></div>
     ${a?.configured ? quotaControls(a.limit) : ""}
     <label class="set-toggle"><input type="checkbox" id="asksageOnly" ${a?.only ? "checked" : ""}/>
-      <span><b>AskSage-only (lockdown)</b> — route every turn through the gov gateway and hide direct providers in the model picker.</span></label>
+      <span><b>AskSage-only (lockdown)</b> - route every turn through the gov gateway and hide direct providers in the model picker.</span></label>
     ${a?.only ? datasetsSection(datasets) : ""}
-    ${a?.configured ? `<div class="set-note ok">${icon("check", 12)} Gov gateway active — AskSage models appear in the picker, with monthly-usage and scanned personas.</div>` : `<div class="set-note">${icon("info", 12)} Add an <code>ASKSAGE_API_KEY</code> in Providers to enable gov models, usage, and personas.</div>`}`;
+    ${a?.configured ? `<div class="set-note ok">${icon("check", 12)} Gov gateway active - AskSage models appear in the picker, with monthly-usage and scanned personas.</div>` : `<div class="set-note">${icon("info", 12)} Add an <code>ASKSAGE_API_KEY</code> in Providers to enable gov models, usage, and personas.</div>`}`;
   return setCard("asksage", "AskSage gov gateway", "accredited proxy", body, true);
 }
 function secCompression(hr: import("./bridge.ts").HeadroomStatus | null): string {
   const body = hr?.installed
     ? `<label class="set-toggle"><input type="checkbox" id="headroomToggle" ${hr.enabled ? "checked" : ""}/>
-        <span><b>Compress context with headroom</b> — fewer tokens before they reach the model. ${hr.running ? `<span class="abadge ok">running · :${hr.port}</span>` : ""}</span></label>
-      <div class="set-note">${icon("info", 12)} Runs entirely on your machine (${esc(hr.version ?? "installed")}). Request-routing + a gov-deployment security review are next — see ADR-0008.</div>`
+        <span><b>Compress context with headroom</b> - fewer tokens before they reach the model. ${hr.running ? `<span class="abadge ok">running · :${hr.port}</span>` : ""}</span></label>
+      <div class="set-note">${icon("info", 12)} Runs entirely on your machine (${esc(hr.version ?? "installed")}). Request-routing + a gov-deployment security review are next - see ADR-0008.</div>`
     : `<div class="set-note">${icon("info", 12)} Optional: install <b>headroom</b> to compress context on-device (60–95% fewer tokens). Run <code>${esc(hr?.installHint ?? "pip install headroom-ai[proxy]")}</code>, then this toggle appears.</div>`;
   return setCard("compression", "Token compression", "headroom · on-device · opt-in", body, true);
 }
@@ -425,10 +425,10 @@ function settingsShell(): string {
     setSkel("compression", "Token compression", "headroom · on-device · opt-in", true),
     setSkel("personal", "Personalization", "private · encrypted · opt-in", true),
     setSkel("others", "More providers", "", true),
-    `<div class="set-note">${icon("shield", 12)} Keys are stored on this machine and passed to omp as env vars — never sent anywhere else. OAuth uses omp's own secure credential vault.</div>`,
+    `<div class="set-note">${icon("shield", 12)} Keys are stored on this machine and passed to omp as env vars - never sent anywhere else. OAuth uses omp's own secure credential vault.</div>`,
   ].join("");
 }
-/** Re-fetch + swap each section IN PLACE (old content stays until fresh arrives — no flash). */
+/** Re-fetch + swap each section IN PLACE (old content stays until fresh arrives - no flash). */
 function hydrateSettings(): void {
   void bridge.workspace().then((ws) => {
     if (ws) { state.workspace = ws; renderWorkspaceBar(); }
@@ -442,7 +442,7 @@ function hydrateSettings(): void {
   void bridge.asksage().then(async (a) => {
     if (a) state.asksage = a;
     fillSec("asksage", secAsksage(a, null)); // paint immediately, without the slow datasets
-    if (a?.configured && a.only) { // only lockdown needs datasets/personas — fetch them after
+    if (a?.configured && a.only) { // only lockdown needs datasets/personas - fetch them after
       const datasets = await bridge.asksageDatasets();
       if (!state.personas.length) state.personas = (await bridge.asksagePersonas()) ?? [];
       fillSec("asksage", secAsksage(a, datasets));
@@ -460,12 +460,12 @@ function renderSettings(): void {
 const SCOPE_INFO: Record<string, { label: string; tone: "ok" | "warn" | "danger"; note: string }> = {
   personal: { label: "Personal Life", tone: "ok", note: "Private to you and encrypted on this device. Used only to tailor responses. New facts are stored here by default." },
   work: { label: "Work", tone: "warn", note: "May include employer-confidential context. Don't store secrets or credentials here; review before exporting or sharing across tools." },
-  combined: { label: "Combined", tone: "warn", note: "A union view of Personal + Work + CUI. This crosses boundaries — take care when exporting or sharing. New facts still default to Personal." },
+  combined: { label: "Combined", tone: "warn", note: "A union view of Personal + Work + CUI. This crosses boundaries - take care when exporting or sharing. New facts still default to Personal." },
   cui: { label: "CUI", tone: "danger", note: "Controlled Unclassified Information handling. Encrypted at rest and NEVER auto-exported or shared with external consumers/harnesses. Follow your organization's CUI policy (e.g. NIST SP 800-171). Do NOT enter classified information." },
 };
 const SCOPE_ORDER = ["personal", "work", "combined", "cui"] as const;
 
-/** Re-render just the Personalization card (instant — the endpoint is local). */
+/** Re-render just the Personalization card (instant - the endpoint is local). */
 function hydratePersonal(): Promise<void> {
   return bridge.personal().then((p) => fillSec("personal", secPersonal(p)));
 }
@@ -473,9 +473,9 @@ function hydratePersonal(): Promise<void> {
 // Work/Personal/Combined/CUI compartment selector with per-mode risk notices.
 function secPersonal(p: import("./bridge.ts").PersonalStatus | null): string {
   const card = (inner: string) => setCard("personal", "Personalization", "private · encrypted · opt-in", inner, true);
-  if (!p) return card(`<div class="set-note">${icon("info", 12)} Personalization is unavailable — update the GUI server.</div>`);
+  if (!p) return card(`<div class="set-note">${icon("info", 12)} Personalization is unavailable - update the GUI server.</div>`);
   const toggle = `<label class="set-toggle"><input type="checkbox" id="personalToggle" ${p.enabled ? "checked" : ""}/>
-      <span><b>Learn about me to tailor responses</b> — a private knowledge graph of your preferences, decisions, interests &amp; style, encrypted on this device (AES-256-GCM). Off by default.</span></label>`;
+      <span><b>Learn about me to tailor responses</b> - a private knowledge graph of your preferences, decisions, interests &amp; style, encrypted on this device (AES-256-GCM). Off by default.</span></label>`;
   if (!p.enabled) return card(toggle + `<div class="set-note">${icon("shield", 12)} Nothing is learned, stored, or recalled until you enable this. Everything stays local; you can forget or export it anytime.</div>`);
 
   let inner: string;
@@ -493,14 +493,14 @@ function secPersonal(p: import("./bridge.ts").PersonalStatus | null): string {
     const info = SCOPE_INFO[cur] ?? SCOPE_INFO.personal!;
     const c = p.counts ?? { work: 0, personal: 0, cui: 0 };
     inner = `<div class="set-note ok">${icon("check", 12)} Unlocked. New facts pass the security gate before they're remembered; you stay in control.</div>
-      <div class="pscope-lbl">Compartment <span class="info-dot" data-tip="Data compartments|Keep Work, Personal, and CUI knowledge separate. The active compartment scopes what is learned and recalled; Combined is a union view. Portability is compartment-aware — see ADR-0012.">${icon("info", 11)}</span></div>
+      <div class="pscope-lbl">Compartment <span class="info-dot" data-tip="Data compartments|Keep Work, Personal, and CUI knowledge separate. The active compartment scopes what is learned and recalled; Combined is a union view. Portability is compartment-aware - see ADR-0012.">${icon("info", 11)}</span></div>
       <div class="seg pscope-seg">${seg}</div>
       <div class="pscope-note ${info.tone}">${icon(info.tone === "danger" ? "shield" : "info", 13)} <span>${esc(info.note)}</span></div>
       <div class="pscope-counts">
         <div class="psc"><b class="psc-personal">${c.personal}</b><span>personal</span></div>
         <div class="psc"><b class="psc-work">${c.work}</b><span>work</span></div>
         <div class="psc"><b class="psc-cui">${c.cui}</b><span>cui</span></div></div>
-      <button class="btn-mini pscope-lock" id="personalLock" data-tip="Lock the store|Wipes the in-memory encryption key. You'll re-enter your passphrase to use personalization again this session — nothing is learned or recalled while locked." data-tip-side="top">${icon("shield", 12)} Lock</button>`;
+      <button class="btn-mini pscope-lock" id="personalLock" data-tip="Lock the store|Wipes the in-memory encryption key. You'll re-enter your passphrase to use personalization again this session - nothing is learned or recalled while locked." data-tip-side="top">${icon("shield", 12)} Lock</button>`;
   }
   return card(toggle + inner);
 }
@@ -533,7 +533,7 @@ function workspaceSection(ws: WorkspaceInfo): string {
       <button class="btn-mini" id="wsSet">Open</button>
     </div>
     <div class="prov-row">
-      <input class="prov-key" id="wsCloneUrl" placeholder="Clone a git repo — https://github.com/… or gitlab.com/…" />
+      <input class="prov-key" id="wsCloneUrl" placeholder="Clone a git repo - https://github.com/… or gitlab.com/…" />
       <button class="btn-mini ok" id="wsClone">${icon("git", 13)} Clone</button>
     </div>
     ${ws.recent.length ? `<div class="ws-recent">${ws.recent.map((r) => `<button class="ws-recent-item" data-ws="${esc(r.path)}" title="${esc(r.path)}">${icon(r.isGit ? "git" : "folder", 12)} ${esc(r.name)}</button>`).join("")}</div>` : ""}
@@ -578,7 +578,7 @@ function secIntro(): string {
   return `<div class="sec-intro">
     <div class="sec-intro-h"><span class="sec-pulse">${icon("shield", 17)}</span><b>Active protection</b>
       <button class="info-dot" id="secInfo" aria-label="How findings are stored">${icon("info", 13)}</button></div>
-    <div class="sec-intro-d">Every tool call the agent makes — shell commands, file writes, and any fetched or imported text — is scanned for hidden-Unicode prompt injection (zero-width characters, look-alike homoglyphs, bidi tricks) <b>before it runs</b>. Anything quarantined is blocked fail-closed, and content from suspicious sources can't quietly promote itself into memory.</div>
+    <div class="sec-intro-d">Every tool call the agent makes - shell commands, file writes, and any fetched or imported text - is scanned for hidden-Unicode prompt injection (zero-width characters, look-alike homoglyphs, bidi tricks) <b>before it runs</b>. Anything quarantined is blocked fail-closed, and content from suspicious sources can't quietly promote itself into memory.</div>
   </div>`;
 }
 function securityHtml(d: SecuritySnapshot | null): string {
@@ -616,7 +616,7 @@ function securityHtml(d: SecuritySnapshot | null): string {
 }
 
 function memoryHtml(d: MemorySnapshot | null): string {
-  if (!d) return `<div class="empty">No omp session yet — launch omp and send a message.</div>`;
+  if (!d) return `<div class="empty">No omp session yet - launch omp and send a message.</div>`;
   let h = "";
   const s = d.session;
   if (s) {
@@ -630,7 +630,7 @@ function memoryHtml(d: MemorySnapshot | null): string {
       + `<div class="kvs"><span class="kv" data-tip="Input tokens served from cache, billed at ~10% of full price">cached <b>${fmtNum(s.cache.read)}</b></span><span class="kv" data-tip="New tokens written into the cache (full price once, then reused)">cache-build <b>${fmtNum(s.cache.write)}</b></span><span class="kv" data-tip="Uncached input, billed at full price">full-price <b>${fmtNum(s.cache.fresh)}</b></span><span class="kv">spend <b>${fmtUSD(s.cost)}</b></span></div>`,
       OPEN.has("mem.cache"));
   } else {
-    h += `<div class="empty">No omp session transcript yet — launch omp and send a message.</div>`;
+    h += `<div class="empty">No omp session transcript yet - launch omp and send a message.</div>`;
   }
   if (d.compaction) {
     h += accordion("mem.compaction", "Compaction policy", "keeps context bounded",
@@ -649,7 +649,7 @@ function memoryHtml(d: MemorySnapshot | null): string {
       + (hm.facts.length ? table([{ key: "entity", label: "entity" }, { key: "statement", label: "statement" }, { key: "trust_label", label: "trust", pill: true }], hm.facts) : ""),
       OPEN.has("mem.layers"));
   } else {
-    h += `<div class="empty">No harness memory yet — appears once the gate runs, or run <code>bun run demo-P4.3</code>.</div>`;
+    h += `<div class="empty">No harness memory yet - appears once the gate runs, or run <code>bun run demo-P4.3</code>.</div>`;
   }
   return h;
 }
@@ -680,7 +680,7 @@ function budgetBody(budgets: NonNullable<MemorySnapshot["budgets"]>): string {
 }
 
 const RICHTIP_DUCKDB = `<div class="rt-h">${icon("shield", 14)} Where this is stored</div>
-  <div class="rt-d">Scans, findings, approvals, and the export audit live in a local embedded <b>DuckDB</b> column store on your machine — fast analytics, and nothing leaves the device. The panels here are read-only views over it.</div>
+  <div class="rt-d">Scans, findings, approvals, and the export audit live in a local embedded <b>DuckDB</b> column store on your machine - fast analytics, and nothing leaves the device. The panels here are read-only views over it.</div>
   <a class="rt-link" href="https://duckdb.org" target="_blank" rel="noopener noreferrer">duckdb.org ${icon("expand", 12)}</a>`;
 
 // AskSage gov-gateway monthly-usage chip (only when a key is configured).
@@ -689,7 +689,7 @@ function asksageChip(): string {
   if (!a?.configured) return "";
   const pct = t && t.limit > 0 ? t.used / t.limit : 0;
   const lock = a.only ? ` <span class="lock-tag" data-tip="AskSage-only lockdown is ON|Every turn routes through the accredited gov gateway">🔒</span>` : "";
-  return `<div class="seg seg-btn" data-asksage-refresh data-tip="AskSage gov usage|Monthly tokens used vs. limit — click to re-check (auto every 5 min)">${icon("shield", 12)} Gov${lock} <b style="color:${loadColor(pct)}">${t ? Math.round(pct * 100) + "%" : "—"}</b> ${icon("refresh", 11)}</div>`;
+  return `<div class="seg seg-btn" data-asksage-refresh data-tip="AskSage gov usage|Monthly tokens used vs. limit - click to re-check (auto every 5 min)">${icon("shield", 12)} Gov${lock} <b style="color:${loadColor(pct)}">${t ? Math.round(pct * 100) + "%" : "-"}</b> ${icon("refresh", 11)}</div>`;
 }
 
 // ───────────────────────── status bar ─────────────────────────
@@ -710,7 +710,7 @@ function renderStatus(): void {
     <div class="seg" data-tip="Context window|How full the model's context is${lu ? " (live this session)" : ""}">${icon("brain", 14)}
       <span class="mini"><span class="fill" style="width:${Math.round(ctx * 100)}%;background:${loadColor(ctx)}"></span></span>
       <b>${fmtNum(curTok)}</b>/${fmtNum(winTok)}</div>
-    <div class="seg" data-tip="Prompt-cache hit rate|Share of input served from cache at the discounted rate — higher means lower cost per turn">${icon("bolt", 14)} cache <b style="color:${goodColor(hit)}">${Math.round(hit * 100)}%</b></div>
+    <div class="seg" data-tip="Prompt-cache hit rate|Share of input served from cache at the discounted rate - higher means lower cost per turn">${icon("bolt", 14)} cache <b style="color:${goodColor(hit)}">${Math.round(hit * 100)}%</b></div>
     ${budget ? `<div class="seg seg-btn" data-budget-refresh data-tip="${esc(budget.label)} usage|Click to re-check now · auto every 5 min. omp's last-seen value, so it can lag the official usage.">${esc(budget.label)} <b>${Math.round(budget.used * 100)}%</b> ${icon("refresh", 11)}</div>` : ""}
     ${asksageChip()}
     <div class="seg" data-tip="Session cost">${fmtUSD(cost)}</div>
@@ -726,18 +726,29 @@ async function refresh(): Promise<void> {
     const [sec, mem] = await Promise.all([bridge.security(), bridge.memory()]);
     state.security = sec; state.memory = mem;
     // the badge reflects the live session CONFIG model (loadConfig), not the
-    // historical snapshot — so it shows what the next turn will actually use.
+    // historical snapshot - so it shows what the next turn will actually use.
     state.lastOk = Date.now();
-    const awaiting = sec?.approvals.length ?? 0;
+    // Security rail badge: number of items AWAITING YOUR REVIEW (quarantined/suspicious
+    // content the gate flagged). Hidden when there's nothing to act on; coloured by the
+    // worst trust label in the queue (quarantined = red, suspicious-only = amber).
+    const approvals = sec?.approvals ?? [];
+    const awaiting = approvals.length;
     const badge = $("#railBadge")!;
-    badge.hidden = awaiting === 0; badge.textContent = String(awaiting);
+    badge.hidden = awaiting === 0;
+    if (awaiting > 0) {
+      const high = approvals.some((a) => String(a.trust_label) === "quarantined");
+      badge.textContent = awaiting > 99 ? "99+" : String(awaiting);
+      badge.className = high ? "badge" : "badge med";
+      badge.setAttribute("data-tip", `${awaiting} item${awaiting === 1 ? "" : "s"} awaiting review|${high ? "Includes quarantined (blocked) content." : "Suspicious content flagged for review."} Open the Security panel to act.`);
+      badge.setAttribute("data-tip-side", "right");
+    }
     renderInspector(); renderStatus(); renderMetricsRail();
   } catch {
     renderStatus();
   }
 }
 
-// Provider budget — manual refresh + a 5-minute auto-poll for the current model.
+// Provider budget - manual refresh + a 5-minute auto-poll for the current model.
 // The figure is omp's last-seen value; a turn updates it, so we also re-pull after
 // each turn. Manual refresh resets the 5-minute timer.
 let budgetTimer: ReturnType<typeof setInterval> | null = null;
@@ -750,7 +761,7 @@ async function refreshBudget(manual = false): Promise<void> {
   renderStatus();
   if (manual) showToast({
     title: budgets?.length ? "Budget refreshed" : "No usage yet",
-    desc: budgets?.length ? "Latest provider usage pulled for your current model." : "Nothing recorded yet — send a turn, then refresh.",
+    desc: budgets?.length ? "Latest provider usage pulled for your current model." : "Nothing recorded yet - send a turn, then refresh.",
     actions: [{ label: "OK" }], timeout: 2200,
   });
   scheduleBudgetPoll();
@@ -803,9 +814,9 @@ function updateComposerTools(): void {
 // persona becomes delimited guidance, a flagged one is blocked (fail-closed).
 async function openPersonaDropdown(anchor: HTMLElement): Promise<void> {
   cfgClose?.();
-  const items = [{ id: "", description: "No persona — default behavior" }, ...state.personas];
+  const items = [{ id: "", description: "No persona - default behavior" }, ...state.personas];
   const rows = items.map((p) => `<div class="cfg-opt ${(state.persona ?? "") === p.id ? "on" : ""}" data-pid="${esc(p.id)}"><span class="tick">${icon("check", 13)}</span><span class="nm">${esc(p.id || "None")}</span><span class="id">${esc((p.description || "").slice(0, 44))}</span></div>`).join("");
-  const { node, close } = popover(anchor, `<div class="cfg-sec"><div class="cfg-lbl">Persona <span class="cur">scanned before use</span></div><div class="cfg-list" id="personaList">${rows || `<div class="empty">No personas — check your AskSage key.</div>`}</div></div>`, () => { cfgClose = null; });
+  const { node, close } = popover(anchor, `<div class="cfg-sec"><div class="cfg-lbl">Persona <span class="cur">scanned before use</span></div><div class="cfg-list" id="personaList">${rows || `<div class="empty">No personas - check your AskSage key.</div>`}</div></div>`, () => { cfgClose = null; });
   cfgClose = close;
   $("#personaList", node)?.addEventListener("click", (e) => {
     const it = (e.target as HTMLElement).closest("[data-pid]") as HTMLElement | null;
@@ -819,21 +830,21 @@ async function applyPersona(id: string | null): Promise<void> {
   if (!id || r?.cleared) { state.persona = null; updateComposerTools(); showToast({ title: "Persona cleared", desc: "Back to default behavior.", actions: [{ label: "OK" }], timeout: 2000 }); return; }
   if (r?.applied) {
     state.persona = id; updateComposerTools();
-    showToast({ title: `Persona "${id}" applied`, desc: "Scanned clean — added as delimited role guidance on your next turn.", actions: [{ label: "OK" }], timeout: 3200 });
+    showToast({ title: `Persona "${id}" applied`, desc: "Scanned clean - added as delimited role guidance on your next turn.", actions: [{ label: "OK" }], timeout: 3200 });
   } else {
     state.persona = null; updateComposerTools();
-    showToast({ title: "Persona blocked", desc: `The scanner flagged this persona (${r?.scan?.findings ?? 0} finding(s)); it was not applied.`, meta: "fail-closed — untrusted content can't enter the prompt", actions: [{ label: "OK" }], timeout: 6000 });
+    showToast({ title: "Persona blocked", desc: `The scanner flagged this persona (${r?.scan?.findings ?? 0} finding(s)); it was not applied.`, meta: "fail-closed - untrusted content can't enter the prompt", actions: [{ label: "OK" }], timeout: 6000 });
   }
 }
 
 // RAG persona picker (Settings → gov datasets). Sets AskSage's NATIVE persona id
-// for the /query route — applied server-side, so no scan (no text enters the prompt).
+// for the /query route - applied server-side, so no scan (no text enters the prompt).
 function openRagPersonaDropdown(anchor: HTMLElement): void {
   cfgClose?.();
   const cur = state.asksage?.persona ?? "";
-  const items = [{ id: "", description: "No persona — plain grounded RAG" }, ...state.personas];
+  const items = [{ id: "", description: "No persona - plain grounded RAG" }, ...state.personas];
   const rows = items.map((p) => `<div class="cfg-opt ${cur === p.id ? "on" : ""}" data-ragpid="${esc(p.id)}"><span class="tick">${icon("check", 13)}</span><span class="nm">${esc(p.id ? `#${p.id}` : "None")}</span><span class="id">${esc((p.description || "").slice(0, 46))}</span></div>`).join("");
-  const { node, close } = popover(anchor, `<div class="cfg-sec"><div class="cfg-lbl">RAG persona <span class="cur">native · /query</span></div><div class="cfg-list" id="ragPersonaList">${rows || `<div class="empty">No personas — check your AskSage key.</div>`}</div></div>`, () => { cfgClose = null; });
+  const { node, close } = popover(anchor, `<div class="cfg-sec"><div class="cfg-lbl">RAG persona <span class="cur">native · /query</span></div><div class="cfg-list" id="ragPersonaList">${rows || `<div class="empty">No personas - check your AskSage key.</div>`}</div></div>`, () => { cfgClose = null; });
   cfgClose = close;
   $("#ragPersonaList", node)?.addEventListener("click", async (e) => {
     const it = (e.target as HTMLElement).closest("[data-ragpid]") as HTMLElement | null;
@@ -846,7 +857,7 @@ function openRagPersonaDropdown(anchor: HTMLElement): void {
   });
 }
 
-// omp skills (discovered from project/user/agent dirs) — invokable via /skill:<name>.
+// omp skills (discovered from project/user/agent dirs) - invokable via /skill:<name>.
 async function loadSkills(): Promise<void> {
   state.skills = (await bridge.skills()) ?? [];
   const btn = $("#ctSkill"); if (btn) (btn as HTMLElement).hidden = state.skills.length === 0;
@@ -855,7 +866,7 @@ function useSkill(name: string): void {
   const ta = $("#input") as HTMLTextAreaElement;
   ta.value = `/skill:${name} ${ta.value}`.trimEnd() + " ";
   autosize(ta); setSendEnabled(); ta.focus();
-  showToast({ title: `Skill: ${name}`, desc: "Added to your message — type your request and send.", actions: [{ label: "OK" }], timeout: 2400 });
+  showToast({ title: `Skill: ${name}`, desc: "Added to your message - type your request and send.", actions: [{ label: "OK" }], timeout: 2400 });
 }
 function openSkillDropdown(anchor: HTMLElement): void {
   cfgClose?.();
@@ -926,7 +937,7 @@ function wire(): void {
     if (t.closest("#wsClone")) {
       const url = ($("#wsCloneUrl", $("#setBody")!) as HTMLInputElement)?.value.trim();
       if (!url) return;
-      showToast({ title: "Cloning…", desc: "Fetching the repo — this can take a moment.", timeout: 2500 });
+      showToast({ title: "Cloning…", desc: "Fetching the repo - this can take a moment.", timeout: 2500 });
       const info = await bridge.cloneWorkspace(url);
       if (info?.cloned) { state.workspace = info; renderWorkspaceBar(); seedThread(); void renderSessions(); void renderSettings(); showToast({ title: "Cloned & opened", desc: `Agent now works in ${info.name}.`, actions: [{ label: "OK" }], timeout: 3000 }); }
       else showToast({ title: "Clone failed", desc: (info?.error ?? "Check the URL and your git access.").slice(0, 180), actions: [{ label: "OK" }], timeout: 6000 });
@@ -984,7 +995,7 @@ function wire(): void {
     if (t.closest("#headroomToggle")) {
       const enabled = ($("#headroomToggle", $("#setBody")!) as HTMLInputElement)?.checked ?? false;
       const st = await bridge.setHeadroom(enabled);
-      showToast({ title: enabled ? "Compression on" : "Compression off", desc: enabled ? (st?.running ? `headroom proxy running on :${st.port}.` : "headroom enabled — proxy will start.") : "headroom proxy stopped.", actions: [{ label: "OK" }], timeout: 2800 });
+      showToast({ title: enabled ? "Compression on" : "Compression off", desc: enabled ? (st?.running ? `headroom proxy running on :${st.port}.` : "headroom enabled - proxy will start.") : "headroom proxy stopped.", actions: [{ label: "OK" }], timeout: 2800 });
       void renderSettings();
       return;
     }
@@ -992,7 +1003,7 @@ function wire(): void {
     if (t.closest("#personalToggle")) {
       const enabled = ($("#personalToggle", $("#setBody")!) as HTMLInputElement)?.checked ?? false;
       await bridge.personalEnable(enabled);
-      showToast({ title: enabled ? "Personalization on" : "Personalization off", desc: enabled ? "Set a passphrase to create your encrypted store." : "Locked and disabled — nothing is learned or recalled.", actions: [{ label: "OK" }], timeout: 2800 });
+      showToast({ title: enabled ? "Personalization on" : "Personalization off", desc: enabled ? "Set a passphrase to create your encrypted store." : "Locked and disabled - nothing is learned or recalled.", actions: [{ label: "OK" }], timeout: 2800 });
       void hydratePersonal();
       return;
     }
@@ -1015,9 +1026,9 @@ function wire(): void {
     if (pscope) {
       const scope = pscope.dataset.pscope as "work" | "personal" | "cui" | "combined";
       const cur = (document.querySelector(".seg-btn.pscope.on") as HTMLElement | null)?.dataset.pscope;
-      if (scope === cur) return; // already active — nothing to do
+      if (scope === cur) return; // already active - nothing to do
       const info = SCOPE_INFO[scope]!;
-      // Switching the compartment changes what is learned + recalled — confirm with a warning.
+      // Switching the compartment changes what is learned + recalled - confirm with a warning.
       showToast({
         title: `Switch to ${info.label}?`,
         desc: info.note,
@@ -1053,7 +1064,7 @@ function wire(): void {
     if (oauth) {
       const r = await bridge.oauthLogin(oauth.dataset.oauth!);
       if (r?.url) window.open(r.url, "_blank");
-      showToast({ title: "OAuth started", desc: r?.url ? "Complete the sign-in in your browser, then return — status updates automatically." : (r?.output?.slice(0, 160) || "Follow omp's prompt in the GUI server window."), actions: [{ label: "OK" }], timeout: 6000 });
+      showToast({ title: "OAuth started", desc: r?.url ? "Complete the sign-in in your browser, then return - status updates automatically." : (r?.output?.slice(0, 160) || "Follow omp's prompt in the GUI server window."), actions: [{ label: "OK" }], timeout: 6000 });
       setTimeout(() => void renderSettings(), 4000);
       return;
     }
@@ -1116,7 +1127,7 @@ function newSession(): void {
 function runCommand(c: OmpCommand): void {
   const ta = $("#input") as HTMLTextAreaElement;
   ta.value = `/${c.name} `; autosize(ta); setSendEnabled(); ta.focus();
-  showToast({ title: `/${c.name}`, desc: `${c.description ?? "omp command"} — press Enter to run${c.hint ? ` (args: ${c.hint})` : ""}.`, actions: [{ label: "OK" }], timeout: 3400 });
+  showToast({ title: `/${c.name}`, desc: `${c.description ?? "omp command"} - press Enter to run${c.hint ? ` (args: ${c.hint})` : ""}.`, actions: [{ label: "OK" }], timeout: 3400 });
 }
 
 const palette = createPalette(() => {
@@ -1161,7 +1172,7 @@ async function applyConfig(configId: string, value: string): Promise<void> {
 }
 
 // current, non-deprecated models, newest → oldest (omp also lists stale/dated
-// ones — those are filtered out; the live current model is always shown).
+// ones - those are filtered out; the live current model is always shown).
 const MODEL_ORDER = [
   "claude-fable-5", "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6",
   "claude-sonnet-4-6", "claude-sonnet-4-5", "claude-haiku-4-5",
@@ -1181,26 +1192,26 @@ const modelRow = (o: { value: string; name: string }, sel: string) => {
 };
 
 // Premium per-model hover card metadata. Two ratings (editorial guidance, NOT a benchmark):
-//   exp = Token Expense  (1–5, red)   — how token/cost-heavy the model is (5 = priciest)
-//   iq  = Intelligence Level (1–5, green) — raw capability
+//   exp = Token Expense  (1–5, red)   - how token/cost-heavy the model is (5 = priciest)
+//   iq  = Intelligence Level (1–5, green) - raw capability
 // plus a one-line description, a practical "best for", and context size. Keyed by short id.
 interface ModelInfo { exp: number; iq: number; eff: string; best: string; ctx?: string }
 const MODEL_INFO: Record<string, ModelInfo> = {
   // Anthropic (direct)
-  "claude-fable-5": { exp: 5, iq: 5, eff: "Frontier capability at a premium price — worth it only when the task needs the ceiling.", best: "The hardest novel reasoning and long-horizon agentic work.", ctx: "1M" },
+  "claude-fable-5": { exp: 5, iq: 5, eff: "Frontier capability at a premium price - worth it only when the task needs the ceiling.", best: "The hardest novel reasoning and long-horizon agentic work.", ctx: "1M" },
   "claude-opus-4-8": { exp: 4, iq: 5, eff: "Top-tier reasoning with strong value at the Opus tier.", best: "Hard bugs, architecture, multi-file refactors.", ctx: "1M" },
   "claude-opus-4-7": { exp: 4, iq: 5, eff: "Near-4.8 capability for a little less.", best: "Complex coding when 4.8 is overkill.", ctx: "1M" },
-  "claude-opus-4-6": { exp: 4, iq: 4, eff: "Prior Opus — very capable, good to pin to.", best: "Complex work needing a stable version.", ctx: "1M" },
+  "claude-opus-4-6": { exp: 4, iq: 4, eff: "Prior Opus - very capable, good to pin to.", best: "Complex work needing a stable version.", ctx: "1M" },
   "claude-sonnet-4-6": { exp: 2, iq: 4, eff: "The best all-round speed-to-cost-to-quality balance.", best: "Everyday coding, refactors, code review.", ctx: "1M" },
   "claude-sonnet-4-5": { exp: 2, iq: 4, eff: "Strong balanced workhorse (prior Sonnet).", best: "Everyday coding; a version pin.", ctx: "1M" },
-  "claude-haiku-4-5": { exp: 1, iq: 3, eff: "Fastest and cheapest Claude — excellent tokens-per-dollar.", best: "Quick edits, lookups, high-volume tasks.", ctx: "200K" },
+  "claude-haiku-4-5": { exp: 1, iq: 3, eff: "Fastest and cheapest Claude - excellent tokens-per-dollar.", best: "Quick edits, lookups, high-volume tasks.", ctx: "200K" },
   // AskSage · OpenAI
   "gpt-5.2": { exp: 3, iq: 4, eff: "Solid general reasoning; the default RAG model.", best: "General gov coding and analysis.", ctx: "256K" },
   "gpt-5.5": { exp: 4, iq: 5, eff: "The most capable GPT-5 on the gateway.", best: "The hardest gov reasoning tasks.", ctx: "256K" },
   "gpt-5.4": { exp: 4, iq: 5, eff: "High-capability GPT-5 variant.", best: "Demanding gov reasoning.", ctx: "256K" },
   "gpt-5.1": { exp: 3, iq: 4, eff: "Capable GPT-5 variant.", best: "General-purpose gov work.", ctx: "256K" },
   "gpt-5": { exp: 3, iq: 4, eff: "Solid GPT-5 baseline.", best: "Everyday gov coding and writing.", ctx: "256K" },
-  "gpt-5-mini": { exp: 2, iq: 3, eff: "Cheaper, faster GPT-5 — strong tokens-per-dollar.", best: "High-volume, latency-sensitive tasks.", ctx: "256K" },
+  "gpt-5-mini": { exp: 2, iq: 3, eff: "Cheaper, faster GPT-5 - strong tokens-per-dollar.", best: "High-volume, latency-sensitive tasks.", ctx: "256K" },
   "gpt-4.1": { exp: 2, iq: 3, eff: "Pre-GPT-5; huge context at lower cost.", best: "Very long context on a budget.", ctx: "1M" },
   "gpt-o3": { exp: 4, iq: 5, eff: "Deliberate o-series reasoning.", best: "Math, logic, hard step-by-step problems.", ctx: "200K" },
   "gpt-o3-mini": { exp: 2, iq: 3, eff: "Efficient reasoning at lower cost.", best: "Reasoning tasks on a budget.", ctx: "200K" },
@@ -1217,7 +1228,7 @@ const MODEL_INFO: Record<string, ModelInfo> = {
   "google-gemini-2.5-pro": { exp: 3, iq: 4, eff: "Gemini 2.5 Pro; 1M context.", best: "Long-context reasoning.", ctx: "1M" },
   "google-gemini-2.5-flash": { exp: 1, iq: 3, eff: "Fast, cheap Gemini; 1M context.", best: "High-volume long-context work.", ctx: "1M" },
   // AskSage · RAG
-  "rag": { exp: 3, iq: 4, eff: "Dataset-grounded answers with citations — only as good as your selected datasets.", best: "Questions over your selected knowledge bases.", ctx: "256K" },
+  "rag": { exp: 3, iq: 4, eff: "Dataset-grounded answers with citations - only as good as your selected datasets.", best: "Questions over your selected knowledge bases.", ctx: "256K" },
 };
 function modelTipHTML(value: string): string | null {
   const info = MODEL_INFO[shortModelId(value)];
@@ -1232,7 +1243,7 @@ function modelTipHTML(value: string): string | null {
     <div class="mt-foot">Practical guidance · not a benchmark</div>`;
 }
 // A single delegated hover card for any [data-model] row (survives list re-render on
-// search). Informational only (pointer-events:none) — never intercepts the picker.
+// search). Informational only (pointer-events:none) - never intercepts the picker.
 let mtCard: HTMLElement | null = null, mtCur: HTMLElement | null = null, mtTimer: number | undefined;
 function hideModelTip(now = false): void {
   if (!mtCard) return; const c = mtCard; mtCard = null; c.classList.remove("show"); setTimeout(() => c.remove(), now ? 0 : 140);
@@ -1278,8 +1289,8 @@ function curatedModels(opt: ConfigOption): { value: string; name: string }[] {
   return ensureCurrent(list);
 }
 const THINK_DESC: Record<string, string> = {
-  off: "Fastest replies — simple edits, lookups, and quick chat.",
-  auto: "Lets the model choose how hard to think — a balanced default.",
+  off: "Fastest replies - simple edits, lookups, and quick chat.",
+  auto: "Lets the model choose how hard to think - a balanced default.",
   minimal: "Light reasoning for quick, well-scoped tasks.",
   low: "Small multi-step tasks and straightforward debugging.",
   medium: "Everyday coding, refactors, and code review.",
@@ -1287,8 +1298,8 @@ const THINK_DESC: Record<string, string> = {
   xhigh: "Deepest reasoning for the most complex, novel problems.",
 };
 const MODE_DESC: Record<string, string> = {
-  default: "Standard agent mode — reads and edits as needed.",
-  plan: "Read-only — drafts a plan to a file before any code changes.",
+  default: "Standard agent mode - reads and edits as needed.",
+  plan: "Read-only - drafts a plan to a file before any code changes.",
 };
 const prettyLevel = (name: string) => { const v = String(name).toLowerCase(); return v === "xhigh" ? "X-High" : v.charAt(0).toUpperCase() + v.slice(1); };
 let cfgClose: (() => void) | null = null;
@@ -1354,7 +1365,7 @@ function openConfigPopover(anchor: HTMLElement): void {
   }
 }
 
-/** A focused single-option dropdown (used by the composer chips) — one config at
+/** A focused single-option dropdown (used by the composer chips) - one config at
  *  a time. omp exposes exactly two modes: Default (Agent) and Plan. */
 function openOptionDropdown(anchor: HTMLElement, configId: string): void {
   cfgClose?.();

@@ -1,4 +1,4 @@
-// desktop/renderer/icons.ts — hand-drawn line-icon set. 24×24, 1.6 stroke,
+// desktop/renderer/icons.ts - hand-drawn line-icon set. 24×24, 1.6 stroke,
 // round caps/joins, currentColor. Consistent optical weight across the set so
 // the activity rail reads as one family. Used in the rail, tooltips, buttons.
 
@@ -43,7 +43,7 @@ const RAW: Record<string, string> = {
   // folder + git (workspace)
   folder: P("M4 7.5A1.5 1.5 0 0 1 5.5 6h3.3l1.7 2h8A1.5 1.5 0 0 1 20 9.5v7a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 16.5z"),
   git: P("M7 8.5a1.7 1.7 0 1 0 0-3.4 1.7 1.7 0 0 0 0 3.4z") + P("M7 18.9a1.7 1.7 0 1 0 0-3.4 1.7 1.7 0 0 0 0 3.4z") + P("M17 9.6a1.7 1.7 0 1 0 0-3.4 1.7 1.7 0 0 0 0 3.4z") + P("M7 8.5v7") + P("M17 9.6v.9a4 4 0 0 1-4 4H7"),
-  // command (⌘ — looped-square: center square + four corner rings)
+  // command (⌘ - looped-square: center square + four corner rings)
   command: P("M9 9h6v6H9z") +
     P("M9 9V7.5A2.5 2.5 0 1 0 6.5 10H9") +
     P("M15 9V7.5A2.5 2.5 0 1 1 17.5 10H15") +

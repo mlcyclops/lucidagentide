@@ -1,6 +1,6 @@
 // desktop/skills_data.ts
 //
-// Surfaces omp's discovered skills (AskSage has no skills API — these are omp's,
+// Surfaces omp's discovered skills (AskSage has no skills API - these are omp's,
 // discovered from project/user/agent skill dirs). Each is invokable in a turn via
 // `/skill:<name>`. Read-only; uses omp's own discoverSkills() so the list matches
 // exactly what the agent loads.

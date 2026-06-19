@@ -6,7 +6,7 @@
 // primary API-key mechanism). Keys never leave the machine; the HTTP API only
 // ever returns masked status (set? + last-4), never the raw key.
 //
-// (OAuth is handled separately via omp's own credential vault / auth-broker —
+// (OAuth is handled separately via omp's own credential vault / auth-broker -
 //  that's the more secure path and omp owns the storage there.)
 
 import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -25,7 +25,7 @@ export interface GuiSettings {
   asksageBaseUrl?: string;
   asksageOnly?: boolean;
   // Monthly inference-token allowance. AskSage's API reports tokens USED but not
-  // the ceiling (admins grant more in the AskSage console — no API to read it), so
+  // the ceiling (admins grant more in the AskSage console - no API to read it), so
   // the limit is a local, user-adjustable value. Everyone starts at 200k.
   asksageLimit?: number;
   // Datasets selected for RAG grounding via AskSage's /query route (ADR-0007).
@@ -34,12 +34,12 @@ export interface GuiSettings {
   asksageQueryModel?: string;
   // Native AskSage persona id applied server-side on the /query (RAG) route. Unlike
   // the composer persona (scanned + delimited into the prompt), this is just an id
-  // passed to AskSage — no untrusted text enters our prompt, so no scan is needed.
+  // passed to AskSage - no untrusted text enters our prompt, so no scan is needed.
   asksagePersona?: string;
   // headroom token-compression proxy (opt-in, on-device). See ADR-0008.
   headroomEnabled?: boolean;
   // Personalization knowledge graph (ADR-0010, P9.x): opt-in, encrypted-at-rest.
-  // OFF by default — no user-fact distillation, recall, or store until enabled.
+  // OFF by default - no user-fact distillation, recall, or store until enabled.
   personalizationEnabled?: boolean;
   // Active compartment (ADR-0012): work | personal | cui | combined (view). Default personal.
   personalScope?: "work" | "personal" | "cui" | "combined";

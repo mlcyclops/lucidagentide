@@ -1,4 +1,4 @@
-// desktop/renderer/ui.ts — overlay layer: delayed custom tooltips, the ⌘K
+// desktop/renderer/ui.ts - overlay layer: delayed custom tooltips, the ⌘K
 // command palette, and the non-modal security toast/popover.
 
 import { $, el } from "./dom.ts";
@@ -57,7 +57,7 @@ export function initTooltips(): void {
 }
 
 // ───────────────────────── rich (hoverable) tooltip ─────────────────────────
-// Like a tooltip, but pointer-events:auto and stays open while hovered — so it
+// Like a tooltip, but pointer-events:auto and stays open while hovered - so it
 // can hold a clickable link. Used for the "where findings are stored" → DuckDB.
 export function attachRichTip(trigger: HTMLElement, html: string): void {
   let card: HTMLElement | null = null, overT = false, overC = false;

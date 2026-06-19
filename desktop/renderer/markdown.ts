@@ -1,11 +1,11 @@
-// desktop/renderer/markdown.ts — render assistant replies as human-readable
+// desktop/renderer/markdown.ts - render assistant replies as human-readable
 // Markdown, safely.
 //
 // Pipeline: shortcode emoji → marked (GFM: headings, lists, tables, code fences,
 // blockquotes, links) → DOMPurify. The model's reply can contain raw HTML and
 // inline SVG; we render them, but DOMPurify strips anything executable
 // (<script>, on* handlers, javascript: URLs, foreignObject, etc.) so a reply can
-// never run code in the renderer. (This is the CHAT display path — distinct from
+// never run code in the renderer. (This is the CHAT display path - distinct from
 // the security gate, which scans tool-call inputs before they run. Rendering text
 // here doesn't go through, or trip, that scanner.)
 

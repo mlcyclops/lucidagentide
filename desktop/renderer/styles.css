@@ -1,4 +1,4 @@
-/* desktop/renderer/styles.css — LucidAgentIDE design system.
+/* desktop/renderer/styles.css - LucidAgentIDE design system.
    Calm, premium, trustworthy. One accent (magenta), cyan for data, semantic
    colour only for state. Tuned for dense-but-readable at 50+ (15px/1.65 body,
    high contrast, 32px+ targets, strong focus). */
@@ -93,9 +93,11 @@ button{font-family:inherit}
 .rail-btn.active{color:var(--accent-2)}
 .rail-btn.active::before{content:"";position:absolute;left:-10px;top:9px;bottom:9px;width:3px;
   border-radius:0 3px 3px 0;background:var(--accent);box-shadow:0 0 10px var(--accent)}
-.rail-btn .badge{position:absolute;top:5px;right:5px;min-width:15px;height:15px;padding:0 3px;
-  border-radius:8px;background:var(--red);color:#fff;font-size:10px;font-weight:700;
-  display:grid;place-items:center;border:2px solid var(--bg-1)}
+.rail-btn .badge{position:absolute;top:3px;right:3px;min-width:16px;height:16px;padding:0 4px;box-sizing:border-box;
+  border-radius:9px;background:var(--red);color:#fff;font-family:var(--mono);font-size:10px;font-weight:700;line-height:1;
+  display:flex;align-items:center;justify-content:center;border:2px solid var(--bg-1);
+  box-shadow:0 0 0 1px color-mix(in srgb,var(--red) 55%,transparent)}
+.rail-btn .badge.med{background:var(--amber);color:#171008;box-shadow:0 0 0 1px color-mix(in srgb,var(--amber) 55%,transparent)}
 
 /* ───────────────────────── sidebar (collapsible) ───────────────────────── */
 .sidebar{
@@ -540,7 +542,7 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .set-toggle input{margin-top:2px;accent-color:var(--accent);width:15px;height:15px;flex:none;cursor:pointer}
 .set-toggle b{color:var(--txt);font-weight:650}
 .lock-tag{font-size:11px}
-/* personalization — compartment selector + per-mode risk notice (ADR-0012) */
+/* personalization - compartment selector + per-mode risk notice (ADR-0012) */
 .pscope-lbl{display:flex;align-items:center;gap:5px;font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--txt-4);margin:12px 0 6px}
 .pscope-lbl .info-dot{color:var(--txt-4)}
 .seg.pscope-seg{display:flex;gap:4px;background:var(--bg-2);border:1px solid var(--line);border-radius:9px;padding:3px}

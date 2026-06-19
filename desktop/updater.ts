@@ -1,4 +1,4 @@
-// desktop/updater.ts — in-app auto-update via electron-updater.
+// desktop/updater.ts - in-app auto-update via electron-updater.
 //
 // Packaged builds check the GitHub Releases feed (publish provider in
 // package.json) on launch. A new version downloads in the background; when it's

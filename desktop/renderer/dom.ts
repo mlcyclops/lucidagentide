@@ -1,4 +1,4 @@
-// desktop/renderer/dom.ts — DOM + dashboard render primitives shared by the
+// desktop/renderer/dom.ts - DOM + dashboard render primitives shared by the
 // inspector panels and status bar. Pure string/Element builders.
 
 import { esc, fmtNum, goodColor, loadColor, pct } from "./format.ts";

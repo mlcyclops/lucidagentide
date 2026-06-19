@@ -1,4 +1,4 @@
-// desktop/build/make-icons.ts — rasterize the brand SVG into the icons
+// desktop/build/make-icons.ts - rasterize the brand SVG into the icons
 // electron-builder consumes. Source of truth is build/icon.svg.
 //
 //   icon.png  1024×1024  → electron-builder generates macOS .icns from it
@@ -7,7 +7,7 @@
 // Run automatically by the desktop `build` script (and the CI workflow) so a
 // fresh checkout always has up-to-date icons without committing binaries.
 //
-// Deps: @resvg/resvg-js (prebuilt native rasterizer) + png-to-ico — both pure
+// Deps: @resvg/resvg-js (prebuilt native rasterizer) + png-to-ico - both pure
 // installs that work on Windows/macOS/Linux runners alike.
 
 import { Resvg } from "@resvg/resvg-js";

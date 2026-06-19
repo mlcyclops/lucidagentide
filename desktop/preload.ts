@@ -1,7 +1,7 @@
-// desktop/preload.ts — the native shell exposed to the renderer (contextIsolated).
+// desktop/preload.ts - the native shell exposed to the renderer (contextIsolated).
 //
 // Chat, dashboards, and session config all flow over the dev server's HTTP API
-// (which is backed by a real omp ACP session — see desktop/acp_backend.ts), so
+// (which is backed by a real omp ACP session - see desktop/acp_backend.ts), so
 // the only things the renderer needs from Electron are crisp text zoom
 // (webFrame) and native window controls. In a plain browser, window.lucid is
 // absent and the renderer falls back to CSS zoom.

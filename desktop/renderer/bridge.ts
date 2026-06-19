@@ -1,7 +1,7 @@
 // desktop/renderer/bridge.ts
 //
 // The single seam between the UI and the outside world. Dashboards, chat, and
-// session config all go over the dev server's HTTP API — which is backed by a
+// session config all go over the dev server's HTTP API - which is backed by a
 // REAL `omp acp` session (desktop/acp_backend.ts), so prompts produce genuine
 // model replies in both the browser build and Electron. The only thing that is
 // native-only is window controls + crisp text zoom, exposed by the Electron
@@ -91,7 +91,7 @@ export interface LucidBridge {
   // headroom token-compression proxy (opt-in, on-device)
   headroom(): Promise<HeadroomStatus | null>;
   setHeadroom(enabled: boolean): Promise<HeadroomStatus | null>;
-  // personalization knowledge graph (opt-in, encrypted — ADR-0010/0012)
+  // personalization knowledge graph (opt-in, encrypted - ADR-0010/0012)
   personal(): Promise<PersonalStatus | null>;
   personalEnable(enabled: boolean): Promise<PersonalStatus | null>;
   personalSetup(passphrase: string): Promise<{ ok: boolean; error?: string } | null>;
@@ -138,11 +138,11 @@ async function streamChat(text: string, onEvent: (e: ChatEvent) => void): Promis
   try {
     res = await fetch("/api/chat", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text }) });
   } catch {
-    onEvent({ type: "token", text: "[chat backend unreachable — is the GUI server running?]" });
+    onEvent({ type: "token", text: "[chat backend unreachable - is the GUI server running?]" });
     onEvent({ type: "done" });
     return;
   }
-  if (res.status === 404) { onEvent({ type: "token", text: "[chat backend is out of date — close the GUI server window and relaunch (launcher → G)]" }); onEvent({ type: "done" }); return; }
+  if (res.status === 404) { onEvent({ type: "token", text: "[chat backend is out of date - close the GUI server window and relaunch (launcher → G)]" }); onEvent({ type: "done" }); return; }
   if (!res.ok || !res.body) { onEvent({ type: "token", text: `[chat backend error ${res.status}]` }); onEvent({ type: "done" }); return; }
   const reader = res.body.getReader();
   const dec = new TextDecoder();

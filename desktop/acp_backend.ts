@@ -42,7 +42,7 @@ class Backend {
   private starting: Promise<void> | null = null;
   private listener: ((e: ChatEvent) => void) | null = null;
   // Approved (scanned + delimited) AskSage persona, delivered once per session
-  // inside the first user turn — never the frozen prefix (ADR-0007 / invariant #5).
+  // inside the first user turn - never the frozen prefix (ADR-0007 / invariant #5).
   private persona: string | null = null;
   private personaDelivered = false;
   configOptions: any[] = [];
@@ -125,7 +125,7 @@ class Backend {
   }
 
   /** Tear down the omp process so the next call respawns it (e.g. after an API
-   *  key changes — the new env is picked up on the fresh spawn). */
+   *  key changes - the new env is picked up on the fresh spawn). */
   restart(): void {
     try { this.acp?.stop(); } catch { /* ignore */ }
     this.acp = null; this.starting = null; this.sessionId = null; this.listener = null;

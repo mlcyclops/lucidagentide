@@ -1,4 +1,4 @@
-// desktop/sessions.ts — list REAL omp sessions for the current project from disk.
+// desktop/sessions.ts - list REAL omp sessions for the current project from disk.
 //
 // omp persists every session (interactive or ACP) as a .jsonl under
 // ~/.omp/agent/sessions/<encoded-cwd>/. We read those, filter to this repo's cwd,
@@ -54,7 +54,7 @@ export function listSessions(cwd: string = currentWorkspace()): SessionInfo[] {
           }
           if (norm(scwd) !== want) continue;
           if (!title && turns === 0) continue; // skip empty/probe sessions with no prompt
-          out.push({ id: id || f, title: title || "Untitled session", model: model.replace(/^anthropic\//, "") || "—", updatedAt: statSync(p).mtimeMs, turns });
+          out.push({ id: id || f, title: title || "Untitled session", model: model.replace(/^anthropic\//, "") || "-", updatedAt: statSync(p).mtimeMs, turns });
         } catch { /* skip unreadable file */ }
       }
     } catch { /* skip dir */ }
