@@ -10,6 +10,8 @@ import { $, $$, accordion, el, fmtNum, gauge, spark, table } from "./dom.ts";
 import { ageStr, esc, fmtUSD, goodColor, loadColor } from "./format.ts";
 import { icon, piMark } from "./icons.ts";
 import { renderMarkdown } from "./markdown.ts";
+import { type GraphHandle, kindLabel, mountGraph } from "./graph.ts";
+import type { PersonalGraphData } from "./bridge.ts";
 import { type Action, attachRichTip, createPalette, initTooltips, popover, showToast } from "./ui.ts";
 
 type Tab = "security" | "memory";
@@ -96,6 +98,7 @@ function buildShell(): void {
         <button class="rail-btn" data-rail="security" data-tip="Security|Findings, quarantine & approvals" data-tip-icon="shield">${icon("shield", 20)}<span class="badge" id="railBadge" hidden>0</span></button>
         <button class="rail-btn" data-rail="memory" data-tip="Memory & context|Context window, prompt-cache savings, semantic memory" data-tip-icon="brain">${icon("brain", 20)}</button>
         <button class="rail-btn" data-rail="runs" data-tip="Runs|Provenance lineage" data-tip-icon="runs">${icon("runs", 20)}</button>
+        <button class="rail-btn" data-rail="knowledge" data-tip="Knowledge graph|Your private, encrypted personalization graph - nodes, edges, drill-down" data-tip-icon="graph">${icon("graph", 20)}</button>
         <div class="spacer"></div>
         <button class="rail-btn" id="railCmd" data-tip="Commands|Ctrl / ⌘ K" data-tip-icon="command">${icon("command", 20)}</button>
         <button class="rail-btn" data-rail="settings" data-tip="Settings" data-tip-icon="sliders">${icon("sliders", 20)}</button>
@@ -150,6 +153,22 @@ function buildShell(): void {
           <button class="set-close" id="setClose" data-tip="Close settings">${icon("close", 16)}</button>
         </div>
         <div class="set-body" id="setBody"></div>
+      </aside>
+
+      <aside class="kg" id="knowledge" hidden>
+        <div class="set-head">
+          <div class="set-title">${icon("graph", 17)} Knowledge graph <span class="set-sub" id="kgScopeLbl"></span></div>
+          <div class="kg-tools">
+            <div class="seg kg-lens" data-kg-lens>
+              <button class="on" data-lens="kind">Kind</button><button data-lens="trust">Trust</button>
+            </div>
+            <button class="set-close" id="kgClose" data-tip="Close">${icon("close", 16)}</button>
+          </div>
+        </div>
+        <div class="kg-main">
+          <div class="kg-canvas" id="kgCanvas"></div>
+          <div class="kg-side" id="kgSide"></div>
+        </div>
       </aside>
     </div>
 
@@ -504,6 +523,7 @@ function secPersonal(p: import("./bridge.ts").PersonalStatus | null): string {
   return card(toggle + inner);
 }
 function openSettings(): void {
+  closeKnowledge();
   state.settingsOpen = true;
   $("#settings")!.hidden = false;
   $("#inspector")!.hidden = true;
@@ -518,6 +538,64 @@ function closeSettings(): void {
   $$(".rail-btn").forEach((b) => b.classList.remove("active"));
   $('.rail-btn[data-rail="chat"]')?.classList.add("active");
 }
+
+// ───────────────────────── Knowledge graph (P9.3) ─────────────────────────
+let kgHandle: GraphHandle | null = null;
+let kgData: PersonalGraphData | null = null;
+let kgLens: "kind" | "trust" = "kind";
+let kgOpen = false;
+let kgSelId: string | null = null;
+function openKnowledge(): void {
+  kgOpen = true;
+  closeSettings();
+  $("#knowledge")!.hidden = false;
+  $("#inspector")!.hidden = true;
+  $$(".rail-btn").forEach((b) => b.classList.toggle("active", (b as HTMLElement).dataset.rail === "knowledge"));
+  void renderKnowledge();
+}
+function closeKnowledge(): void {
+  if (!kgOpen) return;
+  kgOpen = false;
+  kgHandle?.destroy(); kgHandle = null;
+  $("#knowledge")!.hidden = true;
+  $("#inspector")!.hidden = false;
+  $$(".rail-btn").forEach((b) => b.classList.remove("active"));
+  $('.rail-btn[data-rail="chat"]')?.classList.add("active");
+}
+async function renderKnowledge(): Promise<void> {
+  const canvas = $("#kgCanvas"), side = $("#kgSide"), scopeLbl = $("#kgScopeLbl");
+  if (!canvas || !side) return;
+  kgHandle?.destroy(); kgHandle = null;
+  const status = await bridge.personal();
+  if (scopeLbl) scopeLbl.textContent = status?.scope ? `· ${status.scope}` : "";
+  const gate = (msg: string) => { canvas.innerHTML = `<div class="kg-empty">${icon("graph", 30)}<div>${msg}</div></div>`; side.innerHTML = ""; };
+  if (!status?.enabled) return gate("Personalization is off. Enable it in Settings to build a knowledge graph.");
+  if (!status.unlocked) return gate("Your store is locked. Unlock it in Settings to view the graph.");
+  kgData = await bridge.personalGraph();
+  if (!kgData || kgData.nodes.length === 0) return gate("Nothing learned yet. As you chat, facts you share are gated and remembered here.");
+  side.innerHTML = `<div class="kg-side-empty">${icon("eye", 22)}<div>Click a node to see its facts.</div></div>`;
+  kgHandle = mountGraph(canvas as HTMLElement, kgData, (id) => renderKgSide(id));
+  kgHandle.setLens(kgLens);
+}
+function renderKgSide(id: string | null): void {
+  kgSelId = id;
+  const side = $("#kgSide"); if (!side || !kgData) return;
+  if (!id) { side.innerHTML = `<div class="kg-side-empty">${icon("eye", 22)}<div>Click a node to see its facts.</div></div>`; return; }
+  const node = kgData.nodes.find((n) => n.id === id);
+  if (!node) return;
+  const facts = kgData.facts.filter((f) => f.entity_id === id);
+  const rows = facts.map((f) => `<div class="kg-fact">
+      <div class="kg-fact-stmt">${esc(f.statement)}</div>
+      <div class="kg-fact-meta"><span class="pill ${esc(f.trust)}">${esc(f.trust)}</span> <span>conf ${Math.round((f.confidence ?? 0) * 100)}%</span>
+        <button class="kg-forget" data-forget="${esc(f.id)}" data-tip="Forget this|Soft-delete - the agent stops recalling it.">${icon("close", 12)} forget</button></div>
+    </div>`).join("");
+  side.innerHTML = `<div class="kg-side-head"><span class="kg-side-kind" style="background:${kindTint(node.kind)}">${esc(kindLabel(node.kind))}</span><b>${esc(node.name)}</b></div>
+    <div class="kg-side-facts">${rows || `<div class="empty">No active facts.</div>`}</div>`;
+}
+const kindTint = (k: string): string => {
+  const c: Record<string, string> = { preference: "var(--cyan-dim)", interest: "var(--green-dim)", decision: "var(--blue-dim)", behavior: "var(--amber-dim)", personality: "var(--accent-dim)" };
+  return c[kindLabel(k)] ?? "var(--bg-3)";
+};
 
 // ───────────────────────── workspace ─────────────────────────
 function workspaceSection(ws: WorkspaceInfo): string {
@@ -909,12 +987,29 @@ function wire(): void {
   // rail
   $$(".rail-btn[data-rail]").forEach((b) => b.addEventListener("click", () => {
     const r = (b as HTMLElement).dataset.rail!;
+    if (r !== "knowledge") closeKnowledge();
     if (r === "security" || r === "memory") focusInspector(r);
     else if (r === "chat") { closeSettings(); $("#input")?.focus(); $$(".rail-btn").forEach((x) => x.classList.toggle("active", x === b)); }
     else if (r === "runs") { focusInspector("security"); $("#inspBody")?.querySelector('[data-acc="sec.runs"] .acc-head')?.dispatchEvent(new Event("click", { bubbles: true })); }
     else if (r === "settings") openSettings();
+    else if (r === "knowledge") openKnowledge();
     else palette.show();
   }));
+  // Knowledge graph: close, lens toggle, forget-fact
+  $("#kgClose")!.addEventListener("click", () => closeKnowledge());
+  $("#knowledge")!.addEventListener("click", async (e) => {
+    const t = e.target as HTMLElement;
+    const lens = t.closest("[data-lens]") as HTMLElement | null;
+    if (lens) { kgLens = lens.dataset.lens as "kind" | "trust"; kgHandle?.setLens(kgLens); $$("[data-kg-lens] button").forEach((x) => x.classList.toggle("on", x === lens)); return; }
+    const forget = t.closest("[data-forget]") as HTMLElement | null;
+    if (forget) {
+      const fid = forget.dataset.forget!;
+      await bridge.personalForget(fid);
+      if (kgData) kgData.facts = kgData.facts.filter((f) => f.id !== fid); // keep the graph layout; just drop the fact
+      renderKgSide(kgSelId);
+      showToast({ title: "Forgotten", desc: "The agent will stop recalling that fact.", actions: [{ label: "OK" }], timeout: 2000 });
+    }
+  });
   $("#railCmd")!.addEventListener("click", () => palette.show());
   $("#cmdkBtn")!.addEventListener("click", () => palette.show());
 

@@ -60,6 +60,8 @@ export const EVENT_NAMES = [
   // P9.2 — auto-distilled user facts + scope-aware recall
   "personal_fact_learned",
   "personal_recall_injected",
+  // P9.3 — user edits the knowledge graph
+  "personal_fact_forgotten",
 ] as const;
 export type EventName = (typeof EVENT_NAMES)[number];
 

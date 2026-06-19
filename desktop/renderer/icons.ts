@@ -15,6 +15,9 @@ const RAW: Record<string, string> = {
     P("M12 4.5v14.5"),
   // runs / lineage (branch)
   runs: P("M7 5v9") + P("M7 18.5a1.6 1.6 0 1 0 0-3.2 1.6 1.6 0 0 0 0 3.2z") + P("M7 8.2a1.6 1.6 0 1 0 0-3.2 1.6 1.6 0 0 0 0 3.2z") + P("M17 9.5a1.6 1.6 0 1 0 0-3.2 1.6 1.6 0 0 0 0 3.2z") + P("M17 8.2V11a3 3 0 0 1-3 3H7"),
+  // knowledge graph (nodes + edges)
+  graph: P("M8 8 17 7.5") + P("M8 8 10.5 17.5") + P("M17 7.5 16 16") + P("M10.5 17.5 16 16")
+    + "<circle cx='8' cy='8' r='2.4' fill='currentColor' stroke='none'/><circle cx='17' cy='7.5' r='2' fill='currentColor' stroke='none'/><circle cx='10.5' cy='17.5' r='2.4' fill='currentColor' stroke='none'/><circle cx='16' cy='16' r='2' fill='currentColor' stroke='none'/>",
   // settings (sliders)
   sliders: P("M5 8h7") + P("M16 8h3") + P("M5 16h3") + P("M12 16h7") + P("M14 6v4") + P("M8 14v4"),
   // search

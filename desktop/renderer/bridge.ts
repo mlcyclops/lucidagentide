@@ -46,6 +46,10 @@ export interface PersonalStatus {
   enabled: boolean; configured: boolean; unlocked: boolean;
   scope: PersonalScopeView; counts: { work: number; personal: number; cui: number } | null;
 }
+export interface GraphNode { id: string; name: string; kind: string; trust: string; count: number }
+export interface GraphEdge { from: string; to: string; relation: string }
+export interface GraphFact { id: string; entity_id: string; statement: string; scope: string; trust: string; confidence: number; session?: string; at: string }
+export interface PersonalGraphData { nodes: GraphNode[]; edges: GraphEdge[]; facts: GraphFact[] }
 export interface WorkspaceInfo {
   current: string; name: string; isGit: boolean;
   recent: { path: string; name: string; isGit: boolean }[];
@@ -98,6 +102,8 @@ export interface LucidBridge {
   personalUnlock(passphrase: string): Promise<{ ok: boolean; error?: string } | null>;
   personalLock(): Promise<PersonalStatus | null>;
   personalScope(scope: PersonalScopeView): Promise<PersonalStatus | null>;
+  personalGraph(scope?: PersonalScopeView): Promise<PersonalGraphData | null>;
+  personalForget(factId: string): Promise<{ ok: boolean } | null>;
   // workspace (folder the agent works in; local or cloned remote)
   workspace(): Promise<WorkspaceInfo | null>;
   setWorkspace(path: string): Promise<WorkspaceInfo | null>;
@@ -198,6 +204,8 @@ export const bridge: LucidBridge = {
   personalUnlock: (passphrase) => post("/api/personal/unlock", { passphrase }),
   personalLock: () => post("/api/personal/lock", {}),
   personalScope: (scope) => post("/api/personal/scope", { scope }),
+  personalGraph: (scope) => getData(`/api/personal/graph${scope ? `?scope=${encodeURIComponent(scope)}` : ""}`),
+  personalForget: (factId) => post("/api/personal/forget", { factId }),
   workspace: () => getData("/api/workspace"),
   setWorkspace: (path) => post("/api/workspace", { path }),
   cloneWorkspace: (url) => post("/api/workspace/clone", { url }),

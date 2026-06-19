@@ -65,8 +65,41 @@ export function setScope(scope: ScopeView): PersonalStatus {
   return personalStatus();
 }
 
-/** The unlocked store, or null. (For future P9.3 wiring: KG view.) */
+/** The unlocked store, or null. */
 export function currentStore(): PersonalStore | null { return store; }
+
+// ── P9.3: knowledge-graph view data + edits ───────────────────────────────────────
+export interface GraphNode { id: string; name: string; kind: string; trust: string; count: number }
+export interface GraphEdge { from: string; to: string; relation: string }
+export interface GraphFact { id: string; entity_id: string; statement: string; scope: string; trust: string; confidence: number; session?: string; at: string }
+export interface PersonalGraphData { nodes: GraphNode[]; edges: GraphEdge[]; facts: GraphFact[] }
+
+/** The node/edge graph for the active (or given) compartment, or null when off/locked. */
+export function personalGraph(scopeArg?: ScopeView): PersonalGraphData | null {
+  const s = load();
+  if (!s.personalizationEnabled || !store) return null;
+  const scope = scopeArg ?? ((s.personalScope ?? "personal") as ScopeView);
+  const g = store.graph({ scope });
+  const byEntity = new Map<string, typeof g.facts>();
+  for (const f of g.facts) (byEntity.get(f.entity_id) ?? byEntity.set(f.entity_id, []).get(f.entity_id)!).push(f);
+  const nodes: GraphNode[] = g.entities
+    .filter((e) => byEntity.has(e.id))
+    .map((e) => ({ id: e.id, name: e.name, kind: e.kind, trust: e.trust_label, count: byEntity.get(e.id)!.length }));
+  const ids = new Set(nodes.map((n) => n.id));
+  const edges: GraphEdge[] = g.links
+    .filter((l) => ids.has(l.from_entity_id) && ids.has(l.to_entity_id))
+    .map((l) => ({ from: l.from_entity_id, to: l.to_entity_id, relation: l.relation }));
+  const facts: GraphFact[] = g.facts.map((f) => ({ id: f.id, entity_id: f.entity_id, statement: f.statement, scope: f.scope, trust: f.trust_label, confidence: f.confidence, session: f.source_session_id, at: f.promoted_at }));
+  return { nodes, edges, facts };
+}
+
+/** Forget (soft-delete) a fact the user no longer wants remembered. */
+export function forgetFact(factId: string): { ok: boolean } {
+  if (!store) return { ok: false };
+  const ok = store.forgetFact(factId);
+  if (ok) store.save();
+  return { ok };
+}
 
 // ── P9.2: learn from / recall into conversations ───────────────────────────────────
 let distillScanner: ScannerClient | null = null;

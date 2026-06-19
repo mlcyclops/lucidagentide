@@ -4,6 +4,17 @@ Three lines per session: **shipped / stubbed / next** (CLAUDE.md session ritual)
 
 -----
 
+## P9.3: in-app SVG Knowledge Graph view (ADR-0010/0012)
+- **shipped:** a hand-rolled, dependency-free force-directed SVG graph (desktop/renderer/graph.ts) on a
+  new "Knowledge" rail tab. Nodes = entities (sized by fact count, coloured by a Kind/Trust lens),
+  edges = links; pan / wheel-zoom / drag; click a node to drill in to its facts with a per-fact
+  Forget (soft-delete). Server: personalGraph(scope) + forgetFact() in personal.ts, GET
+  /api/personal/graph + POST /api/personal/forget; new EventName personal_fact_forgotten; a custom
+  "graph" rail icon. Gated: shows a message when personalization is off / locked / empty.
+- **stubbed:** edit (rename/relabel) facts; node-level forget; the security-lens currently recolors
+  by trust (provenance overlay can deepen later).
+- **next:** P9.4 — Obsidian vault export (personalization-focused, audited decrypt→write).
+
 ## P9.2: conversation distiller + scope-aware recall (ADR-0010/0012)
 - **shipped:** harness/personal/distiller.ts — learn durable user-facts from a turn, FAIL-CLOSED:
   the user's text is scanned and only a clean+trusted source contributes facts (suspicious/
