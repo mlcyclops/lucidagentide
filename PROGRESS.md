@@ -4,6 +4,20 @@ Three lines per session: **shipped / stubbed / next** (CLAUDE.md session ritual)
 
 -----
 
+## P9.5.0: hard CUI isolation roadmap (planning only — ADR-0014)
+- **shipped:** ADR-0014 — resolves ADR-0012's open "CUI isolation strength" question. Decision:
+  Option A, a SEPARATE encrypted CUI store (new format personal-cui.v1, its own DEK + custody) so a
+  single key never decrypts both CUI and non-CUI; the main store rejects cui writes; CUI can lock
+  independently and be destroyed independently (ties to ADR-0013 NARA records destruction). Rejected
+  one-file-two-DEKs (couples lifecycle) + HKDF-from-one-master (master KEK could derive both — defeats
+  the goal). Phases P9.5a (store+dual-custody+routing) → P9.5b (audited migration + destroy) → P9.5c
+  (UI). New EventNames + new frozen format reserved for the build increments; no code this session.
+- **stubbed:** all of P9.5a–c (designed, unbuilt). Three open questions flagged for confirmation:
+  separate-CUI-passphrase recommend-vs-require, Combined-view-with-CUI-locked behavior, migration
+  trigger (explicit+audited recommended).
+- **next:** build P9.5a — the personal-cui.v1 store + independent unlock + two-store routing (main
+  store refuses cui writes; cui learning/recall/graph/export route to the CUI store).
+
 ## P9.4: audited Obsidian vault export + NARA-aligned CUI archive (ADR-0013 / ADR-0010/0012)
 - **shipped:** harness/export/vault_export.ts — pure buildVault (note-per-entity, YAML frontmatter,
   sanitized-but-working links, [[wikilinks]], _index.md MOC; scope-filtered, CUI EXCLUDED by default)

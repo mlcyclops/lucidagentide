@@ -1058,3 +1058,108 @@ endpoints `POST /api/personal/vault`, `POST /api/personal/cui-archive`, `GET /ap
 - **Hard CUI isolation** (separate store / per-compartment DEK) remains the documented hardening
   upgrade if an accreditation requires it; P9.4 keeps tag-based separation + the loud, audited,
   CUI-only archive path.
+
+-----
+
+## ADR-0014 — Hard CUI isolation: a separate encrypted store with its own DEK (roadmap)
+
+**Date:** 2026-06-19
+**Status:** Proposed (planning only — no functional code this session). Resolves the **open
+question** flagged in ADR-0012 ("CUI isolation strength"). Future phases P9.5a–c build it; each is
+its own increment + ADR delta per the session ritual.
+**Relationship:** hardens ADR-0010/ADR-0012; complements ADR-0013 (the CUI archive export) by also
+isolating CUI **at rest in the working store**, not just at export time.
+
+### Context — the weakness this closes
+
+Today (P9.1–P9.4) all compartments — `work`, `personal`, `cui` — live in **one** encrypted store
+(`lucid-personal.kg.enc`, `personal-kg.v1`) under **one DEK**, separated only by the `scope` tag +
+UI/export rules. That tag-based separation is enough for handling discipline, but it has a real
+limitation: **unlocking to use Personal necessarily decrypts CUI into the same process memory**, and
+a single compromised secret (passphrase or keystore entry) exposes CUI alongside everything else.
+ADR-0012 explicitly deferred the stronger option. This ADR designs it.
+
+**Goal (the invariant to add):** *a single key never decrypts both CUI and non-CUI.* CUI can stay
+locked while Personal/Work are in use (and vice versa), and CUI records can be destroyed
+independently — directly serving the NARA records-destruction duty introduced in ADR-0013.
+
+### Decision — Option A: a separate CUI store (separate file, separate DEK, separate custody)
+
+Split CUI into its **own** encrypted document:
+
+- **`~/.omp/lucid-personal.kg.enc`** (`personal-kg.v1`) — holds **work + personal** only. After
+  migration it contains **no** `cui` facts, and the API **rejects** writing a `cui`-scoped fact into it.
+- **`~/.omp/lucid-cui.kg.enc`** (new format **`personal-cui.v1`**, its own frozen contract) — holds
+  **cui** only. Reuses the exact `crypto.ts` algorithm layer (AES-256-GCM, PBKDF2-HMAC-SHA256
+  ≥600k, GCM auth tag) with an **independent** DEK, salt, and `wrappedDek`/keystore entry.
+
+Two DEKs, each in memory **only while its own store is unlocked**. The Personal/Work unlock path
+never derives or holds the CUI DEK — the new invariant holds by construction.
+
+**Rejected alternatives.** *(B) One file, two wrapped DEKs* — granular, but co-locating ciphertext
+couples lifecycle, so you can't destroy CUI by deleting a file (records destruction matters here).
+*(C) Per-scope DEK via HKDF from one master KEK* — `crypto.ts` has no HKDF, and more importantly the
+master KEK in memory could derive **both** keys, which **violates the goal**. Option A is the only
+one that actually satisfies "one key never decrypts both."
+
+### Why Option A pays off (beyond isolation)
+
+1. **NARA records destruction (ties to ADR-0013):** zeroize the CUI DEK + delete `lucid-cui.kg.enc`
+   = a clean, auditable destruction of CUI records that leaves Personal/Work untouched.
+2. **Independent lifecycle:** lock CUI while Personal is open; require CUI re-auth more often; the CUI
+   store file *is* the encrypted-at-rest archive, pairing with the P9.4 plaintext CUI archive.
+3. **Independent custody:** the CUI store gets its **own** secret — a distinct passphrase
+   (recommended, not forced) or a distinct OS-keystore entry (a separate named `safeStorage` blob).
+
+### Behavior changes (designed; built in P9.5)
+
+A small manager holds up to two stores (`main` = work+personal, `cui`). Routing becomes scope-aware:
+- `graph({scope})`: `cui` → cui store; `work|personal` → main; `combined` → **union of both when both
+  unlocked**; if CUI is locked, Combined shows non-CUI + an explicit **"CUI locked"** marker (chosen
+  over blocking Combined entirely).
+- **Learning** a `cui`-scoped fact requires the CUI store unlocked; if it's locked, the fact is
+  **dropped, never silently written to the main store** (fail-closed — keystone #2 discipline).
+- **Recall** of CUI facts happens only when the CUI store is unlocked.
+- **Export:** `exportCuiArchive` (ADR-0013) reads the CUI store; the vault export reads main (CUI
+  already excluded). No change to the export *formats*.
+- `scopeCounts()` reports `cui` from the CUI store when unlocked, else a "locked" sentinel (count
+  hidden, not zero — zero would mislead).
+
+### Frozen-contract deltas (for the future build increments)
+
+- **New store format `personal-cui.v1`** — its own frozen contract (envelope identical in shape to
+  `personal-kg.v1`; the algorithm layer is unchanged).
+- **New EventNames** (added in the increment that emits them, invariant #8):
+  `personal_cui_store_unlocked`, `personal_cui_migrated`, `personal_cui_destroyed`.
+- **No DuckDB migration** (the stores are separate encrypted files).
+- `personal-kg.v1` is structurally unchanged; post-migration it simply holds no `cui` facts, and the
+  main store's write path rejects `scope==="cui"`.
+
+### Phases (each its own future increment + ADR delta)
+
+- **P9.5a — CUI store + dual-custody unlock + routing.** The `personal-cui.v1` store, an independent
+  unlock flow, the two-store manager, and scope routing (main store rejects `cui` writes; cui
+  learning/recall/graph/export route to the CUI store). New format + `personal_cui_store_unlocked`.
+- **P9.5b — audited migration + records destruction.** A one-time, **idempotent, audited** migration
+  that moves existing `cui` entities/facts/links out of the main store into the CUI store (reuses the
+  P9.4 audit trail); plus a loud, confirmed **"Destroy CUI records"** action (zeroize DEK + delete
+  file). New events `personal_cui_migrated`, `personal_cui_destroyed`.
+- **P9.5c — UI.** An independent CUI lock state in the compartment selector (unlock CUI separately),
+  the Combined "CUI locked" handling, and the destroy-CUI confirm.
+
+**Recommended first build:** P9.5a.
+
+### Honest posture (unchanged)
+
+Hard isolation strengthens **key separation** and **records destruction**; it does **not** change the
+BoringSSL/approved-algorithms-not-FIPS-*mode* caveat from ADR-0010. Same algorithms, two keys.
+
+### Open questions (flagged for confirmation before building P9.5a)
+
+- **Separate CUI passphrase — recommend or require?** Forcing a distinct secret maximizes isolation
+  but adds friction for a single-user dev workflow. *Recommended: allow same, strongly suggest
+  separate; never silently reuse without telling the user.*
+- **Combined view with CUI locked** — show non-CUI + a "CUI locked" marker (recommended) vs. block
+  Combined entirely.
+- **Migration trigger** — automatic-on-first-CUI-store-setup vs. an explicit "Move my CUI data into
+  the isolated store" button. *Recommended: explicit + audited (it moves controlled data).*
