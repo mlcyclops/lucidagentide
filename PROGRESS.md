@@ -417,3 +417,14 @@ Three lines per session: **shipped / stubbed / next** (CLAUDE.md session ritual)
   (or acp-ui/Zed/JetBrains) uses. Gate stays in-process; invariants intact. ADR-0006.
 - **next:** Electron shell embedding the web page + an omp `acp` chat panel;
   click-to-approve quarantine actions; SSE push instead of 4s polling.
+
+## DX: Electron desktop GUI (chat + dashboards)
+- **shipped:** desktop/ — a polished Electron shell. Renderer (vanilla TS): custom
+  frameless titlebar, icon rail, sessions sidebar, streaming chat, collapsible
+  Security + Memory inspector, ⌘K command palette, delayed SVG tooltips, and a
+  non-modal fly-in toast when the gate quarantines a tool call. Screenshot-verified
+  in-browser (bun run desktop:web); renderer + main + preload type-clean.
+- **shipped:** main/preload/acp wire omp via `omp acp -e <gate>` (gate stays
+  in-process on the chat path) + read-only dashboards; reuses ~/.omp credentials.
+- **next:** confirm ACP session/update→event field shapes on a live model turn;
+  surface tool-permission prompts in the UI; package installers (electron-builder).

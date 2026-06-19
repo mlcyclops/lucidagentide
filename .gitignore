@@ -27,3 +27,7 @@ Thumbs.db
 
 # --- local Claude Code settings (personal; shared config lives in settings.json) ---
 .claude/settings.local.json
+
+# desktop electron app
+desktop/node_modules/
+desktop/dist/

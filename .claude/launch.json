@@ -6,6 +6,12 @@
       "runtimeExecutable": "bun",
       "runtimeArgs": ["run", "tools/web/server.ts"],
       "port": 4317
+    },
+    {
+      "name": "lucid-desktop",
+      "runtimeExecutable": "bun",
+      "runtimeArgs": ["run", "desktop/dev.ts"],
+      "port": 4318
     }
   ]
 }

@@ -1,0 +1,17 @@
+{
+  "name": "lucidagentide-desktop",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Electron desktop shell for LucidAgentIDE + omp — gated agent chat + live security/memory dashboards.",
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "bun build main.ts --target=node --format=cjs --external electron --outfile dist/main.js && bun build preload.ts --target=node --format=cjs --external electron --outfile dist/preload.js",
+    "start": "bun run build && electron .",
+    "web": "bun run dev.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "typescript": "^5.6.0"
+  }
+}

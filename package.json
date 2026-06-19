@@ -35,7 +35,8 @@
     "dashboard:tui": "bun run tools/dashboard_tui.ts",
     "memory:tui": "bun run tools/memory_tui.ts",
     "dashboard:web": "bun run tools/web/server.ts",
-    "acp:probe": "bun run tools/acp_probe.ts"
+    "acp:probe": "bun run tools/acp_probe.ts",
+    "desktop:web": "bun run desktop/dev.ts"
   },
   "dependencies": {
     "@duckdb/node-api": "1.5.4-r.1",

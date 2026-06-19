@@ -67,19 +67,29 @@ Inside omp: `/lucid:help`, `/lucid:scan <text>`, `/lucid:dashboard` (security), 
 compaction policy, semantic memory) — or `!bun run dashboard:tui` /
 `!bun run memory:tui` for instant in-terminal dashboards.
 
-### Browser dashboard (the desktop/Electron path)
+### Desktop app + browser dashboards
 
 ```bash
-bun run dashboard:web    # http://localhost:4317 — security + memory, live, read-only
-bun run acp:probe        # proves omp speaks Agent Client Protocol (the GUI seam)
+bun run desktop:web      # http://localhost:4318 — the full GUI (chat + dashboards) in a browser
+bun run dashboard:web    # http://localhost:4317 — just the dashboards, live, read-only
+bun run acp:probe        # proves omp speaks Agent Client Protocol (the GUI's chat seam)
 ```
 
-`dashboard:web` serves the same security + memory views as a live, auto-refreshing
-web page (the data layer is shared with the TUIs). It's the front-end proof for a
-desktop app: an Electron shell would embed this page and add an omp chat panel via
-`omp acp` — which `acp:probe` confirms omp serves (reusing your `~/.omp`
-credentials). The security gate stays an in-process omp hook either way, so the
-fail-closed invariants are untouched by the GUI. See [`DECISIONS.md`](DECISIONS.md) ADR-0006.
+The **desktop GUI** lives in [`desktop/`](desktop/) — a polished Electron shell:
+a gated agent chat, plus a live Security and Memory & Context inspector (collapsible
+sections, custom tooltips, ⌘K command palette, a non-modal fly-in toast when the
+gate quarantines a tool call). `desktop:web` runs the exact same renderer in a
+plain browser (simulated chat) so it needs no Electron to try. For the real app:
+
+```bash
+cd desktop && bun install && bun run start
+```
+
+It spawns omp as `omp acp -e harness/omp/security_extension.ts`, so the **security
+gate stays loaded in-process on the chat path** (invariant #4), and reuses your
+`~/.omp` credentials. The dashboards are served read-only — the GUI never becomes
+a second place that decides "safe." See [`desktop/README.md`](desktop/README.md)
+and [`DECISIONS.md`](DECISIONS.md) ADR-0006.
 
 Or do it by hand — omp is installed globally; load the security gate into a real
 session (every tool call is scanned, quarantined content blocked fail-closed):

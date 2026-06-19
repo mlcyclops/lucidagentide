@@ -393,3 +393,16 @@ the security boundary:
   is the single source of truth for the memory/context view across TUI + web.
 - `tools/web/` and `tools/acp_probe.ts` are front-end/proof code, not on the
   security path; they hold no frozen contracts.
+
+### Addendum (Electron realization)
+
+The desktop shell in `desktop/` implements decision #1+#2 above:
+`desktop/main.ts` (Electron) spawns the Bun content/dashboard server **and**
+`omp acp -e harness/omp/security_extension.ts`, bridging ACP↔renderer over IPC
+(`desktop/acp.ts`, `desktop/preload.ts`). The renderer (`desktop/renderer/`,
+vanilla TS) is identical in Electron and in a plain browser — `bridge.ts` prefers
+`window.lucid` (real ACP) and falls back to `fetch('/api/*')` + a simulated chat,
+so the UI is screenshot-verifiable without Electron. Confirmed that `omp acp`
+accepts the `-e` gate (initialize still succeeds), so the gate runs in-process on
+the GUI chat path. The ACP `session/update`→chat-event mapping follows the spec
+but is the one piece not exercisable headlessly; flagged for first-run confirmation.
