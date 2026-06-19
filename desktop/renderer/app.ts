@@ -22,6 +22,7 @@ const state = {
   memory: null as MemorySnapshot | null,
   config: [] as ConfigOption[],
   commands: [] as OmpCommand[],
+  skills: [] as { name: string; description: string; source: string }[],
   liveUsage: null as { used: number; size: number; cost: number } | null,
   workspace: null as WorkspaceInfo | null,
   asksage: null as { configured: boolean; base: string; only: boolean; limit: number } | null,
@@ -95,6 +96,7 @@ function buildShell(): void {
             <button class="ctool" id="ctMode" data-tip="Mode|Agent edits files · Plan drafts read-only">${icon("bolt", 14)}<span id="ctModeName">Agent</span>${icon("chevron", 11)}</button>
             <button class="ctool" id="ctThink" data-tip="Thinking depth|How hard the model reasons">${icon("brain", 14)}<span id="ctThinkName">High</span>${icon("chevron", 11)}</button>
             <button class="ctool" id="ctPersona" data-tip="AskSage persona|Server-supplied role guidance — scanned before use" hidden>${icon("user", 14)}<span id="ctPersonaName">Persona</span>${icon("chevron", 11)}</button>
+            <button class="ctool" id="ctSkill" data-tip="Skills|omp skills the agent can run — adds /skill:<name> to your message" hidden>${icon("bolt", 14)}<span>Skills</span>${icon("chevron", 11)}</button>
             <div class="ctool-spacer"></div>
             <span class="ctool-hint"><kbd>Enter</kbd> send · <kbd>⇧↵</kbd> newline · <kbd>⌘K</kbd> commands</span>
           </div>
@@ -668,6 +670,31 @@ async function applyPersona(id: string | null): Promise<void> {
   }
 }
 
+// omp skills (discovered from project/user/agent dirs) — invokable via /skill:<name>.
+async function loadSkills(): Promise<void> {
+  state.skills = (await bridge.skills()) ?? [];
+  const btn = $("#ctSkill"); if (btn) (btn as HTMLElement).hidden = state.skills.length === 0;
+}
+function useSkill(name: string): void {
+  const ta = $("#input") as HTMLTextAreaElement;
+  ta.value = `/skill:${name} ${ta.value}`.trimEnd() + " ";
+  autosize(ta); setSendEnabled(); ta.focus();
+  showToast({ title: `Skill: ${name}`, desc: "Added to your message — type your request and send.", actions: [{ label: "OK" }], timeout: 2400 });
+}
+function openSkillDropdown(anchor: HTMLElement): void {
+  cfgClose?.();
+  const rows = state.skills.map((s) =>
+    `<div class="cfg-opt" data-skill="${esc(s.name)}" data-tip="${esc(s.description || s.name)}|${esc(s.source)}" data-tip-side="left"><span class="tick">${icon("bolt", 13)}</span><span class="nm">${esc(s.name)}</span><span class="id">${esc((s.description || "").slice(0, 42))}</span></div>`).join("");
+  const { node, close } = popover(anchor, `<div class="cfg-sec"><div class="cfg-lbl">Skills <span class="cur">${state.skills.length} available · /skill:</span></div><div class="cfg-list" id="skillList">${rows || `<div class="empty">No skills found. Add markdown skills under <code>.omp/skills/</code>.</div>`}</div></div>`, () => { cfgClose = null; });
+  cfgClose = close;
+  $("#skillList", node)?.addEventListener("click", (e) => {
+    const it = (e.target as HTMLElement).closest("[data-skill]") as HTMLElement | null;
+    if (!it) return;
+    close();
+    useSkill(it.dataset.skill!);
+  });
+}
+
 function wire(): void {
   // rail
   $$(".rail-btn[data-rail]").forEach((b) => b.addEventListener("click", () => {
@@ -704,6 +731,7 @@ function wire(): void {
   $("#ctMode")!.addEventListener("click", () => openOptionDropdown($("#ctMode")!, "mode"));
   $("#ctThink")!.addEventListener("click", () => openOptionDropdown($("#ctThink")!, "thinking"));
   $("#ctPersona")!.addEventListener("click", () => openPersonaDropdown($("#ctPersona")!));
+  $("#ctSkill")!.addEventListener("click", () => openSkillDropdown($("#ctSkill")!));
 
   // settings page actions (delegated)
   $("#setClose")!.addEventListener("click", () => closeSettings());
@@ -865,6 +893,7 @@ const palette = createPalette(() => {
   const model = state.config.find((c) => c.id === "model");
   if (model) for (const o of model.options.slice(0, 10)) acts.push({ id: "m:" + o.value, title: `Model: ${o.name}`, icon: "spark", hint: o.value === model.currentValue ? "current" : "", run: () => applyConfig("model", o.value) });
   for (const c of state.commands) acts.push({ id: "cmd:" + c.name, title: `/${c.name}${c.hint ? " " + c.hint : ""}`, icon: "command", hint: (c.description ?? "omp").slice(0, 26), run: () => runCommand(c) });
+  for (const s of state.skills) acts.push({ id: "skill:" + s.name, title: `Skill: ${s.name}`, icon: "bolt", hint: (s.description ?? "").slice(0, 26), run: () => useSkill(s.name) });
   return acts;
 });
 
@@ -1074,6 +1103,7 @@ renderStatus();
 void loadConfig().then(renderStatus);
 void loadWorkspace();
 void loadAsksage();
+void loadSkills();
 refresh();
 scheduleBudgetPoll(); // provider budget: re-check every 5 min for the current model
 setInterval(refresh, 4000);

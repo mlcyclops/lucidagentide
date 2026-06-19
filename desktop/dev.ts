@@ -17,6 +17,7 @@ import { providerAuth } from "./auth_status.ts";
 import { cloneRepo, setWorkspace, workspaceInfo } from "./workspace.ts";
 import { applyEnv, load as loadSettings, setAsksage, setKey, setUsername } from "./settings_store.ts";
 import { asksageConfig, listDatasets, listPersonas, monthlyTokens, scanPersona, wrapPersona } from "./asksage.ts";
+import { listSkills } from "./skills_data.ts";
 import { homedir } from "node:os";
 import { existsSync } from "node:fs";
 
@@ -142,6 +143,7 @@ const server = Bun.serve({
       }
       if (p === "/api/config") return json({ ok: true, data: await backend.getConfig() });
       if (p === "/api/commands") return json({ ok: true, data: await backend.getCommands() });
+      if (p === "/api/skills") return json({ ok: true, data: await listSkills() });
       if (p === "/api/setConfig" && req.method === "POST") { const { configId, value } = await req.json(); return json({ ok: true, data: await backend.setConfig(configId, value) }); }
       if (p === "/api/newSession" && req.method === "POST") { await backend.newSession(); return json({ ok: true }); }
       if (p === "/api/chat" && req.method === "POST") {

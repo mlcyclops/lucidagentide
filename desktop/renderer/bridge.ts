@@ -59,6 +59,7 @@ export interface LucidBridge {
   config(): Promise<ConfigOption[]>;
   setConfig(configId: string, value: string): Promise<ConfigOption[]>;
   commands(): Promise<OmpCommand[]>;
+  skills(): Promise<{ name: string; description: string; source: string }[] | null>;
   sessions(): Promise<SessionInfo[] | null>;
   sessionMessages(id: string): Promise<{ role: string; text: string }[] | null>;
   resumeSession(id: string): Promise<void>;
@@ -147,6 +148,7 @@ export const bridge: LucidBridge = {
   config: async () => (await getData("/api/config")) ?? FALLBACK_CONFIG,
   setConfig: async (id, value) => (await post("/api/setConfig", { configId: id, value })) ?? FALLBACK_CONFIG,
   commands: async () => (await getData("/api/commands")) ?? [],
+  skills: () => getData("/api/skills"),
   sessions: async () => {
     try {
       const r = await fetch("/api/sessions", { cache: "no-store" });
