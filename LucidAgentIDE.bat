@@ -41,15 +41,23 @@ goto :menu
 rem ===========================================================================
 :banner
 echo.
-echo    =====================================================================
-echo        L  U  C  I  D     A  G  E  N  T     I  D  E
-echo    ---------------------------------------------------------------------
-echo         .---.        scan   every tool call checked for hidden-unicode
-echo        /  _  \              prompt injection + homoglyph spoofing
-echo       :  /_\  :      gate   quarantined content blocked, fail-closed
-echo        \  #  /       audit  findings / approvals / exports all logged
-echo         '---'        omp    security harness  -  extend, never fork
-echo    =====================================================================
+echo    ══════════════════════════════════════════════════════════════════
+echo.
+echo      ██╗      ██╗   ██╗  ██████╗ ██╗ ██████╗
+echo      ██║      ██║   ██║ ██╔════╝ ██║ ██╔══██╗      ░▒▓ prism of trust
+echo      ██║      ██║   ██║ ██║      ██║ ██║  ██║
+echo      ██║      ██║   ██║ ██║      ██║ ██║  ██║      A G E N T  ·  I D E
+echo      ███████╗ ╚██████╔╝ ╚██████╗ ██║ ██████╔╝
+echo      ╚══════╝  ╚═════╝   ╚═════╝ ╚═╝ ╚═════╝
+echo.
+echo      ░▒▓█  a fail-closed  security · provenance · memory  harness
+echo    ──────────────────────────────────────────────────────────────────
+echo      scan   ▸  every tool call checked for hidden-unicode prompt
+echo                injection ^& homoglyph spoofing
+echo      gate   ▸  quarantined content blocked  —  fail-closed
+echo      audit  ▸  findings · approvals · exports  —  all logged
+echo      omp    ▸  the security harness it wraps  —  extend, never fork
+echo    ══════════════════════════════════════════════════════════════════
 echo.
 goto :eof
 
