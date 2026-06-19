@@ -43,3 +43,6 @@ lucid-gui.json
 *secret*
 *credentials*
 **/auth.json
+
+# desktop electron-builder output
+desktop/release/

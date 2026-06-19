@@ -85,3 +85,46 @@ native-only bits are crisp text zoom (`webFrame`) and window controls, from
 
 See [`../DECISIONS.md`](../DECISIONS.md) ADR-0006 for why the gate stays
 in-process and the GUI is a front end only.
+
+## Build a macOS installer (.dmg)
+
+The app is packaged with **electron-builder** (config in `package.json` → `build`,
+mac entitlements in `build/entitlements.mac.plist`). A `.dmg`/`.zip` is produced
+for both Apple Silicon (`arm64`) and Intel (`x64`).
+
+> **Must be built on macOS.** electron-builder can't produce/sign a mac `.dmg`
+> from Windows or Linux. Run this on a Mac (or mac CI runner).
+
+```bash
+cd desktop
+bun install            # pulls electron + electron-builder
+bun run dist:mac       # → desktop/release/LucidAgentIDE-<ver>-{arm64,x64}.dmg (+ .zip)
+```
+
+### What the installer bundles vs. requires
+
+The `.app` bundles the **renderer + the LucidAgentIDE repo** it runs (harness,
+tools, scanner-sidecar, desktop sources, and `node_modules`) into
+`Contents/Resources/repo` (`extraResources`), and the main process resolves paths
+from there when packaged.
+
+It still **orchestrates tools on the user's Mac** (it spawns them, it doesn't
+embed them) — so the target Mac needs:
+
+- **Bun** (`~/.bun/bin/bun`) — runs the in-app server + bundles the renderer.
+- **omp** (`~/.bun/bin/omp`, `bun add -g @oh-my-pi/pi-coding-agent`) — the agent.
+- **Python + uv** for the Unicode scanner sidecar — once, in the bundled repo:
+  `cd "<App>/Contents/Resources/repo/scanner-sidecar" && uv sync`.
+
+(Embedding bun/omp/python into the `.app` is a future step.)
+
+### Signing / notarization
+
+The config builds **unsigned** by default. Unsigned apps hit Gatekeeper — first
+launch via right-click → **Open**. To ship it, set an Apple Developer identity
+(`CSC_LINK`/`CSC_KEY_PASSWORD` env or `mac.identity`) and add notarization
+(`afterSign` + `@electron/notarize`); the hardened-runtime entitlements are
+already in place.
+
+> Note: this packaging is **configured but not built/tested from this Windows
+> host** — run `dist:mac` on a Mac and tell me anything that needs adjusting.

@@ -65,7 +65,9 @@ ipcMain.on("lucid:win", (e, action: string) => {
 });
 
 app.whenReady().then(async () => {
-  REPO = join(app.getAppPath(), "..");
+  // Dev: repo is the parent of desktop/. Packaged: the repo is bundled into
+  // Resources/repo (electron-builder extraResources) so bun/omp can run it.
+  REPO = app.isPackaged ? join(process.resourcesPath, "repo") : join(app.getAppPath(), "..");
   startDevServer();
   await waitForServer();
   createWindow();
