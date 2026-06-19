@@ -580,3 +580,25 @@ Also fixed a latent bug surfaced while wiring this: `listPersonas` posted to
 `${base}/server/get-personas`, but `base` already ends in `/server` (so it hit
 `.../server/server/get-personas` → 404 → null). Corrected to `${base}/get-personas`, matching
 the sibling calls (`/get-datasets`, `/count-monthly-tokens`) and the docs; 39 personas now load.
+
+### Addendum (expandable RAG citations + premium model tooltips)
+
+**Expandable citations.** A live probe showed AskSage's `/query` returns its separate
+`references` field EMPTY and instead appends a `References\n[1] …\n[2] …` section to the end
+of `message`, with `[n]` markers inline in the body. So the streamSimple "query" route now
+parses that trailing block (`splitReferences`) and re-emits it as a collapsed
+`<details class="rag-refs">` followed by a Markdown list (blank lines around it so marked
+renders the list inside the HTML block). The chat's existing marked+DOMPurify path renders it:
+`<details>/<summary>` are in DOMPurify's html profile, and the afterSanitizeAttributes hook
+hardens the autolinked source URLs (`target=_blank rel=noopener`). Verified live: a Log4Shell
+turn produced "📎 3 references · grounded on 1 dataset", collapsed by default, expand-on-click,
+three NVD/Apache links. Replies with no "References" header pass through unchanged (graceful).
+
+**Premium model tooltips.** Both model pickers now show a hover card per row with a
+token-EFFICACY rating (1–5 stars = capability delivered per token/dollar, NOT raw power) plus a
+practical "best for" line and context size, from a curated `MODEL_INFO` table keyed by the
+shortened model id. It's a single delegated card (survives the search re-render),
+`pointer-events:none` so it never intercepts the picker, and editorial (a "not a benchmark"
+footer makes that explicit) — there is no live benchmark feed, by design. Same session also fixed
+the model-dropdown layout (names were clipping to "C…" + a horizontal scrollbar): name gets
+priority, the id truncates, and the redundant "· AskSage Gov" suffix became a compact Gov pill.

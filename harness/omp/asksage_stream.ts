@@ -58,6 +58,27 @@ async function callAnthropic(cfg: AsksageStreamCfg, model: string, system: strin
   return { text: extractText(j?.content), usage: { input: u.input_tokens ?? 0, output: u.output_tokens ?? 0, cacheRead: u.cache_read_input_tokens ?? 0, cacheWrite: u.cache_creation_input_tokens ?? 0 } };
 }
 
+// AskSage's /query returns citations INLINE at the end of `message` as a
+// "References\n[1] …\n[2] …" section (the separate `references` field is empty),
+// with [n] markers in the body. Split that trailing block out so the desktop can
+// render it as an expandable <details> instead of a wall of text. Returns the
+// answer body plus the parsed reference entries (one string per [n]).
+function splitReferences(message: string): { body: string; refs: string[] } {
+  const lines = message.replace(/\r/g, "").split("\n");
+  let idx = -1;
+  for (let i = lines.length - 1; i >= 0; i--) if (/^\s*references\s*:?\s*$/i.test(lines[i] ?? "")) { idx = i; break; }
+  if (idx === -1) return { body: message, refs: [] };
+  const refs: string[] = [];
+  let cur = "";
+  for (const ln of lines.slice(idx + 1)) {
+    if (/^\s*\[\d+\]/.test(ln)) { if (cur.trim()) refs.push(cur.trim()); cur = ln.trim(); }
+    else if (cur) cur += " " + ln.trim();
+  }
+  if (cur.trim()) refs.push(cur.trim());
+  if (!refs.length) return { body: message, refs: [] };
+  return { body: lines.slice(0, idx).join("\n").trimEnd(), refs };
+}
+
 // AskSage's native /query route: a single `message`, with optional RAG grounding
 // on `dataset` and a native `persona` id. One-shot (non-streamed). Underlying model
 // + datasets + persona come from env (set by the desktop from the user's selection).
@@ -73,12 +94,21 @@ async function callQuery(cfg: AsksageStreamCfg, system: string, msgs: { role: st
   const r = await fetch(`${cfg.base}/query`, { method: "POST", headers: jsonHeaders(cfg.key), body: JSON.stringify(body) });
   const j: any = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(j?.error ?? j?.message ?? `AskSage query HTTP ${r.status}`);
-  const text = String(j?.message ?? j?.response ?? "").trim();
-  const refs = Array.isArray(j?.references) && j.references.length
-    ? `\n\n---\n_Grounded on ${datasets.length} dataset(s); ${j.references.length} reference(s)._`
-    : "";
+  const raw = String(j?.message ?? j?.response ?? "").trim();
+  const { body: answer, refs } = splitReferences(raw);
+  // Prefer the datasets AskSage reports it actually grounded on (provenance) over what we asked for.
+  const usedDs = Array.isArray(j?.provenance?.datasets) ? j.provenance.datasets.length : datasets.length;
+  let text = answer;
+  if (refs.length) {
+    const items = refs.map((x) => `- ${x.replace(/\s+/g, " ").trim()}`).join("\n");
+    const label = `📎 ${refs.length} reference${refs.length === 1 ? "" : "s"}${usedDs ? ` · grounded on ${usedDs} dataset${usedDs === 1 ? "" : "s"}` : ""}`;
+    // Blank lines around the inner list so marked renders it as Markdown inside the HTML block.
+    text = `${answer}\n\n<details class="rag-refs">\n<summary>${label}</summary>\n\n${items}\n\n</details>`;
+  } else if (usedDs) {
+    text = `${answer}\n\n<sub>Grounded on ${usedDs} dataset${usedDs === 1 ? "" : "s"} — no inline citations returned.</sub>`;
+  }
   const u = j?.usage ?? {};
-  return { text: text + refs, usage: { input: u.input_tokens ?? u.prompt_tokens ?? 0, output: u.output_tokens ?? u.completion_tokens ?? 0, cacheRead: 0, cacheWrite: 0 } };
+  return { text, usage: { input: u.input_tokens ?? u.prompt_tokens ?? 0, output: u.output_tokens ?? u.completion_tokens ?? 0, cacheRead: 0, cacheWrite: 0 } };
 }
 
 async function callGoogle(cfg: AsksageStreamCfg, model: string, system: string, msgs: { role: string; text: string }[]): Promise<RouteResult> {

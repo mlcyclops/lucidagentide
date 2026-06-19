@@ -437,6 +437,38 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
   color:var(--accent-2);text-decoration:none}
 .richtip .rt-link:hover{text-decoration:underline}
 
+/* premium per-model hover card (model picker) */
+.modeltip{position:fixed;z-index:135;width:266px;pointer-events:none;background:var(--bg-4);
+  border:1px solid var(--line-strong);border-radius:12px;box-shadow:var(--shadow);padding:13px 14px;
+  opacity:0;transform:translateY(4px) scale(.98);transition:opacity var(--t),transform var(--t-slow) var(--ease-out)}
+.modeltip.show{opacity:1;transform:none}
+.modeltip .mt-h{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+.modeltip .mt-name{font-size:13px;font-weight:650;color:var(--txt);flex:1;min-width:0;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.modeltip .mt-rate{display:flex;align-items:center;gap:8px;margin-bottom:9px}
+.modeltip .mt-stars{font-size:13px;letter-spacing:1.5px;color:var(--accent-2);line-height:1}
+.modeltip .mt-stars .mt-dim{color:var(--line-strong)}
+.modeltip .mt-rlabel{font-size:9.5px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--txt-4)}
+.modeltip .mt-eff{font-size:12px;line-height:1.55;color:var(--txt-2);margin-bottom:9px}
+.modeltip .mt-row{display:flex;gap:9px;font-size:11.5px;line-height:1.5;margin-top:5px}
+.modeltip .mt-k{flex:none;width:54px;color:var(--txt-4)}
+.modeltip .mt-v{flex:1;min-width:0;color:var(--txt)}
+.modeltip .mt-foot{margin-top:11px;padding-top:8px;border-top:1px solid var(--line-soft);
+  font-size:10px;color:var(--txt-4);font-style:italic}
+
+/* expandable RAG citations inside an assistant reply */
+.msg .text .rag-refs{margin-top:12px;border:1px solid var(--line-soft);border-radius:9px;background:var(--bg-2);overflow:hidden}
+.msg .text .rag-refs>summary{cursor:pointer;list-style:none;padding:8px 12px;font-size:12px;font-weight:600;color:var(--txt-2);
+  display:flex;align-items:center;gap:6px;user-select:none;transition:color var(--t),background var(--t)}
+.msg .text .rag-refs>summary::-webkit-details-marker{display:none}
+.msg .text .rag-refs>summary::before{content:"▸";color:var(--accent-2);font-size:11px;transition:transform var(--t)}
+.msg .text .rag-refs[open]>summary::before{transform:rotate(90deg)}
+.msg .text .rag-refs>summary:hover{color:var(--txt);background:var(--bg-3)}
+.msg .text .rag-refs[open]>summary{border-bottom:1px solid var(--line-soft)}
+.msg .text .rag-refs ul{margin:6px 0;padding:4px 14px 6px 30px}
+.msg .text .rag-refs li{font-size:11.5px;line-height:1.5;color:var(--txt-3);margin:4px 0;word-break:break-word}
+.msg .text .rag-refs li::marker{color:var(--txt-4)}
+
 /* ───────────────────────── inspector collapse → metrics rail ───────────────────────── */
 .insp-collapse{flex:none;-webkit-app-region:no-drag;border:0;background:transparent;color:var(--txt-3);
   width:28px;height:28px;border-radius:7px;display:grid;place-items:center;cursor:pointer;transition:background var(--t),color var(--t)}

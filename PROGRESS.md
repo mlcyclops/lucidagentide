@@ -4,6 +4,18 @@ Three lines per session: **shipped / stubbed / next** (CLAUDE.md session ritual)
 
 -----
 
+## P-ASKSAGE.6: expandable RAG citations + premium model tooltips
+- **shipped:** (a) RAG citations are now expandable — the adapter splits the trailing
+  "References\n[n] …" block AskSage inlines in /query replies into a collapsed
+  <details> (renders via marked+DOMPurify; URLs autolinked & hardened). Verified live:
+  Log4Shell turn → "📎 3 references · grounded on 1 dataset", collapsed by default.
+  (b) Premium per-model hover cards in BOTH model pickers — token-efficacy star rating
+  (1–5) + "best for" + context, from a curated MODEL_INFO table; delegated, survives
+  search re-render, pointer-events:none. Fixed model-picker dropdown earlier this session.
+- **stubbed:** efficacy ratings are editorial guidance (no live benchmark feed); RAG
+  citations only structure when AskSage emits a "References" header (inline-cite replies pass through).
+- **next:** training-token usage chip; OR AskSage agents/plugins; OR headroom routing + gov review.
+
 ## 2026-06-18 — Increment 0: harness bring-up + invariants
 
 - **shipped:** Toolchain (Bun 1.3.14 + uv 0.11.21); repo skeleton; omp vendored
