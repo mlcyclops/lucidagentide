@@ -75,6 +75,7 @@ export interface LucidBridge {
   asksage(): Promise<{ configured: boolean; base: string; only: boolean; limit: number } | null>;
   saveAsksage(opts: { baseUrl?: string; only?: boolean; limit?: number }): Promise<{ configured: boolean; base: string; only: boolean; limit: number } | null>;
   asksageTokens(): Promise<{ used: number; limit: number } | null>;
+  asksageDatasets(): Promise<string[] | null>;
   asksagePersonas(): Promise<{ id: string; description: string }[] | null>;
   applyPersona(id: string | null): Promise<{ applied?: boolean; cleared?: boolean; scan?: { ok: boolean; reason?: string; findings: number } } | null>;
   // workspace (folder the agent works in; local or cloned remote)
@@ -165,6 +166,7 @@ export const bridge: LucidBridge = {
   asksage: () => getData("/api/asksage"),
   saveAsksage: (opts) => post("/api/asksage", opts),
   asksageTokens: () => getData("/api/asksage/tokens"),
+  asksageDatasets: () => getData("/api/asksage/datasets"),
   asksagePersonas: () => getData("/api/asksage/personas"),
   applyPersona: (id) => post("/api/asksage/persona", id ? { id } : { clear: true }),
   workspace: () => getData("/api/workspace"),

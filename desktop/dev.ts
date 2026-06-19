@@ -16,7 +16,7 @@ import { listSessions, sessionMessages } from "./sessions.ts";
 import { providerAuth } from "./auth_status.ts";
 import { cloneRepo, setWorkspace, workspaceInfo } from "./workspace.ts";
 import { applyEnv, load as loadSettings, setAsksage, setKey, setUsername } from "./settings_store.ts";
-import { asksageConfig, listPersonas, monthlyTokens, scanPersona, wrapPersona } from "./asksage.ts";
+import { asksageConfig, listDatasets, listPersonas, monthlyTokens, scanPersona, wrapPersona } from "./asksage.ts";
 import { homedir } from "node:os";
 import { existsSync } from "node:fs";
 
@@ -127,6 +127,7 @@ const server = Bun.serve({
         return json({ ok: true, data: { configured: c.configured, base: c.base, only: c.only, limit: c.limit } });
       }
       if (p === "/api/asksage/tokens") return json({ ok: true, data: await monthlyTokens() });
+      if (p === "/api/asksage/datasets") return json({ ok: true, data: await listDatasets() });
       if (p === "/api/asksage/personas") return json({ ok: true, data: await listPersonas() });
       if (p === "/api/asksage/persona" && req.method === "POST") {
         const { id, clear } = await req.json();

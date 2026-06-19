@@ -56,11 +56,18 @@ const OPENAI_MODELS: ModelSpec[] = [
 // Claude + Gemini go through the streamSimple adapter (AskSage serves them
 // non-streamed). reasoning:false — the adapter delivers a complete reply and does
 // not implement provider thinking, so we don't surface a thinking control for them.
+// Model ids verified to reply on a live CIV account (broken ones like gpt-5.4-gov
+// (502) / gpt-5.4-sec (400) are intentionally omitted).
 const ANTHROPIC_MODELS: ModelSpec[] = [
+  { id: "google-claude-45-opus", name: "Claude 4.5 Opus · AskSage Gov", reasoning: false, contextWindow: 200_000, maxTokens: 32_000 },
+  { id: "google-claude-45-sonnet", name: "Claude 4.5 Sonnet · AskSage Gov", reasoning: false, contextWindow: 200_000, maxTokens: 64_000 },
+  { id: "aws-bedrock-claude-45-sonnet-gov", name: "Claude 4.5 Sonnet (Gov) · AskSage", reasoning: false, contextWindow: 200_000, maxTokens: 64_000 },
   { id: "claude-opus-4", name: "Claude Opus 4 · AskSage Gov", reasoning: false, contextWindow: 200_000, maxTokens: 32_000 },
   { id: "claude-sonnet-4", name: "Claude Sonnet 4 · AskSage Gov", reasoning: false, contextWindow: 200_000, maxTokens: 64_000 },
 ];
 const GOOGLE_MODELS: ModelSpec[] = [
+  { id: "google-gemini-3.1-pro-com", name: "Gemini 3.1 Pro · AskSage Gov", reasoning: false, contextWindow: 1_000_000, maxTokens: 64_000 },
+  { id: "google-gemini-3.5-flash-gov", name: "Gemini 3.5 Flash (Gov) · AskSage", reasoning: false, contextWindow: 1_000_000, maxTokens: 64_000 },
   { id: "google-gemini-2.5-pro", name: "Gemini 2.5 Pro · AskSage Gov", reasoning: false, contextWindow: 1_000_000, maxTokens: 64_000 },
   { id: "google-gemini-2.5-flash", name: "Gemini 2.5 Flash · AskSage Gov", reasoning: false, contextWindow: 1_000_000, maxTokens: 64_000 },
 ];

@@ -518,3 +518,13 @@ Three lines per session: **shipped / stubbed / next** (CLAUDE.md session ritual)
 - **stubbed:** adapter is non-streaming (one delta per reply) — fine for AskSage,
   which doesn't stream these routes anyway; thinking/tools not surfaced for them.
 - **next:** (optional) per-model thinking for gemini/claude if AskSage exposes it.
+
+## P-ASKSAGE.3: more gov models + datasets in gov-only mode
+- **shipped:** added verified gov models — Gemini 3.1 Pro, Gemini 3.5 Flash (Gov),
+  Claude 4.5 Opus/Sonnet, Claude 4.5 Sonnet (Gov/Bedrock) — 19 gov models total
+  (broken gpt-5.4-gov/-sec omitted). Gov datasets (/get-datasets, 34 KBs: DoD, Air
+  Force, NIST…) now listed in Settings when AskSage-only lockdown is on.
+- **stubbed:** datasets are read-only (display); not yet wired as a per-turn RAG
+  `dataset` selector. AskSage has NO skills API (/get-skills 404) — the prototype's
+  "skills" were local, not an AskSage feature.
+- **next:** (optional) dataset-grounded queries; decide on headroom integration.

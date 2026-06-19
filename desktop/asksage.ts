@@ -43,6 +43,21 @@ export async function monthlyTokens(): Promise<{ used: number; limit: number } |
   }
 }
 
+/** Dataset (knowledge base) names available on the account (POST /get-datasets). */
+export async function listDatasets(): Promise<string[] | null> {
+  const { key, base, configured } = asksageConfig();
+  if (!configured) return null;
+  try {
+    const r = await fetch(`${base}/get-datasets`, { method: "POST", headers: headers(key), body: "{}", signal: AbortSignal.timeout(8000) });
+    if (!r.ok) return null;
+    const j: any = await r.json();
+    const arr: any[] = j.response ?? j.datasets ?? (Array.isArray(j) ? j : []);
+    return arr.map((d) => (typeof d === "string" ? d : String(d?.name ?? d?.id ?? ""))).filter(Boolean);
+  } catch {
+    return null;
+  }
+}
+
 export interface Persona { id: string; description: string; text: string }
 /** Persona list (POST /server/get-personas). */
 export async function listPersonas(): Promise<Persona[] | null> {

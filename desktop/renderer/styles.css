@@ -493,6 +493,12 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .aq-bar i{display:block;height:100%;border-radius:6px;transition:width var(--t)}
 .aq-pct{font-size:10.5px;color:var(--txt-4);margin-top:5px}
 .aq-btns{display:flex;gap:6px;margin-top:10px;flex-wrap:wrap}
+/* gov datasets */
+.ds-note{font-size:11px;color:var(--txt-4);margin-bottom:9px}
+.ds-list{display:flex;flex-wrap:wrap;gap:6px;max-height:200px;overflow:auto}
+.ds-chip{font-size:11.5px;color:var(--txt-2);background:var(--bg-3);border:1px solid var(--line-soft);
+  border-radius:999px;padding:3px 10px;white-space:nowrap;cursor:default;transition:border-color var(--t),color var(--t)}
+.ds-chip:hover{border-color:var(--cyan);color:var(--txt)}
 .prov{background:var(--bg-2);border:1px solid var(--line);border-radius:11px;padding:12px 13px;margin-bottom:10px}
 .prov-h{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px}
 .prov-name{font-size:13.5px;font-weight:600;color:var(--txt)}

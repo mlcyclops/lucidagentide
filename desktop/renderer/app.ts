@@ -312,11 +312,24 @@ function quotaControls(limit: number): string {
   </div>`;
 }
 
+// Gov datasets (knowledge bases) — shown in gov-only mode. Names are tidied for
+// display (the raw `user_custom_<n>_<name>_content` form is kept in the tooltip).
+function datasetsSection(list: string[] | null): string {
+  if (!list) return "";
+  const tidy = (d: string) => d.replace(/^user_custom_\d+_/, "").replace(/_content$/, "").replace(/[_-]+/g, " ").trim();
+  const items = list.map((d) => `<span class="ds-chip" data-tip="${esc(d)}">${esc(tidy(d))}</span>`).join("");
+  return accordion("set.datasets", "Gov datasets", `${list.length} knowledge base${list.length === 1 ? "" : "s"}`,
+    `<div class="ds-note">Knowledge bases your AskSage account can ground answers on.</div><div class="ds-list">${items || `<div class="empty">No datasets on this account.</div>`}</div>`,
+    OPEN.has("set.datasets"));
+}
+
 async function renderSettings(): Promise<void> {
   const body = $("#setBody"); if (!body) return;
   const [settings, auth, ws, asksage] = await Promise.all([bridge.getSettings(), bridge.auth(), bridge.workspace(), bridge.asksage()]);
   if (ws) { state.workspace = ws; renderWorkspaceBar(); }
   if (asksage) state.asksage = asksage;
+  // Datasets are surfaced in gov-only (lockdown) mode.
+  const datasets = asksage?.configured && asksage.only ? await bridge.asksageDatasets() : null;
   body.innerHTML = `
     ${ws ? workspaceSection(ws) : ""}
     <div class="set-sec"><div class="set-lbl">Profile</div>
@@ -330,6 +343,7 @@ async function renderSettings(): Promise<void> {
       ${asksage?.configured ? quotaControls(asksage.limit) : ""}
       <label class="set-toggle"><input type="checkbox" id="asksageOnly" ${asksage?.only ? "checked" : ""}/>
         <span><b>AskSage-only (lockdown)</b> — route every turn through the gov gateway and hide direct providers in the model picker.</span></label>
+      ${asksage?.only ? datasetsSection(datasets) : ""}
       ${asksage?.configured ? `<div class="set-note ok">${icon("check", 12)} Gov gateway active — AskSage models appear in the picker, with monthly-usage and scanned personas.</div>` : `<div class="set-note">${icon("info", 12)} Add an <code>ASKSAGE_API_KEY</code> above (AskSage · Gov gateway) to enable gov models, usage, and personas.</div>`}</div>
     ${accordion("set.others", "More providers", "", (auth?.others ?? []).map(provCard).join(""), OPEN.has("set.others"))}
     <div class="set-note">${icon("shield", 12)} Keys are stored on this machine and passed to omp as env vars — never sent anywhere else. OAuth uses omp's own secure credential vault.</div>`;
