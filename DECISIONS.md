@@ -549,3 +549,17 @@ verified without the dependency and carry real risk:
   Python added to the harness — headroom runs as the user's own external process).
 - A clean install-and-enable path; the high-value routing lands once headroom is
   installed and the three checks above pass.
+
+### Addendum (native /query RAG route + dataset grounding)
+
+Per the AskSage API docs, the primary endpoint is `POST /server/query`, which natively
+supports `dataset: [...]` (RAG grounding) and `persona: <id>`. The passthrough
+openai/anthropic/google routes cannot use these. So a fourth provider, `asksage-query`,
+exposes an "AskSage RAG (dataset-grounded)" model via the same streamSimple adapter
+(route "query"): it flattens the conversation into `/query`'s single `message`, grounds
+on the datasets the user selected (env `ASKSAGE_DATASETS`, set from Settings), uses the
+configurable underlying model (`ASKSAGE_QUERY_MODEL`, default gpt-5.2), and returns the
+cited answer. The gov-datasets list in Settings is now SELECTABLE (toggle chips) — the
+chosen sets ground the RAG model. Verified live: a NIST_NVD_CVE-grounded turn returned a
+cited Log4Shell answer. (Personas also have no systemPrompt field server-side; the proper
+application is /query's persona id — wired as env ASKSAGE_PERSONA, selectable next.)

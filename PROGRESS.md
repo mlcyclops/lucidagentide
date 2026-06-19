@@ -538,3 +538,13 @@ Three lines per session: **shipped / stubbed / next** (CLAUDE.md session ritual)
   deliberately not wired blind; needs headroom actually installed.
 - **next:** install headroom together, verify the three security checks, then route
   the OpenAI-compatible providers through it behind the toggle.
+
+## P-ASKSAGE.4: native /query RAG route + selectable datasets
+- **shipped:** asksage-query provider with an "AskSage RAG (dataset-grounded)" model
+  via the streamSimple adapter's new "query" route (POST /server/query). Gov-datasets
+  list is now selectable (toggle chips in gov-only mode); selected sets ground the RAG
+  model's answers (env ASKSAGE_DATASETS), underlying model configurable (ASKSAGE_QUERY_MODEL,
+  default gpt-5.2). Verified live: NIST_NVD_CVE-grounded turn returned a cited Log4Shell answer.
+- **stubbed:** native persona-by-id on /query (env ASKSAGE_PERSONA) wired in the adapter
+  but no persona-id picker yet; references shown as a count note (not expandable).
+- **next:** persona-id picker for the RAG route; expandable reference citations.

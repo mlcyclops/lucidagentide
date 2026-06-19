@@ -28,6 +28,10 @@ export interface GuiSettings {
   // the ceiling (admins grant more in the AskSage console — no API to read it), so
   // the limit is a local, user-adjustable value. Everyone starts at 200k.
   asksageLimit?: number;
+  // Datasets selected for RAG grounding via AskSage's /query route (ADR-0007).
+  asksageDatasets?: string[];
+  // Underlying model the "AskSage RAG" (/query) route uses. Default gpt-5.2.
+  asksageQueryModel?: string;
   // headroom token-compression proxy (opt-in, on-device). See ADR-0008.
   headroomEnabled?: boolean;
 }
@@ -48,8 +52,10 @@ export function applyEnv(): void {
   const s = load();
   for (const [k, v] of Object.entries(s.keys ?? {})) if (v) process.env[k] = v;
   if (s.asksageBaseUrl) process.env.ASKSAGE_BASE_URL = s.asksageBaseUrl;
+  if (s.asksageDatasets?.length) process.env.ASKSAGE_DATASETS = s.asksageDatasets.join(",");
+  if (s.asksageQueryModel) process.env.ASKSAGE_QUERY_MODEL = s.asksageQueryModel;
 }
-export function setAsksage(opts: { baseUrl?: string; only?: boolean; limit?: number }): GuiSettings {
+export function setAsksage(opts: { baseUrl?: string; only?: boolean; limit?: number; datasets?: string[]; queryModel?: string }): GuiSettings {
   const s = load();
   if (opts.baseUrl !== undefined) {
     s.asksageBaseUrl = opts.baseUrl || undefined;
@@ -58,6 +64,16 @@ export function setAsksage(opts: { baseUrl?: string; only?: boolean; limit?: num
   }
   if (opts.only !== undefined) s.asksageOnly = opts.only;
   if (opts.limit !== undefined) s.asksageLimit = Math.max(0, Math.round(opts.limit)) || undefined;
+  if (opts.datasets !== undefined) {
+    s.asksageDatasets = opts.datasets.length ? opts.datasets : undefined;
+    if (opts.datasets.length) process.env.ASKSAGE_DATASETS = opts.datasets.join(",");
+    else delete process.env.ASKSAGE_DATASETS;
+  }
+  if (opts.queryModel !== undefined) {
+    s.asksageQueryModel = opts.queryModel || undefined;
+    if (opts.queryModel) process.env.ASKSAGE_QUERY_MODEL = opts.queryModel;
+    else delete process.env.ASKSAGE_QUERY_MODEL;
+  }
   save(s); return s;
 }
 export function setUsername(name: string): GuiSettings {

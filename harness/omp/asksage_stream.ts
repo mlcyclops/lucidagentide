@@ -14,7 +14,7 @@
 
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 
-export type AsksageRoute = "anthropic" | "google";
+export type AsksageRoute = "anthropic" | "google" | "query";
 export interface AsksageStreamCfg { base: string; key: string }
 
 function extractText(content: unknown): string {
@@ -58,6 +58,29 @@ async function callAnthropic(cfg: AsksageStreamCfg, model: string, system: strin
   return { text: extractText(j?.content), usage: { input: u.input_tokens ?? 0, output: u.output_tokens ?? 0, cacheRead: u.cache_read_input_tokens ?? 0, cacheWrite: u.cache_creation_input_tokens ?? 0 } };
 }
 
+// AskSage's native /query route: a single `message`, with optional RAG grounding
+// on `dataset` and a native `persona` id. One-shot (non-streamed). Underlying model
+// + datasets + persona come from env (set by the desktop from the user's selection).
+async function callQuery(cfg: AsksageStreamCfg, system: string, msgs: { role: string; text: string }[]): Promise<RouteResult & { references?: string }> {
+  const model = process.env.ASKSAGE_QUERY_MODEL || "gpt-5.2";
+  const datasets = (process.env.ASKSAGE_DATASETS || "").split(",").map((d) => d.trim()).filter(Boolean);
+  const persona = Number(process.env.ASKSAGE_PERSONA || "") || undefined;
+  // /query takes one message — flatten system + turns into a single transcript.
+  const message = [system ? `[System guidance]\n${system}` : "", ...msgs.map((m) => `${m.role === "assistant" ? "Assistant" : "User"}: ${m.text}`)].filter(Boolean).join("\n\n");
+  const body: any = { message, model, temperature: 0.0, limit_references: 5 };
+  if (datasets.length) body.dataset = datasets;
+  if (persona) body.persona = persona;
+  const r = await fetch(`${cfg.base}/query`, { method: "POST", headers: jsonHeaders(cfg.key), body: JSON.stringify(body) });
+  const j: any = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j?.error ?? j?.message ?? `AskSage query HTTP ${r.status}`);
+  const text = String(j?.message ?? j?.response ?? "").trim();
+  const refs = Array.isArray(j?.references) && j.references.length
+    ? `\n\n---\n_Grounded on ${datasets.length} dataset(s); ${j.references.length} reference(s)._`
+    : "";
+  const u = j?.usage ?? {};
+  return { text: text + refs, usage: { input: u.input_tokens ?? u.prompt_tokens ?? 0, output: u.output_tokens ?? u.completion_tokens ?? 0, cacheRead: 0, cacheWrite: 0 } };
+}
+
 async function callGoogle(cfg: AsksageStreamCfg, model: string, system: string, msgs: { role: string; text: string }[]): Promise<RouteResult> {
   const contents = msgs.map((m) => ({ role: m.role === "assistant" ? "model" : "user", parts: [{ text: m.text }] }));
   const r = await fetch(`${cfg.base}/google/v1beta/models/${model}:generateContent`, {
@@ -94,7 +117,9 @@ export function makeAsksageStream(route: AsksageRoute, getCfg: () => AsksageStre
         const maxTokens = Number(model?.maxTokens) || 8192;
         const { text, usage } = route === "anthropic"
           ? await callAnthropic(cfg, model.id, system, messages, maxTokens)
-          : await callGoogle(cfg, model.id, system, messages);
+          : route === "query"
+            ? await callQuery(cfg, system, messages)
+            : await callGoogle(cfg, model.id, system, messages);
         const message = mkMessage(text, "stop", usage);
         stream.push({ type: "start", partial: message });
         stream.push({ type: "text_start", contentIndex: 0, partial: message });

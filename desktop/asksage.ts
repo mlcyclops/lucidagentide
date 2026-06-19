@@ -14,12 +14,15 @@ import { UNTRUSTED_END, UNTRUSTED_START } from "../harness/prompt/assembler.ts";
 
 const DEFAULT_BASE = "https://api.civ.asksage.ai/server";
 
-export interface AsksageCfg { key: string; base: string; only: boolean; configured: boolean; limit: number }
+export interface AsksageCfg { key: string; base: string; only: boolean; configured: boolean; limit: number; datasets: string[]; queryModel: string }
 export function asksageConfig(): AsksageCfg {
   const s = load();
   const key = s.keys?.ASKSAGE_API_KEY ?? process.env.ASKSAGE_API_KEY ?? "";
   const base = (s.asksageBaseUrl ?? process.env.ASKSAGE_BASE_URL ?? DEFAULT_BASE).replace(/\/+$/, "");
-  return { key, base, only: !!s.asksageOnly, configured: !!key, limit: s.asksageLimit ?? ASKSAGE_DEFAULT_LIMIT };
+  return {
+    key, base, only: !!s.asksageOnly, configured: !!key, limit: s.asksageLimit ?? ASKSAGE_DEFAULT_LIMIT,
+    datasets: s.asksageDatasets ?? [], queryModel: s.asksageQueryModel ?? "gpt-5.2",
+  };
 }
 
 function headers(key: string): Record<string, string> {

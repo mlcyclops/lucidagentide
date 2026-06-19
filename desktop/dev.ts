@@ -118,16 +118,20 @@ const server = Bun.serve({
       if (p === "/api/asksage") {
         if (req.method === "POST") {
           const b = await req.json();
-          const prevBase = asksageConfig().base;
+          const prev = asksageConfig();
           setAsksage({
             baseUrl: typeof b.baseUrl === "string" ? b.baseUrl : undefined,
             only: typeof b.only === "boolean" ? b.only : undefined,
             limit: typeof b.limit === "number" ? b.limit : undefined,
+            datasets: Array.isArray(b.datasets) ? b.datasets.map(String) : undefined,
+            queryModel: typeof b.queryModel === "string" ? b.queryModel : undefined,
           });
-          if (typeof b.baseUrl === "string" && b.baseUrl.replace(/\/+$/, "") !== prevBase) backend.restart(); // re-register provider against new base
+          const next = asksageConfig();
+          // The omp child reads datasets/model/base from env at spawn — restart to apply.
+          if ((typeof b.baseUrl === "string" && next.base !== prev.base) || (b.datasets !== undefined && next.datasets.join(",") !== prev.datasets.join(",")) || (b.queryModel !== undefined && next.queryModel !== prev.queryModel)) backend.restart();
         }
         const c = asksageConfig();
-        return json({ ok: true, data: { configured: c.configured, base: c.base, only: c.only, limit: c.limit } });
+        return json({ ok: true, data: { configured: c.configured, base: c.base, only: c.only, limit: c.limit, datasets: c.datasets, queryModel: c.queryModel } });
       }
       if (p === "/api/asksage/tokens") return json({ ok: true, data: await monthlyTokens() });
       if (p === "/api/asksage/datasets") return json({ ok: true, data: await listDatasets() });

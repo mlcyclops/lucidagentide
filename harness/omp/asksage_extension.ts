@@ -71,6 +71,11 @@ const GOOGLE_MODELS: ModelSpec[] = [
   { id: "google-gemini-2.5-pro", name: "Gemini 2.5 Pro · AskSage Gov", reasoning: false, contextWindow: 1_000_000, maxTokens: 64_000 },
   { id: "google-gemini-2.5-flash", name: "Gemini 2.5 Flash · AskSage Gov", reasoning: false, contextWindow: 1_000_000, maxTokens: 64_000 },
 ];
+// AskSage native /query route — RAG-grounded on the datasets the user selects, with
+// an optional native persona. The underlying model + datasets come from env.
+const QUERY_MODELS: ModelSpec[] = [
+  { id: "rag", name: "AskSage RAG (dataset-grounded) · Gov", reasoning: false, contextWindow: 256_000, maxTokens: 32_000 },
+];
 
 const COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 
@@ -121,6 +126,15 @@ export default function asksageExtension(pi: any): void {
       headers: { "x-access-tokens": key },
       streamSimple: makeAsksageStream("google", getCfg),
       models: toProviderModels(GOOGLE_MODELS),
+    });
+    // Native /query route: RAG-grounded on selected datasets (+ optional persona).
+    pi.registerProvider("asksage-query", {
+      baseUrl: base,
+      api: "asksage-query",
+      apiKey: "ASKSAGE_API_KEY",
+      headers: { "x-access-tokens": key },
+      streamSimple: makeAsksageStream("query", getCfg),
+      models: toProviderModels(QUERY_MODELS),
     });
 
     process.stderr.write(`\n🏛️  [LucidAgentIDE] AskSage gov gateway registered (${base})\n`);

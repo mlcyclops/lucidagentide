@@ -496,9 +496,12 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 /* gov datasets */
 .ds-note{font-size:11px;color:var(--txt-4);margin-bottom:9px}
 .ds-list{display:flex;flex-wrap:wrap;gap:6px;max-height:200px;overflow:auto}
-.ds-chip{font-size:11.5px;color:var(--txt-2);background:var(--bg-3);border:1px solid var(--line-soft);
-  border-radius:999px;padding:3px 10px;white-space:nowrap;cursor:default;transition:border-color var(--t),color var(--t)}
+.ds-chip{display:inline-flex;align-items:center;gap:4px;font-size:11.5px;color:var(--txt-2);background:var(--bg-3);
+  border:1px solid var(--line-soft);border-radius:999px;padding:3px 10px;white-space:nowrap;cursor:pointer;
+  transition:border-color var(--t),color var(--t),background var(--t)}
 .ds-chip:hover{border-color:var(--cyan);color:var(--txt)}
+.ds-chip.on{border-color:var(--accent);color:var(--txt);background:var(--accent-dim)}
+.ds-chip.on .ic{color:var(--accent-2)}
 .prov{background:var(--bg-2);border:1px solid var(--line);border-radius:11px;padding:12px 13px;margin-bottom:10px}
 .prov-h{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px}
 .prov-name{font-size:13.5px;font-weight:600;color:var(--txt)}

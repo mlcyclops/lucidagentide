@@ -25,7 +25,7 @@ const state = {
   skills: [] as { name: string; description: string; source: string }[],
   liveUsage: null as { used: number; size: number; cost: number } | null,
   workspace: null as WorkspaceInfo | null,
-  asksage: null as { configured: boolean; base: string; only: boolean; limit: number } | null,
+  asksage: null as { configured: boolean; base: string; only: boolean; limit: number; datasets: string[]; queryModel: string } | null,
   asksageTokens: null as { used: number; limit: number } | null,
   persona: null as string | null, // active persona id (AskSage)
   personas: [] as { id: string; description: string }[],
@@ -314,15 +314,17 @@ function quotaControls(limit: number): string {
   </div>`;
 }
 
-// Gov datasets (knowledge bases) — shown in gov-only mode. Names are tidied for
+// Gov datasets (knowledge bases) — shown in gov-only mode. Selectable: the chosen
+// ones ground the "AskSage RAG" model's answers via /query. Names are tidied for
 // display (the raw `user_custom_<n>_<name>_content` form is kept in the tooltip).
 function datasetsSection(list: string[] | null): string {
   if (!list) return "";
+  const sel = new Set(state.asksage?.datasets ?? []);
   const tidy = (d: string) => d.replace(/^user_custom_\d+_/, "").replace(/_content$/, "").replace(/[_-]+/g, " ").trim();
-  const items = list.map((d) => `<span class="ds-chip" data-tip="${esc(d)}">${esc(tidy(d))}</span>`).join("");
-  return accordion("set.datasets", "Gov datasets", `${list.length} knowledge base${list.length === 1 ? "" : "s"}`,
-    `<div class="ds-note">Knowledge bases your AskSage account can ground answers on.</div><div class="ds-list">${items || `<div class="empty">No datasets on this account.</div>`}</div>`,
-    OPEN.has("set.datasets"));
+  const items = list.map((d) => `<span class="ds-chip${sel.has(d) ? " on" : ""}" data-ds="${esc(d)}" data-tip="${esc(d)}|Click to ${sel.has(d) ? "remove from" : "use for"} RAG grounding">${sel.has(d) ? icon("check", 11) : ""}${esc(tidy(d))}</span>`).join("");
+  return accordion("set.datasets", "Gov datasets", `${sel.size}/${list.length} selected`,
+    `<div class="ds-note">Pick knowledge bases to ground answers on, then chat with the <b>AskSage RAG</b> model.</div><div class="ds-list">${items || `<div class="empty">No datasets on this account.</div>`}</div>`,
+    OPEN.has("set.datasets"), `${sel.size || ""}`);
 }
 
 async function renderSettings(): Promise<void> {
@@ -786,7 +788,7 @@ function wire(): void {
     if (t.closest("#asksageOnly")) {
       const only = ($("#asksageOnly", $("#setBody")!) as HTMLInputElement)?.checked ?? false;
       await bridge.saveAsksage({ only });
-      state.asksage = { ...(state.asksage ?? { configured: false, base: "", only: false, limit: 200_000 }), only };
+      state.asksage = { ...(state.asksage ?? { configured: false, base: "", only: false, limit: 200_000, datasets: [], queryModel: "gpt-5.2" }), only };
       // Lockdown must guarantee gateway routing: if we're on a direct model, switch
       // to a gov one so no turn can bypass AskSage.
       if (only) {
@@ -815,6 +817,15 @@ function wire(): void {
       const enabled = ($("#headroomToggle", $("#setBody")!) as HTMLInputElement)?.checked ?? false;
       const st = await bridge.setHeadroom(enabled);
       showToast({ title: enabled ? "Compression on" : "Compression off", desc: enabled ? (st?.running ? `headroom proxy running on :${st.port}.` : "headroom enabled — proxy will start.") : "headroom proxy stopped.", actions: [{ label: "OK" }], timeout: 2800 });
+      void renderSettings();
+      return;
+    }
+    const ds = t.closest("[data-ds]") as HTMLElement | null;
+    if (ds) {
+      const name = ds.dataset.ds!;
+      const cur = new Set(state.asksage?.datasets ?? []);
+      cur.has(name) ? cur.delete(name) : cur.add(name);
+      state.asksage = (await bridge.saveAsksage({ datasets: [...cur] })) ?? state.asksage;
       void renderSettings();
       return;
     }
