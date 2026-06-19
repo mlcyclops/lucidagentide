@@ -72,8 +72,8 @@ export interface LucidBridge {
   oauthLogin(oauthId: string): Promise<{ started: boolean; url: string; output: string } | null>;
   oauthLogout(oauthId: string): Promise<AuthStatus | null>;
   // AskSage gov gateway (ADR-0007)
-  asksage(): Promise<{ configured: boolean; base: string; only: boolean } | null>;
-  saveAsksage(opts: { baseUrl?: string; only?: boolean }): Promise<{ configured: boolean; base: string; only: boolean } | null>;
+  asksage(): Promise<{ configured: boolean; base: string; only: boolean; limit: number } | null>;
+  saveAsksage(opts: { baseUrl?: string; only?: boolean; limit?: number }): Promise<{ configured: boolean; base: string; only: boolean; limit: number } | null>;
   asksageTokens(): Promise<{ used: number; limit: number } | null>;
   asksagePersonas(): Promise<{ id: string; description: string }[] | null>;
   applyPersona(id: string | null): Promise<{ applied?: boolean; cleared?: boolean; scan?: { ok: boolean; reason?: string; findings: number } } | null>;

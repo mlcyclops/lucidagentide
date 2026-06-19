@@ -497,3 +497,13 @@ Three lines per session: **shipped / stubbed / next** (CLAUDE.md session ritual)
   real AskSage quota (fallback to non-streaming compat flagged).
 - **next:** smoke-test a live AskSage turn (header on the wire, reply renders) and
   populate personas from a real account; add Gemini route.
+
+## P-ASKSAGE.1: smoke test, model-id fix, quota increments
+- **shipped:** verified the AskSage OpenAI route live (gpt-5.2 real reply, x-access-tokens
+  accepted, streams); corrected gov model ids from the live /openai/v1/models (gpt-o3 etc.,
+  +gpt-5.5/5.4/5.1/4.1); local adjustable monthly-token allowance (default 200k) with
+  +50K/+250K/+1M/Reset increments + a Usage&Billing tooltip; Gov chip uses used(API)/limit(local).
+- **stubbed:** Claude + Gemini disabled — AskSage serves them non-streamed (claude turn used
+  tokens, returned no text); both land next via a custom streamSimple adapter.
+- **next:** build the streamSimple adapter (AskSage native non-streaming endpoints → one
+  delta) to re-enable Claude and add Gemini.

@@ -473,3 +473,22 @@ Google/Gemini deferred (more bespoke route).
 - Not yet exercised live: a full AskSage model reply (needs gateway quota) and SSE
   streaming on the passthrough routes (fallback to a `compat`/non-streaming shim if
   AskSage lacks SSE) — flagged for first live use.
+
+### Addendum (live smoke test + quota model)
+
+Smoke-tested against a real CIV account:
+- **OpenAI route works end-to-end** — `asksage-openai/gpt-5.2` returned a real reply
+  with usage; the `x-access-tokens` header is accepted and omp **streams** fine. Model
+  ids corrected to the live `/openai/v1/models` list (o-series are `gpt-o3`/`gpt-o4-mini`,
+  not `o3`; added gpt-5.5/5.4/5.1/4.1).
+- **Anthropic route disabled (for now).** A live `claude-sonnet-4` turn via
+  `/anthropic/v1/messages` consumed tokens but returned **no text** — AskSage serves
+  Claude (and Gemini) **non-streamed**, which omp's `anthropic-messages`/google providers
+  don't parse as a stream. Re-enabling Claude + adding Gemini will use a custom
+  `streamSimple` adapter that calls AskSage's non-streaming endpoints and yields the
+  text as one delta (next increment).
+- **Quota is a local allowance.** `/count-monthly-tokens` returns tokens **used**
+  (e.g. `{"response":1103216}`) but **no ceiling** — admins raise it in the AskSage
+  console with no API to read it back. So the limit is a local, user-adjustable value
+  (default **200k**) with +50K / +250K / +1M / Reset increments in Settings and a
+  tooltip pointing to AskSage → Settings → Usage & Billing. `used` is live from the API.

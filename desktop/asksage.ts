@@ -7,36 +7,37 @@
 // reach a prompt, and clean personas are wrapped in UNTRUSTED_CONTENT delimiters
 // (invariant #5). Fail-closed: if we can't scan, we don't inject.
 
-import { load } from "./settings_store.ts";
+import { ASKSAGE_DEFAULT_LIMIT, load } from "./settings_store.ts";
 import { ScannerClient } from "../harness/security/scanner_client.ts";
 import { DEFAULT_POLICY, scanAndDecide } from "../harness/security/gate.ts";
 import { UNTRUSTED_END, UNTRUSTED_START } from "../harness/prompt/assembler.ts";
 
 const DEFAULT_BASE = "https://api.civ.asksage.ai/server";
 
-export interface AsksageCfg { key: string; base: string; only: boolean; configured: boolean }
+export interface AsksageCfg { key: string; base: string; only: boolean; configured: boolean; limit: number }
 export function asksageConfig(): AsksageCfg {
   const s = load();
   const key = s.keys?.ASKSAGE_API_KEY ?? process.env.ASKSAGE_API_KEY ?? "";
   const base = (s.asksageBaseUrl ?? process.env.ASKSAGE_BASE_URL ?? DEFAULT_BASE).replace(/\/+$/, "");
-  return { key, base, only: !!s.asksageOnly, configured: !!key };
+  return { key, base, only: !!s.asksageOnly, configured: !!key, limit: s.asksageLimit ?? ASKSAGE_DEFAULT_LIMIT };
 }
 
 function headers(key: string): Record<string, string> {
   return { "content-type": "application/json", "x-access-tokens": key, authorization: `Bearer ${key}` };
 }
 
-/** Monthly token quota (POST /count-monthly-tokens). null when not configured/unreachable. */
+/** Monthly token usage. `used` comes from AskSage (POST /count-monthly-tokens);
+ *  `limit` is the LOCAL user-set allowance — AskSage's API reports usage but not
+ *  the ceiling (admins raise it in the AskSage console; no API to read it back). */
 export async function monthlyTokens(): Promise<{ used: number; limit: number } | null> {
-  const { key, base, configured } = asksageConfig();
+  const { key, base, configured, limit } = asksageConfig();
   if (!configured) return null;
   try {
     const r = await fetch(`${base}/count-monthly-tokens`, { method: "POST", headers: headers(key), body: "{}", signal: AbortSignal.timeout(8000) });
     if (!r.ok) return null;
     const j: any = await r.json();
     const used = Number(j.response ?? j.count ?? j.tokens ?? j.total ?? 0);
-    const limit = Number(j.limit ?? j.quota ?? j.monthly_limit ?? j.total_limit ?? j.inference_limit ?? 200_000);
-    return { used: Number.isFinite(used) ? used : 0, limit: Number.isFinite(limit) && limit > 0 ? limit : 200_000 };
+    return { used: Number.isFinite(used) ? used : 0, limit };
   } catch {
     return null;
   }

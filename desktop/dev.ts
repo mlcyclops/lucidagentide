@@ -116,11 +116,15 @@ const server = Bun.serve({
         if (req.method === "POST") {
           const b = await req.json();
           const prevBase = asksageConfig().base;
-          setAsksage({ baseUrl: typeof b.baseUrl === "string" ? b.baseUrl : undefined, only: typeof b.only === "boolean" ? b.only : undefined });
+          setAsksage({
+            baseUrl: typeof b.baseUrl === "string" ? b.baseUrl : undefined,
+            only: typeof b.only === "boolean" ? b.only : undefined,
+            limit: typeof b.limit === "number" ? b.limit : undefined,
+          });
           if (typeof b.baseUrl === "string" && b.baseUrl.replace(/\/+$/, "") !== prevBase) backend.restart(); // re-register provider against new base
         }
         const c = asksageConfig();
-        return json({ ok: true, data: { configured: c.configured, base: c.base, only: c.only } });
+        return json({ ok: true, data: { configured: c.configured, base: c.base, only: c.only, limit: c.limit } });
       }
       if (p === "/api/asksage/tokens") return json({ ok: true, data: await monthlyTokens() });
       if (p === "/api/asksage/personas") return json({ ok: true, data: await listPersonas() });

@@ -30,15 +30,21 @@ interface ModelSpec {
   thinking?: unknown;
 }
 
-// AskSage model ids must match what the gateway expects in the request `model`
-// field (mirrors the prototype's curated list). Cost is cosmetic here (AskSage
-// bills via a monthly token quota, surfaced separately in the desktop).
+// AskSage model ids must match what the gateway accepts in the request `model`
+// field — taken from the live `/openai/v1/models` on a real CIV account (note
+// the o-series are `gpt-o3` / `gpt-o4-mini`, not `o3`). Cost is cosmetic here
+// (AskSage bills via a monthly token quota, surfaced separately in the desktop).
 const OPENAI_MODELS: ModelSpec[] = [
-  { id: "gpt-5.2", name: "GPT-5.2 · AskSage Gov", reasoning: false, contextWindow: 256_000, maxTokens: 32_000 },
-  { id: "gpt-5", name: "GPT-5 · AskSage Gov", reasoning: false, contextWindow: 256_000, maxTokens: 32_000 },
-  { id: "gpt-5-mini", name: "GPT-5 mini · AskSage Gov", reasoning: false, contextWindow: 256_000, maxTokens: 32_000 },
-  { id: "o3", name: "o3 · AskSage Gov", reasoning: true, contextWindow: 200_000, maxTokens: 100_000 },
-  { id: "o4-mini", name: "o4-mini · AskSage Gov", reasoning: true, contextWindow: 200_000, maxTokens: 100_000 },
+  { id: "gpt-5.2", name: "GPT-5.2 · AskSage Gov", reasoning: true, contextWindow: 256_000, maxTokens: 32_000 },
+  { id: "gpt-5.5", name: "GPT-5.5 · AskSage Gov", reasoning: true, contextWindow: 256_000, maxTokens: 32_000 },
+  { id: "gpt-5.4", name: "GPT-5.4 · AskSage Gov", reasoning: true, contextWindow: 256_000, maxTokens: 32_000 },
+  { id: "gpt-5.1", name: "GPT-5.1 · AskSage Gov", reasoning: true, contextWindow: 256_000, maxTokens: 32_000 },
+  { id: "gpt-5", name: "GPT-5 · AskSage Gov", reasoning: true, contextWindow: 256_000, maxTokens: 32_000 },
+  { id: "gpt-5-mini", name: "GPT-5 mini · AskSage Gov", reasoning: true, contextWindow: 256_000, maxTokens: 32_000 },
+  { id: "gpt-4.1", name: "GPT-4.1 · AskSage Gov", reasoning: false, contextWindow: 1_000_000, maxTokens: 32_000 },
+  { id: "gpt-o3", name: "o3 · AskSage Gov", reasoning: true, contextWindow: 200_000, maxTokens: 100_000 },
+  { id: "gpt-o3-mini", name: "o3-mini · AskSage Gov", reasoning: true, contextWindow: 200_000, maxTokens: 100_000 },
+  { id: "gpt-o4-mini", name: "o4-mini · AskSage Gov", reasoning: true, contextWindow: 200_000, maxTokens: 100_000 },
 ];
 
 const ANTHROPIC_THINKING = { mode: "anthropic-adaptive", efforts: ["minimal", "low", "medium", "high"] };
@@ -79,15 +85,13 @@ export default function asksageExtension(pi: any): void {
       models: toProviderModels(OPENAI_MODELS),
     });
 
-    // Anthropic route: omp appends `/v1/messages` to baseUrl and sends `x-api-key`
-    // from apiKey; we add `x-access-tokens`.
-    pi.registerProvider("asksage-anthropic", {
-      baseUrl: `${base}/anthropic`,
-      api: "anthropic-messages",
-      apiKey: "ASKSAGE_API_KEY",
-      headers: { "x-access-tokens": key },
-      models: toProviderModels(ANTHROPIC_MODELS),
-    });
+    // Anthropic route: DISABLED for now. AskSage's /anthropic passthrough does not
+    // stream the way omp's anthropic-messages parser expects — a live turn consumed
+    // tokens but returned no text. Claude (and Gemini, same root cause: AskSage
+    // serves them non-streamed) will be re-enabled via a custom `streamSimple`
+    // adapter that calls AskSage's non-streaming endpoints. See ADR-0007 / PROGRESS.
+    void ANTHROPIC_MODELS; // retained for the adapter increment
+    // pi.registerProvider("asksage-anthropic", { baseUrl: `${base}/anthropic`, api: "anthropic-messages", apiKey: "ASKSAGE_API_KEY", headers: { "x-access-tokens": key }, models: toProviderModels(ANTHROPIC_MODELS) });
 
     process.stderr.write(`\n🏛️  [LucidAgentIDE] AskSage gov gateway registered (${base})\n`);
   } catch (e) {

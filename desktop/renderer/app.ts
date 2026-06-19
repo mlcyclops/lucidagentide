@@ -24,7 +24,7 @@ const state = {
   commands: [] as OmpCommand[],
   liveUsage: null as { used: number; size: number; cost: number } | null,
   workspace: null as WorkspaceInfo | null,
-  asksage: null as { configured: boolean; base: string; only: boolean } | null,
+  asksage: null as { configured: boolean; base: string; only: boolean; limit: number } | null,
   asksageTokens: null as { used: number; limit: number } | null,
   persona: null as string | null, // active persona id (AskSage)
   personas: [] as { id: string; description: string }[],
@@ -291,6 +291,27 @@ function provCard(p: ProviderAuth): string {
         ${p.keySet ? `<button class="btn-mini" data-clearkey="${esc(p.env)}">Clear</button>` : ""}
       </div></div></div>`;
 }
+// AskSage monthly-token allowance. AskSage reports tokens USED but not the ceiling
+// (admins raise it in the AskSage console — no API), so the limit is local + the
+// user tops it up in increments to match what they were approved.
+function quotaControls(limit: number): string {
+  const used = state.asksageTokens?.used ?? 0;
+  const pct = limit > 0 ? Math.min(100, (used / limit) * 100) : 0;
+  return `<div class="aq">
+    <div class="aq-head"><span>Monthly token limit</span>
+      <button class="info-dot aq-info" data-tip="Token allowance|You start at 200,000 tokens. AskSage reports how many you've USED but not your ceiling — your org admin grants more in the AskSage console. Set this to match what you were approved under AskSage → Settings → Usage &amp; Billing (Inference Tokens)." data-tip-side="top">${icon("info", 12)}</button>
+      <b class="aq-val">${fmtNum(used)} / ${fmtNum(limit)}</b></div>
+    <div class="aq-bar"><i style="width:${pct.toFixed(1)}%;background:${loadColor(pct / 100)}"></i></div>
+    <div class="aq-pct">${Math.round(pct)}% used</div>
+    <div class="aq-btns">
+      <button class="btn-mini" data-quota="50000">+50K</button>
+      <button class="btn-mini" data-quota="250000">+250K</button>
+      <button class="btn-mini" data-quota="1000000">+1M</button>
+      <button class="btn-mini" data-quota="reset" data-tip="Back to the 200k starting allowance">Reset 200K</button>
+    </div>
+  </div>`;
+}
+
 async function renderSettings(): Promise<void> {
   const body = $("#setBody"); if (!body) return;
   const [settings, auth, ws, asksage] = await Promise.all([bridge.getSettings(), bridge.auth(), bridge.workspace(), bridge.asksage()]);
@@ -306,6 +327,7 @@ async function renderSettings(): Promise<void> {
     <div class="set-sec"><div class="set-lbl">AskSage gov gateway <span class="set-sub">accredited proxy · set the key above</span></div>
       <div class="prov-row"><input id="asksageBase" class="prov-key" placeholder="https://api.civ.asksage.ai/server" value="${esc(asksage?.base ?? "")}" />
         <button class="btn-mini ok" id="asksageSaveBase">${icon("check", 12)} Save URL</button></div>
+      ${asksage?.configured ? quotaControls(asksage.limit) : ""}
       <label class="set-toggle"><input type="checkbox" id="asksageOnly" ${asksage?.only ? "checked" : ""}/>
         <span><b>AskSage-only (lockdown)</b> — route every turn through the gov gateway and hide direct providers in the model picker.</span></label>
       ${asksage?.configured ? `<div class="set-note ok">${icon("check", 12)} Gov gateway active — AskSage models appear in the picker, with monthly-usage and scanned personas.</div>` : `<div class="set-note">${icon("info", 12)} Add an <code>ASKSAGE_API_KEY</code> above (AskSage · Gov gateway) to enable gov models, usage, and personas.</div>`}</div>
@@ -716,7 +738,7 @@ function wire(): void {
     if (t.closest("#asksageOnly")) {
       const only = ($("#asksageOnly", $("#setBody")!) as HTMLInputElement)?.checked ?? false;
       await bridge.saveAsksage({ only });
-      state.asksage = { ...(state.asksage ?? { configured: false, base: "" }), only };
+      state.asksage = { ...(state.asksage ?? { configured: false, base: "", only: false, limit: 200_000 }), only };
       // Lockdown must guarantee gateway routing: if we're on a direct model, switch
       // to a gov one so no turn can bypass AskSage.
       if (only) {
@@ -728,6 +750,17 @@ function wire(): void {
       }
       showToast({ title: only ? "Lockdown ON" : "Lockdown off", desc: only ? "Every turn now routes through the AskSage gov gateway." : "Direct providers are selectable again.", actions: [{ label: "OK" }], timeout: 2800 });
       updateComposerTools(); renderStatus();
+      return;
+    }
+    const quota = t.closest("[data-quota]") as HTMLElement | null;
+    if (quota) {
+      const cur = state.asksage?.limit ?? 200_000;
+      const v = quota.dataset.quota!;
+      const next = v === "reset" ? 200_000 : Math.round(cur + Number(v));
+      state.asksage = (await bridge.saveAsksage({ limit: next })) ?? state.asksage;
+      state.asksageTokens = state.asksage?.configured ? await bridge.asksageTokens() : state.asksageTokens;
+      renderStatus(); void renderSettings();
+      showToast({ title: v === "reset" ? "Reset to 200K" : `+${fmtNum(Number(v))} tokens`, desc: `Monthly allowance is now ${fmtNum(next)} tokens.`, actions: [{ label: "OK" }], timeout: 2200 });
       return;
     }
     const clear = t.closest("[data-clearkey]") as HTMLElement | null;

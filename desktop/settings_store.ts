@@ -24,7 +24,13 @@ export interface GuiSettings {
   // itself lives in `keys.ASKSAGE_API_KEY` like any other provider key.
   asksageBaseUrl?: string;
   asksageOnly?: boolean;
+  // Monthly inference-token allowance. AskSage's API reports tokens USED but not
+  // the ceiling (admins grant more in the AskSage console — no API to read it), so
+  // the limit is a local, user-adjustable value. Everyone starts at 200k.
+  asksageLimit?: number;
 }
+
+export const ASKSAGE_DEFAULT_LIMIT = 200_000;
 
 export function load(): GuiSettings {
   try { return existsSync(FILE) ? JSON.parse(readFileSync(FILE, "utf8")) : {}; } catch { return {}; }
@@ -41,7 +47,7 @@ export function applyEnv(): void {
   for (const [k, v] of Object.entries(s.keys ?? {})) if (v) process.env[k] = v;
   if (s.asksageBaseUrl) process.env.ASKSAGE_BASE_URL = s.asksageBaseUrl;
 }
-export function setAsksage(opts: { baseUrl?: string; only?: boolean }): GuiSettings {
+export function setAsksage(opts: { baseUrl?: string; only?: boolean; limit?: number }): GuiSettings {
   const s = load();
   if (opts.baseUrl !== undefined) {
     s.asksageBaseUrl = opts.baseUrl || undefined;
@@ -49,6 +55,7 @@ export function setAsksage(opts: { baseUrl?: string; only?: boolean }): GuiSetti
     else delete process.env.ASKSAGE_BASE_URL;
   }
   if (opts.only !== undefined) s.asksageOnly = opts.only;
+  if (opts.limit !== undefined) s.asksageLimit = Math.max(0, Math.round(opts.limit)) || undefined;
   save(s); return s;
 }
 export function setUsername(name: string): GuiSettings {
