@@ -1148,6 +1148,8 @@ present recommendation; revisit upward over time. The envelope's version-tagged 
 built for exactly this, so **Argon2id may be added later as an explicitly-labeled NON-FIPS hardening
 option** for non-federal deployments — never the CUI default. (Same honest posture as ADR-0010: the
 strongest *approved* algorithms by default; document where a stronger-but-unapproved option exists.)
+The Argon2id slot + a self-describing cipher-suite descriptor are specified in **ADR-0015**
+(crypto-agility + PQC readiness), which this KDF decision feeds into.
 
 ### Frozen-contract deltas (for the future build increments)
 
@@ -1203,3 +1205,83 @@ BoringSSL/approved-algorithms-not-FIPS-*mode* caveat from ADR-0010. Same algorit
    packages, and structures to these standards; an authorized CUI/records officer still completes and
    certifies designations. Capturing the *specific* federal interchange target is its own scoping pass
    before the connector increment.
+
+-----
+
+## ADR-0015 — Crypto agility: Argon2 + PQC readiness (FIPS 203 / 204 / 205)
+
+**Date:** 2026-06-19
+**Status:** Accepted as a standing architectural principle (planning/posture — no functional code this
+session). Establishes that LucidAgentIDE's cryptography is **algorithm-agile and post-quantum-ready**,
+so newly-approved NIST algorithms drop into versioned slots without breaking existing data.
+**Relationship:** generalizes the `kdf.algo` decision in ADR-0014 into a whole-system principle; sets
+the crypto direction for the future connector (ADR-0012 layer 3) and signed exports (ADR-0013).
+**Driver:** federal procurement is now pushing PQC. NIST finalized the first PQC standards (Aug 13,
+2024): **FIPS 203 ML-KEM** (key encapsulation, from CRYSTALS-Kyber), **FIPS 204 ML-DSA** (digital
+signatures, from CRYSTALS-Dilithium), **FIPS 205 SLH-DSA** (stateless hash-based signatures, from
+SPHINCS+); plus **SP 800-208 LMS/XMSS** (stateful hash-based signatures). Symmetric **AES-256** (FIPS
+197) and **SHA-384/512** (FIPS 180-4) remain approved. (User reference: safelogic.com/compliance/pqc-standards.)
+
+### The reassuring headline (honest, and true today)
+
+**Our data at rest is already quantum-resistant.** The personalization store and the CUI archive are
+encrypted with **AES-256-GCM**, and the KEK is derived with **PBKDF2-HMAC-SHA256** — both symmetric /
+hash-based. Quantum attacks (Grover) only *halve* symmetric strength: AES-256 → ~128-bit, SHA-256 →
+~128-bit, which remain strong. Critically, **the at-rest path uses NO asymmetric cryptography**, so
+there is **no "harvest-now-decrypt-later" exposure** for the stored data — HNDL threatens key-exchange
+and signatures, which we don't use at rest. PQC matters for us the moment we add *asymmetric* crypto:
+**sharing** a compartment to another consumer (key establishment) and **signing** exports (authenticity).
+
+### Decision — crypto agility as a contract
+
+Every cryptographic choice is **named + versioned** in the data it protects, so an algorithm can be
+swapped without breaking old artifacts (the principle already present in `kdf.algo` + the
+`personal-kg.v1` / `personal-cui.v1` / `lucid-cui-archive.v1` format versions). The build increment
+generalizes this into an explicit **cipher-suite descriptor** carried by each envelope/export:
+
+```
+suite: { kdf: "pbkdf2-hmac-sha256" | "argon2id", aead: "aes-256-gcm",
+         hash: "sha-256" | "sha-384" | "sha-512",
+         kem?: "ml-kem-768",            // FIPS 203 — only when a channel/transfer needs it
+         sig?: "ml-dsa-65" | "slh-dsa-…" | "lms" | "xmss" }   // FIPS 204/205 / SP 800-208
+```
+
+Old artifacts keep their recorded suite and still open; new artifacts can adopt stronger suites. No
+silent algorithm changes — the suite is self-describing and audited.
+
+### Where each PQC algorithm plugs in (the readiness map)
+
+| NIST standard | Algorithm | Where it enters LucidAgentIDE |
+|:--|:--|:--|
+| **FIPS 203** | ML-KEM (Kyber) | **Connector (ADR-0012 layer 3):** post-quantum **key establishment** / DEK-wrapping when a compartment is shared to another harness/consumer. Hybrid X25519+ML-KEM during transition. |
+| **FIPS 204** | ML-DSA (Dilithium) | **Signed exports:** authenticity signature over the vault / CUI archive + manifest (beyond today's SHA-256 *integrity* inventory). |
+| **FIPS 205** | SLH-DSA (SPHINCS+) | **Long-term archival signatures:** conservative, hash-only security — ideal for decades-long **NARA records** provenance. |
+| **SP 800-208** | LMS / XMSS | Stateful hash-based signing alternative for archive integrity where a state-managed signer is acceptable. |
+| **FIPS 197 / 180-4** | AES-256, SHA-384/512 | Already approved + quantum-resistant. **Keep AES-256;** offer SHA-384/512 in the suite for extra hash margin. |
+| (non-FIPS) | **Argon2id** | KDF hardening opt-in (ADR-0014) — memory-hard, but **not FIPS-approved**, so never the CUI/federal default. |
+
+### Honest posture (the caveat that keeps this truthful)
+
+This ADR makes the system **PQC-*ready*, not PQC-*implemented* today.** Bun/BoringSSL + `node:crypto`
+do not yet expose ML-KEM / ML-DSA / SLH-DSA through a stable, FIPS-*validated* surface; these standards
+are months old and the validated modules are still landing. Readiness here means: (1) the suite
+descriptor + format-versioning so PQC artifacts are expressible and old ones still open; (2) algorithm
+selection isolated behind the `crypto.ts` layer so adding a KEM/sig is a localized change; (3) a
+preference for **hybrid** (classical + PQC) during any transition. When a validated module ships the
+PQC primitives, we populate the `kem`/`sig` slots — no schema rewrite. Same discipline as the FIPS
+posture in ADR-0010: approved algorithms now, an honest, documented path to the next bar.
+
+### Frozen-contract deltas (for the future build increment)
+
+- Extend the store/export envelopes with the **`suite` descriptor** (additive; absent ⇒ the documented
+  P9.1/P9.4 defaults — back-compatible, no version bump unless a slot's *meaning* changes).
+- `crypto.ts` grows an internal **algorithm registry** (kdf/aead/hash/kem/sig) gating which suites are
+  selectable in this runtime; selecting an unavailable algorithm fails loud, never silently downgrades.
+- New EventName candidate `crypto_suite_selected` (added only when emitted).
+- No DuckDB migration.
+
+### Not now (scope discipline)
+
+No code this session. The suite descriptor + Argon2id opt-in land with the P9.5 crypto work; the
+KEM/sig slots are populated when (a) the connector increment needs key establishment and (b) a
+validated PQC module is available. Tracked as **P9.6 — crypto-agility + PQC slots** in the roadmap.

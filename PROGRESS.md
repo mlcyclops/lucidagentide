@@ -4,6 +4,21 @@ Three lines per session: **shipped / stubbed / next** (CLAUDE.md session ritual)
 
 -----
 
+## P9.6.0: crypto-agility + PQC readiness roadmap (planning only — ADR-0015)
+- **shipped:** ADR-0015 — LucidAgentIDE is algorithm-agile + post-quantum-READY. Honest headline:
+  data at rest is ALREADY quantum-resistant (AES-256-GCM + PBKDF2/SHA-256 are symmetric/hash-based;
+  no asymmetric crypto at rest → no harvest-now-decrypt-later exposure for the store/archive). PQC
+  enters only with asymmetric needs: FIPS 203 ML-KEM (connector key establishment / DEK wrapping),
+  FIPS 204 ML-DSA (signed exports), FIPS 205 SLH-DSA + SP 800-208 LMS/XMSS (long-term NARA archival
+  signatures); AES-256 + SHA-384/512 stay. Plan: a self-describing `suite` descriptor on every
+  envelope/export + an algorithm registry in crypto.ts so PQC/Argon2id drop into versioned slots
+  without breaking old artifacts; prefer hybrid during transition.
+- **stubbed:** PQC is READY not IMPLEMENTED — Bun/BoringSSL + node:crypto don't yet expose
+  FIPS-validated ML-KEM/ML-DSA/SLH-DSA; slots populated when a validated module ships. Suite
+  descriptor + Argon2id opt-in land with P9.5 crypto work.
+- **next:** P9.6 — add the `suite` descriptor + algorithm registry (additive, back-compatible) and the
+  Argon2id non-FIPS KDF opt-in; wire KEM/sig slots when the connector + a validated PQC module arrive.
+
 ## P9.5.0: hard CUI isolation roadmap (planning only — ADR-0014)
 - **shipped:** ADR-0014 — resolves ADR-0012's open "CUI isolation strength" question. Decision:
   Option A, a SEPARATE encrypted CUI store (new format personal-cui.v1, its own DEK + custody) so a
