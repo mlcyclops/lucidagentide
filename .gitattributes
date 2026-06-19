@@ -2,3 +2,6 @@
 * text=auto eol=lf
 *.png binary
 *.duckdb binary
+# The Windows control-panel banner is streamed by cmd's TYPE under chcp 65001 —
+# it MUST keep its CRLF line endings + UTF-8 bytes exactly (LF would staircase).
+.github/assets/cli-banner.txt -text

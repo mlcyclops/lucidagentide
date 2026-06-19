@@ -40,24 +40,15 @@ goto :menu
 
 rem ===========================================================================
 :banner
+rem  The slick UTF-8 art lives in an external file rendered with TYPE - inlining
+rem  multibyte chars in the script desyncs cmd's parser under "chcp 65001" and
+rem  silently aborts the menu. TYPE just streams the bytes, so the .bat stays ASCII.
 echo.
-echo    ══════════════════════════════════════════════════════════════════
-echo.
-echo      ██╗      ██╗   ██╗  ██████╗ ██╗ ██████╗
-echo      ██║      ██║   ██║ ██╔════╝ ██║ ██╔══██╗      ░▒▓ prism of trust
-echo      ██║      ██║   ██║ ██║      ██║ ██║  ██║
-echo      ██║      ██║   ██║ ██║      ██║ ██║  ██║      A G E N T  ·  I D E
-echo      ███████╗ ╚██████╔╝ ╚██████╗ ██║ ██████╔╝
-echo      ╚══════╝  ╚═════╝   ╚═════╝ ╚═╝ ╚═════╝
-echo.
-echo      ░▒▓█  a fail-closed  security · provenance · memory  harness
-echo    ──────────────────────────────────────────────────────────────────
-echo      scan   ▸  every tool call checked for hidden-unicode prompt
-echo                injection ^& homoglyph spoofing
-echo      gate   ▸  quarantined content blocked  —  fail-closed
-echo      audit  ▸  findings · approvals · exports  —  all logged
-echo      omp    ▸  the security harness it wraps  —  extend, never fork
-echo    ══════════════════════════════════════════════════════════════════
+if exist "%REPO%\.github\assets\cli-banner.txt" (
+  type "%REPO%\.github\assets\cli-banner.txt"
+) else (
+  echo    L U C I D   A G E N T   I D E   -   security . provenance . memory
+)
 echo.
 goto :eof
 

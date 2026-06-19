@@ -1,0 +1,17 @@
+    ══════════════════════════════════════════════════════════════════
+
+      ██╗      ██╗   ██╗  ██████╗ ██╗ ██████╗
+      ██║      ██║   ██║ ██╔════╝ ██║ ██╔══██╗      ░▒▓ prism of trust
+      ██║      ██║   ██║ ██║      ██║ ██║  ██║
+      ██║      ██║   ██║ ██║      ██║ ██║  ██║      A G E N T  ·  I D E
+      ███████╗ ╚██████╔╝ ╚██████╗ ██║ ██████╔╝
+      ╚══════╝  ╚═════╝   ╚═════╝ ╚═╝ ╚═════╝
+
+      ░▒▓█  a fail-closed  security · provenance · memory  harness
+    ──────────────────────────────────────────────────────────────────
+      scan   ▸  every tool call checked for hidden-unicode prompt
+                injection & homoglyph spoofing
+      gate   ▸  quarantined content blocked  —  fail-closed
+      audit  ▸  findings · approvals · exports  —  all logged
+      omp    ▸  the security harness it wraps  —  extend, never fork
+    ══════════════════════════════════════════════════════════════════
