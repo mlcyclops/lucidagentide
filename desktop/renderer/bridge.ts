@@ -32,6 +32,11 @@ export interface ConfigOption {
 }
 export interface OmpCommand { name: string; description?: string; hint?: string }
 export interface SessionInfo { id: string; title: string; model: string; updatedAt: number; turns: number }
+export interface ProviderAuth {
+  id: string; name: string; env: string; oauthId: string; canOauth: boolean;
+  oauthActive: boolean; oauthIdentity?: string; keySet: boolean; keyLast4?: string;
+}
+export interface AuthStatus { majors: ProviderAuth[]; others: ProviderAuth[] }
 
 export type ChatEvent =
   | { type: "token"; text: string }
@@ -51,6 +56,13 @@ export interface LucidBridge {
   sessions(): Promise<SessionInfo[] | null>;
   newSession(): Promise<void>;
   setZoom(factor: number): void;
+  // settings + provider auth
+  getSettings(): Promise<{ username: string } | null>;
+  saveUsername(username: string): Promise<{ username: string } | null>;
+  auth(): Promise<AuthStatus | null>;
+  saveKey(env: string, key: string): Promise<AuthStatus | null>;
+  oauthLogin(oauthId: string): Promise<{ started: boolean; url: string; output: string } | null>;
+  oauthLogout(oauthId: string): Promise<AuthStatus | null>;
 }
 
 /** Native shell injected by the Electron preload (window controls + crisp zoom). */
@@ -121,6 +133,12 @@ export const bridge: LucidBridge = {
     } catch { return null; }
   },
   newSession: async () => { await post("/api/newSession", {}); },
+  getSettings: () => getData("/api/settings"),
+  saveUsername: (username) => post("/api/settings", { username }),
+  auth: () => getData("/api/auth"),
+  saveKey: (env, key) => post("/api/auth/key", { env, key }),
+  oauthLogin: (oauthId) => post("/api/auth/oauth", { oauthId }),
+  oauthLogout: (oauthId) => post("/api/auth/logout", { oauthId }),
   setZoom: (f) => {
     if (shell?.setZoom) { shell.setZoom(f); return; } // Electron: crisp native zoom
     // Browser: zoom #app and counter-scale its height so it still fills the viewport

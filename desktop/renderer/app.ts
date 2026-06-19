@@ -5,7 +5,7 @@
 // agent turn. Same renderer in Electron (real omp ACP via window.lucid) and in
 // the browser dev server (simulated). Pure DOM, no framework.
 
-import { bridge, type ChatEvent, type ConfigOption, type MemorySnapshot, type OmpCommand, type SecuritySnapshot, type SessionInfo } from "./bridge.ts";
+import { bridge, type ChatEvent, type ConfigOption, type MemorySnapshot, type OmpCommand, type ProviderAuth, type SecuritySnapshot, type SessionInfo } from "./bridge.ts";
 import { $, $$, accordion, el, fmtNum, gauge, spark, table } from "./dom.ts";
 import { ageStr, esc, fmtUSD, goodColor, loadColor } from "./format.ts";
 import { icon, piMark } from "./icons.ts";
@@ -23,6 +23,7 @@ const state = {
   commands: [] as OmpCommand[],
   liveUsage: null as { used: number; size: number; cost: number } | null,
   zoom: 1,
+  settingsOpen: false,
   lastOk: 0,
   streaming: false,
 };
@@ -102,6 +103,14 @@ function buildShell(): void {
           <button class="rail-expand" id="railExpand" data-tip="Expand panel" data-tip-side="right">${icon("expand", 16)}</button>
           <div class="rail-tiles" id="railTiles"></div>
         </div>
+      </aside>
+
+      <aside class="settings" id="settings" hidden>
+        <div class="set-head">
+          <div class="set-title">${icon("sliders", 17)} Settings</div>
+          <button class="set-close" id="setClose" data-tip="Close settings">${icon("close", 16)}</button>
+        </div>
+        <div class="set-body" id="setBody"></div>
       </aside>
     </div>
 
@@ -204,6 +213,7 @@ function setSendEnabled(): void {
 
 // ───────────────────────── inspector ─────────────────────────
 function focusInspector(tab: Tab): void {
+  closeSettings();
   state.inspectorTab = tab;
   if (state.inspectorRail) setInspectorRail(false);
   $$(".insp-tab").forEach((t) => t.classList.toggle("active", (t as HTMLElement).dataset.insp === tab));
@@ -249,6 +259,55 @@ function setInspectorRail(rail: boolean): void {
   state.inspectorRail = rail;
   $("#inspector")!.classList.toggle("rail", rail);
   if (rail) renderMetricsRail();
+}
+
+// ───────────────────────── settings page ─────────────────────────
+function provCard(p: ProviderAuth): string {
+  const last4 = esc(p.keyLast4 ?? "");
+  const status =
+    (p.oauthActive ? `<span class="abadge ok">${icon("check", 11)} OAuth active</span>` : "") +
+    (p.keySet ? `<span class="abadge set">key ••${last4}</span>` : "") +
+    (!p.oauthActive && !p.keySet ? `<span class="abadge none">not set</span>` : "");
+  const oauthRow = p.canOauth
+    ? `<div class="prov-row">${p.oauthActive
+        ? `<span class="prov-id">${esc(p.oauthIdentity ?? "connected")}</span><button class="btn-mini danger" data-oauth-logout="${esc(p.oauthId)}">Disconnect</button>`
+        : `<button class="btn-mini ok" data-oauth="${esc(p.oauthId)}">${icon("expand", 12)} Connect via OAuth</button>`}</div>`
+    : "";
+  return `<div class="prov">
+    <div class="prov-h"><span class="prov-name">${esc(p.name)}</span><span class="prov-status">${status}</span></div>
+    <div class="prov-body">${oauthRow}
+      <div class="prov-row">
+        <input type="password" class="prov-key" data-env="${esc(p.env)}" placeholder="${p.keySet ? `saved ••${last4} — type to replace` : `Paste ${esc(p.env)}…`}" />
+        <button class="btn-mini ok" data-savekey="${esc(p.env)}">${icon("check", 12)} Save</button>
+        ${p.keySet ? `<button class="btn-mini" data-clearkey="${esc(p.env)}">Clear</button>` : ""}
+      </div></div></div>`;
+}
+async function renderSettings(): Promise<void> {
+  const body = $("#setBody"); if (!body) return;
+  const [settings, auth] = await Promise.all([bridge.getSettings(), bridge.auth()]);
+  body.innerHTML = `
+    <div class="set-sec"><div class="set-lbl">Profile</div>
+      <div class="prov-row"><input id="setUsername" class="prov-key" placeholder="Your name" value="${esc(settings?.username ?? "")}" />
+        <button class="btn-mini ok" id="saveUsername">${icon("check", 12)} Save</button></div></div>
+    <div class="set-sec"><div class="set-lbl">Providers <span class="set-sub">key or OAuth · majors first</span></div>
+      ${(auth?.majors ?? []).map(provCard).join("") || `<div class="empty">couldn't read auth — is the server up to date?</div>`}</div>
+    ${accordion("set.others", "More providers", "", (auth?.others ?? []).map(provCard).join(""), OPEN.has("set.others"))}
+    <div class="set-note">${icon("shield", 12)} Keys are stored on this machine and passed to omp as env vars — never sent anywhere else. OAuth uses omp's own secure credential vault.</div>`;
+}
+function openSettings(): void {
+  state.settingsOpen = true;
+  $("#settings")!.hidden = false;
+  $("#inspector")!.hidden = true;
+  $$(".rail-btn").forEach((b) => b.classList.toggle("active", (b as HTMLElement).dataset.rail === "settings"));
+  void renderSettings();
+}
+function closeSettings(): void {
+  if (!state.settingsOpen) return;
+  state.settingsOpen = false;
+  $("#settings")!.hidden = true;
+  $("#inspector")!.hidden = false;
+  $$(".rail-btn").forEach((b) => b.classList.remove("active"));
+  $('.rail-btn[data-rail="chat"]')?.classList.add("active");
 }
 
 function chips(items: { cls: string; n: number | string; l: string }[]): string {
@@ -403,8 +462,9 @@ function wire(): void {
   $$(".rail-btn[data-rail]").forEach((b) => b.addEventListener("click", () => {
     const r = (b as HTMLElement).dataset.rail!;
     if (r === "security" || r === "memory") focusInspector(r);
-    else if (r === "chat") { $("#input")?.focus(); $$(".rail-btn").forEach((x) => x.classList.toggle("active", x === b)); }
+    else if (r === "chat") { closeSettings(); $("#input")?.focus(); $$(".rail-btn").forEach((x) => x.classList.toggle("active", x === b)); }
     else if (r === "runs") { focusInspector("security"); $("#inspBody")?.querySelector('[data-acc="sec.runs"] .acc-head')?.dispatchEvent(new Event("click", { bubbles: true })); }
+    else if (r === "settings") openSettings();
     else palette.show();
   }));
   $("#railCmd")!.addEventListener("click", () => palette.show());
@@ -432,6 +492,42 @@ function wire(): void {
   $("#ctModel")!.addEventListener("click", () => openOptionDropdown($("#ctModel")!, "model"));
   $("#ctMode")!.addEventListener("click", () => openOptionDropdown($("#ctMode")!, "mode"));
   $("#ctThink")!.addEventListener("click", () => openOptionDropdown($("#ctThink")!, "thinking"));
+
+  // settings page actions (delegated)
+  $("#setClose")!.addEventListener("click", () => closeSettings());
+  $("#setBody")!.addEventListener("click", async (e) => {
+    const t = e.target as HTMLElement;
+    const head = t.closest("[data-acc-toggle]") as HTMLElement | null;
+    if (head) { const k = head.dataset.accToggle!; (head.closest(".acc")!.classList.toggle("open")) ? OPEN.add(k) : OPEN.delete(k); return; }
+    const save = t.closest("[data-savekey]") as HTMLElement | null;
+    if (save) {
+      const env = save.dataset.savekey!;
+      const inp = $(`.prov-key[data-env="${env}"]`, $("#setBody")!) as HTMLInputElement | null;
+      const val = inp?.value.trim() ?? "";
+      if (!val) { showToast({ title: "Nothing to save", desc: "Paste a key first.", actions: [{ label: "OK" }], timeout: 2000 }); return; }
+      await bridge.saveKey(env, val);
+      showToast({ title: `${env} saved`, desc: "Stored on this machine and passed to omp. New turns use it.", actions: [{ label: "OK" }], timeout: 2800 });
+      void renderSettings();
+      return;
+    }
+    const clear = t.closest("[data-clearkey]") as HTMLElement | null;
+    if (clear) { await bridge.saveKey(clear.dataset.clearkey!, ""); void renderSettings(); return; }
+    const oauth = t.closest("[data-oauth]") as HTMLElement | null;
+    if (oauth) {
+      const r = await bridge.oauthLogin(oauth.dataset.oauth!);
+      if (r?.url) window.open(r.url, "_blank");
+      showToast({ title: "OAuth started", desc: r?.url ? "Complete the sign-in in your browser, then return — status updates automatically." : (r?.output?.slice(0, 160) || "Follow omp's prompt in the GUI server window."), actions: [{ label: "OK" }], timeout: 6000 });
+      setTimeout(() => void renderSettings(), 4000);
+      return;
+    }
+    const logout = t.closest("[data-oauth-logout]") as HTMLElement | null;
+    if (logout) { await bridge.oauthLogout(logout.dataset.oauthLogout!); void renderSettings(); return; }
+    if (t.closest("#saveUsername")) {
+      const u = ($("#setUsername") as HTMLInputElement)?.value ?? "";
+      await bridge.saveUsername(u);
+      showToast({ title: "Saved", desc: `Hi${u ? ", " + u : " there"}.`, actions: [{ label: "OK" }], timeout: 2000 });
+    }
+  });
 
   // inspector tabs
   $$(".insp-tab").forEach((t) => t.addEventListener("click", () => focusInspector((t as HTMLElement).dataset.insp as Tab)));

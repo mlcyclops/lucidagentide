@@ -99,6 +99,13 @@ class Backend {
     await this.ensureSession();
   }
 
+  /** Tear down the omp process so the next call respawns it (e.g. after an API
+   *  key changes — the new env is picked up on the fresh spawn). */
+  restart(): void {
+    try { this.acp?.stop(); } catch { /* ignore */ }
+    this.acp = null; this.starting = null; this.sessionId = null; this.listener = null;
+  }
+
   /** Run one turn, streaming events to onEvent; resolves after `done`. */
   async prompt(text: string, onEvent: (e: ChatEvent) => void): Promise<void> {
     this.listener = onEvent;

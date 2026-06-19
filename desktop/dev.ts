@@ -13,6 +13,17 @@ import { securitySnapshot } from "../tools/web/data.ts";
 import { memorySnapshot } from "../tools/memory_data.ts";
 import { backend } from "./acp_backend.ts";
 import { listSessions } from "./sessions.ts";
+import { providerAuth } from "./auth_status.ts";
+import { applyEnv, load as loadSettings, setKey, setUsername } from "./settings_store.ts";
+import { homedir } from "node:os";
+import { existsSync } from "node:fs";
+
+applyEnv(); // make stored API keys available to a spawned omp acp
+
+function ompBin(): string {
+  for (const c of [join(homedir(), ".bun", "bin", "omp.exe"), join(homedir(), ".bun", "bin", "omp")]) if (existsSync(c)) return c;
+  return "omp";
+}
 
 const ROOT = join(import.meta.dir, "renderer");
 const PORT = Number(process.env.PORT ?? 5319);
@@ -49,6 +60,38 @@ const server = Bun.serve({
 
       // real omp ACP backend (genuine model replies + live session config)
       if (p === "/api/sessions") return json({ ok: true, data: listSessions() });
+
+      // settings + provider auth
+      if (p === "/api/settings") {
+        if (req.method === "POST") { const b = await req.json(); setUsername(String(b.username ?? "")); }
+        return json({ ok: true, data: { username: loadSettings().username ?? "" } });
+      }
+      if (p === "/api/auth") return json({ ok: true, data: providerAuth() });
+      if (p === "/api/auth/key" && req.method === "POST") {
+        const { env, key } = await req.json();
+        setKey(String(env), String(key ?? ""));
+        backend.restart(); // pick up the new env on next turn
+        return json({ ok: true, data: providerAuth() });
+      }
+      if (p === "/api/auth/oauth" && req.method === "POST") {
+        const { oauthId } = await req.json();
+        // omp owns the secure OAuth flow. Spawn it async so it STAYS ALIVE to
+        // receive the browser callback; read a little stdout to grab the URL.
+        const proc = Bun.spawn([ompBin(), "auth-broker", "login", String(oauthId)], { stdout: "pipe", stderr: "pipe", stdin: "ignore" });
+        const dec = new TextDecoder();
+        let out = "";
+        await Promise.race([
+          (async () => { for await (const c of proc.stdout) { out += dec.decode(c); if (/https?:\/\//.test(out)) break; } })(),
+          new Promise((r) => setTimeout(r, 2500)),
+        ]);
+        const url = (out.match(/https?:\/\/\S+/) ?? [])[0] ?? "";
+        return json({ ok: true, data: { started: true, url, output: out.slice(0, 600) } });
+      }
+      if (p === "/api/auth/logout" && req.method === "POST") {
+        const { oauthId } = await req.json();
+        Bun.spawnSync([ompBin(), "auth-broker", "logout", String(oauthId)], { timeout: 4000 });
+        return json({ ok: true, data: providerAuth() });
+      }
       if (p === "/api/config") return json({ ok: true, data: await backend.getConfig() });
       if (p === "/api/commands") return json({ ok: true, data: await backend.getCommands() });
       if (p === "/api/setConfig" && req.method === "POST") { const { configId, value } = await req.json(); return json({ ok: true, data: await backend.setConfig(configId, value) }); }
