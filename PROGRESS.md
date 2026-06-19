@@ -4,6 +4,18 @@ Three lines per session: **shipped / stubbed / next** (CLAUDE.md session ritual)
 
 -----
 
+## P10.0: context-window fix + observability roadmap (ADR-0011)
+- **shipped:** fixed the context-window display (status bar + Memory panel showed 256k/200k for a 1M
+  Gemini) via a per-model MODEL_CTX/CTX_WINDOW map keyed by short id. ADR-0011 captures the
+  observability/cost-intelligence roadmap: live response HUD (MM:SS + semantic phase + cost estimate),
+  cross-model usage/cost ledger + flippable savings card, live provider rate-limit probes (accurate
+  "Claude 5 Hour"), local-vs-gateway attribution.
+- **stubbed:** P10.1–P10.4 designed, unbuilt; pricing currently duplicated (MODEL_CTX) — should move to a
+  shared API to avoid drift; provider-probe header semantics to confirm.
+- **next:** continue the P9 path — build **P9.1** (encrypted personal store) now; sequence P10 after P9.
+
+-----
+
 ## P9.0: personalization knowledge-graph roadmap (planning only — ADR-0010)
 - **shipped:** ADR-0010 in DECISIONS.md — a detailed design for a private, FIPS-grade,
   inspectable **personalization** knowledge graph (a Karpathy-style "second brain" about the user

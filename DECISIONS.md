@@ -853,3 +853,62 @@ prerequisite for everything, has the smallest surface, needs no DuckDB migration
   contract, so each future increment is clean and isolated.
 - The personalization store is the project's first **encryption-at-rest** surface — a deliberate new
   capability, scoped to opt-in personal data, with an honest (not oversold) FIPS posture.
+
+-----
+
+## ADR-0011 — Observability & cost intelligence (roadmap)
+
+**Date:** 2026-06-19
+**Status:** Accepted as a roadmap. Phases P10.1–P10.4 are **Proposed**.
+**Context increment:** P10.0 (planning; the related context-window display bug was fixed inline).
+
+### Context
+
+The user wants the GUI to be honest and informative about *what the agent is doing and what it costs*:
+a live "thinking" HUD per response, accurate provider limits, and a cross-model token/cost ledger that
+shows where their tokens go and which models earn the best prompt-cache savings. A first, concrete bug
+surfaced this: switching to Gemini 2.5 Flash (1M) still showed 256k/200k context — **fixed inline** by a
+per-model context-window map (`MODEL_CTX` in `app.ts`, `CTX_WINDOW` in `tools/memory_data.ts`).
+
+### Decision — the four phases
+
+**P10.1 — Response activity HUD.** During a streaming turn, show a live **MM:SS timer counting up**, a
+**semantic "phase" label**, and a **running token-cost estimate** — a friendlier take on what Claude Code
+shows. The phase label is driven by REAL signals already on the chat stream (`acp_backend.ts` emits `tool`
+events with name/detail) plus a heuristic opening guess from the user's ask ("Searching the codebase…",
+"Reasoning…", "Editing files…", "Running tests…"). Cost estimate accrues from the streamed `usage`
+events × per-model pricing. Mostly client-side; no new contract. Also surface each model's context window in
+the **model picker dropdown** (today's `MODEL_CTX` makes this trivial).
+
+**P10.2 — Cross-model usage & cost ledger.** Aggregate tokens + cost **per model across sessions**: all-models
+total, **provider/subscription vs. local** (if a local runtime is installed), average cost savings, *where*
+the tokens go (top models), and **which models give the best prompt-cache hit-rate / savings**. A flippable
+**savings card**: per-turn → per-model → an all-models summary with **estimated savings vs. full price**
+(cacheRead billed at ~10%, so savings ≈ cacheRead × 0.9 × input-price). Source: the telemetry stream + omp
+session transcripts + per-model pricing (the AskSage extension already carries `cost{input,output,cacheRead,
+cacheWrite}`; omp carries native pricing). May add a usage-rollup migration if live aggregation is too slow.
+
+**P10.3 — Live provider rate-limit probes.** The "Claude 5 Hour" figure is omp's last-seen value and lags.
+Replace it with a **lightweight probe every 5 min** for each configured provider that has a key: a minimal
+request whose **response rate-limit headers** carry the real remaining budget (Anthropic
+`anthropic-ratelimit-*`; OpenAI `x-ratelimit-*` / usage endpoint). Show accurate "remaining / resets-at" per
+provider; only runs when a Claude/OpenAI key (or AskSage gov) is present. Opt-in (a tiny request has a tiny
+cost); reuses the existing 5-min budget-poll scheduler.
+
+**P10.4 — Local vs. gateway attribution.** Tag each turn's spend as subscription/provider vs. local model
+(if a local runtime is ever added) so the ledger can answer "how much am I spending where," and feed the
+savings card.
+
+### Open questions (resolve before building each phase)
+
+- Exact provider rate-limit header semantics + whether a `count_tokens`/`max_tokens:1` probe is the cheapest
+  way to read them without burning quota (P10.3).
+- Whether per-model pricing lives in one shared table (the renderer + harness both need it; today `MODEL_CTX`
+  is duplicated — pricing should probably be exposed via an API endpoint to avoid drift).
+- Whether the usage ledger aggregates live from telemetry or needs a rollup table (perf at scale) (P10.2).
+
+### Consequences / guardrails
+
+- All read-only and additive; no change to the security gate or frozen prompt prefix.
+- Provider probes are opt-in and only fire with a configured key; no telemetry leaves the machine.
+- This is sequenced **after** the P9 personalization work; P9.1 (encrypted store) is the immediate next build.
