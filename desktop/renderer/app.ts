@@ -365,38 +365,94 @@ function datasetsSection(list: string[] | null): string {
     OPEN.has("set.datasets"), `${sel.size || ""}`);
 }
 
-async function renderSettings(): Promise<void> {
+// ── Settings: progressive (snappy) rendering ────────────────────────────────
+// The panel paints a shell instantly, then each section hydrates independently — so a
+// slow omp/AskSage fetch never blocks the whole page (the old renderSettings awaited
+// every fetch + 8s dataset/persona timeouts before painting anything). Heavy/optional
+// sections collapse to keep the panel short.
+const SET_OPEN = new Set<string>(["asksage"]); // collapsible sections open by default
+
+function setCard(name: string, title: string, sub: string, body: string, collapsible: boolean): string {
+  const subHtml = sub ? ` <span class="set-sub">${sub}</span>` : "";
+  if (!collapsible) return `<div class="set-sec" data-sec="${name}"><div class="set-lbl">${title}${subHtml}</div>${body}</div>`;
+  return `<div class="set-sec set-coll${SET_OPEN.has(name) ? " open" : ""}" data-sec="${name}">
+    <button class="set-coll-h" data-setcard="${name}"><span class="set-lbl">${title}${subHtml}</span><span class="set-coll-chev">${icon("chevron", 15)}</span></button>
+    <div class="set-coll-body">${body}</div></div>`;
+}
+const setSkel = (name: string, title: string, sub: string, collapsible = false): string =>
+  setCard(name, title, sub, `<div class="set-skel"></div><div class="set-skel short"></div>`, collapsible);
+function fillSec(name: string, html: string): void {
+  const el = document.querySelector(`#setBody [data-sec="${name}"]`);
+  if (el) el.outerHTML = html;
+}
+
+function secProfile(s: { username: string } | null): string {
+  return setCard("profile", "Profile", "", `<div class="prov-row"><input id="setUsername" class="prov-key" placeholder="Your name" value="${esc(s?.username ?? "")}" />
+    <button class="btn-mini ok" id="saveUsername">${icon("check", 12)} Save</button></div>`, false);
+}
+function secProviders(auth: import("./bridge.ts").AuthStatus | null): string {
+  return setCard("providers", "Providers", "key or OAuth · majors first",
+    (auth?.majors ?? []).map(provCard).join("") || `<div class="empty">couldn't read auth — is the server up to date?</div>`, false);
+}
+function secAsksage(a: typeof state.asksage, datasets: string[] | null): string {
+  const body = `<div class="prov-row"><input id="asksageBase" class="prov-key" placeholder="https://api.civ.asksage.ai/server" value="${esc(a?.base ?? "")}" />
+      <button class="btn-mini ok" id="asksageSaveBase">${icon("check", 12)} Save URL</button></div>
+    ${a?.configured ? quotaControls(a.limit) : ""}
+    <label class="set-toggle"><input type="checkbox" id="asksageOnly" ${a?.only ? "checked" : ""}/>
+      <span><b>AskSage-only (lockdown)</b> — route every turn through the gov gateway and hide direct providers in the model picker.</span></label>
+    ${a?.only ? datasetsSection(datasets) : ""}
+    ${a?.configured ? `<div class="set-note ok">${icon("check", 12)} Gov gateway active — AskSage models appear in the picker, with monthly-usage and scanned personas.</div>` : `<div class="set-note">${icon("info", 12)} Add an <code>ASKSAGE_API_KEY</code> in Providers to enable gov models, usage, and personas.</div>`}`;
+  return setCard("asksage", "AskSage gov gateway", "accredited proxy", body, true);
+}
+function secCompression(hr: import("./bridge.ts").HeadroomStatus | null): string {
+  const body = hr?.installed
+    ? `<label class="set-toggle"><input type="checkbox" id="headroomToggle" ${hr.enabled ? "checked" : ""}/>
+        <span><b>Compress context with headroom</b> — fewer tokens before they reach the model. ${hr.running ? `<span class="abadge ok">running · :${hr.port}</span>` : ""}</span></label>
+      <div class="set-note">${icon("info", 12)} Runs entirely on your machine (${esc(hr.version ?? "installed")}). Request-routing + a gov-deployment security review are next — see ADR-0008.</div>`
+    : `<div class="set-note">${icon("info", 12)} Optional: install <b>headroom</b> to compress context on-device (60–95% fewer tokens). Run <code>${esc(hr?.installHint ?? "pip install headroom-ai[proxy]")}</code>, then this toggle appears.</div>`;
+  return setCard("compression", "Token compression", "headroom · on-device · opt-in", body, true);
+}
+function secOthers(auth: import("./bridge.ts").AuthStatus | null): string {
+  return setCard("others", "More providers", "", (auth?.others ?? []).map(provCard).join("") || `<div class="empty">none</div>`, true);
+}
+
+function settingsShell(): string {
+  return [
+    `<div data-sec="workspace"></div>`,
+    setSkel("profile", "Profile", ""),
+    setSkel("providers", "Providers", "key or OAuth · majors first"),
+    setSkel("asksage", "AskSage gov gateway", "accredited proxy", true),
+    setSkel("compression", "Token compression", "headroom · on-device · opt-in", true),
+    setSkel("personal", "Personalization", "private · encrypted · opt-in", true),
+    setSkel("others", "More providers", "", true),
+    `<div class="set-note">${icon("shield", 12)} Keys are stored on this machine and passed to omp as env vars — never sent anywhere else. OAuth uses omp's own secure credential vault.</div>`,
+  ].join("");
+}
+/** Re-fetch + swap each section IN PLACE (old content stays until fresh arrives — no flash). */
+function hydrateSettings(): void {
+  void bridge.workspace().then((ws) => {
+    if (ws) { state.workspace = ws; renderWorkspaceBar(); }
+    const el = document.querySelector(`#setBody [data-sec="workspace"]`);
+    if (el) el.outerHTML = `<div data-sec="workspace">${ws ? workspaceSection(ws) : ""}</div>`;
+  });
+  void bridge.getSettings().then((s) => fillSec("profile", secProfile(s)));
+  void bridge.auth().then((a) => { fillSec("providers", secProviders(a)); fillSec("others", secOthers(a)); });
+  void bridge.headroom().then((h) => fillSec("compression", secCompression(h)));
+  void hydratePersonal();
+  void bridge.asksage().then(async (a) => {
+    if (a) state.asksage = a;
+    fillSec("asksage", secAsksage(a, null)); // paint immediately, without the slow datasets
+    if (a?.configured && a.only) { // only lockdown needs datasets/personas — fetch them after
+      const datasets = await bridge.asksageDatasets();
+      if (!state.personas.length) state.personas = (await bridge.asksagePersonas()) ?? [];
+      fillSec("asksage", secAsksage(a, datasets));
+    }
+  });
+}
+function renderSettings(): void {
   const body = $("#setBody"); if (!body) return;
-  const [settings, auth, ws, asksage, hr, personal] = await Promise.all([bridge.getSettings(), bridge.auth(), bridge.workspace(), bridge.asksage(), bridge.headroom(), bridge.personal()]);
-  if (ws) { state.workspace = ws; renderWorkspaceBar(); }
-  if (asksage) state.asksage = asksage;
-  // Datasets + the RAG-persona picker are surfaced in gov-only (lockdown) mode.
-  const datasets = asksage?.configured && asksage.only ? await bridge.asksageDatasets() : null;
-  if (asksage?.configured && asksage.only && !state.personas.length) state.personas = (await bridge.asksagePersonas()) ?? [];
-  body.innerHTML = `
-    ${ws ? workspaceSection(ws) : ""}
-    <div class="set-sec"><div class="set-lbl">Profile</div>
-      <div class="prov-row"><input id="setUsername" class="prov-key" placeholder="Your name" value="${esc(settings?.username ?? "")}" />
-        <button class="btn-mini ok" id="saveUsername">${icon("check", 12)} Save</button></div></div>
-    <div class="set-sec"><div class="set-lbl">Providers <span class="set-sub">key or OAuth · majors first</span></div>
-      ${(auth?.majors ?? []).map(provCard).join("") || `<div class="empty">couldn't read auth — is the server up to date?</div>`}</div>
-    <div class="set-sec"><div class="set-lbl">AskSage gov gateway <span class="set-sub">accredited proxy · set the key above</span></div>
-      <div class="prov-row"><input id="asksageBase" class="prov-key" placeholder="https://api.civ.asksage.ai/server" value="${esc(asksage?.base ?? "")}" />
-        <button class="btn-mini ok" id="asksageSaveBase">${icon("check", 12)} Save URL</button></div>
-      ${asksage?.configured ? quotaControls(asksage.limit) : ""}
-      <label class="set-toggle"><input type="checkbox" id="asksageOnly" ${asksage?.only ? "checked" : ""}/>
-        <span><b>AskSage-only (lockdown)</b> — route every turn through the gov gateway and hide direct providers in the model picker.</span></label>
-      ${asksage?.only ? datasetsSection(datasets) : ""}
-      ${asksage?.configured ? `<div class="set-note ok">${icon("check", 12)} Gov gateway active — AskSage models appear in the picker, with monthly-usage and scanned personas.</div>` : `<div class="set-note">${icon("info", 12)} Add an <code>ASKSAGE_API_KEY</code> above (AskSage · Gov gateway) to enable gov models, usage, and personas.</div>`}</div>
-    <div class="set-sec"><div class="set-lbl">Token compression <span class="set-sub">headroom · on-device · opt-in</span></div>
-      ${hr?.installed
-        ? `<label class="set-toggle"><input type="checkbox" id="headroomToggle" ${hr.enabled ? "checked" : ""}/>
-            <span><b>Compress context with headroom</b> — fewer tokens before they reach the model. ${hr.running ? `<span class="abadge ok">running · :${hr.port}</span>` : ""}</span></label>
-          <div class="set-note">${icon("info", 12)} Runs entirely on your machine (${esc(hr.version ?? "installed")}). Request-routing + a gov-deployment security review are the next step — see ADR-0008.</div>`
-        : `<div class="set-note">${icon("info", 12)} Optional: install <b>headroom</b> to compress context on-device (60–95% fewer tokens) — great for stretching your AskSage quota. Run <code>${esc(hr?.installHint ?? "pip install headroom-ai[proxy]")}</code>, then this toggle appears.</div>`}</div>
-    ${personalizationSection(personal)}
-    ${accordion("set.others", "More providers", "", (auth?.others ?? []).map(provCard).join(""), OPEN.has("set.others"))}
-    <div class="set-note">${icon("shield", 12)} Keys are stored on this machine and passed to omp as env vars — never sent anywhere else. OAuth uses omp's own secure credential vault.</div>`;
+  if (!body.querySelector("[data-sec]")) body.innerHTML = settingsShell(); // first open: skeleton
+  hydrateSettings(); // then fill in place
 }
 
 // Per-compartment security posture + risk-mitigation notice (ADR-0012). `combined` is a
@@ -409,23 +465,26 @@ const SCOPE_INFO: Record<string, { label: string; tone: "ok" | "warn" | "danger"
 };
 const SCOPE_ORDER = ["personal", "work", "combined", "cui"] as const;
 
-// Settings → Personalization (ADR-0010/0012): opt-in, encrypted-at-rest user knowledge
-// graph + the Work/Personal/Combined/CUI compartment selector with risk notices.
-function personalizationSection(p: import("./bridge.ts").PersonalStatus | null): string {
-  const sub = `private · encrypted · opt-in`;
-  const head = (inner: string) => `<div class="set-sec"><div class="set-lbl">Personalization <span class="set-sub">${sub}</span></div>${inner}</div>`;
-  if (!p) return head(`<div class="set-note">${icon("info", 12)} Personalization is unavailable — update the GUI server.</div>`);
+/** Re-render just the Personalization card (instant — the endpoint is local). */
+function hydratePersonal(): Promise<void> {
+  return bridge.personal().then((p) => fillSec("personal", secPersonal(p)));
+}
+// Settings → Personalization (ADR-0010/0012): opt-in encrypted KG + the
+// Work/Personal/Combined/CUI compartment selector with per-mode risk notices.
+function secPersonal(p: import("./bridge.ts").PersonalStatus | null): string {
+  const card = (inner: string) => setCard("personal", "Personalization", "private · encrypted · opt-in", inner, true);
+  if (!p) return card(`<div class="set-note">${icon("info", 12)} Personalization is unavailable — update the GUI server.</div>`);
   const toggle = `<label class="set-toggle"><input type="checkbox" id="personalToggle" ${p.enabled ? "checked" : ""}/>
       <span><b>Learn about me to tailor responses</b> — a private knowledge graph of your preferences, decisions, interests &amp; style, encrypted on this device (AES-256-GCM). Off by default.</span></label>`;
-  if (!p.enabled) return head(toggle + `<div class="set-note">${icon("shield", 12)} Nothing is learned, stored, or recalled until you enable this. Everything stays local; you can forget or export it anytime.</div>`);
+  if (!p.enabled) return card(toggle + `<div class="set-note">${icon("shield", 12)} Nothing is learned, stored, or recalled until you enable this. Everything stays local; you can forget or export it anytime.</div>`);
 
-  let body: string;
+  let inner: string;
   if (!p.configured) {
-    body = `<div class="set-note">${icon("info", 12)} Set a passphrase to create your encrypted store. It protects your data and <b>cannot be recovered</b> if lost.</div>
+    inner = `<div class="set-note">${icon("info", 12)} Set a passphrase to create your encrypted store. It protects your data and <b>cannot be recovered</b> if lost.</div>
       <div class="prov-row"><input id="personalPass" class="prov-key" type="password" placeholder="New passphrase (min 8 chars)" autocomplete="new-password" />
         <button class="btn-mini ok" id="personalSetup">${icon("shield", 12)} Create</button></div>`;
   } else if (!p.unlocked) {
-    body = `<div class="set-note">${icon("info", 12)} Your store is locked. Enter your passphrase to unlock it this session.</div>
+    inner = `<div class="set-note">${icon("info", 12)} Your store is locked. Enter your passphrase to unlock it this session.</div>
       <div class="prov-row"><input id="personalPass" class="prov-key" type="password" placeholder="Passphrase" autocomplete="current-password" />
         <button class="btn-mini ok" id="personalUnlock">${icon("shield", 12)} Unlock</button></div>`;
   } else {
@@ -433,14 +492,14 @@ function personalizationSection(p: import("./bridge.ts").PersonalStatus | null):
     const seg = SCOPE_ORDER.map((sc) => `<button class="seg-btn pscope${sc === cur ? " on" : ""}" data-pscope="${sc}" data-tip="${esc(SCOPE_INFO[sc]!.label)}|${esc(SCOPE_INFO[sc]!.note)}" data-tip-side="top">${esc(SCOPE_INFO[sc]!.label)}</button>`).join("");
     const info = SCOPE_INFO[cur] ?? SCOPE_INFO.personal!;
     const c = p.counts ?? { work: 0, personal: 0, cui: 0 };
-    body = `<div class="set-note ok">${icon("check", 12)} Unlocked. New facts pass the security gate before they're remembered; you stay in control.</div>
+    inner = `<div class="set-note ok">${icon("check", 12)} Unlocked. New facts pass the security gate before they're remembered; you stay in control.</div>
       <div class="pscope-lbl">Compartment <span class="info-dot" data-tip="Data compartments|Keep Work, Personal, and CUI knowledge separate. The active compartment scopes what is learned and recalled; Combined is a union view. Portability is compartment-aware — see ADR-0012.">${icon("info", 11)}</span></div>
       <div class="seg pscope-seg">${seg}</div>
       <div class="pscope-note ${info.tone}">${icon(info.tone === "danger" ? "shield" : "info", 13)} <span>${esc(info.note)}</span></div>
       <div class="kvs"><span class="kv">personal <b>${c.personal}</b></span><span class="kv">work <b>${c.work}</b></span><span class="kv">cui <b>${c.cui}</b></span></div>
       <button class="btn-mini" id="personalLock">${icon("shield", 12)} Lock</button>`;
   }
-  return head(toggle + body);
+  return card(toggle + inner);
 }
 function openSettings(): void {
   state.settingsOpen = true;
@@ -931,7 +990,7 @@ function wire(): void {
       const enabled = ($("#personalToggle", $("#setBody")!) as HTMLInputElement)?.checked ?? false;
       await bridge.personalEnable(enabled);
       showToast({ title: enabled ? "Personalization on" : "Personalization off", desc: enabled ? "Set a passphrase to create your encrypted store." : "Locked and disabled — nothing is learned or recalled.", actions: [{ label: "OK" }], timeout: 2800 });
-      void renderSettings();
+      void hydratePersonal();
       return;
     }
     if (t.closest("#personalSetup") || t.closest("#personalUnlock")) {
@@ -940,20 +999,38 @@ function wire(): void {
       const r = setup ? await bridge.personalSetup(pass) : await bridge.personalUnlock(pass);
       if (r?.ok) showToast({ title: setup ? "Store created" : "Unlocked", desc: setup ? "Your encrypted personalization store is ready." : "Unlocked for this session.", actions: [{ label: "OK" }], timeout: 2600 });
       else showToast({ title: setup ? "Couldn't create store" : "Couldn't unlock", desc: r?.error ?? "Try again.", meta: "passphrase is never stored or sent anywhere", actions: [{ label: "OK" }], timeout: 5000 });
-      void renderSettings();
+      void hydratePersonal();
       return;
     }
     if (t.closest("#personalLock")) {
       await bridge.personalLock();
       showToast({ title: "Locked", desc: "The in-memory key was wiped; unlock again to use it.", actions: [{ label: "OK" }], timeout: 2400 });
-      void renderSettings();
+      void hydratePersonal();
       return;
     }
     const pscope = t.closest("[data-pscope]") as HTMLElement | null;
     if (pscope) {
       const scope = pscope.dataset.pscope as "work" | "personal" | "cui" | "combined";
-      await bridge.personalScope(scope);
-      void renderSettings();
+      const cur = (document.querySelector(".seg-btn.pscope.on") as HTMLElement | null)?.dataset.pscope;
+      if (scope === cur) return; // already active — nothing to do
+      const info = SCOPE_INFO[scope]!;
+      // Switching the compartment changes what is learned + recalled — confirm with a warning.
+      showToast({
+        title: `Switch to ${info.label}?`,
+        desc: info.note,
+        meta: scope === "cui" ? "CUI handling applies once you switch." : "This changes what new facts join and what is recalled.",
+        actions: [
+          { label: scope === "cui" ? "Switch to CUI" : "Switch", kind: scope === "cui" ? "danger" : "ok", run: async () => { await bridge.personalScope(scope); await hydratePersonal(); } },
+          { label: "Cancel" },
+        ],
+      });
+      return;
+    }
+    const setcard = t.closest("[data-setcard]") as HTMLElement | null;
+    if (setcard) {
+      const nm = setcard.dataset.setcard!;
+      const open = setcard.closest(".set-coll")?.classList.toggle("open");
+      if (open) SET_OPEN.add(nm); else SET_OPEN.delete(nm);
       return;
     }
     const ragP = t.closest("#ragPersonaBtn") as HTMLElement | null;

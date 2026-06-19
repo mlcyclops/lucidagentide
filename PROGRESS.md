@@ -4,6 +4,17 @@ Three lines per session: **shipped / stubbed / next** (CLAUDE.md session ritual)
 
 -----
 
+## P9.1c: Settings UX — snappy progressive load + compartment switch fix
+- **shipped:** Settings now paints a shell instantly (~2ms) and hydrates each section independently —
+  a slow omp/AskSage fetch no longer blocks the page (root cause of both "Settings slow" and the
+  compartment feeling "stuck": the old renderSettings awaited every fetch + two 8s dataset/persona
+  timeouts). Heavy sections (AskSage/Compression/Personalization/More providers) are now collapsible
+  cards (shorter panel). Compartment switching is fixed + now confirms with a per-mode warning
+  ("Switch to CUI?") before applying — freely changeable both ways. Right metrics rail tightened:
+  left-aligned sharp metric cards, less padding, auto-grows (fit-content, 86–176px) for big numbers.
+- **stubbed:** —
+- **next:** P9.2 — conversation distiller (model-based, auto-gated) + scope-aware recall.
+
 ## P9.1b: personalization desktop wiring + compartments (ADR-0010/0012)
 - **shipped:** Settings "Personalization" section — enable toggle (default OFF), passphrase create/unlock/lock
   flow (`desktop/personal.ts` + `/api/personal/*`), and the **Work/Personal/Combined/CUI compartment
