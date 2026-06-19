@@ -12,6 +12,7 @@ import { join } from "node:path";
 import { securitySnapshot } from "../tools/web/data.ts";
 import { memorySnapshot } from "../tools/memory_data.ts";
 import { backend } from "./acp_backend.ts";
+import { listSessions } from "./sessions.ts";
 
 const ROOT = join(import.meta.dir, "renderer");
 const PORT = Number(process.env.PORT ?? 5319);
@@ -47,6 +48,7 @@ const server = Bun.serve({
       if (p === "/api/health") return json({ ok: true });
 
       // real omp ACP backend (genuine model replies + live session config)
+      if (p === "/api/sessions") return json({ ok: true, data: listSessions() });
       if (p === "/api/config") return json({ ok: true, data: await backend.getConfig() });
       if (p === "/api/commands") return json({ ok: true, data: await backend.getCommands() });
       if (p === "/api/setConfig" && req.method === "POST") { const { configId, value } = await req.json(); return json({ ok: true, data: await backend.setConfig(configId, value) }); }

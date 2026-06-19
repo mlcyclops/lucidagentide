@@ -5,17 +5,17 @@
 // agent turn. Same renderer in Electron (real omp ACP via window.lucid) and in
 // the browser dev server (simulated). Pure DOM, no framework.
 
-import { bridge, type ChatEvent, type ConfigOption, type MemorySnapshot, type OmpCommand, type SecuritySnapshot } from "./bridge.ts";
+import { bridge, type ChatEvent, type ConfigOption, type MemorySnapshot, type OmpCommand, type SecuritySnapshot, type SessionInfo } from "./bridge.ts";
 import { $, $$, accordion, el, fmtNum, gauge, spark, table } from "./dom.ts";
 import { ageStr, esc, fmtUSD, goodColor, loadColor } from "./format.ts";
 import { icon, piMark } from "./icons.ts";
-import { type Action, createPalette, initTooltips, popover, showToast } from "./ui.ts";
+import { type Action, attachRichTip, createPalette, initTooltips, popover, showToast } from "./ui.ts";
 
 type Tab = "security" | "memory";
 const state = {
   inspectorTab: "security" as Tab,
   sidebarCollapsed: false,
-  inspectorCollapsed: false,
+  inspectorRail: false,
   model: "claude-opus-4-8",
   security: null as SecuritySnapshot | null,
   memory: null as MemorySnapshot | null,
@@ -35,7 +35,7 @@ function buildShell(): void {
   $("#app")!.appendChild(el(`
   <div id="app-inner" style="display:contents">
     <div class="titlebar">
-      <div class="brand">LUCID<span class="pi">${piMark}</span></div>
+      <div class="brand"><span class="lucid-word">LUCID</span><span class="pi">${piMark}</span></div>
       <button class="model-badge" id="modelBadge" data-tip="Model · mode · thinking|Click to choose" data-tip-icon="spark">
         <span class="dot"></span><span id="modelName">${esc(prettyModel(state.model))}</span>${icon("chevron", 13)}
       </button>
@@ -77,7 +77,13 @@ function buildShell(): void {
             <textarea id="input" rows="1" placeholder="Ask the agent…  every tool call is scanned before it runs"></textarea>
             <button class="send-btn" id="send" data-tip="Send|Enter" disabled>${icon("send", 18)}</button>
           </div>
-          <div class="composer-hint"><span><kbd>Enter</kbd> send</span><span><kbd>⇧ Enter</kbd> newline</span><span><kbd>⌘K</kbd> commands</span></div>
+          <div class="composer-tools" id="composerTools">
+            <button class="ctool" id="ctModel" data-tip="Model|Click to change the model">${icon("spark", 14)}<span id="ctModelName">${esc(prettyModel(state.model))}</span>${icon("chevron", 11)}</button>
+            <button class="ctool" id="ctMode" data-tip="Mode|Agent edits files · Plan drafts read-only">${icon("bolt", 14)}<span id="ctModeName">Agent</span>${icon("chevron", 11)}</button>
+            <button class="ctool" id="ctThink" data-tip="Thinking depth|How hard the model reasons">${icon("brain", 14)}<span id="ctThinkName">High</span>${icon("chevron", 11)}</button>
+            <div class="ctool-spacer"></div>
+            <span class="ctool-hint"><kbd>Enter</kbd> send · <kbd>⇧↵</kbd> newline · <kbd>⌘K</kbd> commands</span>
+          </div>
         </div>
       </main>
 
@@ -85,8 +91,13 @@ function buildShell(): void {
         <div class="insp-tabs">
           <button class="insp-tab sec active" data-insp="security">${icon("shield", 15)} Security</button>
           <button class="insp-tab mem" data-insp="memory">${icon("brain", 15)} Memory</button>
+          <button class="insp-collapse" id="inspCollapse" data-tip="Collapse to metrics|Slide into a live quick-metrics rail" data-tip-side="bottom">${icon("collapse", 16)}</button>
         </div>
         <div class="insp-body" id="inspBody"></div>
+        <div class="metrics-rail" id="metricsRail">
+          <button class="rail-expand" id="railExpand" data-tip="Expand panel" data-tip-side="right">${icon("expand", 16)}</button>
+          <div class="rail-tiles" id="railTiles"></div>
+        </div>
       </aside>
     </div>
 
@@ -94,17 +105,23 @@ function buildShell(): void {
   </div>`));
 }
 
-// ───────────────────────── sidebar (demo sessions) ─────────────────────────
-function renderSessions(): void {
-  const items = [
-    { t: "Harden the export path", m: "opus-4-8", n: "12 turns", active: true },
-    { t: "Scan PR #42 comments", m: "opus-4-8", n: "blocked ×2" },
-    { t: "Wire the memory dashboard", m: "sonnet-4-6", n: "done" },
-  ];
-  $("#sessList")!.innerHTML = items.map((s) => `
-    <div class="sess ${s.active ? "active" : ""}">
-      <div class="t">${esc(s.t)}</div>
-      <div class="m"><b>${esc(s.m)}</b> · ${esc(s.n)}</div>
+// ───────────────────────── sidebar (real omp sessions) ─────────────────────────
+function relTime(ms: number): string {
+  const s = Math.round((Date.now() - ms) / 1000);
+  if (s < 60) return "just now";
+  const m = Math.floor(s / 60); if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60); if (h < 24) return `${h}h ago`;
+  return `${Math.floor(h / 24)}d ago`;
+}
+async function renderSessions(): Promise<void> {
+  const sessions = await bridge.sessions().catch(() => [] as SessionInfo[]);
+  const list = $("#sessList");
+  if (!list) return;
+  if (!sessions.length) { list.innerHTML = `<div class="side-empty">No sessions yet — send a prompt to start one. They persist here across runs.</div>`; return; }
+  list.innerHTML = sessions.map((s, i) => `
+    <div class="sess ${i === 0 ? "active" : ""}" data-sid="${esc(s.id)}" data-tip="${esc(s.title)}|${esc(prettyModel(s.model))} · ${s.turns} turn${s.turns === 1 ? "" : "s"} · ${relTime(s.updatedAt)}" data-tip-side="right">
+      <div class="t">${esc(s.title)}</div>
+      <div class="m"><b>${esc(prettyModel(s.model))}</b> · ${s.turns} turn${s.turns === 1 ? "" : "s"} · ${relTime(s.updatedAt)}</div>
     </div>`).join("");
 }
 
@@ -151,11 +168,11 @@ async function send(): Promise<void> {
     if (e.type === "token") { buf += e.text; textEl.innerHTML = mdInline(buf) + `<span class="cursor"></span>`; scrollChat(); }
     else if (e.type === "tool") addEvent(`<div class="evt tool">${icon("eye", 15)}<span class="k">${esc(e.name)}</span><span>${esc(e.detail)}</span></div>`);
     else if (e.type === "block") onBlock(e);
-    else if (e.type === "usage") { state.liveUsage = { used: e.used, size: e.size, cost: e.cost }; renderStatus(); }
+    else if (e.type === "usage") { state.liveUsage = { used: e.used, size: e.size, cost: e.cost }; renderStatus(); renderMetricsRail(); }
     else if (e.type === "done") { textEl.innerHTML = mdInline(buf); state.streaming = false; setSendEnabled(); }
   };
   try { await bridge.sendPrompt(text, onEvent); }
-  finally { if (state.streaming) { textEl.innerHTML = mdInline(buf); state.streaming = false; setSendEnabled(); } }
+  finally { if (state.streaming) { textEl.innerHTML = mdInline(buf); state.streaming = false; setSendEnabled(); } void renderSessions(); }
 }
 
 function onBlock(e: Extract<ChatEvent, { type: "block" }>): void {
@@ -183,7 +200,7 @@ function setSendEnabled(): void {
 // ───────────────────────── inspector ─────────────────────────
 function focusInspector(tab: Tab): void {
   state.inspectorTab = tab;
-  if (state.inspectorCollapsed) toggleInspector(true);
+  if (state.inspectorRail) setInspectorRail(false);
   $$(".insp-tab").forEach((t) => t.classList.toggle("active", (t as HTMLElement).dataset.insp === tab));
   $$(".rail-btn").forEach((b) => b.classList.toggle("active", (b as HTMLElement).dataset.rail === tab));
   lastInspHash = ""; renderInspector();
@@ -198,23 +215,60 @@ function renderInspector(): void {
   const top = body.scrollTop;
   body.innerHTML = html;
   body.scrollTop = top;
+  const info = $("#secInfo");
+  if (info) attachRichTip(info, RICHTIP_DUCKDB);
+}
+
+// ───────────────────────── quick-metrics rail (collapsed inspector) ─────────────────────────
+function renderMetricsRail(): void {
+  const tiles = $("#railTiles");
+  if (!tiles) return;
+  const s = state.memory?.session, lu = state.liveUsage, sec = state.security;
+  const cur = lu ? lu.used : (s?.current ?? 0);
+  const turns = s?.turns ?? 0;
+  const hit = s?.cache.hit ?? 0;
+  const avg = turns ? Math.round(cur / turns) : 0;
+  const findings = sec ? sec.findings.reduce((a, r) => a + Number(r.n || 0), 0) : 0;
+  const quar = sec ? sec.quarantine.length : 0;
+  const tile = (n: string, label: string, cls: string, tip: string) =>
+    `<div class="tile ${cls}" data-tip="${esc(label)}|${esc(tip)}" data-tip-side="left"><div class="n">${esc(n)}</div><div class="l">${esc(label)}</div></div>`;
+  tiles.innerHTML =
+    tile(`${Math.round(hit * 100)}%`, "cache", "g", "KV-cache hit rate — higher means the frozen prefix is paying off") +
+    tile(fmtNum(avg), "avg/turn", "c", "Average tokens per turn") +
+    tile(fmtNum(cur), "context", "b", "Context tokens in use this turn") +
+    tile(String(turns), "turns", "b2", "Agent turns in this session") +
+    tile(String(findings), "findings", "m", "Scanner findings so far") +
+    tile(String(quar), "quarantd", "r", "Artifacts currently quarantined");
+}
+function setInspectorRail(rail: boolean): void {
+  state.inspectorRail = rail;
+  $("#inspector")!.classList.toggle("rail", rail);
+  if (rail) renderMetricsRail();
 }
 
 function chips(items: { cls: string; n: number | string; l: string }[]): string {
   return `<div class="chips">${items.map((c) => `<div class="chip ${c.cls}"><div class="n">${esc(c.n)}</div><div class="l">${esc(c.l)}</div></div>`).join("")}</div>`;
 }
 
+function secIntro(): string {
+  return `<div class="sec-intro">
+    <div class="sec-intro-h"><span class="sec-pulse">${icon("shield", 17)}</span><b>Active protection</b>
+      <button class="info-dot" id="secInfo" aria-label="How findings are stored">${icon("info", 13)}</button></div>
+    <div class="sec-intro-d">Every tool call the agent makes — shell commands, file writes, and any fetched or imported text — is scanned for hidden-Unicode prompt injection (zero-width characters, look-alike homoglyphs, bidi tricks) <b>before it runs</b>. Anything quarantined is blocked fail-closed, and content from suspicious sources can't quietly promote itself into memory.</div>
+  </div>`;
+}
 function securityHtml(d: SecuritySnapshot | null): string {
-  if (!d) return emptyDb();
-  const totFind = d.findings.reduce((a, r) => a + Number(r.n || 0), 0);
-  const promoted = Number((d.promotion.find((r) => r.outcome === "promoted") || {}).n || 0);
-  const blocked = Number((d.promotion.find((r) => r.outcome === "blocked") || {}).n || 0);
-  let h = chips([
-    { cls: "q", n: d.quarantine.length, l: "quarantined" },
-    { cls: "a", n: d.approvals.length, l: "awaiting review" },
+  const totFind = d ? d.findings.reduce((a, r) => a + Number(r.n || 0), 0) : 0;
+  const promoted = d ? Number((d.promotion.find((r) => r.outcome === "promoted") || {}).n || 0) : 0;
+  const blocked = d ? Number((d.promotion.find((r) => r.outcome === "blocked") || {}).n || 0) : 0;
+  let h = secIntro();
+  h += chips([
+    { cls: "q", n: d ? d.quarantine.length : 0, l: "quarantined" },
+    { cls: "a", n: d ? d.approvals.length : 0, l: "awaiting review" },
     { cls: "f", n: totFind, l: "findings" },
     { cls: "g", n: promoted, l: "promoted facts" },
   ]);
+  if (!d) { h += `<div class="empty">Nothing has tripped the scanner yet. The moment a tool call carries hidden-Unicode or another injection, the finding, the quarantine queue, and the audit trail appear right here.</div>`; return h; }
   h += accordion("sec.quarantine", "Quarantine review", "isolated · fail-closed",
     table([{ key: "artifact_id", label: "artifact", mono: true }, { key: "source", label: "source" }, { key: "trust_label", label: "trust", pill: true }, { key: "risk_score", label: "risk", mono: true }], d.quarantine),
     OPEN.has("sec.quarantine"), String(d.quarantine.length));
@@ -277,8 +331,9 @@ function memoryHtml(d: MemorySnapshot | null): string {
   return h;
 }
 
-const emptyDb = () => `<div class="empty">No live security DB yet — <code>agent_obs.duckdb</code> is created on the first
-  blocked tool call. Launch omp with the gate and trigger a block, or run <code>bun run demo-P4.3</code>.</div>`;
+const RICHTIP_DUCKDB = `<div class="rt-h">${icon("shield", 14)} Where this is stored</div>
+  <div class="rt-d">Scans, findings, approvals, and the export audit live in a local embedded <b>DuckDB</b> column store on your machine — fast analytics, and nothing leaves the device. The panels here are read-only views over it.</div>
+  <a class="rt-link" href="https://duckdb.org" target="_blank" rel="noopener noreferrer">duckdb.org ${icon("expand", 12)}</a>`;
 
 // ───────────────────────── status bar ─────────────────────────
 function renderStatus(): void {
@@ -316,7 +371,7 @@ async function refresh(): Promise<void> {
     const awaiting = sec?.approvals.length ?? 0;
     const badge = $("#railBadge")!;
     badge.hidden = awaiting === 0; badge.textContent = String(awaiting);
-    renderInspector(); renderStatus();
+    renderInspector(); renderStatus(); renderMetricsRail();
   } catch {
     renderStatus();
   }
@@ -327,9 +382,15 @@ function toggleSidebar(force?: boolean): void {
   state.sidebarCollapsed = force ?? !state.sidebarCollapsed;
   $("#sidebar")!.classList.toggle("collapsed", state.sidebarCollapsed);
 }
-function toggleInspector(open?: boolean): void {
-  state.inspectorCollapsed = open != null ? !open : !state.inspectorCollapsed;
-  $("#inspector")!.classList.toggle("collapsed", state.inspectorCollapsed);
+/** Update the composer's quick agent-controls (model · mode · thinking) labels. */
+function updateComposerTools(): void {
+  const model = state.config.find((c) => c.id === "model");
+  const mode = state.config.find((c) => c.id === "mode");
+  const think = state.config.find((c) => c.id === "thinking");
+  const set = (sel: string, v: string) => { const e = $(sel); if (e) e.textContent = v; };
+  if (model) set("#ctModelName", prettyModel(model.currentValue));
+  if (mode) set("#ctModeName", mode.currentValue === "plan" ? "Plan" : "Agent");
+  if (think) { const cur = think.options.find((o) => o.value === think.currentValue); set("#ctThinkName", prettyLevel(cur?.name ?? think.currentValue)); }
 }
 
 function wire(): void {
@@ -357,6 +418,15 @@ function wire(): void {
     else if (e.key === "-" || e.key === "_") { e.preventDefault(); nudgeZoom(-0.1); }
     else if (e.key === "0") { e.preventDefault(); resetZoom(); }
   });
+
+  // inspector collapse ↔ metrics rail
+  $("#inspCollapse")!.addEventListener("click", () => setInspectorRail(true));
+  $("#railExpand")!.addEventListener("click", () => setInspectorRail(false));
+
+  // composer agent controls → the model · mode · thinking picker
+  $("#ctModel")!.addEventListener("click", () => openConfigPopover($("#ctModel")!));
+  $("#ctMode")!.addEventListener("click", () => openConfigPopover($("#ctMode")!));
+  $("#ctThink")!.addEventListener("click", () => openConfigPopover($("#ctThink")!));
 
   // inspector tabs
   $$(".insp-tab").forEach((t) => t.addEventListener("click", () => focusInspector((t as HTMLElement).dataset.insp as Tab)));
@@ -409,7 +479,7 @@ const palette = createPalette(() => {
     { id: "zreset", title: "Reset text zoom to 100%", icon: "refresh", hint: "Ctrl 0", run: () => resetZoom() },
     { id: "new", title: "New session", icon: "plus", run: () => newSession() },
     { id: "side", title: "Toggle sidebar", icon: "layout", run: () => toggleSidebar() },
-    { id: "insp", title: "Toggle inspector", icon: "layout", run: () => toggleInspector() },
+    { id: "insp", title: "Collapse / expand inspector (metrics rail)", icon: "collapse", run: () => setInspectorRail(!state.inspectorRail) },
     { id: "refresh", title: "Refresh dashboards now", icon: "refresh", run: () => refresh() },
   ];
   const model = state.config.find((c) => c.id === "model");
@@ -425,6 +495,7 @@ async function loadConfig(): Promise<void> {
     state.commands = await bridge.commands();
     const model = state.config.find((c) => c.id === "model");
     if (model) { state.model = model.currentValue; const mn = $("#modelName"); if (mn) mn.textContent = prettyModel(model.currentValue); }
+    updateComposerTools();
   } catch { /* browser/no-session: keep defaults */ }
 }
 
@@ -434,6 +505,7 @@ async function applyConfig(configId: string, value: string): Promise<void> {
   try { state.config = await bridge.setConfig(configId, value); } catch { /* keep optimistic */ }
   const o = state.config.find((c) => c.id === configId); if (o) o.currentValue = value;
   if (configId === "model") { state.model = value; const mn = $("#modelName"); if (mn) mn.textContent = prettyModel(value); renderStatus(); }
+  updateComposerTools();
   showToast({ title: `${opt?.name ?? configId} → ${label}`, desc: configId === "model" ? "New turns use this model." : "Applied to the active session.", actions: [{ label: "OK" }], timeout: 2400 });
 }
 
@@ -546,7 +618,7 @@ function initZoom(): void {
 
 // ───────────────────────── boot ─────────────────────────
 buildShell();
-renderSessions();
+void renderSessions();
 initTooltips();
 wire();
 initZoom();
@@ -556,3 +628,4 @@ void loadConfig().then(renderStatus);
 refresh();
 setInterval(refresh, 4000);
 setInterval(renderStatus, 1000);
+setInterval(() => void renderSessions(), 15000);

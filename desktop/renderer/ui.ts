@@ -56,6 +56,36 @@ export function initTooltips(): void {
   window.addEventListener("scroll", () => { tip.classList.remove("show"); cur = null; }, true);
 }
 
+// ───────────────────────── rich (hoverable) tooltip ─────────────────────────
+// Like a tooltip, but pointer-events:auto and stays open while hovered — so it
+// can hold a clickable link. Used for the "where findings are stored" → DuckDB.
+export function attachRichTip(trigger: HTMLElement, html: string): void {
+  let card: HTMLElement | null = null, overT = false, overC = false;
+  let timer: number | undefined;
+  const hide = () => {
+    timer = window.setTimeout(() => {
+      if (!overT && !overC && card) { const c = card; card = null; c.classList.remove("show"); setTimeout(() => c.remove(), 160); }
+    }, 160);
+  };
+  const show = () => {
+    if (card) return;
+    card = el(`<div class="richtip">${html}</div>`);
+    document.body.appendChild(card);
+    const r = trigger.getBoundingClientRect();
+    const cr = card.getBoundingClientRect();
+    let x = r.left - cr.width - 10;
+    if (x < 8) x = Math.min(r.right + 10, window.innerWidth - cr.width - 8);
+    let y = Math.max(8, Math.min(r.top + r.height / 2 - cr.height / 2, window.innerHeight - cr.height - 8));
+    card.style.left = `${Math.round(x)}px`;
+    card.style.top = `${Math.round(y)}px`;
+    requestAnimationFrame(() => card!.classList.add("show"));
+    card.addEventListener("mouseenter", () => { overC = true; clearTimeout(timer); });
+    card.addEventListener("mouseleave", () => { overC = false; hide(); });
+  };
+  trigger.addEventListener("mouseenter", () => { overT = true; clearTimeout(timer); show(); });
+  trigger.addEventListener("mouseleave", () => { overT = false; hide(); });
+}
+
 // ───────────────────────── command palette ─────────────────────────
 export interface Action { id: string; title: string; icon: string; hint?: string; run: () => void }
 

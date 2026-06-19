@@ -34,6 +34,9 @@ const RAW: Record<string, string> = {
   // minimise / maximise (window controls)
   minus: P("M6 12h12"),
   square: P("M6 6.5h12v11H6z"),
+  // collapse-right / expand-left (inspector ↔ metrics rail)
+  collapse: P("M7 6l5 6-5 6") + P("M13 6l5 6-5 6"),
+  expand: P("M17 6l-5 6 5 6") + P("M11 6l-5 6 5 6"),
   // command
   command: P("M9 6a1.8 1.8 0 1 0 1.8 1.8V6zM9 18a1.8 1.8 0 1 1 1.8-1.8V18zM15 6a1.8 1.8 0 1 1-1.8 1.8H15zM15 18a1.8 1.8 0 1 0-1.8-1.8H15z") + P("M9.2 7.8h5.6v8.4H9.2z"),
   // eye (review)

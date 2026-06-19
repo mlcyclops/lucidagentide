@@ -31,6 +31,7 @@ export interface ConfigOption {
   currentValue: string; options: { value: string; name: string }[];
 }
 export interface OmpCommand { name: string; description?: string; hint?: string }
+export interface SessionInfo { id: string; title: string; model: string; updatedAt: number; turns: number }
 
 export type ChatEvent =
   | { type: "token"; text: string }
@@ -47,6 +48,7 @@ export interface LucidBridge {
   config(): Promise<ConfigOption[]>;
   setConfig(configId: string, value: string): Promise<ConfigOption[]>;
   commands(): Promise<OmpCommand[]>;
+  sessions(): Promise<SessionInfo[]>;
   newSession(): Promise<void>;
   setZoom(factor: number): void;
 }
@@ -111,6 +113,7 @@ export const bridge: LucidBridge = {
   config: async () => (await getData("/api/config")) ?? FALLBACK_CONFIG,
   setConfig: async (id, value) => (await post("/api/setConfig", { configId: id, value })) ?? FALLBACK_CONFIG,
   commands: async () => (await getData("/api/commands")) ?? [],
+  sessions: async () => (await getData("/api/sessions")) ?? [],
   newSession: async () => { await post("/api/newSession", {}); },
   setZoom: (f) => { if (shell?.setZoom) shell.setZoom(f); else (document.body.style as any).zoom = String(f); },
 };

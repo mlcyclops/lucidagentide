@@ -7,7 +7,7 @@
 // browser build and the desktop app share one real backend. The preload only
 // adds native window controls + crisp zoom.
 
-import { app, BrowserWindow, ipcMain } from "electron";
+import { app, BrowserWindow, ipcMain, shell } from "electron";
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
@@ -44,6 +44,8 @@ function createWindow(): void {
     webPreferences: { preload: preloadPath(), contextIsolation: true, nodeIntegration: false },
   });
   win.once("ready-to-show", () => win!.show());
+  // external links (e.g. duckdb.org) open in the OS browser, not a new Electron window
+  win.webContents.setWindowOpenHandler(({ url }) => { if (/^https?:/.test(url)) shell.openExternal(url); return { action: "deny" }; });
   win.loadURL(`http://localhost:${PORT}`);
   win.on("closed", () => (win = null));
 }
