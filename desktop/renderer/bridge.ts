@@ -71,6 +71,12 @@ export interface LucidBridge {
   saveKey(env: string, key: string): Promise<AuthStatus | null>;
   oauthLogin(oauthId: string): Promise<{ started: boolean; url: string; output: string } | null>;
   oauthLogout(oauthId: string): Promise<AuthStatus | null>;
+  // AskSage gov gateway (ADR-0007)
+  asksage(): Promise<{ configured: boolean; base: string; only: boolean } | null>;
+  saveAsksage(opts: { baseUrl?: string; only?: boolean }): Promise<{ configured: boolean; base: string; only: boolean } | null>;
+  asksageTokens(): Promise<{ used: number; limit: number } | null>;
+  asksagePersonas(): Promise<{ id: string; description: string }[] | null>;
+  applyPersona(id: string | null): Promise<{ applied?: boolean; cleared?: boolean; scan?: { ok: boolean; reason?: string; findings: number } } | null>;
   // workspace (folder the agent works in; local or cloned remote)
   workspace(): Promise<WorkspaceInfo | null>;
   setWorkspace(path: string): Promise<WorkspaceInfo | null>;
@@ -156,6 +162,11 @@ export const bridge: LucidBridge = {
   saveKey: (env, key) => post("/api/auth/key", { env, key }),
   oauthLogin: (oauthId) => post("/api/auth/oauth", { oauthId }),
   oauthLogout: (oauthId) => post("/api/auth/logout", { oauthId }),
+  asksage: () => getData("/api/asksage"),
+  saveAsksage: (opts) => post("/api/asksage", opts),
+  asksageTokens: () => getData("/api/asksage/tokens"),
+  asksagePersonas: () => getData("/api/asksage/personas"),
+  applyPersona: (id) => post("/api/asksage/persona", id ? { id } : { clear: true }),
   workspace: () => getData("/api/workspace"),
   setWorkspace: (path) => post("/api/workspace", { path }),
   cloneWorkspace: (url) => post("/api/workspace/clone", { url }),

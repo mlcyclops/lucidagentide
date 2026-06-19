@@ -15,7 +15,8 @@ import { backend } from "./acp_backend.ts";
 import { listSessions, sessionMessages } from "./sessions.ts";
 import { providerAuth } from "./auth_status.ts";
 import { cloneRepo, setWorkspace, workspaceInfo } from "./workspace.ts";
-import { applyEnv, load as loadSettings, setKey, setUsername } from "./settings_store.ts";
+import { applyEnv, load as loadSettings, setAsksage, setKey, setUsername } from "./settings_store.ts";
+import { asksageConfig, listPersonas, monthlyTokens, scanPersona, wrapPersona } from "./asksage.ts";
 import { homedir } from "node:os";
 import { existsSync } from "node:fs";
 
@@ -109,6 +110,30 @@ const server = Bun.serve({
         const { oauthId } = await req.json();
         Bun.spawnSync([ompBin(), "auth-broker", "logout", String(oauthId)], { timeout: 4000 });
         return json({ ok: true, data: providerAuth() });
+      }
+      // AskSage gov gateway (ADR-0007)
+      if (p === "/api/asksage") {
+        if (req.method === "POST") {
+          const b = await req.json();
+          const prevBase = asksageConfig().base;
+          setAsksage({ baseUrl: typeof b.baseUrl === "string" ? b.baseUrl : undefined, only: typeof b.only === "boolean" ? b.only : undefined });
+          if (typeof b.baseUrl === "string" && b.baseUrl.replace(/\/+$/, "") !== prevBase) backend.restart(); // re-register provider against new base
+        }
+        const c = asksageConfig();
+        return json({ ok: true, data: { configured: c.configured, base: c.base, only: c.only } });
+      }
+      if (p === "/api/asksage/tokens") return json({ ok: true, data: await monthlyTokens() });
+      if (p === "/api/asksage/personas") return json({ ok: true, data: await listPersonas() });
+      if (p === "/api/asksage/persona" && req.method === "POST") {
+        const { id, clear } = await req.json();
+        if (clear) { backend.setPersona(null); return json({ ok: true, data: { cleared: true } }); }
+        const personas = (await listPersonas()) ?? [];
+        const persona = personas.find((x) => x.id === String(id));
+        if (!persona) return json({ ok: false, error: "persona not found" });
+        const scan = await scanPersona(persona.text); // SAME scanner as tool calls — fail-closed
+        if (!scan.ok) { backend.setPersona(null); return json({ ok: true, data: { applied: false, scan } }); }
+        backend.setPersona(wrapPersona(persona.id, persona.text)); // delimited, delivered in the user turn
+        return json({ ok: true, data: { applied: true, scan } });
       }
       if (p === "/api/config") return json({ ok: true, data: await backend.getConfig() });
       if (p === "/api/commands") return json({ ok: true, data: await backend.getCommands() });

@@ -486,3 +486,14 @@ Three lines per session: **shipped / stubbed / next** (CLAUDE.md session ritual)
   real install/CI (can't run the Electron bundle from this host); mac arch picks
   the right bundled bun/uv at runtime.
 - **next:** cut a tag to produce signed installers + smoke-test first-run on a Mac.
+
+## P-ASKSAGE: AskSage gov gateway as an omp provider extension
+- **shipped:** harness/omp/asksage_extension.ts registers AskSage as two omp
+  providers via pi.registerProvider (openai + anthropic routes, x-access-tokens
+  header), loaded alongside the gate (second -e). Desktop: key in Settings, gov
+  models auto-listed over ACP, monthly-usage chip (5-min poll), persona dropdown
+  (scanned + delimited), AskSage-only lockdown w/ auto-switch. ADR-0007.
+- **stubbed:** Google/Gemini route deferred; live model reply + SSE streaming need
+  real AskSage quota (fallback to non-streaming compat flagged).
+- **next:** smoke-test a live AskSage turn (header on the wire, reply renders) and
+  populate personas from a real account; add Gemini route.

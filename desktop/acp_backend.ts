@@ -16,6 +16,9 @@ import { currentWorkspace } from "./workspace.ts";
 const REPO = join(import.meta.dir, "..");
 // Absolute so the gate loads from THIS repo even when omp runs in another workspace.
 const GATE = join(REPO, "harness", "omp", "security_extension.ts");
+// AskSage gov-gateway provider extension, loaded alongside the gate (omp -e is
+// repeatable). No-op unless ASKSAGE_API_KEY is set in the spawn env. ADR-0007.
+const ASKSAGE = join(REPO, "harness", "omp", "asksage_extension.ts");
 function ompBin(): string {
   // Prefer the path the Electron main process resolved (bundled or app-managed
   // install); fall back to the user's bun bin, then PATH.
@@ -38,8 +41,15 @@ class Backend {
   private sessionId: string | null = null;
   private starting: Promise<void> | null = null;
   private listener: ((e: ChatEvent) => void) | null = null;
+  // Approved (scanned + delimited) AskSage persona, delivered once per session
+  // inside the first user turn — never the frozen prefix (ADR-0007 / invariant #5).
+  private persona: string | null = null;
+  private personaDelivered = false;
   configOptions: any[] = [];
   commands: any[] = [];
+
+  /** Set/clear the active persona. Pass the ALREADY-scanned, delimiter-wrapped text. */
+  setPersona(wrapped: string | null): void { this.persona = wrapped; this.personaDelivered = false; }
 
   private emit(e: ChatEvent): void { this.listener?.(e); }
 
@@ -47,7 +57,7 @@ class Backend {
     if (this.acp) return;
     if (!this.starting) {
       this.starting = (async () => {
-        const acp = new ACPClient(ompBin(), ["acp", "-e", GATE], currentWorkspace());
+        const acp = new ACPClient(ompBin(), ["acp", "-e", GATE, "-e", ASKSAGE], currentWorkspace());
         acp.onNotify = (method, params) => {
           if (method !== "session/update") return;
           const u = params?.update ?? params;
@@ -110,6 +120,7 @@ class Backend {
     await this.start();
     if (this.sessionId) await this.acp!.request("session/close", { sessionId: this.sessionId }).catch(() => {});
     this.sessionId = null;
+    this.personaDelivered = false; // re-deliver the persona in the fresh session
     await this.ensureSession();
   }
 
@@ -118,6 +129,7 @@ class Backend {
   restart(): void {
     try { this.acp?.stop(); } catch { /* ignore */ }
     this.acp = null; this.starting = null; this.sessionId = null; this.listener = null;
+    this.personaDelivered = false; // keep the chosen persona; re-deliver after respawn
   }
 
   /** Run one turn, streaming events to onEvent; resolves after `done`. */
@@ -125,7 +137,10 @@ class Backend {
     this.listener = onEvent;
     try {
       await this.ensureSession();
-      await this.acp!.request("session/prompt", { sessionId: this.sessionId, prompt: [{ type: "text", text }] });
+      // Deliver the approved persona once, as a delimited preamble in the user turn.
+      let body = text;
+      if (this.persona && !this.personaDelivered) { body = `${this.persona}\n\n${text}`; this.personaDelivered = true; }
+      await this.acp!.request("session/prompt", { sessionId: this.sessionId, prompt: [{ type: "text", text: body }] });
     } catch (e) {
       onEvent({ type: "token", text: `\n[agent unavailable: ${String((e as any)?.message ?? e)}]` });
     }

@@ -417,3 +417,59 @@ spec-inferred): `session/new`→`configOptions`, `agent_message_chunk`,
 `/api/chat` prompt returned a correct model reply with live usage. Still
 unexercised: `tool_call`/`tool_call_update` shapes (the verifying turns used no
 tools); the gate's stderr `[BLOCKED …]` line is the reliable block signal regardless.
+
+-----
+
+## ADR-0007 — AskSage gov gateway as an omp provider extension (no fork)
+
+### Context
+
+The earlier prototype (`AgentIDEHarness`) talked directly to the **AskSage**
+accredited gov AI gateway (`https://api.civ.asksage.ai/server`) — a proxy fronting
+OpenAI / Anthropic / Google behind a non-standard `x-access-tokens` header. We want
+that capability inside LucidAgentIDE so the in-process scanner gate sits in front of
+AskSage-routed traffic too. Constraint: extend omp, never fork (CLAUDE.md #1).
+
+### Decision
+
+AskSage is an **omp provider extension** loaded via a second `-e` flag alongside the
+security gate (`omp acp -e <gate> -e <asksage>`; omp's `-e` is repeatable, verified).
+`harness/omp/asksage_extension.ts` calls omp's first-class
+`pi.registerProvider(name, { baseUrl, api, apiKey, headers })` — NOT a fork, NOT the
+`registerCustomApi` path the initial planning pass guessed. Two providers map
+AskSage's per-route paths to native omp APIs:
+
+- `asksage-openai` → `api:"openai-completions"`, `baseUrl:.../server/openai/v1`
+  (omp appends `/chat/completions`); GPT / o-series models.
+- `asksage-anthropic` → `api:"anthropic-messages"`, `baseUrl:.../server/anthropic`
+  (omp appends `/v1/messages`); Claude models.
+
+Both inject `headers:{ "x-access-tokens": key }`; omp adds the provider-native auth
+header (`Authorization: Bearer` / `x-api-key`) from `apiKey`. Models registered here
+surface automatically over ACP, so the desktop picker needs no hardcoded list.
+Google/Gemini deferred (more bespoke route).
+
+### Load-bearing choices
+
+- **Key handling.** `ASKSAGE_API_KEY` rides the existing key store
+  (`~/.omp/lucid-gui.json`, mode 0600, git-ignored) + `applyEnv`; never committed,
+  only masked status (last-4) leaves the server. Base URL + `asksageOnly` lockdown
+  live in the same settings file.
+- **Personas are untrusted.** AskSage personas are server-supplied text; injecting
+  one as guidance is an untrusted-content path. Every persona passes the SAME Unicode
+  scanner as tool calls (`scanAndDecide`) before use — quarantined personas are
+  blocked (fail-closed), clean ones are wrapped in `UNTRUSTED_CONTENT_*` delimiters
+  and delivered inside a user turn, never the frozen prefix (invariants #3, #5, #6).
+- **Lockdown.** An "AskSage-only" toggle filters the model picker to gov models and
+  auto-switches off any direct model, so a gov deployment can guarantee that every
+  turn routes through the accredited gateway.
+
+### Consequences
+
+- The security gate is unaffected — it still wraps every tool call, fail-closed, on
+  AskSage turns. The 130-test harness suite stays green.
+- Verified: 8 gov models appear over ACP; persona scanning blocks a hidden-Unicode
+  persona (42 findings) while allowing a clean one; lockdown filters the picker.
+- Not yet exercised live: a full AskSage model reply (needs gateway quota) and SSE
+  streaming on the passthrough routes (fallback to a `compat`/non-streaming shim if
+  AskSage lacks SSE) — flagged for first live use.

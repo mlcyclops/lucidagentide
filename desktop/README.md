@@ -75,6 +75,24 @@ native-only bits are crisp text zoom (`webFrame`) and window controls, from
 - **Live telemetry** — the status bar's context gauge + cost update from the
   session's `usage_update` stream.
 
+## AskSage gov gateway (ADR-0007)
+
+Optional: route turns through the **AskSage** accredited government AI gateway
+(`api.civ.asksage.ai`) instead of (or alongside) direct providers.
+
+- **Enable:** Settings → Providers → **AskSage · Gov gateway** → paste your
+  `ASKSAGE_API_KEY` (stored locally, git-ignored, never committed). Gov models
+  (`GPT-5.2 · AskSage Gov`, `Claude Opus 4 · AskSage Gov`, …) then appear in the
+  model picker automatically.
+- **How:** `harness/omp/asksage_extension.ts` registers two omp providers via
+  `pi.registerProvider` (OpenAI + Anthropic routes), loaded with a second `-e`
+  alongside the security gate — no fork, gate still fail-closed on every turn.
+- **Monthly usage** shows as a "Gov" chip in the status bar (refresh + 5-min poll).
+- **Personas** (composer dropdown) are **scanned** by the same Unicode scanner as
+  tool calls before use; a poisoned persona is blocked, a clean one is delimited.
+- **Lockdown:** Settings → "AskSage-only" routes every turn through the gateway and
+  hides direct providers.
+
 ## Verified vs. to confirm on first run
 
 - **Verified:** the renderer (screenshotted: chat stream, toast, palette, config

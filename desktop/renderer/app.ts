@@ -24,6 +24,10 @@ const state = {
   commands: [] as OmpCommand[],
   liveUsage: null as { used: number; size: number; cost: number } | null,
   workspace: null as WorkspaceInfo | null,
+  asksage: null as { configured: boolean; base: string; only: boolean } | null,
+  asksageTokens: null as { used: number; limit: number } | null,
+  persona: null as string | null, // active persona id (AskSage)
+  personas: [] as { id: string; description: string }[],
   zoom: 1,
   settingsOpen: false,
   lastOk: 0,
@@ -90,6 +94,7 @@ function buildShell(): void {
             <button class="ctool" id="ctModel" data-tip="Model|Click to change the model">${icon("spark", 14)}<span id="ctModelName">${esc(prettyModel(state.model))}</span>${icon("chevron", 11)}</button>
             <button class="ctool" id="ctMode" data-tip="Mode|Agent edits files · Plan drafts read-only">${icon("bolt", 14)}<span id="ctModeName">Agent</span>${icon("chevron", 11)}</button>
             <button class="ctool" id="ctThink" data-tip="Thinking depth|How hard the model reasons">${icon("brain", 14)}<span id="ctThinkName">High</span>${icon("chevron", 11)}</button>
+            <button class="ctool" id="ctPersona" data-tip="AskSage persona|Server-supplied role guidance — scanned before use" hidden>${icon("user", 14)}<span id="ctPersonaName">Persona</span>${icon("chevron", 11)}</button>
             <div class="ctool-spacer"></div>
             <span class="ctool-hint"><kbd>Enter</kbd> send · <kbd>⇧↵</kbd> newline · <kbd>⌘K</kbd> commands</span>
           </div>
@@ -288,8 +293,9 @@ function provCard(p: ProviderAuth): string {
 }
 async function renderSettings(): Promise<void> {
   const body = $("#setBody"); if (!body) return;
-  const [settings, auth, ws] = await Promise.all([bridge.getSettings(), bridge.auth(), bridge.workspace()]);
+  const [settings, auth, ws, asksage] = await Promise.all([bridge.getSettings(), bridge.auth(), bridge.workspace(), bridge.asksage()]);
   if (ws) { state.workspace = ws; renderWorkspaceBar(); }
+  if (asksage) state.asksage = asksage;
   body.innerHTML = `
     ${ws ? workspaceSection(ws) : ""}
     <div class="set-sec"><div class="set-lbl">Profile</div>
@@ -297,6 +303,12 @@ async function renderSettings(): Promise<void> {
         <button class="btn-mini ok" id="saveUsername">${icon("check", 12)} Save</button></div></div>
     <div class="set-sec"><div class="set-lbl">Providers <span class="set-sub">key or OAuth · majors first</span></div>
       ${(auth?.majors ?? []).map(provCard).join("") || `<div class="empty">couldn't read auth — is the server up to date?</div>`}</div>
+    <div class="set-sec"><div class="set-lbl">AskSage gov gateway <span class="set-sub">accredited proxy · set the key above</span></div>
+      <div class="prov-row"><input id="asksageBase" class="prov-key" placeholder="https://api.civ.asksage.ai/server" value="${esc(asksage?.base ?? "")}" />
+        <button class="btn-mini ok" id="asksageSaveBase">${icon("check", 12)} Save URL</button></div>
+      <label class="set-toggle"><input type="checkbox" id="asksageOnly" ${asksage?.only ? "checked" : ""}/>
+        <span><b>AskSage-only (lockdown)</b> — route every turn through the gov gateway and hide direct providers in the model picker.</span></label>
+      ${asksage?.configured ? `<div class="set-note ok">${icon("check", 12)} Gov gateway active — AskSage models appear in the picker, with monthly-usage and scanned personas.</div>` : `<div class="set-note">${icon("info", 12)} Add an <code>ASKSAGE_API_KEY</code> above (AskSage · Gov gateway) to enable gov models, usage, and personas.</div>`}</div>
     ${accordion("set.others", "More providers", "", (auth?.others ?? []).map(provCard).join(""), OPEN.has("set.others"))}
     <div class="set-note">${icon("shield", 12)} Keys are stored on this machine and passed to omp as env vars — never sent anywhere else. OAuth uses omp's own secure credential vault.</div>`;
 }
@@ -479,6 +491,15 @@ const RICHTIP_DUCKDB = `<div class="rt-h">${icon("shield", 14)} Where this is st
   <div class="rt-d">Scans, findings, approvals, and the export audit live in a local embedded <b>DuckDB</b> column store on your machine — fast analytics, and nothing leaves the device. The panels here are read-only views over it.</div>
   <a class="rt-link" href="https://duckdb.org" target="_blank" rel="noopener noreferrer">duckdb.org ${icon("expand", 12)}</a>`;
 
+// AskSage gov-gateway monthly-usage chip (only when a key is configured).
+function asksageChip(): string {
+  const a = state.asksage, t = state.asksageTokens;
+  if (!a?.configured) return "";
+  const pct = t && t.limit > 0 ? t.used / t.limit : 0;
+  const lock = a.only ? ` <span class="lock-tag" data-tip="AskSage-only lockdown is ON|Every turn routes through the accredited gov gateway">🔒</span>` : "";
+  return `<div class="seg seg-btn" data-asksage-refresh data-tip="AskSage gov usage|Monthly tokens used vs. limit — click to re-check (auto every 5 min)">${icon("shield", 12)} Gov${lock} <b style="color:${loadColor(pct)}">${t ? Math.round(pct * 100) + "%" : "—"}</b> ${icon("refresh", 11)}</div>`;
+}
+
 // ───────────────────────── status bar ─────────────────────────
 function renderStatus(): void {
   const m = state.memory, s = m?.session;
@@ -497,6 +518,7 @@ function renderStatus(): void {
       <b>${fmtNum(curTok)}</b>/${fmtNum(winTok)}</div>
     <div class="seg" data-tip="Prompt-cache hit rate|Share of input served from cache at the discounted rate — higher means lower cost per turn">${icon("bolt", 14)} cache <b style="color:${goodColor(hit)}">${Math.round(hit * 100)}%</b></div>
     ${budget ? `<div class="seg seg-btn" data-budget-refresh data-tip="${esc(budget.label)} usage|Click to re-check now · auto every 5 min. omp's last-seen value, so it can lag the official usage.">${esc(budget.label)} <b>${Math.round(budget.used * 100)}%</b> ${icon("refresh", 11)}</div>` : ""}
+    ${asksageChip()}
     <div class="seg" data-tip="Session cost">${fmtUSD(cost)}</div>
     <div class="right">
       <div class="seg" data-tip="Security gate|In-process, fail-closed">${icon("shield", 13)} gate active</div>
@@ -529,6 +551,7 @@ const BUDGET_POLL_MS = 5 * 60 * 1000;
 async function refreshBudget(manual = false): Promise<void> {
   const budgets = await bridge.budget();
   if (budgets && state.memory) state.memory.budgets = budgets;
+  if (state.asksage?.configured) state.asksageTokens = await bridge.asksageTokens(); // gov usage on the same cadence
   if (state.inspectorTab === "memory" && !state.inspectorRail) renderInspector();
   renderStatus();
   if (manual) showToast({
@@ -541,6 +564,27 @@ async function refreshBudget(manual = false): Promise<void> {
 function scheduleBudgetPoll(): void {
   if (budgetTimer) clearInterval(budgetTimer);
   budgetTimer = setInterval(() => void refreshBudget(false), BUDGET_POLL_MS);
+}
+
+// AskSage gov gateway: load config + personas once, refresh usage on demand.
+async function loadAsksage(): Promise<void> {
+  state.asksage = await bridge.asksage();
+  if (state.asksage?.configured) {
+    state.asksageTokens = await bridge.asksageTokens();
+    state.personas = (await bridge.asksagePersonas()) ?? [];
+  }
+  renderStatus();
+  updateComposerTools();
+}
+async function refreshAsksage(): Promise<void> {
+  state.asksage = await bridge.asksage();
+  state.asksageTokens = state.asksage?.configured ? await bridge.asksageTokens() : null;
+  renderStatus();
+  showToast({
+    title: state.asksageTokens ? "Gov usage refreshed" : "AskSage not reachable",
+    desc: state.asksageTokens ? `${fmtNum(state.asksageTokens.used)} / ${fmtNum(state.asksageTokens.limit)} tokens this month.` : "Add a key (and check the base URL) in Settings.",
+    actions: [{ label: "OK" }], timeout: 2400,
+  });
 }
 
 // ───────────────────────── interactions ─────────────────────────
@@ -557,6 +601,35 @@ function updateComposerTools(): void {
   if (model) set("#ctModelName", prettyModel(model.currentValue));
   if (mode) set("#ctModeName", mode.currentValue === "plan" ? "Plan" : "Agent");
   if (think) { const cur = think.options.find((o) => o.value === think.currentValue); set("#ctThinkName", prettyLevel(cur?.name ?? think.currentValue)); }
+  const pBtn = $("#ctPersona"); if (pBtn) (pBtn as HTMLElement).hidden = !state.asksage?.configured;
+  set("#ctPersonaName", state.persona ?? "Persona");
+}
+
+// AskSage persona picker (composer). Selecting one scans it server-side; a clean
+// persona becomes delimited guidance, a flagged one is blocked (fail-closed).
+async function openPersonaDropdown(anchor: HTMLElement): Promise<void> {
+  cfgClose?.();
+  const items = [{ id: "", description: "No persona — default behavior" }, ...state.personas];
+  const rows = items.map((p) => `<div class="cfg-opt ${(state.persona ?? "") === p.id ? "on" : ""}" data-pid="${esc(p.id)}"><span class="tick">${icon("check", 13)}</span><span class="nm">${esc(p.id || "None")}</span><span class="id">${esc((p.description || "").slice(0, 44))}</span></div>`).join("");
+  const { node, close } = popover(anchor, `<div class="cfg-sec"><div class="cfg-lbl">Persona <span class="cur">scanned before use</span></div><div class="cfg-list" id="personaList">${rows || `<div class="empty">No personas — check your AskSage key.</div>`}</div></div>`, () => { cfgClose = null; });
+  cfgClose = close;
+  $("#personaList", node)?.addEventListener("click", (e) => {
+    const it = (e.target as HTMLElement).closest("[data-pid]") as HTMLElement | null;
+    if (!it) return;
+    close();
+    void applyPersona(it.dataset.pid || null);
+  });
+}
+async function applyPersona(id: string | null): Promise<void> {
+  const r = await bridge.applyPersona(id);
+  if (!id || r?.cleared) { state.persona = null; updateComposerTools(); showToast({ title: "Persona cleared", desc: "Back to default behavior.", actions: [{ label: "OK" }], timeout: 2000 }); return; }
+  if (r?.applied) {
+    state.persona = id; updateComposerTools();
+    showToast({ title: `Persona "${id}" applied`, desc: "Scanned clean — added as delimited role guidance on your next turn.", actions: [{ label: "OK" }], timeout: 3200 });
+  } else {
+    state.persona = null; updateComposerTools();
+    showToast({ title: "Persona blocked", desc: `The scanner flagged this persona (${r?.scan?.findings ?? 0} finding(s)); it was not applied.`, meta: "fail-closed — untrusted content can't enter the prompt", actions: [{ label: "OK" }], timeout: 6000 });
+  }
 }
 
 function wire(): void {
@@ -594,6 +667,7 @@ function wire(): void {
   $("#ctModel")!.addEventListener("click", () => openOptionDropdown($("#ctModel")!, "model"));
   $("#ctMode")!.addEventListener("click", () => openOptionDropdown($("#ctMode")!, "mode"));
   $("#ctThink")!.addEventListener("click", () => openOptionDropdown($("#ctThink")!, "thinking"));
+  $("#ctPersona")!.addEventListener("click", () => openPersonaDropdown($("#ctPersona")!));
 
   // settings page actions (delegated)
   $("#setClose")!.addEventListener("click", () => closeSettings());
@@ -629,6 +703,31 @@ function wire(): void {
       await bridge.saveKey(env, val);
       showToast({ title: `${env} saved`, desc: "Stored on this machine and passed to omp. New turns use it.", actions: [{ label: "OK" }], timeout: 2800 });
       void renderSettings();
+      if (env === "ASKSAGE_API_KEY") { await loadConfig(); await loadAsksage(); } // surface gov models + usage
+      return;
+    }
+    if (t.closest("#asksageSaveBase")) {
+      const base = ($("#asksageBase", $("#setBody")!) as HTMLInputElement)?.value.trim() ?? "";
+      await bridge.saveAsksage({ baseUrl: base });
+      showToast({ title: "AskSage base URL saved", desc: base || "Reset to the default gov endpoint.", actions: [{ label: "OK" }], timeout: 2600 });
+      await loadConfig(); await loadAsksage(); void renderSettings();
+      return;
+    }
+    if (t.closest("#asksageOnly")) {
+      const only = ($("#asksageOnly", $("#setBody")!) as HTMLInputElement)?.checked ?? false;
+      await bridge.saveAsksage({ only });
+      state.asksage = { ...(state.asksage ?? { configured: false, base: "" }), only };
+      // Lockdown must guarantee gateway routing: if we're on a direct model, switch
+      // to a gov one so no turn can bypass AskSage.
+      if (only) {
+        const model = state.config.find((c) => c.id === "model");
+        if (model && !isAsksage(model.currentValue)) {
+          const gov = model.options.find((o) => isAsksage(o.value));
+          if (gov) await applyConfig("model", gov.value);
+        }
+      }
+      showToast({ title: only ? "Lockdown ON" : "Lockdown off", desc: only ? "Every turn now routes through the AskSage gov gateway." : "Direct providers are selectable again.", actions: [{ label: "OK" }], timeout: 2800 });
+      updateComposerTools(); renderStatus();
       return;
     }
     const clear = t.closest("[data-clearkey]") as HTMLElement | null;
@@ -678,9 +777,11 @@ function wire(): void {
   $("#sessList")!.addEventListener("click", (e) => { const s = (e.target as HTMLElement).closest(".sess") as HTMLElement | null; if (s?.dataset.sid) void resumeSession(s.dataset.sid); });
   $(".brand")!.addEventListener("click", () => toggleSidebar());
 
-  // status bar: click the budget chip to re-check provider usage now
+  // status bar: click the budget / gov chips to re-check usage now
   $("#statusbar")!.addEventListener("click", (e) => {
-    if ((e.target as HTMLElement).closest("[data-budget-refresh]")) void refreshBudget(true);
+    const t = e.target as HTMLElement;
+    if (t.closest("[data-asksage-refresh]")) { void refreshAsksage(); return; }
+    if (t.closest("[data-budget-refresh]")) void refreshBudget(true);
   });
   $("#newSession")!.addEventListener("click", () => newSession());
   const w = (window as any).lucid?.win;
@@ -748,14 +849,22 @@ const MODEL_ORDER = [
   "claude-sonnet-4-6", "claude-sonnet-4-5", "claude-haiku-4-5",
 ];
 const bareModel = (v: string) => v.replace(/^anthropic\//, "");
+const isAsksage = (v: string) => /asksage/i.test(v);
 function curatedModels(opt: ConfigOption): { value: string; name: string }[] {
+  const asksage = opt.options.filter((o) => isAsksage(o.value));
+  const ensureCurrent = (list: { value: string; name: string }[]) => {
+    if (!list.some((o) => o.value === opt.currentValue)) {
+      const cur = opt.options.find((o) => o.value === opt.currentValue);
+      if (cur) list.unshift(cur); // never hide what's actually selected
+    }
+    return list;
+  };
+  // Lockdown: only the gov-gateway models are selectable.
+  if (state.asksage?.only) return ensureCurrent(asksage.slice());
   const byBare = new Map(opt.options.map((o) => [bareModel(o.value), o]));
   const list = MODEL_ORDER.map((id) => byBare.get(id)).filter(Boolean) as { value: string; name: string }[];
-  if (!list.some((o) => o.value === opt.currentValue)) {
-    const cur = opt.options.find((o) => o.value === opt.currentValue);
-    if (cur) list.unshift(cur); // never hide what's actually selected
-  }
-  return list;
+  for (const a of asksage) if (!list.some((o) => o.value === a.value)) list.push(a); // gov models alongside direct
+  return ensureCurrent(list);
 }
 const THINK_DESC: Record<string, string> = {
   off: "Fastest replies — simple edits, lookups, and quick chat.",
@@ -917,6 +1026,7 @@ seedThread();
 renderStatus();
 void loadConfig().then(renderStatus);
 void loadWorkspace();
+void loadAsksage();
 refresh();
 scheduleBudgetPoll(); // provider budget: re-check every 5 min for the current model
 setInterval(refresh, 4000);

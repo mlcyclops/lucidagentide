@@ -18,6 +18,8 @@ export interface ProviderAuth {
 
 // Majors first; omp's broker provider ids used for the OAuth path.
 export const MAJORS = [
+  // Gov gateway (ADR-0007): API-key only, key in keys.ASKSAGE_API_KEY.
+  { id: "asksage", name: "AskSage · Gov gateway", env: "ASKSAGE_API_KEY", oauthId: "", canOauth: false },
   { id: "anthropic", name: "Anthropic · Claude", env: "ANTHROPIC_API_KEY", oauthId: "anthropic", canOauth: true },
   { id: "openai", name: "OpenAI", env: "OPENAI_API_KEY", oauthId: "openai-codex", canOauth: true },
   { id: "google", name: "Google · Gemini", env: "GEMINI_API_KEY", oauthId: "google-gemini-cli", canOauth: true },
