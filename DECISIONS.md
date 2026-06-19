@@ -69,7 +69,9 @@ Neither held, so: Option A.
 ## ADR-0002 — Scanner sidecar IPC contract (stub — finalize in P2.1)
 
 **Date:** 2026-06-17
-**Status:** Proposed (finalize when the scanner lands in P2.1)
+**Status:** Accepted — finalized in P2.1. The scanner shipped (`scanner-sidecar/scanner.py`,
+`server.py`) and is keystone-tested (CLAUDE.md keystone #1); the IPC contract below is the
+implemented, frozen boundary.
 
 The TS↔Python scanner boundary is a frozen contract. Proposed shape:
 
@@ -859,7 +861,8 @@ prerequisite for everything, has the smallest surface, needs no DuckDB migration
 ## ADR-0011 — Observability & cost intelligence (roadmap)
 
 **Date:** 2026-06-19
-**Status:** Accepted as a roadmap. Phases P10.1–P10.4 are **Proposed**.
+**Status:** Accepted as a roadmap. **P10.1 is BUILT** (the response activity HUD + per-model context
+window in the picker). Phases **P10.2–P10.4 remain Proposed**.
 **Context increment:** P10.0 (planning; the related context-window display bug was fixed inline).
 
 ### Context
@@ -1064,9 +1067,11 @@ endpoints `POST /api/personal/vault`, `POST /api/personal/cui-archive`, `GET /ap
 ## ADR-0014 — Hard CUI isolation: a separate encrypted store with its own DEK (roadmap)
 
 **Date:** 2026-06-19
-**Status:** Proposed (planning only — no functional code this session). Resolves the **open
-question** flagged in ADR-0012 ("CUI isolation strength"). Future phases P9.5a–c build it; each is
-its own increment + ADR delta per the session ritual.
+**Status:** Accepted — **built**. P9.5a shipped the separate `personal-cui.v1` store + independent
+unlock + two-store routing + the data-layer isolation guard; P9.5b shipped the audited migration
+(move legacy cui out of the main store) + NARA records-destruction. Resolves the **open question**
+flagged in ADR-0012 ("CUI isolation strength"). (P9.5c — the dedicated CUI-lock UX polish — folded
+into the existing compartment selector; remaining nice-to-haves tracked in PROGRESS.)
 **Relationship:** hardens ADR-0010/ADR-0012; complements ADR-0013 (the CUI archive export) by also
 isolating CUI **at rest in the working store**, not just at export time.
 

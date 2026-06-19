@@ -225,6 +225,25 @@ function addEvent(html: string): HTMLElement {
 }
 const scrollChat = () => { const c = $("#chat")!; requestAnimationFrame(() => (c.scrollTop = c.scrollHeight)); };
 
+// P10.1 (ADR-0011): a friendly, honest "what's happening" phase label — an opening guess
+// from the user's ask, then driven by REAL tool events on the chat stream.
+function guessPhase(text: string): string {
+  const t = text.toLowerCase();
+  if (/\b(test|jest|vitest|pytest)\b/.test(t)) return "Planning…";
+  if (/\b(search|find|where|locate|grep|look)\b/.test(t)) return "Searching…";
+  if (/\b(fix|edit|refactor|change|add|implement|write|create|build)\b/.test(t)) return "Working on it…";
+  return "Thinking…";
+}
+function phaseForTool(name: string, detail: string): string {
+  const n = name.toLowerCase(), d = (detail || "").toLowerCase();
+  if (/read|grep|glob|search|find|^ls|list/.test(n)) return "Searching the codebase…";
+  if (/edit|write|notebook|patch|apply|create/.test(n)) return "Editing files…";
+  if (/bash|shell|run|exec|command/.test(n)) return /\b(test|jest|vitest|pytest|build|tsc)\b/.test(d) ? "Running tests…" : "Running commands…";
+  if (/fetch|web|http|browse/.test(n)) return "Searching the web…";
+  return `Using ${name}…`;
+}
+const fmtClock = (ms: number): string => { const s = Math.max(0, Math.floor(ms / 1000)); return `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`; };
+
 async function send(): Promise<void> {
   const ta = $("#input") as HTMLTextAreaElement;
   const text = ta.value.trim();
@@ -235,17 +254,37 @@ async function send(): Promise<void> {
 
   const node = addMessage("assistant", "");
   const textEl = $(".text", node) as HTMLElement;
-  textEl.innerHTML = `<span class="cursor"></span>`;
+  textEl.innerHTML = "";
+  // P10.1 response activity HUD: live MM:SS timer + semantic phase + running token-cost.
+  const hud = el(`<div class="hud streaming">${icon("bolt", 12)}<span class="hud-t">00:00</span><span class="hud-sep">·</span><span class="hud-phase"></span><span class="hud-meta"></span></div>`);
+  const streamEl = el(`<div class="stream"></div>`);
+  textEl.append(hud, streamEl);
+  streamEl.innerHTML = `<span class="cursor"></span>`;
   let buf = "";
+  const t0 = Date.now();
+  let phase = guessPhase(text), sawTool = false, tok = 0, cost = 0;
+  const paintHud = () => {
+    ($(".hud-t", hud) as HTMLElement).textContent = fmtClock(Date.now() - t0);
+    ($(".hud-phase", hud) as HTMLElement).textContent = phase;
+    ($(".hud-meta", hud) as HTMLElement).textContent = tok ? `· ${fmtNum(tok)} tok · ~$${cost.toFixed(4)}` : "";
+  };
+  paintHud();
+  const timer = window.setInterval(paintHud, 1000);
+  const finishHud = () => {
+    clearInterval(timer);
+    const ic = $(".ic", hud); if (ic) ic.outerHTML = icon("check", 12);
+    hud.classList.remove("streaming"); hud.classList.add("done");
+    phase = "Done"; paintHud();
+  };
   const onEvent = (e: ChatEvent) => {
-    if (e.type === "token") { buf += e.text; textEl.innerHTML = renderMarkdown(buf) + `<span class="cursor"></span>`; scrollChat(); }
-    else if (e.type === "tool") addEvent(`<div class="evt tool">${icon("eye", 15)}<span class="k">${esc(e.name)}</span><span>${esc(e.detail)}</span></div>`);
+    if (e.type === "token") { buf += e.text; if (!sawTool) phase = "Responding…"; streamEl.innerHTML = renderMarkdown(buf) + `<span class="cursor"></span>`; paintHud(); scrollChat(); }
+    else if (e.type === "tool") { sawTool = true; phase = phaseForTool(e.name, e.detail); paintHud(); addEvent(`<div class="evt tool">${icon("eye", 15)}<span class="k">${esc(e.name)}</span><span>${esc(e.detail)}</span></div>`); }
     else if (e.type === "block") onBlock(e);
-    else if (e.type === "usage") { state.liveUsage = { used: e.used, size: e.size, cost: e.cost }; renderStatus(); renderMetricsRail(); }
-    else if (e.type === "done") { textEl.innerHTML = renderMarkdown(buf); state.streaming = false; setSendEnabled(); }
+    else if (e.type === "usage") { tok = e.used; cost = e.cost; state.liveUsage = { used: e.used, size: e.size, cost: e.cost }; paintHud(); renderStatus(); renderMetricsRail(); }
+    else if (e.type === "done") { streamEl.innerHTML = renderMarkdown(buf); finishHud(); state.streaming = false; setSendEnabled(); }
   };
   try { await bridge.sendPrompt(text, onEvent); }
-  finally { if (state.streaming) { textEl.innerHTML = renderMarkdown(buf); state.streaming = false; setSendEnabled(); } void renderSessions(); void refreshBudget(false); }
+  finally { if (state.streaming) { streamEl.innerHTML = renderMarkdown(buf); finishHud(); state.streaming = false; setSendEnabled(); } else clearInterval(timer); void renderSessions(); void refreshBudget(false); }
 }
 
 function onBlock(e: Extract<ChatEvent, { type: "block" }>): void {
@@ -1398,7 +1437,11 @@ const stars5 = (n: number, cls: string) => `<span class="mt-stars ${cls}">${"★
 const modelRow = (o: { value: string; name: string }, sel: string) => {
   const info = MODEL_INFO[shortModelId(o.value)];
   const iq = info ? `<span class="row-iq" aria-label="Intelligence ${info.iq} of 5">${"★".repeat(info.iq)}<span class="row-iq-dim">${"☆".repeat(5 - info.iq)}</span></span>` : "";
-  return `<div class="cfg-opt ${o.value === sel ? "on" : ""}" data-val="${esc(o.value)}" data-model="${esc(o.value)}"><span class="tick">${icon("check", 13)}</span><span class="nm">${esc(cleanModelName(o.name))}</span>${isAsksage(o.value) ? `<span class="gov-pill">Gov</span>` : ""}${iq}</div>`;
+  // P10.1: surface each model's context window right in the picker.
+  const ctxNum = modelCtx(o.value);
+  const ctxLbl = info?.ctx ?? (ctxNum ? (ctxNum >= 1_000_000 ? `${Math.round(ctxNum / 1_000_000)}M` : `${Math.round(ctxNum / 1000)}K`) : "");
+  const ctx = ctxLbl ? `<span class="row-ctx" data-tip="Context window">${esc(ctxLbl)}</span>` : "";
+  return `<div class="cfg-opt ${o.value === sel ? "on" : ""}" data-val="${esc(o.value)}" data-model="${esc(o.value)}"><span class="tick">${icon("check", 13)}</span><span class="nm">${esc(cleanModelName(o.name))}</span>${isAsksage(o.value) ? `<span class="gov-pill">Gov</span>` : ""}${ctx}${iq}</div>`;
 };
 
 // Premium per-model hover card metadata. Two ratings (editorial guidance, NOT a benchmark):

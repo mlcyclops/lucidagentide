@@ -4,6 +4,20 @@ Three lines per session: **shipped / stubbed / next** (CLAUDE.md session ritual)
 
 -----
 
+## P10.1: response activity HUD + per-model context window (ADR-0011)
+- **shipped:** a live per-response HUD on the streaming assistant message — MM:SS timer counting up,
+  a semantic phase label (opening guess from the user's ask, then driven by REAL tool events on the
+  stream: Searching the codebase / Editing files / Running tests / Responding), and a running token +
+  ~cost readout from the streamed usage events; freezes to a "Done" line with a green check on
+  completion. Also surfaced each model's context window as a chip in the model picker (modelCtx +
+  MODEL_INFO.ctx). All client-side, no contract change. Also updated stale ADR statuses (0014 →
+  Built, 0002 → Finalized in P2.1). desktop tsc clean; renderer bundles; verified live via a
+  synthetic event stream (phase transitions, cost, Done+check, timer, ctx chips).
+- **stubbed:** the phase heuristic is best-effort (maps common omp tool names); no per-phase timing
+  breakdown yet. Cost uses the stream's usage.cost (omp/AskSage-provided), not a local pricing table.
+- **next:** P10.2 — cross-model usage & cost ledger (per-model totals, provider-vs-local, cache-savings
+  card); then P10.3 (live rate-limit probes) + P10.4 (local-vs-gateway attribution).
+
 ## P9.5b: audited CUI migration + NARA records destruction (ADR-0014)
 - **shipped:** the migration that MOVES legacy cui facts out of a pre-isolation main store into the
   isolated CUI store — store.ts migration primitives (importEntity/importFact/importLink preserve
