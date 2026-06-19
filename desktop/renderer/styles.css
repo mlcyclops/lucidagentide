@@ -445,10 +445,17 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .modeltip .mt-h{display:flex;align-items:center;gap:8px;margin-bottom:8px}
 .modeltip .mt-name{font-size:13px;font-weight:650;color:var(--txt);flex:1;min-width:0;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.modeltip .mt-rate{display:flex;align-items:center;gap:8px;margin-bottom:9px}
-.modeltip .mt-stars{font-size:13px;letter-spacing:1.5px;color:var(--accent-2);line-height:1}
+.modeltip .mt-rate{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+.modeltip .mt-stars{font-size:13px;letter-spacing:1.5px;line-height:1;flex:none;width:88px}
+.modeltip .mt-stars.exp{color:var(--red)}
+.modeltip .mt-stars.iq{color:var(--green)}
 .modeltip .mt-stars .mt-dim{color:var(--line-strong)}
 .modeltip .mt-rlabel{font-size:9.5px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--txt-4)}
+.modeltip .mt-rate:last-of-type{margin-bottom:9px}
+.modeltip .mt-id{font-family:var(--mono);font-size:10.5px;color:var(--txt-3)}
+/* inline green Intelligence-Level stars in each model row */
+.cfg-opt .row-iq{flex:none;font-size:10px;letter-spacing:.5px;line-height:1;color:var(--green);white-space:nowrap}
+.cfg-opt .row-iq .row-iq-dim{color:var(--line-strong)}
 .modeltip .mt-eff{font-size:12px;line-height:1.55;color:var(--txt-2);margin-bottom:9px}
 .modeltip .mt-row{display:flex;gap:9px;font-size:11.5px;line-height:1.5;margin-top:5px}
 .modeltip .mt-k{flex:none;width:54px;color:var(--txt-4)}

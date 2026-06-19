@@ -994,59 +994,67 @@ const MODEL_ORDER = [
 ];
 const bareModel = (v: string) => v.replace(/^anthropic\//, "");
 const isAsksage = (v: string) => /asksage/i.test(v);
-// One row in a model dropdown: clean name (priority) · a Gov pill for gateway models ·
-// the shortened id (truncates). Shared so both pickers render identically. data-model
-// drives the premium hover card (token efficacy + best-use).
-const modelRow = (o: { value: string; name: string }, sel: string) =>
-  `<div class="cfg-opt ${o.value === sel ? "on" : ""}" data-val="${esc(o.value)}" data-model="${esc(o.value)}"><span class="tick">${icon("check", 13)}</span><span class="nm">${esc(cleanModelName(o.name))}</span>${isAsksage(o.value) ? `<span class="gov-pill">Gov</span>` : ""}<span class="id">${esc(shortModelId(o.value))}</span></div>`;
+// 5-star rating renderer (filled + dimmed). `cls` colors the filled stars.
+const stars5 = (n: number, cls: string) => `<span class="mt-stars ${cls}">${"★".repeat(n)}<span class="mt-dim">${"☆".repeat(5 - n)}</span></span>`;
 
-// Premium per-model hover card metadata: a token-efficacy rating (1–5 = capability
-// delivered per token/dollar, NOT raw power) and a practical "best for" line. Editorial
-// guidance, keyed by the shortened model id. Models without an entry fall back to no card.
-interface ModelInfo { r: number; eff: string; best: string; ctx?: string }
+// One row in a model dropdown: clean name (priority) · a Gov pill for gateway models ·
+// the green Intelligence-Level stars. Shared so both pickers render identically. data-model
+// drives the premium hover card (Token Expense + Intelligence + best-use + id).
+const modelRow = (o: { value: string; name: string }, sel: string) => {
+  const info = MODEL_INFO[shortModelId(o.value)];
+  const iq = info ? `<span class="row-iq" aria-label="Intelligence ${info.iq} of 5">${"★".repeat(info.iq)}<span class="row-iq-dim">${"☆".repeat(5 - info.iq)}</span></span>` : "";
+  return `<div class="cfg-opt ${o.value === sel ? "on" : ""}" data-val="${esc(o.value)}" data-model="${esc(o.value)}"><span class="tick">${icon("check", 13)}</span><span class="nm">${esc(cleanModelName(o.name))}</span>${isAsksage(o.value) ? `<span class="gov-pill">Gov</span>` : ""}${iq}</div>`;
+};
+
+// Premium per-model hover card metadata. Two ratings (editorial guidance, NOT a benchmark):
+//   exp = Token Expense  (1–5, red)   — how token/cost-heavy the model is (5 = priciest)
+//   iq  = Intelligence Level (1–5, green) — raw capability
+// plus a one-line description, a practical "best for", and context size. Keyed by short id.
+interface ModelInfo { exp: number; iq: number; eff: string; best: string; ctx?: string }
 const MODEL_INFO: Record<string, ModelInfo> = {
   // Anthropic (direct)
-  "claude-fable-5": { r: 5, eff: "Frontier capability at a premium price — efficient only when the task truly needs the ceiling.", best: "The hardest novel reasoning and long-horizon agentic work.", ctx: "1M" },
-  "claude-opus-4-8": { r: 5, eff: "Top-tier reasoning with strong value at the Opus tier.", best: "Hard bugs, architecture, multi-file refactors.", ctx: "1M" },
-  "claude-opus-4-7": { r: 4, eff: "Near-4.8 capability for a little less.", best: "Complex coding when 4.8 is overkill.", ctx: "1M" },
-  "claude-opus-4-6": { r: 4, eff: "Prior Opus — very capable, good to pin to.", best: "Complex work needing a stable version.", ctx: "1M" },
-  "claude-sonnet-4-6": { r: 5, eff: "The best all-round speed-to-cost-to-quality balance.", best: "Everyday coding, refactors, code review.", ctx: "1M" },
-  "claude-sonnet-4-5": { r: 4, eff: "Strong balanced workhorse (prior Sonnet).", best: "Everyday coding; a version pin.", ctx: "1M" },
-  "claude-haiku-4-5": { r: 4, eff: "Fastest and cheapest Claude — excellent tokens-per-dollar.", best: "Quick edits, lookups, high-volume tasks.", ctx: "200K" },
+  "claude-fable-5": { exp: 5, iq: 5, eff: "Frontier capability at a premium price — worth it only when the task needs the ceiling.", best: "The hardest novel reasoning and long-horizon agentic work.", ctx: "1M" },
+  "claude-opus-4-8": { exp: 4, iq: 5, eff: "Top-tier reasoning with strong value at the Opus tier.", best: "Hard bugs, architecture, multi-file refactors.", ctx: "1M" },
+  "claude-opus-4-7": { exp: 4, iq: 5, eff: "Near-4.8 capability for a little less.", best: "Complex coding when 4.8 is overkill.", ctx: "1M" },
+  "claude-opus-4-6": { exp: 4, iq: 4, eff: "Prior Opus — very capable, good to pin to.", best: "Complex work needing a stable version.", ctx: "1M" },
+  "claude-sonnet-4-6": { exp: 2, iq: 4, eff: "The best all-round speed-to-cost-to-quality balance.", best: "Everyday coding, refactors, code review.", ctx: "1M" },
+  "claude-sonnet-4-5": { exp: 2, iq: 4, eff: "Strong balanced workhorse (prior Sonnet).", best: "Everyday coding; a version pin.", ctx: "1M" },
+  "claude-haiku-4-5": { exp: 1, iq: 3, eff: "Fastest and cheapest Claude — excellent tokens-per-dollar.", best: "Quick edits, lookups, high-volume tasks.", ctx: "200K" },
   // AskSage · OpenAI
-  "gpt-5.2": { r: 4, eff: "Solid general reasoning; the default RAG model.", best: "General gov coding and analysis.", ctx: "256K" },
-  "gpt-5.5": { r: 5, eff: "The most capable GPT-5 on the gateway.", best: "The hardest gov reasoning tasks.", ctx: "256K" },
-  "gpt-5.4": { r: 4, eff: "High-capability GPT-5 variant.", best: "Demanding gov reasoning.", ctx: "256K" },
-  "gpt-5.1": { r: 4, eff: "Capable GPT-5 variant.", best: "General-purpose gov work.", ctx: "256K" },
-  "gpt-5": { r: 4, eff: "Solid GPT-5 baseline.", best: "Everyday gov coding and writing.", ctx: "256K" },
-  "gpt-5-mini": { r: 3, eff: "Cheaper, faster GPT-5 — strong tokens-per-dollar.", best: "High-volume, latency-sensitive tasks.", ctx: "256K" },
-  "gpt-4.1": { r: 3, eff: "Pre-GPT-5; huge context at lower cost.", best: "Very long context on a budget.", ctx: "1M" },
-  "gpt-o3": { r: 4, eff: "Deliberate o-series reasoning.", best: "Math, logic, hard step-by-step problems.", ctx: "200K" },
-  "gpt-o3-mini": { r: 3, eff: "Efficient reasoning at lower cost.", best: "Reasoning tasks on a budget.", ctx: "200K" },
-  "gpt-o4-mini": { r: 4, eff: "Latest-gen reasoning, cost-effective.", best: "Cost-efficient deep reasoning.", ctx: "200K" },
+  "gpt-5.2": { exp: 3, iq: 4, eff: "Solid general reasoning; the default RAG model.", best: "General gov coding and analysis.", ctx: "256K" },
+  "gpt-5.5": { exp: 4, iq: 5, eff: "The most capable GPT-5 on the gateway.", best: "The hardest gov reasoning tasks.", ctx: "256K" },
+  "gpt-5.4": { exp: 4, iq: 5, eff: "High-capability GPT-5 variant.", best: "Demanding gov reasoning.", ctx: "256K" },
+  "gpt-5.1": { exp: 3, iq: 4, eff: "Capable GPT-5 variant.", best: "General-purpose gov work.", ctx: "256K" },
+  "gpt-5": { exp: 3, iq: 4, eff: "Solid GPT-5 baseline.", best: "Everyday gov coding and writing.", ctx: "256K" },
+  "gpt-5-mini": { exp: 2, iq: 3, eff: "Cheaper, faster GPT-5 — strong tokens-per-dollar.", best: "High-volume, latency-sensitive tasks.", ctx: "256K" },
+  "gpt-4.1": { exp: 2, iq: 3, eff: "Pre-GPT-5; huge context at lower cost.", best: "Very long context on a budget.", ctx: "1M" },
+  "gpt-o3": { exp: 4, iq: 5, eff: "Deliberate o-series reasoning.", best: "Math, logic, hard step-by-step problems.", ctx: "200K" },
+  "gpt-o3-mini": { exp: 2, iq: 3, eff: "Efficient reasoning at lower cost.", best: "Reasoning tasks on a budget.", ctx: "200K" },
+  "gpt-o4-mini": { exp: 2, iq: 4, eff: "Latest-gen reasoning, cost-effective.", best: "Cost-efficient deep reasoning.", ctx: "200K" },
   // AskSage · Anthropic
-  "google-claude-45-opus": { r: 5, eff: "Claude 4.5 Opus via the gov gateway.", best: "The hardest gov coding and reasoning.", ctx: "200K" },
-  "google-claude-45-sonnet": { r: 5, eff: "Balanced Claude 4.5 via the gov gateway.", best: "Everyday gov coding and review.", ctx: "200K" },
-  "aws-bedrock-claude-45-sonnet-gov": { r: 5, eff: "Claude 4.5 Sonnet inside AWS GovCloud.", best: "FedRAMP / IL-bound Sonnet workloads.", ctx: "200K" },
-  "claude-opus-4": { r: 4, eff: "Claude Opus 4 via the gov gateway.", best: "Complex gov tasks.", ctx: "200K" },
-  "claude-sonnet-4": { r: 4, eff: "Claude Sonnet 4 via the gov gateway.", best: "Balanced gov coding.", ctx: "200K" },
+  "google-claude-45-opus": { exp: 5, iq: 5, eff: "Claude 4.5 Opus via the gov gateway.", best: "The hardest gov coding and reasoning.", ctx: "200K" },
+  "google-claude-45-sonnet": { exp: 3, iq: 4, eff: "Balanced Claude 4.5 via the gov gateway.", best: "Everyday gov coding and review.", ctx: "200K" },
+  "aws-bedrock-claude-45-sonnet-gov": { exp: 3, iq: 4, eff: "Claude 4.5 Sonnet inside AWS GovCloud.", best: "FedRAMP / IL-bound Sonnet workloads.", ctx: "200K" },
+  "claude-opus-4": { exp: 4, iq: 5, eff: "Claude Opus 4 via the gov gateway.", best: "Complex gov tasks.", ctx: "200K" },
+  "claude-sonnet-4": { exp: 3, iq: 4, eff: "Claude Sonnet 4 via the gov gateway.", best: "Balanced gov coding.", ctx: "200K" },
   // AskSage · Google
-  "google-gemini-3.1-pro-com": { r: 4, eff: "Gemini 3.1 Pro with a 1M context.", best: "Huge-context gov analysis.", ctx: "1M" },
-  "google-gemini-3.5-flash-gov": { r: 4, eff: "Fast Gemini in GovCloud; 1M context.", best: "Fast long-context gov tasks.", ctx: "1M" },
-  "google-gemini-2.5-pro": { r: 4, eff: "Gemini 2.5 Pro; 1M context.", best: "Long-context reasoning.", ctx: "1M" },
-  "google-gemini-2.5-flash": { r: 3, eff: "Fast, cheap Gemini; 1M context.", best: "High-volume long-context work.", ctx: "1M" },
+  "google-gemini-3.1-pro-com": { exp: 3, iq: 5, eff: "Gemini 3.1 Pro with a 1M context.", best: "Huge-context gov analysis.", ctx: "1M" },
+  "google-gemini-3.5-flash-gov": { exp: 2, iq: 3, eff: "Fast Gemini in GovCloud; 1M context.", best: "Fast long-context gov tasks.", ctx: "1M" },
+  "google-gemini-2.5-pro": { exp: 3, iq: 4, eff: "Gemini 2.5 Pro; 1M context.", best: "Long-context reasoning.", ctx: "1M" },
+  "google-gemini-2.5-flash": { exp: 1, iq: 3, eff: "Fast, cheap Gemini; 1M context.", best: "High-volume long-context work.", ctx: "1M" },
   // AskSage · RAG
-  "rag": { r: 5, eff: "Dataset-grounded answers with citations — only as good as your selected datasets.", best: "Questions over your selected knowledge bases.", ctx: "256K" },
+  "rag": { exp: 3, iq: 4, eff: "Dataset-grounded answers with citations — only as good as your selected datasets.", best: "Questions over your selected knowledge bases.", ctx: "256K" },
 };
 function modelTipHTML(value: string): string | null {
   const info = MODEL_INFO[shortModelId(value)];
   if (!info) return null;
-  const stars = `<span class="mt-stars">${"★".repeat(info.r)}<span class="mt-dim">${"☆".repeat(5 - info.r)}</span></span>`;
   return `<div class="mt-h"><span class="mt-name">${esc(modelLabel(value))}</span>${isAsksage(value) ? `<span class="gov-pill">Gov</span>` : ""}</div>
-    <div class="mt-rate">${stars}<span class="mt-rlabel">token efficacy</span></div>
+    <div class="mt-rate">${stars5(info.exp, "exp")}<span class="mt-rlabel">Token Expense</span></div>
+    <div class="mt-rate">${stars5(info.iq, "iq")}<span class="mt-rlabel">Intelligence Level</span></div>
     <div class="mt-eff">${esc(info.eff)}</div>
     <div class="mt-row"><span class="mt-k">Best for</span><span class="mt-v">${esc(info.best)}</span></div>
     ${info.ctx ? `<div class="mt-row"><span class="mt-k">Context</span><span class="mt-v">${esc(info.ctx)} tokens</span></div>` : ""}
+    <div class="mt-row"><span class="mt-k">Model&nbsp;id</span><span class="mt-v mt-id">${esc(shortModelId(value))}</span></div>
     <div class="mt-foot">Practical guidance · not a benchmark</div>`;
 }
 // A single delegated hover card for any [data-model] row (survives list re-render on
@@ -1255,6 +1263,8 @@ wire();
 initZoom();
 initResize();
 seedThread();
+toggleSidebar(true);    // start with the left sessions panel collapsed
+setInspectorRail(true); // start with the right inspector slid into the metrics rail
 renderStatus();
 void loadConfig().then(renderStatus);
 void loadWorkspace();

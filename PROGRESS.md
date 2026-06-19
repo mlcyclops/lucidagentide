@@ -16,6 +16,14 @@ Three lines per session: **shipped / stubbed / next** (CLAUDE.md session ritual)
   citations only structure when AskSage emits a "References" header (inline-cite replies pass through).
 - **next:** training-token usage chip; OR AskSage agents/plugins; OR headroom routing + gov review.
 
+## P-ASKSAGE.6b: dual model ratings + panels collapsed on boot
+- **shipped:** model hover card now shows TWO ratings — Token Expense (red stars) +
+  Intelligence Level (green stars) — plus the model id; the green Intelligence stars also
+  render inline in each dropdown row. Both slide-out panels (left sessions, right inspector)
+  now start collapsed on boot. Verified live: red/green star colors, no row overflow, panels collapsed.
+- **stubbed:** ratings remain editorial (no live benchmark feed).
+- **next:** training-token usage chip; OR AskSage agents/plugins; OR headroom routing + gov review.
+
 ## 2026-06-18 — Increment 0: harness bring-up + invariants
 
 - **shipped:** Toolchain (Bun 1.3.14 + uv 0.11.21); repo skeleton; omp vendored
