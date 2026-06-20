@@ -304,18 +304,38 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .evt.block .reason{color:var(--txt-2)}
 
 .composer-wrap{padding:10px 26px 18px}
-.composer{max-width:min(1080px,94vw);margin:0 auto;background:var(--bg-2);border:1px solid var(--line);
+.composer{max-width:min(1080px,94vw);margin:0 auto;
+  background:linear-gradient(180deg,var(--bg-3),var(--bg-2));border:1px solid var(--line);
   border-radius:14px;padding:8px 8px 8px 14px;display:flex;align-items:flex-end;gap:8px;
-  transition:border-color var(--t),box-shadow var(--t)}
-.composer:focus-within{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-dim)}
+  /* soft outer elevation + inset emboss top-highlight / bottom-shade */
+  box-shadow:var(--shadow,0 10px 28px -14px rgba(0,0,0,.5)),
+    inset 0 1px 0 rgba(255,255,255,.05),inset 0 -1px 0 rgba(0,0,0,.28);
+  transition:border-color var(--t) var(--ease),box-shadow var(--t-slow) var(--ease),transform var(--t-fast) var(--ease)}
+.composer:focus-within{border-color:var(--accent);
+  box-shadow:0 0 0 3px var(--accent-dim),0 0 22px -6px rgba(198,75,214,.45),
+    var(--shadow,0 12px 30px -14px rgba(0,0,0,.55)),
+    inset 0 1px 0 rgba(255,255,255,.06)}
 .composer textarea{flex:1;background:transparent;border:0;resize:none;color:var(--txt);
-  font-family:inherit;font-size:15px;line-height:1.5;padding:7px 0;max-height:180px;outline:none;user-select:text}
-.composer textarea::placeholder{color:var(--txt-4)}
+  font-family:inherit;font-size:15px;line-height:1.5;padding:7px 0;max-height:180px;outline:none;user-select:text;
+  caret-color:var(--accent-2)}
+.composer textarea::placeholder{color:var(--txt-4);transition:color var(--t) var(--ease)}
+.composer:focus-within textarea::placeholder{color:var(--txt-3)}
 .send-btn{flex:none;width:36px;height:36px;border:0;border-radius:10px;cursor:pointer;display:grid;place-items:center;
-  background:var(--accent);color:#fff;transition:transform var(--t),background var(--t),opacity var(--t)}
-.send-btn:hover{background:var(--accent-2)}
-.send-btn:active{transform:scale(.94)}
-.send-btn:disabled{background:var(--bg-4);color:var(--txt-4);cursor:default}
+  background:linear-gradient(180deg,var(--accent-2),var(--accent));color:#fff;
+  box-shadow:0 4px 12px -3px rgba(198,75,214,.5),inset 0 1px 0 rgba(255,255,255,.22);
+  transition:transform var(--t-fast) var(--ease-out),background var(--t) var(--ease),
+    box-shadow var(--t) var(--ease),filter var(--t) var(--ease),opacity var(--t) var(--ease)}
+.send-btn:hover{filter:brightness(1.08);transform:translateY(-1px) scale(1.04);
+  box-shadow:0 7px 18px -4px rgba(198,75,214,.6),inset 0 1px 0 rgba(255,255,255,.28)}
+.send-btn:active{transform:translateY(.5px) scale(.92);
+  box-shadow:0 2px 6px -2px rgba(198,75,214,.5),inset 0 2px 5px rgba(0,0,0,.32);
+  filter:brightness(.97);transition-duration:var(--t-fast)}
+/* the sendReady glow animates box-shadow and would otherwise override the
+   hover/press shadow via the cascade — drop the animation during interaction
+   so the declared tactile shadow actually shows */
+.send-btn:not(:disabled):hover,.send-btn:not(:disabled):active{animation:none}
+.send-btn:disabled{background:var(--bg-4);color:var(--txt-4);cursor:default;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.03);transform:none;filter:none;opacity:.85}
 .composer-hint{max-width:min(1080px,94vw);margin:7px auto 0;font-size:11.5px;color:var(--txt-4);display:flex;gap:14px}
 .composer-hint kbd{font-family:var(--mono);background:var(--bg-2);border:1px solid var(--line);
   border-bottom-width:2px;border-radius:5px;padding:0 5px;color:var(--txt-3);font-size:11px}
@@ -524,17 +544,28 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 
 /* ───────────────────────── composer agent controls ───────────────────────── */
 .composer-tools{max-width:min(1080px,94vw);margin:9px auto 0;display:flex;flex-wrap:wrap;align-items:center;gap:7px}
-.ctool{-webkit-app-region:no-drag;display:inline-flex;align-items:center;gap:6px;flex:none;white-space:nowrap;background:var(--bg-2);border:1px solid var(--line);
+.ctool{-webkit-app-region:no-drag;display:inline-flex;align-items:center;gap:6px;flex:none;white-space:nowrap;
+  background:linear-gradient(180deg,var(--bg-3),var(--bg-2));border:1px solid var(--line);
   border-radius:8px;padding:5px 10px;color:var(--txt-2);font-size:12px;font-weight:500;font-family:inherit;cursor:pointer;
-  transition:background var(--t),border-color var(--t),color var(--t)}
-.ctool:hover{background:var(--bg-3);border-color:var(--line-strong);color:var(--txt)}
-.ctool .ic{color:var(--txt-3);transition:color var(--t)}
-.ctool:hover .ic{color:var(--accent-2)}
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.04);
+  transition:background var(--t) var(--ease),border-color var(--t) var(--ease),color var(--t) var(--ease),
+    box-shadow var(--t) var(--ease),transform var(--t-fast) var(--ease-out)}
+.ctool:hover{background:linear-gradient(180deg,var(--bg-4),var(--bg-3));border-color:var(--line-strong);color:var(--txt);
+  transform:translateY(-1px);box-shadow:0 4px 12px -5px rgba(0,0,0,.55),inset 0 1px 0 rgba(255,255,255,.06)}
+.ctool:active{transform:translateY(.5px) scale(.97);
+  box-shadow:inset 0 2px 4px rgba(0,0,0,.3);transition-duration:var(--t-fast)}
+.ctool .ic{color:var(--txt-3);transition:color var(--t) var(--ease),transform var(--t) var(--ease-out)}
+.ctool:hover .ic{color:var(--accent-2);transform:scale(1.08)}
 .ctool-hint{margin-left:auto;flex:none;white-space:nowrap;display:inline-flex;align-items:center;gap:6px;font-size:11px;color:var(--txt-4)}
 .ctool-hint .kh{display:inline-flex;align-items:center;gap:4px}
-.ctool-hint kbd{font-family:var(--mono);background:var(--bg-2);border:1px solid var(--line);border-radius:4px;padding:1px 5px;color:var(--txt-3);font-size:10px;line-height:1.5}
+.ctool-hint kbd{font-family:var(--mono);background:linear-gradient(180deg,var(--bg-3),var(--bg-2));
+  border:1px solid var(--line);border-bottom-width:2px;border-bottom-color:var(--line-strong);
+  border-radius:4px;padding:1px 5px;color:var(--txt-3);font-size:10px;line-height:1.5;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.05)}
 .send-btn:not(:disabled){animation:sendReady 3.4s ease-in-out infinite}
-@keyframes sendReady{0%,100%{box-shadow:0 0 8px rgba(198,75,214,.22)}50%{box-shadow:0 0 17px rgba(198,75,214,.5)}}
+@keyframes sendReady{
+  0%,100%{box-shadow:0 4px 12px -3px rgba(198,75,214,.45),0 0 8px rgba(198,75,214,.22),inset 0 1px 0 rgba(255,255,255,.22)}
+  50%{box-shadow:0 6px 16px -3px rgba(198,75,214,.55),0 0 18px rgba(198,75,214,.52),inset 0 1px 0 rgba(255,255,255,.26)}}
 
 /* ───────────────────────── security "active protection" intro ───────────────────────── */
 .sec-intro{background:linear-gradient(155deg,rgba(198,75,214,.09),transparent 70%);border:1px solid var(--line);
