@@ -166,6 +166,20 @@ jobs:
       - name: List artifacts
         run: ls -la dist
 
+      # softprops/action-gh-release replaces same-named assets but never deletes ones whose
+      # names changed (e.g. an old *.dmg or a versioned *-mac.zip from a prior build). Clear
+      # ALL existing assets on the rolling "latest" release first so it only ever holds the
+      # current build's artifacts. No-op if the release doesn't exist yet.
+      - name: Clear stale assets from the "latest" release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ids=$(gh api "repos/${{ github.repository }}/releases/tags/latest" --jq '.assets[].id' 2>/dev/null || true)
+          for id in $ids; do
+            echo "deleting stale asset $id"
+            gh api -X DELETE "repos/${{ github.repository }}/releases/assets/$id" || true
+          done
+
       - name: Publish / update the "latest" release
         uses: softprops/action-gh-release@v3
         with:
