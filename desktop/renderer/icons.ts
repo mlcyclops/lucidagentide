@@ -68,9 +68,15 @@ const RAW: Record<string, string> = {
   download: P("M12 4v9.5") + P("M8 10.5l4 4 4-4") + P("M5 18.5h14"),
 };
 
+// Action glyphs that read as "do something now" — they get the .ic-action hook
+// so CSS can give them an extra spark on hover. Purely additive: behavior and
+// default visual weight are unchanged.
+const ACTION = new Set(["bolt", "spark", "refresh", "send", "plus", "download"]);
+
 export function icon(name: keyof typeof RAW | string, size = 18, extraClass = ""): string {
   const body = RAW[name] ?? RAW.info;
-  return `<svg class="ic ${extraClass}" viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body}</svg>`;
+  const hook = ACTION.has(name as string) ? " ic-action" : "";
+  return `<svg class="ic${hook}${extraClass ? " " + extraClass : ""}" viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body}</svg>`;
 }
 
 /** The LUCID wordmark π glyph used in the titlebar. */
