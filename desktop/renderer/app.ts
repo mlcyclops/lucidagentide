@@ -191,10 +191,19 @@ function relTime(ms: number): string {
   const h = Math.floor(m / 60); if (h < 24) return `${h}h ago`;
   return `${Math.floor(h / 24)}d ago`;
 }
+// #11 perceived-latency: a few placeholder session cards painted INSTANTLY so the
+// sidebar never looks empty/broken while /api/sessions is in flight.
+function sessSkeleton(): string {
+  return `<div class="skel-group">${Array.from({ length: 5 }, () =>
+    `<div class="skel-sess"><div class="skel skel-line t"></div><div class="skel skel-line m"></div></div>`).join("")}</div>`;
+}
 async function renderSessions(): Promise<void> {
-  const sessions = await bridge.sessions().catch(() => null);
   const list = $("#sessList");
   if (!list) return;
+  // Show the skeleton only on a cold list (first load). On a re-render after sending a
+  // prompt the list already has content — don't flash it back to skeleton.
+  if (!list.firstElementChild || $(".skel-group", list)) list.innerHTML = sessSkeleton();
+  const sessions = await bridge.sessions().catch(() => null);
   if (sessions === null) { list.innerHTML = `<div class="side-empty">Couldn't load history - the GUI server looks out of date. Relaunch it (launcher → <b>G</b>), or restart <code>bun run desktop:web</code>.</div>`; return; }
   if (!sessions.length) { list.innerHTML = `<div class="side-empty">No sessions yet - send a prompt to start one. They persist here across runs.</div>`; return; }
   list.innerHTML = sessions.map((s, i) => `
@@ -335,7 +344,24 @@ function focusInspector(tab: Tab): void {
   lastInspHash = ""; renderInspector();
 }
 
+// #11 perceived-latency: placeholder chips + rows shown on the inspector's very first
+// paint, before the first 4s poll completes (state.lastOk === 0). Swaps to real content
+// — or the genuine empty-state — the moment refresh() lands or fails.
+function inspSkeleton(): string {
+  return `<div class="skel-chips">${Array.from({ length: 4 }, () => `<div class="skel skel-chip"></div>`).join("")}</div>`
+    + `<div class="skel-group">${Array.from({ length: 5 }, () => `<div class="skel skel-row"></div>`).join("")}</div>`;
+}
 function renderInspector(): void {
+  const snap = state.inspectorTab === "security" ? state.security : state.memory;
+  // First-load only: no successful poll yet AND no snapshot for this tab.
+  if (state.lastOk === 0 && snap === null) {
+    const body = $("#inspBody")!;
+    const skelHash = "skel:" + state.inspectorTab;
+    if (skelHash === lastInspHash) return;
+    lastInspHash = skelHash;
+    body.innerHTML = inspSkeleton();
+    return;
+  }
   const html = state.inspectorTab === "security" ? securityHtml(state.security) : memoryHtml(state.memory);
   const hash = state.inspectorTab + html.length + html.slice(0, 64);
   if (hash === lastInspHash) return;
@@ -658,12 +684,20 @@ async function renderKnowledge(): Promise<void> {
   const canvas = $("#kgCanvas"), side = $("#kgSide"), scopeLbl = $("#kgScopeLbl");
   if (!canvas || !side) return;
   kgHandle?.destroy(); kgHandle = null;
-  const status = await bridge.personal();
+  // #11 perceived-latency: the graph store is encrypted, so personal()/personalGraph()
+  // can take a beat to decrypt. Paint a calm "Decrypting…" state INSTANTLY; the gate()
+  // / mountGraph below always replaces it (and the catch() guarantees no stuck shimmer).
+  canvas.innerHTML = `<div class="skel-kg">${icon("refresh", 26, "spin")}<div>Decrypting your graph…</div></div>`;
+  side.innerHTML = "";
+  let status: Awaited<ReturnType<typeof bridge.personal>>;
+  try { status = await bridge.personal(); }
+  catch { canvas.innerHTML = `<div class="kg-empty">${icon("graph", 30)}<div>Couldn't load your graph. Try reopening this panel.</div></div>`; return; }
   if (scopeLbl) scopeLbl.textContent = status?.scope ? `· ${status.scope}` : "";
   const gate = (msg: string) => { canvas.innerHTML = `<div class="kg-empty">${icon("graph", 30)}<div>${msg}</div></div>`; side.innerHTML = ""; };
   if (!status?.enabled) return gate("Personalization is off. Enable it in Settings to build a knowledge graph.");
   if (!status.unlocked) return gate("Your store is locked. Unlock it in Settings to view the graph.");
-  kgData = await bridge.personalGraph();
+  try { kgData = await bridge.personalGraph(); }
+  catch { return gate("Couldn't decrypt your graph. Try reopening this panel."); }
   if (!kgData || kgData.nodes.length === 0) return gate("Nothing learned yet. It remembers durable facts about <b>you</b> - not what we discuss. Tell me things like <i>“I prefer Rust”</i>, <i>“I use vim”</i>, <i>“I decided to go with Postgres”</i>, or <i>“remember that I deploy with Kubernetes”</i> and they'll appear here (each is security-scanned first).");
   side.innerHTML = `<div class="kg-side-empty">${icon("eye", 22)}<div>Click a node to see its facts.</div></div>`;
   kgHandle = mountGraph(canvas as HTMLElement, kgData, (id) => renderKgSide(id));
@@ -717,7 +751,15 @@ function renderWorkspaceBar(): void {
   bar.innerHTML = `${icon(w.isGit ? "git" : "folder", 14)}<span class="ws-bar-name">${esc(w.name)}</span>${icon("sliders", 12, "dim")}`;
 }
 async function loadWorkspace(): Promise<void> {
-  state.workspace = await bridge.workspace();
+  // #11 perceived-latency: the bar used to stay hidden until workspace() resolved, then
+  // pop in. Show a subtle "loading workspace…" pill instantly; renderWorkspaceBar() below
+  // always replaces it (even on a null/failed result, which hides the bar as before).
+  const bar = $("#wsBar") as HTMLButtonElement | null;
+  if (bar && !state.workspace) {
+    bar.hidden = false;
+    bar.innerHTML = `<span class="ws-bar-loading">${icon("refresh", 12, "spin")}loading workspace…</span>`;
+  }
+  state.workspace = await bridge.workspace().catch(() => null);
   renderWorkspaceBar();
 }
 async function resumeSession(id: string): Promise<void> {
@@ -732,8 +774,15 @@ async function resumeSession(id: string): Promise<void> {
 }
 
 async function applyWorkspace(path: string): Promise<void> {
+  // #11 perceived-latency: setWorkspace() respawns the backend (2–5s). Reassure the user
+  // up front that work is happening, then confirm when it's ready, and reflect the switch
+  // immediately on the workspace bar via a "loading…" pill.
+  showToast({ title: "Switching workspace…", desc: "Restarting the agent in the new folder — ready in a moment.", timeout: 4000 });
+  const bar = $("#wsBar") as HTMLButtonElement | null;
+  if (bar) { bar.hidden = false; bar.innerHTML = `<span class="ws-bar-loading">${icon("refresh", 12, "spin")}switching…</span>`; }
   const info = await bridge.setWorkspace(path);
-  if (info) { state.workspace = info; renderWorkspaceBar(); }
+  if (info) { state.workspace = info; }
+  renderWorkspaceBar();
   seedThread(); state.liveUsage = null; renderStatus(); renderMetricsRail();
   void renderSessions(); void renderSettings();
   showToast({ title: "Workspace set", desc: `Agent now works in ${info?.name ?? path}.`, actions: [{ label: "OK" }], timeout: 2600 });
@@ -1589,12 +1638,27 @@ async function loadConfig(): Promise<void> {
 /** Force omp to re-read its credential vault and refresh the model list (manual "Refresh models"
  *  button). Restarts the omp child, so it also picks up a provider connected since launch. */
 async function refreshModels(): Promise<void> {
+  // #11 perceived-latency: refreshConfig() triggers an omp respawn (2–5s) during which the
+  // model badge would otherwise sit stale with no signal. Show an inline "Refreshing
+  // models…" spinner on the badge + a reassuring toast, and ALWAYS restore the real label
+  // afterwards (success or failure) so it can never get stuck spinning.
+  const mn = $("#modelName");
+  const badge = $("#modelBadge");
+  const prevName = mn?.textContent ?? "";
+  if (mn) mn.textContent = "Refreshing models…";
+  badge?.classList.add("busy");
+  showToast({ title: "Refreshing models…", desc: "Restarting omp to re-read your providers. Your next turn will pick up the new list.", timeout: 4000 });
   try {
     state.config = await bridge.refreshConfig();
     const model = state.config.find((c) => c.id === "model");
-    if (model) { state.model = model.currentValue; const mn = $("#modelName"); if (mn) mn.textContent = modelLabel(model.currentValue); }
+    if (model) { state.model = model.currentValue; if (mn) mn.textContent = modelLabel(model.currentValue); }
+    else if (mn) mn.textContent = prevName;
     updateComposerTools();
-  } catch { /* keep current */ }
+  } catch {
+    if (mn) mn.textContent = prevName; // keep current on failure
+  } finally {
+    badge?.classList.remove("busy"); // never leave the badge stuck in a busy state
+  }
 }
 
 /** After an OAuth login is kicked off, watch the provider's status until it flips to connected
