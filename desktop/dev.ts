@@ -11,12 +11,13 @@
 import { join } from "node:path";
 import { securitySnapshot } from "../tools/web/data.ts";
 import { approveBlock, liveBlocks } from "./security_log.ts";
+import { probeRateLimits } from "./ratelimit_probe.ts";
 import { memorySnapshot, rateLimits, usageLedger } from "../tools/memory_data.ts";
 import { backend } from "./acp_backend.ts";
 import { listSessions, sessionMessages } from "./sessions.ts";
 import { providerAuth } from "./auth_status.ts";
 import { cloneRepo, setWorkspace, workspaceInfo } from "./workspace.ts";
-import { applyEnv, load as loadSettings, setAsksage, setKey, setUsername } from "./settings_store.ts";
+import { applyEnv, load as loadSettings, setAsksage, setKey, setRateLimitProbe, setUsername } from "./settings_store.ts";
 import { asksageConfig, listDatasets, listPersonas, monthlyTokens, scanPersona, wrapPersona } from "./asksage.ts";
 import { listSkills } from "./skills_data.ts";
 import { headroomStatus, setHeadroomEnabled, startHeadroom } from "./headroom.ts";
@@ -105,6 +106,12 @@ const server = Bun.serve({
       // Light, fast re-read of the provider rate-limit budget (omp's agent.db).
       // Used by the front-end's manual refresh + 5-minute auto-poll.
       if (p === "/api/budget") return json({ ok: true, data: rateLimits() });
+      // P10.3: live rate-limit probe for API-KEY providers (opt-in). GET returns probed limits
+      // (cached 5 min; [] when off); POST {enabled} flips the opt-in.
+      if (p === "/api/ratelimits") {
+        if (req.method === "POST") { const b = await req.json(); return json({ ok: true, data: setRateLimitProbe(!!b.enabled) }); }
+        return json({ ok: true, data: { enabled: !!loadSettings().rateLimitProbe, limits: await probeRateLimits(url.searchParams.get("force") === "1") } });
+      }
       // P10.2: cross-model usage & cost ledger (per-model totals + estimated cache savings).
       if (p === "/api/usage") return json({ ok: true, data: usageLedger() });
       if (p === "/api/health") return json({ ok: true });

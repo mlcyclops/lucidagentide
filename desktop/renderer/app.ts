@@ -39,6 +39,8 @@ const state = {
   lastOk: 0,
   streaming: false,
   lastPrompt: "" as string, // last user message — re-sent by an Approve & retry (ADR-0019 C)
+  probedLimits: [] as import("./bridge.ts").ProbedLimit[], // P10.3 live API-key rate limits
+  probeEnabled: false, // P10.3 opt-in state for the live rate-limit probe
 };
 const prettyModel = (v: string) => v.replace(/^anthropic\//, "");
 // Strip the redundant "· AskSage Gov" / "· Gov" suffix from a model's display name
@@ -1059,10 +1061,17 @@ function budgetBody(budgets: NonNullable<MemorySnapshot["budgets"]>): string {
     return `<div class="bgt${on ? " on" : ""}">${on ? `<span class="bgt-tag" data-tip="Provider for your current model">current model</span>` : ""}${
       gauge(b.label.replace(/^Claude /, ""), b.used, `<span style="color:var(--txt-4)">${esc(b.status)} · resets ${ageStr(b.resetsAt)}</span>`)}</div>`;
   }).join("");
+  // P10.3: live API-key rate-limit probes (opt-in) render as extra gauges, tagged so they're
+  // distinct from omp's subscription/OAuth windows above.
+  const probed = state.probedLimits.map((b) =>
+    `<div class="bgt${active(b.label) ? " on" : ""}"><span class="bgt-tag live" data-tip="Live from the provider's rate-limit headers (API key)">API key · live</span>${
+      gauge(b.label, b.used, `<span style="color:var(--txt-4)">${fmtNum(b.remaining)} left · resets ${ageStr(b.resetsAt)}</span>`)}</div>`).join("");
+  const probeToggle = `<label class="set-toggle bgt-probe"><input type="checkbox" id="ratelimitToggle" ${state.probeEnabled ? "checked" : ""}/>
+    <span>Live API-key probe ${state.probeEnabled ? "" : ""}<button class="info-dot" data-tip="Live rate-limit probe|For providers set with an API KEY (Anthropic / OpenAI), read the real remaining limit from response headers. Off by default — each check makes one tiny request (a token or two). Your OAuth 5-hour window is already shown above and has no header to probe.">${icon("info", 11)}</button></span></label>`;
   return `<div class="bgt-head">
       <button class="btn-mini" data-budget-refresh data-tip="Re-check provider usage now">${icon("refresh", 13)} Refresh</button>
       <span class="bgt-note">auto every 5 min</span>
-    </div>${rows}`;
+    </div>${rows}${probed}${probeToggle}`;
 }
 
 const RICHTIP_DUCKDB = `<div class="rt-h">${icon("shield", 14)} Where this is stored</div>
@@ -1165,6 +1174,9 @@ async function refreshBudget(manual = false): Promise<void> {
   const budgets = await bridge.budget();
   if (budgets && state.memory) state.memory.budgets = budgets;
   checkBudgetWarning(budgets);
+  // P10.3: live API-key rate-limit probe (no-op + [] unless the opt-in is on). force on manual.
+  const rl = await bridge.rateLimits(manual);
+  state.probedLimits = rl?.limits ?? []; state.probeEnabled = rl?.enabled ?? false;
   if (state.asksage?.configured) state.asksageTokens = await bridge.asksageTokens(); // gov usage on the same cadence
   if (state.inspectorTab === "memory" && !state.inspectorRail) renderInspector();
   renderStatus();
@@ -1694,6 +1706,17 @@ function wire(): void {
   // accordion toggles (delegated; flips OPEN + .open without a full re-render)
   $("#inspBody")!.addEventListener("click", (e) => {
     if ((e.target as HTMLElement).closest("[data-budget-refresh]")) { void refreshBudget(true); return; }
+    // P10.3: flip the live API-key rate-limit probe opt-in, then re-poll.
+    if ((e.target as HTMLElement).closest("#ratelimitToggle")) {
+      const on = ($("#ratelimitToggle") as HTMLInputElement)?.checked ?? false;
+      void (async () => {
+        await bridge.setRateLimitProbe(on);
+        state.probeEnabled = on;
+        showToast({ title: on ? "Live probe on" : "Live probe off", desc: on ? "Reading API-key rate-limit headers every 5 min (one tiny request per keyed provider)." : "Stopped probing provider rate-limit headers.", actions: [{ label: "OK" }], timeout: 3000 });
+        await refreshBudget(true);
+      })();
+      return;
+    }
     const head = (e.target as HTMLElement).closest("[data-acc-toggle]") as HTMLElement | null;
     if (head) { const k = head.dataset.accToggle!; const acc = head.closest(".acc")!; const open = acc.classList.toggle("open"); open ? OPEN.add(k) : OPEN.delete(k); return; }
     // Approve & retry: the audited fail-closed override for one live gate block (ADR-0019 C).

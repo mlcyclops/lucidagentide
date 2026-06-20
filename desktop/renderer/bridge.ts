@@ -29,6 +29,9 @@ export interface MemorySnapshot {
     gate: { promoted: number; blocked: number };
   };
 }
+
+// P10.3: a live rate-limit reading probed from an API-key provider's response headers.
+export interface ProbedLimit { provider: string; label: string; used: number; remaining: number; limit: number; resetsAt: number | null }
 // P10.2 cross-model usage & cost ledger
 export interface ModelUsage {
   model: string; provider: string; source: "subscription" | "local";
@@ -104,6 +107,10 @@ export interface LucidBridge {
   securityApprove(id: string): Promise<BlockRecord | null>;
   memory(): Promise<MemorySnapshot | null>;
   budget(): Promise<{ label: string; used: number; status: string; resetsAt: number | null }[] | null>;
+  // P10.3: live API-key rate-limit probe (opt-in). `rateLimits()` returns probed limits ([] when off);
+  // `setRateLimitProbe` flips the opt-in.
+  rateLimits(force?: boolean): Promise<{ enabled: boolean; limits: ProbedLimit[] } | null>;
+  setRateLimitProbe(enabled: boolean): Promise<unknown>;
   usage(): Promise<UsageLedger | null>;
   sendPrompt(text: string, onEvent: (e: ChatEvent) => void): Promise<void>;
   config(): Promise<ConfigOption[]>;
@@ -224,6 +231,8 @@ export const bridge: LucidBridge = {
   securityApprove: (id) => post("/api/security/approve", { id }),
   memory: () => getData("/api/memory"),
   budget: () => getData("/api/budget"),
+  rateLimits: (force) => getData(`/api/ratelimits${force ? "?force=1" : ""}`),
+  setRateLimitProbe: (enabled) => post("/api/ratelimits", { enabled }),
   usage: () => getData("/api/usage"),
   sendPrompt: streamChat,
   config: async () => (await getData("/api/config")) ?? FALLBACK_CONFIG,

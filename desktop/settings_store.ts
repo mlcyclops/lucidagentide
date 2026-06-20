@@ -38,6 +38,9 @@ export interface GuiSettings {
   asksagePersona?: string;
   // headroom token-compression proxy (opt-in, on-device). See ADR-0008.
   headroomEnabled?: boolean;
+  // P10.3: opt-in live rate-limit probe for API-KEY providers (Anthropic/OpenAI). OFF by default —
+  // it makes a tiny request per provider to read the rate-limit headers, which costs a token or two.
+  rateLimitProbe?: boolean;
   // Personalization knowledge graph (ADR-0010, P9.x): opt-in, encrypted-at-rest.
   // OFF by default - no user-fact distillation, recall, or store until enabled.
   personalizationEnabled?: boolean;
@@ -66,6 +69,9 @@ export function personalVaultDir(): string { return join(homedir(), ".omp", "luc
 export function personalCuiArchiveDir(): string { return join(homedir(), ".omp", "lucid-cui-archive"); }
 export function setPersonalization(enabled: boolean): GuiSettings {
   const s = load(); s.personalizationEnabled = enabled; save(s); return s;
+}
+export function setRateLimitProbe(enabled: boolean): GuiSettings {
+  const s = load(); s.rateLimitProbe = enabled; save(s); return s;
 }
 export function setPersonalScope(scope: GuiSettings["personalScope"]): GuiSettings {
   const s = load(); s.personalScope = scope; save(s); return s;
