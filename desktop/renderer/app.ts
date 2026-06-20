@@ -191,10 +191,19 @@ function relTime(ms: number): string {
   const h = Math.floor(m / 60); if (h < 24) return `${h}h ago`;
   return `${Math.floor(h / 24)}d ago`;
 }
+// #11 perceived-latency: a few placeholder session cards painted INSTANTLY so the
+// sidebar never looks empty/broken while /api/sessions is in flight.
+function sessSkeleton(): string {
+  return `<div class="skel-group">${Array.from({ length: 5 }, () =>
+    `<div class="skel-sess"><div class="skel skel-line t"></div><div class="skel skel-line m"></div></div>`).join("")}</div>`;
+}
 async function renderSessions(): Promise<void> {
-  const sessions = await bridge.sessions().catch(() => null);
   const list = $("#sessList");
   if (!list) return;
+  // Show the skeleton only on a cold list (first load). On a re-render after sending a
+  // prompt the list already has content — don't flash it back to skeleton.
+  if (!list.firstElementChild || $(".skel-group", list)) list.innerHTML = sessSkeleton();
+  const sessions = await bridge.sessions().catch(() => null);
   if (sessions === null) { list.innerHTML = `<div class="side-empty">Couldn't load history - the GUI server looks out of date. Relaunch it (launcher → <b>G</b>), or restart <code>bun run desktop:web</code>.</div>`; return; }
   if (!sessions.length) { list.innerHTML = `<div class="side-empty">No sessions yet - send a prompt to start one. They persist here across runs.</div>`; return; }
   list.innerHTML = sessions.map((s, i) => `
@@ -233,12 +242,27 @@ function addEvent(html: string): HTMLElement {
   scrollChat();
   return node;
 }
-// Stick-to-bottom autoscroll: only follow new output when the user is already near the
-// bottom, so scrolling up to re-read mid-stream isn't yanked back down. Instant (not
-// smooth-animated) per token — that reads as smooth during a stream and avoids jank.
-const scrollChat = () => {
-  const c = $("#chat")!;
-  if (c.scrollHeight - c.scrollTop - c.clientHeight < 150) requestAnimationFrame(() => { c.scrollTop = c.scrollHeight; });
+// Stick-to-bottom autoscroll, rAF-batched for buttery playback under rapid tokens.
+// Many scrollChat() calls within one frame coalesce into a SINGLE scrollTop write, so the
+// browser never thrashes layout mid-stream. We only follow output while the user is parked
+// near the bottom (STICK_PX); the moment they scroll UP to re-read, autoscroll releases and
+// stays released until they come back down — so re-reading mid-stream is never yanked.
+const STICK_PX = 150;
+let scrollPending = false; // a follow-frame is already queued
+let lastWroteTop = -1;     // the scrollTop value WE last wrote — lets us spot a user scroll-up
+const nearBottom = (c: HTMLElement): boolean => c.scrollHeight - c.scrollTop - c.clientHeight < STICK_PX;
+const scrollChat = (): void => {
+  const c = $("#chat");
+  if (!c) return;
+  // A user scroll-up since our last programmatic write releases the stick until they return.
+  if (lastWroteTop >= 0 && c.scrollTop < lastWroteTop - 2 && !nearBottom(c)) return;
+  if (scrollPending || !nearBottom(c)) return;
+  scrollPending = true;
+  requestAnimationFrame(() => {
+    scrollPending = false;
+    const cc = $("#chat");
+    if (cc && nearBottom(cc)) { cc.scrollTop = cc.scrollHeight; lastWroteTop = cc.scrollTop; }
+  });
 };
 
 // P10.1 (ADR-0011): a friendly, honest "what's happening" phase label — an opening guess
@@ -258,7 +282,77 @@ function phaseForTool(name: string, detail: string): string {
   if (/fetch|web|http|browse/.test(n)) return "Searching the web…";
   return `Using ${name}…`;
 }
+// A category icon for a tool, so each consolidated activity step reads at a glance.
+function phaseIcon(name: string): string {
+  const n = name.toLowerCase();
+  if (/read|grep|glob|search|find|^ls|list/.test(n)) return "search";
+  if (/edit|write|notebook|patch|apply|create/.test(n)) return "folder";
+  if (/bash|shell|run|exec|command/.test(n)) return "bolt";
+  if (/fetch|web|http|browse/.test(n)) return "runs";
+  return "eye";
+}
 const fmtClock = (ms: number): string => { const s = Math.max(0, Math.floor(ms / 1000)); return `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`; };
+
+// ── Consolidating activity window (the "working / agent thoughts" surface) ──
+// Instead of an ever-growing stack of raw .evt chips, the agent's tool calls collapse into
+// ONE compact window per turn: a head (live current step + a count) you can expand to see the
+// full step list, and a tidy one-line summary on done. Security blocks are NEVER folded in
+// here — onBlock keeps emitting its own loud .evt.block chip alongside this window.
+interface ThoughtsWin {
+  el: HTMLElement;
+  /** Record a tool/activity step. */
+  step(name: string, detail: string): void;
+  /** Collapse into the final one-line summary (auto-collapse on done). */
+  finish(ms: number): void;
+}
+function createThoughts(): ThoughtsWin {
+  const win = el(`<div class="thoughts open" data-streaming="1">
+    <button class="thoughts-head" type="button" aria-expanded="true">
+      <span class="thoughts-spin">${icon("spark", 13)}</span>
+      <span class="thoughts-cur">Working…</span>
+      <span class="thoughts-count" hidden>0</span>
+      <span class="thoughts-chev">${icon("chevron", 14)}</span>
+    </button>
+    <div class="thoughts-body"></div>
+  </div>`);
+  const headBtn = $(".thoughts-head", win) as HTMLButtonElement;
+  const curEl = $(".thoughts-cur", win) as HTMLElement;
+  const countEl = $(".thoughts-count", win) as HTMLElement;
+  const body = $(".thoughts-body", win) as HTMLElement;
+  let steps = 0;
+  const files = new Set<string>();
+  const toggle = (open: boolean) => {
+    win.classList.toggle("open", open);
+    headBtn.setAttribute("aria-expanded", String(open));
+  };
+  headBtn.addEventListener("click", () => toggle(!win.classList.contains("open")));
+  return {
+    el: win,
+    step(name: string, detail: string) {
+      steps++;
+      const label = phaseForTool(name, detail);
+      curEl.textContent = label;
+      countEl.hidden = false;
+      countEl.textContent = String(steps);
+      if (/edit|write|notebook|patch|apply|create/i.test(name) && detail) files.add(detail.trim());
+      body.appendChild(el(`<div class="thoughts-step">${icon(phaseIcon(name), 13)}<span class="ts-k">${esc(name)}</span><span class="ts-d">${esc(detail)}</span></div>`));
+      // Keep the newest step in view while expanded, without stealing the page scroll.
+      if (win.classList.contains("open")) body.scrollTop = body.scrollHeight;
+    },
+    finish(ms: number) {
+      win.removeAttribute("data-streaming");
+      win.classList.add("done");
+      toggle(false); // auto-collapse to the tidy summary
+      const fileBit = files.size ? ` · ${files.size} file${files.size === 1 ? "" : "s"}` : "";
+      const secs = ms / 1000;
+      const timeBit = secs >= 0.05 ? ` · ${secs < 10 ? secs.toFixed(1) : Math.round(secs)}s` : "";
+      curEl.textContent = steps
+        ? `${steps} step${steps === 1 ? "" : "s"}${fileBit}${timeBit}`
+        : "No tools used";
+      countEl.hidden = true;
+    },
+  };
+}
 
 async function send(): Promise<void> {
   const ta = $("#input") as HTMLTextAreaElement;
@@ -272,35 +366,58 @@ async function send(): Promise<void> {
   const textEl = $(".text", node) as HTMLElement;
   textEl.innerHTML = "";
   // P10.1 response activity HUD: live MM:SS timer + semantic phase + running token-cost.
-  const hud = el(`<div class="hud streaming">${icon("bolt", 12)}<span class="hud-t">00:00</span><span class="hud-sep">·</span><span class="hud-phase"></span><span class="hud-meta"></span></div>`);
+  const hud = el(`<div class="hud streaming"><span class="hud-ic">${icon("bolt", 12)}</span><span class="hud-t">00:00</span><span class="hud-sep">·</span><span class="hud-phase"></span><span class="hud-meta"></span></div>`);
   const streamEl = el(`<div class="stream"></div>`);
   textEl.append(streamEl, hud); // status sits BELOW the line that's filling in
   streamEl.innerHTML = `<span class="cursor"></span>`;
+  // The consolidating activity window lives between the answer and the HUD; created lazily
+  // on the first tool event so a pure-text turn shows nothing extra.
+  let thoughts: ThoughtsWin | null = null;
   let buf = "";
   const t0 = Date.now();
-  let phase = guessPhase(text), sawTool = false, tok = 0, cost = 0;
+  // Cold start: the timer is already ticking but nothing has arrived — show "Warming up…"
+  // so the user always sees something meaningful before the first token/tool.
+  let phase = "Warming up…", sawTool = false, tok = 0, cost = 0;
+  const phaseEl = $(".hud-phase", hud) as HTMLElement;
+  const setPhase = (p: string) => {
+    if (p === phase) return;
+    phase = p;
+    // Brief crossfade on phase change — GPU-friendly (opacity only), respects reduced-motion via CSS.
+    phaseEl.classList.remove("swap"); void phaseEl.offsetWidth; phaseEl.classList.add("swap");
+    phaseEl.textContent = p;
+  };
   const paintHud = () => {
     ($(".hud-t", hud) as HTMLElement).textContent = fmtClock(Date.now() - t0);
-    ($(".hud-phase", hud) as HTMLElement).textContent = phase;
+    if (phaseEl.textContent !== phase) phaseEl.textContent = phase;
     ($(".hud-meta", hud) as HTMLElement).textContent = tok ? `· ${fmtNum(tok)} tok · ~$${cost.toFixed(4)}` : "";
   };
+  phaseEl.textContent = phase;
   paintHud();
   const timer = window.setInterval(paintHud, 1000);
+  let finished = false;
   const finishHud = () => {
+    if (finished) return;
+    finished = true;
     clearInterval(timer);
-    const ic = $(".ic", hud); if (ic) ic.outerHTML = icon("check", 12);
+    const ic = $(".hud-ic", hud); if (ic) ic.innerHTML = icon("check", 12);
     hud.classList.remove("streaming"); hud.classList.add("done");
-    phase = "Done"; paintHud();
+    setPhase("Done"); paintHud();
+    thoughts?.finish(Date.now() - t0);
   };
   const onEvent = (e: ChatEvent) => {
-    if (e.type === "token") { buf += e.text; if (!sawTool) phase = "Responding…"; streamEl.innerHTML = renderMarkdown(buf) + `<span class="cursor"></span>`; paintHud(); scrollChat(); }
-    else if (e.type === "tool") { sawTool = true; phase = phaseForTool(e.name, e.detail); paintHud(); addEvent(`<div class="evt tool">${icon("eye", 15)}<span class="k">${esc(e.name)}</span><span>${esc(e.detail)}</span></div>`); }
+    if (e.type === "token") { buf += e.text; if (!sawTool) setPhase("Responding…"); streamEl.innerHTML = renderMarkdown(buf) + `<span class="cursor"></span>`; paintHud(); scrollChat(); }
+    else if (e.type === "tool") {
+      sawTool = true; setPhase(phaseForTool(e.name, e.detail)); paintHud();
+      if (!thoughts) { thoughts = createThoughts(); streamEl.after(thoughts.el); } // window sits below the answer
+      thoughts.step(e.name, e.detail);
+      scrollChat();
+    }
     else if (e.type === "block") onBlock(e);
     else if (e.type === "usage") { tok = e.used; cost = e.cost; state.liveUsage = { used: e.used, size: e.size, cost: e.cost }; paintHud(); renderStatus(); renderMetricsRail(); }
     else if (e.type === "done") { streamEl.innerHTML = renderMarkdown(buf); (node as MsgNode)._md = buf; finishHud(); state.streaming = false; setSendEnabled(); }
   };
   try { await bridge.sendPrompt(text, onEvent); }
-  finally { (node as MsgNode)._md = buf; if (state.streaming) { streamEl.innerHTML = renderMarkdown(buf); finishHud(); state.streaming = false; setSendEnabled(); } else clearInterval(timer); void renderSessions(); void refreshBudget(false); }
+  finally { (node as MsgNode)._md = buf; if (state.streaming) { streamEl.innerHTML = renderMarkdown(buf); finishHud(); state.streaming = false; setSendEnabled(); } else { finishHud(); } void renderSessions(); void refreshBudget(false); }
 }
 
 function onBlock(e: Extract<ChatEvent, { type: "block" }>): void {
@@ -335,7 +452,24 @@ function focusInspector(tab: Tab): void {
   lastInspHash = ""; renderInspector();
 }
 
+// #11 perceived-latency: placeholder chips + rows shown on the inspector's very first
+// paint, before the first 4s poll completes (state.lastOk === 0). Swaps to real content
+// — or the genuine empty-state — the moment refresh() lands or fails.
+function inspSkeleton(): string {
+  return `<div class="skel-chips">${Array.from({ length: 4 }, () => `<div class="skel skel-chip"></div>`).join("")}</div>`
+    + `<div class="skel-group">${Array.from({ length: 5 }, () => `<div class="skel skel-row"></div>`).join("")}</div>`;
+}
 function renderInspector(): void {
+  const snap = state.inspectorTab === "security" ? state.security : state.memory;
+  // First-load only: no successful poll yet AND no snapshot for this tab.
+  if (state.lastOk === 0 && snap === null) {
+    const body = $("#inspBody")!;
+    const skelHash = "skel:" + state.inspectorTab;
+    if (skelHash === lastInspHash) return;
+    lastInspHash = skelHash;
+    body.innerHTML = inspSkeleton();
+    return;
+  }
   const html = state.inspectorTab === "security" ? securityHtml(state.security) : memoryHtml(state.memory);
   const hash = state.inspectorTab + html.length + html.slice(0, 64);
   if (hash === lastInspHash) return;
@@ -658,12 +792,20 @@ async function renderKnowledge(): Promise<void> {
   const canvas = $("#kgCanvas"), side = $("#kgSide"), scopeLbl = $("#kgScopeLbl");
   if (!canvas || !side) return;
   kgHandle?.destroy(); kgHandle = null;
-  const status = await bridge.personal();
+  // #11 perceived-latency: the graph store is encrypted, so personal()/personalGraph()
+  // can take a beat to decrypt. Paint a calm "Decrypting…" state INSTANTLY; the gate()
+  // / mountGraph below always replaces it (and the catch() guarantees no stuck shimmer).
+  canvas.innerHTML = `<div class="skel-kg">${icon("refresh", 26, "spin")}<div>Decrypting your graph…</div></div>`;
+  side.innerHTML = "";
+  let status: Awaited<ReturnType<typeof bridge.personal>>;
+  try { status = await bridge.personal(); }
+  catch { canvas.innerHTML = `<div class="kg-empty">${icon("graph", 30)}<div>Couldn't load your graph. Try reopening this panel.</div></div>`; return; }
   if (scopeLbl) scopeLbl.textContent = status?.scope ? `· ${status.scope}` : "";
   const gate = (msg: string) => { canvas.innerHTML = `<div class="kg-empty">${icon("graph", 30)}<div>${msg}</div></div>`; side.innerHTML = ""; };
   if (!status?.enabled) return gate("Personalization is off. Enable it in Settings to build a knowledge graph.");
   if (!status.unlocked) return gate("Your store is locked. Unlock it in Settings to view the graph.");
-  kgData = await bridge.personalGraph();
+  try { kgData = await bridge.personalGraph(); }
+  catch { return gate("Couldn't decrypt your graph. Try reopening this panel."); }
   if (!kgData || kgData.nodes.length === 0) return gate("Nothing learned yet. It remembers durable facts about <b>you</b> - not what we discuss. Tell me things like <i>“I prefer Rust”</i>, <i>“I use vim”</i>, <i>“I decided to go with Postgres”</i>, or <i>“remember that I deploy with Kubernetes”</i> and they'll appear here (each is security-scanned first).");
   side.innerHTML = `<div class="kg-side-empty">${icon("eye", 22)}<div>Click a node to see its facts.</div></div>`;
   kgHandle = mountGraph(canvas as HTMLElement, kgData, (id) => renderKgSide(id));
@@ -717,7 +859,15 @@ function renderWorkspaceBar(): void {
   bar.innerHTML = `${icon(w.isGit ? "git" : "folder", 14)}<span class="ws-bar-name">${esc(w.name)}</span>${icon("sliders", 12, "dim")}`;
 }
 async function loadWorkspace(): Promise<void> {
-  state.workspace = await bridge.workspace();
+  // #11 perceived-latency: the bar used to stay hidden until workspace() resolved, then
+  // pop in. Show a subtle "loading workspace…" pill instantly; renderWorkspaceBar() below
+  // always replaces it (even on a null/failed result, which hides the bar as before).
+  const bar = $("#wsBar") as HTMLButtonElement | null;
+  if (bar && !state.workspace) {
+    bar.hidden = false;
+    bar.innerHTML = `<span class="ws-bar-loading">${icon("refresh", 12, "spin")}loading workspace…</span>`;
+  }
+  state.workspace = await bridge.workspace().catch(() => null);
   renderWorkspaceBar();
 }
 async function resumeSession(id: string): Promise<void> {
@@ -732,8 +882,15 @@ async function resumeSession(id: string): Promise<void> {
 }
 
 async function applyWorkspace(path: string): Promise<void> {
+  // #11 perceived-latency: setWorkspace() respawns the backend (2–5s). Reassure the user
+  // up front that work is happening, then confirm when it's ready, and reflect the switch
+  // immediately on the workspace bar via a "loading…" pill.
+  showToast({ title: "Switching workspace…", desc: "Restarting the agent in the new folder — ready in a moment.", timeout: 4000 });
+  const bar = $("#wsBar") as HTMLButtonElement | null;
+  if (bar) { bar.hidden = false; bar.innerHTML = `<span class="ws-bar-loading">${icon("refresh", 12, "spin")}switching…</span>`; }
   const info = await bridge.setWorkspace(path);
-  if (info) { state.workspace = info; renderWorkspaceBar(); }
+  if (info) { state.workspace = info; }
+  renderWorkspaceBar();
   seedThread(); state.liveUsage = null; renderStatus(); renderMetricsRail();
   void renderSessions(); void renderSettings();
   showToast({ title: "Workspace set", desc: `Agent now works in ${info?.name ?? path}.`, actions: [{ label: "OK" }], timeout: 2600 });
@@ -1589,12 +1746,27 @@ async function loadConfig(): Promise<void> {
 /** Force omp to re-read its credential vault and refresh the model list (manual "Refresh models"
  *  button). Restarts the omp child, so it also picks up a provider connected since launch. */
 async function refreshModels(): Promise<void> {
+  // #11 perceived-latency: refreshConfig() triggers an omp respawn (2–5s) during which the
+  // model badge would otherwise sit stale with no signal. Show an inline "Refreshing
+  // models…" spinner on the badge + a reassuring toast, and ALWAYS restore the real label
+  // afterwards (success or failure) so it can never get stuck spinning.
+  const mn = $("#modelName");
+  const badge = $("#modelBadge");
+  const prevName = mn?.textContent ?? "";
+  if (mn) mn.textContent = "Refreshing models…";
+  badge?.classList.add("busy");
+  showToast({ title: "Refreshing models…", desc: "Restarting omp to re-read your providers. Your next turn will pick up the new list.", timeout: 4000 });
   try {
     state.config = await bridge.refreshConfig();
     const model = state.config.find((c) => c.id === "model");
-    if (model) { state.model = model.currentValue; const mn = $("#modelName"); if (mn) mn.textContent = modelLabel(model.currentValue); }
+    if (model) { state.model = model.currentValue; if (mn) mn.textContent = modelLabel(model.currentValue); }
+    else if (mn) mn.textContent = prevName;
     updateComposerTools();
-  } catch { /* keep current */ }
+  } catch {
+    if (mn) mn.textContent = prevName; // keep current on failure
+  } finally {
+    badge?.classList.remove("busy"); // never leave the badge stuck in a busy state
+  }
 }
 
 /** After an OAuth login is kicked off, watch the provider's status until it flips to connected
