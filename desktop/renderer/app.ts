@@ -209,22 +209,33 @@ function seedThread(): void {
 }
 function addMessage(role: "user" | "assistant", text: string): HTMLElement {
   $("#chatHint")?.remove();
+  const actions = role === "assistant"
+    ? `<div class="msg-actions"><button class="msg-act" data-msg-copy data-tip="Copy markdown">${icon("copy", 13)}</button><button class="msg-act" data-msg-save data-tip="Save as .md">${icon("download", 13)}</button></div>`
+    : "";
   const node = el(`<div class="msg ${role}">
     <div class="who">${role === "user" ? "You" : "LucidAgent"}</div>
     <div class="av">${role === "user" ? icon("user", 16) : piMark}</div>
-    <div class="text"></div></div>`);
+    <div class="text"></div>${actions}</div>`);
+  (node as MsgNode)._md = text; // raw markdown, for copy / save-as-.md
   ($(".text", node) as HTMLElement).innerHTML = renderMarkdown(text);
   $("#thread")!.appendChild(node);
   scrollChat();
   return node;
 }
+interface MsgNode extends HTMLElement { _md?: string }
 function addEvent(html: string): HTMLElement {
   const node = el(html);
   $("#thread")!.appendChild(node);
   scrollChat();
   return node;
 }
-const scrollChat = () => { const c = $("#chat")!; requestAnimationFrame(() => (c.scrollTop = c.scrollHeight)); };
+// Stick-to-bottom autoscroll: only follow new output when the user is already near the
+// bottom, so scrolling up to re-read mid-stream isn't yanked back down. Instant (not
+// smooth-animated) per token — that reads as smooth during a stream and avoids jank.
+const scrollChat = () => {
+  const c = $("#chat")!;
+  if (c.scrollHeight - c.scrollTop - c.clientHeight < 150) requestAnimationFrame(() => { c.scrollTop = c.scrollHeight; });
+};
 
 // P10.1 (ADR-0011): a friendly, honest "what's happening" phase label — an opening guess
 // from the user's ask, then driven by REAL tool events on the chat stream.
@@ -259,7 +270,7 @@ async function send(): Promise<void> {
   // P10.1 response activity HUD: live MM:SS timer + semantic phase + running token-cost.
   const hud = el(`<div class="hud streaming">${icon("bolt", 12)}<span class="hud-t">00:00</span><span class="hud-sep">·</span><span class="hud-phase"></span><span class="hud-meta"></span></div>`);
   const streamEl = el(`<div class="stream"></div>`);
-  textEl.append(hud, streamEl);
+  textEl.append(streamEl, hud); // status sits BELOW the line that's filling in
   streamEl.innerHTML = `<span class="cursor"></span>`;
   let buf = "";
   const t0 = Date.now();
@@ -282,10 +293,10 @@ async function send(): Promise<void> {
     else if (e.type === "tool") { sawTool = true; phase = phaseForTool(e.name, e.detail); paintHud(); addEvent(`<div class="evt tool">${icon("eye", 15)}<span class="k">${esc(e.name)}</span><span>${esc(e.detail)}</span></div>`); }
     else if (e.type === "block") onBlock(e);
     else if (e.type === "usage") { tok = e.used; cost = e.cost; state.liveUsage = { used: e.used, size: e.size, cost: e.cost }; paintHud(); renderStatus(); renderMetricsRail(); }
-    else if (e.type === "done") { streamEl.innerHTML = renderMarkdown(buf); finishHud(); state.streaming = false; setSendEnabled(); }
+    else if (e.type === "done") { streamEl.innerHTML = renderMarkdown(buf); (node as MsgNode)._md = buf; finishHud(); state.streaming = false; setSendEnabled(); }
   };
   try { await bridge.sendPrompt(text, onEvent); }
-  finally { if (state.streaming) { streamEl.innerHTML = renderMarkdown(buf); finishHud(); state.streaming = false; setSendEnabled(); } else clearInterval(timer); void renderSessions(); void refreshBudget(false); }
+  finally { (node as MsgNode)._md = buf; if (state.streaming) { streamEl.innerHTML = renderMarkdown(buf); finishHud(); state.streaming = false; setSendEnabled(); } else clearInterval(timer); void renderSessions(); void refreshBudget(false); }
 }
 
 function onBlock(e: Extract<ChatEvent, { type: "block" }>): void {
@@ -1135,6 +1146,34 @@ function wire(): void {
   });
   $("#railCmd")!.addEventListener("click", () => palette.show());
   $("#cmdkBtn")!.addEventListener("click", () => palette.show());
+  // Per-message copy (markdown) + save-as-.md
+  $("#thread")!.addEventListener("click", async (e) => {
+    const t = e.target as HTMLElement;
+    const copyBtn = t.closest("[data-msg-copy]") as HTMLElement | null;
+    const saveBtn = t.closest("[data-msg-save]") as HTMLElement | null;
+    if (!copyBtn && !saveBtn) return;
+    const md = ((t.closest(".msg") as MsgNode | null)?._md ?? "").trim();
+    if (!md) { showToast({ title: "Nothing to copy yet", desc: "Wait for the reply to finish.", actions: [{ label: "OK" }], timeout: 2000 }); return; }
+    if (copyBtn) {
+      try {
+        await navigator.clipboard.writeText(md);
+        copyBtn.classList.add("ok"); copyBtn.innerHTML = icon("check", 13);
+        setTimeout(() => { copyBtn.classList.remove("ok"); copyBtn.innerHTML = icon("copy", 13); }, 1200);
+      } catch { showToast({ title: "Copy failed", desc: "Clipboard unavailable in this view.", actions: [{ label: "OK" }], timeout: 2800 }); }
+    } else if (saveBtn) {
+      const blob = new Blob([md], { type: "text/markdown;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a"); a.href = url; a.download = "lucid-reply.md"; a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1500);
+    }
+  });
+  // Safety net: the model hover card lives on document.body and is orphaned when the
+  // picker closes/re-renders (its mouseout never fires). Dismiss it the moment the
+  // pointer isn't over a model row, and on any click/wheel.
+  const dropTip = () => { if (mtCard || mtCur) { mtCur = null; hideModelTip(true); } };
+  window.addEventListener("mousemove", (e) => { if ((mtCard || mtCur) && !(e.target as HTMLElement).closest?.("[data-model]")) dropTip(); }, { passive: true, capture: true });
+  window.addEventListener("mousedown", dropTip, { capture: true });
+  window.addEventListener("wheel", dropTip, { passive: true, capture: true });
 
   // model / mode / thinking picker
   $("#modelBadge")!.addEventListener("click", () => openConfigPopover($("#modelBadge")!));

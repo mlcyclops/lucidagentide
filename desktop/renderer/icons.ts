@@ -62,6 +62,10 @@ const RAW: Record<string, string> = {
   layout: P("M4 5.5h16v13H4z") + P("M14 5.5v13"),
   // refresh
   refresh: P("M5 12a7 7 0 0 1 12-5l2 2") + P("M19 5v4h-4") + P("M19 12a7 7 0 0 1-12 5l-2-2") + P("M5 19v-4h4"),
+  // copy (two overlapping cards)
+  copy: P("M9.5 9.5h8v8h-8z") + P("M6.5 14.5H6A1.5 1.5 0 0 1 4.5 13V6A1.5 1.5 0 0 1 6 4.5h7A1.5 1.5 0 0 1 14.5 6v.5"),
+  // download (save to disk)
+  download: P("M12 4v9.5") + P("M8 10.5l4 4 4-4") + P("M5 18.5h14"),
 };
 
 export function icon(name: keyof typeof RAW | string, size = 18, extraClass = ""): string {

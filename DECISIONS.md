@@ -1326,3 +1326,52 @@ expect, designed in now (a small registry guard) rather than bolted on later (a 
 No code this session. The suite descriptor + Argon2id opt-in land with the P9.5 crypto work; the
 KEM/sig slots are populated when (a) the connector increment needs key establishment and (b) a
 validated PQC module is available. Tracked as **P9.6 — crypto-agility + PQC slots** in the roadmap.
+
+-----
+
+## ADR-0016 — Chat reading experience + the one renderer dependency (KaTeX)
+
+**Date:** 2026-06-20
+**Status:** Accepted. Built this increment (chat-UX overhaul).
+**Relationship:** refines the GUI (ADR-0006) and the P10.1 HUD (ADR-0011).
+
+### Context
+
+The chat surface had real friction: model replies with LaTeX showed as raw `\frac`/`\int`,
+output couldn't be copied or saved, code blocks were hard to scan, the column wasted horizontal
+space, the model hover-cards got stuck on screen, and a rate-limited turn hung on "Thinking…"
+forever (no ACP timeout — fixed separately in this session).
+
+### Decision — the one dependency: KaTeX, bundled offline
+
+The renderer was deliberately **zero-dependency** (airgap/gov; same reasoning that kept the
+Knowledge graph hand-rolled). Proper LaTeX rendering is the one place a hand-rolled approach can't
+keep up (the replies use `\begin{align*}`, `\mathbf`, matrices). So we add **exactly one** renderer
+dep — **KaTeX** — and **vendor it fully offline** (no CDN): `desktop/renderer/vendor/katex/` holds
+`katex.min.css` + 20 woff2 fonts, served from the renderer for both the dev server and the Electron
+`file://` build. This preserves the airgap posture (nothing is fetched at runtime).
+
+Safety: math is rendered up front with `katex.renderToString` (`trust:false` blocks `\href` etc.;
+KaTeX escapes its own input), swapped for a private-use placeholder THROUGH marked+DOMPurify, then
+the trusted KaTeX HTML is reinserted AFTER sanitizing (KaTeX needs inline styles that DOMPurify
+would otherwise strip). A render cache keeps streaming cheap; a pure-number guard avoids `$10`
+currency false positives. The `.katex` HTML is the only post-sanitize HTML we trust, and only
+because we generated it.
+
+### Also shipped (renderer-only, no contract change)
+
+- Per-message **Copy markdown** + **Save .md** (raw markdown stashed on the node).
+- HUD moved **below** the streaming line, with the live **token counter** kept on it.
+- **Wider** thread/composer (`min(1080px, 94vw)`), font smoothing, clearer **code blocks** (distinct
+  surface + accent edge + smooth horizontal scroll).
+- **Stick-to-bottom** autoscroll (follows output only when already near the bottom — no yank when
+  you scroll up to re-read).
+- **Tooltip fix:** the model hover-card lives on `document.body` and was orphaned when the picker
+  closed (its `mouseout` never fired); a global guard dismisses it the moment the pointer leaves a
+  model row (and on click/wheel).
+
+### Consequences
+
+- JS bundle grows ~460KB (KaTeX) — the cost of offline math; acceptable for a desktop app.
+- `desktop/renderer/vendor/` is now a tracked, shipped path (`.gitignore` exception added).
+- The zero-dep stance still holds everywhere else; KaTeX is the single, justified, vendored exception.

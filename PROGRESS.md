@@ -4,6 +4,22 @@ Three lines per session: **shipped / stubbed / next** (CLAUDE.md session ritual)
 
 -----
 
+## P11.1: chat reading experience + LaTeX (ADR-0016) · stall fix · CI/mac fixes
+- **shipped:** (1) FIX — a rate-limited/stalled turn no longer hangs on "Thinking…" forever (idle
+  timeout in acp_backend.prompt, resets on every event). (2) LaTeX math via bundled-offline KaTeX
+  (vendored CSS + woff2; rendered up front, placeholdered through marked+DOMPurify, reinserted
+  trusted; render cache; currency guard) — the one renderer dependency, airgap-clean. (3) Chat UX:
+  per-message Copy + Save .md, HUD moved below the streaming line (token counter kept), wider column
+  (min(1080px,94vw)), font smoothing, clearer code blocks, stick-to-bottom autoscroll, and a fix for
+  orphaned model hover-cards. Also CI: mac unsigned build (identity:null) + checkout@v5 + extraResources
+  excludes. Verified live (synthetic stream): math renders, HUD-below, copy/save present, tooltip
+  dismisses, width applied. desktop tsc clean; JS bundle +~460KB (KaTeX).
+- **stubbed:** per-code-block copy button (per-message copy covers it for now); bundling a mono font
+  (system stack used); the "breaks after 3rd prompt" root cause is rate-limiting — surfaced, not
+  removed (P10.3 live rate-limit probes would warn earlier).
+- **next:** P10.3 (live provider rate-limit probes) so you see the 5-hour wall coming; optional
+  per-code-block copy + bundled mono.
+
 ## P10.2: cross-model usage & cost ledger (ADR-0011)
 - **shipped:** usageLedger() in tools/memory_data.ts aggregates per-model tokens + cost across ALL
   omp session .jsonl (with a per-file mtime cache so repeat calls are cheap). Savings is DERIVED from
