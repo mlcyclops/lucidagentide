@@ -887,3 +887,15 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **stubbed:** OAuth-restart + post-login poll can't be exercised headless (need a real provider
   login); logic typechecks. Perplexity OAuth (OTP/macOS-app) intentionally not wired here.
 - **next:** surface which credential (oauth vs key) a model came from in the picker hover card.
+
+## P11.1: scanner homoglyph precision + source-scoped gate (ADR-0019 A+B)
+- **shipped:** fixed the generate_image false positives. (A) scanner mixed-script-homoglyph now
+  flags ONLY Latin-confusable Greek/Cyrillic codepoints — math (Δ Σ λ μ π) passes, real spoofs
+  (Cyrillic а, Greek omicron) still caught; clean-corpus + adversarial fixtures green. (B) gate
+  GatePolicy.nonBlockingTypes demotes homoglyph-only hits in the model's OWN tool content to
+  recorded-but-not-blocked (suspicious), while dangerous vectors still hard-block and external
+  text stays strict; fail-closed law untouched. harness 369 pass, scanner pytest green.
+- **stubbed:** Part C — block observability (the chat shows blocks but the Security panel reads
+  an empty DB because the omp-child gate can't co-write the GUI's single-writer DuckDB) + the
+  toast "Review" + an audited "Approve & retry". Next increment.
+- **next:** P11.2 — persist gate blocks GUI-side, wire Review to the finding, add approve/override.

@@ -1510,3 +1510,58 @@ and looks for `conversations.json` then `MyActivity.json` (then a lone `.json`).
   sees it; the model can't pull facts from un-scanned text.
 - `complete()` bypasses persona/recall and runs in an isolated session — no prompt-prefix impact.
 - Cap is surfaced, never silent (no false "imported everything").
+
+-----
+
+## ADR-0019 — Scanner homoglyph precision + source-scoped gate + block observability
+
+**Date:** 2026-06-20
+**Status:** Accepted. Part A + B built this increment; Part C (observability/review/approve) is next.
+**Relationship:** refines keystone #1 (the Unicode scanner) and the quarantine gate (invariant #3/#4).
+A deliberate, isolated fail-closed adjustment with its own ADR, as CLAUDE.md requires.
+
+### Context
+
+A user generating an image of a physics answer hit repeated false-positive blocks: the gate
+quarantined the model's own `generate_image` content because it contained ordinary scientific
+Unicode (`Δv`, `Σ`, `5μm`). Two distinct defects:
+1. **Scanner over-flagged** — `mixed-script-homoglyph` fired on ANY Latin+Greek/Cyrillic token, so
+   legitimate math notation (Greek letters with no Latin look-alike) was treated as a spoof.
+2. **Blocks were invisible** — the chat showed 8 "Blocked …" chips, but the Security panel read
+   0 quarantined / 0 findings (verified against `agent_obs.duckdb`), and the toast "Review" did
+   nothing. Root cause: the gate runs in the omp CHILD process and only writes the block to stderr;
+   its DuckDB persistence fails because the GUI server (a separate process) holds the single-writer
+   DB. So nothing reaches the tables the panel reads, and "Review" opens an empty panel.
+
+### Decision A — confusable-only homoglyph detection (scanner, keystone #1)
+
+`_detect_homoglyphs` now flags a Greek/Cyrillic letter only when its codepoint is a genuine Latin
+look-alike (`_LATIN_CONFUSABLE`: Α Β Ε … ο ν ρ; а е о р с …), not the whole Greek/Cyrillic block.
+Non-confusable math/scientific letters (Δ Σ Π Λ Φ λ μ π θ) mixed with Latin pass clean. Real spoofs
+(Cyrillic `а` in "pаypаl", Greek omicron in "lοgin") still fire — the existing adversarial fixtures
+stay green, and new clean-corpus fixtures assert the physics case produces zero findings.
+
+### Decision B — source-scoped gate (gate policy, invariant #3)
+
+The gate scans the model's OWN tool args. A homoglyph-only hit there is not an injection against the
+model, so it is **recorded-but-not-blocked**. New optional `GatePolicy.nonBlockingTypes` demotes
+specified finding types: they stay in `findings` and keep the label **suspicious** (so keystone #2
+still blocks promotion into memory), but don't quarantine on their own. The omp gate uses
+`TOOL_POLICY = { blockAtOrAbove: "high", nonBlockingTypes: {mixed-script-homoglyph} }`. This is a
+**bounded** relaxation: the never-legitimate vectors (zero-width, bidi-control, tag-block, PUA) still
+hard-block; a dangerous finding ALONGSIDE a demoted one still blocks (type-scoped, not blanket); and
+external/imported text — scanned on a different path with the strict `DEFAULT_POLICY` — is unchanged.
+The fail-closed law is untouched: a missing/failed scan still blocks (gate.failclosed.test green).
+
+### Decision C — block observability + review + approve (PLANNED, next increment)
+
+Move block PERSISTENCE to the GUI process (which owns the writable `agent_obs.duckdb`): the GUI
+already observes every block (the gate's stderr signal + tool_call_update rejection), so it records a
+quarantine/finding row there, surfaces it in the Security panel + rail badge + counts, makes the
+toast/chip "Review" open the specific finding, and adds an audited "Approve & retry" (a deliberate
+fail-closed override writing an `approval_event`). Not built this increment.
+
+### Guardrails
+
+- Fail-closed law intact; scanner clean-corpus still zero false-positives; adversarial spoofs still
+  caught; keystone #2 (suspicious can't auto-promote) unaffected. harness 369 pass, scanner pytest green.

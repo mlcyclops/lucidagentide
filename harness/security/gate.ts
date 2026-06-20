@@ -10,7 +10,7 @@
 // out-of-process (the Python sidecar); the gate that ACTS on the result may not
 // (CLAUDE.md invariant #4).
 
-import type { Finding, Severity, TrustLabel } from "../contracts.ts";
+import type { Finding, FindingType, Severity, TrustLabel } from "../contracts.ts";
 import { ScannerClient, ScanUnavailableError } from "./scanner_client.ts";
 
 const SEVERITY_RANK: Record<Severity, number> = {
@@ -24,6 +24,12 @@ const SEVERITY_RANK: Record<Severity, number> = {
 export interface GatePolicy {
   /** Findings at or above this severity block. Default: "high". */
   blockAtOrAbove: Severity;
+  /** Finding types that are RECORDED but do not, on their own, force a block. Scopes the
+   *  gate by source: the model's OWN tool content shouldn't hard-block on a homoglyph-only
+   *  hit (legit when it writes about spoofing or uses a Greek variable), while external /
+   *  untrusted text stays strict (DEFAULT_POLICY demotes nothing). The genuinely dangerous
+   *  vectors (zero-width, bidi-control, tag-block, PUA) still block. See ADR-0019. */
+  nonBlockingTypes?: ReadonlySet<FindingType>;
 }
 
 export const DEFAULT_POLICY: GatePolicy = { blockAtOrAbove: "high" };
@@ -43,7 +49,13 @@ export function decideFromFindings(findings: Finding[], policy: GatePolicy = DEF
     return { block: false, reason: "clean", trustLabel: "trusted", findings, failClosed: false };
   }
   const threshold = SEVERITY_RANK[policy.blockAtOrAbove];
-  const top = findings.reduce((m, f) => Math.max(m, SEVERITY_RANK[f.severity]), 0);
+  // Only findings whose type is NOT demoted can force a block. Demoted types (e.g. a
+  // homoglyph-only hit in the model's own tool content) are still recorded — they remain
+  // in `findings` and keep the label suspicious — but never quarantine on their own.
+  const blockingFindings = policy.nonBlockingTypes
+    ? findings.filter((f) => !policy.nonBlockingTypes!.has(f.type))
+    : findings;
+  const top = blockingFindings.reduce((m, f) => Math.max(m, SEVERITY_RANK[f.severity]), 0);
   if (top >= threshold) {
     return {
       block: true,

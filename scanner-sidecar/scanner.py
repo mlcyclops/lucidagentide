@@ -62,6 +62,29 @@ _SEVERITY = {
 # the confusable set (Cherokee, Coptic, fullwidth, ...) is a future enhancement.
 _HOMOGLYPH_PRONE = {"CYRILLIC", "GREEK"}
 
+# A Greek/Cyrillic letter mixed into a Latin token is only a homoglyph SPOOF when that
+# specific codepoint is a genuine Latin look-alike. Non-confusable letters (Δ Σ Π Λ Φ Ψ Ω
+# Γ Θ Ξ λ μ π θ σ φ …) are ordinary math/scientific notation and MUST NOT be flagged —
+# "Δv", "5μm", "Σλ" are not attacks. This set is the Latin-confusable subset only; it
+# preserves real spoof detection (Cyrillic 'а' in "pаypаl", Greek omicron in "lοgin")
+# while letting legitimate scientific Unicode through. (The gate additionally treats
+# homoglyph-only hits in the model's OWN tool content as non-blocking — see ADR-0019.)
+_LATIN_CONFUSABLE = frozenset(
+    {
+        # Greek capitals that mirror Latin capitals (A B E Z H I K M N O P T Y X)
+        0x0391, 0x0392, 0x0395, 0x0396, 0x0397, 0x0399, 0x039A, 0x039C,
+        0x039D, 0x039F, 0x03A1, 0x03A4, 0x03A5, 0x03A7,
+        # Greek lowercase look-alikes: omicron→o, nu→v, rho→p, lunate sigma→c, gamma→y
+        0x03BF, 0x03BD, 0x03C1, 0x03F2, 0x03B3,
+        # Cyrillic capitals that mirror Latin (A B E K M H O P C T Y X, plus S J)
+        0x0410, 0x0412, 0x0415, 0x041A, 0x041C, 0x041D, 0x041E, 0x0420,
+        0x0421, 0x0422, 0x0423, 0x0425, 0x0405, 0x0408,
+        # Cyrillic lowercase look-alikes: a e o p c y x s i j
+        0x0430, 0x0435, 0x043E, 0x0440, 0x0441, 0x0443, 0x0445, 0x0455,
+        0x0456, 0x0458,
+    }
+)
+
 
 def _classify(code: int, name: str, cat: str) -> str | None:
     """Return a FindingType string, or None if the character is unremarkable."""
@@ -119,6 +142,10 @@ def _detect_homoglyphs(text: str) -> list[dict]:
             continue
         for prone in _HOMOGLYPH_PRONE & scripts.keys():
             for idx in scripts[prone]:
+                # Only a genuine Latin look-alike is a spoof; non-confusable math/
+                # scientific letters (Δ Σ λ μ π …) mixed with Latin are legitimate.
+                if ord(text[idx]) not in _LATIN_CONFUSABLE:
+                    continue
                 ch = text[idx]
                 findings.append(
                     {
