@@ -117,7 +117,9 @@
     ]
   },
   "dependencies": {
-    "electron-updater": "^6.3.9"
+    "@types/katex": "^0.16.8",
+    "electron-updater": "^6.3.9",
+    "katex": "^0.17.0"
   },
   "devDependencies": {
     "@resvg/resvg-js": "^2.6.2",

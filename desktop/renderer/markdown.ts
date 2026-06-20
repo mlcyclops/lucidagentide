@@ -11,8 +11,47 @@
 
 import DOMPurify from "dompurify";
 import { marked } from "marked";
+import katex from "katex";
 
 marked.setOptions({ gfm: true, breaks: true });
+
+// ── LaTeX math (KaTeX, bundled offline) ──────────────────────────────────────
+// KaTeX is XSS-safe (it escapes its input; trust:false blocks \href etc.) and emits
+// HTML with INLINE STYLES that DOMPurify would otherwise strip — so we render math to
+// HTML up front, swap it for a placeholder, run marked+DOMPurify on the rest, then
+// reinsert the trusted KaTeX HTML AFTER sanitizing. A small cache avoids re-rendering
+// the same expression on every streamed token.
+const mathCache = new Map<string, string>();
+function tex(src: string, display: boolean): string | null {
+  const key = (display ? "D" : "I") + src;
+  const hit = mathCache.get(key);
+  if (hit !== undefined) return hit || null;
+  let out: string;
+  try { out = katex.renderToString(src, { displayMode: display, throwOnError: false, strict: false, trust: false }); }
+  catch { out = ""; }
+  if (mathCache.size > 500) mathCache.clear();
+  mathCache.set(key, out);
+  return out || null;
+}
+// Private-use sentinels survive marked + DOMPurify untouched; index maps back to KaTeX HTML.
+const OPEN = "", CLOSE = "";
+function extractMath(text: string, store: string[]): string {
+  const stash = (html: string) => `${OPEN}${store.push(html) - 1}${CLOSE}`;
+  const block = (m: string, disp: boolean, full: string) => { const h = tex(m.trim(), disp); return h ? stash(h) : full; };
+  let s = text;
+  s = s.replace(/\$\$([\s\S]+?)\$\$/g, (full, m) => block(m, true, full));            // $$ … $$
+  s = s.replace(/\\\[([\s\S]+?)\\\]/g, (full, m) => block(m, true, full));            // \[ … \]
+  s = s.replace(/\\begin\{(align\*?|aligned|equation\*?|gather\*?|gathered|alignat\*?|multline\*?|split|cases|array|matrix|[pbBvV]matrix|smallmatrix)\}[\s\S]+?\\end\{\1\}/g, (full) => block(full, true, full)); // math environments
+  s = s.replace(/\\\(([\s\S]+?)\\\)/g, (full, m) => block(m, false, full));           // \( … \)
+  s = s.replace(/(?<![\\$])\$(?!\s)([^\n$]+?)(?<!\s)\$(?!\$)/g, (full, m) => {         // $ … $ (skip pure currency)
+    if (/^[\d.,\s]+$/.test(m)) return full;
+    const h = tex(m.trim(), false); return h ? stash(h) : full;
+  });
+  return s;
+}
+function reinsertMath(html: string, store: string[]): string {
+  return html.replace(new RegExp(`${OPEN}(\\d+)${CLOSE}`, "g"), (_, i) => store[Number(i)] ?? "");
+}
 
 // Open links in the OS browser, never in-app; harden every anchor.
 DOMPurify.addHook("afterSanitizeAttributes", (node) => {
@@ -41,12 +80,16 @@ const SANITIZE = {
 
 const clean = (html: string): string => DOMPurify.sanitize(html, SANITIZE) as unknown as string;
 
-/** Markdown (+ safe HTML/SVG/emoji) → sanitized HTML for the chat thread. */
+/** Markdown (+ LaTeX math, safe HTML/SVG/emoji) → sanitized HTML for the chat thread. */
 export function renderMarkdown(text: string): string {
-  return clean(marked.parse(emojify(text), { async: false }) as string);
+  const math: string[] = [];
+  const html = clean(marked.parse(emojify(extractMath(text, math)), { async: false }) as string);
+  return reinsertMath(html, math);
 }
 
 /** Inline-only variant (no block wrapping) for one-liners. */
 export function renderInline(text: string): string {
-  return clean(marked.parseInline(emojify(text), { async: false }) as string);
+  const math: string[] = [];
+  const html = clean(marked.parseInline(emojify(extractMath(text, math)), { async: false }) as string);
+  return reinsertMath(html, math);
 }

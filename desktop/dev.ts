@@ -33,7 +33,7 @@ function ompBin(): string {
 
 const ROOT = join(import.meta.dir, "renderer");
 const PORT = Number(process.env.PORT ?? 5319);
-const CT: Record<string, string> = { ".html": "text/html", ".css": "text/css", ".js": "text/javascript", ".svg": "image/svg+xml" };
+const CT: Record<string, string> = { ".html": "text/html", ".css": "text/css", ".js": "text/javascript", ".svg": "image/svg+xml", ".woff2": "font/woff2", ".woff": "font/woff", ".ttf": "font/ttf" };
 
 async function bundleApp(): Promise<{ js: string; ok: boolean }> {
   const out = await Bun.build({ entrypoints: [join(ROOT, "app.ts")], target: "browser", sourcemap: "inline" });

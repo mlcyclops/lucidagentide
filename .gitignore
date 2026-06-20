@@ -11,6 +11,9 @@ scanner-sidecar/.venv/
 
 # --- vendored omp reference clone (read-only, not part of our source) ---
 vendor/
+# ...but the desktop renderer's vendored, offline assets (KaTeX CSS + fonts) DO ship.
+!desktop/renderer/vendor/
+!desktop/renderer/vendor/**
 
 # --- telemetry / databases (raw forensic data stays local, never committed) ---
 **/*.duckdb
