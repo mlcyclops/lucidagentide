@@ -1,0 +1,58 @@
+# Continuous integration: typecheck + the full test suite on every push and PR to master.
+# Gives PRs (e.g. from collaborators) a green/red signal before merge, and keeps the
+# README test badge honest.
+
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  harness:
+    name: Harness tests + typecheck (Bun)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install (root)
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck (root)
+        run: bun x tsc --noEmit
+
+      - name: Harness test suite
+        run: bun test harness
+
+      - name: Install + typecheck (desktop)
+        working-directory: desktop
+        run: |
+          bun install
+          bun x tsc --noEmit
+
+  scanner:
+    name: Unicode scanner tests (Python)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Pytest (scanner-sidecar)
+        working-directory: scanner-sidecar
+        run: |
+          python -m pip install --upgrade pip pytest
+          python -m pytest

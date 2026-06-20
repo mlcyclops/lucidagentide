@@ -138,3 +138,43 @@ jobs:
             desktop/release/*portable*.exe
             desktop/release/*.blockmap
             desktop/release/latest*.yml
+
+  # Rolling "latest" release — every successful build (both platforms) publishes the newest
+  # installers to a single `latest`-tagged release, so the README download buttons
+  # (releases/latest/download/...) always point at the most recent build. Tag pushes still
+  # get their own versioned release via the step above; this covers manual `workflow_dispatch`
+  # runs so you don't have to tag to refresh the downloads.
+  publish-latest:
+    name: Publish rolling "latest" release
+    needs: build
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all platform artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: List artifacts
+        run: ls -la dist
+
+      - name: Publish / update the "latest" release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: Latest build
+          prerelease: false
+          make_latest: "true"
+          body: |
+            Rolling build — auto-updated on every successful CI build (commit ${{ github.sha }}).
+            Always the newest Windows + macOS installers. For a pinned version, see the tagged releases.
+          files: |
+            dist/*.dmg
+            dist/*Setup*.exe
+            dist/*portable*.exe
+            dist/*.zip
+            dist/*.blockmap
+            dist/latest*.yml

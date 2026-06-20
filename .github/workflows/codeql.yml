@@ -1,0 +1,49 @@
+# Static Application Security Testing (SAST) for the harness.
+#
+# CodeQL analyzes the TypeScript harness/desktop AND the Python scanner sidecar for
+# security bugs (injection, path traversal, unsafe deserialization, etc.) using the
+# security-extended query suite, and reports them in the repo's Security → Code scanning tab.
+#
+# Free on public repos; on private repos it needs GitHub Advanced Security enabled.
+# TS + Python are interpreted, so no build step is required.
+
+name: CodeQL (SAST)
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  schedule:
+    - cron: "27 4 * * 1" # weekly, Monday 04:27 UTC — catches newly-published query updates
+
+permissions:
+  contents: read
+  security-events: write # upload findings to Code scanning
+  actions: read
+
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: Analyze ${{ matrix.language }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [javascript-typescript, python]
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          queries: security-extended
+
+      - name: Analyze
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{ matrix.language }}"

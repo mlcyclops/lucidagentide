@@ -1,0 +1,33 @@
+# Dependency security + freshness (SCA). Dependabot opens PRs for vulnerable / outdated
+# deps and security advisories across every manifest in the repo.
+version: 2
+updates:
+  # GitHub Actions — keep the CI/build actions pinned to fresh, patched versions.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    labels: ["dependencies", "ci"]
+
+  # Root harness (Bun/npm package.json).
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    labels: ["dependencies"]
+
+  # Desktop app (Electron, KaTeX, etc.).
+  - package-ecosystem: npm
+    directory: "/desktop"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    labels: ["dependencies", "desktop"]
+
+  # Python scanner sidecar (pyproject; zero runtime deps today, pytest dev only).
+  - package-ecosystem: pip
+    directory: "/scanner-sidecar"
+    schedule:
+      interval: weekly
+    labels: ["dependencies", "python"]
