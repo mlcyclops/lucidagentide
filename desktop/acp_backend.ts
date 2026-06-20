@@ -138,11 +138,22 @@ class Backend {
     this.recallDelivered = false;
   }
 
+  // Max silence (no token/tool/usage event) before we treat a turn as stalled. omp's
+  // ACP request has no timeout, so without this a rate-limited / hung turn leaves the UI
+  // on "Thinking…" forever. Resets on every event, so a legitimately long turn is fine —
+  // only TOTAL silence for this long trips it.
+  private static readonly IDLE_MS = 120_000;
+
   /** Run one turn, streaming events to onEvent; resolves after `done`. Captures the
-   *  assistant reply so the personalization distiller can learn from the turn (P9.2). */
+   *  assistant reply so the personalization distiller can learn from the turn (P9.2).
+   *  A stall (no activity for IDLE_MS) ends the turn with a clear error instead of hanging. */
   async prompt(text: string, onEvent: (e: ChatEvent) => void): Promise<void> {
     let assistant = "";
-    const sink = (e: ChatEvent) => { if (e.type === "token") assistant += e.text; onEvent(e); };
+    let stalled = false;
+    let idle: ReturnType<typeof setTimeout> | undefined;
+    let onStall: (e: Error) => void = () => {};
+    const arm = () => { if (idle) clearTimeout(idle); idle = setTimeout(() => { stalled = true; onStall(new Error("the model did not respond for 2 minutes — the provider may be rate-limited (check your hourly budget) or the turn stalled. Try again.")); }, Backend.IDLE_MS); };
+    const sink = (e: ChatEvent) => { arm(); if (e.type === "token") assistant += e.text; onEvent(e); };
     this.listener = sink;
     try {
       await this.ensureSession();
@@ -152,9 +163,16 @@ class Backend {
       if (this.persona && !this.personaDelivered) { preamble += `${this.persona}\n\n`; this.personaDelivered = true; }
       if (!this.recallDelivered) { const r = recallPreamble(); if (r) preamble += `${r}\n\n`; this.recallDelivered = true; }
       const body = preamble + text;
-      await this.acp!.request("session/prompt", { sessionId: this.sessionId, prompt: [{ type: "text", text: body }] });
+      arm(); // start the idle clock now (covers a stall BEFORE the first token)
+      const stall = new Promise<never>((_, reject) => { onStall = reject; });
+      await Promise.race([
+        this.acp!.request("session/prompt", { sessionId: this.sessionId, prompt: [{ type: "text", text: body }] }),
+        stall,
+      ]);
     } catch (e) {
-      onEvent({ type: "token", text: `\n[agent unavailable: ${String((e as any)?.message ?? e)}]` });
+      onEvent({ type: "token", text: `\n[${stalled ? "stalled" : "agent unavailable"}: ${String((e as any)?.message ?? e)}]` });
+    } finally {
+      if (idle) clearTimeout(idle);
     }
     this.listener = null;
     onEvent({ type: "done" });
