@@ -32,6 +32,13 @@ export interface MemorySnapshot {
 
 // P10.3: a live rate-limit reading probed from an API-key provider's response headers.
 export interface ProbedLimit { provider: string; label: string; used: number; remaining: number; limit: number; resetsAt: number | null }
+
+// ADR-0009 Phase D: read-only developer Logs view (gated on Developer mode).
+export interface DevView {
+  enabled: boolean;
+  snapshot: { telemetry: any[]; runs: any[]; exports: any[] } | null;
+  blocks: { quarantined: BlockRecord[]; approved: BlockRecord[]; total: number };
+}
 // P10.2 cross-model usage & cost ledger
 export interface ModelUsage {
   model: string; provider: string; source: "subscription" | "local";
@@ -111,6 +118,9 @@ export interface LucidBridge {
   // `setRateLimitProbe` flips the opt-in.
   rateLimits(force?: boolean): Promise<{ enabled: boolean; limits: ProbedLimit[] } | null>;
   setRateLimitProbe(enabled: boolean): Promise<unknown>;
+  // ADR-0009 Phase D: developer Logs view + its opt-in toggle.
+  dev(): Promise<DevView | null>;
+  setDeveloperMode(enabled: boolean): Promise<unknown>;
   usage(): Promise<UsageLedger | null>;
   sendPrompt(text: string, onEvent: (e: ChatEvent) => void): Promise<void>;
   config(): Promise<ConfigOption[]>;
@@ -233,6 +243,8 @@ export const bridge: LucidBridge = {
   budget: () => getData("/api/budget"),
   rateLimits: (force) => getData(`/api/ratelimits${force ? "?force=1" : ""}`),
   setRateLimitProbe: (enabled) => post("/api/ratelimits", { enabled }),
+  dev: () => getData("/api/dev"),
+  setDeveloperMode: (enabled) => post("/api/dev", { enabled }),
   usage: () => getData("/api/usage"),
   sendPrompt: streamChat,
   config: async () => (await getData("/api/config")) ?? FALLBACK_CONFIG,

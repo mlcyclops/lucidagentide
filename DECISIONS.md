@@ -614,9 +614,10 @@ collapsed on boot (`toggleSidebar(true)` + `setInspectorRail(true)`) for a calme
 ## ADR-0009 — Memory continuity, knowledge-graph export, and developer observability (roadmap)
 
 **Date:** 2026-06-19
-**Status:** Accepted as a roadmap. Phases P8.1–P8.4 are **Proposed** — each is built in
-its own future increment with its own confirming ADR (or an addendum here) when the
-frozen-contract changes land.
+**Status:** Accepted as a roadmap. **Phase C** superseded by ADR-0013 (vault export, built).
+**Phase D BUILT** (scoped — Logs view; transcripts + raw-reveal deferred, see Phase D below).
+**Phase A** (cross-session memory recall) and **Phase B** (traceability) remain **Proposed** and are
+assigned to contributor alexander-blackwell (issues #11 / #12). Each lands in its own increment.
 **Context increment:** P8.0 (planning only — no functional code shipped this session).
 
 ### Context
@@ -687,15 +688,18 @@ impacts:* **no migration** for the sanitized path (reuses `semantic_*`, `archive
 `export_events`); reuse `safe_export_created`; raw path shares `raw_revealed` (Phase D). New
 `harness/export/vault_export.ts`; `POST /api/vault/export` in `dev.ts`.
 
-**Phase D — `P8.4-dev-logging` (Developer-mode admin view).** Satisfies #4. Depends on B.
-A Settings-gated, read-only view of telemetry, run lineage, and per-turn transcripts, with the
-audited raw-reveal. Add `developerMode?: boolean` to `settings_store.ts` (+ `setDeveloperMode`)
-and a Settings checkbox copying `headroomToggle`; when ON, reveal a new **Logs** rail tab.
-Surfaces (READ_ONLY, gated server-side on `developerMode`): `telemetry_events` stream,
-`getRunTree` lineage, `turns` transcripts (sanitized). Endpoints `GET
-/api/dev/{telemetry,lineage,turns}` and `POST /api/dev/reveal` (the audited raw path).
-*Frozen-contract impacts:* no migration; `raw_revealed` (shared with C); recommended
-`developer_mode_toggled` (flipping the gate's posture is auditable).
+**Phase D — `P8.4-dev-logging` (Developer-mode admin view). BUILT (scoped).** Satisfies #4.
+`developerMode?: boolean` + `setDeveloperMode` in `settings_store.ts`; a Settings toggle reveals a
+read-only **Logs** rail panel (`data-rail="dev"`, third inspector view). `GET /api/dev` is gated
+server-side on `developerMode` (returns `{enabled:false, snapshot:null}` when off) and surfaces, all
+READ_ONLY + metadata-only: the **telemetry_events stream** (new `telemetryStream` view), **run
+lineage** (`activeRuns`), the **gate block audit** (the ADR-0019-C `security_log`), and the **export
+audit**. `POST /api/dev {enabled}` flips the mode.
+*Deferred (honest scope):* (1) **per-turn transcripts** depend on Phase B (traceability — open
+ticket #12, not built), so the transcript surface is omitted, not faked; (2) the **audited
+raw-reveal** (`POST /api/dev/reveal` + `raw_revealed`) is a deliberate fail-closed weakening best
+done as its own careful pass — left for a follow-up. *Frozen-contract impacts of what shipped:* a
+new additive read-only dashboard view (`telemetry_stream`); no migration; no new EventName.
 
 ### Recommended build order
 
@@ -1576,3 +1580,33 @@ optionally overrides what it already did.
 
 - Fail-closed law intact; scanner clean-corpus still zero false-positives; adversarial spoofs still
   caught; keystone #2 (suspicious can't auto-promote) unaffected. harness 369 pass, scanner pytest green.
+
+-----
+
+## ADR-0020 — MCP Enterprise-Managed Auth Hub
+
+**Date:** 2026-06-20
+**Status:** Accepted
+**Context increment:** Integration Phase
+
+### Decision
+
+We are building a centralized **MCP Server Connection Hub** into the IDE to automatically authenticate against enterprise MCP servers (such as internal tools or commercial SaaS) using the Zero-Touch, Identity-Provider-driven authorization model. 
+This will support **Okta, Entra ID (Azure AD), and GCP Workload Identity Federation (WIF)** natively.
+
+1. **Pop-out UI Behavior:** Advanced configurations will "pop out... into the main window" as a full-height overlay panel that slides over the main chat/workspace area when an MCP connector is clicked in the Settings sidebar. This gives maximum real estate for forms, logs, and token status without cluttering the narrow sidebar.
+2. **Token Storage Security:** OAuth Access Tokens will be stored using an **OS-level secure credential vault interface** via Electron's `safeStorage`. We have added a roadmap path for integrating Post-Quantum Cryptography (PQC) algorithms (e.g., NIST ML-KEM/Kyber) once they are standardized by OS vendors.
+3. **OAuth Redirect URIs:** We will use an **Ephemeral Localhost Server with PKCE** for handling OAuth redirects, which adheres to IETF RFC 8252 (OAuth 2.0 for Native Apps) as the most secure and auditable standard for desktop applications.
+4. **GCP WIF Profiles:** Because most enterprises use Entra ID, Yubikeys, or PIV tokens, we will configure GCP WIF to directly trust the Entra ID OIDC provider. The IDE will perform the Entra ID flow and exchange the resulting Entra ID token directly with GCP STS for a GCP access token, avoiding the need for standalone Google credentials.
+5. **Terraform Scope:** We will provide Terraform snippets to aid in configuring the Identity Provider side (Okta, Entra ID, GCP WIF pool), accompanied by README links to official docs for configuring the actual MCP server side.
+
+### Why
+
+Anthropic's Enterprise-Managed Auth demonstrated the power of zero-touch IdP integration for MCP. By managing auth centrally rather than requiring individual user API keys or personal access tokens, we maintain strong governance, auditability, and ease of use in enterprise deployments.
+
+### Consequences
+
+- A new `desktop/mcp_hub.ts` backend to handle the PKCE flows, localhost redirect catchers, and GCP STS exchanges.
+- Electron's `safeStorage` dependency for token persistence.
+- A new UI overlay system integrated into `desktop/renderer/app.ts` that interacts seamlessly with the existing `settingsShell()`.
+- A set of Terraform modules (`terraform/mcp_auth/`) included in the repo for deploying the required IdP configuration.

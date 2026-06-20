@@ -41,6 +41,9 @@ export interface GuiSettings {
   // P10.3: opt-in live rate-limit probe for API-KEY providers (Anthropic/OpenAI). OFF by default —
   // it makes a tiny request per provider to read the rate-limit headers, which costs a token or two.
   rateLimitProbe?: boolean;
+  // ADR-0009 Phase D: developer-mode logging view (telemetry + lineage + audit trails, read-only).
+  // OFF by default; flips on the "Logs" rail tab. Gated server-side too.
+  developerMode?: boolean;
   // Personalization knowledge graph (ADR-0010, P9.x): opt-in, encrypted-at-rest.
   // OFF by default - no user-fact distillation, recall, or store until enabled.
   personalizationEnabled?: boolean;
@@ -72,6 +75,9 @@ export function setPersonalization(enabled: boolean): GuiSettings {
 }
 export function setRateLimitProbe(enabled: boolean): GuiSettings {
   const s = load(); s.rateLimitProbe = enabled; save(s); return s;
+}
+export function setDeveloperMode(enabled: boolean): GuiSettings {
+  const s = load(); s.developerMode = enabled; save(s); return s;
 }
 export function setPersonalScope(scope: GuiSettings["personalScope"]): GuiSettings {
   const s = load(); s.personalScope = scope; save(s); return s;

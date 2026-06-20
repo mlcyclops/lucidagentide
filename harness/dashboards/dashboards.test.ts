@@ -20,6 +20,7 @@ const VIEW_NAMES = [
   "memory_promotion_risk",
   "export_audit",
   "active_runs",
+  "telemetry_stream",
 ];
 
 function hasInvisible(s: string): boolean {
@@ -55,7 +56,7 @@ test("rowsToCsv writes a quoted header + rows; empty -> empty", () => {
   expect(rowsToCsv([{ a: 1, b: "x" }])).toBe('"a","b"\n"1","x"');
 });
 
-test("materialize writes all seven view files", async () => {
+test("materialize writes all eight view files", async () => {
   const out = join(dir, "data");
   const r = await materializeDashboards(db, out);
   expect(r.files.map((f) => f.name).sort()).toEqual([...VIEW_NAMES].sort());

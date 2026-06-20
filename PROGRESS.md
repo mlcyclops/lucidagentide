@@ -934,3 +934,15 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **stubbed:** live header correctness needs a real Anthropic/OpenAI key to fully validate (parsers
   tested, gating + graceful-empty verified). Probe model ids (haiku/gpt-4o-mini) are sensible defaults.
 - **next:** ADR-0009 Phase D — developer-mode logging view.
+
+## P8.4 / Phase D: developer-mode Logs view (ADR-0009 Phase D, scoped)
+- **shipped:** a Settings "Developer mode" toggle reveals a read-only Logs rail panel (third
+  inspector view). GET /api/dev (gated server-side on developerMode) surfaces, metadata-only +
+  READ_ONLY: telemetry_events stream (new telemetryStream dashboard view), run lineage (activeRuns),
+  the gate block audit (ADR-0019-C security_log), and the export audit. settings_store
+  developerMode/setDeveloperMode; bridge dev()/setDeveloperMode; new desktop/ratelimit-free devHtml
+  renderer + rail button (hidden until on). Verified live: off→null, toggle reveals the rail +
+  renders the 4 accordions. harness 369 pass (telemetry view + count test updated), tsc+bundle clean.
+- **stubbed:** per-turn transcripts (depend on Phase B / alex's #12 — omitted, not faked); the
+  audited raw-reveal (POST /api/dev/reveal + raw_revealed) left as a careful follow-up.
+- **next:** ADR-0009 Phase A/B (alex); optional Phase D raw-reveal; ADR-0015 PQC when FIPS requires.

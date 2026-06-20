@@ -72,4 +72,31 @@ export async function securitySnapshot(): Promise<SecuritySnapshot | null> {
   }
 }
 
+export interface DevSnapshot {
+  telemetry: Record<string, unknown>[];
+  runs: Record<string, unknown>[];
+  exports: Record<string, unknown>[];
+}
+
+/** ADR-0009 Phase D: read-only developer-logging snapshot from agent_obs.duckdb (null if absent).
+ *  Metadata only (the views never select raw content). The caller gates on Developer mode. */
+export async function devSnapshot(): Promise<DevSnapshot | null> {
+  const dbPath = join(import.meta.dir, "..", "..", "agent_obs.duckdb");
+  if (!existsSync(dbPath)) return null;
+  let ro: Awaited<ReturnType<typeof openReadOnly>> | undefined;
+  try {
+    ro = await openReadOnly(dbPath);
+    const { dbLike } = ro;
+    return {
+      telemetry: clean(await views.telemetryStream(dbLike)),
+      runs: clean(await views.activeRuns(dbLike)),
+      exports: clean(await views.exportAudit(dbLike)),
+    };
+  } catch {
+    return null;
+  } finally {
+    ro?.close();
+  }
+}
+
 export const OBS_DB = OBS_DB_PATH;

@@ -14,7 +14,7 @@ import { type GraphHandle, kindLabel, mountGraph } from "./graph.ts";
 import type { PersonalGraphData } from "./bridge.ts";
 import { type Action, attachRichTip, createPalette, initTooltips, popover, showToast } from "./ui.ts";
 
-type Tab = "security" | "memory";
+type Tab = "security" | "memory" | "dev";
 const state = {
   inspectorTab: "security" as Tab,
   sidebarCollapsed: false,
@@ -41,6 +41,8 @@ const state = {
   lastPrompt: "" as string, // last user message — re-sent by an Approve & retry (ADR-0019 C)
   probedLimits: [] as import("./bridge.ts").ProbedLimit[], // P10.3 live API-key rate limits
   probeEnabled: false, // P10.3 opt-in state for the live rate-limit probe
+  developerMode: false, // ADR-0009 Phase D
+  dev: null as import("./bridge.ts").DevView | null, // ADR-0009 Phase D logs snapshot
 };
 const prettyModel = (v: string) => v.replace(/^anthropic\//, "");
 // Strip the redundant "· AskSage Gov" / "· Gov" suffix from a model's display name
@@ -105,6 +107,7 @@ function buildShell(): void {
         <button class="rail-btn" data-rail="memory" data-tip="Memory & context|Context window, prompt-cache savings, semantic memory" data-tip-icon="brain">${icon("brain", 20)}</button>
         <button class="rail-btn" data-rail="runs" data-tip="Runs|Provenance lineage" data-tip-icon="runs">${icon("runs", 20)}</button>
         <button class="rail-btn" data-rail="knowledge" data-tip="Knowledge graph|Your private, encrypted personalization graph - nodes, edges, drill-down" data-tip-icon="graph">${icon("graph", 20)}</button>
+        <button class="rail-btn" id="railLogs" data-rail="dev" hidden data-tip="Logs · Developer|Read-only telemetry, run lineage, and audit trails. Enabled in Settings → Developer mode." data-tip-icon="layout">${icon("layout", 20)}</button>
         <div class="spacer"></div>
         <button class="rail-btn" id="railCmd" data-tip="Commands|Ctrl / ⌘ K" data-tip-icon="command">${icon("command", 20)}</button>
         <button class="rail-btn" data-rail="settings" data-tip="Settings" data-tip-icon="sliders">${icon("sliders", 20)}</button>
@@ -472,6 +475,14 @@ function inspSkeleton(): string {
     + `<div class="skel-group">${Array.from({ length: 5 }, () => `<div class="skel skel-row"></div>`).join("")}</div>`;
 }
 function renderInspector(): void {
+  if (state.inspectorTab === "dev") {
+    const html = devHtml(state.dev);
+    const hash = "dev" + html.length + html.slice(0, 80);
+    if (hash === lastInspHash) return;
+    lastInspHash = hash;
+    const body = $("#inspBody")!; const top = body.scrollTop; body.innerHTML = html; body.scrollTop = top;
+    return;
+  }
   const snap = state.inspectorTab === "security" ? state.security : state.memory;
   // First-load only: no successful poll yet AND no snapshot for this tab.
   if (state.lastOk === 0 && snap === null) {
@@ -639,7 +650,10 @@ function secCompression(hr: import("./bridge.ts").HeadroomStatus | null): string
         <span><b>Compress context with headroom</b> - fewer tokens before they reach the model. ${hr.running ? `<span class="abadge ok">running · :${hr.port}</span>` : ""}</span></label>
       <div class="set-note">${icon("info", 12)} Runs entirely on your machine (${esc(hr.version ?? "installed")}). Request-routing + a gov-deployment security review are next - see ADR-0008.</div>`
     : `<div class="set-note">${icon("info", 12)} Optional: install <b>headroom</b> to compress context on-device (60–95% fewer tokens). Run <code>${esc(hr?.installHint ?? "pip install headroom-ai[proxy]")}</code>, then this toggle appears.</div>`;
-  return setCard("compression", "Token compression", "headroom · on-device · opt-in", body, true);
+  // ADR-0009 Phase D: Developer mode toggle (reveals the read-only Logs rail panel).
+  const dev = `<label class="set-toggle" style="margin-top:12px;border-top:1px solid var(--line-soft);padding-top:12px"><input type="checkbox" id="devModeToggle" ${state.developerMode ? "checked" : ""}/>
+    <span><b>Developer mode</b> - reveal a read-only <b>Logs</b> panel in the rail: telemetry stream, run lineage, and audit trails (metadata only).</span></label>`;
+  return setCard("compression", "Token compression & developer", "on-device · opt-in", body + dev, true);
 }
 function secOthers(auth: import("./bridge.ts").AuthStatus | null): string {
   return setCard("others", "More providers", "", (auth?.others ?? []).map(provCard).join("") || `<div class="empty">none</div>`, true);
@@ -969,6 +983,39 @@ function securityHtml(d: SecuritySnapshot | null): string {
     table([{ key: "kind", label: "kind" }, { key: "mode", label: "mode" }, { key: "sandbox_profile", label: "sandbox" }, { key: "status", label: "status" }], runs),
     OPEN.has("sec.runs"));
   return h;
+}
+
+// ── ADR-0009 Phase D: developer Logs view (read-only; metadata only) ──────────────
+function devHtml(d: import("./bridge.ts").DevView | null): string {
+  let h = `<div class="sec-intro"><div class="sec-intro-h"><span class="sec-pulse">${icon("layout", 17)}</span><b>Developer logs</b></div>
+    <div class="sec-intro-d">Read-only telemetry, run lineage, and audit trails from this machine - metadata only, no prompt or file content. Per-turn transcripts arrive with ADR-0009 Phase B.</div></div>`;
+  if (!d || !d.enabled) { h += `<div class="empty">Developer mode is off. Turn it on in <b>Settings → Developer mode</b> to see the telemetry stream, run lineage, and the audit trail.</div>`; return h; }
+  const tel = d.snapshot?.telemetry ?? [], runs = d.snapshot?.runs ?? [], exp = d.snapshot?.exports ?? [], blk = d.blocks?.quarantined ?? [];
+  h += chips([
+    { cls: "f", n: tel.length, l: "events" },
+    { cls: "g", n: runs.length, l: "runs" },
+    { cls: "q", n: blk.length, l: "live blocks" },
+    { cls: "a", n: exp.length, l: "exports" },
+  ]);
+  h += accordion("dev.telemetry", "Telemetry stream", "recent · metadata only",
+    table([{ key: "event", label: "event" }, { key: "run_id", label: "run", mono: true }, { key: "session_id", label: "session", mono: true }, { key: "created_at", label: "at", mono: true }], tel),
+    true, String(tel.length));
+  h += accordion("dev.runs", "Run lineage", "provenance",
+    table([{ key: "run_id", label: "run", mono: true }, { key: "kind", label: "kind" }, { key: "mode", label: "mode" }, { key: "sandbox_profile", label: "sandbox" }, { key: "status", label: "status" }], runs),
+    OPEN.has("dev.runs"), String(runs.length));
+  h += accordion("dev.blocks", "Gate block audit", "this session",
+    table([{ key: "tool", label: "tool" }, { key: "severity", label: "sev", mono: true }, { key: "reason", label: "reason" }, { key: "status", label: "status", pill: true }], blk as unknown as Record<string, unknown>[]),
+    OPEN.has("dev.blocks"), String(blk.length));
+  h += accordion("dev.exports", "Export audit", "what left, sanitized",
+    table([{ key: "export_type", label: "type" }, { key: "sanitization_status", label: "sanitized" }, { key: "reviewer", label: "by" }], exp),
+    OPEN.has("dev.exports"));
+  return h;
+}
+async function loadDev(): Promise<void> {
+  state.dev = await bridge.dev();
+  state.developerMode = state.dev?.enabled ?? false;
+  const btn = $("#railLogs"); if (btn) (btn as HTMLElement).hidden = !state.developerMode;
+  if (state.inspectorTab === "dev") { lastInspHash = ""; renderInspector(); }
 }
 
 function memoryHtml(d: MemorySnapshot | null): string {
@@ -1377,6 +1424,7 @@ function wire(): void {
     const r = (b as HTMLElement).dataset.rail!;
     if (r !== "knowledge") closeKnowledge();
     if (r === "security" || r === "memory") focusInspector(r);
+    else if (r === "dev") { focusInspector("dev"); void loadDev(); } // ADR-0009 Phase D
     else if (r === "chat") { closeSettings(); $("#input")?.focus(); $$(".rail-btn").forEach((x) => x.classList.toggle("active", x === b)); }
     else if (r === "runs") { focusInspector("security"); $("#inspBody")?.querySelector('[data-acc="sec.runs"] .acc-head')?.dispatchEvent(new Event("click", { bubbles: true })); }
     else if (r === "settings") openSettings();
@@ -1575,6 +1623,14 @@ function wire(): void {
       const st = await bridge.setHeadroom(enabled);
       showToast({ title: enabled ? "Compression on" : "Compression off", desc: enabled ? (st?.running ? `headroom proxy running on :${st.port}.` : "headroom enabled - proxy will start.") : "headroom proxy stopped.", actions: [{ label: "OK" }], timeout: 2800 });
       void renderSettings();
+      return;
+    }
+    // ADR-0009 Phase D: Developer mode → reveal/hide the Logs rail panel.
+    if (t.closest("#devModeToggle")) {
+      const enabled = ($("#devModeToggle", $("#setBody")!) as HTMLInputElement)?.checked ?? false;
+      await bridge.setDeveloperMode(enabled);
+      await loadDev();
+      showToast({ title: enabled ? "Developer mode on" : "Developer mode off", desc: enabled ? "A read-only Logs panel is now in the rail (telemetry, lineage, audit)." : "The Logs panel is hidden.", actions: [{ label: "OK" }], timeout: 3000 });
       return;
     }
     // ── Personalization (ADR-0010/0012) ──
@@ -2170,6 +2226,7 @@ void loadConfig().then(renderStatus);
 void loadWorkspace();
 void loadAsksage();
 void loadSkills();
+void loadDev(); // ADR-0009 Phase D: reveal the Logs rail panel if developer mode is on
 void bridge.getSettings().then((s) => { // your saved name → the "You" label on your messages
   if (s?.username) { state.username = s.username; $$(".msg.user .who").forEach((w) => { w.textContent = s.username!; }); }
 });

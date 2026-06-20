@@ -9,7 +9,7 @@
 //   bun run desktop:web        # http://localhost:5319
 
 import { join } from "node:path";
-import { securitySnapshot } from "../tools/web/data.ts";
+import { devSnapshot, securitySnapshot } from "../tools/web/data.ts";
 import { approveBlock, liveBlocks } from "./security_log.ts";
 import { probeRateLimits } from "./ratelimit_probe.ts";
 import { memorySnapshot, rateLimits, usageLedger } from "../tools/memory_data.ts";
@@ -17,7 +17,7 @@ import { backend } from "./acp_backend.ts";
 import { listSessions, sessionMessages } from "./sessions.ts";
 import { providerAuth } from "./auth_status.ts";
 import { cloneRepo, setWorkspace, workspaceInfo } from "./workspace.ts";
-import { applyEnv, load as loadSettings, setAsksage, setKey, setRateLimitProbe, setUsername } from "./settings_store.ts";
+import { applyEnv, load as loadSettings, setAsksage, setDeveloperMode, setKey, setRateLimitProbe, setUsername } from "./settings_store.ts";
 import { asksageConfig, listDatasets, listPersonas, monthlyTokens, scanPersona, wrapPersona } from "./asksage.ts";
 import { listSkills } from "./skills_data.ts";
 import { headroomStatus, setHeadroomEnabled, startHeadroom } from "./headroom.ts";
@@ -103,6 +103,13 @@ const server = Bun.serve({
       // Audited fail-closed override: release one quarantined call (ADR-0019 C).
       if (p === "/api/security/approve" && req.method === "POST") { const b = await req.json(); return json({ ok: true, data: approveBlock(String(b.id ?? "")) }); }
       if (p === "/api/memory") return json({ ok: true, data: await memorySnapshot() });
+      // ADR-0009 Phase D: developer-mode logging view. GET is gated server-side on developerMode
+      // (returns null when off); POST {enabled} flips the mode. Read-only, metadata-only.
+      if (p === "/api/dev") {
+        if (req.method === "POST") { const b = await req.json(); return json({ ok: true, data: setDeveloperMode(!!b.enabled) }); }
+        if (!loadSettings().developerMode) return json({ ok: true, data: { enabled: false, snapshot: null, blocks: { quarantined: [], approved: [], total: 0 } } });
+        return json({ ok: true, data: { enabled: true, snapshot: await devSnapshot(), blocks: liveBlocks() } });
+      }
       // Light, fast re-read of the provider rate-limit budget (omp's agent.db).
       // Used by the front-end's manual refresh + 5-minute auto-poll.
       if (p === "/api/budget") return json({ ok: true, data: rateLimits() });
