@@ -13,6 +13,7 @@ import { join } from "node:path";
 import { ACPClient } from "./acp.ts";
 import { currentWorkspace } from "./workspace.ts";
 import { learnFromTurn, recallPreamble } from "./personal.ts";
+import { recordBlock } from "./security_log.ts";
 
 const REPO = join(import.meta.dir, "..");
 // Absolute so the gate loads from THIS repo even when omp runs in another workspace.
@@ -33,7 +34,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 export type ChatEvent =
   | { type: "token"; text: string }
   | { type: "tool"; name: string; detail: string }
-  | { type: "block"; tool: string; reason: string; severity: string; findings: string }
+  | { type: "block"; tool: string; reason: string; severity: string; findings: string; id?: string; quarantined?: boolean }
   | { type: "usage"; used: number; size: number; cost: number }
   | { type: "done" };
 
@@ -68,7 +69,11 @@ class Backend {
           switch (u?.sessionUpdate) {
             case "agent_message_chunk": if (u.content?.type === "text") this.emit({ type: "token", text: u.content.text }); break;
             case "tool_call": this.emit({ type: "tool", name: String(u.kind ?? u.title ?? "tool"), detail: String(u.title ?? u.rawInput?.command ?? "") }); break;
-            case "tool_call_update": if (u.status === "failed" || u.status === "rejected") this.emit({ type: "block", tool: String(u.kind ?? "tool"), reason: "blocked by the security gate", severity: "high", findings: "" }); break;
+            // A failed/rejected tool call is omp's GENERIC signal — it fires for the security
+            // gate AND for ordinary tool failures, so it must NOT claim "blocked by the security
+            // gate" (that mislabel made benign failures look like quarantines). The authoritative
+            // security block is the gate's own stderr signal, handled in onStderr below.
+            case "tool_call_update": if (u.status === "failed" || u.status === "rejected") this.emit({ type: "block", tool: String(u.kind ?? "tool"), reason: "tool call rejected", severity: "low", findings: "", quarantined: false }); break;
             case "usage_update": this.emit({ type: "usage", used: Number(u.used ?? 0), size: Number(u.size ?? 0), cost: Number(u.cost?.amount ?? 0) }); break;
             case "available_commands_update": this.commands = u.availableCommands ?? []; break;
             case "config_option_update": if (u.configOptions) this.configOptions = u.configOptions; break;
@@ -85,7 +90,12 @@ class Backend {
         acp.onStderr = (chunk) => {
           for (const line of chunk.split("\n")) {
             const m = /\[BLOCKED tool_call:(\w+)\].*?severity=(\w+).*?findings=([^\s]+)/.exec(line);
-            if (m) this.emit({ type: "block", tool: m[1]!, reason: "hidden-Unicode content quarantined", severity: m[2]!, findings: m[3]! });
+            if (m) {
+              // The authoritative security-gate block. Persist it GUI-side (the gate's own omp
+              // child can't co-write the DB) so it reaches the Security panel + is reviewable.
+              const rec = recordBlock({ tool: m[1]!, severity: m[2]!, findings: m[3]!, reason: "hidden-Unicode content quarantined", sessionId: this.sessionId ?? undefined });
+              this.emit({ type: "block", tool: m[1]!, reason: "hidden-Unicode content quarantined", severity: m[2]!, findings: m[3]!, id: rec.id, quarantined: true });
+            }
           }
         };
         acp.start();

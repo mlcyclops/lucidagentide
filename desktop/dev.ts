@@ -10,6 +10,7 @@
 
 import { join } from "node:path";
 import { securitySnapshot } from "../tools/web/data.ts";
+import { approveBlock, liveBlocks } from "./security_log.ts";
 import { memorySnapshot, rateLimits, usageLedger } from "../tools/memory_data.ts";
 import { backend } from "./acp_backend.ts";
 import { listSessions, sessionMessages } from "./sessions.ts";
@@ -92,7 +93,14 @@ const server = Bun.serve({
         const { js } = await bundleApp();
         return new Response(js, { headers: { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-store" } });
       }
-      if (p === "/api/security") return json({ ok: true, data: await securitySnapshot() });
+      // Security snapshot + the GUI-owned LIVE gate blocks (ADR-0019 C). Live blocks are merged
+      // in even when the DuckDB snapshot is null, so a fresh machine still shows quarantines.
+      if (p === "/api/security") {
+        const snap = await securitySnapshot();
+        return json({ ok: true, data: { ...(snap ?? {}), live: liveBlocks() } });
+      }
+      // Audited fail-closed override: release one quarantined call (ADR-0019 C).
+      if (p === "/api/security/approve" && req.method === "POST") { const b = await req.json(); return json({ ok: true, data: approveBlock(String(b.id ?? "")) }); }
       if (p === "/api/memory") return json({ ok: true, data: await memorySnapshot() });
       // Light, fast re-read of the provider rate-limit budget (omp's agent.db).
       // Used by the front-end's manual refresh + 5-minute auto-poll.
