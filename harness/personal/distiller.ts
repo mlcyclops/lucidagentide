@@ -33,10 +33,15 @@ const clip = (s: string, n = 140): string => s.replace(/\s+/g, " ").trim().slice
 const PATTERNS: { re: RegExp; kind: UserKind; verb: string }[] = [
   { re: /\bi (?:prefer|favou?r)\s+([^.,;!?\n]{2,60})/gi, kind: "user:preference", verb: "Prefers" },
   { re: /\bi (?:like|love|enjoy|am into|am a fan of)\s+([^.,;!?\n]{2,60})/gi, kind: "user:interest", verb: "Likes" },
-  { re: /\bi (?:use|work with|code in|write|build with)\s+([^.,;!?\n]{2,50})/gi, kind: "user:skill", verb: "Uses" },
+  { re: /\bi (?:dislike|hate|avoid|can'?t stand|don'?t like)\s+([^.,;!?\n]{2,60})/gi, kind: "user:preference", verb: "Avoids" },
+  { re: /\bi (?:use|work with|code in|write|build with|am on|run|develop in)\s+([^.,;!?\n]{2,50})/gi, kind: "user:skill", verb: "Uses" },
+  { re: /\bi (?:decided|chose|went with|picked|am going with|will go with)\s+(?:to use\s+)?([^.,;!?\n]{2,60})/gi, kind: "user:decision", verb: "Chose" },
   { re: /\bi (?:always|usually|tend to|generally|never)\s+([^.,;!?\n]{3,70})/gi, kind: "user:behavior", verb: "Tends to" },
-  { re: /\bi(?:'m| am)\s+(?:working on|building|focused on)\s+([^.,;!?\n]{3,70})/gi, kind: "user:goal", verb: "Working on" },
-  { re: /\b(?:remember|note) that\s+([^.\n]{3,120})/gi, kind: "user:preference", verb: "Note" },
+  { re: /\bi(?:'m| am)\s+(?:working on|building|focused on|trying to)\s+([^.,;!?\n]{3,70})/gi, kind: "user:goal", verb: "Working on" },
+  { re: /\bmy (?:goal|aim|plan) is to\s+([^.,;!?\n]{3,70})/gi, kind: "user:goal", verb: "Goal:" },
+  { re: /\bi(?:'m| am)\s+(?:an?\s+)?([a-z][\w /+-]{2,40}?(?:engineer|developer|dev|designer|manager|analyst|scientist|architect|consultant|lead|founder|student|researcher|admin|devops|sre|pm|operator|hacker))\b/gi, kind: "user:personality", verb: "Is a" },
+  { re: /\b(?:remember|note|keep in mind) that\s+([^.\n]{3,120})/gi, kind: "user:preference", verb: "Note" },
+  { re: /\b(?:call me|my name is|i'?m called)\s+([a-z][\w'-]{1,30})\b/gi, kind: "user:personality", verb: "Goes by" },
 ];
 const URL_RE = /\bhttps?:\/\/[^\s)\]<>"']{6,200}/gi;
 

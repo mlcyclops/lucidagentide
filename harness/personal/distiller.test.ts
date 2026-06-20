@@ -36,6 +36,20 @@ test("heuristicExtractor finds preferences, interests, and links", () => {
   expect(facts.find((f) => f.kind === "user:link")!.statement).toContain("https://example.com/page");
 });
 
+test("heuristicExtractor captures natural-language facts (decision, role, goal, avoid, name)", () => {
+  const facts = heuristicExtractor({ user: "I'm a security engineer and I decided to go with Postgres. I avoid Java. My goal is to ship v1. Call me Nick.", assistant: "" });
+  const kinds = facts.map((f) => f.kind);
+  expect(kinds).toContain("user:decision");    // Chose Postgres
+  expect(kinds).toContain("user:personality");  // Is a security engineer / Goes by Nick
+  expect(kinds).toContain("user:goal");         // ship v1
+  expect(facts.some((f) => /avoids java/i.test(f.statement))).toBe(true);
+  expect(facts.some((f) => /goes by nick/i.test(f.statement))).toBe(true);
+});
+
+test("heuristicExtractor learns nothing from a plain coding question (no personal facts)", () => {
+  expect(heuristicExtractor({ user: "Can you fix this restart() bug in my game loop?", assistant: "" }).length).toBe(0);
+});
+
 test("modelExtractor parses a JSON array and drops invalid kinds", async () => {
   const callModel = async () => 'noise before [{"kind":"user:goal","entity":"P9","statement":"Ship P9.2","confidence":0.9},{"kind":"bogus","entity":"x","statement":"y"}] trailing';
   const facts = await modelExtractor(callModel)({ user: "anything", assistant: "" });

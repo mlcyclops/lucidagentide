@@ -654,7 +654,7 @@ async function renderKnowledge(): Promise<void> {
   if (!status?.enabled) return gate("Personalization is off. Enable it in Settings to build a knowledge graph.");
   if (!status.unlocked) return gate("Your store is locked. Unlock it in Settings to view the graph.");
   kgData = await bridge.personalGraph();
-  if (!kgData || kgData.nodes.length === 0) return gate("Nothing learned yet. As you chat, facts you share are gated and remembered here.");
+  if (!kgData || kgData.nodes.length === 0) return gate("Nothing learned yet. It remembers durable facts about <b>you</b> - not what we discuss. Tell me things like <i>“I prefer Rust”</i>, <i>“I use vim”</i>, <i>“I decided to go with Postgres”</i>, or <i>“remember that I deploy with Kubernetes”</i> and they'll appear here (each is security-scanned first).");
   side.innerHTML = `<div class="kg-side-empty">${icon("eye", 22)}<div>Click a node to see its facts.</div></div>`;
   kgHandle = mountGraph(canvas as HTMLElement, kgData, (id) => renderKgSide(id));
   kgHandle.setLens(kgLens);
@@ -1009,6 +1009,7 @@ async function refreshAsksage(): Promise<void> {
 function toggleSidebar(force?: boolean): void {
   state.sidebarCollapsed = force ?? !state.sidebarCollapsed;
   $("#sidebar")!.classList.toggle("collapsed", state.sidebarCollapsed);
+  try { localStorage.setItem("lucid.sidebar-collapsed", state.sidebarCollapsed ? "1" : "0"); } catch { /* ignore */ }
 }
 /** Update the composer's quick agent-controls (model · mode · thinking) labels. */
 function updateComposerTools(): void {
@@ -1841,7 +1842,10 @@ wire();
 initZoom();
 initResize();
 seedThread();
-toggleSidebar(true);    // start with the left sessions panel collapsed
+// Sessions panel: remember your choice across launches; default OPEN so a past
+// conversation is one click away (it used to start collapsed → expand-then-click felt like
+// a double-click). Collapse it once and it stays collapsed.
+toggleSidebar((() => { try { return localStorage.getItem("lucid.sidebar-collapsed") === "1"; } catch { return false; } })());
 setInspectorRail(true); // start with the right inspector slid into the metrics rail
 renderStatus();
 void loadConfig().then(renderStatus);
