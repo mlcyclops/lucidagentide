@@ -128,7 +128,7 @@ jobs:
 
       - name: Attach installers to the Release (tag builds only)
         if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           # Installers + the electron-updater feed (latest*.yml + .blockmap) so
           # in-app auto-update can find new versions.
@@ -163,7 +163,7 @@ jobs:
         run: ls -la dist
 
       - name: Publish / update the "latest" release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: latest
           name: Latest build
