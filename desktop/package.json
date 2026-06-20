@@ -44,12 +44,17 @@
           "desktop/renderer/**/*",
           "desktop/package.json",
           "node_modules/**/*",
-          "package.json"
+          "package.json",
+          "!desktop/node_modules/**",
+          "!desktop/release/**",
+          "!desktop/dist/**",
+          "!**/.git/**"
         ]
       }
     ],
     "mac": {
       "category": "public.app-category.developer-tools",
+      "icon": "build/icon.png",
       "target": [
         {
           "target": "dmg",
