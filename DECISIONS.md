@@ -1586,8 +1586,9 @@ optionally overrides what it already did.
 ## ADR-0020 — MCP Enterprise-Managed Auth Hub
 
 **Date:** 2026-06-20
-**Status:** Accepted
-**Context increment:** Integration Phase
+**Status:** Accepted as a roadmap — phased build **P-MCP.1–4** (see "Phases" below). New surface, not
+a refinement. Review addendum added 2026-06-20 to align it with the harness invariants.
+**Context increment:** planning only (no functional code this increment).
 
 ### Decision
 
@@ -1595,10 +1596,10 @@ We are building a centralized **MCP Server Connection Hub** into the IDE to auto
 This will support **Okta, Entra ID (Azure AD), and GCP Workload Identity Federation (WIF)** natively.
 
 1. **Pop-out UI Behavior:** Advanced configurations will "pop out... into the main window" as a full-height overlay panel that slides over the main chat/workspace area when an MCP connector is clicked in the Settings sidebar. This gives maximum real estate for forms, logs, and token status without cluttering the narrow sidebar.
-2. **Token Storage Security:** OAuth Access Tokens will be stored using an **OS-level secure credential vault interface** via Electron's `safeStorage`. We have added a roadmap path for integrating Post-Quantum Cryptography (PQC) algorithms (e.g., NIST ML-KEM/Kyber) once they are standardized by OS vendors.
-3. **OAuth Redirect URIs:** We will use an **Ephemeral Localhost Server with PKCE** for handling OAuth redirects, which adheres to IETF RFC 8252 (OAuth 2.0 for Native Apps) as the most secure and auditable standard for desktop applications.
-4. **GCP WIF Profiles:** Because most enterprises use Entra ID, Yubikeys, or PIV tokens, we will configure GCP WIF to directly trust the Entra ID OIDC provider. The IDE will perform the Entra ID flow and exchange the resulting Entra ID token directly with GCP STS for a GCP access token, avoiding the need for standalone Google credentials.
-5. **Terraform Scope:** We will provide Terraform snippets to aid in configuring the Identity Provider side (Okta, Entra ID, GCP WIF pool), accompanied by README links to official docs for configuring the actual MCP server side.
+2. **Token Storage Security:** OAuth Access Tokens will be stored using an **OS-level secure credential vault interface** via Electron's `safeStorage`. **Seam:** `safeStorage` is an Electron **main-process** API, and our GUI server runs as a *separate* Bun process (ADR-0006) — so token seal/unseal must route through `main.ts` + preload (the exact custody seam ADR-0010 already uses), with a PBKDF2 passphrase fallback in the plain-Bun dev runtime. PQC note: ML-KEM is **already standardized** (FIPS 203, Aug 2024 — see ADR-0015); the real dependency is OS-vendor *keystore* adoption, so track it under ADR-0015 (crypto-agility) rather than as a fresh roadmap path here.
+3. **OAuth Redirect URIs:** We will use an **Ephemeral Localhost Server with PKCE** for handling OAuth redirects, which adheres to IETF RFC 8252 (OAuth 2.0 for Native Apps) as the most secure and auditable standard for desktop applications. **Coordination:** we already run a localhost OAuth catcher (omp `auth-broker`, ~:1455). The MCP PKCE catcher MUST bind a *distinct ephemeral* port, validate `state`, and fully drain its child pipes + close on callback — the exact failure mode that previously took down provider OAuth (a wrapper that stopped draining stdout/stderr blocked the callback server).
+4. **GCP WIF Profiles:** Because most enterprises front identity with **Entra ID or Okta** (with Yubikey / PIV as the *factors* behind it), we will configure GCP WIF to directly trust the Entra ID **OIDC provider**. The IDE performs the Entra ID flow and exchanges the resulting OIDC token directly with **GCP STS** (`token` endpoint) for a short-lived GCP access token, avoiding standalone Google credentials.
+5. **Terraform Scope:** We will provide Terraform snippets to aid in configuring the Identity Provider side (Okta, Entra ID, GCP WIF pool), accompanied by README links to official docs for configuring the actual MCP server side. **Boundary:** `terraform/mcp_auth/` is **deployment IaC + docs only** — never on the build/test path, never imported by the harness, kept isolated like `scanner-sidecar/` so it does not widen the fixed TypeScript-+-one-Python language boundary (inv. #2).
 
 ### Why
 
@@ -1608,5 +1609,45 @@ Anthropic's Enterprise-Managed Auth demonstrated the power of zero-touch IdP int
 
 - A new `desktop/mcp_hub.ts` backend to handle the PKCE flows, localhost redirect catchers, and GCP STS exchanges.
 - Electron's `safeStorage` dependency for token persistence.
-- A new UI overlay system integrated into `desktop/renderer/app.ts` that interacts seamlessly with the existing `settingsShell()`.
+- A new UI overlay system integrated into `desktop/renderer/app.ts` that interacts seamlessly with the existing `settingsShell()` (reusing the same slide-over pattern as Settings / Knowledge / the dev Logs view).
 - A set of Terraform modules (`terraform/mcp_auth/`) included in the repo for deploying the required IdP configuration.
+
+### Integration with the invariants (review addendum — 2026-06-20)
+
+6. **Extend omp; never fork it (invariant #1) — the load-bearing decision.** omp ALREADY terminates
+   MCP: `session/new` / `session/load` accept an `mcpServers[]` array (today `[]` in
+   `acp_backend.ts:112/209`). The hub's job is **authentication + config assembly only** — it runs
+   the IdP / PKCE / STS flows, obtains the token, and hands omp a fully-authenticated MCP server
+   entry (URL + headers/token) through that `mcpServers` array on the next `session/new`. It does
+   **not** implement MCP transport, tool discovery, or tool calling — omp owns that. So
+   `desktop/mcp_hub.ts` is *auth + sealed storage + the omp-config seam*, nothing more. Re-implementing
+   an MCP client would be a fork-shaped design and is out of scope.
+
+**Security guardrails (load-bearing, not optional):**
+- **Untrusted MCP output (invariant #5).** An MCP server is an untrusted source until scanned. Any
+  tool result that re-enters the prompt passes the existing fail-closed gate (`scanAndDecide`,
+  keystone #1) and is wrapped in `UNTRUSTED_CONTENT_START/END` after the cache breakpoint — exactly
+  like imported/fetched text. Auth governs *access*; the gate still governs *content*.
+- **Tokens never logged, never in the frozen prefix.** Access tokens live only in the sealed store +
+  memory, are redacted from telemetry, and never touch prompt layers 1–4.
+- **safeStorage only via Electron main** (Decision 2 seam); PBKDF2 passphrase fallback in dev.
+- **Localhost catcher**: distinct ephemeral port, PKCE + `state`, drain-and-close on callback.
+
+**Phases — one increment each (session ritual):**
+- **P-MCP.1** — the omp `mcpServers` config seam + a manual (paste-a-token) MCP connector + the
+  slide-over overlay UI. Proves auth→omp end-to-end with no IdP yet. EventName `mcp_server_connected`.
+- **P-MCP.2** — Entra ID / Okta OIDC via the ephemeral-localhost PKCE catcher + token seal through
+  Electron main. EventName `mcp_auth_completed` (+ `mcp_auth_failed`).
+- **P-MCP.3** — GCP WIF: exchange the Entra OIDC token with GCP STS for a short-lived GCP token.
+- **P-MCP.4** — Terraform IaC modules + docs (deployment-only; no harness coupling).
+Recommended first build: **P-MCP.1** (smallest surface; reuses the existing overlay + settings-key
+storage pattern; proves the omp seam before any IdP work).
+
+**Frozen-contract impacts:**
+- New `EventName`s — `mcp_server_connected`, `mcp_auth_completed`, `mcp_auth_failed` — each added in
+  the increment that emits it (emitting an unknown name throws; inv. #8). Enumerate before building.
+- **No DuckDB migration** (tokens live in the sealed safeStorage blob, not DuckDB).
+- The MCP server registry persists in the git-ignored GUI settings file (`lucid-gui.json`, mode 0600)
+  like provider keys — **never committed** (the standing keys-stay-out-of-git constraint).
+- New deps: Electron `safeStorage` only (already implied by ADR-0010); Terraform is out-of-band
+  tooling, not an npm/bun dependency.
