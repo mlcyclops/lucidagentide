@@ -511,6 +511,16 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
   border:1px dashed var(--line-strong);border-radius:10px;padding:14px;line-height:1.6}
 .empty code{font-family:var(--mono);color:var(--accent-2)}
 .row-actions{display:flex;gap:6px;margin-top:9px}
+/* live gate blocks (ADR-0019 C): one card per block this session, with Approve & retry */
+.liveblk{border:1px solid color-mix(in srgb,var(--red) 28%,var(--line));border-radius:9px;
+  background:linear-gradient(150deg,var(--red-dim),transparent 70%);padding:9px 11px;margin-bottom:8px;
+  box-shadow:var(--emboss,inset 0 1px 0 rgba(255,255,255,.03))}
+.lb-head{display:flex;align-items:center;gap:8px;font-size:12.5px;min-width:0}
+.lb-head b{color:var(--txt);flex:none}
+.lb-reason{color:var(--txt-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lb-foot{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:8px}
+.lb-meta{font-family:var(--mono);font-size:10.5px;color:var(--txt-4);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lb-approved{margin-top:6px;font-size:11px;color:var(--green);display:flex;align-items:center;gap:5px}
 .btn-mini{-webkit-app-region:no-drag;border:1px solid var(--line);background:var(--bg-2);color:var(--txt-2);
   font-size:11.5px;font-weight:600;padding:5px 10px;border-radius:7px;cursor:pointer;display:inline-flex;align-items:center;gap:6px;
   transition:background var(--t),color var(--t),border-color var(--t)}

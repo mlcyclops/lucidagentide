@@ -1516,7 +1516,7 @@ and looks for `conversations.json` then `MyActivity.json` (then a lone `.json`).
 ## ADR-0019 — Scanner homoglyph precision + source-scoped gate + block observability
 
 **Date:** 2026-06-20
-**Status:** Accepted. Part A + B built this increment; Part C (observability/review/approve) is next.
+**Status:** Accepted. Parts A, B, and C all built.
 **Relationship:** refines keystone #1 (the Unicode scanner) and the quarantine gate (invariant #3/#4).
 A deliberate, isolated fail-closed adjustment with its own ADR, as CLAUDE.md requires.
 
@@ -1553,13 +1553,22 @@ hard-block; a dangerous finding ALONGSIDE a demoted one still blocks (type-scope
 external/imported text — scanned on a different path with the strict `DEFAULT_POLICY` — is unchanged.
 The fail-closed law is untouched: a missing/failed scan still blocks (gate.failclosed.test green).
 
-### Decision C — block observability + review + approve (PLANNED, next increment)
+### Decision C — block observability + review + approve (BUILT)
 
-Move block PERSISTENCE to the GUI process (which owns the writable `agent_obs.duckdb`): the GUI
-already observes every block (the gate's stderr signal + tool_call_update rejection), so it records a
-quarantine/finding row there, surfaces it in the Security panel + rail badge + counts, makes the
-toast/chip "Review" open the specific finding, and adds an audited "Approve & retry" (a deliberate
-fail-closed override writing an `approval_event`). Not built this increment.
+Block persistence moved to the GUI process — but NOT into `agent_obs.duckdb` (that's the same
+single-writer file the gate's omp child can't reach; co-writing it from the GUI invites the same
+contention). Instead a dedicated GUI-owned store, `desktop/security_log.ts`: an append-only JSONL
+audit at `~/.omp/lucid-blocks.jsonl` + an in-memory view, metadata-only (tool/severity/findings/
+reason, never raw content). The ACP client (`acp_backend.ts`, in the GUI process) calls `recordBlock`
+on the gate's authoritative stderr `[BLOCKED …]` signal, and — importantly — the generic
+`tool_call_update` rejection is **relabelled "tool call rejected" (not a security block)**, fixing
+the mislabel that made ordinary tool failures look like quarantines. `/api/security` merges
+`liveBlocks()` (so blocks show even when the DuckDB views are empty); the Security panel gains a
+"Live blocks (this session)" accordion + the quarantined chip + rail badge count them; the
+toast/chip "Review" opens it. `POST /api/security/approve` + an "Approve & retry" button release one
+block (audited in the JSONL) and re-send the user's last message — the deliberate, bounded
+fail-closed override. The gate itself is unchanged (still fail-closed); this only surfaces +
+optionally overrides what it already did.
 
 ### Guardrails
 

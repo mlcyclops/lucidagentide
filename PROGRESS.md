@@ -899,3 +899,17 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
   an empty DB because the omp-child gate can't co-write the GUI's single-writer DuckDB) + the
   toast "Review" + an audited "Approve & retry". Next increment.
 - **next:** P11.2 — persist gate blocks GUI-side, wire Review to the finding, add approve/override.
+
+## P11.2: security block observability + review + approve/override (ADR-0019 C)
+- **shipped:** the gate's blocks now reach the UI. Root cause of "isn't in the metrics / Review did
+  nothing": the gate runs in the omp child and can't co-write the GUI's single-writer DuckDB, so
+  blocks only hit stderr. Fix: GUI-owned desktop/security_log.ts (append-only JSONL + in-memory),
+  recorded by acp_backend on the gate's authoritative stderr signal; the generic tool_call_update
+  rejection is relabelled "tool call rejected" (no longer a fake security block). /api/security
+  merges liveBlocks(); Security panel gains a "Live blocks" accordion + quarantined chip + rail
+  badge; toast/chip Review opens it; POST /api/security/approve + an "Approve & retry" button
+  release one block (audited) and re-send the last prompt. Verified live: endpoint returns live
+  blocks, approve is idempotent, panel + badge render. desktop tsc + bundle clean, harness 369 pass.
+- **stubbed:** approved blocks aren't yet replayed at the omp tool level (retry = re-send the turn);
+  live blocks are session/JSONL-scoped, not folded into the DuckDB quarantine views.
+- **next:** none queued.

@@ -38,6 +38,7 @@ const state = {
   settingsOpen: false,
   lastOk: 0,
   streaming: false,
+  lastPrompt: "" as string, // last user message — re-sent by an Approve & retry (ADR-0019 C)
 };
 const prettyModel = (v: string) => v.replace(/^anthropic\//, "");
 // Strip the redundant "· AskSage Gov" / "· Gov" suffix from a model's display name
@@ -358,6 +359,7 @@ async function send(): Promise<void> {
   const ta = $("#input") as HTMLTextAreaElement;
   const text = ta.value.trim();
   if (!text || state.streaming) return;
+  state.lastPrompt = text; // remembered so an Approve & retry can re-send it
   ta.value = ""; autosize(ta); setSendEnabled();
   addMessage("user", text);
   state.streaming = true; setSendEnabled();
@@ -421,19 +423,27 @@ async function send(): Promise<void> {
 }
 
 function onBlock(e: Extract<ChatEvent, { type: "block" }>): void {
+  // A generic tool rejection (omp couldn't run a call for non-security reasons) is NOT a
+  // security event — show a quiet, neutral chip and stop. Only the gate's authoritative
+  // quarantine (quarantined !== false) gets the loud treatment + Security-panel review.
+  if (e.quarantined === false) {
+    addEvent(`<div class="evt" data-tip="Tool call did not run">${icon("close", 14)}<span><b>${esc(e.tool)}</b> · ${esc(e.reason)}</span></div>`);
+    return;
+  }
+  const review = () => { OPEN.add("sec.live"); focusInspector("security"); void refresh(); };
   addEvent(`<div class="evt block" data-tip="Quarantined|Click to review in the Security panel" data-tip-icon="shield">
     ${icon("shield", 15)}<span>Blocked <b>${esc(e.tool)}</b> ·</span><span class="reason">${esc(e.reason)}</span></div>`)
-    .addEventListener("click", () => focusInspector("security"));
+    .addEventListener("click", review);
   showToast({
     title: "Tool call quarantined",
     desc: `${e.reason}.`,
-    meta: `tool=${e.tool} · severity=${e.severity} · ${e.findings}`,
+    meta: `tool=${e.tool} · severity=${e.severity}${e.findings ? " · " + e.findings : ""}`,
     actions: [
-      { label: "Review", run: () => focusInspector("security") },
+      { label: "Review", run: review },
       { label: "Dismiss", kind: "danger" },
     ],
   });
-  refresh(); // pull the new finding into the panels
+  void refresh(); // pull the new block into the panels + badge
 }
 
 function autosize(ta: HTMLTextAreaElement): void { ta.style.height = "auto"; ta.style.height = Math.min(ta.scrollHeight, 180) + "px"; }
@@ -908,35 +918,53 @@ function secIntro(): string {
   </div>`;
 }
 function securityHtml(d: SecuritySnapshot | null): string {
-  const totFind = d ? d.findings.reduce((a, r) => a + Number(r.n || 0), 0) : 0;
-  const promoted = d ? Number((d.promotion.find((r) => r.outcome === "promoted") || {}).n || 0) : 0;
-  const blocked = d ? Number((d.promotion.find((r) => r.outcome === "blocked") || {}).n || 0) : 0;
+  // The /api/security response always carries `live` (GUI-owned gate blocks), but the DuckDB
+  // arrays may be absent on a fresh machine — guard every one.
+  const quarantine = d?.quarantine ?? [], approvals = d?.approvals ?? [], findings = d?.findings ?? [];
+  const promotion = d?.promotion ?? [], exports = d?.exports ?? [], runs = d?.runs ?? [];
+  const live = d?.live ?? { quarantined: [], approved: [], total: 0 };
+  const totFind = findings.reduce((a, r) => a + Number(r.n || 0), 0);
+  const promoted = Number((promotion.find((r) => r.outcome === "promoted") || {}).n || 0);
+  const blocked = Number((promotion.find((r) => r.outcome === "blocked") || {}).n || 0);
   let h = secIntro();
   h += chips([
-    { cls: "q", n: d ? d.quarantine.length : 0, l: "quarantined" },
-    { cls: "a", n: d ? d.approvals.length : 0, l: "awaiting review" },
+    { cls: "q", n: quarantine.length + live.quarantined.length, l: "quarantined" },
+    { cls: "a", n: approvals.length, l: "awaiting review" },
     { cls: "f", n: totFind, l: "findings" },
     { cls: "g", n: promoted, l: "promoted facts" },
   ]);
-  if (!d) { h += `<div class="empty">Nothing has tripped the scanner yet. The moment a tool call carries hidden-Unicode or another injection, the finding, the quarantine queue, and the audit trail appear right here.</div>`; return h; }
+  // Live blocks (this session) — what the gate actually stopped in THIS GUI, with the audited
+  // "Approve & retry" override. Sits up top so the toast "Review" lands on something actionable.
+  if (live.quarantined.length || live.approved.length) {
+    const rows = live.quarantined.length
+      ? live.quarantined.map((b) => `<div class="liveblk">
+          <div class="lb-head"><span class="pill quarantined">${esc(b.severity)}</span><b>${esc(b.tool)}</b><span class="lb-reason">${esc(b.reason)}</span></div>
+          <div class="lb-foot"><span class="lb-meta">${esc(b.findings || "no detail")} · ${esc(relTime(Date.parse(b.at)))}</span>
+            <button class="btn-mini ok" data-approve="${esc(b.id)}" data-tip="Approve &amp; retry|Release this one blocked call (audited) and re-send your last message so the agent can try again. Use only if you're sure it was a false positive.">${icon("check", 13)} Approve &amp; retry</button></div>
+        </div>`).join("")
+      : `<div class="empty">No active blocks — everything released or clean.</div>`;
+    const approvedNote = live.approved.length ? `<div class="lb-approved">${icon("check", 12)} ${live.approved.length} released this session · audited</div>` : "";
+    h += accordion("sec.live", "Live blocks", "this session · gate-enforced", rows + approvedNote, true, String(live.quarantined.length));
+  }
+  if (!d && !live.total) { h += `<div class="empty">Nothing has tripped the scanner yet. The moment a tool call carries hidden-Unicode or another injection, the finding, the quarantine queue, and the audit trail appear right here.</div>`; return h; }
   h += accordion("sec.quarantine", "Quarantine review", "isolated · fail-closed",
-    table([{ key: "artifact_id", label: "artifact", mono: true }, { key: "source", label: "source" }, { key: "trust_label", label: "trust", pill: true }, { key: "risk_score", label: "risk", mono: true }], d.quarantine),
-    OPEN.has("sec.quarantine"), String(d.quarantine.length));
+    table([{ key: "artifact_id", label: "artifact", mono: true }, { key: "source", label: "source" }, { key: "trust_label", label: "trust", pill: true }, { key: "risk_score", label: "risk", mono: true }], quarantine),
+    OPEN.has("sec.quarantine"), String(quarantine.length));
   h += accordion("sec.approvals", "Approval queue", "blocked · awaiting a human",
-    table([{ key: "artifact_id", label: "artifact", mono: true }, { key: "source", label: "source" }, { key: "trust_label", label: "trust", pill: true }, { key: "verdict", label: "verdict", pill: true }], d.approvals)
-    + (d.approvals.length ? `<div class="row-actions"><button class="btn-mini ok" data-act="approve">${icon("check", 14)} Approve</button><button class="btn-mini danger" data-act="deny">${icon("close", 14)} Deny</button></div>` : ""),
-    OPEN.has("sec.approvals"), String(d.approvals.length));
+    table([{ key: "artifact_id", label: "artifact", mono: true }, { key: "source", label: "source" }, { key: "trust_label", label: "trust", pill: true }, { key: "verdict", label: "verdict", pill: true }], approvals)
+    + (approvals.length ? `<div class="row-actions"><button class="btn-mini ok" data-act="approve">${icon("check", 14)} Approve</button><button class="btn-mini danger" data-act="deny">${icon("close", 14)} Deny</button></div>` : ""),
+    OPEN.has("sec.approvals"), String(approvals.length));
   h += accordion("sec.findings", "Findings overview", "by type · severity · source",
-    table([{ key: "finding_type", label: "type" }, { key: "severity", label: "sev", pill: true }, { key: "source", label: "source" }, { key: "n", label: "n", mono: true }], d.findings),
+    table([{ key: "finding_type", label: "type" }, { key: "severity", label: "sev", pill: true }, { key: "source", label: "source" }, { key: "n", label: "n", mono: true }], findings),
     OPEN.has("sec.findings"));
   h += accordion("sec.gate", "Memory-promotion gate", "untrusted content can't auto-save",
     gauge("blocked", blocked + promoted ? blocked / (blocked + promoted) : 0, `<b>${blocked}</b>&nbsp;blocked / ${promoted} ok`),
     OPEN.has("sec.gate"));
   h += accordion("sec.exports", "Export audit", "what left, sanitized",
-    table([{ key: "export_type", label: "type" }, { key: "sanitization_status", label: "sanitized" }, { key: "reviewer", label: "by" }], d.exports),
+    table([{ key: "export_type", label: "type" }, { key: "sanitization_status", label: "sanitized" }, { key: "reviewer", label: "by" }], exports),
     OPEN.has("sec.exports"));
   h += accordion("sec.runs", "Active runs", "provenance lineage",
-    table([{ key: "kind", label: "kind" }, { key: "mode", label: "mode" }, { key: "sandbox_profile", label: "sandbox" }, { key: "status", label: "status" }], d.runs),
+    table([{ key: "kind", label: "kind" }, { key: "mode", label: "mode" }, { key: "sandbox_profile", label: "sandbox" }, { key: "status", label: "status" }], runs),
     OPEN.has("sec.runs"));
   return h;
 }
@@ -1091,11 +1119,12 @@ async function refresh(): Promise<void> {
     // content the gate flagged). Hidden when there's nothing to act on; coloured by the
     // worst trust label in the queue (quarantined = red, suspicious-only = amber).
     const approvals = sec?.approvals ?? [];
-    const awaiting = approvals.length;
+    const liveQ = sec?.live?.quarantined ?? []; // GUI-owned live gate blocks (ADR-0019 C)
+    const awaiting = approvals.length + liveQ.length;
     const badge = $("#railBadge")!;
     badge.hidden = awaiting === 0;
     if (awaiting > 0) {
-      const high = approvals.some((a) => String(a.trust_label) === "quarantined");
+      const high = liveQ.length > 0 || approvals.some((a) => String(a.trust_label) === "quarantined");
       badge.textContent = awaiting > 99 ? "99+" : String(awaiting);
       badge.className = high ? "badge" : "badge med";
       badge.setAttribute("data-tip", `${awaiting} item${awaiting === 1 ? "" : "s"} awaiting review|${high ? "Includes quarantined (blocked) content." : "Suspicious content flagged for review."} Open the Security panel to act.`);
@@ -1667,6 +1696,26 @@ function wire(): void {
     if ((e.target as HTMLElement).closest("[data-budget-refresh]")) { void refreshBudget(true); return; }
     const head = (e.target as HTMLElement).closest("[data-acc-toggle]") as HTMLElement | null;
     if (head) { const k = head.dataset.accToggle!; const acc = head.closest(".acc")!; const open = acc.classList.toggle("open"); open ? OPEN.add(k) : OPEN.delete(k); return; }
+    // Approve & retry: the audited fail-closed override for one live gate block (ADR-0019 C).
+    const approve = (e.target as HTMLElement).closest("[data-approve]") as HTMLElement | null;
+    if (approve) {
+      const id = approve.dataset.approve!;
+      (approve as HTMLButtonElement).disabled = true;
+      void (async () => {
+        const r = await bridge.securityApprove(id);
+        if (!r) { showToast({ title: "Already handled", desc: "That block was already released.", actions: [{ label: "OK" }], timeout: 3000 }); return; }
+        await refresh(); // drop it from the live-block list + counts + badge
+        const retry = state.lastPrompt.trim();
+        showToast({
+          title: "Released · audited",
+          desc: retry ? "Re-sending your last message so the agent can try again." : "Block released and recorded in the audit log.",
+          meta: `tool=${r.tool} · approved`,
+          actions: [{ label: "OK" }], timeout: 4500,
+        });
+        if (retry && !state.streaming) { const ta = $("#input") as HTMLTextAreaElement; ta.value = retry; void send(); }
+      })();
+      return;
+    }
     const act = (e.target as HTMLElement).closest("[data-act]") as HTMLElement | null;
     if (act) {
       const ok = act.dataset.act === "approve";

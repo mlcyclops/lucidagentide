@@ -7,9 +7,12 @@
 // native-only is window controls + crisp text zoom, exposed by the Electron
 // preload as `window.lucid`; in a plain browser those fall back to CSS zoom.
 
+export interface BlockRecord { id: string; tool: string; severity: string; findings: string; reason: string; at: string; status: "quarantined" | "approved"; reviewer?: string }
 export interface SecuritySnapshot {
   findings: any[]; unicode: any[]; approvals: any[]; quarantine: any[];
   promotion: any[]; exports: any[]; runs: any[];
+  // GUI-owned LIVE gate blocks (ADR-0019 C) — present even when the DuckDB views are empty.
+  live?: { quarantined: BlockRecord[]; approved: BlockRecord[]; total: number };
 }
 export interface MemorySnapshot {
   session: null | {
@@ -90,13 +93,15 @@ export interface WorkspaceInfo {
 export type ChatEvent =
   | { type: "token"; text: string }
   | { type: "tool"; name: string; detail: string }
-  | { type: "block"; tool: string; reason: string; severity: string; findings: string }
+  | { type: "block"; tool: string; reason: string; severity: string; findings: string; id?: string; quarantined?: boolean }
   | { type: "usage"; used: number; size: number; cost: number }
   | { type: "done" };
 
 export interface LucidBridge {
   isElectron: boolean;
   security(): Promise<SecuritySnapshot | null>;
+  /** Release one quarantined call — the audited fail-closed override (ADR-0019 C). */
+  securityApprove(id: string): Promise<BlockRecord | null>;
   memory(): Promise<MemorySnapshot | null>;
   budget(): Promise<{ label: string; used: number; status: string; resetsAt: number | null }[] | null>;
   usage(): Promise<UsageLedger | null>;
@@ -216,6 +221,7 @@ async function streamChat(text: string, onEvent: (e: ChatEvent) => void): Promis
 export const bridge: LucidBridge = {
   isElectron: !!shell?.isElectron,
   security: () => getData("/api/security"),
+  securityApprove: (id) => post("/api/security/approve", { id }),
   memory: () => getData("/api/memory"),
   budget: () => getData("/api/budget"),
   usage: () => getData("/api/usage"),
