@@ -55,15 +55,28 @@ function projectVenvPython(): string {
 }
 
 // --- resolvers ---------------------------------------------------------------
+/** Common absolute install dirs for a CLI tool, so a Finder-launched GUI app
+ *  (minimal PATH: /usr/bin:/bin) still finds Homebrew / system installs without
+ *  depending on PATH at all — the cause of `spawn bun ENOENT` on packaged apps. */
+function systemBins(tool: string): string[] {
+  const dirs = process.platform === "win32" ? [] : ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"];
+  return dirs.map((d) => join(d, `${tool}${EXE}`));
+}
 export function findBun(): string {
-  return bundled("bun") ?? firstExisting([join(homedir(), ".bun", "bin", `bun${EXE}`)]) ?? "bun";
+  return bundled("bun") ?? firstExisting([join(homedir(), ".bun", "bin", `bun${EXE}`), ...systemBins("bun")]) ?? "bun";
 }
 export function findUv(): string | null {
-  return bundled("uv")
-    ?? firstExisting([join(homedir(), ".local", "bin", `uv${EXE}`), join(homedir(), ".cargo", "bin", `uv${EXE}`)]);
+  return (
+    bundled("uv") ??
+    firstExisting([
+      join(homedir(), ".local", "bin", `uv${EXE}`),
+      join(homedir(), ".cargo", "bin", `uv${EXE}`),
+      ...systemBins("uv"),
+    ])
+  );
 }
 export function findOmp(): string | null {
-  return firstExisting([managedOmp(), join(homedir(), ".bun", "bin", `omp${EXE}`)]);
+  return firstExisting([managedOmp(), join(homedir(), ".bun", "bin", `omp${EXE}`), ...systemBins("omp")]);
 }
 function findScannerPython(): string | null {
   return firstExisting([venvPython(), projectVenvPython()]);

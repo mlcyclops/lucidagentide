@@ -7,13 +7,14 @@
   "scripts": {
     "build": "bun build main.ts --target=node --format=cjs --external electron --outfile dist/main.js && bun build preload.ts --target=node --format=cjs --external electron --outfile dist/preload.js",
     "icons": "bun run build/make-icons.ts",
+    "runtimes:mac": "bun run build/fetch-runtimes.ts",
     "start": "bun run build && electron .",
     "web": "bun run dev.ts",
     "typecheck": "tsc --noEmit",
-    "dist:mac": "bun run icons && bun run build && electron-builder --mac",
-    "dist:win": "bun run icons && bun run build && electron-builder --win",
-    "dist:linux": "bun run icons && bun run build && electron-builder --linux",
-    "dist": "bun run icons && bun run build && electron-builder"
+    "dist:mac": "bun run runtimes:mac && bun run icons && bun run build && electron-builder --mac --publish never",
+    "dist:win": "bun run icons && bun run build && electron-builder --win --publish never",
+    "dist:linux": "bun run icons && bun run build && electron-builder --linux --publish never",
+    "dist": "bun run icons && bun run build && electron-builder --publish never"
   },
   "build": {
     "appId": "com.lucidagentide.desktop",
@@ -65,8 +66,7 @@
       "gatekeeperAssess": false
     },
     "dmg": {
-      "title": "LucidAgentIDE ${version}",
-      "icon": "build/icon.icns"
+      "title": "LucidAgentIDE ${version}"
     },
     "win": {
       "icon": "build/icon.ico",
