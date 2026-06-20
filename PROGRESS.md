@@ -922,3 +922,15 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
   and piped (not inherited) stdio with output forwarded for dev. desktop tsc clean.
 - **stubbed:** Bun.spawn auth-broker (OAuth-only, transient) left as-is (no windowsHide option on Bun.spawn).
 - **next:** P10.3 rate-limit header probe; ADR-0009 Phase D dev-logging view.
+
+## P10.3: live API-key rate-limit probe (ADR-0011, completes P10.3)
+- **shipped:** the deferred half of P10.3. desktop/ratelimit_probe.ts probes a keyed provider's
+  rate-limit response headers (Anthropic anthropic-ratelimit-*, OpenAI x-ratelimit-*) → remaining /
+  resets-at, 5-min cache, fails soft. OPT-IN (off by default; each check is one tiny request that
+  costs a token or two). Pure header parsers unit-tested (4 pass). Settings/state: rateLimitProbe +
+  setRateLimitProbe; GET/POST /api/ratelimits; bridge rateLimits/setRateLimitProbe; budget panel
+  shows probed limits (cyan "API key · live" tag) + an in-panel toggle. Verified live: off→[],
+  toggle flips, no probe fires without a key. desktop+root tsc clean, bundle OK, harness 369 pass.
+- **stubbed:** live header correctness needs a real Anthropic/OpenAI key to fully validate (parsers
+  tested, gating + graceful-empty verified). Probe model ids (haiku/gpt-4o-mini) are sensible defaults.
+- **next:** ADR-0009 Phase D — developer-mode logging view.

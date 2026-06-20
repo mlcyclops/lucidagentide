@@ -861,8 +861,10 @@ prerequisite for everything, has the smallest surface, needs no DuckDB migration
 ## ADR-0011 — Observability & cost intelligence (roadmap)
 
 **Date:** 2026-06-19
-**Status:** Accepted as a roadmap. **P10.1 BUILT** + **P10.2 BUILT**. **P10.3 PARTIAL** — the proactive
-budget warning shipped (chip turns red + a once-per-window toast at ≥90%, so you see the wall coming);
+**Status:** Accepted as a roadmap. **P10.1 BUILT** + **P10.2 BUILT** + **P10.3 BUILT** (the live
+header probe landed as an opt-in — `desktop/ratelimit_probe.ts`, parsers unit-tested, surfaced in
+the budget panel). **P10.4 remains Proposed.** The proactive budget warning also shipped earlier
+(chip turns red + a once-per-window toast at ≥90%, so you see the wall coming);
 the live header probe is deferred. **P10.4 remains Proposed**.
 
 > **P10.3 design note (learned in build):** the user's binding limit is the **Claude oauth 5-hour
