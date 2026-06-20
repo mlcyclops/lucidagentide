@@ -90,7 +90,11 @@ export function needsBootstrap(): boolean {
 
 function run(cmd: string, args: string[], extraEnv: Record<string, string> = {}): Promise<void> {
   return new Promise((resolve, reject) => {
-    const p = spawn(cmd, args, { stdio: "inherit", env: { ...process.env, ...extraEnv } });
+    // windowsHide + piped (not inherited) stdio so provisioning never flashes a console window
+    // in the packaged GUI app; output is forwarded for terminal/dev runs.
+    const p = spawn(cmd, args, { stdio: ["ignore", "pipe", "pipe"], windowsHide: true, env: { ...process.env, ...extraEnv } });
+    p.stdout?.on("data", (d) => process.stdout.write(d));
+    p.stderr?.on("data", (d) => process.stderr.write(d));
     p.on("error", reject);
     p.on("exit", (code) => (code === 0 ? resolve() : reject(new Error(`${cmd} exited ${code}`))));
   });

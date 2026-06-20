@@ -27,7 +27,7 @@ export class ACPClient {
   constructor(private cmd: string, private args: string[], private cwd: string) {}
 
   start(): void {
-    this.proc = spawn(this.cmd, this.args, { cwd: this.cwd, stdio: ["pipe", "pipe", "pipe"] });
+    this.proc = spawn(this.cmd, this.args, { cwd: this.cwd, stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
     this.proc.stdout!.on("data", (d) => this.onData(String(d)));
     this.proc.stderr!.on("data", (d) => this.onStderr(String(d)));
     this.proc.on("exit", (code) => this.onExit(code));
