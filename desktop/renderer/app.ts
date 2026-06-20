@@ -233,12 +233,27 @@ function addEvent(html: string): HTMLElement {
   scrollChat();
   return node;
 }
-// Stick-to-bottom autoscroll: only follow new output when the user is already near the
-// bottom, so scrolling up to re-read mid-stream isn't yanked back down. Instant (not
-// smooth-animated) per token — that reads as smooth during a stream and avoids jank.
-const scrollChat = () => {
-  const c = $("#chat")!;
-  if (c.scrollHeight - c.scrollTop - c.clientHeight < 150) requestAnimationFrame(() => { c.scrollTop = c.scrollHeight; });
+// Stick-to-bottom autoscroll, rAF-batched for buttery playback under rapid tokens.
+// Many scrollChat() calls within one frame coalesce into a SINGLE scrollTop write, so the
+// browser never thrashes layout mid-stream. We only follow output while the user is parked
+// near the bottom (STICK_PX); the moment they scroll UP to re-read, autoscroll releases and
+// stays released until they come back down — so re-reading mid-stream is never yanked.
+const STICK_PX = 150;
+let scrollPending = false; // a follow-frame is already queued
+let lastWroteTop = -1;     // the scrollTop value WE last wrote — lets us spot a user scroll-up
+const nearBottom = (c: HTMLElement): boolean => c.scrollHeight - c.scrollTop - c.clientHeight < STICK_PX;
+const scrollChat = (): void => {
+  const c = $("#chat");
+  if (!c) return;
+  // A user scroll-up since our last programmatic write releases the stick until they return.
+  if (lastWroteTop >= 0 && c.scrollTop < lastWroteTop - 2 && !nearBottom(c)) return;
+  if (scrollPending || !nearBottom(c)) return;
+  scrollPending = true;
+  requestAnimationFrame(() => {
+    scrollPending = false;
+    const cc = $("#chat");
+    if (cc && nearBottom(cc)) { cc.scrollTop = cc.scrollHeight; lastWroteTop = cc.scrollTop; }
+  });
 };
 
 // P10.1 (ADR-0011): a friendly, honest "what's happening" phase label — an opening guess
@@ -258,7 +273,77 @@ function phaseForTool(name: string, detail: string): string {
   if (/fetch|web|http|browse/.test(n)) return "Searching the web…";
   return `Using ${name}…`;
 }
+// A category icon for a tool, so each consolidated activity step reads at a glance.
+function phaseIcon(name: string): string {
+  const n = name.toLowerCase();
+  if (/read|grep|glob|search|find|^ls|list/.test(n)) return "search";
+  if (/edit|write|notebook|patch|apply|create/.test(n)) return "folder";
+  if (/bash|shell|run|exec|command/.test(n)) return "bolt";
+  if (/fetch|web|http|browse/.test(n)) return "runs";
+  return "eye";
+}
 const fmtClock = (ms: number): string => { const s = Math.max(0, Math.floor(ms / 1000)); return `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`; };
+
+// ── Consolidating activity window (the "working / agent thoughts" surface) ──
+// Instead of an ever-growing stack of raw .evt chips, the agent's tool calls collapse into
+// ONE compact window per turn: a head (live current step + a count) you can expand to see the
+// full step list, and a tidy one-line summary on done. Security blocks are NEVER folded in
+// here — onBlock keeps emitting its own loud .evt.block chip alongside this window.
+interface ThoughtsWin {
+  el: HTMLElement;
+  /** Record a tool/activity step. */
+  step(name: string, detail: string): void;
+  /** Collapse into the final one-line summary (auto-collapse on done). */
+  finish(ms: number): void;
+}
+function createThoughts(): ThoughtsWin {
+  const win = el(`<div class="thoughts open" data-streaming="1">
+    <button class="thoughts-head" type="button" aria-expanded="true">
+      <span class="thoughts-spin">${icon("spark", 13)}</span>
+      <span class="thoughts-cur">Working…</span>
+      <span class="thoughts-count" hidden>0</span>
+      <span class="thoughts-chev">${icon("chevron", 14)}</span>
+    </button>
+    <div class="thoughts-body"></div>
+  </div>`);
+  const headBtn = $(".thoughts-head", win) as HTMLButtonElement;
+  const curEl = $(".thoughts-cur", win) as HTMLElement;
+  const countEl = $(".thoughts-count", win) as HTMLElement;
+  const body = $(".thoughts-body", win) as HTMLElement;
+  let steps = 0;
+  const files = new Set<string>();
+  const toggle = (open: boolean) => {
+    win.classList.toggle("open", open);
+    headBtn.setAttribute("aria-expanded", String(open));
+  };
+  headBtn.addEventListener("click", () => toggle(!win.classList.contains("open")));
+  return {
+    el: win,
+    step(name: string, detail: string) {
+      steps++;
+      const label = phaseForTool(name, detail);
+      curEl.textContent = label;
+      countEl.hidden = false;
+      countEl.textContent = String(steps);
+      if (/edit|write|notebook|patch|apply|create/i.test(name) && detail) files.add(detail.trim());
+      body.appendChild(el(`<div class="thoughts-step">${icon(phaseIcon(name), 13)}<span class="ts-k">${esc(name)}</span><span class="ts-d">${esc(detail)}</span></div>`));
+      // Keep the newest step in view while expanded, without stealing the page scroll.
+      if (win.classList.contains("open")) body.scrollTop = body.scrollHeight;
+    },
+    finish(ms: number) {
+      win.removeAttribute("data-streaming");
+      win.classList.add("done");
+      toggle(false); // auto-collapse to the tidy summary
+      const fileBit = files.size ? ` · ${files.size} file${files.size === 1 ? "" : "s"}` : "";
+      const secs = ms / 1000;
+      const timeBit = secs >= 0.05 ? ` · ${secs < 10 ? secs.toFixed(1) : Math.round(secs)}s` : "";
+      curEl.textContent = steps
+        ? `${steps} step${steps === 1 ? "" : "s"}${fileBit}${timeBit}`
+        : "No tools used";
+      countEl.hidden = true;
+    },
+  };
+}
 
 async function send(): Promise<void> {
   const ta = $("#input") as HTMLTextAreaElement;
@@ -272,35 +357,58 @@ async function send(): Promise<void> {
   const textEl = $(".text", node) as HTMLElement;
   textEl.innerHTML = "";
   // P10.1 response activity HUD: live MM:SS timer + semantic phase + running token-cost.
-  const hud = el(`<div class="hud streaming">${icon("bolt", 12)}<span class="hud-t">00:00</span><span class="hud-sep">·</span><span class="hud-phase"></span><span class="hud-meta"></span></div>`);
+  const hud = el(`<div class="hud streaming"><span class="hud-ic">${icon("bolt", 12)}</span><span class="hud-t">00:00</span><span class="hud-sep">·</span><span class="hud-phase"></span><span class="hud-meta"></span></div>`);
   const streamEl = el(`<div class="stream"></div>`);
   textEl.append(streamEl, hud); // status sits BELOW the line that's filling in
   streamEl.innerHTML = `<span class="cursor"></span>`;
+  // The consolidating activity window lives between the answer and the HUD; created lazily
+  // on the first tool event so a pure-text turn shows nothing extra.
+  let thoughts: ThoughtsWin | null = null;
   let buf = "";
   const t0 = Date.now();
-  let phase = guessPhase(text), sawTool = false, tok = 0, cost = 0;
+  // Cold start: the timer is already ticking but nothing has arrived — show "Warming up…"
+  // so the user always sees something meaningful before the first token/tool.
+  let phase = "Warming up…", sawTool = false, tok = 0, cost = 0;
+  const phaseEl = $(".hud-phase", hud) as HTMLElement;
+  const setPhase = (p: string) => {
+    if (p === phase) return;
+    phase = p;
+    // Brief crossfade on phase change — GPU-friendly (opacity only), respects reduced-motion via CSS.
+    phaseEl.classList.remove("swap"); void phaseEl.offsetWidth; phaseEl.classList.add("swap");
+    phaseEl.textContent = p;
+  };
   const paintHud = () => {
     ($(".hud-t", hud) as HTMLElement).textContent = fmtClock(Date.now() - t0);
-    ($(".hud-phase", hud) as HTMLElement).textContent = phase;
+    if (phaseEl.textContent !== phase) phaseEl.textContent = phase;
     ($(".hud-meta", hud) as HTMLElement).textContent = tok ? `· ${fmtNum(tok)} tok · ~$${cost.toFixed(4)}` : "";
   };
+  phaseEl.textContent = phase;
   paintHud();
   const timer = window.setInterval(paintHud, 1000);
+  let finished = false;
   const finishHud = () => {
+    if (finished) return;
+    finished = true;
     clearInterval(timer);
-    const ic = $(".ic", hud); if (ic) ic.outerHTML = icon("check", 12);
+    const ic = $(".hud-ic", hud); if (ic) ic.innerHTML = icon("check", 12);
     hud.classList.remove("streaming"); hud.classList.add("done");
-    phase = "Done"; paintHud();
+    setPhase("Done"); paintHud();
+    thoughts?.finish(Date.now() - t0);
   };
   const onEvent = (e: ChatEvent) => {
-    if (e.type === "token") { buf += e.text; if (!sawTool) phase = "Responding…"; streamEl.innerHTML = renderMarkdown(buf) + `<span class="cursor"></span>`; paintHud(); scrollChat(); }
-    else if (e.type === "tool") { sawTool = true; phase = phaseForTool(e.name, e.detail); paintHud(); addEvent(`<div class="evt tool">${icon("eye", 15)}<span class="k">${esc(e.name)}</span><span>${esc(e.detail)}</span></div>`); }
+    if (e.type === "token") { buf += e.text; if (!sawTool) setPhase("Responding…"); streamEl.innerHTML = renderMarkdown(buf) + `<span class="cursor"></span>`; paintHud(); scrollChat(); }
+    else if (e.type === "tool") {
+      sawTool = true; setPhase(phaseForTool(e.name, e.detail)); paintHud();
+      if (!thoughts) { thoughts = createThoughts(); streamEl.after(thoughts.el); } // window sits below the answer
+      thoughts.step(e.name, e.detail);
+      scrollChat();
+    }
     else if (e.type === "block") onBlock(e);
     else if (e.type === "usage") { tok = e.used; cost = e.cost; state.liveUsage = { used: e.used, size: e.size, cost: e.cost }; paintHud(); renderStatus(); renderMetricsRail(); }
     else if (e.type === "done") { streamEl.innerHTML = renderMarkdown(buf); (node as MsgNode)._md = buf; finishHud(); state.streaming = false; setSendEnabled(); }
   };
   try { await bridge.sendPrompt(text, onEvent); }
-  finally { (node as MsgNode)._md = buf; if (state.streaming) { streamEl.innerHTML = renderMarkdown(buf); finishHud(); state.streaming = false; setSendEnabled(); } else clearInterval(timer); void renderSessions(); void refreshBudget(false); }
+  finally { (node as MsgNode)._md = buf; if (state.streaming) { streamEl.innerHTML = renderMarkdown(buf); finishHud(); state.streaming = false; setSendEnabled(); } else { finishHud(); } void renderSessions(); void refreshBudget(false); }
 }
 
 function onBlock(e: Extract<ChatEvent, { type: "block" }>): void {

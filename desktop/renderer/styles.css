@@ -261,15 +261,22 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .stream>:last-child{margin-bottom:0}
 /* P10.1 response activity HUD: live timer + semantic phase + running cost */
 .hud{display:flex;align-items:center;gap:6px;font-family:var(--mono);font-size:11px;color:var(--txt-3);margin:9px 0 0;line-height:1}
-.hud .ic{flex:none}
-.hud.streaming .ic{color:var(--accent-2);animation:hudpulse 1.4s var(--ease) infinite}
-.hud.done .ic{color:var(--green);animation:none}
+.hud .ic{flex:none;display:block}
+.hud-ic{flex:none;display:inline-flex;transition:color var(--t) var(--ease)}
+.hud.streaming .hud-ic{color:var(--accent-2)}
+.hud.streaming .hud-ic .ic{animation:hudpulse 1.5s var(--ease) infinite}
+.hud.done .hud-ic{color:var(--green)}
+.hud.done .hud-ic .ic{animation:checkpop var(--t-slow) var(--ease-out)}
 .hud-t{color:var(--txt-2);font-variant-numeric:tabular-nums}
 .hud-sep{opacity:.45}
+/* phase label: a tasteful crossfade when it changes; reduced-motion neutralises it via the global rule */
 .hud-phase{color:var(--txt-2)}
+.hud-phase.swap{animation:phasein 260ms var(--ease-out)}
 .hud.done .hud-phase{color:var(--txt-4)}
 .hud-meta{color:var(--txt-4)}
-@keyframes hudpulse{0%,100%{opacity:1}50%{opacity:.35}}
+@keyframes hudpulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.4;transform:scale(.9)}}
+@keyframes checkpop{0%{transform:scale(.6);opacity:.4}60%{transform:scale(1.12)}100%{transform:scale(1);opacity:1}}
+@keyframes phasein{from{opacity:0;transform:translateY(2px)}to{opacity:1;transform:none}}
 .row-ctx{font-family:var(--mono);font-size:9.5px;color:var(--txt-4);background:var(--bg-2);border:1px solid var(--line);border-radius:5px;padding:1px 5px;margin-left:6px;white-space:nowrap}
 /* P10.2 cross-model cost & savings ledger */
 .ledger-card{background:linear-gradient(180deg,var(--bg-3),var(--bg-2));border:1px solid var(--line);border-radius:11px;
@@ -323,20 +330,54 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
   background:linear-gradient(150deg,var(--accent),#7d39c4);color:#fff;box-shadow:0 0 22px rgba(198,75,214,.4),inset 0 1px 0 rgba(255,255,255,.18);transform:scale(1.5)}
 .chat-hint .h{font-size:18px;font-weight:600;color:var(--txt);margin-top:8px;letter-spacing:-.01em}
 .chat-hint .d{font-size:13.5px;max-width:340px;line-height:1.62;color:var(--txt-2)}
-.cursor{display:inline-block;width:7px;height:16px;vertical-align:-2px;background:var(--accent-2);
-  border-radius:2px;animation:blink 1s steps(2) infinite}
-@keyframes blink{50%{opacity:0}}
+/* streaming caret: a soft pulsing bar (eased fade, not a hard blink) with a faint glow — feels
+   alive without flicker. Sits flush after the last token; reduced-motion stops the animation. */
+.cursor{display:inline-block;width:7px;height:1.05em;vertical-align:-2px;margin-left:1px;border-radius:2px;
+  background:var(--accent-2);box-shadow:0 0 7px var(--accent-dim);
+  animation:caret 1.05s var(--ease) infinite;will-change:opacity}
+@keyframes caret{0%,42%{opacity:1}70%,100%{opacity:.18}}
 
-/* tool + block chips inside the thread */
+/* tool + block chips inside the thread.
+   Tool calls now consolidate into the .thoughts window (below); the lone .evt that still
+   renders inline is the SECURITY block — kept loud and never folded into the collapse. */
 .evt{display:flex;align-items:center;gap:9px;font-size:12.5px;padding:8px 11px;border-radius:9px;
-  border:1px solid var(--line);background:var(--bg-1);color:var(--txt-2);width:fit-content;max-width:100%}
+  border:1px solid var(--line);background:var(--bg-1);color:var(--txt-2);width:fit-content;max-width:100%;
+  animation:rise var(--t) var(--ease-out)}
 .evt .ic{color:var(--txt-3)}
 .evt.tool .k{color:var(--cyan);font-weight:600}
 .evt.block{border-color:rgba(239,95,95,.4);background:linear-gradient(90deg,var(--red-dim),transparent);
-  color:#ffd0d0;cursor:pointer;transition:border-color var(--t)}
-.evt.block:hover{border-color:var(--red)}
+  color:#ffd0d0;cursor:pointer;transition:border-color var(--t),box-shadow var(--t)}
+.evt.block:hover{border-color:var(--red);box-shadow:0 0 0 3px var(--red-dim)}
 .evt.block .ic{color:var(--red)}
 .evt.block .reason{color:var(--txt-2)}
+
+/* ── Consolidating activity / "thoughts" window ──
+   One compact, collapsible surface per turn: a head with the live current step + a count,
+   expandable to the full step list. Auto-collapses to a one-line summary on done. */
+.thoughts{margin:8px 0 2px;border:1px solid var(--line);border-radius:11px;background:var(--bg-1);
+  width:fit-content;max-width:100%;overflow:hidden;animation:rise var(--t) var(--ease-out)}
+.thoughts-head{display:flex;align-items:center;gap:8px;width:100%;text-align:left;cursor:pointer;
+  background:transparent;border:0;color:var(--txt-2);font-family:var(--mono);font-size:12px;
+  padding:8px 11px;transition:background var(--t)}
+.thoughts-head:hover{background:var(--bg-2)}
+.thoughts-spin{flex:none;display:inline-flex;color:var(--accent-2)}
+.thoughts[data-streaming] .thoughts-spin .ic{animation:spin 1.4s linear infinite}
+.thoughts.done .thoughts-spin{color:var(--green)}
+.thoughts-cur{flex:1;min-width:0;color:var(--txt-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.thoughts.done .thoughts-cur{color:var(--txt-3)}
+.thoughts-count{flex:none;font-size:10.5px;font-weight:600;color:var(--accent-2);background:var(--accent-dim);
+  border-radius:999px;padding:1px 7px;min-width:18px;text-align:center}
+.thoughts-chev{flex:none;display:inline-flex;color:var(--txt-4);transition:transform var(--t) var(--ease)}
+.thoughts.open .thoughts-chev{transform:rotate(90deg)}
+/* body: collapses via max-height (also the scroll container while expanded) */
+.thoughts-body{max-height:0;overflow:hidden;transition:max-height var(--t-slow) var(--ease)}
+.thoughts.open .thoughts-body{max-height:240px;overflow-y:auto;scrollbar-width:thin}
+.thoughts-step{display:flex;align-items:center;gap:8px;font-size:12px;font-family:var(--mono);
+  color:var(--txt-3);padding:5px 11px;border-top:1px solid var(--line-soft);animation:rise var(--t-fast) var(--ease-out)}
+.thoughts-step .ic{flex:none;color:var(--txt-4)}
+.thoughts-step .ts-k{color:var(--cyan);font-weight:600;flex:none}
+.thoughts-step .ts-d{color:var(--txt-3);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+@keyframes spin{to{transform:rotate(360deg)}}
 
 .composer-wrap{padding:10px 26px 18px}
 .composer{max-width:min(1080px,94vw);margin:0 auto;
