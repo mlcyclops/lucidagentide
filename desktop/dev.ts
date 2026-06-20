@@ -21,7 +21,8 @@ import { listSkills } from "./skills_data.ts";
 import { headroomStatus, setHeadroomEnabled, startHeadroom } from "./headroom.ts";
 import { destroyCui, enablePersonal, exportCuiArchive, exportHistory, exportVault, forgetFact, lockCui, lockPersonal, migrateCuiIntoStore, personalGraph, personalStatus, setScope, setupCui, setupPersonal, unlockCui, unlockPersonal } from "./personal.ts";
 import { homedir } from "node:os";
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync, statSync } from "node:fs";
+import { dirname } from "node:path";
 
 applyEnv(); // make stored API keys available to a spawned omp acp
 if (loadSettings().headroomEnabled) startHeadroom(); // resume the opt-in compression proxy
@@ -68,6 +69,23 @@ const server = Bun.serve({
       // P10.2: cross-model usage & cost ledger (per-model totals + estimated cache savings).
       if (p === "/api/usage") return json({ ok: true, data: usageLedger() });
       if (p === "/api/health") return json({ ok: true });
+      // In-app folder browser (works in the browser build AND Electron — the dev server
+      // reads the local FS in both). Lists subdirectories + flags git repos, for Workspace.
+      if (p === "/api/fs/list") {
+        const want = url.searchParams.get("path");
+        const base = want && existsSync(want) ? want : homedir();
+        const dirs: { name: string; path: string; isGit: boolean }[] = [];
+        try {
+          for (const name of readdirSync(base)) {
+            if (name.startsWith(".")) continue; // hide dotfiles
+            const full = join(base, name);
+            try { if (statSync(full).isDirectory()) dirs.push({ name, path: full, isGit: existsSync(join(full, ".git")) }); } catch { /* unreadable */ }
+          }
+        } catch { /* unreadable dir */ }
+        dirs.sort((a, b) => a.name.localeCompare(b.name));
+        const parent = dirname(base);
+        return json({ ok: true, data: { path: base, parent: parent !== base ? parent : null, home: homedir(), isGit: existsSync(join(base, ".git")), dirs } });
+      }
 
       // real omp ACP backend (genuine model replies + live session config)
       if (p === "/api/sessions") return json({ ok: true, data: listSessions() });

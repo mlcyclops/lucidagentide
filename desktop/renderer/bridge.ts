@@ -76,6 +76,10 @@ export interface GraphNode { id: string; name: string; kind: string; trust: stri
 export interface GraphEdge { from: string; to: string; relation: string }
 export interface GraphFact { id: string; entity_id: string; statement: string; scope: string; trust: string; confidence: number; session?: string; at: string }
 export interface PersonalGraphData { nodes: GraphNode[]; edges: GraphEdge[]; facts: GraphFact[] }
+export interface FsList {
+  path: string; parent: string | null; home: string; isGit: boolean;
+  dirs: { name: string; path: string; isGit: boolean }[];
+}
 export interface WorkspaceInfo {
   current: string; name: string; isGit: boolean;
   recent: { path: string; name: string; isGit: boolean }[];
@@ -147,6 +151,7 @@ export interface LucidBridge {
   setWorkspace(path: string): Promise<WorkspaceInfo | null>;
   cloneWorkspace(url: string): Promise<WorkspaceInfo | null>;
   pickFolder(): Promise<string | null>; // native dialog in Electron; null in browser
+  listDir(path?: string): Promise<FsList | null>; // in-app folder browser (works everywhere)
 }
 
 /** Native shell injected by the Electron preload (window controls + crisp zoom). */
@@ -257,6 +262,7 @@ export const bridge: LucidBridge = {
   setWorkspace: (path) => post("/api/workspace", { path }),
   cloneWorkspace: (url) => post("/api/workspace/clone", { url }),
   pickFolder: () => (shell?.pickFolder ? shell.pickFolder() : Promise.resolve(null)),
+  listDir: (path) => getData(`/api/fs/list${path ? `?path=${encodeURIComponent(path)}` : ""}`),
   setZoom: (f) => {
     if (shell?.setZoom) { shell.setZoom(f); return; } // Electron: crisp native zoom
     // Browser: zoom #app and counter-scale its height so it still fills the viewport

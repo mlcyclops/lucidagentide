@@ -27,6 +27,7 @@ const state = {
   commands: [] as OmpCommand[],
   skills: [] as { name: string; description: string; source: string }[],
   liveUsage: null as { used: number; size: number; cost: number } | null,
+  username: "" as string, // the "You" label on your messages (Settings → Profile)
   workspace: null as WorkspaceInfo | null,
   asksage: null as { configured: boolean; base: string; only: boolean; limit: number; datasets: string[]; queryModel: string; persona: string } | null,
   asksageTokens: null as { used: number; limit: number } | null,
@@ -209,11 +210,11 @@ function seedThread(): void {
 }
 function addMessage(role: "user" | "assistant", text: string): HTMLElement {
   $("#chatHint")?.remove();
-  const actions = role === "assistant"
-    ? `<div class="msg-actions"><button class="msg-act" data-msg-copy data-tip="Copy markdown">${icon("copy", 13)}</button><button class="msg-act" data-msg-save data-tip="Save as .md">${icon("download", 13)}</button></div>`
-    : "";
+  // Copy + Save .md on BOTH roles (copy your own prompts too).
+  const actions = `<div class="msg-actions"><button class="msg-act" data-msg-copy data-tip="Copy markdown">${icon("copy", 13)}</button><button class="msg-act" data-msg-save data-tip="Save as .md">${icon("download", 13)}</button></div>`;
+  const who = role === "user" ? (state.username || "You") : "LucidAgent";
   const node = el(`<div class="msg ${role}">
-    <div class="who">${role === "user" ? "You" : "LucidAgent"}</div>
+    <div class="who">${esc(who)}</div>
     <div class="av">${role === "user" ? icon("user", 16) : piMark}</div>
     <div class="text"></div>${actions}</div>`);
   (node as MsgNode)._md = text; // raw markdown, for copy / save-as-.md
@@ -1095,6 +1096,47 @@ function openSkillDropdown(anchor: HTMLElement): void {
   });
 }
 
+// In-app folder browser — works in the browser build AND Electron (the dev server reads
+// the local FS). Navigate folders, see which are git repos, pick one as the workspace.
+function openFolderBrowser(): Promise<string | null> {
+  return new Promise((resolve) => {
+    let cur = "", parent: string | null = null, home = "";
+    const scrim = el(`<div class="fb-scrim"></div>`);
+    const box = el(`<div class="fb" role="dialog" aria-label="Choose a workspace folder">
+      <div class="fb-head"><span class="fb-title">${icon("folder", 15)} Choose a workspace folder</span><button class="fb-x" data-fb="cancel" data-tip="Close">${icon("close", 15)}</button></div>
+      <div class="fb-bar"><button class="btn-mini" data-fb="up">${icon("expand", 12)} Up</button><button class="btn-mini" data-fb="home">${icon("folder", 12)} Home</button><span class="fb-path" id="fbPath"></span></div>
+      <div class="fb-list" id="fbList"></div>
+      <div class="fb-foot"><div class="fb-hint" id="fbHint"></div><div class="fb-actions"><button class="btn-mini" data-fb="cancel">Cancel</button><button class="btn-mini ok" data-fb="open">${icon("check", 12)} Open this folder</button></div></div>
+    </div>`);
+    document.body.append(scrim, box);
+    const close = (val: string | null) => { scrim.remove(); box.remove(); resolve(val); };
+    const render = async (path?: string) => {
+      const d = await bridge.listDir(path);
+      const list = $("#fbList", box) as HTMLElement;
+      if (!d) { list.innerHTML = `<div class="fb-empty">Couldn't read that folder.</div>`; return; }
+      cur = d.path; parent = d.parent; home = d.home;
+      ($("#fbPath", box) as HTMLElement).textContent = d.path;
+      ($("#fbHint", box) as HTMLElement).innerHTML = `Open <b>${esc(d.path.split(/[\\/]/).pop() || d.path)}</b>${d.isGit ? ` <span class="abadge ok">git</span>` : ""}`;
+      (box.querySelector('[data-fb="up"]') as HTMLButtonElement).disabled = !d.parent;
+      list.innerHTML = d.dirs.length
+        ? d.dirs.map((x) => `<button class="fb-item" data-go="${esc(x.path)}">${icon(x.isGit ? "git" : "folder", 14)}<span class="fb-name">${esc(x.name)}</span>${x.isGit ? `<span class="abadge ok">git</span>` : ""}</button>`).join("")
+        : `<div class="fb-empty">No subfolders here.</div>`;
+    };
+    box.addEventListener("click", (e) => {
+      const t = e.target as HTMLElement;
+      const go = t.closest("[data-go]") as HTMLElement | null;
+      if (go) { void render(go.dataset.go); return; }
+      const act = (t.closest("[data-fb]") as HTMLElement | null)?.dataset.fb;
+      if (act === "cancel") close(null);
+      else if (act === "open") close(cur);
+      else if (act === "up" && parent) void render(parent);
+      else if (act === "home") void render(home);
+    });
+    scrim.addEventListener("click", () => close(null));
+    void render();
+  });
+}
+
 function wire(): void {
   // rail
   $$(".rail-btn[data-rail]").forEach((b) => b.addEventListener("click", () => {
@@ -1208,9 +1250,10 @@ function wire(): void {
     if (head) { const k = head.dataset.accToggle!; (head.closest(".acc")!.classList.toggle("open")) ? OPEN.add(k) : OPEN.delete(k); return; }
     // workspace
     if (t.closest("#wsBrowse")) {
-      const path = await bridge.pickFolder();
+      // In-app folder browser — works in both the packaged app and the browser build, and
+      // flags which folders are git repos (to open or initialize one).
+      const path = await openFolderBrowser();
       if (path) await applyWorkspace(path);
-      else showToast({ title: "Browse needs the desktop app", desc: "In the browser build, paste a folder path instead.", actions: [{ label: "OK" }], timeout: 3400 });
       return;
     }
     if (t.closest("#wsSet")) { const v = ($("#wsPath", $("#setBody")!) as HTMLInputElement)?.value.trim(); if (v) await applyWorkspace(v); return; }
@@ -1392,8 +1435,10 @@ function wire(): void {
     const logout = t.closest("[data-oauth-logout]") as HTMLElement | null;
     if (logout) { await bridge.oauthLogout(logout.dataset.oauthLogout!); void renderSettings(); return; }
     if (t.closest("#saveUsername")) {
-      const u = ($("#setUsername") as HTMLInputElement)?.value ?? "";
+      const u = (($("#setUsername") as HTMLInputElement)?.value ?? "").trim();
       await bridge.saveUsername(u);
+      state.username = u;
+      $$(".msg.user .who").forEach((w) => { w.textContent = u || "You"; }); // relabel existing turns
       showToast({ title: "Saved", desc: `Hi${u ? ", " + u : " there"}.`, actions: [{ label: "OK" }], timeout: 2000 });
     }
   });
@@ -1780,6 +1825,9 @@ void loadConfig().then(renderStatus);
 void loadWorkspace();
 void loadAsksage();
 void loadSkills();
+void bridge.getSettings().then((s) => { // your saved name → the "You" label on your messages
+  if (s?.username) { state.username = s.username; $$(".msg.user .who").forEach((w) => { w.textContent = s.username!; }); }
+});
 refresh();
 scheduleBudgetPoll(); // provider budget: re-check every 5 min for the current model
 setInterval(refresh, 4000);
