@@ -4,6 +4,22 @@ Three lines per session: **shipped / stubbed / next** (CLAUDE.md session ritual)
 
 -----
 
+## P11.2: right rail UX — memory default, security triage, ledger hierarchy (ADR-0021)
+- **shipped:** (1) **Default tab → Memory** — `state.inspectorTab` now initialises to `"memory"`,
+  and the HTML tab buttons match (Memory gets `active` class). When the inspector is collapsed to
+  the metrics rail, expanding it re-checks `hasActiveBlocks()` and overrides to Security if the gate
+  quarantined something. (2) **Security triage pulse** — new `@keyframes chipPulseGlow` (glowing
+  border) + `@keyframes chipShimmer` (sweeping gradient across the chip card) CSS animations.
+  Applied via `.chip.alert` / `.chip.alert.alert-amber` classes conditionally when `qCount > 0`
+  (quarantined → red shimmer) or `aCount > 0` (awaiting review → amber shimmer). The CSS uses
+  `--chip-alert-color` / `--chip-alert-dim` custom properties so the shimmer inherits the metric's
+  semantic colour. (3) **Ledger hierarchy** — `ledgerBody()` refactored into `ledgerSplit()` which
+  returns `{ peek, rest }`: the snapshot card + first (highest-spend) model row are rendered in a
+  `.ledger-peek` div OUTSIDE the accordion, always visible. Only the remaining N−1 models are
+  wrapped inside the chevron accordion. root+desktop tsc clean.
+- **stubbed:** the `onBlock` handler already calls `focusInspector("security")` on quarantine,
+  so auto-override on block arrival is covered; no separate poll-driven override needed.
+- **next:** P-MCP.1 (manual MCP connector + overlay UI) or P11.3 (further UX refinements).
 ## P10.3a/UX: proactive budget warning · copy-own-prompts · profile name · folder browser
 - **shipped:** (P10.3 partial) the Claude 5-hour chip now turns RED and a once-per-window toast fires
   at ≥90% — you see the wall coming instead of stalling into it (header probes deferred; the oauth
@@ -946,3 +962,16 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **stubbed:** per-turn transcripts (depend on Phase B / alex's #12 — omitted, not faked); the
   audited raw-reveal (POST /api/dev/reveal + raw_revealed) left as a careful follow-up.
 - **next:** ADR-0009 Phase A/B (alex); optional Phase D raw-reveal; ADR-0015 PQC when FIPS requires.
+
+## P-MCP.1: MCP connector + omp mcpServers seam (ADR-0020)
+- **shipped:** the first MCP-hub increment, built as an EXTENSION of omp (inv. #1): omp already
+  accepts session/new.mcpServers, so mcpServersForAcp() assembles authenticated configs (HTTP/SSE,
+  bearer→Authorization header) and the hub does auth+config only — omp owns the transport.
+  settings_store McpServerEntry registry (git-ignored lucid-gui.json, masked over the wire);
+  GET/POST /api/mcp + /remove + /toggle (respawn omp on change); bridge mcp* methods; a Settings
+  "MCP connectors" card (list/add/enable/remove). EventName mcp_server_connected added. Verified
+  live: add→masked (token never leaks), toggle, remove; harness 369 pass, tsc+bundle clean.
+- **stubbed:** full slide-over overlay → P-MCP.2; telemetry emission of mcp_server_connected awaits
+  GUI-side telemetry persistence (two-process DuckDB); MCP tool output scanning relies on the
+  existing gate (omp tool calls are already scanned) — confirm the path in P-MCP.2.
+- **next:** P-MCP.2 — Entra/Okta OIDC via ephemeral-localhost PKCE + safeStorage via Electron main.

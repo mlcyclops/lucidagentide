@@ -10,10 +10,22 @@
 //  that's the more secure path and omp owns the storage there.)
 
 import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
 const FILE = join(homedir(), ".omp", "lucid-gui.json");
+
+// P-MCP.1 (ADR-0020): one configured MCP server. The token is a bearer credential sent as an
+// Authorization header to a remote (HTTP/SSE) MCP server.
+export interface McpServerEntry {
+  id: string;
+  name: string;
+  transport: "http" | "sse";
+  url: string;
+  token?: string;
+  enabled: boolean;
+}
 
 export interface GuiSettings {
   username?: string;
@@ -44,6 +56,9 @@ export interface GuiSettings {
   // ADR-0009 Phase D: developer-mode logging view (telemetry + lineage + audit trails, read-only).
   // OFF by default; flips on the "Logs" rail tab. Gated server-side too.
   developerMode?: boolean;
+  // P-MCP.1 (ADR-0020): configured MCP servers, fed into omp's session/new mcpServers. Tokens live
+  // in THIS git-ignored file (mode 0600) like provider keys; safeStorage custody is a later phase.
+  mcpServers?: McpServerEntry[];
   // Personalization knowledge graph (ADR-0010, P9.x): opt-in, encrypted-at-rest.
   // OFF by default - no user-fact distillation, recall, or store until enabled.
   personalizationEnabled?: boolean;
@@ -78,6 +93,27 @@ export function setRateLimitProbe(enabled: boolean): GuiSettings {
 }
 export function setDeveloperMode(enabled: boolean): GuiSettings {
   const s = load(); s.developerMode = enabled; save(s); return s;
+}
+
+// ── P-MCP.1 (ADR-0020): MCP server registry ───────────────────────────────────────
+export function listMcpServers(): McpServerEntry[] { return load().mcpServers ?? []; }
+/** Add or update (by id) an MCP server. Returns the stored entry. */
+export function upsertMcpServer(e: { id?: string; name: string; transport?: "http" | "sse"; url: string; token?: string; enabled?: boolean }): McpServerEntry {
+  const s = load(); s.mcpServers = s.mcpServers ?? [];
+  const id = e.id || `mcp-${randomUUID().slice(0, 8)}`;
+  const entry: McpServerEntry = { id, name: e.name.trim() || "MCP server", transport: e.transport ?? "http", url: e.url.trim(), token: e.token?.trim() || undefined, enabled: e.enabled ?? true };
+  const i = s.mcpServers.findIndex((x) => x.id === id);
+  if (i >= 0) s.mcpServers[i] = entry; else s.mcpServers.push(entry);
+  save(s); return entry;
+}
+export function removeMcpServer(id: string): void { const s = load(); s.mcpServers = (s.mcpServers ?? []).filter((x) => x.id !== id); save(s); }
+export function setMcpServerEnabled(id: string, enabled: boolean): void { const s = load(); const e = (s.mcpServers ?? []).find((x) => x.id === id); if (e) { e.enabled = enabled; save(s); } }
+/** The ACP `session/new.mcpServers` array for ENABLED servers (ADR-0020 Decision 6: omp owns the
+ *  MCP transport; we only assemble the authenticated config). Bearer token → Authorization header. */
+export function mcpServersForAcp(): Record<string, unknown>[] {
+  return (load().mcpServers ?? [])
+    .filter((e) => e.enabled && e.url)
+    .map((e) => ({ type: e.transport, name: e.name, url: e.url, headers: e.token ? [{ name: "Authorization", value: `Bearer ${e.token}` }] : [] }));
 }
 export function setPersonalScope(scope: GuiSettings["personalScope"]): GuiSettings {
   const s = load(); s.personalScope = scope; save(s); return s;

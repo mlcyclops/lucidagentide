@@ -1634,8 +1634,14 @@ Anthropic's Enterprise-Managed Auth demonstrated the power of zero-touch IdP int
 - **Localhost catcher**: distinct ephemeral port, PKCE + `state`, drain-and-close on callback.
 
 **Phases — one increment each (session ritual):**
-- **P-MCP.1** — the omp `mcpServers` config seam + a manual (paste-a-token) MCP connector + the
-  slide-over overlay UI. Proves auth→omp end-to-end with no IdP yet. EventName `mcp_server_connected`.
+- **P-MCP.1 — BUILT.** The omp `mcpServers` config seam (`mcpServersForAcp()` → `session/new`/
+  `session/load`) + a manual (paste-a-token) MCP connector in a Settings "MCP connectors" card
+  (list / add / enable-disable / remove; HTTP + SSE; bearer token → `Authorization` header).
+  Tokens persist in the git-ignored `lucid-gui.json` (like provider keys) and the API only ever
+  returns masked status (never the raw token); changes respawn omp so it re-reads `mcpServers`.
+  EventName `mcp_server_connected` added to the enum. *Scoped:* the full slide-over overlay is
+  deferred to P-MCP.2 (where the IdP forms/logs need the real estate); telemetry emission of the
+  event awaits GUI-side telemetry persistence (the two-process-DuckDB gap).
 - **P-MCP.2** — Entra ID / Okta OIDC via the ephemeral-localhost PKCE catcher + token seal through
   Electron main. EventName `mcp_auth_completed` (+ `mcp_auth_failed`).
 - **P-MCP.3** — GCP WIF: exchange the Entra OIDC token with GCP STS for a short-lived GCP token.
@@ -1651,3 +1657,34 @@ storage pattern; proves the omp seam before any IdP work).
   like provider keys — **never committed** (the standing keys-stay-out-of-git constraint).
 - New deps: Electron `safeStorage` only (already implied by ADR-0010); Terraform is out-of-band
   tooling, not an npm/bun dependency.
+
+-----
+
+## ADR-0021 — Right Rail UX: Memory Default, Security Triage, and Ledger Hierarchy
+
+**Date:** 2026-06-20
+**Status:** Built
+**Context increment:** P11.2/UX
+
+### Decision
+
+We are refining the Right Rail (Inspector) default behavior, adding visual indicators for security alerts, and restructuring the Cost & Savings ledger.
+
+1. **Default Tab:** The right rail Inspector will default to the **Memory** tab, surfacing context window, token spend, and cache hit-rates immediately. However, if the gate has quarantined content (fail-closed block), the Inspector overrides this to default to the **Security** tab to enforce triage.
+2. **Visual Triage:** Security metrics requiring review will feature a CSS shimmer particle effect and a glowing pulse matching the severity color (`--red` or `--amber`) to instantly draw the eye to the blocked payload.
+3. **Ledger Visibility:** The Cost & Savings ledger is restructured so the aggregate snapshot and the primary (highest-spend) model are permanently visible outside the accordion, while the remaining tail of models are hidden within the accordion.
+
+### Why
+
+The previous design hid the critical Cost & Savings snapshot inside a closed accordion and defaulted to the Security tab even when the user had no active threats. By defaulting to Memory, the user gets immediate token/cost feedback. By pulsing active threats, we ensure they don't miss quarantines. By pinning the aggregate snapshot outside the accordion, we maintain developer cost-awareness without vertical clutter.
+
+### Integration with the invariants
+
+4. **Fail-closed is law (invariant #3).** The visual triage only changes the *presentation* of the fail-closed gate blocks, not the gate itself. The quarantine mechanism and semantics are unaffected.
+5. **No new dependencies.** The CSS pulse and shimmer effects are implemented via standard keyframe animations in `styles.css`. No external animation libraries are introduced.
+6. **Extend omp; never fork it (invariant #1).** All changes are localized to the `desktop/renderer/app.ts` UI shell and CSS. No changes to the underlying `omp` or `scanner-sidecar` are required.
+
+### Phases — one increment each (session ritual)
+
+- **P11.2a/UX** — Implement the conditional default tab logic in `focusInspector()` and the conditional CSS class application for the `.pulse-glow` and `.shimmer-particle` animations in `securityHtml()`.
+- **P11.2b/UX** — Refactor `ledgerBody()` to separate the snapshot card and the first model row from the `accordion()` wrapper, preserving the "Prompt-cache savings" layout below it.

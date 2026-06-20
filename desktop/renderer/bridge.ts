@@ -33,6 +33,9 @@ export interface MemorySnapshot {
 // P10.3: a live rate-limit reading probed from an API-key provider's response headers.
 export interface ProbedLimit { provider: string; label: string; used: number; remaining: number; limit: number; resetsAt: number | null }
 
+// P-MCP.1 (ADR-0020): a configured MCP server's masked status (token never crosses the wire).
+export interface McpServerStatus { id: string; name: string; transport: "http" | "sse"; url: string; enabled: boolean; hasToken: boolean; tokenLast4?: string }
+
 // ADR-0009 Phase D: read-only developer Logs view (gated on Developer mode).
 export interface DevView {
   enabled: boolean;
@@ -121,6 +124,11 @@ export interface LucidBridge {
   // ADR-0009 Phase D: developer Logs view + its opt-in toggle.
   dev(): Promise<DevView | null>;
   setDeveloperMode(enabled: boolean): Promise<unknown>;
+  // P-MCP.1 (ADR-0020): MCP server registry (masked — never the raw token).
+  mcpList(): Promise<McpServerStatus[] | null>;
+  mcpUpsert(e: { id?: string; name: string; transport?: "http" | "sse"; url: string; token?: string; enabled?: boolean }): Promise<McpServerStatus | null>;
+  mcpRemove(id: string): Promise<unknown>;
+  mcpToggle(id: string, enabled: boolean): Promise<unknown>;
   usage(): Promise<UsageLedger | null>;
   sendPrompt(text: string, onEvent: (e: ChatEvent) => void): Promise<void>;
   config(): Promise<ConfigOption[]>;
@@ -245,6 +253,10 @@ export const bridge: LucidBridge = {
   setRateLimitProbe: (enabled) => post("/api/ratelimits", { enabled }),
   dev: () => getData("/api/dev"),
   setDeveloperMode: (enabled) => post("/api/dev", { enabled }),
+  mcpList: () => getData("/api/mcp"),
+  mcpUpsert: (e) => post("/api/mcp", e),
+  mcpRemove: (id) => post("/api/mcp/remove", { id }),
+  mcpToggle: (id, enabled) => post("/api/mcp/toggle", { id, enabled }),
   usage: () => getData("/api/usage"),
   sendPrompt: streamChat,
   config: async () => (await getData("/api/config")) ?? FALLBACK_CONFIG,

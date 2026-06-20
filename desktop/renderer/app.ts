@@ -16,7 +16,7 @@ import { type Action, attachRichTip, createPalette, initTooltips, popover, showT
 
 type Tab = "security" | "memory" | "dev";
 const state = {
-  inspectorTab: "security" as Tab,
+  inspectorTab: "memory" as Tab, // ADR-0021: default to Memory; overridden to Security when active blocks exist
   sidebarCollapsed: false,
   inspectorRail: false,
   model: "claude-opus-4-8",
@@ -43,6 +43,7 @@ const state = {
   probeEnabled: false, // P10.3 opt-in state for the live rate-limit probe
   developerMode: false, // ADR-0009 Phase D
   dev: null as import("./bridge.ts").DevView | null, // ADR-0009 Phase D logs snapshot
+  mcpServers: [] as import("./bridge.ts").McpServerStatus[], // P-MCP.1 (ADR-0020)
 };
 const prettyModel = (v: string) => v.replace(/^anthropic\//, "");
 // Strip the redundant "· AskSage Gov" / "· Gov" suffix from a model's display name
@@ -145,8 +146,8 @@ function buildShell(): void {
       <aside class="inspector" id="inspector">
         <div class="resizer resizer-l" data-resize="inspector" data-tip="Drag to resize" data-tip-side="left"></div>
         <div class="insp-tabs">
-          <button class="insp-tab sec active" data-insp="security">${icon("shield", 15)} Security</button>
-          <button class="insp-tab mem" data-insp="memory">${icon("brain", 15)} Memory</button>
+          <button class="insp-tab sec" data-insp="security">${icon("shield", 15)} Security</button>
+          <button class="insp-tab mem active" data-insp="memory">${icon("brain", 15)} Memory</button>
           <button class="insp-collapse" id="inspCollapse" data-tip="Collapse to metrics|Slide into a live quick-metrics rail" data-tip-side="bottom">${icon("collapse", 16)}</button>
         </div>
         <div class="insp-body" id="inspBody"></div>
@@ -458,6 +459,14 @@ function setSendEnabled(): void {
 }
 
 // ───────────────────────── inspector ─────────────────────────
+// ADR-0021: detect active security blocks that require triage.
+function hasActiveBlocks(): boolean {
+  const sec = state.security;
+  if (!sec) return false;
+  const liveQ = sec.live?.quarantined?.length ?? 0;
+  const approvals = sec.approvals?.length ?? 0;
+  return liveQ + approvals > 0;
+}
 function focusInspector(tab: Tab): void {
   closeSettings();
   state.inspectorTab = tab;
@@ -529,7 +538,13 @@ function renderMetricsRail(): void {
 function setInspectorRail(rail: boolean): void {
   state.inspectorRail = rail;
   $("#inspector")!.classList.toggle("rail", rail);
-  if (rail) renderMetricsRail();
+  if (rail) { renderMetricsRail(); return; }
+  // ADR-0021: expanding from rail → if active blocks exist, override to Security tab
+  if (hasActiveBlocks() && state.inspectorTab !== "security") {
+    focusInspector("security");
+    return;
+  }
+  lastInspHash = ""; renderInspector();
 }
 
 // ───────────────────────── settings page ─────────────────────────
@@ -658,6 +673,33 @@ function secCompression(hr: import("./bridge.ts").HeadroomStatus | null): string
 function secOthers(auth: import("./bridge.ts").AuthStatus | null): string {
   return setCard("others", "More providers", "", (auth?.others ?? []).map(provCard).join("") || `<div class="empty">none</div>`, true);
 }
+// P-MCP.1 (ADR-0020): MCP connectors — auth + config only; omp owns the MCP transport.
+function secMcp(servers: import("./bridge.ts").McpServerStatus[]): string {
+  const rows = servers.length ? servers.map((m) => `<div class="prov">
+      <div class="prov-h"><span class="prov-name">${esc(m.name)} <span class="abadge set">${esc(m.transport)}</span></span>
+        <span class="prov-status">${m.enabled ? `<span class="abadge ok">${icon("check", 11)} on</span>` : `<span class="abadge none">off</span>`}${m.hasToken ? `<span class="abadge set">token ••${esc(m.tokenLast4 ?? "")}</span>` : ""}</span></div>
+      <div class="prov-body">
+        <div class="prov-row"><span class="prov-id" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis">${esc(m.url)}</span></div>
+        <div class="prov-row">
+          <button class="btn-mini" data-mcp-toggle="${esc(m.id)}" data-mcp-on="${m.enabled ? "0" : "1"}">${m.enabled ? "Disable" : "Enable"}</button>
+          <button class="btn-mini danger" data-mcp-remove="${esc(m.id)}">${icon("close", 12)} Remove</button>
+        </div></div></div>`).join("")
+    : `<div class="empty">No MCP servers yet. Add one below — it's handed to the agent via omp's native MCP support.</div>`;
+  const form = `<div class="prov" style="border-style:dashed">
+      <div class="prov-h"><span class="prov-name">${icon("plus", 13)} Add an MCP server</span></div>
+      <div class="prov-body">
+        <div class="prov-row"><input id="mcpName" class="prov-key" placeholder="Name (e.g. Linear, internal-tools)" /></div>
+        <div class="prov-row"><input id="mcpUrl" class="prov-key" placeholder="https://mcp.example.com/mcp (or /sse)" />
+          <select id="mcpTransport" class="prov-key" style="flex:none;width:84px"><option value="http">HTTP</option><option value="sse">SSE</option></select></div>
+        <div class="prov-row"><input id="mcpToken" class="prov-key" type="password" placeholder="Bearer token (optional)" />
+          <button class="btn-mini ok" id="mcpAdd">${icon("check", 12)} Connect</button></div>
+      </div></div>`;
+  const note = `<div class="set-note">${icon("info", 12)} Auth + config only — <b>omp owns the MCP connection</b> (ADR-0020). The token is stored on this machine (git-ignored) and sent as an <code>Authorization: Bearer</code> header; MCP tool output is still scanned by the security gate. Enterprise IdP sign-in (Okta / Entra / GCP WIF) lands in P-MCP.2.</div>`;
+  return setCard("mcp", "MCP connectors", "model context protocol", rows + form + note, true);
+}
+function hydrateMcp(): void {
+  void bridge.mcpList().then((m) => { state.mcpServers = m ?? []; fillSec("mcp", secMcp(state.mcpServers)); });
+}
 
 function settingsShell(): string {
   return [
@@ -667,6 +709,7 @@ function settingsShell(): string {
     setSkel("asksage", "AskSage gov gateway", "accredited proxy", true),
     setSkel("compression", "Token compression", "headroom · on-device · opt-in", true),
     setSkel("personal", "Personalization", "private · encrypted · opt-in", true),
+    setSkel("mcp", "MCP connectors", "model context protocol", true),
     setSkel("others", "More providers", "", true),
     `<div class="set-note">${icon("shield", 12)} Keys are stored on this machine and passed to omp as env vars - never sent anywhere else. OAuth uses omp's own secure credential vault.</div>`,
   ].join("");
@@ -682,6 +725,7 @@ function hydrateSettings(): void {
   void bridge.auth().then((a) => { fillSec("providers", secProviders(a)); fillSec("others", secOthers(a)); });
   void bridge.headroom().then((h) => fillSec("compression", secCompression(h)));
   void hydratePersonal();
+  hydrateMcp();
   void bridge.asksage().then(async (a) => {
     if (a) state.asksage = a;
     fillSec("asksage", secAsksage(a, null)); // paint immediately, without the slow datasets
@@ -943,9 +987,13 @@ function securityHtml(d: SecuritySnapshot | null): string {
   const promoted = Number((promotion.find((r) => r.outcome === "promoted") || {}).n || 0);
   const blocked = Number((promotion.find((r) => r.outcome === "blocked") || {}).n || 0);
   let h = secIntro();
+  // ADR-0021: pulse the metric chip that requires triage — quarantined gets red shimmer,
+  // awaiting-review gets amber shimmer, only when there are active items in that category.
+  const qCount = quarantine.length + live.quarantined.length;
+  const aCount = approvals.length;
   h += chips([
-    { cls: "q", n: quarantine.length + live.quarantined.length, l: "quarantined" },
-    { cls: "a", n: approvals.length, l: "awaiting review" },
+    { cls: "q" + (qCount > 0 ? " alert" : ""), n: qCount, l: "quarantined" },
+    { cls: "a" + (aCount > 0 ? " alert alert-amber" : ""), n: aCount, l: "awaiting review" },
     { cls: "f", n: totFind, l: "findings" },
     { cls: "g", n: promoted, l: "promoted facts" },
   ]);
@@ -1020,10 +1068,16 @@ async function loadDev(): Promise<void> {
 
 function memoryHtml(d: MemorySnapshot | null): string {
   let h = "";
-  // P10.2: the cross-model cost & savings ledger sits on top (it spans ALL sessions, so
-  // it shows even when the current workspace has no live omp transcript).
+  // P10.2 + ADR-0021: the cross-model cost & savings ledger sits on top (it spans ALL sessions,
+  // so it shows even when the current workspace has no live omp transcript).
+  // ADR-0021 restructure: the snapshot card + the first (highest-spend) model row are always
+  // visible outside the accordion; only the remaining models are inside the chevron.
   const led = state.ledger;
-  if (led && led.models.length) h += accordion("mem.ledger", "Cost & savings ledger", "all models · estimated cache savings", ledgerBody(led), OPEN.has("mem.ledger"), `${led.models.length}`);
+  if (led && led.models.length) {
+    const { peek, rest } = ledgerSplit(led);
+    h += `<div class="ledger-peek">${peek}</div>`;
+    if (rest) h += accordion("mem.ledger", "Cost & savings ledger", `${led.models.length - 1} more models`, rest, OPEN.has("mem.ledger"), `${led.models.length - 1}`);
+  }
   if (!d) return h || `<div class="empty">No omp session yet - launch omp and send a message.</div>`;
   const s = d.session;
   if (s) {
@@ -1065,6 +1119,12 @@ function memoryHtml(d: MemorySnapshot | null): string {
 // (sorted by spend, so the top rows are where the tokens go). Savings is estimated from the
 // data (cache reads billed at ~10% of input → est. savings = cost.cacheRead × 9).
 function ledgerBody(led: import("./bridge.ts").UsageLedger): string {
+  const { peek, rest } = ledgerSplit(led);
+  return peek + (rest ?? "");
+}
+// ADR-0021: split the ledger into a "peek" (always visible: snapshot card + first model row)
+// and "rest" (the remaining model rows, rendered inside an accordion by the caller).
+function ledgerSplit(led: import("./bridge.ts").UsageLedger): { peek: string; rest: string | null } {
   const t = led.totals;
   const savedPct = t.cost + t.savings > 0 ? t.savings / (t.cost + t.savings) : 0;
   const local = led.bySource.local;
@@ -1075,18 +1135,25 @@ function ledgerBody(led: import("./bridge.ts").UsageLedger): string {
     <div class="lc-foot">${fmtNum(t.tokens)} tokens · ${t.turns} turns · ${led.models.length} models · ${t.sessions} sessions${local.cost > 0 ? ` · <span class="lc-local">local ${fmtUSD(local.cost)}</span>` : " · all provider/subscription"}</div>
     ${led.truncated ? `<div class="lc-foot warn">${icon("info", 11)} showing the ${led.files} most recent sessions</div>` : ""}
   </div>`;
-  const rows = led.models.map((m) => ({
+  const cols = [
+    { key: "model", label: "model" }, { key: "turns", label: "turns", mono: true }, { key: "tokens", label: "tokens", mono: true },
+    { key: "cost", label: "cost", mono: true }, { key: "saved", label: "saved", mono: true }, { key: "cache", label: "cache", mono: true },
+  ] as const;
+  const toRow = (m: typeof led.models[number]) => ({
     model: cleanModelName(prettyModel(m.model)),
     turns: String(m.turns),
     tokens: fmtNum(m.tokens.total),
     cost: fmtUSD(m.cost.total),
     saved: m.savings > 0 ? fmtUSD(m.savings) : "—",
     cache: `${Math.round(m.cacheHitRate * 100)}%`,
-  }));
-  return card + table([
-    { key: "model", label: "model" }, { key: "turns", label: "turns", mono: true }, { key: "tokens", label: "tokens", mono: true },
-    { key: "cost", label: "cost", mono: true }, { key: "saved", label: "saved", mono: true }, { key: "cache", label: "cache", mono: true },
-  ], rows);
+  });
+  // Peek: snapshot card + just the first (highest-spend) model
+  const firstRow = led.models.length ? [toRow(led.models[0])] : [];
+  const peek = card + table([...cols], firstRow);
+  // Rest: remaining models (index 1+), or null if there's only one
+  if (led.models.length <= 1) return { peek, rest: null };
+  const restRows = led.models.slice(1).map(toRow);
+  return { peek, rest: table([...cols], restRows) };
 }
 
 /** Provider keywords for the active model, so we can highlight the budget that
@@ -1633,6 +1700,23 @@ function wire(): void {
       showToast({ title: enabled ? "Developer mode on" : "Developer mode off", desc: enabled ? "A read-only Logs panel is now in the rail (telemetry, lineage, audit)." : "The Logs panel is hidden.", actions: [{ label: "OK" }], timeout: 3000 });
       return;
     }
+    // ── P-MCP.1 (ADR-0020): MCP connectors ──
+    if (t.closest("#mcpAdd")) {
+      const body = $("#setBody")!;
+      const name = (($("#mcpName", body) as HTMLInputElement)?.value ?? "").trim();
+      const url = (($("#mcpUrl", body) as HTMLInputElement)?.value ?? "").trim();
+      const transport = (($("#mcpTransport", body) as HTMLSelectElement)?.value === "sse" ? "sse" : "http") as "http" | "sse";
+      const token = (($("#mcpToken", body) as HTMLInputElement)?.value ?? "").trim();
+      if (!url) { showToast({ title: "URL required", desc: "Enter the MCP server's URL.", actions: [{ label: "OK" }], timeout: 3000 }); return; }
+      await bridge.mcpUpsert({ name: name || "MCP server", url, transport, token: token || undefined });
+      hydrateMcp();
+      showToast({ title: "MCP connector added", desc: `${name || "Server"} is configured — the agent picks it up on your next turn.`, meta: "omp owns the connection · tool output is still scanned", actions: [{ label: "OK" }], timeout: 5000 });
+      return;
+    }
+    const mcpToggle = t.closest("[data-mcp-toggle]") as HTMLElement | null;
+    if (mcpToggle) { await bridge.mcpToggle(mcpToggle.dataset.mcpToggle!, mcpToggle.dataset.mcpOn === "1"); hydrateMcp(); return; }
+    const mcpRemove = t.closest("[data-mcp-remove]") as HTMLElement | null;
+    if (mcpRemove) { await bridge.mcpRemove(mcpRemove.dataset.mcpRemove!); hydrateMcp(); showToast({ title: "Connector removed", desc: "The MCP server was removed; the agent drops it on the next turn.", actions: [{ label: "OK" }], timeout: 3000 }); return; }
     // ── Personalization (ADR-0010/0012) ──
     if (t.closest("#personalToggle")) {
       const enabled = ($("#personalToggle", $("#setBody")!) as HTMLInputElement)?.checked ?? false;

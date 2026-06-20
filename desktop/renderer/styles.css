@@ -448,6 +448,28 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .chip .l{font-size:11px;color:var(--txt-3);margin-top:2px;letter-spacing:.1px}
 .chip.q .n{color:var(--red)} .chip.a .n{color:var(--amber)} .chip.f .n{color:var(--cyan)} .chip.g .n{color:var(--green)}
 
+/* ADR-0021: security triage visual pulse + shimmer.
+   Applied to .chip.alert when active blocks exist (the gate quarantined something).
+   The pulse glows the border; the shimmer sweeps a moving gradient across the card. */
+.chip.alert{position:relative;border-color:var(--chip-alert-color, var(--red));
+  animation:chipPulseGlow 2.2s var(--ease) infinite}
+.chip.alert::after{content:"";position:absolute;inset:0;border-radius:inherit;pointer-events:none;
+  background:linear-gradient(105deg,transparent 38%,var(--chip-alert-dim, var(--red-dim)) 48%,transparent 58%);
+  background-size:250% 100%;animation:chipShimmer 2.8s var(--ease) infinite}
+@keyframes chipPulseGlow{
+  0%{box-shadow:0 0 0 0 var(--chip-alert-dim, rgba(239,95,95,.35)),var(--shadow-sm)}
+  50%{box-shadow:0 0 12px 2px var(--chip-alert-dim, rgba(239,95,95,.28)),var(--shadow-sm)}
+  100%{box-shadow:0 0 0 0 var(--chip-alert-dim, rgba(239,95,95,.35)),var(--shadow-sm)}}
+@keyframes chipShimmer{
+  0%{background-position:250% 0}
+  100%{background-position:-50% 0}}
+/* colour overrides for the amber (awaiting review) chip alert */
+.chip.alert.alert-amber{--chip-alert-color:var(--amber);--chip-alert-dim:var(--amber-dim)}
+
+/* ADR-0021: ledger-peek — the snapshot card + first model row rendered outside the accordion */
+.ledger-peek{margin-bottom:10px}
+.ledger-peek .tbl{border:1px solid var(--line);border-radius:0 0 11px 11px;overflow:hidden;margin-top:-1px}
+
 /* accordion section (collapsible + slide) */
 .acc{border:1px solid var(--line);border-radius:12px;background:var(--bg-1);margin-bottom:10px;overflow:hidden;
   transition:border-color var(--t),box-shadow var(--t)}
