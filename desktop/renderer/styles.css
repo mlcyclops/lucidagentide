@@ -732,3 +732,43 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 
 /* P10.3 budget chip near-limit warning */
 .statusbar .seg.warn{border-color:color-mix(in srgb,var(--red) 45%,var(--line));background:var(--red-dim)}
+
+/* ───────────────────────── animated icons (unit #2) ─────────────────────────
+   Self-contained icon motion + glow. Scoped to `.ic` only — color stays owned
+   by parents (stroke=currentColor). Motion is GPU-friendly (transform/filter)
+   and globally gated by the prefers-reduced-motion reset near the top of this
+   file. Do not move color/layout ownership here. */
+.ic{transition:transform var(--t) var(--ease-out),filter var(--t) var(--ease-out);
+  transform-origin:center;will-change:transform}
+
+/* Hover lift + on-brand glow when an icon sits inside an interactive control.
+   Targets the .ic only — never the button body (owned elsewhere). */
+.rail-btn:hover .ic,
+.btn-mini:hover .ic,
+.ws-recent-item:hover .ic,
+.fb-item:hover .ic{
+  transform:translateY(-1px) scale(1.08);
+  filter:drop-shadow(0 0 5px rgba(198,75,214,.45));
+}
+/* Action icons get a touch more spark on hover. */
+.btn-mini:hover .ic.ic-action{filter:drop-shadow(0 0 7px rgba(224,123,240,.6))}
+
+/* Pressed state settles back down for tactile feedback. */
+.rail-btn:active .ic,
+.btn-mini:active .ic{transform:translateY(0) scale(.96);transition-duration:var(--t-fast)}
+
+/* Spin utility — loading/refresh code opts in by adding `spin` via extraClass
+   (e.g. icon("refresh", 13, "spin")). Cubic, continuous, GPU-only. */
+.ic.spin{animation:icSpin .9s linear infinite}
+@keyframes icSpin{to{transform:rotate(360deg)}}
+
+/* Soft draw/pulse for action glyphs (bolt, spark) — opt in with `ic-pulse`. */
+.ic.ic-pulse{animation:icPulse 2.4s var(--ease) infinite}
+@keyframes icPulse{
+  0%,100%{filter:drop-shadow(0 0 2px rgba(198,75,214,.25))}
+  50%{filter:drop-shadow(0 0 8px rgba(224,123,240,.7))}
+}
+
+/* One-shot pop for an icon that just appeared / activated — opt in with `ic-pop`. */
+.ic.ic-pop{animation:icPop var(--t-slow) var(--ease-out)}
+@keyframes icPop{0%{transform:scale(.6);opacity:.4}60%{transform:scale(1.12)}100%{transform:none;opacity:1}}
