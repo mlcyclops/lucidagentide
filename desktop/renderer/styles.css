@@ -556,32 +556,41 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .kg{width:min(900px,70vw);background:var(--bg-1);border-left:1px solid var(--line-soft);display:flex;flex-direction:column;overflow:hidden;animation:slideInR var(--t-slow) var(--ease-out)}
 .kg-tools{display:flex;align-items:center;gap:10px}
 .seg.kg-lens{display:flex;gap:3px;background:var(--bg-2);border:1px solid var(--line);border-radius:8px;padding:3px}
-.kg-lens button{-webkit-app-region:no-drag;border:0;background:transparent;color:var(--txt-3);font-size:11px;font-weight:600;padding:4px 11px;border-radius:6px;cursor:pointer}
-.kg-lens button.on{background:var(--bg-4);color:var(--txt)}
+.kg-lens button{-webkit-app-region:no-drag;border:0;background:transparent;color:var(--txt-3);font-size:11px;font-weight:600;padding:4px 11px;border-radius:6px;cursor:pointer;transition:background var(--t),color var(--t),box-shadow var(--t)}
+.kg-lens button:hover{color:var(--txt-2)}
+.kg-lens button.on{background:var(--bg-4);color:var(--txt);box-shadow:inset 0 0 0 1px var(--line-strong),0 1px 2px rgba(0,0,0,.35)}
 .kg-ai{-webkit-app-region:no-drag;display:flex;align-items:center;gap:5px;font-size:11px;font-weight:600;color:var(--txt-3);cursor:pointer;user-select:none}
 .kg-ai input{accent-color:var(--accent);cursor:pointer;margin:0}
 .kg-main{flex:1;min-height:0;display:flex}
-.kg-canvas{flex:1;min-width:0;position:relative;background:radial-gradient(circle at 50% 38%,var(--bg-1),var(--bg-0));overflow:hidden;cursor:grab}
+.kg-canvas{flex:1;min-width:0;position:relative;background:radial-gradient(120% 90% at 50% 34%,#12141d 0%,var(--bg-1) 42%,var(--bg-0) 100%);overflow:hidden;cursor:grab}
+/* faint vignette so nodes feel lit from within the canvas rather than floating on flat fill */
+.kg-canvas::after{content:"";position:absolute;inset:0;pointer-events:none;background:radial-gradient(130% 100% at 50% 42%,transparent 58%,rgba(0,0,0,.32) 100%)}
 .kg-canvas:active{cursor:grabbing}
 .kg-side{width:250px;flex:none;border-left:1px solid var(--line-soft);overflow:auto;padding:14px 14px 24px}
 .kg-empty{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;color:var(--txt-4);font-size:13px;text-align:center;padding:0 36px}
 .kg-empty .ic{opacity:.55}
 .kg-side-empty{display:flex;flex-direction:column;align-items:center;gap:9px;color:var(--txt-4);font-size:12px;margin-top:34px;text-align:center}
-.kg-svg{display:block}
-.kg-edge{fill:none;stroke:var(--line-strong);stroke-width:1.2;opacity:.45;stroke-linecap:round}
-.kg-part{opacity:.9;filter:drop-shadow(0 0 2px currentColor)}
-.kg-node circle{stroke:var(--bg-0);stroke-width:1.5;transition:stroke var(--t)}
-.kg-node:hover circle{stroke:var(--txt-2)}
-.kg-node.sel circle{stroke:#fff;stroke-width:2.5}
-.kg-label{fill:var(--txt-2);font-size:9.5px;font-family:inherit;text-anchor:middle;paint-order:stroke;stroke:var(--bg-0);stroke-width:3px;stroke-linejoin:round}
+.kg-svg{display:block;position:relative;z-index:1}
+.kg-edge{fill:none;stroke:var(--line-strong);stroke-width:1.1;opacity:.32;stroke-linecap:round;transition:opacity var(--t)}
+.kg-part{opacity:.8;filter:drop-shadow(0 0 2.5px currentColor)}
+/* shared soft glow over the whole node layer — one cheap filter, not one per node */
+.kg-nodes{filter:url(#kgGlow)}
+.kg-node circle{stroke:var(--bg-0);stroke-width:1.5;transition:stroke var(--t),stroke-width var(--t),transform var(--t) var(--ease-out);transform-box:fill-box;transform-origin:center}
+.kg-node{cursor:pointer}
+.kg-node:hover circle{stroke:var(--txt-2);transform:scale(1.12)}
+.kg-node.sel circle{stroke:#fff;stroke-width:2.5;transform:scale(1.06)}
+.kg-label{fill:var(--txt-2);font-size:9.5px;font-family:inherit;text-anchor:middle;paint-order:stroke;stroke:var(--bg-0);stroke-width:3px;stroke-linejoin:round;transition:fill var(--t)}
+.kg-node:hover .kg-label,.kg-node.sel .kg-label{fill:var(--txt)}
 .kg-side-head{display:flex;align-items:center;gap:8px;margin-bottom:12px;font-size:13.5px}
 .kg-side-head b{color:var(--txt);min-width:0;overflow:hidden;text-overflow:ellipsis}
 .kg-side-kind{flex:none;font-size:9.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--txt-2);padding:2px 7px;border-radius:6px}
-.kg-fact{border:1px solid var(--line-soft);border-radius:9px;padding:9px 11px;margin-bottom:8px;background:var(--bg-2)}
-.kg-fact-stmt{font-size:12.5px;color:var(--txt);line-height:1.5}
+/* embossed fact cards — hairline top highlight + soft elevation, lifts on hover */
+.kg-fact{border:1px solid var(--line-soft);border-radius:9px;padding:9px 11px;margin-bottom:8px;background:linear-gradient(var(--bg-2),var(--bg-1));box-shadow:inset 0 1px 0 rgba(255,255,255,.03),0 1px 2px rgba(0,0,0,.28);transition:border-color var(--t),box-shadow var(--t),transform var(--t) var(--ease-out)}
+.kg-fact:hover{border-color:var(--line);box-shadow:inset 0 1px 0 rgba(255,255,255,.05),0 4px 12px -4px rgba(0,0,0,.5);transform:translateY(-1px)}
+.kg-fact-stmt{font-size:12.5px;color:var(--txt);line-height:1.55}
 .kg-fact-meta{display:flex;align-items:center;gap:8px;margin-top:7px;font-size:10.5px;color:var(--txt-4)}
-.kg-forget{-webkit-app-region:no-drag;margin-left:auto;border:1px solid var(--line);background:var(--bg-3);color:var(--txt-3);border-radius:6px;padding:2px 7px;font-size:10px;cursor:pointer;display:inline-flex;align-items:center;gap:3px;transition:border-color var(--t),color var(--t)}
-.kg-forget:hover{border-color:var(--red);color:#ff9b9b}
+.kg-forget{-webkit-app-region:no-drag;margin-left:auto;border:1px solid var(--line);background:var(--bg-3);color:var(--txt-3);border-radius:6px;padding:2px 7px;font-size:10px;cursor:pointer;display:inline-flex;align-items:center;gap:3px;transition:border-color var(--t),color var(--t),background var(--t)}
+.kg-forget:hover{border-color:var(--red);color:#ff9b9b;background:var(--red-dim)}
 .set-sec{margin-bottom:14px}
 .set-lbl{font-size:11px;letter-spacing:1.3px;text-transform:uppercase;color:var(--txt-3);margin-bottom:10px;display:flex;align-items:center;gap:8px}
 .set-sub{text-transform:none;letter-spacing:0;font-size:11px;color:var(--txt-4)}
