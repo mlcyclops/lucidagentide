@@ -834,3 +834,28 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
   double-/server bug in listPersonas (base already ends in /server) that returned null.
 - **stubbed:** expandable reference citations on RAG replies (still a count note).
 - **next:** expandable reference citations; OR headroom request-routing + gov security review.
+
+## P9.6: knowledge-graph relational edges (fix: no lines between nodes)
+- **shipped:** the distiller now produces LINKS, so the KG shows relational lines. Root
+  cause: neither extractor emitted relations, so store.links stayed empty. Fix: model
+  extractor requests+parses a `relations[{to,relation}]` array (semantic edges); the
+  offline heuristic chains same-turn non-link facts with a "mentioned with" co-occurrence
+  edge; distillTurn resolves a relation's target to the real turn-entity (correct kind) and
+  dedups undirected. +4 tests assert links appear in store.graph().links. 356 pass.
+- **stubbed:** existing pre-fix facts have no edges (only new/imported data gets them);
+  no retroactive relink pass.
+- **next:** P9.7 multi-vendor chat-export importer (ChatGPT/Claude → gated distill → KG).
+
+## P9.7: multi-vendor chat-export importer (ChatGPT / Claude → KG)
+- **shipped:** import a ChatGPT or Claude data export into the personalization graph through
+  the SAME fail-closed distiller as live chat — every imported user message is scanned before
+  any fact is stored (keystone #2). New harness modules: import_adapters.ts (detectVendor +
+  parseExport for both formats) + importer.ts (gated, deferred-save, provenance-tagged
+  import:<vendor>). New EventName personal_facts_imported (ADR-0017). Desktop:
+  importChatExport() + POST /api/personal/import + "Import history" button in the Knowledge
+  toolbar (reuses the folder browser; pick the unzipped export folder). 363 pass; tsc + bundle
+  clean; endpoint verified live in preview.
+- **stubbed:** import uses the offline heuristic extractor (no model cost) → modest facts; a
+  model-extractor upgrade would yield richer facts + semantic edges. No Gemini/Takeout adapter
+  yet (the design generalizes — ~30 lines). No ZIP unzip (point at the extracted folder).
+- **next:** optional model-extractor import pass; Gemini/Takeout adapter; server-side unzip.

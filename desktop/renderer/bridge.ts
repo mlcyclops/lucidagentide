@@ -76,6 +76,7 @@ export interface GraphNode { id: string; name: string; kind: string; trust: stri
 export interface GraphEdge { from: string; to: string; relation: string }
 export interface GraphFact { id: string; entity_id: string; statement: string; scope: string; trust: string; confidence: number; session?: string; at: string }
 export interface PersonalGraphData { nodes: GraphNode[]; edges: GraphEdge[]; facts: GraphFact[] }
+export interface PersonalImportResult { ok: boolean; error?: string; vendor?: "openai" | "anthropic"; conversations?: number; messages?: number; learned?: number; blocked?: number }
 export interface FsList {
   path: string; parent: string | null; home: string; isGit: boolean;
   dirs: { name: string; path: string; isGit: boolean }[];
@@ -142,6 +143,9 @@ export interface LucidBridge {
   personalCuiDestroy(): Promise<{ ok: boolean; error?: string; destroyed?: boolean; facts?: number } | null>;
   personalGraph(scope?: PersonalScopeView): Promise<PersonalGraphData | null>;
   personalForget(factId: string): Promise<{ ok: boolean } | null>;
+  // P9.7: import a ChatGPT / Claude data export (extracted folder, or conversations.json) into
+  // the active compartment, through the fail-closed gate.
+  personalImport(path: string): Promise<PersonalImportResult | null>;
   // P9.4: audited Obsidian vault export + NARA-aligned CUI archive
   personalExportVault(opts: { scopes?: string[]; dest?: string; reviewer?: string }): Promise<ExportSummary | null>;
   personalCuiArchive(opts: { dest?: string; reviewer?: string }): Promise<ExportSummary | null>;
@@ -255,6 +259,7 @@ export const bridge: LucidBridge = {
   personalCuiDestroy: () => post("/api/personal/cui/destroy", {}),
   personalGraph: (scope) => getData(`/api/personal/graph${scope ? `?scope=${encodeURIComponent(scope)}` : ""}`),
   personalForget: (factId) => post("/api/personal/forget", { factId }),
+  personalImport: (path) => post("/api/personal/import", { path }),
   personalExportVault: (opts) => post("/api/personal/vault", opts),
   personalCuiArchive: (opts) => post("/api/personal/cui-archive", opts),
   personalExports: () => getData("/api/personal/exports"),

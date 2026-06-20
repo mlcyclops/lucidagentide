@@ -72,6 +72,8 @@ export const EVENT_NAMES = [
   // NARA-aligned records-destruction action (zeroize key + delete the cui file).
   "personal_cui_migrated",
   "personal_cui_destroyed",
+  // P9.7 — import a third-party chat export (ChatGPT / Claude) through the gated distiller.
+  "personal_facts_imported",
 ] as const;
 export type EventName = (typeof EVENT_NAMES)[number];
 

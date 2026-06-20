@@ -57,6 +57,20 @@ test("modelExtractor parses a JSON array and drops invalid kinds", async () => {
   expect(facts[0]!.kind).toBe("user:goal");
 });
 
+test("modelExtractor parses relations between entities", async () => {
+  const callModel = async () =>
+    '[{"kind":"user:skill","entity":"rust","statement":"Codes in Rust","relations":[{"to":"kubernetes","relation":"deploys with"}]},{"kind":"user:skill","entity":"kubernetes","statement":"Deploys with K8s"}]';
+  const facts = await modelExtractor(callModel)({ user: "anything", assistant: "" });
+  expect(facts.find((f) => f.entity === "rust")!.relations).toEqual([{ to: "kubernetes", relation: "deploys with" }]);
+});
+
+test("heuristicExtractor chains same-turn facts with a co-occurrence relation (not URLs)", () => {
+  const facts = heuristicExtractor({ user: "I prefer vim and I like Rust. See https://x.com/y", assistant: "" });
+  const withRel = facts.filter((f) => (f.relations?.length ?? 0) > 0);
+  expect(withRel.length).toBeGreaterThan(0); // at least one co-occurrence link
+  expect(facts.find((f) => f.kind === "user:link")!.relations ?? []).toEqual([]); // URLs don't chain
+});
+
 // ── the gated pipeline ─────────────────────────────────────────────────────────────
 test("distillTurn: a clean source learns facts into the active compartment + emits events", async () => {
   const store = newStore();
@@ -68,6 +82,25 @@ test("distillTurn: a clean source learns facts into the active compartment + emi
   expect(store.scopeCounts().work).toBe(r.learned);
   expect(store.scopeCounts().personal).toBe(0); // scoped to "work"
   expect(events.filter((e) => e.event === "personal_fact_learned").length).toBe(r.learned);
+});
+
+test("distillTurn: a clean multi-fact turn creates relational links in the store", async () => {
+  const store = newStore();
+  // model extractor with an explicit relation → a link between the two real entity nodes
+  const callModel = async () =>
+    '[{"kind":"user:skill","entity":"rust","statement":"Codes in Rust","relations":[{"to":"kubernetes","relation":"deploys with"}]},{"kind":"user:skill","entity":"kubernetes","statement":"Uses K8s"}]';
+  await distillTurn(store, cleanScanner, { userText: "I code in Rust and deploy with Kubernetes", scope: "work", extract: modelExtractor(callModel) });
+  const g = store.graph({ scope: "combined" });
+  expect(g.links.length).toBe(1);
+  const rust = g.entities.find((e) => e.name === "rust")!;
+  const k8s = g.entities.find((e) => e.name === "kubernetes")!;
+  expect(g.links[0]).toMatchObject({ from_entity_id: rust.id, to_entity_id: k8s.id, relation: "deploys with" });
+});
+
+test("distillTurn: the offline heuristic also produces links (co-occurrence)", async () => {
+  const store = newStore();
+  await distillTurn(store, cleanScanner, { userText: "I prefer vim and I like Rust", scope: "personal", extract: heuristicExtractor });
+  expect(store.graph().links.length).toBeGreaterThan(0);
 });
 
 test("distillTurn: a QUARANTINED source learns NOTHING (keystone #2, personal path)", async () => {

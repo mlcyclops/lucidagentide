@@ -1382,3 +1382,76 @@ because we generated it.
 - JS bundle grows ~460KB (KaTeX) — the cost of offline math; acceptable for a desktop app.
 - `desktop/renderer/vendor/` is now a tracked, shipped path (`.gitignore` exception added).
 - The zero-dep stance still holds everywhere else; KaTeX is the single, justified, vendored exception.
+
+-----
+
+## ADR-0017 — Knowledge-graph relational edges + multi-vendor chat-export import
+
+**Date:** 2026-06-20
+**Status:** Accepted. Built this increment (P9.6 edges + P9.7 importer).
+**Relationship:** completes the personalization KG (ADR-0010); imports feed it; reuses the
+fail-closed distiller (keystone #2) and the compartment routing (ADR-0012 / ADR-0014).
+
+### Context
+
+Two user-reported gaps in the personalization knowledge graph:
+1. **No relational lines.** The graph rendered nodes but never any edges.
+2. **No way to seed it.** A new user starts empty; they wanted to import their existing
+   ChatGPT (and Claude) history so the graph reflects them from day one.
+
+### Part 1 — why there were no edges (P9.6)
+
+The edge path was wired correctly at every layer EXCEPT the one that creates links. Links are
+only written when a distilled fact candidate carries a `relations[]` array, and **neither
+extractor produced one**: the heuristic emitted none, and the model extractor's prompt didn't
+ask for relations (nor did its parser read them). So `store.links` stayed empty and the (correct)
+renderer had nothing to draw.
+
+**Fix:** the model extractor now requests + parses a `relations:[{to,relation}]` array (real
+semantic edges, e.g. rust → "deploys with" → kubernetes). The offline heuristic chains a turn's
+non-link facts with a weak, clearly-labelled `"mentioned with"` co-occurrence edge so structure
+appears even without the model. `distillTurn` resolves a relation's target to the real
+turn-entity (preserving its own kind, not the source fact's) and dedups undirected. This only
+affects facts learned AFTER the fix — pre-existing facts have no recorded relations and stay
+edgeless (no retroactive relink pass).
+
+### Part 2 — multi-vendor import (P9.7)
+
+**Decision: imports go through the SAME gated distiller as live chat — never a side door.** An
+imported transcript is untrusted external content, so every imported USER message passes
+`scanAndDecide` before any fact is stored. A poisoned message in an old export quarantines exactly
+like a live one (keystone #2). Assistant messages are never distilled (the profile is built from
+the user's own words). Imported facts carry `source_session_id = "import:<vendor>"` for provenance
+in the graph drill-down.
+
+**Vendor adapters** (`harness/personal/import_adapters.ts`, pure + offline): both vendors export a
+top-level JSON array in `conversations.json`. ChatGPT uses a per-conversation `mapping` of message
+nodes (`author.role`, `content.parts`); Claude uses `chat_messages[]` (`sender:human|assistant`,
+`text`/`content`). `detectVendor` sniffs the shape; `parseExport` normalizes both to
+`{title, messages:[{role,text}]}`. The design generalizes — a Gemini/Takeout adapter is ~30 lines.
+
+**Importer** (`harness/personal/importer.ts`): runs each user message through `distillTurn`,
+tallies learned/blocked, emits one metadata-only `personal_facts_imported` event, and saves the
+store ONCE at the end (new `distillTurn` `persist:false` option avoids O(n²) re-encryption over a
+large export). Routes to the active compartment; cui routes to the isolated CUI store and learns
+nothing if it's locked (fail-closed). Per-message scan failures block only that message.
+
+**Desktop**: `importChatExport(path)` accepts the extracted export FOLDER (finds
+`conversations.json` inside) or the file itself; `POST /api/personal/import`; a "Import history"
+button in the Knowledge toolbar reuses the in-app folder browser (now label-parameterized) and
+toasts a summary incl. how many messages the gate quarantined.
+
+### Frozen-contract impact
+
+- New `EventName` `personal_facts_imported` — added in the same increment that emits it (else
+  `emit` throws). This is the only frozen-contract change; hence this ADR.
+- No DuckDB migration (the personalization store is a separate encrypted file, not DuckDB).
+- The encrypted-store format (`personal-kg.v1`) is unchanged — imports use existing
+  entity/fact/link shapes.
+
+### Guardrails preserved
+
+- Fail-closed: import scans every message; suspicious/quarantined sources teach nothing; the
+  scanner-kill test stays green.
+- Recall/prefix untouched — imports write to the store, not the prompt prefix.
+- Opt-in + encrypted-at-rest + compartment routing all hold; cui isolation is respected.

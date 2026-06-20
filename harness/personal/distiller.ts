@@ -62,7 +62,13 @@ export const heuristicExtractor = (turn: { user: string; assistant: string }): F
   }
   // de-dupe by (kind, statement)
   const seen = new Set<string>();
-  return out.filter((c) => { const k = `${c.kind}|${c.statement.toLowerCase()}`; if (seen.has(k)) return false; seen.add(k); return true; }).slice(0, 12);
+  const facts = out.filter((c) => { const k = `${c.kind}|${c.statement.toLowerCase()}`; if (seen.has(k)) return false; seen.add(k); return true; }).slice(0, 12);
+  // Co-occurrence: facts stated in the SAME turn are related context. Chain the non-link
+  // facts (URLs don't chain) with a weak, clearly-labelled "mentioned with" relation so the
+  // graph shows connections offline. The model extractor supplies richer, semantic relations.
+  const chainable = facts.filter((c) => c.kind !== "user:link");
+  for (let i = 0; i < chainable.length - 1; i++) (chainable[i]!.relations ??= []).push({ to: chainable[i + 1]!.entity, relation: "mentioned with" });
+  return facts;
 };
 
 // ── model extractor (production path) ────────────────────────────────────────────
@@ -73,8 +79,11 @@ export const EXTRACT_SYSTEM =
   "Extract DURABLE facts about the USER from their message (preferences, decisions, " +
   "behaviors, interests, personality, skills, goals, and links they value). Ignore " +
   "ephemeral task details. Output ONLY a JSON array of objects " +
-  '{"kind","entity","statement","confidence"} where kind is one of ' +
+  '{"kind","entity","statement","confidence","relations"} where kind is one of ' +
   "user:preference|decision|interest|behavior|personality|link|skill|goal|relationship. " +
+  '"relations" is an OPTIONAL array of {"to","relation"} connecting this entity to another ' +
+  'one you also extracted, e.g. {"to":"kubernetes","relation":"deploys with"} or ' +
+  '{"to":"rust","relation":"used for"}. Use it to show how the user\'s facts connect. ' +
   "Return [] if there is nothing durable.";
 
 export function modelExtractor(callModel: (system: string, user: string) => Promise<string>): Extractor {
@@ -94,7 +103,17 @@ export function modelExtractor(callModel: (system: string, user: string) => Prom
       const statement = clip(String(it?.statement ?? ""), 140);
       if (!KINDS.has(kind) || entity.length < 2 || statement.length < 3) continue;
       const confidence = Math.max(0, Math.min(1, Number(it?.confidence ?? 0.7)));
-      out.push({ kind, entity: entity.toLowerCase().slice(0, 48), statement, confidence });
+      // Optional relations: each links this entity to another the model named. The target
+      // is just a name here; distillTurn resolves it to the real node (or upserts one).
+      const relations: { to: string; relation: string }[] = [];
+      if (Array.isArray(it?.relations)) {
+        for (const r of it.relations as any[]) {
+          const to = clip(String(r?.to ?? ""), 60).toLowerCase().slice(0, 48);
+          if (to.length < 2) continue;
+          relations.push({ to, relation: clip(String(r?.relation ?? "related"), 40) || "related" });
+        }
+      }
+      out.push({ kind, entity: entity.toLowerCase().slice(0, 48), statement, confidence, relations: relations.length ? relations : undefined });
     }
     return out.slice(0, 16);
   };
@@ -108,7 +127,7 @@ export interface DistillResult { learned: number; blocked: boolean; reason?: str
 export async function distillTurn(
   store: PersonalStore,
   scanner: ScannerClient,
-  opts: { userText: string; assistantText?: string; scope: PersonalScope; sessionId?: string; runId?: string; extract: Extractor; telemetry?: Telemetry },
+  opts: { userText: string; assistantText?: string; scope: PersonalScope; sessionId?: string; runId?: string; extract: Extractor; telemetry?: Telemetry; persist?: boolean },
 ): Promise<DistillResult> {
   // 1. Scan the SOURCE (the user's own text). Anything not clean+trusted => learn nothing.
   const decision = await scanAndDecide(scanner, opts.userText, DEFAULT_POLICY);
@@ -117,17 +136,34 @@ export async function distillTurn(
   }
   // 2. Extract candidates, then write the clean ones into the active compartment.
   const candidates = await opts.extract({ user: opts.userText, assistant: opts.assistantText ?? "" });
+  // Create every candidate entity FIRST so a relation can resolve to the real node (with its
+  // own kind) instead of duplicating it under the source fact's kind.
+  const idByName = new Map<string, string>();
+  for (const c of candidates) idByName.set(c.entity.toLowerCase(), store.upsertEntity(c.entity, c.kind, "trusted", c.confidence ?? 1));
+
   let learned = 0;
+  const linkSeen = new Set<string>();
   for (const c of candidates) {
-    const entityId = store.upsertEntity(c.entity, c.kind, "trusted", c.confidence ?? 1);
+    const entityId = idByName.get(c.entity.toLowerCase())!;
     store.addFact({ entityId, statement: c.statement, trustLabel: "trusted", scope: opts.scope, confidence: c.confidence, sourceSessionId: opts.sessionId, sourceRunId: opts.runId });
     for (const rel of c.relations ?? []) {
-      if (!rel?.to) continue;
-      store.addLink(entityId, store.upsertEntity(clip(rel.to, 60).toLowerCase(), c.kind, "trusted"), String(rel.relation || "related"));
+      const toName = clip(String(rel?.to ?? ""), 60).toLowerCase().slice(0, 48);
+      if (toName.length < 2 || toName === c.entity.toLowerCase()) continue; // no self-loops
+      // Prefer an entity created this turn (keeps its real kind); else upsert a generic node.
+      let toId = idByName.get(toName);
+      if (!toId) { toId = store.upsertEntity(toName, c.kind, "trusted"); idByName.set(toName, toId); }
+      const relation = String(rel.relation || "related");
+      // Dedup undirected: A↔B with the same relation is one edge, not two.
+      const key = entityId < toId ? `${entityId}|${toId}|${relation}` : `${toId}|${entityId}|${relation}`;
+      if (linkSeen.has(key)) continue;
+      linkSeen.add(key);
+      store.addLink(entityId, toId, relation);
     }
     learned++;
     opts.telemetry?.emit("personal_fact_learned", { kind: c.kind, scope: opts.scope });
   }
-  if (learned) store.save();
+  // Bulk callers (the importer) defer the write and save once at the end — re-encrypting the
+  // whole graph per message would be O(n²) over a large export.
+  if (learned && opts.persist !== false) store.save();
   return { learned, blocked: false };
 }

@@ -165,6 +165,7 @@ function buildShell(): void {
             <div class="seg kg-lens" data-kg-lens>
               <button class="on" data-lens="kind">Kind</button><button data-lens="trust">Trust</button>
             </div>
+            <button class="btn-mini" id="kgImport" data-tip="Import chat history|Bring in a ChatGPT or Claude data export to seed your graph. Unzip the export, then choose the folder containing conversations.json. Every message is scanned by the security gate before anything is learned; only your own messages teach the profile.">${icon("download", 13)} Import history</button>
             <button class="btn-mini" id="kgExport" data-tip="Export Obsidian vault|Decrypt and write your Personal + Work knowledge to a portable Obsidian vault (notes, [[wikilinks]], escaped). CUI is excluded by design. The export is audited.">${icon("folder", 13)} Export vault</button>
             <button class="btn-mini danger" id="kgCui" data-tip="CUI archive · National Archives|Export ONLY the CUI compartment into a CUI-marked, records-managed package with a SHA-256 manifest (32 CFR 2002 · NARA). For archive/records requirements. Audited.">${icon("shield", 13)} CUI archive</button>
             <button class="set-close" id="kgClose" data-tip="Close">${icon("close", 16)}</button>
@@ -1122,15 +1123,17 @@ function openSkillDropdown(anchor: HTMLElement): void {
 
 // In-app folder browser — works in the browser build AND Electron (the dev server reads
 // the local FS). Navigate folders, see which are git repos, pick one as the workspace.
-function openFolderBrowser(): Promise<string | null> {
+function openFolderBrowser(opts: { title?: string; confirm?: string } = {}): Promise<string | null> {
+  const title = opts.title ?? "Choose a workspace folder";
+  const confirm = opts.confirm ?? "Open this folder";
   return new Promise((resolve) => {
     let cur = "", parent: string | null = null, home = "";
     const scrim = el(`<div class="fb-scrim"></div>`);
-    const box = el(`<div class="fb" role="dialog" aria-label="Choose a workspace folder">
-      <div class="fb-head"><span class="fb-title">${icon("folder", 15)} Choose a workspace folder</span><button class="fb-x" data-fb="cancel" data-tip="Close">${icon("close", 15)}</button></div>
+    const box = el(`<div class="fb" role="dialog" aria-label="${esc(title)}">
+      <div class="fb-head"><span class="fb-title">${icon("folder", 15)} ${esc(title)}</span><button class="fb-x" data-fb="cancel" data-tip="Close">${icon("close", 15)}</button></div>
       <div class="fb-bar"><button class="btn-mini" data-fb="up">${icon("expand", 12)} Up</button><button class="btn-mini" data-fb="home">${icon("folder", 12)} Home</button><span class="fb-path" id="fbPath"></span></div>
       <div class="fb-list" id="fbList"></div>
-      <div class="fb-foot"><div class="fb-hint" id="fbHint"></div><div class="fb-actions"><button class="btn-mini" data-fb="cancel">Cancel</button><button class="btn-mini ok" data-fb="open">${icon("check", 12)} Open this folder</button></div></div>
+      <div class="fb-foot"><div class="fb-hint" id="fbHint"></div><div class="fb-actions"><button class="btn-mini" data-fb="cancel">Cancel</button><button class="btn-mini ok" data-fb="open">${icon("check", 12)} ${esc(confirm)}</button></div></div>
     </div>`);
     document.body.append(scrim, box);
     const close = (val: string | null) => { scrim.remove(); box.remove(); resolve(val); };
@@ -1175,6 +1178,21 @@ function wire(): void {
   }));
   // Knowledge graph: close, lens toggle, forget-fact, export (P9.4)
   $("#kgClose")!.addEventListener("click", () => closeKnowledge());
+  $("#kgImport")!.addEventListener("click", async () => {
+    const folder = await openFolderBrowser({ title: "Choose your exported ChatGPT / Claude folder", confirm: "Import from this folder" });
+    if (!folder) return;
+    showToast({ title: "Importing chat history…", desc: "Scanning every message through the security gate before learning.", timeout: 2000 });
+    const r = await bridge.personalImport(folder);
+    if (!r?.ok) { showToast({ title: "Import failed", desc: r?.error ?? "Personalization is off or locked.", actions: [{ label: "OK" }], timeout: 6000 }); return; }
+    const vendor = r.vendor === "openai" ? "ChatGPT" : r.vendor === "anthropic" ? "Claude" : "export";
+    showToast({
+      title: `Imported from ${vendor}`,
+      desc: `${r.learned} facts learned from ${r.messages} messages across ${r.conversations} conversations.`,
+      meta: r.blocked ? `${r.blocked} message(s) quarantined by the gate and skipped` : "Every message passed the security gate",
+      actions: [{ label: "OK" }], timeout: 8000,
+    });
+    void renderKnowledge(); // redraw with the new nodes + edges
+  });
   $("#kgExport")!.addEventListener("click", async () => {
     showToast({ title: "Exporting vault…", desc: "Decrypting and writing your Obsidian notes.", timeout: 1400 });
     const r = await bridge.personalExportVault({});

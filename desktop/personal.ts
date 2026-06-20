@@ -5,12 +5,14 @@
 // for the moment of derivation; it is NEVER persisted and NEVER returned over the API.
 // Only booleans + compartment counts ever leave the server.
 
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, normalize, sep } from "node:path";
 import { CUI_STORE_VERSION, PersonalStore, type PersonalGraph, type PersonalScope, type ScopeView } from "../harness/personal/store.ts";
 import { load, personalAuditPath, personalCuiArchiveDir, personalCuiStorePath, personalStorePath, personalVaultDir, setPersonalization, setPersonalScope } from "./settings_store.ts";
 import { buildRecall, buildRecallFromGraph } from "../harness/personal/recall.ts";
 import { distillTurn, heuristicExtractor } from "../harness/personal/distiller.ts";
+import { parseExport, type ImportVendor } from "../harness/personal/import_adapters.ts";
+import { importConversations } from "../harness/personal/importer.ts";
 import { ScannerClient } from "../harness/security/scanner_client.ts";
 import { buildCuiArchive, buildVault, type CuiDesignation, type VaultFile } from "../harness/export/vault_export.ts";
 import { Telemetry } from "../harness/telemetry/events.ts";
@@ -323,4 +325,45 @@ export async function learnFromTurn(userText: string, assistantText: string): Pr
   if (!target) return; // main locked, or cui selected but its store is locked
   try { await distillTurn(target, getScanner(), { userText, assistantText, scope, extract: heuristicExtractor }); }
   catch { /* best-effort; the turn already happened */ }
+}
+
+// ── P9.7: import a third-party chat export (ChatGPT / Claude) into the active compartment ──
+export interface ImportResult {
+  ok: boolean; error?: string;
+  vendor?: ImportVendor; conversations?: number; messages?: number; learned?: number; blocked?: number;
+}
+
+/** Import a ChatGPT or Claude data export into the active (unlocked) compartment. `pathArg` may
+ *  be the extracted export FOLDER (we look for conversations.json inside) or the JSON file
+ *  itself. Every imported user message passes the fail-closed scanner gate (keystone #2); cui
+ *  routes to the isolated CUI store, and learns nothing if that store is locked. */
+export async function importChatExport(pathArg: string, vendorHint?: ImportVendor): Promise<ImportResult> {
+  const s = load();
+  if (!s.personalizationEnabled) return { ok: false, error: "Personalization is off." };
+  const view = (s.personalScope ?? "personal") as ScopeView;
+  const scope: PersonalScope = view === "combined" ? "personal" : view;
+  const target = scope === "cui" ? cuiStore : store;
+  if (!target) return { ok: false, error: scope === "cui" ? "Unlock the CUI store first (select CUI and enter its passphrase)." : "Unlock your store first." };
+
+  const raw = String(pathArg ?? "").trim();
+  if (!raw) return { ok: false, error: "Choose your exported folder (the one containing conversations.json)." };
+  let file = raw;
+  try { if (statSync(raw).isDirectory()) file = join(raw, "conversations.json"); } catch { /* treat as a file path */ }
+  let text: string;
+  try { text = readFileSync(file, "utf8"); }
+  catch { return { ok: false, error: "No conversations.json found there. Unzip your export and pick the folder that contains it." }; }
+  let data: unknown;
+  try { data = JSON.parse(text); }
+  catch { return { ok: false, error: "That conversations.json isn't valid JSON." }; }
+
+  let parsed: ReturnType<typeof parseExport>;
+  try { parsed = parseExport(data, vendorHint); }
+  catch (e) { return { ok: false, error: String((e as Error)?.message ?? e) }; }
+  if (!parsed.conversations.length) return { ok: false, error: "No conversations found in that export." };
+
+  try {
+    const tel = new Telemetry({ runId: Snowflake.next(), sessionId: "personal", sink: personalAuditPath() });
+    const sum = await importConversations(target, getScanner(), parsed.conversations, { vendor: parsed.vendor, scope, telemetry: tel });
+    return { ok: true, ...sum };
+  } catch (e) { return { ok: false, error: String((e as Error)?.message ?? e) }; }
 }
