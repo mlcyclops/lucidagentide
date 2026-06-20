@@ -14,6 +14,7 @@ import { ACPClient } from "./acp.ts";
 import { currentWorkspace } from "./workspace.ts";
 import { learnFromTurn, recallPreamble } from "./personal.ts";
 import { recordBlock } from "./security_log.ts";
+import { mcpServersForAcp } from "./settings_store.ts";
 
 const REPO = join(import.meta.dir, "..");
 // Absolute so the gate loads from THIS repo even when omp runs in another workspace.
@@ -109,7 +110,7 @@ class Backend {
   private async ensureSession(): Promise<void> {
     await this.start();
     if (this.sessionId) return;
-    const s: any = await this.acp!.request("session/new", { cwd: currentWorkspace(), mcpServers: [] });
+    const s: any = await this.acp!.request("session/new", { cwd: currentWorkspace(), mcpServers: mcpServersForAcp() });
     this.sessionId = s?.sessionId ?? s?.id ?? null;
     if (Array.isArray(s?.configOptions)) this.configOptions = s.configOptions;
     await sleep(350); // let available_commands_update arrive
@@ -126,7 +127,7 @@ class Backend {
   /** Resume a past session so the next prompt continues it. */
   async loadSession(id: string): Promise<void> {
     await this.start();
-    await this.acp!.request("session/load", { sessionId: id, cwd: currentWorkspace(), mcpServers: [] }).catch(() => {});
+    await this.acp!.request("session/load", { sessionId: id, cwd: currentWorkspace(), mcpServers: mcpServersForAcp() }).catch(() => {});
     this.sessionId = id;
   }
 
@@ -206,7 +207,7 @@ class Backend {
       let idle: ReturnType<typeof setTimeout> | undefined;
       let onStall: (e: Error) => void = () => {};
       try {
-        const s: any = await this.acp!.request("session/new", { cwd: currentWorkspace(), mcpServers: [] });
+        const s: any = await this.acp!.request("session/new", { cwd: currentWorkspace(), mcpServers: mcpServersForAcp() });
         sid = s?.sessionId ?? s?.id ?? null;
         if (!sid) return "";
         const IDLE = opts.idleMs ?? 60_000;

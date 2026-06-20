@@ -17,7 +17,7 @@ import { backend } from "./acp_backend.ts";
 import { listSessions, sessionMessages } from "./sessions.ts";
 import { providerAuth } from "./auth_status.ts";
 import { cloneRepo, setWorkspace, workspaceInfo } from "./workspace.ts";
-import { applyEnv, load as loadSettings, setAsksage, setDeveloperMode, setKey, setRateLimitProbe, setUsername } from "./settings_store.ts";
+import { applyEnv, listMcpServers, load as loadSettings, removeMcpServer, setAsksage, setDeveloperMode, setKey, setMcpServerEnabled, setRateLimitProbe, setUsername, upsertMcpServer } from "./settings_store.ts";
 import { asksageConfig, listDatasets, listPersonas, monthlyTokens, scanPersona, wrapPersona } from "./asksage.ts";
 import { listSkills } from "./skills_data.ts";
 import { headroomStatus, setHeadroomEnabled, startHeadroom } from "./headroom.ts";
@@ -103,6 +103,20 @@ const server = Bun.serve({
       // Audited fail-closed override: release one quarantined call (ADR-0019 C).
       if (p === "/api/security/approve" && req.method === "POST") { const b = await req.json(); return json({ ok: true, data: approveBlock(String(b.id ?? "")) }); }
       if (p === "/api/memory") return json({ ok: true, data: await memorySnapshot() });
+      // P-MCP.1 (ADR-0020): MCP server registry. The hub does auth + config assembly only; omp owns
+      // the MCP transport (configs ride session/new.mcpServers). Changes respawn omp to apply. The
+      // list NEVER returns raw tokens (masked status only — like provider keys).
+      if (p === "/api/mcp") {
+        if (req.method === "POST") {
+          const b = await req.json();
+          const e = upsertMcpServer({ id: b.id, name: String(b.name ?? ""), transport: b.transport === "sse" ? "sse" : "http", url: String(b.url ?? ""), token: b.token != null ? String(b.token) : undefined, enabled: b.enabled });
+          backend.restart(); // omp re-reads mcpServers on the next session
+          return json({ ok: true, data: { id: e.id, name: e.name, transport: e.transport, url: e.url, enabled: e.enabled, hasToken: !!e.token } });
+        }
+        return json({ ok: true, data: listMcpServers().map((e) => ({ id: e.id, name: e.name, transport: e.transport, url: e.url, enabled: e.enabled, hasToken: !!e.token, tokenLast4: e.token ? e.token.slice(-4) : undefined })) });
+      }
+      if (p === "/api/mcp/remove" && req.method === "POST") { const b = await req.json(); removeMcpServer(String(b.id ?? "")); backend.restart(); return json({ ok: true }); }
+      if (p === "/api/mcp/toggle" && req.method === "POST") { const b = await req.json(); setMcpServerEnabled(String(b.id ?? ""), !!b.enabled); backend.restart(); return json({ ok: true }); }
       // ADR-0009 Phase D: developer-mode logging view. GET is gated server-side on developerMode
       // (returns null when off); POST {enabled} flips the mode. Read-only, metadata-only.
       if (p === "/api/dev") {

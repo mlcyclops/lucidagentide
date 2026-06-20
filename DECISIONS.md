@@ -1634,8 +1634,14 @@ Anthropic's Enterprise-Managed Auth demonstrated the power of zero-touch IdP int
 - **Localhost catcher**: distinct ephemeral port, PKCE + `state`, drain-and-close on callback.
 
 **Phases — one increment each (session ritual):**
-- **P-MCP.1** — the omp `mcpServers` config seam + a manual (paste-a-token) MCP connector + the
-  slide-over overlay UI. Proves auth→omp end-to-end with no IdP yet. EventName `mcp_server_connected`.
+- **P-MCP.1 — BUILT.** The omp `mcpServers` config seam (`mcpServersForAcp()` → `session/new`/
+  `session/load`) + a manual (paste-a-token) MCP connector in a Settings "MCP connectors" card
+  (list / add / enable-disable / remove; HTTP + SSE; bearer token → `Authorization` header).
+  Tokens persist in the git-ignored `lucid-gui.json` (like provider keys) and the API only ever
+  returns masked status (never the raw token); changes respawn omp so it re-reads `mcpServers`.
+  EventName `mcp_server_connected` added to the enum. *Scoped:* the full slide-over overlay is
+  deferred to P-MCP.2 (where the IdP forms/logs need the real estate); telemetry emission of the
+  event awaits GUI-side telemetry persistence (the two-process-DuckDB gap).
 - **P-MCP.2** — Entra ID / Okta OIDC via the ephemeral-localhost PKCE catcher + token seal through
   Electron main. EventName `mcp_auth_completed` (+ `mcp_auth_failed`).
 - **P-MCP.3** — GCP WIF: exchange the Entra OIDC token with GCP STS for a short-lived GCP token.
