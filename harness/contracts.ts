@@ -74,6 +74,8 @@ export const EVENT_NAMES = [
   "personal_cui_destroyed",
   // P9.7 — import a third-party chat export (ChatGPT / Claude) through the gated distiller.
   "personal_facts_imported",
+  // P-MCP.1 (ADR-0020) — an authenticated MCP server was connected (config handed to omp).
+  "mcp_server_connected",
 ] as const;
 export type EventName = (typeof EVENT_NAMES)[number];
 
