@@ -17,7 +17,7 @@
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ScannerClient } from "../security/scanner_client.ts";
-import { DEFAULT_POLICY, scanAndDecide } from "../security/gate.ts";
+import { scanAndDecide, type GatePolicy } from "../security/gate.ts";
 import { buildNotification, summarizeNotification } from "../security/notification.ts";
 import type { Db } from "../memory/db.ts";
 
@@ -27,6 +27,14 @@ const LIVE_RUN = "omp-live";
 
 const scanner = new ScannerClient();
 scanner.start();
+
+// The gate scans the model's OWN tool args (the bash command it wrote, the file content it
+// authored, custom-tool inputs). A homoglyph-only hit there is not an injection against the
+// model — it's legitimate when the model emits a Greek-letter variable (Δv, νₑ) or writes
+// about spoofing — so it is RECORDED-but-not-blocked. The dangerous, never-legitimate vectors
+// (zero-width, bidi-control, tag-block, private-use) still hard-block. External / imported
+// text is scanned on a different path with the strict DEFAULT_POLICY. See ADR-0019.
+const TOOL_POLICY: GatePolicy = { blockAtOrAbove: "high", nonBlockingTypes: new Set(["mixed-script-homoglyph"]) };
 
 let dbHandle: Db | undefined;
 let dbInit: Promise<Db | null> | undefined;
@@ -102,7 +110,7 @@ export default function securityExtension(pi: any): void {
   pi.on("tool_call", async (event: any) => {
     const toolName: string = event?.toolName ?? "tool";
     const text = collectStrings(event);
-    const decision = await scanAndDecide(scanner, text, DEFAULT_POLICY);
+    const decision = await scanAndDecide(scanner, text, TOOL_POLICY);
     if (!decision.block) {
       if (text.trim()) void rememberActivity(toolName, text); // allow + remember (provenance/memory)
       return;

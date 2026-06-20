@@ -127,4 +127,10 @@ CLEAN_CORPUS = [
     "مرحبا بالعالم hello world",  # Arabic + Latin (different words)
     "한국어 텍스트 sample",  # Hangul + Latin
     "Markdown: # Heading, **bold**, `code`, [link](http://example.com)",
+    # legitimate math/scientific notation: non-confusable Greek mixed with Latin in
+    # one token (Δv, 5μm, Σλ) is ordinary physics, NOT a homoglyph spoof. Regression
+    # for the generate_image false-positive (Δ Σ λ μ π θ φ ω have no Latin look-alike).
+    "Δv = vexh·ln(m0/mf) ⇒ exponential rocket equation",
+    "resolution 5μm, wavelength 532nm, ΔT = 300K, Σλ over modes",
+    "let λx be the eigenvalue and θphase the angle; ∇·E = ρ/ε0",
 ]

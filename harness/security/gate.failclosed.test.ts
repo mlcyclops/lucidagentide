@@ -59,3 +59,23 @@ test("decideFromFindings is pure and severity-gated", () => {
   expect(sub.block).toBe(false);
   expect(sub.trustLabel).toBe("suspicious");
 });
+
+test("nonBlockingTypes (source-scoped): a homoglyph-only hit is recorded, not blocked (ADR-0019)", () => {
+  const policy = { blockAtOrAbove: "high" as const, nonBlockingTypes: new Set(["mixed-script-homoglyph" as const]) };
+  // homoglyph-only → demoted to suspicious (allowed), but the finding is still carried
+  const homo = decideFromFindings([{ type: "mixed-script-homoglyph", codepoint: "U+0430", index: 0, severity: "high" }], policy);
+  expect(homo.block).toBe(false);
+  expect(homo.trustLabel).toBe("suspicious");
+  expect(homo.findings.length).toBe(1); // recorded, not dropped
+  // a DANGEROUS vector alongside a demoted one still blocks — demotion is type-scoped, not blanket
+  const mixed = decideFromFindings(
+    [
+      { type: "mixed-script-homoglyph", codepoint: "U+0430", index: 0, severity: "high" },
+      { type: "zero-width", codepoint: "U+200B", index: 1, severity: "high" },
+    ],
+    policy,
+  );
+  expect(mixed.block).toBe(true);
+  // without the policy, the same homoglyph hard-blocks (external/untrusted text path)
+  expect(decideFromFindings([{ type: "mixed-script-homoglyph", codepoint: "U+0430", index: 0, severity: "high" }]).block).toBe(true);
+});
