@@ -1455,3 +1455,58 @@ toasts a summary incl. how many messages the gate quarantined.
   scanner-kill test stays green.
 - Recall/prefix untouched — imports write to the store, not the prompt prefix.
 - Opt-in + encrypted-at-rest + compartment routing all hold; cui isolation is respected.
+
+-----
+
+## ADR-0018 — Import enhancements: model extraction, Gemini, in-memory unzip (P9.8)
+
+**Date:** 2026-06-20
+**Status:** Accepted. Built this increment.
+**Relationship:** extends the import path of ADR-0017 (P9.7). No new frozen-contract change
+(reuses `personal_facts_imported`; richer payload fields only).
+
+### Context
+
+Three follow-ups to the chat-export importer, all chosen by the user: (1) optional model-based
+extraction for richer facts + real relationships, (2) Google Gemini (Takeout) as a third vendor,
+(3) import straight from the downloaded `.zip` instead of unzipping first.
+
+### 1 — model-extractor import pass (opt-in)
+
+The importer already takes a pluggable `extract` fn, so model mode is just
+`modelExtractor(complete)` instead of `heuristicExtractor` — the entire gated pipeline (per-message
+scan, provenance, store rules) is reused unchanged. The missing piece was a **standalone
+completion seam**: the chat backend is a single stateful streaming session, and AskSage's API is
+gov-key-only. **Decision: add `backend.complete(system, user)`** — a one-shot completion in a
+THROWAWAY omp session that never touches the chat session, persona, or recall. It's serialized
+through a `utilLock` so it can't race a chat turn's listener, ignores tool-call events (collects
+only assistant text), and reuses whatever model the user already configured (no new keys). The
+model only ever sees text that already passed the scanner gate; its output is still just
+candidates the store governs.
+
+Cost control: model mode is **capped at 500 user messages per import** (`MODEL_IMPORT_CAP`) and the
+cap is **never silent** — `ImportSummary.skipped` reports the remainder and the UI says "re-run to
+continue." Heuristic mode stays the free, unbounded default; an "AI" checkbox in the Knowledge
+toolbar selects model mode.
+
+### 2 — Gemini (Takeout "My Activity")
+
+Google exports Gemini history as a flat `MyActivity.json` array of activity records
+(`{header:"Gemini Apps", title:"Prompted …"}`) — only the user's prompts, which is exactly what we
+distil from. `detectVendor` sniffs a Gemini/Bard `header`; `parseGemini` strips the leading prompt
+verb and bundles the prompts into one synthetic conversation. `ImportVendor` gains `"gemini"`.
+
+### 3 — in-memory unzip (no dependency)
+
+**Decision: a minimal hand-rolled ZIP reader** (`harness/personal/unzip.ts`, pure `node:zlib`)
+rather than a new dependency — consistent with the project's zero-dep / airgap posture. It walks
+the central directory and inflates a single named entry (STORE + DEFLATE; no zip64/encryption,
+which these exports don't use). `importChatExport` now accepts a folder, a `.json`, or a `.zip`,
+and looks for `conversations.json` then `MyActivity.json` (then a lone `.json`).
+
+### Guardrails preserved
+
+- Fail-closed unchanged: every imported message is scanned before the model (or heuristic) ever
+  sees it; the model can't pull facts from un-scanned text.
+- `complete()` bypasses persona/recall and runs in an isolated session — no prompt-prefix impact.
+- Cap is surfaced, never silent (no false "imported everything").

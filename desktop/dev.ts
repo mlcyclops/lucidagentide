@@ -211,9 +211,14 @@ const server = Bun.serve({
       if (p === "/api/personal/cui/destroy" && req.method === "POST") return json({ ok: true, data: destroyCui() });
       if (p === "/api/personal/graph") return json({ ok: true, data: personalGraph((url.searchParams.get("scope") ?? undefined) as any) });
       if (p === "/api/personal/forget" && req.method === "POST") { const b = await req.json(); return json({ ok: true, data: forgetFact(String(b.factId ?? "")) }); }
-      // P9.7: import a ChatGPT / Claude data export (folder containing conversations.json, or the
-      // file itself). Every imported user message is scanned by the fail-closed gate first.
-      if (p === "/api/personal/import" && req.method === "POST") { const b = await req.json(); return json({ ok: true, data: await importChatExport(String(b.path ?? ""), b.vendor) }); }
+      // P9.7: import a ChatGPT / Claude / Gemini export (folder, .json, or .zip). Every imported
+      // user message is scanned by the fail-closed gate first. `model:true` runs the richer LLM
+      // extractor via a throwaway omp completion (capped); otherwise the offline heuristic.
+      if (p === "/api/personal/import" && req.method === "POST") {
+        const b = await req.json();
+        const complete = b.model ? (system: string, user: string) => backend.complete(system, user) : undefined;
+        return json({ ok: true, data: await importChatExport(String(b.path ?? ""), { vendorHint: b.vendor, complete }) });
+      }
       // P9.4: audited decrypt→export. Vault excludes CUI unless explicitly listed; the
       // CUI archive is a separate, loud, NARA-aligned records-management path.
       if (p === "/api/personal/vault" && req.method === "POST") {

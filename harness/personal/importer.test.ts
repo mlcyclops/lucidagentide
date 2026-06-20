@@ -77,6 +77,28 @@ test("parseExport throws a friendly error on an unrecognized shape", () => {
   expect(() => parseExport([{ random: "object" }])).toThrow(/Unrecognized export/);
 });
 
+test("detectVendor + parseExport handle Gemini Takeout (My Activity), stripping the prompt verb", () => {
+  const gemini = [
+    { header: "Gemini Apps", title: "Prompted: I prefer dark mode and I use Rust", time: "t1" },
+    { header: "Search", title: "shoes", time: "t2" }, // non-Gemini activity → dropped
+  ];
+  expect(detectVendor(gemini)).toBe("gemini");
+  const { vendor, conversations } = parseExport(gemini);
+  expect(vendor).toBe("gemini");
+  expect(conversations.length).toBe(1);
+  expect(conversations[0]!.messages.every((m) => m.role === "user")).toBe(true);
+  expect(conversations[0]!.messages[0]!.text).toBe("I prefer dark mode and I use Rust"); // "Prompted:" stripped
+});
+
+test("importConversations: maxMessages caps work and reports skipped (no silent truncation)", async () => {
+  const store = newStore();
+  const convos = [{ title: "c", messages: Array.from({ length: 5 }, (_, i) => ({ role: "user" as const, text: `I like thing${i}` })) }];
+  const sum = await importConversations(store, cleanScanner, convos, { vendor: "openai", scope: "personal", maxMessages: 2, extractorKind: "model" });
+  expect(sum.messages).toBe(2);
+  expect(sum.skipped).toBe(3);
+  expect(sum.extractor).toBe("model");
+});
+
 // ── the gated import pipeline ────────────────────────────────────────────────────────
 test("importConversations: a clean ChatGPT export learns facts (only from user messages)", async () => {
   const store = newStore();

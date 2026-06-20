@@ -5,14 +5,15 @@
 // for the moment of derivation; it is NEVER persisted and NEVER returned over the API.
 // Only booleans + compartment counts ever leave the server.
 
-import { mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, normalize, sep } from "node:path";
 import { CUI_STORE_VERSION, PersonalStore, type PersonalGraph, type PersonalScope, type ScopeView } from "../harness/personal/store.ts";
 import { load, personalAuditPath, personalCuiArchiveDir, personalCuiStorePath, personalStorePath, personalVaultDir, setPersonalization, setPersonalScope } from "./settings_store.ts";
 import { buildRecall, buildRecallFromGraph } from "../harness/personal/recall.ts";
-import { distillTurn, heuristicExtractor } from "../harness/personal/distiller.ts";
+import { distillTurn, heuristicExtractor, modelExtractor, type Extractor } from "../harness/personal/distiller.ts";
 import { parseExport, type ImportVendor } from "../harness/personal/import_adapters.ts";
 import { importConversations } from "../harness/personal/importer.ts";
+import { readZipEntry } from "../harness/personal/unzip.ts";
 import { ScannerClient } from "../harness/security/scanner_client.ts";
 import { buildCuiArchive, buildVault, type CuiDesignation, type VaultFile } from "../harness/export/vault_export.ts";
 import { Telemetry } from "../harness/telemetry/events.ts";
@@ -327,17 +328,54 @@ export async function learnFromTurn(userText: string, assistantText: string): Pr
   catch { /* best-effort; the turn already happened */ }
 }
 
-// ── P9.7: import a third-party chat export (ChatGPT / Claude) into the active compartment ──
+// ── P9.7: import a third-party chat export (ChatGPT / Claude / Gemini) into the active store ──
 export interface ImportResult {
   ok: boolean; error?: string;
   vendor?: ImportVendor; conversations?: number; messages?: number; learned?: number; blocked?: number;
+  skipped?: number; extractor?: "heuristic" | "model";
 }
 
-/** Import a ChatGPT or Claude data export into the active (unlocked) compartment. `pathArg` may
- *  be the extracted export FOLDER (we look for conversations.json inside) or the JSON file
- *  itself. Every imported user message passes the fail-closed scanner gate (keystone #2); cui
- *  routes to the isolated CUI store, and learns nothing if that store is locked. */
-export async function importChatExport(pathArg: string, vendorHint?: ImportVendor): Promise<ImportResult> {
+// Model-mode bounds cost: at most this many user messages get a model call per import. The
+// heuristic mode (default) is free + unbounded. No silent truncation — the summary reports skips.
+const MODEL_IMPORT_CAP = 500;
+const EXPORT_FILES = ["conversations.json", "MyActivity.json"]; // ChatGPT/Claude, then Gemini Takeout
+
+/** Resolve the export's JSON text from a folder, a .json file, or a .zip (reads the entry
+ *  in-memory — no extraction to disk). Returns a user-facing error when nothing usable is found. */
+function loadExportText(raw: string): { ok: true; text: string } | { ok: false; error: string } {
+  const fromZip = (buf: Buffer): { ok: true; text: string } | { ok: false; error: string } => {
+    try {
+      for (const c of EXPORT_FILES) { const e = readZipEntry(buf, c); if (e) return { ok: true, text: e.toString("utf8") }; }
+      return { ok: false, error: "That .zip has no conversations.json / MyActivity.json inside." };
+    } catch (e) { return { ok: false, error: `Couldn't read that .zip: ${String((e as Error)?.message ?? e)}` }; }
+  };
+  let st: ReturnType<typeof statSync>;
+  try { st = statSync(raw); } catch { return { ok: false, error: "That path doesn't exist." }; }
+  if (st.isFile()) {
+    if (raw.toLowerCase().endsWith(".zip")) return fromZip(readFileSync(raw));
+    try { return { ok: true, text: readFileSync(raw, "utf8") }; } catch { return { ok: false, error: "Couldn't read that file." }; }
+  }
+  if (st.isDirectory()) {
+    for (const c of EXPORT_FILES) { const p = join(raw, c); if (existsSync(p)) return { ok: true, text: readFileSync(p, "utf8") }; }
+    let names: string[]; try { names = readdirSync(raw); } catch { return { ok: false, error: "Couldn't read that folder." }; }
+    const zip = names.find((n) => n.toLowerCase().endsWith(".zip"));
+    if (zip) return fromZip(readFileSync(join(raw, zip)));
+    const jsons = names.filter((n) => n.toLowerCase().endsWith(".json"));
+    if (jsons.length === 1) { try { return { ok: true, text: readFileSync(join(raw, jsons[0]!), "utf8") }; } catch { /* fall through */ } }
+    return { ok: false, error: "No conversations.json / MyActivity.json (or an export .zip) found in that folder." };
+  }
+  return { ok: false, error: "Choose the export file or its folder." };
+}
+
+/** Import a ChatGPT / Claude / Gemini data export into the active (unlocked) compartment.
+ *  `pathArg` may be the extracted FOLDER, the JSON file, or the export .zip itself. Every
+ *  imported user message passes the fail-closed scanner gate (keystone #2); cui routes to the
+ *  isolated CUI store and learns nothing if it is locked. When `opts.complete` is supplied
+ *  (model mode), the richer LLM extractor runs (capped); otherwise the offline heuristic. */
+export async function importChatExport(
+  pathArg: string,
+  opts: { vendorHint?: ImportVendor; complete?: (system: string, user: string) => Promise<string> } = {},
+): Promise<ImportResult> {
   const s = load();
   if (!s.personalizationEnabled) return { ok: false, error: "Personalization is off." };
   const view = (s.personalScope ?? "personal") as ScopeView;
@@ -346,24 +384,28 @@ export async function importChatExport(pathArg: string, vendorHint?: ImportVendo
   if (!target) return { ok: false, error: scope === "cui" ? "Unlock the CUI store first (select CUI and enter its passphrase)." : "Unlock your store first." };
 
   const raw = String(pathArg ?? "").trim();
-  if (!raw) return { ok: false, error: "Choose your exported folder (the one containing conversations.json)." };
-  let file = raw;
-  try { if (statSync(raw).isDirectory()) file = join(raw, "conversations.json"); } catch { /* treat as a file path */ }
-  let text: string;
-  try { text = readFileSync(file, "utf8"); }
-  catch { return { ok: false, error: "No conversations.json found there. Unzip your export and pick the folder that contains it." }; }
+  if (!raw) return { ok: false, error: "Choose your exported folder, .json, or .zip." };
+  const loaded = loadExportText(raw);
+  if (!loaded.ok) return loaded;
   let data: unknown;
-  try { data = JSON.parse(text); }
-  catch { return { ok: false, error: "That conversations.json isn't valid JSON." }; }
+  try { data = JSON.parse(loaded.text); }
+  catch { return { ok: false, error: "That export file isn't valid JSON." }; }
 
   let parsed: ReturnType<typeof parseExport>;
-  try { parsed = parseExport(data, vendorHint); }
+  try { parsed = parseExport(data, opts.vendorHint); }
   catch (e) { return { ok: false, error: String((e as Error)?.message ?? e) }; }
   if (!parsed.conversations.length) return { ok: false, error: "No conversations found in that export." };
 
+  // Heuristic (offline, free) by default; model extractor only when a completion fn is provided.
+  const useModel = typeof opts.complete === "function";
+  const extract: Extractor = useModel ? modelExtractor(opts.complete!) : heuristicExtractor;
+
   try {
     const tel = new Telemetry({ runId: Snowflake.next(), sessionId: "personal", sink: personalAuditPath() });
-    const sum = await importConversations(target, getScanner(), parsed.conversations, { vendor: parsed.vendor, scope, telemetry: tel });
+    const sum = await importConversations(target, getScanner(), parsed.conversations, {
+      vendor: parsed.vendor, scope, extract, extractorKind: useModel ? "model" : "heuristic",
+      maxMessages: useModel ? MODEL_IMPORT_CAP : undefined, telemetry: tel,
+    });
     return { ok: true, ...sum };
   } catch (e) { return { ok: false, error: String((e as Error)?.message ?? e) }; }
 }

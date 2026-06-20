@@ -859,3 +859,17 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
   model-extractor upgrade would yield richer facts + semantic edges. No Gemini/Takeout adapter
   yet (the design generalizes — ~30 lines). No ZIP unzip (point at the extracted folder).
 - **next:** optional model-extractor import pass; Gemini/Takeout adapter; server-side unzip.
+
+## P9.8: import enhancements — model extraction, Gemini, in-memory unzip
+- **shipped:** (1) opt-in model extractor for imports via new backend.complete() one-shot
+  (throwaway omp session, serialized, no new keys) — richer facts + real relations; capped at
+  500 msgs/import, skips surfaced (never silent); "AI" toggle in the Knowledge toolbar. (2)
+  Gemini Takeout (MyActivity.json) as a 3rd vendor (detectVendor/parseGemini). (3) hand-rolled
+  zero-dep ZIP reader (harness/personal/unzip.ts, node:zlib) so import takes a folder, .json,
+  OR the .zip directly. 368 pass; tsc + bundle clean; endpoint verified live (model flag routes
+  + guards). ADR-0018.
+- **stubbed:** model mode is per-message (not batched per-conversation) — simpler, reuses the
+  gated pipeline, but more model calls; the 500-cap bounds cost. No zip64/encrypted-zip support
+  (exports don't use them).
+- **next:** optional per-conversation batching to cut model-call volume; resumable AI import
+  past the 500 cap.

@@ -165,7 +165,8 @@ function buildShell(): void {
             <div class="seg kg-lens" data-kg-lens>
               <button class="on" data-lens="kind">Kind</button><button data-lens="trust">Trust</button>
             </div>
-            <button class="btn-mini" id="kgImport" data-tip="Import chat history|Bring in a ChatGPT or Claude data export to seed your graph. Unzip the export, then choose the folder containing conversations.json. Every message is scanned by the security gate before anything is learned; only your own messages teach the profile.">${icon("download", 13)} Import history</button>
+            <label class="kg-ai" data-tip="AI extraction|Use the model to pull richer facts + real relationships from each message, instead of the fast offline heuristic. Slower and uses model quota; capped at 500 messages per import. Leave off for a free, instant pass."><input type="checkbox" id="kgImportAI"/> AI</label>
+            <button class="btn-mini" id="kgImport" data-tip="Import chat history|Bring in a ChatGPT, Claude, or Gemini data export to seed your graph. Choose the export folder, the conversations.json/MyActivity.json, or the .zip itself. Every message is scanned by the security gate before anything is learned; only your own messages teach the profile.">${icon("download", 13)} Import history</button>
             <button class="btn-mini" id="kgExport" data-tip="Export Obsidian vault|Decrypt and write your Personal + Work knowledge to a portable Obsidian vault (notes, [[wikilinks]], escaped). CUI is excluded by design. The export is audited.">${icon("folder", 13)} Export vault</button>
             <button class="btn-mini danger" id="kgCui" data-tip="CUI archive · National Archives|Export ONLY the CUI compartment into a CUI-marked, records-managed package with a SHA-256 manifest (32 CFR 2002 · NARA). For archive/records requirements. Audited.">${icon("shield", 13)} CUI archive</button>
             <button class="set-close" id="kgClose" data-tip="Close">${icon("close", 16)}</button>
@@ -1179,17 +1180,23 @@ function wire(): void {
   // Knowledge graph: close, lens toggle, forget-fact, export (P9.4)
   $("#kgClose")!.addEventListener("click", () => closeKnowledge());
   $("#kgImport")!.addEventListener("click", async () => {
-    const folder = await openFolderBrowser({ title: "Choose your exported ChatGPT / Claude folder", confirm: "Import from this folder" });
+    const useModel = ($("#kgImportAI") as HTMLInputElement | null)?.checked ?? false;
+    const folder = await openFolderBrowser({ title: "Choose your ChatGPT / Claude / Gemini export", confirm: "Import from here" });
     if (!folder) return;
-    showToast({ title: "Importing chat history…", desc: "Scanning every message through the security gate before learning.", timeout: 2000 });
-    const r = await bridge.personalImport(folder);
+    showToast({ title: useModel ? "Importing with AI extraction…" : "Importing chat history…", desc: useModel ? "Scanning each message, then extracting facts with the model. This can take a while." : "Scanning every message through the security gate before learning.", timeout: useModel ? 4000 : 2000 });
+    const r = await bridge.personalImport(folder, useModel);
     if (!r?.ok) { showToast({ title: "Import failed", desc: r?.error ?? "Personalization is off or locked.", actions: [{ label: "OK" }], timeout: 6000 }); return; }
-    const vendor = r.vendor === "openai" ? "ChatGPT" : r.vendor === "anthropic" ? "Claude" : "export";
+    const vendor = r.vendor === "openai" ? "ChatGPT" : r.vendor === "anthropic" ? "Claude" : r.vendor === "gemini" ? "Gemini" : "export";
+    const notes = [
+      r.extractor === "model" ? "AI extraction" : "quick extraction",
+      r.blocked ? `${r.blocked} quarantined by the gate` : "all passed the gate",
+      r.skipped ? `${r.skipped} skipped (500-message AI cap — re-run to continue)` : "",
+    ].filter(Boolean).join(" · ");
     showToast({
       title: `Imported from ${vendor}`,
       desc: `${r.learned} facts learned from ${r.messages} messages across ${r.conversations} conversations.`,
-      meta: r.blocked ? `${r.blocked} message(s) quarantined by the gate and skipped` : "Every message passed the security gate",
-      actions: [{ label: "OK" }], timeout: 8000,
+      meta: notes,
+      actions: [{ label: "OK" }], timeout: 9000,
     });
     void renderKnowledge(); // redraw with the new nodes + edges
   });

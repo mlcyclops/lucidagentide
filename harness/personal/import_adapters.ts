@@ -12,8 +12,12 @@
 //     fact extraction) and sort by create_time.
 //   - Anthropic Claude: each conversation has `chat_messages: [{ sender:"human"|"assistant",
 //     text, content:[{type:"text",text}] }]`.
+//   - Google Gemini (Takeout "My Activity"): a flat array of activity records
+//     `{ header:"Gemini Apps", title:"Prompted …", time }`. Only the user's prompts are in the
+//     log (no assistant turns) — which is exactly what we distil from anyway. We bundle them
+//     into one synthetic conversation.
 
-export type ImportVendor = "openai" | "anthropic";
+export type ImportVendor = "openai" | "anthropic" | "gemini";
 export interface ImportedMessage { role: "user" | "assistant"; text: string }
 export interface ImportedConversation { title: string; messages: ImportedMessage[] }
 export interface ParsedExport { vendor: ImportVendor; conversations: ImportedConversation[] }
@@ -77,6 +81,22 @@ function parseAnthropic(data: any[]): ImportedConversation[] {
   return convos;
 }
 
+// Google Takeout "My Activity" for Gemini Apps (a.k.a. the older "Bard"). Each record's `title`
+// is the user's prompt, usually with a leading verb ("Prompted …"). Only Gemini-headed records
+// are kept; all become user messages in one synthetic conversation.
+const GEMINI_HEADER = /gemini|bard/i;
+const GEMINI_PREFIX = /^(prompted|asked|said|talked to gemini|talked to bard)\b[:\s-]*/i;
+function parseGemini(data: any[]): ImportedConversation[] {
+  const messages: ImportedMessage[] = [];
+  for (const rec of data) {
+    if (!rec || typeof rec !== "object" || !GEMINI_HEADER.test(str(rec.header))) continue;
+    const text = clipMsg(str(rec.title).replace(GEMINI_PREFIX, "").trim());
+    if (text.length < 2) continue; // skip bare "Used Gemini Apps" style records
+    messages.push({ role: "user", text });
+  }
+  return messages.length ? [{ title: "Gemini activity", messages }] : [];
+}
+
 /** Sniff the vendor from the export's shape. null = unrecognized. */
 export function detectVendor(data: unknown): ImportVendor | null {
   if (!Array.isArray(data)) return null;
@@ -84,6 +104,7 @@ export function detectVendor(data: unknown): ImportVendor | null {
     if (!item || typeof item !== "object") continue;
     if ("mapping" in item && (item as any).mapping && typeof (item as any).mapping === "object") return "openai";
     if (Array.isArray((item as any).chat_messages)) return "anthropic";
+    if (GEMINI_HEADER.test(str((item as any).header)) && typeof (item as any).title === "string") return "gemini";
   }
   return null;
 }
@@ -92,7 +113,8 @@ export function detectVendor(data: unknown): ImportVendor | null {
  *  THROWS with a user-facing message when the shape is unrecognized. */
 export function parseExport(data: unknown, vendorHint?: ImportVendor): ParsedExport {
   const vendor = vendorHint ?? detectVendor(data);
-  if (!vendor) throw new Error("Unrecognized export — point to the conversations.json from a ChatGPT or Claude data export.");
-  if (!Array.isArray(data)) throw new Error("Export root must be a JSON array of conversations.");
-  return { vendor, conversations: vendor === "openai" ? parseOpenAI(data) : parseAnthropic(data) };
+  if (!vendor) throw new Error("Unrecognized export — point to the conversations.json (ChatGPT / Claude) or MyActivity.json (Gemini Takeout) from a data export.");
+  if (!Array.isArray(data)) throw new Error("Export root must be a JSON array.");
+  const conversations = vendor === "openai" ? parseOpenAI(data) : vendor === "anthropic" ? parseAnthropic(data) : parseGemini(data);
+  return { vendor, conversations };
 }

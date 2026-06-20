@@ -17,6 +17,8 @@ export interface ImportSummary {
   messages: number; // user messages scanned
   learned: number; // facts remembered
   blocked: number; // user messages the gate refused (suspicious/quarantined source)
+  skipped: number; // user messages NOT processed because maxMessages was hit (never silent)
+  extractor: "heuristic" | "model"; // which extractor ran (for the UI summary)
 }
 
 /** Import normalized conversations into one unlocked store + compartment. The store is saved
@@ -26,15 +28,18 @@ export async function importConversations(
   store: PersonalStore,
   scanner: ScannerClient,
   conversations: ImportedConversation[],
-  opts: { vendor: ImportVendor; scope: PersonalScope; extract?: Extractor; telemetry?: Telemetry; onProgress?: (doneConvos: number, totalConvos: number) => void },
+  opts: { vendor: ImportVendor; scope: PersonalScope; extract?: Extractor; extractorKind?: "heuristic" | "model"; maxMessages?: number; telemetry?: Telemetry; onProgress?: (doneConvos: number, totalConvos: number) => void },
 ): Promise<ImportSummary> {
   const extract = opts.extract ?? heuristicExtractor;
+  const extractor = opts.extractorKind ?? "heuristic";
+  const cap = opts.maxMessages ?? Infinity; // bound model-mode cost; Infinity for the free heuristic
   const sessionId = `import:${opts.vendor}`;
-  let messages = 0, learned = 0, blocked = 0, idx = 0;
+  let messages = 0, learned = 0, blocked = 0, skipped = 0, idx = 0;
   for (const convo of conversations) {
     const runId = `${sessionId}:${idx}`;
     for (const m of convo.messages) {
       if (m.role !== "user" || !m.text.trim()) continue; // only the user's own words teach
+      if (messages >= cap) { skipped++; continue; } // over the cap — count it, never drop silently
       messages++;
       try {
         const r = await distillTurn(store, scanner, { userText: m.text, scope: opts.scope, sessionId, runId, extract, persist: false });
@@ -45,6 +50,6 @@ export async function importConversations(
     opts.onProgress?.(++idx, conversations.length);
   }
   if (learned) store.save(); // one re-encrypt+write for the entire import
-  opts.telemetry?.emit("personal_facts_imported", { vendor: opts.vendor, scope: opts.scope, conversations: conversations.length, messages, learned, blocked });
-  return { vendor: opts.vendor, conversations: conversations.length, messages, learned, blocked };
+  opts.telemetry?.emit("personal_facts_imported", { vendor: opts.vendor, scope: opts.scope, extractor, conversations: conversations.length, messages, learned, blocked, skipped });
+  return { vendor: opts.vendor, conversations: conversations.length, messages, learned, blocked, skipped, extractor };
 }

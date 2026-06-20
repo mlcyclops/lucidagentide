@@ -178,6 +178,47 @@ class Backend {
     onEvent({ type: "done" });
     void learnFromTurn(text, assistant); // best-effort, after the turn — fail-closed inside
   }
+
+  // Serializes utility completions so they never clobber a concurrent chat turn's listener.
+  private utilLock: Promise<void> = Promise.resolve();
+
+  /** One-shot, non-streaming completion in a THROWAWAY session — never touches the chat
+   *  session, persona, or recall. Returns the aggregated assistant text ("" on any failure).
+   *  Serialized via utilLock so it can't race a chat turn. Used by the import model-extractor:
+   *  the model only ever sees text that already passed the scanner gate, and tool-call events
+   *  (if any) are ignored — only assistant text is collected. */
+  async complete(system: string, user: string, opts: { idleMs?: number } = {}): Promise<string> {
+    const run = this.utilLock.then(async () => {
+      await this.start();
+      const prev = this.listener;
+      let sid: string | null = null;
+      let text = "";
+      let idle: ReturnType<typeof setTimeout> | undefined;
+      let onStall: (e: Error) => void = () => {};
+      try {
+        const s: any = await this.acp!.request("session/new", { cwd: currentWorkspace(), mcpServers: [] });
+        sid = s?.sessionId ?? s?.id ?? null;
+        if (!sid) return "";
+        const IDLE = opts.idleMs ?? 60_000;
+        const arm = () => { if (idle) clearTimeout(idle); idle = setTimeout(() => onStall(new Error("stall")), IDLE); };
+        this.listener = (e) => { arm(); if (e.type === "token") text += e.text; };
+        arm();
+        const stall = new Promise<never>((_, reject) => { onStall = reject; });
+        await Promise.race([
+          this.acp!.request("session/prompt", { sessionId: sid, prompt: [{ type: "text", text: `${system}\n\n${user}` }] }),
+          stall,
+        ]);
+        return text;
+      } catch { return text; }
+      finally {
+        if (idle) clearTimeout(idle);
+        this.listener = prev;
+        if (sid) this.acp!.request("session/close", { sessionId: sid }).catch(() => {});
+      }
+    });
+    this.utilLock = run.then(() => {}, () => {}); // next complete() waits for this one
+    return run;
+  }
 }
 
 export const backend = new Backend();
