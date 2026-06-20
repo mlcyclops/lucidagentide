@@ -48,7 +48,7 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v7
 
       - name: Run Claude Code
         uses: anthropics/claude-code-action@v1
