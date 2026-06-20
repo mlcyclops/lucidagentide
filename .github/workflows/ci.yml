@@ -23,6 +23,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+
+      # The load-bearing invariants live in BOTH CLAUDE.md (Claude Code) and AGENTS.md (the
+      # cross-tool standard). They must stay byte-identical below the title line, or one tool's
+      # agents follow stale rules. This fails the build the moment they diverge.
+      - name: CLAUDE.md / AGENTS.md must stay in sync
+        run: |
+          if ! diff <(tail -n +2 CLAUDE.md) <(tail -n +2 AGENTS.md) >/dev/null; then
+            echo "::error::AGENTS.md and CLAUDE.md have diverged below the title line. Keep the invariants identical (only line 1, the '# X — Invariants' title, may differ)."
+            diff <(tail -n +2 CLAUDE.md) <(tail -n +2 AGENTS.md) || true
+            exit 1
+          fi
+          echo "✓ CLAUDE.md and AGENTS.md are in sync."
+
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
