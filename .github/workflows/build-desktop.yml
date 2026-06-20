@@ -47,9 +47,10 @@ jobs:
           bun-version: latest
 
       # Root deps are bundled into the app (extraResources copies node_modules/**),
-      # so they must exist before electron-builder packages.
+      # so they must exist before electron-builder packages. Not --frozen-lockfile: keeps the
+      # build working after a Dependabot npm bump (which updates package.json, not bun.lock).
       - name: Install repo dependencies
-        run: bun install --frozen-lockfile
+        run: bun install
 
       - name: Install desktop dependencies
         run: bun install

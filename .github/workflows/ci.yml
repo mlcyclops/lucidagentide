@@ -27,8 +27,11 @@ jobs:
         with:
           bun-version: latest
 
+      # NOT --frozen-lockfile: Dependabot's npm updater bumps package.json but can't update
+      # bun.lock, so a frozen install would reject every Dependabot PR. Plain install resolves
+      # the bump and still runs the full suite against it.
       - name: Install (root)
-        run: bun install --frozen-lockfile
+        run: bun install
 
       - name: Typecheck (root)
         run: bun x tsc --noEmit
