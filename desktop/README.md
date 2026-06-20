@@ -108,16 +108,24 @@ Optional: route turns through the **AskSage** accredited government AI gateway
 See [`../DECISIONS.md`](../DECISIONS.md) ADR-0006 for why the gate stays
 in-process and the GUI is a front end only.
 
-## Installers (.dmg / .exe) and the app icon
+## Installers (.zip / .exe) and the app icon
 
 The app is packaged with **electron-builder** (config in `package.json` → `build`,
 mac entitlements in `build/entitlements.mac.plist`).
 
 | Platform | Targets | Arch |
 | --- | --- | --- |
-| macOS | `.dmg` + `.zip` | `arm64`, `x64` |
+| macOS | `.zip` app bundle | `arm64`, `x64` |
 | Windows | NSIS `…-Setup.exe` + `…-portable.exe` | `x64` |
 | Linux | `.AppImage` | `x64` |
+
+> **Why mac ships `.zip`, not `.dmg`:** electron-builder's default DMG layout
+> mounts the image read-write and drives a Finder/AppleScript background pass,
+> which is fragile on headless GitHub Apple-Silicon runners (`hdiutil attach
+> failed - no mountable file systems` → missing `background.tiff`). The `.zip`
+> bundle is a complete, auto-updatable distribution; users unzip and drag
+> `LucidAgentIDE.app` to **Applications**. A signed/notarized `.dmg` can be
+> reintroduced later once it can be iterated on a real Mac.
 
 ### The icon
 
@@ -131,8 +139,8 @@ git-ignored — only the SVG is committed.
 ### Recommended: build via GitHub Actions (no Mac/Windows box needed)
 
 [`.github/workflows/build-desktop.yml`](../.github/workflows/build-desktop.yml)
-builds **both** installers on native runners (macOS for the `.dmg`, Windows for
-the `.exe`) — the only way to produce a mac `.dmg` without a Mac.
+builds **both** installers on native runners (macOS for the `.zip` app bundle,
+Windows for the `.exe`) — the only way to produce a signed mac build without a Mac.
 
 - **Manual:** GitHub → **Actions → "Build desktop installers" → Run workflow**.
   Installers download as run **artifacts**.
@@ -149,12 +157,12 @@ workflow.
 ```bash
 cd desktop
 bun install            # pulls electron + electron-builder
-bun run dist:mac       # → release/LucidAgentIDE-<ver>-{arm64,x64}.dmg (+ .zip)   (on macOS)
+bun run dist:mac       # → release/LucidAgentIDE-mac-{arm64,x64}.zip   (on macOS)
 bun run dist:win       # → release/LucidAgentIDE-<ver>-Setup.exe (+ portable.exe) (on Windows)
 ```
 
-> **A mac `.dmg` must be built on macOS** — electron-builder can't produce/sign
-> one from Windows or Linux. Use the workflow above, or a Mac.
+> **A mac build must be produced on macOS** — electron-builder can't package/sign
+> a mac app from Windows or Linux. Use the workflow above, or a Mac.
 >
 > **Building the Windows installer locally needs Developer Mode** (or an elevated
 > shell): electron-builder extracts a signing toolchain that contains symlinks,
@@ -221,8 +229,8 @@ Full secret list and setup: [`SIGNING.md`](SIGNING.md).
 - **Unsigned Windows:** SmartScreen — **More info → Run anyway**. Windows
   auto-updates fine while unsigned.
 
-> Status: the **macOS** `.dmg`/`.zip` (arm64 + x64) build locally on macOS via
-> `bun run dist:mac` — both DMGs pass `hdiutil verify`; the brand icon is
+> Status: the **macOS** `.zip` app bundle (arm64 + x64) builds on macOS via
+> `bun run dist:mac`; the brand icon is
 > embedded; the repo, in-process gate, and the static `bun`/`uv` runtimes are
 > bundled. Verified self-contained: the app's bundled dev server boots under a
 > Finder-style minimal `PATH` (`/usr/bin:/bin`) and serves `/api/health` — i.e.

@@ -1,9 +1,13 @@
-# Build the LucidAgentIDE desktop installers (macOS .dmg/.zip + Windows .exe).
+# Build the LucidAgentIDE desktop installers (macOS .zip app bundle + Windows .exe).
 #
-# electron-builder can't cross-build/sign a mac .dmg from Windows, so this runs
-# the real packaging on native runners: macOS for the .dmg/.zip, Windows for the
+# electron-builder can't cross-build/sign a mac app from Windows, so this runs
+# the real packaging on native runners: macOS for the .zip bundle, Windows for the
 # NSIS installer + portable .exe. Both bundle the repo into the app
 # (extraResources) per desktop/package.json.
+#
+# (macOS ships .zip, not .dmg: the default DMG layout drives a Finder/AppleScript
+#  background pass that is fragile on headless Apple-Silicon runners. The .zip is a
+#  complete, auto-updatable app bundle — see desktop/README.md.)
 #
 # Triggers:
 #   - Manual:  Actions -> "Build desktop installers" -> Run workflow.
@@ -32,7 +36,7 @@ jobs:
       matrix:
         include:
           - os: macos-latest
-            label: macOS (.dmg/.zip, arm64+x64)
+            label: macOS (.zip, arm64+x64)
             script: dist:mac
           - os: windows-latest
             label: Windows (NSIS + portable, x64)

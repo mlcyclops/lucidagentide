@@ -56,11 +56,8 @@
       "category": "public.app-category.developer-tools",
       "icon": "build/icon.png",
       "identity": null,
+      "artifactName": "${productName}-mac-${arch}.${ext}",
       "target": [
-        {
-          "target": "dmg",
-          "arch": ["arm64", "x64"]
-        },
         {
           "target": "zip",
           "arch": ["arm64", "x64"]
@@ -70,10 +67,6 @@
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.plist",
       "gatekeeperAssess": false
-    },
-    "dmg": {
-      "title": "LucidAgentIDE ${version}",
-      "artifactName": "${productName}-mac-${arch}.${ext}"
     },
     "win": {
       "icon": "build/icon.ico",
