@@ -1642,21 +1642,79 @@ Anthropic's Enterprise-Managed Auth demonstrated the power of zero-touch IdP int
   EventName `mcp_server_connected` added to the enum. *Scoped:* the full slide-over overlay is
   deferred to P-MCP.2 (where the IdP forms/logs need the real estate); telemetry emission of the
   event awaits GUI-side telemetry persistence (the two-process-DuckDB gap).
-- **P-MCP.2** — Entra ID / Okta OIDC via the ephemeral-localhost PKCE catcher + token seal through
-  Electron main. EventName `mcp_auth_completed` (+ `mcp_auth_failed`).
+- **P-MCP.2** — Generic-OIDC sign-in for an MCP connector (design spike below; **not yet built**).
+  EventName `mcp_oauth_authorized` (+ `mcp_oauth_refresh_failed`, fail-closed).
 - **P-MCP.3** — GCP WIF: exchange the Entra OIDC token with GCP STS for a short-lived GCP token.
 - **P-MCP.4** — Terraform IaC modules + docs (deployment-only; no harness coupling).
 Recommended first build: **P-MCP.1** (smallest surface; reuses the existing overlay + settings-key
 storage pattern; proves the omp seam before any IdP work).
 
 **Frozen-contract impacts:**
-- New `EventName`s — `mcp_server_connected`, `mcp_auth_completed`, `mcp_auth_failed` — each added in
-  the increment that emits it (emitting an unknown name throws; inv. #8). Enumerate before building.
+- New `EventName`s — `mcp_server_connected` (built), `mcp_oauth_authorized`, `mcp_oauth_refresh_failed`
+  — each added in the increment that emits it (emitting an unknown name throws; inv. #8).
 - **No DuckDB migration** (tokens live in the sealed safeStorage blob, not DuckDB).
 - The MCP server registry persists in the git-ignored GUI settings file (`lucid-gui.json`, mode 0600)
   like provider keys — **never committed** (the standing keys-stay-out-of-git constraint).
 - New deps: Electron `safeStorage` only (already implied by ADR-0010); Terraform is out-of-band
   tooling, not an npm/bun dependency.
+
+### P-MCP.2 design spike (2026-06-20) — generic OIDC sign-in for MCP connectors
+
+**Goal.** Replace the pasted bearer token (P-MCP.1) with one obtained from an enterprise OIDC IdP
+via interactive sign-in, and upgrade custody from the 0600 `lucid-gui.json` field to OS-backed
+`safeStorage`. The output is unchanged: the same `Authorization: Bearer <token>` header fed to omp
+through `mcpServersForAcp()`. Only the token's *provenance and custody* change.
+
+**Probe outcome (decisive) — omp's `auth-broker` cannot do this; we build our own catcher.**
+`omp/16.0.8 auth-broker` is a **closed registry of ~50 LLM-inference providers** (anthropic,
+openai-codex, google-gemini-cli, github-copilot, xai-oauth …). It authenticates you *to model
+vendors*: `login` takes a provider id from that fixed list and has **no** `--issuer` / `--tenant` /
+`--client-id` / `--scope` / `--redirect-uri` flag; there is no generic-OIDC/Entra/Okta entry.
+`serve`/`token` expose omp's *own* broker bearer (so clients reach the broker) — not an IdP access
+token for a downstream MCP server. So "just configure omp's broker" is closed. Building a capability
+omp does not have, in our own TS, with the token still flowing through the existing `mcpServers`
+seam, is **extend, not fork** (inv. #1) — this probe is the justification.
+
+**Decisions locked this spike.** (1) **Generic OIDC only** — implement to spec via
+`.well-known/openid-configuration` discovery; no vendor-specific code paths (Entra/Okta are just
+issuer URLs). (2) **Fixed loopback redirect** `http://127.0.0.1:5319/api/mcp/oauth/callback` —
+reuse the running dev server as the catcher (the launch already hard-binds 5319); admin registers
+it once. PKCE S256, no client secret (RFC 8252 native-app flow), `state` verified.
+
+**Flow.** renderer "Sign in" → `dev.ts` builds the authorize URL (PKCE challenge + state) →
+Electron main `shell.openExternal` opens the *system* browser (never an in-app webview) → IdP 302s
+to the fixed callback → `dev.ts` verifies `state`, exchanges `code`+verifier at `/token` →
+`{access,refresh,expires_in}` → seal (below).
+
+**safeStorage two-process seam (Option C).** `safeStorage` is Electron-main-only; the token is used
+by the Bun dev server at `session/new`. They share no IPC today (only the stdout/stderr pipe). The
+OAuth flow stays in Bun (it already owns the HTTP server + the `auth-broker login` callback
+pattern); main becomes a **pure crypto oracle** exposing only `seal(blob)→ciphertext` /
+`unseal(ciphertext)→blob`, gated by a **per-launch capability secret** that main injects into the
+dev server's env (the `runtimeEnv` channel in `main.ts` already carries secrets down). Plaintext
+never transits the renderer; the oracle never reveals provenance. (Rejected: A — renderer brokers
+plaintext; B — a localhost decrypt endpoint, a broader oracle.)
+
+**Refresh.** Lazy, at point-of-use: `mcpServersForAcp()` checks `expires_at` on assembly and, within
+a skew window, refreshes via the sealed `refresh_token`, re-seals, then emits the header. No
+background timer — matches the existing "respawn omp on change" model.
+
+**Fail-closed.** A refresh or unseal failure **drops the connector** (no header emitted) — never
+sends an empty/stale token that silently de-auths. `mcp_oauth_refresh_failed` records it. MCP tool
+*output* is still scanned by the gate regardless of auth (auth ≠ trust).
+
+**File-by-file (build path).** `desktop/oidc.ts` (new: PKCE, discovery, authorize-URL, code
+exchange, refresh) · `desktop/dev.ts` (`/api/mcp/oauth/start` + `/api/mcp/oauth/callback`) ·
+`desktop/main.ts`+`preload.ts` (`seal`/`unseal` ipc + launch secret) · `settings_store.ts`
+(`McpServerEntry.auth?: {issuer, clientId, sealedTokens, expiresAt}`; the manual `token` path stays)
+· `harness/contracts.ts` (**FROZEN** — `mcp_oauth_authorized` + `mcp_oauth_refresh_failed`, added in
+the increment that emits each; inv. #8).
+
+**Phasing (one increment each).**
+- **P-MCP.2a** — the `safeStorage` seal/unseal seam (Option C) + re-custody the *existing manual*
+  token into `safeStorage`. Lands the custody upgrade independent of OIDC.
+- **P-MCP.2b** — OIDC discovery + PKCE authorize/callback + code exchange (the sign-in itself).
+- **P-MCP.2c** — lazy refresh + fail-closed drop + the EventName/contract increment.
 
 -----
 
