@@ -55,6 +55,7 @@
     "mac": {
       "category": "public.app-category.developer-tools",
       "icon": "build/icon.png",
+      "identity": null,
       "target": [
         {
           "target": "dmg",
