@@ -24,8 +24,12 @@ export interface GraphHandle { destroy: () => void; setLens: (l: "kind" | "trust
 const NS = "http://www.w3.org/2000/svg";
 const make = <K extends keyof SVGElementTagNameMap>(t: K): SVGElementTagNameMap[K] => document.createElementNS(NS, t);
 
+const reducedMotion = (): boolean =>
+  typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+
 export function mountGraph(host: HTMLElement, data: PersonalGraphData, onSelect: (id: string | null) => void): GraphHandle {
   host.innerHTML = "";
+  const calm = reducedMotion(); // reduced-motion: no particle flow, instant fit, gentler settle
   const W = host.clientWidth || 600, H = host.clientHeight || 420;
   const cx = W / 2, cy = H / 2;
   let lens: "kind" | "trust" = "kind";
@@ -44,9 +48,25 @@ export function mountGraph(host: HTMLElement, data: PersonalGraphData, onSelect:
   const colorOf = (n: SimNode): string => (lens === "trust" ? TRUST_COLOR[n.trust] : KIND_COLOR[kindLabel(n.kind)]) ?? "#888";
 
   const svg = make("svg"); svg.setAttribute("class", "kg-svg"); svg.setAttribute("width", "100%"); svg.setAttribute("height", "100%");
+
+  // ── one reusable, cheap soft-glow filter (a single blur shared by every node) ──
+  const defs = make("defs");
+  const filt = make("filter");
+  filt.setAttribute("id", "kgGlow");
+  filt.setAttribute("x", "-60%"); filt.setAttribute("y", "-60%");
+  filt.setAttribute("width", "220%"); filt.setAttribute("height", "220%");
+  const blur = make("feGaussianBlur");
+  blur.setAttribute("in", "SourceGraphic"); blur.setAttribute("stdDeviation", "2.4"); blur.setAttribute("result", "b");
+  const merge = make("feMerge");
+  const m1 = make("feMergeNode"); m1.setAttribute("in", "b");
+  const m2 = make("feMergeNode"); m2.setAttribute("in", "SourceGraphic");
+  merge.append(m1, m2); filt.append(blur, merge); defs.append(filt); svg.append(defs);
+
   const vp = make("g");
   const edgeG = make("g"); const partG = make("g"); const nodeG = make("g");
+  nodeG.setAttribute("class", "kg-nodes"); // hosts the shared glow filter via CSS
   vp.append(edgeG, partG, nodeG); svg.append(vp); host.append(svg);
+  if (calm) partG.style.display = "none"; // reduced-motion: hide the flow particles entirely
 
   // ── edges as curved paths + a few flow particles each (cap for perf on bigger graphs) ──
   const PPE = edges.length > 36 ? 1 : edges.length > 14 ? 2 : 3; // particles per edge
@@ -81,9 +101,10 @@ export function mountGraph(host: HTMLElement, data: PersonalGraphData, onSelect:
       const a = byId.get(ed.e.from)!, b = byId.get(ed.e.to)!;
       const [ccx, ccy] = ctrl(a, b);
       ed.path.setAttribute("d", `M${a.x.toFixed(1)} ${a.y.toFixed(1)} Q${ccx.toFixed(1)} ${ccy.toFixed(1)} ${b.x.toFixed(1)} ${b.y.toFixed(1)}`);
+      if (calm) continue; // reduced-motion: particles are hidden, skip their work
       const col = colorOf(a); // flow direction + colour come from the source node
       for (let i = 0; i < ed.parts.length; i++) {
-        const t = ((phase * 0.006) + i / ed.parts.length) % 1; // travels source → target
+        const t = ((phase * 0.0045) + i / ed.parts.length) % 1; // calmer travel, source → target
         const c = ed.parts[i]!;
         c.setAttribute("cx", bez(a.x, ccx, b.x, t).toFixed(1));
         c.setAttribute("cy", bez(a.y, ccy, b.y, t).toFixed(1));
@@ -132,13 +153,16 @@ export function mountGraph(host: HTMLElement, data: PersonalGraphData, onSelect:
         const d = Math.hypot(dx, dy) || 0.01, target = 72 + a.r + b.r, f = (d - target) * 0.03; dx /= d; dy /= d;
         a.vx += dx * f; a.vy += dy * f; b.vx -= dx * f; b.vy -= dy * f;
       }
-      for (const n of nodes) { if (n === drag) { n.vx = n.vy = 0; continue; } n.vx += (cx - n.x) * 0.0025; n.vy += (cy - n.y) * 0.0025; n.vx *= 0.85; n.vy *= 0.85; n.x += n.vx; n.y += n.vy; }
+      // settling damping eases from looser → tighter so motion glides to rest instead of buzzing
+      const damp = frames < 120 ? 0.86 : 0.8;
+      for (const n of nodes) { if (n === drag) { n.vx = n.vy = 0; continue; } n.vx += (cx - n.x) * 0.0025; n.vy += (cy - n.y) * 0.0025; n.vx *= damp; n.vy *= damp; n.x += n.vx; n.y += n.vy; }
       frames++;
       if (frames === 90 && !userMoved) computeFit(); // one-time auto-fit once the layout forms
     }
-    if (fitT) { // ease current transform toward the fit target
-      scale += (fitT.sc - scale) * 0.16; tx += (fitT.tx - tx) * 0.16; ty += (fitT.ty - ty) * 0.16;
-      if (Math.abs(fitT.sc - scale) < 0.002 && Math.abs(fitT.tx - tx) < 0.5 && Math.abs(fitT.ty - ty) < 0.5) { scale = fitT.sc; tx = fitT.tx; ty = fitT.ty; fitT = null; }
+    if (fitT) { // ease current transform toward the fit target (snap instantly for reduced-motion)
+      const k = calm ? 1 : 0.12; // gentler glide than before, less springy
+      scale += (fitT.sc - scale) * k; tx += (fitT.tx - tx) * k; ty += (fitT.ty - ty) * k;
+      if (calm || (Math.abs(fitT.sc - scale) < 0.002 && Math.abs(fitT.tx - tx) < 0.5 && Math.abs(fitT.ty - ty) < 0.5)) { scale = fitT.sc; tx = fitT.tx; ty = fitT.ty; fitT = null; }
     }
     paint();
     raf = requestAnimationFrame(tick);
