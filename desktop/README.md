@@ -168,8 +168,10 @@ bun run dist:win       # → release/LucidAgentIDE-<ver>-Setup.exe (+ portable.e
 The installer is designed so the user installs **nothing** beforehand:
 
 1. **Bundled** into the app (`Resources/runtimes`): the static **`bun`** and
-   **`uv`** binaries — downloaded per-OS by the CI workflow, named
-   `<tool>-<platform>-<arch>` to match [`runtime.ts`](runtime.ts).
+   **`uv`** binaries, named `<tool>-<platform>-<arch>` to match
+   [`runtime.ts`](runtime.ts). Fetched by `bun run runtimes:mac`
+   ([`build/fetch-runtimes.ts`](build/fetch-runtimes.ts), idempotent) — which
+   `dist:mac` runs automatically — and per-OS by the CI workflow.
 2. **Bundled** into `Resources/repo` (`extraResources`): the renderer + the
    LucidAgentIDE repo it runs (harness, tools, scanner-sidecar, desktop sources,
    `node_modules`). The main process resolves paths from there when packaged.
@@ -185,7 +187,10 @@ The installer is designed so the user installs **nothing** beforehand:
    / `SCANNER_PYTHON` are passed down to the dev server and its omp + scanner
    children. On a machine that already has bun/omp/uv (e.g. a dev box), nothing
    is installed and no splash appears — resolution falls back to the user's own
-   tools, then `PATH`.
+   tools at their absolute install paths (`~/.bun`, `~/.local`, `~/.cargo`, and
+   Homebrew `/opt/homebrew/bin` · `/usr/local/bin`), then bare `PATH`. The
+   absolute paths are load-bearing: a Finder-launched app inherits a minimal
+   `PATH` (`/usr/bin:/bin`), so a bare `bun` would `spawn … ENOENT`.
 
 If first-run setup fails (offline, etc.), the app still launches; the fail-closed
 gate blocks tool calls until the scanner is available — it never treats a missing
@@ -210,7 +215,11 @@ Full secret list and setup: [`SIGNING.md`](SIGNING.md).
 - **Unsigned Windows:** SmartScreen — **More info → Run anyway**. Windows
   auto-updates fine while unsigned.
 
-> Status: the **Windows** packaging is verified on this host up to the unpacked
-> app (`win-unpacked` builds with the icon embedded + repo bundled); the final
-> `Setup.exe` and the **macOS** `.dmg` are produced by the GitHub Actions workflow
-> on native runners (run it and grab the artifacts).
+> Status: the **macOS** `.dmg`/`.zip` (arm64 + x64) build locally on macOS via
+> `bun run dist:mac` — both DMGs pass `hdiutil verify`; the brand icon is
+> embedded; the repo, in-process gate, and the static `bun`/`uv` runtimes are
+> bundled. Verified self-contained: the app's bundled dev server boots under a
+> Finder-style minimal `PATH` (`/usr/bin:/bin`) and serves `/api/health` — i.e.
+> no `spawn bun ENOENT`. The **Windows** packaging is verified up to the unpacked
+> app (`win-unpacked` with icon + repo); its final `Setup.exe` is produced by the
+> GitHub Actions workflow on a native Windows runner (run it and grab the artifacts).
