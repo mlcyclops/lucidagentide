@@ -861,9 +861,16 @@ prerequisite for everything, has the smallest surface, needs no DuckDB migration
 ## ADR-0011 — Observability & cost intelligence (roadmap)
 
 **Date:** 2026-06-19
-**Status:** Accepted as a roadmap. **P10.1 BUILT** (response activity HUD + per-model context window
-in the picker) and **P10.2 BUILT** (cross-model usage & cost ledger with derived cache savings).
-Phases **P10.3–P10.4 remain Proposed**.
+**Status:** Accepted as a roadmap. **P10.1 BUILT** + **P10.2 BUILT**. **P10.3 PARTIAL** — the proactive
+budget warning shipped (chip turns red + a once-per-window toast at ≥90%, so you see the wall coming);
+the live header probe is deferred. **P10.4 remains Proposed**.
+
+> **P10.3 design note (learned in build):** the user's binding limit is the **Claude oauth 5-hour
+> window**, which has **no rate-limit header to probe** — and a probe would *consume* the very budget
+> being watched. So the valuable, correct move for the oauth case is the **proactive warning** off
+> omp's reported figure (shipped), not a probe. The header probe (`anthropic-ratelimit-*` /
+> `x-ratelimit-*`) is worthwhile only for **API-key** providers and needs a live key to verify;
+> deferred as the remaining half of P10.3.
 **Context increment:** P10.0 (planning; the related context-window display bug was fixed inline).
 
 ### Context

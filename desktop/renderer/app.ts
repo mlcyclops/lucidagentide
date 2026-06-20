@@ -28,6 +28,7 @@ const state = {
   skills: [] as { name: string; description: string; source: string }[],
   liveUsage: null as { used: number; size: number; cost: number } | null,
   username: "" as string, // the "You" label on your messages (Settings → Profile)
+  budgetWarned: new Set<string>(), // provider budgets we've already warned about this window
   workspace: null as WorkspaceInfo | null,
   asksage: null as { configured: boolean; base: string; only: boolean; limit: number; datasets: string[]; queryModel: string; persona: string } | null,
   asksageTokens: null as { used: number; limit: number } | null,
@@ -901,7 +902,7 @@ function renderStatus(): void {
       <span class="mini"><span class="fill" style="width:${Math.round(ctx * 100)}%;background:${loadColor(ctx)}"></span></span>
       <b>${fmtNum(curTok)}</b>/${fmtNum(winTok)}</div>
     <div class="seg" data-tip="Prompt-cache hit rate|Share of input served from cache at the discounted rate - higher means lower cost per turn">${icon("bolt", 14)} cache <b style="color:${goodColor(hit)}">${Math.round(hit * 100)}%</b></div>
-    ${budget ? `<div class="seg seg-btn" data-budget-refresh data-tip="${esc(budget.label)} usage|Click to re-check now · auto every 5 min. omp's last-seen value, so it can lag the official usage.">${esc(budget.label)} <b>${Math.round(budget.used * 100)}%</b> ${icon("refresh", 11)}</div>` : ""}
+    ${budget ? `<div class="seg seg-btn${budget.used >= 0.9 ? " warn" : ""}" data-budget-refresh data-tip="${esc(budget.label)} usage|${budget.used >= 0.9 ? "Almost spent - turns may start stalling. " : ""}Click to re-check now · auto every 5 min. omp's last-seen value, so it can lag the official usage.">${esc(budget.label)} <b style="color:${loadColor(budget.used)}">${Math.round(budget.used * 100)}%</b> ${icon("refresh", 11)}</div>` : ""}
     ${asksageChip()}
     <div class="seg" data-tip="Session cost">${fmtUSD(cost)}</div>
     <div class="right">
@@ -915,6 +916,7 @@ async function refresh(): Promise<void> {
   try {
     const [sec, mem, led] = await Promise.all([bridge.security(), bridge.memory(), bridge.usage()]);
     state.security = sec; state.memory = mem; state.ledger = led;
+    checkBudgetWarning(mem?.budgets); // early heads-up before a provider budget runs out
     // the badge reflects the live session CONFIG model (loadConfig), not the
     // historical snapshot - so it shows what the next turn will actually use.
     state.lastOk = Date.now();
@@ -938,6 +940,26 @@ async function refresh(): Promise<void> {
   }
 }
 
+// P10.3: warn BEFORE you hit the wall. The Claude 5-hour (oauth) limit has no header to
+// probe and probing would consume it, so we watch omp's reported figure and warn once per
+// window when it crosses 90% — turning the silent stall into an early heads-up.
+function checkBudgetWarning(budgets: NonNullable<MemorySnapshot["budgets"]> | null | undefined): void {
+  for (const b of budgets ?? []) {
+    if (b.used >= 0.9 && !state.budgetWarned.has(b.label)) {
+      state.budgetWarned.add(b.label);
+      showToast({
+        title: `${b.label} almost spent`,
+        desc: `You're at ${Math.round(b.used * 100)}% of your ${b.label} budget. New turns may stall until it resets ${ageStr(b.resetsAt)}.`,
+        meta: "a stalled turn now ends with a clear message instead of hanging",
+        actions: [{ label: "OK" }],
+        timeout: 9000,
+      });
+    } else if (b.used < 0.8) {
+      state.budgetWarned.delete(b.label); // window reset — re-arm
+    }
+  }
+}
+
 // Provider budget - manual refresh + a 5-minute auto-poll for the current model.
 // The figure is omp's last-seen value; a turn updates it, so we also re-pull after
 // each turn. Manual refresh resets the 5-minute timer.
@@ -946,6 +968,7 @@ const BUDGET_POLL_MS = 5 * 60 * 1000;
 async function refreshBudget(manual = false): Promise<void> {
   const budgets = await bridge.budget();
   if (budgets && state.memory) state.memory.budgets = budgets;
+  checkBudgetWarning(budgets);
   if (state.asksage?.configured) state.asksageTokens = await bridge.asksageTokens(); // gov usage on the same cadence
   if (state.inspectorTab === "memory" && !state.inspectorRail) renderInspector();
   renderStatus();

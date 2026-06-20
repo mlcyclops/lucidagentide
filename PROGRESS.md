@@ -4,6 +4,19 @@ Three lines per session: **shipped / stubbed / next** (CLAUDE.md session ritual)
 
 -----
 
+## P10.3a/UX: proactive budget warning · copy-own-prompts · profile name · folder browser
+- **shipped:** (P10.3 partial) the Claude 5-hour chip now turns RED and a once-per-window toast fires
+  at ≥90% — you see the wall coming instead of stalling into it (header probes deferred; the oauth
+  5-hour limit has no header + probing would consume it — see ADR-0011 note). Plus three UX fixes:
+  Copy/Save .md on your OWN prompts; the saved Profile name now shows as the message label (loaded at
+  boot, relabels existing turns on save); Workspace "Browse" opens an in-app folder browser (GET
+  /api/fs/list) that works in BOTH the packaged app and the browser build, with git-repo badges.
+  Verified live: 95% budget → red chip + warning toast; folder browser lists/navigates; user-message
+  copy/save + name label. desktop tsc clean.
+- **stubbed:** P10.3 live header probe for API-key providers (anthropic-ratelimit / x-ratelimit) —
+  needs a live key to verify and doesn't help the oauth case.
+- **next:** P10.3 header probes (when an API key is available) or P10.4 local-vs-gateway attribution.
+
 ## P11.1: chat reading experience + LaTeX (ADR-0016) · stall fix · CI/mac fixes
 - **shipped:** (1) FIX — a rate-limited/stalled turn no longer hangs on "Thinking…" forever (idle
   timeout in acp_backend.prompt, resets on every event). (2) LaTeX math via bundled-offline KaTeX

@@ -723,3 +723,6 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .fb-foot{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 15px;border-top:1px solid var(--line-soft);background:var(--bg-0)}
 .fb-hint{font-size:12px;color:var(--txt-3);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .fb-actions{display:flex;gap:8px;flex:none}
+
+/* P10.3 budget chip near-limit warning */
+.statusbar .seg.warn{border-color:color-mix(in srgb,var(--red) 45%,var(--line));background:var(--red-dim)}
