@@ -88,6 +88,15 @@ export function activeRuns(db: Db): Promise<Row[]> {
   );
 }
 
+/** ADR-0009 Phase D: the recent telemetry-event stream (metadata only — names + ids + time,
+ *  never content). Read-only; surfaced in the Developer-mode Logs view. */
+export function telemetryStream(db: Db): Promise<Row[]> {
+  return db.all(
+    `SELECT event, run_id, session_id, artifact_id, ts AS created_at
+     FROM telemetry_events ORDER BY ts DESC LIMIT 200`,
+  );
+}
+
 /** All dashboard views keyed by their output file basename. */
 export const DASHBOARD_VIEWS: Record<string, (db: Db) => Promise<Row[]>> = {
   findings_overview: findingsOverview,
@@ -97,4 +106,5 @@ export const DASHBOARD_VIEWS: Record<string, (db: Db) => Promise<Row[]>> = {
   memory_promotion_risk: memoryPromotionRisk,
   export_audit: exportAudit,
   active_runs: activeRuns,
+  telemetry_stream: telemetryStream,
 };
