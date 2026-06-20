@@ -170,8 +170,14 @@ The installer is designed so the user installs **nothing** beforehand:
 1. **Bundled** into the app (`Resources/runtimes`): the static **`bun`** and
    **`uv`** binaries, named `<tool>-<platform>-<arch>` to match
    [`runtime.ts`](runtime.ts). Fetched by `bun run runtimes:mac`
-   ([`build/fetch-runtimes.ts`](build/fetch-runtimes.ts), idempotent) — which
-   `dist:mac` runs automatically — and per-OS by the CI workflow.
+   ([`build/fetch-runtimes.ts`](build/fetch-runtimes.ts)) — which `dist:mac` runs
+   automatically — and per-OS by the CI workflow. **Supply-chain hardened**:
+   versions are **pinned** (bun 1.3.14 / uv 0.11.23, never `latest`) and every
+   archive is **SHA-256-verified against a committed hash before it's bundled** —
+   a mismatch or missing hash fails the build closed. The committed hashes were
+   cross-checked against the vendors' own checksums (bun `SHASUMS256.txt`, uv
+   `<asset>.sha256`). Bump a version, then `REFRESH=1 bun run build/fetch-runtimes.ts`
+   to recompute the hashes (re-cross-check before committing).
 2. **Bundled** into `Resources/repo` (`extraResources`): the renderer + the
    LucidAgentIDE repo it runs (harness, tools, scanner-sidecar, desktop sources,
    `node_modules`). The main process resolves paths from there when packaged.
