@@ -72,7 +72,8 @@
       "gatekeeperAssess": false
     },
     "dmg": {
-      "title": "LucidAgentIDE ${version}"
+      "title": "LucidAgentIDE ${version}",
+      "artifactName": "${productName}-mac-${arch}.${ext}"
     },
     "win": {
       "icon": "build/icon.ico",
@@ -98,10 +99,10 @@
       "installerIcon": "build/icon.ico",
       "uninstallerIcon": "build/icon.ico",
       "installerHeaderIcon": "build/icon.ico",
-      "artifactName": "${productName}-${version}-Setup.${ext}"
+      "artifactName": "${productName}-Setup.${ext}"
     },
     "portable": {
-      "artifactName": "${productName}-${version}-portable.${ext}"
+      "artifactName": "${productName}-portable.${ext}"
     },
     "linux": {
       "icon": "build/icon.png",
