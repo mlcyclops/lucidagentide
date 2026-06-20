@@ -50,6 +50,33 @@ const json = (data: unknown) =>
     headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
   });
 
+// OAuth via omp's `auth-broker login` — it opens the provider, runs a LOCAL callback server
+// (e.g. :1455) for the redirect, exchanges the code, stores the token, then exits. It MUST stay
+// alive AND have BOTH pipes drained until the callback lands — otherwise a full stdout/stderr pipe
+// blocks it and the callback server goes down (browser → "localhost refused to connect"). We keep
+// a reference (no GC), drain both streams in the background, and resolve once we see the auth URL.
+const oauthBrokers = new Set<ReturnType<typeof Bun.spawn>>();
+function startOauthBroker(oauthId: string): Promise<{ started: boolean; url: string; output: string }> {
+  let proc: ReturnType<typeof Bun.spawn>;
+  try { proc = Bun.spawn([ompBin(), "auth-broker", "login", oauthId], { stdout: "pipe", stderr: "pipe", stdin: "ignore" }); }
+  catch (e) { return Promise.resolve({ started: false, url: "", output: String((e as Error)?.message ?? e) }); }
+  oauthBrokers.add(proc);
+  proc.exited.finally(() => oauthBrokers.delete(proc));
+  return new Promise((resolve) => {
+    const dec = new TextDecoder();
+    let out = "", done = false;
+    const finish = (url: string) => { if (done) return; done = true; resolve({ started: true, url, output: out.slice(0, 600) }); };
+    // Drain stdout fully (never stop) so the broker can't block; grab the URL when it appears.
+    (async () => {
+      try { for await (const c of proc.stdout as ReadableStream<Uint8Array>) { out += dec.decode(c); const m = out.match(/https?:\/\/\S+/); if (m) finish(m[0]); } } catch { /* stream ended */ }
+      finish(""); // EOF without a URL
+    })();
+    // Drain stderr too (also a finite pipe that would otherwise block the broker).
+    (async () => { try { for await (const _ of proc.stderr as ReadableStream<Uint8Array>) { /* discard */ } } catch { /* ended */ } })();
+    setTimeout(() => finish(""), 8000); // don't hang the HTTP request if the URL is slow to print
+  });
+}
+
 const server = Bun.serve({
   port: PORT,
   idleTimeout: 60,
@@ -118,17 +145,8 @@ const server = Bun.serve({
       }
       if (p === "/api/auth/oauth" && req.method === "POST") {
         const { oauthId } = await req.json();
-        // omp owns the secure OAuth flow. Spawn it async so it STAYS ALIVE to
-        // receive the browser callback; read a little stdout to grab the URL.
-        const proc = Bun.spawn([ompBin(), "auth-broker", "login", String(oauthId)], { stdout: "pipe", stderr: "pipe", stdin: "ignore" });
-        const dec = new TextDecoder();
-        let out = "";
-        await Promise.race([
-          (async () => { for await (const c of proc.stdout) { out += dec.decode(c); if (/https?:\/\//.test(out)) break; } })(),
-          new Promise((r) => setTimeout(r, 2500)),
-        ]);
-        const url = (out.match(/https?:\/\/\S+/) ?? [])[0] ?? "";
-        return json({ ok: true, data: { started: true, url, output: out.slice(0, 600) } });
+        // omp owns the secure OAuth flow; the broker stays alive + drained until the callback lands.
+        return json({ ok: true, data: await startOauthBroker(String(oauthId)) });
       }
       if (p === "/api/auth/logout" && req.method === "POST") {
         const { oauthId } = await req.json();
