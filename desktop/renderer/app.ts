@@ -376,12 +376,20 @@ function setInspectorRail(rail: boolean): void {
 }
 
 // ───────────────────────── settings page ─────────────────────────
+// OAuth here signs in a SUBSCRIPTION/CLI tier; the full commercial catalog comes from an API key.
+// Spell that out where it bites (OpenAI/Gemini), and steer Perplexity to its working key path.
+const PROV_HINTS: Record<string, string> = {
+  openai: "OAuth signs in your ChatGPT / Codex subscription (those models). For the full commercial catalog — gpt-4o, o-series — add an OPENAI_API_KEY below.",
+  google: "OAuth uses the Gemini CLI / Code Assist tier. For the full commercial Gemini catalog, add a GEMINI_API_KEY below.",
+  perplexity: "Paste a Perplexity API key for Sonar models. (Pro/Max OAuth is interactive email-OTP — it can't run through this app, so use a key here.)",
+};
 function provCard(p: ProviderAuth): string {
   const last4 = esc(p.keyLast4 ?? "");
   const status =
     (p.oauthActive ? `<span class="abadge ok">${icon("check", 11)} OAuth active</span>` : "") +
     (p.keySet ? `<span class="abadge set">key ••${last4}</span>` : "") +
     (!p.oauthActive && !p.keySet ? `<span class="abadge none">not set</span>` : "");
+  const hint = PROV_HINTS[p.id] ? `<div class="prov-hint">${icon("info", 11)} ${PROV_HINTS[p.id]}</div>` : "";
   const oauthRow = p.canOauth
     ? `<div class="prov-row">${p.oauthActive
         ? `<span class="prov-id">${esc(p.oauthIdentity ?? "connected")}</span><button class="btn-mini danger" data-oauth-logout="${esc(p.oauthId)}">Disconnect</button>`
@@ -394,7 +402,7 @@ function provCard(p: ProviderAuth): string {
         <input type="password" class="prov-key" data-env="${esc(p.env)}" placeholder="${p.keySet ? `saved ••${last4} - type to replace` : `Paste ${esc(p.env)}…`}" />
         <button class="btn-mini ok" data-savekey="${esc(p.env)}">${icon("check", 12)} Save</button>
         ${p.keySet ? `<button class="btn-mini" data-clearkey="${esc(p.env)}">Clear</button>` : ""}
-      </div></div></div>`;
+      </div>${hint}</div></div>`;
 }
 // AskSage monthly-token allowance. AskSage reports tokens USED but not the ceiling
 // (admins raise it in the AskSage console - no API), so the limit is local + the
@@ -1475,10 +1483,12 @@ function wire(): void {
     if (clear) { await bridge.saveKey(clear.dataset.clearkey!, ""); void renderSettings(); return; }
     const oauth = t.closest("[data-oauth]") as HTMLElement | null;
     if (oauth) {
-      const r = await bridge.oauthLogin(oauth.dataset.oauth!);
+      const oauthId = oauth.dataset.oauth!;
+      const r = await bridge.oauthLogin(oauthId);
       if (r?.url) window.open(r.url, "_blank");
-      showToast({ title: "OAuth started", desc: r?.url ? "Complete the sign-in in your browser, then return - status updates automatically." : (r?.output?.slice(0, 160) || "Follow omp's prompt in the GUI server window."), actions: [{ label: "OK" }], timeout: 6000 });
+      showToast({ title: "OAuth started", desc: r?.url ? "Complete the sign-in in your browser, then return - the model list updates automatically." : (r?.output?.slice(0, 160) || "Follow omp's prompt in the GUI server window."), actions: [{ label: "OK" }], timeout: 6000 });
       setTimeout(() => void renderSettings(), 4000);
+      void pollOauthThenRefresh(oauthId); // watch for completion, then refresh models
       return;
     }
     const logout = t.closest("[data-oauth-logout]") as HTMLElement | null;
@@ -1574,6 +1584,35 @@ async function loadConfig(): Promise<void> {
     if (model) { state.model = model.currentValue; const mn = $("#modelName"); if (mn) mn.textContent = modelLabel(model.currentValue); }
     updateComposerTools();
   } catch { /* browser/no-session: keep defaults */ }
+}
+
+/** Force omp to re-read its credential vault and refresh the model list (manual "Refresh models"
+ *  button). Restarts the omp child, so it also picks up a provider connected since launch. */
+async function refreshModels(): Promise<void> {
+  try {
+    state.config = await bridge.refreshConfig();
+    const model = state.config.find((c) => c.id === "model");
+    if (model) { state.model = model.currentValue; const mn = $("#modelName"); if (mn) mn.textContent = modelLabel(model.currentValue); }
+    updateComposerTools();
+  } catch { /* keep current */ }
+}
+
+/** After an OAuth login is kicked off, watch the provider's status until it flips to connected
+ *  (the user finishes in the browser/OTP), then refresh the model list. The server already
+ *  respawned omp when the broker exited, so a plain loadConfig() surfaces the new models. */
+async function pollOauthThenRefresh(oauthId: string): Promise<void> {
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  for (let i = 0; i < 30; i++) { // ~2.5 min @ 5s
+    await sleep(5000);
+    const a = await bridge.auth();
+    const prov = [...(a?.majors ?? []), ...(a?.others ?? [])].find((x) => x.oauthId === oauthId);
+    if (prov?.oauthActive) {
+      await loadConfig();
+      if (state.settingsOpen) renderSettings();
+      showToast({ title: "Connected — models updated", desc: `${prov.name} is ready in the model picker.`, actions: [{ label: "OK" }], timeout: 6000 });
+      return;
+    }
+  }
 }
 
 async function applyConfig(configId: string, value: string): Promise<void> {
@@ -1798,7 +1837,10 @@ function openOptionDropdown(anchor: HTMLElement, configId: string): void {
       ? modelRow(o, c.currentValue)
       : `<div class="cfg-opt ${o.value === c.currentValue ? "on" : ""}" data-val="${esc(o.value)}"><span class="tick">${icon("check", 13)}</span><span class="nm">${esc(labelOf(o))}</span></div>`).join("");
   const search = configId === "model" ? `<div class="cfg-search">${icon("search", 15)}<input id="miniSearch" placeholder="Search ${opts.length} models…" /></div>` : "";
-  const { node, close } = popover(anchor, `<div class="cfg-sec"><div class="cfg-lbl">${esc(c.name)}</div>${search}<div class="cfg-list" id="miniList">${rows(opts)}</div></div>`, () => { cfgClose = null; hideModelTip(true); });
+  const lbl = configId === "model"
+    ? `<div class="cfg-lbl">${esc(c.name)}<button class="cfg-refresh" id="cfgRefresh" data-tip="Refresh models|Re-read providers from omp to pick up a provider you just connected (OAuth or key) — no relaunch needed.">${icon("refresh", 12)}</button></div>`
+    : `<div class="cfg-lbl">${esc(c.name)}</div>`;
+  const { node, close } = popover(anchor, `<div class="cfg-sec">${lbl}${search}<div class="cfg-list" id="miniList">${rows(opts)}</div></div>`, () => { cfgClose = null; hideModelTip(true); });
   cfgClose = close;
   const listEl = $("#miniList", node)!;
   if (configId === "model") {
@@ -1806,6 +1848,13 @@ function openOptionDropdown(anchor: HTMLElement, configId: string): void {
     ($("#miniSearch", node) as HTMLInputElement).addEventListener("input", (e) => {
       const q = (e.target as HTMLInputElement).value.toLowerCase();
       listEl.innerHTML = rows(opts.filter((o) => o.name.toLowerCase().includes(q) || o.value.toLowerCase().includes(q)));
+    });
+    $("#cfgRefresh", node)?.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      showToast({ title: "Refreshing models…", desc: "Reloading providers from omp.", timeout: 1500 });
+      await refreshModels();
+      close();
+      openOptionDropdown(anchor, "model"); // reopen with the fresh list
     });
   }
   listEl.addEventListener("click", (e) => { const it = (e.target as HTMLElement).closest("[data-val]") as HTMLElement | null; if (it) { applyConfig(configId, it.dataset.val!); close(); } });

@@ -873,3 +873,17 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
   (exports don't use them).
 - **next:** optional per-conversation batching to cut model-call volume; resumable AI import
   past the 500 cap.
+
+## P-PROV: OAuth model refresh + Perplexity + tier clarity
+- **shipped:** fixed "OAuth connected but no models in the dropdown" — the running omp built its
+  model list at spawn and never reloaded after an OAuth login (API keys already triggered a
+  restart; OAuth didn't). Now: omp respawns when the auth-broker exits successfully, the front-end
+  polls auth status after login and refreshes the model list, and a "Refresh models" button in the
+  picker (POST /api/config/refresh) re-reads providers on demand. Added Perplexity (Sonar) as a
+  key-based provider (its OAuth is interactive email-OTP, which our non-interactive broker can't
+  drive). Added per-provider hints clarifying OAuth = subscription tier (ChatGPT-Codex /
+  Gemini-CLI) vs an API key = full commercial catalog. 368 harness pass; tsc+bundle clean;
+  /api/config/refresh + Perplexity verified live in preview.
+- **stubbed:** OAuth-restart + post-login poll can't be exercised headless (need a real provider
+  login); logic typechecks. Perplexity OAuth (OTP/macOS-app) intentionally not wired here.
+- **next:** surface which credential (oauth vs key) a model came from in the picker hover card.

@@ -24,6 +24,10 @@ export const MAJORS = [
   { id: "openai", name: "OpenAI", env: "OPENAI_API_KEY", oauthId: "openai-codex", canOauth: true },
   { id: "google", name: "Google · Gemini", env: "GEMINI_API_KEY", oauthId: "google-gemini-cli", canOauth: true },
   { id: "openrouter", name: "OpenRouter", env: "OPENROUTER_API_KEY", oauthId: "openrouter", canOauth: true },
+  // Perplexity (Sonar). omp supports OAuth too, but its login is interactive email-OTP / the
+  // macOS app token — neither works through our non-interactive broker spawn — so we expose the
+  // API-key path (the one that works here). canOauth:false hides the dead OAuth button.
+  { id: "perplexity", name: "Perplexity · Sonar", env: "PERPLEXITY_API_KEY", oauthId: "perplexity", canOauth: false },
 ];
 export const OTHERS = [
   { id: "deepseek", name: "DeepSeek", env: "DEEPSEEK_API_KEY", oauthId: "deepseek", canOauth: false },

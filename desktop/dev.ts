@@ -62,6 +62,10 @@ function startOauthBroker(oauthId: string): Promise<{ started: boolean; url: str
   catch (e) { return Promise.resolve({ started: false, url: "", output: String((e as Error)?.message ?? e) }); }
   oauthBrokers.add(proc);
   proc.exited.finally(() => oauthBrokers.delete(proc));
+  // On a SUCCESSFUL login the credential lands in omp's vault, but the already-running omp child
+  // built its model list at spawn and won't see it. Respawn so the new provider's models surface
+  // (mirrors what adding an API key does). The front-end re-fetches /api/config after the badge flips.
+  proc.exited.then((code) => { if (code === 0) backend.restart(); }).catch(() => { /* ignore */ });
   return new Promise((resolve) => {
     const dec = new TextDecoder();
     let out = "", done = false;
@@ -188,6 +192,9 @@ const server = Bun.serve({
         return json({ ok: true, data: { applied: true, scan } });
       }
       if (p === "/api/config") return json({ ok: true, data: await backend.getConfig() });
+      // Manual "Refresh models": respawn omp so it re-reads the credential vault, then return the
+      // fresh model list. Used after connecting a provider (OAuth or key) without relaunching.
+      if (p === "/api/config/refresh" && req.method === "POST") { backend.restart(); return json({ ok: true, data: await backend.getConfig() }); }
       if (p === "/api/commands") return json({ ok: true, data: await backend.getCommands() });
       if (p === "/api/skills") return json({ ok: true, data: await listSkills() });
       if (p === "/api/headroom") {

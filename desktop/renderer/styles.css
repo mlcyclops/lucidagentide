@@ -376,6 +376,8 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .cfg-sec:last-child{border-bottom:0}
 .cfg-lbl{font-size:10.5px;letter-spacing:1.3px;text-transform:uppercase;color:var(--txt-3);margin-bottom:10px;display:flex;align-items:center;justify-content:space-between}
 .cfg-lbl .cur{color:var(--cyan);font-weight:600;letter-spacing:0;text-transform:none;font-size:11.5px}
+.cfg-refresh{-webkit-app-region:no-drag;border:0;background:transparent;color:var(--txt-3);cursor:pointer;padding:2px;border-radius:5px;display:inline-flex;align-items:center}
+.cfg-refresh:hover{color:var(--txt);background:var(--bg-3)}
 .cfg-search{display:flex;align-items:center;gap:8px;background:var(--bg-2);border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin-bottom:8px}
 .cfg-search .ic{color:var(--txt-4)}
 .cfg-search input{flex:1;background:transparent;border:0;outline:none;color:var(--txt);font-size:13px;font-family:inherit}
@@ -676,6 +678,8 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .abadge.none{background:var(--bg-3);color:var(--txt-4)}
 .prov-body{display:flex;flex-direction:column;gap:8px}
 .prov-row{display:flex;align-items:center;gap:8px}
+.prov-hint{margin-top:2px;font-size:11px;color:var(--txt-3);line-height:1.45;display:flex;gap:5px;align-items:flex-start}
+.prov-hint svg{flex:none;margin-top:1px;opacity:.7}
 .prov-id{flex:1;font-family:var(--mono);font-size:11.5px;color:var(--txt-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .prov-key{flex:1;min-width:0;background:var(--bg-1);border:1px solid var(--line);border-radius:8px;padding:8px 11px;color:var(--txt);font-size:13px;font-family:inherit;outline:none;transition:border-color var(--t)}
 .prov-key:focus{border-color:var(--accent)}

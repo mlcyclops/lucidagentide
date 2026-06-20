@@ -102,6 +102,8 @@ export interface LucidBridge {
   usage(): Promise<UsageLedger | null>;
   sendPrompt(text: string, onEvent: (e: ChatEvent) => void): Promise<void>;
   config(): Promise<ConfigOption[]>;
+  /** Respawn omp + re-read its model list (after connecting a provider via OAuth or key). */
+  refreshConfig(): Promise<ConfigOption[]>;
   setConfig(configId: string, value: string): Promise<ConfigOption[]>;
   commands(): Promise<OmpCommand[]>;
   skills(): Promise<{ name: string; description: string; source: string }[] | null>;
@@ -219,6 +221,7 @@ export const bridge: LucidBridge = {
   usage: () => getData("/api/usage"),
   sendPrompt: streamChat,
   config: async () => (await getData("/api/config")) ?? FALLBACK_CONFIG,
+  refreshConfig: async () => (await post("/api/config/refresh", {})) ?? FALLBACK_CONFIG,
   setConfig: async (id, value) => (await post("/api/setConfig", { configId: id, value })) ?? FALLBACK_CONFIG,
   commands: async () => (await getData("/api/commands")) ?? [],
   skills: () => getData("/api/skills"),
