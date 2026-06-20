@@ -31,8 +31,14 @@ function startDevServer(): void {
   dev = spawn(findBun(), ["run", "desktop/dev.ts"], {
     cwd: REPO,
     env: { ...process.env, ...runtimeEnv, PORT: String(PORT) },
-    stdio: "inherit",
+    // NOT "inherit": in a packaged GUI app the Electron main has no console, so inheriting
+    // makes the console-subsystem Bun allocate its OWN console window (the black pop-up).
+    // Pipe instead + windowsHide so no window ever appears; forward output for dev runs.
+    stdio: ["ignore", "pipe", "pipe"],
+    windowsHide: true,
   });
+  dev.stdout?.on("data", (d) => process.stdout.write(d));
+  dev.stderr?.on("data", (d) => process.stderr.write(d));
 }
 async function waitForServer(timeoutMs = 12000): Promise<void> {
   const deadline = Date.now() + timeoutMs;

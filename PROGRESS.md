@@ -913,3 +913,12 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **stubbed:** approved blocks aren't yet replayed at the omp tool level (retry = re-send the turn);
   live blocks are session/JSONL-scoped, not folded into the DuckDB quarantine views.
 - **next:** none queued.
+
+## P-FIX: silent launch (no console pop-up on Windows)
+- **shipped:** the installed app flashed a black `bun-win32-x64.exe` console window on launch. Cause:
+  Electron main spawned the bundled Bun GUI server with stdio:"inherit" + no windowsHide, so the
+  console-subsystem child allocated its own window in the packaged (console-less) GUI app. Fixed all
+  three Node child spawns (main.ts server, runtime.ts provisioning, acp.ts omp child): windowsHide:true
+  and piped (not inherited) stdio with output forwarded for dev. desktop tsc clean.
+- **stubbed:** Bun.spawn auth-broker (OAuth-only, transient) left as-is (no windowsHide option on Bun.spawn).
+- **next:** P10.3 rate-limit header probe; ADR-0009 Phase D dev-logging view.
