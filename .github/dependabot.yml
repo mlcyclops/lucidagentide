@@ -1,12 +1,17 @@
 # Dependency security + freshness (SCA). Dependabot opens PRs for vulnerable / outdated
-# deps and security advisories across every manifest in the repo.
+# deps. GROUPED (one PR per ecosystem, not one per dependency) to avoid the flood, and
+# major bumps for the build-critical Electron stack are IGNORED — those are upgraded by
+# hand with a real dist build + smoke-test, never on a green typecheck.
 version: 2
 updates:
-  # GitHub Actions — keep the CI/build actions pinned to fresh, patched versions.
+  # GitHub Actions — keep CI/build actions pinned to fresh, patched versions.
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
       interval: weekly
+    groups:
+      github-actions:
+        patterns: ["*"]
     labels: ["dependencies", "ci"]
 
   # Root harness (Bun/npm package.json).
@@ -15,14 +20,26 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    groups:
+      root-npm:
+        patterns: ["*"]
     labels: ["dependencies"]
 
-  # Desktop app (Electron, KaTeX, etc.).
+  # Desktop app. Electron + electron-builder MAJOR bumps are excluded (they touch the
+  # packaging we stabilized — upgrade them deliberately, not via a grouped auto-PR).
   - package-ecosystem: npm
     directory: "/desktop"
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    groups:
+      desktop-npm:
+        patterns: ["*"]
+    ignore:
+      - dependency-name: "electron"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "electron-builder"
+        update-types: ["version-update:semver-major"]
     labels: ["dependencies", "desktop"]
 
   # Python scanner sidecar (pyproject; zero runtime deps today, pytest dev only).
@@ -30,4 +47,7 @@ updates:
     directory: "/scanner-sidecar"
     schedule:
       interval: weekly
+    groups:
+      scanner-pip:
+        patterns: ["*"]
     labels: ["dependencies", "python"]

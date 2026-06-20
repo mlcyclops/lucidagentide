@@ -8,9 +8,11 @@
 
 <br/>
 
+<a href="https://github.com/mlcyclops/lucidagentide/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/mlcyclops/lucidagentide/ci.yml?branch=master&label=CI&logo=github&logoColor=white&style=flat-square" alt="CI" /></a>
+<a href="https://github.com/mlcyclops/lucidagentide/actions/workflows/codeql.yml"><img src="https://img.shields.io/github/actions/workflow/status/mlcyclops/lucidagentide/codeql.yml?branch=master&label=CodeQL&logo=github&logoColor=white&style=flat-square" alt="CodeQL SAST" /></a>
 <a href="https://github.com/mlcyclops/lucidagentide/actions/workflows/build-desktop.yml"><img src="https://img.shields.io/github/actions/workflow/status/mlcyclops/lucidagentide/build-desktop.yml?label=Windows%20Build&logo=windows&logoColor=white&style=flat-square" alt="Windows Build" /></a>
 <a href="https://github.com/mlcyclops/lucidagentide/actions/workflows/build-desktop.yml"><img src="https://img.shields.io/github/actions/workflow/status/mlcyclops/lucidagentide/build-desktop.yml?label=macOS%20Build&logo=apple&logoColor=white&style=flat-square" alt="macOS Build" /></a>
-<img src="https://img.shields.io/badge/tests-130%20harness%20%2B%2054%20sidecar-46d27e?style=flat-square" alt="tests" />
+<img src="https://img.shields.io/badge/tests-352%20harness%20%2B%2054%20sidecar-46d27e?style=flat-square" alt="tests" />
 <img src="https://img.shields.io/badge/gate-fail--closed-e07bf0?style=flat-square" alt="fail-closed gate" />
 
 <br/>
@@ -309,7 +311,7 @@ needs **zero prerequisites**. Code-signing and notarization are supported when c
 **Shipped** — Increment 0–2 + Phases 2–10: the full security lifecycle, provenance lineage, replay, the
 cache-optimized prefix, the desktop GUI, the AskSage gov gateway, the headroom scaffold, cross-model
 observability, CUI isolation, and the knowledge graph. Everything green:
-**17 demos**, **130 harness tests**, **54 sidecar tests**, `tsc --noEmit` clean.
+**352 harness tests**, **54 sidecar tests**, `tsc --noEmit` clean (TypeScript + Python).
 
 ### Recent updates
 
