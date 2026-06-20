@@ -88,12 +88,33 @@ button{font-family:inherit}
 .rail .spacer{flex:1}
 .rail-btn{
   position:relative;width:40px;height:40px;border:0;background:transparent;color:var(--txt-3);
-  border-radius:10px;display:grid;place-items:center;cursor:pointer;
-  transition:color var(--t),background var(--t)}
-.rail-btn:hover{color:var(--txt);background:var(--bg-3)}
-.rail-btn.active{color:var(--accent-2)}
-.rail-btn.active::before{content:"";position:absolute;left:-10px;top:9px;bottom:9px;width:3px;
-  border-radius:0 3px 3px 0;background:var(--accent);box-shadow:0 0 10px var(--accent)}
+  border-radius:11px;display:grid;place-items:center;cursor:pointer;
+  transition:color var(--t) var(--ease),background var(--t) var(--ease),
+    transform var(--t-fast) var(--ease-out),box-shadow var(--t) var(--ease)}
+.rail-btn>:not(.badge){transition:transform var(--t-fast) var(--ease-out)}
+.rail-btn:hover{
+  color:var(--txt);
+  background:linear-gradient(180deg,var(--bg-3),var(--bg-2));
+  box-shadow:var(--shadow-sm,0 2px 6px rgba(0,0,0,.28)),
+    inset 0 1px 0 color-mix(in srgb,var(--txt) 7%,transparent)}
+.rail-btn:hover>:not(.badge){transform:translateY(-1px) scale(1.06)}
+.rail-btn:active{transform:scale(.94);transition-duration:var(--t-fast)}
+.rail-btn:active>:not(.badge){transform:scale(.96)}
+.rail-btn:focus-visible{outline:2px solid var(--accent-2);outline-offset:2px}
+.rail-btn.active{
+  color:var(--accent-2);
+  background:linear-gradient(180deg,
+    color-mix(in srgb,var(--accent) 16%,var(--bg-2)),
+    color-mix(in srgb,var(--accent) 8%,var(--bg-1)));
+  box-shadow:var(--emboss,inset 0 1px 0 color-mix(in srgb,var(--accent-2) 22%,transparent)),
+    0 1px 8px -2px var(--accent-dim)}
+.rail-btn.active:hover{
+  background:linear-gradient(180deg,
+    color-mix(in srgb,var(--accent) 22%,var(--bg-2)),
+    color-mix(in srgb,var(--accent) 11%,var(--bg-1)))}
+.rail-btn.active::before{content:"";position:absolute;left:-10px;top:8px;bottom:8px;width:3px;
+  border-radius:0 3px 3px 0;background:linear-gradient(180deg,var(--accent-2),var(--accent));
+  box-shadow:0 0 10px var(--accent)}
 .rail-btn .badge{position:absolute;top:3px;right:3px;min-width:16px;height:16px;padding:0 4px;box-sizing:border-box;
   border-radius:9px;background:var(--red);color:#fff;font-family:var(--mono);font-size:10px;font-weight:700;line-height:1;
   display:flex;align-items:center;justify-content:center;border:2px solid var(--bg-1);
@@ -102,27 +123,58 @@ button{font-family:inherit}
 
 /* ───────────────────────── sidebar (collapsible) ───────────────────────── */
 .sidebar{
-  position:relative;width:var(--sidebar-w,236px);background:var(--bg-1);border-right:1px solid var(--line-soft);
+  position:relative;width:var(--sidebar-w,236px);
+  background:linear-gradient(180deg,var(--bg-1),color-mix(in srgb,var(--bg-1) 92%,var(--bg-0)));
+  border-right:1px solid var(--line-soft);
+  box-shadow:inset -1px 0 0 color-mix(in srgb,var(--txt) 3%,transparent);
   display:flex;flex-direction:column;overflow:hidden;
-  transition:width var(--t-slow) var(--ease),opacity var(--t);}
-.resizer{position:absolute;top:0;width:6px;height:100%;cursor:col-resize;z-index:7}
+  transition:width var(--t-slow) var(--ease-out),opacity var(--t) var(--ease);}
+.resizer{position:absolute;top:0;width:6px;height:100%;cursor:col-resize;z-index:7;
+  transition:background var(--t) var(--ease)}
 .resizer-r{right:0} .resizer-l{left:0}
 .resizer:hover{background:linear-gradient(90deg,transparent,var(--accent-dim))}
 .resizer-l:hover{background:linear-gradient(270deg,transparent,var(--accent-dim))}
+.resizer:active{background:linear-gradient(90deg,transparent,
+  color-mix(in srgb,var(--accent) 30%,transparent))}
+.resizer-l:active{background:linear-gradient(270deg,transparent,
+  color-mix(in srgb,var(--accent) 30%,transparent))}
 body.resizing{cursor:col-resize;user-select:none}
 body.resizing .sidebar,body.resizing .inspector{transition:none}
-.sidebar.collapsed{width:0;opacity:0;border-right:0}
+.sidebar.collapsed{width:0;opacity:0;border-right:0;box-shadow:none}
 .side-head{display:flex;align-items:center;justify-content:space-between;
   padding:13px 14px 8px;font-size:11px;letter-spacing:1.4px;text-transform:uppercase;color:var(--txt-3)}
 .side-new{-webkit-app-region:no-drag;border:0;background:var(--bg-3);color:var(--txt-2);width:24px;height:24px;
-  border-radius:7px;display:grid;place-items:center;cursor:pointer;transition:background var(--t),color var(--t)}
-.side-new:hover{background:var(--accent-dim);color:var(--accent-2)}
+  border-radius:7px;display:grid;place-items:center;cursor:pointer;
+  box-shadow:inset 0 1px 0 color-mix(in srgb,var(--txt) 6%,transparent);
+  transition:background var(--t) var(--ease),color var(--t) var(--ease),
+    transform var(--t-fast) var(--ease-out),box-shadow var(--t) var(--ease)}
+.side-new:hover{background:var(--accent-dim);color:var(--accent-2);transform:translateY(-1px);
+  box-shadow:var(--shadow-sm,0 2px 6px rgba(0,0,0,.28)),
+    inset 0 1px 0 color-mix(in srgb,var(--accent-2) 18%,transparent)}
+.side-new:active{transform:scale(.92);transition-duration:var(--t-fast)}
+.side-new:focus-visible{outline:2px solid var(--accent-2);outline-offset:2px}
 .side-list{overflow:auto;padding:2px 8px 10px;display:flex;flex-direction:column;gap:2px}
-.sess{display:flex;flex-direction:column;gap:2px;padding:9px 11px;border-radius:9px;cursor:pointer;
-  border:1px solid transparent;transition:background var(--t),border-color var(--t)}
-.sess:hover{background:var(--bg-2)}
-.sess.active{background:var(--bg-2);border-color:var(--line)}
-.sess .t{font-size:13px;color:var(--txt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sess{position:relative;display:flex;flex-direction:column;gap:3px;padding:9px 11px;border-radius:9px;cursor:pointer;
+  border:1px solid transparent;
+  transition:background var(--t) var(--ease),border-color var(--t) var(--ease),
+    box-shadow var(--t) var(--ease),transform var(--t-fast) var(--ease-out)}
+.sess:hover{background:var(--bg-2);border-color:var(--line-soft);
+  box-shadow:var(--shadow-sm,0 4px 12px -6px rgba(0,0,0,.4)),
+    inset 0 1px 0 color-mix(in srgb,var(--txt) 4%,transparent)}
+.sess:active{transform:scale(.992)}
+.sess.active{
+  background:linear-gradient(180deg,
+    color-mix(in srgb,var(--accent) 9%,var(--bg-2)),var(--bg-2));
+  border-color:color-mix(in srgb,var(--accent) 28%,var(--line));
+  box-shadow:var(--shadow-sm,0 4px 14px -6px rgba(0,0,0,.45)),
+    inset 0 1px 0 color-mix(in srgb,var(--accent-2) 14%,transparent)}
+.sess.active::before{content:"";position:absolute;left:0;top:8px;bottom:8px;width:2.5px;
+  border-radius:0 3px 3px 0;background:linear-gradient(180deg,var(--accent-2),var(--accent));
+  box-shadow:0 0 8px var(--accent-dim)}
+.sess.active .t{color:var(--txt)}
+.sess .t{font-size:13px;font-weight:550;color:var(--txt-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  transition:color var(--t) var(--ease)}
+.sess:hover .t,.sess.active .t{color:var(--txt)}
 .sess .m{font-size:11.5px;color:var(--txt-3);display:flex;gap:6px;align-items:center}
 .sess .m b{color:var(--cyan);font-weight:600}
 
@@ -433,8 +485,8 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 
 /* ───────────────────────── sessions empty + active glow ───────────────────────── */
 .side-empty{padding:14px 12px;font-size:12px;color:var(--txt-4);line-height:1.6}
-.rail-btn.active::before{animation:railGlow 3.2s ease-in-out infinite}
-@keyframes railGlow{0%,100%{box-shadow:0 0 8px var(--accent)}50%{box-shadow:0 0 15px var(--accent),0 0 26px rgba(198,75,214,.45)}}
+.rail-btn.active::before{animation:railGlow 3.6s var(--ease) infinite}
+@keyframes railGlow{0%,100%{box-shadow:0 0 8px var(--accent)}50%{box-shadow:0 0 14px var(--accent),0 0 24px rgba(198,75,214,.4)}}
 
 /* ───────────────────────── composer agent controls ───────────────────────── */
 .composer-tools{max-width:min(1080px,94vw);margin:9px auto 0;display:flex;flex-wrap:wrap;align-items:center;gap:7px}
