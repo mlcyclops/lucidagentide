@@ -5,7 +5,7 @@
 // (append-only logs). These are the file-backed face of working/episodic memory
 // — local-first and replayable.
 
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 export const STATE_FILES = ["NOW.md", "PROGRESS.md", "DECISIONS.md", "FAILURES.md"] as const;
@@ -32,8 +32,10 @@ export class StateArtifacts {
     this.#now = opts.now ?? (() => new Date().toISOString());
     mkdirSync(dir, { recursive: true });
     for (const f of STATE_FILES) {
-      const p = join(dir, f);
-      if (!existsSync(p)) writeFileSync(p, HEADERS[f], "utf8");
+      // js/file-system-race: seed the header only if the file doesn't exist, atomically.
+      // `wx` creates-or-fails (no existsSync-then-write TOCTOU); an existing file is preserved.
+      try { writeFileSync(join(dir, f), HEADERS[f], { encoding: "utf8", flag: "wx" }); }
+      catch (e) { if ((e as { code?: string })?.code !== "EEXIST") throw e; }
     }
   }
 

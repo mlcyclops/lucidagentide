@@ -120,7 +120,9 @@
 
 <script>
 const $ = (id) => document.getElementById(id);
-const esc = (s) => String(s ?? "").replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+// Escapes for BOTH text and double-quoted attribute contexts (js/incomplete-html-attribute-sanitization):
+// quotes must be escaped too, since esc() output lands inside class="..."/style="..." attributes.
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const fmtNum = (n) => { n=Number(n); if(!isFinite(n)) return "?"; const a=Math.abs(n);
   return a>=1e6?(n/1e6).toFixed(2)+"M":a>=1e3?(n/1e3).toFixed(1)+"k":String(Math.round(n)); };
 const fmtUSD = (n) => "$"+(Number(n)||0).toFixed(Number(n)<1?4:2);

@@ -2040,3 +2040,71 @@ the remaining race on top of those.
 - **P11.6/SEC (this increment)** — rewrite `loadExportText` to read-and-handle (EISDIR/ENOENT branch),
   read the directory listing once, drop `statSync`/`existsSync`, and add `desktop/export_loader.test.ts`
   (6 tests: file, dir-with-conversations.json, lone-json, missing→ENOENT, empty folder, ambiguous folder).
+
+-----
+
+## ADR-0026 — CodeQL alert sweep: stack-trace exposure, FS-race, store perms, dashboard attr escaping
+
+**Date:** 2026-06-21
+**Status:** Built
+**Context increment:** P11.7/SEC
+
+### Context
+
+A pass over the open CodeQL code-scanning alerts on `master` (15 total) resolved into three buckets.
+Two High alerts (#14/#15, `js/file-system-race` in `personal.ts`) were already fixed by ADR-0025
+(#41) and auto-close on the next scan. Eight Medium alerts (#7–#12, #16, #17, "File data in outbound
+network request" in `asksage.ts` and `ratelimit_probe.ts`) are **by design** — the data is the user's
+API key flowing to its *own* configured provider endpoint (`api.anthropic.com`, `api.openai.com`, or
+the user-set AskSage gateway); the key must reach the provider to authenticate, and the destinations
+are not attacker-controlled. Those are dispositioned as dismiss-as-intended on the Security tab, not a
+code change. This ADR covers the **five remaining real findings**.
+
+### Decision
+
+1. **Stack-trace exposure (#3 `desktop/dev.ts`, #4 `tools/web/server.ts`, `js/stack-trace-exposure`).**
+   Both Bun servers caught `err` and returned `String(err)` to the client. Now the catch logs the
+   detail server-side (`console.error`) and returns a generic `{ ok:false, error:"internal error" }`,
+   so an internal error/stack never reaches the renderer or a forged caller.
+2. **File-system race (#5 `harness/memory/state.ts`, `js/file-system-race`).** Seeding state headers
+   was `if (!existsSync(p)) writeFileSync(p, …)` — a check/use gap. Now a single
+   `writeFileSync(p, …, { flag: "wx" })` (create-or-fail) wrapped to swallow `EEXIST`: atomic, an
+   existing file is preserved, no TOCTOU. `existsSync` dropped from the imports.
+3. **Insecure temporary file (#6 `harness/personal/store.ts`, `js/insecure-temporary-file`).** The
+   encrypted store was `writeFileSync(path, …)` then `chmodSync(0o600)` — a window where the blob is
+   the default 0644. Now it is created owner-only at write time via `{ mode: 0o600 }`; the `chmod`
+   stays to tighten an already-existing file on overwrite.
+4. **Incomplete HTML-attribute sanitization (#1 `tools/web/index.html`,
+   `js/incomplete-html-attribute-sanitization`).** The dashboard's `esc()` escaped only `& < >`, but
+   its output lands inside double-quoted attributes (`class="pill ${esc(k)}"`), so a `"` could break
+   out — attribute-injection XSS. `esc()` now also escapes `"`→`&quot;` and `'`→`&#39;`, matching the
+   desktop renderer's `esc` (which already did and was therefore not flagged).
+
+### Why
+
+Each is the standard remediation for its rule: generic client errors + server-side logging for
+information exposure; atomic `wx` create for the FS race; mode-at-creation for the perms window; and
+quote-escaping for attribute-context output. All are pure hardening with behavior preserved (state
+files still seed once and survive reopen; the store still round-trips; the dashboard renders the same
+content, just correctly escaped).
+
+### Integration with the invariants
+
+- **Fail-closed is law (#3).** The error handlers still return a typed `{ ok:false }`; the FS-race
+  and perms fixes only *narrow* what can go wrong. No path now treats an error as success.
+- **Extend omp; never fork (#1) / language boundary (#2).** TypeScript/HTML only, in existing files.
+- **Frozen contracts / no new dependencies.** Pure `node:fs`/string changes; the store envelope format
+  and the prompt prefix are untouched.
+
+### Honest disposition of the by-design alerts
+
+The eight "File data in outbound network request" alerts are intentional credential transmission to a
+configured provider; dismissing them as "won't fix (by design)" on the Security tab is the correct
+disposition (chosen this session). They are recorded here so a future reader doesn't re-litigate them.
+
+### Phases — one increment each (session ritual)
+
+- **P11.7/SEC (this increment)** — the five fixes above + tests: a store-perms assertion
+  (`personal.test.ts`, 0600) and reliance on the existing `state.test.ts` reopen/no-clobber coverage.
+  Verified live: a forced handler error returns `{ok:false,error:"internal error"}` with the real
+  `SyntaxError` only in the server log.

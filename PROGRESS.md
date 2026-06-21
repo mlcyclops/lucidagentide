@@ -1032,3 +1032,19 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
   type-check is relied upon (read succeeds on what's there or fails closed) — the property CodeQL wants.
 - **next:** sweep remaining CodeQL alerts (e.g. autofix #40 alert #2 string-escaping landed on master);
   optional tools/web token + setWorkspace containment; then ADR-0021 P11.2 UX.
+
+## P11.7/SEC: CodeQL alert sweep (ADR-0026 — alerts #1,#3,#4,#5,#6; #7-12/#16/#17 dismissed by-design)
+- **shipped:** five real CodeQL fixes. #3/#4 stack-trace-exposure (desktop/dev.ts + tools/web/server.ts):
+  catch logs server-side, returns generic {error:"internal error"} (was String(err)). #5 file-system-race
+  (harness/memory/state.ts): existsSync-then-write → atomic writeFileSync flag:"wx" (EEXIST-safe), dropped
+  existsSync import. #6 insecure-temporary-file (harness/personal/store.ts): encrypted store created
+  owner-only via {mode:0o600} (no 0644 window before chmod). #1 incomplete-html-attribute-sanitization
+  (tools/web/index.html): dashboard esc() now escapes " and ' too (matches desktop esc) — was attribute
+  XSS. Added store-perms test (0600); state reopen/no-clobber already covered. Verified live: forced
+  handler error → generic body, real SyntaxError only in server log. harness 195 pass (+1), desktop 33,
+  root+desktop tsc clean.
+- **stubbed:** 8 "file data outbound" alerts (asksage ×6, ratelimit_probe ×2) are API keys to their own
+  configured provider endpoints — intended; dispositioned dismiss-as-by-design in the UI (no code change).
+  #14/#15 (personal.ts fs-race) already fixed by #41 — auto-close on next scan.
+- **next:** confirm the next CodeQL run auto-closes #14/#15; optional tools/web token + setWorkspace
+  containment; then back to ADR-0021 P11.2 UX.
