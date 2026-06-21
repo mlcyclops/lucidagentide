@@ -5,7 +5,7 @@
 // for the moment of derivation; it is NEVER persisted and NEVER returned over the API.
 // Only booleans + compartment counts ever leave the server.
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, normalize, sep } from "node:path";
 import { homedir } from "node:os";
 import { pathWithin } from "./path_guard.ts";
@@ -354,30 +354,41 @@ const MODEL_IMPORT_CAP = 500;
 const EXPORT_FILES = ["conversations.json", "MyActivity.json"]; // ChatGPT/Claude, then Gemini Takeout
 
 /** Resolve the export's JSON text from a folder, a .json file, or a .zip (reads the entry
- *  in-memory — no extraction to disk). Returns a user-facing error when nothing usable is found. */
-function loadExportText(raw: string): { ok: true; text: string } | { ok: false; error: string } {
+ *  in-memory — no extraction to disk). Returns a user-facing error when nothing usable is found.
+ *  Exported for direct FS-branch testing (TOCTOU-safe read path). */
+export function loadExportText(raw: string): { ok: true; text: string } | { ok: false; error: string } {
   const fromZip = (buf: Buffer): { ok: true; text: string } | { ok: false; error: string } => {
     try {
       for (const c of EXPORT_FILES) { const e = readZipEntry(buf, c); if (e) return { ok: true, text: e.toString("utf8") }; }
       return { ok: false, error: "That .zip has no conversations.json / MyActivity.json inside." };
     } catch (e) { return { ok: false, error: `Couldn't read that .zip: ${String((e as Error)?.message ?? e)}` }; }
   };
-  let st: ReturnType<typeof statSync>;
-  try { st = statSync(raw); } catch { return { ok: false, error: "That path doesn't exist." }; }
-  if (st.isFile()) {
+  const errCode = (e: unknown): string => (e as { code?: string })?.code ?? "";
+
+  // js/file-system-race (TOCTOU): do NOT stat-then-read — the path could be swapped between the
+  // check and the use. Read `raw` directly and let the failure classify it: EISDIR means it's a
+  // folder (fall through), ENOENT means it's gone. One operation, no check/use gap.
+  try {
     if (raw.toLowerCase().endsWith(".zip")) return fromZip(readFileSync(raw));
-    try { return { ok: true, text: readFileSync(raw, "utf8") }; } catch { return { ok: false, error: "Couldn't read that file." }; }
+    return { ok: true, text: readFileSync(raw, "utf8") };
+  } catch (e) {
+    if (errCode(e) === "ENOENT") return { ok: false, error: "That path doesn't exist." };
+    if (errCode(e) !== "EISDIR") return { ok: false, error: "Couldn't read that file." };
+    // EISDIR → it's a directory; handle it below.
   }
-  if (st.isDirectory()) {
-    for (const c of EXPORT_FILES) { const p = join(raw, c); if (existsSync(p)) return { ok: true, text: readFileSync(p, "utf8") }; }
-    let names: string[]; try { names = readdirSync(raw); } catch { return { ok: false, error: "Couldn't read that folder." }; }
-    const zip = names.find((n) => n.toLowerCase().endsWith(".zip"));
-    if (zip) return fromZip(readFileSync(join(raw, zip)));
-    const jsons = names.filter((n) => n.toLowerCase().endsWith(".json"));
-    if (jsons.length === 1) { try { return { ok: true, text: readFileSync(join(raw, jsons[0]!), "utf8") }; } catch { /* fall through */ } }
-    return { ok: false, error: "No conversations.json / MyActivity.json (or an export .zip) found in that folder." };
-  }
-  return { ok: false, error: "Choose the export file or its folder." };
+
+  // Directory: read the listing ONCE, then pick from it — no per-file existsSync check-then-read.
+  let names: string[];
+  try { names = readdirSync(raw); } catch { return { ok: false, error: "Couldn't read that folder." }; }
+  const pick = (name: string): { ok: true; text: string } | null => {
+    try { return { ok: true, text: readFileSync(join(raw, name), "utf8") }; } catch { return null; }
+  };
+  for (const c of EXPORT_FILES) if (names.includes(c)) { const r = pick(c); if (r) return r; }
+  const zip = names.find((n) => n.toLowerCase().endsWith(".zip"));
+  if (zip) { try { return fromZip(readFileSync(join(raw, zip))); } catch (e) { return { ok: false, error: `Couldn't read that .zip: ${String((e as Error)?.message ?? e)}` }; } }
+  const jsons = names.filter((n) => n.toLowerCase().endsWith(".json"));
+  if (jsons.length === 1) { const r = pick(jsons[0]!); if (r) return r; }
+  return { ok: false, error: "No conversations.json / MyActivity.json (or an export .zip) found in that folder." };
 }
 
 /** Import a ChatGPT / Claude / Gemini data export into the active (unlocked) compartment.
