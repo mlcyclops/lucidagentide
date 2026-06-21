@@ -51,11 +51,20 @@ class Backend {
   // Personalization recall (P9.2): a <user-profile> block delivered once per session in
   // the user turn (never the frozen prefix). Off unless personalization is enabled+unlocked.
   private recallDelivered = false;
+  // Cross-session memory recall (ADR-0009 Phase A): a <recalled-memory> block of facts
+  // distilled in EARLIER sessions, delivered once per session in the user turn — never the
+  // frozen prefix (invariant #5/#6). Distinct from the P9.2 personalization recall above.
+  private memoryRecall: string | null = null;
+  private memoryRecallDelivered = false;
   configOptions: any[] = [];
   commands: any[] = [];
 
   /** Set/clear the active persona. Pass the ALREADY-scanned, delimiter-wrapped text. */
   setPersona(wrapped: string | null): void { this.persona = wrapped; this.personaDelivered = false; }
+
+  /** Set/clear the cross-session recall block. Pass the ALREADY-escaped, delimiter-wrapped
+   *  text from buildRecall(); re-delivered in the first user turn of each session. */
+  setRecall(wrapped: string | null): void { this.memoryRecall = wrapped; this.memoryRecallDelivered = false; }
 
   private emit(e: ChatEvent): void { this.listener?.(e); }
 
@@ -137,6 +146,7 @@ class Backend {
     this.sessionId = null;
     this.personaDelivered = false; // re-deliver the persona in the fresh session
     this.recallDelivered = false;
+    this.memoryRecallDelivered = false; // re-deliver cross-session recall in the fresh session
     await this.ensureSession();
   }
 
@@ -147,6 +157,7 @@ class Backend {
     this.acp = null; this.starting = null; this.sessionId = null; this.listener = null;
     this.personaDelivered = false; // keep the chosen persona; re-deliver after respawn
     this.recallDelivered = false;
+    this.memoryRecallDelivered = false;
   }
 
   // Max silence (no token/tool/usage event) before we treat a turn as stalled. omp's
@@ -173,6 +184,7 @@ class Backend {
       let preamble = "";
       if (this.persona && !this.personaDelivered) { preamble += `${this.persona}\n\n`; this.personaDelivered = true; }
       if (!this.recallDelivered) { const r = recallPreamble(); if (r) preamble += `${r}\n\n`; this.recallDelivered = true; }
+      if (this.memoryRecall && !this.memoryRecallDelivered) { preamble += `${this.memoryRecall}\n\n`; this.memoryRecallDelivered = true; }
       const body = preamble + text;
       arm(); // start the idle clock now (covers a stall BEFORE the first token)
       const stall = new Promise<never>((_, reject) => { onStall = reject; });
