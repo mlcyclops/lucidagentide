@@ -81,7 +81,10 @@ function mdLink(display: string, url: string): string {
 
 /** YAML scalar: quote + escape so no value can break the frontmatter or smuggle a codepoint. */
 function yamlScalar(s: string): string {
-  return `"${escapeMarkdown(s).replace(/"/g, '\\"')}"`;
+  const escaped = escapeMarkdown(s)
+    .replace(/\\/g, "\\\\")
+    .replace(/"/g, '\\"');
+  return `"${escaped}"`;
 }
 
 /** Stable, filesystem-safe basename for an entity; the Obsidian wikilink target. */
