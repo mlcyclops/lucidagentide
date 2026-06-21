@@ -324,7 +324,10 @@ const server = Bun.serve({
         return new Response(file, { headers: { "content-type": (CT[ext] ?? "application/octet-stream") + "; charset=utf-8" } });
       }
     } catch (err) {
-      return json({ ok: false, error: String(err) });
+      // js/stack-trace-exposure: log the detail server-side, return a generic message to the client
+      // so an internal error/stack never reaches the renderer (or a forged caller).
+      console.error(`[dev] ${p}:`, err);
+      return json({ ok: false, error: "internal error" });
     }
     return new Response("not found", { status: 404 });
   },

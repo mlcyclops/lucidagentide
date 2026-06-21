@@ -224,7 +224,10 @@ export class PersonalStore {
       v: this.#version, custody: this.#custody, kdf: this.#kdf, wrappedDek: this.#wrappedDek,
       data: encrypt(JSON.stringify(this.#graph), this.#dek),
     };
-    writeFileSync(this.#path, JSON.stringify(env), "utf8");
+    // js/insecure-temporary-file: create owner-only at write time so the encrypted blob is never
+    // briefly world-readable (the default 0644 window between create and chmod). `mode` applies on
+    // creation; the chmod stays to also tighten an already-existing file on overwrite.
+    writeFileSync(this.#path, JSON.stringify(env), { encoding: "utf8", mode: 0o600 });
     try { chmodSync(this.#path, 0o600); } catch { /* best-effort on Windows */ }
   }
   /** Zero the in-memory key (call when locking the store). */

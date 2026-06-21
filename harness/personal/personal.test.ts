@@ -3,7 +3,7 @@
 // holds the user's private personalization graph. Wrong key / tampering MUST fail.
 
 import { afterAll, expect, test } from "bun:test";
-import { existsSync, rmSync } from "node:fs";
+import { existsSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { Telemetry, type TelemetryEvent } from "../telemetry/events.ts";
@@ -58,6 +58,13 @@ test("store: create → mutate → reopen with passphrase round-trips the graph"
   expect(g.facts[0]!.statement).toBe("Prefers Vim keybindings");
   expect(g.links.length).toBe(1);
   expect(g.links[0]!.relation).toBe("uses-with");
+});
+
+test("store: save() writes the encrypted file owner-only (0600, no world-readable window)", () => {
+  const path = tmp();
+  PersonalStore.createWithPassphrase(path, "pw").save();
+  // POSIX perms only; Windows ACLs don't map to a mode bitmask (CI is ubuntu).
+  if (process.platform !== "win32") expect(statSync(path).mode & 0o777).toBe(0o600);
 });
 
 test("store: wrong passphrase fails closed (throws, no graph leaks)", () => {

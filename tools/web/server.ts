@@ -40,7 +40,9 @@ const server = Bun.serve({
       if (url.pathname === "/api/memory") return json({ ok: true, data: await memorySnapshot() });
       if (url.pathname === "/api/health") return json({ ok: true, ts: new Date().toISOString() });
     } catch (err) {
-      return json({ ok: false, error: String(err) });
+      // js/stack-trace-exposure: keep the detail in the server log, not the HTTP response.
+      console.error(`[dashboard] ${url.pathname}:`, err);
+      return json({ ok: false, error: "internal error" });
     }
     return new Response("not found", { status: 404 });
   },
