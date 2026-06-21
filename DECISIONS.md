@@ -1981,3 +1981,62 @@ doesn't re-open the plane.
   `dev.ts`; `x-lucid-token` on every `bridge.ts` fetch. Verified live: HTML carries the meta token;
   `/api/usage` and `/api/personal/unlock` 403 without it / 200 with it (the latter even with a valid
   Origin, proving independence); `/api/health` and static assets need none.
+
+-----
+
+## ADR-0025 — TOCTOU-safe import reader: read-and-handle, not stat-then-read
+
+**Date:** 2026-06-21
+**Status:** Built
+**Context increment:** P11.6/SEC
+
+### Context
+
+CodeQL alert #15 (`js/file-system-race`, High) flagged `desktop/personal.ts`'s `loadExportText`.
+It resolved a chat-export path by **checking then using**: `statSync(raw)` to branch on file vs
+directory, then a *separate* `readFileSync(raw)`. Between the stat and the read the path can be
+swapped (e.g. a symlink flip), so the bytes read need not be the bytes that were stat'd — a
+time-of-check/time-of-use race. The directory branch had the same shape: `existsSync(join(dir,c))`
+then `readFileSync(join(dir,c))` per candidate.
+
+### Decision
+
+Replace check-then-use with **use-and-handle**: perform the filesystem operation directly and let its
+error classify the path. `loadExportText` now reads `raw` straight away; an `EISDIR` error means it
+is a directory (fall through to the folder logic), `ENOENT` means it is gone. The directory branch
+reads the listing **once** with `readdirSync` and selects from the returned names (`names.includes`)
+instead of a per-file `existsSync` probe. No stat/exists precedes a read of the same path, so there
+is no check/use window. `statSync`/`existsSync` are dropped from the module's `node:fs` imports.
+
+Behavior and user-facing errors are preserved (missing → "That path doesn't exist."; unreadable file
+→ "Couldn't read that file."; unreadable/empty folder → the folder guidance). An ambiguous folder
+(multiple unnamed `.json`) is still rejected rather than guessed.
+
+### Why
+
+`use-and-handle` is the standard `js/file-system-race` remediation: collapsing the check and the use
+into one operation removes the swap window entirely, and is also fewer syscalls. The path is already
+confined to the home subtree (ADR-0023) and scanned fail-closed on import (keystone #2); this closes
+the remaining race on top of those.
+
+### Integration with the invariants
+
+- **Fail-closed is law (#3).** Every read is wrapped; any error yields a typed `{ ok:false }` with a
+  user-facing message — never an unguarded throw or a silent pass. The import scanner gate downstream
+  is unchanged.
+- **Extend omp; never fork (#1) / language boundary (#2).** TypeScript only, confined to `desktop/`.
+- **No new dependencies / frozen contracts untouched.** Pure `node:fs` refactor.
+
+### Honest residual
+
+- `loadExportText` is now `export`ed solely so the FS branching is unit-testable directly
+  (`desktop/export_loader.test.ts`); it remains an internal helper with no new caller.
+- A swap to a *different regular file* between `readdirSync` and the subsequent `readFileSync(join(dir,
+  name))` is still theoretically possible, but there is no longer a type-check being relied upon — the
+  read either succeeds on whatever is there or fails closed, which is the property CodeQL requires.
+
+### Phases — one increment each (session ritual)
+
+- **P11.6/SEC (this increment)** — rewrite `loadExportText` to read-and-handle (EISDIR/ENOENT branch),
+  read the directory listing once, drop `statSync`/`existsSync`, and add `desktop/export_loader.test.ts`
+  (6 tests: file, dir-with-conversations.json, lone-json, missing→ENOENT, empty folder, ambiguous folder).

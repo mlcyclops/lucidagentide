@@ -1019,3 +1019,16 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
   read it (already full renderer compromise; markdown is DOMPurify-sanitized) — it guards the
   network/CSRF boundary, not in-page injection.
 - **next:** optional token for tools/web; setWorkspace path containment; then back to ADR-0021 P11.2 UX.
+
+## P11.6/SEC: TOCTOU-safe import reader (ADR-0025 — CodeQL alert #15 js/file-system-race)
+- **shipped:** fixed the High file-system-race in desktop/personal.ts loadExportText. Was stat-then-
+  read (statSync to branch file/dir, separate readFileSync — swappable in between); now read-and-handle:
+  read raw directly and let EISDIR (→ folder) / ENOENT (→ missing) classify it, and read the directory
+  listing ONCE (names.includes) instead of per-file existsSync. Dropped statSync/existsSync imports.
+  User-facing errors + ambiguous-folder rejection preserved. loadExportText exported for direct FS
+  testing; new desktop/export_loader.test.ts (6 pass). desktop 33 pass (+6), harness 194 pass,
+  root+desktop tsc clean.
+- **stubbed:** readdir→readFileSync(join(dir,name)) still has a theoretical swap window, but no
+  type-check is relied upon (read succeeds on what's there or fails closed) — the property CodeQL wants.
+- **next:** sweep remaining CodeQL alerts (e.g. autofix #40 alert #2 string-escaping landed on master);
+  optional tools/web token + setWorkspace containment; then ADR-0021 P11.2 UX.
