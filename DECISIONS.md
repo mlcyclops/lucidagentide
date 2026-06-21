@@ -2555,3 +2555,164 @@ into LucidAgentIDE:
   existing Task tool.
 - **Deferred:** remote skill search/install (rejected for airgap); skill-specific tool
   definitions; IDE panel file-explorer (omp already manages files).
+
+## ADR-0030 — Code activity dashboard: lines-of-code metric + monthly workspace ledger
+
+**Date:** 2026-06-21
+**Status:** Accepted
+**Context increment:** P-CODE.1 / P-CODE.2 / P-CODE.3
+
+### Context
+
+The existing ledger card in the Memory tab (`ledgerSplit()` in `app.ts:1358`) shows cost-
+focused metrics: spend · all models, est. cache savings, cache hit-rate, tokens, turns,
+models, sessions, and API vs. subscription. There is no visibility into what the AI agent
+actually **produced** — how many lines of code were written, how many files were touched,
+and across which workspaces. This makes it difficult for users to assess productivity,
+justify spend, or understand the scope of changes across repositories.
+
+**Data gap:** The current `usageLedger()` in `tools/memory_data.ts` reads omp's JSONL
+session transcripts for token/cost data, but there is no code-change tracking. omp
+records `tool_call` events (including `write_file`, `edit_file`, `bash` commands), but
+does not aggregate lines added/deleted/files edited. The most reliable source for code-
+change metrics is `git diff --stat` run against each workspace's repository.
+
+### Decision
+
+**1. Top-line code activity metric in the ledger card (P-CODE.1).**
+
+Insert a new `lc-row` in the ledger card, immediately below the "cache hit-rate" row,
+showing:
+
+```
+lines of code    +1,247 / -318    # 42 files
+```
+
+Where:
+- `+1,247` is green (`var(--green)`), showing total lines added across all workspaces
+  in the current month.
+- `/` is neutral separator.
+- `-318` is red (`var(--red)`), showing total lines deleted.
+- `# 42 files` shows total unique files edited, using `#` as the files sigil.
+
+This same metric also appears as a new tile in the collapsed metrics rail:
+`+1.2k/-318 · 42f` under the label "code" — compact enough for the rail's narrow tiles.
+
+**2. Monthly workspace activity section (P-CODE.2).**
+
+A new accordion section in `memoryHtml()`, positioned after the "Cost & savings ledger"
+accordion, titled **"Workspace activity · \<month\> \<year\>"** (e.g., "Workspace activity ·
+June 2026"). The time window is the current calendar month (system date, 28–31 days).
+
+Contents:
+- **Summary card** (same pattern as the ledger card, `ledger-card` class):
+  - `spend · all models` — the existing `fmtUSD(t.cost)` (repeated for context)
+  - `est. cash savings` — the existing `fmtUSD(t.savings)`
+  - `cache hit-rate` — the existing `Math.round(t.cacheHitRate * 100)%`
+  - `total tokens` — `fmtNum(t.tokens)`
+  - `lines of code` — `+N` green `/` `-N` red (aggregated across all workspaces)
+  - Footer: `N turns · N models · N sessions · API/subscription`
+
+- **Per-workspace table** (below the summary card), one row per repository:
+
+  | workspace | files | lines | spend |
+  |-----------|-------|-------|-------|
+  | LucidAgentIDE | 42 | +1,247 / -318 | $2.14 |
+  | AgentIDEHarness | 8 | +92 / -15 | $0.38 |
+
+  Where:
+  - `workspace` is the repo directory basename (e.g., `LucidAgentIDE`).
+  - `files` is the count of unique files edited in that repo this month.
+  - `lines` uses the `+N` green `/` `-N` red format.
+  - `spend` is the estimated cost attributed to sessions that touched that workspace
+    (matched by `cwd` in omp session metadata).
+
+**3. Git-based data collection (P-CODE.1 backend).**
+
+New function in `tools/memory_data.ts`:
+
+```typescript
+export interface CodeActivity {
+  workspaces: {
+    name: string;       // repo basename
+    path: string;       // absolute repo path
+    added: number;      // lines added this month
+    deleted: number;    // lines deleted this month
+    files: number;      // unique files edited
+    spend: number;      // estimated cost from matching sessions
+  }[];
+  totals: { added: number; deleted: number; files: number };
+  month: string;        // "June 2026"
+  daysInMonth: number;
+}
+
+export function codeActivity(opts?: { workspaces?: string[] }): CodeActivity
+```
+
+Implementation:
+- For each known workspace (from omp's `projects` config or explicitly passed), run
+  `git log --since="<month-start>" --until="<month-end>" --numstat --pretty=format:""` and
+  parse the output for per-file add/delete counts.
+- Aggregate by workspace. Deduplicate files (same file edited multiple times counts as 1).
+- Match workspace paths to omp session `cwd` to attribute spend from the usage ledger.
+- Exposed via `GET /api/code-activity` from `dev.ts`.
+
+**Why git instead of omp tool_call parsing:** omp's `tool_call` events record the content
+passed to `write_file`/`edit_file`, but counting lines from tool args is unreliable (partial
+edits, overwrites, bash commands writing files). `git diff --stat` is the ground truth for
+what actually landed in the repo, and it's available on every workspace since all workspaces
+are git repos (the FsList type checks `isGit`).
+
+### Integration with the invariants
+
+- **Extend omp, never fork (#1).** Data comes from `git log` on workspaces, not from an omp
+  fork. The new API endpoint follows the existing `/api/usage` pattern.
+- **Language boundary fixed (#2).** All new code is TypeScript in `tools/` and
+  `desktop/renderer/`. No Python.
+- **Fail-closed is law (#3).** If `git log` fails (not a git repo, git not installed), the
+  workspace is omitted from results — never faked. The ledger card shows "–" if no git data
+  is available.
+- **Frozen prefix byte-stable (#6).** No prompt changes. This is a read-only metrics
+  dashboard.
+- **Events exact names (#8).** No new events. This is display-only, no telemetry emission.
+- **DuckDB schema freezes (#10).** No schema change — data is computed on-the-fly from git,
+  not stored in DuckDB. (A future ADR could add a `code_activity` table for historical
+  trending, but that's deferred.)
+
+### Phases — one increment each (session ritual)
+
+- **P-CODE.1** — git data collection + top-line metric. New `codeActivity()` function in
+  `tools/memory_data.ts`. New `GET /api/code-activity` endpoint. New `lc-row` in the ledger
+  card showing `+N/-N # files`. New metrics rail tile. CSS for green/red line counts.
+  Verified: ledger card shows live git stats for the current month.
+
+- **P-CODE.2** — monthly workspace activity section. New accordion in `memoryHtml()` with
+  the summary card (spend, savings, cache, tokens, lines) + per-workspace table. Calendar-
+  month window derived from system date. Spend attribution by matching session `cwd` to
+  workspace paths.
+  Verified: accordion lists all workspaces with correct diffstats and spend.
+
+- **P-CODE.3** — polish + edge cases. Handle: workspace with no git history this month
+  (show "no changes"), non-git directories (skip gracefully), binary files in `git log`
+  output (the `- -` format — exclude from line counts), detached HEAD or shallow clones.
+  Add a "refresh" button on the workspace activity section. Integration tests.
+
+### Alternatives considered
+
+| Option | Rejected because |
+|--------|------------------|
+| Parse omp `tool_call` events for write_file content | Unreliable: partial edits, bash writes, tool args don't reflect final state |
+| Store in DuckDB for historical trending | Over-scoped for v1; computed-on-the-fly is simpler and avoids a schema migration |
+| Track per-session instead of per-month | Per-session is too granular; monthly is the natural billing/review cycle |
+| Show only current session's changes | User wants a monthly workspace overview, not just the active session |
+
+### Consequences
+
+- **Performance:** `git log --numstat` is fast even for large repos (reads the pack index).
+  One call per workspace per refresh cycle (every 5s poll, cached for 30s to avoid hammering).
+- **No frozen-contract change.** No new `EventName`, no schema migration.
+- **New API endpoint:** `GET /api/code-activity` — follows the existing pattern
+  (`/api/usage`, `/api/memory`, `/api/security`).
+- **New bridge type:** `CodeActivity` interface in `bridge.ts`.
+- **Deferred:** Historical trending (DuckDB table), per-commit attribution (which AI session
+  produced which commit), branch-level breakdown.
