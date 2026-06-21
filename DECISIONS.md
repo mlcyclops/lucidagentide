@@ -1746,3 +1746,91 @@ The previous design hid the critical Cost & Savings snapshot inside a closed acc
 
 - **P11.2a/UX** — Implement the conditional default tab logic in `focusInspector()` and the conditional CSS class application for the `.pulse-glow` and `.shimmer-particle` animations in `securityHtml()`.
 - **P11.2b/UX** — Refactor `ledgerBody()` to separate the snapshot card and the first model row from the `accordion()` wrapper, preserving the "Prompt-cache savings" layout below it.
+
+-----
+
+## ADR-0022 — Local control-plane hardening: loopback bind, origin/host gate, path containment
+
+**Date:** 2026-06-21
+**Status:** Built
+**Context increment:** P11.3/SEC
+
+### Context
+
+CodeQL (`security-extended`, `.github/workflows/codeql.yml`) and a manual SAST pass
+over the same sink classes surfaced that the desktop data plane is the shipped app's
+real control plane, not just a dev convenience: `desktop/main.ts` spawns
+`desktop/dev.ts` and the Electron window loads it over `http://localhost:5319`. That
+server (and the read-only `tools/web/server.ts` dashboard) handled requests that set
+provider API keys, unlock the encrypted personal/CUI stores with a passphrase, clone
+repos, and browse the filesystem — with **no bind-address restriction, no
+origin/CSRF check, and an unconstrained path** into the folder browser.
+
+Three findings, by severity:
+
+- **H1 — binds to all interfaces.** `Bun.serve` defaults to `0.0.0.0`; neither server
+  passed `hostname`, so the secret-handling control plane was reachable from the LAN.
+- **H2 — no origin/CSRF protection.** Handlers acted on `req.json()` with no `Origin`
+  or `Host` check on a fixed, predictable port — so any web page the user visited (or a
+  DNS-rebinding attack) could drive-by POST to clone repos, set keys, or brute-force
+  the store passphrase.
+- **M1 — path injection (`js/path-injection`).** `/api/fs/list` passed the request's
+  `path` straight to `readdirSync`/`statSync`, an arbitrary directory-listing oracle.
+
+### Decision
+
+1. **Loopback bind (H1).** Both `Bun.serve` instances bind `hostname: "127.0.0.1"`.
+   The Electron window already loads `http://localhost:PORT`, so loopback is the
+   complete, correct surface; the LAN is removed entirely.
+2. **A single front gate (H2).** `desktop/origin_guard.ts` — a pure, unit-tested
+   `isAllowedRequest()` — runs before routing in both servers and 403s anything forged:
+   - **Host allowlist** on *every* method (`localhost|127.0.0.1|[::1]:PORT`) — defeats
+     DNS rebinding, where the socket is loopback but the `Host` is the attacker's domain.
+   - **Origin allowlist** on state-changing methods — blocks drive-by cross-site POSTs
+     (a null Origin is allowed for local non-browser tools; a browser attack always
+     carries a non-null foreign Origin, and is already past the Host gate regardless).
+   - **JSON content-type** on state-changing methods — blocks `<form>`/simple-request
+     CSRF, which cannot set `application/json` without a preflight we never grant.
+3. **Path containment (M1).** `desktop/path_guard.ts`'s `pathWithin()` canonicalizes
+   the requested path (collapsing `../`) and confirms it stays inside the user's home
+   subtree before `/api/fs/list` touches the FS; the returned `parent` is likewise
+   clamped so the browser never offers a path above home. Separator-aware prefix
+   matching avoids the `/home/user` vs `/home/user-evil` sibling-prefix bypass.
+
+### Why
+
+Defense in depth: loopback bind closes the LAN; the Host gate closes DNS rebinding;
+the Origin + content-type gate closes drive-by CSRF from a page the user is browsing;
+path containment turns the FS browser back into a folder picker. Each is independent,
+so no single bypass re-opens the control plane.
+
+### Integration with the invariants
+
+- **Fail-closed is law (invariant #3).** The guard is allow-listed: an unrecognized
+  Host/Origin or a missing JSON body is rejected, never waved through. The security
+  gate, scanner, and quarantine semantics are untouched — this hardens the *transport*
+  around them, not their logic.
+- **Extend omp; never fork it (invariant #1).** All changes live in the GUI shell
+  (`desktop/`, `tools/web/`). No omp or scanner-sidecar change.
+- **The language boundary is fixed (invariant #2).** New code is TypeScript; no new
+  Python surface.
+- **No new dependencies.** Pure standard-library (`node:path`, WHATWG `URL`, `Headers`).
+
+### Honest residual
+
+- **Import / vault `dest` paths** (`/api/personal/import`, `/api/personal/vault`,
+  `cui-archive`) still take an explicit user-supplied path. With H1+H2 the remote/CSRF
+  vector is closed, so the residual is "the local user reads/writes their own chosen
+  files" — the intended function. Tightening these to an allow-listed root is a
+  candidate follow-up, not part of this increment.
+- A **per-launch capability token** (minted in `main.ts`, required as a header) would
+  add a fourth, transport-independent layer. Deferred: the Host + Origin + bind trio
+  already defeats the realistic browser/LAN attacks without threading a secret through
+  the renderer. Tracked as future hardening.
+
+### Phases — one increment each (session ritual)
+
+- **P11.3/SEC (this increment)** — `origin_guard.ts` + `path_guard.ts` (+ unit tests),
+  loopback bind and the front gate wired into `desktop/dev.ts` and `tools/web/server.ts`,
+  and the `/api/fs/list` containment. Verified live: legit GET 200; forged Host 403;
+  cross-site JSON POST 403; `fs/list?path=/etc` returns home, not `/etc`.

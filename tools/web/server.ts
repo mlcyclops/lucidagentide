@@ -14,6 +14,7 @@
 
 import { join } from "node:path";
 import { securitySnapshot, memorySnapshot } from "./data.ts";
+import { isAllowedRequest, reqShape } from "../../desktop/origin_guard.ts";
 
 const PORT = Number(process.env.PORT ?? 4317);
 const INDEX = join(import.meta.dir, "index.html");
@@ -26,8 +27,11 @@ function json(data: unknown): Response {
 
 const server = Bun.serve({
   port: PORT,
+  hostname: "127.0.0.1", // H1 (ADR-0022): loopback only.
   async fetch(req) {
     const url = new URL(req.url);
+    // H2 (ADR-0022): loopback-Host gate (defeats DNS rebinding) — read-only, but cheap and consistent.
+    if (!isAllowedRequest(reqShape(req), PORT)) return new Response("forbidden", { status: 403 });
     try {
       if (url.pathname === "/" || url.pathname === "/index.html") {
         return new Response(Bun.file(INDEX), { headers: { "content-type": "text/html; charset=utf-8" } });
