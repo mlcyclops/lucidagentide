@@ -48,6 +48,8 @@ export const EVENT_NAMES = [
   "approval_granted",
   "approval_denied",
   "memory_promotion_blocked",
+  // ADR-0009 Phase A — distilled facts recalled into a later session (carries run_id/session_id + count).
+  "memory_recalled",
   "remote_run_blocked",
   "safe_export_created",
   "incident_bundle_created",
