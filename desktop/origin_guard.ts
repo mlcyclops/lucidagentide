@@ -69,3 +69,21 @@ export function reqShape(req: Request): ReqShape {
     contentType: req.headers.get("content-type"),
   };
 }
+
+// ── Per-launch capability token (ADR-0024) ───────────────────────────────────
+// A 4th, transport-independent layer: dev.ts mints a random token at boot and
+// injects it into the served HTML, which only a same-origin document can read
+// (SOP blocks a cross-origin page from reading the response body). The renderer
+// echoes it back as `x-lucid-token` on every sensitive /api call. This holds even
+// if the Host/Origin checks ever had a gap, and even against a same-origin-looking
+// request that never loaded our HTML (it can't know the token).
+//
+// Constant-time-ish compare: the length check leaks only the (fixed, public) token
+// length; the byte loop does not early-exit on the first mismatch.
+export function tokenValid(provided: string | null, expected: string): boolean {
+  if (!expected) return false; // no token configured → fail closed, never wave through
+  if (!provided || provided.length !== expected.length) return false;
+  let diff = 0;
+  for (let i = 0; i < expected.length; i++) diff |= provided.charCodeAt(i) ^ expected.charCodeAt(i);
+  return diff === 0;
+}
