@@ -25,8 +25,9 @@ import { destroyCui, enablePersonal, exportCuiArchive, exportHistory, exportVaul
 import { homedir } from "node:os";
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { dirname } from "node:path";
-import { isAllowedRequest, reqShape } from "./origin_guard.ts";
+import { isAllowedRequest, reqShape, tokenValid } from "./origin_guard.ts";
 import { pathWithin } from "./path_guard.ts";
+import { randomBytes } from "node:crypto";
 
 applyEnv(); // make stored API keys available to a spawned omp acp
 if (loadSettings().headroomEnabled) startHeadroom(); // resume the opt-in compression proxy
@@ -38,6 +39,10 @@ function ompBin(): string {
 
 const ROOT = join(import.meta.dir, "renderer");
 const PORT = Number(process.env.PORT ?? 5319);
+// ADR-0024: per-launch capability token. Minted once per server process, injected into the served
+// HTML (only a same-origin document can read it), and required on every sensitive /api call. A new
+// random value each launch means a token never outlives the process that issued it.
+const TOKEN = randomBytes(32).toString("hex");
 const CT: Record<string, string> = { ".html": "text/html", ".css": "text/css", ".js": "text/javascript", ".svg": "image/svg+xml", ".woff2": "font/woff2", ".woff": "font/woff", ".ttf": "font/ttf" };
 
 async function bundleApp(): Promise<{ js: string; ok: boolean }> {
@@ -95,6 +100,11 @@ const server = Bun.serve({
     // H2 (ADR-0022): reject anything a web page or DNS-rebind could forge against
     // the fixed local port (foreign Host/Origin, or a non-JSON state-changing body).
     if (!isAllowedRequest(reqShape(req), PORT)) return new Response("forbidden", { status: 403 });
+    // ADR-0024: the sensitive /api surface additionally requires the per-launch token (carried by
+    // the renderer from the injected HTML). /api/health is exempt — main.ts polls it before the
+    // page (and thus the token) exists, and it returns no data. Static assets/HTML aren't /api/*.
+    if (p.startsWith("/api/") && p !== "/api/health" && !tokenValid(req.headers.get("x-lucid-token"), TOKEN))
+      return new Response("forbidden", { status: 403 });
     try {
       if (p === "/app.js") {
         const { js } = await bundleApp();
@@ -300,6 +310,14 @@ const server = Bun.serve({
       }
 
       const rel = p === "/" ? "index.html" : p.replace(/^\/+/, "");
+      // ADR-0024: serve the HTML with the per-launch token injected as a meta tag. Same-origin
+      // policy keeps a cross-origin page from reading this response body, so the token stays secret
+      // to the real renderer; no-store so it's never cached across launches.
+      if (rel === "index.html") {
+        const html = (await Bun.file(join(ROOT, "index.html")).text())
+          .replace("</head>", `  <meta name="lucid-token" content="${TOKEN}">\n</head>`);
+        return new Response(html, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
+      }
       const file = Bun.file(join(ROOT, rel));
       if (await file.exists()) {
         const ext = rel.slice(rel.lastIndexOf("."));

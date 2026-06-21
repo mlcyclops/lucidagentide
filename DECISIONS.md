@@ -1908,3 +1908,76 @@ one obvious place and makes it unit-testable without standing up an encrypted st
   `exportVault` / `exportCuiArchive` / `importChatExport`, with `desktop/personal_paths.test.ts`
   (7 tests: outside-home rejected with the home-folder message, inside-home passes
   containment, traversal-escape rejected).
+
+-----
+
+## ADR-0024 — Per-launch capability token: a transport-independent gate on the local control plane
+
+**Date:** 2026-06-21
+**Status:** Built
+**Context increment:** P11.5/SEC
+
+### Context
+
+ADR-0022 hardened the desktop control plane (`desktop/dev.ts`, spawned by `main.ts` and loaded by
+the Electron window over `http://localhost:PORT`) with three network-shaped layers: a loopback bind,
+a Host allowlist (DNS-rebind defense), and an Origin + JSON-content-type gate (CSRF defense). Those
+defeat the realistic browser/LAN attacks, but every one keys off request *headers* the browser
+populates — so they share a failure mode: a future gap in that header logic, or any local process
+that can forge a same-origin-looking request, would be through. ADR-0022 explicitly deferred a 4th,
+*transport-independent* layer that doesn't rely on header heuristics.
+
+### Decision
+
+Mint a **per-launch capability token** and require it on the sensitive API surface.
+
+1. **Mint.** `dev.ts` generates `randomBytes(32).toString("hex")` once per process. A fresh value
+   each launch means a captured token never outlives the server that issued it.
+2. **Deliver.** When serving `index.html`, the server injects `<meta name="lucid-token" content="…">`
+   into `<head>`. The same-origin policy prevents a cross-origin page from reading this response
+   body, so only the genuine renderer — which actually loaded our HTML — learns the token.
+3. **Echo.** `bridge.ts` reads the meta once at load and sends it as `x-lucid-token` on every
+   `/api` call (the two fetch wrappers plus the chat-stream and sessions fetches).
+4. **Verify.** After the ADR-0022 Host/Origin gate, `dev.ts` requires `tokenValid(header, TOKEN)`
+   on `p.startsWith("/api/")`. `tokenValid` (in `origin_guard.ts`) is a pure, constant-time-ish
+   compare that fails closed on an empty/missing/wrong token.
+
+**Exemptions:** `/api/health` (polled by `main.ts` *before* the page — and thus the token — exists;
+returns no data) and all non-`/api` paths (HTML, `/app.js`, CSS, fonts — loaded before any JS could
+carry a token, and free of secrets).
+
+### Why this design (server-minted + HTML-injected)
+
+It covers **both** runtimes with no `main.ts` change: the Electron window and the plain-browser dev
+workflow (`bun run desktop:web`) both load the injected HTML and get a working token. A
+`main.ts`-minted/env-passed token would have to be threaded into the renderer separately and would
+break the browser-only dev/screenshot path. The token is a *defense-in-depth* layer, not the only
+one — it sits behind the loopback bind and the Host/Origin gate, so a single bypass of any one layer
+doesn't re-open the plane.
+
+### Integration with the invariants
+
+- **Fail-closed is law (#3).** `tokenValid` returns false for an empty configured token, a missing
+  header, or any mismatch — never waves through. Health/asset exemptions carry no secrets and mutate
+  nothing.
+- **Extend omp; never fork (#1) / language boundary (#2).** TypeScript only, confined to `desktop/`.
+- **Prompt prefix / frozen contracts.** Untouched — this is transport, not prompt or schema.
+- **No new dependencies.** `node:crypto` (stdlib) for the mint; a `<meta>` tag for delivery.
+
+### Honest residual
+
+- **`tools/web/server.ts`** (the separate read-only dashboard on its own port) keeps only the
+  ADR-0022 Host/Origin gate — it serves no `bridge.ts`/`app.js` to carry a token and exposes only
+  read-only snapshots (no keys, passphrases, clone, or FS). Adding a token there is a low-value
+  follow-up, not bundled.
+- The token lives in the DOM of a trusted, same-origin page; a successful **XSS in the renderer**
+  could read it. That is already a full compromise of the renderer (the markdown path is
+  DOMPurify-sanitized, ADR-0016), so the token doesn't widen that blast radius — but it does mean
+  the token defends the *network/CSRF* boundary, not an in-page script-injection one.
+
+### Phases — one increment each (session ritual)
+
+- **P11.5/SEC (this increment)** — `tokenValid` + tests in `origin_guard.ts`; mint/inject/verify in
+  `dev.ts`; `x-lucid-token` on every `bridge.ts` fetch. Verified live: HTML carries the meta token;
+  `/api/usage` and `/api/personal/unlock` 403 without it / 200 with it (the latter even with a valid
+  Origin, proving independence); `/api/health` and static assets need none.

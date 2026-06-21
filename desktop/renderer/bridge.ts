@@ -200,11 +200,20 @@ interface NativeShell {
 declare global { interface Window { lucid?: NativeShell } }
 const shell: NativeShell | undefined = typeof window !== "undefined" ? window.lucid : undefined;
 
+// ADR-0024: the per-launch capability token, injected into the served HTML by dev.ts. We echo it
+// on every /api call so the server can tell the real renderer from a forged request. Read once at
+// load; absent in a stray non-injected page (then calls are simply rejected, fail-closed).
+const TOKEN = typeof document !== "undefined"
+  ? (document.querySelector('meta[name="lucid-token"]') as HTMLMetaElement | null)?.content ?? ""
+  : "";
+const authHeaders = (extra?: Record<string, string>): Record<string, string> =>
+  ({ ...(TOKEN ? { "x-lucid-token": TOKEN } : {}), ...extra });
+
 async function getData(path: string): Promise<any> {
-  try { return (await (await fetch(path, { cache: "no-store" })).json())?.data ?? null; } catch { return null; }
+  try { return (await (await fetch(path, { cache: "no-store", headers: authHeaders() })).json())?.data ?? null; } catch { return null; }
 }
 async function post(path: string, body: unknown): Promise<any> {
-  try { return (await (await fetch(path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) })).json())?.data ?? null; } catch { return null; }
+  try { return (await (await fetch(path, { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify(body) })).json())?.data ?? null; } catch { return null; }
 }
 
 // Mock config only as a last resort if the backend can't be reached (no omp).
@@ -221,7 +230,7 @@ const FALLBACK_CONFIG: ConfigOption[] = [
 async function streamChat(text: string, onEvent: (e: ChatEvent) => void): Promise<void> {
   let res: Response;
   try {
-    res = await fetch("/api/chat", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text }) });
+    res = await fetch("/api/chat", { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify({ text }) });
   } catch {
     onEvent({ type: "token", text: "[chat backend unreachable - is the GUI server running?]" });
     onEvent({ type: "done" });
@@ -266,7 +275,7 @@ export const bridge: LucidBridge = {
   skills: () => getData("/api/skills"),
   sessions: async () => {
     try {
-      const r = await fetch("/api/sessions", { cache: "no-store" });
+      const r = await fetch("/api/sessions", { cache: "no-store", headers: authHeaders() });
       if (r.status === 404) return null; // server predates the sessions route → out of date
       return (await r.json())?.data ?? [];
     } catch { return null; }

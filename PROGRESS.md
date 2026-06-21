@@ -1003,3 +1003,19 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
   user-confirmed allow-list entry); setWorkspace local-folder path tightening not bundled here.
 - **next:** the per-launch capability token (server-minted + HTML-injected, both runtimes); optional
   setWorkspace containment; then back to ADR-0021 P11.2 UX.
+
+## P11.5/SEC: per-launch capability token (ADR-0024 — ADR-0022's deferred 4th layer)
+- **shipped:** a transport-independent gate on the desktop control plane (desktop/dev.ts). dev.ts
+  mints randomBytes(32) hex once per launch, injects it as <meta name="lucid-token"> into served
+  index.html (SOP keeps cross-origin pages from reading it), and requires it via tokenValid() (new
+  pure, constant-time-ish fn in origin_guard.ts) on every /api/* call except /api/health. bridge.ts
+  reads the meta once and echoes x-lucid-token on all four fetch sites. Static assets/HTML need no
+  token. Sits BEHIND the ADR-0022 loopback bind + Host/Origin gate (defense-in-depth). Verified live:
+  HTML carries the token; /api/usage + /api/personal/unlock 403 without it, 200 with it (latter even
+  with a valid Origin → independent layer); health + styles.css need none. desktop 27 pass (+3),
+  harness 194 pass, root+desktop tsc clean, renderer bundles.
+- **stubbed:** tools/web read-only dashboard keeps only the Host/Origin gate (serves no bridge/app.js
+  to carry a token; no secrets) — low-value follow-up. Token is DOM-readable, so a renderer XSS could
+  read it (already full renderer compromise; markdown is DOMPurify-sanitized) — it guards the
+  network/CSRF boundary, not in-page injection.
+- **next:** optional token for tools/web; setWorkspace path containment; then back to ADR-0021 P11.2 UX.

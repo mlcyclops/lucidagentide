@@ -1,6 +1,6 @@
 // Tests for the local control-plane request guard (H1/H2, ADR-0022).
 import { describe, expect, test } from "bun:test";
-import { hostAllowed, isAllowedRequest, reqShape, type ReqShape } from "./origin_guard.ts";
+import { hostAllowed, isAllowedRequest, reqShape, tokenValid, type ReqShape } from "./origin_guard.ts";
 
 const PORT = 5319;
 const base: ReqShape = { method: "GET", host: `localhost:${PORT}`, origin: null, contentType: null };
@@ -55,6 +55,23 @@ describe("isAllowedRequest", () => {
       { method: "POST", host: `localhost:${PORT}`, origin: "::not a url::", contentType: "application/json" },
       PORT,
     )).toBe(false);
+  });
+});
+
+describe("tokenValid (capability token)", () => {
+  const TOKEN = "a".repeat(64);
+  test("accepts the exact token", () => {
+    expect(tokenValid(TOKEN, TOKEN)).toBe(true);
+  });
+  test("rejects a wrong, short, or missing token", () => {
+    expect(tokenValid("b".repeat(64), TOKEN)).toBe(false);
+    expect(tokenValid("a".repeat(63), TOKEN)).toBe(false);
+    expect(tokenValid(null, TOKEN)).toBe(false);
+    expect(tokenValid("", TOKEN)).toBe(false);
+  });
+  test("fails closed when no token is configured", () => {
+    expect(tokenValid("anything", "")).toBe(false);
+    expect(tokenValid("", "")).toBe(false);
   });
 });
 
