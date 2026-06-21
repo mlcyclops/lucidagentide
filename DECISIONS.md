@@ -2108,3 +2108,450 @@ disposition (chosen this session). They are recorded here so a future reader doe
   (`personal.test.ts`, 0600) and reliance on the existing `state.test.ts` reopen/no-clobber coverage.
   Verified live: a forced handler error returns `{ok:false,error:"internal error"}` with the real
   `SyntaxError` only in the server log.
+
+## ADR-0027 — ACP edit modes (Plan / Ask / Agent) + live thought streaming
+
+**Date:** 2026-06-21
+**Status:** **Built** — P-ACP.1 (thought streaming) + P-ACP.2 (Plan/Agent) + P-ACP.3 (Ask mode)
+**Context increment:** P-ACP.1 / P-ACP.2 / P-ACP.3 (one increment each, below)
+
+### Context
+
+Two complaints about the GUI chat surface, both rooted in the same place — the ACP
+session/update → ChatEvent mapping in `desktop/acp_backend.ts` only handles a subset of
+omp's stream:
+
+1. **Streaming "dumps" the reply.** It does *not*, at the omp level. A live probe of the
+   installed `omp acp` (v16.0.8, gate loaded) shows omp streams the answer as multiple
+   `agent_message_chunk`s, and with `thinking` on it streams several `agent_thought_chunk`s
+   *first*. Measured turn (`thinking=high`, "think step by step…"):
+   `THOUGHT #1 @8607ms`, `#2 @8854ms`, `#3 @8962ms`, then `msg_chunk #1 @8972ms`,
+   `#2 @8972ms`. `acp_backend.ts` has **no case for `agent_thought_chunk`**, so the entire
+   ~6s reasoning phase produces no UI events — the HUD sits on "Warming up…" — and then the
+   answer arrives in a fast burst. That burst *reads* as a dump. The omp TUI shows the
+   thinking block live (`--hide-thinking` exists precisely to suppress it), which is why the
+   CLI feels different. **Fix: surface the thought chunks.**
+
+2. **No edit-mode choice.** Claude Code lets the user pick Plan / Ask / Agent. omp's ACP
+   exposes modes natively: `session/new` returns
+   `modes: { availableModes: [{id:"default"…},{id:"plan", description:"Read-only planning
+   mode that drafts a plan to a markdown file before any code changes"}], currentModeId }`,
+   switchable with `session/set_mode` and echoed back via the `current_mode_update`
+   notification. The GUI reads **neither** `sess.modes` nor sends `set_mode`; and
+   `onRequest` auto-approves every `session/request_permission` — so today the app is
+   permanently in an "Agent / yolo" posture. There is **no native "ask" mode** in omp;
+   "Ask" is `default` mode + actually *forwarding* the permission request to the user.
+
+### Decision
+
+**1. Thought streaming (P-ACP.1).**
+   - Extend the `ChatEvent` union (in `acp_backend.ts` and the renderer's `bridge.ts` copy)
+     with `{ type: "thinking"; text: string }`.
+   - `acp_backend.ts`: add `case "agent_thought_chunk": if (u.content?.type === "text")
+     this.emit({ type: "thinking", text: u.content.text });`.
+   - `app.ts` `onEvent`: on the first `thinking` event create a lazy, collapsible reasoning
+     block above the answer; append streamed text live; set the HUD phase to "Thinking…".
+     Collapse it to a one-line summary ("Thought for Ns") when the first answer token or
+     `done` arrives — same pattern as the existing `createThoughts()` tool-activity window,
+     but a distinct surface (reasoning ≠ tool steps).
+   - Thinking text is **display-only**. It is omp-generated, never re-enters a prompt, and is
+     **never** persisted into semantic memory (it is reasoning, not an artifact) — keystone
+     #2 and the personalization distiller (`learnFromTurn`) consume only the assistant answer
+     buffer, which stays separate from the thinking buffer.
+
+**2. Mode selector — Plan / Agent (P-ACP.2).**
+   - `ensureSession()` reads `sess.modes` (availableModes + currentModeId) and stores it;
+     expose via a new `/api/modes` (GET current + list) and a `setMode` on the backend that
+     calls `session/set_mode`. Handle the `current_mode_update` notification to keep the UI in
+     sync if omp changes mode itself (e.g. Plan auto-exits after a plan is drafted).
+   - UI mapping of the tri-state control:
+     - **Plan** → ACP mode `plan` (omp's read-only planner; drafts a plan markdown, no edits).
+     - **Agent** → ACP mode `default` + keep the auto-approve `onRequest` (fully autonomous).
+   - A prominent segmented control in the composer (the model/mode/thinking picker already
+     exists at `app.ts:1947+`; "mode" is also already an omp `configOption`, but `set_mode`
+     is the canonical ACP path and is what emits `current_mode_update`). Selection persists
+     per session.
+
+**3. Ask mode — interactive approval round-trip (P-ACP.3, the hard part).**
+   - **Ask** → ACP mode `default`, but `onRequest("session/request_permission")` no longer
+     auto-selects. Instead the backend emits a `{ type: "permission"; id; tool; options }`
+     ChatEvent down the open `/api/chat` NDJSON stream, parks the JSON-RPC response in a
+     pending map, and the renderer shows an inline approve/deny prompt. The user's choice is
+     POSTed to a new `/api/chat/permission { id, optionId }`, which resolves the parked
+     promise so omp proceeds.
+   - **Fail-closed (invariant #3):** if the user navigates away, the stream closes, or a
+     bounded timeout elapses with no decision, the parked request resolves to
+     `{ outcome: { outcome: "cancelled" } }` — **deny**, never allow.
+
+### Why
+
+The whole problem is an incomplete event map, not a transport defect — every layer
+(`omp acp` → `ACPClient` → backend listener → dev.ts NDJSON → `bridge.streamChat` →
+`app.ts`) already flushes per-event. Surfacing `agent_thought_chunk` makes the turn *feel*
+streamed because the long pole (reasoning) becomes visible. Using omp's native modes +
+permission requests means we adopt Claude-Code-style Plan/Ask/Agent **without forking omp**
+(invariant #1) — the mechanisms already ship in the protocol.
+
+### Integration with the invariants
+
+- **Fail-closed is law (#3).** Ask-mode default on timeout/stream-close is *deny*. The
+  security gate pre-hook still runs in **every** mode — mode is a UX/approval layer, not a
+  security bypass. Plan mode is additionally read-only, which only narrows risk.
+- **Quarantine gate in-process (#4).** Unchanged; the gate fires before any tool runs
+  regardless of selected mode.
+- **Untrusted content delimited + late (#5).** Thinking text is model output, display-only,
+  and is not injected into any prompt or the frozen prefix.
+- **Frozen prefix byte-stable (#6).** Modes and thinking touch neither prefix nor cache
+  breakpoint; the prefix-hash test is unaffected.
+- **Events use exact names (#8).** If we log mode changes or permission decisions, that needs
+  new `EventName` enum values — a frozen-contract change, so it is its **own** sub-increment
+  with an ADR, not a side effect of P-ACP.2/3.
+
+### Phases — one increment each (session ritual)
+
+- **P-ACP.1** — thought streaming. `ChatEvent.thinking` + backend case + bridge copy +
+  `app.ts` reasoning block. Demo: a `thinking=high` turn shows reasoning text streaming
+  before the answer (verified in the browser preview). Smallest, highest-value, lowest-risk —
+  **the recommended first build.**
+- **P-ACP.2** — Plan/Agent selector via `session/set_mode` + `current_mode_update`; segmented
+  UI control; `/api/modes`.
+- **P-ACP.3** — Ask mode: the bidirectional permission round-trip (`{type:"permission"}`
+  event + `/api/chat/permission` + parked-promise resolution), fail-closed on no-decision.
+
+### Open items to confirm at build time
+
+- Exact `set_mode` request/response shape and whether `plan` auto-reverts to `default` after
+  the plan file is written (drives the `current_mode_update` handling).
+- Whether omp emits `agent_thought_chunk` with `content.type:"text"` for every provider, or
+  only thinking-capable models (the probe used Anthropic Opus 4.8).
+
+## ADR-0028 — Proactive subagent delegation via omp's Task tool (context- and cache-efficient)
+
+**Date:** 2026-06-21
+**Status:** **Built** — P-TASK.1 + P-TASK.2 + P-TASK.3 + P-TASK.4 (full ADR shipped) + isolation enablement
+
+> **Isolation enablement (follow-up, built):** P-TASK.3 recorded a sandbox PROFILE but omp owned the
+> actual execution (subagents ran trusted-local in the shared cwd). Now the `omp acp` server is
+> launched with a `--config harness/omp/acp_config.yml` overlay setting `task.isolation.mode: auto`
+> (merge: patch), which makes omp's per-spawn `isolated` option available + advertised; the PAL picks
+> the platform backend (APFS/Btrfs/ZFS/reflink/overlayfs/ProjFS/block-clone) and falls back to rcopy
+> on Windows. The frozen delegation policy (PREFIX_VERSION 2→3) now steers the model to spawn
+> write/exec subtasks ISOLATED (changes captured as a reviewable patch; blast radius contained);
+> read-only research subtasks skip it. omp has no global "force every spawn isolated" flag, so this is
+> enable-the-mode + steer-the-model (invariant #1: extend, don't fork), not a hard guarantee — and
+> isolated spawns require a git workspace. Verified: omp acp loads the overlay cleanly (handshake);
+> prefix-hash green at v3. A full isolated patch-merge run wasn't exercised here (rcopy of this repo +
+> node_modules is slow) — it's enabled and steered; best verified in a real git workspace in use.
+**Context increment:** P-TASK.1 … P-TASK.4 (one increment each, below)
+
+> **P-TASK.4 delta (result gating, as built):** a subagent's returned text re-enters via TWO seams,
+> both now gated by keystone #2: (a) the subagent's own `yield`/tool calls run in the same omp process
+> and already hit the gate's `tool_call` handler (confirmed live — artifacts `omp:yield`, `omp:read`
+> appear under the live run); (b) the parent receives the assembled `<task-result …>` in a
+> `tool_result`, which a new `tool_result` hook routes through `gateSubagentResult` →
+> `ingestArtifact` (scan + trust-label) → `promoteFactGated` (suspicious/quarantined ⇒ never promoted).
+> Verified live: a real explore result was ingested as a `subagent:explore` artifact; unit tests prove
+> a clean result promotes and a hidden-Unicode result is quarantined with zero facts written. Two new
+> `EventName`s added (`subagent_dispatched`, `subagent_result_gated`) — the only frozen-contract change.
+
+> **Delivery-mechanism delta (P-TASK.2, discovered + resolved):** the `FROZEN_PREFIX` assembler
+> (`harness/prompt/assembler.ts`) is NOT wired into the live ACP chat — `acp_backend.ts` spawns
+> `omp acp` and omp owns its own system prompt there; `security_extension.ts` only hooks `tool_call`
+> and injects no prompt. So putting the delegation policy in layer 3 alone would not reach the chat
+> model. Resolution: the policy lives in layer 3 as the canonical, prefix-hash-covered source AND is
+> exported as `DELEGATION_POLICY` and delivered to the live model via `omp acp
+> --append-system-prompt <DELEGATION_POLICY>` (verified: omp 16.0.8 accepts the flag and the model
+> receives the text). It is byte-stable with zero volatile content, so it sits in omp's cached
+> system-prompt prefix — invariant #6 is honored. `PREFIX_VERSION` bumped 1→2 for the layer-3 change.
+
+### Context
+
+The ask: make the orchestrator delegate to subagents **proactively** when a significant
+multi-file change (or a bounded research/triage/summarization subtask) is needed — the way
+Claude Code reaches for its Task tool when a job is too large for the main loop, to protect
+the orchestrator's **context window** and its **prompt-prefix KV cache** from absorbing all
+the intermediate file reads and tool output.
+
+What already exists (P5.1 / P5.2 — the run-tree *data layer*):
+- `harness/runs/lineage.ts` — `startRun()`, `spawnSubagent()` (child inherits parent's
+  `session_id`, sets `kind`/`mode`/`sandbox_profile`), `getRunTree()`, `getLineage()`. Schema
+  `runs(run_id, parent_run_id, session_id, kind, mode, sandbox_profile, status, …)`.
+- `harness/runs/security_review.ts` — `spawnSecurityReview()`, a read-only-**only** subagent.
+- `harness/runs/profiles.ts` — `chooseProfile()` auto-downgrades by causal-chain trust
+  (suspicious→`container-local`, quarantined→`quarantine`).
+- `harness/runs/remote_gate.ts` — `dispatchRemoteRun()` scans a payload **before** dispatch
+  and can route suspicious work to the review subagent.
+- `harness/omp/security_extension.ts` — the pre-hook scans every `tool_call`'s strings and
+  blocks fail-closed; a `task(...)` call's assignment/context strings are therefore *already*
+  scanned, but with no Task-specific policy.
+
+What is **missing** (the gap this ADR fills):
+- No agent-side logic that *decides to delegate*. The harness only reacts (gate, remote gate).
+- No surfacing/encouragement of omp's native **Task tool** through the ACP session, and no
+  Task-aware UI — a `task` call renders as a generic tool chip (`acp_backend.ts` `tool_call`).
+- No explicit **pre-dispatch gate** binding a Task call to a child run + profile.
+- No **result gate**: a subagent's returned text can re-enter the orchestrator's memory
+  without a scan / promotion check.
+
+omp ships the delegation engine natively (the `task`/`agent` tools: single or batch
+assignments, optional `schema`-validated returns, async/background jobs, and worktree/ProjFS
+isolation). Per invariant #1 we **steer and wrap** that engine; we do not reimplement it.
+
+> Build-time prerequisite (CLAUDE.md "known wrinkles"): the Task-tool surface below is read
+> from omp's docs + the captured ACP wire format. The **first task of P-TASK.1 is to confirm
+> the real `task` tool name, its ACP `tool_call` shape, and how sub-tool-calls inside a
+> subagent surface**, against the installed omp, and ADR any deltas.
+
+> **Confirmed wire shape (P-TASK.1, omp 16.0.8, live ACP probe):** the tool is `task`. A spawn does
+> NOT arrive with `kind:"task"` — it arrives as `tool_call` with `kind:"other"` and a human `title`
+> (e.g. "Spawning explore subagent…"), the real signal being `rawInput` = `{ agent, context,
+> tasks:[{assignment, description}] }` (batch) or `{ agent, assignment }` (flat). So detection is
+> rawInput-shape-based, not `kind`-based. omp runs subagents as **background jobs by default**, so the
+> model then issues repeated `tool_call`s with `rawInput.poll:[<id>]` (also `kind:"other"`) until the
+> job settles; the final poll's `content` carries a `<task-result …>` block. Sub-tool-calls *inside*
+> the subagent do NOT surface on the parent ACP stream — only the spawn + the parent's poll calls do
+> (the subagent's own omp child runs them, gated in-process by the same extension). Bundled agents:
+> `explore, plan, designer, reviewer, task, quick_task, librarian, oracle`. P-TASK.1 surfaces the
+> spawn as a `subagent` card and **suppresses** the poll/list/cancel/wait coordination calls as noise.
+
+### Decision
+
+**1. Delegation is omp-native, *steered by the frozen prompt*, never a fork (invariant #1).**
+   The "when to delegate" policy lives in **prompt layer 3 (stable coding rules)** so it is
+   byte-stable and stays inside the cached prefix (invariant #6). It instructs the model to
+   hand off to a subagent when a task (a) will touch more than a small number of files,
+   (b) is an isolable research/triage/summarization unit, or (c) is a bounded refactor — and
+   to pass a **crisp assignment + minimal context**, then consume only the subagent's
+   distilled result.
+
+**2. Token / cache efficiency is the point, and it is mechanical, not magical.**
+   - The subagent runs in **its own context window** (its own omp session/cache). The
+     orchestrator pays only for the short assignment it sends and the compact result it gets
+     back — not the subagent's file reads, diffs, and tool chatter.
+   - Because the orchestrator's context stays small, its **frozen prefix stays cache-hot**:
+     fewer tokens after the cache breakpoint ⇒ fewer cache busts ⇒ the savings the usage
+     ledger already measures (`cacheHitRate`/`savings`) go *up*. This is a direct synergy with
+     invariant #6, not a new caching mechanism.
+   - Prefer **`schema`-validated returns** so a subagent yields a small structured object, not
+     a wall of prose, keeping the re-entry cost (and the result-scan surface) minimal.
+
+**3. Gate the assignment (pre-dispatch).** Make the existing pre-hook Task-aware: a `task`
+   call's assignment + shared context are scanned with a Task policy *before* any subagent
+   spawns; a suspicious/quarantined assignment is **blocked** (fail-closed) or **routed to the
+   read-only security-review subagent**, reusing the `remote_gate.ts` dispatch pattern.
+
+**4. Bind the dispatch to lineage.** On dispatch, `spawnSubagent()` mints a child run
+   (`parent_run_id` = current run, inherits `session_id`, `kind:"task"`, `mode:"subagent"`)
+   with a sandbox profile from `chooseProfile()` keyed to the assignment's trust. The
+   subagent's own omp runtime loads the **same** `security_extension`, so its tool calls are
+   gated **in-process** (invariant #4).
+
+**5. Gate the result (promotion).** Before a subagent's returned text re-enters the
+   orchestrator's memory or next prompt, it is scanned + trust-labelled; a suspicious result
+   **never auto-promotes** into semantic memory (keystone #2 / `promotion_gate.ts`). This
+   closes the open gap.
+
+**6. Surface it in the UI.** Add a Task-aware `ChatEvent`
+   (`{ type:"subagent"; phase:"spawn"|"progress"|"done"; id; assignment; result? }`) so the
+   GUI shows a nested subagent activity card (Claude-Code-style Task chip with its own
+   spinner/summary), distinct from the thinking surface (ADR-0027) and the tool-activity
+   window.
+
+### Why
+
+This gives the user the seamless "it just spun up helpers for the big job" experience while
+keeping LucidAgentIDE's whole reason for existing intact: **every** assignment and **every**
+result crosses the fail-closed scanner, and **every** subagent is a first-class node in the
+run lineage with a trust-appropriate sandbox. We get Claude-Code-grade delegation by wrapping
+omp's engine, not by building our own.
+
+### Integration with the invariants
+
+- **Extend omp; never fork (#1).** Native `task`/`agent` tools + the existing pre-hook +
+  lineage helpers. If sub-tool-calls inside a subagent cannot be gated by the in-process
+  pre-hook, **STOP and ADR before any fork** — do not work around it.
+- **Fail-closed (#3).** Assignment scan failure, missing scan id, or result scan failure ⇒
+  block / quarantine; never dispatch, never promote.
+- **Gate in-process (#4).** The subagent's omp child loads the same extension; its calls are
+  blocked in-process, not over a network seam.
+- **Untrusted content delimited + late (#5).** Retrieved/imported text that becomes an
+  assignment stays delimited + scanned; a subagent result is treated as untrusted until
+  scanned.
+- **Frozen prefix byte-stable (#6).** The delegation policy goes in the **stable** layer 3;
+  the prefix-hash test must stay green. Per-task volatile context rides the tail only.
+- **Trust labels closed set (#7) / Stable IDs (#9).** Each dispatch + result reuses the
+  child `run_id`; results carry one of the four labels, nothing new.
+- **Events exact names (#8) / DuckDB freezes (#10).** New event names
+  (e.g. `subagent_dispatched`, `subagent_result_gated`) are a **frozen-contract** change →
+  their own sub-increment + ADR; any new lineage column is a numbered migration, never an
+  in-place edit.
+
+### Phases — one increment each (session ritual)
+
+- **P-TASK.1** — confirm omp's real Task-tool/ACP shape; enable + surface it through the ACP
+  session; add the `subagent` `ChatEvent` + UI subagent card. Demo: a multi-file ask spawns a
+  *visible* subagent. (No new gating beyond the pre-hook yet.)
+- **P-TASK.2** — the proactive delegation policy in the frozen layer-3 rules + a token-
+  efficiency check (orchestrator context stays small; prefix-hash still green; ledger shows
+  the cache stays hot across a delegated turn).
+- **P-TASK.3** — explicit Task pre-dispatch gating + lineage binding (child run via
+  `spawnSubagent`, profile downgrade, suspicious→security-review).
+- **P-TASK.4** — result-promotion gating (keystone #2) + the `EventName` additions
+  (frozen-contract sub-increment) + the DuckDB lineage rows.
+
+### Relationship to ADR-0027
+
+Independent but complementary: ADR-0027 makes a *single* turn legible (thinking streams,
+modes are selectable); ADR-0028 makes a *large* turn tractable (delegate, protect context).
+They share the `ChatEvent` union and the `acp_backend.ts` event map, so the two new event
+kinds (`thinking`, `subagent`) should be added consistently.
+
+## ADR-0029 — Model family picker, custom skills + `/task` proforma, and IDE slide-out panel
+
+**Date:** 2026-06-21
+**Status:** Accepted
+**Context increment:** P-IDE.1 / P-IDE.2 / P-IDE.3 / P-IDE.4 / P-IDE.5 / P-IDE.6
+
+### Context
+
+Three features in the AgentIDEHarness COVERT Agent IDE prototype are mature enough to port
+into LucidAgentIDE:
+
+1. **Model family segregation.** AgentIDEHarness groups AskSage models into collapsible
+   `<optgroup>` families (OpenAI GPT, o-series, Anthropic Claude, Google Gemini, Open Source).
+   LucidAgentIDE's model picker (`app.ts MODEL_INFO`) renders a flat searchable list with hover
+   cards — functional but unsorted. The family grouping improves discoverability as the model
+   count grows.
+
+2. **Custom skills.** AgentIDEHarness ships 18 hardcoded slash-command skills
+   (`INSTALLED_SKILLS` in `renderer.js:2833–3058`) covering frontend-design, code-review,
+   TDD, security audit, caveman mode, session handoff, etc. Each skill is a prompt template
+   (`systemPrompt`) injected per-turn. LucidAgentIDE has no skills infrastructure beyond omp's
+   native project-dir skill discovery. The built-in skills provide curated expert behaviours
+   without requiring file-system skill installation.
+
+3. **IDE slide-out panel.** AgentIDEHarness has a full Monaco editor surface with file tabs,
+   "View in IDE" buttons on AI code blocks, and live preview. LucidAgentIDE has no code-editing
+   surface — the inspector rail (Memory/Security/KG/Logs) occupies the right side. A slide-out
+   Monaco panel lets users inspect and (later) edit AI-generated code with syntax highlighting.
+
+### Resolved decisions
+
+- **Skill curation → all 18 + `/task` proforma.** All 18 skills ship. Most-used skills
+  surface to the top of the slash-command popup (usage count persisted in `localStorage`).
+  Additionally, a `/task` command provides omp-style subagent delegation with a proforma
+  template that **appends** multi-line subagent task assignments to whatever the user has
+  already typed (preserving existing input). Default 3 sample subagent lines; user
+  adds/removes freely.
+
+- **Remote skill search → built-in only.** No remote skill discovery (skills.sh, GitHub).
+  Maximum airgap / isolated-network portability. All skills are hardcoded in `INSTALLED_SKILLS`
+  and ship with the app.
+
+- **IDE panel scope → read-only first (P-IDE.4), then read-write via omp (P-IDE.5).**
+  P-IDE.4 ships a read-only Monaco viewer for inspecting AI-generated code. P-IDE.5 adds
+  editing + "Save" (routes through omp's `write_file` tool → security gate) + "Send to Chat"
+  (pastes edited code back into composer). File-conflict handling (omp-modified-file reload
+  prompt) lives in P-IDE.5.
+
+### Decision
+
+**1. Model family picker (P-IDE.1).**
+   Add a `MODEL_FAMILIES` classification array with regex-based family assignment. Refactor
+   the model picker dropdown to render collapsible family sections (icon + label + chevron →
+   indented model rows). Search filters across all families; empty families hide. Existing
+   per-model hover card (Token Expense / Intelligence / context / "best for") unchanged.
+
+**2. Slash-command skills + `/task` proforma (P-IDE.2).**
+   New `desktop/renderer/skills.ts`:
+   - `INSTALLED_SKILLS` array — all 18 skills, hardcoded (airgap-safe).
+   - `SkillDef` type with `usageCount` for frequency sorting.
+   - Slash-command popup on `/` in the composer, sorted by `usageCount` descending (most-used
+     first), persisted in `localStorage` under `skill_usage_counts`.
+   - Selecting a skill sets `activeSkill` and injects its `systemPrompt` via
+     `--append-system-prompt` in the volatile tail (after the cache breakpoint — invariant #6).
+   - `/task` is a special entry: does NOT set `activeSkill`, instead appends a proforma
+     template to the composer (`Subagent 1 task: ...`, `Subagent 2 task: ...`, etc.) without
+     erasing existing text. Delegation flows through omp's native Task tool (ADR-0028).
+   - Skills browser sidebar panel (new activity-bar button) with skill cards.
+
+**3. Skill telemetry event (P-IDE.3, frozen-contract change).**
+   Add `"skill_activated"` to `EVENT_NAMES` in `contracts.ts`. Emit from the renderer via a
+   new `POST /api/skill/activated` route (metadata-only: command, name, source — no user
+   content). This is the isolated frozen-contract sub-increment.
+
+**4. IDE panel read-only scaffold (P-IDE.4).**
+   New `desktop/renderer/ide_panel.ts`. Vendor Monaco ESM (airgap-clean, ~4MB, matching the
+   KaTeX vendoring pattern). Panel slides from right over the inspector (higher z-index) with
+   CSS `transform: translateX(100%)` → `translateX(0)`. `readOnly: true`. "View in IDE"
+   button on AI code blocks. Close + resize handle. Footer with Ln/Col.
+
+**5. IDE panel read-write + pop-out (P-IDE.5).**
+   Toggle `readOnly` via an inspect/edit button. "Save" routes through omp's `write_file` tool
+   (existing `tool_call` gate fires). "Send to Chat" pastes into composer with language fence.
+   Pop-out to Electron BrowserWindow (desktop only). Modified-dot indicator. File-conflict
+   banner when omp modifies the open file externally.
+
+**6. Polish + integration tests (P-IDE.6).**
+   Cross-feature polish (skill + IDE interaction). Source attribution in skill cards. `/task`
+   proforma line count adjustable. Integration tests: slash-command → skill injection → model
+   response → "View in IDE" → edit → save.
+
+### Integration with the invariants
+
+- **Extend omp, never fork (#1).** Skills are prompt-template injection via
+  `--append-system-prompt`. `/task` uses omp's native Task tool. IDE panel save routes through
+  omp's `write_file`. No omp fork needed.
+- **Language boundary fixed (#2).** All new code is TypeScript in `desktop/renderer/`. No
+  Python touched.
+- **Fail-closed is law (#3).** Skill user inputs (selected code, `/task` text) flow through
+  the existing `tool_call` gate before any tool executes. IDE panel "Save" goes through the
+  same gate. No new bypass.
+- **Quarantine gate in-process (#4).** Unchanged — the gate fires before any tool regardless
+  of active skill or IDE panel state.
+- **Untrusted content delimited + late (#5).** Skill `systemPrompt` is trusted (shipped with
+  the app). User content in skill turns is scanned normally. Remote skill search rejected —
+  external prompt templates would be untrusted text needing scanning.
+- **Frozen prefix byte-stable (#6).** Skill prompts are injected in the volatile tail (after
+  the cache breakpoint), never in the frozen prefix. The prefix-hash test is unaffected.
+- **Trust labels closed set (#7).** No new labels.
+- **Events exact names (#8).** One new `EventName` (`skill_activated`) — isolated to P-IDE.3
+  as a frozen-contract change.
+- **Stable IDs (#9).** No new ID minting required.
+- **DuckDB schema freezes (#10).** No schema change in this ADR.
+
+### Phases — one increment each (session ritual)
+
+- **P-IDE.1** — model family picker. `MODEL_FAMILIES` classification, collapsible sections,
+  search filter, CSS. Renderer-only, no contract change.
+- **P-IDE.2** — slash-command skills + `/task` proforma. `skills.ts` with all 18 skills +
+  `/task`. Usage-frequency sorting. Skill badge. Skills browser panel. Renderer-only, no
+  contract change.
+- **P-IDE.3** — skill telemetry event. `skill_activated` in `contracts.ts` + emit route.
+  Frozen-contract sub-increment.
+- **P-IDE.4** — Monaco vendor + IDE panel scaffold (read-only). Vendored ESM, slide animation,
+  dark theme, "View in IDE" buttons, resize handle. No editing, no save, no pop-out.
+- **P-IDE.5** — IDE panel read-write + pop-out + save-through-omp. Edit toggle, Save via
+  `write_file`, Send to Chat, pop-out, modified-dot, file-conflict banner.
+- **P-IDE.6** — polish + integration tests. Cross-feature flows, source attribution, end-to-end
+  test coverage.
+
+### Alternatives considered
+
+| Option | Rejected because |
+|--------|------------------|
+| Fork omp for native skill support | Violates invariant #1 |
+| Remote skill install from skills.sh | Violates airgap requirement; external prompts are untrusted (invariant #5) |
+| Full read-write IDE from day one | +250 LOC + conflict handling; read-only ships faster, read-write follows |
+| Skills as `.md` files on disk | File-discovery surface; inline array is simpler, auditable, airgap-clean |
+| Static subagent count in `/task` | User may want 1–N; default 3 sample lines, add/remove freely |
+
+### Consequences
+
+- **Bundle size:** +~4MB from vendored Monaco (matches KaTeX precedent).
+- **Frozen contract:** one new `EventName` (`skill_activated`), isolated to P-IDE.3.
+- **No new invariant violations.** Skills are prompt-template-only; IDE panel renders model
+  output in a text editor; model picker is UI-only; `/task` is pure text insertion using omp's
+  existing Task tool.
+- **Deferred:** remote skill search/install (rejected for airgap); skill-specific tool
+  definitions; IDE panel file-explorer (omp already manages files).
