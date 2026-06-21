@@ -975,3 +975,17 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
   GUI-side telemetry persistence (two-process DuckDB); MCP tool output scanning relies on the
   existing gate (omp tool calls are already scanned) — confirm the path in P-MCP.2.
 - **next:** P-MCP.2 — Entra/Okta OIDC via ephemeral-localhost PKCE + safeStorage via Electron main.
+
+## P11.3/SEC: local control-plane hardening (ADR-0022 — SAST H1/H2/M1)
+- **shipped:** CodeQL/SAST fixes for the desktop control plane (desktop/dev.ts, spawned by main.ts as
+  the shipped app's data plane, + tools/web/server.ts). H1: both Bun.serve bind hostname 127.0.0.1
+  (was 0.0.0.0/LAN-exposed). H2: new pure, unit-tested desktop/origin_guard.ts front-gates both
+  servers — Host allowlist (defeats DNS rebinding) on every method + Origin allowlist & JSON
+  content-type on state-changing methods (defeats drive-by CSRF against keys/passphrase/clone). M1:
+  desktop/path_guard.ts pathWithin() confines /api/fs/list to the home subtree (was arbitrary
+  readdir/js/path-injection). Verified live: legit GET 200, forged Host 403, cross-site POST 403,
+  fs/list?path=/etc→home. harness 194 pass, desktop 17 pass (12 new), root+desktop tsc clean.
+- **stubbed:** per-launch capability token (transport-independent 4th layer) deferred; import/vault
+  `dest` paths remain user-scoped (remote/CSRF vector closed by H1/H2) — allow-list tightening is a
+  follow-up. CodeQL alert IDs not machine-fetchable in-session (no list_code_scanning_alerts tool).
+- **next:** optional per-launch token + import/vault `dest` containment; then back to ADR-0021 P11.2 UX.

@@ -25,6 +25,8 @@ import { destroyCui, enablePersonal, exportCuiArchive, exportHistory, exportVaul
 import { homedir } from "node:os";
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { dirname } from "node:path";
+import { isAllowedRequest, reqShape } from "./origin_guard.ts";
+import { pathWithin } from "./path_guard.ts";
 
 applyEnv(); // make stored API keys available to a spawned omp acp
 if (loadSettings().headroomEnabled) startHeadroom(); // resume the opt-in compression proxy
@@ -85,10 +87,14 @@ function startOauthBroker(oauthId: string): Promise<{ started: boolean; url: str
 
 const server = Bun.serve({
   port: PORT,
+  hostname: "127.0.0.1", // H1 (ADR-0022): loopback only — this control plane handles keys/passphrases.
   idleTimeout: 60,
   async fetch(req) {
     const url = new URL(req.url);
     const p = url.pathname;
+    // H2 (ADR-0022): reject anything a web page or DNS-rebind could forge against
+    // the fixed local port (foreign Host/Origin, or a non-JSON state-changing body).
+    if (!isAllowedRequest(reqShape(req), PORT)) return new Response("forbidden", { status: 403 });
     try {
       if (p === "/app.js") {
         const { js } = await bundleApp();
@@ -139,8 +145,12 @@ const server = Bun.serve({
       // In-app folder browser (works in the browser build AND Electron — the dev server
       // reads the local FS in both). Lists subdirectories + flags git repos, for Workspace.
       if (p === "/api/fs/list") {
+        // M1 (ADR-0022): the folder browser is confined to the user's home subtree.
+        // pathWithin canonicalizes (collapsing any ../) and rejects anything outside,
+        // so the request path can't turn this into an arbitrary directory-listing oracle.
         const want = url.searchParams.get("path");
-        const base = want && existsSync(want) ? want : homedir();
+        const safe = want ? pathWithin(homedir(), want) : null;
+        const base = safe && existsSync(safe) ? safe : homedir();
         const dirs: { name: string; path: string; isGit: boolean }[] = [];
         try {
           for (const name of readdirSync(base)) {
@@ -150,8 +160,9 @@ const server = Bun.serve({
           }
         } catch { /* unreadable dir */ }
         dirs.sort((a, b) => a.name.localeCompare(b.name));
-        const parent = dirname(base);
-        return json({ ok: true, data: { path: base, parent: parent !== base ? parent : null, home: homedir(), isGit: existsSync(join(base, ".git")), dirs } });
+        const parentDir = dirname(base);
+        const parent = parentDir !== base && pathWithin(homedir(), parentDir) ? parentDir : null; // never offer a parent above home
+        return json({ ok: true, data: { path: base, parent, home: homedir(), isGit: existsSync(join(base, ".git")), dirs } });
       }
 
       // real omp ACP backend (genuine model replies + live session config)
