@@ -58,6 +58,16 @@ export class Db {
     return db;
   }
 
+  /** Open the database READ-ONLY (no migrations, no write lock). Used by readers
+   *  that must coexist with the single-writer process holding the DB open RW —
+   *  e.g. the desktop dev server building cross-session recall while the omp gate
+   *  child owns the writer (ADR-0009 Phase A). Throws if the file doesn't exist. */
+  static async openReadOnly(path: string): Promise<Db> {
+    const instance = await DuckDBInstance.create(path, { access_mode: "READ_ONLY" });
+    const conn = await instance.connect();
+    return new Db(instance, conn);
+  }
+
   private async migrate(): Promise<void> {
     await this.conn.run(
       `CREATE TABLE IF NOT EXISTS schema_migrations (
