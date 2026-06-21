@@ -1834,3 +1834,77 @@ so no single bypass re-opens the control plane.
   loopback bind and the front gate wired into `desktop/dev.ts` and `tools/web/server.ts`,
   and the `/api/fs/list` containment. Verified live: legit GET 200; forged Host 403;
   cross-site JSON POST 403; `fs/list?path=/etc` returns home, not `/etc`.
+
+-----
+
+## ADR-0023 — GUI filesystem path containment: import sources & export destinations
+
+**Date:** 2026-06-21
+**Status:** Built
+**Context increment:** P11.4/SEC
+
+### Context
+
+ADR-0022 closed the network/CSRF vectors on the local control plane (loopback bind,
+Host/Origin gate) and confined the in-app folder browser (`/api/fs/list`) to the home
+subtree (M1). It explicitly left one residual: the personalization endpoints still took
+an unconstrained filesystem path —
+
+- `/api/personal/import` → `importChatExport(path)` reads an arbitrary file/folder/zip;
+- `/api/personal/vault` → `exportVault({ dest })` writes the Obsidian vault to an
+  arbitrary directory;
+- `/api/personal/cui-archive` → `exportCuiArchive({ dest })` writes the NARA-aligned CUI
+  archive to an arbitrary directory.
+
+`writeFiles()` already refused paths escaping the chosen `dest`, but the `dest` (and the
+import source) themselves were unbounded — an arbitrary-read primitive on import and an
+arbitrary-write location on export (CodeQL `js/path-injection`).
+
+### Decision
+
+Confine **every GUI-driven file path — import source and export destination — to the
+user's home subtree**, the same boundary M1 already applies to the folder browser.
+
+`desktop/personal.ts` gains `confineToHome(p)`, a one-liner over ADR-0022's
+`pathWithin(homedir(), p)` (canonicalizes, collapses `../`, separator-aware prefix match
+to avoid the `~user` vs `~user-evil` sibling bypass). It runs as **early input
+validation** — before the personalization/store-unlocked guards — in `exportVault`,
+`exportCuiArchive`, and `importChatExport`. An out-of-bounds path returns a plain
+"…inside your home folder" error; an in-bounds path yields the canonical path used for
+all subsequent FS work. Every default destination (`~/.omp/lucid-vault`,
+`~/.omp/lucid-cui-archive`) already lives under home, so defaults are unaffected.
+
+### Why
+
+The home subtree is exactly what the in-app folder browser can navigate (M1) and where
+every default already sits, so containment matches real usage while removing the
+arbitrary read/write. Validating up front (before stateful guards) keeps the check in
+one obvious place and makes it unit-testable without standing up an encrypted store.
+
+### Integration with the invariants
+
+- **Fail-closed is law (#3).** Allow-listed: a path that doesn't resolve inside home is
+  rejected, never written to or read from. The scanner gate that imported messages still
+  pass (keystone #2) is unchanged — this adds a path boundary *before* it.
+- **Extend omp; never fork (#1) / language boundary (#2).** TypeScript only, all in
+  `desktop/`. Reuses the ADR-0022 `path_guard.ts` helper; no new dependency.
+- **Frozen contracts.** No contract, schema, or prompt-prefix change.
+
+### Honest residual
+
+- **External drives / paths outside home** (e.g. exporting a vault to a mounted backup
+  volume) are now rejected. This is the deliberate tradeoff; a future increment can add an
+  explicit, user-confirmed allow-list entry for a chosen external root rather than
+  widening the default boundary.
+- `setWorkspace`/`cloneRepo` already write under `~/.omp/lucid-workspaces`; tightening the
+  local-folder `setWorkspace` path is a small follow-up, not bundled here.
+- The per-launch capability token (ADR-0022's deferred 4th layer) remains future work;
+  the chosen design is server-minted + HTML-injected so it covers both the Electron and
+  the plain-browser dev runtimes.
+
+### Phases — one increment each (session ritual)
+
+- **P11.4/SEC (this increment)** — `confineToHome()` + early-validation wiring in
+  `exportVault` / `exportCuiArchive` / `importChatExport`, with `desktop/personal_paths.test.ts`
+  (7 tests: outside-home rejected with the home-folder message, inside-home passes
+  containment, traversal-escape rejected).

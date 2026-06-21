@@ -989,3 +989,17 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
   `dest` paths remain user-scoped (remote/CSRF vector closed by H1/H2) — allow-list tightening is a
   follow-up. CodeQL alert IDs not machine-fetchable in-session (no list_code_scanning_alerts tool).
 - **next:** optional per-launch token + import/vault `dest` containment; then back to ADR-0021 P11.2 UX.
+
+## P11.4/SEC: GUI filesystem path containment (ADR-0023 — completes ADR-0022 M2 residual)
+- **shipped:** confined the personalization endpoints' file paths to the user's home subtree, the
+  same boundary M1 gave the folder browser. desktop/personal.ts gains confineToHome() (reuses
+  ADR-0022 path_guard.pathWithin) run as EARLY input validation in exportVault, exportCuiArchive,
+  and importChatExport — an out-of-home dest/source is rejected ("…inside your home folder") before
+  any FS read/write, closing the residual arbitrary-read (import) / arbitrary-write (export dest)
+  from ADR-0022 (CodeQL js/path-injection). Defaults (~/.omp/lucid-vault, lucid-cui-archive) are
+  under home, unaffected. New desktop/personal_paths.test.ts (7 pass). desktop 24 pass (+7), harness
+  194 pass, root+desktop tsc clean.
+- **stubbed:** external-drive exports are now rejected (deliberate tradeoff — future explicit
+  user-confirmed allow-list entry); setWorkspace local-folder path tightening not bundled here.
+- **next:** the per-launch capability token (server-minted + HTML-injected, both runtimes); optional
+  setWorkspace containment; then back to ADR-0021 P11.2 UX.

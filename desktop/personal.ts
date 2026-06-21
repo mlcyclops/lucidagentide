@@ -7,6 +7,8 @@
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, normalize, sep } from "node:path";
+import { homedir } from "node:os";
+import { pathWithin } from "./path_guard.ts";
 import { CUI_STORE_VERSION, PersonalStore, type PersonalGraph, type PersonalScope, type ScopeView } from "../harness/personal/store.ts";
 import { load, personalAuditPath, personalCuiArchiveDir, personalCuiStorePath, personalStorePath, personalVaultDir, setPersonalization, setPersonalScope } from "./settings_store.ts";
 import { buildRecall, buildRecallFromGraph } from "../harness/personal/recall.ts";
@@ -164,6 +166,15 @@ export interface ExportSummary {
   scopes?: PersonalScope[]; includedCui?: boolean; payloadSha256?: string; manifestSha256?: string;
 }
 
+// M2 (ADR-0023): confine every GUI-driven file path — an import SOURCE or an export DESTINATION —
+// to the user's home subtree, the same boundary the in-app folder browser navigates (M1, ADR-0022).
+// writeFiles() already contains files WITHIN the chosen dir; this confines the dir/source ITSELF so
+// the GUI can't read an arbitrary file or write an export outside home. Canonicalizes (collapsing
+// any ../) and returns the safe absolute path, or null for the caller to turn into a user error.
+function confineToHome(p: string): string | null {
+  return pathWithin(homedir(), p);
+}
+
 /** Write the export's files under destDir, refusing any path that escapes it. Returns bytes. */
 function writeFiles(destDir: string, files: VaultFile[]): number {
   const root = normalize(destDir);
@@ -188,6 +199,8 @@ function auditExport(event: "personal_vault_exported" | "personal_cui_archived" 
  *  (ADR-0012). Decrypt→write→audit: writes files, records the action inside the
  *  encrypted store, and emits a metadata-only telemetry event. */
 export function exportVault(opts: { scopes?: PersonalScope[]; dest?: string; reviewer?: string } = {}): ExportSummary {
+  const dest = confineToHome(opts.dest?.trim() || personalVaultDir());
+  if (!dest) return { ok: false, error: "Export destination must be inside your home folder." };
   const s = load();
   if (!s.personalizationEnabled || !store) return { ok: false, error: "Personalization is off or locked." };
   // The portable vault reads the MAIN store only — CUI lives in its own isolated store and is
@@ -195,7 +208,6 @@ export function exportVault(opts: { scopes?: PersonalScope[]; dest?: string; rev
   const scopes = (opts.scopes && opts.scopes.length ? opts.scopes : (["personal", "work"] as PersonalScope[]))
     .filter((x): x is PersonalScope => x === "personal" || x === "work");
   if (!scopes.length) return { ok: false, error: "Select Personal and/or Work to export. CUI uses the CUI archive." };
-  const dest = opts.dest?.trim() || personalVaultDir();
   try {
     const build = buildVault(store.graph({ scope: "combined" }), { scopes, now: new Date().toISOString() });
     if (build.summary.entities === 0) return { ok: false, error: "Nothing to export in the selected compartment(s) yet." };
@@ -218,11 +230,12 @@ export function exportVault(opts: { scopes?: PersonalScope[]; dest?: string; rev
  *  Archives / NARA records management). Exports ONLY the cui scope into a CUI-marked,
  *  records-managed package with a SHA-256 manifest. Never bundled into the normal vault. */
 export function exportCuiArchive(opts: { dest?: string; designation?: CuiDesignation; reviewer?: string } = {}): ExportSummary {
+  const dest = confineToHome(opts.dest?.trim() || personalCuiArchiveDir());
+  if (!dest) return { ok: false, error: "Archive destination must be inside your home folder." };
   const s = load();
   if (!s.personalizationEnabled) return { ok: false, error: "Personalization is off." };
   if (!cuiStore) return { ok: false, error: "Unlock the CUI store first (select the CUI compartment and enter its passphrase)." };
   if (cuiStore.scopeCounts().cui === 0) return { ok: false, error: "No CUI-compartment facts to archive." };
-  const dest = opts.dest?.trim() || personalCuiArchiveDir();
   const designation = { ...opts.designation, reviewer: opts.reviewer ?? opts.designation?.reviewer };
   try {
     const build = buildCuiArchive(cuiStore.graph({ scope: "cui" }), { now: new Date().toISOString(), designation });
@@ -376,6 +389,13 @@ export async function importChatExport(
   pathArg: string,
   opts: { vendorHint?: ImportVendor; complete?: (system: string, user: string) => Promise<string> } = {},
 ): Promise<ImportResult> {
+  // Validate the untrusted source path up front (M2, ADR-0023): it must resolve inside home,
+  // so an import can't be pointed at an arbitrary file (e.g. /etc/passwd) to read it in.
+  const raw = String(pathArg ?? "").trim();
+  if (!raw) return { ok: false, error: "Choose your exported folder, .json, or .zip." };
+  const safe = confineToHome(raw);
+  if (!safe) return { ok: false, error: "Choose a file inside your home folder." };
+
   const s = load();
   if (!s.personalizationEnabled) return { ok: false, error: "Personalization is off." };
   const view = (s.personalScope ?? "personal") as ScopeView;
@@ -383,9 +403,7 @@ export async function importChatExport(
   const target = scope === "cui" ? cuiStore : store;
   if (!target) return { ok: false, error: scope === "cui" ? "Unlock the CUI store first (select CUI and enter its passphrase)." : "Unlock your store first." };
 
-  const raw = String(pathArg ?? "").trim();
-  if (!raw) return { ok: false, error: "Choose your exported folder, .json, or .zip." };
-  const loaded = loadExportText(raw);
+  const loaded = loadExportText(safe);
   if (!loaded.ok) return loaded;
   let data: unknown;
   try { data = JSON.parse(loaded.text); }
