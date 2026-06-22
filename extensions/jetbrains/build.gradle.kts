@@ -29,6 +29,19 @@ intellijPlatform {
             sinceBuild = "242"
         }
     }
+    // P-EXT.4b — JetBrains Marketplace publish (`gradle publishPlugin`). The token comes from the CI
+    // secret JETBRAINS_PUBLISH_TOKEN; these are LAZY providers, resolved only when the publish/sign
+    // tasks run, so `gradle test buildPlugin` (the CI verify job) is unaffected when they're unset.
+    publishing {
+        token = providers.environmentVariable("JETBRAINS_PUBLISH_TOKEN")
+    }
+    // Plugin signing (recommended by JetBrains Marketplace). Supply a cert chain + key via secrets;
+    // signPlugin runs before publishPlugin when present, and is skipped otherwise.
+    signing {
+        certificateChain = providers.environmentVariable("JETBRAINS_CERTIFICATE_CHAIN")
+        privateKey = providers.environmentVariable("JETBRAINS_PRIVATE_KEY")
+        password = providers.environmentVariable("JETBRAINS_PRIVATE_KEY_PASSWORD")
+    }
 }
 
 kotlin {

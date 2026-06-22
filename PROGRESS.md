@@ -4,6 +4,22 @@ Three lines per session: **shipped / stubbed / next** (CLAUDE.md session ritual)
 
 -----
 
+## P-EXT.4b: marketplace publish pipelines (ADR-0038)
+- **shipped:** the tag-triggered publish path for both editors. .github/workflows/extensions-publish.yml
+  (on `ext-v*` tags / dispatch): a VS Code job (esbuild --production → vsce publish + ovsx publish) and a
+  JetBrains job (gradle buildPlugin → publishPlugin). Every publish step is SECRET-GATED (no token →
+  builds but skips publish, workflow stays green), so it's safe before secrets exist. build.gradle.kts
+  gains intellijPlatform.publishing{token} + signing{certChain/key/password} as LAZY env providers
+  (resolved only by the publish/sign tasks → the green `gradle test buildPlugin` verify job is
+  unaffected). docs/EXT-SECURE-BUILD.md documents the required repo secrets + the `ext-v<x.y.z>` release
+  flow. Verified by the existing Extensions CI re-configuring the project with the publishing block.
+- **stubbed:** the actual publishes need the user's marketplace tokens (VSCE_PAT / OVSX_PAT /
+  JETBRAINS_PUBLISH_TOKEN) + optional JetBrains signing certs as repo secrets; no version-bump
+  automation (manual tag); the `lucid` launcher ships + signs with the DESKTOP installer, not here.
+- **next:** attach-mode (optional) as its own security-reviewed increment — the desktop writes the
+  ADR-0024 capability token to userData; the extension reads it same-machine + shares the gated loopback
+  session (ADR-0022 Host/Origin guard). stdio `lucid acp` stays the default; attach-mode never bypasses it.
+
 ## P-EXT.4a: ship the compiled `lucid` launcher + standalone resolution (ADR-0038)
 - **shipped:** the load-bearing integration so installed editors actually FIND the launcher. A
   package.json `bin` never materializes a node_modules/.bin/lucid shim for the package itself, so the

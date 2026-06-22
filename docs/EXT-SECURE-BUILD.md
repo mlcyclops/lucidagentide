@@ -122,7 +122,26 @@ Demo: install the plugin zip, same gated reply + block banner in IntelliJ.
 3. **VS Code surface:** Webview view (recommended, full parity) vs chat-participant / LM API — prototype
    both in P-EXT.2.
 
+## Publishing (P-EXT.4b)
+
+`.github/workflows/extensions-publish.yml` publishes on an `ext-v*` tag; each step is **secret-gated**
+(no token → built but not published, workflow stays green). Required repo secrets:
+
+| Secret | For |
+|---|---|
+| `VSCE_PAT` | VS Code Marketplace (publisher `lucidagentide`) |
+| `OVSX_PAT` | Open VSX (Cursor / VSCodium / Windsurf) |
+| `JETBRAINS_PUBLISH_TOKEN` | JetBrains Marketplace (`gradle publishPlugin`) |
+| `JETBRAINS_CERTIFICATE_CHAIN` / `JETBRAINS_PRIVATE_KEY` / `JETBRAINS_PRIVATE_KEY_PASSWORD` | optional plugin signing |
+
+Release: bump the version in `extensions/vscode/package.json` + `extensions/jetbrains/build.gradle.kts`,
+then `git tag ext-v<x.y.z> && git push origin ext-v<x.y.z>`.
+
+The `lucid` launcher (the trust anchor) is shipped + signed with the **desktop installer**
+(`build-desktop.yml`), not the marketplace extensions — the extensions only locate it.
+
 ## Build order
 
-P-EXT.1 (the security guarantee + foundation) → P-EXT.2 (VS Code) → P-EXT.3 (JetBrains) → P-EXT.4
-(packaging/CI + attach-mode). Each is one increment with its own demo, per the session ritual.
+P-EXT.1 (the security guarantee + foundation) → P-EXT.2 (VS Code) → P-EXT.3 (JetBrains) → P-EXT.4a
+(ship the compiled `lucid` launcher) → P-EXT.4b (marketplace publish) → attach-mode (optional, its own
+security-reviewed increment). Each is one increment with its own demo, per the session ritual.

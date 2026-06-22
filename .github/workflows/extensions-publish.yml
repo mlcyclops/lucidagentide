@@ -1,0 +1,81 @@
+# P-EXT.4b — publish the IDE extensions to their marketplaces on an `ext-v*` tag.
+#
+# Each publish step is GATED on its secret: with no token set, the step is skipped (the workflow stays
+# green and publishes nothing), so this is safe to run before the secrets exist. Build/package is always
+# exercised (that's the verification; the dedicated Extensions CI also runs it on every push).
+#
+# Required repo secrets (Settings → Secrets and variables → Actions):
+#   VSCE_PAT                       VS Code Marketplace personal access token (publisher: lucidagentide)
+#   OVSX_PAT                       Open VSX token
+#   JETBRAINS_PUBLISH_TOKEN        JetBrains Marketplace token
+#   JETBRAINS_CERTIFICATE_CHAIN / JETBRAINS_PRIVATE_KEY / JETBRAINS_PRIVATE_KEY_PASSWORD  (optional, to sign)
+#
+# Release: bump the version in extensions/{vscode/package.json,jetbrains/build.gradle.kts}, then
+#   git tag ext-v0.1.0 && git push origin ext-v0.1.0
+
+name: Publish extensions
+
+on:
+  push:
+    tags: ["ext-v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  vscode:
+    name: VS Code → Marketplace + OpenVSX
+    runs-on: ubuntu-latest
+    env:
+      VSCE_PAT: ${{ secrets.VSCE_PAT }}
+      OVSX_PAT: ${{ secrets.OVSX_PAT }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: Build
+        working-directory: extensions/vscode
+        run: |
+          bun install
+          bun esbuild.mjs --production
+      - name: Publish to VS Code Marketplace
+        if: ${{ env.VSCE_PAT != '' }}
+        working-directory: extensions/vscode
+        run: bunx @vscode/vsce publish --no-dependencies -p "$VSCE_PAT"
+      - name: Publish to Open VSX
+        if: ${{ env.OVSX_PAT != '' }}
+        working-directory: extensions/vscode
+        run: bunx ovsx publish --no-dependencies -p "$OVSX_PAT"
+      - name: Skipped (no tokens)
+        if: ${{ env.VSCE_PAT == '' && env.OVSX_PAT == '' }}
+        run: echo "::notice::No VSCE_PAT/OVSX_PAT secrets set — built but did not publish."
+
+  jetbrains:
+    name: JetBrains → Marketplace
+    runs-on: ubuntu-latest
+    env:
+      JETBRAINS_PUBLISH_TOKEN: ${{ secrets.JETBRAINS_PUBLISH_TOKEN }}
+      JETBRAINS_CERTIFICATE_CHAIN: ${{ secrets.JETBRAINS_CERTIFICATE_CHAIN }}
+      JETBRAINS_PRIVATE_KEY: ${{ secrets.JETBRAINS_PRIVATE_KEY }}
+      JETBRAINS_PRIVATE_KEY_PASSWORD: ${{ secrets.JETBRAINS_PRIVATE_KEY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.10"
+      - name: Build plugin
+        working-directory: extensions/jetbrains
+        run: gradle buildPlugin --no-daemon --stacktrace
+      - name: Publish to JetBrains Marketplace
+        if: ${{ env.JETBRAINS_PUBLISH_TOKEN != '' }}
+        working-directory: extensions/jetbrains
+        run: gradle publishPlugin --no-daemon --stacktrace
+      - name: Skipped (no token)
+        if: ${{ env.JETBRAINS_PUBLISH_TOKEN == '' }}
+        run: echo "::notice::No JETBRAINS_PUBLISH_TOKEN secret set — built but did not publish."
