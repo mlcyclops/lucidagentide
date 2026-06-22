@@ -141,7 +141,12 @@ button{font-family:inherit}
 /* ───────────────────────── activity rail ───────────────────────── */
 .rail{
   width:54px;background:var(--bg-1);border-right:1px solid var(--line-soft);
-  display:flex;flex-direction:column;align-items:center;padding:10px 0;gap:4px}
+  display:flex;flex-direction:column;align-items:center;padding:10px 0;gap:4px;
+  transition:opacity var(--t) var(--ease)}
+/* When the sessions panel is collapsed the nav recedes to ~55% so it isn't distracting; the
+   hamburger (#sideToggle) still reads, and hovering the rail brings it fully back. */
+#app-inner.sidebar-collapsed .rail{opacity:.55}
+#app-inner.sidebar-collapsed .rail:hover{opacity:1}
 .rail .spacer{flex:1}
 .rail-btn{
   position:relative;width:40px;height:40px;border:0;background:transparent;color:var(--txt-3);
@@ -210,6 +215,7 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
     inset 0 1px 0 color-mix(in srgb,var(--accent-2) 18%,transparent)}
 .side-new:active{transform:scale(.92);transition-duration:var(--t-fast)}
 .side-new:focus-visible{outline:2px solid var(--accent-2);outline-offset:2px}
+.side-new .ic{display:block} /* drop the inline-SVG baseline gap so the glyph is truly centered */
 .side-list{overflow:auto;padding:2px 8px 10px;display:flex;flex-direction:column;gap:2px}
 .sess{position:relative;display:flex;flex-direction:column;gap:3px;padding:9px 11px;border-radius:9px;cursor:pointer;
   border:1px solid transparent;
@@ -379,10 +385,86 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .thoughts-step .ts-d{color:var(--txt-3);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 @keyframes spin{to{transform:rotate(360deg)}}
 
+/* reasoning ("thinking") block — P-ACP.1 (ADR-0027). Sits ABOVE the answer; streams the model's
+   thought text live, then auto-collapses to a "Thought for Ns" summary when the answer takes over. */
+.reasoning{margin:2px 0 8px;border:1px solid var(--line);border-left:2px solid var(--accent-dim);
+  border-radius:11px;background:var(--bg-1);width:fit-content;max-width:100%;overflow:hidden;
+  animation:rise var(--t) var(--ease-out)}
+.reasoning-head{display:flex;align-items:center;gap:8px;width:100%;text-align:left;cursor:pointer;
+  background:transparent;border:0;color:var(--txt-2);font-family:var(--mono);font-size:12px;padding:8px 11px;
+  transition:background var(--t)}
+.reasoning-head:hover{background:var(--bg-2)}
+.reasoning-spin{flex:none;display:inline-flex;color:var(--accent-2)}
+.reasoning[data-streaming] .reasoning-spin .ic{animation:thinkpulse 1.6s ease-in-out infinite}
+.reasoning.done .reasoning-spin{color:var(--txt-4)}
+.reasoning-cur{flex:1;min-width:0;color:var(--txt-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.reasoning.done .reasoning-cur{color:var(--txt-3)}
+.reasoning-chev{flex:none;display:inline-flex;color:var(--txt-4);transition:transform var(--t) var(--ease)}
+.reasoning.open .reasoning-chev{transform:rotate(90deg)}
+.reasoning-body{max-height:0;overflow:hidden;transition:max-height var(--t-slow) var(--ease)}
+.reasoning.open .reasoning-body{max-height:280px;overflow-y:auto;scrollbar-width:thin}
+.reasoning-body{font-family:var(--mono);font-size:12px;line-height:1.55;color:var(--txt-3);
+  white-space:pre-wrap;word-break:break-word;padding:0 12px} /* padding applies once expanded */
+.reasoning.open .reasoning-body{padding:2px 12px 10px}
+@keyframes thinkpulse{0%,100%{opacity:.45}50%{opacity:1}}
+
+/* tool-permission prompt (Ask mode) — P-ACP.3 (ADR-0027). Inline approve/deny card inside the turn. */
+.perm{margin:8px 0;border:1px solid var(--line);border-left:2px solid var(--accent);border-radius:11px;
+  background:var(--bg-1);width:fit-content;max-width:100%;overflow:hidden;font-family:var(--mono);font-size:12.5px;
+  animation:rise var(--t) var(--ease-out)}
+.perm[data-streaming]{box-shadow:0 0 0 1px var(--accent-dim),0 6px 18px -10px rgba(0,0,0,.5)}
+.perm-head{display:flex;align-items:center;gap:8px;padding:9px 12px 4px;color:var(--accent-2);font-weight:600}
+.perm-head .ic{flex:none}
+.perm-body{padding:0 12px 9px;color:var(--txt-2);white-space:pre-wrap;word-break:break-word}
+.perm-body b{color:var(--cyan)}
+.perm-d{color:var(--txt-3)}
+.perm-actions{display:flex;gap:7px;padding:0 12px 11px;flex-wrap:wrap}
+.perm-btn{font-family:inherit;font-size:12px;font-weight:600;border-radius:8px;padding:5px 13px;cursor:pointer;
+  border:1px solid var(--line-strong);background:var(--bg-3);color:var(--txt-2);
+  transition:transform var(--t-fast) var(--ease-out),background var(--t) var(--ease),border-color var(--t) var(--ease),color var(--t) var(--ease),filter var(--t) var(--ease)}
+.perm-btn:hover{transform:translateY(-1px)}
+.perm-btn.ok{background:linear-gradient(180deg,var(--accent-2),var(--accent));color:#fff;border-color:transparent;
+  box-shadow:0 4px 12px -4px rgba(198,75,214,.5)}
+.perm-btn.ok:hover{filter:brightness(1.08)}
+.perm-btn.no:hover{border-color:var(--red);color:var(--red);background:var(--red-dim)}
+.perm-result{display:flex;align-items:center;gap:7px;padding:2px 12px 11px;font-weight:600}
+.perm-result.ok{color:var(--green)}
+.perm-result.no{color:var(--txt-3)}
+.perm-result .ic{flex:none}
+
+/* subagent delegation card (omp `task` tool) — P-TASK.1 (ADR-0028). Mirrors .thoughts/.reasoning. */
+.subagent{margin:8px 0 2px;border:1px solid var(--line);border-left:2px solid var(--cyan);border-radius:11px;
+  background:var(--bg-1);width:fit-content;max-width:100%;overflow:hidden;animation:rise var(--t) var(--ease-out)}
+.subagent-head{display:flex;align-items:center;gap:8px;width:100%;text-align:left;cursor:pointer;
+  background:transparent;border:0;color:var(--txt-2);font-family:var(--mono);font-size:12px;padding:8px 11px;
+  transition:background var(--t)}
+.subagent-head:hover{background:var(--bg-2)}
+.subagent-spin{flex:none;display:inline-flex;color:var(--cyan)}
+/* the stick man with a looking glass — green neon. The .look group (head + arm + magnifier) bobs
+   slightly up and down while running, as if scanning. */
+.subagent-spin .looker{color:var(--green);overflow:visible;
+  filter:drop-shadow(0 0 2px var(--green)) drop-shadow(0 0 5px color-mix(in srgb,var(--green) 55%,transparent))}
+.subagent-spin .looker .look{transform-box:view-box;transform-origin:9px 8px}
+.subagent[data-streaming] .subagent-spin .looker .look{animation:peer 1.3s ease-in-out infinite}
+.subagent.done .subagent-spin .looker{filter:drop-shadow(0 0 2px var(--green))} /* settle the glow when done */
+@keyframes peer{0%,100%{transform:translateY(-0.7px)}50%{transform:translateY(0.9px)}}
+.subagent-cur{flex:1;min-width:0;color:var(--txt-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.subagent-cur b{color:var(--cyan);font-weight:600}
+.subagent-chev{flex:none;display:inline-flex;color:var(--txt-4);transition:transform var(--t) var(--ease)}
+.subagent.open .subagent-chev{transform:rotate(90deg)}
+.subagent-body{max-height:0;overflow:hidden;transition:max-height var(--t-slow) var(--ease)}
+.subagent.open .subagent-body{max-height:320px;overflow-y:auto;scrollbar-width:thin}
+.subagent-task{display:flex;align-items:flex-start;gap:7px;font-size:12px;font-family:var(--mono);color:var(--txt-3);
+  padding:6px 11px;border-top:1px solid var(--line-soft);white-space:pre-wrap;word-break:break-word}
+.subagent-task .ic{flex:none;color:var(--txt-4);margin-top:2px}
+
 .composer-wrap{padding:10px 26px 18px}
-.composer{max-width:min(1080px,94vw);margin:0 auto;
+/* The send button lives OUTSIDE the bordered .composer box (the expanding/scrolling input window),
+   bottom-aligned beside it, so a long prompt's scroll region is just the text. */
+.composer-row{max-width:min(1080px,94vw);margin:0 auto;display:flex;align-items:flex-end;gap:8px}
+.composer{flex:1;min-width:0;display:flex;
   background:linear-gradient(180deg,var(--bg-3),var(--bg-2));border:1px solid var(--line);
-  border-radius:14px;padding:8px 8px 8px 14px;display:flex;align-items:flex-end;gap:8px;
+  border-radius:14px;padding:8px 12px;
   /* soft outer elevation + inset emboss top-highlight / bottom-shade */
   box-shadow:var(--shadow,0 10px 28px -14px rgba(0,0,0,.5)),
     inset 0 1px 0 rgba(255,255,255,.05),inset 0 -1px 0 rgba(0,0,0,.28);
@@ -391,9 +473,13 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
   box-shadow:0 0 0 3px var(--accent-dim),0 0 22px -6px rgba(198,75,214,.45),
     var(--shadow,0 12px 30px -14px rgba(0,0,0,.55)),
     inset 0 1px 0 rgba(255,255,255,.06)}
+/* max-height = 3 rows (line-height 1.5 × 15px × 3 + 14px vertical padding ≈ 82px); JS autosize grows
+   to fit up to this, then the textarea scrolls internally so long prompts stay readable. */
+/* padding-left here is the small gap to the LEFT of the cursor/text (not the box frame); the box's
+   own inset is .composer's padding. */
 .composer textarea{flex:1;background:transparent;border:0;resize:none;color:var(--txt);
-  font-family:inherit;font-size:15px;line-height:1.5;padding:7px 0;max-height:180px;outline:none;user-select:text;
-  caret-color:var(--accent-2)}
+  font-family:inherit;font-size:15px;line-height:1.5;padding:7px 0 7px 4px;max-height:82px;outline:none;user-select:text;
+  scrollbar-width:thin;caret-color:var(--accent-2)}
 .composer textarea::placeholder{color:var(--txt-4);transition:color var(--t) var(--ease)}
 .composer:focus-within textarea::placeholder{color:var(--txt-3)}
 .send-btn{flex:none;width:36px;height:36px;border:0;border-radius:10px;cursor:pointer;display:grid;place-items:center;
@@ -412,6 +498,21 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .send-btn:not(:disabled):hover,.send-btn:not(:disabled):active{animation:none}
 .send-btn:disabled{background:var(--bg-4);color:var(--txt-4);cursor:default;
   box-shadow:inset 0 1px 0 rgba(255,255,255,.03);transform:none;filter:none;opacity:.85}
+/* P-ACP.4: Stop state — the Send button turns into a red Stop control while a turn runs */
+.send-btn.stop{background:linear-gradient(180deg,#e5564e,#c8423b);
+  box-shadow:0 4px 12px -3px rgba(200,66,59,.5),inset 0 1px 0 rgba(255,255,255,.22)}
+.send-btn.stop:hover{filter:brightness(1.08);box-shadow:0 7px 18px -4px rgba(200,66,59,.6),inset 0 1px 0 rgba(255,255,255,.28)}
+.send-btn.stop{animation:none}
+/* P-ACP.4 / P-IDE.1d: pre-staged ("queued") prompt — a compact, subdued pill aligned to the right
+   above the composer, with a delete (✕) to drop it before it sends */
+.queued-chip{max-width:min(1080px,94vw);margin:0 auto 6px;display:flex;justify-content:flex-end;padding:0 2px}
+.q-pill{display:inline-flex;align-items:center;gap:7px;max-width:72%;background:var(--bg-2);
+  border:1px solid var(--line-soft);border-radius:999px;padding:2px 5px 2px 10px;color:var(--txt-3)}
+.q-pill .q-label{flex:none;font-size:8.5px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--txt-4)}
+.q-pill .q-text{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--txt-2);font-size:11px}
+.q-pill .q-cancel{flex:none;background:none;border:0;color:var(--txt-4);cursor:pointer;display:grid;place-items:center;
+  width:18px;height:18px;border-radius:50%}
+.q-pill .q-cancel:hover{color:var(--txt);background:var(--bg-3)}
 .composer-hint{max-width:min(1080px,94vw);margin:7px auto 0;font-size:11.5px;color:var(--txt-4);display:flex;gap:14px}
 .composer-hint kbd{font-family:var(--mono);background:var(--bg-2);border:1px solid var(--line);
   border-bottom-width:2px;border-radius:5px;padding:0 5px;color:var(--txt-3);font-size:11px}
@@ -517,6 +618,10 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .tbl tbody tr:hover td{background:rgba(255,255,255,.022)}
 .tbl tr:last-child td{border-bottom:0}
 .tbl td.mono{font-family:var(--mono);color:var(--txt-2);font-size:11.5px;font-variant-numeric:tabular-nums}
+/* P-LOC.2: AI-authored code card */
+.ailoc-attr{display:flex;align-items:center;gap:6px;margin:8px 0 2px;font-size:11.5px;color:var(--txt-3)}
+.ailoc-attr .ic{color:var(--txt-4)}
+.ailoc-tbl td.num{font-variant-numeric:tabular-nums;white-space:nowrap}
 
 .pill{display:inline-flex;align-items:center;justify-content:center;text-align:center;min-width:56px;
   padding:2px 10px;border-radius:999px;font-size:10.5px;font-weight:700;letter-spacing:.3px;line-height:1.5;
@@ -561,7 +666,7 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .bgt-tag.live{color:var(--cyan);background:var(--cyan-dim)}
 .bgt-probe{margin-top:10px;padding-top:9px;border-top:1px solid var(--line-soft);font-size:11.5px}
 .bgt-probe .info-dot{vertical-align:-1px}
-.statusbar .seg.seg-btn{cursor:pointer;border-radius:6px;padding:0 5px;
+.statusbar .seg.seg-btn{cursor:pointer;border-radius:6px;padding:0 8px 0 5px;
   transition:background var(--t-fast) var(--ease),color var(--t-fast) var(--ease)}
 .statusbar .seg.seg-btn:hover{background:var(--bg-3);color:var(--txt-2)}
 .statusbar .seg.seg-btn:active{background:var(--bg-2)}
@@ -578,7 +683,7 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .statusbar::before{content:"";position:absolute;inset:0 0 auto 0;height:1px;pointer-events:none;
   background:linear-gradient(90deg,transparent,rgba(255,255,255,.05) 20%,
     rgba(255,255,255,.05) 80%,transparent)}
-.statusbar .seg{display:flex;align-items:center;gap:7px;cursor:default}
+.statusbar .seg{display:flex;align-items:center;gap:7px;cursor:default;padding-right:5px}
 .statusbar .seg b{font-family:var(--mono);color:var(--txt-2);font-weight:600;font-variant-numeric:tabular-nums}
 .statusbar .mini{width:64px;height:7px;background:#0c0e15;
   border:1px solid var(--line-soft);border-radius:5px;overflow:hidden;
@@ -646,8 +751,9 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .popover{position:fixed;z-index:95;width:366px;background:var(--bg-1);background-image:var(--emboss,none);
   border:1px solid var(--line-strong);border-radius:14px;
   box-shadow:var(--shadow-lg,var(--shadow)),0 0 0 1px rgba(255,255,255,.02) inset;
-  opacity:0;transform:translateY(-8px) scale(.97);transform-origin:50% 0;
-  transition:opacity var(--t-fast) var(--ease-out),transform var(--t-slow) var(--spring,var(--ease-out));overflow:hidden}
+  opacity:0;transform:translateY(-6px) scale(.985);transform-origin:50% 0;
+  /* P-IDE.1b: snappier open (no bouncy spring/overshoot) so the model picker feels instant */
+  transition:opacity var(--t-fast) var(--ease-out),transform var(--t) var(--ease-out);overflow:hidden}
 .popover.show{opacity:1;transform:none}
 .cfg-sec{padding:14px 16px;border-bottom:1px solid var(--line-soft)}
 .cfg-sec:last-child{border-bottom:0}
@@ -669,6 +775,27 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
   color:var(--accent-2);background:var(--accent-dim);border:1px solid var(--line-soft);border-radius:5px;padding:1px 5px;line-height:1.6}
 .cfg-opt .id{flex:0 1 auto;min-width:0;max-width:38%;text-align:right;font-family:var(--mono);font-size:10px;
   color:var(--txt-4);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* P-IDE.1: model family sections (collapsible) */
+.cfg-fam{display:flex;flex-direction:column}
+.cfg-fam+.cfg-fam{margin-top:4px}
+/* P-IDE.1d: no icon; bolder, higher-contrast family headers + count */
+.cfg-fam-h{display:flex;align-items:center;gap:8px;width:100%;padding:7px 8px;border:0;background:transparent;
+  cursor:pointer;color:var(--txt);font:inherit;font-size:11px;font-weight:700;letter-spacing:.7px;text-transform:uppercase;border-radius:7px}
+.cfg-fam-h:hover{background:var(--bg-2)}
+.cfg-fam-name{flex:1 1 auto;min-width:0;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cfg-fam-n{flex:none;font-size:10.5px;font-weight:700;letter-spacing:0;color:var(--txt-2);background:var(--bg-3);border:1px solid var(--line-soft);border-radius:6px;padding:0 7px;line-height:1.7}
+.cfg-fam-chev{flex:none;color:var(--txt-4);transition:transform .15s ease}
+.cfg-fam.collapsed .cfg-fam-chev{transform:rotate(-90deg)}
+.cfg-fam-list{display:flex;flex-direction:column;gap:2px;padding-left:6px}
+.cfg-fam.collapsed .cfg-fam-list{display:none}
+.cfg-empty{padding:14px 10px;text-align:center;color:var(--txt-4);font-size:12px}
+/* P-IDE.1d: cold-boot "updating…" indicator next to the Model label while the live list loads */
+.cfg-loading{display:inline-flex;align-items:center;gap:5px;margin-left:auto;font-size:10px;font-weight:600;
+  letter-spacing:.3px;text-transform:none;color:var(--txt-4)}
+.cfg-loading[hidden]{display:none}
+.cfg-spin{width:10px;height:10px;border:1.5px solid var(--line-strong);border-top-color:var(--accent-2);
+  border-radius:50%;animation:cfgspin .7s linear infinite}
+@keyframes cfgspin{to{transform:rotate(360deg)}}
 /* thinking dropdown */
 .cfg-dd{position:relative}
 .cfg-dd-btn{width:100%;display:flex;align-items:center;justify-content:space-between;gap:8px;background:var(--bg-2);
@@ -693,7 +820,7 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .seg button.on.acc{color:var(--accent-2)}
 
 /* ───────────────────────── toast / popover ───────────────────────── */
-#toasts{position:fixed;right:18px;bottom:42px;z-index:80;display:flex;flex-direction:column;gap:10px;align-items:flex-end}
+#toasts{position:fixed;right:18px;bottom:42px;z-index:120;display:flex;flex-direction:column;gap:10px;align-items:flex-end}
 /* --tone: the toast's accent colour; defaults to danger so existing (classless) toasts are unchanged. */
 .toast{--tone:var(--red);--tone-tint:rgba(239,95,95,.14);--tone-h:#ffd0d0;
   width:340px;background:var(--bg-1);background-image:var(--emboss,none);
@@ -733,6 +860,9 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
     box-shadow var(--t) var(--ease),transform var(--t-fast) var(--ease-out)}
 .ctool:hover{background:linear-gradient(180deg,var(--bg-4),var(--bg-3));border-color:var(--line-strong);color:var(--txt);
   transform:translateY(-1px);box-shadow:0 4px 12px -5px rgba(0,0,0,.55),inset 0 1px 0 rgba(255,255,255,.06)}
+/* P-IDE.2: a bundled skill is active — highlight the Skills button (accent border + tint) */
+.ctool.on{border-color:var(--accent);color:var(--txt);background:var(--accent-dim)}
+.ctool.on .ic{color:var(--accent-2)}
 .ctool:active{transform:translateY(.5px) scale(.97);
   box-shadow:inset 0 2px 4px rgba(0,0,0,.3);transition-duration:var(--t-fast)}
 .ctool .ic{color:var(--txt-3);transition:color var(--t) var(--ease),transform var(--t) var(--ease-out)}
@@ -790,9 +920,29 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .modeltip .mt-rlabel{font-size:9.5px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--txt-4)}
 .modeltip .mt-rate:last-of-type{margin-bottom:9px}
 .modeltip .mt-id{font-family:var(--mono);font-size:10.5px;color:var(--txt-3)}
+/* P-IDE.1b: advisory banners in the hover card (ITAR-unavailable, gov-prototype-only) */
+.modeltip .mt-banner{font-size:11px;line-height:1.45;border-radius:7px;padding:6px 8px;margin-bottom:8px;border:1px solid var(--line-soft)}
+.modeltip .mt-banner.warn{color:var(--amber,#e0a93b);background:color-mix(in srgb,var(--amber,#e0a93b) 12%,transparent);border-color:color-mix(in srgb,var(--amber,#e0a93b) 30%,transparent)}
+.modeltip .mt-banner.gov{color:var(--txt-2);background:var(--bg-2)}
+/* P-IDE.1c: provider-route tag, shown only on rows whose model name collides across providers */
+.cfg-opt .row-prov{flex:none;font-size:9px;font-weight:600;letter-spacing:.02em;color:var(--txt-4);
+  background:var(--bg-2);border:1px solid var(--line-soft);border-radius:5px;padding:1px 5px;line-height:1.6;white-space:nowrap}
 /* inline green Intelligence-Level stars in each model row */
 .cfg-opt .row-iq{flex:none;font-size:10px;letter-spacing:.5px;line-height:1;color:var(--green);white-space:nowrap}
 .cfg-opt .row-iq .row-iq-dim{color:var(--line-strong)}
+/* P-IDE.1b: an unavailable (e.g. ITAR-blocked) model — visible but greyed + non-selectable */
+.cfg-opt.unavail{cursor:default;opacity:.5}
+.cfg-opt.unavail:hover{background:transparent}
+.cfg-opt.unavail .nm{color:var(--txt-3)}
+.cfg-opt.unavail .unavail-tag{margin-left:auto;flex:none;font-size:9px;font-weight:700;letter-spacing:.04em;
+  text-transform:uppercase;color:var(--txt-4);background:var(--bg-2);border:1px solid var(--line-soft);border-radius:5px;padding:1px 6px;line-height:1.6}
+/* P-IDE.1c: China-origin model unlock (Settings) */
+.china-unlock{display:flex;gap:8px;margin-top:9px}
+.china-unlock input{flex:1;background:var(--bg-2);border:1px solid var(--line);border-radius:8px;padding:8px 10px;
+  color:var(--txt);font-size:12.5px;font-family:inherit;letter-spacing:.08em}
+.china-unlock input:focus{outline:none;border-color:var(--line-strong)}
+.china-unlock .btn-mini[disabled]{opacity:.45;cursor:not-allowed}
+.btn-link{background:none;border:0;color:var(--accent-2);cursor:pointer;font:inherit;font-size:inherit;text-decoration:underline;padding:0}
 .modeltip .mt-eff{font-size:12px;line-height:1.55;color:var(--txt-2);margin-bottom:9px}
 .modeltip .mt-row{display:flex;gap:9px;font-size:11.5px;line-height:1.5;margin-top:5px}
 .modeltip .mt-k{flex:none;width:54px;color:var(--txt-4)}
@@ -818,21 +968,26 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
   width:28px;height:28px;border-radius:7px;display:grid;place-items:center;cursor:pointer;transition:background var(--t),color var(--t)}
 .insp-collapse:hover{background:var(--bg-2);color:var(--txt)}
 .inspector .metrics-rail{display:none}
-/* collapsed inspector = a tight metrics rail; grows to fit big numbers, bounded */
-.inspector.rail{width:fit-content;min-width:86px;max-width:176px}
+/* collapsed inspector = a tight metrics rail; grows to fit big numbers, bounded. When collapsed it
+   recedes to ~55% so it doesn't compete for attention; hovering (or expanding) brings it back. */
+/* width:fit-content + a low floor → the rail is thin when the tiles only hold short values (0, 0%)
+   and expands tightly to the widest number when one appears (e.g. 248.5k), never past max-width. */
+.inspector.rail{width:fit-content;min-width:54px;max-width:168px;opacity:.55;
+  transition:width var(--t-slow) var(--ease-out),opacity var(--t) var(--ease)}
+.inspector.rail:hover{opacity:1}
 .inspector.rail .insp-tabs,.inspector.rail .insp-body{display:none}
-.inspector.rail .metrics-rail{display:flex;flex-direction:column;align-items:stretch;gap:6px;padding:8px 7px;overflow:auto}
+.inspector.rail .metrics-rail{display:flex;flex-direction:column;align-items:stretch;gap:6px;padding:8px 6px;overflow:auto}
 .rail-expand{-webkit-app-region:no-drag;border:1px solid var(--line);background:var(--bg-2);color:var(--txt-3);align-self:center;
   width:32px;height:30px;border-radius:8px;display:grid;place-items:center;cursor:pointer;transition:background var(--t),color var(--t)}
 .rail-expand:hover{background:var(--bg-3);color:var(--accent-2)}
 .rail-tiles{display:flex;flex-direction:column;gap:6px;align-self:stretch}
-.tile{background:linear-gradient(180deg,var(--bg-3),var(--bg-2));border:1px solid var(--line);border-radius:10px;min-width:74px;
-  display:flex;flex-direction:column;align-items:flex-start;justify-content:center;gap:2px;padding:8px 11px;cursor:default;
+.tile{background:linear-gradient(180deg,var(--bg-3),var(--bg-2));border:1px solid var(--line);border-radius:10px;min-width:48px;
+  display:flex;flex-direction:column;align-items:center;text-align:center;justify-content:center;gap:2px;padding:5px 6px;cursor:default;
   box-shadow:var(--emboss,inset 0 1px 0 rgba(255,255,255,.03));
   transition:border-color var(--t),transform var(--t),box-shadow var(--t)}
 .tile:hover{transform:translateY(-1.5px);box-shadow:var(--shadow-md,0 6px 16px -8px rgba(0,0,0,.6)),inset 0 1px 0 rgba(255,255,255,.05)}
-.tile .n{font-family:var(--mono);font-size:17px;font-weight:700;line-height:1.05;white-space:nowrap;font-variant-numeric:tabular-nums;letter-spacing:-.01em}
-.tile .l{font-size:9px;color:var(--txt-3);letter-spacing:.3px;text-transform:uppercase;white-space:nowrap}
+.tile .n{font-family:var(--mono);font-size:14px;font-weight:700;line-height:1.05;white-space:nowrap;font-variant-numeric:tabular-nums;letter-spacing:-.01em}
+.tile .l{font-size:7.5px;color:var(--txt-3);letter-spacing:.2px;text-transform:uppercase;white-space:nowrap}
 .tile.g{border-color:rgba(70,210,126,.32)} .tile.g .n{color:var(--green)}
 .tile.c{border-color:rgba(70,200,220,.32)} .tile.c .n{color:var(--cyan)}
 .tile.b{border-color:rgba(94,141,242,.32)} .tile.b .n{color:var(--blue)}
@@ -850,9 +1005,9 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .set-title .ic{color:var(--accent-2)}
 .set-close{-webkit-app-region:no-drag;border:0;background:transparent;color:var(--txt-3);width:30px;height:30px;border-radius:8px;display:grid;place-items:center;cursor:pointer;transition:background var(--t),color var(--t)}
 .set-close:hover{background:var(--bg-3);color:var(--txt)}
-.set-body{flex:1;min-height:0;overflow:auto;padding:14px 16px 24px}
+.set-body{flex:1;min-height:0;overflow:auto;padding:12px 14px 20px}
 /* knowledge graph view (P9.3) */
-.kg{width:min(900px,70vw);background:var(--bg-1);border-left:1px solid var(--line-soft);display:flex;flex-direction:column;overflow:hidden;animation:slideInR var(--t-slow) var(--ease-out)}
+.kg{position:relative;width:var(--kg-w,min(900px,70vw));background:var(--bg-1);border-left:1px solid var(--line-soft);display:flex;flex-direction:column;overflow:hidden;animation:slideInR var(--t-slow) var(--ease-out)}
 .kg-tools{display:flex;align-items:center;gap:10px}
 .seg.kg-lens{display:flex;gap:3px;background:var(--bg-2);border:1px solid var(--line);border-radius:8px;padding:3px}
 .kg-lens button{-webkit-app-region:no-drag;border:0;background:transparent;color:var(--txt-3);font-size:11px;font-weight:600;padding:4px 11px;border-radius:6px;cursor:pointer;transition:background var(--t),color var(--t),box-shadow var(--t)}
@@ -866,8 +1021,42 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .kg-canvas::after{content:"";position:absolute;inset:0;pointer-events:none;background:radial-gradient(130% 100% at 50% 42%,transparent 58%,rgba(0,0,0,.32) 100%)}
 .kg-canvas:active{cursor:grabbing}
 .kg-side{width:250px;flex:none;border-left:1px solid var(--line-soft);overflow:auto;padding:14px 14px 24px}
+.kg-side[hidden]{display:none} /* only shown when a node is selected — the graph re-fits to full width */
 .kg-empty{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;color:var(--txt-4);font-size:13px;text-align:center;padding:0 36px}
 .kg-empty .ic{opacity:.55}
+/* inline Knowledge-graph unlock (passphrase under the locked message) */
+.kg-unlock{gap:10px}
+.kg-unlock>div:first-of-type{color:var(--txt-3);max-width:340px}
+.kg-unlock-field{position:relative;display:flex;width:min(320px,80%)}
+.kg-unlock-field .prov-key{flex:1;padding-right:38px;text-align:left}
+.kg-eye{position:absolute;right:4px;top:50%;transform:translateY(-50%);width:30px;height:30px;border:0;background:transparent;
+  color:var(--txt-4);display:grid;place-items:center;cursor:pointer;border-radius:7px;transition:color var(--t),background var(--t)}
+.kg-eye:hover{color:var(--txt-2);background:var(--bg-3)}
+.kg-eye.on{color:var(--accent-2)}
+.kg-unlock-btn{margin-top:2px}
+.kg-unlock-hint{display:flex;align-items:center;gap:6px;font-size:11.5px}
+.kg-unlock-hint.caps{color:var(--amber)}
+.kg-unlock-hint.err{color:var(--red)}
+.kg-unlock-note{font-size:11px;color:var(--txt-4);max-width:320px;opacity:.85}
+
+/* first-open modal (e.g. corporate-email attribution prompt) */
+.modal-ov{position:fixed;inset:0;z-index:200;display:grid;place-items:center;background:rgba(4,5,9,.6);
+  backdrop-filter:blur(3px);animation:fade var(--t) var(--ease)}
+.modal{width:min(440px,90vw);background:linear-gradient(180deg,var(--bg-2),var(--bg-1));
+  border:1px solid var(--line);border-radius:16px;padding:22px 22px 18px;text-align:center;
+  box-shadow:0 24px 60px -20px rgba(0,0,0,.7),0 0 0 1px var(--accent-dim),inset 0 1px 0 rgba(255,255,255,.05);
+  animation:rise var(--t-slow) var(--ease-out)}
+.modal-icon{width:46px;height:46px;margin:0 auto 12px;border-radius:13px;display:grid;place-items:center;
+  color:#fff;background:linear-gradient(180deg,var(--accent-2),var(--accent));
+  box-shadow:0 8px 20px -8px rgba(198,75,214,.6),inset 0 1px 0 rgba(255,255,255,.25)}
+.modal-title{font-size:17px;font-weight:650;margin:0 0 7px;color:var(--txt)}
+.modal-desc{font-size:12.5px;line-height:1.55;color:var(--txt-3);margin:0 auto 15px;max-width:380px}
+.modal-field{display:flex;margin:0 auto 4px}
+.modal-field .prov-key{text-align:center}
+.modal-err{color:var(--red);font-size:11.5px;margin:6px 0 0;min-height:14px}
+.modal-actions{display:flex;justify-content:center;gap:9px;margin-top:14px}
+.modal-actions .btn-mini{padding:6px 16px}
+@keyframes fade{from{opacity:0}to{opacity:1}}
 .kg-side-empty{display:flex;flex-direction:column;align-items:center;gap:9px;color:var(--txt-4);font-size:12px;margin-top:34px;text-align:center}
 .kg-svg{display:block;position:relative;z-index:1}
 .kg-edge{fill:none;stroke:var(--line-strong);stroke-width:1.1;opacity:.32;stroke-linecap:round;transition:opacity var(--t)}
@@ -890,29 +1079,34 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .kg-fact-meta{display:flex;align-items:center;gap:8px;margin-top:7px;font-size:10.5px;color:var(--txt-4)}
 .kg-forget{-webkit-app-region:no-drag;margin-left:auto;border:1px solid var(--line);background:var(--bg-3);color:var(--txt-3);border-radius:6px;padding:2px 7px;font-size:10px;cursor:pointer;display:inline-flex;align-items:center;gap:3px;transition:border-color var(--t),color var(--t),background var(--t)}
 .kg-forget:hover{border-color:var(--red);color:#ff9b9b;background:var(--red-dim)}
-.set-sec{margin-bottom:14px;animation:setSecIn var(--t-slow) var(--ease-out) both}
+.set-sec{margin-bottom:9px;animation:setSecIn var(--t-slow) var(--ease-out) both}
 @keyframes setSecIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
-.set-lbl{font-size:11px;letter-spacing:1.3px;text-transform:uppercase;color:var(--txt-3);margin-bottom:10px;display:flex;align-items:center;gap:8px}
+.set-lbl{font-size:11px;letter-spacing:1.3px;text-transform:uppercase;color:var(--txt-3);margin-bottom:7px;display:flex;align-items:center;gap:8px}
 /* hairline accent tick before each section label — quiet structure */
 .set-lbl::before{content:"";width:2px;height:11px;border-radius:2px;flex:none;
   background:linear-gradient(180deg,var(--accent-2),var(--accent));opacity:.55}
 .set-coll-h .set-lbl::before{content:none}
 .set-sub{text-transform:none;letter-spacing:0;font-size:11px;color:var(--txt-4)}
 /* collapsible settings section (keeps the panel short) */
-.set-coll{margin-bottom:14px;border:1px solid var(--line-soft);border-radius:11px;
+.set-coll{margin-bottom:9px;border:1px solid var(--line-soft);border-radius:11px;
   background:var(--emboss-bg,linear-gradient(180deg,var(--bg-1),color-mix(in srgb,var(--bg-1) 92%,#000)));
   box-shadow:var(--emboss,inset 0 1px 0 rgba(255,255,255,.025),0 1px 2px rgba(0,0,0,.25));
   overflow:hidden;transition:border-color var(--t),box-shadow var(--t)}
 .set-coll.open{border-color:var(--line)}
+/* Personalization section gets a quiet accent glow (it's the privacy-sensitive one). */
+.set-coll[data-sec="personal"]{border-color:color-mix(in srgb,var(--accent) 38%,var(--line));
+  box-shadow:0 0 0 1px var(--accent-dim),0 0 18px -7px color-mix(in srgb,var(--accent) 50%,transparent),
+    var(--emboss,inset 0 1px 0 rgba(255,255,255,.03))}
+.set-coll[data-sec="personal"].open{border-color:color-mix(in srgb,var(--accent) 52%,var(--line))}
 .set-coll-h{width:100%;display:flex;align-items:center;justify-content:space-between;gap:10px;background:transparent;
-  border:0;cursor:pointer;padding:12px 13px;color:inherit;text-align:left;transition:background var(--t-fast)}
+  border:0;cursor:pointer;padding:10px 12px;color:inherit;text-align:left;transition:background var(--t-fast)}
 .set-coll-h .set-lbl{margin-bottom:0}
 .set-coll-h:hover{background:var(--bg-2)}
 .set-coll-h:active{background:var(--bg-3)}
 .set-coll-chev{color:var(--txt-4);display:inline-flex;transition:transform var(--t-slow) var(--ease-out),color var(--t)}
 .set-coll-h:hover .set-coll-chev{color:var(--txt-2)}
 .set-coll.open .set-coll-chev{transform:rotate(180deg)}
-.set-coll-body{display:none;padding:0 13px 13px}
+.set-coll-body{display:none;padding:0 12px 11px}
 .set-coll.open .set-coll-body{display:block;animation:setCollOpen var(--t-slow) var(--ease-out)}
 @keyframes setCollOpen{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}
 /* skeleton shimmer while a section hydrates — calm, premium sweep */
@@ -1088,11 +1282,11 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .ws-recent-item:hover{background:var(--bg-3);border-color:var(--accent);color:var(--txt)}
 .ws-recent-item .ic{color:var(--txt-3)}
 /* in-app folder browser (Workspace → Browse) */
-.fb-scrim{position:fixed;inset:0;z-index:60;
+.fb-scrim{position:fixed;inset:0;z-index:110;/* above the IDE slide-out panel (z-index:90) so a Save-As / import browser is never hidden behind it */
   background:radial-gradient(120% 90% at 50% 0%,rgba(20,14,28,.46),rgba(5,6,10,.6));
   backdrop-filter:blur(5px) saturate(115%);-webkit-backdrop-filter:blur(5px) saturate(115%);animation:fbScrimIn var(--t) var(--ease-out)}
 @keyframes fbScrimIn{from{opacity:0}to{opacity:1}}
-.fb{position:fixed;z-index:61;top:50%;left:50%;transform:translate(-50%,-50%);width:min(560px,92vw);max-height:80vh;display:flex;flex-direction:column;
+.fb{position:fixed;z-index:111;top:50%;left:50%;transform:translate(-50%,-50%);width:min(560px,92vw);max-height:80vh;display:flex;flex-direction:column;
   background:var(--bg-1);background-image:var(--emboss,none);border:1px solid var(--line-strong);border-radius:16px;
   box-shadow:var(--shadow-lg,var(--shadow)),0 0 0 1px rgba(255,255,255,.02) inset;overflow:hidden;
   animation:fbIn var(--t-slow) var(--spring,var(--ease-out))}
@@ -1203,3 +1397,59 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 /* One-shot pop for an icon that just appeared / activated — opt in with `ic-pop`. */
 .ic.ic-pop{animation:icPop var(--t-slow) var(--ease-out)}
 @keyframes icPop{0%{transform:scale(.6);opacity:.4}60%{transform:scale(1.12)}100%{transform:none;opacity:1}}
+
+/* ── P-IDE.4 (ADR-0029): read-only Monaco IDE slide-out panel ───────────────── */
+.ide-panel{position:fixed;top:0;right:0;bottom:0;width:var(--ide-w,560px);max-width:92vw;z-index:90;
+  display:flex;flex-direction:column;background:#0b0e14;border-left:1px solid var(--line-strong);
+  box-shadow:-18px 0 44px -22px rgba(0,0,0,.75);transform:translateX(100%);
+  transition:transform var(--t) var(--ease-out);overflow:hidden}
+.ide-panel.open{transform:none}
+.ide-head{flex:none;display:flex;align-items:center;gap:8px;padding:9px 12px;border-bottom:1px solid var(--line-soft);background:var(--bg-1)}
+.ide-head .ide-ic{color:var(--txt-4);display:grid;place-items:center}
+.ide-title{flex:0 1 auto;min-width:0;font-size:13px;font-weight:600;color:var(--txt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ide-lang{flex:none;font-size:9.5px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--txt-4);
+  background:var(--bg-3);border:1px solid var(--line-soft);border-radius:5px;padding:1px 6px;line-height:1.6}
+.ide-x{margin-left:auto;flex:none;background:none;border:0;color:var(--txt-3);cursor:pointer;display:grid;place-items:center;border-radius:6px;padding:3px}
+.ide-x:hover{color:var(--txt);background:var(--bg-3)}
+.ide-body{flex:1;min-height:0;position:relative}
+.ide-body .monaco-editor{position:absolute;inset:0}
+.ide-foot{flex:none;display:flex;align-items:center;justify-content:space-between;gap:10px;padding:4px 12px;
+  border-top:1px solid var(--line-soft);background:var(--bg-1);font-size:10.5px;color:var(--txt-4);font-family:var(--mono)}
+.ide-foot .ide-ro{color:var(--amber,#e0a93b)}
+.ide-resize{position:absolute;top:0;left:0;width:6px;height:100%;cursor:col-resize;z-index:2}
+.ide-resize:hover{background:var(--accent-dim)}
+.ide-err{padding:24px;color:var(--red);font-size:13px}
+/* P-IDE.5 editing chrome: modified dot · toolbar · banner · status states · Save-As prompt */
+.ide-dot{flex:none;color:var(--accent-2);font-size:11px;line-height:1;margin-left:-3px}
+.ide-tools{display:flex;align-items:center;gap:4px;margin-left:auto}
+.ide-head .ide-x{margin-left:4px}
+.ide-tb{display:inline-flex;align-items:center;gap:4px;background:var(--bg-3);border:1px solid var(--line);color:var(--txt-3);
+  border-radius:6px;padding:3px 7px;font-size:11px;cursor:pointer;transition:background var(--t-fast) var(--ease),color var(--t-fast) var(--ease),border-color var(--t-fast) var(--ease)}
+.ide-tb:hover{color:var(--txt);border-color:var(--line-strong)}
+.ide-tb:disabled{opacity:.45;cursor:default}
+.ide-tb.danger{color:var(--red);border-color:color-mix(in srgb,var(--red) 40%,var(--line))}
+.ide-tb.danger:hover{background:color-mix(in srgb,var(--red) 16%,var(--bg-3))}
+.ide-banner{flex:none;display:flex;align-items:center;gap:10px;justify-content:space-between;padding:7px 12px;font-size:12px;border-bottom:1px solid var(--line-soft)}
+.ide-banner.warn{background:color-mix(in srgb,var(--amber) 14%,var(--bg-1));color:var(--txt)}
+.ide-banner.danger{background:color-mix(in srgb,var(--red) 14%,var(--bg-1));color:var(--txt)}
+.ide-bmsg{flex:1;min-width:0}
+.ide-bacts{display:flex;gap:5px;flex:none}
+.ide-stat{flex:none}
+.ide-stat.mod{color:var(--accent-2)}
+.ide-stat.edit{color:var(--txt-2)}
+.ide-stat.ok{color:var(--green)}
+.ide-stat.err{color:var(--red)}
+.fb.prompt{max-width:440px}
+.prompt-body{padding:14px 16px;display:flex;flex-direction:column;gap:6px}
+.prompt-lbl{font-size:11px;color:var(--txt-3)}
+.prompt-in{width:100%;box-sizing:border-box;background:var(--bg-0);border:1px solid var(--line);border-radius:7px;color:var(--txt);font-size:13px;padding:8px 10px;font-family:var(--mono)}
+.prompt-in:focus{outline:none;border-color:var(--accent-dim)}
+/* "View in IDE" affordance on chat code blocks. Anchored BOTTOM-right so it never collides with the
+   per-message copy / save-.md actions, which sit at the message's TOP-right (a code block at the top
+   of a reply otherwise stacks the two). */
+.code-ide-btn{position:absolute;bottom:8px;right:8px;top:auto;z-index:3;display:inline-flex;align-items:center;gap:5px;
+  background:var(--bg-3);border:1px solid var(--line);border-radius:7px;padding:3px 8px;font-size:11px;
+  color:var(--txt-3);cursor:pointer;opacity:0;transition:opacity var(--t-fast) var(--ease),color var(--t-fast) var(--ease);
+  box-shadow:0 2px 8px rgba(0,0,0,.35)}
+pre:hover .code-ide-btn,pre:focus-within .code-ide-btn{opacity:1}
+.code-ide-btn:hover{color:var(--txt);border-color:var(--line-strong)}

@@ -2217,6 +2217,19 @@ permission requests means we adopt Claude-Code-style Plan/Ask/Agent **without fo
   UI control; `/api/modes`.
 - **P-ACP.3** — Ask mode: the bidirectional permission round-trip (`{type:"permission"}`
   event + `/api/chat/permission` + parked-promise resolution), fail-closed on no-decision.
+- **P-ACP.4** — Stop button + prompt pre-staging. **— Built 2026-06-21.** (1) **Stop:** while a turn
+  runs, the composer Send button becomes a red Stop control. Clicking it calls a new
+  `/api/chat/cancel` → `backend.cancel()` → the ACP **`session/cancel` notification** (new
+  `ACPClient.notify()` for id-less JSON-RPC). omp aborts the streaming reply AND in-flight tool calls
+  and returns the pending `session/prompt`, so the turn's `done` fires and the UI settles. Verified
+  live: interrupt lands in ~155ms and the reply stops growing (`grewAfterStop: 0`). (2) **Pre-staging:**
+  typing + Enter while a turn is running no longer drops the input — it's queued (one slot; a newer
+  entry replaces it) and shown in a "Queued · sends when this turn ends" chip with a cancel ✕. When the
+  turn ends (naturally OR via Stop), the queued prompt auto-sends. Renderer state `state.queued` +
+  `renderQueued()`; auto-send in `send()`'s `finally`. NO contract/schema change. **Build wrinkle
+  found + fixed in verification:** the dev *server process* must be restarted to pick up `dev.ts`/
+  `acp_backend.ts` changes (page reload only refreshes the renderer bundle); an early test hit a stale
+  404 and looked like cancel was ignored.
 
 ### Open items to confirm at build time
 
@@ -2468,8 +2481,15 @@ into LucidAgentIDE:
    - `SkillDef` type with `usageCount` for frequency sorting.
    - Slash-command popup on `/` in the composer, sorted by `usageCount` descending (most-used
      first), persisted in `localStorage` under `skill_usage_counts`.
-   - Selecting a skill sets `activeSkill` and injects its `systemPrompt` via
-     `--append-system-prompt` in the volatile tail (after the cache breakpoint — invariant #6).
+   - Selecting a skill sets `activeSkill`; its `systemPrompt` is delivered as a delimited preamble
+     in the **user turn** (the volatile tail, after the cache breakpoint — invariant #6), once per
+     turn while active — the SAME path the AskSage persona / personalization recall already use in
+     `acp_backend.prompt()`. It must NOT use `--append-system-prompt`: that is a spawn-time flag that
+     lands in omp's cached SYSTEM PROMPT (the frozen-prefix region), so switching skills that way
+     would bust the KV cache or force an omp respawn per switch (dropping the ACP session).
+     `--append-system-prompt` stays reserved for the byte-stable `DELEGATION_POLICY` (ADR-0028).
+     [Review correction, 2026-06-21: the original draft said "via --append-system-prompt in the
+     volatile tail," which conflated two different locations.]
    - `/task` is a special entry: does NOT set `activeSkill`, instead appends a proforma
      template to the composer (`Subagent 1 task: ...`, `Subagent 2 task: ...`, etc.) without
      erasing existing text. Delegation flows through omp's native Task tool (ADR-0028).
@@ -2499,9 +2519,9 @@ into LucidAgentIDE:
 
 ### Integration with the invariants
 
-- **Extend omp, never fork (#1).** Skills are prompt-template injection via
-  `--append-system-prompt`. `/task` uses omp's native Task tool. IDE panel save routes through
-  omp's `write_file`. No omp fork needed.
+- **Extend omp, never fork (#1).** Skills are prompt-template injection delivered in the user turn
+  (the volatile tail), `/task` uses omp's native Task tool, and IDE panel save routes through omp's
+  `write_file`. No omp fork needed.
 - **Language boundary fixed (#2).** All new code is TypeScript in `desktop/renderer/`. No
   Python touched.
 - **Fail-closed is law (#3).** Skill user inputs (selected code, `/task` text) flow through
@@ -2511,7 +2531,10 @@ into LucidAgentIDE:
   of active skill or IDE panel state.
 - **Untrusted content delimited + late (#5).** Skill `systemPrompt` is trusted (shipped with
   the app). User content in skill turns is scanned normally. Remote skill search rejected —
-  external prompt templates would be untrusted text needing scanning.
+  external prompt templates would be untrusted text needing scanning. [Review correction: because
+  these 18 prompts are injected as TRUSTED (bypassing the untrusted-content scanner), each one must
+  be security-reviewed before shipping — a ported prompt that weakens safety would be a
+  self-inflicted bypass. Treat the prompt corpus as a frozen, audited asset.]
 - **Frozen prefix byte-stable (#6).** Skill prompts are injected in the volatile tail (after
   the cache breakpoint), never in the frozen prefix. The prefix-hash test is unaffected.
 - **Trust labels closed set (#7).** No new labels.
@@ -2523,14 +2546,117 @@ into LucidAgentIDE:
 ### Phases — one increment each (session ritual)
 
 - **P-IDE.1** — model family picker. `MODEL_FAMILIES` classification, collapsible sections,
-  search filter, CSS. Renderer-only, no contract change.
+  search filter, CSS. Renderer-only, no contract change. **— Built 2026-06-21.** Pure
+  classification/grouping extracted to `desktop/renderer/model_families.ts` (`familyOf`,
+  `groupByFamily`, `filterModels`; regex order = o-series before GPT; gateway-prefix robust;
+  unmatched → "Other") and unit-tested (`model_families.test.ts`, 15 tests). `app.ts` adds the
+  collapsible UI (`familyListHTML` + persisted collapse in `localStorage["lucid.model-fam-collapsed"]`)
+  to BOTH pickers (`openConfigPopover` + the composer `openOptionDropdown`); the family holding the
+  current selection and any family during an active search are force-expanded; empty/no-match families
+  are omitted. Hover card + row click unchanged. Verified live in the preview against real omp models:
+  27 models → 5 families (claude 12 · o-series 3 · gpt 7 · gemini 4 · rag 1), collapse-toggle +
+  persistence, cross-family search + auto-expand, empty state, no console errors.
+- **P-IDE.1b** — model picker corrections (follow-up). **— Built 2026-06-21.** Five fixes, all
+  verified live against the user's real omp catalog (which turned out to be **85 models**, not 27):
+  (1) **Show ALL models** — `curatedModels` previously kept only the curated Claude ids + AskSage,
+  silently dropping the user's **direct OAuth GPT (23) + Gemini (20)**; now it returns every model omp
+  exposes, ordered by `MODEL_ORDER` for Claude and stable otherwise (family grouping arranges the rest).
+  (2) **Collapse bug** — the family holding the selected model could never collapse (the `!hasSel`
+  guard); removed it, so collapse is fully user-driven (selected family expanded by default, collapsible,
+  persisted). (3) **Unavailable models** — `UNAVAILABLE` registry renders Fable 5 greyed + non-selectable
+  (no `data-val`) with a "Currently Unavailable" tag and an ITAR explanation in the hover card; ready for
+  the day the government clears it. (4) **AskSage-configured ordering** — when the gov gateway is
+  configured, families reorder GPT/o-series/Gemini ABOVE Claude (`ASKSAGE_FAMILY_ORDER`, via a new
+  optional `order` arg on `groupByFamily`). (5) **Gov advisory** — gov-gateway models carry a
+  "restricted to internal prototype use only until cleared" banner in the hover card. Also: **cold-start
+  responsiveness** — removed P-LOC.1's one-time startup omp respawn (it dropped the session + slowed
+  first config load; see the ADR-0031 revision) and gave the popover a snappier non-bouncy open. Render
+  measured at ~4ms for 85 rows (never the bottleneck). `model_families.test.ts` now 17 tests.
+- **P-IDE.1c** — model picker curation + data-sovereignty gating (follow-up). **— Built 2026-06-21.**
+  omp exposes no deprecation/provider metadata over ACP, so curation is rule-based + unit-tested in
+  `model_families.ts`. (1) **Deprecation (moderate, user-chosen):** drop dated-snapshot duplicates
+  (…-20251001) + `-latest` aliases, legacy Claude (3.x, 4.0/4.1; keep 4.5+) and Gemini 2.0 (keep 2.5+).
+  (2) **GPT 5.4+ everywhere** (gov AND direct) — `gptVersion()` < 5.4 dropped; o-series + gpt-oss are
+  version-less and kept. (3) **Gov-only-with-key** — gov (AskSage) models hidden unless an AskSage
+  CIV/MIL key is configured (`state.asksage.configured`). (4) **Gov at top, newest→oldest** within each
+  family (`sortGovFirstNewest` + `cmpModelsNewestFirst`; groupByFamily preserves the relative order).
+  (5) **Drop omp auxiliary models** (tab-completion, codex auto-review). (6) **China-origin gate**
+  (`isChinaModel`: DeepSeek/Kimi/Moonshot/MiniMax/GLM/Zhipu/Qwen/…) — hidden until the user types
+  ACKNOWLEDGE in a Settings → "Restricted-origin models" card (persisted via `chinaModelsAcknowledged`
+  in settings_store + `/api/china-ack`); the card renders ONLY when such a model exists (none in the
+  current catalog → forward-looking guard). (7) **Provider disambiguation** — the same model can appear
+  via multiple providers (Claude via Anthropic AND Antigravity); colliding display names get a small
+  provider tag (Anthropic/Antigravity/Codex/Gemini CLI), suppressed on gov rows (Gov pill suffices), and
+  a final dedup drops rows that would render identically. Verified live: the user's catalog curated from
+  85 → 47 models, gov-first ordering, GPT<5.4 gone, zero visual duplicates, no console errors.
+  `model_families.test.ts` now 27 tests.
+- **P-IDE.1d** — picker polish + queued-chip refinement (follow-up). **— Built 2026-06-21.** (1)
+  **Mythos 5 = Fable 5**: added to `UNAVAILABLE` (shared ITAR reason) + `MODEL_INFO`/`MODEL_CTX`, so it's
+  greyed/non-selectable with the same rich hover card. (2) **Every listed model gets a hover card**:
+  `resolveModelInfo()` falls back curated→base-id→`inferModelInfo()` (family + tier heuristic), so
+  provider-routed copies of known models inherit ratings and unknown ones still get the full card
+  framework; `modelRow` uses it too so every row shows stars + context. (3) **Cold-boot cache**: the
+  last config is persisted to `localStorage["lucid.config-cache.v1"]` and painted instantly on boot via
+  `loadCachedConfig()`; `loadConfig` now only ADOPTS the live config when omp actually returned one
+  (non-empty model options) — a not-ready/cold omp no longer blanks the cached picker — and an
+  "updating…" spinner shows while the live refresh is pending (`pickerRedraw` swaps cached→live in place
+  when it lands, dropping revoked-provider models). (4) **Family headers**: removed the leading family
+  icon, bolded the label + count (weight 700) and raised contrast (near-white). Queued chip (P-ACP.4):
+  redesigned to a compact, subdued, right-aligned pill (11px) with a "Queued" tag + a delete (✕) that
+  removes the pre-staged prompt before it sends. **Bug found + fixed in verification:** `inferModelInfo`
+  referenced `familyOf` without importing it — a runtime ReferenceError that emptied the picker; neither
+  `tsc` nor `Bun.build` flagged the undefined free variable (it became a runtime error). Verified live:
+  47-model catalog renders, every row has stars, Mythos/Fable unavailable + matching cards, bold
+  icon-less headers, queued pill + delete (deleted prompt does not send). desktop 235 pass.
 - **P-IDE.2** — slash-command skills + `/task` proforma. `skills.ts` with all 18 skills +
   `/task`. Usage-frequency sorting. Skill badge. Skills browser panel. Renderer-only, no
-  contract change.
+  contract change. **Build per the settled review findings #2/#3:** ONE unified picker (sectioned
+  "Built-in" + "Project", reusing the P-IDE.1 family-section UI), bundled prompts injected via the
+  user-turn tail (omp-native skills stay on `useSkill`), inline auditable array (no `.md` on disk),
+  each ported prompt security-reviewed as it lands. **— Built 2026-06-21.** `desktop/renderer/skills.ts`
+  ships `INSTALLED_SKILLS` (12 audited, trusted prompts — Frontend Design, Code Review, TDD, Security
+  Audit, Refactor, Debug, Write Tests, Explain, Performance, Accessibility, Session Handoff, Plan) +
+  usage-frequency sorting (`localStorage`) + the `/task` proforma. The Skills button opens ONE picker:
+  a "Built-in" section (`/task` + bundled, most-used first) and a "Project" section (omp-native via
+  `/skill:`). Activating a bundled skill stores it and the trusted prompt is delivered as an
+  `<active-skill>` preamble in the USER TURN via the persona/recall path (acp_backend `setSkill` +
+  `skillDelivered`, re-delivered on new session/respawn) — never the frozen prefix, never
+  `--append-system-prompt`; the distiller ignores it. Wiring: `/api/skill` (set/clear) + bridge
+  `setActiveSkill/clearActiveSkill`; the composer Skills chip shows the active skill + a Clear row;
+  command palette lists `/task` + bundled + project skills. Note: scoped to 12 strong prompts (not a
+  literal 18) so each got a real safety pass (review finding #3) — more can be added the same way.
+  Verified live: unified picker (12 built-in + 2 project), activation → chip "Code Review" + backend
+  round-trips the active name, `/task` appends the template, Clear resets both, no console errors.
 - **P-IDE.3** — skill telemetry event. `skill_activated` in `contracts.ts` + emit route.
-  Frozen-contract sub-increment.
+  Frozen-contract sub-increment. **— Built 2026-06-21.** Added `skill_activated` to `EVENT_NAMES`
+  (frozen contract). New `desktop/skills_log.ts` `recordSkillActivated({command,name,source})` emits via
+  the canonical `Telemetry` class (validated against the enum) — METADATA ONLY, never user content — to
+  an append-only NDJSON (`~/.omp/lucid-events.ndjson`), since the GUI can't co-write agent_obs.duckdb
+  (the omp child holds it), mirroring `security_log.ts`. New `POST /api/skill/activated` + bridge
+  `skillActivated`; the renderer fires it on bundled activation, project `useSkill`, and `/task`
+  (source: bundled|project|task). Verified: 3 unit tests; live activation of Security Audit + /task
+  appended valid `skill_activated` events with correct metadata. desktop 238 · harness 403 · typecheck
+  clean (3 projects).
 - **P-IDE.4** — Monaco vendor + IDE panel scaffold (read-only). Vendored ESM, slide animation,
-  dark theme, "View in IDE" buttons, resize handle. No editing, no save, no pop-out.
+  dark theme, "View in IDE" buttons, resize handle. No editing, no save, no pop-out. **— Built
+  2026-06-21.** Monaco 0.55 added as a desktop dep; its AMD `min/vs` (~16MB) is served LOCALLY from
+  node_modules via a guarded dev.ts route (`/vendor/monaco/*`, `pathWithin` traversal guard) — airgap-
+  clean WITHOUT committing 16MB; packaged builds get it via electron-builder `files`
+  (`node_modules/monaco-editor/min/**`). `desktop/renderer/ide_panel.ts` lazy-loads Monaco via its AMD
+  loader on first open (never bloats app.js), creates a `readOnly` editor with a lucid-dark theme,
+  slides in over the inspector (`transform: translateX`), header (title + language chip + close), footer
+  (live Ln/Col + "Read-only"), and a drag resize handle (persisted width). "View in IDE" buttons are
+  injected onto chat code blocks post-render (DOMPurify forbids `<button>` inside sanitized markdown) and
+  open the panel via a delegated handler that reads the code + language from the block. Right-edge
+  exclusivity: opening the IDE closes Settings + KG and vice-versa. **Worker note (ADR review #4):** a
+  read-only viewer needs NO language-service worker (highlighting is main-thread); Monaco 0.55's worker
+  is a hashed AMD chunk that's fragile to wire under our strict CSP (`script-src 'self'`, no blob), so
+  the viewer uses the main-thread fallback and silences ONLY Monaco's benign "could not create web
+  worker" notice — real workers are deferred to the read-write phase (P-IDE.5), exactly as the review
+  anticipated. CSP gained `worker-src 'self'` + `font-src 'self'`. Verified live: editor renders +
+  highlights TS/Python/Rust/Go, footer tracks the cursor, close + exclusivity + injected buttons work,
+  zero console errors/CSP violations. desktop 238 · typecheck clean (3 projects). Packaged-build worker
+  verification still pending (couldn't build a packaged app in this environment).
 - **P-IDE.5** — IDE panel read-write + pop-out + save-through-omp. Edit toggle, Save via
   `write_file`, Send to Chat, pop-out, modified-dot, file-conflict banner.
 - **P-IDE.6** — polish + integration tests. Cross-feature flows, source attribution, end-to-end
@@ -2555,6 +2681,44 @@ into LucidAgentIDE:
   existing Task tool.
 - **Deferred:** remote skill search/install (rejected for airgap); skill-specific tool
   definitions; IDE panel file-explorer (omp already manages files).
+
+### Review findings (2026-06-21, before building)
+
+Correctness/clarity fixes applied above, plus open items to resolve in the relevant phase:
+
+1. **Injection mechanism (fixed in Decision #2 / invariant #1).** Skill prompts ride the user-turn
+   tail (persona/recall pattern), NOT `--append-system-prompt` — see the inline correction.
+2. **Two skill surfaces (resolve in P-IDE.2).** LucidAgentIDE already surfaces omp's native skills
+   (`/api/skills` → `listSkills()`, the composer Skills button, `useSkill`). The 18 bundled
+   `INSTALLED_SKILLS` would be a SECOND, parallel system. Reconcile before building: either present
+   one unified picker (bundled + omp-native, sectioned by source) or ship the 18 as bundled omp skill
+   files so there is a single discovery path. Don't ship two competing skill lists.
+   **— Settled 2026-06-21: ONE unified picker, two delivery mechanisms behind it.** The existing
+   composer Skills popup becomes the single discovery surface, listing both sources in labelled
+   sections — "Built-in" (the 18 bundled) and "Project" (omp-native from `listSkills()`). The picker
+   reuses the SAME family-section UI pattern just shipped for the model picker (P-IDE.1:
+   `model_families.ts` collapsible sections), so there is one interaction model across pickers.
+   Internally: bundled skills inject their `systemPrompt` via the user-turn tail (the persona/recall
+   path in `acp_backend.prompt()`), while omp-native skills keep going through omp's existing
+   `useSkill`/`/api/skills` path — an implementation detail, NOT a second list. We do NOT ship the 18
+   as `.md` files on disk (keeps the ADR's inline, auditable, airgap-clean array — see the alternatives
+   table) and we do NOT reimplement omp's native skill discovery. This satisfies "single discovery
+   path" (#2) without forking omp (#1) or adding a file-discovery surface. The bundled badge in each
+   card shows its source for transparency (#6 polish).
+3. **Trusted prompt corpus (noted in invariant #5).** The 18 ported prompts are injected as trusted;
+   audit each before shipping and treat the corpus as a frozen, reviewed asset.
+   **— Settled 2026-06-21:** P-IDE.2 ports the 18 prompts ONE pass at a time, and each is
+   security-reviewed as it lands (no prompt that weakens the safety/trust-boundary rules ships). The
+   corpus becomes a frozen, reviewed asset: changing a bundled prompt is its own reviewed change, the
+   same discipline as the frozen prompt prefix. Bundled-skill text is TRUSTED (injected without the
+   untrusted-content scanner); USER content in a skill turn is still scanned by the gate as normal.
+4. **Monaco airgap (P-IDE.4).** Vendoring the Monaco ESM is necessary but not sufficient — its web
+   workers fetch separate scripts. Set `self.MonacoEnvironment.getWorker` to local vendored worker
+   bundles, or the editor breaks offline / in the standalone build. Verify in a packaged build.
+5. **Right-panel exclusivity (P-IDE.4/5).** The IDE slide-out shares the right edge with the
+   inspector, Settings, and the Knowledge-graph panels (all `data-rail`/aside surfaces). Make them
+   mutually exclusive (open one closes the others) and coordinate z-index, mirroring how Settings/KG
+   already auto-collapse the sessions sidebar, so panels never overlap.
 
 ## ADR-0030 — Code activity dashboard: lines-of-code metric + monthly workspace ledger
 
@@ -2652,9 +2816,16 @@ export function codeActivity(opts?: { workspaces?: string[] }): CodeActivity
 Implementation:
 - For each known workspace (from omp's `projects` config or explicitly passed), run
   `git log --since="<month-start>" --until="<month-end>" --numstat --pretty=format:""` and
-  parse the output for per-file add/delete counts.
-- Aggregate by workspace. Deduplicate files (same file edited multiple times counts as 1).
-- Match workspace paths to omp session `cwd` to attribute spend from the usage ledger.
+  parse the output for per-file add/delete counts. [Review correction: spawn git with an ARGS
+  ARRAY, never a shell string (no injection via paths/refs); confine each workspace path with the
+  existing `pathWithin` containment (ADR-0022/0023) before running git on it; apply an exec timeout.
+  Add a pathspec to exclude vendored/generated/lockfiles so the metric reflects real source, not
+  dependency churn: `-- . ':(exclude)node_modules' ':(exclude)vendor' ':(exclude)dist'
+  ':(exclude)*.lock' ':(exclude)*.min.*'`.]
+- Aggregate by workspace. Deduplicate files (same file edited multiple times counts as 1); handle
+  rename rows (`{old => new}`) and the blank lines `--pretty=format:""` leaves between commits.
+- Match workspace paths to omp session `cwd` to attribute spend from the usage ledger (an ESTIMATE —
+  a session may touch files outside its cwd).
 - Exposed via `GET /api/code-activity` from `dev.ts`.
 
 **Why git instead of omp tool_call parsing:** omp's `tool_call` events record the content
@@ -2716,3 +2887,511 @@ are git repos (the FsList type checks `isGit`).
 - **New bridge type:** `CodeActivity` interface in `bridge.ts`.
 - **Deferred:** Historical trending (DuckDB table), per-commit attribution (which AI session
   produced which commit), branch-level breakdown.
+
+### Review findings (2026-06-21, before building)
+
+1. **Attribution honesty (must fix the framing).** `git log --since=<month>` counts EVERY commit in
+   the repo — your own commits, other contributors, merges, `git pull`s, vendored deps, generated
+   files — so it cannot equal "what the AI agent produced." v1 must be labeled as **workspace / repo
+   activity this month**, NOT AI authorship. The "what the AI agent actually produced" wording in
+   Context is the inaccuracy to correct. Real AI attribution (commit author/marker for omp commits,
+   or intersecting commit times with agent-session windows) stays the deferred item — but the v1 UI
+   label and tooltip must not overclaim.
+2. **Safe git invocation (security).** This adds an external-process surface on the hardened local
+   control plane (ADR-0022/0024): spawn git with an args array (no shell), `pathWithin`-confine each
+   workspace path, and add an exec timeout. (Folded into Decision #3 above.)
+3. **Exclude dependency churn.** Pathspec excludes for node_modules/vendor/dist/lockfiles/minified, or
+   one committed `node_modules` swamps the line counts. (Folded into Decision #3.)
+4. **Perf claim nit.** `--numstat` computes per-file diffs; it does NOT just "read the pack index."
+   Fine for a month of history with the 30s cache, but the justification is inaccurate.
+5. **Merges.** `git log --numstat` shows no numstat for merge commits by default → merge churn is
+   silently excluded (acceptable; note it).
+
+### Future direction: premium BI add-on (separate private repo)
+
+High-level seam ONLY in this repo; the real PRD + scaffolding/IaC live in the private add-on repo
+(`mlcyclops/lucidagentIDEaddon`) to keep that IP separate.
+
+- **Seam:** `codeActivity()` + the existing observability/ledger data (`usageLedger()`,
+  `memorySnapshot()`, security/lineage) already expose stable, read-only JSON over the local
+  `/api/*` surface. That JSON shape is the integration contract a future **premium MCP server**
+  (built privately) would consume — it does NOT require changes to LucidAgentIDE's core beyond
+  keeping those payloads stable and versioned.
+- **Add-on (private repo, to be developed):** a paid MCP-server add-on that exports this
+  observability/code-activity data into enterprise BI surfaces — GCC-High Power BI / Power Apps,
+  Google Looker, AWS QuickSight, self-hosted Kibana, a SharePoint dashboard, and a standalone
+  single-HTML CIO/CFO dashboard that renders the MCP payload — shipped with Terraform/IaC + config
+  per target. Authored as separate, licensable IP; this repo stays add-on-agnostic (it just emits
+  the data an authenticated MCP client can read). See the private repo's PRD for the full design.
+- **Attribution identity (built in core; high level here).** Every metric carries an attribution
+  identity so it rolls up + pushes traceably. Resolution, highest-assurance first: verified MCP-auth
+  identity (X.509 client-cert subject via corporate CA / SPIFFE, or OAuth/OIDC claim — reusing the
+  ADR-0020 IdP groundwork) → configured corporate email (Profile) → **workstation hostname** when the
+  user skips the email prompt. Core implements the email/workstation tiers (Settings → Profile +
+  first-open prompt with a Skip that records the hostname; `settings_store.attribution()`); the MCP
+  add-on adds OAuth + **X.509 workload identity** (import a corporate-CA cert or generate a CSR via
+  EST/SCEP/ACME) and OVERRIDES the local tag with the verified principal for non-repudiable exec/
+  compliance reporting. Full auth model: private repo `docs/identity-and-auth.md`. Fail-closed; the
+  metadata-only / CUI-excluded invariant holds regardless of identity.
+- **Enterprise-managed config (capability built in core; high level here).** Admins can deploy a
+  read-only policy file (GPO / Intune / JAMF / MDM) to a machine-wide, admin-only path
+  (`%ProgramData%\LucidAgentIDE\managed-config.json`, `/Library/Application Support/…`, `/etc/…`, or
+  the `LUCID_MANAGED_CONFIG` env). `desktop/managed_config.ts` reads it at startup and ENFORCES org
+  policy — currently the attribution policy (`requireEmail`, `allowSkip`, `allowedEmailDomains`) +
+  `orgName` + `asksageOnly`, validated server-side in `/api/settings` and reflected in the UI (no
+  Skip, org-branded prompt, "Managed by …"). Security model: the file lives in an admin-only path (a
+  non-admin cannot forge policy; POSIX rejects group/world-writable; Windows relies on the dir ACL);
+  it only ever ADDS constraints, never relaxes the gate; absent/malformed ⇒ unmanaged (safe default).
+  Schema is extensible (pinned MCP servers, locked workspace roots, BI endpoint to come). The tested
+  policy TEMPLATE + the GPO/Intune/MDM deployment runbook live in the private repo
+  (`managed-config/`); this repo holds only the consuming capability.
+
+## ADR-0031 — AI-LOC attribution: count AI-authored lines at the gate, per model/repo/identity
+
+**Date:** 2026-06-21
+**Status:** Accepted
+**Context increment:** P-LOC.1
+
+### Context
+
+ADR-0030 builds a code-activity dashboard from `git diff --stat`. Git answers "how much did
+this repo change," but it **cannot honestly attribute authorship to a model** — a single
+commit blends AI edits, human edits, merges, formatters, and generated files, and the commit
+author is the human, not the model. The user's actual ask is per-**model** attribution: "how
+many lines did each AI model write, per repo, attributed to a person." Git is the wrong
+source for that metric (ADR-0030 itself flags this); the right source is the moment the AI
+authors an edit and it passes our security gate.
+
+We already gate **every** tool call in-process, fail-closed (`security_extension.ts`), and omp
+emits a rich `tool_result` for its file-mutation tools — `write` (`{path, content}`) and
+`edit` (all four modes: the default `hashline`, plus `replace`, `patch`, `apply_patch`). The
+`edit` result carries `EditToolDetails.diff` — omp's **post-apply** unified diff of the change
+actually made (line-numbered rows like `+42|code`). That is the authoritative "the AI wrote
+these lines" signal, available exactly where we already sit.
+
+### Decision
+
+1. **Count at the gate's `tool_result` hook**, from omp's own post-apply signal — not git,
+   not the model-specific input. A successful `edit` is counted from `details.diff` /
+   `details.perFileResults[].diff`; a `write` is counted from `input.content`. Because we read
+   the *result*, one counter covers all edit modes (incl. the default hashline) and we never
+   over-count failed edits (a hashline hash-mismatch / no-match edit returns `isError`).
+   Counting is a PURE module (`harness/runs/loc_count.ts`), over-tested as a keystone: the
+   diff counter is robust to both omp's numbered format and plain unified diffs (`+`/`-` at
+   column 0, excluding `+++`/`---`). `write` records `removed=0` (we lack the prior file; the
+   honest claim is "lines authored," not churn).
+2. **New frozen table** `ai_loc_ledger` (migration 0007): one row per file touched, with
+   `model`, `identity`, `identity_source`, `repo`, `file_path`, `tool`, `added_lines`,
+   `removed_lines`. `aiLocRollup()` groups by `(model, repo, identity)` for the dashboard and
+   the future BI add-on push. New `EventName` `ai_edit_recorded` (frozen-contract change, part
+   of this increment).
+3. **Attribution context via env at spawn.** omp can't observe env changes after it execs, so
+   the IDE sets `LUCID_MODEL` / `LUCID_IDENTITY` / `LUCID_IDENTITY_SOURCE` / `LUCID_REPO` before
+   spawning `omp acp`; the in-process gate reads them. Identity is the ADR-0030 attribution
+   identity (corporate email, or the workstation-name fallback). Model is seeded from the
+   persisted last value; once omp reports its active model (`model` config option), the backend
+   persists it and updates `process.env` so the NEXT spawn (and any later respawn — key change,
+   "Refresh models") is exact. **[Revised under P-IDE.1b, 2026-06-21]:** the backend does NOT force a
+   respawn to reconcile the model. The original design respawned omp once if the spawn-time model
+   differed; that drops the ACP session and slows cold start for a best-effort metric, so it was
+   removed. Net effect: in a brand-new install's FIRST session, edits made before the model is learned
+   record model `unknown`; every session after that (model now persisted) is exact.
+4. **Best-effort, never security-bearing.** Recording an edit is fire-and-forget in the gate;
+   a DB-lock / open failure simply skips the row (verified: it no-ops, fail-safe). It NEVER
+   influences the fail-closed decision.
+
+### Consequences / constraints
+
+- **Live model switching (known limitation):** because the child reads `LUCID_MODEL` at spawn, a
+  *live* in-session model change (`setConfig("model")`) updates the persisted value + `process.env`
+  for the next spawn but does NOT re-tag the running session — edits after a live switch carry the
+  prior model until omp next respawns. We accept this rather than respawn-on-switch (which would drop
+  the conversation/session and is a heavy cost for a best-effort metric). If exact live-switch tagging
+  is ever required, the right fix is a live side-channel the gate re-reads per edit (e.g. a small model
+  file written by the backend), NOT a session-dropping respawn.
+- **Supersedes git for the AI-authored metric.** ADR-0030's `git diff --stat` stays as the
+  *repo-activity* view (total human+AI+tooling churn); ADR-0031 is the *AI-authored* view.
+  The dashboard surfaces both, clearly labelled — never conflated.
+- The ledger lives in the same observability DB (`agent_obs.duckdb`) as telemetry/lineage; the
+  `repo` column distinguishes edited workspaces (which differ from the DB's own location).
+
+### Built P-LOC.2 (2026-06-21) — dashboard surface
+
+The read side of AI-LOC. `tools/memory_data.ts` adds `aiLocSummary()` — a READ_ONLY DuckDB roll-up of
+`ai_loc_ledger` (totals + per-model + per-(model,repo,identity), distinct identities), opened read-only
+so it coexists with the live gate's write lock and degrades to null when the table is absent (no edits
+yet). It is folded into the existing `MemorySnapshot` (no new endpoint/fetch) and rendered in the
+Memory tab as an "AI-authored code" accordion: +added/−removed totals, a per-model table, and a
+by-repo·identity breakdown (corporate email vs. the workstation-name fallback, marked `⌂`). Verified
+live in the preview with seeded rows: totals/per-model/per-repo math exact, attribution + workstation
+marker correct, card hidden when the table is empty, no console errors. Renderer + read-only reader
+only — no schema/contract change beyond ADR-0031's frozen 0007 table.
+
+## ADR-0032 — Revert isolate-writes steer: the agent builds files directly (bug fix)
+
+**Date:** 2026-06-21
+**Status:** Accepted
+**Context increment:** fix (frozen-prefix change, PREFIX_VERSION 3 → 4)
+
+### Context
+
+User report: "the Agent not building a file." Investigation: the security gate's block log
+(`~/.omp/lucid-blocks.jsonl`) showed NO write/edit block, so the gate was not stopping the write —
+the file simply wasn't landing in the workspace. Root cause traced to ADR-0028 (P-TASK.3/4), which
+(a) enabled omp task isolation (`harness/omp/acp_config.yml`: `mode: auto`, `merge: patch`) and (b)
+added a `DELEGATION_POLICY` line steering the model: "when a delegated subtask will EDIT files … spawn
+it ISOLATED so its changes are captured as a reviewable patch."
+
+So a delegated file-build ran in an ISOLATED copy and came back as a patch. But LucidAgentIDE has **no
+patch-review/apply UI**, and the Windows isolation→merge path (projfs/block-clone/rcopy + `git apply`)
+is fragile and can fail silently. Net effect: the agent "built" the file in a throwaway workspace and
+it never appeared on disk — exactly the reported bug. Isolation was meant as a blast-radius layer, but
+the in-process, fail-closed security gate (which scans EVERY tool call) is the actual load-bearing
+protection; isolation was an extra that, here, broke the product's core function.
+
+### Decision
+
+1. **`DELEGATION_POLICY` rewritten** (frozen prefix layer 3, also delivered live via
+   `--append-system-prompt`): the agent now APPLIES FILE EDITS DIRECTLY in the workspace with its own
+   write/edit tools (gate-scanned), and isolation is reserved for running UNTRUSTED/risky code, NEVER
+   for creating or editing files. Delegation is still encouraged for read-only exploration/research/
+   triage (context-window + cache efficiency) — and a delegated build subagent also writes directly.
+   `PREFIX_VERSION` 3 → 4 (deliberate cache-busting prefix change; the self-consistent prefix-hash
+   test still passes).
+2. **Task isolation DISABLED** (`acp_config.yml`: `mode: none`). With isolation off, a `task` subagent
+   runs in the REAL workspace, so its writes land where the user sees them — even if the model still
+   attempts an isolated spawn.
+
+### Consequences
+
+- Restores reliable file-building; writes are still fully gate-protected (fail-closed, in-process).
+- Blast-radius isolation is deferred until (a) a patch-review/apply UI exists and (b) the chosen
+  backend's merge is verified reliable on Windows. Re-enabling is a one-line config + policy change.
+- Supersedes the ADR-0028 P-TASK.3/4 "isolate write/exec subtasks" decision (kept in history); the
+  P-TASK lineage bookkeeping (task_gate.ts, subagent_dispatched/result_gated) is unaffected.
+
+## ADR-0033 — Build / anti-over-refusal policy: stop models declining buildable tasks (bug fix)
+
+**Date:** 2026-06-21
+**Status:** Accepted
+**Context increment:** fix (frozen-prefix change, PREFIX_VERSION 4 → 5)
+
+### Context
+
+User report (screenshot): asked the agent (Gemini 3.1 Pro) to "reimage the game killer rabbit as a
+single HTML file ... amazing graphics, music, and easy playability, put it in the OSP-Tests folder."
+The model FLATLY REFUSED: "I cannot create a fully functional game ... My capabilities are limited to
+code manipulation, file system operations, and text-based interactions. I cannot generate rich media
+content ...". This is over-refusal: a self-contained HTML game (canvas graphics + Web Audio music +
+requestAnimationFrame + inline JS) is ORDINARY CODE the agent writes — not external media it must fetch.
+The restrictive phrasing was NOT in our prompt (grep-confirmed); the model invented the limit. ADR-0032
+(the concurrent revert of the isolate-writes steer) fixed file-STRANDING; this is a different failure —
+the model declining to even attempt the build.
+
+### Decision
+
+Add a `BUILD_POLICY` block to the frozen prompt prefix (layer 3, alongside `DELEGATION_POLICY`) that
+explicitly affirms full build capability and forbids capability-based refusal of buildable work: a
+self-contained app/game/visualization as one HTML file is code (canvas/SVG/CSS graphics, Web Audio
+sound, rAF animation, inline JS — no external assets); deliver a complete working result and write it to
+the requested location; ask a clarifying question only when genuinely ambiguous, never to avoid work.
+Bump `PREFIX_VERSION` 4 → 5 (deliberate cache bump). Like `DELEGATION_POLICY`, `BUILD_POLICY` is
+exported and also delivered to the live omp ACP chat via `--append-system-prompt` (acp_backend appends
+`DELEGATION_POLICY` + `BUILD_POLICY`), since omp owns its own system prompt on that path.
+
+### Verification
+
+Live in the preview with the SAME model that refused (Gemini 3.1 Pro, `google-antigravity/gemini-3.1-pro`)
+and the SAME prompt: the refusal was gone — the model designed ("Designing the Killer Rabbit Game ... a
+single-HTML-file game") and BUILT it, writing `OSP-Tests/killer-rabbit.html` (a real game: 7× canvas,
+Web Audio `AudioContext`, `requestAnimationFrame`, Monty Python "Caerbannog"/"Killer Rabbit" theme).
+prefix-hash test green at v5; harness 403 pass; desktop 235 pass; typecheck clean (3 projects).
+
+### Consequences
+
+- One-time KV-cache bust on the v5 bump (by design). The prefix-hash test is behavior-based (asserts
+  stability across requests + that versions differ), so it needed no value update.
+- Guidance is model-agnostic; it helps any over-cautious model, not just Gemini. It does not weaken the
+  safety/trust-boundary layers (layer 4 untrusted-content rules are unchanged).
+
+## ADR-0034 — Onboard the modern (sharded) ChatGPT data export
+
+**Date:** 2026-06-21
+**Status:** Accepted
+**Context increment:** P-IMP.1
+
+### Context
+
+A real OpenAI account export (669 MB unzipped) was inspected to scope ChatGPT→LucidAgentIDE
+onboarding. Shape, by bytes: `conversations-000.json … -004.json` (5 shards, 21 MB, **420
+conversations / 5,591 message nodes**) carry all the signal; `chat.html` (15 MB) is a derived
+duplicate; the 793 MB of `*.dat` are renamed binary assets (~586 voice WAVs, ~90 JPEG
+images, a few PDF/DOCX), mapped back to real names by `conversation_asset_file_names.json`.
+
+Two findings drove the design:
+1. **The export is sharded.** Modern exports have **no single `conversations.json`** — history
+   is split across `conversations-NNN.json`. The existing import pipeline (ADR-0010/0012/0023/0025,
+   P9.7) only ever resolved one named file, so it rejected a real 2026 export as an "ambiguous
+   directory" — the single thing blocking onboarding. The gated distiller, scanner gate, encrypted
+   store, KG view, and the in-app "Import history" button (folder browser → `personalImport`) all
+   already existed and were unchanged.
+2. **Voice is already transcribed in the JSON.** Voice turns arrive as `multimodal_text` with
+   `audio_transcription` parts carrying `.text` (1,280 of them, ~114 K tokens). The 586 WAVs are
+   therefore **redundant for the knowledge graph** — no Whisper/transcription compute is needed; the
+   existing `partsText` reader already folds these into the user's words.
+
+### Decision
+
+Make the *existing* gated import shard-aware — extend, never fork (invariant #1); no new language
+(invariant #2); same fail-closed gate (#3, #5) and the same suspicious-source promotion gate
+(keystone #2). Three small, pure, over-tested additions:
+- `unzip.ts`: `readZipEntriesMatching(buf, predicate)` — decompress **every** matching entry in one
+  central-directory pass (pull all shards from a `.zip`).
+- `import_adapters.ts`: `isConversationShard(basename)` (`conversations(-NNN)?.json`, case-insensitive)
+  + `mergeConversationShards(shards)` (concatenate shard arrays in order; skip non-arrays so one bad
+  shard can't abort an import). The merged array flows through the unchanged
+  `detectVendor → parseExport → importConversations` path.
+- `personal.ts`: `loadExportData(raw)` — a shard-aware sibling of `loadExportText` that gathers +
+  merges shards from a folder **or** a `.zip` (loose or nested), falling back to the legacy
+  single-file resolution (`conversations.json` / `MyActivity.json` / lone `.json`). Same TOCTOU-safe
+  read discipline as `loadExportText` (one read per resource, classify by error code; js/file-system-
+  race-safe per ADR-0025). `importChatExport` now calls it instead of `loadExportText` + `JSON.parse`.
+  `loadExportText` is retained (its ADR-0025 contract test is unchanged).
+
+No new EventName, no schema migration, no frozen-prefix change.
+
+**Two ingestion methods, documented for the user (not both built — the deterministic path is the
+default; the model path is the existing opt-in "AI" checkbox):**
+- *Deterministic / heuristic (free, ~0 tokens):* the loader+gate+heuristic distiller. Structural
+  facts ≈ 100 % accurate, zero hallucination; near-zero recall on narrative facts and no relationship
+  inference — a skeleton, not the connective tissue.
+- *AI extraction (opt-in `modelExtractor`, capped 500 msgs):* high recall on semantic
+  facts/relationships at ~3–8 % hallucination — recommended scope is the high-signal slice (user text
+  + transcripts ≈ 190 K input tokens), each fact carrying a source turn and still passing the
+  promotion gate. Don't feed assistant boilerplate + chain-of-thought (`thoughts`/`reasoning_recap`,
+  1,569 nodes) — that's the bulk of the ~1 M-token full corpus and almost all noise.
+
+### Verification
+
+Deterministic loader+parser on the **real** export: 5 shards → **420 conversations / 1,952 user
+messages (~109 K tokens, voice transcripts included) in 98 ms**. Full gated pipeline on the real
+content into a throwaway temp store (random key — the user's encrypted store was never touched):
+**1,952 messages scanned through the real fail-closed scanner in ~1 s, 1 blocked (a genuine
+finding), 100 facts learned** by the free heuristic — confirming both the gate at scale and the
+documented entropy tradeoff (heuristic facts are free + zero-hallucination but noisy). New unit
+tests: shard detection/merge, merged-shard parse, the `audio_transcription` capture path,
+`readZipEntriesMatching` (multi-entry zip), and `loadExportData` folder/zip/legacy/missing cases.
+**harness 408 pass, desktop 242 pass, typecheck clean (3 projects).**
+
+### Consequences
+
+- A real 2026 ChatGPT export folder (or its `.zip`) now imports directly via the existing UI —
+  Enable personalization → set passphrase → Knowledge graph → **Import history** → pick the export
+  folder. The live UI walk-through requires the user's passphrase, so it was proven at the
+  pipeline/real-data level rather than by writing to the real store.
+- The 793 MB of media `.dat` is intentionally **not** ingested: voice is already transcribed in the
+  JSON, and images/PDFs would need OCR/vision (a future opt-in), not raw bytes.
+- Per-shard parse is tolerant (a corrupt shard is skipped, not fatal) and never silently truncates —
+  `ImportSummary` continues to report `messages`/`learned`/`blocked`/`skipped`.
+
+### Addendum — live UI walkthrough (2026-06-22)
+
+Drove the full import through the actual UI in an **isolated** preview so the user could test + give
+feedback without touching their real store (one already existed: `~/.omp/lucid-personal.kg.enc`,
+verified byte-identical before/after). Three small fixes fell out of doing it for real:
+- **`LUCID_PERSONAL_DIR` override** (`settings_store.ts` `personalBaseDir()`): relocates the whole
+  personalization artifact set (store, CUI store, audit, exports) as one unit; default `~/.omp`
+  unchanged. Mirrors the existing `LUCID_PERSONAL_STORE_PATH` the seeder already reads. Override-only;
+  it moves WHERE the encrypted file lives, never WHETHER content is gated. Enabled a fully isolated
+  demo server (separate store dir) so the walkthrough never risked the real store.
+- **`setupPersonal`/`setupCui` now `mkdir -p` the store dir** before `createWithPassphrase` (which
+  uses a bare `writeFileSync`). Latent gap: invisible while `~/.omp` always pre-existed, but a fresh
+  override dir made setup fail silently. Now first-run is robust anywhere.
+- **Import tooltip** updated: "just pick the unzipped export FOLDER (a modern ChatGPT export has no
+  single conversations.json — it ships conversations-000.json … and we merge them)". The old text
+  pointed users at a `conversations.json` that no longer exists — the exact onboarding confusion.
+
+UX feedback captured for later: the Personalization settings section is a **collapsed** accordion by
+default, so a brand-new user may not discover enable→passphrase without expanding it; and the free
+heuristic splits compound self-statements into lowercased fragments ("rust for systems work") — the
+opt-in AI extractor is the quality path.
+
+**Verification (live):** isolated demo server → enable → passphrase → KG → Import history → folder
+browser → picked the synthetic sharded export → audit logged `personal_facts_imported`
+{vendor:openai, conversations:4 (both shards merged via the picker), messages:5, learned:3,
+blocked:0}; the graph rendered the imported nodes. Real store confirmed untouched; demo artifacts
+torn down. Tests added for the override + base-dir defaults; harness/desktop suites green, typecheck
+clean, renderer bundle builds.
+
+### Related fix — IDE viewer (ADR-0029 / P-IDE.4)
+
+The user hit "Couldn't load the editor" on **View in IDE**, and the button overlapped the per-message
+copy / save-`.md` actions. Root causes + fixes:
+- **Overlap:** `.code-ide-btn` was `top:6px;right:8px` inside the `pre`, colliding with the message
+  actions at the message's top-right. Moved to the pre's **bottom-right** (with a drop shadow) — a
+  measured 65px clear of the message actions.
+- **"Couldn't load":** the load path itself is sound (verified Monaco loads + an editor renders in a
+  fresh server), so the user's failure was a **stale dev server started before the `/vendor/monaco`
+  route shipped** (`loader.js` 404 → `loader.onerror`). The real bug it exposed: `loadMonaco` cached
+  the in-flight promise but never cleared it on failure, making one transient miss permanent until a
+  full reload. Now failure nulls the cached promise so reopening retries; the error message says so.
+
+## ADR-0035 — ChatGPT-import onboarding: first-run nudge + AI-default with a token/time warning
+
+**Date:** 2026-06-22
+**Status:** Accepted
+**Context increment:** P-IMP.2
+
+### Context
+
+Live walkthrough of ADR-0034's import surfaced two onboarding gaps the user asked to close:
+1. The **Personalization** settings section is a collapsed accordion by default — a brand-new user
+   may never find enable→passphrase, so the import they came for is undiscoverable.
+2. The free heuristic splits compound self-statements into lowercased fragments ("rust for systems
+   work"); the opt-in AI extractor is the quality path, but it was off by default and gave the user no
+   sense of its cost (it makes one *sequential, paid* model call per message, capped at 500).
+
+(Also corrected: a verification claim of "18 graph nodes" was a bad DOM count — the renderer emits
+several SVG primitives per node; the real graph was 3 nodes / 2 edges, matching `learned:3` and the
+co-occurrence rule that only links facts from the *same* message.)
+
+### Decision
+
+A renderer-led onboarding increment plus one read-only server endpoint — no gate/contract/schema
+change, no new EventName:
+- **First-run nudge + expand-until-configured** (`app.ts`): on boot, if personalization is
+  unconfigured, keep the Personalization section expanded (`SET_OPEN`) every launch and show a
+  ONE-TIME nudge toast ("Make LucidAgent yours") whose CTA opens Settings scrolled to the section.
+  The toast is gated by a `localStorage` flag; the expansion is tied to the unconfigured state (not
+  the flag), so it persists until setup but never nags.
+- **AI default on first import + token/time warning** (`app.ts` + `personal.ts` + `dev.ts` +
+  `bridge.ts`): a new read-only `estimateChatExport(path)` (shard-aware load + parse + count user
+  messages/chars; no scan, no store, home-confined) backs a pre-import confirm toast. First import
+  (empty graph) defaults to **AI extraction** (listed first); the toast shows `~tokens · ~time`
+  (capped at 500 msgs, ~200-tok prompt + msg in / ~100-tok out per call, ~2.5 s/call — explicitly
+  "approximate") and offers AI / Quick (free) / Cancel. `timeout:0` forces an explicit choice because
+  AI mode is paid and minutes-long.
+
+### Verification
+
+Drove it all live in an isolated demo (`LUCID_PERSONAL_DIR`, real store byte-identical throughout):
+the nudge fired on first boot → CTA opened Settings with Personalization expanded + scrolled + the
+passphrase field visible; after setup, Import → folder picker → confirm toast read "Import 4 ChatGPT
+conversations? · 5 of your messages · AI: ~1.6k tokens · ~13s · Quick: free + instant" with AI
+listed first (first-import default) and a warn tone; "Quick (free)" completed the import
+(`personal_facts_imported {conversations:4, learned:3}`). Tests added for `estimateChatExport`
+(merged-shard counts + home containment). harness/desktop suites green, typecheck clean, bundle
+builds. Demo artifacts torn down.
+
+### Consequences
+
+- The token/time figures are deliberately rough (one number, labelled approximate) — they set
+  expectations before a paid run, not a billing guarantee. The cap constant (`AI_IMPORT_CAP = 500`)
+  is duplicated in the renderer with a comment pointing at `MODEL_IMPORT_CAP`; if that server cap
+  changes, update both.
+- Onboarding state lives in `localStorage` (renderer-local), not the GUI settings file — appropriate
+  for one-time UI hints, and it means clearing site data re-arms the nudge.
+
+## ADR-0036 — In-app code editor goes read-write: gated Save, Save-As, conflict banner, Send to chat
+
+**Date:** 2026-06-22
+**Status:** Accepted
+**Context increment:** P-IDE.5
+
+### Context
+
+P-IDE.4 shipped a read-only Monaco viewer fed by chat code blocks. P-IDE.5 makes it an editor: edit
+toggle, modified indicator, **Save**, "Save As" for snippets, a file-conflict banner, "Send to chat",
+and a pop-out. The security crux is the write path — CLAUDE.md #3 (fail-closed) and #4 (gate
+in-process) say nothing reaches disk unscanned.
+
+### Decision
+
+**Save is routed through the in-process scanner gate, not a raw fs write.** A new server module
+`desktop/editor.ts` exposes `readEditorFile` + `saveEditorFile`; the latter, in order: (1) confines the
+path to the user's home subtree via `pathWithin` (the established GUI file boundary, ADR-0023 — chosen
+over workspace-scoping so it matches the home-rooted folder browser, import, and export, avoiding a
+"picked a folder outside the workspace" papercut); (2) detects a conflict (on-disk hash drifted since
+open, or a Save-As onto a file we never opened) and refuses to clobber without explicit overwrite;
+(3) **`scanAndDecide(scanner, content)`** — a >=high finding (zero-width / bidi / tag-block / PUA …)
+OR an unavailable scanner BLOCKS the write; (4) writes. omp's own ACP filesystem write is intentionally
+disabled for the GUI (`acp_backend` initialize → `writeTextFile:false`), so this gated endpoint — not a
+model tool call — is the editor's persistence path, and it keeps the gate in the loop. Routes:
+`/api/editor/file` + `/api/editor/save` (token-guarded like every other API).
+
+**Renderer** (`ide_panel.ts`): an Edit/View toggle (`readOnly` flips), a modified dot + footer status
+(Read-only / Editing / Modified / Saving… / Saved ✓ / Conflict / Blocked), Ctrl/⌘-S, a Save that does
+**Save-As** for unbound snippets (app.ts wires `pickSavePath` = folder browser → a new `promptText`
+filename overlay) and writes back for bound files, a conflict **banner** (Overwrite / Reload from disk
+/ Cancel), a blocked banner, **Send to chat** (drops the buffer into the composer as a fenced block via
+the `setIdeHooks` callback — no app.ts import cycle), a detached **pop-out** (a new window with a
+read-only textarea — no scripts, CSP-safe), and an unsaved-changes confirm on close.
+
+**Language-service WORKERS remain deferred.** Editing tokenizes on the main thread (fine); semantic
+IntelliSense needs Monaco's hashed worker chunk, which is genuinely hard under our strict
+`script-src 'self'` (no blob/eval) CSP. It's a non-blocker for read-write and its own hardening task.
+
+### Verification
+
+Live (real scanner): a clean buffer saved; a buffer with a **zero-width space hidden in a comment** was
+**blocked** ("quarantined: 1 finding(s), max severity exceeds high") and never reached disk; a path
+outside home was rejected. Full UI Save-As (View→edit→Save→folder pick→filename→write), the conflict
+banner (external on-disk edit → "changed on disk" → Overwrite wrote the buffer), Send-to-chat (fenced
+block into the composer), modified dot/status transitions, pop-out (graceful "blocked" in the headless
+preview; a real window in Electron), and the unsaved-changes close guard all confirmed. New unit tests
+in `editor.test.ts` (confinement, gated block, conflict + overwrite, Save-As-onto-existing, clean
+write; scanner injected). **typecheck clean (3 projects) · desktop 255 · harness 408 · bundle builds.**
+
+### Consequences
+
+- Saving anywhere in the home subtree (not just the workspace) is the trade for UI consistency; the gate
+  scans every save regardless of location, so blast radius is bounded by the scanner, not the path.
+- The shared `ScannerClient` serializes over one sidecar pipe; rapid *overlapping* saves can stall a
+  response (seen only under artificial concurrent test load — real saves are sequential). A per-save
+  timeout/queue is a possible future hardening, noted not fixed.
+- Pop-out is a detached read-only COPY (edits there don't sync back) — deliberate MVP; a live second
+  editor window is future scope.
+
+## ADR-0037 — IDE polish: modal stacking, concurrent-save safety, lifecycle tests
+
+**Date:** 2026-06-22
+**Status:** Accepted
+**Context increment:** P-IDE.6
+
+### Context
+
+Polish + hardening pass over the P-IDE.5 editor, driven by two issues seen in real use: the Save-As
+folder browser rendered UNDER the IDE panel, and a slow/overlapping save could leave the UI stuck on
+"Saving…".
+
+### Decision
+
+- **Modal stacking:** the IDE slide-out panel is `z-index:90`, but the folder browser / prompt scrim
+  was `60/61` — so any GUI modal opened while the IDE was open (Save-As, and also import / workspace
+  pickers) hid behind it. Lifted `.fb-scrim`→`110`, `.fb`→`111` (above the panel), and `#toasts`→`120`
+  (so IDE-triggered toasts/notifications are never occluded either).
+- **Concurrent-save safety:** a `saving` guard is now set BEFORE the async Save-As picker (a rapid
+  double-click previously opened two folder browsers / two saves) and released in a `finally`; the Save
+  button is disabled while in flight. The save request also races a 20 s timeout so a hung/slow scanner
+  yields a definite "Save timed out → Retry" instead of an infinite spinner (the gate still fails closed
+  server-side). This addresses the shared-`ScannerClient`-pipe stall noted in ADR-0036.
+- **Copy + suggestion polish:** the Save-As dialog title dropped the inaccurate "(your workspace)"
+  (saves are home-confined, ADR-0036), and an unbound snippet now suggests a clean `snippet.<ext>`
+  rather than a name derived from the language chip ("rs.rs").
+
+### Verification
+
+Live: the Save-As browser now renders above the IDE panel (z 111 > 90, scrim dims the panel); a triple-
+click on Save opened exactly ONE browser (guard holds); the refactored happy path still saved cleanly
+("Saved ✓", title→filename, button re-disabled); suggested name "snippet.rs". Integration tests added to
+`editor.test.ts` — the read↔save round-trip (read hash == save hash), the open→external-change→conflict
+→overwrite→reopen cycle, and a chained-save sequence. **typecheck clean (3 projects) · desktop 258 ·
+harness 408 · bundle builds.**
+
+### Consequences
+
+- z-index now has a documented ordering: panel 90 < modals 110/111 < toasts 120 < the main settings
+  scrim sits at 100 (a modal opened over settings still wins at 110/111). Future top-layer surfaces
+  should slot relative to these.
+- The 20 s save timeout is a UI safety net, not a server cancel — a timed-out request may still complete
+  on the server; the editor simply lets the user retry (an idempotent overwrite-or-conflict on re-save).

@@ -1,0 +1,22 @@
+# harness/omp/acp_config.yml
+#
+# One-process config overlay for the `omp acp` server the desktop backend spawns
+# (acp_backend.ts passes it via `--config`). Precedence: runtime flags > this
+# overlay > project config > global ~/.omp/agent/config.yml.
+#
+# ADR-0032 (fix): task isolation is DISABLED (`mode: none`). It was enabled in
+# ADR-0028 so subagents would run in an isolated copy and return a reviewable
+# patch — but on this product that STRANDED built files: omp captured the
+# subagent's edits as a patch (merge: patch) that LucidAgentIDE has no UI to
+# apply, and the Windows merge-back (projfs/block-clone/rcopy + git apply) is
+# fragile and can fail silently. Net effect: the agent "built" a file in an
+# isolated workspace and it never appeared on disk — the bug this reverts.
+#
+# With isolation off, a `task` subagent runs in the REAL workspace, so its
+# write/edit lands directly where the user sees it. The security gate still scans
+# EVERY tool call in-process, fail-closed — that, not isolation, is the load-
+# bearing protection. Re-enable isolation only once (a) a patch-review/apply UI
+# exists and (b) the chosen backend's merge is verified reliable on Windows.
+task:
+  isolation:
+    mode: none

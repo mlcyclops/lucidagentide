@@ -11,10 +11,11 @@ import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { ACPClient } from "./acp.ts";
+import { BUILD_POLICY, DELEGATION_POLICY } from "../harness/prompt/assembler.ts";
 import { currentWorkspace } from "./workspace.ts";
 import { learnFromTurn, recallPreamble } from "./personal.ts";
 import { recordBlock } from "./security_log.ts";
-import { mcpServersForAcp } from "./settings_store.ts";
+import { attribution, lastModel, mcpServersForAcp, setLastModel } from "./settings_store.ts";
 
 const REPO = join(import.meta.dir, "..");
 // Absolute so the gate loads from THIS repo even when omp runs in another workspace.
@@ -22,6 +23,9 @@ const GATE = join(REPO, "harness", "omp", "security_extension.ts");
 // AskSage gov-gateway provider extension, loaded alongside the gate (omp -e is
 // repeatable). No-op unless ASKSAGE_API_KEY is set in the spawn env. ADR-0007.
 const ASKSAGE = join(REPO, "harness", "omp", "asksage_extension.ts");
+// P-TASK.3/4 (ADR-0028): config overlay that turns ON task isolation (mode: auto) so subagents
+// can run isolated and return a reviewable patch — containing the blast radius of a bad tool call.
+const ACP_CONFIG = join(REPO, "harness", "omp", "acp_config.yml");
 function ompBin(): string {
   // Prefer the path the Electron main process resolved (bundled or app-managed
   // install); fall back to the user's bun bin, then PATH.
@@ -34,8 +38,11 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export type ChatEvent =
   | { type: "token"; text: string }
+  | { type: "thinking"; text: string }
   | { type: "tool"; name: string; detail: string }
+  | { type: "subagent"; id: string; agent: string; title: string; assignments: string[] }
   | { type: "block"; tool: string; reason: string; severity: string; findings: string; id?: string; quarantined?: boolean }
+  | { type: "permission"; id: string; tool: string; detail: string; options: { optionId: string; name: string; kind?: string }[] }
   | { type: "usage"; used: number; size: number; cost: number }
   | { type: "done" };
 
@@ -51,11 +58,38 @@ class Backend {
   // Personalization recall (P9.2): a <user-profile> block delivered once per session in
   // the user turn (never the frozen prefix). Off unless personalization is enabled+unlocked.
   private recallDelivered = false;
+  // P-IDE.2 (ADR-0029): an active BUNDLED skill's trusted guidance, delivered once per session in the
+  // user turn (same path as persona/recall — never the frozen prefix, never --append-system-prompt).
+  // Already wrapped (`<active-skill name="…">…</active-skill>`). Persists until cleared/changed.
+  private skill: string | null = null;
+  private skillName = "";
+  private skillDelivered = false;
   configOptions: any[] = [];
   commands: any[] = [];
+  // P-ACP.2 (ADR-0027): ACP session modes (omp exposes [default, plan]). Plan is a read-only
+  // planner; default ("Agent") is autonomous. Switched via session/set_mode; omp echoes the
+  // active mode back with a current_mode_update notification (and may change it itself, e.g.
+  // Plan auto-exiting once a plan is drafted), so we track that to keep the UI in sync.
+  availableModes: any[] = [];
+  currentModeId = "default";
+  // P-ACP.3 (ADR-0027): "Ask" is a CLIENT mode (omp has no native ask) — omp mode stays `default`
+  // (so it can edit) but every tool-permission request is forwarded to the UI for an explicit
+  // decision instead of being auto-approved. The composer's 3-way Plan/Ask/Agent is derived from
+  // (currentModeId, permissionMode). Fail-closed: no decision (timeout / disconnect) ⇒ deny.
+  permissionMode: "auto" | "ask" = "auto";
+  private askActive = false;            // true only during a chat turn (never the util `complete()`)
+  private permSeq = 0;
+  private permPending = new Map<string, (optionId: string | null) => void>();
+  private pendingPerms = 0;             // while > 0 the turn's idle/stall clock is paused
+  private static readonly PERM_MS = 300_000; // 5 min to decide, then fail-closed (deny)
 
   /** Set/clear the active persona. Pass the ALREADY-scanned, delimiter-wrapped text. */
   setPersona(wrapped: string | null): void { this.persona = wrapped; this.personaDelivered = false; }
+
+  /** P-IDE.2: set/clear the active bundled skill. `wrapped` is the trusted `<active-skill …>` block
+   *  (or null to clear). Re-delivered on the next turn so a skill change takes effect immediately. */
+  setSkill(wrapped: string | null, name = ""): void { this.skill = wrapped; this.skillName = wrapped ? name : ""; this.skillDelivered = false; }
+  activeSkillName(): string { return this.skillName; }
 
   private emit(e: ChatEvent): void { this.listener?.(e); }
 
@@ -63,13 +97,54 @@ class Backend {
     if (this.acp) return;
     if (!this.starting) {
       this.starting = (async () => {
-        const acp = new ACPClient(ompBin(), ["acp", "-e", GATE, "-e", ASKSAGE], currentWorkspace());
+        // P-TASK.2 (ADR-0028): append the byte-stable proactive-delegation policy to omp's system
+        // prompt. omp owns the system prompt on the ACP path, so --append-system-prompt is how our
+        // cached, stable layer-3 policy reaches the chat model (no volatile bytes → cache stays hot).
+        // The isolation overlay ships under harness/** and resolves like GATE in dev AND packaged
+        // builds; add it ONLY if present so a missing file degrades isolation off rather than crashing
+        // `omp acp` (bundled-safety, fail-open on a non-security knob — the gate still scans every call).
+        const isoCfg = existsSync(ACP_CONFIG) ? ["--config", ACP_CONFIG] : [];
+        // P-LOC.1 (ADR-0031): thread the AI-LOC attribution context to the gate via env. The spawned
+        // omp child inherits process.env, so the in-process gate tags each AI-authored edit with the
+        // authoring model + the attribution identity + the edited workspace. Set BEFORE spawn (env is
+        // copied at exec; the child can't see later changes).
+        this.applyAttributionEnv();
+        // ADR-0033: also append the build / anti-over-refusal policy so the chat model doesn't decline
+        // a buildable task (e.g. "make a game/graphics/music in one HTML file") by mis-reading its scope.
+        const appendedPolicy = `${DELEGATION_POLICY}\n\n${BUILD_POLICY}`;
+        const acp = new ACPClient(ompBin(), ["acp", "-e", GATE, "-e", ASKSAGE, ...isoCfg, "--append-system-prompt", appendedPolicy], currentWorkspace());
         acp.onNotify = (method, params) => {
           if (method !== "session/update") return;
           const u = params?.update ?? params;
           switch (u?.sessionUpdate) {
             case "agent_message_chunk": if (u.content?.type === "text") this.emit({ type: "token", text: u.content.text }); break;
-            case "tool_call": this.emit({ type: "tool", name: String(u.kind ?? u.title ?? "tool"), detail: String(u.title ?? u.rawInput?.command ?? "") }); break;
+            // P-ACP.1 (ADR-0027): the model's reasoning stream. omp emits these BEFORE the answer when
+            // thinking is on; without this case they were dropped, so the whole reasoning phase showed
+            // nothing and the answer then arrived in a burst (the "big dump"). Surface them so the UI
+            // streams thinking live, like the omp TUI. Display-only — never added to the assistant buffer
+            // the personalization distiller learns from, and never persisted.
+            case "agent_thought_chunk": if (u.content?.type === "text") this.emit({ type: "thinking", text: u.content.text }); break;
+            case "tool_call": {
+              // P-TASK.1 (ADR-0028): omp's `task` tool surfaces as a generic tool_call (kind "other")
+              // whose rawInput carries { agent, context, tasks[] } (batch) or { agent, assignment } (flat).
+              // Detect it and emit a distinct `subagent` event so the UI shows a delegation card instead
+              // of a nameless "other" chip. (The rawInput strings are still scanned by the pre-hook gate.)
+              const ri = u.rawInput ?? {};
+              if (ri.agent && (Array.isArray(ri.tasks) || typeof ri.assignment === "string")) {
+                const items: any[] = Array.isArray(ri.tasks) ? ri.tasks : [{ assignment: ri.assignment, description: ri.description }];
+                this.emit({
+                  type: "subagent", id: String(u.toolCallId ?? u.title ?? ""), agent: String(ri.agent),
+                  title: String(u.title ?? `${ri.agent} subagent`),
+                  assignments: items.map((t) => String(t?.description ?? t?.assignment ?? "").slice(0, 200)).filter(Boolean),
+                });
+              } else if (ri.poll || ri.cancel || ri.list || ri.wait) {
+                // job-coordination calls (poll/list/cancel/wait of background subagents) are internal
+                // bookkeeping while a task runs — don't surface them as separate tool chips.
+              } else {
+                this.emit({ type: "tool", name: String(u.kind ?? u.title ?? "tool"), detail: String(u.title ?? ri.command ?? "") });
+              }
+              break;
+            }
             // A failed/rejected tool call is omp's GENERIC signal — it fires for the security
             // gate AND for ordinary tool failures, so it must NOT claim "blocked by the security
             // gate" (that mislabel made benign failures look like quarantines). The authoritative
@@ -77,12 +152,16 @@ class Backend {
             case "tool_call_update": if (u.status === "failed" || u.status === "rejected") this.emit({ type: "block", tool: String(u.kind ?? "tool"), reason: "tool call rejected", severity: "low", findings: "", quarantined: false }); break;
             case "usage_update": this.emit({ type: "usage", used: Number(u.used ?? 0), size: Number(u.size ?? 0), cost: Number(u.cost?.amount ?? 0) }); break;
             case "available_commands_update": this.commands = u.availableCommands ?? []; break;
-            case "config_option_update": if (u.configOptions) this.configOptions = u.configOptions; break;
+            case "config_option_update": if (u.configOptions) { this.configOptions = u.configOptions; this.syncModelEnv(); } break;
+            case "current_mode_update": this.currentModeId = String(u.currentModeId ?? this.currentModeId); break;
           }
         };
         acp.onRequest = async (m, params) => {
           if (m === "session/request_permission") {
             const opts: any[] = params?.options ?? [];
+            // Ask mode (and only inside a live chat turn): hand the decision to the user.
+            if (this.permissionMode === "ask" && this.askActive && this.listener) return this.askUser(params, opts);
+            // Agent / Plan: auto-approve.
             const a = opts.find((o) => /allow/i.test(o.kind ?? o.optionId ?? "")) ?? opts[0];
             return a ? { outcome: { outcome: "selected", optionId: a.optionId } } : { outcome: { outcome: "cancelled" } };
           }
@@ -113,15 +192,96 @@ class Backend {
     const s: any = await this.acp!.request("session/new", { cwd: currentWorkspace(), mcpServers: mcpServersForAcp() });
     this.sessionId = s?.sessionId ?? s?.id ?? null;
     if (Array.isArray(s?.configOptions)) this.configOptions = s.configOptions;
+    if (s?.modes) { this.availableModes = s.modes.availableModes ?? []; this.currentModeId = String(s.modes.currentModeId ?? "default"); }
     await sleep(350); // let available_commands_update arrive
+    this.syncModelEnv();
+  }
+
+  /** P-LOC.1: the omp-reported active model id (from the `model` config option), or "" if unknown. */
+  private activeModel(): string {
+    const opt = this.configOptions.find((c) => c?.id === "model");
+    const v = opt?.currentValue ?? opt?.value;
+    return typeof v === "string" ? v : "";
+  }
+  /** P-LOC.1: set the AI-LOC attribution env for the NEXT omp spawn (model from the persisted last
+   *  value; identity/source/repo from settings). The running child keeps the env it was spawned with. */
+  private applyAttributionEnv(): void {
+    const a = attribution();
+    process.env.LUCID_MODEL = lastModel(); // "" until omp first reports one → gate records "unknown"
+    process.env.LUCID_IDENTITY = a.identity;
+    process.env.LUCID_IDENTITY_SOURCE = a.source;
+    process.env.LUCID_REPO = currentWorkspace();
+  }
+  /** P-LOC.1: reconcile the authoring model for AI-LOC. Once omp reports its active model, persist it
+   *  (so the NEXT omp spawn tags edits with it) and update process.env so any later respawn — provider
+   *  key change, manual "Refresh models" — is accurate. We deliberately do NOT force a respawn here: a
+   *  respawn drops the ACP session and slows cold start, and AI-LOC is best-effort. Net effect: edits in
+   *  a brand-new install's first session (before the model is learned) record model 'unknown'; every
+   *  session after that is exact. (ADR-0031, revised under P-IDE.1b.) */
+  private syncModelEnv(): void {
+    const model = this.activeModel();
+    if (!model) return;
+    setLastModel(model);
+    process.env.LUCID_MODEL = model;
   }
 
   async getConfig(): Promise<any[]> { await this.ensureSession(); return this.configOptions; }
+  /** The composer's 3-way control, derived from the omp mode + the client permission posture. */
+  uiMode(): "agent" | "ask" | "plan" {
+    if (this.currentModeId === "plan") return "plan";
+    return this.permissionMode === "ask" ? "ask" : "agent";
+  }
+  /** P-ACP.2/3: the ACP session modes + the active omp mode + the derived 3-way UI mode. */
+  async getModes(): Promise<{ available: any[]; current: string; ui: string; permissionMode: string }> {
+    await this.ensureSession();
+    return { available: this.availableModes, current: this.currentModeId, ui: this.uiMode(), permissionMode: this.permissionMode };
+  }
+  /** Switch the ACP session mode via session/set_mode (canonical; emits current_mode_update). */
+  async setMode(modeId: string): Promise<{ available: any[]; current: string }> {
+    await this.ensureSession();
+    await this.acp!.request("session/set_mode", { sessionId: this.sessionId, modeId }).catch(() => {});
+    this.currentModeId = modeId; // optimistic; current_mode_update will confirm/correct
+    return { available: this.availableModes, current: this.currentModeId };
+  }
+  /** P-ACP.3: set the composer's Plan/Ask/Agent. Plan→omp `plan`; Agent/Ask→omp `default`, with
+   *  Ask flipping permission forwarding on (the user approves each tool call). */
+  async setUiMode(uiMode: "agent" | "ask" | "plan"): Promise<{ available: any[]; current: string; ui: string; permissionMode: string }> {
+    this.permissionMode = uiMode === "ask" ? "ask" : "auto";
+    await this.setMode(uiMode === "plan" ? "plan" : "default");
+    return { available: this.availableModes, current: this.currentModeId, ui: this.uiMode(), permissionMode: this.permissionMode };
+  }
+
+  /** P-ACP.3: forward one tool-permission request to the UI and await the user's choice. Parks the
+   *  JSON-RPC response until /api/chat/permission resolves it; fail-closed to "deny" on timeout. */
+  private askUser(params: any, opts: any[]): Promise<any> {
+    const id = `perm_${++this.permSeq}`;
+    const tc = params?.toolCall ?? params?.tool_call ?? {};
+    this.pendingPerms++; // pause the turn's idle/stall clock while we wait for a human
+    this.emit({
+      type: "permission", id,
+      tool: String(tc.kind ?? tc.title ?? params?.tool ?? "tool"),
+      detail: String(tc.title ?? tc.rawInput?.command ?? ""),
+      options: opts.map((o) => ({ optionId: String(o.optionId ?? o.id ?? ""), name: String(o.name ?? o.optionId ?? "option"), kind: o.kind })),
+    });
+    return new Promise((resolve) => {
+      const settle = (outcome: any) => { clearTimeout(t); this.permPending.delete(id); this.pendingPerms = Math.max(0, this.pendingPerms - 1); resolve(outcome); };
+      const t = setTimeout(() => settle({ outcome: { outcome: "cancelled" } }), Backend.PERM_MS); // fail-closed
+      this.permPending.set(id, (optionId) => settle(optionId ? { outcome: { outcome: "selected", optionId } } : { outcome: { outcome: "cancelled" } }));
+    });
+  }
+  /** Resolve a parked permission from the UI. `optionId` null/empty ⇒ deny (cancelled). */
+  resolvePermission(id: string, optionId: string | null): boolean {
+    const fn = this.permPending.get(id);
+    if (!fn) return false;
+    fn(optionId && optionId.length ? optionId : null);
+    return true;
+  }
   async getCommands(): Promise<any[]> { await this.ensureSession(); return this.commands.map((c) => ({ name: c.name, description: c.description, hint: c.input?.hint })); }
   async setConfig(configId: string, value: string): Promise<any[]> {
     await this.ensureSession();
     const r: any = await this.acp!.request("session/set_config_option", { sessionId: this.sessionId, configId, value }).catch(() => null);
     if (Array.isArray(r?.configOptions)) this.configOptions = r.configOptions;
+    if (configId === "model") this.syncModelEnv(); // persist the new authoring model for AI-LOC (ADR-0031)
     return this.configOptions;
   }
   /** Resume a past session so the next prompt continues it. */
@@ -137,6 +297,7 @@ class Backend {
     this.sessionId = null;
     this.personaDelivered = false; // re-deliver the persona in the fresh session
     this.recallDelivered = false;
+    this.skillDelivered = false; // re-deliver the active bundled skill in the fresh session
     await this.ensureSession();
   }
 
@@ -147,6 +308,11 @@ class Backend {
     this.acp = null; this.starting = null; this.sessionId = null; this.listener = null;
     this.personaDelivered = false; // keep the chosen persona; re-deliver after respawn
     this.recallDelivered = false;
+    this.skillDelivered = false; // keep the active skill; re-deliver after respawn
+    this.availableModes = []; this.currentModeId = "default"; // re-captured from the fresh session
+    // Drop any parked permission (deny) but KEEP permissionMode — the user's Ask choice survives a respawn.
+    for (const [, fn] of this.permPending) fn(null);
+    this.permPending.clear(); this.pendingPerms = 0; this.askActive = false;
   }
 
   // Max silence (no token/tool/usage event) before we treat a turn as stalled. omp's
@@ -163,15 +329,19 @@ class Backend {
     let stalled = false;
     let idle: ReturnType<typeof setTimeout> | undefined;
     let onStall: (e: Error) => void = () => {};
-    const arm = () => { if (idle) clearTimeout(idle); idle = setTimeout(() => { stalled = true; onStall(new Error("the model did not respond for 2 minutes — the provider may be rate-limited (check your hourly budget) or the turn stalled. Try again.")); }, Backend.IDLE_MS); };
+    // While a permission is awaiting the user (Ask mode), pause the idle/stall clock — a human
+    // deciding is not a stalled turn (askUser has its own fail-closed timeout).
+    const arm = () => { if (idle) clearTimeout(idle); if (this.pendingPerms > 0) return; idle = setTimeout(() => { stalled = true; onStall(new Error("the model did not respond for 2 minutes — the provider may be rate-limited (check your hourly budget) or the turn stalled. Try again.")); }, Backend.IDLE_MS); };
     const sink = (e: ChatEvent) => { arm(); if (e.type === "token") assistant += e.text; onEvent(e); };
     this.listener = sink;
+    this.askActive = true; // permission requests in THIS turn may be forwarded to the UI (Ask mode)
     try {
       await this.ensureSession();
       // Deliver, once per session in the user turn (never the frozen prefix): the approved
       // persona (delimited untrusted) + the personalization recall (<user-profile> guidance).
       let preamble = "";
       if (this.persona && !this.personaDelivered) { preamble += `${this.persona}\n\n`; this.personaDelivered = true; }
+      if (this.skill && !this.skillDelivered) { preamble += `${this.skill}\n\n`; this.skillDelivered = true; } // P-IDE.2 bundled skill
       if (!this.recallDelivered) { const r = recallPreamble(); if (r) preamble += `${r}\n\n`; this.recallDelivered = true; }
       const body = preamble + text;
       arm(); // start the idle clock now (covers a stall BEFORE the first token)
@@ -184,10 +354,21 @@ class Backend {
       onEvent({ type: "token", text: `\n[${stalled ? "stalled" : "agent unavailable"}: ${String((e as any)?.message ?? e)}]` });
     } finally {
       if (idle) clearTimeout(idle);
+      this.askActive = false;
+      // Fail-closed: any permission still parked at turn's end (stall/disconnect) is denied.
+      for (const [id, fn] of this.permPending) { this.permPending.delete(id); fn(null); }
+      this.pendingPerms = 0;
     }
     this.listener = null;
     onEvent({ type: "done" });
     void learnFromTurn(text, assistant); // best-effort, after the turn — fail-closed inside
+  }
+
+  /** P-ACP.4: interrupt the in-flight turn. Sends the ACP `session/cancel` notification — omp aborts
+   *  the streaming reply AND in-flight tool calls and returns the pending `session/prompt` with a
+   *  cancelled stopReason, so the turn's `done` fires normally and the UI settles. No-op when idle. */
+  cancel(): void {
+    try { if (this.acp && this.sessionId) this.acp.notify("session/cancel", { sessionId: this.sessionId }); } catch { /* best-effort */ }
   }
 
   // Serializes utility completions so they never clobber a concurrent chat turn's listener.

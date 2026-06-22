@@ -8,7 +8,9 @@
     "bun": ">=1.3.0"
   },
   "scripts": {
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p desktop/tsconfig.json && tsc --noEmit -p desktop/tsconfig.server.json",
+    "typecheck:desktop": "tsc --noEmit -p desktop/tsconfig.json",
+    "typecheck:desktop-server": "tsc --noEmit -p desktop/tsconfig.server.json",
     "test": "bun test harness",
     "demo-00": "bun run harness/scripts/demo00_omp_echo.ts && bun run harness/scripts/demo00_scanner.ts && bun run harness/scripts/demo00_failclosed.ts",
     "demo-00:echo": "bun run harness/scripts/demo00_omp_echo.ts",
@@ -30,6 +32,7 @@
     "demo-P6.2": "bun run harness/scripts/demo13_safe_export.ts",
     "demo-P7.1": "bun run harness/scripts/demo14_dashboards.ts",
     "demo-P7.2": "bun run harness/scripts/demo15_replay_bench.ts",
+    "demo-P-LOC.1": "bun run harness/scripts/demo16_ai_loc.ts",
     "dashboards": "bun run harness/scripts/materialize_dashboards.ts",
     "omp:secure": "omp -e harness/omp/security_extension.ts",
     "dashboard:tui": "bun run tools/dashboard_tui.ts",

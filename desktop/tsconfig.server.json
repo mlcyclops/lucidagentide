@@ -1,0 +1,49 @@
+{
+  "compilerOptions": {
+    "lib": ["ESNext"],
+    "module": "ESNext",
+    "target": "ESNext",
+    "moduleResolution": "bundler",
+    "moduleDetection": "force",
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "noEmit": true,
+    "strict": true,
+    "skipLibCheck": true,
+    "noUncheckedIndexedAccess": true,
+    "noFallthroughCasesInSwitch": true,
+    "forceConsistentCasingInFileNames": true,
+    "types": ["bun"]
+  },
+  "comment": "Bun-runtime desktop SERVER surface (dev.ts + the modules it pulls in). These run under Bun, NOT Electron/Node — so this mirrors the root tsconfig (types: bun, lib: ESNext, NO DOM). The Electron-main + renderer files live in desktop/tsconfig.json and are excluded here.",
+  "comment2": "*.test.ts are excluded: they import bun:test and run under `bun test`, not this type-check.",
+  "include": [
+    "dev.ts",
+    "acp_backend.ts",
+    "asksage.ts",
+    "auth_status.ts",
+    "headroom.ts",
+    "managed_config.ts",
+    "origin_guard.ts",
+    "path_guard.ts",
+    "personal.ts",
+    "ratelimit_probe.ts",
+    "security_log.ts",
+    "sessions.ts",
+    "settings_store.ts",
+    "skills_data.ts",
+    "workspace.ts"
+  ],
+  "exclude": [
+    "dist",
+    "node_modules",
+    "main.ts",
+    "preload.ts",
+    "acp.ts",
+    "updater.ts",
+    "runtime.ts",
+    "splash.ts",
+    "renderer",
+    "**/*.test.ts"
+  ]
+}

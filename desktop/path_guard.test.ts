@@ -7,9 +7,11 @@ const ROOT = resolve("/home/user");
 
 describe("pathWithin", () => {
   test("accepts the root itself and descendants", () => {
+    // Compare against resolve(...) so the expectation uses the platform separator
+    // (Windows backslash vs POSIX slash) — pathWithin returns a resolved path.
     expect(pathWithin(ROOT, ROOT)).toBe(ROOT);
-    expect(pathWithin(ROOT, `${ROOT}/projects`)).toBe(`${ROOT}/projects`);
-    expect(pathWithin(ROOT, "projects/app")).toBe(`${ROOT}/projects/app`);
+    expect(pathWithin(ROOT, `${ROOT}/projects`)).toBe(resolve(ROOT, "projects"));
+    expect(pathWithin(ROOT, "projects/app")).toBe(resolve(ROOT, "projects/app"));
   });
   test("rejects traversal that escapes the root", () => {
     expect(pathWithin(ROOT, "../../etc/passwd")).toBeNull();

@@ -11,7 +11,8 @@
     "types": ["node", "electron"],
     "verbatimModuleSyntax": false
   },
-  "comment": "Electron/Node + DOM surface. dev.ts is a Bun-runtime server (checked by the root project), excluded here so Bun globals don't error under Node types.",
+  "comment": "Electron/Node + DOM surface (the renderer + Electron-main side). Bun-runtime servers (dev.ts and the modules it pulls in) run under Bun and are excluded here so Bun globals don't error under Node types; they're exercised by `bun test desktop`.",
+  "comment2": "*.test.ts are excluded: they import bun:test and run under `bun test`, not this Node/DOM type-check.",
   "include": ["main.ts", "preload.ts", "acp.ts", "updater.ts", "runtime.ts", "splash.ts", "renderer/**/*.ts"],
-  "exclude": ["dist", "node_modules", "dev.ts"]
+  "exclude": ["dist", "node_modules", "dev.ts", "**/*.test.ts"]
 }

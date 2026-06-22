@@ -33,6 +33,37 @@ export function listZipEntries(buf: Buffer): ZipEntry[] {
   return out;
 }
 
+/** Decompress EVERY entry whose basename satisfies `match` (used to pull all
+ *  `conversations-NNN.json` shards out of a modern ChatGPT export in one pass).
+ *  Entries are returned in central-directory order; sort by name if you need a
+ *  deterministic shard order. Throws on a corrupt zip or unsupported method. */
+export function readZipEntriesMatching(buf: Buffer, match: (basename: string) => boolean): { name: string; data: Buffer }[] {
+  const eocd = findEOCD(buf);
+  if (eocd < 0) throw new Error("not a zip file");
+  let off = buf.readUInt32LE(eocd + 16);
+  const count = buf.readUInt16LE(eocd + 10);
+  const out: { name: string; data: Buffer }[] = [];
+  for (let i = 0; i < count && off + 46 <= buf.length; i++) {
+    if (buf.readUInt32LE(off) !== CEN_SIG) break;
+    const method = buf.readUInt16LE(off + 10);
+    const cSize = buf.readUInt32LE(off + 20);
+    const nameLen = buf.readUInt16LE(off + 28), extraLen = buf.readUInt16LE(off + 30), commentLen = buf.readUInt16LE(off + 32);
+    const localOff = buf.readUInt32LE(off + 42);
+    const name = buf.toString("utf8", off + 46, off + 46 + nameLen);
+    const base = name.split("/").pop()!;
+    if (match(base)) {
+      const lNameLen = buf.readUInt16LE(localOff + 26), lExtraLen = buf.readUInt16LE(localOff + 28);
+      const dataStart = localOff + 30 + lNameLen + lExtraLen;
+      const comp = buf.subarray(dataStart, dataStart + cSize);
+      if (method === 0) out.push({ name: base, data: Buffer.from(comp) });
+      else if (method === 8) out.push({ name: base, data: inflateRawSync(comp) });
+      else throw new Error(`unsupported zip compression method ${method}`);
+    }
+    off += 46 + nameLen + extraLen + commentLen;
+  }
+  return out;
+}
+
 /** Decompress the first entry whose basename equals `filename` (case-insensitive), or null if
  *  absent. Throws on a corrupt zip or an unsupported compression method. */
 export function readZipEntry(buf: Buffer, filename: string): Buffer | null {

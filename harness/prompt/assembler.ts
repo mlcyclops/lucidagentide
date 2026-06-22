@@ -21,8 +21,15 @@
 import { createHash } from "node:crypto";
 import type { TrustLabel } from "../contracts.ts";
 
-/** Bump this (and write an ADR) to deliberately change the cached prefix. */
-export const PREFIX_VERSION = "1";
+/** Bump this (and write an ADR) to deliberately change the cached prefix.
+ *  v2 (ADR-0028, P-TASK.2): added the proactive subagent-delegation policy to layer 3.
+ *  v3 (ADR-0028, P-TASK.3/4): steer write/exec subtasks to ISOLATED subagents (blast-radius).
+ *  v4 (ADR-0032, fix): REVERTED the isolate-writes steer — it stranded built files outside the
+ *      workspace (no patch-apply UI; fragile Windows merge). Agent now writes files DIRECTLY
+ *      (gate-protected); isolation is reserved for running untrusted code.
+ *  v5 (ADR-0033, fix): added the build/anti-over-refusal policy to layer 3 — some models refused
+ *      buildable tasks ("can't make a game/graphics/music") by mis-reading their own scope. */
+export const PREFIX_VERSION = "5";
 
 export const UNTRUSTED_START = "UNTRUSTED_CONTENT_START";
 export const UNTRUSTED_END = "UNTRUSTED_CONTENT_END";
@@ -54,12 +61,50 @@ retry verbatim.
 </permissions>`;
 
 // ── Layer 3 — stable coding rules ───────────────────────────────────────────
+// Proactive subagent-delegation policy (P-TASK.2, ADR-0028). Byte-stable and exported so the
+// live omp ACP chat receives the SAME text via `--append-system-prompt` (acp_backend) — omp owns
+// its own system prompt on that path, so this is how the cached, stable policy reaches the model.
+export const DELEGATION_POLICY = `<delegation>
+When a task needs broad codebase exploration, or is an isolable research / triage /
+summarization unit, PROACTIVELY hand it to a subagent via the \`task\` tool instead of
+doing all the work in this conversation. Give the subagent a crisp, self-contained
+assignment plus only the context it needs, then continue from its distilled result.
+This keeps your own context window small and your cached prompt prefix hot — the way a
+lead engineer delegates bounded work. Prefer the bundled agents (\`explore\` for
+codebase search, \`plan\` for design, \`reviewer\` for review) when they fit.
+APPLY FILE EDITS DIRECTLY in this workspace with your own write/edit tools — every
+write is scanned in-process by the security gate, so ordinary file authoring needs no
+isolation, and isolating a build would strand its result outside the workspace where
+the user never sees the file. Reserve isolated execution for running untrusted or
+risky code, NEVER for creating or editing files. When you delegate a build to a
+subagent, that subagent also writes directly to this workspace.
+</delegation>`;
+
+// Build / anti-over-refusal policy (P-FIX, ADR-0033). Byte-stable and exported so the live omp ACP
+// chat receives the SAME text via `--append-system-prompt` (acp_backend), alongside DELEGATION_POLICY.
+// Some models refuse a buildable task by mis-reading their own scope ("I can't make a game / graphics /
+// music"); this corrects that — a self-contained app is ordinary code the agent writes.
+export const BUILD_POLICY = `<build>
+You are a FULL-CAPABILITY coding agent. If a request can be satisfied by writing or editing files,
+BUILD IT — never decline or under-deliver by claiming limited capabilities. A self-contained app, game,
+visualization, or demo as a single HTML file is ORDINARY CODE you write: graphics via <canvas>/SVG/CSS,
+sound and music via the Web Audio API (synthesized or procedural), animation via requestAnimationFrame,
+state and logic in inline JavaScript — all in one file, no external assets required. "Amazing graphics
+and music in one HTML file" means well-crafted HTML/CSS/JS, NOT media you must fetch or generate as
+binaries. Deliver a complete, working result and write it to the location the user asked for. Ask a
+clarifying question only when the request is genuinely ambiguous — never to avoid the work.
+</build>`;
+
 const LAYER_3_CODING = `<coding>
 Match the surrounding code's idiom, naming, and comment density. Verification is
 part of completion: code is not done until the relevant checks (tests, lint,
 types) pass or the user explicitly accepts a partial result. You NEVER fabricate
 results; if a step was skipped or a check failed, you say so plainly.
-</coding>`;
+</coding>
+
+${DELEGATION_POLICY}
+
+${BUILD_POLICY}`;
 
 // ── Layer 4 — security policy & trust-boundary rules ────────────────────────
 // This layer defines the data/instruction boundary the whole product enforces.

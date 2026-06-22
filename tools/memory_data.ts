@@ -356,6 +356,59 @@ export async function harnessMemory(): Promise<HarnessMemory | null> {
   }
 }
 
+// ── P-LOC.2 (ADR-0031): AI-LOC attribution roll-up for the dashboard ──────────
+// Read-only view of the `ai_loc_ledger` the security gate writes (P-LOC.1): how many lines the AI
+// authored, per model · repo · identity. READ_ONLY so it coexists with the live gate's write lock;
+// a missing table (no edits recorded yet) degrades to null via the per-query catch.
+export interface AiLocModel { model: string; added: number; removed: number; edits: number }
+export interface AiLocRow { model: string; repo: string; identity: string; identitySource: string; edits: number; added: number; removed: number }
+export interface AiLocSummary {
+  totals: { added: number; removed: number; edits: number; models: number; repos: number };
+  byModel: AiLocModel[];   // per model, most lines first
+  rows: AiLocRow[];        // per (model, repo, identity), most lines first (capped)
+  identities: string[];    // distinct attribution identities seen
+  generatedAt: string;
+}
+
+/** The AI-LOC roll-up, or null when nothing has been recorded yet (no DB / no table / no rows). */
+export async function aiLocSummary(): Promise<AiLocSummary | null> {
+  if (!existsSync(OBS_DB_PATH)) return null;
+  try {
+    const instance = await DuckDBInstance.create(OBS_DB_PATH, { access_mode: "READ_ONLY" });
+    const conn = await instance.connect();
+    const rows = async (sql: string): Promise<any[]> => {
+      try { return (await conn.runAndReadAll(sql)).getRowObjects() as any[]; } catch { return []; }
+    };
+    const totalRow = (await rows(
+      `SELECT sum(added_lines)::INT added, sum(removed_lines)::INT removed, count(*)::INT edits,
+              count(DISTINCT model)::INT models, count(DISTINCT repo)::INT repos FROM ai_loc_ledger`,
+    ))[0];
+    const edits = Number(totalRow?.edits ?? 0);
+    if (edits === 0) { instance.closeSync(); return null; }
+    const byModel = (await rows(
+      `SELECT model, sum(added_lines)::INT added, sum(removed_lines)::INT removed, count(*)::INT edits
+       FROM ai_loc_ledger GROUP BY model ORDER BY added DESC`,
+    )).map((r) => ({ model: String(r.model), added: Number(r.added ?? 0), removed: Number(r.removed ?? 0), edits: Number(r.edits ?? 0) }));
+    const detail = (await rows(
+      `SELECT model, repo, identity, any_value(identity_source) identity_source,
+              count(*)::INT edits, sum(added_lines)::INT added, sum(removed_lines)::INT removed
+       FROM ai_loc_ledger GROUP BY model, repo, identity ORDER BY added DESC LIMIT 50`,
+    )).map((r) => ({
+      model: String(r.model), repo: String(r.repo), identity: String(r.identity),
+      identitySource: String(r.identity_source), edits: Number(r.edits ?? 0),
+      added: Number(r.added ?? 0), removed: Number(r.removed ?? 0),
+    }));
+    const identities = (await rows(`SELECT DISTINCT identity FROM ai_loc_ledger ORDER BY identity`)).map((r) => String(r.identity));
+    instance.closeSync();
+    return {
+      totals: { added: Number(totalRow?.added ?? 0), removed: Number(totalRow?.removed ?? 0), edits, models: Number(totalRow?.models ?? 0), repos: Number(totalRow?.repos ?? 0) },
+      byModel, rows: detail, identities, generatedAt: new Date().toISOString(),
+    };
+  } catch {
+    return null; // missing schema, or held read-write by the live gate
+  }
+}
+
 export function ageStr(epochMs: number | null): string {
   if (!epochMs) return "—";
   const secs = Math.round((epochMs - Date.now()) / 1000);
@@ -382,6 +435,7 @@ export interface MemorySnapshot {
   compaction: Record<string, string> | null;
   budgets: Budget[] | null;
   harness: HarnessMemory | null;
+  aiLoc: AiLocSummary | null; // P-LOC.2 (ADR-0031): AI-authored lines per model/repo/identity
 }
 
 export async function memorySnapshot(sessionArg?: string): Promise<MemorySnapshot> {
@@ -414,5 +468,6 @@ export async function memorySnapshot(sessionArg?: string): Promise<MemorySnapsho
     compaction: compactionPolicy() ?? null,
     budgets: rateLimits(),
     harness: await harnessMemory(),
+    aiLoc: await aiLocSummary(),
   };
 }
