@@ -158,7 +158,7 @@ jobs:
       contents: write
     steps:
       - name: Download all platform artifacts
-        uses: actions/download-artifact@v7 # must match upload-artifact's major (artifact format)
+        uses: actions/download-artifact@v8 # must match upload-artifact's major (artifact format)
         with:
           path: dist
           merge-multiple: true
