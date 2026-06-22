@@ -138,6 +138,10 @@ demo-P7.1: ## P7.1: materialize the six security dashboard views to safe CSVs
 demo-P7.2: ## P7.2: replay run tree/timeline + benchmark cache-hit per prompt-prefix version
 	$(BUN) run harness/scripts/demo15_replay_bench.ts
 
+.PHONY: demo-P-LOC.1
+demo-P-LOC.1: ## P-LOC.1: AI-LOC attribution — count AI-authored lines per model/repo/identity
+	$(BUN) run harness/scripts/demo16_ai_loc.ts
+
 .PHONY: dashboards
 dashboards: ## Materialize dashboard CSVs from a DuckDB into observable/docs/data (DB=path)
 	$(BUN) run harness/scripts/materialize_dashboards.ts $(DB) observable/docs/data

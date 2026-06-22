@@ -70,6 +70,12 @@ export class ACPClient {
     return pr;
   }
 
+  /** Send a JSON-RPC NOTIFICATION (no id, no response) — e.g. ACP `session/cancel`. */
+  notify(method: string, params?: any): void {
+    if (!this.proc) return;
+    this.write({ jsonrpc: "2.0", method, params });
+  }
+
   private write(o: unknown): void {
     this.proc?.stdin!.write(JSON.stringify(o) + "\n");
   }

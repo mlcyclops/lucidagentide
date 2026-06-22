@@ -105,13 +105,54 @@ async function rememberActivity(toolName: string, text: string): Promise<void> {
   }
 }
 
+/** P-TASK.3 (ADR-0028): record an omp `task` dispatch into the run lineage with its pre-dispatch
+ *  sandbox disposition. Clean → a subagent child run (profile auto-downgraded for the assignment's
+ *  trust); blocked → a read-only security-review run instead of the dispatch. Best-effort and
+ *  fire-and-forget: it NEVER influences the gate's fail-closed decision (already made by the caller). */
+async function recordTaskDispatch(decision: { block: boolean; trustLabel: any }): Promise<void> {
+  try {
+    const db = await getDb();
+    if (!db) return;
+    const { gateTaskDispatch } = await import("../runs/task_gate.ts");
+    await gateTaskDispatch(db, LIVE_RUN, { block: decision.block, trustLabel: decision.trustLabel });
+  } catch {
+    /* best-effort lineage; the security decision already stands */
+  }
+}
+
+/** P-LOC.1 (ADR-0031): count an AI-authored file mutation that PASSED the gate (a successful
+ *  omp `write`/`edit` tool_result) into the AI-LOC attribution ledger. The authoring model and the
+ *  attribution identity are threaded in from the IDE via env at omp spawn (LUCID_MODEL / LUCID_IDENTITY /
+ *  LUCID_IDENTITY_SOURCE / LUCID_REPO); the lines come from omp's own post-apply diff. Best-effort and
+ *  fire-and-forget: it NEVER influences the gate's fail-closed decision. */
+async function recordEditLoc(event: any): Promise<void> {
+  try {
+    if (event?.toolName !== "write" && event?.toolName !== "edit") return;
+    const db = await getDb();
+    if (!db) return;
+    const { recordAiEdit } = await import("../runs/loc_ledger.ts");
+    const src = process.env.LUCID_IDENTITY_SOURCE;
+    await recordAiEdit(db, event, {
+      model: process.env.LUCID_MODEL || "unknown",
+      identity: process.env.LUCID_IDENTITY || "unknown",
+      identitySource: src === "email" || src === "workstation" ? src : "unknown",
+      repo: process.env.LUCID_REPO || process.cwd(),
+      runId: LIVE_RUN,
+    });
+  } catch {
+    /* best-effort attribution; the security decision already stands */
+  }
+}
+
 // omp extensions are `(pi) => void` and register handlers via pi.on(...).
 export default function securityExtension(pi: any): void {
   pi.on("tool_call", async (event: any) => {
     const toolName: string = event?.toolName ?? "tool";
     const text = collectStrings(event);
     const decision = await scanAndDecide(scanner, text, TOOL_POLICY);
+    const isTask = toolName === "task"; // omp's subagent-spawn tool — gate + bind it to lineage
     if (!decision.block) {
+      if (isTask) void recordTaskDispatch(decision); // dispatched: subagent run + sandbox profile
       if (text.trim()) void rememberActivity(toolName, text); // allow + remember (provenance/memory)
       return;
     }
@@ -125,7 +166,29 @@ export default function securityExtension(pi: any): void {
       failClosed: decision.failClosed,
     });
     process.stderr.write(`\n🛡️  [LucidAgentIDE] ${summarizeNotification(notification)}\n`);
+    if (isTask) void recordTaskDispatch(decision); // blocked task → routed to read-only security-review
     void rememberActivity(toolName, text); // fire-and-forget; never blocks the gate
     return { block: true, reason: `Blocked by LucidAgentIDE security gate: ${decision.reason}` };
+  });
+
+  // P-TASK.4 (ADR-0028): gate a subagent's RETURNED text before it can become durable memory.
+  // omp delivers a finished subagent's output in a tool_result carrying a `<task-result …>` block;
+  // route that through the keystone-#2 promotion gate so a suspicious result never auto-promotes
+  // into semantic memory. Best-effort and override-free — it never changes the tool's output.
+  pi.on("tool_result", async (event: any) => {
+    // P-LOC.1: count AI-authored write/edit lines into the attribution ledger (independent of the
+    // subagent-result gating below; both are best-effort and never affect the tool result).
+    void recordEditLoc(event);
+    try {
+      const text = collectStrings(event);
+      if (!text.includes("<task-result")) return; // only finished-subagent results
+      const agent = /<task-result[^>]*\bagent="([^"]+)"/.exec(text)?.[1] ?? "task";
+      const db = await getDb();
+      if (!db) return;
+      const { gateSubagentResult } = await import("../runs/task_gate.ts");
+      await gateSubagentResult(db, scanner, { runId: LIVE_RUN, agent, resultText: text });
+    } catch {
+      /* best-effort memory gating; never affects the tool result */
+    }
   });
 }

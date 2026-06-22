@@ -30,8 +30,9 @@ const reducedMotion = (): boolean =>
 export function mountGraph(host: HTMLElement, data: PersonalGraphData, onSelect: (id: string | null) => void): GraphHandle {
   host.innerHTML = "";
   const calm = reducedMotion(); // reduced-motion: no particle flow, instant fit, gentler settle
-  const W = host.clientWidth || 600, H = host.clientHeight || 420;
-  const cx = W / 2, cy = H / 2;
+  // Mutable so the layout re-fits when the canvas resizes (side panel toggles, KG resizer, window).
+  let W = host.clientWidth || 600, H = host.clientHeight || 420;
+  let cx = W / 2, cy = H / 2;
   let lens: "kind" | "trust" = "kind";
   let scale = 1, tx = 0, ty = 0;
   let sel: string | null = null;
@@ -199,9 +200,20 @@ export function mountGraph(host: HTMLElement, data: PersonalGraphData, onSelect:
   svg.addEventListener("wheel", onWheel, { passive: false });
   svg.addEventListener("dblclick", onDbl);
 
+  // Re-fit when the canvas changes size (the facts side-panel showing/hiding, the KG resizer, or the
+  // window). Only auto-refits when the user hasn't manually panned/zoomed, so their view is preserved.
+  const ro = new ResizeObserver(() => {
+    const nw = host.clientWidth, nh = host.clientHeight;
+    if (!nw || !nh || (nw === W && nh === H)) return;
+    W = nw; H = nh; cx = W / 2; cy = H / 2;
+    if (!userMoved) computeFit();
+    reheat();
+  });
+  ro.observe(host);
+
   paint();
   return {
-    destroy() { stopped = true; cancelAnimationFrame(raf); window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); host.innerHTML = ""; },
+    destroy() { stopped = true; cancelAnimationFrame(raf); ro.disconnect(); window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); host.innerHTML = ""; },
     setLens(l) { lens = l; paint(); },
     fit() { userMoved = true; computeFit(); },
   };

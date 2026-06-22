@@ -29,21 +29,37 @@ function headers(key: string): Record<string, string> {
   return { "content-type": "application/json", "x-access-tokens": key, authorization: `Bearer ${key}` };
 }
 
-/** Monthly token usage. `used` comes from AskSage (POST /count-monthly-tokens);
- *  `limit` is the LOCAL user-set allowance - AskSage's API reports usage but not
- *  the ceiling (admins raise it in the AskSage console; no API to read it back). */
-export async function monthlyTokens(): Promise<{ used: number; limit: number } | null> {
-  const { key, base, configured, limit } = asksageConfig();
-  if (!configured) return null;
+/** Read one AskSage monthly-token counter (POST; body "{}"). Returns the numeric
+ *  `response` (the AskSage count shape), or null if the call fails/404s. */
+async function tokenCount(base: string, key: string, path: string): Promise<number | null> {
   try {
-    const r = await fetch(`${base}/count-monthly-tokens`, { method: "POST", headers: headers(key), body: "{}", signal: AbortSignal.timeout(8000) });
+    const r = await fetch(`${base}${path}`, { method: "POST", headers: headers(key), body: "{}", signal: AbortSignal.timeout(8000) });
     if (!r.ok) return null;
     const j: any = await r.json();
-    const used = Number(j.response ?? j.count ?? j.tokens ?? j.total ?? 0);
-    return { used: Number.isFinite(used) ? used : 0, limit };
+    const n = Number(j.response ?? j.count ?? j.tokens ?? j.total ?? 0);
+    return Number.isFinite(n) ? n : null;
   } catch {
     return null;
   }
+}
+
+/**
+ * Monthly token usage, fully from the AskSage Civ API (no manual limit):
+ *  - `used`      → POST /count-monthly-tokens               (this account's usage this month)
+ *  - `remaining` → POST /count-monthly-tokens-left-with-org (left, accounting for user AND org caps)
+ *  - `limit`     → used + remaining                         (the real monthly allowance)
+ * There is no user-only "tokens left" endpoint (it 404s), so the org-aware remaining is the
+ * authoritative ceiling; used + remaining recovers the allowance. Falls back to the locally-stored
+ * limit only if the remaining call is unavailable. Returns null only if usage itself can't be read.
+ */
+export async function monthlyTokens(): Promise<{ used: number; remaining: number | null; limit: number } | null> {
+  const { key, base, configured, limit: storedLimit } = asksageConfig();
+  if (!configured) return null;
+  const used = await tokenCount(base, key, "/count-monthly-tokens");
+  if (used == null) return null; // can't read usage → treat the gateway as unreachable
+  const remaining = await tokenCount(base, key, "/count-monthly-tokens-left-with-org");
+  const limit = remaining != null ? used + remaining : storedLimit;
+  return { used, remaining, limit };
 }
 
 /** Dataset (knowledge base) names available on the account (POST /get-datasets). */

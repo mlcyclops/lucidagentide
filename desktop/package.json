@@ -23,7 +23,7 @@
       "output": "release",
       "buildResources": "build"
     },
-    "files": ["dist/**", "renderer/**", "package.json"],
+    "files": ["dist/**", "renderer/**", "package.json", "node_modules/monaco-editor/min/**"],
     "asarUnpack": [],
     "extraResources": [
       {
@@ -113,7 +113,8 @@
   "dependencies": {
     "@types/katex": "^0.16.8",
     "electron-updater": "^6.3.9",
-    "katex": "^0.17.0"
+    "katex": "^0.17.0",
+    "monaco-editor": "^0.55.1"
   },
   "devDependencies": {
     "@resvg/resvg-js": "^2.6.2",

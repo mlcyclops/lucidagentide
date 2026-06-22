@@ -11,7 +11,7 @@ import type { ScannerClient } from "../security/scanner_client.ts";
 import { Telemetry, type TelemetryEvent } from "../telemetry/events.ts";
 import { randomKey } from "./crypto.ts";
 import { PersonalStore } from "./store.ts";
-import { detectVendor, parseExport } from "./import_adapters.ts";
+import { detectVendor, isConversationShard, mergeConversationShards, parseExport } from "./import_adapters.ts";
 import { importConversations } from "./importer.ts";
 
 let n = 0;
@@ -88,6 +88,49 @@ test("detectVendor + parseExport handle Gemini Takeout (My Activity), stripping 
   expect(conversations.length).toBe(1);
   expect(conversations[0]!.messages.every((m) => m.role === "user")).toBe(true);
   expect(conversations[0]!.messages[0]!.text).toBe("I prefer dark mode and I use Rust"); // "Prompted:" stripped
+});
+
+// ── modern sharded ChatGPT export (conversations-000.json … -NNN.json) ──────────────
+test("isConversationShard matches conversations.json and conversations-NNN.json (basename, case-insensitive)", () => {
+  expect(isConversationShard("conversations.json")).toBe(true);
+  expect(isConversationShard("conversations-000.json")).toBe(true);
+  expect(isConversationShard("conversations-12.json")).toBe(true);
+  expect(isConversationShard("ChatGPT/CONVERSATIONS-001.JSON")).toBe(true); // folder-prefixed + case
+  expect(isConversationShard("conversation_asset_file_names.json")).toBe(false);
+  expect(isConversationShard("MyActivity.json")).toBe(false);
+  expect(isConversationShard("conversations-abc.json")).toBe(false);
+});
+
+test("mergeConversationShards concatenates shard arrays in order and skips non-arrays", () => {
+  const merged = mergeConversationShards([[{ a: 1 }, { a: 2 }], null, [{ a: 3 }], { not: "array" }]);
+  expect(merged).toEqual([{ a: 1 }, { a: 2 }, { a: 3 }]);
+  expect(mergeConversationShards([])).toEqual([]);
+});
+
+test("parseExport over MERGED shards yields all conversations across shards", () => {
+  // Two shards, each its own JSON array — exactly the modern export's shape.
+  const shard0 = [{ title: "A", mapping: { a: { message: { author: { role: "user" }, create_time: 1, content: { content_type: "text", parts: ["I prefer Rust"] } } } } }];
+  const shard1 = [{ title: "B", mapping: { b: { message: { author: { role: "user" }, create_time: 1, content: { content_type: "text", parts: ["I use vim"] } } } } }];
+  const merged = mergeConversationShards([shard0, shard1]);
+  expect(detectVendor(merged)).toBe("openai");
+  const { conversations } = parseExport(merged);
+  expect(conversations.map((c) => c.title)).toEqual(["A", "B"]); // both shards present
+});
+
+test("parseExport captures voice audio_transcription parts (the export already transcribes voice)", () => {
+  // Voice turns arrive as multimodal_text whose user part is an audio_transcription object with .text;
+  // partsText pulls that out so spoken words teach the profile without needing the .wav assets.
+  const voice = [{
+    title: "Voice chat",
+    mapping: {
+      u: { message: { author: { role: "user" }, create_time: 1, content: { content_type: "multimodal_text", parts: [
+        { content_type: "audio_transcription", direction: "in", text: "I prefer kayaking on weekends" },
+        { content_type: "audio_asset_pointer", asset_pointer: "file-x" }, // no text → skipped
+      ] } } },
+    },
+  }];
+  const { conversations } = parseExport(voice);
+  expect(conversations[0]!.messages[0]!.text).toContain("kayaking");
 });
 
 test("importConversations: maxMessages caps work and reports skipped (no silent truncation)", async () => {

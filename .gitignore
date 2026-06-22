@@ -31,6 +31,8 @@ Thumbs.db
 
 # --- local Claude Code settings (personal; shared config lives in settings.json) ---
 .claude/settings.local.json
+# Agent worktrees (isolated per-agent repo copies) — transient, never commit them
+.claude/worktrees/
 
 # desktop electron app
 desktop/node_modules/

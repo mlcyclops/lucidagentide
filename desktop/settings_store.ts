@@ -11,8 +11,9 @@
 
 import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { homedir } from "node:os";
+import { homedir, hostname } from "node:os";
 import { join } from "node:path";
+import { emailDomainAllowed, managedConfig, skipAllowed } from "./managed_config.ts";
 
 const FILE = join(homedir(), ".omp", "lucid-gui.json");
 
@@ -29,6 +30,13 @@ export interface McpServerEntry {
 
 export interface GuiSettings {
   username?: string;
+  // Corporate email — the attribution identity for code-activity / per-model LOC (ADR-0030).
+  // Prompted on first open if unset. Stored locally only (like username); never sent off-host.
+  email?: string;
+  // How code activity is attributed. "email" = use `email`; "workstation" = the user skipped the
+  // email prompt, so fall back to the machine hostname (still traceable, still rolls up to the
+  // dashboard / MCP push). `undefined` = not decided yet → show the first-open prompt.
+  attributionMode?: "email" | "workstation";
   keys?: Record<string, string>;
   workspace?: string;
   recentWorkspaces?: string[];
@@ -64,27 +72,40 @@ export interface GuiSettings {
   personalizationEnabled?: boolean;
   // Active compartment (ADR-0012): work | personal | cui | combined (view). Default personal.
   personalScope?: "work" | "personal" | "cui" | "combined";
+  // P-LOC.1 (ADR-0031): the last model omp reported active, persisted so the AI-LOC gate can tag
+  // edits with the authoring model from the very first edit of a fresh session (env at spawn).
+  lastModel?: string;
+  // P-IDE.1c (ADR-0029): the user acknowledged the data-sovereignty warning for China-origin models
+  // (DeepSeek/Kimi/MiniMax/GLM/…). Until set, those models are hidden from the picker. Off by default.
+  chinaModelsAcknowledged?: boolean;
 }
 
 export const ASKSAGE_DEFAULT_LIMIT = 200_000;
 
+/** Base directory for all personalization artifacts. Defaults to `~/.omp`; `LUCID_PERSONAL_DIR`
+ *  relocates the whole set (store, CUI store, audit, exports) as one unit — for tests and isolated
+ *  demos that must NOT touch the real encrypted store. Override-only; it changes WHERE the encrypted
+ *  file lives, never WHETHER content is gated (the security gate is independent of this path). */
+export function personalBaseDir(): string {
+  return process.env.LUCID_PERSONAL_DIR || join(homedir(), ".omp");
+}
 /** Default on-disk location of the encrypted personalization store (P9.1) — work + personal. */
 export function personalStorePath(): string {
-  return join(homedir(), ".omp", "lucid-personal.kg.enc");
+  return join(personalBaseDir(), "lucid-personal.kg.enc");
 }
 /** The SEPARATE encrypted CUI store (P9.5a, ADR-0014) — its own file, DEK, and passphrase, so
  *  one key never decrypts both CUI and non-CUI. */
 export function personalCuiStorePath(): string {
-  return join(homedir(), ".omp", "lucid-cui.kg.enc");
+  return join(personalBaseDir(), "lucid-cui.kg.enc");
 }
 /** Metadata-only audit log for personalization exports (P9.4). NDJSON; counts + hashes
  *  only, never fact content (the full, private trail lives encrypted inside the store). */
 export function personalAuditPath(): string {
-  return join(homedir(), ".omp", "lucid-personal-audit.ndjson");
+  return join(personalBaseDir(), "lucid-personal-audit.ndjson");
 }
 /** Default export destinations (P9.4). The CUI archive is deliberately separate. */
-export function personalVaultDir(): string { return join(homedir(), ".omp", "lucid-vault"); }
-export function personalCuiArchiveDir(): string { return join(homedir(), ".omp", "lucid-cui-archive"); }
+export function personalVaultDir(): string { return join(personalBaseDir(), "lucid-vault"); }
+export function personalCuiArchiveDir(): string { return join(personalBaseDir(), "lucid-cui-archive"); }
 export function setPersonalization(enabled: boolean): GuiSettings {
   const s = load(); s.personalizationEnabled = enabled; save(s); return s;
 }
@@ -165,6 +186,60 @@ export function setAsksage(opts: { baseUrl?: string; only?: boolean; limit?: num
 }
 export function setUsername(name: string): GuiSettings {
   const s = load(); s.username = name; save(s); return s;
+}
+/** Set profile fields (username and/or corporate email). Only provided fields change. A non-empty
+ *  email also locks attribution to "email". */
+export function setProfile(p: { username?: string; email?: string }): GuiSettings {
+  const s = load();
+  if (p.username !== undefined) s.username = p.username;
+  if (p.email !== undefined) {
+    s.email = p.email.trim();
+    if (s.email) s.attributionMode = "email";
+  }
+  save(s); return s;
+}
+/** P-IDE.1c (ADR-0029): the data-sovereignty acknowledgement gate for China-origin models. */
+export function chinaModelsAcknowledged(): boolean { return !!load().chinaModelsAcknowledged; }
+export function setChinaModelsAcknowledged(on: boolean): GuiSettings {
+  const s = load(); s.chinaModelsAcknowledged = on; save(s); return s;
+}
+/** P-LOC.1 (ADR-0031): the last omp-reported active model, used to tag AI-LOC ledger rows from the
+ *  first edit of a session. Empty until omp reports one (then the gate records model 'unknown'). */
+export function lastModel(): string { return load().lastModel ?? ""; }
+export function setLastModel(model: string): void {
+  const m = (model ?? "").trim(); if (!m) return;
+  const s = load(); if (s.lastModel === m) return; s.lastModel = m; save(s);
+}
+/** User skipped the email prompt: attribute by workstation hostname instead (recorded, not forced).
+ *  No-op when managed policy disallows skipping (the caller should check `skipAllowed()` first). */
+export function setAttributionSkip(): GuiSettings {
+  const s = load(); if (skipAllowed()) s.attributionMode = "workstation"; save(s); return s;
+}
+
+export interface Attribution {
+  identity: string; source: "email" | "workstation"; email: string; workstation: string; decided: boolean;
+  // Managed-policy view (drives the UI: hide Skip, require/validate email, show "Managed by …").
+  managed: boolean; orgName: string; requireEmail: boolean; allowSkip: boolean; allowedDomains: string[];
+}
+/** The effective attribution identity, folding in enterprise-managed policy. `decided` is false until
+ *  the user satisfies policy (provides a compliant email, or skips when allowed) → drives the prompt.
+ *  Workstation fallback keeps every metric traceable + roll-up-able when skipping is permitted. */
+export function attribution(): Attribution {
+  const s = load();
+  const workstation = hostname();
+  const email = s.email ?? "";
+  const mc = managedConfig().config;
+  const orgName = typeof mc?.orgName === "string" ? mc.orgName : "";
+  const requireEmail = !!mc?.attribution?.requireEmail;
+  const allowSkip = skipAllowed();
+  const allowedDomains = mc?.attribution?.allowedEmailDomains ?? [];
+  const base = { email, workstation, managed: !!mc, orgName, requireEmail, allowSkip, allowedDomains };
+  const emailOk = !!email && emailDomainAllowed(email);
+  // A prior skip only counts if skipping is (still) allowed by policy.
+  if (s.attributionMode === "workstation" && allowSkip) return { ...base, identity: workstation, source: "workstation", decided: true };
+  if (emailOk) return { ...base, identity: email, source: "email", decided: true };
+  // Undecided (no compliant email, and skip not taken/allowed) → prompt; fall back to a traceable id.
+  return { ...base, identity: email || workstation, source: email ? "email" : "workstation", decided: false };
 }
 export function setKey(env: string, key: string): GuiSettings {
   const s = load(); s.keys = s.keys ?? {};
