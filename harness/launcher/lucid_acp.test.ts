@@ -6,7 +6,7 @@
 // is needed — the launcher is structured so the gate can't be bypassed.
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -73,7 +73,9 @@ test("assets resolve under the repo root", () => {
   const a = assets("/repo");
   expect(a.gate.replace(/\\/g, "/")).toBe("/repo/harness/omp/security_extension.ts");
   expect(a.asksage.replace(/\\/g, "/")).toBe("/repo/harness/omp/asksage_extension.ts");
-  expect(repoRoot()).toContain("LucidAgentIDE");
+  // host-independent: repoRoot() must point at a real repo (the gate file lives under it). NOT a string
+  // match on the folder name — the CI checkout dir is lowercase `lucidagentide`, case-sensitive on Linux.
+  expect(existsSync(join(repoRoot(), "harness", "omp", "security_extension.ts"))).toBe(true);
 });
 
 test("resolveOmp prefers an existing LUCID_OMP_BIN and never uses a bogus one", () => {
