@@ -1,0 +1,21 @@
+{
+  "_comment": "Language-neutral parity spec for the IDE-client security logic (ADR-0038). BOTH the TS extension (harness/launcher/ide_client.ts, P-EXT.2) and the JetBrains Kotlin port (extensions/jetbrains, P-EXT.3) run their implementations against THESE cases, so the two editors share one verified contract. Keep in sync; a change here is a change to both.",
+  "launcherAccept": [
+    { "path": "/usr/local/bin/lucid", "accept": true },
+    { "path": "/usr/local/bin/lucid.exe", "accept": true },
+    { "path": "C:\\Users\\x\\AppData\\Local\\Programs\\LucidAgentIDE\\resources\\repo\\node_modules\\.bin\\lucid.exe", "accept": true },
+    { "path": "lucid", "accept": true },
+    { "path": "/opt/tools/omp", "accept": false },
+    { "path": "/usr/bin/lucidd", "accept": false },
+    { "path": "/usr/bin/notlucid", "accept": false },
+    { "path": "/usr/bin/lucid-helper", "accept": false },
+    { "path": "/usr/bin/lucid.sh", "accept": false },
+    { "path": "", "accept": false }
+  ],
+  "blockLines": [
+    { "line": "🛡️ [BLOCKED tool_call:write] reason=hidden-unicode severity=high findings=zero-width×2", "expect": { "tool": "write", "severity": "high", "findings": "zero-width×2" } },
+    { "line": "[BLOCKED tool_call:bash] severity=critical findings=bidi-control", "expect": { "tool": "bash", "severity": "critical", "findings": "bidi-control" } },
+    { "line": "ordinary log line, not a block", "expect": null },
+    { "line": "[BLOCKED] malformed without fields", "expect": null }
+  ]
+}

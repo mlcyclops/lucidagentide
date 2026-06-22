@@ -69,8 +69,14 @@ export function buildLauncherCandidates(o: LauncherCandidateOpts = {}): string[]
   for (const d of o.pathDirs ?? []) if (d && d.trim()) out.push(j(d.trim(), bin));
   // SECURITY: keep ONLY the user's explicit config path + lucid-looking binaries. Nothing else can
   // enter the candidate list, so the extension can never be steered to spawn a non-lucid command.
-  const isLucid = (p: string) => /(^|[\\/])lucid(\.exe)?$/.test(p);
-  return out.filter((p) => p === config || isLucid(p));
+  return out.filter((p) => p === config || isLucidBinary(p));
+}
+
+/** Whether a path is a `lucid` launcher binary (its basename is exactly `lucid` or `lucid.exe`). The
+ *  security filter that keeps non-lucid commands (e.g. `omp`) out of the candidate list. Mirrored
+ *  byte-for-byte by the JetBrains port; pinned by the ext_parity.json shared spec. */
+export function isLucidBinary(p: string): boolean {
+  return /(^|[\\/])lucid(\.exe)?$/.test(p);
 }
 
 /** Pick the first candidate that exists. Returns null if none — the caller must then prompt to install

@@ -1,0 +1,17 @@
+<idea-plugin>
+  <id>com.lucidagentide.plugin</id>
+  <name>LucidAgentIDE</name>
+  <vendor url="https://github.com/mlcyclops/lucidagentide">LucidAgentIDE</vendor>
+  <description><![CDATA[
+    Chat with the Lucid coding agent (omp) over the Agent Client Protocol, with the in-process
+    security gate always loaded. The plugin spawns only the fail-closed <code>lucid acp</code>
+    launcher — never a raw agent command — so it can never produce an ungated session.
+  ]]></description>
+
+  <depends>com.intellij.modules.platform</depends>
+
+  <extensions defaultExtensionNs="com.intellij">
+    <toolWindow id="LucidAgentIDE" anchor="right" icon="/icons/lucid.svg"
+                factoryClass="com.lucidagentide.plugin.LucidToolWindowFactory"/>
+  </extensions>
+</idea-plugin>

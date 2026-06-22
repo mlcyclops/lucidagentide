@@ -4,6 +4,23 @@ Three lines per session: **shipped / stubbed / next** (CLAUDE.md session ritual)
 
 -----
 
+## P-EXT.3: JetBrains plugin — Kotlin ACP client of `lucid acp` (ADR-0038)
+- **shipped:** extensions/jetbrains/ — a Gradle IntelliJ-Platform plugin (Kotlin) driving the gated
+  agent over ACP from a tool window. Launcher.kt mirrors the tested ide_client.ts security core
+  (isLucidBinary only-lucid filter — never a raw agent command, candidate resolution, [BLOCKED]
+  parser); AcpClient.kt is the Kotlin twin of desktop/acp.ts (line-delimited JSON-RPC over stdio);
+  LucidToolWindow.kt spawns `lucid acp` with the project dir as cwd, streams reply + tool activity, runs
+  the FAIL-CLOSED permission round-trip (cancel/close ⇒ deny), shows the gate block banner. A SHARED
+  parity spec harness/launcher/ext_parity.json pins isLucidBinary + parseBlockLine; BOTH the TS
+  extension (ext_parity.test.ts) and the Kotlin ParityTest run against it → one verified contract across
+  editors. 439 harness green (extracted isLucidBinary + 2 parity tests); root tsc clean.
+- **stubbed:** the Kotlin DOES NOT compile/test in the Bun harness env (no JDK/Gradle) — it builds +
+  runs ParityTest in CI / on a JVM machine; the security contract IS verified here via the shared spec
+  on the TS side. The Swing tool-window UI is an MVP (agent_thought_chunk omitted from the log);
+  publishPlugin is P-EXT.4. DECISIONS.md/ADR-0038 left to the cloud author to avoid a clash.
+- **next:** P-EXT.4 — marketplace packaging (vsce/ovsx for VS Code + OpenVSX; Gradle publishPlugin for
+  JetBrains), sign + ship the `lucid` bin in the installer, optional token-gated attach-mode.
+
 ## P-EXT.2: VS Code extension — thin ACP client of `lucid acp` (ADR-0038)
 - **shipped:** extensions/vscode/ — a VS Code extension that drives the gated agent over ACP. Resolves
   the Lucid launcher SECURELY (lucid.launcherPath → installed app → PATH; NEVER a raw agent command —
