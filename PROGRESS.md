@@ -4,6 +4,25 @@ Three lines per session: **shipped / stubbed / next** (CLAUDE.md session ritual)
 
 -----
 
+## P8.2 / Phase B: prompt/response traceability — turn transcripts (ADR-0009 Phase B, issue #12)
+- **shipped:** the deferred Phase B (Alex's #12). HARNESS CORE: migration 0009_turn_transcripts.sql
+  (`turns` table) + new EventName `turn_captured` (contracts.ts) + harness/memory/turns.ts —
+  captureTurn archives the RAW turn in archive_chunks (by sha), escapeMarkdowns it into the turns row
+  (the only text rendered), and emits a METADATA-ONLY event (ids/role/seq/sha/trust/blocked — never
+  the text); getTurns reads transcripts in order. DESKTOP: the omp hook never sees the prompt/reply, so
+  capture lives in acp_backend.prompt() (GUI-side, can't co-write DuckDB) → desktop/turns_log.ts appends
+  sanitized+sha to ~/.omp/lucid-turns.jsonl + the event, best-effort after `done` (mirrors security_log/
+  skills_log). The Phase D Logs view now surfaces them (Turn transcripts accordion + turns chip),
+  closing its stub. 9 new tests (turns 6 + turns_log 3); harness 419 + desktop 261 green, tsc clean
+  (3 configs), demo-P8.2 passes. Verified live (preview): panel renders transcripts, corrupt-line guard
+  holds, no console errors.
+- **stubbed:** GUI live path passes blocked-count 0 (per-turn finding correlation from the gate's
+  security_log not yet wired); audited per-transcript raw-reveal shares Phase D's deferred raw_revealed
+  gate; the harness `turns` DuckDB table is written by the tested core + demo (live capture uses the
+  JSONL sidecar — the same two-process split as Phase A / security_log).
+- **next:** wire the per-turn blocked-count from security_log into recordTurns; then Phase D raw-reveal
+  (POST /api/dev/reveal + raw_revealed), or ADR-0015 P9.6 crypto-agility.
+
 ## P11.2: right rail UX — memory default, security triage, ledger hierarchy (ADR-0021)
 - **shipped:** (1) **Default tab → Memory** — `state.inspectorTab` now initialises to `"memory"`,
   and the HTML tab buttons match (Memory gets `active` class). When the inspector is collapsed to

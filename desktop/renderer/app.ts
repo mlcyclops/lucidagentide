@@ -1490,18 +1490,23 @@ function securityHtml(d: SecuritySnapshot | null): string {
 // ── ADR-0009 Phase D: developer Logs view (read-only; metadata only) ──────────────
 function devHtml(d: import("./bridge.ts").DevView | null): string {
   let h = `<div class="sec-intro"><div class="sec-intro-h"><span class="sec-pulse">${icon("layout", 17)}</span><b>Developer logs</b></div>
-    <div class="sec-intro-d">Read-only telemetry, run lineage, and audit trails from this machine - metadata only, no prompt or file content. Per-turn transcripts arrive with ADR-0009 Phase B.</div></div>`;
-  if (!d || !d.enabled) { h += `<div class="empty">Developer mode is off. Turn it on in <b>Settings → Developer mode</b> to see the telemetry stream, run lineage, and the audit trail.</div>`; return h; }
-  const tel = d.snapshot?.telemetry ?? [], runs = d.snapshot?.runs ?? [], exp = d.snapshot?.exports ?? [], blk = d.blocks?.quarantined ?? [];
+    <div class="sec-intro-d">Read-only telemetry, run lineage, transcripts, and audit trails from this machine - sanitized, no raw prompt or file content (the raw is referenced by sha only).</div></div>`;
+  if (!d || !d.enabled) { h += `<div class="empty">Developer mode is off. Turn it on in <b>Settings → Developer mode</b> to see the telemetry stream, run lineage, transcripts, and the audit trail.</div>`; return h; }
+  const tel = d.snapshot?.telemetry ?? [], runs = d.snapshot?.runs ?? [], exp = d.snapshot?.exports ?? [], blk = d.blocks?.quarantined ?? [], turns = d.turns ?? [];
   h += chips([
     { cls: "f", n: tel.length, l: "events" },
     { cls: "g", n: runs.length, l: "runs" },
+    { cls: "g", n: turns.length, l: "turns" },
     { cls: "q", n: blk.length, l: "live blocks" },
     { cls: "a", n: exp.length, l: "exports" },
   ]);
   h += accordion("dev.telemetry", "Telemetry stream", "recent · metadata only",
     table([{ key: "event", label: "event" }, { key: "run_id", label: "run", mono: true }, { key: "session_id", label: "session", mono: true }, { key: "created_at", label: "at", mono: true }], tel),
     true, String(tel.length));
+  const turnRows = turns.map((t) => ({ seq: t.seq, role: t.role, trust: t.trust, sanitized: t.sanitized, sha: String(t.rawSha256).slice(0, 12) }));
+  h += accordion("dev.turns", "Turn transcripts", "sanitized · raw by sha",
+    table([{ key: "seq", label: "#", mono: true }, { key: "role", label: "role", pill: true }, { key: "trust", label: "trust", mono: true }, { key: "sanitized", label: "text" }, { key: "sha", label: "raw sha", mono: true }], turnRows as unknown as Record<string, unknown>[]),
+    OPEN.has("dev.turns"), String(turns.length));
   h += accordion("dev.runs", "Run lineage", "provenance",
     table([{ key: "run_id", label: "run", mono: true }, { key: "kind", label: "kind" }, { key: "mode", label: "mode" }, { key: "sandbox_profile", label: "sandbox" }, { key: "status", label: "status" }], runs),
     OPEN.has("dev.runs"), String(runs.length));

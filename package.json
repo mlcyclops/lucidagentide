@@ -33,6 +33,8 @@
     "demo-P7.1": "bun run harness/scripts/demo14_dashboards.ts",
     "demo-P7.2": "bun run harness/scripts/demo15_replay_bench.ts",
     "demo-P-LOC.1": "bun run harness/scripts/demo16_ai_loc.ts",
+    "demo-P8.1": "bun run harness/scripts/demo17_recall.ts",
+    "demo-P8.2": "bun run harness/scripts/demo18_turns.ts",
     "dashboards": "bun run harness/scripts/materialize_dashboards.ts",
     "omp:secure": "omp -e harness/omp/security_extension.ts",
     "dashboard:tui": "bun run tools/dashboard_tui.ts",

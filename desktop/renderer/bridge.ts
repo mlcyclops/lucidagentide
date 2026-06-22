@@ -49,10 +49,13 @@ export interface ProbedLimit { provider: string; label: string; used: number; re
 export interface McpServerStatus { id: string; name: string; transport: "http" | "sse"; url: string; enabled: boolean; hasToken: boolean; tokenLast4?: string }
 
 // ADR-0009 Phase D: read-only developer Logs view (gated on Developer mode).
+export interface TurnView { id: string; sessionId: string; seq: number; role: string; sanitized: string; rawSha256: string; trust: string; at: string }
 export interface DevView {
   enabled: boolean;
   snapshot: { telemetry: any[]; runs: any[]; exports: any[] } | null;
   blocks: { quarantined: BlockRecord[]; approved: BlockRecord[]; total: number };
+  // ADR-0009 Phase B (issue #12): captured prompt/response transcripts (sanitized; raw by sha).
+  turns: TurnView[];
 }
 // P10.2 cross-model usage & cost ledger
 export interface ModelUsage {

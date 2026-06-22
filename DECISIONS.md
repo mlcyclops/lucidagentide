@@ -615,9 +615,9 @@ collapsed on boot (`toggleSidebar(true)` + `setInspectorRail(true)`) for a calme
 
 **Date:** 2026-06-19
 **Status:** Accepted as a roadmap. **Phase C** superseded by ADR-0013 (vault export, built).
-**Phase D BUILT** (scoped — Logs view; transcripts + raw-reveal deferred, see Phase D below).
-**Phase A BUILT** (this increment — cross-session memory recall; delta below). **Phase B**
-(traceability) remains **Proposed**, assigned to contributor alexander-blackwell (issue #12).
+**Phase D BUILT** (scoped — Logs view; raw-reveal still deferred; per-turn transcripts now
+surfaced via Phase B). **Phase A BUILT** (cross-session memory recall; delta below).
+**Phase B BUILT** (this increment — prompt/response traceability, issue #12; delta below).
 Each lands in its own increment.
 **Context increment:** P8.0 (planning only — no functional code shipped this session).
 
@@ -691,6 +691,40 @@ user prompt or free-text reply); best-effort, buffered, flushed on `done`. Sanit
 impacts:* migration `0008_turn_transcripts.sql` — `turns(turn_id, run_id, session_id, seq,
 role, sanitized_text, raw_sha256, archive_chunk_id, trust_label, created_at)`; new `EventName`
 `turn_captured` (metadata only — ids/role/sha/blocked-count, no content).
+
+#### Phase B delta — BUILT (prompt/response traceability, issue #12)
+
+Shipped as specced. **Harness core** (the contract-bearing, replayable half): migration
+`0009_turn_transcripts.sql` adds the `turns` table exactly as designed (renumbered from `0008`
+on merge — `0008` was already claimed by Phase A's `0008_memory_session.sql`, same wrinkle the
+Phase A merge note records). New `EventName` `turn_captured` in `contracts.ts` (the frozen-contract
+delta this ADR sanctions). `harness/memory/turns.ts` — `captureTurn(db, …)` archives the RAW text
+in `archive_chunks` (source of truth, by `content_sha256`), `escapeMarkdown`s it into the `turns`
+row (the only text ever rendered), and emits the **metadata-only** `turn_captured` event
+(`turn_id`/`role`/`seq`/`raw_sha256`/`trust_label`/blocked-count — never the prompt or reply text;
+the artifact in scope is the raw chunk). `getTurns(db, …)` reads transcripts in session/seq order
+for replay + the Logs view. Trust defaults to `untrusted` (the safe floor); the caller may raise it
+(e.g. `trusted` for model output). Coverage: `harness/memory/turns.test.ts` (raw-preserved-vs-
+sanitized, metadata-only event, role closed-set, trust default, ordering/filter) + demo
+`harness/scripts/demo18_turns.ts` (`demo-P8.2`).
+
+**Desktop wiring** (the actual hook point — the omp tool-call hook never sees the prompt/reply, so
+capture lives in the GUI's `acp_backend.prompt()` stream). The GUI can't co-write `agent_obs.duckdb`
+(the omp child holds the single writer), so — exactly like `security_log.ts` / `skills_log.ts` —
+`desktop/turns_log.ts` records each turn-pair to an append-only JSONL (`~/.omp/lucid-turns.jsonl`)
+plus the metadata-only `turn_captured` event, SANITIZED + sha only (the raw text is never persisted
+GUI-side). `acp_backend.prompt()` calls `recordTurns()` best-effort after `done` (alongside
+`learnFromTurn`), so a capture failure can never break the chat. The Phase D **Logs** view now
+surfaces the captured transcripts (a "Turn transcripts" accordion + a turns chip in `/api/dev`),
+closing the Phase-D stub that deferred them here. `desktop/turns_log.test.ts` covers the
+metadata-only event + the sanitized/sha-only JSONL. Verified live (browser preview): the panel
+renders the transcripts, the corrupt-line guard drops a malformed record, no console errors.
+
+*Carried forward (stubbed):* the GUI live path passes blocked-count `0` (the per-turn finding count
+isn't yet correlated from the gate's `security_log`); the audited raw-reveal for a transcript shares
+Phase D's deferred `raw_revealed` gate; the harness `turns` table is written by the tested core +
+demo (and any future single-writer consumer) — live desktop capture goes to the JSONL sidecar, the
+same two-process split Phase A and `security_log` use.
 
 **Phase C — `P8.3-vault-export` (Obsidian KG).** Satisfies #2. Depends on A; reuses B.
 Export the semantic graph as an Obsidian vault: note-per-entity (`semantic_entities`) with

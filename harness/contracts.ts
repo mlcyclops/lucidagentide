@@ -50,6 +50,9 @@ export const EVENT_NAMES = [
   "memory_promotion_blocked",
   // ADR-0009 Phase A — distilled facts recalled into a later session (carries run_id/session_id + count).
   "memory_recalled",
+  // ADR-0009 Phase B (issue #12) — a prompt/response turn was captured for traceability.
+  // METADATA ONLY: turn_id/role/seq/raw_sha256/trust_label/blocked-count — never the text.
+  "turn_captured",
   "remote_run_blocked",
   "safe_export_created",
   "incident_bundle_created",

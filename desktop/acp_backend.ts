@@ -14,6 +14,7 @@ import { ACPClient } from "./acp.ts";
 import { BUILD_POLICY, DELEGATION_POLICY } from "../harness/prompt/assembler.ts";
 import { currentWorkspace } from "./workspace.ts";
 import { learnFromTurn, recallPreamble } from "./personal.ts";
+import { recordTurns } from "./turns_log.ts";
 import { recordBlock } from "./security_log.ts";
 import { attribution, lastModel, mcpServersForAcp, setLastModel } from "./settings_store.ts";
 
@@ -374,6 +375,9 @@ class Backend {
     this.listener = null;
     onEvent({ type: "done" });
     void learnFromTurn(text, assistant); // best-effort, after the turn — fail-closed inside
+    // ADR-0009 Phase B (issue #12): capture the turn for traceability. Sanitized + sha only,
+    // GUI-side (can't co-write DuckDB); fully guarded so it never affects the chat.
+    recordTurns({ sessionId: this.sessionId ?? "", userText: text, assistantText: assistant });
   }
 
   /** P-ACP.4: interrupt the in-flight turn. Sends the ACP `session/cancel` notification — omp aborts
