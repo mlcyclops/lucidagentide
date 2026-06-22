@@ -1,0 +1,79 @@
+# Build + test the IDE extensions (ADR-0038 P-EXT.2/3/4). This is the verification the Bun harness
+# environment can't do locally: it COMPILES the JetBrains Kotlin plugin (gradle test buildPlugin —
+# runs ParityTest against the shared harness/launcher/ext_parity.json) and BUILDS + PACKAGES the VS
+# Code extension (esbuild + vsce). Green here is the real "does the Kotlin compile / does the .vsix
+# build" signal before P-EXT.3 / P-EXT.2 merge.
+
+name: Extensions
+
+on:
+  push:
+    paths:
+      - "extensions/**"
+      - "harness/launcher/**"
+      - ".github/workflows/extensions.yml"
+  pull_request:
+    branches: [master]
+    paths:
+      - "extensions/**"
+      - "harness/launcher/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ext-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  jetbrains:
+    name: JetBrains plugin (Kotlin · gradle)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.10"
+      # `test` compiles the Kotlin + runs ParityTest (which reads the SHARED spec
+      # harness/launcher/ext_parity.json — the same cases the TS extension verifies). `buildPlugin`
+      # assembles the installable plugin zip, proving the IntelliJ-Platform build is sound.
+      - name: gradle test + buildPlugin
+        working-directory: extensions/jetbrains
+        run: gradle test buildPlugin --no-daemon --stacktrace
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jetbrains-plugin
+          path: extensions/jetbrains/build/distributions/*.zip
+          if-no-files-found: warn
+
+  vscode:
+    name: VS Code extension (esbuild · vsce)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: Install
+        working-directory: extensions/vscode
+        run: bun install
+      - name: Typecheck
+        working-directory: extensions/vscode
+        run: bun x tsc --noEmit -p tsconfig.json
+      - name: Bundle (esbuild)
+        working-directory: extensions/vscode
+        run: bun esbuild.mjs --production
+      # Package the .vsix (no-dependencies: the host bundle is esbuild-produced, deps aren't shipped).
+      - name: Package (vsce)
+        working-directory: extensions/vscode
+        run: bunx @vscode/vsce package --no-dependencies -o lucidagentide.vsix
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vscode-extension
+          path: extensions/vscode/lucidagentide.vsix
+          if-no-files-found: warn
