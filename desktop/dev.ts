@@ -156,7 +156,11 @@ const server = Bun.serve({
       }
       // P-IDE.4 (ADR-0029): serve the vendored Monaco editor (AMD min build) from node_modules so it's
       // local/airgap-clean without committing ~16MB. The read-only viewer runs Monaco on the main thread
-      // (no language-service worker); packaged builds get it via electron-builder `files`.
+      // (no language-service worker). This route reads from THIS server's dir (resources/repo/desktop in
+      // a packaged build), so the bundle MUST keep desktop/node_modules/monaco-editor/min — the repo
+      // extraResources filter re-includes it past the desktop/node_modules exclusion (electron-builder
+      // applies filters in order). The app.asar `files` copy is unreachable from here. Without the
+      // re-include this 404s in the installed app (the editor never loads) while working in dev.
       if (p.startsWith("/vendor/monaco/")) {
         const base = join(import.meta.dir, "node_modules", "monaco-editor", "min", "vs");
         const target = join(base, p.slice("/vendor/monaco/".length));

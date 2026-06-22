@@ -46,6 +46,7 @@
           "node_modules/**/*",
           "package.json",
           "!desktop/node_modules/**",
+          "desktop/node_modules/monaco-editor/min/**/*",
           "!desktop/release/**",
           "!desktop/dist/**",
           "!**/.git/**"
