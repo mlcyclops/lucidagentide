@@ -22,7 +22,7 @@ jobs:
     name: Harness tests + typecheck (Bun)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       # The load-bearing invariants live in BOTH CLAUDE.md (Claude Code) and AGENTS.md (the
       # cross-tool standard). They must stay byte-identical below the title line, or one tool's
@@ -62,7 +62,7 @@ jobs:
     name: Unicode scanner tests (Python)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
