@@ -3411,3 +3411,152 @@ harness 408 · bundle builds.**
   should slot relative to these.
 - The 20 s save timeout is a UI safety net, not a server cancel — a timed-out request may still complete
   on the server; the editor simply lets the user retry (an idempotent overwrite-or-conflict on re-save).
+
+-----
+
+## ADR-0038 — Marketplace IDE extensions (JetBrains + VS Code) that drive omp over ACP, gate stays in-process
+
+**Date:** 2026-06-22
+**Status:** **Draft (proposed)** — not built; this is the design to iterate on before any P-EXT increment.
+**Context increments (one each):** P-EXT.1 (launcher) · P-EXT.2 (VS Code) · P-EXT.3 (JetBrains) · P-EXT.4 (packaging/CI + attach-mode)
+
+### Context
+
+Today LucidAgentIDE has exactly one graphical front end: the Electron desktop shell, whose Bun
+control-plane spawns `omp acp -e harness/omp/security_extension.ts` so the gate loads in-process
+(ADR-0006 addendum; `desktop/acp_backend.ts:124`). We want to meet developers in the editors they
+already live in — **JetBrains IDEs** (IntelliJ/PyCharm/GoLand/…) and **VS Code** — with **installable
+extensions published to the JetBrains Marketplace and the VS Code Marketplace (+ OpenVSX)** that connect
+to the Lucid coding backend (omp) and talk to it over the **Agent Client Protocol (ACP)**.
+
+ACP is already proven here: `tools/acp_probe.ts` confirmed the handshake against omp 16.0.8, and the
+desktop addendum captured the live wire format (`session/new` → `configOptions`/`modes`,
+`agent_message_chunk`, `agent_thought_chunk`, `tool_call(_update)`, `usage_update`, `session/set_mode`,
+`session/request_permission`, `session/cancel`). `desktop/acp.ts` is a clean ~80-line JSON-RPC-over-stdio
+ACP client we can reuse. ADR-0006 already named "existing ACP clients like acp-ui / Zed / JetBrains" as
+the intended drivers, with the gate remaining the in-process omp hook.
+
+**The trap.** In ACP the *editor is the client* and the *agent is the server*. The naive marketplace
+extension would register "omp" as an agent and spawn **bare `omp acp`** — which loads **no `-e
+security_extension.ts`** and therefore runs with **zero Lucid security**. That silently violates
+invariant #4 (gate in-process) and the fail-closed law (#3): the most-replaceable, least-trusted piece in
+the system (a marketplace extension) would be the thing deciding whether the gate is present. That cannot
+be the design.
+
+### Decision
+
+**1. A single sanctioned, fail-closed ACP entrypoint: `lucid acp` (P-EXT.1).** The trust anchor is a
+Lucid-owned launcher, *not* the extension. `lucid acp` is a thin wrapper (new `bin` in `package.json`,
+shipped with the desktop app and installable standalone) that execs the **exact** gated command
+`desktop/acp_backend.ts` already uses:
+
+```
+omp acp -e <repo>/harness/omp/security_extension.ts \
+        -e <repo>/harness/omp/asksage_extension.ts \
+        [--isolate <acp_config.yml>] \
+        --append-system-prompt <BUILD_POLICY + DELEGATION_POLICY>
+```
+
+It resolves the omp binary (`ompBin()` logic), threads the AI-LOC attribution env (ADR-0031), and
+**fail-closes at startup**: if the gate extension fails to load or the scanner sidecar can't be reached,
+`lucid acp` returns an ACP `initialize` error and exits non-zero, so the IDE shows "agent unavailable" —
+**never** an ungated session. This makes invariant #4 hold regardless of extension code: the gate is
+always in the same OS process tree as omp, no network in the blocking path.
+
+**2. The extensions are thin ACP clients of `lucid acp` (P-EXT.2 / P-EXT.3).** They never spawn bare
+`omp acp`. Each extension:
+   - locates the `lucid` binary (installed LucidAgentIDE app → PATH → user-set path; offer download if
+     missing),
+   - spawns `lucid acp` with the **opened workspace folder as cwd** (that folder is the omp workspace and
+     the path-containment boundary, ADR-0022/0023),
+   - drives the same loop already proven in `desktop/acp.ts` + `acp_backend.ts`: `session/new` → read
+     `modes` → `session/prompt`, mapping `session/update` notifications to UI,
+   - surfaces the ADR-0027 UX: **Plan / Ask / Agent** modes (`session/set_mode`), **live thought
+     streaming** (`agent_thought_chunk`), tool-activity, **Stop** (`session/cancel`), and the
+     **permission round-trip** for Ask mode — **fail-closed**: timeout / view-closed / no-decision ⇒
+     `cancelled` (deny), exactly as P-ACP.3 specifies,
+   - watches stderr for the gate's authoritative `[BLOCKED …]` line and renders a security-block banner
+     (the same reliable signal the desktop shell uses).
+
+   **VS Code (P-EXT.2):** TypeScript extension; **reuse `desktop/acp.ts` directly** as the ACP client in
+   the extension host. UI = a Webview **view** in a Lucid activity-bar container (parity with the Electron
+   renderer; full control over Plan/Ask/Agent + thinking + block banner). A VS Code *chat-participant* /
+   Language Model API integration is a possible later add-on, not the MVP. Publish to **VS Code
+   Marketplace + OpenVSX** (OpenVSX so Cursor/VSCodium/Windsurf users can install too).
+
+   **JetBrains (P-EXT.3):** Gradle IntelliJ-Platform plugin (Kotlin). Port the tiny `desktop/acp.ts`
+   client to Kotlin (it is line-delimited JSON-RPC — trivial) so the gate still lives in `lucid acp`, not
+   in the JVM. UI = a Lucid **tool window**. Publish to the **JetBrains Marketplace**. (If a host already
+   exposes a generic ACP "external agent" registration, a lighter path is to just contribute a `lucid acp`
+   agent definition + panel; we still ship the full plugin so the experience does not depend on the host's
+   ACP maturity.)
+
+**3. No ungated escape hatch by default.** There is no setting that points an extension at a raw agent
+command. If an "advanced: custom agent command" is ever added it must be opt-in behind a prominent
+"⚠ Lucid security gate disabled" wall, and `lucid acp` itself still verifies the gate loaded and refuses
+otherwise (#3). The marketplace is an untrusted distribution channel; the launcher is the chokepoint.
+
+### Why
+
+- **Real ACP, not a second protocol.** The user asked specifically for ACP. Driving `lucid acp` over
+  stdio JSON-RPC is genuine ACP and reuses code already verified against omp 16.0.8 — no new wire format,
+  no fork (invariant #1; the gate, modes, permissions are all native omp/ACP mechanisms).
+- **The gate cannot be left out.** Putting the `-e security_extension.ts` decision in `lucid acp` (Lucid
+  code) rather than in extension code means installing the marketplace extension can never produce an
+  ungated session. Fail-closed at launcher startup covers the dead-sidecar / unloadable-gate cases.
+- **Per-workspace sessions, no desktop app required.** Each IDE window gets its own gated omp session
+  scoped to its folder — better than every IDE attaching to one shared Electron session.
+
+### Integration with the invariants
+
+- **Extend omp; never fork (#1).** ACP, modes, permission requests, and `-e` extensions are all native
+  omp surfaces. The launcher is a wrapper; the extensions are clients. Nothing forks omp.
+- **Fail-closed is law (#3).** `lucid acp` refuses to serve if the gate or sidecar is unavailable; Ask-mode
+  permission requests default to *deny* on timeout/close. An IDE that cannot reach a gated launcher shows
+  "unavailable," never falls back to bare omp.
+- **Gate runs in-process (#4).** `lucid acp` == `omp acp -e security_extension.ts`, so the pre-hook fires
+  inside omp's runtime before any tool runs, in the same process tree the IDE spawned. No network call in
+  the blocking path. Identical posture to the desktop shell.
+- **Untrusted content delimited + late (#5).** Unchanged — the gate and prompt assembler own this;
+  extensions only transport prompts/replies. Thinking text stays display-only (ADR-0027) and never
+  re-enters a prompt or semantic memory.
+- **Frozen prefix byte-stable (#6).** The launcher passes the same `--append-system-prompt` policy bytes
+  as `acp_backend.ts`; the editor's volatile context (cwd) is the workspace folder arg, not prefix bytes.
+  Prefix-hash test unaffected.
+- **Events use exact names (#8).** Logging "ide_session_started / attached" or per-IDE provenance would
+  add `EventName` enum values — a **frozen-contract change**, so it is its own sub-increment + ADR, not a
+  side effect of any P-EXT increment. Until then the extensions emit nothing new; the gate's existing
+  events stand.
+- **Local control-plane hardening (ADR-0022/0024).** The stdio launcher needs no socket, so the
+  loopback/origin/token controls don't apply to the primary path. They *do* apply to the optional
+  attach-mode below.
+
+### Phases — one increment each (session ritual)
+
+- **P-EXT.1 — `lucid acp` launcher.** The gated, fail-closed ACP entrypoint + a `lucid` bin in
+  `package.json`. Demo: `lucid acp` serves a real model turn with the gate loaded; killing the sidecar
+  makes `initialize` fail (fail-closed), proven the same way as the Increment-0 kill-the-sidecar test.
+  Foundation for both extensions — **recommended first build.**
+- **P-EXT.2 — VS Code extension (MVP).** Locate launcher → spawn `lucid acp` → reuse `desktop/acp.ts` →
+  Webview view with Plan/Ask/Agent, thought streaming, permission round-trip (fail-closed), block banner.
+  Demo: install the `.vsix`, open a folder, get a gated reply; a poisoned tool call shows the block banner.
+- **P-EXT.3 — JetBrains plugin (MVP).** Gradle IntelliJ plugin, Kotlin ACP-client port, Lucid tool window,
+  same semantics. Demo: install the plugin zip, same gated reply + block banner in IntelliJ.
+- **P-EXT.4 — packaging, signing, CI + attach-mode.** Marketplace publish pipelines (VS Marketplace +
+  OpenVSX `vsce`/`ovsx`; JetBrains `publishPlugin`), versioning/auto-update, publisher verification. Plus
+  an **optional "attach to running LucidAgentIDE" mode** (Option B): if the desktop control-plane is up,
+  the extension may instead talk to its loopback control-plane (ADR-0022 bind + ADR-0024 capability
+  token) and share that gated session. ACP-over-`lucid acp` stays the default; attach-mode is a
+  convenience, never a way to bypass the launcher's guarantees.
+
+### Open items to confirm at build time
+
+- Whether current JetBrains releases expose a stable generic-ACP "external agent" registration we can
+  contribute to (lighter plugin) vs. needing the full embedded client + tool window.
+- VS Code surface choice: custom Webview view (recommended, full parity) vs. the chat-participant /
+  Language Model API (tighter native feel, less control over Plan/Ask/Agent) — prototype both in P-EXT.2.
+- `lucid acp` repo/asset resolution when launched outside this checkout (absolute paths to
+  `security_extension.ts` / `asksage_extension.ts` / `acp_config.yml` must resolve from the installed app
+  location, mirroring the `REPO`/`GATE` constants in `acp_backend.ts`).
+- Exact `initialize`-error shape omp emits when an `-e` extension fails to load (drives the launcher's
+  fail-closed signal to the IDE).
