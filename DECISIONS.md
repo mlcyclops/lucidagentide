@@ -3594,3 +3594,110 @@ otherwise (#3). The marketplace is an untrusted distribution channel; the launch
   location, mirroring the `REPO`/`GATE` constants in `acp_backend.ts`).
 - Exact `initialize`-error shape omp emits when an `-e` extension fails to load (drives the launcher's
   fail-closed signal to the IDE).
+
+-----
+
+## ADR-0039 — Attach mode: IDE extensions share the running desktop's gated session (planning)
+
+**Date:** 2026-06-22
+**Status:** **Draft (proposed)** — planning only; not built. Deferred from ADR-0038 P-EXT.4 ("optional
+attach-mode") so it gets its own security review rather than a tail-end addition.
+**Context increment:** planning only — no functional code this session.
+
+### Context
+
+ADR-0038 made the IDE extensions thin ACP clients that spawn their OWN fail-closed `lucid acp` (P-EXT.1)
+per workspace — the default, no desktop app required (built: P-EXT.1–4b). It also named an **optional
+attach-mode** (Option B): when the LucidAgentIDE desktop app is already running, an extension MAY instead
+talk to its loopback control-plane and **share that already-gated session** rather than spawning a second
+omp.
+
+Why anyone would want it:
+- One gated session shared across the desktop shell + the IDE — same memory/recall/persona/usage ledger,
+  one omp child instead of two.
+- Lower resource use (no second omp + scanner per IDE window).
+- The desktop already owns provider auth/secrets; the IDE rides on it with no credential setup.
+
+The catch — and the reason this needs its own ADR: the desktop control-plane is deliberately
+UNREACHABLE by other processes. ADR-0022 binds loopback-only + a Host/Origin guard; ADR-0024 requires a
+**per-launch capability token** injected into the served HTML (only a same-origin document can read it).
+An external IDE extension is exactly the caller those controls keep out. Attach-mode must narrowly open
+a **same-machine, same-user** door — carefully.
+
+### Decisions (proposed)
+
+1. **stdio `lucid acp` stays the DEFAULT; attach-mode is opt-in + best-effort.** The extension attempts
+   attach only when the user enabled it AND a live desktop is discoverable; on ANY failure it falls back
+   to spawning `lucid acp`. Attach is never the only path and never a route to an ungated agent.
+
+2. **Token custody via an owner-only userData handshake file.** The ADR-0024 token is per-launch +
+   in-memory. To let a same-machine IDE present it, the desktop writes a small file to its userData dir
+   on control-plane start — `{ port, token, pid, startedAt, workspace }` — with **owner-only perms**
+   (0600 POSIX; user-ACL'd on Windows), rewritten each launch, removed on clean exit. The extension reads
+   it (the SAME same-user trust boundary that already protects the omp credential vault + the AES-256
+   personal store). The token rotates every launch and never outlives the process.
+
+3. **Transport: the existing hardened loopback control-plane, UNCHANGED.** The extension calls
+   `http://127.0.0.1:<port>` with `Host: 127.0.0.1`, the `x-lucid-token` header, and a JSON content-type
+   — satisfying the ADR-0022 Host/Origin guard + the ADR-0024 token check AS-IS. No new bind, no new
+   exemption. The gate (security_extension) still runs in the desktop's omp child (invariant #4) —
+   attach-mode changes WHO talks to the control-plane, not where the gate runs.
+
+4. **Shared session over the existing `/api/*` chat surface (recommended).** Reuse `/api/chat` (NDJSON
+   gated stream) + `/api/newSession` / `/api/chat/cancel` / `/api/modes` / `/api/chat/permission` — all
+   already gated, tested, and carrying the block + permission signals the extension UI needs (it maps the
+   same ChatEvent stream the renderer consumes). A dedicated `/api/acp` bridge is the alternative, but
+   reusing the proven chat surface is less new surface. Prompting is turn-serialized server-side; a
+   second client prompting mid-turn is rejected as "busy", not silently interleaved.
+
+5. **Discovery + liveness.** Read `{port, token, pid}` from the handshake file → probe `GET /api/health`
+   → attach only if it answers and the pid is alive. A stale file (process gone) is ignored → fall back.
+   The control-plane only honors ITS OWN in-memory token, so a stale token is rejected even if the file
+   lingers.
+
+### Why (security)
+
+- **No weaker than today.** The control-plane controls are unchanged; attach-mode only gives a
+  same-machine same-user client a legitimate way to present the token. The new surface is exactly one
+  owner-only file in userData — the boundary that already holds the user's provider creds + encrypted
+  store. An attacker who can read it can already read those.
+- **Per-launch rotation + liveness binding.** The token dies with the process; the control-plane honors
+  only its live in-memory value; a stale handshake is rejected by both the pid check and token mismatch.
+  No durable secret.
+- **Gate placement unchanged (#4); fail-safe (#3).** The gate runs in the desktop's omp child regardless;
+  any attach failure falls back to the fail-closed `lucid acp`. Never spawns or reaches an ungated agent.
+
+### Integration with the invariants
+
+- **Extend omp; never fork (#1):** pure client/transport wiring over the existing control-plane + omp
+  session. Nothing forks.
+- **Untrusted content delimited + late (#5):** the desktop's existing prompt assembly owns this; the
+  extension only transports prompts/replies.
+- **Local control-plane hardening (ADR-0022/0024):** attach-mode is the FIRST sanctioned EXTERNAL consumer
+  of the token; it adds the userData handshake file (owner-only) as the delivery channel and changes
+  nothing else about the bind/guard/token.
+- **Events (#8):** an `ide_attached` / `ide_session_started` EventName is a frozen-contract change → its
+  own sub-increment + ADR, not part of attach-mode's build.
+
+### Phases (each its own increment + ADR delta when built)
+
+- **P-EXT.5a — desktop handshake writer.** On control-plane start, write `<userData>/lucid-attach.json`
+  (owner-only) with `{port, token, pid, startedAt, workspace}`; remove on quit; NEVER log the token. New
+  Settings toggle "Allow IDE attach" (default **OFF** — opt-in). No extension changes yet.
+- **P-EXT.5b — extension attach path.** Behind a `lucid.attachToDesktop` setting: read the handshake,
+  probe `/api/health`, attach over `/api/chat` (+ modes/cancel/permission/newSession); fall back to
+  `lucid acp` on any failure. Surface "attached to desktop session" vs "own session" in the UI.
+- **P-EXT.5c — concurrency + lifecycle.** Busy-turn handling, multi-IDE/multi-window arbitration,
+  desktop-quit-while-attached recovery (auto-fall-back to `lucid acp`).
+
+### Open items to resolve at build time
+
+- **Workspace-boundary semantics (the key security question).** The desktop's gated session is scoped to
+  the desktop's ONE workspace (path containment, ADR-0022/23). If the IDE's open folder differs, attaching
+  would run the IDE's prompts against the DESKTOP's workspace — wrong and unsafe. Proposed rule: attach
+  ONLY when the IDE workspace == the desktop workspace (compare via the handshake `workspace` field);
+  otherwise spawn `lucid acp` for the IDE's own folder.
+- Handshake file location + format per-OS; whether to embed more than the workspace.
+- `/api/chat` reuse vs a dedicated `/api/acp` bridge.
+- Concurrency model: one shared turn-serialized session vs a desktop-spawned per-IDE child session.
+- Windows owner-only ACLs (no POSIX 0600) — confirm the mechanism (icacls / Node fs Windows ACL).

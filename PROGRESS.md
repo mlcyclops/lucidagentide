@@ -4,6 +4,20 @@ Three lines per session: **shipped / stubbed / next** (CLAUDE.md session ritual)
 
 -----
 
+## P-EXT.5.0: attach-mode roadmap (planning only — ADR-0039)
+- **shipped:** ADR-0039 in DECISIONS.md — designs the deferred ADR-0038 optional attach-mode (an IDE
+  extension SHARING the running desktop's already-gated session instead of spawning its own `lucid acp`).
+  Locked: stdio `lucid acp` stays the DEFAULT (attach is opt-in + best-effort, falls back to the launcher
+  on ANY failure); token custody via an OWNER-ONLY userData handshake file `{port,token,pid,workspace}`
+  (per-launch rotation; the same same-user boundary as the cred vault / encrypted store); transport reuses
+  the UNCHANGED hardened loopback control-plane (ADR-0022 Host/Origin guard + ADR-0024 token) over the
+  existing `/api/chat` surface; the gate stays in the desktop omp child (#4). No code this session.
+- **stubbed:** all of P-EXT.5a (desktop handshake writer + opt-in toggle) / 5b (extension attach path +
+  fallback) / 5c (concurrency + lifecycle) designed, unbuilt.
+- **next:** resolve the KEY open security question first — workspace boundary: attach ONLY when the IDE
+  folder == the desktop workspace (path containment, ADR-0022/23), else spawn `lucid acp` for the IDE's
+  own folder. Then build P-EXT.5a.
+
 ## P-EXT.4b: marketplace publish pipelines (ADR-0038)
 - **shipped:** the tag-triggered publish path for both editors. .github/workflows/extensions-publish.yml
   (on `ext-v*` tags / dispatch): a VS Code job (esbuild --production → vsce publish + ovsx publish) and a
