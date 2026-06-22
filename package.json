@@ -4,6 +4,9 @@
   "private": true,
   "description": "Security/provenance/memory harness built AROUND oh-my-pi (omp). Extend, never fork. See CLAUDE.md.",
   "type": "module",
+  "bin": {
+    "lucid": "harness/launcher/lucid_acp.ts"
+  },
   "engines": {
     "bun": ">=1.3.0"
   },
@@ -35,6 +38,7 @@
     "demo-P-LOC.1": "bun run harness/scripts/demo16_ai_loc.ts",
     "demo-P8.1": "bun run harness/scripts/demo17_recall.ts",
     "demo-P8.2": "bun run harness/scripts/demo18_turns.ts",
+    "demo-P-EXT.1": "bun run harness/scripts/demo19_lucid_launcher.ts",
     "dashboards": "bun run harness/scripts/materialize_dashboards.ts",
     "omp:secure": "omp -e harness/omp/security_extension.ts",
     "dashboard:tui": "bun run tools/dashboard_tui.ts",

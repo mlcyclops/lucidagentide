@@ -4,6 +4,25 @@ Three lines per session: **shipped / stubbed / next** (CLAUDE.md session ritual)
 
 -----
 
+## P-EXT.1: `lucid acp` launcher — fail-closed ACP trust anchor (ADR-0038)
+- **shipped:** harness/launcher/lucid_acp.ts — the single sanctioned `lucid acp` entrypoint the IDE
+  extensions spawn INSTEAD of bare `omp acp`. Reproduces the EXACT gated command acp_backend.ts uses
+  (omp -e security_extension.ts -e asksage_extension.ts [--isolate acp_config.yml] --append-system-prompt
+  DELEGATION+BUILD, byte-identical order → inv #6), resolves omp (LUCID_OMP_BIN → bundled
+  node_modules/.bin/omp → ~/.bun → PATH) + assets from repoRoot (dev == packaged, two levels up), and
+  FAIL-CLOSES at startup: a missing gate or unreachable scanner sidecar → exit 1 with omp NEVER spawned
+  (the IDE shows "agent unavailable", never an ungated agent → inv #3/#4). New `lucid` bin in
+  package.json. 12 launcher tests (injected probe/spawn: exact argv, gate-can't-be-bypassed,
+  kill-the-sidecar) + demo-P-EXT.1 (offline fail-closed proof; live scanner probe). 431 harness + 261
+  desktop green, tsc clean (3 configs); prefix-hash demo unaffected.
+- **stubbed:** the "serves a real model turn" half needs creds/omp (the offline demo proves
+  command-assembly + fail-closed); translating omp's `-e`-load-failure into a clean ACP `initialize`
+  error (vs exit-non-zero) is an open item; packaging the `lucid` bin into the installer is P-EXT.4.
+  DECISIONS.md ADR-0038 "BUILT" status left to the cloud author to avoid a clash; design in
+  docs/EXT-SECURE-BUILD.md.
+- **next:** P-EXT.2 — VS Code extension (reuse desktop/acp.ts → spawn `lucid acp` → Webview Plan/Ask/
+  Agent + thinking + block banner); then P-EXT.3 JetBrains, P-EXT.4 marketplace packaging/CI.
+
 ## P8.2 / Phase B: prompt/response traceability — turn transcripts (ADR-0009 Phase B, issue #12)
 - **shipped:** the deferred Phase B (Alex's #12). HARNESS CORE: migration 0009_turn_transcripts.sql
   (`turns` table) + new EventName `turn_captured` (contracts.ts) + harness/memory/turns.ts —
