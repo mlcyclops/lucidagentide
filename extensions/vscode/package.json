@@ -1,0 +1,54 @@
+{
+  "name": "lucidagentide",
+  "displayName": "LucidAgentIDE",
+  "description": "Chat with the Lucid coding agent (omp) over ACP, with the in-process security gate always loaded.",
+  "version": "0.1.0",
+  "publisher": "lucidagentide",
+  "license": "SEE LICENSE IN ../../LICENSE",
+  "engines": { "vscode": "^1.90.0" },
+  "categories": ["AI", "Chat", "Programming Languages"],
+  "main": "./dist/extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        { "id": "lucid", "title": "LucidAgentIDE", "icon": "media/lucid.svg" }
+      ]
+    },
+    "views": {
+      "lucid": [
+        { "type": "webview", "id": "lucid.chat", "name": "Chat", "icon": "media/lucid.svg" }
+      ]
+    },
+    "commands": [
+      { "command": "lucid.newSession", "title": "Lucid: New Session", "category": "Lucid" },
+      { "command": "lucid.stop", "title": "Lucid: Stop", "category": "Lucid" }
+    ],
+    "configuration": {
+      "title": "LucidAgentIDE",
+      "properties": {
+        "lucid.launcherPath": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Absolute path to the `lucid` launcher binary. Leave empty to auto-detect the installed LucidAgentIDE app, then `lucid` on PATH. **The extension only ever spawns this gated `lucid acp` launcher — never a raw agent command.**"
+        },
+        "lucid.isolate": {
+          "type": "boolean",
+          "default": false,
+          "description": "Run the agent with task isolation (subagents return a reviewable patch). Containment for risky tool calls."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "node esbuild.mjs",
+    "watch": "node esbuild.mjs --watch",
+    "vscode:prepublish": "node esbuild.mjs --production",
+    "package": "vsce package --no-dependencies"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.90.0",
+    "esbuild": "^0.23.0"
+  }
+}

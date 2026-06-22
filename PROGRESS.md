@@ -4,6 +4,23 @@ Three lines per session: **shipped / stubbed / next** (CLAUDE.md session ritual)
 
 -----
 
+## P-EXT.2: VS Code extension — thin ACP client of `lucid acp` (ADR-0038)
+- **shipped:** extensions/vscode/ — a VS Code extension that drives the gated agent over ACP. Resolves
+  the Lucid launcher SECURELY (lucid.launcherPath → installed app → PATH; NEVER a raw agent command —
+  enforced by harness/launcher/ide_client.ts buildLauncherCandidates) and spawns `lucid acp` with the
+  opened workspace folder as cwd (the path boundary, ADR-0022/23), reusing the proven desktop/acp.ts
+  transport (bundled by esbuild, vscode external). A Webview chat view (activity-bar container) renders
+  streaming reply + thinking + tool activity, the gate's [BLOCKED] banner, and the Ask-mode permission
+  round-trip — FAIL-CLOSED (timeout/dismiss ⇒ deny). The security-critical editor-agnostic logic
+  (only-lucid candidate list, block-signal parser, ACP-update mapping) is in the shared TESTED
+  ide_client.ts (6 tests; JetBrains will reuse it). 437 harness + 261 desktop green; extension + root
+  tsc clean; bundle builds (dist/extension.js).
+- **stubbed:** end-to-end (install .vsix → gated reply → block banner in an Extension Dev Host) needs a
+  real VS Code — proven here only via pure-logic tests + clean bundle/typecheck; Plan/Ask/Agent map to
+  omp default/plan ids (Ask = default + per-tool prompts); marketplace publish (vsce/ovsx) is P-EXT.4.
+- **next:** P-EXT.3 — JetBrains plugin (Kotlin ACP-client port + tool window, reuse ide_client
+  semantics); then P-EXT.4 — marketplace packaging + token-gated attach-mode.
+
 ## P-EXT.1: `lucid acp` launcher — fail-closed ACP trust anchor (ADR-0038)
 - **shipped:** harness/launcher/lucid_acp.ts — the single sanctioned `lucid acp` entrypoint the IDE
   extensions spawn INSTEAD of bare `omp acp`. Reproduces the EXACT gated command acp_backend.ts uses
