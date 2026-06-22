@@ -147,20 +147,21 @@ never fail open.
 
 | Metric | Value |
 |:--|--:|
-| **Total Spend (all models)** | **$13.38** |
-| **Est. Cache Savings** | **$26.47** *(66% off full price)* |
-| **Cache Hit-Rate** | **81%** |
-| **Tokens Processed** | **7.49M** across 743 turns |
-| **Models Used** | **12** across 399 sessions |
+| **Total Spend (all models)** | **$35.73** |
+| **Est. Cache Savings** | **$73.66** *(67% off full price)* |
+| **Cache Hit-Rate** | **82%** |
+| **Tokens Processed** | **21.34M** across 1,998 turns |
+| **Models Used** | **29** across 1,041 sessions |
 
 <br/>
 
-**Per-model breakdown:**
+**Per-model breakdown** *(top models · 24 more in the ledger):*
 
 | Model | Turns | Tokens | Cost | Saved | Cache % |
 |:--|--:|--:|--:|--:|--:|
-| claude-opus-4-8 | 86 | 6.25M | $11.44 | $22.94 | **83%** |
+| claude-opus-4-8 | 242 | 18.26M | $32.51 | $67.89 | **84%** |
 | claude-opus-4-6 | 14 | 791.7k | $1.32 | $3.17 | **92%** |
+| gpt-5.5 | 21 | 659.8k | $1.15 | $2.24 | 76% |
 | claude-sonnet-4-5 | 4 | 114.6k | $0.31 | $0.18 | 64% |
 | claude-sonnet-4-6 | 4 | 141.9k | $0.30 | $0.18 | 48% |
 
