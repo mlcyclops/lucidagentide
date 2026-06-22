@@ -12,7 +12,7 @@
 <a href="https://github.com/mlcyclops/lucidagentide/actions/workflows/codeql.yml"><img src="https://img.shields.io/github/actions/workflow/status/mlcyclops/lucidagentide/codeql.yml?branch=master&label=CodeQL&logo=github&logoColor=white&style=flat-square" alt="CodeQL SAST" /></a>
 <a href="https://github.com/mlcyclops/lucidagentide/actions/workflows/build-desktop.yml"><img src="https://img.shields.io/github/actions/workflow/status/mlcyclops/lucidagentide/build-desktop.yml?label=Windows%20Build&logo=windows&logoColor=white&style=flat-square" alt="Windows Build" /></a>
 <a href="https://github.com/mlcyclops/lucidagentide/actions/workflows/build-desktop.yml"><img src="https://img.shields.io/github/actions/workflow/status/mlcyclops/lucidagentide/build-desktop.yml?label=macOS%20Build&logo=apple&logoColor=white&style=flat-square" alt="macOS Build" /></a>
-<img src="https://img.shields.io/badge/tests-352%20harness%20%2B%2054%20sidecar-46d27e?style=flat-square" alt="tests" />
+<img src="https://img.shields.io/badge/tests-413%20harness%20%2B%20258%20desktop%20%2B%2054%20sidecar-46d27e?style=flat-square" alt="tests" />
 <img src="https://img.shields.io/badge/gate-fail--closed-e07bf0?style=flat-square" alt="fail-closed gate" />
 
 <br/>
@@ -34,8 +34,14 @@
 <br/>
 
 **A security · provenance · memory layer built _around_ <a href="https://omp.sh">oh-my-pi</a> — not a fork.**
-Prompt-injection defense, trust labeling, fail-closed quarantine, provenance-backed memory, replayable
-telemetry, a gov AI gateway, and a polished desktop GUI — added through omp's hooks, custom tools, and SDK.
+A fail-closed prompt-injection gate, provenance-backed memory, **sovereignty-aware model governance**,
+**AI-authorship attribution**, **one-command migration from ChatGPT**, and a **read-write IDE where even
+_Save_ is scanned** — wrapped in a polished desktop app, added entirely through omp's hooks, custom tools,
+and SDK.
+
+<sub>🔒 <b>What it does is open; how the hard parts work is not.</b> The deepest trust, provenance, and
+personalization internals are proprietary and intentionally undocumented here — this README describes the
+<i>capabilities and guarantees</i>, not the mechanisms behind them.</sub>
 
 <a href="#-quick-start"><b>Quick start</b></a> ·
 <a href="#-architecture"><b>Architecture</b></a> ·
@@ -87,7 +93,7 @@ never fail open.
 
 | <img src=".github/assets/icons/security.svg" width="20" alt=""> Security | <img src=".github/assets/icons/memory.svg" width="20" alt=""> Provenance | <img src=".github/assets/icons/roadmap.svg" width="20" alt=""> Memory |
 |:--|:--|:--|
-| Unicode scanner + fail-closed quarantine gate, in-process on every tool call | Stable IDs, trust labels, and a DuckDB audit trail for every run, finding & approval | Promotion-gated semantic memory + a roadmap to a private, encrypted personalization graph |
+| Unicode scanner + fail-closed quarantine gate, in-process on every tool call | Stable IDs, trust labels, and a DuckDB audit trail for every run, finding & approval | Promotion-gated semantic memory **+ a shipped, encrypted, cross-session personalization graph** |
 
 </div>
 
@@ -106,9 +112,20 @@ never fail open.
   breakpoint — verified by a prefix-hash test and a cache-hit benchmark.
 - **🏛️ A gov-grade gateway, gated.** [AskSage](https://asksage.ai) is integrated as an omp provider with an
   "AskSage-only" lockdown, **scanned** personas, and dataset-grounded RAG that returns expandable citations.
-- **🧠 A personalization knowledge graph (roadmap).** A private, **FIPS-grade-encrypted**, inspectable
-  node/edge graph the agent learns from you and recalls to tailor responses — security/provenance becomes a
-  toggle, not the headline (see [ADR-0010](DECISIONS.md)).
+- **🧠 An encrypted personalization knowledge graph (shipped).** A private, **FIPS-grade-encrypted**,
+  inspectable node/edge graph the agent learns from you and **recalls across sessions** to tailor responses —
+  CUI-isolated, compartmentalized (work / personal / CUI), and exportable to an Obsidian vault.
+- **🪪 AI-authorship attribution.** A tamper-evident ledger of *which model wrote which lines* — per repo, per
+  identity, per session — so AI-generated code is governable, auditable, and attributable. The attribution
+  engine is *proprietary*; the dashboard over it is in-app.
+- **🌐 Sovereignty-aware model governance.** Gov-only lockdown, accredited-gateway gating, curated gov-model
+  lists, and an explicit **data-sovereignty acknowledgment wall** for foreign-origin models — choose raw
+  capability *and* provenance, by policy, not by accident.
+- **⬇️ One-command migration from ChatGPT / Claude / Gemini.** Bring years of history in; **every message is
+  scanned through the fail-closed gate** and distilled into your encrypted personal graph — onboard a new user
+  in minutes, with a token/runtime estimate before any model call.
+- **✍️ A read-write IDE where _Save_ is gated.** Edit code in an embedded editor and save it back through the
+  *same* in-process scanner — a hidden-Unicode payload is **blocked before a single byte lands on disk**.
 - **💰 Cross-model cost tracking & showback.** Real-time per-model token usage, cache savings, and estimated
   cost with a built-in showback ledger — know exactly what every conversation costs.
 
@@ -173,7 +190,8 @@ never fail open.
 harness/                  # ALL TypeScript (Bun)
   contracts.ts              # FROZEN: TrustLabel · AgentMode · EventName · ToolResult · Finding
   security/                 # scanner_client (NDJSON, fail-closed) · gate (scanAndDecide)
-  memory/                   # DuckDB store · promotion gate (keystone #2) · migrations 0001–0006
+  memory/                   # DuckDB store · promotion gate (keystone #2) · cross-session recall · migrations 0001–0008
+  personal/                 # encrypted personalization graph · distiller · CUI isolation · ChatGPT/Claude/Gemini import
   telemetry/                # stable-id event stream → DuckDB (replayable)
   runs/                     # provenance lineage · sandbox profiles · replay
   export/                   # safe_export: escaped, sanitized-only by default
@@ -217,9 +235,10 @@ migrations) holds working state, archived chunks, and a **promotion-gated** sema
 entities/facts/links — each fact carrying provenance and a trust label. Memory fills from ordinary turns,
 and poisoned content is blocked from promotion.
 
-**Roadmap ([ADR-0009](DECISIONS.md) / [ADR-0010](DECISIONS.md)).** A private **personalization knowledge
-graph** — a Karpathy-style "second brain" of your preferences, decisions, interests, personality, and
-sanitized-but-working links that the agent learns, remembers, and recalls to tailor responses. It is:
+**Shipped ([ADR-0009](DECISIONS.md) / [ADR-0010](DECISIONS.md)).** A private **personalization knowledge
+graph** — a "second brain" of your preferences, decisions, interests, personality, and sanitized-but-working
+links that the agent learns, **recalls across sessions**, and uses to tailor responses (and that you can seed
+in minutes by importing an existing ChatGPT / Claude / Gemini history). It is:
 
 - **Opt-in** and **local-first**, stored in a dedicated **AES-256-GCM** encrypted store (key sealed by the OS
   keystore via Electron `safeStorage`, with a PBKDF2 passphrase fallback).
@@ -311,31 +330,32 @@ needs **zero prerequisites**. Code-signing and notarization are supported when c
 
 ## <img src=".github/assets/icons/roadmap.svg" width="28" align="top" alt=""> Roadmap
 
-**Shipped** — Increment 0–2 + Phases 2–10: the full security lifecycle, provenance lineage, replay, the
-cache-optimized prefix, the desktop GUI, the AskSage gov gateway, the headroom scaffold, cross-model
-observability, CUI isolation, and the knowledge graph. Everything green:
-**352 harness tests**, **54 sidecar tests**, `tsc --noEmit` clean (TypeScript + Python).
+**Shipped** — Increment 0–2 + Phases 2–10 + the personalization, attribution, migration, and IDE phases:
+the full security lifecycle, provenance lineage, replay, the cache-optimized prefix, the desktop GUI, the
+AskSage gov gateway, cross-model observability, CUI isolation, the encrypted personalization graph with
+cross-session recall, AI-authorship attribution, one-command ChatGPT/Claude/Gemini migration, and a
+read-write IDE with gated saves. Everything green:
+**413 harness tests**, **258 desktop tests**, **54 sidecar tests**, `tsc --noEmit` clean across 3 projects
+(TypeScript 6.0 + Python).
 
 ### Recent updates
 
-| Phase | Feature | Commit |
+| Phase | Feature | ADR |
 |:--|:--|:--|
-| **P10.2** | Cross-model usage & cost ledger (ADR-0011) | `d866723` |
-| **P10.1** | Response activity HUD + per-model context window | `bd30066` |
-| **P9.5** | Hard CUI isolation — separate encrypted CUI store (ADR-0014) | `43be5b8` |
-| **P9.4** | Audited Obsidian vault export + NARA CUI archive (ADR-0013) | `2240964` |
-| **P9.3** | In-app SVG Knowledge Graph view — curved links + flow particles | `6e00efd` |
-| **P9.2** | Conversation distiller + scope-aware recall (ADR-0012) | `838168b` |
-| — | Binary pinning + SHA-256 verification (supply-chain hardening) | `18bbd5d` |
-| — | Stalled-turn recovery — surface stuck turns instead of hanging | `93f8ece` |
-| — | macOS unsigned build fix + Electron `checkout@v5` | `cd88222` |
+| **P-IDE.5–6** | Read-write Monaco IDE — **Save routed through the scanner gate** (≥high finding or dead scanner *blocks* the write), Save-As, conflict banner, Send-to-chat | [ADR-0036/0037](DECISIONS.md) |
+| **P-IMP.1–2** | One-command **ChatGPT/Claude/Gemini import** — shard-aware, fully gated, with a first-run onboarding nudge + token/runtime estimate | [ADR-0034/0035](DECISIONS.md) |
+| **P-LOC.1–2** | **AI-authorship attribution** — per-model/repo/identity LOC ledger + dashboard rollup | [ADR-0031](DECISIONS.md) |
+| **P-IDE.1** | Sovereignty-aware **model governance** — gov curation, accredited-gateway gating, foreign-origin acknowledgment wall | [ADR-0029](DECISIONS.md) |
+| **P8.1** | **Cross-session memory recall** — prior-session facts resurface as delimited, post-cache context | [ADR-0009](DECISIONS.md) |
+| **P9.5** | Hard CUI isolation — separate encrypted CUI store | [ADR-0014](DECISIONS.md) |
+| **P10.2** | Cross-model usage & cost ledger | [ADR-0011](DECISIONS.md) |
 
 **Next** — designed in ADRs, building one increment per session:
 
-| Phase | Theme | ADR |
-|:--|:--|:--|
-| **P8.1–P8.4** | Cross-session memory recall · prompt/response traceability · Obsidian export · dev-mode logging | [ADR-0009](DECISIONS.md) |
-| **P9.1–P9.4** | Encrypted personal store · model-distilled user facts · the SVG knowledge-graph view · vault export | [ADR-0010](DECISIONS.md) |
+| Theme | ADR |
+|:--|:--|
+| Monaco language-service workers under strict CSP (semantic IntelliSense) · packaged-build verification | [ADR-0036](DECISIONS.md) |
+| Prompt/response traceability · dev-mode logging deepening | [ADR-0009](DECISIONS.md) |
 
 See [`PROGRESS.md`](PROGRESS.md) for the per-session log (shipped / stubbed / next).
 
@@ -344,7 +364,7 @@ See [`PROGRESS.md`](PROGRESS.md) for the per-session log (shipped / stubbed / ne
 | Doc | What's in it |
 |:--|:--|
 | [`CLAUDE.md`](CLAUDE.md) | **Read first.** The load-bearing invariants (fail-closed, extend-don't-fork, frozen contracts, byte-stable prefix) |
-| [`DECISIONS.md`](DECISIONS.md) | Architecture decision records (ADR-0001 … ADR-0015) |
+| [`DECISIONS.md`](DECISIONS.md) | Architecture decision records (ADR-0001 … ADR-0037) |
 | [`PROGRESS.md`](PROGRESS.md) | Per-session build log: shipped / stubbed / next |
 | [`desktop/README.md`](desktop/README.md) | The desktop GUI + dev server |
 | [`CHEATSHEET.md`](CHEATSHEET.md) | Day-to-day commands |
