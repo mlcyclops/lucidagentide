@@ -51,6 +51,7 @@
     "@oh-my-pi/pi-utils": "^16.0.6",
     "arktype": "^2.2.1",
     "dompurify": "^3.4.11",
+    "katex": "^0.17.0",
     "marked": "^18.0.5"
   },
   "devDependencies": {

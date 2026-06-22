@@ -73,13 +73,22 @@ async function refreshRecall(): Promise<void> {
   }
 }
 
+// Render a build failure AS the script body so the page shows the real error instead of nothing.
+function bundleError(msg: string): { js: string; ok: boolean } {
+  return { ok: false, js: `document.body.innerHTML='<pre style="color:#ef5f5f;padding:20px;font:13px monospace;white-space:pre-wrap">'+${JSON.stringify(msg)}+'</pre>';` };
+}
 async function bundleApp(): Promise<{ js: string; ok: boolean }> {
-  const out = await Bun.build({ entrypoints: [join(ROOT, "app.ts")], target: "browser", sourcemap: "inline" });
-  if (!out.success) {
-    const msg = out.logs.map((l) => String(l)).join("\n");
-    return { ok: false, js: `document.body.innerHTML='<pre style="color:#ef5f5f;padding:20px;font:13px monospace;white-space:pre-wrap">'+${JSON.stringify(msg)}+'</pre>';` };
+  try {
+    const out = await Bun.build({ entrypoints: [join(ROOT, "app.ts")], target: "browser", sourcemap: "inline" });
+    if (!out.success) return bundleError(out.logs.map((l) => String(l)).join("\n"));
+    return { ok: true, js: await out.outputs[0]!.text() };
+  } catch (e) {
+    // A THROW from Bun.build (e.g. an unresolved import in a packaged build where a renderer dep
+    // wasn't bundled) must NOT fall through to the generic JSON error handler — that ships as
+    // <script>{"ok":false,...}</script>, an invalid-JS blob that leaves the window a silent dark
+    // shell (the katex-missing dark-screen bug). Surface the real error in the page instead.
+    return bundleError(`Renderer build failed:\n${String((e as Error)?.stack ?? e)}`);
   }
-  return { ok: true, js: await out.outputs[0]!.text() };
 }
 
 const json = (data: unknown) =>
