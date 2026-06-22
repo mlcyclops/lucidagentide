@@ -11,7 +11,7 @@ export interface BlockRecord { id: string; tool: string; severity: string; findi
 export interface SecuritySnapshot {
   findings: any[]; unicode: any[]; approvals: any[]; quarantine: any[];
   promotion: any[]; exports: any[]; runs: any[];
-  // GUI-owned LIVE gate blocks (ADR-0019 C) — present even when the DuckDB views are empty.
+  // GUI-owned LIVE gate blocks (ADR-0019 C) - present even when the DuckDB views are empty.
   live?: { quarantined: BlockRecord[]; approved: BlockRecord[]; total: number };
 }
 export interface MemorySnapshot {
@@ -28,6 +28,18 @@ export interface MemorySnapshot {
     facts: { entity: string; statement: string; trust_label: string }[];
     gate: { promoted: number; blocked: number };
   };
+  aiLoc: AiLocSummary | null; // P-LOC.2 (ADR-0031): AI-authored lines per model/repo/identity
+}
+
+// P-LOC.2 (ADR-0031): AI-LOC attribution roll-up surfaced in the Memory tab.
+export interface AiLocModel { model: string; added: number; removed: number; edits: number }
+export interface AiLocRow { model: string; repo: string; identity: string; identitySource: string; edits: number; added: number; removed: number }
+export interface AiLocSummary {
+  totals: { added: number; removed: number; edits: number; models: number; repos: number };
+  byModel: AiLocModel[];
+  rows: AiLocRow[];
+  identities: string[];
+  generatedAt: string;
 }
 
 // P10.3: a live rate-limit reading probed from an API-key provider's response headers.
@@ -60,6 +72,8 @@ export interface ConfigOption {
   id: string; name: string; category: string; type: string;
   currentValue: string; options: { value: string; name: string }[];
 }
+export interface ModeOption { id: string; name: string; description?: string }
+export interface ModeState { available: ModeOption[]; current: string; ui?: "agent" | "ask" | "plan"; permissionMode?: "auto" | "ask" }
 export interface OmpCommand { name: string; description?: string; hint?: string }
 export interface SessionInfo { id: string; title: string; model: string; updatedAt: number; turns: number }
 export interface ProviderAuth {
@@ -93,6 +107,10 @@ export interface GraphEdge { from: string; to: string; relation: string }
 export interface GraphFact { id: string; entity_id: string; statement: string; scope: string; trust: string; confidence: number; session?: string; at: string }
 export interface PersonalGraphData { nodes: GraphNode[]; edges: GraphEdge[]; facts: GraphFact[] }
 export interface PersonalImportResult { ok: boolean; error?: string; vendor?: "openai" | "anthropic" | "gemini"; conversations?: number; messages?: number; learned?: number; blocked?: number; skipped?: number; extractor?: "heuristic" | "model" }
+export interface PersonalImportEstimate { ok: boolean; error?: string; vendor?: "openai" | "anthropic" | "gemini"; conversations?: number; userMessages?: number; userChars?: number }
+// P-IDE.5 (ADR-0036): gated read/write for the in-app editor.
+export interface EditorReadResult { ok: boolean; error?: string; path?: string; content?: string; mtime?: number; sha256?: string }
+export interface EditorSaveResult { ok: boolean; error?: string; blocked?: boolean; conflict?: boolean; reason?: string; path?: string; mtime?: number; sha256?: string; currentSha?: string }
 export interface FsList {
   path: string; parent: string | null; home: string; isGit: boolean;
   dirs: { name: string; path: string; isGit: boolean }[];
@@ -105,15 +123,34 @@ export interface WorkspaceInfo {
 
 export type ChatEvent =
   | { type: "token"; text: string }
+  | { type: "thinking"; text: string }
   | { type: "tool"; name: string; detail: string }
+  | { type: "subagent"; id: string; agent: string; title: string; assignments: string[] }
   | { type: "block"; tool: string; reason: string; severity: string; findings: string; id?: string; quarantined?: boolean }
+  | { type: "permission"; id: string; tool: string; detail: string; options: { optionId: string; name: string; kind?: string }[] }
   | { type: "usage"; used: number; size: number; cost: number }
   | { type: "done" };
 
+export interface Attribution {
+  identity: string; source: "email" | "workstation"; email: string; workstation: string; decided: boolean;
+  // Enterprise-managed policy view (ADR-0030): drives the prompt + "Managed by …" UI.
+  managed: boolean; orgName: string; requireEmail: boolean; allowSkip: boolean; allowedDomains: string[];
+}
+export interface ProfileSettings {
+  username: string;
+  email: string;
+  // Effective code-activity attribution identity (ADR-0030): email if set, else workstation hostname.
+  attribution?: Attribution;
+}
+export interface ManagedPolicy {
+  managed: boolean; orgName: string;
+  attribution: { requireEmail?: boolean; allowSkip?: boolean; allowedEmailDomains?: string[] } | null;
+  asksageOnly: boolean;
+}
 export interface LucidBridge {
   isElectron: boolean;
   security(): Promise<SecuritySnapshot | null>;
-  /** Release one quarantined call — the audited fail-closed override (ADR-0019 C). */
+  /** Release one quarantined call - the audited fail-closed override (ADR-0019 C). */
   securityApprove(id: string): Promise<BlockRecord | null>;
   memory(): Promise<MemorySnapshot | null>;
   budget(): Promise<{ label: string; used: number; status: string; resetsAt: number | null }[] | null>;
@@ -124,7 +161,7 @@ export interface LucidBridge {
   // ADR-0009 Phase D: developer Logs view + its opt-in toggle.
   dev(): Promise<DevView | null>;
   setDeveloperMode(enabled: boolean): Promise<unknown>;
-  // P-MCP.1 (ADR-0020): MCP server registry (masked — never the raw token).
+  // P-MCP.1 (ADR-0020): MCP server registry (masked - never the raw token).
   mcpList(): Promise<McpServerStatus[] | null>;
   mcpUpsert(e: { id?: string; name: string; transport?: "http" | "sse"; url: string; token?: string; enabled?: boolean }): Promise<McpServerStatus | null>;
   mcpRemove(id: string): Promise<unknown>;
@@ -135,16 +172,38 @@ export interface LucidBridge {
   /** Respawn omp + re-read its model list (after connecting a provider via OAuth or key). */
   refreshConfig(): Promise<ConfigOption[]>;
   setConfig(configId: string, value: string): Promise<ConfigOption[]>;
+  // P-ACP.2 (ADR-0027): ACP session modes (Plan / Agent), switched via session/set_mode.
+  modes(): Promise<ModeState | null>;
+  setMode(modeId: string): Promise<ModeState | null>;
+  // P-ACP.3: the composer's 3-way Plan/Ask/Agent + answering a forwarded permission request.
+  setUiMode(uiMode: "agent" | "ask" | "plan"): Promise<ModeState | null>;
+  respondPermission(id: string, optionId: string | null): Promise<unknown>;
+  // P-ACP.4: Stop the in-flight turn (interrupt reply + tool calls).
+  cancelChat(): Promise<unknown>;
   commands(): Promise<OmpCommand[]>;
   skills(): Promise<{ name: string; description: string; source: string }[] | null>;
+  // P-IDE.2: set/clear the active bundled skill (its trusted prompt rides the user-turn preamble).
+  setActiveSkill(name: string, prompt: string): Promise<{ active: string } | null>;
+  clearActiveSkill(): Promise<{ active: string } | null>;
+  // P-IDE.3: record a skill activation as telemetry (metadata only).
+  skillActivated(command: string, name: string, source: "bundled" | "project" | "task"): Promise<unknown>;
   sessions(): Promise<SessionInfo[] | null>;
   sessionMessages(id: string): Promise<{ role: string; text: string }[] | null>;
   resumeSession(id: string): Promise<void>;
   newSession(): Promise<void>;
   setZoom(factor: number): void;
   // settings + provider auth
-  getSettings(): Promise<{ username: string } | null>;
-  saveUsername(username: string): Promise<{ username: string } | null>;
+  getSettings(): Promise<ProfileSettings | null>;
+  saveUsername(username: string): Promise<ProfileSettings | null>;
+  // Corporate email = attribution identity (ADR-0030). Save email (and/or username) together.
+  saveProfile(p: { username?: string; email?: string }): Promise<ProfileSettings | null>;
+  // User skips the email prompt → attribute by workstation hostname instead (recorded, traceable).
+  skipEmail(): Promise<ProfileSettings | null>;
+  // Enterprise-managed policy (read-only; placed by admins via GPO/MDM).
+  managed(): Promise<ManagedPolicy | null>;
+  // P-IDE.1c: China-origin model data-sovereignty acknowledgement gate.
+  chinaAck(): Promise<{ acknowledged: boolean } | null>;
+  setChinaAck(acknowledge: boolean): Promise<{ acknowledged: boolean } | null>;
   auth(): Promise<AuthStatus | null>;
   saveKey(env: string, key: string): Promise<AuthStatus | null>;
   oauthLogin(oauthId: string): Promise<{ started: boolean; url: string; output: string } | null>;
@@ -152,7 +211,7 @@ export interface LucidBridge {
   // AskSage gov gateway (ADR-0007)
   asksage(): Promise<{ configured: boolean; base: string; only: boolean; limit: number; datasets: string[]; queryModel: string; persona: string } | null>;
   saveAsksage(opts: { baseUrl?: string; only?: boolean; limit?: number; datasets?: string[]; queryModel?: string; persona?: string }): Promise<{ configured: boolean; base: string; only: boolean; limit: number; datasets: string[]; queryModel: string; persona: string } | null>;
-  asksageTokens(): Promise<{ used: number; limit: number } | null>;
+  asksageTokens(): Promise<{ used: number; remaining: number | null; limit: number } | null>;
   asksageDatasets(): Promise<string[] | null>;
   asksagePersonas(): Promise<{ id: string; description: string }[] | null>;
   applyPersona(id: string | null): Promise<{ applied?: boolean; cleared?: boolean; scan?: { ok: boolean; reason?: string; findings: number } } | null>;
@@ -178,6 +237,11 @@ export interface LucidBridge {
   // P9.7: import a ChatGPT / Claude / Gemini data export (folder, .json, or .zip) into the active
   // compartment, through the fail-closed gate. `model` runs the richer LLM extractor (capped).
   personalImport(path: string, model?: boolean): Promise<PersonalImportResult | null>;
+  // P-IMP.2: read-only pre-import estimate (counts) for the AI-mode token/time warning.
+  personalImportEstimate(path: string): Promise<PersonalImportEstimate | null>;
+  // P-IDE.5: in-app editor — read a workspace file, and save the buffer THROUGH the scanner gate.
+  editorRead(path: string): Promise<EditorReadResult | null>;
+  editorSave(opts: { path: string; content: string; baseSha?: string; overwrite?: boolean }): Promise<EditorSaveResult | null>;
   // P9.4: audited Obsidian vault export + NARA-aligned CUI archive
   personalExportVault(opts: { scopes?: string[]; dest?: string; reviewer?: string }): Promise<ExportSummary | null>;
   personalCuiArchive(opts: { dest?: string; reviewer?: string }): Promise<ExportSummary | null>;
@@ -271,8 +335,16 @@ export const bridge: LucidBridge = {
   config: async () => (await getData("/api/config")) ?? FALLBACK_CONFIG,
   refreshConfig: async () => (await post("/api/config/refresh", {})) ?? FALLBACK_CONFIG,
   setConfig: async (id, value) => (await post("/api/setConfig", { configId: id, value })) ?? FALLBACK_CONFIG,
+  modes: () => getData("/api/modes"),
+  setMode: (modeId) => post("/api/modes", { modeId }),
+  setUiMode: (uiMode) => post("/api/uimode", { uiMode }),
+  respondPermission: (id, optionId) => post("/api/chat/permission", { id, optionId }),
+  cancelChat: () => post("/api/chat/cancel", {}),
   commands: async () => (await getData("/api/commands")) ?? [],
   skills: () => getData("/api/skills"),
+  setActiveSkill: (name, prompt) => post("/api/skill", { name, prompt }),
+  clearActiveSkill: () => post("/api/skill", { clear: true }),
+  skillActivated: (command, name, source) => post("/api/skill/activated", { command, name, source }),
   sessions: async () => {
     try {
       const r = await fetch("/api/sessions", { cache: "no-store", headers: authHeaders() });
@@ -285,6 +357,11 @@ export const bridge: LucidBridge = {
   newSession: async () => { await post("/api/newSession", {}); },
   getSettings: () => getData("/api/settings"),
   saveUsername: (username) => post("/api/settings", { username }),
+  saveProfile: (p) => post("/api/settings", p),
+  skipEmail: () => post("/api/settings", { skip: true }),
+  managed: () => getData("/api/managed"),
+  chinaAck: () => getData("/api/china-ack"),
+  setChinaAck: (acknowledge) => post("/api/china-ack", { acknowledge }),
   auth: () => getData("/api/auth"),
   saveKey: (env, key) => post("/api/auth/key", { env, key }),
   oauthLogin: (oauthId) => post("/api/auth/oauth", { oauthId }),
@@ -311,6 +388,9 @@ export const bridge: LucidBridge = {
   personalGraph: (scope) => getData(`/api/personal/graph${scope ? `?scope=${encodeURIComponent(scope)}` : ""}`),
   personalForget: (factId) => post("/api/personal/forget", { factId }),
   personalImport: (path, model) => post("/api/personal/import", { path, model: !!model }),
+  personalImportEstimate: (path) => post("/api/personal/import/estimate", { path }),
+  editorRead: (path) => post("/api/editor/file", { path }),
+  editorSave: (opts) => post("/api/editor/save", opts),
   personalExportVault: (opts) => post("/api/personal/vault", opts),
   personalCuiArchive: (opts) => post("/api/personal/cui-archive", opts),
   personalExports: () => getData("/api/personal/exports"),

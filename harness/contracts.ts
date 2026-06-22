@@ -78,6 +78,16 @@ export const EVENT_NAMES = [
   "personal_facts_imported",
   // P-MCP.1 (ADR-0020) — an authenticated MCP server was connected (config handed to omp).
   "mcp_server_connected",
+  // P-TASK.3/4 (ADR-0028) — proactive subagent delegation: a `task` dispatch was bound to lineage,
+  // and a returned subagent result was run through the keystone-#2 promotion gate.
+  "subagent_dispatched",
+  "subagent_result_gated",
+  // P-LOC.1 (ADR-0031) — an AI-authored file mutation that passed the gate was counted into the
+  // AI-LOC attribution ledger (lines written per model/repo/identity).
+  "ai_edit_recorded",
+  // P-IDE.3 (ADR-0029) — a skill was activated from the picker (bundled / project / task proforma).
+  // Metadata only: command, name, source — never user content.
+  "skill_activated",
 ] as const;
 export type EventName = (typeof EVENT_NAMES)[number];
 

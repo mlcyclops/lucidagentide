@@ -97,6 +97,28 @@ function parseGemini(data: any[]): ImportedConversation[] {
   return messages.length ? [{ title: "Gemini activity", messages }] : [];
 }
 
+// ── modern (sharded) ChatGPT export ─────────────────────────────────────────
+// Since ~2025 OpenAI splits a large account's history across `conversations.json` AND/OR
+// `conversations-000.json`, `conversations-001.json`, … (no single combined file). Each shard
+// is an independent JSON array of conversation objects in the SAME shape parseOpenAI reads.
+// These two helpers let the loader gather every shard and concatenate them into the one array
+// the rest of the pipeline (detectVendor → parseExport → importConversations) already expects.
+
+/** True for a ChatGPT conversations shard filename: `conversations.json` or `conversations-NNN.json`
+ *  (case-insensitive; basename only — strip any folder prefix before calling). */
+export function isConversationShard(basename: string): boolean {
+  return /^conversations(-\d+)?\.json$/i.test(basename.split(/[\\/]/).pop() ?? "");
+}
+
+/** Concatenate the conversation arrays from multiple shards into one array, preserving shard
+ *  order. Non-array shards (a failed parse, an unexpected shape) are skipped, never thrown — one
+ *  bad shard must not abort an otherwise-good import. */
+export function mergeConversationShards(shards: unknown[]): unknown[] {
+  const out: unknown[] = [];
+  for (const s of shards) if (Array.isArray(s)) out.push(...s);
+  return out;
+}
+
 /** Sniff the vendor from the export's shape. null = unrecognized. */
 export function detectVendor(data: unknown): ImportVendor | null {
   if (!Array.isArray(data)) return null;

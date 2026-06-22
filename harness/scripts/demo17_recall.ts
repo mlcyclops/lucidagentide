@@ -1,4 +1,4 @@
-// harness/scripts/demo16_recall.ts
+// harness/scripts/demo17_recall.ts
 //
 // ADR-0009 Phase A — cross-session memory recall. The persist half already runs
 // live (rememberActivity -> ingestArtifact -> promoteFactGated on allowed tool
@@ -54,7 +54,7 @@ try {
 
   console.log(`\nrecorded ${rows.length} fact_sessions rows; emitted memory_recalled (count=${recalledEvents[0]!.count})`);
   console.log("suspicious fact excluded from recall — keystone #2 held on the read side");
-  console.log("\ndemo16_recall OK");
+  console.log("\ndemo17_recall OK");
 } finally {
   db.close();
   rmSync(dir, { recursive: true, force: true });

@@ -43,7 +43,7 @@ jobs:
             script: dist:win
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2

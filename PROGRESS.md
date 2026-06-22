@@ -266,7 +266,7 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
   sanitized-by-default with an audited "reveal raw (dangerous)" gate. No functional code this session.
 - **stubbed:** all four phases (P8.1–P8.4) are designed but unbuilt; the auto-distiller half of
   cross-session memory already exists (rememberActivity in security_extension.ts) — the gap is recall.
-- **next:** build **P8.1 memory-recall** first (migration 0007_memory_session.sql + EventName
+- **next:** build **P8.1 memory-recall** first (migration 0008_memory_session.sql + EventName
   memory_recalled + harness/memory/recall.ts + backend.setRecall via the persona seam), per ADR-0009.
 
 Roadmap phases (each its own future increment + ADR for its frozen-contract delta):
@@ -1048,3 +1048,622 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
   #14/#15 (personal.ts fs-race) already fixed by #41 — auto-close on next scan.
 - **next:** confirm the next CodeQL run auto-closes #14/#15; optional tools/web token + setWorkspace
   containment; then back to ADR-0021 P11.2 UX.
+
+## Design session: ACP modes + thought streaming (ADR-0027) and proactive Task delegation (ADR-0028)
+- **shipped:** verification + two design ADRs, no feature code. Confirmed against pulled `master`:
+  token caching green (demo02 prefix-hash; frozen prefix byte-stable, volatile in tail), harness
+  370/370. Live-probed `omp acp` v16.0.8: it DOES stream `agent_message_chunk` and (thinking on)
+  `agent_thought_chunk` first — root-caused the "big dump" to the GUI dropping every thought chunk
+  (`acp_backend.ts` has no `agent_thought_chunk` case). Confirmed native ACP modes
+  `[default, plan]` via `session/new`+`session/set_mode` (no native "ask"). Mapped the existing
+  subagent data layer (P5.1/P5.2) and the delegation gaps. Wrote ADR-0027 (Plan/Ask/Agent + thought
+  streaming, phased P-ACP.1/2/3) and ADR-0028 (proactive omp-Task delegation, phased P-TASK.1–4).
+- **stubbed:** all implementation deferred (user chose ADRs-only). Fixed one Windows-only test bug in
+  `desktop/path_guard.test.ts` (hardcoded `/` vs platform `sep`) to restore a green desktop baseline
+  (207→208 pass); the guard itself was already correct.
+- **next:** build P-ACP.1 (thought streaming — smallest, highest-value) as the first implementation
+  increment; then P-ACP.2 (Plan/Agent selector), then P-ACP.3 (Ask round-trip); P-TASK.1 in parallel.
+
+## P-ACP.1: live thought streaming + composer input polish (ADR-0027)
+- **shipped:** the agent's reasoning now streams live. `acp_backend.ts` handles `agent_thought_chunk`
+  → new `ChatEvent {type:"thinking"}` (mirrored in renderer `bridge.ts`); `app.ts` renders a
+  collapsible reasoning block ABOVE the answer that fills in live ("Thinking…"), then auto-collapses
+  to "Thought for Ns" when the first answer token arrives — fixing the "big dump" (thought chunks were
+  previously dropped). Thinking text is display-only: never added to the assistant buffer the
+  personalization distiller learns from, never persisted. New `.reasoning` CSS (own `thinkpulse`
+  keyframe, no collision with the existing `pulse`). Composer polish: left padding 14→18px; `autosize`
+  now grows to 3 rows (line-height×3 + padding ≈ 82px) then scrolls internally (`overflow-y:auto`),
+  CSS `max-height` matched. Verified live in the browser preview: a reasoning turn streamed thinking
+  then collapsed ("Thought for 4.0s", expandable to the captured reasoning); a 5-line prompt capped at
+  82px with an internal scrollbar (scrollHeight 239 > clientHeight 82). desktop 208 pass, tsc clean,
+  renderer bundles, no console errors.
+- **stubbed:** P-ACP.2 (Plan/Agent mode selector via session/set_mode) and P-ACP.3 (Ask-mode
+  permission round-trip) not started. Also fixed the Windows-only path_guard.test.ts separator bug.
+- **next:** P-ACP.2 mode selector, then P-ACP.3 Ask round-trip; P-TASK.1 (surface omp's Task tool).
+
+## P-ACP.2: Plan / Agent mode selector via ACP session/set_mode (ADR-0027) + composer polish
+- **shipped:** the composer Mode control now switches the ACP session mode through the canonical
+  `session/set_mode` (was routed through a config option). `acp_backend.ts` captures `sess.modes`
+  (availableModes + currentModeId), tracks `current_mode_update` (so omp auto-exiting Plan reflects in
+  the UI), and exposes `getModes()`/`setMode()`; `dev.ts` adds `/api/modes` (GET list+current, POST
+  switch); `bridge.ts` adds `modes()`/`setMode()` + `ModeState`; `app.ts` routes mode changes in
+  `applyConfig` to `setMode`, adds `syncMode()` (called on load + after every turn). Probed omp 16.0.8:
+  `session/set_mode` returns `{}` and fires `current_mode_update`. Verified live in preview: dropdown
+  lists Agent(default)/Plan; selecting Plan → composer label "Plan" AND backend `/api/modes`.current =
+  "plan"; reset → default. desktop 208 pass, tsc clean, bundles, no console errors.
+  Composer polish (follow-up to P-ACP.1 feedback): the few-px gap is now on the textarea text
+  (`padding-left:4px` on the cursor), not the box frame; the Send button moved OUT of the bordered
+  input box into a new `.composer-row` (bottom-aligned beside it, 8px gap) so the 3-row scroll window
+  contains only text. Verified: button outside box, textarea scrolls internally (scrollHeight>client).
+- **stubbed:** P-ACP.3 (Ask mode = forward session/request_permission to the UI, fail-closed) not
+  started. New sessions start in omp's default (Agent) mode — the selected mode is not yet persisted
+  across a new-session/respawn (re-captured from the fresh session).
+- **next:** P-ACP.3 Ask-mode permission round-trip; then P-TASK.1 (surface omp's Task tool in the UI).
+
+## P-ACP.3: Ask mode — interactive tool-permission round-trip (ADR-0027)
+- **shipped:** the composer Mode control is now the full Claude-Code-style 3-way **Agent / Ask / Plan**
+  (`MODE_UI_OPTS`; both the composer dropdown AND the model-badge popover seg unified on it). "Ask" is
+  a client posture (omp has no native ask): omp mode stays `default` but `permissionMode="ask"` so each
+  tool-permission request is forwarded to the UI. `acp_backend.ts`: `onRequest` forwards
+  `session/request_permission` (only inside a live chat turn) via a new `{type:"permission"}` ChatEvent,
+  parks the JSON-RPC reply in `permPending`, and resolves it from `resolvePermission()`; fail-closed —
+  no decision (5-min timeout / turn-end / respawn / disconnect) ⇒ deny. The turn's idle/stall clock is
+  paused while a permission is pending (`pendingPerms`). `setUiMode()` derives omp-mode + permissionMode;
+  `uiMode()` derives the 3-way from (currentModeId, permissionMode). dev.ts: `/api/uimode` (POST) +
+  `/api/chat/permission` (POST). bridge: `setUiMode`/`respondPermission` + `permission` ChatEvent +
+  `ModeState.ui/permissionMode`. app.ts: inline `.perm` approve/deny card (allow* vs reject* options,
+  resolves on click, finalizes to Denied on turn-end). New `.perm` CSS.
+  Verified live (preview, omp 16.0.8 Opus): set Ask → label "Ask"; a read (`ls`) ran with NO prompt
+  (omp doesn't gate reads — expected); an exec (`echo …`) raised the card with Allow once / Always allow
+  / Reject / Always reject → **Allow once** ran the command + card shows "Allowed"; a second exec →
+  **Reject** → card "Denied" and the model reported the command was not run. desktop 208 pass, tsc clean,
+  bundles, no console errors.
+- **stubbed:** Ask only prompts when omp itself emits request_permission (writes/exec), not for
+  read-only tools — matches omp's approval model. "Always allow/reject" are passed through to omp as
+  given (we don't yet persist a client allowlist). uiMode (incl. Ask) survives a respawn; a brand-new
+  session still starts in omp default but permissionMode is preserved.
+- **next:** P-TASK.1 — surface omp's Task tool in the UI (proactive subagent delegation, ADR-0028).
+
+## P-TASK.1: surface omp's Task tool as a subagent card (ADR-0028)
+- **shipped:** delegations to omp's `task` tool now show a distinct Claude-Code-style card instead of a
+  nameless "other" tool chip. First confirmed the real ACP wire shape with a live probe (omp 16.0.8):
+  a spawn is a `tool_call` with `kind:"other"` whose `rawInput` is `{agent, context, tasks[]}` (batch)
+  or `{agent, assignment}` (flat) — detection is rawInput-shape-based; omp runs subagents as background
+  jobs so the model then issues `rawInput.poll[]` calls until the `<task-result>` lands. `acp_backend.ts`
+  detects the spawn → new `{type:"subagent", id, agent, title, assignments[]}` ChatEvent, and suppresses
+  poll/list/cancel/wait coordination calls as noise (mirrored in `bridge.ts`). `app.ts` renders a
+  collapsible cyan `.subagent` card ("Delegated to <agent>" + the assignment[s]), spinner while running,
+  resolves to done when the turn ends; new `.subagent` CSS. The rawInput strings are still scanned by
+  the in-process pre-hook gate (no new gating this increment, per ADR scope). Verified live: "spawn an
+  explore subagent…" → card "Delegated to explore · List top-level repo files", poll noise suppressed,
+  card → done with a green check, orchestrator summarized the subagent result. desktop 208 pass, tsc
+  clean, bundles, no console errors. ADR-0028 status → P-TASK.1 Built (+ confirmed-wire-shape note).
+- **stubbed:** no live per-subagent progress yet (card shows running→done, not streamed steps); the
+  `<task-result>` payload from the final poll isn't parsed into the card. No proactive delegation
+  policy yet (the model only delegates when asked) — that's P-TASK.2. No Task pre-dispatch/result
+  gating beyond the existing pre-hook — P-TASK.3/4.
+- **next:** P-TASK.2 — proactive delegation policy in the frozen layer-3 rules + token-efficiency check.
+
+## P-TASK.2: proactive subagent-delegation policy (ADR-0028) + green-neon digging icon
+- **shipped:** added a byte-stable `DELEGATION_POLICY` to the frozen prompt prefix (layer 3,
+  `harness/prompt/assembler.ts`; `PREFIX_VERSION` 1→2) telling the model to PROACTIVELY hand
+  multi-file / broad-exploration / isolable subtasks to the `task` tool, pass a crisp assignment +
+  minimal context, and continue from the distilled result (keeps context small + cache hot). KEY
+  finding: the FROZEN_PREFIX assembler is NOT wired to the live ACP chat (omp owns its system prompt;
+  the gate injects none), so the policy is also delivered to the running model via `omp acp
+  --append-system-prompt DELEGATION_POLICY` in `acp_backend.ts` — proven the flag reaches the model
+  (marker probe). Byte-stable, no volatile content → stays in omp's cached prefix (invariant #6).
+  Also (user request): the subagent card's spinner is a custom animated green-neon SVG of a "stick
+  man peering through a looking glass" (`LOOKER_SVG` in app.ts; `.looker`/`@keyframes peer` CSS — the
+  head + raised glass-arm bob slightly up/down while running, settle on done). (Superseded an earlier
+  digging-shovel variant per feedback — exploring/scanning reads better than digging.)
+  Verified: demo-02 prefix-hash green, assembler tests 14 pass, harness 370, desktop 208, tsc clean,
+  bundles. Live: digging icon renders green (rgb 70,210,126) with neon double drop-shadow + `dig`
+  animation; subagent spawn/card still works. Honest note: a read-only "overview" prompt did NOT
+  delegate — the model did efficient inline parallel reads (Claude-Code-like judgment); delegation is
+  guidance, not forced. The mechanism is delivered + cache-stable; behavior is the model's call.
+- **stubbed:** no automated token-efficiency MEASUREMENT (relied on: policy in cached prefix, stable
+  bytes, and P-TASK.1's finding that subagent sub-tool-calls don't enter the parent context). Didn't
+  test a real multi-file CHANGE delegation (would mutate the repo). Policy wording is balanced to
+  avoid over-delegation; tune later if it under-delegates in practice.
+- **next:** P-TASK.3 — explicit Task pre-dispatch gating + lineage binding (child run via
+  spawnSubagent, profile downgrade, suspicious→security-review); then P-TASK.4 result gating.
+
+## UX polish: SAVINGS metric, smaller tiles, receding collapsed rails, auto-collapsing sessions
+- **shipped (renderer-only):** (1) right metric tiles smaller (`.tile .n` 17→14px, `.l` 9→8px,
+  tighter padding/min-width). (2) Renamed the CACHE tile → **SAVINGS** with a CFO/5th-grade tooltip
+  ("…re-reads the same background every turn; that repeat is billed at ~1/10th the price — ~90% off…
+  higher = smaller bill"); value still the prompt-cache hit %. (3) Collapsed side rails recede to
+  ~55% opacity so they don't distract, full on hover/expand: `.inspector.rail` opacity .55 (+:hover 1);
+  the left nav `.rail` dims via `#app-inner.sidebar-collapsed` (toggled in `toggleSidebar`). (4)
+  Sessions panel auto-collapses on the FIRST chat message (`autoCollapsedSessions` one-shot in
+  `send`); the nav hamburger (`#sideToggle`) reopens it (Claude-Code style). Verified live: savings
+  label+tooltip, 14/8px fonts, both rails 0.55 collapsed / 1.0 expanded, hamburger reopen → 236px +
+  full opacity, send → auto-collapse + dim. desktop 208 pass, tsc clean, bundles, no console errors.
+
+## P-TASK.3: Task pre-dispatch gating + lineage binding (ADR-0028)
+- **shipped:** the security gate (`harness/omp/security_extension.ts`) is now Task-aware: on a
+  `task` tool_call (detected via `event.toolName === "task"` — confirmed against omp source, where the
+  tool is `readonly name = "task"` and omp's own executor keys on the same) it records the dispatch
+  into the run lineage, best-effort and AFTER the existing fail-closed scan (never affects the block
+  decision). New `harness/runs/task_gate.ts` `gateTaskDispatch(db, parent, {block, trustLabel})`:
+  clean -> `spawnSubagent` child run with a profile from `chooseProfile` (auto-downgraded:
+  suspicious->container-local, else trusted-local); blocked -> `spawnSecurityReview` read-only child
+  run (work NOT dispatched). New `task_gate.test.ts` (4 pass: dispatch+profile, suspicious downgrade,
+  blocked->review, session inheritance). Verified live (headless `omp -e gate -p "use task..."`): a
+  real explore dispatch wrote a `subagent` run under `omp-live` (mode subagent, sandbox trusted-local,
+  clean) AND still ran/answered - lineage is provenance, not a gate. harness 374 pass (+4),
+  fail-closed keystone still green, root tsc clean.
+- **stubbed:** the chosen sandbox profile is recorded as POLICY/provenance - omp still owns the
+  subagent's actual isolation (we don't force omp's backend from it). Blocked->security-review path is
+  unit-tested (a live hidden-Unicode-in-assignment block wasn't separately exercised; the gate's
+  fail-closed block decision is covered by the keystone tests). No subagent RESULT gating yet - P-TASK.4.
+- **next:** P-TASK.4 - gate the subagent's returned text before it re-enters parent memory (keystone
+  #2 / promotion_gate) + EventName additions (frozen-contract sub-increment) + DuckDB lineage rows.
+
+## P-TASK.4: subagent result-promotion gating (keystone #2) + rail/status UI polish (ADR-0028)
+- **shipped:** subagent RESULTS can no longer poison durable memory. New `gateSubagentResult(db,
+  scanner, {runId, agent, resultText})` in `harness/runs/task_gate.ts`: ingest (scan + trust-label,
+  raw preserved) -> `promoteFactGated` (keystone #2 blocks suspicious/quarantined unreviewed sources).
+  Wired a `tool_result` hook in the gate (`security_extension.ts`) that detects the assembled
+  `<task-result agent="..">` and routes it through the gate (best-effort, override-free - never alters
+  tool output). Two new `EventName`s (`subagent_dispatched`, `subagent_result_gated`) in contracts.ts
+  (the only frozen-contract change) + emitted from task_gate. Discovered the subagent's own
+  `yield`/tool calls ALSO already hit the gate's tool_call handler (same omp process) - so results are
+  gated on both seams. 2 new tests (clean result -> promoted 1 fact; hidden-Unicode result ->
+  quarantined, 0 facts). Verified live (headless `omp -e gate -p "use task"`): a real explore result
+  was ingested as a `subagent:explore` artifact. harness 376 pass (+2), fail-closed + promotion
+  keystones green, root+desktop tsc clean. **ADR-0028 fully shipped (P-TASK.1-4).**
+- **UI polish (this session, renderer-only):** right metrics rail thinner (min-width 80->54, tiles
+  min 48, fit-content tightly expands for big numbers: ~72px idle -> ~77px with 248.5k); metric
+  numbers/labels now CENTERED with tighter padding (5px 6px, label 7.5px); status-bar pills got more
+  right padding (`.seg` +5px, seg-btn 0 8px 0 5px); `fmtUSD` now rounds to the nearest cent ($0.0000
+  -> $0.00). Verified live: centered tiles, $0.00, no console errors; desktop 208 pass.
+- **next:** ADR-0028 complete. Open follow-ups: live per-subagent progress in the UI card (parse the
+  `<task-result>` poll payload); optional enforce omp isolation backend from the chosen profile.
+
+## UX: instant Profile load, inline Knowledge-graph unlock, status-bar $0.00 (renderer-only)
+- **shipped:** (1) **Profile no longer lags** — Settings → Profile is just the local name, already in
+  `state.username`, so `settingsShell` now renders it from cache instead of a skeleton that waited on
+  `/api/settings` (measured: warm 2-7ms but a ~660ms COLD first hit — that was the lag). Background
+  refresh only re-fills if the value changed AND the field isn't focused (no clobber while typing).
+  (2) **Inline Knowledge-graph unlock** — when the store is configured-but-locked, the graph panel now
+  shows a passphrase field + Unlock right under "Your store is locked…" (no trip to Settings), via new
+  `renderKgLocked`. Input validation (empty → "Enter your passphrase."), **Caps-Lock warning**
+  (`getModifierState`), a **show/hide** eye toggle, inline error on wrong passphrase (surfaces
+  `personalUnlock`'s message), and on success it mounts the graph. Not-yet-set-up still points to
+  Settings (setup needs the confirm flow). New `.kg-unlock*` CSS. (3) **Status bar** `$0.0000 → $0.00`
+  (fmtUSD nearest cent, from the prior session) + a touch more right padding on each pill.
+  Verified live: profile input present instantly ("Nick", no skeleton); KG empty-validation, show/hide
+  (password↔text), and wrong-passphrase error all work; $0.00 in the bar. desktop 208 pass, tsc clean,
+  bundles, no console errors.
+- **stubbed:** Caps-Lock + show/hide are wired and code-correct; synthetic CapsLock can't be faked in
+  the headless check so it wasn't auto-asserted. Inline unlock targets the MAIN personal store
+  (matches the old "Unlock in Settings"); a CUI-scope inline unlock could be added later.
+- **next:** (unchanged) live per-subagent progress card; optional isolation-backend enforcement.
+
+## UX cleanup: centered side buttons, settings density, personalization placement, em-dash purge, no Runs rail
+- **shipped (renderer-only):** (1) New-session "+" and collapse "<<" glyphs truly centered (`.side-new
+  .ic{display:block}` drops the inline-SVG baseline gap). (2) Tighter Settings density (`.set-sec`/
+  `.set-coll` margin 14->9, `.set-coll-h` pad 12/13->10/12, body 14/16/24->12/14/20, label mb 10->7).
+  (3) Personalization moved directly under Profile in `settingsShell` + a quiet accent GLOW
+  (`.set-coll[data-sec="personal"]` box-shadow/border). (4) Removed the **Runs** rail button - it only
+  called `focusInspector("security")` (duplicated Security); dropped the dead handler branch too (the
+  `runs` icon name is still used by tool-phase glyphs). (5) Purged em dashes from rendered UI text
+  (replace_all "—"->"-" in app.ts + bridge.ts; remaining ones are code comments only, not rendered).
+  Verified live: + / << centered, section order workspace>profile>personal>providers, personal glow on,
+  no Runs button, empty-state text uses hyphens. desktop 208 pass, tsc clean, bundles, no console errors.
+- **note (answered for the user):** "root" = the top/orchestrator run (kind in `runs`), parent of the
+  subagents; "parent" is the relationship (parent_run_id), "root" is the run's role. Sandbox profiles
+  are recorded POLICY (chooseProfile), NOT yet enforced on omp's actual isolation - clean task spawns
+  run trusted-local (shared cwd, in-process gate still scans every call); real per-agent containers
+  require enforcing the isolation backend (the open follow-up).
+
+## AskSage live token readout (Civ API) + subagent isolation enablement
+- **shipped (AskSage):** the AskSage box is now fully dynamic from the Civ API - no manual limit.
+  Probed the real API: `/count-monthly-tokens` -> used (1,139,721), `/count-monthly-tokens-left` ->
+  404 (no user-only endpoint), `/count-monthly-tokens-left-with-org` -> remaining incl. org (860,279);
+  used + remaining = exactly 2.00M = the real allowance. `asksage.ts monthlyTokens()` now returns
+  `{used, remaining, limit=used+remaining}` (falls back to stored limit only if remaining 404s).
+  Renderer: `quotaControls` (the +50K/+250K/+1M/Reset boxes) replaced by read-only `quotaDisplay`
+  showing "used / limit", "% used · N left (you + org)"; hydrate fetches tokens then re-renders so the
+  USED figure populates (the "0 used" bug was a render-before-fetch timing issue, not the API). Dead
+  manual-quota handler removed. Verified live: 1.14M / 2.00M, 57% used · 860.3k left, no boxes.
+- **shipped (isolation):** `omp acp` now launches with `--config harness/omp/acp_config.yml`
+  (`task.isolation.mode: auto`, merge: patch) so the per-spawn `isolated` option is available; the
+  frozen delegation policy (PREFIX_VERSION 2->3) steers write/exec subtasks to spawn isolated (patch +
+  contained blast radius), read-only ones skip it. omp owns execution (auto backend, rcopy fallback on
+  Windows); no global force-isolate exists, so it's enable+steer not a hard guarantee; isolated needs
+  a git workspace. Verified: omp acp loads the overlay (handshake OK), prefix-hash green v3.
+- **verified:** harness 376 pass, desktop 208 pass, tsc clean both, bundles, no console errors.
+- **stubbed:** a full isolated patch-merge run wasn't exercised (rcopy of this repo+node_modules is
+  slow); enabled + steered, best verified in a real git workspace in use.
+- **next:** live per-subagent progress card (parse `<task-result>`); optional CUI-scope inline unlock.
+
+## Bundled-safe isolation + panel UX (right-panel auto-collapse + KG resizer)
+- **shipped:** (1) **Isolation works bundled** - `acp_config.yml` already ships via the extraResources
+  `harness/**/*` glob (same path as the gate extension) and `acp_backend` resolves `ACP_CONFIG` from
+  `REPO = import.meta.dir/..`, which is `<resources>/repo` in packaged builds (the dev server is spawned
+  with `cwd: REPO` from `<resources>/repo/desktop`). Made it FAIL-OPEN: `--config` is only passed when
+  `existsSync(ACP_CONFIG)`, so a missing overlay degrades isolation off instead of crashing `omp acp`
+  (the in-process gate still scans every call). (2) **Opening Settings or the Knowledge graph now
+  auto-collapses the Sessions panel** (`toggleSidebar(true)` in `openSettings`/`openKnowledge`) for
+  more chat real estate; the nav hamburger reopens it. (3) **Knowledge-graph left-edge resizer** - a
+  `.resizer-l[data-resize="kg"]` in the KG aside; `.kg` width is now `var(--kg-w, min(900px,70vw))`;
+  `initResize` handles `kg` (maps to `#knowledge`, left-edge drag, clamp 360px..80vw, persisted to
+  `lucid.kg-w`). Verified live: KG open → sessions collapsed; drag → 674→360 (min) and →770 (≈80vw),
+  persisted; Settings open also collapses sessions. desktop 208 pass, tsc clean, bundles, no errors.
+- **stubbed:** still didn't run a full isolated patch-merge end-to-end (rcopy of repo is slow); the
+  config-ships + path-resolves + fail-open are verified, omp owns the actual isolated execution.
+- **next:** (unchanged) live per-subagent progress card; optional CUI-scope inline unlock.
+
+## KG facts panel: show only on selection (reclaim space) + graph auto-refit on resize
+- **shipped:** the Knowledge-graph right-hand facts panel (`#kgSide`, 250px) no longer shows an empty
+  "Click a node" strip - it's `hidden` until a node is selected (`renderKgSide` toggles `side.hidden`;
+  the locked/empty/gate states also hide it), so the graph canvas uses the full width. `graph.ts` W/H/
+  cx/cy made mutable + a `ResizeObserver` re-fits the layout (computeFit) when the canvas changes size
+  (facts panel toggling, the KG resizer, or the window) - only when the user hasn't manually pan/zoomed,
+  preserving their view; observer disconnected on destroy. `.kg-side[hidden]{display:none}` safety.
+  Verified live: no selection → side display:none, canvas full width (741px), no console errors.
+  desktop 208 pass, tsc clean, bundles.
+- **reviewed ADR-0029** (model family picker, 18 bundled skills + /task proforma, Monaco IDE slide-out;
+  committed f100a57 - DECISIONS.md ONLY, no code yet). Flagged: (1) invariant-#6 wording is
+  self-contradictory - skills can't be both `--append-system-prompt` AND "volatile tail"; per-skill
+  prompts should ride the user-turn tail (persona/recall pattern), not respawn omp; (2) overlaps omp's
+  native skills surface (two skill systems) - needs reconciliation; (3) the 18 ported prompts are
+  injected as TRUSTED, so they need a security review before shipping; (4) Monaco web-workers are an
+  airgap gotcha (must vendor workers locally); (5) coordinate IDE-panel z-index with the KG/Settings/
+  inspector right panels. Otherwise well-structured + invariant-mapped.
+- **reviewed + corrected ADR-0030** (code-activity dashboard). Applied fixes in DECISIONS.md: (1)
+  attribution honesty — `git log` churn ≠ AI-authored; v1 must be labelled "workspace/repo activity,"
+  real attribution deferred; (2) safe git invocation — args-array (no shell), `pathWithin`-confined
+  paths, exec timeout; (3) exclude vendored/generated/lockfiles via pathspec so the metric isn't
+  dependency churn; (4) perf-claim nit (`--numstat` diffs, not pack-index); merges excluded. Added a
+  high-level "premium BI add-on seam" note ONLY (real PRD kept out of this repo).
+- **drafted the premium BI add-on PRD in the PRIVATE repo** (`mlcyclops/lucidagentIDEaddon`, pushed
+  to `main`): an MCP server that publishes core's read-only observability to Power BI (GCC-High),
+  Looker, AWS QuickSight, self-hosted Kibana, SharePoint, and a standalone single-HTML CIO/CFO
+  dashboard, with per-target Terraform/IaC; metadata-only, gov-cloud/airgap-aware, no core fork. PRD +
+  ROADMAP + data-contract + scaffolding stubs. IP intentionally separate; this repo holds only the
+  high-level seam note. (Cloned as a sibling dir, NOT inside this repo.)
+
+## Attribution identity: corporate-email profile field + first-open prompt (ADR-0030 prerequisite)
+- **shipped:** the foundation for per-model/per-repo code attribution. `settings_store` gains an
+  `email` field + `setProfile({username,email})`; `/api/settings` GET returns `{username,email}` and
+  POST updates only the provided fields; `bridge.saveProfile`. Profile (Settings) now has a corporate-
+  email input with validation + an attribution note. **First-open modal** (`promptForEmailIfMissing`)
+  asks for the work email on launch when unset (validated; "Later" defers to next launch; re-renders
+  Profile + toasts on save). New `.modal-*` CSS. Verified live: modal appears on no-email, empty/
+  invalid rejected, valid save persists (`/api/settings` returns it), Profile shows it, no re-prompt.
+  desktop 208 pass, tsc clean, bundles, no console errors.
+- **next / plan (large, multi-increment — building in order):**
+  - **AI-LOC attribution (the core ask):** the honest "what the AI wrote per model/repo/user" source
+    is the agent's OWN edits, NOT `git log` (which counts human commits too). Plan: in the gate
+    (`security_extension`), on an allowed `write_file`/`edit_file` tool_call, compute lines added/
+    removed and record `{model, workspace, email, added, removed}` — model+email passed to the omp
+    spawn via env from `acp_backend` (re-spawn on model/email change so the tag is current), workspace
+    from cwd. Store in a new DuckDB table (numbered migration = frozen-contract increment). This
+    SUPERSEDES ADR-0030's git approach for the AI-authored metric; git stays for total repo activity.
+  - **ADR-0029 phases:** P-IDE.1 model family picker (renderer-only) → P-IDE.2 skills + `/task`
+    proforma (deliver skill prompt in the USER TURN per the ADR-0029 review correction, not
+    --append-system-prompt) → P-IDE.3 `skill_activated` event → P-IDE.4-6 Monaco IDE panel.
+  - **ADR-0030 phases:** P-CODE.1 git collection + ledger metric (safe-spawn + pathspec excludes per
+    review) → P-CODE.2 monthly workspace table (joined with the AI-LOC attribution above) → P-CODE.3
+    polish.
+- **also pending:** live per-subagent progress card; optional CUI-scope inline unlock.
+
+## Attribution identity v2: skip → workstation fallback + MCP OAuth/X.509 design
+- **shipped (core):** email is now OPTIONAL — the first-open prompt has a **"Skip - use <hostname>"**
+  button that records the **workstation name** as the attribution identity (still traceable, still
+  rolls up to the dashboard / MCP push), so a user without an email is never forced. `settings_store`:
+  `attributionMode` ("email"|"workstation"), `setAttributionSkip()`, and `attribution()` →
+  `{identity, source, email, workstation, decided}` (any saved email OR a skip = decided → no
+  re-prompt; undecided falls back to hostname). `/api/settings` returns `attribution` + accepts
+  `{skip:true}`; `bridge.skipEmail()`; Profile shows the effective identity line. Verified live (with
+  the settings file temporarily stripped): modal shows "Skip - use DESKTOP-LGF6LQP", Skip →
+  attribution `{identity:"DESKTOP-LGF6LQP", source:"workstation", decided:true}`, no re-prompt,
+  Profile note correct; restored the real email after. desktop 208 pass, tsc clean, bundles.
+- **designed (private repo `lucidagentIDEaddon`, pushed):** `docs/identity-and-auth.md` — the MCP
+  server authenticates clients via **OAuth/OIDC** (Entra Gov/Okta/WIF, reusing core ADR-0020) **or
+  X.509 workload identity** (mTLS client cert from a corporate CA / SPIFFE; import a cert or generate
+  a CSR via EST/SCEP/ACME). Attribution resolves X.509 > OAuth > email > workstation; the verified
+  MCP identity overrides the local tag for non-repudiable reporting. Fail-closed, metadata-only,
+  CUI-excluded. Added `attribution` to the contract. Core ADR-0030 carries the high-level note only.
+- **next:** AI-LOC attribution backend (gate edit-counting → DuckDB, tagged model+repo+identity), then
+  ADR-0029 phases, then ADR-0030 git metric.
+
+## Enterprise-managed config: admin-deployable policy (GPO/Intune/MDM)
+- **shipped (core capability):** `desktop/managed_config.ts` reads a read-only policy file at startup
+  from a machine-wide admin-only path (`%ProgramData%\LucidAgentIDE\managed-config.json`, macOS
+  `/Library/Application Support/…`, Linux `/etc/lucidagentide/…`, or `LUCID_MANAGED_CONFIG` env) and
+  ENFORCES it. v1 enforces attribution policy: `requireEmail` / `allowSkip` / `allowedEmailDomains` +
+  `orgName` + `asksageOnly`. `settings_store.attribution()` folds policy in (decided/skip/domain);
+  `/api/settings` enforces server-side (rejects skip/bad-domain) + `/api/managed`; renderer hides Skip,
+  org-brands the prompt, validates domain, shows "Managed by …". Security: admin-only path (POSIX
+  rejects group/world-writable; Windows = dir ACL), only ADDS constraints, absent/malformed ⇒
+  unmanaged. Verified: unit (Acme policy → skipAllowed=false, gmail rejected, decided=false) AND live
+  (file at the real ProgramData path → modal "Required by Acme Corp · use @acme.com", no Skip, gmail
+  rejected client+server); removed the test file after. desktop 208 pass, tsc clean, bundles, no errors.
+- **shipped (private repo, pushed):** tested `managed-config/managed-config.template.json` + a
+  GPO/Intune/JAMF/MDM deployment runbook with per-OS paths + ACL hardening. Core ADR-0030 carries only
+  the high-level capability note; the template + runbook are IP in the add-on repo.
+- **next (unchanged):** AI-LOC attribution backend, then ADR-0029 phases, then ADR-0030 git metric.
+
+## P-LOC.1: AI-LOC attribution backend (ADR-0031)
+- **shipped:** the in-process gate counts every AI-authored file mutation that PASSES it (a successful
+  omp `write`/`edit` `tool_result`) from omp's OWN post-apply diff — one pure counter covers all edit
+  modes incl. the default hashline, and never over-counts failed edits (`isError`). `harness/runs/loc_count.ts`
+  (over-tested keystone) + `loc_ledger.ts` (writer + `aiLocRollup` per model/repo/identity) → new FROZEN
+  table `ai_loc_ledger` (migration 0007) + EventName `ai_edit_recorded`. Attribution threaded to the gate
+  via env at omp spawn (`LUCID_MODEL`/`LUCID_IDENTITY`/`LUCID_IDENTITY_SOURCE`/`LUCID_REPO`); model
+  reconciled from omp's active-model config (persisted `lastModel`, one-time respawn if it differs).
+  Best-effort: a DB-open failure skips the row, never the gate. Verified: 27 new unit tests + `demo-P-LOC.1`
+  + harness 403 pass + desktop 208 pass + tsc clean + prefix-hash unaffected + a LIVE end-to-end gate
+  drive (real `edit` → one `+1/-1` row; `read` ignored; self-cleaned).
+- **stubbed:** live in-session model switching must respawn omp to keep the model tag exact (a documented
+  constraint on ADR-0029 P-IDE.1); surfacing `aiLocRollup` on the dashboard / BI push is a later increment.
+- **next:** ADR-0029 P-IDE.1 (model family picker), then surface AI-LOC on the dashboard.
+
+## P-IDE.1: model family picker (ADR-0029)
+- **shipped:** the model picker now groups models into collapsible **family** sections (Anthropic
+  Claude · OpenAI o-series · OpenAI GPT · Google Gemini · AskSage RAG · Other) instead of a flat list.
+  Pure classification/grouping in new `desktop/renderer/model_families.ts` (`familyOf`/`groupByFamily`/
+  `filterModels`; regex ORDER = o-series before GPT; robust to `asksage-…/` prefixes; unmatched → Other),
+  unit-tested (`model_families.test.ts`, 15 tests). `app.ts` adds the collapsible UI (`familyListHTML`,
+  collapse persisted in `localStorage`) to BOTH the badge popover and the composer chip; the selected
+  model's family + any family during search are force-expanded; empty/no-match families hide; hover card
+  + click unchanged. Renderer-only — no contract/schema change. Verified LIVE in the preview vs real omp
+  models (27 → 5 families: claude 12·o-series 3·gpt 7·gemini 4·rag 1), collapse-toggle + persistence,
+  cross-family search + auto-expand, empty state, selected-family-expanded, zero console errors,
+  screenshot. desktop 223 pass, tsc clean, renderer build clean.
+- **stubbed:** P-IDE.2 (slash-command skills + `/task` proforma — reconcile with omp-native skills per
+  the ADR review finding #2) onward not yet built.
+- **next:** ADR-0029 P-IDE.2 (bundled skills, unified with omp-native skills), or surface AI-LOC on the dashboard.
+
+## P-LOC.2: AI-LOC roll-up on the dashboard (ADR-0031)
+- **shipped:** the Memory tab now shows an **"AI-authored code"** card — the output counterpart to the
+  cost ledger. `tools/memory_data.ts` adds `aiLocSummary()` (READ_ONLY DuckDB roll-up of `ai_loc_ledger`:
+  totals + per-model + per-(model·repo·identity) + distinct identities; coexists with the live gate's
+  write lock; null when no edits recorded), folded into the existing `MemorySnapshot` (no new endpoint).
+  `app.ts` renders an accordion: +added/−removed totals, a per-model table, and a by-repo·identity
+  breakdown (corporate email vs. workstation fallback marked `⌂`). Verified LIVE in the preview with
+  seeded rows — totals (+64/−2), per-model (opus +62/−1, sonnet +2/−1) and per-repo math exact,
+  attribution + workstation marker correct, card hidden when empty, zero console errors, screenshot;
+  seeded rows cleaned up after. desktop 223 pass, tsc clean, renderer build clean.
+- **settled (no code):** ADR-0029 P-IDE.2 open questions resolved — ONE unified skills picker
+  ("Built-in" + "Project" sections, reusing the P-IDE.1 family-section UI), bundled prompts via the
+  user-turn tail (omp-native stays on `useSkill`), inline auditable array (no `.md` on disk), each
+  ported prompt security-reviewed as it lands. Recorded in ADR-0029 review findings #2/#3 + the phase.
+- **next:** ADR-0029 P-IDE.2 (bundled slash-command skills + `/task` proforma), per the settled plan.
+
+## P-IDE.1b: model picker corrections (ADR-0029)
+- **shipped:** five user-reported fixes, verified live against the real omp catalog (**85 models**, not
+  27). (1) **Show ALL models** — `curatedModels` was dropping the user's direct-OAuth GPT (23) + Gemini
+  (20), keeping only curated Claude + AskSage; now returns every model omp exposes. (2) **Collapse bug**
+  — the selected model's family couldn't collapse (removed the `!hasSel` guard); collapse is now fully
+  user-driven + persisted. (3) **Fable 5 unavailable** — greyed, non-selectable, "Currently Unavailable"
+  tag + ITAR explanation in the hover card (`UNAVAILABLE` registry). (4) **AskSage ordering** — gov
+  configured → GPT/o-series/Gemini above Claude (`ASKSAGE_FAMILY_ORDER` + new `groupByFamily(order)`).
+  (5) **Gov advisory** — gov models show "internal prototype use only until cleared" in the hover card.
+  Plus cold-start: removed P-LOC.1's one-time startup respawn (dropped the session/slowed first load —
+  see ADR-0031 revision) + snappier popover open. Render ~4ms for 85 rows (never the bottleneck).
+  Verified: Claude collapses, Fable non-clickable + ITAR banner, o3 gov advisory, 85-model gov-first
+  ordering, no console errors, screenshot. desktop 225 pass · harness 403 pass · tsc clean · build clean.
+- **stubbed:** the 3 "Other"-family entries are omp auxiliary models (tab-completion, codex auto-review)
+  — left visible in Other (honest: don't hide available models); exact live-model-switch tagging deferred
+  (documented limitation in ADR-0031).
+- **next:** ADR-0029 P-IDE.2 (bundled skills + `/task`), per the settled unified-picker plan.
+
+## P-IDE.1c: model picker curation + data-sovereignty gating (ADR-0029)
+- **shipped:** rule-based curation in `model_families.ts` (omp gives no deprecation/provider metadata):
+  moderate deprecation (drop dated snapshots + legacy Claude 3.x/4.0-4.1 + Gemini 2.0); **GPT 5.4+
+  everywhere** (gov + direct; o-series/gpt-oss exempt); **gov models hidden unless an AskSage key is
+  set**; **gov at top of each family, newest→oldest**; drop omp auxiliary models; **China-origin gate**
+  (DeepSeek/Kimi/MiniMax/GLM/Qwen) hidden until a typed-ACKNOWLEDGE unlock in Settings (persisted;
+  card shows only when such a model exists — none currently, so forward-looking); **provider
+  disambiguation** tag for models that appear via multiple providers + a final identical-render dedup.
+  Wiring: settings_store `chinaModelsAcknowledged` + `/api/china-ack` + bridge `chinaAck/setChinaAck` +
+  `state.chinaAck`. Verified LIVE: user's catalog 85 → 47, gov-first ordering, GPT<5.4 gone, zero visual
+  duplicates, no console errors, screenshot. desktop 235 pass · model_families.test.ts 27 · tsc/build clean.
+- **stubbed:** the China unlock UI couldn't be exercised live (no China models in the catalog) — covered
+  by `isChinaModel` unit tests + the gated Settings card; live-verify when such a provider is connected.
+- **next:** Send→Stop button + prompt prestaging (P-ACP.4), then ADR-0029 P-IDE.2.
+
+## P-ACP.4: Stop button + prompt pre-staging (ADR-0027)
+- **shipped:** while a turn runs, the Send button becomes a red **Stop** that interrupts the reply +
+  tool calls via the ACP `session/cancel` notification (new `ACPClient.notify()` + `backend.cancel()` +
+  `/api/chat/cancel` + `bridge.cancelChat()`). **Pre-staging:** typing + Enter mid-turn no longer drops
+  the input — it's queued (one slot) with a "Queued · sends when this turn ends" chip (cancelable), and
+  auto-sends when the turn ends (naturally or via Stop). Renderer: `state.queued`, `renderQueued()`,
+  `stopTurn()`, `setSendEnabled()` Send/Stop toggle; auto-send in `send()`'s finally. No contract change.
+  Verified LIVE: Stop halts omp in ~155ms (reply stops growing, grewAfterStop=0), red Stop button +
+  queued chip render, queued prompt auto-sends after Stop, no console errors, screenshot. desktop 235
+  pass · harness 403 pass · tsc/build clean.
+- **gotcha (recorded):** the dev SERVER process must be restarted (not just page-reloaded) to pick up
+  `dev.ts`/`acp_backend.ts`/`acp.ts` edits — an early Stop test hit a stale 404 and looked broken.
+- **next:** ADR-0029 P-IDE.2 (bundled skills + `/task`), per the settled unified-picker plan.
+
+## P-IDE.1d: picker polish + queued-chip refinement (ADR-0029 / ADR-0027)
+- **shipped:** (1) **Mythos 5** now matches **Fable 5** — greyed "Currently Unavailable" (ITAR) + the same
+  rich hover card. (2) **Every listed model** gets a hover card via `resolveModelInfo()`
+  (curated→base-id→inferred-by-family/tier); rows show stars + context uniformly. (3) **Cold-boot cache**
+  — last config persisted to localStorage + painted instantly on boot (`loadCachedConfig`); `loadConfig`
+  only adopts a NON-empty live config (a cold omp no longer blanks the picker), with an "updating…"
+  spinner + in-place `pickerRedraw` when live lands (drops revoked providers). (4) **Family headers** —
+  removed the leading icon, bold label + count, higher contrast. (5) **Queued chip** — compact, subdued,
+  right-aligned 11px pill with a "Queued" tag + a delete (✕) that removes the pre-staged prompt before it
+  sends. Verified LIVE (47-model catalog): stars on every row, Mythos/Fable cards match, icon-less bold
+  headers, queued pill + working delete (deleted prompt doesn't send). desktop 235 · tsc/build clean.
+- **bug caught in verification:** `inferModelInfo` used `familyOf` without importing it → runtime
+  ReferenceError that emptied the picker; NEITHER tsc NOR Bun.build flagged the undefined free variable
+  (renderer type-safety gap — a missing import isn't caught; found only by live test + DOM instrumentation).
+- **next:** ADR-0029 P-IDE.2 (bundled skills + `/task`), per the settled unified-picker plan.
+
+## ADR-0032 fix: agent now builds files directly (was: stranded in isolation)
+- **shipped:** root-caused "Agent not building a file" — the gate block log showed NO write block, so
+  the write wasn't blocked; it was being STRANDED. ADR-0028 had (a) enabled task isolation
+  (`acp_config.yml` mode:auto/merge:patch) and (b) a `DELEGATION_POLICY` line steering the model to
+  "spawn ISOLATED … captured as a reviewable patch" for file edits. A delegated build ran in an
+  isolated copy → returned as a patch with NO apply-UI + fragile Windows merge → file never hit disk.
+  Fix: `DELEGATION_POLICY` rewritten to APPLY FILE EDITS DIRECTLY (gate-scanned), isolation reserved for
+  untrusted EXECUTION only (frozen-prefix change, PREFIX_VERSION 3→4, ADR-0032); `acp_config.yml` set
+  `mode: none` so a `task` subagent writes to the REAL workspace even if the model still tries to
+  isolate. Security gate (in-process, fail-closed) remains the load-bearing protection.
+- **caveat:** couldn't read the exact live chat session (sessions dir held only old omp-echo tests; the
+  Bash safety-classifier was intermittently down). Diagnosis rests on: no gate block logged + the
+  isolation/delegation steer I added in ADR-0028 + no patch-apply UI. Fix is safe regardless (can't make
+  file-building worse; writes land directly + gate-protected). Verify pending: full test run once the
+  classifier is back (prefix-hash self-test unaffected; isolation deferred until a patch-apply UI exists).
+- **next:** confirm with the user that builds now land; then ADR-0029 P-IDE.2.
+
+## Tooling: close the renderer type-check gap (root cause of the P-IDE.1d bug)
+- **shipped:** the renderer/Electron code IS covered by `desktop/tsconfig.json` (DOM types) — but my
+  verification only ran `tsc --noEmit` (root project = `harness/**`+`tools/**`), so renderer changes were
+  NEVER type-checked; that's why a missing `familyOf` import slipped to runtime in P-IDE.1d. Fixes:
+  excluded `**/*.test.ts` from `desktop/tsconfig.json` (they import `bun:test`, run under `bun test`) so
+  `tsc -p desktop/tsconfig.json` is a clean gate; updated the `typecheck` script to run BOTH projects
+  (root + desktop) + added `typecheck:desktop`. Verified `bun run typecheck` clean across both. Renderer
+  edits are now caught at build time.
+- **known gap (deferred → spawned task):** Bun-runtime desktop SERVER files (`dev.ts`, `acp_backend.ts`,
+  `settings_store.ts`, …) are in NEITHER tsconfig (`dev.ts` alone shows ~81 strict errors, mostly
+  `unknown`-typed `req.json()`). Covered by `bun test desktop` at runtime; strict type-checking deferred.
+- **next:** ADR-0029 P-IDE.2 (bundled skills + `/task`), per the settled unified-picker plan.
+
+## ADR-0033: build / anti-over-refusal policy (model refused to build a game)
+- **shipped:** user hit Gemini 3.1 Pro flatly refusing "make a single-HTML killer-rabbit game with
+  graphics/music in OSP-Tests" ("I cannot create… capabilities are limited… cannot generate rich
+  media"). The restrictive phrasing was NOT in our prompt — the model invented the limit. Added a
+  `BUILD_POLICY` block to the frozen prefix (layer 3, next to `DELEGATION_POLICY`): a self-contained
+  app/game/visualization in one HTML file is CODE (canvas/SVG/CSS + Web Audio + rAF + inline JS, no
+  external assets); build it and write it where asked; don't refuse buildable work on capability
+  grounds. Bumped `PREFIX_VERSION` 4→5; exported + appended to the live ACP chat via
+  `--append-system-prompt` (acp_backend now appends `DELEGATION_POLICY` + `BUILD_POLICY`).
+- **verified LIVE** with the SAME model + prompt: refusal gone — Gemini "Designing the Killer Rabbit
+  Game…" then wrote `OSP-Tests/killer-rabbit.html`, a real game (7× canvas, Web Audio AudioContext,
+  requestAnimationFrame, Caerbannog/Killer-Rabbit theme). prefix-hash green at v5 · harness 403 ·
+  desktop 235 · typecheck clean (3 projects). Distinct from ADR-0032 (which fixed file *stranding*); this
+  fixes the model *declining to attempt* the build.
+- **next:** ADR-0029 P-IDE.2 (bundled skills + `/task`), per the settled unified-picker plan.
+
+## P-IDE.2: unified skills picker + /task proforma (ADR-0029)
+- **shipped:** `desktop/renderer/skills.ts` — `INSTALLED_SKILLS` (12 audited, trusted prompts: Frontend
+  Design, Code Review, TDD, Security Audit, Refactor, Debug, Write Tests, Explain, Performance,
+  Accessibility, Session Handoff, Plan) + usage-frequency sort + the `/task` proforma. ONE picker behind
+  the composer Skills button: "Built-in" (/task + bundled, most-used first) + "Project" (omp-native via
+  `/skill:`). Activating a bundled skill delivers its prompt as an `<active-skill>` preamble in the USER
+  TURN (persona/recall path: acp_backend `setSkill`/`skillDelivered`, reset on new session/respawn) —
+  never the frozen prefix, never `--append-system-prompt`, distiller ignores it. `/api/skill` (set/clear)
+  + bridge `setActiveSkill`/`clearActiveSkill`; Skills chip shows the active skill + a Clear row; command
+  palette lists /task + bundled + project. Scoped to 12 strong prompts (not literal 18) so each got a real
+  safety pass (ADR review #3); more add the same way. Verified LIVE: 12 built-in + 2 project sections,
+  activate → chip "Code Review" + backend round-trips active name, /task appends template, Clear resets
+  both, no console errors. desktop 235 · typecheck clean (3 projects) · build clean.
+- **next:** ADR-0029 P-IDE.3 (`skill_activated` telemetry event — frozen-contract sub-increment).
+
+## P-IDE.3: skill_activated telemetry event (ADR-0029, frozen-contract sub-increment)
+- **shipped:** added `skill_activated` to `EVENT_NAMES` (frozen contract). `desktop/skills_log.ts`
+  `recordSkillActivated({command,name,source})` emits via the canonical `Telemetry` class (so the name
+  is validated against the enum) — METADATA ONLY (command/name/source, never user content) — to an
+  append-only NDJSON (`~/.omp/lucid-events.ndjson`), since the GUI can't co-write agent_obs.duckdb
+  (omp child holds it), mirroring `security_log.ts`. New `POST /api/skill/activated` + bridge
+  `skillActivated`; renderer fires it on bundled activation, project `useSkill`, and `/task`.
+  Verified: 3 unit tests (valid event + enum membership + all 3 sources) + LIVE (activating Security
+  Audit + /task appended valid `skill_activated` lines with correct metadata). desktop 238 · harness
+  403 · typecheck clean (3 projects) · build clean.
+- **next:** ADR-0029 P-IDE.4 — Monaco IDE panel scaffold (read-only; vendor workers locally; right-panel
+  exclusivity), then P-IDE.5/6.
+
+## P-IDE.4: read-only Monaco IDE panel scaffold (ADR-0029)
+- **shipped:** Monaco 0.55 added as a desktop dep; AMD `min/vs` served LOCALLY from node_modules via a
+  guarded dev.ts route (`/vendor/monaco/*`, pathWithin guard) — airgap-clean, no 16MB commit; packaged
+  via electron-builder `files`. `desktop/renderer/ide_panel.ts` lazy-loads Monaco (AMD loader) on first
+  open (app.js stays lean), creates a `readOnly` lucid-dark editor that slides over the inspector
+  (translateX), with a header (title + lang chip + close), footer (live Ln/Col + Read-only), and a drag
+  resize handle (persisted). "View in IDE" buttons are injected onto chat code blocks post-render
+  (DOMPurify forbids `<button>` in sanitized markdown) → delegated handler opens the panel with the
+  block's code + language. Right-edge exclusivity: IDE ↔ Settings ↔ KG mutually close. CSP gained
+  `worker-src 'self'` + `font-src 'self'`. Verified LIVE: renders + highlights TS/Python/Rust/Go, footer
+  tracks cursor, close + both-direction exclusivity + injected buttons all work, zero console
+  errors/CSP violations.
+- **worker note (ADR review #4):** a read-only viewer needs no language-service worker (highlighting is
+  main-thread); Monaco 0.55's worker is a hashed AMD chunk that's fragile under our strict CSP, so the
+  viewer uses the main-thread fallback and silences only Monaco's benign "could not create web worker"
+  notice. Real workers are P-IDE.5 (read-write/IntelliSense) scope, as the review anticipated.
+- **stubbed / pending:** packaged-build worker verification (couldn't build a packaged app here);
+  P-IDE.5 (read-write + Save-via-write_file + pop-out) and P-IDE.6 (polish + integration tests).
+- **next:** ADR-0029 P-IDE.5 (IDE read-write + save through omp's write tool + pop-out).
+
+### P-IMP.1 — onboard the modern (sharded) ChatGPT export (ADR-0034)
+- **shipped:** made the existing gated import shard-aware so a real 2026 OpenAI export onboards
+  directly (it ships `conversations-000…NNN.json`, no single `conversations.json`, and was being
+  rejected as an "ambiguous directory" — the one thing blocking ChatGPT→Lucid onboarding). Three pure,
+  over-tested additions, extending — never forking — the existing pipeline: `readZipEntriesMatching`
+  (pull every shard from a .zip in one pass), `isConversationShard` + `mergeConversationShards`
+  (concatenate shard arrays, skip bad ones), and `loadExportData` (shard-aware folder/zip resolver,
+  same TOCTOU-safe reads as `loadExportText`, legacy single-file fallback). Same fail-closed scanner
+  gate, same suspicious-source promotion gate, same encrypted store + "Import history" UI — unchanged.
+  Verified on the **real 669 MB export**: 5 shards → 420 conversations / 1,952 user msgs (~109 K
+  tokens, voice transcripts folded in) in 98 ms; full gated run into a throwaway temp store scanned all
+  1,952 msgs in ~1 s with 1 blocked + 100 heuristic facts. harness 408 / desktop 242 / typecheck clean.
+- **stubbed / pending:** AI extraction is the existing opt-in "AI" checkbox (capped 500 msgs), not run
+  here; media `.dat` (images/PDFs) left for a future OCR/vision opt-in (voice is already transcribed in
+  the JSON, so the 586 WAVs need no compute).
+- **next:** ADR-0029 P-IDE.5 (IDE read-write + save through omp's write tool + pop-out).
+
+### P-IMP.1 addendum — live UI walkthrough + two IDE bug fixes (ADR-0034 addendum)
+- **shipped:** drove the import through the real UI in an **isolated** preview (new `LUCID_PERSONAL_DIR`
+  store-dir override) so it never touched the user's existing real store (verified byte-identical
+  before/after) — enable → passphrase → KG → Import history → folder picker → synthetic *sharded*
+  export → audit `personal_facts_imported{conversations:4 (both shards merged via the picker),
+  messages:5, learned:3, blocked:0}`, graph rendered the nodes. Fixed two real bugs found doing it:
+  (1) **View in IDE** "Couldn't load" — `loadMonaco` cached the rejected promise so a transient/stale-
+  server miss was permanent; now clears on failure + retries on reopen (the user's case was a dev
+  server started before the `/vendor/monaco` route shipped). (2) the IDE button **overlapped** the
+  message copy/save-`.md` actions → moved to the code block's bottom-right (measured 65px clear).
+  Also: `setup{Personal,Cui}` now `mkdir -p` the store dir (latent first-run gap), and the Import
+  tooltip no longer points at a `conversations.json` that sharded exports don't have.
+- **verified:** typecheck (3 projects) clean · desktop 244 · harness 408 · renderer bundle builds ·
+  View-in-IDE + overlap fixes confirmed live (Monaco renders, 65px gap, zero console errors).
+- **next:** ADR-0029 P-IDE.5 (IDE read-write + save through omp's write tool + pop-out).
+
+### P-IMP.2 — ChatGPT-import onboarding (ADR-0035)
+- **shipped:** (1) first-run **nudge** + Personalization settings section now **expanded until
+  configured** (was a collapsed accordion → undiscoverable for new users); the one-time "Make
+  LucidAgent yours" toast's CTA opens Settings scrolled to enable→passphrase. (2) **AI extraction now
+  defaults on for the first import**, behind a pre-import **confirm toast** that warns `~tokens · ~time`
+  — backed by a new read-only, home-confined `estimateChatExport` (shard-aware count, no scan/store).
+  Also corrected my earlier bogus "18 nodes" claim — real graph was 3 nodes / 2 edges (= learned:3).
+- **verified live (isolated demo, real store byte-identical throughout):** nudge fired → CTA expanded
+  + scrolled the section; Import → confirm "Import 4 ChatGPT conversations? · AI: ~1.6k tokens · ~13s ·
+  Quick: free + instant" (AI first = first-import default, warn tone) → Quick completed the import
+  (learned:3). Tests added for the estimate. typecheck clean · desktop 246 · harness 408 · bundle builds.
+- **next:** ADR-0029 P-IDE.5 (IDE read-write + save through omp's write tool + pop-out).
+
+### P-IDE.5 — IDE read-write: gated Save + Save-As + conflict banner + Send to chat (ADR-0036)
+- **shipped:** the Monaco panel is now an editor. New `desktop/editor.ts` (read + **gated save**):
+  paths confined to home (ADR-0023 boundary), conflict detection (on-disk hash drift / Save-As clobber),
+  and **`scanAndDecide` — a >=high finding or an unavailable scanner BLOCKS the write** (omp's ACP fs
+  write is disabled for the GUI, so this gated endpoint is the persistence path, keeping the gate in the
+  loop). Renderer: Edit/View toggle, modified dot + status states, Ctrl/⌘-S, Save-As (folder browser +
+  new `promptText` filename overlay), conflict banner (Overwrite/Reload/Cancel), Send-to-chat (fenced
+  block into the composer via `setIdeHooks`), detached pop-out, unsaved-changes close guard. Workers
+  still deferred (main-thread tokenization is fine; semantic IntelliSense under strict CSP is its own task).
+- **verified live (real scanner):** clean save wrote; a zero-width space hidden in a comment was BLOCKED
+  and never hit disk; outside-home rejected; full UI Save-As + conflict→Overwrite + Send-to-chat +
+  status transitions + pop-out (graceful) + close guard all confirmed. 9 `editor.test.ts` cases added.
+  typecheck clean (3 projects) · desktop 255 · harness 408 · bundle builds.
+- **next:** P-IDE.6 (polish + integration tests; optional: Monaco language-service workers under CSP).
+
+### P-IDE.6 — IDE polish: modal stacking, concurrent-save safety, lifecycle tests (ADR-0037)
+- **shipped:** fixed the Save-As folder browser rendering UNDER the IDE panel (lifted modal scrim/box to
+  z-index 110/111 > panel 90; toasts → 120 so IDE notifications aren't occluded). Hardened Save: a
+  `saving` guard set BEFORE the async Save-As picker (a rapid double-click used to open two browsers) +
+  released in `finally`, plus a 20 s request timeout so a hung scanner gives "Save timed out → Retry"
+  instead of a stuck spinner. Polish: Save-As dialog copy (dropped inaccurate "your workspace"; saves are
+  home-confined) and a clean `snippet.<ext>` suggested name. Integration tests for the read↔save
+  round-trip + conflict/overwrite/chain cycles.
+- **verified live:** Save-As browser now above the panel; triple-click Save → exactly 1 browser (guard
+  holds); refactored happy path still saves ("Saved ✓"); suggested "snippet.rs". typecheck clean ·
+  desktop 258 · harness 408 · bundle builds.
+- **next:** optional P-IDE.7 — Monaco language-service workers under strict CSP (semantic IntelliSense),
+  and an "Open file…" entry point wiring the (already-built) editorRead into the UI.

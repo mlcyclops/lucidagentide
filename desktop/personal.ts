@@ -13,9 +13,9 @@ import { CUI_STORE_VERSION, PersonalStore, type PersonalGraph, type PersonalScop
 import { load, personalAuditPath, personalCuiArchiveDir, personalCuiStorePath, personalStorePath, personalVaultDir, setPersonalization, setPersonalScope } from "./settings_store.ts";
 import { buildRecall, buildRecallFromGraph } from "../harness/personal/recall.ts";
 import { distillTurn, heuristicExtractor, modelExtractor, type Extractor } from "../harness/personal/distiller.ts";
-import { parseExport, type ImportVendor } from "../harness/personal/import_adapters.ts";
+import { isConversationShard, mergeConversationShards, parseExport, type ImportVendor } from "../harness/personal/import_adapters.ts";
 import { importConversations } from "../harness/personal/importer.ts";
-import { readZipEntry } from "../harness/personal/unzip.ts";
+import { readZipEntriesMatching, readZipEntry } from "../harness/personal/unzip.ts";
 import { ScannerClient } from "../harness/security/scanner_client.ts";
 import { buildCuiArchive, buildVault, type CuiDesignation, type VaultFile } from "../harness/export/vault_export.ts";
 import { Telemetry } from "../harness/telemetry/events.ts";
@@ -67,7 +67,7 @@ export function enablePersonal(enabled: boolean): PersonalStatus {
 export function setupPersonal(passphrase: string): { ok: boolean; error?: string } {
   if (!passphrase || passphrase.length < 8) return { ok: false, error: "Passphrase must be at least 8 characters." };
   if (PersonalStore.exists(personalStorePath())) return { ok: false, error: "A store already exists - unlock it instead." };
-  try { store = PersonalStore.createWithPassphrase(personalStorePath(), passphrase); return { ok: true }; }
+  try { mkdirSync(dirname(personalStorePath()), { recursive: true }); store = PersonalStore.createWithPassphrase(personalStorePath(), passphrase); return { ok: true }; }
   catch (e) { return { ok: false, error: String((e as Error)?.message ?? e) }; }
 }
 
@@ -90,7 +90,7 @@ export function setupCui(passphrase: string): { ok: boolean; error?: string } {
   if (!load().personalizationEnabled) return { ok: false, error: "Enable personalization first." };
   if (!passphrase || passphrase.length < 8) return { ok: false, error: "Passphrase must be at least 8 characters." };
   if (PersonalStore.exists(personalCuiStorePath())) return { ok: false, error: "A CUI store already exists - unlock it instead." };
-  try { cuiStore = PersonalStore.createWithPassphrase(personalCuiStorePath(), passphrase, { version: CUI_STORE_VERSION }); return { ok: true }; }
+  try { mkdirSync(dirname(personalCuiStorePath()), { recursive: true }); cuiStore = PersonalStore.createWithPassphrase(personalCuiStorePath(), passphrase, { version: CUI_STORE_VERSION }); return { ok: true }; }
   catch (e) { return { ok: false, error: String((e as Error)?.message ?? e) }; }
 }
 
@@ -391,6 +391,95 @@ export function loadExportText(raw: string): { ok: true; text: string } | { ok: 
   return { ok: false, error: "No conversations.json / MyActivity.json (or an export .zip) found in that folder." };
 }
 
+/** Decompress + merge every `conversations(-NNN).json` shard from a zip buffer into one
+ *  conversation array (the modern ChatGPT export splits history across shards). null = the zip
+ *  has no shards (caller falls back to the single-file path). */
+function shardsFromZipBuf(buf: Buffer): unknown[] | null {
+  const entries = readZipEntriesMatching(buf, isConversationShard);
+  if (!entries.length) return null;
+  entries.sort((a, b) => a.name.localeCompare(b.name)); // conversations-000, -001, … deterministic
+  const arrays = entries.map((e) => { try { return JSON.parse(e.data.toString("utf8")); } catch { return null; } });
+  const merged = mergeConversationShards(arrays);
+  return merged.length ? merged : null;
+}
+
+/** Resolve the export's decoded JSON value from a folder, a .json file, or a .zip — SHARD-AWARE.
+ *  A modern ChatGPT export has no single conversations.json; it ships conversations-000.json …
+ *  -NNN.json (loose in the folder or inside the .zip). This gathers + concatenates every shard
+ *  into the one conversation array the rest of the pipeline expects, and otherwise falls back to
+ *  the legacy single-file resolution (conversations.json / MyActivity.json / a lone .json). Same
+ *  TOCTOU-safe read discipline as loadExportText: one read per resource, classify by error code. */
+export function loadExportData(raw: string): { ok: true; data: unknown } | { ok: false; error: string } {
+  const msg = (e: unknown): string => String((e as Error)?.message ?? e);
+  const errCode = (e: unknown): string => (e as { code?: string })?.code ?? "";
+  const parse = (text: string): { ok: true; data: unknown } | { ok: false; error: string } => {
+    try { return { ok: true, data: JSON.parse(text) }; } catch { return { ok: false, error: "That export file isn't valid JSON." }; }
+  };
+  const fromZip = (buf: Buffer): { ok: true; data: unknown } | { ok: false; error: string } => {
+    try {
+      const shards = shardsFromZipBuf(buf);
+      if (shards) return { ok: true, data: shards };
+      for (const c of EXPORT_FILES) { const e = readZipEntry(buf, c); if (e) return parse(e.toString("utf8")); }
+      return { ok: false, error: "That .zip has no conversations(-NNN).json / MyActivity.json inside." };
+    } catch (e) { return { ok: false, error: `Couldn't read that .zip: ${msg(e)}` }; }
+  };
+
+  // 1) read `raw` directly (no stat-then-read; EISDIR => folder, ENOENT => gone).
+  try {
+    if (raw.toLowerCase().endsWith(".zip")) return fromZip(readFileSync(raw));
+    return parse(readFileSync(raw, "utf8")); // a lone .json, or one conversations-NNN.json shard
+  } catch (e) {
+    if (errCode(e) === "ENOENT") return { ok: false, error: "That path doesn't exist." };
+    if (errCode(e) !== "EISDIR") return { ok: false, error: "Couldn't read that file." };
+  }
+
+  // 2) directory: list once, then pick from the listing.
+  let names: string[];
+  try { names = readdirSync(raw); } catch { return { ok: false, error: "Couldn't read that folder." }; }
+  // 2a) loose shards — the modern sharded ChatGPT export.
+  const shardNames = names.filter(isConversationShard).sort();
+  if (shardNames.length) {
+    const arrays: unknown[] = [];
+    for (const n of shardNames) { try { arrays.push(JSON.parse(readFileSync(join(raw, n), "utf8"))); } catch { /* skip a bad shard, keep the rest */ } }
+    const merged = mergeConversationShards(arrays);
+    if (merged.length) return { ok: true, data: merged };
+  }
+  // 2b) legacy single named file.
+  for (const c of EXPORT_FILES) if (names.includes(c)) { try { return parse(readFileSync(join(raw, c), "utf8")); } catch { /* fall through */ } }
+  // 2c) a .zip inside the folder (may itself hold shards).
+  const zip = names.find((n) => n.toLowerCase().endsWith(".zip"));
+  if (zip) { try { return fromZip(readFileSync(join(raw, zip))); } catch (e) { return { ok: false, error: `Couldn't read that .zip: ${msg(e)}` }; } }
+  // 2d) a single lone .json.
+  const jsons = names.filter((n) => n.toLowerCase().endsWith(".json"));
+  if (jsons.length === 1) { try { return parse(readFileSync(join(raw, jsons[0]!), "utf8")); } catch { /* fall through */ } }
+  return { ok: false, error: "No conversations(-NNN).json / MyActivity.json (or an export .zip) found in that folder." };
+}
+
+// ── P-IMP.2 (ADR-0035): pre-import estimate for the AI-mode token/time warning ──────
+export interface ImportEstimate {
+  ok: boolean; error?: string;
+  vendor?: ImportVendor; conversations?: number; userMessages?: number; userChars?: number;
+}
+
+/** Read-only pre-check: how big is this export? Resolves + parses the source (shard-aware) and
+ *  counts the USER messages + characters that would teach the profile — NO scan, NO store write,
+ *  no personalization-enabled requirement. The renderer uses this to warn about AI-mode token cost
+ *  and runtime before the (capped, sequential, paid) model extraction runs. */
+export async function estimateChatExport(pathArg: string): Promise<ImportEstimate> {
+  const raw = String(pathArg ?? "").trim();
+  if (!raw) return { ok: false, error: "Choose your exported folder, .json, or .zip." };
+  const safe = confineToHome(raw);
+  if (!safe) return { ok: false, error: "Choose a file inside your home folder." };
+  const loaded = loadExportData(safe);
+  if (!loaded.ok) return loaded;
+  let parsed: ReturnType<typeof parseExport>;
+  try { parsed = parseExport(loaded.data); }
+  catch (e) { return { ok: false, error: String((e as Error)?.message ?? e) }; }
+  let userMessages = 0, userChars = 0;
+  for (const c of parsed.conversations) for (const m of c.messages) if (m.role === "user" && m.text.trim()) { userMessages++; userChars += m.text.length; }
+  return { ok: true, vendor: parsed.vendor, conversations: parsed.conversations.length, userMessages, userChars };
+}
+
 /** Import a ChatGPT / Claude / Gemini data export into the active (unlocked) compartment.
  *  `pathArg` may be the extracted FOLDER, the JSON file, or the export .zip itself. Every
  *  imported user message passes the fail-closed scanner gate (keystone #2); cui routes to the
@@ -414,11 +503,11 @@ export async function importChatExport(
   const target = scope === "cui" ? cuiStore : store;
   if (!target) return { ok: false, error: scope === "cui" ? "Unlock the CUI store first (select CUI and enter its passphrase)." : "Unlock your store first." };
 
-  const loaded = loadExportText(safe);
+  // Shard-aware: a modern ChatGPT export has no single conversations.json, only
+  // conversations-000.json … -NNN.json. loadExportData gathers + concatenates them (folder or zip).
+  const loaded = loadExportData(safe);
   if (!loaded.ok) return loaded;
-  let data: unknown;
-  try { data = JSON.parse(loaded.text); }
-  catch { return { ok: false, error: "That export file isn't valid JSON." }; }
+  const data = loaded.data;
 
   let parsed: ReturnType<typeof parseExport>;
   try { parsed = parseExport(data, opts.vendorHint); }
