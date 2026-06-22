@@ -29,12 +29,13 @@ export function launcherBinaryName(platform: Platform = process.platform): strin
   return platform === "win32" ? "lucid.exe" : "lucid";
 }
 
-/** Per-OS default install locations of the LucidAgentIDE app, where the `lucid` bin ships beside the
- *  bundled repo (`resources/repo/node_modules/.bin/lucid`, per the package.json bin). */
+/** Per-OS default install locations of the LucidAgentIDE app, where the compiled `lucid` launcher ships
+ *  in the bundled repo at `resources/repo/bin/lucid[.exe]` (P-EXT.4 build step; a real standalone binary,
+ *  NOT a package.json-bin shim — those aren't created for the package itself). */
 export function installedAppLauncherPaths(env: Env = process.env, platform: Platform = process.platform): string[] {
   const bin = launcherBinaryName(platform);
   const j = joiner(platform);
-  const inRepo = (root: string) => j(root, "resources", "repo", "node_modules", ".bin", bin);
+  const inRepo = (root: string) => j(root, "resources", "repo", "bin", bin);
   if (platform === "win32") {
     const la = env.LOCALAPPDATA;
     return la ? [inRepo(j(la, "Programs", "LucidAgentIDE"))] : [];

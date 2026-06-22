@@ -20,11 +20,11 @@ test("launcher binary name is OS-correct", () => {
   expect(launcherBinaryName("linux")).toBe("lucid");
 });
 
-test("installed-app paths point at the bundled lucid bin per OS", () => {
+test("installed-app paths point at the compiled lucid bin per OS", () => {
   const win = installedAppLauncherPaths({ LOCALAPPDATA: "C:/Users/x/AppData/Local" }, "win32");
-  expect(win[0]!.replace(/\\/g, "/")).toContain("Programs/LucidAgentIDE/resources/repo/node_modules/.bin/lucid.exe");
+  expect(win[0]!.replace(/\\/g, "/")).toContain("Programs/LucidAgentIDE/resources/repo/bin/lucid.exe");
   const mac = installedAppLauncherPaths({}, "darwin");
-  expect(mac[0]).toContain("/Applications/LucidAgentIDE.app/Contents/resources/repo/node_modules/.bin/lucid");
+  expect(mac[0]).toContain("/Applications/LucidAgentIDE.app/Contents/resources/repo/bin/lucid");
 });
 
 test("SECURITY: candidate list contains only the explicit config path + lucid binaries — never omp", () => {

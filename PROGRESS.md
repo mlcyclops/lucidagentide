@@ -4,6 +4,25 @@ Three lines per session: **shipped / stubbed / next** (CLAUDE.md session ritual)
 
 -----
 
+## P-EXT.4a: ship the compiled `lucid` launcher + standalone resolution (ADR-0038)
+- **shipped:** the load-bearing integration so installed editors actually FIND the launcher. A
+  package.json `bin` never materializes a node_modules/.bin/lucid shim for the package itself, so the
+  installed-app path was a dead end. Fix: a desktop `compile-lucid` step (`bun build --compile`
+  harness/launcher/lucid_acp.ts → <repo>/bin/lucid[.exe]) wired into dist:*, shipped via extraResources
+  (bin/**) to resources/repo/bin/lucid; both extensions' installedAppLauncherPaths (ide_client.ts +
+  Kotlin Launcher.kt) resolve there. lucid_acp gained execPath-based repoRoot (a --compile binary
+  VIRTUALIZES import.meta), resolveScannerEnv (LUCID_SCANNER_DIR + SCANNER_PYTHON from the real on-disk
+  sidecar/venv incl. the desktop userData venv), and a `lucid check` preflight command. scanner_client
+  reads LUCID_SCANNER_DIR LAZILY — a module-const captured the stale virtual path (caught by running the
+  compiled binary). VERIFIED LOCALLY by compiling + running the real lucid.exe: `check` → OK in-repo,
+  fail-closed (gate missing) from an isolated dir, `--help` → 0. 440 harness + 261 desktop green; tsc
+  clean (3 configs).
+- **stubbed:** the compiled binary is ~98MB (embeds the bun runtime) — works, but a size cost; the
+  installed-app scanner-venv path is best-effort (worst case = fail-closed, safe); an end-to-end install
+  verify (a packaged build that actually contains bin/lucid) needs the desktop CI build.
+- **next:** P-EXT.4b — marketplace publish (vsce/ovsx + Gradle publishPlugin, tag+secret gated) +
+  optional token-gated attach-mode.
+
 ## P-EXT.3: JetBrains plugin — Kotlin ACP client of `lucid acp` (ADR-0038)
 - **shipped:** extensions/jetbrains/ — a Gradle IntelliJ-Platform plugin (Kotlin) driving the gated
   agent over ACP from a tool window. Launcher.kt mirrors the tested ide_client.ts security core

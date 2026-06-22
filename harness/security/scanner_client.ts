@@ -18,7 +18,14 @@ import { fileURLToPath } from "node:url";
 import type { Finding } from "../contracts.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const SIDECAR_DIR = join(HERE, "..", "..", "scanner-sidecar");
+// LUCID_SCANNER_DIR lets a standalone/compiled launcher (the `lucid` binary — P-EXT.1/4) point the
+// scanner at the REAL on-disk scanner-sidecar: a `bun build --compile` binary virtualizes import.meta,
+// so the source-relative path would be wrong. Read LAZILY (not a module-level const) — the launcher
+// sets the env in main(), AFTER this module is imported, so a const would capture the stale virtual
+// path. Fail-closed-safe: a wrong/missing dir makes the scan fail (ScanUnavailableError), never "safe".
+function sidecarDir(): string {
+  return process.env.LUCID_SCANNER_DIR || join(HERE, "..", "..", "scanner-sidecar");
+}
 
 export interface ScanResponse {
   id: string;
@@ -40,8 +47,8 @@ export class ScanUnavailableError extends Error {
 
 function resolvePython(): string {
   if (process.env.SCANNER_PYTHON) return process.env.SCANNER_PYTHON;
-  const win = join(SIDECAR_DIR, ".venv", "Scripts", "python.exe");
-  const posix = join(SIDECAR_DIR, ".venv", "bin", "python");
+  const win = join(sidecarDir(), ".venv", "Scripts", "python.exe");
+  const posix = join(sidecarDir(), ".venv", "bin", "python");
   if (existsSync(win)) return win;
   if (existsSync(posix)) return posix;
   return "python"; // last resort; venv strongly preferred
@@ -73,7 +80,7 @@ export class ScannerClient {
     if (this.#proc) return;
     const py = resolvePython();
     const proc = spawn(py, ["server.py"], {
-      cwd: SIDECAR_DIR,
+      cwd: sidecarDir(),
       stdio: ["pipe", "pipe", "pipe"],
     });
     this.#proc = proc;

@@ -3,7 +3,7 @@
   "launcherAccept": [
     { "path": "/usr/local/bin/lucid", "accept": true },
     { "path": "/usr/local/bin/lucid.exe", "accept": true },
-    { "path": "C:\\Users\\x\\AppData\\Local\\Programs\\LucidAgentIDE\\resources\\repo\\node_modules\\.bin\\lucid.exe", "accept": true },
+    { "path": "C:\\Users\\x\\AppData\\Local\\Programs\\LucidAgentIDE\\resources\\repo\\bin\\lucid.exe", "accept": true },
     { "path": "lucid", "accept": true },
     { "path": "/opt/tools/omp", "accept": false },
     { "path": "/usr/bin/lucidd", "accept": false },

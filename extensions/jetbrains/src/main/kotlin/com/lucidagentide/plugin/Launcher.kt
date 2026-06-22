@@ -21,10 +21,10 @@ object Launcher {
      *  `omp` and look-alikes (lucidd, lucid-helper, lucid.sh) out of the candidate list. */
     fun isLucidBinary(path: String): Boolean = LUCID_RE.containsMatchIn(path)
 
-    /** Per-OS install locations of the bundled `lucid` bin (resources/repo/node_modules/.bin/lucid). */
+    /** Per-OS install locations of the compiled `lucid` launcher (resources/repo/bin/lucid[.exe]). */
     fun installedAppLauncherPaths(env: Map<String, String> = System.getenv(), windows: Boolean = isWindows()): List<String> {
         val bin = launcherBinaryName(windows)
-        fun inRepo(root: String) = listOf(root, "resources", "repo", "node_modules", ".bin", bin).joinToString(File.separator)
+        fun inRepo(root: String) = listOf(root, "resources", "repo", "bin", bin).joinToString(File.separator)
         return when {
             windows -> env["LOCALAPPDATA"]?.let { listOf(inRepo(listOf(it, "Programs", "LucidAgentIDE").joinToString(File.separator))) } ?: emptyList()
             System.getProperty("os.name").orEmpty().lowercase().contains("mac") ->

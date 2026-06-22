@@ -17,6 +17,7 @@ import {
   preflight,
   repoRoot,
   resolveOmp,
+  resolveScannerEnv,
   runAcp,
   type SpawnFn,
 } from "./lucid_acp.ts";
@@ -90,6 +91,16 @@ test("resolveOmp prefers an existing LUCID_OMP_BIN and never uses a bogus one", 
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("resolveScannerEnv points the scanner at the repo's on-disk sidecar (compiled-launch path)", () => {
+  const env: Record<string, string | undefined> = {};
+  resolveScannerEnv(env, "/repo");
+  expect(env.LUCID_SCANNER_DIR!.replace(/\\/g, "/")).toBe("/repo/scanner-sidecar");
+  // an already-valid SCANNER_PYTHON is left as-is (the existing file wins)
+  const withPy: Record<string, string | undefined> = { SCANNER_PYTHON: __filename };
+  resolveScannerEnv(withPy, "/repo");
+  expect(withPy.SCANNER_PYTHON).toBe(__filename);
 });
 
 // ── fail-closed preflight ─────────────────────────────────────────────────────

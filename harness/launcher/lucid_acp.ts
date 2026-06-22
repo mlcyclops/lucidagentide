@@ -27,11 +27,37 @@ type Env = Record<string, string | undefined>;
 const EXE = process.platform === "win32" ? ".exe" : "";
 const HERE = dirname(fileURLToPath(import.meta.url));
 
-/** Repo root. This file lives at <repo>/harness/launcher/ — two dirs under the root — and that holds
- *  identically in a dev checkout and in the packaged resources/repo (ADR-0038 open-item #1: harness/,
- *  desktop/, tools/ are always a fixed depth under the repo root, so no Electron app paths needed). */
+/** Repo root. In a dev checkout / packaged resources/repo this file lives at <repo>/harness/launcher/.
+ *  In a `bun build --compile` standalone `lucid` binary (P-EXT.4), import.meta is VIRTUALIZED, so the
+ *  source-relative path is wrong — there we derive the repo from the real on-disk binary, which ships
+ *  at <repo>/bin/lucid[.exe] (so repo = dirname(execPath)/..). */
 export function repoRoot(): string {
-  return join(HERE, "..", "..");
+  const fromSource = join(HERE, "..", "..");
+  if (existsSync(join(fromSource, "harness", "omp", "security_extension.ts"))) return fromSource;
+  return join(dirname(process.execPath), "..");
+}
+
+/** The desktop app's userData dir (Electron app.getPath('userData') == productName under the OS app-data
+ *  root) — where first-run provisioning puts the scanner venv. The standalone launcher mirrors it so it
+ *  can find that interpreter when an IDE (not Electron) spawned it. */
+function userDataDir(): string {
+  const home = homedir();
+  if (process.platform === "win32") return join(process.env.APPDATA || join(home, "AppData", "Roaming"), "LucidAgentIDE");
+  if (process.platform === "darwin") return join(home, "Library", "Application Support", "LucidAgentIDE");
+  return join(process.env.XDG_CONFIG_HOME || join(home, ".config"), "LucidAgentIDE");
+}
+
+/** Point the scanner at the REAL on-disk sidecar + a usable Python, so the gate's fail-closed scan can
+ *  actually run from a standalone/compiled launch. Best-effort: if no interpreter is found the preflight
+ *  simply fails closed (never a false "safe"). Mutates `env` (and so the omp child inherits it). */
+export function resolveScannerEnv(env: Env, repo: string): void {
+  env.LUCID_SCANNER_DIR = join(repo, "scanner-sidecar");
+  if (env.SCANNER_PYTHON && existsSync(env.SCANNER_PYTHON)) return;
+  const py = process.platform === "win32" ? ["Scripts", "python.exe"] : ["bin", "python"];
+  for (const venv of [join(repo, "scanner-sidecar", ".venv"), join(userDataDir(), "runtimes", "scanner-venv")]) {
+    const cand = join(venv, ...py);
+    if (existsSync(cand)) { env.SCANNER_PYTHON = cand; return; }
+  }
 }
 
 export interface LaunchAssets {
@@ -135,6 +161,10 @@ export async function runAcp(o: RunAcpOpts = {}): Promise<number> {
   const err = o.stderr ?? ((s) => void process.stderr.write(s));
   const a = assets();
 
+  // Real path only (tests inject scannerProbe): point the scanner at the on-disk sidecar + interpreter
+  // so the fail-closed probe can actually run from a standalone/compiled launch. The omp child inherits it.
+  if (!o.scannerProbe) resolveScannerEnv(process.env, a.repo);
+
   const pf = await preflight({ gate: a.gate, scannerProbe: o.scannerProbe });
   if (!pf.ok) {
     err(`[lucid acp] FAIL-CLOSED: ${pf.reason}\n[lucid acp] refusing to start — the Lucid security gate must be loaded (never an ungated agent).\n`);
@@ -154,14 +184,23 @@ export async function runAcp(o: RunAcpOpts = {}): Promise<number> {
   });
 }
 
-/** CLI entry. `lucid acp [--isolate]` is the only subcommand; anything else prints usage. */
+/** CLI entry. `lucid acp [--isolate]` starts the gated session; `lucid check` runs the fail-closed
+ *  preflight and exits (a diagnostic the IDE / installer can use); anything else prints usage. */
 export async function main(argv: string[], env: Env = process.env): Promise<number> {
   const [sub, ...rest] = argv;
+  if (sub === "check") {
+    const a = assets();
+    resolveScannerEnv(process.env, a.repo);
+    const pf = await preflight({ gate: a.gate });
+    process.stdout.write(pf.ok ? "[lucid check] OK — gate + scanner ready\n" : `[lucid check] FAIL-CLOSED — ${pf.reason}\n`);
+    return pf.ok ? 0 : 1;
+  }
   if (sub !== "acp") {
     process.stderr.write(
-      "usage: lucid acp [--isolate]\n" +
-        "  Start the gated Lucid ACP agent (omp + the in-process security gate) for an IDE client.\n" +
-        "  Fail-closed: refuses to start if the gate or scanner sidecar is unavailable.\n",
+      "usage: lucid acp [--isolate] | lucid check\n" +
+        "  acp    Start the gated Lucid ACP agent (omp + the in-process security gate) for an IDE client.\n" +
+        "  check  Run the fail-closed preflight (gate + scanner) and exit 0 (ready) / 1 (unavailable).\n" +
+        "  Fail-closed: `acp` refuses to start if the gate or scanner sidecar is unavailable.\n",
     );
     return sub === undefined || sub === "-h" || sub === "--help" ? 0 : 2;
   }

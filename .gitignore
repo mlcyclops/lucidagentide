@@ -70,3 +70,6 @@ desktop/runtimes/*
 
 # Local-only: contains real personal data (PII) — never commit
 tools/seed_personal_facts.ts
+
+# P-EXT.4: compiled lucid launcher (built during desktop dist)
+/bin/
