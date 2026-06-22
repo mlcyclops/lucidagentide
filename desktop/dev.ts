@@ -12,7 +12,7 @@ import { join } from "node:path";
 import { devSnapshot, securitySnapshot } from "../tools/web/data.ts";
 import { approveBlock, liveBlocks } from "./security_log.ts";
 import { probeRateLimits } from "./ratelimit_probe.ts";
-import { memorySnapshot, rateLimits, usageLedger } from "../tools/memory_data.ts";
+import { OBS_DB_PATH, memorySnapshot, rateLimits, usageLedger } from "../tools/memory_data.ts";
 import { backend } from "./acp_backend.ts";
 import { listSessions, sessionMessages } from "./sessions.ts";
 import { providerAuth } from "./auth_status.ts";
@@ -31,6 +31,8 @@ import { dirname } from "node:path";
 import { isAllowedRequest, reqShape, tokenValid } from "./origin_guard.ts";
 import { pathWithin } from "./path_guard.ts";
 import { randomBytes } from "node:crypto";
+import { buildRecall } from "../harness/memory/recall.ts";
+import { Db } from "../harness/memory/db.ts";
 import type { ImportVendor } from "../harness/personal/import_adapters.ts";
 import type { CuiDesignation } from "../harness/export/vault_export.ts";
 
@@ -49,6 +51,26 @@ const PORT = Number(process.env.PORT ?? 5319);
 // random value each launch means a token never outlives the process that issued it.
 const TOKEN = randomBytes(32).toString("hex");
 const CT: Record<string, string> = { ".html": "text/html", ".css": "text/css", ".js": "text/javascript", ".svg": "image/svg+xml", ".woff2": "font/woff2", ".woff": "font/woff", ".ttf": "font/ttf" };
+
+// ADR-0009 Phase A — hand the cross-session recall block to the backend for first-user-turn
+// injection (never the frozen prefix; invariant #5/#6). READ-ONLY: the omp gate child is the
+// single writer of agent_obs.duckdb, so we open read-only and omit the sessionId — no
+// fact_sessions write, hence no two-process DuckDB write contention. Best-effort: a recall
+// failure clears recall (setRecall(null)) and never breaks chat.
+async function refreshRecall(): Promise<void> {
+  try {
+    if (!existsSync(OBS_DB_PATH)) { backend.setRecall(null); return; }
+    const db = await Db.openReadOnly(OBS_DB_PATH);
+    try {
+      const { block } = await buildRecall(db, { limit: 20 });
+      backend.setRecall(block);
+    } finally {
+      db.close();
+    }
+  } catch {
+    backend.setRecall(null);
+  }
+}
 
 async function bundleApp(): Promise<{ js: string; ok: boolean }> {
   const out = await Bun.build({ entrypoints: [join(ROOT, "app.ts")], target: "browser", sourcemap: "inline" });
@@ -399,7 +421,8 @@ const server = Bun.serve({
         recordSkillActivated({ command: String(b.command ?? "").slice(0, 80), name: String(b.name ?? "").slice(0, 80), source });
         return json({ ok: true, data: { recorded: true } });
       }
-      if (p === "/api/newSession" && req.method === "POST") { await backend.newSession(); return json({ ok: true }); }
+      // ADR-0009 Phase A: re-load the cross-session recall block for the fresh session (read-only).
+      if (p === "/api/newSession" && req.method === "POST") { await backend.newSession(); await refreshRecall(); return json({ ok: true }); }
       if (p === "/api/chat" && req.method === "POST") {
         const { text } = await readBody<{ text?: unknown }>(req);
         const enc = new TextEncoder();
@@ -435,5 +458,10 @@ const server = Bun.serve({
     return new Response("not found", { status: 404 });
   },
 });
+
+// Build recall once at startup — the FIRST session is created lazily on the first /api/chat (never
+// via /api/newSession), so this is what carries prior-session facts into it. Best-effort; the omp
+// child isn't spawned yet here, so the read-only open is uncontended.
+await refreshRecall();
 
 console.log(`\n  ◆ LucidAgentIDE desktop renderer (dev)\n  → http://localhost:${server.port}\n`);

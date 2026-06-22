@@ -58,6 +58,11 @@ class Backend {
   // Personalization recall (P9.2): a <user-profile> block delivered once per session in
   // the user turn (never the frozen prefix). Off unless personalization is enabled+unlocked.
   private recallDelivered = false;
+  // Cross-session memory recall (ADR-0009 Phase A): a <recalled-memory> block of facts
+  // distilled in EARLIER sessions, delivered once per session in the user turn — never the
+  // frozen prefix (invariant #5/#6). Distinct from the P9.2 personalization recall above.
+  private memoryRecall: string | null = null;
+  private memoryRecallDelivered = false;
   // P-IDE.2 (ADR-0029): an active BUNDLED skill's trusted guidance, delivered once per session in the
   // user turn (same path as persona/recall — never the frozen prefix, never --append-system-prompt).
   // Already wrapped (`<active-skill name="…">…</active-skill>`). Persists until cleared/changed.
@@ -85,6 +90,10 @@ class Backend {
 
   /** Set/clear the active persona. Pass the ALREADY-scanned, delimiter-wrapped text. */
   setPersona(wrapped: string | null): void { this.persona = wrapped; this.personaDelivered = false; }
+
+  /** Set/clear the cross-session recall block. Pass the ALREADY-escaped, delimiter-wrapped
+   *  text from buildRecall(); re-delivered in the first user turn of each session. */
+  setRecall(wrapped: string | null): void { this.memoryRecall = wrapped; this.memoryRecallDelivered = false; }
 
   /** P-IDE.2: set/clear the active bundled skill. `wrapped` is the trusted `<active-skill …>` block
    *  (or null to clear). Re-delivered on the next turn so a skill change takes effect immediately. */
@@ -297,6 +306,7 @@ class Backend {
     this.sessionId = null;
     this.personaDelivered = false; // re-deliver the persona in the fresh session
     this.recallDelivered = false;
+    this.memoryRecallDelivered = false; // re-deliver cross-session recall in the fresh session
     this.skillDelivered = false; // re-deliver the active bundled skill in the fresh session
     await this.ensureSession();
   }
@@ -308,6 +318,7 @@ class Backend {
     this.acp = null; this.starting = null; this.sessionId = null; this.listener = null;
     this.personaDelivered = false; // keep the chosen persona; re-deliver after respawn
     this.recallDelivered = false;
+    this.memoryRecallDelivered = false;
     this.skillDelivered = false; // keep the active skill; re-deliver after respawn
     this.availableModes = []; this.currentModeId = "default"; // re-captured from the fresh session
     // Drop any parked permission (deny) but KEEP permissionMode — the user's Ask choice survives a respawn.
@@ -343,6 +354,7 @@ class Backend {
       if (this.persona && !this.personaDelivered) { preamble += `${this.persona}\n\n`; this.personaDelivered = true; }
       if (this.skill && !this.skillDelivered) { preamble += `${this.skill}\n\n`; this.skillDelivered = true; } // P-IDE.2 bundled skill
       if (!this.recallDelivered) { const r = recallPreamble(); if (r) preamble += `${r}\n\n`; this.recallDelivered = true; }
+      if (this.memoryRecall && !this.memoryRecallDelivered) { preamble += `${this.memoryRecall}\n\n`; this.memoryRecallDelivered = true; }
       const body = preamble + text;
       arm(); // start the idle clock now (covers a stall BEFORE the first token)
       const stall = new Promise<never>((_, reject) => { onStall = reject; });

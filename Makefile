@@ -142,6 +142,10 @@ demo-P7.2: ## P7.2: replay run tree/timeline + benchmark cache-hit per prompt-pr
 demo-P-LOC.1: ## P-LOC.1: AI-LOC attribution — count AI-authored lines per model/repo/identity
 	$(BUN) run harness/scripts/demo16_ai_loc.ts
 
+.PHONY: demo-ADR9A
+demo-ADR9A: ## ADR-0009 Phase A: recall prior-session facts into a new session (suspicious never recalled)
+	$(BUN) run harness/scripts/demo17_recall.ts
+
 .PHONY: dashboards
 dashboards: ## Materialize dashboard CSVs from a DuckDB into observable/docs/data (DB=path)
 	$(BUN) run harness/scripts/materialize_dashboards.ts $(DB) observable/docs/data

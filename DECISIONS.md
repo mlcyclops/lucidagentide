@@ -616,8 +616,9 @@ collapsed on boot (`toggleSidebar(true)` + `setInspectorRail(true)`) for a calme
 **Date:** 2026-06-19
 **Status:** Accepted as a roadmap. **Phase C** superseded by ADR-0013 (vault export, built).
 **Phase D BUILT** (scoped — Logs view; transcripts + raw-reveal deferred, see Phase D below).
-**Phase A** (cross-session memory recall) and **Phase B** (traceability) remain **Proposed** and are
-assigned to contributor alexander-blackwell (issues #11 / #12). Each lands in its own increment.
+**Phase A BUILT** (this increment — cross-session memory recall; delta below). **Phase B**
+(traceability) remains **Proposed**, assigned to contributor alexander-blackwell (issue #12).
+Each lands in its own increment.
 **Context increment:** P8.0 (planning only — no functional code shipped this session).
 
 ### Context
@@ -664,8 +665,23 @@ sessions as delimited, post-cache context. New `harness/memory/recall.ts`
 `trusted`/`untrusted` facts — never suspicious/quarantined); inject via a new
 `backend.setRecall(wrapped)` mirroring `setPersona` (first user turn, AFTER the cache
 breakpoint, never the frozen prefix). *Frozen-contract impacts (own ADR when built):*
-migration `0007_memory_session.sql` — sidecar `fact_sessions(fact_id, session_id, run_id,
+migration `0008_memory_session.sql` — sidecar `fact_sessions(fact_id, session_id, run_id,
 recalled_at)`, never ALTER frozen `semantic_facts`; new `EventName` `memory_recalled`.
+
+#### Phase A delta — BUILT (cross-session memory recall)
+
+Shipped as specced: `harness/memory/recall.ts` `buildRecall(db, {sessionId?, runId?, limit, telemetry?})`
+reads only `trusted`/`untrusted` semantic facts (keystone #2 — suspicious/quarantined excluded in
+SQL), `escapeMarkdown`s every entity + statement, and returns a delimited `<recalled-memory>` block
+injected in the first user turn via the new `backend.setRecall(wrapped)` seam
+(`desktop/acp_backend.ts`, mirrors `setPersona`/`personaDelivered`; never the frozen prefix).
+Migration `0008_memory_session.sql` adds the additive sidecar `fact_sessions(fact_id, session_id,
+run_id, recalled_at)` (never ALTERs `semantic_facts`); a recall with a `sessionId` logs one row per
+fact and emits the new `memory_recalled` event (carries `run_id`/`session_id`/`count`). Coverage:
+`harness/memory/recall.test.ts` (keystone exclusion, escaping, sidecar+event, limits) + demo
+`harness/scripts/demo17_recall.ts`. Prefix-hash test unaffected (recall is post-cache, user turn).
+(Merge note: the migration shipped as `0008_memory_session.sql` and the demo as `demo17_recall.ts` —
+renumbered from 0007/demo16 on merge, since master already claimed `0007_ai_loc_ledger.sql`/`demo16_ai_loc.ts`.)
 
 **Phase B — `P8.2-traceability` (prompt/response capture).** Satisfies #3. Capture each
 turn's prompt + response with stable ids + provenance. Hook point is the **desktop-layer

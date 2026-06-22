@@ -266,7 +266,7 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
   sanitized-by-default with an audited "reveal raw (dangerous)" gate. No functional code this session.
 - **stubbed:** all four phases (P8.1–P8.4) are designed but unbuilt; the auto-distiller half of
   cross-session memory already exists (rememberActivity in security_extension.ts) — the gap is recall.
-- **next:** build **P8.1 memory-recall** first (migration 0007_memory_session.sql + EventName
+- **next:** build **P8.1 memory-recall** first (migration 0008_memory_session.sql + EventName
   memory_recalled + harness/memory/recall.ts + backend.setRecall via the persona seam), per ADR-0009.
 
 Roadmap phases (each its own future increment + ADR for its frozen-contract delta):
