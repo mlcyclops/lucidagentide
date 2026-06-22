@@ -9,7 +9,7 @@
 // writeTextFile:false), so this gated endpoint — not a model tool call — is how the editor persists,
 // and it keeps the gate in the loop.
 
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, statSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { homedir } from "node:os";
 import { createHash } from "node:crypto";
@@ -37,14 +37,24 @@ function safePath(p: string): string | null { return pathWithin(homedir(), Strin
 export function readEditorFile(pathArg: string): EditorReadResult {
   const safe = safePath(pathArg);
   if (!safe) return { ok: false, error: "That file is outside your home folder." };
+  // TOCTOU-safe (js/file-system-race, ADR-0025): open the file ONCE, then fstat + read the SAME
+  // descriptor. Never statSync(path)-then-readFileSync(path) — the path could be swapped between the
+  // check and the use; the fd binds to the inode we actually read.
+  let fd: number | undefined;
   try {
-    const st = statSync(safe);
+    fd = openSync(safe, "r");
+    const st = fstatSync(fd);
     if (!st.isFile()) return { ok: false, error: "That path is not a file." };
     if (st.size > MAX_BYTES) return { ok: false, error: `That file is too large for the editor (> ${Math.round(MAX_BYTES / 1e6)} MB).` };
-    const content = readFileSync(safe, "utf8");
+    const buf = Buffer.allocUnsafe(st.size);
+    let off = 0;
+    while (off < st.size) { const n = readSync(fd, buf, off, st.size - off, off); if (n <= 0) break; off += n; }
+    const content = buf.subarray(0, off).toString("utf8");
     return { ok: true, path: safe, content, mtime: st.mtimeMs, sha256: sha256(content) };
   } catch (e) {
     return { ok: false, error: (e as { code?: string })?.code === "ENOENT" ? "That file doesn't exist." : "Couldn't read that file." };
+  } finally {
+    if (fd !== undefined) try { closeSync(fd); } catch { /* already closed / never opened */ }
   }
 }
 
@@ -63,13 +73,17 @@ export async function saveEditorFile(input: EditorSaveInput, deps: { scanner?: S
   if (Buffer.byteLength(content, "utf8") > MAX_BYTES) return { ok: false, error: "That file is too large to save from the editor." };
 
   // Conflict: the file changed on disk since the editor opened it (hash drift), or a Save-As would
-  // land on a file the editor never opened (no baseSha). Either way, don't clobber without confirmation.
-  if (!input.overwrite && existsSync(safe)) {
-    try {
-      const cur = sha256(readFileSync(safe, "utf8"));
+  // land on a file the editor never opened (no baseSha). Don't clobber without confirmation. Read
+  // DIRECTLY (no existsSync check-then-read; js/file-system-race, ADR-0025): ENOENT just means the
+  // file isn't there yet → no conflict; any other read error → skip the check and let the write try.
+  if (!input.overwrite) {
+    let onDisk: string | undefined;
+    try { onDisk = readFileSync(safe, "utf8"); } catch { /* missing or unreadable → no conflict check */ }
+    if (onDisk !== undefined) {
+      const cur = sha256(onDisk);
       if (!input.baseSha) return { ok: false, conflict: true, error: "A file already exists there.", currentSha: cur };
       if (cur !== input.baseSha) return { ok: false, conflict: true, error: "This file changed on disk since you opened it.", currentSha: cur };
-    } catch { /* unreadable existing file → fall through to the gate + write attempt */ }
+    }
   }
 
   // Gate: scan fail-closed. A >=high finding (zero-width / bidi / tag-block / PUA …) or a missing
