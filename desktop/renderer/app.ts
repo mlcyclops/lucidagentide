@@ -280,7 +280,7 @@ const fmtDur = (s: number): string => (s < 90 ? `~${s}s` : s < 3600 ? `~${Math.r
 async function runPersonalImport(folder: string, useModel: boolean): Promise<void> {
   showToast({ title: useModel ? "Importing with AI extraction…" : "Importing chat history…", desc: useModel ? "Scanning each message, then extracting facts with the model. This can take a while." : "Scanning every message through the security gate before learning.", timeout: useModel ? 4000 : 2000 });
   const r = await bridge.personalImport(folder, useModel);
-  if (!r?.ok) { showToast({ title: "Import failed", desc: r?.error ?? "Personalization is off or locked.", actions: [{ label: "OK" }], timeout: 6000 }); return; }
+  if (!r?.ok) { showToast({ tone: "danger", title: "Import failed", desc: r?.error ?? "Personalization is off or locked.", actions: [{ label: "OK" }], timeout: 6000 }); return; }
   const vendor = r.vendor === "openai" ? "ChatGPT" : r.vendor === "anthropic" ? "Claude" : r.vendor === "gemini" ? "Gemini" : "export";
   const notes = [
     r.extractor === "model" ? "AI extraction" : "quick extraction",
@@ -1912,7 +1912,7 @@ async function applyPersona(id: string | null): Promise<void> {
     showToast({ title: `Persona "${id}" applied`, desc: "Scanned clean - added as delimited role guidance on your next turn.", actions: [{ label: "OK" }], timeout: 3200 });
   } else {
     state.persona = null; updateComposerTools();
-    showToast({ title: "Persona blocked", desc: `The scanner flagged this persona (${r?.scan?.findings ?? 0} finding(s)); it was not applied.`, meta: "fail-closed - untrusted content can't enter the prompt", actions: [{ label: "OK" }], timeout: 6000 });
+    showToast({ tone: "danger", title: "Persona blocked", desc: `The scanner flagged this persona (${r?.scan?.findings ?? 0} finding(s)); it was not applied.`, meta: "fail-closed - untrusted content can't enter the prompt", actions: [{ label: "OK" }], timeout: 6000 });
   }
 }
 
@@ -2088,7 +2088,7 @@ function wire(): void {
     if (!folder) return;
     // Read-only pre-import estimate → warn about AI-mode token cost + runtime before the paid run.
     const est = await bridge.personalImportEstimate(folder);
-    if (!est?.ok) { showToast({ title: "Couldn't read that export", desc: est?.error ?? "No conversations found in that export.", actions: [{ label: "OK" }], timeout: 6000 }); return; }
+    if (!est?.ok) { showToast({ tone: "danger", title: "Couldn't read that export", desc: est?.error ?? "No conversations found in that export.", actions: [{ label: "OK" }], timeout: 6000 }); return; }
     // First import (empty graph) defaults to AI extraction (best quality); after that, honor the box.
     const status = await bridge.personal();
     const totalFacts = status?.counts ? status.counts.work + status.counts.personal + status.counts.cui : 0;
@@ -2110,7 +2110,7 @@ function wire(): void {
   $("#kgExport")!.addEventListener("click", async () => {
     showToast({ title: "Exporting vault…", desc: "Decrypting and writing your Obsidian notes.", timeout: 1400 });
     const r = await bridge.personalExportVault({});
-    if (!r?.ok) showToast({ title: "Vault not exported", desc: r?.error ?? "Personalization is off or locked.", actions: [{ label: "OK" }], timeout: 5000 });
+    if (!r?.ok) showToast({ tone: "danger", title: "Vault not exported", desc: r?.error ?? "Personalization is off or locked.", actions: [{ label: "OK" }], timeout: 5000 });
     else showToast({ title: "Vault exported", desc: `${r.files} files · ${r.entities} notes · ${r.facts} facts → ${r.dest}`, meta: "Personal + Work · CUI excluded by design · audited", actions: [{ label: "OK" }], timeout: 7000 });
   });
   $("#kgCui")!.addEventListener("click", () => {
@@ -2122,7 +2122,7 @@ function wire(): void {
         { label: "Cancel" },
         { label: "Export CUI archive", kind: "danger", run: async () => {
           const r = await bridge.personalCuiArchive({});
-          if (!r?.ok) showToast({ title: "CUI archive not written", desc: r?.error ?? "Personalization is off or locked.", actions: [{ label: "OK" }], timeout: 6000 });
+          if (!r?.ok) showToast({ tone: "danger", title: "CUI archive not written", desc: r?.error ?? "Personalization is off or locked.", actions: [{ label: "OK" }], timeout: 6000 });
           else showToast({ title: "CUI archive written", desc: `${r.files} files · ${r.facts} facts → ${r.dest}`, meta: `manifest sha256 ${(r.manifestSha256 ?? "").slice(0, 12)}… · complete the designation before transfer`, actions: [{ label: "OK" }], timeout: 9000 });
         } },
       ],
@@ -2151,13 +2151,13 @@ function wire(): void {
     const saveBtn = t.closest("[data-msg-save]") as HTMLElement | null;
     if (!copyBtn && !saveBtn) return;
     const md = ((t.closest(".msg") as MsgNode | null)?._md ?? "").trim();
-    if (!md) { showToast({ title: "Nothing to copy yet", desc: "Wait for the reply to finish.", actions: [{ label: "OK" }], timeout: 2000 }); return; }
+    if (!md) { showToast({ tone: "warn", title: "Nothing to copy yet", desc: "Wait for the reply to finish.", actions: [{ label: "OK" }], timeout: 2000 }); return; }
     if (copyBtn) {
       try {
         await navigator.clipboard.writeText(md);
         copyBtn.classList.add("ok"); copyBtn.innerHTML = icon("check", 13);
         setTimeout(() => { copyBtn.classList.remove("ok"); copyBtn.innerHTML = icon("copy", 13); }, 1200);
-      } catch { showToast({ title: "Copy failed", desc: "Clipboard unavailable in this view.", actions: [{ label: "OK" }], timeout: 2800 }); }
+      } catch { showToast({ tone: "danger", title: "Copy failed", desc: "Clipboard unavailable in this view.", actions: [{ label: "OK" }], timeout: 2800 }); }
     } else if (saveBtn) {
       const blob = new Blob([md], { type: "text/markdown;charset=utf-8" });
       const url = URL.createObjectURL(blob);
@@ -2224,7 +2224,7 @@ function wire(): void {
       showToast({ title: "Cloning…", desc: "Fetching the repo - this can take a moment.", timeout: 2500 });
       const info = await bridge.cloneWorkspace(url);
       if (info?.cloned) { state.workspace = info; renderWorkspaceBar(); seedThread(); void renderSessions(); void renderSettings(); showToast({ title: "Cloned & opened", desc: `Agent now works in ${info.name}.`, actions: [{ label: "OK" }], timeout: 3000 }); }
-      else showToast({ title: "Clone failed", desc: (info?.error ?? "Check the URL and your git access.").slice(0, 180), actions: [{ label: "OK" }], timeout: 6000 });
+      else showToast({ tone: "danger", title: "Clone failed", desc: (info?.error ?? "Check the URL and your git access.").slice(0, 180), actions: [{ label: "OK" }], timeout: 6000 });
       return;
     }
     const wsr = t.closest("[data-ws]") as HTMLElement | null;
@@ -2249,7 +2249,7 @@ function wire(): void {
       const env = save.dataset.savekey!;
       const inp = $(`.prov-key[data-env="${env}"]`, $("#setBody")!) as HTMLInputElement | null;
       const val = inp?.value.trim() ?? "";
-      if (!val) { showToast({ title: "Nothing to save", desc: "Paste a key first.", actions: [{ label: "OK" }], timeout: 2000 }); return; }
+      if (!val) { showToast({ tone: "warn", title: "Nothing to save", desc: "Paste a key first.", actions: [{ label: "OK" }], timeout: 2000 }); return; }
       await bridge.saveKey(env, val);
       showToast({ title: `${env} saved`, desc: "Stored on this machine and passed to omp. New turns use it.", actions: [{ label: "OK" }], timeout: 2800 });
       void renderSettings();
