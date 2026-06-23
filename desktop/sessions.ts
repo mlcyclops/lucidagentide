@@ -20,11 +20,13 @@ const norm = (p: string) => p.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCas
 // they must NOT appear in the chat transcript or session titles. omp persists them inside
 // the user turn on disk, so strip any leading block(s) before we DISPLAY a user message.
 // Display-only: the model already received the full body live. See issue #52.
+// Opening tags may carry attributes (e.g. `<user-profile note="…">`, `<active-skill name="…">`),
+// so match `<tag` + any attrs + `>`, not a bare `<tag>`.
 const PREAMBLE_BLOCKS: RegExp[] = [
   new RegExp(`^\\s*${UNTRUSTED_START}[\\s\\S]*?${UNTRUSTED_END}`),
-  /^\s*<active-skill\b[\s\S]*?<\/active-skill>/,
-  /^\s*<user-profile>[\s\S]*?<\/user-profile>/,
-  /^\s*<recalled-memory>[\s\S]*?<\/recalled-memory>/,
+  /^\s*<active-skill\b[^>]*>[\s\S]*?<\/active-skill>/,
+  /^\s*<user-profile\b[^>]*>[\s\S]*?<\/user-profile>/,
+  /^\s*<recalled-memory\b[^>]*>[\s\S]*?<\/recalled-memory>/,
 ];
 
 /** Remove the leading injected-context block(s) from a user message so only what the
