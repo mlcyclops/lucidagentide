@@ -1,10 +1,11 @@
 // harness/scripts/demo17_recall.ts
 //
-// ADR-0009 Phase A — cross-session memory recall. The persist half already runs
-// live (rememberActivity -> ingestArtifact -> promoteFactGated on allowed tool
-// calls); this demo proves the RECALL half: facts distilled in one session are
-// recalled into a LATER session as a delimited, untrusted, post-cache block —
-// and suspicious/quarantined facts are NEVER recallable (keystone #2, read side).
+// ADR-0009 Phase A — cross-session memory recall. The persist half runs live when a
+// subagent RESULT is gated (runs/task_gate.ts gateSubagentResult -> promoteFactGated);
+// raw tool I/O is recorded for provenance only and is NOT promoted (issue #51). This
+// demo proves the RECALL half: facts distilled in one session are recalled into a
+// LATER session as a delimited, untrusted, post-cache block — and suspicious/
+// quarantined facts are NEVER recallable (keystone #2, read side).
 
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
