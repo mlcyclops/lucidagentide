@@ -183,15 +183,15 @@ export interface ToastAction { label: string; kind?: "ok" | "danger"; run?: () =
 export type ToastTone = "ok" | "info" | "warn" | "danger";
 export interface ToastOpts { title: string; desc: string; meta?: string; actions?: ToastAction[]; timeout?: number; tone?: ToastTone }
 
-// Per-tone icon. Defaults to the danger look ("shield") when tone is omitted, so
-// existing callers are unchanged — they just lose the aggressive red via CSS only
-// when they opt into a tone.
+// Per-tone icon. Defaults to the positive look ("check") when tone is omitted, matching
+// the green default in CSS — most toasts are confirmations. Failure callers opt into
+// tone:"danger" (shield + red), warnings into tone:"warn".
 const TONE_ICON: Record<ToastTone, string> = { ok: "check", info: "info", warn: "bolt", danger: "shield" };
 
 export function showToast(o: ToastOpts): void {
   const host = $("#toasts")!;
   const toneClass = o.tone ? ` ${o.tone}` : "";
-  const ico = o.tone ? (TONE_ICON[o.tone] ?? "shield") : "shield";
+  const ico = o.tone ? (TONE_ICON[o.tone] ?? "shield") : "check";
   const node = el(`<div class="toast${toneClass}" role="alert">
     <div class="bar"></div>
     <div class="in">${icon(ico, 18)}

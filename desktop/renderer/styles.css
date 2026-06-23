@@ -820,9 +820,10 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .seg button.on.acc{color:var(--accent-2)}
 
 /* ───────────────────────── toast / popover ───────────────────────── */
-#toasts{position:fixed;right:18px;bottom:42px;z-index:120;display:flex;flex-direction:column;gap:10px;align-items:flex-end}
-/* --tone: the toast's accent colour; defaults to danger so existing (classless) toasts are unchanged. */
-.toast{--tone:var(--red);--tone-tint:rgba(239,95,95,.14);--tone-h:#ffd0d0;
+#toasts{position:fixed;right:18px;top:52px;z-index:120;display:flex;flex-direction:column;gap:10px;align-items:flex-end}
+/* --tone: the toast's accent colour; defaults to the positive (green) look — most toasts are
+   confirmations. Error/failure callers opt into tone:"danger" (red); warnings into tone:"warn". */
+.toast{--tone:var(--green);--tone-tint:var(--green-dim);--tone-h:#c6f3d6;
   width:340px;background:var(--bg-1);background-image:var(--emboss,none);
   border:1px solid color-mix(in srgb,var(--tone) 42%,transparent);border-radius:13px;
   box-shadow:var(--shadow-lg,var(--shadow)),0 0 0 1px rgba(255,255,255,.02) inset;overflow:hidden;
