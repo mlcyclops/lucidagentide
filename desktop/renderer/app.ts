@@ -1858,8 +1858,22 @@ function updateComposerTools(): void {
   if (model) set("#ctModelName", modelLabel(model.currentValue));
   set("#ctModeName", state.uiMode === "ask" ? "Ask" : state.uiMode === "plan" ? "Plan" : "Agent");
   if (think) { const cur = think.options.find((o) => o.value === think.currentValue); set("#ctThinkName", prettyLevel(cur?.name ?? think.currentValue)); }
-  const pBtn = $("#ctPersona"); if (pBtn) (pBtn as HTMLElement).hidden = !state.asksage?.configured;
-  set("#ctPersonaName", state.persona ?? "Persona");
+  const pBtn = $("#ctPersona");
+  if (pBtn) {
+    (pBtn as HTMLElement).hidden = !state.asksage?.configured;
+    // Show a readable persona name (up to 25 chars), not the raw numeric id; the FULL
+    // description is surfaced on hover via data-tip ("Title|Description").
+    const sel = state.persona ? state.personas.find((p) => p.id === state.persona) : null;
+    if (sel) {
+      const title = personaTitle(sel.description, sel.id);
+      const label = title.length > 25 ? title.slice(0, 24).trimEnd() + "…" : title;
+      set("#ctPersonaName", label);
+      pBtn.setAttribute("data-tip", `AskSage persona · #${sel.id}|${sel.description || "No description provided."}`);
+    } else {
+      set("#ctPersonaName", "Persona");
+      pBtn.setAttribute("data-tip", "AskSage persona|Server-supplied role guidance - scanned before use");
+    }
+  }
 }
 
 // AskSage persona picker (composer). Selecting one scans it server-side; a clean
@@ -1906,7 +1920,9 @@ async function applyPersona(id: string | null): Promise<void> {
   if (!id || r?.cleared) { state.persona = null; updateComposerTools(); showToast({ title: "Persona cleared", desc: "Back to default behavior.", actions: [{ label: "OK" }], timeout: 2000 }); return; }
   if (r?.applied) {
     state.persona = id; updateComposerTools();
-    showToast({ title: `Persona "${id}" applied`, desc: "Scanned clean - added as delimited role guidance on your next turn.", actions: [{ label: "OK" }], timeout: 3200 });
+    const sel = state.personas.find((p) => p.id === id);
+    const nm = sel ? personaTitle(sel.description, sel.id) : `#${id}`;
+    showToast({ title: `Persona: ${nm}`, desc: "Scanned clean - added as delimited role guidance on your next turn.", actions: [{ label: "OK" }], timeout: 3200 });
   } else {
     state.persona = null; updateComposerTools();
     showToast({ tone: "danger", title: "Persona blocked", desc: `The scanner flagged this persona (${r?.scan?.findings ?? 0} finding(s)); it was not applied.`, meta: "fail-closed - untrusted content can't enter the prompt", actions: [{ label: "OK" }], timeout: 6000 });
