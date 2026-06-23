@@ -44,6 +44,30 @@ test("keystone #2: only trusted/untrusted facts are recallable; suspicious/quara
   expect(out.block).not.toContain("QUARANTINED payload");
 });
 
+test("mechanical tool-activity facts (omp:* / subagent:*) are never recalled", async () => {
+  // rememberActivity promotes a fact per tool call; these are activity, not durable
+  // knowledge, and must not be injected into a later session's user turn.
+  await seed("omp:web_search", "web_search best burgers Seattle 2025", "untrusted");
+  await seed("omp:job", "job RegularMarsupial", "untrusted");
+  await seed("subagent:explore", "explore list top-level files", "untrusted");
+  await seed("build-system", "The project builds with Bun.", "trusted");
+
+  const out = await buildRecall(db, { limit: 50 });
+  expect(out.count).toBe(1); // only the genuine knowledge fact
+  expect(out.block).toContain("The project builds with Bun.");
+  expect(out.block).not.toContain("best burgers");
+  expect(out.block).not.toContain("RegularMarsupial");
+  expect(out.block).not.toContain("explore list top-level");
+});
+
+test("recall is empty (null block) when only tool-activity facts exist", async () => {
+  await seed("omp:read", "read README.md", "untrusted");
+  await seed("omp:task", "task explore the repo", "untrusted");
+  const out = await buildRecall(db, { limit: 50 });
+  expect(out.count).toBe(0);
+  expect(out.block).toBeNull();
+});
+
 test("every statement + entity is markdown/codepoint escaped (defense in depth)", async () => {
   // zero-width space (invisible) + markdown metachars in the statement.
   await seed("ent*x", "danger\u200Bzone *bold* [link](x)", "untrusted");
