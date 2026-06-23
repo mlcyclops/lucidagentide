@@ -24,6 +24,18 @@ import type { Db } from "./db.ts";
  *  suspicious, quarantined — are deliberately excluded (keystone #2). */
 const RECALLABLE_TRUST = ["trusted", "untrusted"] as const;
 
+/** Entity-name prefixes for MECHANICAL TOOL ACTIVITY, not durable knowledge.
+ *  `rememberActivity` (omp/security_extension.ts) promotes a fact for every tool
+ *  call with entity `omp:<tool>` (and task subagents land as `subagent:<name>`).
+ *  Those are activity, not knowledge — recalling "omp:web_search: best burgers
+ *  Seattle" or "omp:job: job RegularMarsupial" into a later, unrelated session
+ *  only confuses the model and clutters the user turn. They are excluded from
+ *  recall here (defense in depth: even if such facts exist in the store, they are
+ *  never surfaced). Genuine, durable facts use semantic entity names (e.g.
+ *  "build-system", "user-pref") and are unaffected. See also: stop promoting them
+ *  at the source (tracked separately). */
+const ACTIVITY_ENTITY_PREFIXES = ["omp:", "subagent:"] as const;
+
 export interface RecallOptions {
   /** Session the facts are being recalled INTO. When set, the recall is logged
    *  to fact_sessions and a memory_recalled event is emitted. */
@@ -56,15 +68,23 @@ export async function buildRecall(db: Db, opts: RecallOptions = {}): Promise<Rec
   const limit = Math.max(0, Math.trunc(opts.limit ?? 20));
   if (limit === 0) return { block: null, factIds: [], count: 0 };
 
-  const placeholders = RECALLABLE_TRUST.map((_, i) => `$${i + 1}`).join(", ");
+  const trustPlaceholders = RECALLABLE_TRUST.map((_, i) => `$${i + 1}`).join(", ");
+  // Exclude mechanical tool-activity entities (omp:* / subagent:*) so only durable
+  // knowledge is recalled. Patterns are bound parameters, after the trust params.
+  const activityPatterns = ACTIVITY_ENTITY_PREFIXES.map((p) => `${p}%`);
+  const activityClause = activityPatterns
+    .map((_, i) => `e.name NOT LIKE $${RECALLABLE_TRUST.length + 1 + i}`)
+    .join(" AND ");
+  const limitParam = RECALLABLE_TRUST.length + ACTIVITY_ENTITY_PREFIXES.length + 1;
   const rows = await db.all(
     `SELECT f.fact_id AS fact_id, f.statement AS statement, f.trust_label AS trust_label, e.name AS entity
        FROM semantic_facts f
        JOIN semantic_entities e ON e.entity_id = f.entity_id
-      WHERE f.trust_label IN (${placeholders})
+      WHERE f.trust_label IN (${trustPlaceholders})
+        AND ${activityClause}
       ORDER BY f.promoted_at DESC, f.fact_id DESC
-      LIMIT $${RECALLABLE_TRUST.length + 1}`,
-    [...RECALLABLE_TRUST, limit],
+      LIMIT $${limitParam}`,
+    [...RECALLABLE_TRUST, ...activityPatterns, limit],
   );
   if (rows.length === 0) return { block: null, factIds: [], count: 0 };
 
