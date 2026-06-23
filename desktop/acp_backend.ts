@@ -294,6 +294,10 @@ class Backend {
     if (configId === "model") this.syncModelEnv(); // persist the new authoring model for AI-LOC (ADR-0031)
     return this.configOptions;
   }
+  /** The live ACP session id (matches the omp on-disk session id), or null when fresh.
+   *  Used by the delete route to close the session before removing its file (#53). */
+  currentSessionId(): string | null { return this.sessionId; }
+
   /** Resume a past session so the next prompt continues it. */
   async loadSession(id: string): Promise<void> {
     await this.start();
