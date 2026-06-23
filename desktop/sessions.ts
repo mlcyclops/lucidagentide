@@ -8,9 +8,39 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { UNTRUSTED_END, UNTRUSTED_START } from "../harness/prompt/assembler.ts";
 import { currentWorkspace } from "./workspace.ts";
 
 const norm = (p: string) => p.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+
+// The per-session USER-TURN PREAMBLE that acp_backend prepends to the first typed
+// message (never the frozen prefix): the AskSage persona (UNTRUSTED_CONTENT_* wrapped),
+// the active bundled skill (<active-skill>), the personalization recall (<user-profile>),
+// and the cross-session memory recall (<recalled-memory>). The model needs these, but
+// they must NOT appear in the chat transcript or session titles. omp persists them inside
+// the user turn on disk, so strip any leading block(s) before we DISPLAY a user message.
+// Display-only: the model already received the full body live. See issue #52.
+const PREAMBLE_BLOCKS: RegExp[] = [
+  new RegExp(`^\\s*${UNTRUSTED_START}[\\s\\S]*?${UNTRUSTED_END}`),
+  /^\s*<active-skill\b[\s\S]*?<\/active-skill>/,
+  /^\s*<user-profile>[\s\S]*?<\/user-profile>/,
+  /^\s*<recalled-memory>[\s\S]*?<\/recalled-memory>/,
+];
+
+/** Remove the leading injected-context block(s) from a user message so only what the
+ *  user actually typed is shown. Strips repeatedly (blocks stack) and is a no-op for a
+ *  clean message. Never applied to assistant text. Exported for tests. */
+export function stripInjectedPreamble(text: string): string {
+  let s = text;
+  for (let changed = true; changed; ) {
+    changed = false;
+    for (const re of PREAMBLE_BLOCKS) {
+      const m = re.exec(s);
+      if (m) { s = s.slice(m[0].length); changed = true; }
+    }
+  }
+  return s.replace(/^\s+/, "");
+}
 
 export interface SessionInfo {
   id: string;
@@ -48,7 +78,7 @@ export function listSessions(cwd: string = currentWorkspace()): SessionInfo[] {
             if (o.type === "session") { id = o.id ?? f; scwd = o.cwd ?? ""; }
             else if (o.type === "model_change" && o.model) model = o.model;
             else if (o.type === "message" && o.message) {
-              if (o.message.role === "user" && !title) { const t = firstUserText(o.message); if (t.trim()) title = t.trim().slice(0, 64); }
+              if (o.message.role === "user" && !title) { const t = stripInjectedPreamble(firstUserText(o.message)); if (t.trim()) title = t.trim().slice(0, 64); }
               if (o.message.role === "assistant" && o.message.usage) { turns++; if (o.message.model) model = o.message.model; }
             }
           }
@@ -89,7 +119,9 @@ export function sessionMessages(id: string): { role: string; text: string }[] {
           if (!ln) continue;
           let o: any; try { o = JSON.parse(ln); } catch { continue; }
           if (o.type === "message" && (o.message?.role === "user" || o.message?.role === "assistant")) {
-            const t = msgText(o.message);
+            // Strip the injected preamble from USER turns only (assistant text never carries it).
+            const raw = msgText(o.message);
+            const t = o.message.role === "user" ? stripInjectedPreamble(raw) : raw;
             if (t.trim()) out.push({ role: o.message.role, text: t });
           }
         }
