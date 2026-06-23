@@ -118,7 +118,6 @@ function buildShell(): void {
         <button class="rail-btn" data-rail="security" data-tip="Security|Findings, quarantine & approvals" data-tip-icon="shield">${icon("shield", 20)}<span class="badge" id="railBadge" hidden>0</span></button>
         <button class="rail-btn" data-rail="memory" data-tip="Memory & context|Context window, prompt-cache savings, semantic memory" data-tip-icon="brain">${icon("brain", 20)}</button>
         <button class="rail-btn" data-rail="knowledge" data-tip="Knowledge graph|Your private, encrypted personalization graph - nodes, edges, drill-down" data-tip-icon="graph">${icon("graph", 20)}</button>
-        <button class="rail-btn" id="railLogs" data-rail="dev" hidden data-tip="Logs · Developer|Read-only telemetry, run lineage, and audit trails. Enabled in Settings → Developer mode." data-tip-icon="layout">${icon("layout", 20)}</button>
         <div class="spacer"></div>
         <button class="rail-btn" id="railCmd" data-tip="Commands|Ctrl / ⌘ K" data-tip-icon="command">${icon("command", 20)}</button>
         <button class="rail-btn" data-rail="settings" data-tip="Settings" data-tip-icon="sliders">${icon("sliders", 20)}</button>
@@ -1013,9 +1012,7 @@ function secCompression(hr: import("./bridge.ts").HeadroomStatus | null): string
       <div class="set-note">${icon("info", 12)} Runs entirely on your machine (${esc(hr.version ?? "installed")}). Request-routing + a gov-deployment security review are next - see ADR-0008.</div>`
     : `<div class="set-note">${icon("info", 12)} Optional: install <b>headroom</b> to compress context on-device (60–95% fewer tokens). Run <code>${esc(hr?.installHint ?? "pip install headroom-ai[proxy]")}</code>, then this toggle appears.</div>`;
   // ADR-0009 Phase D: Developer mode toggle (reveals the read-only Logs rail panel).
-  const dev = `<label class="set-toggle" style="margin-top:12px;border-top:1px solid var(--line-soft);padding-top:12px"><input type="checkbox" id="devModeToggle" ${state.developerMode ? "checked" : ""}/>
-    <span><b>Developer mode</b> - reveal a read-only <b>Logs</b> panel in the rail: telemetry stream, run lineage, and audit trails (metadata only).</span></label>`;
-  return setCard("compression", "Token compression & developer", "on-device · opt-in", body + dev, true);
+  return setCard("compression", "Token compression", "on-device · opt-in", body, true);
 }
 function secOthers(auth: import("./bridge.ts").AuthStatus | null): string {
   return setCard("others", "More providers", "", (auth?.others ?? []).map(provCard).join("") || `<div class="empty">none</div>`, true);
