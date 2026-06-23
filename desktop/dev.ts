@@ -14,7 +14,7 @@ import { approveBlock, liveBlocks } from "./security_log.ts";
 import { probeRateLimits } from "./ratelimit_probe.ts";
 import { OBS_DB_PATH, memorySnapshot, rateLimits, usageLedger } from "../tools/memory_data.ts";
 import { backend } from "./acp_backend.ts";
-import { listSessions, sessionMessages } from "./sessions.ts";
+import { deleteSession, listSessions, sessionMessages } from "./sessions.ts";
 import { providerAuth } from "./auth_status.ts";
 import { cloneRepo, setWorkspace, workspaceInfo } from "./workspace.ts";
 import { applyEnv, attribution, chinaModelsAcknowledged, listMcpServers, load as loadSettings, removeMcpServer, setAsksage, setAttributionSkip, setChinaModelsAcknowledged, setDeveloperMode, setKey, setMcpServerEnabled, setProfile, setRateLimitProbe, upsertMcpServer } from "./settings_store.ts";
@@ -241,6 +241,15 @@ const server = Bun.serve({
       if (p === "/api/sessions") return json({ ok: true, data: listSessions() });
       if (p === "/api/session" && url.searchParams.get("id")) return json({ ok: true, data: sessionMessages(url.searchParams.get("id")!) });
       if (p === "/api/session/load" && req.method === "POST") { const { id } = await readBody<{ id?: unknown }>(req); await backend.loadSession(String(id)); return json({ ok: true }); }
+      if (p === "/api/session/delete" && req.method === "POST") {
+        const { id } = await readBody<{ id?: unknown }>(req);
+        const sid = String(id);
+        // If it's the live session, close it first so omp releases the file handle (Windows
+        // locks open files), then start fresh. newSession() does session/close + ensureSession.
+        if (backend.currentSessionId() === sid) await backend.newSession().catch(() => {});
+        const res = deleteSession(sid);
+        return json({ ok: true, data: res });
+      }
 
       // workspace (the folder the agent works in; local or cloned remote)
       if (p === "/api/workspace") {

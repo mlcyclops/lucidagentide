@@ -34,6 +34,8 @@ const RAW: Record<string, string> = {
   bolt: P("M12 3 6 13h5l-1 8 6-11h-5z"),
   // close
   close: P("M6 6l12 12") + P("M18 6 6 18"),
+  // trash / delete
+  trash: P("M5 7h14") + P("M9 7V5.5A1.5 1.5 0 0 1 10.5 4h3A1.5 1.5 0 0 1 15 5.5V7") + P("M6.6 7l.8 11.1A1.6 1.6 0 0 0 9 19.6h6a1.6 1.6 0 0 0 1.6-1.5L17.4 7") + P("M10 11v5") + P("M14 11v5"),
   // minimise / maximise (window controls)
   minus: P("M6 12h12"),
   square: P("M6 6.5h12v11H6z"),

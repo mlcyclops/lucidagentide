@@ -5,7 +5,7 @@
 // and derive a title (first user message), model, turn count, and last-modified.
 // New GUI chats write new files here, so they appear on the next poll.
 
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { currentWorkspace } from "./workspace.ts";
@@ -98,4 +98,39 @@ export function sessionMessages(id: string): { role: string; text: string }[] {
     } catch { /* skip */ }
   }
   return [];
+}
+
+/** Delete a session's omp `.jsonl` transcript from disk. Restricted to the CURRENT
+ *  workspace's sessions (defense in depth) and matched by session id (or filename).
+ *  Returns `{ ok }`; `ok:false` when the session is not found, belongs to another
+ *  workspace, or the file can't be removed (e.g. still open by omp on Windows — close
+ *  the live session first). The append-only DuckDB audit/provenance is a separate store
+ *  and is intentionally untouched (issue #53). */
+export function deleteSession(id: string, cwd: string = currentWorkspace(), root: string = join(homedir(), ".omp", "agent", "sessions")): { ok: boolean; error?: string } {
+  if (!existsSync(root)) return { ok: false, error: "no sessions directory" };
+  const want = norm(cwd);
+  for (const d of readdirSync(root)) {
+    const dir = join(root, d);
+    try {
+      if (!statSync(dir).isDirectory()) continue;
+      for (const f of readdirSync(dir)) {
+        if (!f.endsWith(".jsonl")) continue;
+        const p = join(dir, f);
+        // Resolve id + cwd from the session record (first matching line), like listSessions.
+        let sid = f, scwd = "";
+        try {
+          for (const ln of readFileSync(p, "utf8").split("\n")) {
+            if (!ln) continue;
+            let o: any; try { o = JSON.parse(ln); } catch { continue; }
+            if (o.type === "session") { sid = o.id ?? f; scwd = o.cwd ?? ""; break; }
+          }
+        } catch { /* keep filename fallback */ }
+        if (sid !== id && f !== id) continue;
+        if (scwd && norm(scwd) !== want) return { ok: false, error: "session belongs to another workspace" };
+        try { rmSync(p, { force: true }); return { ok: true }; }
+        catch (e) { return { ok: false, error: String((e as any)?.message ?? e) }; }
+      }
+    } catch { /* skip dir */ }
+  }
+  return { ok: false, error: "session not found" };
 }

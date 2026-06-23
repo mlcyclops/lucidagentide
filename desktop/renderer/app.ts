@@ -230,6 +230,7 @@ async function renderSessions(): Promise<void> {
     <div class="sess ${i === 0 ? "active" : ""}" data-sid="${esc(s.id)}" data-tip="${esc(s.title)}|${esc(modelLabel(s.model))} · ${s.turns} turn${s.turns === 1 ? "" : "s"} · ${relTime(s.updatedAt)}" data-tip-side="right">
       <div class="t">${esc(s.title)}</div>
       <div class="m"><b>${esc(modelLabel(s.model))}</b> · ${s.turns} turn${s.turns === 1 ? "" : "s"} · ${relTime(s.updatedAt)}</div>
+      <button class="sess-del" data-del="${esc(s.id)}" data-tip="Delete session" aria-label="Delete session" tabindex="-1">${icon("trash", 13)}</button>
     </div>`).join("");
 }
 
@@ -1405,6 +1406,32 @@ async function resumeSession(id: string): Promise<void> {
   $("#input")?.focus();
 }
 
+/** Delete a session from history (with confirm). Backend closes the live session first if it's
+ *  the one being deleted (so omp releases the file), then removes the .jsonl; the append-only
+ *  audit trail is untouched. If the deleted session was the active one, reset to a fresh chat. */
+function confirmDeleteSession(id: string): void {
+  if (state.streaming) { showToast({ title: "Finish the current turn first", desc: "Stop or let the reply finish, then delete the session.", tone: "warn", actions: [{ label: "OK" }], timeout: 3000 }); return; }
+  const row = $$(".sess").find((s) => (s as HTMLElement).dataset.sid === id) as HTMLElement | undefined;
+  const wasActive = row?.classList.contains("active") ?? false;
+  const title = row?.querySelector(".t")?.textContent?.trim() || "this session";
+  showToast({
+    title: "Delete session?",
+    desc: `"${title}" will be removed from history. This can't be undone. (Audit/provenance records are kept.)`,
+    tone: "warn",
+    actions: [
+      { label: "Delete", kind: "danger", run: async () => {
+        const r = await bridge.deleteSession(id).catch(() => ({ ok: false, error: "request failed" }));
+        if (!r?.ok) { showToast({ title: "Couldn't delete", desc: r?.error || "Try again in a moment.", tone: "danger", actions: [{ label: "OK" }], timeout: 4000 }); return; }
+        if (wasActive) { seedThread(); state.liveUsage = null; renderStatus(); renderMetricsRail(); }
+        await renderSessions();
+        showToast({ title: "Session deleted", desc: "", timeout: 1600 });
+      } },
+      { label: "Cancel" },
+    ],
+    timeout: 8000,
+  });
+}
+
 async function applyWorkspace(path: string): Promise<void> {
   // #11 perceived-latency: setWorkspace() respawns the backend (2–5s). Reassure the user
   // up front that work is happening, then confirm when it's ready, and reflect the switch
@@ -2496,7 +2523,13 @@ function wire(): void {
   $("#sideToggle")!.addEventListener("click", () => toggleSidebar());
   $("#sideCollapse")!.addEventListener("click", () => toggleSidebar(true));
   $("#wsBar")!.addEventListener("click", () => openSettings());
-  $("#sessList")!.addEventListener("click", (e) => { const s = (e.target as HTMLElement).closest(".sess") as HTMLElement | null; if (s?.dataset.sid) void resumeSession(s.dataset.sid); });
+  $("#sessList")!.addEventListener("click", (e) => {
+    const t = e.target as HTMLElement;
+    const del = t.closest(".sess-del") as HTMLElement | null;
+    if (del?.dataset.del) { e.stopPropagation(); confirmDeleteSession(del.dataset.del); return; }
+    const s = t.closest(".sess") as HTMLElement | null;
+    if (s?.dataset.sid) void resumeSession(s.dataset.sid);
+  });
   $(".brand")!.addEventListener("click", () => toggleSidebar());
 
   // status bar: click the budget / gov chips to re-check usage now

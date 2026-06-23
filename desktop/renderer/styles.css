@@ -240,6 +240,15 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .sess:hover .t,.sess.active .t{color:var(--txt)}
 .sess .m{font-size:11.5px;color:var(--txt-3);display:flex;gap:6px;align-items:center}
 .sess .m b{color:var(--cyan);font-weight:600}
+/* per-row delete: hidden until hover/focus, danger tint on hover; never shifts layout */
+.sess-del{position:absolute;top:7px;right:7px;display:grid;place-items:center;width:24px;height:24px;
+  border:0;border-radius:7px;background:transparent;color:var(--txt-3);cursor:pointer;opacity:0;
+  transition:opacity var(--t) var(--ease),background var(--t) var(--ease),color var(--t) var(--ease)}
+.sess-del svg{width:13px;height:13px}
+.sess:hover .sess-del,.sess:focus-within .sess-del{opacity:.85}
+.sess-del:hover{opacity:1;background:color-mix(in srgb,var(--danger,#e5484d) 16%,transparent);color:var(--danger,#e5484d)}
+.sess-del:focus-visible{opacity:1;outline:2px solid var(--accent);outline-offset:1px}
+.sess:hover .t{padding-right:24px}
 
 /* ───────────────────────── centre / chat ───────────────────────── */
 .center{display:flex;flex-direction:column;min-width:0;min-height:0;background:var(--bg-0)}
