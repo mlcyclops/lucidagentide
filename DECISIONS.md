@@ -4227,3 +4227,51 @@ the run-with selections and the flat per-iteration token assumptions).
 ADR-0046 (the loop), ADR-0047 (automations), ADR-0048 (the checker model this prices alongside the
 maker); P10.2 (the usage/cost ledger the actual prices come from); ADR-0029 (the active-skill + persona
 paths the run-with pickers drive).
+
+-----
+
+## ADR-0050 — The /goal launcher: guided walkthrough, premium tooltips, lockdown model policy
+
+**Date:** 2026-06-24
+**Status:** **Accepted** — P-GOAL.8 built this increment.
+**Context increment:** P-GOAL.8.
+
+### Context
+
+The /goal launcher had grown to a dense single screen (goal, verify command, iterations, checker,
+run-with, schedule, estimate) — powerful but intimidating for a first-time user, and its cost tooltip
+rendered UNDER the modal. Feedback: make it approachable, fix the tooltip, suggest common verify
+commands, and stop the base-model picker from offering non-AskSage models under the gov lockdown.
+
+### Decision
+
+- **Guided walkthrough (default) ⇄ Advanced.** The modal defaults to a five-step walkthrough showing
+  1–3 inputs at a time — (1) Goal, (2) Verification, (3) Effort + checker, (4) Run with, (5) Schedule —
+  each with a one-line note and a premium info-dot tooltip. Back/Next navigate; step 1 requires a goal
+  before advancing; the last step reveals Run / Save. A pill in the upper-right toggles **Advanced**
+  (the old all-at-once view); the choice persists in `localStorage` (`lucid.goalMode`). The same field
+  DOM backs both modes (one element per control), so all existing wiring — checker picker, run-with,
+  cadence, live estimate — works unchanged; the mode only controls visibility + the button set.
+- **Premium tooltips + z-index fix.** Every section has an info dot using the app's global
+  `data-tip="Title|Body"` tooltip (same as the model badge). `#tip`'s z-index was below the goal
+  scrim (120 < 200) so tooltips rendered under the modal — raised to 260.
+- **Verify-command suggestions.** The command input is backed by a `<datalist>` of ~20 common
+  commands (npm/pnpm/bun/pytest/go/cargo/make/…); the user can pick one or type anything.
+- **AskSage lockdown model policy (per the user).** The CHECKER stays GOV-only (ADR-0048). The BASE
+  model, which previously still offered non-AskSage models under lockdown, is now restricted to
+  AskSage-routed models and grouped **Gemini, then GPT, then Anthropic** (GOV-suffixed first within
+  each, via `groupByFamily` + `sortGovFirstNewest`); RAG/auxiliary routes are excluded. AskSage is the
+  gov gateway, so all of these are compliant; this is the only policy that still surfaces GPT (no GPT
+  id carries a literal `-gov` suffix).
+
+### Consequences
+
+A newcomer is walked through one decision at a time with inline help; a power user flips to Advanced
+once and stays there. The cost tooltip is finally visible. Under lockdown the base model can no longer
+escape the AskSage gateway. The walkthrough is presentation-only over the existing controls, so it adds
+no new server surface and no new estimate/pricing logic.
+
+### Relates to
+
+ADR-0046/47/48/49 (the loop, automations, checker model, cost estimate this wraps); ADR-0029 P-IDE.1c
+(`model_families` gov/ordering helpers reused for the lockdown base picker); the global tooltip system.

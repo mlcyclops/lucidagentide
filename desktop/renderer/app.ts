@@ -2194,57 +2194,137 @@ let goalLoopRunning = false; // P-GOAL.2: true while a /goal loop streams, so St
 let goalLedger: Awaited<ReturnType<typeof bridge.usage>> | null = null;
 // A launcher form (goal · optional verify command · max iterations), then a loop that streams maker
 // iterations with a separate checker's verdict each round. Every action is still gated server-side.
+
+// P-GOAL.8: common verification commands offered as type-ahead suggestions (the user can still type
+// anything). Ordered by rough ecosystem prevalence.
+const COMMON_VERIFY_COMMANDS = [
+  "npm test", "npm test && npm run lint", "npm run build", "npm run lint", "pnpm test", "yarn test",
+  "bun test", "pytest", "pytest -q", "python -m pytest", "go test ./...", "cargo test", "cargo check",
+  "make test", "make", "bun run typecheck", "tsc --noEmit", "dotnet test", "mvn test", "gradle test",
+];
+// P-GOAL.8: a premium info dot (uses the global data-tip tooltip). `tip` is "Title|Body".
+function goalInfoDot(tip: string): string {
+  return `<button type="button" class="info-dot goal-info" tabindex="-1" data-tip="${esc(tip)}" data-tip-icon="info" data-tip-side="right">${icon("info", 11)}</button>`;
+}
+// P-GOAL.8: under AskSage lockdown the base-model picker lists Gemini, then GPT, then Anthropic.
+const GUIDED_GOV_FAMILY_ORDER = ["gemini", "gpt-o", "gpt", "claude", "rag", "other"];
+
 function openGoalForm(): void {
-  const ov = el(`<div class="scrim goal-scrim"><div class="goal-modal">
-    <div class="goal-modal-h">${icon("bolt", 15)} Run a goal loop</div>
+  const ov = el(`<div class="scrim goal-scrim"><div class="goal-modal" data-mode="guided">
+    <div class="goal-modal-h">
+      <span class="goal-h-title">${icon("bolt", 15)} Run a goal loop</span>
+      <button type="button" class="goal-mode-toggle" id="goalModeToggle" data-tip="Advanced mode|Show every option on one screen, for power users. You can switch back to the guided walkthrough anytime." data-tip-side="bottom"></button>
+    </div>
     <div class="goal-modal-sub">The agent iterates until a verifiable condition holds. A separate checker grades each round; the security gate scans every action.</div>
     <div id="goalResumeSec"></div>
     <div id="goalAutoSec"></div>
-    <label class="goal-lbl">Goal</label>
-    <textarea id="goalGoal" class="prov-key" rows="3" placeholder="e.g. Make all auth tests pass and fix any lint errors"></textarea>
-    <label class="goal-lbl">Verification command <span class="goal-opt">optional, proves "done" by exit 0</span></label>
-    <input id="goalCmd" class="prov-key" placeholder="e.g. npm test && npm run lint" spellcheck="false" autocomplete="off" />
-    <div class="goal-row"><label class="goal-lbl">Max iterations</label><input id="goalMax" class="prov-key goal-max" type="number" min="1" max="20" value="6" /></div>
-    <div class="goal-row goal-runwith">
-      <label class="goal-lbl">${icon("spark", 12)} Run with <span class="goal-opt">base model, thinking, skill, persona</span></label>
-      <div class="goal-rw-grid">
-        <label class="goal-rw-f"><span>Base model</span><select id="goalModel" class="prov-key"></select></label>
-        <label class="goal-rw-f" id="goalThinkWrap" hidden><span>Thinking</span><select id="goalThink" class="prov-key"></select></label>
-        <label class="goal-rw-f"><span>Skill</span><select id="goalSkill" class="prov-key"></select></label>
-        <label class="goal-rw-f" id="goalPersonaWrap" hidden><span>Persona</span><select id="goalPersona" class="prov-key"></select></label>
-      </div>
-    </div>
-    <div class="goal-row goal-checker">
-      <label class="goal-lbl">${icon("spark", 12)} Checker model <span class="goal-opt">grades each round; a cheaper model is fine</span></label>
-      <select id="goalChecker" class="prov-key goal-ckr"><option>loading…</option></select>
-    </div>
-    <div class="goal-ckr-why" id="goalCkrWhy"></div>
-    <div class="goal-row goal-sched">
-      <label class="goal-lbl">${icon("clock", 12)} Schedule <span class="goal-opt">save as an automation</span></label>
-      <select id="goalCadKind" class="prov-key goal-cadk">
-        <option value="off">Run once now</option>
-        <option value="interval">Every…</option>
-        <option value="daily">Daily at…</option>
-      </select>
-      <span id="goalCadInterval" hidden><input id="goalCadEvery" class="prov-key goal-cadn" type="number" min="1" value="60" /><select id="goalCadUnit" class="prov-key goal-cadu"><option value="min">minutes</option><option value="hour">hours</option></select></span>
-      <input id="goalCadTime" class="prov-key goal-cadt" type="time" value="09:00" hidden />
+    <div class="goal-steps">
+      <section class="goal-step" data-step="1">
+        <div class="goal-step-head"><span class="goal-step-n"></span><h4>What should the agent accomplish?</h4></div>
+        <div class="goal-note">Describe the end state in plain language. The clearer the target, the fewer rounds it takes. ${goalInfoDot("The goal|This is the objective the agent works toward each round. Be concrete about the finished result, e.g. 'all auth tests pass and the lint is clean.'")}</div>
+        <label class="goal-lbl">Goal</label>
+        <textarea id="goalGoal" class="prov-key" rows="3" placeholder="e.g. Make all auth tests pass and fix any lint errors"></textarea>
+      </section>
+      <section class="goal-step" data-step="2">
+        <div class="goal-step-head"><span class="goal-step-n"></span><h4>How do we know it is done?</h4></div>
+        <div class="goal-note">A shell command that exits 0 when the goal is met. This is the strongest signal of done; without one the checker judges the agent's own report. ${goalInfoDot("Verification command|Run after each round by a separate checker. Exit code 0 means done. Pick a suggestion or type your own, e.g. 'npm test && npm run lint'.")}</div>
+        <label class="goal-lbl">Verification command <span class="goal-opt">optional, proves "done" by exit 0</span></label>
+        <input id="goalCmd" class="prov-key" list="goalCmdList" placeholder="e.g. npm test && npm run lint" spellcheck="false" autocomplete="off" />
+        <datalist id="goalCmdList">${COMMON_VERIFY_COMMANDS.map((c) => `<option value="${esc(c)}"></option>`).join("")}</datalist>
+      </section>
+      <section class="goal-step" data-step="3">
+        <div class="goal-step-head"><span class="goal-step-n"></span><h4>Effort and grading</h4></div>
+        <div class="goal-note">Cap how many rounds it may take, and pick who grades each round. A cheaper checker keeps cost low. ${goalInfoDot("Iterations and checker|Max iterations is a hard ceiling - the loop stops as soon as the condition holds. The checker is a separate model that grades each round; a small fast model is usually plenty.")}</div>
+        <div class="goal-row"><label class="goal-lbl">Max iterations</label><input id="goalMax" class="prov-key goal-max" type="number" min="1" max="20" value="6" /></div>
+        <div class="goal-row goal-checker">
+          <label class="goal-lbl">${icon("spark", 12)} Checker model <span class="goal-opt">grades each round; a cheaper model is fine</span></label>
+          <select id="goalChecker" class="prov-key goal-ckr"><option>loading…</option></select>
+        </div>
+        <div class="goal-ckr-why" id="goalCkrWhy"></div>
+      </section>
+      <section class="goal-step" data-step="4">
+        <div class="goal-step-head"><span class="goal-step-n"></span><h4>Run with</h4></div>
+        <div class="goal-note">Optional: pick the base model the agent uses, its thinking level, and a skill or persona to steer it. Defaults match your current session. ${goalInfoDot("Run with|These apply when you press Run. Base model + thinking set the maker; a Skill adds trusted guidance; a Persona adds scanned role guidance. Leave as-is to use your current setup.")}</div>
+        <div class="goal-row goal-runwith">
+          <div class="goal-rw-grid">
+            <label class="goal-rw-f"><span>Base model</span><select id="goalModel" class="prov-key"></select></label>
+            <label class="goal-rw-f" id="goalThinkWrap" hidden><span>Thinking</span><select id="goalThink" class="prov-key"></select></label>
+            <label class="goal-rw-f"><span>Skill</span><select id="goalSkill" class="prov-key"></select></label>
+            <label class="goal-rw-f" id="goalPersonaWrap" hidden><span>Persona</span><select id="goalPersona" class="prov-key"></select></label>
+          </div>
+        </div>
+      </section>
+      <section class="goal-step" data-step="5">
+        <div class="goal-step-head"><span class="goal-step-n"></span><h4>Run now or on a schedule?</h4></div>
+        <div class="goal-note">Run once now, or save it as an automation that runs on a cadence while the app is open. ${goalInfoDot("Schedule|'Run once now' starts immediately. A cadence saves a (disabled) automation you arm later; it runs the same loop on a timer, only while the app is open.")}</div>
+        <div class="goal-row goal-sched">
+          <label class="goal-lbl">${icon("clock", 12)} Schedule <span class="goal-opt">save as an automation</span></label>
+          <select id="goalCadKind" class="prov-key goal-cadk">
+            <option value="off">Run once now</option>
+            <option value="interval">Every…</option>
+            <option value="daily">Daily at…</option>
+          </select>
+          <span id="goalCadInterval" hidden><input id="goalCadEvery" class="prov-key goal-cadn" type="number" min="1" value="60" /><select id="goalCadUnit" class="prov-key goal-cadu"><option value="min">minutes</option><option value="hour">hours</option></select></span>
+          <input id="goalCadTime" class="prov-key goal-cadt" type="time" value="09:00" hidden />
+        </div>
+      </section>
     </div>
     <div class="goal-modal-actions">
       <div class="goal-estimate" id="goalEstimate" tabindex="0"></div>
-      <div class="goal-actbtns"><button class="btn-mini" id="goalCancel">Cancel</button><button class="btn-mini" id="goalSave" hidden>${icon("clock", 12)} Save automation</button><button class="btn-mini ok" id="goalRun">${icon("bolt", 12)} Run loop</button></div>
+      <div class="goal-actbtns">
+        <button class="btn-mini" id="goalBack" hidden>${icon("chevron", 12)} Back</button>
+        <button class="btn-mini" id="goalCancel">Cancel</button>
+        <button class="btn-mini" id="goalSave" hidden>${icon("clock", 12)} Save automation</button>
+        <button class="btn-mini ok" id="goalNext" hidden>Next ${icon("chevron", 12)}</button>
+        <button class="btn-mini ok" id="goalRun">${icon("bolt", 12)} Run loop</button>
+      </div>
     </div>
   </div></div>`);
   document.body.appendChild(ov);
   const close = () => ov.remove();
   $("#goalCancel", ov)?.addEventListener("click", close);
   ov.addEventListener("mousedown", (e) => { if (e.target === ov) close(); });
-  // Cadence picker: reveal interval / daily inputs, and show "Save automation" only when a cadence is set.
+
+  // ── P-GOAL.8: guided walkthrough (default) vs advanced (all-at-once) ──────────
+  const modal = $(".goal-modal", ov) as HTMLElement;
+  const steps = [...ov.querySelectorAll<HTMLElement>(".goal-step")];
+  const TOTAL = steps.length;
+  let mode: "guided" | "advanced" = (localStorage.getItem("lucid.goalMode") === "advanced" ? "advanced" : "guided");
+  let cur = 1;
+  const setHidden = (sel: string, hidden: boolean) => { const e = $(sel, ov) as HTMLElement | null; if (e) e.hidden = hidden; };
+  const cadenceSet = () => (($("#goalCadKind", ov) as HTMLSelectElement)?.value ?? "off") !== "off";
+  const render = () => {
+    modal.dataset.mode = mode;
+    ($("#goalModeToggle", ov) as HTMLElement).textContent = mode === "guided" ? "Advanced" : "Guided walkthrough";
+    if (mode === "advanced") {
+      steps.forEach((s) => (s.hidden = false));
+      setHidden("#goalBack", true); setHidden("#goalNext", true);
+      setHidden("#goalCancel", false); setHidden("#goalRun", false);
+      setHidden("#goalSave", !cadenceSet());
+    } else {
+      steps.forEach((s) => (s.hidden = Number(s.dataset.step) !== cur));
+      const last = cur === TOTAL;
+      const headN = $(`.goal-step[data-step="${cur}"] .goal-step-n`, ov); if (headN) headN.textContent = `Step ${cur} of ${TOTAL}`;
+      setHidden("#goalBack", cur === 1); setHidden("#goalNext", last);
+      setHidden("#goalCancel", false); setHidden("#goalRun", !last);
+      setHidden("#goalSave", !(last && cadenceSet()));
+      const focusable = $(`.goal-step[data-step="${cur}"] textarea, .goal-step[data-step="${cur}"] input, .goal-step[data-step="${cur}"] select`, ov) as HTMLElement | null;
+      setTimeout(() => focusable?.focus(), 30);
+    }
+  };
+  $("#goalModeToggle", ov)?.addEventListener("click", () => { mode = mode === "guided" ? "advanced" : "guided"; localStorage.setItem("lucid.goalMode", mode); if (mode === "guided") cur = 1; render(); });
+  $("#goalNext", ov)?.addEventListener("click", () => {
+    if (cur === 1 && !($("#goalGoal", ov) as HTMLTextAreaElement).value.trim()) { showToast({ tone: "warn", title: "Add a goal", desc: "Describe what the loop should accomplish.", timeout: 2400 }); return; }
+    if (cur < TOTAL) { cur++; render(); }
+  });
+  $("#goalBack", ov)?.addEventListener("click", () => { if (cur > 1) { cur--; render(); } });
+  // Cadence picker: reveal interval / daily inputs; render() owns the "Save automation" visibility.
   const kindSel = $("#goalCadKind", ov) as HTMLSelectElement;
   const syncCadence = () => {
     const k = kindSel.value;
     ($("#goalCadInterval", ov) as HTMLElement).hidden = k !== "interval";
     ($("#goalCadTime", ov) as HTMLElement).hidden = k !== "daily";
-    ($("#goalSave", ov) as HTMLElement).hidden = k === "off";
+    render();
   };
   kindSel.addEventListener("change", syncCadence);
   const readCadence = (): { kind: "interval"; everyMin: number } | { kind: "daily"; hhmm: string } | null => {
@@ -2265,6 +2345,7 @@ function openGoalForm(): void {
   // P-GOAL.6.1: live token estimate (lower-left), recomputed as the iteration count changes.
   ($("#goalMax", ov) as HTMLInputElement)?.addEventListener("input", () => updateGoalEstimate(ov));
   updateGoalEstimate(ov); // initial; model names fill in once loadCheckerModel resolves
+  render(); // P-GOAL.8: apply guided/advanced mode + show the right step/buttons
   $("#goalRun", ov)?.addEventListener("click", async () => {
     const { goal, command, maxIters } = readSpec();
     if (!goal) { showToast({ tone: "warn", title: "Add a goal", desc: "Describe what the loop should accomplish.", timeout: 2400 }); return; }
@@ -2313,11 +2394,25 @@ function loadRunWith(ov: HTMLElement): void {
   const modelOpt = state.config.find((c) => c.id === "model");
   const modelSel = $("#goalModel", ov) as HTMLSelectElement | null;
   if (modelSel && modelOpt) {
-    const byProv = new Map<string, { value: string; name?: string }[]>();
-    for (const o of (modelOpt.options ?? [])) { const p = o.value.split("/")[0]; (byProv.get(p) ?? byProv.set(p, []).get(p)!).push(o); }
-    modelSel.innerHTML = [...byProv.entries()].map(([prov, opts]) =>
-      `<optgroup label="${esc(prov)}">` + opts.map((o) => `<option value="${esc(o.value)}">${esc(o.name || o.value.split("/").pop() || o.value)}</option>`).join("") + `</optgroup>`).join("");
-    modelSel.value = modelOpt.currentValue ?? "";
+    let opts = (modelOpt.options ?? []).filter((o) => !isAuxiliaryModel(o.value) && !/(^|[/-])rag$/i.test(o.value));
+    // P-GOAL.8: under AskSage lockdown the base model must be AskSage-routed too — restrict to those, and
+    // group by family in the order Gemini, GPT, Anthropic (GOV-suffixed first within each).
+    const locked = !!state.asksage?.only;
+    if (locked) {
+      const gov = opts.filter((o) => isGovModel(o.value));
+      if (gov.length) opts = gov;
+    }
+    if (locked) {
+      modelSel.innerHTML = groupByFamily(sortGovFirstNewest(opts), GUIDED_GOV_FAMILY_ORDER)
+        .map(({ fam, models }) => `<optgroup label="${esc(fam.label)}">` + models.map((o) => `<option value="${esc(o.value)}">${esc(o.name || o.value.split("/").pop() || o.value)}</option>`).join("") + `</optgroup>`).join("");
+    } else {
+      const byProv = new Map<string, { value: string; name?: string }[]>();
+      for (const o of opts) { const p = o.value.split("/")[0]; (byProv.get(p) ?? byProv.set(p, []).get(p)!).push(o); }
+      modelSel.innerHTML = [...byProv.entries()].map(([prov, list]) =>
+        `<optgroup label="${esc(prov)}">` + list.map((o) => `<option value="${esc(o.value)}">${esc(o.name || o.value.split("/").pop() || o.value)}</option>`).join("") + `</optgroup>`).join("");
+    }
+    // Keep the session model selected if it survived the filter, else fall to the first allowed option.
+    modelSel.value = opts.some((o) => o.value === modelOpt.currentValue) ? (modelOpt.currentValue ?? "") : (opts[0]?.value ?? "");
     ov.dataset.makerModel = modelSel.value;
     ov.dataset.makerName = modelOpt.options?.find((o) => o.value === modelSel.value)?.name || modelSel.value.split("/").pop() || modelSel.value;
     // Selecting only updates the cost estimate instantly; the session model is applied at Run time

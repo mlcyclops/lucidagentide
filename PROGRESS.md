@@ -2036,3 +2036,19 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **stubbed:** list prices are approximate + age (actual-usage pricing is exact only for metered models); saved
   automations don't yet capture the run-with selections; per-iteration token split is a flat heuristic.
 - **next:** carry run-with into automations; a maintained price table or a live pricing source.
+
+---
+**P-GOAL.8 — /goal launcher: guided walkthrough + premium tooltips + lockdown base model (ADR-0050)**
+- **shipped:** the goal modal defaults to a 5-step GUIDED walkthrough (Goal / Verification / Effort+checker /
+  Run with / Schedule), 1-3 inputs per step with a note + premium info-dot tooltip; Back/Next nav (step 1 requires
+  a goal); an "Advanced" pill top-right toggles the all-at-once view and persists (localStorage). Same field DOM
+  backs both modes, so all existing wiring is unchanged. Fixed the cost tooltip rendering UNDER the modal (#tip
+  z-index 120 -> 260). Verification command now has a ~20-entry datalist of common commands (free-typing preserved).
+  AskSage lockdown: the BASE model picker is now restricted to AskSage-routed models, grouped Gemini -> GPT ->
+  Anthropic (GOV first within each, via model_families groupByFamily/sortGovFirstNewest), RAG/aux excluded; checker
+  stays GOV-only. typecheck clean (3 cfgs); bun test desktop 326/326. Live-verified: guided default, step nav +
+  empty-goal guard, advanced toggle persists, tooltip renders above modal (z 260>200), 5 info dots, 20 cmd
+  suggestions, lockdown base list all-AskSage ordered Gemini/GPT/Anthropic; session model restored; no console errors.
+- **stubbed:** lockdown detection uses the user asksageOnly flag in the renderer (backend already enforces the
+  checker GOV filter); walkthrough copy is static; datalist styling is the native control.
+- **next:** carry run-with into saved automations; a maintained/live price source.
