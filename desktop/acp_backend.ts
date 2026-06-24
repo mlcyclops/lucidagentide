@@ -18,6 +18,7 @@ import { buildUserTurnPreamble } from "./preamble.ts";
 import { recordTurns } from "./turns_log.ts";
 import { recordBlock } from "./security_log.ts";
 import { attribution, lastModel, mcpServersForAcp, setLastModel } from "./settings_store.ts";
+import { parseGoalVerdict } from "./goal_verdict.ts";
 
 const REPO = join(import.meta.dir, "..");
 // Absolute so the gate loads from THIS repo even when omp runs in another workspace.
@@ -46,6 +47,12 @@ export type ChatEvent =
   | { type: "block"; tool: string; reason: string; severity: string; findings: string; id?: string; quarantined?: boolean }
   | { type: "permission"; id: string; tool: string; detail: string; options: { optionId: string; name: string; kind?: string }[] }
   | { type: "usage"; used: number; size: number; cost: number }
+  // P-GOAL.1 (ADR-0046): /goal loop events — an iteration begins, the separate checker's verdict,
+  // the loop met its condition, or it stopped (cap / no-progress).
+  | { type: "goal-iter"; n: number; max: number }
+  | { type: "goal-check"; n: number; done: boolean; reason: string }
+  | { type: "goal-done"; iters: number; reason: string }
+  | { type: "goal-stop"; reason: string }
   | { type: "done" };
 
 class Backend {
@@ -81,6 +88,9 @@ class Backend {
   // decision instead of being auto-approved. The composer's 3-way Plan/Ask/Agent is derived from
   // (currentModeId, permissionMode). Fail-closed: no decision (timeout / disconnect) ⇒ deny.
   permissionMode: "auto" | "ask" = "auto";
+  // P-GOAL.2 (ADR-0046): a /goal loop is running, and a request to stop it after the current iteration.
+  private goalActive = false;
+  private goalCancelled = false;
   private askActive = false;            // true only during a chat turn (never the util `complete()`)
   private permSeq = 0;
   private permPending = new Map<string, (optionId: string | null) => void>();
@@ -378,6 +388,82 @@ class Backend {
     // ADR-0009 Phase B (issue #12): capture the turn for traceability. Sanitized + sha only,
     // GUI-side (can't co-write DuckDB); fully guarded so it never affects the chat.
     recordTurns({ sessionId: this.sessionId ?? "", userText: text, assistantText: assistant });
+  }
+
+  // P-GOAL.1 (ADR-0046): the /goal loop. Run MAKER iterations on the persistent session toward `goal`,
+  // and after each one a SEPARATE checker decides if the verifiable `condition` is met (running `command`
+  // when given). Capped at `maxIters`, auto-stops on no-progress. Runs UNATTENDED — permissions are
+  // auto-approved for the duration, but every tool call is still scanned fail-closed by the in-process
+  // gate (that, not human approval, is the safety boundary). Streams the usual chat events plus goal-*.
+  async runGoal(opts: { goal: string; condition: string; command?: string; maxIters: number }, onEvent: (e: ChatEvent) => void): Promise<void> {
+    const goal = opts.goal.trim();
+    const condition = (opts.condition || opts.command || "the goal is fully accomplished").trim();
+    const command = opts.command?.trim() || "";
+    const maxIters = Math.min(Math.max(1, Math.floor(opts.maxIters) || 6), 20); // hard ceiling
+    const prevMode = this.permissionMode;
+    this.permissionMode = "auto"; // unattended: auto-approve tool calls (the gate still scans every one)
+    this.goalActive = true; this.goalCancelled = false;
+    let noProgress = 0;
+    try {
+      for (let i = 1; i <= maxIters; i++) {
+        if (this.goalCancelled) { onEvent({ type: "goal-stop", reason: "stopped by you" }); return; }
+        onEvent({ type: "goal-iter", n: i, max: maxIters });
+        let work = "";
+        let actedThisIter = false;
+        // Forward the maker's stream, but swallow the per-iteration `done` so the client sees ONE loop.
+        const sink = (e: ChatEvent) => {
+          if (e.type === "done") return;
+          if (e.type === "token") work += e.text;
+          if (e.type === "tool" || e.type === "subagent") actedThisIter = true;
+          onEvent(e);
+        };
+        const iterText = i === 1
+          ? `${goal}\n\nWork toward this goal now. The stop condition is: ${condition}${command ? ` (verified by running \`${command}\`)` : ""}. Take the next concrete step.`
+          : `Continue toward the goal. Stop condition: ${condition}. Take the next concrete step; if you believe the condition now holds, say so briefly and stop.`;
+        await this.prompt(iterText, sink);
+        if (this.goalCancelled) { onEvent({ type: "goal-stop", reason: "stopped by you" }); return; }
+
+        const verdict = await this.checkGoal({ goal, condition, command, lastWork: work });
+        onEvent({ type: "goal-check", n: i, done: verdict.done, reason: verdict.reason });
+        if (verdict.done) { onEvent({ type: "goal-done", iters: i, reason: verdict.reason }); return; }
+
+        noProgress = actedThisIter ? 0 : noProgress + 1;
+        if (noProgress >= 2) { onEvent({ type: "goal-stop", reason: "stopped: two iterations with no actions and the condition still unmet" }); return; }
+      }
+      onEvent({ type: "goal-stop", reason: `stopped: hit the ${maxIters}-iteration cap without meeting the condition` });
+    } catch (e) {
+      onEvent({ type: "goal-stop", reason: `loop error: ${String((e as Error)?.message ?? e)}` });
+    } finally {
+      this.goalActive = false;
+      this.permissionMode = prevMode;
+      onEvent({ type: "done" });
+    }
+  }
+
+  /** P-GOAL.2: stop a running /goal loop — aborts the current maker turn and halts further iterations.
+   *  No-op when no loop is active. */
+  cancelGoal(): void { if (this.goalActive) { this.goalCancelled = true; this.cancel(); } }
+  /** Whether a /goal loop is currently running (so the UI routes Stop to cancelGoal, not cancelChat). */
+  isGoalRunning(): boolean { return this.goalActive; }
+
+  /** P-GOAL.1: the loop's "done" checker, run in a SEPARATE complete() session (maker ≠ checker). With a
+   *  verification command it runs it and reports exit-0 (a real proof); otherwise it judges the goal
+   *  against the maker's reported work, conservatively. Fail-closed: an empty/failed reply ⇒ not done. */
+  private async checkGoal(a: { goal: string; condition: string; command: string; lastWork: string }): Promise<{ done: boolean; reason: string }> {
+    if (a.command) {
+      const out = await this.complete(
+        `You are a verification CHECKER, separate from the agent that did the work. Run the given command EXACTLY in the workspace and report only the outcome. Do NOT modify any files or try to fix anything. Output ONLY strict JSON on one line: {"done": <true only if the command finished with exit code 0>, "reason": "<short summary of what happened>"}.`,
+        `Run this verification command and report whether it passed:\n\n\`\`\`\n${a.command}\n\`\`\``,
+        { idleMs: 180_000 },
+      );
+      return parseGoalVerdict(out);
+    }
+    const out = await this.complete(
+      `You are a strict CHECKER, separate from the agent that did the work. Decide whether the goal is fully met. Be conservative: if you are not sure, answer done=false. Output ONLY strict JSON on one line: {"done": bool, "reason": "<one line>"}.`,
+      `Goal: ${a.goal}\nStop condition: ${a.condition}\n\nThe agent reported:\n${(a.lastWork || "(no output)").slice(0, 4000)}\n\nIs the goal fully met?`,
+      { idleMs: 120_000 },
+    );
+    return parseGoalVerdict(out);
   }
 
   /** P-ACP.4: interrupt the in-flight turn. Sends the ACP `session/cancel` notification — omp aborts

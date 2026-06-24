@@ -3983,3 +3983,40 @@ A three-phase design, one ADR, separate increments.
 ### Relates to
 
 ADR-0029 (P-IDE.2 active-skill delivery — skills as re-delivered, delimited guidance); ADR-0042 (opt-in model extraction — the cost-gated, scanned model-assist pattern P-SKILL.2 reuses); ADR-0019 (gate/quarantine + Security-panel block surfacing); CLAUDE.md invariants #3 (fail-closed), #5 (untrusted delimited), and keystone #2 (semantic-promotion gate).
+
+-----
+
+## ADR-0046 — The `/goal` loop primitive: capped maker iterations with a separate, objective checker
+
+**Date:** 2026-06-24
+**Status:** **Accepted** — P-GOAL.1 (the run-to-condition loop) built this increment; pause/resume/persistence deferred to P-GOAL.2.
+**Context increment:** P-GOAL.1.
+
+### Context
+
+P-SLASH.1 *listed* `/goal` as a steering skill but omp has no native `/goal` (Claude Code / Codex do). The real primitive — the heart of Osmani's "Loop Engineering" — is a control loop: define a goal and a **verifiable** stop condition, the agent iterates, and **a separate checker (not the maker) decides "done."** This ADR builds that loop in the desktop ACP backend, where the two pieces already exist: `backend.prompt()` runs a turn on the **persistent** session (iterations build on each other), and `backend.complete()` runs a **throwaway** session — a natural maker≠checker split.
+
+### Decision
+
+A capped loop with an objective checker, fully gated. (User-chosen posture: objective-command-with-model-fallback; capped + auto-approve + gated.)
+
+**Loop (`backend.runGoal({goal, condition, command, maxIters}, onEvent)`):** for each iteration up to `maxIters`: (1) emit `goal-iter`; (2) run a **maker** turn via `prompt()` toward the goal (streaming the usual `token`/`thinking`/`tool` events; the per-iteration `done` is swallowed so the client sees one continuous loop); (3) run the **checker** in a *separate* `complete()` session; (4) emit `goal-check {done, reason}`; stop with `goal-done` if met, else continue. A single `done` closes the stream at the end.
+
+**Checker (`checkGoal`):** if a verification `command` is given, a separate checker session **runs it and reports exit-0** as strict JSON `{done, reason}` — a real proof (Osmani's "verifiable stopping condition"), and the checker is told NOT to modify anything. With no command, it falls back to a **model judgment** against the maker's reported work, conservative (unsure ⇒ not done). `parseGoalVerdict()` is a pure, unit-tested parser; **a failed/empty checker is treated as not-done** (fail-closed — the loop never *falsely* declares success).
+
+**Safety (the load-bearing part of an unattended loop):**
+- **Capped.** Hard `maxIters` (user-set, default 6) + **auto-stop on no-progress** (two iterations with no tool actions and still not done ⇒ stop). No runaway.
+- **Gated.** During the loop the backend forces `permissionMode: "auto"` so it runs unattended — but **every tool call is still scanned fail-closed by the in-process gate** (CLAUDE.md invariant #3). The gate, not human approval, is the safety boundary; the cap bounds cost.
+- **maker ≠ checker.** The checker is a distinct session (and may be a distinct model later); it never grades its own work.
+
+**Surface:** `POST /api/goal` streams the loop as NDJSON (same shape as `/api/chat` plus the `goal-*` events). The composer's `/goal` opens a small launcher (goal · optional verify command · max iterations) and renders the loop inline with per-iteration dividers and the checker's verdict.
+
+### What is deliberately deferred (P-GOAL.2+)
+
+- **Pause / resume / clear** and on-disk loop state (the article's "memory") — phase 1 is run-to-condition, in-session.
+- A **distinct checker model** (most-used / cheaper model) — phase 1's checker reuses the session model via `complete()`; ADR-0045's "model override on `complete()`" wrinkle applies here too.
+- **Scheduled automations** (the loop's "heartbeat") — a separate Loop-Engineering building block this harness doesn't yet expose.
+
+### Relates to
+
+ADR-0045 / P-SLASH.1 (listed `/goal` as a skill; this builds the primitive); ADR-0027 (ACP session/prompt + `complete()` plumbing); ADR-0028 (subagent maker/checker split — same principle applied to the stop condition); CLAUDE.md invariant #3 (fail-closed gate is the loop's safety boundary).

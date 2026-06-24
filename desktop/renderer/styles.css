@@ -507,6 +507,31 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .sl-opt.on{background:var(--bg-3);border-left-color:var(--accent-2)}
 .sl-nm{flex:none;font-size:13px;font-weight:600;color:var(--txt);font-family:var(--mono)}
 .sl-hint{flex:1 1 auto;min-width:0;font-size:11.5px;color:var(--txt-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* P-GOAL.1: /goal loop launcher modal + the in-chat loop rendering. */
+.goal-scrim{position:fixed;inset:0;z-index:200;background:rgba(0,0,0,.55);display:grid;place-items:center;animation:fade var(--t) var(--ease)}
+.goal-modal{width:min(520px,92vw);background:var(--bg-1);border:1px solid var(--line-strong);border-radius:16px;padding:20px;
+  box-shadow:0 20px 60px rgba(0,0,0,.55);display:flex;flex-direction:column;gap:8px;animation:rise var(--t-slow) var(--ease-out)}
+.goal-modal-h{display:flex;align-items:center;gap:8px;font-size:15px;font-weight:600;color:var(--txt)}
+.goal-modal-h .ic{color:var(--accent-2)}
+.goal-modal-sub{font-size:12px;color:var(--txt-3);line-height:1.5;margin-bottom:4px}
+.goal-lbl{font-size:11.5px;font-weight:600;color:var(--txt-2);margin-top:6px}
+.goal-opt{font-weight:400;color:var(--txt-4)}
+.goal-modal textarea.prov-key{resize:vertical;min-height:58px;font-family:inherit}
+.goal-row{display:flex;align-items:center;gap:10px;margin-top:6px}
+.goal-row .goal-lbl{margin:0}
+.goal-max{width:80px;flex:none}
+.goal-modal-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:14px}
+.goal-loop{display:flex;flex-direction:column;gap:10px}
+.goal-iter{border:1px solid var(--line-soft);border-left:2px solid var(--accent-dim);border-radius:11px;background:var(--bg-1);padding:10px 13px}
+.goal-iter-h{display:flex;align-items:center;gap:7px;font-family:var(--mono);font-size:11.5px;color:var(--accent-2);font-weight:600;margin-bottom:6px}
+.goal-act{display:flex;align-items:center;gap:7px;font-family:var(--mono);font-size:11.5px;color:var(--txt-3);margin-top:5px}
+.goal-act .ic{flex:none;color:var(--txt-4)}
+.goal-verdict{display:flex;align-items:center;gap:7px;font-size:12px;margin-top:8px;padding:6px 9px;border-radius:8px}
+.goal-verdict.ok{color:var(--green);background:color-mix(in srgb,var(--green) 12%,transparent)}
+.goal-verdict.no{color:var(--amber);background:color-mix(in srgb,var(--amber) 10%,transparent)}
+.goal-banner{display:flex;align-items:center;gap:9px;font-size:13px;font-weight:600;padding:10px 13px;border-radius:11px}
+.goal-banner.ok{color:var(--green);background:color-mix(in srgb,var(--green) 14%,transparent);border:1px solid color-mix(in srgb,var(--green) 40%,var(--line))}
+.goal-banner.stop{color:var(--txt-2);background:var(--bg-2);border:1px solid var(--line)}
 /* The send button lives OUTSIDE the bordered .composer box (the expanding/scrolling input window),
    bottom-aligned beside it, so a long prompt's scroll region is just the text. */
 .composer-row{max-width:min(1080px,94vw);margin:0 auto;display:flex;align-items:flex-end;gap:8px}

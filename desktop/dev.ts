@@ -479,6 +479,7 @@ const server = Bun.serve({
       }
       // P-ACP.4: Stop — interrupt the in-flight turn (reply + tool calls) via ACP session/cancel.
       if (p === "/api/chat/cancel" && req.method === "POST") { backend.cancel(); return json({ ok: true, data: { cancelled: true } }); }
+      if (p === "/api/goal/cancel" && req.method === "POST") { backend.cancelGoal(); return json({ ok: true, data: { cancelled: true } }); } // P-GOAL.2: stop the loop
       // P-IDE.2 (ADR-0029): set/clear the active BUNDLED skill. Its prompt is TRUSTED (app corpus), so
       // it's wrapped in `<active-skill>` and delivered as a user-turn preamble (persona/recall path) —
       // never the frozen prefix. Clearing passes {clear:true}.
@@ -506,6 +507,22 @@ const server = Bun.serve({
         const stream = new ReadableStream({
           async start(controller) {
             await backend.prompt(String(text ?? ""), (e) => { try { controller.enqueue(enc.encode(JSON.stringify(e) + "\n")); } catch { /* stream closed */ } });
+            try { controller.close(); } catch { /* already closed */ }
+          },
+        });
+        return new Response(stream, { headers: { "content-type": "application/x-ndjson; charset=utf-8", "cache-control": "no-store" } });
+      }
+      // P-GOAL.1 (ADR-0046): run a /goal loop — maker iterations + a separate verifiable checker, capped
+      // and gated. Streams the same NDJSON chat events plus goal-iter / goal-check / goal-done / goal-stop.
+      if (p === "/api/goal" && req.method === "POST") {
+        const b = await readBody<{ goal?: unknown; condition?: unknown; command?: unknown; maxIters?: unknown }>(req);
+        const enc = new TextEncoder();
+        const stream = new ReadableStream({
+          async start(controller) {
+            await backend.runGoal(
+              { goal: String(b.goal ?? ""), condition: String(b.condition ?? ""), command: b.command ? String(b.command) : undefined, maxIters: Number(b.maxIters) || 6 },
+              (e) => { try { controller.enqueue(enc.encode(JSON.stringify(e) + "\n")); } catch { /* stream closed */ } },
+            );
             try { controller.close(); } catch { /* already closed */ }
           },
         });

@@ -1902,3 +1902,42 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **next:** build the `/goal` loop primitive (ACP-backend control loop + objective stop-condition checker)
   as its own increment+ADR; surface the other Loop-Engineering building blocks (automations/scheduling) that
   this harness doesn't yet expose.
+
+-----
+
+## P-GOAL.1: the /goal loop primitive (ADR-0046)
+- **shipped:** ADR-0046 + the real `/goal` loop. `backend.runGoal({goal,condition,command,maxIters}, onEvent)`
+  (`desktop/acp_backend.ts`): runs MAKER iterations via `prompt()` on the persistent session toward the
+  goal, and after each one a SEPARATE checker (`checkGoal` → `complete()`, a throwaway session = maker≠checker)
+  decides "done" — running the verification `command` and reporting exit-0 (objective proof), or a
+  conservative model judgment as fallback. Capped (`maxIters`, ceiling 20) + auto-stop on 2 no-progress
+  iterations; runs unattended (`permissionMode:"auto"`) but EVERY tool call still scanned fail-closed by the
+  gate (the load-bearing safety boundary). `parseGoalVerdict` extracted to `desktop/goal_verdict.ts`, FAIL-
+  CLOSED (empty/garbled/malformed ⇒ not-done) with 10 unit tests. `POST /api/goal` streams NDJSON
+  (chat events + goal-iter/check/done/stop); `bridge.runGoal` (generalized `streamNdjson`); composer `/goal`
+  opens a launcher (goal · verify command · max iters) and renders the loop inline (iteration dividers,
+  per-round checker verdict, success/stop banner). Verified live: endpoint + UI both ran a real loop
+  (goal→READY, `echo ok`→exit 0→done in 1 iteration); typecheck clean (3 cfgs); goal_verdict 10/10; no console errors.
+- **stubbed (P-GOAL.2+):** pause/resume/clear + on-disk loop state (the article's "memory"); a DISTINCT
+  checker model (reuses the session model via `complete()` for now — same ADR-0045 model-override wrinkle);
+  scheduled automations (the loop's "heartbeat"). No `make demo` (loop needs a live model; parser is unit-tested,
+  loop integration-tested live).
+- **next:** P-GOAL.2 — persist loop state to disk + pause/resume; then automations/scheduling so a loop can
+  run on a cadence (the last missing Loop-Engineering building block in this harness).
+
+-----
+
+## P-GOAL.2: stop a running /goal loop (ADR-0046)
+- **shipped:** loop cancellation. `backend.cancelGoal()` (`desktop/acp_backend.ts`) sets a `goalCancelled`
+  flag and aborts the in-flight maker turn (`cancel()`); `runGoal` checks it before each iteration and right
+  after the maker turn, emitting `goal-stop "stopped by you"` and halting (no checker, no further iterations).
+  `goalActive`/`isGoalRunning` track loop state. `POST /api/goal/cancel` (dev.ts) → `cancelGoal`;
+  `bridge.cancelGoal`; the composer Stop button routes to the LOOP cancel while a loop streams
+  (`goalLoopRunning` flag in `runGoalLoop`, branch in `stopTurn`) and to the normal turn-cancel otherwise.
+  Verified live: a 5-iteration loop (verify `exit 1`, so the checker never says done) cancelled mid-iteration
+  → `goal-stop "stopped by you"` and the stream ended; goal_verdict 10/10; typecheck clean; no console errors.
+- **stubbed:** still no pause/RESUME or on-disk loop "memory" (cancel is a hard stop, not a resumable pause);
+  no distinct checker model; no scheduled automations. UI Stop-button routing verified by logic + endpoint
+  (the goalLoopRunning branch), not a synthetic button click.
+- **next:** P-GOAL.3 — on-disk loop state ("memory") + pause/resume so a stopped loop can be continued; then
+  scheduled automations (the loop's heartbeat).

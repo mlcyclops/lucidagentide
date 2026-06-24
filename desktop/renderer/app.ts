@@ -829,7 +829,9 @@ function renderQueued(): void {
  *  `done`/finally path flips `streaming` off and fires any pre-staged prompt. */
 async function stopTurn(): Promise<void> {
   if (!state.streaming) return;
-  try { await bridge.cancelChat(); } catch { /* best-effort; the turn will still settle */ }
+  // P-GOAL.2: a running /goal loop is cancelled at the LOOP level (halt iterations + abort the turn);
+  // an ordinary turn just cancels the turn.
+  try { await (goalLoopRunning ? bridge.cancelGoal() : bridge.cancelChat()); } catch { /* best-effort; it still settles */ }
 }
 
 // ───────────────────────── inspector ─────────────────────────
@@ -2184,6 +2186,67 @@ async function handleSkillFiles(fileList: FileList | File[], node: HTMLElement):
     actions: [{ label: "OK" }], timeout: 4200,
   });
 }
+// ── /goal loop (P-GOAL.1, ADR-0046) ───────────────────────────────────────────
+let goalLoopRunning = false; // P-GOAL.2: true while a /goal loop streams, so Stop cancels the LOOP
+// A launcher form (goal · optional verify command · max iterations), then a loop that streams maker
+// iterations with a separate checker's verdict each round. Every action is still gated server-side.
+function openGoalForm(): void {
+  const ov = el(`<div class="scrim goal-scrim"><div class="goal-modal">
+    <div class="goal-modal-h">${icon("bolt", 15)} Run a goal loop</div>
+    <div class="goal-modal-sub">The agent iterates until a verifiable condition holds. A separate checker grades each round; the security gate scans every action.</div>
+    <label class="goal-lbl">Goal</label>
+    <textarea id="goalGoal" class="prov-key" rows="3" placeholder="e.g. Make all auth tests pass and fix any lint errors"></textarea>
+    <label class="goal-lbl">Verification command <span class="goal-opt">optional, proves "done" by exit 0</span></label>
+    <input id="goalCmd" class="prov-key" placeholder="e.g. npm test && npm run lint" spellcheck="false" autocomplete="off" />
+    <div class="goal-row"><label class="goal-lbl">Max iterations</label><input id="goalMax" class="prov-key goal-max" type="number" min="1" max="20" value="6" /></div>
+    <div class="goal-modal-actions"><button class="btn-mini" id="goalCancel">Cancel</button><button class="btn-mini ok" id="goalRun">${icon("bolt", 12)} Run loop</button></div>
+  </div></div>`);
+  document.body.appendChild(ov);
+  const close = () => ov.remove();
+  $("#goalCancel", ov)?.addEventListener("click", close);
+  ov.addEventListener("mousedown", (e) => { if (e.target === ov) close(); });
+  $("#goalRun", ov)?.addEventListener("click", () => {
+    const goal = ($("#goalGoal", ov) as HTMLTextAreaElement).value.trim();
+    if (!goal) { showToast({ tone: "warn", title: "Add a goal", desc: "Describe what the loop should accomplish.", timeout: 2400 }); return; }
+    const command = ($("#goalCmd", ov) as HTMLInputElement).value.trim();
+    const maxIters = Math.min(20, Math.max(1, Number(($("#goalMax", ov) as HTMLInputElement).value) || 6));
+    close();
+    void runGoalLoop({ goal, condition: command || goal, command: command || undefined, maxIters });
+  });
+  ($("#goalGoal", ov) as HTMLTextAreaElement)?.focus();
+}
+async function runGoalLoop(opts: { goal: string; condition: string; command?: string; maxIters: number }): Promise<void> {
+  if (state.streaming) { showToast({ tone: "warn", title: "A turn is running", desc: "Wait for it to finish before starting a loop.", timeout: 2400 }); return; }
+  if (!autoCollapsedSessions) { autoCollapsedSessions = true; if (!state.sidebarCollapsed) toggleSidebar(true); }
+  state.lastPrompt = opts.goal;
+  addMessage("user", `/goal: ${opts.goal}${opts.command ? `\nverify: \`${opts.command}\`` : ""}  ·  up to ${opts.maxIters} iterations`);
+  state.streaming = true; goalLoopRunning = true; setSendEnabled();
+  const node = addMessage("assistant", "");
+  const textEl = $(".text", node) as HTMLElement; textEl.innerHTML = "";
+  const wrap = el(`<div class="goal-loop"></div>`); textEl.appendChild(wrap);
+  let iterEl: HTMLElement | null = null, streamEl: HTMLElement | null = null, buf = "";
+  const onEvent = (e: ChatEvent) => {
+    if (e.type === "goal-iter") {
+      buf = "";
+      iterEl = el(`<div class="goal-iter"><div class="goal-iter-h">${icon("refresh", 11)} Iteration ${e.n} of ${e.max}</div><div class="stream"></div></div>`);
+      wrap.appendChild(iterEl); streamEl = $(".stream", iterEl); scrollChat();
+    } else if (e.type === "token") { buf += e.text; if (streamEl) streamEl.innerHTML = renderMarkdown(buf) + `<span class="cursor"></span>`; scrollChat(); }
+    else if (e.type === "tool") { iterEl?.appendChild(el(`<div class="goal-act">${icon(phaseIcon(e.name), 12)} ${esc(phaseForTool(e.name, e.detail))}</div>`)); scrollChat(); }
+    else if (e.type === "subagent") { iterEl?.appendChild(el(`<div class="goal-act">${icon("bolt", 12)} Delegated to ${esc(e.agent)}</div>`)); scrollChat(); }
+    else if (e.type === "block") onBlock(e);
+    else if (e.type === "goal-check") {
+      if (streamEl) streamEl.innerHTML = renderMarkdown(buf); // freeze this round's text
+      iterEl?.appendChild(el(`<div class="goal-verdict ${e.done ? "ok" : "no"}">${icon(e.done ? "check" : "refresh", 12)} checker: ${e.done ? "condition met" : "not yet"} · ${esc(e.reason)}</div>`));
+      scrollChat();
+    }
+    else if (e.type === "goal-done") { wrap.appendChild(el(`<div class="goal-banner ok">${icon("check", 14)} Goal met in ${e.iters} iteration${e.iters === 1 ? "" : "s"}. ${esc(e.reason)}</div>`)); scrollChat(); }
+    else if (e.type === "goal-stop") { wrap.appendChild(el(`<div class="goal-banner stop">${icon("info", 14)} ${esc(e.reason)}</div>`)); scrollChat(); }
+    else if (e.type === "done") { if (streamEl) streamEl.innerHTML = renderMarkdown(buf); }
+  };
+  try { await bridge.runGoal(opts, onEvent); }
+  finally { state.streaming = false; goalLoopRunning = false; setSendEnabled(); void renderSessions(); void refreshBudget(false); }
+}
+
 // ── "/" command + skill autocomplete (P-SLASH.1) ──────────────────────────────
 // Type "/" in the composer to pop an inline, filtered list of slash commands (omp's) + skills
 // (built-in, most-used first; project) + /goal & /loop-engineering. Filters character-by-character;
@@ -2238,6 +2301,7 @@ function applySlash(it: SlashItem | undefined): void {
   if (!it) return;
   const ta = $("#input") as HTMLTextAreaElement;
   closeSlashAC();
+  if (it.activate === "goal") { ta.value = ""; autosize(ta); setSendEnabled(); openGoalForm(); return; } // /goal is the REAL loop primitive (P-GOAL.1)
   if (it.activate) { void activateBundledSkill(it.activate); ta.value = ""; } // built-in skill rides the next turn
   else if (it.complete) { ta.value = it.complete; }                          // command / project skill: finish typing args
   autosize(ta); setSendEnabled(); ta.focus();
