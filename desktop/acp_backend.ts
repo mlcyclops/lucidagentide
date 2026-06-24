@@ -14,6 +14,7 @@ import { ACPClient } from "./acp.ts";
 import { BUILD_POLICY, DELEGATION_POLICY } from "../harness/prompt/assembler.ts";
 import { currentWorkspace } from "./workspace.ts";
 import { learnFromTurn, recallPreamble } from "./personal.ts";
+import { buildUserTurnPreamble } from "./preamble.ts";
 import { recordTurns } from "./turns_log.ts";
 import { recordBlock } from "./security_log.ts";
 import { attribution, lastModel, mcpServersForAcp, setLastModel } from "./settings_store.ts";
@@ -52,24 +53,21 @@ class Backend {
   private sessionId: string | null = null;
   private starting: Promise<void> | null = null;
   private listener: ((e: ChatEvent) => void) | null = null;
-  // Approved (scanned + delimited) AskSage persona, delivered once per session
-  // inside the first user turn - never the frozen prefix (ADR-0007 / invariant #5).
+  // Approved (scanned + delimited) AskSage persona. STANDING guidance: re-delivered EVERY turn in the
+  // user turn (never the frozen prefix; ADR-0007 / invariant #5) so it doesn't fade (issue #54).
   private persona: string | null = null;
-  private personaDelivered = false;
-  // Personalization recall (P9.2): a <user-profile> block delivered once per session in
-  // the user turn (never the frozen prefix). Off unless personalization is enabled+unlocked.
-  private recallDelivered = false;
-  // Cross-session memory recall (ADR-0009 Phase A): a <recalled-memory> block of facts
-  // distilled in EARLIER sessions, delivered once per session in the user turn — never the
-  // frozen prefix (invariant #5/#6). Distinct from the P9.2 personalization recall above.
+  // Personalization recall (P9.2): the live <user-profile> block, re-read and re-delivered every turn
+  // (never the frozen prefix). Off unless personalization is enabled+unlocked.
+  // Cross-session memory recall (ADR-0009 Phase A): a <recalled-memory> block of facts distilled in
+  // EARLIER sessions, delivered ONCE per session in the user turn (a session-start recall, not standing
+  // guidance) — never the frozen prefix (invariant #5/#6). Distinct from the P9.2 recall above.
   private memoryRecall: string | null = null;
   private memoryRecallDelivered = false;
-  // P-IDE.2 (ADR-0029): an active BUNDLED skill's trusted guidance, delivered once per session in the
-  // user turn (same path as persona/recall — never the frozen prefix, never --append-system-prompt).
-  // Already wrapped (`<active-skill name="…">…</active-skill>`). Persists until cleared/changed.
+  // P-IDE.2 (ADR-0029): an active BUNDLED skill's trusted guidance. STANDING guidance: re-delivered
+  // every turn (never the frozen prefix, never --append-system-prompt) so the skill keeps guiding the
+  // agent until cleared (issue #54). Already wrapped (`<active-skill name="…">…</active-skill>`).
   private skill: string | null = null;
   private skillName = "";
-  private skillDelivered = false;
   configOptions: any[] = [];
   commands: any[] = [];
   // P-ACP.2 (ADR-0027): ACP session modes (omp exposes [default, plan]). Plan is a read-only
@@ -90,7 +88,7 @@ class Backend {
   private static readonly PERM_MS = 300_000; // 5 min to decide, then fail-closed (deny)
 
   /** Set/clear the active persona. Pass the ALREADY-scanned, delimiter-wrapped text. */
-  setPersona(wrapped: string | null): void { this.persona = wrapped; this.personaDelivered = false; }
+  setPersona(wrapped: string | null): void { this.persona = wrapped; }
 
   /** Set/clear the cross-session recall block. Pass the ALREADY-escaped, delimiter-wrapped
    *  text from buildRecall(); re-delivered in the first user turn of each session. */
@@ -98,7 +96,7 @@ class Backend {
 
   /** P-IDE.2: set/clear the active bundled skill. `wrapped` is the trusted `<active-skill …>` block
    *  (or null to clear). Re-delivered on the next turn so a skill change takes effect immediately. */
-  setSkill(wrapped: string | null, name = ""): void { this.skill = wrapped; this.skillName = wrapped ? name : ""; this.skillDelivered = false; }
+  setSkill(wrapped: string | null, name = ""): void { this.skill = wrapped; this.skillName = wrapped ? name : ""; }
   activeSkillName(): string { return this.skillName; }
 
   private emit(e: ChatEvent): void { this.listener?.(e); }
@@ -309,10 +307,7 @@ class Backend {
     await this.start();
     if (this.sessionId) await this.acp!.request("session/close", { sessionId: this.sessionId }).catch(() => {});
     this.sessionId = null;
-    this.personaDelivered = false; // re-deliver the persona in the fresh session
-    this.recallDelivered = false;
-    this.memoryRecallDelivered = false; // re-deliver cross-session recall in the fresh session
-    this.skillDelivered = false; // re-deliver the active bundled skill in the fresh session
+    this.memoryRecallDelivered = false; // re-deliver the cross-session recall once in the fresh session
     await this.ensureSession();
   }
 
@@ -321,10 +316,7 @@ class Backend {
   restart(): void {
     try { this.acp?.stop(); } catch { /* ignore */ }
     this.acp = null; this.starting = null; this.sessionId = null; this.listener = null;
-    this.personaDelivered = false; // keep the chosen persona; re-deliver after respawn
-    this.recallDelivered = false;
-    this.memoryRecallDelivered = false;
-    this.skillDelivered = false; // keep the active skill; re-deliver after respawn
+    this.memoryRecallDelivered = false; // persona/skill/profile are re-delivered every turn anyway (#54)
     this.availableModes = []; this.currentModeId = "default"; // re-captured from the fresh session
     // Drop any parked permission (deny) but KEEP permissionMode — the user's Ask choice survives a respawn.
     for (const [, fn] of this.permPending) fn(null);
@@ -353,14 +345,18 @@ class Backend {
     this.askActive = true; // permission requests in THIS turn may be forwarded to the UI (Ask mode)
     try {
       await this.ensureSession();
-      // Deliver, once per session in the user turn (never the frozen prefix): the approved
-      // persona (delimited untrusted) + the personalization recall (<user-profile> guidance).
-      let preamble = "";
-      if (this.persona && !this.personaDelivered) { preamble += `${this.persona}\n\n`; this.personaDelivered = true; }
-      if (this.skill && !this.skillDelivered) { preamble += `${this.skill}\n\n`; this.skillDelivered = true; } // P-IDE.2 bundled skill
-      if (!this.recallDelivered) { const r = recallPreamble(); if (r) preamble += `${r}\n\n`; this.recallDelivered = true; }
-      if (this.memoryRecall && !this.memoryRecallDelivered) { preamble += `${this.memoryRecall}\n\n`; this.memoryRecallDelivered = true; }
-      const body = preamble + text;
+      // Assemble the user-turn preamble (never the frozen prefix; invariant #5/#6). Issue #54:
+      // persona + skill + the live <user-profile> profile are STANDING guidance re-delivered every
+      // turn; the cross-session <recalled-memory> is a one-time session-start recall. See preamble.ts.
+      const built = buildUserTurnPreamble({
+        persona: this.persona,
+        skill: this.skill,
+        profile: recallPreamble(), // P9.2: re-read each turn so newly-learned facts show up
+        memoryRecall: this.memoryRecall,
+        memoryRecallDelivered: this.memoryRecallDelivered,
+      });
+      this.memoryRecallDelivered = built.memoryRecallDelivered;
+      const body = built.preamble + text;
       arm(); // start the idle clock now (covers a stall BEFORE the first token)
       const stall = new Promise<never>((_, reject) => { onStall = reject; });
       await Promise.race([
