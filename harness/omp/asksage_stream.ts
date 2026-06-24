@@ -13,7 +13,7 @@
 // omp's event-stream type); registered via pi.registerProvider({ api, streamSimple }).
 
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
-import { toolWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
+import { normalizeSchemaForGoogle, toolWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
 
 export type AsksageRoute = "anthropic" | "google" | "query";
 export interface AsksageStreamCfg { base: string; key: string }
@@ -86,6 +86,40 @@ function toolInputSchema(tool: any): Record<string, unknown> {
   let s: Record<string, unknown> = {};
   try { const w = toolWireSchema(tool); if (isRecord(w)) s = w; } catch { /* fall back to an empty object schema */ }
   return { ...s, type: "object", properties: isRecord(s.properties) ? s.properties : {} };
+}
+
+// A Gemini `generateContent` content turn: text, or functionCall / functionResponse parts.
+interface GoogleContent { role: "user" | "model"; parts: any[] }
+
+// Build Gemini `contents`, PRESERVING tool-use structure (mirrors omp's native Google provider):
+// an assistant `toolCall` → a `functionCall` part in a "model" turn; an omp `toolResult` → a
+// `functionResponse` part ({output} or {error}) merged into a "user" turn. Real Gemini models match
+// responses to calls by NAME (no id — omp's `requiresToolCallId` is false for non-Claude models).
+function toGoogleContents(context: any): { system: string; contents: GoogleContent[] } {
+  const system = ((context?.systemPrompt ?? []) as string[]).join("\n\n").trim();
+  const contents: GoogleContent[] = [];
+  for (const m of (context?.messages ?? []) as any[]) {
+    if (m.role === "assistant") {
+      const parts: any[] = [];
+      for (const c of Array.isArray(m.content) ? m.content : []) {
+        if (c?.type === "text" && typeof c.text === "string" && c.text) parts.push({ text: c.text });
+        else if (c?.type === "toolCall") parts.push({ functionCall: { name: String(c.name), args: isRecord(c.arguments) ? c.arguments : {} } });
+      }
+      if (!parts.length) { const t = extractText(m.content); if (t.trim()) parts.push({ text: t }); }
+      if (parts.length) contents.push({ role: "model", parts });
+    } else if (m.role === "toolResult") {
+      const value = extractText(m.content) || " ";
+      const part = { functionResponse: { name: String(m.toolName ?? ""), response: m.isError ? { error: value } : { output: value } } };
+      const last = contents[contents.length - 1];
+      if (last && last.role === "user" && last.parts.some((p: any) => p.functionResponse)) last.parts.push(part);
+      else contents.push({ role: "user", parts: [part] });
+    } else {
+      const t = extractText(m.content);
+      if (t.trim()) contents.push({ role: "user", parts: [{ text: t }] });
+    }
+  }
+  if (!contents.length) contents.push({ role: "user", parts: [{ text: " " }] });
+  return { system, contents };
 }
 
 const jsonHeaders = (key: string, extra: Record<string, string> = {}) => ({
@@ -173,18 +207,33 @@ async function callQuery(cfg: AsksageStreamCfg, system: string, msgs: { role: st
   return { text, usage: { input: u.input_tokens ?? u.prompt_tokens ?? 0, output: u.output_tokens ?? u.completion_tokens ?? 0, cacheRead: 0, cacheWrite: 0 } };
 }
 
-async function callGoogle(cfg: AsksageStreamCfg, model: string, system: string, msgs: { role: string; text: string }[]): Promise<RouteResult> {
-  const contents = msgs.map((m) => ({ role: m.role === "assistant" ? "model" : "user", parts: [{ text: m.text }] }));
+interface GoogleResult extends RouteResult { toolCalls: OmpToolCall[]; stopReason: "stop" | "length" | "toolUse" }
+
+// Call AskSage's Gemini route WITH tool support: pass functionDeclarations, parse functionCall parts.
+// Mirrors omp's native Google provider — `parametersJsonSchema` (full JSON Schema, normalized for
+// Google) for real Gemini models. Gemini gives no call id, so we mint a synthetic one (omp tracks the
+// call→result mapping internally and replays the result back by NAME).
+async function callGoogle(cfg: AsksageStreamCfg, model: string, system: string, contents: GoogleContent[], tools: any[] | undefined, maxTokens: number): Promise<GoogleResult> {
+  const body: any = { contents, ...(system ? { systemInstruction: { parts: [{ text: system }] } } : {}), generationConfig: { maxOutputTokens: maxTokens } };
+  if (Array.isArray(tools) && tools.length) {
+    body.tools = [{ functionDeclarations: tools.map((t) => ({ name: t.name, description: t.description ?? "", parametersJsonSchema: normalizeSchemaForGoogle(toolWireSchema(t)) })) }];
+  }
   const r = await fetch(`${cfg.base}/google/v1beta/models/${model}:generateContent`, {
     method: "POST",
     headers: jsonHeaders(cfg.key),
-    body: JSON.stringify({ contents, ...(system ? { systemInstruction: { parts: [{ text: system }] } } : {}) }),
+    body: JSON.stringify(body),
   });
   const j: any = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(j?.error?.message ?? `AskSage google HTTP ${r.status}`);
-  const text = (j?.candidates?.[0]?.content?.parts ?? []).map((p: any) => p?.text).filter(Boolean).join("");
+  const parts: any[] = j?.candidates?.[0]?.content?.parts ?? [];
+  const text = parts.filter((p) => typeof p?.text === "string").map((p) => p.text).join("");
+  let n = 0;
+  const toolCalls: OmpToolCall[] = parts
+    .filter((p) => p?.functionCall)
+    .map((p) => ({ type: "toolCall", id: `${p.functionCall.name || "tool"}-${n++}`, name: String(p.functionCall.name ?? ""), arguments: isRecord(p.functionCall.args) ? p.functionCall.args : {} }));
+  const stopReason: GoogleResult["stopReason"] = toolCalls.length ? "toolUse" : j?.candidates?.[0]?.finishReason === "MAX_TOKENS" ? "length" : "stop";
   const um = j?.usageMetadata ?? {};
-  return { text, usage: { input: um.promptTokenCount ?? 0, output: um.candidatesTokenCount ?? 0, cacheRead: 0, cacheWrite: 0 } };
+  return { text, toolCalls, stopReason, usage: { input: um.promptTokenCount ?? 0, output: um.candidatesTokenCount ?? 0, cacheRead: 0, cacheWrite: 0 } };
 }
 
 /** Build a streamSimple bound to a route. `getCfg` is read lazily so a key/base
@@ -206,44 +255,46 @@ export function makeAsksageStream(route: AsksageRoute, getCfg: () => AsksageStre
         stopReason,
         timestamp: Date.now(),
       });
+      // Emit a (possibly tool-calling) assistant turn: text first, then one toolcall_start/end per call,
+      // then `done`. omp executes each call (every one scanned by the in-process gate) and loops on toolUse.
+      const emit = (text: string, toolCalls: OmpToolCall[], stop: "stop" | "length", usage: RouteResult["usage"]) => {
+        const reason = toolCalls.length ? "toolUse" : stop;
+        const content: any[] = [];
+        if (text) content.push({ type: "text", text });
+        for (const tc of toolCalls) content.push(tc);
+        const message = mkMessage(content, reason, usage);
+        stream.push({ type: "start", partial: message });
+        let idx = 0;
+        if (text) {
+          stream.push({ type: "text_start", contentIndex: idx, partial: message });
+          stream.push({ type: "text_delta", contentIndex: idx, delta: text, partial: message });
+          stream.push({ type: "text_end", contentIndex: idx, content: text, partial: message });
+          idx++;
+        }
+        for (const tc of toolCalls) {
+          stream.push({ type: "toolcall_start", contentIndex: idx, partial: message });
+          stream.push({ type: "toolcall_end", contentIndex: idx, toolCall: tc, partial: message });
+          idx++;
+        }
+        stream.push({ type: "done", reason, message });
+      };
       try {
         const maxTokens = Number(model?.maxTokens) || 8192;
         if (route === "anthropic") {
-          // Tool-capable path: pass tools, parse tool_use blocks, and emit toolcall events so omp executes
-          // them (each scanned by the in-process gate) and loops. Falls back to plain text when no tools.
           const { system: sys, messages: amsgs } = toAnthropicMessages(context);
           const res = await callAnthropic(cfg, model.id, sys, amsgs, context?.tools, maxTokens);
-          const content: any[] = [];
-          if (res.text) content.push({ type: "text", text: res.text });
-          for (const tc of res.toolCalls) content.push(tc);
-          const reason = res.toolCalls.length ? "toolUse" : res.stopReason === "length" ? "length" : "stop";
-          const message = mkMessage(content, reason, res.usage);
-          stream.push({ type: "start", partial: message });
-          let idx = 0;
-          if (res.text) {
-            stream.push({ type: "text_start", contentIndex: idx, partial: message });
-            stream.push({ type: "text_delta", contentIndex: idx, delta: res.text, partial: message });
-            stream.push({ type: "text_end", contentIndex: idx, content: res.text, partial: message });
-            idx++;
-          }
-          for (const tc of res.toolCalls) {
-            stream.push({ type: "toolcall_start", contentIndex: idx, partial: message });
-            stream.push({ type: "toolcall_end", contentIndex: idx, toolCall: tc, partial: message });
-            idx++;
-          }
-          stream.push({ type: "done", reason, message });
+          emit(res.text, res.toolCalls, res.stopReason === "length" ? "length" : "stop", res.usage);
           return;
         }
-        // Google / RAG: text-only (no tool use; see Fix 5 in the bug doc).
-        const { text, usage } = route === "query"
-          ? await callQuery(cfg, system, messages)
-          : await callGoogle(cfg, model.id, system, messages);
-        const message = mkMessage(text ? [{ type: "text", text }] : [], "stop", usage);
-        stream.push({ type: "start", partial: message });
-        stream.push({ type: "text_start", contentIndex: 0, partial: message });
-        stream.push({ type: "text_delta", contentIndex: 0, delta: text, partial: message });
-        stream.push({ type: "text_end", contentIndex: 0, content: text, partial: message });
-        stream.push({ type: "done", reason: "stop", message }); // resolves the final result
+        if (route === "google") {
+          const { system: sys, contents } = toGoogleContents(context);
+          const res = await callGoogle(cfg, model.id, sys, contents, context?.tools, maxTokens);
+          emit(res.text, res.toolCalls, res.stopReason === "length" ? "length" : "stop", res.usage);
+          return;
+        }
+        // RAG /query: single-message, text-only (no tool use).
+        const { text, usage } = await callQuery(cfg, system, messages);
+        emit(text, [], "stop", usage);
       } catch (e) {
         const errMessage = mkMessage([], "error");
         errMessage.errorMessage = String((e as Error)?.message ?? e);

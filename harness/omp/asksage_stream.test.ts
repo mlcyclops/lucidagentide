@@ -89,14 +89,50 @@ describe("AskSage Anthropic tool use", () => {
     expect(body.tools).toBeUndefined();
   });
 
-  test("Google route stays text-only (no regression, no tools)", async () => {
+});
+
+describe("AskSage Gemini tool use", () => {
+  const google = makeAsksageStream("google", () => cfg);
+  const gemini = { id: "gemini-x", api: "asksage-google", provider: "asksage-google", maxTokens: 1000 };
+
+  test("a functionCall response emits toolcall_start/end with stopReason toolUse", async () => {
+    mockFetch({ candidates: [{ content: { parts: [{ functionCall: { name: "write_file", args: { path: "x.txt" } } }] }, finishReason: "STOP" }], usageMetadata: {} });
+    const events = await collect(google(gemini, { messages: [{ role: "user", content: "go" }], tools: [writeTool] }));
+    const end = events.find((e) => e.type === "toolcall_end");
+    expect(end.toolCall.name).toBe("write_file");
+    expect(end.toolCall.arguments).toEqual({ path: "x.txt" });
+    const done = events.find((e) => e.type === "done");
+    expect(done.reason).toBe("toolUse");
+    expect(done.message.content.some((c: any) => c.type === "toolCall")).toBe(true);
+  });
+
+  test("wire format: functionDeclarations carry parametersJsonSchema; round-trip is functionCall + functionResponse by name", async () => {
+    let body: any;
+    mockFetch({ candidates: [{ content: { parts: [{ text: "ok" }] }, finishReason: "STOP" }], usageMetadata: {} }, (_u, init) => { body = JSON.parse(init.body); });
+    await collect(google(gemini, {
+      messages: [
+        { role: "user", content: "create a.txt" },
+        { role: "assistant", content: [{ type: "toolCall", id: "write_file-0", name: "write_file", arguments: { path: "a.txt" } }] },
+        { role: "toolResult", toolCallId: "write_file-0", toolName: "write_file", content: [{ type: "text", text: "wrote a.txt" }], isError: false },
+      ],
+      tools: [writeTool],
+    }));
+    expect(body.tools[0].functionDeclarations[0].name).toBe("write_file");
+    expect(body.tools[0].functionDeclarations[0].parametersJsonSchema).toBeDefined();
+    const modelTurn = body.contents.find((c: any) => c.role === "model");
+    expect(modelTurn.parts.some((p: any) => p.functionCall?.name === "write_file")).toBe(true);
+    const userTurn = body.contents.find((c: any) => Array.isArray(c.parts) && c.parts.some((p: any) => p.functionResponse));
+    expect(userTurn.parts[0].functionResponse.name).toBe("write_file"); // Gemini matches by name, not id
+    expect(userTurn.parts[0].functionResponse.response.output).toContain("wrote a.txt");
+  });
+
+  test("text-only with no tools is unchanged (no tools key, reason stop)", async () => {
     let body: any;
     mockFetch({ candidates: [{ content: { parts: [{ text: "google reply" }] } }], usageMetadata: { promptTokenCount: 4, candidatesTokenCount: 3 } }, (_u, init) => { body = JSON.parse(init.body); });
-    const google = makeAsksageStream("google", () => cfg);
-    const events = await collect(google({ id: "gemini-x" }, { messages: [{ role: "user", content: "hi" }], tools: [writeTool] }));
+    const events = await collect(google(gemini, { messages: [{ role: "user", content: "hi" }] }));
     const done = events.find((e) => e.type === "done");
     expect(done.reason).toBe("stop");
     expect(done.message.content).toEqual([{ type: "text", text: "google reply" }]);
-    expect(body.tools).toBeUndefined(); // Google tool use is out of scope; never sent
+    expect(body.tools).toBeUndefined();
   });
 });

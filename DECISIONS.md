@@ -4363,3 +4363,23 @@ blocked). Editor functionality (IntelliSense workers) restored on the locked-dow
 ### Relates to
 
 ADR-0036 / P-IDE.6 (the strict CSP + same-origin worker bootstrap this minimally relaxes).
+
+### Addendum — Gemini tool use (completes ADR-0051's deferred Fix 5)
+
+The AskSage Gemini route is now tool-capable too (the bug doc had deferred it). Mirroring omp's own
+native Google provider so the wire format matches what omp uses against real Gemini:
+
+- **Tools sent** as `tools: [{ functionDeclarations: [{ name, description, parametersJsonSchema }] }]`,
+  the schema via `normalizeSchemaForGoogle(toolWireSchema(tool))` (omp's Gemini normalizer).
+- **Calls parsed** from `candidates[0].content.parts[].functionCall {name, args}` → omp `ToolCall`s.
+  Gemini returns no call id, so we mint a synthetic one; omp's `requiresToolCallId` is false for
+  non-Claude models, so results are replayed back by **name**, not id.
+- **History preserved** by `toGoogleContents`: an assistant `toolCall` → a `functionCall` part in a
+  `model` turn; an omp `toolResult` → a `functionResponse` part (`{output}` or `{error}`) merged into
+  a single `user` turn — exactly omp's structure. Emission reuses the same `emit()` path (toolcall
+  events + `toolUse`), so the gate scans Gemini tool calls identically.
+
+Only the RAG `/query` route stays text-only (single-message endpoint, no tool use). 3 new Gemini tests
+(functionCall→events, the `functionDeclarations`/`functionResponse` wire round-trip, text-only no-tools)
+alongside the 4 Anthropic ones. `bun test harness` 473. Live gov-gateway verification is still the
+manual check (same caveat as the Anthropic path — both are unit-tested against mocked HTTP).

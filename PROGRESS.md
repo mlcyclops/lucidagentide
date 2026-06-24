@@ -2079,3 +2079,17 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **stubbed:** Gemini tool use (needs functionDeclarations) deferred; AskSage tool use verified via mocked HTTP
   (live gov-gateway round-trip is the manual check in the bug doc).
 - **next:** Gemini functionDeclarations tool support if needed; live end-to-end tool run on the gov gateway.
+
+---
+**AskSage Gemini tool use (completes ADR-0051)**
+- **shipped:** the AskSage Gemini route is now tool-capable, mirroring omp's native Google provider:
+  callGoogle sends functionDeclarations (parametersJsonSchema via normalizeSchemaForGoogle+toolWireSchema),
+  parses functionCall parts into omp ToolCalls (synthetic id; results replayed by NAME since Gemini gives no
+  id), and toGoogleContents rebuilds functionCall (model turn) / functionResponse (merged user turn) for
+  multi-turn loops. Shared emit() path → same toolcall events + gate scanning as Anthropic. RAG /query stays
+  text-only. 3 new Gemini tests (+4 Anthropic) = 7 in asksage_stream.test.ts. bun test harness 473 · desktop
+  326 · typecheck clean (3 cfgs).
+- **stubbed:** verified against mocked HTTP only — live AskSage gov-gateway tool round-trip (both Claude and
+  Gemini) is the manual check; parametersJsonSchema assumes AskSage's Gemini proxy is current (omp uses it for
+  real Gemini).
+- **next:** live end-to-end tool run on the gov gateway for both providers.
