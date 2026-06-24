@@ -1978,3 +1978,18 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
   so it's continue-by-context, not session-restore); no distinct checker model; no scheduled automations.
 - **next:** P-GOAL.5 — scheduled automations (run a loop / discovery on a cadence) — the last Loop-Engineering
   building block this harness doesn't expose; then a distinct/cheaper checker model.
+
+---
+**P-GOAL.5 — scheduled automations (the loop's heartbeat) (ADR-0047)**
+- **shipped:** an automation = a saved `/goal` spec + a cadence, run by an IN-PROCESS scheduler (ticks every
+  30s while the app is open; never the OS — keeps the fail-closed gate armed, invariant #2/#3). `desktop/automations.ts`
+  = store (`<ws>/.omp/automations.json`, pathWithin-confined, fail-safe) + PURE `isDue` (interval `everyMin` OR
+  `daily` `hhmm`, local time). Created **disabled** until the user arms it; a tick never preempts a chat/loop/pending
+  permission and runs at most one due automation, stamping `lastRunAt` up-front. `runAutomation` reuses `runGoal`
+  (same maker/checker, durable memory, gate). Endpoints `GET/POST /api/automations` + `/{enable,delete,run}`; the
+  `/goal` modal gained a schedule picker + saved-automations list (toggle · run-now · delete · last-run). 10 new unit
+  tests; `bun test desktop` 304/304; typecheck clean (3 cfgs); live-verified CRUD + UI (disabled-by-default, condition
+  defaults to command, picker reveals interval/daily, toggle persists), workspace cleaned, clean console.
+- **stubbed:** no distinct/cheaper CHECKER model (checker still shares the maker model via `complete()`); no OS-level
+  scheduling for app-closed runs (intentionally out of scope — fail-closed grounds); run-now streams, background ticks don't.
+- **next:** distinct/cheaper checker model — the last stub on the goal loop; the Loop-Engineering building blocks are now all exposed.

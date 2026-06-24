@@ -529,6 +529,27 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .goal-resume .ic{flex:none;color:var(--accent-2)}
 .goal-resume .gr-goal{flex:1 1 auto;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .goal-resume .gr-iters{flex:none;font-family:var(--mono);font-size:10px;color:var(--txt-4)}
+/* P-GOAL.5: schedule picker + saved-automation rows in the goal modal */
+.goal-sched{flex-wrap:wrap;gap:6px}
+.goal-sched .goal-lbl{flex:1 1 100%;display:flex;align-items:center;gap:5px}
+.goal-sched .goal-lbl .ic{color:var(--accent-2)}
+.goal-cadk,.goal-cadu{width:auto;min-width:120px}
+.goal-cadn{width:64px}.goal-cadt{width:auto}
+#goalCadInterval{display:inline-flex;gap:6px}
+#goalAutoSec{display:flex;flex-direction:column;gap:5px;margin-top:4px}
+.goal-auto{display:flex;align-items:center;gap:9px;padding:7px 9px;border:1px solid var(--line);border-radius:9px;background:var(--bg-2)}
+.goal-auto.on{border-color:color-mix(in srgb,var(--green) 38%,var(--line));background:color-mix(in srgb,var(--green) 7%,var(--bg-2))}
+.goal-auto .ga-body{flex:1 1 auto;min-width:0}
+.ga-goal{font-size:12px;color:var(--txt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ga-meta{font-size:10px;color:var(--txt-4);font-family:var(--mono);display:flex;align-items:center;gap:5px;margin-top:2px}
+.ga-meta .ic{flex:none}
+.ga-toggle{flex:none;width:30px;height:17px;border-radius:9px;border:1px solid var(--line);background:var(--bg-3);position:relative;cursor:pointer;transition:background var(--t),border-color var(--t)}
+.ga-toggle::after{content:"";position:absolute;top:1px;left:1px;width:13px;height:13px;border-radius:50%;background:var(--txt-4);transition:transform var(--t),background var(--t)}
+.goal-auto.on .ga-toggle{background:color-mix(in srgb,var(--green) 30%,transparent);border-color:color-mix(in srgb,var(--green) 50%,var(--line))}
+.goal-auto.on .ga-toggle::after{transform:translateX(13px);background:var(--green)}
+.ga-run,.ga-del{flex:none;width:26px;height:26px;display:grid;place-items:center;border:1px solid var(--line);border-radius:7px;background:var(--bg-1);color:var(--txt-3);cursor:pointer;transition:background var(--t),color var(--t),border-color var(--t)}
+.ga-run:hover{color:var(--accent-2);border-color:color-mix(in srgb,var(--accent) 40%,var(--line))}
+.ga-del:hover{color:var(--red,#e0585f);border-color:color-mix(in srgb,var(--red,#e0585f) 40%,var(--line))}
 .goal-loop{display:flex;flex-direction:column;gap:10px}
 .goal-mem{display:flex;align-items:center;gap:7px;font-size:11px;color:var(--txt-4)}
 .goal-mem .ic{flex:none;color:var(--txt-4)}

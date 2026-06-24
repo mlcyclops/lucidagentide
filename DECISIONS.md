@@ -4020,3 +4020,75 @@ A capped loop with an objective checker, fully gated. (User-chosen posture: obje
 ### Relates to
 
 ADR-0045 / P-SLASH.1 (listed `/goal` as a skill; this builds the primitive); ADR-0027 (ACP session/prompt + `complete()` plumbing); ADR-0028 (subagent maker/checker split — same principle applied to the stop condition); CLAUDE.md invariant #3 (fail-closed gate is the loop's safety boundary).
+
+-----
+
+## ADR-0047 — Scheduled automations: the loop's in-process "heartbeat"
+
+**Date:** 2026-06-24
+**Status:** **Accepted** — P-GOAL.5 built this increment (in-process scheduler; interval + daily cadence; created disabled).
+**Context increment:** P-GOAL.5.
+
+### Context
+
+ADR-0046 gave us the `/goal` loop (maker iterations + a separate objective checker), and
+P-GOAL.2–4 added cancellation, durable on-disk memory, and resume. The one Loop-Engineering
+building block (Osmani) the harness still didn't expose is the **automation** — the loop's
+"heartbeat": a saved goal that runs on a *cadence* without a human kicking it off each time.
+"The loop you don't have to start is the one that compounds."
+
+### Decision
+
+An **automation is just a saved `/goal` spec** — goal + verifiable condition + optional
+verification command + iteration cap — **plus a cadence**. It reuses `runGoal` wholesale, so
+every scheduled tick inherits the exact same safety envelope: maker ≠ checker, the durable
+on-disk loop memory, and — load-bearing — the **in-process fail-closed gate scanning every
+tool call** (CLAUDE.md #3/#4). Three forks were decided with the user:
+
+1. **In-process scheduler only (app open).** A `setInterval` inside the harness ticks every
+   30s and fires the first *due* automation. We deliberately do **not** register with the OS
+   scheduler (Windows Task Scheduler): that would spawn omp in a process where the in-process
+   gate isn't guaranteed armed — a fail-closed risk — and would drag platform-specific surface
+   against the TS-only boundary (invariant #2). The safe envelope is "while the app is open";
+   nothing runs once it's closed. The timer is `.unref()`'d so it never keeps the process alive.
+
+2. **Cadence is interval *or* daily.** `{kind:"interval", everyMin}` ("every N minutes/hours")
+   or `{kind:"daily", hhmm}` ("every day at HH:MM", local time). `isDue(a, now)` is a **pure**
+   function (heavily unit-tested) so scheduling is deterministic and side-effect-free; the timer
+   only decides *whether* to call `runGoal`, never *how* the loop behaves.
+
+3. **Disabled until enabled.** A freshly-created automation is **inert** — saved but not armed.
+   Nothing runs commands unattended on a cadence until the user explicitly flips it on. Safest
+   default for an unattended-loop primitive; arming is a deliberate, reversible toggle.
+
+### Mechanics / invariants preserved
+
+- **Store:** a single JSON array at `<workspace>/.omp/automations.json`, confined via
+  `pathWithin` and fully fail-safe — any read/parse/write error degrades to "no automations",
+  never throwing into the timer. A malformed cadence is rejected at create time (fail-closed:
+  a bad cadence never arms). `desktop/automations.ts` is the store + the pure scheduling math.
+- **Never preempt the user.** A tick is skipped if a chat turn (`askActive`), another loop
+  (`goalActive`), a pending permission, or an in-flight automation (`autoRunning`) is active.
+  At most one automation runs per tick. `lastRunAt` is stamped *up-front* so a slow run can't be
+  re-fired by the next tick before it finishes.
+- **Background runs stream nowhere** — the durable goal-memory file written by `runGoal`
+  (ADR-0046) is the audit trail; `lastResult` on the record is surfaced in the UI. A **"run
+  now"** action streams the same goal events into the chat transcript, reusing the P-GOAL.1
+  inline loop renderer.
+- **Surface:** `GET/POST /api/automations`, `POST /api/automations/{enable,delete,run}`; the
+  scheduler is armed once at dev-server startup (`backend.startAutomationScheduler()`). The
+  `/goal` modal gained a schedule picker ("Run once now / Every… / Daily at…") and a saved-
+  automations list (enable toggle · run-now · delete · last-run status).
+
+### Consequences
+
+The Loop-Engineering picture is now complete in this harness: maker/checker loop, cancellation,
+durable memory, resume, and — now — scheduled automations. Still deferred: a distinct/cheaper
+*checker* model (the checker currently shares the maker's model via `complete()`), and OS-level
+scheduling for app-closed runs (intentionally out of scope on the fail-closed grounds above).
+
+### Relates to
+
+ADR-0046 / P-GOAL.1–4 (the loop, cancel, memory, resume this schedules); CLAUDE.md invariants
+#2 (TS-only — why no OS scheduler), #3/#4 (the in-process fail-closed gate is what makes an
+unattended cadence safe); ADR-0028 (maker/checker split the loop reuses).

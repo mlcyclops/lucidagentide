@@ -20,6 +20,7 @@ import { recordBlock } from "./security_log.ts";
 import { attribution, lastModel, mcpServersForAcp, setLastModel } from "./settings_store.ts";
 import { parseGoalVerdict } from "./goal_verdict.ts";
 import { appendGoalIteration, finishGoalMemory, type GoalMemory, resumeGoalMemory, startGoalMemory } from "./goal_memory.ts";
+import { type Automation, listAutomations, nextDueAutomation, updateAutomation } from "./automations.ts";
 
 const REPO = join(import.meta.dir, "..");
 // Absolute so the gate loads from THIS repo even when omp runs in another workspace.
@@ -93,6 +94,11 @@ class Backend {
   // P-GOAL.2 (ADR-0046): a /goal loop is running, and a request to stop it after the current iteration.
   private goalActive = false;
   private goalCancelled = false;
+  // P-GOAL.5 (ADR-0047): in-process automation scheduler. A timer ticks while the app is open and runs
+  // the first DUE automation through runGoal. `autoRunning` guards against a tick overlapping itself.
+  private autoTimer: ReturnType<typeof setInterval> | null = null;
+  private autoRunning = false;
+  private static readonly AUTO_TICK_MS = 30_000;
   private askActive = false;            // true only during a chat turn (never the util `complete()`)
   private permSeq = 0;
   private permPending = new Map<string, (optionId: string | null) => void>();
@@ -458,6 +464,54 @@ class Backend {
   cancelGoal(): void { if (this.goalActive) { this.goalCancelled = true; this.cancel(); } }
   /** Whether a /goal loop is currently running (so the UI routes Stop to cancelGoal, not cancelChat). */
   isGoalRunning(): boolean { return this.goalActive; }
+
+  // P-GOAL.5 (ADR-0047): the automation scheduler. Arm a timer that, while the app is open, fires the
+  // first DUE automation through runGoal — same maker/checker loop, same fail-closed gate, same durable
+  // memory. The OS is never involved; nothing runs once the app is closed (that's the safe envelope).
+  startAutomationScheduler(): void {
+    if (this.autoTimer) return;
+    this.autoTimer = setInterval(() => { void this.tickAutomations(); }, Backend.AUTO_TICK_MS);
+    if (typeof (this.autoTimer as any)?.unref === "function") (this.autoTimer as any).unref(); // don't keep the process alive
+  }
+  stopAutomationScheduler(): void { if (this.autoTimer) { clearInterval(this.autoTimer); this.autoTimer = null; } }
+
+  /** One scheduler tick: never overlap a live chat turn or another loop; run at most one due automation. */
+  private async tickAutomations(): Promise<void> {
+    if (this.askActive || this.goalActive || this.autoRunning || this.pendingPerms > 0) return; // never preempt the user
+    const due = nextDueAutomation(currentWorkspace(), Date.now());
+    if (!due) return;
+    await this.runAutomation(due.id).catch(() => {}); // a background run must never crash the timer
+  }
+
+  /** Run one saved automation now (the scheduler's tick, or a manual "run now"). Records the outcome to
+   *  the store so the UI can show last-run status. Background runs stream nowhere — the durable goal
+   *  memory file (written by runGoal) is the audit trail. */
+  async runAutomation(id: string, onEvent?: (e: ChatEvent) => void): Promise<{ ran: boolean; result?: string }> {
+    if (this.autoRunning || this.goalActive || this.askActive) return { ran: false };
+    const ws = currentWorkspace();
+    const a: Automation | undefined = listAutomations(ws).find((x) => x.id === id);
+    if (!a) return { ran: false };
+    this.autoRunning = true;
+    // Stamp lastRunAt up-front so a slow run can't be re-fired by the next tick before it finishes.
+    updateAutomation(ws, id, { lastRunAt: Date.now() });
+    let result = "ran";
+    try {
+      await this.runGoal(
+        { goal: a.goal, condition: a.condition, command: a.command, maxIters: a.maxIters },
+        (e) => {
+          if (e.type === "goal-done") result = `goal met: ${e.reason}`;
+          else if (e.type === "goal-stop") result = e.reason;
+          onEvent?.(e);
+        },
+      );
+    } catch (e) {
+      result = `error: ${String((e as Error)?.message ?? e)}`;
+    } finally {
+      this.autoRunning = false;
+      updateAutomation(ws, id, { lastRunAt: Date.now(), lastResult: result.slice(0, 200) });
+    }
+    return { ran: true, result };
+  }
 
   /** P-GOAL.1: the loop's "done" checker, run in a SEPARATE complete() session (maker ≠ checker). With a
    *  verification command it runs it and reports exit-0 (a real proof); otherwise it judges the goal

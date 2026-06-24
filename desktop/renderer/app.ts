@@ -2195,24 +2195,66 @@ function openGoalForm(): void {
     <div class="goal-modal-h">${icon("bolt", 15)} Run a goal loop</div>
     <div class="goal-modal-sub">The agent iterates until a verifiable condition holds. A separate checker grades each round; the security gate scans every action.</div>
     <div id="goalResumeSec"></div>
+    <div id="goalAutoSec"></div>
     <label class="goal-lbl">Goal</label>
     <textarea id="goalGoal" class="prov-key" rows="3" placeholder="e.g. Make all auth tests pass and fix any lint errors"></textarea>
     <label class="goal-lbl">Verification command <span class="goal-opt">optional, proves "done" by exit 0</span></label>
     <input id="goalCmd" class="prov-key" placeholder="e.g. npm test && npm run lint" spellcheck="false" autocomplete="off" />
     <div class="goal-row"><label class="goal-lbl">Max iterations</label><input id="goalMax" class="prov-key goal-max" type="number" min="1" max="20" value="6" /></div>
-    <div class="goal-modal-actions"><button class="btn-mini" id="goalCancel">Cancel</button><button class="btn-mini ok" id="goalRun">${icon("bolt", 12)} Run loop</button></div>
+    <div class="goal-row goal-sched">
+      <label class="goal-lbl">${icon("clock", 12)} Schedule <span class="goal-opt">save as an automation</span></label>
+      <select id="goalCadKind" class="prov-key goal-cadk">
+        <option value="off">Run once now</option>
+        <option value="interval">Every…</option>
+        <option value="daily">Daily at…</option>
+      </select>
+      <span id="goalCadInterval" hidden><input id="goalCadEvery" class="prov-key goal-cadn" type="number" min="1" value="60" /><select id="goalCadUnit" class="prov-key goal-cadu"><option value="min">minutes</option><option value="hour">hours</option></select></span>
+      <input id="goalCadTime" class="prov-key goal-cadt" type="time" value="09:00" hidden />
+    </div>
+    <div class="goal-modal-actions"><button class="btn-mini" id="goalCancel">Cancel</button><button class="btn-mini" id="goalSave" hidden>${icon("clock", 12)} Save automation</button><button class="btn-mini ok" id="goalRun">${icon("bolt", 12)} Run loop</button></div>
   </div></div>`);
   document.body.appendChild(ov);
   const close = () => ov.remove();
   $("#goalCancel", ov)?.addEventListener("click", close);
   ov.addEventListener("mousedown", (e) => { if (e.target === ov) close(); });
-  $("#goalRun", ov)?.addEventListener("click", () => {
+  // Cadence picker: reveal interval / daily inputs, and show "Save automation" only when a cadence is set.
+  const kindSel = $("#goalCadKind", ov) as HTMLSelectElement;
+  const syncCadence = () => {
+    const k = kindSel.value;
+    ($("#goalCadInterval", ov) as HTMLElement).hidden = k !== "interval";
+    ($("#goalCadTime", ov) as HTMLElement).hidden = k !== "daily";
+    ($("#goalSave", ov) as HTMLElement).hidden = k === "off";
+  };
+  kindSel.addEventListener("change", syncCadence);
+  const readCadence = (): { kind: "interval"; everyMin: number } | { kind: "daily"; hhmm: string } | null => {
+    if (kindSel.value === "interval") {
+      const n = Math.max(1, Number(($("#goalCadEvery", ov) as HTMLInputElement).value) || 60);
+      const unit = ($("#goalCadUnit", ov) as HTMLSelectElement).value;
+      return { kind: "interval", everyMin: unit === "hour" ? n * 60 : n };
+    }
+    if (kindSel.value === "daily") return { kind: "daily", hhmm: ($("#goalCadTime", ov) as HTMLInputElement).value || "09:00" };
+    return null;
+  };
+  const readSpec = () => {
     const goal = ($("#goalGoal", ov) as HTMLTextAreaElement).value.trim();
-    if (!goal) { showToast({ tone: "warn", title: "Add a goal", desc: "Describe what the loop should accomplish.", timeout: 2400 }); return; }
     const command = ($("#goalCmd", ov) as HTMLInputElement).value.trim();
     const maxIters = Math.min(20, Math.max(1, Number(($("#goalMax", ov) as HTMLInputElement).value) || 6));
+    return { goal, command, maxIters };
+  };
+  $("#goalRun", ov)?.addEventListener("click", () => {
+    const { goal, command, maxIters } = readSpec();
+    if (!goal) { showToast({ tone: "warn", title: "Add a goal", desc: "Describe what the loop should accomplish.", timeout: 2400 }); return; }
     close();
     void runGoalLoop({ goal, condition: command || goal, command: command || undefined, maxIters });
+  });
+  $("#goalSave", ov)?.addEventListener("click", async () => {
+    const { goal, command, maxIters } = readSpec();
+    if (!goal) { showToast({ tone: "warn", title: "Add a goal", desc: "An automation needs a goal to pursue.", timeout: 2400 }); return; }
+    const cadence = readCadence();
+    if (!cadence) return;
+    const a = await bridge.automationCreate({ goal, command: command || undefined, condition: command || goal, maxIters, cadence });
+    if (a) { showToast({ tone: "ok", title: "Automation saved", desc: "It's disabled until you enable it below.", timeout: 2600 }); void renderAutomations(ov, close); }
+    else showToast({ tone: "warn", title: "Could not save", desc: "Check the goal and schedule.", timeout: 2600 });
   });
   ($("#goalGoal", ov) as HTMLTextAreaElement)?.focus();
   // P-GOAL.4: offer to resume any loop that stopped without meeting its condition.
@@ -2226,12 +2268,48 @@ function openGoalForm(): void {
       void runGoalLoop({ goal: d.goal!, condition: d.cond || d.goal!, command: d.cmd || undefined, maxIters: 6, resume: d.rel });
     }));
   });
+  // P-GOAL.5: list saved automations (enable / run-now / delete).
+  void renderAutomations(ov, close);
 }
-async function runGoalLoop(opts: { goal: string; condition: string; command?: string; maxIters: number; resume?: string }): Promise<void> {
+
+// P-GOAL.5 (ADR-0047): render the saved-automations list inside the goal modal — each row shows its
+// cadence + last-run status, with an enable toggle, a run-now button, and delete.
+async function renderAutomations(ov: HTMLElement, close: () => void): Promise<void> {
+  const sec = $("#goalAutoSec", ov); if (!sec) return;
+  const list = await bridge.automations();
+  if (!list?.length) { sec.innerHTML = ""; return; }
+  const cadLabel = (c: { kind: "interval"; everyMin: number } | { kind: "daily"; hhmm: string }): string =>
+    c.kind === "daily" ? `daily at ${c.hhmm}` : c.everyMin % 60 === 0 ? `every ${c.everyMin / 60}h` : `every ${c.everyMin}m`;
+  sec.innerHTML = `<div class="goal-lbl">${icon("clock", 12)} Scheduled automations</div>` + list.map((a) => `
+    <div class="goal-auto ${a.enabled ? "on" : ""}" data-id="${esc(a.id)}">
+      <button class="ga-toggle" title="${a.enabled ? "Disable" : "Enable"}" aria-pressed="${a.enabled}"></button>
+      <div class="ga-body">
+        <div class="ga-goal">${esc(a.goal.slice(0, 80))}</div>
+        <div class="ga-meta">${icon("refresh", 10)} ${esc(cadLabel(a.cadence))}${a.lastResult ? ` · last: ${esc(a.lastResult.slice(0, 60))}` : " · not run yet"}</div>
+      </div>
+      <button class="ga-run" title="Run now">${icon("bolt", 12)}</button>
+      <button class="ga-del" title="Delete">${icon("trash", 12)}</button>
+    </div>`).join("");
+  sec.querySelectorAll(".goal-auto").forEach((row) => {
+    const id = (row as HTMLElement).dataset.id!;
+    const a = list.find((x) => x.id === id)!;
+    $(".ga-toggle", row as HTMLElement)?.addEventListener("click", async () => { await bridge.automationEnable(id, !a.enabled); void renderAutomations(ov, close); });
+    $(".ga-del", row as HTMLElement)?.addEventListener("click", async () => { await bridge.automationDelete(id); void renderAutomations(ov, close); });
+    $(".ga-run", row as HTMLElement)?.addEventListener("click", () => {
+      close();
+      void runGoalLoop({ goal: a.goal, condition: a.condition, command: a.command, maxIters: a.maxIters }, (on) => bridge.automationRun(id, on), "automation");
+    });
+  });
+}
+async function runGoalLoop(
+  opts: { goal: string; condition: string; command?: string; maxIters: number; resume?: string },
+  stream?: (onEvent: (e: ChatEvent) => void) => Promise<void>, // P-GOAL.5: automation run-now reuses this renderer
+  verb = "/goal",
+): Promise<void> {
   if (state.streaming) { showToast({ tone: "warn", title: "A turn is running", desc: "Wait for it to finish before starting a loop.", timeout: 2400 }); return; }
   if (!autoCollapsedSessions) { autoCollapsedSessions = true; if (!state.sidebarCollapsed) toggleSidebar(true); }
   state.lastPrompt = opts.goal;
-  addMessage("user", `/goal${opts.resume ? " (resume)" : ""}: ${opts.goal}${opts.command ? `\nverify: \`${opts.command}\`` : ""}  ·  up to ${opts.maxIters} iterations`);
+  addMessage("user", `${verb}${opts.resume ? " (resume)" : ""}: ${opts.goal}${opts.command ? `\nverify: \`${opts.command}\`` : ""}  ·  up to ${opts.maxIters} iterations`);
   state.streaming = true; goalLoopRunning = true; setSendEnabled();
   const node = addMessage("assistant", "");
   const textEl = $(".text", node) as HTMLElement; textEl.innerHTML = "";
@@ -2256,7 +2334,7 @@ async function runGoalLoop(opts: { goal: string; condition: string; command?: st
     else if (e.type === "goal-stop") { wrap.appendChild(el(`<div class="goal-banner stop">${icon("info", 14)} ${esc(e.reason)}</div>`)); scrollChat(); }
     else if (e.type === "done") { if (streamEl) streamEl.innerHTML = renderMarkdown(buf); }
   };
-  try { await bridge.runGoal(opts, onEvent); }
+  try { await (stream ?? ((on: (e: ChatEvent) => void) => bridge.runGoal(opts, on)))(onEvent); }
   finally { state.streaming = false; goalLoopRunning = false; setSendEnabled(); void renderSessions(); void refreshBudget(false); }
 }
 

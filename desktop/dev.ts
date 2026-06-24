@@ -23,6 +23,7 @@ import { asksageConfig, listDatasets, listPersonas, monthlyTokens, scanPersona, 
 import { listSkills } from "./skills_data.ts";
 import { importSkill } from "./skills_import.ts";
 import { listResumableLoops } from "./goal_memory.ts";
+import { createAutomation, deleteAutomation, listAutomations, normalizeCadence, updateAutomation } from "./automations.ts";
 import { currentWorkspace } from "./workspace.ts";
 import { recordSkillActivated } from "./skills_log.ts";
 import { recentTurns } from "./turns_log.ts";
@@ -533,6 +534,39 @@ const server = Bun.serve({
         return new Response(stream, { headers: { "content-type": "application/x-ndjson; charset=utf-8", "cache-control": "no-store" } });
       }
 
+      // P-GOAL.5 (ADR-0047): scheduled AUTOMATIONS — saved /goal specs the in-process scheduler runs on a
+      // cadence (interval or daily) while the app is open. Created DISABLED; the user arms each explicitly.
+      if (p === "/api/automations" && req.method === "GET") return json({ ok: true, data: listAutomations(currentWorkspace()) });
+      if (p === "/api/automations" && req.method === "POST") {
+        const b = await readBody<{ goal?: unknown; condition?: unknown; command?: unknown; maxIters?: unknown; cadence?: unknown }>(req);
+        const cadence = normalizeCadence(b.cadence);
+        if (!cadence) return json({ ok: false, error: "invalid cadence" });
+        const a = createAutomation(currentWorkspace(),
+          { goal: String(b.goal ?? ""), condition: b.condition ? String(b.condition) : undefined, command: b.command ? String(b.command) : undefined, maxIters: Number(b.maxIters) || 6, cadence },
+          Date.now().toString(36) + Math.floor(Math.random() * 1e6).toString(36), Date.now());
+        return a ? json({ ok: true, data: a }) : json({ ok: false, error: "could not create (check the goal)" });
+      }
+      if (p === "/api/automations/enable" && req.method === "POST") {
+        const b = await readBody<{ id?: unknown; enabled?: unknown }>(req);
+        const a = updateAutomation(currentWorkspace(), String(b.id ?? ""), { enabled: !!b.enabled });
+        return a ? json({ ok: true, data: a }) : json({ ok: false, error: "not found" });
+      }
+      if (p === "/api/automations/delete" && req.method === "POST") {
+        const b = await readBody<{ id?: unknown }>(req);
+        return json({ ok: deleteAutomation(currentWorkspace(), String(b.id ?? "")), data: { deleted: true } });
+      }
+      if (p === "/api/automations/run" && req.method === "POST") {
+        const b = await readBody<{ id?: unknown }>(req);
+        const enc = new TextEncoder();
+        const stream = new ReadableStream({
+          async start(controller) {
+            await backend.runAutomation(String(b.id ?? ""), (e) => { try { controller.enqueue(enc.encode(JSON.stringify(e) + "\n")); } catch { /* closed */ } });
+            try { controller.close(); } catch { /* already closed */ }
+          },
+        });
+        return new Response(stream, { headers: { "content-type": "application/x-ndjson; charset=utf-8", "cache-control": "no-store" } });
+      }
+
       const rel = p === "/" ? "index.html" : p.replace(/^\/+/, "");
       // ADR-0024: serve the HTML with the per-launch token injected as a meta tag. Same-origin
       // policy keeps a cross-origin page from reading this response body, so the token stays secret
@@ -561,5 +595,9 @@ const server = Bun.serve({
 // via /api/newSession), so this is what carries prior-session facts into it. Best-effort; the omp
 // child isn't spawned yet here, so the read-only open is uncontended.
 await refreshRecall();
+
+// P-GOAL.5 (ADR-0047): arm the in-process automation scheduler. It only ticks while this dev server
+// (and thus the app) is running; nothing is registered with the OS, so closing the app stops it.
+backend.startAutomationScheduler();
 
 console.log(`\n  ◆ LucidAgentIDE desktop renderer (dev)\n  → http://localhost:${server.port}\n`);

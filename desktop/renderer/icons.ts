@@ -32,6 +32,8 @@ const RAW: Record<string, string> = {
   spark: P("M7 7h10v10H7z") + P("M10 4v3") + P("M14 4v3") + P("M10 17v3") + P("M14 17v3") + P("M4 10h3") + P("M4 14h3") + P("M17 10h3") + P("M17 14h3"),
   // bolt
   bolt: P("M12 3 6 13h5l-1 8 6-11h-5z"),
+  // clock (scheduled automations) — ring + hands
+  clock: P("M12 5a7 7 0 1 0 0 14 7 7 0 0 0 0-14z") + P("M12 8.5V12l2.5 1.6"),
   // close
   close: P("M6 6l12 12") + P("M18 6 6 18"),
   // trash / delete
