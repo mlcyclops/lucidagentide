@@ -534,6 +534,14 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
   border:1px solid var(--line);background:var(--bg-2);color:var(--txt-4);cursor:help;padding:0;vertical-align:middle}
 .goal-info:hover{color:var(--accent-2);border-color:color-mix(in srgb,var(--accent) 40%,var(--line))}
 .goal-nav{display:flex;gap:8px}
+#goalBack .ic{transform:rotate(180deg)} /* Back chevron points left */
+/* P-GOAL.8.1: custom verify-command type-ahead, anchored under the field */
+.goal-cmd-wrap{position:relative}
+.goal-cmd-menu{position:absolute;top:calc(100% + 4px);left:0;right:0;z-index:8;max-height:216px;overflow:auto;
+  background:var(--bg-2);border:1px solid var(--line-strong);border-radius:10px;padding:4px;
+  box-shadow:0 14px 36px rgba(0,0,0,.5);animation:fade var(--t) var(--ease)}
+.goal-cmd-item{padding:7px 10px;border-radius:7px;font-size:12.5px;font-family:var(--mono);color:var(--txt-2);cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.goal-cmd-item:hover,.goal-cmd-item.active{background:var(--accent-dim);color:var(--txt)}
 .goal-modal-sub{font-size:13px;color:var(--txt-2);line-height:1.5;margin-bottom:4px}
 .goal-lbl{font-size:13px;font-weight:600;color:var(--txt-2);margin-top:6px}
 .goal-opt{font-weight:400;color:var(--txt-4);font-size:12px}

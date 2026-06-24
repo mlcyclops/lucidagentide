@@ -2208,6 +2208,44 @@ function goalInfoDot(tip: string): string {
 }
 // P-GOAL.8: under AskSage lockdown the base-model picker lists Gemini, then GPT, then Anthropic.
 const GUIDED_GOV_FAMILY_ORDER = ["gemini", "gpt-o", "gpt", "claude", "rag", "other"];
+// P-GOAL.8.1: skills NOT offered for a goal loop — meta/planning/self-referential ones that don't help
+// drive code toward a verifiable condition (the loop itself, the loop-engineering doc, read-only Plan/
+// Explain, the handoff doc). Everything else (TDD, Code Review, Refactor, Debug, …) is build-oriented.
+const GOAL_SKILL_DENY = new Set(["goal", "loop-engineering", "plan", "explain", "session-handoff"]);
+
+// P-GOAL.8.1: a custom, anchored type-ahead for the verification command (the native <datalist> popup
+// mispositioned to the top-left). Shows filtered common commands directly under the input; the user can
+// still type anything. Arrow keys + Enter to pick, Escape/blur to dismiss.
+function wireCmdSuggest(ov: HTMLElement): void {
+  const input = $("#goalCmd", ov) as HTMLInputElement | null;
+  const menu = $("#goalCmdMenu", ov) as HTMLElement | null;
+  if (!input || !menu) return;
+  let active = -1;
+  const items = () => [...menu.querySelectorAll<HTMLElement>(".goal-cmd-item")];
+  const hide = () => { menu.hidden = true; input.setAttribute("aria-expanded", "false"); active = -1; };
+  const fill = (q: string) => {
+    const ql = q.trim().toLowerCase();
+    const matches = COMMON_VERIFY_COMMANDS.filter((c) => !ql || c.toLowerCase().includes(ql));
+    if (!matches.length) { hide(); return; }
+    menu.innerHTML = matches.map((c) => `<div class="goal-cmd-item" role="option">${esc(c)}</div>`).join("");
+    items().forEach((it) => it.addEventListener("mousedown", (e) => { e.preventDefault(); input.value = it.textContent || ""; hide(); input.focus(); }));
+    active = -1; menu.hidden = false; input.setAttribute("aria-expanded", "true");
+  };
+  input.addEventListener("focus", () => fill(input.value));
+  input.addEventListener("input", () => fill(input.value));
+  input.addEventListener("blur", () => setTimeout(hide, 130));
+  input.addEventListener("keydown", (e) => {
+    if (menu.hidden) return;
+    const list = items();
+    if (e.key === "ArrowDown") { e.preventDefault(); active = Math.min(active + 1, list.length - 1); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); active = Math.max(active - 1, 0); }
+    else if (e.key === "Enter" && active >= 0) { e.preventDefault(); input.value = list[active]?.textContent ?? input.value; hide(); return; }
+    else if (e.key === "Escape") { e.stopPropagation(); hide(); return; }
+    else return;
+    list.forEach((it, i) => it.classList.toggle("active", i === active));
+    list[active]?.scrollIntoView({ block: "nearest" });
+  });
+}
 
 function openGoalForm(): void {
   const ov = el(`<div class="scrim goal-scrim"><div class="goal-modal" data-mode="guided">
@@ -2229,20 +2267,12 @@ function openGoalForm(): void {
         <div class="goal-step-head"><span class="goal-step-n"></span><h4>How do we know it is done?</h4></div>
         <div class="goal-note">A shell command that exits 0 when the goal is met. This is the strongest signal of done; without one the checker judges the agent's own report. ${goalInfoDot("Verification command|Run after each round by a separate checker. Exit code 0 means done. Pick a suggestion or type your own, e.g. 'npm test && npm run lint'.")}</div>
         <label class="goal-lbl">Verification command <span class="goal-opt">optional, proves "done" by exit 0</span></label>
-        <input id="goalCmd" class="prov-key" list="goalCmdList" placeholder="e.g. npm test && npm run lint" spellcheck="false" autocomplete="off" />
-        <datalist id="goalCmdList">${COMMON_VERIFY_COMMANDS.map((c) => `<option value="${esc(c)}"></option>`).join("")}</datalist>
+        <div class="goal-cmd-wrap">
+          <input id="goalCmd" class="prov-key" placeholder="e.g. npm test && npm run lint" spellcheck="false" autocomplete="off" role="combobox" aria-expanded="false" />
+          <div class="goal-cmd-menu" id="goalCmdMenu" hidden></div>
+        </div>
       </section>
       <section class="goal-step" data-step="3">
-        <div class="goal-step-head"><span class="goal-step-n"></span><h4>Effort and grading</h4></div>
-        <div class="goal-note">Cap how many rounds it may take, and pick who grades each round. A cheaper checker keeps cost low. ${goalInfoDot("Iterations and checker|Max iterations is a hard ceiling - the loop stops as soon as the condition holds. The checker is a separate model that grades each round; a small fast model is usually plenty.")}</div>
-        <div class="goal-row"><label class="goal-lbl">Max iterations</label><input id="goalMax" class="prov-key goal-max" type="number" min="1" max="20" value="6" /></div>
-        <div class="goal-row goal-checker">
-          <label class="goal-lbl">${icon("spark", 12)} Checker model <span class="goal-opt">grades each round; a cheaper model is fine</span></label>
-          <select id="goalChecker" class="prov-key goal-ckr"><option>loading…</option></select>
-        </div>
-        <div class="goal-ckr-why" id="goalCkrWhy"></div>
-      </section>
-      <section class="goal-step" data-step="4">
         <div class="goal-step-head"><span class="goal-step-n"></span><h4>Run with</h4></div>
         <div class="goal-note">Optional: pick the base model the agent uses, its thinking level, and a skill or persona to steer it. Defaults match your current session. ${goalInfoDot("Run with|These apply when you press Run. Base model + thinking set the maker; a Skill adds trusted guidance; a Persona adds scanned role guidance. Leave as-is to use your current setup.")}</div>
         <div class="goal-row goal-runwith">
@@ -2253,6 +2283,16 @@ function openGoalForm(): void {
             <label class="goal-rw-f" id="goalPersonaWrap" hidden><span>Persona</span><select id="goalPersona" class="prov-key"></select></label>
           </div>
         </div>
+      </section>
+      <section class="goal-step" data-step="4">
+        <div class="goal-step-head"><span class="goal-step-n"></span><h4>Effort and grading</h4></div>
+        <div class="goal-note">Cap how many rounds it may take, and pick who grades each round. A cheaper checker keeps cost low. ${goalInfoDot("Iterations and checker|Max iterations is a hard ceiling - the loop stops as soon as the condition holds. The checker is a separate model that grades each round; a small fast model is usually plenty.")}</div>
+        <div class="goal-row"><label class="goal-lbl">Max iterations</label><input id="goalMax" class="prov-key goal-max" type="number" min="1" max="20" value="6" /></div>
+        <div class="goal-row goal-checker">
+          <label class="goal-lbl">${icon("spark", 12)} Checker model <span class="goal-opt">grades each round; a cheaper model is fine</span></label>
+          <select id="goalChecker" class="prov-key goal-ckr"><option>loading…</option></select>
+        </div>
+        <div class="goal-ckr-why" id="goalCkrWhy"></div>
       </section>
       <section class="goal-step" data-step="5">
         <div class="goal-step-head"><span class="goal-step-n"></span><h4>Run now or on a schedule?</h4></div>
@@ -2346,6 +2386,7 @@ function openGoalForm(): void {
   ($("#goalMax", ov) as HTMLInputElement)?.addEventListener("input", () => updateGoalEstimate(ov));
   updateGoalEstimate(ov); // initial; model names fill in once loadCheckerModel resolves
   render(); // P-GOAL.8: apply guided/advanced mode + show the right step/buttons
+  wireCmdSuggest(ov); // P-GOAL.8.1: custom verify-command type-ahead
   $("#goalRun", ov)?.addEventListener("click", async () => {
     const { goal, command, maxIters } = readSpec();
     if (!goal) { showToast({ tone: "warn", title: "Add a goal", desc: "Describe what the loop should accomplish.", timeout: 2400 }); return; }
@@ -2431,17 +2472,19 @@ function loadRunWith(ov: HTMLElement): void {
     thinkSel.innerHTML = thinkOpt.options.map((o) => `<option value="${esc(o.value)}">${esc(prettyLevel(o.name))}</option>`).join("");
     thinkSel.value = thinkOpt.currentValue ?? "";
   }
-  // Skill — None + bundled (trusted guidance that rides every loop turn). Defaults to the active skill.
+  // Skill — None + only the bundled skills that suit a goal loop (build/verify-oriented; meta ones like
+  // Goal Loop / Loop Engineering / Plan are excluded). Trusted guidance that rides every loop turn.
   const skillSel = $("#goalSkill", ov) as HTMLSelectElement | null;
   if (skillSel) {
-    skillSel.innerHTML = `<option value="">None</option>` + bundledSkillsByUsage().map((s) => `<option value="${esc(s.command)}">${esc(s.name)}</option>`).join("");
-    skillSel.value = state.activeSkill?.command ?? "";
+    const loopSkills = bundledSkillsByUsage().filter((s) => !GOAL_SKILL_DENY.has(s.command));
+    skillSel.innerHTML = `<option value="">None</option>` + loopSkills.map((s) => `<option value="${esc(s.command)}">${esc(s.name)}</option>`).join("");
+    skillSel.value = GOAL_SKILL_DENY.has(state.activeSkill?.command ?? "") ? "" : (state.activeSkill?.command ?? "");
   }
-  // Persona — only if AskSage personas are available. Defaults to the applied one.
+  // Persona — only if AskSage personas are available. Show the human name/description, not the numeric id.
   const personaSel = $("#goalPersona", ov) as HTMLSelectElement | null;
   if (personaSel && state.personas.length) {
     ($("#goalPersonaWrap", ov) as HTMLElement).hidden = false;
-    personaSel.innerHTML = `<option value="">None</option>` + state.personas.map((p) => `<option value="${esc(p.id)}">${esc(p.id)}</option>`).join("");
+    personaSel.innerHTML = `<option value="">None</option>` + state.personas.map((p) => `<option value="${esc(p.id)}">${esc((p.description?.trim() || `Persona ${p.id}`).slice(0, 60))}</option>`).join("");
     personaSel.value = state.asksage?.persona ?? "";
   }
 }

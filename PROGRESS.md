@@ -2052,3 +2052,15 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **stubbed:** lockdown detection uses the user asksageOnly flag in the renderer (backend already enforces the
   checker GOV filter); walkthrough copy is static; datalist styling is the native control.
 - **next:** carry run-with into saved automations; a maintained/live price source.
+
+---
+**P-GOAL.8.1 — walkthrough polish: combobox, step order, skill/persona fixes**
+- **shipped:** replaced the mispositioned native <datalist> with a custom verify-command combobox anchored
+  directly under the field (filter + click + arrow/Enter nav, free-typing preserved). Back chevron now points
+  left (rotate 180). Reordered guided steps so "Run with" (base model) is step 3, BEFORE "Effort and grading"
+  (iterations + checker) at step 4. Skill picker now excludes meta skills (goal, loop-engineering, plan, explain,
+  session-handoff) — only build-oriented skills suited to a loop. Persona dropdown shows the human description,
+  not the numeric id. typecheck clean; bun test desktop 326/326. Live-verified: menu sits under the field (4px,
+  left-aligned), Back arrow matrix(-1,0,0,-1,0,0), step3=Run with / step4=Effort, 9 build skills only, persona
+  names; no console errors.
+- **next:** carry run-with into saved automations; a maintained/live price source; shorter persona display names.
