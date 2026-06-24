@@ -29,7 +29,7 @@
 <a href="https://github.com/mlcyclops/lucidagentide/actions/workflows/codeql.yml"><img src="https://img.shields.io/github/actions/workflow/status/mlcyclops/lucidagentide/codeql.yml?branch=master&label=CodeQL&logo=github&logoColor=white&style=flat-square" alt="CodeQL SAST" /></a>
 <a href="https://github.com/mlcyclops/lucidagentide/actions/workflows/build-desktop.yml"><img src="https://img.shields.io/github/actions/workflow/status/mlcyclops/lucidagentide/build-desktop.yml?label=Windows%20Build&logo=windows&logoColor=white&style=flat-square" alt="Windows Build" /></a>
 <a href="https://github.com/mlcyclops/lucidagentide/actions/workflows/build-desktop.yml"><img src="https://img.shields.io/github/actions/workflow/status/mlcyclops/lucidagentide/build-desktop.yml?label=macOS%20Build&logo=apple&logoColor=white&style=flat-square" alt="macOS Build" /></a>
-<img src="https://img.shields.io/badge/tests-413%20harness%20%2B%20258%20desktop%20%2B%2054%20sidecar-46d27e?style=flat-square" alt="tests" />
+<img src="https://img.shields.io/badge/tests-473%20harness%20%2B%20326%20desktop%20%2B%2055%20sidecar-46d27e?style=flat-square" alt="tests" />
 <img src="https://img.shields.io/badge/gate-fail--closed-e07bf0?style=flat-square" alt="fail-closed gate" />
 
 <br/>
@@ -60,10 +60,12 @@ and SDK.
 personalization internals are proprietary and intentionally undocumented here - this README describes the
 <i>capabilities and guarantees</i>, not the mechanisms behind them.</sub>
 
+<a href="#-who-its-for"><b>Who it's for</b></a> ·
 <a href="#-quick-start"><b>Quick start</b></a> ·
-<a href="#-architecture"><b>Architecture</b></a> ·
 <a href="#-security-model"><b>Security</b></a> ·
 <a href="#-token-cost-savings--showback"><b>Cost Savings</b></a> ·
+<a href="#-knowledge--rag-coming-soon"><b>Knowledge / RAG</b></a> ·
+<a href="#-contributing"><b>Contributing</b></a> ·
 <a href="#-roadmap"><b>Roadmap</b></a> ·
 <a href="DECISIONS.md"><b>Decisions (ADRs)</b></a>
 
@@ -75,14 +77,17 @@ personalization internals are proprietary and intentionally undocumented here - 
 
 - [<img src=".github/assets/icons/overview.svg" width="16" alt=""> Overview](#-overview)
 - [<img src=".github/assets/icons/novelty.svg" width="16" alt=""> What makes it novel](#-what-makes-it-novel)
+- [🎯 Who it's for](#-who-its-for)
 - [💰 Token Cost Savings & Showback](#-token-cost-savings--showback)
 - [<img src=".github/assets/icons/architecture.svg" width="16" alt=""> Architecture](#-architecture)
 - [<img src=".github/assets/icons/security.svg" width="16" alt=""> Security model](#-security-model)
 - [<img src=".github/assets/icons/memory.svg" width="16" alt=""> Memory and the personalization graph](#-memory-and-the-personalization-graph)
 - [<img src=".github/assets/icons/gateway.svg" width="16" alt=""> Models and the AskSage gateway](#-models-and-the-asksage-gateway)
+- [📚 Knowledge & RAG (Coming Soon)](#-knowledge--rag-coming-soon)
 - [<img src=".github/assets/icons/builton.svg" width="16" alt=""> Built on](#-built-on)
 - [<img src=".github/assets/icons/quickstart.svg" width="16" alt=""> Quick start](#-quick-start)
 - [<img src=".github/assets/icons/desktop.svg" width="16" alt=""> Desktop app](#-desktop-app)
+- [🤝 Contributing](#-contributing)
 - [<img src=".github/assets/icons/roadmap.svg" width="16" alt=""> Roadmap](#-roadmap)
 - [<img src=".github/assets/icons/docs.svg" width="16" alt=""> Project docs](#-project-docs)
 
@@ -147,6 +152,18 @@ never fail open.
   cost with a built-in showback ledger - know exactly what every conversation costs.
 
 ---
+
+## 🎯 Who it's for
+
+| If you are… | Why it matters here |
+|:--|:--|
+| **Government / regulated / CUI teams** | An AskSage-gated, **sovereignty-aware** agent with hard **CUI isolation**, a fail-closed gate, and a full provenance/audit trail - packaged for **locked-down, air-gapped laptops** with *zero prerequisites* (Bun + the Python sidecar are bundled). |
+| **Security-conscious engineers** | Every tool call, **every _Save_**, every persona, and every imported message is scanned by a gate that **cannot fail open**. Prompt-injection defense is the default, not a toggle. |
+| **Teams that need governance & showback** | Real **cost per model** with cache-savings showback, plus a tamper-evident ledger of **which model wrote which lines** - so AI spend and AI authorship are both auditable. |
+| **Anyone leaving ChatGPT / Claude / Gemini** | **One-command import** brings your history in (gated + distilled into an encrypted personal graph) and keeps your context **across sessions**. |
+| **Agent-platform builders** | A worked, test-backed example of adding security, provenance, and memory **around** a fast runtime via hooks/tools/SDK - **extend, never fork**. |
+
+It's a **desktop app you can just download and run** (Windows installer/portable + macOS), and a **source-available codebase** you can study, run from source, and build on.
 
 ## 💰 Token Cost Savings & Showback
 
@@ -220,7 +237,7 @@ never fail open.
 harness/                  # ALL TypeScript (Bun)
   contracts.ts              # FROZEN: TrustLabel · AgentMode · EventName · ToolResult · Finding
   security/                 # scanner_client (NDJSON, fail-closed) · gate (scanAndDecide)
-  memory/                   # DuckDB store · promotion gate (keystone #2) · cross-session recall · migrations 0001–0008
+  memory/                   # DuckDB store · promotion gate (keystone #2) · cross-session recall · migrations 0001–0009
   personal/                 # encrypted personalization graph · distiller · CUI isolation · ChatGPT/Claude/Gemini import
   telemetry/                # stable-id event stream → DuckDB (replayable)
   runs/                     # provenance lineage · sandbox profiles · replay
@@ -295,6 +312,31 @@ Models from any omp provider work out of the box (Claude, GPT, Gemini, …). On 
 Optionally, the on-device [**headroom**](https://github.com/chopratejas/headroom) token-compression proxy can
 be enabled to stretch a gov token quota ([ADR-0008](DECISIONS.md)).
 
+## 📚 Knowledge & RAG (Coming Soon)
+
+> **Designed in [ADR-0053](DECISIONS.md); building next as `P-RAG.1–4`.** Bring your own documents into the
+> agent's context - **two paths, one trust boundary**, both scanned by the same fail-closed gate.
+
+- **🔒 Local-first vector store (air-gapped).** Drag in PDFs and images; they're parsed, embedded, and indexed
+  **entirely on your machine** in a local [DuckDB](https://duckdb.org) vector store - **no document ever leaves
+  the host.** Retrieved chunks are injected as **scanned, delimited, untrusted context** (never the cached
+  prefix), so RAG can't become a prompt-injection vector.
+- **🖼️ PDF + image ingest.** Local PDF text extraction, plus **caption-at-ingest** for images - the multimodal
+  model describes each image (with optional on-device OCR) and the image is kept for multimodal prompts.
+- **💻 Built for a standard laptop.** WASM embeddings (**no GPU, no native binaries**), **bundled weights** so it
+  works fully **offline**, and brute-force cosine that stays **sub-millisecond** at realistic sizes - an HNSW
+  accelerator is held in reserve for very large corpora.
+- **🏛️ AskSage dataset training (gov cloud), classification-aware.** Civ users can create **custom-named
+  datasets** and ingest files straight into the AskSage gateway - and **CUI content is never sent to a Civ
+  endpoint**. The UI tells you *where your data goes and why*.
+- **🧭 One guided popup.** A walkthrough (with an advanced one-screen mode), premium hover help at every step,
+  and a **parse-and-scan preview** that shows what was extracted - and the gate verdict - *before* anything is
+  stored.
+
+Every ingested chunk runs the **same lifecycle as everything else**: scanned → trust-labeled → quarantined if
+poisoned - *before* it can ever be embedded or recalled. Suspicious sources can't auto-promote into semantic
+memory (keystone #2 holds for RAG too).
+
 ## <img src=".github/assets/icons/builton.svg" width="28" align="top" alt=""> Built on
 
 LucidAgentIDE is a thin, principled layer over best-in-class building blocks - credit where it's due:
@@ -364,14 +406,17 @@ needs **zero prerequisites**. Code-signing and notarization are supported when c
 the full security lifecycle, provenance lineage, replay, the cache-optimized prefix, the desktop GUI, the
 AskSage gov gateway, cross-model observability, CUI isolation, the encrypted personalization graph with
 cross-session recall, AI-authorship attribution, one-command ChatGPT/Claude/Gemini migration, and a
-read-write IDE with gated saves. Everything green:
-**413 harness tests**, **258 desktop tests**, **54 sidecar tests**, `tsc --noEmit` clean across 3 projects
+read-write IDE with gated saves, AskSage **tool use on the gov gateway** (Claude *and* Gemini), and the
+**`/goal` agentic loop primitive**. Everything green:
+**473 harness tests**, **326 desktop tests**, **55 sidecar tests**, `tsc --noEmit` clean across 3 projects
 (TypeScript 6.0 + Python).
 
 ### Recent updates
 
 | Phase | Feature | ADR |
 |:--|:--|:--|
+| **P-GOAL.1–8** | The **`/goal` agentic loop** - iterate to a verifiable stop condition with a separate (cheaper, recommended) checker model, durable on-disk memory, resume, scheduled automations, a cost estimate, and a guided walkthrough | [ADR-0046–0050](DECISIONS.md) |
+| **AskSage tool use** | Claude **and** Gemini routed through the **gov gateway can now use omp tools** (write files, run commands) - the streamSimple adapter parses tool calls + scans each through the gate | [ADR-0051](DECISIONS.md) |
 | **P-IDE.5–6** | Read-write Monaco IDE - **Save routed through the scanner gate** (≥high finding or dead scanner *blocks* the write), Save-As, conflict banner, Send-to-chat | [ADR-0036/0037](DECISIONS.md) |
 | **P-IMP.1–2** | One-command **ChatGPT/Claude/Gemini import** - shard-aware, fully gated, with a first-run onboarding nudge + token/runtime estimate | [ADR-0034/0035](DECISIONS.md) |
 | **P-LOC.1–2** | **AI-authorship attribution** - per-model/repo/identity LOC ledger + dashboard rollup | [ADR-0031](DECISIONS.md) |
@@ -384,17 +429,42 @@ read-write IDE with gated saves. Everything green:
 
 | Theme | ADR |
 |:--|:--|
-| Monaco language-service workers under strict CSP (semantic IntelliSense) · packaged-build verification | [ADR-0036](DECISIONS.md) |
+| **Knowledge & RAG** - local PDF/image ingest into an air-gapped DuckDB vector store + AskSage dataset training | [ADR-0053](DECISIONS.md) |
 | Prompt/response traceability · dev-mode logging deepening | [ADR-0009](DECISIONS.md) |
 
 See [`PROGRESS.md`](PROGRESS.md) for the per-session log (shipped / stubbed / next).
+
+## 🤝 Contributing
+
+Built in the open, **one disciplined increment at a time.** If you want to run it from source, file an issue,
+or propose a change, start here:
+
+- **Read [`CLAUDE.md`](CLAUDE.md) first.** It's the load-bearing contract - fail-closed, **extend omp (don't
+  fork)**, frozen contracts, a byte-stable prompt prefix. A change that silently breaks an invariant won't land.
+- **ADR-first.** Non-trivial work begins as an ADR in [`DECISIONS.md`](DECISIONS.md) (**53 and counting**) -
+  scope, decision, alternatives, invariants preserved. The whole roadmap is designed this way; pick one up or
+  propose your own.
+- **One increment per change** - small, verifiable, with a demo + tests. See [`PROGRESS.md`](PROGRESS.md) for
+  the cadence and [`CHEATSHEET.md`](CHEATSHEET.md) for day-to-day commands.
+- **Tests are the gate.** `bun test harness && bun test desktop` stay green, `tsc --noEmit` is clean across all
+  projects, and any prompt-prefix change must pass the prefix-hash test. CI runs the build + CodeQL on every push.
+- **The only Python is the scanner sidecar.** Everything else is TypeScript on Bun - please don't add a second
+  Python surface.
+
+**Good first areas:** the desktop GUI + dev server, scanner fixtures, docs/wording, and platform/build
+robustness (Windows + macOS installers).
+
+> **License & boundary.** This repo is shared publicly for **transparency and evaluation**. The *capabilities
+> and guarantees* are open; the deepest **trust, provenance, and personalization mechanisms are proprietary**
+> (© 2026 Nick Chadwick - **All Rights Reserved**; no open-source license is granted). Please **open an issue or
+> discussion before any large change** so we can align on scope and contribution terms.
 
 ## <img src=".github/assets/icons/docs.svg" width="28" align="top" alt=""> Project docs
 
 | Doc | What's in it |
 |:--|:--|
 | [`CLAUDE.md`](CLAUDE.md) | **Read first.** The load-bearing invariants (fail-closed, extend-don't-fork, frozen contracts, byte-stable prefix) |
-| [`DECISIONS.md`](DECISIONS.md) | Architecture decision records (ADR-0001 … ADR-0037) |
+| [`DECISIONS.md`](DECISIONS.md) | Architecture decision records (ADR-0001 … ADR-0053) |
 | [`PROGRESS.md`](PROGRESS.md) | Per-session build log: shipped / stubbed / next |
 | [`desktop/README.md`](desktop/README.md) | The desktop GUI + dev server |
 | [`CHEATSHEET.md`](CHEATSHEET.md) | Day-to-day commands |
