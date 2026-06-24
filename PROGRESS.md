@@ -2021,3 +2021,18 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
   12→126k; tooltip renames checker on override; reset clean; no console errors.
 - **stubbed:** estimate is a flat per-iteration heuristic (no live price/cost table, no thinking-budget factor).
 - **next:** a price-aware ranker + cost (not just token) display; per-automation checker override.
+
+---
+**P-GOAL.7 — /goal launcher: dollar estimate + per-run model/skill/persona (ADR-0049)**
+- **shipped:** the goal modal now shows a cache-rationalized DOLLAR estimate (`~$0.00 · ~Nk tokens · N loops`)
+  at the lower-left via the premium `data-tip` tooltip. `desktop/model_pricing.ts` (pure, 6 tests): price a model
+  from the user's ACTUAL usage-ledger cost÷tokens when metered, else a per-tier LIST table; `estimateGoalCost`
+  (loop_estimate, +4 tests) splits in/out tokens, prices maker+checker separately, discounts cached input at 10%
+  using the observed cache-hit rate. New "Run with" row: base model / thinking / skill / persona selects, defaulting
+  to session state, updating the estimate live and applied to the session ONLY at Run time (browsing never mutates).
+  Whole module text enlarged + higher contrast. `bun test desktop` 326/326; typecheck clean (3 cfgs). Live-verified:
+  opus $1.05 → haiku $0.06 → haiku×12 $0.13; premium tooltip renders (title + cache text); session unchanged while
+  browsing; pickers populate (8 model groups, thinking, bundled skills, persona); no console errors; session reset clean.
+- **stubbed:** list prices are approximate + age (actual-usage pricing is exact only for metered models); saved
+  automations don't yet capture the run-with selections; per-iteration token split is a flat heuristic.
+- **next:** carry run-with into automations; a maintained price table or a live pricing source.

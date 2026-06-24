@@ -15,7 +15,8 @@ import type { PersonalGraphData } from "./bridge.ts";
 import { type Action, attachRichTip, createPalette, initTooltips, popover, showToast } from "./ui.ts";
 import { ASKSAGE_FAMILY_ORDER, familyOf, filterModels, groupByFamily, isAuxiliaryModel, isChinaModel, isDeprecatedModel, isGovModel, sortGovFirstNewest } from "./model_families.ts";
 import { INSTALLED_SKILLS, bumpSkillUsage, bundledSkillsByUsage, taskProforma } from "./skills.ts";
-import { CHECKER_TOKENS_PER_ITER, MAKER_TOKENS_PER_ITER, estimateGoalTokens, formatTokens } from "../loop_estimate.ts";
+import { CHECKER_TOKENS_PER_ITER, MAKER_TOKENS_PER_ITER, estimateGoalCost, estimateGoalTokens, formatTokens, formatUSD } from "../loop_estimate.ts";
+import { assumedCacheRate, priceFor } from "../model_pricing.ts";
 import { closeIde, openIde, setIdeExclusivity, setIdeHooks } from "./ide_panel.ts";
 // P-TPS.1 (ADR-0044): the shared output-token speedometer — same engine the omp
 // terminal adapter uses. Drives the HUD's live "tok out · tok/s" readout from the
@@ -2189,6 +2190,8 @@ async function handleSkillFiles(fileList: FileList | File[], node: HTMLElement):
 }
 // ── /goal loop (P-GOAL.1, ADR-0046) ───────────────────────────────────────────
 let goalLoopRunning = false; // P-GOAL.2: true while a /goal loop streams, so Stop cancels the LOOP
+// P-GOAL.7: the usage ledger for the open goal modal (real per-model price + cache rate), fetched lazily.
+let goalLedger: Awaited<ReturnType<typeof bridge.usage>> | null = null;
 // A launcher form (goal · optional verify command · max iterations), then a loop that streams maker
 // iterations with a separate checker's verdict each round. Every action is still gated server-side.
 function openGoalForm(): void {
@@ -2202,6 +2205,15 @@ function openGoalForm(): void {
     <label class="goal-lbl">Verification command <span class="goal-opt">optional, proves "done" by exit 0</span></label>
     <input id="goalCmd" class="prov-key" placeholder="e.g. npm test && npm run lint" spellcheck="false" autocomplete="off" />
     <div class="goal-row"><label class="goal-lbl">Max iterations</label><input id="goalMax" class="prov-key goal-max" type="number" min="1" max="20" value="6" /></div>
+    <div class="goal-row goal-runwith">
+      <label class="goal-lbl">${icon("spark", 12)} Run with <span class="goal-opt">base model, thinking, skill, persona</span></label>
+      <div class="goal-rw-grid">
+        <label class="goal-rw-f"><span>Base model</span><select id="goalModel" class="prov-key"></select></label>
+        <label class="goal-rw-f" id="goalThinkWrap" hidden><span>Thinking</span><select id="goalThink" class="prov-key"></select></label>
+        <label class="goal-rw-f"><span>Skill</span><select id="goalSkill" class="prov-key"></select></label>
+        <label class="goal-rw-f" id="goalPersonaWrap" hidden><span>Persona</span><select id="goalPersona" class="prov-key"></select></label>
+      </div>
+    </div>
     <div class="goal-row goal-checker">
       <label class="goal-lbl">${icon("spark", 12)} Checker model <span class="goal-opt">grades each round; a cheaper model is fine</span></label>
       <select id="goalChecker" class="prov-key goal-ckr"><option>loading…</option></select>
@@ -2253,9 +2265,10 @@ function openGoalForm(): void {
   // P-GOAL.6.1: live token estimate (lower-left), recomputed as the iteration count changes.
   ($("#goalMax", ov) as HTMLInputElement)?.addEventListener("input", () => updateGoalEstimate(ov));
   updateGoalEstimate(ov); // initial; model names fill in once loadCheckerModel resolves
-  $("#goalRun", ov)?.addEventListener("click", () => {
+  $("#goalRun", ov)?.addEventListener("click", async () => {
     const { goal, command, maxIters } = readSpec();
     if (!goal) { showToast({ tone: "warn", title: "Add a goal", desc: "Describe what the loop should accomplish.", timeout: 2400 }); return; }
+    await applyRunWith(ov); // P-GOAL.7: apply base model / thinking / skill / persona for this run
     close();
     void runGoalLoop({ goal, condition: command || goal, command: command || undefined, maxIters });
   });
@@ -2284,6 +2297,77 @@ function openGoalForm(): void {
   void renderAutomations(ov, close);
   // P-GOAL.6: populate the checker-model picker (auto recommendation + override).
   void loadCheckerModel(ov);
+  // P-GOAL.7: the "Run with" pickers (base model / thinking / skill / persona) + the usage ledger that
+  // makes the cost estimate use the user's REAL per-model prices and cache rate.
+  loadRunWith(ov);
+  goalLedger = null;
+  void bridge.usage().then((l) => { goalLedger = l; updateGoalEstimate(ov); });
+}
+
+// P-GOAL.7 (ADR-0049): the goal modal's "Run with" pickers. They drive the SAME session controls as the
+// composer (base model + thinking via config; bundled skill via the active-skill path; AskSage persona),
+// defaulting to the current session state, so the loop runs with exactly what's shown. Thinking and
+// persona only appear when available.
+function loadRunWith(ov: HTMLElement): void {
+  // Base model — the maker. Options come from the session model config; changing it sets the session.
+  const modelOpt = state.config.find((c) => c.id === "model");
+  const modelSel = $("#goalModel", ov) as HTMLSelectElement | null;
+  if (modelSel && modelOpt) {
+    const byProv = new Map<string, { value: string; name?: string }[]>();
+    for (const o of (modelOpt.options ?? [])) { const p = o.value.split("/")[0]; (byProv.get(p) ?? byProv.set(p, []).get(p)!).push(o); }
+    modelSel.innerHTML = [...byProv.entries()].map(([prov, opts]) =>
+      `<optgroup label="${esc(prov)}">` + opts.map((o) => `<option value="${esc(o.value)}">${esc(o.name || o.value.split("/").pop() || o.value)}</option>`).join("") + `</optgroup>`).join("");
+    modelSel.value = modelOpt.currentValue ?? "";
+    ov.dataset.makerModel = modelSel.value;
+    ov.dataset.makerName = modelOpt.options?.find((o) => o.value === modelSel.value)?.name || modelSel.value.split("/").pop() || modelSel.value;
+    // Selecting only updates the cost estimate instantly; the session model is applied at Run time
+    // (so just browsing the dropdown never mutates the live session).
+    modelSel.addEventListener("change", () => {
+      ov.dataset.makerModel = modelSel.value;
+      ov.dataset.makerName = (modelOpt.options ?? []).find((o) => o.value === modelSel.value)?.name || modelSel.value.split("/").pop() || modelSel.value;
+      updateGoalEstimate(ov);
+    });
+  }
+  // Thinking — only if the provider exposes it. Applied at Run time.
+  const thinkOpt = state.config.find((c) => c.id === "thinking");
+  const thinkSel = $("#goalThink", ov) as HTMLSelectElement | null;
+  if (thinkSel && thinkOpt?.options?.length) {
+    ($("#goalThinkWrap", ov) as HTMLElement).hidden = false;
+    thinkSel.innerHTML = thinkOpt.options.map((o) => `<option value="${esc(o.value)}">${esc(prettyLevel(o.name))}</option>`).join("");
+    thinkSel.value = thinkOpt.currentValue ?? "";
+  }
+  // Skill — None + bundled (trusted guidance that rides every loop turn). Defaults to the active skill.
+  const skillSel = $("#goalSkill", ov) as HTMLSelectElement | null;
+  if (skillSel) {
+    skillSel.innerHTML = `<option value="">None</option>` + bundledSkillsByUsage().map((s) => `<option value="${esc(s.command)}">${esc(s.name)}</option>`).join("");
+    skillSel.value = state.activeSkill?.command ?? "";
+  }
+  // Persona — only if AskSage personas are available. Defaults to the applied one.
+  const personaSel = $("#goalPersona", ov) as HTMLSelectElement | null;
+  if (personaSel && state.personas.length) {
+    ($("#goalPersonaWrap", ov) as HTMLElement).hidden = false;
+    personaSel.innerHTML = `<option value="">None</option>` + state.personas.map((p) => `<option value="${esc(p.id)}">${esc(p.id)}</option>`).join("");
+    personaSel.value = state.asksage?.persona ?? "";
+  }
+}
+
+// P-GOAL.7: apply the "Run with" selections to the session right before a loop runs — base model +
+// thinking (config), bundled skill (active-skill path), AskSage persona. Only changes what actually
+// differs from the current state, so a run with the defaults is a no-op. Best-effort; never blocks Run.
+async function applyRunWith(ov: HTMLElement): Promise<void> {
+  try {
+    const modelSel = $("#goalModel", ov) as HTMLSelectElement | null;
+    const cur = state.config.find((c) => c.id === "model")?.currentValue;
+    if (modelSel?.value && modelSel.value !== cur) { await bridge.setConfig("model", modelSel.value); state.config = (await bridge.config()) ?? state.config; }
+    const thinkSel = $("#goalThink", ov) as HTMLSelectElement | null;
+    const curThink = state.config.find((c) => c.id === "thinking")?.currentValue;
+    if (thinkSel && !thinkSel.closest("[hidden]") && thinkSel.value && thinkSel.value !== curThink) { await bridge.setConfig("thinking", thinkSel.value); state.config = (await bridge.config()) ?? state.config; }
+    const skillSel = $("#goalSkill", ov) as HTMLSelectElement | null;
+    if (skillSel && skillSel.value !== (state.activeSkill?.command ?? "")) { if (skillSel.value) await activateBundledSkill(skillSel.value); else await clearBundledSkill(); }
+    const personaSel = $("#goalPersona", ov) as HTMLSelectElement | null;
+    if (personaSel && !personaSel.closest("[hidden]") && personaSel.value !== (state.asksage?.persona ?? "")) { await bridge.applyPersona(personaSel.value || null); }
+    updateComposerTools();
+  } catch { /* best-effort: a failed apply must not block the loop */ }
 }
 
 // P-GOAL.6 (ADR-0048): fill the checker-model <select> with "Auto (recommended)" + the user's
@@ -2302,9 +2386,10 @@ async function loadCheckerModel(ov: HTMLElement): Promise<void> {
   sel.value = info.selected || "";
   const showWhy = () => { if (why) why.textContent = sel.value ? "" : (info.recommendedWhy || ""); };
   showWhy();
-  // P-GOAL.6.1: stash the maker + recommended-checker display names so the token estimate can name them.
+  // P-GOAL.6.1: stash the maker + recommended-checker names/values so the cost estimate can price + name them.
   ov.dataset.makerName = info.options.find((o) => o.value === info.current)?.name || info.current.split("/").pop() || info.current;
   ov.dataset.ckrRecName = recName;
+  ov.dataset.ckrRecValue = info.recommended;
   updateGoalEstimate(ov);
   sel.addEventListener("change", async () => {
     const updated = await bridge.setCheckerModel(sel.value);
@@ -2313,24 +2398,32 @@ async function loadCheckerModel(ov: HTMLElement): Promise<void> {
   });
 }
 
-// P-GOAL.6.1 (ADR-0048): the live token estimate at the modal's lower-left. Names the maker (chat) and
-// checker models, scales by the iteration count, and explains the rough assumptions on hover. The number
-// is the CEILING — a loop usually stops earlier, the moment its condition holds.
+// P-GOAL.6.1 / P-GOAL.7 (ADR-0048/0049): the live cost estimate at the modal's lower-left — tokens AND a
+// cache-rationalized dollar figure for the SELECTED base + checker models. Updates as iterations / models
+// change; the premium tooltip (data-tip) explains the assumptions. The number is a CEILING — a loop
+// usually stops earlier, the moment its condition holds.
 function updateGoalEstimate(ov: HTMLElement): void {
   const box = $("#goalEstimate", ov); if (!box) return;
   const maxIters = Math.min(20, Math.max(1, Number(($("#goalMax", ov) as HTMLInputElement)?.value) || 6));
-  const est = estimateGoalTokens({ maxIters });
-  const makerName = ov.dataset.makerName || "your model";
-  const sel = $("#goalChecker", ov) as HTMLSelectElement | null;
-  const checkerName = sel?.value
-    ? (sel.options[sel.selectedIndex]?.textContent || sel.value)
-    : (ov.dataset.ckrRecName || makerName);
-  box.innerHTML = `${icon("spark", 11)} <span class="ge-n">~${esc(formatTokens(est.total))} tokens</span> · ${est.iters} loop${est.iters === 1 ? "" : "s"}`;
-  box.setAttribute("title",
-    `Rough token estimate for this run; the ceiling, since a loop usually stops earlier the moment its condition holds.\n\n` +
-    `Assumes ~${formatTokens(MAKER_TOKENS_PER_ITER)} per maker iteration on ${makerName} (context + reasoning + tool output) ` +
-    `and ~${formatTokens(CHECKER_TOKENS_PER_ITER)} per checker check on ${checkerName}, across up to ${est.iters} iteration${est.iters === 1 ? "" : "s"}.\n` +
-    `Actual usage depends on the task. Choosing a cheaper checker model lowers the per-iteration cost.`);
+  const tok = estimateGoalTokens({ maxIters });
+  // Maker = the selected base model; checker = the selected override, else the recommendation.
+  const makerModel = (($("#goalModel", ov) as HTMLSelectElement | null)?.value) || ov.dataset.makerModel || "";
+  const makerName = ov.dataset.makerName || makerModel.split("/").pop() || "your model";
+  const ckrSel = $("#goalChecker", ov) as HTMLSelectElement | null;
+  const checkerModel = ckrSel?.value || ov.dataset.ckrRecValue || makerModel;
+  const checkerName = ckrSel?.value ? (ckrSel.options[ckrSel.selectedIndex]?.textContent || ckrSel.value) : (ov.dataset.ckrRecName || makerName);
+  const makerP = priceFor(makerModel, goalLedger);
+  const checkerP = priceFor(checkerModel, goalLedger);
+  const rate = assumedCacheRate(goalLedger);
+  const cost = estimateGoalCost({ maxIters, makerPrice: makerP.price, checkerPrice: checkerP.price, cacheRate: rate });
+  box.innerHTML = `${icon("spark", 11)} <span class="ge-n">~${esc(formatUSD(cost.net))}</span> · ~${esc(formatTokens(tok.total))} tokens · ${tok.iters} loop${tok.iters === 1 ? "" : "s"}`;
+  const priceNote = makerP.source === "actual" || checkerP.source === "actual" ? "your actual metered prices" : "list-price estimates";
+  box.setAttribute("data-tip",
+    `Estimated run cost|Up to ~${formatUSD(cost.net)} and ~${formatTokens(tok.total)} tokens across ${tok.iters} iteration${tok.iters === 1 ? "" : "s"}: ` +
+    `maker ${makerName} (~${formatTokens(MAKER_TOKENS_PER_ITER)}/iter), checker ${checkerName} (~${formatTokens(CHECKER_TOKENS_PER_ITER)}/iter). ` +
+    `Priced with ${priceNote}, after ~${Math.round(rate * 100)}% prompt-cache savings (about ${formatUSD(cost.savings)} saved). ` +
+    `This is a ceiling; a loop usually stops earlier the moment its condition holds.`);
+  box.setAttribute("data-tip-icon", "spark");
 }
 
 // P-GOAL.5 (ADR-0047): render the saved-automations list inside the goal modal — each row shows its

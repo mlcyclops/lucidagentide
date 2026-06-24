@@ -4178,3 +4178,52 @@ Three follow-ups landed on the checker picker the increment after P-GOAL.6:
   explains the per-iteration assumptions, names the maker + checker models, and notes it's a CEILING
   (a loop usually stops earlier). The user confirms by clicking Run with the estimate in view. The
   "Auto" option label is em-dash-free (`Auto (recommended: <name>)`).
+
+-----
+
+## ADR-0049 — The /goal launcher as a run console: cost estimate + per-run model/skill/persona
+
+**Date:** 2026-06-24
+**Status:** **Accepted** — P-GOAL.7 built this increment.
+**Context increment:** P-GOAL.7.
+
+### Context
+
+The /goal modal had a token estimate (P-GOAL.6.1) and a checker-model picker. The user asked to (a)
+show a real DOLLAR estimate rounded to cents, rationalized against prompt-cache savings; (b) let the
+loop choose its base (maker) model, thinking level, a skill, and a persona; (c) use the app's premium
+tooltip for the estimate; and (d) enlarge the module's text for readability.
+
+### Decision
+
+The launcher becomes a small "run console". Three pieces:
+
+- **Dollar estimate, cache-rationalized.** `desktop/model_pricing.ts` (pure, tested) prices a model two
+  ways, in priority order: the user's ACTUAL metered price from the usage ledger (cost ÷ tokens per
+  model — truest for them), else a built-in per-tier LIST table (approximate public prices). `desktop/
+  loop_estimate.ts` gains `estimateGoalCost`: it splits each iteration into input/output tokens, prices
+  maker + checker separately, and applies the prompt-cache discount to INPUT (cached input billed at
+  ~10%), using the user's observed cache-hit rate (else a modest 0.35 — a loop re-sends a large,
+  identical prefix every round, so reuse is real). Shown as `~$0.00 · ~Nk tokens · N loops` at the
+  modal's lower-left; it's a CEILING (loops usually stop early). All estimates; the tooltip says so.
+- **Per-run "Run with" pickers.** Base model, thinking, skill (None + bundled), and persona (when
+  AskSage personas exist). They default to the current session state and update the estimate live, but
+  are applied to the session ONLY at Run time (`applyRunWith`) — browsing the dropdowns never mutates
+  the live session. `applyRunWith` only changes what differs from current, so a default run is a no-op;
+  it's best-effort and never blocks the loop. (Saved automations don't capture these yet — noted stub.)
+- **Premium tooltip + readability.** The estimate uses the app's `data-tip="Title|Body"` tooltip (the
+  same one as the model badge), not a native title. The whole modal's type is larger / higher-contrast.
+
+### Consequences
+
+A user can see, before committing, roughly what a loop will cost in dollars for THEIR plan and cache
+behaviour, and tune the model/thinking/skill/persona + checker to trade cost against capability. The
+dollar figure is only as good as the price source: real when the model has metered usage, an approximate
+list price otherwise (and list prices age — that's the main stub, alongside automations not yet carrying
+the run-with selections and the flat per-iteration token assumptions).
+
+### Relates to
+
+ADR-0046 (the loop), ADR-0047 (automations), ADR-0048 (the checker model this prices alongside the
+maker); P10.2 (the usage/cost ledger the actual prices come from); ADR-0029 (the active-skill + persona
+paths the run-with pickers drive).

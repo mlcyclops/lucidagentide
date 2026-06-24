@@ -509,13 +509,15 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .sl-hint{flex:1 1 auto;min-width:0;font-size:11.5px;color:var(--txt-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 /* P-GOAL.1: /goal loop launcher modal + the in-chat loop rendering. */
 .goal-scrim{position:fixed;inset:0;z-index:200;background:rgba(0,0,0,.55);display:grid;place-items:center;animation:fade var(--t) var(--ease)}
-.goal-modal{width:min(520px,92vw);background:var(--bg-1);border:1px solid var(--line-strong);border-radius:16px;padding:20px;
-  box-shadow:0 20px 60px rgba(0,0,0,.55);display:flex;flex-direction:column;gap:8px;animation:rise var(--t-slow) var(--ease-out)}
-.goal-modal-h{display:flex;align-items:center;gap:8px;font-size:15px;font-weight:600;color:var(--txt)}
+/* P-GOAL.7: larger, higher-contrast text across the whole module for easier reading */
+.goal-modal{width:min(560px,93vw);background:var(--bg-1);border:1px solid var(--line-strong);border-radius:16px;padding:22px;
+  box-shadow:0 20px 60px rgba(0,0,0,.55);display:flex;flex-direction:column;gap:9px;animation:rise var(--t-slow) var(--ease-out)}
+.goal-modal-h{display:flex;align-items:center;gap:8px;font-size:16.5px;font-weight:650;color:var(--txt)}
 .goal-modal-h .ic{color:var(--accent-2)}
-.goal-modal-sub{font-size:12px;color:var(--txt-3);line-height:1.5;margin-bottom:4px}
-.goal-lbl{font-size:11.5px;font-weight:600;color:var(--txt-2);margin-top:6px}
-.goal-opt{font-weight:400;color:var(--txt-4)}
+.goal-modal-sub{font-size:13px;color:var(--txt-2);line-height:1.5;margin-bottom:4px}
+.goal-lbl{font-size:13px;font-weight:600;color:var(--txt-2);margin-top:6px}
+.goal-opt{font-weight:400;color:var(--txt-4);font-size:12px}
+.goal-modal .prov-key{font-size:13px}
 .goal-modal textarea.prov-key{resize:vertical;min-height:58px;font-family:inherit}
 .goal-row{display:flex;align-items:center;gap:10px;margin-top:6px}
 .goal-row .goal-lbl{margin:0}
@@ -529,6 +531,14 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .goal-resume .ic{flex:none;color:var(--accent-2)}
 .goal-resume .gr-goal{flex:1 1 auto;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .goal-resume .gr-iters{flex:none;font-family:var(--mono);font-size:10px;color:var(--txt-4)}
+/* P-GOAL.7: "Run with" pickers (base model / thinking / skill / persona) */
+.goal-runwith{flex-wrap:wrap;gap:6px}
+.goal-runwith .goal-lbl{flex:1 1 100%;display:flex;align-items:center;gap:5px}
+.goal-runwith .goal-lbl .ic{color:var(--accent-2)}
+.goal-rw-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;width:100%}
+.goal-rw-f{display:flex;flex-direction:column;gap:4px;min-width:0}
+.goal-rw-f>span{font-size:11.5px;color:var(--txt-3)}
+.goal-rw-f>select{width:100%}
 /* P-GOAL.6: checker-model picker in the goal modal (bigger + higher-contrast text for readability) */
 .goal-checker{flex-wrap:wrap;gap:6px}
 .goal-checker .goal-lbl{flex:1 1 100%;display:flex;align-items:center;gap:5px;font-size:13px;color:var(--txt-2)}
