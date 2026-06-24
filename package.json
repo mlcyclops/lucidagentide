@@ -39,6 +39,7 @@
     "demo-P8.1": "bun run harness/scripts/demo17_recall.ts",
     "demo-P8.2": "bun run harness/scripts/demo18_turns.ts",
     "demo-P-EXT.1": "bun run harness/scripts/demo19_lucid_launcher.ts",
+    "demo-P-CODE.1": "bun run harness/scripts/demo_pcode1.ts",
     "dashboards": "bun run harness/scripts/materialize_dashboards.ts",
     "omp:secure": "omp -e harness/omp/security_extension.ts",
     "dashboard:tui": "bun run tools/dashboard_tui.ts",

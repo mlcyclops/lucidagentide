@@ -12,7 +12,7 @@ import { join } from "node:path";
 import { devSnapshot, securitySnapshot } from "../tools/web/data.ts";
 import { approveBlock, liveBlocks } from "./security_log.ts";
 import { probeRateLimits } from "./ratelimit_probe.ts";
-import { OBS_DB_PATH, memorySnapshot, rateLimits, usageLedger } from "../tools/memory_data.ts";
+import { OBS_DB_PATH, codeActivity, memorySnapshot, rateLimits, usageLedger } from "../tools/memory_data.ts";
 import { backend } from "./acp_backend.ts";
 import { deleteSession, listSessions, sessionMessages } from "./sessions.ts";
 import { providerAuth } from "./auth_status.ts";
@@ -39,6 +39,9 @@ import type { CuiDesignation } from "../harness/export/vault_export.ts";
 
 applyEnv(); // make stored API keys available to a spawned omp acp
 if (loadSettings().headroomEnabled) startHeadroom(); // resume the opt-in compression proxy
+
+// 30s memo for /api/code-activity — each rebuild spawns `git log` per workspace (ADR-0030 P-CODE.1).
+let codeActivityCache: { at: number; data: ReturnType<typeof codeActivity> } | null = null;
 
 function ompBin(): string {
   for (const c of [join(homedir(), ".bun", "bin", "omp.exe"), join(homedir(), ".bun", "bin", "omp")]) if (existsSync(c)) return c;
@@ -213,6 +216,16 @@ const server = Bun.serve({
       }
       // P10.2: cross-model usage & cost ledger (per-model totals + estimated cache savings).
       if (p === "/api/usage") return json({ ok: true, data: usageLedger() });
+      // ADR-0030 P-CODE.1: per-workspace git diffstat for the current month (repo
+      // activity, not AI authorship). Read-only, metadata-only, fail-closed per workspace.
+      // Cached 30s — each call spawns `git log` per workspace, so don't re-run it on
+      // every dashboard poll. `?force=1` bypasses the cache (manual refresh).
+      if (p === "/api/code-activity") {
+        const now = Date.now();
+        if (!codeActivityCache || now - codeActivityCache.at > 30_000 || url.searchParams.get("force") === "1")
+          codeActivityCache = { at: now, data: codeActivity() };
+        return json({ ok: true, data: codeActivityCache.data });
+      }
       if (p === "/api/health") return json({ ok: true });
       // In-app folder browser (works in the browser build AND Electron — the dev server
       // reads the local FS in both). Lists subdirectories + flags git repos, for Workspace.

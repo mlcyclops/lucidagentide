@@ -26,6 +26,7 @@ const state = {
   security: null as SecuritySnapshot | null,
   memory: null as MemorySnapshot | null,
   ledger: null as import("./bridge.ts").UsageLedger | null, // P10.2 cross-model usage ledger
+  codeActivity: null as import("./bridge.ts").CodeActivity | null, // ADR-0030 P-CODE.1 git workspace diffstat
   config: [] as ConfigOption[],
   configCached: false, // P-IDE.1d: current config came from the local cache; live refresh pending
   uiMode: "agent" as "agent" | "ask" | "plan", // P-ACP.2/3: composer Plan/Ask/Agent (derived from backend)
@@ -796,6 +797,7 @@ function renderMetricsRail(): void {
   const avg = turns ? Math.round(cur / turns) : 0;
   const findings = sec ? sec.findings.reduce((a, r) => a + Number(r.n || 0), 0) : 0;
   const quar = sec ? sec.quarantine.length : 0;
+  const ca = state.codeActivity; // ADR-0030 P-CODE.1: this month's repo activity
   const tile = (n: string, label: string, cls: string, tip: string) =>
     `<div class="tile ${cls}" data-tip="${esc(label)}|${esc(tip)}" data-tip-side="left"><div class="n">${esc(n)}</div><div class="l">${esc(label)}</div></div>`;
   tiles.innerHTML =
@@ -803,6 +805,7 @@ function renderMetricsRail(): void {
     tile(fmtNum(avg), "avg/turn", "c", "Average tokens per turn") +
     tile(fmtNum(cur), "context", "b", "Context tokens in use this turn") +
     tile(String(turns), "turns", "b2", "Agent turns in this session") +
+    (ca && ca.totals.files > 0 ? tile(`+${fmtNum(ca.totals.added)}`, "lines", "g", `Workspace activity this month (${ca.month}): ${fmtNum(ca.totals.added)} lines added, ${fmtNum(ca.totals.deleted)} deleted across ${fmtNum(ca.totals.files)} files. This is REPO activity (all commits), not AI-authored lines.`) : "") +
     tile(String(findings), "findings", "m", "Scanner findings so far") +
     tile(String(quar), "quarantd", "r", "Artifacts currently quarantined");
 }
@@ -1668,6 +1671,16 @@ function ledgerBody(led: import("./bridge.ts").UsageLedger): string {
   const { peek, rest } = ledgerSplit(led);
   return peek + (rest ?? "");
 }
+// ADR-0030 P-CODE.1: one ledger-card row for this month's git workspace activity.
+// Honest label — this is REPO activity (all commits), NOT AI authorship (AGENTS.md #10).
+function codeActivityRow(): string {
+  const ca = state.codeActivity;
+  if (!ca || ca.totals.files === 0) return ""; // fail-closed: no live git data → render nothing
+  const { added, deleted, files } = ca.totals;
+  return `<div class="lc-row"><span class="lc-k">workspace activity · ${esc(ca.month)}</span>`
+    + `<b class="lc-loc"><span class="loc-add">+${fmtNum(added)}</span> / <span class="loc-del">-${fmtNum(deleted)}</span>`
+    + ` <span class="lc-pct">${fmtNum(files)} file${files === 1 ? "" : "s"}</span></b></div>`;
+}
 // ADR-0021: split the ledger into a "peek" (always visible: snapshot card + first model row)
 // and "rest" (the remaining model rows, rendered inside an accordion by the caller).
 function ledgerSplit(led: import("./bridge.ts").UsageLedger): { peek: string; rest: string | null } {
@@ -1678,6 +1691,7 @@ function ledgerSplit(led: import("./bridge.ts").UsageLedger): { peek: string; re
     <div class="lc-row"><span class="lc-k">spend · all models</span><b>${fmtUSD(t.cost)}</b></div>
     <div class="lc-row ok"><span class="lc-k">est. cache savings</span><b>${fmtUSD(t.savings)} <span class="lc-pct">${Math.round(savedPct * 100)}% off full price</span></b></div>
     <div class="lc-row"><span class="lc-k">cache hit-rate</span><b style="color:${goodColor(t.cacheHitRate)}">${Math.round(t.cacheHitRate * 100)}%</b></div>
+    ${codeActivityRow()}
     <div class="lc-foot">${fmtNum(t.tokens)} tokens · ${t.turns} turns · ${led.models.length} models · ${t.sessions} sessions${local.cost > 0 ? ` · <span class="lc-local">local ${fmtUSD(local.cost)}</span>` : " · all provider/subscription"}</div>
     ${led.truncated ? `<div class="lc-foot warn">${icon("info", 11)} showing the ${led.files} most recent sessions</div>` : ""}
   </div>`;
@@ -1778,8 +1792,8 @@ function renderStatus(): void {
 // ───────────────────────── data polling ─────────────────────────
 async function refresh(): Promise<void> {
   try {
-    const [sec, mem, led] = await Promise.all([bridge.security(), bridge.memory(), bridge.usage()]);
-    state.security = sec; state.memory = mem; state.ledger = led;
+    const [sec, mem, led, code] = await Promise.all([bridge.security(), bridge.memory(), bridge.usage(), bridge.codeActivity()]);
+    state.security = sec; state.memory = mem; state.ledger = led; state.codeActivity = code;
     checkBudgetWarning(mem?.budgets); // early heads-up before a provider budget runs out
     // the badge reflects the live session CONFIG model (loadConfig), not the
     // historical snapshot - so it shows what the next turn will actually use.

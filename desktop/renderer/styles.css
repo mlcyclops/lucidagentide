@@ -306,6 +306,10 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .lc-foot{margin-top:8px;padding-top:8px;border-top:1px solid var(--line-soft);font-size:10.5px;color:var(--txt-3);display:flex;align-items:center;gap:5px;flex-wrap:wrap}
 .lc-foot.warn{color:var(--amber);border-top:0;padding-top:2px;margin-top:3px}
 .lc-local{color:var(--cyan)}
+/* ADR-0030 P-CODE.1: git diffstat line counts in the ledger card (+added / -deleted) */
+.lc-loc{font-weight:700;font-variant-numeric:tabular-nums}
+.loc-add{color:var(--green)}
+.loc-del{color:var(--red)}
 /* reading column: a comfortable measure keeps long prose calm and scannable */
 .msg .text p,.msg .text ul,.msg .text ol,.msg .text blockquote{max-width:72ch}
 .msg .text p{margin:0 0 12px}

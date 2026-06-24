@@ -146,6 +146,10 @@ demo-P-LOC.1: ## P-LOC.1: AI-LOC attribution — count AI-authored lines per mod
 demo-ADR9A: ## ADR-0009 Phase A: recall prior-session facts into a new session (suspicious never recalled)
 	$(BUN) run harness/scripts/demo17_recall.ts
 
+.PHONY: demo-P-CODE.1
+demo-P-CODE.1: ## P-CODE.1 (ADR-0030): git workspace diffstat this month + fail-closed omit of non-git dirs
+	$(BUN) run harness/scripts/demo_pcode1.ts
+
 .PHONY: dashboards
 dashboards: ## Materialize dashboard CSVs from a DuckDB into observable/docs/data (DB=path)
 	$(BUN) run harness/scripts/materialize_dashboards.ts $(DB) observable/docs/data
