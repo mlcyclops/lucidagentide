@@ -1788,3 +1788,17 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
   desktop 258 · harness 408 · bundle builds.
 - **next:** optional P-IDE.7 — Monaco language-service workers under strict CSP (semantic IntelliSense),
   and an "Open file…" entry point wiring the (already-built) editorRead into the UI.
+
+## ADR-0040 — standing user-turn guidance re-delivered every turn (+ KG/memory polish)
+
+- **shipped:** ADR-0040 (DECISIONS.md): persona (ADR-0007) / bundled skill (ADR-0029) / personalization
+  `<user-profile>` profile (ADR-0009 P9.2) now re-deliver on EVERY user turn instead of once per session,
+  so they stop fading mid-conversation; cross-session `<recalled-memory>` stays once. Safe — all post
+  cache-breakpoint (invariant #6 holds; demo02_prefix_hash green). Documents this session's fixes:
+  recall excludes mechanical tool activity + stops promoting raw tool I/O as facts; preamble stripped from
+  chat/titles; KG live-refresh + cross-turn linking + opt-in model extraction; persona-button label;
+  delete-session; toasts; Logs-button removal; and the omp compatibility-probe CI (POAM R-01).
+- **stubbed:** omp exact-pin PR (#49) still open — caret remains on master until merged; the compat probe
+  derisks the bump but the pin closes the silent-drift gap.
+- **next:** merge #49; consider an ADR for the omp version-pin policy + an ADR for the opt-in model
+  extractor (cost-vs-quality learning) if it graduates from opt-in.

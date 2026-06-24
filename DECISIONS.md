@@ -3701,3 +3701,63 @@ a **same-machine, same-user** door — carefully.
 - `/api/chat` reuse vs a dedicated `/api/acp` bridge.
 - Concurrency model: one shared turn-serialized session vs a desktop-spawned per-IDE child session.
 - Windows owner-only ACLs (no POSIX 0600) — confirm the mechanism (icacls / Node fs Windows ACL).
+
+-----
+
+## ADR-0040 — Standing user-turn guidance (persona, skill, personalization profile) is re-delivered every turn
+
+**Date:** 2026-06-24
+**Status:** **Accepted (built)** — desktop chat backend. Shipped this session (issue #54).
+**Context increment:** UX bug-fix pass — persona/skill/personalization felt like they "stopped working" mid-conversation.
+
+### Context
+
+Three blocks ride the **user turn** (the volatile tail, AFTER the cache breakpoint — never the frozen
+prefix, invariants #5/#6):
+- the AskSage **persona** (ADR-0007), delimited untrusted;
+- the active **bundled skill** (ADR-0029), trusted `<active-skill …>`;
+- the **personalization profile** (ADR-0009 Phase A / P9.2), the `<user-profile note="…">` recall.
+
+All three were delivered **once per session** — gated by a `*Delivered` flag set on the first user turn,
+then never re-sent (`desktop/acp_backend.ts`). Over a multi-turn conversation the guidance faded: the
+model effectively "forgot" the active skill/persona and the learned profile even though the UI still
+showed them active. The reported symptom: after learning "likes caramel/custard," the agent answered a
+follow-up by searching workspace files instead of using the knowledge-graph facts it had just learned —
+because the `<user-profile>` block was delivered on turn 1 and gone by the later turn.
+
+### Decision
+
+**Re-deliver STANDING guidance on EVERY turn**, not once:
+- persona, active skill, and the live `<user-profile>` profile are prepended to **every** user turn;
+- the profile is **re-read each turn** (`recallPreamble()`), so facts learned mid-session appear next turn;
+- the cross-session `<recalled-memory>` block (ADR-0009 prior-session facts) stays **once per session** — it
+  is a session-start recall, not standing guidance, and re-injecting old facts every turn is bloat.
+
+The assembly was extracted into a pure, unit-tested `buildUserTurnPreamble()` (`desktop/preamble.ts`), and
+the now-unused `personaDelivered` / `skillDelivered` / `recallDelivered` flags were removed.
+
+### Why this is safe (invariant #6)
+
+These blocks live in the user turn **after the cache breakpoint**, so re-sending them every turn does **not**
+mutate or bust the byte-stable frozen prefix or its KV cache. Verified: `demo02_prefix_hash` still green.
+The only cost is a few input tokens per turn — exactly the tradeoff that makes the guidance persist. The
+fail-closed gate and the metadata-only/CUI rules are untouched (persona stays delimited-untrusted; the CUI
+profile still routes to the isolated store and learns nothing while locked).
+
+### Consequences
+
+- Persona / skill / personalization now hold across long conversations instead of fading after turn 1.
+- Small, bounded per-turn token cost (the blocks are short; all post-cache).
+- Cross-session memory recall behavior is unchanged (still once per session).
+- 5 unit tests (`desktop/preamble.test.ts`) pin: persona/skill/profile present on both turn 1 and turn 2,
+  while `<recalled-memory>` fires exactly once.
+
+### Supersedes / relates to
+
+- **Supersedes** the "delivered once per session" user-turn delivery in **ADR-0007** (persona) and
+  **ADR-0029** (bundled skill), for STANDING guidance.
+- **Refines ADR-0009 Phase A:** the P9.2 personalization `<user-profile>` recall is now re-delivered every
+  turn; the cross-session `<recalled-memory>` recall stays once-per-session.
+- Builds on the same session's recall hygiene: recall now excludes mechanical tool-call activity
+  (`omp:*` / `subagent:*`) and stops promoting raw tool I/O as facts, so what rides the user turn is
+  genuine knowledge, not noise.
