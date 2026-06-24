@@ -99,8 +99,10 @@ export function listResumableLoops(workspace: string): ResumableLoop[] {
 export function resumeGoalMemory(workspace: string, rel: string): { mem: GoalMemory; prior: string } | null {
   const root = join(workspace, ".omp", "loops");
   const target = pathWithin(root, join(workspace, rel)); // confined to .omp/loops/ (rejects traversal)
-  if (!target || !existsSync(target)) return null;
+  if (!target) return null;
   try {
+    // No existsSync precheck: readFileSync below fails closed (throws → caught → null) when the file is
+    // missing, so a separate existence check would only add a check-then-use TOCTOU window (js/file-system-race).
     const prior = readFileSync(target, "utf8");
     appendFileSync(target, `\n## Resumed\n\n`, "utf8");
     return { mem: { path: target, rel }, prior };
