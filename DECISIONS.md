@@ -3811,3 +3811,93 @@ localized to a single reviewed, fully-tested bump rather than a silent transitiv
 - Invariant #1 (extend omp, never fork) and the two correctness keystones (CLAUDE.md).
 - POAM R-01 (exact pin + compatibility CI) and R-10 (license/version record) in the add-on repo, and the
   detailed memo `BD/omp-license-and-version-pin.md` (the IP-counsel-style license note + the 16.0.6 choice).
+
+-----
+
+## ADR-0042 — Opt-in model extraction for the personalization graph (cost vs quality)
+
+**Date:** 2026-06-24
+**Status:** **Accepted (built)** — Settings toggle, default OFF (PR #66).
+**Context increment:** richer knowledge-graph relationships ("custard ↔ caramel" cross-turn linking).
+
+### Context
+
+Live learning (`learnFromTurn`, ADR-0010 P9.2) used the **offline `heuristicExtractor`**: conservative
+regex over the user's own text, plus same-turn co-occurrence edges. A richer **`modelExtractor`** (semantic
+facts + explicit `{to, relation}` links) already existed but was wired only into the chat-history *import*
+path. The heuristic, by design, misses nuance — it could not connect related concepts stated across
+different turns, and it often distilled a multi-part remark to a single fact, so there was nothing to link.
+
+### Decision
+
+Add an **opt-in** Settings toggle **"Richer graph (uses the model)"** (`personalAiExtract`, **default OFF**).
+When on, `learnFromTurn` uses `modelExtractor` instead of the heuristic, pulling semantic facts +
+relationships — at the cost of **one extra model call per turn**. It reuses the backend's existing
+`complete()` util (the same one the import path uses); falls back to the heuristic if no model-call is
+available. The toggle is surfaced only when the store is unlocked (that is when learning runs).
+
+### Why off by default
+
+A model call per turn is real latency and token cost, and silent recurring spend violates the project's
+no-surprise-cost posture. The free baseline — the offline heuristic **plus** the always-on cross-turn
+linker (ADR-0043-adjacent, PR #65) — covers most users; the model path is there for those who want the
+smartest graph and accept the cost.
+
+### Consequences
+
+- Two learning modes: free/offline (default) and richer/paid (opt-in). The offline cross-turn linker runs
+  underneath **either** mode.
+- No behavioral or cost change unless a user flips the toggle; metadata-only / CUI-isolation / fail-closed
+  gating are unchanged (the model extractor still feeds the same gated `distillTurn`).
+- Plumbing: `personalAiExtract` setting + setter, `learnFromTurn(…, complete?)`, `acp_backend` passes
+  `complete()`, `personalStatus.aiExtract`, `/api/personal/ai-extract`, and the UI toggle.
+
+### Relates to
+
+ADR-0010 (personalization graph); the import-path model extractor it generalizes.
+
+-----
+
+## ADR-0043 — Memory recall hygiene: tool I/O is provenance, not durable knowledge
+
+**Date:** 2026-06-24
+**Status:** **Accepted (built)** — read-side exclusion (PR #50) + write-side root cause (PR #56).
+**Context increment:** the knowledge graph and chat were polluted with mechanical tool-call "facts".
+
+### Context
+
+`rememberActivity` (`harness/omp/security_extension.ts`) promoted a semantic fact for **every** allowed
+tool call (entity `omp:<tool>`, e.g. `omp:web_search: best burgers Seattle`, `omp:job: job
+RegularMarsupial`), and `buildRecall` (ADR-0009 Phase A) injected up to 20 of them into each new session's
+first user turn. A live query found **17 of 17** stored facts were tool/subagent activity — zero genuine
+knowledge. The result: the model was confused by stale, irrelevant "facts," and they rendered as visible
+clutter in the chat (the `<recalled-memory>` block).
+
+### Decision
+
+1. **Read side (PR #50):** `buildRecall` excludes mechanical-activity entities (`omp:*` / `subagent:*`)
+   via parameterized `NOT LIKE`. Defense in depth — even if such facts exist, they are never surfaced.
+2. **Write side / root cause (PR #56):** `rememberActivity` no longer **promotes** raw tool I/O as a
+   recallable fact. It still **ingests** the tool output as a scanned, trust-labelled artifact (provenance
+   + audit), so the security trail is complete — it just stops treating mechanical tool mechanics as
+   durable knowledge.
+
+### What is deliberately unchanged
+
+- A subagent's **summarized result** still promotes through the **keystone-#2 semantic-promotion gate**
+  (`runs/task_gate.ts gateSubagentResult`) — suspicious/quarantined results still never auto-promote. That
+  path and its tests are untouched: keystone #2 holds.
+- Genuine user learning flows through the personalization graph (`learnFromTurn`, ADR-0010), not through
+  tool-call observation.
+
+### Consequences
+
+- Cross-session recall now carries genuine knowledge, not noise; the model is no longer derailed by old
+  tool calls, and nothing mechanical leaks into the chat or session titles.
+- The semantic-memory store stops accumulating `omp:*` / `subagent:*` activity rows over time.
+- Tests pin both halves (recall-exclusion + keystone-#2 promotion still green).
+
+### Relates to
+
+ADR-0009 Phase A (cross-session memory recall); CLAUDE.md keystone #2 (the semantic-promotion gate);
+ADR-0040 (which cited this hygiene as the reason the user turn now carries knowledge, not noise).

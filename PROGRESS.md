@@ -1813,3 +1813,14 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **stubbed:** SBOM-side version+license recording per build is the add-on Phase 3 (POAM R-10), not core.
 - **next:** run the probe (Actions → omp compatibility probe) when you want omp's reliability fixes;
   optional ADRs for the opt-in model extractor (#66) and recall hygiene (#50/#56) if you want them recorded.
+
+## ADR-0042 + ADR-0043 — KG model-extraction (opt-in) + memory recall hygiene
+
+- **shipped:** ADR-0042 (opt-in `personalAiExtract` model extractor, default OFF — richer semantic facts +
+  cross-turn relations at one model call/turn; reuses `backend.complete()`; PR #66) and ADR-0043 (memory
+  recall hygiene — `buildRecall` excludes `omp:*`/`subagent:*` mechanical activity (PR #50) and
+  `rememberActivity` stops promoting raw tool I/O as facts while keeping provenance ingest (PR #56);
+  keystone #2 subagent-result promotion untouched).
+- **stubbed:** none — both decisions were already built/merged; these ADRs formalize them.
+- **next:** nothing pending. Use the omp compatibility probe (Actions) to adopt omp fixes; flip "Richer
+  graph (uses the model)" in Settings if you want model-based learning.
