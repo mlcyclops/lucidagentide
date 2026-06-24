@@ -47,6 +47,7 @@ export function personalStatus(): PersonalStatus {
   const cuiUnlocked = !!cuiStore;
   return {
     enabled: !!s.personalizationEnabled,
+    aiExtract: !!s.personalAiExtract,
     configured: PersonalStore.exists(personalStorePath()),
     unlocked: !!store,
     scope: (s.personalScope ?? "personal") as ScopeView,
@@ -328,7 +329,11 @@ export function recallPreamble(): string {
  *  Uses the offline heuristic extractor (no per-turn model cost); the model extractor is
  *  available in the harness for an opt-in upgrade. New facts join the active compartment
  *  (Combined view defaults them to Personal). */
-export async function learnFromTurn(userText: string, assistantText: string): Promise<void> {
+export async function learnFromTurn(
+  userText: string,
+  assistantText: string,
+  complete?: (system: string, user: string) => Promise<string>,
+): Promise<void> {
   const s = load();
   if (!s.personalizationEnabled || !userText.trim()) return; // off or empty
   const view = (s.personalScope ?? "personal") as ScopeView;
@@ -337,7 +342,10 @@ export async function learnFromTurn(userText: string, assistantText: string): Pr
   const scope: PersonalScope = view === "combined" ? "personal" : view;
   const target = scope === "cui" ? cuiStore : store;
   if (!target) return; // main locked, or cui selected but its store is locked
-  try { await distillTurn(target, getScanner(), { userText, assistantText, scope, extract: heuristicExtractor }); }
+  // Opt-in (Settings): the MODEL extractor pulls richer facts + relations but costs one extra model
+  // call per turn. Off by default → the offline heuristic. Falls back to heuristic if no model fn.
+  const extract = s.personalAiExtract && complete ? modelExtractor(complete) : heuristicExtractor;
+  try { await distillTurn(target, getScanner(), { userText, assistantText, scope, extract }); }
   catch { /* best-effort; the turn already happened */ }
 }
 

@@ -90,7 +90,7 @@ export interface HeadroomStatus {
 }
 export type PersonalScopeView = "work" | "personal" | "cui" | "combined";
 export interface PersonalStatus {
-  enabled: boolean; configured: boolean; unlocked: boolean;
+  enabled: boolean; aiExtract: boolean; configured: boolean; unlocked: boolean;
   scope: PersonalScopeView; counts: { work: number; personal: number; cui: number } | null;
   // P9.5a hard CUI isolation: the CUI store is a separate file with its own passphrase.
   cuiConfigured: boolean; cuiUnlocked: boolean; legacyCuiInMain: number;
@@ -225,6 +225,7 @@ export interface LucidBridge {
   // personalization knowledge graph (opt-in, encrypted - ADR-0010/0012)
   personal(): Promise<PersonalStatus | null>;
   personalEnable(enabled: boolean): Promise<PersonalStatus | null>;
+  personalAiExtract(enabled: boolean): Promise<PersonalStatus | null>;
   personalSetup(passphrase: string): Promise<{ ok: boolean; error?: string } | null>;
   personalUnlock(passphrase: string): Promise<{ ok: boolean; error?: string } | null>;
   personalLock(): Promise<PersonalStatus | null>;
@@ -381,6 +382,7 @@ export const bridge: LucidBridge = {
   setHeadroom: (enabled) => post("/api/headroom", { enabled }),
   personal: () => getData("/api/personal"),
   personalEnable: (enabled) => post("/api/personal/enable", { enabled }),
+  personalAiExtract: (enabled) => post("/api/personal/ai-extract", { enabled }),
   personalSetup: (passphrase) => post("/api/personal/setup", { passphrase }),
   personalUnlock: (passphrase) => post("/api/personal/unlock", { passphrase }),
   personalLock: () => post("/api/personal/lock", {}),

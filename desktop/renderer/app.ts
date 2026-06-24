@@ -1152,6 +1152,8 @@ function secPersonal(p: import("./bridge.ts").PersonalStatus | null): string {
         <div class="psc"><b class="psc-cui">${p.cuiUnlocked ? c.cui : "-"}</b><span>cui${p.cuiUnlocked ? "" : " (locked)"}</span></div></div>
       ${cur === "cui" ? secCui(p) : ""}
       ${p.legacyCuiInMain > 0 ? `<div class="set-note warn">${icon("info", 12)} <span>${p.legacyCuiInMain} legacy CUI fact(s) sit in the main store from before isolation - not recalled or exported. ${p.cuiUnlocked ? `<button class="btn-mini" id="cuiMigrate" data-tip="Move into the isolated store|Relocates these cui facts (ids + timestamps preserved) into the separate CUI store, then removes them from the main store. Audited.">${icon("shield", 11)} Move into the CUI store</button>` : "Select CUI and unlock its store to move them into isolation."}</span></div>` : ""}
+      <label class="set-toggle" style="margin-top:10px;border-top:1px solid var(--line-soft);padding-top:10px"><input type="checkbox" id="personalAiToggle" ${p.aiExtract ? "checked" : ""}/>
+        <span><b>Richer graph (uses the model)</b> - extract semantic facts &amp; relationships with the model instead of offline patterns, so related ideas connect across turns. Costs one extra model call per turn. Off by default.</span></label>
       <button class="btn-mini pscope-lock" id="personalLock" data-tip="Lock everything|Wipes BOTH in-memory keys (main + CUI). You'll re-enter your passphrase to use personalization again this session - nothing is learned or recalled while locked." data-tip-side="top">${icon("shield", 12)} Lock</button>`;
   }
   return card(toggle + inner);
@@ -2361,6 +2363,12 @@ function wire(): void {
       await bridge.personalEnable(enabled);
       showToast({ title: enabled ? "Personalization on" : "Personalization off", desc: enabled ? "Set a passphrase to create your encrypted store." : "Locked and disabled - nothing is learned or recalled.", actions: [{ label: "OK" }], timeout: 2800 });
       void hydratePersonal();
+      return;
+    }
+    if (t.closest("#personalAiToggle")) {
+      const on = ($("#personalAiToggle", $("#setBody")!) as HTMLInputElement)?.checked ?? false;
+      await bridge.personalAiExtract(on);
+      showToast({ title: on ? "Richer graph on" : "Richer graph off", desc: on ? "New turns use the model to extract semantic facts + relationships (one extra call per turn)." : "Back to offline pattern extraction (no model cost).", actions: [{ label: "OK" }], timeout: 3200 });
       return;
     }
     if (t.closest("#personalSetup") || t.closest("#personalUnlock")) {
