@@ -19,7 +19,7 @@ const TRUST_COLOR: Record<string, string> = { trusted: "#46d27e", untrusted: "#5
 export const kindLabel = (k: string): string => k.replace(/^user:/, "");
 
 interface SimNode extends GraphNode { x: number; y: number; vx: number; vy: number; r: number }
-export interface GraphHandle { destroy: () => void; setLens: (l: "kind" | "trust") => void; fit: () => void }
+export interface GraphHandle { destroy: () => void; setLens: (l: "kind" | "trust") => void; fit: () => void; update: (data: PersonalGraphData) => void }
 
 const NS = "http://www.w3.org/2000/svg";
 const make = <K extends keyof SVGElementTagNameMap>(t: K): SVGElementTagNameMap[K] => document.createElementNS(NS, t);
@@ -212,9 +212,55 @@ export function mountGraph(host: HTMLElement, data: PersonalGraphData, onSelect:
   ro.observe(host);
 
   paint();
+
+  // Position-preserving merge of fresh data into the LIVE simulation (issue #54 follow-up): keep
+  // existing nodes AND their x/y (so the layout doesn't jump), add new nodes near the centre so they
+  // animate in, drop removed ones, then rebuild the cheap edge layer. Reheats so new nodes settle.
+  const mkNodeEl = (n: SimNode) => {
+    const g = make("g"); g.setAttribute("class", "kg-node"); (g as SVGGElement & { dataset: DOMStringMap }).dataset.id = n.id;
+    const c = make("circle"); c.setAttribute("r", String(n.r));
+    const t = make("text"); t.setAttribute("class", "kg-label"); t.setAttribute("y", String(-n.r - 5));
+    t.textContent = n.name.length > 22 ? n.name.slice(0, 21) + "…" : n.name;
+    g.append(c, t); nodeG.append(g); elFor.set(n.id, { g, c });
+  };
+  const update = (next: PersonalGraphData) => {
+    const incoming = new Map(next.nodes.map((n) => [n.id, n]));
+    for (let i = nodes.length - 1; i >= 0; i--) { // drop removed nodes
+      const n = nodes[i]!;
+      if (!incoming.has(n.id)) { elFor.get(n.id)?.g.remove(); elFor.delete(n.id); byId.delete(n.id); nodes.splice(i, 1); }
+    }
+    for (const nd of next.nodes) { // add new + refresh existing (KEEP position)
+      const r = 7 + Math.min(15, nd.count * 2.5);
+      const ex = byId.get(nd.id);
+      if (ex) {
+        ex.name = nd.name; ex.kind = nd.kind; ex.trust = nd.trust; ex.count = nd.count; ex.r = r;
+        const el = elFor.get(nd.id);
+        if (el) {
+          el.c.setAttribute("r", String(r));
+          const lbl = el.g.querySelector(".kg-label") as SVGTextElement | null;
+          if (lbl) { lbl.textContent = nd.name.length > 22 ? nd.name.slice(0, 21) + "…" : nd.name; lbl.setAttribute("y", String(-r - 5)); }
+        }
+      } else {
+        const sn: SimNode = { ...nd, x: cx + (Math.random() - 0.5) * 60, y: cy + (Math.random() - 0.5) * 60, vx: 0, vy: 0, r };
+        nodes.push(sn); byId.set(sn.id, sn); mkNodeEl(sn);
+      }
+    }
+    for (const ed of edgeEls) { ed.path.remove(); for (const p of ed.parts) p.remove(); } // rebuild edges (cheap)
+    edgeEls.length = 0; edges.length = 0;
+    for (const e of next.edges.filter((e) => byId.has(e.from) && byId.has(e.to))) {
+      edges.push(e);
+      const path = make("path"); path.setAttribute("class", "kg-edge"); edgeG.append(path);
+      const parts: SVGCircleElement[] = [];
+      for (let i = 0; i < PPE; i++) { const c = make("circle"); c.setAttribute("class", "kg-part"); c.setAttribute("r", "1.7"); partG.append(c); parts.push(c); }
+      edgeEls.push({ e, path, parts });
+    }
+    reheat(); paint();
+  };
+
   return {
     destroy() { stopped = true; cancelAnimationFrame(raf); ro.disconnect(); window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); host.innerHTML = ""; },
     setLens(l) { lens = l; paint(); },
     fit() { userMoved = true; computeFit(); },
+    update,
   };
 }

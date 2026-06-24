@@ -648,6 +648,7 @@ async function send(): Promise<void> {
     (node as MsgNode)._md = buf;
     if (state.streaming) { streamEl.innerHTML = renderMarkdown(buf); enhanceCodeBlocks(streamEl); finishHud(); state.streaming = false; setSendEnabled(); } else { finishHud(); }
     void renderSessions(); void refreshBudget(false); void syncMode();
+    scheduleKnowledgeRefresh(); // #54 follow-up: new facts appear in the open KG without close/reopen
     // P-ACP.4: the turn ended — fire off any pre-staged prompt now (the composer is idle again).
     if (state.queued) { const q = state.queued; state.queued = null; renderQueued(); const ta2 = $("#input") as HTMLTextAreaElement; ta2.value = q; setSendEnabled(); void send(); }
   }
@@ -1238,6 +1239,33 @@ let kgData: PersonalGraphData | null = null;
 let kgLens: "kind" | "trust" = "kind";
 let kgOpen = false;
 let kgSelId: string | null = null;
+let kgSig = ""; // signature of the last-rendered graph, to skip no-op live refreshes
+
+/** Cheap change-signature for the graph (node/edge ids + counts + fact total). */
+function kgSignature(d: PersonalGraphData | null): string {
+  if (!d) return "";
+  return `${d.nodes.map((n) => `${n.id}:${n.count}`).join("|")}#${d.edges.map((e) => `${e.from}>${e.to}`).join("|")}#${d.facts?.length ?? 0}`;
+}
+
+/** Live-refresh the open KG without a full remount: merge new facts/edges into the running
+ *  simulation (positions preserved). No-op if the panel is closed or nothing changed. */
+async function refreshKnowledgeLive(): Promise<void> {
+  if (!kgOpen || !kgHandle) return;
+  const data = await bridge.personalGraph().catch(() => null);
+  if (!data || data.nodes.length === 0) return;
+  const sig = kgSignature(data);
+  if (sig === kgSig) return; // nothing new learned
+  kgSig = sig; kgData = data;
+  kgHandle.update(data);
+}
+
+/** After a chat turn, learning happens in the background (learnFromTurn, async + best-effort),
+ *  so poll a couple of times to catch both the fast heuristic and the slower model extractor. */
+function scheduleKnowledgeRefresh(): void {
+  if (!kgOpen) return;
+  setTimeout(() => void refreshKnowledgeLive(), 1500);
+  setTimeout(() => void refreshKnowledgeLive(), 4500);
+}
 function openKnowledge(): void {
   kgOpen = true;
   closeSettings();
@@ -1283,6 +1311,7 @@ async function renderKnowledge(): Promise<void> {
   (side as HTMLElement).hidden = true; side.innerHTML = ""; // appears only when a node is clicked
   kgHandle = mountGraph(canvas as HTMLElement, kgData, (id) => renderKgSide(id));
   kgHandle.setLens(kgLens);
+  kgSig = kgSignature(kgData); // baseline so live refreshes only fire on real changes
 }
 // Inline unlock for the Knowledge graph - enter the passphrase here instead of going to Settings.
 // Validates (non-empty), warns on Caps Lock, and has a show/hide toggle. On success the graph mounts.
