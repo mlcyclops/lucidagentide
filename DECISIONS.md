@@ -4483,16 +4483,15 @@ filters, ingest, delete). **Wording upgrades over AskSage:** say *where data goe
 - **P-RAG.4** — polish: retrieval ranking/citations in replies, dataset management (rename/delete/stats),
   HNSW accelerator if the corpus grows.
 
-### Open decisions (need a call before P-RAG.1)
+### Resolved decisions (locked with the user 2026-06-24)
 
-1. **Embedder weight cost vs air-gap:** bundle ~33–90 MB of ONNX weights (air-gap, larger installer) vs
-   download-on-first-use (smaller, but not air-gap)? Recommend **bundle** for the locked-down target.
-2. **Images:** caption-at-ingest (reuses models, lighter) vs CLIP local embeddings (true multimodal
-   search, heavier)? Recommend **caption-at-ingest** for v1.
-3. **Where the KB DB lives:** the existing `agent_obs.duckdb` (one DB, write-lock contention with omp) vs a
-   **separate `knowledge.duckdb`** (cleaner, no contention). Recommend **separate DB**.
-4. **Retrieval trigger:** auto-RAG every turn when a dataset is selected (like the AskSage `/query`
-   datasets dropdown) vs an explicit "use knowledge" toggle. Recommend **mirror the existing selector**.
+1. **Embedder weights → BUNDLE** the ONNX text-embedder into the installer (air-gap; works fully offline on
+   the locked-down target; larger installer accepted).
+2. **Images → CAPTION-AT-INGEST** for v1 (active multimodal model describes the image + optional OCR →
+   embed the caption; image bytes retained for multimodal prompts). CLIP shared-space embeddings deferred.
+3. **KB DB → SEPARATE `knowledge.duckdb`** (no write-lock contention with omp's `agent_obs.duckdb`).
+4. **Retrieval trigger → MIRROR THE DATASET SELECTOR** (selecting a local dataset auto-retrieves + injects
+   delimited chunks each turn, consistent with the existing AskSage datasets dropdown).
 
 ### Alternatives considered
 
