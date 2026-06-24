@@ -1802,3 +1802,14 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
   derisks the bump but the pin closes the silent-drift gap.
 - **next:** merge #49; consider an ADR for the omp version-pin policy + an ADR for the opt-in model
   extractor (cost-vs-quality learning) if it graduates from opt-in.
+
+## ADR-0041 — omp version-pin policy (exact pin + compatibility-probe-gated bumps)
+
+- **shipped:** ADR-0041 (DECISIONS.md): formalizes the now-built policy — exact-pin all four `@oh-my-pi/*`
+  at the tested baseline `16.0.6` (PR #49, merged; caret gone, lockfile committed), and bump ONLY via the
+  weekly + on-demand compatibility probe (`.github/workflows/omp-compat.yml`, PR #67) that runs the full
+  suite + both keystones (fail-closed gate, byte-stable prefix) on a branch → green opens a ready-to-merge
+  bump PR, red files an issue. Never auto-merges; a human reviews omp's seam changes and moves the pin.
+- **stubbed:** SBOM-side version+license recording per build is the add-on Phase 3 (POAM R-10), not core.
+- **next:** run the probe (Actions → omp compatibility probe) when you want omp's reliability fixes;
+  optional ADRs for the opt-in model extractor (#66) and recall hygiene (#50/#56) if you want them recorded.

@@ -3761,3 +3761,53 @@ profile still routes to the isolated store and learns nothing while locked).
 - Builds on the same session's recall hygiene: recall now excludes mechanical tool-call activity
   (`omp:*` / `subagent:*`) and stops promoting raw tool I/O as facts, so what rides the user turn is
   genuine knowledge, not noise.
+
+-----
+
+## ADR-0041 — omp version-pin policy: exact pin + compatibility-probe-gated bumps
+
+**Date:** 2026-06-24
+**Status:** **Accepted (built)** — exact pin shipped (PR #49), compatibility probe shipped (PR #67).
+**Context increment:** derisking the dependency on a fast-moving upstream.
+
+### Context
+
+We **extend omp, never fork it** (invariant #1), so the whole harness rides omp's releases. But omp ships
+~3 releases per day (755 commits between 16.0.6 and 16.1.16 alone) and has broken user-facing behavior
+*within* a minor series (e.g. oh-my-pi#2976: `/model` effort selection vanished). A caret range
+(`^16.0.6`) silently pulls those breaking releases on the next `bun install` — straight into the two
+correctness keystones this project is built to protect: the **fail-closed scanner gate** and the
+**byte-stable frozen prompt prefix**. Riding omp's releases is correct; riding them *blindly, daily* is not.
+
+### Decision
+
+1. **Exact-pin** all four `@oh-my-pi/*` packages (no caret) in `package.json`, and commit `bun.lock` (PR
+   #49). The pinned, tested version (currently `16.0.6`) is the **supported baseline**; a fresh install can
+   no longer drift.
+2. **Never bump blindly.** A scheduled (weekly) + on-demand (`workflow_dispatch`) **compatibility probe**
+   (`.github/workflows/omp-compat.yml`, PR #67) bumps omp to the latest (or a chosen version) **on a
+   branch** and runs: root + desktop typecheck, the full harness + desktop suites, and the two named
+   keystones — **KEYSTONE 1** (kill the sidecar mid-call → the gate must block) and **KEYSTONE 2**
+   (`demo02_prefix_hash` → byte-identical frozen prefix) — plus the scanner pytest.
+3. **Green → ready-to-merge bump PR** (master untouched); **red → tracking issue** (stay on the safe pin).
+   A human reviews the omp seam changes — context/compaction, `eval`, thinking/reasoning, providers — and
+   merges to **move the exact pin forward deliberately**. The probe never auto-merges.
+
+### Why
+
+This is how we capture omp's genuine reliability fixes (replay/stall fixes, OAuth quota rotation,
+multi-key login) without gambling the gate or the prefix on hundreds of unreviewed commits. Risk is
+localized to a single reviewed, fully-tested bump rather than a silent transitive update.
+
+### Consequences
+
+- omp features arrive deliberately (a small adoption lag vs bleeding edge) — an explicit, accepted trade.
+- The pinned omp version is a **frozen-ish surface**: it changes only through the probe path, and each bump
+  records the exact version in the commit (and the version + license in the SBOM, add-on Phase 3).
+- The probe gives a recurring "is the latest omp safe?" signal with zero manual effort.
+
+### Relates to
+
+- Invariant #1 (extend omp, never fork) and the two correctness keystones (CLAUDE.md).
+- POAM R-01 (exact pin + compatibility CI) and R-10 (license/version record) in the add-on repo, and the
+  detailed memo `BD/omp-license-and-version-pin.md` (the IP-counsel-style license note + the 16.0.6 choice).
