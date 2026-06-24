@@ -122,6 +122,17 @@ export function modelExtractor(callModel: (system: string, user: string) => Prom
 // ── the gated pipeline ───────────────────────────────────────────────────────────
 export interface DistillResult { learned: number; blocked: boolean; reason?: string }
 
+// Cross-turn linking (#1): when a new turn RE-MENTIONS a concept already in the graph, connect
+// this turn's new fact to that prior entity with a weak "mentioned with" edge — so related ideas
+// from different turns join up. Conservative + offline: whole-word match on a significant
+// (>=4-char, non-stopword) token of the prior entity's name, capped per turn so it never floods.
+const CROSS_LINK_CAP = 3;
+const CROSS_LINK_STOP = new Set([
+  "this", "that", "with", "from", "your", "have", "they", "them", "what", "when", "about", "into",
+  "over", "also", "just", "very", "much", "such", "then", "than", "each", "some", "like", "really",
+  "want", "need", "make", "made", "does", "done", "using", "used", "would", "could", "should", "more",
+]);
+
 /** Distil + remember durable user-facts from one turn. Fail-closed: only a clean,
  *  trusted source contributes facts. Best-effort; the caller treats failures as no-op. */
 export async function distillTurn(
@@ -136,6 +147,12 @@ export async function distillTurn(
   }
   // 2. Extract candidates, then write the clean ones into the active compartment.
   const candidates = await opts.extract({ user: opts.userText, assistant: opts.assistantText ?? "" });
+  // Snapshot the graph BEFORE this turn writes to it, so cross-turn linking (below) can tell which
+  // entities are pre-existing and which links already exist.
+  const before = store.graph();
+  const priorIds = new Set(before.entities.map((e) => e.id));
+  const linkKey = (a: string, b: string) => (a < b ? `${a}|${b}` : `${b}|${a}`);
+  const existingLinks = new Set(before.links.map((l) => linkKey(l.from_entity_id, l.to_entity_id)));
   // Create every candidate entity FIRST so a relation can resolve to the real node (with its
   // own kind) instead of duplicating it under the source fact's kind.
   const idByName = new Map<string, string>();
@@ -161,6 +178,25 @@ export async function distillTurn(
     }
     learned++;
     opts.telemetry?.emit("personal_fact_learned", { kind: c.kind, scope: opts.scope });
+  }
+  // 3. Cross-turn linking: connect this turn's PRIMARY new entity to PRIOR entities the user
+  //    re-mentions (whole-word token match), so concepts from different turns join up.
+  const newIds = [...idByName.values()].filter((id) => !priorIds.has(id));
+  if (learned && newIds.length) {
+    const subject = newIds[0]!; // the turn's first new entity
+    const turnWords = new Set(opts.userText.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean));
+    let added = 0;
+    for (const pe of before.entities) {
+      if (added >= CROSS_LINK_CAP) break;
+      if (pe.id === subject) continue;
+      const tokens = pe.name.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length >= 4 && !CROSS_LINK_STOP.has(w));
+      if (!tokens.some((w) => turnWords.has(w))) continue; // not re-mentioned
+      const key = linkKey(subject, pe.id);
+      if (existingLinks.has(key)) continue; // already connected
+      existingLinks.add(key);
+      store.addLink(subject, pe.id, "mentioned with");
+      added++;
+    }
   }
   // Bulk callers (the importer) defer the write and save once at the end — re-encrypting the
   // whole graph per message would be O(n²) over a large export.
