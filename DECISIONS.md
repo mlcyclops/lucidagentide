@@ -4493,6 +4493,28 @@ filters, ingest, delete). **Wording upgrades over AskSage:** say *where data goe
 4. **Retrieval trigger → MIRROR THE DATASET SELECTOR** (selecting a local dataset auto-retrieves + injects
    delimited chunks each turn, consistent with the existing AskSage datasets dropdown).
 
+### Performance / laptop feasibility
+
+Designed to run on a standard (incl. locked-down/gov) laptop — 8 GB+ RAM, modern CPU, **no GPU, no native
+binaries, no internet** for the local path. Profile:
+
+- **Querying is always fast.** DuckDB brute-force cosine over 384-dim vectors is sub-millisecond to a few
+  ms for a realistic single-user KB (hundreds to tens of thousands of chunks).
+- **Ingest is the heaviest moment, and it is one-time.** The WASM text embedder runs ~20–100 ms per chunk
+  on CPU, so a large PDF (100–300 chunks) is a few seconds to ~30 s. Mitigated with **batched embedding,
+  background ingest, and a progress bar** so the UI never blocks.
+- **RAM stays modest.** Electron baseline + a transient ~0.3–0.5 GB while embedding; comfortable on 8 GB.
+  Model weights ~33–90 MB; vectors ~1.5 KB/chunk (10k chunks ≈ 15 MB).
+- **Image captioning is offloaded to the model API** (network call), so the laptop does no local vision
+  compute. Optional `tesseract.js` OCR is the slowest *local* op (~1–5 s/image) — secondary to captioning.
+
+Two real limits, with escape hatches: (1) brute-force scales linearly — fine to ~tens of thousands of
+chunks; a *very* large KB (100k+) is when the deferred bundled **HNSW** accelerator (P-RAG.4) earns its
+keep; (2) bulk OCR is CPU-bound — kept optional. Trade-off accepted: a larger installer (bundled weights)
+in exchange for fully-offline operation. These constraints are *why* the design chose WASM over native
+`onnxruntime`, brute-force over the network-`INSTALL`ed `vss` extension, and caption-at-ingest over a
+second local vision model.
+
 ### Alternatives considered
 
 - **Vector store:** sqlite-vec / LanceDB / Chroma / Qdrant — all add a new datastore + (LanceDB/Qdrant)
