@@ -2009,3 +2009,15 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **stubbed:** recommendation is a name-pattern heuristic (no live price table / per-token cost data); cross-family
   version scale is approximate (only compared within a provider); no per-automation checker override (global setting).
 - **next:** the Loop-Engineering building blocks are all exposed now — natural follow-ups are a price-aware ranker and per-automation checker overrides.
+
+---
+**P-GOAL.6.1 — checker picker: GOV lock, readability, token estimate (ADR-0048 addendum)**
+- **shipped:** AskSage lock (user OR managed) now restricts the checker's accessible models to GOV-only AskSage
+  routes in `accessibleModels()` (fail-safe narrow; constrains both picker + recommendation; locked → recommends
+  asksage-google/google-gemini-3.5-flash-gov). Checker picker/label/why text bigger + higher-contrast (13px/--txt-2).
+  Live token estimate at the modal's lower-left (`desktop/loop_estimate.ts`, pure, 3 tests): iters × (~9k maker +
+  ~1.5k checker), clamped 1..20, hover names maker+checker models + explains it's a ceiling; "Auto" option label
+  em-dash-free. `bun test desktop` 316/316; typecheck clean. Live-verified: lock → 2 GOV options; estimate 6→63k,
+  12→126k; tooltip renames checker on override; reset clean; no console errors.
+- **stubbed:** estimate is a flat per-iteration heuristic (no live price/cost table, no thinking-budget factor).
+- **next:** a price-aware ranker + cost (not just token) display; per-automation checker override.

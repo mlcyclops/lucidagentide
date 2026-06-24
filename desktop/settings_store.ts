@@ -219,6 +219,8 @@ export function setLastModel(model: string): void {
   const m = (model ?? "").trim(); if (!m) return;
   const s = load(); if (s.lastModel === m) return; s.lastModel = m; save(s);
 }
+/** Whether the user has set the "AskSage only" model lock (the org-managed lock is OR'd in by callers). */
+export function asksageOnly(): boolean { return !!load().asksageOnly; }
 /** P-GOAL.6: the user's chosen checker model ("" = auto/recommended). */
 export function checkerModel(): string { return load().checkerModel ?? ""; }
 /** Persist the checker-model choice. Empty string clears it (back to auto). */

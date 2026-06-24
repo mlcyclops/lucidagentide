@@ -17,7 +17,8 @@ import { learnFromTurn, recallPreamble } from "./personal.ts";
 import { buildUserTurnPreamble } from "./preamble.ts";
 import { recordTurns } from "./turns_log.ts";
 import { recordBlock } from "./security_log.ts";
-import { attribution, checkerModel, lastModel, mcpServersForAcp, setCheckerModel, setLastModel } from "./settings_store.ts";
+import { asksageOnly, attribution, checkerModel, lastModel, mcpServersForAcp, setCheckerModel, setLastModel } from "./settings_store.ts";
+import { managedConfig } from "./managed_config.ts";
 import { recommendCheckerModel, resolveCheckerModel, type ModelOption } from "./checker_model.ts";
 import { parseGoalVerdict } from "./goal_verdict.ts";
 import { appendGoalIteration, finishGoalMemory, type GoalMemory, resumeGoalMemory, startGoalMemory } from "./goal_memory.ts";
@@ -514,12 +515,23 @@ class Backend {
     return { ran: true, result };
   }
 
+  /** The "AskSage only" model lock, from either the user's setting or org-managed config. */
+  private asksageLocked(): boolean { return asksageOnly() || !!managedConfig().config?.asksageOnly; }
+
   // P-GOAL.6 (ADR-0048): the user's accessible models, as the model config reports them (provider-
   // prefixed value + display name). Empty until omp has reported a config.
   private accessibleModels(): ModelOption[] {
     const opt = this.configOptions.find((c) => c?.id === "model");
     const list = Array.isArray(opt?.options) ? opt!.options : [];
-    return list.filter((o: any) => o?.value).map((o: any) => ({ value: String(o.value), name: o.name, description: o.description }));
+    const models = list.filter((o: any) => o?.value).map((o: any) => ({ value: String(o.value), name: o.name, description: o.description }));
+    // P-GOAL.6.1: when the AskSage lock is on, the checker must use a GOV model routed through AskSage —
+    // restrict to asksage providers whose id is a GOV model. Fail-safe: only narrow if such models exist
+    // (never empty the list, which would drop the picker / the recommendation to the maker model).
+    if (this.asksageLocked()) {
+      const gov = models.filter((m: ModelOption) => /^asksage/i.test(m.value) && /gov/i.test(m.value));
+      if (gov.length) return gov;
+    }
+    return models;
   }
   /** P-GOAL.6: the CHECKER model picker state for the UI — the user's saved choice, the auto
    *  recommendation, the current (maker) model, and the full accessible list. */

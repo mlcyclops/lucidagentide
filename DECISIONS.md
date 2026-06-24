@@ -4159,3 +4159,22 @@ scheduled automations) are now exposed, and the checker is no longer pinned to t
 ADR-0046 (the maker/checker loop this refines); ADR-0047 (automations whose ticks inherit the
 checker model); ADR-0031 (the `model` config option + AI-LOC authoring-model plumbing this reads);
 CLAUDE.md invariant #3 (the checker's verdict is still parsed fail-closed via `parseGoalVerdict`).
+
+### Addendum — P-GOAL.6.1 (same ADR): GOV lock, readability, token estimate
+
+Three follow-ups landed on the checker picker the increment after P-GOAL.6:
+
+- **AskSage GOV lock.** When the "AskSage only" lock is set (user setting OR org-managed config),
+  the checker's accessible list is restricted to **GOV models routed through AskSage** (asksage
+  provider + a `gov` id) — so a locked-down deployment never runs the checker on a non-GOV or
+  non-AskSage route. `accessibleModels()` applies this filter (fail-safe: only narrows when such
+  models exist), so it constrains BOTH the picker and the auto recommendation. e.g. locked → the
+  recommendation becomes `asksage-google/google-gemini-3.5-flash-gov` (the GOV small-tier model).
+- **Readability.** The picker, its label, and the "why" line are larger and higher-contrast
+  (13px / `--txt-2`, up from 11px / `--txt-4`).
+- **Token estimate + confirm.** A live, rough token estimate sits at the modal's lower-left
+  (`desktop/loop_estimate.ts`, pure + unit-tested): `iters × (~9k maker + ~1.5k checker)`, clamped
+  to the loop's 1..20 range. It updates as the iteration count and checker model change, and a hover
+  explains the per-iteration assumptions, names the maker + checker models, and notes it's a CEILING
+  (a loop usually stops earlier). The user confirms by clicking Run with the estimate in view. The
+  "Auto" option label is em-dash-free (`Auto (recommended: <name>)`).

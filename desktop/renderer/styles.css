@@ -529,13 +529,21 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .goal-resume .ic{flex:none;color:var(--accent-2)}
 .goal-resume .gr-goal{flex:1 1 auto;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .goal-resume .gr-iters{flex:none;font-family:var(--mono);font-size:10px;color:var(--txt-4)}
-/* P-GOAL.6: checker-model picker in the goal modal */
+/* P-GOAL.6: checker-model picker in the goal modal (bigger + higher-contrast text for readability) */
 .goal-checker{flex-wrap:wrap;gap:6px}
-.goal-checker .goal-lbl{flex:1 1 100%;display:flex;align-items:center;gap:5px}
+.goal-checker .goal-lbl{flex:1 1 100%;display:flex;align-items:center;gap:5px;font-size:13px;color:var(--txt-2)}
 .goal-checker .goal-lbl .ic{color:var(--accent-2)}
-.goal-ckr{width:100%}
-.goal-ckr-why{font-size:11px;color:var(--txt-4);margin:-4px 0 2px;min-height:0}
+.goal-ckr{width:100%;font-size:13px;color:var(--txt);font-weight:500;padding:9px 11px}
+.goal-ckr-why{font-size:12px;line-height:1.4;color:var(--txt-2);margin:-2px 0 2px;min-height:0}
 .goal-ckr-why:empty{display:none}
+/* P-GOAL.6.1: live token estimate at the modal's lower-left */
+.goal-modal-actions{align-items:center;justify-content:space-between}
+.goal-actbtns{display:flex;gap:8px}
+.goal-estimate{display:inline-flex;align-items:center;gap:5px;font-size:12px;color:var(--txt-3);cursor:help;user-select:none}
+.goal-estimate:empty{display:none}
+.goal-estimate .ic{color:var(--accent-2)}
+.goal-estimate .ge-n{font-weight:600;color:var(--txt-2)}
+.goal-estimate:hover .ge-n{color:var(--accent-2)}
 /* P-GOAL.5: schedule picker + saved-automation rows in the goal modal */
 .goal-sched{flex-wrap:wrap;gap:6px}
 .goal-sched .goal-lbl{flex:1 1 100%;display:flex;align-items:center;gap:5px}

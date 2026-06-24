@@ -15,6 +15,7 @@ import type { PersonalGraphData } from "./bridge.ts";
 import { type Action, attachRichTip, createPalette, initTooltips, popover, showToast } from "./ui.ts";
 import { ASKSAGE_FAMILY_ORDER, familyOf, filterModels, groupByFamily, isAuxiliaryModel, isChinaModel, isDeprecatedModel, isGovModel, sortGovFirstNewest } from "./model_families.ts";
 import { INSTALLED_SKILLS, bumpSkillUsage, bundledSkillsByUsage, taskProforma } from "./skills.ts";
+import { CHECKER_TOKENS_PER_ITER, MAKER_TOKENS_PER_ITER, estimateGoalTokens, formatTokens } from "../loop_estimate.ts";
 import { closeIde, openIde, setIdeExclusivity, setIdeHooks } from "./ide_panel.ts";
 // P-TPS.1 (ADR-0044): the shared output-token speedometer — same engine the omp
 // terminal adapter uses. Drives the HUD's live "tok out · tok/s" readout from the
@@ -2216,7 +2217,10 @@ function openGoalForm(): void {
       <span id="goalCadInterval" hidden><input id="goalCadEvery" class="prov-key goal-cadn" type="number" min="1" value="60" /><select id="goalCadUnit" class="prov-key goal-cadu"><option value="min">minutes</option><option value="hour">hours</option></select></span>
       <input id="goalCadTime" class="prov-key goal-cadt" type="time" value="09:00" hidden />
     </div>
-    <div class="goal-modal-actions"><button class="btn-mini" id="goalCancel">Cancel</button><button class="btn-mini" id="goalSave" hidden>${icon("clock", 12)} Save automation</button><button class="btn-mini ok" id="goalRun">${icon("bolt", 12)} Run loop</button></div>
+    <div class="goal-modal-actions">
+      <div class="goal-estimate" id="goalEstimate" tabindex="0"></div>
+      <div class="goal-actbtns"><button class="btn-mini" id="goalCancel">Cancel</button><button class="btn-mini" id="goalSave" hidden>${icon("clock", 12)} Save automation</button><button class="btn-mini ok" id="goalRun">${icon("bolt", 12)} Run loop</button></div>
+    </div>
   </div></div>`);
   document.body.appendChild(ov);
   const close = () => ov.remove();
@@ -2246,6 +2250,9 @@ function openGoalForm(): void {
     const maxIters = Math.min(20, Math.max(1, Number(($("#goalMax", ov) as HTMLInputElement).value) || 6));
     return { goal, command, maxIters };
   };
+  // P-GOAL.6.1: live token estimate (lower-left), recomputed as the iteration count changes.
+  ($("#goalMax", ov) as HTMLInputElement)?.addEventListener("input", () => updateGoalEstimate(ov));
+  updateGoalEstimate(ov); // initial; model names fill in once loadCheckerModel resolves
   $("#goalRun", ov)?.addEventListener("click", () => {
     const { goal, command, maxIters } = readSpec();
     if (!goal) { showToast({ tone: "warn", title: "Add a goal", desc: "Describe what the loop should accomplish.", timeout: 2400 }); return; }
@@ -2291,14 +2298,39 @@ async function loadCheckerModel(ov: HTMLElement): Promise<void> {
   for (const o of info.options) { const p = o.value.split("/")[0]; (byProvider.get(p) ?? byProvider.set(p, []).get(p)!).push(o); }
   const groups = [...byProvider.entries()].map(([prov, opts]) =>
     `<optgroup label="${esc(prov)}">` + opts.map((o) => `<option value="${esc(o.value)}">${esc(o.name || o.value.split("/").pop() || o.value)}</option>`).join("") + `</optgroup>`).join("");
-  sel.innerHTML = `<option value="">Auto — recommended: ${esc(recName)}</option>` + groups;
+  sel.innerHTML = `<option value="">Auto (recommended: ${esc(recName)})</option>` + groups;
   sel.value = info.selected || "";
   const showWhy = () => { if (why) why.textContent = sel.value ? "" : (info.recommendedWhy || ""); };
   showWhy();
+  // P-GOAL.6.1: stash the maker + recommended-checker display names so the token estimate can name them.
+  ov.dataset.makerName = info.options.find((o) => o.value === info.current)?.name || info.current.split("/").pop() || info.current;
+  ov.dataset.ckrRecName = recName;
+  updateGoalEstimate(ov);
   sel.addEventListener("change", async () => {
     const updated = await bridge.setCheckerModel(sel.value);
     if (updated && why) why.textContent = sel.value ? "" : (updated.recommendedWhy || "");
+    updateGoalEstimate(ov);
   });
+}
+
+// P-GOAL.6.1 (ADR-0048): the live token estimate at the modal's lower-left. Names the maker (chat) and
+// checker models, scales by the iteration count, and explains the rough assumptions on hover. The number
+// is the CEILING — a loop usually stops earlier, the moment its condition holds.
+function updateGoalEstimate(ov: HTMLElement): void {
+  const box = $("#goalEstimate", ov); if (!box) return;
+  const maxIters = Math.min(20, Math.max(1, Number(($("#goalMax", ov) as HTMLInputElement)?.value) || 6));
+  const est = estimateGoalTokens({ maxIters });
+  const makerName = ov.dataset.makerName || "your model";
+  const sel = $("#goalChecker", ov) as HTMLSelectElement | null;
+  const checkerName = sel?.value
+    ? (sel.options[sel.selectedIndex]?.textContent || sel.value)
+    : (ov.dataset.ckrRecName || makerName);
+  box.innerHTML = `${icon("spark", 11)} <span class="ge-n">~${esc(formatTokens(est.total))} tokens</span> · ${est.iters} loop${est.iters === 1 ? "" : "s"}`;
+  box.setAttribute("title",
+    `Rough token estimate for this run; the ceiling, since a loop usually stops earlier the moment its condition holds.\n\n` +
+    `Assumes ~${formatTokens(MAKER_TOKENS_PER_ITER)} per maker iteration on ${makerName} (context + reasoning + tool output) ` +
+    `and ~${formatTokens(CHECKER_TOKENS_PER_ITER)} per checker check on ${checkerName}, across up to ${est.iters} iteration${est.iters === 1 ? "" : "s"}.\n` +
+    `Actual usage depends on the task. Choosing a cheaper checker model lowers the per-iteration cost.`);
 }
 
 // P-GOAL.5 (ADR-0047): render the saved-automations list inside the goal modal — each row shows its

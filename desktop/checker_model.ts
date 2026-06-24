@@ -89,9 +89,9 @@ export function recommendCheckerModel(models: ModelOption[], current: string): C
   const t = tier(best.value);
   const same = provider(best.value) === curProvider && curProvider;
   const why = t === 2
-    ? `newest small-tier model${same ? ` in your ${curProvider} family` : ""} — fast and cheap to run every iteration`
+    ? `newest small-tier model${same ? ` in your ${curProvider} family` : ""}: fast and cheap to run every iteration`
     : t === 1
-    ? `lightest capable model available${same ? ` in your ${curProvider} family` : ""} — keeps per-iteration checks cheap`
+    ? `lightest capable model available${same ? ` in your ${curProvider} family` : ""}: keeps per-iteration checks cheap`
     : `no small/fast model in your providers; using the most economical capable one available`;
   return { value: best.value, why };
 }
