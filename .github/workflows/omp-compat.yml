@@ -1,0 +1,150 @@
+# omp compatibility probe (POAM R-01 — derisk bumping oh-my-pi).
+#
+# omp ships ~3 releases/day and has broken behavior within minor versions, so we EXACT-PIN it and
+# never bump blindly (see the add-on repo BD/omp-license-and-version-pin.md). This workflow bumps omp
+# to the latest (or a chosen version) ON A BRANCH and runs the full suite plus the two correctness
+# keystones — the FAIL-CLOSED gate test and the BYTE-STABLE prompt-prefix check. If everything is
+# green it opens a ready-to-merge bump PR; if anything breaks it files a tracking issue. It NEVER
+# touches master automatically — a human reviews the omp seam changes and merges.
+
+name: omp compatibility probe
+
+on:
+  schedule:
+    - cron: "0 7 * * 1" # weekly, Monday 07:00 UTC (omp moves fast; bump the cadence if you want)
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "omp version/tag to test (default: latest)"
+        required: false
+        default: "latest"
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: omp-compat
+  cancel-in-progress: true
+
+jobs:
+  probe:
+    name: Bump omp + run keystone checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      # The fail-closed gate test spawns the zero-dependency scanner sidecar as `python server.py`,
+      # so the runner needs `python` on PATH.
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Resolve current pin vs target omp version
+        id: ver
+        run: |
+          CUR=$(node -p "require('./package.json').dependencies['@oh-my-pi/pi-coding-agent'].replace(/[^0-9.]/g,'')")
+          TARGET="${{ github.event.inputs.version || 'latest' }}"
+          RESOLVED=$(npm view "@oh-my-pi/pi-coding-agent@${TARGET}" version)
+          echo "current=$CUR"     >> "$GITHUB_OUTPUT"
+          echo "resolved=$RESOLVED" >> "$GITHUB_OUTPUT"
+          if [ "$CUR" = "$RESOLVED" ]; then echo "skip=true" >> "$GITHUB_OUTPUT"; else echo "skip=false" >> "$GITHUB_OUTPUT"; fi
+          {
+            echo "## omp compatibility probe"
+            echo "- Current pin: \`$CUR\`"
+            echo "- Target: \`$RESOLVED\`"
+            [ "$CUR" = "$RESOLVED" ] && echo "- **Already pinning the target — nothing to test.**" || echo "- Testing the bump…"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Bump omp packages (exact pin)
+        if: steps.ver.outputs.skip == 'false'
+        run: |
+          V="${{ steps.ver.outputs.resolved }}"
+          bun add --exact "@oh-my-pi/pi-agent-core@$V" "@oh-my-pi/pi-ai@$V" "@oh-my-pi/pi-coding-agent@$V" "@oh-my-pi/pi-utils@$V"
+
+      - name: Typecheck (root)
+        if: steps.ver.outputs.skip == 'false'
+        run: bun x tsc --noEmit
+
+      - name: Full harness test suite
+        if: steps.ver.outputs.skip == 'false'
+        run: bun test harness
+
+      - name: "KEYSTONE 1 — fail-closed gate (sidecar dies → gate BLOCKS)"
+        if: steps.ver.outputs.skip == 'false'
+        run: bun test harness/security/gate.failclosed.test.ts
+
+      - name: "KEYSTONE 2 — byte-stable frozen prompt prefix (KV-cache)"
+        if: steps.ver.outputs.skip == 'false'
+        run: bun run harness/scripts/demo02_prefix_hash.ts
+
+      - name: Desktop — install, typecheck, tests
+        if: steps.ver.outputs.skip == 'false'
+        working-directory: desktop
+        run: |
+          bun install
+          bun x tsc --noEmit
+          bun test .
+
+      - name: Scanner sidecar (Python)
+        if: steps.ver.outputs.skip == 'false'
+        working-directory: scanner-sidecar
+        run: |
+          python -m pip install -q pytest
+          python -m pytest -q
+
+      # GREEN: open (or refresh) a ready-to-merge bump PR. master is untouched.
+      - name: Open ready-to-merge bump PR (all checks green)
+        if: success() && steps.ver.outputs.skip == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          V="${{ steps.ver.outputs.resolved }}"
+          BR="chore/omp-bump-$V"
+          git config user.name "omp-compat-bot"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BR"
+          git add package.json bun.lock
+          git commit -m "chore(deps): bump omp to $V (compat probe green)" || { echo "no changes to commit"; exit 0; }
+          git push -f origin "$BR"
+          BODY="Automated omp compatibility probe. omp \`${{ steps.ver.outputs.current }}\` → \`$V\`.
+
+          **All keystone checks passed** against \`$V\`:
+          - typecheck (root + desktop)
+          - full harness suite + desktop suite
+          - KEYSTONE 1: fail-closed gate (sidecar killed mid-call → gate blocks)
+          - KEYSTONE 2: byte-stable frozen prompt prefix
+          - scanner sidecar pytest
+
+          Before merging, skim the omp release notes for seam changes (compaction/context, eval, thinking, providers). Then merge to move the exact pin forward. Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          gh pr create --base master --head "$BR" \
+            --title "chore(deps): bump omp ${{ steps.ver.outputs.current }} → $V (compat probe green)" \
+            --body "$BODY" \
+            --label "dependencies" 2>/dev/null \
+            || gh pr edit "$BR" --body "$BODY"
+          echo "- ✅ **Green.** Opened/updated bump PR for \`$V\`." >> "$GITHUB_STEP_SUMMARY"
+
+      # RED: file (or comment on) a tracking issue so the breakage is actionable. Do NOT bump.
+      - name: File breakage issue (a keystone or test failed)
+        if: failure() && steps.ver.outputs.skip == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          V="${{ steps.ver.outputs.resolved }}"
+          TITLE="omp $V fails the compatibility probe"
+          RUN="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          EXIST=$(gh issue list --search "$TITLE in:title" --state open --json number --jq '.[0].number // empty')
+          if [ -n "$EXIST" ]; then
+            gh issue comment "$EXIST" --body "Still failing as of run $RUN."
+          else
+            gh issue create --title "$TITLE" \
+              --body "The scheduled omp compatibility probe bumped omp to \`$V\` (current pin \`${{ steps.ver.outputs.current }}\`) and a check FAILED. **Do not bump until resolved.** Likely seams: compaction/context, eval, thinking, providers. Run: $RUN" \
+              --label "bug"
+          fi
+          echo "- ❌ **Failed.** Filed/updated a breakage issue for \`$V\`. master left on the safe pin." >> "$GITHUB_STEP_SUMMARY"
