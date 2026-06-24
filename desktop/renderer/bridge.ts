@@ -147,7 +147,9 @@ export type ChatEvent =
   | { type: "goal-done"; iters: number; reason: string }
   | { type: "goal-stop"; reason: string }
   | { type: "done" };
-export interface GoalOpts { goal: string; condition: string; command?: string; maxIters: number }
+export interface GoalOpts { goal: string; condition: string; command?: string; maxIters: number; resume?: string }
+// P-GOAL.4: a stopped loop that can be resumed from its on-disk memory file.
+export interface ResumableLoop { rel: string; goal: string; condition: string; command?: string; iterations: number; updatedAt: number }
 
 export interface Attribution {
   identity: string; source: "email" | "workstation"; email: string; workstation: string; decided: boolean;
@@ -189,6 +191,7 @@ export interface LucidBridge {
   sendPrompt(text: string, onEvent: (e: ChatEvent) => void): Promise<void>;
   // P-GOAL.1 (ADR-0046): run a /goal loop — streams the same events plus goal-iter/check/done/stop.
   runGoal(opts: GoalOpts, onEvent: (e: ChatEvent) => void): Promise<void>;
+  resumableLoops(): Promise<ResumableLoop[] | null>; // P-GOAL.4: loops that stopped without meeting their condition
   config(): Promise<ConfigOption[]>;
   /** Respawn omp + re-read its model list (after connecting a provider via OAuth or key). */
   refreshConfig(): Promise<ConfigOption[]>;
@@ -363,6 +366,7 @@ export const bridge: LucidBridge = {
   codeActivity: () => getData("/api/code-activity"),
   sendPrompt: streamChat,
   runGoal: (opts, onEvent) => streamNdjson("/api/goal", opts, onEvent),
+  resumableLoops: () => getData("/api/goal/resumable"),
   config: async () => (await getData("/api/config")) ?? FALLBACK_CONFIG,
   refreshConfig: async () => (await post("/api/config/refresh", {})) ?? FALLBACK_CONFIG,
   setConfig: async (id, value) => (await post("/api/setConfig", { configId: id, value })) ?? FALLBACK_CONFIG,

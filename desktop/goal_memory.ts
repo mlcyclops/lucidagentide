@@ -8,7 +8,7 @@
 //
 // The loop owns this file (server-side writes), confined under the loops root via pathWithin.
 
-import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { pathWithin } from "./path_guard.ts";
 
@@ -51,4 +51,58 @@ export function appendGoalIteration(mem: GoalMemory | null, n: number, summary: 
 export function finishGoalMemory(mem: GoalMemory | null, result: string): void {
   if (!mem) return;
   try { appendFileSync(mem.path, `## Result\n${result}\n`, "utf8"); } catch { /* best-effort */ }
+}
+
+// ── P-GOAL.4: read a memory file back to RESUME a stopped loop ─────────────────
+
+export interface ParsedGoalMemory { goal: string; condition: string; command?: string; iterations: number; succeeded: boolean; result?: string }
+
+/** Pure parser: pull the loop's parameters + progress out of a memory markdown. `succeeded` is true
+ *  when the final Result says the goal was met — those loops are NOT resumable. Returns null if the
+ *  file isn't a loop-memory record. */
+export function parseGoalMemory(content: string): ParsedGoalMemory | null {
+  const goal = /^#\s+Goal loop:\s*(.+)$/m.exec(content ?? "")?.[1]?.trim();
+  if (!goal) return null;
+  const condition = /^-\s*condition:\s*(.+)$/m.exec(content)?.[1]?.trim() ?? "";
+  const command = /^-\s*verify:\s*`([^`]+)`/m.exec(content)?.[1]?.trim();
+  const iterations = (content.match(/^##\s+Iteration\s+\d+/gm) ?? []).length;
+  const result = /##\s+Result\s*\n([\s\S]*?)\s*$/.exec(content)?.[1]?.trim();
+  const succeeded = /\bgoal met\b/i.test(result ?? "");
+  return { goal, condition, command, iterations, succeeded, result };
+}
+
+export interface ResumableLoop { rel: string; goal: string; condition: string; command?: string; iterations: number; updatedAt: number }
+
+/** List incomplete loop-memory files (most-recent first), so a stopped loop can be resumed. */
+export function listResumableLoops(workspace: string): ResumableLoop[] {
+  const root = join(workspace, ".omp", "loops");
+  if (!existsSync(root)) return [];
+  const out: (ResumableLoop & { _mt: number })[] = [];
+  let files: string[];
+  try { files = readdirSync(root); } catch { return []; }
+  for (const f of files) {
+    if (!f.endsWith(".md")) continue;
+    const target = pathWithin(root, join(root, f));
+    if (!target) continue;
+    try {
+      const parsed = parseGoalMemory(readFileSync(target, "utf8"));
+      if (!parsed || parsed.succeeded) continue; // only loops that did NOT meet their condition
+      out.push({ rel: join(".omp", "loops", f), goal: parsed.goal, condition: parsed.condition, command: parsed.command, iterations: parsed.iterations, updatedAt: statSync(target).mtimeMs, _mt: statSync(target).mtimeMs });
+    } catch { /* skip unreadable */ }
+  }
+  out.sort((a, b) => b._mt - a._mt);
+  return out.map(({ _mt, ...r }) => r);
+}
+
+/** Resolve an existing loop-memory file (confined to `.omp/loops/`), append a "Resumed" marker, and
+ *  return the handle + the prior content to inject into the maker prompt. Null if not found / unsafe. */
+export function resumeGoalMemory(workspace: string, rel: string): { mem: GoalMemory; prior: string } | null {
+  const root = join(workspace, ".omp", "loops");
+  const target = pathWithin(root, join(workspace, rel)); // confined to .omp/loops/ (rejects traversal)
+  if (!target || !existsSync(target)) return null;
+  try {
+    const prior = readFileSync(target, "utf8");
+    appendFileSync(target, `\n## Resumed\n\n`, "utf8");
+    return { mem: { path: target, rel }, prior };
+  } catch { return null; }
 }

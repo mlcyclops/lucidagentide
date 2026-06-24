@@ -22,6 +22,8 @@ import { emailDomainAllowed, managedConfig, skipAllowed } from "./managed_config
 import { asksageConfig, listDatasets, listPersonas, monthlyTokens, scanPersona, wrapPersona } from "./asksage.ts";
 import { listSkills } from "./skills_data.ts";
 import { importSkill } from "./skills_import.ts";
+import { listResumableLoops } from "./goal_memory.ts";
+import { currentWorkspace } from "./workspace.ts";
 import { recordSkillActivated } from "./skills_log.ts";
 import { recentTurns } from "./turns_log.ts";
 import { headroomStatus, setHeadroomEnabled, startHeadroom } from "./headroom.ts";
@@ -514,13 +516,15 @@ const server = Bun.serve({
       }
       // P-GOAL.1 (ADR-0046): run a /goal loop — maker iterations + a separate verifiable checker, capped
       // and gated. Streams the same NDJSON chat events plus goal-iter / goal-check / goal-done / goal-stop.
+      // P-GOAL.4: loops that stopped without meeting their condition (resumable from their memory file).
+      if (p === "/api/goal/resumable") return json({ ok: true, data: listResumableLoops(currentWorkspace()) });
       if (p === "/api/goal" && req.method === "POST") {
-        const b = await readBody<{ goal?: unknown; condition?: unknown; command?: unknown; maxIters?: unknown }>(req);
+        const b = await readBody<{ goal?: unknown; condition?: unknown; command?: unknown; maxIters?: unknown; resume?: unknown }>(req);
         const enc = new TextEncoder();
         const stream = new ReadableStream({
           async start(controller) {
             await backend.runGoal(
-              { goal: String(b.goal ?? ""), condition: String(b.condition ?? ""), command: b.command ? String(b.command) : undefined, maxIters: Number(b.maxIters) || 6 },
+              { goal: String(b.goal ?? ""), condition: String(b.condition ?? ""), command: b.command ? String(b.command) : undefined, maxIters: Number(b.maxIters) || 6, resume: b.resume ? String(b.resume) : undefined },
               (e) => { try { controller.enqueue(enc.encode(JSON.stringify(e) + "\n")); } catch { /* stream closed */ } },
             );
             try { controller.close(); } catch { /* already closed */ }

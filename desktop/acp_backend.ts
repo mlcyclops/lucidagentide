@@ -19,7 +19,7 @@ import { recordTurns } from "./turns_log.ts";
 import { recordBlock } from "./security_log.ts";
 import { attribution, lastModel, mcpServersForAcp, setLastModel } from "./settings_store.ts";
 import { parseGoalVerdict } from "./goal_verdict.ts";
-import { appendGoalIteration, finishGoalMemory, type GoalMemory, startGoalMemory } from "./goal_memory.ts";
+import { appendGoalIteration, finishGoalMemory, type GoalMemory, resumeGoalMemory, startGoalMemory } from "./goal_memory.ts";
 
 const REPO = join(import.meta.dir, "..");
 // Absolute so the gate loads from THIS repo even when omp runs in another workspace.
@@ -397,7 +397,7 @@ class Backend {
   // when given). Capped at `maxIters`, auto-stops on no-progress. Runs UNATTENDED — permissions are
   // auto-approved for the duration, but every tool call is still scanned fail-closed by the in-process
   // gate (that, not human approval, is the safety boundary). Streams the usual chat events plus goal-*.
-  async runGoal(opts: { goal: string; condition: string; command?: string; maxIters: number }, onEvent: (e: ChatEvent) => void): Promise<void> {
+  async runGoal(opts: { goal: string; condition: string; command?: string; maxIters: number; resume?: string }, onEvent: (e: ChatEvent) => void): Promise<void> {
     const goal = opts.goal.trim();
     const condition = (opts.condition || opts.command || "the goal is fully accomplished").trim();
     const command = opts.command?.trim() || "";
@@ -405,11 +405,13 @@ class Backend {
     const prevMode = this.permissionMode;
     this.permissionMode = "auto"; // unattended: auto-approve tool calls (the gate still scans every one)
     this.goalActive = true; this.goalCancelled = false;
-    // P-GOAL.3: durable on-disk memory (best-effort; the loop runs even if it can't be written).
-    const loopId = Date.now().toString(36);
-    const mem: GoalMemory | null = startGoalMemory(currentWorkspace(), loopId, { goal, condition, command });
+    // P-GOAL.3/4: durable on-disk memory (best-effort). `resume` continues an existing loop-memory file
+    // and injects its prior progress; otherwise start a fresh record.
+    const resumed = opts.resume ? resumeGoalMemory(currentWorkspace(), opts.resume) : null;
+    const mem: GoalMemory | null = resumed ? resumed.mem : startGoalMemory(currentWorkspace(), Date.now().toString(36), { goal, condition, command });
     if (mem) onEvent({ type: "goal-memory", path: mem.rel });
     const memNote = mem ? ` Your durable progress memory is the file ${mem.rel} (it records what's done across iterations).` : "";
+    const resumeNote = resumed ? `\n\nThis loop was already in progress. Below is the progress so far — do NOT redo completed work, continue from where it stopped:\n${resumed.prior.slice(0, 3000)}` : "";
     let noProgress = 0;
     try {
       for (let i = 1; i <= maxIters; i++) {
@@ -425,7 +427,7 @@ class Backend {
           onEvent(e);
         };
         const iterText = i === 1
-          ? `${goal}\n\nWork toward this goal now. The stop condition is: ${condition}${command ? ` (verified by running \`${command}\`)` : ""}. Take the next concrete step.${memNote}`
+          ? `${goal}\n\nWork toward this goal now. The stop condition is: ${condition}${command ? ` (verified by running \`${command}\`)` : ""}. Take the next concrete step.${memNote}${resumeNote}`
           : `Continue toward the goal. Stop condition: ${condition}. Take the next concrete step; if you believe the condition now holds, say so briefly and stop.${memNote}`;
         await this.prompt(iterText, sink);
         if (this.goalCancelled) { onEvent({ type: "goal-stop", reason: "stopped by you" }); finishGoalMemory(mem, "stopped by you"); return; }

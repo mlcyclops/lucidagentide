@@ -1959,3 +1959,22 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
   file format is the foundation for it); no distinct checker model; no scheduled automations. The agent is
   TOLD about the memory file but the loop owns the writes (the agent reads, in-context within a run).
 - **next:** P-GOAL.4 — resume from a loop-memory file (read status/last iteration, continue); then automations.
+
+-----
+
+## P-GOAL.4: resume a stopped loop from its memory file (ADR-0046)
+- **shipped:** loop resume. `desktop/goal_memory.ts` gains `parseGoalMemory` (pull goal/condition/command/
+  iterations + `succeeded` from a memory markdown), `listResumableLoops` (incomplete loops, newest first),
+  and `resumeGoalMemory` (reopen an existing file confined to `.omp/loops/`, append a `## Resumed` marker,
+  return the prior content). `runGoal` takes `resume?: <rel>` — reuses that memory file (no new one) and
+  INJECTS the prior progress into the maker prompt ("do not redo completed work, continue from where it
+  stopped"). `GET /api/goal/resumable` + `resume` on the `/api/goal` POST; `bridge.resumableLoops` +
+  `GoalOpts.resume` + `ResumableLoop`; the `/goal` launcher shows a "Resume a stopped loop" list. 4 more
+  unit tests (parse / succeeded-excluded / lister / resume+traversal-reject). Verified live, full cycle:
+  a loop stopped on an unsatisfiable `exit 1` → listed as resumable → resumed (SAME memory file, prior
+  progress carried in) → met the condition with `echo ok` → dropped off the resumable list; one file holds
+  the whole history (run → `## Resumed` → run → Goal met). `bun test desktop` 294/294; typecheck clean; clean console.
+- **stubbed:** resume re-runs fresh maker iterations seeded by the memory (the original ACP session is gone,
+  so it's continue-by-context, not session-restore); no distinct checker model; no scheduled automations.
+- **next:** P-GOAL.5 — scheduled automations (run a loop / discovery on a cadence) — the last Loop-Engineering
+  building block this harness doesn't expose; then a distinct/cheaper checker model.

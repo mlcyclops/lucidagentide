@@ -2194,6 +2194,7 @@ function openGoalForm(): void {
   const ov = el(`<div class="scrim goal-scrim"><div class="goal-modal">
     <div class="goal-modal-h">${icon("bolt", 15)} Run a goal loop</div>
     <div class="goal-modal-sub">The agent iterates until a verifiable condition holds. A separate checker grades each round; the security gate scans every action.</div>
+    <div id="goalResumeSec"></div>
     <label class="goal-lbl">Goal</label>
     <textarea id="goalGoal" class="prov-key" rows="3" placeholder="e.g. Make all auth tests pass and fix any lint errors"></textarea>
     <label class="goal-lbl">Verification command <span class="goal-opt">optional, proves "done" by exit 0</span></label>
@@ -2214,12 +2215,23 @@ function openGoalForm(): void {
     void runGoalLoop({ goal, condition: command || goal, command: command || undefined, maxIters });
   });
   ($("#goalGoal", ov) as HTMLTextAreaElement)?.focus();
+  // P-GOAL.4: offer to resume any loop that stopped without meeting its condition.
+  void bridge.resumableLoops().then((loops) => {
+    if (!loops?.length) return;
+    const sec = $("#goalResumeSec", ov); if (!sec) return;
+    sec.innerHTML = `<div class="goal-lbl">Resume a stopped loop</div>` + loops.slice(0, 5).map((l) =>
+      `<button class="goal-resume" data-rel="${esc(l.rel)}" data-goal="${esc(l.goal)}" data-cond="${esc(l.condition)}" data-cmd="${esc(l.command ?? "")}">${icon("refresh", 12)} <span class="gr-goal">${esc(l.goal.slice(0, 64))}</span><span class="gr-iters">${l.iterations} iter</span></button>`).join("");
+    sec.querySelectorAll(".goal-resume").forEach((b) => b.addEventListener("click", () => {
+      const d = (b as HTMLElement).dataset; close();
+      void runGoalLoop({ goal: d.goal!, condition: d.cond || d.goal!, command: d.cmd || undefined, maxIters: 6, resume: d.rel });
+    }));
+  });
 }
-async function runGoalLoop(opts: { goal: string; condition: string; command?: string; maxIters: number }): Promise<void> {
+async function runGoalLoop(opts: { goal: string; condition: string; command?: string; maxIters: number; resume?: string }): Promise<void> {
   if (state.streaming) { showToast({ tone: "warn", title: "A turn is running", desc: "Wait for it to finish before starting a loop.", timeout: 2400 }); return; }
   if (!autoCollapsedSessions) { autoCollapsedSessions = true; if (!state.sidebarCollapsed) toggleSidebar(true); }
   state.lastPrompt = opts.goal;
-  addMessage("user", `/goal: ${opts.goal}${opts.command ? `\nverify: \`${opts.command}\`` : ""}  ·  up to ${opts.maxIters} iterations`);
+  addMessage("user", `/goal${opts.resume ? " (resume)" : ""}: ${opts.goal}${opts.command ? `\nverify: \`${opts.command}\`` : ""}  ·  up to ${opts.maxIters} iterations`);
   state.streaming = true; goalLoopRunning = true; setSendEnabled();
   const node = addMessage("assistant", "");
   const textEl = $(".text", node) as HTMLElement; textEl.innerHTML = "";

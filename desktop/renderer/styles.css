@@ -521,6 +521,14 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .goal-row .goal-lbl{margin:0}
 .goal-max{width:80px;flex:none}
 .goal-modal-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:14px}
+#goalResumeSec{display:flex;flex-direction:column;gap:5px}
+.goal-resume{display:flex;align-items:center;gap:8px;width:100%;text-align:left;padding:8px 10px;cursor:pointer;
+  border:1px solid var(--line);border-radius:9px;background:var(--bg-2);color:var(--txt-2);font-size:12px;
+  transition:background var(--t),border-color var(--t),color var(--t)}
+.goal-resume:hover{background:var(--bg-3);color:var(--txt);border-color:color-mix(in srgb,var(--accent) 40%,var(--line))}
+.goal-resume .ic{flex:none;color:var(--accent-2)}
+.goal-resume .gr-goal{flex:1 1 auto;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.goal-resume .gr-iters{flex:none;font-family:var(--mono);font-size:10px;color:var(--txt-4)}
 .goal-loop{display:flex;flex-direction:column;gap:10px}
 .goal-mem{display:flex;align-items:center;gap:7px;font-size:11px;color:var(--txt-4)}
 .goal-mem .ic{flex:none;color:var(--txt-4)}
