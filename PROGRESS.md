@@ -1941,3 +1941,21 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
   (the goalLoopRunning branch), not a synthetic button click.
 - **next:** P-GOAL.3 — on-disk loop state ("memory") + pause/resume so a stopped loop can be continued; then
   scheduled automations (the loop's heartbeat).
+
+-----
+
+## P-GOAL.3: durable on-disk loop memory (ADR-0046)
+- **shipped:** the loop's "memory on disk" (Osmani: "the model forgets between runs, the repo doesn't").
+  `desktop/goal_memory.ts` (`startGoalMemory`/`appendGoalIteration`/`finishGoalMemory`) writes a markdown
+  record under `<ws>/.omp/loops/<id>-<slug>.md` — goal header + condition + verify command, then an entry
+  per iteration (maker summary + checker verdict) and the final result. `pathWithin`-confined, best-effort
+  (null/unwritable ⇒ safe no-op, the loop still runs). `runGoal` creates it, references its path in the
+  maker prompt, appends each round, and finalizes on done/stop/cancel/error; emits a new `goal-memory`
+  event (ChatEvent parity in bridge.ts) and the composer renders a `loop memory: <path>` line. Em dash in
+  the verdict swapped to `·` for consistency. 3 unit tests (format · null-safe · path-confined).
+  Verified live: a real loop wrote the file with the correct header/iteration/result; `bun test desktop`
+  290/290; typecheck clean (3 cfgs); test artifacts cleaned from the workspace.
+- **stubbed:** still no RESUME (the memory is written but not yet read back to continue a stopped loop — the
+  file format is the foundation for it); no distinct checker model; no scheduled automations. The agent is
+  TOLD about the memory file but the loop owns the writes (the agent reads, in-context within a run).
+- **next:** P-GOAL.4 — resume from a loop-memory file (read status/last iteration, continue); then automations.

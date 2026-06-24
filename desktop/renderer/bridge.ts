@@ -140,7 +140,8 @@ export type ChatEvent =
   | { type: "block"; tool: string; reason: string; severity: string; findings: string; id?: string; quarantined?: boolean }
   | { type: "permission"; id: string; tool: string; detail: string; options: { optionId: string; name: string; kind?: string }[] }
   | { type: "usage"; used: number; size: number; cost: number }
-  // P-GOAL.1 (ADR-0046): /goal loop events (kept in parity with desktop/acp_backend.ts).
+  // P-GOAL.1/3 (ADR-0046): /goal loop events (kept in parity with desktop/acp_backend.ts).
+  | { type: "goal-memory"; path: string }
   | { type: "goal-iter"; n: number; max: number }
   | { type: "goal-check"; n: number; done: boolean; reason: string }
   | { type: "goal-done"; iters: number; reason: string }

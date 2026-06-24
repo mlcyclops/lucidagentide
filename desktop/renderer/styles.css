@@ -522,6 +522,9 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .goal-max{width:80px;flex:none}
 .goal-modal-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:14px}
 .goal-loop{display:flex;flex-direction:column;gap:10px}
+.goal-mem{display:flex;align-items:center;gap:7px;font-size:11px;color:var(--txt-4)}
+.goal-mem .ic{flex:none;color:var(--txt-4)}
+.goal-mem code{font-family:var(--mono);color:var(--txt-3)}
 .goal-iter{border:1px solid var(--line-soft);border-left:2px solid var(--accent-dim);border-radius:11px;background:var(--bg-1);padding:10px 13px}
 .goal-iter-h{display:flex;align-items:center;gap:7px;font-family:var(--mono);font-size:11.5px;color:var(--accent-2);font-weight:600;margin-bottom:6px}
 .goal-act{display:flex;align-items:center;gap:7px;font-family:var(--mono);font-size:11.5px;color:var(--txt-3);margin-top:5px}

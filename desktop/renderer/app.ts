@@ -2226,7 +2226,8 @@ async function runGoalLoop(opts: { goal: string; condition: string; command?: st
   const wrap = el(`<div class="goal-loop"></div>`); textEl.appendChild(wrap);
   let iterEl: HTMLElement | null = null, streamEl: HTMLElement | null = null, buf = "";
   const onEvent = (e: ChatEvent) => {
-    if (e.type === "goal-iter") {
+    if (e.type === "goal-memory") { wrap.appendChild(el(`<div class="goal-mem">${icon("folder", 12)} loop memory: <code>${esc(e.path)}</code></div>`)); scrollChat(); }
+    else if (e.type === "goal-iter") {
       buf = "";
       iterEl = el(`<div class="goal-iter"><div class="goal-iter-h">${icon("refresh", 11)} Iteration ${e.n} of ${e.max}</div><div class="stream"></div></div>`);
       wrap.appendChild(iterEl); streamEl = $(".stream", iterEl); scrollChat();

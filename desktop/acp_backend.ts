@@ -19,6 +19,7 @@ import { recordTurns } from "./turns_log.ts";
 import { recordBlock } from "./security_log.ts";
 import { attribution, lastModel, mcpServersForAcp, setLastModel } from "./settings_store.ts";
 import { parseGoalVerdict } from "./goal_verdict.ts";
+import { appendGoalIteration, finishGoalMemory, type GoalMemory, startGoalMemory } from "./goal_memory.ts";
 
 const REPO = join(import.meta.dir, "..");
 // Absolute so the gate loads from THIS repo even when omp runs in another workspace.
@@ -49,6 +50,7 @@ export type ChatEvent =
   | { type: "usage"; used: number; size: number; cost: number }
   // P-GOAL.1 (ADR-0046): /goal loop events — an iteration begins, the separate checker's verdict,
   // the loop met its condition, or it stopped (cap / no-progress).
+  | { type: "goal-memory"; path: string }
   | { type: "goal-iter"; n: number; max: number }
   | { type: "goal-check"; n: number; done: boolean; reason: string }
   | { type: "goal-done"; iters: number; reason: string }
@@ -403,10 +405,15 @@ class Backend {
     const prevMode = this.permissionMode;
     this.permissionMode = "auto"; // unattended: auto-approve tool calls (the gate still scans every one)
     this.goalActive = true; this.goalCancelled = false;
+    // P-GOAL.3: durable on-disk memory (best-effort; the loop runs even if it can't be written).
+    const loopId = Date.now().toString(36);
+    const mem: GoalMemory | null = startGoalMemory(currentWorkspace(), loopId, { goal, condition, command });
+    if (mem) onEvent({ type: "goal-memory", path: mem.rel });
+    const memNote = mem ? ` Your durable progress memory is the file ${mem.rel} (it records what's done across iterations).` : "";
     let noProgress = 0;
     try {
       for (let i = 1; i <= maxIters; i++) {
-        if (this.goalCancelled) { onEvent({ type: "goal-stop", reason: "stopped by you" }); return; }
+        if (this.goalCancelled) { onEvent({ type: "goal-stop", reason: "stopped by you" }); finishGoalMemory(mem, "stopped by you"); return; }
         onEvent({ type: "goal-iter", n: i, max: maxIters });
         let work = "";
         let actedThisIter = false;
@@ -418,21 +425,25 @@ class Backend {
           onEvent(e);
         };
         const iterText = i === 1
-          ? `${goal}\n\nWork toward this goal now. The stop condition is: ${condition}${command ? ` (verified by running \`${command}\`)` : ""}. Take the next concrete step.`
-          : `Continue toward the goal. Stop condition: ${condition}. Take the next concrete step; if you believe the condition now holds, say so briefly and stop.`;
+          ? `${goal}\n\nWork toward this goal now. The stop condition is: ${condition}${command ? ` (verified by running \`${command}\`)` : ""}. Take the next concrete step.${memNote}`
+          : `Continue toward the goal. Stop condition: ${condition}. Take the next concrete step; if you believe the condition now holds, say so briefly and stop.${memNote}`;
         await this.prompt(iterText, sink);
-        if (this.goalCancelled) { onEvent({ type: "goal-stop", reason: "stopped by you" }); return; }
+        if (this.goalCancelled) { onEvent({ type: "goal-stop", reason: "stopped by you" }); finishGoalMemory(mem, "stopped by you"); return; }
 
         const verdict = await this.checkGoal({ goal, condition, command, lastWork: work });
         onEvent({ type: "goal-check", n: i, done: verdict.done, reason: verdict.reason });
-        if (verdict.done) { onEvent({ type: "goal-done", iters: i, reason: verdict.reason }); return; }
+        appendGoalIteration(mem, i, work, verdict);
+        if (verdict.done) { onEvent({ type: "goal-done", iters: i, reason: verdict.reason }); finishGoalMemory(mem, `Goal met in ${i} iteration${i === 1 ? "" : "s"}: ${verdict.reason}`); return; }
 
         noProgress = actedThisIter ? 0 : noProgress + 1;
-        if (noProgress >= 2) { onEvent({ type: "goal-stop", reason: "stopped: two iterations with no actions and the condition still unmet" }); return; }
+        if (noProgress >= 2) { onEvent({ type: "goal-stop", reason: "stopped: two iterations with no actions and the condition still unmet" }); finishGoalMemory(mem, "stopped: no progress for two iterations"); return; }
       }
       onEvent({ type: "goal-stop", reason: `stopped: hit the ${maxIters}-iteration cap without meeting the condition` });
+      finishGoalMemory(mem, `stopped: hit the ${maxIters}-iteration cap without meeting the condition`);
     } catch (e) {
-      onEvent({ type: "goal-stop", reason: `loop error: ${String((e as Error)?.message ?? e)}` });
+      const reason = `loop error: ${String((e as Error)?.message ?? e)}`;
+      onEvent({ type: "goal-stop", reason });
+      finishGoalMemory(mem, reason);
     } finally {
       this.goalActive = false;
       this.permissionMode = prevMode;
