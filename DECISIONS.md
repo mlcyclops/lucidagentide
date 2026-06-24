@@ -4383,3 +4383,136 @@ Only the RAG `/query` route stays text-only (single-message endpoint, no tool us
 (functionCall→events, the `functionDeclarations`/`functionResponse` wire round-trip, text-only no-tools)
 alongside the 4 Anthropic ones. `bun test harness` 473. Live gov-gateway verification is still the
 manual check (same caveat as the Anthropic path — both are unit-tested against mocked HTTP).
+
+-----
+
+## ADR-0053 — Knowledge ingest: local RAG vector store + AskSage dataset training (SCOPE/PLAN)
+
+**Date:** 2026-06-24
+**Status:** **Proposed** — scope + plan only; no code this increment. Splits into P-RAG.1..4 below.
+**Context increment:** P-RAG (planning).
+
+### Context
+
+The user wants a "Knowledge / Data" module that parses PDFs and images **locally** into a **local vector
+datastore** for retrieval against multimodal models, AND lets AskSage **Civ** users train named AskSage
+datasets — modeled on AskSage's own "Data Settings → Manage Datasets → File Ingest" popups, but with
+clearer wording, premium hover tooltips, and a guided walkthrough + advanced mode (the P-GOAL.8 pattern).
+
+Two distinct trust paths, which the UI must keep visually separate:
+- **Local** — parse + embed + store **on this host**; nothing leaves the machine. The privacy/air-gap path.
+- **AskSage** — upload/train into AskSage-hosted datasets via the gov gateway. Content leaves the host.
+
+What already exists (research): DuckDB (`@duckdb/node-api`) with a frozen, numbered-migration schema; the
+fail-closed Unicode scanner gate (`scanAndDecide`) + trust labels + `UNTRUSTED_CONTENT` delimiters
+(invariant #5); the AskSage helpers (`desktop/asksage.ts`: `listDatasets`/`monthlyTokens`/persona scan)
+and the `/query` RAG route; the compartment model (work/personal/cui, ADR-0012); and the P-GOAL.8 guided
+walkthrough. What does NOT exist: any embedding model, PDF/image parsing, or vector column.
+
+### Decision — vector datastore: DuckDB built-in cosine (no extension), HNSW later
+
+Reuse the existing DuckDB. A new **migration `0010_knowledge_vectors.sql`** adds `kb_datasets`
+(id, name, classification U|CUI, source local|asksage, embedding_model, dim, created_at) and `kb_chunks`
+(chunk_id, dataset_id, artifact_id to content_artifacts, source_path, ordinal, text, trust_label,
+`embedding FLOAT[]`, dim, created_at). Retrieval is **brute-force** `ORDER BY array_cosine_distance(
+embedding::FLOAT[dim], $q) LIMIT k` using DuckDB's **built-in** array functions — **no extension to
+install** (so it works air-gapped; `INSTALL vss` would require a network fetch). For a single-user,
+hundreds-to-thousands-of-chunks knowledge base this is fast enough. The `vss`/HNSW index (usearch-based)
+is a **future, optional accelerator** — and only if its binary is **bundled** (air-gap) and its
+experimental-persistence corruption risk is accepted; brute-force avoids both. This honors invariant #10
+(new numbered migration, never edit a frozen one) and adds no new datastore dependency.
+
+### Decision — local parse + embed (phased, TS-only, air-gap-clean)
+
+- **PDF text:** `unpdf` (or `pdfjs-dist`) — pure JS/WASM, no native binary, runs in the Bun harness.
+- **Text embeddings:** `@huggingface/transformers` on the **WASM** backend (avoids the native
+  `onnxruntime-node` the desktop build currently excludes), model `bge-small-en-v1.5` (384-dim) or
+  `all-MiniLM-L6-v2`. Weights are **bundled as extraResources** (air-gap; no runtime download). Embedding
+  runs server-side (harness/dev server), where the scanner + DuckDB write already live.
+- **Images / multimodal (Phase 2):** prefer **caption-at-ingest** — the active multimodal model describes
+  the image (and optional `tesseract.js` WASM OCR pulls embedded text); the caption+OCR text is scanned,
+  embedded, and stored, and the image bytes are retained for later inclusion in multimodal prompts. This
+  reuses existing models and keeps the new ML dependency to ONE text embedder. **CLIP shared-space
+  embeddings** (`Xenova/clip-vit-base-patch32`) are the heavier alternative (true text-image search) —
+  noted, not chosen for v1.
+
+### Decision — security (this is a security product; non-negotiable)
+
+- **Every extracted text chunk** (PDF text, image caption/OCR) is **scanned fail-closed** by the Unicode
+  scanner before it is stored AND before it is ever injected — same `scanAndDecide` path as personas /
+  skill import. Blocked chunks are recorded via `recordBlock`, never embedded.
+- Stored chunks carry a **trust label**; retrieval wraps the top-k in `UNTRUSTED_CONTENT_START/END`
+  (invariant #5) and injects only in the user-turn tail, never the frozen prefix.
+- Each dataset has a **classification** (U / CUI), aligned with the compartment model. **CUI-classified
+  content is never offered to the AskSage *Civ* endpoint** — the AskSage path is gated to U (or a gov
+  base); the UI states the boundary plainly.
+- New `EventName`s for the audit trail (a contracts change = its own increment): `knowledge_ingested`,
+  `chunk_embedded`, `knowledge_retrieved` (reuse `content_ingested`/`content_scanned`/`artifact_quarantined`
+  where they already fit). Artifacts persist to `content_artifacts` as today.
+
+### Decision — AskSage training (Civ users)
+
+Server-side wrappers mirroring the existing `listDatasets` pattern (POST, `x-access-tokens`, fail-soft),
+new `/api/asksage/dataset/*` routes: list (`/get-datasets`, have it), **create** (`/add-dataset` or
+`/dataset`), **train text** (`/train` — `{context, content, summarize, summarize_model, force_dataset}`),
+**train file** (multipart `/file` aka `/train-with-file`), list files (`/get-all-files-ingested`), delete
+file (`/delete-filename-from-dataset`), dataset info/results/copy. **Exact paths/params confirmed at
+implementation** against a live gateway (the public docs expose `/train` + `/file`; the swagger UI also
+shows `/train-with-file`/`/train-with-array` — some may be client-method names). Custom dataset names are
+supported (the community note: pass the plain name, not the `user_content_…` mangled form).
+
+### Decision — UI: one "Knowledge" popup, guided + advanced (P-GOAL.8 pattern)
+
+A single modal, reusing the goal-modal walkthrough machinery (guided default vs Advanced toggle persisted
+in `localStorage`, premium `data-tip` tooltips, info dots, step nav). **Guided steps:** (1) Destination —
+**Local (stays on this host)** vs **AskSage dataset (uploads to the gateway)**, each explained; (2)
+Dataset — pick existing or create with a **custom name + classification**; (3) Files — drag-drop PDF/image
+(supported-formats list, clearer than AskSage's); (4) Parse + scan preview — show what was extracted and
+the gate verdict per file BEFORE committing; (5) Ingest — embed+store locally, or upload to AskSage, with
+a progress + result summary. **Advanced mode:** the AskSage-style one-screen grid (datasets, files,
+filters, ingest, delete). **Wording upgrades over AskSage:** say *where data goes* and *why*, what parsing
++ embedding actually do, that everything is scanned at the gate, and what each classification means.
+
+### Phasing
+
+- **P-RAG.1** — local PDF to text ingest: migration 0010, `unpdf` parse, text embedder (bundled), DuckDB
+  brute-force retrieval, scan-gated, the Knowledge popup (guided+advanced) for the LOCAL path, and RAG
+  injection (delimited) into the chat turn.
+- **P-RAG.2** — image/multimodal ingest (caption+OCR at ingest; image retained for multimodal prompts).
+- **P-RAG.3** — AskSage dataset training UI (create/list/ingest/delete) for Civ users, classification-gated.
+- **P-RAG.4** — polish: retrieval ranking/citations in replies, dataset management (rename/delete/stats),
+  HNSW accelerator if the corpus grows.
+
+### Open decisions (need a call before P-RAG.1)
+
+1. **Embedder weight cost vs air-gap:** bundle ~33–90 MB of ONNX weights (air-gap, larger installer) vs
+   download-on-first-use (smaller, but not air-gap)? Recommend **bundle** for the locked-down target.
+2. **Images:** caption-at-ingest (reuses models, lighter) vs CLIP local embeddings (true multimodal
+   search, heavier)? Recommend **caption-at-ingest** for v1.
+3. **Where the KB DB lives:** the existing `agent_obs.duckdb` (one DB, write-lock contention with omp) vs a
+   **separate `knowledge.duckdb`** (cleaner, no contention). Recommend **separate DB**.
+4. **Retrieval trigger:** auto-RAG every turn when a dataset is selected (like the AskSage `/query`
+   datasets dropdown) vs an explicit "use knowledge" toggle. Recommend **mirror the existing selector**.
+
+### Alternatives considered
+
+- **Vector store:** sqlite-vec / LanceDB / Chroma / Qdrant — all add a new datastore + (LanceDB/Qdrant)
+  native or server surface; DuckDB is already in-tree and air-gap-clean. **vss/HNSW extension** — needs a
+  network `INSTALL` or a bundled binary + experimental-persistence (corruption) risk; deferred.
+- **Embeddings:** remote embedding API (defeats local privacy / air-gap) — rejected for the local path.
+  `onnxruntime-node` native — the desktop build already excludes it; WASM backend avoids per-platform
+  native binaries.
+
+### Invariants preserved
+
+#2 (TS-only — `unpdf`/transformers.js/tesseract.js are JS/WASM; the only Python stays the scanner) · #3/#5
+(every ingested chunk scanned fail-closed, stored with a trust label, injected only delimited + late) · #8
+(new events via the `EventName` enum) · #9 (stable `*_id` for datasets/chunks) · #10 (a new numbered
+migration; frozen ones untouched) · keystone #2 (suspicious-source content never auto-promotes — RAG
+chunks are retrieval context, never semantic memory).
+
+### Relates to
+
+ADR-0007 (AskSage adapter + `/query` RAG this extends); ADR-0012 (compartments/classification); ADR-0019
+(gate/quarantine + Security-panel surfacing); ADR-0050 / P-GOAL.8 (the guided-walkthrough UI pattern
+reused); CLAUDE.md invariants #2/#3/#5/#10 + keystone #2.
