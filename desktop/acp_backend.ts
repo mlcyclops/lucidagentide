@@ -374,7 +374,7 @@ class Backend {
     }
     this.listener = null;
     onEvent({ type: "done" });
-    void learnFromTurn(text, assistant); // best-effort, after the turn — fail-closed inside
+    void learnFromTurn(text, assistant, (sys, usr) => this.complete(sys, usr)); // best-effort; the model extractor (opt-in) uses complete()
     // ADR-0009 Phase B (issue #12): capture the turn for traceability. Sanitized + sha only,
     // GUI-side (can't co-write DuckDB); fully guarded so it never affects the chat.
     recordTurns({ sessionId: this.sessionId ?? "", userText: text, assistantText: assistant });

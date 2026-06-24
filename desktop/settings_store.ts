@@ -70,6 +70,9 @@ export interface GuiSettings {
   // Personalization knowledge graph (ADR-0010, P9.x): opt-in, encrypted-at-rest.
   // OFF by default - no user-fact distillation, recall, or store until enabled.
   personalizationEnabled?: boolean;
+  // OFF by default - opt-in richer learning: use the MODEL extractor (one extra model call per
+  // turn) instead of the offline heuristic, for semantic facts + relations. Cost vs quality.
+  personalAiExtract?: boolean;
   // Active compartment (ADR-0012): work | personal | cui | combined (view). Default personal.
   personalScope?: "work" | "personal" | "cui" | "combined";
   // P-LOC.1 (ADR-0031): the last model omp reported active, persisted so the AI-LOC gate can tag
@@ -108,6 +111,9 @@ export function personalVaultDir(): string { return join(personalBaseDir(), "luc
 export function personalCuiArchiveDir(): string { return join(personalBaseDir(), "lucid-cui-archive"); }
 export function setPersonalization(enabled: boolean): GuiSettings {
   const s = load(); s.personalizationEnabled = enabled; save(s); return s;
+}
+export function setPersonalAiExtract(enabled: boolean): GuiSettings {
+  const s = load(); s.personalAiExtract = enabled; save(s); return s;
 }
 export function setRateLimitProbe(enabled: boolean): GuiSettings {
   const s = load(); s.rateLimitProbe = enabled; save(s); return s;
