@@ -50,6 +50,29 @@ test("heuristicExtractor learns nothing from a plain coding question (no persona
   expect(heuristicExtractor({ user: "Can you fix this restart() bug in my game loop?", assistant: "" }).length).toBe(0);
 });
 
+test("cross-turn linking: re-mentioning a prior concept links it to the new turn's fact (#1)", async () => {
+  const store = newStore();
+  await distillTurn(store, cleanScanner, { userText: "I love premium custard", scope: "personal", extract: heuristicExtractor });
+  // a LATER turn that re-mentions "custard" (a word in the prior entity) and learns a NEW fact
+  await distillTurn(store, cleanScanner, { userText: "I love caramel on custard", scope: "personal", extract: heuristicExtractor });
+  const g = store.graph();
+  const id = (name: string) => g.entities.find((e) => e.name.toLowerCase() === name)?.id;
+  const custard = id("premium custard"), caramel = id("caramel on custard");
+  expect(custard && caramel).toBeTruthy();
+  const link = g.links.find((l) =>
+    (l.from_entity_id === caramel && l.to_entity_id === custard) ||
+    (l.from_entity_id === custard && l.to_entity_id === caramel));
+  expect(link?.relation).toBe("mentioned with"); // joined across turns
+});
+
+test("cross-turn linking does NOT connect unrelated turns", async () => {
+  const store = newStore();
+  await distillTurn(store, cleanScanner, { userText: "I love premium custard", scope: "personal", extract: heuristicExtractor });
+  await distillTurn(store, cleanScanner, { userText: "I use Rust for systems work", scope: "personal", extract: heuristicExtractor });
+  const g = store.graph();
+  expect(g.links.length).toBe(0); // no shared words → no cross-link, no false edges
+});
+
 test("modelExtractor parses a JSON array and drops invalid kinds", async () => {
   const callModel = async () => 'noise before [{"kind":"user:goal","entity":"P9","statement":"Ship P9.2","confidence":0.9},{"kind":"bogus","entity":"x","statement":"y"}] trailing';
   const facts = await modelExtractor(callModel)({ user: "anything", assistant: "" });
