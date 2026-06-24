@@ -237,7 +237,7 @@ It's a **desktop app you can just download and run** (Windows installer/portable
 harness/                  # ALL TypeScript (Bun)
   contracts.ts              # FROZEN: TrustLabel · AgentMode · EventName · ToolResult · Finding
   security/                 # scanner_client (NDJSON, fail-closed) · gate (scanAndDecide)
-  memory/                   # DuckDB store · promotion gate (keystone #2) · cross-session recall · migrations 0001–0009
+  memory/                   # DuckDB store · promotion gate (keystone #2) · cross-session recall · migrations 0001-0009
   personal/                 # encrypted personalization graph · distiller · CUI isolation · ChatGPT/Claude/Gemini import
   telemetry/                # stable-id event stream → DuckDB (replayable)
   runs/                     # provenance lineage · sandbox profiles · replay
@@ -314,7 +314,7 @@ be enabled to stretch a gov token quota ([ADR-0008](DECISIONS.md)).
 
 ## 📚 Knowledge & RAG (Coming Soon)
 
-> **Designed in [ADR-0053](DECISIONS.md); building next as `P-RAG.1–4`.** Bring your own documents into the
+> **Designed in [ADR-0053](DECISIONS.md); building next as `P-RAG.1-4`.** Bring your own documents into the
 > agent's context - **two paths, one trust boundary**, both scanned by the same fail-closed gate.
 
 - **🔒 Local-first vector store (air-gapped).** Drag in PDFs and images; they're parsed, embedded, and indexed
@@ -347,7 +347,7 @@ LucidAgentIDE is a thin, principled layer over best-in-class building blocks - c
 | [**DuckDB**](https://duckdb.org) | An in-process analytical (OLAP) SQL database | The append-only **provenance + memory store** (findings, telemetry, semantic memory, run lineage) |
 | [**Obsidian**](https://obsidian.md) | A local-first Markdown knowledge base with `[[wikilinks]]` + a graph view | The **export format** for the personalization knowledge graph (roadmap) |
 | [**BoringSSL**](https://boringssl.googlesource.com/boringssl/) | Google's streamlined fork of OpenSSL (Bun's crypto backend) | Context for the **FIPS posture** - FIPS-approved algorithms; no FIPS *mode* in Bun's runtime |
-| [**headroom**](https://github.com/chopratejas/headroom) | An on-device, OpenAI-compatible token-compression proxy (60–95% reduction) | **Opt-in** context compression to stretch gov token quotas |
+| [**headroom**](https://github.com/chopratejas/headroom) | An on-device, OpenAI-compatible token-compression proxy (60-95% reduction) | **Opt-in** context compression to stretch gov token quotas |
 | [**AskSage**](https://asksage.ai) | An accredited government generative-AI gateway fronting OpenAI/Anthropic/Google | An omp **provider extension**: lockdown, scanned personas, dataset-grounded RAG |
 
 Runtime stack: [Bun](https://bun.sh) (harness + dev server), [Electron](https://electronjs.org) (desktop),
@@ -402,7 +402,7 @@ needs **zero prerequisites**. Code-signing and notarization are supported when c
 
 ## <img src=".github/assets/icons/roadmap.svg" width="28" align="top" alt=""> Roadmap
 
-**Shipped** - Increment 0–2 + Phases 2–10 + the personalization, attribution, migration, and IDE phases:
+**Shipped** - Increment 0-2 + Phases 2-10 + the personalization, attribution, migration, and IDE phases:
 the full security lifecycle, provenance lineage, replay, the cache-optimized prefix, the desktop GUI, the
 AskSage gov gateway, cross-model observability, CUI isolation, the encrypted personalization graph with
 cross-session recall, AI-authorship attribution, one-command ChatGPT/Claude/Gemini migration, and a
@@ -415,11 +415,11 @@ read-write IDE with gated saves, AskSage **tool use on the gov gateway** (Claude
 
 | Phase | Feature | ADR |
 |:--|:--|:--|
-| **P-GOAL.1–8** | The **`/goal` agentic loop** - iterate to a verifiable stop condition with a separate (cheaper, recommended) checker model, durable on-disk memory, resume, scheduled automations, a cost estimate, and a guided walkthrough | [ADR-0046–0050](DECISIONS.md) |
+| **P-GOAL.1-8** | The **`/goal` agentic loop** - iterate to a verifiable stop condition with a separate (cheaper, recommended) checker model, durable on-disk memory, resume, scheduled automations, a cost estimate, and a guided walkthrough | [ADR-0046-0050](DECISIONS.md) |
 | **AskSage tool use** | Claude **and** Gemini routed through the **gov gateway can now use omp tools** (write files, run commands) - the streamSimple adapter parses tool calls + scans each through the gate | [ADR-0051](DECISIONS.md) |
-| **P-IDE.5–6** | Read-write Monaco IDE - **Save routed through the scanner gate** (≥high finding or dead scanner *blocks* the write), Save-As, conflict banner, Send-to-chat | [ADR-0036/0037](DECISIONS.md) |
-| **P-IMP.1–2** | One-command **ChatGPT/Claude/Gemini import** - shard-aware, fully gated, with a first-run onboarding nudge + token/runtime estimate | [ADR-0034/0035](DECISIONS.md) |
-| **P-LOC.1–2** | **AI-authorship attribution** - per-model/repo/identity LOC ledger + dashboard rollup | [ADR-0031](DECISIONS.md) |
+| **P-IDE.5-6** | Read-write Monaco IDE - **Save routed through the scanner gate** (≥high finding or dead scanner *blocks* the write), Save-As, conflict banner, Send-to-chat | [ADR-0036/0037](DECISIONS.md) |
+| **P-IMP.1-2** | One-command **ChatGPT/Claude/Gemini import** - shard-aware, fully gated, with a first-run onboarding nudge + token/runtime estimate | [ADR-0034/0035](DECISIONS.md) |
+| **P-LOC.1-2** | **AI-authorship attribution** - per-model/repo/identity LOC ledger + dashboard rollup | [ADR-0031](DECISIONS.md) |
 | **P-IDE.1** | Sovereignty-aware **model governance** - gov curation, accredited-gateway gating, foreign-origin acknowledgment wall | [ADR-0029](DECISIONS.md) |
 | **P8.1** | **Cross-session memory recall** - prior-session facts resurface as delimited, post-cache context | [ADR-0009](DECISIONS.md) |
 | **P9.5** | Hard CUI isolation - separate encrypted CUI store | [ADR-0014](DECISIONS.md) |
