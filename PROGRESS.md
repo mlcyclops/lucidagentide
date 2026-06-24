@@ -2064,3 +2064,18 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
   left-aligned), Back arrow matrix(-1,0,0,-1,0,0), step3=Run with / step4=Effort, 9 build skills only, persona
   names; no console errors.
 - **next:** carry run-with into saved automations; a maintained/live price source; shorter persona display names.
+
+---
+**Locked-down fixes: AskSage Claude tool use (ADR-0051) + Monaco CSP (ADR-0052)**
+- **shipped:** (1) AskSage Anthropic route is now TOOL-CAPABLE — harness/omp/asksage_stream.ts passes
+  context.tools as input_schema (via omp toolWireSchema), parses tool_use blocks into omp ToolCalls, builds
+  proper tool_use/tool_result message structure (toAnthropicMessages), and emits toolcall_start/end + stopReason
+  "toolUse" so omp executes the call and loops (each scanned by the gate). Google/RAG stay text-only (out of
+  scope, no regression, never sent tools). 5 new tests (asksage_stream.test.ts). (2) Monaco CSP relaxed two
+  directives in index.html: font-src adds data: (codicon font is inlined as data:font/ttf in Monaco's min build),
+  worker-src adds blob: (language-service worker) — egress still locked by connect-src/script-src. bun test
+  harness 471 · desktop 326 · typecheck clean (3 cfgs). Live-verified: blob worker constructs + data: font load
+  raise ZERO CSP violations; tool-use unit tests cover the wire format + event emission + round-trip.
+- **stubbed:** Gemini tool use (needs functionDeclarations) deferred; AskSage tool use verified via mocked HTTP
+  (live gov-gateway round-trip is the manual check in the bug doc).
+- **next:** Gemini functionDeclarations tool support if needed; live end-to-end tool run on the gov gateway.

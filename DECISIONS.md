@@ -4275,3 +4275,91 @@ no new server surface and no new estimate/pricing logic.
 
 ADR-0046/47/48/49 (the loop, automations, checker model, cost estimate this wraps); ADR-0029 P-IDE.1c
 (`model_families` gov/ordering helpers reused for the lockdown base picker); the global tooltip system.
+
+-----
+
+## ADR-0051 — AskSage Claude tool use (streamSimple adapter)
+
+**Date:** 2026-06-24
+**Status:** **Accepted** — built this increment.
+**Context increment:** P-ASKSAGE.TOOLS.
+
+### Context
+
+On the locked-down (AskSage gov gateway) system, Claude/Gemini models served through AskSage could
+not write files, run commands, or use ANY omp tool: the agent emitted tool-call XML as plain text,
+nothing executed, yet it reported success. Root cause was in `harness/omp/asksage_stream.ts` (the
+custom `streamSimple` adapter for AskSage's non-streamed routes, ADR-0007): it never passed `tools`
+to the Anthropic Messages API, flattened tool results to plain text, parsed only text from the reply,
+and always reported `stopReason: "stop"` — so omp never knew to execute a tool and loop.
+
+### Decision
+
+The Anthropic route is now tool-capable (changes confined to that one file; no frozen contract touched):
+
+- **Tools sent.** `callAnthropic` serializes `context.tools` to Anthropic `{name, description,
+  input_schema}`, using omp's own `toolWireSchema` (resolves Zod / ArkType / JSON-Schema authoring
+  shapes to a JSON Schema) so the schema matches what omp's native providers send.
+- **Tool calls parsed.** The reply's `tool_use` content blocks become omp `ToolCall`s (`{type:
+  "toolCall", id, name, arguments}`); `stop_reason: "tool_use"` (or any tool call present) maps to
+  omp `stopReason: "toolUse"`.
+- **Events emitted.** A new `toAnthropicMessages` builder preserves the tool-use conversation
+  structure Claude requires — a prior assistant turn's `toolCall` content → `tool_use` blocks; omp
+  `toolResult` messages → `tool_result` blocks (consecutive ones merged into one user turn). The
+  stream emits `text_*` then, per call, `toolcall_start`/`toolcall_end`, and a final `done` with
+  reason `toolUse`. omp executes each call and loops — and because they flow as real `toolcall`
+  events, the **in-process security gate scans every one** (invariant #3/#4), unchanged.
+- **Google + RAG unchanged.** Gemini tool use (needs `functionDeclarations`) is out of scope and
+  stays text-only; the `/query` RAG route is single-message with no tool use. Neither regresses, and
+  neither is ever sent a `tools` field.
+
+### Verification
+
+`harness/omp/asksage_stream.test.ts` (5 tests, fetch mocked): tool_use → toolcall events + `toolUse`
+stop reason; mixed text+tool ordering and a content array with both; the request wire format carries
+`input_schema` and a prior round-trip as `tool_use` + `tool_result`; text-only unchanged; Google
+stays text-only (no `tools`). `bun test harness` 471 · `bun test desktop` 326 · typecheck clean.
+
+### Relates to
+
+ADR-0007 (the AskSage adapter); CLAUDE.md invariants #3/#4 (the gate scans the tool calls this now
+emits); the TS-only boundary (the fix is TS in the existing adapter — no new surface).
+
+-----
+
+## ADR-0052 — Monaco CSP: allow data: fonts + blob: workers
+
+**Date:** 2026-06-24
+**Status:** **Accepted** — built this increment.
+**Context increment:** P-IDE.CSP.
+
+### Context
+
+On the locked-down system the Monaco editor logged two CSP violations: its codicon icon font (inlined
+as a `data:font/ttf;base64,…` URL in Monaco's min `editor.main.css`) was blocked by `font-src 'self'`,
+and its language-service worker (a `blob:` URL) was blocked by `worker-src 'self'`. The P-IDE.6 strict
+CSP (ADR-0036) plus a same-origin worker bootstrap worked on dev Chromium but not under the
+locked-down browser's stricter enforcement — the font especially is unavoidable (Monaco's build inlines
+it as data:, not a file we can serve).
+
+### Decision
+
+Relax exactly two CSP directives in `desktop/renderer/index.html`: `font-src 'self' data:` and
+`worker-src 'self' blob:`. The same-origin worker bootstrap stays (preferred when assets are present);
+`blob:` is the belt-and-suspenders fallback. This is the standard, documented Monaco CSP.
+
+**Why it's safe:** both additions are same-origin-DERIVED and cannot exfiltrate — a data: font is
+inert bytes, a blob: worker can only run code already admitted by `script-src 'self'`. The actual
+egress controls are untouched: `connect-src 'self' http://localhost:* ws://localhost:*` and
+`script-src 'self'` still block any network call or remote script. So the locked-down posture holds
+where it matters; we relaxed only the two inert, same-origin resource types Monaco needs.
+
+### Verification
+
+CSP served with both relaxations; a `blob:` Worker now constructs without error and a `data:` font
+load raises NO `securitypolicyviolation` (zero violations observed for both, where before each was
+blocked). Editor functionality (IntelliSense workers) restored on the locked-down build.
+
+### Relates to
+
+ADR-0036 / P-IDE.6 (the strict CSP + same-origin worker bootstrap this minimally relaxes).
