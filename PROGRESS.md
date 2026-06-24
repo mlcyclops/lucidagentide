@@ -1993,3 +1993,19 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **stubbed:** no distinct/cheaper CHECKER model (checker still shares the maker model via `complete()`); no OS-level
   scheduling for app-closed runs (intentionally out of scope — fail-closed grounds); run-now streams, background ticks don't.
 - **next:** distinct/cheaper checker model — the last stub on the goal loop; the Loop-Engineering building blocks are now all exposed.
+
+---
+**P-GOAL.6 — a distinct, recommended checker model for the loop (ADR-0048)**
+- **shipped:** the /goal checker now runs on a RESOLVED checker model (user's choice → auto recommendation →
+  maker model), drawn only from the user's own accessible picker. `desktop/checker_model.ts` (pure, 9 tests):
+  recommend by tier (haiku/flash/mini over nano/lite/oss over flagship) → same provider family → newest version
+  (dates stripped, light flagship-cost tiebreak) → clean alias. `complete()` gained an optional per-session
+  `model` (session/set_config_option before the prompt — chat session untouched; best-effort/fail-safe). A
+  stale override falls through to the recommendation, empty list to the maker model. Persisted as `checkerModel`
+  in GUI settings (""=auto). `GET/POST /api/checker-model`; the /goal modal got a "Checker model" picker (Auto —
+  recommended: <name> + one-line why, then provider-grouped list). Automations inherit it. `bun test desktop`
+  313/313; typecheck clean (3 cfgs). Live-verified: maker opus-4-8 → recommends haiku-4-5; override persists +
+  resets; real loop ran with checker forced onto a DISTINCT haiku-4-5 (echo ok → exit 0 → goal-done). Workspace cleaned.
+- **stubbed:** recommendation is a name-pattern heuristic (no live price table / per-token cost data); cross-family
+  version scale is approximate (only compared within a provider); no per-automation checker override (global setting).
+- **next:** the Loop-Engineering building blocks are all exposed now — natural follow-ups are a price-aware ranker and per-automation checker overrides.

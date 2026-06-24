@@ -81,6 +81,9 @@ export interface GuiSettings {
   // P-IDE.1c (ADR-0029): the user acknowledged the data-sovereignty warning for China-origin models
   // (DeepSeek/Kimi/MiniMax/GLM/…). Until set, those models are hidden from the picker. Off by default.
   chinaModelsAcknowledged?: boolean;
+  // P-GOAL.6 (ADR-0048): the model the /goal loop's CHECKER runs on, overriding the maker's model.
+  // "" / unset = auto (the harness recommends a cheap, capable, recent model from the user's picker).
+  checkerModel?: string;
 }
 
 export const ASKSAGE_DEFAULT_LIMIT = 200_000;
@@ -215,6 +218,13 @@ export function lastModel(): string { return load().lastModel ?? ""; }
 export function setLastModel(model: string): void {
   const m = (model ?? "").trim(); if (!m) return;
   const s = load(); if (s.lastModel === m) return; s.lastModel = m; save(s);
+}
+/** P-GOAL.6: the user's chosen checker model ("" = auto/recommended). */
+export function checkerModel(): string { return load().checkerModel ?? ""; }
+/** Persist the checker-model choice. Empty string clears it (back to auto). */
+export function setCheckerModel(model: string): void {
+  const m = (model ?? "").trim();
+  const s = load(); if ((s.checkerModel ?? "") === m) return; s.checkerModel = m || undefined; save(s);
 }
 /** User skipped the email prompt: attribute by workstation hostname instead (recorded, not forced).
  *  No-op when managed policy disallows skipping (the caller should check `skipAllowed()` first). */

@@ -518,6 +518,13 @@ const server = Bun.serve({
       // P-GOAL.1 (ADR-0046): run a /goal loop — maker iterations + a separate verifiable checker, capped
       // and gated. Streams the same NDJSON chat events plus goal-iter / goal-check / goal-done / goal-stop.
       // P-GOAL.4: loops that stopped without meeting their condition (resumable from their memory file).
+      // P-GOAL.6 (ADR-0048): the /goal checker MODEL — a distinct, cheaper judge. GET returns the saved
+      // choice + the auto recommendation + the accessible list; POST persists the choice ("" = auto).
+      if (p === "/api/checker-model" && req.method === "GET") return json({ ok: true, data: backend.checkerModelInfo() });
+      if (p === "/api/checker-model" && req.method === "POST") {
+        const b = await readBody<{ value?: unknown }>(req);
+        return json({ ok: true, data: backend.setCheckerModelChoice(String(b.value ?? "")) });
+      }
       if (p === "/api/goal/resumable") return json({ ok: true, data: listResumableLoops(currentWorkspace()) });
       if (p === "/api/goal" && req.method === "POST") {
         const b = await readBody<{ goal?: unknown; condition?: unknown; command?: unknown; maxIters?: unknown; resume?: unknown }>(req);

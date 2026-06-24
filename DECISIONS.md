@@ -4092,3 +4092,70 @@ scheduling for app-closed runs (intentionally out of scope on the fail-closed gr
 ADR-0046 / P-GOAL.1–4 (the loop, cancel, memory, resume this schedules); CLAUDE.md invariants
 #2 (TS-only — why no OS scheduler), #3/#4 (the in-process fail-closed gate is what makes an
 unattended cadence safe); ADR-0028 (maker/checker split the loop reuses).
+
+-----
+
+## ADR-0048 — A distinct, recommended CHECKER model for the `/goal` loop
+
+**Date:** 2026-06-24
+**Status:** **Accepted** — P-GOAL.6 built this increment (per-session checker model + auto recommendation + user override).
+**Context increment:** P-GOAL.6.
+
+### Context
+
+ADR-0046 split the loop into a maker and a separate `complete()`-based checker, but both ran on
+the *same* model — whatever the user picked for chat, often a flagship (e.g. `claude-opus-4-8`).
+The checker is a small, frequent, read-only judgement ("did the verification command exit 0?" /
+"is the condition met?") that runs once **per iteration**. Paying flagship rates for it — every
+round, on every automation tick — is wasteful. The remaining stub on the loop was: let the
+checker run on a cheaper model, user-selectable, with a smart default.
+
+### Decision
+
+The checker runs on a **resolved checker model**, in priority order: (1) the user's explicit
+choice, if it's still in their accessible list; (2) an **auto recommendation**; (3) the maker's
+model (the ADR-0046 default) when nothing else resolves. The recommendation is drawn **only from
+the user's own model picker** — the models their configured providers/subscriptions actually
+expose — so the default always works regardless of which APIs/keys/gateways they have.
+
+**Recommendation heuristic** (`desktop/checker_model.ts`, a PURE, unit-tested module), in order:
+1. **Tier** — prefer the small-but-capable class (`haiku` / `flash` / `mini` / `spark`) over both
+   ultra-cheap-but-weak (`nano` / `lite` / `oss`) and flagship overkill (`opus` / `sonnet` / `pro`
+   / full `gpt` / `o3`). Tier dominates the score.
+2. **Same provider family** as the user's current chat model — same credentials/billing they're
+   already using (a `google-antigravity` user gets a Gemini Flash, an AskSage-gov user an AskSage
+   mini, never a model behind a key they don't have).
+3. **Newest version** (date pins stripped so a snapshot id never reads as a huge version), minus a
+   light flagship-cost penalty that only breaks ties *within* a tier (so a flagship-only fallback
+   prefers e.g. `sonnet` over `opus`).
+4. **Clean "latest" alias** over a date-pinned id, so the checker tracks the newest snapshot.
+
+E.g. a maker on `anthropic/claude-opus-4-8` → checker auto-recommends `anthropic/claude-haiku-4-5`.
+
+### Mechanics / invariants preserved
+
+- **Per-session override, chat untouched.** `complete()` gained an optional `model`: the throwaway
+  session does `session/set_config_option {model}` *before* the prompt, so the override is
+  session-scoped and the chat session's model is never changed. Best-effort — if the set fails the
+  completion just runs on the default model; the loop never blocks on it (fail-safe).
+- **Fail-safe resolution.** A stale/removed override (model no longer in the list) silently falls
+  through to the recommendation, never an error. An empty list falls through to the maker model.
+- **Persistence.** The choice is a single `checkerModel` field in the git-ignored GUI settings
+  (`""`/unset = auto). No new schema, no migration.
+- **Surface.** `GET/POST /api/checker-model` (state = selected + recommended + why + current +
+  accessible options). The `/goal` modal gained a **Checker model** picker: "Auto — recommended:
+  <name>" first (with a one-line *why*), then the full list grouped by provider. Automations
+  inherit it automatically (their ticks call the same `checkGoal`).
+
+### Consequences
+
+Every `/goal` round — interactive or scheduled (ADR-0047) — now judges on a cheap, capable, recent
+model by default, with full user control. This closes the last stub on the goal loop: all of
+Osmani's Loop-Engineering building blocks (maker/checker loop, cancel, durable memory, resume,
+scheduled automations) are now exposed, and the checker is no longer pinned to the maker's model.
+
+### Relates to
+
+ADR-0046 (the maker/checker loop this refines); ADR-0047 (automations whose ticks inherit the
+checker model); ADR-0031 (the `model` config option + AI-LOC authoring-model plumbing this reads);
+CLAUDE.md invariant #3 (the checker's verdict is still parsed fail-closed via `parseGoalVerdict`).

@@ -529,6 +529,13 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .goal-resume .ic{flex:none;color:var(--accent-2)}
 .goal-resume .gr-goal{flex:1 1 auto;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .goal-resume .gr-iters{flex:none;font-family:var(--mono);font-size:10px;color:var(--txt-4)}
+/* P-GOAL.6: checker-model picker in the goal modal */
+.goal-checker{flex-wrap:wrap;gap:6px}
+.goal-checker .goal-lbl{flex:1 1 100%;display:flex;align-items:center;gap:5px}
+.goal-checker .goal-lbl .ic{color:var(--accent-2)}
+.goal-ckr{width:100%}
+.goal-ckr-why{font-size:11px;color:var(--txt-4);margin:-4px 0 2px;min-height:0}
+.goal-ckr-why:empty{display:none}
 /* P-GOAL.5: schedule picker + saved-automation rows in the goal modal */
 .goal-sched{flex-wrap:wrap;gap:6px}
 .goal-sched .goal-lbl{flex:1 1 100%;display:flex;align-items:center;gap:5px}

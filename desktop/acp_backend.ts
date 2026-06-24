@@ -17,7 +17,8 @@ import { learnFromTurn, recallPreamble } from "./personal.ts";
 import { buildUserTurnPreamble } from "./preamble.ts";
 import { recordTurns } from "./turns_log.ts";
 import { recordBlock } from "./security_log.ts";
-import { attribution, lastModel, mcpServersForAcp, setLastModel } from "./settings_store.ts";
+import { attribution, checkerModel, lastModel, mcpServersForAcp, setCheckerModel, setLastModel } from "./settings_store.ts";
+import { recommendCheckerModel, resolveCheckerModel, type ModelOption } from "./checker_model.ts";
 import { parseGoalVerdict } from "./goal_verdict.ts";
 import { appendGoalIteration, finishGoalMemory, type GoalMemory, resumeGoalMemory, startGoalMemory } from "./goal_memory.ts";
 import { type Automation, listAutomations, nextDueAutomation, updateAutomation } from "./automations.ts";
@@ -513,22 +514,46 @@ class Backend {
     return { ran: true, result };
   }
 
+  // P-GOAL.6 (ADR-0048): the user's accessible models, as the model config reports them (provider-
+  // prefixed value + display name). Empty until omp has reported a config.
+  private accessibleModels(): ModelOption[] {
+    const opt = this.configOptions.find((c) => c?.id === "model");
+    const list = Array.isArray(opt?.options) ? opt!.options : [];
+    return list.filter((o: any) => o?.value).map((o: any) => ({ value: String(o.value), name: o.name, description: o.description }));
+  }
+  /** P-GOAL.6: the CHECKER model picker state for the UI — the user's saved choice, the auto
+   *  recommendation, the current (maker) model, and the full accessible list. */
+  checkerModelInfo(): { selected: string; recommended: string; recommendedWhy: string; current: string; options: ModelOption[] } {
+    const models = this.accessibleModels();
+    const current = this.activeModel();
+    const rec = recommendCheckerModel(models, current);
+    return { selected: checkerModel(), recommended: rec?.value ?? current, recommendedWhy: rec?.why ?? "", current, options: models };
+  }
+  /** P-GOAL.6: persist the checker-model choice ("" = auto/recommended). Returns the refreshed state. */
+  setCheckerModelChoice(value: string): ReturnType<Backend["checkerModelInfo"]> {
+    setCheckerModel(value);
+    return this.checkerModelInfo();
+  }
+
   /** P-GOAL.1: the loop's "done" checker, run in a SEPARATE complete() session (maker ≠ checker). With a
    *  verification command it runs it and reports exit-0 (a real proof); otherwise it judges the goal
-   *  against the maker's reported work, conservatively. Fail-closed: an empty/failed reply ⇒ not done. */
+   *  against the maker's reported work, conservatively. Fail-closed: an empty/failed reply ⇒ not done.
+   *  P-GOAL.6: runs on the resolved CHECKER model (the user's choice, else a cheap/capable recommendation,
+   *  else the maker's model) — a distinct, cheaper judge that costs less to run every iteration. */
   private async checkGoal(a: { goal: string; condition: string; command: string; lastWork: string }): Promise<{ done: boolean; reason: string }> {
+    const model = resolveCheckerModel({ chosen: checkerModel(), models: this.accessibleModels(), current: this.activeModel() }).value;
     if (a.command) {
       const out = await this.complete(
         `You are a verification CHECKER, separate from the agent that did the work. Run the given command EXACTLY in the workspace and report only the outcome. Do NOT modify any files or try to fix anything. Output ONLY strict JSON on one line: {"done": <true only if the command finished with exit code 0>, "reason": "<short summary of what happened>"}.`,
         `Run this verification command and report whether it passed:\n\n\`\`\`\n${a.command}\n\`\`\``,
-        { idleMs: 180_000 },
+        { idleMs: 180_000, model },
       );
       return parseGoalVerdict(out);
     }
     const out = await this.complete(
       `You are a strict CHECKER, separate from the agent that did the work. Decide whether the goal is fully met. Be conservative: if you are not sure, answer done=false. Output ONLY strict JSON on one line: {"done": bool, "reason": "<one line>"}.`,
       `Goal: ${a.goal}\nStop condition: ${a.condition}\n\nThe agent reported:\n${(a.lastWork || "(no output)").slice(0, 4000)}\n\nIs the goal fully met?`,
-      { idleMs: 120_000 },
+      { idleMs: 120_000, model },
     );
     return parseGoalVerdict(out);
   }
@@ -548,7 +573,7 @@ class Backend {
    *  Serialized via utilLock so it can't race a chat turn. Used by the import model-extractor:
    *  the model only ever sees text that already passed the scanner gate, and tool-call events
    *  (if any) are ignored — only assistant text is collected. */
-  async complete(system: string, user: string, opts: { idleMs?: number } = {}): Promise<string> {
+  async complete(system: string, user: string, opts: { idleMs?: number; model?: string } = {}): Promise<string> {
     const run = this.utilLock.then(async () => {
       await this.start();
       const prev = this.listener;
@@ -560,6 +585,10 @@ class Backend {
         const s: any = await this.acp!.request("session/new", { cwd: currentWorkspace(), mcpServers: mcpServersForAcp() });
         sid = s?.sessionId ?? s?.id ?? null;
         if (!sid) return "";
+        // P-GOAL.6 (ADR-0048): run this throwaway completion on a DIFFERENT model when asked (the /goal
+        // checker). Session-scoped, so the chat session's model is untouched. Best-effort: if the set
+        // fails, the completion just runs on the default model (fail-safe, never blocks the loop).
+        if (opts.model) await this.acp!.request("session/set_config_option", { sessionId: sid, configId: "model", value: opts.model }).catch(() => {});
         const IDLE = opts.idleMs ?? 60_000;
         const arm = () => { if (idle) clearTimeout(idle); idle = setTimeout(() => onStall(new Error("stall")), IDLE); };
         this.listener = (e) => { arm(); if (e.type === "token") text += e.text; };

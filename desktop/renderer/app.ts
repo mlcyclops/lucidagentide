@@ -2201,6 +2201,11 @@ function openGoalForm(): void {
     <label class="goal-lbl">Verification command <span class="goal-opt">optional, proves "done" by exit 0</span></label>
     <input id="goalCmd" class="prov-key" placeholder="e.g. npm test && npm run lint" spellcheck="false" autocomplete="off" />
     <div class="goal-row"><label class="goal-lbl">Max iterations</label><input id="goalMax" class="prov-key goal-max" type="number" min="1" max="20" value="6" /></div>
+    <div class="goal-row goal-checker">
+      <label class="goal-lbl">${icon("spark", 12)} Checker model <span class="goal-opt">grades each round; a cheaper model is fine</span></label>
+      <select id="goalChecker" class="prov-key goal-ckr"><option>loading…</option></select>
+    </div>
+    <div class="goal-ckr-why" id="goalCkrWhy"></div>
     <div class="goal-row goal-sched">
       <label class="goal-lbl">${icon("clock", 12)} Schedule <span class="goal-opt">save as an automation</span></label>
       <select id="goalCadKind" class="prov-key goal-cadk">
@@ -2270,6 +2275,30 @@ function openGoalForm(): void {
   });
   // P-GOAL.5: list saved automations (enable / run-now / delete).
   void renderAutomations(ov, close);
+  // P-GOAL.6: populate the checker-model picker (auto recommendation + override).
+  void loadCheckerModel(ov);
+}
+
+// P-GOAL.6 (ADR-0048): fill the checker-model <select> with "Auto (recommended)" + the user's
+// accessible models grouped by provider, select their saved choice, and persist changes.
+async function loadCheckerModel(ov: HTMLElement): Promise<void> {
+  const sel = $("#goalChecker", ov) as HTMLSelectElement | null;
+  const why = $("#goalCkrWhy", ov); if (!sel) return;
+  const info = await bridge.checkerModel();
+  if (!info) { sel.innerHTML = `<option value="">Auto (recommended)</option>`; return; }
+  const recName = info.options.find((o) => o.value === info.recommended)?.name || info.recommended.split("/").pop() || info.recommended;
+  const byProvider = new Map<string, typeof info.options>();
+  for (const o of info.options) { const p = o.value.split("/")[0]; (byProvider.get(p) ?? byProvider.set(p, []).get(p)!).push(o); }
+  const groups = [...byProvider.entries()].map(([prov, opts]) =>
+    `<optgroup label="${esc(prov)}">` + opts.map((o) => `<option value="${esc(o.value)}">${esc(o.name || o.value.split("/").pop() || o.value)}</option>`).join("") + `</optgroup>`).join("");
+  sel.innerHTML = `<option value="">Auto — recommended: ${esc(recName)}</option>` + groups;
+  sel.value = info.selected || "";
+  const showWhy = () => { if (why) why.textContent = sel.value ? "" : (info.recommendedWhy || ""); };
+  showWhy();
+  sel.addEventListener("change", async () => {
+    const updated = await bridge.setCheckerModel(sel.value);
+    if (updated && why) why.textContent = sel.value ? "" : (updated.recommendedWhy || "");
+  });
 }
 
 // P-GOAL.5 (ADR-0047): render the saved-automations list inside the goal modal — each row shows its

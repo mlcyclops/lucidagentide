@@ -157,6 +157,9 @@ export interface Automation {
   cadence: Cadence; enabled: boolean; createdAt: number; lastRunAt?: number; lastResult?: string;
 }
 export interface AutomationSpec { goal: string; condition?: string; command?: string; maxIters?: number; cadence: Cadence }
+// P-GOAL.6: the /goal checker-model picker state.
+export interface ModelOption { value: string; name?: string; description?: string }
+export interface CheckerModelInfo { selected: string; recommended: string; recommendedWhy: string; current: string; options: ModelOption[] }
 
 export interface Attribution {
   identity: string; source: "email" | "workstation"; email: string; workstation: string; decided: boolean;
@@ -205,6 +208,9 @@ export interface LucidBridge {
   automationEnable(id: string, enabled: boolean): Promise<Automation | null>;
   automationDelete(id: string): Promise<unknown>;
   automationRun(id: string, onEvent: (e: ChatEvent) => void): Promise<void>;
+  // P-GOAL.6 (ADR-0048): the loop's checker-model picker (auto recommendation + override).
+  checkerModel(): Promise<CheckerModelInfo | null>;
+  setCheckerModel(value: string): Promise<CheckerModelInfo | null>;
   config(): Promise<ConfigOption[]>;
   /** Respawn omp + re-read its model list (after connecting a provider via OAuth or key). */
   refreshConfig(): Promise<ConfigOption[]>;
@@ -385,6 +391,8 @@ export const bridge: LucidBridge = {
   automationEnable: (id, enabled) => post("/api/automations/enable", { id, enabled }),
   automationDelete: (id) => post("/api/automations/delete", { id }),
   automationRun: (id, onEvent) => streamNdjson("/api/automations/run", { id }, onEvent),
+  checkerModel: () => getData("/api/checker-model"),
+  setCheckerModel: (value) => post("/api/checker-model", { value }),
   config: async () => (await getData("/api/config")) ?? FALLBACK_CONFIG,
   refreshConfig: async () => (await post("/api/config/refresh", {})) ?? FALLBACK_CONFIG,
   setConfig: async (id, value) => (await post("/api/setConfig", { configId: id, value })) ?? FALLBACK_CONFIG,
