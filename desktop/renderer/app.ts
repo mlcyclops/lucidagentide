@@ -2484,7 +2484,7 @@ function loadRunWith(ov: HTMLElement): void {
   const personaSel = $("#goalPersona", ov) as HTMLSelectElement | null;
   if (personaSel && state.personas.length) {
     ($("#goalPersonaWrap", ov) as HTMLElement).hidden = false;
-    personaSel.innerHTML = `<option value="">None</option>` + state.personas.map((p) => `<option value="${esc(p.id)}">${esc((p.description?.trim() || `Persona ${p.id}`).slice(0, 60))}</option>`).join("");
+    personaSel.innerHTML = `<option value="">None</option>` + state.personas.map((p) => `<option value="${esc(p.id)}">${esc(personaTitle(p.description, p.id))}</option>`).join("");
     personaSel.value = state.asksage?.persona ?? "";
   }
 }
