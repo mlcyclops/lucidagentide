@@ -71,6 +71,12 @@ export interface UsageLedger {
   bySource: { subscription: { cost: number; tokens: number }; local: { cost: number; tokens: number } };
   files: number; truncated: boolean; generatedAt: string;
 }
+// ADR-0030 P-CODE.1: git workspace diffstat this month (repo activity, not AI authorship).
+export interface CodeActivity {
+  workspaces: { name: string; path: string; added: number; deleted: number; files: number; spend: number }[];
+  totals: { added: number; deleted: number; files: number };
+  month: string; daysInMonth: number;
+}
 export interface ConfigOption {
   id: string; name: string; category: string; type: string;
   currentValue: string; options: { value: string; name: string }[];
@@ -170,6 +176,7 @@ export interface LucidBridge {
   mcpRemove(id: string): Promise<unknown>;
   mcpToggle(id: string, enabled: boolean): Promise<unknown>;
   usage(): Promise<UsageLedger | null>;
+  codeActivity(): Promise<CodeActivity | null>;
   sendPrompt(text: string, onEvent: (e: ChatEvent) => void): Promise<void>;
   config(): Promise<ConfigOption[]>;
   /** Respawn omp + re-read its model list (after connecting a provider via OAuth or key). */
@@ -336,6 +343,7 @@ export const bridge: LucidBridge = {
   mcpRemove: (id) => post("/api/mcp/remove", { id }),
   mcpToggle: (id, enabled) => post("/api/mcp/toggle", { id, enabled }),
   usage: () => getData("/api/usage"),
+  codeActivity: () => getData("/api/code-activity"),
   sendPrompt: streamChat,
   config: async () => (await getData("/api/config")) ?? FALLBACK_CONFIG,
   refreshConfig: async () => (await post("/api/config/refresh", {})) ?? FALLBACK_CONFIG,

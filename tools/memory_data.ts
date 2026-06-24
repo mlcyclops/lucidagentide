@@ -11,10 +11,11 @@
 //   - Lucid memory layers + promotion gate   : agent_obs.duckdb (DuckDB READ_ONLY)
 
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { Database as Sqlite } from "bun:sqlite";
 import { DuckDBInstance } from "@duckdb/node-api";
+import { pathWithin } from "../desktop/path_guard.ts";
 
 // ── model context windows (tokens) ────────────────────────────────────────────
 // Keyed by the SHORT model id (provider prefix stripped). Keep in sync with
@@ -237,6 +238,126 @@ export function usageLedger(opts: { root?: string; maxFiles?: number } = {}): Us
   }
   totals.cacheHitRate = dDenom > 0 ? dRead / dDenom : 0;
   return { models, totals, bySource, files: scan.length, truncated, generatedAt };
+}
+
+// ── code activity (git workspace diffstat, ADR-0030 P-CODE.1) ──────────────────
+// Per-workspace lines added/deleted + files touched this calendar month, from
+// `git log --numstat`. Honest framing: this is REPO/WORKSPACE activity (every
+// commit — yours, others', merges), NOT AI authorship. The AI-authored metric is
+// a different source (ADR-0031, see aiLoc). Spend attribution per workspace is
+// deferred to P-CODE.2; spend is reported as 0 here.
+export interface CodeActivity {
+  workspaces: { name: string; path: string; added: number; deleted: number; files: number; spend: number }[];
+  totals: { added: number; deleted: number; files: number };
+  month: string; // e.g. "June 2026"
+  daysInMonth: number;
+}
+
+/** Resolve a `git log --numstat` rename path to its final path. Handles the two
+ *  git rename notations: `old => new` and `dir/{old => new}/file`. */
+export function renamedPath(p: string): string {
+  const brace = p.match(/^(.*)\{(.*?) => (.*?)\}(.*)$/);
+  if (brace) return ((brace[1] ?? "") + (brace[3] ?? "") + (brace[4] ?? "")).replace(/\/{2,}/g, "/");
+  const i = p.indexOf(" => ");
+  return i >= 0 ? p.slice(i + 4) : p;
+}
+
+/** PURE parser for `git log --numstat` output (keystone — over-tested). Sums
+ *  added/deleted lines and collects the set of files touched. Binary files show
+ *  as `-\t-\tpath`: the file counts as touched but contributes no line counts.
+ *  Rename rows are normalized to the final path so a rename isn't double-counted. */
+export function parseNumstat(output: string): { added: number; deleted: number; files: string[] } {
+  let added = 0, deleted = 0;
+  const files = new Set<string>();
+  for (const raw of output.split("\n")) {
+    const line = raw.replace(/\r$/, "");
+    if (!line.trim()) continue; // blank lines between commits (from --format=)
+    const tab = line.split("\t");
+    if (tab.length < 3) continue; // not a numstat row (e.g. a stray commit header)
+    const [a = "", d = "", ...rest] = tab;
+    const file = renamedPath(rest.join("\t").trim());
+    if (!file) continue;
+    files.add(file);
+    if (a !== "-") added += Number.parseInt(a, 10) || 0;   // "-" == binary → no line count
+    if (d !== "-") deleted += Number.parseInt(d, 10) || 0;
+  }
+  return { added, deleted, files: [...files].sort() };
+}
+
+/** Light read of an omp session file's working dir (the `session` line is first). */
+function readSessionCwd(path: string): string | undefined {
+  try {
+    for (const line of readFileSync(path, "utf8").split("\n")) {
+      if (!line) continue;
+      if (line.includes('"type":"session"')) {
+        try { const o = JSON.parse(line); if (o.cwd) return String(o.cwd); } catch { /* keep scanning */ }
+      }
+    }
+  } catch { /* unreadable */ }
+  return undefined;
+}
+
+/** Distinct git-repo working dirs seen across recent omp sessions (newest first). */
+function discoverWorkspaces(root?: string, cap = 500): string[] {
+  const base = root ?? join(homedir(), ".omp", "agent", "sessions");
+  if (!existsSync(base)) return [];
+  const files: { p: string; mtime: number }[] = [];
+  for (const d of readdirSync(base)) {
+    const dir = join(base, d);
+    try { if (!statSync(dir).isDirectory()) continue; for (const f of readdirSync(dir)) if (f.endsWith(".jsonl")) files.push({ p: join(dir, f), mtime: statSync(join(dir, f)).mtimeMs }); }
+    catch { /* skip */ }
+  }
+  files.sort((a, b) => b.mtime - a.mtime);
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const { p } of files.slice(0, cap)) {
+    const cwd = readSessionCwd(p);
+    if (!cwd || seen.has(cwd)) continue;
+    seen.add(cwd);
+    if (existsSync(join(cwd, ".git"))) out.push(cwd);
+  }
+  return out;
+}
+
+/** Per-workspace git diffstat for the current calendar month.
+ *  Workspaces: `opts.workspaces` if given, else discovered from omp session cwds.
+ *  Fail-closed: a workspace outside the home subtree, a non-git dir, or a failed
+ *  `git` invocation is OMITTED — never faked (CLAUDE.md invariant #3). */
+export function codeActivity(opts: { workspaces?: string[]; root?: string; now?: Date; timeoutMs?: number } = {}): CodeActivity {
+  const now = opts.now ?? new Date();
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+  const month = monthStart.toLocaleString("en-US", { month: "long", year: "numeric" });
+  const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+  const timeout = opts.timeoutMs ?? 15_000; // generous — a large repo's `git log --numstat`
+  // can take several seconds; the result is cached 30s, so we'd rather wait than fail-close to
+  // an empty dashboard. A truly hung git still trips the timeout and the workspace is omitted.
+  const candidates = opts.workspaces ?? discoverWorkspaces(opts.root);
+
+  const workspaces: CodeActivity["workspaces"] = [];
+  for (const ws of candidates) {
+    const safe = pathWithin(homedir(), ws);            // confine to the home subtree (ADR-0022/0023)
+    if (!safe) continue;                                // outside home → omit (fail-closed)
+    if (!existsSync(join(safe, ".git"))) continue;      // not a git repo → omit
+    // Args ARRAY, never a shell string (no injection via paths/refs). Exclude vendored/
+    // generated churn so the metric reflects real source. `--format=` suppresses commit
+    // headers, leaving only numstat rows + blank separators.
+    const r = Bun.spawnSync(
+      ["git", "log", `--since=${monthStart.toISOString()}`, "--numstat", "--no-color", "--format=",
+        "--", ".", ":(exclude)node_modules", ":(exclude)vendor", ":(exclude)dist", ":(exclude)*.lock", ":(exclude)*.min.*"],
+      { cwd: safe, timeout, stdout: "pipe", stderr: "pipe" },
+    );
+    if (!r.success) continue;                           // git missing/failed/timeout → omit (never fake)
+    const { added, deleted, files } = parseNumstat(r.stdout.toString());
+    if (files.length === 0) continue;                   // no activity this month → not listed
+    workspaces.push({ name: basename(safe), path: safe, added, deleted, files: files.length, spend: 0 });
+  }
+
+  workspaces.sort((a, b) => b.added + b.deleted - (a.added + a.deleted));
+  const totals = workspaces.reduce(
+    (t, w) => ({ added: t.added + w.added, deleted: t.deleted + w.deleted, files: t.files + w.files }),
+    { added: 0, deleted: 0, files: 0 },
+  );
+  return { workspaces, totals, month, daysInMonth };
 }
 
 // ── omp compaction policy ─────────────────────────────────────────────────────

@@ -1824,3 +1824,20 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **stubbed:** none — both decisions were already built/merged; these ADRs formalize them.
 - **next:** nothing pending. Use the omp compatibility probe (Actions) to adopt omp fixes; flip "Richer
   graph (uses the model)" in Settings if you want model-based learning.
+
+-----
+
+## P-CODE.1: git workspace code-activity metric (ADR-0030)
+- **shipped:** `codeActivity()` + pure `parseNumstat`/`renamedPath` in `tools/memory_data.ts` (git
+  `--numstat` for the calendar month; args-array spawn, `pathWithin` home-subtree confinement, 15s timeout,
+  vendored-churn pathspec excludes, rename + binary handling, fail-closed omit of non-git/out-of-home/failed
+  dirs); `GET /api/code-activity` in `dev.ts` (30s cache, `?force=1` bypass); `CodeActivity` bridge type +
+  accessor; ledger-card "workspace activity" row + green/red `.loc-add`/`.loc-del` CSS + a "lines" rail tile
+  (honest label — repo activity, NOT AI authorship; AGENTS.md #10). New `harness/code_activity.test.ts` (12
+  tests, parser keystone) + `demo-P-CODE.1`. Verified: 456/456 harness green; demo OK; live endpoint 403
+  w/o token, real data with (+39,271/-2,801, 302 files this month); UI rendered + screenshot, no console errors.
+- **stubbed:** per-workspace **spend** attribution (session `cwd` → ledger) deferred to P-CODE.2 (`spend:0`
+  for now); P-CODE.2 monthly workspace accordion/table and P-CODE.3 polish (no-changes/detached-HEAD edges)
+  not started. Pre-existing typecheck error `desktop/personal.ts:50` (ADR-0042 `aiExtract`) left as-is — out of scope.
+- **next:** P-CODE.2 — monthly workspace activity section (summary card + per-workspace table) + spend
+  attribution; then the add-on can re-pin its data contract and flip drift D-4 (code-activity) to ✅.
