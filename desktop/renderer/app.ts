@@ -2179,8 +2179,9 @@ function wire(): void {
     if (forget) {
       const fid = forget.dataset.forget!;
       await bridge.personalForget(fid);
-      if (kgData) kgData.facts = kgData.facts.filter((f) => f.id !== fid); // keep the graph layout; just drop the fact
+      if (kgData) kgData.facts = kgData.facts.filter((f) => f.id !== fid); // drop the fact from the side panel
       renderKgSide(kgSelId);
+      void refreshKnowledgeLive(); // also drop the node live if that was its last fact (no reopen needed)
       showToast({ title: "Forgotten", desc: "The agent will stop recalling that fact.", actions: [{ label: "OK" }], timeout: 2000 });
     }
   });
