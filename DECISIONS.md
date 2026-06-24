@@ -3901,3 +3901,85 @@ clutter in the chat (the `<recalled-memory>` block).
 
 ADR-0009 Phase A (cross-session memory recall); CLAUDE.md keystone #2 (the semantic-promotion gate);
 ADR-0040 (which cited this hygiene as the reason the user turn now carries knowledge, not noise).
+
+-----
+
+## ADR-0044 — P-TPS.1: streaming output-token readout (terminal + desktop), vendored from pi-token-speed
+
+**Date:** 2026-06-24
+**Status:** **Accepted (built)** — shared core + omp terminal adapter + desktop HUD readout + demo.
+**Context increment:** P-TPS.1. User ask: *"show the streaming token count while the model is thinking/replying, minus the entire system prompt — so nobody thinks the prompt is re-charged each turn"* (à la Claude Code). They recalled an omp-upstream feature and asked which version.
+
+### Context
+
+The feature they remembered is the upstream extension **`pi-token-speed`** (Gabriel Sanhueza, MIT, v0.5.1) — it is an **extension, not a core-version feature**, so "which version" has no answer. Verifying it against the installed tree surfaced two facts that make a literal install impossible on *both* of our surfaces:
+
+1. **It will not load under omp.** `settings.ts` / `commands.ts` import `@earendil-works/pi-coding-agent` and `@earendil-works/pi-tui` at **runtime** (`getAgentDir`, `getSettingsListTheme`, `SettingsList`). Our tree is `@oh-my-pi/*` (omp). `omp -e node_modules/pi-token-speed/index.ts` crashes on first import. (The *type-only* imports are erased by Bun and would be fine; the value imports are not.)
+2. **It is a no-op in the desktop IDE.** Its only renderer is `ctx.ui.setStatus` (omp's TUI status bar). On the ACP/RPC path the desktop spawns, omp stubs the entire `ExtensionUIContext` to `()=>{}` — the engine would run and the number would be discarded.
+
+What *does* hold: its **pure engine** (`engine.ts` + `sliding-window.ts` + `constants.ts`) has **zero foreign imports**, and the figure is **output-only** by construction. omp documents `Usage.output` as *"Total output tokens for the turn, including thinking, assistant text, and tool-call argument tokens"* — `input` / `cacheRead` / `cacheWrite` are separate fields, so the system prompt (frozen prefix + tools) is never in it. That is exactly the user's "minus the prompt" requirement, satisfied at the data source, not by filtering.
+
+### Decision
+
+**Vendor the pure engine, write two thin adapters.** (User chose "vendor the pure engine" over a fragile `@earendil-works → @oh-my-pi` shim.)
+
+1. **Shared core** — `harness/metrics/token_speed.ts`: a near-verbatim lift of pi-token-speed's engine + sliding window + word/punctuation estimator (MIT header preserved, modifications noted). Two intentional departures from upstream: **config is injected** via constructor (no `~/.pi/agent/settings.json` disk read), and the **clock is injectable** (`now()`) so the sliding window is deterministically testable. A plain-text `formatReadout()` (no ANSI) renders identically in a terminal or the DOM. Unit-tested (`token_speed.test.ts`) on the two load-bearing properties: the count reflects *only* the deltas fed in (nothing leaks in before `start()` / after `stop()`), and the figures (count, windowed tok/s, TTFT realignment, provider reconciliation) are correct against a controlled clock.
+2. **Terminal adapter** — `harness/omp/token_speed_extension.ts`: an omp extension (typed `any`, no omp imports, "loads under any omp version" — same defensive style as `security_extension.ts`). Drives the core from `message_update` (`text_delta`/`thinking_delta`/`toolcall_delta`, with `ev.partial.usage.output` when present → exact counts, estimate as fallback) and paints `ctx.ui.setStatus` with a themed `⚡ TPS:`. Registers `/tps` to cycle display mode (replacing the package's `SettingsList` menu, which needed the foreign UI imports). Wired into the `omp:secure` npm script.
+3. **Desktop adapter** — `desktop/renderer/app.ts`: the same engine, fed client-side from the `token`/`thinking` `ChatEvent`s already streaming over ACP, rendered in the per-message activity HUD as `· N tok out · R tok/s`. The existing context figure (from `usage_update`) is relabelled **`ctx`** so it is never mistaken for the per-turn output — directly resolving the confusion the user flagged.
+
+### What is deliberately NOT done
+
+- **The terminal extension is not added to the ACP launcher (`lucid_acp.ts`).** `ui.setStatus` is a no-op there, and adding a third `-e` would break the `ext_parity` / `lucid_acp` tests that assert the exact gate-first `-e` ordering. The desktop draws its own readout from the same core instead. Terminal-only by design.
+- **No backend / `ChatEvent` / `acp_backend.ts` change.** The desktop readout is computed entirely from existing events — zero new wire surface, zero parity-test risk.
+- **The context/`usage_update` figure is left intact** (only relabelled). It legitimately includes the prompt because it measures window *fill*; conflating it with output would be the very misrepresentation we are removing.
+
+### Consequences
+
+- The desktop shows a live, output-only `tok out · tok/s` while thinking and replying; the terminal `omp:secure` session shows `⚡ TPS:` in the status bar — one tested engine behind both.
+- The desktop count is an **estimate** (ACP deltas carry no per-delta `usage.output`; `usage_update` is context, not output); the terminal count is **exact** whenever omp reports usage, estimate-bridged before the first usage figure. Acceptable: the figure is a live speedometer, not a billing ledger (cost is already priced correctly via the cache-aware `usage_update`).
+- Prior art credited; we carry a small vendored copy rather than a dependency, consistent with the repo's "omp extensions are local `.ts`" convention. If upstream pi-token-speed materially improves its engine, re-vendoring is a localized future increment.
+
+### Relates to
+
+ADR-0041 (omp version-pin / compat-probe — this is a compat-probe outcome: the package's API matched omp's `ExtensionAPI`/`AssistantMessageEvent`/`Usage`, but its runtime package names did not); ADR-0027 (ACP session/usage plumbing the desktop figure rides on); CLAUDE.md invariant #6 (the output count is volatile tail data, never the frozen prefix).
+
+-----
+
+## ADR-0045 — Project skills: gated drop-import, model-assisted skill builder, and session-derived skills
+
+**Date:** 2026-06-24
+**Status:** **Accepted** — P-SKILL.1 (gated drop-import) built this increment; P-SKILL.2 (builder) and P-SKILL.3 (session-derived) designed here, deferred to their own increments.
+**Context increment:** P-SKILL.1 (+ design for P-SKILL.2/3).
+
+### Context
+
+The desktop surfaces *project skills* — markdown files under the workspace's `.omp/skills/<name>/SKILL.md` — which omp discovers natively (`discoverSkills(currentWorkspace())`, `desktop/skills_data.ts`). A skill becomes the agent's standing guidance (`/skill:<name>`, or the bundled-skill `<active-skill>` preamble re-delivered every turn, ADR-0029). **Today, project skill files are NOT scanned by the Lucid security gate** — omp loads them directly, so the gate is *not* authoritative for project skills. Bundled skills are the only ones vetted (frozen, reviewed corpus; `desktop/renderer/skills.ts`).
+
+The ask: (1) drag-and-drop `.md` skill files into Project Skills, *scanned at the gate*; (2) a "skills builder" that uses the **most-used model (by usage metrics)** to assess/normalize a skill; (3) build a new skill from **specific selected sessions**. A skill is *guidance the model obeys*, so a poisoned skill is a prompt-injection vector — making the gate authoritative for skill import is a security improvement, not just a feature.
+
+### Decision
+
+A three-phase design, one ADR, separate increments.
+
+**P-SKILL.1 — Gated drop-import (built now).** Drop `.md` onto Project Skills → the desktop server scans the content **fail-closed** through the Python scanner (`scanAndDecide(scanner, text, DEFAULT_POLICY)`, the same path as `scanPersona`). Clean → written to `<workspace>/.omp/skills/<slug>/SKILL.md` (so omp discovers it natively) under a `pathWithin` confinement check. **Suspicious/quarantined → NOT written**; recorded via `recordBlock(...)` so it surfaces in the Security panel as a reviewable block (the user's chosen "block + review" posture). New `POST /api/skills/import`. This closes the unscanned-project-skill gap: the gate becomes authoritative for imported skills.
+
+**P-SKILL.2 — Skills-builder assessment (deferred).** Opt-in (token cost, gated like the ADR-0042 model extractor). Runs the **most-used model** (`usageLedger().models[0]`, `ledgerProvider()`) via `backend.complete(system, user)` (one-shot, throwaway, already-gated session) to normalize a dropped draft into proper skill shape (`name`/`description` frontmatter + structured body) and flag issues. The model's output is **untrusted structure → re-scanned at the gate before save**; the user gets a preview/diff to accept. Wrinkle to resolve in that increment: `complete()` currently uses the *active chat* model, so targeting the most-used model needs a model override on the throwaway session.
+
+**P-SKILL.3 — Session-derived skills (deferred).** Select specific sessions (`listSessions` / `sessionMessages` — preamble-stripped `{role,text}[]`) → distill a reusable skill `.md` with the most-used model. Most security-sensitive (derived + model-generated content), so: scan the inputs, scan the generated skill before save, present a draft to edit. Treated with keystone-#2 discipline — a session-derived skill never becomes trusted guidance without a clean scan (and, by the P-SKILL.1 posture, review if flagged).
+
+### Security analysis (why this is sound)
+
+- **Fail-closed (invariant #3):** import scans through the same `scanAndDecide` seam; scanner-dead / malformed / timeout → blocked, never written.
+- **Gate becomes authoritative for skills:** previously project skills bypassed the scanner; the import path routes them through it. (Skills dropped *outside* the app — hand-placed in `.omp/skills/` — still bypass it; the ADR notes this as a known residual, mitigated by the fact that the app is the supported import path.)
+- **Injection posture:** a skill is obeyed by the model, so clean ≠ automatically safe-as-instructions. Skills remain **user-selected** (the user picks which to activate) and are delivered **delimited** (invariant #5) like personas (`wrapPersona`); a flagged skill is quarantined for review, not silently usable.
+- **Keystone #2 (P-SKILL.3):** model/session-derived skills are derived content; they are scanned before save and never auto-trusted.
+
+### What is deliberately deferred / not done
+
+- The builder (P-SKILL.2) and session-derived (P-SKILL.3) flows — designed, not built.
+- No change to how bundled skills work (still the trusted frozen corpus).
+- Hand-placed `.omp/skills/` files are not retroactively scanned (only the import path is gated).
+
+### Relates to
+
+ADR-0029 (P-IDE.2 active-skill delivery — skills as re-delivered, delimited guidance); ADR-0042 (opt-in model extraction — the cost-gated, scanned model-assist pattern P-SKILL.2 reuses); ADR-0019 (gate/quarantine + Security-panel block surfacing); CLAUDE.md invariants #3 (fail-closed), #5 (untrusted delimited), and keystone #2 (semantic-promotion gate).

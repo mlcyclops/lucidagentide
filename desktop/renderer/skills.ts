@@ -108,6 +108,23 @@ export const INSTALLED_SKILLS: BundledSkill[] = [
     systemPrompt:
       "Plan before building. Restate the goal and constraints, survey the relevant code, then propose an approach with concrete steps and the files each touches. Note key tradeoffs, risks, and how you'll verify. Prefer the smallest change that solves the real problem. Do not start editing until the plan is clear; if the request is ambiguous, ask one sharp question.",
   },
+  {
+    // The /goal loop primitive (Claude Code / Codex). omp has no native /goal; this lists it as a
+    // skill that steers the agent to iterate until a VERIFIABLE stop condition holds, checked objectively.
+    command: "goal",
+    name: "Goal Loop",
+    description: "Iterate until a verifiable stop condition holds, checked objectively, then stop.",
+    systemPrompt:
+      "Run as a goal loop. The user gives a concrete, verifiable stop condition (for example: all tests in test/auth pass and lint is clean). Work toward it in turns: do the next smallest useful step, then CHECK the condition objectively by running the real verification (tests, lint, build, a command), never by self-assessment. After each step, state whether the condition is met and the exact evidence. Do not declare done until the verification actually passes; if it cannot be met, say why and stop. Keep the maker separate from the checker: grade by the objective check, not by how confident the change feels. Watch token cost: reuse what you already know instead of re-deriving it.",
+  },
+  {
+    // Andrej Osmani's "Loop Engineering": design the loop that prompts the agent instead of prompting it.
+    command: "loop-engineering",
+    name: "Loop Engineering",
+    description: "Design a self-running loop that finds, does, checks, and remembers work.",
+    systemPrompt:
+      "Help the user DESIGN a loop instead of prompting it step by step. A loop has five parts plus a memory: (1) an automation on a schedule that does discovery and triage; (2) worktrees so parallel agents do not collide; (3) skills that write down project knowledge so intent is not re-guessed each run; (4) connectors and plugins (MCP) so the loop acts inside real tools; (5) sub-agents that split the maker from the checker; and a memory file on disk (a markdown file or a board) that holds what is done and what is next, since the model forgets between runs. Propose the smallest loop that finds the work, hands it out, verifies it with a separate checker, writes state to disk, and decides the next step. Keep verification on a human: the loop's 'done' is a claim, not a proof. Name the token-cost and quality risks. Output a concrete loop design mapped to THIS project, not generic advice.",
+  },
 ];
 
 // ── Usage-frequency sorting (most-used first), persisted locally ──────────────
@@ -128,5 +145,5 @@ export function bundledSkillsByUsage(): BundledSkill[] {
 /** A multi-line subagent-delegation template appended to whatever the user has already typed. */
 export function taskProforma(lines = 3): string {
   const items = Array.from({ length: Math.max(1, lines) }, (_, i) => `Subagent ${i + 1} task: `).join("\n");
-  return `/task — delegate these to subagents (omp Task tool), each isolated to its own assignment:\n${items}\n`;
+  return `/task: delegate these to subagents (omp Task tool), each isolated to its own assignment:\n${items}\n`;
 }

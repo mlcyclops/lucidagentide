@@ -251,9 +251,22 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .sess:hover .t{padding-right:24px}
 
 /* ───────────────────────── centre / chat ───────────────────────── */
-.center{display:flex;flex-direction:column;min-width:0;min-height:0;background:var(--bg-0)}
+.center{position:relative;display:flex;flex-direction:column;min-width:0;min-height:0;background:var(--bg-0)}
 .chat{flex:1;min-height:0;overflow-y:auto;padding:22px 0 8px}
-.thread{max-width:min(1080px,94vw);margin:0 auto;padding:0 30px;display:flex;flex-direction:column;gap:20px}
+/* Jump-to-latest: double-down-arrow in the LucidAgent accent, tucked just inside the scrollbar.
+   `bottom` is set in JS to sit a hair above the composer. Hidden until there's a page-plus below. */
+.jump-down{position:absolute;right:14px;z-index:25;width:34px;height:34px;border-radius:50%;
+  display:grid;place-items:center;cursor:pointer;color:var(--accent);
+  border:1px solid color-mix(in srgb,var(--accent) 50%,var(--line));background:var(--bg-2);
+  box-shadow:0 5px 16px rgba(0,0,0,.4),inset 0 1px 0 rgba(255,255,255,.05);
+  opacity:0;transform:translateY(6px) scale(.92);pointer-events:none;
+  transition:opacity var(--t) var(--ease-out),transform var(--t) var(--ease-out),background var(--t),color var(--t),border-color var(--t)}
+.jump-down.show{opacity:1;transform:none;pointer-events:auto}
+.jump-down:hover{background:var(--accent);color:#fff;border-color:var(--accent);box-shadow:0 6px 20px color-mix(in srgb,var(--accent) 40%,transparent)}
+.jump-down:active{transform:scale(.94)}
+/* Wider, fluid reading column: grows with the window (96vw) up to a higher cap so it fills the side
+   padding on big screens, and slimmer side gutters reclaim more width. Still centred + responsive. */
+.thread{max-width:min(1320px,96vw);margin:0 auto;padding:0 22px;display:flex;flex-direction:column;gap:20px}
 .msg{position:relative;display:flex;gap:11px;align-items:flex-start;animation:rise var(--t-slow) var(--ease-out)}
 /* per-message actions (copy markdown · save .md) — appear on hover */
 .msg-actions{position:absolute;top:-3px;right:0;display:flex;gap:4px;opacity:0;transform:translateY(-2px);transition:opacity var(--t) var(--ease-out),transform var(--t) var(--ease-out);pointer-events:none}
@@ -261,6 +274,10 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .msg-act{-webkit-app-region:no-drag;border:1px solid var(--line);background:var(--bg-2);color:var(--txt-2);width:27px;height:27px;border-radius:7px;display:grid;place-items:center;cursor:pointer;transition:background var(--t),color var(--t),border-color var(--t)}
 .msg-act:hover{background:var(--bg-3);color:var(--txt);border-color:var(--line-strong)}
 .msg-act.ok{color:var(--green);border-color:color-mix(in srgb,var(--green) 45%,var(--line))}
+/* Keep collapsible blocks' chevron (the expand/collapse "dropdown") clear of the hover copy/download
+   actions. A long reasoning/thoughts/subagent head can grow to the message's right edge and put its
+   chevron UNDER the 58px actions cluster; reserve a right gutter so the two never overlap. */
+.msg .reasoning,.msg .thoughts,.msg .subagent{max-width:calc(100% - 64px)}
 @keyframes rise{from{opacity:0;transform:translateY(7px)}to{opacity:1;transform:none}}
 .msg .who{flex:none;width:84px;text-align:right;font-size:12.5px;font-weight:600;letter-spacing:.3px;padding-top:5px;white-space:nowrap}
 .msg.user .who{color:var(--txt-2)}
@@ -288,6 +305,12 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .hud-phase{color:var(--txt-2)}
 .hud-phase.swap{animation:phasein 260ms var(--ease-out)}
 .hud.done .hud-phase{color:var(--txt-4)}
+/* P-TPS.1: live OUTPUT-token readout (tok out · tok/s). The headline streaming
+   number, so it tracks the pulsing accent while streaming and settles to a calm
+   tone when done. Tabular figures so the rate doesn't jitter the layout. */
+.hud-tps{color:var(--txt-3);font-variant-numeric:tabular-nums}
+.hud.streaming .hud-tps{color:var(--accent-2)}
+.hud.done .hud-tps{color:var(--txt-4)}
 .hud-meta{color:var(--txt-4)}
 @keyframes hudpulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.4;transform:scale(.9)}}
 @keyframes checkpop{0%{transform:scale(.6);opacity:.4}60%{transform:scale(1.12)}100%{transform:scale(1);opacity:1}}
@@ -472,6 +495,18 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .subagent-task .ic{flex:none;color:var(--txt-4);margin-top:2px}
 
 .composer-wrap{padding:10px 26px 18px}
+/* P-SLASH.1: "/" command + skill autocomplete, floating just above the composer. */
+.composer-row{position:relative}
+.slash-ac{position:absolute;left:0;right:0;bottom:calc(100% + 8px);z-index:30;
+  background:var(--bg-2);border:1px solid var(--line-strong);border-radius:12px;overflow-y:auto;max-height:300px;
+  box-shadow:0 12px 34px rgba(0,0,0,.5),inset 0 1px 0 rgba(255,255,255,.04);animation:rise var(--t) var(--ease-out)}
+.slash-ac .sl-head{position:sticky;top:0;font-size:10.5px;color:var(--txt-4);padding:7px 12px;
+  border-bottom:1px solid var(--line-soft);background:var(--bg-1);font-variant-numeric:tabular-nums}
+.sl-opt{display:flex;align-items:center;gap:10px;padding:9px 12px;cursor:pointer;border-left:2px solid transparent}
+.sl-opt:hover{background:var(--bg-3)}
+.sl-opt.on{background:var(--bg-3);border-left-color:var(--accent-2)}
+.sl-nm{flex:none;font-size:13px;font-weight:600;color:var(--txt);font-family:var(--mono)}
+.sl-hint{flex:1 1 auto;min-width:0;font-size:11.5px;color:var(--txt-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 /* The send button lives OUTSIDE the bordered .composer box (the expanding/scrolling input window),
    bottom-aligned beside it, so a long prompt's scroll region is just the text. */
 .composer-row{max-width:min(1080px,94vw);margin:0 auto;display:flex;align-items:flex-end;gap:8px}
@@ -531,8 +566,11 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
   border-bottom-width:2px;border-radius:5px;padding:0 5px;color:var(--txt-3);font-size:11px}
 
 /* ───────────────────────── inspector (right) ───────────────────────── */
+/* Default width fits the Prompt-cache chip row through "spend $…" on one line (~430px is the no-wrap
+   threshold once the accordion's nested padding is counted; 440 leaves a margin). Users can still
+   drag-resize narrower/wider (persisted to localStorage). */
 .inspector{
-  position:relative;width:var(--inspector-w,372px);background:var(--bg-1);border-left:1px solid var(--line-soft);
+  position:relative;width:var(--inspector-w,440px);background:var(--bg-1);border-left:1px solid var(--line-soft);
   display:flex;flex-direction:column;overflow:hidden;
   transition:width var(--t-slow) var(--ease)}
 .inspector.collapsed{width:0;border-left:0}
@@ -608,12 +646,24 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .gauge-row .lab{width:58px;font-size:11.5px;color:var(--txt-3)}
 .gbar{flex:1;height:13px;background:#0a0c12;border:1px solid var(--line-soft);border-radius:7px;overflow:hidden;
   box-shadow:inset 0 1px 2px rgba(0,0,0,.5)}
-/* fill keeps the JS-set background colour; we add motion + a top-edge sheen */
-.gbar .fill{position:relative;height:100%;border-radius:7px;
-  transition:width var(--t-slow) var(--ease-out);
-  box-shadow:inset 0 1px 0 rgba(255,255,255,.18),0 0 7px -1px rgba(0,0,0,.25)}
-.gbar .fill::after{content:"";position:absolute;inset:0;border-radius:inherit;
-  background:linear-gradient(180deg,rgba(255,255,255,.16),transparent 55%)}
+/* fill keeps the JS-set background colour (--gc). display:block so the % width/height actually
+   apply (a bare inline <span> collapses to 0×0 — that was the "bars don't fill" bug). */
+.gbar .fill{display:block;position:relative;height:100%;border-radius:7px;overflow:hidden;
+  transition:width var(--t-slow) var(--ease-out),box-shadow var(--t) var(--ease),filter var(--t);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.20),0 0 7px -1px rgba(0,0,0,.25)}
+/* plasma sheen: a bright band + fine bands drift across the fill (screen-blended so they read as
+   energy over the colour). The whole thing intensifies and the bar glows in its own colour on hover.
+   Globally paused by the prefers-reduced-motion reset near the top of this file. */
+.gbar .fill::after{content:"";position:absolute;inset:0;border-radius:inherit;mix-blend-mode:screen;
+  background:
+    linear-gradient(115deg,transparent 6%,rgba(255,255,255,.55) 24%,transparent 42%),
+    repeating-linear-gradient(115deg,rgba(255,255,255,.13) 0 6px,transparent 6px 16px);
+  background-size:220% 100%,200% 100%;background-position:140% 0,0 0;
+  opacity:.5;animation:plasma 3.6s linear infinite}
+@keyframes plasma{to{background-position:-90% 0,-220% 0}}
+.gauge-row:hover .gbar .fill{filter:brightness(1.08) saturate(1.18);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.32),0 0 16px -3px var(--gc, var(--accent))}
+.gauge-row:hover .gbar .fill::after{opacity:.92;animation-duration:1.5s}
 .gauge-row .val{width:112px;text-align:right;font-family:var(--mono);font-size:11.5px;font-variant-numeric:tabular-nums;color:var(--txt-2)}
 .gauge-row .val b{font-weight:700;color:var(--txt)}
 .kvs{display:flex;gap:7px;flex-wrap:wrap;margin-top:9px}
@@ -698,6 +748,10 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
     rgba(255,255,255,.05) 80%,transparent)}
 .statusbar .seg{display:flex;align-items:center;gap:7px;cursor:default;padding-right:5px}
 .statusbar .seg b{font-family:var(--mono);color:var(--txt-2);font-weight:600;font-variant-numeric:tabular-nums}
+/* Live/“updated Ns ago” indicator: fixed width so the changing text never resizes the segment (which
+   would shove "gate active" left and right every poll — the distracting jiggle). Content left-aligned:
+   the green dot + text sit at the left of the chip, the slack absorbs on the right. */
+.statusbar .seg-live{width:110px;padding-left:7px;padding-right:2px;justify-content:flex-start;white-space:nowrap;overflow:hidden}
 .statusbar .mini{width:64px;height:7px;background:#0c0e15;
   border:1px solid var(--line-soft);border-radius:5px;overflow:hidden;
   box-shadow:inset 0 1px 1px rgba(0,0,0,.45)}
@@ -788,6 +842,15 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
   color:var(--accent-2);background:var(--accent-dim);border:1px solid var(--line-soft);border-radius:5px;padding:1px 5px;line-height:1.6}
 .cfg-opt .id{flex:0 1 auto;min-width:0;max-width:38%;text-align:right;font-family:var(--mono);font-size:10px;
   color:var(--txt-4);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* P-SKILL.1 (ADR-0045): drop zone for importing .md skills (scanned at the gate). Dashed target that
+   lights up in the accent on drag-over; the whole label opens the native file picker on click. */
+.skill-drop{display:flex;align-items:center;gap:8px;margin-top:8px;padding:10px 11px;cursor:pointer;
+  border:1px dashed var(--line-strong);border-radius:9px;background:var(--bg-1);color:var(--txt-3);font-size:11.5px;
+  transition:border-color var(--t),background var(--t),color var(--t)}
+.skill-drop:hover{color:var(--txt-2);border-color:color-mix(in srgb,var(--accent) 45%,var(--line-strong))}
+.skill-drop.drag{border-color:var(--accent);background:var(--accent-dim);color:var(--txt)}
+.skill-drop .ic{flex:none;color:var(--accent-2)}
+.skill-drop code{font-family:var(--mono);color:var(--accent-2)}
 /* P-IDE.1: model family sections (collapsible) */
 .cfg-fam{display:flex;flex-direction:column}
 .cfg-fam+.cfg-fam{margin-top:4px}
@@ -1207,13 +1270,23 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .aq-info{border:0;background:transparent;color:var(--txt-3);cursor:help;padding:0;display:inline-grid;place-items:center}
 .aq-info:hover{color:var(--accent-2)}
 .aq-val{margin-left:auto;font-family:var(--mono);font-weight:600;color:var(--txt-2)}
-.aq-bar{height:8px;background:#0c0e15;border:1px solid var(--line-soft);border-radius:6px;overflow:hidden;
+.aq-bar{height:10px;background:#0c0e15;border:1px solid var(--line-soft);border-radius:6px;overflow:hidden;
   box-shadow:inset 0 1px 2px rgba(0,0,0,.45)}
-.aq-bar i{display:block;height:100%;border-radius:6px;transition:width var(--t-slow) var(--ease-out);position:relative}
-/* glossy sheen over the JS-set fill colour (inline background is the bar's hue) */
-.aq-bar i::after{content:"";position:absolute;inset:0;border-radius:6px;
-  background:linear-gradient(180deg,rgba(255,255,255,.18),transparent 55%)}
-.aq-pct{font-size:10.5px;color:var(--txt-4);margin-top:5px}
+.aq-bar i{display:block;height:100%;border-radius:6px;overflow:hidden;position:relative;
+  transition:width var(--t-slow) var(--ease-out),box-shadow var(--t) var(--ease),filter var(--t)}
+/* plasma sheen over the JS-set fill colour (inline background = the bar's hue; --gc tints the glow).
+   Mirrors the Context-window gauges: a drifting band that intensifies and a colour-matched glow on hover. */
+.aq-bar i::after{content:"";position:absolute;inset:0;border-radius:inherit;mix-blend-mode:screen;
+  background:
+    linear-gradient(115deg,transparent 6%,rgba(255,255,255,.55) 24%,transparent 42%),
+    repeating-linear-gradient(115deg,rgba(255,255,255,.13) 0 6px,transparent 6px 16px);
+  background-size:220% 100%,200% 100%;background-position:140% 0,0 0;
+  opacity:.5;animation:plasma 3.6s linear infinite}
+.aq:hover .aq-bar i{filter:brightness(1.08) saturate(1.18);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.30),0 0 14px -3px var(--gc,var(--accent))}
+.aq:hover .aq-bar i::after{opacity:.92;animation-duration:1.5s}
+.aq-pct{font-size:12px;color:var(--txt-2);margin-top:6px}
+.aq-pct b{color:var(--txt)}
 .aq-btns{display:flex;gap:6px;margin-top:10px;flex-wrap:wrap}
 /* gov datasets */
 .ds-note{font-size:11px;color:var(--txt-4);margin-bottom:9px}

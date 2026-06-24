@@ -85,6 +85,8 @@ export interface ModeOption { id: string; name: string; description?: string }
 export interface ModeState { available: ModeOption[]; current: string; ui?: "agent" | "ask" | "plan"; permissionMode?: "auto" | "ask" }
 export interface OmpCommand { name: string; description?: string; hint?: string }
 export interface SessionInfo { id: string; title: string; model: string; updatedAt: number; turns: number }
+// P-SKILL.1 (ADR-0045): per-file result of a gated skill import (mirrors desktop/skills_import.ts).
+export interface SkillImportResult { ok: boolean; name: string; written?: boolean; path?: string; blocked?: boolean; reason?: string; trustLabel?: string; findings?: number }
 export interface ProviderAuth {
   id: string; name: string; env: string; oauthId: string; canOauth: boolean;
   oauthActive: boolean; oauthIdentity?: string; keySet: boolean; keyLast4?: string;
@@ -192,6 +194,9 @@ export interface LucidBridge {
   cancelChat(): Promise<unknown>;
   commands(): Promise<OmpCommand[]>;
   skills(): Promise<{ name: string; description: string; source: string }[] | null>;
+  // P-SKILL.1 (ADR-0045): import dropped .md skill files — each is scanned at the gate; clean ones are
+  // written under .omp/skills/, flagged ones are held for Security-panel review.
+  skillImport(files: { name: string; content: string }[]): Promise<{ results: SkillImportResult[] } | null>;
   // P-IDE.2: set/clear the active bundled skill (its trusted prompt rides the user-turn preamble).
   setActiveSkill(name: string, prompt: string): Promise<{ active: string } | null>;
   clearActiveSkill(): Promise<{ active: string } | null>;
@@ -355,6 +360,7 @@ export const bridge: LucidBridge = {
   cancelChat: () => post("/api/chat/cancel", {}),
   commands: async () => (await getData("/api/commands")) ?? [],
   skills: () => getData("/api/skills"),
+  skillImport: (files) => post("/api/skills/import", { files }),
   setActiveSkill: (name, prompt) => post("/api/skill", { name, prompt }),
   clearActiveSkill: () => post("/api/skill", { clear: true }),
   skillActivated: (command, name, source) => post("/api/skill/activated", { command, name, source }),

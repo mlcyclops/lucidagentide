@@ -68,6 +68,11 @@ const RAW: Record<string, string> = {
   copy: P("M9.5 9.5h8v8h-8z") + P("M6.5 14.5H6A1.5 1.5 0 0 1 4.5 13V6A1.5 1.5 0 0 1 6 4.5h7A1.5 1.5 0 0 1 14.5 6v.5"),
   // download (save to disk)
   download: P("M12 4v9.5") + P("M8 10.5l4 4 4-4") + P("M5 18.5h14"),
+  // lightbulb (thinking) — glass dome + neck, filament tick, two base lines
+  bulb: P("M12 4.2a5 5 0 0 0-3 9c.7.5 1.1 1.3 1.2 2.1h3.6c.1-.8.5-1.6 1.2-2.1a5 5 0 0 0-3-9z")
+    + P("M10.4 18.6h3.2") + P("M10.9 20.6h2.2") + P("M12 9.2v2.4") + P("M10.7 10.4h2.6"),
+  // double chevron down (jump-to-latest) — two stacked downward carets
+  chevronsDown: P("M6.5 7.5 12 13l5.5-5.5") + P("M6.5 13 12 18.5 17.5 13"),
 };
 
 // Action glyphs that read as "do something now" — they get the .ic-action hook

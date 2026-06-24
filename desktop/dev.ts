@@ -12,7 +12,7 @@ import { join } from "node:path";
 import { devSnapshot, securitySnapshot } from "../tools/web/data.ts";
 import { approveBlock, liveBlocks } from "./security_log.ts";
 import { probeRateLimits } from "./ratelimit_probe.ts";
-import { OBS_DB_PATH, codeActivity, memorySnapshot, rateLimits, usageLedger } from "../tools/memory_data.ts";
+import { OBS_DB_PATH, codeActivity, memorySnapshot, rateLimits, sessionPathById, usageLedger } from "../tools/memory_data.ts";
 import { backend } from "./acp_backend.ts";
 import { deleteSession, listSessions, sessionMessages } from "./sessions.ts";
 import { providerAuth } from "./auth_status.ts";
@@ -21,6 +21,7 @@ import { applyEnv, attribution, chinaModelsAcknowledged, listMcpServers, load as
 import { emailDomainAllowed, managedConfig, skipAllowed } from "./managed_config.ts";
 import { asksageConfig, listDatasets, listPersonas, monthlyTokens, scanPersona, wrapPersona } from "./asksage.ts";
 import { listSkills } from "./skills_data.ts";
+import { importSkill } from "./skills_import.ts";
 import { recordSkillActivated } from "./skills_log.ts";
 import { recentTurns } from "./turns_log.ts";
 import { headroomStatus, setHeadroomEnabled, startHeadroom } from "./headroom.ts";
@@ -164,6 +165,29 @@ const server = Bun.serve({
       // extraResources filter re-includes it past the desktop/node_modules exclusion (electron-builder
       // applies filters in order). The app.asar `files` copy is unreachable from here. Without the
       // re-include this 404s in the installed app (the editor never loads) while working in dev.
+      // P-IDE.6: serve a SAME-ORIGIN worker bootstrap so Monaco's language-service workers run under
+      // the strict `worker-src 'self'` CSP. Monaco's own getWorker wraps the language worker in a blob:
+      // URL (which the CSP — and a locked-down browser — block). This is the same idea, but same-origin:
+      // set MonacoEnvironment.baseUrl inside the worker, then importScripts the real (self-contained,
+      // classic) language worker. `script-src 'self'` permits the same-origin importScripts.
+      if (p === "/vendor/monaco-worker.js") {
+        const label = url.searchParams.get("label") ?? "";
+        const key = label === "typescript" || label === "javascript" ? "ts"
+          : label === "json" ? "json"
+          : label === "css" || label === "scss" || label === "less" ? "css"
+          : label === "html" || label === "handlebars" || label === "razor" ? "html"
+          : "editor";
+        let asset = "";
+        try {
+          const dir = join(import.meta.dir, "node_modules", "monaco-editor", "min", "vs", "assets");
+          const re = new RegExp(`^${key}\\.worker-.*\\.js$`);
+          for (const f of readdirSync(dir)) if (re.test(f)) { asset = `assets/${f}`; break; }
+        } catch { /* no assets dir */ }
+        const body = asset
+          ? `self.MonacoEnvironment={baseUrl:self.location.origin+"/vendor/monaco/"};importScripts(self.location.origin+"/vendor/monaco/${asset}");`
+          : "/* monaco worker asset not found */";
+        return new Response(body, { headers: { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-store" } });
+      }
       if (p.startsWith("/vendor/monaco/")) {
         const base = join(import.meta.dir, "node_modules", "monaco-editor", "min", "vs");
         const target = join(base, p.slice("/vendor/monaco/".length));
@@ -183,7 +207,10 @@ const server = Bun.serve({
       }
       // Audited fail-closed override: release one quarantined call (ADR-0019 C).
       if (p === "/api/security/approve" && req.method === "POST") { const b = await readBody<{ id?: unknown }>(req); return json({ ok: true, data: approveBlock(String(b.id ?? "")) }); }
-      if (p === "/api/memory") return json({ ok: true, data: await memorySnapshot() });
+      // Anchor the snapshot to the ACTIVE chat session (its on-disk transcript) so the Context window
+      // + Prompt-cache gauges reflect the live conversation; fall back to findSession's cwd match only
+      // when there's no active session yet (fresh launch).
+      if (p === "/api/memory") return json({ ok: true, data: await memorySnapshot(sessionPathById(backend.currentSessionId())) });
       // P-MCP.1 (ADR-0020): MCP server registry. The hub does auth + config assembly only; omp owns
       // the MCP transport (configs ride session/new.mcpServers). Changes respawn omp to apply. The
       // list NEVER returns raw tokens (masked status only — like provider keys).
@@ -360,6 +387,19 @@ const server = Bun.serve({
       if (p === "/api/config/refresh" && req.method === "POST") { backend.restart(); return json({ ok: true, data: await backend.getConfig() }); }
       if (p === "/api/commands") return json({ ok: true, data: await backend.getCommands() });
       if (p === "/api/skills") return json({ ok: true, data: await listSkills() });
+      // P-SKILL.1 (ADR-0045): gated drop-import. Each dropped .md is scanned fail-closed; clean ones
+      // are written under .omp/skills/<slug>/SKILL.md, flagged ones are held for Security-panel review.
+      if (p === "/api/skills/import" && req.method === "POST") {
+        const b = await readBody<{ files?: { name?: unknown; content?: unknown }[] }>(req);
+        const files = Array.isArray(b.files) ? b.files.slice(0, 20) : []; // cap one drop at 20 files
+        const results = [];
+        for (const f of files) {
+          const content = String(f?.content ?? "");
+          if (!content.trim()) { results.push({ ok: false, name: String(f?.name ?? "skill"), reason: "empty file" }); continue; }
+          results.push(await importSkill(String(f?.name ?? "skill.md"), content));
+        }
+        return json({ ok: true, data: { results } });
+      }
       if (p === "/api/headroom") {
         if (req.method === "POST") { const b = await readBody<{ enabled?: unknown }>(req); return json({ ok: true, data: setHeadroomEnabled(!!b.enabled) }); }
         return json({ ok: true, data: headroomStatus() });

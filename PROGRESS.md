@@ -1841,3 +1841,64 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
   not started. Pre-existing typecheck error `desktop/personal.ts:50` (ADR-0042 `aiExtract`) left as-is — out of scope.
 - **next:** P-CODE.2 — monthly workspace activity section (summary card + per-workspace table) + spend
   attribution; then the add-on can re-pin its data contract and flip drift D-4 (code-activity) to ✅.
+
+-----
+
+## P-TPS.1: streaming output-token readout — terminal + desktop (ADR-0044)
+- **shipped:** vendored pi-token-speed's pure engine (MIT) as a shared, UI-agnostic core
+  `harness/metrics/token_speed.ts` (config injected, clock injectable, plain-text `formatReadout`; engine +
+  sliding-window + word/punct estimator) with `harness/metrics/token_speed.test.ts` (10 tests: output-only
+  counting, provider-token reconciliation, TTFT realign, windowed tok/s). Two thin adapters off the one core:
+  terminal `harness/omp/token_speed_extension.ts` (omp `message_update`→`ctx.ui.setStatus` `⚡ TPS:`, `/tps`
+  cycles mode, `useProviderTokens` for exact counts; wired into `omp:secure`) and desktop HUD in
+  `desktop/renderer/app.ts` (same engine fed from the `token`/`thinking` ChatEvents → `· N tok out · R tok/s`;
+  existing `usage_update` figure relabelled **`ctx`** so output ≠ context) + `.hud-tps` CSS. New ADR-0044,
+  `demo-P-TPS.1` (`demo_ptps1.ts`, proves the system prompt is excluded + provider reconciliation). Verified:
+  typecheck clean (3 cfgs); `bun test harness` 466/466; browser bundle of app.ts succeeds; demo PASS.
+- **stubbed:** desktop count is an ESTIMATE (ACP deltas carry no per-delta `usage.output`; `usage_update` is
+  context, not output) — terminal count is exact when omp reports usage. Not added to the ACP launcher
+  (`lucid_acp.ts`): `ui.setStatus` is a no-op there + would break the `ext_parity` `-e`-ordering tests. No
+  live in-desktop streaming screenshot (needs a real model turn / provider auth).
+- **next:** optional — surface a per-turn output total on `done` from an authoritative source if omp ever
+  exposes per-turn output over ACP (would make the desktop figure exact); a `/tps`-style toggle in desktop Settings.
+
+-----
+
+## P-SKILL.1: gated drag-and-drop skill import (ADR-0045)
+- **shipped:** ADR-0045 (3-phase design: gated import + model-assisted builder + session-derived skills).
+  P-SKILL.1 built: `desktop/skills_import.ts` `importSkill()` scans a dropped `.md` fail-closed
+  (`scanAndDecide`/DEFAULT_POLICY, same seam as `scanPersona`) → clean writes to
+  `<ws>/.omp/skills/<slug>/SKILL.md` (omp discovers it natively) under a `pathWithin` check; flagged →
+  NOT written, `recordBlock`'d to the Security panel ("block + review" posture). New `POST /api/skills/import`
+  (dev.ts), `bridge.skillImport` + `SkillImportResult`, a drop zone in the Skills popover's Project section
+  (`app.ts` `handleSkillFiles`/`projSkillRows`) + `.skill-drop` CSS. New `demo-P-SKILL.1` (clean writes,
+  poisoned bidi/zero-width blocks). Verified: typecheck clean (3 cfgs); demo PASS; live endpoint round-trip
+  (clean → written + appears in `/api/skills`; poisoned → quarantined + reaches `/api/security`); drop zone
+  renders. This makes the gate authoritative for IMPORTED project skills (omp's native loader bypasses it).
+- **stubbed:** P-SKILL.2 (skills-builder via most-used model + `complete()`, opt-in, re-scanned output) and
+  P-SKILL.3 (session-derived skills from selected sessions) — designed in ADR-0045, not built. Hand-placed
+  `.omp/skills/` files (outside the app) are still not retroactively scanned. The synthetic DOM file-drop
+  couldn't be simulated in-preview (real OS drag-drop unverified by automation — needs a real file drop).
+- **next:** P-SKILL.2 — wire the opt-in skills-builder (`usageLedger().models[0]` → `complete()` with a
+  model override on the throwaway session; re-scan + preview-to-accept), then P-SKILL.3 session-derived.
+
+-----
+
+## P-SLASH.1: "/" command + skill autocomplete in the composer (builds on ADR-0029)
+- **shipped:** inline autocomplete in the prompt bar (`desktop/renderer/app.ts` `updateSlashAC`/`filterSlash`/
+  `slashKeydown`/`applySlash` + `.slash-ac` CSS): typing `/` pops a filtered list of omp slash commands +
+  built-in skills (most-used first via `bundledSkillsByUsage`) + project skills; filters character-by-
+  character; ↑/↓ to move, Tab/Enter to complete (commands/project skills → text with trailing space;
+  built-in skills → activate). Added two built-in skills: **Goal Loop** (`/goal` — iterate to a verifiable
+  stop condition, checked by an objective run, maker≠checker; omp has no native `/goal`) and **Loop
+  Engineering** (Osmani's loop design: automations · worktrees · skills · connectors · sub-agents + on-disk
+  memory). Removed the em dash from the `/task` list entry + proforma (now `/task:`). Verified live: AC
+  appears on `/`, `/go`→Goal Loop, `/loop`→Loop Engineering, `/mod`+Tab→`/model `, Enter on Goal Loop
+  activates it, most-used floats up, no em dashes in the list; typecheck clean (3 cfgs).
+- **stubbed:** the REAL `/goal` loop primitive (a control loop that re-runs until a verifiable condition
+  with a separate checker model) is only LISTED as a skill, not built — it's a harness-level increment of
+  its own (would need an ADR). No demo script (browser-only composer UX; verified in the preview). Slash
+  autocomplete triggers only when the whole input is a single `/…` token (closes once you type a space).
+- **next:** build the `/goal` loop primitive (ACP-backend control loop + objective stop-condition checker)
+  as its own increment+ADR; surface the other Loop-Engineering building blocks (automations/scheduling) that
+  this harness doesn't yet expose.
