@@ -150,6 +150,14 @@ demo-ADR9A: ## ADR-0009 Phase A: recall prior-session facts into a new session (
 demo-P-CODE.1: ## P-CODE.1 (ADR-0030): git workspace diffstat this month + fail-closed omit of non-git dirs
 	$(BUN) run harness/scripts/demo_pcode1.ts
 
+.PHONY: demo-P-TPS.1
+demo-P-TPS.1: ## P-TPS.1 (ADR-0044): streaming output-token readout — output-only, prompt-excluded, provider-reconciled
+	$(BUN) run harness/scripts/demo_ptps1.ts
+
+.PHONY: demo-P-SKILL.1
+demo-P-SKILL.1: ## P-SKILL.1 (ADR-0045): gated skill import — clean .md writes to .omp/skills/, poisoned blocks at the gate
+	$(BUN) run harness/scripts/demo_pskill1.ts
+
 .PHONY: dashboards
 dashboards: ## Materialize dashboard CSVs from a DuckDB into observable/docs/data (DB=path)
 	$(BUN) run harness/scripts/materialize_dashboards.ts $(DB) observable/docs/data

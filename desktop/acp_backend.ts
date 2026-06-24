@@ -17,7 +17,12 @@ import { learnFromTurn, recallPreamble } from "./personal.ts";
 import { buildUserTurnPreamble } from "./preamble.ts";
 import { recordTurns } from "./turns_log.ts";
 import { recordBlock } from "./security_log.ts";
-import { attribution, lastModel, mcpServersForAcp, setLastModel } from "./settings_store.ts";
+import { asksageOnly, attribution, checkerModel, lastModel, mcpServersForAcp, setCheckerModel, setLastModel } from "./settings_store.ts";
+import { managedConfig } from "./managed_config.ts";
+import { recommendCheckerModel, resolveCheckerModel, type ModelOption } from "./checker_model.ts";
+import { parseGoalVerdict } from "./goal_verdict.ts";
+import { appendGoalIteration, finishGoalMemory, type GoalMemory, resumeGoalMemory, startGoalMemory } from "./goal_memory.ts";
+import { type Automation, listAutomations, nextDueAutomation, updateAutomation } from "./automations.ts";
 
 const REPO = join(import.meta.dir, "..");
 // Absolute so the gate loads from THIS repo even when omp runs in another workspace.
@@ -46,6 +51,13 @@ export type ChatEvent =
   | { type: "block"; tool: string; reason: string; severity: string; findings: string; id?: string; quarantined?: boolean }
   | { type: "permission"; id: string; tool: string; detail: string; options: { optionId: string; name: string; kind?: string }[] }
   | { type: "usage"; used: number; size: number; cost: number }
+  // P-GOAL.1 (ADR-0046): /goal loop events — an iteration begins, the separate checker's verdict,
+  // the loop met its condition, or it stopped (cap / no-progress).
+  | { type: "goal-memory"; path: string }
+  | { type: "goal-iter"; n: number; max: number }
+  | { type: "goal-check"; n: number; done: boolean; reason: string }
+  | { type: "goal-done"; iters: number; reason: string }
+  | { type: "goal-stop"; reason: string }
   | { type: "done" };
 
 class Backend {
@@ -81,6 +93,14 @@ class Backend {
   // decision instead of being auto-approved. The composer's 3-way Plan/Ask/Agent is derived from
   // (currentModeId, permissionMode). Fail-closed: no decision (timeout / disconnect) ⇒ deny.
   permissionMode: "auto" | "ask" = "auto";
+  // P-GOAL.2 (ADR-0046): a /goal loop is running, and a request to stop it after the current iteration.
+  private goalActive = false;
+  private goalCancelled = false;
+  // P-GOAL.5 (ADR-0047): in-process automation scheduler. A timer ticks while the app is open and runs
+  // the first DUE automation through runGoal. `autoRunning` guards against a tick overlapping itself.
+  private autoTimer: ReturnType<typeof setInterval> | null = null;
+  private autoRunning = false;
+  private static readonly AUTO_TICK_MS = 30_000;
   private askActive = false;            // true only during a chat turn (never the util `complete()`)
   private permSeq = 0;
   private permPending = new Map<string, (optionId: string | null) => void>();
@@ -380,6 +400,176 @@ class Backend {
     recordTurns({ sessionId: this.sessionId ?? "", userText: text, assistantText: assistant });
   }
 
+  // P-GOAL.1 (ADR-0046): the /goal loop. Run MAKER iterations on the persistent session toward `goal`,
+  // and after each one a SEPARATE checker decides if the verifiable `condition` is met (running `command`
+  // when given). Capped at `maxIters`, auto-stops on no-progress. Runs UNATTENDED — permissions are
+  // auto-approved for the duration, but every tool call is still scanned fail-closed by the in-process
+  // gate (that, not human approval, is the safety boundary). Streams the usual chat events plus goal-*.
+  async runGoal(opts: { goal: string; condition: string; command?: string; maxIters: number; resume?: string }, onEvent: (e: ChatEvent) => void): Promise<void> {
+    const goal = opts.goal.trim();
+    const condition = (opts.condition || opts.command || "the goal is fully accomplished").trim();
+    const command = opts.command?.trim() || "";
+    const maxIters = Math.min(Math.max(1, Math.floor(opts.maxIters) || 6), 20); // hard ceiling
+    const prevMode = this.permissionMode;
+    this.permissionMode = "auto"; // unattended: auto-approve tool calls (the gate still scans every one)
+    this.goalActive = true; this.goalCancelled = false;
+    // P-GOAL.3/4: durable on-disk memory (best-effort). `resume` continues an existing loop-memory file
+    // and injects its prior progress; otherwise start a fresh record.
+    const resumed = opts.resume ? resumeGoalMemory(currentWorkspace(), opts.resume) : null;
+    const mem: GoalMemory | null = resumed ? resumed.mem : startGoalMemory(currentWorkspace(), Date.now().toString(36), { goal, condition, command });
+    if (mem) onEvent({ type: "goal-memory", path: mem.rel });
+    const memNote = mem ? ` Your durable progress memory is the file ${mem.rel} (it records what's done across iterations).` : "";
+    const resumeNote = resumed ? `\n\nThis loop was already in progress. Below is the progress so far — do NOT redo completed work, continue from where it stopped:\n${resumed.prior.slice(0, 3000)}` : "";
+    let noProgress = 0;
+    try {
+      for (let i = 1; i <= maxIters; i++) {
+        if (this.goalCancelled) { onEvent({ type: "goal-stop", reason: "stopped by you" }); finishGoalMemory(mem, "stopped by you"); return; }
+        onEvent({ type: "goal-iter", n: i, max: maxIters });
+        let work = "";
+        let actedThisIter = false;
+        // Forward the maker's stream, but swallow the per-iteration `done` so the client sees ONE loop.
+        const sink = (e: ChatEvent) => {
+          if (e.type === "done") return;
+          if (e.type === "token") work += e.text;
+          if (e.type === "tool" || e.type === "subagent") actedThisIter = true;
+          onEvent(e);
+        };
+        const iterText = i === 1
+          ? `${goal}\n\nWork toward this goal now. The stop condition is: ${condition}${command ? ` (verified by running \`${command}\`)` : ""}. Take the next concrete step.${memNote}${resumeNote}`
+          : `Continue toward the goal. Stop condition: ${condition}. Take the next concrete step; if you believe the condition now holds, say so briefly and stop.${memNote}`;
+        await this.prompt(iterText, sink);
+        if (this.goalCancelled) { onEvent({ type: "goal-stop", reason: "stopped by you" }); finishGoalMemory(mem, "stopped by you"); return; }
+
+        const verdict = await this.checkGoal({ goal, condition, command, lastWork: work });
+        onEvent({ type: "goal-check", n: i, done: verdict.done, reason: verdict.reason });
+        appendGoalIteration(mem, i, work, verdict);
+        if (verdict.done) { onEvent({ type: "goal-done", iters: i, reason: verdict.reason }); finishGoalMemory(mem, `Goal met in ${i} iteration${i === 1 ? "" : "s"}: ${verdict.reason}`); return; }
+
+        noProgress = actedThisIter ? 0 : noProgress + 1;
+        if (noProgress >= 2) { onEvent({ type: "goal-stop", reason: "stopped: two iterations with no actions and the condition still unmet" }); finishGoalMemory(mem, "stopped: no progress for two iterations"); return; }
+      }
+      onEvent({ type: "goal-stop", reason: `stopped: hit the ${maxIters}-iteration cap without meeting the condition` });
+      finishGoalMemory(mem, `stopped: hit the ${maxIters}-iteration cap without meeting the condition`);
+    } catch (e) {
+      const reason = `loop error: ${String((e as Error)?.message ?? e)}`;
+      onEvent({ type: "goal-stop", reason });
+      finishGoalMemory(mem, reason);
+    } finally {
+      this.goalActive = false;
+      this.permissionMode = prevMode;
+      onEvent({ type: "done" });
+    }
+  }
+
+  /** P-GOAL.2: stop a running /goal loop — aborts the current maker turn and halts further iterations.
+   *  No-op when no loop is active. */
+  cancelGoal(): void { if (this.goalActive) { this.goalCancelled = true; this.cancel(); } }
+  /** Whether a /goal loop is currently running (so the UI routes Stop to cancelGoal, not cancelChat). */
+  isGoalRunning(): boolean { return this.goalActive; }
+
+  // P-GOAL.5 (ADR-0047): the automation scheduler. Arm a timer that, while the app is open, fires the
+  // first DUE automation through runGoal — same maker/checker loop, same fail-closed gate, same durable
+  // memory. The OS is never involved; nothing runs once the app is closed (that's the safe envelope).
+  startAutomationScheduler(): void {
+    if (this.autoTimer) return;
+    this.autoTimer = setInterval(() => { void this.tickAutomations(); }, Backend.AUTO_TICK_MS);
+    if (typeof (this.autoTimer as any)?.unref === "function") (this.autoTimer as any).unref(); // don't keep the process alive
+  }
+  stopAutomationScheduler(): void { if (this.autoTimer) { clearInterval(this.autoTimer); this.autoTimer = null; } }
+
+  /** One scheduler tick: never overlap a live chat turn or another loop; run at most one due automation. */
+  private async tickAutomations(): Promise<void> {
+    if (this.askActive || this.goalActive || this.autoRunning || this.pendingPerms > 0) return; // never preempt the user
+    const due = nextDueAutomation(currentWorkspace(), Date.now());
+    if (!due) return;
+    await this.runAutomation(due.id).catch(() => {}); // a background run must never crash the timer
+  }
+
+  /** Run one saved automation now (the scheduler's tick, or a manual "run now"). Records the outcome to
+   *  the store so the UI can show last-run status. Background runs stream nowhere — the durable goal
+   *  memory file (written by runGoal) is the audit trail. */
+  async runAutomation(id: string, onEvent?: (e: ChatEvent) => void): Promise<{ ran: boolean; result?: string }> {
+    if (this.autoRunning || this.goalActive || this.askActive) return { ran: false };
+    const ws = currentWorkspace();
+    const a: Automation | undefined = listAutomations(ws).find((x) => x.id === id);
+    if (!a) return { ran: false };
+    this.autoRunning = true;
+    // Stamp lastRunAt up-front so a slow run can't be re-fired by the next tick before it finishes.
+    updateAutomation(ws, id, { lastRunAt: Date.now() });
+    let result = "ran";
+    try {
+      await this.runGoal(
+        { goal: a.goal, condition: a.condition, command: a.command, maxIters: a.maxIters },
+        (e) => {
+          if (e.type === "goal-done") result = `goal met: ${e.reason}`;
+          else if (e.type === "goal-stop") result = e.reason;
+          onEvent?.(e);
+        },
+      );
+    } catch (e) {
+      result = `error: ${String((e as Error)?.message ?? e)}`;
+    } finally {
+      this.autoRunning = false;
+      updateAutomation(ws, id, { lastRunAt: Date.now(), lastResult: result.slice(0, 200) });
+    }
+    return { ran: true, result };
+  }
+
+  /** The "AskSage only" model lock, from either the user's setting or org-managed config. */
+  private asksageLocked(): boolean { return asksageOnly() || !!managedConfig().config?.asksageOnly; }
+
+  // P-GOAL.6 (ADR-0048): the user's accessible models, as the model config reports them (provider-
+  // prefixed value + display name). Empty until omp has reported a config.
+  private accessibleModels(): ModelOption[] {
+    const opt = this.configOptions.find((c) => c?.id === "model");
+    const list = Array.isArray(opt?.options) ? opt!.options : [];
+    const models = list.filter((o: any) => o?.value).map((o: any) => ({ value: String(o.value), name: o.name, description: o.description }));
+    // P-GOAL.6.1: when the AskSage lock is on, the checker must use a GOV model routed through AskSage —
+    // restrict to asksage providers whose id is a GOV model. Fail-safe: only narrow if such models exist
+    // (never empty the list, which would drop the picker / the recommendation to the maker model).
+    if (this.asksageLocked()) {
+      const gov = models.filter((m: ModelOption) => /^asksage/i.test(m.value) && /gov/i.test(m.value));
+      if (gov.length) return gov;
+    }
+    return models;
+  }
+  /** P-GOAL.6: the CHECKER model picker state for the UI — the user's saved choice, the auto
+   *  recommendation, the current (maker) model, and the full accessible list. */
+  checkerModelInfo(): { selected: string; recommended: string; recommendedWhy: string; current: string; options: ModelOption[] } {
+    const models = this.accessibleModels();
+    const current = this.activeModel();
+    const rec = recommendCheckerModel(models, current);
+    return { selected: checkerModel(), recommended: rec?.value ?? current, recommendedWhy: rec?.why ?? "", current, options: models };
+  }
+  /** P-GOAL.6: persist the checker-model choice ("" = auto/recommended). Returns the refreshed state. */
+  setCheckerModelChoice(value: string): ReturnType<Backend["checkerModelInfo"]> {
+    setCheckerModel(value);
+    return this.checkerModelInfo();
+  }
+
+  /** P-GOAL.1: the loop's "done" checker, run in a SEPARATE complete() session (maker ≠ checker). With a
+   *  verification command it runs it and reports exit-0 (a real proof); otherwise it judges the goal
+   *  against the maker's reported work, conservatively. Fail-closed: an empty/failed reply ⇒ not done.
+   *  P-GOAL.6: runs on the resolved CHECKER model (the user's choice, else a cheap/capable recommendation,
+   *  else the maker's model) — a distinct, cheaper judge that costs less to run every iteration. */
+  private async checkGoal(a: { goal: string; condition: string; command: string; lastWork: string }): Promise<{ done: boolean; reason: string }> {
+    const model = resolveCheckerModel({ chosen: checkerModel(), models: this.accessibleModels(), current: this.activeModel() }).value;
+    if (a.command) {
+      const out = await this.complete(
+        `You are a verification CHECKER, separate from the agent that did the work. Run the given command EXACTLY in the workspace and report only the outcome. Do NOT modify any files or try to fix anything. Output ONLY strict JSON on one line: {"done": <true only if the command finished with exit code 0>, "reason": "<short summary of what happened>"}.`,
+        `Run this verification command and report whether it passed:\n\n\`\`\`\n${a.command}\n\`\`\``,
+        { idleMs: 180_000, model },
+      );
+      return parseGoalVerdict(out);
+    }
+    const out = await this.complete(
+      `You are a strict CHECKER, separate from the agent that did the work. Decide whether the goal is fully met. Be conservative: if you are not sure, answer done=false. Output ONLY strict JSON on one line: {"done": bool, "reason": "<one line>"}.`,
+      `Goal: ${a.goal}\nStop condition: ${a.condition}\n\nThe agent reported:\n${(a.lastWork || "(no output)").slice(0, 4000)}\n\nIs the goal fully met?`,
+      { idleMs: 120_000, model },
+    );
+    return parseGoalVerdict(out);
+  }
+
   /** P-ACP.4: interrupt the in-flight turn. Sends the ACP `session/cancel` notification — omp aborts
    *  the streaming reply AND in-flight tool calls and returns the pending `session/prompt` with a
    *  cancelled stopReason, so the turn's `done` fires normally and the UI settles. No-op when idle. */
@@ -395,7 +585,7 @@ class Backend {
    *  Serialized via utilLock so it can't race a chat turn. Used by the import model-extractor:
    *  the model only ever sees text that already passed the scanner gate, and tool-call events
    *  (if any) are ignored — only assistant text is collected. */
-  async complete(system: string, user: string, opts: { idleMs?: number } = {}): Promise<string> {
+  async complete(system: string, user: string, opts: { idleMs?: number; model?: string } = {}): Promise<string> {
     const run = this.utilLock.then(async () => {
       await this.start();
       const prev = this.listener;
@@ -407,6 +597,10 @@ class Backend {
         const s: any = await this.acp!.request("session/new", { cwd: currentWorkspace(), mcpServers: mcpServersForAcp() });
         sid = s?.sessionId ?? s?.id ?? null;
         if (!sid) return "";
+        // P-GOAL.6 (ADR-0048): run this throwaway completion on a DIFFERENT model when asked (the /goal
+        // checker). Session-scoped, so the chat session's model is untouched. Best-effort: if the set
+        // fails, the completion just runs on the default model (fail-safe, never blocks the loop).
+        if (opts.model) await this.acp!.request("session/set_config_option", { sessionId: sid, configId: "model", value: opts.model }).catch(() => {});
         const IDLE = opts.idleMs ?? 60_000;
         const arm = () => { if (idle) clearTimeout(idle); idle = setTimeout(() => onStall(new Error("stall")), IDLE); };
         this.listener = (e) => { arm(); if (e.type === "token") text += e.text; };

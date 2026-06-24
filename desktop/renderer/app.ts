@@ -15,7 +15,13 @@ import type { PersonalGraphData } from "./bridge.ts";
 import { type Action, attachRichTip, createPalette, initTooltips, popover, showToast } from "./ui.ts";
 import { ASKSAGE_FAMILY_ORDER, familyOf, filterModels, groupByFamily, isAuxiliaryModel, isChinaModel, isDeprecatedModel, isGovModel, sortGovFirstNewest } from "./model_families.ts";
 import { INSTALLED_SKILLS, bumpSkillUsage, bundledSkillsByUsage, taskProforma } from "./skills.ts";
+import { CHECKER_TOKENS_PER_ITER, MAKER_TOKENS_PER_ITER, estimateGoalCost, estimateGoalTokens, formatTokens, formatUSD } from "../loop_estimate.ts";
+import { assumedCacheRate, priceFor } from "../model_pricing.ts";
 import { closeIde, openIde, setIdeExclusivity, setIdeHooks } from "./ide_panel.ts";
+// P-TPS.1 (ADR-0044): the shared output-token speedometer — same engine the omp
+// terminal adapter uses. Drives the HUD's live "tok out · tok/s" readout from the
+// streaming text/thinking deltas (output only; never the system prompt).
+import { TokenSpeedEngine } from "../../harness/metrics/token_speed.ts";
 
 type Tab = "security" | "memory" | "dev";
 const state = {
@@ -137,6 +143,7 @@ function buildShell(): void {
 
       <main class="center">
         <div class="chat" id="chat"><div class="thread" id="thread"></div></div>
+        <button class="jump-down" id="jumpDown" type="button" aria-label="Jump down a page" data-tip="Jump down a page">${icon("chevronsDown", 18)}</button>
         <div class="composer-wrap">
           <div class="composer-row">
             <div class="composer">
@@ -147,7 +154,7 @@ function buildShell(): void {
           <div class="composer-tools" id="composerTools">
             <button class="ctool" id="ctModel" data-tip="Model|Click to change the model">${icon("spark", 14)}<span id="ctModelName">${esc(modelLabel(state.model))}</span>${icon("chevron", 11)}</button>
             <button class="ctool" id="ctMode" data-tip="Mode|Agent edits files · Plan drafts read-only">${icon("bolt", 14)}<span id="ctModeName">Agent</span>${icon("chevron", 11)}</button>
-            <button class="ctool" id="ctThink" data-tip="Thinking depth|How hard the model reasons">${icon("brain", 14)}<span id="ctThinkName">High</span>${icon("chevron", 11)}</button>
+            <button class="ctool" id="ctThink" data-tip="Thinking depth|How hard the model reasons">${icon("bulb", 14)}<span id="ctThinkName">High</span>${icon("chevron", 11)}</button>
             <button class="ctool" id="ctPersona" data-tip="AskSage persona|Server-supplied role guidance - scanned before use" hidden>${icon("user", 14)}<span id="ctPersonaName">Persona</span>${icon("chevron", 11)}</button>
             <button class="ctool" id="ctSkill" data-tip="Skills|Built-in skills, /task delegation, and project skills" hidden>${icon("bolt", 14)}<span>Skills</span>${icon("chevron", 11)}</button>
             <span class="ctool-hint"><span class="kh"><kbd>↵</kbd> send</span><span class="kh"><kbd>⇧↵</kbd> newline</span><span class="kh"><kbd>⌘K</kbd> commands</span></span>
@@ -239,7 +246,7 @@ function seedThread(): void {
   $("#thread")!.innerHTML = `<div class="chat-hint" id="chatHint">
     <div class="bs">${piMark}</div>
     <div class="h">Ask the agent anything</div>
-    <div class="d">Real omp replies - every tool call is scanned by the security gate before it runs.</div></div>`;
+    <div class="d">Secure prompting and code generation</div></div>`;
 }
 function addMessage(role: "user" | "assistant", text: string): HTMLElement {
   $("#chatHint")?.remove();
@@ -318,7 +325,11 @@ function addEvent(html: string): HTMLElement {
 // browser never thrashes layout mid-stream. We only follow output while the user is parked
 // near the bottom (STICK_PX); the moment they scroll UP to re-read, autoscroll releases and
 // stays released until they come back down - so re-reading mid-stream is never yanked.
-const STICK_PX = 150;
+// Tight stick window: we only auto-FOLLOW while the user is essentially parked at the bottom.
+// Slow output advances < STICK_PX per frame, so it keeps pace; a fast burst grows the page by more
+// than STICK_PX between frames, which releases the follow — and the jump-down button (below) lets the
+// reader catch up a page at a time instead of being yanked. That's the behaviour the user asked for.
+const STICK_PX = 72;
 let scrollPending = false; // a follow-frame is already queued
 let lastWroteTop = -1;     // the scrollTop value WE last wrote - lets us spot a user scroll-up
 const nearBottom = (c: HTMLElement): boolean => c.scrollHeight - c.scrollTop - c.clientHeight < STICK_PX;
@@ -326,25 +337,92 @@ const scrollChat = (): void => {
   const c = $("#chat");
   if (!c) return;
   // A user scroll-up since our last programmatic write releases the stick until they return.
-  if (lastWroteTop >= 0 && c.scrollTop < lastWroteTop - 2 && !nearBottom(c)) return;
-  if (scrollPending || !nearBottom(c)) return;
+  if (lastWroteTop >= 0 && c.scrollTop < lastWroteTop - 2 && !nearBottom(c)) { updateJump(); return; }
+  if (scrollPending || !nearBottom(c)) { updateJump(); return; }
   scrollPending = true;
   requestAnimationFrame(() => {
     scrollPending = false;
     const cc = $("#chat");
     if (cc && nearBottom(cc)) { cc.scrollTop = cc.scrollHeight; lastWroteTop = cc.scrollTop; }
+    updateJump();
   });
 };
 
-// P10.1 (ADR-0011): a friendly, honest "what's happening" phase label - an opening guess
-// from the user's ask, then driven by REAL tool events on the chat stream.
-function guessPhase(text: string): string {
-  const t = text.toLowerCase();
-  if (/\b(test|jest|vitest|pytest)\b/.test(t)) return "Planning…";
-  if (/\b(search|find|where|locate|grep|look)\b/.test(t)) return "Searching…";
-  if (/\b(fix|edit|refactor|change|add|implement|write|create|build)\b/.test(t)) return "Working on it…";
-  return "Thinking…";
+// ── Jump-to-latest (catch up on fast output) ──
+// A double-down-arrow in the LucidAgent accent appears, tucked just inside the scrollbar, whenever
+// there's a screen-plus of content below the fold. Clicking advances ONE viewport but overlaps the
+// last visible line, so a reader resumes exactly where they left off rather than losing their place.
+const JUMP_SHOW_PX = 140; // content below the fold before the catch-up button shows
+let jumpRaf = false;
+function lineHeightPx(): number {
+  const t = $("#thread")?.querySelector(".msg .text") as Element | null;
+  const lh = t ? parseFloat(getComputedStyle(t).lineHeight) : NaN;
+  return Number.isFinite(lh) && lh > 0 ? lh : 28;
 }
+function updateJump(): void {
+  const c = $("#chat"), b = $("#jumpDown");
+  if (!c || !b) return;
+  const show = c.scrollHeight - c.scrollTop - c.clientHeight > JUMP_SHOW_PX;
+  if (show) {
+    const cw = $(".composer-wrap");
+    b.style.bottom = `${(cw ? cw.getBoundingClientRect().height : 64) + 14}px`;
+  }
+  b.classList.toggle("show", show);
+}
+const scheduleJump = (): void => { if (jumpRaf) return; jumpRaf = true; requestAnimationFrame(() => { jumpRaf = false; updateJump(); }); };
+function jumpDownOnePage(): void {
+  const c = $("#chat");
+  if (!c) return;
+  const step = Math.max(c.clientHeight - lineHeightPx() - 8, 80); // one viewport, minus a line of overlap
+  c.scrollTo({ top: Math.min(c.scrollTop + step, c.scrollHeight), behavior: "smooth" });
+}
+
+// P10.1 (ADR-0011) + UI polish: a friendly, honest "what's happening" label. We classify the user's
+// ask into a coarse INTENT, then pick a fitting line for each phase (warming → thinking → writing),
+// randomized WITHIN the intent so repeat asks don't read identically. Real tool events still override
+// these with the concrete action (phaseForTool) the moment they arrive.
+type Intent = "code" | "debug" | "search" | "test" | "explain" | "general";
+function classifyIntent(text: string): Intent {
+  const t = text.toLowerCase();
+  if (/\b(fix|bug|error|broken|crash|fail(s|ed|ing)?|debug|stack ?trace)\b|isn'?t working|doesn'?t work/.test(t)) return "debug";
+  if (/\b(test|tests|jest|vitest|pytest|spec|coverage)\b/.test(t)) return "test";
+  if (/\b(find|search|where|locate|grep)\b|look for|which file/.test(t)) return "search";
+  if (/\b(build|create|make|write|implement|add|code|app|game|function|component|refactor|generate|script|feature)\b/.test(t)) return "code";
+  if (/\b(explain|how|what|why|describe|summar\w*|compare|overview|understand)\b|tell me/.test(t)) return "explain";
+  return "general";
+}
+// Phase lines by intent. `warm` = before anything streams; `think` = during reasoning; `write` = while
+// the answer streams. Keep them upbeat but honest — they describe the kind of work, not fake specifics.
+const PHASE_LINES: Record<"warm" | "think" | "write", Record<Intent, string[]>> = {
+  warm: {
+    code: ["Cooking up something great…", "Spinning up the build…", "Sketching the approach…", "Rolling up my sleeves…"],
+    debug: ["Sizing up the problem…", "Putting on my detective hat…", "Reading the symptoms…"],
+    search: ["Casing the codebase…", "Getting my bearings…", "Lining up the search…"],
+    test: ["Prepping the test bench…", "Lining up the checks…", "Warming up the harness…"],
+    explain: ["Gathering my thoughts…", "Pulling the threads together…", "Framing the answer…"],
+    general: ["Warming up…", "Getting oriented…", "On it…", "Spinning up…"],
+  },
+  think: {
+    code: ["Thinking through the design…", "Weighing the approach…", "Planning the build…"],
+    debug: ["Tracing the root cause…", "Reasoning about the failure…", "Following the clues…"],
+    search: ["Working out where to look…", "Mapping it out…", "Narrowing it down…"],
+    test: ["Reasoning about edge cases…", "Planning the checks…"],
+    explain: ["Organizing the explanation…", "Connecting the ideas…", "Thinking it through…"],
+    general: ["Thinking it through…", "Reasoning it out…", "Mulling it over…", "Working it out…"],
+  },
+  write: {
+    code: ["Cooking up something great…", "Writing the code…", "Building it out…", "Wiring it together…"],
+    debug: ["Walking through the fix…", "Writing up the fix…", "Laying out the solution…"],
+    search: ["Writing up what I found…", "Pulling the findings together…"],
+    test: ["Writing the tests…", "Laying out the checks…"],
+    explain: ["Writing it up…", "Putting it into words…", "Composing the answer…"],
+    general: ["Putting it together…", "Writing it up…", "Drafting the reply…"],
+  },
+};
+const pickLine = (kind: "warm" | "think" | "write", intent: Intent): string => {
+  const pool = PHASE_LINES[kind][intent];
+  return pool[Math.floor(Math.random() * pool.length)]!;
+};
 function phaseForTool(name: string, detail: string): string {
   const n = name.toLowerCase(), d = (detail || "").toLowerCase();
   if (/read|grep|glob|search|find|^ls|list/.test(n)) return "Searching the codebase…";
@@ -440,7 +518,7 @@ interface ReasoningWin {
 function createReasoning(): ReasoningWin {
   const win = el(`<div class="reasoning open" data-streaming="1">
     <button class="reasoning-head" type="button" aria-expanded="true">
-      <span class="reasoning-spin">${icon("brain", 13)}</span>
+      <span class="reasoning-spin">${icon("bulb", 13)}</span>
       <span class="reasoning-cur">Thinking…</span>
       <span class="reasoning-chev">${icon("chevron", 14)}</span>
     </button>
@@ -568,7 +646,7 @@ async function send(): Promise<void> {
   const textEl = $(".text", node) as HTMLElement;
   textEl.innerHTML = "";
   // P10.1 response activity HUD: live MM:SS timer + semantic phase + running token-cost.
-  const hud = el(`<div class="hud streaming"><span class="hud-ic">${icon("bolt", 12)}</span><span class="hud-t">00:00</span><span class="hud-sep">·</span><span class="hud-phase"></span><span class="hud-meta"></span></div>`);
+  const hud = el(`<div class="hud streaming"><span class="hud-ic">${icon("bolt", 12)}</span><span class="hud-t">00:00</span><span class="hud-sep">·</span><span class="hud-phase"></span><span class="hud-tps"></span><span class="hud-meta"></span></div>`);
   const streamEl = el(`<div class="stream"></div>`);
   textEl.append(streamEl, hud); // status sits BELOW the line that's filling in
   streamEl.innerHTML = `<span class="cursor"></span>`;
@@ -580,10 +658,24 @@ async function send(): Promise<void> {
   const subCards: { el: HTMLElement; finish: () => void }[] = []; // P-TASK.1 subagent delegation cards
   let buf = "";
   const t0 = Date.now();
-  // Cold start: the timer is already ticking but nothing has arrived - show "Warming up…"
-  // so the user always sees something meaningful before the first token/tool.
-  let phase = "Warming up…", sawTool = false, tok = 0, cost = 0;
+  // Cold start: the timer is already ticking but nothing has arrived - show an intent-aware
+  // "warming" line so the user always sees something meaningful before the first token/tool.
+  // The think/write lines are picked ONCE per turn (stable, not reshuffling on every token).
+  const intent = classifyIntent(text);
+  const thinkLine = pickLine("think", intent);
+  const writeLine = pickLine("write", intent);
+  let phase = pickLine("warm", intent), sawTool = false, tok = 0, cost = 0;
+  // P-TPS.1 (ADR-0044): output-token speedometer for THIS turn. startTTFT now (at
+  // submit), start() so deltas count; the first content delta calls stopTTFT() to
+  // freeze TTFT and align the rate clock to first-token. Estimate strategy — ACP
+  // deltas are text chunks, and the desktop has no per-delta provider usage
+  // (usage_update is CONTEXT fill, not per-turn output), so we approximate locally.
+  const tps = new TokenSpeedEngine({ countStrategy: "estimate" });
+  tps.startTTFT(); tps.start();
+  let firstDelta = true;
+  const countDelta = (s: string) => { if (firstDelta) { tps.stopTTFT(); firstDelta = false; } tps.recordDelta(s); };
   const phaseEl = $(".hud-phase", hud) as HTMLElement;
+  const tpsEl = $(".hud-tps", hud) as HTMLElement;
   const setPhase = (p: string) => {
     if (p === phase) return;
     phase = p;
@@ -594,7 +686,17 @@ async function send(): Promise<void> {
   const paintHud = () => {
     ($(".hud-t", hud) as HTMLElement).textContent = fmtClock(Date.now() - t0);
     if (phaseEl.textContent !== phase) phaseEl.textContent = phase;
-    ($(".hud-meta", hud) as HTMLElement).textContent = tok ? `· ${fmtNum(tok)} tok · ~$${cost.toFixed(4)}` : "";
+    // The streaming OUTPUT count — what the model is generating right now, with no
+    // system prompt / cached prefix in it (the user's "minus the whole prompt" ask).
+    const out = tps.tokenCount;
+    // averageTps (not the windowed tps): ACP delivers reasoning/text in big lumps,
+    // so the running average reads steady where a windowed rate would strobe.
+    if (out > 0) { const r = tps.averageTps; tpsEl.textContent = `· ${fmtNum(out)} tokens out${r > 0 ? ` · ${r.toFixed(1)} tokens/s` : ""}`; }
+    else tpsEl.textContent = "";
+    // The CONTEXT figure (window fill + turn cost) genuinely includes the prompt —
+    // labelled "context" so it's never mistaken for the per-turn output above. Cost
+    // is shown to the cent ($0.00) — the sub-cent precision read as noise.
+    ($(".hud-meta", hud) as HTMLElement).textContent = tok ? `· ${fmtNum(tok)} context · ~$${cost.toFixed(2)}` : "";
   };
   phaseEl.textContent = phase;
   paintHud();
@@ -604,6 +706,7 @@ async function send(): Promise<void> {
     if (finished) return;
     finished = true;
     clearInterval(timer);
+    if (tps.isStreaming) tps.stop(); // freeze the readout at the final avg tok/s
     const ic = $(".hud-ic", hud); if (ic) ic.innerHTML = icon("check", 12);
     hud.classList.remove("streaming"); hud.classList.add("done");
     setPhase("Done"); paintHud();
@@ -613,11 +716,12 @@ async function send(): Promise<void> {
     permCards.forEach((c) => c.finalize()); // any unanswered prompt = denied (matches server fail-close)
   };
   const onEvent = (e: ChatEvent) => {
-    if (e.type === "token") { reasoning?.finish(Date.now() - t0); buf += e.text; if (!sawTool) setPhase("Responding…"); streamEl.innerHTML = renderMarkdown(buf) + `<span class="cursor"></span>`; paintHud(); scrollChat(); }
+    if (e.type === "token") { reasoning?.finish(Date.now() - t0); buf += e.text; countDelta(e.text); if (!sawTool) setPhase(writeLine); streamEl.innerHTML = renderMarkdown(buf) + `<span class="cursor"></span>`; paintHud(); scrollChat(); }
     else if (e.type === "thinking") {
       // First reasoning chunk: spin up the live thinking block above the answer.
       if (!reasoning) { reasoning = createReasoning(); streamEl.before(reasoning.el); }
-      if (!sawTool) setPhase("Thinking…");
+      if (!sawTool) setPhase(thinkLine);
+      countDelta(e.text); // thinking tokens ARE output — count them in the readout
       reasoning.push(e.text); paintHud(); scrollChat();
     }
     else if (e.type === "tool") {
@@ -727,7 +831,9 @@ function renderQueued(): void {
  *  `done`/finally path flips `streaming` off and fires any pre-staged prompt. */
 async function stopTurn(): Promise<void> {
   if (!state.streaming) return;
-  try { await bridge.cancelChat(); } catch { /* best-effort; the turn will still settle */ }
+  // P-GOAL.2: a running /goal loop is cancelled at the LOOP level (halt iterations + abort the turn);
+  // an ordinary turn just cancels the turn.
+  try { await (goalLoopRunning ? bridge.cancelGoal() : bridge.cancelChat()); } catch { /* best-effort; it still settles */ }
 }
 
 // ───────────────────────── inspector ─────────────────────────
@@ -854,16 +960,18 @@ function provCard(p: ProviderAuth): string {
 // account's usage; `remaining` is what's left accounting for BOTH your and your org's caps; the
 // real allowance is used + remaining. Refreshed on open + the 5-min cadence (no boxes to set).
 function quotaDisplay(t: typeof state.asksageTokens): string {
-  if (!t) return `<div class="aq"><div class="aq-head"><span>Monthly tokens</span></div>
+  if (!t) return `<div class="aq"><div class="aq-head"><span>AskSage Monthly Token Usage</span></div>
     <div class="aq-pct">${icon("refresh", 11, "spin")} reading usage from the gov gateway…</div></div>`;
   const { used, limit, remaining } = t;
   const pct = limit > 0 ? Math.min(100, (used / limit) * 100) : 0;
+  // Usage ramp: green ≤50%, yellow 51–90%, red 91–100%. --gc tints the bar's hover glow to match.
+  const barColor = pct > 90 ? "var(--red)" : pct > 50 ? "var(--amber)" : "var(--green)";
   return `<div class="aq">
-    <div class="aq-head"><span>Monthly tokens</span>
-      <button class="info-dot aq-info" data-tip="Monthly tokens|Live from the AskSage Civ API. Used = this account's usage this month; the allowance is used + tokens remaining (the remaining figure already accounts for both your limit and your organization's pool). Replenishes on the 1st." data-tip-side="top">${icon("info", 12)}</button>
+    <div class="aq-head"><span>AskSage Monthly Token Usage</span>
+      <button class="info-dot aq-info" data-tip="AskSage monthly token usage|Live from the AskSage Civ API. Used = this account's usage this month; the allowance is used + tokens remaining (the remaining figure already accounts for both your limit and your organization's pool). Replenishes on the 1st." data-tip-side="top">${icon("info", 12)}</button>
       <b class="aq-val">${fmtNum(used)} / ${fmtNum(limit)}</b></div>
-    <div class="aq-bar"><i style="width:${pct.toFixed(1)}%;background:${loadColor(pct / 100)}"></i></div>
-    <div class="aq-pct">${Math.round(pct)}% used${remaining != null ? ` · <b>${fmtNum(remaining)}</b> left (you + org)` : ""}</div>
+    <div class="aq-bar"><i style="width:${pct.toFixed(1)}%;background:${barColor};--gc:${barColor}"></i></div>
+    <div class="aq-pct">${Math.round(pct)}% used${remaining != null ? ` · <b>${fmtNum(remaining)}</b> left` : ""}</div>
   </div>`;
 }
 
@@ -1003,12 +1111,18 @@ function secSovereignty(): string {
 function secAsksage(a: typeof state.asksage, datasets: string[] | null): string {
   const body = `<div class="prov-row"><input id="asksageBase" class="prov-key" placeholder="https://api.civ.asksage.ai/server" value="${esc(a?.base ?? "")}" />
       <button class="btn-mini ok" id="asksageSaveBase">${icon("check", 12)} Save URL</button></div>
-    ${a?.configured ? quotaDisplay(state.asksageTokens) : ""}
     <label class="set-toggle"><input type="checkbox" id="asksageOnly" ${a?.only ? "checked" : ""}/>
       <span><b>AskSage-only (lockdown)</b> - route every turn through the gov gateway and hide direct providers in the model picker.</span></label>
     ${a?.only ? datasetsSection(datasets) : ""}
     ${a?.configured ? `<div class="set-note ok">${icon("check", 12)} Gov gateway active - AskSage models appear in the picker, with monthly-usage and scanned personas.</div>` : `<div class="set-note">${icon("info", 12)} Add an <code>ASKSAGE_API_KEY</code> in Providers to enable gov models, usage, and personas.</div>`}`;
   return setCard("asksage", "AskSage gov gateway", "accredited proxy", body, true);
+}
+// The AskSage Monthly-tokens bar, rendered into the `asksageQuota` slot ABOVE Providers — but only
+// once the gov gateway is configured (an ASKSAGE_API_KEY is saved); otherwise an empty placeholder so
+// the slot keeps its position for a later config. Wrapped in its own data-sec so fillSec() can re-swap
+// it (spinner → real numbers) without disturbing the Providers section below it.
+function secAsksageQuota(a: typeof state.asksage): string {
+  return `<div data-sec="asksageQuota">${a?.configured ? quotaDisplay(state.asksageTokens) : ""}</div>`;
 }
 function secCompression(hr: import("./bridge.ts").HeadroomStatus | null): string {
   const body = hr?.installed
@@ -1057,6 +1171,7 @@ function settingsShell(): string {
     // no fetch wait; the first /api/settings call pays a ~0.6s cold cost that made this lag).
     secProfile({ username: state.username, email: state.email, attribution: state.attribution ?? undefined }),
     setSkel("personal", "Personalization", "private · encrypted · opt-in", true),
+    `<div data-sec="asksageQuota"></div>`, // AskSage Monthly-tokens bar — sits directly above Providers, ONLY when the gov gateway is configured (filled in hydrateSettings)
     setSkel("providers", "Providers", "key or OAuth · majors first"),
     setSkel("asksage", "AskSage gov gateway", "accredited proxy", true),
     `<div data-sec="sovereignty"></div>`, // P-IDE.1c: China-origin unlock (renders only when such models exist)
@@ -1091,9 +1206,11 @@ function hydrateSettings(): void {
   void bridge.asksage().then(async (a) => {
     if (a) state.asksage = a;
     fillSec("asksage", secAsksage(a, null)); // paint immediately (token readout shows a spinner)
+    fillSec("asksageQuota", secAsksageQuota(a)); // Monthly-tokens bar above Providers (spinner or empty)
     if (a?.configured) {
       state.asksageTokens = await bridge.asksageTokens(); // live used + remaining from the Civ API
       fillSec("asksage", secAsksage(a, null));            // re-render so the real numbers populate
+      fillSec("asksageQuota", secAsksageQuota(a));        // swap the spinner for the real numbers
       if (a.only) { // only lockdown needs datasets/personas - fetch them after
         const datasets = await bridge.asksageDatasets();
         if (!state.personas.length) state.personas = (await bridge.asksagePersonas()) ?? [];
@@ -1785,7 +1902,7 @@ function renderStatus(): void {
     <div class="seg" data-tip="Session cost">${fmtUSD(cost)}</div>
     <div class="right">
       <div class="seg" data-tip="Security gate|In-process, fail-closed">${icon("shield", 13)} gate active</div>
-      <div class="seg"><span class="live-dot"></span> ${ago == null ? "connecting…" : ago < 2 ? "live" : `updated ${ago}s ago`}</div>
+      <div class="seg seg-live"><span class="live-dot"></span> ${ago == null ? "connecting…" : ago < 2 ? "live" : `updated ${ago}s ago`}</div>
     </div>`;
 }
 
@@ -2037,30 +2154,586 @@ function insertTaskProforma(): void {
   autosize(ta); setSendEnabled(); ta.focus();
   void bridge.skillActivated("task", "/task", "task"); // P-IDE.3 telemetry (metadata only)
 }
+/** Project-skill rows for the picker (extracted so the list can re-render in place after an import). */
+function projSkillRows(): string {
+  return state.skills.map((s) =>
+    `<div class="cfg-opt" data-skill="${esc(s.name)}" data-tip="${esc(s.description || s.name)}|${esc(s.source)}" data-tip-side="left"><span class="tick">${icon("bolt", 13)}</span><span class="nm">${esc(s.name)}</span><span class="id">${esc((s.description || "").slice(0, 42))}</span></div>`).join("")
+    || `<div class="empty">No project skills yet. Drop <code>.md</code> skills below.</div>`;
+}
+/** P-SKILL.1 (ADR-0045): import dropped/picked .md skill files. Each is scanned at the gate server-side;
+ *  clean ones land under .omp/skills/, flagged ones are held for Security-panel review. Refreshes the
+ *  project list in place and toasts a summary. */
+async function handleSkillFiles(fileList: FileList | File[], node: HTMLElement): Promise<void> {
+  const mds = [...fileList].filter((f) => /\.md$/i.test(f.name) || f.type === "text/markdown");
+  if (!mds.length) { showToast({ tone: "warn", title: "No .md files", desc: "Drop markdown skill files (.md).", timeout: 2400 }); return; }
+  let files: { name: string; content: string }[];
+  try { files = await Promise.all(mds.slice(0, 20).map(async (f) => ({ name: f.name, content: await f.text() }))); }
+  catch { showToast({ tone: "warn", title: "Couldn't read those files", desc: "Try dropping the .md skill files again.", timeout: 2400 }); return; }
+  const res = await bridge.skillImport(files);
+  const results = res?.results ?? [];
+  const written = results.filter((r) => r.written);
+  const blocked = results.filter((r) => r.blocked);
+  if (written.length) {
+    await loadSkills(); // refresh state.skills, then re-render the project list inside the open popover
+    const list = node.querySelector("#projSkillList"); if (list) list.innerHTML = projSkillRows();
+  }
+  const parts: string[] = [];
+  if (written.length) parts.push(`${written.length} imported`);
+  if (blocked.length) parts.push(`${blocked.length} blocked`);
+  showToast({
+    tone: blocked.length ? "warn" : "ok",
+    title: parts.join(" · ") || "Nothing imported",
+    desc: [written.length ? `Added: ${written.map((r) => r.name).join(", ")}.` : "",
+      blocked.length ? `${blocked.length} flagged by the security gate — review in the Security panel.` : ""].filter(Boolean).join(" "),
+    actions: [{ label: "OK" }], timeout: 4200,
+  });
+}
+// ── /goal loop (P-GOAL.1, ADR-0046) ───────────────────────────────────────────
+let goalLoopRunning = false; // P-GOAL.2: true while a /goal loop streams, so Stop cancels the LOOP
+// P-GOAL.7: the usage ledger for the open goal modal (real per-model price + cache rate), fetched lazily.
+let goalLedger: Awaited<ReturnType<typeof bridge.usage>> | null = null;
+// A launcher form (goal · optional verify command · max iterations), then a loop that streams maker
+// iterations with a separate checker's verdict each round. Every action is still gated server-side.
+
+// P-GOAL.8: common verification commands offered as type-ahead suggestions (the user can still type
+// anything). Ordered by rough ecosystem prevalence.
+const COMMON_VERIFY_COMMANDS = [
+  "npm test", "npm test && npm run lint", "npm run build", "npm run lint", "pnpm test", "yarn test",
+  "bun test", "pytest", "pytest -q", "python -m pytest", "go test ./...", "cargo test", "cargo check",
+  "make test", "make", "bun run typecheck", "tsc --noEmit", "dotnet test", "mvn test", "gradle test",
+];
+// P-GOAL.8: a premium info dot (uses the global data-tip tooltip). `tip` is "Title|Body".
+function goalInfoDot(tip: string): string {
+  return `<button type="button" class="info-dot goal-info" tabindex="-1" data-tip="${esc(tip)}" data-tip-icon="info" data-tip-side="right">${icon("info", 11)}</button>`;
+}
+// P-GOAL.8: under AskSage lockdown the base-model picker lists Gemini, then GPT, then Anthropic.
+const GUIDED_GOV_FAMILY_ORDER = ["gemini", "gpt-o", "gpt", "claude", "rag", "other"];
+// P-GOAL.8.1: skills NOT offered for a goal loop — meta/planning/self-referential ones that don't help
+// drive code toward a verifiable condition (the loop itself, the loop-engineering doc, read-only Plan/
+// Explain, the handoff doc). Everything else (TDD, Code Review, Refactor, Debug, …) is build-oriented.
+const GOAL_SKILL_DENY = new Set(["goal", "loop-engineering", "plan", "explain", "session-handoff"]);
+
+// P-GOAL.8.1: a custom, anchored type-ahead for the verification command (the native <datalist> popup
+// mispositioned to the top-left). Shows filtered common commands directly under the input; the user can
+// still type anything. Arrow keys + Enter to pick, Escape/blur to dismiss.
+function wireCmdSuggest(ov: HTMLElement): void {
+  const input = $("#goalCmd", ov) as HTMLInputElement | null;
+  const menu = $("#goalCmdMenu", ov) as HTMLElement | null;
+  if (!input || !menu) return;
+  let active = -1;
+  const items = () => [...menu.querySelectorAll<HTMLElement>(".goal-cmd-item")];
+  const hide = () => { menu.hidden = true; input.setAttribute("aria-expanded", "false"); active = -1; };
+  const fill = (q: string) => {
+    const ql = q.trim().toLowerCase();
+    const matches = COMMON_VERIFY_COMMANDS.filter((c) => !ql || c.toLowerCase().includes(ql));
+    if (!matches.length) { hide(); return; }
+    menu.innerHTML = matches.map((c) => `<div class="goal-cmd-item" role="option">${esc(c)}</div>`).join("");
+    items().forEach((it) => it.addEventListener("mousedown", (e) => { e.preventDefault(); input.value = it.textContent || ""; hide(); input.focus(); }));
+    active = -1; menu.hidden = false; input.setAttribute("aria-expanded", "true");
+  };
+  input.addEventListener("focus", () => fill(input.value));
+  input.addEventListener("input", () => fill(input.value));
+  input.addEventListener("blur", () => setTimeout(hide, 130));
+  input.addEventListener("keydown", (e) => {
+    if (menu.hidden) return;
+    const list = items();
+    if (e.key === "ArrowDown") { e.preventDefault(); active = Math.min(active + 1, list.length - 1); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); active = Math.max(active - 1, 0); }
+    else if (e.key === "Enter" && active >= 0) { e.preventDefault(); input.value = list[active]?.textContent ?? input.value; hide(); return; }
+    else if (e.key === "Escape") { e.stopPropagation(); hide(); return; }
+    else return;
+    list.forEach((it, i) => it.classList.toggle("active", i === active));
+    list[active]?.scrollIntoView({ block: "nearest" });
+  });
+}
+
+function openGoalForm(): void {
+  const ov = el(`<div class="scrim goal-scrim"><div class="goal-modal" data-mode="guided">
+    <div class="goal-modal-h">
+      <span class="goal-h-title">${icon("bolt", 15)} Run a goal loop</span>
+      <button type="button" class="goal-mode-toggle" id="goalModeToggle" data-tip="Advanced mode|Show every option on one screen, for power users. You can switch back to the guided walkthrough anytime." data-tip-side="bottom"></button>
+    </div>
+    <div class="goal-modal-sub">The agent iterates until a verifiable condition holds. A separate checker grades each round; the security gate scans every action.</div>
+    <div id="goalResumeSec"></div>
+    <div id="goalAutoSec"></div>
+    <div class="goal-steps">
+      <section class="goal-step" data-step="1">
+        <div class="goal-step-head"><span class="goal-step-n"></span><h4>What should the agent accomplish?</h4></div>
+        <div class="goal-note">Describe the end state in plain language. The clearer the target, the fewer rounds it takes. ${goalInfoDot("The goal|This is the objective the agent works toward each round. Be concrete about the finished result, e.g. 'all auth tests pass and the lint is clean.'")}</div>
+        <label class="goal-lbl">Goal</label>
+        <textarea id="goalGoal" class="prov-key" rows="3" placeholder="e.g. Make all auth tests pass and fix any lint errors"></textarea>
+      </section>
+      <section class="goal-step" data-step="2">
+        <div class="goal-step-head"><span class="goal-step-n"></span><h4>How do we know it is done?</h4></div>
+        <div class="goal-note">A shell command that exits 0 when the goal is met. This is the strongest signal of done; without one the checker judges the agent's own report. ${goalInfoDot("Verification command|Run after each round by a separate checker. Exit code 0 means done. Pick a suggestion or type your own, e.g. 'npm test && npm run lint'.")}</div>
+        <label class="goal-lbl">Verification command <span class="goal-opt">optional, proves "done" by exit 0</span></label>
+        <div class="goal-cmd-wrap">
+          <input id="goalCmd" class="prov-key" placeholder="e.g. npm test && npm run lint" spellcheck="false" autocomplete="off" role="combobox" aria-expanded="false" />
+          <div class="goal-cmd-menu" id="goalCmdMenu" hidden></div>
+        </div>
+      </section>
+      <section class="goal-step" data-step="3">
+        <div class="goal-step-head"><span class="goal-step-n"></span><h4>Run with</h4></div>
+        <div class="goal-note">Optional: pick the base model the agent uses, its thinking level, and a skill or persona to steer it. Defaults match your current session. ${goalInfoDot("Run with|These apply when you press Run. Base model + thinking set the maker; a Skill adds trusted guidance; a Persona adds scanned role guidance. Leave as-is to use your current setup.")}</div>
+        <div class="goal-row goal-runwith">
+          <div class="goal-rw-grid">
+            <label class="goal-rw-f"><span>Base model</span><select id="goalModel" class="prov-key"></select></label>
+            <label class="goal-rw-f" id="goalThinkWrap" hidden><span>Thinking</span><select id="goalThink" class="prov-key"></select></label>
+            <label class="goal-rw-f"><span>Skill</span><select id="goalSkill" class="prov-key"></select></label>
+            <label class="goal-rw-f" id="goalPersonaWrap" hidden><span>Persona</span><select id="goalPersona" class="prov-key"></select></label>
+          </div>
+        </div>
+      </section>
+      <section class="goal-step" data-step="4">
+        <div class="goal-step-head"><span class="goal-step-n"></span><h4>Effort and grading</h4></div>
+        <div class="goal-note">Cap how many rounds it may take, and pick who grades each round. A cheaper checker keeps cost low. ${goalInfoDot("Iterations and checker|Max iterations is a hard ceiling - the loop stops as soon as the condition holds. The checker is a separate model that grades each round; a small fast model is usually plenty.")}</div>
+        <div class="goal-row"><label class="goal-lbl">Max iterations</label><input id="goalMax" class="prov-key goal-max" type="number" min="1" max="20" value="6" /></div>
+        <div class="goal-row goal-checker">
+          <label class="goal-lbl">${icon("spark", 12)} Checker model <span class="goal-opt">grades each round; a cheaper model is fine</span></label>
+          <select id="goalChecker" class="prov-key goal-ckr"><option>loading…</option></select>
+        </div>
+        <div class="goal-ckr-why" id="goalCkrWhy"></div>
+      </section>
+      <section class="goal-step" data-step="5">
+        <div class="goal-step-head"><span class="goal-step-n"></span><h4>Run now or on a schedule?</h4></div>
+        <div class="goal-note">Run once now, or save it as an automation that runs on a cadence while the app is open. ${goalInfoDot("Schedule|'Run once now' starts immediately. A cadence saves a (disabled) automation you arm later; it runs the same loop on a timer, only while the app is open.")}</div>
+        <div class="goal-row goal-sched">
+          <label class="goal-lbl">${icon("clock", 12)} Schedule <span class="goal-opt">save as an automation</span></label>
+          <select id="goalCadKind" class="prov-key goal-cadk">
+            <option value="off">Run once now</option>
+            <option value="interval">Every…</option>
+            <option value="daily">Daily at…</option>
+          </select>
+          <span id="goalCadInterval" hidden><input id="goalCadEvery" class="prov-key goal-cadn" type="number" min="1" value="60" /><select id="goalCadUnit" class="prov-key goal-cadu"><option value="min">minutes</option><option value="hour">hours</option></select></span>
+          <input id="goalCadTime" class="prov-key goal-cadt" type="time" value="09:00" hidden />
+        </div>
+      </section>
+    </div>
+    <div class="goal-modal-actions">
+      <div class="goal-estimate" id="goalEstimate" tabindex="0"></div>
+      <div class="goal-actbtns">
+        <button class="btn-mini" id="goalBack" hidden>${icon("chevron", 12)} Back</button>
+        <button class="btn-mini" id="goalCancel">Cancel</button>
+        <button class="btn-mini" id="goalSave" hidden>${icon("clock", 12)} Save automation</button>
+        <button class="btn-mini ok" id="goalNext" hidden>Next ${icon("chevron", 12)}</button>
+        <button class="btn-mini ok" id="goalRun">${icon("bolt", 12)} Run loop</button>
+      </div>
+    </div>
+  </div></div>`);
+  document.body.appendChild(ov);
+  const close = () => ov.remove();
+  $("#goalCancel", ov)?.addEventListener("click", close);
+  ov.addEventListener("mousedown", (e) => { if (e.target === ov) close(); });
+
+  // ── P-GOAL.8: guided walkthrough (default) vs advanced (all-at-once) ──────────
+  const modal = $(".goal-modal", ov) as HTMLElement;
+  const steps = [...ov.querySelectorAll<HTMLElement>(".goal-step")];
+  const TOTAL = steps.length;
+  let mode: "guided" | "advanced" = (localStorage.getItem("lucid.goalMode") === "advanced" ? "advanced" : "guided");
+  let cur = 1;
+  const setHidden = (sel: string, hidden: boolean) => { const e = $(sel, ov) as HTMLElement | null; if (e) e.hidden = hidden; };
+  const cadenceSet = () => (($("#goalCadKind", ov) as HTMLSelectElement)?.value ?? "off") !== "off";
+  const render = () => {
+    modal.dataset.mode = mode;
+    ($("#goalModeToggle", ov) as HTMLElement).textContent = mode === "guided" ? "Advanced" : "Guided walkthrough";
+    if (mode === "advanced") {
+      steps.forEach((s) => (s.hidden = false));
+      setHidden("#goalBack", true); setHidden("#goalNext", true);
+      setHidden("#goalCancel", false); setHidden("#goalRun", false);
+      setHidden("#goalSave", !cadenceSet());
+    } else {
+      steps.forEach((s) => (s.hidden = Number(s.dataset.step) !== cur));
+      const last = cur === TOTAL;
+      const headN = $(`.goal-step[data-step="${cur}"] .goal-step-n`, ov); if (headN) headN.textContent = `Step ${cur} of ${TOTAL}`;
+      setHidden("#goalBack", cur === 1); setHidden("#goalNext", last);
+      setHidden("#goalCancel", false); setHidden("#goalRun", !last);
+      setHidden("#goalSave", !(last && cadenceSet()));
+      const focusable = $(`.goal-step[data-step="${cur}"] textarea, .goal-step[data-step="${cur}"] input, .goal-step[data-step="${cur}"] select`, ov) as HTMLElement | null;
+      setTimeout(() => focusable?.focus(), 30);
+    }
+  };
+  $("#goalModeToggle", ov)?.addEventListener("click", () => { mode = mode === "guided" ? "advanced" : "guided"; localStorage.setItem("lucid.goalMode", mode); if (mode === "guided") cur = 1; render(); });
+  $("#goalNext", ov)?.addEventListener("click", () => {
+    if (cur === 1 && !($("#goalGoal", ov) as HTMLTextAreaElement).value.trim()) { showToast({ tone: "warn", title: "Add a goal", desc: "Describe what the loop should accomplish.", timeout: 2400 }); return; }
+    if (cur < TOTAL) { cur++; render(); }
+  });
+  $("#goalBack", ov)?.addEventListener("click", () => { if (cur > 1) { cur--; render(); } });
+  // Cadence picker: reveal interval / daily inputs; render() owns the "Save automation" visibility.
+  const kindSel = $("#goalCadKind", ov) as HTMLSelectElement;
+  const syncCadence = () => {
+    const k = kindSel.value;
+    ($("#goalCadInterval", ov) as HTMLElement).hidden = k !== "interval";
+    ($("#goalCadTime", ov) as HTMLElement).hidden = k !== "daily";
+    render();
+  };
+  kindSel.addEventListener("change", syncCadence);
+  const readCadence = (): { kind: "interval"; everyMin: number } | { kind: "daily"; hhmm: string } | null => {
+    if (kindSel.value === "interval") {
+      const n = Math.max(1, Number(($("#goalCadEvery", ov) as HTMLInputElement).value) || 60);
+      const unit = ($("#goalCadUnit", ov) as HTMLSelectElement).value;
+      return { kind: "interval", everyMin: unit === "hour" ? n * 60 : n };
+    }
+    if (kindSel.value === "daily") return { kind: "daily", hhmm: ($("#goalCadTime", ov) as HTMLInputElement).value || "09:00" };
+    return null;
+  };
+  const readSpec = () => {
+    const goal = ($("#goalGoal", ov) as HTMLTextAreaElement).value.trim();
+    const command = ($("#goalCmd", ov) as HTMLInputElement).value.trim();
+    const maxIters = Math.min(20, Math.max(1, Number(($("#goalMax", ov) as HTMLInputElement).value) || 6));
+    return { goal, command, maxIters };
+  };
+  // P-GOAL.6.1: live token estimate (lower-left), recomputed as the iteration count changes.
+  ($("#goalMax", ov) as HTMLInputElement)?.addEventListener("input", () => updateGoalEstimate(ov));
+  updateGoalEstimate(ov); // initial; model names fill in once loadCheckerModel resolves
+  render(); // P-GOAL.8: apply guided/advanced mode + show the right step/buttons
+  wireCmdSuggest(ov); // P-GOAL.8.1: custom verify-command type-ahead
+  $("#goalRun", ov)?.addEventListener("click", async () => {
+    const { goal, command, maxIters } = readSpec();
+    if (!goal) { showToast({ tone: "warn", title: "Add a goal", desc: "Describe what the loop should accomplish.", timeout: 2400 }); return; }
+    await applyRunWith(ov); // P-GOAL.7: apply base model / thinking / skill / persona for this run
+    close();
+    void runGoalLoop({ goal, condition: command || goal, command: command || undefined, maxIters });
+  });
+  $("#goalSave", ov)?.addEventListener("click", async () => {
+    const { goal, command, maxIters } = readSpec();
+    if (!goal) { showToast({ tone: "warn", title: "Add a goal", desc: "An automation needs a goal to pursue.", timeout: 2400 }); return; }
+    const cadence = readCadence();
+    if (!cadence) return;
+    const a = await bridge.automationCreate({ goal, command: command || undefined, condition: command || goal, maxIters, cadence });
+    if (a) { showToast({ tone: "ok", title: "Automation saved", desc: "It's disabled until you enable it below.", timeout: 2600 }); void renderAutomations(ov, close); }
+    else showToast({ tone: "warn", title: "Could not save", desc: "Check the goal and schedule.", timeout: 2600 });
+  });
+  ($("#goalGoal", ov) as HTMLTextAreaElement)?.focus();
+  // P-GOAL.4: offer to resume any loop that stopped without meeting its condition.
+  void bridge.resumableLoops().then((loops) => {
+    if (!loops?.length) return;
+    const sec = $("#goalResumeSec", ov); if (!sec) return;
+    sec.innerHTML = `<div class="goal-lbl">Resume a stopped loop</div>` + loops.slice(0, 5).map((l) =>
+      `<button class="goal-resume" data-rel="${esc(l.rel)}" data-goal="${esc(l.goal)}" data-cond="${esc(l.condition)}" data-cmd="${esc(l.command ?? "")}">${icon("refresh", 12)} <span class="gr-goal">${esc(l.goal.slice(0, 64))}</span><span class="gr-iters">${l.iterations} iter</span></button>`).join("");
+    sec.querySelectorAll(".goal-resume").forEach((b) => b.addEventListener("click", () => {
+      const d = (b as HTMLElement).dataset; close();
+      void runGoalLoop({ goal: d.goal!, condition: d.cond || d.goal!, command: d.cmd || undefined, maxIters: 6, resume: d.rel });
+    }));
+  });
+  // P-GOAL.5: list saved automations (enable / run-now / delete).
+  void renderAutomations(ov, close);
+  // P-GOAL.6: populate the checker-model picker (auto recommendation + override).
+  void loadCheckerModel(ov);
+  // P-GOAL.7: the "Run with" pickers (base model / thinking / skill / persona) + the usage ledger that
+  // makes the cost estimate use the user's REAL per-model prices and cache rate.
+  loadRunWith(ov);
+  goalLedger = null;
+  void bridge.usage().then((l) => { goalLedger = l; updateGoalEstimate(ov); });
+}
+
+// P-GOAL.7 (ADR-0049): the goal modal's "Run with" pickers. They drive the SAME session controls as the
+// composer (base model + thinking via config; bundled skill via the active-skill path; AskSage persona),
+// defaulting to the current session state, so the loop runs with exactly what's shown. Thinking and
+// persona only appear when available.
+function loadRunWith(ov: HTMLElement): void {
+  // Base model — the maker. Options come from the session model config; changing it sets the session.
+  const modelOpt = state.config.find((c) => c.id === "model");
+  const modelSel = $("#goalModel", ov) as HTMLSelectElement | null;
+  if (modelSel && modelOpt) {
+    let opts = (modelOpt.options ?? []).filter((o) => !isAuxiliaryModel(o.value) && !/(^|[/-])rag$/i.test(o.value));
+    // P-GOAL.8: under AskSage lockdown the base model must be AskSage-routed too — restrict to those, and
+    // group by family in the order Gemini, GPT, Anthropic (GOV-suffixed first within each).
+    const locked = !!state.asksage?.only;
+    if (locked) {
+      const gov = opts.filter((o) => isGovModel(o.value));
+      if (gov.length) opts = gov;
+    }
+    if (locked) {
+      modelSel.innerHTML = groupByFamily(sortGovFirstNewest(opts), GUIDED_GOV_FAMILY_ORDER)
+        .map(({ fam, models }) => `<optgroup label="${esc(fam.label)}">` + models.map((o) => `<option value="${esc(o.value)}">${esc(o.name || o.value.split("/").pop() || o.value)}</option>`).join("") + `</optgroup>`).join("");
+    } else {
+      const byProv = new Map<string, { value: string; name?: string }[]>();
+      for (const o of opts) { const p = o.value.split("/")[0]; (byProv.get(p) ?? byProv.set(p, []).get(p)!).push(o); }
+      modelSel.innerHTML = [...byProv.entries()].map(([prov, list]) =>
+        `<optgroup label="${esc(prov)}">` + list.map((o) => `<option value="${esc(o.value)}">${esc(o.name || o.value.split("/").pop() || o.value)}</option>`).join("") + `</optgroup>`).join("");
+    }
+    // Keep the session model selected if it survived the filter, else fall to the first allowed option.
+    modelSel.value = opts.some((o) => o.value === modelOpt.currentValue) ? (modelOpt.currentValue ?? "") : (opts[0]?.value ?? "");
+    ov.dataset.makerModel = modelSel.value;
+    ov.dataset.makerName = modelOpt.options?.find((o) => o.value === modelSel.value)?.name || modelSel.value.split("/").pop() || modelSel.value;
+    // Selecting only updates the cost estimate instantly; the session model is applied at Run time
+    // (so just browsing the dropdown never mutates the live session).
+    modelSel.addEventListener("change", () => {
+      ov.dataset.makerModel = modelSel.value;
+      ov.dataset.makerName = (modelOpt.options ?? []).find((o) => o.value === modelSel.value)?.name || modelSel.value.split("/").pop() || modelSel.value;
+      updateGoalEstimate(ov);
+    });
+  }
+  // Thinking — only if the provider exposes it. Applied at Run time.
+  const thinkOpt = state.config.find((c) => c.id === "thinking");
+  const thinkSel = $("#goalThink", ov) as HTMLSelectElement | null;
+  if (thinkSel && thinkOpt?.options?.length) {
+    ($("#goalThinkWrap", ov) as HTMLElement).hidden = false;
+    thinkSel.innerHTML = thinkOpt.options.map((o) => `<option value="${esc(o.value)}">${esc(prettyLevel(o.name))}</option>`).join("");
+    thinkSel.value = thinkOpt.currentValue ?? "";
+  }
+  // Skill — None + only the bundled skills that suit a goal loop (build/verify-oriented; meta ones like
+  // Goal Loop / Loop Engineering / Plan are excluded). Trusted guidance that rides every loop turn.
+  const skillSel = $("#goalSkill", ov) as HTMLSelectElement | null;
+  if (skillSel) {
+    const loopSkills = bundledSkillsByUsage().filter((s) => !GOAL_SKILL_DENY.has(s.command));
+    skillSel.innerHTML = `<option value="">None</option>` + loopSkills.map((s) => `<option value="${esc(s.command)}">${esc(s.name)}</option>`).join("");
+    skillSel.value = GOAL_SKILL_DENY.has(state.activeSkill?.command ?? "") ? "" : (state.activeSkill?.command ?? "");
+  }
+  // Persona — only if AskSage personas are available. Show the human name/description, not the numeric id.
+  const personaSel = $("#goalPersona", ov) as HTMLSelectElement | null;
+  if (personaSel && state.personas.length) {
+    ($("#goalPersonaWrap", ov) as HTMLElement).hidden = false;
+    personaSel.innerHTML = `<option value="">None</option>` + state.personas.map((p) => `<option value="${esc(p.id)}">${esc(personaTitle(p.description, p.id))}</option>`).join("");
+    personaSel.value = state.asksage?.persona ?? "";
+  }
+}
+
+// P-GOAL.7: apply the "Run with" selections to the session right before a loop runs — base model +
+// thinking (config), bundled skill (active-skill path), AskSage persona. Only changes what actually
+// differs from the current state, so a run with the defaults is a no-op. Best-effort; never blocks Run.
+async function applyRunWith(ov: HTMLElement): Promise<void> {
+  try {
+    const modelSel = $("#goalModel", ov) as HTMLSelectElement | null;
+    const cur = state.config.find((c) => c.id === "model")?.currentValue;
+    if (modelSel?.value && modelSel.value !== cur) { await bridge.setConfig("model", modelSel.value); state.config = (await bridge.config()) ?? state.config; }
+    const thinkSel = $("#goalThink", ov) as HTMLSelectElement | null;
+    const curThink = state.config.find((c) => c.id === "thinking")?.currentValue;
+    if (thinkSel && !thinkSel.closest("[hidden]") && thinkSel.value && thinkSel.value !== curThink) { await bridge.setConfig("thinking", thinkSel.value); state.config = (await bridge.config()) ?? state.config; }
+    const skillSel = $("#goalSkill", ov) as HTMLSelectElement | null;
+    if (skillSel && skillSel.value !== (state.activeSkill?.command ?? "")) { if (skillSel.value) await activateBundledSkill(skillSel.value); else await clearBundledSkill(); }
+    const personaSel = $("#goalPersona", ov) as HTMLSelectElement | null;
+    if (personaSel && !personaSel.closest("[hidden]") && personaSel.value !== (state.asksage?.persona ?? "")) { await bridge.applyPersona(personaSel.value || null); }
+    updateComposerTools();
+  } catch { /* best-effort: a failed apply must not block the loop */ }
+}
+
+// P-GOAL.6 (ADR-0048): fill the checker-model <select> with "Auto (recommended)" + the user's
+// accessible models grouped by provider, select their saved choice, and persist changes.
+async function loadCheckerModel(ov: HTMLElement): Promise<void> {
+  const sel = $("#goalChecker", ov) as HTMLSelectElement | null;
+  const why = $("#goalCkrWhy", ov); if (!sel) return;
+  const info = await bridge.checkerModel();
+  if (!info) { sel.innerHTML = `<option value="">Auto (recommended)</option>`; return; }
+  const recName = info.options.find((o) => o.value === info.recommended)?.name || info.recommended.split("/").pop() || info.recommended;
+  const byProvider = new Map<string, typeof info.options>();
+  for (const o of info.options) { const p = o.value.split("/")[0]; (byProvider.get(p) ?? byProvider.set(p, []).get(p)!).push(o); }
+  const groups = [...byProvider.entries()].map(([prov, opts]) =>
+    `<optgroup label="${esc(prov)}">` + opts.map((o) => `<option value="${esc(o.value)}">${esc(o.name || o.value.split("/").pop() || o.value)}</option>`).join("") + `</optgroup>`).join("");
+  sel.innerHTML = `<option value="">Auto (recommended: ${esc(recName)})</option>` + groups;
+  sel.value = info.selected || "";
+  const showWhy = () => { if (why) why.textContent = sel.value ? "" : (info.recommendedWhy || ""); };
+  showWhy();
+  // P-GOAL.6.1: stash the maker + recommended-checker names/values so the cost estimate can price + name them.
+  ov.dataset.makerName = info.options.find((o) => o.value === info.current)?.name || info.current.split("/").pop() || info.current;
+  ov.dataset.ckrRecName = recName;
+  ov.dataset.ckrRecValue = info.recommended;
+  updateGoalEstimate(ov);
+  sel.addEventListener("change", async () => {
+    const updated = await bridge.setCheckerModel(sel.value);
+    if (updated && why) why.textContent = sel.value ? "" : (updated.recommendedWhy || "");
+    updateGoalEstimate(ov);
+  });
+}
+
+// P-GOAL.6.1 / P-GOAL.7 (ADR-0048/0049): the live cost estimate at the modal's lower-left — tokens AND a
+// cache-rationalized dollar figure for the SELECTED base + checker models. Updates as iterations / models
+// change; the premium tooltip (data-tip) explains the assumptions. The number is a CEILING — a loop
+// usually stops earlier, the moment its condition holds.
+function updateGoalEstimate(ov: HTMLElement): void {
+  const box = $("#goalEstimate", ov); if (!box) return;
+  const maxIters = Math.min(20, Math.max(1, Number(($("#goalMax", ov) as HTMLInputElement)?.value) || 6));
+  const tok = estimateGoalTokens({ maxIters });
+  // Maker = the selected base model; checker = the selected override, else the recommendation.
+  const makerModel = (($("#goalModel", ov) as HTMLSelectElement | null)?.value) || ov.dataset.makerModel || "";
+  const makerName = ov.dataset.makerName || makerModel.split("/").pop() || "your model";
+  const ckrSel = $("#goalChecker", ov) as HTMLSelectElement | null;
+  const checkerModel = ckrSel?.value || ov.dataset.ckrRecValue || makerModel;
+  const checkerName = ckrSel?.value ? (ckrSel.options[ckrSel.selectedIndex]?.textContent || ckrSel.value) : (ov.dataset.ckrRecName || makerName);
+  const makerP = priceFor(makerModel, goalLedger);
+  const checkerP = priceFor(checkerModel, goalLedger);
+  const rate = assumedCacheRate(goalLedger);
+  const cost = estimateGoalCost({ maxIters, makerPrice: makerP.price, checkerPrice: checkerP.price, cacheRate: rate });
+  box.innerHTML = `${icon("spark", 11)} <span class="ge-n">~${esc(formatUSD(cost.net))}</span> · ~${esc(formatTokens(tok.total))} tokens · ${tok.iters} loop${tok.iters === 1 ? "" : "s"}`;
+  const priceNote = makerP.source === "actual" || checkerP.source === "actual" ? "your actual metered prices" : "list-price estimates";
+  box.setAttribute("data-tip",
+    `Estimated run cost|Up to ~${formatUSD(cost.net)} and ~${formatTokens(tok.total)} tokens across ${tok.iters} iteration${tok.iters === 1 ? "" : "s"}: ` +
+    `maker ${makerName} (~${formatTokens(MAKER_TOKENS_PER_ITER)}/iter), checker ${checkerName} (~${formatTokens(CHECKER_TOKENS_PER_ITER)}/iter). ` +
+    `Priced with ${priceNote}, after ~${Math.round(rate * 100)}% prompt-cache savings (about ${formatUSD(cost.savings)} saved). ` +
+    `This is a ceiling; a loop usually stops earlier the moment its condition holds.`);
+  box.setAttribute("data-tip-icon", "spark");
+}
+
+// P-GOAL.5 (ADR-0047): render the saved-automations list inside the goal modal — each row shows its
+// cadence + last-run status, with an enable toggle, a run-now button, and delete.
+async function renderAutomations(ov: HTMLElement, close: () => void): Promise<void> {
+  const sec = $("#goalAutoSec", ov); if (!sec) return;
+  const list = await bridge.automations();
+  if (!list?.length) { sec.innerHTML = ""; return; }
+  const cadLabel = (c: { kind: "interval"; everyMin: number } | { kind: "daily"; hhmm: string }): string =>
+    c.kind === "daily" ? `daily at ${c.hhmm}` : c.everyMin % 60 === 0 ? `every ${c.everyMin / 60}h` : `every ${c.everyMin}m`;
+  sec.innerHTML = `<div class="goal-lbl">${icon("clock", 12)} Scheduled automations</div>` + list.map((a) => `
+    <div class="goal-auto ${a.enabled ? "on" : ""}" data-id="${esc(a.id)}">
+      <button class="ga-toggle" title="${a.enabled ? "Disable" : "Enable"}" aria-pressed="${a.enabled}"></button>
+      <div class="ga-body">
+        <div class="ga-goal">${esc(a.goal.slice(0, 80))}</div>
+        <div class="ga-meta">${icon("refresh", 10)} ${esc(cadLabel(a.cadence))}${a.lastResult ? ` · last: ${esc(a.lastResult.slice(0, 60))}` : " · not run yet"}</div>
+      </div>
+      <button class="ga-run" title="Run now">${icon("bolt", 12)}</button>
+      <button class="ga-del" title="Delete">${icon("trash", 12)}</button>
+    </div>`).join("");
+  sec.querySelectorAll(".goal-auto").forEach((row) => {
+    const id = (row as HTMLElement).dataset.id!;
+    const a = list.find((x) => x.id === id)!;
+    $(".ga-toggle", row as HTMLElement)?.addEventListener("click", async () => { await bridge.automationEnable(id, !a.enabled); void renderAutomations(ov, close); });
+    $(".ga-del", row as HTMLElement)?.addEventListener("click", async () => { await bridge.automationDelete(id); void renderAutomations(ov, close); });
+    $(".ga-run", row as HTMLElement)?.addEventListener("click", () => {
+      close();
+      void runGoalLoop({ goal: a.goal, condition: a.condition, command: a.command, maxIters: a.maxIters }, (on) => bridge.automationRun(id, on), "automation");
+    });
+  });
+}
+async function runGoalLoop(
+  opts: { goal: string; condition: string; command?: string; maxIters: number; resume?: string },
+  stream?: (onEvent: (e: ChatEvent) => void) => Promise<void>, // P-GOAL.5: automation run-now reuses this renderer
+  verb = "/goal",
+): Promise<void> {
+  if (state.streaming) { showToast({ tone: "warn", title: "A turn is running", desc: "Wait for it to finish before starting a loop.", timeout: 2400 }); return; }
+  if (!autoCollapsedSessions) { autoCollapsedSessions = true; if (!state.sidebarCollapsed) toggleSidebar(true); }
+  state.lastPrompt = opts.goal;
+  addMessage("user", `${verb}${opts.resume ? " (resume)" : ""}: ${opts.goal}${opts.command ? `\nverify: \`${opts.command}\`` : ""}  ·  up to ${opts.maxIters} iterations`);
+  state.streaming = true; goalLoopRunning = true; setSendEnabled();
+  const node = addMessage("assistant", "");
+  const textEl = $(".text", node) as HTMLElement; textEl.innerHTML = "";
+  const wrap = el(`<div class="goal-loop"></div>`); textEl.appendChild(wrap);
+  let iterEl: HTMLElement | null = null, streamEl: HTMLElement | null = null, buf = "";
+  const onEvent = (e: ChatEvent) => {
+    if (e.type === "goal-memory") { wrap.appendChild(el(`<div class="goal-mem">${icon("folder", 12)} loop memory: <code>${esc(e.path)}</code></div>`)); scrollChat(); }
+    else if (e.type === "goal-iter") {
+      buf = "";
+      iterEl = el(`<div class="goal-iter"><div class="goal-iter-h">${icon("refresh", 11)} Iteration ${e.n} of ${e.max}</div><div class="stream"></div></div>`);
+      wrap.appendChild(iterEl); streamEl = $(".stream", iterEl); scrollChat();
+    } else if (e.type === "token") { buf += e.text; if (streamEl) streamEl.innerHTML = renderMarkdown(buf) + `<span class="cursor"></span>`; scrollChat(); }
+    else if (e.type === "tool") { iterEl?.appendChild(el(`<div class="goal-act">${icon(phaseIcon(e.name), 12)} ${esc(phaseForTool(e.name, e.detail))}</div>`)); scrollChat(); }
+    else if (e.type === "subagent") { iterEl?.appendChild(el(`<div class="goal-act">${icon("bolt", 12)} Delegated to ${esc(e.agent)}</div>`)); scrollChat(); }
+    else if (e.type === "block") onBlock(e);
+    else if (e.type === "goal-check") {
+      if (streamEl) streamEl.innerHTML = renderMarkdown(buf); // freeze this round's text
+      iterEl?.appendChild(el(`<div class="goal-verdict ${e.done ? "ok" : "no"}">${icon(e.done ? "check" : "refresh", 12)} checker: ${e.done ? "condition met" : "not yet"} · ${esc(e.reason)}</div>`));
+      scrollChat();
+    }
+    else if (e.type === "goal-done") { wrap.appendChild(el(`<div class="goal-banner ok">${icon("check", 14)} Goal met in ${e.iters} iteration${e.iters === 1 ? "" : "s"}. ${esc(e.reason)}</div>`)); scrollChat(); }
+    else if (e.type === "goal-stop") { wrap.appendChild(el(`<div class="goal-banner stop">${icon("info", 14)} ${esc(e.reason)}</div>`)); scrollChat(); }
+    else if (e.type === "done") { if (streamEl) streamEl.innerHTML = renderMarkdown(buf); }
+  };
+  try { await (stream ?? ((on: (e: ChatEvent) => void) => bridge.runGoal(opts, on)))(onEvent); }
+  finally { state.streaming = false; goalLoopRunning = false; setSendEnabled(); void renderSessions(); void refreshBudget(false); }
+}
+
+// ── "/" command + skill autocomplete (P-SLASH.1) ──────────────────────────────
+// Type "/" in the composer to pop an inline, filtered list of slash commands (omp's) + skills
+// (built-in, most-used first; project) + /goal & /loop-engineering. Filters character-by-character;
+// ↑/↓ to move, Tab/Enter to complete, Esc to dismiss. Built-in skills ACTIVATE on select; commands and
+// project skills COMPLETE into the textarea so you can finish typing args.
+interface SlashItem { label: string; hint: string; kind: "bundled" | "project" | "command"; complete?: string; activate?: string; uses: number }
+const SLASH_KIND_RANK: Record<SlashItem["kind"], number> = { bundled: 0, project: 1, command: 2 };
+let slashEl: HTMLElement | null = null;
+let slashItems: SlashItem[] = [];
+let slashSel = 0;
+
+function slashSource(): SlashItem[] {
+  let uses: Record<string, number> = {};
+  try { uses = JSON.parse(localStorage.getItem("lucid.skill-usage") || "{}"); } catch { /* none */ }
+  const out: SlashItem[] = [];
+  for (const s of bundledSkillsByUsage()) out.push({ label: s.name, hint: s.description, kind: "bundled", activate: s.command, uses: uses[s.command] ?? 0 });
+  for (const s of state.skills) out.push({ label: `/skill:${s.name}`, hint: s.description || s.source, kind: "project", complete: `/skill:${s.name} `, uses: 0 });
+  for (const c of state.commands) out.push({ label: `/${c.name}`, hint: c.description ?? "", kind: "command", complete: `/${c.name} `, uses: 0 });
+  return out;
+}
+function filterSlash(prefix: string): SlashItem[] {
+  const p = prefix.toLowerCase();
+  const scored = slashSource().map((it) => {
+    const key = (it.activate ?? it.label).replace(/^\/(?:skill:)?/, "").toLowerCase();
+    const name = it.label.toLowerCase();
+    let score = -1;
+    if (!p) score = 0;                                                  // bare "/" → show all (most-used floats up)
+    else if (key.startsWith(p) || name.startsWith(p) || name.startsWith("/" + p)) score = 2; // prefix match
+    else if (key.includes(p) || it.hint.toLowerCase().includes(p)) score = 1;                // loose match
+    return { it, score };
+  }).filter((x) => x.score >= 0);
+  scored.sort((a, b) => b.score - a.score || b.it.uses - a.it.uses || SLASH_KIND_RANK[a.it.kind] - SLASH_KIND_RANK[b.it.kind] || a.it.label.localeCompare(b.it.label));
+  return scored.slice(0, 8).map((x) => x.it);
+}
+function closeSlashAC(): void { slashEl?.remove(); slashEl = null; slashItems = []; slashSel = 0; }
+function updateSlashAC(): void {
+  const ta = $("#input") as HTMLTextAreaElement | null; if (!ta) return;
+  const m = /^\/(\S*)$/.exec(ta.value); // the whole input is a single "/…" token (no space yet)
+  if (!m || state.streaming) { closeSlashAC(); return; }
+  slashItems = filterSlash(m[1]);
+  if (!slashItems.length) { closeSlashAC(); return; }
+  if (slashSel >= slashItems.length) slashSel = slashItems.length - 1;
+  const rows = slashItems.map((it, i) =>
+    `<div class="sl-opt${i === slashSel ? " on" : ""}" data-i="${i}"><span class="sl-nm">${esc(it.label)}</span><span class="sl-hint">${esc(it.hint.slice(0, 70))}</span></div>`).join("");
+  const host = (ta.closest(".composer-row") ?? ta.parentElement) as HTMLElement;
+  if (!slashEl) { slashEl = el(`<div class="slash-ac"></div>`); host.appendChild(slashEl); }
+  slashEl.innerHTML = `<div class="sl-head">Tab to complete · ↑↓ to move · Esc to dismiss</div>${rows}`;
+  slashEl.querySelectorAll(".sl-opt").forEach((r) => r.addEventListener("mousedown", (e) => { e.preventDefault(); applySlash(slashItems[Number((r as HTMLElement).dataset.i)]!); }));
+  (slashEl.querySelector(".sl-opt.on") as HTMLElement | null)?.scrollIntoView({ block: "nearest" });
+}
+function applySlash(it: SlashItem | undefined): void {
+  if (!it) return;
+  const ta = $("#input") as HTMLTextAreaElement;
+  closeSlashAC();
+  if (it.activate === "goal") { ta.value = ""; autosize(ta); setSendEnabled(); openGoalForm(); return; } // /goal is the REAL loop primitive (P-GOAL.1)
+  if (it.activate) { void activateBundledSkill(it.activate); ta.value = ""; } // built-in skill rides the next turn
+  else if (it.complete) { ta.value = it.complete; }                          // command / project skill: finish typing args
+  autosize(ta); setSendEnabled(); ta.focus();
+}
+/** Intercept a composer keydown while the "/" autocomplete is open. Returns true if it consumed the key. */
+function slashKeydown(e: KeyboardEvent): boolean {
+  if (!slashEl || !slashItems.length) return false;
+  const n = slashItems.length;
+  if (e.key === "ArrowDown") { e.preventDefault(); slashSel = (slashSel + 1) % n; updateSlashAC(); return true; }
+  if (e.key === "ArrowUp") { e.preventDefault(); slashSel = (slashSel - 1 + n) % n; updateSlashAC(); return true; }
+  if (e.key === "Tab" || e.key === "Enter") { e.preventDefault(); applySlash(slashItems[slashSel]); return true; }
+  if (e.key === "Escape") { e.preventDefault(); closeSlashAC(); return true; }
+  return false;
+}
 function openSkillDropdown(anchor: HTMLElement): void {
   cfgClose?.();
   const active = state.activeSkill?.command;
-  const taskRow = `<div class="cfg-opt" data-task="1" data-tip="Delegate sub-tasks to isolated subagents (omp Task tool)|Appends a template" data-tip-side="left"><span class="tick">${icon("bolt", 13)}</span><span class="nm">/task — delegate to subagents</span></div>`;
+  const taskRow = `<div class="cfg-opt" data-task="1" data-tip="Delegate sub-tasks to isolated subagents (omp Task tool)|Appends a template" data-tip-side="left"><span class="tick">${icon("bolt", 13)}</span><span class="nm">/task: delegate to subagents</span></div>`;
   const bundledRows = bundledSkillsByUsage().map((s) =>
     `<div class="cfg-opt ${s.command === active ? "on" : ""}" data-bundled="${esc(s.command)}" data-tip="${esc(s.description)}|Built-in skill" data-tip-side="left"><span class="tick">${icon("check", 13)}</span><span class="nm">${esc(s.name)}</span><span class="id">${esc(s.description.slice(0, 40))}</span></div>`).join("");
-  const projRows = state.skills.map((s) =>
-    `<div class="cfg-opt" data-skill="${esc(s.name)}" data-tip="${esc(s.description || s.name)}|${esc(s.source)}" data-tip-side="left"><span class="tick">${icon("bolt", 13)}</span><span class="nm">${esc(s.name)}</span><span class="id">${esc((s.description || "").slice(0, 42))}</span></div>`).join("");
   const clearSec = active
     ? `<div class="cfg-sec"><div class="cfg-list"><div class="cfg-opt" data-clearskill="1" data-tip="Stop the active bundled skill" data-tip-side="left"><span class="tick">${icon("close", 13)}</span><span class="nm">Clear active skill (${esc(state.activeSkill!.name)})</span></div></div></div>`
     : "";
   const html =
     `<div class="cfg-sec"><div class="cfg-lbl">Built-in skills</div><div class="cfg-list">${taskRow}${bundledRows}</div></div>` +
     clearSec +
-    `<div class="cfg-sec"><div class="cfg-lbl">Project skills <span class="cur">${state.skills.length ? `${state.skills.length} · /skill:` : "none"}</span></div><div class="cfg-list">${projRows || `<div class="empty">No project skills. Add markdown skills under <code>.omp/skills/</code>.</div>`}</div></div>`;
+    `<div class="cfg-sec"><div class="cfg-lbl">Project skills <span class="cur">${state.skills.length ? `${state.skills.length} · /skill:` : "none"}</span></div>
+      <div class="cfg-list" id="projSkillList">${projSkillRows()}</div>
+      <label class="skill-drop" id="skillDrop" data-tip="Drop .md skill files — each is scanned at the security gate before import"><input type="file" id="skillDropInput" accept=".md,text/markdown" multiple hidden>${icon("download", 13)} <span>Drop <code>.md</code> skills here — scanned at the gate</span></label>
+    </div>`;
   const { node, close } = popover(anchor, html, () => { cfgClose = null; });
   cfgClose = close;
   node.addEventListener("click", (e) => {
     const t = e.target as HTMLElement;
+    if (t.closest("#skillDrop")) return; // the drop label opens the native file picker; not a skill choice
     const task = t.closest("[data-task]"); if (task) { close(); insertTaskProforma(); return; }
     const clear = t.closest("[data-clearskill]"); if (clear) { close(); void clearBundledSkill(); return; }
     const bundled = t.closest("[data-bundled]") as HTMLElement | null; if (bundled) { close(); void activateBundledSkill(bundled.dataset.bundled!); return; }
     const proj = t.closest("[data-skill]") as HTMLElement | null; if (proj) { close(); useSkill(proj.dataset.skill!); return; }
   });
+  // P-SKILL.1: drag-and-drop (or click-to-pick) .md skill import — scanned at the gate server-side.
+  const drop = node.querySelector("#skillDrop") as HTMLElement | null;
+  const input = node.querySelector("#skillDropInput") as HTMLInputElement | null;
+  if (drop) {
+    drop.addEventListener("dragover", (e) => { e.preventDefault(); drop.classList.add("drag"); });
+    drop.addEventListener("dragleave", () => drop.classList.remove("drag"));
+    drop.addEventListener("drop", (e) => { e.preventDefault(); drop.classList.remove("drag"); void handleSkillFiles((e as DragEvent).dataTransfer?.files ?? [], node); });
+  }
+  input?.addEventListener("change", () => { if (input.files?.length) void handleSkillFiles(input.files, node); });
 }
 
 // In-app folder browser - works in the browser build AND Electron (the dev server reads
@@ -2551,10 +3224,19 @@ function wire(): void {
 
   // composer
   const ta = $("#input") as HTMLTextAreaElement;
-  ta.addEventListener("input", () => { autosize(ta); setSendEnabled(); });
-  ta.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } });
+  ta.addEventListener("input", () => { autosize(ta); setSendEnabled(); updateSlashAC(); });
+  ta.addEventListener("keydown", (e) => {
+    if (slashKeydown(e)) return; // the "/" autocomplete consumed it (nav / Tab / Enter / Esc)
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
+  });
+  ta.addEventListener("blur", () => window.setTimeout(closeSlashAC, 120)); // dismiss when focus leaves (after a click lands)
   // P-ACP.4: while a turn runs the Send button is a Stop control (interrupt the turn); else it sends.
   $("#send")!.addEventListener("click", () => { if (state.streaming) void stopTurn(); else void send(); });
+
+  // Jump-to-latest: show the catch-up arrow on user scroll / resize; click pages down one screen.
+  $("#chat")?.addEventListener("scroll", scheduleJump, { passive: true });
+  window.addEventListener("resize", scheduleJump, { passive: true });
+  $("#jumpDown")?.addEventListener("click", jumpDownOnePage);
 
   // P-IDE.4: "View in IDE" on chat code blocks → open the read-only Monaco panel (delegated, one
   // listener for all current + future blocks). Exclusivity: opening the IDE closes Settings + KG.

@@ -29,6 +29,7 @@ let cuiStore: PersonalStore | null = null; // isolated CUI store
 
 export interface PersonalStatus {
   enabled: boolean;
+  aiExtract: boolean; // ADR-0042: opt-in model extractor (Settings); mirrors renderer/bridge.ts PersonalStatus
   configured: boolean; // the main store file exists on disk
   unlocked: boolean;
   scope: ScopeView; // the active compartment (view)

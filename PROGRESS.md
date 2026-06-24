@@ -1841,3 +1841,255 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
   not started. Pre-existing typecheck error `desktop/personal.ts:50` (ADR-0042 `aiExtract`) left as-is — out of scope.
 - **next:** P-CODE.2 — monthly workspace activity section (summary card + per-workspace table) + spend
   attribution; then the add-on can re-pin its data contract and flip drift D-4 (code-activity) to ✅.
+
+-----
+
+## P-TPS.1: streaming output-token readout — terminal + desktop (ADR-0044)
+- **shipped:** vendored pi-token-speed's pure engine (MIT) as a shared, UI-agnostic core
+  `harness/metrics/token_speed.ts` (config injected, clock injectable, plain-text `formatReadout`; engine +
+  sliding-window + word/punct estimator) with `harness/metrics/token_speed.test.ts` (10 tests: output-only
+  counting, provider-token reconciliation, TTFT realign, windowed tok/s). Two thin adapters off the one core:
+  terminal `harness/omp/token_speed_extension.ts` (omp `message_update`→`ctx.ui.setStatus` `⚡ TPS:`, `/tps`
+  cycles mode, `useProviderTokens` for exact counts; wired into `omp:secure`) and desktop HUD in
+  `desktop/renderer/app.ts` (same engine fed from the `token`/`thinking` ChatEvents → `· N tok out · R tok/s`;
+  existing `usage_update` figure relabelled **`ctx`** so output ≠ context) + `.hud-tps` CSS. New ADR-0044,
+  `demo-P-TPS.1` (`demo_ptps1.ts`, proves the system prompt is excluded + provider reconciliation). Verified:
+  typecheck clean (3 cfgs); `bun test harness` 466/466; browser bundle of app.ts succeeds; demo PASS.
+- **stubbed:** desktop count is an ESTIMATE (ACP deltas carry no per-delta `usage.output`; `usage_update` is
+  context, not output) — terminal count is exact when omp reports usage. Not added to the ACP launcher
+  (`lucid_acp.ts`): `ui.setStatus` is a no-op there + would break the `ext_parity` `-e`-ordering tests. No
+  live in-desktop streaming screenshot (needs a real model turn / provider auth).
+- **next:** optional — surface a per-turn output total on `done` from an authoritative source if omp ever
+  exposes per-turn output over ACP (would make the desktop figure exact); a `/tps`-style toggle in desktop Settings.
+
+-----
+
+## P-SKILL.1: gated drag-and-drop skill import (ADR-0045)
+- **shipped:** ADR-0045 (3-phase design: gated import + model-assisted builder + session-derived skills).
+  P-SKILL.1 built: `desktop/skills_import.ts` `importSkill()` scans a dropped `.md` fail-closed
+  (`scanAndDecide`/DEFAULT_POLICY, same seam as `scanPersona`) → clean writes to
+  `<ws>/.omp/skills/<slug>/SKILL.md` (omp discovers it natively) under a `pathWithin` check; flagged →
+  NOT written, `recordBlock`'d to the Security panel ("block + review" posture). New `POST /api/skills/import`
+  (dev.ts), `bridge.skillImport` + `SkillImportResult`, a drop zone in the Skills popover's Project section
+  (`app.ts` `handleSkillFiles`/`projSkillRows`) + `.skill-drop` CSS. New `demo-P-SKILL.1` (clean writes,
+  poisoned bidi/zero-width blocks). Verified: typecheck clean (3 cfgs); demo PASS; live endpoint round-trip
+  (clean → written + appears in `/api/skills`; poisoned → quarantined + reaches `/api/security`); drop zone
+  renders. This makes the gate authoritative for IMPORTED project skills (omp's native loader bypasses it).
+- **stubbed:** P-SKILL.2 (skills-builder via most-used model + `complete()`, opt-in, re-scanned output) and
+  P-SKILL.3 (session-derived skills from selected sessions) — designed in ADR-0045, not built. Hand-placed
+  `.omp/skills/` files (outside the app) are still not retroactively scanned. The synthetic DOM file-drop
+  couldn't be simulated in-preview (real OS drag-drop unverified by automation — needs a real file drop).
+- **next:** P-SKILL.2 — wire the opt-in skills-builder (`usageLedger().models[0]` → `complete()` with a
+  model override on the throwaway session; re-scan + preview-to-accept), then P-SKILL.3 session-derived.
+
+-----
+
+## P-SLASH.1: "/" command + skill autocomplete in the composer (builds on ADR-0029)
+- **shipped:** inline autocomplete in the prompt bar (`desktop/renderer/app.ts` `updateSlashAC`/`filterSlash`/
+  `slashKeydown`/`applySlash` + `.slash-ac` CSS): typing `/` pops a filtered list of omp slash commands +
+  built-in skills (most-used first via `bundledSkillsByUsage`) + project skills; filters character-by-
+  character; ↑/↓ to move, Tab/Enter to complete (commands/project skills → text with trailing space;
+  built-in skills → activate). Added two built-in skills: **Goal Loop** (`/goal` — iterate to a verifiable
+  stop condition, checked by an objective run, maker≠checker; omp has no native `/goal`) and **Loop
+  Engineering** (Osmani's loop design: automations · worktrees · skills · connectors · sub-agents + on-disk
+  memory). Removed the em dash from the `/task` list entry + proforma (now `/task:`). Verified live: AC
+  appears on `/`, `/go`→Goal Loop, `/loop`→Loop Engineering, `/mod`+Tab→`/model `, Enter on Goal Loop
+  activates it, most-used floats up, no em dashes in the list; typecheck clean (3 cfgs).
+- **stubbed:** the REAL `/goal` loop primitive (a control loop that re-runs until a verifiable condition
+  with a separate checker model) is only LISTED as a skill, not built — it's a harness-level increment of
+  its own (would need an ADR). No demo script (browser-only composer UX; verified in the preview). Slash
+  autocomplete triggers only when the whole input is a single `/…` token (closes once you type a space).
+- **next:** build the `/goal` loop primitive (ACP-backend control loop + objective stop-condition checker)
+  as its own increment+ADR; surface the other Loop-Engineering building blocks (automations/scheduling) that
+  this harness doesn't yet expose.
+
+-----
+
+## P-GOAL.1: the /goal loop primitive (ADR-0046)
+- **shipped:** ADR-0046 + the real `/goal` loop. `backend.runGoal({goal,condition,command,maxIters}, onEvent)`
+  (`desktop/acp_backend.ts`): runs MAKER iterations via `prompt()` on the persistent session toward the
+  goal, and after each one a SEPARATE checker (`checkGoal` → `complete()`, a throwaway session = maker≠checker)
+  decides "done" — running the verification `command` and reporting exit-0 (objective proof), or a
+  conservative model judgment as fallback. Capped (`maxIters`, ceiling 20) + auto-stop on 2 no-progress
+  iterations; runs unattended (`permissionMode:"auto"`) but EVERY tool call still scanned fail-closed by the
+  gate (the load-bearing safety boundary). `parseGoalVerdict` extracted to `desktop/goal_verdict.ts`, FAIL-
+  CLOSED (empty/garbled/malformed ⇒ not-done) with 10 unit tests. `POST /api/goal` streams NDJSON
+  (chat events + goal-iter/check/done/stop); `bridge.runGoal` (generalized `streamNdjson`); composer `/goal`
+  opens a launcher (goal · verify command · max iters) and renders the loop inline (iteration dividers,
+  per-round checker verdict, success/stop banner). Verified live: endpoint + UI both ran a real loop
+  (goal→READY, `echo ok`→exit 0→done in 1 iteration); typecheck clean (3 cfgs); goal_verdict 10/10; no console errors.
+- **stubbed (P-GOAL.2+):** pause/resume/clear + on-disk loop state (the article's "memory"); a DISTINCT
+  checker model (reuses the session model via `complete()` for now — same ADR-0045 model-override wrinkle);
+  scheduled automations (the loop's "heartbeat"). No `make demo` (loop needs a live model; parser is unit-tested,
+  loop integration-tested live).
+- **next:** P-GOAL.2 — persist loop state to disk + pause/resume; then automations/scheduling so a loop can
+  run on a cadence (the last missing Loop-Engineering building block in this harness).
+
+-----
+
+## P-GOAL.2: stop a running /goal loop (ADR-0046)
+- **shipped:** loop cancellation. `backend.cancelGoal()` (`desktop/acp_backend.ts`) sets a `goalCancelled`
+  flag and aborts the in-flight maker turn (`cancel()`); `runGoal` checks it before each iteration and right
+  after the maker turn, emitting `goal-stop "stopped by you"` and halting (no checker, no further iterations).
+  `goalActive`/`isGoalRunning` track loop state. `POST /api/goal/cancel` (dev.ts) → `cancelGoal`;
+  `bridge.cancelGoal`; the composer Stop button routes to the LOOP cancel while a loop streams
+  (`goalLoopRunning` flag in `runGoalLoop`, branch in `stopTurn`) and to the normal turn-cancel otherwise.
+  Verified live: a 5-iteration loop (verify `exit 1`, so the checker never says done) cancelled mid-iteration
+  → `goal-stop "stopped by you"` and the stream ended; goal_verdict 10/10; typecheck clean; no console errors.
+- **stubbed:** still no pause/RESUME or on-disk loop "memory" (cancel is a hard stop, not a resumable pause);
+  no distinct checker model; no scheduled automations. UI Stop-button routing verified by logic + endpoint
+  (the goalLoopRunning branch), not a synthetic button click.
+- **next:** P-GOAL.3 — on-disk loop state ("memory") + pause/resume so a stopped loop can be continued; then
+  scheduled automations (the loop's heartbeat).
+
+-----
+
+## P-GOAL.3: durable on-disk loop memory (ADR-0046)
+- **shipped:** the loop's "memory on disk" (Osmani: "the model forgets between runs, the repo doesn't").
+  `desktop/goal_memory.ts` (`startGoalMemory`/`appendGoalIteration`/`finishGoalMemory`) writes a markdown
+  record under `<ws>/.omp/loops/<id>-<slug>.md` — goal header + condition + verify command, then an entry
+  per iteration (maker summary + checker verdict) and the final result. `pathWithin`-confined, best-effort
+  (null/unwritable ⇒ safe no-op, the loop still runs). `runGoal` creates it, references its path in the
+  maker prompt, appends each round, and finalizes on done/stop/cancel/error; emits a new `goal-memory`
+  event (ChatEvent parity in bridge.ts) and the composer renders a `loop memory: <path>` line. Em dash in
+  the verdict swapped to `·` for consistency. 3 unit tests (format · null-safe · path-confined).
+  Verified live: a real loop wrote the file with the correct header/iteration/result; `bun test desktop`
+  290/290; typecheck clean (3 cfgs); test artifacts cleaned from the workspace.
+- **stubbed:** still no RESUME (the memory is written but not yet read back to continue a stopped loop — the
+  file format is the foundation for it); no distinct checker model; no scheduled automations. The agent is
+  TOLD about the memory file but the loop owns the writes (the agent reads, in-context within a run).
+- **next:** P-GOAL.4 — resume from a loop-memory file (read status/last iteration, continue); then automations.
+
+-----
+
+## P-GOAL.4: resume a stopped loop from its memory file (ADR-0046)
+- **shipped:** loop resume. `desktop/goal_memory.ts` gains `parseGoalMemory` (pull goal/condition/command/
+  iterations + `succeeded` from a memory markdown), `listResumableLoops` (incomplete loops, newest first),
+  and `resumeGoalMemory` (reopen an existing file confined to `.omp/loops/`, append a `## Resumed` marker,
+  return the prior content). `runGoal` takes `resume?: <rel>` — reuses that memory file (no new one) and
+  INJECTS the prior progress into the maker prompt ("do not redo completed work, continue from where it
+  stopped"). `GET /api/goal/resumable` + `resume` on the `/api/goal` POST; `bridge.resumableLoops` +
+  `GoalOpts.resume` + `ResumableLoop`; the `/goal` launcher shows a "Resume a stopped loop" list. 4 more
+  unit tests (parse / succeeded-excluded / lister / resume+traversal-reject). Verified live, full cycle:
+  a loop stopped on an unsatisfiable `exit 1` → listed as resumable → resumed (SAME memory file, prior
+  progress carried in) → met the condition with `echo ok` → dropped off the resumable list; one file holds
+  the whole history (run → `## Resumed` → run → Goal met). `bun test desktop` 294/294; typecheck clean; clean console.
+- **stubbed:** resume re-runs fresh maker iterations seeded by the memory (the original ACP session is gone,
+  so it's continue-by-context, not session-restore); no distinct checker model; no scheduled automations.
+- **next:** P-GOAL.5 — scheduled automations (run a loop / discovery on a cadence) — the last Loop-Engineering
+  building block this harness doesn't expose; then a distinct/cheaper checker model.
+
+---
+**P-GOAL.5 — scheduled automations (the loop's heartbeat) (ADR-0047)**
+- **shipped:** an automation = a saved `/goal` spec + a cadence, run by an IN-PROCESS scheduler (ticks every
+  30s while the app is open; never the OS — keeps the fail-closed gate armed, invariant #2/#3). `desktop/automations.ts`
+  = store (`<ws>/.omp/automations.json`, pathWithin-confined, fail-safe) + PURE `isDue` (interval `everyMin` OR
+  `daily` `hhmm`, local time). Created **disabled** until the user arms it; a tick never preempts a chat/loop/pending
+  permission and runs at most one due automation, stamping `lastRunAt` up-front. `runAutomation` reuses `runGoal`
+  (same maker/checker, durable memory, gate). Endpoints `GET/POST /api/automations` + `/{enable,delete,run}`; the
+  `/goal` modal gained a schedule picker + saved-automations list (toggle · run-now · delete · last-run). 10 new unit
+  tests; `bun test desktop` 304/304; typecheck clean (3 cfgs); live-verified CRUD + UI (disabled-by-default, condition
+  defaults to command, picker reveals interval/daily, toggle persists), workspace cleaned, clean console.
+- **stubbed:** no distinct/cheaper CHECKER model (checker still shares the maker model via `complete()`); no OS-level
+  scheduling for app-closed runs (intentionally out of scope — fail-closed grounds); run-now streams, background ticks don't.
+- **next:** distinct/cheaper checker model — the last stub on the goal loop; the Loop-Engineering building blocks are now all exposed.
+
+---
+**P-GOAL.6 — a distinct, recommended checker model for the loop (ADR-0048)**
+- **shipped:** the /goal checker now runs on a RESOLVED checker model (user's choice → auto recommendation →
+  maker model), drawn only from the user's own accessible picker. `desktop/checker_model.ts` (pure, 9 tests):
+  recommend by tier (haiku/flash/mini over nano/lite/oss over flagship) → same provider family → newest version
+  (dates stripped, light flagship-cost tiebreak) → clean alias. `complete()` gained an optional per-session
+  `model` (session/set_config_option before the prompt — chat session untouched; best-effort/fail-safe). A
+  stale override falls through to the recommendation, empty list to the maker model. Persisted as `checkerModel`
+  in GUI settings (""=auto). `GET/POST /api/checker-model`; the /goal modal got a "Checker model" picker (Auto —
+  recommended: <name> + one-line why, then provider-grouped list). Automations inherit it. `bun test desktop`
+  313/313; typecheck clean (3 cfgs). Live-verified: maker opus-4-8 → recommends haiku-4-5; override persists +
+  resets; real loop ran with checker forced onto a DISTINCT haiku-4-5 (echo ok → exit 0 → goal-done). Workspace cleaned.
+- **stubbed:** recommendation is a name-pattern heuristic (no live price table / per-token cost data); cross-family
+  version scale is approximate (only compared within a provider); no per-automation checker override (global setting).
+- **next:** the Loop-Engineering building blocks are all exposed now — natural follow-ups are a price-aware ranker and per-automation checker overrides.
+
+---
+**P-GOAL.6.1 — checker picker: GOV lock, readability, token estimate (ADR-0048 addendum)**
+- **shipped:** AskSage lock (user OR managed) now restricts the checker's accessible models to GOV-only AskSage
+  routes in `accessibleModels()` (fail-safe narrow; constrains both picker + recommendation; locked → recommends
+  asksage-google/google-gemini-3.5-flash-gov). Checker picker/label/why text bigger + higher-contrast (13px/--txt-2).
+  Live token estimate at the modal's lower-left (`desktop/loop_estimate.ts`, pure, 3 tests): iters × (~9k maker +
+  ~1.5k checker), clamped 1..20, hover names maker+checker models + explains it's a ceiling; "Auto" option label
+  em-dash-free. `bun test desktop` 316/316; typecheck clean. Live-verified: lock → 2 GOV options; estimate 6→63k,
+  12→126k; tooltip renames checker on override; reset clean; no console errors.
+- **stubbed:** estimate is a flat per-iteration heuristic (no live price/cost table, no thinking-budget factor).
+- **next:** a price-aware ranker + cost (not just token) display; per-automation checker override.
+
+---
+**P-GOAL.7 — /goal launcher: dollar estimate + per-run model/skill/persona (ADR-0049)**
+- **shipped:** the goal modal now shows a cache-rationalized DOLLAR estimate (`~$0.00 · ~Nk tokens · N loops`)
+  at the lower-left via the premium `data-tip` tooltip. `desktop/model_pricing.ts` (pure, 6 tests): price a model
+  from the user's ACTUAL usage-ledger cost÷tokens when metered, else a per-tier LIST table; `estimateGoalCost`
+  (loop_estimate, +4 tests) splits in/out tokens, prices maker+checker separately, discounts cached input at 10%
+  using the observed cache-hit rate. New "Run with" row: base model / thinking / skill / persona selects, defaulting
+  to session state, updating the estimate live and applied to the session ONLY at Run time (browsing never mutates).
+  Whole module text enlarged + higher contrast. `bun test desktop` 326/326; typecheck clean (3 cfgs). Live-verified:
+  opus $1.05 → haiku $0.06 → haiku×12 $0.13; premium tooltip renders (title + cache text); session unchanged while
+  browsing; pickers populate (8 model groups, thinking, bundled skills, persona); no console errors; session reset clean.
+- **stubbed:** list prices are approximate + age (actual-usage pricing is exact only for metered models); saved
+  automations don't yet capture the run-with selections; per-iteration token split is a flat heuristic.
+- **next:** carry run-with into automations; a maintained price table or a live pricing source.
+
+---
+**P-GOAL.8 — /goal launcher: guided walkthrough + premium tooltips + lockdown base model (ADR-0050)**
+- **shipped:** the goal modal defaults to a 5-step GUIDED walkthrough (Goal / Verification / Effort+checker /
+  Run with / Schedule), 1-3 inputs per step with a note + premium info-dot tooltip; Back/Next nav (step 1 requires
+  a goal); an "Advanced" pill top-right toggles the all-at-once view and persists (localStorage). Same field DOM
+  backs both modes, so all existing wiring is unchanged. Fixed the cost tooltip rendering UNDER the modal (#tip
+  z-index 120 -> 260). Verification command now has a ~20-entry datalist of common commands (free-typing preserved).
+  AskSage lockdown: the BASE model picker is now restricted to AskSage-routed models, grouped Gemini -> GPT ->
+  Anthropic (GOV first within each, via model_families groupByFamily/sortGovFirstNewest), RAG/aux excluded; checker
+  stays GOV-only. typecheck clean (3 cfgs); bun test desktop 326/326. Live-verified: guided default, step nav +
+  empty-goal guard, advanced toggle persists, tooltip renders above modal (z 260>200), 5 info dots, 20 cmd
+  suggestions, lockdown base list all-AskSage ordered Gemini/GPT/Anthropic; session model restored; no console errors.
+- **stubbed:** lockdown detection uses the user asksageOnly flag in the renderer (backend already enforces the
+  checker GOV filter); walkthrough copy is static; datalist styling is the native control.
+- **next:** carry run-with into saved automations; a maintained/live price source.
+
+---
+**P-GOAL.8.1 — walkthrough polish: combobox, step order, skill/persona fixes**
+- **shipped:** replaced the mispositioned native <datalist> with a custom verify-command combobox anchored
+  directly under the field (filter + click + arrow/Enter nav, free-typing preserved). Back chevron now points
+  left (rotate 180). Reordered guided steps so "Run with" (base model) is step 3, BEFORE "Effort and grading"
+  (iterations + checker) at step 4. Skill picker now excludes meta skills (goal, loop-engineering, plan, explain,
+  session-handoff) — only build-oriented skills suited to a loop. Persona dropdown shows the human description,
+  not the numeric id. typecheck clean; bun test desktop 326/326. Live-verified: menu sits under the field (4px,
+  left-aligned), Back arrow matrix(-1,0,0,-1,0,0), step3=Run with / step4=Effort, 9 build skills only, persona
+  names; no console errors.
+- **next:** carry run-with into saved automations; a maintained/live price source; shorter persona display names.
+
+---
+**Locked-down fixes: AskSage Claude tool use (ADR-0051) + Monaco CSP (ADR-0052)**
+- **shipped:** (1) AskSage Anthropic route is now TOOL-CAPABLE — harness/omp/asksage_stream.ts passes
+  context.tools as input_schema (via omp toolWireSchema), parses tool_use blocks into omp ToolCalls, builds
+  proper tool_use/tool_result message structure (toAnthropicMessages), and emits toolcall_start/end + stopReason
+  "toolUse" so omp executes the call and loops (each scanned by the gate). Google/RAG stay text-only (out of
+  scope, no regression, never sent tools). 5 new tests (asksage_stream.test.ts). (2) Monaco CSP relaxed two
+  directives in index.html: font-src adds data: (codicon font is inlined as data:font/ttf in Monaco's min build),
+  worker-src adds blob: (language-service worker) — egress still locked by connect-src/script-src. bun test
+  harness 471 · desktop 326 · typecheck clean (3 cfgs). Live-verified: blob worker constructs + data: font load
+  raise ZERO CSP violations; tool-use unit tests cover the wire format + event emission + round-trip.
+- **stubbed:** Gemini tool use (needs functionDeclarations) deferred; AskSage tool use verified via mocked HTTP
+  (live gov-gateway round-trip is the manual check in the bug doc).
+- **next:** Gemini functionDeclarations tool support if needed; live end-to-end tool run on the gov gateway.
+
+---
+**AskSage Gemini tool use (completes ADR-0051)**
+- **shipped:** the AskSage Gemini route is now tool-capable, mirroring omp's native Google provider:
+  callGoogle sends functionDeclarations (parametersJsonSchema via normalizeSchemaForGoogle+toolWireSchema),
+  parses functionCall parts into omp ToolCalls (synthetic id; results replayed by NAME since Gemini gives no
+  id), and toGoogleContents rebuilds functionCall (model turn) / functionResponse (merged user turn) for
+  multi-turn loops. Shared emit() path → same toolcall events + gate scanning as Anthropic. RAG /query stays
+  text-only. 3 new Gemini tests (+4 Anthropic) = 7 in asksage_stream.test.ts. bun test harness 473 · desktop
+  326 · typecheck clean (3 cfgs).
+- **stubbed:** verified against mocked HTTP only — live AskSage gov-gateway tool round-trip (both Claude and
+  Gemini) is the manual check; parametersJsonSchema assumes AskSage's Gemini proxy is current (omp uses it for
+  real Gemini).
+- **next:** live end-to-end tool run on the gov gateway for both providers.

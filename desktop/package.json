@@ -51,7 +51,17 @@
           "desktop/node_modules/monaco-editor/min/**/*",
           "!desktop/release/**",
           "!desktop/dist/**",
-          "!**/.git/**"
+          "!**/.git/**",
+          "!node_modules/**/*.md",
+          "!node_modules/**/*.map",
+          "!node_modules/**/*.d.ts",
+          "!node_modules/.bin/**",
+          "!node_modules/onnxruntime-node/**",
+          "!node_modules/onnxruntime-web/**",
+          "!node_modules/@opentelemetry/**",
+          "!node_modules/typescript/**",
+          "!node_modules/date-fns/**",
+          "!node_modules/lucide-react/**"
         ]
       }
     ],

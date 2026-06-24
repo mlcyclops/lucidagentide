@@ -84,6 +84,30 @@ export function findSession(explicit?: string): string | undefined {
   return files[0]?.p;
 }
 
+/** Resolve an omp session id (Snowflake) to its on-disk `.jsonl` transcript, if present. Session
+ *  files are named `<timestamp>_<sessionId>.jsonl`, so we match the id within the filename and return
+ *  the most-recently-modified hit. This lets the live UI anchor the memory snapshot to the ACTIVE chat
+ *  session rather than falling back to `findSession`'s cwd match — which picks by `process.cwd()` (the
+ *  app's dir) while chats actually run in the user's selected workspace, so the fallback can lock onto
+ *  a stale, empty session and show "0 turns" with empty gauges. */
+export function sessionPathById(id: string | null | undefined): string | undefined {
+  if (!id) return undefined;
+  const root = join(homedir(), ".omp", "agent", "sessions");
+  if (!existsSync(root)) return undefined;
+  const matches: { p: string; mtime: number }[] = [];
+  for (const d of readdirSync(root)) {
+    const dir = join(root, d);
+    try {
+      if (!statSync(dir).isDirectory()) continue;
+      for (const f of readdirSync(dir)) if (f.endsWith(".jsonl") && f.includes(id)) matches.push({ p: join(dir, f), mtime: statSync(join(dir, f)).mtimeMs });
+    } catch {
+      /* skip unreadable dir */
+    }
+  }
+  matches.sort((a, b) => b.mtime - a.mtime);
+  return matches[0]?.p;
+}
+
 export function parseSession(path: string): Session {
   const s: Session = { path, cwd: "?", started: "?", model: "?", turns: [] };
   for (const line of readFileSync(path, "utf8").split("\n")) {

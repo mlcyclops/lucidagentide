@@ -85,6 +85,8 @@ export interface ModeOption { id: string; name: string; description?: string }
 export interface ModeState { available: ModeOption[]; current: string; ui?: "agent" | "ask" | "plan"; permissionMode?: "auto" | "ask" }
 export interface OmpCommand { name: string; description?: string; hint?: string }
 export interface SessionInfo { id: string; title: string; model: string; updatedAt: number; turns: number }
+// P-SKILL.1 (ADR-0045): per-file result of a gated skill import (mirrors desktop/skills_import.ts).
+export interface SkillImportResult { ok: boolean; name: string; written?: boolean; path?: string; blocked?: boolean; reason?: string; trustLabel?: string; findings?: number }
 export interface ProviderAuth {
   id: string; name: string; env: string; oauthId: string; canOauth: boolean;
   oauthActive: boolean; oauthIdentity?: string; keySet: boolean; keyLast4?: string;
@@ -138,7 +140,26 @@ export type ChatEvent =
   | { type: "block"; tool: string; reason: string; severity: string; findings: string; id?: string; quarantined?: boolean }
   | { type: "permission"; id: string; tool: string; detail: string; options: { optionId: string; name: string; kind?: string }[] }
   | { type: "usage"; used: number; size: number; cost: number }
+  // P-GOAL.1/3 (ADR-0046): /goal loop events (kept in parity with desktop/acp_backend.ts).
+  | { type: "goal-memory"; path: string }
+  | { type: "goal-iter"; n: number; max: number }
+  | { type: "goal-check"; n: number; done: boolean; reason: string }
+  | { type: "goal-done"; iters: number; reason: string }
+  | { type: "goal-stop"; reason: string }
   | { type: "done" };
+export interface GoalOpts { goal: string; condition: string; command?: string; maxIters: number; resume?: string }
+// P-GOAL.4: a stopped loop that can be resumed from its on-disk memory file.
+export interface ResumableLoop { rel: string; goal: string; condition: string; command?: string; iterations: number; updatedAt: number }
+// P-GOAL.5: a scheduled automation — a saved /goal spec the in-process scheduler runs on a cadence.
+export type Cadence = { kind: "interval"; everyMin: number } | { kind: "daily"; hhmm: string };
+export interface Automation {
+  id: string; goal: string; condition: string; command?: string; maxIters: number;
+  cadence: Cadence; enabled: boolean; createdAt: number; lastRunAt?: number; lastResult?: string;
+}
+export interface AutomationSpec { goal: string; condition?: string; command?: string; maxIters?: number; cadence: Cadence }
+// P-GOAL.6: the /goal checker-model picker state.
+export interface ModelOption { value: string; name?: string; description?: string }
+export interface CheckerModelInfo { selected: string; recommended: string; recommendedWhy: string; current: string; options: ModelOption[] }
 
 export interface Attribution {
   identity: string; source: "email" | "workstation"; email: string; workstation: string; decided: boolean;
@@ -178,6 +199,18 @@ export interface LucidBridge {
   usage(): Promise<UsageLedger | null>;
   codeActivity(): Promise<CodeActivity | null>;
   sendPrompt(text: string, onEvent: (e: ChatEvent) => void): Promise<void>;
+  // P-GOAL.1 (ADR-0046): run a /goal loop — streams the same events plus goal-iter/check/done/stop.
+  runGoal(opts: GoalOpts, onEvent: (e: ChatEvent) => void): Promise<void>;
+  resumableLoops(): Promise<ResumableLoop[] | null>; // P-GOAL.4: loops that stopped without meeting their condition
+  // P-GOAL.5 (ADR-0047): scheduled automations — CRUD + arm/disarm + run-now (run-now streams goal events).
+  automations(): Promise<Automation[] | null>;
+  automationCreate(spec: AutomationSpec): Promise<Automation | null>;
+  automationEnable(id: string, enabled: boolean): Promise<Automation | null>;
+  automationDelete(id: string): Promise<unknown>;
+  automationRun(id: string, onEvent: (e: ChatEvent) => void): Promise<void>;
+  // P-GOAL.6 (ADR-0048): the loop's checker-model picker (auto recommendation + override).
+  checkerModel(): Promise<CheckerModelInfo | null>;
+  setCheckerModel(value: string): Promise<CheckerModelInfo | null>;
   config(): Promise<ConfigOption[]>;
   /** Respawn omp + re-read its model list (after connecting a provider via OAuth or key). */
   refreshConfig(): Promise<ConfigOption[]>;
@@ -190,8 +223,12 @@ export interface LucidBridge {
   respondPermission(id: string, optionId: string | null): Promise<unknown>;
   // P-ACP.4: Stop the in-flight turn (interrupt reply + tool calls).
   cancelChat(): Promise<unknown>;
+  cancelGoal(): Promise<unknown>; // P-GOAL.2: stop a running /goal loop
   commands(): Promise<OmpCommand[]>;
   skills(): Promise<{ name: string; description: string; source: string }[] | null>;
+  // P-SKILL.1 (ADR-0045): import dropped .md skill files — each is scanned at the gate; clean ones are
+  // written under .omp/skills/, flagged ones are held for Security-panel review.
+  skillImport(files: { name: string; content: string }[]): Promise<{ results: SkillImportResult[] } | null>;
   // P-IDE.2: set/clear the active bundled skill (its trusted prompt rides the user-turn preamble).
   setActiveSkill(name: string, prompt: string): Promise<{ active: string } | null>;
   clearActiveSkill(): Promise<{ active: string } | null>;
@@ -303,17 +340,18 @@ const FALLBACK_CONFIG: ConfigOption[] = [
   ] },
 ];
 
-async function streamChat(text: string, onEvent: (e: ChatEvent) => void): Promise<void> {
+// Generic NDJSON event stream (used by both /api/chat and the /api/goal loop).
+async function streamNdjson(path: string, body: unknown, onEvent: (e: ChatEvent) => void): Promise<void> {
   let res: Response;
   try {
-    res = await fetch("/api/chat", { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify({ text }) });
+    res = await fetch(path, { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify(body) });
   } catch {
-    onEvent({ type: "token", text: "[chat backend unreachable - is the GUI server running?]" });
+    onEvent({ type: "token", text: "[backend unreachable - is the GUI server running?]" });
     onEvent({ type: "done" });
     return;
   }
-  if (res.status === 404) { onEvent({ type: "token", text: "[chat backend is out of date - close the GUI server window and relaunch (launcher → G)]" }); onEvent({ type: "done" }); return; }
-  if (!res.ok || !res.body) { onEvent({ type: "token", text: `[chat backend error ${res.status}]` }); onEvent({ type: "done" }); return; }
+  if (res.status === 404) { onEvent({ type: "token", text: "[backend is out of date - close the GUI server window and relaunch (launcher → G)]" }); onEvent({ type: "done" }); return; }
+  if (!res.ok || !res.body) { onEvent({ type: "token", text: `[backend error ${res.status}]` }); onEvent({ type: "done" }); return; }
   const reader = res.body.getReader();
   const dec = new TextDecoder();
   let buf = "";
@@ -327,6 +365,7 @@ async function streamChat(text: string, onEvent: (e: ChatEvent) => void): Promis
   }
   flush(buf);
 }
+const streamChat = (text: string, onEvent: (e: ChatEvent) => void) => streamNdjson("/api/chat", { text }, onEvent);
 
 export const bridge: LucidBridge = {
   isElectron: !!shell?.isElectron,
@@ -345,6 +384,15 @@ export const bridge: LucidBridge = {
   usage: () => getData("/api/usage"),
   codeActivity: () => getData("/api/code-activity"),
   sendPrompt: streamChat,
+  runGoal: (opts, onEvent) => streamNdjson("/api/goal", opts, onEvent),
+  resumableLoops: () => getData("/api/goal/resumable"),
+  automations: () => getData("/api/automations"),
+  automationCreate: (spec) => post("/api/automations", spec),
+  automationEnable: (id, enabled) => post("/api/automations/enable", { id, enabled }),
+  automationDelete: (id) => post("/api/automations/delete", { id }),
+  automationRun: (id, onEvent) => streamNdjson("/api/automations/run", { id }, onEvent),
+  checkerModel: () => getData("/api/checker-model"),
+  setCheckerModel: (value) => post("/api/checker-model", { value }),
   config: async () => (await getData("/api/config")) ?? FALLBACK_CONFIG,
   refreshConfig: async () => (await post("/api/config/refresh", {})) ?? FALLBACK_CONFIG,
   setConfig: async (id, value) => (await post("/api/setConfig", { configId: id, value })) ?? FALLBACK_CONFIG,
@@ -353,8 +401,10 @@ export const bridge: LucidBridge = {
   setUiMode: (uiMode) => post("/api/uimode", { uiMode }),
   respondPermission: (id, optionId) => post("/api/chat/permission", { id, optionId }),
   cancelChat: () => post("/api/chat/cancel", {}),
+  cancelGoal: () => post("/api/goal/cancel", {}),
   commands: async () => (await getData("/api/commands")) ?? [],
   skills: () => getData("/api/skills"),
+  skillImport: (files) => post("/api/skills/import", { files }),
   setActiveSkill: (name, prompt) => post("/api/skill", { name, prompt }),
   clearActiveSkill: () => post("/api/skill", { clear: true }),
   skillActivated: (command, name, source) => post("/api/skill/activated", { command, name, source }),

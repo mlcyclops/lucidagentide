@@ -3901,3 +3901,639 @@ clutter in the chat (the `<recalled-memory>` block).
 
 ADR-0009 Phase A (cross-session memory recall); CLAUDE.md keystone #2 (the semantic-promotion gate);
 ADR-0040 (which cited this hygiene as the reason the user turn now carries knowledge, not noise).
+
+-----
+
+## ADR-0044 — P-TPS.1: streaming output-token readout (terminal + desktop), vendored from pi-token-speed
+
+**Date:** 2026-06-24
+**Status:** **Accepted (built)** — shared core + omp terminal adapter + desktop HUD readout + demo.
+**Context increment:** P-TPS.1. User ask: *"show the streaming token count while the model is thinking/replying, minus the entire system prompt — so nobody thinks the prompt is re-charged each turn"* (à la Claude Code). They recalled an omp-upstream feature and asked which version.
+
+### Context
+
+The feature they remembered is the upstream extension **`pi-token-speed`** (Gabriel Sanhueza, MIT, v0.5.1) — it is an **extension, not a core-version feature**, so "which version" has no answer. Verifying it against the installed tree surfaced two facts that make a literal install impossible on *both* of our surfaces:
+
+1. **It will not load under omp.** `settings.ts` / `commands.ts` import `@earendil-works/pi-coding-agent` and `@earendil-works/pi-tui` at **runtime** (`getAgentDir`, `getSettingsListTheme`, `SettingsList`). Our tree is `@oh-my-pi/*` (omp). `omp -e node_modules/pi-token-speed/index.ts` crashes on first import. (The *type-only* imports are erased by Bun and would be fine; the value imports are not.)
+2. **It is a no-op in the desktop IDE.** Its only renderer is `ctx.ui.setStatus` (omp's TUI status bar). On the ACP/RPC path the desktop spawns, omp stubs the entire `ExtensionUIContext` to `()=>{}` — the engine would run and the number would be discarded.
+
+What *does* hold: its **pure engine** (`engine.ts` + `sliding-window.ts` + `constants.ts`) has **zero foreign imports**, and the figure is **output-only** by construction. omp documents `Usage.output` as *"Total output tokens for the turn, including thinking, assistant text, and tool-call argument tokens"* — `input` / `cacheRead` / `cacheWrite` are separate fields, so the system prompt (frozen prefix + tools) is never in it. That is exactly the user's "minus the prompt" requirement, satisfied at the data source, not by filtering.
+
+### Decision
+
+**Vendor the pure engine, write two thin adapters.** (User chose "vendor the pure engine" over a fragile `@earendil-works → @oh-my-pi` shim.)
+
+1. **Shared core** — `harness/metrics/token_speed.ts`: a near-verbatim lift of pi-token-speed's engine + sliding window + word/punctuation estimator (MIT header preserved, modifications noted). Two intentional departures from upstream: **config is injected** via constructor (no `~/.pi/agent/settings.json` disk read), and the **clock is injectable** (`now()`) so the sliding window is deterministically testable. A plain-text `formatReadout()` (no ANSI) renders identically in a terminal or the DOM. Unit-tested (`token_speed.test.ts`) on the two load-bearing properties: the count reflects *only* the deltas fed in (nothing leaks in before `start()` / after `stop()`), and the figures (count, windowed tok/s, TTFT realignment, provider reconciliation) are correct against a controlled clock.
+2. **Terminal adapter** — `harness/omp/token_speed_extension.ts`: an omp extension (typed `any`, no omp imports, "loads under any omp version" — same defensive style as `security_extension.ts`). Drives the core from `message_update` (`text_delta`/`thinking_delta`/`toolcall_delta`, with `ev.partial.usage.output` when present → exact counts, estimate as fallback) and paints `ctx.ui.setStatus` with a themed `⚡ TPS:`. Registers `/tps` to cycle display mode (replacing the package's `SettingsList` menu, which needed the foreign UI imports). Wired into the `omp:secure` npm script.
+3. **Desktop adapter** — `desktop/renderer/app.ts`: the same engine, fed client-side from the `token`/`thinking` `ChatEvent`s already streaming over ACP, rendered in the per-message activity HUD as `· N tok out · R tok/s`. The existing context figure (from `usage_update`) is relabelled **`ctx`** so it is never mistaken for the per-turn output — directly resolving the confusion the user flagged.
+
+### What is deliberately NOT done
+
+- **The terminal extension is not added to the ACP launcher (`lucid_acp.ts`).** `ui.setStatus` is a no-op there, and adding a third `-e` would break the `ext_parity` / `lucid_acp` tests that assert the exact gate-first `-e` ordering. The desktop draws its own readout from the same core instead. Terminal-only by design.
+- **No backend / `ChatEvent` / `acp_backend.ts` change.** The desktop readout is computed entirely from existing events — zero new wire surface, zero parity-test risk.
+- **The context/`usage_update` figure is left intact** (only relabelled). It legitimately includes the prompt because it measures window *fill*; conflating it with output would be the very misrepresentation we are removing.
+
+### Consequences
+
+- The desktop shows a live, output-only `tok out · tok/s` while thinking and replying; the terminal `omp:secure` session shows `⚡ TPS:` in the status bar — one tested engine behind both.
+- The desktop count is an **estimate** (ACP deltas carry no per-delta `usage.output`; `usage_update` is context, not output); the terminal count is **exact** whenever omp reports usage, estimate-bridged before the first usage figure. Acceptable: the figure is a live speedometer, not a billing ledger (cost is already priced correctly via the cache-aware `usage_update`).
+- Prior art credited; we carry a small vendored copy rather than a dependency, consistent with the repo's "omp extensions are local `.ts`" convention. If upstream pi-token-speed materially improves its engine, re-vendoring is a localized future increment.
+
+### Relates to
+
+ADR-0041 (omp version-pin / compat-probe — this is a compat-probe outcome: the package's API matched omp's `ExtensionAPI`/`AssistantMessageEvent`/`Usage`, but its runtime package names did not); ADR-0027 (ACP session/usage plumbing the desktop figure rides on); CLAUDE.md invariant #6 (the output count is volatile tail data, never the frozen prefix).
+
+-----
+
+## ADR-0045 — Project skills: gated drop-import, model-assisted skill builder, and session-derived skills
+
+**Date:** 2026-06-24
+**Status:** **Accepted** — P-SKILL.1 (gated drop-import) built this increment; P-SKILL.2 (builder) and P-SKILL.3 (session-derived) designed here, deferred to their own increments.
+**Context increment:** P-SKILL.1 (+ design for P-SKILL.2/3).
+
+### Context
+
+The desktop surfaces *project skills* — markdown files under the workspace's `.omp/skills/<name>/SKILL.md` — which omp discovers natively (`discoverSkills(currentWorkspace())`, `desktop/skills_data.ts`). A skill becomes the agent's standing guidance (`/skill:<name>`, or the bundled-skill `<active-skill>` preamble re-delivered every turn, ADR-0029). **Today, project skill files are NOT scanned by the Lucid security gate** — omp loads them directly, so the gate is *not* authoritative for project skills. Bundled skills are the only ones vetted (frozen, reviewed corpus; `desktop/renderer/skills.ts`).
+
+The ask: (1) drag-and-drop `.md` skill files into Project Skills, *scanned at the gate*; (2) a "skills builder" that uses the **most-used model (by usage metrics)** to assess/normalize a skill; (3) build a new skill from **specific selected sessions**. A skill is *guidance the model obeys*, so a poisoned skill is a prompt-injection vector — making the gate authoritative for skill import is a security improvement, not just a feature.
+
+### Decision
+
+A three-phase design, one ADR, separate increments.
+
+**P-SKILL.1 — Gated drop-import (built now).** Drop `.md` onto Project Skills → the desktop server scans the content **fail-closed** through the Python scanner (`scanAndDecide(scanner, text, DEFAULT_POLICY)`, the same path as `scanPersona`). Clean → written to `<workspace>/.omp/skills/<slug>/SKILL.md` (so omp discovers it natively) under a `pathWithin` confinement check. **Suspicious/quarantined → NOT written**; recorded via `recordBlock(...)` so it surfaces in the Security panel as a reviewable block (the user's chosen "block + review" posture). New `POST /api/skills/import`. This closes the unscanned-project-skill gap: the gate becomes authoritative for imported skills.
+
+**P-SKILL.2 — Skills-builder assessment (deferred).** Opt-in (token cost, gated like the ADR-0042 model extractor). Runs the **most-used model** (`usageLedger().models[0]`, `ledgerProvider()`) via `backend.complete(system, user)` (one-shot, throwaway, already-gated session) to normalize a dropped draft into proper skill shape (`name`/`description` frontmatter + structured body) and flag issues. The model's output is **untrusted structure → re-scanned at the gate before save**; the user gets a preview/diff to accept. Wrinkle to resolve in that increment: `complete()` currently uses the *active chat* model, so targeting the most-used model needs a model override on the throwaway session.
+
+**P-SKILL.3 — Session-derived skills (deferred).** Select specific sessions (`listSessions` / `sessionMessages` — preamble-stripped `{role,text}[]`) → distill a reusable skill `.md` with the most-used model. Most security-sensitive (derived + model-generated content), so: scan the inputs, scan the generated skill before save, present a draft to edit. Treated with keystone-#2 discipline — a session-derived skill never becomes trusted guidance without a clean scan (and, by the P-SKILL.1 posture, review if flagged).
+
+### Security analysis (why this is sound)
+
+- **Fail-closed (invariant #3):** import scans through the same `scanAndDecide` seam; scanner-dead / malformed / timeout → blocked, never written.
+- **Gate becomes authoritative for skills:** previously project skills bypassed the scanner; the import path routes them through it. (Skills dropped *outside* the app — hand-placed in `.omp/skills/` — still bypass it; the ADR notes this as a known residual, mitigated by the fact that the app is the supported import path.)
+- **Injection posture:** a skill is obeyed by the model, so clean ≠ automatically safe-as-instructions. Skills remain **user-selected** (the user picks which to activate) and are delivered **delimited** (invariant #5) like personas (`wrapPersona`); a flagged skill is quarantined for review, not silently usable.
+- **Keystone #2 (P-SKILL.3):** model/session-derived skills are derived content; they are scanned before save and never auto-trusted.
+
+### What is deliberately deferred / not done
+
+- The builder (P-SKILL.2) and session-derived (P-SKILL.3) flows — designed, not built.
+- No change to how bundled skills work (still the trusted frozen corpus).
+- Hand-placed `.omp/skills/` files are not retroactively scanned (only the import path is gated).
+
+### Relates to
+
+ADR-0029 (P-IDE.2 active-skill delivery — skills as re-delivered, delimited guidance); ADR-0042 (opt-in model extraction — the cost-gated, scanned model-assist pattern P-SKILL.2 reuses); ADR-0019 (gate/quarantine + Security-panel block surfacing); CLAUDE.md invariants #3 (fail-closed), #5 (untrusted delimited), and keystone #2 (semantic-promotion gate).
+
+-----
+
+## ADR-0046 — The `/goal` loop primitive: capped maker iterations with a separate, objective checker
+
+**Date:** 2026-06-24
+**Status:** **Accepted** — P-GOAL.1 (the run-to-condition loop) built this increment; pause/resume/persistence deferred to P-GOAL.2.
+**Context increment:** P-GOAL.1.
+
+### Context
+
+P-SLASH.1 *listed* `/goal` as a steering skill but omp has no native `/goal` (Claude Code / Codex do). The real primitive — the heart of Osmani's "Loop Engineering" — is a control loop: define a goal and a **verifiable** stop condition, the agent iterates, and **a separate checker (not the maker) decides "done."** This ADR builds that loop in the desktop ACP backend, where the two pieces already exist: `backend.prompt()` runs a turn on the **persistent** session (iterations build on each other), and `backend.complete()` runs a **throwaway** session — a natural maker≠checker split.
+
+### Decision
+
+A capped loop with an objective checker, fully gated. (User-chosen posture: objective-command-with-model-fallback; capped + auto-approve + gated.)
+
+**Loop (`backend.runGoal({goal, condition, command, maxIters}, onEvent)`):** for each iteration up to `maxIters`: (1) emit `goal-iter`; (2) run a **maker** turn via `prompt()` toward the goal (streaming the usual `token`/`thinking`/`tool` events; the per-iteration `done` is swallowed so the client sees one continuous loop); (3) run the **checker** in a *separate* `complete()` session; (4) emit `goal-check {done, reason}`; stop with `goal-done` if met, else continue. A single `done` closes the stream at the end.
+
+**Checker (`checkGoal`):** if a verification `command` is given, a separate checker session **runs it and reports exit-0** as strict JSON `{done, reason}` — a real proof (Osmani's "verifiable stopping condition"), and the checker is told NOT to modify anything. With no command, it falls back to a **model judgment** against the maker's reported work, conservative (unsure ⇒ not done). `parseGoalVerdict()` is a pure, unit-tested parser; **a failed/empty checker is treated as not-done** (fail-closed — the loop never *falsely* declares success).
+
+**Safety (the load-bearing part of an unattended loop):**
+- **Capped.** Hard `maxIters` (user-set, default 6) + **auto-stop on no-progress** (two iterations with no tool actions and still not done ⇒ stop). No runaway.
+- **Gated.** During the loop the backend forces `permissionMode: "auto"` so it runs unattended — but **every tool call is still scanned fail-closed by the in-process gate** (CLAUDE.md invariant #3). The gate, not human approval, is the safety boundary; the cap bounds cost.
+- **maker ≠ checker.** The checker is a distinct session (and may be a distinct model later); it never grades its own work.
+
+**Surface:** `POST /api/goal` streams the loop as NDJSON (same shape as `/api/chat` plus the `goal-*` events). The composer's `/goal` opens a small launcher (goal · optional verify command · max iterations) and renders the loop inline with per-iteration dividers and the checker's verdict.
+
+### What is deliberately deferred (P-GOAL.2+)
+
+- **Pause / resume / clear** and on-disk loop state (the article's "memory") — phase 1 is run-to-condition, in-session.
+- A **distinct checker model** (most-used / cheaper model) — phase 1's checker reuses the session model via `complete()`; ADR-0045's "model override on `complete()`" wrinkle applies here too.
+- **Scheduled automations** (the loop's "heartbeat") — a separate Loop-Engineering building block this harness doesn't yet expose.
+
+### Relates to
+
+ADR-0045 / P-SLASH.1 (listed `/goal` as a skill; this builds the primitive); ADR-0027 (ACP session/prompt + `complete()` plumbing); ADR-0028 (subagent maker/checker split — same principle applied to the stop condition); CLAUDE.md invariant #3 (fail-closed gate is the loop's safety boundary).
+
+-----
+
+## ADR-0047 — Scheduled automations: the loop's in-process "heartbeat"
+
+**Date:** 2026-06-24
+**Status:** **Accepted** — P-GOAL.5 built this increment (in-process scheduler; interval + daily cadence; created disabled).
+**Context increment:** P-GOAL.5.
+
+### Context
+
+ADR-0046 gave us the `/goal` loop (maker iterations + a separate objective checker), and
+P-GOAL.2–4 added cancellation, durable on-disk memory, and resume. The one Loop-Engineering
+building block (Osmani) the harness still didn't expose is the **automation** — the loop's
+"heartbeat": a saved goal that runs on a *cadence* without a human kicking it off each time.
+"The loop you don't have to start is the one that compounds."
+
+### Decision
+
+An **automation is just a saved `/goal` spec** — goal + verifiable condition + optional
+verification command + iteration cap — **plus a cadence**. It reuses `runGoal` wholesale, so
+every scheduled tick inherits the exact same safety envelope: maker ≠ checker, the durable
+on-disk loop memory, and — load-bearing — the **in-process fail-closed gate scanning every
+tool call** (CLAUDE.md #3/#4). Three forks were decided with the user:
+
+1. **In-process scheduler only (app open).** A `setInterval` inside the harness ticks every
+   30s and fires the first *due* automation. We deliberately do **not** register with the OS
+   scheduler (Windows Task Scheduler): that would spawn omp in a process where the in-process
+   gate isn't guaranteed armed — a fail-closed risk — and would drag platform-specific surface
+   against the TS-only boundary (invariant #2). The safe envelope is "while the app is open";
+   nothing runs once it's closed. The timer is `.unref()`'d so it never keeps the process alive.
+
+2. **Cadence is interval *or* daily.** `{kind:"interval", everyMin}` ("every N minutes/hours")
+   or `{kind:"daily", hhmm}` ("every day at HH:MM", local time). `isDue(a, now)` is a **pure**
+   function (heavily unit-tested) so scheduling is deterministic and side-effect-free; the timer
+   only decides *whether* to call `runGoal`, never *how* the loop behaves.
+
+3. **Disabled until enabled.** A freshly-created automation is **inert** — saved but not armed.
+   Nothing runs commands unattended on a cadence until the user explicitly flips it on. Safest
+   default for an unattended-loop primitive; arming is a deliberate, reversible toggle.
+
+### Mechanics / invariants preserved
+
+- **Store:** a single JSON array at `<workspace>/.omp/automations.json`, confined via
+  `pathWithin` and fully fail-safe — any read/parse/write error degrades to "no automations",
+  never throwing into the timer. A malformed cadence is rejected at create time (fail-closed:
+  a bad cadence never arms). `desktop/automations.ts` is the store + the pure scheduling math.
+- **Never preempt the user.** A tick is skipped if a chat turn (`askActive`), another loop
+  (`goalActive`), a pending permission, or an in-flight automation (`autoRunning`) is active.
+  At most one automation runs per tick. `lastRunAt` is stamped *up-front* so a slow run can't be
+  re-fired by the next tick before it finishes.
+- **Background runs stream nowhere** — the durable goal-memory file written by `runGoal`
+  (ADR-0046) is the audit trail; `lastResult` on the record is surfaced in the UI. A **"run
+  now"** action streams the same goal events into the chat transcript, reusing the P-GOAL.1
+  inline loop renderer.
+- **Surface:** `GET/POST /api/automations`, `POST /api/automations/{enable,delete,run}`; the
+  scheduler is armed once at dev-server startup (`backend.startAutomationScheduler()`). The
+  `/goal` modal gained a schedule picker ("Run once now / Every… / Daily at…") and a saved-
+  automations list (enable toggle · run-now · delete · last-run status).
+
+### Consequences
+
+The Loop-Engineering picture is now complete in this harness: maker/checker loop, cancellation,
+durable memory, resume, and — now — scheduled automations. Still deferred: a distinct/cheaper
+*checker* model (the checker currently shares the maker's model via `complete()`), and OS-level
+scheduling for app-closed runs (intentionally out of scope on the fail-closed grounds above).
+
+### Relates to
+
+ADR-0046 / P-GOAL.1–4 (the loop, cancel, memory, resume this schedules); CLAUDE.md invariants
+#2 (TS-only — why no OS scheduler), #3/#4 (the in-process fail-closed gate is what makes an
+unattended cadence safe); ADR-0028 (maker/checker split the loop reuses).
+
+-----
+
+## ADR-0048 — A distinct, recommended CHECKER model for the `/goal` loop
+
+**Date:** 2026-06-24
+**Status:** **Accepted** — P-GOAL.6 built this increment (per-session checker model + auto recommendation + user override).
+**Context increment:** P-GOAL.6.
+
+### Context
+
+ADR-0046 split the loop into a maker and a separate `complete()`-based checker, but both ran on
+the *same* model — whatever the user picked for chat, often a flagship (e.g. `claude-opus-4-8`).
+The checker is a small, frequent, read-only judgement ("did the verification command exit 0?" /
+"is the condition met?") that runs once **per iteration**. Paying flagship rates for it — every
+round, on every automation tick — is wasteful. The remaining stub on the loop was: let the
+checker run on a cheaper model, user-selectable, with a smart default.
+
+### Decision
+
+The checker runs on a **resolved checker model**, in priority order: (1) the user's explicit
+choice, if it's still in their accessible list; (2) an **auto recommendation**; (3) the maker's
+model (the ADR-0046 default) when nothing else resolves. The recommendation is drawn **only from
+the user's own model picker** — the models their configured providers/subscriptions actually
+expose — so the default always works regardless of which APIs/keys/gateways they have.
+
+**Recommendation heuristic** (`desktop/checker_model.ts`, a PURE, unit-tested module), in order:
+1. **Tier** — prefer the small-but-capable class (`haiku` / `flash` / `mini` / `spark`) over both
+   ultra-cheap-but-weak (`nano` / `lite` / `oss`) and flagship overkill (`opus` / `sonnet` / `pro`
+   / full `gpt` / `o3`). Tier dominates the score.
+2. **Same provider family** as the user's current chat model — same credentials/billing they're
+   already using (a `google-antigravity` user gets a Gemini Flash, an AskSage-gov user an AskSage
+   mini, never a model behind a key they don't have).
+3. **Newest version** (date pins stripped so a snapshot id never reads as a huge version), minus a
+   light flagship-cost penalty that only breaks ties *within* a tier (so a flagship-only fallback
+   prefers e.g. `sonnet` over `opus`).
+4. **Clean "latest" alias** over a date-pinned id, so the checker tracks the newest snapshot.
+
+E.g. a maker on `anthropic/claude-opus-4-8` → checker auto-recommends `anthropic/claude-haiku-4-5`.
+
+### Mechanics / invariants preserved
+
+- **Per-session override, chat untouched.** `complete()` gained an optional `model`: the throwaway
+  session does `session/set_config_option {model}` *before* the prompt, so the override is
+  session-scoped and the chat session's model is never changed. Best-effort — if the set fails the
+  completion just runs on the default model; the loop never blocks on it (fail-safe).
+- **Fail-safe resolution.** A stale/removed override (model no longer in the list) silently falls
+  through to the recommendation, never an error. An empty list falls through to the maker model.
+- **Persistence.** The choice is a single `checkerModel` field in the git-ignored GUI settings
+  (`""`/unset = auto). No new schema, no migration.
+- **Surface.** `GET/POST /api/checker-model` (state = selected + recommended + why + current +
+  accessible options). The `/goal` modal gained a **Checker model** picker: "Auto — recommended:
+  <name>" first (with a one-line *why*), then the full list grouped by provider. Automations
+  inherit it automatically (their ticks call the same `checkGoal`).
+
+### Consequences
+
+Every `/goal` round — interactive or scheduled (ADR-0047) — now judges on a cheap, capable, recent
+model by default, with full user control. This closes the last stub on the goal loop: all of
+Osmani's Loop-Engineering building blocks (maker/checker loop, cancel, durable memory, resume,
+scheduled automations) are now exposed, and the checker is no longer pinned to the maker's model.
+
+### Relates to
+
+ADR-0046 (the maker/checker loop this refines); ADR-0047 (automations whose ticks inherit the
+checker model); ADR-0031 (the `model` config option + AI-LOC authoring-model plumbing this reads);
+CLAUDE.md invariant #3 (the checker's verdict is still parsed fail-closed via `parseGoalVerdict`).
+
+### Addendum — P-GOAL.6.1 (same ADR): GOV lock, readability, token estimate
+
+Three follow-ups landed on the checker picker the increment after P-GOAL.6:
+
+- **AskSage GOV lock.** When the "AskSage only" lock is set (user setting OR org-managed config),
+  the checker's accessible list is restricted to **GOV models routed through AskSage** (asksage
+  provider + a `gov` id) — so a locked-down deployment never runs the checker on a non-GOV or
+  non-AskSage route. `accessibleModels()` applies this filter (fail-safe: only narrows when such
+  models exist), so it constrains BOTH the picker and the auto recommendation. e.g. locked → the
+  recommendation becomes `asksage-google/google-gemini-3.5-flash-gov` (the GOV small-tier model).
+- **Readability.** The picker, its label, and the "why" line are larger and higher-contrast
+  (13px / `--txt-2`, up from 11px / `--txt-4`).
+- **Token estimate + confirm.** A live, rough token estimate sits at the modal's lower-left
+  (`desktop/loop_estimate.ts`, pure + unit-tested): `iters × (~9k maker + ~1.5k checker)`, clamped
+  to the loop's 1..20 range. It updates as the iteration count and checker model change, and a hover
+  explains the per-iteration assumptions, names the maker + checker models, and notes it's a CEILING
+  (a loop usually stops earlier). The user confirms by clicking Run with the estimate in view. The
+  "Auto" option label is em-dash-free (`Auto (recommended: <name>)`).
+
+-----
+
+## ADR-0049 — The /goal launcher as a run console: cost estimate + per-run model/skill/persona
+
+**Date:** 2026-06-24
+**Status:** **Accepted** — P-GOAL.7 built this increment.
+**Context increment:** P-GOAL.7.
+
+### Context
+
+The /goal modal had a token estimate (P-GOAL.6.1) and a checker-model picker. The user asked to (a)
+show a real DOLLAR estimate rounded to cents, rationalized against prompt-cache savings; (b) let the
+loop choose its base (maker) model, thinking level, a skill, and a persona; (c) use the app's premium
+tooltip for the estimate; and (d) enlarge the module's text for readability.
+
+### Decision
+
+The launcher becomes a small "run console". Three pieces:
+
+- **Dollar estimate, cache-rationalized.** `desktop/model_pricing.ts` (pure, tested) prices a model two
+  ways, in priority order: the user's ACTUAL metered price from the usage ledger (cost ÷ tokens per
+  model — truest for them), else a built-in per-tier LIST table (approximate public prices). `desktop/
+  loop_estimate.ts` gains `estimateGoalCost`: it splits each iteration into input/output tokens, prices
+  maker + checker separately, and applies the prompt-cache discount to INPUT (cached input billed at
+  ~10%), using the user's observed cache-hit rate (else a modest 0.35 — a loop re-sends a large,
+  identical prefix every round, so reuse is real). Shown as `~$0.00 · ~Nk tokens · N loops` at the
+  modal's lower-left; it's a CEILING (loops usually stop early). All estimates; the tooltip says so.
+- **Per-run "Run with" pickers.** Base model, thinking, skill (None + bundled), and persona (when
+  AskSage personas exist). They default to the current session state and update the estimate live, but
+  are applied to the session ONLY at Run time (`applyRunWith`) — browsing the dropdowns never mutates
+  the live session. `applyRunWith` only changes what differs from current, so a default run is a no-op;
+  it's best-effort and never blocks the loop. (Saved automations don't capture these yet — noted stub.)
+- **Premium tooltip + readability.** The estimate uses the app's `data-tip="Title|Body"` tooltip (the
+  same one as the model badge), not a native title. The whole modal's type is larger / higher-contrast.
+
+### Consequences
+
+A user can see, before committing, roughly what a loop will cost in dollars for THEIR plan and cache
+behaviour, and tune the model/thinking/skill/persona + checker to trade cost against capability. The
+dollar figure is only as good as the price source: real when the model has metered usage, an approximate
+list price otherwise (and list prices age — that's the main stub, alongside automations not yet carrying
+the run-with selections and the flat per-iteration token assumptions).
+
+### Relates to
+
+ADR-0046 (the loop), ADR-0047 (automations), ADR-0048 (the checker model this prices alongside the
+maker); P10.2 (the usage/cost ledger the actual prices come from); ADR-0029 (the active-skill + persona
+paths the run-with pickers drive).
+
+-----
+
+## ADR-0050 — The /goal launcher: guided walkthrough, premium tooltips, lockdown model policy
+
+**Date:** 2026-06-24
+**Status:** **Accepted** — P-GOAL.8 built this increment.
+**Context increment:** P-GOAL.8.
+
+### Context
+
+The /goal launcher had grown to a dense single screen (goal, verify command, iterations, checker,
+run-with, schedule, estimate) — powerful but intimidating for a first-time user, and its cost tooltip
+rendered UNDER the modal. Feedback: make it approachable, fix the tooltip, suggest common verify
+commands, and stop the base-model picker from offering non-AskSage models under the gov lockdown.
+
+### Decision
+
+- **Guided walkthrough (default) ⇄ Advanced.** The modal defaults to a five-step walkthrough showing
+  1–3 inputs at a time — (1) Goal, (2) Verification, (3) Effort + checker, (4) Run with, (5) Schedule —
+  each with a one-line note and a premium info-dot tooltip. Back/Next navigate; step 1 requires a goal
+  before advancing; the last step reveals Run / Save. A pill in the upper-right toggles **Advanced**
+  (the old all-at-once view); the choice persists in `localStorage` (`lucid.goalMode`). The same field
+  DOM backs both modes (one element per control), so all existing wiring — checker picker, run-with,
+  cadence, live estimate — works unchanged; the mode only controls visibility + the button set.
+- **Premium tooltips + z-index fix.** Every section has an info dot using the app's global
+  `data-tip="Title|Body"` tooltip (same as the model badge). `#tip`'s z-index was below the goal
+  scrim (120 < 200) so tooltips rendered under the modal — raised to 260.
+- **Verify-command suggestions.** The command input is backed by a `<datalist>` of ~20 common
+  commands (npm/pnpm/bun/pytest/go/cargo/make/…); the user can pick one or type anything.
+- **AskSage lockdown model policy (per the user).** The CHECKER stays GOV-only (ADR-0048). The BASE
+  model, which previously still offered non-AskSage models under lockdown, is now restricted to
+  AskSage-routed models and grouped **Gemini, then GPT, then Anthropic** (GOV-suffixed first within
+  each, via `groupByFamily` + `sortGovFirstNewest`); RAG/auxiliary routes are excluded. AskSage is the
+  gov gateway, so all of these are compliant; this is the only policy that still surfaces GPT (no GPT
+  id carries a literal `-gov` suffix).
+
+### Consequences
+
+A newcomer is walked through one decision at a time with inline help; a power user flips to Advanced
+once and stays there. The cost tooltip is finally visible. Under lockdown the base model can no longer
+escape the AskSage gateway. The walkthrough is presentation-only over the existing controls, so it adds
+no new server surface and no new estimate/pricing logic.
+
+### Relates to
+
+ADR-0046/47/48/49 (the loop, automations, checker model, cost estimate this wraps); ADR-0029 P-IDE.1c
+(`model_families` gov/ordering helpers reused for the lockdown base picker); the global tooltip system.
+
+-----
+
+## ADR-0051 — AskSage Claude tool use (streamSimple adapter)
+
+**Date:** 2026-06-24
+**Status:** **Accepted** — built this increment.
+**Context increment:** P-ASKSAGE.TOOLS.
+
+### Context
+
+On the locked-down (AskSage gov gateway) system, Claude/Gemini models served through AskSage could
+not write files, run commands, or use ANY omp tool: the agent emitted tool-call XML as plain text,
+nothing executed, yet it reported success. Root cause was in `harness/omp/asksage_stream.ts` (the
+custom `streamSimple` adapter for AskSage's non-streamed routes, ADR-0007): it never passed `tools`
+to the Anthropic Messages API, flattened tool results to plain text, parsed only text from the reply,
+and always reported `stopReason: "stop"` — so omp never knew to execute a tool and loop.
+
+### Decision
+
+The Anthropic route is now tool-capable (changes confined to that one file; no frozen contract touched):
+
+- **Tools sent.** `callAnthropic` serializes `context.tools` to Anthropic `{name, description,
+  input_schema}`, using omp's own `toolWireSchema` (resolves Zod / ArkType / JSON-Schema authoring
+  shapes to a JSON Schema) so the schema matches what omp's native providers send.
+- **Tool calls parsed.** The reply's `tool_use` content blocks become omp `ToolCall`s (`{type:
+  "toolCall", id, name, arguments}`); `stop_reason: "tool_use"` (or any tool call present) maps to
+  omp `stopReason: "toolUse"`.
+- **Events emitted.** A new `toAnthropicMessages` builder preserves the tool-use conversation
+  structure Claude requires — a prior assistant turn's `toolCall` content → `tool_use` blocks; omp
+  `toolResult` messages → `tool_result` blocks (consecutive ones merged into one user turn). The
+  stream emits `text_*` then, per call, `toolcall_start`/`toolcall_end`, and a final `done` with
+  reason `toolUse`. omp executes each call and loops — and because they flow as real `toolcall`
+  events, the **in-process security gate scans every one** (invariant #3/#4), unchanged.
+- **Google + RAG unchanged.** Gemini tool use (needs `functionDeclarations`) is out of scope and
+  stays text-only; the `/query` RAG route is single-message with no tool use. Neither regresses, and
+  neither is ever sent a `tools` field.
+
+### Verification
+
+`harness/omp/asksage_stream.test.ts` (5 tests, fetch mocked): tool_use → toolcall events + `toolUse`
+stop reason; mixed text+tool ordering and a content array with both; the request wire format carries
+`input_schema` and a prior round-trip as `tool_use` + `tool_result`; text-only unchanged; Google
+stays text-only (no `tools`). `bun test harness` 471 · `bun test desktop` 326 · typecheck clean.
+
+### Relates to
+
+ADR-0007 (the AskSage adapter); CLAUDE.md invariants #3/#4 (the gate scans the tool calls this now
+emits); the TS-only boundary (the fix is TS in the existing adapter — no new surface).
+
+-----
+
+## ADR-0052 — Monaco CSP: allow data: fonts + blob: workers
+
+**Date:** 2026-06-24
+**Status:** **Accepted** — built this increment.
+**Context increment:** P-IDE.CSP.
+
+### Context
+
+On the locked-down system the Monaco editor logged two CSP violations: its codicon icon font (inlined
+as a `data:font/ttf;base64,…` URL in Monaco's min `editor.main.css`) was blocked by `font-src 'self'`,
+and its language-service worker (a `blob:` URL) was blocked by `worker-src 'self'`. The P-IDE.6 strict
+CSP (ADR-0036) plus a same-origin worker bootstrap worked on dev Chromium but not under the
+locked-down browser's stricter enforcement — the font especially is unavoidable (Monaco's build inlines
+it as data:, not a file we can serve).
+
+### Decision
+
+Relax exactly two CSP directives in `desktop/renderer/index.html`: `font-src 'self' data:` and
+`worker-src 'self' blob:`. The same-origin worker bootstrap stays (preferred when assets are present);
+`blob:` is the belt-and-suspenders fallback. This is the standard, documented Monaco CSP.
+
+**Why it's safe:** both additions are same-origin-DERIVED and cannot exfiltrate — a data: font is
+inert bytes, a blob: worker can only run code already admitted by `script-src 'self'`. The actual
+egress controls are untouched: `connect-src 'self' http://localhost:* ws://localhost:*` and
+`script-src 'self'` still block any network call or remote script. So the locked-down posture holds
+where it matters; we relaxed only the two inert, same-origin resource types Monaco needs.
+
+### Verification
+
+CSP served with both relaxations; a `blob:` Worker now constructs without error and a `data:` font
+load raises NO `securitypolicyviolation` (zero violations observed for both, where before each was
+blocked). Editor functionality (IntelliSense workers) restored on the locked-down build.
+
+### Relates to
+
+ADR-0036 / P-IDE.6 (the strict CSP + same-origin worker bootstrap this minimally relaxes).
+
+### Addendum — Gemini tool use (completes ADR-0051's deferred Fix 5)
+
+The AskSage Gemini route is now tool-capable too (the bug doc had deferred it). Mirroring omp's own
+native Google provider so the wire format matches what omp uses against real Gemini:
+
+- **Tools sent** as `tools: [{ functionDeclarations: [{ name, description, parametersJsonSchema }] }]`,
+  the schema via `normalizeSchemaForGoogle(toolWireSchema(tool))` (omp's Gemini normalizer).
+- **Calls parsed** from `candidates[0].content.parts[].functionCall {name, args}` → omp `ToolCall`s.
+  Gemini returns no call id, so we mint a synthetic one; omp's `requiresToolCallId` is false for
+  non-Claude models, so results are replayed back by **name**, not id.
+- **History preserved** by `toGoogleContents`: an assistant `toolCall` → a `functionCall` part in a
+  `model` turn; an omp `toolResult` → a `functionResponse` part (`{output}` or `{error}`) merged into
+  a single `user` turn — exactly omp's structure. Emission reuses the same `emit()` path (toolcall
+  events + `toolUse`), so the gate scans Gemini tool calls identically.
+
+Only the RAG `/query` route stays text-only (single-message endpoint, no tool use). 3 new Gemini tests
+(functionCall→events, the `functionDeclarations`/`functionResponse` wire round-trip, text-only no-tools)
+alongside the 4 Anthropic ones. `bun test harness` 473. Live gov-gateway verification is still the
+manual check (same caveat as the Anthropic path — both are unit-tested against mocked HTTP).
+
+-----
+
+## ADR-0053 — Knowledge ingest: local RAG vector store + AskSage dataset training (SCOPE/PLAN)
+
+**Date:** 2026-06-24
+**Status:** **Proposed** — scope + plan only; no code this increment. Splits into P-RAG.1..4 below.
+**Context increment:** P-RAG (planning).
+
+### Context
+
+The user wants a "Knowledge / Data" module that parses PDFs and images **locally** into a **local vector
+datastore** for retrieval against multimodal models, AND lets AskSage **Civ** users train named AskSage
+datasets — modeled on AskSage's own "Data Settings → Manage Datasets → File Ingest" popups, but with
+clearer wording, premium hover tooltips, and a guided walkthrough + advanced mode (the P-GOAL.8 pattern).
+
+Two distinct trust paths, which the UI must keep visually separate:
+- **Local** — parse + embed + store **on this host**; nothing leaves the machine. The privacy/air-gap path.
+- **AskSage** — upload/train into AskSage-hosted datasets via the gov gateway. Content leaves the host.
+
+What already exists (research): DuckDB (`@duckdb/node-api`) with a frozen, numbered-migration schema; the
+fail-closed Unicode scanner gate (`scanAndDecide`) + trust labels + `UNTRUSTED_CONTENT` delimiters
+(invariant #5); the AskSage helpers (`desktop/asksage.ts`: `listDatasets`/`monthlyTokens`/persona scan)
+and the `/query` RAG route; the compartment model (work/personal/cui, ADR-0012); and the P-GOAL.8 guided
+walkthrough. What does NOT exist: any embedding model, PDF/image parsing, or vector column.
+
+### Decision — vector datastore: DuckDB built-in cosine (no extension), HNSW later
+
+Reuse the existing DuckDB. A new **migration `0010_knowledge_vectors.sql`** adds `kb_datasets`
+(id, name, classification U|CUI, source local|asksage, embedding_model, dim, created_at) and `kb_chunks`
+(chunk_id, dataset_id, artifact_id to content_artifacts, source_path, ordinal, text, trust_label,
+`embedding FLOAT[]`, dim, created_at). Retrieval is **brute-force** `ORDER BY array_cosine_distance(
+embedding::FLOAT[dim], $q) LIMIT k` using DuckDB's **built-in** array functions — **no extension to
+install** (so it works air-gapped; `INSTALL vss` would require a network fetch). For a single-user,
+hundreds-to-thousands-of-chunks knowledge base this is fast enough. The `vss`/HNSW index (usearch-based)
+is a **future, optional accelerator** — and only if its binary is **bundled** (air-gap) and its
+experimental-persistence corruption risk is accepted; brute-force avoids both. This honors invariant #10
+(new numbered migration, never edit a frozen one) and adds no new datastore dependency.
+
+### Decision — local parse + embed (phased, TS-only, air-gap-clean)
+
+- **PDF text:** `unpdf` (or `pdfjs-dist`) — pure JS/WASM, no native binary, runs in the Bun harness.
+- **Text embeddings:** `@huggingface/transformers` on the **WASM** backend (avoids the native
+  `onnxruntime-node` the desktop build currently excludes), model `bge-small-en-v1.5` (384-dim) or
+  `all-MiniLM-L6-v2`. Weights are **bundled as extraResources** (air-gap; no runtime download). Embedding
+  runs server-side (harness/dev server), where the scanner + DuckDB write already live.
+- **Images / multimodal (Phase 2):** prefer **caption-at-ingest** — the active multimodal model describes
+  the image (and optional `tesseract.js` WASM OCR pulls embedded text); the caption+OCR text is scanned,
+  embedded, and stored, and the image bytes are retained for later inclusion in multimodal prompts. This
+  reuses existing models and keeps the new ML dependency to ONE text embedder. **CLIP shared-space
+  embeddings** (`Xenova/clip-vit-base-patch32`) are the heavier alternative (true text-image search) —
+  noted, not chosen for v1.
+
+### Decision — security (this is a security product; non-negotiable)
+
+- **Every extracted text chunk** (PDF text, image caption/OCR) is **scanned fail-closed** by the Unicode
+  scanner before it is stored AND before it is ever injected — same `scanAndDecide` path as personas /
+  skill import. Blocked chunks are recorded via `recordBlock`, never embedded.
+- Stored chunks carry a **trust label**; retrieval wraps the top-k in `UNTRUSTED_CONTENT_START/END`
+  (invariant #5) and injects only in the user-turn tail, never the frozen prefix.
+- Each dataset has a **classification** (U / CUI), aligned with the compartment model. **CUI-classified
+  content is never offered to the AskSage *Civ* endpoint** — the AskSage path is gated to U (or a gov
+  base); the UI states the boundary plainly.
+- New `EventName`s for the audit trail (a contracts change = its own increment): `knowledge_ingested`,
+  `chunk_embedded`, `knowledge_retrieved` (reuse `content_ingested`/`content_scanned`/`artifact_quarantined`
+  where they already fit). Artifacts persist to `content_artifacts` as today.
+
+### Decision — AskSage training (Civ users)
+
+Server-side wrappers mirroring the existing `listDatasets` pattern (POST, `x-access-tokens`, fail-soft),
+new `/api/asksage/dataset/*` routes: list (`/get-datasets`, have it), **create** (`/add-dataset` or
+`/dataset`), **train text** (`/train` — `{context, content, summarize, summarize_model, force_dataset}`),
+**train file** (multipart `/file` aka `/train-with-file`), list files (`/get-all-files-ingested`), delete
+file (`/delete-filename-from-dataset`), dataset info/results/copy. **Exact paths/params confirmed at
+implementation** against a live gateway (the public docs expose `/train` + `/file`; the swagger UI also
+shows `/train-with-file`/`/train-with-array` — some may be client-method names). Custom dataset names are
+supported (the community note: pass the plain name, not the `user_content_…` mangled form).
+
+### Decision — UI: one "Knowledge" popup, guided + advanced (P-GOAL.8 pattern)
+
+A single modal, reusing the goal-modal walkthrough machinery (guided default vs Advanced toggle persisted
+in `localStorage`, premium `data-tip` tooltips, info dots, step nav). **Guided steps:** (1) Destination —
+**Local (stays on this host)** vs **AskSage dataset (uploads to the gateway)**, each explained; (2)
+Dataset — pick existing or create with a **custom name + classification**; (3) Files — drag-drop PDF/image
+(supported-formats list, clearer than AskSage's); (4) Parse + scan preview — show what was extracted and
+the gate verdict per file BEFORE committing; (5) Ingest — embed+store locally, or upload to AskSage, with
+a progress + result summary. **Advanced mode:** the AskSage-style one-screen grid (datasets, files,
+filters, ingest, delete). **Wording upgrades over AskSage:** say *where data goes* and *why*, what parsing
++ embedding actually do, that everything is scanned at the gate, and what each classification means.
+
+### Phasing
+
+- **P-RAG.1** — local PDF to text ingest: migration 0010, `unpdf` parse, text embedder (bundled), DuckDB
+  brute-force retrieval, scan-gated, the Knowledge popup (guided+advanced) for the LOCAL path, and RAG
+  injection (delimited) into the chat turn.
+- **P-RAG.2** — image/multimodal ingest (caption+OCR at ingest; image retained for multimodal prompts).
+- **P-RAG.3** — AskSage dataset training UI (create/list/ingest/delete) for Civ users, classification-gated.
+- **P-RAG.4** — polish: retrieval ranking/citations in replies, dataset management (rename/delete/stats),
+  HNSW accelerator if the corpus grows.
+
+### Resolved decisions (locked with the user 2026-06-24)
+
+1. **Embedder weights → BUNDLE** the ONNX text-embedder into the installer (air-gap; works fully offline on
+   the locked-down target; larger installer accepted).
+2. **Images → CAPTION-AT-INGEST** for v1 (active multimodal model describes the image + optional OCR →
+   embed the caption; image bytes retained for multimodal prompts). CLIP shared-space embeddings deferred.
+3. **KB DB → SEPARATE `knowledge.duckdb`** (no write-lock contention with omp's `agent_obs.duckdb`).
+4. **Retrieval trigger → MIRROR THE DATASET SELECTOR** (selecting a local dataset auto-retrieves + injects
+   delimited chunks each turn, consistent with the existing AskSage datasets dropdown).
+
+### Performance / laptop feasibility
+
+Designed to run on a standard (incl. locked-down/gov) laptop — 8 GB+ RAM, modern CPU, **no GPU, no native
+binaries, no internet** for the local path. Profile:
+
+- **Querying is always fast.** DuckDB brute-force cosine over 384-dim vectors is sub-millisecond to a few
+  ms for a realistic single-user KB (hundreds to tens of thousands of chunks).
+- **Ingest is the heaviest moment, and it is one-time.** The WASM text embedder runs ~20–100 ms per chunk
+  on CPU, so a large PDF (100–300 chunks) is a few seconds to ~30 s. Mitigated with **batched embedding,
+  background ingest, and a progress bar** so the UI never blocks.
+- **RAM stays modest.** Electron baseline + a transient ~0.3–0.5 GB while embedding; comfortable on 8 GB.
+  Model weights ~33–90 MB; vectors ~1.5 KB/chunk (10k chunks ≈ 15 MB).
+- **Image captioning is offloaded to the model API** (network call), so the laptop does no local vision
+  compute. Optional `tesseract.js` OCR is the slowest *local* op (~1–5 s/image) — secondary to captioning.
+
+Two real limits, with escape hatches: (1) brute-force scales linearly — fine to ~tens of thousands of
+chunks; a *very* large KB (100k+) is when the deferred bundled **HNSW** accelerator (P-RAG.4) earns its
+keep; (2) bulk OCR is CPU-bound — kept optional. Trade-off accepted: a larger installer (bundled weights)
+in exchange for fully-offline operation. These constraints are *why* the design chose WASM over native
+`onnxruntime`, brute-force over the network-`INSTALL`ed `vss` extension, and caption-at-ingest over a
+second local vision model.
+
+### Alternatives considered
+
+- **Vector store:** sqlite-vec / LanceDB / Chroma / Qdrant — all add a new datastore + (LanceDB/Qdrant)
+  native or server surface; DuckDB is already in-tree and air-gap-clean. **vss/HNSW extension** — needs a
+  network `INSTALL` or a bundled binary + experimental-persistence (corruption) risk; deferred.
+- **Embeddings:** remote embedding API (defeats local privacy / air-gap) — rejected for the local path.
+  `onnxruntime-node` native — the desktop build already excludes it; WASM backend avoids per-platform
+  native binaries.
+
+### Invariants preserved
+
+#2 (TS-only — `unpdf`/transformers.js/tesseract.js are JS/WASM; the only Python stays the scanner) · #3/#5
+(every ingested chunk scanned fail-closed, stored with a trust label, injected only delimited + late) · #8
+(new events via the `EventName` enum) · #9 (stable `*_id` for datasets/chunks) · #10 (a new numbered
+migration; frozen ones untouched) · keystone #2 (suspicious-source content never auto-promotes — RAG
+chunks are retrieval context, never semantic memory).
+
+### Relates to
+
+ADR-0007 (AskSage adapter + `/query` RAG this extends); ADR-0012 (compartments/classification); ADR-0019
+(gate/quarantine + Security-panel surfacing); ADR-0050 / P-GOAL.8 (the guided-walkthrough UI pattern
+reused); CLAUDE.md invariants #2/#3/#5/#10 + keystone #2.

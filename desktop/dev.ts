@@ -12,7 +12,7 @@ import { join } from "node:path";
 import { devSnapshot, securitySnapshot } from "../tools/web/data.ts";
 import { approveBlock, liveBlocks } from "./security_log.ts";
 import { probeRateLimits } from "./ratelimit_probe.ts";
-import { OBS_DB_PATH, codeActivity, memorySnapshot, rateLimits, usageLedger } from "../tools/memory_data.ts";
+import { OBS_DB_PATH, codeActivity, memorySnapshot, rateLimits, sessionPathById, usageLedger } from "../tools/memory_data.ts";
 import { backend } from "./acp_backend.ts";
 import { deleteSession, listSessions, sessionMessages } from "./sessions.ts";
 import { providerAuth } from "./auth_status.ts";
@@ -21,6 +21,10 @@ import { applyEnv, attribution, chinaModelsAcknowledged, listMcpServers, load as
 import { emailDomainAllowed, managedConfig, skipAllowed } from "./managed_config.ts";
 import { asksageConfig, listDatasets, listPersonas, monthlyTokens, scanPersona, wrapPersona } from "./asksage.ts";
 import { listSkills } from "./skills_data.ts";
+import { importSkill } from "./skills_import.ts";
+import { listResumableLoops } from "./goal_memory.ts";
+import { createAutomation, deleteAutomation, listAutomations, normalizeCadence, updateAutomation } from "./automations.ts";
+import { currentWorkspace } from "./workspace.ts";
 import { recordSkillActivated } from "./skills_log.ts";
 import { recentTurns } from "./turns_log.ts";
 import { headroomStatus, setHeadroomEnabled, startHeadroom } from "./headroom.ts";
@@ -164,6 +168,29 @@ const server = Bun.serve({
       // extraResources filter re-includes it past the desktop/node_modules exclusion (electron-builder
       // applies filters in order). The app.asar `files` copy is unreachable from here. Without the
       // re-include this 404s in the installed app (the editor never loads) while working in dev.
+      // P-IDE.6: serve a SAME-ORIGIN worker bootstrap so Monaco's language-service workers run under
+      // the strict `worker-src 'self'` CSP. Monaco's own getWorker wraps the language worker in a blob:
+      // URL (which the CSP — and a locked-down browser — block). This is the same idea, but same-origin:
+      // set MonacoEnvironment.baseUrl inside the worker, then importScripts the real (self-contained,
+      // classic) language worker. `script-src 'self'` permits the same-origin importScripts.
+      if (p === "/vendor/monaco-worker.js") {
+        const label = url.searchParams.get("label") ?? "";
+        const key = label === "typescript" || label === "javascript" ? "ts"
+          : label === "json" ? "json"
+          : label === "css" || label === "scss" || label === "less" ? "css"
+          : label === "html" || label === "handlebars" || label === "razor" ? "html"
+          : "editor";
+        let asset = "";
+        try {
+          const dir = join(import.meta.dir, "node_modules", "monaco-editor", "min", "vs", "assets");
+          const re = new RegExp(`^${key}\\.worker-.*\\.js$`);
+          for (const f of readdirSync(dir)) if (re.test(f)) { asset = `assets/${f}`; break; }
+        } catch { /* no assets dir */ }
+        const body = asset
+          ? `self.MonacoEnvironment={baseUrl:self.location.origin+"/vendor/monaco/"};importScripts(self.location.origin+"/vendor/monaco/${asset}");`
+          : "/* monaco worker asset not found */";
+        return new Response(body, { headers: { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-store" } });
+      }
       if (p.startsWith("/vendor/monaco/")) {
         const base = join(import.meta.dir, "node_modules", "monaco-editor", "min", "vs");
         const target = join(base, p.slice("/vendor/monaco/".length));
@@ -183,7 +210,10 @@ const server = Bun.serve({
       }
       // Audited fail-closed override: release one quarantined call (ADR-0019 C).
       if (p === "/api/security/approve" && req.method === "POST") { const b = await readBody<{ id?: unknown }>(req); return json({ ok: true, data: approveBlock(String(b.id ?? "")) }); }
-      if (p === "/api/memory") return json({ ok: true, data: await memorySnapshot() });
+      // Anchor the snapshot to the ACTIVE chat session (its on-disk transcript) so the Context window
+      // + Prompt-cache gauges reflect the live conversation; fall back to findSession's cwd match only
+      // when there's no active session yet (fresh launch).
+      if (p === "/api/memory") return json({ ok: true, data: await memorySnapshot(sessionPathById(backend.currentSessionId())) });
       // P-MCP.1 (ADR-0020): MCP server registry. The hub does auth + config assembly only; omp owns
       // the MCP transport (configs ride session/new.mcpServers). Changes respawn omp to apply. The
       // list NEVER returns raw tokens (masked status only — like provider keys).
@@ -360,6 +390,19 @@ const server = Bun.serve({
       if (p === "/api/config/refresh" && req.method === "POST") { backend.restart(); return json({ ok: true, data: await backend.getConfig() }); }
       if (p === "/api/commands") return json({ ok: true, data: await backend.getCommands() });
       if (p === "/api/skills") return json({ ok: true, data: await listSkills() });
+      // P-SKILL.1 (ADR-0045): gated drop-import. Each dropped .md is scanned fail-closed; clean ones
+      // are written under .omp/skills/<slug>/SKILL.md, flagged ones are held for Security-panel review.
+      if (p === "/api/skills/import" && req.method === "POST") {
+        const b = await readBody<{ files?: { name?: unknown; content?: unknown }[] }>(req);
+        const files = Array.isArray(b.files) ? b.files.slice(0, 20) : []; // cap one drop at 20 files
+        const results = [];
+        for (const f of files) {
+          const content = String(f?.content ?? "");
+          if (!content.trim()) { results.push({ ok: false, name: String(f?.name ?? "skill"), reason: "empty file" }); continue; }
+          results.push(await importSkill(String(f?.name ?? "skill.md"), content));
+        }
+        return json({ ok: true, data: { results } });
+      }
       if (p === "/api/headroom") {
         if (req.method === "POST") { const b = await readBody<{ enabled?: unknown }>(req); return json({ ok: true, data: setHeadroomEnabled(!!b.enabled) }); }
         return json({ ok: true, data: headroomStatus() });
@@ -439,6 +482,7 @@ const server = Bun.serve({
       }
       // P-ACP.4: Stop — interrupt the in-flight turn (reply + tool calls) via ACP session/cancel.
       if (p === "/api/chat/cancel" && req.method === "POST") { backend.cancel(); return json({ ok: true, data: { cancelled: true } }); }
+      if (p === "/api/goal/cancel" && req.method === "POST") { backend.cancelGoal(); return json({ ok: true, data: { cancelled: true } }); } // P-GOAL.2: stop the loop
       // P-IDE.2 (ADR-0029): set/clear the active BUNDLED skill. Its prompt is TRUSTED (app corpus), so
       // it's wrapped in `<active-skill>` and delivered as a user-turn preamble (persona/recall path) —
       // never the frozen prefix. Clearing passes {clear:true}.
@@ -466,6 +510,64 @@ const server = Bun.serve({
         const stream = new ReadableStream({
           async start(controller) {
             await backend.prompt(String(text ?? ""), (e) => { try { controller.enqueue(enc.encode(JSON.stringify(e) + "\n")); } catch { /* stream closed */ } });
+            try { controller.close(); } catch { /* already closed */ }
+          },
+        });
+        return new Response(stream, { headers: { "content-type": "application/x-ndjson; charset=utf-8", "cache-control": "no-store" } });
+      }
+      // P-GOAL.1 (ADR-0046): run a /goal loop — maker iterations + a separate verifiable checker, capped
+      // and gated. Streams the same NDJSON chat events plus goal-iter / goal-check / goal-done / goal-stop.
+      // P-GOAL.4: loops that stopped without meeting their condition (resumable from their memory file).
+      // P-GOAL.6 (ADR-0048): the /goal checker MODEL — a distinct, cheaper judge. GET returns the saved
+      // choice + the auto recommendation + the accessible list; POST persists the choice ("" = auto).
+      if (p === "/api/checker-model" && req.method === "GET") return json({ ok: true, data: backend.checkerModelInfo() });
+      if (p === "/api/checker-model" && req.method === "POST") {
+        const b = await readBody<{ value?: unknown }>(req);
+        return json({ ok: true, data: backend.setCheckerModelChoice(String(b.value ?? "")) });
+      }
+      if (p === "/api/goal/resumable") return json({ ok: true, data: listResumableLoops(currentWorkspace()) });
+      if (p === "/api/goal" && req.method === "POST") {
+        const b = await readBody<{ goal?: unknown; condition?: unknown; command?: unknown; maxIters?: unknown; resume?: unknown }>(req);
+        const enc = new TextEncoder();
+        const stream = new ReadableStream({
+          async start(controller) {
+            await backend.runGoal(
+              { goal: String(b.goal ?? ""), condition: String(b.condition ?? ""), command: b.command ? String(b.command) : undefined, maxIters: Number(b.maxIters) || 6, resume: b.resume ? String(b.resume) : undefined },
+              (e) => { try { controller.enqueue(enc.encode(JSON.stringify(e) + "\n")); } catch { /* stream closed */ } },
+            );
+            try { controller.close(); } catch { /* already closed */ }
+          },
+        });
+        return new Response(stream, { headers: { "content-type": "application/x-ndjson; charset=utf-8", "cache-control": "no-store" } });
+      }
+
+      // P-GOAL.5 (ADR-0047): scheduled AUTOMATIONS — saved /goal specs the in-process scheduler runs on a
+      // cadence (interval or daily) while the app is open. Created DISABLED; the user arms each explicitly.
+      if (p === "/api/automations" && req.method === "GET") return json({ ok: true, data: listAutomations(currentWorkspace()) });
+      if (p === "/api/automations" && req.method === "POST") {
+        const b = await readBody<{ goal?: unknown; condition?: unknown; command?: unknown; maxIters?: unknown; cadence?: unknown }>(req);
+        const cadence = normalizeCadence(b.cadence);
+        if (!cadence) return json({ ok: false, error: "invalid cadence" });
+        const a = createAutomation(currentWorkspace(),
+          { goal: String(b.goal ?? ""), condition: b.condition ? String(b.condition) : undefined, command: b.command ? String(b.command) : undefined, maxIters: Number(b.maxIters) || 6, cadence },
+          Date.now().toString(36) + Math.floor(Math.random() * 1e6).toString(36), Date.now());
+        return a ? json({ ok: true, data: a }) : json({ ok: false, error: "could not create (check the goal)" });
+      }
+      if (p === "/api/automations/enable" && req.method === "POST") {
+        const b = await readBody<{ id?: unknown; enabled?: unknown }>(req);
+        const a = updateAutomation(currentWorkspace(), String(b.id ?? ""), { enabled: !!b.enabled });
+        return a ? json({ ok: true, data: a }) : json({ ok: false, error: "not found" });
+      }
+      if (p === "/api/automations/delete" && req.method === "POST") {
+        const b = await readBody<{ id?: unknown }>(req);
+        return json({ ok: deleteAutomation(currentWorkspace(), String(b.id ?? "")), data: { deleted: true } });
+      }
+      if (p === "/api/automations/run" && req.method === "POST") {
+        const b = await readBody<{ id?: unknown }>(req);
+        const enc = new TextEncoder();
+        const stream = new ReadableStream({
+          async start(controller) {
+            await backend.runAutomation(String(b.id ?? ""), (e) => { try { controller.enqueue(enc.encode(JSON.stringify(e) + "\n")); } catch { /* closed */ } });
             try { controller.close(); } catch { /* already closed */ }
           },
         });
@@ -500,5 +602,9 @@ const server = Bun.serve({
 // via /api/newSession), so this is what carries prior-session facts into it. Best-effort; the omp
 // child isn't spawned yet here, so the read-only open is uncontended.
 await refreshRecall();
+
+// P-GOAL.5 (ADR-0047): arm the in-process automation scheduler. It only ticks while this dev server
+// (and thus the app) is running; nothing is registered with the OS, so closing the app stops it.
+backend.startAutomationScheduler();
 
 console.log(`\n  ◆ LucidAgentIDE desktop renderer (dev)\n  → http://localhost:${server.port}\n`);

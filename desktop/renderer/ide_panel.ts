@@ -35,7 +35,12 @@ export function setIdeHooks(h: { sendToChat?: (text: string) => void; pickSavePa
 export function setIdeExclusivity(cb: () => void): void { onBeforeOpen = cb; }
 export function isIdeOpen(): boolean { return !!panel?.classList.contains("open"); }
 
-/** Lazily load the vendored Monaco (AMD loader → editor.main). */
+/** Lazily load the vendored Monaco (AMD loader → editor.main), WITH semantic IntelliSense.
+ *  P-IDE.6 (supersedes the ADR-0036 deferral): the TypeScript/JSON language services run in SAME-ORIGIN
+ *  web workers, so completions, hovers, and error squiggles work — even in a locked-down browser. The
+ *  trick: editor.main installs its own getWorker that wraps the worker in a `blob:` URL (which strict
+ *  `worker-src 'self'` blocks); we override it after load with a worker served same-origin by dev.ts
+ *  (`/vendor/monaco-worker.js`), which the CSP allows. See the req() callback below. */
 function loadMonaco(): Promise<any> {
   if (monaco) return Promise.resolve(monaco);
   if (monacoLoading) return monacoLoading;
@@ -44,18 +49,6 @@ function loadMonaco(): Promise<any> {
     // failure so the next openIde() retries (a transient miss — e.g. opening before the /vendor/monaco
     // route is up after a dev-server restart — otherwise sticks until a full reload).
     const fail = (err: Error) => { monacoLoading = null; reject(err); };
-    // Editing still tokenizes on the main thread; language-service WORKERS stay deferred (ADR-0036).
-    // Monaco's worker service tries to spawn one and logs a benign "Could not create web worker …
-    // falling back to main thread"; silence ONLY that message (+ its bare follow-ups in a 50 ms window).
-    (self as any).MonacoEnvironment = {};
-    const realWarn = console.warn.bind(console);
-    let swallowUntil = 0;
-    console.warn = (...args: unknown[]) => {
-      const first = args[0];
-      if (typeof first === "string" && first.includes("Could not create web worker")) { swallowUntil = Date.now() + 50; return; }
-      if (Date.now() < swallowUntil && (first === undefined || first === "")) return;
-      realWarn(...args);
-    };
     const loader = document.createElement("script");
     loader.src = `${MONACO_BASE}/loader.js`;
     loader.onload = () => {
@@ -63,10 +56,19 @@ function loadMonaco(): Promise<any> {
       req.config({ paths: { vs: MONACO_BASE } });
       req(["vs/editor/editor.main"], () => {
         monaco = (self as any).monaco;
+        // P-IDE.6: editor.main installs its OWN MonacoEnvironment.getWorker (which builds a blob: worker
+        // the CSP blocks). Override it AFTER load with a SAME-ORIGIN bootstrap worker (served by dev.ts),
+        // which the `worker-src 'self'` CSP allows — this is what re-enables the language-service workers
+        // (and thus IntelliSense) in a locked-down browser. Monaco reads getWorker lazily per worker.
         try {
-          monaco.languages.typescript?.typescriptDefaults?.setDiagnosticsOptions?.({ noSemanticValidation: true, noSyntaxValidation: true });
-          monaco.languages.typescript?.javascriptDefaults?.setDiagnosticsOptions?.({ noSemanticValidation: true, noSyntaxValidation: true });
-          monaco.languages.json?.jsonDefaults?.setDiagnosticsOptions?.({ validate: false });
+          const env = (self as any).MonacoEnvironment ?? ((self as any).MonacoEnvironment = {});
+          env.getWorker = (_id: string, label: string) => new Worker(`${MONACO_BASE}-worker.js?label=${encodeURIComponent(label)}`);
+        } catch { /* if it fails, monaco falls back to main thread (no IntelliSense) */ }
+        try {
+          // Workers run now → turn semantic + syntax validation ON for TS/JS and JSON.
+          monaco.languages.typescript?.typescriptDefaults?.setDiagnosticsOptions?.({ noSemanticValidation: false, noSyntaxValidation: false });
+          monaco.languages.typescript?.javascriptDefaults?.setDiagnosticsOptions?.({ noSemanticValidation: false, noSyntaxValidation: false });
+          monaco.languages.json?.jsonDefaults?.setDiagnosticsOptions?.({ validate: true });
           monaco.editor.defineTheme("lucid-dark", LUCID_THEME);
         } catch { /* best-effort: theme/diagnostics tuning is non-essential */ }
         resolve(monaco);
