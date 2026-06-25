@@ -41,6 +41,26 @@ function safeJsonArgs(v: unknown): Record<string, any> {
   return {};
 }
 
+// ── Transient-failure resilience (P-RESIL.1, ADR-0057) ───────────────────────────────────────────────
+// The gov gateway intermittently 504s, and Gemini sometimes returns finishReason MALFORMED_FUNCTION_CALL
+// with an EMPTY body — both burned a whole turn (and 100k-200k input tokens) for zero output. We retry
+// these transient outcomes a few times with short backoff before giving up, so the agent loop doesn't
+// waste a turn on a glitch. Retries are abort-aware (Stop cancels mid-backoff) and logged.
+const MAX_ATTEMPTS = 3;
+const BACKOFF_MS = [800, 2000]; // between attempt 1→2, 2→3
+/** True for HTTP statuses worth retrying (gateway/overload/rate-limit), not client errors. */
+function retriableStatus(status: number): boolean {
+  return status === 429 || (status >= 500 && status <= 599);
+}
+/** Sleep `ms`, rejecting immediately if `signal` aborts (so Stop doesn't wait out the backoff). */
+function backoff(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) { reject(new DOMException("aborted", "AbortError")); return; }
+    const t = setTimeout(resolve, ms);
+    signal?.addEventListener("abort", () => { clearTimeout(t); reject(new DOMException("aborted", "AbortError")); }, { once: true });
+  });
+}
+
 // omp ToolCall content block (the shape omp's agent loop executes + the gate scans).
 interface OmpToolCall { type: "toolCall"; id: string; name: string; arguments: Record<string, any> }
 
@@ -183,16 +203,23 @@ async function callAnthropic(cfg: AsksageStreamCfg, model: string, system: strin
   }
   const reqDiag = { route: "anthropic", model, maxTokens, tools: toolNames, msgs: messages.length };
   let r: Response;
-  try {
-    r = await fetch(`${cfg.base}/anthropic/v1/messages`, { method: "POST", headers: jsonHeaders(cfg.key, { "anthropic-version": "2023-06-01" }), body: JSON.stringify(body), signal });
-  } catch (e) {
-    diag({ ...reqDiag, ok: false, error: `fetch failed: ${String((e as Error)?.message ?? e)}` });
-    throw e;
-  }
-  const j: any = await r.json().catch(() => ({}));
-  if (!r.ok) {
-    diag({ ...reqDiag, status: r.status, ok: false, error: j?.error?.message ?? `HTTP ${r.status}`, raw: snippet(j) });
-    throw new Error(j?.error?.message ?? `AskSage anthropic HTTP ${r.status}`);
+  let j: any;
+  for (let attempt = 1; ; attempt++) {
+    try {
+      r = await fetch(`${cfg.base}/anthropic/v1/messages`, { method: "POST", headers: jsonHeaders(cfg.key, { "anthropic-version": "2023-06-01" }), body: JSON.stringify(body), signal });
+    } catch (e) {
+      if (signal?.aborted) throw e; // Stop — don't retry
+      if (attempt < MAX_ATTEMPTS) { diag({ ...reqDiag, attempt, ok: false, retry: true, error: `fetch failed: ${String((e as Error)?.message ?? e)}` }); await backoff(BACKOFF_MS[attempt - 1] ?? 2000, signal); continue; }
+      diag({ ...reqDiag, attempt, ok: false, error: `fetch failed: ${String((e as Error)?.message ?? e)}` });
+      throw e;
+    }
+    j = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      if (retriableStatus(r.status) && attempt < MAX_ATTEMPTS) { diag({ ...reqDiag, attempt, status: r.status, ok: false, retry: true, error: j?.error?.message ?? `HTTP ${r.status}` }); await backoff(BACKOFF_MS[attempt - 1] ?? 2000, signal); continue; }
+      diag({ ...reqDiag, attempt, status: r.status, ok: false, error: j?.error?.message ?? `HTTP ${r.status}`, raw: snippet(j) });
+      throw new Error(j?.error?.message ?? `AskSage anthropic HTTP ${r.status}`);
+    }
+    break;
   }
   const { blocks: content, via } = anthropicBlocks(j);
   const text = content.filter((c) => c?.type === "text" && typeof c.text === "string").map((c) => c.text).join("");
@@ -288,27 +315,43 @@ async function callGoogle(cfg: AsksageStreamCfg, model: string, system: string, 
   }
   const reqDiag = { route: "google", model, maxTokens, tools: toolNames, msgs: contents.length };
   let r: Response;
-  try {
-    r = await fetch(`${cfg.base}/google/v1beta/models/${model}:generateContent`, { method: "POST", headers: jsonHeaders(cfg.key), body: JSON.stringify(body), signal });
-  } catch (e) {
-    diag({ ...reqDiag, ok: false, error: `fetch failed: ${String((e as Error)?.message ?? e)}` });
-    throw e;
+  let j: any;
+  let via = "none", text = "", toolCalls: OmpToolCall[] = [], finish: string | undefined;
+  for (let attempt = 1; ; attempt++) {
+    try {
+      r = await fetch(`${cfg.base}/google/v1beta/models/${model}:generateContent`, { method: "POST", headers: jsonHeaders(cfg.key), body: JSON.stringify(body), signal });
+    } catch (e) {
+      if (signal?.aborted) throw e;
+      if (attempt < MAX_ATTEMPTS) { diag({ ...reqDiag, attempt, ok: false, retry: true, error: `fetch failed: ${String((e as Error)?.message ?? e)}` }); await backoff(BACKOFF_MS[attempt - 1] ?? 2000, signal); continue; }
+      diag({ ...reqDiag, attempt, ok: false, error: `fetch failed: ${String((e as Error)?.message ?? e)}` });
+      throw e;
+    }
+    j = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      if (retriableStatus(r.status) && attempt < MAX_ATTEMPTS) { diag({ ...reqDiag, attempt, status: r.status, ok: false, retry: true, error: j?.error?.message ?? `HTTP ${r.status}` }); await backoff(BACKOFF_MS[attempt - 1] ?? 2000, signal); continue; }
+      diag({ ...reqDiag, attempt, status: r.status, ok: false, error: j?.error?.message ?? `HTTP ${r.status}`, raw: snippet(j) });
+      throw new Error(j?.error?.message ?? `AskSage google HTTP ${r.status}`);
+    }
+    const parsed = googleParts(j);
+    via = parsed.via;
+    text = parsed.parts.filter((p) => typeof p?.text === "string").map((p) => p.text).join("");
+    let n = 0;
+    toolCalls = parsed.parts
+      .filter((p) => p?.functionCall)
+      .map((p) => ({ type: "toolCall", id: `${p.functionCall.name || "tool"}-${n++}`, name: String(p.functionCall.name ?? ""), arguments: isRecord(p.functionCall.args) ? p.functionCall.args : {} }));
+    finish = j?.candidates?.[0]?.finishReason;
+    // Gemini sometimes returns MALFORMED_FUNCTION_CALL with an empty body (it failed to form a valid tool
+    // call) — burns the whole turn for nothing. Retry it (often stochastic) before accepting the empty.
+    if (finish === "MALFORMED_FUNCTION_CALL" && !text && !toolCalls.length && attempt < MAX_ATTEMPTS) {
+      diag({ ...reqDiag, attempt, ok: true, finish, retry: true, anomaly: "malformed-function-call" });
+      await backoff(BACKOFF_MS[attempt - 1] ?? 2000, signal);
+      continue;
+    }
+    break;
   }
-  const j: any = await r.json().catch(() => ({}));
-  if (!r.ok) {
-    diag({ ...reqDiag, status: r.status, ok: false, error: j?.error?.message ?? `HTTP ${r.status}`, raw: snippet(j) });
-    throw new Error(j?.error?.message ?? `AskSage google HTTP ${r.status}`);
-  }
-  const { parts, via } = googleParts(j);
-  const text = parts.filter((p) => typeof p?.text === "string").map((p) => p.text).join("");
-  let n = 0;
-  const toolCalls: OmpToolCall[] = parts
-    .filter((p) => p?.functionCall)
-    .map((p) => ({ type: "toolCall", id: `${p.functionCall.name || "tool"}-${n++}`, name: String(p.functionCall.name ?? ""), arguments: isRecord(p.functionCall.args) ? p.functionCall.args : {} }));
-  const finish = j?.candidates?.[0]?.finishReason;
   const stopReason: GoogleResult["stopReason"] = toolCalls.length ? "toolUse" : finish === "MAX_TOKENS" ? "length" : "stop";
   const um = j?.usageMetadata ?? {};
-  const anomaly = (!text && !toolCalls.length) ? "empty-response" : stopReason === "length" ? "truncated" : undefined;
+  const anomaly = (!text && !toolCalls.length) ? (finish === "MALFORMED_FUNCTION_CALL" ? "malformed-function-call" : "empty-response") : stopReason === "length" ? "truncated" : undefined;
   // Gemini always reports finishReason "STOP" even when it emits a functionCall; log the MAPPED reason
   // (toolUse = the loop continues) plus the raw finish, so a tool-calling row reads "toolUse", not "STOP".
   diag({ ...reqDiag, status: r.status, ok: true, respKeys: Object.keys(j ?? {}), via, textLen: text.length, toolCalls: toolCalls.map((t) => t.name), stopReason, finish, usage: { in: um.promptTokenCount ?? 0, out: um.candidatesTokenCount ?? 0 }, ...(anomaly ? { anomaly, raw: snippet(j) } : {}) });

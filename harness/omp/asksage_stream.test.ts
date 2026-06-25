@@ -237,3 +237,61 @@ describe("AskSage diagnostics + tolerant extraction", () => {
     expect(events.some((e) => e.type === "error")).toBe(false); // a deliberate cancel is not an error
   });
 });
+
+// ── Transient-failure resilience (P-RESIL.1, ADR-0057) ───────────────────────────────────────────────
+// A queued mock: returns the next response per fetch call (last one repeats), and reports the call count.
+function mockSeq(responses: Array<{ ok?: boolean; status?: number; json: any }>): () => number {
+  let i = 0;
+  globalThis.fetch = (async () => {
+    const r = responses[Math.min(i, responses.length - 1)]!;
+    i++;
+    return { ok: r.ok ?? true, status: r.status ?? 200, json: async () => r.json } as any;
+  }) as any;
+  return () => i;
+}
+
+describe("AskSage transient-failure resilience", () => {
+  const google = makeAsksageStream("google", () => cfg);
+  const gemini = { id: "gemini-x", api: "asksage-google", provider: "asksage-google", maxTokens: 1000 };
+
+  test("Gemini: a 504 then success retries and succeeds (no wasted turn)", async () => {
+    const calls = mockSeq([
+      { ok: false, status: 504, json: { error: { message: "gateway timeout" } } },
+      { json: { candidates: [{ content: { parts: [{ text: "recovered after retry" }] }, finishReason: "STOP" }], usageMetadata: {} } },
+    ]);
+    const done = (await collect(google(gemini, { messages: [{ role: "user", content: "x" }] }))).find((e) => e.type === "done");
+    expect(calls()).toBe(2); // retried once
+    expect(done.message.content).toEqual([{ type: "text", text: "recovered after retry" }]);
+  });
+
+  test("Gemini: MALFORMED_FUNCTION_CALL then a valid tool call retries and recovers", async () => {
+    const calls = mockSeq([
+      { json: { candidates: [{ content: {}, finishReason: "MALFORMED_FUNCTION_CALL" }], usageMetadata: {} } },
+      { json: { candidates: [{ content: { parts: [{ functionCall: { name: "write_file", args: { path: "a.txt" } } }] }, finishReason: "STOP" }], usageMetadata: {} } },
+    ]);
+    const events = await collect(google(gemini, { messages: [{ role: "user", content: "x" }], tools: [writeTool] }));
+    expect(calls()).toBe(2);
+    const end = events.find((e) => e.type === "toolcall_end");
+    expect(end.toolCall.name).toBe("write_file");
+  });
+
+  test("Gemini: a persistent 504 gives up after MAX_ATTEMPTS (3) and errors", async () => {
+    const calls = mockSeq([{ ok: false, status: 504, json: { error: { message: "down" } } }]);
+    const events = await collect(google(gemini, { messages: [{ role: "user", content: "x" }] }));
+    expect(calls()).toBe(3); // 1 + 2 retries
+    expect(events.some((e) => e.type === "error")).toBe(true);
+  });
+
+  test("a client error (400) is NOT retried", async () => {
+    const calls = mockSeq([{ ok: false, status: 400, json: { error: { message: "bad request" } } }]);
+    const events = await collect(google(gemini, { messages: [{ role: "user", content: "x" }] }));
+    expect(calls()).toBe(1); // no retry on 4xx
+    expect(events.some((e) => e.type === "error")).toBe(true);
+  });
+
+  test("a first-try success makes exactly one request (no needless retry)", async () => {
+    const calls = mockSeq([{ json: { candidates: [{ content: { parts: [{ text: "ok" }] }, finishReason: "STOP" }], usageMetadata: {} } }]);
+    await collect(google(gemini, { messages: [{ role: "user", content: "x" }] }));
+    expect(calls()).toBe(1);
+  });
+});

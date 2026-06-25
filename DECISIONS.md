@@ -4788,3 +4788,59 @@ is maker != checker (a different/smaller model), echoing the `/goal` separation.
 ADR-0046 (`/goal` maker/checker loop reused), ADR-0048 (distinct recommended checker model + `complete()`
 model override), ADR-0027 (the thinking stream surfaced to the UI), ADR-0055 (the idle-cap bump + AskSage
 non-streamed adapter this compensates for), `model_families.ts` / `checker_model.ts`.
+
+## ADR-0057 - P-RESIL.1: AskSage call resilience (retry transient 5xx + MALFORMED_FUNCTION_CALL)
+
+**Date:** 2026-06-24
+**Status:** Accepted - BUILT.
+**Increment:** P-RESIL.1.
+
+### Context
+
+Live `[ASKSAGE_DIAG]` capture (developer mode, ADR-0055) showed two transient failures burning whole agent
+turns - and 100k-200k INPUT tokens each - for zero output:
+- **HTTP 504** from the gov gateway (overloaded/slow on big requests).
+- Gemini **`finishReason: MALFORMED_FUNCTION_CALL`** with an EMPTY body: the model tried to emit a tool
+  call, failed to form valid arguments, and returned nothing. Our adapter parsed it as `empty-response`,
+  so omp got an empty turn and the loop wasted a step (often repeatedly).
+
+Both are usually TRANSIENT (a 504 clears; a malformed call is stochastic at temperature), so a bounded
+retry recovers the turn instead of wasting it.
+
+### Decision
+
+In `callAnthropic` and `callGoogle` (asksage_stream.ts), wrap the fetch + parse in a bounded retry loop:
+`MAX_ATTEMPTS = 3` with short backoff `[800ms, 2000ms]`. Retry when:
+- the fetch throws (network blip) and it was NOT a user abort,
+- the HTTP status is **retriable** (`429` or `5xx`),
+- (Gemini only) `finishReason === "MALFORMED_FUNCTION_CALL"` AND the parse yielded no text and no tool call.
+
+Do NOT retry: success, 4xx client errors (except 429), or a user **Stop** (the abort signal short-circuits
+the loop AND the backoff - `backoff()` rejects immediately on abort, so Stop never waits out a delay).
+Each retry is logged (`retry:true`, `attempt`) so the diagnostics show the recovery. A persistent failure
+still throws after the 3rd attempt (unchanged terminal behavior). A persistent malformed call is now
+labelled `anomaly: "malformed-function-call"` (distinct from a plain `empty-response`) for the Logs panel.
+
+### Why bounded + short
+
+Three attempts with sub-2s backoff bounds the added latency (worst case ~2.8s) and the extra gov-gateway
+load, while clearing the common one-off glitch. It is deliberately NOT an unbounded retry (that would mask
+a real outage and hammer a rate-limited gateway). The auto-continue checker (ADR-0056) covers the
+DIFFERENT case where the model legitimately stops short.
+
+### Verification
+
+5 new tests (asksage_stream.test.ts, 20 total): 504-then-success retries once and recovers;
+MALFORMED-then-valid-tool-call recovers; persistent 504 gives up after exactly 3 attempts and errors; a
+4xx is not retried; a first-try success makes exactly one request. Full harness 506, typecheck clean.
+
+### Invariants preserved
+
+#2 (TS-only) - #3/#4 (retries change nothing about the gate: every recovered tool call is still scanned
+in-process) - the frozen prompt prefix is untouched. Retries are abort-aware so Stop (ADR-0055) still
+cancels instantly.
+
+### Relates to
+
+ADR-0007/0051/0055 (the AskSage adapter + diagnostics this hardens), ADR-0056 (auto-continue, the
+complementary fix for legitimate short-stops), CLAUDE.md #2/#3/#4.
