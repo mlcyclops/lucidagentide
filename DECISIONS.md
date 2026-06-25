@@ -4579,3 +4579,336 @@ that counting is provenance-independent.
   reliable Windows merge-back), R-06 MUST be re-opened: the stash merge-back would need explicit gate
   scanning + attribution of the merged diff, and a nested-repo dirty-state test. This ADR is the
   tripwire for that.
+## ADR-0054 — Thinking-item governance: reasoning is display-only, never durable (R-04)
+
+**Date:** 2026-06-24
+**Status:** Accepted — built this increment.
+**Relationship:** ratifies ADR-0027 (the thinking stream is display-only) as a security policy; extends
+keystone #2 (semantic-promotion gate) and invariants #3 (fail-closed) / #5 (untrusted content) to omp's
+now-first-class reasoning/thinking items. Tracks add-on POAM **R-02 sibling R-04**.
+
+### Context
+
+omp made reasoning/thinking items first-class (a `--thinking` flag; reasoning items in replay). Raw
+model reasoning is a sensitive surface: if it were persisted, learned-from, recalled, or exported it
+could bypass the scan/trust-label gate, leak into semantic memory, or escape CUI exclusion.
+
+### Decision
+
+Thinking is **display-only and never durable**. The chat backend streams `agent_thought_chunk` to the
+UI as a `thinking` event (live reasoning, like the omp TUI) but it is excluded from everything that
+reaches durable state. The single chokepoint is `desktop/thinking_governance.ts`
+`isLearnableAssistantText(e)` — **only `token` text is learnable**. The per-turn `assistant` buffer (the
+sole input to both `recordTurns` persistence/transcripts and `learnFromTurn` — the personalization
+distiller / memory promotion) is built through that predicate, so thinking, tool, block, subagent, and
+usage events contribute nothing. Because thinking is never persisted, it is never recalled and never
+reaches an export (exports read persisted data) — CUI exclusion holds by construction.
+
+A future change that wants to persist thinking MUST first: scan it through the fail-closed gate,
+trust-label it, gate it against semantic promotion (keystone #2), and CUI-exclude it from exports.
+`desktop/thinking_governance.test.ts` regression-locks the invariant.
+
+### Consequences
+
+- The thinking-exclusion rule is now a tested pure function, not an inline `=== "token"` that could
+  silently drift; `acp_backend.prompt()`'s `sink` consumes it.
+- No new persistence/promotion/export path may special-case thinking without passing the four gates
+  above — enforced by review against this ADR + the regression test.
+- The desktop test suite (`bun test` / `make test`) covers it; note CI's `bun test harness` does not
+  yet include `desktop/` (pre-existing; a CI-scope item for R-01).
+## ADR-0054 — The `/goal` loop's After-Action Report + termination guards (P-GOAL.9)
+
+**Date:** 2026-06-25
+**Status:** Accepted — shipped this increment.
+**Context increment:** P-GOAL.9.
+
+### Context
+
+We reviewed our `/goal` loop (ADR-0046–0050) against Cobus Greyling's **loop-engineering**
+playbook (`cobusgreyling/loop-engineering`: failure-modes catalog + ship-readiness rubric,
+itself drawing on Osmani/Cherny). Our loop already does the hard parts the rubric stresses —
+a real **maker/checker split** on a separate, cheaper model (ADR-0048), a **fail-closed
+checker** (`goal_verdict.ts`), **durable on-disk memory** with resume (ADR-0046/0047), an
+iteration cap + no-progress stop, and a pre-run cost estimate (ADR-0049). The rubric exposed
+four gaps, all sharpest for **long-running / unattended** loops:
+
+1. **Resume injected the wrong end of memory.** `runGoal` fed `prior.slice(0, 3000)` — the
+   *head* (header + oldest rounds) — so a long resumed loop never saw what it just did. A
+   correctness bug squarely in the long-running case (their "State Rot").
+2. **No "Infinite Fix Loop" guard (their #1 failure mode).** We stopped on *no actions*, but
+   not on *acting-yet-never-converging* — the agent edits every round and the same check keeps
+   failing until the cap.
+3. **Tool failure was invisible to the loop.** A failed/blocked tool call emitted a generic
+   `block` event the loop never counted or reacted to.
+4. **No metrics/observability surface (rubric §9).** The markdown memory is human-readable but
+   not *measurable*; nothing told the user what a run actually did.
+
+The user asked specifically for an **After-Action Report** as the loop's **last task**, with
+"the best type of graphs" for **Tool Calls (by type)**, **LOC changed (added/removed)**,
+**Errors recorded**, and **websites visited**.
+
+### Decision
+
+One coherent increment — instrument the loop once, then use that data for both the
+termination guards and the report.
+
+- **Pure report core — `desktop/loop_report.ts`** (no I/O, no `Date.now()`; tested like
+  `loop_estimate.ts`/`goal_verdict.ts`). Collectors: `normalizeToolName` (group raw omp kinds
+  into a stable type set), `extractUrls`, `parseNumstat`, `stallSignature`. Renderer:
+  `renderLoopReport(LoopMetrics)` emits a deterministic markdown AAR.
+- **"Best type of graphs" = Mermaid + a text scoreboard.** The durable record lives on disk;
+  Mermaid (`pie` for tool-calls-by-type, `xychart-beta` bars for LOC and per-iteration errors)
+  renders natively on GitHub / VS Code / Obsidian — portable, zero-dependency, and TS-only
+  (we generate text, not a charting lib; invariant #2). A unicode **scoreboard** + tables make
+  it render even in our in-app `marked` view, which has no Mermaid. Sections with no data
+  degrade to an honest one-liner — never an empty/invalid chart.
+- **The report is the loop's LAST task.** Generated in `runGoal`'s `finally`, so *every* exit
+  path (met / stopped / cancelled / error) produces one; emitted as a new `goal-report`
+  ChatEvent (path + summary + markdown) and written beside the memory file via
+  `saveGoalReport` (same `<id>-<slug>` stem, `.report.md`, confined by `pathWithin`).
+- **Termination guards from the same instrumentation.** (#2) `stallSignature` collapses a
+  recurring checker blocker across rounds; three identical not-done rounds stop the loop as
+  "not converging" instead of burning the cap. (#3) per-iteration tool-failure counts are
+  recorded and fed back into the next maker prompt ("N tool calls failed last round — fix the
+  cause"), and surfaced in the report's Errors section.
+- **LOC via best-effort git.** `gitHead()` pins a baseline commit; `gitDiffVs()` parses
+  `git diff --numstat` of the tree vs that commit at the end, minus any changes already present
+  at start. Non-git workspace ⇒ `loc: null` ⇒ the report says so. Never a precondition.
+- **Resume fix (#1).** `prior.slice(0, 3000)` → `slice(-3000)` (the most-recent rounds).
+
+Everything new is **best-effort**: a failure assembling/writing the report is swallowed so the
+turn always settles with `done`. The fail-closed gate remains the only safety boundary.
+
+### Alternatives considered
+
+- **Render charts in-app (add a Mermaid/Chart.js dependency).** Rejected: a new vendored
+  bundle + CSP surface for a report whose durable, portable home is the on-disk file. The text
+  scoreboard covers the in-app view; the rich graphs live where they render for free.
+- **Have the checker model write the report prose.** Rejected: the metrics are objective —
+  deterministic generation is cheaper, reproducible, and can't hallucinate ("verifier theater"
+  in the report itself).
+- **A structured JSONL run-log instead of markdown.** Deferred — a good *next* increment for
+  cross-run success-rate/eval. This increment delivers the per-run record the user asked for;
+  the JSONL ledger + live token budget + escalation ping are the follow-ons.
+
+### Invariants preserved
+
+#2 (TS-only; the report is generated text, no new language surface, no charting lib) · #3
+(the report is best-effort and never gates anything; the fail-closed scanner is still the
+boundary) · #5 (no untrusted content enters the prefix; the report is a post-hoc artifact) ·
+#8 (`goal-report` is an ACP **ChatEvent**, the UI stream — not an `EventName` provenance event) ·
+path confinement via `pathWithin` for the on-disk report.
+
+### Relates to
+
+ADR-0046 (the maker/checker loop + durable memory this instruments); ADR-0047 (automations —
+their background ticks now also produce a report); ADR-0048 (the checker model whose verdicts
+feed the stall guard); ADR-0049/0050 (the launcher/cost estimate this complements with
+*actuals*); `cobusgreyling/loop-engineering` (failure-modes #1 Infinite Fix Loop, State Rot,
+Token Burn; ship-readiness §9 Observability — the external review that motivated this).
+
+-----
+
+## ADR-0055 — Cross-run evaluation: the `/goal` loop run-log + stats surface (P-GOAL.10)
+
+**Date:** 2026-06-25
+**Status:** Accepted — shipped this increment.
+**Context increment:** P-GOAL.10.
+
+### Context
+
+ADR-0054 (P-GOAL.9) gave each `/goal` run an After-Action Report — metrics + graphs for ONE
+run. loop-engineering's ship-readiness rubric (§9 Observability) also asks for the cross-run
+view: "success metrics established", an "append-only run history" the team can read without
+chat logs. That is the "metrics/evaluation layer" the user asked for in the original review.
+We already compute a rich `LoopMetrics` per run (ADR-0054); nothing yet persists it across runs
+or aggregates it.
+
+### Decision
+
+A flat, append-only **JSONL ledger** plus a PURE aggregator, reusing the P-GOAL.9 metrics.
+
+- **`desktop/loop_runlog.ts`** (PURE; no I/O, no `Date.now()`; unit-tested):
+  - `toRunRecord(LoopMetrics, {id, ts})` projects a finished run into a compact `LoopRunRecord`
+    (outcome, iterations, duration, tool totals + by-type, LOC, errors, websites). `id`/`ts`
+    come from the backend (pure modules can't read the clock).
+  - `runRecordLine` / `parseRunLog` serialize to / from JSONL; a malformed line is skipped, never
+    fatal (append-only, best-effort).
+  - `aggregateRuns(records): RunStats` — runs, success rate, **average iterations-to-success**
+    (over met runs only), avg duration, summed tools/LOC/errors, and a **failure breakdown** that
+    groups non-success runs by recurring blocker via `stallSignature` (so "3 of 5 tests fail" and
+    "2 of 5 tests fail" collapse to one). `summarizeRunStats` gives a one-line chip.
+- **Persistence — `.omp/loops/run-log.jsonl`** (`appendRunLog`/`readRunLog` in `goal_memory.ts`,
+  path-confined, best-effort). `runGoal`'s `finally` appends one line per completed run, right
+  after writing the AAR — so the ledger and the per-run report are produced together as the
+  loop's last task.
+- **Surface** — backend `loopRunStats()` → `GET /api/goal/stats` → a compact **evaluation banner**
+  in the `/goal` launcher (success rate, avg iters-to-win, avg duration, tool mix, most-common
+  stop). Hidden until there's history, so a first-time user sees nothing extra.
+
+**Why JSONL, not DuckDB.** The desktop `/goal` loop persists to `.omp/loops/` markdown
+(goal-memory, ADR-0046) — this stays in that lightweight, air-gap-clean lane. The DuckDB schema
+(invariant #10) is the harness security/provenance pipeline, a different layer; a per-loop eval
+ledger does not belong there and must not trigger a migration. The flat file is inspectable,
+append-only, and trivially exportable.
+
+### Alternatives considered
+
+- **Write to the DuckDB telemetry store.** Rejected — couples the desktop loop to the harness
+  analytics DB + a frozen-schema migration (invariant #10) for a lightweight, workspace-local
+  ledger. JSONL keeps it in the goal-memory lane.
+- **Recompute stats by scanning the markdown memory/report files.** Rejected — parsing prose for
+  metrics is brittle; a typed JSONL record is the stable contract the aggregator reads.
+- **A full history table UI.** Deferred — the launcher banner is the high-value at-a-glance view;
+  a deeper drill-down can come later (the records carry enough to build it without a migration).
+
+### Invariants preserved
+
+#2 (TS-only; pure aggregator + a flat file, no new language surface) · #3 (the ledger is
+best-effort and never gates the loop; the fail-closed scanner remains the boundary) · #10 (does
+NOT touch the frozen DuckDB schema — a separate workspace-local JSONL file) · path confinement via
+`pathWithin` for the ledger.
+
+### Relates to
+
+ADR-0054 (the After-Action Report + `LoopMetrics` this serializes across runs); ADR-0046/0047
+(the loop + automations whose every run now logs); `cobusgreyling/loop-engineering` (ship-
+readiness §9 Observability — "append-only run history", "success metrics established"). Follow-ons:
+a live per-loop token budget + kill switch, and an escalation ping on unattended stop.
+
+-----
+
+## ADR-0056 — Live per-loop spend meter + budget kill switch (P-GOAL.11)
+
+**Date:** 2026-06-25
+**Status:** Accepted — shipped this increment.
+**Context increment:** P-GOAL.11.
+
+### Context
+
+loop-engineering's costliest failure mode is **Token Burn** — an unattended loop running full
+turns until "the bill spikes"; its prescribed mitigation is a "daily budget limit" / "kill
+switch". ADR-0049 already shows a pre-run cost ESTIMATE in the launcher, but the running loop had
+no view of ACTUAL spend and no ceiling that could halt it. The only bound was `maxIters`, which
+says nothing about dollars. For long-running / scheduled loops — exactly the ones the user cares
+about — that's the gap.
+
+### Decision
+
+A live spend meter fed by the maker's usage telemetry, plus a hard dollar cap that stops the loop.
+
+- **`desktop/loop_budget.ts`** (PURE, unit-tested): `LoopSpend` + `addTurnSpend` (sum each maker
+  turn's PEAK cost; track context tokens as a high-water mark, never summed — `used` is cumulative
+  within the persistent maker session), `overBudget(spent, cap)` (the kill switch — a non-positive
+  cap means "no budget"), and `normalizeBudget` (clamp the user's input to a non-negative $ amount).
+- **Why per-turn peak, summed.** `runGoal` owns the turn boundaries, so accounting needs no fragile
+  counter-reset detection: omp's `usage_update.cost` is a per-turn figure, and each maker iteration
+  is one turn, so total spend = Σ(per-turn peak cost). The checker runs in a separate throwaway
+  `complete()` session whose usage never reaches the loop sink, so the meter measures maker spend —
+  the dominant cost (the checker is cheap by ADR-0048's design).
+- **Kill switch, two-stage.** In the maker sink, the moment `spend + thisTurnPeak` crosses the cap
+  we `cancel()` the in-flight turn (stops mid-stream). After the turn, if `overBudget` we end the
+  loop with `stopped: budget cap $X reached (spent $Y)` — before spending a checker call. The bill
+  cannot run away unattended.
+- **Surfaced everywhere the metrics already flow.** `LoopMetrics` gains `spendUsd` /
+  `peakContextTokens` / `budgetUsd` (spend is `null`, not `$0`, when no usage telemetry was seen);
+  the After-Action Report shows a "Spend $X of $Y cap · peak context N" row (ADR-0054); the run-log
+  record + cross-run eval sum actual spend (ADR-0055); the launcher gains an optional "Budget cap"
+  field next to Max iterations.
+
+### Alternatives considered
+
+- **Budget in tokens.** Rejected as the primary unit — "Token Burn" is about the bill, and `used`
+  is cumulative context (re-counts the cached prefix each turn), so a token cap would be confusing.
+  Dollars are what the user sets a ceiling on; tokens are shown as informational peak context.
+- **Reset-detecting accumulator over a possibly-cumulative cost counter.** Rejected — the loop owns
+  turn boundaries, so "sum per-turn peaks" is exact and simpler than guessing counter semantics.
+- **A cap on scheduled automations too.** Deferred — needs an `Automation` schema field + form; the
+  iteration cap still bounds automations today. A clean follow-on.
+
+### Invariants preserved
+
+#2 (TS-only; a pure meter, no new surface) · #3 (the meter is best-effort telemetry and the kill
+switch only ever stops EARLY — it can never let a run continue past a limit; the fail-closed gate
+remains the safety boundary) · #6 (the budget field is user-turn/launcher state, never the frozen
+prefix). No schema/DuckDB change (spend rides the ADR-0055 JSONL ledger).
+
+### Relates to
+
+ADR-0049 (the pre-run cost estimate this complements with ACTUALS), ADR-0054 (the AAR that now
+shows spend), ADR-0055 (the run-log/eval that now sums spend), ADR-0048 (the cheap checker that
+keeps the meter ≈ maker spend); `cobusgreyling/loop-engineering` (Token Burn — "daily budget
+limit", "kill switch"). Remaining follow-on: an escalation ping on unattended stop.
+
+-----
+
+## ADR-0057 — The Pre-Flight Audit: loop design + readiness before you build (P-GOAL.12)
+
+**Date:** 2026-06-25
+**Status:** Accepted — shipped this increment.
+**Context increment:** P-GOAL.12.
+
+### Context
+
+loop-engineering ships two CLIs — `loop-init` (scaffold run-log/budget/state templates) and
+`loop-audit` (score a repo 0→100, L0→L3, on readiness for unattended loops). We already *generate*
+live what they scaffold static (run-log P-GOAL.10, budget kill switch P-GOAL.11, goal-memory
+P-GOAL.4), so adopting the CLIs would be redundant + drift (Node CLIs for grok/codex workflows;
+we're in-process Bun/Electron). But their **readiness rubric** is valuable — reframed from "is this
+REPO ready?" to "is THIS loop well-formed?", surfaced at the moment of building a loop. The user
+asked for an active **"Pre-Flight Audit"**: an optional button above the Goal input that pauses the
+builder, scopes the loop (branch/worktree) and runs a prompt-engineering interview, reads past-run
+history so context isn't lost, folds in **user/product-owner AND engineer** feedback, and emits a
+**repeatable Loop Design report (.md)** the user adopts as the goal — whose matured success criteria
+thread to the small checker so it grades against the real design. The whole thing closes a
+**recursive self-improvement loop**: each run's After-Action Report + run-log feed the next loop's
+Pre-Flight, which matures the next goal.
+
+### Decision
+
+- **`desktop/loop_preflight.ts`** (PURE, unit-tested): `assessReadiness` scores the spec L0→L3 with
+  **gated** levels (L3 "unattended-capable" REQUIRES the safety-bearing four — verification command,
+  budget cap, explicit scope, cheap checker — so a verbose goal can't buy L3 without a real verifier,
+  defeating *Verifier Theater*). `renderLoopDesign` emits the repeatable report; `maturedGoalFrom`
+  distills the adoptable goal; `successCriteria` distills the checker's grading rubric. History:
+  `relevantPriorRuns` / `summarizePriorRuns` / `renderPriorRuns` surface prior runs of a similar loop
+  (their AARs live in `.omp/loops/`). Interview: `preflightSystemPrompt` / `preflightUserPrompt` /
+  `parsePreflightJson` / `mergeMatured` (user-provided values always win; the model fills blanks).
+- **Backend** `preflightAudit(spec)`: reads the run-log for history, runs ONE interview pass on the
+  cheap **checker** model (`complete()`, best-effort; deterministic fallback to the user's answers if
+  the model is unavailable), scores readiness, writes the Loop Design under `.omp/loops/*.preflight.md`,
+  and returns the matured goal + criteria + report. `loopScopes()` lists branches/worktrees (git,
+  best-effort). It mutates nothing — a planning step.
+- **Checker context (deterministic grading).** `runGoal`/`checkGoal` gain an optional `criteria`; the
+  small checker now grades against the matured success criteria and **reports back which are met/unmet**
+  — appropriate context, not a bare condition. Adopting a Pre-Flight design stashes its criteria and
+  threads it to the next run.
+- **UI**: an optional "Pre-Flight Audit" button above the Goal field opens a panel (scope picker +
+  interview incl. user/PO feedback + engineer notes), runs the audit, shows the readiness chip + the
+  rendered report + prior-run note, and "Adopt as goal" fills the Goal field (+ command) and stashes
+  the criteria. The builder is paused until the user adopts or closes.
+
+### Alternatives considered
+
+- **Vendor loop-init / loop-audit.** Rejected — Node CLIs that scaffold static markdown for grok/codex;
+  we already generate those live, and a CLI surface cuts against "extend, don't fork".
+- **Open-ended multi-turn interview chat.** Rejected for this increment — a structured interview + one
+  model maturation pass is reliable, testable, and bounded; a multi-turn agent can come later.
+- **A passive readiness chip only.** Rejected — the user wanted an active design step that produces an
+  adoptable artifact and carries history/feedback forward (the self-improvement loop).
+
+### Invariants preserved
+
+#2 (TS-only; a pure core + a model call via existing `complete()`, no new surface) · #3 (best-effort
+throughout — git scopes, the model interview, the report write all degrade gracefully; the checker
+stays fail-closed and the gate is still the boundary) · #5 (the matured goal is shown to the user to
+review/edit before it ever runs — human in the loop) · #10 (the Loop Design + preflight reports are
+flat `.omp/loops/` files; no DuckDB schema change).
+
+### Relates to
+
+ADR-0048 (the cheap checker that runs the interview + now grades against criteria), ADR-0054/0055
+(the AARs + run-log this reads for history — the recursive loop), ADR-0056 (the budget cap the rubric
+checks), ADR-0046/0047 (the loop + automations); loop-engineering's `loop-audit` rubric (L0→L3) and
+`loop-design-checklist` (the report's shape). Follow-on: a budget field for automations; an escalation
+ping on unattended stop.

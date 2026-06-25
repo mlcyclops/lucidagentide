@@ -8,6 +8,14 @@ Three lines per session: **shipped / stubbed / next** (CLAUDE.md session ritual)
 - **shipped:** verified + regression-locked that subagent (`task`) edits are NOT masked from the gate or code-activity attribution. With task isolation OFF (ADR-0032), a subagent edits the REAL workspace → its write/edit tool calls route through the same in-process fail-closed gate → ADR-0031 attribution counts them from the gate's tool_result hook, and `EditResultLike` carries no agent/provenance dimension (so nothing can drop a subagent's edit). `harness/runs/loc_count_subagent.test.ts` (3 tests). ADR-0055.
 - **stubbed:** the stash-isolate/apply/merge masking risk only exists if isolation is RE-enabled (ADR-0032 conditions: patch-review UI + reliable Windows merge-back) — ADR-0055 is the tripwire to re-open R-06 then (gate-scan + attribute the merged diff; nested-repo dirty-state test).
 - **next:** add-on PI items continue (R-08 #38, B-ADR-001 #40, B-ADR-006 #42).
+## R-04: thinking-item governance (ADR-0054)
+- **shipped:** `desktop/thinking_governance.ts` — `isLearnableAssistantText` / `accumulateAssistantText`: **only assistant `token` text is learnable** (eligible for `recordTurns` persistence + `learnFromTurn` distiller/promotion). Reasoning/thinking (and tool/block/subagent/usage) are display-only (ratifies ADR-0027 as a security policy): never persisted → never recalled → never exported → CUI-excluded by construction; never auto-promoted to semantic memory (keystone #2). `acp_backend.prompt()`'s `sink` now routes the per-turn `assistant` buffer through the predicate. 3 regression tests lock it.
+- **stubbed:** persisting thinking in future REQUIRES scan + trust-label + promotion-gate + CUI-exclude first (gated by this ADR + the test). CI's `bun test harness` doesn't run `desktop/` yet (pre-existing; R-01 CI scope) — covered by `bun test` / `make test`.
+- **next:** R-06 (subagent stash-isolation provenance) — confirm lineage/attribution track subagent edits under ADR-0032 (isolation off).
+## R-02: prefix-hash regression vs omp auto-compaction
+- **shipped:** `harness/prompt/prefix_compaction.test.ts` — drives a REAL omp agent session (echo model) at the pinned omp **16.0.6**, forces a manual compaction (`AgentSession.compact()` with `compaction.keepRecentTokens` lowered so a headless session is compactable), and asserts the byte-stable frozen prefix (layers 1-4, invariant #6) in `session.systemPrompt` is unchanged across the compaction AND still present verbatim in what omp hands the model on the next turn. Plus an exact-pin assertion on all four `@oh-my-pi/*` packages. Finding: omp 16.0.6 compaction operates on conversation history only (system block preserved) — the invariant HOLDS, no forced change, so no ADR (per R-02's "ADR if omp forces a change").
+- **stubbed:** compaction is exercised via a lowered `keepRecentTokens` (echo turns can't reach the 20k default headlessly); the `snapcompact` strategy is not covered (it needs a vision-capable model) — the `context-full` path is tested. R-02's broader "supported-omp matrix" + scheduled bump CI is R-01 (Nicholas).
+- **next:** R-01's scheduled omp-compat CI should run this test against candidate omp bumps. PRE-EXISTING baseline break unrelated to R-02 — `harness/memory/db.test.ts` asserts `appliedVersions [1..7]` but migrations `0008_memory_session`/`0009_turn_transcripts` (P8.x) make it `[1..9]`; the test wasn't updated when those landed (memory lane to fix).
 
 -----
 
@@ -2100,3 +2108,75 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
   Gemini) is the manual check; parametersJsonSchema assumes AskSage's Gemini proxy is current (omp uses it for
   real Gemini).
 - **next:** live end-to-end tool run on the gov gateway for both providers.
+
+---
+**P-GOAL.9 — /goal After-Action Report + termination guards (ADR-0054)**
+- **shipped:** the loop's LAST task is now an After-Action Report — `desktop/loop_report.ts` (PURE,
+  unit-tested) renders a deterministic markdown AAR with portable Mermaid graphs (pie: Tool Calls by type;
+  xychart bars: LOC added/removed + Errors per iteration) + a unicode scoreboard + Websites-visited table,
+  written beside the memory file via `saveGoalReport` (same `<id>-<slug>` stem, `.report.md`) and streamed
+  as a new `goal-report` ChatEvent rendered as a collapsible card in the chat. Same instrumentation powers
+  three guards: convergence-stall detection (3 identical checker blockers → stop "not converging", #2
+  Infinite Fix Loop), per-iteration tool-failure counts fed back into the next maker prompt (#3), and LOC
+  via best-effort git numstat. Fixed the resume bug: `prior.slice(0,3000)` (head/stale) → `slice(-3000)`
+  (most-recent rounds). bun test desktop 143 pass (+19 new; 4 fails are the pre-existing missing-omp-dep
+  env issue, unchanged from baseline); `make demo-P-GOAL.9` green; AAR artifact renders pie+bar on GitHub/VSCode.
+- **stubbed:** typecheck not run here (this container lacks @types/node/electron/bun); in-app `marked` view
+  shows the scoreboard+tables, not Mermaid (charts live in the on-disk record by design).
+- **next:** structured JSONL run-log for cross-run success-rate/eval; live per-loop token budget + kill
+  switch; escalation ping on unattended stop (loop-engineering Token Burn / Escalation Failure).
+
+---
+**P-GOAL.10 — cross-run evaluation: the /goal run-log + stats surface (ADR-0055)**
+- **shipped:** every completed /goal run now appends one compact JSON line to `.omp/loops/run-log.jsonl`
+  (best-effort, path-confined, written in runGoal's finally beside the AAR). New PURE `desktop/loop_runlog.ts`
+  (unit-tested) projects a P-GOAL.9 LoopMetrics → record, round-trips JSONL (malformed lines skipped), and
+  `aggregateRuns` computes the eval stats: success rate, avg iterations-to-success (over met runs), avg
+  duration, summed tools/LOC/errors, and a failure breakdown that collapses recurring blockers via
+  stallSignature. Surfaced via backend `loopRunStats()` → `GET /api/goal/stats` → a compact evaluation
+  banner in the /goal launcher (hidden until there's history). Flat JSONL by design — stays in the
+  goal-memory lane, never touches the frozen DuckDB schema (invariant #10). bun test desktop 158 pass
+  (+11 new); `make demo-P-GOAL.10` green; typecheck clean across all 3 desktop/root tsconfigs (verified
+  after installing the container's missing bun/node type stubs, then reverting the manifest).
+- **stubbed:** the launcher shows aggregate stats + a 10-run recent slice from the API but no deep
+  per-run history drill-down UI yet (records carry enough to build it without a migration).
+- **next:** live per-loop token budget + kill switch; escalation ping on unattended stop (loop-engineering
+  Token Burn / Escalation Failure) — both can read/append this same ledger.
+
+---
+**P-GOAL.11 — live spend meter + budget kill switch (ADR-0056)**
+- **shipped:** the /goal loop now meters ACTUAL spend and enforces an optional hard dollar cap (loop-
+  engineering "Token Burn" kill switch). New PURE `desktop/loop_budget.ts` (unit-tested) sums each maker
+  turn's peak cost (context tokens tracked as a high-water mark, never summed) and `overBudget` trips the
+  switch. runGoal aborts the in-flight turn the instant running spend crosses the cap, then ends the loop
+  "budget cap $X reached" before wasting a checker call. Spend flows through everything the metrics already
+  touch: LoopMetrics gains spendUsd/peakContextTokens/budgetUsd (null when no usage telemetry, not $0); the
+  After-Action Report shows a Spend row; the run-log + cross-run eval sum actual spend; a "Budget cap" field
+  sits beside Max iterations in the launcher (plumbed via GoalOpts → /api/goal → runGoal). bun test desktop
+  195 pass / 0 fail (+10 new); make demo-P-GOAL.{9,10,11} green; typecheck clean across all 3 tsconfigs.
+- **stubbed:** scheduled automations run uncapped for now (the iteration cap still bounds them) — a budget
+  field on the Automation schema/form is the clean follow-on; the meter measures MAKER spend (checker runs
+  in a separate throwaway session, cheap by ADR-0048 design).
+- **next:** escalation ping on unattended stop (loop-engineering Escalation Failure) — the last follow-on;
+  then a budget field for automations.
+
+---
+**P-GOAL.12 — the Pre-Flight Audit: loop design + readiness before you build (ADR-0057)**
+- **shipped:** an optional "Pre-Flight Audit" button above the Goal input that pauses the builder and
+  designs the loop first. New PURE `desktop/loop_preflight.ts` (unit-tested): `assessReadiness` scores the
+  spec L0→L3 with GATED levels (L3 needs the safety-bearing four — verify command, budget, scope, cheap
+  checker — so a verbose goal can't buy L3 without a real verifier); `renderLoopDesign` emits a repeatable
+  Loop Design .md; history awareness (`relevantPriorRuns`/`renderPriorRuns`) surfaces prior runs of a similar
+  loop so context isn't lost; a prompt-engineering interview (`preflight*Prompt`/`parsePreflightJson`/
+  `mergeMatured`) matures the goal with user/PO + engineer feedback; `successCriteria` distills the checker's
+  grading rubric. Backend `preflightAudit` reads the run-log, runs ONE interview pass on the cheap checker
+  (best-effort, deterministic fallback), writes `.omp/loops/*.preflight.md`, returns matured goal + criteria;
+  `loopScopes` lists branches/worktrees. The checker (`runGoal`/`checkGoal`) now grades against the matured
+  `criteria` and reports which are met/unmet — closing the recursive self-improvement loop (AAR/run-log →
+  preflight → run → AAR). UI: scope picker + interview panel + readiness chip + rendered report + "Adopt as
+  goal". bun test desktop 216 pass / 0 fail (+21); make demo-P-GOAL.12 green; typecheck clean across all 3
+  tsconfigs (verified with electron/node/bun types installed, manifest reverted).
+- **stubbed:** the interview is one structured maturation pass (not open-ended multi-turn); adopting carries
+  criteria to the immediate next run only; automations still don't take a budget/criteria.
+- **next:** escalation ping on unattended stop; a budget + criteria field for scheduled automations; an
+  optional multi-turn interview.
