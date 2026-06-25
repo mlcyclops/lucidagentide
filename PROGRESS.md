@@ -4,6 +4,13 @@ Three lines per session: **shipped / stubbed / next** (CLAUDE.md session ritual)
 
 -----
 
+## R-02: prefix-hash regression vs omp auto-compaction
+- **shipped:** `harness/prompt/prefix_compaction.test.ts` — drives a REAL omp agent session (echo model) at the pinned omp **16.0.6**, forces a manual compaction (`AgentSession.compact()` with `compaction.keepRecentTokens` lowered so a headless session is compactable), and asserts the byte-stable frozen prefix (layers 1-4, invariant #6) in `session.systemPrompt` is unchanged across the compaction AND still present verbatim in what omp hands the model on the next turn. Plus an exact-pin assertion on all four `@oh-my-pi/*` packages. Finding: omp 16.0.6 compaction operates on conversation history only (system block preserved) — the invariant HOLDS, no forced change, so no ADR (per R-02's "ADR if omp forces a change").
+- **stubbed:** compaction is exercised via a lowered `keepRecentTokens` (echo turns can't reach the 20k default headlessly); the `snapcompact` strategy is not covered (it needs a vision-capable model) — the `context-full` path is tested. R-02's broader "supported-omp matrix" + scheduled bump CI is R-01 (Nicholas).
+- **next:** R-01's scheduled omp-compat CI should run this test against candidate omp bumps. PRE-EXISTING baseline break unrelated to R-02 — `harness/memory/db.test.ts` asserts `appliedVersions [1..7]` but migrations `0008_memory_session`/`0009_turn_transcripts` (P8.x) make it `[1..9]`; the test wasn't updated when those landed (memory lane to fix).
+
+-----
+
 ## P-EXT.5.0: attach-mode roadmap (planning only — ADR-0039)
 - **shipped:** ADR-0039 in DECISIONS.md — designs the deferred ADR-0038 optional attach-mode (an IDE
   extension SHARING the running desktop's already-gated session instead of spawning its own `lucid acp`).
