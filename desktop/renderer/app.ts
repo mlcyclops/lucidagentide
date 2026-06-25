@@ -2636,7 +2636,7 @@ async function renderAutomations(ov: HTMLElement, close: () => void): Promise<vo
   });
 }
 async function runGoalLoop(
-  opts: { goal: string; condition: string; command?: string; maxIters: number; resume?: string },
+  opts: { goal: string; condition: string; command?: string; maxIters: number; resume?: string; budgetUsd?: number },
   stream?: (onEvent: (e: ChatEvent) => void) => Promise<void>, // P-GOAL.5: automation run-now reuses this renderer
   verb = "/goal",
 ): Promise<void> {
