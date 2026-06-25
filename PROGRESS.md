@@ -2144,3 +2144,24 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
   in a separate throwaway session, cheap by ADR-0048 design).
 - **next:** escalation ping on unattended stop (loop-engineering Escalation Failure) — the last follow-on;
   then a budget field for automations.
+
+---
+**P-GOAL.12 — the Pre-Flight Audit: loop design + readiness before you build (ADR-0057)**
+- **shipped:** an optional "Pre-Flight Audit" button above the Goal input that pauses the builder and
+  designs the loop first. New PURE `desktop/loop_preflight.ts` (unit-tested): `assessReadiness` scores the
+  spec L0→L3 with GATED levels (L3 needs the safety-bearing four — verify command, budget, scope, cheap
+  checker — so a verbose goal can't buy L3 without a real verifier); `renderLoopDesign` emits a repeatable
+  Loop Design .md; history awareness (`relevantPriorRuns`/`renderPriorRuns`) surfaces prior runs of a similar
+  loop so context isn't lost; a prompt-engineering interview (`preflight*Prompt`/`parsePreflightJson`/
+  `mergeMatured`) matures the goal with user/PO + engineer feedback; `successCriteria` distills the checker's
+  grading rubric. Backend `preflightAudit` reads the run-log, runs ONE interview pass on the cheap checker
+  (best-effort, deterministic fallback), writes `.omp/loops/*.preflight.md`, returns matured goal + criteria;
+  `loopScopes` lists branches/worktrees. The checker (`runGoal`/`checkGoal`) now grades against the matured
+  `criteria` and reports which are met/unmet — closing the recursive self-improvement loop (AAR/run-log →
+  preflight → run → AAR). UI: scope picker + interview panel + readiness chip + rendered report + "Adopt as
+  goal". bun test desktop 216 pass / 0 fail (+21); make demo-P-GOAL.12 green; typecheck clean across all 3
+  tsconfigs (verified with electron/node/bun types installed, manifest reverted).
+- **stubbed:** the interview is one structured maturation pass (not open-ended multi-turn); adopting carries
+  criteria to the immediate next run only; automations still don't take a budget/criteria.
+- **next:** escalation ping on unattended stop; a budget + criteria field for scheduled automations; an
+  optional multi-turn interview.

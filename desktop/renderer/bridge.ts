@@ -149,7 +149,7 @@ export type ChatEvent =
   // P-GOAL.9 (ADR-0054): the loop's last task — an After-Action Report (metrics + portable graphs).
   | { type: "goal-report"; path: string; summary: string; markdown: string }
   | { type: "done" };
-export interface GoalOpts { goal: string; condition: string; command?: string; maxIters: number; resume?: string; budgetUsd?: number }
+export interface GoalOpts { goal: string; condition: string; command?: string; maxIters: number; resume?: string; budgetUsd?: number; criteria?: string }
 // P-GOAL.4: a stopped loop that can be resumed from its on-disk memory file.
 export interface ResumableLoop { rel: string; goal: string; condition: string; command?: string; iterations: number; updatedAt: number }
 // P-GOAL.10 (ADR-0055): the cross-run evaluation surface (mirrors desktop/loop_runlog.ts).
@@ -165,6 +165,15 @@ export interface RunStats {
   totalErrors: number; totalSpendUsd: number; topBlockers: { reason: string; count: number }[];
 }
 export interface LoopRunStats { stats: RunStats; summary: string; recent: LoopRunRecord[] }
+// P-GOAL.12 (ADR-0057): the Pre-Flight Audit (mirrors desktop/loop_preflight.ts).
+export interface PreflightSpec {
+  goal: string; command?: string; scope?: string; budgetUsd?: number; maxIters?: number; checkerIsCheap?: boolean;
+  doneDefinition?: string; nonGoals?: string; risks?: string; feedback?: string;
+}
+export interface ReadinessCheck { key: string; label: string; ok: boolean; weight: number; nudge?: string }
+export interface ReadinessReport { level: "L0" | "L1" | "L2" | "L3"; score: number; checks: ReadinessCheck[]; summary: string }
+export interface PreflightResult { maturedGoal: string; criteria: string; reportMd: string; reportPath: string; readiness: ReadinessReport; prior: { total: number; relevant: number } }
+export interface LoopScopes { current: string; branches: string[]; worktrees: string[] }
 // P-GOAL.5: a scheduled automation — a saved /goal spec the in-process scheduler runs on a cadence.
 export type Cadence = { kind: "interval"; everyMin: number } | { kind: "daily"; hhmm: string };
 export interface Automation {
@@ -218,6 +227,8 @@ export interface LucidBridge {
   runGoal(opts: GoalOpts, onEvent: (e: ChatEvent) => void): Promise<void>;
   resumableLoops(): Promise<ResumableLoop[] | null>; // P-GOAL.4: loops that stopped without meeting their condition
   loopRunStats(): Promise<LoopRunStats | null>; // P-GOAL.10 (ADR-0055): cross-run evaluation stats + recent runs
+  loopScopes(): Promise<LoopScopes | null>;     // P-GOAL.12 (ADR-0057): branches/worktrees for the Pre-Flight scope picker
+  preflightAudit(spec: PreflightSpec): Promise<PreflightResult | null>; // P-GOAL.12: readiness + matured goal + design report
   // P-GOAL.5 (ADR-0047): scheduled automations — CRUD + arm/disarm + run-now (run-now streams goal events).
   automations(): Promise<Automation[] | null>;
   automationCreate(spec: AutomationSpec): Promise<Automation | null>;
@@ -403,6 +414,8 @@ export const bridge: LucidBridge = {
   runGoal: (opts, onEvent) => streamNdjson("/api/goal", opts, onEvent),
   resumableLoops: () => getData("/api/goal/resumable"),
   loopRunStats: () => getData("/api/goal/stats"),
+  loopScopes: () => getData("/api/goal/scopes"),
+  preflightAudit: (spec) => post("/api/goal/preflight", spec),
   automations: () => getData("/api/automations"),
   automationCreate: (spec) => post("/api/automations", spec),
   automationEnable: (id, enabled) => post("/api/automations/enable", { id, enabled }),

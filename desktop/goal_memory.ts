@@ -69,6 +69,20 @@ export function saveGoalReport(workspace: string, id: string, goal: string, mark
   } catch { return null; }
 }
 
+/** P-GOAL.12 (ADR-0057): write a Pre-Flight Audit's Loop Design report under `.omp/loops/`
+ *  (`<id>-<slug>.preflight.md`). Best-effort; returns the workspace-relative path or null. */
+export function savePreflightReport(workspace: string, id: string, goal: string, markdown: string): string | null {
+  const root = join(workspace, ".omp", "loops");
+  const file = `${id}-${slugify(goal)}.preflight.md`;
+  const target = pathWithin(root, join(root, file));
+  if (!target) return null;
+  try {
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, markdown, "utf8");
+    return join(".omp", "loops", file);
+  } catch { return null; }
+}
+
 // ── P-GOAL.10 (ADR-0055): the cross-run evaluation ledger (`.omp/loops/run-log.jsonl`) ─────────────
 
 const RUN_LOG = "run-log.jsonl";

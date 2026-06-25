@@ -528,13 +528,25 @@ const server = Bun.serve({
       if (p === "/api/goal/resumable") return json({ ok: true, data: listResumableLoops(currentWorkspace()) });
       // P-GOAL.10 (ADR-0055): cross-run evaluation — success rate / avg iters / failure breakdown + recent runs.
       if (p === "/api/goal/stats") return json({ ok: true, data: backend.loopRunStats() });
+      // P-GOAL.12 (ADR-0057): Pre-Flight Audit — git scopes for the picker, and the readiness/design pass.
+      if (p === "/api/goal/scopes") return json({ ok: true, data: backend.loopScopes() });
+      if (p === "/api/goal/preflight" && req.method === "POST") {
+        const b = await readBody<Record<string, unknown>>(req);
+        const spec = {
+          goal: String(b.goal ?? ""), command: b.command ? String(b.command) : undefined, scope: b.scope ? String(b.scope) : undefined,
+          budgetUsd: Number(b.budgetUsd) || 0, maxIters: Number(b.maxIters) || undefined, checkerIsCheap: b.checkerIsCheap === true,
+          doneDefinition: b.doneDefinition ? String(b.doneDefinition) : undefined, nonGoals: b.nonGoals ? String(b.nonGoals) : undefined,
+          risks: b.risks ? String(b.risks) : undefined, feedback: b.feedback ? String(b.feedback) : undefined,
+        };
+        return json({ ok: true, data: await backend.preflightAudit(spec) });
+      }
       if (p === "/api/goal" && req.method === "POST") {
-        const b = await readBody<{ goal?: unknown; condition?: unknown; command?: unknown; maxIters?: unknown; resume?: unknown; budgetUsd?: unknown }>(req);
+        const b = await readBody<{ goal?: unknown; condition?: unknown; command?: unknown; maxIters?: unknown; resume?: unknown; budgetUsd?: unknown; criteria?: unknown }>(req);
         const enc = new TextEncoder();
         const stream = new ReadableStream({
           async start(controller) {
             await backend.runGoal(
-              { goal: String(b.goal ?? ""), condition: String(b.condition ?? ""), command: b.command ? String(b.command) : undefined, maxIters: Number(b.maxIters) || 6, resume: b.resume ? String(b.resume) : undefined, budgetUsd: Number(b.budgetUsd) || 0 },
+              { goal: String(b.goal ?? ""), condition: String(b.condition ?? ""), command: b.command ? String(b.command) : undefined, maxIters: Number(b.maxIters) || 6, resume: b.resume ? String(b.resume) : undefined, budgetUsd: Number(b.budgetUsd) || 0, criteria: b.criteria ? String(b.criteria) : undefined },
               (e) => { try { controller.enqueue(enc.encode(JSON.stringify(e) + "\n")); } catch { /* stream closed */ } },
             );
             try { controller.close(); } catch { /* already closed */ }

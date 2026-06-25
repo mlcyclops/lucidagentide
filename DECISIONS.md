@@ -4763,3 +4763,76 @@ ADR-0049 (the pre-run cost estimate this complements with ACTUALS), ADR-0054 (th
 shows spend), ADR-0055 (the run-log/eval that now sums spend), ADR-0048 (the cheap checker that
 keeps the meter ≈ maker spend); `cobusgreyling/loop-engineering` (Token Burn — "daily budget
 limit", "kill switch"). Remaining follow-on: an escalation ping on unattended stop.
+
+-----
+
+## ADR-0057 — The Pre-Flight Audit: loop design + readiness before you build (P-GOAL.12)
+
+**Date:** 2026-06-25
+**Status:** Accepted — shipped this increment.
+**Context increment:** P-GOAL.12.
+
+### Context
+
+loop-engineering ships two CLIs — `loop-init` (scaffold run-log/budget/state templates) and
+`loop-audit` (score a repo 0→100, L0→L3, on readiness for unattended loops). We already *generate*
+live what they scaffold static (run-log P-GOAL.10, budget kill switch P-GOAL.11, goal-memory
+P-GOAL.4), so adopting the CLIs would be redundant + drift (Node CLIs for grok/codex workflows;
+we're in-process Bun/Electron). But their **readiness rubric** is valuable — reframed from "is this
+REPO ready?" to "is THIS loop well-formed?", surfaced at the moment of building a loop. The user
+asked for an active **"Pre-Flight Audit"**: an optional button above the Goal input that pauses the
+builder, scopes the loop (branch/worktree) and runs a prompt-engineering interview, reads past-run
+history so context isn't lost, folds in **user/product-owner AND engineer** feedback, and emits a
+**repeatable Loop Design report (.md)** the user adopts as the goal — whose matured success criteria
+thread to the small checker so it grades against the real design. The whole thing closes a
+**recursive self-improvement loop**: each run's After-Action Report + run-log feed the next loop's
+Pre-Flight, which matures the next goal.
+
+### Decision
+
+- **`desktop/loop_preflight.ts`** (PURE, unit-tested): `assessReadiness` scores the spec L0→L3 with
+  **gated** levels (L3 "unattended-capable" REQUIRES the safety-bearing four — verification command,
+  budget cap, explicit scope, cheap checker — so a verbose goal can't buy L3 without a real verifier,
+  defeating *Verifier Theater*). `renderLoopDesign` emits the repeatable report; `maturedGoalFrom`
+  distills the adoptable goal; `successCriteria` distills the checker's grading rubric. History:
+  `relevantPriorRuns` / `summarizePriorRuns` / `renderPriorRuns` surface prior runs of a similar loop
+  (their AARs live in `.omp/loops/`). Interview: `preflightSystemPrompt` / `preflightUserPrompt` /
+  `parsePreflightJson` / `mergeMatured` (user-provided values always win; the model fills blanks).
+- **Backend** `preflightAudit(spec)`: reads the run-log for history, runs ONE interview pass on the
+  cheap **checker** model (`complete()`, best-effort; deterministic fallback to the user's answers if
+  the model is unavailable), scores readiness, writes the Loop Design under `.omp/loops/*.preflight.md`,
+  and returns the matured goal + criteria + report. `loopScopes()` lists branches/worktrees (git,
+  best-effort). It mutates nothing — a planning step.
+- **Checker context (deterministic grading).** `runGoal`/`checkGoal` gain an optional `criteria`; the
+  small checker now grades against the matured success criteria and **reports back which are met/unmet**
+  — appropriate context, not a bare condition. Adopting a Pre-Flight design stashes its criteria and
+  threads it to the next run.
+- **UI**: an optional "Pre-Flight Audit" button above the Goal field opens a panel (scope picker +
+  interview incl. user/PO feedback + engineer notes), runs the audit, shows the readiness chip + the
+  rendered report + prior-run note, and "Adopt as goal" fills the Goal field (+ command) and stashes
+  the criteria. The builder is paused until the user adopts or closes.
+
+### Alternatives considered
+
+- **Vendor loop-init / loop-audit.** Rejected — Node CLIs that scaffold static markdown for grok/codex;
+  we already generate those live, and a CLI surface cuts against "extend, don't fork".
+- **Open-ended multi-turn interview chat.** Rejected for this increment — a structured interview + one
+  model maturation pass is reliable, testable, and bounded; a multi-turn agent can come later.
+- **A passive readiness chip only.** Rejected — the user wanted an active design step that produces an
+  adoptable artifact and carries history/feedback forward (the self-improvement loop).
+
+### Invariants preserved
+
+#2 (TS-only; a pure core + a model call via existing `complete()`, no new surface) · #3 (best-effort
+throughout — git scopes, the model interview, the report write all degrade gracefully; the checker
+stays fail-closed and the gate is still the boundary) · #5 (the matured goal is shown to the user to
+review/edit before it ever runs — human in the loop) · #10 (the Loop Design + preflight reports are
+flat `.omp/loops/` files; no DuckDB schema change).
+
+### Relates to
+
+ADR-0048 (the cheap checker that runs the interview + now grades against criteria), ADR-0054/0055
+(the AARs + run-log this reads for history — the recursive loop), ADR-0056 (the budget cap the rubric
+checks), ADR-0046/0047 (the loop + automations); loop-engineering's `loop-audit` rubric (L0→L3) and
+`loop-design-checklist` (the report's shape). Follow-on: a budget field for automations; an escalation
+ping on unattended stop.

@@ -21,11 +21,12 @@ import { asksageOnly, attribution, checkerModel, lastModel, mcpServersForAcp, se
 import { managedConfig } from "./managed_config.ts";
 import { recommendCheckerModel, resolveCheckerModel, type ModelOption } from "./checker_model.ts";
 import { parseGoalVerdict } from "./goal_verdict.ts";
-import { appendGoalIteration, appendRunLog, finishGoalMemory, type GoalMemory, readRunLog, resumeGoalMemory, saveGoalReport, startGoalMemory } from "./goal_memory.ts";
+import { appendGoalIteration, appendRunLog, finishGoalMemory, type GoalMemory, readRunLog, resumeGoalMemory, saveGoalReport, savePreflightReport, startGoalMemory } from "./goal_memory.ts";
 import { extractUrls, type IterStat, type LocStat, type LoopMetrics, type LoopOutcome, normalizeToolName, parseNumstat, renderLoopReport, stallSignature, summarizeLoop } from "./loop_report.ts";
 import { aggregateRuns, type LoopRunRecord, type RunStats, summarizeRunStats, toRunRecord } from "./loop_runlog.ts";
 import { addTurnSpend, type LoopSpend, newLoopSpend, normalizeBudget, overBudget } from "./loop_budget.ts";
 import { formatSpend } from "./loop_report.ts";
+import { assessReadiness, maturedGoalFrom, mergeMatured, parsePreflightJson, type PreflightSpec, preflightSystemPrompt, preflightUserPrompt, type ReadinessReport, relevantPriorRuns, renderLoopDesign, successCriteria, summarizePriorRuns } from "./loop_preflight.ts";
 import { execFileSync } from "node:child_process";
 import { type Automation, listAutomations, nextDueAutomation, updateAutomation } from "./automations.ts";
 
@@ -412,10 +413,11 @@ class Backend {
   // when given). Capped at `maxIters`, auto-stops on no-progress. Runs UNATTENDED — permissions are
   // auto-approved for the duration, but every tool call is still scanned fail-closed by the in-process
   // gate (that, not human approval, is the safety boundary). Streams the usual chat events plus goal-*.
-  async runGoal(opts: { goal: string; condition: string; command?: string; maxIters: number; resume?: string; budgetUsd?: number }, onEvent: (e: ChatEvent) => void): Promise<void> {
+  async runGoal(opts: { goal: string; condition: string; command?: string; maxIters: number; resume?: string; budgetUsd?: number; criteria?: string }, onEvent: (e: ChatEvent) => void): Promise<void> {
     const goal = opts.goal.trim();
     const condition = (opts.condition || opts.command || "the goal is fully accomplished").trim();
     const command = opts.command?.trim() || "";
+    const criteria = opts.criteria?.trim() || ""; // P-GOAL.12: matured success criteria for the checker
     const maxIters = Math.min(Math.max(1, Math.floor(opts.maxIters) || 6), 20); // hard ceiling
     const budgetUsd = normalizeBudget(opts.budgetUsd); // P-GOAL.11: 0 = no cap (iteration cap stays the ceiling)
     const prevMode = this.permissionMode;
@@ -498,7 +500,7 @@ class Backend {
           onEvent({ type: "goal-stop", reason: terminalReason }); finishGoalMemory(mem, terminalReason); return;
         }
 
-        const verdict = await this.checkGoal({ goal, condition, command, lastWork: work });
+        const verdict = await this.checkGoal({ goal, condition, command, lastWork: work, criteria });
         onEvent({ type: "goal-check", n: i, done: verdict.done, reason: verdict.reason });
         appendGoalIteration(mem, i, work, verdict);
         perIteration.push({ n: i, tools: iterTools, errors: iterErrors, done: verdict.done, reason: verdict.reason });
@@ -578,6 +580,43 @@ class Backend {
     const records = readRunLog(currentWorkspace());
     const stats = aggregateRuns(records);
     return { stats, summary: summarizeRunStats(stats), recent: records.slice(0, Math.max(0, limit)) };
+  }
+
+  /** P-GOAL.12 (ADR-0057): the branches + worktrees the Pre-Flight Audit offers as loop scope. Best-effort. */
+  private gitLines(args: string[]): string[] {
+    try { return execFileSync("git", args, { cwd: currentWorkspace(), encoding: "utf8", timeout: 5_000, maxBuffer: 2 * 1024 * 1024, stdio: ["ignore", "pipe", "ignore"] }).split("\n").map((s) => s.trim()).filter(Boolean); }
+    catch { return []; }
+  }
+  loopScopes(): { current: string; branches: string[]; worktrees: string[] } {
+    const current = this.gitLines(["rev-parse", "--abbrev-ref", "HEAD"])[0] ?? "";
+    const branches = this.gitLines(["branch", "--format=%(refname:short)"]);
+    const worktrees = this.gitLines(["worktree", "list", "--porcelain"]).filter((l) => l.startsWith("worktree ")).map((l) => l.slice(9).trim());
+    return { current, branches, worktrees };
+  }
+
+  /** P-GOAL.12 (ADR-0057): the Pre-Flight Audit. Reads prior-run history (so the new loop carries past
+   *  context, not re-solving old blockers), runs ONE prompt-engineering interview pass on the cheap checker
+   *  model to mature the goal (best-effort; falls back to the user's structured answers), scores readiness
+   *  against the rubric, and writes a durable Loop Design report. Returns the matured goal to adopt + the
+   *  report. Never mutates the loop or the session — it's a planning step. */
+  async preflightAudit(spec: PreflightSpec): Promise<{ maturedGoal: string; criteria: string; reportMd: string; reportPath: string; readiness: ReadinessReport; prior: { total: number; relevant: number } }> {
+    const ws = currentWorkspace();
+    const records = readRunLog(ws);                                  // history awareness
+    const relevant = relevantPriorRuns(records, spec.goal, 3);
+    let matured: PreflightSpec = spec;
+    let maturedGoal = "";
+    try {
+      const model = resolveCheckerModel({ chosen: checkerModel(), models: this.accessibleModels(), current: this.activeModel() }).value;
+      const out = await this.complete(preflightSystemPrompt(), preflightUserPrompt(spec, summarizePriorRuns(relevant)), { idleMs: 90_000, model });
+      const fields = parsePreflightJson(out);
+      matured = mergeMatured(spec, fields);
+      maturedGoal = fields.maturedGoal || "";
+    } catch { /* model unavailable — fall back to the user's structured answers */ }
+    if (!maturedGoal) maturedGoal = maturedGoalFrom(matured);        // deterministic fallback
+    const readiness = assessReadiness(matured);
+    const reportMd = renderLoopDesign(matured, readiness, maturedGoal, { total: records.length, relevant });
+    const reportPath = savePreflightReport(ws, Date.now().toString(36), spec.goal || "loop", reportMd) ?? "";
+    return { maturedGoal, criteria: successCriteria(matured), reportMd, reportPath, readiness, prior: { total: records.length, relevant: relevant.length } };
   }
 
   // P-GOAL.5 (ADR-0047): the automation scheduler. Arm a timer that, while the app is open, fires the
@@ -665,19 +704,22 @@ class Backend {
    *  against the maker's reported work, conservatively. Fail-closed: an empty/failed reply ⇒ not done.
    *  P-GOAL.6: runs on the resolved CHECKER model (the user's choice, else a cheap/capable recommendation,
    *  else the maker's model) — a distinct, cheaper judge that costs less to run every iteration. */
-  private async checkGoal(a: { goal: string; condition: string; command: string; lastWork: string }): Promise<{ done: boolean; reason: string }> {
+  private async checkGoal(a: { goal: string; condition: string; command: string; lastWork: string; criteria?: string }): Promise<{ done: boolean; reason: string }> {
     const model = resolveCheckerModel({ chosen: checkerModel(), models: this.accessibleModels(), current: this.activeModel() }).value;
+    // P-GOAL.12 (ADR-0057): give the small checker the matured SUCCESS CRITERIA from the Pre-Flight design,
+    // and have it report back against EACH — appropriate context for a deterministic grade, not a bare check.
+    const criteriaBlock = a.criteria ? `\n\nGrade against these success criteria (report which are met / unmet):\n${a.criteria.slice(0, 1500)}` : "";
     if (a.command) {
       const out = await this.complete(
-        `You are a verification CHECKER, separate from the agent that did the work. Run the given command EXACTLY in the workspace and report only the outcome. Do NOT modify any files or try to fix anything. Output ONLY strict JSON on one line: {"done": <true only if the command finished with exit code 0>, "reason": "<short summary of what happened>"}.`,
-        `Run this verification command and report whether it passed:\n\n\`\`\`\n${a.command}\n\`\`\``,
+        `You are a verification CHECKER, separate from the agent that did the work. Run the given command EXACTLY in the workspace and report only the outcome. Do NOT modify any files or try to fix anything. ${a.criteria ? "Also note any success criterion that the command does not cover. " : ""}Output ONLY strict JSON on one line: {"done": <true only if the command finished with exit code 0${a.criteria ? " AND every success criterion holds" : ""}>, "reason": "<short summary: what happened + which criteria are met/unmet>"}.`,
+        `Run this verification command and report whether it passed:\n\n\`\`\`\n${a.command}\n\`\`\`${criteriaBlock}`,
         { idleMs: 180_000, model },
       );
       return parseGoalVerdict(out);
     }
     const out = await this.complete(
-      `You are a strict CHECKER, separate from the agent that did the work. Decide whether the goal is fully met. Be conservative: if you are not sure, answer done=false. Output ONLY strict JSON on one line: {"done": bool, "reason": "<one line>"}.`,
-      `Goal: ${a.goal}\nStop condition: ${a.condition}\n\nThe agent reported:\n${(a.lastWork || "(no output)").slice(0, 4000)}\n\nIs the goal fully met?`,
+      `You are a strict CHECKER, separate from the agent that did the work. Decide whether the goal is fully met against the success criteria. Be conservative: if you are not sure, answer done=false. Output ONLY strict JSON on one line: {"done": bool, "reason": "<one line: which criteria are met/unmet>"}.`,
+      `Goal: ${a.goal}\nStop condition: ${a.condition}${criteriaBlock}\n\nThe agent reported:\n${(a.lastWork || "(no output)").slice(0, 4000)}\n\nIs the goal fully met?`,
       { idleMs: 120_000, model },
     );
     return parseGoalVerdict(out);
