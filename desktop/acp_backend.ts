@@ -21,7 +21,9 @@ import { asksageOnly, attribution, checkerModel, lastModel, mcpServersForAcp, se
 import { managedConfig } from "./managed_config.ts";
 import { recommendCheckerModel, resolveCheckerModel, type ModelOption } from "./checker_model.ts";
 import { parseGoalVerdict } from "./goal_verdict.ts";
-import { appendGoalIteration, finishGoalMemory, type GoalMemory, resumeGoalMemory, startGoalMemory } from "./goal_memory.ts";
+import { appendGoalIteration, finishGoalMemory, type GoalMemory, resumeGoalMemory, saveGoalReport, startGoalMemory } from "./goal_memory.ts";
+import { extractUrls, type IterStat, type LocStat, type LoopMetrics, type LoopOutcome, normalizeToolName, parseNumstat, renderLoopReport, stallSignature, summarizeLoop } from "./loop_report.ts";
+import { execFileSync } from "node:child_process";
 import { type Automation, listAutomations, nextDueAutomation, updateAutomation } from "./automations.ts";
 
 const REPO = join(import.meta.dir, "..");
@@ -58,6 +60,8 @@ export type ChatEvent =
   | { type: "goal-check"; n: number; done: boolean; reason: string }
   | { type: "goal-done"; iters: number; reason: string }
   | { type: "goal-stop"; reason: string }
+  // P-GOAL.9 (ADR-0054): the loop's last task — an After-Action Report (metrics + portable graphs).
+  | { type: "goal-report"; path: string; summary: string; markdown: string }
   | { type: "done" };
 
 class Backend {
@@ -416,49 +420,120 @@ class Backend {
     // P-GOAL.3/4: durable on-disk memory (best-effort). `resume` continues an existing loop-memory file
     // and injects its prior progress; otherwise start a fresh record.
     const resumed = opts.resume ? resumeGoalMemory(currentWorkspace(), opts.resume) : null;
-    const mem: GoalMemory | null = resumed ? resumed.mem : startGoalMemory(currentWorkspace(), Date.now().toString(36), { goal, condition, command });
+    // P-GOAL.9: a stable id shared by the memory file and the After-Action Report (same `<id>-<slug>`
+    // stem). When resuming, reuse the existing file's id so the report lands beside it.
+    const loopId = resumed ? (resumed.mem.rel.split("/").pop()?.split("-")[0] || Date.now().toString(36)) : Date.now().toString(36);
+    const mem: GoalMemory | null = resumed ? resumed.mem : startGoalMemory(currentWorkspace(), loopId, { goal, condition, command });
     if (mem) onEvent({ type: "goal-memory", path: mem.rel });
     const memNote = mem ? ` Your durable progress memory is the file ${mem.rel} (it records what's done across iterations).` : "";
-    const resumeNote = resumed ? `\n\nThis loop was already in progress. Below is the progress so far — do NOT redo completed work, continue from where it stopped:\n${resumed.prior.slice(0, 3000)}` : "";
+    // P-GOAL.9 fix: inject the TAIL of the prior progress (the most-recent iterations), not the head —
+    // a long resumed loop must see what it just did, not the stale opening rounds.
+    const resumeNote = resumed ? `\n\nThis loop was already in progress. Below is the most recent progress — do NOT redo completed work, continue from where it stopped:\n${resumed.prior.slice(-3000)}` : "";
+
+    // ── P-GOAL.9 (ADR-0054): run-time instrumentation feeding the After-Action Report ──────────────
+    const startedAt = Date.now();
+    const toolCalls: Record<string, number> = {};
+    const errors: { iter: number; detail: string }[] = [];
+    const websites = new Set<string>();
+    const perIteration: IterStat[] = [];
+    // LOC: pin a baseline COMMIT now; at the end, diff the tree against it (captures committed-since +
+    // uncommitted) and subtract any changes that were already present at start. Best-effort, git-only.
+    const startRef = this.gitHead();
+    const startDiff = startRef ? this.gitDiffVs(startRef) : null;
+    let terminalOutcome: LoopOutcome = "stopped";
+    let terminalReason = `stopped: hit the ${maxIters}-iteration cap without meeting the condition`;
+
     let noProgress = 0;
+    let lastSig = "";       // P-GOAL.9 (#2 Infinite Fix Loop): the prior round's blocker signature
+    let stallCount = 0;     // consecutive rounds stuck on the SAME blocker
+    let lastIterErrors = 0; // P-GOAL.9 (#3): tool failures last round, fed back into the next prompt
     try {
       for (let i = 1; i <= maxIters; i++) {
-        if (this.goalCancelled) { onEvent({ type: "goal-stop", reason: "stopped by you" }); finishGoalMemory(mem, "stopped by you"); return; }
+        if (this.goalCancelled) { terminalOutcome = "cancelled"; terminalReason = "stopped by you"; onEvent({ type: "goal-stop", reason: terminalReason }); finishGoalMemory(mem, terminalReason); return; }
         onEvent({ type: "goal-iter", n: i, max: maxIters });
         let work = "";
         let actedThisIter = false;
+        let iterTools = 0, iterErrors = 0;
         // Forward the maker's stream, but swallow the per-iteration `done` so the client sees ONE loop.
         const sink = (e: ChatEvent) => {
           if (e.type === "done") return;
           if (e.type === "token") work += e.text;
-          if (e.type === "tool" || e.type === "subagent") actedThisIter = true;
+          if (e.type === "tool") { actedThisIter = true; iterTools++; const t = normalizeToolName(e.name); toolCalls[t] = (toolCalls[t] ?? 0) + 1; for (const u of extractUrls(e.detail)) websites.add(u); }
+          else if (e.type === "subagent") { actedThisIter = true; iterTools++; toolCalls.subagent = (toolCalls.subagent ?? 0) + 1; }
+          else if (e.type === "block") { iterErrors++; errors.push({ iter: i, detail: `${e.tool}: ${e.reason}`.slice(0, 200) }); }
           onEvent(e);
         };
+        // P-GOAL.9 (#3): when the previous round had failed/blocked tool calls, tell the maker so it
+        // changes approach instead of re-issuing the same failing call.
+        const failNote = lastIterErrors > 0 ? ` Note: ${lastIterErrors} tool call${lastIterErrors === 1 ? "" : "s"} failed or were blocked last round — fix the cause (paths, permissions, syntax) rather than repeating them.` : "";
         const iterText = i === 1
           ? `${goal}\n\nWork toward this goal now. The stop condition is: ${condition}${command ? ` (verified by running \`${command}\`)` : ""}. Take the next concrete step.${memNote}${resumeNote}`
-          : `Continue toward the goal. Stop condition: ${condition}. Take the next concrete step; if you believe the condition now holds, say so briefly and stop.${memNote}`;
+          : `Continue toward the goal. Stop condition: ${condition}. Take the next concrete step; if you believe the condition now holds, say so briefly and stop.${memNote}${failNote}`;
         await this.prompt(iterText, sink);
-        if (this.goalCancelled) { onEvent({ type: "goal-stop", reason: "stopped by you" }); finishGoalMemory(mem, "stopped by you"); return; }
+        for (const u of extractUrls(work)) websites.add(u); // links the maker mentioned in its own text
+        lastIterErrors = iterErrors;
+        if (this.goalCancelled) { perIteration.push({ n: i, tools: iterTools, errors: iterErrors, done: false, reason: "cancelled" }); terminalOutcome = "cancelled"; terminalReason = "stopped by you"; onEvent({ type: "goal-stop", reason: terminalReason }); finishGoalMemory(mem, terminalReason); return; }
 
         const verdict = await this.checkGoal({ goal, condition, command, lastWork: work });
         onEvent({ type: "goal-check", n: i, done: verdict.done, reason: verdict.reason });
         appendGoalIteration(mem, i, work, verdict);
-        if (verdict.done) { onEvent({ type: "goal-done", iters: i, reason: verdict.reason }); finishGoalMemory(mem, `Goal met in ${i} iteration${i === 1 ? "" : "s"}: ${verdict.reason}`); return; }
+        perIteration.push({ n: i, tools: iterTools, errors: iterErrors, done: verdict.done, reason: verdict.reason });
+        if (verdict.done) { terminalOutcome = "met"; terminalReason = verdict.reason; onEvent({ type: "goal-done", iters: i, reason: verdict.reason }); finishGoalMemory(mem, `Goal met in ${i} iteration${i === 1 ? "" : "s"}: ${verdict.reason}`); return; }
+
+        // P-GOAL.9 (#2): if the checker reports the SAME blocker three rounds running, the loop is not
+        // converging — stop and surface it rather than burning iterations on an unbreakable wall.
+        const sig = stallSignature(verdict.reason);
+        stallCount = sig && sig === lastSig ? stallCount + 1 : 1;
+        lastSig = sig;
+        if (stallCount >= 3) { terminalReason = `stopped: not converging — the same blocker held for ${stallCount} rounds (${verdict.reason})`; onEvent({ type: "goal-stop", reason: terminalReason }); finishGoalMemory(mem, terminalReason); return; }
 
         noProgress = actedThisIter ? 0 : noProgress + 1;
-        if (noProgress >= 2) { onEvent({ type: "goal-stop", reason: "stopped: two iterations with no actions and the condition still unmet" }); finishGoalMemory(mem, "stopped: no progress for two iterations"); return; }
+        if (noProgress >= 2) { terminalReason = "stopped: two iterations with no actions and the condition still unmet"; onEvent({ type: "goal-stop", reason: terminalReason }); finishGoalMemory(mem, "stopped: no progress for two iterations"); return; }
       }
-      onEvent({ type: "goal-stop", reason: `stopped: hit the ${maxIters}-iteration cap without meeting the condition` });
-      finishGoalMemory(mem, `stopped: hit the ${maxIters}-iteration cap without meeting the condition`);
+      onEvent({ type: "goal-stop", reason: terminalReason });
+      finishGoalMemory(mem, terminalReason);
     } catch (e) {
-      const reason = `loop error: ${String((e as Error)?.message ?? e)}`;
-      onEvent({ type: "goal-stop", reason });
-      finishGoalMemory(mem, reason);
+      terminalOutcome = "error";
+      terminalReason = `loop error: ${String((e as Error)?.message ?? e)}`;
+      onEvent({ type: "goal-stop", reason: terminalReason });
+      finishGoalMemory(mem, terminalReason);
     } finally {
       this.goalActive = false;
       this.permissionMode = prevMode;
+      // P-GOAL.9: the loop's LAST task — assemble metrics + render the After-Action Report. Wholly
+      // best-effort: a failure here is swallowed so the turn always settles with `done`.
+      try {
+        let loc: LocStat | null = null;
+        if (startRef) {
+          const end = this.gitDiffVs(startRef);
+          if (end) loc = { added: Math.max(0, end.added - (startDiff?.added ?? 0)), removed: Math.max(0, end.removed - (startDiff?.removed ?? 0)), files: end.files };
+        }
+        const metrics: LoopMetrics = {
+          goal, condition, command: command || undefined,
+          outcome: terminalOutcome, outcomeReason: terminalReason || "(no reason recorded)",
+          iterations: perIteration.length, maxIters, durationMs: Date.now() - startedAt,
+          toolCalls, loc, errors, websites: [...websites], perIteration,
+        };
+        const markdown = renderLoopReport(metrics);
+        const path = saveGoalReport(currentWorkspace(), loopId, goal, markdown) ?? "";
+        if (mem && path) { try { finishGoalMemory(mem, `After-Action Report: ${path}`); } catch { /* best-effort */ } }
+        onEvent({ type: "goal-report", path, summary: summarizeLoop(metrics), markdown });
+      } catch { /* the report never blocks the loop's completion */ }
       onEvent({ type: "done" });
     }
+  }
+
+  /** P-GOAL.9: the current HEAD commit, or null when the workspace isn't a git repo / git is absent.
+   *  Best-effort and quick (5s cap); a missing baseline just means the report shows "LOC n/a". */
+  private gitHead(): string | null {
+    try { return execFileSync("git", ["rev-parse", "HEAD"], { cwd: currentWorkspace(), encoding: "utf8", timeout: 5_000, stdio: ["ignore", "pipe", "ignore"] }).trim() || null; }
+    catch { return null; }
+  }
+  /** P-GOAL.9: parsed `git diff --numstat <ref>` for the working tree vs `ref` (tracked changes,
+   *  staged + unstaged + committed-since). Null on any git failure — LOC tracking is best-effort. */
+  private gitDiffVs(ref: string): LocStat | null {
+    try { return parseNumstat(execFileSync("git", ["diff", "--numstat", ref], { cwd: currentWorkspace(), encoding: "utf8", timeout: 5_000, maxBuffer: 4 * 1024 * 1024, stdio: ["ignore", "pipe", "ignore"] })); }
+    catch { return null; }
   }
 
   /** P-GOAL.2: stop a running /goal loop — aborts the current maker turn and halts further iterations.

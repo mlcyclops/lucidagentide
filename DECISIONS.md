@@ -4537,3 +4537,96 @@ chunks are retrieval context, never semantic memory).
 ADR-0007 (AskSage adapter + `/query` RAG this extends); ADR-0012 (compartments/classification); ADR-0019
 (gate/quarantine + Security-panel surfacing); ADR-0050 / P-GOAL.8 (the guided-walkthrough UI pattern
 reused); CLAUDE.md invariants #2/#3/#5/#10 + keystone #2.
+
+-----
+
+## ADR-0054 — The `/goal` loop's After-Action Report + termination guards (P-GOAL.9)
+
+**Date:** 2026-06-25
+**Status:** Accepted — shipped this increment.
+**Context increment:** P-GOAL.9.
+
+### Context
+
+We reviewed our `/goal` loop (ADR-0046–0050) against Cobus Greyling's **loop-engineering**
+playbook (`cobusgreyling/loop-engineering`: failure-modes catalog + ship-readiness rubric,
+itself drawing on Osmani/Cherny). Our loop already does the hard parts the rubric stresses —
+a real **maker/checker split** on a separate, cheaper model (ADR-0048), a **fail-closed
+checker** (`goal_verdict.ts`), **durable on-disk memory** with resume (ADR-0046/0047), an
+iteration cap + no-progress stop, and a pre-run cost estimate (ADR-0049). The rubric exposed
+four gaps, all sharpest for **long-running / unattended** loops:
+
+1. **Resume injected the wrong end of memory.** `runGoal` fed `prior.slice(0, 3000)` — the
+   *head* (header + oldest rounds) — so a long resumed loop never saw what it just did. A
+   correctness bug squarely in the long-running case (their "State Rot").
+2. **No "Infinite Fix Loop" guard (their #1 failure mode).** We stopped on *no actions*, but
+   not on *acting-yet-never-converging* — the agent edits every round and the same check keeps
+   failing until the cap.
+3. **Tool failure was invisible to the loop.** A failed/blocked tool call emitted a generic
+   `block` event the loop never counted or reacted to.
+4. **No metrics/observability surface (rubric §9).** The markdown memory is human-readable but
+   not *measurable*; nothing told the user what a run actually did.
+
+The user asked specifically for an **After-Action Report** as the loop's **last task**, with
+"the best type of graphs" for **Tool Calls (by type)**, **LOC changed (added/removed)**,
+**Errors recorded**, and **websites visited**.
+
+### Decision
+
+One coherent increment — instrument the loop once, then use that data for both the
+termination guards and the report.
+
+- **Pure report core — `desktop/loop_report.ts`** (no I/O, no `Date.now()`; tested like
+  `loop_estimate.ts`/`goal_verdict.ts`). Collectors: `normalizeToolName` (group raw omp kinds
+  into a stable type set), `extractUrls`, `parseNumstat`, `stallSignature`. Renderer:
+  `renderLoopReport(LoopMetrics)` emits a deterministic markdown AAR.
+- **"Best type of graphs" = Mermaid + a text scoreboard.** The durable record lives on disk;
+  Mermaid (`pie` for tool-calls-by-type, `xychart-beta` bars for LOC and per-iteration errors)
+  renders natively on GitHub / VS Code / Obsidian — portable, zero-dependency, and TS-only
+  (we generate text, not a charting lib; invariant #2). A unicode **scoreboard** + tables make
+  it render even in our in-app `marked` view, which has no Mermaid. Sections with no data
+  degrade to an honest one-liner — never an empty/invalid chart.
+- **The report is the loop's LAST task.** Generated in `runGoal`'s `finally`, so *every* exit
+  path (met / stopped / cancelled / error) produces one; emitted as a new `goal-report`
+  ChatEvent (path + summary + markdown) and written beside the memory file via
+  `saveGoalReport` (same `<id>-<slug>` stem, `.report.md`, confined by `pathWithin`).
+- **Termination guards from the same instrumentation.** (#2) `stallSignature` collapses a
+  recurring checker blocker across rounds; three identical not-done rounds stop the loop as
+  "not converging" instead of burning the cap. (#3) per-iteration tool-failure counts are
+  recorded and fed back into the next maker prompt ("N tool calls failed last round — fix the
+  cause"), and surfaced in the report's Errors section.
+- **LOC via best-effort git.** `gitHead()` pins a baseline commit; `gitDiffVs()` parses
+  `git diff --numstat` of the tree vs that commit at the end, minus any changes already present
+  at start. Non-git workspace ⇒ `loc: null` ⇒ the report says so. Never a precondition.
+- **Resume fix (#1).** `prior.slice(0, 3000)` → `slice(-3000)` (the most-recent rounds).
+
+Everything new is **best-effort**: a failure assembling/writing the report is swallowed so the
+turn always settles with `done`. The fail-closed gate remains the only safety boundary.
+
+### Alternatives considered
+
+- **Render charts in-app (add a Mermaid/Chart.js dependency).** Rejected: a new vendored
+  bundle + CSP surface for a report whose durable, portable home is the on-disk file. The text
+  scoreboard covers the in-app view; the rich graphs live where they render for free.
+- **Have the checker model write the report prose.** Rejected: the metrics are objective —
+  deterministic generation is cheaper, reproducible, and can't hallucinate ("verifier theater"
+  in the report itself).
+- **A structured JSONL run-log instead of markdown.** Deferred — a good *next* increment for
+  cross-run success-rate/eval. This increment delivers the per-run record the user asked for;
+  the JSONL ledger + live token budget + escalation ping are the follow-ons.
+
+### Invariants preserved
+
+#2 (TS-only; the report is generated text, no new language surface, no charting lib) · #3
+(the report is best-effort and never gates anything; the fail-closed scanner is still the
+boundary) · #5 (no untrusted content enters the prefix; the report is a post-hoc artifact) ·
+#8 (`goal-report` is an ACP **ChatEvent**, the UI stream — not an `EventName` provenance event) ·
+path confinement via `pathWithin` for the on-disk report.
+
+### Relates to
+
+ADR-0046 (the maker/checker loop + durable memory this instruments); ADR-0047 (automations —
+their background ticks now also produce a report); ADR-0048 (the checker model whose verdicts
+feed the stall guard); ADR-0049/0050 (the launcher/cost estimate this complements with
+*actuals*); `cobusgreyling/loop-engineering` (failure-modes #1 Infinite Fix Loop, State Rot,
+Token Burn; ship-readiness §9 Observability — the external review that motivated this).

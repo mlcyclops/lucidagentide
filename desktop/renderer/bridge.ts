@@ -146,6 +146,8 @@ export type ChatEvent =
   | { type: "goal-check"; n: number; done: boolean; reason: string }
   | { type: "goal-done"; iters: number; reason: string }
   | { type: "goal-stop"; reason: string }
+  // P-GOAL.9 (ADR-0054): the loop's last task — an After-Action Report (metrics + portable graphs).
+  | { type: "goal-report"; path: string; summary: string; markdown: string }
   | { type: "done" };
 export interface GoalOpts { goal: string; condition: string; command?: string; maxIters: number; resume?: string }
 // P-GOAL.4: a stopped loop that can be resumed from its on-disk memory file.

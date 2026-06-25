@@ -617,6 +617,14 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .goal-banner{display:flex;align-items:center;gap:9px;font-size:13px;font-weight:600;padding:10px 13px;border-radius:11px}
 .goal-banner.ok{color:var(--green);background:color-mix(in srgb,var(--green) 14%,transparent);border:1px solid color-mix(in srgb,var(--green) 40%,var(--line))}
 .goal-banner.stop{color:var(--txt-2);background:var(--bg-2);border:1px solid var(--line)}
+/* P-GOAL.9: the After-Action Report card — collapsible, with the metrics summary in the header. */
+.goal-aar{margin-top:10px;border:1px solid var(--line);border-radius:11px;background:var(--bg-2);overflow:hidden}
+.goal-aar>summary{cursor:pointer;list-style:none;display:flex;align-items:center;gap:7px;font-size:12px;padding:9px 12px;color:var(--txt-2)}
+.goal-aar>summary::-webkit-details-marker{display:none}
+.goal-aar>summary b{font-weight:600;color:var(--txt-1)}
+.goal-aar>summary code{font-family:var(--mono);font-size:11px;color:var(--txt-4)}
+.goal-aar-body{padding:4px 14px 12px;border-top:1px solid var(--line);font-size:12.5px}
+.goal-aar-body pre{overflow:auto}
 /* The send button lives OUTSIDE the bordered .composer box (the expanding/scrolling input window),
    bottom-aligned beside it, so a long prompt's scroll region is just the text. */
 .composer-row{max-width:min(1080px,94vw);margin:0 auto;display:flex;align-items:flex-end;gap:8px}

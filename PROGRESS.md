@@ -2093,3 +2093,20 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
   Gemini) is the manual check; parametersJsonSchema assumes AskSage's Gemini proxy is current (omp uses it for
   real Gemini).
 - **next:** live end-to-end tool run on the gov gateway for both providers.
+
+---
+**P-GOAL.9 — /goal After-Action Report + termination guards (ADR-0054)**
+- **shipped:** the loop's LAST task is now an After-Action Report — `desktop/loop_report.ts` (PURE,
+  unit-tested) renders a deterministic markdown AAR with portable Mermaid graphs (pie: Tool Calls by type;
+  xychart bars: LOC added/removed + Errors per iteration) + a unicode scoreboard + Websites-visited table,
+  written beside the memory file via `saveGoalReport` (same `<id>-<slug>` stem, `.report.md`) and streamed
+  as a new `goal-report` ChatEvent rendered as a collapsible card in the chat. Same instrumentation powers
+  three guards: convergence-stall detection (3 identical checker blockers → stop "not converging", #2
+  Infinite Fix Loop), per-iteration tool-failure counts fed back into the next maker prompt (#3), and LOC
+  via best-effort git numstat. Fixed the resume bug: `prior.slice(0,3000)` (head/stale) → `slice(-3000)`
+  (most-recent rounds). bun test desktop 143 pass (+19 new; 4 fails are the pre-existing missing-omp-dep
+  env issue, unchanged from baseline); `make demo-P-GOAL.9` green; AAR artifact renders pie+bar on GitHub/VSCode.
+- **stubbed:** typecheck not run here (this container lacks @types/node/electron/bun); in-app `marked` view
+  shows the scoreboard+tables, not Mermaid (charts live in the on-disk record by design).
+- **next:** structured JSONL run-log for cross-run success-rate/eval; live per-loop token budget + kill
+  switch; escalation ping on unattended stop (loop-engineering Token Burn / Escalation Failure).

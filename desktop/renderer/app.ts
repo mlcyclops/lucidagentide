@@ -2624,6 +2624,16 @@ async function runGoalLoop(
     }
     else if (e.type === "goal-done") { wrap.appendChild(el(`<div class="goal-banner ok">${icon("check", 14)} Goal met in ${e.iters} iteration${e.iters === 1 ? "" : "s"}. ${esc(e.reason)}</div>`)); scrollChat(); }
     else if (e.type === "goal-stop") { wrap.appendChild(el(`<div class="goal-banner stop">${icon("info", 14)} ${esc(e.reason)}</div>`)); scrollChat(); }
+    else if (e.type === "goal-report") {
+      // P-GOAL.9: the loop's last task — an After-Action Report (metrics + portable graphs). The durable
+      // record is on disk (Mermaid renders on GitHub/VS Code); in-app we show the summary + the report's
+      // text scoreboard/tables (our `marked` view has no Mermaid, so charts stay in the file).
+      const card = el(`<details class="goal-aar" open>
+        <summary>${icon("graph", 13)} After-Action Report · <b>${esc(e.summary)}</b>${e.path ? ` · <code>${esc(e.path)}</code>` : ""}</summary>
+        <div class="goal-aar-body">${renderMarkdown(e.markdown)}</div>
+      </details>`);
+      wrap.appendChild(card); scrollChat();
+    }
     else if (e.type === "done") { if (streamEl) streamEl.innerHTML = renderMarkdown(buf); }
   };
   try { await (stream ?? ((on: (e: ChatEvent) => void) => bridge.runGoal(opts, on)))(onEvent); }

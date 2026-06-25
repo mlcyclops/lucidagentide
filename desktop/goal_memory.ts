@@ -53,6 +53,21 @@ export function finishGoalMemory(mem: GoalMemory | null, result: string): void {
   try { appendFileSync(mem.path, `## Result\n${result}\n`, "utf8"); } catch { /* best-effort */ }
 }
 
+/** P-GOAL.9 (ADR-0054): write the loop's After-Action Report next to its memory file (same
+ *  `<id>-<slug>` stem, `.report.md`). Best-effort like the memory itself — a failed write never
+ *  affects the loop's outcome. Returns the workspace-relative path on success, else null. */
+export function saveGoalReport(workspace: string, id: string, goal: string, markdown: string): string | null {
+  const root = join(workspace, ".omp", "loops");
+  const file = `${id}-${slugify(goal)}.report.md`;
+  const target = pathWithin(root, join(root, file));
+  if (!target) return null;
+  try {
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, markdown, "utf8");
+    return join(".omp", "loops", file);
+  } catch { return null; }
+}
+
 // ── P-GOAL.4: read a memory file back to RESUME a stopped loop ─────────────────
 
 export interface ParsedGoalMemory { goal: string; condition: string; command?: string; iterations: number; succeeded: boolean; result?: string }

@@ -158,6 +158,10 @@ demo-P-TPS.1: ## P-TPS.1 (ADR-0044): streaming output-token readout — output-o
 demo-P-SKILL.1: ## P-SKILL.1 (ADR-0045): gated skill import — clean .md writes to .omp/skills/, poisoned blocks at the gate
 	$(BUN) run harness/scripts/demo_pskill1.ts
 
+.PHONY: demo-P-GOAL.9
+demo-P-GOAL.9: ## P-GOAL.9 (ADR-0054): /goal After-Action Report — tool calls/LOC/errors/websites graphs + stall guard
+	$(BUN) run harness/scripts/demo_pgoal9.ts
+
 .PHONY: dashboards
 dashboards: ## Materialize dashboard CSVs from a DuckDB into observable/docs/data (DB=path)
 	$(BUN) run harness/scripts/materialize_dashboards.ts $(DB) observable/docs/data
