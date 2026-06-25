@@ -67,6 +67,18 @@ jobs:
       # fetched + SHA-256-verified by desktop/build/fetch-runtimes.ts, which each `dist:<os>` script
       # runs first (pinned versions, vendor-cross-checked hashes — fail-closed). The old inline
       # `latest`-curl steps were unpinned/unverified AND shadowed that path, so they were removed.
+      # electron-updater compares VERSION numbers. A rolling "latest" release that always ships 0.1.0
+      # never looks newer than an installed 0.1.0, so the in-app updater is a permanent no-op (the new
+      # code is in the installer, but auto-update refuses to fetch it). Stamp a MONOTONIC version per
+      # build: the git tag for tagged releases, else 0.1.<run number>. Build-time only (not committed).
+      - name: Set build version (so auto-update sees a newer release)
+        shell: bash
+        working-directory: desktop
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then V="${GITHUB_REF#refs/tags/v}"; else V="0.1.${GITHUB_RUN_NUMBER}"; fi
+          node -e "const fs=require('fs'),p=require('./package.json');p.version=process.argv[1];fs.writeFileSync('package.json',JSON.stringify(p,null,2)+'\n')" "$V"
+          echo "build version = $V"
+
       - name: Build installer (${{ matrix.script }})
         run: bun run ${{ matrix.script }}
         working-directory: desktop
