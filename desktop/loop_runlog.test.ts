@@ -25,7 +25,7 @@ function rec(over: Partial<LoopRunRecord> = {}): LoopRunRecord {
   return {
     ts: 1000, id: "r", goal: "g", outcome: "met", outcomeReason: "ok", iterations: 2, maxIters: 6,
     durationMs: 1000, tools: 4, toolsByType: { shell: 4 }, added: 0, removed: 0, hasLoc: false,
-    errors: 0, websites: 0, ...over,
+    errors: 0, websites: 0, spendUsd: 0, hasSpend: false, ...over,
   };
 }
 
@@ -42,6 +42,11 @@ describe("toRunRecord", () => {
     const r = toRunRecord(metrics({ loc: null }), { id: "x", ts: 1 });
     expect(r.hasLoc).toBe(false);
     expect(r.added).toBe(0);
+  });
+  test("carries spend when observed; marks it unknown when absent (P-GOAL.11)", () => {
+    expect(toRunRecord(metrics({ spendUsd: 0.42 }), { id: "a", ts: 1 })).toMatchObject({ spendUsd: 0.42, hasSpend: true });
+    const noSpend = toRunRecord(metrics({ spendUsd: null }), { id: "b", ts: 1 });
+    expect(noSpend).toMatchObject({ spendUsd: 0, hasSpend: false });
   });
 });
 
@@ -87,6 +92,15 @@ describe("aggregateRuns", () => {
     expect(s.totalAdded).toBe(15);
     expect(s.totalRemoved).toBe(2);
     expect(s.totalErrors).toBe(3);
+  });
+
+  test("sums spend only over runs that reported it (P-GOAL.11)", () => {
+    const s = aggregateRuns([
+      rec({ spendUsd: 0.10, hasSpend: true }),
+      rec({ spendUsd: 0.25, hasSpend: true }),
+      rec({ spendUsd: 0, hasSpend: false }), // unknown spend — excluded, not counted as $0
+    ]);
+    expect(s.totalSpendUsd).toBeCloseTo(0.35, 10);
   });
 
   test("failure breakdown groups recurring blockers (digits collapsed), most-common first", () => {

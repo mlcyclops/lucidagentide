@@ -2289,6 +2289,7 @@ function openGoalForm(): void {
         <div class="goal-step-head"><span class="goal-step-n"></span><h4>Effort and grading</h4></div>
         <div class="goal-note">Cap how many rounds it may take, and pick who grades each round. A cheaper checker keeps cost low. ${goalInfoDot("Iterations and checker|Max iterations is a hard ceiling - the loop stops as soon as the condition holds. The checker is a separate model that grades each round; a small fast model is usually plenty.")}</div>
         <div class="goal-row"><label class="goal-lbl">Max iterations</label><input id="goalMax" class="prov-key goal-max" type="number" min="1" max="20" value="6" /></div>
+        <div class="goal-row"><label class="goal-lbl">Budget cap <span class="goal-opt">optional $ ceiling; stops the loop if spend hits it</span> ${goalInfoDot("Budget cap|A hard dollar ceiling on actual spend. The loop halts the moment the maker's running cost reaches it - the kill switch for unattended runs. Leave blank for no cap (max iterations still bounds the run).")}</label><input id="goalBudget" class="prov-key goal-max" type="number" min="0" step="0.25" placeholder="no cap" /></div>
         <div class="goal-row goal-checker">
           <label class="goal-lbl">${icon("spark", 12)} Checker model <span class="goal-opt">grades each round; a cheaper model is fine</span></label>
           <select id="goalChecker" class="prov-key goal-ckr"><option>loading…</option></select>
@@ -2381,7 +2382,8 @@ function openGoalForm(): void {
     const goal = ($("#goalGoal", ov) as HTMLTextAreaElement).value.trim();
     const command = ($("#goalCmd", ov) as HTMLInputElement).value.trim();
     const maxIters = Math.min(20, Math.max(1, Number(($("#goalMax", ov) as HTMLInputElement).value) || 6));
-    return { goal, command, maxIters };
+    const budgetUsd = Math.max(0, Number(($("#goalBudget", ov) as HTMLInputElement)?.value) || 0); // P-GOAL.11: 0 = no cap
+    return { goal, command, maxIters, budgetUsd };
   };
   // P-GOAL.6.1: live token estimate (lower-left), recomputed as the iteration count changes.
   ($("#goalMax", ov) as HTMLInputElement)?.addEventListener("input", () => updateGoalEstimate(ov));
@@ -2389,11 +2391,11 @@ function openGoalForm(): void {
   render(); // P-GOAL.8: apply guided/advanced mode + show the right step/buttons
   wireCmdSuggest(ov); // P-GOAL.8.1: custom verify-command type-ahead
   $("#goalRun", ov)?.addEventListener("click", async () => {
-    const { goal, command, maxIters } = readSpec();
+    const { goal, command, maxIters, budgetUsd } = readSpec();
     if (!goal) { showToast({ tone: "warn", title: "Add a goal", desc: "Describe what the loop should accomplish.", timeout: 2400 }); return; }
     await applyRunWith(ov); // P-GOAL.7: apply base model / thinking / skill / persona for this run
     close();
-    void runGoalLoop({ goal, condition: command || goal, command: command || undefined, maxIters });
+    void runGoalLoop({ goal, condition: command || goal, command: command || undefined, maxIters, budgetUsd });
   });
   $("#goalSave", ov)?.addEventListener("click", async () => {
     const { goal, command, maxIters } = readSpec();
@@ -2582,7 +2584,8 @@ async function loadLoopStats(ov: HTMLElement): Promise<void> {
   const iters = s.avgItersToSucceed ? `${s.avgItersToSucceed.toFixed(1)}` : "—";
   const dur = s.avgDurationMs ? formatLoopDur(s.avgDurationMs) : "—";
   const blocker = s.topBlockers[0];
-  const mix = Object.entries(s.toolsByType).sort((a, b) => b[1] - a[1]).slice(0, 4)
+  const spend = s.totalSpendUsd > 0 ? `<span class="gs-tool">spend <b>$${s.totalSpendUsd.toFixed(2)}</b></span>` : "";
+  const mix = spend + Object.entries(s.toolsByType).sort((a, b) => b[1] - a[1]).slice(0, 4)
     .map(([k, v]) => `<span class="gs-tool">${esc(k)} <b>${v}</b></span>`).join("");
   sec.innerHTML = `<div class="goal-stats" data-tone="${tone}">
     <div class="gs-head">${icon("graph", 13)} Loop history <span class="gs-sum">${esc(data!.summary)}</span></div>

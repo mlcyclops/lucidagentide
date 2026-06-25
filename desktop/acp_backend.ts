@@ -24,6 +24,8 @@ import { parseGoalVerdict } from "./goal_verdict.ts";
 import { appendGoalIteration, appendRunLog, finishGoalMemory, type GoalMemory, readRunLog, resumeGoalMemory, saveGoalReport, startGoalMemory } from "./goal_memory.ts";
 import { extractUrls, type IterStat, type LocStat, type LoopMetrics, type LoopOutcome, normalizeToolName, parseNumstat, renderLoopReport, stallSignature, summarizeLoop } from "./loop_report.ts";
 import { aggregateRuns, type LoopRunRecord, type RunStats, summarizeRunStats, toRunRecord } from "./loop_runlog.ts";
+import { addTurnSpend, type LoopSpend, newLoopSpend, normalizeBudget, overBudget } from "./loop_budget.ts";
+import { formatSpend } from "./loop_report.ts";
 import { execFileSync } from "node:child_process";
 import { type Automation, listAutomations, nextDueAutomation, updateAutomation } from "./automations.ts";
 
@@ -410,11 +412,12 @@ class Backend {
   // when given). Capped at `maxIters`, auto-stops on no-progress. Runs UNATTENDED — permissions are
   // auto-approved for the duration, but every tool call is still scanned fail-closed by the in-process
   // gate (that, not human approval, is the safety boundary). Streams the usual chat events plus goal-*.
-  async runGoal(opts: { goal: string; condition: string; command?: string; maxIters: number; resume?: string }, onEvent: (e: ChatEvent) => void): Promise<void> {
+  async runGoal(opts: { goal: string; condition: string; command?: string; maxIters: number; resume?: string; budgetUsd?: number }, onEvent: (e: ChatEvent) => void): Promise<void> {
     const goal = opts.goal.trim();
     const condition = (opts.condition || opts.command || "the goal is fully accomplished").trim();
     const command = opts.command?.trim() || "";
     const maxIters = Math.min(Math.max(1, Math.floor(opts.maxIters) || 6), 20); // hard ceiling
+    const budgetUsd = normalizeBudget(opts.budgetUsd); // P-GOAL.11: 0 = no cap (iteration cap stays the ceiling)
     const prevMode = this.permissionMode;
     this.permissionMode = "auto"; // unattended: auto-approve tool calls (the gate still scans every one)
     this.goalActive = true; this.goalCancelled = false;
@@ -448,6 +451,10 @@ class Backend {
     let lastSig = "";       // P-GOAL.9 (#2 Infinite Fix Loop): the prior round's blocker signature
     let stallCount = 0;     // consecutive rounds stuck on the SAME blocker
     let lastIterErrors = 0; // P-GOAL.9 (#3): tool failures last round, fed back into the next prompt
+    // P-GOAL.11 (ADR-0056): live spend + budget kill switch. We own the turn boundaries, so spend is
+    // just the sum of each maker turn's PEAK cost; context tokens are tracked as a peak, never summed.
+    let spend: LoopSpend = newLoopSpend();
+    let sawUsage = false;   // false ⇒ no usage telemetry at all ⇒ report spend as "unknown", not "$0"
     try {
       for (let i = 1; i <= maxIters; i++) {
         if (this.goalCancelled) { terminalOutcome = "cancelled"; terminalReason = "stopped by you"; onEvent({ type: "goal-stop", reason: terminalReason }); finishGoalMemory(mem, terminalReason); return; }
@@ -455,6 +462,7 @@ class Backend {
         let work = "";
         let actedThisIter = false;
         let iterTools = 0, iterErrors = 0;
+        let turnPeakCost = 0, turnPeakCtx = 0, budgetHit = false;
         // Forward the maker's stream, but swallow the per-iteration `done` so the client sees ONE loop.
         const sink = (e: ChatEvent) => {
           if (e.type === "done") return;
@@ -462,6 +470,13 @@ class Backend {
           if (e.type === "tool") { actedThisIter = true; iterTools++; const t = normalizeToolName(e.name); toolCalls[t] = (toolCalls[t] ?? 0) + 1; for (const u of extractUrls(e.detail)) websites.add(u); }
           else if (e.type === "subagent") { actedThisIter = true; iterTools++; toolCalls.subagent = (toolCalls.subagent ?? 0) + 1; }
           else if (e.type === "block") { iterErrors++; errors.push({ iter: i, detail: `${e.tool}: ${e.reason}`.slice(0, 200) }); }
+          else if (e.type === "usage") {
+            sawUsage = true;
+            turnPeakCost = Math.max(turnPeakCost, e.cost);
+            turnPeakCtx = Math.max(turnPeakCtx, e.used);
+            // P-GOAL.11 kill switch: abort THIS turn the instant running spend crosses the cap.
+            if (!budgetHit && overBudget(spend.usd + turnPeakCost, budgetUsd)) { budgetHit = true; this.cancel(); }
+          }
           onEvent(e);
         };
         // P-GOAL.9 (#3): when the previous round had failed/blocked tool calls, tell the maker so it
@@ -473,7 +488,15 @@ class Backend {
         await this.prompt(iterText, sink);
         for (const u of extractUrls(work)) websites.add(u); // links the maker mentioned in its own text
         lastIterErrors = iterErrors;
+        spend = addTurnSpend(spend, turnPeakCost, turnPeakCtx); // P-GOAL.11: fold this turn's peak into the running spend
         if (this.goalCancelled) { perIteration.push({ n: i, tools: iterTools, errors: iterErrors, done: false, reason: "cancelled" }); terminalOutcome = "cancelled"; terminalReason = "stopped by you"; onEvent({ type: "goal-stop", reason: terminalReason }); finishGoalMemory(mem, terminalReason); return; }
+        // P-GOAL.11 (ADR-0056): budget kill switch — once spend crosses the cap, stop the loop (the
+        // current turn was already aborted mid-stream above). The bill can't run away unattended.
+        if (overBudget(spend.usd, budgetUsd)) {
+          perIteration.push({ n: i, tools: iterTools, errors: iterErrors, done: false, reason: `budget cap ${formatSpend(budgetUsd)} reached` });
+          terminalReason = `stopped: budget cap ${formatSpend(budgetUsd)} reached (spent ${formatSpend(spend.usd)})`;
+          onEvent({ type: "goal-stop", reason: terminalReason }); finishGoalMemory(mem, terminalReason); return;
+        }
 
         const verdict = await this.checkGoal({ goal, condition, command, lastWork: work });
         onEvent({ type: "goal-check", n: i, done: verdict.done, reason: verdict.reason });
@@ -514,6 +537,10 @@ class Backend {
           outcome: terminalOutcome, outcomeReason: terminalReason || "(no reason recorded)",
           iterations: perIteration.length, maxIters, durationMs: Date.now() - startedAt,
           toolCalls, loc, errors, websites: [...websites], perIteration,
+          // P-GOAL.11: actual spend (null when no usage telemetry was seen) + the cap that was in force.
+          spendUsd: sawUsage ? spend.usd : null,
+          peakContextTokens: sawUsage ? spend.peakContextTokens : null,
+          budgetUsd: budgetUsd || undefined,
         };
         const markdown = renderLoopReport(metrics);
         const path = saveGoalReport(currentWorkspace(), loopId, goal, markdown) ?? "";

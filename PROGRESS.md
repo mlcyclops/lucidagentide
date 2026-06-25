@@ -2127,3 +2127,20 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
   per-run history drill-down UI yet (records carry enough to build it without a migration).
 - **next:** live per-loop token budget + kill switch; escalation ping on unattended stop (loop-engineering
   Token Burn / Escalation Failure) — both can read/append this same ledger.
+
+---
+**P-GOAL.11 — live spend meter + budget kill switch (ADR-0056)**
+- **shipped:** the /goal loop now meters ACTUAL spend and enforces an optional hard dollar cap (loop-
+  engineering "Token Burn" kill switch). New PURE `desktop/loop_budget.ts` (unit-tested) sums each maker
+  turn's peak cost (context tokens tracked as a high-water mark, never summed) and `overBudget` trips the
+  switch. runGoal aborts the in-flight turn the instant running spend crosses the cap, then ends the loop
+  "budget cap $X reached" before wasting a checker call. Spend flows through everything the metrics already
+  touch: LoopMetrics gains spendUsd/peakContextTokens/budgetUsd (null when no usage telemetry, not $0); the
+  After-Action Report shows a Spend row; the run-log + cross-run eval sum actual spend; a "Budget cap" field
+  sits beside Max iterations in the launcher (plumbed via GoalOpts → /api/goal → runGoal). bun test desktop
+  195 pass / 0 fail (+10 new); make demo-P-GOAL.{9,10,11} green; typecheck clean across all 3 tsconfigs.
+- **stubbed:** scheduled automations run uncapped for now (the iteration cap still bounds them) — a budget
+  field on the Automation schema/form is the clean follow-on; the meter measures MAKER spend (checker runs
+  in a separate throwaway session, cheap by ADR-0048 design).
+- **next:** escalation ping on unattended stop (loop-engineering Escalation Failure) — the last follow-on;
+  then a budget field for automations.

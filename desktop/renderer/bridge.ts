@@ -149,19 +149,20 @@ export type ChatEvent =
   // P-GOAL.9 (ADR-0054): the loop's last task — an After-Action Report (metrics + portable graphs).
   | { type: "goal-report"; path: string; summary: string; markdown: string }
   | { type: "done" };
-export interface GoalOpts { goal: string; condition: string; command?: string; maxIters: number; resume?: string }
+export interface GoalOpts { goal: string; condition: string; command?: string; maxIters: number; resume?: string; budgetUsd?: number }
 // P-GOAL.4: a stopped loop that can be resumed from its on-disk memory file.
 export interface ResumableLoop { rel: string; goal: string; condition: string; command?: string; iterations: number; updatedAt: number }
 // P-GOAL.10 (ADR-0055): the cross-run evaluation surface (mirrors desktop/loop_runlog.ts).
 export interface LoopRunRecord {
   ts: number; id: string; goal: string; outcome: "met" | "stopped" | "cancelled" | "error"; outcomeReason: string;
   iterations: number; maxIters: number; durationMs: number; tools: number; toolsByType: Record<string, number>;
-  added: number; removed: number; hasLoc: boolean; errors: number; websites: number; command?: string;
+  added: number; removed: number; hasLoc: boolean; errors: number; websites: number;
+  spendUsd: number; hasSpend: boolean; command?: string;
 }
 export interface RunStats {
   runs: number; succeeded: number; successRate: number; avgItersToSucceed: number; avgDurationMs: number;
   totalTools: number; toolsByType: Record<string, number>; totalAdded: number; totalRemoved: number;
-  totalErrors: number; topBlockers: { reason: string; count: number }[];
+  totalErrors: number; totalSpendUsd: number; topBlockers: { reason: string; count: number }[];
 }
 export interface LoopRunStats { stats: RunStats; summary: string; recent: LoopRunRecord[] }
 // P-GOAL.5: a scheduled automation — a saved /goal spec the in-process scheduler runs on a cadence.

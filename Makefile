@@ -166,6 +166,10 @@ demo-P-GOAL.9: ## P-GOAL.9 (ADR-0054): /goal After-Action Report — tool calls/
 demo-P-GOAL.10: ## P-GOAL.10 (ADR-0055): /goal cross-run evaluation ledger — success rate, avg iters, failure breakdown
 	$(BUN) run harness/scripts/demo_pgoal10.ts
 
+.PHONY: demo-P-GOAL.11
+demo-P-GOAL.11: ## P-GOAL.11 (ADR-0056): /goal live spend meter + budget kill switch — halts an unattended run at a $ cap
+	$(BUN) run harness/scripts/demo_pgoal11.ts
+
 .PHONY: dashboards
 dashboards: ## Materialize dashboard CSVs from a DuckDB into observable/docs/data (DB=path)
 	$(BUN) run harness/scripts/materialize_dashboards.ts $(DB) observable/docs/data

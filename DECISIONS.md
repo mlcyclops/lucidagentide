@@ -4699,3 +4699,67 @@ ADR-0054 (the After-Action Report + `LoopMetrics` this serializes across runs); 
 (the loop + automations whose every run now logs); `cobusgreyling/loop-engineering` (ship-
 readiness §9 Observability — "append-only run history", "success metrics established"). Follow-ons:
 a live per-loop token budget + kill switch, and an escalation ping on unattended stop.
+
+-----
+
+## ADR-0056 — Live per-loop spend meter + budget kill switch (P-GOAL.11)
+
+**Date:** 2026-06-25
+**Status:** Accepted — shipped this increment.
+**Context increment:** P-GOAL.11.
+
+### Context
+
+loop-engineering's costliest failure mode is **Token Burn** — an unattended loop running full
+turns until "the bill spikes"; its prescribed mitigation is a "daily budget limit" / "kill
+switch". ADR-0049 already shows a pre-run cost ESTIMATE in the launcher, but the running loop had
+no view of ACTUAL spend and no ceiling that could halt it. The only bound was `maxIters`, which
+says nothing about dollars. For long-running / scheduled loops — exactly the ones the user cares
+about — that's the gap.
+
+### Decision
+
+A live spend meter fed by the maker's usage telemetry, plus a hard dollar cap that stops the loop.
+
+- **`desktop/loop_budget.ts`** (PURE, unit-tested): `LoopSpend` + `addTurnSpend` (sum each maker
+  turn's PEAK cost; track context tokens as a high-water mark, never summed — `used` is cumulative
+  within the persistent maker session), `overBudget(spent, cap)` (the kill switch — a non-positive
+  cap means "no budget"), and `normalizeBudget` (clamp the user's input to a non-negative $ amount).
+- **Why per-turn peak, summed.** `runGoal` owns the turn boundaries, so accounting needs no fragile
+  counter-reset detection: omp's `usage_update.cost` is a per-turn figure, and each maker iteration
+  is one turn, so total spend = Σ(per-turn peak cost). The checker runs in a separate throwaway
+  `complete()` session whose usage never reaches the loop sink, so the meter measures maker spend —
+  the dominant cost (the checker is cheap by ADR-0048's design).
+- **Kill switch, two-stage.** In the maker sink, the moment `spend + thisTurnPeak` crosses the cap
+  we `cancel()` the in-flight turn (stops mid-stream). After the turn, if `overBudget` we end the
+  loop with `stopped: budget cap $X reached (spent $Y)` — before spending a checker call. The bill
+  cannot run away unattended.
+- **Surfaced everywhere the metrics already flow.** `LoopMetrics` gains `spendUsd` /
+  `peakContextTokens` / `budgetUsd` (spend is `null`, not `$0`, when no usage telemetry was seen);
+  the After-Action Report shows a "Spend $X of $Y cap · peak context N" row (ADR-0054); the run-log
+  record + cross-run eval sum actual spend (ADR-0055); the launcher gains an optional "Budget cap"
+  field next to Max iterations.
+
+### Alternatives considered
+
+- **Budget in tokens.** Rejected as the primary unit — "Token Burn" is about the bill, and `used`
+  is cumulative context (re-counts the cached prefix each turn), so a token cap would be confusing.
+  Dollars are what the user sets a ceiling on; tokens are shown as informational peak context.
+- **Reset-detecting accumulator over a possibly-cumulative cost counter.** Rejected — the loop owns
+  turn boundaries, so "sum per-turn peaks" is exact and simpler than guessing counter semantics.
+- **A cap on scheduled automations too.** Deferred — needs an `Automation` schema field + form; the
+  iteration cap still bounds automations today. A clean follow-on.
+
+### Invariants preserved
+
+#2 (TS-only; a pure meter, no new surface) · #3 (the meter is best-effort telemetry and the kill
+switch only ever stops EARLY — it can never let a run continue past a limit; the fail-closed gate
+remains the safety boundary) · #6 (the budget field is user-turn/launcher state, never the frozen
+prefix). No schema/DuckDB change (spend rides the ADR-0055 JSONL ledger).
+
+### Relates to
+
+ADR-0049 (the pre-run cost estimate this complements with ACTUALS), ADR-0054 (the AAR that now
+shows spend), ADR-0055 (the run-log/eval that now sums spend), ADR-0048 (the cheap checker that
+keeps the meter ≈ maker spend); `cobusgreyling/loop-engineering` (Token Burn — "daily budget
+limit", "kill switch"). Remaining follow-on: an escalation ping on unattended stop.

@@ -31,6 +31,8 @@ export interface LoopRunRecord {
   hasLoc: boolean;                     // false ⇒ added/removed are "unknown", not "zero"
   errors: number;
   websites: number;
+  spendUsd: number;                    // P-GOAL.11: actual dollars spent (0 when unknown)
+  hasSpend: boolean;                   // false ⇒ spendUsd is "unknown", not "$0"
   command?: string;
 }
 
@@ -54,6 +56,8 @@ export function toRunRecord(m: LoopMetrics, meta: { id: string; ts: number }): L
     hasLoc: m.loc != null,
     errors: m.errors.length,
     websites: m.websites.length,
+    spendUsd: m.spendUsd ?? 0,
+    hasSpend: m.spendUsd != null,
     command: m.command,
   };
 }
@@ -89,6 +93,8 @@ export function parseRunLog(content: string): LoopRunRecord[] {
         hasLoc: o.hasLoc === true,
         errors: Number(o.errors) || 0,
         websites: Number(o.websites) || 0,
+        spendUsd: Number(o.spendUsd) || 0,
+        hasSpend: o.hasSpend === true,
         command: typeof o.command === "string" ? o.command : undefined,
       });
     } catch { /* skip a malformed line */ }
@@ -107,6 +113,7 @@ export interface RunStats {
   totalAdded: number;
   totalRemoved: number;
   totalErrors: number;
+  totalSpendUsd: number;   // P-GOAL.11: summed actual spend over runs that reported it
   /** non-success runs grouped by recurring blocker (normalized reason), most-common first. */
   topBlockers: { reason: string; count: number }[];
 }
@@ -118,13 +125,14 @@ export function aggregateRuns(records: LoopRunRecord[]): RunStats {
   const runs = records.length;
   const met = records.filter((r) => r.outcome === "met");
   const toolsByType: Record<string, number> = {};
-  let totalTools = 0, totalAdded = 0, totalRemoved = 0, totalErrors = 0, totalDuration = 0;
+  let totalTools = 0, totalAdded = 0, totalRemoved = 0, totalErrors = 0, totalDuration = 0, totalSpendUsd = 0;
   for (const r of records) {
     totalTools += r.tools;
     totalAdded += r.added;
     totalRemoved += r.removed;
     totalErrors += r.errors;
     totalDuration += r.durationMs;
+    if (r.hasSpend) totalSpendUsd += r.spendUsd;
     for (const [k, v] of Object.entries(r.toolsByType)) toolsByType[k] = (toolsByType[k] ?? 0) + (Number(v) || 0);
   }
   // failure breakdown: group the non-met runs by normalized blocker signature
@@ -148,6 +156,7 @@ export function aggregateRuns(records: LoopRunRecord[]): RunStats {
     totalAdded,
     totalRemoved,
     totalErrors,
+    totalSpendUsd,
     topBlockers,
   };
 }

@@ -529,12 +529,12 @@ const server = Bun.serve({
       // P-GOAL.10 (ADR-0055): cross-run evaluation — success rate / avg iters / failure breakdown + recent runs.
       if (p === "/api/goal/stats") return json({ ok: true, data: backend.loopRunStats() });
       if (p === "/api/goal" && req.method === "POST") {
-        const b = await readBody<{ goal?: unknown; condition?: unknown; command?: unknown; maxIters?: unknown; resume?: unknown }>(req);
+        const b = await readBody<{ goal?: unknown; condition?: unknown; command?: unknown; maxIters?: unknown; resume?: unknown; budgetUsd?: unknown }>(req);
         const enc = new TextEncoder();
         const stream = new ReadableStream({
           async start(controller) {
             await backend.runGoal(
-              { goal: String(b.goal ?? ""), condition: String(b.condition ?? ""), command: b.command ? String(b.command) : undefined, maxIters: Number(b.maxIters) || 6, resume: b.resume ? String(b.resume) : undefined },
+              { goal: String(b.goal ?? ""), condition: String(b.condition ?? ""), command: b.command ? String(b.command) : undefined, maxIters: Number(b.maxIters) || 6, resume: b.resume ? String(b.resume) : undefined, budgetUsd: Number(b.budgetUsd) || 0 },
               (e) => { try { controller.enqueue(enc.encode(JSON.stringify(e) + "\n")); } catch { /* stream closed */ } },
             );
             try { controller.close(); } catch { /* already closed */ }

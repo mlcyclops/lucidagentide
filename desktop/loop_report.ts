@@ -12,6 +12,8 @@
 // run and calls `renderLoopReport` as the loop's LAST task; the file write is best-effort (goal_memory).
 // Everything here is unit-tested — the same discipline as loop_estimate.ts / goal_verdict.ts.
 
+import { formatTokens } from "./loop_estimate.ts";
+
 export interface IterStat {
   /** 1-based iteration number. */ n: number;
   /** tool calls the maker made this iteration. */ tools: number;
@@ -42,6 +44,12 @@ export interface LoopMetrics {
   /** unique http(s) URLs the maker touched (web fetch / search / links in tool details). */
   websites: string[];
   perIteration: IterStat[];
+  // P-GOAL.11 (ADR-0056): actual spend. null when no usage telemetry was observed.
+  spendUsd?: number | null;
+  /** peak context-window fill across the run (informational; not summed). */
+  peakContextTokens?: number | null;
+  /** the budget cap that was in force, if any (0/undefined = no cap). */
+  budgetUsd?: number;
 }
 
 // ── pure collectors (used by the backend's instrumentation) ───────────────────
@@ -118,6 +126,12 @@ export function bar(value: number, max: number, width = 20): string {
   return "█".repeat(filled) + "░".repeat(width - filled);
 }
 
+/** Dollars for the report: 2-dp, but a tiny non-zero spend shows "<$0.01" rather than "$0.00". */
+export function formatSpend(usd: number): string {
+  if (usd > 0 && usd < 0.01) return "<$0.01";
+  return `$${(Math.round(usd * 100) / 100).toFixed(2)}`;
+}
+
 /** "3m 12s" / "0.8s" / "1h 04m" — compact, no library. */
 export function formatDuration(ms: number): string {
   const s = Math.max(0, Math.round(ms / 1000));
@@ -174,7 +188,8 @@ const OUTCOME_BADGE: Record<LoopOutcome, string> = {
 export function summarizeLoop(m: LoopMetrics): string {
   const tools = Object.values(m.toolCalls).reduce((a, b) => a + b, 0);
   const loc = m.loc ? `+${m.loc.added}/-${m.loc.removed} LOC` : "LOC n/a";
-  return `${m.iterations} iter · ${tools} tool calls · ${loc} · ${m.errors.length} errors · ${m.websites.length} sites`;
+  const spend = m.spendUsd != null ? ` · ${formatSpend(m.spendUsd)}` : "";
+  return `${m.iterations} iter · ${tools} tool calls · ${loc} · ${m.errors.length} errors · ${m.websites.length} sites${spend}`;
 }
 
 /** Render the full After-Action Report markdown. Deterministic: the same metrics always produce the
@@ -204,6 +219,10 @@ export function renderLoopReport(m: LoopMetrics): string {
   out.push(`| Duration | ${formatDuration(m.durationMs)} |`);
   out.push(`| Stop condition | ${m.condition || "—"} |`);
   out.push(`| Verification | ${m.command ? "`" + m.command + "`" : "checker judgement (no command)"} |`);
+  if (m.spendUsd != null) {
+    const cap = m.budgetUsd && m.budgetUsd > 0 ? ` of ${formatSpend(m.budgetUsd)} cap` : "";
+    out.push(`| Spend | ${formatSpend(m.spendUsd)}${cap}${m.peakContextTokens ? ` · peak context ${formatTokens(m.peakContextTokens)}` : ""} |`);
+  }
   out.push("");
 
   out.push("## Scoreboard");
