@@ -95,7 +95,7 @@ personalization internals are proprietary and intentionally undocumented here - 
 
 ---
 
-## <img src=".github/assets/icons/overview.svg" width="28" align="top" alt=""> Overview
+## <img src=".github/assets/icons/overview-animated.svg" width="28" align="top" alt=""> Overview
 
 **LucidAgentIDE** wraps [oh-my-pi (omp)](https://omp.sh) - a fast agentic coding runtime that provides
 tool-calling, model routing, sessions, sandboxing, and a TUI - with the security/provenance/memory layer
@@ -121,46 +121,26 @@ never fail open.
 
 </div>
 
-## <img src=".github/assets/icons/novelty.svg" width="28" align="top" alt=""> What makes it novel
+## <img src=".github/assets/icons/novelty-animated.svg" width="28" align="top" alt=""> What makes it novel
 
-- **🛡️ Security *around* a moving target, not a fork.** The injection defense lives in omp extensions, so it
-  upgrades with omp instead of accumulating merge debt.
-- **🔒 A gate that cannot fail open.** The Unicode scanner is a pure sidecar behind an NDJSON contract; if it
-  dies, times out, or returns garbage, the gate **blocks** (`trust=quarantined`). A test kills the sidecar
-  mid-run and asserts the block - and stays green forever.
-- **🧬 Provenance-gated memory.** Suspicious or quarantined content can **never auto-promote** into semantic
-  memory (the second correctness keystone) - trust is re-derived from the source artifact, never the caller's
-  claim.
-- **🧊 A byte-stable, KV-cache-optimized prompt prefix.** Identity/safety/tool/security layers are frozen and
-  byte-identical across requests; untrusted content only ever enters **delimited** and **after** the cache
-  breakpoint - verified by a prefix-hash test and a cache-hit benchmark.
-- **🏛️ A gov-grade gateway, gated.** [AskSage](https://asksage.ai) is integrated as an omp provider with an
-  "AskSage-only" lockdown, **scanned** personas, and dataset-grounded RAG that returns expandable citations.
-- **🧠 An encrypted personalization knowledge graph (shipped).** A private, **FIPS-grade-encrypted**,
-  inspectable node/edge graph the agent learns from you and **recalls across sessions** to tailor responses -
-  CUI-isolated, compartmentalized (work / personal / CUI), and exportable to an Obsidian vault.
-- **🪪 AI-authorship attribution.** A tamper-evident ledger of *which model wrote which lines* - per repo, per
-  identity, per session - so AI-generated code is governable, auditable, and attributable. The attribution
-  engine is *proprietary*; the dashboard over it is in-app.
-- **🌐 Sovereignty-aware model governance.** Gov-only lockdown, accredited-gateway gating, curated gov-model
-  lists, and an explicit **data-sovereignty acknowledgment wall** for foreign-origin models - choose raw
-  capability *and* provenance, by policy, not by accident.
-- **⬇️ One-command migration from ChatGPT / Claude / Gemini.** Bring years of history in; **every message is
-  scanned through the fail-closed gate** and distilled into your encrypted personal graph - onboard a new user
-  in minutes, with a token/runtime estimate before any model call.
-- **✍️ A read-write IDE where _Save_ is gated.** Edit code in an embedded editor and save it back through the
-  *same* in-process scanner - a hidden-Unicode payload is **blocked before a single byte lands on disk**.
-- **🔁 Loop engineering, not just a loop.** The `/goal` primitive iterates an agent to a **verifiable** stop
-  condition with a **separate, cheaper checker model**, durable on-disk memory, and resume - then adds the
-  operational spine unattended loops actually need: a **budget kill switch** (a hard `$` ceiling that aborts
-  the run mid-turn before the bill runs away), **convergence-stall + tool-failure guards** that stop a loop
-  spinning on the same blocker, an **After-Action Report** (portable Mermaid graphs of tool calls, LOC,
-  errors, and sites visited - rendered straight on GitHub/VS Code), and a **cross-run evaluation ledger**
-  (success rate, avg iterations-to-win, failure breakdown). Inspired by the
-  [loop-engineering](https://github.com/cobusgreyling/loop-engineering) playbook; every action still passes
-  the fail-closed gate.
-- **💰 Cross-model cost tracking & showback.** Real-time per-model token usage, cache savings, and estimated
-  cost with a built-in showback ledger - know exactly what every conversation costs.
+Twelve things you rarely find together. Each is in plain language below - the deeper "how" stays proprietary.
+
+| What's novel | What it means for you |
+|:--|:--|
+| 🛡️ **Security *around* a moving target** | The injection defense lives in omp's extensions, so it upgrades with omp - no fork, no merge debt. |
+| 🔒 **A gate that cannot fail open** | If the scanner dies or returns garbage, the gate **blocks** (never "safe"). A test kills it mid-run and the block still holds. |
+| 🧬 **Provenance-gated memory** | Suspicious or quarantined content can **never auto-save** into memory. Trust comes from the source, not the caller's word. |
+| 🧊 **A cache-stable prompt** | The safety layers are byte-identical on every request. Untrusted text only ever enters **delimited** and **after** the cache point - faster *and* safer. |
+| 🏛️ **A gov-grade gateway, gated** | [AskSage](https://asksage.ai) is wired in with a lockdown mode, **scanned** personas, and answers grounded on your own datasets, with citations. |
+| 🧠 **An encrypted personalization graph** | A private, encrypted "second brain" the agent learns from you and **recalls across sessions** - CUI-isolated and exportable. *(Shipped.)* |
+| 🪪 **AI-authorship attribution** | A tamper-evident ledger of **which model wrote which lines** - per repo, per person, per session. |
+| 🌐 **Sovereignty-aware governance** | Gov-only lockdown, curated model lists, and a clear **warning wall** before any foreign-origin model is used. |
+| ⬇️ **One-command migration** | Bring your **ChatGPT / Claude / Gemini** history in - every message scanned, then distilled into your private graph. |
+| ✍️ **An IDE where _Save_ is scanned** | Edit and save through the **same** gate. A hidden-Unicode payload is blocked **before a byte lands on disk**. |
+| 🔁 **Loop engineering, not just a loop** | `/goal` runs an agent to a **verified** finish - with a budget kill switch, stall guards, and an after-action report. |
+| 💰 **Cost tracking & showback** | Live per-model spend and cache savings - know exactly what every conversation costs. |
+
+<sub>Loop engineering is inspired by the [loop-engineering](https://github.com/cobusgreyling/loop-engineering) playbook. Every action above still passes the same fail-closed gate.</sub>
 
 ---
 
@@ -272,7 +252,7 @@ Trust boundary, layered: the **frozen prefix** (identity → tool policy → cod
 cached; everything volatile - instruction files, *delimited* retrieved content, the task, session state,
 working memory - lives in the **tail after the cache breakpoint**. Untrusted bytes never touch the prefix.
 
-## <img src=".github/assets/icons/security.svg" width="28" align="top" alt=""> Security model
+## <img src=".github/assets/icons/security-animated.svg" width="28" align="top" alt=""> Security model
 
 | Stage | Mechanism | Guarantee |
 |:--|:--|:--|
@@ -293,27 +273,23 @@ run it, and the gate blocks the `bash` call:
 The gate that blocks here is the exact one the test suite proves - see [`CLAUDE.md`](CLAUDE.md) for the
 load-bearing invariants (fail-closed, extend-don't-fork, frozen contracts, byte-stable prefix).
 
-## <img src=".github/assets/icons/memory.svg" width="28" align="top" alt=""> Memory and the personalization graph
+## <img src=".github/assets/icons/memory-animated.svg" width="28" align="top" alt=""> Memory and the personalization graph
 
-**Shipped.** A [DuckDB](https://duckdb.org) store (schema frozen on first write, evolved only by numbered
-migrations) holds working state, archived chunks, and a **promotion-gated** semantic graph of
-entities/facts/links - each fact carrying provenance and a trust label. Memory fills from ordinary turns,
-and poisoned content is blocked from promotion.
+**Two memories, both shipped.**
 
-**Shipped ([ADR-0009](DECISIONS.md) / [ADR-0010](DECISIONS.md)).** A private **personalization knowledge
-graph** - a "second brain" of your preferences, decisions, interests, personality, and sanitized-but-working
-links that the agent learns, **recalls across sessions**, and uses to tailor responses (and that you can seed
-in minutes by importing an existing ChatGPT / Claude / Gemini history). It is:
+First, a [DuckDB](https://duckdb.org) store holds the agent's working state and a **promotion-gated** semantic
+graph. Every fact carries its provenance and a trust label, and poisoned content is blocked from ever being
+saved.
 
-- **Opt-in** and **local-first**, stored in a dedicated **AES-256-GCM** encrypted store (key sealed by the OS
-  keystore via Electron `safeStorage`, with a PBKDF2 passphrase fallback).
-- **Inspectable** as an interactive, hand-drawn **SVG node/edge graph** with drill-down - exportable to an
-  [Obsidian](https://obsidian.md) vault with `[[wikilinks]]`.
-- **Honest about FIPS:** FIPS-*approved* algorithms + OS-keystore custody + a documented deployment checklist
-  (the runtime is Bun/[BoringSSL](https://boringssl.googlesource.com/boringssl/), so there is no FIPS *mode*
-  in-process - true 140-3 validation is an OS/module concern, not something the app self-certifies).
+On top of that sits a private **personalization knowledge graph** - a "second brain" of your preferences,
+decisions, and interests that the agent learns, **recalls across sessions**, and uses to tailor its replies.
+You can seed it in minutes by importing a ChatGPT / Claude / Gemini history.
 
-## <img src=".github/assets/icons/gateway.svg" width="28" align="top" alt=""> Models and the AskSage gateway
+- 🔐 **Encrypted and local-first.** A dedicated **AES-256-GCM** store, with the key sealed by your OS keystore (passphrase fallback). Opt-in.
+- 🕸️ **Inspectable.** An interactive node/edge graph you can drill into - and export to an [Obsidian](https://obsidian.md) vault.
+- 🏛️ **Honest about FIPS.** FIPS-*approved* algorithms plus OS-keystore key custody. True 140-3 validation is an OS concern, so the app never claims a FIPS *mode* it can't self-certify.
+
+## <img src=".github/assets/icons/gateway-animated.svg" width="28" align="top" alt=""> Models and the AskSage gateway
 
 Models from any omp provider work out of the box (Claude, GPT, Gemini, …). On top of that, the
 [**AskSage**](https://asksage.ai) accredited government AI gateway is integrated as an omp provider extension
@@ -335,25 +311,14 @@ be enabled to stretch a gov token quota ([ADR-0008](DECISIONS.md)).
 > **Designed in [ADR-0053](DECISIONS.md); building next as `P-RAG.1-4`.** Bring your own documents into the
 > agent's context - **two paths, one trust boundary**, both scanned by the same fail-closed gate.
 
-- **🔒 Local-first vector store (air-gapped).** Drag in PDFs and images; they're parsed, embedded, and indexed
-  **entirely on your machine** in a local [DuckDB](https://duckdb.org) vector store - **no document ever leaves
-  the host.** Retrieved chunks are injected as **scanned, delimited, untrusted context** (never the cached
-  prefix), so RAG can't become a prompt-injection vector.
-- **🖼️ PDF + image ingest.** Local PDF text extraction, plus **caption-at-ingest** for images - the multimodal
-  model describes each image (with optional on-device OCR) and the image is kept for multimodal prompts.
-- **💻 Built for a standard laptop.** WASM embeddings (**no GPU, no native binaries**), **bundled weights** so it
-  works fully **offline**, and brute-force cosine that stays **sub-millisecond** at realistic sizes - an HNSW
-  accelerator is held in reserve for very large corpora.
-- **🏛️ AskSage dataset training (gov cloud), classification-aware.** Civ users can create **custom-named
-  datasets** and ingest files straight into the AskSage gateway - and **CUI content is never sent to a Civ
-  endpoint**. The UI tells you *where your data goes and why*.
-- **🧭 One guided popup.** A walkthrough (with an advanced one-screen mode), premium hover help at every step,
-  and a **parse-and-scan preview** that shows what was extracted - and the gate verdict - *before* anything is
-  stored.
+- 🔒 **Local-first and air-gapped.** Drag in PDFs and images; they're parsed, embedded, and indexed **entirely on your machine** - no document ever leaves the host.
+- 🖼️ **PDF + image ingest.** Local PDF text extraction, plus a caption for each image so it works in multimodal prompts (optional on-device OCR).
+- 💻 **Built for a standard laptop.** WASM embeddings (**no GPU, no native binaries**) with **bundled weights**, so it works fully **offline**.
+- 🏛️ **Gov-cloud datasets, classification-aware.** Optionally train AskSage datasets from your files - and **CUI is never sent to a Civ endpoint**. The UI tells you where your data goes.
+- 🧭 **One guided popup.** A walkthrough with a **parse-and-scan preview** that shows what was extracted, and the gate's verdict, *before* anything is stored.
 
-Every ingested chunk runs the **same lifecycle as everything else**: scanned → trust-labeled → quarantined if
-poisoned - *before* it can ever be embedded or recalled. Suspicious sources can't auto-promote into semantic
-memory (keystone #2 holds for RAG too).
+Every ingested chunk runs the **same lifecycle as everything else** - scanned, trust-labeled, and quarantined
+if poisoned, *before* it can ever be embedded or recalled. (Keystone #2 holds for RAG too.)
 
 ## <img src=".github/assets/icons/builton.svg" width="28" align="top" alt=""> Built on
 
@@ -424,15 +389,14 @@ needs **zero prerequisites**. Code-signing and notarization are supported when c
 
 ## <img src=".github/assets/icons/roadmap.svg" width="28" align="top" alt=""> Roadmap
 
-**Shipped** - Increment 0-2 + Phases 2-10 + the personalization, attribution, migration, and IDE phases:
-the full security lifecycle, provenance lineage, replay, the cache-optimized prefix, the desktop GUI, the
-AskSage gov gateway, cross-model observability, CUI isolation, the encrypted personalization graph with
-cross-session recall, AI-authorship attribution, one-command ChatGPT/Claude/Gemini migration, and a
-read-write IDE with gated saves, AskSage **tool use on the gov gateway** (Claude *and* Gemini), and the
-**`/goal` agentic loop** with full loop-engineering instrumentation - After-Action Reports, a budget kill
-switch, convergence/tool-failure guards, and a cross-run evaluation ledger. Everything green:
-**473 harness tests**, **326 desktop tests**, **55 sidecar tests**, `tsc --noEmit` clean across 3 projects
-(TypeScript 6.0 + Python).
+**Shipped and green.** The full security lifecycle, provenance lineage + replay, the cache-optimized prompt,
+the desktop app, and the AskSage gov gateway (with tool use on Claude *and* Gemini). Plus cross-model cost
+tracking, CUI isolation, the encrypted personalization graph with cross-session recall, AI-authorship
+attribution, one-command import, a read-write IDE with gated saves, and the **`/goal` loop** with full
+loop-engineering (after-action reports, a budget kill switch, and stall guards).
+
+Every test suite passes and `tsc --noEmit` is clean across all three projects (TypeScript + Python). The
+table below is the recent slice; [`PROGRESS.md`](PROGRESS.md) has the full per-session log.
 
 ### Recent updates
 
@@ -463,17 +427,11 @@ See [`PROGRESS.md`](PROGRESS.md) for the per-session log (shipped / stubbed / ne
 Built in the open, **one disciplined increment at a time.** If you want to run it from source, file an issue,
 or propose a change, start here:
 
-- **Read [`CLAUDE.md`](CLAUDE.md) first.** It's the load-bearing contract - fail-closed, **extend omp (don't
-  fork)**, frozen contracts, a byte-stable prompt prefix. A change that silently breaks an invariant won't land.
-- **ADR-first.** Non-trivial work begins as an ADR in [`DECISIONS.md`](DECISIONS.md) (**53 and counting**) -
-  scope, decision, alternatives, invariants preserved. The whole roadmap is designed this way; pick one up or
-  propose your own.
-- **One increment per change** - small, verifiable, with a demo + tests. See [`PROGRESS.md`](PROGRESS.md) for
-  the cadence and [`CHEATSHEET.md`](CHEATSHEET.md) for day-to-day commands.
-- **Tests are the gate.** `bun test harness && bun test desktop` stay green, `tsc --noEmit` is clean across all
-  projects, and any prompt-prefix change must pass the prefix-hash test. CI runs the build + CodeQL on every push.
-- **The only Python is the scanner sidecar.** Everything else is TypeScript on Bun - please don't add a second
-  Python surface.
+- **Read [`CLAUDE.md`](CLAUDE.md) first.** It's the load-bearing contract - fail-closed, extend omp (don't fork), frozen contracts, a byte-stable prompt. A change that silently breaks an invariant won't land.
+- **ADR-first.** Non-trivial work begins as an ADR in [`DECISIONS.md`](DECISIONS.md) (53 and counting) - pick one up, or propose your own.
+- **One increment per change.** Small, verifiable, with a demo and tests. See [`CHEATSHEET.md`](CHEATSHEET.md) for day-to-day commands.
+- **Tests are the gate.** `bun test harness && bun test desktop` stay green and `tsc --noEmit` is clean; CI runs the build + CodeQL on every push.
+- **The only Python is the scanner sidecar.** Everything else is TypeScript on Bun - please don't add a second Python surface.
 
 **Good first areas:** the desktop GUI + dev server, scanner fixtures, docs/wording, and platform/build
 robustness (Windows + macOS installers).
