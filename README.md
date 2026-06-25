@@ -148,6 +148,15 @@ never fail open.
   in minutes, with a token/runtime estimate before any model call.
 - **✍️ A read-write IDE where _Save_ is gated.** Edit code in an embedded editor and save it back through the
   *same* in-process scanner - a hidden-Unicode payload is **blocked before a single byte lands on disk**.
+- **🔁 Loop engineering, not just a loop.** The `/goal` primitive iterates an agent to a **verifiable** stop
+  condition with a **separate, cheaper checker model**, durable on-disk memory, and resume - then adds the
+  operational spine unattended loops actually need: a **budget kill switch** (a hard `$` ceiling that aborts
+  the run mid-turn before the bill runs away), **convergence-stall + tool-failure guards** that stop a loop
+  spinning on the same blocker, an **After-Action Report** (portable Mermaid graphs of tool calls, LOC,
+  errors, and sites visited - rendered straight on GitHub/VS Code), and a **cross-run evaluation ledger**
+  (success rate, avg iterations-to-win, failure breakdown). Inspired by the
+  [loop-engineering](https://github.com/cobusgreyling/loop-engineering) playbook; every action still passes
+  the fail-closed gate.
 - **💰 Cross-model cost tracking & showback.** Real-time per-model token usage, cache savings, and estimated
   cost with a built-in showback ledger - know exactly what every conversation costs.
 
@@ -407,7 +416,8 @@ the full security lifecycle, provenance lineage, replay, the cache-optimized pre
 AskSage gov gateway, cross-model observability, CUI isolation, the encrypted personalization graph with
 cross-session recall, AI-authorship attribution, one-command ChatGPT/Claude/Gemini migration, and a
 read-write IDE with gated saves, AskSage **tool use on the gov gateway** (Claude *and* Gemini), and the
-**`/goal` agentic loop primitive**. Everything green:
+**`/goal` agentic loop** with full loop-engineering instrumentation - After-Action Reports, a budget kill
+switch, convergence/tool-failure guards, and a cross-run evaluation ledger. Everything green:
 **473 harness tests**, **326 desktop tests**, **55 sidecar tests**, `tsc --noEmit` clean across 3 projects
 (TypeScript 6.0 + Python).
 
@@ -415,6 +425,7 @@ read-write IDE with gated saves, AskSage **tool use on the gov gateway** (Claude
 
 | Phase | Feature | ADR |
 |:--|:--|:--|
+| **P-GOAL.9-11** | **Loop engineering** for the `/goal` loop - an **After-Action Report** (Mermaid graphs: tool calls by type, LOC ±, errors, sites visited), **convergence-stall + tool-failure guards**, a **cross-run evaluation ledger** (success rate / avg iterations-to-win / failure breakdown), and a **budget kill switch** (a hard `$` cap that aborts an unattended run mid-turn) | [ADR-0054-0056](DECISIONS.md) |
 | **P-GOAL.1-8** | The **`/goal` agentic loop** - iterate to a verifiable stop condition with a separate (cheaper, recommended) checker model, durable on-disk memory, resume, scheduled automations, a cost estimate, and a guided walkthrough | [ADR-0046-0050](DECISIONS.md) |
 | **AskSage tool use** | Claude **and** Gemini routed through the **gov gateway can now use omp tools** (write files, run commands) - the streamSimple adapter parses tool calls + scans each through the gate | [ADR-0051](DECISIONS.md) |
 | **P-IDE.5-6** | Read-write Monaco IDE - **Save routed through the scanner gate** (≥high finding or dead scanner *blocks* the write), Save-As, conflict banner, Send-to-chat | [ADR-0036/0037](DECISIONS.md) |
