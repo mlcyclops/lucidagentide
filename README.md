@@ -238,6 +238,13 @@ It's a **desktop app you can just download and run** (Windows installer/portable
 - 🏷️ **Showback-ready** - built for teams that need to attribute AI costs to projects or users
 - 🪪 **AI-authored code ledger** - a tamper-evident count of *which model wrote which lines*, per repo and identity (authorship attribution, not just git activity)
 
+> **🏛️ Enterprise rollups (premium, coming soon).** A separately-licensed add-on rolls this showback
+> up into executive **BI dashboards** - Power BI (GCC-High), QuickSight, Looker, SharePoint, or an
+> airgap-friendly single-file HTML view - and adds **loop-efficiency and ROI** reporting per model and
+> per program: cost-per-outcome, productivity, and security posture in one pane for the CFO / CIO / CISO.
+> Read-only and **metadata-only** by construction (no code, prompts, or CUI leave the host); the
+> analytics methodology is proprietary.
+
 ---
 
 ## <img src=".github/assets/icons/architecture.svg" width="28" align="top" alt=""> Architecture
