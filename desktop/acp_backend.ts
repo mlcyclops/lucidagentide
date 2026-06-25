@@ -16,6 +16,7 @@ import { currentWorkspace } from "./workspace.ts";
 import { learnFromTurn, recallPreamble } from "./personal.ts";
 import { buildUserTurnPreamble } from "./preamble.ts";
 import { recordTurns } from "./turns_log.ts";
+import { isLearnableAssistantText } from "./thinking_governance.ts";
 import { recordBlock } from "./security_log.ts";
 import { asksageOnly, attribution, checkerModel, lastModel, mcpServersForAcp, setCheckerModel, setLastModel } from "./settings_store.ts";
 import { managedConfig } from "./managed_config.ts";
@@ -368,7 +369,9 @@ class Backend {
     // While a permission is awaiting the user (Ask mode), pause the idle/stall clock — a human
     // deciding is not a stalled turn (askUser has its own fail-closed timeout).
     const arm = () => { if (idle) clearTimeout(idle); if (this.pendingPerms > 0) return; idle = setTimeout(() => { stalled = true; onStall(new Error("the model did not respond for 2 minutes — the provider may be rate-limited (check your hourly budget) or the turn stalled. Try again.")); }, Backend.IDLE_MS); };
-    const sink = (e: ChatEvent) => { arm(); if (e.type === "token") assistant += e.text; onEvent(e); };
+    // Only learnable assistant text accrues to `assistant` (→ recordTurns + learnFromTurn). Thinking
+    // and other display-only events are excluded by construction (R-04 / ADR-0054).
+    const sink = (e: ChatEvent) => { arm(); if (isLearnableAssistantText(e)) assistant += e.text; onEvent(e); };
     this.listener = sink;
     this.askActive = true; // permission requests in THIS turn may be forwarded to the UI (Ask mode)
     try {

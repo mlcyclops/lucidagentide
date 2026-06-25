@@ -4540,6 +4540,43 @@ reused); CLAUDE.md invariants #2/#3/#5/#10 + keystone #2.
 
 -----
 
+## ADR-0054 — Thinking-item governance: reasoning is display-only, never durable (R-04)
+
+**Date:** 2026-06-24
+**Status:** Accepted — built this increment.
+**Relationship:** ratifies ADR-0027 (the thinking stream is display-only) as a security policy; extends
+keystone #2 (semantic-promotion gate) and invariants #3 (fail-closed) / #5 (untrusted content) to omp's
+now-first-class reasoning/thinking items. Tracks add-on POAM **R-02 sibling R-04**.
+
+### Context
+
+omp made reasoning/thinking items first-class (a `--thinking` flag; reasoning items in replay). Raw
+model reasoning is a sensitive surface: if it were persisted, learned-from, recalled, or exported it
+could bypass the scan/trust-label gate, leak into semantic memory, or escape CUI exclusion.
+
+### Decision
+
+Thinking is **display-only and never durable**. The chat backend streams `agent_thought_chunk` to the
+UI as a `thinking` event (live reasoning, like the omp TUI) but it is excluded from everything that
+reaches durable state. The single chokepoint is `desktop/thinking_governance.ts`
+`isLearnableAssistantText(e)` — **only `token` text is learnable**. The per-turn `assistant` buffer (the
+sole input to both `recordTurns` persistence/transcripts and `learnFromTurn` — the personalization
+distiller / memory promotion) is built through that predicate, so thinking, tool, block, subagent, and
+usage events contribute nothing. Because thinking is never persisted, it is never recalled and never
+reaches an export (exports read persisted data) — CUI exclusion holds by construction.
+
+A future change that wants to persist thinking MUST first: scan it through the fail-closed gate,
+trust-label it, gate it against semantic promotion (keystone #2), and CUI-exclude it from exports.
+`desktop/thinking_governance.test.ts` regression-locks the invariant.
+
+### Consequences
+
+- The thinking-exclusion rule is now a tested pure function, not an inline `=== "token"` that could
+  silently drift; `acp_backend.prompt()`'s `sink` consumes it.
+- No new persistence/promotion/export path may special-case thinking without passing the four gates
+  above — enforced by review against this ADR + the regression test.
+- The desktop test suite (`bun test` / `make test`) covers it; note CI's `bun test harness` does not
+  yet include `desktop/` (pre-existing; a CI-scope item for R-01).
 ## ADR-0054 — The `/goal` loop's After-Action Report + termination guards (P-GOAL.9)
 
 **Date:** 2026-06-25
