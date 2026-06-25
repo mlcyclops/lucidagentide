@@ -897,6 +897,16 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .btn-mini:hover{background:var(--bg-3);color:var(--txt)}
 .btn-mini.ok:hover{border-color:var(--green);color:#84e3a6}
 .btn-mini.danger:hover{border-color:var(--red);color:#ff9b9b}
+/* Dismissed live blocks (acknowledged, STILL blocked) - muted + collapsed, out of the active count. */
+.pill.dismissed{background:var(--bg-3);color:var(--txt-2);border-color:var(--line)}
+.liveblk.muted{border-color:var(--line);background:color-mix(in srgb,var(--bg-2) 70%,transparent);opacity:.78}
+.lb-dismissed{margin-top:8px}
+.lb-dismissed>summary{cursor:pointer;list-style:none;font-size:11px;color:var(--txt-2);padding:4px 2px;user-select:none}
+.lb-dismissed>summary::-webkit-details-marker{display:none}
+.lb-dismissed>summary:hover{color:var(--txt)}
+.lb-dismissed>summary::before{content:"\25B8";display:inline-block;margin-right:6px;transition:transform var(--t-fast)}
+.lb-dismissed[open]>summary::before{transform:rotate(90deg)}
+.lb-dismissed .liveblk{margin-top:6px}
 
 /* provider budget */
 .bgt-head{display:flex;align-items:center;gap:10px;margin:0 0 8px}

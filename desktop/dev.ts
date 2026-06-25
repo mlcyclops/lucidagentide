@@ -10,7 +10,7 @@
 
 import { join } from "node:path";
 import { devSnapshot, securitySnapshot } from "../tools/web/data.ts";
-import { approveBlock, liveBlocks } from "./security_log.ts";
+import { approveBlock, dismissBlock, liveBlocks } from "./security_log.ts";
 import { probeRateLimits } from "./ratelimit_probe.ts";
 import { OBS_DB_PATH, codeActivity, memorySnapshot, rateLimits, sessionPathById, usageLedger } from "../tools/memory_data.ts";
 import { backend } from "./acp_backend.ts";
@@ -234,6 +234,7 @@ const server = Bun.serve({
       }
       // Audited fail-closed override: release one quarantined call (ADR-0019 C).
       if (p === "/api/security/approve" && req.method === "POST") { const b = await readBody<{ id?: unknown }>(req); return json({ ok: true, data: approveBlock(String(b.id ?? "")) }); }
+      if (p === "/api/security/dismiss" && req.method === "POST") { const b = await readBody<{ id?: unknown }>(req); return json({ ok: true, data: dismissBlock(String(b.id ?? "")) }); }
       // Anchor the snapshot to the ACTIVE chat session (its on-disk transcript) so the Context window
       // + Prompt-cache gauges reflect the live conversation; fall back to findSession's cwd match only
       // when there's no active session yet (fresh launch).
