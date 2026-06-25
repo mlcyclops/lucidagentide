@@ -467,6 +467,22 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .perm-result.ok{color:var(--green)}
 .perm-result.no{color:var(--txt-3)}
 .perm-result .ic{flex:none}
+/* P-EGRESS.1 (ADR-0058): per-website egress approval card. Amber accent — this is a network-egress gate. */
+.perm-egress{border-left-color:var(--amber,#e0a64e)}
+.perm-head-warn{color:var(--amber,#e0a64e)}
+.perm-egress-target{display:flex;align-items:center;gap:7px;margin:2px 12px 6px;padding:7px 9px;border-radius:8px;
+  background:var(--bg-2);border:1px solid var(--line-soft)}
+.perm-url{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;color:var(--cyan);word-break:break-all;flex:1 1 auto}
+.perm-copy{flex:none;display:inline-flex;align-items:center;border:1px solid var(--line);background:var(--bg-1);color:var(--txt-2);
+  border-radius:7px;padding:4px 7px;cursor:pointer}
+.perm-copy:hover,.perm-copy.ok{border-color:var(--green);color:var(--green)}
+.perm-egress-note{display:flex;align-items:flex-start;gap:6px;padding:0 12px 7px;color:var(--txt-3);font-size:11.5px;line-height:1.5}
+.perm-egress-note .ic{flex:none;margin-top:1px}
+.perm-radar{margin:0 12px 9px;display:inline-flex;align-items:center;gap:6px;font-family:inherit;font-size:12px;font-weight:600;
+  border:1px solid var(--line);background:var(--bg-1);color:var(--accent-2);border-radius:8px;padding:6px 11px;cursor:pointer}
+.perm-radar:hover{border-color:var(--accent-2);background:var(--accent-dim)}
+.perm-actions-col{flex-direction:column;align-items:stretch}
+.perm-actions-col .perm-btn{text-align:left}
 
 /* subagent delegation card (omp `task` tool) — P-TASK.1 (ADR-0028). Mirrors .thoughts/.reasoning. */
 .subagent{margin:8px 0 2px;border:1px solid var(--line);border-left:2px solid var(--cyan);border-radius:11px;

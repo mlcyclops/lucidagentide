@@ -23,6 +23,29 @@ import { recommendCheckerModel, resolveCheckerModel, type ModelOption } from "./
 import { parseGoalVerdict } from "./goal_verdict.ts";
 import { appendGoalIteration, finishGoalMemory, type GoalMemory, resumeGoalMemory, startGoalMemory } from "./goal_memory.ts";
 import { type Automation, listAutomations, nextDueAutomation, updateAutomation } from "./automations.ts";
+import { type EgressChoice, egressDecision, recordEgress } from "./egress_policy.ts";
+
+// P-EGRESS.1 (ADR-0058): the network-reaching tools omp is told to PROMPT for (acp_config.yml). When omp
+// requests permission for one of these, the desktop shows the per-website approval dialog instead of
+// silently auto-approving in Agent mode.
+const EGRESS_TOOLS = new Set(["browser", "web_search", "web", "fetch", "navigate"]);
+// The dialog's choices. Each maps to an EgressChoice the store folds in; all the "Yes" variants approve
+// the call to omp, "deny" blocks it.
+const EGRESS_OPTIONS: { optionId: string; name: string; kind?: string }[] = [
+  { optionId: "egress:allow-once", name: "Yes - allow this, just this once", kind: "allow" },
+  { optionId: "egress:allow-site", name: "Yes - and don't ask again for this website", kind: "allow" },
+  { optionId: "egress:ask-site", name: "Yes - but ask me every time for this website", kind: "allow" },
+  { optionId: "egress:danger", name: "Yes - danger is my middle name (allow all sites)", kind: "allow" },
+  { optionId: "egress:deny", name: "No - block this", kind: "reject" },
+];
+/** Pull the URL (browser) or query (web_search) an egress tool call targets, from its rawInput/title. */
+function egressTarget(tc: any): string | null {
+  const ri = tc?.rawInput ?? tc?.input ?? {};
+  for (const k of ["url", "href", "uri", "link"]) if (typeof ri[k] === "string" && ri[k].trim()) return ri[k].trim();
+  if (typeof ri.query === "string" && ri.query.trim()) return ri.query.trim();
+  const m = /(https?:\/\/[^\s)]+)/i.exec(String(tc?.title ?? ""));
+  return m ? m[1]! : (String(tc?.title ?? "").trim() || null);
+}
 
 const REPO = join(import.meta.dir, "..");
 // Absolute so the gate loads from THIS repo even when omp runs in another workspace.
@@ -49,7 +72,7 @@ export type ChatEvent =
   | { type: "tool"; name: string; detail: string }
   | { type: "subagent"; id: string; agent: string; title: string; assignments: string[] }
   | { type: "block"; tool: string; reason: string; severity: string; findings: string; id?: string; quarantined?: boolean }
-  | { type: "permission"; id: string; tool: string; detail: string; options: { optionId: string; name: string; kind?: string }[] }
+  | { type: "permission"; id: string; tool: string; detail: string; options: { optionId: string; name: string; kind?: string }[]; url?: string; egress?: boolean }
   | { type: "usage"; used: number; size: number; cost: number }
   // P-GOAL.1 (ADR-0046): /goal loop events — an iteration begins, the separate checker's verdict,
   // the loop met its condition, or it stopped (cap / no-progress).
@@ -205,6 +228,22 @@ class Backend {
         acp.onRequest = async (m, params) => {
           if (m === "session/request_permission") {
             const opts: any[] = params?.options ?? [];
+            const tc = params?.toolCall ?? params?.tool_call ?? {};
+            const toolName = [tc.kind, tc.title, tc.name, tc.toolName, params?.tool, params?.toolName].filter(Boolean).join(" ").toLowerCase();
+            const target = egressTarget(tc);
+            // P-EGRESS.1 (ADR-0058): a network-reaching tool — matched by name OR by carrying an external
+            // http(s) URL (omp may report the browser tool with a generic kind, so name alone can miss it).
+            // Unless a standing decision already allows the target, force the per-website approval dialog —
+            // EVEN in Agent mode (egress is never silently auto-approved). Fail-closed: no live UI ⇒ deny.
+            const isEgress = [...EGRESS_TOOLS].some((t) => toolName.includes(t)) || (!!target && /^https?:\/\//i.test(target));
+            if (isEgress) {
+              if (target && egressDecision(target) === "allow") {
+                const a = opts.find((o) => /allow/i.test(o.kind ?? o.optionId ?? "")) ?? opts[0];
+                return a ? { outcome: { outcome: "selected", optionId: a.optionId } } : { outcome: { outcome: "cancelled" } };
+              }
+              if (this.askActive && this.listener) return this.askEgress(params, opts, target ?? toolName);
+              return { outcome: { outcome: "cancelled" } }; // no UI to ask → block the egress
+            }
             // Ask mode (and only inside a live chat turn): hand the decision to the user.
             if (this.permissionMode === "ask" && this.askActive && this.listener) return this.askUser(params, opts);
             // Agent / Plan: auto-approve.
@@ -328,6 +367,30 @@ class Backend {
       const settle = (outcome: any) => { clearTimeout(t); this.permPending.delete(id); this.pendingPerms = Math.max(0, this.pendingPerms - 1); resolve(outcome); };
       const t = setTimeout(() => settle({ outcome: { outcome: "cancelled" } }), Backend.PERM_MS); // fail-closed
       this.permPending.set(id, (optionId) => settle(optionId ? { outcome: { outcome: "selected", optionId } } : { outcome: { outcome: "cancelled" } }));
+    });
+  }
+
+  /** P-EGRESS.1 (ADR-0058): forward an EGRESS request as the per-website approval dialog (the rich
+   *  options + the target URL for the Cloudflare-Radar check). The user's choice is persisted to the
+   *  egress store, then mapped back to omp's own allow/deny option. Fail-closed: timeout ⇒ deny. */
+  private askEgress(params: any, opts: any[], target: string): Promise<any> {
+    const id = `perm_${++this.permSeq}`;
+    const tc = params?.toolCall ?? params?.tool_call ?? {};
+    this.pendingPerms++;
+    this.emit({ type: "permission", id, tool: String(tc.kind ?? "browser"), detail: target, url: target, egress: true, options: EGRESS_OPTIONS });
+    const allowOpt = opts.find((o) => /allow/i.test(o.kind ?? o.optionId ?? "")) ?? opts[0];
+    const denyOpt = opts.find((o) => /(deny|reject|cancel|no)/i.test(o.kind ?? o.optionId ?? ""));
+    const approve = () => allowOpt ? { outcome: { outcome: "selected", optionId: allowOpt.optionId } } : { outcome: { outcome: "cancelled" } };
+    const block = () => denyOpt ? { outcome: { outcome: "selected", optionId: denyOpt.optionId } } : { outcome: { outcome: "cancelled" } };
+    return new Promise((resolve) => {
+      const settle = (outcome: any) => { clearTimeout(t); this.permPending.delete(id); this.pendingPerms = Math.max(0, this.pendingPerms - 1); resolve(outcome); };
+      const t = setTimeout(() => settle(block()), Backend.PERM_MS); // fail-closed → block egress
+      this.permPending.set(id, (optionId) => {
+        const choice = String(optionId ?? "").replace(/^egress:/, "") as EgressChoice;
+        if (!optionId || choice === "deny") { settle(block()); return; }
+        try { recordEgress(target, choice); } catch { /* best-effort persistence */ }
+        settle(approve());
+      });
     });
   }
   /** Resolve a parked permission from the UI. `optionId` null/empty ⇒ deny (cancelled). */

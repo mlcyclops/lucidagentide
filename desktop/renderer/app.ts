@@ -559,12 +559,36 @@ const isAllowOpt = (kind?: string, optionId?: string) => /allow|approve|grant|ac
 function createPermissionCard(e: Extract<ChatEvent, { type: "permission" }>): { el: HTMLElement; finalize: () => void } {
   const btns = e.options.map((o) =>
     `<button class="perm-btn ${isAllowOpt(o.kind, o.optionId) ? "ok" : "no"}" data-oid="${esc(o.optionId)}">${esc(o.name)}</button>`).join("");
-  const win = el(`<div class="perm" data-streaming="1">
-    <div class="perm-head">${icon("shield", 14)}<span>Approve tool call?</span></div>
-    <div class="perm-body"><b>${esc(e.tool)}</b>${e.detail ? ` · <span class="perm-d">${esc(e.detail)}</span>` : ""}</div>
-    <div class="perm-actions">${btns}</div>
-    <div class="perm-result" hidden></div>
-  </div>`);
+  let win: HTMLElement;
+  if (e.egress) {
+    // P-EGRESS.1 (ADR-0058): the agent wants to reach the internet. Show the target prominently with a
+    // copy button + a one-click Cloudflare-Radar safety check, then the per-website approval choices.
+    const url = e.url ?? e.detail ?? "";
+    win = el(`<div class="perm perm-egress" data-streaming="1">
+      <div class="perm-head perm-head-warn">${icon("shield", 14)}<span>Let the agent reach this website?</span></div>
+      <div class="perm-egress-target"><code class="perm-url">${esc(url)}</code><button class="perm-copy" data-tip="Copy the URL">${icon("copy", 12)}</button></div>
+      <div class="perm-egress-note">${icon("info", 12)}<span>This sends a request to the internet. Approve only sites you trust.</span></div>
+      <button class="perm-radar" data-radar>${icon("search", 12)} Check this site with Cloudflare Radar</button>
+      <div class="perm-actions perm-actions-col">${btns}</div>
+      <div class="perm-result" hidden></div>
+    </div>`);
+    const copyBtn = $(".perm-copy", win) as HTMLElement | null;
+    copyBtn?.addEventListener("click", async () => {
+      try { await navigator.clipboard.writeText(url); copyBtn.innerHTML = icon("check", 12); setTimeout(() => { copyBtn.innerHTML = icon("copy", 12); }, 1200); } catch { /* clipboard blocked */ }
+    });
+    ($("[data-radar]", win) as HTMLElement | null)?.addEventListener("click", async () => {
+      try { await navigator.clipboard.writeText(url); } catch { /* ignore */ }
+      window.open("https://radar.cloudflare.com/scan", "_blank", "noopener");
+      showToast({ title: "URL copied · Radar opened", desc: "Paste the URL into Cloudflare Radar's scan box to vet it before allowing.", actions: [{ label: "OK" }], timeout: 4000 });
+    });
+  } else {
+    win = el(`<div class="perm" data-streaming="1">
+      <div class="perm-head">${icon("shield", 14)}<span>Approve tool call?</span></div>
+      <div class="perm-body"><b>${esc(e.tool)}</b>${e.detail ? ` · <span class="perm-d">${esc(e.detail)}</span>` : ""}</div>
+      <div class="perm-actions">${btns}</div>
+      <div class="perm-result" hidden></div>
+    </div>`);
+  }
   const actions = $(".perm-actions", win) as HTMLElement;
   const result = $(".perm-result", win) as HTMLElement;
   let answered = false;

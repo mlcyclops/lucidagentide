@@ -4844,3 +4844,78 @@ cancels instantly.
 
 ADR-0007/0051/0055 (the AskSage adapter + diagnostics this hardens), ADR-0056 (auto-continue, the
 complementary fix for legitimate short-stops), CLAUDE.md #2/#3/#4.
+
+## ADR-0058 - P-EGRESS.1: per-website approval for the agent's network-reaching tools
+
+**Date:** 2026-06-24
+**Status:** Accepted - BUILT.
+**Increment:** P-EGRESS.1.
+
+### Context
+
+Live testing showed the agent autonomously navigating to arbitrary internet sites with omp's `browser`
+tool (improvising a base64 upload of an audio file). In a security/provenance product, silent egress to
+unknown hosts is a real risk (exfiltration, SSRF, fetching hostile content). The gate scans tool-call
+CONTENT for hidden Unicode but does not govern WHERE the agent reaches. The user asked for a
+prompt-before-each-external-fetch flow with rich, persisted choices.
+
+Root cause of the silent browsing: omp's `tools.approvalMode` defaults to **`yolo`** (auto-approve all
+tiers). But `tools.approval` (per-tool policy) is **honored in every approval mode** - so a per-tool
+`prompt` override forces omp to request permission even under yolo.
+
+### Decision - omp config forces a prompt; the desktop owns the dialog
+
+`acp_config.yml` sets `tools.approval: { browser: prompt, web_search: prompt, web: prompt, fetch: prompt }`.
+omp then sends `session/request_permission` for those tools. `acp_backend.onRequest` recognises an egress
+request - by tool name OR by the call carrying an external `http(s)` URL (omp may report `browser` with a
+generic kind, so name alone can miss it) - and, instead of the Agent-mode auto-approve, runs `askEgress`:
+the per-website approval dialog. A standing decision can still auto-allow without prompting. Fail-closed:
+no live UI / timeout (5 min) ⇒ the egress is BLOCKED.
+
+### Decision - the five choices, and what they persist (egress_policy.ts)
+
+The dialog offers four "Yes" and a "No", each mapped to a pure `EgressChoice` folded into a machine-level
+store (`~/.omp/lucid-egress.json`):
+- **allow-once** - approve this call, remember nothing.
+- **allow-site** - approve + auto-allow this host forever (`allowHosts`).
+- **ask-site** - approve, but PIN this host to always-prompt (`alwaysAskHosts`) - overrides danger mode.
+- **danger** ("danger is my middle name") - global allow-all egress (`dangerMode`).
+- **deny** - block; persist nothing.
+
+`egressVerdict(store, url)` is fail-closed: `alwaysAsk` pin → prompt; allow-listed host → allow; danger →
+allow; everything else (incl. an unparseable URL) → prompt. The decision logic is pure and unit-tested;
+the chosen omp option (allow/deny) is resolved from omp's own `options`, so we never invent option ids.
+
+### Decision - the dialog (the user's spec)
+
+The card shows the **target URL prominently** with a **copy button**, a security note, and a **"Check this
+site with Cloudflare Radar"** button that copies the URL and opens `https://radar.cloudflare.com/scan` in a
+browser so the user can vet the site before allowing. Then the five choices, stacked. Amber-accented (it's
+a network-egress gate, distinct from the standard Ask-mode card).
+
+### Scope / deferred (P-EGRESS.2)
+
+`web_search` (a search QUERY, no host) currently falls into the dialog as allow-once/danger/deny - the
+per-site options are no-ops without a host; a query-aware variant is deferred. A Security-panel view of
+egress decisions (and a "forget this site" / "exit danger mode" control) is deferred. Domain-allowlist
+import and per-project (not just per-host) scoping are deferred.
+
+### Verification
+
+13 unit tests (egress_policy.test.ts): host extraction (URL / bare / junk), fail-closed verdict,
+allow-list, danger mode, ask-site pin overriding danger, and choice-folding round-trips. Desktop 339,
+typecheck clean, bundle OK; the dialog rendering was visually verified in the dev server. The LIVE
+omp-permission round-trip (does omp emit request_permission for `browser` with the URL in rawInput?) is
+the manual check - the config + the name-OR-url detection are built to handle either shape.
+
+### Invariants preserved
+
+#3/#4 (the gate is unchanged - it still scans every tool call; this adds an egress GATE on top, never
+bypasses the content gate) - fail-closed (no UI / timeout ⇒ block) - the frozen prompt prefix is
+untouched. Permission still parks the JSON-RPC response and pauses the idle clock (P-ACP.3), so a human
+deciding is not a stalled turn.
+
+### Relates to
+
+ADR-0027/P-ACP.3 (the tool-permission forwarding this extends), ADR-0019 (the content gate this complements
+with an egress gate), ADR-0055 (the diagnostics that surfaced the browser flailing). CLAUDE.md #3/#4.
