@@ -418,7 +418,9 @@ class Backend {
       this.pendingPerms = 0;
     }
     this.listener = null;
-    onEvent({ type: "done" });
+    // Carry the FULL accumulated reply on `done` so the UI can reconcile a lossy live stream (if some
+    // token chunks didn't reach the browser, the turn still renders the complete final answer on settle).
+    onEvent({ type: "done", text: assistant });
     void learnFromTurn(text, assistant, (sys, usr) => this.complete(sys, usr)); // best-effort; the model extractor (opt-in) uses complete()
     // ADR-0009 Phase B (issue #12): capture the turn for traceability. Sanitized + sha only,
     // GUI-side (can't co-write DuckDB); fully guarded so it never affects the chat.

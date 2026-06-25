@@ -2182,3 +2182,20 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
   watchdog added (a single gov-gateway call can exceed 60s, so a silence-timeout would false-settle).
 - **next:** capture omp's own logs during a wedge to see why session/prompt doesn't resolve; consider an
   omp issue/upstream fix or a per-turn server-side timeout in acp_backend.prompt().
+
+---
+**Chat reconciles full reply on `done` (follow-up to ADR-0055)**
+- **shipped:** live AskSage turns sometimes completed server-side (captured in the turns log) yet the chat
+  showed only the first tool call and no answer until a browser reload (which then lost the live tool chips
+  + time/token stats). The server-side `assistant` accumulator and the browser stream are fed by the same
+  listener, so a completed turn HAS the full text. Now `prompt()` emits `{type:"done", text: assistant}`
+  and the renderer reconciles: on done, if the server's full text is longer than what streamed, it replaces
+  buf — so the complete final answer always renders when the turn settles, even if live token chunks were
+  lost. typecheck clean · desktop 326 · bundle OK.
+- **stubbed:** this only helps when `done` REACHES the browser. The deeper failure — omp not resolving
+  session/prompt at all (a genuine wedge: the model finished per the stderr diag + turns log, but the ACP
+  turn never closes) and intermediate tool_call/agent_message events dropping mid-stream — is an
+  omp-integration issue that needs omp's own logs to root-cause. Stop (client abort, prior commit) is the
+  recovery path meanwhile.
+- **next:** capture omp's terminal output during a wedge; determine if it's every AskSage turn or only
+  long multi-tool ones; consider a server-side per-turn timeout in acp_backend.prompt() as a backstop.

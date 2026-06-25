@@ -148,7 +148,7 @@ export type ChatEvent =
   | { type: "goal-check"; n: number; done: boolean; reason: string }
   | { type: "goal-done"; iters: number; reason: string }
   | { type: "goal-stop"; reason: string }
-  | { type: "done" };
+  | { type: "done"; text?: string }; // text = the authoritative full assistant reply (reconciles lossy streaming)
 export interface GoalOpts { goal: string; condition: string; command?: string; maxIters: number; resume?: string }
 // P-GOAL.4: a stopped loop that can be resumed from its on-disk memory file.
 export interface ResumableLoop { rel: string; goal: string; condition: string; command?: string; iterations: number; updatedAt: number }
