@@ -4,6 +4,13 @@ Three lines per session: **shipped / stubbed / next** (CLAUDE.md session ritual)
 
 -----
 
+## R-04: thinking-item governance (ADR-0054)
+- **shipped:** `desktop/thinking_governance.ts` — `isLearnableAssistantText` / `accumulateAssistantText`: **only assistant `token` text is learnable** (eligible for `recordTurns` persistence + `learnFromTurn` distiller/promotion). Reasoning/thinking (and tool/block/subagent/usage) are display-only (ratifies ADR-0027 as a security policy): never persisted → never recalled → never exported → CUI-excluded by construction; never auto-promoted to semantic memory (keystone #2). `acp_backend.prompt()`'s `sink` now routes the per-turn `assistant` buffer through the predicate. 3 regression tests lock it.
+- **stubbed:** persisting thinking in future REQUIRES scan + trust-label + promotion-gate + CUI-exclude first (gated by this ADR + the test). CI's `bun test harness` doesn't run `desktop/` yet (pre-existing; R-01 CI scope) — covered by `bun test` / `make test`.
+- **next:** R-06 (subagent stash-isolation provenance) — confirm lineage/attribution track subagent edits under ADR-0032 (isolation off).
+
+-----
+
 ## P-EXT.5.0: attach-mode roadmap (planning only — ADR-0039)
 - **shipped:** ADR-0039 in DECISIONS.md — designs the deferred ADR-0038 optional attach-mode (an IDE
   extension SHARING the running desktop's already-gated session instead of spawning its own `lucid acp`).
