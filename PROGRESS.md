@@ -2148,3 +2148,19 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **next:** the user re-tests live with developer mode on; read the AskSage-calls diagnostics (look for
   `empty-response`/`truncated`/error rows + the `via`/raw shape) and fix the confirmed root cause
   (likely either a wrapper shape to parse, a max_tokens bump, or relaying thinking).
+
+---
+**AskSage Stop fix + live, readable Logs (follow-ups to P-ASKSAGE.1, ADR-0055)**
+- **shipped:** (1) STOP now cancels AskSage turns — omp passes options.signal (AbortSignal, aborted on
+  session/cancel) but the adapter ignored it, so a non-streamed AskSage fetch ran on after Stop and the
+  turn hung; threaded signal into every fetch (anthropic/google/query) + settle cleanly (done/stop, no
+  error) on abort. (2) Developer Logs poll live — refresh() re-fetches /api/dev while the Logs tab is open,
+  so AskSage rows + transcripts update mid-turn instead of only on tab-switch/refresh. (3) Turn transcripts
+  + AskSage calls now render NEWEST-FIRST with a US-Eastern (auto EST/EDT) timestamp column. 1 new abort
+  test (asksage_stream 15); harness 501 · desktop 326 · typecheck clean · bundle OK; live-verified the
+  transcript order + EDT stamps.
+- **stubbed:** the native-provider hang (public Claude/Opus "searching the codebase" that wouldn't stop) is
+  NOT this fix — that path is omp-native and was already cancellable; if it recurs it's a separate
+  gate/omp-level investigation. Live gov-gateway Stop round-trip still the manual check.
+- **next:** user re-tests live: AskSage rows should populate without a refresh, Stop should end a hung
+  AskSage turn, transcripts newest-first with ET times. Then read the diagnostics for the give-up root cause.

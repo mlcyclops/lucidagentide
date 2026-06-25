@@ -4688,6 +4688,17 @@ flagged with a raw snippet; HTTP-error diag + stream error). Full harness 500, d
 clean (3 cfgs), renderer bundles. `make demo-P-ASKSAGE.1` proves wrapped replies are recovered, empty
 turns are flagged, and diagnostics are off by default.
 
+### Follow-ups from live testing
+
+- **Stop now actually stops AskSage.** `SimpleStreamOptions.signal` carries omp's AbortSignal, aborted on
+  session/cancel. The adapter ignored `_options`, so a non-streamed AskSage fetch (one long request per
+  turn) kept running after Stop and the turn hung. Threaded `options.signal` into every fetch
+  (anthropic/google/query) and, on abort, settle with a clean `done`/stop (no error toast). Native-provider
+  models (GPT, public Claude) were already cancellable by omp; this closes the AskSage gap.
+- **Developer Logs are live + readable.** The 4s poll now re-fetches `/api/dev` while the Logs tab is open
+  (AskSage rows + transcripts no longer go stale mid-turn). Turn transcripts and AskSage calls render
+  newest-first with a US-Eastern (`America/New_York`, auto EST/EDT) timestamp column.
+
 ### Invariants preserved
 
 #2 (TS-only) - #3/#4 (every tool call the adapter surfaces is still scanned by the in-process gate;

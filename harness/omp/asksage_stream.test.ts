@@ -220,4 +220,20 @@ describe("AskSage diagnostics + tolerant extraction", () => {
     expect(recs[0]).toMatchObject({ route: "google", ok: false, status: 502 });
     expect(recs[0].error).toContain("bad gateway");
   });
+
+  test("Stop: an aborted signal cancels the fetch and settles cleanly (done/stop, no error)", async () => {
+    // fetch that rejects with an AbortError when the passed signal aborts (mirrors real fetch on abort).
+    globalThis.fetch = ((_url: any, init: any) => new Promise((_resolve, reject) => {
+      init?.signal?.addEventListener("abort", () => { const e: any = new Error("aborted"); e.name = "AbortError"; reject(e); });
+    })) as any;
+    const ctrl = new AbortController();
+    const events: any[] = [];
+    const drain = (async () => { for await (const ev of anthropic(model, { messages: [{ role: "user", content: "x" }] }, { signal: ctrl.signal })) events.push(ev); })();
+    ctrl.abort(); // user presses Stop
+    await drain;
+    const done = events.find((e) => e.type === "done");
+    expect(done).toBeDefined();
+    expect(done.reason).toBe("stop");
+    expect(events.some((e) => e.type === "error")).toBe(false); // a deliberate cancel is not an error
+  });
 });

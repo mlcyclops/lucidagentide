@@ -1679,9 +1679,18 @@ function securityHtml(d: SecuritySnapshot | null): string {
 }
 
 // ── ADR-0009 Phase D: developer Logs view (read-only; metadata only) ──────────────
+// Format an ISO/epoch timestamp as US Eastern time (auto EST/EDT) — "Jun 24, 3:45 PM EDT".
+function estTime(ts: string | number | undefined | null): string {
+  if (ts === undefined || ts === null || ts === "") return "";
+  const d = new Date(ts);
+  if (isNaN(d.getTime())) return "";
+  try {
+    return d.toLocaleString("en-US", { timeZone: "America/New_York", month: "short", day: "numeric", hour: "numeric", minute: "2-digit", hour12: true, timeZoneName: "short" });
+  } catch { return d.toISOString(); }
+}
 function devHtml(d: import("./bridge.ts").DevView | null): string {
   let h = `<div class="sec-intro"><div class="sec-intro-h"><span class="sec-pulse">${icon("logs", 17)}</span><b>Developer logs</b></div>
-    <div class="sec-intro-d">Read-only telemetry, run lineage, transcripts, and audit trails from this machine - sanitized, no raw prompt or file content (the raw is referenced by sha only).</div></div>`;
+    <div class="sec-intro-d">Read-only telemetry, run lineage, transcripts, and audit trails from this machine - sanitized, no raw prompt or file content (the raw is referenced by sha only). Newest first; times in US Eastern.</div></div>`;
   if (!d || !d.enabled) { h += `<div class="empty">Developer mode is off. Turn it on in <b>Settings → Developer mode</b> to see the telemetry stream, run lineage, transcripts, and the audit trail.</div>`; return h; }
   const tel = d.snapshot?.telemetry ?? [], runs = d.snapshot?.runs ?? [], exp = d.snapshot?.exports ?? [], blk = d.blocks?.quarantined ?? [], turns = d.turns ?? [];
   const ask = d.asksage ?? [];
@@ -1697,6 +1706,7 @@ function devHtml(d: import("./bridge.ts").DevView | null): string {
   // P-ASKSAGE.1 (ADR-0055): AskSage tool-loop diagnostics. One row per non-streamed call. An `anomaly`
   // (empty-response / truncated) or an error is the smoking gun for the loop "giving up too soon".
   const askRows = ask.slice().reverse().map((r) => ({
+    when: estTime(r.at as number),
     route: String(r.route ?? ""),
     model: String(r.model ?? "").replace(/^.*\//, ""),
     via: String(r.via ?? (r.ok === false ? "-" : "")),
@@ -1706,14 +1716,15 @@ function devHtml(d: import("./bridge.ts").DevView | null): string {
     flag: r.anomaly ? `⚠ ${r.anomaly}` : r.ok === false ? `✕ ${String(r.error ?? "error").slice(0, 60)}` : "ok",
   }));
   h += accordion("dev.asksage", "AskSage tool calls", "non-streamed loop · developer diagnostics",
-    table([{ key: "route", label: "route" }, { key: "model", label: "model", mono: true }, { key: "via", label: "parsed via", mono: true }, { key: "text", label: "txt", mono: true }, { key: "calls", label: "tool calls" }, { key: "stop", label: "stop", mono: true }, { key: "flag", label: "flag", pill: true }], askRows as unknown as Record<string, unknown>[]),
+    table([{ key: "when", label: "when", mono: true }, { key: "route", label: "route" }, { key: "model", label: "model", mono: true }, { key: "via", label: "parsed via", mono: true }, { key: "text", label: "txt", mono: true }, { key: "calls", label: "tool calls" }, { key: "stop", label: "stop", mono: true }, { key: "flag", label: "flag", pill: true }], askRows as unknown as Record<string, unknown>[]),
     OPEN.has("dev.asksage") || askAnoms > 0, askAnoms ? `${ask.length} · ${askAnoms}⚠` : String(ask.length));
   h += accordion("dev.telemetry", "Telemetry stream", "recent · metadata only",
     table([{ key: "event", label: "event" }, { key: "run_id", label: "run", mono: true }, { key: "session_id", label: "session", mono: true }, { key: "created_at", label: "at", mono: true }], tel),
     true, String(tel.length));
-  const turnRows = turns.map((t) => ({ seq: t.seq, role: t.role, trust: t.trust, sanitized: t.sanitized, sha: String(t.rawSha256).slice(0, 12) }));
-  h += accordion("dev.turns", "Turn transcripts", "sanitized · raw by sha",
-    table([{ key: "seq", label: "#", mono: true }, { key: "role", label: "role", pill: true }, { key: "trust", label: "trust", mono: true }, { key: "sanitized", label: "text" }, { key: "sha", label: "raw sha", mono: true }], turnRows as unknown as Record<string, unknown>[]),
+  // Newest first (reverse the append-ordered log) so the latest turn is at the top, with an Eastern-time stamp.
+  const turnRows = turns.slice().reverse().map((t) => ({ when: estTime(t.at), seq: t.seq, role: t.role, trust: t.trust, sanitized: t.sanitized, sha: String(t.rawSha256).slice(0, 12) }));
+  h += accordion("dev.turns", "Turn transcripts", "newest first · sanitized · raw by sha",
+    table([{ key: "when", label: "when", mono: true }, { key: "seq", label: "#", mono: true }, { key: "role", label: "role", pill: true }, { key: "trust", label: "trust", mono: true }, { key: "sanitized", label: "text" }, { key: "sha", label: "raw sha", mono: true }], turnRows as unknown as Record<string, unknown>[]),
     OPEN.has("dev.turns"), String(turns.length));
   h += accordion("dev.runs", "Run lineage", "provenance",
     table([{ key: "run_id", label: "run", mono: true }, { key: "kind", label: "kind" }, { key: "mode", label: "mode" }, { key: "sandbox_profile", label: "sandbox" }, { key: "status", label: "status" }], runs),
@@ -1944,6 +1955,9 @@ async function refresh(): Promise<void> {
   try {
     const [sec, mem, led, code] = await Promise.all([bridge.security(), bridge.memory(), bridge.usage(), bridge.codeActivity()]);
     state.security = sec; state.memory = mem; state.ledger = led; state.codeActivity = code;
+    // Keep the developer Logs panel live (AskSage tool calls, transcripts) while it's the open tab —
+    // otherwise its data only refreshed on tab-switch and looked stale mid-turn.
+    if (state.developerMode && state.inspectorTab === "dev") { try { state.dev = await bridge.dev(); } catch { /* keep last */ } }
     checkBudgetWarning(mem?.budgets); // early heads-up before a provider budget runs out
     // the badge reflects the live session CONFIG model (loadConfig), not the
     // historical snapshot - so it shows what the next turn will actually use.

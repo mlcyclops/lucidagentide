@@ -175,7 +175,7 @@ function anthropicBlocks(j: any): { blocks: any[]; via: string } {
 // Call AskSage's Anthropic Messages route WITH tool support: pass the tool definitions, and parse both
 // text and `tool_use` content blocks from the reply so omp can execute the calls and loop (previously
 // tools were dropped, so Claude emitted tool-call XML as plain text and nothing ran).
-async function callAnthropic(cfg: AsksageStreamCfg, model: string, system: string, messages: AnthropicMsg[], tools: any[] | undefined, maxTokens: number): Promise<AnthropicResult> {
+async function callAnthropic(cfg: AsksageStreamCfg, model: string, system: string, messages: AnthropicMsg[], tools: any[] | undefined, maxTokens: number, signal?: AbortSignal): Promise<AnthropicResult> {
   const body: any = { model, max_tokens: maxTokens, ...(system ? { system } : {}), messages };
   const toolNames = Array.isArray(tools) ? tools.map((t) => t?.name) : [];
   if (Array.isArray(tools) && tools.length) {
@@ -184,7 +184,7 @@ async function callAnthropic(cfg: AsksageStreamCfg, model: string, system: strin
   const reqDiag = { route: "anthropic", model, maxTokens, tools: toolNames, msgs: messages.length };
   let r: Response;
   try {
-    r = await fetch(`${cfg.base}/anthropic/v1/messages`, { method: "POST", headers: jsonHeaders(cfg.key, { "anthropic-version": "2023-06-01" }), body: JSON.stringify(body) });
+    r = await fetch(`${cfg.base}/anthropic/v1/messages`, { method: "POST", headers: jsonHeaders(cfg.key, { "anthropic-version": "2023-06-01" }), body: JSON.stringify(body), signal });
   } catch (e) {
     diag({ ...reqDiag, ok: false, error: `fetch failed: ${String((e as Error)?.message ?? e)}` });
     throw e;
@@ -230,7 +230,7 @@ function splitReferences(message: string): { body: string; refs: string[] } {
 // AskSage's native /query route: a single `message`, with optional RAG grounding
 // on `dataset` and a native `persona` id. One-shot (non-streamed). Underlying model
 // + datasets + persona come from env (set by the desktop from the user's selection).
-async function callQuery(cfg: AsksageStreamCfg, system: string, msgs: { role: string; text: string }[]): Promise<RouteResult & { references?: string }> {
+async function callQuery(cfg: AsksageStreamCfg, system: string, msgs: { role: string; text: string }[], signal?: AbortSignal): Promise<RouteResult & { references?: string }> {
   const model = process.env.ASKSAGE_QUERY_MODEL || "gpt-5.2";
   const datasets = (process.env.ASKSAGE_DATASETS || "").split(",").map((d) => d.trim()).filter(Boolean);
   const persona = Number(process.env.ASKSAGE_PERSONA || "") || undefined;
@@ -239,7 +239,7 @@ async function callQuery(cfg: AsksageStreamCfg, system: string, msgs: { role: st
   const body: any = { message, model, temperature: 0.0, limit_references: 5 };
   if (datasets.length) body.dataset = datasets;
   if (persona) body.persona = persona;
-  const r = await fetch(`${cfg.base}/query`, { method: "POST", headers: jsonHeaders(cfg.key), body: JSON.stringify(body) });
+  const r = await fetch(`${cfg.base}/query`, { method: "POST", headers: jsonHeaders(cfg.key), body: JSON.stringify(body), signal });
   const j: any = await r.json().catch(() => ({}));
   if (!r.ok) { diag({ route: "query", model, status: r.status, ok: false, error: j?.error ?? j?.message ?? `HTTP ${r.status}`, raw: snippet(j) }); throw new Error(j?.error ?? j?.message ?? `AskSage query HTTP ${r.status}`); }
   const raw = String(j?.message ?? j?.response ?? "").trim();
@@ -278,7 +278,7 @@ function googleParts(j: any): { parts: any[]; via: string } {
   return { parts: [], via: "none" };
 }
 
-async function callGoogle(cfg: AsksageStreamCfg, model: string, system: string, contents: GoogleContent[], tools: any[] | undefined, maxTokens: number): Promise<GoogleResult> {
+async function callGoogle(cfg: AsksageStreamCfg, model: string, system: string, contents: GoogleContent[], tools: any[] | undefined, maxTokens: number, signal?: AbortSignal): Promise<GoogleResult> {
   const body: any = { contents, ...(system ? { systemInstruction: { parts: [{ text: system }] } } : {}), generationConfig: { maxOutputTokens: maxTokens } };
   const toolNames = Array.isArray(tools) ? tools.map((t) => t?.name) : [];
   if (Array.isArray(tools) && tools.length) {
@@ -287,7 +287,7 @@ async function callGoogle(cfg: AsksageStreamCfg, model: string, system: string, 
   const reqDiag = { route: "google", model, maxTokens, tools: toolNames, msgs: contents.length };
   let r: Response;
   try {
-    r = await fetch(`${cfg.base}/google/v1beta/models/${model}:generateContent`, { method: "POST", headers: jsonHeaders(cfg.key), body: JSON.stringify(body) });
+    r = await fetch(`${cfg.base}/google/v1beta/models/${model}:generateContent`, { method: "POST", headers: jsonHeaders(cfg.key), body: JSON.stringify(body), signal });
   } catch (e) {
     diag({ ...reqDiag, ok: false, error: `fetch failed: ${String((e as Error)?.message ?? e)}` });
     throw e;
@@ -314,10 +314,14 @@ async function callGoogle(cfg: AsksageStreamCfg, model: string, system: string, 
 /** Build a streamSimple bound to a route. `getCfg` is read lazily so a key/base
  *  change (without a respawn) is still picked up. */
 export function makeAsksageStream(route: AsksageRoute, getCfg: () => AsksageStreamCfg) {
-  return function streamSimple(model: any, context: any, _options?: any): AssistantMessageEventStream {
+  return function streamSimple(model: any, context: any, options?: any): AssistantMessageEventStream {
     const stream = new AssistantMessageEventStream();
     void (async () => {
       const cfg = getCfg();
+      // omp passes an AbortSignal and aborts it on session/cancel (Stop). AskSage is non-streamed — one
+      // long fetch per turn — so WITHOUT threading this the request kept running after Stop and the turn
+      // hung. Wire it into every fetch and settle cleanly on abort (ADR-0055).
+      const signal: AbortSignal | undefined = options?.signal;
       const { system, messages } = toTurns(context);
       const usageOf = (u: { input: number; output: number; cacheRead: number; cacheWrite: number }) => ({ ...u, totalTokens: u.input + u.output + u.cacheRead + u.cacheWrite });
       const mkMessage = (content: any[], stopReason: string, usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }): any => ({
@@ -357,20 +361,26 @@ export function makeAsksageStream(route: AsksageRoute, getCfg: () => AsksageStre
         const maxTokens = Number(model?.maxTokens) || 8192;
         if (route === "anthropic") {
           const { system: sys, messages: amsgs } = toAnthropicMessages(context);
-          const res = await callAnthropic(cfg, model.id, sys, amsgs, context?.tools, maxTokens);
+          const res = await callAnthropic(cfg, model.id, sys, amsgs, context?.tools, maxTokens, signal);
           emit(res.text, res.toolCalls, res.stopReason === "length" ? "length" : "stop", res.usage);
           return;
         }
         if (route === "google") {
           const { system: sys, contents } = toGoogleContents(context);
-          const res = await callGoogle(cfg, model.id, sys, contents, context?.tools, maxTokens);
+          const res = await callGoogle(cfg, model.id, sys, contents, context?.tools, maxTokens, signal);
           emit(res.text, res.toolCalls, res.stopReason === "length" ? "length" : "stop", res.usage);
           return;
         }
         // RAG /query: single-message, text-only (no tool use).
-        const { text, usage } = await callQuery(cfg, system, messages);
+        const { text, usage } = await callQuery(cfg, system, messages, signal);
         emit(text, [], "stop", usage);
       } catch (e) {
+        // Stop pressed → omp aborts the signal → fetch throws AbortError. Settle the turn cleanly (a
+        // plain stop), NOT an error, so the UI doesn't flash a failure toast for a deliberate cancel.
+        if (signal?.aborted || (e as any)?.name === "AbortError") {
+          emit("", [], "stop", { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+          return;
+        }
         const errMessage = mkMessage([], "error");
         errMessage.errorMessage = String((e as Error)?.message ?? e);
         stream.push({ type: "error", reason: "error", error: errMessage });
