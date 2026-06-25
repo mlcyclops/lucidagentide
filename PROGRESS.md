@@ -2199,3 +2199,20 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
   recovery path meanwhile.
 - **next:** capture omp's terminal output during a wedge; determine if it's every AskSage turn or only
   long multi-tool ones; consider a server-side per-turn timeout in acp_backend.prompt() as a backstop.
+
+---
+**Turn-lifecycle diagnostics + listener-clobber guard (debugging the AskSage long-turn hang, ADR-0055)**
+- **shipped:** user confirmed long multi-tool AskSage turns hang with done never reaching the browser (blank
+  till reload). Added `[TURN_DIAG]` logging (developer mode → dev-server console): prompt.start /
+  prompt.resolved|stalled|error (with chars, enqueueErr, listenerIntact) / complete.end (clobberAvoided) /
+  chat-stream-write-failed. This disambiguates the three hypotheses on the NEXT hang: omp wedge (no
+  prompt.resolved line ever), listener clobber (listenerIntact=false), or browser disconnect (enqueueErr>0 /
+  write failed). Also: sink now swallows onEvent throws (counts enqueueErr) so a closed browser stream can't
+  break the server turn; and complete() no longer restores the shared this.listener if a chat turn took it
+  over mid-completion (clobberAvoided) — a real orphan bug for overlapping turns. typecheck · desktop 326 ·
+  bundle OK.
+- **stubbed:** root cause still unconfirmed pending a live `[TURN_DIAG]` capture; if it's the omp wedge
+  (session/prompt never resolving while events trickle, so the 2-min idle never fires) the fix is upstream
+  or a hard per-turn cap (user deferred the timeout).
+- **next:** user reproduces a long-turn hang with developer mode ON and pastes the `[TURN_DIAG]` lines from
+  the dev-server terminal; that pins wedge vs clobber vs disconnect and the fix follows.

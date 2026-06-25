@@ -517,9 +517,13 @@ const server = Bun.serve({
       if (p === "/api/chat" && req.method === "POST") {
         const { text } = await readBody<{ text?: unknown }>(req);
         const enc = new TextEncoder();
+        let writeFailed = false;
         const stream = new ReadableStream({
           async start(controller) {
-            await backend.prompt(String(text ?? ""), (e) => { try { controller.enqueue(enc.encode(JSON.stringify(e) + "\n")); } catch { /* stream closed */ } });
+            await backend.prompt(String(text ?? ""), (e) => {
+              try { controller.enqueue(enc.encode(JSON.stringify(e) + "\n")); }
+              catch { if (!writeFailed && loadSettings().developerMode) { writeFailed = true; console.error("[TURN_DIAG] chat stream write failed (browser disconnected) — server turn continues"); } }
+            });
             try { controller.close(); } catch { /* already closed */ }
           },
         });

@@ -128,6 +128,14 @@ class Backend {
   /** Recent AskSage call diagnostics (most-recent last), capped. Empty unless developer mode is on. */
   asksageDiagnostics(): Array<Record<string, unknown>> { return this.asksageDiag.slice(-100); }
 
+  // Turn-lifecycle diagnostics (developer mode). Prints to the dev-server console so a hung long
+  // multi-tool turn reveals WHERE it stalls: did prompt() resolve (server finished, browser orphaned) or
+  // never resolve (omp wedge)? did complete() clobber the chat listener? did the browser stream break?
+  private turnDiag(msg: string): void {
+    if (!loadSettings().developerMode) return;
+    try { console.error(`[TURN_DIAG] ${msg}`); } catch { /* never break a turn on a log */ }
+  }
+
   private async start(): Promise<void> {
     if (this.acp) return;
     if (!this.starting) {
@@ -385,9 +393,11 @@ class Backend {
     // While a permission is awaiting the user (Ask mode), pause the idle/stall clock — a human
     // deciding is not a stalled turn (askUser has its own fail-closed timeout).
     const arm = () => { if (idle) clearTimeout(idle); if (this.pendingPerms > 0) return; idle = setTimeout(() => { stalled = true; onStall(new Error("the model did not respond for 2 minutes — the provider may be rate-limited (check your hourly budget) or the turn stalled. Try again.")); }, Backend.IDLE_MS); };
-    const sink = (e: ChatEvent) => { arm(); if (e.type === "token") assistant += e.text; onEvent(e); };
+    let enqueueErr = 0; // counts browser-stream write failures (orphaned/closed client stream)
+    const sink = (e: ChatEvent) => { arm(); if (e.type === "token") assistant += e.text; try { onEvent(e); } catch { enqueueErr++; } };
     this.listener = sink;
     this.askActive = true; // permission requests in THIS turn may be forwarded to the UI (Ask mode)
+    this.turnDiag(`prompt.start session=${this.sessionId}`);
     try {
       await this.ensureSession();
       // Assemble the user-turn preamble (never the frozen prefix; invariant #5/#6). Issue #54:
@@ -408,7 +418,9 @@ class Backend {
         this.acp!.request("session/prompt", { sessionId: this.sessionId, prompt: [{ type: "text", text: body }] }),
         stall,
       ]);
+      this.turnDiag(`prompt.resolved session=${this.sessionId} chars=${assistant.length} enqueueErr=${enqueueErr} listenerIntact=${this.listener === sink}`);
     } catch (e) {
+      this.turnDiag(`prompt.${stalled ? "stalled" : "error"} session=${this.sessionId} chars=${assistant.length} enqueueErr=${enqueueErr} listenerIntact=${this.listener === sink} msg=${String((e as any)?.message ?? e).slice(0, 80)}`);
       onEvent({ type: "token", text: `\n[${stalled ? "stalled" : "agent unavailable"}: ${String((e as any)?.message ?? e)}]` });
     } finally {
       if (idle) clearTimeout(idle);
@@ -620,6 +632,7 @@ class Backend {
       let text = "";
       let idle: ReturnType<typeof setTimeout> | undefined;
       let onStall: (e: Error) => void = () => {};
+      let myListener: ((e: ChatEvent) => void) | null = null;
       try {
         const s: any = await this.acp!.request("session/new", { cwd: currentWorkspace(), mcpServers: mcpServersForAcp() });
         sid = s?.sessionId ?? s?.id ?? null;
@@ -630,7 +643,8 @@ class Backend {
         if (opts.model) await this.acp!.request("session/set_config_option", { sessionId: sid, configId: "model", value: opts.model }).catch(() => {});
         const IDLE = opts.idleMs ?? 60_000;
         const arm = () => { if (idle) clearTimeout(idle); idle = setTimeout(() => onStall(new Error("stall")), IDLE); };
-        this.listener = (e) => { arm(); if (e.type === "token") text += e.text; };
+        myListener = (e: ChatEvent) => { arm(); if (e.type === "token") text += e.text; };
+        this.listener = myListener;
         arm();
         const stall = new Promise<never>((_, reject) => { onStall = reject; });
         await Promise.race([
@@ -641,7 +655,12 @@ class Backend {
       } catch { return text; }
       finally {
         if (idle) clearTimeout(idle);
-        this.listener = prev;
+        // Only restore if WE are still the active listener. If a chat turn started while this throwaway
+        // completion ran (long ones overlap), `this.listener` is now that turn's sink — restoring `prev`
+        // here would orphan it (drop its events → blank chat until reload). Leave it alone in that case.
+        const clobber = myListener !== null && this.listener !== myListener;
+        this.turnDiag(`complete.end clobberAvoided=${clobber} chars=${text.length}`);
+        if (!clobber) this.listener = prev;
         if (sid) this.acp!.request("session/close", { sessionId: sid }).catch(() => {});
       }
     });
