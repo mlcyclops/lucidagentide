@@ -4618,3 +4618,81 @@ is additive) - keystone #2 (RAG chunks are retrieval context, never auto-promote
 ADR-0053 (the RAG scope/plan this first-builds); ADR-0045/P-SKILL.1 (the scan-gate import seam reused);
 ADR-0012 (classification); ADR-0019 (gate/quarantine surfacing); CLAUDE.md invariants #2/#3/#5/#9/#10 +
 keystone #2.
+
+## ADR-0055 - P-ASKSAGE.1: AskSage tool-loop diagnostics + tolerant response extraction
+
+**Date:** 2026-06-24
+**Status:** Accepted - BUILT.
+**Increment:** P-ASKSAGE.1.
+
+### Context
+
+Live UI testing surfaced a real defect the mocked tests could not: AskSage **Claude** and **Gemini**
+models run tools (files get partially written) but then the agentic loop "gives up too soon" - no retry,
+no visible reasoning, half-done work. The same prompts complete fine on the public (non-AskSage) models.
+AskSage **GPT** is noticeably better. That last fact is the key clue: GPT goes through omp's NATIVE
+`openai-completions` provider (real streaming, omp's battle-tested loop), while Claude/Gemini go through
+our custom NON-streamed `streamSimple` adapter (`asksage_stream.ts`, ADR-0007/0051). So the early
+termination is isolated to our adapter.
+
+Most likely mechanism, and it is silent: each `streamSimple` call is one HTTP round-trip = one assistant
+turn; omp drives the loop. If a follow-up response is parsed to EMPTY text + ZERO tool calls - because
+the AskSage proxy wrapped the body in a shape our strict parser does not read - we emit a clean
+`done`/`stop` with empty content, and omp concludes the model finished. The mock hand-builds the standard
+Anthropic/Gemini shapes, so it never exercises a wrapped/odd live shape.
+
+The user chose "add diagnostics first" (cannot reach the live gov gateway from the dev host), so this
+increment makes the loop OBSERVABLE and adds the one safe robustness fix.
+
+### Decision - per-call diagnostics (env-gated), surfaced in the developer Logs panel
+
+`asksage_stream.ts` emits one `[ASKSAGE_DIAG] {json}` line per call to stderr when
+`LUCID_ASKSAGE_DEBUG` is set. Each record carries the request summary (route, model, maxTokens, tool
+names sent, message count) and the parsed response (HTTP status, top-level response keys, `via` = which
+shape matched, text length, tool-call names, stopReason, usage). The give-up smoking gun is called out
+explicitly: when an OK response yields empty text AND no tool calls, the record gets
+`anomaly: "empty-response"` plus a truncated raw snippet; a `length`/`MAX_TOKENS` finish gets
+`anomaly: "truncated"`. HTTP and fetch errors are logged with a raw snippet too.
+
+`acp_backend.ts` enables `LUCID_ASKSAGE_DEBUG` in the omp child (inherited at spawn) **when developer
+mode is on** - zero overhead otherwise - and its `onStderr` parses `[ASKSAGE_DIAG]` lines into a bounded
+in-memory ring (last 200), echoing them to the dev-server console. `/api/dev` exposes the ring (developer
+mode only); the renderer's **Logs -> AskSage tool calls** accordion shows one row per call and
+auto-opens, with a chip, when any anomaly/error is present.
+
+### Decision - tolerant response extraction (the one safe fix)
+
+`anthropicBlocks()` / `googleParts()` locate the content blocks/parts tolerantly: the standard shape
+first (`content[]` / `candidates[0].content.parts`), then known wrappers (`response.content`,
+`message.content`, OpenAI-style `choices[0].message` with `tool_calls`, or a plain string under
+`response`/`message`/`completion`/`text`/`answer`). Fallbacks fire ONLY when the strict parse finds
+nothing, so they can only RECOVER content that would otherwise be dropped (turning a premature empty stop
+into a real turn), never change a good parse. `via` records which path matched, so a live test reveals
+the real wire format rather than guessing.
+
+### Deliberately deferred (pending the live diagnostics)
+
+- Relaying the model's THINKING blocks (no reasoning is currently shown) - needs the live shape first.
+- Raising/overriding `max_tokens` if `truncated` turns out to be the cause (diagnostics will say).
+- Confirming omp re-invokes `streamSimple` after each tool result for a custom provider (the per-call
+  log makes the invocation count visible). If it does not loop, that is a deeper omp-integration fix.
+- A live gov-gateway tool round-trip remains the manual check this dev host cannot run.
+
+### Verification
+
+`asksage_stream.test.ts` 14/14 (the original 7 + 7 new: tolerant `response.content` / OpenAI-`choices` /
+wrapped-Gemini recovery; diag off without the env; diag records request+parse; `empty-response` anomaly
+flagged with a raw snippet; HTTP-error diag + stream error). Full harness 500, desktop 326, typecheck
+clean (3 cfgs), renderer bundles. `make demo-P-ASKSAGE.1` proves wrapped replies are recovered, empty
+turns are flagged, and diagnostics are off by default.
+
+### Invariants preserved
+
+#2 (TS-only) - #3/#4 (every tool call the adapter surfaces is still scanned by the in-process gate;
+diagnostics never bypass it) - the frozen prompt prefix is untouched (no prompt bytes changed). Logging
+is metadata + a truncated snippet to stderr, developer-mode-gated, never persisted to the store.
+
+### Relates to
+
+ADR-0007 (the AskSage adapter), ADR-0051 (tool use added to the Claude+Gemini routes - the path this
+hardens), ADR-0009 Phase D (the developer Logs panel reused), CLAUDE.md invariants #2/#3/#4/#6.

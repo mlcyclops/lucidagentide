@@ -17,7 +17,7 @@ import { learnFromTurn, recallPreamble } from "./personal.ts";
 import { buildUserTurnPreamble } from "./preamble.ts";
 import { recordTurns } from "./turns_log.ts";
 import { recordBlock } from "./security_log.ts";
-import { asksageOnly, attribution, checkerModel, lastModel, mcpServersForAcp, setCheckerModel, setLastModel } from "./settings_store.ts";
+import { asksageOnly, attribution, checkerModel, lastModel, load as loadSettings, mcpServersForAcp, setCheckerModel, setLastModel } from "./settings_store.ts";
 import { managedConfig } from "./managed_config.ts";
 import { recommendCheckerModel, resolveCheckerModel, type ModelOption } from "./checker_model.ts";
 import { parseGoalVerdict } from "./goal_verdict.ts";
@@ -121,6 +121,13 @@ class Backend {
 
   private emit(e: ChatEvent): void { this.listener?.(e); }
 
+  // P-ASKSAGE.1 (ADR-0055): a bounded ring of AskSage tool-loop diagnostics, parsed from the omp child's
+  // `[ASKSAGE_DIAG]` stderr lines. Surfaced (developer-mode only) in the Logs panel so the non-streamed
+  // AskSage tool loop — and the "empty-response → gives up early" anomaly — is observable from a UI test.
+  private asksageDiag: Array<Record<string, unknown>> = [];
+  /** Recent AskSage call diagnostics (most-recent last), capped. Empty unless developer mode is on. */
+  asksageDiagnostics(): Array<Record<string, unknown>> { return this.asksageDiag.slice(-100); }
+
   private async start(): Promise<void> {
     if (this.acp) return;
     if (!this.starting) {
@@ -137,6 +144,9 @@ class Backend {
         // authoring model + the attribution identity + the edited workspace. Set BEFORE spawn (env is
         // copied at exec; the child can't see later changes).
         this.applyAttributionEnv();
+        // P-ASKSAGE.1 (ADR-0055): enable AskSage tool-loop diagnostics in the omp child when developer
+        // mode is on (the child inherits process.env at spawn). Off otherwise — zero overhead in normal use.
+        if (loadSettings().developerMode) process.env.LUCID_ASKSAGE_DEBUG = "1"; else delete process.env.LUCID_ASKSAGE_DEBUG;
         // ADR-0033: also append the build / anti-over-refusal policy so the chat model doesn't decline
         // a buildable task (e.g. "make a game/graphics/music in one HTML file") by mis-reading its scope.
         const appendedPolicy = `${DELEGATION_POLICY}\n\n${BUILD_POLICY}`;
@@ -197,6 +207,21 @@ class Backend {
         };
         acp.onStderr = (chunk) => {
           for (const line of chunk.split("\n")) {
+            // P-ASKSAGE.1 (ADR-0055): capture AskSage call diagnostics into the ring + echo to the dev
+            // server console for terminal visibility. Best-effort parse — a malformed line is ignored.
+            const di = line.indexOf("[ASKSAGE_DIAG]");
+            if (di !== -1) {
+              const jstart = line.indexOf("{", di);
+              if (jstart !== -1) {
+                try {
+                  const rec = JSON.parse(line.slice(jstart));
+                  this.asksageDiag.push({ at: Date.now(), ...rec });
+                  if (this.asksageDiag.length > 200) this.asksageDiag.shift();
+                  console.error(line.slice(di)); // surface in the dev server / Electron log
+                } catch { /* not valid JSON — ignore */ }
+              }
+              continue;
+            }
             const m = /\[BLOCKED tool_call:(\w+)\].*?severity=(\w+).*?findings=([^\s]+)/.exec(line);
             if (m) {
               // The authoritative security-gate block. Persist it GUI-side (the gate's own omp

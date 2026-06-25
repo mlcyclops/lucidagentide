@@ -2116,3 +2116,27 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **next:** P-RAG.1b (real WASM embedder + PDF parse behind the `Embedder` seam, weights bundled as
   extraResources), then P-RAG.1c (Knowledge popup guided+advanced for the local path, fixed-path
   knowledge.duckdb, desktop recordBlock via onBlock, retrieval injection mirroring the dataset selector).
+
+---
+## P-ASKSAGE.1: AskSage tool-loop diagnostics + tolerant extraction (ADR-0055)
+- **shipped:** live UI testing showed AskSage Claude/Gemini run tools but the loop "gives up too soon"
+  (half-done files, no retry, no visible reasoning) while public models + AskSage GPT do fine — GPT uses
+  omp's NATIVE openai-completions provider, Claude/Gemini use our non-streamed streamSimple adapter, so
+  the bug is isolated there. Most likely silent cause: a follow-up reply parsed to empty text + 0 tool
+  calls → omp thinks the model finished. Fix: (1) per-call diagnostics in asksage_stream.ts — one
+  `[ASKSAGE_DIAG] {json}` line per call (env LUCID_ASKSAGE_DEBUG) capturing request (route/model/maxTokens/
+  tools/msgs) + parsed response (status/respKeys/via/textLen/toolCalls/stopReason/usage), with an explicit
+  `empty-response`/`truncated` anomaly + raw snippet on the give-up path; (2) tolerant extraction
+  (anthropicBlocks/googleParts) that recovers content from wrapped shapes (response.content,
+  OpenAI choices[].message, plain-string message) — fires ONLY when the strict parse is empty, so it can
+  only turn a premature empty stop into a real turn; (3) acp_backend sets the env in DEVELOPER MODE,
+  onStderr rings the diagnostics (last 200) + echoes to console; (4) renderer Logs → "AskSage tool calls"
+  accordion (auto-opens + chip on any anomaly). 7 new tests (asksage_stream 14 total); harness 500 ·
+  desktop 326 · typecheck clean · bundle OK. demo-P-ASKSAGE.1 proves recover/flag/off-by-default.
+- **stubbed:** thinking-block relay (no reasoning shown yet) and a max_tokens override are DEFERRED until
+  the live diagnostics say which failure it is; whether omp re-invokes streamSimple after each tool result
+  for a custom provider is now observable (the per-call log) but unconfirmed live. Tolerant fallbacks are
+  for SHAPES NOT YET CONFIRMED against the real gateway (conservative — only recover, never override).
+- **next:** the user re-tests live with developer mode on; read the AskSage-calls diagnostics (look for
+  `empty-response`/`truncated`/error rows + the `via`/raw shape) and fix the confirmed root cause
+  (likely either a wrapper shape to parse, a max_tokens bump, or relaying thinking).

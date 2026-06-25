@@ -1668,13 +1668,30 @@ function devHtml(d: import("./bridge.ts").DevView | null): string {
     <div class="sec-intro-d">Read-only telemetry, run lineage, transcripts, and audit trails from this machine - sanitized, no raw prompt or file content (the raw is referenced by sha only).</div></div>`;
   if (!d || !d.enabled) { h += `<div class="empty">Developer mode is off. Turn it on in <b>Settings → Developer mode</b> to see the telemetry stream, run lineage, transcripts, and the audit trail.</div>`; return h; }
   const tel = d.snapshot?.telemetry ?? [], runs = d.snapshot?.runs ?? [], exp = d.snapshot?.exports ?? [], blk = d.blocks?.quarantined ?? [], turns = d.turns ?? [];
+  const ask = d.asksage ?? [];
+  const askAnoms = ask.filter((r) => r.anomaly || r.ok === false).length;
   h += chips([
     { cls: "f", n: tel.length, l: "events" },
     { cls: "g", n: runs.length, l: "runs" },
     { cls: "g", n: turns.length, l: "turns" },
     { cls: "q", n: blk.length, l: "live blocks" },
     { cls: "a", n: exp.length, l: "exports" },
+    ...(ask.length ? [{ cls: askAnoms ? "q" : "g", n: ask.length, l: "AskSage calls" } as const] : []),
   ]);
+  // P-ASKSAGE.1 (ADR-0055): AskSage tool-loop diagnostics. One row per non-streamed call. An `anomaly`
+  // (empty-response / truncated) or an error is the smoking gun for the loop "giving up too soon".
+  const askRows = ask.slice().reverse().map((r) => ({
+    route: String(r.route ?? ""),
+    model: String(r.model ?? "").replace(/^.*\//, ""),
+    via: String(r.via ?? (r.ok === false ? "-" : "")),
+    text: r.textLen ?? "",
+    calls: Array.isArray(r.toolCalls) ? (r.toolCalls as string[]).join(", ") : "",
+    stop: String(r.stopReason ?? ""),
+    flag: r.anomaly ? `⚠ ${r.anomaly}` : r.ok === false ? `✕ ${String(r.error ?? "error").slice(0, 60)}` : "ok",
+  }));
+  h += accordion("dev.asksage", "AskSage tool calls", "non-streamed loop · developer diagnostics",
+    table([{ key: "route", label: "route" }, { key: "model", label: "model", mono: true }, { key: "via", label: "parsed via", mono: true }, { key: "text", label: "txt", mono: true }, { key: "calls", label: "tool calls" }, { key: "stop", label: "stop", mono: true }, { key: "flag", label: "flag", pill: true }], askRows as unknown as Record<string, unknown>[]),
+    OPEN.has("dev.asksage") || askAnoms > 0, askAnoms ? `${ask.length} · ${askAnoms}⚠` : String(ask.length));
   h += accordion("dev.telemetry", "Telemetry stream", "recent · metadata only",
     table([{ key: "event", label: "event" }, { key: "run_id", label: "run", mono: true }, { key: "session_id", label: "session", mono: true }, { key: "created_at", label: "at", mono: true }], tel),
     true, String(tel.length));

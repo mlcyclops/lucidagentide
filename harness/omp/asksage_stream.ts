@@ -20,6 +20,27 @@ export interface AsksageStreamCfg { base: string; key: string }
 
 const isRecord = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
 
+// ── Diagnostics (P-ASKSAGE.1, ADR-0055) ─────────────────────────────────────────────────────────────
+// AskSage serves Claude/Gemini NON-streamed, so each streamSimple call is one HTTP round-trip = one
+// assistant turn; omp drives the agentic loop. When that loop "gives up too soon" (tools run, files end
+// up half-written, no retry), the usual cause is invisible: a follow-up response we parse to EMPTY text
+// + ZERO tool calls makes omp think the model finished. These diagnostics make every call observable.
+// Enabled by env LUCID_ASKSAGE_DEBUG (the desktop sets it in developer mode). One `[ASKSAGE_DIAG] {json}`
+// line per call to stderr; acp_backend's onStderr captures it into the developer Logs panel.
+function diag(rec: Record<string, unknown>): void {
+  if (!process.env.LUCID_ASKSAGE_DEBUG) return;
+  try { process.stderr.write(`[ASKSAGE_DIAG] ${JSON.stringify(rec)}\n`); } catch { /* never let logging break a turn */ }
+}
+/** A short, safe snippet of a raw response for the anomaly/error log (never the whole body). */
+function snippet(j: unknown): string {
+  try { return JSON.stringify(j).slice(0, 600); } catch { return String(j).slice(0, 600); }
+}
+function safeJsonArgs(v: unknown): Record<string, any> {
+  if (isRecord(v)) return v;
+  if (typeof v === "string") { try { const p = JSON.parse(v); return isRecord(p) ? p : {}; } catch { return {}; } }
+  return {};
+}
+
 // omp ToolCall content block (the shape omp's agent loop executes + the gate scans).
 interface OmpToolCall { type: "toolCall"; id: string; name: string; arguments: Record<string, any> }
 
@@ -129,28 +150,59 @@ const jsonHeaders = (key: string, extra: Record<string, string> = {}) => ({
 interface RouteResult { text: string; usage: { input: number; output: number; cacheRead: number; cacheWrite: number } }
 interface AnthropicResult extends RouteResult { toolCalls: OmpToolCall[]; stopReason: "stop" | "length" | "toolUse" }
 
+// Locate the Anthropic content blocks TOLERANTLY. The standard reply is `{ content: [...] }` (verified
+// live for text), but a proxy may wrap it. Fallbacks can only RECOVER content the strict parse would
+// drop (they fire only when `content` is absent), and `via` records which shape actually matched so a
+// live test reveals the real wire format instead of silently emitting an empty turn. ADR-0055.
+function anthropicBlocks(j: any): { blocks: any[]; via: string } {
+  if (Array.isArray(j?.content)) return { blocks: j.content, via: "content" };
+  if (Array.isArray(j?.response?.content)) return { blocks: j.response.content, via: "response.content" };
+  if (Array.isArray(j?.message?.content)) return { blocks: j.message.content, via: "message.content" };
+  // Some gateways normalize everything to the OpenAI chat shape.
+  const choice = j?.choices?.[0]?.message;
+  if (isRecord(choice)) {
+    const b: any[] = [];
+    if (typeof choice.content === "string" && choice.content) b.push({ type: "text", text: choice.content });
+    for (const tc of (Array.isArray(choice.tool_calls) ? choice.tool_calls : [])) b.push({ type: "tool_use", id: (tc as any)?.id, name: (tc as any)?.function?.name, input: safeJsonArgs((tc as any)?.function?.arguments) });
+    if (b.length) return { blocks: b, via: "openai-choices" };
+  }
+  for (const k of ["response", "message", "completion", "text", "answer"]) {
+    if (typeof j?.[k] === "string" && j[k].trim()) return { blocks: [{ type: "text", text: j[k] }], via: `string:${k}` };
+  }
+  return { blocks: [], via: "none" };
+}
+
 // Call AskSage's Anthropic Messages route WITH tool support: pass the tool definitions, and parse both
 // text and `tool_use` content blocks from the reply so omp can execute the calls and loop (previously
 // tools were dropped, so Claude emitted tool-call XML as plain text and nothing ran).
 async function callAnthropic(cfg: AsksageStreamCfg, model: string, system: string, messages: AnthropicMsg[], tools: any[] | undefined, maxTokens: number): Promise<AnthropicResult> {
   const body: any = { model, max_tokens: maxTokens, ...(system ? { system } : {}), messages };
+  const toolNames = Array.isArray(tools) ? tools.map((t) => t?.name) : [];
   if (Array.isArray(tools) && tools.length) {
     body.tools = tools.map((t) => ({ name: t.name, description: t.description ?? "", input_schema: toolInputSchema(t) }));
   }
-  const r = await fetch(`${cfg.base}/anthropic/v1/messages`, {
-    method: "POST",
-    headers: jsonHeaders(cfg.key, { "anthropic-version": "2023-06-01" }),
-    body: JSON.stringify(body),
-  });
+  const reqDiag = { route: "anthropic", model, maxTokens, tools: toolNames, msgs: messages.length };
+  let r: Response;
+  try {
+    r = await fetch(`${cfg.base}/anthropic/v1/messages`, { method: "POST", headers: jsonHeaders(cfg.key, { "anthropic-version": "2023-06-01" }), body: JSON.stringify(body) });
+  } catch (e) {
+    diag({ ...reqDiag, ok: false, error: `fetch failed: ${String((e as Error)?.message ?? e)}` });
+    throw e;
+  }
   const j: any = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(j?.error?.message ?? `AskSage anthropic HTTP ${r.status}`);
-  const content: any[] = Array.isArray(j?.content) ? j.content : [];
+  if (!r.ok) {
+    diag({ ...reqDiag, status: r.status, ok: false, error: j?.error?.message ?? `HTTP ${r.status}`, raw: snippet(j) });
+    throw new Error(j?.error?.message ?? `AskSage anthropic HTTP ${r.status}`);
+  }
+  const { blocks: content, via } = anthropicBlocks(j);
   const text = content.filter((c) => c?.type === "text" && typeof c.text === "string").map((c) => c.text).join("");
   const toolCalls: OmpToolCall[] = content
     .filter((c) => c?.type === "tool_use")
     .map((c) => ({ type: "toolCall", id: String(c.id ?? ""), name: String(c.name ?? ""), arguments: isRecord(c.input) ? c.input : {} }));
   const stopReason: AnthropicResult["stopReason"] = j?.stop_reason === "tool_use" || toolCalls.length ? "toolUse" : j?.stop_reason === "max_tokens" ? "length" : "stop";
   const u = j?.usage ?? {};
+  const anomaly = (!text && !toolCalls.length) ? "empty-response" : stopReason === "length" ? "truncated" : undefined;
+  diag({ ...reqDiag, status: r.status, ok: true, respKeys: Object.keys(j ?? {}), via, textLen: text.length, toolCalls: toolCalls.map((t) => t.name), stopReason: j?.stop_reason ?? stopReason, usage: { in: u.input_tokens ?? 0, out: u.output_tokens ?? 0 }, ...(anomaly ? { anomaly, raw: snippet(j) } : {}) });
   return { text, toolCalls, stopReason, usage: { input: u.input_tokens ?? 0, output: u.output_tokens ?? 0, cacheRead: u.cache_read_input_tokens ?? 0, cacheWrite: u.cache_creation_input_tokens ?? 0 } };
 }
 
@@ -189,7 +241,7 @@ async function callQuery(cfg: AsksageStreamCfg, system: string, msgs: { role: st
   if (persona) body.persona = persona;
   const r = await fetch(`${cfg.base}/query`, { method: "POST", headers: jsonHeaders(cfg.key), body: JSON.stringify(body) });
   const j: any = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(j?.error ?? j?.message ?? `AskSage query HTTP ${r.status}`);
+  if (!r.ok) { diag({ route: "query", model, status: r.status, ok: false, error: j?.error ?? j?.message ?? `HTTP ${r.status}`, raw: snippet(j) }); throw new Error(j?.error ?? j?.message ?? `AskSage query HTTP ${r.status}`); }
   const raw = String(j?.message ?? j?.response ?? "").trim();
   const { body: answer, refs } = splitReferences(raw);
   // Prefer the datasets AskSage reports it actually grounded on (provenance) over what we asked for.
@@ -213,26 +265,49 @@ interface GoogleResult extends RouteResult { toolCalls: OmpToolCall[]; stopReaso
 // Mirrors omp's native Google provider — `parametersJsonSchema` (full JSON Schema, normalized for
 // Google) for real Gemini models. Gemini gives no call id, so we mint a synthetic one (omp tracks the
 // call→result mapping internally and replays the result back by NAME).
+// Locate the Gemini parts TOLERANTLY (mirrors anthropicBlocks). Standard shape is
+// candidates[0].content.parts; `via` records what matched so a live test reveals the real format. ADR-0055.
+function googleParts(j: any): { parts: any[]; via: string } {
+  const std = j?.candidates?.[0]?.content?.parts;
+  if (Array.isArray(std)) return { parts: std, via: "candidates" };
+  if (Array.isArray(j?.content?.parts)) return { parts: j.content.parts, via: "content.parts" };
+  if (Array.isArray(j?.parts)) return { parts: j.parts, via: "parts" };
+  for (const k of ["response", "message", "text", "answer"]) {
+    if (typeof j?.[k] === "string" && j[k].trim()) return { parts: [{ text: j[k] }], via: `string:${k}` };
+  }
+  return { parts: [], via: "none" };
+}
+
 async function callGoogle(cfg: AsksageStreamCfg, model: string, system: string, contents: GoogleContent[], tools: any[] | undefined, maxTokens: number): Promise<GoogleResult> {
   const body: any = { contents, ...(system ? { systemInstruction: { parts: [{ text: system }] } } : {}), generationConfig: { maxOutputTokens: maxTokens } };
+  const toolNames = Array.isArray(tools) ? tools.map((t) => t?.name) : [];
   if (Array.isArray(tools) && tools.length) {
     body.tools = [{ functionDeclarations: tools.map((t) => ({ name: t.name, description: t.description ?? "", parametersJsonSchema: normalizeSchemaForGoogle(toolWireSchema(t)) })) }];
   }
-  const r = await fetch(`${cfg.base}/google/v1beta/models/${model}:generateContent`, {
-    method: "POST",
-    headers: jsonHeaders(cfg.key),
-    body: JSON.stringify(body),
-  });
+  const reqDiag = { route: "google", model, maxTokens, tools: toolNames, msgs: contents.length };
+  let r: Response;
+  try {
+    r = await fetch(`${cfg.base}/google/v1beta/models/${model}:generateContent`, { method: "POST", headers: jsonHeaders(cfg.key), body: JSON.stringify(body) });
+  } catch (e) {
+    diag({ ...reqDiag, ok: false, error: `fetch failed: ${String((e as Error)?.message ?? e)}` });
+    throw e;
+  }
   const j: any = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(j?.error?.message ?? `AskSage google HTTP ${r.status}`);
-  const parts: any[] = j?.candidates?.[0]?.content?.parts ?? [];
+  if (!r.ok) {
+    diag({ ...reqDiag, status: r.status, ok: false, error: j?.error?.message ?? `HTTP ${r.status}`, raw: snippet(j) });
+    throw new Error(j?.error?.message ?? `AskSage google HTTP ${r.status}`);
+  }
+  const { parts, via } = googleParts(j);
   const text = parts.filter((p) => typeof p?.text === "string").map((p) => p.text).join("");
   let n = 0;
   const toolCalls: OmpToolCall[] = parts
     .filter((p) => p?.functionCall)
     .map((p) => ({ type: "toolCall", id: `${p.functionCall.name || "tool"}-${n++}`, name: String(p.functionCall.name ?? ""), arguments: isRecord(p.functionCall.args) ? p.functionCall.args : {} }));
-  const stopReason: GoogleResult["stopReason"] = toolCalls.length ? "toolUse" : j?.candidates?.[0]?.finishReason === "MAX_TOKENS" ? "length" : "stop";
+  const finish = j?.candidates?.[0]?.finishReason;
+  const stopReason: GoogleResult["stopReason"] = toolCalls.length ? "toolUse" : finish === "MAX_TOKENS" ? "length" : "stop";
   const um = j?.usageMetadata ?? {};
+  const anomaly = (!text && !toolCalls.length) ? "empty-response" : stopReason === "length" ? "truncated" : undefined;
+  diag({ ...reqDiag, status: r.status, ok: true, respKeys: Object.keys(j ?? {}), via, textLen: text.length, toolCalls: toolCalls.map((t) => t.name), stopReason: finish ?? stopReason, usage: { in: um.promptTokenCount ?? 0, out: um.candidatesTokenCount ?? 0 }, ...(anomaly ? { anomaly, raw: snippet(j) } : {}) });
   return { text, toolCalls, stopReason, usage: { input: um.promptTokenCount ?? 0, output: um.candidatesTokenCount ?? 0, cacheRead: 0, cacheWrite: 0 } };
 }
 

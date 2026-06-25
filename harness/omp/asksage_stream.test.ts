@@ -136,3 +136,88 @@ describe("AskSage Gemini tool use", () => {
     expect(body.tools).toBeUndefined();
   });
 });
+
+// ── Diagnostics + tolerant extraction (P-ASKSAGE.1, ADR-0055) ────────────────────────────────────────
+// These cover the "gives up too soon" failure mode: a follow-up response whose content we'd otherwise
+// drop (proxy wraps it differently) → empty turn → omp thinks the model finished. Tolerant extraction
+// recovers it; the diagnostics make every call (and the empty-response anomaly) observable.
+function mockResp(opts: { ok?: boolean; status?: number; json: any }, capture?: (url: string, init: any) => void): void {
+  globalThis.fetch = (async (url: any, init: any) => {
+    capture?.(String(url), init);
+    return { ok: opts.ok ?? true, status: opts.status ?? 200, json: async () => opts.json } as any;
+  }) as any;
+}
+/** Run `fn` with LUCID_ASKSAGE_DEBUG on and capture parsed `[ASKSAGE_DIAG]` records from stderr. */
+async function withDiag(fn: () => Promise<void>): Promise<any[]> {
+  const lines: string[] = [];
+  const orig = process.stderr.write.bind(process.stderr);
+  process.env.LUCID_ASKSAGE_DEBUG = "1";
+  (process.stderr as any).write = (s: any) => { lines.push(String(s)); return true; };
+  try { await fn(); } finally { (process.stderr as any).write = orig; delete process.env.LUCID_ASKSAGE_DEBUG; }
+  return lines.filter((l) => l.includes("[ASKSAGE_DIAG]")).map((l) => JSON.parse(l.slice(l.indexOf("{"))));
+}
+
+describe("AskSage diagnostics + tolerant extraction", () => {
+  const google = makeAsksageStream("google", () => cfg);
+  const gemini = { id: "gemini-x", api: "asksage-google", provider: "asksage-google", maxTokens: 1000 };
+
+  test("Anthropic: a `response.content`-wrapped reply is still parsed (not dropped)", async () => {
+    mockResp({ json: { response: { content: [{ type: "text", text: "recovered text" }] }, usage: {} } });
+    const done = (await collect(anthropic(model, { messages: [{ role: "user", content: "x" }] }))).find((e) => e.type === "done");
+    expect(done.message.content).toEqual([{ type: "text", text: "recovered text" }]);
+    expect(done.reason).toBe("stop");
+  });
+
+  test("Anthropic: an OpenAI-chat-shaped reply (choices[].message) recovers text + tool calls", async () => {
+    mockResp({ json: { choices: [{ message: { content: "doing it", tool_calls: [{ id: "c1", function: { name: "write_file", arguments: '{"path":"a.txt"}' } }] } }], usage: {} } });
+    const events = await collect(anthropic(model, { messages: [{ role: "user", content: "x" }], tools: [writeTool] }));
+    const end = events.find((e) => e.type === "toolcall_end");
+    expect(end.toolCall).toEqual({ type: "toolCall", id: "c1", name: "write_file", arguments: { path: "a.txt" } });
+    expect(events.find((e) => e.type === "done").reason).toBe("toolUse");
+  });
+
+  test("Gemini: a `{response: \"...\"}`-wrapped reply is still parsed", async () => {
+    mockResp({ json: { response: "gemini wrapped reply", usageMetadata: {} } });
+    const done = (await collect(google(gemini, { messages: [{ role: "user", content: "x" }] }))).find((e) => e.type === "done");
+    expect(done.message.content).toEqual([{ type: "text", text: "gemini wrapped reply" }]);
+  });
+
+  test("diag is OFF without the env (no [ASKSAGE_DIAG] lines)", async () => {
+    mockResp({ json: { content: [{ type: "text", text: "hi" }], usage: {} } });
+    const lines: string[] = [];
+    const orig = process.stderr.write.bind(process.stderr);
+    (process.stderr as any).write = (s: any) => { lines.push(String(s)); return true; };
+    try { await collect(anthropic(model, { messages: [{ role: "user", content: "x" }] })); } finally { (process.stderr as any).write = orig; }
+    expect(lines.some((l) => l.includes("[ASKSAGE_DIAG]"))).toBe(false);
+  });
+
+  test("diag records the request + parsed response per call (via=content, stopReason)", async () => {
+    const recs = await withDiag(async () => {
+      mockResp({ json: { content: [{ type: "text", text: "ok" }], stop_reason: "end_turn", usage: { input_tokens: 5, output_tokens: 2 } } });
+      await collect(anthropic(model, { messages: [{ role: "user", content: "x" }], tools: [writeTool] }));
+    });
+    expect(recs).toHaveLength(1);
+    expect(recs[0]).toMatchObject({ route: "anthropic", ok: true, via: "content", tools: ["write_file"], textLen: 2 });
+    expect(recs[0].anomaly).toBeUndefined();
+  });
+
+  test("diag flags an empty ok response as the `empty-response` anomaly (the give-up smoking gun)", async () => {
+    const recs = await withDiag(async () => {
+      mockResp({ json: { id: "x", usage: {} } }); // no content, no tool calls → empty turn
+      await collect(anthropic(model, { messages: [{ role: "user", content: "x" }] }));
+    });
+    expect(recs[0].anomaly).toBe("empty-response");
+    expect(recs[0].via).toBe("none");
+    expect(typeof recs[0].raw).toBe("string"); // raw snippet captured for inspection
+  });
+
+  test("diag captures HTTP errors with a raw snippet, and the stream errors", async () => {
+    const recs = await withDiag(async () => {
+      mockResp({ ok: false, status: 502, json: { error: { message: "bad gateway" } } });
+      const events = await collect(google(gemini, { messages: [{ role: "user", content: "x" }] }));
+      expect(events.some((e) => e.type === "error")).toBe(true);
+    });
+    expect(recs[0]).toMatchObject({ route: "google", ok: false, status: 502 });
+    expect(recs[0].error).toContain("bad gateway");
+  });
+});
