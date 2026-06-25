@@ -202,7 +202,9 @@ async function callAnthropic(cfg: AsksageStreamCfg, model: string, system: strin
   const stopReason: AnthropicResult["stopReason"] = j?.stop_reason === "tool_use" || toolCalls.length ? "toolUse" : j?.stop_reason === "max_tokens" ? "length" : "stop";
   const u = j?.usage ?? {};
   const anomaly = (!text && !toolCalls.length) ? "empty-response" : stopReason === "length" ? "truncated" : undefined;
-  diag({ ...reqDiag, status: r.status, ok: true, respKeys: Object.keys(j ?? {}), via, textLen: text.length, toolCalls: toolCalls.map((t) => t.name), stopReason: j?.stop_reason ?? stopReason, usage: { in: u.input_tokens ?? 0, out: u.output_tokens ?? 0 }, ...(anomaly ? { anomaly, raw: snippet(j) } : {}) });
+  // Log the MAPPED stopReason (what actually drives omp's loop: toolUse = continue) plus the raw provider
+  // finish, so a tool-calling row reads "toolUse", not the bare provider value.
+  diag({ ...reqDiag, status: r.status, ok: true, respKeys: Object.keys(j ?? {}), via, textLen: text.length, toolCalls: toolCalls.map((t) => t.name), stopReason, finish: j?.stop_reason, usage: { in: u.input_tokens ?? 0, out: u.output_tokens ?? 0 }, ...(anomaly ? { anomaly, raw: snippet(j) } : {}) });
   return { text, toolCalls, stopReason, usage: { input: u.input_tokens ?? 0, output: u.output_tokens ?? 0, cacheRead: u.cache_read_input_tokens ?? 0, cacheWrite: u.cache_creation_input_tokens ?? 0 } };
 }
 
@@ -307,7 +309,9 @@ async function callGoogle(cfg: AsksageStreamCfg, model: string, system: string, 
   const stopReason: GoogleResult["stopReason"] = toolCalls.length ? "toolUse" : finish === "MAX_TOKENS" ? "length" : "stop";
   const um = j?.usageMetadata ?? {};
   const anomaly = (!text && !toolCalls.length) ? "empty-response" : stopReason === "length" ? "truncated" : undefined;
-  diag({ ...reqDiag, status: r.status, ok: true, respKeys: Object.keys(j ?? {}), via, textLen: text.length, toolCalls: toolCalls.map((t) => t.name), stopReason: finish ?? stopReason, usage: { in: um.promptTokenCount ?? 0, out: um.candidatesTokenCount ?? 0 }, ...(anomaly ? { anomaly, raw: snippet(j) } : {}) });
+  // Gemini always reports finishReason "STOP" even when it emits a functionCall; log the MAPPED reason
+  // (toolUse = the loop continues) plus the raw finish, so a tool-calling row reads "toolUse", not "STOP".
+  diag({ ...reqDiag, status: r.status, ok: true, respKeys: Object.keys(j ?? {}), via, textLen: text.length, toolCalls: toolCalls.map((t) => t.name), stopReason, finish, usage: { in: um.promptTokenCount ?? 0, out: um.candidatesTokenCount ?? 0 }, ...(anomaly ? { anomaly, raw: snippet(j) } : {}) });
   return { text, toolCalls, stopReason, usage: { input: um.promptTokenCount ?? 0, output: um.candidatesTokenCount ?? 0, cacheRead: 0, cacheWrite: 0 } };
 }
 

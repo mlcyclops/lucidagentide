@@ -1713,10 +1713,11 @@ function devHtml(d: import("./bridge.ts").DevView | null): string {
     text: r.textLen ?? "",
     calls: Array.isArray(r.toolCalls) ? (r.toolCalls as string[]).join(", ") : "",
     stop: String(r.stopReason ?? ""),
+    finish: String(r.finish ?? ""),
     flag: r.anomaly ? `⚠ ${r.anomaly}` : r.ok === false ? `✕ ${String(r.error ?? "error").slice(0, 60)}` : "ok",
   }));
   h += accordion("dev.asksage", "AskSage tool calls", "non-streamed loop · developer diagnostics",
-    table([{ key: "when", label: "when", mono: true }, { key: "route", label: "route" }, { key: "model", label: "model", mono: true }, { key: "via", label: "parsed via", mono: true }, { key: "text", label: "txt", mono: true }, { key: "calls", label: "tool calls" }, { key: "stop", label: "stop", mono: true }, { key: "flag", label: "flag", pill: true }], askRows as unknown as Record<string, unknown>[]),
+    table([{ key: "when", label: "when", mono: true }, { key: "route", label: "route" }, { key: "model", label: "model", mono: true }, { key: "via", label: "parsed via", mono: true }, { key: "text", label: "txt", mono: true }, { key: "calls", label: "tool calls" }, { key: "stop", label: "loop", mono: true }, { key: "finish", label: "raw", mono: true }, { key: "flag", label: "flag", pill: true }], askRows as unknown as Record<string, unknown>[]),
     OPEN.has("dev.asksage") || askAnoms > 0, askAnoms ? `${ask.length} · ${askAnoms}⚠` : String(ask.length));
   h += accordion("dev.telemetry", "Telemetry stream", "recent · metadata only",
     table([{ key: "event", label: "event" }, { key: "run_id", label: "run", mono: true }, { key: "session_id", label: "session", mono: true }, { key: "created_at", label: "at", mono: true }], tel),
