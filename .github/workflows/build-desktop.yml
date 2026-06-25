@@ -1,9 +1,9 @@
-# Build the LucidAgentIDE desktop installers (macOS .zip app bundle + Windows .exe).
+# Build the LucidAgentIDE desktop installers (macOS .zip app bundle + Windows .exe + Linux AppImage).
 #
 # electron-builder can't cross-build/sign a mac app from Windows, so this runs
 # the real packaging on native runners: macOS for the .zip bundle, Windows for the
-# NSIS installer + portable .exe. Both bundle the repo into the app
-# (extraResources) per desktop/package.json.
+# NSIS installer + portable .exe, and Ubuntu for the AppImage. All bundle the repo
+# into the app (extraResources) per desktop/package.json.
 #
 # (macOS ships .zip, not .dmg: the default DMG layout drives a Finder/AppleScript
 #  background pass that is fragile on headless Apple-Silicon runners. The .zip is a
@@ -41,6 +41,9 @@ jobs:
           - os: windows-latest
             label: Windows (NSIS + portable, x64)
             script: dist:win
+          - os: ubuntu-latest
+            label: Linux (AppImage, x64)
+            script: dist:linux
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
@@ -69,9 +72,10 @@ jobs:
         working-directory: desktop
         env:
           # --- Code signing (all optional; absent secrets ⇒ unsigned build) ---
-          # Per-OS Authenticode / Apple Developer cert as base64-encoded PKCS#12.
-          CSC_LINK: ${{ runner.os == 'macOS' && secrets.MAC_CSC_LINK || secrets.WIN_CSC_LINK }}
-          CSC_KEY_PASSWORD: ${{ runner.os == 'macOS' && secrets.MAC_CSC_KEY_PASSWORD || secrets.WIN_CSC_KEY_PASSWORD }}
+          # Per-OS Authenticode / Apple Developer cert as base64-encoded PKCS#12. Linux (AppImage) is
+          # unsigned, so it must resolve to empty — don't let it inherit the Windows cert.
+          CSC_LINK: ${{ runner.os == 'macOS' && secrets.MAC_CSC_LINK || runner.os == 'Windows' && secrets.WIN_CSC_LINK || '' }}
+          CSC_KEY_PASSWORD: ${{ runner.os == 'macOS' && secrets.MAC_CSC_KEY_PASSWORD || runner.os == 'Windows' && secrets.WIN_CSC_KEY_PASSWORD || '' }}
           # Only hunt the keychain for a mac identity when a mac cert is provided.
           CSC_IDENTITY_AUTO_DISCOVERY: ${{ runner.os == 'macOS' && secrets.MAC_CSC_LINK != '' }}
           # macOS notarization (electron-builder runs notarytool when these are set).
@@ -91,6 +95,7 @@ jobs:
             desktop/release/*.zip
             desktop/release/*Setup*.exe
             desktop/release/*portable*.exe
+            desktop/release/*.AppImage
             desktop/release/*.blockmap
             desktop/release/latest*.yml
 
@@ -105,6 +110,7 @@ jobs:
             desktop/release/*.zip
             desktop/release/*Setup*.exe
             desktop/release/*portable*.exe
+            desktop/release/*.AppImage
             desktop/release/*.blockmap
             desktop/release/latest*.yml
 
@@ -153,11 +159,12 @@ jobs:
           make_latest: "true"
           body: |
             Rolling build — auto-updated on every successful CI build (commit ${{ github.sha }}).
-            Always the newest Windows + macOS installers. For a pinned version, see the tagged releases.
+            Always the newest Windows, macOS, and Linux installers. For a pinned version, see the tagged releases.
           files: |
             dist/*.dmg
             dist/*Setup*.exe
             dist/*portable*.exe
+            dist/*.AppImage
             dist/*.zip
             dist/*.blockmap
             dist/latest*.yml

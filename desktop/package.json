@@ -116,7 +116,8 @@
     "linux": {
       "icon": "build/icon.png",
       "category": "Development",
-      "target": ["AppImage"]
+      "target": ["AppImage"],
+      "artifactName": "${productName}-x86_64.${ext}"
     },
     "publish": [
       {
