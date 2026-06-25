@@ -4,6 +4,13 @@ Three lines per session: **shipped / stubbed / next** (CLAUDE.md session ritual)
 
 -----
 
+## R-06: subagent edits gated + attributed, no stash-masking (ADR-0055)
+- **shipped:** verified + regression-locked that subagent (`task`) edits are NOT masked from the gate or code-activity attribution. With task isolation OFF (ADR-0032), a subagent edits the REAL workspace → its write/edit tool calls route through the same in-process fail-closed gate → ADR-0031 attribution counts them from the gate's tool_result hook, and `EditResultLike` carries no agent/provenance dimension (so nothing can drop a subagent's edit). `harness/runs/loc_count_subagent.test.ts` (3 tests). ADR-0055.
+- **stubbed:** the stash-isolate/apply/merge masking risk only exists if isolation is RE-enabled (ADR-0032 conditions: patch-review UI + reliable Windows merge-back) — ADR-0055 is the tripwire to re-open R-06 then (gate-scan + attribute the merged diff; nested-repo dirty-state test).
+- **next:** add-on PI items continue (R-08 #38, B-ADR-001 #40, B-ADR-006 #42).
+
+-----
+
 ## P-EXT.5.0: attach-mode roadmap (planning only — ADR-0039)
 - **shipped:** ADR-0039 in DECISIONS.md — designs the deferred ADR-0038 optional attach-mode (an IDE
   extension SHARING the running desktop's already-gated session instead of spawning its own `lucid acp`).
