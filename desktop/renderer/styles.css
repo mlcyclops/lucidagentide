@@ -644,6 +644,49 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .goal-banner{display:flex;align-items:center;gap:9px;font-size:13px;font-weight:600;padding:10px 13px;border-radius:11px}
 .goal-banner.ok{color:var(--green);background:color-mix(in srgb,var(--green) 14%,transparent);border:1px solid color-mix(in srgb,var(--green) 40%,var(--line))}
 .goal-banner.stop{color:var(--txt-2);background:var(--bg-2);border:1px solid var(--line)}
+/* P-GOAL.9: the After-Action Report card — collapsible, with the metrics summary in the header. */
+.goal-aar{margin-top:10px;border:1px solid var(--line);border-radius:11px;background:var(--bg-2);overflow:hidden}
+.goal-aar>summary{cursor:pointer;list-style:none;display:flex;align-items:center;gap:7px;font-size:12px;padding:9px 12px;color:var(--txt-2)}
+.goal-aar>summary::-webkit-details-marker{display:none}
+.goal-aar>summary b{font-weight:600;color:var(--txt-1)}
+.goal-aar>summary code{font-family:var(--mono);font-size:11px;color:var(--txt-4)}
+.goal-aar-body{padding:4px 14px 12px;border-top:1px solid var(--line);font-size:12.5px}
+.goal-aar-body pre{overflow:auto}
+/* P-GOAL.10: the cross-run evaluation banner in the goal launcher. */
+.goal-stats{margin:4px 0 10px;border:1px solid var(--line);border-radius:11px;padding:10px 12px;background:var(--bg-2)}
+.goal-stats[data-tone="ok"]{border-color:color-mix(in srgb,var(--green) 38%,var(--line))}
+.goal-stats[data-tone="low"]{border-color:color-mix(in srgb,var(--amber) 38%,var(--line))}
+.gs-head{display:flex;align-items:center;gap:7px;font-size:12px;color:var(--txt-2);margin-bottom:8px}
+.gs-head .gs-sum{margin-left:auto;font-size:11px;color:var(--txt-4)}
+.gs-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+.gs-cell{display:flex;flex-direction:column;align-items:center;gap:1px;padding:6px 4px;border-radius:8px;background:var(--bg-1)}
+.gs-cell .gs-n{font-size:16px;font-weight:600;color:var(--txt-1)}
+.gs-cell .gs-l{font-size:10px;color:var(--txt-4);text-align:center}
+.gs-mix{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.gs-mix .gs-tool{font-size:10.5px;color:var(--txt-3);background:var(--bg-1);border:1px solid var(--line);border-radius:6px;padding:2px 7px}
+.gs-mix .gs-tool b{color:var(--txt-1)}
+.gs-blocker{display:flex;align-items:center;gap:5px;margin-top:8px;font-size:11px;color:var(--txt-4)}
+.gs-blocker span{color:var(--txt-3)}
+/* P-GOAL.12: Pre-Flight Audit — the optional design/readiness pass that pauses the builder. */
+.goal-preflight-btn{margin:0 0 8px;display:inline-flex;align-items:center;gap:6px}
+.preflight-modal{width:min(720px,94vw);max-height:90vh;overflow:auto;background:var(--bg-1);border:1px solid var(--line);border-radius:14px;padding:16px 18px;display:flex;flex-direction:column;gap:10px}
+.pf-form{display:flex;flex-direction:column;gap:8px}
+.pf-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.pf-f{display:flex;flex-direction:column;gap:4px;font-size:11px;color:var(--txt-3)}
+.pf-f>span{font-weight:600;color:var(--txt-2)}
+.pf-actions{display:flex;justify-content:flex-end;margin-top:4px}
+.pf-result{border-top:1px solid var(--line);padding-top:10px;display:flex;flex-direction:column;gap:10px}
+.pf-loading{display:flex;align-items:center;gap:7px;font-size:12px;color:var(--txt-3)}
+.pf-readiness{display:flex;align-items:center;gap:7px;font-size:13px;padding:9px 12px;border-radius:10px;background:var(--bg-2);border:1px solid var(--line)}
+.pf-readiness[data-tone="ok"]{border-color:color-mix(in srgb,var(--green) 45%,var(--line));color:var(--green)}
+.pf-readiness[data-tone="mid"]{border-color:color-mix(in srgb,var(--amber) 40%,var(--line))}
+.pf-readiness[data-tone="low"]{border-color:color-mix(in srgb,var(--amber) 45%,var(--line));color:var(--amber)}
+.pf-readiness b{color:var(--txt-1)}
+.pf-readiness[data-tone="ok"] b{color:var(--green)}
+.pf-report{font-size:12.5px;max-height:42vh;overflow:auto;border:1px solid var(--line);border-radius:10px;padding:6px 14px;background:var(--bg-2)}
+.pf-report pre{overflow:auto}
+.pf-adopt-row{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.pf-adopt-row code{font-family:var(--mono);font-size:11px;color:var(--txt-4)}
 /* The send button lives OUTSIDE the bordered .composer box (the expanding/scrolling input window),
    bottom-aligned beside it, so a long prompt's scroll region is just the text. */
 .composer-row{max-width:min(1080px,94vw);margin:0 auto;display:flex;align-items:flex-end;gap:8px}

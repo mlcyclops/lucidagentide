@@ -21,7 +21,13 @@ import { asksageOnly, attribution, checkerModel, lastModel, load as loadSettings
 import { managedConfig } from "./managed_config.ts";
 import { recommendCheckerModel, resolveCheckerModel, type ModelOption } from "./checker_model.ts";
 import { parseGoalVerdict } from "./goal_verdict.ts";
-import { appendGoalIteration, finishGoalMemory, type GoalMemory, resumeGoalMemory, startGoalMemory } from "./goal_memory.ts";
+import { appendGoalIteration, appendRunLog, finishGoalMemory, type GoalMemory, readRunLog, resumeGoalMemory, saveGoalReport, savePreflightReport, startGoalMemory } from "./goal_memory.ts";
+import { extractUrls, type IterStat, type LocStat, type LoopMetrics, type LoopOutcome, normalizeToolName, parseNumstat, renderLoopReport, stallSignature, summarizeLoop } from "./loop_report.ts";
+import { aggregateRuns, type LoopRunRecord, type RunStats, summarizeRunStats, toRunRecord } from "./loop_runlog.ts";
+import { addTurnSpend, type LoopSpend, newLoopSpend, normalizeBudget, overBudget } from "./loop_budget.ts";
+import { formatSpend } from "./loop_report.ts";
+import { assessReadiness, maturedGoalFrom, mergeMatured, parsePreflightJson, type PreflightSpec, preflightSystemPrompt, preflightUserPrompt, type ReadinessReport, relevantPriorRuns, renderLoopDesign, successCriteria, summarizePriorRuns } from "./loop_preflight.ts";
+import { execFileSync } from "node:child_process";
 import { type Automation, listAutomations, nextDueAutomation, updateAutomation } from "./automations.ts";
 import { type EgressChoice, egressDecision, recordEgress } from "./egress_policy.ts";
 
@@ -81,7 +87,9 @@ export type ChatEvent =
   | { type: "goal-check"; n: number; done: boolean; reason: string }
   | { type: "goal-done"; iters: number; reason: string }
   | { type: "goal-stop"; reason: string }
-  | { type: "done" };
+  // P-GOAL.9 (ADR-0054): the loop's last task — an After-Action Report (metrics + portable graphs).
+  | { type: "goal-report"; path: string; summary: string; markdown: string }
+  | { type: "done"; text?: string }; // text = the authoritative full assistant reply (reconciles lossy streaming)
 
 class Backend {
   private acp: ACPClient | null = null;
@@ -511,60 +519,159 @@ class Backend {
   // when given). Capped at `maxIters`, auto-stops on no-progress. Runs UNATTENDED — permissions are
   // auto-approved for the duration, but every tool call is still scanned fail-closed by the in-process
   // gate (that, not human approval, is the safety boundary). Streams the usual chat events plus goal-*.
-  async runGoal(opts: { goal: string; condition: string; command?: string; maxIters: number; resume?: string }, onEvent: (e: ChatEvent) => void): Promise<void> {
+  async runGoal(opts: { goal: string; condition: string; command?: string; maxIters: number; resume?: string; budgetUsd?: number; criteria?: string }, onEvent: (e: ChatEvent) => void): Promise<void> {
     const goal = opts.goal.trim();
     const condition = (opts.condition || opts.command || "the goal is fully accomplished").trim();
     const command = opts.command?.trim() || "";
+    const criteria = opts.criteria?.trim() || ""; // P-GOAL.12: matured success criteria for the checker
     const maxIters = Math.min(Math.max(1, Math.floor(opts.maxIters) || 6), 20); // hard ceiling
+    const budgetUsd = normalizeBudget(opts.budgetUsd); // P-GOAL.11: 0 = no cap (iteration cap stays the ceiling)
     const prevMode = this.permissionMode;
     this.permissionMode = "auto"; // unattended: auto-approve tool calls (the gate still scans every one)
     this.goalActive = true; this.goalCancelled = false;
     // P-GOAL.3/4: durable on-disk memory (best-effort). `resume` continues an existing loop-memory file
     // and injects its prior progress; otherwise start a fresh record.
     const resumed = opts.resume ? resumeGoalMemory(currentWorkspace(), opts.resume) : null;
-    const mem: GoalMemory | null = resumed ? resumed.mem : startGoalMemory(currentWorkspace(), Date.now().toString(36), { goal, condition, command });
+    // P-GOAL.9: a stable id shared by the memory file and the After-Action Report (same `<id>-<slug>`
+    // stem). When resuming, reuse the existing file's id so the report lands beside it.
+    const loopId = resumed ? (resumed.mem.rel.split("/").pop()?.split("-")[0] || Date.now().toString(36)) : Date.now().toString(36);
+    const mem: GoalMemory | null = resumed ? resumed.mem : startGoalMemory(currentWorkspace(), loopId, { goal, condition, command });
     if (mem) onEvent({ type: "goal-memory", path: mem.rel });
     const memNote = mem ? ` Your durable progress memory is the file ${mem.rel} (it records what's done across iterations).` : "";
-    const resumeNote = resumed ? `\n\nThis loop was already in progress. Below is the progress so far — do NOT redo completed work, continue from where it stopped:\n${resumed.prior.slice(0, 3000)}` : "";
+    // P-GOAL.9 fix: inject the TAIL of the prior progress (the most-recent iterations), not the head —
+    // a long resumed loop must see what it just did, not the stale opening rounds.
+    const resumeNote = resumed ? `\n\nThis loop was already in progress. Below is the most recent progress — do NOT redo completed work, continue from where it stopped:\n${resumed.prior.slice(-3000)}` : "";
+
+    // ── P-GOAL.9 (ADR-0054): run-time instrumentation feeding the After-Action Report ──────────────
+    const startedAt = Date.now();
+    const toolCalls: Record<string, number> = {};
+    const errors: { iter: number; detail: string }[] = [];
+    const websites = new Set<string>();
+    const perIteration: IterStat[] = [];
+    // LOC: pin a baseline COMMIT now; at the end, diff the tree against it (captures committed-since +
+    // uncommitted) and subtract any changes that were already present at start. Best-effort, git-only.
+    const startRef = this.gitHead();
+    const startDiff = startRef ? this.gitDiffVs(startRef) : null;
+    let terminalOutcome: LoopOutcome = "stopped";
+    let terminalReason = `stopped: hit the ${maxIters}-iteration cap without meeting the condition`;
+
     let noProgress = 0;
+    let lastSig = "";       // P-GOAL.9 (#2 Infinite Fix Loop): the prior round's blocker signature
+    let stallCount = 0;     // consecutive rounds stuck on the SAME blocker
+    let lastIterErrors = 0; // P-GOAL.9 (#3): tool failures last round, fed back into the next prompt
+    // P-GOAL.11 (ADR-0056): live spend + budget kill switch. We own the turn boundaries, so spend is
+    // just the sum of each maker turn's PEAK cost; context tokens are tracked as a peak, never summed.
+    let spend: LoopSpend = newLoopSpend();
+    let sawUsage = false;   // false ⇒ no usage telemetry at all ⇒ report spend as "unknown", not "$0"
     try {
       for (let i = 1; i <= maxIters; i++) {
-        if (this.goalCancelled) { onEvent({ type: "goal-stop", reason: "stopped by you" }); finishGoalMemory(mem, "stopped by you"); return; }
+        if (this.goalCancelled) { terminalOutcome = "cancelled"; terminalReason = "stopped by you"; onEvent({ type: "goal-stop", reason: terminalReason }); finishGoalMemory(mem, terminalReason); return; }
         onEvent({ type: "goal-iter", n: i, max: maxIters });
         let work = "";
         let actedThisIter = false;
+        let iterTools = 0, iterErrors = 0;
+        let turnPeakCost = 0, turnPeakCtx = 0, budgetHit = false;
         // Forward the maker's stream, but swallow the per-iteration `done` so the client sees ONE loop.
         const sink = (e: ChatEvent) => {
           if (e.type === "done") return;
           if (e.type === "token") work += e.text;
-          if (e.type === "tool" || e.type === "subagent") actedThisIter = true;
+          if (e.type === "tool") { actedThisIter = true; iterTools++; const t = normalizeToolName(e.name); toolCalls[t] = (toolCalls[t] ?? 0) + 1; for (const u of extractUrls(e.detail)) websites.add(u); }
+          else if (e.type === "subagent") { actedThisIter = true; iterTools++; toolCalls.subagent = (toolCalls.subagent ?? 0) + 1; }
+          else if (e.type === "block") { iterErrors++; errors.push({ iter: i, detail: `${e.tool}: ${e.reason}`.slice(0, 200) }); }
+          else if (e.type === "usage") {
+            sawUsage = true;
+            turnPeakCost = Math.max(turnPeakCost, e.cost);
+            turnPeakCtx = Math.max(turnPeakCtx, e.used);
+            // P-GOAL.11 kill switch: abort THIS turn the instant running spend crosses the cap.
+            if (!budgetHit && overBudget(spend.usd + turnPeakCost, budgetUsd)) { budgetHit = true; this.cancel(); }
+          }
           onEvent(e);
         };
+        // P-GOAL.9 (#3): when the previous round had failed/blocked tool calls, tell the maker so it
+        // changes approach instead of re-issuing the same failing call.
+        const failNote = lastIterErrors > 0 ? ` Note: ${lastIterErrors} tool call${lastIterErrors === 1 ? "" : "s"} failed or were blocked last round — fix the cause (paths, permissions, syntax) rather than repeating them.` : "";
         const iterText = i === 1
           ? `${goal}\n\nWork toward this goal now. The stop condition is: ${condition}${command ? ` (verified by running \`${command}\`)` : ""}. Take the next concrete step.${memNote}${resumeNote}`
-          : `Continue toward the goal. Stop condition: ${condition}. Take the next concrete step; if you believe the condition now holds, say so briefly and stop.${memNote}`;
+          : `Continue toward the goal. Stop condition: ${condition}. Take the next concrete step; if you believe the condition now holds, say so briefly and stop.${memNote}${failNote}`;
         await this.prompt(iterText, sink);
-        if (this.goalCancelled) { onEvent({ type: "goal-stop", reason: "stopped by you" }); finishGoalMemory(mem, "stopped by you"); return; }
+        for (const u of extractUrls(work)) websites.add(u); // links the maker mentioned in its own text
+        lastIterErrors = iterErrors;
+        spend = addTurnSpend(spend, turnPeakCost, turnPeakCtx); // P-GOAL.11: fold this turn's peak into the running spend
+        if (this.goalCancelled) { perIteration.push({ n: i, tools: iterTools, errors: iterErrors, done: false, reason: "cancelled" }); terminalOutcome = "cancelled"; terminalReason = "stopped by you"; onEvent({ type: "goal-stop", reason: terminalReason }); finishGoalMemory(mem, terminalReason); return; }
+        // P-GOAL.11 (ADR-0056): budget kill switch — once spend crosses the cap, stop the loop (the
+        // current turn was already aborted mid-stream above). The bill can't run away unattended.
+        if (overBudget(spend.usd, budgetUsd)) {
+          perIteration.push({ n: i, tools: iterTools, errors: iterErrors, done: false, reason: `budget cap ${formatSpend(budgetUsd)} reached` });
+          terminalReason = `stopped: budget cap ${formatSpend(budgetUsd)} reached (spent ${formatSpend(spend.usd)})`;
+          onEvent({ type: "goal-stop", reason: terminalReason }); finishGoalMemory(mem, terminalReason); return;
+        }
 
-        const verdict = await this.checkGoal({ goal, condition, command, lastWork: work });
+        const verdict = await this.checkGoal({ goal, condition, command, lastWork: work, criteria });
         onEvent({ type: "goal-check", n: i, done: verdict.done, reason: verdict.reason });
         appendGoalIteration(mem, i, work, verdict);
-        if (verdict.done) { onEvent({ type: "goal-done", iters: i, reason: verdict.reason }); finishGoalMemory(mem, `Goal met in ${i} iteration${i === 1 ? "" : "s"}: ${verdict.reason}`); return; }
+        perIteration.push({ n: i, tools: iterTools, errors: iterErrors, done: verdict.done, reason: verdict.reason });
+        if (verdict.done) { terminalOutcome = "met"; terminalReason = verdict.reason; onEvent({ type: "goal-done", iters: i, reason: verdict.reason }); finishGoalMemory(mem, `Goal met in ${i} iteration${i === 1 ? "" : "s"}: ${verdict.reason}`); return; }
+
+        // P-GOAL.9 (#2): if the checker reports the SAME blocker three rounds running, the loop is not
+        // converging — stop and surface it rather than burning iterations on an unbreakable wall.
+        const sig = stallSignature(verdict.reason);
+        stallCount = sig && sig === lastSig ? stallCount + 1 : 1;
+        lastSig = sig;
+        if (stallCount >= 3) { terminalReason = `stopped: not converging — the same blocker held for ${stallCount} rounds (${verdict.reason})`; onEvent({ type: "goal-stop", reason: terminalReason }); finishGoalMemory(mem, terminalReason); return; }
 
         noProgress = actedThisIter ? 0 : noProgress + 1;
-        if (noProgress >= 2) { onEvent({ type: "goal-stop", reason: "stopped: two iterations with no actions and the condition still unmet" }); finishGoalMemory(mem, "stopped: no progress for two iterations"); return; }
+        if (noProgress >= 2) { terminalReason = "stopped: two iterations with no actions and the condition still unmet"; onEvent({ type: "goal-stop", reason: terminalReason }); finishGoalMemory(mem, "stopped: no progress for two iterations"); return; }
       }
-      onEvent({ type: "goal-stop", reason: `stopped: hit the ${maxIters}-iteration cap without meeting the condition` });
-      finishGoalMemory(mem, `stopped: hit the ${maxIters}-iteration cap without meeting the condition`);
+      onEvent({ type: "goal-stop", reason: terminalReason });
+      finishGoalMemory(mem, terminalReason);
     } catch (e) {
-      const reason = `loop error: ${String((e as Error)?.message ?? e)}`;
-      onEvent({ type: "goal-stop", reason });
-      finishGoalMemory(mem, reason);
+      terminalOutcome = "error";
+      terminalReason = `loop error: ${String((e as Error)?.message ?? e)}`;
+      onEvent({ type: "goal-stop", reason: terminalReason });
+      finishGoalMemory(mem, terminalReason);
     } finally {
       this.goalActive = false;
       this.permissionMode = prevMode;
+      // P-GOAL.9: the loop's LAST task — assemble metrics + render the After-Action Report. Wholly
+      // best-effort: a failure here is swallowed so the turn always settles with `done`.
+      try {
+        let loc: LocStat | null = null;
+        if (startRef) {
+          const end = this.gitDiffVs(startRef);
+          if (end) loc = { added: Math.max(0, end.added - (startDiff?.added ?? 0)), removed: Math.max(0, end.removed - (startDiff?.removed ?? 0)), files: end.files };
+        }
+        const metrics: LoopMetrics = {
+          goal, condition, command: command || undefined,
+          outcome: terminalOutcome, outcomeReason: terminalReason || "(no reason recorded)",
+          iterations: perIteration.length, maxIters, durationMs: Date.now() - startedAt,
+          toolCalls, loc, errors, websites: [...websites], perIteration,
+          // P-GOAL.11: actual spend (null when no usage telemetry was seen) + the cap that was in force.
+          spendUsd: sawUsage ? spend.usd : null,
+          peakContextTokens: sawUsage ? spend.peakContextTokens : null,
+          budgetUsd: budgetUsd || undefined,
+        };
+        const markdown = renderLoopReport(metrics);
+        const path = saveGoalReport(currentWorkspace(), loopId, goal, markdown) ?? "";
+        if (mem && path) { try { finishGoalMemory(mem, `After-Action Report: ${path}`); } catch { /* best-effort */ } }
+        // P-GOAL.10: append this run to the cross-run evaluation ledger (best-effort).
+        try { appendRunLog(currentWorkspace(), toRunRecord(metrics, { id: loopId, ts: Date.now() })); } catch { /* best-effort */ }
+        onEvent({ type: "goal-report", path, summary: summarizeLoop(metrics), markdown });
+      } catch { /* the report never blocks the loop's completion */ }
       onEvent({ type: "done" });
     }
+  }
+
+  /** P-GOAL.9: the current HEAD commit, or null when the workspace isn't a git repo / git is absent.
+   *  Best-effort and quick (5s cap); a missing baseline just means the report shows "LOC n/a". */
+  private gitHead(): string | null {
+    try { return execFileSync("git", ["rev-parse", "HEAD"], { cwd: currentWorkspace(), encoding: "utf8", timeout: 5_000, stdio: ["ignore", "pipe", "ignore"] }).trim() || null; }
+    catch { return null; }
+  }
+  /** P-GOAL.9: parsed `git diff --numstat <ref>` for the working tree vs `ref` (tracked changes,
+   *  staged + unstaged + committed-since). Null on any git failure — LOC tracking is best-effort. */
+  private gitDiffVs(ref: string): LocStat | null {
+    try { return parseNumstat(execFileSync("git", ["diff", "--numstat", ref], { cwd: currentWorkspace(), encoding: "utf8", timeout: 5_000, maxBuffer: 4 * 1024 * 1024, stdio: ["ignore", "pipe", "ignore"] })); }
+    catch { return null; }
   }
 
   /** P-GOAL.2: stop a running /goal loop — aborts the current maker turn and halts further iterations.
@@ -572,6 +679,51 @@ class Backend {
   cancelGoal(): void { if (this.goalActive) { this.goalCancelled = true; this.cancel(); } }
   /** Whether a /goal loop is currently running (so the UI routes Stop to cancelGoal, not cancelChat). */
   isGoalRunning(): boolean { return this.goalActive; }
+
+  /** P-GOAL.10 (ADR-0055): the cross-run evaluation surface — aggregate stats over the run-log plus the
+   *  most-recent runs for a compact history view. Reads the workspace's `.omp/loops/run-log.jsonl`. */
+  loopRunStats(limit = 10): { stats: RunStats; summary: string; recent: LoopRunRecord[] } {
+    const records = readRunLog(currentWorkspace());
+    const stats = aggregateRuns(records);
+    return { stats, summary: summarizeRunStats(stats), recent: records.slice(0, Math.max(0, limit)) };
+  }
+
+  /** P-GOAL.12 (ADR-0057): the branches + worktrees the Pre-Flight Audit offers as loop scope. Best-effort. */
+  private gitLines(args: string[]): string[] {
+    try { return execFileSync("git", args, { cwd: currentWorkspace(), encoding: "utf8", timeout: 5_000, maxBuffer: 2 * 1024 * 1024, stdio: ["ignore", "pipe", "ignore"] }).split("\n").map((s) => s.trim()).filter(Boolean); }
+    catch { return []; }
+  }
+  loopScopes(): { current: string; branches: string[]; worktrees: string[] } {
+    const current = this.gitLines(["rev-parse", "--abbrev-ref", "HEAD"])[0] ?? "";
+    const branches = this.gitLines(["branch", "--format=%(refname:short)"]);
+    const worktrees = this.gitLines(["worktree", "list", "--porcelain"]).filter((l) => l.startsWith("worktree ")).map((l) => l.slice(9).trim());
+    return { current, branches, worktrees };
+  }
+
+  /** P-GOAL.12 (ADR-0057): the Pre-Flight Audit. Reads prior-run history (so the new loop carries past
+   *  context, not re-solving old blockers), runs ONE prompt-engineering interview pass on the cheap checker
+   *  model to mature the goal (best-effort; falls back to the user's structured answers), scores readiness
+   *  against the rubric, and writes a durable Loop Design report. Returns the matured goal to adopt + the
+   *  report. Never mutates the loop or the session — it's a planning step. */
+  async preflightAudit(spec: PreflightSpec): Promise<{ maturedGoal: string; criteria: string; reportMd: string; reportPath: string; readiness: ReadinessReport; prior: { total: number; relevant: number } }> {
+    const ws = currentWorkspace();
+    const records = readRunLog(ws);                                  // history awareness
+    const relevant = relevantPriorRuns(records, spec.goal, 3);
+    let matured: PreflightSpec = spec;
+    let maturedGoal = "";
+    try {
+      const model = resolveCheckerModel({ chosen: checkerModel(), models: this.accessibleModels(), current: this.activeModel() }).value;
+      const out = await this.complete(preflightSystemPrompt(), preflightUserPrompt(spec, summarizePriorRuns(relevant)), { idleMs: 90_000, model });
+      const fields = parsePreflightJson(out);
+      matured = mergeMatured(spec, fields);
+      maturedGoal = fields.maturedGoal || "";
+    } catch { /* model unavailable — fall back to the user's structured answers */ }
+    if (!maturedGoal) maturedGoal = maturedGoalFrom(matured);        // deterministic fallback
+    const readiness = assessReadiness(matured);
+    const reportMd = renderLoopDesign(matured, readiness, maturedGoal, { total: records.length, relevant });
+    const reportPath = savePreflightReport(ws, Date.now().toString(36), spec.goal || "loop", reportMd) ?? "";
+    return { maturedGoal, criteria: successCriteria(matured), reportMd, reportPath, readiness, prior: { total: records.length, relevant: relevant.length } };
+  }
 
   // P-GOAL.5 (ADR-0047): the automation scheduler. Arm a timer that, while the app is open, fires the
   // first DUE automation through runGoal — same maker/checker loop, same fail-closed gate, same durable
@@ -658,19 +810,22 @@ class Backend {
    *  against the maker's reported work, conservatively. Fail-closed: an empty/failed reply ⇒ not done.
    *  P-GOAL.6: runs on the resolved CHECKER model (the user's choice, else a cheap/capable recommendation,
    *  else the maker's model) — a distinct, cheaper judge that costs less to run every iteration. */
-  private async checkGoal(a: { goal: string; condition: string; command: string; lastWork: string }): Promise<{ done: boolean; reason: string }> {
+  private async checkGoal(a: { goal: string; condition: string; command: string; lastWork: string; criteria?: string }): Promise<{ done: boolean; reason: string }> {
     const model = resolveCheckerModel({ chosen: checkerModel(), models: this.accessibleModels(), current: this.activeModel() }).value;
+    // P-GOAL.12 (ADR-0057): give the small checker the matured SUCCESS CRITERIA from the Pre-Flight design,
+    // and have it report back against EACH — appropriate context for a deterministic grade, not a bare check.
+    const criteriaBlock = a.criteria ? `\n\nGrade against these success criteria (report which are met / unmet):\n${a.criteria.slice(0, 1500)}` : "";
     if (a.command) {
       const out = await this.complete(
-        `You are a verification CHECKER, separate from the agent that did the work. Run the given command EXACTLY in the workspace and report only the outcome. Do NOT modify any files or try to fix anything. Output ONLY strict JSON on one line: {"done": <true only if the command finished with exit code 0>, "reason": "<short summary of what happened>"}.`,
-        `Run this verification command and report whether it passed:\n\n\`\`\`\n${a.command}\n\`\`\``,
+        `You are a verification CHECKER, separate from the agent that did the work. Run the given command EXACTLY in the workspace and report only the outcome. Do NOT modify any files or try to fix anything. ${a.criteria ? "Also note any success criterion that the command does not cover. " : ""}Output ONLY strict JSON on one line: {"done": <true only if the command finished with exit code 0${a.criteria ? " AND every success criterion holds" : ""}>, "reason": "<short summary: what happened + which criteria are met/unmet>"}.`,
+        `Run this verification command and report whether it passed:\n\n\`\`\`\n${a.command}\n\`\`\`${criteriaBlock}`,
         { idleMs: 180_000, model },
       );
       return parseGoalVerdict(out);
     }
     const out = await this.complete(
-      `You are a strict CHECKER, separate from the agent that did the work. Decide whether the goal is fully met. Be conservative: if you are not sure, answer done=false. Output ONLY strict JSON on one line: {"done": bool, "reason": "<one line>"}.`,
-      `Goal: ${a.goal}\nStop condition: ${a.condition}\n\nThe agent reported:\n${(a.lastWork || "(no output)").slice(0, 4000)}\n\nIs the goal fully met?`,
+      `You are a strict CHECKER, separate from the agent that did the work. Decide whether the goal is fully met against the success criteria. Be conservative: if you are not sure, answer done=false. Output ONLY strict JSON on one line: {"done": bool, "reason": "<one line: which criteria are met/unmet>"}.`,
+      `Goal: ${a.goal}\nStop condition: ${a.condition}${criteriaBlock}\n\nThe agent reported:\n${(a.lastWork || "(no output)").slice(0, 4000)}\n\nIs the goal fully met?`,
       { idleMs: 120_000, model },
     );
     return parseGoalVerdict(out);

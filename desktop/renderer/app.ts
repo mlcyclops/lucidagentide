@@ -2280,6 +2280,9 @@ async function handleSkillFiles(fileList: FileList | File[], node: HTMLElement):
 let goalLoopRunning = false; // P-GOAL.2: true while a /goal loop streams, so Stop cancels the LOOP
 // P-GOAL.7: the usage ledger for the open goal modal (real per-model price + cache rate), fetched lazily.
 let goalLedger: Awaited<ReturnType<typeof bridge.usage>> | null = null;
+// P-GOAL.12 (ADR-0057): success criteria adopted from a Pre-Flight Audit, threaded to the checker on the
+// next run so it grades against the matured design (and reports back against it). Reset each modal open.
+let adoptedCriteria = "";
 // A launcher form (goal · optional verify command · max iterations), then a loop that streams maker
 // iterations with a separate checker's verdict each round. Every action is still gated server-side.
 
@@ -2342,12 +2345,14 @@ function openGoalForm(): void {
       <button type="button" class="goal-mode-toggle" id="goalModeToggle" data-tip="Advanced mode|Show every option on one screen, for power users. You can switch back to the guided walkthrough anytime." data-tip-side="bottom"></button>
     </div>
     <div class="goal-modal-sub">The agent iterates until a verifiable condition holds. A separate checker grades each round; the security gate scans every action.</div>
+    <div id="goalStatsSec"></div>
     <div id="goalResumeSec"></div>
     <div id="goalAutoSec"></div>
     <div class="goal-steps">
       <section class="goal-step" data-step="1">
         <div class="goal-step-head"><span class="goal-step-n"></span><h4>What should the agent accomplish?</h4></div>
         <div class="goal-note">Describe the end state in plain language. The clearer the target, the fewer rounds it takes. ${goalInfoDot("The goal|This is the objective the agent works toward each round. Be concrete about the finished result, e.g. 'all auth tests pass and the lint is clean.'")}</div>
+        <button type="button" class="btn-mini goal-preflight-btn" id="goalPreflight" data-tip="Pre-Flight Audit|Pause and design the loop first: pick a scope, answer a few prompt-engineering questions, fold in user/engineer feedback and past-run history, and get a readiness-scored Loop Design you can adopt as the goal." data-tip-side="right">${icon("shield", 12)} Pre-Flight Audit <span class="goal-opt">optional · design &amp; readiness check</span></button>
         <label class="goal-lbl">Goal</label>
         <textarea id="goalGoal" class="prov-key" rows="3" placeholder="e.g. Make all auth tests pass and fix any lint errors"></textarea>
       </section>
@@ -2376,6 +2381,7 @@ function openGoalForm(): void {
         <div class="goal-step-head"><span class="goal-step-n"></span><h4>Effort and grading</h4></div>
         <div class="goal-note">Cap how many rounds it may take, and pick who grades each round. A cheaper checker keeps cost low. ${goalInfoDot("Iterations and checker|Max iterations is a hard ceiling - the loop stops as soon as the condition holds. The checker is a separate model that grades each round; a small fast model is usually plenty.")}</div>
         <div class="goal-row"><label class="goal-lbl">Max iterations</label><input id="goalMax" class="prov-key goal-max" type="number" min="1" max="20" value="6" /></div>
+        <div class="goal-row"><label class="goal-lbl">Budget cap <span class="goal-opt">optional $ ceiling; stops the loop if spend hits it</span> ${goalInfoDot("Budget cap|A hard dollar ceiling on actual spend. The loop halts the moment the maker's running cost reaches it - the kill switch for unattended runs. Leave blank for no cap (max iterations still bounds the run).")}</label><input id="goalBudget" class="prov-key goal-max" type="number" min="0" step="0.25" placeholder="no cap" /></div>
         <div class="goal-row goal-checker">
           <label class="goal-lbl">${icon("spark", 12)} Checker model <span class="goal-opt">grades each round; a cheaper model is fine</span></label>
           <select id="goalChecker" class="prov-key goal-ckr"><option>loading…</option></select>
@@ -2468,7 +2474,8 @@ function openGoalForm(): void {
     const goal = ($("#goalGoal", ov) as HTMLTextAreaElement).value.trim();
     const command = ($("#goalCmd", ov) as HTMLInputElement).value.trim();
     const maxIters = Math.min(20, Math.max(1, Number(($("#goalMax", ov) as HTMLInputElement).value) || 6));
-    return { goal, command, maxIters };
+    const budgetUsd = Math.max(0, Number(($("#goalBudget", ov) as HTMLInputElement)?.value) || 0); // P-GOAL.11: 0 = no cap
+    return { goal, command, maxIters, budgetUsd, criteria: adoptedCriteria || undefined }; // P-GOAL.12: matured checker criteria
   };
   // P-GOAL.6.1: live token estimate (lower-left), recomputed as the iteration count changes.
   ($("#goalMax", ov) as HTMLInputElement)?.addEventListener("input", () => updateGoalEstimate(ov));
@@ -2476,11 +2483,11 @@ function openGoalForm(): void {
   render(); // P-GOAL.8: apply guided/advanced mode + show the right step/buttons
   wireCmdSuggest(ov); // P-GOAL.8.1: custom verify-command type-ahead
   $("#goalRun", ov)?.addEventListener("click", async () => {
-    const { goal, command, maxIters } = readSpec();
+    const { goal, command, maxIters, budgetUsd, criteria } = readSpec();
     if (!goal) { showToast({ tone: "warn", title: "Add a goal", desc: "Describe what the loop should accomplish.", timeout: 2400 }); return; }
     await applyRunWith(ov); // P-GOAL.7: apply base model / thinking / skill / persona for this run
     close();
-    void runGoalLoop({ goal, condition: command || goal, command: command || undefined, maxIters });
+    void runGoalLoop({ goal, condition: command || goal, command: command || undefined, maxIters, budgetUsd, criteria });
   });
   $("#goalSave", ov)?.addEventListener("click", async () => {
     const { goal, command, maxIters } = readSpec();
@@ -2503,6 +2510,11 @@ function openGoalForm(): void {
       void runGoalLoop({ goal: d.goal!, condition: d.cond || d.goal!, command: d.cmd || undefined, maxIters: 6, resume: d.rel });
     }));
   });
+  // P-GOAL.10 (ADR-0055): the cross-run evaluation banner (success rate / avg iters / top blocker).
+  void loadLoopStats(ov);
+  // P-GOAL.12 (ADR-0057): the optional Pre-Flight Audit (design + readiness before building the loop).
+  adoptedCriteria = "";
+  $("#goalPreflight", ov)?.addEventListener("click", () => openPreflight(ov));
   // P-GOAL.5: list saved automations (enable / run-now / delete).
   void renderAutomations(ov, close);
   // P-GOAL.6: populate the checker-model picker (auto recommendation + override).
@@ -2654,6 +2666,119 @@ function updateGoalEstimate(ov: HTMLElement): void {
 
 // P-GOAL.5 (ADR-0047): render the saved-automations list inside the goal modal — each row shows its
 // cadence + last-run status, with an enable toggle, a run-now button, and delete.
+// P-GOAL.10 (ADR-0055): render the cross-run evaluation banner from the run-log ledger — success rate,
+// average iterations-to-success, the most-common blocker, and a tool-mix bar. Hidden until there's
+// history (a first-time user sees nothing extra).
+async function loadLoopStats(ov: HTMLElement): Promise<void> {
+  const sec = $("#goalStatsSec", ov); if (!sec) return;
+  const data = await bridge.loopRunStats().catch(() => null);
+  const s = data?.stats;
+  if (!s || s.runs === 0) { sec.innerHTML = ""; return; }
+  const pct = Math.round(s.successRate * 100);
+  const tone = pct >= 75 ? "ok" : pct >= 40 ? "mid" : "low";
+  const iters = s.avgItersToSucceed ? `${s.avgItersToSucceed.toFixed(1)}` : "—";
+  const dur = s.avgDurationMs ? formatLoopDur(s.avgDurationMs) : "—";
+  const blocker = s.topBlockers[0];
+  const spend = s.totalSpendUsd > 0 ? `<span class="gs-tool">spend <b>$${s.totalSpendUsd.toFixed(2)}</b></span>` : "";
+  const mix = spend + Object.entries(s.toolsByType).sort((a, b) => b[1] - a[1]).slice(0, 4)
+    .map(([k, v]) => `<span class="gs-tool">${esc(k)} <b>${v}</b></span>`).join("");
+  sec.innerHTML = `<div class="goal-stats" data-tone="${tone}">
+    <div class="gs-head">${icon("graph", 13)} Loop history <span class="gs-sum">${esc(data!.summary)}</span></div>
+    <div class="gs-grid">
+      <div class="gs-cell"><span class="gs-n">${pct}%</span><span class="gs-l">met</span></div>
+      <div class="gs-cell"><span class="gs-n">${esc(iters)}</span><span class="gs-l">avg iters to win</span></div>
+      <div class="gs-cell"><span class="gs-n">${esc(dur)}</span><span class="gs-l">avg duration</span></div>
+      <div class="gs-cell"><span class="gs-n">${s.totalTools}</span><span class="gs-l">tool calls</span></div>
+    </div>
+    ${mix ? `<div class="gs-mix">${mix}</div>` : ""}
+    ${blocker ? `<div class="gs-blocker">${icon("info", 11)} most-common stop: <span>${esc(blocker.reason.slice(0, 90))}</span>${blocker.count > 1 ? ` ·&nbsp;${blocker.count}×` : ""}</div>` : ""}
+  </div>`;
+}
+
+/** Compact duration for the eval banner (mirrors loop_report.formatDuration, kept local to the renderer). */
+function formatLoopDur(ms: number): string {
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  return m < 60 ? `${m}m ${String(s % 60).padStart(2, "0")}s` : `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, "0")}m`;
+}
+
+// P-GOAL.12 (ADR-0057): the Pre-Flight Audit — pause the builder, design the loop (scope + a short
+// prompt-engineering interview + user/PO + engineer feedback), fold in past-run history, and produce a
+// readiness-scored Loop Design report the user adopts as the goal (its criteria thread to the checker).
+async function openPreflight(goalOv: HTMLElement): Promise<void> {
+  const g = ($("#goalGoal", goalOv) as HTMLTextAreaElement)?.value.trim() ?? "";
+  const cmd = ($("#goalCmd", goalOv) as HTMLInputElement)?.value.trim() ?? "";
+  const ov = el(`<div class="scrim preflight-scrim"><div class="preflight-modal">
+    <div class="goal-modal-h"><span class="goal-h-title">${icon("shield", 15)} Pre-Flight Audit</span><button type="button" class="btn-mini" id="pfClose">Close</button></div>
+    <div class="goal-modal-sub">Design the loop before you build it — scope it, answer a few questions, fold in user/engineer feedback and past-run history, then adopt a readiness-scored Loop Design as your goal.</div>
+    <div class="pf-form">
+      <label class="goal-lbl">Scope <span class="goal-opt">where the loop runs</span></label>
+      <select id="pfScope" class="prov-key"><option value="workspace">current workspace</option></select>
+      <label class="goal-lbl">Objective</label>
+      <textarea id="pfGoal" class="prov-key" rows="2" placeholder="What should the loop accomplish?">${esc(g)}</textarea>
+      <div class="pf-grid">
+        <label class="goal-lbl pf-f"><span>Definition of done</span><textarea id="pfDone" class="prov-key" rows="2" placeholder="What does 'done' look like, concretely?"></textarea></label>
+        <label class="goal-lbl pf-f"><span>Verification command</span><input id="pfCmd" class="prov-key" placeholder="npm test && npm run lint" value="${esc(cmd)}" /></label>
+        <label class="goal-lbl pf-f"><span>Non-goals</span><textarea id="pfNon" class="prov-key" rows="2" placeholder="What must it NOT do?"></textarea></label>
+        <label class="goal-lbl pf-f"><span>Risky / off-limits</span><textarea id="pfRisk" class="prov-key" rows="2" placeholder="auth, payments, secrets, infra…"></textarea></label>
+        <label class="goal-lbl pf-f"><span>User / product-owner feedback</span><textarea id="pfFeed" class="prov-key" rows="2" placeholder="What does the product owner want?"></textarea></label>
+        <label class="goal-lbl pf-f"><span>Engineer notes</span><textarea id="pfEng" class="prov-key" rows="2" placeholder="Constraints, gotchas, the right approach…"></textarea></label>
+      </div>
+      <div class="pf-actions"><button class="btn-mini ok" id="pfRun">${icon("bolt", 12)} Run Pre-Flight Audit</button></div>
+    </div>
+    <div class="pf-result" id="pfResult" hidden></div>
+  </div></div>`);
+  document.body.appendChild(ov);
+  const close = () => ov.remove();
+  $("#pfClose", ov)?.addEventListener("click", close);
+  ov.addEventListener("click", (e) => { if (e.target === ov) close(); });
+
+  // scope picker — branches + worktrees (best-effort; falls back to "current workspace")
+  void bridge.loopScopes().then((s) => {
+    const sel = $("#pfScope", ov) as HTMLSelectElement | null; if (!sel || !s) return;
+    const opts = [`<option value="workspace">current workspace</option>`];
+    for (const b of s.branches) opts.push(`<option value="branch: ${esc(b)}">branch: ${esc(b)}${b === s.current ? " (current)" : ""}</option>`);
+    for (const w of s.worktrees) opts.push(`<option value="worktree: ${esc(w)}">worktree: ${esc(w)}</option>`);
+    sel.innerHTML = opts.join("");
+    if (s.current) sel.value = `branch: ${s.current}`;
+  });
+
+  let last: Awaited<ReturnType<typeof bridge.preflightAudit>> = null;
+  $("#pfRun", ov)?.addEventListener("click", async () => {
+    const val = (id: string) => ($(id, ov) as HTMLInputElement | HTMLTextAreaElement | null)?.value.trim() || undefined;
+    const spec = {
+      goal: val("#pfGoal") ?? "", scope: ($("#pfScope", ov) as HTMLSelectElement).value,
+      command: val("#pfCmd"), doneDefinition: val("#pfDone"), nonGoals: val("#pfNon"), risks: val("#pfRisk"),
+      feedback: val("#pfFeed"), engineerNotes: val("#pfEng"),
+      budgetUsd: Math.max(0, Number(($("#goalBudget", goalOv) as HTMLInputElement)?.value) || 0),
+      maxIters: Math.min(20, Math.max(1, Number(($("#goalMax", goalOv) as HTMLInputElement)?.value) || 6)),
+      checkerIsCheap: true,
+    };
+    if (!spec.goal) { showToast({ tone: "warn", title: "Add an objective", desc: "Describe what the loop should accomplish.", timeout: 2400 }); return; }
+    const btn = $("#pfRun", ov) as HTMLButtonElement; btn.disabled = true; btn.textContent = "Auditing…";
+    const res = $("#pfResult", ov) as HTMLElement; res.hidden = false;
+    res.innerHTML = `<div class="pf-loading">${icon("refresh", 13)} Interviewing the checker model + scoring readiness against past runs…</div>`;
+    last = await bridge.preflightAudit(spec).catch(() => null);
+    btn.disabled = false; btn.innerHTML = `${icon("bolt", 12)} Re-run`;
+    if (!last) { res.innerHTML = `<div class="pf-loading">Audit failed — check the model/connection and try again.</div>`; return; }
+    const lvl = last.readiness.level, tone = lvl === "L3" ? "ok" : lvl === "L2" ? "mid" : "low";
+    res.innerHTML = `<div class="pf-readiness" data-tone="${tone}">${icon("shield", 14)} <b>${esc(last.readiness.summary)}</b>${last.prior.total ? ` <span class="goal-opt">· ${last.prior.total} prior run${last.prior.total === 1 ? "" : "s"} on record, ${last.prior.relevant} relevant</span>` : ""}</div>
+      <div class="pf-report">${renderMarkdown(last.reportMd)}</div>
+      <div class="pf-adopt-row">${last.reportPath ? `<span class="goal-opt">saved <code>${esc(last.reportPath)}</code></span>` : ""}<button class="btn-mini ok" id="pfAdopt">${icon("check", 12)} Adopt as goal</button></div>`;
+    $("#pfAdopt", ov)?.addEventListener("click", () => {
+      if (!last) return;
+      ($("#goalGoal", goalOv) as HTMLTextAreaElement).value = last.maturedGoal;
+      const cmdEl = $("#goalCmd", goalOv) as HTMLInputElement | null, suggested = ($("#pfCmd", ov) as HTMLInputElement).value.trim();
+      if (cmdEl && !cmdEl.value.trim() && suggested) cmdEl.value = suggested;
+      adoptedCriteria = last.criteria || ""; // threads to the checker on the next run
+      updateGoalEstimate(goalOv);
+      close();
+      showToast({ tone: "ok", title: "Adopted into the goal", desc: "Tweak it in the Goal field, then Run — the checker will grade against your criteria.", timeout: 3400 });
+    });
+  });
+}
+
 async function renderAutomations(ov: HTMLElement, close: () => void): Promise<void> {
   const sec = $("#goalAutoSec", ov); if (!sec) return;
   const list = await bridge.automations();
@@ -2682,7 +2807,7 @@ async function renderAutomations(ov: HTMLElement, close: () => void): Promise<vo
   });
 }
 async function runGoalLoop(
-  opts: { goal: string; condition: string; command?: string; maxIters: number; resume?: string },
+  opts: { goal: string; condition: string; command?: string; maxIters: number; resume?: string; budgetUsd?: number; criteria?: string },
   stream?: (onEvent: (e: ChatEvent) => void) => Promise<void>, // P-GOAL.5: automation run-now reuses this renderer
   verb = "/goal",
 ): Promise<void> {
@@ -2712,6 +2837,16 @@ async function runGoalLoop(
     }
     else if (e.type === "goal-done") { wrap.appendChild(el(`<div class="goal-banner ok">${icon("check", 14)} Goal met in ${e.iters} iteration${e.iters === 1 ? "" : "s"}. ${esc(e.reason)}</div>`)); scrollChat(); }
     else if (e.type === "goal-stop") { wrap.appendChild(el(`<div class="goal-banner stop">${icon("info", 14)} ${esc(e.reason)}</div>`)); scrollChat(); }
+    else if (e.type === "goal-report") {
+      // P-GOAL.9: the loop's last task — an After-Action Report (metrics + portable graphs). The durable
+      // record is on disk (Mermaid renders on GitHub/VS Code); in-app we show the summary + the report's
+      // text scoreboard/tables (our `marked` view has no Mermaid, so charts stay in the file).
+      const card = el(`<details class="goal-aar" open>
+        <summary>${icon("graph", 13)} After-Action Report · <b>${esc(e.summary)}</b>${e.path ? ` · <code>${esc(e.path)}</code>` : ""}</summary>
+        <div class="goal-aar-body">${renderMarkdown(e.markdown)}</div>
+      </details>`);
+      wrap.appendChild(card); scrollChat();
+    }
     else if (e.type === "done") { if (streamEl) streamEl.innerHTML = renderMarkdown(buf); }
   };
   try { await (stream ?? ((on: (e: ChatEvent) => void) => bridge.runGoal(opts, on)))(onEvent); }
