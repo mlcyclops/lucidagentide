@@ -7,12 +7,12 @@
 // native-only is window controls + crisp text zoom, exposed by the Electron
 // preload as `window.lucid`; in a plain browser those fall back to CSS zoom.
 
-export interface BlockRecord { id: string; tool: string; severity: string; findings: string; reason: string; at: string; status: "quarantined" | "approved"; reviewer?: string }
+export interface BlockRecord { id: string; tool: string; severity: string; findings: string; reason: string; at: string; status: "quarantined" | "approved" | "dismissed"; reviewer?: string }
 export interface SecuritySnapshot {
   findings: any[]; unicode: any[]; approvals: any[]; quarantine: any[];
   promotion: any[]; exports: any[]; runs: any[];
   // GUI-owned LIVE gate blocks (ADR-0019 C) - present even when the DuckDB views are empty.
-  live?: { quarantined: BlockRecord[]; approved: BlockRecord[]; total: number };
+  live?: { quarantined: BlockRecord[]; approved: BlockRecord[]; dismissed: BlockRecord[]; total: number };
 }
 export interface MemorySnapshot {
   session: null | {
@@ -208,6 +208,7 @@ export interface LucidBridge {
   security(): Promise<SecuritySnapshot | null>;
   /** Release one quarantined call - the audited fail-closed override (ADR-0019 C). */
   securityApprove(id: string): Promise<BlockRecord | null>;
+  securityDismiss(id: string): Promise<BlockRecord | null>;
   memory(): Promise<MemorySnapshot | null>;
   budget(): Promise<{ label: string; used: number; status: string; resetsAt: number | null }[] | null>;
   // P10.3: live API-key rate-limit probe (opt-in). `rateLimits()` returns probed limits ([] when off);
@@ -412,6 +413,7 @@ export const bridge: LucidBridge = {
   isElectron: !!shell?.isElectron,
   security: () => getData("/api/security"),
   securityApprove: (id) => post("/api/security/approve", { id }),
+  securityDismiss: (id) => post("/api/security/dismiss", { id }),
   memory: () => getData("/api/memory"),
   budget: () => getData("/api/budget"),
   rateLimits: (force) => getData(`/api/ratelimits${force ? "?force=1" : ""}`),

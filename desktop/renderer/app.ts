@@ -1667,7 +1667,7 @@ function securityHtml(d: SecuritySnapshot | null): string {
   // arrays may be absent on a fresh machine - guard every one.
   const quarantine = d?.quarantine ?? [], approvals = d?.approvals ?? [], findings = d?.findings ?? [];
   const promotion = d?.promotion ?? [], exports = d?.exports ?? [], runs = d?.runs ?? [];
-  const live = d?.live ?? { quarantined: [], approved: [], total: 0 };
+  const live = d?.live ?? { quarantined: [], approved: [], dismissed: [], total: 0 };
   const totFind = findings.reduce((a, r) => a + Number(r.n || 0), 0);
   const promoted = Number((promotion.find((r) => r.outcome === "promoted") || {}).n || 0);
   const blocked = Number((promotion.find((r) => r.outcome === "blocked") || {}).n || 0);
@@ -1684,16 +1684,27 @@ function securityHtml(d: SecuritySnapshot | null): string {
   ]);
   // Live blocks (this session) - what the gate actually stopped in THIS GUI, with the audited
   // "Approve & retry" override. Sits up top so the toast "Review" lands on something actionable.
-  if (live.quarantined.length || live.approved.length) {
+  if (live.quarantined.length || live.approved.length || live.dismissed.length) {
     const rows = live.quarantined.length
       ? live.quarantined.map((b) => `<div class="liveblk">
           <div class="lb-head"><span class="pill quarantined">${esc(b.severity)}</span><b>${esc(b.tool)}</b><span class="lb-reason">${esc(b.reason)}</span></div>
           <div class="lb-foot"><span class="lb-meta">${esc(b.findings || "no detail")} · ${esc(relTime(Date.parse(b.at)))}</span>
-            <button class="btn-mini ok" data-approve="${esc(b.id)}" data-tip="Approve &amp; retry|Release this one blocked call (audited) and re-send your last message so the agent can try again. Use only if you're sure it was a false positive.">${icon("check", 13)} Approve &amp; retry</button></div>
+            <button class="btn-mini ok" data-approve="${esc(b.id)}" data-tip="Approve &amp; retry|Release this one blocked call (audited) and re-send your last message so the agent can try again. Use only if you're sure it was a false positive.">${icon("check", 13)} Approve &amp; retry</button>
+            <button class="btn-mini dismiss" data-dismiss="${esc(b.id)}" data-tip="Dismiss|Acknowledge this block and move it to the Dismissed section. The call STAYS blocked - this only clears it from the active queue. The audit record is kept.">${icon("close", 13)} Dismiss</button></div>
         </div>`).join("")
-      : `<div class="empty">No active blocks - everything released or clean.</div>`;
+      : `<div class="empty">No active blocks - everything released, dismissed, or clean.</div>`;
     const approvedNote = live.approved.length ? `<div class="lb-approved">${icon("check", 12)} ${live.approved.length} released this session · audited</div>` : "";
-    h += accordion("sec.live", "Live blocks", "this session · gate-enforced", rows + approvedNote, true, String(live.quarantined.length));
+    // Dismissed: reviewed + acknowledged, STILL blocked. Muted + collapsed, out of the active count.
+    const dismissedNote = live.dismissed.length
+      ? `<details class="lb-dismissed"><summary>${live.dismissed.length} dismissed · still blocked · audited</summary>`
+        + live.dismissed.map((b) => `<div class="liveblk muted">
+            <div class="lb-head"><span class="pill dismissed">${esc(b.severity)}</span><b>${esc(b.tool)}</b><span class="lb-reason">${esc(b.reason)}</span></div>
+            <div class="lb-foot"><span class="lb-meta">${esc(b.findings || "no detail")} · ${esc(relTime(Date.parse(b.at)))}</span>
+              <button class="btn-mini ok" data-approve="${esc(b.id)}" data-tip="Approve &amp; retry|Release this blocked call (audited) and re-send your last message. Use only if you now trust the source.">${icon("check", 13)} Approve &amp; retry</button></div>
+          </div>`).join("")
+        + `</details>`
+      : "";
+    h += accordion("sec.live", "Live blocks", "this session · gate-enforced", rows + approvedNote + dismissedNote, true, String(live.quarantined.length));
   }
   if (!d && !live.total) { h += `<div class="empty">Nothing has tripped the scanner yet. The moment a tool call carries hidden-Unicode or another injection, the finding, the quarantine queue, and the audit trail appear right here.</div>`; return h; }
   h += accordion("sec.quarantine", "Quarantine review", "isolated · fail-closed",
@@ -3435,6 +3446,25 @@ function wire(): void {
           actions: [{ label: "OK" }], timeout: 4500,
         });
         if (retry && !state.streaming) { const ta = $("#input") as HTMLTextAreaElement; ta.value = retry; void send(); }
+      })();
+      return;
+    }
+    // Dismiss: acknowledge a reviewed block — moves it to the Dismissed section WITHOUT releasing it
+    // (the call stays blocked, the audit record is kept). Clears it from the active "quarantined" count.
+    const dismiss = (e.target as HTMLElement).closest("[data-dismiss]") as HTMLElement | null;
+    if (dismiss) {
+      const id = dismiss.dataset.dismiss!;
+      (dismiss as HTMLButtonElement).disabled = true;
+      void (async () => {
+        const r = await bridge.securityDismiss(id);
+        if (!r) { showToast({ title: "Already handled", desc: "That block was already released or dismissed.", actions: [{ label: "OK" }], timeout: 3000 }); return; }
+        await refresh(); // drop it from the active list + counts, into the Dismissed section
+        showToast({
+          title: "Dismissed · still blocked",
+          desc: "Moved to the Dismissed section. The call stays blocked; the audit record is kept.",
+          meta: `tool=${r.tool} · dismissed`,
+          actions: [{ label: "OK" }], timeout: 4000,
+        });
       })();
       return;
     }

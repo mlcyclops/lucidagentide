@@ -21,9 +21,10 @@ export interface BlockRecord {
   reason: string;
   sessionId?: string;
   at: string; // ISO timestamp
-  status: "quarantined" | "approved";
+  status: "quarantined" | "approved" | "dismissed";
   reviewer?: string;
   approvedAt?: string;
+  dismissedAt?: string;
 }
 
 const LOG_PATH = join(homedir(), ".omp", "lucid-blocks.jsonl");
@@ -37,8 +38,9 @@ function load(): BlockRecord[] {
     if (existsSync(LOG_PATH)) {
       for (const line of readFileSync(LOG_PATH, "utf8").split("\n")) {
         if (!line.trim()) continue;
-        const o = JSON.parse(line) as BlockRecord & { _approval?: boolean };
+        const o = JSON.parse(line) as BlockRecord & { _approval?: boolean; _dismiss?: boolean };
         if (o._approval) { const r = byId.get(o.id); if (r) { r.status = "approved"; r.reviewer = o.reviewer; r.approvedAt = o.approvedAt; } }
+        else if (o._dismiss) { const r = byId.get(o.id); if (r) { r.status = "dismissed"; r.reviewer = o.reviewer; r.dismissedAt = o.dismissedAt; } }
         else byId.set(o.id, { ...o, status: o.status ?? "quarantined" });
       }
     }
@@ -73,11 +75,23 @@ export function approveBlock(id: string, reviewer = "user"): BlockRecord | null 
   return r;
 }
 
-export interface LiveBlocks { quarantined: BlockRecord[]; approved: BlockRecord[]; total: number }
+/** Acknowledge a block WITHOUT releasing it: the call stays blocked (never imported/run) — this only
+ *  moves it out of the active queue into the Dismissed section so a reviewed, correctly-blocked event
+ *  stops lighting the "quarantined" count. The audit record is RETAINED (never deleted). Returns null
+ *  if unknown or not currently quarantined (approved blocks aren't dismissable). */
+export function dismissBlock(id: string, reviewer = "user"): BlockRecord | null {
+  const r = load().find((x) => x.id === id);
+  if (!r || r.status !== "quarantined") return null;
+  r.status = "dismissed"; r.reviewer = reviewer; r.dismissedAt = new Date().toISOString();
+  append({ _dismiss: true, id, reviewer, dismissedAt: r.dismissedAt });
+  return r;
+}
+
+export interface LiveBlocks { quarantined: BlockRecord[]; approved: BlockRecord[]; dismissed: BlockRecord[]; total: number }
 
 /** The live-block view for the Security panel (most-recent first, capped). */
 export function liveBlocks(): LiveBlocks {
   const all = load();
   const recent = (s: BlockRecord["status"]) => all.filter((b) => b.status === s).slice(-100).reverse();
-  return { quarantined: recent("quarantined"), approved: recent("approved"), total: all.length };
+  return { quarantined: recent("quarantined"), approved: recent("approved"), dismissed: recent("dismissed"), total: all.length };
 }
