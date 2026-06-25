@@ -89,10 +89,11 @@ describe("renderLoopDesign", () => {
     expect(md).toContain("**Verification command (exit 0 = done)**");
     expect(md).toContain("_none — checker judges self-report_");
   });
-  test("escapes pipes/newlines so a hostile answer can't break the table", () => {
-    const s = spec({ goal: "a | b\nc", risks: "x | y" });
+  test("escapes backslash-then-pipe and flattens newlines (CodeQL: incomplete escaping)", () => {
+    const s = spec({ goal: "a | b\nc", risks: "C:\\tmp | bad" });
     const md = renderLoopDesign(s, assessReadiness(s), "g");
-    expect(md).toContain("a \\| b c"); // pipe escaped, newline flattened
+    expect(md).toContain("a \\| b c");           // pipe escaped, newline flattened
+    expect(md).toContain("C:\\\\tmp \\| bad");   // backslash → \\ FIRST, then pipe → \|
   });
 });
 

@@ -139,7 +139,9 @@ export function summarizePriorRuns(runs: LoopRunRecord[]): string {
   return "Prior runs of similar loops:\n" + runs.map((r) => `- "${r.goal.slice(0, 60)}": ${priorLine(r)}`).join("\n");
 }
 
-const esc = (s: string | undefined): string => (s ?? "").replace(/\|/g, "\\|").replace(/[\r\n]+/g, " ").trim();
+// Escape for a Markdown table cell: backslash FIRST (else a trailing "\" escapes the cell's closing
+// pipe), then pipe, then flatten newlines. Same rule as loop_report.mdCell (CodeQL: incomplete escaping).
+const esc = (s: string | undefined): string => (s ?? "").replace(/\\/g, "\\\\").replace(/\|/g, "\\|").replace(/[\r\n]+/g, " ").trim();
 
 /** The "## Prior runs" report section — states whether history exists and surfaces the relevant runs so
  *  the new loop design carries their context forward (their After-Action Reports live in `.omp/loops/`). */
