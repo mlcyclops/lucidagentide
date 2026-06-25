@@ -16,6 +16,7 @@ import { currentWorkspace } from "./workspace.ts";
 import { learnFromTurn, recallPreamble } from "./personal.ts";
 import { buildUserTurnPreamble } from "./preamble.ts";
 import { recordTurns } from "./turns_log.ts";
+import { isLearnableAssistantText } from "./thinking_governance.ts";
 import { recordBlock } from "./security_log.ts";
 import { asksageOnly, attribution, checkerModel, lastModel, load as loadSettings, mcpServersForAcp, setCheckerModel, setLastModel } from "./settings_store.ts";
 import { managedConfig } from "./managed_config.ts";
@@ -470,6 +471,10 @@ class Backend {
     const arm = () => { if (idle) clearTimeout(idle); if (this.pendingPerms > 0) return; idle = setTimeout(() => { stalled = true; onStall(new Error("the model went quiet for 5 minutes — the provider may be rate-limited (check your hourly budget) or the turn stalled. Try again.")); }, Backend.IDLE_MS); };
     let enqueueErr = 0; // counts browser-stream write failures (orphaned/closed client stream)
     const sink = (e: ChatEvent) => { arm(); if (e.type === "token") assistant += e.text; try { onEvent(e); } catch { enqueueErr++; } };
+    const arm = () => { if (idle) clearTimeout(idle); if (this.pendingPerms > 0) return; idle = setTimeout(() => { stalled = true; onStall(new Error("the model did not respond for 2 minutes — the provider may be rate-limited (check your hourly budget) or the turn stalled. Try again.")); }, Backend.IDLE_MS); };
+    // Only learnable assistant text accrues to `assistant` (→ recordTurns + learnFromTurn). Thinking
+    // and other display-only events are excluded by construction (R-04 / ADR-0054).
+    const sink = (e: ChatEvent) => { arm(); if (isLearnableAssistantText(e)) assistant += e.text; onEvent(e); };
     this.listener = sink;
     this.askActive = true; // permission requests in THIS turn may be forwarded to the UI (Ask mode)
     this.turnDiag(`prompt.start session=${this.sessionId}`);

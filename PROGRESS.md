@@ -4,6 +4,21 @@ Three lines per session: **shipped / stubbed / next** (CLAUDE.md session ritual)
 
 -----
 
+## R-06: subagent edits gated + attributed, no stash-masking (ADR-0055)
+- **shipped:** verified + regression-locked that subagent (`task`) edits are NOT masked from the gate or code-activity attribution. With task isolation OFF (ADR-0032), a subagent edits the REAL workspace → its write/edit tool calls route through the same in-process fail-closed gate → ADR-0031 attribution counts them from the gate's tool_result hook, and `EditResultLike` carries no agent/provenance dimension (so nothing can drop a subagent's edit). `harness/runs/loc_count_subagent.test.ts` (3 tests). ADR-0055.
+- **stubbed:** the stash-isolate/apply/merge masking risk only exists if isolation is RE-enabled (ADR-0032 conditions: patch-review UI + reliable Windows merge-back) — ADR-0055 is the tripwire to re-open R-06 then (gate-scan + attribute the merged diff; nested-repo dirty-state test).
+- **next:** add-on PI items continue (R-08 #38, B-ADR-001 #40, B-ADR-006 #42).
+## R-04: thinking-item governance (ADR-0054)
+- **shipped:** `desktop/thinking_governance.ts` — `isLearnableAssistantText` / `accumulateAssistantText`: **only assistant `token` text is learnable** (eligible for `recordTurns` persistence + `learnFromTurn` distiller/promotion). Reasoning/thinking (and tool/block/subagent/usage) are display-only (ratifies ADR-0027 as a security policy): never persisted → never recalled → never exported → CUI-excluded by construction; never auto-promoted to semantic memory (keystone #2). `acp_backend.prompt()`'s `sink` now routes the per-turn `assistant` buffer through the predicate. 3 regression tests lock it.
+- **stubbed:** persisting thinking in future REQUIRES scan + trust-label + promotion-gate + CUI-exclude first (gated by this ADR + the test). CI's `bun test harness` doesn't run `desktop/` yet (pre-existing; R-01 CI scope) — covered by `bun test` / `make test`.
+- **next:** R-06 (subagent stash-isolation provenance) — confirm lineage/attribution track subagent edits under ADR-0032 (isolation off).
+## R-02: prefix-hash regression vs omp auto-compaction
+- **shipped:** `harness/prompt/prefix_compaction.test.ts` — drives a REAL omp agent session (echo model) at the pinned omp **16.0.6**, forces a manual compaction (`AgentSession.compact()` with `compaction.keepRecentTokens` lowered so a headless session is compactable), and asserts the byte-stable frozen prefix (layers 1-4, invariant #6) in `session.systemPrompt` is unchanged across the compaction AND still present verbatim in what omp hands the model on the next turn. Plus an exact-pin assertion on all four `@oh-my-pi/*` packages. Finding: omp 16.0.6 compaction operates on conversation history only (system block preserved) — the invariant HOLDS, no forced change, so no ADR (per R-02's "ADR if omp forces a change").
+- **stubbed:** compaction is exercised via a lowered `keepRecentTokens` (echo turns can't reach the 20k default headlessly); the `snapcompact` strategy is not covered (it needs a vision-capable model) — the `context-full` path is tested. R-02's broader "supported-omp matrix" + scheduled bump CI is R-01 (Nicholas).
+- **next:** R-01's scheduled omp-compat CI should run this test against candidate omp bumps. PRE-EXISTING baseline break unrelated to R-02 — `harness/memory/db.test.ts` asserts `appliedVersions [1..7]` but migrations `0008_memory_session`/`0009_turn_transcripts` (P8.x) make it `[1..9]`; the test wasn't updated when those landed (memory lane to fix).
+
+-----
+
 ## P-EXT.5.0: attach-mode roadmap (planning only — ADR-0039)
 - **shipped:** ADR-0039 in DECISIONS.md — designs the deferred ADR-0038 optional attach-mode (an IDE
   extension SHARING the running desktop's already-gated session instead of spawning its own `lucid acp`).

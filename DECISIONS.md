@@ -4540,6 +4540,82 @@ reused); CLAUDE.md invariants #2/#3/#5/#10 + keystone #2.
 
 -----
 
+## ADR-0055 — Subagent edits are gated + attributed (no stash-masking) (R-06)
+
+**Date:** 2026-06-24
+**Status:** Accepted — verified + regression-locked this increment.
+**Relationship:** depends on ADR-0032 (task isolation OFF) and ADR-0031 (AI-LOC code-activity
+attribution); reconciles with the editor TOCTOU fix. Tracks add-on POAM **R-06**. (Numbered after
+ADR-0054 / R-04, a sibling PI risk PR.)
+
+### Context
+
+omp's subagent `agent()`/`task` can git-stash isolate → apply → merge a subagent's edits. R-06's risk:
+a stash-isolated edit could be masked from the in-process gate or from code-activity attribution
+(the AI bill-of-changes), and the nested-repo dirty-state path could mis-attribute.
+
+### Decision / finding
+
+On THIS product the masking surface does not exist, because **task isolation is OFF** (ADR-0032,
+`harness/omp/acp_config.yml` `task.isolation.mode: none`):
+
+- A `task` subagent runs in the **real workspace**, so its `write`/`edit` tool calls route through the
+  **same in-process fail-closed gate** as the main agent (keystone #1, invariants #3/#4). The
+  kill-the-sidecar test already proves the gate intercepts *every* tool call.
+- Code-activity attribution (ADR-0031) counts from that gate's `tool_result` hook. The counted event
+  shape (`EditResultLike`) carries **no agent/provenance dimension** — so a subagent's edit is counted
+  identically to a main-agent edit; there is no field a counter could use to drop it.
+- Editor TOCTOU: the applied bytes equal the scanned bytes regardless of which agent applied them, so
+  attribution counts exactly what the gate cleared.
+
+`harness/runs/loc_count_subagent.test.ts` regression-locks that subagent writes/edits are counted and
+that counting is provenance-independent.
+
+### Consequences
+
+- No code change needed to *track* subagent edits — isolation-off + the agent-agnostic gate hook make
+  it automatic. The risk is closed by architecture, not a patch.
+- **If isolation is ever re-enabled** (ADR-0032's conditions: a patch-review/apply UI + a verified
+  reliable Windows merge-back), R-06 MUST be re-opened: the stash merge-back would need explicit gate
+  scanning + attribution of the merged diff, and a nested-repo dirty-state test. This ADR is the
+  tripwire for that.
+## ADR-0054 — Thinking-item governance: reasoning is display-only, never durable (R-04)
+
+**Date:** 2026-06-24
+**Status:** Accepted — built this increment.
+**Relationship:** ratifies ADR-0027 (the thinking stream is display-only) as a security policy; extends
+keystone #2 (semantic-promotion gate) and invariants #3 (fail-closed) / #5 (untrusted content) to omp's
+now-first-class reasoning/thinking items. Tracks add-on POAM **R-02 sibling R-04**.
+
+### Context
+
+omp made reasoning/thinking items first-class (a `--thinking` flag; reasoning items in replay). Raw
+model reasoning is a sensitive surface: if it were persisted, learned-from, recalled, or exported it
+could bypass the scan/trust-label gate, leak into semantic memory, or escape CUI exclusion.
+
+### Decision
+
+Thinking is **display-only and never durable**. The chat backend streams `agent_thought_chunk` to the
+UI as a `thinking` event (live reasoning, like the omp TUI) but it is excluded from everything that
+reaches durable state. The single chokepoint is `desktop/thinking_governance.ts`
+`isLearnableAssistantText(e)` — **only `token` text is learnable**. The per-turn `assistant` buffer (the
+sole input to both `recordTurns` persistence/transcripts and `learnFromTurn` — the personalization
+distiller / memory promotion) is built through that predicate, so thinking, tool, block, subagent, and
+usage events contribute nothing. Because thinking is never persisted, it is never recalled and never
+reaches an export (exports read persisted data) — CUI exclusion holds by construction.
+
+A future change that wants to persist thinking MUST first: scan it through the fail-closed gate,
+trust-label it, gate it against semantic promotion (keystone #2), and CUI-exclude it from exports.
+`desktop/thinking_governance.test.ts` regression-locks the invariant.
+
+### Consequences
+
+- The thinking-exclusion rule is now a tested pure function, not an inline `=== "token"` that could
+  silently drift; `acp_backend.prompt()`'s `sink` consumes it.
+- No new persistence/promotion/export path may special-case thinking without passing the four gates
+  above — enforced by review against this ADR + the regression test.
+- The desktop test suite (`bun test` / `make test`) covers it; note CI's `bun test harness` does not
+  yet include `desktop/` (pre-existing; a CI-scope item for R-01).
 ## ADR-0054 — The `/goal` loop's After-Action Report + termination guards (P-GOAL.9)
 
 **Date:** 2026-06-25
