@@ -526,6 +526,8 @@ const server = Bun.serve({
         return json({ ok: true, data: backend.setCheckerModelChoice(String(b.value ?? "")) });
       }
       if (p === "/api/goal/resumable") return json({ ok: true, data: listResumableLoops(currentWorkspace()) });
+      // P-GOAL.10 (ADR-0055): cross-run evaluation — success rate / avg iters / failure breakdown + recent runs.
+      if (p === "/api/goal/stats") return json({ ok: true, data: backend.loopRunStats() });
       if (p === "/api/goal" && req.method === "POST") {
         const b = await readBody<{ goal?: unknown; condition?: unknown; command?: unknown; maxIters?: unknown; resume?: unknown }>(req);
         const enc = new TextEncoder();

@@ -152,6 +152,18 @@ export type ChatEvent =
 export interface GoalOpts { goal: string; condition: string; command?: string; maxIters: number; resume?: string }
 // P-GOAL.4: a stopped loop that can be resumed from its on-disk memory file.
 export interface ResumableLoop { rel: string; goal: string; condition: string; command?: string; iterations: number; updatedAt: number }
+// P-GOAL.10 (ADR-0055): the cross-run evaluation surface (mirrors desktop/loop_runlog.ts).
+export interface LoopRunRecord {
+  ts: number; id: string; goal: string; outcome: "met" | "stopped" | "cancelled" | "error"; outcomeReason: string;
+  iterations: number; maxIters: number; durationMs: number; tools: number; toolsByType: Record<string, number>;
+  added: number; removed: number; hasLoc: boolean; errors: number; websites: number; command?: string;
+}
+export interface RunStats {
+  runs: number; succeeded: number; successRate: number; avgItersToSucceed: number; avgDurationMs: number;
+  totalTools: number; toolsByType: Record<string, number>; totalAdded: number; totalRemoved: number;
+  totalErrors: number; topBlockers: { reason: string; count: number }[];
+}
+export interface LoopRunStats { stats: RunStats; summary: string; recent: LoopRunRecord[] }
 // P-GOAL.5: a scheduled automation — a saved /goal spec the in-process scheduler runs on a cadence.
 export type Cadence = { kind: "interval"; everyMin: number } | { kind: "daily"; hhmm: string };
 export interface Automation {
@@ -204,6 +216,7 @@ export interface LucidBridge {
   // P-GOAL.1 (ADR-0046): run a /goal loop — streams the same events plus goal-iter/check/done/stop.
   runGoal(opts: GoalOpts, onEvent: (e: ChatEvent) => void): Promise<void>;
   resumableLoops(): Promise<ResumableLoop[] | null>; // P-GOAL.4: loops that stopped without meeting their condition
+  loopRunStats(): Promise<LoopRunStats | null>; // P-GOAL.10 (ADR-0055): cross-run evaluation stats + recent runs
   // P-GOAL.5 (ADR-0047): scheduled automations — CRUD + arm/disarm + run-now (run-now streams goal events).
   automations(): Promise<Automation[] | null>;
   automationCreate(spec: AutomationSpec): Promise<Automation | null>;
@@ -388,6 +401,7 @@ export const bridge: LucidBridge = {
   sendPrompt: streamChat,
   runGoal: (opts, onEvent) => streamNdjson("/api/goal", opts, onEvent),
   resumableLoops: () => getData("/api/goal/resumable"),
+  loopRunStats: () => getData("/api/goal/stats"),
   automations: () => getData("/api/automations"),
   automationCreate: (spec) => post("/api/automations", spec),
   automationEnable: (id, enabled) => post("/api/automations/enable", { id, enabled }),

@@ -2110,3 +2110,20 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
   shows the scoreboard+tables, not Mermaid (charts live in the on-disk record by design).
 - **next:** structured JSONL run-log for cross-run success-rate/eval; live per-loop token budget + kill
   switch; escalation ping on unattended stop (loop-engineering Token Burn / Escalation Failure).
+
+---
+**P-GOAL.10 — cross-run evaluation: the /goal run-log + stats surface (ADR-0055)**
+- **shipped:** every completed /goal run now appends one compact JSON line to `.omp/loops/run-log.jsonl`
+  (best-effort, path-confined, written in runGoal's finally beside the AAR). New PURE `desktop/loop_runlog.ts`
+  (unit-tested) projects a P-GOAL.9 LoopMetrics → record, round-trips JSONL (malformed lines skipped), and
+  `aggregateRuns` computes the eval stats: success rate, avg iterations-to-success (over met runs), avg
+  duration, summed tools/LOC/errors, and a failure breakdown that collapses recurring blockers via
+  stallSignature. Surfaced via backend `loopRunStats()` → `GET /api/goal/stats` → a compact evaluation
+  banner in the /goal launcher (hidden until there's history). Flat JSONL by design — stays in the
+  goal-memory lane, never touches the frozen DuckDB schema (invariant #10). bun test desktop 158 pass
+  (+11 new); `make demo-P-GOAL.10` green; typecheck clean across all 3 desktop/root tsconfigs (verified
+  after installing the container's missing bun/node type stubs, then reverting the manifest).
+- **stubbed:** the launcher shows aggregate stats + a 10-run recent slice from the API but no deep
+  per-run history drill-down UI yet (records carry enough to build it without a migration).
+- **next:** live per-loop token budget + kill switch; escalation ping on unattended stop (loop-engineering
+  Token Burn / Escalation Failure) — both can read/append this same ledger.

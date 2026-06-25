@@ -4630,3 +4630,72 @@ their background ticks now also produce a report); ADR-0048 (the checker model w
 feed the stall guard); ADR-0049/0050 (the launcher/cost estimate this complements with
 *actuals*); `cobusgreyling/loop-engineering` (failure-modes #1 Infinite Fix Loop, State Rot,
 Token Burn; ship-readiness §9 Observability — the external review that motivated this).
+
+-----
+
+## ADR-0055 — Cross-run evaluation: the `/goal` loop run-log + stats surface (P-GOAL.10)
+
+**Date:** 2026-06-25
+**Status:** Accepted — shipped this increment.
+**Context increment:** P-GOAL.10.
+
+### Context
+
+ADR-0054 (P-GOAL.9) gave each `/goal` run an After-Action Report — metrics + graphs for ONE
+run. loop-engineering's ship-readiness rubric (§9 Observability) also asks for the cross-run
+view: "success metrics established", an "append-only run history" the team can read without
+chat logs. That is the "metrics/evaluation layer" the user asked for in the original review.
+We already compute a rich `LoopMetrics` per run (ADR-0054); nothing yet persists it across runs
+or aggregates it.
+
+### Decision
+
+A flat, append-only **JSONL ledger** plus a PURE aggregator, reusing the P-GOAL.9 metrics.
+
+- **`desktop/loop_runlog.ts`** (PURE; no I/O, no `Date.now()`; unit-tested):
+  - `toRunRecord(LoopMetrics, {id, ts})` projects a finished run into a compact `LoopRunRecord`
+    (outcome, iterations, duration, tool totals + by-type, LOC, errors, websites). `id`/`ts`
+    come from the backend (pure modules can't read the clock).
+  - `runRecordLine` / `parseRunLog` serialize to / from JSONL; a malformed line is skipped, never
+    fatal (append-only, best-effort).
+  - `aggregateRuns(records): RunStats` — runs, success rate, **average iterations-to-success**
+    (over met runs only), avg duration, summed tools/LOC/errors, and a **failure breakdown** that
+    groups non-success runs by recurring blocker via `stallSignature` (so "3 of 5 tests fail" and
+    "2 of 5 tests fail" collapse to one). `summarizeRunStats` gives a one-line chip.
+- **Persistence — `.omp/loops/run-log.jsonl`** (`appendRunLog`/`readRunLog` in `goal_memory.ts`,
+  path-confined, best-effort). `runGoal`'s `finally` appends one line per completed run, right
+  after writing the AAR — so the ledger and the per-run report are produced together as the
+  loop's last task.
+- **Surface** — backend `loopRunStats()` → `GET /api/goal/stats` → a compact **evaluation banner**
+  in the `/goal` launcher (success rate, avg iters-to-win, avg duration, tool mix, most-common
+  stop). Hidden until there's history, so a first-time user sees nothing extra.
+
+**Why JSONL, not DuckDB.** The desktop `/goal` loop persists to `.omp/loops/` markdown
+(goal-memory, ADR-0046) — this stays in that lightweight, air-gap-clean lane. The DuckDB schema
+(invariant #10) is the harness security/provenance pipeline, a different layer; a per-loop eval
+ledger does not belong there and must not trigger a migration. The flat file is inspectable,
+append-only, and trivially exportable.
+
+### Alternatives considered
+
+- **Write to the DuckDB telemetry store.** Rejected — couples the desktop loop to the harness
+  analytics DB + a frozen-schema migration (invariant #10) for a lightweight, workspace-local
+  ledger. JSONL keeps it in the goal-memory lane.
+- **Recompute stats by scanning the markdown memory/report files.** Rejected — parsing prose for
+  metrics is brittle; a typed JSONL record is the stable contract the aggregator reads.
+- **A full history table UI.** Deferred — the launcher banner is the high-value at-a-glance view;
+  a deeper drill-down can come later (the records carry enough to build it without a migration).
+
+### Invariants preserved
+
+#2 (TS-only; pure aggregator + a flat file, no new language surface) · #3 (the ledger is
+best-effort and never gates the loop; the fail-closed scanner remains the boundary) · #10 (does
+NOT touch the frozen DuckDB schema — a separate workspace-local JSONL file) · path confinement via
+`pathWithin` for the ledger.
+
+### Relates to
+
+ADR-0054 (the After-Action Report + `LoopMetrics` this serializes across runs); ADR-0046/0047
+(the loop + automations whose every run now logs); `cobusgreyling/loop-engineering` (ship-
+readiness §9 Observability — "append-only run history", "success metrics established"). Follow-ons:
+a live per-loop token budget + kill switch, and an escalation ping on unattended stop.

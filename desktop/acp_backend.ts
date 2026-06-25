@@ -21,8 +21,9 @@ import { asksageOnly, attribution, checkerModel, lastModel, mcpServersForAcp, se
 import { managedConfig } from "./managed_config.ts";
 import { recommendCheckerModel, resolveCheckerModel, type ModelOption } from "./checker_model.ts";
 import { parseGoalVerdict } from "./goal_verdict.ts";
-import { appendGoalIteration, finishGoalMemory, type GoalMemory, resumeGoalMemory, saveGoalReport, startGoalMemory } from "./goal_memory.ts";
+import { appendGoalIteration, appendRunLog, finishGoalMemory, type GoalMemory, readRunLog, resumeGoalMemory, saveGoalReport, startGoalMemory } from "./goal_memory.ts";
 import { extractUrls, type IterStat, type LocStat, type LoopMetrics, type LoopOutcome, normalizeToolName, parseNumstat, renderLoopReport, stallSignature, summarizeLoop } from "./loop_report.ts";
+import { aggregateRuns, type LoopRunRecord, type RunStats, summarizeRunStats, toRunRecord } from "./loop_runlog.ts";
 import { execFileSync } from "node:child_process";
 import { type Automation, listAutomations, nextDueAutomation, updateAutomation } from "./automations.ts";
 
@@ -517,6 +518,8 @@ class Backend {
         const markdown = renderLoopReport(metrics);
         const path = saveGoalReport(currentWorkspace(), loopId, goal, markdown) ?? "";
         if (mem && path) { try { finishGoalMemory(mem, `After-Action Report: ${path}`); } catch { /* best-effort */ } }
+        // P-GOAL.10: append this run to the cross-run evaluation ledger (best-effort).
+        try { appendRunLog(currentWorkspace(), toRunRecord(metrics, { id: loopId, ts: Date.now() })); } catch { /* best-effort */ }
         onEvent({ type: "goal-report", path, summary: summarizeLoop(metrics), markdown });
       } catch { /* the report never blocks the loop's completion */ }
       onEvent({ type: "done" });
@@ -541,6 +544,14 @@ class Backend {
   cancelGoal(): void { if (this.goalActive) { this.goalCancelled = true; this.cancel(); } }
   /** Whether a /goal loop is currently running (so the UI routes Stop to cancelGoal, not cancelChat). */
   isGoalRunning(): boolean { return this.goalActive; }
+
+  /** P-GOAL.10 (ADR-0055): the cross-run evaluation surface — aggregate stats over the run-log plus the
+   *  most-recent runs for a compact history view. Reads the workspace's `.omp/loops/run-log.jsonl`. */
+  loopRunStats(limit = 10): { stats: RunStats; summary: string; recent: LoopRunRecord[] } {
+    const records = readRunLog(currentWorkspace());
+    const stats = aggregateRuns(records);
+    return { stats, summary: summarizeRunStats(stats), recent: records.slice(0, Math.max(0, limit)) };
+  }
 
   // P-GOAL.5 (ADR-0047): the automation scheduler. Arm a timer that, while the app is open, fires the
   // first DUE automation through runGoal — same maker/checker loop, same fail-closed gate, same durable

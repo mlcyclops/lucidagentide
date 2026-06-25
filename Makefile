@@ -162,6 +162,10 @@ demo-P-SKILL.1: ## P-SKILL.1 (ADR-0045): gated skill import — clean .md writes
 demo-P-GOAL.9: ## P-GOAL.9 (ADR-0054): /goal After-Action Report — tool calls/LOC/errors/websites graphs + stall guard
 	$(BUN) run harness/scripts/demo_pgoal9.ts
 
+.PHONY: demo-P-GOAL.10
+demo-P-GOAL.10: ## P-GOAL.10 (ADR-0055): /goal cross-run evaluation ledger — success rate, avg iters, failure breakdown
+	$(BUN) run harness/scripts/demo_pgoal10.ts
+
 .PHONY: dashboards
 dashboards: ## Materialize dashboard CSVs from a DuckDB into observable/docs/data (DB=path)
 	$(BUN) run harness/scripts/materialize_dashboards.ts $(DB) observable/docs/data

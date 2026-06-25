@@ -2254,6 +2254,7 @@ function openGoalForm(): void {
       <button type="button" class="goal-mode-toggle" id="goalModeToggle" data-tip="Advanced mode|Show every option on one screen, for power users. You can switch back to the guided walkthrough anytime." data-tip-side="bottom"></button>
     </div>
     <div class="goal-modal-sub">The agent iterates until a verifiable condition holds. A separate checker grades each round; the security gate scans every action.</div>
+    <div id="goalStatsSec"></div>
     <div id="goalResumeSec"></div>
     <div id="goalAutoSec"></div>
     <div class="goal-steps">
@@ -2415,6 +2416,8 @@ function openGoalForm(): void {
       void runGoalLoop({ goal: d.goal!, condition: d.cond || d.goal!, command: d.cmd || undefined, maxIters: 6, resume: d.rel });
     }));
   });
+  // P-GOAL.10 (ADR-0055): the cross-run evaluation banner (success rate / avg iters / top blocker).
+  void loadLoopStats(ov);
   // P-GOAL.5: list saved automations (enable / run-now / delete).
   void renderAutomations(ov, close);
   // P-GOAL.6: populate the checker-model picker (auto recommendation + override).
@@ -2566,6 +2569,42 @@ function updateGoalEstimate(ov: HTMLElement): void {
 
 // P-GOAL.5 (ADR-0047): render the saved-automations list inside the goal modal — each row shows its
 // cadence + last-run status, with an enable toggle, a run-now button, and delete.
+// P-GOAL.10 (ADR-0055): render the cross-run evaluation banner from the run-log ledger — success rate,
+// average iterations-to-success, the most-common blocker, and a tool-mix bar. Hidden until there's
+// history (a first-time user sees nothing extra).
+async function loadLoopStats(ov: HTMLElement): Promise<void> {
+  const sec = $("#goalStatsSec", ov); if (!sec) return;
+  const data = await bridge.loopRunStats().catch(() => null);
+  const s = data?.stats;
+  if (!s || s.runs === 0) { sec.innerHTML = ""; return; }
+  const pct = Math.round(s.successRate * 100);
+  const tone = pct >= 75 ? "ok" : pct >= 40 ? "mid" : "low";
+  const iters = s.avgItersToSucceed ? `${s.avgItersToSucceed.toFixed(1)}` : "—";
+  const dur = s.avgDurationMs ? formatLoopDur(s.avgDurationMs) : "—";
+  const blocker = s.topBlockers[0];
+  const mix = Object.entries(s.toolsByType).sort((a, b) => b[1] - a[1]).slice(0, 4)
+    .map(([k, v]) => `<span class="gs-tool">${esc(k)} <b>${v}</b></span>`).join("");
+  sec.innerHTML = `<div class="goal-stats" data-tone="${tone}">
+    <div class="gs-head">${icon("graph", 13)} Loop history <span class="gs-sum">${esc(data!.summary)}</span></div>
+    <div class="gs-grid">
+      <div class="gs-cell"><span class="gs-n">${pct}%</span><span class="gs-l">met</span></div>
+      <div class="gs-cell"><span class="gs-n">${esc(iters)}</span><span class="gs-l">avg iters to win</span></div>
+      <div class="gs-cell"><span class="gs-n">${esc(dur)}</span><span class="gs-l">avg duration</span></div>
+      <div class="gs-cell"><span class="gs-n">${s.totalTools}</span><span class="gs-l">tool calls</span></div>
+    </div>
+    ${mix ? `<div class="gs-mix">${mix}</div>` : ""}
+    ${blocker ? `<div class="gs-blocker">${icon("info", 11)} most-common stop: <span>${esc(blocker.reason.slice(0, 90))}</span>${blocker.count > 1 ? ` ·&nbsp;${blocker.count}×` : ""}</div>` : ""}
+  </div>`;
+}
+
+/** Compact duration for the eval banner (mirrors loop_report.formatDuration, kept local to the renderer). */
+function formatLoopDur(ms: number): string {
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  return m < 60 ? `${m}m ${String(s % 60).padStart(2, "0")}s` : `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, "0")}m`;
+}
+
 async function renderAutomations(ov: HTMLElement, close: () => void): Promise<void> {
   const sec = $("#goalAutoSec", ov); if (!sec) return;
   const list = await bridge.automations();
