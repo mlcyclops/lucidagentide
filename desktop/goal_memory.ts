@@ -11,6 +11,7 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { pathWithin } from "./path_guard.ts";
+import { type LoopRunRecord, parseRunLog, runRecordLine } from "./loop_runlog.ts";
 
 export interface GoalMemory { path: string; rel: string }
 
@@ -51,6 +52,64 @@ export function appendGoalIteration(mem: GoalMemory | null, n: number, summary: 
 export function finishGoalMemory(mem: GoalMemory | null, result: string): void {
   if (!mem) return;
   try { appendFileSync(mem.path, `## Result\n${result}\n`, "utf8"); } catch { /* best-effort */ }
+}
+
+/** P-GOAL.9 (ADR-0054): write the loop's After-Action Report next to its memory file (same
+ *  `<id>-<slug>` stem, `.report.md`). Best-effort like the memory itself — a failed write never
+ *  affects the loop's outcome. Returns the workspace-relative path on success, else null. */
+export function saveGoalReport(workspace: string, id: string, goal: string, markdown: string): string | null {
+  const root = join(workspace, ".omp", "loops");
+  const file = `${id}-${slugify(goal)}.report.md`;
+  const target = pathWithin(root, join(root, file));
+  if (!target) return null;
+  try {
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, markdown, "utf8");
+    return join(".omp", "loops", file);
+  } catch { return null; }
+}
+
+/** P-GOAL.12 (ADR-0057): write a Pre-Flight Audit's Loop Design report under `.omp/loops/`
+ *  (`<id>-<slug>.preflight.md`). Best-effort; returns the workspace-relative path or null. */
+export function savePreflightReport(workspace: string, id: string, goal: string, markdown: string): string | null {
+  const root = join(workspace, ".omp", "loops");
+  const file = `${id}-${slugify(goal)}.preflight.md`;
+  const target = pathWithin(root, join(root, file));
+  if (!target) return null;
+  try {
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, markdown, "utf8");
+    return join(".omp", "loops", file);
+  } catch { return null; }
+}
+
+// ── P-GOAL.10 (ADR-0055): the cross-run evaluation ledger (`.omp/loops/run-log.jsonl`) ─────────────
+
+const RUN_LOG = "run-log.jsonl";
+
+/** Append one completed loop to the run-log (append-only JSONL). Best-effort: a failed write never
+ *  affects the loop. Returns true on success. */
+export function appendRunLog(workspace: string, record: LoopRunRecord): boolean {
+  const root = join(workspace, ".omp", "loops");
+  const target = pathWithin(root, join(root, RUN_LOG));
+  if (!target) return false;
+  try {
+    mkdirSync(dirname(target), { recursive: true });
+    appendFileSync(target, runRecordLine(record) + "\n", "utf8");
+    return true;
+  } catch { return false; }
+}
+
+/** Read the run-log back into records (most-recent first), for the evaluation surface. Empty when the
+ *  ledger is missing/unreadable — never throws. */
+export function readRunLog(workspace: string): LoopRunRecord[] {
+  const root = join(workspace, ".omp", "loops");
+  const target = pathWithin(root, join(root, RUN_LOG));
+  if (!target) return [];
+  try {
+    const records = parseRunLog(readFileSync(target, "utf8"));
+    return records.sort((a, b) => b.ts - a.ts);
+  } catch { return []; }
 }
 
 // ── P-GOAL.4: read a memory file back to RESUME a stopped loop ─────────────────
