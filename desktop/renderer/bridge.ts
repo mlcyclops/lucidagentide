@@ -342,12 +342,14 @@ const FALLBACK_CONFIG: ConfigOption[] = [
   ] },
 ];
 
-// Generic NDJSON event stream (used by both /api/chat and the /api/goal loop).
-async function streamNdjson(path: string, body: unknown, onEvent: (e: ChatEvent) => void): Promise<void> {
+// Generic NDJSON event stream (used by both /api/chat and the /api/goal loop). `signal` lets Stop abort
+// the CLIENT read so the turn settles even if the server/omp never closes the stream (a wedged turn).
+async function streamNdjson(path: string, body: unknown, onEvent: (e: ChatEvent) => void, signal?: AbortSignal): Promise<void> {
   let res: Response;
   try {
-    res = await fetch(path, { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify(body) });
+    res = await fetch(path, { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify(body), signal });
   } catch {
+    if (signal?.aborted) return; // Stop pressed — the caller's finally settles the UI; no error line
     onEvent({ type: "token", text: "[backend unreachable - is the GUI server running?]" });
     onEvent({ type: "done" });
     return;
@@ -358,16 +360,25 @@ async function streamNdjson(path: string, body: unknown, onEvent: (e: ChatEvent)
   const dec = new TextDecoder();
   let buf = "";
   const flush = (line: string) => { const s = line.trim(); if (s) { try { onEvent(JSON.parse(s)); } catch { /* skip */ } } };
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buf += dec.decode(value, { stream: true });
-    let nl: number;
-    while ((nl = buf.indexOf("\n")) >= 0) { flush(buf.slice(0, nl)); buf = buf.slice(nl + 1); }
-  }
-  flush(buf);
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let nl: number;
+      while ((nl = buf.indexOf("\n")) >= 0) { flush(buf.slice(0, nl)); buf = buf.slice(nl + 1); }
+    }
+    flush(buf);
+  } catch { /* Stop aborted the read, or the stream errored — return so the caller's finally settles. */ }
 }
-const streamChat = (text: string, onEvent: (e: ChatEvent) => void) => streamNdjson("/api/chat", { text }, onEvent);
+// Stop must always recover the UI: aborting this controller ends the client read immediately, so the
+// turn's finally runs even when omp is wedged. cancelChat() aborts it AND posts the server cancel.
+let chatAbort: AbortController | null = null;
+const streamChat = (text: string, onEvent: (e: ChatEvent) => void) => {
+  chatAbort?.abort();
+  chatAbort = new AbortController();
+  return streamNdjson("/api/chat", { text }, onEvent, chatAbort.signal).finally(() => { chatAbort = null; });
+};
 
 export const bridge: LucidBridge = {
   isElectron: !!shell?.isElectron,
@@ -402,7 +413,7 @@ export const bridge: LucidBridge = {
   setMode: (modeId) => post("/api/modes", { modeId }),
   setUiMode: (uiMode) => post("/api/uimode", { uiMode }),
   respondPermission: (id, optionId) => post("/api/chat/permission", { id, optionId }),
-  cancelChat: () => post("/api/chat/cancel", {}),
+  cancelChat: () => { chatAbort?.abort(); return post("/api/chat/cancel", {}); },
   cancelGoal: () => post("/api/goal/cancel", {}),
   commands: async () => (await getData("/api/commands")) ?? [],
   skills: () => getData("/api/skills"),

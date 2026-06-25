@@ -2164,3 +2164,21 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
   gate/omp-level investigation. Live gov-gateway Stop round-trip still the manual check.
 - **next:** user re-tests live: AskSage rows should populate without a refresh, Stop should end a hung
   AskSage turn, transcripts newest-first with ET times. Then read the diagnostics for the give-up root cause.
+
+---
+**Stop reliably recovers a wedged turn (client-side abort) — follow-up to ADR-0055**
+- **shipped:** live AskSage Claude-45-Sonnet-Gov trace showed a HEALTHY adapter loop (read→write→end_turn,
+  msgs 27→29→31, all ok via:content, no anomalies) yet the chat UI hung showing only the first tool call
+  and Stop didn't recover it. Root cause: the turn settles only when bridge.sendPrompt's NDJSON stream
+  ends; if omp never resolves session/prompt (turn-finalization wedge — the model finished but omp didn't
+  close the stream), reader.read() blocks forever and the UI is stuck. Fix: streamNdjson takes an
+  AbortSignal; a module-level chatAbort controller wraps the chat stream; cancelChat() now aborts it
+  (client read ends → sendPrompt resolves → the send finally settles the UI) AND posts the server cancel.
+  So Stop ALWAYS recovers the UI even when omp is wedged. typecheck clean · desktop 326 · bundle OK.
+- **stubbed:** the underlying wedge (omp not resolving session/prompt after a custom-provider turn ends, and
+  only the first tool_call reaching the desktop over ACP while the model loop ran ahead) is an
+  omp-integration issue not root-caused here — the adapter is provably healthy (stderr diag), the gap is in
+  omp's ACP session/update + prompt-completion emission for the custom streamSimple provider. No client
+  watchdog added (a single gov-gateway call can exceed 60s, so a silence-timeout would false-settle).
+- **next:** capture omp's own logs during a wedge to see why session/prompt doesn't resolve; consider an
+  omp issue/upstream fix or a per-turn server-side timeout in acp_backend.prompt().
