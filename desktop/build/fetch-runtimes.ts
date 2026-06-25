@@ -18,9 +18,19 @@
 
 import { $ } from "bun";
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+
+// Locate the extracted member by basename, recursively. Cross-platform ON PURPOSE: it replaces a
+// `find … -name` shell call that on the Windows CI runner resolves to System32\find.exe (a text-search
+// tool with incompatible syntax → "FIND: Parameter format not correct"), not the Unix find.
+function findMember(root: string, member: string): string | null {
+	for (const rel of readdirSync(root, { recursive: true }) as string[]) {
+		if (rel.split(/[\\/]/).pop() === member) return join(root, rel);
+	}
+	return null;
+}
 
 // Pinned upstream versions — bump deliberately, then REFRESH the hashes below.
 const BUN_VERSION = "1.3.14"; // github.com/oven-sh/bun -> release tag bun-v<ver>
@@ -168,12 +178,12 @@ for (const spec of specs) {
 	} else {
 		await $`tar xzf ${archive} -C ${tmp}`;
 	}
-	const found = (await $`find ${tmp} -type f -name ${spec.member}`.text()).trim().split("\n")[0];
+	const found = findMember(tmp, spec.member);
 	if (!found) {
 		rmSync(tmp, { recursive: true, force: true });
 		throw new Error(`fetch-runtimes: "${spec.member}" not found in ${spec.url}`);
 	}
-	await $`cp ${found} ${dest}`;
+	cpSync(found, dest);
 	chmodSync(dest, 0o755);
 	rmSync(tmp, { recursive: true, force: true });
 	console.log(`runtimes: ${spec.name} ok (sha256 verified)`);
