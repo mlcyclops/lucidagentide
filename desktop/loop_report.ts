@@ -69,7 +69,9 @@ export function extractUrls(text: string, cap = 50): string[] {
   const seen = new Set<string>();
   const re = /https?:\/\/[^\s"'`)<>\]}]+/gi;
   for (const m of (text || "").matchAll(re)) {
-    let u = m[0].replace(/[.,;:!?)\]]+$/, ""); // strip trailing sentence punctuation
+    const m0 = m[0];
+    if (!m0) continue;
+    let u = m0.replace(/[.,;:!?)\]]+$/, ""); // strip trailing sentence punctuation
     if (u.length > 200) u = u.slice(0, 200);
     const key = u.toLowerCase();
     if (seen.has(key)) continue;
@@ -129,6 +131,13 @@ export function formatDuration(ms: number): string {
 /** Quote+sanitize a label for a Mermaid string literal (no quotes/newlines/brackets). */
 function mlabel(s: string): string {
   return s.replace(/["\n\r[\]{}]/g, " ").replace(/\s+/g, " ").trim().slice(0, 32) || "?";
+}
+
+/** Escape arbitrary text for a single Markdown table cell. Backslashes are escaped FIRST — otherwise a
+ *  trailing "\" in the input would escape the cell's closing "|" and corrupt the row — then pipes, then
+ *  newlines are flattened (a table cell can't span lines). */
+function mdCell(s: string): string {
+  return (s || "").replace(/\\/g, "\\\\").replace(/\|/g, "\\|").replace(/[\r\n]+/g, " ");
 }
 
 /** A Mermaid pie chart, or "" when there's nothing to plot (an empty pie is invalid Mermaid). */
@@ -242,7 +251,7 @@ export function renderLoopReport(m: LoopMetrics): string {
     if (chart) { out.push(chart); out.push(""); }
     out.push("| Iter | Error |");
     out.push("|---|---|");
-    for (const e of m.errors.slice(0, 50)) out.push(`| ${e.iter} | ${e.detail.replace(/\|/g, "\\|").slice(0, 160)} |`);
+    for (const e of m.errors.slice(0, 50)) out.push(`| ${e.iter} | ${mdCell(e.detail.slice(0, 160))} |`);
     if (m.errors.length > 50) out.push(`| … | _${m.errors.length - 50} more_ |`);
   } else {
     out.push("_No errors recorded. 🎉_");
@@ -265,7 +274,7 @@ export function renderLoopReport(m: LoopMetrics): string {
   out.push("| Iter | Tools | Errors | Checker |");
   out.push("|---|---|---|---|");
   for (const it of m.perIteration) {
-    const verdict = `${it.done ? "✅ met" : "… not yet"} — ${(it.reason || "").replace(/\|/g, "\\|").slice(0, 120)}`;
+    const verdict = `${it.done ? "✅ met" : "… not yet"} — ${mdCell((it.reason || "").slice(0, 120))}`;
     out.push(`| ${it.n} | ${it.tools} | ${it.errors} | ${verdict} |`);
   }
   out.push("");

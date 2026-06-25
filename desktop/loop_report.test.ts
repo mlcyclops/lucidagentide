@@ -155,6 +155,20 @@ describe("renderLoopReport", () => {
   test("is deterministic — same metrics, same bytes", () => {
     expect(renderLoopReport(metrics())).toBe(renderLoopReport(metrics()));
   });
+
+  test("table cells escape backslash before pipe (CodeQL: incomplete escaping)", () => {
+    // A trailing backslash must NOT be left able to escape the cell's closing pipe.
+    const md = renderLoopReport(metrics({
+      errors: [{ iter: 1, detail: "path C:\\tmp | bad" }],
+      perIteration: [{ n: 1, tools: 1, errors: 1, done: false, reason: "regex a\\|b failed" }],
+    }));
+    expect(md).toContain("C:\\\\tmp \\| bad");   // backslash → \\, pipe → \|
+    expect(md).toContain("regex a\\\\\\|b failed"); // a, \ →\\, | →\|, b
+    // every body row still has the right number of cell delimiters (not broken by a stray pipe)
+    for (const line of md.split("\n").filter((l) => /^\| 1 \|/.test(l))) {
+      expect(line.endsWith(" |")).toBe(true);
+    }
+  });
 });
 
 describe("summarizeLoop", () => {
