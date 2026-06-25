@@ -125,6 +125,7 @@ function buildShell(): void {
         <button class="rail-btn" data-rail="security" data-tip="Security|Findings, quarantine & approvals" data-tip-icon="shield">${icon("shield", 20)}<span class="badge" id="railBadge" hidden>0</span></button>
         <button class="rail-btn" data-rail="memory" data-tip="Memory & context|Context window, prompt-cache savings, semantic memory" data-tip-icon="brain">${icon("brain", 20)}</button>
         <button class="rail-btn" data-rail="knowledge" data-tip="Knowledge graph|Your private, encrypted personalization graph - nodes, edges, drill-down" data-tip-icon="graph">${icon("graph", 20)}</button>
+        <button class="rail-btn" id="railLogs" data-rail="dev" hidden data-tip="Logs|Read-only developer logs: telemetry, run lineage, transcripts, gate-block audit, AskSage tool-call diagnostics" data-tip-icon="layout">${icon("layout", 20)}</button>
         <div class="spacer"></div>
         <button class="rail-btn" id="railCmd" data-tip="Commands|Ctrl / ⌘ K" data-tip-icon="command">${icon("command", 20)}</button>
         <button class="rail-btn" data-rail="settings" data-tip="Settings" data-tip-icon="sliders">${icon("sliders", 20)}</button>
@@ -848,7 +849,11 @@ function hasActiveBlocks(): boolean {
 function focusInspector(tab: Tab): void {
   closeSettings();
   state.inspectorTab = tab;
-  if (state.inspectorRail) setInspectorRail(false);
+  // Expanding from the collapsed metrics rail on an EXPLICIT tab click: clear the rail state directly.
+  // Do NOT route through setInspectorRail() here — its ADR-0021 active-blocks override would hijack the
+  // chosen tab (e.g. clicking Logs/Memory while blocks exist would snap to Security). The passive expand
+  // gesture (#railExpand) still calls setInspectorRail(false), so that override is preserved there.
+  if (state.inspectorRail) { state.inspectorRail = false; $("#inspector")?.classList.remove("rail"); }
   $$(".insp-tab").forEach((t) => t.classList.toggle("active", (t as HTMLElement).dataset.insp === tab));
   $$(".rail-btn").forEach((b) => b.classList.toggle("active", (b as HTMLElement).dataset.rail === tab));
   lastInspHash = ""; renderInspector();

@@ -2135,7 +2135,11 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
   real change) so the debug env takes effect with NO app restart. Also ADDED the missing Developer-mode
   toggle to Settings (Settings → Developer) — the #devModeToggle handler existed but no card rendered it,
   so dev mode (and thus the Logs panel + these diagnostics) was unreachable from the UI; live-verified the
-  card renders, toggles on/off, and respawns cleanly. 7 new tests (asksage_stream 14 total); harness 500 ·
+  card renders, toggles on/off, and respawns cleanly. ALSO added the missing #railLogs rail button (its
+  loadDev() un-hide existed but no button was rendered) AND fixed focusInspector so an explicit Logs/Memory
+  click from the collapsed metrics rail is no longer hijacked to Security by the ADR-0021 active-blocks
+  override — live-verified the Logs button appears in dev mode and opens the Developer-logs panel (AskSage
+  accordion at top). 7 new tests (asksage_stream 14 total); harness 500 ·
   desktop 326 · typecheck clean · bundle OK. demo-P-ASKSAGE.1 proves recover/flag/off-by-default.
 - **stubbed:** thinking-block relay (no reasoning shown yet) and a max_tokens override are DEFERRED until
   the live diagnostics say which failure it is; whether omp re-invokes streamSimple after each tool result
