@@ -2131,7 +2131,8 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
   OpenAI choices[].message, plain-string message) — fires ONLY when the strict parse is empty, so it can
   only turn a premature empty stop into a real turn; (3) acp_backend sets the env in DEVELOPER MODE,
   onStderr rings the diagnostics (last 200) + echoes to console; (4) renderer Logs → "AskSage tool calls"
-  accordion (auto-opens + chip on any anomaly). 7 new tests (asksage_stream 14 total); harness 500 ·
+  accordion (auto-opens + chip on any anomaly); toggling developer mode respawns omp (backend.restart on a
+  real change) so the debug env takes effect with NO app restart. 7 new tests (asksage_stream 14 total); harness 500 ·
   desktop 326 · typecheck clean · bundle OK. demo-P-ASKSAGE.1 proves recover/flag/off-by-default.
 - **stubbed:** thinking-block relay (no reasoning shown yet) and a max_tokens override are DEFERRED until
   the live diagnostics say which failure it is; whether omp re-invokes streamSimple after each tool result

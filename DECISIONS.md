@@ -4658,7 +4658,9 @@ explicitly: when an OK response yields empty text AND no tool calls, the record 
 mode is on** - zero overhead otherwise - and its `onStderr` parses `[ASKSAGE_DIAG]` lines into a bounded
 in-memory ring (last 200), echoing them to the dev-server console. `/api/dev` exposes the ring (developer
 mode only); the renderer's **Logs -> AskSage tool calls** accordion shows one row per call and
-auto-opens, with a chip, when any anomaly/error is present.
+auto-opens, with a chip, when any anomaly/error is present. Because the child reads the env only at
+spawn, toggling developer mode (`POST /api/dev`) calls `backend.restart()` on a real change, so the
+diagnostics take effect immediately with no app restart (the same respawn pattern as an API-key change).
 
 ### Decision - tolerant response extraction (the one safe fix)
 
