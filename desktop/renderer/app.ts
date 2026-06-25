@@ -1130,8 +1130,17 @@ function secCompression(hr: import("./bridge.ts").HeadroomStatus | null): string
         <span><b>Compress context with headroom</b> - fewer tokens before they reach the model. ${hr.running ? `<span class="abadge ok">running · :${hr.port}</span>` : ""}</span></label>
       <div class="set-note">${icon("info", 12)} Runs entirely on your machine (${esc(hr.version ?? "installed")}). Request-routing + a gov-deployment security review are next - see ADR-0008.</div>`
     : `<div class="set-note">${icon("info", 12)} Optional: install <b>headroom</b> to compress context on-device (60–95% fewer tokens). Run <code>${esc(hr?.installHint ?? "pip install headroom-ai[proxy]")}</code>, then this toggle appears.</div>`;
-  // ADR-0009 Phase D: Developer mode toggle (reveals the read-only Logs rail panel).
   return setCard("compression", "Token compression", "on-device · opt-in", body, true);
+}
+// ADR-0009 Phase D + P-ASKSAGE.1 (ADR-0055): Developer mode toggle. Reveals the read-only Logs rail
+// panel (telemetry, lineage, transcripts, gate-block audit) AND enables AskSage tool-call diagnostics.
+// Uses the existing #devModeToggle handler, which now respawns omp so the diagnostics apply immediately.
+function secDeveloper(): string {
+  const on = state.developerMode;
+  const body = `<label class="set-toggle"><input type="checkbox" id="devModeToggle" ${on ? "checked" : ""}/>
+      <span><b>Developer mode</b> - reveal a read-only <b>Logs</b> panel in the rail (telemetry, run lineage, transcripts, gate-block audit) and turn on <b>AskSage tool-call diagnostics</b>. Read-only, on this machine, off by default.</span></label>
+    <div class="set-note">${icon("info", 12)} Turning this on respawns the agent so diagnostics apply right away, then shows a <b>Logs</b> panel in the left rail. Open <b>Logs → AskSage tool calls</b> to watch each non-streamed AskSage call.</div>`;
+  return setCard("developer", "Developer", "logs · diagnostics", body, true);
 }
 function secOthers(auth: import("./bridge.ts").AuthStatus | null): string {
   return setCard("others", "More providers", "", (auth?.others ?? []).map(provCard).join("") || `<div class="empty">none</div>`, true);
@@ -1178,6 +1187,7 @@ function settingsShell(): string {
     setSkel("compression", "Token compression", "headroom · on-device · opt-in", true),
     setSkel("mcp", "MCP connectors", "model context protocol", true),
     setSkel("others", "More providers", "", true),
+    setSkel("developer", "Developer", "logs · diagnostics", true),
     `<div class="set-note">${icon("shield", 12)} Keys are stored on this machine and passed to omp as env vars - never sent anywhere else. OAuth uses omp's own secure credential vault.</div>`,
   ].join("");
 }
@@ -1201,6 +1211,7 @@ function hydrateSettings(): void {
   void bridge.auth().then((a) => { fillSec("providers", secProviders(a)); fillSec("others", secOthers(a)); });
   fillSec("sovereignty", secSovereignty()); // P-IDE.1c: only renders a card when China-origin models exist
   void bridge.headroom().then((h) => fillSec("compression", secCompression(h)));
+  fillSec("developer", secDeveloper()); // ADR-0055: render from state.developerMode (loaded by loadDev)
   void hydratePersonal();
   hydrateMcp();
   void bridge.asksage().then(async (a) => {
