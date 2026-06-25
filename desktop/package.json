@@ -7,15 +7,18 @@
   "scripts": {
     "build": "bun build main.ts --target=node --format=cjs --external electron --outfile dist/main.js && bun build preload.ts --target=node --format=cjs --external electron --outfile dist/preload.js",
     "icons": "bun run build/make-icons.ts",
+    "runtimes": "bun run build/fetch-runtimes.ts",
     "runtimes:mac": "bun run build/fetch-runtimes.ts",
+    "runtimes:win": "bun run build/fetch-runtimes.ts",
+    "runtimes:linux": "bun run build/fetch-runtimes.ts",
     "compile-lucid": "bun build --compile ../harness/launcher/lucid_acp.ts --outfile ../bin/lucid",
     "start": "bun run build && electron .",
     "web": "bun run dev.ts",
     "typecheck": "tsc --noEmit",
     "dist:mac": "bun run runtimes:mac && bun run icons && bun run build && bun run compile-lucid && electron-builder --mac --publish never",
-    "dist:win": "bun run icons && bun run build && bun run compile-lucid && electron-builder --win --publish never",
-    "dist:linux": "bun run icons && bun run build && bun run compile-lucid && electron-builder --linux --publish never",
-    "dist": "bun run icons && bun run build && bun run compile-lucid && electron-builder --publish never"
+    "dist:win": "bun run runtimes:win && bun run icons && bun run build && bun run compile-lucid && electron-builder --win --publish never",
+    "dist:linux": "bun run runtimes:linux && bun run icons && bun run build && bun run compile-lucid && electron-builder --linux --publish never",
+    "dist": "bun run runtimes && bun run icons && bun run build && bun run compile-lucid && electron-builder --publish never"
   },
   "build": {
     "appId": "com.lucidagentide.desktop",
@@ -113,7 +116,8 @@
     "linux": {
       "icon": "build/icon.png",
       "category": "Development",
-      "target": ["AppImage"]
+      "target": ["AppImage"],
+      "artifactName": "${productName}-x86_64.${ext}"
     },
     "publish": [
       {

@@ -40,12 +40,16 @@ function startDevServer(): void {
   dev.stdout?.on("data", (d) => process.stdout.write(d));
   dev.stderr?.on("data", (d) => process.stderr.write(d));
 }
-async function waitForServer(timeoutMs = 12000): Promise<void> {
+// Returns true once the dev server answers /api/health, false if it never does within the window.
+// 30s headroom: the server's own init (DuckDB open + omp acp spawn) can outlast a slow first launch;
+// the splash already covered the longer omp/scanner provisioning before we got here.
+async function waitForServer(timeoutMs = 30000): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    try { if ((await fetch(`http://localhost:${PORT}/api/health`)).ok) return; } catch { /* retry */ }
+    try { if ((await fetch(`http://localhost:${PORT}/api/health`)).ok) return true; } catch { /* retry */ }
     await sleep(180);
   }
+  return false;
 }
 
 function createWindow(): void {
@@ -61,6 +65,12 @@ function createWindow(): void {
   win.once("ready-to-show", () => win!.show());
   // external links (e.g. duckdb.org) open in the OS browser, not a new Electron window
   win.webContents.setWindowOpenHandler(({ url }) => { if (/^https?:/.test(url)) shell.openExternal(url); return { action: "deny" }; });
+  // If the dev server isn't answering yet (slow first launch), the load fails — retry a bounded number
+  // of times so a late-ready server self-heals into a rendered window instead of a permanent black one.
+  let reloadTries = 0;
+  win.webContents.on("did-fail-load", () => {
+    if (reloadTries++ < 30) setTimeout(() => win?.loadURL(`http://localhost:${PORT}`), 1000);
+  });
   win.loadURL(`http://localhost:${PORT}`);
   win.on("closed", () => (win = null));
 }
@@ -95,9 +105,21 @@ app.whenReady().then(async () => {
   }
 
   startDevServer();
-  await waitForServer();
+  const serverUp = await waitForServer();
   createWindow();
   splash?.close();
+  // Don't leave the user staring at a black window with no explanation: if the local engine never
+  // came up (e.g. no usable bun runtime), say so. The window keeps retrying via did-fail-load, so a
+  // late start still recovers; this only fires when it genuinely failed to answer in time.
+  if (!serverUp) {
+    dialog.showErrorBox(
+      "LucidAgentIDE could not start its local engine",
+      `The bundled background service did not respond on port ${PORT} within 30 seconds, so the window ` +
+        `may stay blank.\n\nThis usually means the bundled runtime is missing or was blocked. The app ` +
+        `will keep retrying — if it stays blank, reinstall the latest release, or relaunch from a ` +
+        `terminal to see the startup log.`,
+    );
+  }
   initAutoUpdate(() => win); // packaged-only; checks GitHub Releases, prompts on download
   app.on("activate", () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 });

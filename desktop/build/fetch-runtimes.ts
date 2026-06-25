@@ -27,34 +27,39 @@ const BUN_VERSION = "1.3.14"; // github.com/oven-sh/bun -> release tag bun-v<ver
 const UV_VERSION = "0.11.23"; // github.com/astral-sh/uv -> release tag <ver>
 
 interface RuntimeSpec {
-	readonly name: string; // output name under runtimes/ — must match bundled()
+	readonly platform: "darwin" | "win32" | "linux"; // the process.platform this runtime targets
+	readonly name: string; // output name under runtimes/ — must match runtime.ts bundled()
 	readonly url: string; // exact, versioned release archive URL (never `latest`)
 	readonly kind: "zip" | "tgz";
 	readonly member: string; // executable basename inside the archive
 	readonly sha256: string; // expected SHA-256 of the archive (committed + vendor-cross-checked)
 }
 
-const bunUrl = (arch: string): string =>
-	`https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/bun-darwin-${arch}.zip`;
-const uvUrl = (triple: string): string =>
-	`https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-${triple}.tar.gz`;
+const bunUrl = (slug: string): string =>
+	`https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/bun-${slug}.zip`;
+const uvUrl = (triple: string, ext: "tar.gz" | "zip" = "tar.gz"): string =>
+	`https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-${triple}.${ext}`;
 
 const SPECS: readonly RuntimeSpec[] = [
+	// macOS (both arches; runtime.ts picks by process.arch)
 	{
+		platform: "darwin",
 		name: "bun-darwin-arm64",
 		kind: "zip",
 		member: "bun",
-		url: bunUrl("aarch64"),
+		url: bunUrl("darwin-aarch64"),
 		sha256: "d8b96221828ad6f97ac7ac0ab7e95872341af763001e8803e8267652c2652620",
 	},
 	{
+		platform: "darwin",
 		name: "bun-darwin-x64",
 		kind: "zip",
 		member: "bun",
-		url: bunUrl("x64"),
+		url: bunUrl("darwin-x64"),
 		sha256: "4183df3374623e5bab315c547cfa0974533cd457d86b73b639f7a87974cd6633",
 	},
 	{
+		platform: "darwin",
 		name: "uv-darwin-arm64",
 		kind: "tgz",
 		member: "uv",
@@ -62,11 +67,46 @@ const SPECS: readonly RuntimeSpec[] = [
 		sha256: "71ef9de85db820749b3b12b7585624ee279e9c5afcbc6f8236bc3d628c4305b0",
 	},
 	{
+		platform: "darwin",
 		name: "uv-darwin-x64",
 		kind: "tgz",
 		member: "uv",
 		url: uvUrl("x86_64-apple-darwin"),
 		sha256: "7a88155033cc469bba5bd5a24212e355eb92e3e2a276320b669ec576296c1e25",
+	},
+	// Windows x64 — output names carry the `.exe` so they match runtime.ts bundled() (EXE = ".exe").
+	{
+		platform: "win32",
+		name: "bun-win32-x64.exe",
+		kind: "zip",
+		member: "bun.exe",
+		url: bunUrl("windows-x64"),
+		sha256: "0a0620930b6675d7ba440e81f4e0e00d3cfbe096c4b140d3fff02205e9e18922",
+	},
+	{
+		platform: "win32",
+		name: "uv-win32-x64.exe",
+		kind: "zip",
+		member: "uv.exe",
+		url: uvUrl("x86_64-pc-windows-msvc", "zip"),
+		sha256: "02ad29f07e674d68726ba3bb1ff25b335d83515756e2b1a194bb56c3cc30e07c",
+	},
+	// Linux x64
+	{
+		platform: "linux",
+		name: "bun-linux-x64",
+		kind: "zip",
+		member: "bun",
+		url: bunUrl("linux-x64"),
+		sha256: "951ee2aee855f08595aeec6225226a298d3fea83a3dcd6465c09cbccdf7e848f",
+	},
+	{
+		platform: "linux",
+		name: "uv-linux-x64",
+		kind: "tgz",
+		member: "uv",
+		url: uvUrl("x86_64-unknown-linux-gnu"),
+		sha256: "e12c4cda2fe8c305510a78380a88f2c32a27e90cdcd123cefd2873388f0ebb5f",
 	},
 ];
 
@@ -77,7 +117,16 @@ const hashOf = (file: string): string => createHash("sha256").update(readFileSyn
 
 mkdirSync(OUT, { recursive: true });
 
-for (const spec of SPECS) {
+// electron-builder packages on the matching OS, so by default we fetch only the current platform's
+// runtimes (RUNTIME_OS overrides — e.g. to pre-stage another OS's binaries). Filtering keeps a Windows
+// build from downloading the mac/linux binaries it would never bundle.
+const TARGET = (process.env.RUNTIME_OS ?? process.platform) as RuntimeSpec["platform"];
+const specs = SPECS.filter((s) => s.platform === TARGET);
+if (specs.length === 0) {
+	console.warn(`fetch-runtimes: no runtime specs for platform "${TARGET}" — nothing to bundle.`);
+}
+
+for (const spec of specs) {
 	const dest = join(OUT, spec.name);
 	if (!REFRESH && existsSync(dest)) {
 		console.log(`runtimes: ${spec.name} (cached)`);
