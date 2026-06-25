@@ -1,4 +1,4 @@
-// desktop/egress_policy.test.ts — pure egress decision + choice-folding (P-EGRESS.1, ADR-0058).
+// desktop/egress_policy.test.ts — pure egress decision + choice-folding (P-EGRESS.1, ADR-0062).
 
 import { describe, expect, test } from "bun:test";
 import { applyEgressChoice, egressVerdict, extractHost, type EgressStore } from "./egress_policy.ts";

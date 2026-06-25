@@ -1,6 +1,6 @@
 // harness/knowledge/embedder.ts
 //
-// P-RAG.1 (ADR-0054): the embedding seam. The ingest + retrieval pipeline depends on this interface,
+// P-RAG.1 (ADR-0058): the embedding seam. The ingest + retrieval pipeline depends on this interface,
 // NOT on any concrete model, so the spine is testable and air-gap-clean today and the real model drops
 // in later without touching callers.
 //

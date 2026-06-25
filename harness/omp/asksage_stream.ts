@@ -20,7 +20,7 @@ export interface AsksageStreamCfg { base: string; key: string }
 
 const isRecord = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
 
-// ── Diagnostics (P-ASKSAGE.1, ADR-0055) ─────────────────────────────────────────────────────────────
+// ── Diagnostics (P-ASKSAGE.1, ADR-0059) ─────────────────────────────────────────────────────────────
 // AskSage serves Claude/Gemini NON-streamed, so each streamSimple call is one HTTP round-trip = one
 // assistant turn; omp drives the agentic loop. When that loop "gives up too soon" (tools run, files end
 // up half-written, no retry), the usual cause is invisible: a follow-up response we parse to EMPTY text
@@ -41,7 +41,7 @@ function safeJsonArgs(v: unknown): Record<string, any> {
   return {};
 }
 
-// ── Transient-failure resilience (P-RESIL.1, ADR-0057) ───────────────────────────────────────────────
+// ── Transient-failure resilience (P-RESIL.1, ADR-0061) ───────────────────────────────────────────────
 // The gov gateway intermittently 504s, and Gemini sometimes returns finishReason MALFORMED_FUNCTION_CALL
 // with an EMPTY body — both burned a whole turn (and 100k-200k input tokens) for zero output. We retry
 // these transient outcomes a few times with short backoff before giving up, so the agent loop doesn't
@@ -173,7 +173,7 @@ interface AnthropicResult extends RouteResult { toolCalls: OmpToolCall[]; stopRe
 // Locate the Anthropic content blocks TOLERANTLY. The standard reply is `{ content: [...] }` (verified
 // live for text), but a proxy may wrap it. Fallbacks can only RECOVER content the strict parse would
 // drop (they fire only when `content` is absent), and `via` records which shape actually matched so a
-// live test reveals the real wire format instead of silently emitting an empty turn. ADR-0055.
+// live test reveals the real wire format instead of silently emitting an empty turn. ADR-0059.
 function anthropicBlocks(j: any): { blocks: any[]; via: string } {
   if (Array.isArray(j?.content)) return { blocks: j.content, via: "content" };
   if (Array.isArray(j?.response?.content)) return { blocks: j.response.content, via: "response.content" };
@@ -295,7 +295,7 @@ interface GoogleResult extends RouteResult { toolCalls: OmpToolCall[]; stopReaso
 // Google) for real Gemini models. Gemini gives no call id, so we mint a synthetic one (omp tracks the
 // call→result mapping internally and replays the result back by NAME).
 // Locate the Gemini parts TOLERANTLY (mirrors anthropicBlocks). Standard shape is
-// candidates[0].content.parts; `via` records what matched so a live test reveals the real format. ADR-0055.
+// candidates[0].content.parts; `via` records what matched so a live test reveals the real format. ADR-0059.
 function googleParts(j: any): { parts: any[]; via: string } {
   const std = j?.candidates?.[0]?.content?.parts;
   if (Array.isArray(std)) return { parts: std, via: "candidates" };
@@ -367,7 +367,7 @@ export function makeAsksageStream(route: AsksageRoute, getCfg: () => AsksageStre
       const cfg = getCfg();
       // omp passes an AbortSignal and aborts it on session/cancel (Stop). AskSage is non-streamed — one
       // long fetch per turn — so WITHOUT threading this the request kept running after Stop and the turn
-      // hung. Wire it into every fetch and settle cleanly on abort (ADR-0055).
+      // hung. Wire it into every fetch and settle cleanly on abort (ADR-0059).
       const signal: AbortSignal | undefined = options?.signal;
       const { system, messages } = toTurns(context);
       const usageOf = (u: { input: number; output: number; cacheRead: number; cacheWrite: number }) => ({ ...u, totalTokens: u.input + u.output + u.cacheRead + u.cacheWrite });

@@ -1,6 +1,6 @@
 // harness/knowledge/store.ts
 //
-// P-RAG.1 (ADR-0054): the local knowledge vector store. Wraps a SEPARATE knowledge.duckdb (its own
+// P-RAG.1 (ADR-0058): the local knowledge vector store. Wraps a SEPARATE knowledge.duckdb (its own
 // migration set, ADR-0053 decision #3) and exposes dataset + chunk CRUD and brute-force cosine
 // retrieval over DuckDB's built-in `list_cosine_distance` — no vss/HNSW extension, so it runs
 // air-gapped (invariant: air-gap clean).

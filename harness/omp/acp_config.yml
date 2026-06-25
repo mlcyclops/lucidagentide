@@ -21,7 +21,7 @@ task:
   isolation:
     mode: none
 
-# P-EGRESS.1 (ADR-0058): force the network-reaching tools to PROMPT, honored in EVERY approval mode
+# P-EGRESS.1 (ADR-0062): force the network-reaching tools to PROMPT, honored in EVERY approval mode
 # (including omp's default `yolo`, which otherwise auto-runs them). Without this an agent silently browses
 # arbitrary internet sites — a real risk in a security/provenance product. The desktop intercepts these
 # permission requests (acp_backend onRequest) and shows the per-website approval dialog; a standing user

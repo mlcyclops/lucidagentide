@@ -559,7 +559,7 @@ const isAllowOpt = (kind?: string, optionId?: string) => /allow|approve|grant|ac
 function createPermissionCard(e: Extract<ChatEvent, { type: "permission" }>): { el: HTMLElement; finalize: () => void } {
   let win: HTMLElement;
   if (e.egress) {
-    // P-EGRESS.1 (ADR-0058): the agent wants to reach the internet. Docked above the composer. Subdued
+    // P-EGRESS.1 (ADR-0062): the agent wants to reach the internet. Docked above the composer. Subdued
     // styling that matches the app; the target URL with a copy button + a one-click Cloudflare-Radar check,
     // then the per-website choices (kind: allow → neutral, danger → amber, reject → block).
     const url = e.url ?? e.detail ?? "";
@@ -1177,7 +1177,7 @@ function secCompression(hr: import("./bridge.ts").HeadroomStatus | null): string
     : `<div class="set-note">${icon("info", 12)} Optional: install <b>headroom</b> to compress context on-device (60–95% fewer tokens). Run <code>${esc(hr?.installHint ?? "pip install headroom-ai[proxy]")}</code>, then this toggle appears.</div>`;
   return setCard("compression", "Token compression", "on-device · opt-in", body, true);
 }
-// ADR-0009 Phase D + P-ASKSAGE.1 (ADR-0055): Developer mode toggle. Reveals the read-only Logs rail
+// ADR-0009 Phase D + P-ASKSAGE.1 (ADR-0059): Developer mode toggle. Reveals the read-only Logs rail
 // panel (telemetry, lineage, transcripts, gate-block audit) AND enables AskSage tool-call diagnostics.
 // Uses the existing #devModeToggle handler, which now respawns omp so the diagnostics apply immediately.
 function secDeveloper(): string {
@@ -1256,7 +1256,7 @@ function hydrateSettings(): void {
   void bridge.auth().then((a) => { fillSec("providers", secProviders(a)); fillSec("others", secOthers(a)); });
   fillSec("sovereignty", secSovereignty()); // P-IDE.1c: only renders a card when China-origin models exist
   void bridge.headroom().then((h) => fillSec("compression", secCompression(h)));
-  fillSec("developer", secDeveloper()); // ADR-0055: render from state.developerMode (loaded by loadDev)
+  fillSec("developer", secDeveloper()); // ADR-0059: render from state.developerMode (loaded by loadDev)
   void hydratePersonal();
   hydrateMcp();
   void bridge.asksage().then(async (a) => {
@@ -1743,7 +1743,7 @@ function devHtml(d: import("./bridge.ts").DevView | null): string {
     { cls: "a", n: exp.length, l: "exports" },
     ...(ask.length ? [{ cls: askAnoms ? "q" : "g", n: ask.length, l: "AskSage calls" } as const] : []),
   ]);
-  // P-ASKSAGE.1 (ADR-0055): AskSage tool-loop diagnostics. One row per non-streamed call. An `anomaly`
+  // P-ASKSAGE.1 (ADR-0059): AskSage tool-loop diagnostics. One row per non-streamed call. An `anomaly`
   // (empty-response / truncated) or an error is the smoking gun for the loop "giving up too soon".
   const askRows = ask.slice().reverse().map((r) => ({
     when: estTime(r.at as number),

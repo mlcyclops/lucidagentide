@@ -1,4 +1,4 @@
--- migration 0010 — knowledge vector store (ADR-0053 / ADR-0054, P-RAG.1)
+-- migration 0010 — knowledge vector store (ADR-0053 / ADR-0058, P-RAG.1)
 --
 -- FROZEN once applied (invariant #10). Lives in its OWN migration set
 -- (harness/knowledge/migrations) applied to a SEPARATE knowledge.duckdb, so it never

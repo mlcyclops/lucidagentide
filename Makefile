@@ -159,11 +159,11 @@ demo-P-SKILL.1: ## P-SKILL.1 (ADR-0045): gated skill import — clean .md writes
 	$(BUN) run harness/scripts/demo_pskill1.ts
 
 .PHONY: demo-P-RAG.1
-demo-P-RAG.1: ## P-RAG.1 (ADR-0054): local knowledge spine — scan-gated ingest, fail-closed block, offline cosine retrieval, delimited injection
+demo-P-RAG.1: ## P-RAG.1 (ADR-0058): local knowledge spine — scan-gated ingest, fail-closed block, offline cosine retrieval, delimited injection
 	$(BUN) run harness/scripts/demo_prag1.ts
 
 .PHONY: demo-P-ASKSAGE.1
-demo-P-ASKSAGE.1: ## P-ASKSAGE.1 (ADR-0055): AskSage tool-loop diagnostics + tolerant extraction — wrapped replies recovered, empty turns flagged
+demo-P-ASKSAGE.1: ## P-ASKSAGE.1 (ADR-0059): AskSage tool-loop diagnostics + tolerant extraction — wrapped replies recovered, empty turns flagged
 	$(BUN) run harness/scripts/demo_paskage1.ts
 
 .PHONY: dashboards

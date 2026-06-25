@@ -1,6 +1,6 @@
 // harness/knowledge/ingest.ts
 //
-// P-RAG.1 (ADR-0054): the scan-gated local ingest pipeline + the delimited retrieval wrapper. This is
+// P-RAG.1 (ADR-0058): the scan-gated local ingest pipeline + the delimited retrieval wrapper. This is
 // the security-load-bearing core of the knowledge store.
 //
 // ingestText: chunk → SCAN each chunk fail-closed (scanAndDecide / DEFAULT_POLICY, the same seam as

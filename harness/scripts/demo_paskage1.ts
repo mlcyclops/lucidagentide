@@ -1,6 +1,6 @@
 // harness/scripts/demo_paskage1.ts
 //
-// P-ASKSAGE.1 (ADR-0055): AskSage tool-loop diagnostics + tolerant response extraction. AskSage serves
+// P-ASKSAGE.1 (ADR-0059): AskSage tool-loop diagnostics + tolerant response extraction. AskSage serves
 // Claude/Gemini NON-streamed through our streamSimple adapter; when the agentic loop "gives up too soon"
 // the usual cause is invisible — a follow-up response whose content we drop (the proxy wrapped it
 // differently) becomes an EMPTY turn, and omp concludes the model finished. This demo proves, with a

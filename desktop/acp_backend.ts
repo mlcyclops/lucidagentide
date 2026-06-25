@@ -25,7 +25,7 @@ import { appendGoalIteration, finishGoalMemory, type GoalMemory, resumeGoalMemor
 import { type Automation, listAutomations, nextDueAutomation, updateAutomation } from "./automations.ts";
 import { type EgressChoice, egressDecision, recordEgress } from "./egress_policy.ts";
 
-// P-EGRESS.1 (ADR-0058): the network-reaching tools omp is told to PROMPT for (acp_config.yml). When omp
+// P-EGRESS.1 (ADR-0062): the network-reaching tools omp is told to PROMPT for (acp_config.yml). When omp
 // requests permission for one of these, the desktop shows the per-website approval dialog instead of
 // silently auto-approving in Agent mode.
 const EGRESS_TOOLS = new Set(["browser", "web_search", "web", "fetch", "navigate"]);
@@ -144,7 +144,7 @@ class Backend {
 
   private emit(e: ChatEvent): void { this.listener?.(e); }
 
-  // P-ASKSAGE.1 (ADR-0055): a bounded ring of AskSage tool-loop diagnostics, parsed from the omp child's
+  // P-ASKSAGE.1 (ADR-0059): a bounded ring of AskSage tool-loop diagnostics, parsed from the omp child's
   // `[ASKSAGE_DIAG]` stderr lines. Surfaced (developer-mode only) in the Logs panel so the non-streamed
   // AskSage tool loop — and the "empty-response → gives up early" anomaly — is observable from a UI test.
   private asksageDiag: Array<Record<string, unknown>> = [];
@@ -175,7 +175,7 @@ class Backend {
         // authoring model + the attribution identity + the edited workspace. Set BEFORE spawn (env is
         // copied at exec; the child can't see later changes).
         this.applyAttributionEnv();
-        // P-ASKSAGE.1 (ADR-0055): enable AskSage tool-loop diagnostics in the omp child when developer
+        // P-ASKSAGE.1 (ADR-0059): enable AskSage tool-loop diagnostics in the omp child when developer
         // mode is on (the child inherits process.env at spawn). Off otherwise — zero overhead in normal use.
         if (loadSettings().developerMode) process.env.LUCID_ASKSAGE_DEBUG = "1"; else delete process.env.LUCID_ASKSAGE_DEBUG;
         // ADR-0033: also append the build / anti-over-refusal policy so the chat model doesn't decline
@@ -231,7 +231,7 @@ class Backend {
             const tc = params?.toolCall ?? params?.tool_call ?? {};
             const toolName = [tc.kind, tc.title, tc.name, tc.toolName, params?.tool, params?.toolName].filter(Boolean).join(" ").toLowerCase();
             const target = egressTarget(tc);
-            // P-EGRESS.1 (ADR-0058): a network-reaching tool — matched by name OR by carrying an external
+            // P-EGRESS.1 (ADR-0062): a network-reaching tool — matched by name OR by carrying an external
             // http(s) URL (omp may report the browser tool with a generic kind, so name alone can miss it).
             // Unless a standing decision already allows the target, force the per-website approval dialog —
             // EVEN in Agent mode (egress is never silently auto-approved). Fail-closed: no live UI ⇒ deny.
@@ -254,7 +254,7 @@ class Backend {
         };
         acp.onStderr = (chunk) => {
           for (const line of chunk.split("\n")) {
-            // P-ASKSAGE.1 (ADR-0055): capture AskSage call diagnostics into the ring + echo to the dev
+            // P-ASKSAGE.1 (ADR-0059): capture AskSage call diagnostics into the ring + echo to the dev
             // server console for terminal visibility. Best-effort parse — a malformed line is ignored.
             const di = line.indexOf("[ASKSAGE_DIAG]");
             if (di !== -1) {
@@ -370,7 +370,7 @@ class Backend {
     });
   }
 
-  /** P-EGRESS.1 (ADR-0058): forward an EGRESS request as the per-website approval dialog (the rich
+  /** P-EGRESS.1 (ADR-0062): forward an EGRESS request as the per-website approval dialog (the rich
    *  options + the target URL for the Cloudflare-Radar check). The user's choice is persisted to the
    *  egress store, then mapped back to omp's own allow/deny option. Fail-closed: timeout ⇒ deny. */
   private askEgress(params: any, opts: any[], target: string): Promise<any> {
@@ -445,7 +445,7 @@ class Backend {
   // only TOTAL silence for this long trips it.
   // 5 min. Native providers stream tokens every few seconds so they almost never trip this; the headroom
   // is for the NON-STREAMED AskSage gov gateway, where a single big call emits nothing for minutes and a
-  // 2-min cap false-stalled live turns ("gave up on the provider"). The auto-continue checker (ADR-0056)
+  // 2-min cap false-stalled live turns ("gave up on the provider"). The auto-continue checker (ADR-0060)
   // will eventually turn a stall into a wellness-check + resume rather than a dead end.
   private static readonly IDLE_MS = 300_000;
 

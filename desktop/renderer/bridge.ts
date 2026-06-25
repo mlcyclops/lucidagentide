@@ -56,7 +56,7 @@ export interface DevView {
   blocks: { quarantined: BlockRecord[]; approved: BlockRecord[]; total: number };
   // ADR-0009 Phase B (issue #12): captured prompt/response transcripts (sanitized; raw by sha).
   turns: TurnView[];
-  // P-ASKSAGE.1 (ADR-0055): recent AskSage tool-loop call diagnostics (developer mode only).
+  // P-ASKSAGE.1 (ADR-0059): recent AskSage tool-loop call diagnostics (developer mode only).
   asksage?: Array<Record<string, unknown>>;
 }
 // P10.2 cross-model usage & cost ledger

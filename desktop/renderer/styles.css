@@ -467,7 +467,7 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .perm-result.ok{color:var(--green)}
 .perm-result.no{color:var(--txt-3)}
 .perm-result .ic{flex:none}
-/* P-EGRESS.1 (ADR-0058): per-website egress approval, DOCKED above the prompt bar. Subdued to match the
+/* P-EGRESS.1 (ADR-0062): per-website egress approval, DOCKED above the prompt bar. Subdued to match the
    app — outline buttons (no bright fills), amber only as a thin accent, color on hover. */
 #egressDock{max-width:min(1080px,94vw);margin:0 auto 10px;display:flex;flex-direction:column;gap:8px}
 .perm-egress{margin:0;border:1px solid var(--line);border-left:2px solid color-mix(in srgb,var(--amber,#e0a64e) 55%,var(--line));

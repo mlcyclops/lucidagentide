@@ -4538,7 +4538,7 @@ ADR-0007 (AskSage adapter + `/query` RAG this extends); ADR-0012 (compartments/c
 (gate/quarantine + Security-panel surfacing); ADR-0050 / P-GOAL.8 (the guided-walkthrough UI pattern
 reused); CLAUDE.md invariants #2/#3/#5/#10 + keystone #2.
 
-## ADR-0054 - P-RAG.1: the local knowledge spine (scan-gated ingest + offline cosine retrieval)
+## ADR-0058 - P-RAG.1: the local knowledge spine (scan-gated ingest + offline cosine retrieval)
 
 **Date:** 2026-06-24
 **Status:** Accepted - BUILT.
@@ -4619,7 +4619,7 @@ ADR-0053 (the RAG scope/plan this first-builds); ADR-0045/P-SKILL.1 (the scan-ga
 ADR-0012 (classification); ADR-0019 (gate/quarantine surfacing); CLAUDE.md invariants #2/#3/#5/#9/#10 +
 keystone #2.
 
-## ADR-0055 - P-ASKSAGE.1: AskSage tool-loop diagnostics + tolerant response extraction
+## ADR-0059 - P-ASKSAGE.1: AskSage tool-loop diagnostics + tolerant response extraction
 
 **Date:** 2026-06-24
 **Status:** Accepted - BUILT.
@@ -4710,7 +4710,7 @@ is metadata + a truncated snippet to stderr, developer-mode-gated, never persist
 ADR-0007 (the AskSage adapter), ADR-0051 (tool use added to the Claude+Gemini routes - the path this
 hardens), ADR-0009 Phase D (the developer Logs panel reused), CLAUDE.md invariants #2/#3/#4/#6.
 
-## ADR-0056 - Turn wellness-check + auto-continue ("is the big model still awake?") (SCOPE/PLAN)
+## ADR-0060 - Turn wellness-check + auto-continue ("is the big model still awake?") (SCOPE/PLAN)
 
 **Date:** 2026-06-24
 **Status:** Proposed - scope + plan only; no behavior code yet. Splits into P-CONTINUE.1..2.
@@ -4720,7 +4720,7 @@ hardens), ADR-0009 Phase D (the developer Logs panel reused), CLAUDE.md invarian
 
 Long turns can stop SHORT, and the user has to notice and type "continue":
 - **Idle stall:** the non-streamed AskSage gov gateway emits nothing for minutes during a big call; the
-  idle cap (now 5 min, ADR-0055 follow-up) ends the turn ("gave up on the provider"). Native streaming
+  idle cap (now 5 min, ADR-0059 follow-up) ends the turn ("gave up on the provider"). Native streaming
   models rarely hit this - they emit tokens every few seconds.
 - **Cut off:** the model stops mid-task (stopReason length/truncated, or it just ends early).
 
@@ -4786,10 +4786,10 @@ is maker != checker (a different/smaller model), echoing the `/goal` separation.
 ### Relates to
 
 ADR-0046 (`/goal` maker/checker loop reused), ADR-0048 (distinct recommended checker model + `complete()`
-model override), ADR-0027 (the thinking stream surfaced to the UI), ADR-0055 (the idle-cap bump + AskSage
+model override), ADR-0027 (the thinking stream surfaced to the UI), ADR-0059 (the idle-cap bump + AskSage
 non-streamed adapter this compensates for), `model_families.ts` / `checker_model.ts`.
 
-## ADR-0057 - P-RESIL.1: AskSage call resilience (retry transient 5xx + MALFORMED_FUNCTION_CALL)
+## ADR-0061 - P-RESIL.1: AskSage call resilience (retry transient 5xx + MALFORMED_FUNCTION_CALL)
 
 **Date:** 2026-06-24
 **Status:** Accepted - BUILT.
@@ -4797,7 +4797,7 @@ non-streamed adapter this compensates for), `model_families.ts` / `checker_model
 
 ### Context
 
-Live `[ASKSAGE_DIAG]` capture (developer mode, ADR-0055) showed two transient failures burning whole agent
+Live `[ASKSAGE_DIAG]` capture (developer mode, ADR-0059) showed two transient failures burning whole agent
 turns - and 100k-200k INPUT tokens each - for zero output:
 - **HTTP 504** from the gov gateway (overloaded/slow on big requests).
 - Gemini **`finishReason: MALFORMED_FUNCTION_CALL`** with an EMPTY body: the model tried to emit a tool
@@ -4825,7 +4825,7 @@ labelled `anomaly: "malformed-function-call"` (distinct from a plain `empty-resp
 
 Three attempts with sub-2s backoff bounds the added latency (worst case ~2.8s) and the extra gov-gateway
 load, while clearing the common one-off glitch. It is deliberately NOT an unbounded retry (that would mask
-a real outage and hammer a rate-limited gateway). The auto-continue checker (ADR-0056) covers the
+a real outage and hammer a rate-limited gateway). The auto-continue checker (ADR-0060) covers the
 DIFFERENT case where the model legitimately stops short.
 
 ### Verification
@@ -4837,15 +4837,15 @@ MALFORMED-then-valid-tool-call recovers; persistent 504 gives up after exactly 3
 ### Invariants preserved
 
 #2 (TS-only) - #3/#4 (retries change nothing about the gate: every recovered tool call is still scanned
-in-process) - the frozen prompt prefix is untouched. Retries are abort-aware so Stop (ADR-0055) still
+in-process) - the frozen prompt prefix is untouched. Retries are abort-aware so Stop (ADR-0059) still
 cancels instantly.
 
 ### Relates to
 
-ADR-0007/0051/0055 (the AskSage adapter + diagnostics this hardens), ADR-0056 (auto-continue, the
+ADR-0007/0051/0059 (the AskSage adapter + diagnostics this hardens), ADR-0060 (auto-continue, the
 complementary fix for legitimate short-stops), CLAUDE.md #2/#3/#4.
 
-## ADR-0058 - P-EGRESS.1: per-website approval for the agent's network-reaching tools
+## ADR-0062 - P-EGRESS.1: per-website approval for the agent's network-reaching tools
 
 **Date:** 2026-06-24
 **Status:** Accepted - BUILT.
@@ -4918,4 +4918,4 @@ deciding is not a stalled turn.
 ### Relates to
 
 ADR-0027/P-ACP.3 (the tool-permission forwarding this extends), ADR-0019 (the content gate this complements
-with an egress gate), ADR-0055 (the diagnostics that surfaced the browser flailing). CLAUDE.md #3/#4.
+with an egress gate), ADR-0059 (the diagnostics that surfaced the browser flailing). CLAUDE.md #3/#4.

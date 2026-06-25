@@ -1,6 +1,6 @@
 // desktop/egress_policy.ts
 //
-// P-EGRESS.1 (ADR-0058): per-website approval for the agent's network-reaching tools (browser,
+// P-EGRESS.1 (ADR-0062): per-website approval for the agent's network-reaching tools (browser,
 // web_search). In a security/provenance product, an agent autonomously browsing arbitrary internet
 // sites is a real risk, so omp is configured to PROMPT for those tools (acp_config.yml `tools.approval`),
 // and this module decides — per the user's standing choices — whether a given URL is auto-allowed or

@@ -1,6 +1,6 @@
 // harness/knowledge/chunk.ts
 //
-// P-RAG.1 (ADR-0054): pure text chunking for the local knowledge store. No I/O — splits a document
+// P-RAG.1 (ADR-0058): pure text chunking for the local knowledge store. No I/O — splits a document
 // into overlapping, roughly word-bounded windows so each chunk embeds to a coherent vector and
 // retrieval returns readable spans. Deterministic (same input → same chunks), so the ingest pipeline
 // and its tests are reproducible.

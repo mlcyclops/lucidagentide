@@ -236,7 +236,7 @@ const server = Bun.serve({
           const next = !!b.enabled;
           const changed = loadSettings().developerMode !== next;
           const data = setDeveloperMode(next);
-          // P-ASKSAGE.1 (ADR-0055): the omp child reads LUCID_ASKSAGE_DEBUG only at spawn. Respawn on a
+          // P-ASKSAGE.1 (ADR-0059): the omp child reads LUCID_ASKSAGE_DEBUG only at spawn. Respawn on a
           // real change so toggling developer mode takes effect immediately (no app restart) — the fresh
           // omp picks up / drops the debug env. Same pattern as an API-key change (backend.restart()).
           if (changed) backend.restart();

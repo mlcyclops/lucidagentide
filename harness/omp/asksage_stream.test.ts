@@ -137,7 +137,7 @@ describe("AskSage Gemini tool use", () => {
   });
 });
 
-// ── Diagnostics + tolerant extraction (P-ASKSAGE.1, ADR-0055) ────────────────────────────────────────
+// ── Diagnostics + tolerant extraction (P-ASKSAGE.1, ADR-0059) ────────────────────────────────────────
 // These cover the "gives up too soon" failure mode: a follow-up response whose content we'd otherwise
 // drop (proxy wraps it differently) → empty turn → omp thinks the model finished. Tolerant extraction
 // recovers it; the diagnostics make every call (and the empty-response anomaly) observable.
@@ -238,7 +238,7 @@ describe("AskSage diagnostics + tolerant extraction", () => {
   });
 });
 
-// ── Transient-failure resilience (P-RESIL.1, ADR-0057) ───────────────────────────────────────────────
+// ── Transient-failure resilience (P-RESIL.1, ADR-0061) ───────────────────────────────────────────────
 // A queued mock: returns the next response per fetch call (last one repeats), and reports the call count.
 function mockSeq(responses: Array<{ ok?: boolean; status?: number; json: any }>): () => number {
   let i = 0;

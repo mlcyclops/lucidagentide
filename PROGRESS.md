@@ -2095,7 +2095,7 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **next:** live end-to-end tool run on the gov gateway for both providers.
 
 ---
-## P-RAG.1: the local knowledge spine (ADR-0054, first build under ADR-0053)
+## P-RAG.1: the local knowledge spine (ADR-0058, first build under ADR-0053)
 - **shipped:** the air-gap-clean RAG core, server-side, no new runtime deps. `Db.open(path, migrationsDir?)`
   parameterized (additive; every existing caller unchanged) so a SEPARATE `knowledge.duckdb` gets its own
   migration set (ADR-0053 #3); migration `0010_knowledge_vectors.sql` (kb_datasets U|CUI/local|asksage +
@@ -2118,7 +2118,7 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
   knowledge.duckdb, desktop recordBlock via onBlock, retrieval injection mirroring the dataset selector).
 
 ---
-## P-ASKSAGE.1: AskSage tool-loop diagnostics + tolerant extraction (ADR-0055)
+## P-ASKSAGE.1: AskSage tool-loop diagnostics + tolerant extraction (ADR-0059)
 - **shipped:** live UI testing showed AskSage Claude/Gemini run tools but the loop "gives up too soon"
   (half-done files, no retry, no visible reasoning) while public models + AskSage GPT do fine — GPT uses
   omp's NATIVE openai-completions provider, Claude/Gemini use our non-streamed streamSimple adapter, so
@@ -2150,7 +2150,7 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
   (likely either a wrapper shape to parse, a max_tokens bump, or relaying thinking).
 
 ---
-**AskSage Stop fix + live, readable Logs (follow-ups to P-ASKSAGE.1, ADR-0055)**
+**AskSage Stop fix + live, readable Logs (follow-ups to P-ASKSAGE.1, ADR-0059)**
 - **shipped:** (1) STOP now cancels AskSage turns — omp passes options.signal (AbortSignal, aborted on
   session/cancel) but the adapter ignored it, so a non-streamed AskSage fetch ran on after Stop and the
   turn hung; threaded signal into every fetch (anthropic/google/query) + settle cleanly (done/stop, no
@@ -2166,7 +2166,7 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
   AskSage turn, transcripts newest-first with ET times. Then read the diagnostics for the give-up root cause.
 
 ---
-**Stop reliably recovers a wedged turn (client-side abort) — follow-up to ADR-0055**
+**Stop reliably recovers a wedged turn (client-side abort) — follow-up to ADR-0059**
 - **shipped:** live AskSage Claude-45-Sonnet-Gov trace showed a HEALTHY adapter loop (read→write→end_turn,
   msgs 27→29→31, all ok via:content, no anomalies) yet the chat UI hung showing only the first tool call
   and Stop didn't recover it. Root cause: the turn settles only when bridge.sendPrompt's NDJSON stream
@@ -2184,7 +2184,7 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
   omp issue/upstream fix or a per-turn server-side timeout in acp_backend.prompt().
 
 ---
-**Chat reconciles full reply on `done` (follow-up to ADR-0055)**
+**Chat reconciles full reply on `done` (follow-up to ADR-0059)**
 - **shipped:** live AskSage turns sometimes completed server-side (captured in the turns log) yet the chat
   showed only the first tool call and no answer until a browser reload (which then lost the live tool chips
   + time/token stats). The server-side `assistant` accumulator and the browser stream are fed by the same
@@ -2201,7 +2201,7 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
   long multi-tool ones; consider a server-side per-turn timeout in acp_backend.prompt() as a backstop.
 
 ---
-**Turn-lifecycle diagnostics + listener-clobber guard (debugging the AskSage long-turn hang, ADR-0055)**
+**Turn-lifecycle diagnostics + listener-clobber guard (debugging the AskSage long-turn hang, ADR-0059)**
 - **shipped:** user confirmed long multi-tool AskSage turns hang with done never reaching the browser (blank
   till reload). Added `[TURN_DIAG]` logging (developer mode → dev-server console): prompt.start /
   prompt.resolved|stalled|error (with chars, enqueueErr, listenerIntact) / complete.end (clobberAvoided) /
@@ -2218,7 +2218,7 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
   the dev-server terminal; that pins wedge vs clobber vs disconnect and the fix follows.
 
 ---
-**P-EGRESS.1 UI polish: docked, subdued, de-duplicated egress dialog (ADR-0058)**
+**P-EGRESS.1 UI polish: docked, subdued, de-duplicated egress dialog (ADR-0062)**
 - **shipped:** per UX feedback — the egress approval card now DOCKS directly above the prompt bar (egressDock
   in .composer-wrap) instead of inline in the chat; restyled subdued to match the app (outline buttons, no
   bright magenta fills, thin amber accent, app text styles); the choices were de-duplicated from 5 to 4

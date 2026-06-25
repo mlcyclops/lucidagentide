@@ -1,6 +1,6 @@
 // harness/scripts/demo_prag1.ts
 //
-// P-RAG.1 (ADR-0054): the local knowledge spine. Proves the end-to-end security + retrieval property
+// P-RAG.1 (ADR-0058): the local knowledge spine. Proves the end-to-end security + retrieval property
 // against the REAL Unicode scanner sidecar and a real (temp) knowledge.duckdb:
 //   1. a CLEAN document is chunked, scanned, embedded, and stored in the vector store;
 //   2. a TAMPERED document (Trojan-Source bidi U+202E + zero-width U+200B) is BLOCKED at the gate —
