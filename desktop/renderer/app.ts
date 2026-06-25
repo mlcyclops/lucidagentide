@@ -125,6 +125,7 @@ function buildShell(): void {
         <button class="rail-btn" data-rail="security" data-tip="Security|Findings, quarantine & approvals" data-tip-icon="shield">${icon("shield", 20)}<span class="badge" id="railBadge" hidden>0</span></button>
         <button class="rail-btn" data-rail="memory" data-tip="Memory & context|Context window, prompt-cache savings, semantic memory" data-tip-icon="brain">${icon("brain", 20)}</button>
         <button class="rail-btn" data-rail="knowledge" data-tip="Knowledge graph|Your private, encrypted personalization graph - nodes, edges, drill-down" data-tip-icon="graph">${icon("graph", 20)}</button>
+        <button class="rail-btn" id="railLogs" data-rail="dev" hidden data-tip="Logs|Read-only developer logs: telemetry, run lineage, transcripts, gate-block audit, AskSage tool-call diagnostics" data-tip-icon="logs">${icon("logs", 20)}</button>
         <div class="spacer"></div>
         <button class="rail-btn" id="railCmd" data-tip="Commands|Ctrl / ⌘ K" data-tip-icon="command">${icon("command", 20)}</button>
         <button class="rail-btn" data-rail="settings" data-tip="Settings" data-tip-icon="sliders">${icon("sliders", 20)}</button>
@@ -556,35 +557,74 @@ function createReasoning(): ReasoningWin {
 // request. Unanswered at turn's end ⇒ Denied (the backend already fail-closes server-side).
 const isAllowOpt = (kind?: string, optionId?: string) => /allow|approve|grant|accept|yes/i.test(`${kind ?? ""} ${optionId ?? ""}`);
 function createPermissionCard(e: Extract<ChatEvent, { type: "permission" }>): { el: HTMLElement; finalize: () => void } {
-  const btns = e.options.map((o) =>
-    `<button class="perm-btn ${isAllowOpt(o.kind, o.optionId) ? "ok" : "no"}" data-oid="${esc(o.optionId)}">${esc(o.name)}</button>`).join("");
-  const win = el(`<div class="perm" data-streaming="1">
-    <div class="perm-head">${icon("shield", 14)}<span>Approve tool call?</span></div>
-    <div class="perm-body"><b>${esc(e.tool)}</b>${e.detail ? ` · <span class="perm-d">${esc(e.detail)}</span>` : ""}</div>
-    <div class="perm-actions">${btns}</div>
-    <div class="perm-result" hidden></div>
-  </div>`);
+  let win: HTMLElement;
+  if (e.egress) {
+    // P-EGRESS.1 (ADR-0062): the agent wants to reach the internet. Docked above the composer. Subdued
+    // styling that matches the app; the target URL with a copy button + a one-click Cloudflare-Radar check,
+    // then the per-website choices (kind: allow → neutral, danger → amber, reject → block).
+    const url = e.url ?? e.detail ?? "";
+    const egCls = (k?: string) => k === "reject" ? "eg-block" : k === "danger" ? "eg-danger" : "eg-allow";
+    const btns = e.options.map((o) => `<button class="perm-btn ${egCls(o.kind)}" data-oid="${esc(o.optionId)}">${esc(o.name)}</button>`).join("");
+    win = el(`<div class="perm perm-egress" data-streaming="1">
+      <div class="perm-eg-head">${icon("git", 13)}<span>The agent wants to visit a website</span></div>
+      <div class="perm-egress-target"><code class="perm-url">${esc(url)}</code><button class="perm-copy" data-tip="Copy URL">${icon("copy", 12)}</button></div>
+      <button class="perm-radar" data-radar>${icon("search", 12)} Check it on Cloudflare Radar</button>
+      <div class="perm-actions perm-actions-col">${btns}</div>
+    </div>`);
+    const copyBtn = $(".perm-copy", win) as HTMLElement | null;
+    copyBtn?.addEventListener("click", async () => {
+      try { await navigator.clipboard.writeText(url); copyBtn.innerHTML = icon("check", 12); setTimeout(() => { copyBtn.innerHTML = icon("copy", 12); }, 1200); } catch { /* clipboard blocked */ }
+    });
+    ($("[data-radar]", win) as HTMLElement | null)?.addEventListener("click", async () => {
+      try { await navigator.clipboard.writeText(url); } catch { /* ignore */ }
+      window.open("https://radar.cloudflare.com/scan", "_blank", "noopener");
+      showToast({ title: "URL copied · Radar opened", desc: "Paste the URL into Cloudflare Radar to vet the site before allowing.", actions: [{ label: "OK" }], timeout: 4000 });
+    });
+  } else {
+    const btns = e.options.map((o) => `<button class="perm-btn ${isAllowOpt(o.kind, o.optionId) ? "ok" : "no"}" data-oid="${esc(o.optionId)}">${esc(o.name)}</button>`).join("");
+    win = el(`<div class="perm" data-streaming="1">
+      <div class="perm-head">${icon("shield", 14)}<span>Approve tool call?</span></div>
+      <div class="perm-body"><b>${esc(e.tool)}</b>${e.detail ? ` · <span class="perm-d">${esc(e.detail)}</span>` : ""}</div>
+      <div class="perm-actions">${btns}</div>
+      <div class="perm-result" hidden></div>
+    </div>`);
+  }
   const actions = $(".perm-actions", win) as HTMLElement;
-  const result = $(".perm-result", win) as HTMLElement;
+  const result = $(".perm-result", win) as HTMLElement | null;
   let answered = false;
   const choose = (oid: string | null, label: string, ok: boolean) => {
     if (answered) return;
     answered = true;
     win.removeAttribute("data-streaming");
     void bridge.respondPermission(e.id, oid);
+    if (e.egress) {
+      // Docked card: confirm with a brief toast, then remove it (and the dock when empty).
+      showToast({ title: ok ? "Allowed" : "Blocked", desc: ok ? "The agent can reach the site." : "The agent won't reach that site.", actions: [{ label: "OK" }], timeout: 2200, ...(ok ? {} : { tone: "warn" as const }) });
+      win.remove();
+      const dock = $("#egressDock"); if (dock && !dock.children.length) dock.remove();
+      return;
+    }
     actions.hidden = true;
-    result.hidden = false;
-    result.className = `perm-result ${ok ? "ok" : "no"}`;
-    result.innerHTML = `${icon(ok ? "check" : "close", 13)}<span>${esc(label)}</span>`;
+    if (result) { result.hidden = false; result.className = `perm-result ${ok ? "ok" : "no"}`; result.innerHTML = `${icon(ok ? "check" : "close", 13)}<span>${esc(label)}</span>`; }
   };
   actions.addEventListener("click", (ev) => {
     const b = (ev.target as HTMLElement).closest("[data-oid]") as HTMLElement | null;
     if (!b) return;
     const opt = e.options.find((o) => o.optionId === b.dataset.oid);
-    const ok = isAllowOpt(opt?.kind, opt?.optionId);
-    choose(b.dataset.oid!, ok ? "Allowed" : "Denied", ok);
+    const isDeny = e.egress ? opt?.kind === "reject" : !isAllowOpt(opt?.kind, opt?.optionId);
+    choose(b.dataset.oid!, isDeny ? "Denied" : "Allowed", !isDeny);
   });
   return { el: win, finalize: () => choose(null, "Denied (turn ended)", false) };
+}
+/** P-EGRESS.1: the dock above the composer where egress approval cards sit (not inline in the chat). */
+function egressDock(): HTMLElement {
+  let dock = $("#egressDock");
+  if (!dock) {
+    dock = el(`<div id="egressDock"></div>`);
+    const wrap = $(".composer-wrap")!;
+    wrap.insertBefore(dock, wrap.firstChild);
+  }
+  return dock;
 }
 
 // ── Subagent delegation card - P-TASK.1 (ADR-0028) ──
@@ -741,12 +781,13 @@ async function send(): Promise<void> {
       setPhase("Needs approval"); paintHud();
       const card = createPermissionCard(e);
       permCards.push(card);
-      hud.before(card.el); // sits just above the activity HUD, within this message
-      scrollChat();
+      // P-EGRESS.1: egress approvals dock directly above the prompt bar; normal tool prompts stay inline.
+      if (e.egress) egressDock().appendChild(card.el);
+      else { hud.before(card.el); scrollChat(); }
     }
     else if (e.type === "block") onBlock(e);
     else if (e.type === "usage") { tok = e.used; cost = e.cost; state.liveUsage = { used: e.used, size: e.size, cost: e.cost }; paintHud(); renderStatus(); renderMetricsRail(); }
-    else if (e.type === "done") { streamEl.innerHTML = renderMarkdown(buf); enhanceCodeBlocks(streamEl); (node as MsgNode)._md = buf; finishHud(); state.streaming = false; setSendEnabled(); }
+    else if (e.type === "done") { if (e.text && e.text.length > buf.length) buf = e.text; /* reconcile a lossy stream with the server's full reply */ streamEl.innerHTML = renderMarkdown(buf); enhanceCodeBlocks(streamEl); (node as MsgNode)._md = buf; finishHud(); state.streaming = false; setSendEnabled(); }
   };
   try { await bridge.sendPrompt(text, onEvent); }
   finally {
@@ -848,7 +889,11 @@ function hasActiveBlocks(): boolean {
 function focusInspector(tab: Tab): void {
   closeSettings();
   state.inspectorTab = tab;
-  if (state.inspectorRail) setInspectorRail(false);
+  // Expanding from the collapsed metrics rail on an EXPLICIT tab click: clear the rail state directly.
+  // Do NOT route through setInspectorRail() here — its ADR-0021 active-blocks override would hijack the
+  // chosen tab (e.g. clicking Logs/Memory while blocks exist would snap to Security). The passive expand
+  // gesture (#railExpand) still calls setInspectorRail(false), so that override is preserved there.
+  if (state.inspectorRail) { state.inspectorRail = false; $("#inspector")?.classList.remove("rail"); }
   $$(".insp-tab").forEach((t) => t.classList.toggle("active", (t as HTMLElement).dataset.insp === tab));
   $$(".rail-btn").forEach((b) => b.classList.toggle("active", (b as HTMLElement).dataset.rail === tab));
   lastInspHash = ""; renderInspector();
@@ -1130,8 +1175,17 @@ function secCompression(hr: import("./bridge.ts").HeadroomStatus | null): string
         <span><b>Compress context with headroom</b> - fewer tokens before they reach the model. ${hr.running ? `<span class="abadge ok">running · :${hr.port}</span>` : ""}</span></label>
       <div class="set-note">${icon("info", 12)} Runs entirely on your machine (${esc(hr.version ?? "installed")}). Request-routing + a gov-deployment security review are next - see ADR-0008.</div>`
     : `<div class="set-note">${icon("info", 12)} Optional: install <b>headroom</b> to compress context on-device (60–95% fewer tokens). Run <code>${esc(hr?.installHint ?? "pip install headroom-ai[proxy]")}</code>, then this toggle appears.</div>`;
-  // ADR-0009 Phase D: Developer mode toggle (reveals the read-only Logs rail panel).
   return setCard("compression", "Token compression", "on-device · opt-in", body, true);
+}
+// ADR-0009 Phase D + P-ASKSAGE.1 (ADR-0059): Developer mode toggle. Reveals the read-only Logs rail
+// panel (telemetry, lineage, transcripts, gate-block audit) AND enables AskSage tool-call diagnostics.
+// Uses the existing #devModeToggle handler, which now respawns omp so the diagnostics apply immediately.
+function secDeveloper(): string {
+  const on = state.developerMode;
+  const body = `<label class="set-toggle"><input type="checkbox" id="devModeToggle" ${on ? "checked" : ""}/>
+      <span><b>Developer mode</b> - reveal a read-only <b>Logs</b> panel in the rail (telemetry, run lineage, transcripts, gate-block audit) and turn on <b>AskSage tool-call diagnostics</b>. Read-only, on this machine, off by default.</span></label>
+    <div class="set-note">${icon("info", 12)} <span>Turning this on respawns the agent so the diagnostics take effect immediately, then adds a <b>Logs</b> panel to the left rail. Open it and expand <b>AskSage tool calls</b> to watch each request live.</span></div>`;
+  return setCard("developer", "Developer", "logs · diagnostics", body, true);
 }
 function secOthers(auth: import("./bridge.ts").AuthStatus | null): string {
   return setCard("others", "More providers", "", (auth?.others ?? []).map(provCard).join("") || `<div class="empty">none</div>`, true);
@@ -1178,6 +1232,7 @@ function settingsShell(): string {
     setSkel("compression", "Token compression", "headroom · on-device · opt-in", true),
     setSkel("mcp", "MCP connectors", "model context protocol", true),
     setSkel("others", "More providers", "", true),
+    setSkel("developer", "Developer", "logs · diagnostics", true),
     `<div class="set-note">${icon("shield", 12)} Keys are stored on this machine and passed to omp as env vars - never sent anywhere else. OAuth uses omp's own secure credential vault.</div>`,
   ].join("");
 }
@@ -1201,6 +1256,7 @@ function hydrateSettings(): void {
   void bridge.auth().then((a) => { fillSec("providers", secProviders(a)); fillSec("others", secOthers(a)); });
   fillSec("sovereignty", secSovereignty()); // P-IDE.1c: only renders a card when China-origin models exist
   void bridge.headroom().then((h) => fillSec("compression", secCompression(h)));
+  fillSec("developer", secDeveloper()); // ADR-0059: render from state.developerMode (loaded by loadDev)
   void hydratePersonal();
   hydrateMcp();
   void bridge.asksage().then(async (a) => {
@@ -1663,24 +1719,53 @@ function securityHtml(d: SecuritySnapshot | null): string {
 }
 
 // ── ADR-0009 Phase D: developer Logs view (read-only; metadata only) ──────────────
+// Format an ISO/epoch timestamp as US Eastern time (auto EST/EDT) — "Jun 24, 3:45 PM EDT".
+function estTime(ts: string | number | undefined | null): string {
+  if (ts === undefined || ts === null || ts === "") return "";
+  const d = new Date(ts);
+  if (isNaN(d.getTime())) return "";
+  try {
+    return d.toLocaleString("en-US", { timeZone: "America/New_York", month: "short", day: "numeric", hour: "numeric", minute: "2-digit", hour12: true, timeZoneName: "short" });
+  } catch { return d.toISOString(); }
+}
 function devHtml(d: import("./bridge.ts").DevView | null): string {
-  let h = `<div class="sec-intro"><div class="sec-intro-h"><span class="sec-pulse">${icon("layout", 17)}</span><b>Developer logs</b></div>
-    <div class="sec-intro-d">Read-only telemetry, run lineage, transcripts, and audit trails from this machine - sanitized, no raw prompt or file content (the raw is referenced by sha only).</div></div>`;
+  let h = `<div class="sec-intro"><div class="sec-intro-h"><span class="sec-pulse">${icon("logs", 17)}</span><b>Developer logs</b></div>
+    <div class="sec-intro-d">Read-only telemetry, run lineage, transcripts, and audit trails from this machine - sanitized, no raw prompt or file content (the raw is referenced by sha only). Newest first; times in US Eastern.</div></div>`;
   if (!d || !d.enabled) { h += `<div class="empty">Developer mode is off. Turn it on in <b>Settings → Developer mode</b> to see the telemetry stream, run lineage, transcripts, and the audit trail.</div>`; return h; }
   const tel = d.snapshot?.telemetry ?? [], runs = d.snapshot?.runs ?? [], exp = d.snapshot?.exports ?? [], blk = d.blocks?.quarantined ?? [], turns = d.turns ?? [];
+  const ask = d.asksage ?? [];
+  const askAnoms = ask.filter((r) => r.anomaly || r.ok === false).length;
   h += chips([
     { cls: "f", n: tel.length, l: "events" },
     { cls: "g", n: runs.length, l: "runs" },
     { cls: "g", n: turns.length, l: "turns" },
     { cls: "q", n: blk.length, l: "live blocks" },
     { cls: "a", n: exp.length, l: "exports" },
+    ...(ask.length ? [{ cls: askAnoms ? "q" : "g", n: ask.length, l: "AskSage calls" } as const] : []),
   ]);
+  // P-ASKSAGE.1 (ADR-0059): AskSage tool-loop diagnostics. One row per non-streamed call. An `anomaly`
+  // (empty-response / truncated) or an error is the smoking gun for the loop "giving up too soon".
+  const askRows = ask.slice().reverse().map((r) => ({
+    when: estTime(r.at as number),
+    route: String(r.route ?? ""),
+    model: String(r.model ?? "").replace(/^.*\//, ""),
+    via: String(r.via ?? (r.ok === false ? "-" : "")),
+    text: r.textLen ?? "",
+    calls: Array.isArray(r.toolCalls) ? (r.toolCalls as string[]).join(", ") : "",
+    stop: String(r.stopReason ?? ""),
+    finish: String(r.finish ?? ""),
+    flag: r.anomaly ? `⚠ ${r.anomaly}` : r.ok === false ? `✕ ${String(r.error ?? "error").slice(0, 60)}` : "ok",
+  }));
+  h += accordion("dev.asksage", "AskSage tool calls", "non-streamed loop · developer diagnostics",
+    table([{ key: "when", label: "when", mono: true }, { key: "route", label: "route" }, { key: "model", label: "model", mono: true }, { key: "via", label: "parsed via", mono: true }, { key: "text", label: "txt", mono: true }, { key: "calls", label: "tool calls" }, { key: "stop", label: "loop", mono: true }, { key: "finish", label: "raw", mono: true }, { key: "flag", label: "flag", pill: true }], askRows as unknown as Record<string, unknown>[]),
+    OPEN.has("dev.asksage") || askAnoms > 0, askAnoms ? `${ask.length} · ${askAnoms}⚠` : String(ask.length));
   h += accordion("dev.telemetry", "Telemetry stream", "recent · metadata only",
     table([{ key: "event", label: "event" }, { key: "run_id", label: "run", mono: true }, { key: "session_id", label: "session", mono: true }, { key: "created_at", label: "at", mono: true }], tel),
     true, String(tel.length));
-  const turnRows = turns.map((t) => ({ seq: t.seq, role: t.role, trust: t.trust, sanitized: t.sanitized, sha: String(t.rawSha256).slice(0, 12) }));
-  h += accordion("dev.turns", "Turn transcripts", "sanitized · raw by sha",
-    table([{ key: "seq", label: "#", mono: true }, { key: "role", label: "role", pill: true }, { key: "trust", label: "trust", mono: true }, { key: "sanitized", label: "text" }, { key: "sha", label: "raw sha", mono: true }], turnRows as unknown as Record<string, unknown>[]),
+  // Newest first (reverse the append-ordered log) so the latest turn is at the top, with an Eastern-time stamp.
+  const turnRows = turns.slice().reverse().map((t) => ({ when: estTime(t.at), seq: t.seq, role: t.role, trust: t.trust, sanitized: t.sanitized, sha: String(t.rawSha256).slice(0, 12) }));
+  h += accordion("dev.turns", "Turn transcripts", "newest first · sanitized · raw by sha",
+    table([{ key: "when", label: "when", mono: true }, { key: "seq", label: "#", mono: true }, { key: "role", label: "role", pill: true }, { key: "trust", label: "trust", mono: true }, { key: "sanitized", label: "text" }, { key: "sha", label: "raw sha", mono: true }], turnRows as unknown as Record<string, unknown>[]),
     OPEN.has("dev.turns"), String(turns.length));
   h += accordion("dev.runs", "Run lineage", "provenance",
     table([{ key: "run_id", label: "run", mono: true }, { key: "kind", label: "kind" }, { key: "mode", label: "mode" }, { key: "sandbox_profile", label: "sandbox" }, { key: "status", label: "status" }], runs),
@@ -1911,6 +1996,9 @@ async function refresh(): Promise<void> {
   try {
     const [sec, mem, led, code] = await Promise.all([bridge.security(), bridge.memory(), bridge.usage(), bridge.codeActivity()]);
     state.security = sec; state.memory = mem; state.ledger = led; state.codeActivity = code;
+    // Keep the developer Logs panel live (AskSage tool calls, transcripts) while it's the open tab —
+    // otherwise its data only refreshed on tab-switch and looked stale mid-turn.
+    if (state.developerMode && state.inspectorTab === "dev") { try { state.dev = await bridge.dev(); } catch { /* keep last */ } }
     checkBudgetWarning(mem?.budgets); // early heads-up before a provider budget runs out
     // the badge reflects the live session CONFIG model (loadConfig), not the
     // historical snapshot - so it shows what the next turn will actually use.

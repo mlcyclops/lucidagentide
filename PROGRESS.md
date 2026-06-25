@@ -2110,6 +2110,140 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **next:** live end-to-end tool run on the gov gateway for both providers.
 
 ---
+## P-RAG.1: the local knowledge spine (ADR-0058, first build under ADR-0053)
+- **shipped:** the air-gap-clean RAG core, server-side, no new runtime deps. `Db.open(path, migrationsDir?)`
+  parameterized (additive; every existing caller unchanged) so a SEPARATE `knowledge.duckdb` gets its own
+  migration set (ADR-0053 #3); migration `0010_knowledge_vectors.sql` (kb_datasets U|CUI/local|asksage +
+  kb_chunks with `embedding FLOAT[]` + trust_label) applies ONLY to it, never agent_obs.duckdb. New
+  `harness/knowledge/`: pure `chunk.ts` (overlapping, boundary-preferring, deterministic); `embedder.ts`
+  (an `Embedder` interface + deterministic dependency-free `HashEmbedder`, so the spine is testable offline
+  and the real WASM bge drops in later behind the same seam); `store.ts` (dataset/chunk CRUD + brute-force
+  `list_cosine_distance` retrieval, vectors inlined as numeric SQL list literals since the node binding
+  can't bind a JS array param); `ingest.ts` `ingestText` (chunk -> scanAndDecide fail-closed -> embed only
+  clean -> store; blocked chunk never embedded/stored, audited via an `onBlock` hook = clean layering) +
+  `wrapRetrieved` (UNTRUSTED_CONTENT delimited, invariant #5). 20 new tests; bun test harness 493 · desktop
+  326 · typecheck clean (3 cfgs). `make demo-P-RAG.1` proves it against the REAL scanner + a temp
+  knowledge.duckdb: clean doc stored, Trojan-Source (bidi/zero-width) note blocked + never stored, cosine
+  retrieval returns the relevant chunk first, injection delimited.
+- **stubbed:** the embedder is the deterministic `HashEmbedder`, NOT a real model (P-RAG.1b: WASM
+  `bge-small-en-v1.5` + bundled weights + `unpdf` PDF parse). No Knowledge UI / per-turn injection wiring yet
+  (P-RAG.1c). New EventNames deferred (a contracts change is its own increment). No live multimodal.
+- **next:** P-RAG.1b (real WASM embedder + PDF parse behind the `Embedder` seam, weights bundled as
+  extraResources), then P-RAG.1c (Knowledge popup guided+advanced for the local path, fixed-path
+  knowledge.duckdb, desktop recordBlock via onBlock, retrieval injection mirroring the dataset selector).
+
+---
+## P-ASKSAGE.1: AskSage tool-loop diagnostics + tolerant extraction (ADR-0059)
+- **shipped:** live UI testing showed AskSage Claude/Gemini run tools but the loop "gives up too soon"
+  (half-done files, no retry, no visible reasoning) while public models + AskSage GPT do fine — GPT uses
+  omp's NATIVE openai-completions provider, Claude/Gemini use our non-streamed streamSimple adapter, so
+  the bug is isolated there. Most likely silent cause: a follow-up reply parsed to empty text + 0 tool
+  calls → omp thinks the model finished. Fix: (1) per-call diagnostics in asksage_stream.ts — one
+  `[ASKSAGE_DIAG] {json}` line per call (env LUCID_ASKSAGE_DEBUG) capturing request (route/model/maxTokens/
+  tools/msgs) + parsed response (status/respKeys/via/textLen/toolCalls/stopReason/usage), with an explicit
+  `empty-response`/`truncated` anomaly + raw snippet on the give-up path; (2) tolerant extraction
+  (anthropicBlocks/googleParts) that recovers content from wrapped shapes (response.content,
+  OpenAI choices[].message, plain-string message) — fires ONLY when the strict parse is empty, so it can
+  only turn a premature empty stop into a real turn; (3) acp_backend sets the env in DEVELOPER MODE,
+  onStderr rings the diagnostics (last 200) + echoes to console; (4) renderer Logs → "AskSage tool calls"
+  accordion (auto-opens + chip on any anomaly); toggling developer mode respawns omp (backend.restart on a
+  real change) so the debug env takes effect with NO app restart. Also ADDED the missing Developer-mode
+  toggle to Settings (Settings → Developer) — the #devModeToggle handler existed but no card rendered it,
+  so dev mode (and thus the Logs panel + these diagnostics) was unreachable from the UI; live-verified the
+  card renders, toggles on/off, and respawns cleanly. ALSO added the missing #railLogs rail button (its
+  loadDev() un-hide existed but no button was rendered) AND fixed focusInspector so an explicit Logs/Memory
+  click from the collapsed metrics rail is no longer hijacked to Security by the ADR-0021 active-blocks
+  override — live-verified the Logs button appears in dev mode and opens the Developer-logs panel (AskSage
+  accordion at top). 7 new tests (asksage_stream 14 total); harness 500 ·
+  desktop 326 · typecheck clean · bundle OK. demo-P-ASKSAGE.1 proves recover/flag/off-by-default.
+- **stubbed:** thinking-block relay (no reasoning shown yet) and a max_tokens override are DEFERRED until
+  the live diagnostics say which failure it is; whether omp re-invokes streamSimple after each tool result
+  for a custom provider is now observable (the per-call log) but unconfirmed live. Tolerant fallbacks are
+  for SHAPES NOT YET CONFIRMED against the real gateway (conservative — only recover, never override).
+- **next:** the user re-tests live with developer mode on; read the AskSage-calls diagnostics (look for
+  `empty-response`/`truncated`/error rows + the `via`/raw shape) and fix the confirmed root cause
+  (likely either a wrapper shape to parse, a max_tokens bump, or relaying thinking).
+
+---
+**AskSage Stop fix + live, readable Logs (follow-ups to P-ASKSAGE.1, ADR-0059)**
+- **shipped:** (1) STOP now cancels AskSage turns — omp passes options.signal (AbortSignal, aborted on
+  session/cancel) but the adapter ignored it, so a non-streamed AskSage fetch ran on after Stop and the
+  turn hung; threaded signal into every fetch (anthropic/google/query) + settle cleanly (done/stop, no
+  error) on abort. (2) Developer Logs poll live — refresh() re-fetches /api/dev while the Logs tab is open,
+  so AskSage rows + transcripts update mid-turn instead of only on tab-switch/refresh. (3) Turn transcripts
+  + AskSage calls now render NEWEST-FIRST with a US-Eastern (auto EST/EDT) timestamp column. 1 new abort
+  test (asksage_stream 15); harness 501 · desktop 326 · typecheck clean · bundle OK; live-verified the
+  transcript order + EDT stamps.
+- **stubbed:** the native-provider hang (public Claude/Opus "searching the codebase" that wouldn't stop) is
+  NOT this fix — that path is omp-native and was already cancellable; if it recurs it's a separate
+  gate/omp-level investigation. Live gov-gateway Stop round-trip still the manual check.
+- **next:** user re-tests live: AskSage rows should populate without a refresh, Stop should end a hung
+  AskSage turn, transcripts newest-first with ET times. Then read the diagnostics for the give-up root cause.
+
+---
+**Stop reliably recovers a wedged turn (client-side abort) — follow-up to ADR-0059**
+- **shipped:** live AskSage Claude-45-Sonnet-Gov trace showed a HEALTHY adapter loop (read→write→end_turn,
+  msgs 27→29→31, all ok via:content, no anomalies) yet the chat UI hung showing only the first tool call
+  and Stop didn't recover it. Root cause: the turn settles only when bridge.sendPrompt's NDJSON stream
+  ends; if omp never resolves session/prompt (turn-finalization wedge — the model finished but omp didn't
+  close the stream), reader.read() blocks forever and the UI is stuck. Fix: streamNdjson takes an
+  AbortSignal; a module-level chatAbort controller wraps the chat stream; cancelChat() now aborts it
+  (client read ends → sendPrompt resolves → the send finally settles the UI) AND posts the server cancel.
+  So Stop ALWAYS recovers the UI even when omp is wedged. typecheck clean · desktop 326 · bundle OK.
+- **stubbed:** the underlying wedge (omp not resolving session/prompt after a custom-provider turn ends, and
+  only the first tool_call reaching the desktop over ACP while the model loop ran ahead) is an
+  omp-integration issue not root-caused here — the adapter is provably healthy (stderr diag), the gap is in
+  omp's ACP session/update + prompt-completion emission for the custom streamSimple provider. No client
+  watchdog added (a single gov-gateway call can exceed 60s, so a silence-timeout would false-settle).
+- **next:** capture omp's own logs during a wedge to see why session/prompt doesn't resolve; consider an
+  omp issue/upstream fix or a per-turn server-side timeout in acp_backend.prompt().
+
+---
+**Chat reconciles full reply on `done` (follow-up to ADR-0059)**
+- **shipped:** live AskSage turns sometimes completed server-side (captured in the turns log) yet the chat
+  showed only the first tool call and no answer until a browser reload (which then lost the live tool chips
+  + time/token stats). The server-side `assistant` accumulator and the browser stream are fed by the same
+  listener, so a completed turn HAS the full text. Now `prompt()` emits `{type:"done", text: assistant}`
+  and the renderer reconciles: on done, if the server's full text is longer than what streamed, it replaces
+  buf — so the complete final answer always renders when the turn settles, even if live token chunks were
+  lost. typecheck clean · desktop 326 · bundle OK.
+- **stubbed:** this only helps when `done` REACHES the browser. The deeper failure — omp not resolving
+  session/prompt at all (a genuine wedge: the model finished per the stderr diag + turns log, but the ACP
+  turn never closes) and intermediate tool_call/agent_message events dropping mid-stream — is an
+  omp-integration issue that needs omp's own logs to root-cause. Stop (client abort, prior commit) is the
+  recovery path meanwhile.
+- **next:** capture omp's terminal output during a wedge; determine if it's every AskSage turn or only
+  long multi-tool ones; consider a server-side per-turn timeout in acp_backend.prompt() as a backstop.
+
+---
+**Turn-lifecycle diagnostics + listener-clobber guard (debugging the AskSage long-turn hang, ADR-0059)**
+- **shipped:** user confirmed long multi-tool AskSage turns hang with done never reaching the browser (blank
+  till reload). Added `[TURN_DIAG]` logging (developer mode → dev-server console): prompt.start /
+  prompt.resolved|stalled|error (with chars, enqueueErr, listenerIntact) / complete.end (clobberAvoided) /
+  chat-stream-write-failed. This disambiguates the three hypotheses on the NEXT hang: omp wedge (no
+  prompt.resolved line ever), listener clobber (listenerIntact=false), or browser disconnect (enqueueErr>0 /
+  write failed). Also: sink now swallows onEvent throws (counts enqueueErr) so a closed browser stream can't
+  break the server turn; and complete() no longer restores the shared this.listener if a chat turn took it
+  over mid-completion (clobberAvoided) — a real orphan bug for overlapping turns. typecheck · desktop 326 ·
+  bundle OK.
+- **stubbed:** root cause still unconfirmed pending a live `[TURN_DIAG]` capture; if it's the omp wedge
+  (session/prompt never resolving while events trickle, so the 2-min idle never fires) the fix is upstream
+  or a hard per-turn cap (user deferred the timeout).
+- **next:** user reproduces a long-turn hang with developer mode ON and pastes the `[TURN_DIAG]` lines from
+  the dev-server terminal; that pins wedge vs clobber vs disconnect and the fix follows.
+
+---
+**P-EGRESS.1 UI polish: docked, subdued, de-duplicated egress dialog (ADR-0062)**
+- **shipped:** per UX feedback — the egress approval card now DOCKS directly above the prompt bar (egressDock
+  in .composer-wrap) instead of inline in the chat; restyled subdued to match the app (outline buttons, no
+  bright magenta fills, thin amber accent, app text styles); the choices were de-duplicated from 5 to 4
+  ("ask me every time" had the same outcome as "Allow once" — both ask again next time — so it was dropped):
+  Allow once / Always allow this site / Always allow every site (amber-tinted = the risky one) / Block. On
+  answer the docked card removes itself + a brief toast. typecheck clean · bundle OK · egress tests 13 ·
+  card visually verified in the dev server.
+- **next:** remaining selected threads — tool curation, lossy streaming ([TURN_DIAG]), P-CONTINUE.1.
+
+---
 **P-GOAL.9 — /goal After-Action Report + termination guards (ADR-0054)**
 - **shipped:** the loop's LAST task is now an After-Action Report — `desktop/loop_report.ts` (PURE,
   unit-tested) renders a deterministic markdown AAR with portable Mermaid graphs (pie: Tool Calls by type;

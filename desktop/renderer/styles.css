@@ -467,6 +467,33 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .perm-result.ok{color:var(--green)}
 .perm-result.no{color:var(--txt-3)}
 .perm-result .ic{flex:none}
+/* P-EGRESS.1 (ADR-0062): per-website egress approval, DOCKED above the prompt bar. Subdued to match the
+   app — outline buttons (no bright fills), amber only as a thin accent, color on hover. */
+#egressDock{max-width:min(1080px,94vw);margin:0 auto 10px;display:flex;flex-direction:column;gap:8px}
+.perm-egress{margin:0;border:1px solid var(--line);border-left:2px solid color-mix(in srgb,var(--amber,#e0a64e) 55%,var(--line));
+  border-radius:11px;background:var(--bg-1)}
+.perm-eg-head{display:flex;align-items:center;gap:7px;padding:9px 12px 5px;color:var(--txt-2);font-weight:600;font-size:13px}
+.perm-eg-head .ic{flex:none;color:var(--amber,#e0a64e)}
+.perm-egress-target{display:flex;align-items:center;gap:7px;margin:0 12px 7px;padding:6px 9px;border-radius:8px;
+  background:var(--bg-2);border:1px solid var(--line-soft)}
+.perm-url{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;color:var(--txt-2);word-break:break-all;flex:1 1 auto;line-height:1.45}
+.perm-copy{flex:none;display:inline-flex;align-items:center;border:1px solid var(--line);background:var(--bg-1);color:var(--txt-3);
+  border-radius:7px;padding:4px 6px;cursor:pointer;transition:color var(--t) var(--ease),border-color var(--t) var(--ease)}
+.perm-copy:hover,.perm-copy.ok{border-color:var(--green);color:var(--green)}
+.perm-radar{margin:0 12px 9px;align-self:flex-start;display:inline-flex;align-items:center;gap:6px;font-family:inherit;font-size:12px;font-weight:500;
+  border:1px solid var(--line);background:var(--bg-1);color:var(--txt-3);border-radius:8px;padding:5px 10px;cursor:pointer;
+  transition:color var(--t) var(--ease),border-color var(--t) var(--ease)}
+.perm-radar:hover{border-color:var(--accent-2);color:var(--accent-2)}
+.perm-egress .perm-actions-col{flex-direction:column;align-items:stretch;gap:6px;padding:0 12px 11px}
+.perm-egress .perm-btn{text-align:left;font-weight:500;font-size:12.5px;padding:8px 12px;border-radius:9px;
+  background:var(--bg-2);border:1px solid var(--line);color:var(--txt-2);
+  transition:color var(--t) var(--ease),border-color var(--t) var(--ease),background var(--t) var(--ease)}
+.perm-egress .perm-btn:hover{transform:none}
+.perm-egress .eg-allow:hover{border-color:var(--green);color:var(--txt);background:color-mix(in srgb,var(--green) 9%,transparent)}
+.perm-egress .eg-danger{color:var(--amber,#e0a64e);border-color:color-mix(in srgb,var(--amber,#e0a64e) 26%,var(--line))}
+.perm-egress .eg-danger:hover{border-color:var(--amber,#e0a64e);background:color-mix(in srgb,var(--amber,#e0a64e) 10%,transparent)}
+.perm-egress .eg-block{color:var(--txt-3)}
+.perm-egress .eg-block:hover{border-color:var(--red);color:var(--red);background:var(--red-dim)}
 
 /* subagent delegation card (omp `task` tool) — P-TASK.1 (ADR-0028). Mirrors .thoughts/.reasoning. */
 .subagent{margin:8px 0 2px;border:1px solid var(--line);border-left:2px solid var(--cyan);border-radius:11px;

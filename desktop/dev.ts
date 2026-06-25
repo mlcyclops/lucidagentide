@@ -231,9 +231,19 @@ const server = Bun.serve({
       // ADR-0009 Phase D: developer-mode logging view. GET is gated server-side on developerMode
       // (returns null when off); POST {enabled} flips the mode. Read-only, metadata-only.
       if (p === "/api/dev") {
-        if (req.method === "POST") { const b = await readBody<{ enabled?: unknown }>(req); return json({ ok: true, data: setDeveloperMode(!!b.enabled) }); }
-        if (!loadSettings().developerMode) return json({ ok: true, data: { enabled: false, snapshot: null, blocks: { quarantined: [], approved: [], total: 0 }, turns: [] } });
-        return json({ ok: true, data: { enabled: true, snapshot: await devSnapshot(), blocks: liveBlocks(), turns: recentTurns() } });
+        if (req.method === "POST") {
+          const b = await readBody<{ enabled?: unknown }>(req);
+          const next = !!b.enabled;
+          const changed = loadSettings().developerMode !== next;
+          const data = setDeveloperMode(next);
+          // P-ASKSAGE.1 (ADR-0059): the omp child reads LUCID_ASKSAGE_DEBUG only at spawn. Respawn on a
+          // real change so toggling developer mode takes effect immediately (no app restart) — the fresh
+          // omp picks up / drops the debug env. Same pattern as an API-key change (backend.restart()).
+          if (changed) backend.restart();
+          return json({ ok: true, data });
+        }
+        if (!loadSettings().developerMode) return json({ ok: true, data: { enabled: false, snapshot: null, blocks: { quarantined: [], approved: [], total: 0 }, turns: [], asksage: [] } });
+        return json({ ok: true, data: { enabled: true, snapshot: await devSnapshot(), blocks: liveBlocks(), turns: recentTurns(), asksage: backend.asksageDiagnostics() } });
       }
       // Light, fast re-read of the provider rate-limit budget (omp's agent.db).
       // Used by the front-end's manual refresh + 5-minute auto-poll.
@@ -507,9 +517,13 @@ const server = Bun.serve({
       if (p === "/api/chat" && req.method === "POST") {
         const { text } = await readBody<{ text?: unknown }>(req);
         const enc = new TextEncoder();
+        let writeFailed = false;
         const stream = new ReadableStream({
           async start(controller) {
-            await backend.prompt(String(text ?? ""), (e) => { try { controller.enqueue(enc.encode(JSON.stringify(e) + "\n")); } catch { /* stream closed */ } });
+            await backend.prompt(String(text ?? ""), (e) => {
+              try { controller.enqueue(enc.encode(JSON.stringify(e) + "\n")); }
+              catch { if (!writeFailed && loadSettings().developerMode) { writeFailed = true; console.error("[TURN_DIAG] chat stream write failed (browser disconnected) — server turn continues"); } }
+            });
             try { controller.close(); } catch { /* already closed */ }
           },
         });

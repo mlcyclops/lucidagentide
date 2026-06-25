@@ -64,6 +64,8 @@ const RAW: Record<string, string> = {
   info: P("M12 4.5a7.5 7.5 0 1 0 0 15 7.5 7.5 0 0 0 0-15z") + P("M12 11v5") + P("M12 8h.01"),
   // pin / dock
   layout: P("M4 5.5h16v13H4z") + P("M14 5.5v13"),
+  // logs / developer console — a terminal frame with a ">" prompt + cursor line
+  logs: P("M4 5.5h16v13H4z") + P("M7.5 9.7 10 12l-2.5 2.3") + P("M11.8 14.3h4.7"),
   // refresh
   refresh: P("M5 12a7 7 0 0 1 12-5l2 2") + P("M19 5v4h-4") + P("M19 12a7 7 0 0 1-12 5l-2-2") + P("M5 19v-4h4"),
   // copy (two overlapping cards)

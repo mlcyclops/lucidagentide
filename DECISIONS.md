@@ -4912,3 +4912,386 @@ ADR-0048 (the cheap checker that runs the interview + now grades against criteri
 checks), ADR-0046/0047 (the loop + automations); loop-engineering's `loop-audit` rubric (L0→L3) and
 `loop-design-checklist` (the report's shape). Follow-on: a budget field for automations; an escalation
 ping on unattended stop.
+
+-----
+## ADR-0058 - P-RAG.1: the local knowledge spine (scan-gated ingest + offline cosine retrieval)
+
+**Date:** 2026-06-24
+**Status:** Accepted - BUILT.
+**Increment:** P-RAG.1 (first build increment under ADR-0053).
+
+### Context
+
+ADR-0053 scoped the Knowledge module as one large increment (schema + PDF parse + WASM embedder +
+retrieval + Knowledge popup + injection). Building all of that in one session is exactly the
+half-finished-increment failure CLAUDE.md warns against, and the heaviest pieces (bundling ONNX weights,
+`unpdf`, live multimodal captioning) need network / real environments that cannot be verified
+deterministically in this dev host. So P-RAG.1 is narrowed to the load-bearing, air-gap-clean,
+fully-testable CORE - the data + security + retrieval spine - and the heavy/UI pieces move to follow-ons.
+
+### Decision - what P-RAG.1 builds (server-side, no new runtime deps)
+
+1. **Separate `knowledge.duckdb`** (ADR-0053 decision #3). `Db.open(path, migrationsDir?)` gained an
+   optional second arg selecting the migration set; it defaults to the core memory schema, so every
+   existing caller is unchanged. The knowledge store passes its own dir
+   (`harness/knowledge/migrations`), so migration `0010_knowledge_vectors.sql` applies ONLY to
+   knowledge.duckdb and never to `agent_obs.duckdb` (invariant #10; frozen migrations untouched).
+2. **Migration 0010** - `kb_datasets` (id, name, classification U|CUI, source local|asksage,
+   embedding_model, dim) + `kb_chunks` (chunk_id, dataset_id FK, artifact_id soft-ref, source_path,
+   ordinal, text, trust_label, `embedding FLOAT[]`, dim). The 0010 number keeps project migration
+   numbering globally unique even though this is a distinct database.
+3. **`chunk.ts`** - pure, deterministic, overlapping, boundary-preferring text chunker.
+4. **`embedder.ts`** - an `Embedder` INTERFACE (`{id, dim, embed()}`) plus `HashEmbedder`, a
+   deterministic, dependency-free hashed-bag-of-words embedder (L2-normalized). The pipeline depends on
+   the interface, NOT a model, so the spine is testable and air-gap-clean today; P-RAG.1b drops in the
+   real WASM `bge-small-en-v1.5` (384-dim) behind the same interface with weights bundled.
+5. **`ingest.ts` `ingestText`** - the security keystone: chunk -> SCAN each chunk fail-closed
+   (`scanAndDecide`/DEFAULT_POLICY, same seam as persona/skill import) -> embed ONLY clean chunks ->
+   store with their trust label. A blocked chunk (quarantined, suspicious-over-threshold, OR
+   scanner-unavailable) is NEVER embedded and NEVER stored. An `onBlock` audit hook lets the desktop
+   layer `recordBlock()` without this harness module importing the desktop security log (clean layering).
+6. **Retrieval** - `KnowledgeStore.retrieve()` brute-forces top-k by DuckDB's built-in
+   `list_cosine_distance` (no vss/HNSW extension - air-gap clean). `wrapRetrieved()` renders hits inside
+   `UNTRUSTED_CONTENT_START/END` for late, delimited injection (invariant #5/#6).
+
+### Vectors are inlined as numeric SQL list literals (not bound params)
+
+The `@duckdb/node-api` binding rejects a JS array bound as a parameter ("Cannot create values of type
+ANY"). Probed: `list_cosine_distance(embedding, [<literal>])` works with no cast, on both INSERT and
+SELECT. Embedding components are machine-generated finite floats (never user text), and `floatList()`
+throws on any non-finite component, so inlining is safe and keeps retrieval in SQL.
+
+### Deferred (explicit, so the boundary is honest)
+
+- **P-RAG.1b** - real WASM text embedder (`@huggingface/transformers`, `bge-small-en-v1.5`) with weights
+  bundled as extraResources; `unpdf` PDF->text; wire both behind the existing `Embedder` interface.
+- **P-RAG.1c** - the Knowledge popup (guided + advanced, P-GOAL.8 pattern) for the LOCAL path, a
+  `knowledge.duckdb` at a fixed app path, desktop `recordBlock` wiring via `onBlock`, and per-turn
+  retrieval injection mirroring the dataset selector (ADR-0053 decision #4).
+- **P-RAG.2** images/multimodal; **P-RAG.3** AskSage dataset training; **P-RAG.4** ranking/citations + HNSW.
+- New `EventName`s (`knowledge_ingested`/`chunk_embedded`/`knowledge_retrieved`) remain deferred - a
+  `contracts.ts` change is its own increment (ADR-0053); the spine reuses existing block-audit plumbing.
+
+### Verification
+
+`bun test harness/knowledge` 20/20 (chunk bounds/overlap/determinism; embedder shape/normalization/
+ranking; store CRUD + cosine ranking + dim-mismatch-throws + dataset scoping; ingest clean-stores /
+poison-blocked-never-stored / dead-scanner-fails-closed / delimited-wrap). Full harness 493, desktop 326,
+typecheck clean (3 cfgs). `make demo-P-RAG.1` (`demo_prag1.ts`) proves the property against the REAL
+scanner sidecar + a real temp knowledge.duckdb: clean doc stored, Trojan-Source (bidi U+202E + zero-width
+U+200B) note blocked and never stored, cosine retrieval returns the relevant chunk first, injection
+delimited.
+
+### Invariants preserved
+
+#2 (TS-only - no new Python; the scanner stays the only Python) - #3/#5 (every chunk scanned fail-closed,
+stored with a trust label, injected only delimited + late) - #9 (stable Snowflake `*_id` for
+datasets/chunks) - #10 (a new numbered migration in its own set; frozen ones untouched; `Db.open` change
+is additive) - keystone #2 (RAG chunks are retrieval context, never auto-promoted into semantic memory).
+
+### Relates to
+
+ADR-0053 (the RAG scope/plan this first-builds); ADR-0045/P-SKILL.1 (the scan-gate import seam reused);
+ADR-0012 (classification); ADR-0019 (gate/quarantine surfacing); CLAUDE.md invariants #2/#3/#5/#9/#10 +
+keystone #2.
+
+## ADR-0059 - P-ASKSAGE.1: AskSage tool-loop diagnostics + tolerant response extraction
+
+**Date:** 2026-06-24
+**Status:** Accepted - BUILT.
+**Increment:** P-ASKSAGE.1.
+
+### Context
+
+Live UI testing surfaced a real defect the mocked tests could not: AskSage **Claude** and **Gemini**
+models run tools (files get partially written) but then the agentic loop "gives up too soon" - no retry,
+no visible reasoning, half-done work. The same prompts complete fine on the public (non-AskSage) models.
+AskSage **GPT** is noticeably better. That last fact is the key clue: GPT goes through omp's NATIVE
+`openai-completions` provider (real streaming, omp's battle-tested loop), while Claude/Gemini go through
+our custom NON-streamed `streamSimple` adapter (`asksage_stream.ts`, ADR-0007/0051). So the early
+termination is isolated to our adapter.
+
+Most likely mechanism, and it is silent: each `streamSimple` call is one HTTP round-trip = one assistant
+turn; omp drives the loop. If a follow-up response is parsed to EMPTY text + ZERO tool calls - because
+the AskSage proxy wrapped the body in a shape our strict parser does not read - we emit a clean
+`done`/`stop` with empty content, and omp concludes the model finished. The mock hand-builds the standard
+Anthropic/Gemini shapes, so it never exercises a wrapped/odd live shape.
+
+The user chose "add diagnostics first" (cannot reach the live gov gateway from the dev host), so this
+increment makes the loop OBSERVABLE and adds the one safe robustness fix.
+
+### Decision - per-call diagnostics (env-gated), surfaced in the developer Logs panel
+
+`asksage_stream.ts` emits one `[ASKSAGE_DIAG] {json}` line per call to stderr when
+`LUCID_ASKSAGE_DEBUG` is set. Each record carries the request summary (route, model, maxTokens, tool
+names sent, message count) and the parsed response (HTTP status, top-level response keys, `via` = which
+shape matched, text length, tool-call names, stopReason, usage). The give-up smoking gun is called out
+explicitly: when an OK response yields empty text AND no tool calls, the record gets
+`anomaly: "empty-response"` plus a truncated raw snippet; a `length`/`MAX_TOKENS` finish gets
+`anomaly: "truncated"`. HTTP and fetch errors are logged with a raw snippet too.
+
+`acp_backend.ts` enables `LUCID_ASKSAGE_DEBUG` in the omp child (inherited at spawn) **when developer
+mode is on** - zero overhead otherwise - and its `onStderr` parses `[ASKSAGE_DIAG]` lines into a bounded
+in-memory ring (last 200), echoing them to the dev-server console. `/api/dev` exposes the ring (developer
+mode only); the renderer's **Logs -> AskSage tool calls** accordion shows one row per call and
+auto-opens, with a chip, when any anomaly/error is present. Because the child reads the env only at
+spawn, toggling developer mode (`POST /api/dev`) calls `backend.restart()` on a real change, so the
+diagnostics take effect immediately with no app restart (the same respawn pattern as an API-key change).
+
+### Decision - tolerant response extraction (the one safe fix)
+
+`anthropicBlocks()` / `googleParts()` locate the content blocks/parts tolerantly: the standard shape
+first (`content[]` / `candidates[0].content.parts`), then known wrappers (`response.content`,
+`message.content`, OpenAI-style `choices[0].message` with `tool_calls`, or a plain string under
+`response`/`message`/`completion`/`text`/`answer`). Fallbacks fire ONLY when the strict parse finds
+nothing, so they can only RECOVER content that would otherwise be dropped (turning a premature empty stop
+into a real turn), never change a good parse. `via` records which path matched, so a live test reveals
+the real wire format rather than guessing.
+
+### Deliberately deferred (pending the live diagnostics)
+
+- Relaying the model's THINKING blocks (no reasoning is currently shown) - needs the live shape first.
+- Raising/overriding `max_tokens` if `truncated` turns out to be the cause (diagnostics will say).
+- Confirming omp re-invokes `streamSimple` after each tool result for a custom provider (the per-call
+  log makes the invocation count visible). If it does not loop, that is a deeper omp-integration fix.
+- A live gov-gateway tool round-trip remains the manual check this dev host cannot run.
+
+### Verification
+
+`asksage_stream.test.ts` 14/14 (the original 7 + 7 new: tolerant `response.content` / OpenAI-`choices` /
+wrapped-Gemini recovery; diag off without the env; diag records request+parse; `empty-response` anomaly
+flagged with a raw snippet; HTTP-error diag + stream error). Full harness 500, desktop 326, typecheck
+clean (3 cfgs), renderer bundles. `make demo-P-ASKSAGE.1` proves wrapped replies are recovered, empty
+turns are flagged, and diagnostics are off by default.
+
+### Follow-ups from live testing
+
+- **Stop now actually stops AskSage.** `SimpleStreamOptions.signal` carries omp's AbortSignal, aborted on
+  session/cancel. The adapter ignored `_options`, so a non-streamed AskSage fetch (one long request per
+  turn) kept running after Stop and the turn hung. Threaded `options.signal` into every fetch
+  (anthropic/google/query) and, on abort, settle with a clean `done`/stop (no error toast). Native-provider
+  models (GPT, public Claude) were already cancellable by omp; this closes the AskSage gap.
+- **Developer Logs are live + readable.** The 4s poll now re-fetches `/api/dev` while the Logs tab is open
+  (AskSage rows + transcripts no longer go stale mid-turn). Turn transcripts and AskSage calls render
+  newest-first with a US-Eastern (`America/New_York`, auto EST/EDT) timestamp column.
+
+### Invariants preserved
+
+#2 (TS-only) - #3/#4 (every tool call the adapter surfaces is still scanned by the in-process gate;
+diagnostics never bypass it) - the frozen prompt prefix is untouched (no prompt bytes changed). Logging
+is metadata + a truncated snippet to stderr, developer-mode-gated, never persisted to the store.
+
+### Relates to
+
+ADR-0007 (the AskSage adapter), ADR-0051 (tool use added to the Claude+Gemini routes - the path this
+hardens), ADR-0009 Phase D (the developer Logs panel reused), CLAUDE.md invariants #2/#3/#4/#6.
+
+## ADR-0060 - Turn wellness-check + auto-continue ("is the big model still awake?") (SCOPE/PLAN)
+
+**Date:** 2026-06-24
+**Status:** Proposed - scope + plan only; no behavior code yet. Splits into P-CONTINUE.1..2.
+**Context increment:** P-CONTINUE (planning).
+
+### Context
+
+Long turns can stop SHORT, and the user has to notice and type "continue":
+- **Idle stall:** the non-streamed AskSage gov gateway emits nothing for minutes during a big call; the
+  idle cap (now 5 min, ADR-0059 follow-up) ends the turn ("gave up on the provider"). Native streaming
+  models rarely hit this - they emit tokens every few seconds.
+- **Cut off:** the model stops mid-task (stopReason length/truncated, or it just ends early).
+
+The user's idea: when a turn looks unfinished, have a SMALL, FAST model of the SAME family "check on the
+big guy" - read the chat history, decide if the work is actually done, and if not, automatically push the
+big model for another turn to finish, showing the check in the thinking panel. This is the `/goal`
+maker/checker pattern (ADR-0046) applied to chat continuation, reusing `complete()` with a model override
+(ADR-0048) and the existing thinking stream (ADR-0027).
+
+### Decision - the loop
+
+After a chat turn ENDS, if it looks potentially INCOMPLETE, run a CHECKER (cheap same-family model) on the
+last user request + the assistant's final message. The checker returns COMPLETE or INCOMPLETE + a one-line
+"what remains". If INCOMPLETE and under a cap, auto-send a continuation prompt to the BIG model on the same
+session; surface the whole thing in the thinking panel. Stop when the checker says COMPLETE or the cap hits.
+
+### Decision - when to trigger (conservative, cost-aware)
+
+Run the checker ONLY when there's a real cut-off signal: the turn **idle-stalled**, OR stopReason was
+**length/truncated**. Do NOT run on: a user-cancelled turn (Stop), an empty/errored turn, a `/goal` loop
+turn (it has its own checker), or a turn that ended with a normal `end_turn` and no truncation (default:
+assume complete - no checker, no cost). P-CONTINUE.2 may add a heuristic "looks mid-task" trigger
+(unclosed code fence, ends on "Let me.../Next I'll...").
+
+### Decision - checker model (same family, smaller)
+
+Map the active model to its fast/small SAME-family sibling: Gemini Pro -> Gemini Flash; Claude Sonnet/Opus
+-> Claude Haiku; GPT-big -> GPT-mini. Reuse `model_families.ts` + `recommendCheckerModel`
+(`checker_model.ts`). For AskSage models, keep the checker on the AskSage route of the SAME family (gov
+compliance - never route gov content to a non-gov checker). Fall back to the same model if no smaller
+sibling exists. The checker runs via `complete(system, user, { model })` - a throwaway session that never
+pollutes the chat (ADR-0048).
+
+### Decision - the verdict is fail-closed
+
+The checker is prompted to answer strictly `COMPLETE` / `INCOMPLETE` + reason + what-remains. Parsing
+mirrors `parseGoalVerdict` (`goal_verdict.ts`): empty/garbled/ambiguous => treat as COMPLETE. Better to
+under-continue than to loop forever. A hard cap `maxAutoContinue` (default 2) bounds it regardless.
+
+### Decision - UX
+
+Show the check live in the THINKING panel: "Checking whether the last turn finished... the response looks
+cut off; asking the model to continue (what remains: ...)". The auto-sent continuation renders as a normal
+assistant turn with a subtle "auto-continued" marker so the user knows it was the wellness-check, not them.
+A Settings toggle (default ON, with the cap shown) lets users disable it. Continuation prompt: "Continue
+and finish what you were doing - <what remains>. Do not repeat work you already completed."
+
+### Phasing
+
+- **P-CONTINUE.1** - core: detect cut-off (stall / length), pick the same-family checker, run it via
+  `complete()`, auto-send ONE continuation on INCOMPLETE, fail-closed verdict, cap + Settings toggle,
+  thinking-panel surfacing.
+- **P-CONTINUE.2** - heuristic "looks mid-task" trigger, sharper "what remains" extraction, multi-continue
+  tuning, and per-provider rate-limit backoff (don't hammer a 429'd gov gateway).
+
+### Invariants preserved
+
+#3/#4 (continuation turns + the checker's view still pass the in-process gate - every tool call scanned;
+the checker only ever sees gate-clean assistant text) - #5 (no untrusted text enters the frozen prefix) -
+keystone #2 (the checker is ephemeral judgment via `complete()`, never promoted to memory). The checker
+is maker != checker (a different/smaller model), echoing the `/goal` separation.
+
+### Relates to
+
+ADR-0046 (`/goal` maker/checker loop reused), ADR-0048 (distinct recommended checker model + `complete()`
+model override), ADR-0027 (the thinking stream surfaced to the UI), ADR-0059 (the idle-cap bump + AskSage
+non-streamed adapter this compensates for), `model_families.ts` / `checker_model.ts`.
+
+## ADR-0061 - P-RESIL.1: AskSage call resilience (retry transient 5xx + MALFORMED_FUNCTION_CALL)
+
+**Date:** 2026-06-24
+**Status:** Accepted - BUILT.
+**Increment:** P-RESIL.1.
+
+### Context
+
+Live `[ASKSAGE_DIAG]` capture (developer mode, ADR-0059) showed two transient failures burning whole agent
+turns - and 100k-200k INPUT tokens each - for zero output:
+- **HTTP 504** from the gov gateway (overloaded/slow on big requests).
+- Gemini **`finishReason: MALFORMED_FUNCTION_CALL`** with an EMPTY body: the model tried to emit a tool
+  call, failed to form valid arguments, and returned nothing. Our adapter parsed it as `empty-response`,
+  so omp got an empty turn and the loop wasted a step (often repeatedly).
+
+Both are usually TRANSIENT (a 504 clears; a malformed call is stochastic at temperature), so a bounded
+retry recovers the turn instead of wasting it.
+
+### Decision
+
+In `callAnthropic` and `callGoogle` (asksage_stream.ts), wrap the fetch + parse in a bounded retry loop:
+`MAX_ATTEMPTS = 3` with short backoff `[800ms, 2000ms]`. Retry when:
+- the fetch throws (network blip) and it was NOT a user abort,
+- the HTTP status is **retriable** (`429` or `5xx`),
+- (Gemini only) `finishReason === "MALFORMED_FUNCTION_CALL"` AND the parse yielded no text and no tool call.
+
+Do NOT retry: success, 4xx client errors (except 429), or a user **Stop** (the abort signal short-circuits
+the loop AND the backoff - `backoff()` rejects immediately on abort, so Stop never waits out a delay).
+Each retry is logged (`retry:true`, `attempt`) so the diagnostics show the recovery. A persistent failure
+still throws after the 3rd attempt (unchanged terminal behavior). A persistent malformed call is now
+labelled `anomaly: "malformed-function-call"` (distinct from a plain `empty-response`) for the Logs panel.
+
+### Why bounded + short
+
+Three attempts with sub-2s backoff bounds the added latency (worst case ~2.8s) and the extra gov-gateway
+load, while clearing the common one-off glitch. It is deliberately NOT an unbounded retry (that would mask
+a real outage and hammer a rate-limited gateway). The auto-continue checker (ADR-0060) covers the
+DIFFERENT case where the model legitimately stops short.
+
+### Verification
+
+5 new tests (asksage_stream.test.ts, 20 total): 504-then-success retries once and recovers;
+MALFORMED-then-valid-tool-call recovers; persistent 504 gives up after exactly 3 attempts and errors; a
+4xx is not retried; a first-try success makes exactly one request. Full harness 506, typecheck clean.
+
+### Invariants preserved
+
+#2 (TS-only) - #3/#4 (retries change nothing about the gate: every recovered tool call is still scanned
+in-process) - the frozen prompt prefix is untouched. Retries are abort-aware so Stop (ADR-0059) still
+cancels instantly.
+
+### Relates to
+
+ADR-0007/0051/0059 (the AskSage adapter + diagnostics this hardens), ADR-0060 (auto-continue, the
+complementary fix for legitimate short-stops), CLAUDE.md #2/#3/#4.
+
+## ADR-0062 - P-EGRESS.1: per-website approval for the agent's network-reaching tools
+
+**Date:** 2026-06-24
+**Status:** Accepted - BUILT.
+**Increment:** P-EGRESS.1.
+
+### Context
+
+Live testing showed the agent autonomously navigating to arbitrary internet sites with omp's `browser`
+tool (improvising a base64 upload of an audio file). In a security/provenance product, silent egress to
+unknown hosts is a real risk (exfiltration, SSRF, fetching hostile content). The gate scans tool-call
+CONTENT for hidden Unicode but does not govern WHERE the agent reaches. The user asked for a
+prompt-before-each-external-fetch flow with rich, persisted choices.
+
+Root cause of the silent browsing: omp's `tools.approvalMode` defaults to **`yolo`** (auto-approve all
+tiers). But `tools.approval` (per-tool policy) is **honored in every approval mode** - so a per-tool
+`prompt` override forces omp to request permission even under yolo.
+
+### Decision - omp config forces a prompt; the desktop owns the dialog
+
+`acp_config.yml` sets `tools.approval: { browser: prompt, web_search: prompt, web: prompt, fetch: prompt }`.
+omp then sends `session/request_permission` for those tools. `acp_backend.onRequest` recognises an egress
+request - by tool name OR by the call carrying an external `http(s)` URL (omp may report `browser` with a
+generic kind, so name alone can miss it) - and, instead of the Agent-mode auto-approve, runs `askEgress`:
+the per-website approval dialog. A standing decision can still auto-allow without prompting. Fail-closed:
+no live UI / timeout (5 min) ⇒ the egress is BLOCKED.
+
+### Decision - the five choices, and what they persist (egress_policy.ts)
+
+The dialog offers four "Yes" and a "No", each mapped to a pure `EgressChoice` folded into a machine-level
+store (`~/.omp/lucid-egress.json`):
+- **allow-once** - approve this call, remember nothing.
+- **allow-site** - approve + auto-allow this host forever (`allowHosts`).
+- **ask-site** - approve, but PIN this host to always-prompt (`alwaysAskHosts`) - overrides danger mode.
+- **danger** ("danger is my middle name") - global allow-all egress (`dangerMode`).
+- **deny** - block; persist nothing.
+
+`egressVerdict(store, url)` is fail-closed: `alwaysAsk` pin → prompt; allow-listed host → allow; danger →
+allow; everything else (incl. an unparseable URL) → prompt. The decision logic is pure and unit-tested;
+the chosen omp option (allow/deny) is resolved from omp's own `options`, so we never invent option ids.
+
+### Decision - the dialog (the user's spec)
+
+The card shows the **target URL prominently** with a **copy button**, a security note, and a **"Check this
+site with Cloudflare Radar"** button that copies the URL and opens `https://radar.cloudflare.com/scan` in a
+browser so the user can vet the site before allowing. Then the five choices, stacked. Amber-accented (it's
+a network-egress gate, distinct from the standard Ask-mode card).
+
+### Scope / deferred (P-EGRESS.2)
+
+`web_search` (a search QUERY, no host) currently falls into the dialog as allow-once/danger/deny - the
+per-site options are no-ops without a host; a query-aware variant is deferred. A Security-panel view of
+egress decisions (and a "forget this site" / "exit danger mode" control) is deferred. Domain-allowlist
+import and per-project (not just per-host) scoping are deferred.
+
+### Verification
+
+13 unit tests (egress_policy.test.ts): host extraction (URL / bare / junk), fail-closed verdict,
+allow-list, danger mode, ask-site pin overriding danger, and choice-folding round-trips. Desktop 339,
+typecheck clean, bundle OK; the dialog rendering was visually verified in the dev server. The LIVE
+omp-permission round-trip (does omp emit request_permission for `browser` with the URL in rawInput?) is
+the manual check - the config + the name-OR-url detection are built to handle either shape.
+
+### Invariants preserved
+
+#3/#4 (the gate is unchanged - it still scans every tool call; this adds an egress GATE on top, never
+bypasses the content gate) - fail-closed (no UI / timeout ⇒ block) - the frozen prompt prefix is
+untouched. Permission still parks the JSON-RPC response and pauses the idle clock (P-ACP.3), so a human
+deciding is not a stalled turn.
+
+### Relates to
+
+ADR-0027/P-ACP.3 (the tool-permission forwarding this extends), ADR-0019 (the content gate this complements
+with an egress gate), ADR-0059 (the diagnostics that surfaced the browser flailing). CLAUDE.md #3/#4.

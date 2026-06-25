@@ -18,7 +18,7 @@ import { buildUserTurnPreamble } from "./preamble.ts";
 import { recordTurns } from "./turns_log.ts";
 import { isLearnableAssistantText } from "./thinking_governance.ts";
 import { recordBlock } from "./security_log.ts";
-import { asksageOnly, attribution, checkerModel, lastModel, mcpServersForAcp, setCheckerModel, setLastModel } from "./settings_store.ts";
+import { asksageOnly, attribution, checkerModel, lastModel, load as loadSettings, mcpServersForAcp, setCheckerModel, setLastModel } from "./settings_store.ts";
 import { managedConfig } from "./managed_config.ts";
 import { recommendCheckerModel, resolveCheckerModel, type ModelOption } from "./checker_model.ts";
 import { parseGoalVerdict } from "./goal_verdict.ts";
@@ -30,6 +30,29 @@ import { formatSpend } from "./loop_report.ts";
 import { assessReadiness, maturedGoalFrom, mergeMatured, parsePreflightJson, type PreflightSpec, preflightSystemPrompt, preflightUserPrompt, type ReadinessReport, relevantPriorRuns, renderLoopDesign, successCriteria, summarizePriorRuns } from "./loop_preflight.ts";
 import { execFileSync } from "node:child_process";
 import { type Automation, listAutomations, nextDueAutomation, updateAutomation } from "./automations.ts";
+import { type EgressChoice, egressDecision, recordEgress } from "./egress_policy.ts";
+
+// P-EGRESS.1 (ADR-0062): the network-reaching tools omp is told to PROMPT for (acp_config.yml). When omp
+// requests permission for one of these, the desktop shows the per-website approval dialog instead of
+// silently auto-approving in Agent mode.
+const EGRESS_TOOLS = new Set(["browser", "web_search", "web", "fetch", "navigate"]);
+// The dialog's choices — clear and non-overlapping. ("allow once" and an "ask every time" pin had the
+// same outcome — both ask again next time — so the pin was dropped.) Each maps to an EgressChoice the
+// store folds in; the "allow" variants approve the call to omp, "deny" blocks it.
+const EGRESS_OPTIONS: { optionId: string; name: string; kind?: string }[] = [
+  { optionId: "egress:allow-once", name: "Allow once", kind: "allow" },
+  { optionId: "egress:allow-site", name: "Always allow this site", kind: "allow" },
+  { optionId: "egress:danger", name: "Always allow every site", kind: "danger" },
+  { optionId: "egress:deny", name: "Block", kind: "reject" },
+];
+/** Pull the URL (browser) or query (web_search) an egress tool call targets, from its rawInput/title. */
+function egressTarget(tc: any): string | null {
+  const ri = tc?.rawInput ?? tc?.input ?? {};
+  for (const k of ["url", "href", "uri", "link"]) if (typeof ri[k] === "string" && ri[k].trim()) return ri[k].trim();
+  if (typeof ri.query === "string" && ri.query.trim()) return ri.query.trim();
+  const m = /(https?:\/\/[^\s)]+)/i.exec(String(tc?.title ?? ""));
+  return m ? m[1]! : (String(tc?.title ?? "").trim() || null);
+}
 
 const REPO = join(import.meta.dir, "..");
 // Absolute so the gate loads from THIS repo even when omp runs in another workspace.
@@ -56,7 +79,7 @@ export type ChatEvent =
   | { type: "tool"; name: string; detail: string }
   | { type: "subagent"; id: string; agent: string; title: string; assignments: string[] }
   | { type: "block"; tool: string; reason: string; severity: string; findings: string; id?: string; quarantined?: boolean }
-  | { type: "permission"; id: string; tool: string; detail: string; options: { optionId: string; name: string; kind?: string }[] }
+  | { type: "permission"; id: string; tool: string; detail: string; options: { optionId: string; name: string; kind?: string }[]; url?: string; egress?: boolean }
   | { type: "usage"; used: number; size: number; cost: number }
   // P-GOAL.1 (ADR-0046): /goal loop events — an iteration begins, the separate checker's verdict,
   // the loop met its condition, or it stopped (cap / no-progress).
@@ -67,7 +90,7 @@ export type ChatEvent =
   | { type: "goal-stop"; reason: string }
   // P-GOAL.9 (ADR-0054): the loop's last task — an After-Action Report (metrics + portable graphs).
   | { type: "goal-report"; path: string; summary: string; markdown: string }
-  | { type: "done" };
+  | { type: "done"; text?: string }; // text = the authoritative full assistant reply (reconciles lossy streaming)
 
 class Backend {
   private acp: ACPClient | null = null;
@@ -130,6 +153,21 @@ class Backend {
 
   private emit(e: ChatEvent): void { this.listener?.(e); }
 
+  // P-ASKSAGE.1 (ADR-0059): a bounded ring of AskSage tool-loop diagnostics, parsed from the omp child's
+  // `[ASKSAGE_DIAG]` stderr lines. Surfaced (developer-mode only) in the Logs panel so the non-streamed
+  // AskSage tool loop — and the "empty-response → gives up early" anomaly — is observable from a UI test.
+  private asksageDiag: Array<Record<string, unknown>> = [];
+  /** Recent AskSage call diagnostics (most-recent last), capped. Empty unless developer mode is on. */
+  asksageDiagnostics(): Array<Record<string, unknown>> { return this.asksageDiag.slice(-100); }
+
+  // Turn-lifecycle diagnostics (developer mode). Prints to the dev-server console so a hung long
+  // multi-tool turn reveals WHERE it stalls: did prompt() resolve (server finished, browser orphaned) or
+  // never resolve (omp wedge)? did complete() clobber the chat listener? did the browser stream break?
+  private turnDiag(msg: string): void {
+    if (!loadSettings().developerMode) return;
+    try { console.error(`[TURN_DIAG] ${msg}`); } catch { /* never break a turn on a log */ }
+  }
+
   private async start(): Promise<void> {
     if (this.acp) return;
     if (!this.starting) {
@@ -146,6 +184,9 @@ class Backend {
         // authoring model + the attribution identity + the edited workspace. Set BEFORE spawn (env is
         // copied at exec; the child can't see later changes).
         this.applyAttributionEnv();
+        // P-ASKSAGE.1 (ADR-0059): enable AskSage tool-loop diagnostics in the omp child when developer
+        // mode is on (the child inherits process.env at spawn). Off otherwise — zero overhead in normal use.
+        if (loadSettings().developerMode) process.env.LUCID_ASKSAGE_DEBUG = "1"; else delete process.env.LUCID_ASKSAGE_DEBUG;
         // ADR-0033: also append the build / anti-over-refusal policy so the chat model doesn't decline
         // a buildable task (e.g. "make a game/graphics/music in one HTML file") by mis-reading its scope.
         const appendedPolicy = `${DELEGATION_POLICY}\n\n${BUILD_POLICY}`;
@@ -196,6 +237,22 @@ class Backend {
         acp.onRequest = async (m, params) => {
           if (m === "session/request_permission") {
             const opts: any[] = params?.options ?? [];
+            const tc = params?.toolCall ?? params?.tool_call ?? {};
+            const toolName = [tc.kind, tc.title, tc.name, tc.toolName, params?.tool, params?.toolName].filter(Boolean).join(" ").toLowerCase();
+            const target = egressTarget(tc);
+            // P-EGRESS.1 (ADR-0062): a network-reaching tool — matched by name OR by carrying an external
+            // http(s) URL (omp may report the browser tool with a generic kind, so name alone can miss it).
+            // Unless a standing decision already allows the target, force the per-website approval dialog —
+            // EVEN in Agent mode (egress is never silently auto-approved). Fail-closed: no live UI ⇒ deny.
+            const isEgress = [...EGRESS_TOOLS].some((t) => toolName.includes(t)) || (!!target && /^https?:\/\//i.test(target));
+            if (isEgress) {
+              if (target && egressDecision(target) === "allow") {
+                const a = opts.find((o) => /allow/i.test(o.kind ?? o.optionId ?? "")) ?? opts[0];
+                return a ? { outcome: { outcome: "selected", optionId: a.optionId } } : { outcome: { outcome: "cancelled" } };
+              }
+              if (this.askActive && this.listener) return this.askEgress(params, opts, target ?? toolName);
+              return { outcome: { outcome: "cancelled" } }; // no UI to ask → block the egress
+            }
             // Ask mode (and only inside a live chat turn): hand the decision to the user.
             if (this.permissionMode === "ask" && this.askActive && this.listener) return this.askUser(params, opts);
             // Agent / Plan: auto-approve.
@@ -206,6 +263,21 @@ class Backend {
         };
         acp.onStderr = (chunk) => {
           for (const line of chunk.split("\n")) {
+            // P-ASKSAGE.1 (ADR-0059): capture AskSage call diagnostics into the ring + echo to the dev
+            // server console for terminal visibility. Best-effort parse — a malformed line is ignored.
+            const di = line.indexOf("[ASKSAGE_DIAG]");
+            if (di !== -1) {
+              const jstart = line.indexOf("{", di);
+              if (jstart !== -1) {
+                try {
+                  const rec = JSON.parse(line.slice(jstart));
+                  this.asksageDiag.push({ at: Date.now(), ...rec });
+                  if (this.asksageDiag.length > 200) this.asksageDiag.shift();
+                  console.error(line.slice(di)); // surface in the dev server / Electron log
+                } catch { /* not valid JSON — ignore */ }
+              }
+              continue;
+            }
             const m = /\[BLOCKED tool_call:(\w+)\].*?severity=(\w+).*?findings=([^\s]+)/.exec(line);
             if (m) {
               // The authoritative security-gate block. Persist it GUI-side (the gate's own omp
@@ -306,6 +378,30 @@ class Backend {
       this.permPending.set(id, (optionId) => settle(optionId ? { outcome: { outcome: "selected", optionId } } : { outcome: { outcome: "cancelled" } }));
     });
   }
+
+  /** P-EGRESS.1 (ADR-0062): forward an EGRESS request as the per-website approval dialog (the rich
+   *  options + the target URL for the Cloudflare-Radar check). The user's choice is persisted to the
+   *  egress store, then mapped back to omp's own allow/deny option. Fail-closed: timeout ⇒ deny. */
+  private askEgress(params: any, opts: any[], target: string): Promise<any> {
+    const id = `perm_${++this.permSeq}`;
+    const tc = params?.toolCall ?? params?.tool_call ?? {};
+    this.pendingPerms++;
+    this.emit({ type: "permission", id, tool: String(tc.kind ?? "browser"), detail: target, url: target, egress: true, options: EGRESS_OPTIONS });
+    const allowOpt = opts.find((o) => /allow/i.test(o.kind ?? o.optionId ?? "")) ?? opts[0];
+    const denyOpt = opts.find((o) => /(deny|reject|cancel|no)/i.test(o.kind ?? o.optionId ?? ""));
+    const approve = () => allowOpt ? { outcome: { outcome: "selected", optionId: allowOpt.optionId } } : { outcome: { outcome: "cancelled" } };
+    const block = () => denyOpt ? { outcome: { outcome: "selected", optionId: denyOpt.optionId } } : { outcome: { outcome: "cancelled" } };
+    return new Promise((resolve) => {
+      const settle = (outcome: any) => { clearTimeout(t); this.permPending.delete(id); this.pendingPerms = Math.max(0, this.pendingPerms - 1); resolve(outcome); };
+      const t = setTimeout(() => settle(block()), Backend.PERM_MS); // fail-closed → block egress
+      this.permPending.set(id, (optionId) => {
+        const choice = String(optionId ?? "").replace(/^egress:/, "") as EgressChoice;
+        if (!optionId || choice === "deny") { settle(block()); return; }
+        try { recordEgress(target, choice); } catch { /* best-effort persistence */ }
+        settle(approve());
+      });
+    });
+  }
   /** Resolve a parked permission from the UI. `optionId` null/empty ⇒ deny (cancelled). */
   resolvePermission(id: string, optionId: string | null): boolean {
     const fn = this.permPending.get(id);
@@ -356,7 +452,11 @@ class Backend {
   // ACP request has no timeout, so without this a rate-limited / hung turn leaves the UI
   // on "Thinking…" forever. Resets on every event, so a legitimately long turn is fine —
   // only TOTAL silence for this long trips it.
-  private static readonly IDLE_MS = 120_000;
+  // 5 min. Native providers stream tokens every few seconds so they almost never trip this; the headroom
+  // is for the NON-STREAMED AskSage gov gateway, where a single big call emits nothing for minutes and a
+  // 2-min cap false-stalled live turns ("gave up on the provider"). The auto-continue checker (ADR-0060)
+  // will eventually turn a stall into a wellness-check + resume rather than a dead end.
+  private static readonly IDLE_MS = 300_000;
 
   /** Run one turn, streaming events to onEvent; resolves after `done`. Captures the
    *  assistant reply so the personalization distiller can learn from the turn (P9.2).
@@ -368,12 +468,16 @@ class Backend {
     let onStall: (e: Error) => void = () => {};
     // While a permission is awaiting the user (Ask mode), pause the idle/stall clock — a human
     // deciding is not a stalled turn (askUser has its own fail-closed timeout).
+    const arm = () => { if (idle) clearTimeout(idle); if (this.pendingPerms > 0) return; idle = setTimeout(() => { stalled = true; onStall(new Error("the model went quiet for 5 minutes — the provider may be rate-limited (check your hourly budget) or the turn stalled. Try again.")); }, Backend.IDLE_MS); };
+    let enqueueErr = 0; // counts browser-stream write failures (orphaned/closed client stream)
+    const sink = (e: ChatEvent) => { arm(); if (e.type === "token") assistant += e.text; try { onEvent(e); } catch { enqueueErr++; } };
     const arm = () => { if (idle) clearTimeout(idle); if (this.pendingPerms > 0) return; idle = setTimeout(() => { stalled = true; onStall(new Error("the model did not respond for 2 minutes — the provider may be rate-limited (check your hourly budget) or the turn stalled. Try again.")); }, Backend.IDLE_MS); };
     // Only learnable assistant text accrues to `assistant` (→ recordTurns + learnFromTurn). Thinking
     // and other display-only events are excluded by construction (R-04 / ADR-0054).
     const sink = (e: ChatEvent) => { arm(); if (isLearnableAssistantText(e)) assistant += e.text; onEvent(e); };
     this.listener = sink;
     this.askActive = true; // permission requests in THIS turn may be forwarded to the UI (Ask mode)
+    this.turnDiag(`prompt.start session=${this.sessionId}`);
     try {
       await this.ensureSession();
       // Assemble the user-turn preamble (never the frozen prefix; invariant #5/#6). Issue #54:
@@ -394,7 +498,9 @@ class Backend {
         this.acp!.request("session/prompt", { sessionId: this.sessionId, prompt: [{ type: "text", text: body }] }),
         stall,
       ]);
+      this.turnDiag(`prompt.resolved session=${this.sessionId} chars=${assistant.length} enqueueErr=${enqueueErr} listenerIntact=${this.listener === sink}`);
     } catch (e) {
+      this.turnDiag(`prompt.${stalled ? "stalled" : "error"} session=${this.sessionId} chars=${assistant.length} enqueueErr=${enqueueErr} listenerIntact=${this.listener === sink} msg=${String((e as any)?.message ?? e).slice(0, 80)}`);
       onEvent({ type: "token", text: `\n[${stalled ? "stalled" : "agent unavailable"}: ${String((e as any)?.message ?? e)}]` });
     } finally {
       if (idle) clearTimeout(idle);
@@ -404,7 +510,9 @@ class Backend {
       this.pendingPerms = 0;
     }
     this.listener = null;
-    onEvent({ type: "done" });
+    // Carry the FULL accumulated reply on `done` so the UI can reconcile a lossy live stream (if some
+    // token chunks didn't reach the browser, the turn still renders the complete final answer on settle).
+    onEvent({ type: "done", text: assistant });
     void learnFromTurn(text, assistant, (sys, usr) => this.complete(sys, usr)); // best-effort; the model extractor (opt-in) uses complete()
     // ADR-0009 Phase B (issue #12): capture the turn for traceability. Sanitized + sha only,
     // GUI-side (can't co-write DuckDB); fully guarded so it never affects the chat.
@@ -751,6 +859,7 @@ class Backend {
       let text = "";
       let idle: ReturnType<typeof setTimeout> | undefined;
       let onStall: (e: Error) => void = () => {};
+      let myListener: ((e: ChatEvent) => void) | null = null;
       try {
         const s: any = await this.acp!.request("session/new", { cwd: currentWorkspace(), mcpServers: mcpServersForAcp() });
         sid = s?.sessionId ?? s?.id ?? null;
@@ -761,7 +870,8 @@ class Backend {
         if (opts.model) await this.acp!.request("session/set_config_option", { sessionId: sid, configId: "model", value: opts.model }).catch(() => {});
         const IDLE = opts.idleMs ?? 60_000;
         const arm = () => { if (idle) clearTimeout(idle); idle = setTimeout(() => onStall(new Error("stall")), IDLE); };
-        this.listener = (e) => { arm(); if (e.type === "token") text += e.text; };
+        myListener = (e: ChatEvent) => { arm(); if (e.type === "token") text += e.text; };
+        this.listener = myListener;
         arm();
         const stall = new Promise<never>((_, reject) => { onStall = reject; });
         await Promise.race([
@@ -772,7 +882,12 @@ class Backend {
       } catch { return text; }
       finally {
         if (idle) clearTimeout(idle);
-        this.listener = prev;
+        // Only restore if WE are still the active listener. If a chat turn started while this throwaway
+        // completion ran (long ones overlap), `this.listener` is now that turn's sink — restoring `prev`
+        // here would orphan it (drop its events → blank chat until reload). Leave it alone in that case.
+        const clobber = myListener !== null && this.listener !== myListener;
+        this.turnDiag(`complete.end clobberAvoided=${clobber} chars=${text.length}`);
+        if (!clobber) this.listener = prev;
         if (sid) this.acp!.request("session/close", { sessionId: sid }).catch(() => {});
       }
     });

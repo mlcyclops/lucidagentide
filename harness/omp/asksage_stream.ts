@@ -20,6 +20,47 @@ export interface AsksageStreamCfg { base: string; key: string }
 
 const isRecord = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
 
+// ── Diagnostics (P-ASKSAGE.1, ADR-0059) ─────────────────────────────────────────────────────────────
+// AskSage serves Claude/Gemini NON-streamed, so each streamSimple call is one HTTP round-trip = one
+// assistant turn; omp drives the agentic loop. When that loop "gives up too soon" (tools run, files end
+// up half-written, no retry), the usual cause is invisible: a follow-up response we parse to EMPTY text
+// + ZERO tool calls makes omp think the model finished. These diagnostics make every call observable.
+// Enabled by env LUCID_ASKSAGE_DEBUG (the desktop sets it in developer mode). One `[ASKSAGE_DIAG] {json}`
+// line per call to stderr; acp_backend's onStderr captures it into the developer Logs panel.
+function diag(rec: Record<string, unknown>): void {
+  if (!process.env.LUCID_ASKSAGE_DEBUG) return;
+  try { process.stderr.write(`[ASKSAGE_DIAG] ${JSON.stringify(rec)}\n`); } catch { /* never let logging break a turn */ }
+}
+/** A short, safe snippet of a raw response for the anomaly/error log (never the whole body). */
+function snippet(j: unknown): string {
+  try { return JSON.stringify(j).slice(0, 600); } catch { return String(j).slice(0, 600); }
+}
+function safeJsonArgs(v: unknown): Record<string, any> {
+  if (isRecord(v)) return v;
+  if (typeof v === "string") { try { const p = JSON.parse(v); return isRecord(p) ? p : {}; } catch { return {}; } }
+  return {};
+}
+
+// ── Transient-failure resilience (P-RESIL.1, ADR-0061) ───────────────────────────────────────────────
+// The gov gateway intermittently 504s, and Gemini sometimes returns finishReason MALFORMED_FUNCTION_CALL
+// with an EMPTY body — both burned a whole turn (and 100k-200k input tokens) for zero output. We retry
+// these transient outcomes a few times with short backoff before giving up, so the agent loop doesn't
+// waste a turn on a glitch. Retries are abort-aware (Stop cancels mid-backoff) and logged.
+const MAX_ATTEMPTS = 3;
+const BACKOFF_MS = [800, 2000]; // between attempt 1→2, 2→3
+/** True for HTTP statuses worth retrying (gateway/overload/rate-limit), not client errors. */
+function retriableStatus(status: number): boolean {
+  return status === 429 || (status >= 500 && status <= 599);
+}
+/** Sleep `ms`, rejecting immediately if `signal` aborts (so Stop doesn't wait out the backoff). */
+function backoff(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) { reject(new DOMException("aborted", "AbortError")); return; }
+    const t = setTimeout(resolve, ms);
+    signal?.addEventListener("abort", () => { clearTimeout(t); reject(new DOMException("aborted", "AbortError")); }, { once: true });
+  });
+}
+
 // omp ToolCall content block (the shape omp's agent loop executes + the gate scans).
 interface OmpToolCall { type: "toolCall"; id: string; name: string; arguments: Record<string, any> }
 
@@ -129,28 +170,68 @@ const jsonHeaders = (key: string, extra: Record<string, string> = {}) => ({
 interface RouteResult { text: string; usage: { input: number; output: number; cacheRead: number; cacheWrite: number } }
 interface AnthropicResult extends RouteResult { toolCalls: OmpToolCall[]; stopReason: "stop" | "length" | "toolUse" }
 
+// Locate the Anthropic content blocks TOLERANTLY. The standard reply is `{ content: [...] }` (verified
+// live for text), but a proxy may wrap it. Fallbacks can only RECOVER content the strict parse would
+// drop (they fire only when `content` is absent), and `via` records which shape actually matched so a
+// live test reveals the real wire format instead of silently emitting an empty turn. ADR-0059.
+function anthropicBlocks(j: any): { blocks: any[]; via: string } {
+  if (Array.isArray(j?.content)) return { blocks: j.content, via: "content" };
+  if (Array.isArray(j?.response?.content)) return { blocks: j.response.content, via: "response.content" };
+  if (Array.isArray(j?.message?.content)) return { blocks: j.message.content, via: "message.content" };
+  // Some gateways normalize everything to the OpenAI chat shape.
+  const choice = j?.choices?.[0]?.message;
+  if (isRecord(choice)) {
+    const b: any[] = [];
+    if (typeof choice.content === "string" && choice.content) b.push({ type: "text", text: choice.content });
+    for (const tc of (Array.isArray(choice.tool_calls) ? choice.tool_calls : [])) b.push({ type: "tool_use", id: (tc as any)?.id, name: (tc as any)?.function?.name, input: safeJsonArgs((tc as any)?.function?.arguments) });
+    if (b.length) return { blocks: b, via: "openai-choices" };
+  }
+  for (const k of ["response", "message", "completion", "text", "answer"]) {
+    if (typeof j?.[k] === "string" && j[k].trim()) return { blocks: [{ type: "text", text: j[k] }], via: `string:${k}` };
+  }
+  return { blocks: [], via: "none" };
+}
+
 // Call AskSage's Anthropic Messages route WITH tool support: pass the tool definitions, and parse both
 // text and `tool_use` content blocks from the reply so omp can execute the calls and loop (previously
 // tools were dropped, so Claude emitted tool-call XML as plain text and nothing ran).
-async function callAnthropic(cfg: AsksageStreamCfg, model: string, system: string, messages: AnthropicMsg[], tools: any[] | undefined, maxTokens: number): Promise<AnthropicResult> {
+async function callAnthropic(cfg: AsksageStreamCfg, model: string, system: string, messages: AnthropicMsg[], tools: any[] | undefined, maxTokens: number, signal?: AbortSignal): Promise<AnthropicResult> {
   const body: any = { model, max_tokens: maxTokens, ...(system ? { system } : {}), messages };
+  const toolNames = Array.isArray(tools) ? tools.map((t) => t?.name) : [];
   if (Array.isArray(tools) && tools.length) {
     body.tools = tools.map((t) => ({ name: t.name, description: t.description ?? "", input_schema: toolInputSchema(t) }));
   }
-  const r = await fetch(`${cfg.base}/anthropic/v1/messages`, {
-    method: "POST",
-    headers: jsonHeaders(cfg.key, { "anthropic-version": "2023-06-01" }),
-    body: JSON.stringify(body),
-  });
-  const j: any = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(j?.error?.message ?? `AskSage anthropic HTTP ${r.status}`);
-  const content: any[] = Array.isArray(j?.content) ? j.content : [];
+  const reqDiag = { route: "anthropic", model, maxTokens, tools: toolNames, msgs: messages.length };
+  let r: Response;
+  let j: any;
+  for (let attempt = 1; ; attempt++) {
+    try {
+      r = await fetch(`${cfg.base}/anthropic/v1/messages`, { method: "POST", headers: jsonHeaders(cfg.key, { "anthropic-version": "2023-06-01" }), body: JSON.stringify(body), signal });
+    } catch (e) {
+      if (signal?.aborted) throw e; // Stop — don't retry
+      if (attempt < MAX_ATTEMPTS) { diag({ ...reqDiag, attempt, ok: false, retry: true, error: `fetch failed: ${String((e as Error)?.message ?? e)}` }); await backoff(BACKOFF_MS[attempt - 1] ?? 2000, signal); continue; }
+      diag({ ...reqDiag, attempt, ok: false, error: `fetch failed: ${String((e as Error)?.message ?? e)}` });
+      throw e;
+    }
+    j = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      if (retriableStatus(r.status) && attempt < MAX_ATTEMPTS) { diag({ ...reqDiag, attempt, status: r.status, ok: false, retry: true, error: j?.error?.message ?? `HTTP ${r.status}` }); await backoff(BACKOFF_MS[attempt - 1] ?? 2000, signal); continue; }
+      diag({ ...reqDiag, attempt, status: r.status, ok: false, error: j?.error?.message ?? `HTTP ${r.status}`, raw: snippet(j) });
+      throw new Error(j?.error?.message ?? `AskSage anthropic HTTP ${r.status}`);
+    }
+    break;
+  }
+  const { blocks: content, via } = anthropicBlocks(j);
   const text = content.filter((c) => c?.type === "text" && typeof c.text === "string").map((c) => c.text).join("");
   const toolCalls: OmpToolCall[] = content
     .filter((c) => c?.type === "tool_use")
     .map((c) => ({ type: "toolCall", id: String(c.id ?? ""), name: String(c.name ?? ""), arguments: isRecord(c.input) ? c.input : {} }));
   const stopReason: AnthropicResult["stopReason"] = j?.stop_reason === "tool_use" || toolCalls.length ? "toolUse" : j?.stop_reason === "max_tokens" ? "length" : "stop";
   const u = j?.usage ?? {};
+  const anomaly = (!text && !toolCalls.length) ? "empty-response" : stopReason === "length" ? "truncated" : undefined;
+  // Log the MAPPED stopReason (what actually drives omp's loop: toolUse = continue) plus the raw provider
+  // finish, so a tool-calling row reads "toolUse", not the bare provider value.
+  diag({ ...reqDiag, status: r.status, ok: true, respKeys: Object.keys(j ?? {}), via, textLen: text.length, toolCalls: toolCalls.map((t) => t.name), stopReason, finish: j?.stop_reason, usage: { in: u.input_tokens ?? 0, out: u.output_tokens ?? 0 }, ...(anomaly ? { anomaly, raw: snippet(j) } : {}) });
   return { text, toolCalls, stopReason, usage: { input: u.input_tokens ?? 0, output: u.output_tokens ?? 0, cacheRead: u.cache_read_input_tokens ?? 0, cacheWrite: u.cache_creation_input_tokens ?? 0 } };
 }
 
@@ -178,7 +259,7 @@ function splitReferences(message: string): { body: string; refs: string[] } {
 // AskSage's native /query route: a single `message`, with optional RAG grounding
 // on `dataset` and a native `persona` id. One-shot (non-streamed). Underlying model
 // + datasets + persona come from env (set by the desktop from the user's selection).
-async function callQuery(cfg: AsksageStreamCfg, system: string, msgs: { role: string; text: string }[]): Promise<RouteResult & { references?: string }> {
+async function callQuery(cfg: AsksageStreamCfg, system: string, msgs: { role: string; text: string }[], signal?: AbortSignal): Promise<RouteResult & { references?: string }> {
   const model = process.env.ASKSAGE_QUERY_MODEL || "gpt-5.2";
   const datasets = (process.env.ASKSAGE_DATASETS || "").split(",").map((d) => d.trim()).filter(Boolean);
   const persona = Number(process.env.ASKSAGE_PERSONA || "") || undefined;
@@ -187,9 +268,9 @@ async function callQuery(cfg: AsksageStreamCfg, system: string, msgs: { role: st
   const body: any = { message, model, temperature: 0.0, limit_references: 5 };
   if (datasets.length) body.dataset = datasets;
   if (persona) body.persona = persona;
-  const r = await fetch(`${cfg.base}/query`, { method: "POST", headers: jsonHeaders(cfg.key), body: JSON.stringify(body) });
+  const r = await fetch(`${cfg.base}/query`, { method: "POST", headers: jsonHeaders(cfg.key), body: JSON.stringify(body), signal });
   const j: any = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(j?.error ?? j?.message ?? `AskSage query HTTP ${r.status}`);
+  if (!r.ok) { diag({ route: "query", model, status: r.status, ok: false, error: j?.error ?? j?.message ?? `HTTP ${r.status}`, raw: snippet(j) }); throw new Error(j?.error ?? j?.message ?? `AskSage query HTTP ${r.status}`); }
   const raw = String(j?.message ?? j?.response ?? "").trim();
   const { body: answer, refs } = splitReferences(raw);
   // Prefer the datasets AskSage reports it actually grounded on (provenance) over what we asked for.
@@ -213,36 +294,81 @@ interface GoogleResult extends RouteResult { toolCalls: OmpToolCall[]; stopReaso
 // Mirrors omp's native Google provider — `parametersJsonSchema` (full JSON Schema, normalized for
 // Google) for real Gemini models. Gemini gives no call id, so we mint a synthetic one (omp tracks the
 // call→result mapping internally and replays the result back by NAME).
-async function callGoogle(cfg: AsksageStreamCfg, model: string, system: string, contents: GoogleContent[], tools: any[] | undefined, maxTokens: number): Promise<GoogleResult> {
+// Locate the Gemini parts TOLERANTLY (mirrors anthropicBlocks). Standard shape is
+// candidates[0].content.parts; `via` records what matched so a live test reveals the real format. ADR-0059.
+function googleParts(j: any): { parts: any[]; via: string } {
+  const std = j?.candidates?.[0]?.content?.parts;
+  if (Array.isArray(std)) return { parts: std, via: "candidates" };
+  if (Array.isArray(j?.content?.parts)) return { parts: j.content.parts, via: "content.parts" };
+  if (Array.isArray(j?.parts)) return { parts: j.parts, via: "parts" };
+  for (const k of ["response", "message", "text", "answer"]) {
+    if (typeof j?.[k] === "string" && j[k].trim()) return { parts: [{ text: j[k] }], via: `string:${k}` };
+  }
+  return { parts: [], via: "none" };
+}
+
+async function callGoogle(cfg: AsksageStreamCfg, model: string, system: string, contents: GoogleContent[], tools: any[] | undefined, maxTokens: number, signal?: AbortSignal): Promise<GoogleResult> {
   const body: any = { contents, ...(system ? { systemInstruction: { parts: [{ text: system }] } } : {}), generationConfig: { maxOutputTokens: maxTokens } };
+  const toolNames = Array.isArray(tools) ? tools.map((t) => t?.name) : [];
   if (Array.isArray(tools) && tools.length) {
     body.tools = [{ functionDeclarations: tools.map((t) => ({ name: t.name, description: t.description ?? "", parametersJsonSchema: normalizeSchemaForGoogle(toolWireSchema(t)) })) }];
   }
-  const r = await fetch(`${cfg.base}/google/v1beta/models/${model}:generateContent`, {
-    method: "POST",
-    headers: jsonHeaders(cfg.key),
-    body: JSON.stringify(body),
-  });
-  const j: any = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(j?.error?.message ?? `AskSage google HTTP ${r.status}`);
-  const parts: any[] = j?.candidates?.[0]?.content?.parts ?? [];
-  const text = parts.filter((p) => typeof p?.text === "string").map((p) => p.text).join("");
-  let n = 0;
-  const toolCalls: OmpToolCall[] = parts
-    .filter((p) => p?.functionCall)
-    .map((p) => ({ type: "toolCall", id: `${p.functionCall.name || "tool"}-${n++}`, name: String(p.functionCall.name ?? ""), arguments: isRecord(p.functionCall.args) ? p.functionCall.args : {} }));
-  const stopReason: GoogleResult["stopReason"] = toolCalls.length ? "toolUse" : j?.candidates?.[0]?.finishReason === "MAX_TOKENS" ? "length" : "stop";
+  const reqDiag = { route: "google", model, maxTokens, tools: toolNames, msgs: contents.length };
+  let r: Response;
+  let j: any;
+  let via = "none", text = "", toolCalls: OmpToolCall[] = [], finish: string | undefined;
+  for (let attempt = 1; ; attempt++) {
+    try {
+      r = await fetch(`${cfg.base}/google/v1beta/models/${model}:generateContent`, { method: "POST", headers: jsonHeaders(cfg.key), body: JSON.stringify(body), signal });
+    } catch (e) {
+      if (signal?.aborted) throw e;
+      if (attempt < MAX_ATTEMPTS) { diag({ ...reqDiag, attempt, ok: false, retry: true, error: `fetch failed: ${String((e as Error)?.message ?? e)}` }); await backoff(BACKOFF_MS[attempt - 1] ?? 2000, signal); continue; }
+      diag({ ...reqDiag, attempt, ok: false, error: `fetch failed: ${String((e as Error)?.message ?? e)}` });
+      throw e;
+    }
+    j = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      if (retriableStatus(r.status) && attempt < MAX_ATTEMPTS) { diag({ ...reqDiag, attempt, status: r.status, ok: false, retry: true, error: j?.error?.message ?? `HTTP ${r.status}` }); await backoff(BACKOFF_MS[attempt - 1] ?? 2000, signal); continue; }
+      diag({ ...reqDiag, attempt, status: r.status, ok: false, error: j?.error?.message ?? `HTTP ${r.status}`, raw: snippet(j) });
+      throw new Error(j?.error?.message ?? `AskSage google HTTP ${r.status}`);
+    }
+    const parsed = googleParts(j);
+    via = parsed.via;
+    text = parsed.parts.filter((p) => typeof p?.text === "string").map((p) => p.text).join("");
+    let n = 0;
+    toolCalls = parsed.parts
+      .filter((p) => p?.functionCall)
+      .map((p) => ({ type: "toolCall", id: `${p.functionCall.name || "tool"}-${n++}`, name: String(p.functionCall.name ?? ""), arguments: isRecord(p.functionCall.args) ? p.functionCall.args : {} }));
+    finish = j?.candidates?.[0]?.finishReason;
+    // Gemini sometimes returns MALFORMED_FUNCTION_CALL with an empty body (it failed to form a valid tool
+    // call) — burns the whole turn for nothing. Retry it (often stochastic) before accepting the empty.
+    if (finish === "MALFORMED_FUNCTION_CALL" && !text && !toolCalls.length && attempt < MAX_ATTEMPTS) {
+      diag({ ...reqDiag, attempt, ok: true, finish, retry: true, anomaly: "malformed-function-call" });
+      await backoff(BACKOFF_MS[attempt - 1] ?? 2000, signal);
+      continue;
+    }
+    break;
+  }
+  const stopReason: GoogleResult["stopReason"] = toolCalls.length ? "toolUse" : finish === "MAX_TOKENS" ? "length" : "stop";
   const um = j?.usageMetadata ?? {};
+  const anomaly = (!text && !toolCalls.length) ? (finish === "MALFORMED_FUNCTION_CALL" ? "malformed-function-call" : "empty-response") : stopReason === "length" ? "truncated" : undefined;
+  // Gemini always reports finishReason "STOP" even when it emits a functionCall; log the MAPPED reason
+  // (toolUse = the loop continues) plus the raw finish, so a tool-calling row reads "toolUse", not "STOP".
+  diag({ ...reqDiag, status: r.status, ok: true, respKeys: Object.keys(j ?? {}), via, textLen: text.length, toolCalls: toolCalls.map((t) => t.name), stopReason, finish, usage: { in: um.promptTokenCount ?? 0, out: um.candidatesTokenCount ?? 0 }, ...(anomaly ? { anomaly, raw: snippet(j) } : {}) });
   return { text, toolCalls, stopReason, usage: { input: um.promptTokenCount ?? 0, output: um.candidatesTokenCount ?? 0, cacheRead: 0, cacheWrite: 0 } };
 }
 
 /** Build a streamSimple bound to a route. `getCfg` is read lazily so a key/base
  *  change (without a respawn) is still picked up. */
 export function makeAsksageStream(route: AsksageRoute, getCfg: () => AsksageStreamCfg) {
-  return function streamSimple(model: any, context: any, _options?: any): AssistantMessageEventStream {
+  return function streamSimple(model: any, context: any, options?: any): AssistantMessageEventStream {
     const stream = new AssistantMessageEventStream();
     void (async () => {
       const cfg = getCfg();
+      // omp passes an AbortSignal and aborts it on session/cancel (Stop). AskSage is non-streamed — one
+      // long fetch per turn — so WITHOUT threading this the request kept running after Stop and the turn
+      // hung. Wire it into every fetch and settle cleanly on abort (ADR-0059).
+      const signal: AbortSignal | undefined = options?.signal;
       const { system, messages } = toTurns(context);
       const usageOf = (u: { input: number; output: number; cacheRead: number; cacheWrite: number }) => ({ ...u, totalTokens: u.input + u.output + u.cacheRead + u.cacheWrite });
       const mkMessage = (content: any[], stopReason: string, usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }): any => ({
@@ -282,20 +408,26 @@ export function makeAsksageStream(route: AsksageRoute, getCfg: () => AsksageStre
         const maxTokens = Number(model?.maxTokens) || 8192;
         if (route === "anthropic") {
           const { system: sys, messages: amsgs } = toAnthropicMessages(context);
-          const res = await callAnthropic(cfg, model.id, sys, amsgs, context?.tools, maxTokens);
+          const res = await callAnthropic(cfg, model.id, sys, amsgs, context?.tools, maxTokens, signal);
           emit(res.text, res.toolCalls, res.stopReason === "length" ? "length" : "stop", res.usage);
           return;
         }
         if (route === "google") {
           const { system: sys, contents } = toGoogleContents(context);
-          const res = await callGoogle(cfg, model.id, sys, contents, context?.tools, maxTokens);
+          const res = await callGoogle(cfg, model.id, sys, contents, context?.tools, maxTokens, signal);
           emit(res.text, res.toolCalls, res.stopReason === "length" ? "length" : "stop", res.usage);
           return;
         }
         // RAG /query: single-message, text-only (no tool use).
-        const { text, usage } = await callQuery(cfg, system, messages);
+        const { text, usage } = await callQuery(cfg, system, messages, signal);
         emit(text, [], "stop", usage);
       } catch (e) {
+        // Stop pressed → omp aborts the signal → fetch throws AbortError. Settle the turn cleanly (a
+        // plain stop), NOT an error, so the UI doesn't flash a failure toast for a deliberate cancel.
+        if (signal?.aborted || (e as any)?.name === "AbortError") {
+          emit("", [], "stop", { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+          return;
+        }
         const errMessage = mkMessage([], "error");
         errMessage.errorMessage = String((e as Error)?.message ?? e);
         stream.push({ type: "error", reason: "error", error: errMessage });
