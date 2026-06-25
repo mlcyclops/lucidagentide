@@ -386,7 +386,8 @@ async function streamNdjson(path: string, body: unknown, onEvent: (e: ChatEvent)
   const reader = res.body.getReader();
   const dec = new TextDecoder();
   let buf = "";
-  const flush = (line: string) => { const s = line.trim(); if (s) { try { onEvent(JSON.parse(s)); } catch { /* skip */ } } };
+  // Drop server heartbeats ({type:"ping"}) — they only keep the socket alive through long tool calls.
+  const flush = (line: string) => { const s = line.trim(); if (!s) return; try { const ev = JSON.parse(s); if (ev && ev.type === "ping") return; onEvent(ev); } catch { /* skip */ } };
   try {
     for (;;) {
       const { done, value } = await reader.read();

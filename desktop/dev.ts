@@ -141,6 +141,30 @@ function startOauthBroker(oauthId: string): Promise<{ started: boolean; url: str
   });
 }
 
+// Stream NDJSON ChatEvents to the browser with a HEARTBEAT. A long maker tool call (e.g. a broad
+// codebase search during a /goal loop) can run for >60s emitting nothing; without a keepalive the
+// socket goes idle, Bun's `idleTimeout` closes it, and every later event — tool chips AND the final
+// answer — is lost while the turn keeps working server-side (it writes the file, the UI stays frozen
+// on the last event it saw). A `{type:"ping"}` every 15s keeps the connection alive; the client
+// (bridge.ts) drops pings. On a real browser disconnect we log once (developer mode) and keep going.
+function ndjsonStream(label: string, run: (emit: (e: unknown) => void) => Promise<void>): Response {
+  const enc = new TextEncoder();
+  const stream = new ReadableStream({
+    async start(controller) {
+      let writeFailed = false;
+      let lastSend = Date.now();
+      const emit = (e: unknown) => {
+        try { controller.enqueue(enc.encode(JSON.stringify(e) + "\n")); lastSend = Date.now(); }
+        catch { if (!writeFailed && loadSettings().developerMode) { writeFailed = true; console.error(`[TURN_DIAG] ${label} stream write failed (browser disconnected) — server turn continues`); } }
+      };
+      const hb = setInterval(() => { if (Date.now() - lastSend >= 15_000) emit({ type: "ping" }); }, 15_000);
+      try { await run(emit); }
+      finally { clearInterval(hb); try { controller.close(); } catch { /* already closed */ } }
+    },
+  });
+  return new Response(stream, { headers: { "content-type": "application/x-ndjson; charset=utf-8", "cache-control": "no-store" } });
+}
+
 const server = Bun.serve({
   port: PORT,
   hostname: "127.0.0.1", // H1 (ADR-0022): loopback only — this control plane handles keys/passphrases.
@@ -516,18 +540,7 @@ const server = Bun.serve({
       if (p === "/api/newSession" && req.method === "POST") { await backend.newSession(); await refreshRecall(); return json({ ok: true }); }
       if (p === "/api/chat" && req.method === "POST") {
         const { text } = await readBody<{ text?: unknown }>(req);
-        const enc = new TextEncoder();
-        let writeFailed = false;
-        const stream = new ReadableStream({
-          async start(controller) {
-            await backend.prompt(String(text ?? ""), (e) => {
-              try { controller.enqueue(enc.encode(JSON.stringify(e) + "\n")); }
-              catch { if (!writeFailed && loadSettings().developerMode) { writeFailed = true; console.error("[TURN_DIAG] chat stream write failed (browser disconnected) — server turn continues"); } }
-            });
-            try { controller.close(); } catch { /* already closed */ }
-          },
-        });
-        return new Response(stream, { headers: { "content-type": "application/x-ndjson; charset=utf-8", "cache-control": "no-store" } });
+        return ndjsonStream("chat", (emit) => backend.prompt(String(text ?? ""), emit));
       }
       // P-GOAL.1 (ADR-0046): run a /goal loop — maker iterations + a separate verifiable checker, capped
       // and gated. Streams the same NDJSON chat events plus goal-iter / goal-check / goal-done / goal-stop.
@@ -556,17 +569,10 @@ const server = Bun.serve({
       }
       if (p === "/api/goal" && req.method === "POST") {
         const b = await readBody<{ goal?: unknown; condition?: unknown; command?: unknown; maxIters?: unknown; resume?: unknown; budgetUsd?: unknown; criteria?: unknown }>(req);
-        const enc = new TextEncoder();
-        const stream = new ReadableStream({
-          async start(controller) {
-            await backend.runGoal(
-              { goal: String(b.goal ?? ""), condition: String(b.condition ?? ""), command: b.command ? String(b.command) : undefined, maxIters: Number(b.maxIters) || 6, resume: b.resume ? String(b.resume) : undefined, budgetUsd: Number(b.budgetUsd) || 0, criteria: b.criteria ? String(b.criteria) : undefined },
-              (e) => { try { controller.enqueue(enc.encode(JSON.stringify(e) + "\n")); } catch { /* stream closed */ } },
-            );
-            try { controller.close(); } catch { /* already closed */ }
-          },
-        });
-        return new Response(stream, { headers: { "content-type": "application/x-ndjson; charset=utf-8", "cache-control": "no-store" } });
+        return ndjsonStream("goal", (emit) => backend.runGoal(
+          { goal: String(b.goal ?? ""), condition: String(b.condition ?? ""), command: b.command ? String(b.command) : undefined, maxIters: Number(b.maxIters) || 6, resume: b.resume ? String(b.resume) : undefined, budgetUsd: Number(b.budgetUsd) || 0, criteria: b.criteria ? String(b.criteria) : undefined },
+          emit,
+        ));
       }
 
       // P-GOAL.5 (ADR-0047): scheduled AUTOMATIONS — saved /goal specs the in-process scheduler runs on a
@@ -592,14 +598,7 @@ const server = Bun.serve({
       }
       if (p === "/api/automations/run" && req.method === "POST") {
         const b = await readBody<{ id?: unknown }>(req);
-        const enc = new TextEncoder();
-        const stream = new ReadableStream({
-          async start(controller) {
-            await backend.runAutomation(String(b.id ?? ""), (e) => { try { controller.enqueue(enc.encode(JSON.stringify(e) + "\n")); } catch { /* closed */ } });
-            try { controller.close(); } catch { /* already closed */ }
-          },
-        });
-        return new Response(stream, { headers: { "content-type": "application/x-ndjson; charset=utf-8", "cache-control": "no-store" } });
+        return ndjsonStream("automation", async (emit) => { await backend.runAutomation(String(b.id ?? ""), emit); });
       }
 
       const rel = p === "/" ? "index.html" : p.replace(/^\/+/, "");
