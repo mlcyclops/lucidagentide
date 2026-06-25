@@ -125,7 +125,7 @@ function buildShell(): void {
         <button class="rail-btn" data-rail="security" data-tip="Security|Findings, quarantine & approvals" data-tip-icon="shield">${icon("shield", 20)}<span class="badge" id="railBadge" hidden>0</span></button>
         <button class="rail-btn" data-rail="memory" data-tip="Memory & context|Context window, prompt-cache savings, semantic memory" data-tip-icon="brain">${icon("brain", 20)}</button>
         <button class="rail-btn" data-rail="knowledge" data-tip="Knowledge graph|Your private, encrypted personalization graph - nodes, edges, drill-down" data-tip-icon="graph">${icon("graph", 20)}</button>
-        <button class="rail-btn" id="railLogs" data-rail="dev" hidden data-tip="Logs|Read-only developer logs: telemetry, run lineage, transcripts, gate-block audit, AskSage tool-call diagnostics" data-tip-icon="layout">${icon("layout", 20)}</button>
+        <button class="rail-btn" id="railLogs" data-rail="dev" hidden data-tip="Logs|Read-only developer logs: telemetry, run lineage, transcripts, gate-block audit, AskSage tool-call diagnostics" data-tip-icon="logs">${icon("logs", 20)}</button>
         <div class="spacer"></div>
         <button class="rail-btn" id="railCmd" data-tip="Commands|Ctrl / ⌘ K" data-tip-icon="command">${icon("command", 20)}</button>
         <button class="rail-btn" data-rail="settings" data-tip="Settings" data-tip-icon="sliders">${icon("sliders", 20)}</button>
@@ -1144,7 +1144,7 @@ function secDeveloper(): string {
   const on = state.developerMode;
   const body = `<label class="set-toggle"><input type="checkbox" id="devModeToggle" ${on ? "checked" : ""}/>
       <span><b>Developer mode</b> - reveal a read-only <b>Logs</b> panel in the rail (telemetry, run lineage, transcripts, gate-block audit) and turn on <b>AskSage tool-call diagnostics</b>. Read-only, on this machine, off by default.</span></label>
-    <div class="set-note">${icon("info", 12)} Turning this on respawns the agent so diagnostics apply right away, then shows a <b>Logs</b> panel in the left rail. Open <b>Logs → AskSage tool calls</b> to watch each non-streamed AskSage call.</div>`;
+    <div class="set-note">${icon("info", 12)} <span>Turning this on respawns the agent so the diagnostics take effect immediately, then adds a <b>Logs</b> panel to the left rail. Open it and expand <b>AskSage tool calls</b> to watch each request live.</span></div>`;
   return setCard("developer", "Developer", "logs · diagnostics", body, true);
 }
 function secOthers(auth: import("./bridge.ts").AuthStatus | null): string {
@@ -1680,7 +1680,7 @@ function securityHtml(d: SecuritySnapshot | null): string {
 
 // ── ADR-0009 Phase D: developer Logs view (read-only; metadata only) ──────────────
 function devHtml(d: import("./bridge.ts").DevView | null): string {
-  let h = `<div class="sec-intro"><div class="sec-intro-h"><span class="sec-pulse">${icon("layout", 17)}</span><b>Developer logs</b></div>
+  let h = `<div class="sec-intro"><div class="sec-intro-h"><span class="sec-pulse">${icon("logs", 17)}</span><b>Developer logs</b></div>
     <div class="sec-intro-d">Read-only telemetry, run lineage, transcripts, and audit trails from this machine - sanitized, no raw prompt or file content (the raw is referenced by sha only).</div></div>`;
   if (!d || !d.enabled) { h += `<div class="empty">Developer mode is off. Turn it on in <b>Settings → Developer mode</b> to see the telemetry stream, run lineage, transcripts, and the audit trail.</div>`; return h; }
   const tel = d.snapshot?.telemetry ?? [], runs = d.snapshot?.runs ?? [], exp = d.snapshot?.exports ?? [], blk = d.blocks?.quarantined ?? [], turns = d.turns ?? [];
