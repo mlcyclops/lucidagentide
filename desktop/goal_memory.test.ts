@@ -8,7 +8,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { appendGoalIteration, finishGoalMemory, listResumableLoops, parseGoalMemory, resumeGoalMemory, startGoalMemory } from "./goal_memory.ts";
+import { appendGoalIteration, finishGoalMemory, listResumableLoops, parseGoalMemory, resumeGoalMemory, saveGoalReport, startGoalMemory } from "./goal_memory.ts";
 
 describe("goal_memory", () => {
   test("writes a durable markdown record under .omp/loops/", () => {
@@ -94,6 +94,39 @@ describe("parseGoalMemory + resume (P-GOAL.4)", () => {
       expect(readFileSync(mem.path, "utf8")).toContain("## Resumed");
       expect(resumeGoalMemory(ws, "../../../etc/passwd")).toBeNull(); // confinement
       expect(resumeGoalMemory(ws, ".omp/loops/nope.md")).toBeNull();   // missing
+    } finally { rmSync(ws, { recursive: true, force: true }); }
+  });
+});
+
+describe("saveGoalReport (P-GOAL.9)", () => {
+  test("writes the AAR beside the memory file, confined to the loops root", () => {
+    const ws = mkdtempSync(join(homedir(), ".lucid-goalreport-"));
+    try {
+      const rel = saveGoalReport(ws, "rep1", "Make auth tests pass", "# After-Action Report: x\n\nbody\n");
+      expect(rel).not.toBeNull();
+      expect(rel!.replace(/\\/g, "/")).toBe(".omp/loops/rep1-make-auth-tests-pass.report.md");
+      expect(readFileSync(join(ws, rel!), "utf8")).toContain("After-Action Report");
+    } finally { rmSync(ws, { recursive: true, force: true }); }
+  });
+
+  test("shares the memory file's <id>-<slug> stem so they co-locate", () => {
+    const ws = mkdtempSync(join(homedir(), ".lucid-goalreport2-"));
+    try {
+      const mem = startGoalMemory(ws, "stem9", { goal: "Fix the build", condition: "c" })!;
+      const rel = saveGoalReport(ws, "stem9", "Fix the build", "report")!;
+      // same directory + same id prefix as the memory file, distinguished by the .report.md suffix
+      expect(mem.rel.replace(/\\/g, "/")).toBe(".omp/loops/stem9-fix-the-build.md");
+      expect(rel.replace(/\\/g, "/")).toBe(".omp/loops/stem9-fix-the-build.report.md");
+    } finally { rmSync(ws, { recursive: true, force: true }); }
+  });
+
+  test("a hostile goal cannot escape the loops root", () => {
+    const ws = mkdtempSync(join(homedir(), ".lucid-goalreport3-"));
+    try {
+      const rel = saveGoalReport(ws, "id", "../../etc/passwd evil", "x");
+      expect(rel).not.toBeNull();
+      expect(rel!).not.toContain("..");
+      expect(rel!.replace(/\\/g, "/")).toContain(".omp/loops/");
     } finally { rmSync(ws, { recursive: true, force: true }); }
   });
 });
