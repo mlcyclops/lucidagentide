@@ -468,13 +468,11 @@ class Backend {
     let onStall: (e: Error) => void = () => {};
     // While a permission is awaiting the user (Ask mode), pause the idle/stall clock — a human
     // deciding is not a stalled turn (askUser has its own fail-closed timeout).
-    const arm = () => { if (idle) clearTimeout(idle); if (this.pendingPerms > 0) return; idle = setTimeout(() => { stalled = true; onStall(new Error("the model went quiet for 5 minutes — the provider may be rate-limited (check your hourly budget) or the turn stalled. Try again.")); }, Backend.IDLE_MS); };
-    let enqueueErr = 0; // counts browser-stream write failures (orphaned/closed client stream)
-    const sink = (e: ChatEvent) => { arm(); if (e.type === "token") assistant += e.text; try { onEvent(e); } catch { enqueueErr++; } };
     const arm = () => { if (idle) clearTimeout(idle); if (this.pendingPerms > 0) return; idle = setTimeout(() => { stalled = true; onStall(new Error("the model did not respond for 2 minutes — the provider may be rate-limited (check your hourly budget) or the turn stalled. Try again.")); }, Backend.IDLE_MS); };
+    let enqueueErr = 0; // counts browser-stream write failures (orphaned/closed client stream)
     // Only learnable assistant text accrues to `assistant` (→ recordTurns + learnFromTurn). Thinking
     // and other display-only events are excluded by construction (R-04 / ADR-0054).
-    const sink = (e: ChatEvent) => { arm(); if (isLearnableAssistantText(e)) assistant += e.text; onEvent(e); };
+    const sink = (e: ChatEvent) => { arm(); if (isLearnableAssistantText(e)) assistant += e.text; try { onEvent(e); } catch { enqueueErr++; } };
     this.listener = sink;
     this.askActive = true; // permission requests in THIS turn may be forwarded to the UI (Ask mode)
     this.turnDiag(`prompt.start session=${this.sessionId}`);
