@@ -213,6 +213,7 @@ function buildShell(): void {
 
 // ───────────────────────── sidebar (real omp sessions) ─────────────────────────
 function relTime(ms: number): string {
+  if (!Number.isFinite(ms)) return "unknown"; // a missing/unparseable timestamp must not render "NaNd ago"
   const s = Math.round((Date.now() - ms) / 1000);
   if (s < 60) return "just now";
   const m = Math.floor(s / 60); if (m < 60) return `${m}m ago`;
