@@ -380,7 +380,11 @@ class Backend {
   // ACP request has no timeout, so without this a rate-limited / hung turn leaves the UI
   // on "Thinking…" forever. Resets on every event, so a legitimately long turn is fine —
   // only TOTAL silence for this long trips it.
-  private static readonly IDLE_MS = 120_000;
+  // 5 min. Native providers stream tokens every few seconds so they almost never trip this; the headroom
+  // is for the NON-STREAMED AskSage gov gateway, where a single big call emits nothing for minutes and a
+  // 2-min cap false-stalled live turns ("gave up on the provider"). The auto-continue checker (ADR-0056)
+  // will eventually turn a stall into a wellness-check + resume rather than a dead end.
+  private static readonly IDLE_MS = 300_000;
 
   /** Run one turn, streaming events to onEvent; resolves after `done`. Captures the
    *  assistant reply so the personalization distiller can learn from the turn (P9.2).
@@ -392,7 +396,7 @@ class Backend {
     let onStall: (e: Error) => void = () => {};
     // While a permission is awaiting the user (Ask mode), pause the idle/stall clock — a human
     // deciding is not a stalled turn (askUser has its own fail-closed timeout).
-    const arm = () => { if (idle) clearTimeout(idle); if (this.pendingPerms > 0) return; idle = setTimeout(() => { stalled = true; onStall(new Error("the model did not respond for 2 minutes — the provider may be rate-limited (check your hourly budget) or the turn stalled. Try again.")); }, Backend.IDLE_MS); };
+    const arm = () => { if (idle) clearTimeout(idle); if (this.pendingPerms > 0) return; idle = setTimeout(() => { stalled = true; onStall(new Error("the model went quiet for 5 minutes — the provider may be rate-limited (check your hourly budget) or the turn stalled. Try again.")); }, Backend.IDLE_MS); };
     let enqueueErr = 0; // counts browser-stream write failures (orphaned/closed client stream)
     const sink = (e: ChatEvent) => { arm(); if (e.type === "token") assistant += e.text; try { onEvent(e); } catch { enqueueErr++; } };
     this.listener = sink;

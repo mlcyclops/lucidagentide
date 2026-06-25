@@ -4709,3 +4709,82 @@ is metadata + a truncated snippet to stderr, developer-mode-gated, never persist
 
 ADR-0007 (the AskSage adapter), ADR-0051 (tool use added to the Claude+Gemini routes - the path this
 hardens), ADR-0009 Phase D (the developer Logs panel reused), CLAUDE.md invariants #2/#3/#4/#6.
+
+## ADR-0056 - Turn wellness-check + auto-continue ("is the big model still awake?") (SCOPE/PLAN)
+
+**Date:** 2026-06-24
+**Status:** Proposed - scope + plan only; no behavior code yet. Splits into P-CONTINUE.1..2.
+**Context increment:** P-CONTINUE (planning).
+
+### Context
+
+Long turns can stop SHORT, and the user has to notice and type "continue":
+- **Idle stall:** the non-streamed AskSage gov gateway emits nothing for minutes during a big call; the
+  idle cap (now 5 min, ADR-0055 follow-up) ends the turn ("gave up on the provider"). Native streaming
+  models rarely hit this - they emit tokens every few seconds.
+- **Cut off:** the model stops mid-task (stopReason length/truncated, or it just ends early).
+
+The user's idea: when a turn looks unfinished, have a SMALL, FAST model of the SAME family "check on the
+big guy" - read the chat history, decide if the work is actually done, and if not, automatically push the
+big model for another turn to finish, showing the check in the thinking panel. This is the `/goal`
+maker/checker pattern (ADR-0046) applied to chat continuation, reusing `complete()` with a model override
+(ADR-0048) and the existing thinking stream (ADR-0027).
+
+### Decision - the loop
+
+After a chat turn ENDS, if it looks potentially INCOMPLETE, run a CHECKER (cheap same-family model) on the
+last user request + the assistant's final message. The checker returns COMPLETE or INCOMPLETE + a one-line
+"what remains". If INCOMPLETE and under a cap, auto-send a continuation prompt to the BIG model on the same
+session; surface the whole thing in the thinking panel. Stop when the checker says COMPLETE or the cap hits.
+
+### Decision - when to trigger (conservative, cost-aware)
+
+Run the checker ONLY when there's a real cut-off signal: the turn **idle-stalled**, OR stopReason was
+**length/truncated**. Do NOT run on: a user-cancelled turn (Stop), an empty/errored turn, a `/goal` loop
+turn (it has its own checker), or a turn that ended with a normal `end_turn` and no truncation (default:
+assume complete - no checker, no cost). P-CONTINUE.2 may add a heuristic "looks mid-task" trigger
+(unclosed code fence, ends on "Let me.../Next I'll...").
+
+### Decision - checker model (same family, smaller)
+
+Map the active model to its fast/small SAME-family sibling: Gemini Pro -> Gemini Flash; Claude Sonnet/Opus
+-> Claude Haiku; GPT-big -> GPT-mini. Reuse `model_families.ts` + `recommendCheckerModel`
+(`checker_model.ts`). For AskSage models, keep the checker on the AskSage route of the SAME family (gov
+compliance - never route gov content to a non-gov checker). Fall back to the same model if no smaller
+sibling exists. The checker runs via `complete(system, user, { model })` - a throwaway session that never
+pollutes the chat (ADR-0048).
+
+### Decision - the verdict is fail-closed
+
+The checker is prompted to answer strictly `COMPLETE` / `INCOMPLETE` + reason + what-remains. Parsing
+mirrors `parseGoalVerdict` (`goal_verdict.ts`): empty/garbled/ambiguous => treat as COMPLETE. Better to
+under-continue than to loop forever. A hard cap `maxAutoContinue` (default 2) bounds it regardless.
+
+### Decision - UX
+
+Show the check live in the THINKING panel: "Checking whether the last turn finished... the response looks
+cut off; asking the model to continue (what remains: ...)". The auto-sent continuation renders as a normal
+assistant turn with a subtle "auto-continued" marker so the user knows it was the wellness-check, not them.
+A Settings toggle (default ON, with the cap shown) lets users disable it. Continuation prompt: "Continue
+and finish what you were doing - <what remains>. Do not repeat work you already completed."
+
+### Phasing
+
+- **P-CONTINUE.1** - core: detect cut-off (stall / length), pick the same-family checker, run it via
+  `complete()`, auto-send ONE continuation on INCOMPLETE, fail-closed verdict, cap + Settings toggle,
+  thinking-panel surfacing.
+- **P-CONTINUE.2** - heuristic "looks mid-task" trigger, sharper "what remains" extraction, multi-continue
+  tuning, and per-provider rate-limit backoff (don't hammer a 429'd gov gateway).
+
+### Invariants preserved
+
+#3/#4 (continuation turns + the checker's view still pass the in-process gate - every tool call scanned;
+the checker only ever sees gate-clean assistant text) - #5 (no untrusted text enters the frozen prefix) -
+keystone #2 (the checker is ephemeral judgment via `complete()`, never promoted to memory). The checker
+is maker != checker (a different/smaller model), echoing the `/goal` separation.
+
+### Relates to
+
+ADR-0046 (`/goal` maker/checker loop reused), ADR-0048 (distinct recommended checker model + `complete()`
+model override), ADR-0027 (the thinking stream surfaced to the UI), ADR-0055 (the idle-cap bump + AskSage
+non-streamed adapter this compensates for), `model_families.ts` / `checker_model.ts`.
