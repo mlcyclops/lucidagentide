@@ -10,7 +10,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { DuckDBInstance, type DuckDBConnection } from "@duckdb/node-api";
 
-const MIGRATIONS_DIR = join(import.meta.dir, "migrations");
+export const MIGRATIONS_DIR = join(import.meta.dir, "migrations");
 
 export type Row = Record<string, unknown>;
 export type Params = unknown[] | Record<string, unknown>;
@@ -21,14 +21,14 @@ interface Migration {
   sql: string;
 }
 
-function loadMigrations(): Migration[] {
-  const files = readdirSync(MIGRATIONS_DIR)
+function loadMigrations(dir: string): Migration[] {
+  const files = readdirSync(dir)
     .filter((f) => f.endsWith(".sql"))
     .sort();
   return files.map((f) => {
     const m = /^(\d+)_(.+)\.sql$/.exec(f);
     if (!m) throw new Error(`bad migration filename: ${f} (expected NNNN_name.sql)`);
-    return { version: Number(m[1]), name: m[2]!, sql: readFileSync(join(MIGRATIONS_DIR, f), "utf8") };
+    return { version: Number(m[1]), name: m[2]!, sql: readFileSync(join(dir, f), "utf8") };
   });
 }
 
@@ -47,13 +47,17 @@ export class Db {
   private constructor(
     private readonly instance: DuckDBInstance,
     private readonly conn: DuckDBConnection,
+    private readonly migrationsDir: string,
   ) {}
 
-  /** Open (or create) the database at `path` and apply pending migrations. */
-  static async open(path: string): Promise<Db> {
+  /** Open (or create) the database at `path` and apply pending migrations.
+   *  `migrationsDir` selects the migration set — defaults to the core memory schema;
+   *  a SEPARATE database (e.g. knowledge.duckdb, ADR-0053) passes its own dir so its
+   *  migrations apply only to it and never to agent_obs.duckdb (invariant #10). */
+  static async open(path: string, migrationsDir: string = MIGRATIONS_DIR): Promise<Db> {
     const instance = await DuckDBInstance.create(path);
     const conn = await instance.connect();
-    const db = new Db(instance, conn);
+    const db = new Db(instance, conn, migrationsDir);
     await db.migrate();
     return db;
   }
@@ -65,7 +69,7 @@ export class Db {
   static async openReadOnly(path: string): Promise<Db> {
     const instance = await DuckDBInstance.create(path, { access_mode: "READ_ONLY" });
     const conn = await instance.connect();
-    return new Db(instance, conn);
+    return new Db(instance, conn, MIGRATIONS_DIR);
   }
 
   private async migrate(): Promise<void> {
@@ -79,7 +83,7 @@ export class Db {
     const appliedRows = await this.all("SELECT version FROM schema_migrations");
     const applied = new Set(appliedRows.map((r) => Number(r.version)));
 
-    for (const mig of loadMigrations()) {
+    for (const mig of loadMigrations(this.migrationsDir)) {
       if (applied.has(mig.version)) continue;
       for (const stmt of splitStatements(mig.sql)) {
         await this.conn.run(stmt);

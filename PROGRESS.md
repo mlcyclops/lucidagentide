@@ -2093,3 +2093,26 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
   Gemini) is the manual check; parametersJsonSchema assumes AskSage's Gemini proxy is current (omp uses it for
   real Gemini).
 - **next:** live end-to-end tool run on the gov gateway for both providers.
+
+---
+## P-RAG.1: the local knowledge spine (ADR-0054, first build under ADR-0053)
+- **shipped:** the air-gap-clean RAG core, server-side, no new runtime deps. `Db.open(path, migrationsDir?)`
+  parameterized (additive; every existing caller unchanged) so a SEPARATE `knowledge.duckdb` gets its own
+  migration set (ADR-0053 #3); migration `0010_knowledge_vectors.sql` (kb_datasets U|CUI/local|asksage +
+  kb_chunks with `embedding FLOAT[]` + trust_label) applies ONLY to it, never agent_obs.duckdb. New
+  `harness/knowledge/`: pure `chunk.ts` (overlapping, boundary-preferring, deterministic); `embedder.ts`
+  (an `Embedder` interface + deterministic dependency-free `HashEmbedder`, so the spine is testable offline
+  and the real WASM bge drops in later behind the same seam); `store.ts` (dataset/chunk CRUD + brute-force
+  `list_cosine_distance` retrieval, vectors inlined as numeric SQL list literals since the node binding
+  can't bind a JS array param); `ingest.ts` `ingestText` (chunk -> scanAndDecide fail-closed -> embed only
+  clean -> store; blocked chunk never embedded/stored, audited via an `onBlock` hook = clean layering) +
+  `wrapRetrieved` (UNTRUSTED_CONTENT delimited, invariant #5). 20 new tests; bun test harness 493 · desktop
+  326 · typecheck clean (3 cfgs). `make demo-P-RAG.1` proves it against the REAL scanner + a temp
+  knowledge.duckdb: clean doc stored, Trojan-Source (bidi/zero-width) note blocked + never stored, cosine
+  retrieval returns the relevant chunk first, injection delimited.
+- **stubbed:** the embedder is the deterministic `HashEmbedder`, NOT a real model (P-RAG.1b: WASM
+  `bge-small-en-v1.5` + bundled weights + `unpdf` PDF parse). No Knowledge UI / per-turn injection wiring yet
+  (P-RAG.1c). New EventNames deferred (a contracts change is its own increment). No live multimodal.
+- **next:** P-RAG.1b (real WASM embedder + PDF parse behind the `Embedder` seam, weights bundled as
+  extraResources), then P-RAG.1c (Knowledge popup guided+advanced for the local path, fixed-path
+  knowledge.duckdb, desktop recordBlock via onBlock, retrieval injection mirroring the dataset selector).

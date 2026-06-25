@@ -42,6 +42,7 @@
     "demo-P-CODE.1": "bun run harness/scripts/demo_pcode1.ts",
     "demo-P-TPS.1": "bun run harness/scripts/demo_ptps1.ts",
     "demo-P-SKILL.1": "bun run harness/scripts/demo_pskill1.ts",
+    "demo-P-RAG.1": "bun run harness/scripts/demo_prag1.ts",
     "dashboards": "bun run harness/scripts/materialize_dashboards.ts",
     "omp:secure": "omp -e harness/omp/security_extension.ts -e harness/omp/token_speed_extension.ts",
     "dashboard:tui": "bun run tools/dashboard_tui.ts",

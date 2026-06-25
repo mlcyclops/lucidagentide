@@ -4537,3 +4537,84 @@ chunks are retrieval context, never semantic memory).
 ADR-0007 (AskSage adapter + `/query` RAG this extends); ADR-0012 (compartments/classification); ADR-0019
 (gate/quarantine + Security-panel surfacing); ADR-0050 / P-GOAL.8 (the guided-walkthrough UI pattern
 reused); CLAUDE.md invariants #2/#3/#5/#10 + keystone #2.
+
+## ADR-0054 - P-RAG.1: the local knowledge spine (scan-gated ingest + offline cosine retrieval)
+
+**Date:** 2026-06-24
+**Status:** Accepted - BUILT.
+**Increment:** P-RAG.1 (first build increment under ADR-0053).
+
+### Context
+
+ADR-0053 scoped the Knowledge module as one large increment (schema + PDF parse + WASM embedder +
+retrieval + Knowledge popup + injection). Building all of that in one session is exactly the
+half-finished-increment failure CLAUDE.md warns against, and the heaviest pieces (bundling ONNX weights,
+`unpdf`, live multimodal captioning) need network / real environments that cannot be verified
+deterministically in this dev host. So P-RAG.1 is narrowed to the load-bearing, air-gap-clean,
+fully-testable CORE - the data + security + retrieval spine - and the heavy/UI pieces move to follow-ons.
+
+### Decision - what P-RAG.1 builds (server-side, no new runtime deps)
+
+1. **Separate `knowledge.duckdb`** (ADR-0053 decision #3). `Db.open(path, migrationsDir?)` gained an
+   optional second arg selecting the migration set; it defaults to the core memory schema, so every
+   existing caller is unchanged. The knowledge store passes its own dir
+   (`harness/knowledge/migrations`), so migration `0010_knowledge_vectors.sql` applies ONLY to
+   knowledge.duckdb and never to `agent_obs.duckdb` (invariant #10; frozen migrations untouched).
+2. **Migration 0010** - `kb_datasets` (id, name, classification U|CUI, source local|asksage,
+   embedding_model, dim) + `kb_chunks` (chunk_id, dataset_id FK, artifact_id soft-ref, source_path,
+   ordinal, text, trust_label, `embedding FLOAT[]`, dim). The 0010 number keeps project migration
+   numbering globally unique even though this is a distinct database.
+3. **`chunk.ts`** - pure, deterministic, overlapping, boundary-preferring text chunker.
+4. **`embedder.ts`** - an `Embedder` INTERFACE (`{id, dim, embed()}`) plus `HashEmbedder`, a
+   deterministic, dependency-free hashed-bag-of-words embedder (L2-normalized). The pipeline depends on
+   the interface, NOT a model, so the spine is testable and air-gap-clean today; P-RAG.1b drops in the
+   real WASM `bge-small-en-v1.5` (384-dim) behind the same interface with weights bundled.
+5. **`ingest.ts` `ingestText`** - the security keystone: chunk -> SCAN each chunk fail-closed
+   (`scanAndDecide`/DEFAULT_POLICY, same seam as persona/skill import) -> embed ONLY clean chunks ->
+   store with their trust label. A blocked chunk (quarantined, suspicious-over-threshold, OR
+   scanner-unavailable) is NEVER embedded and NEVER stored. An `onBlock` audit hook lets the desktop
+   layer `recordBlock()` without this harness module importing the desktop security log (clean layering).
+6. **Retrieval** - `KnowledgeStore.retrieve()` brute-forces top-k by DuckDB's built-in
+   `list_cosine_distance` (no vss/HNSW extension - air-gap clean). `wrapRetrieved()` renders hits inside
+   `UNTRUSTED_CONTENT_START/END` for late, delimited injection (invariant #5/#6).
+
+### Vectors are inlined as numeric SQL list literals (not bound params)
+
+The `@duckdb/node-api` binding rejects a JS array bound as a parameter ("Cannot create values of type
+ANY"). Probed: `list_cosine_distance(embedding, [<literal>])` works with no cast, on both INSERT and
+SELECT. Embedding components are machine-generated finite floats (never user text), and `floatList()`
+throws on any non-finite component, so inlining is safe and keeps retrieval in SQL.
+
+### Deferred (explicit, so the boundary is honest)
+
+- **P-RAG.1b** - real WASM text embedder (`@huggingface/transformers`, `bge-small-en-v1.5`) with weights
+  bundled as extraResources; `unpdf` PDF->text; wire both behind the existing `Embedder` interface.
+- **P-RAG.1c** - the Knowledge popup (guided + advanced, P-GOAL.8 pattern) for the LOCAL path, a
+  `knowledge.duckdb` at a fixed app path, desktop `recordBlock` wiring via `onBlock`, and per-turn
+  retrieval injection mirroring the dataset selector (ADR-0053 decision #4).
+- **P-RAG.2** images/multimodal; **P-RAG.3** AskSage dataset training; **P-RAG.4** ranking/citations + HNSW.
+- New `EventName`s (`knowledge_ingested`/`chunk_embedded`/`knowledge_retrieved`) remain deferred - a
+  `contracts.ts` change is its own increment (ADR-0053); the spine reuses existing block-audit plumbing.
+
+### Verification
+
+`bun test harness/knowledge` 20/20 (chunk bounds/overlap/determinism; embedder shape/normalization/
+ranking; store CRUD + cosine ranking + dim-mismatch-throws + dataset scoping; ingest clean-stores /
+poison-blocked-never-stored / dead-scanner-fails-closed / delimited-wrap). Full harness 493, desktop 326,
+typecheck clean (3 cfgs). `make demo-P-RAG.1` (`demo_prag1.ts`) proves the property against the REAL
+scanner sidecar + a real temp knowledge.duckdb: clean doc stored, Trojan-Source (bidi U+202E + zero-width
+U+200B) note blocked and never stored, cosine retrieval returns the relevant chunk first, injection
+delimited.
+
+### Invariants preserved
+
+#2 (TS-only - no new Python; the scanner stays the only Python) - #3/#5 (every chunk scanned fail-closed,
+stored with a trust label, injected only delimited + late) - #9 (stable Snowflake `*_id` for
+datasets/chunks) - #10 (a new numbered migration in its own set; frozen ones untouched; `Db.open` change
+is additive) - keystone #2 (RAG chunks are retrieval context, never auto-promoted into semantic memory).
+
+### Relates to
+
+ADR-0053 (the RAG scope/plan this first-builds); ADR-0045/P-SKILL.1 (the scan-gate import seam reused);
+ADR-0012 (classification); ADR-0019 (gate/quarantine surfacing); CLAUDE.md invariants #2/#3/#5/#9/#10 +
+keystone #2.
