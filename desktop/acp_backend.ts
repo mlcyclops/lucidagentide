@@ -29,14 +29,14 @@ import { type EgressChoice, egressDecision, recordEgress } from "./egress_policy
 // requests permission for one of these, the desktop shows the per-website approval dialog instead of
 // silently auto-approving in Agent mode.
 const EGRESS_TOOLS = new Set(["browser", "web_search", "web", "fetch", "navigate"]);
-// The dialog's choices. Each maps to an EgressChoice the store folds in; all the "Yes" variants approve
-// the call to omp, "deny" blocks it.
+// The dialog's choices — clear and non-overlapping. ("allow once" and an "ask every time" pin had the
+// same outcome — both ask again next time — so the pin was dropped.) Each maps to an EgressChoice the
+// store folds in; the "allow" variants approve the call to omp, "deny" blocks it.
 const EGRESS_OPTIONS: { optionId: string; name: string; kind?: string }[] = [
-  { optionId: "egress:allow-once", name: "Yes - allow this, just this once", kind: "allow" },
-  { optionId: "egress:allow-site", name: "Yes - and don't ask again for this website", kind: "allow" },
-  { optionId: "egress:ask-site", name: "Yes - but ask me every time for this website", kind: "allow" },
-  { optionId: "egress:danger", name: "Yes - danger is my middle name (allow all sites)", kind: "allow" },
-  { optionId: "egress:deny", name: "No - block this", kind: "reject" },
+  { optionId: "egress:allow-once", name: "Allow once", kind: "allow" },
+  { optionId: "egress:allow-site", name: "Always allow this site", kind: "allow" },
+  { optionId: "egress:danger", name: "Always allow every site", kind: "danger" },
+  { optionId: "egress:deny", name: "Block", kind: "reject" },
 ];
 /** Pull the URL (browser) or query (web_search) an egress tool call targets, from its rawInput/title. */
 function egressTarget(tc: any): string | null {

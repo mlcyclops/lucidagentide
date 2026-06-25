@@ -2216,3 +2216,14 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
   or a hard per-turn cap (user deferred the timeout).
 - **next:** user reproduces a long-turn hang with developer mode ON and pastes the `[TURN_DIAG]` lines from
   the dev-server terminal; that pins wedge vs clobber vs disconnect and the fix follows.
+
+---
+**P-EGRESS.1 UI polish: docked, subdued, de-duplicated egress dialog (ADR-0058)**
+- **shipped:** per UX feedback — the egress approval card now DOCKS directly above the prompt bar (egressDock
+  in .composer-wrap) instead of inline in the chat; restyled subdued to match the app (outline buttons, no
+  bright magenta fills, thin amber accent, app text styles); the choices were de-duplicated from 5 to 4
+  ("ask me every time" had the same outcome as "Allow once" — both ask again next time — so it was dropped):
+  Allow once / Always allow this site / Always allow every site (amber-tinted = the risky one) / Block. On
+  answer the docked card removes itself + a brief toast. typecheck clean · bundle OK · egress tests 13 ·
+  card visually verified in the dev server.
+- **next:** remaining selected threads — tool curation, lossy streaming ([TURN_DIAG]), P-CONTINUE.1.

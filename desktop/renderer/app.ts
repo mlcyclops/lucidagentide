@@ -557,20 +557,19 @@ function createReasoning(): ReasoningWin {
 // request. Unanswered at turn's end ⇒ Denied (the backend already fail-closes server-side).
 const isAllowOpt = (kind?: string, optionId?: string) => /allow|approve|grant|accept|yes/i.test(`${kind ?? ""} ${optionId ?? ""}`);
 function createPermissionCard(e: Extract<ChatEvent, { type: "permission" }>): { el: HTMLElement; finalize: () => void } {
-  const btns = e.options.map((o) =>
-    `<button class="perm-btn ${isAllowOpt(o.kind, o.optionId) ? "ok" : "no"}" data-oid="${esc(o.optionId)}">${esc(o.name)}</button>`).join("");
   let win: HTMLElement;
   if (e.egress) {
-    // P-EGRESS.1 (ADR-0058): the agent wants to reach the internet. Show the target prominently with a
-    // copy button + a one-click Cloudflare-Radar safety check, then the per-website approval choices.
+    // P-EGRESS.1 (ADR-0058): the agent wants to reach the internet. Docked above the composer. Subdued
+    // styling that matches the app; the target URL with a copy button + a one-click Cloudflare-Radar check,
+    // then the per-website choices (kind: allow → neutral, danger → amber, reject → block).
     const url = e.url ?? e.detail ?? "";
+    const egCls = (k?: string) => k === "reject" ? "eg-block" : k === "danger" ? "eg-danger" : "eg-allow";
+    const btns = e.options.map((o) => `<button class="perm-btn ${egCls(o.kind)}" data-oid="${esc(o.optionId)}">${esc(o.name)}</button>`).join("");
     win = el(`<div class="perm perm-egress" data-streaming="1">
-      <div class="perm-head perm-head-warn">${icon("shield", 14)}<span>Let the agent reach this website?</span></div>
-      <div class="perm-egress-target"><code class="perm-url">${esc(url)}</code><button class="perm-copy" data-tip="Copy the URL">${icon("copy", 12)}</button></div>
-      <div class="perm-egress-note">${icon("info", 12)}<span>This sends a request to the internet. Approve only sites you trust.</span></div>
-      <button class="perm-radar" data-radar>${icon("search", 12)} Check this site with Cloudflare Radar</button>
+      <div class="perm-eg-head">${icon("git", 13)}<span>The agent wants to visit a website</span></div>
+      <div class="perm-egress-target"><code class="perm-url">${esc(url)}</code><button class="perm-copy" data-tip="Copy URL">${icon("copy", 12)}</button></div>
+      <button class="perm-radar" data-radar>${icon("search", 12)} Check it on Cloudflare Radar</button>
       <div class="perm-actions perm-actions-col">${btns}</div>
-      <div class="perm-result" hidden></div>
     </div>`);
     const copyBtn = $(".perm-copy", win) as HTMLElement | null;
     copyBtn?.addEventListener("click", async () => {
@@ -579,9 +578,10 @@ function createPermissionCard(e: Extract<ChatEvent, { type: "permission" }>): { 
     ($("[data-radar]", win) as HTMLElement | null)?.addEventListener("click", async () => {
       try { await navigator.clipboard.writeText(url); } catch { /* ignore */ }
       window.open("https://radar.cloudflare.com/scan", "_blank", "noopener");
-      showToast({ title: "URL copied · Radar opened", desc: "Paste the URL into Cloudflare Radar's scan box to vet it before allowing.", actions: [{ label: "OK" }], timeout: 4000 });
+      showToast({ title: "URL copied · Radar opened", desc: "Paste the URL into Cloudflare Radar to vet the site before allowing.", actions: [{ label: "OK" }], timeout: 4000 });
     });
   } else {
+    const btns = e.options.map((o) => `<button class="perm-btn ${isAllowOpt(o.kind, o.optionId) ? "ok" : "no"}" data-oid="${esc(o.optionId)}">${esc(o.name)}</button>`).join("");
     win = el(`<div class="perm" data-streaming="1">
       <div class="perm-head">${icon("shield", 14)}<span>Approve tool call?</span></div>
       <div class="perm-body"><b>${esc(e.tool)}</b>${e.detail ? ` · <span class="perm-d">${esc(e.detail)}</span>` : ""}</div>
@@ -590,26 +590,41 @@ function createPermissionCard(e: Extract<ChatEvent, { type: "permission" }>): { 
     </div>`);
   }
   const actions = $(".perm-actions", win) as HTMLElement;
-  const result = $(".perm-result", win) as HTMLElement;
+  const result = $(".perm-result", win) as HTMLElement | null;
   let answered = false;
   const choose = (oid: string | null, label: string, ok: boolean) => {
     if (answered) return;
     answered = true;
     win.removeAttribute("data-streaming");
     void bridge.respondPermission(e.id, oid);
+    if (e.egress) {
+      // Docked card: confirm with a brief toast, then remove it (and the dock when empty).
+      showToast({ title: ok ? "Allowed" : "Blocked", desc: ok ? "The agent can reach the site." : "The agent won't reach that site.", actions: [{ label: "OK" }], timeout: 2200, ...(ok ? {} : { tone: "warn" as const }) });
+      win.remove();
+      const dock = $("#egressDock"); if (dock && !dock.children.length) dock.remove();
+      return;
+    }
     actions.hidden = true;
-    result.hidden = false;
-    result.className = `perm-result ${ok ? "ok" : "no"}`;
-    result.innerHTML = `${icon(ok ? "check" : "close", 13)}<span>${esc(label)}</span>`;
+    if (result) { result.hidden = false; result.className = `perm-result ${ok ? "ok" : "no"}`; result.innerHTML = `${icon(ok ? "check" : "close", 13)}<span>${esc(label)}</span>`; }
   };
   actions.addEventListener("click", (ev) => {
     const b = (ev.target as HTMLElement).closest("[data-oid]") as HTMLElement | null;
     if (!b) return;
     const opt = e.options.find((o) => o.optionId === b.dataset.oid);
-    const ok = isAllowOpt(opt?.kind, opt?.optionId);
-    choose(b.dataset.oid!, ok ? "Allowed" : "Denied", ok);
+    const isDeny = e.egress ? opt?.kind === "reject" : !isAllowOpt(opt?.kind, opt?.optionId);
+    choose(b.dataset.oid!, isDeny ? "Denied" : "Allowed", !isDeny);
   });
   return { el: win, finalize: () => choose(null, "Denied (turn ended)", false) };
+}
+/** P-EGRESS.1: the dock above the composer where egress approval cards sit (not inline in the chat). */
+function egressDock(): HTMLElement {
+  let dock = $("#egressDock");
+  if (!dock) {
+    dock = el(`<div id="egressDock"></div>`);
+    const wrap = $(".composer-wrap")!;
+    wrap.insertBefore(dock, wrap.firstChild);
+  }
+  return dock;
 }
 
 // ── Subagent delegation card - P-TASK.1 (ADR-0028) ──
@@ -766,8 +781,9 @@ async function send(): Promise<void> {
       setPhase("Needs approval"); paintHud();
       const card = createPermissionCard(e);
       permCards.push(card);
-      hud.before(card.el); // sits just above the activity HUD, within this message
-      scrollChat();
+      // P-EGRESS.1: egress approvals dock directly above the prompt bar; normal tool prompts stay inline.
+      if (e.egress) egressDock().appendChild(card.el);
+      else { hud.before(card.el); scrollChat(); }
     }
     else if (e.type === "block") onBlock(e);
     else if (e.type === "usage") { tok = e.used; cost = e.cost; state.liveUsage = { used: e.used, size: e.size, cost: e.cost }; paintHud(); renderStatus(); renderMetricsRail(); }
