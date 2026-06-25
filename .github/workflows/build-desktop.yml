@@ -60,46 +60,10 @@ jobs:
         run: bun install
         working-directory: desktop
 
-      # Embed the static bun + uv binaries so the installed app needs no
-      # prerequisites. Named <tool>-<platform>-<arch> to match desktop/runtime.ts;
-      # extraResources bundles them into Resources/runtimes. The first launch uses
-      # them to install omp + provision the scanner interpreter.
-      - name: Bundle runtimes (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        working-directory: desktop/runtimes
-        run: |
-          New-Item -ItemType Directory -Force tmp | Out-Null
-          curl -L -o tmp/bun.zip https://github.com/oven-sh/bun/releases/latest/download/bun-windows-x64.zip
-          curl -L -o tmp/uv.zip  https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-pc-windows-msvc.zip
-          Expand-Archive tmp/bun.zip -DestinationPath tmp/bun -Force
-          Expand-Archive tmp/uv.zip  -DestinationPath tmp/uv  -Force
-          Copy-Item (Get-ChildItem tmp/bun -Recurse -Filter bun.exe)[0].FullName bun-win32-x64.exe
-          Copy-Item (Get-ChildItem tmp/uv  -Recurse -Filter uv.exe)[0].FullName  uv-win32-x64.exe
-          Remove-Item tmp -Recurse -Force
-          Get-ChildItem
-
-      - name: Bundle runtimes (macOS)
-        if: runner.os == 'macOS'
-        shell: bash
-        working-directory: desktop/runtimes
-        run: |
-          set -euo pipefail
-          mkdir -p tmp
-          # bun (both arches; runtime.ts picks by process.arch)
-          curl -L -o tmp/bun-arm.zip https://github.com/oven-sh/bun/releases/latest/download/bun-darwin-aarch64.zip
-          curl -L -o tmp/bun-x64.zip https://github.com/oven-sh/bun/releases/latest/download/bun-darwin-x64.zip
-          unzip -o tmp/bun-arm.zip -d tmp && mv tmp/bun-darwin-aarch64/bun bun-darwin-arm64
-          unzip -o tmp/bun-x64.zip -d tmp && mv tmp/bun-darwin-x64/bun bun-darwin-x64
-          # uv (both arches; tar.gz)
-          curl -L -o tmp/uv-arm.tgz https://github.com/astral-sh/uv/releases/latest/download/uv-aarch64-apple-darwin.tar.gz
-          curl -L -o tmp/uv-x64.tgz https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-apple-darwin.tar.gz
-          tar xzf tmp/uv-arm.tgz -C tmp && mv tmp/uv-aarch64-apple-darwin/uv uv-darwin-arm64
-          tar xzf tmp/uv-x64.tgz -C tmp && mv tmp/uv-x86_64-apple-darwin/uv uv-darwin-x64
-          chmod +x bun-darwin-* uv-darwin-*
-          rm -rf tmp
-          ls -la
-
+      # The static bun + uv binaries the installed app needs (so it has no prerequisites) are now
+      # fetched + SHA-256-verified by desktop/build/fetch-runtimes.ts, which each `dist:<os>` script
+      # runs first (pinned versions, vendor-cross-checked hashes — fail-closed). The old inline
+      # `latest`-curl steps were unpinned/unverified AND shadowed that path, so they were removed.
       - name: Build installer (${{ matrix.script }})
         run: bun run ${{ matrix.script }}
         working-directory: desktop
