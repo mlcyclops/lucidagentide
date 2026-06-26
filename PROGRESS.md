@@ -2326,3 +2326,9 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **shipped:** `harness/knowledge/pdf.ts` - `extractPdfText` (unpdf/pdf.js, pure JS, air-gap clean; fail-closed `%PDF-` sniff + non-destructive copy) and `ingestPdf` that delegates to the UNCHANGED scan-gated `ingestText`, so PDF pages are gated/embedded exactly like .txt; `demo-P-RAG.1c` proves semantic retrieval FROM a 3-page PDF (zero-shared-word query ranks the pets page first, d=0.45 vs 0.58/0.70) + a corrupt PDF fails closed; `pdf.test.ts` covers a POISON page blocked + a dead scanner; `pdf_fixture.ts` (test-only PDF writer, no binary in git). harness 518 pass / 1 skip / 0 fail; typecheck clean; new DIRECT dep `unpdf`.
 - **stubbed:** image/scanned-PDF OCR (a text-less PDF yields zero chunks, not an error); PDF code is not yet imported by the dev server / chat path (only pdf.ts + its test + demo).
 - **next:** remaining P-RAG.1c slices - WASM packaging (web build + bundled weights as extraResources), per-turn retrieval injection into chat, Knowledge ingest UI + image caption-at-ingest.
+
+---
+**ADR-A009 / #74 - managed-config update channel (OSS-core)**
+- **shipped:** `managed_config.ts` gains `updateChannel: "github"|"feed"|"managed"` + `updateFeedUrl` and a PURE `resolveUpdatePolicy` (fail-safe: unmanaged/unknown→github, feed-without-url→managed, managed→disabled); `updater.ts` honors it - `managed` skips the in-app check entirely (no offline nag/hang), `feed` points electron-updater's generic provider at the customer mirror, `github` unchanged. 8 new tests; full typecheck clean.
+- **stubbed:** the internal-feed mirror layout + native enterprise packages (MSI/MSIX/rpm/deb/pkg) are the rest of ADR-A009 (private follow-on issues #75-79); macOS feed-update still needs signing.
+- **next:** wire the channel into the managed-config TEMPLATE + ADMX (private ADR-A010), and the Channel-B/C packaging.

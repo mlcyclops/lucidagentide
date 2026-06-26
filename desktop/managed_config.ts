@@ -25,14 +25,28 @@ export interface ManagedAttribution {
   /** If set, the email must end in one of these domains (e.g. ["company.com","contractor.company.com"]). */
   allowedEmailDomains?: string[];
 }
+export type UpdateChannel = "github" | "feed" | "managed";
+
 export interface ManagedConfig {
   /** Shown as "Managed by <orgName>" in the UI. */
   orgName?: string;
   attribution?: ManagedAttribution;
   /** Force AskSage-only (gov gateway) routing. */
   asksageOnly?: boolean;
+  /** ADR-A009: which in-app update channel this fleet uses. Default "github" (today's public feed).
+   *  "feed" = electron-updater generic provider against a customer-hosted mirror (needs updateFeedUrl);
+   *  "managed" = IT owns the version (MSI/MSIX/rpm/deb/pkg), so the in-app update check is DISABLED. */
+  updateChannel?: UpdateChannel;
+  /** The customer-hosted feed URL for updateChannel:"feed" (mirrors latest*.yml + installers). */
+  updateFeedUrl?: string;
   /** Reserved/extensible: pinned mcpServers, BI endpoint, locked workspace roots, etc. */
   [k: string]: unknown;
+}
+
+export interface UpdatePolicy {
+  channel: UpdateChannel;
+  /** Present only when channel === "feed". */
+  feedUrl?: string;
 }
 
 function candidatePaths(): string[] {
@@ -87,3 +101,22 @@ export function skipAllowed(): boolean {
   if (a.requireEmail) return false;
   return a.allowSkip !== false;
 }
+
+/** ADR-A009 (#74): resolve the effective update policy from a (possibly null) managed config. PURE so it
+ *  is unit-testable without files. Fail-safe defaults:
+ *   - unmanaged / unset / unknown value ⇒ "github" (today's behavior — never silently disable updates),
+ *   - "feed" with a non-blank URL ⇒ feed against that URL,
+ *   - "feed" with NO usable URL ⇒ "managed" (disable the check rather than hit a wrong/empty feed),
+ *   - "managed" ⇒ disable the in-app check (IT owns the version). */
+export function resolveUpdatePolicy(mc: ManagedConfig | null): UpdatePolicy {
+  const channel = mc?.updateChannel;
+  if (channel === "managed") return { channel: "managed" };
+  if (channel === "feed") {
+    const feedUrl = typeof mc?.updateFeedUrl === "string" ? mc.updateFeedUrl.trim() : "";
+    return feedUrl ? { channel: "feed", feedUrl } : { channel: "managed" };
+  }
+  return { channel: "github" }; // default + unknown value
+}
+
+/** Read-side: the effective update policy from the live managed config. */
+export function updatePolicy(): UpdatePolicy { return resolveUpdatePolicy(managedConfig().config); }
