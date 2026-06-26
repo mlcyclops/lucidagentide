@@ -5425,3 +5425,68 @@ context, never semantic-memory promotion.
 
 ADR-0063 (the embedder this feeds), ADR-0058 (the ingest seam it reuses), ADR-0053 (RAG scope: named
 `unpdf`, air-gap, the remaining 1c slices), CLAUDE.md invariants #2 / #3 / #5 + keystone #2.
+
+## ADR-0065 - P-RAG.1c (slice 2) FINDING: WASM-under-Bun is blocked; the embedder backend decision is deferred
+
+**Date:** 2026-06-25
+**Status:** Proposed - FINDING ONLY, decision DEFERRED (no code change this increment).
+**Increment:** P-RAG.1c slice 2 (run the real embedder in the PACKAGED app). Spiked, not built.
+
+### Context
+
+The shipped embedder must run in the PACKAGED desktop app, not just the harness/dev server. Topology
+(desktop/main.ts): the packaged app runs the harness by spawning the BUNDLED `bun` on `desktop/dev.ts`,
+so ingest/retrieval/embedding execute under **Bun** (not the Electron renderer, not Node). ADR-0053 /
+ADR-0063 ASSUMED the shipped backend would be transformers.js's WASM web build (onnxruntime-web), because
+`desktop/package.json` excludes both `onnxruntime-node` and `onnxruntime-web` to keep the bundle lean and
+"native-free". This increment set out to wire that WASM path. A feasibility spike says it does not work.
+
+### Finding - the transformers.js WEB build cannot deliver the model under Bun
+
+`@huggingface/transformers` resolves its **`node`** export under Bun -> `transformers.node.mjs` ->
+`onnxruntime-node` (native). The WASM path is the **`default`/web** export -> `transformers.web.js` ->
+`onnxruntime-web`. Spiking the web build (deep-imported by file path, since `exports` only maps "."):
+
+- The WASM runtime **imports and runs under Bun** - no crash on browser globals. So WASM itself is fine.
+- config.json / tokenizer.json load via a custom `env.fetch` shim that serves the LOCAL cached weights.
+- The 133 MB **model.onnx fails**. Because Bun is detected as a node env (`apis.IS_NODE_ENV`), the web
+  build calls `getModelFile(..., return_path=true)` - ORT wants a FILE PATH for the big model, not a
+  buffer. But the web build's local-file reader is a BROWSER STUB (`node_fs_default.existsSync is not a
+  function`), and a fetch-served `Response` is a buffer, not the `FileResponse.filePath` the path branch
+  demands. The two loaders are mutually exclusive and both dead for that one file, and the stub is baked
+  into the bundled web build - not reachable via `env`.
+
+Net: pure-WASM-under-Bun with bundled weights is not achievable with the current transformers.js web
+build without patching the vendored bundle.
+
+### Options (for the deferred decision)
+
+1. **Bundle `onnxruntime-node` per-platform (recommended).** Stop excluding it; ship the target platform's
+   prebuilt ORT (the npm package already carries win/mac/linux + arm64/x64 binaries, ~211 MB unfiltered;
+   electron-builder can prune to one platform's `bin/` ~tens of MB) + bundle bge-small weights
+   (quantized ~30 MB) as `extraResources`; point the UNCHANGED 1b `TransformersEmbedder` at them via its
+   existing `modelPath`. Air-gap clean, robust, zero embedder code change. Cost: ships a NATIVE ML runtime
+   (reverses ADR-0053's WASM assumption) and adds ~40-90 MB to the installer. CI is already per-OS, so each
+   build bundles only its own binary cleanly.
+2. **Embed in the Electron renderer** (a real browser env, so the web build's WASM path works natively).
+   Architecturally invasive: embedding moves out of the bun server, splitting ingest (renderer embeds ->
+   server stores). Keeps it WASM/native-free but is a much bigger change.
+3. **Patch the vendored `transformers.web.js`** to give it a working `node:fs` under Bun. Brittle - breaks
+   on every transformers.js bump, fights the library. Not recommended.
+
+### Decision
+
+DEFERRED. Recorded so a future session picks with eyes open. The recommendation is Option 1
+(bundle onnxruntime-node): it satisfies the REAL requirements - packaged + air-gap + win/mac/linux - and
+reuses the unchanged embedder; "WASM" was a means, not an end. Revisit ADR-0053's native-free assumption
+explicitly when this is taken up.
+
+### Invariants preserved
+
+No code changed; the fail-closed gate, the `Embedder` seam, and the frozen prefix are untouched. Whatever
+backend is chosen, it stays UPSTREAM-gated and air-gap (local weights, no network) per #3 / ADR-0053.
+
+### Relates to
+
+ADR-0063 (the embedder that needs a shipped backend), ADR-0053 (the WASM / native-free assumption this
+finding challenges), ADR-0064 (sibling 1c slice, PDF), CLAUDE.md invariant #3 + keystone #2.
