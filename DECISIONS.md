@@ -5801,3 +5801,82 @@ block records into the export schema without adding enum values. Frozen prefix u
 `security_log.ts` (the audit extended), ADR-0068 (carries the sink config), ADR-0066/0067/0062 (the
 decisions exported), `contracts.ts` `EventName` (#8), and the private ADR-A011 (the per-SIEM connector
 shapes - the "how").
+
+## ADR-0070 - P-BRIEF.1: Executive Engineering Update — repo logs → brief + podcast behind a vendor-agnostic audio seam
+
+**Date:** 2026-06-26
+**Status:** Accepted - BUILT (slice 1: the generator + the audio seam). Audio backends, the Goal Loop
+accordion, and Slack/Drive delivery are follow-on slices (P-BRIEF.2/.3).
+**Increment:** P-BRIEF.1. Informed by a deep-research pass (NotebookLM Enterprise API, ElevenLabs,
+Podcastfy/Kokoro, Workspace OAuth, Slack) — findings folded in below.
+
+### Context
+
+Goal: an automated "Executive Engineering Update" - a curated written brief AND a podcast - generated
+from a repo's own change history (PROGRESS.md, DECISIONS.md/ADRs, HANDOFF.md, and the goal-loop
+After-Action Report), focused on LOAD-BEARING DEPENDENCIES, TECH DEBT, and UPCOMING DECISIONS, and
+configurable from the Goal Loop UI. The open question was the audio-generation backend; a deep-research
+pass resolved it (verified, 22/25 claims confirmed).
+
+### Research findings (verified)
+
+- **NotebookLM has an official ENTERPRISE API.** `notebooks.audioOverviews.create` (Discovery Engine
+  `google.cloud.notebooklm.v1alpha`, HTTP POST, GCP bearer token) creates notebooks + Audio Overviews
+  programmatically. It is `v1alpha`/Preview (pre-GA, one-audio-overview-per-notebook). The separate
+  standalone Podcast API is DEPRECATED (no new-customer allowlisting) - do NOT build on it.
+- **No headless browser.** omp DOES ship `puppeteer-core`, but driving the CONSUMER NotebookLM is
+  unnecessary given the API and carries real Workspace-AUP suspension risk (24h cure §4.1; immediate
+  §4.2). Rejected.
+- **Multi-vendor alternatives.** ElevenLabs `POST /v1/studio/podcasts` (two-speaker "conversation" /
+  "bulletin"; allowlist-gated). Air-gap: **Podcastfy** (Apache-2.0, vendor-agnostic `tts_model`) or Open
+  Notebook for transcript/orchestration + a **self-hosted Kokoro TTS** server (OpenAI-compatible
+  `/v1/audio/speech`, true offline `KOKORO_LOCAL_ONLY`). (Open Notebook's full-offline claim was REFUTED;
+  rely on Podcastfy+Kokoro for the verified offline audio path.)
+- **Auth.** GCP bearer via OAuth consent or a plain service account; AVOID domain-wide delegation (Google
+  IAM best-practice - DWD can impersonate any user). Workspace/Drive delivery via the `google_workspace_mcp`
+  server (3-legged OAuth 2.1+PKCE, auto refresh) - it does NOT cover NotebookLM. Slack delivery is a
+  dedicated Slack bot (`files.upload` + `chat.postMessage`), not a provider connector.
+
+### Decision
+
+**1. A pure generator (BUILT this slice).** `harness/brief/engineering_update.ts` - no I/O, no Date.now,
+no network: parse PROGRESS.md (shipped/stubbed/next) + DECISIONS.md (ADR status + `DEPENDS ON`/`Blocked
+by`) + an optional AAR (`AarLike`, declared locally so harness never imports desktop) into a typed
+`EngineeringUpdate` (recentlyShipped · loadBearingDependencies · techDebt · upcomingDecisions · risks).
+Mapping: PROGRESS `stubbed` + `DEFERRED`/`FINDING` ADRs → tech debt; `Proposed`/`SCOPE/PLAN`/`DEFERRED`
+ADRs + PROGRESS `next` → upcoming decisions; ADR `DEPENDS ON` edges → load-bearing; AAR
+errors/blocks/non-met outcome → risks. Renders a written brief AND a TTS-ready two-host podcast SCRIPT.
+
+**2. A vendor-agnostic `PodcastBackend` seam (BUILT).** `synthesize(script) → PodcastResult`. The default
+`ScriptOnlyBackend` returns the script with NO audio, so the pipeline never hard-fails on a missing cloud
+key and the AIR-GAP default ships today. The cloud/offline adapters (NotebookLM Enterprise, ElevenLabs,
+Podcastfy+Kokoro) implement this same interface in P-BRIEF.2 - the generator never changes.
+
+**3. Follow-on slices (deferred).** P-BRIEF.2: the audio adapters (behind the seam) + delivery (Slack bot,
+Workspace MCP). P-BRIEF.3: the Goal Loop accordion - provider picker (script-only | NotebookLM-Enterprise
+| ElevenLabs | Podcastfy+Kokoro), cadence, and destinations - wired as advanced config; the cloud paths
+gate through egress (ADR-0062) + managed-config (ADR-0068) and keys live like other provider keys.
+
+### Generation-option comparison
+
+| Option | API today | Auth | Air-gap | ToS/risk | Role |
+|---|---|---|---|---|---|
+| NotebookLM Enterprise audioOverviews | yes (v1alpha/Preview) | GCP bearer (OAuth/SA) | no (cloud) | low (official API) | primary cloud |
+| ElevenLabs studio/podcasts | yes (allowlist-gated) | xi-api-key | no | low | hosted multi-vendor |
+| Podcastfy + self-hosted Kokoro | yes (OSS) | none (local) | YES (Kokoro `LOCAL_ONLY`) | none | air-gap |
+| Headless consumer NotebookLM | n/a | Workspace OAuth | no | HIGH (suspension) | REJECTED |
+| Script-only (default) | built | none | YES | none | fallback / no-vendor |
+
+### Consequences / invariants
+
+- Air-gap by default (script-only, pure, no network); the cloud backends are opt-in and egress-gated.
+- The brief is a SUMMARY of already-local logs - no raw source/CUI leaves the host until a vendor backend
+  is deliberately configured. The frozen prefix is untouched; no `contracts.ts` change.
+- `make demo-P-BRIEF.1` generates a real update from THIS repo's logs (shipped/deps/debt/decisions + a
+  two-host script) with no vendor. 10 unit tests; typecheck clean.
+
+### Relates to
+
+`desktop/loop_report.ts` (the AAR input), DECISIONS.md/PROGRESS.md (the inputs), ADR-0067 (the loop AAR
+blocks feed Risks), ADR-0020 (MCP servers - the Workspace/Slack delivery surface), ADR-0062/0068
+(egress + managed-config govern the cloud backends), and the deep-research pass that chose the backend.

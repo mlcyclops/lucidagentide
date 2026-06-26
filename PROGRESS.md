@@ -2332,3 +2332,9 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **shipped:** `managed_config.ts` gains `updateChannel: "github"|"feed"|"managed"` + `updateFeedUrl` and a PURE `resolveUpdatePolicy` (fail-safe: unmanaged/unknown→github, feed-without-url→managed, managed→disabled); `updater.ts` honors it - `managed` skips the in-app check entirely (no offline nag/hang), `feed` points electron-updater's generic provider at the customer mirror, `github` unchanged. 8 new tests; full typecheck clean.
 - **stubbed:** the internal-feed mirror layout + native enterprise packages (MSI/MSIX/rpm/deb/pkg) are the rest of ADR-A009 (private follow-on issues #75-79); macOS feed-update still needs signing.
 - **next:** wire the channel into the managed-config TEMPLATE + ADMX (private ADR-A010), and the Channel-B/C packaging.
+
+---
+**P-BRIEF.1 - Executive Engineering Update generator (ADR-0070)**
+- **shipped:** `harness/brief/engineering_update.ts` (PURE, air-gap) - parses PROGRESS.md + DECISIONS.md (+ optional AAR) into a typed `EngineeringUpdate` (load-bearing deps / tech debt / upcoming decisions / shipped / risks) and renders a written brief AND a TTS-ready two-host podcast script; a vendor-agnostic `PodcastBackend` seam with a `ScriptOnlyBackend` default (no cloud key needed). `demo-P-BRIEF.1` runs against THIS repo's logs (6 shipped, the ADR-0067→0066 edge, 7 debt, 12 decisions). Deep-research chose the backend: NotebookLM Enterprise audioOverviews API (primary), ElevenLabs (multi-vendor), Podcastfy+Kokoro (air-gap), NO headless browser. 10 tests; typecheck clean.
+- **stubbed:** the audio adapters (NotebookLM Enterprise / ElevenLabs / Podcastfy+Kokoro) behind the seam, Slack/Workspace delivery, and the Goal Loop accordion config are P-BRIEF.2/.3.
+- **next:** P-BRIEF.2 - implement one audio backend (likely ElevenLabs or Podcastfy+Kokoro first) + delivery, egress/managed-config gated.
