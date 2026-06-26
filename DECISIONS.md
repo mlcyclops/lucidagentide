@@ -5494,8 +5494,11 @@ finding challenges), ADR-0064 (sibling 1c slice, PDF), CLAUDE.md invariant #3 + 
 ## ADR-0066 - P-EXEC.1: per-action approval for the agent's exec tools (bash + eval) (SCOPE/PLAN)
 
 **Date:** 2026-06-26
-**Status:** Proposed - SCOPE/PLAN (design locked; implementation is the next increment).
+**Status:** Proposed - SCOPE/PLAN (design locked + refined; implementation is the next increment).
 **Increment:** P-EXEC.1 (v1 = bash + eval). ssh + task fast-follow as P-EXEC.2.
+**Refined 2026-06-26:** program-level key (kept simple) + a non-silenceable catastrophic ALWAYS-PROMPT
+set; added `allow-turn` (session-scoped, in-memory); exec danger-mode is a SEPARATE toggle from egress;
+safe-program-dangerous-flag table; dropped precise out-of-workspace path analysis.
 
 ### Context - the gap
 
@@ -5520,42 +5523,63 @@ classifier so we do not nag on read-only commands.
 `{ risk: "safe" | "risky", key: string | null }`:
 - **safe** - argv0 is on a conservative read-only allowlist (`ls cat head tail grep rg find pwd echo wc
   which file stat`, read-only `git status|diff|log|show|branch`) AND the command carries NO
-  semantics-changing markers. Safe → auto-approve in Agent (still scanned).
+  semantics-changing markers AND no segment trips the **safe-program-dangerous-flag table** (refinement
+  #2): a program that is read-only by default but destructive under a flag - `find -delete` / `find
+  -exec`, `tar -x`, `sort -o`, `tee`, `xargs <risky>` - is forced to RISKY. Safe → auto-approve in Agent
+  (still scanned).
 - **risky** - ANY of: a mutating/dangerous program (`rm mv dd chmod chown sudo doas mkfs kill`), a
   network fetch (`curl wget nc scp ssh`), pipe-to-interpreter (`| sh|bash|python|node`), output
   redirection (`> >>`), command substitution (`$(…)` / backticks), chaining into a risky segment
-  (`; && ||`), package installs (`npm i`, `pip install`), or an absolute write-path outside the
-  workspace. Risky → prompt.
+  (`; && ||`), or package installs (`npm i`, `pip install`). Risky → prompt. **We do NOT attempt precise
+  "writes outside the workspace" path analysis** (refinement #5 - unreliable from a raw command string and
+  invites false confidence); redirection + write-capable-program markers + fail-closed cover it.
 - **eval is ALWAYS risky** (arbitrary code execution) - it never auto-approves.
 - **Fail-closed:** anything unparseable, compound-and-ambiguous, or simply unknown is classified RISKY.
   The classifier is a correctness keystone like the scanner: a clean read-only corpus must not produce
   prompts that matter, and a dangerous corpus must be 100% flagged. Over-test with fixtures.
 
 **2. Standing decisions (the memory), keyed by PROGRAM.** When a risky call prompts, the dialog offers
-the egress-style choices mapped to an `ExecChoice` folded into `~/.omp/lucid-exec.json` via a pure
-`applyExecChoice` / `execVerdict`:
+five choices mapped to an `ExecChoice` folded into `~/.omp/lucid-exec.json` via a pure `applyExecChoice` /
+`execVerdict`:
 - `allow-once` → approve, remember nothing.
-- `allow-program` → approve + auto-allow this argv0 (`git`, `npm`, …) from now on.
-- `danger` → auto-allow ALL exec from now on (the "danger is my middle name" global, same as egress).
+- `allow-turn` → approve + auto-allow matching risky calls for the REST OF THIS TURN/RUN only
+  (refinement #3 - the missing middle for a legit multi-step risky sequence). IN-MEMORY ONLY: never
+  written to `lucid-exec.json`, auto-expires when the turn/run ends. Lives on the backend turn state,
+  not the store.
+- `allow-program` → approve + auto-allow this argv0 (`git`, `npm`, …) from now on (persisted).
+- `danger` → auto-allow ALL exec from now on. **A SEPARATE toggle from egress danger-mode** (refinement
+  #4): it lives in `lucid-exec.json` and is never coupled to `lucid-egress.json` - enabling allow-all
+  browsing must never enable allow-all shell (shell is the bigger blast radius).
 - `deny` → block, no persistence.
-The key is the PROGRAM, not the full command (a full command is too unique to remember). A
-compound/unparseable command exposes ONLY `allow-once` + `deny` - there is no safe program key to pin,
-so we never let an ambiguous command earn a standing allow.
+
+**Keying = PROGRAM (argv0), with a non-silenceable catastrophic set.** The maintainer chose the simpler
+program-level key over program+subcommand. To keep that simple key from re-opening the worst hole (an
+`allow-program` for `git` would otherwise auto-run `git reset --hard`), a small fixed
+**ALWAYS-PROMPT set ALWAYS prompts regardless of any standing allow or danger-mode** - mirroring how an
+egress `ask-site` pin overrides danger: `sudo`/`doas`, `rm -rf`, pipe-to-interpreter, `dd`/`mkfs`, a fork
+bomb, and `git reset --hard` / `git clean -f*` / `git push --force`. So a program-allow silences the
+ordinary forms of that program but never a catastrophic one. A compound/unparseable command exposes ONLY
+`allow-once` + `allow-turn` + `deny` (no safe program key to pin).
 
 **3. Unattended automations block risky, run safe + pre-approved.** A `/goal` loop sets
 `permissionMode:"auto"` (acp_backend.ts) and has no human to ask. There, the exec gate consults ONLY the
-standing allowlist + danger mode + the safe tier: a risky command with no standing allow is BLOCKED
-(omp surfaces a rejected tool call; the loop records it). No silent auto-approve of an unrecognized risky
-command - fail-closed even when nobody is watching.
+PERSISTED standing allowlist + exec danger-mode + the safe tier: a risky command with no standing allow is
+BLOCKED (omp surfaces a rejected tool call; the loop records it). `allow-turn` is interactive-only (no
+human = nothing to scope to), and the catastrophic ALWAYS-PROMPT set can never be auto-allowed, so it is
+BLOCKED unattended. No silent auto-approve of an unrecognized risky command - fail-closed even when nobody
+is watching.
 
 ### Plumbing (for the build increment)
 
 - `desktop/exec_policy.ts` - mirrors `egress_policy.ts`: `ExecChoice`/`ExecStore`/`ExecVerdict`, pure
-  `execVerdict` + `applyExecChoice`, `loadExec`/`recordExec`, AND the pure `classifyCommand`.
+  `execVerdict` + `applyExecChoice`, `loadExec`/`recordExec`, the pure `classifyCommand` (with the
+  safe-program-dangerous-flag table), and the fixed `ALWAYS_PROMPT` catastrophic-pattern set.
 - `harness/omp/acp_config.yml` - add `bash: prompt`, `eval: prompt` under `tools.approval`.
 - `acp_backend.ts onRequest` - a new `isExec` branch BEFORE the Agent auto-approve: classify; safe →
-  approve; risky → `execDecision(key)` allow → approve; else live UI → `askExec` (mirror `askEgress`,
-  showing the command + program); else (unattended / no UI) → block. Fail-closed throughout.
+  approve; risky → if it hits `ALWAYS_PROMPT` skip standing allows; else turn-scope allow (in-memory) or
+  `execDecision(key)` allow → approve; else live UI → `askExec` (mirror `askEgress`, showing the command +
+  program); else (unattended / no UI) → block. The turn-scope set lives on the backend's turn state and is
+  cleared when the turn/run ends. Fail-closed throughout.
 - Renderer - extend the existing permission dialog with an exec variant (show the command + the program
   key); reuse the egress dialog's option rendering.
 - `desktop/exec_policy.test.ts` - verdict/apply + a heavy `classifyCommand` fixture corpus (safe corpus
