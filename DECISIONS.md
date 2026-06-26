@@ -5685,3 +5685,119 @@ UI); (b) the plasma slider popover matrix UI on top. (a) is shippable and testab
 ADR-0066 (the exec classifier this grades + drives), ADR-0062 (egress - web tools already gate; the dial's
 web rows compose with it), ADR-0054/0056 (the loop AAR this extends), ADR-0060 (unattended-loop posture),
 CLAUDE.md invariant #3 + the scanner keystone.
+
+## ADR-0068 - P-ENT.1: enterprise managed-policy override for the security knobs (GPO / MDM) (SCOPE/PLAN)
+
+**Date:** 2026-06-26
+**Status:** Proposed - SCOPE/PLAN. Public seam; the org's actual policy TEMPLATES are private-repo IP.
+**Increment:** P-ENT.1. Extends the EXISTING `managed_config.ts` seam (it already governs attribution).
+
+### Context
+
+`desktop/managed_config.ts` already exists: an admin places a read-only policy file in a machine-only
+path (`%ProgramData%\LucidAgentIDE` / `/Library/Application Support` / `/etc/lucidagentide`, or
+`LUCID_MANAGED_CONFIG`), tamper-guarded, fail-safe (absent/malformed = unmanaged), and it only ever ADDS
+constraints. Today it governs attribution (require corporate email, allowed domains, no-skip) and
+`asksageOnly`. The new exec-risk controls - ADR-0066 (exec approval) and ADR-0067 (the loop Speed<->Risk
+dial) - and the SIEM logging of ADR-0069 must be CENTRALLY governable by an org admin via GPO / Intune /
+Jamf / Ansible, not left per-user. This ADR extends the seam; it invents no new mechanism.
+
+### Decision - extend `ManagedConfig` with a `security` + `logging` block; managed values can LOCK
+
+`ManagedConfig` gains (all optional; absent = unmanaged for that knob):
+- `security.exec` - org default + CEILING for the per-command risk dial (ADR-0067 tiers), an optional
+  `lock` (user may set SAFER than the org default but never riskier), `disableDangerMode` (forbid the
+  "allow all" global), and program `allowlist`/`denylist`.
+- `security.egress` - `allowedHosts`, `deniedHosts`, `disableDangerMode`, default verdict (ADR-0062).
+- `security.loop` - a maximum auto-run tier ceiling for unattended `/goal` runs (clamps every dial row).
+- `logging` - the SIEM/audit sink config consumed by ADR-0069 (sink type, endpoint, format, on/off).
+- `models` - generalizes the existing `asksageOnly` lock (allowed providers/models).
+
+**Precedence + enforcement.** Effective policy = `clampToManaged(userSetting, managed)`: managed is a
+CEILING, never a floor that relaxes safety. A locked knob disables its UI control and shows "Managed by
+<orgName>" (the attribution UI already does this). Enforcement is at the existing decision points -
+`egress_policy` / `exec_policy` / the loop dial read the managed ceiling and can only tighten. The
+security GATE itself (scanner, fail-closed) is never touched by policy (invariants #3/#4).
+
+**Distribution channels (one build, many environments).** The canonical file path already works for any
+MDM that can drop a file (Intune, Jamf, Ansible, SCCM). ADD a Windows **Group Policy** channel: an ADMX
+template writes `HKLM\Software\Policies\LucidAgentIDE`, and `managed_config.ts` gains a Windows
+registry-policy reader merged UNDER the file (HKLM policy is admin-only by ACL = the same tamper model).
+The PUBLIC repo ships the schema + enforcement + the registry reader; the private add-on repo ships the
+ADMX/Intune/Jamf/Ansible TEMPLATES + the deployment runbook (ADR-A010).
+
+### Plumbing (build increment)
+
+- `managed_config.ts` - add the `security`/`logging`/`models` types; a Windows `HKLM\...\Policies`
+  reader; `clampToManaged` helpers; cache + tamper guard unchanged.
+- `egress_policy.ts` / `exec_policy.ts` / the loop dial - read the managed ceiling/lock and tighten only.
+- Renderer - disable + "Managed by <org>" on locked controls (mirror the attribution UI).
+- Tests - `managed_config.test.ts` clamp/lock matrix; a managed policy can only tighten, never loosen.
+
+### Invariants preserved
+
+Managed policy only ADDS constraints (existing rule); fail-safe to unmanaged; the scanner/fail-closed gate
+is independent of policy (#3/#4); no `contracts.ts` change.
+
+### Relates to
+
+`managed_config.ts` (the seam extended), ADR-0066/0067 (the knobs governed), ADR-0062 (egress), ADR-A009
+(same managed-config file already carries `updateChannel`), ADR-0069 (consumes `logging`), and the private
+ADR-A010 (the GPO/MDM templates - the "how").
+
+## ADR-0069 - P-ENT.2: security audit event export seam (SIEM-ready, OCSF-aligned) (SCOPE/PLAN)
+
+**Date:** 2026-06-26
+**Status:** Proposed - SCOPE/PLAN. Public defines the schema + sink interface + file sink; the per-SIEM
+CONNECTORS are private-repo IP (ADR-A011).
+**Increment:** P-ENT.2. Extends the EXISTING `security_log.ts` append-only audit.
+
+### Context
+
+`desktop/security_log.ts` already keeps an append-only JSONL audit of gate blocks
+(`~/.omp/lucid-blocks.jsonl`, metadata only, never raw content) that the in-app dashboards read. A SOC
+needs those events - plus the ADR-0066 exec-gate and ADR-0062 egress decisions, approvals/dismissals, and
+ADR-0067 loop blocks - in the enterprise SIEM (Splunk, ACAS/Tenable, Elastic, AWS, Azure, GCP). This ADR
+turns the local audit into a normalized, exportable security-event stream.
+
+### Decision - one canonical, versioned, OCSF-aligned event; a pluggable sink interface
+
+- **Canonical event.** A single versioned `SecurityEvent` (schemaVersion, id, ts RFC3339, category, type,
+  severity, tool, decision = block|allow|prompt, reason, tier, sessionId/runId, host + attribution
+  identity, orgName). Metadata ONLY - never raw scanned content (existing rule). Every source maps to it:
+  scanner block, exec-gate decision, egress decision, approve/dismiss, loop block.
+- **OCSF normalization.** The wire shape is **OCSF** (Open Cybersecurity Schema Framework) - the common
+  denominator that maps cleanly to Splunk, Elastic ECS, AWS Security Lake, Azure Sentinel, and GCP
+  Chronicle/SecOps - so the public emitter is vendor-neutral and the private connectors are thin field
+  re-maps, not re-modeling.
+- **Pluggable sinks.** Public ships (a) the enriched append-only FILE sink (the existing JSONL, now
+  carrying every security event - the dashboards read it) and (b) a `Sink` INTERFACE + a config-driven
+  dispatcher reading `managedConfig().logging`. The private add-on ships the network connectors keyed by
+  sink type: Splunk HEC, syslog/CEF over TLS, Elastic bulk, AWS Security Lake / Firehose, Azure Monitor
+  (Sentinel DCR), GCP Chronicle ingestion, ACAS/Tenable (ADR-A011).
+- **Dashboards.** The in-app dashboards already read the JSONL; extend to the unified security-event
+  stream + per-sink delivery status (so an admin sees "events forwarded to Splunk: ok").
+- **Fail-safe, not fail-open.** A dead/slow SIEM sink NEVER blocks a turn - export is best-effort + buffered
+  (like the existing audit append). Security DECISIONS stay fail-closed regardless of whether logging
+  succeeds: logging is observability, not the gate.
+
+### Plumbing (build increment)
+
+- `desktop/audit_export.ts` (new) - the `SecurityEvent` type, the OCSF mapper, the `Sink` interface, the
+  dispatcher, and the file sink.
+- `security_log.ts` + the exec/egress/loop decision points - emit a `SecurityEvent` alongside their
+  existing records (additive).
+- `managed_config.ts` `logging` block (ADR-0068) selects + configures sinks centrally.
+- Tests - OCSF mapping fixtures (each source -> valid OCSF), dispatcher fail-safe (dead sink never throws).
+
+### Invariants preserved
+
+Metadata-only audit (existing); fail-safe export, fail-closed gate (#3); new canonical event TYPES that
+would extend the `EventName` enum are a `contracts.ts` change = their own increment (#8) - v1 maps EXISTING
+block records into the export schema without adding enum values. Frozen prefix untouched (#6).
+
+### Relates to
+
+`security_log.ts` (the audit extended), ADR-0068 (carries the sink config), ADR-0066/0067/0062 (the
+decisions exported), `contracts.ts` `EventName` (#8), and the private ADR-A011 (the per-SIEM connector
+shapes - the "how").
