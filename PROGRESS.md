@@ -2314,3 +2314,9 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
   criteria to the immediate next run only; automations still don't take a budget/criteria.
 - **next:** escalation ping on unattended stop; a budget + criteria field for scheduled automations; an
   optional multi-turn interview.
+
+---
+**P-RAG.1b - the real bge-small embedder (ADR-0063)**
+- **shipped:** `TransformersEmbedder` (bge-small-en-v1.5, 384d, transformers.js) behind the unchanged P-RAG.1 `Embedder` seam - semantic retrieval proven by `demo-P-RAG.1b` (a query sharing ZERO content words ranks the right chunk first: kittens d=0.47 vs 0.58/0.72); air-gap `modelPath` option (local weights + remote disabled); opt-in real-model test (`LUCID_TEST_EMBED=1`). harness 513 pass / 1 skip / 0 fail; typecheck clean.
+- **stubbed:** the WASM web-build backend + bundled model WEIGHTS for the PACKAGED app are deferred to P-RAG.1c (node/native backend works in the harness + dev server today); the embedder is not yet imported by the chat path.
+- **next:** P-RAG.1c - Knowledge ingest UI + PDF (`unpdf`) + image caption-at-ingest + per-turn retrieval injection + the WASM packaging (bundle weights as extraResources).

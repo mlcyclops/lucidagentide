@@ -5295,3 +5295,63 @@ deciding is not a stalled turn.
 
 ADR-0027/P-ACP.3 (the tool-permission forwarding this extends), ADR-0019 (the content gate this complements
 with an egress gate), ADR-0059 (the diagnostics that surfaced the browser flailing). CLAUDE.md #3/#4.
+
+-----
+
+## ADR-0063 - P-RAG.1b: the real WASM embedder (bge-small-en-v1.5) behind the P-RAG.1 seam
+
+**Date:** 2026-06-25
+**Status:** Accepted - BUILT.
+**Increment:** P-RAG.1b.
+
+### Context
+
+P-RAG.1 (ADR-0058) shipped the knowledge spine against a deterministic `HashEmbedder` stub: enough to
+prove the scan-gate + store + cosine-retrieval plumbing, but a bag-of-words hash only matches SHARED
+vocabulary - it has no notion of meaning, so "a small furry pet that meows" and "kittens are
+housecats" look unrelated. The whole point of RAG is semantic recall. P-RAG.1b drops in a real model.
+
+### Decision - one concrete embedder behind the existing seam
+
+`TransformersEmbedder` (`harness/knowledge/transformers_embedder.ts`) implements the unchanged
+`Embedder` interface (`id`, `dim`, `embed`) with **`bge-small-en-v1.5` (384-dim)** via
+[transformers.js](https://github.com/huggingface/transformers.js) (`@huggingface/transformers`),
+mean-pooled + L2-normalized so DuckDB `list_cosine_distance` stays meaningful. The model is loaded
+LAZILY once and reused. Because it is just another `Embedder`, ingest.ts, store.ts, and every existing
+test are untouched - **tests keep `HashEmbedder` (fast, no download); production passes this one**.
+
+**Air-gap (ADR-0053).** `TransformersEmbedder({ modelPath })` sets `env.localModelPath` +
+`env.allowRemoteModels = false`, so a bundled-weights deployment loads ONLY from disk and never reaches
+the HuggingFace Hub. Without `modelPath` the model is fetched once and cached (dev / connected).
+
+**Backend - WASM is the shipped path, deferred to P-RAG.1c.** transformers.js's Node build runs
+`onnxruntime-node` (native CPU), which is present in the harness + dev server where ingest/retrieval run
+today, so 1b works there now. The packaged desktop build excludes native binaries in favor of a WASM
+backend (ADR-0053); transformers.js only exposes WASM through its separate **web build**
+(`onnxruntime-web`), and `device: "wasm"` is NOT accepted by the node build. Wiring the WASM web build +
+bundling the model weights as `extraResources` into the SHIPPED app is **P-RAG.1c** (the Knowledge UI
+increment). This module is backend-agnostic - callers only ever see `Embedder` - so that switch never
+touches ingest or retrieval.
+
+**Scope - PDF deferred.** ADR-0053 paired the embedder with `unpdf` PDF->text. To keep one clean
+increment, PDF (and image) ingest moves to **P-RAG.1c** alongside the ingest UI; 1b is the embedder.
+
+### Consequences
+
+- Retrieval is genuinely SEMANTIC. `make demo-P-RAG.1b` proves it: a query sharing **zero** content
+  words with the target chunk still ranks it first (kittens d=0.47, vs unrelated 0.58 / 0.72), while the
+  tampered note is still blocked fail-closed and the hit is still wrapped UNTRUSTED + delimited.
+- New dep `@huggingface/transformers` (+ onnxruntime). It is NOT yet imported by the dev server / chat
+  path (only the demo + test), so the packaged app loads no model until 1c wires it deliberately.
+- The real-model test is opt-in (`LUCID_TEST_EMBED=1`); the normal suite stays fast and network-free.
+
+### Invariants preserved
+
+Same `Embedder` seam (#frozen-contract spirit - callers/tests unchanged); the fail-closed gate runs
+UPSTREAM of the embedder, so poisoned text is never embedded (#3/#5); keystone #2 holds - RAG chunks are
+retrieval context, never semantic-memory promotion.
+
+### Relates to
+
+ADR-0058 (the seam this fills), ADR-0053 (RAG scope: WASM / bundled weights / air-gap / the deferred PDF
++ UI), CLAUDE.md invariants #2 (transformers.js is JS/WASM, not a second Python) / #3 / #5 + keystone #2.
