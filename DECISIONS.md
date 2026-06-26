@@ -5490,3 +5490,85 @@ backend is chosen, it stays UPSTREAM-gated and air-gap (local weights, no networ
 
 ADR-0063 (the embedder that needs a shipped backend), ADR-0053 (the WASM / native-free assumption this
 finding challenges), ADR-0064 (sibling 1c slice, PDF), CLAUDE.md invariant #3 + keystone #2.
+
+## ADR-0067 - P-GOAL.13: per-command Speed<->Risk dial for the loop + tools/blocks in the AAR (SCOPE/PLAN)
+
+**Date:** 2026-06-26
+**Status:** Proposed - SCOPE/PLAN (design; build is its own increment[s]).
+**Increment:** P-GOAL.13. DEPENDS ON ADR-0066's exec classifier (P-EXEC.1) - the dial reads its risk tier.
+
+### Context
+
+ADR-0066 added a per-action exec gate for INTERACTIVE use (prompt the human). The `/goal` loop runs
+UNATTENDED, where there is no human to prompt - so the same risk awareness has to become a STANDING
+posture the user sets before the run. The ask: in the loop's advanced settings, a green->red "plasma"
+slider PER COMMAND TYPE trading speed against risk, in a popover; and the After-Action Report should call
+out which tools ran and what got blocked. The AAR already tallies tool calls by type
+(`LoopMetrics.toolCalls`, loop_report.ts) but folds blocks into a generic `errors` list - there is no
+first-class "blocks" dimension yet.
+
+### Decision
+
+**1. A graded risk ladder (extends ADR-0066's binary classifier).** `classifyCommand` is refined to
+return an ordered TIER, not just safe/risky:
+- **T0 read-only** (`ls cat grep` …) · **T1 local-mutate** (edit/write/mkdir within workspace) ·
+  **T2 reach-out** (network fetch, package install, `git push`) · **T3 destructive** (`rm`, `chmod`,
+  overwrite-`mv`, `ssh`) · **T4 catastrophic** (`sudo`, `rm -rf`, pipe-to-shell, `dd`/`mkfs`,
+  force-push / hard-reset, fork bomb).
+- T4 is the ADR-0066 ALWAYS-PROMPT set; in the loop it is **ALWAYS BLOCKED** (no human, never
+  auto-runnable) regardless of any dial. Fail-closed: an unparseable/unknown command is T3.
+
+**2. A per-command-type dial matrix (the slider popover).** In the loop's advanced settings (P-GOAL.8),
+a popover module shows one **green->red plasma slider per command TYPE** (the existing `normalizeToolName`
+classes: shell, edit, delete, web-fetch, web-search, subagent; read/search are fixed T0/green). Each
+slider sets that type's **max auto-run tier** = the speed<->risk trade:
+- green/left = T0 only (auto-run safe, BLOCK everything riskier - slowest, safest, most blocks),
+- amber/middle = up to T1/T2,
+- red/right = up to T3 (auto-run all but the catastrophic T4 - fastest, fewest blocks).
+A command auto-runs in the loop **iff its classified tier <= that type's dial**; otherwise it is BLOCKED
+and recorded. For `shell`, the per-COMMAND tier comes from the classifier (so `ls` is T0 even when the
+shell dial is green); for the other classes the tool maps to one intrinsic tier. This per-command-type
+dial IS the loop's unattended exec policy - it supersedes ADR-0066's generic unattended allowlist for loop
+runs (the interactive per-program `lucid-exec.json` allowlist is an interactive-mode concept; the loop is
+governed by the dial). Persisted with the loop's other advanced settings.
+
+**3. Tools + blocks in the AAR.** `LoopMetrics` gains a first-class `blocks: { iter, tool, tier, reason }[]`
+(`reason` ∈ `risk-dial` | `catastrophic` | `security-gate`), and `renderLoopReport` gains a **Blocks**
+section: a count, a by-reason/by-tier breakdown, and a table of what was stopped - rendered next to the
+existing tool-calls pie. Security-gate (Unicode scanner) blocks and risk-dial blocks are tallied SEPARATELY
+(different layers, both shown). The report header also records the dial posture the run used, so an AAR is
+self-describing ("this run was set to: shell=T1, web=T0, …").
+
+### Plumbing (for the build increment[s])
+
+- `desktop/exec_policy.ts` (ADR-0066) - `classifyCommand` returns a `tier` (T0-T4); add the pure
+  `loopVerdict(dial, tier)` -> `auto` | `block`.
+- Renderer - the plasma slider is pure CSS (a green->amber->red gradient track + a glowing thumb); the
+  popover matrix lives in the goal advanced-settings panel (app.ts ~2357+); the dial matrix persists to the
+  goal settings store and rides the `/api/goal` start payload.
+- `acp_backend.ts` - in unattended loop mode, the exec branch consults `loopVerdict` instead of prompting;
+  a `block` increments the loop's block metric and rejects the tool call (fail-closed).
+- `desktop/loop_report.ts` - extend `LoopMetrics` + `renderLoopReport` with the Blocks section; the backend
+  collects blocks during the run (it already collects tools/errors).
+- `desktop/loop_report.test.ts` + `exec_policy.test.ts` - cover `loopVerdict` (every tier x every dial) and
+  the new AAR section, plus the classifier tier corpus (scanner-level rigor).
+
+### Suggested slicing
+
+(a) classifier tier + `loopVerdict` + loop gate + AAR Blocks section (the security-meaningful core, no new
+UI); (b) the plasma slider popover matrix UI on top. (a) is shippable and testable without the slider
+(defaults: a conservative dial); (b) makes it user-tunable.
+
+### Consequences / invariants
+
+- Fail-closed extends to the loop: unknown tier = T3, T4 always blocks, and a missing/zeroed dial defaults
+  to the safest (T0-only) posture - an unconfigured loop is the SAFEST loop, not the most permissive.
+- No `contracts.ts` change: blocks are loop-side metrics reusing existing emit plumbing; a dedicated
+  `exec_blocked` `EventName` stays a future increment (invariant #8). The frozen prompt prefix is untouched
+  (#6). Defense in depth on top of the scanner keystone, not a replacement.
+
+### Relates to
+
+ADR-0066 (the exec classifier this grades + drives), ADR-0062 (egress - web tools already gate; the dial's
+web rows compose with it), ADR-0054/0056 (the loop AAR this extends), ADR-0060 (unattended-loop posture),
+CLAUDE.md invariant #3 + the scanner keystone.
