@@ -9,6 +9,8 @@
 //   bun run desktop:web        # http://localhost:5319
 
 import { join } from "node:path";
+import { readFileSync } from "node:fs";
+import { buildEngineeringUpdate, renderEngineeringBrief, buildPodcastScript, renderScript } from "../harness/brief/engineering_update.ts";
 import { devSnapshot, securitySnapshot } from "../tools/web/data.ts";
 import { approveBlock, dismissBlock, liveBlocks } from "./security_log.ts";
 import { probeRateLimits } from "./ratelimit_probe.ts";
@@ -292,6 +294,16 @@ const server = Bun.serve({
         return json({ ok: true, data: codeActivityCache.data });
       }
       if (p === "/api/health") return json({ ok: true });
+      // P-BRIEF.3 (ADR-0072): generate the Executive Engineering Update from the repo's own logs. Pure +
+      // air-gap (reads DECISIONS.md/PROGRESS.md from the repo root); returns the written brief + the
+      // two-host podcast script. Audio synthesis (a TTS backend) is a later slice; this is the brief.
+      if (p === "/api/brief") {
+        const repo = join(import.meta.dir, "..");
+        const rd = (f: string) => { try { return existsSync(join(repo, f)) ? readFileSync(join(repo, f), "utf8") : ""; } catch { return ""; } };
+        const u = buildEngineeringUpdate({ label: "LucidAgentIDE", progressMd: rd("PROGRESS.md"), decisionsMd: rd("DECISIONS.md") });
+        const counts = { shipped: u.recentlyShipped.length, loadBearing: u.loadBearingDependencies.length, techDebt: u.techDebt.length, decisions: u.upcomingDecisions.length, risks: u.risks.length };
+        return json({ ok: true, data: { brief: renderEngineeringBrief(u), scriptText: renderScript(buildPodcastScript(u)), counts } });
+      }
       // In-app folder browser (works in the browser build AND Electron — the dev server
       // reads the local FS in both). Lists subdirectories + flags git repos, for Workspace.
       if (p === "/api/fs/list") {
