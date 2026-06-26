@@ -538,7 +538,12 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .goal-scrim{position:fixed;inset:0;z-index:200;background:rgba(0,0,0,.55);display:grid;place-items:center;animation:fade var(--t) var(--ease)}
 /* P-GOAL.7: larger, higher-contrast text across the whole module for easier reading */
 .goal-modal{width:min(560px,93vw);background:var(--bg-1);border:1px solid var(--line-strong);border-radius:16px;padding:22px;
-  box-shadow:0 20px 60px rgba(0,0,0,.55);display:flex;flex-direction:column;gap:9px;animation:rise var(--t-slow) var(--ease-out)}
+  box-shadow:0 20px 60px rgba(0,0,0,.55);display:flex;flex-direction:column;gap:9px;animation:rise var(--t-slow) var(--ease-out);
+  /* cap height + scroll so the action buttons (Run/Cancel) are always reachable even after the
+     Engineering-Update brief renders; without this the centered modal overflowed the viewport. */
+  max-height:92vh;overflow-y:auto;scrollbar-gutter:stable}
+/* Empty optional sections must not reserve flex-gap space (the wasted padding above Step N). */
+#goalStatsSec:empty,#goalResumeSec:empty,#goalAutoSec:empty{display:none}
 .goal-modal-h{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:16.5px;font-weight:650;color:var(--txt)}
 .goal-modal-h .ic{color:var(--accent-2)}
 .goal-h-title{display:flex;align-items:center;gap:8px}
@@ -666,6 +671,14 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .gs-mix .gs-tool{font-size:10.5px;color:var(--txt-3);background:var(--bg-1);border:1px solid var(--line);border-radius:6px;padding:2px 7px}
 .gs-mix .gs-tool b{color:var(--txt-1)}
 .gs-blocker{display:flex;align-items:center;gap:5px;margin-top:8px;font-size:11px;color:var(--txt-4)}
+/* Collapsible Loop history: auto-collapses once past step 1 (guided) or in advanced mode — the user
+   already saw it — and the header is clickable to expand (`.expanded` is the manual override). */
+.goal-stats .gs-head{cursor:pointer;user-select:none;margin-bottom:0}
+.goal-stats:not(.collapsed) .gs-head{margin-bottom:8px}
+.gs-caret{margin-left:7px;display:inline-flex;color:var(--txt-4);transition:transform var(--t)}
+.goal-stats.collapsed .gs-caret{transform:rotate(-90deg)}
+.goal-stats.collapsed .gs-grid,.goal-stats.collapsed .gs-mix,.goal-stats.collapsed .gs-blocker{display:none}
+.goal-stats.collapsed{padding-top:9px;padding-bottom:9px}
 .gs-blocker span{color:var(--txt-3)}
 /* P-GOAL.12: Pre-Flight Audit — the optional design/readiness pass that pauses the builder. */
 .goal-preflight-btn{margin:0 0 8px;display:inline-flex;align-items:center;gap:6px}

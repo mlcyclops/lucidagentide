@@ -2450,8 +2450,15 @@ function openGoalForm(): void {
   const TOTAL = steps.length;
   let mode: "guided" | "advanced" = (localStorage.getItem("lucid.goalMode") === "advanced" ? "advanced" : "guided");
   let cur = 1;
+  let statsTouched = false; // true once the user manually expands/collapses Loop history (stops auto-collapse)
   const setHidden = (sel: string, hidden: boolean) => { const e = $(sel, ov) as HTMLElement | null; if (e) e.hidden = hidden; };
   const cadenceSet = () => (($("#goalCadKind", ov) as HTMLSelectElement)?.value ?? "off") !== "off";
+  // Loop history auto-collapses once past step 1 (or in advanced) since the user already saw it; a manual
+  // click pins it. Safe to call before the async stats load — it no-ops until the panel exists.
+  const syncStats = () => {
+    const stats = ov.querySelector(".goal-stats");
+    if (stats && !statsTouched) stats.classList.toggle("collapsed", mode === "advanced" || cur > 1);
+  };
   const render = () => {
     modal.dataset.mode = mode;
     ($("#goalModeToggle", ov) as HTMLElement).textContent = mode === "guided" ? "Advanced" : "Guided walkthrough";
@@ -2470,7 +2477,15 @@ function openGoalForm(): void {
       const focusable = $(`.goal-step[data-step="${cur}"] textarea, .goal-step[data-step="${cur}"] input, .goal-step[data-step="${cur}"] select`, ov) as HTMLElement | null;
       setTimeout(() => focusable?.focus(), 30);
     }
+    syncStats();
   };
+  // Click the Loop-history header to expand/collapse it (pins the choice, overriding auto-collapse).
+  ov.addEventListener("click", (e) => {
+    if ((e.target as HTMLElement).closest?.(".gs-head")) {
+      statsTouched = true;
+      ov.querySelector(".goal-stats")?.classList.toggle("collapsed");
+    }
+  });
   $("#goalModeToggle", ov)?.addEventListener("click", () => { mode = mode === "guided" ? "advanced" : "guided"; localStorage.setItem("lucid.goalMode", mode); if (mode === "guided") cur = 1; render(); });
   $("#goalNext", ov)?.addEventListener("click", () => {
     if (cur === 1 && !($("#goalGoal", ov) as HTMLTextAreaElement).value.trim()) { showToast({ tone: "warn", title: "Add a goal", desc: "Describe what the loop should accomplish.", timeout: 2400 }); return; }
@@ -2559,7 +2574,7 @@ function openGoalForm(): void {
     }));
   });
   // P-GOAL.10 (ADR-0055): the cross-run evaluation banner (success rate / avg iters / top blocker).
-  void loadLoopStats(ov);
+  void loadLoopStats(ov).then(syncStats);
   // P-GOAL.12 (ADR-0057): the optional Pre-Flight Audit (design + readiness before building the loop).
   adoptedCriteria = "";
   $("#goalPreflight", ov)?.addEventListener("click", () => openPreflight(ov));
@@ -2731,7 +2746,7 @@ async function loadLoopStats(ov: HTMLElement): Promise<void> {
   const mix = spend + Object.entries(s.toolsByType).sort((a, b) => b[1] - a[1]).slice(0, 4)
     .map(([k, v]) => `<span class="gs-tool">${esc(k)} <b>${v}</b></span>`).join("");
   sec.innerHTML = `<div class="goal-stats" data-tone="${tone}">
-    <div class="gs-head">${icon("graph", 13)} Loop history <span class="gs-sum">${esc(data!.summary)}</span></div>
+    <div class="gs-head">${icon("graph", 13)} Loop history <span class="gs-sum">${esc(data!.summary)}</span><span class="gs-caret">${icon("chevron", 12)}</span></div>
     <div class="gs-grid">
       <div class="gs-cell"><span class="gs-n">${pct}%</span><span class="gs-l">met</span></div>
       <div class="gs-cell"><span class="gs-n">${esc(iters)}</span><span class="gs-l">avg iters to win</span></div>
