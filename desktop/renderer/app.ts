@@ -2413,6 +2413,19 @@ function openGoalForm(): void {
           <span id="goalCadInterval" hidden><input id="goalCadEvery" class="prov-key goal-cadn" type="number" min="1" value="60" /><select id="goalCadUnit" class="prov-key goal-cadu"><option value="min">minutes</option><option value="hour">hours</option></select></span>
           <input id="goalCadTime" class="prov-key goal-cadt" type="time" value="09:00" hidden />
         </div>
+        <details class="goal-eu">
+          <summary>${icon("spark", 13)} Engineering Update <span class="goal-opt">an exec brief + podcast from this run</span> ${goalInfoDot("Why an Engineering Update|As the goal loop runs round after round, the ADRs, run-logs and decisions pile up, and a tired reader starts to tune out. This curated executive brief and podcast mitigates Cognitive Surrender and Information Overload, surfacing the signal in the noise during orchestration looping: what shipped, what is load-bearing, the tech debt, and the decisions that need you.")}</summary>
+          <div class="goal-eu-body">
+            <div class="goal-row"><label class="goal-lbl">Audio</label>
+              <select id="euProvider" class="prov-key">
+                <option value="script-only">Script only (no audio)</option>
+                <option value="local-tts">Local TTS — Kokoro (air-gap)</option>
+              </select>
+            </div>
+            <button type="button" class="btn-mini ok" id="euGenerate">${icon("bolt", 12)} Generate update now</button>
+            <div class="goal-eu-result" id="euResult" hidden></div>
+          </div>
+        </details>
       </section>
     </div>
     <div class="goal-modal-actions">
@@ -2494,6 +2507,29 @@ function openGoalForm(): void {
   updateGoalEstimate(ov); // initial; model names fill in once loadCheckerModel resolves
   render(); // P-GOAL.8: apply guided/advanced mode + show the right step/buttons
   wireCmdSuggest(ov); // P-GOAL.8.1: custom verify-command type-ahead
+  // P-BRIEF.3 (ADR-0072): the Engineering Update accordion — the audio-provider choice persists; Generate
+  // fetches the curated brief from the repo's logs and renders it inline (audio backend is a later slice).
+  const euProv = $("#euProvider", ov) as HTMLSelectElement | null;
+  if (euProv) {
+    euProv.value = localStorage.getItem("lucid.euProvider") || "script-only";
+    euProv.addEventListener("change", () => localStorage.setItem("lucid.euProvider", euProv.value));
+  }
+  $("#euGenerate", ov)?.addEventListener("click", async () => {
+    const btn = $("#euGenerate", ov) as HTMLButtonElement;
+    const out = $("#euResult", ov) as HTMLElement;
+    const prev = btn.innerHTML;
+    btn.disabled = true; btn.textContent = "Generating…";
+    try {
+      const data = await bridge.engineeringBrief();
+      if (!data) { showToast({ tone: "warn", title: "Could not generate", desc: "The local engine didn't return a brief.", timeout: 2600 }); return; }
+      out.hidden = false;
+      const counts = `<div class="goal-eu-counts">${Object.entries(data.counts).map(([k, v]) => `<b>${v}</b> ${k}`).join(" · ")}</div>`;
+      const audioNote = euProv?.value === "local-tts"
+        ? `<div class="goal-opt">Audio: point a local TTS endpoint (Kokoro) at the app to render the podcast — the two-host script is ready.</div>`
+        : "";
+      out.innerHTML = counts + audioNote + renderMarkdown(data.brief);
+    } finally { btn.disabled = false; btn.innerHTML = prev; }
+  });
   $("#goalRun", ov)?.addEventListener("click", async () => {
     const { goal, command, maxIters, budgetUsd, criteria } = readSpec();
     if (!goal) { showToast({ tone: "warn", title: "Add a goal", desc: "Describe what the loop should accomplish.", timeout: 2400 }); return; }

@@ -1730,3 +1730,14 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
   box-shadow:0 2px 8px rgba(0,0,0,.35)}
 pre:hover .code-ide-btn,pre:focus-within .code-ide-btn{opacity:1}
 .code-ide-btn:hover{color:var(--txt);border-color:var(--line-strong)}
+
+/* P-BRIEF.3 (ADR-0072): the Engineering Update accordion inside the goal modal. */
+.goal-eu { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 10px; }
+.goal-eu > summary { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 6px; font-weight: 600; color: var(--txt); }
+.goal-eu > summary::-webkit-details-marker { display: none; }
+.goal-eu > summary:hover { color: var(--accent); }
+.goal-eu-body { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }
+.goal-eu-result { margin-top: 8px; max-height: 300px; overflow: auto; font-size: 12px; line-height: 1.55; border: 1px solid var(--line-soft); border-radius: 8px; padding: 10px 12px; background: var(--bg-2); color: var(--txt-2); }
+.goal-eu-result h1, .goal-eu-result h2 { font-size: 13px; margin: 10px 0 4px; color: var(--txt); }
+.goal-eu-counts { font-size: 11px; color: var(--txt-3); margin-bottom: 8px; }
+.goal-eu-counts b { color: var(--accent); }

@@ -209,6 +209,8 @@ export interface LucidBridge {
   /** Release one quarantined call - the audited fail-closed override (ADR-0019 C). */
   securityApprove(id: string): Promise<BlockRecord | null>;
   securityDismiss(id: string): Promise<BlockRecord | null>;
+  /** P-BRIEF.3 (ADR-0072): the Executive Engineering Update generated from the repo's own logs. */
+  engineeringBrief(): Promise<{ brief: string; scriptText: string; counts: Record<string, number> } | null>;
   memory(): Promise<MemorySnapshot | null>;
   budget(): Promise<{ label: string; used: number; status: string; resetsAt: number | null }[] | null>;
   // P10.3: live API-key rate-limit probe (opt-in). `rateLimits()` returns probed limits ([] when off);
@@ -414,6 +416,7 @@ export const bridge: LucidBridge = {
   security: () => getData("/api/security"),
   securityApprove: (id) => post("/api/security/approve", { id }),
   securityDismiss: (id) => post("/api/security/dismiss", { id }),
+  engineeringBrief: () => getData("/api/brief"),
   memory: () => getData("/api/memory"),
   budget: () => getData("/api/budget"),
   rateLimits: (force) => getData(`/api/ratelimits${force ? "?force=1" : ""}`),

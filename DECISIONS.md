@@ -5933,3 +5933,50 @@ transport keep it testable offline; no `contracts.ts` change; the frozen prefix 
 
 ADR-0070 (the seam + generator this fills), the deep-research pass (Kokoro as the verified air-gap TTS),
 ADR-0062/0068 (egress + managed-config will govern a hosted endpoint when delivery lands in P-BRIEF.2b).
+
+## ADR-0072 - P-BRIEF.3: the Engineering Update in the Goal Loop UI (accordion + premium tooltip)
+
+**Date:** 2026-06-26
+**Status:** Accepted - BUILT (the accordion + the generate endpoint + the written brief inline). Audio
+playback + Slack/Workspace delivery remain P-BRIEF.2b.
+**Increment:** P-BRIEF.3. Surfaces P-BRIEF.1/.2 (ADR-0070/0071) from the Goal Loop UI.
+
+### Context
+
+The generator (ADR-0070) and a TTS backend (ADR-0071) exist as harness modules. They needed a UI: the
+user asked for the config to live "as an accordion drop inside one of the steps or advanced config" of the
+Goal Loop, with a PREMIUM hover tooltip explaining the value.
+
+### Decision
+
+- **A self-contained `<details class="goal-eu">` accordion** inside the goal modal's last step (no new
+  required step, so the guided 1→Run flow is undisturbed). It holds an audio-provider `<select>`
+  (Script only | Local TTS - Kokoro), a "Generate update now" button, and an inline result area. The
+  provider choice persists to `localStorage` (`lucid.euProvider`).
+- **A premium tooltip** via the existing `goalInfoDot("Title|Body")` (the project's "premium info dot"
+  using the global `data-tip`), with the user's exact framing: the curated brief + podcast mitigates
+  **"Cognitive Surrender and Information Overload"** and surfaces the **signal in the noise during
+  orchestration looping** - what shipped, what is load-bearing, the tech debt, and the decisions that
+  need a human.
+- **A read-only server route `GET /api/brief`** (desktop/dev.ts): reads the repo's own DECISIONS.md /
+  PROGRESS.md, runs the PURE `buildEngineeringUpdate` (ADR-0070), and returns `{ brief, scriptText,
+  counts }`. The renderer renders the brief markdown with the existing DOMPurify-backed `renderMarkdown`.
+  `bridge.engineeringBrief()` is the typed client.
+
+### Verification
+
+Live in the dev server (preview): `GET /api/brief` → 200 with the real repo's counts (6 shipped, 1
+load-bearing, 7 tech-debt, 12 upcoming decisions); the served `/app.js` carries the `goal-eu` accordion,
+the `euGenerate` handler, and the exact tooltip copy; full typecheck clean; no console errors.
+
+### Consequences / invariants
+
+- The route is read-only + air-gap (it summarizes already-local logs; nothing leaves the host). Audio is
+  not generated here - the accordion configures provider intent; rendering audio is P-BRIEF.2b, where a
+  hosted endpoint goes through egress (ADR-0062) + managed-config (ADR-0068).
+- No `contracts.ts` change; the frozen prefix is untouched; the security gate is unaffected.
+
+### Relates to
+
+ADR-0070 (the generator the route calls), ADR-0071 (the TTS backend the provider picker will drive),
+P-GOAL.8 (the goal modal + `goalInfoDot` this extends), the deep-research pass that scoped the feature.
