@@ -5980,3 +5980,61 @@ the `euGenerate` handler, and the exact tooltip copy; full typecheck clean; no c
 
 ADR-0070 (the generator the route calls), ADR-0071 (the TTS backend the provider picker will drive),
 P-GOAL.8 (the goal modal + `goalInfoDot` this extends), the deep-research pass that scoped the feature.
+
+## ADR-0073 - P-STT.1: speech-to-text (mic input) behind a vendor-agnostic transcription seam
+
+**Date:** 2026-06-26
+**Status:** Accepted - BUILT (the seam + the OpenAI-compatible/Whisper adapter). The mic UI in the chat +
+goal composer is P-STT.2.
+**Increment:** P-STT.1. The symmetric mirror of the P-BRIEF.2 TTS backend (ADR-0071) — voice IN, where
+P-BRIEF was voice OUT.
+
+### Context
+
+With TTS shipped (ADR-0070/0071), the reverse — dictating a goal/prompt by mic, like Claude Code — lands
+on two of this product's stated values: accessibility (older adults / vision-impaired, per the README) and
+hands-free operation during long unattended loops. This builds the air-gap-clean core; the mic button is a
+follow-on slice.
+
+### Decision - one TranscriptionBackend seam; first backend is OpenAI-compatible (local Whisper)
+
+`harness/voice/transcription.ts` adds `TranscriptionBackend { transcribe(audio, opts) -> TranscriptionResult }`
+and a first concrete `OpenAiCompatibleSttBackend` that POSTs the audio as multipart to
+`{baseUrl}/v1/audio/transcriptions` — the shape a SELF-HOSTED Whisper server (whisper.cpp / faster-whisper)
+exposes, and any OpenAI-compatible endpoint. Chosen first for the same reasons as the Kokoro TTS adapter:
+- **Air-gap default** — a local Whisper means audio NEVER leaves the host; no cloud account.
+- **No new Python (invariant #2)** — a TS HTTP client to a transcription server, not a vendored model.
+- **No new trust surface** — the returned transcript is ordinary USER INPUT; it enters the agent through
+  the SAME scanned path as typed text. STT adds capture, not a new ingestion channel.
+
+**Testable + fail-safe.** The transport is INJECTABLE (`fetchImpl`); empty audio short-circuits with no
+network call; any error (endpoint down, non-200, missing `text`) returns an EMPTY transcript with a note
+rather than throwing — a broken STT endpoint never crashes the composer, the user just types instead. The
+audio buffer is copied before the multipart blob, so a detaching transport can't corrupt the caller's bytes.
+
+### Consequences
+
+- Env surface mirrors TTS: `LUCID_STT_BASE_URL` (+ optional `_API_KEY`, `_MODEL`). The same adapter serves
+  a localhost Whisper (air-gap) or any hosted OpenAI-compatible STT.
+- `make demo-P-STT.1` runs audio-bytes → transcript via a mock by default (offline/CI) and live with
+  `LUCID_STT_BASE_URL`; it also proves the fail-safe (broken endpoint → empty text).
+- A hosted endpoint is opt-in and must be governed by egress (ADR-0062) + managed-config (ADR-0068) so a
+  locked-down / air-gapped deployment can FORBID cloud STT and pin to the local server (sovereignty).
+
+### Deferred to P-STT.2 (the UI)
+
+A mic button in the chat composer + the goal input: record → `transcribe` → drop the text into the field.
+Two guardrails to honor there: (1) under managed lockdown, only a local STT endpoint is selectable (audio
+sovereignty); (2) voice must NOT confirm a CATASTROPHIC exec-approval (ADR-0066 always-prompt set) — those
+require a deliberate click, never a spoken "approve".
+
+### Invariants preserved
+
+No second Python surface (#2 — TS HTTP client); fail-safe, never fail-open; the transcript is gated by the
+existing scanner on the normal input path (#3/#5); injectable transport keeps it testable offline; no
+`contracts.ts` change; the frozen prefix is untouched.
+
+### Relates to
+
+ADR-0071 (the TTS backend this mirrors), ADR-0070 (the audio-platform-seam thesis), ADR-0062/0068 (egress +
+managed-config govern a hosted endpoint), ADR-0066 (the exec-approval guardrail for voice in P-STT.2).
