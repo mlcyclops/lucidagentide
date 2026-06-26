@@ -190,6 +190,10 @@ demo-P-RAG.1c: ## P-RAG.1c (ADR-0064): PDF -> text through the SAME scan gate �
 demo-P-BRIEF.1: ## P-BRIEF.1 (ADR-0070): Executive Engineering Update from the repo's DECISIONS/PROGRESS — written brief + two-host podcast script, air-gap clean
 	$(BUN) run harness/scripts/demo_pbrief1.ts
 
+.PHONY: demo-P-BRIEF.2
+demo-P-BRIEF.2: ## P-BRIEF.2 (ADR-0071): the exec-update script → one WAV via the OpenAI-compatible (Kokoro) TTS backend; mock transport offline, LUCID_TTS_BASE_URL for live
+	$(BUN) run harness/scripts/demo_pbrief2.ts
+
 .PHONY: demo-P-ASKSAGE.1
 demo-P-ASKSAGE.1: ## P-ASKSAGE.1 (ADR-0059): AskSage tool-loop diagnostics + tolerant extraction — wrapped replies recovered, empty turns flagged
 	$(BUN) run harness/scripts/demo_paskage1.ts

@@ -5880,3 +5880,56 @@ gate through egress (ADR-0062) + managed-config (ADR-0068) and keys live like ot
 `desktop/loop_report.ts` (the AAR input), DECISIONS.md/PROGRESS.md (the inputs), ADR-0067 (the loop AAR
 blocks feed Risks), ADR-0020 (MCP servers - the Workspace/Slack delivery surface), ADR-0062/0068
 (egress + managed-config govern the cloud backends), and the deep-research pass that chose the backend.
+
+## ADR-0071 - P-BRIEF.2: first audio backend — OpenAI-compatible (self-hosted Kokoro) TTS behind the seam
+
+**Date:** 2026-06-26
+**Status:** Accepted - BUILT (slice: one audio adapter). Delivery (Slack/Workspace) + the Goal Loop
+accordion + the cloud adapters (NotebookLM Enterprise, ElevenLabs) remain P-BRIEF.2b/.3.
+**Increment:** P-BRIEF.2. Fills the `PodcastBackend` seam from ADR-0070 with its first concrete backend.
+
+### Context
+
+ADR-0070 shipped the generator + the `PodcastBackend` seam with a `ScriptOnlyBackend` default. This slice
+implements the FIRST real backend so the pipeline produces actual audio.
+
+### Decision - OpenAI-compatible TTS first (air-gap, no allowlist, no new Python)
+
+`harness/brief/tts_backend.ts` adds `OpenAiCompatibleTtsBackend implements PodcastBackend`. It POSTs each
+podcast turn to `{baseUrl}/v1/audio/speech` (the shape a self-hosted **Kokoro** server exposes, and any
+OpenAI-compatible TTS endpoint), with a per-speaker voice, and concatenates the returned WAV segments
+into one briefing. Chosen as the first backend BECAUSE:
+- **Air-gap** - the research's verified offline path (Kokoro `KOKORO_LOCAL_ONLY`); no cloud account.
+- **No allowlist** - unlike ElevenLabs Studio (access-gated) and NotebookLM Enterprise (GCP project),
+  this works against a localhost server out of the box.
+- **Invariant #2** - it is a TypeScript HTTP client, NOT a second Python surface (Podcastfy, being
+  Python, is deliberately NOT vendored; we call a TTS server over HTTP instead).
+
+**Pure, testable audio stitch.** `parseWav` / `buildWav` / `concatWav` are PURE (chunk-aware - tolerant of
+LIST/fact chunks, not the naive 44-byte assumption) and unit-tested without any server. The HTTP transport
+is INJECTABLE (`fetchImpl`), so the adapter is fully tested with a mock; `make demo-P-BRIEF.2` runs the
+whole repo-logs → script → synth → WAV pipeline against a mock by default (offline/CI-safe) and against a
+real server when `LUCID_TTS_BASE_URL` is set.
+
+**Fail-safe (inherited).** Any synth error (endpoint down, non-200) degrades to a script-only result with
+the reason in `note` - the brief never hard-fails on a TTS problem. `PodcastResult` gained an additive
+`audio?: Uint8Array` (the caller persists/delivers it; the backend stays I/O-light).
+
+### Consequences
+
+- One configurable env surface: `LUCID_TTS_BASE_URL` (+ optional `_API_KEY`, `_VOICE_HOST`, `_VOICE_GUEST`).
+  The same adapter serves a localhost Kokoro (air-gap) or any hosted OpenAI-compatible TTS.
+- Multi-WAV concatenation assumes a uniform PCM format across turns (true for one server/voice config);
+  a format mismatch throws rather than emit a corrupt file.
+- Cloud adapters (NotebookLM Enterprise audioOverviews, ElevenLabs studio/podcasts) implement the SAME
+  interface later; the generator and this WAV stitch are unchanged.
+
+### Invariants preserved
+
+No second Python surface (#2 - TS HTTP client); fail-safe, never fail-open; pure audio helpers + injectable
+transport keep it testable offline; no `contracts.ts` change; the frozen prefix is untouched.
+
+### Relates to
+
+ADR-0070 (the seam + generator this fills), the deep-research pass (Kokoro as the verified air-gap TTS),
+ADR-0062/0068 (egress + managed-config will govern a hosted endpoint when delivery lands in P-BRIEF.2b).

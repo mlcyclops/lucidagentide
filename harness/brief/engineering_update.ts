@@ -176,7 +176,10 @@ export interface PodcastScript { title: string; turns: PodcastTurn[] }
 export interface PodcastResult {
   backendId: string;
   script: PodcastScript;
-  /** Absolute path to generated audio, when a real backend produced it. */
+  /** Generated audio bytes (e.g. a WAV), when a real backend produced them. The caller persists/delivers
+   *  them - the backend stays I/O-light and testable. */
+  audio?: Uint8Array;
+  /** Absolute path to generated audio, when a backend wrote one. */
   audioPath?: string;
   note: string;
 }
