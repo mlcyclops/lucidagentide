@@ -227,6 +227,15 @@ It's a **desktop app you can just download and run** (Windows installer/portable
 > Read-only and **metadata-only** by construction (no code, prompts, or CUI leave the host); the
 > analytics methodology is proprietary.
 
+> **🛡️ Central policy & SIEM audit (premium, coming soon).** The same per-action safety the app enforces
+> locally - the exec-approval gate and the loop's Speed↔Risk dial - becomes **centrally governable** by an
+> org admin through the tools you already run (**Group Policy / Intune / Jamf / Ansible**): set and **lock**
+> the risk posture fleet-wide, and stream a **metadata-only security-audit feed** to your **SIEM**
+> (Splunk, Elastic, ACAS, and AWS / Azure / GCP security logging) for SOC visibility. The enabling seams
+> are in this OSS core (managed-config + an audit-export interface); the policy templates and SIEM
+> connectors are a separately-licensed add-on. Metadata-only by construction - no code, prompts, or CUI
+> leave the host.
+
 ---
 
 ## <img src=".github/assets/icons/architecture.svg" width="28" align="top" alt=""> Architecture
@@ -418,6 +427,8 @@ table below is the recent slice; [`PROGRESS.md`](PROGRESS.md) has the full per-s
 | Theme | ADR |
 |:--|:--|
 | **Knowledge & RAG** - local PDF/image ingest into an air-gapped DuckDB vector store + AskSage dataset training | [ADR-0053](DECISIONS.md) |
+| **Exec-tool safety** - per-action approval for `bash`/`eval` + a per-command **Speed↔Risk dial** for the unattended loop, with tools & blocks in the After-Action Report | [ADR-0066/0067](DECISIONS.md) |
+| **Enterprise governance** - centrally-managed (GPO / MDM) security policy + a SIEM-ready, metadata-only security-audit export seam | [ADR-0068/0069](DECISIONS.md) |
 | Prompt/response traceability · dev-mode logging deepening | [ADR-0009](DECISIONS.md) |
 
 See [`PROGRESS.md`](PROGRESS.md) for the per-session log (shipped / stubbed / next).
