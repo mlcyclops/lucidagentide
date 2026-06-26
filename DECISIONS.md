@@ -5355,3 +5355,73 @@ retrieval context, never semantic-memory promotion.
 
 ADR-0058 (the seam this fills), ADR-0053 (RAG scope: WASM / bundled weights / air-gap / the deferred PDF
 + UI), CLAUDE.md invariants #2 (transformers.js is JS/WASM, not a second Python) / #3 / #5 + keystone #2.
+
+## ADR-0064 - P-RAG.1c (slice 1): PDF ingest through the unchanged scan gate
+
+**Date:** 2026-06-25
+**Status:** Accepted - BUILT.
+**Increment:** P-RAG.1c, slice 1 of 4 (PDF; remaining: WASM packaging, per-turn injection, ingest UI + image captioning).
+
+### Context
+
+ADR-0053 paired the embedder with `unpdf` PDF->text; ADR-0063 deferred PDF to P-RAG.1c to keep the
+embedder a clean increment. This slice adds PDF as an ingest SOURCE - the first of P-RAG.1c's four
+independent slices - without touching the security-load-bearing ingest core.
+
+### Decision - a PDF is just another text source; the gate is unchanged
+
+`harness/knowledge/pdf.ts` adds two functions and NO new trust path:
+
+- `extractPdfText(data)` pulls the text layer out page-by-page via **`unpdf`** (pdf.js serverless
+  build - pure JS, no native binary, so it stays air-gap clean and bundles into the packaged app).
+- `ingestPdf(args)` extracts, joins the pages with a blank line, and hands the text to the UNCHANGED
+  `ingestText` (ADR-0058). So every page is chunked, **SCANNED fail-closed**, embedded, and stored
+  exactly like a `.txt` source - poisoned text lifted out of a PDF is gated by the same DEFAULT_POLICY.
+
+**Library choice - `unpdf`, not the transitively-present `mupdf`.** `mupdf@1.27` is only a transitive
+dep of `markit-ai` (fragile - vanishes if that dep moves). `unpdf` is added as a DIRECT dependency, is
+purpose-built for text extraction, and is the library ADR-0053 named. Both are pure-JS/WASM; `unpdf` is
+the lighter, intentional choice.
+
+**Fail-closed posture (two real surfaces, both proven).**
+- A buffer with no `%PDF-` header, or one pdf.js cannot parse, **THROWS** - it is never read as empty
+  text (a corrupt upload must not look like "clean, nothing to store"). The demo asserts a corrupt PDF
+  throws and leaves the store count unchanged.
+- A PDF whose extracted text trips the scanner is blocked per-chunk, and a dead scanner blocks every
+  chunk - the same gate as text, covered by `pdf.test.ts` (a POISON page + a dead scanner).
+
+**Honest scope note - the standard-font round-trip strips Unicode tricks.** A bidi/zero-width payload
+embedded in a Helvetica content stream does NOT survive text extraction (it maps to ligatures/spaces
+before the scanner sees it). So the threat the scanner catches on a PDF is poison in the *recovered*
+text, not glyph-level Unicode attacks that extraction already neutralizes. The demo therefore proves the
+PDF-boundary fail-closed with a corrupt buffer, and the per-chunk gate is proven in tests with an ASCII
+marker - we do not stage a bidi-in-PDF demo that would misrepresent what stops it.
+
+**Non-destructive extract.** pdf.js TRANSFERS (detaches) the typed array it is handed; `extractPdfText`
+copies (`data.slice()`) first, so it never corrupts the caller's buffer and is safe to call twice.
+
+**Test/demo fixture, no binary in git.** `pdf_fixture.ts` emits a minimal valid PDF (one Helvetica line
+per page, correct xref offsets) so the suite needs no checked-in `.pdf`. It is a test-only writer, never
+imported by production ingest.
+
+### Consequences
+
+- `make demo-P-RAG.1c` proves end-to-end: a real 3-page PDF -> scan gate -> real bge-small embeddings ->
+  a zero-shared-word query ranks the right page first (kittens d=0.45 vs 0.58 / 0.70); a corrupt PDF
+  fails closed; the hit is wrapped UNTRUSTED + delimited.
+- New DIRECT dep `unpdf` (pure JS). Not yet imported by the dev server / chat path - only `pdf.ts`, its
+  test, and the demo - so the packaged app pulls in no PDF code until a later slice wires the ingest UI.
+- A scanned image-only PDF (no text layer) yields zero chunks, not an error - OCR / image captioning is
+  a separate later 1c slice.
+
+### Invariants preserved
+
+The scan gate runs UPSTREAM of the embedder on PDF-extracted text exactly as on `.txt` (#3 fail-closed,
+#5 untrusted-only-delimited); `unpdf` is JS/WASM, not a second Python surface (#2); `ingestText` and the
+`Embedder` seam are untouched (frozen-contract spirit); keystone #2 holds - PDF chunks are retrieval
+context, never semantic-memory promotion.
+
+### Relates to
+
+ADR-0063 (the embedder this feeds), ADR-0058 (the ingest seam it reuses), ADR-0053 (RAG scope: named
+`unpdf`, air-gap, the remaining 1c slices), CLAUDE.md invariants #2 / #3 / #5 + keystone #2.

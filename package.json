@@ -44,6 +44,7 @@
     "demo-P-SKILL.1": "bun run harness/scripts/demo_pskill1.ts",
     "demo-P-RAG.1": "bun run harness/scripts/demo_prag1.ts",
     "demo-P-RAG.1b": "bun run harness/scripts/demo_prag1b.ts",
+    "demo-P-RAG.1c": "bun run harness/scripts/demo_prag1c.ts",
     "demo-P-ASKSAGE.1": "bun run harness/scripts/demo_paskage1.ts",
     "dashboards": "bun run harness/scripts/materialize_dashboards.ts",
     "omp:secure": "omp -e harness/omp/security_extension.ts -e harness/omp/token_speed_extension.ts",
@@ -63,7 +64,8 @@
     "arktype": "^2.2.1",
     "dompurify": "^3.4.11",
     "katex": "^0.17.0",
-    "marked": "^18.0.5"
+    "marked": "^18.0.5",
+    "unpdf": "^1.6.2"
   },
   "devDependencies": {
     "@types/bun": "latest",
