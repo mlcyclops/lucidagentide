@@ -5490,3 +5490,116 @@ backend is chosen, it stays UPSTREAM-gated and air-gap (local weights, no networ
 
 ADR-0063 (the embedder that needs a shipped backend), ADR-0053 (the WASM / native-free assumption this
 finding challenges), ADR-0064 (sibling 1c slice, PDF), CLAUDE.md invariant #3 + keystone #2.
+
+## ADR-0066 - P-EXEC.1: per-action approval for the agent's exec tools (bash + eval) (SCOPE/PLAN)
+
+**Date:** 2026-06-26
+**Status:** Proposed - SCOPE/PLAN (design locked + refined; implementation is the next increment).
+**Increment:** P-EXEC.1 (v1 = bash + eval). ssh + task fast-follow as P-EXEC.2.
+**Refined 2026-06-26:** program-level key (kept simple) + a non-silenceable catastrophic ALWAYS-PROMPT
+set; added `allow-turn` (session-scoped, in-memory); exec danger-mode is a SEPARATE toggle from egress;
+safe-program-dangerous-flag table; dropped precise out-of-workspace path analysis.
+
+### Context - the gap
+
+omp's permission schema already "requires confirmation for exec tools such as bash, eval, browser,
+task, and ssh." P-EGRESS.1 (ADR-0062) closed that gap for the NETWORK tools: `acp_config.yml` forces
+them to `prompt`, and the desktop intercepts `session/request_permission` to show a per-website dialog
+EVEN in Agent mode, fail-closed. But the desktop's handler (acp_backend.ts) auto-approves everything
+else in Agent / Plan mode (the default). So `bash`, `eval`, `ssh`, `task` run with NO human gate.
+
+The in-process Unicode scanner still scans every tool call - but it catches MALFORMED / hidden content
+(bidi, zero-width, homoglyph), NOT a perfectly well-formed destructive command: `rm -rf`,
+`curl … | sh`, `dd`, `sudo`, `git reset --hard`, `ssh root@new-host`. Those are exactly the actions a
+security/provenance product must put a human in front of. This is DEFENSE IN DEPTH, a distinct layer
+from the scanner keystone - not a replacement for it.
+
+### Decision - hybrid: a risk tier decides WHETHER to prompt; egress-style memory remembers the answer
+
+Mirror the egress design (a pure verdict + pure apply + thin persistence + fail-closed), adding a risk
+classifier so we do not nag on read-only commands.
+
+**1. Risk tiering (the hard, over-tested part).** A pure `classifyCommand(cmd)` returns
+`{ risk: "safe" | "risky", key: string | null }`:
+- **safe** - argv0 is on a conservative read-only allowlist (`ls cat head tail grep rg find pwd echo wc
+  which file stat`, read-only `git status|diff|log|show|branch`) AND the command carries NO
+  semantics-changing markers AND no segment trips the **safe-program-dangerous-flag table** (refinement
+  #2): a program that is read-only by default but destructive under a flag - `find -delete` / `find
+  -exec`, `tar -x`, `sort -o`, `tee`, `xargs <risky>` - is forced to RISKY. Safe → auto-approve in Agent
+  (still scanned).
+- **risky** - ANY of: a mutating/dangerous program (`rm mv dd chmod chown sudo doas mkfs kill`), a
+  network fetch (`curl wget nc scp ssh`), pipe-to-interpreter (`| sh|bash|python|node`), output
+  redirection (`> >>`), command substitution (`$(…)` / backticks), chaining into a risky segment
+  (`; && ||`), or package installs (`npm i`, `pip install`). Risky → prompt. **We do NOT attempt precise
+  "writes outside the workspace" path analysis** (refinement #5 - unreliable from a raw command string and
+  invites false confidence); redirection + write-capable-program markers + fail-closed cover it.
+- **eval is ALWAYS risky** (arbitrary code execution) - it never auto-approves.
+- **Fail-closed:** anything unparseable, compound-and-ambiguous, or simply unknown is classified RISKY.
+  The classifier is a correctness keystone like the scanner: a clean read-only corpus must not produce
+  prompts that matter, and a dangerous corpus must be 100% flagged. Over-test with fixtures.
+
+**2. Standing decisions (the memory), keyed by PROGRAM.** When a risky call prompts, the dialog offers
+five choices mapped to an `ExecChoice` folded into `~/.omp/lucid-exec.json` via a pure `applyExecChoice` /
+`execVerdict`:
+- `allow-once` → approve, remember nothing.
+- `allow-turn` → approve + auto-allow matching risky calls for the REST OF THIS TURN/RUN only
+  (refinement #3 - the missing middle for a legit multi-step risky sequence). IN-MEMORY ONLY: never
+  written to `lucid-exec.json`, auto-expires when the turn/run ends. Lives on the backend turn state,
+  not the store.
+- `allow-program` → approve + auto-allow this argv0 (`git`, `npm`, …) from now on (persisted).
+- `danger` → auto-allow ALL exec from now on. **A SEPARATE toggle from egress danger-mode** (refinement
+  #4): it lives in `lucid-exec.json` and is never coupled to `lucid-egress.json` - enabling allow-all
+  browsing must never enable allow-all shell (shell is the bigger blast radius).
+- `deny` → block, no persistence.
+
+**Keying = PROGRAM (argv0), with a non-silenceable catastrophic set.** The maintainer chose the simpler
+program-level key over program+subcommand. To keep that simple key from re-opening the worst hole (an
+`allow-program` for `git` would otherwise auto-run `git reset --hard`), a small fixed
+**ALWAYS-PROMPT set ALWAYS prompts regardless of any standing allow or danger-mode** - mirroring how an
+egress `ask-site` pin overrides danger: `sudo`/`doas`, `rm -rf`, pipe-to-interpreter, `dd`/`mkfs`, a fork
+bomb, and `git reset --hard` / `git clean -f*` / `git push --force`. So a program-allow silences the
+ordinary forms of that program but never a catastrophic one. A compound/unparseable command exposes ONLY
+`allow-once` + `allow-turn` + `deny` (no safe program key to pin).
+
+**3. Unattended automations block risky, run safe + pre-approved.** A `/goal` loop sets
+`permissionMode:"auto"` (acp_backend.ts) and has no human to ask. There, the exec gate consults ONLY the
+PERSISTED standing allowlist + exec danger-mode + the safe tier: a risky command with no standing allow is
+BLOCKED (omp surfaces a rejected tool call; the loop records it). `allow-turn` is interactive-only (no
+human = nothing to scope to), and the catastrophic ALWAYS-PROMPT set can never be auto-allowed, so it is
+BLOCKED unattended. No silent auto-approve of an unrecognized risky command - fail-closed even when nobody
+is watching.
+
+### Plumbing (for the build increment)
+
+- `desktop/exec_policy.ts` - mirrors `egress_policy.ts`: `ExecChoice`/`ExecStore`/`ExecVerdict`, pure
+  `execVerdict` + `applyExecChoice`, `loadExec`/`recordExec`, the pure `classifyCommand` (with the
+  safe-program-dangerous-flag table), and the fixed `ALWAYS_PROMPT` catastrophic-pattern set.
+- `harness/omp/acp_config.yml` - add `bash: prompt`, `eval: prompt` under `tools.approval`.
+- `acp_backend.ts onRequest` - a new `isExec` branch BEFORE the Agent auto-approve: classify; safe →
+  approve; risky → if it hits `ALWAYS_PROMPT` skip standing allows; else turn-scope allow (in-memory) or
+  `execDecision(key)` allow → approve; else live UI → `askExec` (mirror `askEgress`, showing the command +
+  program); else (unattended / no UI) → block. The turn-scope set lives on the backend's turn state and is
+  cleared when the turn/run ends. Fail-closed throughout.
+- Renderer - extend the existing permission dialog with an exec variant (show the command + the program
+  key); reuse the egress dialog's option rendering.
+- `desktop/exec_policy.test.ts` - verdict/apply + a heavy `classifyCommand` fixture corpus (safe corpus
+  → 0 false prompts; dangerous corpus → all flagged), the same rigor the scanner gets.
+
+### Consequences / scope
+
+- v1 covers bash + eval (highest-frequency + highest-risk). ssh (key = host - literally the egress
+  model) and task (key = subagent type) are P-EXEC.2.
+- A dedicated audit `EventName` (`exec_approved` / `exec_blocked`) is a `contracts.ts` change = its own
+  increment (invariant #8); v1 reuses the existing permission/block emit plumbing.
+- More prompts than today, but ONLY on genuinely risky actions; read-only agent work is unaffected.
+
+### Invariants preserved
+
+Fail-closed (#3) extends to a new layer; the frozen prompt prefix (#6) is untouched - this is runtime
+permission logic, not prompt bytes; the scanner keystone is unchanged - this is defense in depth ON TOP
+of it. Trust labels / event names are not redefined (no `contracts.ts` change in v1).
+
+### Relates to
+
+ADR-0062 (P-EGRESS.1 - the per-website pattern this mirrors), ADR-0028/0032 (the `task` tool + isolation,
+relevant to P-EXEC.2), CLAUDE.md invariant #3 (fail-closed) + the scanner keystone (defense in depth).
