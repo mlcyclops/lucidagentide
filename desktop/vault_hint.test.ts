@@ -48,3 +48,20 @@ test("compartment isolation: a view never surfaces the OTHER compartment's lock"
   // ...and a personal view never surfaces a locked CUI store (CUI hard isolation, ADR-0014).
   expect(lockedVaultHint(st({ scope: "personal", personalConfigured: true, personalUnlocked: true, cuiConfigured: true, cuiUnlocked: false }))).toBe("");
 });
+
+// ── P-VAULT-HINT.2 (#124): optional fact count ──────────────────────────────────────
+test("a known count enriches the hint (facts=N) without becoming content", () => {
+  const h = lockedVaultHint(st({ scope: "personal", personalConfigured: true, count: 47 }));
+  expect(h).toContain('facts="47"');
+  expect(h).toContain("about 47 stored facts");
+  expect(h).not.toContain("<user-profile"); // still just a number, never the actual facts
+});
+
+test("no/zero count → the boolean form (no facts attribute)", () => {
+  expect(lockedVaultHint(st({ scope: "personal", personalConfigured: true }))).not.toContain("facts=");
+  expect(lockedVaultHint(st({ scope: "personal", personalConfigured: true, count: 0 }))).not.toContain("facts=");
+});
+
+test("singular fact count reads naturally", () => {
+  expect(lockedVaultHint(st({ scope: "personal", personalConfigured: true, count: 1 }))).toContain("1 stored fact");
+});
