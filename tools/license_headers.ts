@@ -3,13 +3,16 @@
 
 // tools/license_headers.ts — apply the BUSL-1.1 SPDX header to FIRST-PARTY source files (idempotent).
 //
-//   bun run tools/license_headers.ts          # add missing headers
-//   bun run tools/license_headers.ts --check   # exit 1 if any file is missing one (CI guard)
+//   bun run tools/license_headers.ts                 # add missing headers across all roots
+//   bun run tools/license_headers.ts --check          # exit 1 if any file is missing one (CI guard)
+//   bun run tools/license_headers.ts <file> [<file>…] # operate ONLY on the given files (used by the
+//                                                       # pre-commit hook to header just-staged source)
 //
 // Excludes vendored / third-party / generated trees (vendor/, node_modules/, desktop/release/, .venv,
-// __pycache__, dist/) — those keep their OWN licenses and must NOT be relicensed.
+// __pycache__, dist/) — those keep their OWN licenses and must NOT be relicensed. Explicitly-named files
+// are still filtered by the same comment-style + exclusion rules, so passing a vendored path is a no-op.
 
-import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 const COPYRIGHT = "Copyright (c) 2026 TechLead 187 LLC";
@@ -39,16 +42,39 @@ function commentStyle(path: string): "hash" | "slash" | null {
   return null;
 }
 
-const check = process.argv.includes("--check");
+// True when a path lives under an excluded tree — applies to both the walk and explicit file args,
+// so handing the hook a vendored/generated path is a safe no-op.
+function excluded(path: string): boolean {
+  const p = path.replace(/\\/g, "/");
+  if (EXCLUDE_PREFIXES.some((pre) => p.startsWith(pre))) return true;
+  return p.split("/").some((seg) => EXCLUDE_SEGMENTS.has(seg));
+}
+
+const args = process.argv.slice(2);
+const check = args.includes("--check");
+const explicit = args.filter((a) => !a.startsWith("--")); // bare paths → operate only on these
+const listModified = args.includes("--list-modified"); // print each rewritten path (pre-commit hook reads this)
 let added = 0;
 const missing: string[] = [];
+const modified: string[] = [];
 
-for (const root of ROOTS) {
-  let files: string[];
-  try { files = [...walk(root)]; } catch { continue; } // a root may not exist in every checkout
-  for (const path of files) {
+// Either an explicit file list (pre-commit hook) or a full walk of the first-party roots.
+function* candidates(): Generator<string> {
+  if (explicit.length) {
+    for (const f of explicit) yield f.replace(/\\/g, "/");
+    return;
+  }
+  for (const root of ROOTS) {
+    try { yield* walk(root); } catch { /* a root may not exist in every checkout */ }
+  }
+}
+
+{
+  for (const path of candidates()) {
+    if (excluded(path)) continue;
     const style = commentStyle(path);
     if (!style) continue;
+    if (!existsSync(path)) continue; // explicit arg may be a staged deletion/rename — nothing to header
     const src = readFileSync(path, "utf8");
     if (src.includes(SPDX)) continue; // already headered — idempotent
     if (check) { missing.push(path); continue; }
@@ -64,9 +90,12 @@ for (const root of ROOTS) {
       out = header + "\n" + src;
     }
     writeFileSync(path, out);
+    modified.push(path);
     added++;
   }
 }
+
+if (listModified) for (const p of modified) console.log(`MODIFIED\t${p}`);
 
 if (check) {
   if (missing.length) { console.error(`Missing BUSL-1.1 header in ${missing.length} file(s):\n  ${missing.slice(0, 40).join("\n  ")}`); process.exit(1); }

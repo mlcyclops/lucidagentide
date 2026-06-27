@@ -1,0 +1,24 @@
+#!/usr/bin/env sh
+# Auto-apply the BUSL-1.1 SPDX header to staged first-party source before each commit.
+# Installed by `make install-hooks` (points core.hooksPath at .githooks/).
+#
+# Only files the header tool actually rewrites get re-staged, so a partial `git add -p`
+# of an already-headered file is left exactly as you staged it. The tool itself filters by
+# extension and skips vendored/generated trees, so passing every staged path is safe.
+#
+# Fail-closed: if bun or the tool errors, the commit aborts rather than slipping a header past.
+set -eu
+
+staged=$(git diff --cached --name-only --diff-filter=ACMR)
+[ -n "$staged" ] || exit 0
+
+# shellcheck disable=SC2086
+modified=$(bun run tools/license_headers.ts --list-modified $staged | sed -n 's/^MODIFIED\t//p')
+
+[ -n "$modified" ] || exit 0
+
+echo "license: added the BUSL-1.1 header to newly-staged source:"
+echo "$modified" | sed 's/^/  /'
+echo "$modified" | while IFS= read -r f; do
+  [ -n "$f" ] && git add "$f"
+done

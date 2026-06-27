@@ -21,7 +21,12 @@ PY         := $(UV) run --project $(SIDECAR_DIR) python
 # ---------------------------------------------------------------------------
 
 .PHONY: install
-install: install-harness install-sidecar ## Install harness + sidecar deps
+install: install-harness install-sidecar install-hooks ## Install harness + sidecar deps + git hooks
+
+.PHONY: install-hooks
+install-hooks: ## Point git at .githooks/ so the pre-commit license-header hook runs
+	git config core.hooksPath .githooks
+	@echo "✓ core.hooksPath -> .githooks (pre-commit applies BUSL-1.1 headers to staged source)"
 
 .PHONY: install-harness
 install-harness: ## Install Bun/TypeScript harness deps
