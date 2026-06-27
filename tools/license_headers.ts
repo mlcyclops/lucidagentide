@@ -12,7 +12,7 @@
 // __pycache__, dist/) — those keep their OWN licenses and must NOT be relicensed. Explicitly-named files
 // are still filtered by the same comment-style + exclusion rules, so passing a vendored path is a no-op.
 
-import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 const COPYRIGHT = "Copyright (c) 2026 TechLead 187 LLC";
@@ -74,8 +74,10 @@ function* candidates(): Generator<string> {
     if (excluded(path)) continue;
     const style = commentStyle(path);
     if (!style) continue;
-    if (!existsSync(path)) continue; // explicit arg may be a staged deletion/rename — nothing to header
-    const src = readFileSync(path, "utf8");
+    // Read directly (no existsSync pre-check — that's a TOCTOU race). An explicit arg may be a
+    // staged deletion/rename, so a missing file is simply skipped.
+    let src: string;
+    try { src = readFileSync(path, "utf8"); } catch { continue; }
     if (src.includes(SPDX)) continue; // already headered — idempotent
     if (check) { missing.push(path); continue; }
     const c = style === "hash" ? "#" : "//";
