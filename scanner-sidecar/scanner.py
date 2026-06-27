@@ -1,3 +1,6 @@
+# Copyright (c) 2026 TechLead 187 LLC
+# SPDX-License-Identifier: BUSL-1.1
+
 """Pure Unicode prompt-injection scanner.
 
 The ONLY Python in the harness (CLAUDE.md invariant #2). Pure function:

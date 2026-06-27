@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/knowledge/store.ts
 //
 // P-RAG.1 (ADR-0058): the local knowledge vector store. Wraps a SEPARATE knowledge.duckdb (its own

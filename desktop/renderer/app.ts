@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // desktop/renderer/app.ts - the LucidAgentIDE renderer.
 //
 // Assembles the shell (titlebar · rail · sidebar · chat · inspector · status),

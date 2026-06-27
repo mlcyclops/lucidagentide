@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/testing/echo.test.ts
 //
 // Golden-path replay test: a headless omp session driven by the no-network echo

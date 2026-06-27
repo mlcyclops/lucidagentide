@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/personal/recall.ts — P9.2: build a compact <user-profile> block from the
 // personalization store, scoped to the active compartment, for the agent to tailor
 // responses (ADR-0010 / ADR-0012).

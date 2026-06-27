@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // desktop/renderer/skills.ts
 //
 // P-IDE.2 (ADR-0029): the BUNDLED skill corpus. These ship inline (airgap-clean, auditable, no

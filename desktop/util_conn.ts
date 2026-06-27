@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // desktop/util_conn.ts — P-KG-INGEST.4 (ADR-0085): the routing contract for utility completions (import /
 // AI-learn extraction + the /goal checker). Extracted as pure functions so the fail-safe + the "when to
 // yield to chat" rule are documented and unit-testable (the spawn/ACP plumbing in acp_backend can't be).

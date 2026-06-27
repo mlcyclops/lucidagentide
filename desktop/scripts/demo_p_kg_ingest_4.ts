@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // desktop/scripts/demo_p_kg_ingest_4.ts
 //
 // Increment P-KG-INGEST.4 — TRUE ingest concurrency (issue/ADR-0085). P-KG-INGEST.3 made chat preempt

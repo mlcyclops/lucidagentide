@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/scripts/demo17_recall.ts
 //
 // ADR-0009 Phase A — cross-session memory recall. The persist half runs live when a

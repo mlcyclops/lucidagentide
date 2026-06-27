@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/scripts/demo_pcode1.ts
 //
 // ADR-0030 P-CODE.1: git-based code-activity metric. Build a throwaway git repo,

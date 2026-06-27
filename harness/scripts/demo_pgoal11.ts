@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/scripts/demo_pgoal11.ts
 //
 // P-GOAL.11 (ADR-0056): the /goal loop's live SPEND meter + budget KILL SWITCH. Self-contained (no omp):

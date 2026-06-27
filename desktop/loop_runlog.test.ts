@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // desktop/loop_runlog.test.ts — P-GOAL.10 (ADR-0055): the cross-run evaluation ledger's pure core.
 
 import { describe, expect, test } from "bun:test";

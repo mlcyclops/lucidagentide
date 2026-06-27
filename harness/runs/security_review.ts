@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/runs/security_review.ts
 //
 // The security-review subagent (P5.2): a read-only / quarantine child run for

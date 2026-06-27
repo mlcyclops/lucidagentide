@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/runs/replay.ts
 //
 // Replay a run (P7.2): reconstruct the run tree, the telemetry timeline across the

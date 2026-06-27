@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/memory/compaction.ts
 //
 // Security-aware compaction (P4.2). A deliberate transform, not an emergency

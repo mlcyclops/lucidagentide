@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // desktop/checker_model.ts
 //
 // P-GOAL.6 (ADR-0048): pick a good CHECKER model for the /goal loop. The loop's checker (ADR-0046) runs

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // desktop/acp_backend.ts
 //
 // A real omp-ACP-backed chat/config singleton for the dev server. This is what

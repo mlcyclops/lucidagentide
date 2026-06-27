@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/runs/task_gate.test.ts — P-TASK.3 (ADR-0028): task dispatch lineage + pre-dispatch gating.
 
 import { test, expect, beforeAll, afterAll, beforeEach, afterEach } from "bun:test";

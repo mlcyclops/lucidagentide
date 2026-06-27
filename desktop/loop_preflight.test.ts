@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // desktop/loop_preflight.test.ts — P-GOAL.12 (ADR-0057): the Pre-Flight Audit's pure core.
 
 import { describe, expect, test } from "bun:test";

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // desktop/import_job.ts — P-KG-INGEST.1 (ADR-0076): run a chat-history import as a tracked BACKGROUND
 // job so the HTTP request returns immediately, the app stays usable, and the UI can show a live countdown
 // + cancel. A single active job at a time (an import is heavy and serialises through one encrypted store);

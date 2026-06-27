@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/scripts/demo09_promotion_gate.ts
 //
 // P4.3 / KEYSTONE #2: suspicious-source content cannot auto-promote into semantic

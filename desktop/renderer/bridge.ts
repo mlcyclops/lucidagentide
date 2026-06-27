@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // desktop/renderer/bridge.ts
 //
 // The single seam between the UI and the outside world. Dashboards, chat, and

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // desktop/scripts/demo_p_kg_rel_2.ts
 //
 // Increment P-KG-REL.2 — custom relation labels for manual relate (issue #122, ADR-0078). P-KG-REL.1

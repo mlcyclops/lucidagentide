@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/scripts/demo_ptps1.ts
 //
 // P-TPS.1 (ADR-0044): streaming output-token readout. Proves the property the

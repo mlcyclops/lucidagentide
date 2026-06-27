@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/personal/distiller.test.ts — P9.2: distillation pipeline + recall.
 // Over-tested on the fail-closed property: a suspicious/quarantined source MUST NOT
 // teach the personalization graph anything (keystone #2 on the personal path).

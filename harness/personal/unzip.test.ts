@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/personal/unzip.test.ts — the minimal ZIP reader used to import an export .zip without
 // a dependency. Builds real zip buffers (deflate + stored) in-memory and round-trips them.
 

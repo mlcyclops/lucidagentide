@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/scripts/demo_prag1.ts
 //
 // P-RAG.1 (ADR-0058): the local knowledge spine. Proves the end-to-end security + retrieval property

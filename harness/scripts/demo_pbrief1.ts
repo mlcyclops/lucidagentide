@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/scripts/demo_pbrief1.ts
 //
 // P-BRIEF.1 (ADR-0070): generate an Executive Engineering Update from THIS repo's own change logs -

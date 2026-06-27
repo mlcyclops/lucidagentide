@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // desktop/scripts/demo_p_kg_ingest_2.ts
 //
 // Increment P-KG-INGEST.2 — "Clear ingest sessions" bulk action (issue #123, ADR-0079). P-KG-INGEST.1b

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // desktop/ratelimit_probe.test.ts — P10.3 pure header-parser coverage. The live fetch needs a real
 // key to exercise; these lock the parsing/math that turns provider headers into the budget shape.
 import { expect, test } from "bun:test";

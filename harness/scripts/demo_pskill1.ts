@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/scripts/demo_pskill1.ts
 //
 // P-SKILL.1 (ADR-0045): gated drag-and-drop import of project skills. Proves the security property:

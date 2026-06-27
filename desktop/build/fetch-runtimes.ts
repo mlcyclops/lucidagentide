@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // desktop/build/fetch-runtimes.ts — fetch + VERIFY the static `bun` + `uv` binaries the
 // packaged app bundles into Resources/runtimes (see desktop/runtime.ts `bundled()`).
 //

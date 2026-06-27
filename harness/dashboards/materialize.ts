@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/dashboards/materialize.ts
 //
 // Materialize the dashboard views to DuckDB-exported CSVs that Observable

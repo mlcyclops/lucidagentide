@@ -1,3 +1,6 @@
+# Copyright (c) 2026 TechLead 187 LLC
+# SPDX-License-Identifier: BUSL-1.1
+
 """Adversarial fixture suite -- keystone #1 (P2.1). Over-tested on purpose.
 
 Every poisoned fixture must produce at least its expected finding types; every

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/security/gate.failclosed.test.ts
 //
 // KEYSTONE SAFETY TEST (CLAUDE.md #3, DECISIONS.md Increment 0 acceptance).

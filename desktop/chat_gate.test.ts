@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // Tests for the chat-yield gate (P-KG-INGEST.3, ADR-0081): background extraction yields to a live chat.
 
 import { expect, test } from "bun:test";

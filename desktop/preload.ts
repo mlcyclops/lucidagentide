@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // desktop/preload.ts - the native shell exposed to the renderer (contextIsolated).
 //
 // Chat, dashboards, and session config all flow over the dev server's HTTP API

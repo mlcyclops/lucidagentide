@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // desktop/personal.ts - server-side lifecycle for the encrypted personalization
 // store (ADR-0010 P9.1 + ADR-0012 compartments). The Bun dev server uses PASSPHRASE
 // custody (the OS-keystore path needs Electron safeStorage in the packaged app - a

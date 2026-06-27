@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // desktop/sessions_delete.test.ts
 //
 // Issue #53: deleting a chat from the session menu removes the omp .jsonl transcript

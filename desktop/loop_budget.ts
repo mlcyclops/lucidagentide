@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // desktop/loop_budget.ts
 //
 // P-GOAL.11 (ADR-0056): live per-loop SPEND accounting + a budget KILL SWITCH. loop-engineering's

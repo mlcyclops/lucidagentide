@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/voice/transcription.test.ts — the OpenAI-compatible STT backend (P-STT.1, ADR-0073). Asserts the
 // multipart request shape (model/language/file), the transcript round-trip, the empty-audio short-circuit,
 // and the fail-safe (transport error / non-200 → empty text, never throws).

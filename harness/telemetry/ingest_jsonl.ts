@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/telemetry/ingest_jsonl.ts
 //
 // Ingest the telemetry JSONL stream (events.jsonl) into DuckDB's telemetry_events

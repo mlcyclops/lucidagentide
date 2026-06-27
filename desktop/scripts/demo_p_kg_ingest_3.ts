@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // desktop/scripts/demo_p_kg_ingest_3.ts
 //
 // Increment P-KG-INGEST.3 — chat stays responsive during an AI-mode ingest (issue #125, ADR-0081).

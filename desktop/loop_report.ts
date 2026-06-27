@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // desktop/loop_report.ts
 //
 // P-GOAL.9 (ADR-0054): the loop's AFTER-ACTION REPORT (AAR) and the pure helpers behind the loop's

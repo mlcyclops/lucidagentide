@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/memory/resume.ts
 //
 // Resume a run from durable state SAFELY (PRD Phase 4: "a run can resume from

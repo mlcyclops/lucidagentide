@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // desktop/path_guard.ts — M1 (ADR-0022): filesystem path containment.
 //
 // The in-app folder browser (/api/fs/list) takes a directory path straight from

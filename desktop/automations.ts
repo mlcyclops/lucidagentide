@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // desktop/automations.ts
 //
 // P-GOAL.5 (ADR-0047): scheduled AUTOMATIONS — the loop's "heartbeat", the last Loop-Engineering

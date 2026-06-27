@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // Tests for the export-toast affordance plan (increment B-KG.2, issue #115).
 
 import { describe, expect, test } from "bun:test";

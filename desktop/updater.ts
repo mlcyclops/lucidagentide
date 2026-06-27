@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // desktop/updater.ts - in-app auto-update via electron-updater.
 //
 // Packaged builds check an update feed on launch, selected by managed-config

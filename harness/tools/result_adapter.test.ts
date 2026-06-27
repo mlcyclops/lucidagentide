@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/tools/result_adapter.test.ts
 //
 // The frozen boundary (ADR-0003): omp AgentToolResult <-> PRD ToolResult.

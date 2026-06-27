@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/personal/distiller.ts — P9.2: learn durable facts ABOUT THE USER from a
 // conversation turn, gate them fail-closed, and remember the clean ones in the active
 // compartment (ADR-0010 / ADR-0012).

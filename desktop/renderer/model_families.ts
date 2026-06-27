@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // desktop/renderer/model_families.ts
 //
 // P-IDE.1 (ADR-0029): model family classification for the picker. Pure, DOM-free, and unit-tested

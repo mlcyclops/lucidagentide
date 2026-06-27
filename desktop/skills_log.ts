@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // desktop/skills_log.ts — P-IDE.3 (ADR-0029): record skill activations as telemetry.
 //
 // When a skill is activated from the picker, the GUI emits a `skill_activated` event through the

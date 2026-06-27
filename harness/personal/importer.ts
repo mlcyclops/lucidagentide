@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/personal/importer.ts — P9.7: feed a parsed third-party chat export (ChatGPT / Claude)
 // through the SAME fail-closed, gated distiller the live chat uses. Every imported USER message
 // is scanned; only clean, trusted messages contribute facts (keystone #2 — a poisoned old

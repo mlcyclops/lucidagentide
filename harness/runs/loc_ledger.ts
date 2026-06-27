@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/runs/loc_ledger.ts
 //
 // P-LOC.1 (ADR-0031): persist AI-authored line counts into the frozen `ai_loc_ledger`

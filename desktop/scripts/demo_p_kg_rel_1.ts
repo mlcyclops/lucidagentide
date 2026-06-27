@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // desktop/scripts/demo_p_kg_rel_1.ts
 //
 // Increment P-KG-REL.1 — manual relationship authoring (issue #109, ADR-0075). The graph was read-only;

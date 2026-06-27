@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // desktop/preamble.ts
 //
 // Builds the per-turn USER-TURN PREAMBLE that acp_backend prepends to the typed message

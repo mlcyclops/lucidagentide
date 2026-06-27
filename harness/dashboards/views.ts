@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/dashboards/views.ts
 //
 // Dashboard view queries (P7.1). The six security dashboard views (PRD) plus a

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/scripts/demo00_scanner.ts
 //
 // Increment 0, part 2/3: the scanner sidecar flags a poisoned string and passes

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/scripts/demo_pgoal12.ts
 //
 // P-GOAL.12 (ADR-0057): the Pre-Flight Audit. Self-contained (no omp): drives the pure core end-to-end —

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // desktop/loop_estimate.ts
 //
 // P-GOAL.6.1 (ADR-0048): a rough TOKEN estimate for a /goal loop run, shown in the launcher so the user

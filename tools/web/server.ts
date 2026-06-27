@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // tools/web/server.ts
 //
 // Local web dashboard for LucidAgentIDE — the browser-rendered version of the

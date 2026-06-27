@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // desktop/loop_preflight.ts
 //
 // P-GOAL.12 (ADR-0057): the "Pre-Flight Audit" — a structured, repeatable readiness pass the user can

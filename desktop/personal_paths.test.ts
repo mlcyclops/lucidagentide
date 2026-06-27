@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // Tests for GUI file-path containment (M2, ADR-0023): import sources and export
 // destinations must resolve inside the user's home subtree. The containment check
 // runs before the stateful (store-unlocked) guards, so these exercise it without

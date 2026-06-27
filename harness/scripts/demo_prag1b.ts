@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/scripts/demo_prag1b.ts
 //
 // P-RAG.1b (ADR-0063): the REAL embedder. Same spine as P-RAG.1, but `bge-small-en-v1.5` (384-dim)

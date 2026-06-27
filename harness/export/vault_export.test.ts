@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/export/vault_export.test.ts — P9.4: the Obsidian vault + NARA CUI archive.
 // Over-tested on the two security-load-bearing guarantees: (1) CUI is never in the
 // ordinary vault unless explicitly requested, and (2) every emitted byte is escaped —

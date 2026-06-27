@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // desktop/security_log.ts — a GUI-owned record of the security gate's live blocks (ADR-0019 C).
 //
 // WHY THIS EXISTS: the gate runs inside the omp CHILD process and can only signal a block over

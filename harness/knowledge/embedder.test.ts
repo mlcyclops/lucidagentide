@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/knowledge/embedder.test.ts — the deterministic stub embedder: shape, normalization,
 // determinism, and that shared-vocabulary texts embed closer than unrelated ones (so retrieval ranks).
 

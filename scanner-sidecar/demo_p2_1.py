@@ -1,3 +1,6 @@
+# Copyright (c) 2026 TechLead 187 LLC
+# SPDX-License-Identifier: BUSL-1.1
+
 """demo-P2.1 -- scan every adversarial fixture, assert detection, and assert the
 clean corpus is false-positive free. Stdlib only; runs with any Python 3.11+.
 

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/personal/store.ts — the encrypted personalization knowledge-graph store
 // (ADR-0010, P9.1). A private "second brain" of user-facts the agent learns and recalls
 // to tailor responses. OPT-IN, LOCAL-FIRST, ENCRYPTED-AT-REST.

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // desktop/renderer/model_families.test.ts
 //
 // P-IDE.1 (ADR-0029): the model-picker family classification. The regex ORDER (o-series before

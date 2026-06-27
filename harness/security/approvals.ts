@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/security/approvals.ts
 //
 // The human review workflow (PRD "Required review actions"). Every approval is a

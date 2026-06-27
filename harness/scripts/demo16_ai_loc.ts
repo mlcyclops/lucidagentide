@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/scripts/demo16_ai_loc.ts
 //
 // P-LOC.1 (ADR-0031): AI-LOC attribution. The security gate counts each AI-authored file

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // desktop/origin_guard.ts — H1/H2 (ADR-0022): local control-plane request guard.
 //
 // The desktop data plane (desktop/dev.ts) and the read-only web dashboard

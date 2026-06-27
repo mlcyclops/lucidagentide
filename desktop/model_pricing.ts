@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // desktop/model_pricing.ts
 //
 // P-GOAL.7 (ADR-0049): a per-model token PRICE, used to put a rough dollar figure on a /goal loop run.

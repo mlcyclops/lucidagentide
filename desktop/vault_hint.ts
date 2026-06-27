@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // desktop/vault_hint.ts — P-VAULT-HINT.1 (ADR-0077): the content-free "a locked vault exists" hint.
 //
 // When the user's encrypted memory vault is CONFIGURED but LOCKED, recallPreamble() used to inject

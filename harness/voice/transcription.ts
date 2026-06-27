@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/voice/transcription.ts
 //
 // P-STT.1 (ADR-0073): speech-to-text behind a vendor-agnostic seam — the symmetric mirror of the P-BRIEF.2

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // desktop/renderer/swr_cache.ts — P-PERF.1 (ADR-0084): a tiny localStorage-backed stale-while-revalidate
 // cache so a RETURNING user gets instant UI. On open we paint the cached value immediately, then fetch
 // fresh in the background and update only if it changed. Persisted across reloads/restarts.

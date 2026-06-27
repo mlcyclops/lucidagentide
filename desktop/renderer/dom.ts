@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // desktop/renderer/dom.ts - DOM + dashboard render primitives shared by the
 // inspector panels and status bar. Pure string/Element builders.
 

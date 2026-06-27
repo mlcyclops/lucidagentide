@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // desktop/splash.ts - tiny first-run setup window.
 //
 // Shown only when ensureRuntimes() has work to do (installing omp / provisioning

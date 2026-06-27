@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // Tests for the stale-while-revalidate cache (P-PERF.1, ADR-0084). Runs against the in-memory fallback
 // store (no localStorage in bun), reset between cases.
 

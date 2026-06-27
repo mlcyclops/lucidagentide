@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // Tests for the background-import job registry (P-KG-INGEST.1, ADR-0076).
 
 import { beforeEach, expect, test } from "bun:test";

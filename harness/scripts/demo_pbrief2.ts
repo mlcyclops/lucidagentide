@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/scripts/demo_pbrief2.ts
 //
 // P-BRIEF.2 (ADR-0071): the FIRST audio backend behind the P-BRIEF.1 seam. Builds the Executive

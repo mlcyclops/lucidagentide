@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/scripts/demo08_compaction.ts
 //
 // P4.2: security-aware compaction. The summary is generated from SANITIZED

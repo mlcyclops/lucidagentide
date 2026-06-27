@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/omp/asksage_extension.ts
 //
 // Registers the AskSage government AI gateway (https://api.civ.asksage.ai/server)

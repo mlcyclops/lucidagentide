@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // desktop/scripts/demo_p_vault_hint_2.ts
 //
 // Increment P-VAULT-HINT.2 — fact COUNT in the locked-vault hint (issue #124, ADR-0080). P-VAULT-HINT.1

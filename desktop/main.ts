@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // desktop/main.ts - Electron main process for LucidAgentIDE.
 //
 // Thin shell: it spawns the Bun dev server (desktop/dev.ts) - which serves the

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // Tests for the Knowledge-graph interaction-polish helpers (increment B-KG.1, issues #112/#113/#114).
 // These are the pure cores of: fit-on-open, idle-CPU frame budgeting, and optimistic forget.
 

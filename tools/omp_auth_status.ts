@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // tools/omp_auth_status.ts
 //
 // Reports which providers omp is actually authenticated to — including OAuth /

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // desktop/renderer/format.ts - tiny presentation helpers (no DOM).
 
 export const clamp01 = (f: number) => Math.max(0, Math.min(1, Number.isFinite(f) ? f : 0));

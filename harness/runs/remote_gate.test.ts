@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/runs/remote_gate.test.ts
 
 import { test, expect, beforeAll, afterAll, beforeEach, afterEach } from "bun:test";

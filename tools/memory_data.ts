@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // tools/memory_data.ts
 //
 // Pure data layer for the MEMORY & CONTEXT view — no rendering. Both the TUI

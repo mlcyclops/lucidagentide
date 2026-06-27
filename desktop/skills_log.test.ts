@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // desktop/skills_log.test.ts — P-IDE.3 (ADR-0029)
 //
 // The skill-activation telemetry must validate against the frozen EventName enum and carry only
