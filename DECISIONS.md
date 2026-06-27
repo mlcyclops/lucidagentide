@@ -6038,3 +6038,47 @@ existing scanner on the normal input path (#3/#5); injectable transport keeps it
 
 ADR-0071 (the TTS backend this mirrors), ADR-0070 (the audio-platform-seam thesis), ADR-0062/0068 (egress +
 managed-config govern a hosted endpoint), ADR-0066 (the exec-approval guardrail for voice in P-STT.2).
+
+## ADR-0074 - P-GOAL-DIAG.1: maker-turn event-breakdown diagnostics (the Anthropic empty-loop bug)
+
+**Date:** 2026-06-26
+**Status:** Accepted - BUILT (dev-mode diagnostics only; no behavior change).
+**Increment:** P-GOAL-DIAG.1. Same diagnostic-first pattern as P-ASKSAGE.1 (ADR-0059) for a model-specific
+loop failure.
+
+### Context
+
+The `/goal` loop is ineffective with Anthropic models: the checker repeatedly reports "no output / no
+changes / no tools called" (per-iteration log all 0s), while the SAME goal works with GPT-5.5. Root from
+the code: the loop builds `work` ONLY from `token` events (`agent_message_chunk` text) and counts tools
+ONLY from `tool_call` events; the model's THINKING (`agent_thought_chunk`) is display-only and excluded
+from `work` (acp_backend.ts; isLearnableAssistantText is true only for `token`). The strong hypothesis is
+that a Claude (Opus 4.8, high-thinking) maker turn streams thinking-only and surfaces no tool calls / no
+answer through omp's ACP path, so the checker is handed "(no output)". But the exact failure (thinking-
+only vs tools-not-surfacing vs empty/early turn end) can't be told apart from the existing logs.
+
+### Decision - capture the truth before fixing (no behavior change)
+
+Two dev-mode (developerMode-gated) `turnDiag` lines:
+- `prompt.resolved … stopReason=<r>` - the omp `session/prompt` stop reason, so an empty/early turn end is
+  visible (captured the `session/prompt` result, previously discarded).
+- `goal.iter <i> maker-turn: answer_chars=<n> thinking=<events>/<chars>c tools=<n> blocks=<n> acted=<bool>`
+  per maker iteration - the event-type breakdown. A Claude empty turn shows as `answer_chars=0 tools=0`
+  with `thinking_chars>0`, pinpointing thinking-only; tools-not-counted would show `tools=0` with
+  `answer_chars>0`; a truly empty turn shows all zeros + the stopReason.
+
+One Claude `/goal` run (Developer mode on, launched so the dev-server console is visible) now reveals the
+exact signature, and the fix follows precisely - manage maker thinking, feed thinking to the checker as a
+fallback, or correct the event mapping / file an omp-side issue.
+
+### Consequences / invariants
+
+Dev-mode only (gated by developerMode; zero overhead + zero output otherwise); no loop behavior change; no
+`contracts.ts` change; typecheck clean. The GPT-5.5 "stalls a bit after a lot of work" the user also saw is
+the by-design maker->checker pause (a separate checker model grades between iterations with no streaming) -
+not a bug; a "Checking…" indicator is a separate optional UX follow-up.
+
+### Relates to
+
+ADR-0059 (P-ASKSAGE.1 - same diagnostic-first approach), ADR-0054 (the loop + AAR), the `thinking`/`token`
+split in acp_backend.ts `onNotify` + thinking_governance.ts.
