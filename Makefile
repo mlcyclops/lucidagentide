@@ -206,6 +206,10 @@ demo-P-ASKSAGE.1: ## P-ASKSAGE.1 (ADR-0059): AskSage tool-loop diagnostics + tol
 demo-B-KG.1: ## B-KG.1 (#112/#113/#114): KG interaction polish — large graph fits on open, idle CPU halts, forget is instant + snapshot-safe
 	$(BUN) run desktop/scripts/demo_b_kg_1.ts
 
+.PHONY: demo-P-KG-REL.1
+demo-P-KG-REL.1: ## P-KG-REL.1 (#109/ADR-0075): manual relate — authored edge lands in the store + persists; drag/multi-select interaction logic
+	$(BUN) run desktop/scripts/demo_p_kg_rel_1.ts
+
 .PHONY: dashboards
 dashboards: ## Materialize dashboard CSVs from a DuckDB into observable/docs/data (DB=path)
 	$(BUN) run harness/scripts/materialize_dashboards.ts $(DB) observable/docs/data

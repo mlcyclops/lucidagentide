@@ -1347,6 +1347,17 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .kg-node{cursor:pointer}
 .kg-node:hover circle{stroke:var(--txt-2);transform:scale(1.12)}
 .kg-node.sel circle{stroke:#fff;stroke-width:2.5;transform:scale(1.06)}
+/* P-KG-REL.1: relate mode — crosshair cursor, picked-node ring, and the cursor-following ghost edge */
+.kg-relating .kg-node,.kg-relating .kg-svg{cursor:crosshair}
+.kg-node.rel circle{stroke:var(--accent);stroke-width:2.5;transform:scale(1.1)}
+.kg-node.rel .kg-label{fill:var(--txt)}
+.kg-ghost{fill:none;stroke:var(--accent);stroke-width:1.6;stroke-dasharray:4 4;opacity:.85;pointer-events:none}
+.kg-relate-bar{display:flex;align-items:center;gap:10px;padding:7px 14px;background:var(--bg-2);border-bottom:1px solid var(--line)}
+.kg-relate-hint{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--txt-2)}
+.kg-relate-count{font-size:12px;color:var(--accent);font-weight:600}
+.kg-relate-bar .btn-mini{margin-left:auto}
+.kg-relate-bar .btn-mini+.btn-mini{margin-left:6px}
+#kgRelate.on{background:var(--accent);color:var(--bg-0);border-color:var(--accent)}
 .kg-label{fill:var(--txt-2);font-size:9.5px;font-family:inherit;text-anchor:middle;paint-order:stroke;stroke:var(--bg-0);stroke-width:3px;stroke-linejoin:round;transition:fill var(--t)}
 .kg-node:hover .kg-label,.kg-node.sel .kg-label{fill:var(--txt)}
 .kg-side-head{display:flex;align-items:center;gap:8px;margin-bottom:12px;font-size:13.5px}

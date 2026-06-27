@@ -10,7 +10,7 @@
 //   - smooth zoom-to-fit on first layout + double-click to re-fit
 
 import type { GraphNode, PersonalGraphData } from "./bridge.ts";
-import { fitTransform, frameWork } from "./kg_ops.ts";
+import { fitTransform, frameWork, nodeAtPoint, togglePick } from "./kg_ops.ts";
 
 const KIND_COLOR: Record<string, string> = {
   preference: "#46c8dc", interest: "#7ef0a8", decision: "#5e8df2", behavior: "#e8b23c",
@@ -20,7 +20,13 @@ const TRUST_COLOR: Record<string, string> = { trusted: "#46d27e", untrusted: "#5
 export const kindLabel = (k: string): string => k.replace(/^user:/, "");
 
 interface SimNode extends GraphNode { x: number; y: number; vx: number; vy: number; r: number }
-export interface GraphHandle { destroy: () => void; setLens: (l: "kind" | "trust") => void; fit: () => void; update: (data: PersonalGraphData) => void }
+// P-KG-REL.1 (ADR-0075): callbacks for user-authored relationships. onRelate fires on a drag from one
+// node onto another; onRelatePick fires as the multi-select pick set changes (for the "Relate" action).
+export interface GraphHooks { onRelate?: (fromId: string, toId: string) => void; onRelatePick?: (ids: string[]) => void }
+export interface GraphHandle {
+  destroy: () => void; setLens: (l: "kind" | "trust") => void; fit: () => void; update: (data: PersonalGraphData) => void;
+  setRelateMode: (on: boolean) => void; clearRelatePicks: () => void;
+}
 
 const NS = "http://www.w3.org/2000/svg";
 const make = <K extends keyof SVGElementTagNameMap>(t: K): SVGElementTagNameMap[K] => document.createElementNS(NS, t);
@@ -28,7 +34,7 @@ const make = <K extends keyof SVGElementTagNameMap>(t: K): SVGElementTagNameMap[
 const reducedMotion = (): boolean =>
   typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-export function mountGraph(host: HTMLElement, data: PersonalGraphData, onSelect: (id: string | null) => void): GraphHandle {
+export function mountGraph(host: HTMLElement, data: PersonalGraphData, onSelect: (id: string | null) => void, hooks: GraphHooks = {}): GraphHandle {
   host.innerHTML = "";
   const calm = reducedMotion(); // reduced-motion: no particle flow, instant fit, gentler settle
   // Mutable so the layout re-fits when the canvas resizes (side panel toggles, KG resizer, window).
@@ -39,6 +45,11 @@ export function mountGraph(host: HTMLElement, data: PersonalGraphData, onSelect:
   let sel: string | null = null;
   let stopped = false;
   let userMoved = false; // suppresses the one-time auto-fit once the user interacts
+  // P-KG-REL.1: manual relationship authoring. In relate mode a drag from one node onto another draws an
+  // edge; clicking nodes builds an ordered pick set for the "Relate" action. Normal mode is unchanged.
+  let relateMode = false;
+  let relatePicks: string[] = [];
+  let linkDrag: { from: SimNode; x: number; y: number } | null = null;
 
   const nodes: SimNode[] = data.nodes.map((n, i) => {
     const a = (i / Math.max(1, data.nodes.length)) * Math.PI * 2;
@@ -69,6 +80,13 @@ export function mountGraph(host: HTMLElement, data: PersonalGraphData, onSelect:
   nodeG.setAttribute("class", "kg-nodes"); // hosts the shared glow filter via CSS
   vp.append(edgeG, partG, nodeG); svg.append(vp); host.append(svg);
   if (calm) partG.style.display = "none"; // reduced-motion: hide the flow particles entirely
+  // P-KG-REL.1: a single ghost edge that follows the cursor while dragging to relate two nodes.
+  const ghost = make("path"); ghost.setAttribute("class", "kg-ghost"); ghost.style.display = "none"; vp.insertBefore(ghost, nodeG);
+  const drawGhost = () => {
+    if (!linkDrag) { ghost.style.display = "none"; return; }
+    ghost.style.display = "";
+    ghost.setAttribute("d", `M${linkDrag.from.x.toFixed(1)} ${linkDrag.from.y.toFixed(1)} L${linkDrag.x.toFixed(1)} ${linkDrag.y.toFixed(1)}`);
+  };
 
   // ── edges as curved paths + a few flow particles each (cap for perf on bigger graphs) ──
   const PPE = edges.length > 36 ? 1 : edges.length > 14 ? 2 : 3; // particles per edge
@@ -114,6 +132,7 @@ export function mountGraph(host: HTMLElement, data: PersonalGraphData, onSelect:
       e.g.setAttribute("transform", `translate(${n.x.toFixed(1)},${n.y.toFixed(1)})`);
       e.c.setAttribute("fill", colorOf(n));
       e.g.classList.toggle("sel", n.id === sel);
+      e.g.classList.toggle("rel", relatePicks.includes(n.id)); // P-KG-REL.1 multi-select pick highlight
     }
     vp.setAttribute("transform", `translate(${tx.toFixed(1)},${ty.toFixed(1)}) scale(${scale.toFixed(3)})`);
   };
@@ -191,19 +210,30 @@ export function mountGraph(host: HTMLElement, data: PersonalGraphData, onSelect:
   const reheat = () => { if (!stopped && frames > SETTLE - 160) { frames = SETTLE - 160; kick(); } };
 
   let pan: { x: number; y: number } | null = null, moved = false;
+  const toGraph = (ev: MouseEvent): [number, number] => { const r = svg.getBoundingClientRect(); return [(ev.clientX - r.left - tx) / scale, (ev.clientY - r.top - ty) / scale]; };
   const onDown = (ev: MouseEvent) => {
     moved = false; fitT = null;
     const t = (ev.target as Element).closest(".kg-node") as (SVGGElement & { dataset: DOMStringMap }) | null;
-    if (t) drag = byId.get(t.dataset.id!) ?? null;
+    const node = t ? byId.get(t.dataset.id!) ?? null : null;
+    // Relate mode: a press on a node starts an edge-draw (not a reposition); empty space still pans.
+    if (relateMode && node) { linkDrag = { from: node, x: node.x, y: node.y }; kick(); }
+    else if (node) drag = node;
     else pan = { x: ev.clientX - tx, y: ev.clientY - ty };
     if (drag) kick(); // resume the loop if it parked while idle (reduced-motion)
   };
   const onMove = (ev: MouseEvent) => {
-    if (drag) { const r = svg.getBoundingClientRect(); drag.x = (ev.clientX - r.left - tx) / scale; drag.y = (ev.clientY - r.top - ty) / scale; moved = true; userMoved = true; reheat(); paint(); }
+    if (linkDrag) { [linkDrag.x, linkDrag.y] = toGraph(ev); moved = true; drawGhost(); }
+    else if (drag) { const [gx, gy] = toGraph(ev); drag.x = gx; drag.y = gy; moved = true; userMoved = true; reheat(); paint(); }
     else if (pan) { tx = ev.clientX - pan.x; ty = ev.clientY - pan.y; moved = true; userMoved = true; paint(); }
   };
   const onUp = () => {
-    if (drag && !moved) { sel = sel === drag.id ? null : drag.id; onSelect(sel); paint(); }
+    if (linkDrag) {
+      const from = linkDrag.from;
+      const target = moved ? nodeAtPoint(nodes, linkDrag.x, linkDrag.y, from.id) : null;
+      if (target) hooks.onRelate?.(from.id, target); // dragged onto another node → author an edge
+      else if (!moved) { relatePicks = togglePick(relatePicks, from.id); hooks.onRelatePick?.([...relatePicks]); } // a click = multi-pick
+      linkDrag = null; drawGhost(); paint();
+    } else if (drag && !moved) { sel = sel === drag.id ? null : drag.id; onSelect(sel); paint(); }
     else if (pan && !moved) { if (sel) { sel = null; onSelect(null); paint(); } }
     drag = null; pan = null;
   };
@@ -282,5 +312,12 @@ export function mountGraph(host: HTMLElement, data: PersonalGraphData, onSelect:
     setLens(l) { lens = l; paint(); },
     fit() { userMoved = true; computeFit(); },
     update,
+    setRelateMode(on) {
+      relateMode = on;
+      host.classList.toggle("kg-relating", on); // CSS swaps the cursor to a crosshair
+      if (!on) { relatePicks = []; linkDrag = null; drawGhost(); hooks.onRelatePick?.([]); } // leaving the mode clears picks
+      paint();
+    },
+    clearRelatePicks() { relatePicks = []; linkDrag = null; drawGhost(); hooks.onRelatePick?.([]); paint(); },
   };
 }

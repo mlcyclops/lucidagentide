@@ -3,7 +3,7 @@
 
 import { describe, expect, test } from "bun:test";
 import type { PersonalGraphData } from "./bridge.ts";
-import { applyForget, fitTransform, frameWork } from "./kg_ops.ts";
+import { addEdgeOptimistic, applyForget, chainPairs, fitTransform, frameWork, nodeAtPoint, togglePick } from "./kg_ops.ts";
 
 describe("#112 fitTransform — large graphs actually fit", () => {
   const W = 800, H = 600;
@@ -104,5 +104,43 @@ describe("#113 applyForget — instant, snapshot-safe removal", () => {
     expect(nodeRemoved).toBeNull();
     expect(data.facts).toHaveLength(3);
     expect(data.nodes).toHaveLength(2);
+  });
+});
+
+describe("#109 manual relate helpers (P-KG-REL.1)", () => {
+  const hit = [
+    { id: "a", x: 0, y: 0, r: 10 },
+    { id: "b", x: 100, y: 0, r: 8 },
+  ];
+
+  test("nodeAtPoint finds the node under a point (with grab padding) and respects exclude", () => {
+    expect(nodeAtPoint(hit, 3, 4)).toBe("a");        // within a's radius
+    expect(nodeAtPoint(hit, 100, 0)).toBe("b");
+    expect(nodeAtPoint(hit, 50, 0)).toBeNull();       // empty space between
+    expect(nodeAtPoint(hit, 3, 4, "a")).toBeNull();   // excluded → can't relate a node to itself
+  });
+
+  test("togglePick adds then removes, preserving order", () => {
+    let picks: string[] = [];
+    picks = togglePick(picks, "a"); expect(picks).toEqual(["a"]);
+    picks = togglePick(picks, "b"); expect(picks).toEqual(["a", "b"]);
+    picks = togglePick(picks, "a"); expect(picks).toEqual(["b"]); // toggle off, order preserved
+  });
+
+  test("chainPairs links consecutive picks (A,B,C → A→B, B→C)", () => {
+    expect(chainPairs(["a", "b", "c"])).toEqual([["a", "b"], ["b", "c"]]);
+    expect(chainPairs(["a"])).toEqual([]); // need at least two to relate
+    expect(chainPairs([])).toEqual([]);
+  });
+
+  test("addEdgeOptimistic appends a new edge, dedups identical, never mutates input", () => {
+    const data: PersonalGraphData = { nodes: [], edges: [{ from: "a", to: "b", relation: "related" }], facts: [] };
+    const added = addEdgeOptimistic(data, "b", "c", "related");
+    expect(added.edges).toHaveLength(2);
+    expect(added.edges.at(-1)).toEqual({ from: "b", to: "c", relation: "related" });
+    expect(data.edges).toHaveLength(1); // input untouched → caller can roll back
+
+    const dup = addEdgeOptimistic(data, "a", "b", "related"); // identical → no-op (same ref back)
+    expect(dup).toBe(data);
   });
 });

@@ -81,3 +81,39 @@ export function applyForget(data: PersonalGraphData, factId: string): ForgetResu
   const edges = data.edges.filter((e) => e.from !== entityId && e.to !== entityId);
   return { data: { nodes, edges, facts }, nodeRemoved: entityId };
 }
+
+// ───────────────────────── P-KG-REL.1 manual relate (#109 / ADR-0075) ─────────────────────────
+
+export interface HitNode { id: string; x: number; y: number; r: number }
+
+/** The id of the node under a point in graph-space (for drag-to-relate's drop target), or null.
+ *  `excludeId` skips the node the link drag started from so you can't relate a node to itself. */
+export function nodeAtPoint(nodes: HitNode[], x: number, y: number, excludeId?: string): string | null {
+  for (const n of nodes) {
+    if (n.id === excludeId) continue;
+    const dx = n.x - x, dy = n.y - y, rr = n.r + 6; // small grab padding around the node
+    if (dx * dx + dy * dy <= rr * rr) return n.id;
+  }
+  return null;
+}
+
+/** Toggle a node in the ordered multi-select pick list (for the "Relate" action). Preserves click order
+ *  so the relate is chained in the sequence the user picked. */
+export function togglePick(picks: string[], id: string): string[] {
+  return picks.includes(id) ? picks.filter((p) => p !== id) : [...picks, id];
+}
+
+/** Consecutive [from,to] pairs from an ordered pick list — a 3-pick A,B,C → A→B, B→C (a chain, not a
+ *  clique), which is the least-surprising default for "relate these nodes". */
+export function chainPairs(ids: string[]): Array<[string, string]> {
+  const out: Array<[string, string]> = [];
+  for (let i = 0; i + 1 < ids.length; i++) out.push([ids[i]!, ids[i + 1]!]);
+  return out;
+}
+
+/** Optimistically add a user-authored edge (dedup on from+to+relation), without mutating the input — so
+ *  the edge shows instantly and the caller can roll back if the server rejects it. */
+export function addEdgeOptimistic(data: PersonalGraphData, from: string, to: string, relation: string): PersonalGraphData {
+  if (data.edges.some((e) => e.from === from && e.to === to && e.relation === relation)) return data;
+  return { ...data, edges: [...data.edges, { from, to, relation }] };
+}

@@ -6042,9 +6042,10 @@ managed-config govern a hosted endpoint), ADR-0066 (the exec-approval guardrail 
 ## ADR-0075 - P-KG-REL.1: manual relationship authoring in the Knowledge Graph (drag-to-relate + multi-select Relate)
 
 **Date:** 2026-06-27
-**Status:** Accepted - SCOPE/PLAN. Surfaced from first real-user import feedback (a ~25-min ChatGPT-history
-ingest). The graph is accurate but **read-only**; the user wants to assert relationships the extractor missed.
-**Increment:** P-KG-REL.1. UI-only wiring of an existing, unused data-layer capability.
+**Status:** Accepted - BUILT. Surfaced from first real-user import feedback (a ~25-min ChatGPT-history
+ingest). The graph was read-only; users can now assert relationships the extractor missed. Custom relation
+labels beyond the neutral "related" default are deferred (see Consequences).
+**Increment:** P-KG-REL.1. UI wiring of an existing, unused data-layer capability (`store.addLink`).
 
 ### Context
 
