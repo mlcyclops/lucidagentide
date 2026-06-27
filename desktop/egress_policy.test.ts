@@ -1,7 +1,7 @@
 // desktop/egress_policy.test.ts — pure egress decision + choice-folding (P-EGRESS.1, ADR-0062).
 
 import { describe, expect, test } from "bun:test";
-import { applyEgressChoice, egressVerdict, extractHost, type EgressStore } from "./egress_policy.ts";
+import { applyEgressChoice, clampEgress, egressVerdict, extractHost, type EgressStore } from "./egress_policy.ts";
 
 describe("extractHost", () => {
   test("pulls the lowercased hostname from a URL", () => {
@@ -62,5 +62,45 @@ describe("applyEgressChoice (pure, never mutates)", () => {
   test("a full round-trip: allow-site then the same host auto-allows", () => {
     const s = applyEgressChoice({}, "https://grant.ed/path", "allow-site");
     expect(egressVerdict(s, "https://grant.ed/other")).toBe("allow");
+  });
+});
+
+// ── ADR-0068 (P-ENT.1): managed egress ceiling — clampEgress only ever TIGHTENS ──────────────────
+describe("clampEgress (managed ceiling, tighten-only)", () => {
+  test("no managed policy ⇒ the store is returned unchanged", () => {
+    const s: EgressStore = { allowHosts: ["a.test"], dangerMode: true };
+    expect(clampEgress(s, undefined)).toBe(s);
+  });
+
+  test("deniedHosts can never be auto-allowed: dropped from allow + pinned to always-prompt", () => {
+    const s: EgressStore = { allowHosts: ["bank.example", "ok.test"] };
+    const c = clampEgress(s, { deniedHosts: ["bank.example"] });
+    expect(egressVerdict(c, "https://bank.example/login")).toBe("prompt");
+    expect(egressVerdict(c, "https://ok.test")).toBe("allow");
+  });
+
+  test("a denied host prompts even under user danger mode", () => {
+    const c = clampEgress({ dangerMode: true }, { deniedHosts: ["bank.example"] });
+    expect(egressVerdict(c, "https://bank.example/x")).toBe("prompt");
+  });
+
+  test("disableDangerMode forces allow-all OFF", () => {
+    const c = clampEgress({ dangerMode: true }, { disableDangerMode: true });
+    expect(c.dangerMode).toBe(false);
+    expect(egressVerdict(c, "https://anything.test")).toBe("prompt");
+  });
+
+  test("a restrictive allowedHosts whitelist intersects the user's allow set AND kills danger mode", () => {
+    const s: EgressStore = { allowHosts: ["in.test", "out.test"], dangerMode: true };
+    const c = clampEgress(s, { allowedHosts: ["in.test"] });
+    expect(egressVerdict(c, "https://in.test")).toBe("allow");   // on the org list + user-allowed
+    expect(egressVerdict(c, "https://out.test")).toBe("prompt"); // user-allowed but off the org list
+    expect(egressVerdict(c, "https://other.test")).toBe("prompt"); // danger no longer allows-all
+    expect(c.dangerMode).toBe(false);
+  });
+
+  test("hosts on the org allow-list the user never approved still prompt (ceiling, not pre-approval)", () => {
+    const c = clampEgress({ allowHosts: [] }, { allowedHosts: ["org.test"] });
+    expect(egressVerdict(c, "https://org.test")).toBe("prompt");
   });
 });

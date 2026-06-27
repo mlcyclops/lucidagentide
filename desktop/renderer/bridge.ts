@@ -202,6 +202,8 @@ export interface ManagedPolicy {
   managed: boolean; orgName: string;
   attribution: { requireEmail?: boolean; allowSkip?: boolean; allowedEmailDomains?: string[] } | null;
   asksageOnly: boolean;
+  /** ADR-0068 (P-ENT.1): which controls the managed policy locks (UI disables them + "Managed by <org>"). */
+  locks?: { exec: boolean; egress: boolean; loop: boolean; models: boolean };
 }
 export interface LucidBridge {
   isElectron: boolean;

@@ -16,6 +16,7 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { managedConfig, type ManagedEgressPolicy } from "./managed_config.ts";
 
 const FILE = join(homedir(), ".omp", "lucid-egress.json");
 
@@ -66,6 +67,33 @@ export function applyEgressChoice(store: EgressStore, url: string, choice: Egres
   return { dangerMode: danger, allowHosts: [...allow], alwaysAskHosts: [...ask] };
 }
 
+/** ADR-0068 (P-ENT.1): tighten a user's egress store by the managed CEILING, returning a NEW store that
+ *  is never riskier than the user's. Pure. Tighten-only semantics:
+ *   - `deniedHosts` can never be auto-allowed → dropped from allow + pinned to always-ask (they prompt
+ *     even under danger mode).
+ *   - `allowedHosts`, when present, is a RESTRICTIVE allow-list (a ceiling, not a pre-approval): the
+ *     user's allow set is intersected with it, and danger mode is forced OFF (allow-all contradicts a
+ *     whitelist), so a host outside the org list always prompts.
+ *   - `disableDangerMode` forbids allow-all outright. */
+export function clampEgress(store: EgressStore, managed?: ManagedEgressPolicy): EgressStore {
+  if (!managed) return store;
+  const norm = (h: string) => h.trim().toLowerCase();
+  const denied = new Set((managed.deniedHosts ?? []).map(norm).filter(Boolean));
+  const allowList = (managed.allowedHosts ?? []).map(norm).filter(Boolean);
+  const allowWhitelist = allowList.length ? new Set(allowList) : null;
+
+  let allow = (store.allowHosts ?? []).map(norm);
+  if (allowWhitelist) allow = allow.filter((h) => allowWhitelist.has(h));
+  allow = allow.filter((h) => !denied.has(h));
+
+  const ask = new Set((store.alwaysAskHosts ?? []).map(norm));
+  for (const d of denied) ask.add(d);
+
+  // A restrictive allow-list or an explicit disable both kill allow-all (tighten only).
+  const danger = managed.disableDangerMode || allowWhitelist ? false : store.dangerMode ?? false;
+  return { dangerMode: danger, allowHosts: [...new Set(allow)], alwaysAskHosts: [...ask] };
+}
+
 // ── thin persistence (machine-level, like settings) ─────────────────────────────────────────────────
 export function loadEgress(): EgressStore {
   try { return existsSync(FILE) ? JSON.parse(readFileSync(FILE, "utf8")) : {}; } catch { return {}; }
@@ -74,7 +102,9 @@ function saveEgress(s: EgressStore): void {
   try { writeFileSync(FILE, JSON.stringify(s, null, 2), "utf8"); } catch { /* best-effort; never break a turn */ }
 }
 
-/** Read-side: is this URL allowed without asking? */
-export function egressDecision(url: string): EgressVerdict { return egressVerdict(loadEgress(), url); }
+/** Read-side: is this URL allowed without asking? Honors the enterprise-managed egress ceiling. */
+export function egressDecision(url: string): EgressVerdict {
+  return egressVerdict(clampEgress(loadEgress(), managedConfig().config?.security?.egress), url);
+}
 /** Write-side: persist the user's choice (allow-once/deny are no-ops on disk). */
 export function recordEgress(url: string, choice: EgressChoice): void { saveEgress(applyEgressChoice(loadEgress(), url, choice)); }

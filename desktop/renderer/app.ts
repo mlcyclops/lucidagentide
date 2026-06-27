@@ -62,6 +62,7 @@ const state = {
   developerMode: false, // ADR-0009 Phase D
   dev: null as import("./bridge.ts").DevView | null, // ADR-0009 Phase D logs snapshot
   mcpServers: [] as import("./bridge.ts").McpServerStatus[], // P-MCP.1 (ADR-0020)
+  managed: null as import("./bridge.ts").ManagedPolicy | null, // ADR-0068 (P-ENT.1) enterprise locks
 };
 const prettyModel = (v: string) => v.replace(/^anthropic\//, "");
 // Strip the redundant "· AskSage Gov" / "· Gov" suffix from a model's display name
@@ -1156,11 +1157,20 @@ function secSovereignty(): string {
      <div class="china-unlock"><input id="chinaAckInput" placeholder="Type ACKNOWLEDGE to unlock" autocomplete="off" spellcheck="false" /><button class="btn-mini" id="chinaAckBtn" disabled>Unlock</button></div>`, true);
 }
 function secAsksage(a: typeof state.asksage, datasets: string[] | null): string {
+  // ADR-0068 (P-ENT.1): an enterprise policy can LOCK model routing (force gov-gateway-only). When
+  // locked, the toggle is forced-on, disabled, and labelled "Managed by <org>" (mirrors attribution).
+  const locked = !!state.managed?.locks?.models;
+  const org = esc(state.managed?.orgName || "your organization");
+  const checked = locked || a?.only ? "checked" : "";
+  const managedNote = locked
+    ? `<div class="set-note">${icon("shield", 12)} Managed by <b>${org}</b> - gov-gateway-only routing is enforced.</div>`
+    : "";
   const body = `<div class="prov-row"><input id="asksageBase" class="prov-key" placeholder="https://api.civ.asksage.ai/server" value="${esc(a?.base ?? "")}" />
       <button class="btn-mini ok" id="asksageSaveBase">${icon("check", 12)} Save URL</button></div>
-    <label class="set-toggle"><input type="checkbox" id="asksageOnly" ${a?.only ? "checked" : ""}/>
+    <label class="set-toggle"><input type="checkbox" id="asksageOnly" ${checked} ${locked ? "disabled" : ""}/>
       <span><b>AskSage-only (lockdown)</b> - route every turn through the gov gateway and hide direct providers in the model picker.</span></label>
-    ${a?.only ? datasetsSection(datasets) : ""}
+    ${managedNote}
+    ${locked || a?.only ? datasetsSection(datasets) : ""}
     ${a?.configured ? `<div class="set-note ok">${icon("check", 12)} Gov gateway active - AskSage models appear in the picker, with monthly-usage and scanned personas.</div>` : `<div class="set-note">${icon("info", 12)} Add an <code>ASKSAGE_API_KEY</code> in Providers to enable gov models, usage, and personas.</div>`}`;
   return setCard("asksage", "AskSage gov gateway", "accredited proxy", body, true);
 }
@@ -3304,6 +3314,7 @@ function wire(): void {
       return;
     }
     if (t.closest("#asksageOnly")) {
+      if (state.managed?.locks?.models) return; // ADR-0068: org-locked routing — not user-toggleable
       const only = ($("#asksageOnly", $("#setBody")!) as HTMLInputElement)?.checked ?? false;
       await bridge.saveAsksage({ only });
       state.asksage = { ...(state.asksage ?? { configured: false, base: "", only: false, limit: 200_000, datasets: [], queryModel: "gpt-5.2", persona: "" }), only };
@@ -3683,6 +3694,7 @@ async function loadConfig(): Promise<void> {
     const live = await bridge.config();
     state.commands = await bridge.commands();
     state.chinaAck = !!(await bridge.chinaAck())?.acknowledged; // P-IDE.1c: gate China-origin models
+    state.managed = await bridge.managed(); // ADR-0068 (P-ENT.1): enterprise lock view for the UI
     // P-IDE.1d: only adopt the live config when omp actually returned one. A cold/not-ready omp returns
     // an empty list — keep the cached list visible (spinner stays) rather than blanking the picker. When
     // omp IS ready, the live config replaces the cache (so a revoked key/OAuth's models drop out).
