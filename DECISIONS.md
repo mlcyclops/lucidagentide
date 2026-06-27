@@ -6488,3 +6488,39 @@ set; no `contracts.ts` change.
 ADR-0075/0078 (P-KG-REL.1/.2, which this completes), `harness/personal/store.ts` (`addLink`/`removeLink`),
 `desktop/personal.ts` (`relateEntities`/`unrelateEntities`), `desktop/renderer/kg_ops.ts`
 (`addEdgeOptimistic`/`removeEdgeOptimistic`).
+
+## ADR-0083 - P-KG-SEARCH.1: find a node in the graph
+
+**Date:** 2026-06-27
+**Status:** Accepted - BUILT.
+**Increment:** P-KG-SEARCH.1. Navigation for the large imported graphs the rest of this epic produces.
+
+### Context
+
+A real ChatGPT-history import yields hundreds of nodes. Finding a specific one means dragging the canvas
+around hunting for a label — the single biggest navigation pain on a big graph. There was no search.
+
+### Decision - a live search box that highlights + centers matches; pure matcher
+
+A `#kgSearch` input in the KG toolbar. As the user types, `kg_ops.ts matchNodes(nodes, query)` (pure,
+case-insensitive substring on name; empty → no matches) returns the matching ids, which the renderer hands
+to `graph.setSearch(ids)`. The graph rings + brightens matches, **dims** the rest, and **centers** on the
+matches (`computeFit` over the matched subset — reusing the #112 fit math). Esc (or clearing the box) drops
+the filter. An active search is preserved across a live remount, like relate mode.
+
+### Consequences
+
+- Zero data change — display-only highlight/zoom. `make demo-P-KG-SEARCH.1` + unit tests cover the pure
+  `matchNodes`; the SVG highlight/center is the renderer layer (verified by the browser bundle + by eye).
+- Fitting to a single match zooms in on it (scale capped at the existing max), so a unique name jumps
+  straight into view.
+
+### Invariants preserved
+
+Display-only (no store/scan/promotion change); reuses the existing fit math (#112) and the dirty-flag paint
+loop (#114 — search just toggles node classes, no new per-frame cost).
+
+### Relates to
+
+ADR-0072-ish KG view, `desktop/renderer/kg_ops.ts` (`matchNodes`), `desktop/renderer/graph.ts`
+(`setSearch`/`computeFit` subset), the #112 fit-transform this reuses.

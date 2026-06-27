@@ -11,7 +11,7 @@ import { ageStr, esc, fmtUSD, goodColor, loadColor } from "./format.ts";
 import { icon, piMark } from "./icons.ts";
 import { renderMarkdown } from "./markdown.ts";
 import { type GraphHandle, kindLabel, mountGraph } from "./graph.ts";
-import { addEdgeOptimistic, applyForget, chainPairs, removeEdgeOptimistic, resolveRelationLabel } from "./kg_ops.ts";
+import { addEdgeOptimistic, applyForget, chainPairs, matchNodes, removeEdgeOptimistic, resolveRelationLabel } from "./kg_ops.ts";
 import type { PersonalGraphData } from "./bridge.ts";
 import { type Action, type ToastAction, attachRichTip, createPalette, initTooltips, popover, showToast } from "./ui.ts";
 import { exportActionPlan } from "./kg_export.ts";
@@ -194,6 +194,7 @@ function buildShell(): void {
         <div class="set-head">
           <div class="set-title">${icon("graph", 17)} Knowledge graph <span class="set-sub" id="kgScopeLbl"></span></div>
           <div class="kg-tools">
+            <input id="kgSearch" class="kg-search" type="search" placeholder="Find a node…" spellcheck="false" autocomplete="off" data-tip="Find a node|Type to highlight + center matching nodes. Esc clears." />
             <div class="seg kg-lens" data-kg-lens>
               <button class="on" data-lens="kind">Kind</button><button data-lens="trust">Trust</button>
             </div>
@@ -1645,6 +1646,8 @@ async function renderKnowledge(): Promise<void> {
   (side as HTMLElement).hidden = true; side.innerHTML = ""; // appears only when a node is clicked
   kgHandle = mountGraph(canvas as HTMLElement, kgData, (id) => renderKgSide(id), { onRelate: relateNodes, onRelatePick: onRelatePick });
   if (kgRelateMode) { kgHandle.setRelateMode(true); onRelatePick([]); } // preserve relate mode across a live remount
+  const sq = ($("#kgSearch") as HTMLInputElement | null)?.value; // P-KG-SEARCH.1: preserve an active search across a remount
+  if (sq?.trim()) kgHandle.setSearch(matchNodes(kgData.nodes, sq));
   kgHandle.setLens(kgLens);
   kgSig = kgSignature(kgData); // baseline so live refreshes only fire on real changes
 }
@@ -3283,6 +3286,14 @@ function wire(): void {
   }));
   // Knowledge graph: close, lens toggle, forget-fact, export (P9.4)
   $("#kgClose")!.addEventListener("click", () => closeKnowledge());
+  // P-KG-SEARCH.1: live node search — highlight + center matches as you type (Esc clears).
+  $("#kgSearch")?.addEventListener("input", (e) => {
+    const q = (e.target as HTMLInputElement).value;
+    kgHandle?.setSearch(q.trim() ? matchNodes(kgData?.nodes ?? [], q) : null);
+  });
+  $("#kgSearch")?.addEventListener("keydown", (e) => {
+    if ((e as KeyboardEvent).key === "Escape") { (e.target as HTMLInputElement).value = ""; kgHandle?.setSearch(null); }
+  });
   $("#kgImport")!.addEventListener("click", async () => {
     const folder = await openFolderBrowser({ title: "Choose your ChatGPT / Claude / Gemini export", confirm: "Import from here" });
     if (!folder) return;

@@ -111,6 +111,16 @@ export function chainPairs(ids: string[]): Array<[string, string]> {
   return out;
 }
 
+/** Ids of nodes whose name matches a search query (P-KG-SEARCH.1) — case-insensitive substring. An empty
+ *  query matches nothing (→ no filter / clear). Pure so the matching is unit-testable. */
+export function matchNodes(nodes: ReadonlyArray<{ id: string; name: string }>, query: string): Set<string> {
+  const q = query.trim().toLowerCase();
+  const out = new Set<string>();
+  if (!q) return out;
+  for (const n of nodes) if (n.name.toLowerCase().includes(q)) out.add(n.id);
+  return out;
+}
+
 /** The relationship label from a raw input (P-KG-REL.2): trimmed, or "related" when blank/whitespace.
  *  The server still sanitizes + length-caps it; this is the UI default. */
 export function resolveRelationLabel(raw: string | null | undefined): string {

@@ -26,6 +26,7 @@ export interface GraphHooks { onRelate?: (fromId: string, toId: string) => void;
 export interface GraphHandle {
   destroy: () => void; setLens: (l: "kind" | "trust") => void; fit: () => void; update: (data: PersonalGraphData) => void;
   setRelateMode: (on: boolean) => void; clearRelatePicks: () => void;
+  setSearch: (ids: Set<string> | null) => void; // P-KG-SEARCH.1: highlight + center matching nodes
 }
 
 const NS = "http://www.w3.org/2000/svg";
@@ -50,6 +51,7 @@ export function mountGraph(host: HTMLElement, data: PersonalGraphData, onSelect:
   let relateMode = false;
   let relatePicks: string[] = [];
   let linkDrag: { from: SimNode; x: number; y: number } | null = null;
+  let searchIds: Set<string> | null = null; // P-KG-SEARCH.1: matching nodes (null = no active search)
 
   const nodes: SimNode[] = data.nodes.map((n, i) => {
     const a = (i / Math.max(1, data.nodes.length)) * Math.PI * 2;
@@ -133,6 +135,8 @@ export function mountGraph(host: HTMLElement, data: PersonalGraphData, onSelect:
       e.c.setAttribute("fill", colorOf(n));
       e.g.classList.toggle("sel", n.id === sel);
       e.g.classList.toggle("rel", relatePicks.includes(n.id)); // P-KG-REL.1 multi-select pick highlight
+      e.g.classList.toggle("match", !!searchIds && searchIds.has(n.id)); // P-KG-SEARCH.1 highlight
+      e.g.classList.toggle("dim", !!searchIds && !searchIds.has(n.id)); // ...and dim the rest
     }
     vp.setAttribute("transform", `translate(${tx.toFixed(1)},${ty.toFixed(1)}) scale(${scale.toFixed(3)})`);
   };
@@ -155,10 +159,11 @@ export function mountGraph(host: HTMLElement, data: PersonalGraphData, onSelect:
 
   // ── smooth zoom-to-fit (eased toward a target transform over a few frames) ──
   let fitT: { sc: number; tx: number; ty: number } | null = null;
-  const computeFit = () => {
-    if (!nodes.length) return;
+  const computeFit = (subset?: SimNode[]) => {
+    const fitNodes = subset && subset.length ? subset : nodes; // P-KG-SEARCH.1: fit to matches when given
+    if (!fitNodes.length) return;
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-    for (const n of nodes) { minX = Math.min(minX, n.x - n.r); minY = Math.min(minY, n.y - n.r); maxX = Math.max(maxX, n.x + n.r); maxY = Math.max(maxY, n.y + n.r); }
+    for (const n of fitNodes) { minX = Math.min(minX, n.x - n.r); minY = Math.min(minY, n.y - n.r); maxX = Math.max(maxX, n.x + n.r); maxY = Math.max(maxY, n.y + n.r); }
     const t = fitTransform({ minX, minY, maxX, maxY }, W, H); // low min-scale floor → big graphs actually fit (#112)
     if (t) { fitT = t; kick(); } // a fit needs the loop running to ease toward it
   };
@@ -319,5 +324,10 @@ export function mountGraph(host: HTMLElement, data: PersonalGraphData, onSelect:
       paint();
     },
     clearRelatePicks() { relatePicks = []; linkDrag = null; drawGhost(); hooks.onRelatePick?.([]); paint(); },
+    setSearch(ids) {
+      searchIds = ids && ids.size ? ids : null;
+      if (searchIds) { userMoved = true; computeFit(nodes.filter((n) => searchIds!.has(n.id))); } // center on the matches
+      paint(); // apply / clear the dim+match classes
+    },
   };
 }

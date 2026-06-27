@@ -1366,6 +1366,14 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .kg-node{cursor:pointer}
 .kg-node:hover circle{stroke:var(--txt-2);transform:scale(1.12)}
 .kg-node.sel circle{stroke:#fff;stroke-width:2.5;transform:scale(1.06)}
+/* P-KG-SEARCH.1: dim non-matches, ring + brighten matches while a search is active */
+.kg-node.dim{opacity:.16;transition:opacity var(--t)}
+.kg-node.dim .kg-label{opacity:0}
+.kg-node.match circle{stroke:var(--accent);stroke-width:3;transform:scale(1.12)}
+.kg-node.match .kg-label{fill:var(--txt);opacity:1}
+.kg-search{width:150px;padding:4px 9px;font-size:12px;border-radius:7px;border:1px solid var(--line);background:var(--bg-0);color:var(--txt);outline:none;transition:border-color var(--t) var(--ease)}
+.kg-search:focus{border-color:var(--accent);width:180px}
+.kg-search::placeholder{color:var(--txt-3)}
 /* P-KG-REL.1: relate mode — crosshair cursor, picked-node ring, and the cursor-following ghost edge */
 .kg-relating .kg-node,.kg-relating .kg-svg{cursor:crosshair}
 .kg-node.rel circle{stroke:var(--accent);stroke-width:2.5;transform:scale(1.1)}
