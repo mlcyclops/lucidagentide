@@ -3,7 +3,26 @@
 
 import { describe, expect, test } from "bun:test";
 import type { PersonalGraphData } from "./bridge.ts";
-import { addEdgeOptimistic, applyForget, chainPairs, fitTransform, frameWork, nodeAtPoint, resolveRelationLabel, togglePick } from "./kg_ops.ts";
+import { addEdgeOptimistic, applyForget, chainPairs, fitTransform, frameWork, nodeAtPoint, removeEdgeOptimistic, resolveRelationLabel, togglePick } from "./kg_ops.ts";
+
+describe("#130 removeEdgeOptimistic (P-KG-REL.3)", () => {
+  const data = (): PersonalGraphData => ({
+    nodes: [],
+    edges: [{ from: "a", to: "b", relation: "related" }, { from: "a", to: "b", relation: "deploys with" }],
+    facts: [],
+  });
+  test("removes the exact from+to+relation triple, never mutating the input", () => {
+    const d = data();
+    const out = removeEdgeOptimistic(d, "a", "b", "related");
+    expect(out.edges).toEqual([{ from: "a", to: "b", relation: "deploys with" }]); // only the matching one
+    expect(d.edges).toHaveLength(2); // input untouched → caller can roll back
+  });
+  test("a non-matching removal is a no-op (same ref back)", () => {
+    const d = data();
+    expect(removeEdgeOptimistic(d, "a", "b", "nope")).toBe(d);
+    expect(removeEdgeOptimistic(d, "x", "y", "related")).toBe(d);
+  });
+});
 
 describe("#122 resolveRelationLabel (P-KG-REL.2)", () => {
   test("uses a typed label, defaults to 'related' when blank", () => {

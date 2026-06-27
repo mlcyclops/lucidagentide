@@ -6450,3 +6450,41 @@ stalled/errored chat turn can't leave the import permanently paused.
 
 ADR-0076 (P-KG-INGEST.1a/1b, the background ingest this completes), `desktop/acp_backend.ts`
 (`prompt`/`complete`/`utilLock`), `desktop/chat_gate.ts`.
+
+## ADR-0082 - P-KG-REL.3: remove a relationship from the graph
+
+**Date:** 2026-06-27
+**Status:** Accepted - BUILT.
+**Increment:** P-KG-REL.3. Completes manual relationship authoring — create (REL.1), label (REL.2), remove.
+
+### Context
+
+P-KG-REL.1/.2 let the user author relationships but never delete one — you could add an edge by mistake and
+be stuck with it. The data layer had `addLink` but no removal.
+
+### Decision - a removable relationships list in the node panel; mirror the relate path
+
+`harness/personal/store.ts removeLink(from, to, relation?)` deletes matching user-authored link(s) (exact
+relation, or all between the pair) and returns the count. `desktop/personal.ts unrelateEntities` wraps it
+for the active scope (mirrors `relateEntities`); served at `POST /api/personal/unrelate` +
+`bridge.personalUnrelate`. The node detail panel (`renderKgSide`) gains a **Relationships** section listing
+each edge touching the node (with a direction arrow + the label) and a remove (×) button; clicking it
+removes the edge OPTIMISTICALLY (`kg_ops.ts removeEdgeOptimistic`, rollback-safe) then calls the server.
+
+### Consequences
+
+- Symmetric with the forget-fact flow (optimistic mutate + reconcile + rollback). `make demo-P-KG-REL.3`
+  proves the optimistic removal is rollback-safe AND `store.removeLink` persists the deletion through the
+  encrypted store (only the targeted edge goes). Unit tests cover `removeEdgeOptimistic`.
+
+### Invariants preserved
+
+User-authored edges remain first-party (no scanner, no semantic promotion — keystone #2); removal is
+scope-confined (the active store only); nodes/facts are untouched (only the edge is deleted); closed trust
+set; no `contracts.ts` change.
+
+### Relates to
+
+ADR-0075/0078 (P-KG-REL.1/.2, which this completes), `harness/personal/store.ts` (`addLink`/`removeLink`),
+`desktop/personal.ts` (`relateEntities`/`unrelateEntities`), `desktop/renderer/kg_ops.ts`
+(`addEdgeOptimistic`/`removeEdgeOptimistic`).

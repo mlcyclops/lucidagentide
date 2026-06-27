@@ -330,6 +330,7 @@ export interface LucidBridge {
   personalForget(factId: string): Promise<{ ok: boolean } | null>;
   // P-KG-REL.1 (ADR-0075): user-authored relationship between two existing, visible nodes.
   personalRelate(from: string, to: string, relation?: string): Promise<{ ok: boolean; error?: string; id?: string } | null>;
+  personalUnrelate(from: string, to: string, relation?: string): Promise<{ ok: boolean; error?: string; removed?: number } | null>; // P-KG-REL.3
   // P9.7: import a ChatGPT / Claude / Gemini data export (folder, .json, or .zip) into the active
   // compartment, through the fail-closed gate. `model` runs the richer LLM extractor (capped).
   // P-KG-INGEST.1: starts a BACKGROUND import job (returns a jobId); poll status + cancel below.
@@ -527,6 +528,7 @@ export const bridge: LucidBridge = {
   personalGraph: (scope) => getData(`/api/personal/graph${scope ? `?scope=${encodeURIComponent(scope)}` : ""}`),
   personalForget: (factId) => post("/api/personal/forget", { factId }),
   personalRelate: (from, to, relation) => post("/api/personal/relate", { from, to, relation }),
+  personalUnrelate: (from, to, relation) => post("/api/personal/unrelate", { from, to, relation }),
   personalImport: (path, model) => post("/api/personal/import", { path, model: !!model }),
   personalImportStatus: (jobId) => getData(`/api/personal/import/status${jobId ? `?jobId=${encodeURIComponent(jobId)}` : ""}`),
   personalImportCancel: (jobId) => post("/api/personal/import/cancel", { jobId }),

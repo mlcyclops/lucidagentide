@@ -203,6 +203,22 @@ export function relateEntities(fromId: string, toId: string, relation?: string):
   return { ok: true, id };
 }
 
+/** Remove a user-authored relationship between two nodes (P-KG-REL.3, ADR-0082). With `relation`, only
+ *  that exact edge; otherwise every edge between the pair (in that direction). Operates on the
+ *  currently-scoped store; returns how many edges were removed. */
+export function unrelateEntities(fromId: string, toId: string, relation?: string): { ok: boolean; error?: string; removed?: number } {
+  const s = load();
+  if (!s.personalizationEnabled || !store) return { ok: false, error: "Personalization is off." };
+  const scope = (s.personalScope ?? "personal") as ScopeView;
+  const src = storeForScope(scope);
+  if (!src) return { ok: false, error: "That compartment is locked." };
+  const from = String(fromId ?? ""), to = String(toId ?? "");
+  if (!from || !to) return { ok: false, error: "Pick two nodes." };
+  const removed = src.removeLink(from, to, relation == null ? undefined : String(relation)); // match the stored label as-is
+  if (removed) src.save();
+  return { ok: true, removed };
+}
+
 // ── P9.4: audited Obsidian vault export + NARA-aligned CUI archive ─────────────────
 export interface ExportSummary {
   ok: boolean; error?: string; dest?: string;
