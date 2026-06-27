@@ -11,7 +11,7 @@ import { ageStr, esc, fmtUSD, goodColor, loadColor } from "./format.ts";
 import { icon, piMark } from "./icons.ts";
 import { renderMarkdown } from "./markdown.ts";
 import { type GraphHandle, kindLabel, mountGraph } from "./graph.ts";
-import { addEdgeOptimistic, applyForget, chainPairs, resolveRelationLabel } from "./kg_ops.ts";
+import { addEdgeOptimistic, applyForget, chainPairs, removeEdgeOptimistic, resolveRelationLabel } from "./kg_ops.ts";
 import type { PersonalGraphData } from "./bridge.ts";
 import { type Action, type ToastAction, attachRichTip, createPalette, initTooltips, popover, showToast } from "./ui.ts";
 import { exportActionPlan } from "./kg_export.ts";
@@ -1709,8 +1709,19 @@ function renderKgSide(id: string | null): void {
       <div class="kg-fact-meta"><span class="pill ${esc(f.trust)}">${esc(f.trust)}</span> <span>conf ${Math.round((f.confidence ?? 0) * 100)}%</span>
         <button class="kg-forget" data-forget="${esc(f.id)}" data-tip="Forget this|Soft-delete - the agent stops recalling it.">${icon("close", 12)} forget</button></div>
     </div>`).join("");
+  // P-KG-REL.3: this node's relationships, each removable. Arrow shows direction (→ from this node, ← into it).
+  const nameOf = (nid: string): string => kgData!.nodes.find((n) => n.id === nid)?.name ?? "(removed)";
+  const edges = kgData.edges.filter((e) => e.from === id || e.to === id);
+  const relRows = edges.map((e) => {
+    const other = e.from === id ? e.to : e.from;
+    return `<div class="kg-rel">
+      <div class="kg-rel-text"><span class="kg-rel-arrow">${e.from === id ? "→" : "←"}</span> <b>${esc(nameOf(other))}</b> <span class="kg-rel-label">${esc(e.relation)}</span></div>
+      <button class="kg-unrelate" data-unrelate data-from="${esc(e.from)}" data-to="${esc(e.to)}" data-rel="${esc(e.relation)}" data-tip="Remove this relationship|Deletes the edge; the nodes stay.">${icon("close", 11)}</button>
+    </div>`;
+  }).join("");
+  const relSection = edges.length ? `<div class="kg-side-sub">Relationships</div><div class="kg-side-rels">${relRows}</div>` : "";
   side.innerHTML = `<div class="kg-side-head"><span class="kg-side-kind" style="background:${kindTint(node.kind)}">${esc(kindLabel(node.kind))}</span><b>${esc(node.name)}</b></div>
-    <div class="kg-side-facts">${rows || `<div class="empty">No active facts.</div>`}</div>`;
+    <div class="kg-side-facts">${rows || `<div class="empty">No active facts.</div>`}</div>${relSection}`;
 }
 const kindTint = (k: string): string => {
   const c: Record<string, string> = { preference: "var(--cyan-dim)", interest: "var(--green-dim)", decision: "var(--blue-dim)", behavior: "var(--amber-dim)", personality: "var(--accent-dim)" };
@@ -3325,6 +3336,23 @@ function wire(): void {
     if (t.closest("#kgRelate")) { setRelateMode(!kgRelateMode); return; } // P-KG-REL.1 toggle relate mode
     if (t.closest("#kgRelateDo")) { void relatePicked(); return; }
     if (t.closest("#kgRelateClear")) { kgHandle?.clearRelatePicks(); return; }
+    const unrel = t.closest("[data-unrelate]") as HTMLElement | null; // P-KG-REL.3 remove a relationship
+    if (unrel) {
+      const from = unrel.dataset.from!, to = unrel.dataset.to!, rel = unrel.dataset.rel ?? "";
+      if (kgData) {
+        const before = kgData;
+        kgData = removeEdgeOptimistic(kgData, from, to, rel); // vanish on click
+        kgSig = kgSignature(kgData);
+        kgHandle?.update(kgData);
+        renderKgSide(kgSelId);
+        const r = await bridge.personalUnrelate(from, to, rel).catch(() => null);
+        if (!r?.ok) { // server refused → roll back
+          kgData = before; kgSig = kgSignature(kgData); kgHandle?.update(kgData); renderKgSide(kgSelId);
+          showToast({ tone: "danger", title: "Couldn't remove that", desc: r?.error ?? "Try again.", actions: [{ label: "OK" }], timeout: 4000 });
+        }
+      }
+      return;
+    }
     const forget = t.closest("[data-forget]") as HTMLElement | null;
     if (forget) {
       const fid = forget.dataset.forget!;

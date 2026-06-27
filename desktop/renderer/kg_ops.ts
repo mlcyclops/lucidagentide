@@ -123,3 +123,10 @@ export function addEdgeOptimistic(data: PersonalGraphData, from: string, to: str
   if (data.edges.some((e) => e.from === from && e.to === to && e.relation === relation)) return data;
   return { ...data, edges: [...data.edges, { from, to, relation }] };
 }
+
+/** Optimistically remove an edge (P-KG-REL.3) without mutating the input — so it vanishes on click and the
+ *  caller can roll back on server failure. Matches the exact from+to+relation triple. */
+export function removeEdgeOptimistic(data: PersonalGraphData, from: string, to: string, relation: string): PersonalGraphData {
+  const edges = data.edges.filter((e) => !(e.from === from && e.to === to && e.relation === relation));
+  return edges.length === data.edges.length ? data : { ...data, edges };
+}

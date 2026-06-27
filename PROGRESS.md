@@ -4,6 +4,11 @@ Three lines per session: **shipped / stubbed / next** (CLAUDE.md session ritual)
 
 -----
 
+## P-KG-REL.3: remove a relationship (#130, ADR-0082)
+- **shipped:** the node panel now lists a node's **Relationships** (direction arrow + label) each with a remove (×) — closing the create-only asymmetry of REL.1/.2. New `store.removeLink(from, to, relation?)` (data layer) + `unrelateEntities` (`desktop/personal.ts`, mirrors `relateEntities`) + `POST /api/personal/unrelate` + `bridge.personalUnrelate`. Removal is optimistic (`kg_ops.ts removeEdgeOptimistic`, rollback-safe) then reconciled with the server — symmetric with the forget flow. Authored edges stay first-party; nodes/facts untouched. Proof: `kg_ops.test.ts` removeEdgeOptimistic + `make demo-P-KG-REL.3` (optimistic + `store.removeLink` persists only the targeted edge). ADR-0082 BUILT.
+- **stubbed:** no edit-in-place of a relation's label (remove + re-add); no multi-edge bulk remove.
+- **next:** KG import-feedback epic + all follow-ups (ADR-0075-0082) shipped.
+
 ## P-KG-INGEST.3: chat stays responsive during an AI-mode ingest (#125, ADR-0081)
 - **shipped:** a long AI import no longer freezes chat. `desktop/chat_gate.ts ChatGate` (begin/end/whenIdle) lets background extraction yield to a live chat turn: `acp_backend.prompt()` brackets a chat turn with `chatGate.begin()/end()`; `complete()` (every util completion — import extraction + the /goal checker) `await chatGate.whenIdle()` before creating its session. So while the user chats, the import pauses between extractions and resumes after the reply — chat preempts with ≤1 in-flight extraction of latency instead of waiting out the whole import. Zero overhead when idle (`whenIdle()` resolves synchronously). Fail-safe: `end()` is in `prompt()`'s `finally` so a stalled chat can't pause the import forever. Proof: `chat_gate.test.ts` (5) + `make demo-P-KG-INGEST.3`. ADR-0081 BUILT.
 - **stubbed:** a SECOND omp process dedicated to extraction would remove even the one-extraction latency (true concurrency) — deferred as a much larger change; the gate delivers responsive chat with a tiny surface.

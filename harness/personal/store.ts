@@ -161,6 +161,14 @@ export class PersonalStore {
     this.#graph.links.push({ id, from_entity_id: fromEntityId, to_entity_id: toEntityId, relation, created_at: now() });
     return id;
   }
+  /** Remove user-authored link(s) between two entities (P-KG-REL.3). With `relation`, only that exact
+   *  relation; otherwise every link between the pair (in that direction). Returns how many were removed. */
+  removeLink(fromEntityId: string, toEntityId: string, relation?: string): number {
+    const before = this.#graph.links.length;
+    this.#graph.links = this.#graph.links.filter((l) =>
+      !(l.from_entity_id === fromEntityId && l.to_entity_id === toEntityId && (relation === undefined || l.relation === relation)));
+    return before - this.#graph.links.length;
+  }
   /** Record an audited export (P9.4). Appends to the encrypted, in-store trail and
    *  returns the event id. The caller persists with save(). Metadata only. */
   recordExport(ev: Omit<PersonalExportEvent, "id" | "at">): string {

@@ -246,6 +246,10 @@ demo-P-VAULT-HINT.2: ## P-VAULT-HINT.2 (#124/ADR-0080): fact count in the locked
 demo-P-KG-INGEST.3: ## P-KG-INGEST.3 (#125/ADR-0081): chat preempts a back-to-back ingest loop via the ChatGate (yields, then resumes)
 	$(BUN) run desktop/scripts/demo_p_kg_ingest_3.ts
 
+.PHONY: demo-P-KG-REL.3
+demo-P-KG-REL.3: ## P-KG-REL.3 (#130/ADR-0082): remove a relationship — optimistic edge removal + store.removeLink persists (only the targeted edge)
+	$(BUN) run desktop/scripts/demo_p_kg_rel_3.ts
+
 .PHONY: dashboards
 dashboards: ## Materialize dashboard CSVs from a DuckDB into observable/docs/data (DB=path)
 	$(BUN) run harness/scripts/materialize_dashboards.ts $(DB) observable/docs/data
