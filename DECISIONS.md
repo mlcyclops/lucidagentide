@@ -6038,3 +6038,202 @@ existing scanner on the normal input path (#3/#5); injectable transport keeps it
 
 ADR-0071 (the TTS backend this mirrors), ADR-0070 (the audio-platform-seam thesis), ADR-0062/0068 (egress +
 managed-config govern a hosted endpoint), ADR-0066 (the exec-approval guardrail for voice in P-STT.2).
+
+## ADR-0075 - P-KG-REL.1: manual relationship authoring in the Knowledge Graph (drag-to-relate + multi-select Relate)
+
+**Date:** 2026-06-27
+**Status:** Accepted - SCOPE/PLAN. Surfaced from first real-user import feedback (a ~25-min ChatGPT-history
+ingest). The graph is accurate but **read-only**; the user wants to assert relationships the extractor missed.
+**Increment:** P-KG-REL.1. UI-only wiring of an existing, unused data-layer capability.
+
+### Context
+
+`harness/personal/store.ts` already has `addLink(fromEntityId, toEntityId, relation)` (≈line 159), but no UI
+path reaches it. Edges today come only from import or the "Richer graph" model extractor (`app.ts` "AI
+extraction" toggle). The graph (`desktop/renderer/graph.ts`, a zero-dep SVG force layout) supports
+**single-node selection only** (`kgSelId` is one string; `onUp` toggles `sel` at graph.ts:186). The user
+asked for two complementary gestures:
+1. **Drag from one node onto another** to draw a relationship (direct, spatial).
+2. **Click two or more nodes, then "Relate"**, and have the layout reform around the new edges (deliberate,
+   multi-edge).
+
+### Decision - add a UI authoring path that mints `trusted` user-authored edges; never an ingestion channel
+
+Wire both gestures to `store.addLink()` via a new `bridge.personalRelate(from, to, relation)` →
+`/api/personal/relate` route, mirroring the existing `personalForget` path (`app.ts` → `bridge.ts` →
+`dev.ts` → `personal.ts` → `store.ts`).
+
+1. **Drag-to-relate.** Extend `graph.ts onDown/onMove/onUp`: hold a modifier (or a "Relate" mode toggle so
+   plain drag still repositions a node) and drop node A's cursor over node B → emit an `onRelate(a, b)`
+   callback. Reuse the existing hit-test (`closest(".kg-node")`). A transient ghost edge follows the cursor.
+2. **Multi-select + Relate.** Promote selection from a single `kgSelId` to an ordered `Set`. Shift/ctrl-click
+   adds to the set; a "Relate" button in the side panel appears when ≥2 are selected; clicking it creates
+   edges (chain or star — default chain in selection order) and `reheat()`s the sim so the layout reforms.
+3. **Relation label.** Default the `relation` to a neutral `"related"`; allow a quick inline label. Keep it
+   short and free-text; it is display metadata, not a typed ontology (out of scope here).
+
+**Trust + provenance.** A user-authored edge is `trusted` by construction — the human asserted it in-app, it
+is NOT externally-sourced content, so it does **not** pass through the scanner and is **never** treated as
+model instructions. This is symmetric with `forgetFact` (a user decision mutates the store directly). The new
+edge carries the user as author so lineage/attribution (ADR-0031) can distinguish authored edges from
+extracted ones. Authoring an edge must NOT auto-promote either endpoint's facts into semantic memory
+(keystone #2) — it relates existing nodes, it does not create or elevate facts.
+
+**Refresh.** After a successful relate, mutate local `kgData.edges` optimistically and `kgHandle.update()` so
+the edge appears immediately (the same instant-feedback fix tracked for the forget bug), then reconcile with
+`refreshKnowledgeLive()`.
+
+### Consequences
+
+- Selection model in `graph.ts` becomes a set; the side panel renders 1 node (detail) or N nodes ("Relate"
+  affordance). Encrypted/locked compartments stay un-authored — you cannot relate nodes you cannot see.
+- `make demo-P-KG-REL.1`: select two nodes → Relate → assert an edge with `relation:"related"`, author=user,
+  `trust:"trusted"` lands in the store and renders without a reload; drag A→B does the same.
+
+### Invariants preserved
+
+No scanner bypass for *external* content (#5 — authored edges are first-party, not ingested); closed trust
+set (#7 — edge is `trusted`); no semantic auto-promotion (keystone #2); no `contracts.ts` change (edge shape
+already exists); frozen prefix untouched; reuses the existing forget IPC pattern rather than a new boundary.
+
+### Relates to
+
+`harness/personal/store.ts` (`addLink`, the unused capability this wires), `desktop/renderer/graph.ts`
+(selection + drag), the forget-flow IPC chain it mirrors, ADR-0031 (authored-vs-extracted attribution), the
+KG instant-refresh bug (the optimistic-update fix both share).
+
+## ADR-0076 - P-KG-INGEST.1: non-blocking background ingest with live progress + grouped ingest sessions
+
+**Date:** 2026-06-27
+**Status:** Accepted - SCOPE/PLAN. The single highest-impact UX finding from the first real import: a
+~25-minute ChatGPT-history ingest that **froze the app**, showed **no progress**, and **polluted the session
+list** with hundreds of throwaway "Extract DURABLE facts about…" chats.
+**Increment:** P-KG-INGEST.1. Two coupled problems (foreground blocking + session pollution) with one root —
+the importer runs inline and each model extraction mints a visible chat session.
+
+### Context
+
+`harness/personal/importer.ts importConversations()` loops conversations and messages **sequentially**,
+awaiting `distillTurn()` per user message; with model extraction on, each call hits the model backend. Three
+defects compound:
+1. **It blocks.** The work runs inline on the request the UI is awaiting; the app is unusable for ~25 min.
+2. **No progress.** `importConversations` exposes `onProgress(done, total)` but it fires once per
+   conversation and nothing surfaces it; the UI shows only a 2-second "Importing…" toast, then silence. The
+   user only saw results after closing and reopening the panel.
+3. **Session pollution.** Each model extraction calls `complete()` (`desktop/acp_backend.ts`), which opens an
+   omp `session/new` (≈line 858). omp persists that session to disk before the close request, so every
+   extraction becomes a row in the session list, titled from its first user message ("Extract DURABLE facts
+   about…", `desktop/sessions.ts listSessions()`). For a large import that is hundreds of junk sessions.
+
+### Decision - run ingest as a cancellable background job; emit a persistent progress channel; tag + collapse ingest sessions
+
+1. **Background job, app stays live.** Move the ingest loop off the awaited request into a tracked background
+   job (a `JobManager` keyed by `job_id`). The import endpoint returns the `job_id` immediately; the UI is
+   never blocked and the user can work elsewhere (chat, graph, settings) while it runs. Honor a stable
+   `EventName` for job lifecycle (`ingest.started|progress|done|failed`) carrying `run_id`/`session_id`.
+2. **Live progress + periodic digest.** Push progress every conversation (and at least every 15–30 s) to a
+   small **persistent** status surface — a pinned toast/status-pill showing `done/total`, a running
+   elapsed/ETA, and a one-line digest of what was just ingested ("+12 facts, 3 new entities from 'Logistics
+   planning'"). On completion: a summary (totals, duration) and a "View graph" action. On failure: fail-safe
+   — partial facts already persisted stay, the job reports `failed` with a reason, nothing is half-written to
+   the encrypted store mid-record.
+3. **Tag ingest sessions; collapse them out of the chat list.** Stamp every session minted by the distiller's
+   `complete()` with a `kind:"kg-ingest"` (or equivalent) marker at creation, and have `listSessions()` /
+   the renderer **group** them under a single collapsible "Knowledge Graph Ingest" entry instead of N rows in
+   the user's conversation history. They remain inspectable (provenance) but do not pollute the working list.
+   Prefer suppressing disk persistence for these throwaway extraction sessions entirely if omp's SDK allows a
+   non-persisted/ephemeral session; if not, the tag-and-group path is the fallback.
+
+**Cancellable.** The job exposes cancel; cancel stops the loop at the next conversation boundary and leaves
+already-distilled facts in place (fail-safe, never a torn write).
+
+### Consequences
+
+- The import IPC becomes async/polled (`start` → `job_id`; `status(job_id)` or an event stream). Reopening
+  the panel is no longer how you discover results.
+- A `kind` discriminator on sessions is additive; `sessions.ts` and the session-list renderer learn to fold
+  the ingest group. This is the same machinery a future "system/automation sessions" grouping would want.
+- `make demo-P-KG-INGEST.1`: kick a small import → assert the call returns before completion, progress events
+  fire ≥1/15-30s, the app-equivalent request path stays responsive, ingest sessions carry `kind:"kg-ingest"`
+  and collapse, and a mid-run cancel leaves a consistent store.
+
+### Invariants preserved
+
+Fail-closed/fail-safe (#3 — partial/cancelled/failed ingest never produces a torn encrypted record and never
+marks unscanned content trusted); imported text still enters only via the scanned, delimited, late path
+(#5 — backgrounding changes *when/where* it runs, not the gate it passes); event names stay in the
+`EventName` enum (#8) with `run_id`/`session_id` (#9); no second Python surface (#2); frozen prefix untouched.
+
+### Relates to
+
+`harness/personal/importer.ts` (`importConversations`, the blocking loop + unused `onProgress`),
+`harness/personal/distiller.ts` (`EXTRACT_SYSTEM`, the per-message extraction), `desktop/acp_backend.ts`
+(`complete()` minting `session/new`), `desktop/sessions.ts` (`listSessions` titling/grouping), ADR-0073 (the
+seam-then-UI slicing pattern), the KG instant-refresh bug (shared "results should appear without a reload").
+
+## ADR-0077 - P-VAULT-HINT.1: locked-vault existence signal — the agent knows encrypted facts EXIST without seeing them
+
+**Date:** 2026-06-27
+**Status:** Accepted - SCOPE/PLAN. Security-sensitive: it deliberately leaks **metadata** (a count, not
+content) across the lock boundary, so it gets its own careful ADR and over-tested gate.
+**Increment:** P-VAULT-HINT.1. A narrow, audited change to the recall preamble when a compartment is locked.
+
+### Context
+
+`recallPreamble()` (`desktop/personal.ts` ≈line 317) builds the per-turn memory block. When a compartment is
+**locked**, the store reference is null and it returns `""` — the agent gets **zero signal**. So when the
+user asks "what do I like?" with their CUI/personal vault locked, the agent silently answers from nothing and
+never says "I could answer better if you unlock your vault." The user explicitly wants the agent to *know
+something is there and offer to unlock it*, while the actual data stays encrypted at rest. The decrypted
+content is correctly walled off today (AES-256-GCM, DEK zeroed on lock, `crypto.ts`); only the **awareness**
+is missing.
+
+### Decision - when locked, inject a content-free existence hint built from already-known metadata; never decrypt
+
+When a selected compartment is locked but configured (`PersonalStore.exists(...)` is already surfaced as
+`cuiConfigured` in `PersonalStatus`, `personal.ts` ≈line 56), `recallPreamble()` returns a small structured
+hint **instead of** the empty string:
+
+```
+<encrypted-vault locked="true" facts="N">
+The user has a locked personal/CUI vault (N stored facts) that is encrypted and unreadable this turn.
+If the answer would benefit from it, ASK the user to unlock — do not guess its contents.
+</encrypted-vault>
+```
+
+1. **Metadata only, no content, ever.** The hint carries a **count** (and optionally coarse scope names like
+   "personal", "CUI"), derived from cheap, non-secret metadata — NOT a decrypt. The decision is whether to
+   expose even a count: yes, because a count is the minimum needed to make the offer credible and is far less
+   sensitive than any fact. Expose **N** at most; if even the count is too revealing for a deployment, a
+   managed-config knob (ADR-0068) can degrade it to a boolean ("a locked vault exists") or suppress it.
+2. **It is an instruction to the agent, not untrusted data.** The block is first-party harness text in the
+   trusted region telling the model how to behave (ask, don't fabricate). It contains no user/external
+   content, so it does not pass — and must not appear to pass — through the untrusted-content delimiters.
+3. **Fail-closed unchanged.** Locked still means **no decrypted facts reach the prompt** (#3). This ADR only
+   adds a count-bearing breadcrumb on the locked path; the unlocked path is unchanged. The CUI hard-isolation
+   (ADR-0014) holds — a locked CUI never decrypts to satisfy a hint; we read its fact count from metadata
+   without opening the DEK.
+
+### Consequences
+
+- `PersonalStatus` may need a `lockedFactCount` (metadata, persisted outside the encrypted blob or derivable
+  from a non-secret manifest) so the count is available *without* unlocking. If the count cannot be known
+  without decrypting, degrade to the boolean form — never unlock to count.
+- The agent's answers gain a polite "unlock for a fuller answer" path; the demo asserts the prompt contains
+  the hint (with N) when locked, contains **no fact text**, and contains the normal recall when unlocked.
+- `make demo-P-VAULT-HINT.1`: lock the vault, build the preamble, assert (a) a hint with a count is present,
+  (b) **no** decrypted statement text appears anywhere in the prompt, (c) unlocking restores normal recall and
+  drops the hint. This is a stop-the-line test alongside the semantic-promotion gate.
+
+### Invariants preserved
+
+Fail-closed (#3 — locked never yields decrypted content; a count is not content); untrusted-content delimiting
+(#5 — the hint is first-party trusted instruction, not ingested data, and stays out of the untrusted block);
+CUI hard isolation (ADR-0014 — no cross-compartment decrypt to satisfy a hint); closed trust set (#7);
+frozen prefix untouched (the hint lives in the volatile recall tail, after the cache breakpoint, #6).
+
+### Relates to
+
+`desktop/personal.ts` (`recallPreamble`, `PersonalStatus.cuiConfigured`), `harness/personal/recall.ts`
+(`buildRecallFromGraph` — the block this augments), `harness/personal/crypto.ts` (the lock that this respects),
+ADR-0014 (CUI hard isolation), ADR-0068 (managed-config can degrade/suppress the count), keystones #2/#3.
