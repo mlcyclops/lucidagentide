@@ -6221,8 +6221,11 @@ seam-then-UI slicing pattern), the KG instant-refresh bug (shared "results shoul
 ## ADR-0077 - P-VAULT-HINT.1: locked-vault existence signal — the agent knows encrypted facts EXIST without seeing them
 
 **Date:** 2026-06-27
-**Status:** Accepted - SCOPE/PLAN. Security-sensitive: it deliberately leaks **metadata** (a count, not
-content) across the lock boundary, so it gets its own careful ADR and over-tested gate.
+**Status:** Accepted - **BUILT (boolean form)**. The fact COUNT lives inside the AES-GCM blob, so reading
+it while locked would require a decrypt (forbidden, keystone #3) — per this ADR we degraded to the boolean
+form: the hint signals a locked vault EXISTS, with no count. A count would need a non-secret sidecar manifest
+(a future slice, gated by managed-config). Security-sensitive: it deliberately leaks only the EXISTENCE of a
+locked vault across the boundary, so it gets its own over-tested gate.
 **Increment:** P-VAULT-HINT.1. A narrow, audited change to the recall preamble when a compartment is locked.
 
 ### Context

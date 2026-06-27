@@ -15,6 +15,7 @@ import { buildRecall, buildRecallFromGraph } from "../harness/personal/recall.ts
 import { distillTurn, heuristicExtractor, modelExtractor, type Extractor } from "../harness/personal/distiller.ts";
 import { isConversationShard, mergeConversationShards, parseExport, type ImportVendor } from "../harness/personal/import_adapters.ts";
 import { importConversations, type ImportProgressTick } from "../harness/personal/importer.ts";
+import { lockedVaultHint } from "./vault_hint.ts";
 import { readZipEntriesMatching, readZipEntry } from "../harness/personal/unzip.ts";
 import { ScannerClient } from "../harness/security/scanner_client.ts";
 import { buildCuiArchive, buildVault, type CuiDesignation, type VaultFile } from "../harness/export/vault_export.ts";
@@ -350,13 +351,25 @@ function getScanner(): ScannerClient {
  *  The agent uses it to tailor responses; it enters the user turn, never the frozen prefix. */
 export function recallPreamble(): string {
   const s = load();
-  if (!s.personalizationEnabled || !store) return "";
+  if (!s.personalizationEnabled) return "";
   const scope = (s.personalScope ?? "personal") as ScopeView;
   try {
-    if (scope === "cui") return cuiStore ? buildRecall(cuiStore, { scope: "cui" }).block : "";
-    if (scope === "combined") return buildRecallFromGraph(nonCui(store.graph({ scope: "combined" }))).block; // never CUI (it's locked)
-    return buildRecall(store, { scope }).block;
+    // Unlocked path: the live <user-profile> recall block (CUI only from its own store; combined never CUI).
+    if (store) {
+      if (scope === "cui") { if (cuiStore) return buildRecall(cuiStore, { scope: "cui" }).block; }
+      else if (scope === "combined") return buildRecallFromGraph(nonCui(store.graph({ scope: "combined" }))).block;
+      else return buildRecall(store, { scope }).block;
+    }
   } catch { return ""; }
+  // P-VAULT-HINT.1 (ADR-0077): the vault is CONFIGURED but LOCKED for this scope → emit a content-free
+  // hint so the agent knows it EXISTS and can offer to unlock. Fail-closed: metadata only, never a decrypt.
+  return lockedVaultHint({
+    scope,
+    personalConfigured: PersonalStore.exists(personalStorePath()),
+    personalUnlocked: !!store,
+    cuiConfigured: PersonalStore.exists(personalCuiStorePath()),
+    cuiUnlocked: !!cuiStore,
+  });
 }
 
 /** Learn durable user-facts from one finished turn (best-effort). Fail-closed: only a

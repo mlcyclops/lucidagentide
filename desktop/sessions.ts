@@ -28,6 +28,7 @@ const PREAMBLE_BLOCKS: RegExp[] = [
   /^\s*<active-skill\b[^>]*>[\s\S]*?<\/active-skill>/,
   /^\s*<user-profile\b[^>]*>[\s\S]*?<\/user-profile>/,
   /^\s*<recalled-memory\b[^>]*>[\s\S]*?<\/recalled-memory>/,
+  /^\s*<encrypted-vault\b[^>]*>[\s\S]*?<\/encrypted-vault>/, // P-VAULT-HINT.1: the locked-vault hint
 ];
 
 /** Remove the leading injected-context block(s) from a user message so only what the

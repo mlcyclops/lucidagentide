@@ -226,6 +226,10 @@ demo-P-KG-INGEST.1: ## P-KG-INGEST.1 (#110/ADR-0076): non-blocking background in
 demo-P-KG-INGEST.1b: ## P-KG-INGEST.1b (#110/ADR-0076): group the throwaway "Extract DURABLE facts…" ingest sessions out of the chat list
 	$(BUN) run desktop/scripts/demo_p_kg_ingest_1b.ts
 
+.PHONY: demo-P-VAULT-HINT.1
+demo-P-VAULT-HINT.1: ## P-VAULT-HINT.1 (#111/ADR-0077): locked vault → content-free existence hint (agent offers to unlock; never decrypts)
+	$(BUN) run desktop/scripts/demo_p_vault_hint_1.ts
+
 .PHONY: dashboards
 dashboards: ## Materialize dashboard CSVs from a DuckDB into observable/docs/data (DB=path)
 	$(BUN) run harness/scripts/materialize_dashboards.ts $(DB) observable/docs/data
