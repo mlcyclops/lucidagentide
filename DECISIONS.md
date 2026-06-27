@@ -6571,3 +6571,51 @@ cached); best-effort + fail-safe (cache errors degrade to a normal fetch, never 
 `desktop/renderer/bridge.ts` (`sessions`/`sessionMessages`, the `no-store` fetches this fronts),
 `desktop/renderer/app.ts` (`renderSessions`/`resumeSession`), the existing `lucid.config` localStorage
 pattern this mirrors, ADR-0010 (the encrypted personal store this deliberately does NOT cache).
+
+## ADR-0085 - P-KG-INGEST.4: true ingest concurrency — a dedicated omp connection for extraction
+
+**Date:** 2026-06-27
+**Status:** Accepted - BUILT.
+**Increment:** P-KG-INGEST.4. Supersedes the yield-based mechanism of P-KG-INGEST.3 (kept as the fallback).
+
+### Context
+
+Utility completions (`backend.complete()`: import + AI-learn fact extraction, and the /goal checker) ran on
+the SINGLE omp ACP connection that chat uses. P-KG-INGEST.3 (ADR-0081) added a `ChatGate` so extraction
+YIELDS to a live chat turn — but they still share one omp process, so chat waits out up to one in-flight
+extraction. The user asked for TRUE concurrency: extraction on its own process, zero chat impact.
+
+### Decision - a second, dedicated omp connection for util completions, with a fail-safe fallback
+
+`acp_backend` lazily spawns a SECOND `omp acp` (`utilAcp`) the first time a util completion runs. It has its
+own event sink (`utilSink` collects only `agent_message_chunk` text — extraction is text-only; no tools,
+permissions, or gate-block surfacing) so it NEVER swaps the chat listener. `complete()` routes via the pure
+`util_conn.ts completionPath()`:
+- **dedicated** (util spawned) → `completeOn(utilAcp, …)` — runs flat-out, no ChatGate yield (the connections
+  are independent). A 25-minute AI import no longer competes with chat at all.
+- **shared-fallback** (util spawn failed) → `completeShared(…)` — the EXISTING path: shared connection,
+  listener-swap, `ChatGate.whenIdle()` so chat still preempts. This is today's proven behavior, so a host
+  that can't run a second omp degrades safely rather than erroring.
+
+`restart()` tears down `utilAcp` too (so a key/env change respawns both).
+
+### Consequences
+
+- The chat path is UNCHANGED (`completeShared` is the old `complete()` body verbatim) — the full desktop +
+  harness suites stay green, which is the load-bearing regression check for a core-backend change.
+- Cost: a second omp process during extraction (memory + a model connection). Acceptable for true
+  concurrency; it only spawns when a util completion actually runs (lazy), and is torn down on respawn.
+- The live "import while chatting" property is integration behavior (real omp + model); it's verified here by
+  design + the fail-safe + the suite, with a manual end-to-end check as a follow-up. The routing/fail-safe
+  contract is unit-tested (`util_conn.test.ts`) + `make demo-P-KG-INGEST.4`.
+
+### Invariants preserved
+
+Imported text still enters only via the scanned, gated path (keystone #2 — the util omp still runs with the
+gate `-e`); the dedicated connection never touches the chat listener/session (chat isolation); fail-safe
+(spawn failure → proven shared path, never an error); no `contracts.ts` change.
+
+### Relates to
+
+ADR-0081 (P-KG-INGEST.3 ChatGate — now the fallback), `desktop/acp_backend.ts` (`startUtil`/`completeOn`/
+`completeShared`), `desktop/util_conn.ts` (the routing contract), `desktop/chat_gate.ts` (fallback yield).

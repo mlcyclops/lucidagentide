@@ -258,6 +258,10 @@ demo-P-KG-SEARCH.1: ## P-KG-SEARCH.1 (#132/ADR-0083): find a node — case-insen
 demo-P-PERF.1: ## P-PERF.1 (#134/ADR-0084): instant cached session list + transcripts (SWR) — paint cache, refresh, re-render only if changed; LRU-capped
 	$(BUN) run desktop/scripts/demo_p_perf_1.ts
 
+.PHONY: demo-P-KG-INGEST.4
+demo-P-KG-INGEST.4: ## P-KG-INGEST.4 (#136/ADR-0085): true ingest concurrency — dedicated util omp connection; fail-safe fallback; routing contract
+	$(BUN) run desktop/scripts/demo_p_kg_ingest_4.ts
+
 .PHONY: dashboards
 dashboards: ## Materialize dashboard CSVs from a DuckDB into observable/docs/data (DB=path)
 	$(BUN) run harness/scripts/materialize_dashboards.ts $(DB) observable/docs/data

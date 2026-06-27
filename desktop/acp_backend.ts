@@ -16,6 +16,7 @@ import { currentWorkspace } from "./workspace.ts";
 import { learnFromTurn, recallPreamble } from "./personal.ts";
 import { buildUserTurnPreamble } from "./preamble.ts";
 import { ChatGate } from "./chat_gate.ts";
+import { completionPath } from "./util_conn.ts";
 import { recordTurns } from "./turns_log.ts";
 import { isLearnableAssistantText } from "./thinking_governance.ts";
 import { recordBlock } from "./security_log.ts";
@@ -441,7 +442,9 @@ class Backend {
    *  key changes - the new env is picked up on the fresh spawn). */
   restart(): void {
     try { this.acp?.stop(); } catch { /* ignore */ }
+    try { this.utilAcp?.stop(); } catch { /* ignore */ } // P-KG-INGEST.4: respawn the util omp too (fresh env/keys)
     this.acp = null; this.starting = null; this.sessionId = null; this.listener = null;
+    this.utilAcp = null; this.utilStarting = null; this.utilSink = null;
     this.memoryRecallDelivered = false; // persona/skill/profile are re-delivered every turn anyway (#54)
     this.availableModes = []; this.currentModeId = "default"; // re-captured from the fresh session
     // Drop any parked permission (deny) but KEEP permissionMode — the user's Ask choice survives a respawn.
@@ -856,9 +859,47 @@ class Backend {
 
   // Serializes utility completions so they never clobber a concurrent chat turn's listener.
   private utilLock: Promise<void> = Promise.resolve();
-  // P-KG-INGEST.3 (ADR-0081): lets background extraction (complete()) yield to a live chat turn, so a long
-  // AI-mode ingest can't starve chat on the shared omp connection.
+  // P-KG-INGEST.3 (ADR-0081): lets background extraction (complete()) yield to a live chat turn on the
+  // SHARED connection (the fallback path below). Superseded by the dedicated util connection when available.
   private chatGate = new ChatGate();
+
+  // P-KG-INGEST.4 (ADR-0085): a SECOND, dedicated omp connection for utility completions (import / AI-learn
+  // extraction + the /goal checker). It runs TRULY concurrently with chat — separate process, separate
+  // event sink — so a long AI ingest never touches the chat connection. Fail-safe: if this second omp can't
+  // spawn, complete() falls back to the shared connection (with the ChatGate so chat still preempts).
+  private utilAcp: ACPClient | null = null;
+  private utilStarting: Promise<ACPClient | null> | null = null;
+  private utilSink: ((text: string) => void) | null = null; // active util completion's text collector
+
+  /** Lazily spawn the dedicated util omp. Returns null on spawn failure (→ shared-connection fallback). */
+  private async startUtil(): Promise<ACPClient | null> {
+    if (this.utilAcp) return this.utilAcp;
+    if (!this.utilStarting) {
+      this.utilStarting = (async () => {
+        try {
+          this.applyAttributionEnv(); // same env threading as the chat spawn
+          const isoCfg = existsSync(ACP_CONFIG) ? ["--config", ACP_CONFIG] : [];
+          const acp = new ACPClient(ompBin(), ["acp", "-e", GATE, "-e", ASKSAGE, ...isoCfg], currentWorkspace());
+          // A util completion is TEXT-ONLY: collect assistant text into the active sink, ignore everything
+          // else (no tool calls, no permissions, no gate-block surfacing — that's the chat connection's job).
+          acp.onNotify = (method: string, params: any) => {
+            if (method !== "session/update") return;
+            const u = params?.update ?? params;
+            if (u?.sessionUpdate === "agent_message_chunk" && u.content?.type === "text") this.utilSink?.(u.content.text);
+          };
+          acp.onRequest = async () => ({}); // no interactive permissions during extraction
+          acp.onStderr = () => { /* no tools here → nothing to surface */ };
+          acp.start();
+          await acp.request("initialize", { protocolVersion: 1, clientCapabilities: { fs: { readTextFile: false, writeTextFile: false } } });
+          this.utilAcp = acp;
+          return acp;
+        } catch { this.utilAcp = null; return null; }
+      })();
+    }
+    const acp = await this.utilStarting;
+    this.utilStarting = null; // allow a retry on a later call if this spawn failed
+    return acp;
+  }
 
   /** One-shot, non-streaming completion in a THROWAWAY session — never touches the chat
    *  session, persona, or recall. Returns the aggregated assistant text ("" on any failure).
@@ -868,49 +909,82 @@ class Backend {
   async complete(system: string, user: string, opts: { idleMs?: number; model?: string } = {}): Promise<string> {
     const run = this.utilLock.then(async () => {
       await this.start();
-      const prev = this.listener;
-      let sid: string | null = null;
-      let text = "";
-      let idle: ReturnType<typeof setTimeout> | undefined;
-      let onStall: (e: Error) => void = () => {};
-      let myListener: ((e: ChatEvent) => void) | null = null;
-      try {
-        // P-KG-INGEST.3: yield to a live chat turn before running this extraction. A long AI-mode import
-        // fires complete() back-to-back; pausing here while the user is chatting lets chat preempt the
-        // import (at most one in-flight extraction of latency), then the import resumes.
-        await this.chatGate.whenIdle();
-        const s: any = await this.acp!.request("session/new", { cwd: currentWorkspace(), mcpServers: mcpServersForAcp() });
-        sid = s?.sessionId ?? s?.id ?? null;
-        if (!sid) return "";
-        // P-GOAL.6 (ADR-0048): run this throwaway completion on a DIFFERENT model when asked (the /goal
-        // checker). Session-scoped, so the chat session's model is untouched. Best-effort: if the set
-        // fails, the completion just runs on the default model (fail-safe, never blocks the loop).
-        if (opts.model) await this.acp!.request("session/set_config_option", { sessionId: sid, configId: "model", value: opts.model }).catch(() => {});
-        const IDLE = opts.idleMs ?? 60_000;
-        const arm = () => { if (idle) clearTimeout(idle); idle = setTimeout(() => onStall(new Error("stall")), IDLE); };
-        myListener = (e: ChatEvent) => { arm(); if (e.type === "token") text += e.text; };
-        this.listener = myListener;
-        arm();
-        const stall = new Promise<never>((_, reject) => { onStall = reject; });
-        await Promise.race([
-          this.acp!.request("session/prompt", { sessionId: sid, prompt: [{ type: "text", text: `${system}\n\n${user}` }] }),
-          stall,
-        ]);
-        return text;
-      } catch { return text; }
-      finally {
-        if (idle) clearTimeout(idle);
-        // Only restore if WE are still the active listener. If a chat turn started while this throwaway
-        // completion ran (long ones overlap), `this.listener` is now that turn's sink — restoring `prev`
-        // here would orphan it (drop its events → blank chat until reload). Leave it alone in that case.
-        const clobber = myListener !== null && this.listener !== myListener;
-        this.turnDiag(`complete.end clobberAvoided=${clobber} chars=${text.length}`);
-        if (!clobber) this.listener = prev;
-        if (sid) this.acp!.request("session/close", { sessionId: sid }).catch(() => {});
-      }
+      // P-KG-INGEST.4: prefer the DEDICATED util connection (true concurrency — never touches chat). If it
+      // couldn't spawn, fall back to the shared connection with the ChatGate (chat preempts, ≤1 extraction).
+      const util = await this.startUtil();
+      return completionPath(!!util) === "dedicated" ? this.completeOn(util!, system, user, opts) : this.completeShared(system, user, opts);
     });
     this.utilLock = run.then(() => {}, () => {}); // next complete() waits for this one
     return run;
+  }
+
+  /** Run a completion on the DEDICATED util connection (P-KG-INGEST.4): independent process + sink, so it
+   *  never swaps the chat listener and never needs to yield to chat. Serialized via utilLock, so utilSink
+   *  is never contended. */
+  private async completeOn(acp: ACPClient, system: string, user: string, opts: { idleMs?: number; model?: string }): Promise<string> {
+    let sid: string | null = null;
+    let text = "";
+    let idle: ReturnType<typeof setTimeout> | undefined;
+    let onStall: (e: Error) => void = () => {};
+    try {
+      const s: any = await acp.request("session/new", { cwd: currentWorkspace(), mcpServers: mcpServersForAcp() });
+      sid = s?.sessionId ?? s?.id ?? null;
+      if (!sid) return "";
+      if (opts.model) await acp.request("session/set_config_option", { sessionId: sid, configId: "model", value: opts.model }).catch(() => {});
+      const IDLE = opts.idleMs ?? 60_000;
+      const arm = () => { if (idle) clearTimeout(idle); idle = setTimeout(() => onStall(new Error("stall")), IDLE); };
+      this.utilSink = (t) => { arm(); text += t; };
+      arm();
+      const stall = new Promise<never>((_, reject) => { onStall = reject; });
+      await Promise.race([
+        acp.request("session/prompt", { sessionId: sid, prompt: [{ type: "text", text: `${system}\n\n${user}` }] }),
+        stall,
+      ]);
+      return text;
+    } catch { return text; }
+    finally {
+      if (idle) clearTimeout(idle);
+      this.utilSink = null;
+      this.turnDiag(`complete.util chars=${text.length}`);
+      if (sid) acp.request("session/close", { sessionId: sid }).catch(() => {});
+    }
+  }
+
+  /** Fallback path: run on the SHARED chat connection, swapping the listener + yielding to a live chat turn
+   *  via the ChatGate (P-KG-INGEST.3). Used only when the dedicated util omp couldn't spawn. */
+  private async completeShared(system: string, user: string, opts: { idleMs?: number; model?: string }): Promise<string> {
+    const prev = this.listener;
+    let sid: string | null = null;
+    let text = "";
+    let idle: ReturnType<typeof setTimeout> | undefined;
+    let onStall: (e: Error) => void = () => {};
+    let myListener: ((e: ChatEvent) => void) | null = null;
+    try {
+      await this.chatGate.whenIdle(); // chat preempts extraction on the shared connection
+      const s: any = await this.acp!.request("session/new", { cwd: currentWorkspace(), mcpServers: mcpServersForAcp() });
+      sid = s?.sessionId ?? s?.id ?? null;
+      if (!sid) return "";
+      if (opts.model) await this.acp!.request("session/set_config_option", { sessionId: sid, configId: "model", value: opts.model }).catch(() => {});
+      const IDLE = opts.idleMs ?? 60_000;
+      const arm = () => { if (idle) clearTimeout(idle); idle = setTimeout(() => onStall(new Error("stall")), IDLE); };
+      myListener = (e: ChatEvent) => { arm(); if (e.type === "token") text += e.text; };
+      this.listener = myListener;
+      arm();
+      const stall = new Promise<never>((_, reject) => { onStall = reject; });
+      await Promise.race([
+        this.acp!.request("session/prompt", { sessionId: sid, prompt: [{ type: "text", text: `${system}\n\n${user}` }] }),
+        stall,
+      ]);
+      return text;
+    } catch { return text; }
+    finally {
+      if (idle) clearTimeout(idle);
+      // Only restore if WE are still the active listener (a chat turn may have taken over a long overlap).
+      const clobber = myListener !== null && this.listener !== myListener;
+      this.turnDiag(`complete.shared clobberAvoided=${clobber} chars=${text.length}`);
+      if (!clobber) this.listener = prev;
+      if (sid) this.acp!.request("session/close", { sessionId: sid }).catch(() => {});
+    }
   }
 }
 
