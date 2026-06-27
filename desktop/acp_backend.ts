@@ -19,7 +19,7 @@ import { recordTurns } from "./turns_log.ts";
 import { isLearnableAssistantText } from "./thinking_governance.ts";
 import { recordBlock } from "./security_log.ts";
 import { asksageOnly, attribution, checkerModel, lastModel, load as loadSettings, mcpServersForAcp, setCheckerModel, setLastModel } from "./settings_store.ts";
-import { managedConfig } from "./managed_config.ts";
+import { managedAsksageOnly } from "./managed_config.ts";
 import { recommendCheckerModel, resolveCheckerModel, type ModelOption } from "./checker_model.ts";
 import { parseGoalVerdict } from "./goal_verdict.ts";
 import { appendGoalIteration, appendRunLog, finishGoalMemory, type GoalMemory, readRunLog, resumeGoalMemory, saveGoalReport, savePreflightReport, startGoalMemory } from "./goal_memory.ts";
@@ -492,11 +492,13 @@ class Backend {
       const body = built.preamble + text;
       arm(); // start the idle clock now (covers a stall BEFORE the first token)
       const stall = new Promise<never>((_, reject) => { onStall = reject; });
-      await Promise.race([
+      const promptRes = await Promise.race<any>([
         this.acp!.request("session/prompt", { sessionId: this.sessionId, prompt: [{ type: "text", text: body }] }),
         stall,
       ]);
-      this.turnDiag(`prompt.resolved session=${this.sessionId} chars=${assistant.length} enqueueErr=${enqueueErr} listenerIntact=${this.listener === sink}`);
+      // P-GOAL-DIAG.1 (ADR-0074): the omp turn's stopReason tells us WHY a maker turn ended (e.g. an
+      // empty/early end on a thinking-heavy Claude turn) — invaluable for the model-specific loop bug.
+      this.turnDiag(`prompt.resolved session=${this.sessionId} chars=${assistant.length} stopReason=${promptRes?.stopReason ?? "?"} enqueueErr=${enqueueErr} listenerIntact=${this.listener === sink}`);
     } catch (e) {
       this.turnDiag(`prompt.${stalled ? "stalled" : "error"} session=${this.sessionId} chars=${assistant.length} enqueueErr=${enqueueErr} listenerIntact=${this.listener === sink} msg=${String((e as any)?.message ?? e).slice(0, 80)}`);
       onEvent({ type: "token", text: `\n[${stalled ? "stalled" : "agent unavailable"}: ${String((e as any)?.message ?? e)}]` });
@@ -573,6 +575,7 @@ class Backend {
         let work = "";
         let actedThisIter = false;
         let iterTools = 0, iterErrors = 0;
+        let iterThink = 0, iterThinkChars = 0; // P-GOAL-DIAG.1 (ADR-0074): catch a thinking-only maker turn
         let turnPeakCost = 0, turnPeakCtx = 0, budgetHit = false;
         // Forward the maker's stream, but swallow the per-iteration `done` so the client sees ONE loop.
         const sink = (e: ChatEvent) => {
@@ -581,6 +584,7 @@ class Backend {
           if (e.type === "tool") { actedThisIter = true; iterTools++; const t = normalizeToolName(e.name); toolCalls[t] = (toolCalls[t] ?? 0) + 1; for (const u of extractUrls(e.detail)) websites.add(u); }
           else if (e.type === "subagent") { actedThisIter = true; iterTools++; toolCalls.subagent = (toolCalls.subagent ?? 0) + 1; }
           else if (e.type === "block") { iterErrors++; errors.push({ iter: i, detail: `${e.tool}: ${e.reason}`.slice(0, 200) }); }
+          else if (e.type === "thinking") { iterThink++; iterThinkChars += e.text.length; }
           else if (e.type === "usage") {
             sawUsage = true;
             turnPeakCost = Math.max(turnPeakCost, e.cost);
@@ -597,6 +601,11 @@ class Backend {
           ? `${goal}\n\nWork toward this goal now. The stop condition is: ${condition}${command ? ` (verified by running \`${command}\`)` : ""}. Take the next concrete step.${memNote}${resumeNote}`
           : `Continue toward the goal. Stop condition: ${condition}. Take the next concrete step; if you believe the condition now holds, say so briefly and stop.${memNote}${failNote}`;
         await this.prompt(iterText, sink);
+        // P-GOAL-DIAG.1 (ADR-0074): dev-mode breakdown of WHAT this maker turn emitted. A model-specific
+        // empty turn (e.g. Claude with high thinking streaming thinking-only, no tool calls / no answer)
+        // shows here as answer_chars=0 tools=0 with thinking_chars>0 — the exact signature behind the
+        // checker's "no output / no changes" verdict. Off unless developer mode is on.
+        this.turnDiag(`goal.iter ${i} maker-turn: answer_chars=${work.length} thinking=${iterThink}/${iterThinkChars}c tools=${iterTools} blocks=${iterErrors} acted=${actedThisIter}`);
         for (const u of extractUrls(work)) websites.add(u); // links the maker mentioned in its own text
         lastIterErrors = iterErrors;
         spend = addTurnSpend(spend, turnPeakCost, turnPeakCtx); // P-GOAL.11: fold this turn's peak into the running spend
@@ -776,8 +785,9 @@ class Backend {
     return { ran: true, result };
   }
 
-  /** The "AskSage only" model lock, from either the user's setting or org-managed config. */
-  private asksageLocked(): boolean { return asksageOnly() || !!managedConfig().config?.asksageOnly; }
+  /** The "AskSage only" model lock, from either the user's setting or org-managed config (the new
+   *  `models.asksageOnly` block plus the legacy top-level flag, via managedAsksageOnly). */
+  private asksageLocked(): boolean { return asksageOnly() || managedAsksageOnly(); }
 
   // P-GOAL.6 (ADR-0048): the user's accessible models, as the model config reports them (provider-
   // prefixed value + display name). Empty until omp has reported a config.
