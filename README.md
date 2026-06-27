@@ -298,6 +298,13 @@ You can seed it in minutes by importing a ChatGPT / Claude / Gemini history.
 - 🕸️ **Inspectable.** An interactive node/edge graph you can drill into - and export to an [Obsidian](https://obsidian.md) vault.
 - 🏛️ **Honest about FIPS.** FIPS-*approved* algorithms plus OS-keystore key custody. True 140-3 validation is an OS concern, so the app never claims a FIPS *mode* it can't self-certify.
 
+<div align="center">
+<br/>
+<img src=".github/assets/knowledge-graph.png" alt="LucidAgentIDE personalization knowledge graph - an interactive node/edge graph of the user's preferences, decisions, and interests learned from imported chat history, with a selected node showing its facts, trust label, and relationships" width="840" />
+<br/>
+<sub><b>↑ Your personalization knowledge graph</b> - imported from a ChatGPT / Claude / Gemini history; click a node to see its facts (trust label + confidence), relationships, and forget/relate controls. Search to find a node; drag to relate. Private, AES-256-GCM encrypted, opt-in.</sub>
+</div>
+
 ## <img src=".github/assets/icons/gateway-animated.svg" width="28" align="top" alt=""> Models and the AskSage gateway
 
 Models from any omp provider work out of the box (Claude, GPT, Gemini, …). On top of that, the
@@ -314,6 +321,13 @@ Models from any omp provider work out of the box (Claude, GPT, Gemini, …). On 
 
 Optionally, the on-device [**headroom**](https://github.com/chopratejas/headroom) token-compression proxy can
 be enabled to stretch a gov token quota ([ADR-0008](DECISIONS.md)).
+
+<div align="center">
+<br/>
+<img src=".github/assets/asksage-gateway-lockdown.png" alt="LucidAgentIDE Settings showing the AskSage accredited gov-gateway with lockdown enabled - every turn routed through the gateway, direct providers hidden, plus the monthly token-quota meter" width="560" />
+<br/>
+<sub><b>↑ AskSage gov-gateway "lockdown"</b> - one toggle routes <i>every</i> turn through the accredited gateway and hides direct providers in the model picker; the monthly token-quota meter and personalization (private · encrypted · opt-in) sit alongside.</sub>
+</div>
 
 ## 📚 Knowledge & RAG (Coming Soon)
 
@@ -365,6 +379,13 @@ Requires [Bun](https://bun.sh) and [uv](https://docs.astral.sh/uv/). `make` is o
 A polished Electron shell: a **gated agent chat**, plus live **Security** and **Memory & Context** inspectors
 (collapsible sections, custom tooltips, ⌘K palette, a non-modal fly-in toast when the gate quarantines a tool
 call).
+
+<div align="center">
+<br/>
+<img src=".github/assets/chat-metrics-rail.png" alt="LucidAgentIDE desktop chat with the live Memory & Context rail - prompt-cache savings, context window, turns, security findings, and quarantines - and a gate-active / live status bar" width="560" />
+<br/>
+<sub><b>↑ The gated chat + live Memory & Context rail</b> - prompt-cache savings, context window, turns, findings, and quarantines at a glance; every tool call is scanned before it runs (<code>gate active · live</code>).</sub>
+</div>
 
 ```bash
 bun run desktop:web      # http://localhost:5319 - full GUI (chat + dashboards) in a browser
