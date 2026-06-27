@@ -81,6 +81,14 @@ ipcMain.handle("lucid:pickFolder", async (e) => {
   return r.canceled || !r.filePaths[0] ? null : r.filePaths[0];
 });
 
+// Reveal an export location in the OS file manager (#115). Only opens a path that actually exists, so a
+// stray/forged request can't probe the filesystem. shell.openPath returns "" on success, else an error.
+ipcMain.handle("lucid:revealPath", async (_e, p: unknown) => {
+  const target = typeof p === "string" ? p : "";
+  if (!target || !existsSync(target)) return false;
+  return (await shell.openPath(target)) === "";
+});
+
 ipcMain.on("lucid:win", (e, action: string) => {
   const w = BrowserWindow.fromWebContents(e.sender);
   if (!w) return;

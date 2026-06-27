@@ -337,6 +337,8 @@ export interface LucidBridge {
   cloneWorkspace(url: string): Promise<WorkspaceInfo | null>;
   pickFolder(): Promise<string | null>; // native dialog in Electron; null in browser
   listDir(path?: string): Promise<FsList | null>; // in-app folder browser (works everywhere)
+  revealPath(path: string): Promise<boolean>; // open a folder in the OS file manager (Electron only; false in browser)
+  canRevealPath(): boolean; // whether the native shell can reveal a folder (Electron only)
 }
 
 /** Native shell injected by the Electron preload (window controls + crisp zoom). */
@@ -344,6 +346,7 @@ interface NativeShell {
   isElectron?: boolean;
   setZoom?(factor: number): void;
   pickFolder?(): Promise<string | null>;
+  revealPath?(path: string): Promise<boolean>;
   win?: { minimize(): void; toggleMaximize(): void; close(): void };
 }
 declare global { interface Window { lucid?: NativeShell } }
@@ -518,6 +521,8 @@ export const bridge: LucidBridge = {
   cloneWorkspace: (url) => post("/api/workspace/clone", { url }),
   pickFolder: () => (shell?.pickFolder ? shell.pickFolder() : Promise.resolve(null)),
   listDir: (path) => getData(`/api/fs/list${path ? `?path=${encodeURIComponent(path)}` : ""}`),
+  revealPath: (path) => (shell?.revealPath ? shell.revealPath(path) : Promise.resolve(false)),
+  canRevealPath: () => !!shell?.revealPath,
   setZoom: (f) => {
     if (shell?.setZoom) { shell.setZoom(f); return; } // Electron: crisp native zoom
     // Browser: zoom #app and counter-scale its height so it still fills the viewport

@@ -210,6 +210,10 @@ demo-B-KG.1: ## B-KG.1 (#112/#113/#114): KG interaction polish — large graph f
 demo-P-KG-REL.1: ## P-KG-REL.1 (#109/ADR-0075): manual relate — authored edge lands in the store + persists; drag/multi-select interaction logic
 	$(BUN) run desktop/scripts/demo_p_kg_rel_1.ts
 
+.PHONY: demo-B-KG.2
+demo-B-KG.2: ## B-KG.2 (#115): export location is recoverable — persistent toast + Open folder / Copy path
+	$(BUN) run desktop/scripts/demo_b_kg_2.ts
+
 .PHONY: demo-P-ENT.1
 demo-P-ENT.1: ## P-ENT.1 (ADR-0068): enterprise managed-policy override — set + lock exec/egress/model knobs via GPO/MDM, only ever tightening, fail-safe to unmanaged
 	$(BUN) run harness/scripts/demo_pent1.ts
