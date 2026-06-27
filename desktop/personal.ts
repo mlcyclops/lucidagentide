@@ -161,6 +161,40 @@ export function forgetFact(factId: string): { ok: boolean } {
   return { ok: false };
 }
 
+/** Tidy a user-typed relation label: strip control chars, collapse whitespace, cap length, default
+ *  to "related". The label is display-only (links never enter the prompt — recall is fact-only), so this
+ *  is hygiene, not a trust boundary. */
+function sanitizeRelation(relation?: string): string {
+  const cleaned = String(relation ?? "")
+    .replace(/[\u0000-\u001f\u007f-\u009f]/g, " ") // drop control chars (display hygiene)
+    .replace(/\s+/g, " ").trim().slice(0, 40);
+  return cleaned || "related";
+}
+
+/** Relate two entities the user connected in the graph (P-KG-REL.1, ADR-0075). USER-AUTHORED and
+ *  first-party: it does NOT pass through the scanner (it is not external/retrieved content) and never
+ *  auto-promotes a fact (keystone #2) — it only links two EXISTING, currently-visible nodes. Both must
+ *  live in the currently-scoped store and be different; the relation label is sanitized + capped. */
+export function relateEntities(fromId: string, toId: string, relation?: string): { ok: boolean; error?: string; id?: string } {
+  const s = load();
+  if (!s.personalizationEnabled || !store) return { ok: false, error: "Personalization is off." };
+  const scope = (s.personalScope ?? "personal") as ScopeView;
+  const src = storeForScope(scope);
+  if (!src) return { ok: false, error: "That compartment is locked." };
+  const from = String(fromId ?? ""), to = String(toId ?? "");
+  if (!from || !to || from === to) return { ok: false, error: "Pick two different nodes." };
+  // Only relate nodes that are actually visible in the current view (entities that have active facts).
+  const ids = new Set((personalGraph(scope)?.nodes ?? []).map((n) => n.id));
+  if (!ids.has(from) || !ids.has(to)) return { ok: false, error: "Both nodes must be in the current view." };
+  const rel = sanitizeRelation(relation);
+  // Dedup: an identical from→to→relation already asserted is a no-op (don't pile up duplicate edges).
+  const existing = src.graph({ scope }).links.find((l) => l.from_entity_id === from && l.to_entity_id === to && l.relation === rel);
+  if (existing) return { ok: true, id: existing.id };
+  const id = src.addLink(from, to, rel);
+  src.save();
+  return { ok: true, id };
+}
+
 // ── P9.4: audited Obsidian vault export + NARA-aligned CUI archive ─────────────────
 export interface ExportSummary {
   ok: boolean; error?: string; dest?: string;

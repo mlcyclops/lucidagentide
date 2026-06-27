@@ -317,6 +317,8 @@ export interface LucidBridge {
   personalCuiDestroy(): Promise<{ ok: boolean; error?: string; destroyed?: boolean; facts?: number } | null>;
   personalGraph(scope?: PersonalScopeView): Promise<PersonalGraphData | null>;
   personalForget(factId: string): Promise<{ ok: boolean } | null>;
+  // P-KG-REL.1 (ADR-0075): user-authored relationship between two existing, visible nodes.
+  personalRelate(from: string, to: string, relation?: string): Promise<{ ok: boolean; error?: string; id?: string } | null>;
   // P9.7: import a ChatGPT / Claude / Gemini data export (folder, .json, or .zip) into the active
   // compartment, through the fail-closed gate. `model` runs the richer LLM extractor (capped).
   personalImport(path: string, model?: boolean): Promise<PersonalImportResult | null>;
@@ -503,6 +505,7 @@ export const bridge: LucidBridge = {
   personalCuiDestroy: () => post("/api/personal/cui/destroy", {}),
   personalGraph: (scope) => getData(`/api/personal/graph${scope ? `?scope=${encodeURIComponent(scope)}` : ""}`),
   personalForget: (factId) => post("/api/personal/forget", { factId }),
+  personalRelate: (from, to, relation) => post("/api/personal/relate", { from, to, relation }),
   personalImport: (path, model) => post("/api/personal/import", { path, model: !!model }),
   personalImportEstimate: (path) => post("/api/personal/import/estimate", { path }),
   editorRead: (path) => post("/api/editor/file", { path }),

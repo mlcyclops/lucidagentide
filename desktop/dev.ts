@@ -30,7 +30,7 @@ import { currentWorkspace } from "./workspace.ts";
 import { recordSkillActivated } from "./skills_log.ts";
 import { recentTurns } from "./turns_log.ts";
 import { headroomStatus, setHeadroomEnabled, startHeadroom } from "./headroom.ts";
-import { destroyCui, enablePersonal, estimateChatExport, exportCuiArchive, exportHistory, exportVault, forgetFact, importChatExport, lockCui, lockPersonal, migrateCuiIntoStore, personalGraph, personalStatus, setScope, setupCui, setupPersonal, unlockCui, unlockPersonal } from "./personal.ts";
+import { destroyCui, enablePersonal, estimateChatExport, exportCuiArchive, exportHistory, exportVault, forgetFact, importChatExport, lockCui, lockPersonal, migrateCuiIntoStore, personalGraph, personalStatus, relateEntities, setScope, setupCui, setupPersonal, unlockCui, unlockPersonal } from "./personal.ts";
 import { readEditorFile, saveEditorFile } from "./editor.ts";
 import { homedir } from "node:os";
 import { existsSync, readdirSync, statSync } from "node:fs";
@@ -478,6 +478,9 @@ const server = Bun.serve({
       if (p === "/api/personal/cui/destroy" && req.method === "POST") return json({ ok: true, data: destroyCui() });
       if (p === "/api/personal/graph") return json({ ok: true, data: personalGraph((url.searchParams.get("scope") ?? undefined) as any) });
       if (p === "/api/personal/forget" && req.method === "POST") { const b = await readBody<{ factId?: unknown }>(req); return json({ ok: true, data: forgetFact(String(b.factId ?? "")) }); }
+      // P-KG-REL.1 (ADR-0075): user-authored relationship between two existing, visible nodes. First-party
+      // (not external content) → no scanner; relateEntities validates both nodes + sanitizes the label.
+      if (p === "/api/personal/relate" && req.method === "POST") { const b = await readBody<{ from?: unknown; to?: unknown; relation?: unknown }>(req); return json({ ok: true, data: relateEntities(String(b.from ?? ""), String(b.to ?? ""), b.relation == null ? undefined : String(b.relation)) }); }
       // P9.7: import a ChatGPT / Claude / Gemini export (folder, .json, or .zip). Every imported
       // user message is scanned by the fail-closed gate first. `model:true` runs the richer LLM
       // extractor via a throwaway omp completion (capped); otherwise the offline heuristic.

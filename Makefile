@@ -202,6 +202,14 @@ demo-P-STT.1: ## P-STT.1 (ADR-0073): mic audio → text via the OpenAI-compatibl
 demo-P-ASKSAGE.1: ## P-ASKSAGE.1 (ADR-0059): AskSage tool-loop diagnostics + tolerant extraction — wrapped replies recovered, empty turns flagged
 	$(BUN) run harness/scripts/demo_paskage1.ts
 
+.PHONY: demo-B-KG.1
+demo-B-KG.1: ## B-KG.1 (#112/#113/#114): KG interaction polish — large graph fits on open, idle CPU halts, forget is instant + snapshot-safe
+	$(BUN) run desktop/scripts/demo_b_kg_1.ts
+
+.PHONY: demo-P-KG-REL.1
+demo-P-KG-REL.1: ## P-KG-REL.1 (#109/ADR-0075): manual relate — authored edge lands in the store + persists; drag/multi-select interaction logic
+	$(BUN) run desktop/scripts/demo_p_kg_rel_1.ts
+
 .PHONY: demo-P-ENT.1
 demo-P-ENT.1: ## P-ENT.1 (ADR-0068): enterprise managed-policy override — set + lock exec/egress/model knobs via GPO/MDM, only ever tightening, fail-safe to unmanaged
 	$(BUN) run harness/scripts/demo_pent1.ts

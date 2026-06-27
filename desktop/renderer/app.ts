@@ -11,6 +11,7 @@ import { ageStr, esc, fmtUSD, goodColor, loadColor } from "./format.ts";
 import { icon, piMark } from "./icons.ts";
 import { renderMarkdown } from "./markdown.ts";
 import { type GraphHandle, kindLabel, mountGraph } from "./graph.ts";
+import { addEdgeOptimistic, applyForget, chainPairs } from "./kg_ops.ts";
 import type { PersonalGraphData } from "./bridge.ts";
 import { type Action, attachRichTip, createPalette, initTooltips, popover, showToast } from "./ui.ts";
 import { ASKSAGE_FAMILY_ORDER, familyOf, filterModels, groupByFamily, isAuxiliaryModel, isChinaModel, isDeprecatedModel, isGovModel, sortGovFirstNewest } from "./model_families.ts";
@@ -194,12 +195,19 @@ function buildShell(): void {
             <div class="seg kg-lens" data-kg-lens>
               <button class="on" data-lens="kind">Kind</button><button data-lens="trust">Trust</button>
             </div>
+            <button class="btn-mini" id="kgRelate" data-tip="Relate nodes|Turn on relate mode, then drag one node onto another — or click two or more nodes and press Relate — to add your OWN relationships. They're saved to your private graph (first-party, never sent to be scanned as instructions).">${icon("git", 13)} Relate</button>
             <label class="kg-ai" data-tip="AI extraction|Use the model to pull richer facts + real relationships from each message, instead of the fast offline heuristic. Slower and uses model quota; capped at 500 messages per import. Leave off for a free, instant pass."><input type="checkbox" id="kgImportAI"/> AI</label>
             <button class="btn-mini" id="kgImport" data-tip="Import chat history|Bring in a ChatGPT, Claude, or Gemini data export to seed your graph. Easiest: just pick the unzipped export FOLDER (a modern ChatGPT export has no single conversations.json — it ships conversations-000.json, -001.json … and we merge them for you) — or point at the .zip / conversations.json / MyActivity.json directly. Every message is scanned by the security gate before anything is learned; only your own messages teach the profile.">${icon("download", 13)} Import history</button>
             <button class="btn-mini" id="kgExport" data-tip="Export Obsidian vault|Decrypt and write your Personal + Work knowledge to a portable Obsidian vault (notes, [[wikilinks]], escaped). CUI is excluded by design. The export is audited.">${icon("folder", 13)} Export vault</button>
             <button class="btn-mini danger" id="kgCui" data-tip="CUI archive · National Archives|Export ONLY the CUI compartment into a CUI-marked, records-managed package with a SHA-256 manifest (32 CFR 2002 · NARA). For archive/records requirements. Audited.">${icon("shield", 13)} CUI archive</button>
             <button class="set-close" id="kgClose" data-tip="Close">${icon("close", 16)}</button>
           </div>
+        </div>
+        <div class="kg-relate-bar" id="kgRelateBar" hidden>
+          <span class="kg-relate-hint">${icon("info", 12)} Drag a node onto another to relate them — or click nodes, then Relate.</span>
+          <span class="kg-relate-count" id="kgRelateCount"></span>
+          <button class="btn-mini ok" id="kgRelateDo" disabled>Relate</button>
+          <button class="btn-mini" id="kgRelateClear">Clear</button>
         </div>
         <div class="kg-main">
           <div class="kg-canvas" id="kgCanvas"></div>
@@ -1429,6 +1437,56 @@ let kgLens: "kind" | "trust" = "kind";
 let kgOpen = false;
 let kgSelId: string | null = null;
 let kgSig = ""; // signature of the last-rendered graph, to skip no-op live refreshes
+const forgettingIds = new Set<string>(); // in-flight "forget" fact ids — de-dups mashed clicks (#113)
+// P-KG-REL.1 (#109): manual relationship authoring state.
+let kgRelateMode = false;
+let kgRelatePicks: string[] = []; // ordered multi-select pick set (for the "Relate" action)
+let relating = false; // guards against concurrent relate calls
+
+/** Apply a relate result to the live graph: optimistically add the edge, keep the poll baseline in sync,
+ *  and surface failures. Returns whether it landed. */
+async function relateNodes(fromId: string, toId: string, relation = "related"): Promise<boolean> {
+  if (!kgData) return false;
+  const before = kgData;
+  kgData = addEdgeOptimistic(kgData, fromId, toId, relation); // instant edge (no reload wait)
+  kgSig = kgSignature(kgData);
+  kgHandle?.update(kgData);
+  const r = await bridge.personalRelate(fromId, toId, relation).catch(() => null);
+  if (r?.ok) return true;
+  kgData = before; // server refused → roll back
+  kgSig = kgSignature(kgData);
+  kgHandle?.update(kgData);
+  showToast({ tone: "danger", title: "Couldn't relate those", desc: r?.error ?? "Try again.", actions: [{ label: "OK" }], timeout: 4000 });
+  return false;
+}
+
+/** Reflect the current multi-select pick set in the relate bar (count + enabled state). */
+function onRelatePick(ids: string[]): void {
+  kgRelatePicks = ids;
+  const count = $("#kgRelateCount"), doBtn = $("#kgRelateDo") as HTMLButtonElement | null;
+  if (count) count.textContent = ids.length ? `${ids.length} selected` : "";
+  if (doBtn) doBtn.disabled = ids.length < 2;
+}
+
+/** Chain-relate the picked nodes (A,B,C → A→B, B→C), then clear the picks. */
+async function relatePicked(): Promise<void> {
+  if (relating || kgRelatePicks.length < 2) return;
+  relating = true;
+  const pairs = chainPairs(kgRelatePicks);
+  let ok = 0;
+  for (const [from, to] of pairs) if (await relateNodes(from, to)) ok++;
+  relating = false;
+  kgHandle?.clearRelatePicks(); // fires onRelatePick([]) → resets the bar
+  if (ok) showToast({ title: ok === 1 ? "Related" : `${ok} relationships added`, desc: "Saved to your private graph.", timeout: 2400 });
+}
+
+function setRelateMode(on: boolean): void {
+  kgRelateMode = on;
+  kgHandle?.setRelateMode(on);
+  $("#kgRelate")?.classList.toggle("on", on);
+  const bar = $("#kgRelateBar"); if (bar) (bar as HTMLElement).hidden = !on;
+  if (!on) onRelatePick([]);
+}
 
 /** Cheap change-signature for the graph (node/edge ids + counts + fact total). */
 function kgSignature(d: PersonalGraphData | null): string {
@@ -1468,6 +1526,7 @@ function openKnowledge(): void {
 function closeKnowledge(): void {
   if (!kgOpen) return;
   kgOpen = false;
+  if (kgRelateMode) setRelateMode(false); // leave relate mode clean for next open
   kgHandle?.destroy(); kgHandle = null;
   $("#knowledge")!.hidden = true;
   $("#inspector")!.hidden = false;
@@ -1498,7 +1557,8 @@ async function renderKnowledge(): Promise<void> {
   catch { return gate("Couldn't decrypt your graph. Try reopening this panel."); }
   if (!kgData || kgData.nodes.length === 0) return gate("Nothing learned yet. It remembers durable facts about <b>you</b> - not what we discuss. Tell me things like <i>“I prefer Rust”</i>, <i>“I use vim”</i>, <i>“I decided to go with Postgres”</i>, or <i>“remember that I deploy with Kubernetes”</i> and they'll appear here (each is security-scanned first).");
   (side as HTMLElement).hidden = true; side.innerHTML = ""; // appears only when a node is clicked
-  kgHandle = mountGraph(canvas as HTMLElement, kgData, (id) => renderKgSide(id));
+  kgHandle = mountGraph(canvas as HTMLElement, kgData, (id) => renderKgSide(id), { onRelate: relateNodes, onRelatePick: onRelatePick });
+  if (kgRelateMode) { kgHandle.setRelateMode(true); onRelatePick([]); } // preserve relate mode across a live remount
   kgHandle.setLens(kgLens);
   kgSig = kgSignature(kgData); // baseline so live refreshes only fire on real changes
 }
@@ -3160,14 +3220,37 @@ function wire(): void {
     const t = e.target as HTMLElement;
     const lens = t.closest("[data-lens]") as HTMLElement | null;
     if (lens) { kgLens = lens.dataset.lens as "kind" | "trust"; kgHandle?.setLens(kgLens); $$("[data-kg-lens] button").forEach((x) => x.classList.toggle("on", x === lens)); return; }
+    if (t.closest("#kgRelate")) { setRelateMode(!kgRelateMode); return; } // P-KG-REL.1 toggle relate mode
+    if (t.closest("#kgRelateDo")) { void relatePicked(); return; }
+    if (t.closest("#kgRelateClear")) { kgHandle?.clearRelatePicks(); return; }
     const forget = t.closest("[data-forget]") as HTMLElement | null;
     if (forget) {
       const fid = forget.dataset.forget!;
-      await bridge.personalForget(fid);
-      if (kgData) kgData.facts = kgData.facts.filter((f) => f.id !== fid); // drop the fact from the side panel
-      renderKgSide(kgSelId);
-      void refreshKnowledgeLive(); // also drop the node live if that was its last fact (no reopen needed)
-      showToast({ title: "Forgotten", desc: "The agent will stop recalling that fact.", actions: [{ label: "OK" }], timeout: 2000 });
+      if (forgettingIds.has(fid)) return; // de-dup: ignore mashed clicks (#113) — one server call, one toast
+      forgettingIds.add(fid);
+      // Optimistic + instant (#113): drop the fact (and its now-empty node + dangling edges) from the live
+      // graph immediately, so the row/node vanish on click instead of after a 20-30s re-decrypt. Keep the
+      // pre-change graph for rollback if the server call fails.
+      const prev = kgData;
+      if (kgData) {
+        const { data, nodeRemoved } = applyForget(kgData, fid);
+        kgData = data;
+        if (nodeRemoved && kgSelId === nodeRemoved) kgSelId = null;
+        kgSig = kgSignature(kgData); // keep the live-poll baseline in sync so it doesn't redundantly re-update
+        kgHandle?.update(kgData);
+        renderKgSide(kgSelId);
+      }
+      const r = await bridge.personalForget(fid).catch(() => null);
+      forgettingIds.delete(fid);
+      if (r?.ok) {
+        showToast({ title: "Forgotten", desc: "The agent will stop recalling that fact.", timeout: 2000 });
+      } else {
+        // Server refused/failed: roll back the optimistic removal so the graph reflects the truth.
+        kgData = prev;
+        if (kgData) { kgSig = kgSignature(kgData); kgHandle?.update(kgData); }
+        renderKgSide(kgSelId);
+        showToast({ tone: "danger", title: "Couldn't forget that", desc: "Nothing changed — please try again.", actions: [{ label: "OK" }], timeout: 4000 });
+      }
     }
   });
   $("#railCmd")!.addEventListener("click", () => palette.show());
