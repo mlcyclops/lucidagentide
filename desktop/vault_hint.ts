@@ -17,6 +17,9 @@ export interface VaultLockState {
   personalUnlocked: boolean;
   cuiConfigured: boolean;
   cuiUnlocked: boolean;
+  // P-VAULT-HINT.2 (ADR-0080): a fact count KNOWN from this session's lock (captured in memory when the
+  // user locked the vault — never read from disk, never a decrypt). Omit/0 → the boolean form.
+  count?: number;
 }
 
 /** The hint for a CONFIGURED-but-LOCKED vault in the current scope, or "" when nothing is locked
@@ -27,10 +30,15 @@ export function lockedVaultHint(s: VaultLockState): string {
   const mainLocked = s.scope !== "cui" && s.personalConfigured && !s.personalUnlocked;
   if (!cuiLocked && !mainLocked) return "";
   const which = cuiLocked ? "CUI" : "personal";
+  // The count is OPTIONAL metadata (known only from this session's lock). It's still not content — just
+  // "how many", which makes the offer-to-unlock more concrete. Omitted → the boolean form.
+  const hasCount = typeof s.count === "number" && s.count > 0;
+  const countAttr = hasCount ? ` facts="${s.count}"` : "";
+  const countPhrase = hasCount ? ` (about ${s.count} stored fact${s.count === 1 ? "" : "s"})` : "";
   return (
-    `<encrypted-vault locked="true" scope="${which}">\n` +
-    `The user has a LOCKED, encrypted ${which} memory vault. Its contents are unreadable this turn by ` +
-    `design. If the answer would clearly benefit from the user's saved preferences, decisions, or ` +
+    `<encrypted-vault locked="true" scope="${which}"${countAttr}>\n` +
+    `The user has a LOCKED, encrypted ${which} memory vault${countPhrase}. Its contents are unreadable this ` +
+    `turn by design. If the answer would clearly benefit from the user's saved preferences, decisions, or ` +
     `context, briefly ASK them to unlock it (open the Knowledge panel and enter the passphrase) — never ` +
     `guess or fabricate what it might contain.\n` +
     `</encrypted-vault>`

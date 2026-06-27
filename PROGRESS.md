@@ -4,6 +4,11 @@ Three lines per session: **shipped / stubbed / next** (CLAUDE.md session ritual)
 
 -----
 
+## P-VAULT-HINT.2: fact count in the locked-vault hint (#124, ADR-0080)
+- **shipped:** the locked-vault hint now carries a COUNT (`facts="N"` / "about N stored facts") when known. Captured **in memory** at lock time (`lockPersonal`/`lockCui` snapshot `store.graph().facts.length` into `lastFactCount`) and passed to `lockedVaultHint` via `recallPreamble`. **Deliberately NOT an on-disk manifest** — a plaintext count next to the encrypted vault would leak "this user has N facts"; in-memory means no disk surface + no decrypt. Count appears in the common unlock→use→lock→ask flow; a fresh locked start falls back to the boolean form (ADR-0077). Still content-free (a number, never the facts); CUI counts kept per-compartment. Proof: `vault_hint.test.ts` (+3) + `make demo-P-VAULT-HINT.2`. ADR-0080 BUILT.
+- **stubbed:** a CROSS-RESTART count needs the on-disk manifest — left as an opt-in follow-up (managed-config gated per ADR-0077), off by default; the privacy tradeoff is the reason it's not the default.
+- **next:** P-KG-INGEST.3 ingest concurrency (#125) — the last backlog item.
+
 ## P-KG-INGEST.2: "Clear ingest sessions" bulk action (#123, ADR-0079)
 - **shipped:** the grouped throwaway extraction sessions are now bulk-deletable. `desktop/sessions.ts clearIngestSessions(cwd, root?)` removes a file only when it's BOTH this workspace's AND an extractor throwaway (`isIngestPrompt`) — a real chat is never touched; returns the count, idempotent. `POST /api/sessions/ingest/clear` + `bridge.clearIngestSessions()`; renderer adds a trash button on the "Knowledge Graph Ingest · N" group header with a confirm toast (KG store untouched — only omp transcripts). Proof: `sessions_ingest.test.ts` (+2: clears only ingest, workspace-scoped) + `make demo-P-KG-INGEST.2`. ADR-0079 BUILT.
 - **stubbed:** still no ephemeral-session SDK seam (omp persists ingest sessions up front; this is the cleanup path); no auto-clear-on-import-finish (the user clears when they want).

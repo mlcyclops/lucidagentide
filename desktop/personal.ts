@@ -81,7 +81,13 @@ export function unlockPersonal(passphrase: string): { ok: boolean; error?: strin
   catch { return { ok: false, error: "Wrong passphrase, or the store could not be read." }; }
 }
 
+// P-VAULT-HINT.2 (ADR-0080): last-known ACTIVE fact counts, captured IN MEMORY at lock time — NEVER
+// written to disk (no plaintext-count leak) and never a decrypt. Enriches the locked-vault hint; null
+// until the vault is locked at least once this session (a fresh locked start → boolean hint).
+const lastFactCount: { personal: number | null; cui: number | null } = { personal: null, cui: null };
+
 export function lockPersonal(): PersonalStatus {
+  if (store) try { lastFactCount.personal = store.graph().facts.length; } catch { /* keep prior count */ }
   store?.lock(); store = null;
   lockCui();
   return personalStatus();
@@ -106,6 +112,7 @@ export function unlockCui(passphrase: string): { ok: boolean; error?: string } {
 
 /** Lock the CUI store: zero its DEK + drop it. Called on deselect, lock, and disable. */
 export function lockCui(): PersonalStatus {
+  if (cuiStore) try { lastFactCount.cui = cuiStore.graph({ scope: "cui" }).facts.length; } catch { /* keep prior count */ }
   cuiStore?.lock(); cuiStore = null;
   return personalStatus();
 }
@@ -369,6 +376,7 @@ export function recallPreamble(): string {
     personalUnlocked: !!store,
     cuiConfigured: PersonalStore.exists(personalCuiStorePath()),
     cuiUnlocked: !!cuiStore,
+    count: (scope === "cui" ? lastFactCount.cui : lastFactCount.personal) ?? undefined, // in-memory, this session only
   });
 }
 

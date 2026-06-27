@@ -6362,3 +6362,49 @@ audit trail (issue #53) is intentionally separate and untouched.
 
 ADR-0076 (P-KG-INGEST, 1b grouping this complements), `desktop/sessions.ts` (`isIngestPrompt`,
 `deleteSession` — the scoped-delete pattern this mirrors).
+
+## ADR-0080 - P-VAULT-HINT.2: a fact COUNT in the locked-vault hint — in memory, never on disk
+
+**Date:** 2026-06-27
+**Status:** Accepted - BUILT.
+**Increment:** P-VAULT-HINT.2. Completes the count half deferred by ADR-0077.
+
+### Context
+
+P-VAULT-HINT.1 (ADR-0077) shipped the BOOLEAN locked-vault hint and deferred the count, noting the count
+lives inside the AES blob (reading it while locked = a decrypt, forbidden). The backlog suggested a
+"non-secret sidecar manifest" written on save to surface the count across restarts.
+
+### Decision - capture the count IN MEMORY at lock time; reject the on-disk manifest (privacy)
+
+We do NOT write a count manifest to disk. A plaintext fact-count next to the encrypted vault leaks
+"this user has N stored facts" to anyone with file access — a privacy regression that contradicts the
+product's security ethos. Instead, `lockPersonal()` / `lockCui()` capture the active fact count (the count
+the user can already see while unlocked) into an in-memory `lastFactCount` the moment they lock. The locked
+`recallPreamble()` passes that count to `lockedVaultHint`, which adds `facts="N"` ("about N stored facts").
+
+Consequences of the in-memory choice:
+- **No new on-disk surface, no decrypt** — the count is only ever derived from an ALREADY-unlocked store.
+- The count appears in the COMMON flow (unlock → use → lock → ask). A FRESH locked start (app relaunch, vault
+  never unlocked this session) has no count → it falls back to the boolean form (ADR-0077). That's the
+  deliberate trade for not leaking a count to disk.
+- A cross-restart count (the on-disk manifest) remains a possible OPT-IN follow-up, gated by managed-config
+  per ADR-0077 — but off by default and not built here.
+
+### Consequences
+
+- `lockedVaultHint` gains an optional `count`; 0/omitted → boolean form. `make demo-P-VAULT-HINT.2` + 3 new
+  `vault_hint.test.ts` cases prove the count enriches the hint, stays a number (never the facts), and reads
+  naturally in the singular.
+
+### Invariants preserved
+
+Fail-closed (#3 — the count is captured only from an UNLOCKED store; locked never decrypts); the hint is
+still a content-free, first-party signal (a number is not content); CUI isolation (ADR-0014 — counts kept
+per compartment, surfaced only for the active scope); frozen prefix untouched (volatile recall tail).
+
+### Relates to
+
+ADR-0077 (P-VAULT-HINT.1, the boolean hint this enriches), `desktop/vault_hint.ts` (`lockedVaultHint`),
+`desktop/personal.ts` (`lockPersonal`/`lockCui` capture, `recallPreamble`), ADR-0068 (managed-config would
+gate an opt-in on-disk manifest), keystone #3.
