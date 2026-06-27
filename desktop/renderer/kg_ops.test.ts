@@ -3,7 +3,20 @@
 
 import { describe, expect, test } from "bun:test";
 import type { PersonalGraphData } from "./bridge.ts";
-import { addEdgeOptimistic, applyForget, chainPairs, fitTransform, frameWork, nodeAtPoint, removeEdgeOptimistic, resolveRelationLabel, togglePick } from "./kg_ops.ts";
+import { addEdgeOptimistic, applyForget, chainPairs, fitTransform, frameWork, matchNodes, nodeAtPoint, removeEdgeOptimistic, resolveRelationLabel, togglePick } from "./kg_ops.ts";
+
+describe("#131 matchNodes (P-KG-SEARCH.1)", () => {
+  const nodes = [
+    { id: "1", name: "Rust" }, { id: "2", name: "Kubernetes" }, { id: "3", name: "rusty pipelines" },
+  ];
+  test("case-insensitive substring match; empty query → no matches", () => {
+    expect([...matchNodes(nodes, "rust")].sort()).toEqual(["1", "3"]); // "Rust" + "rusty…"
+    expect([...matchNodes(nodes, "KUBER")]).toEqual(["2"]);
+    expect(matchNodes(nodes, "").size).toBe(0);
+    expect(matchNodes(nodes, "   ").size).toBe(0);
+    expect(matchNodes(nodes, "nope").size).toBe(0);
+  });
+});
 
 describe("#130 removeEdgeOptimistic (P-KG-REL.3)", () => {
   const data = (): PersonalGraphData => ({

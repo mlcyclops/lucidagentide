@@ -4,6 +4,11 @@ Three lines per session: **shipped / stubbed / next** (CLAUDE.md session ritual)
 
 -----
 
+## P-KG-SEARCH.1: find a node in the graph (#132, ADR-0083)
+- **shipped:** a `#kgSearch` box in the KG toolbar. As you type, pure `kg_ops.ts matchNodes(nodes, query)` (case-insensitive substring; empty → clear) returns matching ids → `graph.setSearch(ids)` rings + brightens matches, **dims** the rest, and **centers** on them (`computeFit` over the matched subset, reusing the #112 fit math). Esc clears; an active search survives a live remount (like relate mode). Display-only — no store/scan change, no new per-frame cost (just node-class toggles). Proof: `kg_ops.test.ts` matchNodes + `make demo-P-KG-SEARCH.1`; renderer bundle ✓. ADR-0083 BUILT.
+- **stubbed:** no fuzzy/typo-tolerant match (substring only); no next/prev-match cycling when several match.
+- **next:** the KG view is now navigable on big imported graphs; epic + follow-ups (ADR-0075-0083) all shipped.
+
 ## P-KG-REL.3: remove a relationship (#130, ADR-0082)
 - **shipped:** the node panel now lists a node's **Relationships** (direction arrow + label) each with a remove (×) — closing the create-only asymmetry of REL.1/.2. New `store.removeLink(from, to, relation?)` (data layer) + `unrelateEntities` (`desktop/personal.ts`, mirrors `relateEntities`) + `POST /api/personal/unrelate` + `bridge.personalUnrelate`. Removal is optimistic (`kg_ops.ts removeEdgeOptimistic`, rollback-safe) then reconciled with the server — symmetric with the forget flow. Authored edges stay first-party; nodes/facts untouched. Proof: `kg_ops.test.ts` removeEdgeOptimistic + `make demo-P-KG-REL.3` (optimistic + `store.removeLink` persists only the targeted edge). ADR-0082 BUILT.
 - **stubbed:** no edit-in-place of a relation's label (remove + re-add); no multi-edge bulk remove.
