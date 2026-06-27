@@ -15,6 +15,7 @@ import { BUILD_POLICY, DELEGATION_POLICY } from "../harness/prompt/assembler.ts"
 import { currentWorkspace } from "./workspace.ts";
 import { learnFromTurn, recallPreamble } from "./personal.ts";
 import { buildUserTurnPreamble } from "./preamble.ts";
+import { ChatGate } from "./chat_gate.ts";
 import { recordTurns } from "./turns_log.ts";
 import { isLearnableAssistantText } from "./thinking_governance.ts";
 import { recordBlock } from "./security_log.ts";
@@ -475,6 +476,7 @@ class Backend {
     const sink = (e: ChatEvent) => { arm(); if (isLearnableAssistantText(e)) assistant += e.text; try { onEvent(e); } catch { enqueueErr++; } };
     this.listener = sink;
     this.askActive = true; // permission requests in THIS turn may be forwarded to the UI (Ask mode)
+    this.chatGate.begin(); // P-KG-INGEST.3: a chat turn is live → background extraction should yield to it
     this.turnDiag(`prompt.start session=${this.sessionId}`);
     try {
       await this.ensureSession();
@@ -505,6 +507,7 @@ class Backend {
     } finally {
       if (idle) clearTimeout(idle);
       this.askActive = false;
+      this.chatGate.end(); // P-KG-INGEST.3: chat turn done → release any extraction waiting to resume
       // Fail-closed: any permission still parked at turn's end (stall/disconnect) is denied.
       for (const [id, fn] of this.permPending) { this.permPending.delete(id); fn(null); }
       this.pendingPerms = 0;
@@ -853,6 +856,9 @@ class Backend {
 
   // Serializes utility completions so they never clobber a concurrent chat turn's listener.
   private utilLock: Promise<void> = Promise.resolve();
+  // P-KG-INGEST.3 (ADR-0081): lets background extraction (complete()) yield to a live chat turn, so a long
+  // AI-mode ingest can't starve chat on the shared omp connection.
+  private chatGate = new ChatGate();
 
   /** One-shot, non-streaming completion in a THROWAWAY session — never touches the chat
    *  session, persona, or recall. Returns the aggregated assistant text ("" on any failure).
@@ -869,6 +875,10 @@ class Backend {
       let onStall: (e: Error) => void = () => {};
       let myListener: ((e: ChatEvent) => void) | null = null;
       try {
+        // P-KG-INGEST.3: yield to a live chat turn before running this extraction. A long AI-mode import
+        // fires complete() back-to-back; pausing here while the user is chatting lets chat preempt the
+        // import (at most one in-flight extraction of latency), then the import resumes.
+        await this.chatGate.whenIdle();
         const s: any = await this.acp!.request("session/new", { cwd: currentWorkspace(), mcpServers: mcpServersForAcp() });
         sid = s?.sessionId ?? s?.id ?? null;
         if (!sid) return "";

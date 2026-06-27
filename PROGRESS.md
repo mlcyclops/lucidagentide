@@ -4,6 +4,11 @@ Three lines per session: **shipped / stubbed / next** (CLAUDE.md session ritual)
 
 -----
 
+## P-KG-INGEST.3: chat stays responsive during an AI-mode ingest (#125, ADR-0081)
+- **shipped:** a long AI import no longer freezes chat. `desktop/chat_gate.ts ChatGate` (begin/end/whenIdle) lets background extraction yield to a live chat turn: `acp_backend.prompt()` brackets a chat turn with `chatGate.begin()/end()`; `complete()` (every util completion — import extraction + the /goal checker) `await chatGate.whenIdle()` before creating its session. So while the user chats, the import pauses between extractions and resumes after the reply — chat preempts with ≤1 in-flight extraction of latency instead of waiting out the whole import. Zero overhead when idle (`whenIdle()` resolves synchronously). Fail-safe: `end()` is in `prompt()`'s `finally` so a stalled chat can't pause the import forever. Proof: `chat_gate.test.ts` (5) + `make demo-P-KG-INGEST.3`. ADR-0081 BUILT.
+- **stubbed:** a SECOND omp process dedicated to extraction would remove even the one-extraction latency (true concurrency) — deferred as a much larger change; the gate delivers responsive chat with a tiny surface.
+- **next:** ALL KG import-feedback work + the 4 backlog ADRs (0078-0081) are now shipped. Backlog clear.
+
 ## P-VAULT-HINT.2: fact count in the locked-vault hint (#124, ADR-0080)
 - **shipped:** the locked-vault hint now carries a COUNT (`facts="N"` / "about N stored facts") when known. Captured **in memory** at lock time (`lockPersonal`/`lockCui` snapshot `store.graph().facts.length` into `lastFactCount`) and passed to `lockedVaultHint` via `recallPreamble`. **Deliberately NOT an on-disk manifest** — a plaintext count next to the encrypted vault would leak "this user has N facts"; in-memory means no disk surface + no decrypt. Count appears in the common unlock→use→lock→ask flow; a fresh locked start falls back to the boolean form (ADR-0077). Still content-free (a number, never the facts); CUI counts kept per-compartment. Proof: `vault_hint.test.ts` (+3) + `make demo-P-VAULT-HINT.2`. ADR-0080 BUILT.
 - **stubbed:** a CROSS-RESTART count needs the on-disk manifest — left as an opt-in follow-up (managed-config gated per ADR-0077), off by default; the privacy tradeoff is the reason it's not the default.
