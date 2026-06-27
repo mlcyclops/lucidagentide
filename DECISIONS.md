@@ -6408,3 +6408,45 @@ per compartment, surfaced only for the active scope); frozen prefix untouched (v
 ADR-0077 (P-VAULT-HINT.1, the boolean hint this enriches), `desktop/vault_hint.ts` (`lockedVaultHint`),
 `desktop/personal.ts` (`lockPersonal`/`lockCui` capture, `recallPreamble`), ADR-0068 (managed-config would
 gate an opt-in on-disk manifest), keystone #3.
+
+## ADR-0081 - P-KG-INGEST.3: chat stays responsive during an AI-mode ingest
+
+**Date:** 2026-06-27
+**Status:** Accepted - BUILT.
+**Increment:** P-KG-INGEST.3. The last import-UX item — finishes ADR-0076's "use the app while it ingests".
+
+### Context
+
+Model-mode ingest extracts facts by calling `backend.complete()` once per message, back-to-back, through
+the SINGLE omp ACP connection. P-KG-INGEST.1a moved the import OFF the request thread (the app stays usable),
+but a long AI import still fired extractions continuously, so a live chat turn competed with — and stalled
+behind — the stream of extractions on the shared connection. The user saw chat freeze during AI imports.
+
+### Decision - a ChatGate so background extraction YIELDS to a live chat turn (chat preempts the import)
+
+`desktop/chat_gate.ts ChatGate` is a tiny state machine: `begin()`/`end()` bracket a chat turn; `whenIdle()`
+resolves immediately when no chat turn is active, else when the current one ends. `prompt()` (chat) brackets
+its turn with `chatGate.begin()/end()`; `complete()` (every utility completion — import extraction AND the
+/goal checker) `await this.chatGate.whenIdle()` BEFORE creating its session. So while the user is chatting,
+the import pauses between extractions and resumes after the reply — chat preempts the import with at most one
+in-flight extraction of latency (seconds), instead of waiting out the whole import (minutes).
+
+### Consequences
+
+- Zero overhead when nobody is chatting (`whenIdle()` resolves synchronously). No change to import results —
+  it's the same extractions in the same order, just yielding to chat. The /goal checker also yields (already
+  sequenced after the maker turn, so a no-op there).
+- A truly concurrent design (a SECOND omp process dedicated to extraction) would remove even the one-
+  extraction latency, but it's a much larger change (a second backend instance) — deferred; the gate
+  delivers responsive chat with a tiny, well-tested surface.
+
+### Invariants preserved
+
+No change to scanning/gating of imported text (keystone #2) or to memory promotion; the gate only reorders
+WHEN extraction runs relative to chat. Fail-safe: `end()` always runs in `prompt()`'s `finally`, so a
+stalled/errored chat turn can't leave the import permanently paused.
+
+### Relates to
+
+ADR-0076 (P-KG-INGEST.1a/1b, the background ingest this completes), `desktop/acp_backend.ts`
+(`prompt`/`complete`/`utilLock`), `desktop/chat_gate.ts`.

@@ -242,6 +242,10 @@ demo-P-KG-INGEST.2: ## P-KG-INGEST.2 (#123/ADR-0079): bulk-clear ingest sessions
 demo-P-VAULT-HINT.2: ## P-VAULT-HINT.2 (#124/ADR-0080): fact count in the locked-vault hint — in-memory at lock, never on disk, never content
 	$(BUN) run desktop/scripts/demo_p_vault_hint_2.ts
 
+.PHONY: demo-P-KG-INGEST.3
+demo-P-KG-INGEST.3: ## P-KG-INGEST.3 (#125/ADR-0081): chat preempts a back-to-back ingest loop via the ChatGate (yields, then resumes)
+	$(BUN) run desktop/scripts/demo_p_kg_ingest_3.ts
+
 .PHONY: dashboards
 dashboards: ## Materialize dashboard CSVs from a DuckDB into observable/docs/data (DB=path)
 	$(BUN) run harness/scripts/materialize_dashboards.ts $(DB) observable/docs/data
