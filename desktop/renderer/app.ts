@@ -11,6 +11,7 @@ import { ageStr, esc, fmtUSD, goodColor, loadColor } from "./format.ts";
 import { icon, piMark } from "./icons.ts";
 import { renderMarkdown } from "./markdown.ts";
 import { type GraphHandle, kindLabel, mountGraph } from "./graph.ts";
+import { applyForget } from "./kg_ops.ts";
 import type { PersonalGraphData } from "./bridge.ts";
 import { type Action, attachRichTip, createPalette, initTooltips, popover, showToast } from "./ui.ts";
 import { ASKSAGE_FAMILY_ORDER, familyOf, filterModels, groupByFamily, isAuxiliaryModel, isChinaModel, isDeprecatedModel, isGovModel, sortGovFirstNewest } from "./model_families.ts";
@@ -1419,6 +1420,7 @@ let kgLens: "kind" | "trust" = "kind";
 let kgOpen = false;
 let kgSelId: string | null = null;
 let kgSig = ""; // signature of the last-rendered graph, to skip no-op live refreshes
+const forgettingIds = new Set<string>(); // in-flight "forget" fact ids — de-dups mashed clicks (#113)
 
 /** Cheap change-signature for the graph (node/edge ids + counts + fact total). */
 function kgSignature(d: PersonalGraphData | null): string {
@@ -3153,11 +3155,31 @@ function wire(): void {
     const forget = t.closest("[data-forget]") as HTMLElement | null;
     if (forget) {
       const fid = forget.dataset.forget!;
-      await bridge.personalForget(fid);
-      if (kgData) kgData.facts = kgData.facts.filter((f) => f.id !== fid); // drop the fact from the side panel
-      renderKgSide(kgSelId);
-      void refreshKnowledgeLive(); // also drop the node live if that was its last fact (no reopen needed)
-      showToast({ title: "Forgotten", desc: "The agent will stop recalling that fact.", actions: [{ label: "OK" }], timeout: 2000 });
+      if (forgettingIds.has(fid)) return; // de-dup: ignore mashed clicks (#113) — one server call, one toast
+      forgettingIds.add(fid);
+      // Optimistic + instant (#113): drop the fact (and its now-empty node + dangling edges) from the live
+      // graph immediately, so the row/node vanish on click instead of after a 20-30s re-decrypt. Keep the
+      // pre-change graph for rollback if the server call fails.
+      const prev = kgData;
+      if (kgData) {
+        const { data, nodeRemoved } = applyForget(kgData, fid);
+        kgData = data;
+        if (nodeRemoved && kgSelId === nodeRemoved) kgSelId = null;
+        kgSig = kgSignature(kgData); // keep the live-poll baseline in sync so it doesn't redundantly re-update
+        kgHandle?.update(kgData);
+        renderKgSide(kgSelId);
+      }
+      const r = await bridge.personalForget(fid).catch(() => null);
+      forgettingIds.delete(fid);
+      if (r?.ok) {
+        showToast({ title: "Forgotten", desc: "The agent will stop recalling that fact.", timeout: 2000 });
+      } else {
+        // Server refused/failed: roll back the optimistic removal so the graph reflects the truth.
+        kgData = prev;
+        if (kgData) { kgSig = kgSignature(kgData); kgHandle?.update(kgData); }
+        renderKgSide(kgSelId);
+        showToast({ tone: "danger", title: "Couldn't forget that", desc: "Nothing changed — please try again.", actions: [{ label: "OK" }], timeout: 4000 });
+      }
     }
   });
   $("#railCmd")!.addEventListener("click", () => palette.show());

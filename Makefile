@@ -202,6 +202,10 @@ demo-P-STT.1: ## P-STT.1 (ADR-0073): mic audio → text via the OpenAI-compatibl
 demo-P-ASKSAGE.1: ## P-ASKSAGE.1 (ADR-0059): AskSage tool-loop diagnostics + tolerant extraction — wrapped replies recovered, empty turns flagged
 	$(BUN) run harness/scripts/demo_paskage1.ts
 
+.PHONY: demo-B-KG.1
+demo-B-KG.1: ## B-KG.1 (#112/#113/#114): KG interaction polish — large graph fits on open, idle CPU halts, forget is instant + snapshot-safe
+	$(BUN) run desktop/scripts/demo_b_kg_1.ts
+
 .PHONY: dashboards
 dashboards: ## Materialize dashboard CSVs from a DuckDB into observable/docs/data (DB=path)
 	$(BUN) run harness/scripts/materialize_dashboards.ts $(DB) observable/docs/data

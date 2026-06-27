@@ -10,6 +10,7 @@
 //   - smooth zoom-to-fit on first layout + double-click to re-fit
 
 import type { GraphNode, PersonalGraphData } from "./bridge.ts";
+import { fitTransform, frameWork } from "./kg_ops.ts";
 
 const KIND_COLOR: Record<string, string> = {
   preference: "#46c8dc", interest: "#7ef0a8", decision: "#5e8df2", behavior: "#e8b23c",
@@ -71,7 +72,8 @@ export function mountGraph(host: HTMLElement, data: PersonalGraphData, onSelect:
 
   // ── edges as curved paths + a few flow particles each (cap for perf on bigger graphs) ──
   const PPE = edges.length > 36 ? 1 : edges.length > 14 ? 2 : 3; // particles per edge
-  interface EdgeEl { e: (typeof edges)[number]; path: SVGPathElement; parts: SVGCircleElement[] }
+  interface EdgeGeom { ax: number; ay: number; ccx: number; ccy: number; bx: number; by: number; col: string }
+  interface EdgeEl { e: (typeof edges)[number]; path: SVGPathElement; parts: SVGCircleElement[]; geom?: EdgeGeom }
   const edgeEls: EdgeEl[] = edges.map((e) => {
     const path = make("path"); path.setAttribute("class", "kg-edge"); edgeG.append(path);
     const parts: SVGCircleElement[] = [];
@@ -96,21 +98,16 @@ export function mountGraph(host: HTMLElement, data: PersonalGraphData, onSelect:
   };
   const bez = (a: number, c: number, b: number, t: number): number => { const u = 1 - t; return u * u * a + 2 * u * t * c + t * t * b; };
 
-  let phase = 0; // advances every frame to drive particle flow
-  const paint = () => {
+  let phase = 0; // advances every (animating) frame to drive particle flow
+  // The EXPENSIVE pass: edge paths, node transforms, viewport transform. Only run when geometry actually
+  // changed (sim stepping / fit easing / drag / pan / selection / lens) — see #114. It also caches each
+  // edge's endpoints + control point so the cheap particle pass below needs no recompute while idle.
+  const paintLayout = () => {
     for (const ed of edgeEls) {
       const a = byId.get(ed.e.from)!, b = byId.get(ed.e.to)!;
       const [ccx, ccy] = ctrl(a, b);
       ed.path.setAttribute("d", `M${a.x.toFixed(1)} ${a.y.toFixed(1)} Q${ccx.toFixed(1)} ${ccy.toFixed(1)} ${b.x.toFixed(1)} ${b.y.toFixed(1)}`);
-      if (calm) continue; // reduced-motion: particles are hidden, skip their work
-      const col = colorOf(a); // flow direction + colour come from the source node
-      for (let i = 0; i < ed.parts.length; i++) {
-        const t = ((phase * 0.0045) + i / ed.parts.length) % 1; // calmer travel, source → target
-        const c = ed.parts[i]!;
-        c.setAttribute("cx", bez(a.x, ccx, b.x, t).toFixed(1));
-        c.setAttribute("cy", bez(a.y, ccy, b.y, t).toFixed(1));
-        c.setAttribute("fill", col); c.style.color = col; // color drives the CSS drop-shadow glow
-      }
+      ed.geom = { ax: a.x, ay: a.y, ccx, ccy, bx: b.x, by: b.y, col: colorOf(a) }; // source node → flow colour
     }
     for (const n of nodes) {
       const e = elFor.get(n.id)!;
@@ -120,6 +117,22 @@ export function mountGraph(host: HTMLElement, data: PersonalGraphData, onSelect:
     }
     vp.setAttribute("transform", `translate(${tx.toFixed(1)},${ty.toFixed(1)}) scale(${scale.toFixed(3)})`);
   };
+  // The CHEAP pass: move the flow particles along each edge's cached curve. Keeps the graph looking alive
+  // without re-deriving any geometry. Skipped entirely under reduced-motion (particles are hidden).
+  const paintParticles = () => {
+    if (calm) return;
+    for (const ed of edgeEls) {
+      const g = ed.geom; if (!g) continue;
+      for (let i = 0; i < ed.parts.length; i++) {
+        const t = ((phase * 0.0045) + i / ed.parts.length) % 1; // calmer travel, source → target
+        const c = ed.parts[i]!;
+        c.setAttribute("cx", bez(g.ax, g.ccx, g.bx, t).toFixed(1));
+        c.setAttribute("cy", bez(g.ay, g.ccy, g.by, t).toFixed(1));
+        c.setAttribute("fill", g.col); c.style.color = g.col; // color drives the CSS drop-shadow glow
+      }
+    }
+  };
+  const paint = () => { paintLayout(); paintParticles(); }; // full repaint for one-shot callers (mount, setLens, update)
 
   // ── smooth zoom-to-fit (eased toward a target transform over a few frames) ──
   let fitT: { sc: number; tx: number; ty: number } | null = null;
@@ -127,18 +140,17 @@ export function mountGraph(host: HTMLElement, data: PersonalGraphData, onSelect:
     if (!nodes.length) return;
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     for (const n of nodes) { minX = Math.min(minX, n.x - n.r); minY = Math.min(minY, n.y - n.r); maxX = Math.max(maxX, n.x + n.r); maxY = Math.max(maxY, n.y + n.r); }
-    const bw = Math.max(1, maxX - minX), bh = Math.max(1, maxY - minY);
-    const sc = Math.max(0.4, Math.min(1.5, Math.min((W - 70) / bw, (H - 70) / bh)));
-    const bcx = (minX + maxX) / 2, bcy = (minY + maxY) / 2;
-    fitT = { sc, tx: W / 2 - bcx * sc, ty: H / 2 - bcy * sc };
+    const t = fitTransform({ minX, minY, maxX, maxY }, W, H); // low min-scale floor → big graphs actually fit (#112)
+    if (t) { fitT = t; kick(); } // a fit needs the loop running to ease toward it
   };
 
   let drag: SimNode | null = null;
-  let frames = 0, raf = 0;
+  let frames = 0, raf = 0, idleParity = 0;
   const SETTLE = 480;
+  // Restart the rAF loop if it parked itself while idle (reduced-motion). No-op if already running.
+  const kick = () => { if (!stopped && raf === 0) raf = requestAnimationFrame(tick); };
   const tick = () => {
     if (stopped) return;
-    phase++;
     const simActive = frames < SETTLE || !!drag;
     if (simActive) {
       // charge (repulsion) + light collision
@@ -158,18 +170,25 @@ export function mountGraph(host: HTMLElement, data: PersonalGraphData, onSelect:
       const damp = frames < 120 ? 0.86 : 0.8;
       for (const n of nodes) { if (n === drag) { n.vx = n.vy = 0; continue; } n.vx += (cx - n.x) * 0.0025; n.vy += (cy - n.y) * 0.0025; n.vx *= damp; n.vy *= damp; n.x += n.vx; n.y += n.vy; }
       frames++;
-      if (frames === 90 && !userMoved) computeFit(); // one-time auto-fit once the layout forms
+      // Re-fit at a few checkpoints (not just frame 90) so a LARGE graph that's still spreading gets a
+      // corrected fit as it settles (#112). Each eases smoothly, so it reads as one continuous settle.
+      if (!userMoved && (frames === 90 || frames === 240 || frames === SETTLE - 2)) computeFit();
     }
     if (fitT) { // ease current transform toward the fit target (snap instantly for reduced-motion)
       const k = calm ? 1 : 0.12; // gentler glide than before, less springy
       scale += (fitT.sc - scale) * k; tx += (fitT.tx - tx) * k; ty += (fitT.ty - ty) * k;
       if (calm || (Math.abs(fitT.sc - scale) < 0.002 && Math.abs(fitT.tx - tx) < 0.5 && Math.abs(fitT.ty - ty) < 0.5)) { scale = fitT.sc; tx = fitT.tx; ty = fitT.ty; fitT = null; }
     }
-    paint();
+    // #114: only do the expensive layout repaint when something moved; keep particles flowing (throttled
+    // when idle); and under reduced-motion, park the loop entirely once nothing is left to animate.
+    const work = frameWork({ simActive, easing: !!fitT, calm, parity: idleParity++ });
+    if (work.layout) paintLayout();
+    if (work.particles) { phase++; paintParticles(); }
+    if (work.stop) { raf = 0; return; } // idle + no particles → stop burning CPU; kick() resumes it
     raf = requestAnimationFrame(tick);
   };
   raf = requestAnimationFrame(tick);
-  const reheat = () => { if (!stopped && frames > SETTLE - 160) frames = SETTLE - 160; };
+  const reheat = () => { if (!stopped && frames > SETTLE - 160) { frames = SETTLE - 160; kick(); } };
 
   let pan: { x: number; y: number } | null = null, moved = false;
   const onDown = (ev: MouseEvent) => {
@@ -177,6 +196,7 @@ export function mountGraph(host: HTMLElement, data: PersonalGraphData, onSelect:
     const t = (ev.target as Element).closest(".kg-node") as (SVGGElement & { dataset: DOMStringMap }) | null;
     if (t) drag = byId.get(t.dataset.id!) ?? null;
     else pan = { x: ev.clientX - tx, y: ev.clientY - ty };
+    if (drag) kick(); // resume the loop if it parked while idle (reduced-motion)
   };
   const onMove = (ev: MouseEvent) => {
     if (drag) { const r = svg.getBoundingClientRect(); drag.x = (ev.clientX - r.left - tx) / scale; drag.y = (ev.clientY - r.top - ty) / scale; moved = true; userMoved = true; reheat(); paint(); }
