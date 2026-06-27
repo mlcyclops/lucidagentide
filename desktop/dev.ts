@@ -16,7 +16,7 @@ import { approveBlock, dismissBlock, liveBlocks } from "./security_log.ts";
 import { probeRateLimits } from "./ratelimit_probe.ts";
 import { OBS_DB_PATH, codeActivity, memorySnapshot, rateLimits, sessionPathById, usageLedger } from "../tools/memory_data.ts";
 import { backend } from "./acp_backend.ts";
-import { deleteSession, listSessions, sessionMessages } from "./sessions.ts";
+import { clearIngestSessions, deleteSession, listSessions, sessionMessages } from "./sessions.ts";
 import { providerAuth } from "./auth_status.ts";
 import { cloneRepo, setWorkspace, workspaceInfo } from "./workspace.ts";
 import { applyEnv, attribution, chinaModelsAcknowledged, listMcpServers, load as loadSettings, removeMcpServer, setAsksage, setAttributionSkip, setChinaModelsAcknowledged, setDeveloperMode, setKey, setMcpServerEnabled, setPersonalAiExtract, setProfile, setRateLimitProbe, upsertMcpServer } from "./settings_store.ts";
@@ -330,6 +330,7 @@ const server = Bun.serve({
 
       // real omp ACP backend (genuine model replies + live session config)
       if (p === "/api/sessions") return json({ ok: true, data: listSessions() });
+      if (p === "/api/sessions/ingest/clear" && req.method === "POST") return json({ ok: true, data: clearIngestSessions() }); // P-KG-INGEST.2
       if (p === "/api/session" && url.searchParams.get("id")) return json({ ok: true, data: sessionMessages(url.searchParams.get("id")!) });
       if (p === "/api/session/load" && req.method === "POST") { const { id } = await readBody<{ id?: unknown }>(req); await backend.loadSession(String(id)); return json({ ok: true }); }
       if (p === "/api/session/delete" && req.method === "POST") {

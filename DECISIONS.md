@@ -6323,3 +6323,42 @@ First-party authored edges (no scanner, no semantic promotion — keystone #2); 
 
 ADR-0075 (P-KG-REL.1, which this completes), `desktop/personal.ts` (`relateEntities`/`sanitizeRelation`),
 `desktop/renderer/kg_ops.ts` (`resolveRelationLabel`).
+
+## ADR-0079 - P-KG-INGEST.2: "Clear ingest sessions" bulk action
+
+**Date:** 2026-06-27
+**Status:** Accepted - BUILT.
+**Increment:** P-KG-INGEST.2. Completes the housekeeping half of ADR-0076 (1b grouped them; this clears them).
+
+### Context
+
+P-KG-INGEST.1b grouped the throwaway "Extract DURABLE facts…" extraction sessions an import (and live
+AI-learn) mint, but omp still persists each to disk; over time they accumulate. The user wanted them
+cleanable in bulk, not one-by-one.
+
+### Decision - one workspace-scoped bulk delete, gated by the SAME ingest detection
+
+`desktop/sessions.ts clearIngestSessions(cwd, root?)` walks the omp session files and removes a file only
+when it is BOTH (a) in the current workspace AND (b) an extractor throwaway (`isIngestPrompt` on its first
+user message) — so a real chat is never deleted. Returns the count cleared (idempotent). Surfaced at
+`POST /api/sessions/ingest/clear` + `bridge.clearIngestSessions()`; the renderer adds a trash affordance on
+the "Knowledge Graph Ingest · N" group header with a confirm toast. The knowledge graph itself is a separate
+encrypted store and is never touched — only the throwaway omp transcripts are removed.
+
+### Consequences
+
+- `make demo-P-KG-INGEST.2` proves: 9 throwaways cleared, the real chat survives, another workspace's
+  ingest is left alone, and a second clear is a no-op. Two unit tests lock the same (incl. workspace scope).
+- Still no ephemeral-session SDK seam (omp persists them up front); this is the cleanup path. If omp later
+  exposes non-persisted sessions, the distiller's `complete()` should prefer that (then this becomes rare).
+
+### Invariants preserved
+
+The knowledge-graph store is untouched (only omp transcripts are deleted); deletion is workspace-scoped
+(defense in depth, like `deleteSession`); no change to scanning/memory promotion; the append-only DuckDB
+audit trail (issue #53) is intentionally separate and untouched.
+
+### Relates to
+
+ADR-0076 (P-KG-INGEST, 1b grouping this complements), `desktop/sessions.ts` (`isIngestPrompt`,
+`deleteSession` — the scoped-delete pattern this mirrors).

@@ -282,6 +282,7 @@ export interface LucidBridge {
   sessionMessages(id: string): Promise<{ role: string; text: string }[] | null>;
   resumeSession(id: string): Promise<void>;
   deleteSession(id: string): Promise<{ ok: boolean; error?: string }>;
+  clearIngestSessions(): Promise<{ ok: boolean; cleared: number } | null>; // P-KG-INGEST.2: bulk-delete ingest throwaways
   newSession(): Promise<void>;
   setZoom(factor: number): void;
   // settings + provider auth
@@ -490,6 +491,7 @@ export const bridge: LucidBridge = {
   sessionMessages: (id) => getData(`/api/session?id=${encodeURIComponent(id)}`),
   resumeSession: async (id) => { await post("/api/session/load", { id }); },
   deleteSession: async (id) => (await post("/api/session/delete", { id })) ?? { ok: false, error: "no response" },
+  clearIngestSessions: () => post("/api/sessions/ingest/clear", {}),
   newSession: async () => { await post("/api/newSession", {}); },
   getSettings: () => getData("/api/settings"),
   saveUsername: (username) => post("/api/settings", { username }),

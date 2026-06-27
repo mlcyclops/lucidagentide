@@ -234,6 +234,10 @@ demo-P-VAULT-HINT.1: ## P-VAULT-HINT.1 (#111/ADR-0077): locked vault → content
 demo-P-KG-REL.2: ## P-KG-REL.2 (#122/ADR-0078): custom relation labels — typed label round-trips through the store; blank defaults to "related"
 	$(BUN) run desktop/scripts/demo_p_kg_rel_2.ts
 
+.PHONY: demo-P-KG-INGEST.2
+demo-P-KG-INGEST.2: ## P-KG-INGEST.2 (#123/ADR-0079): bulk-clear ingest sessions — workspace-scoped, real chats survive, idempotent
+	$(BUN) run desktop/scripts/demo_p_kg_ingest_2.ts
+
 .PHONY: dashboards
 dashboards: ## Materialize dashboard CSVs from a DuckDB into observable/docs/data (DB=path)
 	$(BUN) run harness/scripts/materialize_dashboards.ts $(DB) observable/docs/data

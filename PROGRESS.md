@@ -4,6 +4,11 @@ Three lines per session: **shipped / stubbed / next** (CLAUDE.md session ritual)
 
 -----
 
+## P-KG-INGEST.2: "Clear ingest sessions" bulk action (#123, ADR-0079)
+- **shipped:** the grouped throwaway extraction sessions are now bulk-deletable. `desktop/sessions.ts clearIngestSessions(cwd, root?)` removes a file only when it's BOTH this workspace's AND an extractor throwaway (`isIngestPrompt`) — a real chat is never touched; returns the count, idempotent. `POST /api/sessions/ingest/clear` + `bridge.clearIngestSessions()`; renderer adds a trash button on the "Knowledge Graph Ingest · N" group header with a confirm toast (KG store untouched — only omp transcripts). Proof: `sessions_ingest.test.ts` (+2: clears only ingest, workspace-scoped) + `make demo-P-KG-INGEST.2`. ADR-0079 BUILT.
+- **stubbed:** still no ephemeral-session SDK seam (omp persists ingest sessions up front; this is the cleanup path); no auto-clear-on-import-finish (the user clears when they want).
+- **next:** P-VAULT-HINT.2 locked count (#124), P-KG-INGEST.3 ingest concurrency (#125).
+
 ## P-KG-REL.2: custom relation labels (#122, ADR-0078)
 - **shipped:** the Relate bar gains an optional label input (`#kgRelateLabel`, max 40, placeholder "related"); both gestures (drag-to-relate + multi-select chain) read it via `currentRelationLabel()` → pure `kg_ops.ts resolveRelationLabel` (trimmed, or "related" when blank). The label flows through the existing optimistic path + `bridge.personalRelate`; backend `relateEntities`/`sanitizeRelation` already sanitize + cap it (no backend change). Proof: `kg_ops.test.ts` resolveRelationLabel cases + `make demo-P-KG-REL.2` (custom "deploys with" round-trips through the encrypted store). ADR-0078 BUILT.
 - **stubbed:** Enter-to-relate in the label input (Relate button works); no per-edge label editing after creation.
