@@ -5689,7 +5689,7 @@ CLAUDE.md invariant #3 + the scanner keystone.
 ## ADR-0068 - P-ENT.1: enterprise managed-policy override for the security knobs (GPO / MDM) (SCOPE/PLAN)
 
 **Date:** 2026-06-26
-**Status:** Proposed - SCOPE/PLAN. Public seam; the org's actual policy TEMPLATES are private-repo IP.
+**Status:** Accepted - BUILT (#96): the schema, the pure clamp/lock helpers, the Windows GPO reader, and the egress + models wiring shipped. Exec/loop ENFORCEMENT lands with ADR-0066/0067 (the schema + clamp helpers are ready for them); `logging` is consumed by ADR-0069. Public seam; the org's actual policy TEMPLATES are private-repo IP.
 **Increment:** P-ENT.1. Extends the EXISTING `managed_config.ts` seam (it already governs attribution).
 
 ### Context

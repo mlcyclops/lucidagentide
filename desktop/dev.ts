@@ -20,7 +20,7 @@ import { deleteSession, listSessions, sessionMessages } from "./sessions.ts";
 import { providerAuth } from "./auth_status.ts";
 import { cloneRepo, setWorkspace, workspaceInfo } from "./workspace.ts";
 import { applyEnv, attribution, chinaModelsAcknowledged, listMcpServers, load as loadSettings, removeMcpServer, setAsksage, setAttributionSkip, setChinaModelsAcknowledged, setDeveloperMode, setKey, setMcpServerEnabled, setPersonalAiExtract, setProfile, setRateLimitProbe, upsertMcpServer } from "./settings_store.ts";
-import { emailDomainAllowed, managedConfig, skipAllowed } from "./managed_config.ts";
+import { emailDomainAllowed, managedAsksageOnly, managedConfig, managedLocks, skipAllowed } from "./managed_config.ts";
 import { asksageConfig, listDatasets, listPersonas, monthlyTokens, scanPersona, wrapPersona } from "./asksage.ts";
 import { listSkills } from "./skills_data.ts";
 import { importSkill } from "./skills_import.ts";
@@ -372,7 +372,13 @@ const server = Bun.serve({
       // Enterprise-managed policy (read-only; placed by admins via GPO/MDM). Sanitized — policy only.
       if (p === "/api/managed") {
         const mc = managedConfig();
-        return json({ ok: true, data: { managed: !!mc.config, orgName: typeof mc.config?.orgName === "string" ? mc.config.orgName : "", attribution: mc.config?.attribution ?? null, asksageOnly: !!mc.config?.asksageOnly } });
+        return json({ ok: true, data: {
+          managed: !!mc.config,
+          orgName: typeof mc.config?.orgName === "string" ? mc.config.orgName : "",
+          attribution: mc.config?.attribution ?? null,
+          asksageOnly: managedAsksageOnly(mc.config),
+          locks: managedLocks(mc.config),
+        } });
       }
       // P-IDE.1c (ADR-0029): the China-origin data-sovereignty acknowledgement gate. GET returns the
       // flag; POST {acknowledge:true} after the user types ACKNOWLEDGE unlocks those models in the picker.

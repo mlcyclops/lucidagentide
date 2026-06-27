@@ -19,7 +19,7 @@ import { recordTurns } from "./turns_log.ts";
 import { isLearnableAssistantText } from "./thinking_governance.ts";
 import { recordBlock } from "./security_log.ts";
 import { asksageOnly, attribution, checkerModel, lastModel, load as loadSettings, mcpServersForAcp, setCheckerModel, setLastModel } from "./settings_store.ts";
-import { managedConfig } from "./managed_config.ts";
+import { managedAsksageOnly } from "./managed_config.ts";
 import { recommendCheckerModel, resolveCheckerModel, type ModelOption } from "./checker_model.ts";
 import { parseGoalVerdict } from "./goal_verdict.ts";
 import { appendGoalIteration, appendRunLog, finishGoalMemory, type GoalMemory, readRunLog, resumeGoalMemory, saveGoalReport, savePreflightReport, startGoalMemory } from "./goal_memory.ts";
@@ -785,8 +785,9 @@ class Backend {
     return { ran: true, result };
   }
 
-  /** The "AskSage only" model lock, from either the user's setting or org-managed config. */
-  private asksageLocked(): boolean { return asksageOnly() || !!managedConfig().config?.asksageOnly; }
+  /** The "AskSage only" model lock, from either the user's setting or org-managed config (the new
+   *  `models.asksageOnly` block plus the legacy top-level flag, via managedAsksageOnly). */
+  private asksageLocked(): boolean { return asksageOnly() || managedAsksageOnly(); }
 
   // P-GOAL.6 (ADR-0048): the user's accessible models, as the model config reports them (provider-
   // prefixed value + display name). Empty until omp has reported a config.
