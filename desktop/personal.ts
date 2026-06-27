@@ -14,7 +14,7 @@ import { load, personalAuditPath, personalCuiArchiveDir, personalCuiStorePath, p
 import { buildRecall, buildRecallFromGraph } from "../harness/personal/recall.ts";
 import { distillTurn, heuristicExtractor, modelExtractor, type Extractor } from "../harness/personal/distiller.ts";
 import { isConversationShard, mergeConversationShards, parseExport, type ImportVendor } from "../harness/personal/import_adapters.ts";
-import { importConversations } from "../harness/personal/importer.ts";
+import { importConversations, type ImportProgressTick } from "../harness/personal/importer.ts";
 import { readZipEntriesMatching, readZipEntry } from "../harness/personal/unzip.ts";
 import { ScannerClient } from "../harness/security/scanner_client.ts";
 import { buildCuiArchive, buildVault, type CuiDesignation, type VaultFile } from "../harness/export/vault_export.ts";
@@ -355,6 +355,7 @@ export interface ImportResult {
   ok: boolean; error?: string;
   vendor?: ImportVendor; conversations?: number; messages?: number; learned?: number; blocked?: number;
   skipped?: number; extractor?: "heuristic" | "model";
+  cancelled?: boolean; // P-KG-INGEST.1: the background run was cancelled mid-flight (partial facts kept)
 }
 
 // Model-mode bounds cost: at most this many user messages get a model call per import. The
@@ -496,7 +497,7 @@ export async function estimateChatExport(pathArg: string): Promise<ImportEstimat
  *  (model mode), the richer LLM extractor runs (capped); otherwise the offline heuristic. */
 export async function importChatExport(
   pathArg: string,
-  opts: { vendorHint?: ImportVendor; complete?: (system: string, user: string) => Promise<string> } = {},
+  opts: { vendorHint?: ImportVendor; complete?: (system: string, user: string) => Promise<string>; onProgress?: (tick: ImportProgressTick) => void; signal?: AbortSignal } = {},
 ): Promise<ImportResult> {
   // Validate the untrusted source path up front (M2, ADR-0023): it must resolve inside home,
   // so an import can't be pointed at an arbitrary file (e.g. /etc/passwd) to read it in.
@@ -532,6 +533,7 @@ export async function importChatExport(
     const sum = await importConversations(target, getScanner(), parsed.conversations, {
       vendor: parsed.vendor, scope, extract, extractorKind: useModel ? "model" : "heuristic",
       maxMessages: useModel ? MODEL_IMPORT_CAP : undefined, telemetry: tel,
+      onProgress: opts.onProgress, signal: opts.signal,
     });
     return { ok: true, ...sum };
   } catch (e) { return { ok: false, error: String((e as Error)?.message ?? e) }; }

@@ -1754,3 +1754,14 @@ pre:hover .code-ide-btn,pre:focus-within .code-ide-btn{opacity:1}
 .goal-eu-result h1, .goal-eu-result h2 { font-size: 13px; margin: 10px 0 4px; color: var(--txt); }
 .goal-eu-counts { font-size: 11px; color: var(--txt-3); margin-bottom: 8px; }
 .goal-eu-counts b { color: var(--accent); }
+
+/* P-KG-INGEST.1 (ADR-0076): background-import status pill — persistent, non-blocking, with a live
+   countdown + Cancel. Sits bottom-right so the rest of the app stays usable during a long ingest. */
+.import-pill{position:fixed;right:18px;bottom:18px;z-index:60;width:300px;background:var(--bg-2);border:1px solid var(--line);border-radius:10px;padding:12px 14px;box-shadow:0 8px 30px rgba(0,0,0,.4)}
+.import-pill-head{display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--txt);margin-bottom:9px}
+.import-pill-head b{font-weight:600}
+.import-pill-vendor{color:var(--txt-2);font-size:11.5px}
+.import-pill-bar{height:5px;background:var(--bg-0);border-radius:3px;overflow:hidden;margin-bottom:9px}
+.import-pill-fill{height:100%;width:0;background:var(--accent);border-radius:3px;transition:width .4s var(--ease-out)}
+.import-pill-row{display:flex;align-items:center;gap:10px}
+.import-pill-text{flex:1;min-width:0;font-size:11.5px;color:var(--txt-2)}

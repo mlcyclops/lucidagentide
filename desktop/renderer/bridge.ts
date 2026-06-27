@@ -119,7 +119,15 @@ export interface GraphNode { id: string; name: string; kind: string; trust: stri
 export interface GraphEdge { from: string; to: string; relation: string }
 export interface GraphFact { id: string; entity_id: string; statement: string; scope: string; trust: string; confidence: number; session?: string; at: string }
 export interface PersonalGraphData { nodes: GraphNode[]; edges: GraphEdge[]; facts: GraphFact[] }
-export interface PersonalImportResult { ok: boolean; error?: string; vendor?: "openai" | "anthropic" | "gemini"; conversations?: number; messages?: number; learned?: number; blocked?: number; skipped?: number; extractor?: "heuristic" | "model" }
+export interface PersonalImportResult { ok: boolean; error?: string; vendor?: "openai" | "anthropic" | "gemini"; conversations?: number; messages?: number; learned?: number; blocked?: number; skipped?: number; extractor?: "heuristic" | "model"; cancelled?: boolean }
+// P-KG-INGEST.1 (ADR-0076): the background import job — start returns a jobId; status is polled for a live countdown.
+export interface PersonalImportStart { ok: boolean; jobId?: string; error?: string }
+export interface PersonalImportJob {
+  jobId: string; state: "running" | "done" | "failed" | "cancelled"; vendor?: string;
+  messages: number; totalMessages: number; conversations: number; totalConversations: number;
+  learned: number; blocked: number; startedAt: number; updatedAt: number;
+  result?: PersonalImportResult; error?: string;
+}
 export interface PersonalImportEstimate { ok: boolean; error?: string; vendor?: "openai" | "anthropic" | "gemini"; conversations?: number; userMessages?: number; userChars?: number }
 // P-IDE.5 (ADR-0036): gated read/write for the in-app editor.
 export interface EditorReadResult { ok: boolean; error?: string; path?: string; content?: string; mtime?: number; sha256?: string }
@@ -319,7 +327,10 @@ export interface LucidBridge {
   personalForget(factId: string): Promise<{ ok: boolean } | null>;
   // P9.7: import a ChatGPT / Claude / Gemini data export (folder, .json, or .zip) into the active
   // compartment, through the fail-closed gate. `model` runs the richer LLM extractor (capped).
-  personalImport(path: string, model?: boolean): Promise<PersonalImportResult | null>;
+  // P-KG-INGEST.1: starts a BACKGROUND import job (returns a jobId); poll status + cancel below.
+  personalImport(path: string, model?: boolean): Promise<PersonalImportStart | null>;
+  personalImportStatus(jobId?: string): Promise<PersonalImportJob | null>;
+  personalImportCancel(jobId?: string): Promise<{ ok: boolean } | null>;
   // P-IMP.2: read-only pre-import estimate (counts) for the AI-mode token/time warning.
   personalImportEstimate(path: string): Promise<PersonalImportEstimate | null>;
   // P-IDE.5: in-app editor — read a workspace file, and save the buffer THROUGH the scanner gate.
@@ -504,6 +515,8 @@ export const bridge: LucidBridge = {
   personalGraph: (scope) => getData(`/api/personal/graph${scope ? `?scope=${encodeURIComponent(scope)}` : ""}`),
   personalForget: (factId) => post("/api/personal/forget", { factId }),
   personalImport: (path, model) => post("/api/personal/import", { path, model: !!model }),
+  personalImportStatus: (jobId) => getData(`/api/personal/import/status${jobId ? `?jobId=${encodeURIComponent(jobId)}` : ""}`),
+  personalImportCancel: (jobId) => post("/api/personal/import/cancel", { jobId }),
   personalImportEstimate: (path) => post("/api/personal/import/estimate", { path }),
   editorRead: (path) => post("/api/editor/file", { path }),
   editorSave: (opts) => post("/api/editor/save", opts),
