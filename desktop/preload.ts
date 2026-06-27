@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld("lucid", {
   isElectron: true,
   setZoom: (factor: number) => { try { webFrame.setZoomFactor(factor); } catch { /* ignore */ } },
   pickFolder: (): Promise<string | null> => ipcRenderer.invoke("lucid:pickFolder"),
+  revealPath: (path: string): Promise<boolean> => ipcRenderer.invoke("lucid:revealPath", path),
   win: {
     minimize: () => ipcRenderer.send("lucid:win", "minimize"),
     toggleMaximize: () => ipcRenderer.send("lucid:win", "toggleMaximize"),

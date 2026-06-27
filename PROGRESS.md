@@ -4,6 +4,11 @@ Three lines per session: **shipped / stubbed / next** (CLAUDE.md session ritual)
 
 -----
 
+## B-KG.2: recoverable export location (#115)
+- **shipped:** the export destination no longer flashes-and-vanishes. New `revealPath` capability through the native shell (`preload.ts` → `main.ts` `ipcMain.handle("lucid:revealPath")` → `shell.openPath`, guarded to an existing path) + `bridge.revealPath`/`canRevealPath`. Pure `desktop/renderer/kg_export.ts exportActionPlan` decides the affordances; `showExportToast` in `app.ts` keeps the toast up (timeout 0) with a `→ <dest>` line and **Open folder** (desktop) + **Copy path** actions, for both vault export and the CUI archive. Proof: `desktop/renderer/kg_export.test.ts` (4 tests) + `make demo-B-KG.2`; desktop 419✓ / typecheck clean.
+- **stubbed:** no persistent "recent exports" history surface yet (the toast is recoverable but transient once dismissed; `personalExports()` already records them server-side — a future Settings list could render it); Open folder is Electron-only by design (browser build offers Copy path only).
+- **next:** the KG import-feedback feature ADRs — P-KG-REL.1 (#109), P-KG-INGEST.1 (#110), P-VAULT-HINT.1 (#111).
+
 ## R-06: subagent edits gated + attributed, no stash-masking (ADR-0055)
 - **shipped:** verified + regression-locked that subagent (`task`) edits are NOT masked from the gate or code-activity attribution. With task isolation OFF (ADR-0032), a subagent edits the REAL workspace → its write/edit tool calls route through the same in-process fail-closed gate → ADR-0031 attribution counts them from the gate's tool_result hook, and `EditResultLike` carries no agent/provenance dimension (so nothing can drop a subagent's edit). `harness/runs/loc_count_subagent.test.ts` (3 tests). ADR-0055.
 - **stubbed:** the stash-isolate/apply/merge masking risk only exists if isolation is RE-enabled (ADR-0032 conditions: patch-review UI + reliable Windows merge-back) — ADR-0055 is the tripwire to re-open R-06 then (gate-scan + attribute the merged diff; nested-repo dirty-state test).

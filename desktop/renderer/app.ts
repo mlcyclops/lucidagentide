@@ -12,7 +12,8 @@ import { icon, piMark } from "./icons.ts";
 import { renderMarkdown } from "./markdown.ts";
 import { type GraphHandle, kindLabel, mountGraph } from "./graph.ts";
 import type { PersonalGraphData } from "./bridge.ts";
-import { type Action, attachRichTip, createPalette, initTooltips, popover, showToast } from "./ui.ts";
+import { type Action, type ToastAction, attachRichTip, createPalette, initTooltips, popover, showToast } from "./ui.ts";
+import { exportActionPlan } from "./kg_export.ts";
 import { ASKSAGE_FAMILY_ORDER, familyOf, filterModels, groupByFamily, isAuxiliaryModel, isChinaModel, isDeprecatedModel, isGovModel, sortGovFirstNewest } from "./model_families.ts";
 import { INSTALLED_SKILLS, bumpSkillUsage, bundledSkillsByUsage, taskProforma } from "./skills.ts";
 import { CHECKER_TOKENS_PER_ITER, MAKER_TOKENS_PER_ITER, estimateGoalCost, estimateGoalTokens, formatTokens, formatUSD } from "../loop_estimate.ts";
@@ -1560,6 +1561,22 @@ const kindTint = (k: string): string => {
   const c: Record<string, string> = { preference: "var(--cyan-dim)", interest: "var(--green-dim)", decision: "var(--blue-dim)", behavior: "var(--amber-dim)", personality: "var(--accent-dim)" };
   return c[kindLabel(k)] ?? "var(--bg-3)";
 };
+
+// #115: a successful export used to flash its location for a few seconds, then it was gone. Keep the toast
+// up (when there's a real path) and offer Copy path — plus Open folder in the desktop app — so the
+// destination is recoverable. With no path (export failed before writing) it auto-dismisses as before.
+function showExportToast(title: string, desc: string, dest: string | undefined): void {
+  const plan = exportActionPlan(dest, bridge.canRevealPath());
+  const actions: ToastAction[] = [];
+  if (plan.reveal) actions.push({ label: "Open folder", kind: "ok", run: () => void bridge.revealPath(dest!) });
+  if (plan.copy) actions.push({ label: "Copy path", run: () => void copyExportPath(dest!) });
+  actions.push({ label: "OK" });
+  showToast({ title, desc, meta: plan.persist ? `→ ${dest}` : undefined, actions, timeout: plan.persist ? 0 : 7000 });
+}
+async function copyExportPath(dest: string): Promise<void> {
+  try { await navigator.clipboard.writeText(dest); showToast({ title: "Path copied", desc: dest, timeout: 2400 }); }
+  catch { showToast({ tone: "warn", title: "Couldn't copy the path", desc: dest, actions: [{ label: "OK" }], timeout: 4000 }); }
+}
 
 // ───────────────────────── workspace ─────────────────────────
 function workspaceSection(ws: WorkspaceInfo): string {
@@ -3128,7 +3145,7 @@ function wire(): void {
     showToast({ title: "Exporting vault…", desc: "Decrypting and writing your Obsidian notes.", timeout: 1400 });
     const r = await bridge.personalExportVault({});
     if (!r?.ok) showToast({ tone: "danger", title: "Vault not exported", desc: r?.error ?? "Personalization is off or locked.", actions: [{ label: "OK" }], timeout: 5000 });
-    else showToast({ title: "Vault exported", desc: `${r.files} files · ${r.entities} notes · ${r.facts} facts → ${r.dest}`, meta: "Personal + Work · CUI excluded by design · audited", actions: [{ label: "OK" }], timeout: 7000 });
+    else showExportToast("Vault exported", `${r.files} files · ${r.entities} notes · ${r.facts} facts · Personal + Work · CUI excluded by design · audited`, r.dest);
   });
   $("#kgCui")!.addEventListener("click", () => {
     showToast({
@@ -3140,7 +3157,7 @@ function wire(): void {
         { label: "Export CUI archive", kind: "danger", run: async () => {
           const r = await bridge.personalCuiArchive({});
           if (!r?.ok) showToast({ tone: "danger", title: "CUI archive not written", desc: r?.error ?? "Personalization is off or locked.", actions: [{ label: "OK" }], timeout: 6000 });
-          else showToast({ title: "CUI archive written", desc: `${r.files} files · ${r.facts} facts → ${r.dest}`, meta: `manifest sha256 ${(r.manifestSha256 ?? "").slice(0, 12)}… · complete the designation before transfer`, actions: [{ label: "OK" }], timeout: 9000 });
+          else showExportToast("CUI archive written", `${r.files} files · ${r.facts} facts · sha256 ${(r.manifestSha256 ?? "").slice(0, 12)}… · complete the designation before transfer`, r.dest);
         } },
       ],
       timeout: 0,
