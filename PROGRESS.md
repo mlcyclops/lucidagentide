@@ -4,6 +4,11 @@ Three lines per session: **shipped / stubbed / next** (CLAUDE.md session ritual)
 
 -----
 
+## P-PERF.1: snappy cached UI — instant session list + transcripts (#134, ADR-0084)
+- **shipped:** a returning user gets an instant UI. New `desktop/renderer/swr_cache.ts` — localStorage-backed stale-while-revalidate: `renderSessions` paints the cached session list on a cold load (no skeleton flash) then refreshes + re-caches; `resumeSession` paints `cachedTranscript(id)` instantly (no blank thread) then reconciles, re-rendering ONLY if `transcriptSig` differs (no flicker on a hit). Transcripts LRU-capped (15 sessions × ≤400 msgs) so localStorage stays bounded. **Privacy boundary:** only the session list + transcripts are cached — omp already stores those as plaintext `*.jsonl`, so no NEW at-rest exposure; the **encrypted KG store is never persisted to localStorage** (stays in-memory). Storage backend is injectable (in-memory fallback) → testable + fail-safe. Proof: `swr_cache.test.ts` (8) + `make demo-P-PERF.1`. ADR-0084 BUILT.
+- **stubbed:** KG re-open still re-decrypts (intentionally not localStorage'd; an in-memory instant-show on same-session re-open is a possible follow-up); live panels (security/memory/usage) already instant via the 4s poll + hash-memoization, so untouched.
+- **next:** P-KG-INGEST.4 — true ingest concurrency (a second omp session/process so extraction never shares the chat connection).
+
 ## P-KG-SEARCH.1: find a node in the graph (#132, ADR-0083)
 - **shipped:** a `#kgSearch` box in the KG toolbar. As you type, pure `kg_ops.ts matchNodes(nodes, query)` (case-insensitive substring; empty → clear) returns matching ids → `graph.setSearch(ids)` rings + brightens matches, **dims** the rest, and **centers** on them (`computeFit` over the matched subset, reusing the #112 fit math). Esc clears; an active search survives a live remount (like relate mode). Display-only — no store/scan change, no new per-frame cost (just node-class toggles). Proof: `kg_ops.test.ts` matchNodes + `make demo-P-KG-SEARCH.1`; renderer bundle ✓. ADR-0083 BUILT.
 - **stubbed:** no fuzzy/typo-tolerant match (substring only); no next/prev-match cycling when several match.

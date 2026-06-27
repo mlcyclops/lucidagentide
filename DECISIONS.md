@@ -6524,3 +6524,50 @@ loop (#114 — search just toggles node classes, no new per-frame cost).
 
 ADR-0072-ish KG view, `desktop/renderer/kg_ops.ts` (`matchNodes`), `desktop/renderer/graph.ts`
 (`setSearch`/`computeFit` subset), the #112 fit-transform this reuses.
+
+## ADR-0084 - P-PERF.1: snappy cached UI — instant session list + transcripts (stale-while-revalidate)
+
+**Date:** 2026-06-27
+**Status:** Accepted - BUILT (first slice: session list + chat transcripts).
+**Increment:** P-PERF.1. Make a RETURNING user's UI instant; the rest of the app stays on its live poll.
+
+### Context
+
+The bridge fetches with `cache: "no-store"`; every navigation re-fetches. The two user-felt costs are
+(1) clicking a chat session re-loads its transcript from disk → a blank thread until it arrives, and
+(2) the session list re-fetches on each load → a skeleton flash even for a returning user. The live panels
+(security/memory/usage) are already instant on tab-switch because a global 4s poll keeps `state` warm and
+the inspector is hash-memoized — so they're out of scope.
+
+### Decision - a tiny localStorage-backed SWR cache for data that is ALREADY plaintext on disk
+
+`desktop/renderer/swr_cache.ts`: paint the cached value immediately, then fetch fresh and re-render ONLY if
+it changed (a `transcriptSig` compare avoids a flicker on a cache-hit). Persisted to `localStorage` so it
+survives reload/restart. `renderSessions` hydrates the list from `lucid.sessions` on a cold list (no
+skeleton for a returning user); `resumeSession` paints `cachedTranscript(id)` instantly, then reconciles.
+Transcripts are LRU-capped (15 sessions × ≤400 msgs) so `localStorage` can't grow unbounded.
+
+**Privacy boundary (deliberate).** ONLY the session list + chat transcripts are cached — and omp already
+persists those as plaintext `~/.omp/.../*.jsonl`, so this adds NO new at-rest exposure. The encrypted
+Knowledge-graph store is **never** written to `localStorage` (that would defeat its at-rest encryption); it
+stays in-memory only. The cache module documents this boundary.
+
+### Consequences
+
+- A returning user: the session list appears with no skeleton, and clicking a session shows its transcript
+  with no blank-thread gap; both refresh silently. `make demo-P-PERF.1` + `swr_cache.test.ts` cover the
+  cache (round-trip, LRU eviction, per-transcript cap, sig-compare). Storage backend is injectable (an
+  in-memory fallback) so it's testable headlessly and degrades safely when `localStorage` is absent/quota'd.
+- Stale risk is bounded: a transcript edited elsewhere shows briefly stale then reconciles on the same open;
+  the list re-caches on every fetch and on session create/delete (which re-render it).
+
+### Invariants preserved
+
+No new plaintext-at-rest surface (only already-plaintext omp transcripts; the encrypted KG is never
+cached); best-effort + fail-safe (cache errors degrade to a normal fetch, never throw); no server change.
+
+### Relates to
+
+`desktop/renderer/bridge.ts` (`sessions`/`sessionMessages`, the `no-store` fetches this fronts),
+`desktop/renderer/app.ts` (`renderSessions`/`resumeSession`), the existing `lucid.config` localStorage
+pattern this mirrors, ADR-0010 (the encrypted personal store this deliberately does NOT cache).

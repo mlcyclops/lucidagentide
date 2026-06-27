@@ -5,7 +5,8 @@
 // agent turn. Same renderer in Electron (real omp ACP via window.lucid) and in
 // the browser dev server (simulated). Pure DOM, no framework.
 
-import { bridge, type ChatEvent, type ConfigOption, type MemorySnapshot, type OmpCommand, type ProviderAuth, type SecuritySnapshot, type SessionInfo, type WorkspaceInfo } from "./bridge.ts";
+import { bridge, type ChatEvent, type ConfigOption, type MemorySnapshot, type OmpCommand, type ProviderAuth, type SecuritySnapshot, type SessionInfo, type SessionList, type WorkspaceInfo } from "./bridge.ts";
+import { cachedSessions, cachedTranscript, setCachedSessions, setCachedTranscript, transcriptSig } from "./swr_cache.ts";
 import { $, $$, accordion, el, fmtNum, gauge, spark, table } from "./dom.ts";
 import { ageStr, esc, fmtUSD, goodColor, loadColor } from "./format.ts";
 import { icon, piMark } from "./icons.ts";
@@ -247,14 +248,8 @@ function sessRow(s: SessionInfo, active: boolean): string {
       <button class="sess-del" data-del="${esc(s.id)}" data-tip="Delete session" aria-label="Delete session" tabindex="-1">${icon("trash", 13)}</button>
     </div>`;
 }
-async function renderSessions(): Promise<void> {
-  const list = $("#sessList");
-  if (!list) return;
-  // Show the skeleton only on a cold list (first load). On a re-render after sending a
-  // prompt the list already has content - don't flash it back to skeleton.
-  if (!list.firstElementChild || $(".skel-group", list)) list.innerHTML = sessSkeleton();
-  const data = await bridge.sessions().catch(() => null);
-  if (data === null) { list.innerHTML = `<div class="side-empty">Couldn't load history - the GUI server looks out of date. Relaunch it (launcher → <b>G</b>), or restart <code>bun run desktop:web</code>.</div>`; return; }
+function renderSessionList(data: SessionList): void {
+  const list = $("#sessList"); if (!list) return;
   const { sessions, ingest } = data;
   if (!sessions.length && !ingest.length) { list.innerHTML = `<div class="side-empty">No sessions yet - send a prompt to start one. They persist here across runs.</div>`; return; }
   const chats = sessions.map((s, i) => sessRow(s, i === 0)).join("");
@@ -270,6 +265,22 @@ async function renderSessions(): Promise<void> {
       <div class="sess-group-body" ${ingestExpanded ? "" : "hidden"}>${ingest.map((s) => sessRow(s, false)).join("")}</div>
     </div>` : "";
   list.innerHTML = chats + ingestGroup;
+}
+async function renderSessions(): Promise<void> {
+  const list = $("#sessList");
+  if (!list) return;
+  // P-PERF.1: on a cold list (first load / skeleton), paint the CACHED session list instantly so a
+  // returning user never sees a skeleton; fall back to the skeleton only when there's no cache yet.
+  const cached = cachedSessions<SessionList>();
+  const cold = !list.firstElementChild || !!$(".skel-group", list);
+  if (cold) { if (cached) renderSessionList(cached); else list.innerHTML = sessSkeleton(); }
+  const data = await bridge.sessions().catch(() => null);
+  if (data === null) { // keep the cached list on a transient error instead of blanking it
+    if (cold && !cached) list.innerHTML = `<div class="side-empty">Couldn't load history - the GUI server looks out of date. Relaunch it (launcher → <b>G</b>), or restart <code>bun run desktop:web</code>.</div>`;
+    return;
+  }
+  renderSessionList(data);
+  setCachedSessions(data); // refresh the cache for next launch
 }
 // P-KG-INGEST.2: bulk-delete the throwaway extraction sessions (chats + knowledge graph untouched).
 function confirmClearIngest(): void {
@@ -1786,13 +1797,25 @@ async function loadWorkspace(): Promise<void> {
   state.workspace = await bridge.workspace().catch(() => null);
   renderWorkspaceBar();
 }
-async function resumeSession(id: string): Promise<void> {
-  closeSettings();
-  const msgs = await bridge.sessionMessages(id);
+function renderThread(msgs: { role: string; text: string }[] | null | undefined): void {
   $("#thread")!.innerHTML = "";
   if (msgs && msgs.length) for (const m of msgs) addMessage(m.role === "user" ? "user" : "assistant", m.text);
   else seedThread();
+}
+async function resumeSession(id: string): Promise<void> {
+  closeSettings();
   $$(".sess").forEach((s) => s.classList.toggle("active", (s as HTMLElement).dataset.sid === id));
+  // P-PERF.1: paint the CACHED transcript instantly (no blank thread), then reconcile with the fresh load.
+  const cached = cachedTranscript(id);
+  let shownSig = "";
+  if (cached && cached.length) { renderThread(cached); shownSig = transcriptSig(cached); }
+  const msgs = await bridge.sessionMessages(id);
+  if (msgs) {
+    if (transcriptSig(msgs) !== shownSig) renderThread(msgs); // re-render only if it actually changed (no flicker)
+    setCachedTranscript(id, msgs, Date.now());
+  } else if (!shownSig) {
+    renderThread(null); // no cache AND the fetch failed → a fresh empty thread
+  }
   await bridge.resumeSession(id);
   $("#input")?.focus();
 }
