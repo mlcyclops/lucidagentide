@@ -125,6 +125,37 @@ export function listSessions(cwd: string = currentWorkspace(), root: string = jo
   };
 }
 
+/** P-KG-INGEST.2 (ADR-0079): delete ALL kg-ingest throwaway sessions for one workspace. Defense in depth:
+ *  only removes files that BOTH (a) belong to the current workspace AND (b) are extractor throwaways
+ *  (`isIngestPrompt` on the first user message) — a real chat is never touched. Returns the count removed. */
+export function clearIngestSessions(cwd: string = currentWorkspace(), root: string = join(homedir(), ".omp", "agent", "sessions")): { ok: boolean; cleared: number } {
+  if (!existsSync(root)) return { ok: true, cleared: 0 };
+  const want = norm(cwd);
+  let cleared = 0;
+  for (const d of readdirSync(root)) {
+    const dir = join(root, d);
+    try {
+      if (!statSync(dir).isDirectory()) continue;
+      for (const f of readdirSync(dir)) {
+        if (!f.endsWith(".jsonl")) continue;
+        const p = join(dir, f);
+        try {
+          let scwd = "", isIngest = false, sawUser = false;
+          for (const ln of readFileSync(p, "utf8").split("\n")) {
+            if (!ln) continue;
+            let o: any; try { o = JSON.parse(ln); } catch { continue; }
+            if (o.type === "session") scwd = o.cwd ?? "";
+            else if (o.type === "message" && o.message?.role === "user" && !sawUser) { sawUser = true; isIngest = isIngestPrompt(firstUserText(o.message)); }
+            if (scwd && sawUser) break; // we know cwd + ingest-ness — stop reading
+          }
+          if (isIngest && norm(scwd) === want) { rmSync(p, { force: true }); cleared++; }
+        } catch { /* skip unreadable/locked file */ }
+      }
+    } catch { /* skip dir */ }
+  }
+  return { ok: true, cleared };
+}
+
 function msgText(message: any): string {
   const c = message?.content;
   if (typeof c === "string") return c;

@@ -260,12 +260,33 @@ async function renderSessions(): Promise<void> {
   // P-KG-INGEST.1b: collapse the throwaway "Extract DURABLE facts…" extraction sessions an import mints
   // into ONE foldable group so they don't pollute the chat history (they stay inspectable when expanded).
   const ingestGroup = ingest.length ? `<div class="sess-group">
-      <button class="sess-group-head" data-ingest-toggle aria-expanded="${ingestExpanded}" data-tip="Throwaway model-extraction sessions from imports + AI learning. Grouped so they don't clutter your chats.">
-        <span class="sess-group-chev ${ingestExpanded ? "open" : ""}">${icon("chevron", 12)}</span> Knowledge Graph Ingest <span class="sess-group-count">${ingest.length}</span>
-      </button>
+      <div class="sess-group-head">
+        <button class="sess-group-toggle" data-ingest-toggle aria-expanded="${ingestExpanded}" data-tip="Throwaway model-extraction sessions from imports + AI learning. Grouped so they don't clutter your chats.">
+          <span class="sess-group-chev ${ingestExpanded ? "open" : ""}">${icon("chevron", 12)}</span> Knowledge Graph Ingest <span class="sess-group-count">${ingest.length}</span>
+        </button>
+        <button class="sess-group-clear" data-ingest-clear data-tip="Clear ingest sessions|Delete all ${ingest.length} throwaway extraction sessions from disk. Your chats and knowledge graph are untouched.">${icon("trash", 12)}</button>
+      </div>
       <div class="sess-group-body" ${ingestExpanded ? "" : "hidden"}>${ingest.map((s) => sessRow(s, false)).join("")}</div>
     </div>` : "";
   list.innerHTML = chats + ingestGroup;
+}
+// P-KG-INGEST.2: bulk-delete the throwaway extraction sessions (chats + knowledge graph untouched).
+function confirmClearIngest(): void {
+  showToast({
+    title: "Clear ingest sessions?",
+    desc: "Deletes the throwaway 'Extract DURABLE facts…' extraction sessions from disk. Your chats and your knowledge graph are NOT affected.",
+    tone: "warn",
+    actions: [
+      { label: "Cancel" },
+      { label: "Clear", kind: "danger", run: async () => {
+        const r = await bridge.clearIngestSessions().catch(() => null);
+        if (!r?.ok) { showToast({ tone: "danger", title: "Couldn't clear", desc: "Some sessions may still be open. Try again.", actions: [{ label: "OK" }], timeout: 5000 }); return; }
+        showToast({ title: r.cleared ? `Cleared ${r.cleared} ingest session${r.cleared === 1 ? "" : "s"}` : "Nothing to clear", desc: "Your chats and knowledge graph are unchanged.", timeout: 3000 });
+        void renderSessions();
+      } },
+    ],
+    timeout: 0,
+  });
 }
 
 // ───────────────────────── chat ─────────────────────────
@@ -3752,6 +3773,7 @@ function wire(): void {
   $("#wsBar")!.addEventListener("click", () => openSettings());
   $("#sessList")!.addEventListener("click", (e) => {
     const t = e.target as HTMLElement;
+    if (t.closest("[data-ingest-clear]")) { e.stopPropagation(); confirmClearIngest(); return; } // P-KG-INGEST.2
     if (t.closest("[data-ingest-toggle]")) { ingestExpanded = !ingestExpanded; void renderSessions(); return; } // P-KG-INGEST.1b
     const del = t.closest(".sess-del") as HTMLElement | null;
     if (del?.dataset.del) { e.stopPropagation(); confirmDeleteSession(del.dataset.del); return; }
