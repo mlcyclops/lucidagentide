@@ -254,6 +254,10 @@ demo-P-KG-REL.3: ## P-KG-REL.3 (#130/ADR-0082): remove a relationship — optimi
 demo-P-KG-SEARCH.1: ## P-KG-SEARCH.1 (#132/ADR-0083): find a node — case-insensitive substring matcher feeding highlight + center
 	$(BUN) run desktop/scripts/demo_p_kg_search_1.ts
 
+.PHONY: demo-P-PERF.1
+demo-P-PERF.1: ## P-PERF.1 (#134/ADR-0084): instant cached session list + transcripts (SWR) — paint cache, refresh, re-render only if changed; LRU-capped
+	$(BUN) run desktop/scripts/demo_p_perf_1.ts
+
 .PHONY: dashboards
 dashboards: ## Materialize dashboard CSVs from a DuckDB into observable/docs/data (DB=path)
 	$(BUN) run harness/scripts/materialize_dashboards.ts $(DB) observable/docs/data
