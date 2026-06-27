@@ -6287,3 +6287,39 @@ frozen prefix untouched (the hint lives in the volatile recall tail, after the c
 `desktop/personal.ts` (`recallPreamble`, `PersonalStatus.cuiConfigured`), `harness/personal/recall.ts`
 (`buildRecallFromGraph` — the block this augments), `harness/personal/crypto.ts` (the lock that this respects),
 ADR-0014 (CUI hard isolation), ADR-0068 (managed-config can degrade/suppress the count), keystones #2/#3.
+
+## ADR-0078 - P-KG-REL.2: custom relation labels for manual relate
+
+**Date:** 2026-06-27
+**Status:** Accepted - BUILT.
+**Increment:** P-KG-REL.2. UI completion of P-KG-REL.1 (ADR-0075) — the data layer already accepted any label.
+
+### Context
+
+P-KG-REL.1 shipped manual relationship authoring with a fixed `"related"` label (the ADR deferred custom
+labels). `store.addLink` and the server-side `relateEntities` already accept + sanitize an arbitrary
+relation string (control-char strip, whitespace collapse, 40-char cap). Only the inline-label UI was missing.
+
+### Decision - a small optional label input in the Relate bar; pure resolution; server still sanitizes
+
+`desktop/renderer/kg_ops.ts resolveRelationLabel(raw)` returns the trimmed input or `"related"` when blank.
+The Relate bar gains a `#kgRelateLabel` text input (`maxlength=40`, placeholder `"related"`); both gestures
+(drag-to-relate and multi-select Relate) read it via `currentRelationLabel()`, so a chain relate applies the
+same label to every pair. The label flows through the existing optimistic path + `bridge.personalRelate`;
+the SERVER remains the trust boundary (it sanitizes + caps, and links carry no trust label — first-party).
+
+### Consequences
+
+- No backend change: `relateEntities`/`addLink` already accept the label. `make demo-P-KG-REL.2` proves a
+  custom label ("deploys with") round-trips through the encrypted store; the pure `resolveRelationLabel`
+  default behavior is unit-tested.
+
+### Invariants preserved
+
+First-party authored edges (no scanner, no semantic promotion — keystone #2); the relation is display-only
+(links never enter the prompt — recall is fact-only); server-side sanitation unchanged; closed trust set.
+
+### Relates to
+
+ADR-0075 (P-KG-REL.1, which this completes), `desktop/personal.ts` (`relateEntities`/`sanitizeRelation`),
+`desktop/renderer/kg_ops.ts` (`resolveRelationLabel`).

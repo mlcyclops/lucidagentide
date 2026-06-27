@@ -111,6 +111,12 @@ export function chainPairs(ids: string[]): Array<[string, string]> {
   return out;
 }
 
+/** The relationship label from a raw input (P-KG-REL.2): trimmed, or "related" when blank/whitespace.
+ *  The server still sanitizes + length-caps it; this is the UI default. */
+export function resolveRelationLabel(raw: string | null | undefined): string {
+  return (raw ?? "").trim() || "related";
+}
+
 /** Optimistically add a user-authored edge (dedup on from+to+relation), without mutating the input — so
  *  the edge shows instantly and the caller can roll back if the server rejects it. */
 export function addEdgeOptimistic(data: PersonalGraphData, from: string, to: string, relation: string): PersonalGraphData {

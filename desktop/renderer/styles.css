@@ -1367,6 +1367,11 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .kg-relate-bar{display:flex;align-items:center;gap:10px;padding:7px 14px;background:var(--bg-2);border-bottom:1px solid var(--line)}
 .kg-relate-hint{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--txt-2)}
 .kg-relate-count{font-size:12px;color:var(--accent);font-weight:600}
+/* P-KG-REL.2: optional relationship-label input */
+.kg-relate-label{width:140px;padding:4px 9px;font-size:12px;border-radius:7px;border:1px solid var(--line);
+  background:var(--bg-0);color:var(--txt);outline:none;transition:border-color var(--t) var(--ease)}
+.kg-relate-label:focus{border-color:var(--accent)}
+.kg-relate-label::placeholder{color:var(--txt-3)}
 .kg-relate-bar .btn-mini{margin-left:auto}
 .kg-relate-bar .btn-mini+.btn-mini{margin-left:6px}
 #kgRelate.on{background:var(--accent);color:var(--bg-0);border-color:var(--accent)}
