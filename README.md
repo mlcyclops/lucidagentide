@@ -396,6 +396,26 @@ needs **zero prerequisites**. Code-signing and notarization are supported when c
 > **Linux:** the download is a portable `AppImage` - `chmod +x LucidAgentIDE-x86_64.AppImage` and run it,
 > no install needed.
 
+### Homebrew (macOS)
+
+Install the desktop app with Homebrew Cask straight from this repo - no manual unzip, and `brew upgrade`
+keeps the cask wiring current (the app itself also self-updates via electron-updater):
+
+```bash
+brew tap mlcyclops/lucid https://github.com/mlcyclops/lucidagentide
+brew trust --cask mlcyclops/lucid/lucidagentide   # Homebrew >= 6 gates third-party taps
+brew install --cask lucidagentide
+
+# Builds are UNSIGNED, so clear macOS quarantine once before first launch:
+xattr -dr com.apple.quarantine "/Applications/LucidAgentIDE.app"
+```
+
+`brew trust` is required on Homebrew 6+, which refuses to load casks from a third-party tap until you
+explicitly trust it (older Homebrew skips this step). The `xattr` step is needed because builds are currently
+**unsigned and not notarized** - macOS Gatekeeper blocks them otherwise, and Homebrew 6 removed the
+`--no-quarantine` install flag. The cask serves both Apple Silicon and Intel automatically. To remove it
+later: `brew uninstall --cask lucidagentide` (add `--zap` to also delete app data).
+
 ## <img src=".github/assets/icons/roadmap.svg" width="28" align="top" alt=""> Roadmap
 
 **Shipped and green.** The full security lifecycle, provenance lineage + replay, the cache-optimized prompt,
