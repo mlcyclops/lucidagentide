@@ -3,7 +3,18 @@
 
 import { describe, expect, test } from "bun:test";
 import type { PersonalGraphData } from "./bridge.ts";
-import { addEdgeOptimistic, applyForget, chainPairs, fitTransform, frameWork, nodeAtPoint, togglePick } from "./kg_ops.ts";
+import { addEdgeOptimistic, applyForget, chainPairs, fitTransform, frameWork, nodeAtPoint, resolveRelationLabel, togglePick } from "./kg_ops.ts";
+
+describe("#122 resolveRelationLabel (P-KG-REL.2)", () => {
+  test("uses a typed label, defaults to 'related' when blank", () => {
+    expect(resolveRelationLabel("deploys with")).toBe("deploys with");
+    expect(resolveRelationLabel("  used for  ")).toBe("used for"); // trimmed
+    expect(resolveRelationLabel("")).toBe("related");
+    expect(resolveRelationLabel("   ")).toBe("related");
+    expect(resolveRelationLabel(null)).toBe("related");
+    expect(resolveRelationLabel(undefined)).toBe("related");
+  });
+});
 
 describe("#112 fitTransform — large graphs actually fit", () => {
   const W = 800, H = 600;

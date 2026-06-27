@@ -11,7 +11,7 @@ import { ageStr, esc, fmtUSD, goodColor, loadColor } from "./format.ts";
 import { icon, piMark } from "./icons.ts";
 import { renderMarkdown } from "./markdown.ts";
 import { type GraphHandle, kindLabel, mountGraph } from "./graph.ts";
-import { addEdgeOptimistic, applyForget, chainPairs } from "./kg_ops.ts";
+import { addEdgeOptimistic, applyForget, chainPairs, resolveRelationLabel } from "./kg_ops.ts";
 import type { PersonalGraphData } from "./bridge.ts";
 import { type Action, type ToastAction, attachRichTip, createPalette, initTooltips, popover, showToast } from "./ui.ts";
 import { exportActionPlan } from "./kg_export.ts";
@@ -206,7 +206,8 @@ function buildShell(): void {
           </div>
         </div>
         <div class="kg-relate-bar" id="kgRelateBar" hidden>
-          <span class="kg-relate-hint">${icon("info", 12)} Drag a node onto another to relate them — or click nodes, then Relate.</span>
+          <span class="kg-relate-hint">${icon("info", 12)} Drag a node onto another, or click nodes then Relate.</span>
+          <input id="kgRelateLabel" class="kg-relate-label" type="text" maxlength="40" placeholder="related" spellcheck="false" autocomplete="off" data-tip="Name the relationship|Optional. e.g. 'deploys with', 'used for'. Defaults to 'related'." />
           <span class="kg-relate-count" id="kgRelateCount"></span>
           <button class="btn-mini ok" id="kgRelateDo" disabled>Relate</button>
           <button class="btn-mini" id="kgRelateClear">Clear</button>
@@ -1503,13 +1504,19 @@ let relating = false; // guards against concurrent relate calls
 
 /** Apply a relate result to the live graph: optimistically add the edge, keep the poll baseline in sync,
  *  and surface failures. Returns whether it landed. */
-async function relateNodes(fromId: string, toId: string, relation = "related"): Promise<boolean> {
+/** The relationship label from the Relate bar (P-KG-REL.2), defaulting to "related". The server
+ *  sanitizes + caps it; this is just the UI default + read. */
+function currentRelationLabel(): string {
+  return resolveRelationLabel(($("#kgRelateLabel") as HTMLInputElement | null)?.value);
+}
+async function relateNodes(fromId: string, toId: string, relation?: string): Promise<boolean> {
   if (!kgData) return false;
+  const rel = relation ?? currentRelationLabel(); // P-KG-REL.2: custom label when the user typed one
   const before = kgData;
-  kgData = addEdgeOptimistic(kgData, fromId, toId, relation); // instant edge (no reload wait)
+  kgData = addEdgeOptimistic(kgData, fromId, toId, rel); // instant edge (no reload wait)
   kgSig = kgSignature(kgData);
   kgHandle?.update(kgData);
-  const r = await bridge.personalRelate(fromId, toId, relation).catch(() => null);
+  const r = await bridge.personalRelate(fromId, toId, rel).catch(() => null);
   if (r?.ok) return true;
   kgData = before; // server refused → roll back
   kgSig = kgSignature(kgData);
