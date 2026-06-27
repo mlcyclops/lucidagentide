@@ -32,6 +32,7 @@ import { recentTurns } from "./turns_log.ts";
 import { headroomStatus, setHeadroomEnabled, startHeadroom } from "./headroom.ts";
 import { destroyCui, enablePersonal, estimateChatExport, exportCuiArchive, exportHistory, exportVault, forgetFact, importChatExport, lockCui, lockPersonal, migrateCuiIntoStore, personalGraph, personalStatus, relateEntities, setScope, setupCui, setupPersonal, unlockCui, unlockPersonal } from "./personal.ts";
 import { readEditorFile, saveEditorFile } from "./editor.ts";
+import { cancelImport, importJobStatus, startImport } from "./import_job.ts";
 import { homedir } from "node:os";
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { dirname } from "node:path";
@@ -485,9 +486,22 @@ const server = Bun.serve({
       // user message is scanned by the fail-closed gate first. `model:true` runs the richer LLM
       // extractor via a throwaway omp completion (capped); otherwise the offline heuristic.
       if (p === "/api/personal/import" && req.method === "POST") {
+        // P-KG-INGEST.1 (ADR-0076): start the import as a BACKGROUND job and return a jobId immediately,
+        // so the request never blocks the app for ~25 minutes. The renderer polls /status + can /cancel.
         const b = await readBody<{ model?: unknown; path?: unknown; vendor?: ImportVendor }>(req);
+        const path = String(b.path ?? ""), vendor = b.vendor;
         const complete = b.model ? (system: string, user: string) => backend.complete(system, user) : undefined;
-        return json({ ok: true, data: await importChatExport(String(b.path ?? ""), { vendorHint: b.vendor, complete }) });
+        const started = startImport({
+          vendor: typeof vendor === "string" ? vendor : undefined,
+          run: (onProgress, signal) => importChatExport(path, { vendorHint: vendor, complete, onProgress, signal }),
+        });
+        return json({ ok: true, data: started });
+      }
+      if (p === "/api/personal/import/status" && req.method === "GET")
+        return json({ ok: true, data: importJobStatus(url.searchParams.get("jobId") ?? undefined) });
+      if (p === "/api/personal/import/cancel" && req.method === "POST") {
+        const b = await readBody<{ jobId?: unknown }>(req);
+        return json({ ok: true, data: cancelImport(b.jobId == null ? undefined : String(b.jobId)) });
       }
       // P-IMP.2 (ADR-0035): read-only pre-import estimate (message + char counts) so the renderer can
       // warn about AI-mode token cost + runtime before the capped, paid model extraction runs.

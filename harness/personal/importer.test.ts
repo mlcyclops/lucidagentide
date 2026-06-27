@@ -178,3 +178,27 @@ test("importConversations: imported multi-fact messages produce relational edges
   await importConversations(store, cleanScanner, conversations, { vendor: "anthropic", scope: "work" });
   expect(store.graph({ scope: "combined" }).links.length).toBeGreaterThan(0); // co-occurrence edges
 });
+
+// ── P-KG-INGEST.1 (ADR-0076): live progress + cancellable ───────────────────────────
+test("importConversations: emits per-message progress ticks with a fixed total (live countdown)", async () => {
+  const store = newStore();
+  const { conversations } = parseExport(claudeExport); // 2 user messages
+  const ticks: { messages: number; totalMessages: number }[] = [];
+  await importConversations(store, cleanScanner, conversations, { vendor: "anthropic", scope: "work", onProgress: (t) => ticks.push({ messages: t.messages, totalMessages: t.totalMessages }) });
+  expect(ticks[0]!.messages).toBe(0); // an initial 0/total so the UI renders immediately
+  expect(Math.max(...ticks.map((t) => t.messages))).toBe(2); // climbs to every processed message
+  expect(new Set(ticks.map((t) => t.totalMessages))).toEqual(new Set([2])); // total is stable across ticks
+});
+
+test("importConversations: an aborted signal stops early but KEEPS facts learned so far (fail-safe)", async () => {
+  const store = newStore();
+  const convos = [...parseExport(chatgptExport).conversations, ...parseExport(claudeExport).conversations]; // 2 convos
+  const ac = new AbortController();
+  const sum = await importConversations(store, cleanScanner, convos, {
+    vendor: "openai", scope: "work", signal: ac.signal,
+    onProgress: (t) => { if (t.conversations === 1) ac.abort(); }, // cancel after the first conversation
+  });
+  expect(sum.cancelled).toBe(true);
+  expect(sum.learned).toBeGreaterThan(0); // facts from the first conversation are kept...
+  expect(store.graph({ scope: "combined" }).facts.length).toBe(sum.learned); // ...and persisted (no torn write)
+});

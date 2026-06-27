@@ -15,6 +15,7 @@ import { addEdgeOptimistic, applyForget, chainPairs } from "./kg_ops.ts";
 import type { PersonalGraphData } from "./bridge.ts";
 import { type Action, type ToastAction, attachRichTip, createPalette, initTooltips, popover, showToast } from "./ui.ts";
 import { exportActionPlan } from "./kg_export.ts";
+import { formatImportLine } from "./import_progress.ts";
 import { ASKSAGE_FAMILY_ORDER, familyOf, filterModels, groupByFamily, isAuxiliaryModel, isChinaModel, isDeprecatedModel, isGovModel, sortGovFirstNewest } from "./model_families.ts";
 import { INSTALLED_SKILLS, bumpSkillUsage, bundledSkillsByUsage, taskProforma } from "./skills.ts";
 import { CHECKER_TOKENS_PER_ITER, MAKER_TOKENS_PER_ITER, estimateGoalCost, estimateGoalTokens, formatTokens, formatUSD } from "../loop_estimate.ts";
@@ -296,22 +297,65 @@ function estimateAiImport(est: import("./bridge.ts").PersonalImportEstimate): { 
 }
 const fmtDur = (s: number): string => (s < 90 ? `~${s}s` : s < 3600 ? `~${Math.round(s / 60)} min` : `~${(s / 3600).toFixed(1)} h`);
 /** Run the gated import in the chosen mode and report the outcome (shared by both confirm actions). */
+const vendorName = (v?: string): string => (v === "openai" ? "ChatGPT" : v === "anthropic" ? "Claude" : v === "gemini" ? "Gemini" : "export");
+// P-KG-INGEST.1 (ADR-0076): a persistent, non-blocking status pill for a background import. The app stays
+// usable while it runs; the pill shows a live countdown + a Cancel button and is updated by polling.
+let importPollTimer = 0;
+function ensureImportPill(): HTMLElement {
+  let pill = document.getElementById("importPill");
+  if (!pill) {
+    pill = el(`<div class="import-pill" id="importPill" hidden>
+      <div class="import-pill-head">${icon("download", 13)} <b>Importing chat history</b> <span class="import-pill-vendor" id="importPillVendor"></span></div>
+      <div class="import-pill-bar"><div class="import-pill-fill" id="importPillFill"></div></div>
+      <div class="import-pill-row"><span class="import-pill-text" id="importPillText">Starting…</span><button class="btn-mini" id="importPillCancel">Cancel</button></div>
+    </div>`);
+    document.body.appendChild(pill);
+  }
+  return pill as HTMLElement;
+}
+function hideImportPill(): void {
+  if (importPollTimer) { clearTimeout(importPollTimer); importPollTimer = 0; }
+  const pill = document.getElementById("importPill"); if (pill) (pill as HTMLElement).hidden = true;
+}
 async function runPersonalImport(folder: string, useModel: boolean): Promise<void> {
-  showToast({ title: useModel ? "Importing with AI extraction…" : "Importing chat history…", desc: useModel ? "Scanning each message, then extracting facts with the model. This can take a while." : "Scanning every message through the security gate before learning.", timeout: useModel ? 4000 : 2000 });
-  const r = await bridge.personalImport(folder, useModel);
-  if (!r?.ok) { showToast({ tone: "danger", title: "Import failed", desc: r?.error ?? "Personalization is off or locked.", actions: [{ label: "OK" }], timeout: 6000 }); return; }
-  const vendor = r.vendor === "openai" ? "ChatGPT" : r.vendor === "anthropic" ? "Claude" : r.vendor === "gemini" ? "Gemini" : "export";
-  const notes = [
-    r.extractor === "model" ? "AI extraction" : "quick extraction",
-    r.blocked ? `${r.blocked} quarantined by the gate` : "all passed the gate",
-    r.skipped ? `${r.skipped} skipped (${AI_IMPORT_CAP}-message AI cap - re-run to continue)` : "",
-  ].filter(Boolean).join(" · ");
-  showToast({
-    title: `Imported from ${vendor}`,
-    desc: `${r.learned} facts learned from ${r.messages} messages across ${r.conversations} conversations.`,
-    meta: notes, actions: [{ label: "OK" }], timeout: 9000,
-  });
-  void renderKnowledge(); // redraw with the new nodes + edges
+  const started = await bridge.personalImport(folder, useModel);
+  if (!started?.ok || !started.jobId) {
+    showToast({ tone: started?.error?.includes("already running") ? "warn" : "danger", title: "Import didn't start", desc: started?.error ?? "Personalization is off or locked.", actions: [{ label: "OK" }], timeout: 6000 });
+    return;
+  }
+  const jobId = started.jobId;
+  const pill = ensureImportPill();
+  pill.hidden = false;
+  const fill = $("#importPillFill", pill) as HTMLElement, text = $("#importPillText", pill) as HTMLElement, ven = $("#importPillVendor", pill) as HTMLElement;
+  const cancelBtn = $("#importPillCancel", pill) as HTMLButtonElement;
+  cancelBtn.disabled = false; cancelBtn.textContent = "Cancel";
+  cancelBtn.onclick = () => { cancelBtn.disabled = true; cancelBtn.textContent = "Stopping…"; void bridge.personalImportCancel(jobId); };
+  const poll = async () => {
+    const st = await bridge.personalImportStatus(jobId).catch(() => null);
+    if (!st) { hideImportPill(); return; }
+    const { pct, line, done } = formatImportLine(st);
+    fill.style.width = `${pct}%`; text.textContent = line; ven.textContent = vendorName(st.vendor);
+    if (!done) { importPollTimer = window.setTimeout(() => void poll(), 1200); return; }
+    hideImportPill();
+    const r = st.result;
+    if (st.state === "failed" || !r?.ok) {
+      showToast({ tone: "danger", title: "Import failed", desc: st.error ?? r?.error ?? "Something went wrong.", actions: [{ label: "OK" }], timeout: 6000 });
+      return;
+    }
+    const notes = [
+      r.extractor === "model" ? "AI extraction" : "quick extraction",
+      r.blocked ? `${r.blocked} quarantined by the gate` : "all passed the gate",
+      r.skipped ? `${r.skipped} skipped (${AI_IMPORT_CAP}-message AI cap - re-run to continue)` : "",
+      st.state === "cancelled" ? "stopped early - re-run to continue" : "",
+    ].filter(Boolean).join(" · ");
+    showToast({
+      title: st.state === "cancelled" ? `Import stopped (${vendorName(r.vendor)})` : `Imported from ${vendorName(r.vendor)}`,
+      desc: `${r.learned} facts learned from ${r.messages} messages across ${r.conversations} conversations.`,
+      meta: notes, actions: [{ label: "OK" }], timeout: 9000,
+    });
+    if (kgOpen) void renderKnowledge(); // redraw with the new nodes + edges (only if the panel is open)
+  };
+  void poll();
 }
 // P-IDE.4 (ADR-0029): add a "View in IDE" affordance to each code block (DOMPurify forbids <button>
 // inside the sanitized markdown, so the button is injected post-render via the DOM). The click handler
