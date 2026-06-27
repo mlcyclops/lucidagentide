@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/memory/recall.test.ts
 //
 // KEYSTONE #2 coverage for the READ side: suspicious/quarantined facts must never

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/scripts/demo_pgoal9.ts
 //
 // P-GOAL.9 (ADR-0054): the /goal loop's After-Action Report + termination guards.

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/knowledge/chunk.test.ts — pure chunking: bounds, overlap, boundary preference, determinism.
 
 import { describe, expect, test } from "bun:test";

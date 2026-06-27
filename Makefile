@@ -274,6 +274,14 @@ dashboards: ## Materialize dashboard CSVs from a DuckDB into observable/docs/dat
 typecheck: ## TS typecheck (no emit)
 	$(BUN) x tsc --noEmit
 
+.PHONY: license-headers
+license-headers: ## Apply the BUSL-1.1 SPDX header to first-party source (idempotent)
+	$(BUN) run tools/license_headers.ts
+
+.PHONY: license-check
+license-check: ## Fail if any first-party source file is missing the BUSL-1.1 header (CI guard)
+	$(BUN) run tools/license_headers.ts --check
+
 .PHONY: clean
 clean: ## Remove build/test artifacts (keeps committed source + DBs)
 	rm -rf node_modules/.cache .bun 2>/dev/null || true

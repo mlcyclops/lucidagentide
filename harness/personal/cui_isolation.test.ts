@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/personal/cui_isolation.test.ts — P9.5a: hard CUI isolation (ADR-0014).
 // The load-bearing invariant: a single key never decrypts both CUI and non-CUI, and a fact
 // can NEVER land in the wrong store. Over-tested on purpose — this is the gov/CUI boundary.

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/runs/task_gate.ts
 //
 // P-TASK.3 (ADR-0028): bind an omp `task` subagent dispatch to the run lineage and record its

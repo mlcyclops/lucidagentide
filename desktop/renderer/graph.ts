@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // desktop/renderer/graph.ts — a tiny, dependency-free force-directed SVG graph for the
 // personalization Knowledge view (ADR-0010 P9.3). Nodes = entities, edges = links; click
 // a node to drill in. Hand-rolled simulation (O(n^2) — personal KGs are small). Supports

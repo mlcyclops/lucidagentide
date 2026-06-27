@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // Tests for the utility-completion routing contract (P-KG-INGEST.4, ADR-0085).
 
 import { expect, test } from "bun:test";

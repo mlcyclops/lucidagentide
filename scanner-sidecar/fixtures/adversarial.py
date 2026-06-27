@@ -1,3 +1,6 @@
+# Copyright (c) 2026 TechLead 187 LLC
+# SPDX-License-Identifier: BUSL-1.1
+
 """Adversarial fixture corpus for the Unicode scanner (keystone #1, P2.1).
 
 Every poisoned string is built from chr(0x....) so this file contains NO literal

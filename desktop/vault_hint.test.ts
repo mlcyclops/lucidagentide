@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // Tests for P-VAULT-HINT.1 (ADR-0077): the locked-vault existence hint. Security-critical — the hint
 // must signal that a vault EXISTS without ever carrying decrypted content, and only fire when locked.
 

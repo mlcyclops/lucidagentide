@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // desktop/loop_estimate.test.ts
 //
 // P-GOAL.6.1 (ADR-0048): the /goal loop token estimate. Verifies the per-iteration math, clamping to the

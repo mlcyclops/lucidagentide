@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/personal/personal.test.ts — P9.1: encryption + the encrypted store.
 // Over-tested on purpose: this is the project's first encryption-at-rest surface and
 // holds the user's private personalization graph. Wrong key / tampering MUST fail.

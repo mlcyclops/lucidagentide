@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // desktop/turns_log.test.ts — ADR-0009 Phase B (issue #12)
 //
 // The GUI-side turn capture must: emit a valid, METADATA-ONLY turn_captured event (never the

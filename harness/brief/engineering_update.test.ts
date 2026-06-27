@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/brief/engineering_update.test.ts — the Executive Engineering Update generator (P-BRIEF.1,
 // ADR-0070). Pure parse → structured update → written brief + podcast script + the backend seam.
 

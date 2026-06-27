@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // desktop/scripts/demo_b_kg_2.ts
 //
 // Increment B-KG.2 — recoverable export location (issue #115). The export destination used to flash in a

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/runs/loc_count_subagent.test.ts
 //
 // R-06: subagent (task) edits must not be masked from the gate or from code-activity attribution.

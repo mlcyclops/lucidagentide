@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // desktop/scripts/demo_b_kg_1.ts
 //
 // Increment B-KG.1 — Knowledge-graph interaction polish (issues #112/#113/#114). Three proofs against

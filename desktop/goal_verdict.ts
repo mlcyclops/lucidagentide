@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // desktop/goal_verdict.ts
 //
 // P-GOAL.1 (ADR-0046): parse a /goal checker's reply into a {done, reason} verdict. Pure + unit-tested.

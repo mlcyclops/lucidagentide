@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // tools/memory_tui.ts
 //
 // In-terminal MEMORY & CONTEXT dashboard — the rendering layer over

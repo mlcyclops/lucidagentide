@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/scripts/demo19_lucid_launcher.ts
 //
 // P-EXT.1 (ADR-0038) — the `lucid acp` launcher is the fail-closed trust anchor for the marketplace

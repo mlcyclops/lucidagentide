@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // desktop/scripts/demo_p_perf_1.ts
 //
 // Increment P-PERF.1 — instant session list + transcripts via a persisted stale-while-revalidate cache

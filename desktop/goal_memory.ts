@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // desktop/goal_memory.ts
 //
 // P-GOAL.3 (ADR-0046): the loop's durable on-disk MEMORY. A markdown file under

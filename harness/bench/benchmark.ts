@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/bench/benchmark.ts
 //
 // Benchmark suite + prompt-version comparison (P7.2). Cache behavior is computed

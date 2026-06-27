@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/scripts/demo05_verification.ts
 //
 // P3.1: verification as completion, with the security scan as a FAIL-CLOSED

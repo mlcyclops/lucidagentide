@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/scripts/demo_prag1c.ts
 //
 // P-RAG.1c slice 1 (ADR-0064): ingest a real PDF. A PDF is just another text SOURCE — extractPdfText()

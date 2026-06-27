@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/scripts/demo10_lineage.ts
 //
 // P5.1: parent/child run lineage. A parent spawns subagents; each child carries

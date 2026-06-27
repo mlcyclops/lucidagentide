@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/knowledge/pdf.test.ts — the PDF path must add NO new trust path. Asserts: text round-trips out
 // of a PDF; a non-PDF buffer fails closed (throws, never empty text); a PDF carrying POISON is BLOCKED by
 // the SAME gate as .txt and never stored; a dead scanner fails closed on PDF input too.

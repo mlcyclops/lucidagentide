@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // desktop/chat_gate.ts — P-KG-INGEST.3 (ADR-0081): let background extraction YIELD to a live chat turn.
 //
 // Model-mode ingest fires a model `complete()` per message, back-to-back, through the one omp connection.

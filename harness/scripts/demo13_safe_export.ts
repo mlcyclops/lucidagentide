@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/scripts/demo13_safe_export.ts
 //
 // P6.2: safe export + incident bundles. Reports/CSV render sanitized derivatives

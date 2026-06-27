@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/runs/loc_count.ts
 //
 // P-LOC.1 (ADR-0031): PURE line-counting for AI-authored file mutations. No I/O, no DB,

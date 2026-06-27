@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/code_activity.test.ts — ADR-0030 P-CODE.1: git workspace diffstat.
 //
 // The numstat PARSER is the keystone (over-tested): renames, binary files, dedup,

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/scripts/demo11_sandbox.ts
 //
 // P5.2: sandbox profiles. Suspicious tasks auto-downgrade to safer profiles; the

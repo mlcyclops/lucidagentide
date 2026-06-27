@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/scripts/demo_pstt1.ts
 //
 // P-STT.1 (ADR-0073): speech-to-text behind the TranscriptionBackend seam. By DEFAULT it runs against a

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // desktop/scripts/demo_p_kg_search_1.ts
 //
 // Increment P-KG-SEARCH.1 — find a node in a large graph (issue/ADR-0083). A real import is hundreds of

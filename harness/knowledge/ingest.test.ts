@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/knowledge/ingest.test.ts — the scan-gate is the security keystone here. Asserts: clean text
 // is chunked/embedded/stored with trust labels; a poisoned chunk is NEVER stored and IS audited; a
 // dead scanner fails closed (nothing stored); and retrieval wrapping is delimited (invariant #5).

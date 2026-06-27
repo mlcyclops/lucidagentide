@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/scripts/materialize_dashboards.ts
 //
 // CLI: materialize the dashboard views from a DuckDB file into an output dir.

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // desktop/renderer/icons.ts - hand-drawn line-icon set. 24×24, 1.6 stroke,
 // round caps/joins, currentColor. Consistent optical weight across the set so
 // the activity rail reads as one family. Used in the rail, tooltips, buttons.

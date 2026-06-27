@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/security/scanner_client.ts
 //
 // TS side of the scanner IPC contract (ADR-0002). Spawns the pure Python

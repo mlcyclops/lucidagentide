@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // desktop/scripts/demo_p_vault_hint_1.ts
 //
 // Increment P-VAULT-HINT.1 — locked-vault existence signal (issue #111, ADR-0077). When the user's

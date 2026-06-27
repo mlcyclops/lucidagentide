@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // Tests for the local control-plane request guard (H1/H2, ADR-0022).
 import { describe, expect, test } from "bun:test";
 import { hostAllowed, isAllowedRequest, reqShape, tokenValid, type ReqShape } from "./origin_guard.ts";

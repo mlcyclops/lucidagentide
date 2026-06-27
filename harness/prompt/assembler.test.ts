@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/prompt/assembler.test.ts
 //
 // KV-cache discipline (CLAUDE.md invariant #6). The frozen prefix must be

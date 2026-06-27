@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/export/vault_export.ts — P9.4: export the personalization knowledge graph
 // to an Obsidian vault (ADR-0010 / ADR-0012), plus a NARA-aligned CUI archive path.
 //

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/runs/loc_count.test.ts
 //
 // P-LOC.1 (ADR-0031): the AI-LOC counter is only as honest as this pure module, so it is

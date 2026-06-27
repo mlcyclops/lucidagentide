@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // tools/scan_cli.ts
 //
 // Scan text for prompt-injection (hidden Unicode / homoglyphs) and print the

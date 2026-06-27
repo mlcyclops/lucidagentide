@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // desktop/settings_store.ts
 //
 // Local GUI settings: username + provider API keys. Stored under

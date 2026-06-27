@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/omp/token_speed_extension.ts
 //
 // P-TPS.1 (ADR-0044): the TERMINAL adapter for the streaming output-token readout.

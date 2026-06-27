@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/knowledge/pdf_fixture.ts
 //
 // P-RAG.1c: a minimal, dependency-free PDF *writer* used ONLY by the PDF tests and demo, so the suite

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/scripts/demo01_contracts.ts
 //
 // Increment 1: boundary contracts. Two proofs:

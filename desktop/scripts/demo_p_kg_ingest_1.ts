@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // desktop/scripts/demo_p_kg_ingest_1.ts
 //
 // Increment P-KG-INGEST.1a — non-blocking background ingest with live progress + cancel (issue #110,

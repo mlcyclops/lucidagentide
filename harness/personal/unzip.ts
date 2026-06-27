@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/personal/unzip.ts — a minimal, dependency-free ZIP entry reader. Just enough to pull a
 // single named file (conversations.json / MyActivity.json) out of a ChatGPT / Claude / Gemini
 // export .zip without shelling out or adding a dependency. Supports STORE (0) + DEFLATE (8); no

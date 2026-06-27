@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // desktop/scripts/demo_p_kg_ingest_1b.ts
 //
 // Increment P-KG-INGEST.1b — group the ingest sessions out of the chat history (issue #110, ADR-0076

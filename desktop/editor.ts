@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // desktop/editor.ts — P-IDE.5 (ADR-0036): gated read/write for the in-app code editor.
 //
 // Saves go through the SAME in-process scanner gate as every other write path (CLAUDE.md #3 fail-

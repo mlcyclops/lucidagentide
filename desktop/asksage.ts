@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // desktop/asksage.ts
 //
 // Server-side AskSage helpers for the dev server (ADR-0007): monthly-token quota,

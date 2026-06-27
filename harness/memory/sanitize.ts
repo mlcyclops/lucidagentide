@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/memory/sanitize.ts
 //
 // Produce a sanitized derivative safe for prompts / memory / export. This is a

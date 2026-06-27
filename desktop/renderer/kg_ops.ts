@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // desktop/renderer/kg_ops.ts — pure, DOM-free helpers behind the Knowledge-graph view's
 // interaction polish (increment B-KG.1, issues #112/#113/#114). Kept out of graph.ts/app.ts so the
 // decision logic is unit-testable headlessly (bun test) and provable via `make demo-B-KG.1`.

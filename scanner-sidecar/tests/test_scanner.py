@@ -1,3 +1,6 @@
+# Copyright (c) 2026 TechLead 187 LLC
+# SPDX-License-Identifier: BUSL-1.1
+
 """Scanner correctness -- keystone #1 (CLAUDE.md). Over-tested on purpose.
 
 Every adversarial character is constructed via chr(0x....) so this source stays

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // Tests for P-KG-INGEST.1b (ADR-0076): the throwaway "Extract DURABLE facts…" extraction sessions an
 // import mints are detected and split out of the chat list into their own group.
 

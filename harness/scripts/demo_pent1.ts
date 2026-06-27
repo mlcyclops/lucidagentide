@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/scripts/demo_pent1.ts
 //
 // ADR-0068 P-ENT.1: enterprise managed-policy override for the security knobs (GPO / MDM).

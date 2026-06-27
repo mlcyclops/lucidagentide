@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // Tests for the in-app editor's gated read/write (ADR-0036). The load-bearing properties:
 //   - paths are confined to the workspace (no arbitrary read/write),
 //   - a save with a >=high finding is BLOCKED and never reaches disk (the gate, fail-closed),

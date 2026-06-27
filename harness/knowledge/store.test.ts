@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/knowledge/store.test.ts — the vector store against a real (temp) knowledge.duckdb: separate
 // migration set applies, dataset/chunk CRUD, brute-force cosine ranking, dim-mismatch fails loudly.
 

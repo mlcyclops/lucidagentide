@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // desktop/preamble.test.ts
 //
 // Issue #54: standing guidance (persona, skill, <user-profile> profile) must be re-delivered on

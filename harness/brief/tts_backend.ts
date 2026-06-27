@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/brief/tts_backend.ts
 //
 // P-BRIEF.2 (ADR-0071): the FIRST concrete PodcastBackend behind the P-BRIEF.1 seam - an

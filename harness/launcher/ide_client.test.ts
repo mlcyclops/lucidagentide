@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/launcher/ide_client.test.ts
 //
 // P-EXT.2 (ADR-0038) — over-tests the security-critical IDE-client logic: the launcher candidate list

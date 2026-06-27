@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // desktop/model_pricing.test.ts
 //
 // P-GOAL.7 (ADR-0049): per-model pricing. Verifies the tier table matches the right markers in the right

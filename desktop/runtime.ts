@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // desktop/runtime.ts - runtime resolution + first-run bootstrap (main process).
 //
 // Goal: a zero-prerequisite install. The installer bundles the small static

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/runs/profiles.ts
 //
 // Sandbox profiles as a POLICY layer over omp's isolation backends (P5.2). omp

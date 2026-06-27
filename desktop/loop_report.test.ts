@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // desktop/loop_report.test.ts — P-GOAL.9 (ADR-0054): the After-Action Report's pure core.
 
 import { describe, expect, test } from "bun:test";

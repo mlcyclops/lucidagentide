@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // desktop/egress_policy.ts
 //
 // P-EGRESS.1 (ADR-0062): per-website approval for the agent's network-reaching tools (browser,

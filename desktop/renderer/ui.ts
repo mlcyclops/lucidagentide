@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // desktop/renderer/ui.ts - overlay layer: delayed custom tooltips, the ⌘K
 // command palette, and the non-modal security toast/popover.
 

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/personal/importer.test.ts — P9.7: third-party chat-export import.
 // Two properties matter most: (1) the vendor adapters reshape ChatGPT/Claude exports faithfully,
 // and (2) the import path is fail-closed — a poisoned imported message teaches NOTHING and never

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // Tests for loadExportText (ADR-0025): the TOCTOU-safe import-source reader. It must
 // classify file vs directory vs missing by performing the read directly and handling the
 // error (no stat-then-read race; js/file-system-race), and read the listing once for folders.

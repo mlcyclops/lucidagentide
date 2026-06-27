@@ -232,7 +232,7 @@ It's a **desktop app you can just download and run** (Windows installer/portable
 > org admin through the tools you already run (**Group Policy / Intune / Jamf / Ansible**): set and **lock**
 > the risk posture fleet-wide, and stream a **metadata-only security-audit feed** to your **SIEM**
 > (Splunk, Elastic, ACAS, and AWS / Azure / GCP security logging) for SOC visibility. The enabling seams
-> are in this OSS core (managed-config + an audit-export interface); the policy templates and SIEM
+> are in this source-available core (managed-config + an audit-export interface); the policy templates and SIEM
 > connectors are a separately-licensed add-on. Metadata-only by construction - no code, prompts, or CUI
 > leave the host.
 
@@ -467,10 +467,14 @@ or propose a change, start here:
 **Good first areas:** the desktop GUI + dev server, scanner fixtures, docs/wording, and platform/build
 robustness (Windows + macOS installers).
 
-> **License & boundary.** This repo is shared publicly for **transparency and evaluation**. The *capabilities
-> and guarantees* are open; the deepest **trust, provenance, and personalization mechanisms are proprietary**
-> (© 2026 Nick Chadwick - **All Rights Reserved**; no open-source license is granted). Please **open an issue or
-> discussion before any large change** so we can align on scope and contribution terms.
+> **License.** The LucidAgentIDE core (this repository) is **source-available under the Business Source
+> License 1.1** (BUSL-1.1) — the model HashiCorp uses for Terraform. You may read, modify, self-host, and
+> use it **in production**, *except* to offer a hosted or embedded commercial product that competes with
+> TechLead 187 LLC's products. On **2030-06-27** (the Change Date) each version converts to the **Mozilla
+> Public License 2.0**. Full terms: [`LICENSE`](LICENSE). © 2026 TechLead 187 LLC. The premium enterprise
+> add-on is a **separate, separately-licensed** repository; vendored dependencies (e.g. `vendor/oh-my-pi`)
+> retain their own licenses. Please **open an issue or discussion before any large change** so we can align
+> on scope and contribution terms.
 
 ## <img src=".github/assets/icons/docs.svg" width="28" align="top" alt=""> Project docs
 
@@ -489,5 +493,5 @@ robustness (Windows + macOS installers).
 <a href="https://www.linkedin.com/in/nickchadwick-techlead187/"><img src="https://img.shields.io/badge/Connect%20on-LinkedIn-0A66C2?style=flat-square&logo=linkedin&logoColor=white" alt="Connect with Nick Chadwick on LinkedIn" /></a>
 <a href="https://x.com/TechLead187"><img src="https://img.shields.io/badge/Follow-%40TechLead187-1DA1F2?style=flat-square&logo=x&logoColor=white" alt="Follow @TechLead187 on X" /></a>
 <br/>
-<sub>© 2026 Nick Chadwick (<a href="https://www.linkedin.com/in/nickchadwick-techlead187/">LinkedIn</a> · <a href="https://x.com/TechLead187">@TechLead187</a>) · All Rights Reserved</sub>
+<sub>© 2026 TechLead 187 LLC · source-available under <a href="LICENSE">BUSL-1.1</a> (converts to MPL-2.0 on 2030-06-27) · <a href="https://www.linkedin.com/in/nickchadwick-techlead187/">LinkedIn</a> · <a href="https://x.com/TechLead187">@TechLead187</a></sub>
 </div>

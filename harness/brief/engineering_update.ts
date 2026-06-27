@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/brief/engineering_update.ts
 //
 // P-BRIEF.1 (ADR-0070): the "Executive Engineering Update" generator. Turns a repo's own structured

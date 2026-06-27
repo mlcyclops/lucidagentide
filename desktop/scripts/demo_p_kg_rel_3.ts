@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // desktop/scripts/demo_p_kg_rel_3.ts
 //
 // Increment P-KG-REL.3 — remove a relationship (issue/ADR-0082). You could CREATE edges (P-KG-REL.1/.2) but

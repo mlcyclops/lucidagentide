@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/metrics/token_speed.test.ts
 //
 // P-TPS.1 (ADR-0044): the output-token speedometer. Over-tested on the two

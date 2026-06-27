@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/personal/crypto.ts — FIPS-approved encryption primitives for the
 // personalization store (ADR-0010, P9.1).
 //

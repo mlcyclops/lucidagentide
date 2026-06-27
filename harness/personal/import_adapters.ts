@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/personal/import_adapters.ts — parse third-party AI chat exports (OpenAI ChatGPT,
 // Anthropic Claude) into a normalized conversation list. PURE, dependency-free, offline.
 //

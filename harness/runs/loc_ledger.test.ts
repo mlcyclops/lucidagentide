@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/runs/loc_ledger.test.ts
 //
 // P-LOC.1 (ADR-0031): the ledger writer + roll-up over the frozen 0007 table. Verifies the

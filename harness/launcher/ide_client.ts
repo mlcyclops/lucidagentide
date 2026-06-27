@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/launcher/ide_client.ts
 //
 // P-EXT.2/3 (ADR-0038) — pure, editor-agnostic logic shared by the IDE clients (the VS Code

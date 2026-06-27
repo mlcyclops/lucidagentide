@@ -1,4 +1,7 @@
 #!/usr/bin/env bun
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/launcher/lucid_acp.ts
 //
 // ┌─────────────────────────────────────────────────────────────────────────┐

@@ -6619,3 +6619,51 @@ gate `-e`); the dedicated connection never touches the chat listener/session (ch
 
 ADR-0081 (P-KG-INGEST.3 ChatGate — now the fallback), `desktop/acp_backend.ts` (`startUtil`/`completeOn`/
 `completeShared`), `desktop/util_conn.ts` (the routing contract), `desktop/chat_gate.ts` (fallback yield).
+
+## ADR-0086 - Licensing: Business Source License 1.1 (source-available, converts to MPL-2.0)
+
+**Date:** 2026-06-27
+**Status:** Accepted - BUILT (LICENSE + per-file SPDX headers + package.json + README).
+**Increment:** chore/busl-license. A repo-level legal decision, recorded here for future contributors.
+
+### Context
+
+The core needed an explicit license. We want a source-available model — read/modify/self-host + production
+use allowed — that still protects the business from a competitor offering a hosted clone, with an eventual
+open-source conversion. The HashiCorp/Terraform model (BSL 1.1) fits exactly.
+
+### Decision - BUSL-1.1 with the Terraform-style parameters
+
+`LICENSE` (root) is the canonical Business Source License 1.1 with:
+- **Licensor:** TechLead 187 LLC.
+- **Licensed Work:** LucidAgentIDE.
+- **Additional Use Grant:** production use permitted EXCEPT offering a hosted/embedded commercial product
+  competitive with TechLead 187 LLC's products (the non-compete).
+- **Change Date:** 2030-06-27 (4 years).
+- **Change License:** Mozilla Public License 2.0 (GPL-compatible per BSL Covenant #1; HashiCorp's choice).
+
+Every FIRST-PARTY source file carries `// Copyright (c) 2026 TechLead 187 LLC` + `// SPDX-License-Identifier:
+BUSL-1.1` (`#` for Python), applied idempotently by `tools/license_headers.ts` (`make license-headers`;
+`make license-check` is the CI guard). `package.json` sets `"license": "BUSL-1.1"`.
+
+**Excluded from headers (keep their own licenses):** `vendor/oh-my-pi`, `node_modules`, `desktop/release`
+(packaged build), and the Python `.venv` / `__pycache__`.
+
+### Consequences
+
+- BSL is **source-available, NOT OSI open source** — the README's "OSS core" wording was corrected to
+  "source-available core", and the prior "All Rights Reserved / no license granted" note replaced with the
+  BSL summary. Each version converts to MPL-2.0 on its Change Date.
+- The premium enterprise add-on remains a separate, separately-licensed repository.
+- NOT legal advice — counsel should review before commercial reliance; the LLC is being registered (FL).
+
+### Invariants preserved
+
+Headers are comments only — no functional change; the byte-stable prompt prefix (#6) is unaffected
+(prefix is built from string constants, not file bytes — `harness/prompt` tests stay green); the vendored
+omp tree is untouched (extend-don't-fork, and its license is preserved).
+
+### Relates to
+
+`LICENSE`, `tools/license_headers.ts`, `package.json`, `README.md`. BSL 1.1 text © MariaDB (used per its
+permission grant). Change License: Mozilla Public License 2.0.

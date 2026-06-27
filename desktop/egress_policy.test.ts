@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // desktop/egress_policy.test.ts — pure egress decision + choice-folding (P-EGRESS.1, ADR-0062).
 
 import { describe, expect, test } from "bun:test";

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/hooks/quarantine_hook.ts
 //
 // The quarantine gate as a real omp `pre`-hook on tool_call (P2.4). Registered

@@ -2,6 +2,8 @@
   "name": "lucid-agent-ide-harness",
   "version": "0.0.0",
   "private": true,
+  "license": "BUSL-1.1",
+  "author": "TechLead 187 LLC",
   "description": "Security/provenance/memory harness built AROUND oh-my-pi (omp). Extend, never fork. See CLAUDE.md.",
   "type": "module",
   "bin": {

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/scripts/demo00_failclosed.ts
 //
 // Increment 0, part 3/3 — THE keystone safety property, proven on day one:

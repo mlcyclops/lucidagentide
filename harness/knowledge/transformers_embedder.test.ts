@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // P-RAG.1b (ADR-0063): TransformersEmbedder contract. The CHEAP checks (id/dim/empty-batch) run in the
 // normal suite without loading the model. The real-model proof (slow: downloads/loads bge-small) is
 // OPT-IN via LUCID_TEST_EMBED=1 and otherwise lives in `make demo-P-RAG.1b`, so `bun test harness`

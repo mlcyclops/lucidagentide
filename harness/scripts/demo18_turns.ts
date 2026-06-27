@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/scripts/demo18_turns.ts
 //
 // ADR-0009 Phase B (issue #12) — prompt/response traceability. Proves a turn is

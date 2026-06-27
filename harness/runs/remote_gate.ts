@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/runs/remote_gate.ts
 //
 // Remote-runner gate (P6.1). A comment/API payload is scanned BEFORE any

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/knowledge/embedder.ts
 //
 // P-RAG.1 (ADR-0058): the embedding seam. The ingest + retrieval pipeline depends on this interface,

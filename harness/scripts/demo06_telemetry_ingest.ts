@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/scripts/demo06_telemetry_ingest.ts
 //
 // P3.2: run a task that emits telemetry to JSONL, ingest it into DuckDB

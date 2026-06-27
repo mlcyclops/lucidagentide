@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/scripts/demo_pgoal10.ts
 //
 // P-GOAL.10 (ADR-0055): the /goal loop's cross-run EVALUATION ledger. Self-contained (no omp): drives

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // desktop/loop_budget.test.ts — P-GOAL.11 (ADR-0056): the per-loop spend meter + budget kill switch.
 
 import { describe, expect, test } from "bun:test";

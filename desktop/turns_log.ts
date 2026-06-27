@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // desktop/turns_log.ts — ADR-0009 Phase B (issue #12): GUI-owned per-turn transcript capture.
 //
 // WHY THIS EXISTS: the omp tool-call hook only sees tool calls — never the user's prompt or the

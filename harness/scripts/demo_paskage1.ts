@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/scripts/demo_paskage1.ts
 //
 // P-ASKSAGE.1 (ADR-0059): AskSage tool-loop diagnostics + tolerant response extraction. AskSage serves

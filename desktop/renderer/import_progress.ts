@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // desktop/renderer/import_progress.ts — pure, DOM-free formatting of the background-import status
 // (P-KG-INGEST.1, ADR-0076). Lives renderer-side (no Snowflake/server deps) so it's safe to bundle and
 // unit-testable; the status pill in app.ts renders from it, and `make demo-P-KG-INGEST.1` asserts it.

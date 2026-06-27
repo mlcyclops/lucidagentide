@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/usage_ledger.test.ts — P10.2 (ADR-0011): the cross-model cost & savings ledger.
 // Aggregation is read-only over omp session .jsonl; the savings figure is DERIVED from the
 // data (cache reads billed at ~10% of input → est. savings = cost.cacheRead × 9), so it's

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // desktop/sessions.ts - list REAL omp sessions for the current project from disk.
 //
 // omp persists every session (interactive or ACP) as a .jsonl under

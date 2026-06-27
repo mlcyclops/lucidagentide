@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/prompt/prefix_compaction.test.ts
 //
 // R-02 (POAM): omp's native context-management / auto-compaction ("snapcompact") must NEVER mutate

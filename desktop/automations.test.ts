@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // desktop/automations.test.ts
 //
 // P-GOAL.5 (ADR-0047): the scheduled-automation store + PURE scheduling math. Covers the CRUD round-trip

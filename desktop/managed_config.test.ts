@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // desktop/managed_config.test.ts — the pure update-channel policy resolver (ADR-A009, #74). Fail-safe by
 // design: unmanaged/unknown ⇒ github (never silently disable), feed-without-url ⇒ managed (never hit a
 // wrong/empty feed), managed ⇒ disabled.

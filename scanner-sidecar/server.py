@@ -1,3 +1,6 @@
+# Copyright (c) 2026 TechLead 187 LLC
+# SPDX-License-Identifier: BUSL-1.1
+
 """NDJSON stdin/stdout server for the Unicode scanner (ADR-0002 IPC contract).
 
 One request line in -> one response line out. Long-lived process (one per

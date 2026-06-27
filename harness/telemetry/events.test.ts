@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/telemetry/events.test.ts
 //
 // Telemetry contract (invariant #8): exact event names, unknown names raise,

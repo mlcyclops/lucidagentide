@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/knowledge/pdf.ts
 //
 // P-RAG.1c (ADR-0064): PDF -> text, then through the UNCHANGED scan-gated ingest path. A PDF is just

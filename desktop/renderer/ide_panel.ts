@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // desktop/renderer/ide_panel.ts
 //
 // P-IDE.4 → P-IDE.5 (ADR-0029 / ADR-0036): a Monaco code panel that slides in from the right over the

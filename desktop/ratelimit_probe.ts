@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // desktop/ratelimit_probe.ts — P10.3: live rate-limit probe for API-KEY providers (ADR-0011).
 //
 // The user's OAuth 5-hour window has NO rate-limit header (already shown from omp's agent.db).

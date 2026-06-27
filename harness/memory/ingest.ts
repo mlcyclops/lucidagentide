@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/memory/ingest.ts
 //
 // The P2.3 ingestion pipeline: raw external content in -> scanned, trust-labeled,

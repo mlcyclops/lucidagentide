@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // harness/scripts/demo14_dashboards.ts
 //
 // P7.1: materialize the six security dashboard views (+ operational) from DuckDB
