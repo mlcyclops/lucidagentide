@@ -237,21 +237,34 @@ function sessSkeleton(): string {
   return `<div class="skel-group">${Array.from({ length: 5 }, () =>
     `<div class="skel-sess"><div class="skel skel-line t"></div><div class="skel skel-line m"></div></div>`).join("")}</div>`;
 }
+let ingestExpanded = false; // P-KG-INGEST.1b: the "Knowledge Graph Ingest" group is collapsed by default
+function sessRow(s: SessionInfo, active: boolean): string {
+  return `<div class="sess ${active ? "active" : ""}" data-sid="${esc(s.id)}" data-tip="${esc(s.title)}|${esc(modelLabel(s.model))} · ${s.turns} turn${s.turns === 1 ? "" : "s"} · ${relTime(s.updatedAt)}" data-tip-side="right">
+      <div class="t">${esc(s.title)}</div>
+      <div class="m"><b>${esc(modelLabel(s.model))}</b> · ${s.turns} turn${s.turns === 1 ? "" : "s"} · ${relTime(s.updatedAt)}</div>
+      <button class="sess-del" data-del="${esc(s.id)}" data-tip="Delete session" aria-label="Delete session" tabindex="-1">${icon("trash", 13)}</button>
+    </div>`;
+}
 async function renderSessions(): Promise<void> {
   const list = $("#sessList");
   if (!list) return;
   // Show the skeleton only on a cold list (first load). On a re-render after sending a
   // prompt the list already has content - don't flash it back to skeleton.
   if (!list.firstElementChild || $(".skel-group", list)) list.innerHTML = sessSkeleton();
-  const sessions = await bridge.sessions().catch(() => null);
-  if (sessions === null) { list.innerHTML = `<div class="side-empty">Couldn't load history - the GUI server looks out of date. Relaunch it (launcher → <b>G</b>), or restart <code>bun run desktop:web</code>.</div>`; return; }
-  if (!sessions.length) { list.innerHTML = `<div class="side-empty">No sessions yet - send a prompt to start one. They persist here across runs.</div>`; return; }
-  list.innerHTML = sessions.map((s, i) => `
-    <div class="sess ${i === 0 ? "active" : ""}" data-sid="${esc(s.id)}" data-tip="${esc(s.title)}|${esc(modelLabel(s.model))} · ${s.turns} turn${s.turns === 1 ? "" : "s"} · ${relTime(s.updatedAt)}" data-tip-side="right">
-      <div class="t">${esc(s.title)}</div>
-      <div class="m"><b>${esc(modelLabel(s.model))}</b> · ${s.turns} turn${s.turns === 1 ? "" : "s"} · ${relTime(s.updatedAt)}</div>
-      <button class="sess-del" data-del="${esc(s.id)}" data-tip="Delete session" aria-label="Delete session" tabindex="-1">${icon("trash", 13)}</button>
-    </div>`).join("");
+  const data = await bridge.sessions().catch(() => null);
+  if (data === null) { list.innerHTML = `<div class="side-empty">Couldn't load history - the GUI server looks out of date. Relaunch it (launcher → <b>G</b>), or restart <code>bun run desktop:web</code>.</div>`; return; }
+  const { sessions, ingest } = data;
+  if (!sessions.length && !ingest.length) { list.innerHTML = `<div class="side-empty">No sessions yet - send a prompt to start one. They persist here across runs.</div>`; return; }
+  const chats = sessions.map((s, i) => sessRow(s, i === 0)).join("");
+  // P-KG-INGEST.1b: collapse the throwaway "Extract DURABLE facts…" extraction sessions an import mints
+  // into ONE foldable group so they don't pollute the chat history (they stay inspectable when expanded).
+  const ingestGroup = ingest.length ? `<div class="sess-group">
+      <button class="sess-group-head" data-ingest-toggle aria-expanded="${ingestExpanded}" data-tip="Throwaway model-extraction sessions from imports + AI learning. Grouped so they don't clutter your chats.">
+        <span class="sess-group-chev ${ingestExpanded ? "open" : ""}">${icon("chevron", 12)}</span> Knowledge Graph Ingest <span class="sess-group-count">${ingest.length}</span>
+      </button>
+      <div class="sess-group-body" ${ingestExpanded ? "" : "hidden"}>${ingest.map((s) => sessRow(s, false)).join("")}</div>
+    </div>` : "";
+  list.innerHTML = chats + ingestGroup;
 }
 
 // ───────────────────────── chat ─────────────────────────
@@ -3732,6 +3745,7 @@ function wire(): void {
   $("#wsBar")!.addEventListener("click", () => openSettings());
   $("#sessList")!.addEventListener("click", (e) => {
     const t = e.target as HTMLElement;
+    if (t.closest("[data-ingest-toggle]")) { ingestExpanded = !ingestExpanded; void renderSessions(); return; } // P-KG-INGEST.1b
     const del = t.closest(".sess-del") as HTMLElement | null;
     if (del?.dataset.del) { e.stopPropagation(); confirmDeleteSession(del.dataset.del); return; }
     const s = t.closest(".sess") as HTMLElement | null;
