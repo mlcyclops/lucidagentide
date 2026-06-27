@@ -86,7 +86,9 @@ export interface ConfigOption {
 export interface ModeOption { id: string; name: string; description?: string }
 export interface ModeState { available: ModeOption[]; current: string; ui?: "agent" | "ask" | "plan"; permissionMode?: "auto" | "ask" }
 export interface OmpCommand { name: string; description?: string; hint?: string }
-export interface SessionInfo { id: string; title: string; model: string; updatedAt: number; turns: number }
+export interface SessionInfo { id: string; title: string; model: string; updatedAt: number; turns: number; kind?: "chat" | "kg-ingest" }
+// P-KG-INGEST.1b (ADR-0076): chats, with throwaway extraction sessions split into a collapsible group.
+export interface SessionList { sessions: SessionInfo[]; ingest: SessionInfo[] }
 // P-SKILL.1 (ADR-0045): per-file result of a gated skill import (mirrors desktop/skills_import.ts).
 export interface SkillImportResult { ok: boolean; name: string; written?: boolean; path?: string; blocked?: boolean; reason?: string; trustLabel?: string; findings?: number }
 export interface ProviderAuth {
@@ -276,7 +278,7 @@ export interface LucidBridge {
   clearActiveSkill(): Promise<{ active: string } | null>;
   // P-IDE.3: record a skill activation as telemetry (metadata only).
   skillActivated(command: string, name: string, source: "bundled" | "project" | "task"): Promise<unknown>;
-  sessions(): Promise<SessionInfo[] | null>;
+  sessions(): Promise<SessionList | null>;
   sessionMessages(id: string): Promise<{ role: string; text: string }[] | null>;
   resumeSession(id: string): Promise<void>;
   deleteSession(id: string): Promise<{ ok: boolean; error?: string }>;
@@ -479,7 +481,10 @@ export const bridge: LucidBridge = {
     try {
       const r = await fetch("/api/sessions", { cache: "no-store", headers: authHeaders() });
       if (r.status === 404) return null; // server predates the sessions route → out of date
-      return (await r.json())?.data ?? [];
+      const data = (await r.json())?.data;
+      // Tolerate an older server that returned a bare array (pre-1b): wrap it as { sessions, ingest }.
+      if (Array.isArray(data)) return { sessions: data, ingest: [] };
+      return data ?? { sessions: [], ingest: [] };
     } catch { return null; }
   },
   sessionMessages: (id) => getData(`/api/session?id=${encodeURIComponent(id)}`),

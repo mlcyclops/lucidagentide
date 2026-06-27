@@ -247,6 +247,18 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .sess-del svg{width:13px;height:13px}
 .sess:hover .sess-del,.sess:focus-within .sess-del{opacity:.85}
 .sess-del:hover{opacity:1;background:color-mix(in srgb,var(--danger,#e5484d) 16%,transparent);color:var(--danger,#e5484d)}
+/* P-KG-INGEST.1b: the collapsible "Knowledge Graph Ingest" group for throwaway extraction sessions */
+.sess-group{margin-top:6px}
+.sess-group-head{display:flex;align-items:center;gap:7px;width:100%;padding:8px 11px;border:0;border-radius:9px;
+  background:transparent;color:var(--txt-2);font-size:12px;font-weight:600;cursor:pointer;text-align:left;
+  transition:background var(--t) var(--ease)}
+.sess-group-head:hover{background:var(--bg-2);color:var(--txt)}
+.sess-group-chev{display:inline-grid;place-items:center;transition:transform var(--t) var(--ease)}
+.sess-group-chev.open{transform:rotate(90deg)}
+.sess-group-count{margin-left:auto;font-size:11px;font-weight:600;color:var(--txt-3);background:var(--bg-2);
+  border-radius:10px;padding:1px 7px}
+.sess-group-body{display:flex;flex-direction:column;gap:4px;margin:4px 0 2px;padding-left:6px;
+  border-left:2px solid var(--line-soft)}
 .sess-del:focus-visible{opacity:1;outline:2px solid var(--accent);outline-offset:1px}
 .sess:hover .t{padding-right:24px}
 

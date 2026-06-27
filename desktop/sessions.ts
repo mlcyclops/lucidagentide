@@ -9,6 +9,7 @@ import { existsSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { UNTRUSTED_END, UNTRUSTED_START } from "../harness/prompt/assembler.ts";
+import { EXTRACT_SYSTEM } from "../harness/personal/distiller.ts";
 import { currentWorkspace } from "./workspace.ts";
 
 const norm = (p: string) => p.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
@@ -50,6 +51,25 @@ export interface SessionInfo {
   model: string;
   updatedAt: number;
   turns: number;
+  kind?: "chat" | "kg-ingest"; // P-KG-INGEST.1b: throwaway model-extraction sessions (import + AI-learn)
+}
+// P-KG-INGEST.1b (ADR-0076): the chat list, with throwaway extraction sessions split into their own group.
+export interface SessionList { sessions: SessionInfo[]; ingest: SessionInfo[] }
+
+// The import / AI-learn extractor runs in THROWAWAY omp sessions whose only "user message" is the
+// extractor system prompt + the text being learned from. omp persists each one, so a big import leaves
+// hundreds of "Extract DURABLE facts about…" rows polluting the chat history. Detect them by the stable
+// opening of EXTRACT_SYSTEM and group them out of the way (they stay inspectable, just collapsed).
+const EXTRACT_SENTINEL = EXTRACT_SYSTEM.slice(0, 52);
+/** True if a session's first user message is an extractor prompt (an ingest throwaway, not a real chat). */
+export function isIngestPrompt(rawFirstUser: string): boolean {
+  return rawFirstUser.trimStart().startsWith(EXTRACT_SENTINEL);
+}
+/** A meaningful ingest title: the actual text being learned from (the extractor system prompt stripped). */
+export function ingestPreview(rawFirstUser: string): string {
+  const s = rawFirstUser.trimStart();
+  const after = s.startsWith(EXTRACT_SYSTEM) ? s.slice(EXTRACT_SYSTEM.length) : s.slice(EXTRACT_SENTINEL.length);
+  return after.replace(/^\s+/, "").slice(0, 64) || "ingested message";
 }
 
 function firstUserText(message: any): string {
@@ -59,11 +79,10 @@ function firstUserText(message: any): string {
   return "";
 }
 
-export function listSessions(cwd: string = currentWorkspace()): SessionInfo[] {
-  const root = join(homedir(), ".omp", "agent", "sessions");
-  if (!existsSync(root)) return [];
+export function listSessions(cwd: string = currentWorkspace(), root: string = join(homedir(), ".omp", "agent", "sessions")): SessionList {
+  if (!existsSync(root)) return { sessions: [], ingest: [] };
   const want = norm(cwd);
-  const out: SessionInfo[] = [];
+  const all: SessionInfo[] = [];
   for (const d of readdirSync(root)) {
     const dir = join(root, d);
     try {
@@ -73,6 +92,7 @@ export function listSessions(cwd: string = currentWorkspace()): SessionInfo[] {
         const p = join(dir, f);
         try {
           let id = "", scwd = "", model = "", title = "", turns = 0;
+          let kind: "chat" | "kg-ingest" = "chat";
           for (const ln of readFileSync(p, "utf8").split("\n")) {
             if (!ln) continue;
             let o: any;
@@ -80,19 +100,28 @@ export function listSessions(cwd: string = currentWorkspace()): SessionInfo[] {
             if (o.type === "session") { id = o.id ?? f; scwd = o.cwd ?? ""; }
             else if (o.type === "model_change" && o.model) model = o.model;
             else if (o.type === "message" && o.message) {
-              if (o.message.role === "user" && !title) { const t = stripInjectedPreamble(firstUserText(o.message)); if (t.trim()) title = t.trim().slice(0, 64); }
+              if (o.message.role === "user" && !title) {
+                const raw = firstUserText(o.message);
+                // An extractor throwaway → group it; its title is the snippet it learned from, not the prompt.
+                if (isIngestPrompt(raw)) { kind = "kg-ingest"; const t = ingestPreview(raw); if (t.trim()) title = t.trim().slice(0, 64); }
+                else { const t = stripInjectedPreamble(raw); if (t.trim()) title = t.trim().slice(0, 64); }
+              }
               if (o.message.role === "assistant" && o.message.usage) { turns++; if (o.message.model) model = o.message.model; }
             }
           }
           if (norm(scwd) !== want) continue;
           if (!title && turns === 0) continue; // skip empty/probe sessions with no prompt
-          out.push({ id: id || f, title: title || "Untitled session", model: model.replace(/^anthropic\//, "") || "-", updatedAt: statSync(p).mtimeMs, turns });
+          all.push({ id: id || f, title: title || "Untitled session", model: model.replace(/^anthropic\//, "") || "-", updatedAt: statSync(p).mtimeMs, turns, kind });
         } catch { /* skip unreadable file */ }
       }
     } catch { /* skip dir */ }
   }
-  out.sort((a, b) => b.updatedAt - a.updatedAt);
-  return out.slice(0, 40);
+  all.sort((a, b) => b.updatedAt - a.updatedAt);
+  // Split: real chats (capped) vs the collapsed ingest group — so a big import can't crowd out chats.
+  return {
+    sessions: all.filter((s) => s.kind !== "kg-ingest").slice(0, 40),
+    ingest: all.filter((s) => s.kind === "kg-ingest").slice(0, 60),
+  };
 }
 
 function msgText(message: any): string {

@@ -6150,8 +6150,8 @@ KG instant-refresh bug (the optimistic-update fix both share).
 ## ADR-0076 - P-KG-INGEST.1: non-blocking background ingest with live progress + grouped ingest sessions
 
 **Date:** 2026-06-27
-**Status:** Accepted - **slice 1a BUILT** (non-blocking background job + live progress + cancel; #119).
-Slice **1b** (tag + collapse the "Extract DURABLE facts…" ingest sessions — decision #3) is PENDING.
+**Status:** Accepted - **BUILT** (1a: non-blocking background job + live progress + cancel, #119; 1b:
+detect + collapse the "Extract DURABLE facts…" ingest sessions into one group, decision #3).
 The single highest-impact UX finding from the first real import: a ~25-minute ChatGPT-history ingest that
 **froze the app**, showed **no progress**, and **polluted the session list** with hundreds of throwaway
 "Extract DURABLE facts about…" chats.
