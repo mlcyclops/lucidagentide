@@ -1,14 +1,10 @@
 cask "lucidagentide" do
+  arch arm: "arm64", intel: "x64"
+
   version :latest
   sha256 :no_check
 
-  on_arm do
-    url "https://github.com/mlcyclops/lucidagentide/releases/download/latest/LucidAgentIDE-mac-arm64.zip"
-  end
-  on_intel do
-    url "https://github.com/mlcyclops/lucidagentide/releases/download/latest/LucidAgentIDE-mac-x64.zip"
-  end
-
+  url "https://github.com/mlcyclops/lucidagentide/releases/download/latest/LucidAgentIDE-mac-#{arch}.pkg"
   name "LucidAgentIDE"
   desc "Fail-closed security, provenance, and memory layer around oh-my-pi (omp)"
   homepage "https://github.com/mlcyclops/lucidagentide"
@@ -22,7 +18,14 @@ cask "lucidagentide" do
 
   depends_on macos: :big_sur
 
-  app "LucidAgentIDE.app"
+  # The .pkg installs LucidAgentIDE.app into /Applications (isRelocatable=false,
+  # overwriteAction=upgrade), so `brew upgrade` replaces the app atomically in
+  # place. User data under ~/Library is never touched on upgrade — only `zap`
+  # (i.e. `brew uninstall --zap`) removes it.
+  pkg "LucidAgentIDE-mac-#{arch}.pkg"
+
+  uninstall quit:    "com.lucidagentide.desktop",
+            pkgutil: "com.lucidagentide.desktop"
 
   zap trash: [
     "~/Library/Application Support/LucidAgentIDE",
@@ -34,15 +37,14 @@ cask "lucidagentide" do
   ]
 
   caveats <<~EOS
-    LucidAgentIDE is currently distributed UNSIGNED and is NOT notarized, so
-    macOS Gatekeeper will block it after install. (Homebrew 6 removed the
-    `--no-quarantine` install flag, so clear the quarantine attribute yourself
-    once, after installing:)
+    LucidAgentIDE ships as a signed + notarized .pkg once the project's Apple
+    signing secrets are configured. If you install an interim UNSIGNED build,
+    macOS Gatekeeper blocks it — install once from Terminal:
 
-      xattr -dr com.apple.quarantine "/Applications/LucidAgentIDE.app"
+      sudo installer -pkg "$(brew --cache --cask lucidagentide)" -target /
 
-    Then open it normally. The app keeps itself current afterwards
-    (electron-updater pulls from the GitHub "latest" release), so `brew upgrade`
-    is rarely needed.
+    The app keeps itself current afterwards via electron-updater. For managed
+    fleet deployment (Jamf / Munki / Intune), do NOT use this cask — see
+    docs/MACOS-ENTERPRISE-DEPLOYMENT.md and push the .pkg through your MDM.
   EOS
 end

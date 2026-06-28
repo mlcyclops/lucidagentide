@@ -88,6 +88,10 @@ jobs:
           # unsigned, so it must resolve to empty — don't let it inherit the Windows cert.
           CSC_LINK: ${{ runner.os == 'macOS' && secrets.MAC_CSC_LINK || runner.os == 'Windows' && secrets.WIN_CSC_LINK || '' }}
           CSC_KEY_PASSWORD: ${{ runner.os == 'macOS' && secrets.MAC_CSC_KEY_PASSWORD || runner.os == 'Windows' && secrets.WIN_CSC_KEY_PASSWORD || '' }}
+          # PKG installer signing needs a SEPARATE "Developer ID Installer" cert
+          # (distinct from the "Developer ID Application" cert in MAC_CSC_LINK).
+          CSC_INSTALLER_LINK: ${{ runner.os == 'macOS' && secrets.MAC_INSTALLER_CSC_LINK || '' }}
+          CSC_INSTALLER_KEY_PASSWORD: ${{ runner.os == 'macOS' && secrets.MAC_INSTALLER_CSC_KEY_PASSWORD || '' }}
           # Only hunt the keychain for a mac identity when a mac cert is provided.
           CSC_IDENTITY_AUTO_DISCOVERY: ${{ runner.os == 'macOS' && secrets.MAC_CSC_LINK != '' }}
           # macOS notarization (electron-builder runs notarytool when these are set).
@@ -105,6 +109,7 @@ jobs:
           path: |
             desktop/release/*.dmg
             desktop/release/*.zip
+            desktop/release/*.pkg
             desktop/release/*Setup*.exe
             desktop/release/*portable*.exe
             desktop/release/*.AppImage
@@ -120,6 +125,7 @@ jobs:
           files: |
             desktop/release/*.dmg
             desktop/release/*.zip
+            desktop/release/*.pkg
             desktop/release/*Setup*.exe
             desktop/release/*portable*.exe
             desktop/release/*.AppImage
@@ -178,5 +184,6 @@ jobs:
             dist/*portable*.exe
             dist/*.AppImage
             dist/*.zip
+            dist/*.pkg
             dist/*.blockmap
             dist/latest*.yml
