@@ -1,4 +1,4 @@
-# Build the LucidAgentIDE desktop installers (macOS .zip app bundle + Windows .exe + Linux AppImage).
+# Build the LucidAgentIDE desktop installers (macOS .zip+.pkg + Windows .exe + Linux AppImage/.deb/.rpm).
 #
 # electron-builder can't cross-build/sign a mac app from Windows, so this runs
 # the real packaging on native runners: macOS for the .zip bundle, Windows for the
@@ -42,7 +42,7 @@ jobs:
             label: Windows (NSIS + portable, x64)
             script: dist:win
           - os: ubuntu-latest
-            label: Linux (AppImage, x64)
+            label: Linux (AppImage + deb + rpm, x64)
             script: dist:linux
     runs-on: ${{ matrix.os }}
     steps:
@@ -109,6 +109,8 @@ jobs:
             desktop/release/*Setup*.exe
             desktop/release/*portable*.exe
             desktop/release/*.AppImage
+            desktop/release/*.deb
+            desktop/release/*.rpm
             desktop/release/*.blockmap
             desktop/release/latest*.yml
 
@@ -125,6 +127,8 @@ jobs:
             desktop/release/*Setup*.exe
             desktop/release/*portable*.exe
             desktop/release/*.AppImage
+            desktop/release/*.deb
+            desktop/release/*.rpm
             desktop/release/*.blockmap
             desktop/release/latest*.yml
 
@@ -179,6 +183,8 @@ jobs:
             dist/*Setup*.exe
             dist/*portable*.exe
             dist/*.AppImage
+            dist/*.deb
+            dist/*.rpm
             dist/*.zip
             dist/*.pkg
             dist/*.blockmap

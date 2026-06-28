@@ -126,8 +126,35 @@
     "linux": {
       "icon": "build/icon.png",
       "category": "Development",
-      "target": ["AppImage"],
+      "maintainer": "TechLead 187 LLC <support@lucidagentide.com>",
+      "vendor": "TechLead 187 LLC",
+      "synopsis": "Sovereignty-aware, fail-closed AI coding IDE",
+      "target": ["AppImage", "deb", "rpm"],
       "artifactName": "${productName}-x86_64.${ext}"
+    },
+    "deb": {
+      "artifactName": "${name}_${version}_${arch}.${ext}",
+      "depends": [
+        "libgtk-3-0",
+        "libnotify4",
+        "libnss3",
+        "libxss1",
+        "libxtst6",
+        "xdg-utils",
+        "libatspi2.0-0",
+        "libdrm2",
+        "libgbm1"
+      ]
+    },
+    "rpm": {
+      "artifactName": "${name}-${version}.${arch}.${ext}",
+      "depends": [
+        "libXScrnSaver",
+        "libnotify",
+        "nss",
+        "libdrm",
+        "mesa-libgbm"
+      ]
     },
     "publish": [
       {
