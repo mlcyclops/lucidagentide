@@ -22,8 +22,8 @@ console.log("== P-ABOUT.1 — About panel + dynamic version ==");
 const pkg = JSON.parse(readFileSync(join(import.meta.dir, "..", "package.json"), "utf8")) as { version: string };
 if (pkg.version !== APP_VERSION) fail(`desktop/package.json (${pkg.version}) and version.ts (${APP_VERSION}) drifted`);
 ok(`version single-sourced: version.ts === desktop/package.json === ${APP_VERSION}`);
-if (APP_VERSION !== "1.8.9") fail(`app version must be 1.8.9, got ${APP_VERSION}`);
-ok("app version is v1.8.9");
+if (APP_VERSION !== "1.8.10") fail(`app version must be 1.8.10, got ${APP_VERSION}`);
+ok("app version is v1.8.10");
 
 // 2. The panel surfaces identity, company, license, and the live version (no hardcoded duplicate).
 const html = aboutHtml(APP_VERSION);
@@ -43,7 +43,7 @@ for (const [label, needle] of must) {
 }
 
 // The version is interpolated, never hardcoded in the markup — bumping version.ts moves the UI.
-if (aboutHtml("9.9.9").includes("v1.8.9")) fail("version is hardcoded in the markup");
+if (aboutHtml("9.9.9").includes("v1.8.10")) fail("version is hardcoded in the markup");
 ok("version is interpolated (dynamic), not hardcoded");
 
 // 3. The animated rail glyph matches the 24×24 / 1.6-stroke icon family and has the twinkle hook.

@@ -9,5 +9,5 @@
 // version.test.ts asserts the two stay equal, so a bump in one is forced into the other.
 //
 // Launch baseline: v1.8.7. v1.8.8 = role onboarding + tour + providers reorg.
-// v1.8.9 = Perplexity→Providers, set-note readability, Gemini model cards, macOS .pkg/cask.
-export const APP_VERSION = "1.8.9";
+// v1.8.10 = Perplexity→Providers, set-note readability, Gemini model cards, macOS .pkg/cask.
+export const APP_VERSION = "1.8.10";
