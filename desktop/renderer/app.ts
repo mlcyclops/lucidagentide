@@ -2025,6 +2025,19 @@ function devHtml(d: import("./bridge.ts").DevView | null): string {
   h += accordion("dev.exports", "Export audit", "what left, sanitized",
     table([{ key: "export_type", label: "type" }, { key: "sanitization_status", label: "sanitized" }, { key: "reviewer", label: "by" }], exp),
     OPEN.has("dev.exports"));
+  // P-ENT.2 (ADR-0069): the unified SIEM-ready security-event stream + per-sink delivery status.
+  const au = d.audit;
+  if (au) {
+    const sinkLine = au.sinks.map((s) => `${esc(s.name)} <b style="color:${s.failed ? "var(--red)" : "var(--green)"}">${s.delivered}✓${s.failed ? ` ${s.failed}✕` : ""}</b>`).join(" · ");
+    const evRows = au.events.map((e) => ({
+      when: estTime(Date.parse(e.ts)), category: e.category, type: e.type,
+      decision: e.decision, sev: e.severity, tier: e.tier ?? "", tool: e.tool ?? "", reason: (e.reason ?? "").slice(0, 80),
+    }));
+    h += accordion("dev.audit", "Security event export (SIEM)", "OCSF-aligned · metadata only · file sink",
+      `<div class="kvs"><span class="kv">sinks ${sinkLine || "<b>none</b>"}</span><span class="kv">events <b>${au.events.length}</b></span></div>`
+      + table([{ key: "when", label: "when", mono: true }, { key: "category", label: "source", pill: true }, { key: "decision", label: "decision", pill: true }, { key: "sev", label: "sev", mono: true }, { key: "tier", label: "tier", mono: true }, { key: "tool", label: "tool", mono: true }, { key: "reason", label: "reason" }], evRows as unknown as Record<string, unknown>[]),
+      OPEN.has("dev.audit"), String(au.events.length));
+  }
   return h;
 }
 async function loadDev(): Promise<void> {

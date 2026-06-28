@@ -5753,8 +5753,12 @@ ADR-A010 (the GPO/MDM templates - the "how").
 ## ADR-0069 - P-ENT.2: security audit event export seam (SIEM-ready, OCSF-aligned) (SCOPE/PLAN)
 
 **Date:** 2026-06-26
-**Status:** Proposed - SCOPE/PLAN. Public defines the schema + sink interface + file sink; the per-SIEM
-CONNECTORS are private-repo IP (ADR-A011).
+**Status:** Accepted - BUILT 2026-06-28 (issue #98). `audit_export.ts` (versioned `SecurityEvent` + OCSF
+Detection-Finding mapper + `Sink` interface + fail-safe `AuditDispatcher` + append-only `FileSink`);
+emitted from `security_log` (scanner/approve/dismiss) + `acp_backend` exec/egress/loop decisions; `/api/audit`
++ a "Security event export (SIEM)" card in the Logs view. Tests: OCSF fixtures + dead-sink fail-safe.
+`make demo-P-ENT.2`. Public defines the schema + sink interface + file sink; the per-SIEM CONNECTORS are
+private-repo IP (ADR-A011).
 **Increment:** P-ENT.2. Extends the EXISTING `security_log.ts` append-only audit.
 
 ### Context

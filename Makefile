@@ -279,6 +279,10 @@ demo-P-EXEC.1: ## P-EXEC.1 (ADR-0066): per-action exec approval — classifier (
 demo-P-GOAL.13: ## P-GOAL.13 (ADR-0067): unattended loop Speed↔Risk dial — graded tiers T0-T4, loopVerdict (T4 always blocks, unset=safest), managed ceiling, AAR Blocks section
 	$(BUN) run desktop/scripts/demo_p_goal_13.ts
 
+.PHONY: demo-P-ENT.2
+demo-P-ENT.2: ## P-ENT.2 (ADR-0069): OCSF security audit export — each source → valid OCSF Detection Finding, fail-safe dispatcher (dead sink never blocks a turn)
+	$(BUN) run desktop/scripts/demo_p_ent_2.ts
+
 .PHONY: dashboards
 dashboards: ## Materialize dashboard CSVs from a DuckDB into observable/docs/data (DB=path)
 	$(BUN) run harness/scripts/materialize_dashboards.ts $(DB) observable/docs/data

@@ -30,6 +30,7 @@ import { parseGoalVerdict } from "./goal_verdict.ts";
 import { appendGoalIteration, appendRunLog, finishGoalMemory, type GoalMemory, readRunLog, resumeGoalMemory, saveGoalReport, savePreflightReport, startGoalMemory } from "./goal_memory.ts";
 import { extractUrls, type IterStat, type LocStat, type LoopBlock, type LoopMetrics, type LoopOutcome, normalizeToolName, parseNumstat, renderLoopReport, stallSignature, summarizeLoop } from "./loop_report.ts";
 import { type LoopDial, clampDialRow, loopVerdict } from "./exec_policy.ts";
+import { emitSecurityEvent } from "./audit_export.ts";
 import { aggregateRuns, type LoopRunRecord, type RunStats, summarizeRunStats, toRunRecord } from "./loop_runlog.ts";
 import { addTurnSpend, type LoopSpend, newLoopSpend, normalizeBudget, overBudget } from "./loop_budget.ts";
 import { formatSpend } from "./loop_report.ts";
@@ -297,12 +298,16 @@ class Backend {
               if (this.goalActive && this.loopDial) {
                 if (loopVerdict(this.loopDial.shell, cls.tier) === "auto") return approveOpt();
                 this.loopBlocks.push({ iter: this.loopIter, tool: cls.key ?? "shell", tier: cls.tier, reason: cls.alwaysPrompt ? "catastrophic" : "risk-dial" });
+                // P-ENT.2: a loop dial/catastrophic block is a SecurityEvent (fail-safe; never throws).
+                emitSecurityEvent({ category: "loop", type: "loop_block", decision: "block", severity: cls.alwaysPrompt ? "critical" : "high", tool: cls.key ?? "shell", tier: cls.tier, reason: cls.reason, sessionId: this.sessionId ?? undefined });
                 return { outcome: { outcome: "cancelled" } }; // blocked by the dial
               }
               const turnAllowed = interactive && (this.execTurnAll || (!!cls.key && this.execTurnPrograms.has(cls.key)));
               const verdict = execVerdict(execStore(), cls, { unattended: !interactive, turnAllowed });
               if (verdict === "allow") return approveOpt();
               if (verdict === "prompt" && interactive) return this.askExec(params, opts, cls, isEvalTool ? "eval" : (cmd ?? toolName));
+              // P-ENT.2: an exec call blocked with no human to ask (unattended risky / catastrophic).
+              emitSecurityEvent({ category: "exec", type: "exec_decision", decision: "block", severity: cls.alwaysPrompt ? "critical" : "high", tool: cls.key ?? "shell", tier: cls.tier, reason: cls.reason, sessionId: this.sessionId ?? undefined });
               return { outcome: { outcome: "cancelled" } }; // block: unattended risky, catastrophic, or no UI to ask
             }
             // P-EGRESS.1 (ADR-0062): a network-reaching tool — matched by name OR by carrying an external
@@ -461,7 +466,10 @@ class Backend {
       const t = setTimeout(() => settle(block()), Backend.PERM_MS); // fail-closed → block egress
       this.permPending.set(id, (optionId) => {
         const choice = String(optionId ?? "").replace(/^egress:/, "") as EgressChoice;
-        if (!optionId || choice === "deny") { settle(block()); return; }
+        const denied = !optionId || choice === "deny";
+        // P-ENT.2 (ADR-0069): the egress (network-reach) decision as a SecurityEvent (fail-safe).
+        emitSecurityEvent({ category: "egress", type: "egress_decision", decision: denied ? "block" : "allow", severity: "medium", tool: "egress", reason: `${denied ? "blocked" : choice} · ${target}`.slice(0, 200), sessionId: this.sessionId ?? undefined });
+        if (denied) { settle(block()); return; }
         try { recordEgress(target, choice); } catch { /* best-effort persistence */ }
         settle(approve());
       });
@@ -489,7 +497,10 @@ class Backend {
       const t = setTimeout(() => settle(block()), Backend.PERM_MS); // fail-closed → block
       this.permPending.set(id, (optionId) => {
         const choice = String(optionId ?? "").replace(/^exec:/, "") as ExecChoice;
-        if (!optionId || choice === "deny") { settle(block()); return; }
+        // P-ENT.2 (ADR-0069): record the human's exec decision as a SecurityEvent (fail-safe).
+        const denied = !optionId || choice === "deny";
+        emitSecurityEvent({ category: "exec", type: "exec_decision", decision: denied ? "block" : "allow", severity: cls.alwaysPrompt ? "critical" : "medium", tool: cls.key ?? "shell", tier: cls.tier, reason: `${denied ? "denied" : choice} · ${cls.reason}`, sessionId: this.sessionId ?? undefined });
+        if (denied) { settle(block()); return; }
         if (choice === "allow-turn") { if (cls.key) this.execTurnPrograms.add(cls.key); else this.execTurnAll = true; } // in-memory only
         else { try { recordExec(cls, choice); } catch { /* best-effort persistence */ } }
         settle(approve());
