@@ -103,7 +103,7 @@ export interface ProviderAuth {
   id: string; name: string; env: string; oauthId: string; canOauth: boolean;
   oauthActive: boolean; oauthIdentity?: string; keySet: boolean; keyLast4?: string;
 }
-export interface AuthStatus { majors: ProviderAuth[]; others: ProviderAuth[] }
+export interface AuthStatus { gateway: ProviderAuth[]; majors: ProviderAuth[]; others: ProviderAuth[] }
 export interface HeadroomStatus {
   installed: boolean; version: string | null; running: boolean; enabled: boolean;
   port: number; url: string; installHint: string;
@@ -316,6 +316,9 @@ export interface LucidBridge {
   // P-IDE.1c: China-origin model data-sovereignty acknowledgement gate.
   chinaAck(): Promise<{ acknowledged: boolean } | null>;
   setChinaAck(acknowledge: boolean): Promise<{ acknowledged: boolean } | null>;
+  // Third-party / non-U.S. / custom "More providers" acknowledgement gate (mirrors chinaAck).
+  thirdPartyAck(): Promise<{ acknowledged: boolean } | null>;
+  setThirdPartyAck(acknowledge: boolean): Promise<{ acknowledged: boolean } | null>;
   auth(): Promise<AuthStatus | null>;
   saveKey(env: string, key: string): Promise<AuthStatus | null>;
   oauthLogin(oauthId: string): Promise<{ started: boolean; url: string; output: string } | null>;
@@ -522,6 +525,8 @@ export const bridge: LucidBridge = {
   managed: () => getData("/api/managed"),
   chinaAck: () => getData("/api/china-ack"),
   setChinaAck: (acknowledge) => post("/api/china-ack", { acknowledge }),
+  thirdPartyAck: () => getData("/api/thirdparty-ack"),
+  setThirdPartyAck: (acknowledge) => post("/api/thirdparty-ack", { acknowledge }),
   auth: () => getData("/api/auth"),
   saveKey: (env, key) => post("/api/auth/key", { env, key }),
   oauthLogin: (oauthId) => post("/api/auth/oauth", { oauthId }),

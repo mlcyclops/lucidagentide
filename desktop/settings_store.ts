@@ -90,6 +90,9 @@ export interface GuiSettings {
   // P-IDE.1c (ADR-0029): the user acknowledged the data-sovereignty warning for China-origin models
   // (DeepSeek/Kimi/MiniMax/GLM/…). Until set, those models are hidden from the picker. Off by default.
   chinaModelsAcknowledged?: boolean;
+  // The user acknowledged the third-party / non-U.S. / custom "More providers" warning. Until set, that
+  // section's provider list stays hidden behind a typed ACKNOWLEDGE gate. Off by default.
+  thirdPartyProvidersAcknowledged?: boolean;
   // P-GOAL.6 (ADR-0048): the model the /goal loop's CHECKER runs on, overriding the maker's model.
   // "" / unset = auto (the harness recommends a cheap, capable, recent model from the user's picker).
   checkerModel?: string;
@@ -248,6 +251,11 @@ export function setProfile(p: { username?: string; email?: string }): GuiSetting
 export function chinaModelsAcknowledged(): boolean { return !!load().chinaModelsAcknowledged; }
 export function setChinaModelsAcknowledged(on: boolean): GuiSettings {
   const s = load(); s.chinaModelsAcknowledged = on; save(s); return s;
+}
+/** Acknowledgement gate for the third-party / non-U.S. / custom "More providers" section. */
+export function thirdPartyProvidersAcknowledged(): boolean { return !!load().thirdPartyProvidersAcknowledged; }
+export function setThirdPartyProvidersAcknowledged(on: boolean): GuiSettings {
+  const s = load(); s.thirdPartyProvidersAcknowledged = on; save(s); return s;
 }
 /** P-LOC.1 (ADR-0031): the last omp-reported active model, used to tag AI-LOC ledger rows from the
  *  first edit of a session. Empty until omp reports one (then the gate records model 'unknown'). */
