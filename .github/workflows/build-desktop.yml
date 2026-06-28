@@ -79,6 +79,13 @@ jobs:
           node -e "const fs=require('fs'),p=require('./package.json');p.version=process.argv[1];fs.writeFileSync('package.json',JSON.stringify(p,null,2)+'\n')" "$V"
           echo "build version = $V"
 
+      # electron-builder's deb/rpm targets shell out to fpm; building an .rpm on the Ubuntu runner needs
+      # the `rpm` toolchain (rpmbuild), which isn't installed by default. (.deb needs only fpm + dpkg,
+      # already present.) No-op on macOS/Windows.
+      - name: Install rpm tooling (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y rpm
+
       - name: Build installer (${{ matrix.script }})
         run: bun run ${{ matrix.script }}
         working-directory: desktop
