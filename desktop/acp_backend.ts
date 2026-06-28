@@ -36,11 +36,36 @@ import { assessReadiness, maturedGoalFrom, mergeMatured, parsePreflightJson, typ
 import { execFileSync } from "node:child_process";
 import { type Automation, listAutomations, nextDueAutomation, updateAutomation } from "./automations.ts";
 import { type EgressChoice, egressDecision, recordEgress } from "./egress_policy.ts";
+import { type ExecChoice, type ExecClass, classifyCommand, classifyEval, execStore, execVerdict, recordExec } from "./exec_policy.ts";
 
 // P-EGRESS.1 (ADR-0062): the network-reaching tools omp is told to PROMPT for (acp_config.yml). When omp
 // requests permission for one of these, the desktop shows the per-website approval dialog instead of
 // silently auto-approving in Agent mode.
 const EGRESS_TOOLS = new Set(["browser", "web_search", "web", "fetch", "navigate"]);
+
+// P-EXEC.1 (ADR-0066): the exec tools omp is told to PROMPT for (acp_config.yml). Each call is classified
+// per-command — read-only auto-approves, risky gates, a catastrophic set always prompts. Detected by the
+// tool name OR (the strong signal) a `command` string in the tool's rawInput.
+const EXEC_TOOLS = /\b(bash|eval|shell|execute|terminal)\b/;
+const EXEC_OPTIONS_FULL = [
+  { optionId: "exec:allow-once", name: "Allow once", kind: "allow" },
+  { optionId: "exec:allow-turn", name: "Allow for this turn", kind: "allow" },
+  { optionId: "exec:allow-program", name: "Always allow this program", kind: "allow" },
+  { optionId: "exec:danger", name: "Always allow every command", kind: "danger" },
+  { optionId: "exec:deny", name: "Block", kind: "reject" },
+];
+// Catastrophic or compound calls (no single program to pin) expose only once / this-turn / deny.
+const EXEC_OPTIONS_LIMITED = [
+  { optionId: "exec:allow-once", name: "Allow once", kind: "allow" },
+  { optionId: "exec:allow-turn", name: "Allow for this turn", kind: "allow" },
+  { optionId: "exec:deny", name: "Block", kind: "reject" },
+];
+/** Pull the command/code an exec tool call will run, from its rawInput. */
+function execCommand(tc: any): string | null {
+  const ri = tc?.rawInput ?? tc?.input ?? {};
+  for (const k of ["command", "cmd", "script", "code", "source", "input"]) if (typeof ri[k] === "string" && ri[k].trim()) return ri[k].trim();
+  return null;
+}
 // The dialog's choices — clear and non-overlapping. ("allow once" and an "ask every time" pin had the
 // same outcome — both ask again next time — so the pin was dropped.) Each maps to an EgressChoice the
 // store folds in; the "allow" variants approve the call to omp, "deny" blocks it.
@@ -84,7 +109,7 @@ export type ChatEvent =
   | { type: "tool"; name: string; detail: string }
   | { type: "subagent"; id: string; agent: string; title: string; assignments: string[] }
   | { type: "block"; tool: string; reason: string; severity: string; findings: string; id?: string; quarantined?: boolean }
-  | { type: "permission"; id: string; tool: string; detail: string; options: { optionId: string; name: string; kind?: string }[]; url?: string; egress?: boolean }
+  | { type: "permission"; id: string; tool: string; detail: string; options: { optionId: string; name: string; kind?: string }[]; url?: string; egress?: boolean; exec?: boolean; program?: string; reason?: string; danger?: boolean }
   | { type: "usage"; used: number; size: number; cost: number }
   // P-GOAL.1 (ADR-0046): /goal loop events — an iteration begins, the separate checker's verdict,
   // the loop met its condition, or it stopped (cap / no-progress).
@@ -139,6 +164,11 @@ class Backend {
   private autoRunning = false;
   private static readonly AUTO_TICK_MS = 30_000;
   private askActive = false;            // true only during a chat turn (never the util `complete()`)
+  // P-EXEC.1 (ADR-0066): the in-memory allow-turn scope — risky programs the user OK'd for the rest of
+  // THIS interactive turn only. NEVER persisted; cleared at every turn boundary. `execTurnAll` is the
+  // compound-command equivalent (no single program to key on).
+  private execTurnPrograms = new Set<string>();
+  private execTurnAll = false;
   private permSeq = 0;
   private permPending = new Map<string, (optionId: string | null) => void>();
   private pendingPerms = 0;             // while > 0 the turn's idle/stall clock is paused
@@ -245,6 +275,24 @@ class Backend {
             const tc = params?.toolCall ?? params?.tool_call ?? {};
             const toolName = [tc.kind, tc.title, tc.name, tc.toolName, params?.tool, params?.toolName].filter(Boolean).join(" ").toLowerCase();
             const target = egressTarget(tc);
+            // P-EXEC.1 (ADR-0066): an exec tool (bash/eval). Classify the command BEFORE the Agent
+            // auto-approve — read-only auto-approves, risky gates, a catastrophic set always prompts. A
+            // shell command is handled here (not egress), so `curl … | sh` is caught as catastrophic exec.
+            const isEvalTool = /\beval\b/.test(toolName);
+            const cmd = execCommand(tc);
+            if (isEvalTool || cmd !== null || EXEC_TOOLS.test(toolName)) {
+              const cls: ExecClass = isEvalTool ? classifyEval() : classifyCommand(cmd ?? toolName);
+              // Interactive = a live chat turn with a UI listener and NOT an unattended loop/automation.
+              const interactive = this.askActive && !!this.listener && !this.goalActive && !this.autoRunning;
+              const turnAllowed = interactive && (this.execTurnAll || (!!cls.key && this.execTurnPrograms.has(cls.key)));
+              const verdict = execVerdict(execStore(), cls, { unattended: !interactive, turnAllowed });
+              if (verdict === "allow") {
+                const a = opts.find((o) => /allow/i.test(o.kind ?? o.optionId ?? "")) ?? opts[0];
+                return a ? { outcome: { outcome: "selected", optionId: a.optionId } } : { outcome: { outcome: "cancelled" } };
+              }
+              if (verdict === "prompt" && interactive) return this.askExec(params, opts, cls, isEvalTool ? "eval" : (cmd ?? toolName));
+              return { outcome: { outcome: "cancelled" } }; // block: unattended risky, catastrophic, or no UI to ask
+            }
             // P-EGRESS.1 (ADR-0062): a network-reaching tool — matched by name OR by carrying an external
             // http(s) URL (omp may report the browser tool with a generic kind, so name alone can miss it).
             // Unless a standing decision already allows the target, force the per-website approval dialog —
@@ -407,6 +455,35 @@ class Backend {
       });
     });
   }
+  /** P-EXEC.1 (ADR-0066): forward a risky exec request as the per-command approval dialog (command +
+   *  program key + why). The user's choice folds into the exec store (allow-program / danger) or the
+   *  in-memory turn scope (allow-turn); allow-once / deny persist nothing. Fail-closed: timeout ⇒ block. */
+  private askExec(params: any, opts: any[], cls: ExecClass, command: string): Promise<any> {
+    const id = `perm_${++this.permSeq}`;
+    this.pendingPerms++;
+    // No pinnable program (catastrophic or compound) ⇒ only once / this-turn / deny.
+    const limited = cls.alwaysPrompt || !cls.key;
+    this.emit({
+      type: "permission", id, tool: "exec", detail: command, exec: true,
+      program: cls.key ?? undefined, reason: cls.reason, danger: cls.alwaysPrompt,
+      options: limited ? EXEC_OPTIONS_LIMITED : EXEC_OPTIONS_FULL,
+    });
+    const allowOpt = opts.find((o) => /allow/i.test(o.kind ?? o.optionId ?? "")) ?? opts[0];
+    const denyOpt = opts.find((o) => /(deny|reject|cancel|no)/i.test(o.kind ?? o.optionId ?? ""));
+    const approve = () => allowOpt ? { outcome: { outcome: "selected", optionId: allowOpt.optionId } } : { outcome: { outcome: "cancelled" } };
+    const block = () => denyOpt ? { outcome: { outcome: "selected", optionId: denyOpt.optionId } } : { outcome: { outcome: "cancelled" } };
+    return new Promise((resolve) => {
+      const settle = (o: any) => { clearTimeout(t); this.permPending.delete(id); this.pendingPerms = Math.max(0, this.pendingPerms - 1); resolve(o); };
+      const t = setTimeout(() => settle(block()), Backend.PERM_MS); // fail-closed → block
+      this.permPending.set(id, (optionId) => {
+        const choice = String(optionId ?? "").replace(/^exec:/, "") as ExecChoice;
+        if (!optionId || choice === "deny") { settle(block()); return; }
+        if (choice === "allow-turn") { if (cls.key) this.execTurnPrograms.add(cls.key); else this.execTurnAll = true; } // in-memory only
+        else { try { recordExec(cls, choice); } catch { /* best-effort persistence */ } }
+        settle(approve());
+      });
+    });
+  }
   /** Resolve a parked permission from the UI. `optionId` null/empty ⇒ deny (cancelled). */
   resolvePermission(id: string, optionId: string | null): boolean {
     const fn = this.permPending.get(id);
@@ -482,6 +559,7 @@ class Backend {
     const sink = (e: ChatEvent) => { arm(); if (isLearnableAssistantText(e)) assistant += e.text; try { onEvent(e); } catch { enqueueErr++; } };
     this.listener = sink;
     this.askActive = true; // permission requests in THIS turn may be forwarded to the UI (Ask mode)
+    this.execTurnPrograms.clear(); this.execTurnAll = false; // P-EXEC.1: allow-turn scope is per-turn
     this.chatGate.begin(); // P-KG-INGEST.3: a chat turn is live → background extraction should yield to it
     this.turnDiag(`prompt.start session=${this.sessionId}`);
     try {

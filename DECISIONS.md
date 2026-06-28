@@ -5494,7 +5494,9 @@ finding challenges), ADR-0064 (sibling 1c slice, PDF), CLAUDE.md invariant #3 + 
 ## ADR-0066 - P-EXEC.1: per-action approval for the agent's exec tools (bash + eval) (SCOPE/PLAN)
 
 **Date:** 2026-06-26
-**Status:** Proposed - SCOPE/PLAN (design locked + refined; implementation is the next increment).
+**Status:** Accepted - BUILT 2026-06-28 (issue #95). `exec_policy.ts` (classifier + verdict/apply/clamp,
+107-test corpus), `acp_config.yml` bash/eval→prompt, `acp_backend` onRequest isExec branch + `askExec` +
+in-memory allow-turn scope, renderer exec dialog (docked, high-risk red variant). `make demo-P-EXEC.1`.
 **Increment:** P-EXEC.1 (v1 = bash + eval). ssh + task fast-follow as P-EXEC.2.
 **Refined 2026-06-26:** program-level key (kept simple) + a non-silenceable catastrophic ALWAYS-PROMPT
 set; added `allow-turn` (session-scoped, in-memory); exec danger-mode is a SEPARATE toggle from egress;
