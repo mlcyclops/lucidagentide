@@ -271,6 +271,10 @@ demo-P-KG-INGEST.4: ## P-KG-INGEST.4 (#136/ADR-0085): true ingest concurrency �
 demo-P-ABOUT.1: ## P-ABOUT.1 (ADR-0087): About panel — single-sourced app version (v1.8.7), LUCID + TechLead 187 + BUSL-1.1 licensing, animated rail glyph
 	$(BUN) run desktop/scripts/demo_p_about_1.ts
 
+.PHONY: demo-P-EXEC.1
+demo-P-EXEC.1: ## P-EXEC.1 (ADR-0066): per-action exec approval — classifier (safe/risky/catastrophic), prompt interactive + block unattended, standing allows, managed denylist
+	$(BUN) run desktop/scripts/demo_p_exec_1.ts
+
 .PHONY: dashboards
 dashboards: ## Materialize dashboard CSVs from a DuckDB into observable/docs/data (DB=path)
 	$(BUN) run harness/scripts/materialize_dashboards.ts $(DB) observable/docs/data

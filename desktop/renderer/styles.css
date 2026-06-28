@@ -514,6 +514,15 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .perm-egress .eg-block{color:var(--txt-3)}
 .perm-egress .eg-block:hover{border-color:var(--red);color:var(--red);background:var(--red-dim)}
 
+/* P-EXEC.1 (ADR-0066): exec approval card — reuses the egress shell, adds a why-line + program chip and a
+   high-risk (catastrophic) red accent. */
+.perm-exec .perm-eg-head .ic{color:var(--cyan)}
+.perm-exec-why{margin:0 12px 8px;font-size:11.5px;color:var(--txt-3);line-height:1.45;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.perm-prog{font-family:var(--mono);font-size:11px;color:var(--txt-2);background:var(--bg-2);border:1px solid var(--line-soft);border-radius:6px;padding:1px 6px}
+.perm-exec-danger{border-left-color:var(--red)}
+.perm-exec-danger .perm-eg-head{color:var(--red)}
+.perm-exec-danger .perm-eg-head .ic{color:var(--red)}
+
 /* subagent delegation card (omp `task` tool) — P-TASK.1 (ADR-0028). Mirrors .thoughts/.reasoning. */
 .subagent{margin:8px 0 2px;border:1px solid var(--line);border-left:2px solid var(--cyan);border-radius:11px;
   background:var(--bg-1);width:fit-content;max-width:100%;overflow:hidden;animation:rise var(--t) var(--ease-out)}

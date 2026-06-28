@@ -32,3 +32,9 @@ tools:
     web_search: prompt
     web: prompt
     fetch: prompt
+    # P-EXEC.1 (ADR-0066): force the exec tools to PROMPT too. omp's default auto-runs bash/eval in Agent
+    # mode; the desktop intercepts these (acp_backend onRequest → askExec) and classifies the command —
+    # read-only commands auto-approve, risky ones gate, a catastrophic set (rm -rf, sudo, pipe-to-shell,
+    # …) always prompts. Defense in depth ON TOP OF the scanner, which still scans every call fail-closed.
+    bash: prompt
+    eval: prompt

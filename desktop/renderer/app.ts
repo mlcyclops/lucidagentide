@@ -688,6 +688,24 @@ function createPermissionCard(e: Extract<ChatEvent, { type: "permission" }>): { 
       window.open("https://radar.cloudflare.com/scan", "_blank", "noopener");
       showToast({ title: "URL copied · Radar opened", desc: "Paste the URL into Cloudflare Radar to vet the site before allowing.", actions: [{ label: "OK" }], timeout: 4000 });
     });
+  } else if (e.exec) {
+    // P-EXEC.1 (ADR-0066): the agent wants to run a shell/eval command. Docked above the composer like
+    // egress. Show the command, the program key + why it's risky, and the per-command choices. A
+    // catastrophic command (rm -rf, sudo, pipe-to-shell, …) is styled as high-risk and offers no
+    // "always allow" — only once / this-turn / block.
+    const cmd = e.detail ?? "";
+    const exCls = (k?: string) => k === "reject" ? "eg-block" : k === "danger" ? "eg-danger" : "eg-allow";
+    const btns = e.options.map((o) => `<button class="perm-btn ${exCls(o.kind)}" data-oid="${esc(o.optionId)}">${esc(o.name)}</button>`).join("");
+    win = el(`<div class="perm perm-egress perm-exec${e.danger ? " perm-exec-danger" : ""}" data-streaming="1">
+      <div class="perm-eg-head">${icon(e.danger ? "shield" : "bolt", 13)}<span>${e.danger ? "The agent wants to run a HIGH-RISK command" : "The agent wants to run a command"}</span></div>
+      <div class="perm-egress-target"><code class="perm-url">${esc(cmd)}</code><button class="perm-copy" data-tip="Copy command">${icon("copy", 12)}</button></div>
+      ${e.reason || e.program ? `<div class="perm-exec-why">${e.program ? `<code class="perm-prog">${esc(e.program)}</code> · ` : ""}${esc(e.reason ?? "")}</div>` : ""}
+      <div class="perm-actions perm-actions-col">${btns}</div>
+    </div>`);
+    const copyBtn = $(".perm-copy", win) as HTMLElement | null;
+    copyBtn?.addEventListener("click", async () => {
+      try { await navigator.clipboard.writeText(cmd); copyBtn.innerHTML = icon("check", 12); setTimeout(() => { copyBtn.innerHTML = icon("copy", 12); }, 1200); } catch { /* clipboard blocked */ }
+    });
   } else {
     const btns = e.options.map((o) => `<button class="perm-btn ${isAllowOpt(o.kind, o.optionId) ? "ok" : "no"}" data-oid="${esc(o.optionId)}">${esc(o.name)}</button>`).join("");
     win = el(`<div class="perm" data-streaming="1">
@@ -705,9 +723,12 @@ function createPermissionCard(e: Extract<ChatEvent, { type: "permission" }>): { 
     answered = true;
     win.removeAttribute("data-streaming");
     void bridge.respondPermission(e.id, oid);
-    if (e.egress) {
+    if (e.egress || e.exec) {
       // Docked card: confirm with a brief toast, then remove it (and the dock when empty).
-      showToast({ title: ok ? "Allowed" : "Blocked", desc: ok ? "The agent can reach the site." : "The agent won't reach that site.", actions: [{ label: "OK" }], timeout: 2200, ...(ok ? {} : { tone: "warn" as const }) });
+      const desc = e.exec
+        ? (ok ? "The agent can run the command." : "The agent won't run that command.")
+        : (ok ? "The agent can reach the site." : "The agent won't reach that site.");
+      showToast({ title: ok ? "Allowed" : "Blocked", desc, actions: [{ label: "OK" }], timeout: 2200, ...(ok ? {} : { tone: "warn" as const }) });
       win.remove();
       const dock = $("#egressDock"); if (dock && !dock.children.length) dock.remove();
       return;
@@ -719,7 +740,7 @@ function createPermissionCard(e: Extract<ChatEvent, { type: "permission" }>): { 
     const b = (ev.target as HTMLElement).closest("[data-oid]") as HTMLElement | null;
     if (!b) return;
     const opt = e.options.find((o) => o.optionId === b.dataset.oid);
-    const isDeny = e.egress ? opt?.kind === "reject" : !isAllowOpt(opt?.kind, opt?.optionId);
+    const isDeny = (e.egress || e.exec) ? opt?.kind === "reject" : !isAllowOpt(opt?.kind, opt?.optionId);
     choose(b.dataset.oid!, isDeny ? "Denied" : "Allowed", !isDeny);
   });
   return { el: win, finalize: () => choose(null, "Denied (turn ended)", false) };
@@ -889,8 +910,9 @@ async function send(): Promise<void> {
       setPhase("Needs approval"); paintHud();
       const card = createPermissionCard(e);
       permCards.push(card);
-      // P-EGRESS.1: egress approvals dock directly above the prompt bar; normal tool prompts stay inline.
-      if (e.egress) egressDock().appendChild(card.el);
+      // P-EGRESS.1 / P-EXEC.1: egress + exec approvals dock directly above the prompt bar; normal tool
+      // prompts stay inline.
+      if (e.egress || e.exec) egressDock().appendChild(card.el);
       else { hud.before(card.el); scrollChat(); }
     }
     else if (e.type === "block") onBlock(e);
