@@ -8,5 +8,6 @@
 // MIRRORS this string (electron's app.getVersion() / electron-builder read package.json);
 // version.test.ts asserts the two stay equal, so a bump in one is forced into the other.
 //
-// Launch baseline: v1.8.7. Bumped to v1.8.8 (role onboarding + guided tour, providers reorg).
-export const APP_VERSION = "1.8.8";
+// Launch baseline: v1.8.7. v1.8.8 = role onboarding + tour + providers reorg.
+// v1.8.9 = Perplexity→Providers, set-note readability, Gemini model cards, macOS .pkg/cask.
+export const APP_VERSION = "1.8.9";

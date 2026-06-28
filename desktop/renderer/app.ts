@@ -1491,7 +1491,7 @@ function secOthers(auth: import("./bridge.ts").AuthStatus | null): string {
       `<div class="set-note ok">${icon("check", 12)} You acknowledged the third-party risk. <button class="btn-link" id="thirdPartyRelock">Re-lock</button></div>${list}`, true);
   }
   return setCard("others", "More providers", "acknowledge to reveal",
-    `<div class="set-note danger">${icon("shield", 12)} <b>Third-party models (non-U.S. / custom)</b> - OpenRouter, Perplexity, DeepSeek, Kimi/Moonshot, Groq. These route to third-party or non-U.S. servers (or aggregate many origins) with <b>no U.S. data-sovereignty guarantee</b>; review each provider's terms before use.</div>
+    `<div class="set-note danger">${icon("shield", 12)} <b>Third-party models (non-U.S. / custom)</b> - OpenRouter, DeepSeek, Kimi/Moonshot, Groq. These route to third-party or non-U.S. servers (or aggregate many origins) with <b>no U.S. data-sovereignty guarantee</b>; review each provider's terms before use.</div>
      <div class="china-unlock"><input id="thirdPartyAckInput" placeholder="Type ACKNOWLEDGE to reveal" autocomplete="off" spellcheck="false" /><button class="btn-mini" id="thirdPartyAckBtn" disabled>Reveal</button></div>`, true);
 }
 // P-MCP.1 (ADR-0020): MCP connectors - auth + config only; omp owns the MCP transport.
@@ -4444,6 +4444,21 @@ const MODEL_INFO: Record<string, ModelInfo> = {
   "google-gemini-3.5-flash-gov": { exp: 2, iq: 3, eff: "Fast Gemini in GovCloud; 1M context.", best: "Fast long-context gov tasks.", ctx: "1M" },
   "google-gemini-2.5-pro": { exp: 3, iq: 4, eff: "Gemini 2.5 Pro; 1M context.", best: "Long-context reasoning.", ctx: "1M" },
   "google-gemini-2.5-flash": { exp: 1, iq: 3, eff: "Fast, cheap Gemini; 1M context.", best: "High-volume long-context work.", ctx: "1M" },
+  // Google · Gemini (direct - Antigravity / Gemini CLI). Keyed by the provider-stripped base id so a
+  // model routed through either provider inherits the same card. Pro tiers are frontier-class (5 stars);
+  // Flash/Lite are the fast, cheap tiers (3 stars). Gemini is 1M-context across the board.
+  "gemini-3.1-pro": { exp: 4, iq: 5, eff: "Google's flagship Gemini 3.1 Pro - top reasoning, 1M context.", best: "Complex reasoning, architecture, huge-context analysis.", ctx: "1M" },
+  "gemini-3.1-pro-preview": { exp: 4, iq: 5, eff: "Preview of Gemini 3.1 Pro - flagship reasoning, 1M context.", best: "Complex reasoning + huge-context analysis (preview).", ctx: "1M" },
+  "gemini-3-pro": { exp: 4, iq: 5, eff: "Gemini 3 Pro - top-tier reasoning, 1M context.", best: "Hard bugs, architecture, complex reasoning.", ctx: "1M" },
+  "gemini-3-pro-preview": { exp: 4, iq: 5, eff: "Preview of Gemini 3 Pro - top-tier reasoning, 1M context.", best: "Complex reasoning + architecture (preview).", ctx: "1M" },
+  "gemini-3.5-flash": { exp: 1, iq: 3, eff: "Fast, cost-efficient Gemini 3.5 Flash; 1M context.", best: "Quick edits, lookups, high-volume long-context tasks.", ctx: "1M" },
+  "gemini-3-flash": { exp: 1, iq: 3, eff: "Fast, cost-efficient Gemini 3 Flash; 1M context.", best: "Quick edits, lookups, high-volume tasks.", ctx: "1M" },
+  "gemini-3-flash-preview": { exp: 1, iq: 3, eff: "Preview of Gemini 3 Flash - fast + cheap; 1M context.", best: "Quick edits + high-volume tasks (preview).", ctx: "1M" },
+  "gemini-3.1-flash-image": { exp: 2, iq: 3, eff: "Gemini 3.1 Flash with image generation; 1M context.", best: "Fast multimodal + image-generation tasks.", ctx: "1M" },
+  "gemini-3.1-flash-lite": { exp: 1, iq: 3, eff: "Lightest, fastest Gemini; 1M context.", best: "High-volume, latency-sensitive tasks.", ctx: "1M" },
+  "gemini-3.1-flash-lite-preview": { exp: 1, iq: 3, eff: "Preview of the lightest, fastest Gemini; 1M context.", best: "High-volume, latency-sensitive tasks (preview).", ctx: "1M" },
+  "gemini-2.5-pro": { exp: 3, iq: 4, eff: "Gemini 2.5 Pro - strong balanced reasoning; 1M context.", best: "Long-context reasoning and everyday Pro work.", ctx: "1M" },
+  "gemini-2.5-flash": { exp: 1, iq: 3, eff: "Fast, cheap Gemini 2.5 Flash; 1M context.", best: "High-volume long-context work.", ctx: "1M" },
   // AskSage · RAG
   "rag": { exp: 3, iq: 4, eff: "Dataset-grounded answers with citations - only as good as your selected datasets.", best: "Questions over your selected knowledge bases.", ctx: "256K" },
 };
@@ -4455,7 +4470,9 @@ const FAMILY_LABEL: Record<string, string> = { claude: "Anthropic Claude", gemin
 function inferModelInfo(value: string): ModelInfo {
   const s = stripProvider(value).toLowerCase();
   const fam = familyOf(value).id;
-  const small = /mini|nano|lite|flash|haiku|oss|-8b|-7b/.test(s);
+  // `\bmini` (word boundary) so "ge·mini" no longer false-matches as small (it was downgrading EVERY
+  // inferred Gemini - incl. the Pro tiers - to 3 stars); "-mini" in gpt-5-mini etc. still matches.
+  const small = /\bmini|nano|lite|flash|haiku|oss|-8b|-7b/.test(s);
   const big = !small && /opus|pro|max|fable|mythos|ultra|gpt-5|gpt-o/.test(s);
   const iq = big ? 5 : small ? 3 : 4;
   const exp = big ? 4 : small ? 1 : 3;
