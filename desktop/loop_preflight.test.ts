@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/loop_preflight.test.ts — P-GOAL.12 (ADR-0057): the Pre-Flight Audit's pure core.
+// desktop/loop_preflight.test.ts - P-GOAL.12 (ADR-0057): the Pre-Flight Audit's pure core.
 
 import { describe, expect, test } from "bun:test";
 import { type LoopRunRecord } from "./loop_runlog.ts";
@@ -31,7 +31,7 @@ function spec(over: Partial<PreflightSpec> = {}): PreflightSpec {
   return { goal: "Make all auth tests pass and fix lint", ...over };
 }
 
-describe("assessReadiness — gated levels", () => {
+describe("assessReadiness - gated levels", () => {
   test("bare objective ⇒ L0", () => {
     expect(assessReadiness(spec({ goal: "speed things up" })).level).toBe("L0"); // too short / vague-ish but present
     expect(assessReadiness({ goal: "" }).level).toBe("L0");
@@ -78,7 +78,7 @@ describe("renderLoopDesign", () => {
     const s = spec({ doneDefinition: "tests green", command: "npm test", scope: "branch: feat/auth", budgetUsd: 2, maxIters: 6, checkerIsCheap: true, nonGoals: "do not touch payments or auth secrets" });
     const r = assessReadiness(s);
     const md = renderLoopDesign(s, r, maturedGoalFrom(s));
-    expect(md).toContain("# Loop Design — Make all auth tests pass");
+    expect(md).toContain("# Loop Design - Make all auth tests pass");
     expect(md).toContain("**Readiness: L3");
     expect(md).toContain("## Matured goal");
     expect(md).toContain("| Verification | `npm test` |");
@@ -90,7 +90,7 @@ describe("renderLoopDesign", () => {
     const md = renderLoopDesign(s, assessReadiness(s), maturedGoalFrom(s));
     expect(md).toContain("## Before you run");
     expect(md).toContain("**Verification command (exit 0 = done)**");
-    expect(md).toContain("_none — checker judges self-report_");
+    expect(md).toContain("_none - checker judges self-report_");
   });
   test("escapes backslash-then-pipe and flattens newlines (CodeQL: incomplete escaping)", () => {
     const s = spec({ goal: "a | b\nc", risks: "C:\\tmp | bad" });

@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// harness/brief/engineering_update.test.ts — the Executive Engineering Update generator (P-BRIEF.1,
+// harness/brief/engineering_update.test.ts - the Executive Engineering Update generator (P-BRIEF.1,
 // ADR-0070). Pure parse → structured update → written brief + podcast script + the backend seam.
 
 import { test, expect, describe } from "bun:test";
@@ -94,7 +94,7 @@ describe("render + podcast seam", () => {
 
   test("the written brief has the three exec sections", () => {
     const md = renderEngineeringBrief(u);
-    expect(md).toContain("# Executive Engineering Update — demo");
+    expect(md).toContain("# Executive Engineering Update - demo");
     expect(md).toContain("## Load-bearing dependencies");
     expect(md).toContain("## Tech debt");
     expect(md).toContain("## Upcoming decisions");

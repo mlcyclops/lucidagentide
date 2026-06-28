@@ -7,10 +7,10 @@
 // inspector. Monaco is vendored locally (dev.ts serves node_modules → /vendor/monaco) and loaded
 // LAZILY via its AMD loader, so it never bloats app.js. P-IDE.4 shipped the read-only viewer; P-IDE.5
 // adds EDITING: an Edit/View toggle, a modified dot, "Save" (routed through the in-process scanner
-// gate via /api/editor/save — never a raw fs write), "Save As" for snippets, a file-conflict banner,
+// gate via /api/editor/save - never a raw fs write), "Save As" for snippets, a file-conflict banner,
 // "Send to chat", and a detached pop-out. Language-service WORKERS are still deferred (read-write
 // tokenization is main-thread; semantic IntelliSense under our strict `script-src 'self'` CSP is its
-// own hardening task — see ADR-0036). app.ts wires composer + save-path via setIdeHooks.
+// own hardening task - see ADR-0036). app.ts wires composer + save-path via setIdeHooks.
 
 import { $, el } from "./dom.ts";
 import { icon } from "./icons.ts";
@@ -40,7 +40,7 @@ export function isIdeOpen(): boolean { return !!panel?.classList.contains("open"
 
 /** Lazily load the vendored Monaco (AMD loader → editor.main), WITH semantic IntelliSense.
  *  P-IDE.6 (supersedes the ADR-0036 deferral): the TypeScript/JSON language services run in SAME-ORIGIN
- *  web workers, so completions, hovers, and error squiggles work — even in a locked-down browser. The
+ *  web workers, so completions, hovers, and error squiggles work - even in a locked-down browser. The
  *  trick: editor.main installs its own getWorker that wraps the worker in a `blob:` URL (which strict
  *  `worker-src 'self'` blocks); we override it after load with a worker served same-origin by dev.ts
  *  (`/vendor/monaco-worker.js`), which the CSP allows. See the req() callback below. */
@@ -49,8 +49,8 @@ function loadMonaco(): Promise<any> {
   if (monacoLoading) return monacoLoading;
   monacoLoading = new Promise((resolve, reject) => {
     // A failed first load must NOT poison every later attempt: clear the cached in-flight promise on
-    // failure so the next openIde() retries (a transient miss — e.g. opening before the /vendor/monaco
-    // route is up after a dev-server restart — otherwise sticks until a full reload).
+    // failure so the next openIde() retries (a transient miss - e.g. opening before the /vendor/monaco
+    // route is up after a dev-server restart - otherwise sticks until a full reload).
     const fail = (err: Error) => { monacoLoading = null; reject(err); };
     const loader = document.createElement("script");
     loader.src = `${MONACO_BASE}/loader.js`;
@@ -61,7 +61,7 @@ function loadMonaco(): Promise<any> {
         monaco = (self as any).monaco;
         // P-IDE.6: editor.main installs its OWN MonacoEnvironment.getWorker (which builds a blob: worker
         // the CSP blocks). Override it AFTER load with a SAME-ORIGIN bootstrap worker (served by dev.ts),
-        // which the `worker-src 'self'` CSP allows — this is what re-enables the language-service workers
+        // which the `worker-src 'self'` CSP allows - this is what re-enables the language-service workers
         // (and thus IntelliSense) in a locked-down browser. Monaco reads getWorker lazily per worker.
         try {
           const env = (self as any).MonacoEnvironment ?? ((self as any).MonacoEnvironment = {});
@@ -113,7 +113,7 @@ function ensurePanel(): HTMLElement {
       <span class="ide-lang" id="ideLang"></span>
       <span class="ide-tools">
         <button class="ide-tb" id="ideEdit" type="button" data-tip="Edit this file">${icon("sliders", 13)} Edit</button>
-        <button class="ide-tb" id="ideSave" type="button" data-tip="Save — scanned by the security gate before it writes" hidden>${icon("download", 13)} Save</button>
+        <button class="ide-tb" id="ideSave" type="button" data-tip="Save - scanned by the security gate before it writes" hidden>${icon("download", 13)} Save</button>
         <button class="ide-tb" id="ideSend" type="button" data-tip="Send this code to the chat composer">${icon("send", 13)}</button>
         <button class="ide-tb" id="idePop" type="button" data-tip="Pop out a detached copy">${icon("expand", 13)}</button>
       </span>
@@ -225,7 +225,7 @@ const SAVE_TIMEOUT = "__lucid_save_timeout__";
 async function save(overwrite: boolean): Promise<void> {
   if (!editor || doc.readOnly || saving) return;
   // Set the guard BEFORE the (async) Save-As picker so a second click can't open a second browser
-  // or a second save. The whole flow — picker + write — is covered by the finally below.
+  // or a second save. The whole flow - picker + write - is covered by the finally below.
   saving = true;
   const saveBtn = $("#ideSave") as HTMLButtonElement | null; if (saveBtn) saveBtn.disabled = true;
   try {
@@ -235,7 +235,7 @@ async function save(overwrite: boolean): Promise<void> {
   if (!path) {
     if (!hooks.pickSavePath) { setStatus("Save unavailable", "err"); return; }
     const picked = await hooks.pickSavePath(suggestedFilename());
-    if (!picked) { refreshDirty(); return; } // cancelled — restore the prior status
+    if (!picked) { refreshDirty(); return; } // cancelled - restore the prior status
     path = picked;
   }
   setStatus("Saving…");
@@ -245,7 +245,7 @@ async function save(overwrite: boolean): Promise<void> {
     bridge.editorSave({ path, content, baseSha: doc.baseSha, overwrite }),
     new Promise<typeof SAVE_TIMEOUT>((res) => setTimeout(() => res(SAVE_TIMEOUT), SAVE_TIMEOUT_MS)),
   ]);
-  if (r === SAVE_TIMEOUT) { setStatus("Save timed out", "err"); showBanner("Saving took too long — the scanner may be busy. Try again.", [{ label: "Retry", run: () => void save(overwrite) }, { label: "OK", run: () => refreshDirty() }], "danger"); return; }
+  if (r === SAVE_TIMEOUT) { setStatus("Save timed out", "err"); showBanner("Saving took too long - the scanner may be busy. Try again.", [{ label: "Retry", run: () => void save(overwrite) }, { label: "OK", run: () => refreshDirty() }], "danger"); return; }
   if (!r) { setStatus("Save failed", "err"); return; }
   if (r.conflict) {
     setStatus("Conflict", "err");
@@ -267,7 +267,7 @@ async function save(overwrite: boolean): Promise<void> {
   refreshDirty();
   setStatus("Saved ✓", "ok");
   } finally {
-    // Always release the guard + restore the button (don't touch the status — the branches set it).
+    // Always release the guard + restore the button (don't touch the status - the branches set it).
     saving = false;
     const b = $("#ideSave") as HTMLButtonElement | null; if (b) b.disabled = doc.readOnly || !doc.dirty;
   }
@@ -291,14 +291,14 @@ function sendToChat(): void {
   setStatus("Sent to chat", "ok");
 }
 
-// Detached COPY in a new window (read-only textarea — no scripts, so it's CSP-safe). Edits there are
+// Detached COPY in a new window (read-only textarea - no scripts, so it's CSP-safe). Edits there are
 // not synced back; it's for side-by-side reference / external copy.
 function popOut(): void {
   if (!editor) return;
   const w = window.open("", "_blank", "width=720,height=640");
   if (!w) { setStatus("Pop-out blocked", "err"); return; }
   const d = w.document;
-  d.title = `${doc.title} — detached copy`;
+  d.title = `${doc.title} - detached copy`;
   d.body.style.cssText = "margin:0;background:#0b0e14;color:#d6deeb;font:13px/1.5 ui-monospace,monospace";
   const bar = d.createElement("div");
   bar.style.cssText = "padding:8px 12px;border-bottom:1px solid #1c2333;color:#8aa;font-weight:600";

@@ -46,6 +46,11 @@ describe("aboutHtml", () => {
     expect(html).toContain("data-about-close");
   });
 
+  test("offers a 'Take the tour' replay control (ADR-0089)", () => {
+    expect(html).toContain("data-about-tour");
+    expect(html).toContain("Take the tour");
+  });
+
   test("escapes the interpolated version (no raw injection)", () => {
     const evil = aboutHtml('1<script>"&');
     expect(evil).not.toContain("<script>");
@@ -68,9 +73,10 @@ describe("logos + rail glyph match the icon family", () => {
     expect(l).toContain("about-pi");
   });
 
-  test("techLeadLogo renders the 187 emblem with a gradient", () => {
+  test("techLeadLogo renders the brand avatar image in an animated ring", () => {
     const t = techLeadLogo();
-    expect(t).toContain("187");
-    expect(t).toContain("tlGrad");
+    expect(t).toContain("assets/techlead187-avatar.png");
+    expect(t).toContain("about-tl-ring"); // the premium animated gradient ring
+    expect(t).toContain('alt=""'); // decorative (the brand name is adjacent text)
   });
 });

@@ -5,8 +5,8 @@
 //
 // P-GOAL.9 (ADR-0054): the /goal loop's After-Action Report + termination guards.
 // Self-contained (no omp/network): drives the PURE report core end-to-end, proving:
-//   A. the AAR renders every metric the user asked for — Tool Calls (by type), LOC (added/removed),
-//      Errors Recorded, and Websites Visited — with portable Mermaid graphs + a text scoreboard.
+//   A. the AAR renders every metric the user asked for - Tool Calls (by type), LOC (added/removed),
+//      Errors Recorded, and Websites Visited - with portable Mermaid graphs + a text scoreboard.
 //   B. the convergence-stall signature collapses a recurring blocker across rounds (#2 Infinite Fix Loop).
 //   C. the report degrades honestly (no invalid empty charts) when a run did nothing.
 // It writes a real report.md you can open to see the graphs render on GitHub / VS Code.
@@ -38,8 +38,8 @@ const metrics: LoopMetrics = {
   toolCalls: { shell: 14, edit: 9, read: 6, search: 4, "web-fetch": 2 },
   loc: { added: 213, removed: 88, files: 7 },
   errors: [
-    { iter: 1, detail: "shell: command failed — exit 1 (TypeError in token.ts)" },
-    { iter: 2, detail: "edit: rejected — file outside workspace" },
+    { iter: 1, detail: "shell: command failed - exit 1 (TypeError in token.ts)" },
+    { iter: 2, detail: "edit: rejected - file outside workspace" },
   ],
   blocks: [],
   websites: ["https://nodejs.org/api/test.html", "https://eslint.org/docs/latest/rules/no-unused-vars"],
@@ -52,7 +52,7 @@ const metrics: LoopMetrics = {
 };
 
 const md = renderLoopReport(metrics);
-console.log("== After-Action Report — required sections & graphs ==");
+console.log("== After-Action Report - required sections & graphs ==");
 for (const [label, needle] of [
   ["Tool Calls (by type) chart", "pie showData title Tool calls by type"],
   ["Tool Calls table", "| shell | 14 |"],

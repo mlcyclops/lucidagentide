@@ -6,7 +6,7 @@
 import { describe, expect, test } from "bun:test";
 import { exportActionPlan } from "./kg_export.ts";
 
-describe("#115 exportActionPlan — recoverable export location", () => {
+describe("#115 exportActionPlan - recoverable export location", () => {
   test("desktop app with a dest → Open folder + Copy path, and keep the toast up", () => {
     expect(exportActionPlan("C:/Users/me/LucidVault", true)).toEqual({ reveal: true, copy: true, persist: true });
   });

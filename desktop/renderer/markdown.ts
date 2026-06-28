@@ -20,7 +20,7 @@ marked.setOptions({ gfm: true, breaks: true });
 
 // ── LaTeX math (KaTeX, bundled offline) ──────────────────────────────────────
 // KaTeX is XSS-safe (it escapes its input; trust:false blocks \href etc.) and emits
-// HTML with INLINE STYLES that DOMPurify would otherwise strip — so we render math to
+// HTML with INLINE STYLES that DOMPurify would otherwise strip - so we render math to
 // HTML up front, swap it for a placeholder, run marked+DOMPurify on the rest, then
 // reinsert the trusted KaTeX HTML AFTER sanitizing. A small cache avoids re-rendering
 // the same expression on every streamed token.

@@ -8,7 +8,10 @@
 // agent turn. Same renderer in Electron (real omp ACP via window.lucid) and in
 // the browser dev server (simulated). Pure DOM, no framework.
 
-import { bridge, type ChatEvent, type ConfigOption, type GoalDial, type MemorySnapshot, type OmpCommand, type ProviderAuth, type SecuritySnapshot, type SessionInfo, type SessionList, type WorkspaceInfo } from "./bridge.ts";
+import { bridge, type ChatEvent, type ConfigOption, type GoalDial, type MemorySnapshot, type OmpCommand, type ProviderAuth, type SecuritySnapshot, type SessionInfo, type SessionList, type UserRole, type WorkspaceInfo } from "./bridge.ts";
+import { ROLE_META, USER_ROLE_LIST, coachHtml, roleDefaultTab, stepsForRole, type TourStep } from "./tour.ts";
+import { modCombo, modSymbol } from "./platform.ts";
+import { roleIcon } from "./role_icons.ts";
 import { cachedSessions, cachedTranscript, setCachedSessions, setCachedTranscript, transcriptSig } from "./swr_cache.ts";
 import { $, $$, accordion, el, fmtNum, gauge, spark, table } from "./dom.ts";
 import { ageStr, esc, fmtUSD, goodColor, loadColor } from "./format.ts";
@@ -27,7 +30,7 @@ import { INSTALLED_SKILLS, bumpSkillUsage, bundledSkillsByUsage, taskProforma } 
 import { CHECKER_TOKENS_PER_ITER, MAKER_TOKENS_PER_ITER, estimateGoalCost, estimateGoalTokens, formatTokens, formatUSD } from "../loop_estimate.ts";
 import { assumedCacheRate, priceFor } from "../model_pricing.ts";
 import { closeIde, openIde, setIdeExclusivity, setIdeHooks } from "./ide_panel.ts";
-// P-TPS.1 (ADR-0044): the shared output-token speedometer — same engine the omp
+// P-TPS.1 (ADR-0044): the shared output-token speedometer - same engine the omp
 // terminal adapter uses. Drives the HUD's live "tok out · tok/s" readout from the
 // streaming text/thinking deltas (output only; never the system prompt).
 import { TokenSpeedEngine } from "../../harness/metrics/token_speed.ts";
@@ -50,7 +53,7 @@ const state = {
   activeSkill: null as { command: string; name: string } | null, // P-IDE.2: active bundled skill
   liveUsage: null as { used: number; size: number; cost: number } | null,
   username: "" as string, // the "You" label on your messages (Settings → Profile)
-  email: "" as string, // corporate email — attribution identity (ADR-0030); prompted on first open
+  email: "" as string, // corporate email - attribution identity (ADR-0030); prompted on first open
   attribution: null as import("./bridge.ts").ProfileSettings["attribution"] | null, // identity + source (email|workstation)
   budgetWarned: new Set<string>(), // provider budgets we've already warned about this window
   workspace: null as WorkspaceInfo | null,
@@ -71,6 +74,8 @@ const state = {
   dev: null as import("./bridge.ts").DevView | null, // ADR-0009 Phase D logs snapshot
   mcpServers: [] as import("./bridge.ts").McpServerStatus[], // P-MCP.1 (ADR-0020)
   managed: null as import("./bridge.ts").ManagedPolicy | null, // ADR-0068 (P-ENT.1) enterprise locks
+  userRole: null as UserRole | null, // ADR-0088 (P-ROLE.1): chosen role; null until onboarding picks one
+  tourSeen: false, // ADR-0089 (P-ROLE.1b): first-run walkthrough already shown (finished or skipped)
 };
 const prettyModel = (v: string) => v.replace(/^anthropic\//, "");
 // Strip the redundant "· AskSage Gov" / "· Gov" suffix from a model's display name
@@ -116,11 +121,11 @@ function buildShell(): void {
       </button>
       <div class="tb-spacer"></div>
       <div class="zoom" role="group" aria-label="Text zoom">
-        <button id="zoomOut" data-tip="Zoom out|Ctrl −">${icon("minus", 15)}</button>
-        <span class="lvl" id="zoomLvl" data-tip="Reset zoom|Ctrl 0">100%</span>
-        <button id="zoomIn" data-tip="Zoom in|Ctrl +">${icon("plus", 15)}</button>
+        <button id="zoomOut" data-tip="Zoom out|${modSymbol("−")}">${icon("minus", 15)}</button>
+        <span class="lvl" id="zoomLvl" data-tip="Reset zoom|${modSymbol("0")}">100%</span>
+        <button id="zoomIn" data-tip="Zoom in|${modSymbol("+")}">${icon("plus", 15)}</button>
       </div>
-      <button class="model-badge" id="cmdkBtn" data-tip="Command palette|Ctrl / ⌘ K" data-tip-icon="command">${icon("command", 14)}<span>Commands</span></button>
+      <button class="model-badge" id="cmdkBtn" data-tip="Command palette|${modCombo("K")}" data-tip-icon="command">${icon("command", 14)}<span>Commands</span></button>
       <div class="win-ctrls">
         <button id="winMin" data-tip="Minimise">${icon("minus", 15)}</button>
         <button id="winMax" data-tip="Maximise">${icon("square", 13)}</button>
@@ -138,7 +143,7 @@ function buildShell(): void {
         <button class="rail-btn" id="railLogs" data-rail="dev" hidden data-tip="Logs|Read-only developer logs: telemetry, run lineage, transcripts, gate-block audit, AskSage tool-call diagnostics" data-tip-icon="logs">${icon("logs", 20)}</button>
         <div class="spacer"></div>
         <button class="rail-btn rail-about" id="railAbout" data-tip="About LUCID Agent IDE|Version, license & credits" data-tip-icon="info">${readmeMark()}</button>
-        <button class="rail-btn" id="railCmd" data-tip="Commands|Ctrl / ⌘ K" data-tip-icon="command">${icon("command", 20)}</button>
+        <button class="rail-btn" id="railCmd" data-tip="Commands|${modCombo("K")}" data-tip-icon="command">${icon("command", 20)}</button>
         <button class="rail-btn" data-rail="settings" data-tip="Settings" data-tip-icon="sliders">${icon("sliders", 20)}</button>
       </nav>
 
@@ -169,7 +174,7 @@ function buildShell(): void {
             <button class="ctool" id="ctThink" data-tip="Thinking depth|How hard the model reasons">${icon("bulb", 14)}<span id="ctThinkName">High</span>${icon("chevron", 11)}</button>
             <button class="ctool" id="ctPersona" data-tip="AskSage persona|Server-supplied role guidance - scanned before use" hidden>${icon("user", 14)}<span id="ctPersonaName">Persona</span>${icon("chevron", 11)}</button>
             <button class="ctool" id="ctSkill" data-tip="Skills|Built-in skills, /task delegation, and project skills" hidden>${icon("bolt", 14)}<span>Skills</span>${icon("chevron", 11)}</button>
-            <span class="ctool-hint"><span class="kh"><kbd>↵</kbd> send</span><span class="kh"><kbd>⇧↵</kbd> newline</span><span class="kh"><kbd>⌘K</kbd> commands</span></span>
+            <span class="ctool-hint"><span class="kh"><kbd>↵</kbd> send</span><span class="kh"><kbd>⇧↵</kbd> newline</span><span class="kh"><kbd>${modCombo("K")}</kbd> commands</span></span>
           </div>
         </div>
       </main>
@@ -205,9 +210,9 @@ function buildShell(): void {
             <div class="seg kg-lens" data-kg-lens>
               <button class="on" data-lens="kind">Kind</button><button data-lens="trust">Trust</button>
             </div>
-            <button class="btn-mini" id="kgRelate" data-tip="Relate nodes|Turn on relate mode, then drag one node onto another — or click two or more nodes and press Relate — to add your OWN relationships. They're saved to your private graph (first-party, never sent to be scanned as instructions).">${icon("git", 13)} Relate</button>
+            <button class="btn-mini" id="kgRelate" data-tip="Relate nodes|Turn on relate mode, then drag one node onto another - or click two or more nodes and press Relate - to add your OWN relationships. They're saved to your private graph (first-party, never sent to be scanned as instructions).">${icon("git", 13)} Relate</button>
             <label class="kg-ai" data-tip="AI extraction|Use the model to pull richer facts + real relationships from each message, instead of the fast offline heuristic. Slower and uses model quota; capped at 500 messages per import. Leave off for a free, instant pass."><input type="checkbox" id="kgImportAI"/> AI</label>
-            <button class="btn-mini" id="kgImport" data-tip="Import chat history|Bring in a ChatGPT, Claude, or Gemini data export to seed your graph. Easiest: just pick the unzipped export FOLDER (a modern ChatGPT export has no single conversations.json — it ships conversations-000.json, -001.json … and we merge them for you) — or point at the .zip / conversations.json / MyActivity.json directly. Every message is scanned by the security gate before anything is learned; only your own messages teach the profile.">${icon("download", 13)} Import history</button>
+            <button class="btn-mini" id="kgImport" data-tip="Import chat history|Bring in a ChatGPT, Claude, or Gemini data export to seed your graph. Easiest: just pick the unzipped export FOLDER (a modern ChatGPT export has no single conversations.json - it ships conversations-000.json, -001.json … and we merge them for you) - or point at the .zip / conversations.json / MyActivity.json directly. Every message is scanned by the security gate before anything is learned; only your own messages teach the profile.">${icon("download", 13)} Import history</button>
             <button class="btn-mini" id="kgExport" data-tip="Export Obsidian vault|Decrypt and write your Personal + Work knowledge to a portable Obsidian vault (notes, [[wikilinks]], escaped). CUI is excluded by design. The export is audited.">${icon("folder", 13)} Export vault</button>
             <button class="btn-mini danger" id="kgCui" data-tip="CUI archive · National Archives|Export ONLY the CUI compartment into a CUI-marked, records-managed package with a SHA-256 manifest (32 CFR 2002 · NARA). For archive/records requirements. Audited.">${icon("shield", 13)} CUI archive</button>
             <button class="set-close" id="kgClose" data-tip="Close">${icon("close", 16)}</button>
@@ -334,12 +339,12 @@ function addMessage(role: "user" | "assistant", text: string): HTMLElement {
 interface MsgNode extends HTMLElement { _md?: string }
 
 // ── P-IMP.2 (ADR-0035): chat-export import onboarding ────────────────────────────────
-// Mirrors MODEL_IMPORT_CAP in desktop/personal.ts — AI mode sends at most this many user messages
+// Mirrors MODEL_IMPORT_CAP in desktop/personal.ts - AI mode sends at most this many user messages
 // to the model (one sequential call each), so the warning's token/time math caps here too.
 const AI_IMPORT_CAP = 500;
 /** Rough AI-extraction cost for the pre-import warning. Per capped message: ~200-token extract
  *  prompt + the message (chars/4) in, ~100-token JSON out; calls run sequentially at ~2.5 s each.
- *  Deliberately approximate — it exists to set expectations before a paid, minutes-long run. */
+ *  Deliberately approximate - it exists to set expectations before a paid, minutes-long run. */
 function estimateAiImport(est: import("./bridge.ts").PersonalImportEstimate): { tokens: number; secs: number; overCap: boolean } {
   const msgs = est.userMessages ?? 0;
   const capped = Math.min(msgs, AI_IMPORT_CAP);
@@ -436,7 +441,7 @@ function addEvent(html: string): HTMLElement {
 // stays released until they come back down - so re-reading mid-stream is never yanked.
 // Tight stick window: we only auto-FOLLOW while the user is essentially parked at the bottom.
 // Slow output advances < STICK_PX per frame, so it keeps pace; a fast burst grows the page by more
-// than STICK_PX between frames, which releases the follow — and the jump-down button (below) lets the
+// than STICK_PX between frames, which releases the follow - and the jump-down button (below) lets the
 // reader catch up a page at a time instead of being yanked. That's the behaviour the user asked for.
 const STICK_PX = 72;
 let scrollPending = false; // a follow-frame is already queued
@@ -501,7 +506,7 @@ function classifyIntent(text: string): Intent {
   return "general";
 }
 // Phase lines by intent. `warm` = before anything streams; `think` = during reasoning; `write` = while
-// the answer streams. Keep them upbeat but honest — they describe the kind of work, not fake specifics.
+// the answer streams. Keep them upbeat but honest - they describe the kind of work, not fake specifics.
 const PHASE_LINES: Record<"warm" | "think" | "write", Record<Intent, string[]>> = {
   warm: {
     code: ["Cooking up something great…", "Spinning up the build…", "Sketching the approach…", "Rolling up my sleeves…"],
@@ -692,7 +697,7 @@ function createPermissionCard(e: Extract<ChatEvent, { type: "permission" }>): { 
     // P-EXEC.1 (ADR-0066): the agent wants to run a shell/eval command. Docked above the composer like
     // egress. Show the command, the program key + why it's risky, and the per-command choices. A
     // catastrophic command (rm -rf, sudo, pipe-to-shell, …) is styled as high-risk and offers no
-    // "always allow" — only once / this-turn / block.
+    // "always allow" - only once / this-turn / block.
     const cmd = e.detail ?? "";
     const exCls = (k?: string) => k === "reject" ? "eg-block" : k === "danger" ? "eg-danger" : "eg-allow";
     const btns = e.options.map((o) => `<button class="perm-btn ${exCls(o.kind)}" data-oid="${esc(o.optionId)}">${esc(o.name)}</button>`).join("");
@@ -800,7 +805,7 @@ async function send(): Promise<void> {
   const text = ta.value.trim();
   if (!text) return;
   // P-ACP.4: a turn is already running → pre-stage this prompt instead of dropping it. It auto-sends
-  // when the current turn ends (naturally or via Stop). One slot — a newer entry replaces the old.
+  // when the current turn ends (naturally or via Stop). One slot - a newer entry replaces the old.
   if (state.streaming) { state.queued = text; ta.value = ""; autosize(ta); renderQueued(); setSendEnabled(); return; }
   // First message of the app session: auto-collapse the sessions panel (Claude-Code style) so the
   // chat takes the focus - the nav hamburger (#sideToggle) reopens history on demand. Done once so
@@ -836,7 +841,7 @@ async function send(): Promise<void> {
   let phase = pickLine("warm", intent), sawTool = false, tok = 0, cost = 0;
   // P-TPS.1 (ADR-0044): output-token speedometer for THIS turn. startTTFT now (at
   // submit), start() so deltas count; the first content delta calls stopTTFT() to
-  // freeze TTFT and align the rate clock to first-token. Estimate strategy — ACP
+  // freeze TTFT and align the rate clock to first-token. Estimate strategy - ACP
   // deltas are text chunks, and the desktop has no per-delta provider usage
   // (usage_update is CONTEXT fill, not per-turn output), so we approximate locally.
   const tps = new TokenSpeedEngine({ countStrategy: "estimate" });
@@ -855,16 +860,16 @@ async function send(): Promise<void> {
   const paintHud = () => {
     ($(".hud-t", hud) as HTMLElement).textContent = fmtClock(Date.now() - t0);
     if (phaseEl.textContent !== phase) phaseEl.textContent = phase;
-    // The streaming OUTPUT count — what the model is generating right now, with no
+    // The streaming OUTPUT count - what the model is generating right now, with no
     // system prompt / cached prefix in it (the user's "minus the whole prompt" ask).
     const out = tps.tokenCount;
     // averageTps (not the windowed tps): ACP delivers reasoning/text in big lumps,
     // so the running average reads steady where a windowed rate would strobe.
     if (out > 0) { const r = tps.averageTps; tpsEl.textContent = `· ${fmtNum(out)} tokens out${r > 0 ? ` · ${r.toFixed(1)} tokens/s` : ""}`; }
     else tpsEl.textContent = "";
-    // The CONTEXT figure (window fill + turn cost) genuinely includes the prompt —
+    // The CONTEXT figure (window fill + turn cost) genuinely includes the prompt -
     // labelled "context" so it's never mistaken for the per-turn output above. Cost
-    // is shown to the cent ($0.00) — the sub-cent precision read as noise.
+    // is shown to the cent ($0.00) - the sub-cent precision read as noise.
     ($(".hud-meta", hud) as HTMLElement).textContent = tok ? `· ${fmtNum(tok)} context · ~$${cost.toFixed(2)}` : "";
   };
   phaseEl.textContent = phase;
@@ -890,7 +895,7 @@ async function send(): Promise<void> {
       // First reasoning chunk: spin up the live thinking block above the answer.
       if (!reasoning) { reasoning = createReasoning(); streamEl.before(reasoning.el); }
       if (!sawTool) setPhase(thinkLine);
-      countDelta(e.text); // thinking tokens ARE output — count them in the readout
+      countDelta(e.text); // thinking tokens ARE output - count them in the readout
       reasoning.push(e.text); paintHud(); scrollChat();
     }
     else if (e.type === "tool") {
@@ -925,7 +930,7 @@ async function send(): Promise<void> {
     if (state.streaming) { streamEl.innerHTML = renderMarkdown(buf); enhanceCodeBlocks(streamEl); finishHud(); state.streaming = false; setSendEnabled(); } else { finishHud(); }
     void renderSessions(); void refreshBudget(false); void syncMode();
     scheduleKnowledgeRefresh(); // #54 follow-up: new facts appear in the open KG without close/reopen
-    // P-ACP.4: the turn ended — fire off any pre-staged prompt now (the composer is idle again).
+    // P-ACP.4: the turn ended - fire off any pre-staged prompt now (the composer is idle again).
     if (state.queued) { const q = state.queued; state.queued = null; renderQueued(); const ta2 = $("#input") as HTMLTextAreaElement; ta2.value = q; setSendEnabled(); void send(); }
   }
 }
@@ -992,13 +997,13 @@ function renderQueued(): void {
     chip = el(`<div id="queuedChip" class="queued-chip"></div>`);
     row.before(chip); // sits above the composer row, inside .composer-wrap
   }
-  // P-IDE.1d: compact, subdued, right-aligned pill — a small "Queued" tag, the prompt preview, and a
+  // P-IDE.1d: compact, subdued, right-aligned pill - a small "Queued" tag, the prompt preview, and a
   // delete (✕) that removes the pre-staged prompt before it sends.
   chip.innerHTML = `<div class="q-pill" data-tip="Sends automatically when the current turn ends"><span class="q-label">Queued</span><span class="q-text"></span><button class="q-cancel" data-tip="Delete queued prompt">${icon("close", 12)}</button></div>`;
   ($(".q-text", chip) as HTMLElement).textContent = state.queued.slice(0, 90);
   ($(".q-cancel", chip) as HTMLElement).addEventListener("click", () => { state.queued = null; renderQueued(); ($("#input") as HTMLTextAreaElement)?.focus(); });
 }
-/** P-ACP.4: Stop — interrupt the running turn. omp's session/cancel ends the turn, so the streaming
+/** P-ACP.4: Stop - interrupt the running turn. omp's session/cancel ends the turn, so the streaming
  *  `done`/finally path flips `streaming` off and fires any pre-staged prompt. */
 async function stopTurn(): Promise<void> {
   if (!state.streaming) return;
@@ -1020,7 +1025,7 @@ function focusInspector(tab: Tab): void {
   closeSettings();
   state.inspectorTab = tab;
   // Expanding from the collapsed metrics rail on an EXPLICIT tab click: clear the rail state directly.
-  // Do NOT route through setInspectorRail() here — its ADR-0021 active-blocks override would hijack the
+  // Do NOT route through setInspectorRail() here - its ADR-0021 active-blocks override would hijack the
   // chosen tab (e.g. clicking Logs/Memory while blocks exist would snap to Security). The passive expand
   // gesture (#railExpand) still calls setInspectorRail(false), so that override is preserved there.
   if (state.inspectorRail) { state.inspectorRail = false; $("#inspector")?.classList.remove("rail"); }
@@ -1131,7 +1136,7 @@ function provCard(p: ProviderAuth): string {
         ${p.keySet ? `<button class="btn-mini" data-clearkey="${esc(p.env)}">Clear</button>` : ""}
       </div>${hint}</div></div>`;
 }
-// AskSage monthly tokens — fully dynamic from the Civ API (no manual limit). `used` is this
+// AskSage monthly tokens - fully dynamic from the Civ API (no manual limit). `used` is this
 // account's usage; `remaining` is what's left accounting for BOTH your and your org's caps; the
 // real allowance is used + remaining. Refreshed on open + the 5-min cadence (no boxes to set).
 function quotaDisplay(t: typeof state.asksageTokens): string {
@@ -1205,8 +1210,8 @@ function emailDomainOk(em: string): boolean {
   const e = em.trim().toLowerCase();
   return domains.some((d) => e.endsWith("@" + d.toLowerCase().replace(/^@/, "")));
 }
-function promptForEmailIfMissing(): void {
-  if (state.attribution?.decided || document.getElementById("emailGate")) return;
+function promptForEmailIfMissing(onDone?: () => void): void {
+  if (state.attribution?.decided || document.getElementById("emailGate")) { onDone?.(); return; }
   const a = state.attribution;
   const ws = a?.workstation ?? "this workstation";
   const allowSkip = a ? a.allowSkip : true;          // managed policy can disable skipping
@@ -1237,18 +1242,153 @@ function promptForEmailIfMissing(): void {
     if (!isValidEmail(em)) { err.textContent = `Enter a valid email address${allowSkip ? ", or Skip to use this workstation" : ""}.`; err.hidden = false; input.focus(); return; }
     if (!emailDomainOk(em)) { err.textContent = `Use your ${org} email (${domains.map((d) => "@" + d).join(", ")}).`; err.hidden = false; input.focus(); return; }
     apply(await bridge.saveProfile({ email: em }).catch(() => null));
-    if (state.attribution?.source === "email") showToast({ title: "Email saved", desc: `Code activity will be attributed to ${em}.`, timeout: 2600 });
-    else { err.textContent = "That email was rejected by your organization's policy."; err.hidden = false; promptForEmailIfMissing(); }
+    if (state.attribution?.source === "email") { showToast({ title: "Email saved", desc: `Code activity will be attributed to ${em}.`, timeout: 2600 }); onDone?.(); }
+    else { err.textContent = "That email was rejected by your organization's policy."; err.hidden = false; promptForEmailIfMissing(onDone); }
   };
   const skip = async () => {
     apply(await bridge.skipEmail().catch(() => null));
     showToast({ title: "Using workstation name", desc: `Code activity will be attributed to ${state.attribution?.identity ?? ws}. Add an email anytime in Settings.`, timeout: 3200 });
+    onDone?.();
   };
   $("#emailGateSave", ov)!.addEventListener("click", () => void save());
   $("#emailGateSkip", ov)?.addEventListener("click", () => void skip());
   input.addEventListener("input", () => { err.hidden = true; });
   input.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); void save(); } });
   setTimeout(() => input.focus(), 30);
+}
+
+// ── ADR-0088/0089 (P-ROLE.1/.1b): role onboarding + first-run guided walkthrough ──────────────
+// First-login flow as a chain: pick a role (if unchosen) → email/attribution → the tour. Each step
+// is cosmetic - none gate or weaken the security path (invariant #3).
+function runOnboarding(): void {
+  const afterEmail = () => { if (!state.tourSeen) startTour(state.userRole ?? "developer"); };
+  if (state.userRole) { promptForEmailIfMissing(afterEmail); return; }
+  void promptForRole().then(() => promptForEmailIfMissing(afterEmail));
+}
+
+// First-run role picker - four cards in the model-card idiom. Resolves once a role is chosen (or
+// the user skips, which defaults to "developer", the safe full-surface role).
+function promptForRole(): Promise<void> {
+  return new Promise((resolve) => {
+    if (state.userRole || document.getElementById("roleGate")) { resolve(); return; }
+    const cards = USER_ROLE_LIST.map((id) => {
+      const m = ROLE_META[id];
+      return `<button class="role-card" type="button" data-role="${esc(id)}">
+        <span class="role-ic r-${esc(id)}">${roleIcon(id)}</span>
+        <span class="role-tx"><b>${esc(m.label)}</b><span class="role-lands">Lands on ${esc(m.lands)}</span><span class="role-blurb">${esc(m.blurb)}</span></span>
+      </button>`;
+    }).join("");
+    const ov = el(`<div id="roleGate" class="modal-ov">
+      <div class="modal role-modal" role="dialog" aria-modal="true" aria-labelledby="roleGateTitle">
+        <div class="modal-icon">${icon("spark", 24)}</div>
+        <h2 class="modal-title" id="roleGateTitle">Welcome - what's your role?</h2>
+        <p class="modal-desc">This tailors what you see first. Nothing is hidden for good - every panel stays one ${modCombo("K")} away, and a security block always surfaces. Change it any time in Settings.</p>
+        <div class="role-grid">${cards}</div>
+        <div class="modal-actions"><button class="btn-mini" id="roleGateSkip" type="button">Skip - use Developer</button></div>
+      </div></div>`);
+    document.body.appendChild(ov);
+    const finish = async (role: UserRole) => {
+      state.userRole = role;
+      applyRoleDefault(role);
+      ov.remove();
+      await bridge.saveRole(role).catch(() => null);
+      if (state.settingsOpen) fillSec("profile", secProfile({ username: state.username, email: state.email, attribution: state.attribution ?? undefined }));
+      resolve();
+    };
+    ov.addEventListener("click", (ev) => {
+      const t = ev.target as HTMLElement;
+      const card = t.closest("[data-role]") as HTMLElement | null;
+      if (card?.dataset.role) { void finish(card.dataset.role as UserRole); return; }
+      if (t.closest("#roleGateSkip")) void finish("developer");
+    });
+  });
+}
+
+// Apply a role's CALM default surfacing (ADR-0088): the landing inspector tab. Cosmetic; ADR-0021's
+// active-block override still wins. The full per-role chrome presets are P-ROLE.2.
+function applyRoleDefault(role: UserRole): void {
+  if (hasActiveBlocks()) return; // never override a live security surface
+  const tab = roleDefaultTab(role);
+  if (state.inspectorRail) { state.inspectorTab = tab; return; }
+  if (state.inspectorTab !== tab) focusInspector(tab);
+}
+
+// ── ADR-0089 (P-ROLE.1b): the first-run guided walkthrough engine ─────────────────────────────
+// A coachmark tour in the model hover-card idiom: a dimmed spotlight on each live target + an
+// anchored premium card with Back/Next/Skip. Dismissable (Esc / click-away). Skip OR finish marks
+// it seen so it never replays uninvited; the About "Take the tour" button replays on demand.
+let tourActive = false;
+function startTour(role: UserRole): void {
+  if (tourActive) return;
+  const steps = stepsForRole(role).filter((s: TourStep) => !s.target || document.querySelector(s.target));
+  if (!steps.length) return;
+  tourActive = true;
+  let idx = 0;
+
+  const catcher = el(`<div class="coach-catch"></div>`);
+  const spot = el(`<div class="coach-spot" hidden></div>`);
+  const card = el(`<div class="coach-card" role="dialog" aria-modal="true" aria-label="Guided tour"></div>`);
+  document.body.append(catcher, spot, card);
+
+  const end = (reason: "done" | "skip") => {
+    tourActive = false;
+    document.removeEventListener("keydown", onKey, true);
+    window.removeEventListener("resize", place);
+    catcher.remove(); spot.remove(); card.remove();
+    if (!state.tourSeen) { state.tourSeen = true; void bridge.setTourSeen(true).catch(() => null); }
+    if (reason === "skip") showToast({ title: "Tour skipped", desc: "Replay it any time from About.", timeout: 2800 });
+  };
+
+  const place = () => {
+    const step = steps[idx]!;
+    card.innerHTML = coachHtml(step, idx, steps.length);
+    const target = step.target ? (document.querySelector(step.target) as HTMLElement | null) : null;
+    const cr = card.getBoundingClientRect();
+    if (!target) {
+      spot.hidden = true;
+      card.style.left = `${Math.round((window.innerWidth - cr.width) / 2)}px`;
+      card.style.top = `${Math.round((window.innerHeight - cr.height) / 2)}px`;
+    } else {
+      const r = target.getBoundingClientRect();
+      const pad = 6;
+      spot.hidden = false;
+      spot.style.left = `${Math.round(r.left - pad)}px`;
+      spot.style.top = `${Math.round(r.top - pad)}px`;
+      spot.style.width = `${Math.round(r.width + pad * 2)}px`;
+      spot.style.height = `${Math.round(r.height + pad * 2)}px`;
+      // Place the card beside the target (prefer the step's side; flip on overflow) - same idea as showModelTip.
+      const wantLeft = step.side === "left";
+      let x = wantLeft ? r.left - cr.width - 14 : r.right + 14;
+      if (!wantLeft && x + cr.width > window.innerWidth - 8) x = r.left - cr.width - 14;
+      if (x < 8) x = Math.min(r.right + 14, window.innerWidth - cr.width - 8);
+      x = Math.max(8, x);
+      const y = Math.max(8, Math.min(r.top - 4, window.innerHeight - cr.height - 8));
+      card.style.left = `${Math.round(x)}px`;
+      card.style.top = `${Math.round(y)}px`;
+    }
+    requestAnimationFrame(() => card.classList.add("show"));
+  };
+
+  const go = (n: number) => { if (n < 0 || n >= steps.length) return; idx = n; card.classList.remove("show"); place(); };
+  const next = () => (idx >= steps.length - 1 ? end("done") : go(idx + 1));
+
+  const onKey = (ev: KeyboardEvent) => {
+    if (!tourActive) return;
+    if (ev.key === "Escape") { ev.preventDefault(); ev.stopPropagation(); end("skip"); }
+    else if (ev.key === "Enter" || ev.key === "ArrowRight") { ev.preventDefault(); next(); }
+    else if (ev.key === "ArrowLeft") { ev.preventDefault(); go(idx - 1); }
+  };
+
+  card.addEventListener("click", (ev) => {
+    const t = ev.target as HTMLElement;
+    if (t.closest("[data-coach-skip]")) end("skip");
+    else if (t.closest("[data-coach-back]")) go(idx - 1);
+    else if (t.closest("[data-coach-next]")) next();
+  });
+  catcher.addEventListener("click", () => end("skip"));
+  document.addEventListener("keydown", onKey, true);
+  window.addEventListener("resize", place);
+  place();
 }
 
 function secProfile(s: { username: string; email?: string; attribution?: import("./bridge.ts").ProfileSettings["attribution"] } | null): string {
@@ -1259,10 +1399,17 @@ function secProfile(s: { username: string; email?: string; attribution?: import(
   const idLine = a
     ? `<div class="set-note ${a.source === "email" ? "ok" : ""}">${icon(a.source === "email" ? "check" : "info", 12)} Code activity is attributed to <b>${esc(a.identity)}</b>${a.source === "workstation" ? " (this workstation - add an email above to attribute to you)" : ""}.</div>`
     : `<div class="set-note">${icon("info", 12)} Your email tags how much code each model wrote, per repo (ADR-0030). Stored on this machine only.</div>`;
+  const role = state.userRole ?? "developer";
+  const roleSeg = USER_ROLE_LIST.map((id) =>
+    `<button class="role-seg${id === role ? " on" : ""}" type="button" data-role-pick="${esc(id)}" data-tip="${esc(ROLE_META[id].label + " · " + ROLE_META[id].blurb)}">${icon(ROLE_META[id].icon, 13)}<span>${esc(ROLE_META[id].label)}</span></button>`).join("");
+  const roleRow = `<div class="set-sub">Role</div>
+    <div class="role-seg-row">${roleSeg}</div>
+    <div class="set-note">${icon("info", 12)} Tailors what you see first - cosmetic only; every panel stays reachable. <button class="btn-link" id="replayTour" type="button">Take the tour</button></div>`;
   return setCard("profile", "Profile", "", `<div class="prov-row"><input id="setUsername" class="prov-key" placeholder="Your name" value="${esc(s?.username ?? "")}" /></div>
     <div class="prov-row"><input id="setEmail" class="prov-key" type="email" inputmode="email" autocomplete="email" placeholder="Corporate email (optional - for code-activity attribution)" value="${esc(s?.email ?? "")}" />
       <button class="btn-mini ok" id="saveUsername">${icon("check", 12)} Save</button></div>
-    ${managedLine}${idLine}`, false);
+    ${managedLine}${idLine}
+    ${roleRow}`, false);
 }
 function secProviders(auth: import("./bridge.ts").AuthStatus | null): string {
   return setCard("providers", "Providers", "key or OAuth · majors first",
@@ -1270,7 +1417,7 @@ function secProviders(auth: import("./bridge.ts").AuthStatus | null): string {
 }
 // P-IDE.1c (ADR-0029): data-sovereignty unlock for China-origin models. Renders ONLY when omp actually
 // exposes such a model (else an empty, preserved anchor). Hidden-by-default; the user must type
-// ACKNOWLEDGE after the warning to list them — they route outside U.S. jurisdiction (no data sovereignty).
+// ACKNOWLEDGE after the warning to list them - they route outside U.S. jurisdiction (no data sovereignty).
 function secSovereignty(): string {
   const model = state.config.find((c) => c.id === "model");
   const china = (model?.options ?? []).filter((o) => isChinaModel(o.value));
@@ -1301,7 +1448,7 @@ function secAsksage(a: typeof state.asksage, datasets: string[] | null): string 
     ${a?.configured ? `<div class="set-note ok">${icon("check", 12)} Gov gateway active - AskSage models appear in the picker, with monthly-usage and scanned personas.</div>` : `<div class="set-note">${icon("info", 12)} Add an <code>ASKSAGE_API_KEY</code> in Providers to enable gov models, usage, and personas.</div>`}`;
   return setCard("asksage", "AskSage gov gateway", "accredited proxy", body, true);
 }
-// The AskSage Monthly-tokens bar, rendered into the `asksageQuota` slot ABOVE Providers — but only
+// The AskSage Monthly-tokens bar, rendered into the `asksageQuota` slot ABOVE Providers - but only
 // once the gov gateway is configured (an ASKSAGE_API_KEY is saved); otherwise an empty placeholder so
 // the slot keeps its position for a later config. Wrapped in its own data-sec so fillSec() can re-swap
 // it (spinner → real numbers) without disturbing the Providers section below it.
@@ -1364,7 +1511,7 @@ function settingsShell(): string {
     // no fetch wait; the first /api/settings call pays a ~0.6s cold cost that made this lag).
     secProfile({ username: state.username, email: state.email, attribution: state.attribution ?? undefined }),
     setSkel("personal", "Personalization", "private · encrypted · opt-in", true),
-    `<div data-sec="asksageQuota"></div>`, // AskSage Monthly-tokens bar — sits directly above Providers, ONLY when the gov gateway is configured (filled in hydrateSettings)
+    `<div data-sec="asksageQuota"></div>`, // AskSage Monthly-tokens bar - sits directly above Providers, ONLY when the gov gateway is configured (filled in hydrateSettings)
     setSkel("providers", "Providers", "key or OAuth · majors first"),
     setSkel("asksage", "AskSage gov gateway", "accredited proxy", true),
     `<div data-sec="sovereignty"></div>`, // P-IDE.1c: China-origin unlock (renders only when such models exist)
@@ -1517,7 +1664,7 @@ function closeSettings(): void {
   $('.rail-btn[data-rail="chat"]')?.classList.add("active");
 }
 
-// P-IMP.2 (ADR-0035): open Settings with the Personalization section expanded + scrolled into view —
+// P-IMP.2 (ADR-0035): open Settings with the Personalization section expanded + scrolled into view -
 // the nudge CTA, and the entry point for a brand-new user to enable + set a passphrase.
 function openPersonalizationSettings(): void {
   SET_OPEN.add("personal");
@@ -1557,7 +1704,7 @@ let kgLens: "kind" | "trust" = "kind";
 let kgOpen = false;
 let kgSelId: string | null = null;
 let kgSig = ""; // signature of the last-rendered graph, to skip no-op live refreshes
-const forgettingIds = new Set<string>(); // in-flight "forget" fact ids — de-dups mashed clicks (#113)
+const forgettingIds = new Set<string>(); // in-flight "forget" fact ids - de-dups mashed clicks (#113)
 // P-KG-REL.1 (#109): manual relationship authoring state.
 let kgRelateMode = false;
 let kgRelatePicks: string[] = []; // ordered multi-select pick set (for the "Relate" action)
@@ -1771,7 +1918,7 @@ const kindTint = (k: string): string => {
 };
 
 // #115: a successful export used to flash its location for a few seconds, then it was gone. Keep the toast
-// up (when there's a real path) and offer Copy path — plus Open folder in the desktop app — so the
+// up (when there's a real path) and offer Copy path - plus Open folder in the desktop app - so the
 // destination is recoverable. With no path (export failed before writing) it auto-dismisses as before.
 function showExportToast(title: string, desc: string, dest: string | undefined): void {
   const plan = exportActionPlan(dest, bridge.canRevealPath());
@@ -1968,7 +2115,7 @@ function securityHtml(d: SecuritySnapshot | null): string {
 }
 
 // ── ADR-0009 Phase D: developer Logs view (read-only; metadata only) ──────────────
-// Format an ISO/epoch timestamp as US Eastern time (auto EST/EDT) — "Jun 24, 3:45 PM EDT".
+// Format an ISO/epoch timestamp as US Eastern time (auto EST/EDT) - "Jun 24, 3:45 PM EDT".
 function estTime(ts: string | number | undefined | null): string {
   if (ts === undefined || ts === null || ts === "") return "";
   const d = new Date(ts);
@@ -2059,7 +2206,7 @@ function memoryHtml(d: MemorySnapshot | null): string {
     h += `<div class="ledger-peek">${peek}</div>`;
     if (rest) h += accordion("mem.ledger", "Cost & savings ledger", `${led.models.length - 1} more models`, rest, OPEN.has("mem.ledger"), `${led.models.length - 1}`);
   }
-  // P-LOC.2 (ADR-0031): the AI-authored code counterpart to the cost ledger — lines the AI wrote,
+  // P-LOC.2 (ADR-0031): the AI-authored code counterpart to the cost ledger - lines the AI wrote,
   // per model/repo, attributed to the identity. Counted at the gate (ADR-0031), not git (ADR-0030).
   if (d?.aiLoc) h += accordion("mem.ailoc", "AI-authored code", `+${fmtNum(d.aiLoc.totals.added)} / −${fmtNum(d.aiLoc.totals.removed)} lines`, aiLocBody(d.aiLoc), OPEN.has("mem.ailoc"), `${d.aiLoc.totals.models}`);
   if (!d) return h || `<div class="empty">No omp session yet - launch omp and send a message.</div>`;
@@ -2099,7 +2246,7 @@ function memoryHtml(d: MemorySnapshot | null): string {
   return h;
 }
 
-// P-LOC.2 (ADR-0031): AI-authored code body — a summary card + a per-model table + a per-repo/
+// P-LOC.2 (ADR-0031): AI-authored code body - a summary card + a per-model table + a per-repo/
 // identity breakdown. Lines are counted at the security gate from omp's own applied diff (ADR-0031),
 // so this is honest "the AI wrote these lines" attribution, distinct from git's total repo churn.
 function aiLocBody(a: import("./bridge.ts").AiLocSummary): string {
@@ -2136,7 +2283,7 @@ function ledgerBody(led: import("./bridge.ts").UsageLedger): string {
   return peek + (rest ?? "");
 }
 // ADR-0030 P-CODE.1: one ledger-card row for this month's git workspace activity.
-// Honest label — this is REPO activity (all commits), NOT AI authorship (AGENTS.md #10).
+// Honest label - this is REPO activity (all commits), NOT AI authorship (AGENTS.md #10).
 function codeActivityRow(): string {
   const ca = state.codeActivity;
   if (!ca || ca.totals.files === 0) return ""; // fail-closed: no live git data → render nothing
@@ -2258,7 +2405,7 @@ async function refresh(): Promise<void> {
   try {
     const [sec, mem, led, code] = await Promise.all([bridge.security(), bridge.memory(), bridge.usage(), bridge.codeActivity()]);
     state.security = sec; state.memory = mem; state.ledger = led; state.codeActivity = code;
-    // Keep the developer Logs panel live (AskSage tool calls, transcripts) while it's the open tab —
+    // Keep the developer Logs panel live (AskSage tool calls, transcripts) while it's the open tab -
     // otherwise its data only refreshed on tab-switch and looked stale mid-turn.
     if (state.developerMode && state.inspectorTab === "dev") { try { state.dev = await bridge.dev(); } catch { /* keep last */ } }
     checkBudgetWarning(mem?.budgets); // early heads-up before a provider budget runs out
@@ -2461,7 +2608,7 @@ function openRagPersonaDropdown(anchor: HTMLElement): void {
   });
 }
 
-// P-IDE.2 (ADR-0029): skills come from TWO sources behind one picker — BUNDLED (skills.ts, trusted
+// P-IDE.2 (ADR-0029): skills come from TWO sources behind one picker - BUNDLED (skills.ts, trusted
 // guidance delivered in the user turn) and PROJECT (omp-discovered, invoked via /skill:<name>). The
 // Skills button is always available (bundled skills always exist).
 async function loadSkills(): Promise<void> {
@@ -2483,7 +2630,7 @@ function useSkill(name: string): void {
   void bridge.skillActivated(name, name, "project"); // P-IDE.3 telemetry (metadata only)
   showToast({ title: `Skill: ${name}`, desc: "Added to your message - type your request and send.", actions: [{ label: "OK" }], timeout: 2400 });
 }
-/** Bundled skill: activate it — its trusted guidance rides the next user turn until cleared. */
+/** Bundled skill: activate it - its trusted guidance rides the next user turn until cleared. */
 async function activateBundledSkill(command: string): Promise<void> {
   const s = INSTALLED_SKILLS.find((x) => x.command === command); if (!s) return;
   state.activeSkill = { command: s.command, name: s.name };
@@ -2534,7 +2681,7 @@ async function handleSkillFiles(fileList: FileList | File[], node: HTMLElement):
     tone: blocked.length ? "warn" : "ok",
     title: parts.join(" · ") || "Nothing imported",
     desc: [written.length ? `Added: ${written.map((r) => r.name).join(", ")}.` : "",
-      blocked.length ? `${blocked.length} flagged by the security gate — review in the Security panel.` : ""].filter(Boolean).join(" "),
+      blocked.length ? `${blocked.length} flagged by the security gate - review in the Security panel.` : ""].filter(Boolean).join(" "),
     actions: [{ label: "OK" }], timeout: 4200,
   });
 }
@@ -2561,7 +2708,7 @@ function goalInfoDot(tip: string): string {
 }
 // P-GOAL.8: under AskSage lockdown the base-model picker lists Gemini, then GPT, then Anthropic.
 const GUIDED_GOV_FAMILY_ORDER = ["gemini", "gpt-o", "gpt", "claude", "rag", "other"];
-// P-GOAL.8.1: skills NOT offered for a goal loop — meta/planning/self-referential ones that don't help
+// P-GOAL.8.1: skills NOT offered for a goal loop - meta/planning/self-referential ones that don't help
 // drive code toward a verifiable condition (the loop itself, the loop-engineering doc, read-only Plan/
 // Explain, the handoff doc). Everything else (TDD, Code Review, Refactor, Debug, …) is build-oriented.
 const GOAL_SKILL_DENY = new Set(["goal", "loop-engineering", "plan", "explain", "session-handoff"]);
@@ -2674,7 +2821,7 @@ function openGoalForm(): void {
             <div class="goal-row"><label class="goal-lbl">Audio</label>
               <select id="euProvider" class="prov-key">
                 <option value="script-only">Script only (no audio)</option>
-                <option value="local-tts">Local TTS — Kokoro (air-gap)</option>
+                <option value="local-tts">Local TTS - Kokoro (air-gap)</option>
               </select>
             </div>
             <button type="button" class="btn-mini ok" id="euGenerate">${icon("bolt", 12)} Generate update now</button>
@@ -2710,7 +2857,7 @@ function openGoalForm(): void {
   const setHidden = (sel: string, hidden: boolean) => { const e = $(sel, ov) as HTMLElement | null; if (e) e.hidden = hidden; };
   const cadenceSet = () => (($("#goalCadKind", ov) as HTMLSelectElement)?.value ?? "off") !== "off";
   // Loop history auto-collapses once past step 1 (or in advanced) since the user already saw it; a manual
-  // click pins it. Safe to call before the async stats load — it no-ops until the panel exists.
+  // click pins it. Safe to call before the async stats load - it no-ops until the panel exists.
   const syncStats = () => {
     const stats = ov.querySelector(".goal-stats");
     if (stats && !statsTouched) stats.classList.toggle("collapsed", mode === "advanced" || cur > 1);
@@ -2778,7 +2925,7 @@ function openGoalForm(): void {
   updateGoalEstimate(ov); // initial; model names fill in once loadCheckerModel resolves
   render(); // P-GOAL.8: apply guided/advanced mode + show the right step/buttons
   wireCmdSuggest(ov); // P-GOAL.8.1: custom verify-command type-ahead
-  // P-BRIEF.3 (ADR-0072): the Engineering Update accordion — the audio-provider choice persists; Generate
+  // P-BRIEF.3 (ADR-0072): the Engineering Update accordion - the audio-provider choice persists; Generate
   // fetches the curated brief from the repo's logs and renders it inline (audio backend is a later slice).
   const euProv = $("#euProvider", ov) as HTMLSelectElement | null;
   if (euProv) {
@@ -2796,7 +2943,7 @@ function openGoalForm(): void {
       out.hidden = false;
       const counts = `<div class="goal-eu-counts">${Object.entries(data.counts).map(([k, v]) => `<b>${v}</b> ${k}`).join(" · ")}</div>`;
       const audioNote = euProv?.value === "local-tts"
-        ? `<div class="goal-opt">Audio: point a local TTS endpoint (Kokoro) at the app to render the podcast — the two-host script is ready.</div>`
+        ? `<div class="goal-opt">Audio: point a local TTS endpoint (Kokoro) at the app to render the podcast - the two-host script is ready.</div>`
         : "";
       out.innerHTML = counts + audioNote + renderMarkdown(data.brief);
     } finally { btn.disabled = false; btn.innerHTML = prev; }
@@ -2850,12 +2997,12 @@ function openGoalForm(): void {
 // defaulting to the current session state, so the loop runs with exactly what's shown. Thinking and
 // persona only appear when available.
 function loadRunWith(ov: HTMLElement): void {
-  // Base model — the maker. Options come from the session model config; changing it sets the session.
+  // Base model - the maker. Options come from the session model config; changing it sets the session.
   const modelOpt = state.config.find((c) => c.id === "model");
   const modelSel = $("#goalModel", ov) as HTMLSelectElement | null;
   if (modelSel && modelOpt) {
     let opts = (modelOpt.options ?? []).filter((o) => !isAuxiliaryModel(o.value) && !/(^|[/-])rag$/i.test(o.value));
-    // P-GOAL.8: under AskSage lockdown the base model must be AskSage-routed too — restrict to those, and
+    // P-GOAL.8: under AskSage lockdown the base model must be AskSage-routed too - restrict to those, and
     // group by family in the order Gemini, GPT, Anthropic (GOV-suffixed first within each).
     const locked = !!state.asksage?.only;
     if (locked) {
@@ -2883,7 +3030,7 @@ function loadRunWith(ov: HTMLElement): void {
       updateGoalEstimate(ov);
     });
   }
-  // Thinking — only if the provider exposes it. Applied at Run time.
+  // Thinking - only if the provider exposes it. Applied at Run time.
   const thinkOpt = state.config.find((c) => c.id === "thinking");
   const thinkSel = $("#goalThink", ov) as HTMLSelectElement | null;
   if (thinkSel && thinkOpt?.options?.length) {
@@ -2891,7 +3038,7 @@ function loadRunWith(ov: HTMLElement): void {
     thinkSel.innerHTML = thinkOpt.options.map((o) => `<option value="${esc(o.value)}">${esc(prettyLevel(o.name))}</option>`).join("");
     thinkSel.value = thinkOpt.currentValue ?? "";
   }
-  // Skill — None + only the bundled skills that suit a goal loop (build/verify-oriented; meta ones like
+  // Skill - None + only the bundled skills that suit a goal loop (build/verify-oriented; meta ones like
   // Goal Loop / Loop Engineering / Plan are excluded). Trusted guidance that rides every loop turn.
   const skillSel = $("#goalSkill", ov) as HTMLSelectElement | null;
   if (skillSel) {
@@ -2899,7 +3046,7 @@ function loadRunWith(ov: HTMLElement): void {
     skillSel.innerHTML = `<option value="">None</option>` + loopSkills.map((s) => `<option value="${esc(s.command)}">${esc(s.name)}</option>`).join("");
     skillSel.value = GOAL_SKILL_DENY.has(state.activeSkill?.command ?? "") ? "" : (state.activeSkill?.command ?? "");
   }
-  // Persona — only if AskSage personas are available. Show the human name/description, not the numeric id.
+  // Persona - only if AskSage personas are available. Show the human name/description, not the numeric id.
   const personaSel = $("#goalPersona", ov) as HTMLSelectElement | null;
   if (personaSel && state.personas.length) {
     ($("#goalPersonaWrap", ov) as HTMLElement).hidden = false;
@@ -2908,7 +3055,7 @@ function loadRunWith(ov: HTMLElement): void {
   }
 }
 
-// P-GOAL.7: apply the "Run with" selections to the session right before a loop runs — base model +
+// P-GOAL.7: apply the "Run with" selections to the session right before a loop runs - base model +
 // thinking (config), bundled skill (active-skill path), AskSage persona. Only changes what actually
 // differs from the current state, so a run with the defaults is a no-op. Best-effort; never blocks Run.
 async function applyRunWith(ov: HTMLElement): Promise<void> {
@@ -2955,9 +3102,9 @@ async function loadCheckerModel(ov: HTMLElement): Promise<void> {
   });
 }
 
-// P-GOAL.6.1 / P-GOAL.7 (ADR-0048/0049): the live cost estimate at the modal's lower-left — tokens AND a
+// P-GOAL.6.1 / P-GOAL.7 (ADR-0048/0049): the live cost estimate at the modal's lower-left - tokens AND a
 // cache-rationalized dollar figure for the SELECTED base + checker models. Updates as iterations / models
-// change; the premium tooltip (data-tip) explains the assumptions. The number is a CEILING — a loop
+// change; the premium tooltip (data-tip) explains the assumptions. The number is a CEILING - a loop
 // usually stops earlier, the moment its condition holds.
 function updateGoalEstimate(ov: HTMLElement): void {
   const box = $("#goalEstimate", ov); if (!box) return;
@@ -2983,9 +3130,9 @@ function updateGoalEstimate(ov: HTMLElement): void {
   box.setAttribute("data-tip-icon", "spark");
 }
 
-// P-GOAL.5 (ADR-0047): render the saved-automations list inside the goal modal — each row shows its
+// P-GOAL.5 (ADR-0047): render the saved-automations list inside the goal modal - each row shows its
 // cadence + last-run status, with an enable toggle, a run-now button, and delete.
-// P-GOAL.10 (ADR-0055): render the cross-run evaluation banner from the run-log ledger — success rate,
+// P-GOAL.10 (ADR-0055): render the cross-run evaluation banner from the run-log ledger - success rate,
 // average iterations-to-success, the most-common blocker, and a tool-mix bar. Hidden until there's
 // history (a first-time user sees nothing extra).
 async function loadLoopStats(ov: HTMLElement): Promise<void> {
@@ -2995,8 +3142,8 @@ async function loadLoopStats(ov: HTMLElement): Promise<void> {
   if (!s || s.runs === 0) { sec.innerHTML = ""; return; }
   const pct = Math.round(s.successRate * 100);
   const tone = pct >= 75 ? "ok" : pct >= 40 ? "mid" : "low";
-  const iters = s.avgItersToSucceed ? `${s.avgItersToSucceed.toFixed(1)}` : "—";
-  const dur = s.avgDurationMs ? formatLoopDur(s.avgDurationMs) : "—";
+  const iters = s.avgItersToSucceed ? `${s.avgItersToSucceed.toFixed(1)}` : "-";
+  const dur = s.avgDurationMs ? formatLoopDur(s.avgDurationMs) : "-";
   const blocker = s.topBlockers[0];
   const spend = s.totalSpendUsd > 0 ? `<span class="gs-tool">spend <b>$${s.totalSpendUsd.toFixed(2)}</b></span>` : "";
   const mix = spend + Object.entries(s.toolsByType).sort((a, b) => b[1] - a[1]).slice(0, 4)
@@ -3022,7 +3169,7 @@ function formatLoopDur(ms: number): string {
   return m < 60 ? `${m}m ${String(s % 60).padStart(2, "0")}s` : `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, "0")}m`;
 }
 
-// P-GOAL.12 (ADR-0057): the Pre-Flight Audit — pause the builder, design the loop (scope + a short
+// P-GOAL.12 (ADR-0057): the Pre-Flight Audit - pause the builder, design the loop (scope + a short
 // prompt-engineering interview + user/PO + engineer feedback), fold in past-run history, and produce a
 // readiness-scored Loop Design report the user adopts as the goal (its criteria thread to the checker).
 async function openPreflight(goalOv: HTMLElement): Promise<void> {
@@ -3030,7 +3177,7 @@ async function openPreflight(goalOv: HTMLElement): Promise<void> {
   const cmd = ($("#goalCmd", goalOv) as HTMLInputElement)?.value.trim() ?? "";
   const ov = el(`<div class="scrim preflight-scrim"><div class="preflight-modal">
     <div class="goal-modal-h"><span class="goal-h-title">${icon("shield", 15)} Pre-Flight Audit</span><button type="button" class="btn-mini" id="pfClose">Close</button></div>
-    <div class="goal-modal-sub">Design the loop before you build it — scope it, answer a few questions, fold in user/engineer feedback and past-run history, then adopt a readiness-scored Loop Design as your goal.</div>
+    <div class="goal-modal-sub">Design the loop before you build it - scope it, answer a few questions, fold in user/engineer feedback and past-run history, then adopt a readiness-scored Loop Design as your goal.</div>
     <div class="pf-form">
       <label class="goal-lbl">Scope <span class="goal-opt">where the loop runs</span></label>
       <select id="pfScope" class="prov-key"><option value="workspace">current workspace</option></select>
@@ -3053,7 +3200,7 @@ async function openPreflight(goalOv: HTMLElement): Promise<void> {
   $("#pfClose", ov)?.addEventListener("click", close);
   ov.addEventListener("click", (e) => { if (e.target === ov) close(); });
 
-  // scope picker — branches + worktrees (best-effort; falls back to "current workspace")
+  // scope picker - branches + worktrees (best-effort; falls back to "current workspace")
   void bridge.loopScopes().then((s) => {
     const sel = $("#pfScope", ov) as HTMLSelectElement | null; if (!sel || !s) return;
     const opts = [`<option value="workspace">current workspace</option>`];
@@ -3080,7 +3227,7 @@ async function openPreflight(goalOv: HTMLElement): Promise<void> {
     res.innerHTML = `<div class="pf-loading">${icon("refresh", 13)} Interviewing the checker model + scoring readiness against past runs…</div>`;
     last = await bridge.preflightAudit(spec).catch(() => null);
     btn.disabled = false; btn.innerHTML = `${icon("bolt", 12)} Re-run`;
-    if (!last) { res.innerHTML = `<div class="pf-loading">Audit failed — check the model/connection and try again.</div>`; return; }
+    if (!last) { res.innerHTML = `<div class="pf-loading">Audit failed - check the model/connection and try again.</div>`; return; }
     const lvl = last.readiness.level, tone = lvl === "L3" ? "ok" : lvl === "L2" ? "mid" : "low";
     res.innerHTML = `<div class="pf-readiness" data-tone="${tone}">${icon("shield", 14)} <b>${esc(last.readiness.summary)}</b>${last.prior.total ? ` <span class="goal-opt">· ${last.prior.total} prior run${last.prior.total === 1 ? "" : "s"} on record, ${last.prior.relevant} relevant</span>` : ""}</div>
       <div class="pf-report">${renderMarkdown(last.reportMd)}</div>
@@ -3093,7 +3240,7 @@ async function openPreflight(goalOv: HTMLElement): Promise<void> {
       adoptedCriteria = last.criteria || ""; // threads to the checker on the next run
       updateGoalEstimate(goalOv);
       close();
-      showToast({ tone: "ok", title: "Adopted into the goal", desc: "Tweak it in the Goal field, then Run — the checker will grade against your criteria.", timeout: 3400 });
+      showToast({ tone: "ok", title: "Adopted into the goal", desc: "Tweak it in the Goal field, then Run - the checker will grade against your criteria.", timeout: 3400 });
     });
   });
 }
@@ -3196,7 +3343,7 @@ async function runGoalLoop(
     else if (e.type === "goal-done") { wrap.appendChild(el(`<div class="goal-banner ok">${icon("check", 14)} Goal met in ${e.iters} iteration${e.iters === 1 ? "" : "s"}. ${esc(e.reason)}</div>`)); scrollChat(); }
     else if (e.type === "goal-stop") { wrap.appendChild(el(`<div class="goal-banner stop">${icon("info", 14)} ${esc(e.reason)}</div>`)); scrollChat(); }
     else if (e.type === "goal-report") {
-      // P-GOAL.9: the loop's last task — an After-Action Report (metrics + portable graphs). The durable
+      // P-GOAL.9: the loop's last task - an After-Action Report (metrics + portable graphs). The durable
       // record is on disk (Mermaid renders on GitHub/VS Code); in-app we show the summary + the report's
       // text scoreboard/tables (our `marked` view has no Mermaid, so charts stay in the file).
       const card = el(`<details class="goal-aar" open>
@@ -3294,7 +3441,7 @@ function openSkillDropdown(anchor: HTMLElement): void {
     clearSec +
     `<div class="cfg-sec"><div class="cfg-lbl">Project skills <span class="cur">${state.skills.length ? `${state.skills.length} · /skill:` : "none"}</span></div>
       <div class="cfg-list" id="projSkillList">${projSkillRows()}</div>
-      <label class="skill-drop" id="skillDrop" data-tip="Drop .md skill files — each is scanned at the security gate before import"><input type="file" id="skillDropInput" accept=".md,text/markdown" multiple hidden>${icon("download", 13)} <span>Drop <code>.md</code> skills here — scanned at the gate</span></label>
+      <label class="skill-drop" id="skillDrop" data-tip="Drop .md skill files - each is scanned at the security gate before import"><input type="file" id="skillDropInput" accept=".md,text/markdown" multiple hidden>${icon("download", 13)} <span>Drop <code>.md</code> skills here - scanned at the gate</span></label>
     </div>`;
   const { node, close } = popover(anchor, html, () => { cfgClose = null; });
   cfgClose = close;
@@ -3306,7 +3453,7 @@ function openSkillDropdown(anchor: HTMLElement): void {
     const bundled = t.closest("[data-bundled]") as HTMLElement | null; if (bundled) { close(); void activateBundledSkill(bundled.dataset.bundled!); return; }
     const proj = t.closest("[data-skill]") as HTMLElement | null; if (proj) { close(); useSkill(proj.dataset.skill!); return; }
   });
-  // P-SKILL.1: drag-and-drop (or click-to-pick) .md skill import — scanned at the gate server-side.
+  // P-SKILL.1: drag-and-drop (or click-to-pick) .md skill import - scanned at the gate server-side.
   const drop = node.querySelector("#skillDrop") as HTMLElement | null;
   const input = node.querySelector("#skillDropInput") as HTMLInputElement | null;
   if (drop) {
@@ -3381,15 +3528,16 @@ function openFolderBrowser(opts: { title?: string; confirm?: string } = {}): Pro
   });
 }
 
-// P-ABOUT.1 (ADR-0087): the About panel — version (single-source APP_VERSION), license & credits.
+// P-ABOUT.1 (ADR-0087): the About panel - version (single-source APP_VERSION), license & credits.
 // Single instance; closes on the X / Close button, a backdrop click, or Escape.
 function openAbout(): void {
-  if ($("#aboutModal")) return; // already open — don't stack
+  if ($("#aboutModal")) return; // already open - don't stack
   const ov = el(`<div id="aboutModal" class="modal-ov about-ov">${aboutHtml(APP_VERSION)}</div>`);
   const close = () => { ov.remove(); document.removeEventListener("keydown", onKey); };
   const onKey = (ev: KeyboardEvent) => { if (ev.key === "Escape") { ev.preventDefault(); close(); } };
   ov.addEventListener("click", (ev) => {
     const t = ev.target as HTMLElement;
+    if (t.closest("[data-about-tour]")) { close(); startTour(state.userRole ?? "developer"); return; } // ADR-0089: replay
     if (t === ov || t.closest("[data-about-close]")) close(); // backdrop or a close control
   });
   document.addEventListener("keydown", onKey);
@@ -3410,7 +3558,7 @@ function wire(): void {
   }));
   // Knowledge graph: close, lens toggle, forget-fact, export (P9.4)
   $("#kgClose")!.addEventListener("click", () => closeKnowledge());
-  // P-KG-SEARCH.1: live node search — highlight + center matches as you type (Esc clears).
+  // P-KG-SEARCH.1: live node search - highlight + center matches as you type (Esc clears).
   $("#kgSearch")?.addEventListener("input", (e) => {
     const q = (e.target as HTMLInputElement).value;
     kgHandle?.setSearch(q.trim() ? matchNodes(kgData?.nodes ?? [], q) : null);
@@ -3491,7 +3639,7 @@ function wire(): void {
     const forget = t.closest("[data-forget]") as HTMLElement | null;
     if (forget) {
       const fid = forget.dataset.forget!;
-      if (forgettingIds.has(fid)) return; // de-dup: ignore mashed clicks (#113) — one server call, one toast
+      if (forgettingIds.has(fid)) return; // de-dup: ignore mashed clicks (#113) - one server call, one toast
       forgettingIds.add(fid);
       // Optimistic + instant (#113): drop the fact (and its now-empty node + dangling edges) from the live
       // graph immediately, so the row/node vanish on click instead of after a 20-30s re-decrypt. Keep the
@@ -3514,7 +3662,7 @@ function wire(): void {
         kgData = prev;
         if (kgData) { kgSig = kgSignature(kgData); kgHandle?.update(kgData); }
         renderKgSide(kgSelId);
-        showToast({ tone: "danger", title: "Couldn't forget that", desc: "Nothing changed — please try again.", actions: [{ label: "OK" }], timeout: 4000 });
+        showToast({ tone: "danger", title: "Couldn't forget that", desc: "Nothing changed - please try again.", actions: [{ label: "OK" }], timeout: 4000 });
       }
     }
   });
@@ -3641,7 +3789,7 @@ function wire(): void {
       return;
     }
     if (t.closest("#asksageOnly")) {
-      if (state.managed?.locks?.models) return; // ADR-0068: org-locked routing — not user-toggleable
+      if (state.managed?.locks?.models) return; // ADR-0068: org-locked routing - not user-toggleable
       const only = ($("#asksageOnly", $("#setBody")!) as HTMLInputElement)?.checked ?? false;
       await bridge.saveAsksage({ only });
       state.asksage = { ...(state.asksage ?? { configured: false, base: "", only: false, limit: 200_000, datasets: [], queryModel: "gpt-5.2", persona: "" }), only };
@@ -3673,6 +3821,21 @@ function wire(): void {
       showToast({ title: enabled ? "Developer mode on" : "Developer mode off", desc: enabled ? "A read-only Logs panel is now in the rail (telemetry, lineage, audit)." : "The Logs panel is hidden.", actions: [{ label: "OK" }], timeout: 3000 });
       return;
     }
+    // ── ADR-0088 (P-ROLE.1): role switcher (cosmetic - re-applies the calm default surfacing) ──
+    const rolePick = t.closest("[data-role-pick]") as HTMLElement | null;
+    if (rolePick?.dataset.rolePick) {
+      const role = rolePick.dataset.rolePick as UserRole;
+      if (role !== state.userRole) {
+        state.userRole = role;
+        await bridge.saveRole(role).catch(() => null);
+        applyRoleDefault(role);
+        fillSec("profile", secProfile({ username: state.username, email: state.email, attribution: state.attribution ?? undefined }));
+        showToast({ title: `${ROLE_META[role].label} view`, desc: ROLE_META[role].blurb, timeout: 2800 });
+      }
+      return;
+    }
+    // ADR-0089 (P-ROLE.1b): replay the first-run walkthrough on demand.
+    if (t.closest("#replayTour")) { startTour(state.userRole ?? "developer"); return; }
     // ── P-MCP.1 (ADR-0020): MCP connectors ──
     if (t.closest("#mcpAdd")) {
       const body = $("#setBody")!;
@@ -3861,7 +4024,7 @@ function wire(): void {
       })();
       return;
     }
-    // Dismiss: acknowledge a reviewed block — moves it to the Dismissed section WITHOUT releasing it
+    // Dismiss: acknowledge a reviewed block - moves it to the Dismissed section WITHOUT releasing it
     // (the call stays blocked, the audit record is kept). Clears it from the active "quarantined" count.
     const dismiss = (e.target as HTMLElement).closest("[data-dismiss]") as HTMLElement | null;
     if (dismiss) {
@@ -3976,9 +4139,9 @@ const palette = createPalette(() => {
     { id: "cfg", title: "Choose model · mode · thinking…", icon: "spark", hint: "config", run: () => openConfigPopover($("#modelBadge")!) },
     { id: "sec", title: "Open Security panel", icon: "shield", hint: "panel", run: () => focusInspector("security") },
     { id: "mem", title: "Open Memory & context panel", icon: "brain", hint: "panel", run: () => focusInspector("memory") },
-    { id: "zin", title: "Zoom in", icon: "plus", hint: "Ctrl +", run: () => nudgeZoom(0.1) },
-    { id: "zout", title: "Zoom out", icon: "minus", hint: "Ctrl −", run: () => nudgeZoom(-0.1) },
-    { id: "zreset", title: "Reset text zoom to 100%", icon: "refresh", hint: "Ctrl 0", run: () => resetZoom() },
+    { id: "zin", title: "Zoom in", icon: "plus", hint: modSymbol("+"), run: () => nudgeZoom(0.1) },
+    { id: "zout", title: "Zoom out", icon: "minus", hint: modSymbol("−"), run: () => nudgeZoom(-0.1) },
+    { id: "zreset", title: "Reset text zoom to 100%", icon: "refresh", hint: modSymbol("0"), run: () => resetZoom() },
     { id: "new", title: "New session", icon: "plus", run: () => newSession() },
     { id: "side", title: "Toggle sidebar", icon: "layout", run: () => toggleSidebar() },
     { id: "insp", title: "Collapse / expand inspector (metrics rail)", icon: "collapse", run: () => setInspectorRail(!state.inspectorRail) },
@@ -3988,7 +4151,7 @@ const palette = createPalette(() => {
   if (model) for (const o of model.options.slice(0, 10)) acts.push({ id: "m:" + o.value, title: `Model: ${o.name}`, icon: "spark", hint: o.value === model.currentValue ? "current" : "", run: () => applyConfig("model", o.value) });
   for (const c of state.commands) acts.push({ id: "cmd:" + c.name, title: `/${c.name}${c.hint ? " " + c.hint : ""}`, icon: "command", hint: (c.description ?? "omp").slice(0, 26), run: () => runCommand(c) });
   // P-IDE.2: bundled skills + /task proforma, then project (omp-native) skills.
-  acts.push({ id: "task", title: "/task — delegate to subagents", icon: "bolt", hint: "proforma", run: () => insertTaskProforma() });
+  acts.push({ id: "task", title: "/task - delegate to subagents", icon: "bolt", hint: "proforma", run: () => insertTaskProforma() });
   for (const s of INSTALLED_SKILLS) acts.push({ id: "bskill:" + s.command, title: `Skill: ${s.name}`, icon: "bolt", hint: s.command === state.activeSkill?.command ? "active" : s.description.slice(0, 24), run: () => void activateBundledSkill(s.command) });
   for (const s of state.skills) acts.push({ id: "skill:" + s.name, title: `Project skill: ${s.name}`, icon: "bolt", hint: (s.description ?? "").slice(0, 26), run: () => useSkill(s.name) });
   return acts;
@@ -4025,7 +4188,7 @@ async function loadConfig(): Promise<void> {
     state.chinaAck = !!(await bridge.chinaAck())?.acknowledged; // P-IDE.1c: gate China-origin models
     state.managed = await bridge.managed(); // ADR-0068 (P-ENT.1): enterprise lock view for the UI
     // P-IDE.1d: only adopt the live config when omp actually returned one. A cold/not-ready omp returns
-    // an empty list — keep the cached list visible (spinner stays) rather than blanking the picker. When
+    // an empty list - keep the cached list visible (spinner stays) rather than blanking the picker. When
     // omp IS ready, the live config replaces the cache (so a revoked key/OAuth's models drop out).
     const liveModel = live?.find((c) => c.id === "model");
     if (live && live.length && liveModel && liveModel.options.length) {
@@ -4118,16 +4281,16 @@ async function applyConfig(configId: string, value: string): Promise<void> {
 const isAsksage = (v: string) => /asksage/i.test(v);
 // Models present in the catalog but NOT currently selectable. Keyed by short id; the value is the
 // reason shown (greyed row + hover banner). Fable 5 + Mythos 5 are ITAR-restricted until the U.S.
-// government clears them — keep them visible-but-disabled so users know they're coming, not missing.
+// government clears them - keep them visible-but-disabled so users know they're coming, not missing.
 // (ADR-0029 P-IDE.1b/1d)
-const ITAR_REASON = "Currently unavailable — restricted under U.S. ITAR export controls until the government clears it for use (expected soon).";
+const ITAR_REASON = "Currently unavailable - restricted under U.S. ITAR export controls until the government clears it for use (expected soon).";
 const UNAVAILABLE: Record<string, string> = {
   "claude-fable-5": ITAR_REASON,
   "claude-mythos-5": ITAR_REASON,
 };
 const unavailableReason = (value: string): string | undefined => UNAVAILABLE[shortModelId(value)];
 // Advisory shown on gov-gateway (AskSage) models until they're cleared for production use.
-const GOV_ADVISORY = "Government (AskSage) model — restricted to internal prototype use only until cleared for production by the U.S. government.";
+const GOV_ADVISORY = "Government (AskSage) model - restricted to internal prototype use only until cleared for production by the U.S. government.";
 // 5-star rating renderer (filled + dimmed). `cls` colors the filled stars.
 const stars5 = (n: number, cls: string) => `<span class="mt-stars ${cls}">${"★".repeat(n)}<span class="mt-dim">${"☆".repeat(5 - n)}</span></span>`;
 
@@ -4151,9 +4314,9 @@ function providerLabel(v: string): string {
   return m ? m[1]!.replace(/^asksage-/, "") : "";
 }
 const modelRow = (o: { value: string; name: string }, sel: string) => {
-  // Provider tag only on NON-gov colliding rows — the Gov pill already distinguishes gov routes.
+  // Provider tag only on NON-gov colliding rows - the Gov pill already distinguishes gov routes.
   const prov = (!isAsksage(o.value) && collidingNames.has(cleanModelName(o.name))) ? `<span class="row-prov" data-tip="Provider route">${esc(providerLabel(o.value))}</span>` : "";
-  // P-IDE.1b: an unavailable model (e.g. ITAR-blocked Fable) renders greyed + non-selectable — NO
+  // P-IDE.1b: an unavailable model (e.g. ITAR-blocked Fable) renders greyed + non-selectable - NO
   // data-val, so the picker's click handler skips it; data-model stays so the hover card explains why.
   const reason = unavailableReason(o.value);
   if (reason) {
@@ -4183,7 +4346,7 @@ function toggleFamilyCollapsed(id: string): void {
  *  no-match families are omitted); while searching, every shown family is force-expanded. When the
  *  gov gateway is configured, families are reordered GPT/Gemini-first (ASKSAGE_FAMILY_ORDER). A
  *  collapsed family still renders its rows (hidden via CSS) so the persisted state round-trips.
- *  Collapse is fully user-driven — even the family holding the current selection can be collapsed. */
+ *  Collapse is fully user-driven - even the family holding the current selection can be collapsed. */
 function familyListHTML(models: { value: string; name: string }[], sel: string, q = ""): string {
   const filtered = filterModels(models, q);
   if (filtered.length === 0) return `<div class="cfg-empty">No models match “${esc(q)}”</div>`;
@@ -4334,7 +4497,7 @@ function curatedModels(opt: ConfigOption): { value: string; name: string }[] {
   // Lockdown: only the gov-gateway models are selectable.
   const list = state.asksage?.only ? visible.filter((o) => isGovModel(o.value)) : visible;
   // Final safety: an omp catalog can list the same model twice under one provider. Drop rows that would
-  // render IDENTICALLY (same gov/provider + same display name) — the user can't tell them apart anyway.
+  // render IDENTICALLY (same gov/provider + same display name) - the user can't tell them apart anyway.
   const seen = new Set<string>();
   const deduped = sortGovFirstNewest(list).filter((o) => {
     const key = `${isGovModel(o.value) ? "gov" : providerLabel(o.value)}|${cleanModelName(o.name)}`;
@@ -4562,7 +4725,10 @@ void bridge.getSettings().then((s) => { // your saved name → the "You" label o
   if (s?.username) { state.username = s.username; $$(".msg.user .who").forEach((w) => { w.textContent = s.username!; }); }
   if (s?.email) state.email = s.email;
   state.attribution = s?.attribution ?? null;
-  promptForEmailIfMissing(); // first open, undecided → ask for email (or skip → workstation identity)
+  state.userRole = s?.role ?? null;               // ADR-0088: null until the user picks a role
+  state.tourSeen = !!s?.tourSeen;                  // ADR-0089: first-run walkthrough replay guard
+  if (state.userRole) applyRoleDefault(state.userRole); // returning user lands on their role's surface
+  runOnboarding(); // ADR-0088/0089: role pick (if needed) → email → first-run tour, in sequence
 });
 refresh();
 void maybeOnboardPersonal(); // P-IMP.2: first-run nudge + expand Personalization until it's configured
