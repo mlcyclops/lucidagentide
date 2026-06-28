@@ -2401,24 +2401,23 @@ function renderStatus(): void {
   // (which is wrong for the AskSage gateway models); fall back for unknown models.
   const winTok = modelCtx(state.model) ?? (lu ? lu.size : (s?.window ?? 0));
   const ctx = winTok ? curTok / winTok : 0;
-  const cost = lu ? lu.cost : (s?.cost ?? 0);
-  const hit = s?.cache.hit ?? 0;
   const budget = m?.budgets?.[0];
-  const ago = state.lastOk ? Math.round((Date.now() - state.lastOk) / 1000) : null;
+  const ctxPct = Math.round(ctx * 100);
+  // Minimal status bar: model · a context-fill RING · (Claude API status / Gov usage when present) · gate.
+  // The cache, session-cost, and "updated Ns ago" pills were removed - they're available in the Memory panel.
   $("#statusbar")!.innerHTML = `
     <div class="seg" data-tip="Active model|Click the badge to change">${icon("spark", 14)} <b>${esc(modelLabel(state.model))}</b></div>
-    <div class="seg" data-tip="Context window|How full the model's context is${lu ? " (live this session)" : ""}">${icon("brain", 14)}
-      <span class="mini"><span class="fill" style="width:${Math.round(ctx * 100)}%;background:${loadColor(ctx)}"></span></span>
-      <b>${fmtNum(curTok)}</b>/${fmtNum(winTok)}</div>
+    <div class="seg ctx" data-tip="Context window|${fmtNum(curTok)} / ${fmtNum(winTok)} tokens used (${ctxPct}%)${lu ? " · live this session" : ""}">
+      <svg class="ctx-ring" viewBox="0 0 22 22" width="17" height="17" aria-hidden="true">
+        <circle class="ctx-track" cx="11" cy="11" r="8"/>
+        <circle class="ctx-arc" pathLength="100" cx="11" cy="11" r="8" style="stroke:${loadColor(ctx)};stroke-dashoffset:${100 - Math.min(100, Math.max(0, ctxPct))}"/>
+      </svg><b>${ctxPct}%</b></div>
     <div class="seg-mid">
-      <div class="seg" data-tip="Prompt-cache hit rate|Share of input served from cache at the discounted rate - higher means lower cost per turn">${icon("bolt", 14)} cache <b style="color:${goodColor(hit)}">${Math.round(hit * 100)}%</b></div>
       ${budget && currentProviderHasApiKey() ? `<div class="seg seg-btn${budget.used >= 0.9 ? " warn" : ""}" data-budget-refresh data-tip="${esc(budget.label)} usage|${budget.used >= 0.9 ? "Almost spent - turns may start stalling. " : ""}Click to re-check now · auto every 5 min. From the provider's API-key rate-limit headers.">${esc(budget.label)} <b style="color:${loadColor(budget.used)}">${Math.round(budget.used * 100)}%</b> ${icon("refresh", 11)}</div>` : ""}
       ${asksageChip()}
-      <div class="seg" data-tip="Session cost">${fmtUSD(cost)}</div>
     </div>
     <div class="right">
       <div class="seg" data-tip="Security gate|In-process, fail-closed">${icon("shield", 13)} gate active</div>
-      <div class="seg seg-live"><span class="live-dot"></span> ${ago == null ? "connecting…" : ago < 2 ? "live" : `updated ${ago}s ago`}</div>
     </div>`;
 }
 

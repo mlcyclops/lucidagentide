@@ -1019,6 +1019,12 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
   border:1px solid var(--line-soft);border-radius:5px;overflow:hidden;
   box-shadow:inset 0 1px 1px rgba(0,0,0,.45)}
 .statusbar .mini .fill{height:100%;box-shadow:0 0 6px -1px currentColor}
+/* context window = a simple ring filled to the % used (replaces the horizontal mini bar) */
+.statusbar .seg.ctx{gap:6px}
+.statusbar .ctx-ring{display:block;flex:none}
+.statusbar .ctx-track{fill:none;stroke:var(--line-strong);stroke-width:2.6}
+.statusbar .ctx-arc{fill:none;stroke-width:2.6;stroke-linecap:round;stroke-dasharray:100;
+  transform:rotate(-90deg);transform-origin:center;transition:stroke-dashoffset var(--t),stroke var(--t)}
 .statusbar .right{margin-left:auto;display:flex;align-items:center;gap:16px}
 .live-dot{width:7px;height:7px;border-radius:50%;background:var(--green);
   box-shadow:0 0 0 2px rgba(70,210,126,.14),0 0 8px var(--green);animation:pulse 2.4s var(--ease) infinite}
