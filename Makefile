@@ -283,6 +283,14 @@ demo-P-GOAL.13: ## P-GOAL.13 (ADR-0067): unattended loop Speed↔Risk dial — g
 demo-P-ENT.2: ## P-ENT.2 (ADR-0069): OCSF security audit export — each source → valid OCSF Detection Finding, fail-safe dispatcher (dead sink never blocks a turn)
 	$(BUN) run desktop/scripts/demo_p_ent_2.ts
 
+.PHONY: demo-P-ROLE.1
+demo-P-ROLE.1: ## P-ROLE.1 (ADR-0088): role-based onboarding — closed role set, fail-safe normalize (unknown->developer), calm per-role default landing surface, cosmetic-only (gate untouched)
+	$(BUN) run desktop/scripts/demo_p_role_1.ts
+
+.PHONY: demo-P-ROLE.1b
+demo-P-ROLE.1b: ## P-ROLE.1b (ADR-0089): first-run guided walkthrough — tailored per-role coachmark tour (opens on composer, closes on closer, no dangling targets), Back/Next/Skip card, replay-guard
+	$(BUN) run desktop/scripts/demo_p_role_1b.ts
+
 .PHONY: dashboards
 dashboards: ## Materialize dashboard CSVs from a DuckDB into observable/docs/data (DB=path)
 	$(BUN) run harness/scripts/materialize_dashboards.ts $(DB) observable/docs/data

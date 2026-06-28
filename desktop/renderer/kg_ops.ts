@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/renderer/kg_ops.ts — pure, DOM-free helpers behind the Knowledge-graph view's
+// desktop/renderer/kg_ops.ts - pure, DOM-free helpers behind the Knowledge-graph view's
 // interaction polish (increment B-KG.1, issues #112/#113/#114). Kept out of graph.ts/app.ts so the
 // decision logic is unit-testable headlessly (bun test) and provable via `make demo-B-KG.1`.
 //
@@ -20,12 +20,12 @@ export interface FitOpts { margin?: number; min?: number; max?: number }
 /** Transform that centers `box` in a W×H viewport and scales it to fit (with margin).
  *
  *  The bug (#112): the previous min-scale floor was 0.4, so a big imported graph whose bounding box
- *  needed e.g. 0.15 to fit stayed zoomed-in and overflowed the panel — the user had to hunt for it by
+ *  needed e.g. 0.15 to fit stayed zoomed-in and overflowed the panel - the user had to hunt for it by
  *  dragging. The floor is now low enough (0.05) that large graphs genuinely fit. Returns null when the
  *  viewport has no size yet (host not laid out) so the caller never centers onto a 0×0 canvas. */
 export function fitTransform(box: FitBox, W: number, H: number, opts: FitOpts = {}): FitTransform | null {
   const margin = opts.margin ?? 70, min = opts.min ?? 0.05, max = opts.max ?? 1.5;
-  if (!(W > 0) || !(H > 0)) return null; // host has no usable size yet — don't fit onto nothing
+  if (!(W > 0) || !(H > 0)) return null; // host has no usable size yet - don't fit onto nothing
   const bw = Math.max(1, box.maxX - box.minX), bh = Math.max(1, box.maxY - box.minY);
   const sc = Math.max(min, Math.min(max, Math.min((W - margin) / bw, (H - margin) / bh)));
   const bcx = (box.minX + box.maxX) / 2, bcy = (box.minY + box.maxY) / 2;
@@ -43,7 +43,7 @@ export interface FrameInputs {
 export interface FrameWork {
   layout: boolean;    // recompute edge paths + node/viewport transforms (the expensive pass)
   particles: boolean; // step the flow particles (cheap; uses cached geometry)
-  stop: boolean;      // nothing left to animate — halt the rAF loop until kicked
+  stop: boolean;      // nothing left to animate - halt the rAF loop until kicked
 }
 
 /** Decide the minimum work a frame needs. The old loop did a FULL repaint every single frame forever,
@@ -67,7 +67,7 @@ export interface ForgetResult { data: PersonalGraphData; nodeRemoved: string | n
  *  the input (so the caller can keep the original for rollback if the server call fails).
  *
  *  The bug (#113): forgetting awaited a 20-30s graph re-decrypt before anything changed on screen, with
- *  no button feedback — so the user kept clicking. Doing the removal locally first makes the fact row
+ *  no button feedback - so the user kept clicking. Doing the removal locally first makes the fact row
  *  (and the node, if that was its last fact, plus its dangling edges) vanish on click. If the removed
  *  fact was the node's last, `nodeRemoved` names the dropped node so the selection can be cleared. */
 export function applyForget(data: PersonalGraphData, factId: string): ForgetResult {
@@ -106,7 +106,7 @@ export function togglePick(picks: string[], id: string): string[] {
   return picks.includes(id) ? picks.filter((p) => p !== id) : [...picks, id];
 }
 
-/** Consecutive [from,to] pairs from an ordered pick list — a 3-pick A,B,C → A→B, B→C (a chain, not a
+/** Consecutive [from,to] pairs from an ordered pick list - a 3-pick A,B,C → A→B, B→C (a chain, not a
  *  clique), which is the least-surprising default for "relate these nodes". */
 export function chainPairs(ids: string[]): Array<[string, string]> {
   const out: Array<[string, string]> = [];
@@ -114,7 +114,7 @@ export function chainPairs(ids: string[]): Array<[string, string]> {
   return out;
 }
 
-/** Ids of nodes whose name matches a search query (P-KG-SEARCH.1) — case-insensitive substring. An empty
+/** Ids of nodes whose name matches a search query (P-KG-SEARCH.1) - case-insensitive substring. An empty
  *  query matches nothing (→ no filter / clear). Pure so the matching is unit-testable. */
 export function matchNodes(nodes: ReadonlyArray<{ id: string; name: string }>, query: string): Set<string> {
   const q = query.trim().toLowerCase();
@@ -130,14 +130,14 @@ export function resolveRelationLabel(raw: string | null | undefined): string {
   return (raw ?? "").trim() || "related";
 }
 
-/** Optimistically add a user-authored edge (dedup on from+to+relation), without mutating the input — so
+/** Optimistically add a user-authored edge (dedup on from+to+relation), without mutating the input - so
  *  the edge shows instantly and the caller can roll back if the server rejects it. */
 export function addEdgeOptimistic(data: PersonalGraphData, from: string, to: string, relation: string): PersonalGraphData {
   if (data.edges.some((e) => e.from === from && e.to === to && e.relation === relation)) return data;
   return { ...data, edges: [...data.edges, { from, to, relation }] };
 }
 
-/** Optimistically remove an edge (P-KG-REL.3) without mutating the input — so it vanishes on click and the
+/** Optimistically remove an edge (P-KG-REL.3) without mutating the input - so it vanishes on click and the
  *  caller can roll back on server failure. Matches the exact from+to+relation triple. */
 export function removeEdgeOptimistic(data: PersonalGraphData, from: string, to: string, relation: string): PersonalGraphData {
   const edges = data.edges.filter((e) => !(e.from === from && e.to === to && e.relation === relation));

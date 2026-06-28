@@ -22,7 +22,15 @@ import { backend } from "./acp_backend.ts";
 import { clearIngestSessions, deleteSession, listSessions, sessionMessages } from "./sessions.ts";
 import { providerAuth } from "./auth_status.ts";
 import { cloneRepo, setWorkspace, workspaceInfo } from "./workspace.ts";
-import { applyEnv, attribution, chinaModelsAcknowledged, listMcpServers, load as loadSettings, removeMcpServer, setAsksage, setAttributionSkip, setChinaModelsAcknowledged, setDeveloperMode, setKey, setMcpServerEnabled, setPersonalAiExtract, setProfile, setRateLimitProbe, upsertMcpServer } from "./settings_store.ts";
+import { applyEnv, attribution, chinaModelsAcknowledged, listMcpServers, load as loadSettings, removeMcpServer, roleChosen, setAsksage, setAttributionSkip, setChinaModelsAcknowledged, setDeveloperMode, setKey, setMcpServerEnabled, setPersonalAiExtract, setProfile, setRateLimitProbe, setTourSeen, setUserRole, tourSeen, upsertMcpServer, USER_ROLES, userRole, type UserRole } from "./settings_store.ts";
+
+// ADR-0088/0089: the /api/settings payload — profile + attribution + the cosmetic role/tour state.
+// `role` is null until the user has EXPLICITLY chosen one (so the renderer can fire the first-run role
+// picker); once chosen it's the concrete role. tourSeen guards the first-run walkthrough replay.
+function settingsData() {
+  const s = loadSettings();
+  return { username: s.username ?? "", email: s.email ?? "", attribution: attribution(), role: roleChosen() ? userRole() : null, tourSeen: tourSeen() };
+}
 import { emailDomainAllowed, managedAsksageOnly, managedConfig, managedLocks, skipAllowed } from "./managed_config.ts";
 import { asksageConfig, listDatasets, listPersonas, monthlyTokens, scanPersona, wrapPersona } from "./asksage.ts";
 import { listSkills } from "./skills_data.ts";
@@ -79,7 +87,9 @@ const PORT = Number(process.env.PORT ?? 5319);
 // HTML (only a same-origin document can read it), and required on every sensitive /api call. A new
 // random value each launch means a token never outlives the process that issued it.
 const TOKEN = randomBytes(32).toString("hex");
-const CT: Record<string, string> = { ".html": "text/html", ".css": "text/css", ".js": "text/javascript", ".svg": "image/svg+xml", ".woff2": "font/woff2", ".woff": "font/woff", ".ttf": "font/ttf" };
+const CT: Record<string, string> = { ".html": "text/html", ".css": "text/css", ".js": "text/javascript", ".svg": "image/svg+xml", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".woff2": "font/woff2", ".woff": "font/woff", ".ttf": "font/ttf" };
+// Text-ish types take a charset; binary (images/fonts) must not (a bogus "image/png; charset" suffix).
+const isTextCT = (ct: string) => /^(text\/|application\/(javascript|json)|image\/svg)/.test(ct);
 
 // ADR-0009 Phase A — hand the cross-session recall block to the backend for first-user-turn
 // injection (never the frozen prefix; invariant #5/#6). READ-ONLY: the omp gate child is the
@@ -379,18 +389,21 @@ const server = Bun.serve({
       // settings + provider auth
       if (p === "/api/settings") {
         if (req.method === "POST") {
-          const b = await readBody<{ skip?: unknown; email?: unknown; username?: unknown }>(req);
+          const b = await readBody<{ skip?: unknown; email?: unknown; username?: unknown; role?: unknown; tourSeen?: unknown }>(req);
+          // ADR-0088/0089: role + first-run-tour state are cosmetic and policy-free — set them up front,
+          // independent of the email-attribution policy gate below.
+          if (b.role != null && (USER_ROLES as string[]).includes(String(b.role))) setUserRole(String(b.role) as UserRole);
+          if (b.tourSeen != null) setTourSeen(!!b.tourSeen);
           // Enforce enterprise-managed attribution policy server-side (the UI also reflects it).
-          if (b.skip && !skipAllowed()) return json({ ok: false, error: "Your organization requires a corporate email.", data: { username: loadSettings().username ?? "", email: loadSettings().email ?? "", attribution: attribution() } });
+          if (b.skip && !skipAllowed()) return json({ ok: false, error: "Your organization requires a corporate email.", data: settingsData() });
           if (b.email != null && String(b.email).trim() && !emailDomainAllowed(String(b.email))) {
             const ds = managedConfig().config?.attribution?.allowedEmailDomains ?? [];
-            return json({ ok: false, error: `Use your corporate email${ds.length ? " (" + ds.map((d) => "@" + d).join(", ") + ")" : ""}.`, data: { username: loadSettings().username ?? "", email: loadSettings().email ?? "", attribution: attribution() } });
+            return json({ ok: false, error: `Use your corporate email${ds.length ? " (" + ds.map((d) => "@" + d).join(", ") + ")" : ""}.`, data: settingsData() });
           }
           if (b.skip) setAttributionSkip(); // user skipped the email prompt → workstation attribution
-          else setProfile({ username: b.username != null ? String(b.username) : undefined, email: b.email != null ? String(b.email) : undefined });
+          else if (b.email != null || b.username != null) setProfile({ username: b.username != null ? String(b.username) : undefined, email: b.email != null ? String(b.email) : undefined });
         }
-        const s = loadSettings();
-        return json({ ok: true, data: { username: s.username ?? "", email: s.email ?? "", attribution: attribution() } });
+        return json({ ok: true, data: settingsData() });
       }
       // Enterprise-managed policy (read-only; placed by admins via GPO/MDM). Sanitized — policy only.
       if (p === "/api/managed") {
@@ -672,7 +685,8 @@ const server = Bun.serve({
       const file = Bun.file(join(ROOT, rel));
       if (await file.exists()) {
         const ext = rel.slice(rel.lastIndexOf("."));
-        return new Response(file, { headers: { "content-type": (CT[ext] ?? "application/octet-stream") + "; charset=utf-8" } });
+        const ct = CT[ext] ?? "application/octet-stream";
+        return new Response(file, { headers: { "content-type": ct + (isTextCT(ct) ? "; charset=utf-8" : ""), "cache-control": "max-age=86400" } });
       }
     } catch (err) {
       // js/stack-trace-exposure: log the detail server-side, return a generic message to the client

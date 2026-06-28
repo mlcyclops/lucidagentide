@@ -35,7 +35,7 @@ const RAW: Record<string, string> = {
   spark: P("M7 7h10v10H7z") + P("M10 4v3") + P("M14 4v3") + P("M10 17v3") + P("M14 17v3") + P("M4 10h3") + P("M4 14h3") + P("M17 10h3") + P("M17 14h3"),
   // bolt
   bolt: P("M12 3 6 13h5l-1 8 6-11h-5z"),
-  // clock (scheduled automations) — ring + hands
+  // clock (scheduled automations) - ring + hands
   clock: P("M12 5a7 7 0 1 0 0 14 7 7 0 0 0 0-14z") + P("M12 8.5V12l2.5 1.6"),
   // close
   close: P("M6 6l12 12") + P("M18 6 6 18"),
@@ -67,7 +67,7 @@ const RAW: Record<string, string> = {
   info: P("M12 4.5a7.5 7.5 0 1 0 0 15 7.5 7.5 0 0 0 0-15z") + P("M12 11v5") + P("M12 8h.01"),
   // pin / dock
   layout: P("M4 5.5h16v13H4z") + P("M14 5.5v13"),
-  // logs / developer console — a terminal frame with a ">" prompt + cursor line
+  // logs / developer console - a terminal frame with a ">" prompt + cursor line
   logs: P("M4 5.5h16v13H4z") + P("M7.5 9.7 10 12l-2.5 2.3") + P("M11.8 14.3h4.7"),
   // refresh
   refresh: P("M5 12a7 7 0 0 1 12-5l2 2") + P("M19 5v4h-4") + P("M19 12a7 7 0 0 1-12 5l-2-2") + P("M5 19v-4h4"),
@@ -75,14 +75,14 @@ const RAW: Record<string, string> = {
   copy: P("M9.5 9.5h8v8h-8z") + P("M6.5 14.5H6A1.5 1.5 0 0 1 4.5 13V6A1.5 1.5 0 0 1 6 4.5h7A1.5 1.5 0 0 1 14.5 6v.5"),
   // download (save to disk)
   download: P("M12 4v9.5") + P("M8 10.5l4 4 4-4") + P("M5 18.5h14"),
-  // lightbulb (thinking) — glass dome + neck, filament tick, two base lines
+  // lightbulb (thinking) - glass dome + neck, filament tick, two base lines
   bulb: P("M12 4.2a5 5 0 0 0-3 9c.7.5 1.1 1.3 1.2 2.1h3.6c.1-.8.5-1.6 1.2-2.1a5 5 0 0 0-3-9z")
     + P("M10.4 18.6h3.2") + P("M10.9 20.6h2.2") + P("M12 9.2v2.4") + P("M10.7 10.4h2.6"),
-  // double chevron down (jump-to-latest) — two stacked downward carets
+  // double chevron down (jump-to-latest) - two stacked downward carets
   chevronsDown: P("M6.5 7.5 12 13l5.5-5.5") + P("M6.5 13 12 18.5 17.5 13"),
 };
 
-// Action glyphs that read as "do something now" — they get the .ic-action hook
+// Action glyphs that read as "do something now" - they get the .ic-action hook
 // so CSS can give them an extra spark on hover. Purely additive: behavior and
 // default visual weight are unchanged.
 const ACTION = new Set(["bolt", "spark", "refresh", "send", "plus", "download"]);

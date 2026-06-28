@@ -1,11 +1,11 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/renderer/swr_cache.ts — P-PERF.1 (ADR-0084): a tiny localStorage-backed stale-while-revalidate
+// desktop/renderer/swr_cache.ts - P-PERF.1 (ADR-0084): a tiny localStorage-backed stale-while-revalidate
 // cache so a RETURNING user gets instant UI. On open we paint the cached value immediately, then fetch
 // fresh in the background and update only if it changed. Persisted across reloads/restarts.
 //
-// SCOPE / privacy: only data that is ALREADY plaintext on disk is cached here — the session list and chat
+// SCOPE / privacy: only data that is ALREADY plaintext on disk is cached here - the session list and chat
 // transcripts (omp persists those as ~/.omp/.../*.jsonl). The encrypted Knowledge-graph store is NEVER
 // cached to disk (that would defeat its at-rest encryption); it stays in-memory only.
 
@@ -26,7 +26,7 @@ export function cacheGet<T>(key: string): T | null {
   try { const raw = store().getItem(key); return raw ? (JSON.parse(raw) as T) : null; } catch { return null; }
 }
 export function cacheSet(key: string, value: unknown): void {
-  try { store().setItem(key, JSON.stringify(value)); } catch { /* quota exceeded / unserializable — caching is best-effort */ }
+  try { store().setItem(key, JSON.stringify(value)); } catch { /* quota exceeded / unserializable - caching is best-effort */ }
 }
 
 // ── session list ────────────────────────────────────────────────────────────

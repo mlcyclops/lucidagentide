@@ -6722,3 +6722,193 @@ files carry the BUSL-1.1 header (ADR-0086).
 `desktop/version.ts`, `desktop/package.json`, `desktop/renderer/about.ts`, `desktop/renderer/app.ts`
 (`#railAbout` + `openAbout`), `desktop/renderer/styles.css` (`.about-*`), `desktop/about.test.ts`,
 `desktop/scripts/demo_p_about_1.ts`.
+
+## ADR-0088 - Role-based onboarding + opinionated, progressively-disclosed views (Dev / Sec / Mgr / Exec)
+
+**Date:** 2026-06-28
+**Status:** Accepted - SCOPE/PLAN.
+**Increment:** P-ROLE.1 (phased: P-ROLE.1 / .2 / .3 / .4).
+
+### Context
+
+First-run onboarding is identity-only: `promptForEmailIfMissing()` (`desktop/renderer/app.ts`) captures a
+corporate email — or skips to workstation attribution — and writes it via `setProfile()` to
+`~/.omp/lucid-gui.json`. There is **no notion of who the user is by job function**. Meanwhile the UI has
+grown dense: five inspector surfaces (Chat, Security, Memory, Knowledge, Dev-logs), an ~8-segment status
+bar, an 8-tile quick-metrics rail, plus About / Commands / Settings rails. A developer chasing flow-state,
+a security engineer triaging quarantine, a delivery manager watching spend, and an executive wanting one
+reassuring posture light all see the **same** wall of metrics — most of it irrelevant to any one of them,
+and overwhelming to all. The product needs opinionated, role-shaped defaults that streamline without
+amputating capability.
+
+Exactly one role-ish mechanic exists today and points the way: Dev-logs is hidden unless `developerMode`
+is on, and **ADR-0021 auto-reveals the Security tab the instant a block fires**. That "hide until it
+matters, then surface it" pattern is the seed we generalize.
+
+### Decision
+
+**The load-bearing rule: roles change DEFAULTS and CHROME, never ENFORCEMENT.** A role is a presentation
+preset. It picks the landing surface, which pills/status-segments/quick-tiles render, and which rails are
+visible by default. It does **not** touch the security gate, the scanner, trust labels, event emission, or
+the prompt prefix. A Developer who never opens the Security panel is exactly as protected as a Security
+Engineer: the fail-closed gate still blocks (invariant #3), the event is still emitted to the audit sink
+(#8), and a real block still **force-reveals** the Security surface for every role.
+
+- **Disclosure model = defaults + always-reachable** (not hard-hide). Nothing is ever removed from the
+  app. Every panel stays reachable via the Command palette and a Settings "Show all panels" switch; the
+  role only sets what is *foregrounded*. This is the safest stance against invariant #3 — a role can never
+  bury a security surface beyond reach.
+
+- **Four roles**, captured at onboarding and persisted as
+  `userRole?: "developer" | "security" | "manager" | "executive"` in `GuiSettings`
+  (`desktop/settings_store.ts`), reusing the existing `setProfile` → `/api/settings` → bridge path the
+  email gate already uses. Unset ⇒ **Developer** (the safe, full-surface default). Each role's preset:
+
+  - **Developer** (default) — lands on Chat + Memory (context / cache / cost). Rails: Chat, Memory,
+    Knowledge. Status pills: model · context-fill · cache-% · session-cost. Quick tiles: cache-savings-% ·
+    avg-tok/turn · context · AI-authored-LOC. Security collapsed to a single green "gate active" until a
+    block lights the badge. Dev-logs off.
+  - **Security Engineer** — lands on the Security inspector. Rails: Chat, Security, Dev-logs (on), Memory.
+    The Security badge is **always on** (green "0 / gate active", never hidden). Pills: quarantined ·
+    awaiting-review · findings-by-severity · promotion-gate (blocked/promoted) · egress-blocks ·
+    exec-approvals (T0–T4) · trust-label mix · SIEM sink delivery (✓/✕). Transcripts + audit on.
+  - **Manager** — lands on the cost / delivery ledger. Rails: Chat, Memory→Ledger, Loop/AAR. Pills:
+    session + monthly spend · cache-savings-$ (% off full price) · AI-LOC by repo/model · loop
+    success-rate & avg-iterations-to-win · budget-% · AskSage gov-usage-%. Security appears as a *count
+    rollup* chip, not the findings table. Dev-logs off.
+  - **Executive** — lands on a posture + spend summary; the Engineering Update Brief + podcast (P-BRIEF)
+    is the marquee surface. Rails: Chat, Brief, Spend. Four reassurance tiles only: 🟢 security posture
+    ("protected — N blocked this month") · monthly spend rollup · AI productivity (LOC/month) ·
+    governance posture (gov-lockdown · FIPS · CUI-isolated · audit-export-ready). Everything operational
+    is hidden (but reachable).
+
+- **"Reveal on relevance" engine** (generalizes ADR-0021), three rules: (1) **Escalation reveal** — a
+  hidden surface un-hides when an event of its class fires: a block lights the Security badge for everyone;
+  a budget breach surfaces the budget chip for Mgr/Exec; a quarantine pulls the Exec posture tile 🟢→🟠.
+  (2) **Always reachable** — Command palette + "Show all panels" open any surface regardless of role.
+  (3) **Policy override wins** — managed GPO/MDM policy (ADR-0068) may pin a role or force-show audit for
+  Sec, and may only *tighten*, never loosen.
+
+- **Onboarding flow** — the existing email gate becomes a two-step modal: Step 1 picks a role (four cards,
+  each with a one-line "what you'll see"), Step 2 is the unchanged email/attribution step. Role is also
+  switchable any time from Settings → Profile. Managed policy can pin it (the switcher then shows the
+  policy source and disables).
+
+### Phasing
+
+- **P-ROLE.1** — persist `userRole` + role→default-view map; two-step onboarding modal; Settings switcher.
+- **P-ROLE.2** — per-role chrome presets (rails / status pills / quick tiles) over the panels that already
+  exist. Pure presentation layer; no new dashboards.
+- **P-ROLE.3** — the reveal-on-relevance engine (generalize ADR-0021) + managed-policy role pin.
+- **P-ROLE.4** *(later)* — dedicated Manager (delivery/showback) and Executive (posture/brief) aggregate
+  dashboards. These surfaces don't exist yet; until built, Mgr/Exec reuse the Memory ledger + P-BRIEF.
+
+### Consequences
+
+- Streamlines the first-run experience per job function without reducing any user's reachable capability.
+- A role is cosmetic state in `lucid-gui.json` — no schema change, no DuckDB migration, no prompt-prefix
+  byte (role lives in the volatile tail / settings, never layers 1–4, so the KV cache is untouched, #6).
+- Adds a presentation-layer escalation engine; the security INVARIANT is unchanged because the gate's
+  blocking path and event emission never consult `userRole`. A test must assert a Developer-role session
+  still blocks + still emits on the kill-sidecar fixture (over-tested per the keystones list).
+- Risk surfaced & rejected: hard-hiding surfaces by role could bury a security signal. Rejected in favor
+  of defaults + always-reachable + forced reveal.
+
+### Invariants preserved
+
+#3 fail-closed (roles are cosmetic; the gate never reads `userRole`), #5/#7 untrusted delimiting + the
+closed trust-label set untouched, #6 frozen prefix untouched (role is tail/settings state), #8 every event
+still emitted regardless of who is looking. New first-party files carry the BUSL-1.1 header (ADR-0086).
+
+### Relates to
+
+`desktop/settings_store.ts` (`GuiSettings.userRole` + setter), `desktop/dev.ts` (`/api/settings`),
+`desktop/renderer/bridge.ts` (`ProfileSettings`), `desktop/renderer/app.ts` (`promptForEmailIfMissing` →
+two-step onboarding, `secProfile` switcher, rail/status/quick-tile presets, generalized ADR-0021 reveal),
+ADR-0021 (auto-reveal Security on block), ADR-0068 (managed GPO/MDM policy), P-BRIEF (Exec marquee),
+ADR-A008 (showback, Manager).
+
+## ADR-0089 - First-run guided walkthrough (coachmark tour), role-tailored, reusing the model hover-card style
+
+**Date:** 2026-06-28
+**Status:** Accepted - SCOPE/PLAN.
+**Increment:** P-ROLE.1b (runs right after role capture in P-ROLE.1; re-launchable from About per ADR-0087).
+
+### Context
+
+A first-time user lands in a dense IDE — rails, an inspector, a status bar of pills, a composer with model /
+mode / thinking / persona controls. ADR-0088 picks a *role* and shapes the defaults, but it does not *teach*:
+nothing points at "this rail is your Security queue," "this pill is your context window," "hover any model for
+the full card." We already built one piece of UI delight worth echoing — the **premium per-model hover card**
+(`.modeltip` / `modelTipHTML()` / `showModelTip`): a floating, anchored card that fades in with a
+`translateY+scale`, reads from a pure string builder, and positions itself off a target's `getBoundingClientRect()`.
+A guided walkthrough that *looks and moves like that card* will feel native, not bolted on. It must be skippable,
+must never replay once dismissed, and must be re-launchable on demand from the About panel.
+
+### Decision
+
+A **role-tailored, first-run coachmark tour** — a sequence of premium cards, each anchored to (and spotlighting)
+a real UI element, that reuses the model hover-card's visual language and positioning math.
+
+- **Trigger / once-only.** The tour is the *third* onboarding step, after role (Step 1) and email (Step 2),
+  fired from the same first-login signal the email gate uses (`!state.attribution?.decided` ⇒ no saved/cached
+  profile). A new cosmetic flag `tourSeen?: boolean` in `GuiSettings` (`~/.omp/lucid-gui.json`, like `userRole`)
+  gates replay: set `true` on **finish OR skip**, so the tour never re-appears uninvited. The init sequence
+  awaits role + email, then — if `!tourSeen` — calls `startTour(role)`.
+
+- **Re-launchable from About.** The About panel (ADR-0087, `about.ts`) gains a "Take the tour" button in
+  `.about-actions`; clicking it closes About and calls `startTour(currentRole)` unconditionally (ignores
+  `tourSeen`). This is the "do it later" path the user asked for.
+
+- **The coachmark = the model card's twin.** A new `.coach` card borrows `.modeltip`'s tokens (`--bg-4`,
+  `--line-strong`, `--shadow`, the `.show` fade-in with `translateY(4px) scale(.98)→none`) and its anchor
+  math (position off the target's rect; flip to the other side when it would overflow the viewport). It DIFFERS
+  in two ways the hover card cannot: it is **interactive** (`pointer-events:auto`; the hover card is
+  `pointer-events:none`) and it paints a **spotlight backdrop** — a dimmed overlay with a transparent cutout
+  around the target (a positioned ring element with a large-spread `box-shadow`), so the eye goes to the
+  highlighted control. Each card carries: a title, a one/two-line description, a "Step N of M" dot row,
+  Back / Next (Next→"Done" on the last step), and a persistent **Skip**. Esc = skip; Enter = next.
+
+- **Role-tailored steps.** A master step catalog (pure data) maps each step to a target selector + copy; a
+  `role → steps[]` table selects the subset that matters to the chosen role (mirrors ADR-0088's foregrounding):
+  - *Developer* — composer → model picker (with the meta-hint "hover any model for the full card") → Memory
+    inspector (context / cache / cost) → Knowledge rail → Command palette → About glyph.
+  - *Security* — composer → Security rail + badge → quarantine / approvals queue → Dev-logs → audit export →
+    Command palette.
+  - *Manager* — composer → cost / delivery ledger → loop / AAR → spend + budget pills → Command palette.
+  - *Executive* — composer → posture pill → spend rollup → the Engineering Update brief → Command palette.
+  - *Universal closer* (all roles) — "Anything hidden is one ⌘K away; replay this tour any time from About."
+  A step whose target is not in the DOM for that role (hidden surface) is **skipped gracefully**, never a
+  dangling arrow pointing at nothing.
+
+- **Motion / a11y.** Honors `prefers-reduced-motion` (no translate/scale, instant placement; backdrop fades
+  only). Focus moves into the card; the card traps Tab between Back/Next/Skip; Esc always exits.
+
+### Consequences
+
+- New users get oriented to exactly the surface their role uses, in the app's own premium idiom — and can bail
+  with one Skip, or replay from About forever.
+- The visual language is shared with the model hover card, so polish stays consistent and the CSS is largely
+  reuse, not new invention.
+- `tourSeen` is cosmetic settings state — no schema change, no DuckDB migration, no prompt-prefix byte.
+- Step content lives in a **pure builder** (`tour.ts`, like `about.ts`), so the catalog + per-role selection
+  are unit-tested and demo-proven without a DOM; `app.ts` owns only the engine (backdrop, anchoring, nav).
+- Risk: a step's target selector can rot if the UI is refactored. Mitigated by a test asserting every catalog
+  selector is a constant referenced from the renderer, and by the skip-if-absent behavior failing *safe*
+  (a missing target drops its step, never breaks the tour).
+
+### Invariants preserved
+
+Renderer-only + additive. #3 fail-closed untouched (the tour is cosmetic; it never gates or un-gates anything),
+#5/#7 untrusted-delimiting + closed trust-label set untouched, #6 frozen prefix untouched (`tourSeen` is
+tail/settings state), #8 event emission unaffected. New first-party files carry the BUSL-1.1 header (ADR-0086);
+all tour copy is first-party + HTML-escaped at the boundary.
+
+### Relates to
+
+ADR-0088 (role onboarding — the tour is its teaching step), ADR-0087 (About panel — the re-launch button +
+`.about-actions`), `desktop/renderer/about.ts` (`aboutHtml` gains "Take the tour"), `desktop/renderer/app.ts`
+(`modeltip`/`showModelTip` anchor math reused by `startTour`; init sequencing after `promptForEmailIfMissing`),
+`desktop/renderer/styles.css` (`.modeltip` tokens → `.coach*` + `.coach-spot` backdrop),
+`desktop/settings_store.ts` (`GuiSettings.tourSeen`), new `desktop/renderer/tour.ts` (pure step catalog +
+role→steps), `desktop/tour.test.ts`, `desktop/scripts/demo_p_role_1b.ts`.

@@ -187,7 +187,7 @@ export type ToastTone = "ok" | "info" | "warn" | "danger";
 export interface ToastOpts { title: string; desc: string; meta?: string; actions?: ToastAction[]; timeout?: number; tone?: ToastTone }
 
 // Per-tone icon. Defaults to the positive look ("check") when tone is omitted, matching
-// the green default in CSS — most toasts are confirmations. Failure callers opt into
+// the green default in CSS - most toasts are confirmations. Failure callers opt into
 // tone:"danger" (shield + red), warnings into tone:"warn".
 const TONE_ICON: Record<ToastTone, string> = { ok: "check", info: "info", warn: "bolt", danger: "shield" };
 

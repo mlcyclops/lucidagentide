@@ -18,13 +18,13 @@
   --spring:cubic-bezier(.34,1.56,.64,1);
   --t-fast:130ms; --t:180ms; --t-slow:240ms;
 
-  /* Elevation — layered, soft, low-opacity. Stack a tight contact shadow
+  /* Elevation - layered, soft, low-opacity. Stack a tight contact shadow
      under a broad ambient one so surfaces lift without muddying the dark UI. */
   --shadow:0 12px 34px -12px rgba(0,0,0,.55), 0 2px 6px rgba(0,0,0,.35);
   --shadow-sm:0 1px 2px rgba(0,0,0,.30), 0 2px 6px -2px rgba(0,0,0,.32);
   --shadow-md:0 2px 5px rgba(0,0,0,.32), 0 8px 20px -6px rgba(0,0,0,.44);
   --shadow-lg:0 4px 10px rgba(0,0,0,.36), 0 18px 44px -12px rgba(0,0,0,.58);
-  /* Inset top highlight — the faint catch-of-light on raised edges. */
+  /* Inset top highlight - the faint catch-of-light on raised edges. */
   --emboss:inset 0 1px 0 rgba(255,255,255,.04);
   /* Hairline focus/selection ring, on-brand. */
   --ring:0 0 0 1px color-mix(in srgb,var(--accent-2) 55%,transparent), 0 0 0 4px var(--accent-dim);
@@ -77,7 +77,7 @@ button{font-family:inherit}
   box-shadow:inset 0 1px 0 rgba(255,255,255,.045), inset 0 -1px 0 rgba(0,0,0,.28),
     0 1px 2px rgba(0,0,0,.35);
 }
-/* crisp top hairline — sits above the inset highlight for a precise edge */
+/* crisp top hairline - sits above the inset highlight for a precise edge */
 .titlebar::before{content:"";position:absolute;inset:0 0 auto 0;height:1px;pointer-events:none;
   background:linear-gradient(90deg,transparent,rgba(255,255,255,.06) 18%,
     rgba(255,255,255,.06) 82%,transparent)}
@@ -98,7 +98,7 @@ button{font-family:inherit}
   padding:5px 11px;font-size:12.5px;color:var(--txt-2);transition:border-color var(--t),color var(--t)}
 .model-badge:hover{border-color:var(--line-strong);color:var(--txt)}
 .model-badge .dot{width:6px;height:6px;border-radius:50%;background:var(--green);box-shadow:0 0 8px var(--green)}
-/* titlebar instance — refined pill: soft shadow, inset emboss, clearer live dot */
+/* titlebar instance - refined pill: soft shadow, inset emboss, clearer live dot */
 .titlebar .model-badge{
   background:linear-gradient(180deg,var(--bg-3),var(--bg-2));
   box-shadow:var(--shadow-sm, 0 1px 2px rgba(0,0,0,.4)),
@@ -254,7 +254,7 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
   border-radius:9px;background:transparent;color:var(--txt-2);font-size:12px;font-weight:600;cursor:pointer;
   text-align:left;transition:background var(--t) var(--ease)}
 .sess-group-toggle:hover{background:var(--bg-2);color:var(--txt)}
-/* P-KG-INGEST.2: bulk "clear ingest sessions" — hidden until group hover, danger tint */
+/* P-KG-INGEST.2: bulk "clear ingest sessions" - hidden until group hover, danger tint */
 .sess-group-clear{display:grid;place-items:center;width:26px;height:26px;border:0;border-radius:7px;
   background:transparent;color:var(--txt-3);cursor:pointer;opacity:0;
   transition:opacity var(--t) var(--ease),color var(--t) var(--ease),background var(--t) var(--ease)}
@@ -287,7 +287,7 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
    padding on big screens, and slimmer side gutters reclaim more width. Still centred + responsive. */
 .thread{max-width:min(1320px,96vw);margin:0 auto;padding:0 22px;display:flex;flex-direction:column;gap:20px}
 .msg{position:relative;display:flex;gap:11px;align-items:flex-start;animation:rise var(--t-slow) var(--ease-out)}
-/* per-message actions (copy markdown · save .md) — appear on hover */
+/* per-message actions (copy markdown · save .md) - appear on hover */
 .msg-actions{position:absolute;top:-3px;right:0;display:flex;gap:4px;opacity:0;transform:translateY(-2px);transition:opacity var(--t) var(--ease-out),transform var(--t) var(--ease-out);pointer-events:none}
 .msg:hover .msg-actions,.msg:focus-within .msg-actions{opacity:1;transform:none;pointer-events:auto}
 .msg-act{-webkit-app-region:no-drag;border:1px solid var(--line);background:var(--bg-2);color:var(--txt-2);width:27px;height:27px;border-radius:7px;display:grid;place-items:center;cursor:pointer;transition:background var(--t),color var(--t),border-color var(--t)}
@@ -370,7 +370,7 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .msg .text blockquote p:last-child{margin-bottom:0}
 .msg .text code{font-family:var(--mono);font-size:.86em;background:var(--cyan-dim);
   border:1px solid color-mix(in srgb,var(--cyan) 22%,var(--line-soft));padding:1.5px 6px;border-radius:5px;color:color-mix(in srgb,var(--cyan) 86%,#fff)}
-/* code blocks: embossed premium panel — distinct surface, accent edge, inset highlight, smooth scroll */
+/* code blocks: embossed premium panel - distinct surface, accent edge, inset highlight, smooth scroll */
 .msg .text pre{position:relative;margin:0 0 14px;padding:14px 16px;background:linear-gradient(180deg,#0e1119,#0b0d14);border:1px solid var(--line-strong);
   border-left:3px solid color-mix(in srgb,var(--accent) 58%,var(--line-strong));border-radius:11px;overflow-x:auto;max-width:100%;
   scrollbar-width:thin;box-shadow:var(--emboss,0 10px 26px -14px rgba(0,0,0,.6)),inset 0 1px 0 rgba(255,255,255,.04);transition:border-color var(--t),box-shadow var(--t)}
@@ -391,7 +391,7 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
   background:linear-gradient(150deg,var(--accent),#7d39c4);color:#fff;box-shadow:0 0 22px rgba(198,75,214,.4),inset 0 1px 0 rgba(255,255,255,.18);transform:scale(1.5)}
 .chat-hint .h{font-size:18px;font-weight:600;color:var(--txt);margin-top:8px;letter-spacing:-.01em}
 .chat-hint .d{font-size:13.5px;max-width:340px;line-height:1.62;color:var(--txt-2)}
-/* streaming caret: a soft pulsing bar (eased fade, not a hard blink) with a faint glow — feels
+/* streaming caret: a soft pulsing bar (eased fade, not a hard blink) with a faint glow - feels
    alive without flicker. Sits flush after the last token; reduced-motion stops the animation. */
 .cursor{display:inline-block;width:7px;height:1.05em;vertical-align:-2px;margin-left:1px;border-radius:2px;
   background:var(--accent-2);box-shadow:0 0 7px var(--accent-dim);
@@ -400,7 +400,7 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 
 /* tool + block chips inside the thread.
    Tool calls now consolidate into the .thoughts window (below); the lone .evt that still
-   renders inline is the SECURITY block — kept loud and never folded into the collapse. */
+   renders inline is the SECURITY block - kept loud and never folded into the collapse. */
 .evt{display:flex;align-items:center;gap:9px;font-size:12.5px;padding:8px 11px;border-radius:9px;
   border:1px solid var(--line);background:var(--bg-1);color:var(--txt-2);width:fit-content;max-width:100%;
   animation:rise var(--t) var(--ease-out)}
@@ -440,7 +440,7 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .thoughts-step .ts-d{color:var(--txt-3);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 @keyframes spin{to{transform:rotate(360deg)}}
 
-/* reasoning ("thinking") block — P-ACP.1 (ADR-0027). Sits ABOVE the answer; streams the model's
+/* reasoning ("thinking") block - P-ACP.1 (ADR-0027). Sits ABOVE the answer; streams the model's
    thought text live, then auto-collapses to a "Thought for Ns" summary when the answer takes over. */
 .reasoning{margin:2px 0 8px;border:1px solid var(--line);border-left:2px solid var(--accent-dim);
   border-radius:11px;background:var(--bg-1);width:fit-content;max-width:100%;overflow:hidden;
@@ -463,7 +463,7 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .reasoning.open .reasoning-body{padding:2px 12px 10px}
 @keyframes thinkpulse{0%,100%{opacity:.45}50%{opacity:1}}
 
-/* tool-permission prompt (Ask mode) — P-ACP.3 (ADR-0027). Inline approve/deny card inside the turn. */
+/* tool-permission prompt (Ask mode) - P-ACP.3 (ADR-0027). Inline approve/deny card inside the turn. */
 .perm{margin:8px 0;border:1px solid var(--line);border-left:2px solid var(--accent);border-radius:11px;
   background:var(--bg-1);width:fit-content;max-width:100%;overflow:hidden;font-family:var(--mono);font-size:12.5px;
   animation:rise var(--t) var(--ease-out)}
@@ -487,7 +487,7 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .perm-result.no{color:var(--txt-3)}
 .perm-result .ic{flex:none}
 /* P-EGRESS.1 (ADR-0062): per-website egress approval, DOCKED above the prompt bar. Subdued to match the
-   app — outline buttons (no bright fills), amber only as a thin accent, color on hover. */
+   app - outline buttons (no bright fills), amber only as a thin accent, color on hover. */
 #egressDock{max-width:min(1080px,94vw);margin:0 auto 10px;display:flex;flex-direction:column;gap:8px}
 .perm-egress{margin:0;border:1px solid var(--line);border-left:2px solid color-mix(in srgb,var(--amber,#e0a64e) 55%,var(--line));
   border-radius:11px;background:var(--bg-1)}
@@ -514,7 +514,7 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .perm-egress .eg-block{color:var(--txt-3)}
 .perm-egress .eg-block:hover{border-color:var(--red);color:var(--red);background:var(--red-dim)}
 
-/* P-EXEC.1 (ADR-0066): exec approval card — reuses the egress shell, adds a why-line + program chip and a
+/* P-EXEC.1 (ADR-0066): exec approval card - reuses the egress shell, adds a why-line + program chip and a
    high-risk (catastrophic) red accent. */
 .perm-exec .perm-eg-head .ic{color:var(--cyan)}
 .perm-exec-why{margin:0 12px 8px;font-size:11.5px;color:var(--txt-3);line-height:1.45;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
@@ -523,7 +523,7 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .perm-exec-danger .perm-eg-head{color:var(--red)}
 .perm-exec-danger .perm-eg-head .ic{color:var(--red)}
 
-/* subagent delegation card (omp `task` tool) — P-TASK.1 (ADR-0028). Mirrors .thoughts/.reasoning. */
+/* subagent delegation card (omp `task` tool) - P-TASK.1 (ADR-0028). Mirrors .thoughts/.reasoning. */
 .subagent{margin:8px 0 2px;border:1px solid var(--line);border-left:2px solid var(--cyan);border-radius:11px;
   background:var(--bg-1);width:fit-content;max-width:100%;overflow:hidden;animation:rise var(--t) var(--ease-out)}
 .subagent-head{display:flex;align-items:center;gap:8px;width:100%;text-align:left;cursor:pointer;
@@ -531,7 +531,7 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
   transition:background var(--t)}
 .subagent-head:hover{background:var(--bg-2)}
 .subagent-spin{flex:none;display:inline-flex;color:var(--cyan)}
-/* the stick man with a looking glass — green neon. The .look group (head + arm + magnifier) bobs
+/* the stick man with a looking glass - green neon. The .look group (head + arm + magnifier) bobs
    slightly up and down while running, as if scanning. */
 .subagent-spin .looker{color:var(--green);overflow:visible;
   filter:drop-shadow(0 0 2px var(--green)) drop-shadow(0 0 5px color-mix(in srgb,var(--green) 55%,transparent))}
@@ -575,7 +575,7 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .goal-modal-h{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:16.5px;font-weight:650;color:var(--txt)}
 .goal-modal-h .ic{color:var(--accent-2)}
 .goal-h-title{display:flex;align-items:center;gap:8px}
-/* P-GOAL.8: mode toggle (upper-right) — guided walkthrough ⇄ advanced */
+/* P-GOAL.8: mode toggle (upper-right) - guided walkthrough ⇄ advanced */
 .goal-mode-toggle{font-size:11.5px;font-weight:600;color:var(--accent-2);background:var(--accent-dim);
   border:1px solid color-mix(in srgb,var(--accent) 30%,var(--line));border-radius:999px;padding:4px 11px;cursor:pointer;
   transition:background var(--t),border-color var(--t),color var(--t);white-space:nowrap}
@@ -701,7 +701,7 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .goal-banner{display:flex;align-items:center;gap:9px;font-size:13px;font-weight:600;padding:10px 13px;border-radius:11px}
 .goal-banner.ok{color:var(--green);background:color-mix(in srgb,var(--green) 14%,transparent);border:1px solid color-mix(in srgb,var(--green) 40%,var(--line))}
 .goal-banner.stop{color:var(--txt-2);background:var(--bg-2);border:1px solid var(--line)}
-/* P-GOAL.9: the After-Action Report card — collapsible, with the metrics summary in the header. */
+/* P-GOAL.9: the After-Action Report card - collapsible, with the metrics summary in the header. */
 .goal-aar{margin-top:10px;border:1px solid var(--line);border-radius:11px;background:var(--bg-2);overflow:hidden}
 .goal-aar>summary{cursor:pointer;list-style:none;display:flex;align-items:center;gap:7px;font-size:12px;padding:9px 12px;color:var(--txt-2)}
 .goal-aar>summary::-webkit-details-marker{display:none}
@@ -723,8 +723,8 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .gs-mix .gs-tool{font-size:10.5px;color:var(--txt-3);background:var(--bg-1);border:1px solid var(--line);border-radius:6px;padding:2px 7px}
 .gs-mix .gs-tool b{color:var(--txt-1)}
 .gs-blocker{display:flex;align-items:center;gap:5px;margin-top:8px;font-size:11px;color:var(--txt-4)}
-/* Collapsible Loop history: auto-collapses once past step 1 (guided) or in advanced mode — the user
-   already saw it — and the header is clickable to expand (`.expanded` is the manual override). */
+/* Collapsible Loop history: auto-collapses once past step 1 (guided) or in advanced mode - the user
+   already saw it - and the header is clickable to expand (`.expanded` is the manual override). */
 .goal-stats .gs-head{cursor:pointer;user-select:none;margin-bottom:0}
 .goal-stats:not(.collapsed) .gs-head{margin-bottom:8px}
 .gs-caret{margin-left:7px;display:inline-flex;color:var(--txt-4);transition:transform var(--t)}
@@ -732,7 +732,7 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .goal-stats.collapsed .gs-grid,.goal-stats.collapsed .gs-mix,.goal-stats.collapsed .gs-blocker{display:none}
 .goal-stats.collapsed{padding-top:9px;padding-bottom:9px}
 .gs-blocker span{color:var(--txt-3)}
-/* P-GOAL.12: Pre-Flight Audit — the optional design/readiness pass that pauses the builder. */
+/* P-GOAL.12: Pre-Flight Audit - the optional design/readiness pass that pauses the builder. */
 .goal-preflight-btn{margin:0 0 8px;display:inline-flex;align-items:center;gap:6px}
 .preflight-modal{width:min(720px,94vw);max-height:90vh;overflow:auto;background:var(--bg-1);border:1px solid var(--line);border-radius:14px;padding:16px 18px;display:flex;flex-direction:column;gap:10px}
 .pf-form{display:flex;flex-direction:column;gap:8px}
@@ -786,17 +786,17 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
   box-shadow:0 2px 6px -2px rgba(198,75,214,.5),inset 0 2px 5px rgba(0,0,0,.32);
   filter:brightness(.97);transition-duration:var(--t-fast)}
 /* the sendReady glow animates box-shadow and would otherwise override the
-   hover/press shadow via the cascade — drop the animation during interaction
+   hover/press shadow via the cascade - drop the animation during interaction
    so the declared tactile shadow actually shows */
 .send-btn:not(:disabled):hover,.send-btn:not(:disabled):active{animation:none}
 .send-btn:disabled{background:var(--bg-4);color:var(--txt-4);cursor:default;
   box-shadow:inset 0 1px 0 rgba(255,255,255,.03);transform:none;filter:none;opacity:.85}
-/* P-ACP.4: Stop state — the Send button turns into a red Stop control while a turn runs */
+/* P-ACP.4: Stop state - the Send button turns into a red Stop control while a turn runs */
 .send-btn.stop{background:linear-gradient(180deg,#e5564e,#c8423b);
   box-shadow:0 4px 12px -3px rgba(200,66,59,.5),inset 0 1px 0 rgba(255,255,255,.22)}
 .send-btn.stop:hover{filter:brightness(1.08);box-shadow:0 7px 18px -4px rgba(200,66,59,.6),inset 0 1px 0 rgba(255,255,255,.28)}
 .send-btn.stop{animation:none}
-/* P-ACP.4 / P-IDE.1d: pre-staged ("queued") prompt — a compact, subdued pill aligned to the right
+/* P-ACP.4 / P-IDE.1d: pre-staged ("queued") prompt - a compact, subdued pill aligned to the right
    above the composer, with a delete (✕) to drop it before it sends */
 .queued-chip{max-width:min(1080px,94vw);margin:0 auto 6px;display:flex;justify-content:flex-end;padding:0 2px}
 .q-pill{display:inline-flex;align-items:center;gap:7px;max-width:72%;background:var(--bg-2);
@@ -863,7 +863,7 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 /* colour overrides for the amber (awaiting review) chip alert */
 .chip.alert.alert-amber{--chip-alert-color:var(--amber);--chip-alert-dim:var(--amber-dim)}
 
-/* ADR-0021: ledger-peek — the snapshot card + first model row rendered outside the accordion */
+/* ADR-0021: ledger-peek - the snapshot card + first model row rendered outside the accordion */
 .ledger-peek{margin-bottom:10px}
 .ledger-peek .tbl{border:1px solid var(--line);border-radius:0 0 11px 11px;overflow:hidden;margin-top:-1px}
 
@@ -892,7 +892,7 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .gbar{flex:1;height:13px;background:#0a0c12;border:1px solid var(--line-soft);border-radius:7px;overflow:hidden;
   box-shadow:inset 0 1px 2px rgba(0,0,0,.5)}
 /* fill keeps the JS-set background colour (--gc). display:block so the % width/height actually
-   apply (a bare inline <span> collapses to 0×0 — that was the "bars don't fill" bug). */
+   apply (a bare inline <span> collapses to 0×0 - that was the "bars don't fill" bug). */
 .gbar .fill{display:block;position:relative;height:100%;border-radius:7px;overflow:hidden;
   transition:width var(--t-slow) var(--ease-out),box-shadow var(--t) var(--ease),filter var(--t);
   box-shadow:inset 0 1px 0 rgba(255,255,255,.20),0 0 7px -1px rgba(0,0,0,.25)}
@@ -1004,7 +1004,7 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .statusbar .seg{display:flex;align-items:center;gap:7px;cursor:default;padding-right:5px}
 .statusbar .seg b{font-family:var(--mono);color:var(--txt-2);font-weight:600;font-variant-numeric:tabular-nums}
 /* Live/“updated Ns ago” indicator: fixed width so the changing text never resizes the segment (which
-   would shove "gate active" left and right every poll — the distracting jiggle). Content left-aligned:
+   would shove "gate active" left and right every poll - the distracting jiggle). Content left-aligned:
    the green dot + text sit at the left of the chip, the slack absorbs on the right. */
 .statusbar .seg-live{width:110px;padding-left:7px;padding-right:2px;justify-content:flex-start;white-space:nowrap;overflow:hidden}
 .statusbar .mini{width:64px;height:7px;background:#0c0e15;
@@ -1152,7 +1152,7 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 
 /* ───────────────────────── toast / popover ───────────────────────── */
 #toasts{position:fixed;right:18px;top:52px;z-index:120;display:flex;flex-direction:column;gap:10px;align-items:flex-end}
-/* --tone: the toast's accent colour; defaults to the positive (green) look — most toasts are
+/* --tone: the toast's accent colour; defaults to the positive (green) look - most toasts are
    confirmations. Error/failure callers opt into tone:"danger" (red); warnings into tone:"warn". */
 .toast{--tone:var(--green);--tone-tint:var(--green-dim);--tone-h:#c6f3d6;
   width:340px;background:var(--bg-1);background-image:var(--emboss,none);
@@ -1170,7 +1170,7 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .toast .d{font-size:12px;color:var(--txt-2);margin-top:3px;line-height:1.5}
 .toast .meta{font-family:var(--mono);font-size:11px;color:var(--txt-3);margin-top:6px}
 .toast .acts{display:flex;gap:7px;margin-top:10px}
-/* tone variants — success feels celebratory, info/warn calm, danger stays the default look. */
+/* tone variants - success feels celebratory, info/warn calm, danger stays the default look. */
 .toast.danger{--tone:var(--red);--tone-tint:var(--red-dim);--tone-h:#ffd0d0}
 .toast.ok{--tone:var(--green);--tone-tint:var(--green-dim);--tone-h:#c6f3d6}
 .toast.info{--tone:var(--cyan);--tone-tint:var(--cyan-dim);--tone-h:#cdeef4}
@@ -1192,7 +1192,7 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
     box-shadow var(--t) var(--ease),transform var(--t-fast) var(--ease-out)}
 .ctool:hover{background:linear-gradient(180deg,var(--bg-4),var(--bg-3));border-color:var(--line-strong);color:var(--txt);
   transform:translateY(-1px);box-shadow:0 4px 12px -5px rgba(0,0,0,.55),inset 0 1px 0 rgba(255,255,255,.06)}
-/* P-IDE.2: a bundled skill is active — highlight the Skills button (accent border + tint) */
+/* P-IDE.2: a bundled skill is active - highlight the Skills button (accent border + tint) */
 .ctool.on{border-color:var(--accent);color:var(--txt);background:var(--accent-dim)}
 .ctool.on .ic{color:var(--accent-2)}
 .ctool:active{transform:translateY(.5px) scale(.97);
@@ -1262,7 +1262,7 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 /* inline green Intelligence-Level stars in each model row */
 .cfg-opt .row-iq{flex:none;font-size:10px;letter-spacing:.5px;line-height:1;color:var(--green);white-space:nowrap}
 .cfg-opt .row-iq .row-iq-dim{color:var(--line-strong)}
-/* P-IDE.1b: an unavailable (e.g. ITAR-blocked) model — visible but greyed + non-selectable */
+/* P-IDE.1b: an unavailable (e.g. ITAR-blocked) model - visible but greyed + non-selectable */
 .cfg-opt.unavail{cursor:default;opacity:.5}
 .cfg-opt.unavail:hover{background:transparent}
 .cfg-opt.unavail .nm{color:var(--txt-3)}
@@ -1281,6 +1281,95 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .modeltip .mt-v{flex:1;min-width:0;color:var(--txt)}
 .modeltip .mt-foot{margin-top:11px;padding-top:8px;border-top:1px solid var(--line-soft);
   font-size:10px;color:var(--txt-4);font-style:italic}
+
+/* ADR-0088 (P-ROLE.1): first-run role picker (four cards in the model-card idiom) */
+.modal.role-modal{width:min(720px,94vw);max-width:720px}
+.role-modal .modal-title{font-size:21px}
+.role-modal .modal-desc{font-size:14px;line-height:1.6;color:var(--txt-2);max-width:560px}
+.role-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:20px 0 6px;text-align:left}
+.role-card{-webkit-app-region:no-drag;display:flex;align-items:flex-start;gap:13px;padding:17px;border:1px solid var(--line-strong);
+  background:var(--bg-2);border-radius:13px;cursor:pointer;transition:border-color var(--t),background var(--t),transform var(--t),box-shadow var(--t)}
+.role-card:hover{border-color:var(--accent-2);background:var(--bg-3);transform:translateY(-1.5px);box-shadow:var(--shadow-md,0 8px 20px -10px rgba(0,0,0,.6))}
+.role-ic{display:grid;place-items:center;width:42px;height:42px;border-radius:11px;background:var(--bg-4);color:var(--accent-2);flex:none}
+.role-ic.r-security{color:var(--red)} .role-ic.r-manager{color:var(--green)} .role-ic.r-executive{color:var(--cyan)} .role-ic.r-developer{color:var(--accent-2)}
+.role-tx{display:flex;flex-direction:column;gap:4px;min-width:0}
+.role-tx>b{font-size:16px;font-weight:650;color:var(--txt)}
+.role-lands{font-size:11px;font-weight:600;color:var(--txt-3);text-transform:uppercase;letter-spacing:.05em}
+.role-blurb{font-size:13.5px;line-height:1.5;color:var(--txt-2)}
+@media (max-width:560px){.role-grid{grid-template-columns:1fr}}
+
+/* ADR-0089: premium ANIMATED role glyphs (role_icons.ts) - one per role, in the icon family */
+.role-ic .ri{display:block;overflow:visible}
+/* Developer - blinking caret + breathing < > */
+.ri-caret{animation:ricaret 1.1s steps(1,end) infinite}
+.ri-dev-l{animation:ridevl 2.4s ease-in-out infinite}
+.ri-dev-r{animation:ridevr 2.4s ease-in-out infinite}
+@keyframes ricaret{0%,55%{opacity:1}56%,100%{opacity:0}}
+@keyframes ridevl{0%,100%{transform:translateX(0)}50%{transform:translateX(-1px)}}
+@keyframes ridevr{0%,100%{transform:translateX(0)}50%{transform:translateX(1px)}}
+/* Security - checkmark redraws on a loop */
+.ri-check{stroke-dasharray:16;stroke-dashoffset:16;animation:richeck 2.6s ease-in-out infinite}
+@keyframes richeck{0%{stroke-dashoffset:16}28%,72%{stroke-dashoffset:0}100%{stroke-dashoffset:0}}
+/* Manager - bars rise in a staggered pulse, trend line draws */
+.ri-bar{stroke-width:2.6;transform-box:fill-box;transform-origin:bottom;animation:ribar 2.4s ease-in-out infinite}
+.ri-bar2{animation-delay:.18s} .ri-bar3{animation-delay:.36s}
+@keyframes ribar{0%,100%{transform:scaleY(.55)}45%{transform:scaleY(1)}}
+.ri-trend{stroke-dasharray:30;stroke-dashoffset:30;animation:ritrend 2.4s ease-in-out infinite}
+@keyframes ritrend{0%{stroke-dashoffset:30}40%,100%{stroke-dashoffset:0}}
+/* Executive - a suited bust that gently breathes, with a subtle tie gleam */
+.ri-bust{transform-box:fill-box;transform-origin:50% 92%;animation:ribust 3.4s ease-in-out infinite}
+.ri-tie{animation:ritie 3.4s ease-in-out infinite}
+@keyframes ribust{0%,100%{transform:scale(1)}50%{transform:scale(1.035)}}
+@keyframes ritie{0%,100%{opacity:.82}50%{opacity:1}}
+@media (prefers-reduced-motion:reduce){
+  .ri-caret,.ri-dev-l,.ri-dev-r,.ri-check,.ri-bar,.ri-bar2,.ri-bar3,.ri-trend,.ri-bust,.ri-tie{animation:none}
+  .ri-check,.ri-trend{stroke-dashoffset:0} .ri-bar{transform:none} .ri-caret,.ri-tie{opacity:1}
+}
+
+/* ADR-0088: Settings → Profile role switcher (segmented) */
+.set-sub{font-size:11px;font-weight:600;color:var(--txt-3);text-transform:uppercase;letter-spacing:.04em;margin:13px 0 6px}
+.role-seg-row{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:7px}
+.role-seg{-webkit-app-region:no-drag;display:inline-flex;align-items:center;gap:5px;border:1px solid var(--line);background:var(--bg-2);
+  color:var(--txt-3);font:inherit;font-size:11.5px;font-weight:600;padding:5px 10px;border-radius:8px;cursor:pointer;
+  transition:color var(--t),background var(--t),border-color var(--t),box-shadow var(--t)}
+.role-seg:hover{color:var(--txt);border-color:var(--line-strong)}
+.role-seg.on{color:var(--txt);background:var(--bg-4);border-color:var(--accent-2);box-shadow:inset 0 0 0 1px var(--accent-2)}
+
+/* ADR-0089 (P-ROLE.1b): first-run guided walkthrough - coachmark = the model hover-card's twin */
+.coach-catch{position:fixed;inset:0;z-index:140;background:transparent}
+.coach-spot{position:fixed;z-index:141;border-radius:10px;pointer-events:none;
+  box-shadow:0 0 0 2px var(--accent-2),0 0 0 9999px rgba(6,7,12,.72);
+  transition:left var(--t-slow) var(--ease-out),top var(--t-slow) var(--ease-out),width var(--t-slow) var(--ease-out),height var(--t-slow) var(--ease-out)}
+.coach-card{position:fixed;z-index:142;width:300px;background:var(--bg-4);border:1px solid var(--line-strong);
+  border-radius:12px;box-shadow:var(--shadow);padding:14px 15px;
+  opacity:0;transform:translateY(4px) scale(.98);transition:opacity var(--t),transform var(--t-slow) var(--ease-out)}
+.coach-card.show{opacity:1;transform:none}
+.coach-h{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+.coach-ic{display:grid;place-items:center;width:24px;height:24px;border-radius:7px;background:var(--bg-2);color:var(--accent-2);flex:none}
+.coach-title{font-size:13px;font-weight:650;color:var(--txt);flex:1;min-width:0}
+.coach-count{font-size:10px;color:var(--txt-4);font-family:var(--mono);flex:none}
+.coach-body{font-size:12px;line-height:1.55;color:var(--txt-2);margin:0 0 10px}
+.coach-tip{display:flex;align-items:center;gap:7px;font-size:11px;line-height:1.4;color:var(--txt-3);
+  background:var(--bg-2);border:1px solid var(--line-soft);border-radius:7px;padding:6px 8px;margin-bottom:11px}
+.coach-tip svg{flex:none;color:var(--amber)}
+.coach-nav{display:flex;align-items:center;gap:7px}
+.coach-dots{display:flex;gap:5px;flex:1;align-items:center}
+.coach-dot{width:6px;height:6px;border-radius:50%;background:var(--line-strong);transition:background var(--t),width var(--t)}
+.coach-dot.on{width:15px;border-radius:6px;background:var(--accent-2)}
+.coach-btn{-webkit-app-region:no-drag;border:1px solid var(--line-strong);background:transparent;color:var(--txt-2);
+  font:inherit;font-size:12px;font-weight:600;padding:5px 12px;border-radius:7px;cursor:pointer;
+  transition:background var(--t),color var(--t),border-color var(--t)}
+.coach-btn:hover{background:var(--bg-2);color:var(--txt)}
+.coach-btn.primary{border-color:transparent;background:var(--accent);color:#fff}
+.coach-btn.primary:hover{background:var(--accent-2)}
+.coach-foot{margin-top:10px;padding-top:8px;border-top:1px solid var(--line-soft);display:flex;align-items:center;justify-content:space-between;gap:8px}
+.coach-foot>span{font-size:10px;color:var(--txt-4);font-style:italic}
+.coach-skip{-webkit-app-region:no-drag;border:0;background:transparent;color:var(--txt-3);font:inherit;font-size:11px;cursor:pointer;text-decoration:underline;padding:0}
+.coach-skip:hover{color:var(--txt-2)}
+@media (prefers-reduced-motion: reduce){
+  .coach-card,.coach-card.show{transition:opacity var(--t);transform:none}
+  .coach-spot{transition:none}
+}
 
 /* expandable RAG citations inside an assistant reply */
 .msg .text .rag-refs{margin-top:12px;border:1px solid var(--line-soft);border-radius:9px;background:var(--bg-2);overflow:hidden}
@@ -1353,7 +1442,7 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .kg-canvas::after{content:"";position:absolute;inset:0;pointer-events:none;background:radial-gradient(130% 100% at 50% 42%,transparent 58%,rgba(0,0,0,.32) 100%)}
 .kg-canvas:active{cursor:grabbing}
 .kg-side{width:250px;flex:none;border-left:1px solid var(--line-soft);overflow:auto;padding:14px 14px 24px}
-.kg-side[hidden]{display:none} /* only shown when a node is selected — the graph re-fits to full width */
+.kg-side[hidden]{display:none} /* only shown when a node is selected - the graph re-fits to full width */
 .kg-empty{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;color:var(--txt-4);font-size:13px;text-align:center;padding:0 36px}
 .kg-empty .ic{opacity:.55}
 /* inline Knowledge-graph unlock (passphrase under the locked message) */
@@ -1414,7 +1503,7 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
   transition:background var(--t),color var(--t),border-color var(--t)}
 .about-x:hover{background:var(--bg-3);color:var(--txt);border-color:var(--line)}
 
-/* hero — wordmark over a soft accent glow */
+/* hero - wordmark over a soft accent glow */
 .about-hero{position:relative;text-align:center;padding:30px 0 18px;overflow:hidden;
   border-bottom:1px solid var(--line-soft);margin:0 -24px 18px;border-radius:18px 18px 0 0}
 .about-glow{position:absolute;inset:-40% 0 auto 0;height:200px;pointer-events:none;
@@ -1442,6 +1531,17 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
   box-shadow:inset 0 1px 0 rgba(255,255,255,.03),0 1px 2px rgba(0,0,0,.3)}
 .about-brand{display:flex;align-items:center;gap:12px;padding-bottom:13px;margin-bottom:13px;border-bottom:1px solid var(--line-soft)}
 .about-tl{flex:none;filter:drop-shadow(0 6px 16px rgba(198,75,214,.42))}
+/* TechLead 187 brand avatar - real logo in a premium animated gradient ring */
+.about-tl-avatar{position:relative;flex:none;width:46px;height:46px;display:grid;place-items:center}
+.about-tl-ring{position:absolute;inset:-3px;border-radius:50%;padding:3px;
+  background:conic-gradient(from 0deg,var(--accent-2),var(--accent),var(--cyan,#46c8dc),var(--accent-2));
+  -webkit-mask:radial-gradient(farthest-side,transparent calc(100% - 3px),#000 calc(100% - 3px));
+          mask:radial-gradient(farthest-side,transparent calc(100% - 3px),#000 calc(100% - 3px));
+  animation:tlspin 6s linear infinite;filter:drop-shadow(0 4px 14px rgba(198,75,214,.4))}
+.about-tl-img{width:46px;height:46px;border-radius:50%;object-fit:cover;display:block;
+  border:1px solid var(--line-strong);background:var(--bg-2)}
+@keyframes tlspin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.about-tl-ring{animation:none}}
 .about-brand-txt{display:flex;flex-direction:column;gap:2px;min-width:0}
 .about-brand-txt b{font-size:14.5px;color:var(--txt);font-weight:700}
 .about-brand-txt span{font-size:11px;color:var(--txt-4)}
@@ -1462,7 +1562,7 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .kg-svg{display:block;position:relative;z-index:1}
 .kg-edge{fill:none;stroke:var(--line-strong);stroke-width:1.1;opacity:.32;stroke-linecap:round;transition:opacity var(--t)}
 .kg-part{opacity:.8;filter:drop-shadow(0 0 2.5px currentColor)}
-/* shared soft glow over the whole node layer — one cheap filter, not one per node */
+/* shared soft glow over the whole node layer - one cheap filter, not one per node */
 .kg-nodes{filter:url(#kgGlow)}
 .kg-node circle{stroke:var(--bg-0);stroke-width:1.5;transition:stroke var(--t),stroke-width var(--t),transform var(--t) var(--ease-out);transform-box:fill-box;transform-origin:center}
 .kg-node{cursor:pointer}
@@ -1476,7 +1576,7 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .kg-search{width:150px;padding:4px 9px;font-size:12px;border-radius:7px;border:1px solid var(--line);background:var(--bg-0);color:var(--txt);outline:none;transition:border-color var(--t) var(--ease)}
 .kg-search:focus{border-color:var(--accent);width:180px}
 .kg-search::placeholder{color:var(--txt-3)}
-/* P-KG-REL.1: relate mode — crosshair cursor, picked-node ring, and the cursor-following ghost edge */
+/* P-KG-REL.1: relate mode - crosshair cursor, picked-node ring, and the cursor-following ghost edge */
 .kg-relating .kg-node,.kg-relating .kg-svg{cursor:crosshair}
 .kg-node.rel circle{stroke:var(--accent);stroke-width:2.5;transform:scale(1.1)}
 .kg-node.rel .kg-label{fill:var(--txt)}
@@ -1497,7 +1597,7 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .kg-side-head{display:flex;align-items:center;gap:8px;margin-bottom:12px;font-size:13.5px}
 .kg-side-head b{color:var(--txt);min-width:0;overflow:hidden;text-overflow:ellipsis}
 .kg-side-kind{flex:none;font-size:9.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--txt-2);padding:2px 7px;border-radius:6px}
-/* embossed fact cards — hairline top highlight + soft elevation, lifts on hover */
+/* embossed fact cards - hairline top highlight + soft elevation, lifts on hover */
 .kg-fact{border:1px solid var(--line-soft);border-radius:9px;padding:9px 11px;margin-bottom:8px;background:linear-gradient(var(--bg-2),var(--bg-1));box-shadow:inset 0 1px 0 rgba(255,255,255,.03),0 1px 2px rgba(0,0,0,.28);transition:border-color var(--t),box-shadow var(--t),transform var(--t) var(--ease-out)}
 .kg-fact:hover{border-color:var(--line);box-shadow:inset 0 1px 0 rgba(255,255,255,.05),0 4px 12px -4px rgba(0,0,0,.5);transform:translateY(-1px)}
 .kg-fact-stmt{font-size:12.5px;color:var(--txt);line-height:1.55}
@@ -1518,7 +1618,7 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .set-sec{margin-bottom:9px;animation:setSecIn var(--t-slow) var(--ease-out) both}
 @keyframes setSecIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
 .set-lbl{font-size:11px;letter-spacing:1.3px;text-transform:uppercase;color:var(--txt-3);margin-bottom:7px;display:flex;align-items:center;gap:8px}
-/* hairline accent tick before each section label — quiet structure */
+/* hairline accent tick before each section label - quiet structure */
 .set-lbl::before{content:"";width:2px;height:11px;border-radius:2px;flex:none;
   background:linear-gradient(180deg,var(--accent-2),var(--accent));opacity:.55}
 .set-coll-h .set-lbl::before{content:none}
@@ -1545,7 +1645,7 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .set-coll-body{display:none;padding:0 12px 11px}
 .set-coll.open .set-coll-body{display:block;animation:setCollOpen var(--t-slow) var(--ease-out)}
 @keyframes setCollOpen{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}
-/* skeleton shimmer while a section hydrates — calm, premium sweep */
+/* skeleton shimmer while a section hydrates - calm, premium sweep */
 .set-skel{height:34px;border-radius:8px;margin:6px 0;position:relative;overflow:hidden;
   background:var(--bg-2)}
 .set-skel::after{content:"";position:absolute;inset:0;
@@ -1704,7 +1804,7 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .prov-row .btn-mini.danger:hover{box-shadow:0 1px 8px -3px color-mix(in srgb,var(--red) 50%,transparent)}
 
 /* An author rule that sets an explicit `display` overrides the UA `[hidden]{display:none}`
-   (author beats user-agent), leaving "hidden" elements visible — this stranded the Knowledge
+   (author beats user-agent), leaving "hidden" elements visible - this stranded the Knowledge
    panel (its close button couldn't dismiss it), and would do the same to the persona/skill
    chips and the workspace bar. Make [hidden] authoritative everywhere. */
 [hidden]{display:none!important}
@@ -1760,28 +1860,28 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 /* ──────────────────────────────────────────────────────────────────────────
    #11 Perceived-latency: generic loading skeletons + respawn spinner.
    Every async surface paints one of these INSTANTLY on open, then swaps to real
-   content (or an empty-state) when the fetch resolves OR fails — never sticky.
+   content (or an empty-state) when the fetch resolves OR fails - never sticky.
    Reuses the existing `shimmer` keyframe (defined above with .set-skel).
    ────────────────────────────────────────────────────────────────────────── */
 .skel{border-radius:8px;background:linear-gradient(90deg,var(--bg-2) 25%,var(--bg-3) 50%,var(--bg-2) 75%);
   background-size:200% 100%;animation:shimmer 1.3s ease-in-out infinite}
 /* a placeholder block of skeleton rows; keep its motion calm and grouped */
 .skel-group{display:flex;flex-direction:column;gap:9px}
-/* sidebar session placeholders — mirror a real .sess card's two-line shape */
+/* sidebar session placeholders - mirror a real .sess card's two-line shape */
 .skel-sess{padding:10px 11px;display:flex;flex-direction:column;gap:7px;
   border:1px solid var(--line-soft);border-radius:9px;background:var(--bg-1)}
 .skel-line{height:11px;border-radius:6px}
 .skel-line.t{width:72%;height:13px}
 .skel-line.m{width:52%}
-/* inspector first-load — placeholder metric chips + a couple of rows */
+/* inspector first-load - placeholder metric chips + a couple of rows */
 .skel-chips{display:flex;gap:9px;margin:2px 0 12px}
 .skel-chip{flex:1;height:54px;border-radius:11px}
 .skel-row{height:32px;border-radius:8px}
-/* knowledge-graph "decrypting…" state — quiet, centered, with a spinner */
+/* knowledge-graph "decrypting…" state - quiet, centered, with a spinner */
 .skel-kg{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;
   justify-content:center;gap:12px;color:var(--txt-4);font-size:13px;text-align:center;padding:0 36px}
 .skel-kg .spin{color:var(--txt-3)}
-/* workspace bar — a subtle "loading workspace…" pill while it resolves */
+/* workspace bar - a subtle "loading workspace…" pill while it resolves */
 .ws-bar-loading{display:inline-flex;align-items:center;gap:7px;color:var(--txt-4);font-size:12px}
 .ws-bar-loading .spin{color:var(--txt-3)}
 /* generic spinner: any icon with .spin rotates; cfg-refresh gets a busy state */
@@ -1805,7 +1905,7 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .statusbar .seg.warn b{color:#ffc7c7}
 
 /* ───────────────────────── animated icons (unit #2) ─────────────────────────
-   Self-contained icon motion + glow. Scoped to `.ic` only — color stays owned
+   Self-contained icon motion + glow. Scoped to `.ic` only - color stays owned
    by parents (stroke=currentColor). Motion is GPU-friendly (transform/filter)
    and globally gated by the prefers-reduced-motion reset near the top of this
    file. Do not move color/layout ownership here. */
@@ -1813,7 +1913,7 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
   transform-origin:center;will-change:transform}
 
 /* Hover lift + on-brand glow when an icon sits inside an interactive control.
-   Targets the .ic only — never the button body (owned elsewhere). */
+   Targets the .ic only - never the button body (owned elsewhere). */
 .rail-btn:hover .ic,
 .btn-mini:hover .ic,
 .ws-recent-item:hover .ic,
@@ -1828,19 +1928,19 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .rail-btn:active .ic,
 .btn-mini:active .ic{transform:translateY(0) scale(.96);transition-duration:var(--t-fast)}
 
-/* Spin utility — loading/refresh code opts in by adding `spin` via extraClass
+/* Spin utility - loading/refresh code opts in by adding `spin` via extraClass
    (e.g. icon("refresh", 13, "spin")). Cubic, continuous, GPU-only. */
 .ic.spin{animation:icSpin .9s linear infinite}
 @keyframes icSpin{to{transform:rotate(360deg)}}
 
-/* Soft draw/pulse for action glyphs (bolt, spark) — opt in with `ic-pulse`. */
+/* Soft draw/pulse for action glyphs (bolt, spark) - opt in with `ic-pulse`. */
 .ic.ic-pulse{animation:icPulse 2.4s var(--ease) infinite}
 @keyframes icPulse{
   0%,100%{filter:drop-shadow(0 0 2px rgba(198,75,214,.25))}
   50%{filter:drop-shadow(0 0 8px rgba(224,123,240,.7))}
 }
 
-/* One-shot pop for an icon that just appeared / activated — opt in with `ic-pop`. */
+/* One-shot pop for an icon that just appeared / activated - opt in with `ic-pop`. */
 .ic.ic-pop{animation:icPop var(--t-slow) var(--ease-out)}
 @keyframes icPop{0%{transform:scale(.6);opacity:.4}60%{transform:scale(1.12)}100%{transform:none;opacity:1}}
 
@@ -1911,7 +2011,7 @@ pre:hover .code-ide-btn,pre:focus-within .code-ide-btn{opacity:1}
 .goal-eu-counts { font-size: 11px; color: var(--txt-3); margin-bottom: 8px; }
 .goal-eu-counts b { color: var(--accent); }
 
-/* P-KG-INGEST.1 (ADR-0076): background-import status pill — persistent, non-blocking, with a live
+/* P-KG-INGEST.1 (ADR-0076): background-import status pill - persistent, non-blocking, with a live
    countdown + Cancel. Sits bottom-right so the rest of the app stays usable during a long ingest. */
 .import-pill{position:fixed;right:18px;bottom:18px;z-index:60;width:300px;background:var(--bg-2);border:1px solid var(--line);border-radius:10px;padding:12px 14px;box-shadow:0 8px 30px rgba(0,0,0,.4)}
 .import-pill-head{display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--txt);margin-bottom:9px}

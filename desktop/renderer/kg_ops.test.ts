@@ -51,11 +51,11 @@ describe("#122 resolveRelationLabel (P-KG-REL.2)", () => {
   });
 });
 
-describe("#112 fitTransform — large graphs actually fit", () => {
+describe("#112 fitTransform - large graphs actually fit", () => {
   const W = 800, H = 600;
 
   test("a big imported graph fits below the OLD 0.4 floor and centers", () => {
-    // bbox 4000×3000 — needs ~0.19 to fit; the old Math.max(0.4, …) floor would have overflowed.
+    // bbox 4000×3000 - needs ~0.19 to fit; the old Math.max(0.4, …) floor would have overflowed.
     const box = { minX: -2000, minY: -1500, maxX: 2000, maxY: 1500 };
     const t = fitTransform(box, W, H)!;
     expect(t).not.toBeNull();
@@ -79,7 +79,7 @@ describe("#112 fitTransform — large graphs actually fit", () => {
   });
 });
 
-describe("#114 frameWork — idle frames stop burning CPU", () => {
+describe("#114 frameWork - idle frames stop burning CPU", () => {
   test("while the sim is stepping, do the full layout repaint", () => {
     const w = frameWork({ simActive: true, easing: false, calm: false, parity: 1 });
     expect(w.layout).toBe(true);
@@ -104,7 +104,7 @@ describe("#114 frameWork — idle frames stop burning CPU", () => {
   });
 });
 
-describe("#113 applyForget — instant, snapshot-safe removal", () => {
+describe("#113 applyForget - instant, snapshot-safe removal", () => {
   const graph = (): PersonalGraphData => ({
     nodes: [
       { id: "n1", name: "Rust", kind: "preference", trust: "trusted", count: 2 },

@@ -130,7 +130,7 @@ export interface GraphEdge { from: string; to: string; relation: string }
 export interface GraphFact { id: string; entity_id: string; statement: string; scope: string; trust: string; confidence: number; session?: string; at: string }
 export interface PersonalGraphData { nodes: GraphNode[]; edges: GraphEdge[]; facts: GraphFact[] }
 export interface PersonalImportResult { ok: boolean; error?: string; vendor?: "openai" | "anthropic" | "gemini"; conversations?: number; messages?: number; learned?: number; blocked?: number; skipped?: number; extractor?: "heuristic" | "model"; cancelled?: boolean }
-// P-KG-INGEST.1 (ADR-0076): the background import job — start returns a jobId; status is polled for a live countdown.
+// P-KG-INGEST.1 (ADR-0076): the background import job - start returns a jobId; status is polled for a live countdown.
 export interface PersonalImportStart { ok: boolean; jobId?: string; error?: string }
 export interface PersonalImportJob {
   jobId: string; state: "running" | "done" | "failed" | "cancelled"; vendor?: string;
@@ -166,10 +166,10 @@ export type ChatEvent =
   | { type: "goal-check"; n: number; done: boolean; reason: string }
   | { type: "goal-done"; iters: number; reason: string }
   | { type: "goal-stop"; reason: string }
-  // P-GOAL.9 (ADR-0054): the loop's last task — an After-Action Report (metrics + portable graphs).
+  // P-GOAL.9 (ADR-0054): the loop's last task - an After-Action Report (metrics + portable graphs).
   | { type: "goal-report"; path: string; summary: string; markdown: string }
   | { type: "done"; text?: string }; // text = the authoritative full assistant reply (reconciles lossy streaming)
-/** P-GOAL.13 (ADR-0067): the per-command-type Speed↔Risk dial — each type's max auto-run tier (T0-T3). */
+/** P-GOAL.13 (ADR-0067): the per-command-type Speed↔Risk dial - each type's max auto-run tier (T0-T3). */
 export type GoalDial = Partial<Record<"shell" | "edit" | "delete" | "web-fetch" | "web-search" | "subagent", "T0" | "T1" | "T2" | "T3">>;
 export interface GoalOpts { goal: string; condition: string; command?: string; maxIters: number; resume?: string; budgetUsd?: number; criteria?: string; dial?: GoalDial }
 // P-GOAL.4: a stopped loop that can be resumed from its on-disk memory file.
@@ -196,7 +196,7 @@ export interface ReadinessCheck { key: string; label: string; ok: boolean; weigh
 export interface ReadinessReport { level: "L0" | "L1" | "L2" | "L3"; score: number; checks: ReadinessCheck[]; summary: string }
 export interface PreflightResult { maturedGoal: string; criteria: string; reportMd: string; reportPath: string; readiness: ReadinessReport; prior: { total: number; relevant: number } }
 export interface LoopScopes { current: string; branches: string[]; worktrees: string[] }
-// P-GOAL.5: a scheduled automation — a saved /goal spec the in-process scheduler runs on a cadence.
+// P-GOAL.5: a scheduled automation - a saved /goal spec the in-process scheduler runs on a cadence.
 export type Cadence = { kind: "interval"; everyMin: number } | { kind: "daily"; hhmm: string };
 export interface Automation {
   id: string; goal: string; condition: string; command?: string; maxIters: number;
@@ -212,11 +212,17 @@ export interface Attribution {
   // Enterprise-managed policy view (ADR-0030): drives the prompt + "Managed by …" UI.
   managed: boolean; orgName: string; requireEmail: boolean; allowSkip: boolean; allowedDomains: string[];
 }
+// ADR-0088 (P-ROLE.1): the four onboarding roles (renderer-side mirror of settings_store's UserRole).
+export type UserRole = "developer" | "security" | "manager" | "executive";
 export interface ProfileSettings {
   username: string;
   email: string;
   // Effective code-activity attribution identity (ADR-0030): email if set, else workstation hostname.
   attribution?: Attribution;
+  // ADR-0088/0089: cosmetic onboarding state. `role` shapes default surfacing; `tourSeen` guards the
+  // first-run walkthrough replay. Both default safely (role→"developer", tourSeen→false) when absent.
+  role?: UserRole;
+  tourSeen?: boolean;
 }
 export interface ManagedPolicy {
   managed: boolean; orgName: string;
@@ -250,13 +256,13 @@ export interface LucidBridge {
   usage(): Promise<UsageLedger | null>;
   codeActivity(): Promise<CodeActivity | null>;
   sendPrompt(text: string, onEvent: (e: ChatEvent) => void): Promise<void>;
-  // P-GOAL.1 (ADR-0046): run a /goal loop — streams the same events plus goal-iter/check/done/stop.
+  // P-GOAL.1 (ADR-0046): run a /goal loop - streams the same events plus goal-iter/check/done/stop.
   runGoal(opts: GoalOpts, onEvent: (e: ChatEvent) => void): Promise<void>;
   resumableLoops(): Promise<ResumableLoop[] | null>; // P-GOAL.4: loops that stopped without meeting their condition
   loopRunStats(): Promise<LoopRunStats | null>; // P-GOAL.10 (ADR-0055): cross-run evaluation stats + recent runs
   loopScopes(): Promise<LoopScopes | null>;     // P-GOAL.12 (ADR-0057): branches/worktrees for the Pre-Flight scope picker
   preflightAudit(spec: PreflightSpec): Promise<PreflightResult | null>; // P-GOAL.12: readiness + matured goal + design report
-  // P-GOAL.5 (ADR-0047): scheduled automations — CRUD + arm/disarm + run-now (run-now streams goal events).
+  // P-GOAL.5 (ADR-0047): scheduled automations - CRUD + arm/disarm + run-now (run-now streams goal events).
   automations(): Promise<Automation[] | null>;
   automationCreate(spec: AutomationSpec): Promise<Automation | null>;
   automationEnable(id: string, enabled: boolean): Promise<Automation | null>;
@@ -280,7 +286,7 @@ export interface LucidBridge {
   cancelGoal(): Promise<unknown>; // P-GOAL.2: stop a running /goal loop
   commands(): Promise<OmpCommand[]>;
   skills(): Promise<{ name: string; description: string; source: string }[] | null>;
-  // P-SKILL.1 (ADR-0045): import dropped .md skill files — each is scanned at the gate; clean ones are
+  // P-SKILL.1 (ADR-0045): import dropped .md skill files - each is scanned at the gate; clean ones are
   // written under .omp/skills/, flagged ones are held for Security-panel review.
   skillImport(files: { name: string; content: string }[]): Promise<{ results: SkillImportResult[] } | null>;
   // P-IDE.2: set/clear the active bundled skill (its trusted prompt rides the user-turn preamble).
@@ -302,6 +308,9 @@ export interface LucidBridge {
   saveProfile(p: { username?: string; email?: string }): Promise<ProfileSettings | null>;
   // User skips the email prompt → attribute by workstation hostname instead (recorded, traceable).
   skipEmail(): Promise<ProfileSettings | null>;
+  // ADR-0088/0089 (P-ROLE.1/.1b): persist the onboarding role + the first-run-tour replay guard.
+  saveRole(role: UserRole): Promise<ProfileSettings | null>;
+  setTourSeen(seen: boolean): Promise<ProfileSettings | null>;
   // Enterprise-managed policy (read-only; placed by admins via GPO/MDM).
   managed(): Promise<ManagedPolicy | null>;
   // P-IDE.1c: China-origin model data-sovereignty acknowledgement gate.
@@ -349,7 +358,7 @@ export interface LucidBridge {
   personalImportCancel(jobId?: string): Promise<{ ok: boolean } | null>;
   // P-IMP.2: read-only pre-import estimate (counts) for the AI-mode token/time warning.
   personalImportEstimate(path: string): Promise<PersonalImportEstimate | null>;
-  // P-IDE.5: in-app editor — read a workspace file, and save the buffer THROUGH the scanner gate.
+  // P-IDE.5: in-app editor - read a workspace file, and save the buffer THROUGH the scanner gate.
   editorRead(path: string): Promise<EditorReadResult | null>;
   editorSave(opts: { path: string; content: string; baseSha?: string; overwrite?: boolean }): Promise<EditorSaveResult | null>;
   // P9.4: audited Obsidian vault export + NARA-aligned CUI archive
@@ -411,7 +420,7 @@ async function streamNdjson(path: string, body: unknown, onEvent: (e: ChatEvent)
   try {
     res = await fetch(path, { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify(body), signal });
   } catch {
-    if (signal?.aborted) return; // Stop pressed — the caller's finally settles the UI; no error line
+    if (signal?.aborted) return; // Stop pressed - the caller's finally settles the UI; no error line
     onEvent({ type: "token", text: "[backend unreachable - is the GUI server running?]" });
     onEvent({ type: "done" });
     return;
@@ -421,7 +430,7 @@ async function streamNdjson(path: string, body: unknown, onEvent: (e: ChatEvent)
   const reader = res.body.getReader();
   const dec = new TextDecoder();
   let buf = "";
-  // Drop server heartbeats ({type:"ping"}) — they only keep the socket alive through long tool calls.
+  // Drop server heartbeats ({type:"ping"}) - they only keep the socket alive through long tool calls.
   const flush = (line: string) => { const s = line.trim(); if (!s) return; try { const ev = JSON.parse(s); if (ev && ev.type === "ping") return; onEvent(ev); } catch { /* skip */ } };
   try {
     for (;;) {
@@ -432,7 +441,7 @@ async function streamNdjson(path: string, body: unknown, onEvent: (e: ChatEvent)
       while ((nl = buf.indexOf("\n")) >= 0) { flush(buf.slice(0, nl)); buf = buf.slice(nl + 1); }
     }
     flush(buf);
-  } catch { /* Stop aborted the read, or the stream errored — return so the caller's finally settles. */ }
+  } catch { /* Stop aborted the read, or the stream errored - return so the caller's finally settles. */ }
 }
 // Stop must always recover the UI: aborting this controller ends the client read immediately, so the
 // turn's finally runs even when omp is wedged. cancelChat() aborts it AND posts the server cancel.
@@ -508,6 +517,8 @@ export const bridge: LucidBridge = {
   saveUsername: (username) => post("/api/settings", { username }),
   saveProfile: (p) => post("/api/settings", p),
   skipEmail: () => post("/api/settings", { skip: true }),
+  saveRole: (role) => post("/api/settings", { role }),
+  setTourSeen: (seen) => post("/api/settings", { tourSeen: seen }),
   managed: () => getData("/api/managed"),
   chinaAck: () => getData("/api/china-ack"),
   setChinaAck: (acknowledge) => post("/api/china-ack", { acknowledge }),

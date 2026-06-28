@@ -7,20 +7,20 @@
 // run-time instrumentation. loop-engineering's ship-readiness rubric (Observability §9) asks every
 // unattended loop to "log each run: started, items found, actions taken" and to surface metrics the
 // team can read WITHOUT scrolling chat. ADR-0046's durable goal-memory is the human-readable trail;
-// this is the measurable one — a self-contained markdown record with portable graphs that renders on
+// this is the measurable one - a self-contained markdown record with portable graphs that renders on
 // GitHub / VS Code / Obsidian (Mermaid, zero deps, fits the TS-only invariant) plus a plain-text
 // scoreboard that renders even in our in-app `marked` view.
 //
 // PURE module: no I/O, no Date.now(). The backend (acp_backend.ts) collects a `LoopMetrics` during the
 // run and calls `renderLoopReport` as the loop's LAST task; the file write is best-effort (goal_memory).
-// Everything here is unit-tested — the same discipline as loop_estimate.ts / goal_verdict.ts.
+// Everything here is unit-tested - the same discipline as loop_estimate.ts / goal_verdict.ts.
 
 import { formatTokens } from "./loop_estimate.ts";
 import type { DialType, LoopDial, RiskTier } from "./exec_policy.ts";
 
 // P-GOAL.13 (ADR-0067): a tool call the unattended loop STOPPED, and why. `risk-dial` = above the user's
 // per-type Speed↔Risk ceiling; `catastrophic` = the T4 set (never auto-runnable); `security-gate` = the
-// in-process Unicode scanner (a different layer — tallied separately, both shown).
+// in-process Unicode scanner (a different layer - tallied separately, both shown).
 export interface LoopBlock {
   iter: number;
   tool: string;
@@ -150,7 +150,7 @@ export function formatSpend(usd: number): string {
   return `$${(Math.round(usd * 100) / 100).toFixed(2)}`;
 }
 
-/** "3m 12s" / "0.8s" / "1h 04m" — compact, no library. */
+/** "3m 12s" / "0.8s" / "1h 04m" - compact, no library. */
 export function formatDuration(ms: number): string {
   const s = Math.max(0, Math.round(ms / 1000));
   if (s < 60) return `${(ms / 1000).toFixed(ms < 10_000 ? 1 : 0)}s`;
@@ -165,8 +165,8 @@ function mlabel(s: string): string {
   return s.replace(/["\n\r[\]{}]/g, " ").replace(/\s+/g, " ").trim().slice(0, 32) || "?";
 }
 
-/** Escape arbitrary text for a single Markdown table cell. Backslashes are escaped FIRST — otherwise a
- *  trailing "\" in the input would escape the cell's closing "|" and corrupt the row — then pipes, then
+/** Escape arbitrary text for a single Markdown table cell. Backslashes are escaped FIRST - otherwise a
+ *  trailing "\" in the input would escape the cell's closing "|" and corrupt the row - then pipes, then
  *  newlines are flattened (a table cell can't span lines). */
 function mdCell(s: string): string {
   return (s || "").replace(/\\/g, "\\\\").replace(/\|/g, "\\|").replace(/[\r\n]+/g, " ");
@@ -206,13 +206,13 @@ const BLOCK_REASON_LABEL: Record<LoopBlock["reason"], string> = {
  *  both shown). Deterministic; degrades to an honest one-liner when nothing was blocked. */
 export function renderBlocks(blocks: LoopBlock[], dial?: LoopDial): string {
   const out: string[] = [];
-  // The dial posture — what speed↔risk trade this run was set to (self-describing AAR).
+  // The dial posture - what speed↔risk trade this run was set to (self-describing AAR).
   if (dial && Object.keys(dial).length) {
     const order: DialType[] = ["shell", "edit", "delete", "web-fetch", "web-search", "subagent"];
     const posture = order.filter((t) => dial[t]).map((t) => `${t}=${dial[t]}`).join(" · ");
     if (posture) out.push(`**Dial posture:** ${posture}  _(a command auto-ran only if its tier ≤ its type's dial; T4 always blocked)_`);
   } else {
-    out.push("**Dial posture:** default — safest (T0 only; everything riskier blocked).");
+    out.push("**Dial posture:** default - safest (T0 only; everything riskier blocked).");
   }
   out.push("");
 
@@ -225,7 +225,7 @@ export function renderBlocks(blocks: LoopBlock[], dial?: LoopDial): string {
     .filter((r) => byReason[r]).map((r) => `${BLOCK_REASON_LABEL[r]}: **${byReason[r]}**`).join(" · ");
   const tierLine = Object.keys(byTier).sort().map((t) => `${t}: ${byTier[t]}`).join(" · ");
 
-  out.push(`**${blocks.length}** call${blocks.length === 1 ? "" : "s"} blocked — ${reasonLine}.`);
+  out.push(`**${blocks.length}** call${blocks.length === 1 ? "" : "s"} blocked - ${reasonLine}.`);
   out.push("");
   out.push(`By tier: ${tierLine}.`);
   out.push("");
@@ -271,13 +271,13 @@ export function renderLoopReport(m: LoopMetrics): string {
   const out: string[] = [];
   out.push(`# After-Action Report: ${m.goal}`);
   out.push("");
-  out.push(`**${OUTCOME_BADGE[m.outcome]}** — ${m.outcomeReason}`);
+  out.push(`**${OUTCOME_BADGE[m.outcome]}** - ${m.outcomeReason}`);
   out.push("");
   out.push(`| | |`);
   out.push(`|---|---|`);
   out.push(`| Iterations | ${m.iterations} of ${m.maxIters} |`);
   out.push(`| Duration | ${formatDuration(m.durationMs)} |`);
-  out.push(`| Stop condition | ${m.condition || "—"} |`);
+  out.push(`| Stop condition | ${m.condition || "-"} |`);
   out.push(`| Verification | ${m.command ? "`" + m.command + "`" : "checker judgement (no command)"} |`);
   if (m.spendUsd != null) {
     const cap = m.budgetUsd && m.budgetUsd > 0 ? ` of ${formatSpend(m.budgetUsd)} cap` : "";
@@ -317,7 +317,7 @@ export function renderLoopReport(m: LoopMetrics): string {
     out.push("");
     out.push(`Net **+${added} / -${removed}** across **${m.loc.files}** file${m.loc.files === 1 ? "" : "s"}.`);
   } else {
-    out.push("_Not a git workspace — line-change tracking unavailable._");
+    out.push("_Not a git workspace - line-change tracking unavailable._");
   }
   out.push("");
 
@@ -358,7 +358,7 @@ export function renderLoopReport(m: LoopMetrics): string {
   out.push("| Iter | Tools | Errors | Checker |");
   out.push("|---|---|---|---|");
   for (const it of m.perIteration) {
-    const verdict = `${it.done ? "✅ met" : "… not yet"} — ${mdCell((it.reason || "").slice(0, 120))}`;
+    const verdict = `${it.done ? "✅ met" : "… not yet"} - ${mdCell((it.reason || "").slice(0, 120))}`;
     out.push(`| ${it.n} | ${it.tools} | ${it.errors} | ${verdict} |`);
   }
   out.push("");
