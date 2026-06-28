@@ -40,6 +40,7 @@ import { homedir } from "node:os";
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { dirname } from "node:path";
 import { DIAL_TYPES, type LoopDial } from "./exec_policy.ts";
+import { audit } from "./audit_export.ts";
 import { isRiskTier } from "./managed_config.ts";
 import { isAllowedRequest, reqShape, tokenValid } from "./origin_guard.ts";
 
@@ -288,7 +289,7 @@ const server = Bun.serve({
           return json({ ok: true, data });
         }
         if (!loadSettings().developerMode) return json({ ok: true, data: { enabled: false, snapshot: null, blocks: { quarantined: [], approved: [], total: 0 }, turns: [], asksage: [] } });
-        return json({ ok: true, data: { enabled: true, snapshot: await devSnapshot(), blocks: liveBlocks(), turns: recentTurns(), asksage: backend.asksageDiagnostics() } });
+        return json({ ok: true, data: { enabled: true, snapshot: await devSnapshot(), blocks: liveBlocks(), turns: recentTurns(), asksage: backend.asksageDiagnostics(), audit: { events: audit.recent(60), sinks: audit.sinkStatuses() } } });
       }
       // Light, fast re-read of the provider rate-limit budget (omp's agent.db).
       // Used by the front-end's manual refresh + 5-minute auto-poll.
@@ -312,6 +313,9 @@ const server = Bun.serve({
         return json({ ok: true, data: codeActivityCache.data });
       }
       if (p === "/api/health") return json({ ok: true });
+      // P-ENT.2 (ADR-0069): the unified security-event stream (metadata-only, OCSF-ready) + per-sink
+      // delivery status, for the in-app dashboard. Read-only; the file sink is the SIEM export source.
+      if (p === "/api/audit") return json({ ok: true, data: { events: audit.recent(100), sinks: audit.sinkStatuses() } });
       // P-BRIEF.3 (ADR-0072): generate the Executive Engineering Update from the repo's own logs. Pure +
       // air-gap (reads DECISIONS.md/PROGRESS.md from the repo root); returns the written brief + the
       // two-host podcast script. Audio synthesis (a TTS backend) is a later slice; this is the brief.
