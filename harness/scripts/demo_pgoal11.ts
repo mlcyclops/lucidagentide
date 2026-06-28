@@ -48,7 +48,7 @@ const metrics: LoopMetrics = {
   outcome: "stopped", outcomeReason: `stopped: budget cap $0.30 reached (spent $0.33)`,
   iterations: 3, maxIters: 6, durationMs: 240_000,
   toolCalls: { shell: 7, edit: 5 }, loc: { added: 60, removed: 12, files: 3 },
-  errors: [], websites: [], perIteration: [],
+  errors: [], blocks: [], websites: [], perIteration: [],
   spendUsd: spend.usd, peakContextTokens: spend.peakContextTokens, budgetUsd: cap,
 };
 const md = renderLoopReport(metrics);

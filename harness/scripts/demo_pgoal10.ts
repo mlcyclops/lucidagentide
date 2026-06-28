@@ -24,7 +24,7 @@ function m(over: Partial<LoopMetrics>): LoopMetrics {
   return {
     goal: "g", condition: "c", command: "npm test", outcome: "met", outcomeReason: "all pass",
     iterations: 3, maxIters: 6, durationMs: 120_000, toolCalls: { shell: 5, edit: 2 },
-    loc: { added: 30, removed: 5, files: 2 }, errors: [], websites: [], perIteration: [], ...over,
+    loc: { added: 30, removed: 5, files: 2 }, errors: [], blocks: [], websites: [], perIteration: [], ...over,
   };
 }
 
