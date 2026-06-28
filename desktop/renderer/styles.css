@@ -993,10 +993,18 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 
 /* ───────────────────────── status bar ───────────────────────── */
 .statusbar{height:30px;display:flex;align-items:center;gap:16px;padding:0 14px;position:relative;
+  flex-wrap:nowrap;overflow:hidden;
   background:linear-gradient(180deg,#0e1016 0%,#0b0c12 60%,#090a0e 100%);
   border-top:1px solid var(--line-soft);
   box-shadow:inset 0 1px 0 rgba(255,255,255,.035);
   font-size:11.5px;color:var(--txt-3);font-variant-numeric:tabular-nums}
+/* Model + context (direct .seg children) and the right-hand status group never shrink; only the middle
+   group (.seg-mid: cache, budget, gov, cost) shrinks + clips, so when the window narrows those secondary
+   pills fall out of view instead of stacking the bar into two rows. */
+.statusbar>.seg{flex:none}
+.statusbar .seg-mid{display:flex;align-items:center;gap:16px;min-width:0;flex:0 1 auto;overflow:hidden;flex-wrap:nowrap}
+.statusbar .seg-mid>.seg{flex:none}
+.statusbar .right{flex:none}
 /* crisp top hairline for a precise frame edge */
 .statusbar::before{content:"";position:absolute;inset:0 0 auto 0;height:1px;pointer-events:none;
   background:linear-gradient(90deg,transparent,rgba(255,255,255,.05) 20%,

@@ -79,6 +79,7 @@ personalization internals are proprietary and intentionally undocumented here - 
 
 - [<img src=".github/assets/icons/overview.svg" width="16" alt=""> Overview](#-overview)
 - [<img src=".github/assets/icons/novelty.svg" width="16" alt=""> What makes it novel](#-what-makes-it-novel)
+- [<img src=".github/assets/icons/models.svg" width="16" alt=""> Any model, any provider](#-any-model-any-provider)
 - [🎯 Who it's for](#-who-its-for)
 - [💰 Token Cost Savings & Showback](#-token-cost-savings--showback)
 - [<img src=".github/assets/icons/architecture.svg" width="16" alt=""> Architecture](#-architecture)
@@ -142,6 +143,42 @@ Twelve things you rarely find together. Each is in plain language below - the de
 | 💰 **Cost tracking & showback** | Live per-model spend and cache savings - know exactly what every conversation costs. |
 
 <sub>Loop engineering is inspired by the [loop-engineering](https://github.com/cobusgreyling/loop-engineering) playbook. Every action above still passes the same fail-closed gate.</sub>
+
+---
+
+## <img src=".github/assets/icons/models-animated.svg" width="28" align="top" alt=""> Any model, any provider
+
+**Bring whatever you already pay for.** LUCID doesn't lock you to one vendor - it exposes the model
+catalog from the open agent runtime (oh-my-pi) and lets you authenticate **either way**:
+
+- **Sign in with your subscription plan (OAuth).** Use your existing **Claude Pro / Max**, **ChatGPT
+  Plus / Pro**, or **Google Gemini** login - no API key, no per-token bill. omp's secure credential vault
+  owns the tokens.
+- **Or paste an API key (metered).** Pay-as-you-go usage straight from the provider, with the real
+  remaining rate limit read from response headers.
+
+Every model in the picker carries a **cost + intelligence card** (token-expense and capability stars, best-use,
+context window) so you can pick the right tier at a glance - and the security gate scans every turn the same
+way, whichever model you choose.
+
+<div align="center">
+<br/>
+<img src=".github/assets/model-picker-gemini3.1pro.JPG" alt="LucidAgentIDE model picker - a searchable list of 47 models across providers (Claude, Gemini, GPT, Grok, AskSage gov), each with intelligence stars and context size, plus a premium hover card showing token expense, intelligence level, best-use, and the model id" width="720" />
+<br/>
+<sub><b>↑ The model picker</b> - 47 models across every connected provider, each with a premium cost + intelligence hover card. Search, then pick by capability and price.</sub>
+</div>
+
+### Providers LUCID supports today
+
+| Tier | Providers | Auth |
+| --- | --- | --- |
+| **U.S. frontier** | **Anthropic** (Claude), **OpenAI** (ChatGPT), **Google** (Gemini), **xAI** (Grok), **Perplexity** (Sonar) | OAuth subscription **or** API key |
+| **Government gateway** | **AskSage** - accredited proxy to Claude, GPT, and Gemini inside GovCloud, with scanned personas + dataset-grounded RAG | API key |
+| **More providers** _(third-party / non-U.S. / custom, behind an acknowledgement)_ | **OpenRouter**, **DeepSeek**, **Moonshot / Kimi**, **Groq** | API key |
+
+<sub>The catalog is **driven by omp** - as the runtime adds providers and models in future builds, they appear
+in the picker automatically. Non-U.S. / restricted-origin models stay hidden behind a data-sovereignty
+acknowledgement, and an enterprise policy can pin the org to the gov gateway only.</sub>
 
 ---
 

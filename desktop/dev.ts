@@ -691,7 +691,9 @@ const server = Bun.serve({
       if (await file.exists()) {
         const ext = rel.slice(rel.lastIndexOf("."));
         const ct = CT[ext] ?? "application/octet-stream";
-        return new Response(file, { headers: { "content-type": ct + (isTextCT(ct) ? "; charset=utf-8" : ""), "cache-control": "max-age=86400" } });
+        // Text assets (css/js/svg) must stay fresh so edits show on reload; cache only binary assets
+        // (images/fonts), which are large and rarely change.
+        return new Response(file, { headers: { "content-type": ct + (isTextCT(ct) ? "; charset=utf-8" : ""), "cache-control": isTextCT(ct) ? "no-store" : "max-age=86400" } });
       }
     } catch (err) {
       // js/stack-trace-exposure: log the detail server-side, return a generic message to the client
