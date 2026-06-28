@@ -77,12 +77,22 @@
         {
           "target": "zip",
           "arch": ["arm64", "x64"]
+        },
+        {
+          "target": "pkg",
+          "arch": ["arm64", "x64"]
         }
       ],
       "hardenedRuntime": true,
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.plist",
       "gatekeeperAssess": false
+    },
+    "pkg": {
+      "isRelocatable": false,
+      "installLocation": "/Applications",
+      "mustClose": ["com.lucidagentide.desktop"],
+      "overwriteAction": "upgrade"
     },
     "win": {
       "icon": "build/icon.ico",

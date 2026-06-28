@@ -105,6 +105,7 @@ jobs:
           path: |
             desktop/release/*.dmg
             desktop/release/*.zip
+            desktop/release/*.pkg
             desktop/release/*Setup*.exe
             desktop/release/*portable*.exe
             desktop/release/*.AppImage
@@ -120,6 +121,7 @@ jobs:
           files: |
             desktop/release/*.dmg
             desktop/release/*.zip
+            desktop/release/*.pkg
             desktop/release/*Setup*.exe
             desktop/release/*portable*.exe
             desktop/release/*.AppImage
@@ -178,5 +180,6 @@ jobs:
             dist/*portable*.exe
             dist/*.AppImage
             dist/*.zip
+            dist/*.pkg
             dist/*.blockmap
             dist/latest*.yml
