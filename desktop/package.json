@@ -17,7 +17,7 @@
     "start": "bun run build && electron .",
     "web": "bun run dev.ts",
     "typecheck": "tsc --noEmit",
-    "dist:mac": "bun run runtimes:mac && bun run icons && bun run build && bun run compile-lucid && electron-builder --mac --publish never",
+    "dist:mac": "bun run runtimes:mac && bun run icons && bun run build && bun run compile-lucid && electron-builder --mac pkg --arm64 --publish never && electron-builder --mac pkg --x64 --publish never && electron-builder --mac zip --arm64 --x64 --publish never",
     "dist:win": "bun run runtimes:win && bun run icons && bun run build && bun run compile-lucid && electron-builder --win --publish never",
     "dist:linux": "bun run runtimes:linux && bun run icons && bun run build && bun run compile-lucid && electron-builder --linux --publish never",
     "dist": "bun run runtimes && bun run icons && bun run build && bun run compile-lucid && electron-builder --publish never"
@@ -79,12 +79,21 @@
         {
           "target": "zip",
           "arch": ["arm64", "x64"]
+        },
+        {
+          "target": "pkg"
         }
       ],
       "hardenedRuntime": true,
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.plist",
       "gatekeeperAssess": false
+    },
+    "pkg": {
+      "isRelocatable": false,
+      "installLocation": "/Applications",
+      "mustClose": ["com.lucidagentide.desktop"],
+      "overwriteAction": "upgrade"
     },
     "win": {
       "icon": "build/icon.ico",
