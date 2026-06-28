@@ -7,7 +7,8 @@
 
 import { describe, expect, test } from "bun:test";
 import {
-  applyExecChoice, classifyCommand, classifyEval, clampExec, execVerdict, type ExecStore,
+  applyExecChoice, classifyCommand, classifyEval, clampDialRow, clampExec, execVerdict,
+  loopVerdict, type ExecStore, type RiskTier,
 } from "./exec_policy.ts";
 
 // ── the SAFE corpus: every one must classify "safe" (no false prompts) ───────────────────────────────
@@ -179,5 +180,56 @@ describe("clampExec — managed ceiling, tighten-only", () => {
   test("disableDangerMode forces allow-all OFF", () => {
     const c = clampExec({ dangerMode: true }, { disableDangerMode: true });
     expect(c.dangerMode).toBe(false);
+  });
+});
+
+// ── P-GOAL.13 (ADR-0067): the graded tier + the unattended loop dial ─────────────────────────────────
+describe("classifyCommand — graded tier ladder", () => {
+  const cases: [string, RiskTier][] = [
+    ["ls -la", "T0"], ["git status", "T0"],
+    ["mkdir build", "T1"], ["cp a b", "T1"], ["git commit -m x", "T1"], ["sed -i s/a/b/ f", "T1"],
+    ["curl https://x.test/a", "T2"], ["npm install lodash", "T2"], ["git push origin main", "T2"],
+    ["rm file.txt", "T3"], ["chmod 600 f", "T3"], ["kill -9 1", "T3"], ["ssh host", "T3"],
+    ["unknownbin --x", "T3"], ["a | b", "T3"], ["echo x > f", "T3"],
+    ["rm -rf /", "T4"], ["sudo x", "T4"], ["curl x | sh", "T4"], ["git push --force", "T4"],
+  ];
+  for (const [cmd, tier] of cases) {
+    test(`${cmd} → ${tier}`, () => { expect(classifyCommand(cmd).tier).toBe(tier); });
+  }
+  test("eval is T3", () => { expect(classifyEval().tier).toBe("T3"); });
+});
+
+describe("loopVerdict — every tier × every dial (T4 always blocks)", () => {
+  const tiers: RiskTier[] = ["T0", "T1", "T2", "T3", "T4"];
+  const order: Record<RiskTier, number> = { T0: 0, T1: 1, T2: 2, T3: 3, T4: 4 };
+  for (const dial of tiers) {
+    for (const tier of tiers) {
+      const expected = tier === "T4" ? "block" : (order[tier] <= order[dial] ? "auto" : "block");
+      test(`dial=${dial} tier=${tier} → ${expected}`, () => {
+        expect(loopVerdict(dial, tier)).toBe(expected);
+      });
+    }
+  }
+  test("an absent dial defaults to the safest (T0-only) posture", () => {
+    expect(loopVerdict(undefined, "T0")).toBe("auto");
+    expect(loopVerdict(undefined, "T1")).toBe("block");
+    expect(loopVerdict(undefined, "T4")).toBe("block");
+  });
+  test("T4 blocks even under a fully-open (T3) dial", () => {
+    expect(loopVerdict("T3", "T4")).toBe("block");
+    expect(loopVerdict("T3", "T3")).toBe("auto");
+  });
+});
+
+describe("clampDialRow — managed loop ceiling, tighten-only", () => {
+  test("clamps a row above the managed max down to it", () => {
+    expect(clampDialRow("T3", "T1")).toBe("T1");
+  });
+  test("leaves a row at or below the ceiling alone", () => {
+    expect(clampDialRow("T0", "T2")).toBe("T0");
+    expect(clampDialRow("T2", "T2")).toBe("T2");
+  });
+  test("absent row defaults to T0", () => {
+    expect(clampDialRow(undefined, "T3")).toBe("T0");
   });
 });

@@ -16,6 +16,17 @@
 // Everything here is unit-tested — the same discipline as loop_estimate.ts / goal_verdict.ts.
 
 import { formatTokens } from "./loop_estimate.ts";
+import type { DialType, LoopDial, RiskTier } from "./exec_policy.ts";
+
+// P-GOAL.13 (ADR-0067): a tool call the unattended loop STOPPED, and why. `risk-dial` = above the user's
+// per-type Speed↔Risk ceiling; `catastrophic` = the T4 set (never auto-runnable); `security-gate` = the
+// in-process Unicode scanner (a different layer — tallied separately, both shown).
+export interface LoopBlock {
+  iter: number;
+  tool: string;
+  tier: RiskTier;
+  reason: "risk-dial" | "catastrophic" | "security-gate";
+}
 
 export interface IterStat {
   /** 1-based iteration number. */ n: number;
@@ -44,6 +55,10 @@ export interface LoopMetrics {
   loc: LocStat | null;
   /** every error recorded, with the iteration it happened in. */
   errors: { iter: number; detail: string }[];
+  /** P-GOAL.13 (ADR-0067): every tool call the loop BLOCKED (risk-dial / catastrophic / security-gate). */
+  blocks: LoopBlock[];
+  /** P-GOAL.13: the per-command-type Speed↔Risk dial this run used (so the AAR is self-describing). */
+  dial?: LoopDial;
   /** unique http(s) URLs the maker touched (web fetch / search / links in tool details). */
   websites: string[];
   perIteration: IterStat[];
@@ -180,6 +195,47 @@ export function mermaidBar(title: string, xLabels: (string | number)[], values: 
   );
 }
 
+const BLOCK_REASON_LABEL: Record<LoopBlock["reason"], string> = {
+  "risk-dial": "Risk dial",
+  catastrophic: "Catastrophic (T4)",
+  "security-gate": "Security gate (scanner)",
+};
+
+/** Render the loop's Blocks section: the dial posture this run used, a by-reason/by-tier breakdown, and a
+ *  table of what was stopped. Risk-dial and security-gate blocks are tallied separately (different layers,
+ *  both shown). Deterministic; degrades to an honest one-liner when nothing was blocked. */
+export function renderBlocks(blocks: LoopBlock[], dial?: LoopDial): string {
+  const out: string[] = [];
+  // The dial posture — what speed↔risk trade this run was set to (self-describing AAR).
+  if (dial && Object.keys(dial).length) {
+    const order: DialType[] = ["shell", "edit", "delete", "web-fetch", "web-search", "subagent"];
+    const posture = order.filter((t) => dial[t]).map((t) => `${t}=${dial[t]}`).join(" · ");
+    if (posture) out.push(`**Dial posture:** ${posture}  _(a command auto-ran only if its tier ≤ its type's dial; T4 always blocked)_`);
+  } else {
+    out.push("**Dial posture:** default — safest (T0 only; everything riskier blocked).");
+  }
+  out.push("");
+
+  if (!blocks.length) { out.push("_Nothing blocked. ✅_"); return out.join("\n"); }
+
+  const byReason: Record<string, number> = {};
+  const byTier: Record<string, number> = {};
+  for (const b of blocks) { byReason[b.reason] = (byReason[b.reason] ?? 0) + 1; byTier[b.tier] = (byTier[b.tier] ?? 0) + 1; }
+  const reasonLine = (Object.keys(BLOCK_REASON_LABEL) as LoopBlock["reason"][])
+    .filter((r) => byReason[r]).map((r) => `${BLOCK_REASON_LABEL[r]}: **${byReason[r]}**`).join(" · ");
+  const tierLine = Object.keys(byTier).sort().map((t) => `${t}: ${byTier[t]}`).join(" · ");
+
+  out.push(`**${blocks.length}** call${blocks.length === 1 ? "" : "s"} blocked — ${reasonLine}.`);
+  out.push("");
+  out.push(`By tier: ${tierLine}.`);
+  out.push("");
+  out.push("| Iter | Tool | Tier | Reason |");
+  out.push("|---|---|---|---|");
+  for (const b of blocks.slice(0, 50)) out.push(`| ${b.iter} | ${mdCell(String(b.tool).slice(0, 60))} | ${b.tier} | ${BLOCK_REASON_LABEL[b.reason]} |`);
+  if (blocks.length > 50) out.push(`| … | | | _${blocks.length - 50} more_ |`);
+  return out.join("\n");
+}
+
 const OUTCOME_BADGE: Record<LoopOutcome, string> = {
   met: "✅ Goal met",
   stopped: "⏹️ Stopped",
@@ -192,7 +248,8 @@ export function summarizeLoop(m: LoopMetrics): string {
   const tools = Object.values(m.toolCalls).reduce((a, b) => a + b, 0);
   const loc = m.loc ? `+${m.loc.added}/-${m.loc.removed} LOC` : "LOC n/a";
   const spend = m.spendUsd != null ? ` · ${formatSpend(m.spendUsd)}` : "";
-  return `${m.iterations} iter · ${tools} tool calls · ${loc} · ${m.errors.length} errors · ${m.websites.length} sites${spend}`;
+  const blocks = m.blocks.length ? ` · ${m.blocks.length} blocked` : "";
+  return `${m.iterations} iter · ${tools} tool calls · ${loc} · ${m.errors.length} errors${blocks} · ${m.websites.length} sites${spend}`;
 }
 
 /** Render the full After-Action Report markdown. Deterministic: the same metrics always produce the
@@ -278,6 +335,11 @@ export function renderLoopReport(m: LoopMetrics): string {
   } else {
     out.push("_No errors recorded. 🎉_");
   }
+  out.push("");
+
+  out.push("## Blocks");
+  out.push("");
+  out.push(renderBlocks(m.blocks, m.dial));
   out.push("");
 
   out.push("## Websites visited");

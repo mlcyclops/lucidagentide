@@ -8,7 +8,7 @@
 // agent turn. Same renderer in Electron (real omp ACP via window.lucid) and in
 // the browser dev server (simulated). Pure DOM, no framework.
 
-import { bridge, type ChatEvent, type ConfigOption, type MemorySnapshot, type OmpCommand, type ProviderAuth, type SecuritySnapshot, type SessionInfo, type SessionList, type WorkspaceInfo } from "./bridge.ts";
+import { bridge, type ChatEvent, type ConfigOption, type GoalDial, type MemorySnapshot, type OmpCommand, type ProviderAuth, type SecuritySnapshot, type SessionInfo, type SessionList, type WorkspaceInfo } from "./bridge.ts";
 import { cachedSessions, cachedTranscript, setCachedSessions, setCachedTranscript, transcriptSig } from "./swr_cache.ts";
 import { $, $$, accordion, el, fmtNum, gauge, spark, table } from "./dom.ts";
 import { ageStr, esc, fmtUSD, goodColor, loadColor } from "./format.ts";
@@ -2636,6 +2636,11 @@ function openGoalForm(): void {
           <select id="goalChecker" class="prov-key goal-ckr"><option>loading…</option></select>
         </div>
         <div class="goal-ckr-why" id="goalCkrWhy"></div>
+        <details class="goal-dial" id="goalDial">
+          <summary>${icon("shield", 13)} Speed vs risk <span class="goal-opt">per-command auto-run ceiling for this unattended run</span> ${goalInfoDot("Speed ↔ risk dial|The loop runs with no human to ask, so you set a STANDING posture per command type: how risky a command may be before it auto-runs. Slide left (green) for the safest, most-blocking run; right (red) to let more through. Anything past the dial is BLOCKED and logged in the After-Action Report. Catastrophic commands (rm -rf, sudo, pipe-to-shell…) ALWAYS block, whatever the dial.")}</summary>
+          <div class="goal-dial-grid" id="goalDialGrid"></div>
+          <div class="goal-dial-foot">${icon("info", 11)} Catastrophic commands (rm -rf, sudo, pipe-to-shell…) always block. Default is the safest (T0) posture.</div>
+        </details>
       </section>
       <section class="goal-step" data-step="5">
         <div class="goal-step-head"><span class="goal-step-n"></span><h4>Run now or on a schedule?</h4></div>
@@ -2680,6 +2685,7 @@ function openGoalForm(): void {
   const close = () => ov.remove();
   $("#goalCancel", ov)?.addEventListener("click", close);
   ov.addEventListener("mousedown", (e) => { if (e.target === ov) close(); });
+  const readDial = buildGoalDial(ov); // P-GOAL.13: the Speed↔Risk slider matrix (persisted)
 
   // ── P-GOAL.8: guided walkthrough (default) vs advanced (all-at-once) ──────────
   const modal = $(".goal-modal", ov) as HTMLElement;
@@ -2752,7 +2758,7 @@ function openGoalForm(): void {
     const command = ($("#goalCmd", ov) as HTMLInputElement).value.trim();
     const maxIters = Math.min(20, Math.max(1, Number(($("#goalMax", ov) as HTMLInputElement).value) || 6));
     const budgetUsd = Math.max(0, Number(($("#goalBudget", ov) as HTMLInputElement)?.value) || 0); // P-GOAL.11: 0 = no cap
-    return { goal, command, maxIters, budgetUsd, criteria: adoptedCriteria || undefined }; // P-GOAL.12: matured checker criteria
+    return { goal, command, maxIters, budgetUsd, criteria: adoptedCriteria || undefined, dial: readDial() }; // P-GOAL.12 criteria · P-GOAL.13 dial
   };
   // P-GOAL.6.1: live token estimate (lower-left), recomputed as the iteration count changes.
   ($("#goalMax", ov) as HTMLInputElement)?.addEventListener("input", () => updateGoalEstimate(ov));
@@ -2783,11 +2789,11 @@ function openGoalForm(): void {
     } finally { btn.disabled = false; btn.innerHTML = prev; }
   });
   $("#goalRun", ov)?.addEventListener("click", async () => {
-    const { goal, command, maxIters, budgetUsd, criteria } = readSpec();
+    const { goal, command, maxIters, budgetUsd, criteria, dial } = readSpec();
     if (!goal) { showToast({ tone: "warn", title: "Add a goal", desc: "Describe what the loop should accomplish.", timeout: 2400 }); return; }
     await applyRunWith(ov); // P-GOAL.7: apply base model / thinking / skill / persona for this run
     close();
-    void runGoalLoop({ goal, condition: command || goal, command: command || undefined, maxIters, budgetUsd, criteria });
+    void runGoalLoop({ goal, condition: command || goal, command: command || undefined, maxIters, budgetUsd, criteria, dial });
   });
   $("#goalSave", ov)?.addEventListener("click", async () => {
     const { goal, command, maxIters } = readSpec();
@@ -3106,8 +3112,47 @@ async function renderAutomations(ov: HTMLElement, close: () => void): Promise<vo
     });
   });
 }
+// ── P-GOAL.13 (ADR-0067): the per-command-type Speed↔Risk dial (the "plasma slider" matrix) ──────────
+const GOAL_DIAL_ROWS: [keyof NonNullable<GoalDial>, string][] = [
+  ["shell", "Shell"], ["edit", "Edit files"], ["delete", "Delete"],
+  ["web-fetch", "Web fetch"], ["web-search", "Web search"], ["subagent", "Subagents"],
+];
+const GOAL_DIAL_TIERS = ["T0", "T1", "T2", "T3"] as const;
+const GOAL_DIAL_TIER_LABEL: Record<string, string> = { T0: "read-only", T1: "local", T2: "reach-out", T3: "destructive" };
+function loadGoalDial(): GoalDial {
+  try { const v = JSON.parse(localStorage.getItem("lucid.goalDial") || "{}"); return v && typeof v === "object" ? v : {}; } catch { return {}; }
+}
+/** Build the slider matrix into #goalDialGrid and return a reader for the current dial. Persists to
+ *  localStorage so the user's posture sticks across runs. Default = T0 (the safest, most-blocking). */
+function buildGoalDial(ov: HTMLElement): () => GoalDial {
+  const dial = loadGoalDial();
+  const grid = $("#goalDialGrid", ov) as HTMLElement | null;
+  if (!grid) return () => ({});
+  const tierOf = (k: keyof NonNullable<GoalDial>) => (dial[k] ?? "T0") as typeof GOAL_DIAL_TIERS[number];
+  grid.innerHTML = GOAL_DIAL_ROWS.map(([k, label]) => {
+    const idx = Math.max(0, GOAL_DIAL_TIERS.indexOf(tierOf(k)));
+    return `<div class="goal-dial-row">
+      <span class="goal-dial-name">${esc(label)}</span>
+      <input type="range" class="goal-dial-slider" min="0" max="3" step="1" value="${idx}" data-dk="${esc(String(k))}" style="--dial:${idx / 3}" aria-label="${esc(label)} auto-run ceiling"/>
+      <span class="goal-dial-tier" data-dt="${esc(String(k))}">${GOAL_DIAL_TIERS[idx]}<i>${GOAL_DIAL_TIER_LABEL[GOAL_DIAL_TIERS[idx]!]}</i></span>
+    </div>`;
+  }).join("");
+  grid.addEventListener("input", (e) => {
+    const s = (e.target as HTMLElement).closest("[data-dk]") as HTMLInputElement | null;
+    if (!s) return;
+    const k = s.dataset.dk as keyof NonNullable<GoalDial>;
+    const tier = GOAL_DIAL_TIERS[Number(s.value)] ?? "T0";
+    dial[k] = tier;
+    try { localStorage.setItem("lucid.goalDial", JSON.stringify(dial)); } catch { /* private mode */ }
+    s.style.setProperty("--dial", String(Number(s.value) / 3));
+    const badge = $(`[data-dt="${k}"]`, ov) as HTMLElement | null;
+    if (badge) badge.innerHTML = `${tier}<i>${GOAL_DIAL_TIER_LABEL[tier]}</i>`;
+  });
+  return () => ({ ...dial });
+}
+
 async function runGoalLoop(
-  opts: { goal: string; condition: string; command?: string; maxIters: number; resume?: string; budgetUsd?: number; criteria?: string },
+  opts: { goal: string; condition: string; command?: string; maxIters: number; resume?: string; budgetUsd?: number; criteria?: string; dial?: GoalDial },
   stream?: (onEvent: (e: ChatEvent) => void) => Promise<void>, // P-GOAL.5: automation run-now reuses this renderer
   verb = "/goal",
 ): Promise<void> {

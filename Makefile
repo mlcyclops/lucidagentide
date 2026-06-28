@@ -275,6 +275,10 @@ demo-P-ABOUT.1: ## P-ABOUT.1 (ADR-0087): About panel — single-sourced app vers
 demo-P-EXEC.1: ## P-EXEC.1 (ADR-0066): per-action exec approval — classifier (safe/risky/catastrophic), prompt interactive + block unattended, standing allows, managed denylist
 	$(BUN) run desktop/scripts/demo_p_exec_1.ts
 
+.PHONY: demo-P-GOAL.13
+demo-P-GOAL.13: ## P-GOAL.13 (ADR-0067): unattended loop Speed↔Risk dial — graded tiers T0-T4, loopVerdict (T4 always blocks, unset=safest), managed ceiling, AAR Blocks section
+	$(BUN) run desktop/scripts/demo_p_goal_13.ts
+
 .PHONY: dashboards
 dashboards: ## Materialize dashboard CSVs from a DuckDB into observable/docs/data (DB=path)
 	$(BUN) run harness/scripts/materialize_dashboards.ts $(DB) observable/docs/data

@@ -39,7 +39,21 @@ import { cancelImport, importJobStatus, startImport } from "./import_job.ts";
 import { homedir } from "node:os";
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { dirname } from "node:path";
+import { DIAL_TYPES, type LoopDial } from "./exec_policy.ts";
+import { isRiskTier } from "./managed_config.ts";
 import { isAllowedRequest, reqShape, tokenValid } from "./origin_guard.ts";
+
+/** Sanitize an untrusted /api/goal `dial` payload into a LoopDial — only known command types + valid
+ *  risk tiers survive; everything else is dropped (the backend clamps it by the managed ceiling anyway). */
+function parseLoopDial(raw: unknown): LoopDial | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const out: LoopDial = {};
+  for (const t of DIAL_TYPES) {
+    const v = (raw as Record<string, unknown>)[t];
+    if (isRiskTier(v)) out[t] = v;
+  }
+  return Object.keys(out).length ? out : undefined;
+}
 import { pathWithin } from "./path_guard.ts";
 import { randomBytes } from "node:crypto";
 import { buildRecall } from "../harness/memory/recall.ts";
@@ -609,9 +623,9 @@ const server = Bun.serve({
         return json({ ok: true, data: await backend.preflightAudit(spec) });
       }
       if (p === "/api/goal" && req.method === "POST") {
-        const b = await readBody<{ goal?: unknown; condition?: unknown; command?: unknown; maxIters?: unknown; resume?: unknown; budgetUsd?: unknown; criteria?: unknown }>(req);
+        const b = await readBody<{ goal?: unknown; condition?: unknown; command?: unknown; maxIters?: unknown; resume?: unknown; budgetUsd?: unknown; criteria?: unknown; dial?: unknown }>(req);
         return ndjsonStream("goal", (emit) => backend.runGoal(
-          { goal: String(b.goal ?? ""), condition: String(b.condition ?? ""), command: b.command ? String(b.command) : undefined, maxIters: Number(b.maxIters) || 6, resume: b.resume ? String(b.resume) : undefined, budgetUsd: Number(b.budgetUsd) || 0, criteria: b.criteria ? String(b.criteria) : undefined },
+          { goal: String(b.goal ?? ""), condition: String(b.condition ?? ""), command: b.command ? String(b.command) : undefined, maxIters: Number(b.maxIters) || 6, resume: b.resume ? String(b.resume) : undefined, budgetUsd: Number(b.budgetUsd) || 0, criteria: b.criteria ? String(b.criteria) : undefined, dial: parseLoopDial(b.dial) },
           emit,
         ));
       }
