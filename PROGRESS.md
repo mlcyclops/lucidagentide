@@ -2441,3 +2441,9 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **shipped:** dev-mode `turnDiag` instrumentation in `acp_backend.ts` - `prompt.resolved … stopReason=` (omp turn stop reason, now captured) + per-iteration `goal.iter <i> maker-turn: answer_chars=… thinking=…/…c tools=… blocks=… acted=…`. Pinpoints whether a Claude maker turn is thinking-only (answer_chars=0, tools=0, thinking_chars>0), tools-not-surfacing, or empty/early-ended. No behavior change; developerMode-gated; typecheck clean.
 - **stubbed:** the FIX awaits one Claude `/goal` run's data (manage maker thinking / feed thinking to the checker / fix event mapping or file an omp issue). The GPT "stall" is the by-design maker->checker pause (optional "Checking…" indicator is a separate follow-up).
 - **next:** run a Claude goal loop with Developer mode on, read the `[TURN_DIAG] goal.iter` lines, then ship the targeted fix.
+
+---
+**P-ABOUT.1 - About panel + single-sourced dynamic app version (ADR-0087)**
+- **shipped:** animated `#railAbout` rail glyph (book + twinkling sparkle, above Commands/Settings) opens a polished dark-mode About modal (`about.ts`, pure builder) — LUCID · AGENT IDE hero, product blurb, TechLead 187 LLC emblem + BUSL-1.1 terms (Change Date 2030-06-27 → MPL-2.0). Version single-sourced in `desktop/version.ts` (`APP_VERSION`), mirrored by `desktop/package.json`, drift-guarded by a test; launch baseline bumped to **v1.8.7**. Also: BUSL header + `make install-hooks`-per-clone note added to CLAUDE.md/AGENTS.md invariants. `make demo-P-ABOUT.1` green; `about.test.ts` 10/10; desktop typecheck + renderer bundle clean.
+- **stubbed:** none. (Optional future: surface the version in the titlebar/status bar too; add an "About" command-palette entry.)
+- **next:** live-verify the panel in the preview, then merge to master.

@@ -145,3 +145,25 @@ as a stop-the-line event.
 - DuckDB uses the Node binding (less mature than DuckDB-Python). If a specific
   analytics task is blocked by it, that’s a localized future ADR — not a reason
   to revisit the harness language.
+
+-----
+
+## Licensing & commit hygiene
+
+Every first-party source file under `harness/`, `desktop/`, `tools/`, and
+`scanner-sidecar/` carries the BUSL-1.1 SPDX header (`Copyright (c) 2026 TechLead
+187 LLC` + `SPDX-License-Identifier: BUSL-1.1`; `#` for Python). This is enforced
+two ways and you must keep both working:
+
+- A **pre-commit hook** (`.githooks/pre-commit`) auto-applies the header to staged
+  source. Run **`make install-hooks` once per clone** to activate it — git cannot
+  self-install hooks on clone, so a fresh checkout (yours or a collaborator’s) has
+  NO hook until this runs. `make install` runs it for you.
+- **CI** runs `tools/license_headers.ts --check` as a backstop, so nothing
+  unheadered can land on master even if the hook was never installed.
+
+Vendored / generated trees (`vendor/`, `node_modules/`, `desktop/release/`,
+`.venv`, `__pycache__`, `dist/`) keep their own licenses and are NEVER
+relicensed. New first-party files get the header automatically (hook) or via
+`make license-headers`. When adding the header in code, read the file then write —
+never `existsSync`-then-read (CodeQL flags that pair as a TOCTOU race).
