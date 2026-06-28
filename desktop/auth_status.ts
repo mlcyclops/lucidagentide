@@ -31,14 +31,15 @@ export const MAJORS = [
   { id: "google", name: "Google · Gemini", env: "GEMINI_API_KEY", oauthId: "google-gemini-cli", canOauth: true },
   { id: "anthropic", name: "Anthropic · Claude", env: "ANTHROPIC_API_KEY", oauthId: "anthropic", canOauth: true },
   { id: "xai", name: "xAI · Grok", env: "XAI_API_KEY", oauthId: "xai-oauth", canOauth: true },
+  // Perplexity (Sonar) is U.S.-based. omp supports OAuth too, but its login is interactive email-OTP /
+  // the macOS app token — neither works through our non-interactive broker spawn — so we expose the
+  // API-key path. canOauth:false hides the dead OAuth button.
+  { id: "perplexity", name: "Perplexity · Sonar", env: "PERPLEXITY_API_KEY", oauthId: "perplexity", canOauth: false },
 ];
 // More providers (third-party / non-U.S. / custom aggregators) - gated behind a typed acknowledgement
 // in the UI because they route to servers outside U.S. jurisdiction or aggregate many origins.
 export const OTHERS = [
   { id: "openrouter", name: "OpenRouter", env: "OPENROUTER_API_KEY", oauthId: "openrouter", canOauth: true },
-  // Perplexity (Sonar). omp supports OAuth too, but its login is interactive email-OTP / the macOS app
-  // token — neither works through our non-interactive broker spawn — so we expose the API-key path.
-  { id: "perplexity", name: "Perplexity · Sonar", env: "PERPLEXITY_API_KEY", oauthId: "perplexity", canOauth: false },
   { id: "deepseek", name: "DeepSeek", env: "DEEPSEEK_API_KEY", oauthId: "deepseek", canOauth: false },
   { id: "moonshot", name: "Moonshot · Kimi", env: "MOONSHOT_API_KEY", oauthId: "moonshot", canOauth: false },
   { id: "groq", name: "Groq", env: "GROQ_API_KEY", oauthId: "", canOauth: false },
