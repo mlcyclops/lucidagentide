@@ -30,7 +30,7 @@
 <a href="https://github.com/mlcyclops/lucidagentide/actions/workflows/build-desktop.yml"><img src="https://img.shields.io/github/actions/workflow/status/mlcyclops/lucidagentide/build-desktop.yml?label=Windows%20Build&logo=windows&logoColor=white&style=flat-square" alt="Windows Build" /></a>
 <a href="https://github.com/mlcyclops/lucidagentide/actions/workflows/build-desktop.yml"><img src="https://img.shields.io/github/actions/workflow/status/mlcyclops/lucidagentide/build-desktop.yml?label=macOS%20Build&logo=apple&logoColor=white&style=flat-square" alt="macOS Build" /></a>
 <a href="https://github.com/mlcyclops/lucidagentide/actions/workflows/build-desktop.yml"><img src="https://img.shields.io/github/actions/workflow/status/mlcyclops/lucidagentide/build-desktop.yml?label=Linux%20Build&logo=linux&logoColor=white&style=flat-square" alt="Linux Build" /></a>
-<img src="https://img.shields.io/badge/tests-545%20harness%20%2B%20503%20desktop%20%2B%2057%20sidecar-46d27e?style=flat-square" alt="tests" />
+<img src="https://img.shields.io/badge/tests-545%20harness%20%2B%20689%20desktop%20%2B%2057%20sidecar-46d27e?style=flat-square" alt="tests" />
 <img src="https://img.shields.io/badge/gate-fail--closed-e07bf0?style=flat-square" alt="fail-closed gate" />
 
 <br/>
@@ -351,7 +351,7 @@ LucidAgentIDE is a thin, principled layer over best-in-class building blocks - c
 |:--|:--|:--|
 | [**oh-my-pi (omp)**](https://omp.sh) <sub>· [repo](https://github.com/can1357/oh-my-pi)</sub> | A fast agentic coding runtime: tool-calling, model routing, sessions, sandboxing, ACP, extensions, skills | The host. Everything is added via omp **hooks / custom tools / SDK** - **never a fork** |
 | [**DuckDB**](https://duckdb.org) | An in-process analytical (OLAP) SQL database | The append-only **provenance + memory store** (findings, telemetry, semantic memory, run lineage) |
-| [**Obsidian**](https://obsidian.md) | A local-first Markdown knowledge base with `[[wikilinks]]` + a graph view | The **export format** for the personalization knowledge graph (roadmap) |
+| [**Obsidian**](https://obsidian.md) | A local-first Markdown knowledge base with `[[wikilinks]]` + a graph view | The **export format** for the personalization knowledge graph — one click decrypts your Personal + Work nodes into a portable vault (notes, `[[wikilinks]]`, escaped; CUI excluded by design; audited) |
 | [**BoringSSL**](https://boringssl.googlesource.com/boringssl/) | Google's streamlined fork of OpenSSL (Bun's crypto backend) | Context for the **FIPS posture** - FIPS-approved algorithms; no FIPS *mode* in Bun's runtime |
 | [**headroom**](https://github.com/chopratejas/headroom) | An on-device, OpenAI-compatible token-compression proxy (60-95% reduction) | **Opt-in** context compression to stretch gov token quotas |
 | [**AskSage**](https://asksage.ai) | An accredited government generative-AI gateway fronting OpenAI/Anthropic/Google | An omp **provider extension**: lockdown, scanned personas, dataset-grounded RAG |
@@ -441,9 +441,12 @@ later: `brew uninstall --cask lucidagentide` (add `--zap` to also delete app dat
 
 **Shipped and green.** The full security lifecycle, provenance lineage + replay, the cache-optimized prompt,
 the desktop app, and the AskSage gov gateway (with tool use on Claude *and* Gemini). Plus cross-model cost
-tracking, CUI isolation, the encrypted personalization graph with cross-session recall, AI-authorship
-attribution, one-command import, a read-write IDE with gated saves, and the **`/goal` loop** with full
-loop-engineering (after-action reports, a budget kill switch, and stall guards).
+tracking, CUI isolation, the encrypted personalization graph with cross-session recall (and one-click
+Obsidian-vault export), AI-authorship attribution, one-command import, a read-write IDE with gated saves,
+and the **`/goal` loop** with full loop-engineering (after-action reports, a budget kill switch, and stall
+guards). **Newest:** a local **RAG knowledge spine** (scan-gated PDF → air-gapped vector store), per-action
+**exec approval** for `bash`/`eval` + a per-command **Speed↔Risk dial** for the unattended loop,
+centrally-managed (GPO/MDM) policy, and a SIEM-ready **OCSF audit-export** seam.
 
 Every test suite passes and `tsc --noEmit` is clean across all three projects (TypeScript + Python). The
 table below is the recent slice; [`PROGRESS.md`](PROGRESS.md) has the full per-session log.
@@ -452,6 +455,9 @@ table below is the recent slice; [`PROGRESS.md`](PROGRESS.md) has the full per-s
 
 | Phase | Feature | ADR |
 |:--|:--|:--|
+| **P-EXEC.1 · P-GOAL.13** | **Exec-tool safety** - per-action approval for `bash`/`eval` (read-only auto-runs, risky prompts, a catastrophic set *always* prompts/blocks) + a per-command **Speed↔Risk dial** governing the unattended `/goal` loop, with tools & blocks in the After-Action Report | [ADR-0066/0067](DECISIONS.md) |
+| **P-ENT.1-2** | **Enterprise governance** - centrally-managed (GPO/MDM) security policy that only ever *tightens* the knobs, plus a SIEM-ready, **OCSF-aligned**, metadata-only **security-audit export** seam (fail-safe sinks) | [ADR-0068/0069](DECISIONS.md) |
+| **P-RAG.1-1c** | **Local knowledge spine (RAG)** - scan-gated PDF ingest into an air-gapped DuckDB vector store, real bge-small **semantic** retrieval, delimited post-cache injection | [ADR-0058/0063/0064](DECISIONS.md) |
 | **P-GOAL.9-11** | **Loop engineering** for the `/goal` loop - an **After-Action Report** (Mermaid graphs: tool calls by type, LOC ±, errors, sites visited), **convergence-stall + tool-failure guards**, a **cross-run evaluation ledger** (success rate / avg iterations-to-win / failure breakdown), and a **budget kill switch** (a hard `$` cap that aborts an unattended run mid-turn) | [ADR-0054-0056](DECISIONS.md) |
 | **P-GOAL.1-8** | The **`/goal` agentic loop** - iterate to a verifiable stop condition with a separate (cheaper, recommended) checker model, durable on-disk memory, resume, scheduled automations, a cost estimate, and a guided walkthrough | [ADR-0046-0050](DECISIONS.md) |
 | **AskSage tool use** | Claude **and** Gemini routed through the **gov gateway can now use omp tools** (write files, run commands) - the streamSimple adapter parses tool calls + scans each through the gate | [ADR-0051](DECISIONS.md) |
@@ -467,9 +473,9 @@ table below is the recent slice; [`PROGRESS.md`](PROGRESS.md) has the full per-s
 
 | Theme | ADR |
 |:--|:--|
-| **Knowledge & RAG** - local PDF/image ingest into an air-gapped DuckDB vector store + AskSage dataset training | [ADR-0053](DECISIONS.md) |
-| **Exec-tool safety** - per-action approval for `bash`/`eval` + a per-command **Speed↔Risk dial** for the unattended loop, with tools & blocks in the After-Action Report | [ADR-0066/0067](DECISIONS.md) |
-| **Enterprise governance** - centrally-managed (GPO / MDM) security policy + a SIEM-ready, metadata-only security-audit export seam | [ADR-0068/0069](DECISIONS.md) |
+| **Exec-tool safety P-EXEC.2** - extend the per-action gate to `ssh` (key = host) and `task` sub-agents | [ADR-0066](DECISIONS.md) |
+| **SIEM connectors** - Splunk HEC / syslog-CEF / Elastic / cloud sinks behind the now-shipped OCSF audit-export `Sink` interface | [ADR-0069](DECISIONS.md) |
+| **AskSage dataset training** - ground the gov gateway on the local knowledge spine | [ADR-0053](DECISIONS.md) |
 | Prompt/response traceability · dev-mode logging deepening | [ADR-0009](DECISIONS.md) |
 
 See [`PROGRESS.md`](PROGRESS.md) for the per-session log (shipped / stubbed / next).
@@ -480,7 +486,7 @@ Built in the open, **one disciplined increment at a time.** If you want to run i
 or propose a change, start here:
 
 - **Read [`CLAUDE.md`](CLAUDE.md) first.** It's the load-bearing contract - fail-closed, extend omp (don't fork), frozen contracts, a byte-stable prompt. A change that silently breaks an invariant won't land.
-- **ADR-first.** Non-trivial work begins as an ADR in [`DECISIONS.md`](DECISIONS.md) (53 and counting) - pick one up, or propose your own.
+- **ADR-first.** Non-trivial work begins as an ADR in [`DECISIONS.md`](DECISIONS.md) (87 and counting) - pick one up, or propose your own.
 - **One increment per change.** Small, verifiable, with a demo and tests. See [`CHEATSHEET.md`](CHEATSHEET.md) for day-to-day commands.
 - **Tests are the gate.** `bun test harness && bun test desktop` stay green and `tsc --noEmit` is clean; CI runs the build + CodeQL on every push.
 - **The only Python is the scanner sidecar.** Everything else is TypeScript on Bun - please don't add a second Python surface.
