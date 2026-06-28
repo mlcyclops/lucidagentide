@@ -19,7 +19,7 @@ function metrics(over: Partial<LoopMetrics> = {}): LoopMetrics {
     goal: "make tests pass", condition: "npm test exits 0", command: "npm test",
     outcome: "met", outcomeReason: "all pass", iterations: 3, maxIters: 6, durationMs: 120_000,
     toolCalls: { shell: 5, edit: 3 }, loc: { added: 40, removed: 9, files: 2 },
-    errors: [{ iter: 1, detail: "x" }], websites: ["https://a.io"],
+    errors: [{ iter: 1, detail: "x" }], blocks: [], websites: ["https://a.io"],
     perIteration: [], ...over,
   };
 }

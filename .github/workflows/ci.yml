@@ -49,6 +49,12 @@ jobs:
       - name: Typecheck (root)
         run: bun x tsc --noEmit
 
+      # Every first-party source file must carry the BUSL-1.1 SPDX header. The pre-commit hook
+      # (make install-hooks) applies these automatically; this is the backstop for anything that
+      # slipped through (e.g. a commit made without the hook installed).
+      - name: License headers (BUSL-1.1)
+        run: bun run tools/license_headers.ts --check
+
       - name: Harness test suite
         run: bun test harness
 

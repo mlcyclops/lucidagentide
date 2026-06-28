@@ -21,7 +21,12 @@ PY         := $(UV) run --project $(SIDECAR_DIR) python
 # ---------------------------------------------------------------------------
 
 .PHONY: install
-install: install-harness install-sidecar ## Install harness + sidecar deps
+install: install-harness install-sidecar install-hooks ## Install harness + sidecar deps + git hooks
+
+.PHONY: install-hooks
+install-hooks: ## Point git at .githooks/ so the pre-commit license-header hook runs
+	git config core.hooksPath .githooks
+	@echo "✓ core.hooksPath -> .githooks (pre-commit applies BUSL-1.1 headers to staged source)"
 
 .PHONY: install-harness
 install-harness: ## Install Bun/TypeScript harness deps
@@ -261,6 +266,22 @@ demo-P-PERF.1: ## P-PERF.1 (#134/ADR-0084): instant cached session list + transc
 .PHONY: demo-P-KG-INGEST.4
 demo-P-KG-INGEST.4: ## P-KG-INGEST.4 (#136/ADR-0085): true ingest concurrency — dedicated util omp connection; fail-safe fallback; routing contract
 	$(BUN) run desktop/scripts/demo_p_kg_ingest_4.ts
+
+.PHONY: demo-P-ABOUT.1
+demo-P-ABOUT.1: ## P-ABOUT.1 (ADR-0087): About panel — single-sourced app version (v1.8.7), LUCID + TechLead 187 + BUSL-1.1 licensing, animated rail glyph
+	$(BUN) run desktop/scripts/demo_p_about_1.ts
+
+.PHONY: demo-P-EXEC.1
+demo-P-EXEC.1: ## P-EXEC.1 (ADR-0066): per-action exec approval — classifier (safe/risky/catastrophic), prompt interactive + block unattended, standing allows, managed denylist
+	$(BUN) run desktop/scripts/demo_p_exec_1.ts
+
+.PHONY: demo-P-GOAL.13
+demo-P-GOAL.13: ## P-GOAL.13 (ADR-0067): unattended loop Speed↔Risk dial — graded tiers T0-T4, loopVerdict (T4 always blocks, unset=safest), managed ceiling, AAR Blocks section
+	$(BUN) run desktop/scripts/demo_p_goal_13.ts
+
+.PHONY: demo-P-ENT.2
+demo-P-ENT.2: ## P-ENT.2 (ADR-0069): OCSF security audit export — each source → valid OCSF Detection Finding, fail-safe dispatcher (dead sink never blocks a turn)
+	$(BUN) run desktop/scripts/demo_p_ent_2.ts
 
 .PHONY: dashboards
 dashboards: ## Materialize dashboard CSVs from a DuckDB into observable/docs/data (DB=path)

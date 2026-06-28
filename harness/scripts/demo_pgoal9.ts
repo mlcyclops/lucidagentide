@@ -41,6 +41,7 @@ const metrics: LoopMetrics = {
     { iter: 1, detail: "shell: command failed — exit 1 (TypeError in token.ts)" },
     { iter: 2, detail: "edit: rejected — file outside workspace" },
   ],
+  blocks: [],
   websites: ["https://nodejs.org/api/test.html", "https://eslint.org/docs/latest/rules/no-unused-vars"],
   perIteration: [
     { n: 1, tools: 8, errors: 1, done: false, reason: "5 of 42 tests fail" },
@@ -80,7 +81,7 @@ console.log("   ✓ recurring blocker collapses across rounds → loop stops 'no
 // ── C. Honest degradation: a no-op run emits no invalid empty charts ───────────
 const empty: LoopMetrics = {
   goal: "noop", condition: "c", outcome: "stopped", outcomeReason: "no progress for two iterations",
-  iterations: 1, maxIters: 6, durationMs: 1200, toolCalls: {}, loc: null, errors: [], websites: [],
+  iterations: 1, maxIters: 6, durationMs: 1200, toolCalls: {}, loc: null, errors: [], blocks: [], websites: [],
   perIteration: [{ n: 1, tools: 0, errors: 0, done: false, reason: "no actions taken" }],
 };
 const emptyMd = renderLoopReport(empty);

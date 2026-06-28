@@ -24,11 +24,13 @@ import { recordTurns } from "./turns_log.ts";
 import { isLearnableAssistantText } from "./thinking_governance.ts";
 import { recordBlock } from "./security_log.ts";
 import { asksageOnly, attribution, checkerModel, lastModel, load as loadSettings, mcpServersForAcp, setCheckerModel, setLastModel } from "./settings_store.ts";
-import { managedAsksageOnly } from "./managed_config.ts";
+import { managedAsksageOnly, managedConfig } from "./managed_config.ts";
 import { recommendCheckerModel, resolveCheckerModel, type ModelOption } from "./checker_model.ts";
 import { parseGoalVerdict } from "./goal_verdict.ts";
 import { appendGoalIteration, appendRunLog, finishGoalMemory, type GoalMemory, readRunLog, resumeGoalMemory, saveGoalReport, savePreflightReport, startGoalMemory } from "./goal_memory.ts";
-import { extractUrls, type IterStat, type LocStat, type LoopMetrics, type LoopOutcome, normalizeToolName, parseNumstat, renderLoopReport, stallSignature, summarizeLoop } from "./loop_report.ts";
+import { extractUrls, type IterStat, type LocStat, type LoopBlock, type LoopMetrics, type LoopOutcome, normalizeToolName, parseNumstat, renderLoopReport, stallSignature, summarizeLoop } from "./loop_report.ts";
+import { type LoopDial, clampDialRow, loopVerdict } from "./exec_policy.ts";
+import { emitSecurityEvent } from "./audit_export.ts";
 import { aggregateRuns, type LoopRunRecord, type RunStats, summarizeRunStats, toRunRecord } from "./loop_runlog.ts";
 import { addTurnSpend, type LoopSpend, newLoopSpend, normalizeBudget, overBudget } from "./loop_budget.ts";
 import { formatSpend } from "./loop_report.ts";
@@ -36,11 +38,36 @@ import { assessReadiness, maturedGoalFrom, mergeMatured, parsePreflightJson, typ
 import { execFileSync } from "node:child_process";
 import { type Automation, listAutomations, nextDueAutomation, updateAutomation } from "./automations.ts";
 import { type EgressChoice, egressDecision, recordEgress } from "./egress_policy.ts";
+import { type ExecChoice, type ExecClass, classifyCommand, classifyEval, execStore, execVerdict, recordExec } from "./exec_policy.ts";
 
 // P-EGRESS.1 (ADR-0062): the network-reaching tools omp is told to PROMPT for (acp_config.yml). When omp
 // requests permission for one of these, the desktop shows the per-website approval dialog instead of
 // silently auto-approving in Agent mode.
 const EGRESS_TOOLS = new Set(["browser", "web_search", "web", "fetch", "navigate"]);
+
+// P-EXEC.1 (ADR-0066): the exec tools omp is told to PROMPT for (acp_config.yml). Each call is classified
+// per-command — read-only auto-approves, risky gates, a catastrophic set always prompts. Detected by the
+// tool name OR (the strong signal) a `command` string in the tool's rawInput.
+const EXEC_TOOLS = /\b(bash|eval|shell|execute|terminal)\b/;
+const EXEC_OPTIONS_FULL = [
+  { optionId: "exec:allow-once", name: "Allow once", kind: "allow" },
+  { optionId: "exec:allow-turn", name: "Allow for this turn", kind: "allow" },
+  { optionId: "exec:allow-program", name: "Always allow this program", kind: "allow" },
+  { optionId: "exec:danger", name: "Always allow every command", kind: "danger" },
+  { optionId: "exec:deny", name: "Block", kind: "reject" },
+];
+// Catastrophic or compound calls (no single program to pin) expose only once / this-turn / deny.
+const EXEC_OPTIONS_LIMITED = [
+  { optionId: "exec:allow-once", name: "Allow once", kind: "allow" },
+  { optionId: "exec:allow-turn", name: "Allow for this turn", kind: "allow" },
+  { optionId: "exec:deny", name: "Block", kind: "reject" },
+];
+/** Pull the command/code an exec tool call will run, from its rawInput. */
+function execCommand(tc: any): string | null {
+  const ri = tc?.rawInput ?? tc?.input ?? {};
+  for (const k of ["command", "cmd", "script", "code", "source", "input"]) if (typeof ri[k] === "string" && ri[k].trim()) return ri[k].trim();
+  return null;
+}
 // The dialog's choices — clear and non-overlapping. ("allow once" and an "ask every time" pin had the
 // same outcome — both ask again next time — so the pin was dropped.) Each maps to an EgressChoice the
 // store folds in; the "allow" variants approve the call to omp, "deny" blocks it.
@@ -84,7 +111,7 @@ export type ChatEvent =
   | { type: "tool"; name: string; detail: string }
   | { type: "subagent"; id: string; agent: string; title: string; assignments: string[] }
   | { type: "block"; tool: string; reason: string; severity: string; findings: string; id?: string; quarantined?: boolean }
-  | { type: "permission"; id: string; tool: string; detail: string; options: { optionId: string; name: string; kind?: string }[]; url?: string; egress?: boolean }
+  | { type: "permission"; id: string; tool: string; detail: string; options: { optionId: string; name: string; kind?: string }[]; url?: string; egress?: boolean; exec?: boolean; program?: string; reason?: string; danger?: boolean }
   | { type: "usage"; used: number; size: number; cost: number }
   // P-GOAL.1 (ADR-0046): /goal loop events — an iteration begins, the separate checker's verdict,
   // the loop met its condition, or it stopped (cap / no-progress).
@@ -139,6 +166,16 @@ class Backend {
   private autoRunning = false;
   private static readonly AUTO_TICK_MS = 30_000;
   private askActive = false;            // true only during a chat turn (never the util `complete()`)
+  // P-EXEC.1 (ADR-0066): the in-memory allow-turn scope — risky programs the user OK'd for the rest of
+  // THIS interactive turn only. NEVER persisted; cleared at every turn boundary. `execTurnAll` is the
+  // compound-command equivalent (no single program to key on).
+  private execTurnPrograms = new Set<string>();
+  private execTurnAll = false;
+  // P-GOAL.13 (ADR-0067): the active unattended-loop dial (per-command-type Speed↔Risk ceiling) + the
+  // blocks it caused. Set while a /goal loop runs; null otherwise. `loopIter` tags each block.
+  private loopDial: LoopDial | null = null;
+  private loopBlocks: LoopBlock[] = [];
+  private loopIter = 0;
   private permSeq = 0;
   private permPending = new Map<string, (optionId: string | null) => void>();
   private pendingPerms = 0;             // while > 0 the turn's idle/stall clock is paused
@@ -245,6 +282,34 @@ class Backend {
             const tc = params?.toolCall ?? params?.tool_call ?? {};
             const toolName = [tc.kind, tc.title, tc.name, tc.toolName, params?.tool, params?.toolName].filter(Boolean).join(" ").toLowerCase();
             const target = egressTarget(tc);
+            // P-EXEC.1 (ADR-0066): an exec tool (bash/eval). Classify the command BEFORE the Agent
+            // auto-approve — read-only auto-approves, risky gates, a catastrophic set always prompts. A
+            // shell command is handled here (not egress), so `curl … | sh` is caught as catastrophic exec.
+            const isEvalTool = /\beval\b/.test(toolName);
+            const cmd = execCommand(tc);
+            if (isEvalTool || cmd !== null || EXEC_TOOLS.test(toolName)) {
+              const cls: ExecClass = isEvalTool ? classifyEval() : classifyCommand(cmd ?? toolName);
+              // Interactive = a live chat turn with a UI listener and NOT an unattended loop/automation.
+              const interactive = this.askActive && !!this.listener && !this.goalActive && !this.autoRunning;
+              const approveOpt = () => { const a = opts.find((o) => /allow/i.test(o.kind ?? o.optionId ?? "")) ?? opts[0]; return a ? { outcome: { outcome: "selected", optionId: a.optionId } } : { outcome: { outcome: "cancelled" } }; };
+              // P-GOAL.13 (ADR-0067): an unattended /goal loop is governed by the per-command-type DIAL,
+              // not the interactive allowlist — a command auto-runs iff its tier ≤ the shell dial; T4
+              // always blocks. A block is recorded for the AAR. Default dial (unset) = safest (T0 only).
+              if (this.goalActive && this.loopDial) {
+                if (loopVerdict(this.loopDial.shell, cls.tier) === "auto") return approveOpt();
+                this.loopBlocks.push({ iter: this.loopIter, tool: cls.key ?? "shell", tier: cls.tier, reason: cls.alwaysPrompt ? "catastrophic" : "risk-dial" });
+                // P-ENT.2: a loop dial/catastrophic block is a SecurityEvent (fail-safe; never throws).
+                emitSecurityEvent({ category: "loop", type: "loop_block", decision: "block", severity: cls.alwaysPrompt ? "critical" : "high", tool: cls.key ?? "shell", tier: cls.tier, reason: cls.reason, sessionId: this.sessionId ?? undefined });
+                return { outcome: { outcome: "cancelled" } }; // blocked by the dial
+              }
+              const turnAllowed = interactive && (this.execTurnAll || (!!cls.key && this.execTurnPrograms.has(cls.key)));
+              const verdict = execVerdict(execStore(), cls, { unattended: !interactive, turnAllowed });
+              if (verdict === "allow") return approveOpt();
+              if (verdict === "prompt" && interactive) return this.askExec(params, opts, cls, isEvalTool ? "eval" : (cmd ?? toolName));
+              // P-ENT.2: an exec call blocked with no human to ask (unattended risky / catastrophic).
+              emitSecurityEvent({ category: "exec", type: "exec_decision", decision: "block", severity: cls.alwaysPrompt ? "critical" : "high", tool: cls.key ?? "shell", tier: cls.tier, reason: cls.reason, sessionId: this.sessionId ?? undefined });
+              return { outcome: { outcome: "cancelled" } }; // block: unattended risky, catastrophic, or no UI to ask
+            }
             // P-EGRESS.1 (ADR-0062): a network-reaching tool — matched by name OR by carrying an external
             // http(s) URL (omp may report the browser tool with a generic kind, so name alone can miss it).
             // Unless a standing decision already allows the target, force the per-website approval dialog —
@@ -401,8 +466,43 @@ class Backend {
       const t = setTimeout(() => settle(block()), Backend.PERM_MS); // fail-closed → block egress
       this.permPending.set(id, (optionId) => {
         const choice = String(optionId ?? "").replace(/^egress:/, "") as EgressChoice;
-        if (!optionId || choice === "deny") { settle(block()); return; }
+        const denied = !optionId || choice === "deny";
+        // P-ENT.2 (ADR-0069): the egress (network-reach) decision as a SecurityEvent (fail-safe).
+        emitSecurityEvent({ category: "egress", type: "egress_decision", decision: denied ? "block" : "allow", severity: "medium", tool: "egress", reason: `${denied ? "blocked" : choice} · ${target}`.slice(0, 200), sessionId: this.sessionId ?? undefined });
+        if (denied) { settle(block()); return; }
         try { recordEgress(target, choice); } catch { /* best-effort persistence */ }
+        settle(approve());
+      });
+    });
+  }
+  /** P-EXEC.1 (ADR-0066): forward a risky exec request as the per-command approval dialog (command +
+   *  program key + why). The user's choice folds into the exec store (allow-program / danger) or the
+   *  in-memory turn scope (allow-turn); allow-once / deny persist nothing. Fail-closed: timeout ⇒ block. */
+  private askExec(params: any, opts: any[], cls: ExecClass, command: string): Promise<any> {
+    const id = `perm_${++this.permSeq}`;
+    this.pendingPerms++;
+    // No pinnable program (catastrophic or compound) ⇒ only once / this-turn / deny.
+    const limited = cls.alwaysPrompt || !cls.key;
+    this.emit({
+      type: "permission", id, tool: "exec", detail: command, exec: true,
+      program: cls.key ?? undefined, reason: cls.reason, danger: cls.alwaysPrompt,
+      options: limited ? EXEC_OPTIONS_LIMITED : EXEC_OPTIONS_FULL,
+    });
+    const allowOpt = opts.find((o) => /allow/i.test(o.kind ?? o.optionId ?? "")) ?? opts[0];
+    const denyOpt = opts.find((o) => /(deny|reject|cancel|no)/i.test(o.kind ?? o.optionId ?? ""));
+    const approve = () => allowOpt ? { outcome: { outcome: "selected", optionId: allowOpt.optionId } } : { outcome: { outcome: "cancelled" } };
+    const block = () => denyOpt ? { outcome: { outcome: "selected", optionId: denyOpt.optionId } } : { outcome: { outcome: "cancelled" } };
+    return new Promise((resolve) => {
+      const settle = (o: any) => { clearTimeout(t); this.permPending.delete(id); this.pendingPerms = Math.max(0, this.pendingPerms - 1); resolve(o); };
+      const t = setTimeout(() => settle(block()), Backend.PERM_MS); // fail-closed → block
+      this.permPending.set(id, (optionId) => {
+        const choice = String(optionId ?? "").replace(/^exec:/, "") as ExecChoice;
+        // P-ENT.2 (ADR-0069): record the human's exec decision as a SecurityEvent (fail-safe).
+        const denied = !optionId || choice === "deny";
+        emitSecurityEvent({ category: "exec", type: "exec_decision", decision: denied ? "block" : "allow", severity: cls.alwaysPrompt ? "critical" : "medium", tool: cls.key ?? "shell", tier: cls.tier, reason: `${denied ? "denied" : choice} · ${cls.reason}`, sessionId: this.sessionId ?? undefined });
+        if (denied) { settle(block()); return; }
+        if (choice === "allow-turn") { if (cls.key) this.execTurnPrograms.add(cls.key); else this.execTurnAll = true; } // in-memory only
+        else { try { recordExec(cls, choice); } catch { /* best-effort persistence */ } }
         settle(approve());
       });
     });
@@ -482,6 +582,7 @@ class Backend {
     const sink = (e: ChatEvent) => { arm(); if (isLearnableAssistantText(e)) assistant += e.text; try { onEvent(e); } catch { enqueueErr++; } };
     this.listener = sink;
     this.askActive = true; // permission requests in THIS turn may be forwarded to the UI (Ask mode)
+    this.execTurnPrograms.clear(); this.execTurnAll = false; // P-EXEC.1: allow-turn scope is per-turn
     this.chatGate.begin(); // P-KG-INGEST.3: a chat turn is live → background extraction should yield to it
     this.turnDiag(`prompt.start session=${this.sessionId}`);
     try {
@@ -533,7 +634,7 @@ class Backend {
   // when given). Capped at `maxIters`, auto-stops on no-progress. Runs UNATTENDED — permissions are
   // auto-approved for the duration, but every tool call is still scanned fail-closed by the in-process
   // gate (that, not human approval, is the safety boundary). Streams the usual chat events plus goal-*.
-  async runGoal(opts: { goal: string; condition: string; command?: string; maxIters: number; resume?: string; budgetUsd?: number; criteria?: string }, onEvent: (e: ChatEvent) => void): Promise<void> {
+  async runGoal(opts: { goal: string; condition: string; command?: string; maxIters: number; resume?: string; budgetUsd?: number; criteria?: string; dial?: LoopDial }, onEvent: (e: ChatEvent) => void): Promise<void> {
     const goal = opts.goal.trim();
     const condition = (opts.condition || opts.command || "the goal is fully accomplished").trim();
     const command = opts.command?.trim() || "";
@@ -543,6 +644,12 @@ class Backend {
     const prevMode = this.permissionMode;
     this.permissionMode = "auto"; // unattended: auto-approve tool calls (the gate still scans every one)
     this.goalActive = true; this.goalCancelled = false;
+    // P-GOAL.13 (ADR-0067): the loop's exec policy is the per-command-type DIAL, clamped by the managed
+    // loop ceiling (ADR-0068, tighten-only). An unset dial defaults to the safest posture (T0 only).
+    const loopMax = managedConfig().config?.security?.loop?.maxAutoTier;
+    const rawDial = opts.dial ?? {};
+    this.loopDial = { shell: clampDialRow(rawDial.shell, loopMax), edit: clampDialRow(rawDial.edit, loopMax), delete: clampDialRow(rawDial.delete, loopMax), "web-fetch": clampDialRow(rawDial["web-fetch"], loopMax), "web-search": clampDialRow(rawDial["web-search"], loopMax), subagent: clampDialRow(rawDial.subagent, loopMax) };
+    this.loopBlocks = []; this.loopIter = 0;
     // P-GOAL.3/4: durable on-disk memory (best-effort). `resume` continues an existing loop-memory file
     // and injects its prior progress; otherwise start a fresh record.
     const resumed = opts.resume ? resumeGoalMemory(currentWorkspace(), opts.resume) : null;
@@ -580,6 +687,7 @@ class Backend {
     try {
       for (let i = 1; i <= maxIters; i++) {
         if (this.goalCancelled) { terminalOutcome = "cancelled"; terminalReason = "stopped by you"; onEvent({ type: "goal-stop", reason: terminalReason }); finishGoalMemory(mem, terminalReason); return; }
+        this.loopIter = i; // P-GOAL.13: tag any dial/scanner block this iteration with its round number
         onEvent({ type: "goal-iter", n: i, max: maxIters });
         let work = "";
         let actedThisIter = false;
@@ -592,7 +700,12 @@ class Backend {
           if (e.type === "token") work += e.text;
           if (e.type === "tool") { actedThisIter = true; iterTools++; const t = normalizeToolName(e.name); toolCalls[t] = (toolCalls[t] ?? 0) + 1; for (const u of extractUrls(e.detail)) websites.add(u); }
           else if (e.type === "subagent") { actedThisIter = true; iterTools++; toolCalls.subagent = (toolCalls.subagent ?? 0) + 1; }
-          else if (e.type === "block") { iterErrors++; errors.push({ iter: i, detail: `${e.tool}: ${e.reason}`.slice(0, 200) }); }
+          else if (e.type === "block") {
+            iterErrors++; errors.push({ iter: i, detail: `${e.tool}: ${e.reason}`.slice(0, 200) });
+            // P-GOAL.13: a fail-closed SCANNER block (quarantined) is also a first-class loop block —
+            // a DIFFERENT layer from the risk dial, tallied separately in the AAR's Blocks section.
+            if (e.quarantined) this.loopBlocks.push({ iter: i, tool: e.tool, tier: "T4", reason: "security-gate" });
+          }
           else if (e.type === "thinking") { iterThink++; iterThinkChars += e.text.length; }
           else if (e.type === "usage") {
             sawUsage = true;
@@ -666,6 +779,8 @@ class Backend {
           outcome: terminalOutcome, outcomeReason: terminalReason || "(no reason recorded)",
           iterations: perIteration.length, maxIters, durationMs: Date.now() - startedAt,
           toolCalls, loc, errors, websites: [...websites], perIteration,
+          // P-GOAL.13 (ADR-0067): what the dial/scanner stopped, and the dial posture this run used.
+          blocks: [...this.loopBlocks], dial: this.loopDial ?? undefined,
           // P-GOAL.11: actual spend (null when no usage telemetry was seen) + the cap that was in force.
           spendUsd: sawUsage ? spend.usd : null,
           peakContextTokens: sawUsage ? spend.peakContextTokens : null,
@@ -678,6 +793,8 @@ class Backend {
         try { appendRunLog(currentWorkspace(), toRunRecord(metrics, { id: loopId, ts: Date.now() })); } catch { /* best-effort */ }
         onEvent({ type: "goal-report", path, summary: summarizeLoop(metrics), markdown });
       } catch { /* the report never blocks the loop's completion */ }
+      // P-GOAL.13: clear the loop's exec posture so a later interactive turn isn't governed by a stale dial.
+      this.loopDial = null; this.loopBlocks = []; this.loopIter = 0;
       onEvent({ type: "done" });
     }
   }

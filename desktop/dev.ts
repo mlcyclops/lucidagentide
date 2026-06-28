@@ -39,7 +39,22 @@ import { cancelImport, importJobStatus, startImport } from "./import_job.ts";
 import { homedir } from "node:os";
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { dirname } from "node:path";
+import { DIAL_TYPES, type LoopDial } from "./exec_policy.ts";
+import { audit } from "./audit_export.ts";
+import { isRiskTier } from "./managed_config.ts";
 import { isAllowedRequest, reqShape, tokenValid } from "./origin_guard.ts";
+
+/** Sanitize an untrusted /api/goal `dial` payload into a LoopDial — only known command types + valid
+ *  risk tiers survive; everything else is dropped (the backend clamps it by the managed ceiling anyway). */
+function parseLoopDial(raw: unknown): LoopDial | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const out: LoopDial = {};
+  for (const t of DIAL_TYPES) {
+    const v = (raw as Record<string, unknown>)[t];
+    if (isRiskTier(v)) out[t] = v;
+  }
+  return Object.keys(out).length ? out : undefined;
+}
 import { pathWithin } from "./path_guard.ts";
 import { randomBytes } from "node:crypto";
 import { buildRecall } from "../harness/memory/recall.ts";
@@ -274,7 +289,7 @@ const server = Bun.serve({
           return json({ ok: true, data });
         }
         if (!loadSettings().developerMode) return json({ ok: true, data: { enabled: false, snapshot: null, blocks: { quarantined: [], approved: [], total: 0 }, turns: [], asksage: [] } });
-        return json({ ok: true, data: { enabled: true, snapshot: await devSnapshot(), blocks: liveBlocks(), turns: recentTurns(), asksage: backend.asksageDiagnostics() } });
+        return json({ ok: true, data: { enabled: true, snapshot: await devSnapshot(), blocks: liveBlocks(), turns: recentTurns(), asksage: backend.asksageDiagnostics(), audit: { events: audit.recent(60), sinks: audit.sinkStatuses() } } });
       }
       // Light, fast re-read of the provider rate-limit budget (omp's agent.db).
       // Used by the front-end's manual refresh + 5-minute auto-poll.
@@ -298,6 +313,9 @@ const server = Bun.serve({
         return json({ ok: true, data: codeActivityCache.data });
       }
       if (p === "/api/health") return json({ ok: true });
+      // P-ENT.2 (ADR-0069): the unified security-event stream (metadata-only, OCSF-ready) + per-sink
+      // delivery status, for the in-app dashboard. Read-only; the file sink is the SIEM export source.
+      if (p === "/api/audit") return json({ ok: true, data: { events: audit.recent(100), sinks: audit.sinkStatuses() } });
       // P-BRIEF.3 (ADR-0072): generate the Executive Engineering Update from the repo's own logs. Pure +
       // air-gap (reads DECISIONS.md/PROGRESS.md from the repo root); returns the written brief + the
       // two-host podcast script. Audio synthesis (a TTS backend) is a later slice; this is the brief.
@@ -609,9 +627,9 @@ const server = Bun.serve({
         return json({ ok: true, data: await backend.preflightAudit(spec) });
       }
       if (p === "/api/goal" && req.method === "POST") {
-        const b = await readBody<{ goal?: unknown; condition?: unknown; command?: unknown; maxIters?: unknown; resume?: unknown; budgetUsd?: unknown; criteria?: unknown }>(req);
+        const b = await readBody<{ goal?: unknown; condition?: unknown; command?: unknown; maxIters?: unknown; resume?: unknown; budgetUsd?: unknown; criteria?: unknown; dial?: unknown }>(req);
         return ndjsonStream("goal", (emit) => backend.runGoal(
-          { goal: String(b.goal ?? ""), condition: String(b.condition ?? ""), command: b.command ? String(b.command) : undefined, maxIters: Number(b.maxIters) || 6, resume: b.resume ? String(b.resume) : undefined, budgetUsd: Number(b.budgetUsd) || 0, criteria: b.criteria ? String(b.criteria) : undefined },
+          { goal: String(b.goal ?? ""), condition: String(b.condition ?? ""), command: b.command ? String(b.command) : undefined, maxIters: Number(b.maxIters) || 6, resume: b.resume ? String(b.resume) : undefined, budgetUsd: Number(b.budgetUsd) || 0, criteria: b.criteria ? String(b.criteria) : undefined, dial: parseLoopDial(b.dial) },
           emit,
         ));
       }

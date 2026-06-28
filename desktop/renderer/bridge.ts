@@ -61,6 +61,11 @@ export interface DevView {
   turns: TurnView[];
   // P-ASKSAGE.1 (ADR-0059): recent AskSage tool-loop call diagnostics (developer mode only).
   asksage?: Array<Record<string, unknown>>;
+  // P-ENT.2 (ADR-0069): the unified security-event stream (OCSF-ready) + per-sink delivery status.
+  audit?: {
+    events: { id: string; ts: string; category: string; type: string; severity: string; decision: string; tool?: string; reason?: string; tier?: string; host: string }[];
+    sinks: { name: string; type: string; delivered: number; failed: number; lastError?: string }[];
+  };
 }
 // P10.2 cross-model usage & cost ledger
 export interface ModelUsage {
@@ -153,7 +158,7 @@ export type ChatEvent =
   | { type: "tool"; name: string; detail: string }
   | { type: "subagent"; id: string; agent: string; title: string; assignments: string[] }
   | { type: "block"; tool: string; reason: string; severity: string; findings: string; id?: string; quarantined?: boolean }
-  | { type: "permission"; id: string; tool: string; detail: string; options: { optionId: string; name: string; kind?: string }[]; url?: string; egress?: boolean }
+  | { type: "permission"; id: string; tool: string; detail: string; options: { optionId: string; name: string; kind?: string }[]; url?: string; egress?: boolean; exec?: boolean; program?: string; reason?: string; danger?: boolean }
   | { type: "usage"; used: number; size: number; cost: number }
   // P-GOAL.1/3 (ADR-0046): /goal loop events (kept in parity with desktop/acp_backend.ts).
   | { type: "goal-memory"; path: string }
@@ -164,7 +169,9 @@ export type ChatEvent =
   // P-GOAL.9 (ADR-0054): the loop's last task — an After-Action Report (metrics + portable graphs).
   | { type: "goal-report"; path: string; summary: string; markdown: string }
   | { type: "done"; text?: string }; // text = the authoritative full assistant reply (reconciles lossy streaming)
-export interface GoalOpts { goal: string; condition: string; command?: string; maxIters: number; resume?: string; budgetUsd?: number; criteria?: string }
+/** P-GOAL.13 (ADR-0067): the per-command-type Speed↔Risk dial — each type's max auto-run tier (T0-T3). */
+export type GoalDial = Partial<Record<"shell" | "edit" | "delete" | "web-fetch" | "web-search" | "subagent", "T0" | "T1" | "T2" | "T3">>;
+export interface GoalOpts { goal: string; condition: string; command?: string; maxIters: number; resume?: string; budgetUsd?: number; criteria?: string; dial?: GoalDial }
 // P-GOAL.4: a stopped loop that can be resumed from its on-disk memory file.
 export interface ResumableLoop { rel: string; goal: string; condition: string; command?: string; iterations: number; updatedAt: number }
 // P-GOAL.10 (ADR-0055): the cross-run evaluation surface (mirrors desktop/loop_runlog.ts).

@@ -5494,7 +5494,9 @@ finding challenges), ADR-0064 (sibling 1c slice, PDF), CLAUDE.md invariant #3 + 
 ## ADR-0066 - P-EXEC.1: per-action approval for the agent's exec tools (bash + eval) (SCOPE/PLAN)
 
 **Date:** 2026-06-26
-**Status:** Proposed - SCOPE/PLAN (design locked + refined; implementation is the next increment).
+**Status:** Accepted - BUILT 2026-06-28 (issue #95). `exec_policy.ts` (classifier + verdict/apply/clamp,
+107-test corpus), `acp_config.yml` bash/eval→prompt, `acp_backend` onRequest isExec branch + `askExec` +
+in-memory allow-turn scope, renderer exec dialog (docked, high-risk red variant). `make demo-P-EXEC.1`.
 **Increment:** P-EXEC.1 (v1 = bash + eval). ssh + task fast-follow as P-EXEC.2.
 **Refined 2026-06-26:** program-level key (kept simple) + a non-silenceable catastrophic ALWAYS-PROMPT
 set; added `allow-turn` (session-scoped, in-memory); exec danger-mode is a SEPARATE toggle from egress;
@@ -5607,7 +5609,10 @@ relevant to P-EXEC.2), CLAUDE.md invariant #3 (fail-closed) + the scanner keysto
 ## ADR-0067 - P-GOAL.13: per-command Speed<->Risk dial for the loop + tools/blocks in the AAR (SCOPE/PLAN)
 
 **Date:** 2026-06-26
-**Status:** Proposed - SCOPE/PLAN (design; build is its own increment[s]).
+**Status:** Accepted - BUILT 2026-06-28 (issue #97). `classifyCommand` graded to tiers T0-T4 +
+`loopVerdict`/`clampDialRow`; `acp_backend` consults the dial unattended (T4 always blocks) + collects
+blocks; `loop_report` gains `LoopMetrics.blocks` + a Blocks section + dial posture; renderer plasma-slider
+matrix (persisted, rides `/api/goal`). 191 desktop loop/exec tests + `make demo-P-GOAL.13`.
 **Increment:** P-GOAL.13. DEPENDS ON ADR-0066's exec classifier (P-EXEC.1) - the dial reads its risk tier.
 
 ### Context
@@ -5748,8 +5753,12 @@ ADR-A010 (the GPO/MDM templates - the "how").
 ## ADR-0069 - P-ENT.2: security audit event export seam (SIEM-ready, OCSF-aligned) (SCOPE/PLAN)
 
 **Date:** 2026-06-26
-**Status:** Proposed - SCOPE/PLAN. Public defines the schema + sink interface + file sink; the per-SIEM
-CONNECTORS are private-repo IP (ADR-A011).
+**Status:** Accepted - BUILT 2026-06-28 (issue #98). `audit_export.ts` (versioned `SecurityEvent` + OCSF
+Detection-Finding mapper + `Sink` interface + fail-safe `AuditDispatcher` + append-only `FileSink`);
+emitted from `security_log` (scanner/approve/dismiss) + `acp_backend` exec/egress/loop decisions; `/api/audit`
++ a "Security event export (SIEM)" card in the Logs view. Tests: OCSF fixtures + dead-sink fail-safe.
+`make demo-P-ENT.2`. Public defines the schema + sink interface + file sink; the per-SIEM CONNECTORS are
+private-repo IP (ADR-A011).
 **Increment:** P-ENT.2. Extends the EXISTING `security_log.ts` append-only audit.
 
 ### Context
@@ -6667,3 +6676,49 @@ omp tree is untouched (extend-don't-fork, and its license is preserved).
 
 `LICENSE`, `tools/license_headers.ts`, `package.json`, `README.md`. BSL 1.1 text © MariaDB (used per its
 permission grant). Change License: Mozilla Public License 2.0.
+
+-----
+
+## ADR-0087 - About panel + a single-sourced, dynamic app version (launch baseline v1.8.7)
+
+**Date:** 2026-06-27
+**Status:** Accepted - BUILT.
+**Increment:** P-ABOUT.1.
+
+### Context
+
+Approaching launch, the product had no in-app "About": no place stating what LUCID Agent IDE is, who owns
+it (TechLead 187 LLC), the BUSL-1.1 license, or the version. The version also lived only in
+`desktop/package.json` (and was a pre-launch `0.1.0`); nothing surfaced it to the user, and any UI display
+would have been a hardcoded literal that drifts. Launch wants the version to jump to **v1.8.7**.
+
+### Decision
+
+- **Single-sourced version.** `desktop/version.ts` exports `APP_VERSION = "1.8.7"`; `desktop/package.json`
+  `"version"` MIRRORS it (electron `app.getVersion()` / electron-builder read package.json). `about.test.ts`
+  + `demo-P-ABOUT.1` assert the two are equal, so a bump in one is forced into the other. The renderer
+  imports `APP_VERSION` (bundled), so the About panel shows the live version — never a hardcoded duplicate.
+- **About panel.** A new animated rail glyph (`#railAbout`, a book + twinkling sparkle in the existing
+  24×24 / 1.6-stroke icon family) sits ABOVE Commands + Settings on the activity rail. It opens a polished
+  dark-mode modal (`desktop/renderer/about.ts`, a PURE string builder so it is demo/test-able without a
+  DOM): the LUCID · AGENT IDE wordmark hero, a one-paragraph product summary, and a TechLead 187 LLC card
+  with the emblem + the BUSL-1.1 terms (Change Date 2030-06-27 → MPL-2.0; "source-available, not OSI
+  open-source"). Closes on the X / Close button, a backdrop click, or Escape; single instance.
+
+### Consequences
+
+- One number to bump per release (`version.ts`), guarded against drift by a test.
+- `about.ts` is pure → the panel's content is unit-tested and demo-proven; `app.ts` only owns open/close.
+- The interpolated version is HTML-escaped at the boundary (defensive; the value is first-party).
+- Honors `prefers-reduced-motion` (all About animations disabled).
+
+### Invariants preserved
+
+Renderer-only + additive: no prompt prefix, no scanner, no trust-label, no schema change. New first-party
+files carry the BUSL-1.1 header (ADR-0086).
+
+### Relates to
+
+`desktop/version.ts`, `desktop/package.json`, `desktop/renderer/about.ts`, `desktop/renderer/app.ts`
+(`#railAbout` + `openAbout`), `desktop/renderer/styles.css` (`.about-*`), `desktop/about.test.ts`,
+`desktop/scripts/demo_p_about_1.ts`.
