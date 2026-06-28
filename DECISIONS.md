@@ -6667,3 +6667,49 @@ omp tree is untouched (extend-don't-fork, and its license is preserved).
 
 `LICENSE`, `tools/license_headers.ts`, `package.json`, `README.md`. BSL 1.1 text © MariaDB (used per its
 permission grant). Change License: Mozilla Public License 2.0.
+
+-----
+
+## ADR-0087 - About panel + a single-sourced, dynamic app version (launch baseline v1.8.7)
+
+**Date:** 2026-06-27
+**Status:** Accepted - BUILT.
+**Increment:** P-ABOUT.1.
+
+### Context
+
+Approaching launch, the product had no in-app "About": no place stating what LUCID Agent IDE is, who owns
+it (TechLead 187 LLC), the BUSL-1.1 license, or the version. The version also lived only in
+`desktop/package.json` (and was a pre-launch `0.1.0`); nothing surfaced it to the user, and any UI display
+would have been a hardcoded literal that drifts. Launch wants the version to jump to **v1.8.7**.
+
+### Decision
+
+- **Single-sourced version.** `desktop/version.ts` exports `APP_VERSION = "1.8.7"`; `desktop/package.json`
+  `"version"` MIRRORS it (electron `app.getVersion()` / electron-builder read package.json). `about.test.ts`
+  + `demo-P-ABOUT.1` assert the two are equal, so a bump in one is forced into the other. The renderer
+  imports `APP_VERSION` (bundled), so the About panel shows the live version — never a hardcoded duplicate.
+- **About panel.** A new animated rail glyph (`#railAbout`, a book + twinkling sparkle in the existing
+  24×24 / 1.6-stroke icon family) sits ABOVE Commands + Settings on the activity rail. It opens a polished
+  dark-mode modal (`desktop/renderer/about.ts`, a PURE string builder so it is demo/test-able without a
+  DOM): the LUCID · AGENT IDE wordmark hero, a one-paragraph product summary, and a TechLead 187 LLC card
+  with the emblem + the BUSL-1.1 terms (Change Date 2030-06-27 → MPL-2.0; "source-available, not OSI
+  open-source"). Closes on the X / Close button, a backdrop click, or Escape; single instance.
+
+### Consequences
+
+- One number to bump per release (`version.ts`), guarded against drift by a test.
+- `about.ts` is pure → the panel's content is unit-tested and demo-proven; `app.ts` only owns open/close.
+- The interpolated version is HTML-escaped at the boundary (defensive; the value is first-party).
+- Honors `prefers-reduced-motion` (all About animations disabled).
+
+### Invariants preserved
+
+Renderer-only + additive: no prompt prefix, no scanner, no trust-label, no schema change. New first-party
+files carry the BUSL-1.1 header (ADR-0086).
+
+### Relates to
+
+`desktop/version.ts`, `desktop/package.json`, `desktop/renderer/about.ts`, `desktop/renderer/app.ts`
+(`#railAbout` + `openAbout`), `desktop/renderer/styles.css` (`.about-*`), `desktop/about.test.ts`,
+`desktop/scripts/demo_p_about_1.ts`.

@@ -13,6 +13,8 @@ import { cachedSessions, cachedTranscript, setCachedSessions, setCachedTranscrip
 import { $, $$, accordion, el, fmtNum, gauge, spark, table } from "./dom.ts";
 import { ageStr, esc, fmtUSD, goodColor, loadColor } from "./format.ts";
 import { icon, piMark } from "./icons.ts";
+import { aboutHtml, readmeMark } from "./about.ts";
+import { APP_VERSION } from "../version.ts";
 import { renderMarkdown } from "./markdown.ts";
 import { type GraphHandle, kindLabel, mountGraph } from "./graph.ts";
 import { addEdgeOptimistic, applyForget, chainPairs, matchNodes, removeEdgeOptimistic, resolveRelationLabel } from "./kg_ops.ts";
@@ -135,6 +137,7 @@ function buildShell(): void {
         <button class="rail-btn" data-rail="knowledge" data-tip="Knowledge graph|Your private, encrypted personalization graph - nodes, edges, drill-down" data-tip-icon="graph">${icon("graph", 20)}</button>
         <button class="rail-btn" id="railLogs" data-rail="dev" hidden data-tip="Logs|Read-only developer logs: telemetry, run lineage, transcripts, gate-block audit, AskSage tool-call diagnostics" data-tip-icon="logs">${icon("logs", 20)}</button>
         <div class="spacer"></div>
+        <button class="rail-btn rail-about" id="railAbout" data-tip="About LUCID Agent IDE|Version, license & credits" data-tip-icon="info">${readmeMark()}</button>
         <button class="rail-btn" id="railCmd" data-tip="Commands|Ctrl / ⌘ K" data-tip-icon="command">${icon("command", 20)}</button>
         <button class="rail-btn" data-rail="settings" data-tip="Settings" data-tip-icon="sliders">${icon("sliders", 20)}</button>
       </nav>
@@ -3298,6 +3301,21 @@ function openFolderBrowser(opts: { title?: string; confirm?: string } = {}): Pro
   });
 }
 
+// P-ABOUT.1 (ADR-0087): the About panel — version (single-source APP_VERSION), license & credits.
+// Single instance; closes on the X / Close button, a backdrop click, or Escape.
+function openAbout(): void {
+  if ($("#aboutModal")) return; // already open — don't stack
+  const ov = el(`<div id="aboutModal" class="modal-ov about-ov">${aboutHtml(APP_VERSION)}</div>`);
+  const close = () => { ov.remove(); document.removeEventListener("keydown", onKey); };
+  const onKey = (ev: KeyboardEvent) => { if (ev.key === "Escape") { ev.preventDefault(); close(); } };
+  ov.addEventListener("click", (ev) => {
+    const t = ev.target as HTMLElement;
+    if (t === ov || t.closest("[data-about-close]")) close(); // backdrop or a close control
+  });
+  document.addEventListener("keydown", onKey);
+  document.body.append(ov);
+}
+
 function wire(): void {
   // rail
   $$(".rail-btn[data-rail]").forEach((b) => b.addEventListener("click", () => {
@@ -3422,6 +3440,7 @@ function wire(): void {
   });
   $("#railCmd")!.addEventListener("click", () => palette.show());
   $("#cmdkBtn")!.addEventListener("click", () => palette.show());
+  $("#railAbout")?.addEventListener("click", () => openAbout());
   // Per-message copy (markdown) + save-as-.md
   $("#thread")!.addEventListener("click", async (e) => {
     const t = e.target as HTMLElement;

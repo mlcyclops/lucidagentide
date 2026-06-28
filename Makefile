@@ -267,6 +267,10 @@ demo-P-PERF.1: ## P-PERF.1 (#134/ADR-0084): instant cached session list + transc
 demo-P-KG-INGEST.4: ## P-KG-INGEST.4 (#136/ADR-0085): true ingest concurrency — dedicated util omp connection; fail-safe fallback; routing contract
 	$(BUN) run desktop/scripts/demo_p_kg_ingest_4.ts
 
+.PHONY: demo-P-ABOUT.1
+demo-P-ABOUT.1: ## P-ABOUT.1 (ADR-0087): About panel — single-sourced app version (v1.8.7), LUCID + TechLead 187 + BUSL-1.1 licensing, animated rail glyph
+	$(BUN) run desktop/scripts/demo_p_about_1.ts
+
 .PHONY: dashboards
 dashboards: ## Materialize dashboard CSVs from a DuckDB into observable/docs/data (DB=path)
 	$(BUN) run harness/scripts/materialize_dashboards.ts $(DB) observable/docs/data
