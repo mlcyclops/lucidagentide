@@ -12,6 +12,7 @@ import { bridge, type ChatEvent, type ConfigOption, type GoalDial, type MemorySn
 import { ROLE_META, USER_ROLE_LIST, coachHtml, roleDefaultTab, stepsForRole, type TourStep } from "./tour.ts";
 import { modCombo, modSymbol } from "./platform.ts";
 import { roleIcon } from "./role_icons.ts";
+import { providerHasApiKey, providerKeywords } from "./budget_gate.ts";
 import { cachedSessions, cachedTranscript, setCachedSessions, setCachedTranscript, transcriptSig } from "./swr_cache.ts";
 import { $, $$, accordion, el, fmtNum, gauge, spark, table } from "./dom.ts";
 import { ageStr, esc, fmtUSD, goodColor, loadColor } from "./format.ts";
@@ -1563,6 +1564,7 @@ function hydrateSettings(): void {
     state.auth = a; // store so the AskSage gateway card can render its key entry from auth.gateway
     fillSec("providers", secProviders(a)); fillSec("others", secOthers(a));
     fillSec("asksage", secAsksage(state.asksage, null)); // inject the ASKSAGE_API_KEY row now that gateway auth is known
+    renderStatus(); // a just-added/removed key flips the OAuth-vs-key budget-pill gate
   });
   fillSec("sovereignty", secSovereignty()); // P-IDE.1c: only renders a card when China-origin models exist
   void bridge.headroom().then((h) => fillSec("compression", secCompression(h)));
@@ -2351,16 +2353,10 @@ function ledgerSplit(led: import("./bridge.ts").UsageLedger): { peek: string; re
   return { peek, rest: table([...cols], restRows) };
 }
 
-/** Provider keywords for the active model, so we can highlight the budget that
- *  actually governs the next turn. */
-function providerKeywords(model: string): string[] {
-  const m = model.toLowerCase();
-  if (m.includes("claude") || m.includes("anthropic")) return ["claude", "anthropic"];
-  if (m.includes("gpt") || m.includes("openai") || /\bo[0-9]/.test(m)) return ["openai", "gpt"];
-  if (m.includes("gemini") || m.includes("google")) return ["gemini", "google"];
-  if (m.includes("grok") || m.includes("xai")) return ["grok", "xai"];
-  if (m.includes("deepseek")) return ["deepseek"];
-  return [m.split(/[-/]/)[0] ?? m];
+// `providerKeywords` (which budget/auth governs the active model) + the OAuth-vs-key budget-pill gate
+// live in the pure, unit-tested `budget_gate.ts`. This just binds the gate to the live state.
+function currentProviderHasApiKey(): boolean {
+  return providerHasApiKey(state.auth, state.model);
 }
 function budgetBody(budgets: NonNullable<MemorySnapshot["budgets"]>): string {
   const kws = providerKeywords(state.model);
@@ -2415,7 +2411,7 @@ function renderStatus(): void {
       <span class="mini"><span class="fill" style="width:${Math.round(ctx * 100)}%;background:${loadColor(ctx)}"></span></span>
       <b>${fmtNum(curTok)}</b>/${fmtNum(winTok)}</div>
     <div class="seg" data-tip="Prompt-cache hit rate|Share of input served from cache at the discounted rate - higher means lower cost per turn">${icon("bolt", 14)} cache <b style="color:${goodColor(hit)}">${Math.round(hit * 100)}%</b></div>
-    ${budget ? `<div class="seg seg-btn${budget.used >= 0.9 ? " warn" : ""}" data-budget-refresh data-tip="${esc(budget.label)} usage|${budget.used >= 0.9 ? "Almost spent - turns may start stalling. " : ""}Click to re-check now · auto every 5 min. omp's last-seen value, so it can lag the official usage.">${esc(budget.label)} <b style="color:${loadColor(budget.used)}">${Math.round(budget.used * 100)}%</b> ${icon("refresh", 11)}</div>` : ""}
+    ${budget && currentProviderHasApiKey() ? `<div class="seg seg-btn${budget.used >= 0.9 ? " warn" : ""}" data-budget-refresh data-tip="${esc(budget.label)} usage|${budget.used >= 0.9 ? "Almost spent - turns may start stalling. " : ""}Click to re-check now · auto every 5 min. From the provider's API-key rate-limit headers.">${esc(budget.label)} <b style="color:${loadColor(budget.used)}">${Math.round(budget.used * 100)}%</b> ${icon("refresh", 11)}</div>` : ""}
     ${asksageChip()}
     <div class="seg" data-tip="Session cost">${fmtUSD(cost)}</div>
     <div class="right">
@@ -2486,6 +2482,7 @@ async function refreshBudget(manual = false): Promise<void> {
   const budgets = await bridge.budget();
   if (budgets && state.memory) state.memory.budgets = budgets;
   checkBudgetWarning(budgets);
+  const a = await bridge.auth(); if (a) state.auth = a; // keep the OAuth-vs-key gate for the budget pill current
   // P10.3: live API-key rate-limit probe (no-op + [] unless the opt-in is on). force on manual.
   const rl = await bridge.rateLimits(manual);
   state.probedLimits = rl?.limits ?? []; state.probeEnabled = rl?.enabled ?? false;
@@ -4790,6 +4787,7 @@ void bridge.getSettings().then((s) => { // your saved name → the "You" label o
 });
 refresh();
 void maybeOnboardPersonal(); // P-IMP.2: first-run nudge + expand Personalization until it's configured
+void bridge.auth().then((a) => { if (a) { state.auth = a; renderStatus(); } }); // gate the budget pill (OAuth vs API key) from first paint
 scheduleBudgetPoll(); // provider budget: re-check every 5 min for the current model
 setInterval(refresh, 4000);
 setInterval(renderStatus, 1000);
