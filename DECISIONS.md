@@ -5609,7 +5609,10 @@ relevant to P-EXEC.2), CLAUDE.md invariant #3 (fail-closed) + the scanner keysto
 ## ADR-0067 - P-GOAL.13: per-command Speed<->Risk dial for the loop + tools/blocks in the AAR (SCOPE/PLAN)
 
 **Date:** 2026-06-26
-**Status:** Proposed - SCOPE/PLAN (design; build is its own increment[s]).
+**Status:** Accepted - BUILT 2026-06-28 (issue #97). `classifyCommand` graded to tiers T0-T4 +
+`loopVerdict`/`clampDialRow`; `acp_backend` consults the dial unattended (T4 always blocks) + collects
+blocks; `loop_report` gains `LoopMetrics.blocks` + a Blocks section + dial posture; renderer plasma-slider
+matrix (persisted, rides `/api/goal`). 191 desktop loop/exec tests + `make demo-P-GOAL.13`.
 **Increment:** P-GOAL.13. DEPENDS ON ADR-0066's exec classifier (P-EXEC.1) - the dial reads its risk tier.
 
 ### Context
