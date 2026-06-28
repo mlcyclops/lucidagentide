@@ -13,6 +13,7 @@ import {
   mermaidPie,
   normalizeToolName,
   parseNumstat,
+  renderBlocks,
   renderLoopReport,
   stallSignature,
   summarizeLoop,
@@ -114,6 +115,8 @@ function metrics(over: Partial<LoopMetrics> = {}): LoopMetrics {
     toolCalls: { edit: 4, shell: 6, read: 2 },
     loc: { added: 40, removed: 9, files: 3 },
     errors: [{ iter: 1, detail: "tool call rejected: bash" }],
+    blocks: [],
+    dial: { shell: "T1", "web-fetch": "T0" },
     websites: ["https://example.com/docs"],
     perIteration: [
       { n: 1, tools: 7, errors: 1, done: false, reason: "1 test still failing" },
@@ -180,5 +183,43 @@ describe("summarizeLoop", () => {
   });
   test("notes when LOC is unavailable", () => {
     expect(summarizeLoop(metrics({ loc: null }))).toContain("LOC n/a");
+  });
+});
+
+// ── P-GOAL.13 (ADR-0067): the Blocks section + dial posture ──────────────────────────────────────────
+describe("renderBlocks", () => {
+  test("an unconfigured dial reports the safest default posture", () => {
+    const out = renderBlocks([], undefined);
+    expect(out).toContain("default — safest");
+    expect(out).toContain("Nothing blocked");
+  });
+  test("shows the dial posture this run used", () => {
+    const out = renderBlocks([], { shell: "T1", "web-fetch": "T0" });
+    expect(out).toContain("shell=T1");
+    expect(out).toContain("web-fetch=T0");
+  });
+  test("tallies risk-dial / catastrophic / security-gate SEPARATELY, by reason and by tier", () => {
+    const out = renderBlocks([
+      { iter: 1, tool: "npm", tier: "T2", reason: "risk-dial" },
+      { iter: 1, tool: "rm", tier: "T4", reason: "catastrophic" },
+      { iter: 2, tool: "bash", tier: "T4", reason: "security-gate" },
+    ], { shell: "T1" });
+    expect(out).toContain("**3** calls blocked");
+    expect(out).toContain("Risk dial: **1**");
+    expect(out).toContain("Catastrophic (T4): **1**");
+    expect(out).toContain("Security gate (scanner): **1**");
+    expect(out).toContain("| 1 | npm | T2 | Risk dial |");
+  });
+});
+
+describe("renderLoopReport — Blocks section", () => {
+  test("always renders a Blocks section, with the dial posture", () => {
+    const md = renderLoopReport(metrics({ blocks: [{ iter: 1, tool: "rm", tier: "T4", reason: "catastrophic" }] }));
+    expect(md).toContain("## Blocks");
+    expect(md).toContain("Dial posture");
+    expect(md).toContain("**1** call blocked");
+  });
+  test("summarizeLoop counts blocks when present", () => {
+    expect(summarizeLoop(metrics({ blocks: [{ iter: 1, tool: "x", tier: "T3", reason: "risk-dial" }] }))).toContain("1 blocked");
   });
 });

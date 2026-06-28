@@ -24,11 +24,12 @@ import { recordTurns } from "./turns_log.ts";
 import { isLearnableAssistantText } from "./thinking_governance.ts";
 import { recordBlock } from "./security_log.ts";
 import { asksageOnly, attribution, checkerModel, lastModel, load as loadSettings, mcpServersForAcp, setCheckerModel, setLastModel } from "./settings_store.ts";
-import { managedAsksageOnly } from "./managed_config.ts";
+import { managedAsksageOnly, managedConfig } from "./managed_config.ts";
 import { recommendCheckerModel, resolveCheckerModel, type ModelOption } from "./checker_model.ts";
 import { parseGoalVerdict } from "./goal_verdict.ts";
 import { appendGoalIteration, appendRunLog, finishGoalMemory, type GoalMemory, readRunLog, resumeGoalMemory, saveGoalReport, savePreflightReport, startGoalMemory } from "./goal_memory.ts";
-import { extractUrls, type IterStat, type LocStat, type LoopMetrics, type LoopOutcome, normalizeToolName, parseNumstat, renderLoopReport, stallSignature, summarizeLoop } from "./loop_report.ts";
+import { extractUrls, type IterStat, type LocStat, type LoopBlock, type LoopMetrics, type LoopOutcome, normalizeToolName, parseNumstat, renderLoopReport, stallSignature, summarizeLoop } from "./loop_report.ts";
+import { type LoopDial, clampDialRow, loopVerdict } from "./exec_policy.ts";
 import { aggregateRuns, type LoopRunRecord, type RunStats, summarizeRunStats, toRunRecord } from "./loop_runlog.ts";
 import { addTurnSpend, type LoopSpend, newLoopSpend, normalizeBudget, overBudget } from "./loop_budget.ts";
 import { formatSpend } from "./loop_report.ts";
@@ -169,6 +170,11 @@ class Backend {
   // compound-command equivalent (no single program to key on).
   private execTurnPrograms = new Set<string>();
   private execTurnAll = false;
+  // P-GOAL.13 (ADR-0067): the active unattended-loop dial (per-command-type Speed↔Risk ceiling) + the
+  // blocks it caused. Set while a /goal loop runs; null otherwise. `loopIter` tags each block.
+  private loopDial: LoopDial | null = null;
+  private loopBlocks: LoopBlock[] = [];
+  private loopIter = 0;
   private permSeq = 0;
   private permPending = new Map<string, (optionId: string | null) => void>();
   private pendingPerms = 0;             // while > 0 the turn's idle/stall clock is paused
@@ -284,12 +290,18 @@ class Backend {
               const cls: ExecClass = isEvalTool ? classifyEval() : classifyCommand(cmd ?? toolName);
               // Interactive = a live chat turn with a UI listener and NOT an unattended loop/automation.
               const interactive = this.askActive && !!this.listener && !this.goalActive && !this.autoRunning;
+              const approveOpt = () => { const a = opts.find((o) => /allow/i.test(o.kind ?? o.optionId ?? "")) ?? opts[0]; return a ? { outcome: { outcome: "selected", optionId: a.optionId } } : { outcome: { outcome: "cancelled" } }; };
+              // P-GOAL.13 (ADR-0067): an unattended /goal loop is governed by the per-command-type DIAL,
+              // not the interactive allowlist — a command auto-runs iff its tier ≤ the shell dial; T4
+              // always blocks. A block is recorded for the AAR. Default dial (unset) = safest (T0 only).
+              if (this.goalActive && this.loopDial) {
+                if (loopVerdict(this.loopDial.shell, cls.tier) === "auto") return approveOpt();
+                this.loopBlocks.push({ iter: this.loopIter, tool: cls.key ?? "shell", tier: cls.tier, reason: cls.alwaysPrompt ? "catastrophic" : "risk-dial" });
+                return { outcome: { outcome: "cancelled" } }; // blocked by the dial
+              }
               const turnAllowed = interactive && (this.execTurnAll || (!!cls.key && this.execTurnPrograms.has(cls.key)));
               const verdict = execVerdict(execStore(), cls, { unattended: !interactive, turnAllowed });
-              if (verdict === "allow") {
-                const a = opts.find((o) => /allow/i.test(o.kind ?? o.optionId ?? "")) ?? opts[0];
-                return a ? { outcome: { outcome: "selected", optionId: a.optionId } } : { outcome: { outcome: "cancelled" } };
-              }
+              if (verdict === "allow") return approveOpt();
               if (verdict === "prompt" && interactive) return this.askExec(params, opts, cls, isEvalTool ? "eval" : (cmd ?? toolName));
               return { outcome: { outcome: "cancelled" } }; // block: unattended risky, catastrophic, or no UI to ask
             }
@@ -611,7 +623,7 @@ class Backend {
   // when given). Capped at `maxIters`, auto-stops on no-progress. Runs UNATTENDED — permissions are
   // auto-approved for the duration, but every tool call is still scanned fail-closed by the in-process
   // gate (that, not human approval, is the safety boundary). Streams the usual chat events plus goal-*.
-  async runGoal(opts: { goal: string; condition: string; command?: string; maxIters: number; resume?: string; budgetUsd?: number; criteria?: string }, onEvent: (e: ChatEvent) => void): Promise<void> {
+  async runGoal(opts: { goal: string; condition: string; command?: string; maxIters: number; resume?: string; budgetUsd?: number; criteria?: string; dial?: LoopDial }, onEvent: (e: ChatEvent) => void): Promise<void> {
     const goal = opts.goal.trim();
     const condition = (opts.condition || opts.command || "the goal is fully accomplished").trim();
     const command = opts.command?.trim() || "";
@@ -621,6 +633,12 @@ class Backend {
     const prevMode = this.permissionMode;
     this.permissionMode = "auto"; // unattended: auto-approve tool calls (the gate still scans every one)
     this.goalActive = true; this.goalCancelled = false;
+    // P-GOAL.13 (ADR-0067): the loop's exec policy is the per-command-type DIAL, clamped by the managed
+    // loop ceiling (ADR-0068, tighten-only). An unset dial defaults to the safest posture (T0 only).
+    const loopMax = managedConfig().config?.security?.loop?.maxAutoTier;
+    const rawDial = opts.dial ?? {};
+    this.loopDial = { shell: clampDialRow(rawDial.shell, loopMax), edit: clampDialRow(rawDial.edit, loopMax), delete: clampDialRow(rawDial.delete, loopMax), "web-fetch": clampDialRow(rawDial["web-fetch"], loopMax), "web-search": clampDialRow(rawDial["web-search"], loopMax), subagent: clampDialRow(rawDial.subagent, loopMax) };
+    this.loopBlocks = []; this.loopIter = 0;
     // P-GOAL.3/4: durable on-disk memory (best-effort). `resume` continues an existing loop-memory file
     // and injects its prior progress; otherwise start a fresh record.
     const resumed = opts.resume ? resumeGoalMemory(currentWorkspace(), opts.resume) : null;
@@ -658,6 +676,7 @@ class Backend {
     try {
       for (let i = 1; i <= maxIters; i++) {
         if (this.goalCancelled) { terminalOutcome = "cancelled"; terminalReason = "stopped by you"; onEvent({ type: "goal-stop", reason: terminalReason }); finishGoalMemory(mem, terminalReason); return; }
+        this.loopIter = i; // P-GOAL.13: tag any dial/scanner block this iteration with its round number
         onEvent({ type: "goal-iter", n: i, max: maxIters });
         let work = "";
         let actedThisIter = false;
@@ -670,7 +689,12 @@ class Backend {
           if (e.type === "token") work += e.text;
           if (e.type === "tool") { actedThisIter = true; iterTools++; const t = normalizeToolName(e.name); toolCalls[t] = (toolCalls[t] ?? 0) + 1; for (const u of extractUrls(e.detail)) websites.add(u); }
           else if (e.type === "subagent") { actedThisIter = true; iterTools++; toolCalls.subagent = (toolCalls.subagent ?? 0) + 1; }
-          else if (e.type === "block") { iterErrors++; errors.push({ iter: i, detail: `${e.tool}: ${e.reason}`.slice(0, 200) }); }
+          else if (e.type === "block") {
+            iterErrors++; errors.push({ iter: i, detail: `${e.tool}: ${e.reason}`.slice(0, 200) });
+            // P-GOAL.13: a fail-closed SCANNER block (quarantined) is also a first-class loop block —
+            // a DIFFERENT layer from the risk dial, tallied separately in the AAR's Blocks section.
+            if (e.quarantined) this.loopBlocks.push({ iter: i, tool: e.tool, tier: "T4", reason: "security-gate" });
+          }
           else if (e.type === "thinking") { iterThink++; iterThinkChars += e.text.length; }
           else if (e.type === "usage") {
             sawUsage = true;
@@ -744,6 +768,8 @@ class Backend {
           outcome: terminalOutcome, outcomeReason: terminalReason || "(no reason recorded)",
           iterations: perIteration.length, maxIters, durationMs: Date.now() - startedAt,
           toolCalls, loc, errors, websites: [...websites], perIteration,
+          // P-GOAL.13 (ADR-0067): what the dial/scanner stopped, and the dial posture this run used.
+          blocks: [...this.loopBlocks], dial: this.loopDial ?? undefined,
           // P-GOAL.11: actual spend (null when no usage telemetry was seen) + the cap that was in force.
           spendUsd: sawUsage ? spend.usd : null,
           peakContextTokens: sawUsage ? spend.peakContextTokens : null,
@@ -756,6 +782,8 @@ class Backend {
         try { appendRunLog(currentWorkspace(), toRunRecord(metrics, { id: loopId, ts: Date.now() })); } catch { /* best-effort */ }
         onEvent({ type: "goal-report", path, summary: summarizeLoop(metrics), markdown });
       } catch { /* the report never blocks the loop's completion */ }
+      // P-GOAL.13: clear the loop's exec posture so a later interactive turn isn't governed by a stale dial.
+      this.loopDial = null; this.loopBlocks = []; this.loopIter = 0;
       onEvent({ type: "done" });
     }
   }

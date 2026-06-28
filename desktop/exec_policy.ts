@@ -24,7 +24,9 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { managedConfig, type ManagedExecPolicy } from "./managed_config.ts";
+import { managedConfig, type ManagedExecPolicy, type RiskTier, TIER_ORDER } from "./managed_config.ts";
+
+export type { RiskTier } from "./managed_config.ts";
 
 const FILE = join(homedir(), ".omp", "lucid-exec.json");
 
@@ -41,6 +43,7 @@ export interface ExecStore {
 /** The result of classifying a single shell command. Pure; no I/O. */
 export interface ExecClass {
   risk: ExecRisk;          // safe → auto-approve in Agent (still scanned); risky → gate
+  tier: RiskTier;          // graded ladder T0-T4 (ADR-0067) — what the unattended loop dial reads
   key: string | null;      // argv0 to pin via allow-program, or null for a compound/unparseable command
   alwaysPrompt: boolean;   // catastrophic — never silenceable by a standing allow or danger mode
   reason: string;          // short human-readable why (for the dialog + audit)
@@ -104,44 +107,61 @@ function base(tok: string): string {
   return b.replace(/\.exe$/i, "").toLowerCase();
 }
 
+// ── the graded risk ladder (ADR-0067): T0 read-only · T1 local-mutate · T2 reach-out · T3 destructive ──
+const REACH_OUT = new Set(["curl", "wget", "nc", "ncat", "netcat", "scp", "sftp", "rsync", "telnet", "ftp"]);
+const DESTRUCTIVE = new Set(["rm", "rmdir", "chmod", "chown", "chgrp", "kill", "killall", "pkill", "shred", "truncate", "ssh"]);
+const LOCAL_MUTATE = new Set(["mkdir", "touch", "ln", "cp", "mv", "tee", "sed", "awk", "patch"]);
+const PKG = /^(npm|pnpm|yarn|pip|pip3|pipx|apt|apt-get|yum|dnf|brew|gem|cargo|go|bundle|composer)$/;
+const PKG_MUTATE = /\b(install|add|upgrade|update|i|get|remove|uninstall)\b/;
+
+/** Tier for a RISKY (non-catastrophic) single program. Fail-closed: an unknown program is T3. */
+function riskyTier(prog: string, raw: string): RiskTier {
+  if (REACH_OUT.has(prog)) return "T2";
+  if (PKG.test(prog) && PKG_MUTATE.test(raw)) return "T2";
+  if (DESTRUCTIVE.has(prog)) return "T3";
+  if (LOCAL_MUTATE.has(prog)) return "T1";
+  return "T3"; // unknown risky → fail-closed to destructive
+}
+
 /**
- * Classify a shell command into safe/risky + a pin key + the catastrophic flag. Pure, fail-closed.
- * A clean read-only corpus must produce NO risky verdicts; a dangerous corpus must be 100% flagged.
+ * Classify a shell command into safe/risky + a graded tier + a pin key + the catastrophic flag. Pure,
+ * fail-closed. A clean read-only corpus must produce NO risky verdicts; a dangerous corpus must be 100%
+ * flagged; an unparseable/unknown command is T3 (ADR-0067).
  */
 export function classifyCommand(cmd: string): ExecClass {
   const raw = (cmd ?? "").trim();
-  if (!raw) return { risk: "risky", key: null, alwaysPrompt: false, reason: "empty/unparseable command" };
+  if (!raw) return { risk: "risky", tier: "T3", key: null, alwaysPrompt: false, reason: "empty/unparseable command" };
 
-  // 1. Catastrophic patterns first — they win over everything, even inside a compound command.
+  // 1. Catastrophic patterns first — they win over everything, even inside a compound command. (T4)
   for (const c of ALWAYS_PROMPT) if (c.re.test(raw)) {
     const { prog } = realArgv0(tokenize(raw));
-    return { risk: "risky", key: prog, alwaysPrompt: true, reason: c.why };
+    return { risk: "risky", tier: "T4", key: prog, alwaysPrompt: true, reason: c.why };
   }
 
-  // 2. Compound / write-capable (pipes, chaining, substitution, redirection) → risky, un-pinnable.
-  if (COMPOUND.test(raw)) return { risk: "risky", key: null, alwaysPrompt: false, reason: "compound or redirecting command" };
+  // 2. Compound / write-capable (pipes, chaining, substitution, redirection) → risky, un-pinnable (T3).
+  if (COMPOUND.test(raw)) return { risk: "risky", tier: "T3", key: null, alwaysPrompt: false, reason: "compound or redirecting command" };
 
   const tokens = tokenize(raw);
   const { prog } = realArgv0(tokens);
-  if (!prog) return { risk: "risky", key: null, alwaysPrompt: false, reason: "no resolvable program" };
+  if (!prog) return { risk: "risky", tier: "T3", key: null, alwaysPrompt: false, reason: "no resolvable program" };
 
-  // 3. git — only the read-only subcommands are safe.
+  // 3. git — only the read-only subcommands are safe; push/pull/fetch/clone reach out (T2), else local (T1).
   if (prog === "git") {
-    const sub = tokens.find((t, idx) => idx > tokens.indexOf("git") && !t.startsWith("-"));
-    return GIT_READONLY.has((sub ?? "").toLowerCase())
-      ? { risk: "safe", key: "git", alwaysPrompt: false, reason: `read-only git ${sub}` }
-      : { risk: "risky", key: "git", alwaysPrompt: false, reason: `git ${sub ?? "(subcommand)"} may mutate the repo` };
+    const sub = (tokens.find((t, idx) => idx > tokens.indexOf("git") && !t.startsWith("-")) ?? "").toLowerCase();
+    if (GIT_READONLY.has(sub)) return { risk: "safe", tier: "T0", key: "git", alwaysPrompt: false, reason: `read-only git ${sub}` };
+    const tier: RiskTier = /^(push|pull|clone|remote|submodule)$/.test(sub) ? "T2" : "T1";
+    return { risk: "risky", tier, key: "git", alwaysPrompt: false, reason: `git ${sub || "(subcommand)"} may mutate the repo` };
   }
 
-  // 4. A safe program — unless it trips its dangerous-flag table.
+  // 4. A safe program — unless it trips its dangerous-flag table (find→destructive T3, else local T1).
   if (SAFE_PROGRAMS.has(prog)) {
     const danger = DANGEROUS_FLAGS[prog];
-    if (danger && danger.test(raw)) return { risk: "risky", key: prog, alwaysPrompt: false, reason: `${prog} with a writing/executing flag` };
-    return { risk: "safe", key: prog, alwaysPrompt: false, reason: `read-only ${prog}` };
+    if (danger && danger.test(raw)) return { risk: "risky", tier: prog === "find" ? "T3" : "T1", key: prog, alwaysPrompt: false, reason: `${prog} with a writing/executing flag` };
+    return { risk: "safe", tier: "T0", key: prog, alwaysPrompt: false, reason: `read-only ${prog}` };
   }
 
   // 5. Everything else is risky (fail-closed) but pinnable by program.
-  return { risk: "risky", key: prog, alwaysPrompt: false, reason: `${prog} is not a known read-only command` };
+  return { risk: "risky", tier: riskyTier(prog, raw), key: prog, alwaysPrompt: false, reason: `${prog} is not a known read-only command` };
 }
 
 /** Split a command into whitespace-separated tokens, honoring simple single/double quotes. */
@@ -154,9 +174,47 @@ function tokenize(cmd: string): string[] {
 }
 
 /** The `eval` tool runs arbitrary code; there's no command string to classify. Always risky, pinnable by
- *  "eval" (so danger-mode / an explicit allow-program can still silence it), never catastrophic. */
+ *  "eval" (so danger-mode / an explicit allow-program can still silence it), never catastrophic. T3 —
+ *  arbitrary code can be destructive. */
 export function classifyEval(): ExecClass {
-  return { risk: "risky", key: "eval", alwaysPrompt: false, reason: "eval executes arbitrary code" };
+  return { risk: "risky", tier: "T3", key: "eval", alwaysPrompt: false, reason: "eval executes arbitrary code" };
+}
+
+// ── the unattended loop dial (ADR-0067) ──────────────────────────────────────────────────────────────
+// The /goal loop runs with no human to prompt, so risk awareness becomes a STANDING posture: a per-
+// command-TYPE ceiling. A command auto-runs in the loop IFF its classified tier ≤ that type's dial AND
+// it isn't catastrophic (T4 always blocks). An UNCONFIGURED dial defaults to the SAFEST posture (T0).
+
+/** Command/tool TYPES the dial matrix exposes (the normalizeToolName classes that can mutate/reach out).
+ *  read + search are fixed T0 (no dial row). */
+export type DialType = "shell" | "edit" | "delete" | "web-fetch" | "web-search" | "subagent";
+export const DIAL_TYPES: DialType[] = ["shell", "edit", "delete", "web-fetch", "web-search", "subagent"];
+export type LoopDial = Partial<Record<DialType, RiskTier>>;
+
+/** The intrinsic tier of a non-shell tool TYPE (shell's tier is per-command from the classifier). */
+export const TOOL_TYPE_TIER: Record<DialType, RiskTier> = {
+  shell: "T2",        // (only used as a fallback; real shell calls carry a per-command tier)
+  edit: "T1",         // local-mutate
+  delete: "T3",       // destructive
+  "web-fetch": "T2",  // reach-out
+  "web-search": "T2", // reach-out
+  subagent: "T2",     // spawns more agent work
+};
+
+/** Pure loop decision: may a command of `tier` auto-run under a dial set to `dialMax`? Fail-closed:
+ *  T4 ALWAYS blocks (no human, never auto-runnable); otherwise auto iff tier ≤ dialMax. An absent dial
+ *  defaults to T0 (the safest, most-blocking posture). */
+export function loopVerdict(dialMax: RiskTier | undefined, tier: RiskTier): "auto" | "block" {
+  if (tier === "T4") return "block";
+  const ceil = dialMax ?? "T0";
+  return TIER_ORDER[tier] <= TIER_ORDER[ceil] ? "auto" : "block";
+}
+
+/** Tighten one dial row by the managed loop ceiling (ADR-0068) — never higher than the org's max. */
+export function clampDialRow(row: RiskTier | undefined, managedMax?: RiskTier): RiskTier {
+  const r = row ?? "T0";
+  if (managedMax && TIER_ORDER[r] > TIER_ORDER[managedMax]) return managedMax;
+  return r;
 }
 
 // ── pure verdict + choice-folding (mirrors egress) ───────────────────────────────────────────────────
