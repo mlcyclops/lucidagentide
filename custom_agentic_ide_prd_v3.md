@@ -2,32 +2,32 @@
 
 ## Revision summary
 
-Version 3 rewrites the product requirements around a stronger security and governance model for long-running coding agents. Compared with the prior version, this revision adds first-class requirements for prompt injection defense, invisible Unicode detection and neutralization, trust labeling, user notification and review workflows, safe export/reporting, security telemetry, and dedicated dashboards for prompt-injection findings and causal lineage.[cite:168][cite:173][cite:183][cite:189][cite:226][cite:228][cite:231][cite:240]
+Version 3 rewrites the product requirements around a stronger security and governance model for long-running coding agents. Compared with the prior version, this revision adds first-class requirements for prompt injection defense, invisible Unicode detection and neutralization, trust labeling, user notification and review workflows, safe export/reporting, security telemetry, and dedicated dashboards for prompt-injection findings and causal lineage.
 
-This version preserves the earlier architectural pillars—agent modes, local-first operation, instruction files, model routing, memory compaction, sandbox profiles, remote runners, DuckDB-backed memory, and replayable traces—but re-frames them through a security lens. The central design premise is that any external text can become a prompt-injection vector, and that a durable memory system can turn a one-time injection into a persistent compromise unless ingestion, compaction, promotion, and replay are explicitly hardened.[cite:183][cite:186][cite:189][cite:226][cite:228][cite:240]
+This version preserves the earlier architectural pillars—agent modes, local-first operation, instruction files, model routing, memory compaction, sandbox profiles, remote runners, DuckDB-backed memory, and replayable traces—but re-frames them through a security lens. The central design premise is that any external text can become a prompt-injection vector, and that a durable memory system can turn a one-time injection into a persistent compromise unless ingestion, compaction, promotion, and replay are explicitly hardened.
 
 ## Executive summary
 
-The product is a local-first agentic coding IDE for advanced technical users who need reliable code generation, planning, verification, memory, and observability. The IDE should outperform raw LLM chat workflows by combining instruction layering, tool-governed execution, structured memory, recursive task decomposition, verification loops, and replayable telemetry.[cite:35][cite:39][cite:50][cite:173][cite:183]
+The product is a local-first agentic coding IDE for advanced technical users who need reliable code generation, planning, verification, memory, and observability. The IDE should outperform raw LLM chat workflows by combining instruction layering, tool-governed execution, structured memory, recursive task decomposition, verification loops, and replayable telemetry.
 
-Version 3 adds a security requirement that the system must treat all user-provided, retrieved, imported, or externally stored text as untrusted until scanned, normalized, classified, and policy-evaluated. The system must detect hidden or suspicious Unicode, defend against visible and invisible prompt injection, show users what was found and why it matters, preserve raw originals for forensics, and ensure that only sanitized or safely quoted derivatives enter prompt assembly, long-term memory, exports, and dashboards.[cite:226][cite:228][cite:231][cite:235][cite:240]
+Version 3 adds a security requirement that the system must treat all user-provided, retrieved, imported, or externally stored text as untrusted until scanned, normalized, classified, and policy-evaluated. The system must detect hidden or suspicious Unicode, defend against visible and invisible prompt injection, show users what was found and why it matters, preserve raw originals for forensics, and ensure that only sanitized or safely quoted derivatives enter prompt assembly, long-term memory, exports, and dashboards.
 
 ## Product vision
 
-The IDE should behave like a disciplined engineering collaborator rather than a chat UI with tools attached. It should gather context, pick an execution mode, load durable instructions, route work to the appropriate model, plan complex tasks, use bounded tools, verify results, compact memory, and expose enough lineage that a user can inspect why the agent acted and which artifacts influenced it.[cite:50][cite:168][cite:173][cite:183]
+The IDE should behave like a disciplined engineering collaborator rather than a chat UI with tools attached. It should gather context, pick an execution mode, load durable instructions, route work to the appropriate model, plan complex tasks, use bounded tools, verify results, compact memory, and expose enough lineage that a user can inspect why the agent acted and which artifacts influenced it.
 
-The security posture should be equally deliberate. The system must not allow injected text from a document, issue comment, note, code comment, or web page to silently cross trust boundaries and become executable instructions, durable semantic memory, or automated shell behavior. Instead, the system should quarantine suspicious content, notify the user, preserve evidence, and downgrade privileges until a human has reviewed the risk.[cite:227][cite:228][cite:231][cite:235][cite:240]
+The security posture should be equally deliberate. The system must not allow injected text from a document, issue comment, note, code comment, or web page to silently cross trust boundaries and become executable instructions, durable semantic memory, or automated shell behavior. Instead, the system should quarantine suspicious content, notify the user, preserve evidence, and downgrade privileges until a human has reviewed the risk.
 
 ## Goals
 
 ### Primary goals
 
-- Increase success rate on multi-step coding work.[cite:50]
-- Reduce repeated prompting by using durable instruction files and structured memory.[cite:35][cite:39][cite:183]
-- Support long-running sessions via compaction, replay, and durable progress artifacts.[cite:183][cite:189][cite:195]
-- Route tasks across local, hosted, or remote execution profiles safely.[cite:168][cite:173]
-- Detect and contain prompt injection, including invisible Unicode prompt injection, before content can influence execution or durable memory.[cite:226][cite:228][cite:231][cite:240]
-- Provide user-facing notifications, review flows, reports, logs, and dashboards for security findings.[cite:230][cite:231][cite:240]
+- Increase success rate on multi-step coding work.
+- Reduce repeated prompting by using durable instruction files and structured memory.
+- Support long-running sessions via compaction, replay, and durable progress artifacts.
+- Route tasks across local, hosted, or remote execution profiles safely.
+- Detect and contain prompt injection, including invisible Unicode prompt injection, before content can influence execution or durable memory.
+- Provide user-facing notifications, review flows, reports, logs, and dashboards for security findings.
 
 ### Non-goals
 
@@ -40,43 +40,43 @@ The security posture should be equally deliberate. The system must not allow inj
 
 | Area | v2 | v3 |
 |---|---|---|
-| Prompt injection handling | Mentioned implicitly through trust boundaries and safe execution | Dedicated security architecture with prompt-injection prevention, Unicode/invisible-character scanning, trust labeling, quarantine, approvals, and user notifications.[cite:226][cite:228][cite:231][cite:240] |
-| Memory | Working, episodic, semantic, and archive layers | Adds security state to memory: scan results, sanitized derivatives, promotion gates, and poisoned-memory prevention rules.[cite:183][cite:186][cite:227][cite:240] |
-| Dashboards | Operational and performance dashboards | Adds security dashboards: injection findings, source distribution, approval events, export audit, and memory-promotion risk dashboards.[cite:109][cite:151][cite:230][cite:240] |
-| Remote execution | Local plus remote runner support | Adds mandatory scanning and quarantine for PR/comment/API-triggered remote runs.[cite:168][cite:227][cite:240] |
-| Export/reporting | Local analytics export | Adds safe export requirements so raw dangerous content is never emitted into reports or dashboards without clear escaping and labeling.[cite:151][cite:231][cite:234] |
+| Prompt injection handling | Mentioned implicitly through trust boundaries and safe execution | Dedicated security architecture with prompt-injection prevention, Unicode/invisible-character scanning, trust labeling, quarantine, approvals, and user notifications. |
+| Memory | Working, episodic, semantic, and archive layers | Adds security state to memory: scan results, sanitized derivatives, promotion gates, and poisoned-memory prevention rules. |
+| Dashboards | Operational and performance dashboards | Adds security dashboards: injection findings, source distribution, approval events, export audit, and memory-promotion risk dashboards. |
+| Remote execution | Local plus remote runner support | Adds mandatory scanning and quarantine for PR/comment/API-triggered remote runs. |
+| Export/reporting | Local analytics export | Adds safe export requirements so raw dangerous content is never emitted into reports or dashboards without clear escaping and labeling. |
 
 ## Design principles
 
 ### Local-first by default
 
-Durable state should remain locally inspectable: source files, instruction files, progress artifacts, raw traces, scan findings, memory tables, sanitized derivatives, and export outputs. This local-first posture improves auditability and matches the design patterns of agent harnesses that emphasize explicit environment artifacts and replayable telemetry rather than opaque hosted state.[cite:183][cite:109][cite:151]
+Durable state should remain locally inspectable: source files, instruction files, progress artifacts, raw traces, scan findings, memory tables, sanitized derivatives, and export outputs. This local-first posture improves auditability and matches the design patterns of agent harnesses that emphasize explicit environment artifacts and replayable telemetry rather than opaque hosted state.
 
 ### Instructions belong in files
 
-Persistent guidance should live in versioned instruction files such as `AGENTS.md`, `CLAUDE.md`, and mode-specific policy files. Codex documents layered `AGENTS.md` behavior, and Claude Code documents customization through system-prompt modification and file-based guidance, making file-backed instruction layers a durable and inspectable mechanism.[cite:35][cite:39][cite:50]
+Persistent guidance should live in versioned instruction files such as `AGENTS.md`, `CLAUDE.md`, and mode-specific policy files. Codex documents layered `AGENTS.md` behavior, and Claude Code documents customization through system-prompt modification and file-based guidance, making file-backed instruction layers a durable and inspectable mechanism.
 
 ### Every trust boundary must be explicit
 
-The system must distinguish trusted instructions from untrusted content at every stage: ingestion, retrieval, prompt assembly, memory promotion, export, and display. OWASP’s guidance on prompt injection and recent invisible-Unicode attack writeups both reinforce that untrusted content must be clearly segmented from system and tool instructions to reduce instruction confusion and attack propagation.[cite:238][cite:240][cite:226][cite:231]
+The system must distinguish trusted instructions from untrusted content at every stage: ingestion, retrieval, prompt assembly, memory promotion, export, and display. OWASP’s guidance on prompt injection and recent invisible-Unicode attack writeups both reinforce that untrusted content must be clearly segmented from system and tool instructions to reduce instruction confusion and attack propagation.
 
 ### Memory should be structured and provenance-backed
 
-Long-running agents need structured memory, but memory is also a persistence mechanism for attacks. Anthropic’s long-running-agent guidance and practical memory patterns show the value of explicit progress artifacts and typed memory layers, while prompt-injection defense requires that every promoted memory item retain provenance back to raw source spans and scan results.[cite:183][cite:186][cite:227][cite:240]
+Long-running agents need structured memory, but memory is also a persistence mechanism for attacks. Anthropic’s long-running-agent guidance and practical memory patterns show the value of explicit progress artifacts and typed memory layers, while prompt-injection defense requires that every promoted memory item retain provenance back to raw source spans and scan results.
 
 ### Verification is required before completion
 
-The system should not consider generated code successful until it has passed the relevant checks or the user has explicitly accepted a partial result. Codex guidance supports a verification-first completion policy, and security review should extend that principle to suspicious-content findings before privileged actions are allowed.[cite:50][cite:235][cite:240]
+The system should not consider generated code successful until it has passed the relevant checks or the user has explicitly accepted a partial result. Codex guidance supports a verification-first completion policy, and security review should extend that principle to suspicious-content findings before privileged actions are allowed.
 
 ### Observability is a product feature
 
-All significant decisions and actions should be logged: instruction loading, model routing, retrieval, tool use, verification, compaction, security scans, approval events, export events, and replay. This aligns with long-running-agent harness guidance and recursive-agent trajectory logging practices, and it is necessary for post-incident analysis when prompt injection is suspected.[cite:173][cite:183][cite:230]
+All significant decisions and actions should be logged: instruction loading, model routing, retrieval, tool use, verification, compaction, security scans, approval events, export events, and replay. This aligns with long-running-agent harness guidance and recursive-agent trajectory logging practices, and it is necessary for post-incident analysis when prompt injection is suspected.
 
 ## User and workflow assumptions
 
-The target user is an advanced technical professional working across code, technical documentation, architecture notes, runbooks, compliance-sensitive content, and evolving design artifacts. The IDE must support a code-plus-notes workflow in which local repositories, Markdown vaults, ADRs, trace data, and dashboard outputs can be linked and searched as one working system without blurring trust boundaries between them.[cite:183][cite:186]
+The target user is an advanced technical professional working across code, technical documentation, architecture notes, runbooks, compliance-sensitive content, and evolving design artifacts. The IDE must support a code-plus-notes workflow in which local repositories, Markdown vaults, ADRs, trace data, and dashboard outputs can be linked and searched as one working system without blurring trust boundaries between them.
 
-The user should be able to inspect not only what the agent did, but what it believed, what it compacted, what it promoted, what it rejected, and what security findings were triggered by imported or retrieved content. This is particularly important in a long-running memory-centric IDE, because hidden prompt injection can otherwise become durable memory poisoning across sessions.[cite:226][cite:228][cite:240]
+The user should be able to inspect not only what the agent did, but what it believed, what it compacted, what it promoted, what it rejected, and what security findings were triggered by imported or retrieved content. This is particularly important in a long-running memory-centric IDE, because hidden prompt injection can otherwise become durable memory poisoning across sessions.
 
 ## System architecture
 
@@ -121,7 +121,7 @@ User
 
 ## Agent modes
 
-OpenCode publicly describes distinct agent roles such as a build agent, a plan agent with tighter permissions, and a general-purpose subagent, which is a strong foundation for capability-scoped execution in this IDE. Version 3 retains those mode boundaries and adds security-aware behavior to each mode.[cite:168]
+OpenCode publicly describes distinct agent roles such as a build agent, a plan agent with tighter permissions, and a general-purpose subagent, which is a strong foundation for capability-scoped execution in this IDE. Version 3 retains those mode boundaries and adds security-aware behavior to each mode.
 
 ### Required modes
 
@@ -146,7 +146,7 @@ OpenCode publicly describes distinct agent roles such as a build agent, a plan a
 6. Security policies.
 7. Runtime task append blocks.
 
-Codex documents nested `AGENTS.md` behavior, while Claude Code documents prompt customization and file-based context injection. In v3, security policies are inserted as a distinct layer that cannot be overridden by untrusted retrieved content.[cite:35][cite:39][cite:50]
+Codex documents nested `AGENTS.md` behavior, while Claude Code documents prompt customization and file-based context injection. In v3, security policies are inserted as a distinct layer that cannot be overridden by untrusted retrieved content.
 
 ### Supported instruction and policy files
 
@@ -191,11 +191,11 @@ unicode_security:
 8. Volatile session state.
 9. Compact working-memory block.
 
-This ordering preserves a stable prefix for caching and ensures that untrusted retrieved text is inserted only after sanitation, labeling, and delimiting. Claude’s compaction and prompt-caching guidance makes the stable-prefix pattern especially useful for long-running agents, while OWASP-style prompt-injection guidance supports strict separation between instructions and data.[cite:189][cite:195][cite:238][cite:240]
+This ordering preserves a stable prefix for caching and ensures that untrusted retrieved text is inserted only after sanitation, labeling, and delimiting. Claude’s compaction and prompt-caching guidance makes the stable-prefix pattern especially useful for long-running agents, while OWASP-style prompt-injection guidance supports strict separation between instructions and data.
 
 ### Required prompt-assembly rule
 
-All user-provided, retrieved, imported, or externally stored text must be injected into prompts only as untrusted data after scanning, normalization, and sanitation. The system prompt must explicitly instruct the model not to follow instructions inside untrusted content blocks.[cite:238][cite:240][cite:231]
+All user-provided, retrieved, imported, or externally stored text must be injected into prompts only as untrusted data after scanning, normalization, and sanitation. The system prompt must explicitly instruct the model not to follow instructions inside untrusted content blocks.
 
 ### Example prompt boundary block
 
@@ -211,7 +211,7 @@ UNTRUSTED_CONTENT_END
 
 ## Model routing and provider registry
 
-Oh My Pi and RLM both support multi-model and multi-provider operation, so the IDE should expose provider metadata and routing policies rather than hard-coding one backend. Version 3 adds security-aware routing rules so sensitive or suspicious inputs can be routed to safer modes or review models before build-capable models are used.[cite:172][cite:173]
+Oh My Pi and RLM both support multi-model and multi-provider operation, so the IDE should expose provider metadata and routing policies rather than hard-coding one backend. Version 3 adds security-aware routing rules so sensitive or suspicious inputs can be routed to safer modes or review models before build-capable models are used.
 
 ### Required routing features
 
@@ -225,7 +225,7 @@ Oh My Pi and RLM both support multi-model and multi-provider operation, so the I
 
 ## Recursive execution
 
-RLM emphasizes recursive inference and the use of subcalls over subproblems rather than one flat context pass. The IDE should use parent-child runs and scoped subagents for research, triage, and summarization, and v3 adds a rule that suspicious artifacts should never be promoted into shared memory by a subagent without explicit review.[cite:173][cite:186]
+RLM emphasizes recursive inference and the use of subcalls over subproblems rather than one flat context pass. The IDE should use parent-child runs and scoped subagents for research, triage, and summarization, and v3 adds a rule that suspicious artifacts should never be promoted into shared memory by a subagent without explicit review.
 
 ### Recursive execution requirements
 
@@ -237,7 +237,7 @@ RLM emphasizes recursive inference and the use of subcalls over subproblems rath
 
 ## Sandbox profiles
 
-RLM materials distinguish among local, Docker, and cloud-isolated execution styles, which is useful for matching task risk to environment risk. Version 3 requires that suspicious-content tasks can be downgraded automatically into safer profiles.[cite:173]
+RLM materials distinguish among local, Docker, and cloud-isolated execution styles, which is useful for matching task risk to environment risk. Version 3 requires that suspicious-content tasks can be downgraded automatically into safer profiles.
 
 ### Required execution profiles
 
@@ -251,60 +251,60 @@ RLM materials distinguish among local, Docker, and cloud-isolated execution styl
 
 ## Remote runner integration
 
-OpenCode publicly documents GitHub comment-driven execution in Actions runners, which makes remote-runner support a valuable extension of the desktop harness. Version 3 requires that any remote-runner request sourced from comments, API payloads, or imported text be scanned before dispatch and quarantined when suspicious invisible or prompt-like content is detected.[cite:168][cite:227][cite:240]
+OpenCode publicly documents GitHub comment-driven execution in Actions runners, which makes remote-runner support a valuable extension of the desktop harness. Version 3 requires that any remote-runner request sourced from comments, API payloads, or imported text be scanned before dispatch and quarantined when suspicious invisible or prompt-like content is detected.
 
 ### Remote runner requirements
 
-- Comment or API payload is scanned before a run is created.[cite:227][cite:240]
-- Suspicious payloads are blocked or routed to `security-review`.[cite:227][cite:230]
-- The run record stores scan findings and approval lineage.[cite:230]
-- No privileged build execution occurs until a user has reviewed critical findings.[cite:235][cite:240]
+- Comment or API payload is scanned before a run is created.
+- Suspicious payloads are blocked or routed to `security-review`.
+- The run record stores scan findings and approval lineage.
+- No privileged build execution occurs until a user has reviewed critical findings.
 
 ## Security architecture
 
 ### Threat model
 
-The system must assume that prompt injection can arrive through user input, retrieved documents, README files, code comments, issue comments, PR comments, notes, imported Markdown, copied clipboard text, and any other external artifact. Invisible prompt injection is a variant where malicious instructions are hidden inside Unicode characters that may not be visible in the UI, creating a high-risk mismatch between what the human reviewer sees and what the model processes.[cite:226][cite:228][cite:231][cite:240]
+The system must assume that prompt injection can arrive through user input, retrieved documents, README files, code comments, issue comments, PR comments, notes, imported Markdown, copied clipboard text, and any other external artifact. Invisible prompt injection is a variant where malicious instructions are hidden inside Unicode characters that may not be visible in the UI, creating a high-risk mismatch between what the human reviewer sees and what the model processes.
 
 ### Security goals
 
-- Detect suspicious Unicode and invisible-character attacks before prompt assembly.[cite:226][cite:228][cite:231]
-- Prevent untrusted content from masquerading as trusted instructions.[cite:238][cite:240]
-- Prevent suspicious content from auto-entering long-term memory or privileged tool paths.[cite:227][cite:240]
-- Notify users what was found, what type it is, and what actions were blocked or downgraded.[cite:230][cite:231]
-- Preserve raw evidence and sanitized derivatives for safe review and export.[cite:231][cite:234]
+- Detect suspicious Unicode and invisible-character attacks before prompt assembly.
+- Prevent untrusted content from masquerading as trusted instructions.
+- Prevent suspicious content from auto-entering long-term memory or privileged tool paths.
+- Notify users what was found, what type it is, and what actions were blocked or downgraded.
+- Preserve raw evidence and sanitized derivatives for safe review and export.
 
 ### Security control layers
 
 | Layer | Requirement | Rationale |
 |---|---|---|
-| Input scanning | Detect zero-width, tag, bidi, private-use, and suspicious mixed-script content before model use.[cite:226][cite:231][cite:236] | Stops common Unicode smuggling patterns. |
-| Normalization and sanitation | Normalize, strip, or escape risky characters according to policy.[cite:231][cite:236] | Prevents hidden instructions from silently entering prompts. |
-| Trust labeling | Mark every artifact as trusted, untrusted, suspicious, or quarantined.[cite:238][cite:240] | Preserves boundary clarity. |
-| Privilege control | Require human approval before risky actions when suspicious content is in the causal chain.[cite:235][cite:240] | Limits blast radius. |
-| Logging and replay | Persist findings, approvals, and downstream actions.[cite:230][cite:240] | Enables forensics and improvement. |
+| Input scanning | Detect zero-width, tag, bidi, private-use, and suspicious mixed-script content before model use. | Stops common Unicode smuggling patterns. |
+| Normalization and sanitation | Normalize, strip, or escape risky characters according to policy. | Prevents hidden instructions from silently entering prompts. |
+| Trust labeling | Mark every artifact as trusted, untrusted, suspicious, or quarantined. | Preserves boundary clarity. |
+| Privilege control | Require human approval before risky actions when suspicious content is in the causal chain. | Limits blast radius. |
+| Logging and replay | Persist findings, approvals, and downstream actions. | Enables forensics and improvement. |
 
 ## Unicode and invisible prompt injection defense
 
-Recent reporting and security guidance show that invisible prompt injection often uses hidden or special Unicode characters to smuggle instructions into model inputs. The PRD therefore treats Unicode scanning not as a cosmetic UI feature but as a mandatory security gate for ingestion, retrieval, prompt assembly, memory promotion, and export.[cite:226][cite:228][cite:231][cite:240]
+Recent reporting and security guidance show that invisible prompt injection often uses hidden or special Unicode characters to smuggle instructions into model inputs. The PRD therefore treats Unicode scanning not as a cosmetic UI feature but as a mandatory security gate for ingestion, retrieval, prompt assembly, memory promotion, and export.
 
 ### Required detections
 
 The system must detect or flag at minimum:
 
-- Zero-width characters.[cite:231]
-- Unicode Tag block characters and related invisible tagging behavior.[cite:227][cite:226]
-- Bidirectional control characters and directionality overrides.[cite:231][cite:236]
-- Private-use-area characters in prompt-bearing content unless explicitly allowed.[cite:236]
-- Mixed-script or homoglyph anomalies in sensitive fields such as tool names, instruction files, and commands.[cite:234][cite:236]
+- Zero-width characters.
+- Unicode Tag block characters and related invisible tagging behavior.
+- Bidirectional control characters and directionality overrides.
+- Private-use-area characters in prompt-bearing content unless explicitly allowed.
+- Mixed-script or homoglyph anomalies in sensitive fields such as tool names, instruction files, and commands.
 
 ### Required handling
 
-- Preserve raw original content in archive storage.[cite:231][cite:234]
-- Produce a sanitized derivative for model consumption.[cite:231][cite:236]
-- Record findings and risk score in the security tables.[cite:230]
-- Quarantine or downgrade execution when thresholds are exceeded.[cite:230][cite:240]
-- Present the user with code-point visibility and a clear description of the finding type.[cite:231][cite:234]
+- Preserve raw original content in archive storage.
+- Produce a sanitized derivative for model consumption.
+- Record findings and risk score in the security tables.
+- Quarantine or downgrade execution when thresholds are exceeded.
+- Present the user with code-point visibility and a clear description of the finding type.
 
 ### Example scanner baseline
 
@@ -351,7 +351,7 @@ def inspect_text(text: str):
 
 ## User notification and review workflow
 
-The system must actively notify the user when prompt-injection findings are detected rather than silently stripping content and continuing. User trust depends on seeing what was found, why it matters, what the system changed, and which actions are now blocked or require approval.[cite:230][cite:231][cite:240]
+The system must actively notify the user when prompt-injection findings are detected rather than silently stripping content and continuing. User trust depends on seeing what was found, why it matters, what the system changed, and which actions are now blocked or require approval.
 
 ### Required notification behavior
 
@@ -359,7 +359,7 @@ When suspicious content is found, the UI must display:
 
 - Artifact source and trust label.
 - Finding severity.
-- Finding type, such as zero-width, tag-block, bidi, private-use, or mixed-script anomaly.[cite:226][cite:231][cite:236]
+- Finding type, such as zero-width, tag-block, bidi, private-use, or mixed-script anomaly.
 - Whether content was sanitized, escaped, blocked, or quarantined.
 - Which downstream actions are restricted until review is complete.
 - Links to raw and sanitized diff views.
@@ -369,7 +369,7 @@ When suspicious content is found, the UI must display:
 The user must be able to:
 
 - View hidden characters and code points.
-- Compare raw original versus sanitized derivative.[cite:231][cite:234]
+- Compare raw original versus sanitized derivative.
 - Mark a finding as benign, suspicious, or malicious.
 - Approve or deny use in prompt context.
 - Approve or deny promotion into semantic memory.
@@ -379,7 +379,7 @@ The user must be able to:
 
 ### Memory layers
 
-The system shall implement working, episodic, semantic, and archive memory, with security metadata attached to every promoted or referenced artifact. Anthropic’s long-running-agent guidance supports explicit progress artifacts and long-context management, while prompt-injection defense requires that memory entries retain provenance and scan state.[cite:183][cite:186][cite:189][cite:240]
+The system shall implement working, episodic, semantic, and archive memory, with security metadata attached to every promoted or referenced artifact. Anthropic’s long-running-agent guidance supports explicit progress artifacts and long-context management, while prompt-injection defense requires that memory entries retain provenance and scan state.
 
 | Layer | Purpose | Storage style | Security rule |
 |---|---|---|---|
@@ -399,7 +399,7 @@ The system shall implement working, episodic, semantic, and archive memory, with
 
 ## Memory compaction strategy
 
-Compaction should be a deliberate transform rather than an emergency summary. Claude’s compaction guidance and Anthropic’s harness advice both support structured state artifacts and context reduction, and v3 adds a security rule that compaction must operate on sanitized or safely quoted content while preserving links to raw source spans and scan results.[cite:183][cite:189][cite:195][cite:240]
+Compaction should be a deliberate transform rather than an emergency summary. Claude’s compaction guidance and Anthropic’s harness advice both support structured state artifacts and context reduction, and v3 adds a security rule that compaction must operate on sanitized or safely quoted content while preserving links to raw source spans and scan results.
 
 ### Compaction triggers
 
@@ -412,15 +412,15 @@ Compaction should be a deliberate transform rather than an emergency summary. Cl
 
 ### Compaction rules
 
-- Preserve goals, blockers, decisions, touched files, commands run, verification outcomes, and next steps.[cite:183][cite:186]
-- Preserve security findings and approval states tied to the compacted span.[cite:230][cite:240]
-- Do not promote suspicious content directly into semantic memory.[cite:227][cite:240]
-- Keep raw source spans in archive storage for replay and incident review.[cite:183][cite:231]
-- Generate summaries from sanitized derivatives, not unsafely rendered originals.[cite:231][cite:236]
+- Preserve goals, blockers, decisions, touched files, commands run, verification outcomes, and next steps.
+- Preserve security findings and approval states tied to the compacted span.
+- Do not promote suspicious content directly into semantic memory.
+- Keep raw source spans in archive storage for replay and incident review.
+- Generate summaries from sanitized derivatives, not unsafely rendered originals.
 
 ## DuckDB-backed data model
 
-DuckDB supports JSON columns, relational constraints, and views, making it suitable for a hybrid event and memory model where major entities are normalized and payload details remain flexible. Version 3 extends the memory schema with security tables for scans, findings, sanitized artifacts, approvals, and export audit trails.[cite:79][cite:197][cite:201][cite:205]
+DuckDB supports JSON columns, relational constraints, and views, making it suitable for a hybrid event and memory model where major entities are normalized and payload details remain flexible. Version 3 extends the memory schema with security tables for scans, findings, sanitized artifacts, approvals, and export audit trails.
 
 ### Required table families
 
@@ -484,7 +484,7 @@ CREATE TABLE security_findings (
 
 ## Logging requirements
 
-Security findings must be logged as first-class telemetry. This includes scan inputs, scan results, finding types, policy decisions, user approvals, blocked actions, downgraded modes, and any downstream memory or execution consequences.[cite:230][cite:240]
+Security findings must be logged as first-class telemetry. This includes scan inputs, scan results, finding types, policy decisions, user approvals, blocked actions, downgraded modes, and any downstream memory or execution consequences.
 
 ### Required logged events
 
@@ -510,7 +510,7 @@ Security findings must be logged as first-class telemetry. This includes scan in
 
 ## Safe export and reporting
 
-The system must support reporting and export without reintroducing dangerous content into downstream consumers. Safe export means preserving evidence and analysis while escaping or replacing risky characters, labeling suspicious artifacts clearly, and preventing accidental prompt injection through reports, Markdown, CSV, or dashboards.[cite:151][cite:231][cite:234]
+The system must support reporting and export without reintroducing dangerous content into downstream consumers. Safe export means preserving evidence and analysis while escaping or replacing risky characters, labeling suspicious artifacts clearly, and preventing accidental prompt injection through reports, Markdown, CSV, or dashboards.
 
 ### Required safe export modes
 
@@ -542,7 +542,7 @@ User-facing reports must describe:
 
 ## Dashboard requirements
 
-Observable Framework remains a strong choice for the local dashboard layer because it supports SQL-driven local data analysis from registered files, and DuckDB can export dashboard-ready CSVs with `COPY`. Version 3 requires dedicated security dashboards alongside operational dashboards.[cite:109][cite:151]
+Observable Framework remains a strong choice for the local dashboard layer because it supports SQL-driven local data analysis from registered files, and DuckDB can export dashboard-ready CSVs with `COPY`. Version 3 requires dedicated security dashboards alongside operational dashboards.
 
 ### Required dashboard pages
 
@@ -570,7 +570,7 @@ Observable Framework remains a strong choice for the local dashboard layer becau
 
 ## Verification engine
 
-The IDE must continue to treat verification as part of task completion, and v3 extends verification to include security preconditions. A build-capable run must fail closed when suspicious-content policy requires review before privileged action.[cite:50][cite:235][cite:240]
+The IDE must continue to treat verification as part of task completion, and v3 extends verification to include security preconditions. A build-capable run must fail closed when suspicious-content policy requires review before privileged action.
 
 ### Verification policy
 
@@ -633,7 +633,7 @@ class ToolResult:
 - Inspect loaded instructions.
 - Toggle execution profile.
 - Review suspicious artifacts.
-- Show hidden characters and code points.[cite:231][cite:234]
+- Show hidden characters and code points.
 - Approve or deny risky actions.
 - Approve or deny memory promotion.
 - Quarantine or release artifacts.
@@ -644,8 +644,8 @@ class ToolResult:
 ### Required UI behaviors
 
 - Show trust label on every imported or retrieved artifact.
-- Show finding type, severity, and explanation when suspicious content is found.[cite:226][cite:231]
-- Show raw versus sanitized diff view.[cite:231][cite:234]
+- Show finding type, severity, and explanation when suspicious content is found.
+- Show raw versus sanitized diff view.
 - Show whether content influenced prompts, memory, or blocked actions.
 - Show user-friendly explanation of why an action is disabled.
 
@@ -691,25 +691,25 @@ agent-workspace/
 
 ### Phase 1: Core harness
 
-Deliver instruction loading, prompt assembly, model registry, mode selector, trust labeling, and base tool router.[cite:35][cite:39][cite:50]
+Deliver instruction loading, prompt assembly, model registry, mode selector, trust labeling, and base tool router.
 
 **Acceptance criteria**
-- Can load layered instruction files.[cite:35][cite:39]
-- Can separate stable and volatile prompt layers.[cite:189][cite:195]
-- Can inject untrusted content only inside delimited blocks.[cite:238][cite:240]
+- Can load layered instruction files.
+- Can separate stable and volatile prompt layers.
+- Can inject untrusted content only inside delimited blocks.
 
 ### Phase 2: Security ingestion and review
 
-Deliver artifact scanning, Unicode detection, sanitation, quarantine, finding notifications, and approval workflows.[cite:226][cite:228][cite:231][cite:240]
+Deliver artifact scanning, Unicode detection, sanitation, quarantine, finding notifications, and approval workflows.
 
 **Acceptance criteria**
-- Suspicious Unicode is detected and classified.[cite:226][cite:231][cite:236]
+- Suspicious Unicode is detected and classified.
 - The user sees finding type and severity before privileged execution.
 - Quarantined content cannot reach build execution.
 
 ### Phase 3: Verification and telemetry
 
-Deliver structured tool execution, verification loops, JSONL logging, DuckDB ingestion, and security-event telemetry.[cite:50][cite:151][cite:230]
+Deliver structured tool execution, verification loops, JSONL logging, DuckDB ingestion, and security-event telemetry.
 
 **Acceptance criteria**
 - Every run, finding, and approval has stable IDs.
@@ -718,16 +718,16 @@ Deliver structured tool execution, verification loops, JSONL logging, DuckDB ing
 
 ### Phase 4: Memory and compaction
 
-Deliver working, episodic, semantic, and archive memory; compaction; promotion logic; and poisoned-memory prevention rules.[cite:183][cite:186][cite:189][cite:240]
+Deliver working, episodic, semantic, and archive memory; compaction; promotion logic; and poisoned-memory prevention rules.
 
 **Acceptance criteria**
-- Suspicious artifacts cannot be auto-promoted into semantic memory.[cite:227][cite:240]
-- Compaction preserves provenance to raw spans and scan findings.[cite:183][cite:231]
+- Suspicious artifacts cannot be auto-promoted into semantic memory.
+- Compaction preserves provenance to raw spans and scan findings.
 - A run can resume from durable state safely.
 
 ### Phase 5: Recursive execution and sandboxing
 
-Deliver parent-child runs, subagent dispatch, and sandbox profiles including quarantine.[cite:173]
+Deliver parent-child runs, subagent dispatch, and sandbox profiles including quarantine.
 
 **Acceptance criteria**
 - Parent-child lineage is stored.
@@ -736,16 +736,16 @@ Deliver parent-child runs, subagent dispatch, and sandbox profiles including qua
 
 ### Phase 6: Remote runners and safe export
 
-Deliver CI/PR-triggered runs, safe reporting, incident bundle export, and dashboard-ready security views.[cite:168][cite:151][cite:231]
+Deliver CI/PR-triggered runs, safe reporting, incident bundle export, and dashboard-ready security views.
 
 **Acceptance criteria**
-- Comment-triggered runs scan before dispatch.[cite:227][cite:240]
-- Safe exports never render raw dangerous content by default.[cite:231][cite:234]
+- Comment-triggered runs scan before dispatch.
+- Safe exports never render raw dangerous content by default.
 - Dashboards reflect findings, approvals, and export history.
 
 ### Phase 7: Visualization and benchmarking
 
-Deliver operational dashboards, security dashboards, replay tools, benchmark suites, and prompt-version comparison.[cite:109][cite:151][cite:195]
+Deliver operational dashboards, security dashboards, replay tools, benchmark suites, and prompt-version comparison.
 
 **Acceptance criteria**
 - Users can inspect finding-type trends and affected sources.
@@ -770,46 +770,46 @@ Deliver operational dashboards, security dashboards, replay tools, benchmark sui
 
 ### Prompt bloat
 
-Excessive static instructions can reduce clarity and hurt cache performance. Mitigation: keep stable policy concise, use structured memory, and reserve dynamic content for sanitized, delimited data blocks.[cite:189][cite:195]
+Excessive static instructions can reduce clarity and hurt cache performance. Mitigation: keep stable policy concise, use structured memory, and reserve dynamic content for sanitized, delimited data blocks.
 
 ### Summary drift
 
-Repeated compaction can degrade truth if summaries summarize summaries. Mitigation: preserve raw archive chunks, preserve scan findings, and regenerate summaries from raw or sanitized source spans when necessary.[cite:183][cite:186][cite:189]
+Repeated compaction can degrade truth if summaries summarize summaries. Mitigation: preserve raw archive chunks, preserve scan findings, and regenerate summaries from raw or sanitized source spans when necessary.
 
 ### Hidden prompt injection
 
-Invisible Unicode can bypass visual inspection and cause the model to process hidden instructions. Mitigation: scan raw text, show hidden characters, quarantine suspicious content, and require review before execution or promotion.[cite:226][cite:228][cite:231][cite:240]
+Invisible Unicode can bypass visual inspection and cause the model to process hidden instructions. Mitigation: scan raw text, show hidden characters, quarantine suspicious content, and require review before execution or promotion.
 
 ### Unsafe reporting
 
-Exports can accidentally reintroduce dangerous content into other tools or dashboards. Mitigation: escape unsafe content, export sanitized derivatives by default, track export metadata, and clearly label any raw evidence bundles.[cite:231][cite:234]
+Exports can accidentally reintroduce dangerous content into other tools or dashboards. Mitigation: escape unsafe content, export sanitized derivatives by default, track export metadata, and clearly label any raw evidence bundles.
 
 ### Retrieval contamination
 
-Large note or document stores can pollute prompt context. Mitigation: retrieve selectively, preserve trust labels, and never elevate retrieved text into trusted instructions without review.[cite:183][cite:186][cite:240]
+Large note or document stores can pollute prompt context. Mitigation: retrieve selectively, preserve trust labels, and never elevate retrieved text into trusted instructions without review.
 
 ## Definition of done
 
 The first major milestone for v3 is complete when the IDE can:
 
-- Load layered instruction files and preserve security policy precedence.[cite:35][cite:39]
-- Scan all external artifacts for prompt-injection risk before prompt use.[cite:226][cite:228][cite:231][cite:240]
-- Notify users what was found, what type it is, and what actions are blocked.[cite:230][cite:231]
-- Sanitize and delimit untrusted content before prompt assembly.[cite:238][cite:240]
-- Store working, episodic, semantic, archive, and security memory with provenance in DuckDB.[cite:79][cite:197][cite:201]
-- Prevent suspicious memory promotion until reviewed.[cite:227][cite:240]
-- Support local, container, quarantine, audit, and remote execution profiles.[cite:168][cite:173]
-- Export safe reports and dashboard data with audit trails.[cite:151][cite:231][cite:234]
-- Render operational and security dashboards from local data.[cite:109][cite:151]
+- Load layered instruction files and preserve security policy precedence.
+- Scan all external artifacts for prompt-injection risk before prompt use.
+- Notify users what was found, what type it is, and what actions are blocked.
+- Sanitize and delimit untrusted content before prompt assembly.
+- Store working, episodic, semantic, archive, and security memory with provenance in DuckDB.
+- Prevent suspicious memory promotion until reviewed.
+- Support local, container, quarantine, audit, and remote execution profiles.
+- Export safe reports and dashboard data with audit trails.
+- Render operational and security dashboards from local data.
 
 ## Recommended build sequence
 
-1. Implement instruction loading, prompt assembly, and explicit trust boundaries first.[cite:35][cite:39][cite:238]
-2. Add content scanning, Unicode detection, and notification workflows before remote execution.[cite:226][cite:231][cite:240]
-3. Add verification, telemetry, and security-event logging next.[cite:50][cite:230]
-4. Add the DuckDB memory and security schema plus durable progress artifacts.[cite:79][cite:197][cite:201][cite:183]
-5. Add compaction, semantic promotion controls, and poisoned-memory prevention.[cite:186][cite:189][cite:240]
-6. Add recursive subagents, quarantine profiles, and replay tools.[cite:173]
-7. Add remote runner integration, safe export, and dashboards once lineage is stable.[cite:168][cite:151]
+1. Implement instruction loading, prompt assembly, and explicit trust boundaries first.
+2. Add content scanning, Unicode detection, and notification workflows before remote execution.
+3. Add verification, telemetry, and security-event logging next.
+4. Add the DuckDB memory and security schema plus durable progress artifacts.
+5. Add compaction, semantic promotion controls, and poisoned-memory prevention.
+6. Add recursive subagents, quarantine profiles, and replay tools.
+7. Add remote runner integration, safe export, and dashboards once lineage is stable.
 
-This sequence keeps the most important guarantee intact from the beginning: the system treats external content as untrusted, preserves inspectable provenance, and never silently converts suspicious text into privileged action or durable memory. That is the practical security foundation for any serious local-first agentic coding IDE.[cite:226][cite:231][cite:240]
+This sequence keeps the most important guarantee intact from the beginning: the system treats external content as untrusted, preserves inspectable provenance, and never silently converts suspicious text into privileged action or durable memory. That is the practical security foundation for any serious local-first agentic coding IDE.
