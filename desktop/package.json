@@ -3,6 +3,8 @@
   "private": true,
   "version": "1.8.7",
   "description": "Electron desktop shell for LucidAgentIDE + omp — gated agent chat + live security/memory dashboards.",
+  "homepage": "https://github.com/mlcyclops/lucidagentide",
+  "author": "TechLead 187 LLC <support@lucidagentide.com>",
   "main": "dist/main.js",
   "scripts": {
     "build": "bun build main.ts --target=node --format=cjs --external electron --outfile dist/main.js && bun build preload.ts --target=node --format=cjs --external electron --outfile dist/preload.js",
