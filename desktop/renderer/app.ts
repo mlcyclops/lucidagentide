@@ -2410,10 +2410,12 @@ function renderStatus(): void {
     <div class="seg" data-tip="Context window|How full the model's context is${lu ? " (live this session)" : ""}">${icon("brain", 14)}
       <span class="mini"><span class="fill" style="width:${Math.round(ctx * 100)}%;background:${loadColor(ctx)}"></span></span>
       <b>${fmtNum(curTok)}</b>/${fmtNum(winTok)}</div>
-    <div class="seg" data-tip="Prompt-cache hit rate|Share of input served from cache at the discounted rate - higher means lower cost per turn">${icon("bolt", 14)} cache <b style="color:${goodColor(hit)}">${Math.round(hit * 100)}%</b></div>
-    ${budget && currentProviderHasApiKey() ? `<div class="seg seg-btn${budget.used >= 0.9 ? " warn" : ""}" data-budget-refresh data-tip="${esc(budget.label)} usage|${budget.used >= 0.9 ? "Almost spent - turns may start stalling. " : ""}Click to re-check now · auto every 5 min. From the provider's API-key rate-limit headers.">${esc(budget.label)} <b style="color:${loadColor(budget.used)}">${Math.round(budget.used * 100)}%</b> ${icon("refresh", 11)}</div>` : ""}
-    ${asksageChip()}
-    <div class="seg" data-tip="Session cost">${fmtUSD(cost)}</div>
+    <div class="seg-mid">
+      <div class="seg" data-tip="Prompt-cache hit rate|Share of input served from cache at the discounted rate - higher means lower cost per turn">${icon("bolt", 14)} cache <b style="color:${goodColor(hit)}">${Math.round(hit * 100)}%</b></div>
+      ${budget && currentProviderHasApiKey() ? `<div class="seg seg-btn${budget.used >= 0.9 ? " warn" : ""}" data-budget-refresh data-tip="${esc(budget.label)} usage|${budget.used >= 0.9 ? "Almost spent - turns may start stalling. " : ""}Click to re-check now · auto every 5 min. From the provider's API-key rate-limit headers.">${esc(budget.label)} <b style="color:${loadColor(budget.used)}">${Math.round(budget.used * 100)}%</b> ${icon("refresh", 11)}</div>` : ""}
+      ${asksageChip()}
+      <div class="seg" data-tip="Session cost">${fmtUSD(cost)}</div>
+    </div>
     <div class="right">
       <div class="seg" data-tip="Security gate|In-process, fail-closed">${icon("shield", 13)} gate active</div>
       <div class="seg seg-live"><span class="live-dot"></span> ${ago == null ? "connecting…" : ago < 2 ? "live" : `updated ${ago}s ago`}</div>
