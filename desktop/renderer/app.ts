@@ -60,6 +60,8 @@ const state = {
   asksage: null as { configured: boolean; base: string; only: boolean; limit: number; datasets: string[]; queryModel: string; persona: string } | null,
   asksageTokens: null as { used: number; remaining: number | null; limit: number } | null,
   chinaAck: false as boolean, // P-IDE.1c: user acknowledged the China-origin data-sovereignty warning (Settings unlock)
+  thirdPartyAck: false as boolean, // user acknowledged the third-party / non-U.S. "More providers" warning
+  auth: null as import("./bridge.ts").AuthStatus | null, // full provider-auth status (gateway/majors/others)
   persona: null as string | null, // active persona id (AskSage)
   personas: [] as { id: string; description: string }[],
   zoom: 1,
@@ -1412,8 +1414,10 @@ function secProfile(s: { username: string; email?: string; attribution?: import(
     ${roleRow}`, false);
 }
 function secProviders(auth: import("./bridge.ts").AuthStatus | null): string {
-  return setCard("providers", "Providers", "key or OAuth · majors first",
-    (auth?.majors ?? []).map(provCard).join("") || `<div class="empty">couldn't read auth - is the server up to date?</div>`, false);
+  // Collapsible + default-collapsed (not in SET_OPEN): the AskSage gov gateway sits above this and is the
+  // foregrounded path; the direct U.S. providers tuck away until needed.
+  return setCard("providers", "Providers", "U.S. frontier · key or OAuth",
+    (auth?.majors ?? []).map(provCard).join("") || `<div class="empty">couldn't read auth - is the server up to date?</div>`, true);
 }
 // P-IDE.1c (ADR-0029): data-sovereignty unlock for China-origin models. Renders ONLY when omp actually
 // exposes such a model (else an empty, preserved anchor). Hidden-by-default; the user must type
@@ -1439,13 +1443,17 @@ function secAsksage(a: typeof state.asksage, datasets: string[] | null): string 
   const managedNote = locked
     ? `<div class="set-note">${icon("shield", 12)} Managed by <b>${org}</b> - gov-gateway-only routing is enforced.</div>`
     : "";
-  const body = `<div class="prov-row"><input id="asksageBase" class="prov-key" placeholder="https://api.civ.asksage.ai/server" value="${esc(a?.base ?? "")}" />
+  // The ASKSAGE_API_KEY entry lives HERE now (this gateway card sits above Providers), not in the
+  // Providers list. Rendered from the auth `gateway` group once it loads.
+  const keyRow = state.auth?.gateway?.[0] ? provCard(state.auth.gateway[0]) : "";
+  const body = `${keyRow}
+    <div class="prov-row"><input id="asksageBase" class="prov-key" placeholder="https://api.civ.asksage.ai/server" value="${esc(a?.base ?? "")}" />
       <button class="btn-mini ok" id="asksageSaveBase">${icon("check", 12)} Save URL</button></div>
     <label class="set-toggle"><input type="checkbox" id="asksageOnly" ${checked} ${locked ? "disabled" : ""}/>
       <span><b>AskSage-only (lockdown)</b> - route every turn through the gov gateway and hide direct providers in the model picker.</span></label>
     ${managedNote}
     ${locked || a?.only ? datasetsSection(datasets) : ""}
-    ${a?.configured ? `<div class="set-note ok">${icon("check", 12)} Gov gateway active - AskSage models appear in the picker, with monthly-usage and scanned personas.</div>` : `<div class="set-note">${icon("info", 12)} Add an <code>ASKSAGE_API_KEY</code> in Providers to enable gov models, usage, and personas.</div>`}`;
+    ${a?.configured ? `<div class="set-note ok">${icon("check", 12)} Gov gateway active - AskSage models appear in the picker, with monthly-usage and scanned personas.</div>` : `<div class="set-note">${icon("info", 12)} Add your <code>ASKSAGE_API_KEY</code> above to enable gov models, usage, and personas.</div>`}`;
   return setCard("asksage", "AskSage gov gateway", "accredited proxy", body, true);
 }
 // The AskSage Monthly-tokens bar, rendered into the `asksageQuota` slot ABOVE Providers - but only
@@ -1473,8 +1481,18 @@ function secDeveloper(): string {
     <div class="set-note">${icon("info", 12)} <span>Turning this on respawns the agent so the diagnostics take effect immediately, then adds a <b>Logs</b> panel to the left rail. Open it and expand <b>AskSage tool calls</b> to watch each request live.</span></div>`;
   return setCard("developer", "Developer", "logs · diagnostics", body, true);
 }
+// "More providers" = third-party / non-U.S. / custom aggregators. The list is HIDDEN behind a typed
+// ACKNOWLEDGE gate (mirrors the China-origin unlock) because these route outside U.S. jurisdiction or
+// aggregate many origins. Expanding the section shows the warning first; the list appears once acknowledged.
 function secOthers(auth: import("./bridge.ts").AuthStatus | null): string {
-  return setCard("others", "More providers", "", (auth?.others ?? []).map(provCard).join("") || `<div class="empty">none</div>`, true);
+  const list = (auth?.others ?? []).map(provCard).join("") || `<div class="empty">none</div>`;
+  if (state.thirdPartyAck) {
+    return setCard("others", "More providers", "third-party · non-U.S. / custom",
+      `<div class="set-note ok">${icon("check", 12)} You acknowledged the third-party risk. <button class="btn-link" id="thirdPartyRelock">Re-lock</button></div>${list}`, true);
+  }
+  return setCard("others", "More providers", "acknowledge to reveal",
+    `<div class="set-note danger">${icon("shield", 12)} <b>Third-party models (non-U.S. / custom)</b> - OpenRouter, Perplexity, DeepSeek, Kimi/Moonshot, Groq. These route to third-party or non-U.S. servers (or aggregate many origins) with <b>no U.S. data-sovereignty guarantee</b>; review each provider's terms before use.</div>
+     <div class="china-unlock"><input id="thirdPartyAckInput" placeholder="Type ACKNOWLEDGE to reveal" autocomplete="off" spellcheck="false" /><button class="btn-mini" id="thirdPartyAckBtn" disabled>Reveal</button></div>`, true);
 }
 // P-MCP.1 (ADR-0020): MCP connectors - auth + config only; omp owns the MCP transport.
 function secMcp(servers: import("./bridge.ts").McpServerStatus[]): string {
@@ -1511,9 +1529,11 @@ function settingsShell(): string {
     // no fetch wait; the first /api/settings call pays a ~0.6s cold cost that made this lag).
     secProfile({ username: state.username, email: state.email, attribution: state.attribution ?? undefined }),
     setSkel("personal", "Personalization", "private · encrypted · opt-in", true),
-    `<div data-sec="asksageQuota"></div>`, // AskSage Monthly-tokens bar - sits directly above Providers, ONLY when the gov gateway is configured (filled in hydrateSettings)
-    setSkel("providers", "Providers", "key or OAuth · majors first"),
+    // AskSage gov gateway sits ABOVE Providers (the foregrounded, accredited path), with its monthly-tokens
+    // bar directly under it; the direct U.S. providers tuck into a default-collapsed card below.
     setSkel("asksage", "AskSage gov gateway", "accredited proxy", true),
+    `<div data-sec="asksageQuota"></div>`, // AskSage Monthly-tokens bar - ONLY when the gov gateway is configured (filled in hydrateSettings)
+    setSkel("providers", "Providers", "U.S. frontier · key or OAuth", true),
     `<div data-sec="sovereignty"></div>`, // P-IDE.1c: China-origin unlock (renders only when such models exist)
     setSkel("compression", "Token compression", "headroom · on-device · opt-in", true),
     setSkel("mcp", "MCP connectors", "model context protocol", true),
@@ -1539,7 +1559,11 @@ function hydrateSettings(): void {
     }
     if (!typing) fillSec("profile", secProfile(s));
   });
-  void bridge.auth().then((a) => { fillSec("providers", secProviders(a)); fillSec("others", secOthers(a)); });
+  void bridge.auth().then((a) => {
+    state.auth = a; // store so the AskSage gateway card can render its key entry from auth.gateway
+    fillSec("providers", secProviders(a)); fillSec("others", secOthers(a));
+    fillSec("asksage", secAsksage(state.asksage, null)); // inject the ASKSAGE_API_KEY row now that gateway auth is known
+  });
   fillSec("sovereignty", secSovereignty()); // P-IDE.1c: only renders a card when China-origin models exist
   void bridge.headroom().then((h) => fillSec("compression", secCompression(h)));
   fillSec("developer", secDeveloper()); // ADR-0059: render from state.developerMode (loaded by loadDev)
@@ -3729,6 +3753,7 @@ function wire(): void {
   $("#setBody")!.addEventListener("input", (e) => {
     const t = e.target as HTMLElement;
     if (t.id === "chinaAckInput") { const b = $("#chinaAckBtn", $("#setBody")!) as HTMLButtonElement | null; if (b) b.disabled = (t as HTMLInputElement).value.trim() !== "ACKNOWLEDGE"; }
+    if (t.id === "thirdPartyAckInput") { const b = $("#thirdPartyAckBtn", $("#setBody")!) as HTMLButtonElement | null; if (b) b.disabled = (t as HTMLInputElement).value.trim() !== "ACKNOWLEDGE"; }
   });
   $("#setBody")!.addEventListener("click", async (e) => {
     const t = e.target as HTMLElement;
@@ -3767,6 +3792,21 @@ function wire(): void {
       state.chinaAck = !!(await bridge.setChinaAck(false))?.acknowledged;
       await loadConfig(); void renderSettings();
       showToast({ title: "Re-locked", desc: "China-origin models are hidden again.", actions: [{ label: "OK" }], timeout: 2600 });
+      return;
+    }
+    // Third-party / non-U.S. "More providers" reveal / re-lock (mirrors the China-origin gate).
+    if (t.closest("#thirdPartyAckBtn")) {
+      const v = ($("#thirdPartyAckInput", $("#setBody")!) as HTMLInputElement)?.value.trim() ?? "";
+      if (v !== "ACKNOWLEDGE") { showToast({ title: "Type ACKNOWLEDGE", desc: "Confirm you accept the third-party / non-U.S. data risk for these providers.", actions: [{ label: "OK" }], timeout: 3000 }); return; }
+      state.thirdPartyAck = !!(await bridge.setThirdPartyAck(true))?.acknowledged;
+      fillSec("others", secOthers(state.auth));
+      showToast({ title: "More providers revealed", desc: "Third-party / non-U.S. providers are now listed. You accepted the data risk.", actions: [{ label: "OK" }], timeout: 3600 });
+      return;
+    }
+    if (t.closest("#thirdPartyRelock")) {
+      state.thirdPartyAck = !!(await bridge.setThirdPartyAck(false))?.acknowledged;
+      fillSec("others", secOthers(state.auth));
+      showToast({ title: "Re-locked", desc: "Third-party providers are hidden again behind the acknowledgement.", actions: [{ label: "OK" }], timeout: 2600 });
       return;
     }
     const save = t.closest("[data-savekey]") as HTMLElement | null;
@@ -4186,6 +4226,7 @@ async function loadConfig(): Promise<void> {
     const live = await bridge.config();
     state.commands = await bridge.commands();
     state.chinaAck = !!(await bridge.chinaAck())?.acknowledged; // P-IDE.1c: gate China-origin models
+    state.thirdPartyAck = !!(await bridge.thirdPartyAck())?.acknowledged; // gate the "More providers" list
     state.managed = await bridge.managed(); // ADR-0068 (P-ENT.1): enterprise lock view for the UI
     // P-IDE.1d: only adopt the live config when omp actually returned one. A cold/not-ready omp returns
     // an empty list - keep the cached list visible (spinner stays) rather than blanking the picker. When
@@ -4248,7 +4289,7 @@ async function pollOauthThenRefresh(oauthId: string): Promise<void> {
   for (let i = 0; i < 30; i++) { // ~2.5 min @ 5s
     await sleep(5000);
     const a = await bridge.auth();
-    const prov = [...(a?.majors ?? []), ...(a?.others ?? [])].find((x) => x.oauthId === oauthId);
+    const prov = [...(a?.gateway ?? []), ...(a?.majors ?? []), ...(a?.others ?? [])].find((x) => x.oauthId === oauthId);
     if (prov?.oauthActive) {
       await loadConfig();
       if (state.settingsOpen) renderSettings();

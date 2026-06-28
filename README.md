@@ -89,6 +89,7 @@ personalization internals are proprietary and intentionally undocumented here - 
 - [<img src=".github/assets/icons/builton.svg" width="16" alt=""> Built on](#-built-on)
 - [<img src=".github/assets/icons/quickstart.svg" width="16" alt=""> Quick start](#-quick-start)
 - [<img src=".github/assets/icons/desktop.svg" width="16" alt=""> Desktop app](#-desktop-app)
+- [<img src=".github/assets/icons/onboarding.svg" width="16" alt=""> Onboarding](#-onboarding)
 - [🤝 Contributing](#-contributing)
 - [<img src=".github/assets/icons/roadmap.svg" width="16" alt=""> Roadmap](#-roadmap)
 - [<img src=".github/assets/icons/docs.svg" width="16" alt=""> Project docs](#-project-docs)
@@ -351,7 +352,7 @@ LucidAgentIDE is a thin, principled layer over best-in-class building blocks - c
 |:--|:--|:--|
 | [**oh-my-pi (omp)**](https://omp.sh) <sub>· [repo](https://github.com/can1357/oh-my-pi)</sub> | A fast agentic coding runtime: tool-calling, model routing, sessions, sandboxing, ACP, extensions, skills | The host. Everything is added via omp **hooks / custom tools / SDK** - **never a fork** |
 | [**DuckDB**](https://duckdb.org) | An in-process analytical (OLAP) SQL database | The append-only **provenance + memory store** (findings, telemetry, semantic memory, run lineage) |
-| [**Obsidian**](https://obsidian.md) | A local-first Markdown knowledge base with `[[wikilinks]]` + a graph view | The **export format** for the personalization knowledge graph — one click decrypts your Personal + Work nodes into a portable vault (notes, `[[wikilinks]]`, escaped; CUI excluded by design; audited) |
+| [**Obsidian**](https://obsidian.md) | A local-first Markdown knowledge base with `[[wikilinks]]` + a graph view | The **export format** for the personalization knowledge graph - one click decrypts your Personal + Work nodes into a portable vault (notes, `[[wikilinks]]`, escaped; CUI excluded by design; audited) |
 | [**BoringSSL**](https://boringssl.googlesource.com/boringssl/) | Google's streamlined fork of OpenSSL (Bun's crypto backend) | Context for the **FIPS posture** - FIPS-approved algorithms; no FIPS *mode* in Bun's runtime |
 | [**headroom**](https://github.com/chopratejas/headroom) | An on-device, OpenAI-compatible token-compression proxy (60-95% reduction) | **Opt-in** context compression to stretch gov token quotas |
 | [**AskSage**](https://asksage.ai) | An accredited government generative-AI gateway fronting OpenAI/Anthropic/Google | An omp **provider extension**: lockdown, scanned personas, dataset-grounded RAG |
@@ -437,6 +438,32 @@ explicitly trust it (older Homebrew skips this step). The `xattr` step is needed
 `--no-quarantine` install flag. The cask serves both Apple Silicon and Intel automatically. To remove it
 later: `brew uninstall --cask lucidagentide` (add `--zap` to also delete app data).
 
+## <img src=".github/assets/icons/onboarding-animated.svg" width="28" align="top" alt=""> Onboarding
+
+First launch asks **who you are**, then gets out of your way. Pick one of four roles - **Developer**,
+**Security engineer**, **Manager**, or **Executive** - and the IDE leads with the surface that role actually
+uses: the developer lands on chat + live context/cache/cost, the analyst on the security queue, the manager
+on the cost + delivery ledger, the executive on a posture + spend summary. Nothing is ever hidden for good -
+every panel stays one `Ctrl`/`⌘`+`K` away, and a real security block always surfaces for every role. Roles
+are a cosmetic preset: they change what's *foregrounded*, never what the fail-closed gate enforces.
+
+A one-time **guided walkthrough** then spotlights the panels that matter to your role - composer, security
+queue, memory, command palette - in the same premium card style as the model picker. Skip it any time, or
+replay it later from **About -> Take the tour**. Switch roles whenever you like in **Settings -> Profile**; a
+managed GPO/MDM policy can pin the role org-wide. Every role gets its own custom animated glyph, and shortcut
+hints render per-OS (`⌘K` on macOS, `Ctrl+K` on Windows/Linux).
+
+<div align="center">
+<br/>
+<img src=".github/assets/onboarding-roles.JPG" alt="LucidAgentIDE first-run onboarding - a role picker with four animated cards (Developer, Security engineer, Manager, Executive), each showing the surface it lands on" width="720" />
+<br/>
+<sub><b>↑ The role picker</b> - choose a role to tailor the first view. Custom animated glyph per role; cosmetic only - the fail-closed security gate is identical for every role.</sub>
+<br/><br/>
+<img src=".github/assets/onboarding-tour.JPG" alt="LucidAgentIDE first-run guided walkthrough - a dimmed spotlight over a panel with a premium coachmark card (title, description, step dots, Back / Next / Skip) anchored beside it, in the same style as the model picker hover card" width="720" />
+<br/>
+<sub><b>↑ The guided walkthrough (coachmark)</b> - a dimmed, dismissable spotlight on each panel that matters to your role, in the model-picker card style; Back / Next / Skip, replayable any time from About.</sub>
+</div>
+
 ## <img src=".github/assets/icons/roadmap.svg" width="28" align="top" alt=""> Roadmap
 
 **Shipped and green.** The full security lifecycle, provenance lineage + replay, the cache-optimized prompt,
@@ -495,7 +522,7 @@ or propose a change, start here:
 robustness (Windows + macOS installers).
 
 > **License.** The LucidAgentIDE core (this repository) is **source-available under the Business Source
-> License 1.1** (BUSL-1.1) — the model HashiCorp uses for Terraform. You may read, modify, self-host, and
+> License 1.1** (BUSL-1.1) - the model HashiCorp uses for Terraform. You may read, modify, self-host, and
 > use it **in production**, *except* to offer a hosted or embedded commercial product that competes with
 > TechLead 187 LLC's products. On **2030-06-27** (the Change Date) each version converts to the **Mozilla
 > Public License 2.0**. Full terms: [`LICENSE`](LICENSE). © 2026 TechLead 187 LLC. The premium enterprise

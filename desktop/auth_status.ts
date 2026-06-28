@@ -19,24 +19,29 @@ export interface ProviderAuth {
   keySet: boolean; keyLast4?: string;
 }
 
-// Majors first; omp's broker provider ids used for the OAuth path.
-export const MAJORS = [
-  // Gov gateway (ADR-0007): API-key only, key in keys.ASKSAGE_API_KEY.
+// The AskSage gov gateway (ADR-0007): API-key only, key in keys.ASKSAGE_API_KEY. Surfaced ABOVE the
+// Providers section in its own card (it routes through an accredited gov proxy, not a direct provider).
+export const GATEWAY = [
   { id: "asksage", name: "AskSage · Gov gateway", env: "ASKSAGE_API_KEY", oauthId: "", canOauth: false },
-  { id: "anthropic", name: "Anthropic · Claude", env: "ANTHROPIC_API_KEY", oauthId: "anthropic", canOauth: true },
-  { id: "openai", name: "OpenAI", env: "OPENAI_API_KEY", oauthId: "openai-codex", canOauth: true },
-  { id: "google", name: "Google · Gemini", env: "GEMINI_API_KEY", oauthId: "google-gemini-cli", canOauth: true },
-  { id: "openrouter", name: "OpenRouter", env: "OPENROUTER_API_KEY", oauthId: "openrouter", canOauth: true },
-  // Perplexity (Sonar). omp supports OAuth too, but its login is interactive email-OTP / the
-  // macOS app token — neither works through our non-interactive broker spawn — so we expose the
-  // API-key path (the one that works here). canOauth:false hides the dead OAuth button.
-  { id: "perplexity", name: "Perplexity · Sonar", env: "PERPLEXITY_API_KEY", oauthId: "perplexity", canOauth: false },
 ];
+// Primary providers (the Providers card): U.S. frontier labs, key or OAuth. omp's broker provider ids
+// drive the OAuth path.
+export const MAJORS = [
+  { id: "openai", name: "OpenAI · ChatGPT", env: "OPENAI_API_KEY", oauthId: "openai-codex", canOauth: true },
+  { id: "google", name: "Google · Gemini", env: "GEMINI_API_KEY", oauthId: "google-gemini-cli", canOauth: true },
+  { id: "anthropic", name: "Anthropic · Claude", env: "ANTHROPIC_API_KEY", oauthId: "anthropic", canOauth: true },
+  { id: "xai", name: "xAI · Grok", env: "XAI_API_KEY", oauthId: "xai-oauth", canOauth: true },
+];
+// More providers (third-party / non-U.S. / custom aggregators) - gated behind a typed acknowledgement
+// in the UI because they route to servers outside U.S. jurisdiction or aggregate many origins.
 export const OTHERS = [
+  { id: "openrouter", name: "OpenRouter", env: "OPENROUTER_API_KEY", oauthId: "openrouter", canOauth: true },
+  // Perplexity (Sonar). omp supports OAuth too, but its login is interactive email-OTP / the macOS app
+  // token — neither works through our non-interactive broker spawn — so we expose the API-key path.
+  { id: "perplexity", name: "Perplexity · Sonar", env: "PERPLEXITY_API_KEY", oauthId: "perplexity", canOauth: false },
   { id: "deepseek", name: "DeepSeek", env: "DEEPSEEK_API_KEY", oauthId: "deepseek", canOauth: false },
   { id: "moonshot", name: "Moonshot · Kimi", env: "MOONSHOT_API_KEY", oauthId: "moonshot", canOauth: false },
   { id: "groq", name: "Groq", env: "GROQ_API_KEY", oauthId: "", canOauth: false },
-  { id: "xai", name: "xAI · Grok", env: "XAI_API_KEY", oauthId: "xai-oauth", canOauth: true },
 ];
 
 function vaultRows(): any[] {
@@ -49,7 +54,7 @@ function vaultRows(): any[] {
   } catch { return []; }
 }
 
-export function providerAuth(): { majors: ProviderAuth[]; others: ProviderAuth[] } {
+export function providerAuth(): { gateway: ProviderAuth[]; majors: ProviderAuth[]; others: ProviderAuth[] } {
   const rows = vaultRows();
   const keys = load().keys ?? {};
   const map = (m: typeof MAJORS[number]): ProviderAuth => {
@@ -61,5 +66,5 @@ export function providerAuth(): { majors: ProviderAuth[]; others: ProviderAuth[]
       keySet: !!key, keyLast4: key ? String(key).slice(-4) : undefined,
     };
   };
-  return { majors: MAJORS.map(map), others: OTHERS.map(map) };
+  return { gateway: GATEWAY.map(map), majors: MAJORS.map(map), others: OTHERS.map(map) };
 }
