@@ -148,13 +148,19 @@ async function readBody<T>(req: Request): Promise<T> {
 // alive AND have BOTH pipes drained until the callback lands — otherwise a full stdout/stderr pipe
 // blocks it and the callback server goes down (browser → "localhost refused to connect"). We keep
 // a reference (no GC), drain both streams in the background, and resolve once we see the auth URL.
-const oauthBrokers = new Set<ReturnType<typeof Bun.spawn>>();
+// Map keyed by oauthId — lets us look up a running broker to send a device code to its stdin
+// (xAI, GitHub, etc. use device-authorization flows where the user copies a code from the browser).
+const oauthBrokers = new Map<string, ReturnType<typeof Bun.spawn>>();
 function startOauthBroker(oauthId: string): Promise<{ started: boolean; url: string; output: string }> {
   let proc: ReturnType<typeof Bun.spawn>;
-  try { proc = Bun.spawn([ompBin(), "auth-broker", "login", oauthId], { stdout: "pipe", stderr: "pipe", stdin: "ignore" }); }
+  try { proc = Bun.spawn([ompBin(), "auth-broker", "login", oauthId], { stdout: "pipe", stderr: "pipe", stdin: "pipe" }); }
+  // stdin: "pipe" (NOT "ignore") — the broker reads stdin as a fallback for pasting the auth code.
+  // "ignore" closes stdin immediately → broker sees EOF → shuts down its callback server
+  // before the browser redirect arrives. "pipe" keeps it open; for device-flow providers (xAI)
+  // we also WRITE the user-pasted code to it via sendOauthCode().
   catch (e) { return Promise.resolve({ started: false, url: "", output: String((e as Error)?.message ?? e) }); }
-  oauthBrokers.add(proc);
-  proc.exited.finally(() => oauthBrokers.delete(proc));
+  oauthBrokers.set(oauthId, proc);
+  proc.exited.finally(() => { if (oauthBrokers.get(oauthId) === proc) oauthBrokers.delete(oauthId); });
   // On a SUCCESSFUL login the credential lands in omp's vault, but the already-running omp child
   // built its model list at spawn and won't see it. Respawn so the new provider's models surface
   // (mirrors what adding an API key does). The front-end re-fetches /api/config after the badge flips.
@@ -178,8 +184,16 @@ function startOauthBroker(oauthId: string): Promise<{ started: boolean; url: str
     })();
     // Drain stderr too (also a finite pipe that would otherwise block the broker).
     (async () => { try { for await (const _ of proc.stderr as ReadableStream<Uint8Array>) { /* discard */ } } catch { /* ended */ } })();
-    setTimeout(() => finish(""), 8000); // don't hang the HTTP request if the URL is slow to print
+    setTimeout(() => finish(""), 60_000); // 60s — OTP/MFA flows need time (phone unlock, SMS delay)
   });
+}
+/** Send a device-authorization code to a running broker's stdin (xAI "Grok Build", GitHub device flow, etc.).
+ *  The broker prints "Paste the authorization code (or full redirect URL)::" and reads a line from stdin. */
+function sendOauthCode(oauthId: string, code: string): { sent: boolean; reason?: string } {
+  const proc = oauthBrokers.get(oauthId);
+  if (!proc) return { sent: false, reason: "no broker running for " + oauthId };
+  try { proc.stdin.write(new TextEncoder().encode(code.trim() + "\n")); return { sent: true }; }
+  catch (e) { return { sent: false, reason: String((e as Error)?.message ?? e) }; }
 }
 
 // Stream NDJSON ChatEvents to the browser with a HEARTBEAT. A long maker tool call (e.g. a broad
@@ -451,6 +465,13 @@ const server = Bun.serve({
         const { oauthId } = await readBody<{ oauthId?: unknown }>(req);
         // omp owns the secure OAuth flow; the broker stays alive + drained until the callback lands.
         return json({ ok: true, data: await startOauthBroker(String(oauthId)) });
+      }
+      // Device-authorization flow: xAI "Grok Build", GitHub device flow, etc. The user copies a code
+      // from the provider's browser page and pastes it here; we forward it to the broker's stdin.
+      if (p === "/api/auth/oauth-code" && req.method === "POST") {
+        const { oauthId, code } = await readBody<{ oauthId?: unknown; code?: unknown }>(req);
+        const r = sendOauthCode(String(oauthId), String(code ?? ""));
+        return json({ ok: true, data: r });
       }
       if (p === "/api/auth/logout" && req.method === "POST") {
         const { oauthId } = await readBody<{ oauthId?: unknown }>(req);

@@ -37,10 +37,12 @@ export interface NetDiagView {
 
 const WIN = process.platform === "win32";
 const UNIX = process.platform === "darwin" || process.platform === "linux";
-// OpenAI's Codex broker binds this fixed loopback port for its OAuth redirect; it's the one callback
-// port we always actively probe. Every OTHER new listener is still caught by the socket diff, so an
-// unknown / ephemeral callback port (Gemini CLI, etc.) is flagged the moment it appears.
-export const DEFAULT_CALLBACK_PORTS = [1455];
+// Known fixed callback ports for OAuth providers. Each is actively probed; ephemeral ports (e.g. xAI)
+// are still caught by the socket diff the instant they appear.
+//   :1455  — OpenAI Codex
+//   :54545 — Anthropic Claude
+//   :8085  — Google Gemini CLI (Code Assist)
+export const DEFAULT_CALLBACK_PORTS = [1455, 54545, 8085];
 
 // ───────────────────────── pure parsing helpers (unit-tested, no OS) ─────────────────────────
 export function portOf(addr: string): number {

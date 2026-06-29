@@ -36,11 +36,14 @@ export function table(cols: Col[], rows: Record<string, unknown>[]): string {
   if (!rows?.length) return `<div class="empty">no rows</div>`;
   const head = cols.map((c) => `<th>${esc(c.label)}</th>`).join("");
   const body = rows
-    .map((r) => "<tr>" + cols.map((c) => {
-      const v = r[c.key];
-      if (c.pill) return `<td>${v != null ? pill(v) : ""}</td>`;
-      return `<td class="${c.mono ? "mono" : ""}">${esc(v)}</td>`;
-    }).join("") + "</tr>")
+    .map((r) => {
+      const cls = typeof r._cls === "string" ? ` class="${r._cls}"` : "";
+      return `<tr${cls}>` + cols.map((c) => {
+        const v = r[c.key];
+        if (c.pill) return `<td>${v != null ? pill(v) : ""}</td>`;
+        return `<td class="${c.mono ? "mono" : ""}">${esc(v)}</td>`;
+      }).join("") + "</tr>";
+    })
     .join("");
   return `<table class="tbl"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
 }

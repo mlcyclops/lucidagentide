@@ -334,6 +334,8 @@ export interface LucidBridge {
   saveKey(env: string, key: string): Promise<AuthStatus | null>;
   oauthLogin(oauthId: string): Promise<{ started: boolean; url: string; output: string } | null>;
   oauthLogout(oauthId: string): Promise<AuthStatus | null>;
+  /** Device-authorization flow: forward a code the user copied from the provider's page to the broker's stdin. */
+  oauthCode(oauthId: string, code: string): Promise<{ sent: boolean; reason?: string } | null>;
   // AskSage gov gateway (ADR-0007)
   asksage(): Promise<{ configured: boolean; base: string; only: boolean; limit: number; datasets: string[]; queryModel: string; persona: string } | null>;
   saveAsksage(opts: { baseUrl?: string; only?: boolean; limit?: number; datasets?: string[]; queryModel?: string; persona?: string }): Promise<{ configured: boolean; base: string; only: boolean; limit: number; datasets: string[]; queryModel: string; persona: string } | null>;
@@ -542,6 +544,7 @@ export const bridge: LucidBridge = {
   saveKey: (env, key) => post("/api/auth/key", { env, key }),
   oauthLogin: (oauthId) => post("/api/auth/oauth", { oauthId }),
   oauthLogout: (oauthId) => post("/api/auth/logout", { oauthId }),
+  oauthCode: (oauthId, code) => post("/api/auth/oauth-code", { oauthId, code }),
   asksage: () => getData("/api/asksage"),
   saveAsksage: (opts) => post("/api/asksage", opts),
   asksageTokens: () => getData("/api/asksage/tokens"),
