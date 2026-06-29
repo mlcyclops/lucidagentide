@@ -66,6 +66,17 @@ export interface DevView {
     events: { id: string; ts: string; category: string; type: string; severity: string; decision: string; tool?: string; reason?: string; tier?: string; host: string }[];
     sinks: { name: string; type: string; delivered: number; failed: number; lastError?: string }[];
   };
+  // P-NETDIAG.1: live loopback / OAuth-callback watcher (developer mode only). Mirrors NetDiagView in
+  // desktop/netdiag.ts - the renderer keeps its own copy of the shape (same pattern as DevView itself).
+  netdiag?: NetDiagView | null;
+}
+export interface NetSocketView { proto: string; local: string; foreign: string; state: string; pid: string; proc: string; port: number; loopback: boolean; }
+export interface NetEventView { at: number; kind: "listener" | "open" | "close" | "probe"; text: string; port?: number; proc?: string; candidate?: boolean; }
+export interface NetDiagView {
+  watching: boolean; platform: string; supported: boolean;
+  ports: number[]; probes: { port: number; state: "open" | "closed" | "timeout" }[];
+  listeners: NetSocketView[]; connections: NetSocketView[];
+  dns: string[]; events: NetEventView[]; startedAt: number | null;
 }
 // P10.2 cross-model usage & cost ledger
 export interface ModelUsage {

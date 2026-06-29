@@ -2164,6 +2164,7 @@ function devHtml(d: import("./bridge.ts").DevView | null): string {
     { cls: "q", n: blk.length, l: "live blocks" },
     { cls: "a", n: exp.length, l: "exports" },
     ...(ask.length ? [{ cls: askAnoms ? "q" : "g", n: ask.length, l: "AskSage calls" } as const] : []),
+    ...(d.netdiag ? [{ cls: d.netdiag.events.some((e) => e.candidate) ? "q" : "f", n: d.netdiag.events.length, l: "net events" } as const] : []),
   ]);
   // P-ASKSAGE.1 (ADR-0059): AskSage tool-loop diagnostics. One row per non-streamed call. An `anomaly`
   // (empty-response / truncated) or an error is the smoking gun for the loop "giving up too soon".
@@ -2210,6 +2211,30 @@ function devHtml(d: import("./bridge.ts").DevView | null): string {
       `<div class="kvs"><span class="kv">sinks ${sinkLine || "<b>none</b>"}</span><span class="kv">events <b>${au.events.length}</b></span></div>`
       + table([{ key: "when", label: "when", mono: true }, { key: "category", label: "source", pill: true }, { key: "decision", label: "decision", pill: true }, { key: "sev", label: "sev", mono: true }, { key: "tier", label: "tier", mono: true }, { key: "tool", label: "tool", mono: true }, { key: "reason", label: "reason" }], evRows as unknown as Record<string, unknown>[]),
       OPEN.has("dev.audit"), String(au.events.length));
+  }
+  // P-NETDIAG.1: the loopback / OAuth-callback watcher. A new LISTENING socket on the callback port
+  // (★ / "callback?") the instant you click "Connect via OAuth" is the prime evidence the broker bound;
+  // its absence the whole flow means the broker never bound (it died before listening).
+  const nd = d.netdiag;
+  if (nd) {
+    const probeLine = nd.probes.map((p) => `:${p.port}=${p.state}`).join("  ") || "-";
+    const cand = nd.events.filter((e) => e.candidate).length;
+    const lisRows = nd.listeners.map((s) => ({ watch: nd.ports.includes(s.port) ? "★" : "", port: s.port, addr: s.local, proc: s.proc }));
+    const evRows = nd.events.slice().reverse().map((e) => ({
+      when: estTime(e.at), kind: e.kind, detail: e.text, proc: e.proc ?? "", flag: e.candidate ? "callback?" : "",
+    }));
+    const body =
+      `<div class="kvs"><span class="kv">capture <b style="color:${nd.watching ? "var(--green)" : "var(--red)"}">${nd.watching ? "live" : "off"}</b></span>`
+      + `<span class="kv">callback probe <b>${esc(probeLine)}</b></span>`
+      + `<span class="kv">listeners <b>${nd.listeners.length}</b></span>`
+      + `<span class="kv">events <b>${nd.events.length}</b></span></div>`
+      + (nd.supported ? "" : `<div class="empty">Live capture isn't wired for ${esc(nd.platform)} yet.</div>`)
+      + `<div class="dev-subh">Listening sockets <span>loopback + all-interface · ★ = watched OAuth callback port</span></div>`
+      + table([{ key: "watch", label: "", mono: true }, { key: "port", label: "port", mono: true }, { key: "addr", label: "local address", mono: true }, { key: "proc", label: "process" }], lisRows as unknown as Record<string, unknown>[])
+      + `<div class="dev-subh">Recent activity <span>newest first · a new listener on the callback port is the prime suspect</span></div>`
+      + table([{ key: "when", label: "when", mono: true }, { key: "kind", label: "event", pill: true }, { key: "detail", label: "socket", mono: true }, { key: "proc", label: "process" }, { key: "flag", label: "flag", pill: true }], evRows as unknown as Record<string, unknown>[])
+      + (nd.dns.length ? `<div class="dev-subh">DNS resolutions <span>recent resolver-cache entries</span></div><div class="kvs">${nd.dns.slice().reverse().slice(0, 30).map((n) => `<span class="kv mono">${esc(n)}</span>`).join("")}</div>` : "");
+    h += accordion("dev.netdiag", "Network diagnostics", "OAuth localhost callback · live capture", body, OPEN.has("dev.netdiag") || cand > 0, cand ? `${nd.events.length} · ${cand}?` : String(nd.events.length));
   }
   return h;
 }

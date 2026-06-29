@@ -15,6 +15,8 @@ import { join } from "node:path";
 import { readFileSync } from "node:fs";
 import { buildEngineeringUpdate, renderEngineeringBrief, buildPodcastScript, renderScript } from "../harness/brief/engineering_update.ts";
 import { devSnapshot, securitySnapshot } from "../tools/web/data.ts";
+import { ensureNetdiagWatch, startNetdiagWatch, stopNetdiagWatch, netdiagView } from "./netdiag.ts";
+import { clearDisabledCredential } from "./auth_vault.ts";
 import { approveBlock, dismissBlock, liveBlocks } from "./security_log.ts";
 import { probeRateLimits } from "./ratelimit_probe.ts";
 import { OBS_DB_PATH, codeActivity, memorySnapshot, rateLimits, sessionPathById, usageLedger } from "../tools/memory_data.ts";
@@ -156,7 +158,15 @@ function startOauthBroker(oauthId: string): Promise<{ started: boolean; url: str
   // On a SUCCESSFUL login the credential lands in omp's vault, but the already-running omp child
   // built its model list at spawn and won't see it. Respawn so the new provider's models surface
   // (mirrors what adding an API key does). The front-end re-fetches /api/config after the badge flips.
-  proc.exited.then((code) => { if (code === 0) backend.restart(); }).catch(() => { /* ignore */ });
+  proc.exited.then((code) => {
+    if (code !== 0) return;
+    // omp's login writes the fresh token but may leave a stale `disabled_cause` from a prior logout,
+    // so the just-fetched credential stays ignored. Clear that one flag (token blob untouched) so the
+    // login actually "sticks", THEN respawn omp to pick up the now-active provider.
+    const r = clearDisabledCredential(oauthId);
+    if (r.cleared) console.log(`[oauth] re-enabled ${oauthId} after login (cleared stale disabled flag)`);
+    backend.restart();
+  }).catch(() => { /* ignore */ });
   return new Promise((resolve) => {
     const dec = new TextDecoder();
     let out = "", done = false;
@@ -296,10 +306,13 @@ const server = Bun.serve({
           // real change so toggling developer mode takes effect immediately (no app restart) — the fresh
           // omp picks up / drops the debug env. Same pattern as an API-key change (backend.restart()).
           if (changed) backend.restart();
+          // Run the loopback/OAuth-callback watcher only while developer mode is on (it polls the OS).
+          if (next) startNetdiagWatch(); else stopNetdiagWatch();
           return json({ ok: true, data });
         }
-        if (!loadSettings().developerMode) return json({ ok: true, data: { enabled: false, snapshot: null, blocks: { quarantined: [], approved: [], total: 0 }, turns: [], asksage: [] } });
-        return json({ ok: true, data: { enabled: true, snapshot: await devSnapshot(), blocks: liveBlocks(), turns: recentTurns(), asksage: backend.asksageDiagnostics(), audit: { events: audit.recent(60), sinks: audit.sinkStatuses() } } });
+        if (!loadSettings().developerMode) return json({ ok: true, data: { enabled: false, snapshot: null, blocks: { quarantined: [], approved: [], total: 0 }, turns: [], asksage: [], netdiag: null } });
+        ensureNetdiagWatch(); // self-heal: live by the time the Logs panel (or boot-time loadDev) reads it
+        return json({ ok: true, data: { enabled: true, snapshot: await devSnapshot(), blocks: liveBlocks(), turns: recentTurns(), asksage: backend.asksageDiagnostics(), audit: { events: audit.recent(60), sinks: audit.sinkStatuses() }, netdiag: netdiagView() } });
       }
       // Light, fast re-read of the provider rate-limit budget (omp's agent.db).
       // Used by the front-end's manual refresh + 5-minute auto-poll.
