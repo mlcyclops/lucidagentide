@@ -919,6 +919,10 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 /* P-NETDIAG.1: small section label inside the Network diagnostics accordion. */
 .dev-subh{margin:13px 0 4px;font-size:11.5px;font-weight:700;color:var(--txt-2);letter-spacing:.01em}
 .dev-subh span{margin-left:7px;font-weight:400;color:var(--txt-4);font-size:10.5px}
+/* P-NETDIAG.1b: OAuth-relevant rows pinned at the top, visually distinct from the noise. */
+.nd-oauth-hdr{color:var(--amber);margin-top:18px;padding-top:6px;border-top:1px solid var(--line-strong)}
+.tbl tr.nd-oauth td{background:rgba(232,178,60,.06);border-left:3px solid var(--amber)}
+.tbl tr.nd-oauth:hover td{background:rgba(232,178,60,.12)}
 .spark{display:block;width:100%;height:42px;margin-top:8px}
 
 /* mini tables */

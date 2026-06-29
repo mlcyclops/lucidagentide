@@ -14,7 +14,7 @@ import { modCombo, modSymbol } from "./platform.ts";
 import { roleIcon } from "./role_icons.ts";
 import { providerHasApiKey, providerKeywords } from "./budget_gate.ts";
 import { cachedSessions, cachedTranscript, setCachedSessions, setCachedTranscript, transcriptSig } from "./swr_cache.ts";
-import { $, $$, accordion, el, fmtNum, gauge, spark, table } from "./dom.ts";
+import { $, $$, accordion, el, fmtNum, gauge, spark, table, type Col } from "./dom.ts";
 import { ageStr, esc, fmtUSD, goodColor, loadColor } from "./format.ts";
 import { icon, piMark } from "./icons.ts";
 import { aboutHtml, readmeMark } from "./about.ts";
@@ -1116,6 +1116,8 @@ function setInspectorRail(rail: boolean): void {
 const PROV_HINTS: Record<string, string> = {
   openai: "OAuth signs in your ChatGPT / Codex subscription (those models). For the full commercial catalog - gpt-4o, o-series - add an OPENAI_API_KEY below.",
   google: "OAuth uses the Gemini CLI / Code Assist tier. For the full commercial Gemini catalog, add a GEMINI_API_KEY below.",
+  anthropic: "OAuth signs in your Claude subscription. For pay-as-you-go API access, add an ANTHROPIC_API_KEY below.",
+  xai: "OAuth signs in via your X / xAI account. Which Grok models are available depends on your plan (Premium+, SuperGrok, or API). If models appear but return empty replies, check your subscription at <b>console.x.ai</b>.",
   perplexity: "Paste a Perplexity API key for Sonar models. (Pro/Max OAuth is interactive email-OTP - it can't run through this app, so use a key here.)",
 };
 function provCard(p: ProviderAuth): string {
@@ -2215,14 +2217,35 @@ function devHtml(d: import("./bridge.ts").DevView | null): string {
   // P-NETDIAG.1: the loopback / OAuth-callback watcher. A new LISTENING socket on the callback port
   // (★ / "callback?") the instant you click "Connect via OAuth" is the prime evidence the broker bound;
   // its absence the whole flow means the broker never bound (it died before listening).
+  // SORT: OAuth-relevant events (port 1455, candidates, probes) surface at the top, newest-first,
+  // with a visual break before the rest — so the user never has to dig through irrelevant sockets.
   const nd = d.netdiag;
   if (nd) {
     const probeLine = nd.probes.map((p) => `:${p.port}=${p.state}`).join("  ") || "-";
     const cand = nd.events.filter((e) => e.candidate).length;
-    const lisRows = nd.listeners.map((s) => ({ watch: nd.ports.includes(s.port) ? "★" : "", port: s.port, addr: s.local, proc: s.proc }));
-    const evRows = nd.events.slice().reverse().map((e) => ({
+    // Listeners: watched (★) ports pinned to top, then by port number.
+    const sortedLis = nd.listeners.slice().sort((a, b) => {
+      const aw = nd.ports.includes(a.port) ? 0 : 1;
+      const bw = nd.ports.includes(b.port) ? 0 : 1;
+      return aw !== bw ? aw - bw : a.port - b.port;
+    });
+    const lisRows = sortedLis.map((s) => {
+      const watched = nd.ports.includes(s.port);
+      return { _cls: watched ? "nd-oauth" : "", watch: watched ? "★" : "", port: s.port, addr: s.local, proc: s.proc };
+    });
+    // Events: split into OAuth-relevant (callback ports, candidates, probes) vs. the rest.
+    const isOauth = (e: { port?: number; candidate?: boolean; kind: string }) =>
+      e.candidate || e.kind === "probe" || (e.port != null && nd.ports.includes(e.port));
+    const allEvReversed = nd.events.slice().reverse();
+    const oauthEv = allEvReversed.filter(isOauth);
+    const otherEv = allEvReversed.filter((e) => !isOauth(e));
+    const mapEv = (e: typeof nd.events[number], highlight: boolean) => ({
+      _cls: highlight ? "nd-oauth" : "",
       when: estTime(e.at), kind: e.kind, detail: e.text, proc: e.proc ?? "", flag: e.candidate ? "callback?" : "",
-    }));
+    });
+    const evCols: Col[] = [{ key: "when", label: "when", mono: true }, { key: "kind", label: "event", pill: true }, { key: "detail", label: "socket", mono: true }, { key: "proc", label: "process" }, { key: "flag", label: "flag", pill: true }];
+    const oauthRows = oauthEv.map((e) => mapEv(e, true));
+    const otherRows = otherEv.map((e) => mapEv(e, false));
     const body =
       `<div class="kvs"><span class="kv">capture <b style="color:${nd.watching ? "var(--green)" : "var(--red)"}">${nd.watching ? "live" : "off"}</b></span>`
       + `<span class="kv">callback probe <b>${esc(probeLine)}</b></span>`
@@ -2231,8 +2254,11 @@ function devHtml(d: import("./bridge.ts").DevView | null): string {
       + (nd.supported ? "" : `<div class="empty">Live capture isn't wired for ${esc(nd.platform)} yet.</div>`)
       + `<div class="dev-subh">Listening sockets <span>loopback + all-interface · ★ = watched OAuth callback port</span></div>`
       + table([{ key: "watch", label: "", mono: true }, { key: "port", label: "port", mono: true }, { key: "addr", label: "local address", mono: true }, { key: "proc", label: "process" }], lisRows as unknown as Record<string, unknown>[])
-      + `<div class="dev-subh">Recent activity <span>newest first · a new listener on the callback port is the prime suspect</span></div>`
-      + table([{ key: "when", label: "when", mono: true }, { key: "kind", label: "event", pill: true }, { key: "detail", label: "socket", mono: true }, { key: "proc", label: "process" }, { key: "flag", label: "flag", pill: true }], evRows as unknown as Record<string, unknown>[])
+      // OAuth-relevant events: pinned at top, highlighted, newest first.
+      + `<div class="dev-subh nd-oauth-hdr">🔑 OAuth / port ${nd.ports.join(", :")} events <span>newest first · candidates, probes, and callback-port traffic</span></div>`
+      + (oauthRows.length ? table(evCols, oauthRows as unknown as Record<string, unknown>[]) : `<div class="empty">no OAuth-relevant events yet — click "Connect via OAuth" to start</div>`)
+      // Separator + the rest.
+      + (otherRows.length ? `<div class="dev-subh">Other network activity <span>${otherRows.length} events · loopback traffic unrelated to the callback port</span></div>` + table(evCols, otherRows as unknown as Record<string, unknown>[]) : "")
       + (nd.dns.length ? `<div class="dev-subh">DNS resolutions <span>recent resolver-cache entries</span></div><div class="kvs">${nd.dns.slice().reverse().slice(0, 30).map((n) => `<span class="kv mono">${esc(n)}</span>`).join("")}</div>` : "");
     h += accordion("dev.netdiag", "Network diagnostics", "OAuth localhost callback · live capture", body, OPEN.has("dev.netdiag") || cand > 0, cand ? `${nd.events.length} · ${cand}?` : String(nd.events.length));
   }
@@ -4029,7 +4055,45 @@ function wire(): void {
       const oauthId = oauth.dataset.oauth!;
       const r = await bridge.oauthLogin(oauthId);
       if (r?.url) window.open(r.url, "_blank");
-      showToast({ title: "OAuth started", desc: r?.url ? "Complete the sign-in in your browser, then return - the model list updates automatically." : (r?.output?.slice(0, 160) || "Follow omp's prompt in the GUI server window."), actions: [{ label: "OK" }], timeout: 6000 });
+      // Device-flow providers (xAI, GitHub, etc.) show a code on the provider's page
+      // that the user must paste back. Redirect-flow providers (OpenAI, Anthropic, Google)
+      // complete silently via the localhost callback.
+      const DEVICE_FLOW_IDS = new Set(["xai-oauth", "github-copilot", "openai-codex-device"]);
+      if (DEVICE_FLOW_IDS.has(oauthId)) {
+        showToast({
+          title: "Paste the code from the sign-in page",
+          desc: "Copy the code shown in your browser, paste it below, and click Submit.",
+          actions: [{ label: "OK" }],
+          timeout: 0, // persistent until dismissed
+        });
+        // Inject a device-code input into the provider card itself
+        const card = oauth.closest(".set-card") as HTMLElement | null;
+        if (card) {
+          let box = card.querySelector(".oauth-device-box") as HTMLElement | null;
+          if (!box) {
+            box = el(`<div class="oauth-device-box prov-row" style="margin-top:8px">
+              <input class="prov-key" id="deviceCode_${oauthId}" type="text" placeholder="Paste device code here…" autocomplete="off" style="font-family:var(--mono)" />
+              <button class="btn-mini ok" id="deviceSubmit_${oauthId}">${icon("check", 12)} Submit</button></div>`);
+            card.appendChild(box);
+            const submit = $(`#deviceSubmit_${oauthId}`, card)!;
+            submit.addEventListener("click", async () => {
+              const inp = $(`#deviceCode_${oauthId}`, card) as HTMLInputElement;
+              const code = inp?.value.trim();
+              if (!code) return;
+              const sr = await bridge.oauthCode(oauthId, code);
+              if (sr?.sent) {
+                showToast({ title: "Code sent", desc: "Waiting for the provider to verify…", timeout: 4000 });
+                box?.remove();
+              } else {
+                showToast({ tone: "danger", title: "Couldn't send code", desc: sr?.reason ?? "The broker may have exited. Try again.", actions: [{ label: "OK" }], timeout: 6000 });
+              }
+            });
+          }
+          ($(`#deviceCode_${oauthId}`, card) as HTMLInputElement)?.focus();
+        }
+      } else {
+        showToast({ title: "OAuth started", desc: r?.url ? "Complete the sign-in in your browser, then return — the model list updates automatically." : (r?.output?.slice(0, 160) || "Follow omp's prompt in the GUI server window."), actions: [{ label: "OK" }], timeout: 6000 });
+      }
       setTimeout(() => void renderSettings(), 4000);
       void pollOauthThenRefresh(oauthId); // watch for completion, then refresh models
       return;
@@ -4309,17 +4373,30 @@ async function refreshModels(): Promise<void> {
  *  respawned omp when the broker exited, so a plain loadConfig() surfaces the new models. */
 async function pollOauthThenRefresh(oauthId: string): Promise<void> {
   const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-  for (let i = 0; i < 30; i++) { // ~2.5 min @ 5s
-    await sleep(5000);
+  let resolved = false;
+  const check = async (): Promise<boolean> => {
+    if (resolved) return true;
     const a = await bridge.auth();
     const prov = [...(a?.gateway ?? []), ...(a?.majors ?? []), ...(a?.others ?? [])].find((x) => x.oauthId === oauthId);
     if (prov?.oauthActive) {
+      resolved = true;
       await loadConfig();
       if (state.settingsOpen) renderSettings();
-      showToast({ title: "Connected - models updated", desc: `${prov.name} is ready in the model picker.`, actions: [{ label: "OK" }], timeout: 6000 });
-      return;
+      showToast({ title: "Connected — models updated", desc: `${prov.name} is ready in the model picker.`, actions: [{ label: "OK" }], timeout: 6000 });
+      return true;
     }
-  }
+    return false;
+  };
+  // When the user returns from the provider's login page (tab switch), re-check immediately.
+  // Chrome throttles setTimeout in background tabs; this fires the instant LUCID is visible again.
+  const onVisible = () => { if (document.visibilityState === "visible") void check(); };
+  document.addEventListener("visibilitychange", onVisible);
+  try {
+    for (let i = 0; i < 150; i++) { // ~5 min @ 2s
+      await sleep(2000);
+      if (await check()) return;
+    }
+  } finally { document.removeEventListener("visibilitychange", onVisible); }
 }
 
 async function applyConfig(configId: string, value: string): Promise<void> {
