@@ -6912,3 +6912,129 @@ ADR-0088 (role onboarding — the tour is its teaching step), ADR-0087 (About pa
 `desktop/renderer/styles.css` (`.modeltip` tokens → `.coach*` + `.coach-spot` backdrop),
 `desktop/settings_store.ts` (`GuiSettings.tourSeen`), new `desktop/renderer/tour.ts` (pure step catalog +
 role→steps), `desktop/tour.test.ts`, `desktop/scripts/demo_p_role_1b.ts`.
+
+## ADR-0090 - In-app network diagnostics for the OAuth localhost callback (developer-mode watcher)
+
+**Date:** 2026-06-29
+**Status:** Accepted - BUILT.
+**Increment:** P-NETDIAG.1 (developer-mode only; lives in the existing Logs panel, ADR-0009 Phase D).
+
+### Context
+
+OAuth sign-in routes through omp's `auth-broker login`, which opens the provider in a browser and runs a
+LOCAL loopback callback server to catch the redirect (OpenAI's Codex broker uses a fixed `127.0.0.1:1455`;
+other providers use ephemeral ports). The recurring failure is the browser showing "localhost refused to
+connect," which has three very different root causes the user cannot tell apart: (a) nothing ever bound the
+port (the broker died before listening - e.g. the full-stdout-pipe hang `dev.ts` already warns about),
+(b) some OTHER process squats the port, or (c) the bind landed on a different interface/family than the
+browser hit. A first cut was a standalone terminal tool (`tools/netwatch.ts`); it works but is the wrong
+ergonomics - you have to start it by hand at the right moment, and the OAuth window is easy to miss
+(OTP entry stretches the flow to 30-45s, and the bind can be brief). Two bugs in that first cut also made it
+report "nothing happened": it filtered to loopback-only (so an all-interface `0.0.0.0` bind was invisible),
+and it printed only on change (so a long wait looked like a hang).
+
+### Decision
+
+A **continuous, in-app network-diagnostics watcher**, surfaced as a **Network diagnostics** accordion in the
+read-only developer Logs panel (the same surface as telemetry / run lineage / AskSage diagnostics).
+
+- **Always-on while developer mode is on.** A background poller (`desktop/netdiag.ts`, 2s interval) runs in
+  the backend the entire time developer mode is enabled - started on the dev-mode POST and self-healed on
+  each `/api/dev` read (so a boot-time `loadDev()` brings it up). By the time the Logs panel is opened, the
+  OAuth window is already captured. It stops when developer mode is turned off.
+- **What it captures.** A rolling event log (bounded, last 400) of: loopback connections, EVERY listener
+  (loopback AND all-interface `0.0.0.0` / `[::]` binds - the fix for the missed-bind bug), an active TCP
+  probe of the callback port(s) (`nc -z`-style), and the Windows DNS resolver cache. A brand-new LISTENING
+  socket on a watched/loopback port is flagged a **callback candidate** - the single decisive "did the
+  broker bind, and which process owns it?" signal. `127.0.0.1:1455` is always probed; any other (ephemeral)
+  callback port is still caught by the socket diff.
+- **OS tools, read-only.** Windows: `netstat -ano` + `tasklist` (PID→image) + `Get-DnsClientCache`.
+  macOS/Linux: `lsof -nP -iTCP` (the command is the process; no DNS). It NEVER binds, blocks, or mutates -
+  pure diagnostics. The TCP probe is a throwaway connect that is immediately destroyed.
+- **Pure core, tested.** The parse (`parseNetstatLine` / `parseLsofLine` / `parseTasklistCsv`) and the
+  snapshot DIFF (`diffSockets`, candidate-flagging) are pure and unit-tested against canned OS output; the
+  timer and the `Bun.spawnSync` calls are the only impure parts. `tools/netwatch.ts` is kept as the
+  standalone CLI for ad-hoc terminal use.
+
+### Consequences
+
+Developers get a self-collecting, always-on diagnostic for the most opaque sign-in failure, without dropping
+to a terminal or hand-timing a capture. Cost: while developer mode is on, the backend shells out to
+netstat/tasklist every ~2-6s and powershell (DNS) every ~6s - acceptable for an opt-in, off-by-default
+developer surface, and zero when developer mode is off (the watcher never starts). The watcher is
+Windows-first; macOS/Linux use the `lsof` path (no DNS); unknown platforms degrade to `supported:false` with
+an empty, non-throwing view.
+
+### Invariants preserved
+
+#3 fail-closed UNTOUCHED - this is read-only diagnostics, never a gate input; it emits no allow/block/quarantine
+verdict (the demo asserts the view shape carries no gate-like field). #2 language boundary preserved - all
+TypeScript, no new `.py` (the watcher shells out to OS tools, it does not add a Python surface). #6 frozen
+prefix untouched (no prompt change). #8 events untouched (the network event log is a developer-mode UI feed,
+not an `EventName` telemetry event). New first-party files carry the BUSL-1.1 header (ADR-0086).
+
+### Relates to
+
+ADR-0009 Phase D (the developer Logs panel this extends), `desktop/dev.ts` (`startOauthBroker` - the callback
+server being diagnosed; `/api/dev` now carries `netdiag`), new `desktop/netdiag.ts` (watcher + pure helpers),
+`desktop/netdiag.test.ts`, `desktop/scripts/demo_p_netdiag_1.ts`, `desktop/renderer/bridge.ts`
+(`DevView.netdiag` + `NetDiagView`), `desktop/renderer/app.ts` (`devHtml` Network diagnostics accordion),
+`desktop/renderer/styles.css` (`.dev-subh`), `tools/netwatch.ts` (the standalone CLI sibling).
+
+## ADR-0091 - OAuth re-login self-heal: clear a stale `disabled_cause` so a fresh login "sticks"
+
+**Date:** 2026-06-29
+**Status:** Accepted - BUILT.
+**Increment:** P-NETDIAG.1b (the fix the P-NETDIAG.1 watcher led us to; same session).
+
+### Context
+
+Diagnosing a real "I logged into OpenAI but it didn't save" report (the case that motivated ADR-0090), the
+credential vault (`~/.omp/agent/agent.db`, `auth_credentials`) showed the truth: the `openai-codex` row had a
+**valid, freshly-written** OAuth token (`updated_at` = the login moment; access + refresh present), yet still
+carried **`disabled_cause = "logged out by user"`** from an earlier *Disconnect*. omp counts a credential as
+active only when that column is null (`auth_status.ts` filters `!disabled_cause`), so the good token was
+ignored. Worse, omp's `auth-broker logout` *disables* the row rather than deleting it, and `auth-broker login`
+updates the token blob without clearing the flag - so re-clicking "Connect via OAuth" can never recover; the
+provider is stuck logged-out forever. omp exposes no `delete` / `re-enable` verb (`login|logout|status|list|
+import|migrate` only), so the harness must compensate.
+
+### Decision
+
+A narrow vault helper, `desktop/auth_vault.ts` → `clearDisabledCredential(provider)`, that nulls ONLY the
+`disabled_cause` column for a provider (the token blob, identity, and every other column are untouched), and
+two call sites:
+
+- **Automatic self-heal.** `dev.ts startOauthBroker`'s success path (broker exit 0) calls it for the just-
+  logged-in `oauthId` *before* `backend.restart()`, so a successful login clears any stale logout flag and the
+  respawned omp picks up the now-active provider. Re-login is now idempotent and always "sticks".
+- **One-shot repair CLI.** `tools/omp_auth_reenable.ts <provider>` for an already-stuck vault (pairs with the
+  read-only `tools/omp_auth_status.ts`). Used live to un-stick `openai-codex` this session.
+
+Read-before-write (only writes when a disabled row exists), `PRAGMA busy_timeout=2000` to tolerate the running
+app's lock, and fully best-effort: any failure (missing/locked db, future schema drift) returns "0 cleared"
+and never throws.
+
+### Consequences
+
+The most confusing OAuth failure mode - "it logged in but nothing happened" - now self-corrects, and an
+already-stuck credential is a one-command fix. Cost/risk: the harness now WRITES to omp's otherwise-private
+vault. Mitigated by touching exactly one column, never the token; by failing closed/quiet on any error; and by
+keeping it OUT of the security path (this is a convenience repair, not a gate - invariant #3 is about the
+scanner). If a future omp changes the column name or starts clearing the flag itself, this degrades to a
+harmless no-op.
+
+### Invariants preserved
+
+#1 extend-omp-don't-fork preserved - we compensate for omp behavior through a tiny vault helper, no fork, no
+omp source change. #2 language boundary (TypeScript, `bun:sqlite`; no new `.py`). #3 fail-closed UNTOUCHED -
+this never feeds the gate and emits no allow/block verdict; it only re-enables a credential the user already
+obtained. #10 (DuckDB schema-freeze) untouched - this is omp's SQLite vault, not our DuckDB. New first-party
+files carry the BUSL-1.1 header (ADR-0086).
+
+### Relates to
+
+ADR-0090 (the netdiag watcher whose investigation surfaced this), `desktop/dev.ts` (`startOauthBroker` success
+path), new `desktop/auth_vault.ts` + `desktop/auth_vault.test.ts`, new `tools/omp_auth_reenable.ts`,
+`tools/omp_auth_status.ts` (read-only sibling), `desktop/auth_status.ts` (the `!disabled_cause` active filter
+this unblocks).

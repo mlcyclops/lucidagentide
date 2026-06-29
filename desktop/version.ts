@@ -10,4 +10,5 @@
 //
 // Launch baseline: v1.8.7. v1.8.8 = role onboarding + tour + providers reorg.
 // v1.8.10 = Perplexity→Providers, set-note readability, Gemini model cards, macOS .pkg/cask.
-export const APP_VERSION = "1.8.10";
+// v1.8.11 = in-app network diagnostics (OAuth callback watcher) + OAuth re-login self-heal.
+export const APP_VERSION = "1.8.11";

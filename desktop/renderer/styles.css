@@ -915,6 +915,10 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .kv{background:linear-gradient(180deg,var(--bg-3),var(--bg-2));border:1px solid var(--line);border-radius:8px;
   padding:5px 9px;font-size:11.5px;color:var(--txt-2);box-shadow:var(--emboss,inset 0 1px 0 rgba(255,255,255,.03))}
 .kv b{font-family:var(--mono);font-variant-numeric:tabular-nums;color:var(--txt)}
+.kv.mono{font-family:var(--mono);font-size:10.5px;color:var(--txt-3)}
+/* P-NETDIAG.1: small section label inside the Network diagnostics accordion. */
+.dev-subh{margin:13px 0 4px;font-size:11.5px;font-weight:700;color:var(--txt-2);letter-spacing:.01em}
+.dev-subh span{margin-left:7px;font-weight:400;color:var(--txt-4);font-size:10.5px}
 .spark{display:block;width:100%;height:42px;margin-top:8px}
 
 /* mini tables */
