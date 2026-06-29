@@ -7038,3 +7038,103 @@ ADR-0090 (the netdiag watcher whose investigation surfaced this), `desktop/dev.t
 path), new `desktop/auth_vault.ts` + `desktop/auth_vault.test.ts`, new `tools/omp_auth_reenable.ts`,
 `tools/omp_auth_status.ts` (read-only sibling), `desktop/auth_status.ts` (the `!disabled_cause` active filter
 this unblocks).
+
+## ADR-0092 - P-DOC.1: Role-based user guides (per-role capability docs with screenshot placeholders, Tips, and cited Notes & References)
+
+**Date:** 2026-06-29
+**Status:** Accepted - SCOPE/PLAN + first pass shipped.
+**Increment:** P-DOC.1.
+
+### Context
+
+ADR-0088 shaped the product into four roles (Developer / Security / Manager / Executive) that change
+*defaults and chrome, never enforcement*, and ADR-0089 added a first-run coachmark tour that teaches each
+role its foregrounded surfaces. But onboarding teaches the UI in ten seconds and then disappears; there is
+no durable, role-shaped **reference** a user can read end to end, link a teammate to, or hand an auditor.
+The repo's prose is engineer-facing (`README.md` capability tour, `DECISIONS.md` ADRs, `CLAUDE.md`
+invariants, `CHEATSHEET.md` commands) - none of it is organized around *what a given role does, step by
+step, with a picture of the screen in front of them.* A Security engineer triaging quarantine, a Manager
+reading the cost ledger, and an Executive glancing at a posture light each need a different document, not
+the same wall of features.
+
+### Decision
+
+Ship **one user guide per role** under `docs/guides/`, plus an index, each generated to a **fixed
+structure** so the four read as a family and a fifth role (if one is ever added) slots in unchanged. Docs
+only - no code, no schema, no prompt-prefix bytes - so every invariant is trivially preserved (the guides
+*describe* the fail-closed gate, they never touch it).
+
+- **Files.** `docs/guides/README.md` (index + "which guide is me?"), `docs/guides/developer-guide.md`,
+  `security-guide.md`, `manager-guide.md`, `executive-guide.md`. Markdown carries **no SPDX header**
+  (matches the existing `docs/*.md` convention; the header set is `harness/ desktop/ tools/
+  scanner-sidecar/` only, ADR-0086). Screenshot binaries live under `docs/guides/images/` and are
+  **placeholders in the first pass** (referenced, not committed) - the guide names exactly what each
+  capture should show so a designer can fill them later.
+
+- **Fixed per-guide structure** (the load-bearing contract this ADR freezes):
+  1. **Title + role one-liner** and a **"Who this is for / What you'll see"** block - the role's landing
+     surface and default rails, taken verbatim-in-spirit from ADR-0088's foregrounding map.
+  2. **Getting started** - the onboarding recap (role picker -> email -> tour; switch in Settings ->
+     Profile; replay the tour from About), scoped to that role.
+  3. **Capability walkthroughs** - the role's foregrounded capabilities, each a numbered **step-by-step**
+     with two mandatory ingredients:
+     - a **screenshot placeholder**: `![alt text](images/<name>.png)` immediately followed by an italic
+       *Figure N -* caption that explains **what the image shows and what to capture** (so the placeholder
+       is self-documenting before the PNG exists);
+     - one or more **Tips** as GitHub callouts (`> [!TIP]`) for design considerations, shortcuts, and
+       gotchas. Risk/safety asides use `> [!NOTE]` / `> [!WARNING]`.
+  4. **Notes and References** - a numbered list mixing (a) **LUCID public-repo documentation** the user
+     should read next (specific `README.md` sections, ADRs, `CLAUDE.md`/`AGENTS.md`, `CHEATSHEET.md`,
+     `PROGRESS.md`) and (b) **external design-pattern / research** sources with short relevance snippets,
+     **all in MLA 9 format**. In-text superscript-style references (`[1]`, `[2]`) point back into this list.
+
+- **Scope per role** (mirrors ADR-0088 so the guide foregrounds what the chrome does):
+  - *Developer* - chat + composer (model picker, edit modes, thinking), the Memory inspector
+    (context / cache / cost), Knowledge/RAG, the read-write gated IDE, `/goal` loop basics, command palette.
+  - *Security* - the Security inspector + badge, quarantine/approvals queue, the fail-closed gate &
+    scanner, exec-approval + Speed<->Risk dial, egress approval, the OCSF audit-export, Dev-logs.
+  - *Manager* - the Cost & Savings ledger + showback, AI-authorship LOC ledger, `/goal` loop success-rate
+    & after-action reports, budget kill switch, AskSage gov-usage.
+  - *Executive* - the posture + spend summary, the Engineering Update brief + podcast (P-BRIEF),
+    governance posture (gov-lockdown / FIPS / CUI-isolated / audit-export-ready).
+
+- **Citations are real or they don't ship.** Every LUCID reference points to a file/section/ADR that
+  exists in this repo at authoring time; external citations are to real, locatable works. A reference whose
+  target cannot be verified is dropped, not faked (fail-closed applied to prose).
+
+### Phasing
+
+- **P-DOC.1** *(this increment)* - the structure + a first-pass of all four guides + the index, wired into
+  the README "Project docs" table. Screenshots are documented placeholders.
+- **P-DOC.2** *(later)* - capture and commit the real PNGs against each placeholder caption; add a
+  link-check to CI so a renamed ADR/section can't silently rot a guide reference.
+- **P-DOC.3** *(later)* - a "generate/refresh guides" maintenance pass keyed off new ADRs, and optional
+  in-app deep-links (a role guide opens from the About panel next to "Take the tour").
+
+### Consequences
+
+- Each role gets a durable, linkable reference in its own language, consistent across the four because the
+  structure is fixed - and a new role is a new file, not a redesign.
+- Docs-only and additive: no schema change, no migration, no prompt-prefix byte, no enforcement path
+  touched. The guides can never weaken the gate; they only explain it.
+- The screenshot-placeholder convention lets the prose ship now and the images land later without churning
+  the guide structure (the caption is the spec for the capture).
+- Risk: a guide reference (ADR number, README anchor) can rot when the repo moves. Mitigated now by
+  verifying every cited target exists at authoring time, and deferred-hardened by the P-DOC.2 CI link-check.
+- Cost: the guides duplicate some README capability prose by design (role-scoped, step-by-step) - accepted;
+  the README is a feature tour, the guides are task walkthroughs.
+
+### Invariants preserved
+
+Docs-only + additive. #3 fail-closed untouched (the guides describe the gate, never gate anything),
+#5/#7 untrusted-delimiting + closed trust-label set untouched, #6 frozen prefix untouched (no prompt bytes),
+#8 event emission unaffected, #10 DuckDB schema untouched. Markdown docs carry no SPDX header per the
+existing `docs/*.md` convention (ADR-0086 scopes the header to source trees only).
+
+### Relates to
+
+ADR-0088 (role onboarding - the foregrounding map each guide mirrors), ADR-0089 (the coachmark tour - the
+guides are its durable, re-readable counterpart), ADR-0087 (About panel - future deep-link target, P-DOC.3),
+ADR-0086 (BUSL licensing + the source-only header scope), `README.md` (the capability tour the guides
+task-scope per role), `CLAUDE.md`/`AGENTS.md` (invariants the Security guide cites), `CHEATSHEET.md`
+(commands the Developer guide cites), new `docs/guides/` (the four guides + index this ADR defines).
