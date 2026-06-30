@@ -21,7 +21,7 @@ export const MODEL_FAMILIES: ModelFamily[] = [
   { id: "rag", label: "AskSage RAG", icon: "search", match: /(^|[/-])rag$/i },
 ];
 // Catch-all for anything unmatched (e.g. a newly-added open-source provider). `/.^/` never matches,
-// so `familyOf` only returns this via the explicit fallback — keeping it out of the ordered scan.
+// so `familyOf` only returns this via the explicit fallback - keeping it out of the ordered scan.
 export const OTHER_FAMILY: ModelFamily = { id: "other", label: "Other models", icon: "bolt", match: /.^/ };
 
 /** The family a model id belongs to (first match wins; OTHER_FAMILY if none). */
@@ -33,10 +33,10 @@ export function familyOf(value: string): ModelFamily {
 // ── P-IDE.1c (ADR-0029): catalog curation + data-sovereignty gating ──────────
 // omp exposes no deprecation/provider metadata over ACP, so these rules live here (pure + tested).
 
-/** Gov-gateway (AskSage CIV/MIL) model — only shown when an AskSage key is configured. */
+/** Gov-gateway (AskSage CIV/MIL) model - only shown when an AskSage key is configured. */
 export function isGovModel(value: string): boolean { return /asksage/i.test(value); }
 
-/** omp auxiliary (non-chat) models — tab-completion + codex auto-review. Never shown in the picker. */
+/** omp auxiliary (non-chat) models - tab-completion + codex auto-review. Never shown in the picker. */
 export function isAuxiliaryModel(value: string): boolean { return /tab_flash|tab_jump|auto-review/i.test(value); }
 
 /** China-origin model (no U.S. data sovereignty). Hidden until the user acknowledges in Settings.
@@ -55,7 +55,7 @@ export function gptVersion(value: string): number | null {
 /** Deprecated/superseded model under the "moderate" policy (ADR-0029 P-IDE.1c):
  *  - dated-snapshot duplicates (…-20251001) and `-latest` aliases
  *  - clearly-legacy families: Claude 3.x and Claude 4.0/4.1 (keep 4.5+), Gemini 2.0 (keep 2.5+)
- *  - GPT below 5.4 everywhere (gov AND direct) — o-series and gpt-oss are version-less, kept. */
+ *  - GPT below 5.4 everywhere (gov AND direct) - o-series and gpt-oss are version-less, kept. */
 export function isDeprecatedModel(value: string): boolean {
   const s = value.toLowerCase();
   if (/-\d{8}(\b|$)/.test(s) || /-latest(\b|$)/.test(s)) return true;     // dated snapshot / alias
@@ -99,7 +99,7 @@ export function filterModels(models: ModelOption[], q: string): ModelOption[] {
 }
 
 /** Bucket models into families, dropping empty ones. Family order defaults to MODEL_FAMILIES (OTHER
- *  last); pass `order` (a list of family ids) to override — e.g. gov-first when AskSage is configured.
+ *  last); pass `order` (a list of family ids) to override - e.g. gov-first when AskSage is configured.
  *  Any family omitted from `order` is appended in its default position. Order WITHIN a family
  *  preserves the caller's input order (already curated upstream). */
 export function groupByFamily(models: ModelOption[], order?: string[]): { fam: ModelFamily; models: ModelOption[] }[] {

@@ -36,8 +36,8 @@
 <br/>
 
 <a href="https://github.com/mlcyclops/lucidagentide/releases/latest/download/LucidAgentIDE-Setup.exe"><img src="https://img.shields.io/badge/Download-Windows%20Installer-2ea44f?style=for-the-badge&logo=windows&logoColor=white" alt="Download Windows installer (latest release)" /></a>
-<a href="https://github.com/mlcyclops/lucidagentide/releases/latest/download/LucidAgentIDE-mac-arm64.zip"><img src="https://img.shields.io/badge/Download-macOS%20Apple%20Silicon-000000?style=for-the-badge&logo=apple&logoColor=white" alt="Download macOS Apple Silicon (latest release)" /></a>
-<a href="https://github.com/mlcyclops/lucidagentide/releases/latest/download/LucidAgentIDE-mac-x64.zip"><img src="https://img.shields.io/badge/macOS-Intel-555555?style=for-the-badge&logo=apple&logoColor=white" alt="Download macOS Intel (latest release)" /></a>
+<a href="https://github.com/mlcyclops/lucidagentide/releases/latest/download/LucidAgentIDE-mac-arm64.pkg"><img src="https://img.shields.io/badge/Download-macOS%20Apple%20Silicon%20(.pkg)-000000?style=for-the-badge&logo=apple&logoColor=white" alt="Download macOS Apple Silicon .pkg installer (latest release)" /></a>
+<a href="https://github.com/mlcyclops/lucidagentide/releases/latest/download/LucidAgentIDE-mac-x64.pkg"><img src="https://img.shields.io/badge/macOS-Intel%20(.pkg)-555555?style=for-the-badge&logo=apple&logoColor=white" alt="Download macOS Intel .pkg installer (latest release)" /></a>
 <a href="https://github.com/mlcyclops/lucidagentide/releases/latest/download/LucidAgentIDE-x86_64.AppImage"><img src="https://img.shields.io/badge/Download-Linux%20AppImage-f0a500?style=for-the-badge&logo=linux&logoColor=white" alt="Download Linux AppImage (latest release)" /></a>
 <a href="https://github.com/mlcyclops/lucidagentide/releases/latest"><img src="https://img.shields.io/github/v/release/mlcyclops/lucidagentide?label=latest&style=for-the-badge&color=c64bd6&sort=semver" alt="Latest release version" /></a>
 
@@ -79,6 +79,7 @@ personalization internals are proprietary and intentionally undocumented here - 
 
 - [<img src=".github/assets/icons/overview.svg" width="16" alt=""> Overview](#-overview)
 - [<img src=".github/assets/icons/novelty.svg" width="16" alt=""> What makes it novel](#-what-makes-it-novel)
+- [<img src=".github/assets/icons/models.svg" width="16" alt=""> Any model, any provider](#-any-model-any-provider)
 - [🎯 Who it's for](#-who-its-for)
 - [💰 Token Cost Savings & Showback](#-token-cost-savings--showback)
 - [<img src=".github/assets/icons/architecture.svg" width="16" alt=""> Architecture](#-architecture)
@@ -89,6 +90,7 @@ personalization internals are proprietary and intentionally undocumented here - 
 - [<img src=".github/assets/icons/builton.svg" width="16" alt=""> Built on](#-built-on)
 - [<img src=".github/assets/icons/quickstart.svg" width="16" alt=""> Quick start](#-quick-start)
 - [<img src=".github/assets/icons/desktop.svg" width="16" alt=""> Desktop app](#-desktop-app)
+- [<img src=".github/assets/icons/onboarding.svg" width="16" alt=""> Onboarding](#-onboarding)
 - [🤝 Contributing](#-contributing)
 - [<img src=".github/assets/icons/roadmap.svg" width="16" alt=""> Roadmap](#-roadmap)
 - [<img src=".github/assets/icons/docs.svg" width="16" alt=""> Project docs](#-project-docs)
@@ -144,6 +146,42 @@ Twelve things you rarely find together. Each is in plain language below - the de
 
 ---
 
+## <img src=".github/assets/icons/models-animated.svg" width="28" align="top" alt=""> Any model, any provider
+
+**Bring whatever you already pay for.** LUCID doesn't lock you to one vendor - it exposes the model
+catalog from the open agent runtime (oh-my-pi) and lets you authenticate **either way**:
+
+- **Sign in with your subscription plan (OAuth).** Use your existing **Claude Pro / Max**, **ChatGPT
+  Plus / Pro**, or **Google Gemini** login - no API key, no per-token bill. omp's secure credential vault
+  owns the tokens.
+- **Or paste an API key (metered).** Pay-as-you-go usage straight from the provider, with the real
+  remaining rate limit read from response headers.
+
+Every model in the picker carries a **cost + intelligence card** (token-expense and capability stars, best-use,
+context window) so you can pick the right tier at a glance - and the security gate scans every turn the same
+way, whichever model you choose.
+
+<div align="center">
+<br/>
+<img src=".github/assets/model-picker-gemini3.1pro.JPG" alt="LucidAgentIDE model picker - a searchable list of 47 models across providers (Claude, Gemini, GPT, Grok, AskSage gov), each with intelligence stars and context size, plus a premium hover card showing token expense, intelligence level, best-use, and the model id" width="720" />
+<br/>
+<sub><b>↑ The model picker</b> - 47 models across every connected provider, each with a premium cost + intelligence hover card. Search, then pick by capability and price.</sub>
+</div>
+
+### Providers LUCID supports today
+
+| Tier | Providers | Auth |
+| --- | --- | --- |
+| **U.S. frontier** | **Anthropic** (Claude), **OpenAI** (ChatGPT), **Google** (Gemini), **xAI** (Grok), **Perplexity** (Sonar) | OAuth subscription **or** API key |
+| **Government gateway** | **AskSage** - accredited proxy to Claude, GPT, and Gemini inside GovCloud, with scanned personas + dataset-grounded RAG | API key |
+| **More providers** _(third-party / non-U.S. / custom, behind an acknowledgement)_ | **OpenRouter**, **DeepSeek**, **Moonshot / Kimi**, **Groq** | API key |
+
+<sub>The catalog is **driven by omp** - as the runtime adds providers and models in future builds, they appear
+in the picker automatically. Non-U.S. / restricted-origin models stay hidden behind a data-sovereignty
+acknowledgement, and an enterprise policy can pin the org to the gov gateway only.</sub>
+
+---
+
 ## 🎯 Who it's for
 
 | If you are… | Why it matters here |
@@ -154,7 +192,7 @@ Twelve things you rarely find together. Each is in plain language below - the de
 | **Anyone leaving ChatGPT / Claude / Gemini** | **One-command import** brings your history in (gated + distilled into an encrypted personal graph) and keeps your context **across sessions**. |
 | **Agent-platform builders** | A worked, test-backed example of adding security, provenance, and memory **around** a fast runtime via hooks/tools/SDK - **extend, never fork**. |
 
-It's a **desktop app you can just download and run** (Windows installer/portable + macOS), and a **source-available codebase** you can study, run from source, and build on.
+It's a **desktop app you can just download and run** (Windows installer/portable + macOS), and a **source-available codebase** you can study, run from source, and build on. Each role gets a tailored first view plus a written, end-to-end **[role guide](docs/guides/README.md)** (Developer / Security / Manager / Executive).
 
 ## 💰 Token Cost Savings & Showback
 
@@ -345,7 +383,7 @@ if poisoned, *before* it can ever be embedded or recalled. (Keystone #2 holds fo
 
 ## 🧩 Agent Skills directory & enterprise registry (Coming Soon)
 
-> **Designed in [ADR-0088](DECISIONS.md) (the directory + management menu) and [ADR-0089](DECISIONS.md)
+> **Designed in [ADR-0097](DECISIONS.md) (the directory + management menu) and [ADR-0098](DECISIONS.md)
 > (the enterprise registry spike).** An [Agent Skill](https://agentskills.io) is a `SKILL.md` folder the
 > agent loads on demand - procedural memory that costs only a few metadata tokens until it triggers.
 > LucidAgentIDE already ships a curated bundled corpus and scan-gated skill import; next is one place to
@@ -364,7 +402,7 @@ LucidAgentIDE is a thin, principled layer over best-in-class building blocks - c
 |:--|:--|:--|
 | [**oh-my-pi (omp)**](https://omp.sh) <sub>· [repo](https://github.com/can1357/oh-my-pi)</sub> | A fast agentic coding runtime: tool-calling, model routing, sessions, sandboxing, ACP, extensions, skills | The host. Everything is added via omp **hooks / custom tools / SDK** - **never a fork** |
 | [**DuckDB**](https://duckdb.org) | An in-process analytical (OLAP) SQL database | The append-only **provenance + memory store** (findings, telemetry, semantic memory, run lineage) |
-| [**Obsidian**](https://obsidian.md) | A local-first Markdown knowledge base with `[[wikilinks]]` + a graph view | The **export format** for the personalization knowledge graph — one click decrypts your Personal + Work nodes into a portable vault (notes, `[[wikilinks]]`, escaped; CUI excluded by design; audited) |
+| [**Obsidian**](https://obsidian.md) | A local-first Markdown knowledge base with `[[wikilinks]]` + a graph view | The **export format** for the personalization knowledge graph - one click decrypts your Personal + Work nodes into a portable vault (notes, `[[wikilinks]]`, escaped; CUI excluded by design; audited) |
 | [**BoringSSL**](https://boringssl.googlesource.com/boringssl/) | Google's streamlined fork of OpenSSL (Bun's crypto backend) | Context for the **FIPS posture** - FIPS-approved algorithms; no FIPS *mode* in Bun's runtime |
 | [**headroom**](https://github.com/chopratejas/headroom) | An on-device, OpenAI-compatible token-compression proxy (60-95% reduction) | **Opt-in** context compression to stretch gov token quotas |
 | [**AskSage**](https://asksage.ai) | An accredited government generative-AI gateway fronting OpenAI/Anthropic/Google | An omp **provider extension**: lockdown, scanned personas, dataset-grounded RAG |
@@ -380,12 +418,18 @@ cd scanner-sidecar && uv sync     # pinned Python sidecar venv
 
 # prove it end-to-end
 bun run demo-00                   # omp echo round-trip + scanner + fail-closed proof
-bun test harness                  # harness suite (incl. the fail-closed keystone)
+make test                         # full suite: harness + desktop + scanner sidecar (1,100+ tests)
 bun run demo-P4.3                 # poisoned memory can't auto-promote (keystone #2)
+bun run demo-P2.1                 # unicode scanner: every finding fires, clean corpus is FP-free
 ```
 
 Requires [Bun](https://bun.sh) and [uv](https://docs.astral.sh/uv/). `make` is optional - the
 [`Makefile`](Makefile) is the canonical task spec, mirrored as bun scripts on hosts without `make`.
+
+**Verification.** Every increment ships a runnable proof - `make demo-<id>` (e.g. `demo-P-EXEC.1`,
+`demo-P-TOOLFAIL.1`, `demo-P-EGRESS.2`; `make help` lists them all) - and CI runs the full test suite plus
+`tsc --noEmit` across all three TypeScript projects on every push. New work lands one increment per session
+behind its own ADR + demo + tests; see [`CLAUDE.md`](CLAUDE.md) for the invariants and session ritual.
 
 ## <img src=".github/assets/icons/desktop.svg" width="28" align="top" alt=""> Desktop app
 
@@ -418,14 +462,17 @@ CI builds desktop installers for **all three platforms** on every tag push:
 | Platform | Artifact | Status | Download (latest release) |
 |:--|:--|:--|:--|
 | **Windows** | NSIS installer + portable `.exe` (x64) | [![Windows Build](https://img.shields.io/github/actions/workflow/status/mlcyclops/lucidagentide/build-desktop.yml?label=passing&logo=windows&logoColor=white&style=flat-square)](https://github.com/mlcyclops/lucidagentide/actions/workflows/build-desktop.yml) | [**Installer**](https://github.com/mlcyclops/lucidagentide/releases/latest/download/LucidAgentIDE-Setup.exe) · [Portable](https://github.com/mlcyclops/lucidagentide/releases/latest/download/LucidAgentIDE-portable.exe) |
-| **macOS** | `.zip` app bundle (arm64 + x64) | [![macOS Build](https://img.shields.io/github/actions/workflow/status/mlcyclops/lucidagentide/build-desktop.yml?label=passing&logo=apple&logoColor=white&style=flat-square)](https://github.com/mlcyclops/lucidagentide/actions/workflows/build-desktop.yml) | [**Apple Silicon**](https://github.com/mlcyclops/lucidagentide/releases/latest/download/LucidAgentIDE-mac-arm64.zip) · [Intel](https://github.com/mlcyclops/lucidagentide/releases/latest/download/LucidAgentIDE-mac-x64.zip) |
+| **macOS** | `.pkg` installer **+** `.zip` app bundle (arm64 + x64) | [![macOS Build](https://img.shields.io/github/actions/workflow/status/mlcyclops/lucidagentide/build-desktop.yml?label=passing&logo=apple&logoColor=white&style=flat-square)](https://github.com/mlcyclops/lucidagentide/actions/workflows/build-desktop.yml) | `.pkg`: [**Apple Silicon**](https://github.com/mlcyclops/lucidagentide/releases/latest/download/LucidAgentIDE-mac-arm64.pkg) · [Intel](https://github.com/mlcyclops/lucidagentide/releases/latest/download/LucidAgentIDE-mac-x64.pkg) · `.zip`: [arm64](https://github.com/mlcyclops/lucidagentide/releases/latest/download/LucidAgentIDE-mac-arm64.zip) · [x64](https://github.com/mlcyclops/lucidagentide/releases/latest/download/LucidAgentIDE-mac-x64.zip) |
 | **Linux** | portable `AppImage` (x64) | [![Linux Build](https://img.shields.io/github/actions/workflow/status/mlcyclops/lucidagentide/build-desktop.yml?label=passing&logo=linux&logoColor=white&style=flat-square)](https://github.com/mlcyclops/lucidagentide/actions/workflows/build-desktop.yml) | [**AppImage**](https://github.com/mlcyclops/lucidagentide/releases/latest/download/LucidAgentIDE-x86_64.AppImage) |
 
 All builds bundle [Bun](https://bun.sh) and [uv](https://docs.astral.sh/uv/) runtimes so the installed app
 needs **zero prerequisites**. Code-signing and notarization are supported when certs are configured.
 
-> **macOS:** the download is a zipped `LucidAgentIDE.app` - unzip it and drag the app into **Applications**.
-> (Builds ship as `.zip` rather than `.dmg`; in-app auto-update uses the same zip feed.)
+> **macOS:** double-click the **`.pkg`** to install `LucidAgentIDE.app` into **Applications** - the simplest
+> path. Builds are unsigned, so if Gatekeeper blocks the first launch, right-click the app -> **Open** once
+> (or System Settings -> Privacy & Security -> **Open Anyway**). Prefer no installer? The **`.zip`** is a
+> drag-to-Applications app bundle, and in-app auto-update uses that same zip feed. Or use **Homebrew** (below),
+> which installs the `.pkg` and strips quarantine for you - no Gatekeeper prompt.
 >
 > **Linux:** the download is a portable `AppImage` - `chmod +x LucidAgentIDE-x86_64.AppImage` and run it,
 > no install needed.
@@ -439,16 +486,55 @@ keeps the cask wiring current (the app itself also self-updates via electron-upd
 brew tap mlcyclops/lucid https://github.com/mlcyclops/lucidagentide
 brew trust --cask mlcyclops/lucid/lucidagentide   # Homebrew >= 6 gates third-party taps
 brew install --cask lucidagentide
-
-# Builds are UNSIGNED, so clear macOS quarantine once before first launch:
-xattr -dr com.apple.quarantine "/Applications/LucidAgentIDE.app"
 ```
 
 `brew trust` is required on Homebrew 6+, which refuses to load casks from a third-party tap until you
-explicitly trust it (older Homebrew skips this step). The `xattr` step is needed because builds are currently
-**unsigned and not notarized** - macOS Gatekeeper blocks them otherwise, and Homebrew 6 removed the
-`--no-quarantine` install flag. The cask serves both Apple Silicon and Intel automatically. To remove it
+explicitly trust it (older Homebrew skips this step). The cask installs a `.pkg`: `installer(8)` places the
+app in `/Applications` **without** the macOS quarantine flag, so it launches with **no Gatekeeper prompt**
+even though the build is unsigned/not-notarized (a `postflight` strips quarantine as belt-and-suspenders, so
+there is no manual `xattr` step). The cask serves both Apple Silicon and Intel automatically. To remove it
 later: `brew uninstall --cask lucidagentide` (add `--zap` to also delete app data).
+
+## <img src=".github/assets/icons/onboarding-animated.svg" width="28" align="top" alt=""> Onboarding
+
+First launch asks **who you are**, then gets out of your way. Pick one of four roles - **Developer**,
+**Security engineer**, **Manager**, or **Executive** - and the IDE leads with the surface that role actually
+uses: the developer lands on chat + live context/cache/cost, the analyst on the security queue, the manager
+on the cost + delivery ledger, the executive on a posture + spend summary. Nothing is ever hidden for good -
+every panel stays one `Ctrl`/`⌘`+`K` away, and a real security block always surfaces for every role. Roles
+are a cosmetic preset: they change what's *foregrounded*, never what the fail-closed gate enforces.
+
+A one-time **guided walkthrough** then spotlights the panels that matter to your role - composer, security
+queue, memory, command palette - in the same premium card style as the model picker. Skip it any time, or
+replay it later from **About -> Take the tour**. Switch roles whenever you like in **Settings -> Profile**; a
+managed GPO/MDM policy can pin the role org-wide. Every role gets its own custom animated glyph, and shortcut
+hints render per-OS (`⌘K` on macOS, `Ctrl+K` on Windows/Linux).
+
+<div align="center">
+<br/>
+<img src=".github/assets/onboarding-roles.JPG" alt="LucidAgentIDE first-run onboarding - a role picker with four animated cards (Developer, Security engineer, Manager, Executive), each showing the surface it lands on" width="720" />
+<br/>
+<sub><b>↑ The role picker</b> - choose a role to tailor the first view. Custom animated glyph per role; cosmetic only - the fail-closed security gate is identical for every role.</sub>
+<br/><br/>
+<img src=".github/assets/onboarding-tour.JPG" alt="LucidAgentIDE first-run guided walkthrough - a dimmed spotlight over a panel with a premium coachmark card (title, description, step dots, Back / Next / Skip) anchored beside it, in the same style as the model picker hover card" width="720" />
+<br/>
+<sub><b>↑ The guided walkthrough (coachmark)</b> - a dimmed, dismissable spotlight on each panel that matters to your role, in the model-picker card style; Back / Next / Skip, replayable any time from About.</sub>
+</div>
+
+### Role guides
+
+The onboarding tour teaches the UI in seconds then vanishes; for a durable, read-end-to-end reference each
+role has its own **user guide** under [`docs/guides/`](docs/guides/README.md) - task-oriented walkthroughs in
+that role's language, with step-by-step capability tours, tips/warnings, and a cited *Notes and References*
+section. Read your own, link a teammate to theirs, or hand the security guide to an auditor:
+
+- **[Developer guide](docs/guides/developer-guide.md)** - chat + model picker, edit modes, the Memory inspector (context / cache / cost), Knowledge & RAG, the gated Save, and the `/goal` loop.
+- **[Security guide](docs/guides/security-guide.md)** - the fail-closed gate + scanner, the quarantine/approvals queue, the promotion gate, per-action exec + the Speed↔Risk dial, egress approval, and the OCSF audit export.
+- **[Manager guide](docs/guides/manager-guide.md)** - the cost & savings ledger + showback, the AI-authorship LOC ledger, `/goal` after-action reports, the budget kill switch, and AskSage gov usage.
+- **[Executive guide](docs/guides/executive-guide.md)** - the posture + spend summary, the Engineering Update brief, and the governance posture tiles.
+
+> Guides ship with documented screenshot placeholders ([`docs/guides/`](docs/guides/README.md) explains the
+> capture spec); the captured images land in a follow-up pass.
 
 ## <img src=".github/assets/icons/roadmap.svg" width="28" align="top" alt=""> Roadmap
 
@@ -459,7 +545,9 @@ Obsidian-vault export), AI-authorship attribution, one-command import, a read-wr
 and the **`/goal` loop** with full loop-engineering (after-action reports, a budget kill switch, and stall
 guards). **Newest:** a local **RAG knowledge spine** (scan-gated PDF → air-gapped vector store), per-action
 **exec approval** for `bash`/`eval` + a per-command **Speed↔Risk dial** for the unattended loop,
-centrally-managed (GPO/MDM) policy, and a SIEM-ready **OCSF audit-export** seam.
+centrally-managed (GPO/MDM) policy, and a SIEM-ready **OCSF audit-export** seam. **Newest:** **role-based
+user guides** (Dev/Sec/Mgr/Exec) and a sweep of agent-trust UX fixes - an honest failed/rejected tool-call
+chip, accurate + audited handling of a local-file browser open, and a discoverable AI-authorship ledger.
 
 Every test suite passes and `tsc --noEmit` is clean across all three projects (TypeScript + Python). The
 table below is the recent slice; [`PROGRESS.md`](PROGRESS.md) has the full per-session log.
@@ -468,6 +556,8 @@ table below is the recent slice; [`PROGRESS.md`](PROGRESS.md) has the full per-s
 
 | Phase | Feature | ADR |
 |:--|:--|:--|
+| **P-DOC.1** | **Role-based user guides** - per-role (Dev/Sec/Mgr/Exec) end-to-end walkthroughs under [`docs/guides/`](docs/guides/README.md): step-by-step capability tours, tips/warnings, screenshot placeholders, and cited *Notes and References* | [ADR-0092](DECISIONS.md) |
+| **P-TOOLFAIL.1 · P-EGRESS.2 · P-LOC.3** | **Agent-trust UX** - an honest failed/rejected tool-call chip (distinguishes a tool that *failed* from one that *didn't run*, never implies a denial), a local-file browser open labeled + audited as a local file (not a website), and the AI-authorship ledger made discoverable (palette entry) + never silently vanishing | [ADR-0093/0094/0095](DECISIONS.md) |
 | **P-EXEC.1 · P-GOAL.13** | **Exec-tool safety** - per-action approval for `bash`/`eval` (read-only auto-runs, risky prompts, a catastrophic set *always* prompts/blocks) + a per-command **Speed↔Risk dial** governing the unattended `/goal` loop, with tools & blocks in the After-Action Report | [ADR-0066/0067](DECISIONS.md) |
 | **P-ENT.1-2** | **Enterprise governance** - centrally-managed (GPO/MDM) security policy that only ever *tightens* the knobs, plus a SIEM-ready, **OCSF-aligned**, metadata-only **security-audit export** seam (fail-safe sinks) | [ADR-0068/0069](DECISIONS.md) |
 | **P-RAG.1-1c** | **Local knowledge spine (RAG)** - scan-gated PDF ingest into an air-gapped DuckDB vector store, real bge-small **semantic** retrieval, delimited post-cache injection | [ADR-0058/0063/0064](DECISIONS.md) |
@@ -486,8 +576,8 @@ table below is the recent slice; [`PROGRESS.md`](PROGRESS.md) has the full per-s
 
 | Theme | ADR |
 |:--|:--|
-| **Agent Skill directory + management menu P-SKILL.4** - one governed view of every skill (bundled · project · user · `.agents`) with source, trust label, enable/disable, inspect, re-scan, and remove | [ADR-0088](DECISIONS.md) |
-| **Enterprise Skills Registry P-SKILLREG.1** - sign/scan/version/distribute skills as portable OCI artifacts (S3 backend) across AWS/Azure/GCP/OCI/IBM + VMware/Nutanix/ONTAP/KVM, incl. IL5; public ships the registry-reader seam, runbooks are private add-on IP | [ADR-0089](DECISIONS.md) |
+| **Agent Skill directory + management menu P-SKILL.4** - one governed view of every skill (bundled · project · user · `.agents`) with source, trust label, enable/disable, inspect, re-scan, and remove | [ADR-0097](DECISIONS.md) |
+| **Enterprise Skills Registry P-SKILLREG.1** - sign/scan/version/distribute skills as portable OCI artifacts (S3 backend) across AWS/Azure/GCP/OCI/IBM + VMware/Nutanix/ONTAP/KVM, incl. IL5; public ships the registry-reader seam, runbooks are private add-on IP | [ADR-0098](DECISIONS.md) |
 | **Exec-tool safety P-EXEC.2** - extend the per-action gate to `ssh` (key = host) and `task` sub-agents | [ADR-0066](DECISIONS.md) |
 | **SIEM connectors** - Splunk HEC / syslog-CEF / Elastic / cloud sinks behind the now-shipped OCSF audit-export `Sink` interface | [ADR-0069](DECISIONS.md) |
 | **AskSage dataset training** - ground the gov gateway on the local knowledge spine | [ADR-0053](DECISIONS.md) |
@@ -501,7 +591,7 @@ Built in the open, **one disciplined increment at a time.** If you want to run i
 or propose a change, start here:
 
 - **Read [`CLAUDE.md`](CLAUDE.md) first.** It's the load-bearing contract - fail-closed, extend omp (don't fork), frozen contracts, a byte-stable prompt. A change that silently breaks an invariant won't land.
-- **ADR-first.** Non-trivial work begins as an ADR in [`DECISIONS.md`](DECISIONS.md) (89 and counting) - pick one up, or propose your own.
+- **ADR-first.** Non-trivial work begins as an ADR in [`DECISIONS.md`](DECISIONS.md) (98 and counting) - pick one up, or propose your own.
 - **One increment per change.** Small, verifiable, with a demo and tests. See [`CHEATSHEET.md`](CHEATSHEET.md) for day-to-day commands.
 - **Tests are the gate.** `bun test harness && bun test desktop` stay green and `tsc --noEmit` is clean; CI runs the build + CodeQL on every push.
 - **The only Python is the scanner sidecar.** Everything else is TypeScript on Bun - please don't add a second Python surface.
@@ -510,7 +600,7 @@ or propose a change, start here:
 robustness (Windows + macOS installers).
 
 > **License.** The LucidAgentIDE core (this repository) is **source-available under the Business Source
-> License 1.1** (BUSL-1.1) — the model HashiCorp uses for Terraform. You may read, modify, self-host, and
+> License 1.1** (BUSL-1.1) - the model HashiCorp uses for Terraform. You may read, modify, self-host, and
 > use it **in production**, *except* to offer a hosted or embedded commercial product that competes with
 > TechLead 187 LLC's products. On **2030-06-27** (the Change Date) each version converts to the **Mozilla
 > Public License 2.0**. Full terms: [`LICENSE`](LICENSE). © 2026 TechLead 187 LLC. The premium enterprise
@@ -523,10 +613,11 @@ robustness (Windows + macOS installers).
 | Doc | What's in it |
 |:--|:--|
 | [`CLAUDE.md`](CLAUDE.md) | **Read first.** The load-bearing invariants (fail-closed, extend-don't-fork, frozen contracts, byte-stable prefix) |
-| [`DECISIONS.md`](DECISIONS.md) | Architecture decision records (ADR-0001 … ADR-0053) |
+| [`DECISIONS.md`](DECISIONS.md) | Architecture decision records (ADR-0001 … ADR-0096) |
 | [`PROGRESS.md`](PROGRESS.md) | Per-session build log: shipped / stubbed / next |
 | [`desktop/README.md`](desktop/README.md) | The desktop GUI + dev server |
 | [`CHEATSHEET.md`](CHEATSHEET.md) | Day-to-day commands |
+| [`docs/guides/`](docs/guides/README.md) | **Role-based user guides** — Developer / Security / Manager / Executive walkthroughs |
 
 <div align="center">
 <br/>

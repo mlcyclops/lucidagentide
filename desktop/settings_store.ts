@@ -31,6 +31,12 @@ export interface McpServerEntry {
   enabled: boolean;
 }
 
+// ADR-0088 (P-ROLE.1): the four onboarding roles. A role is a COSMETIC presentation preset — it
+// shapes which surfaces are foregrounded by default. It never reads into or weakens the security
+// gate (invariant #3). Unset folds to "developer", the safe, full-surface default.
+export type UserRole = "developer" | "security" | "manager" | "executive";
+export const USER_ROLES: UserRole[] = ["developer", "security", "manager", "executive"];
+
 export interface GuiSettings {
   username?: string;
   // Corporate email — the attribution identity for code-activity / per-model LOC (ADR-0030).
@@ -84,9 +90,18 @@ export interface GuiSettings {
   // P-IDE.1c (ADR-0029): the user acknowledged the data-sovereignty warning for China-origin models
   // (DeepSeek/Kimi/MiniMax/GLM/…). Until set, those models are hidden from the picker. Off by default.
   chinaModelsAcknowledged?: boolean;
+  // The user acknowledged the third-party / non-U.S. / custom "More providers" warning. Until set, that
+  // section's provider list stays hidden behind a typed ACKNOWLEDGE gate. Off by default.
+  thirdPartyProvidersAcknowledged?: boolean;
   // P-GOAL.6 (ADR-0048): the model the /goal loop's CHECKER runs on, overriding the maker's model.
   // "" / unset = auto (the harness recommends a cheap, capable, recent model from the user's picker).
   checkerModel?: string;
+  // ADR-0088 (P-ROLE.1): the user's chosen role. Cosmetic preset; unset = "developer". Captured at
+  // first-run onboarding (before the email step) and switchable in Settings → Profile.
+  userRole?: UserRole;
+  // ADR-0089 (P-ROLE.1b): the first-run guided walkthrough has been shown (finished OR skipped).
+  // Replay-guard so the tour never re-appears uninvited; the About "Take the tour" button ignores it.
+  tourSeen?: boolean;
 }
 
 export const ASKSAGE_DEFAULT_LIMIT = 200_000;
@@ -126,6 +141,28 @@ export function setRateLimitProbe(enabled: boolean): GuiSettings {
 }
 export function setDeveloperMode(enabled: boolean): GuiSettings {
   const s = load(); s.developerMode = enabled; save(s); return s;
+}
+
+// ── ADR-0088 / ADR-0089 (P-ROLE.1 / .1b): onboarding role + first-run tour state ──────────────
+/** Fold any stored/incoming value to a valid role — unknown/empty → the safe "developer" default.
+ *  Pure (no file IO) so it is unit-testable without touching the on-disk settings. */
+export function normalizeRole(r: string | undefined | null): UserRole {
+  return r && (USER_ROLES as string[]).includes(r) ? (r as UserRole) : "developer";
+}
+/** The user's effective role. Unset or unknown folds to the safe, full-surface "developer" default. */
+export function userRole(): UserRole { return normalizeRole(load().userRole); }
+/** Whether the user has explicitly chosen a role yet (drives the first-run role step). */
+export function roleChosen(): boolean {
+  const r = load().userRole;
+  return !!r && (USER_ROLES as string[]).includes(r);
+}
+export function setUserRole(role: UserRole): GuiSettings {
+  const s = load(); s.userRole = normalizeRole(role); save(s); return s;
+}
+/** Whether the first-run walkthrough has already been shown (finished or skipped). */
+export function tourSeen(): boolean { return !!load().tourSeen; }
+export function setTourSeen(seen: boolean): GuiSettings {
+  const s = load(); s.tourSeen = !!seen; save(s); return s;
 }
 
 // ── P-MCP.1 (ADR-0020): MCP server registry ───────────────────────────────────────
@@ -214,6 +251,11 @@ export function setProfile(p: { username?: string; email?: string }): GuiSetting
 export function chinaModelsAcknowledged(): boolean { return !!load().chinaModelsAcknowledged; }
 export function setChinaModelsAcknowledged(on: boolean): GuiSettings {
   const s = load(); s.chinaModelsAcknowledged = on; save(s); return s;
+}
+/** Acknowledgement gate for the third-party / non-U.S. / custom "More providers" section. */
+export function thirdPartyProvidersAcknowledged(): boolean { return !!load().thirdPartyProvidersAcknowledged; }
+export function setThirdPartyProvidersAcknowledged(on: boolean): GuiSettings {
+  const s = load(); s.thirdPartyProvidersAcknowledged = on; save(s); return s;
 }
 /** P-LOC.1 (ADR-0031): the last omp-reported active model, used to tag AI-LOC ledger rows from the
  *  first edit of a session. Empty until omp reports one (then the gate records model 'unknown'). */

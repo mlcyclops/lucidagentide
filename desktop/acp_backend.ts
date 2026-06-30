@@ -37,8 +37,10 @@ import { formatSpend } from "./loop_report.ts";
 import { assessReadiness, maturedGoalFrom, mergeMatured, parsePreflightJson, type PreflightSpec, preflightSystemPrompt, preflightUserPrompt, type ReadinessReport, relevantPriorRuns, renderLoopDesign, successCriteria, summarizePriorRuns } from "./loop_preflight.ts";
 import { execFileSync } from "node:child_process";
 import { type Automation, listAutomations, nextDueAutomation, updateAutomation } from "./automations.ts";
-import { type EgressChoice, egressDecision, recordEgress } from "./egress_policy.ts";
+import { type EgressChoice, egressDecision, isLocalFileTarget, recordEgress } from "./egress_policy.ts";
+import { previewablePath } from "./preview_resolve.ts";
 import { type ExecChoice, type ExecClass, classifyCommand, classifyEval, execStore, execVerdict, recordExec } from "./exec_policy.ts";
+import { toolFailureReason } from "./tool_failure.ts";
 
 // P-EGRESS.1 (ADR-0062): the network-reaching tools omp is told to PROMPT for (acp_config.yml). When omp
 // requests permission for one of these, the desktop shows the per-website approval dialog instead of
@@ -77,6 +79,12 @@ const EGRESS_OPTIONS: { optionId: string; name: string; kind?: string }[] = [
   { optionId: "egress:danger", name: "Always allow every site", kind: "danger" },
   { optionId: "egress:deny", name: "Block", kind: "reject" },
 ];
+// P-EGRESS.2 (ADR-0094): opening a LOCAL file in a browser has no "site" to remember, so it offers only
+// open-once / block (a host-pin would persist a junk key for a file path). Still a PROMPT — never auto-allow.
+const EGRESS_LOCAL_OPTIONS: { optionId: string; name: string; kind?: string }[] = [
+  { optionId: "egress:allow-once", name: "Open once", kind: "allow" },
+  { optionId: "egress:deny", name: "Block", kind: "reject" },
+];
 /** Pull the URL (browser) or query (web_search) an egress tool call targets, from its rawInput/title. */
 function egressTarget(tc: any): string | null {
   const ri = tc?.rawInput ?? tc?.input ?? {};
@@ -111,7 +119,8 @@ export type ChatEvent =
   | { type: "tool"; name: string; detail: string }
   | { type: "subagent"; id: string; agent: string; title: string; assignments: string[] }
   | { type: "block"; tool: string; reason: string; severity: string; findings: string; id?: string; quarantined?: boolean }
-  | { type: "permission"; id: string; tool: string; detail: string; options: { optionId: string; name: string; kind?: string }[]; url?: string; egress?: boolean; exec?: boolean; program?: string; reason?: string; danger?: boolean }
+  | { type: "permission"; id: string; tool: string; detail: string; options: { optionId: string; name: string; kind?: string }[]; url?: string; egress?: boolean; localFile?: boolean; exec?: boolean; program?: string; reason?: string; danger?: boolean }
+  | { type: "preview-available"; path: string } // P-PREVIEW.2 (ADR-0096): the agent wrote a previewable file
   | { type: "usage"; used: number; size: number; cost: number }
   // P-GOAL.1 (ADR-0046): /goal loop events — an iteration begins, the separate checker's verdict,
   // the loop met its condition, or it stopped (cap / no-progress).
@@ -262,6 +271,11 @@ class Backend {
                 // bookkeeping while a task runs — don't surface them as separate tool chips.
               } else {
                 this.emit({ type: "tool", name: String(u.kind ?? u.title ?? "tool"), detail: String(u.title ?? ri.command ?? "") });
+                // P-PREVIEW.2 (ADR-0096): if this write/edit produced a browser-previewable file, tell the UI
+                // so it can auto-surface it in the Preview panel. Pure detection (previewablePath); the path
+                // is still gated by the resolver before anything renders.
+                const pv = previewablePath(String(u.kind ?? u.title ?? ""), ri);
+                if (pv) this.emit({ type: "preview-available", path: pv });
               }
               break;
             }
@@ -269,7 +283,11 @@ class Backend {
             // gate AND for ordinary tool failures, so it must NOT claim "blocked by the security
             // gate" (that mislabel made benign failures look like quarantines). The authoritative
             // security block is the gate's own stderr signal, handled in onStderr below.
-            case "tool_call_update": if (u.status === "failed" || u.status === "rejected") this.emit({ type: "block", tool: String(u.kind ?? "tool"), reason: "tool call rejected", severity: "low", findings: "", quarantined: false }); break;
+            // P-TOOLFAIL.1 (ADR-0093): surface omp's ACTUAL status + message instead of a flat
+            // "tool call rejected" — distinguish a tool that ran-and-errored ("failed") from one that
+            // never ran ("rejected": refused / unavailable / cancelled), so the neutral chip says WHY
+            // and is never mistaken for a security denial. (toolFailureReason is pure; see tool_failure.ts.)
+            case "tool_call_update": if (u.status === "failed" || u.status === "rejected") this.emit({ type: "block", tool: String(u.kind ?? "tool"), reason: toolFailureReason(u).reason, severity: "low", findings: "", quarantined: false }); break;
             case "usage_update": this.emit({ type: "usage", used: Number(u.used ?? 0), size: Number(u.size ?? 0), cost: Number(u.cost?.amount ?? 0) }); break;
             case "available_commands_update": this.commands = u.availableCommands ?? []; break;
             case "config_option_update": if (u.configOptions) { this.configOptions = u.configOptions; this.syncModelEnv(); } break;
@@ -316,11 +334,18 @@ class Backend {
             // EVEN in Agent mode (egress is never silently auto-approved). Fail-closed: no live UI ⇒ deny.
             const isEgress = [...EGRESS_TOOLS].some((t) => toolName.includes(t)) || (!!target && /^https?:\/\//i.test(target));
             if (isEgress) {
-              if (target && egressDecision(target) === "allow") {
+              // P-EGRESS.2 (ADR-0094): a browser-open of a LOCAL file (file:// or an absolute path) is not a
+              // website visit — a host-based standing allow can't apply, so we still PROMPT, but with an
+              // accurate local-file dialog (and never persist a host decision for it).
+              const localFile = !!target && isLocalFileTarget(target);
+              if (!localFile && target && egressDecision(target) === "allow") {
                 const a = opts.find((o) => /allow/i.test(o.kind ?? o.optionId ?? "")) ?? opts[0];
                 return a ? { outcome: { outcome: "selected", optionId: a.optionId } } : { outcome: { outcome: "cancelled" } };
               }
-              if (this.askActive && this.listener) return this.askEgress(params, opts, target ?? toolName);
+              if (this.askActive && this.listener) return this.askEgress(params, opts, target ?? toolName, localFile);
+              // P-ENT.3 (ADR-0094): no live UI to ask → fail-closed block, now AUDITED (was a silent block
+              // with no SecurityEvent — the one gate path that left no trail).
+              emitSecurityEvent({ category: "egress", type: "egress_decision", decision: "block", severity: "medium", tool: localFile ? "egress-local-file" : "egress", reason: `blocked (no UI to ask) · ${target ?? toolName}`.slice(0, 200), sessionId: this.sessionId ?? undefined });
               return { outcome: { outcome: "cancelled" } }; // no UI to ask → block the egress
             }
             // Ask mode (and only inside a live chat turn): hand the decision to the user.
@@ -451,12 +476,14 @@ class Backend {
 
   /** P-EGRESS.1 (ADR-0062): forward an EGRESS request as the per-website approval dialog (the rich
    *  options + the target URL for the Cloudflare-Radar check). The user's choice is persisted to the
-   *  egress store, then mapped back to omp's own allow/deny option. Fail-closed: timeout ⇒ deny. */
-  private askEgress(params: any, opts: any[], target: string): Promise<any> {
+   *  egress store, then mapped back to omp's own allow/deny option. Fail-closed: timeout ⇒ deny.
+   *  P-EGRESS.2 (ADR-0094): when `localFile`, the target is a local file open (not a website) — show the
+   *  open-once/block options, label it a local-file event in the audit, and persist no host decision. */
+  private askEgress(params: any, opts: any[], target: string, localFile = false): Promise<any> {
     const id = `perm_${++this.permSeq}`;
     const tc = params?.toolCall ?? params?.tool_call ?? {};
     this.pendingPerms++;
-    this.emit({ type: "permission", id, tool: String(tc.kind ?? "browser"), detail: target, url: target, egress: true, options: EGRESS_OPTIONS });
+    this.emit({ type: "permission", id, tool: String(tc.kind ?? "browser"), detail: target, url: target, egress: true, localFile, options: localFile ? EGRESS_LOCAL_OPTIONS : EGRESS_OPTIONS });
     const allowOpt = opts.find((o) => /allow/i.test(o.kind ?? o.optionId ?? "")) ?? opts[0];
     const denyOpt = opts.find((o) => /(deny|reject|cancel|no)/i.test(o.kind ?? o.optionId ?? ""));
     const approve = () => allowOpt ? { outcome: { outcome: "selected", optionId: allowOpt.optionId } } : { outcome: { outcome: "cancelled" } };
@@ -468,9 +495,10 @@ class Backend {
         const choice = String(optionId ?? "").replace(/^egress:/, "") as EgressChoice;
         const denied = !optionId || choice === "deny";
         // P-ENT.2 (ADR-0069): the egress (network-reach) decision as a SecurityEvent (fail-safe).
-        emitSecurityEvent({ category: "egress", type: "egress_decision", decision: denied ? "block" : "allow", severity: "medium", tool: "egress", reason: `${denied ? "blocked" : choice} · ${target}`.slice(0, 200), sessionId: this.sessionId ?? undefined });
+        emitSecurityEvent({ category: "egress", type: "egress_decision", decision: denied ? "block" : "allow", severity: "medium", tool: localFile ? "egress-local-file" : "egress", reason: `${denied ? "blocked" : choice} · ${target}`.slice(0, 200), sessionId: this.sessionId ?? undefined });
         if (denied) { settle(block()); return; }
-        try { recordEgress(target, choice); } catch { /* best-effort persistence */ }
+        // A local file has no host to remember (allow-once only), so persist nothing for it.
+        if (!localFile) { try { recordEgress(target, choice); } catch { /* best-effort persistence */ } }
         settle(approve());
       });
     });

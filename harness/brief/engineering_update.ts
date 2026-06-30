@@ -120,12 +120,12 @@ export function buildEngineeringUpdate(args: {
 
   for (const a of adrs) {
     if (isOpenDecision(a.status)) {
-      upcomingDecisions.push({ title: `${a.id} — ${clip(a.title, 90)}`, detail: clip(a.status, 120), source: a.id });
+      upcomingDecisions.push({ title: `${a.id} - ${clip(a.title, 90)}`, detail: clip(a.status, 120), source: a.id });
     } else if (isShipped(a.status) && recentlyShipped.length < recentWindow + adrs.length) {
       // recently-decided/built ADRs reinforce the shipped picture (deduped by title later by the caller)
     }
     if (/finding|deferred/i.test(a.status)) {
-      techDebt.push({ title: `${a.id} — deferred/finding`, detail: clip(a.title, 120), source: a.id });
+      techDebt.push({ title: `${a.id} - deferred/finding`, detail: clip(a.title, 120), source: a.id });
     }
     for (const dep of a.dependsOn) {
       loadBearingDependencies.push({ title: `${a.id} depends on ${dep}`, detail: clip(a.title, 100), source: a.id });
@@ -149,7 +149,7 @@ export function buildEngineeringUpdate(args: {
 function section(title: string, items: UpdateItem[], emptyNote: string): string[] {
   const out = [`## ${title}`, ""];
   if (!items.length) { out.push(`_${emptyNote}_`, ""); return out; }
-  for (const it of items) out.push(`- **${it.title}** ${it.detail ? `— ${it.detail}` : ""} _(${it.source})_`.replace(/\s+—\s+$/, ""));
+  for (const it of items) out.push(`- **${it.title}** ${it.detail ? `- ${it.detail}` : ""} _(${it.source})_`.replace(/\s+-\s+$/, ""));
   out.push("");
   return out;
 }
@@ -157,7 +157,7 @@ function section(title: string, items: UpdateItem[], emptyNote: string): string[
 /** Render the written Executive Engineering Update (deterministic markdown). */
 export function renderEngineeringBrief(u: EngineeringUpdate): string {
   const out: string[] = [];
-  out.push(`# Executive Engineering Update — ${u.label}`, "");
+  out.push(`# Executive Engineering Update - ${u.label}`, "");
   out.push(
     `> ${u.recentlyShipped.length} shipped · ${u.loadBearingDependencies.length} load-bearing dependencies · ` +
     `${u.techDebt.length} tech-debt items · ${u.upcomingDecisions.length} upcoming decisions · ${u.risks.length} risks`,
@@ -237,8 +237,8 @@ export function buildPodcastScript(u: EngineeringUpdate): PodcastScript {
     say(ANCHOR, `Anything that should worry us?`);
     say(ANALYST, `Risks from the latest automated run: ${list(u.risks)}.`);
   }
-  say(ANCHOR, `That's the update — shipped work is landing, the dependencies are mapped, and the decisions are queued. We'll check back next cycle.`);
-  return { title: `Executive Engineering Update — ${u.label}`, turns };
+  say(ANCHOR, `That's the update - shipped work is landing, the dependencies are mapped, and the decisions are queued. We'll check back next cycle.`);
+  return { title: `Executive Engineering Update - ${u.label}`, turns };
 }
 
 /** Render a script as plain readable text (for the written report's appendix or a script-only export). */

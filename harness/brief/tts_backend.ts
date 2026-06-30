@@ -116,7 +116,7 @@ export class OpenAiCompatibleTtsBackend implements PodcastBackend {
       const audio = concatWav(segments);
       return { backendId: this.id, script, audio, note: `synthesized ${segments.length} turn(s) via ${url} → ${audio.length} bytes WAV` };
     } catch (e) {
-      // Fail-safe: never hard-fail the brief on a TTS problem — degrade to script-only with the reason.
+      // Fail-safe: never hard-fail the brief on a TTS problem - degrade to script-only with the reason.
       return { backendId: this.id, script, note: `TTS unavailable (${(e as Error)?.message ?? e}); returning script only` };
     }
   }

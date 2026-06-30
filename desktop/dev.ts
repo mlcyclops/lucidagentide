@@ -15,6 +15,8 @@ import { join } from "node:path";
 import { readFileSync } from "node:fs";
 import { buildEngineeringUpdate, renderEngineeringBrief, buildPodcastScript, renderScript } from "../harness/brief/engineering_update.ts";
 import { devSnapshot, securitySnapshot } from "../tools/web/data.ts";
+import { ensureNetdiagWatch, startNetdiagWatch, stopNetdiagWatch, netdiagView } from "./netdiag.ts";
+import { clearDisabledCredential } from "./auth_vault.ts";
 import { approveBlock, dismissBlock, liveBlocks } from "./security_log.ts";
 import { probeRateLimits } from "./ratelimit_probe.ts";
 import { OBS_DB_PATH, codeActivity, memorySnapshot, rateLimits, sessionPathById, usageLedger } from "../tools/memory_data.ts";
@@ -22,7 +24,15 @@ import { backend } from "./acp_backend.ts";
 import { clearIngestSessions, deleteSession, listSessions, sessionMessages } from "./sessions.ts";
 import { providerAuth } from "./auth_status.ts";
 import { cloneRepo, setWorkspace, workspaceInfo } from "./workspace.ts";
-import { applyEnv, attribution, chinaModelsAcknowledged, listMcpServers, load as loadSettings, removeMcpServer, setAsksage, setAttributionSkip, setChinaModelsAcknowledged, setDeveloperMode, setKey, setMcpServerEnabled, setPersonalAiExtract, setProfile, setRateLimitProbe, upsertMcpServer } from "./settings_store.ts";
+import { applyEnv, attribution, chinaModelsAcknowledged, listMcpServers, load as loadSettings, removeMcpServer, roleChosen, setAsksage, setAttributionSkip, setChinaModelsAcknowledged, setDeveloperMode, setKey, setMcpServerEnabled, setPersonalAiExtract, setProfile, setRateLimitProbe, setThirdPartyProvidersAcknowledged, setTourSeen, setUserRole, thirdPartyProvidersAcknowledged, tourSeen, upsertMcpServer, USER_ROLES, userRole, type UserRole } from "./settings_store.ts";
+
+// ADR-0088/0089: the /api/settings payload — profile + attribution + the cosmetic role/tour state.
+// `role` is null until the user has EXPLICITLY chosen one (so the renderer can fire the first-run role
+// picker); once chosen it's the concrete role. tourSeen guards the first-run walkthrough replay.
+function settingsData() {
+  const s = loadSettings();
+  return { username: s.username ?? "", email: s.email ?? "", attribution: attribution(), role: roleChosen() ? userRole() : null, tourSeen: tourSeen() };
+}
 import { emailDomainAllowed, managedAsksageOnly, managedConfig, managedLocks, skipAllowed } from "./managed_config.ts";
 import { asksageConfig, listDatasets, listPersonas, monthlyTokens, scanPersona, wrapPersona } from "./asksage.ts";
 import { listSkills } from "./skills_data.ts";
@@ -79,7 +89,9 @@ const PORT = Number(process.env.PORT ?? 5319);
 // HTML (only a same-origin document can read it), and required on every sensitive /api call. A new
 // random value each launch means a token never outlives the process that issued it.
 const TOKEN = randomBytes(32).toString("hex");
-const CT: Record<string, string> = { ".html": "text/html", ".css": "text/css", ".js": "text/javascript", ".svg": "image/svg+xml", ".woff2": "font/woff2", ".woff": "font/woff", ".ttf": "font/ttf" };
+const CT: Record<string, string> = { ".html": "text/html", ".css": "text/css", ".js": "text/javascript", ".svg": "image/svg+xml", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".woff2": "font/woff2", ".woff": "font/woff", ".ttf": "font/ttf" };
+// Text-ish types take a charset; binary (images/fonts) must not (a bogus "image/png; charset" suffix).
+const isTextCT = (ct: string) => /^(text\/|application\/(javascript|json)|image\/svg)/.test(ct);
 
 // ADR-0009 Phase A — hand the cross-session recall block to the backend for first-user-turn
 // injection (never the frozen prefix; invariant #5/#6). READ-ONLY: the omp gate child is the
@@ -136,17 +148,31 @@ async function readBody<T>(req: Request): Promise<T> {
 // alive AND have BOTH pipes drained until the callback lands — otherwise a full stdout/stderr pipe
 // blocks it and the callback server goes down (browser → "localhost refused to connect"). We keep
 // a reference (no GC), drain both streams in the background, and resolve once we see the auth URL.
-const oauthBrokers = new Set<ReturnType<typeof Bun.spawn>>();
+// Map keyed by oauthId — lets us look up a running broker to send a device code to its stdin
+// (xAI, GitHub, etc. use device-authorization flows where the user copies a code from the browser).
+const oauthBrokers = new Map<string, ReturnType<typeof Bun.spawn>>();
 function startOauthBroker(oauthId: string): Promise<{ started: boolean; url: string; output: string }> {
   let proc: ReturnType<typeof Bun.spawn>;
-  try { proc = Bun.spawn([ompBin(), "auth-broker", "login", oauthId], { stdout: "pipe", stderr: "pipe", stdin: "ignore" }); }
+  try { proc = Bun.spawn([ompBin(), "auth-broker", "login", oauthId], { stdout: "pipe", stderr: "pipe", stdin: "pipe" }); }
+  // stdin: "pipe" (NOT "ignore") — the broker reads stdin as a fallback for pasting the auth code.
+  // "ignore" closes stdin immediately → broker sees EOF → shuts down its callback server
+  // before the browser redirect arrives. "pipe" keeps it open; for device-flow providers (xAI)
+  // we also WRITE the user-pasted code to it via sendOauthCode().
   catch (e) { return Promise.resolve({ started: false, url: "", output: String((e as Error)?.message ?? e) }); }
-  oauthBrokers.add(proc);
-  proc.exited.finally(() => oauthBrokers.delete(proc));
+  oauthBrokers.set(oauthId, proc);
+  proc.exited.finally(() => { if (oauthBrokers.get(oauthId) === proc) oauthBrokers.delete(oauthId); });
   // On a SUCCESSFUL login the credential lands in omp's vault, but the already-running omp child
   // built its model list at spawn and won't see it. Respawn so the new provider's models surface
   // (mirrors what adding an API key does). The front-end re-fetches /api/config after the badge flips.
-  proc.exited.then((code) => { if (code === 0) backend.restart(); }).catch(() => { /* ignore */ });
+  proc.exited.then((code) => {
+    if (code !== 0) return;
+    // omp's login writes the fresh token but may leave a stale `disabled_cause` from a prior logout,
+    // so the just-fetched credential stays ignored. Clear that one flag (token blob untouched) so the
+    // login actually "sticks", THEN respawn omp to pick up the now-active provider.
+    const r = clearDisabledCredential(oauthId);
+    if (r.cleared) console.log(`[oauth] re-enabled ${oauthId} after login (cleared stale disabled flag)`);
+    backend.restart();
+  }).catch(() => { /* ignore */ });
   return new Promise((resolve) => {
     const dec = new TextDecoder();
     let out = "", done = false;
@@ -158,8 +184,16 @@ function startOauthBroker(oauthId: string): Promise<{ started: boolean; url: str
     })();
     // Drain stderr too (also a finite pipe that would otherwise block the broker).
     (async () => { try { for await (const _ of proc.stderr as ReadableStream<Uint8Array>) { /* discard */ } } catch { /* ended */ } })();
-    setTimeout(() => finish(""), 8000); // don't hang the HTTP request if the URL is slow to print
+    setTimeout(() => finish(""), 60_000); // 60s — OTP/MFA flows need time (phone unlock, SMS delay)
   });
+}
+/** Send a device-authorization code to a running broker's stdin (xAI "Grok Build", GitHub device flow, etc.).
+ *  The broker prints "Paste the authorization code (or full redirect URL)::" and reads a line from stdin. */
+function sendOauthCode(oauthId: string, code: string): { sent: boolean; reason?: string } {
+  const proc = oauthBrokers.get(oauthId);
+  if (!proc) return { sent: false, reason: "no broker running for " + oauthId };
+  try { proc.stdin.write(new TextEncoder().encode(code.trim() + "\n")); return { sent: true }; }
+  catch (e) { return { sent: false, reason: String((e as Error)?.message ?? e) }; }
 }
 
 // Stream NDJSON ChatEvents to the browser with a HEARTBEAT. A long maker tool call (e.g. a broad
@@ -286,10 +320,13 @@ const server = Bun.serve({
           // real change so toggling developer mode takes effect immediately (no app restart) — the fresh
           // omp picks up / drops the debug env. Same pattern as an API-key change (backend.restart()).
           if (changed) backend.restart();
+          // Run the loopback/OAuth-callback watcher only while developer mode is on (it polls the OS).
+          if (next) startNetdiagWatch(); else stopNetdiagWatch();
           return json({ ok: true, data });
         }
-        if (!loadSettings().developerMode) return json({ ok: true, data: { enabled: false, snapshot: null, blocks: { quarantined: [], approved: [], total: 0 }, turns: [], asksage: [] } });
-        return json({ ok: true, data: { enabled: true, snapshot: await devSnapshot(), blocks: liveBlocks(), turns: recentTurns(), asksage: backend.asksageDiagnostics(), audit: { events: audit.recent(60), sinks: audit.sinkStatuses() } } });
+        if (!loadSettings().developerMode) return json({ ok: true, data: { enabled: false, snapshot: null, blocks: { quarantined: [], approved: [], total: 0 }, turns: [], asksage: [], netdiag: null } });
+        ensureNetdiagWatch(); // self-heal: live by the time the Logs panel (or boot-time loadDev) reads it
+        return json({ ok: true, data: { enabled: true, snapshot: await devSnapshot(), blocks: liveBlocks(), turns: recentTurns(), asksage: backend.asksageDiagnostics(), audit: { events: audit.recent(60), sinks: audit.sinkStatuses() }, netdiag: netdiagView() } });
       }
       // Light, fast re-read of the provider rate-limit budget (omp's agent.db).
       // Used by the front-end's manual refresh + 5-minute auto-poll.
@@ -379,18 +416,21 @@ const server = Bun.serve({
       // settings + provider auth
       if (p === "/api/settings") {
         if (req.method === "POST") {
-          const b = await readBody<{ skip?: unknown; email?: unknown; username?: unknown }>(req);
+          const b = await readBody<{ skip?: unknown; email?: unknown; username?: unknown; role?: unknown; tourSeen?: unknown }>(req);
+          // ADR-0088/0089: role + first-run-tour state are cosmetic and policy-free — set them up front,
+          // independent of the email-attribution policy gate below.
+          if (b.role != null && (USER_ROLES as string[]).includes(String(b.role))) setUserRole(String(b.role) as UserRole);
+          if (b.tourSeen != null) setTourSeen(!!b.tourSeen);
           // Enforce enterprise-managed attribution policy server-side (the UI also reflects it).
-          if (b.skip && !skipAllowed()) return json({ ok: false, error: "Your organization requires a corporate email.", data: { username: loadSettings().username ?? "", email: loadSettings().email ?? "", attribution: attribution() } });
+          if (b.skip && !skipAllowed()) return json({ ok: false, error: "Your organization requires a corporate email.", data: settingsData() });
           if (b.email != null && String(b.email).trim() && !emailDomainAllowed(String(b.email))) {
             const ds = managedConfig().config?.attribution?.allowedEmailDomains ?? [];
-            return json({ ok: false, error: `Use your corporate email${ds.length ? " (" + ds.map((d) => "@" + d).join(", ") + ")" : ""}.`, data: { username: loadSettings().username ?? "", email: loadSettings().email ?? "", attribution: attribution() } });
+            return json({ ok: false, error: `Use your corporate email${ds.length ? " (" + ds.map((d) => "@" + d).join(", ") + ")" : ""}.`, data: settingsData() });
           }
           if (b.skip) setAttributionSkip(); // user skipped the email prompt → workstation attribution
-          else setProfile({ username: b.username != null ? String(b.username) : undefined, email: b.email != null ? String(b.email) : undefined });
+          else if (b.email != null || b.username != null) setProfile({ username: b.username != null ? String(b.username) : undefined, email: b.email != null ? String(b.email) : undefined });
         }
-        const s = loadSettings();
-        return json({ ok: true, data: { username: s.username ?? "", email: s.email ?? "", attribution: attribution() } });
+        return json({ ok: true, data: settingsData() });
       }
       // Enterprise-managed policy (read-only; placed by admins via GPO/MDM). Sanitized — policy only.
       if (p === "/api/managed") {
@@ -409,6 +449,11 @@ const server = Bun.serve({
         if (req.method === "POST") { const b = await readBody<{ acknowledge?: unknown }>(req); return json({ ok: true, data: { acknowledged: !!setChinaModelsAcknowledged(!!b.acknowledge).chinaModelsAcknowledged } }); }
         return json({ ok: true, data: { acknowledged: chinaModelsAcknowledged() } });
       }
+      // The third-party / non-U.S. / custom "More providers" acknowledgement gate (mirrors china-ack).
+      if (p === "/api/thirdparty-ack") {
+        if (req.method === "POST") { const b = await readBody<{ acknowledge?: unknown }>(req); return json({ ok: true, data: { acknowledged: !!setThirdPartyProvidersAcknowledged(!!b.acknowledge).thirdPartyProvidersAcknowledged } }); }
+        return json({ ok: true, data: { acknowledged: thirdPartyProvidersAcknowledged() } });
+      }
       if (p === "/api/auth") return json({ ok: true, data: providerAuth() });
       if (p === "/api/auth/key" && req.method === "POST") {
         const { env, key } = await readBody<{ env?: unknown; key?: unknown }>(req);
@@ -420,6 +465,13 @@ const server = Bun.serve({
         const { oauthId } = await readBody<{ oauthId?: unknown }>(req);
         // omp owns the secure OAuth flow; the broker stays alive + drained until the callback lands.
         return json({ ok: true, data: await startOauthBroker(String(oauthId)) });
+      }
+      // Device-authorization flow: xAI "Grok Build", GitHub device flow, etc. The user copies a code
+      // from the provider's browser page and pastes it here; we forward it to the broker's stdin.
+      if (p === "/api/auth/oauth-code" && req.method === "POST") {
+        const { oauthId, code } = await readBody<{ oauthId?: unknown; code?: unknown }>(req);
+        const r = sendOauthCode(String(oauthId), String(code ?? ""));
+        return json({ ok: true, data: r });
       }
       if (p === "/api/auth/logout" && req.method === "POST") {
         const { oauthId } = await readBody<{ oauthId?: unknown }>(req);
@@ -672,7 +724,10 @@ const server = Bun.serve({
       const file = Bun.file(join(ROOT, rel));
       if (await file.exists()) {
         const ext = rel.slice(rel.lastIndexOf("."));
-        return new Response(file, { headers: { "content-type": (CT[ext] ?? "application/octet-stream") + "; charset=utf-8" } });
+        const ct = CT[ext] ?? "application/octet-stream";
+        // Text assets (css/js/svg) must stay fresh so edits show on reload; cache only binary assets
+        // (images/fonts), which are large and rarely change.
+        return new Response(file, { headers: { "content-type": ct + (isTextCT(ct) ? "; charset=utf-8" : ""), "cache-control": isTextCT(ct) ? "no-store" : "max-age=86400" } });
       }
     } catch (err) {
       // js/stack-trace-exposure: log the detail server-side, return a generic message to the client

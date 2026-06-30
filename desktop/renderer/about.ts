@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/renderer/about.ts — the "About LUCID Agent IDE" panel.
+// desktop/renderer/about.ts - the "About LUCID Agent IDE" panel.
 //
 // Pure string builders (no DOM), so the demo + test can assert on the markup without a browser.
 // app.ts owns open/close + Escape wiring; styles.css owns the animation + dark-mode polish.
@@ -34,18 +34,12 @@ export function lucidLogo(): string {
     <div class="about-subword">AGENT&nbsp;IDE</div>`;
 }
 
-/** The TechLead 187 emblem — a gradient rounded square with a "187" monogram and an upward "lead" tick. */
+/** The TechLead 187 brand avatar - the real logo image inside a premium animated gradient ring. */
 export function techLeadLogo(): string {
-  return `<svg class="about-tl" viewBox="0 0 40 40" width="38" height="38" aria-hidden="true">
-    <defs>
-      <linearGradient id="tlGrad" x1="0" y1="0" x2="1" y2="1">
-        <stop offset="0" stop-color="var(--accent-2)"/><stop offset="1" stop-color="var(--accent)"/>
-      </linearGradient>
-    </defs>
-    <rect x="2" y="2" width="36" height="36" rx="11" fill="url(#tlGrad)"/>
-    <path d="M9 25l6-7 5 4 11-12" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" opacity=".95"/>
-    <text x="20" y="32" text-anchor="middle" font-family="var(--mono)" font-size="9.5" font-weight="700" fill="#fff" opacity=".96">187</text>
-  </svg>`;
+  return `<span class="about-tl-avatar" aria-hidden="true">
+    <span class="about-tl-ring"></span>
+    <img class="about-tl-img" src="assets/techlead187-avatar.png" alt="" width="46" height="46" loading="lazy" decoding="async" />
+  </span>`;
 }
 
 /** Full inner HTML for the About panel. `version` is APP_VERSION (single source of truth). */
@@ -91,6 +85,10 @@ export function aboutHtml(version: string): string {
     </div>
 
     <div class="about-actions">
+      <button class="btn-mini" data-about-tour>
+        <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 5.5v13l11-6.5z"/></svg>
+        Take the tour
+      </button>
       <button class="btn-mini ok" data-about-close>Close</button>
     </div>
   </div>`;

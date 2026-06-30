@@ -91,7 +91,7 @@ describe("filterModels", () => {
   it("no match returns empty", () => expect(filterModels(models, "zzz")).toHaveLength(0));
 });
 
-describe("P-IDE.1c curation — isDeprecatedModel (moderate policy)", () => {
+describe("P-IDE.1c curation - isDeprecatedModel (moderate policy)", () => {
   it("drops dated snapshots and -latest aliases", () => {
     expect(isDeprecatedModel("anthropic/claude-3-5-sonnet-20241022")).toBe(true);
     expect(isDeprecatedModel("anthropic/claude-opus-4-1-20250805")).toBe(true);
@@ -130,7 +130,7 @@ describe("P-IDE.1c curation — isDeprecatedModel (moderate policy)", () => {
   });
 });
 
-describe("P-IDE.1c — gov / auxiliary / china detection", () => {
+describe("P-IDE.1c - gov / auxiliary / china detection", () => {
   it("isGovModel matches AskSage", () => {
     expect(isGovModel("asksage-openai/gpt-5.5")).toBe(true);
     expect(isGovModel("openai-codex/gpt-5.5")).toBe(false);
@@ -147,7 +147,7 @@ describe("P-IDE.1c — gov / auxiliary / china detection", () => {
   });
 });
 
-describe("P-IDE.1c — sortGovFirstNewest", () => {
+describe("P-IDE.1c - sortGovFirstNewest", () => {
   it("gov models first, each group newest→oldest", () => {
     const models: ModelOption[] = [
       { value: "openai-codex/gpt-5.4", name: "5.4" },

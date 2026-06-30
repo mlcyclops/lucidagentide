@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// harness/brief/tts_backend.test.ts — the OpenAI-compatible TTS backend (P-BRIEF.2, ADR-0071). Pure WAV
+// harness/brief/tts_backend.test.ts - the OpenAI-compatible TTS backend (P-BRIEF.2, ADR-0071). Pure WAV
 // round-trip + concat, an injectable-transport synth (no server), per-speaker voice selection, and the
 // fail-safe degrade-to-script-only path.
 

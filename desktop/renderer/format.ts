@@ -16,7 +16,7 @@ export function fmtNum(n: number): string {
 
 export function fmtUSD(n: number): string {
   n = Number(n) || 0;
-  return "$" + n.toFixed(2); // nearest cent — e.g. $0.00, $0.43
+  return "$" + n.toFixed(2); // nearest cent - e.g. $0.00, $0.43
 }
 
 export const pct = (f: number) => Math.round(clamp01(f) * 100);

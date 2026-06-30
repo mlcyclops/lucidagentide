@@ -15,8 +15,8 @@ describe("version is single-sourced", () => {
     expect(pkg.version).toBe(APP_VERSION);
   });
 
-  test("launch baseline is v1.8.7", () => {
-    expect(APP_VERSION).toBe("1.8.7");
+  test("app version is v1.8.14", () => {
+    expect(APP_VERSION).toBe("1.8.14");
   });
 });
 
@@ -25,7 +25,7 @@ describe("aboutHtml", () => {
 
   test("shows the dynamic version with a v prefix", () => {
     expect(html).toContain(`v${APP_VERSION}`);
-    expect(html).toContain("v1.8.7");
+    expect(html).toContain("v1.8.14");
   });
 
   test("carries the product + company identity", () => {
@@ -44,6 +44,11 @@ describe("aboutHtml", () => {
     expect(html).toContain('role="dialog"');
     expect(html).toContain('aria-modal="true"');
     expect(html).toContain("data-about-close");
+  });
+
+  test("offers a 'Take the tour' replay control (ADR-0089)", () => {
+    expect(html).toContain("data-about-tour");
+    expect(html).toContain("Take the tour");
   });
 
   test("escapes the interpolated version (no raw injection)", () => {
@@ -68,9 +73,10 @@ describe("logos + rail glyph match the icon family", () => {
     expect(l).toContain("about-pi");
   });
 
-  test("techLeadLogo renders the 187 emblem with a gradient", () => {
+  test("techLeadLogo renders the brand avatar image in an animated ring", () => {
     const t = techLeadLogo();
-    expect(t).toContain("187");
-    expect(t).toContain("tlGrad");
+    expect(t).toContain("assets/techlead187-avatar.png");
+    expect(t).toContain("about-tl-ring"); // the premium animated gradient ring
+    expect(t).toContain('alt=""'); // decorative (the brand name is adjacent text)
   });
 });

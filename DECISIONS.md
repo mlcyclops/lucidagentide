@@ -6723,12 +6723,739 @@ files carry the BUSL-1.1 header (ADR-0086).
 (`#railAbout` + `openAbout`), `desktop/renderer/styles.css` (`.about-*`), `desktop/about.test.ts`,
 `desktop/scripts/demo_p_about_1.ts`.
 
-## ADR-0088 - P-SKILL.4: the Agent Skill directory + management menu (SCOPE/PLAN)
+## ADR-0088 - Role-based onboarding + opinionated, progressively-disclosed views (Dev / Sec / Mgr / Exec)
+
+**Date:** 2026-06-28
+**Status:** Accepted - SCOPE/PLAN.
+**Increment:** P-ROLE.1 (phased: P-ROLE.1 / .2 / .3 / .4).
+
+### Context
+
+First-run onboarding is identity-only: `promptForEmailIfMissing()` (`desktop/renderer/app.ts`) captures a
+corporate email — or skips to workstation attribution — and writes it via `setProfile()` to
+`~/.omp/lucid-gui.json`. There is **no notion of who the user is by job function**. Meanwhile the UI has
+grown dense: five inspector surfaces (Chat, Security, Memory, Knowledge, Dev-logs), an ~8-segment status
+bar, an 8-tile quick-metrics rail, plus About / Commands / Settings rails. A developer chasing flow-state,
+a security engineer triaging quarantine, a delivery manager watching spend, and an executive wanting one
+reassuring posture light all see the **same** wall of metrics — most of it irrelevant to any one of them,
+and overwhelming to all. The product needs opinionated, role-shaped defaults that streamline without
+amputating capability.
+
+Exactly one role-ish mechanic exists today and points the way: Dev-logs is hidden unless `developerMode`
+is on, and **ADR-0021 auto-reveals the Security tab the instant a block fires**. That "hide until it
+matters, then surface it" pattern is the seed we generalize.
+
+### Decision
+
+**The load-bearing rule: roles change DEFAULTS and CHROME, never ENFORCEMENT.** A role is a presentation
+preset. It picks the landing surface, which pills/status-segments/quick-tiles render, and which rails are
+visible by default. It does **not** touch the security gate, the scanner, trust labels, event emission, or
+the prompt prefix. A Developer who never opens the Security panel is exactly as protected as a Security
+Engineer: the fail-closed gate still blocks (invariant #3), the event is still emitted to the audit sink
+(#8), and a real block still **force-reveals** the Security surface for every role.
+
+- **Disclosure model = defaults + always-reachable** (not hard-hide). Nothing is ever removed from the
+  app. Every panel stays reachable via the Command palette and a Settings "Show all panels" switch; the
+  role only sets what is *foregrounded*. This is the safest stance against invariant #3 — a role can never
+  bury a security surface beyond reach.
+
+- **Four roles**, captured at onboarding and persisted as
+  `userRole?: "developer" | "security" | "manager" | "executive"` in `GuiSettings`
+  (`desktop/settings_store.ts`), reusing the existing `setProfile` → `/api/settings` → bridge path the
+  email gate already uses. Unset ⇒ **Developer** (the safe, full-surface default). Each role's preset:
+
+  - **Developer** (default) — lands on Chat + Memory (context / cache / cost). Rails: Chat, Memory,
+    Knowledge. Status pills: model · context-fill · cache-% · session-cost. Quick tiles: cache-savings-% ·
+    avg-tok/turn · context · AI-authored-LOC. Security collapsed to a single green "gate active" until a
+    block lights the badge. Dev-logs off.
+  - **Security Engineer** — lands on the Security inspector. Rails: Chat, Security, Dev-logs (on), Memory.
+    The Security badge is **always on** (green "0 / gate active", never hidden). Pills: quarantined ·
+    awaiting-review · findings-by-severity · promotion-gate (blocked/promoted) · egress-blocks ·
+    exec-approvals (T0–T4) · trust-label mix · SIEM sink delivery (✓/✕). Transcripts + audit on.
+  - **Manager** — lands on the cost / delivery ledger. Rails: Chat, Memory→Ledger, Loop/AAR. Pills:
+    session + monthly spend · cache-savings-$ (% off full price) · AI-LOC by repo/model · loop
+    success-rate & avg-iterations-to-win · budget-% · AskSage gov-usage-%. Security appears as a *count
+    rollup* chip, not the findings table. Dev-logs off.
+  - **Executive** — lands on a posture + spend summary; the Engineering Update Brief + podcast (P-BRIEF)
+    is the marquee surface. Rails: Chat, Brief, Spend. Four reassurance tiles only: 🟢 security posture
+    ("protected — N blocked this month") · monthly spend rollup · AI productivity (LOC/month) ·
+    governance posture (gov-lockdown · FIPS · CUI-isolated · audit-export-ready). Everything operational
+    is hidden (but reachable).
+
+- **"Reveal on relevance" engine** (generalizes ADR-0021), three rules: (1) **Escalation reveal** — a
+  hidden surface un-hides when an event of its class fires: a block lights the Security badge for everyone;
+  a budget breach surfaces the budget chip for Mgr/Exec; a quarantine pulls the Exec posture tile 🟢→🟠.
+  (2) **Always reachable** — Command palette + "Show all panels" open any surface regardless of role.
+  (3) **Policy override wins** — managed GPO/MDM policy (ADR-0068) may pin a role or force-show audit for
+  Sec, and may only *tighten*, never loosen.
+
+- **Onboarding flow** — the existing email gate becomes a two-step modal: Step 1 picks a role (four cards,
+  each with a one-line "what you'll see"), Step 2 is the unchanged email/attribution step. Role is also
+  switchable any time from Settings → Profile. Managed policy can pin it (the switcher then shows the
+  policy source and disables).
+
+### Phasing
+
+- **P-ROLE.1** — persist `userRole` + role→default-view map; two-step onboarding modal; Settings switcher.
+- **P-ROLE.2** — per-role chrome presets (rails / status pills / quick tiles) over the panels that already
+  exist. Pure presentation layer; no new dashboards.
+- **P-ROLE.3** — the reveal-on-relevance engine (generalize ADR-0021) + managed-policy role pin.
+- **P-ROLE.4** *(later)* — dedicated Manager (delivery/showback) and Executive (posture/brief) aggregate
+  dashboards. These surfaces don't exist yet; until built, Mgr/Exec reuse the Memory ledger + P-BRIEF.
+
+### Consequences
+
+- Streamlines the first-run experience per job function without reducing any user's reachable capability.
+- A role is cosmetic state in `lucid-gui.json` — no schema change, no DuckDB migration, no prompt-prefix
+  byte (role lives in the volatile tail / settings, never layers 1–4, so the KV cache is untouched, #6).
+- Adds a presentation-layer escalation engine; the security INVARIANT is unchanged because the gate's
+  blocking path and event emission never consult `userRole`. A test must assert a Developer-role session
+  still blocks + still emits on the kill-sidecar fixture (over-tested per the keystones list).
+- Risk surfaced & rejected: hard-hiding surfaces by role could bury a security signal. Rejected in favor
+  of defaults + always-reachable + forced reveal.
+
+### Invariants preserved
+
+#3 fail-closed (roles are cosmetic; the gate never reads `userRole`), #5/#7 untrusted delimiting + the
+closed trust-label set untouched, #6 frozen prefix untouched (role is tail/settings state), #8 every event
+still emitted regardless of who is looking. New first-party files carry the BUSL-1.1 header (ADR-0086).
+
+### Relates to
+
+`desktop/settings_store.ts` (`GuiSettings.userRole` + setter), `desktop/dev.ts` (`/api/settings`),
+`desktop/renderer/bridge.ts` (`ProfileSettings`), `desktop/renderer/app.ts` (`promptForEmailIfMissing` →
+two-step onboarding, `secProfile` switcher, rail/status/quick-tile presets, generalized ADR-0021 reveal),
+ADR-0021 (auto-reveal Security on block), ADR-0068 (managed GPO/MDM policy), P-BRIEF (Exec marquee),
+ADR-A008 (showback, Manager).
+
+## ADR-0089 - First-run guided walkthrough (coachmark tour), role-tailored, reusing the model hover-card style
+
+**Date:** 2026-06-28
+**Status:** Accepted - SCOPE/PLAN.
+**Increment:** P-ROLE.1b (runs right after role capture in P-ROLE.1; re-launchable from About per ADR-0087).
+
+### Context
+
+A first-time user lands in a dense IDE — rails, an inspector, a status bar of pills, a composer with model /
+mode / thinking / persona controls. ADR-0088 picks a *role* and shapes the defaults, but it does not *teach*:
+nothing points at "this rail is your Security queue," "this pill is your context window," "hover any model for
+the full card." We already built one piece of UI delight worth echoing — the **premium per-model hover card**
+(`.modeltip` / `modelTipHTML()` / `showModelTip`): a floating, anchored card that fades in with a
+`translateY+scale`, reads from a pure string builder, and positions itself off a target's `getBoundingClientRect()`.
+A guided walkthrough that *looks and moves like that card* will feel native, not bolted on. It must be skippable,
+must never replay once dismissed, and must be re-launchable on demand from the About panel.
+
+### Decision
+
+A **role-tailored, first-run coachmark tour** — a sequence of premium cards, each anchored to (and spotlighting)
+a real UI element, that reuses the model hover-card's visual language and positioning math.
+
+- **Trigger / once-only.** The tour is the *third* onboarding step, after role (Step 1) and email (Step 2),
+  fired from the same first-login signal the email gate uses (`!state.attribution?.decided` ⇒ no saved/cached
+  profile). A new cosmetic flag `tourSeen?: boolean` in `GuiSettings` (`~/.omp/lucid-gui.json`, like `userRole`)
+  gates replay: set `true` on **finish OR skip**, so the tour never re-appears uninvited. The init sequence
+  awaits role + email, then — if `!tourSeen` — calls `startTour(role)`.
+
+- **Re-launchable from About.** The About panel (ADR-0087, `about.ts`) gains a "Take the tour" button in
+  `.about-actions`; clicking it closes About and calls `startTour(currentRole)` unconditionally (ignores
+  `tourSeen`). This is the "do it later" path the user asked for.
+
+- **The coachmark = the model card's twin.** A new `.coach` card borrows `.modeltip`'s tokens (`--bg-4`,
+  `--line-strong`, `--shadow`, the `.show` fade-in with `translateY(4px) scale(.98)→none`) and its anchor
+  math (position off the target's rect; flip to the other side when it would overflow the viewport). It DIFFERS
+  in two ways the hover card cannot: it is **interactive** (`pointer-events:auto`; the hover card is
+  `pointer-events:none`) and it paints a **spotlight backdrop** — a dimmed overlay with a transparent cutout
+  around the target (a positioned ring element with a large-spread `box-shadow`), so the eye goes to the
+  highlighted control. Each card carries: a title, a one/two-line description, a "Step N of M" dot row,
+  Back / Next (Next→"Done" on the last step), and a persistent **Skip**. Esc = skip; Enter = next.
+
+- **Role-tailored steps.** A master step catalog (pure data) maps each step to a target selector + copy; a
+  `role → steps[]` table selects the subset that matters to the chosen role (mirrors ADR-0088's foregrounding):
+  - *Developer* — composer → model picker (with the meta-hint "hover any model for the full card") → Memory
+    inspector (context / cache / cost) → Knowledge rail → Command palette → About glyph.
+  - *Security* — composer → Security rail + badge → quarantine / approvals queue → Dev-logs → audit export →
+    Command palette.
+  - *Manager* — composer → cost / delivery ledger → loop / AAR → spend + budget pills → Command palette.
+  - *Executive* — composer → posture pill → spend rollup → the Engineering Update brief → Command palette.
+  - *Universal closer* (all roles) — "Anything hidden is one ⌘K away; replay this tour any time from About."
+  A step whose target is not in the DOM for that role (hidden surface) is **skipped gracefully**, never a
+  dangling arrow pointing at nothing.
+
+- **Motion / a11y.** Honors `prefers-reduced-motion` (no translate/scale, instant placement; backdrop fades
+  only). Focus moves into the card; the card traps Tab between Back/Next/Skip; Esc always exits.
+
+### Consequences
+
+- New users get oriented to exactly the surface their role uses, in the app's own premium idiom — and can bail
+  with one Skip, or replay from About forever.
+- The visual language is shared with the model hover card, so polish stays consistent and the CSS is largely
+  reuse, not new invention.
+- `tourSeen` is cosmetic settings state — no schema change, no DuckDB migration, no prompt-prefix byte.
+- Step content lives in a **pure builder** (`tour.ts`, like `about.ts`), so the catalog + per-role selection
+  are unit-tested and demo-proven without a DOM; `app.ts` owns only the engine (backdrop, anchoring, nav).
+- Risk: a step's target selector can rot if the UI is refactored. Mitigated by a test asserting every catalog
+  selector is a constant referenced from the renderer, and by the skip-if-absent behavior failing *safe*
+  (a missing target drops its step, never breaks the tour).
+
+### Invariants preserved
+
+Renderer-only + additive. #3 fail-closed untouched (the tour is cosmetic; it never gates or un-gates anything),
+#5/#7 untrusted-delimiting + closed trust-label set untouched, #6 frozen prefix untouched (`tourSeen` is
+tail/settings state), #8 event emission unaffected. New first-party files carry the BUSL-1.1 header (ADR-0086);
+all tour copy is first-party + HTML-escaped at the boundary.
+
+### Relates to
+
+ADR-0088 (role onboarding — the tour is its teaching step), ADR-0087 (About panel — the re-launch button +
+`.about-actions`), `desktop/renderer/about.ts` (`aboutHtml` gains "Take the tour"), `desktop/renderer/app.ts`
+(`modeltip`/`showModelTip` anchor math reused by `startTour`; init sequencing after `promptForEmailIfMissing`),
+`desktop/renderer/styles.css` (`.modeltip` tokens → `.coach*` + `.coach-spot` backdrop),
+`desktop/settings_store.ts` (`GuiSettings.tourSeen`), new `desktop/renderer/tour.ts` (pure step catalog +
+role→steps), `desktop/tour.test.ts`, `desktop/scripts/demo_p_role_1b.ts`.
+
+## ADR-0090 - In-app network diagnostics for the OAuth localhost callback (developer-mode watcher)
+
+**Date:** 2026-06-29
+**Status:** Accepted - BUILT.
+**Increment:** P-NETDIAG.1 (developer-mode only; lives in the existing Logs panel, ADR-0009 Phase D).
+
+### Context
+
+OAuth sign-in routes through omp's `auth-broker login`, which opens the provider in a browser and runs a
+LOCAL loopback callback server to catch the redirect (OpenAI's Codex broker uses a fixed `127.0.0.1:1455`;
+other providers use ephemeral ports). The recurring failure is the browser showing "localhost refused to
+connect," which has three very different root causes the user cannot tell apart: (a) nothing ever bound the
+port (the broker died before listening - e.g. the full-stdout-pipe hang `dev.ts` already warns about),
+(b) some OTHER process squats the port, or (c) the bind landed on a different interface/family than the
+browser hit. A first cut was a standalone terminal tool (`tools/netwatch.ts`); it works but is the wrong
+ergonomics - you have to start it by hand at the right moment, and the OAuth window is easy to miss
+(OTP entry stretches the flow to 30-45s, and the bind can be brief). Two bugs in that first cut also made it
+report "nothing happened": it filtered to loopback-only (so an all-interface `0.0.0.0` bind was invisible),
+and it printed only on change (so a long wait looked like a hang).
+
+### Decision
+
+A **continuous, in-app network-diagnostics watcher**, surfaced as a **Network diagnostics** accordion in the
+read-only developer Logs panel (the same surface as telemetry / run lineage / AskSage diagnostics).
+
+- **Always-on while developer mode is on.** A background poller (`desktop/netdiag.ts`, 2s interval) runs in
+  the backend the entire time developer mode is enabled - started on the dev-mode POST and self-healed on
+  each `/api/dev` read (so a boot-time `loadDev()` brings it up). By the time the Logs panel is opened, the
+  OAuth window is already captured. It stops when developer mode is turned off.
+- **What it captures.** A rolling event log (bounded, last 400) of: loopback connections, EVERY listener
+  (loopback AND all-interface `0.0.0.0` / `[::]` binds - the fix for the missed-bind bug), an active TCP
+  probe of the callback port(s) (`nc -z`-style), and the Windows DNS resolver cache. A brand-new LISTENING
+  socket on a watched/loopback port is flagged a **callback candidate** - the single decisive "did the
+  broker bind, and which process owns it?" signal. `127.0.0.1:1455` is always probed; any other (ephemeral)
+  callback port is still caught by the socket diff.
+- **OS tools, read-only.** Windows: `netstat -ano` + `tasklist` (PID→image) + `Get-DnsClientCache`.
+  macOS/Linux: `lsof -nP -iTCP` (the command is the process; no DNS). It NEVER binds, blocks, or mutates -
+  pure diagnostics. The TCP probe is a throwaway connect that is immediately destroyed.
+- **Pure core, tested.** The parse (`parseNetstatLine` / `parseLsofLine` / `parseTasklistCsv`) and the
+  snapshot DIFF (`diffSockets`, candidate-flagging) are pure and unit-tested against canned OS output; the
+  timer and the `Bun.spawnSync` calls are the only impure parts. `tools/netwatch.ts` is kept as the
+  standalone CLI for ad-hoc terminal use.
+
+### Consequences
+
+Developers get a self-collecting, always-on diagnostic for the most opaque sign-in failure, without dropping
+to a terminal or hand-timing a capture. Cost: while developer mode is on, the backend shells out to
+netstat/tasklist every ~2-6s and powershell (DNS) every ~6s - acceptable for an opt-in, off-by-default
+developer surface, and zero when developer mode is off (the watcher never starts). The watcher is
+Windows-first; macOS/Linux use the `lsof` path (no DNS); unknown platforms degrade to `supported:false` with
+an empty, non-throwing view.
+
+### Invariants preserved
+
+#3 fail-closed UNTOUCHED - this is read-only diagnostics, never a gate input; it emits no allow/block/quarantine
+verdict (the demo asserts the view shape carries no gate-like field). #2 language boundary preserved - all
+TypeScript, no new `.py` (the watcher shells out to OS tools, it does not add a Python surface). #6 frozen
+prefix untouched (no prompt change). #8 events untouched (the network event log is a developer-mode UI feed,
+not an `EventName` telemetry event). New first-party files carry the BUSL-1.1 header (ADR-0086).
+
+### Relates to
+
+ADR-0009 Phase D (the developer Logs panel this extends), `desktop/dev.ts` (`startOauthBroker` - the callback
+server being diagnosed; `/api/dev` now carries `netdiag`), new `desktop/netdiag.ts` (watcher + pure helpers),
+`desktop/netdiag.test.ts`, `desktop/scripts/demo_p_netdiag_1.ts`, `desktop/renderer/bridge.ts`
+(`DevView.netdiag` + `NetDiagView`), `desktop/renderer/app.ts` (`devHtml` Network diagnostics accordion),
+`desktop/renderer/styles.css` (`.dev-subh`), `tools/netwatch.ts` (the standalone CLI sibling).
+
+## ADR-0091 - OAuth re-login self-heal: clear a stale `disabled_cause` so a fresh login "sticks"
+
+**Date:** 2026-06-29
+**Status:** Accepted - BUILT.
+**Increment:** P-NETDIAG.1b (the fix the P-NETDIAG.1 watcher led us to; same session).
+
+### Context
+
+Diagnosing a real "I logged into OpenAI but it didn't save" report (the case that motivated ADR-0090), the
+credential vault (`~/.omp/agent/agent.db`, `auth_credentials`) showed the truth: the `openai-codex` row had a
+**valid, freshly-written** OAuth token (`updated_at` = the login moment; access + refresh present), yet still
+carried **`disabled_cause = "logged out by user"`** from an earlier *Disconnect*. omp counts a credential as
+active only when that column is null (`auth_status.ts` filters `!disabled_cause`), so the good token was
+ignored. Worse, omp's `auth-broker logout` *disables* the row rather than deleting it, and `auth-broker login`
+updates the token blob without clearing the flag - so re-clicking "Connect via OAuth" can never recover; the
+provider is stuck logged-out forever. omp exposes no `delete` / `re-enable` verb (`login|logout|status|list|
+import|migrate` only), so the harness must compensate.
+
+### Decision
+
+A narrow vault helper, `desktop/auth_vault.ts` → `clearDisabledCredential(provider)`, that nulls ONLY the
+`disabled_cause` column for a provider (the token blob, identity, and every other column are untouched), and
+two call sites:
+
+- **Automatic self-heal.** `dev.ts startOauthBroker`'s success path (broker exit 0) calls it for the just-
+  logged-in `oauthId` *before* `backend.restart()`, so a successful login clears any stale logout flag and the
+  respawned omp picks up the now-active provider. Re-login is now idempotent and always "sticks".
+- **One-shot repair CLI.** `tools/omp_auth_reenable.ts <provider>` for an already-stuck vault (pairs with the
+  read-only `tools/omp_auth_status.ts`). Used live to un-stick `openai-codex` this session.
+
+Read-before-write (only writes when a disabled row exists), `PRAGMA busy_timeout=2000` to tolerate the running
+app's lock, and fully best-effort: any failure (missing/locked db, future schema drift) returns "0 cleared"
+and never throws.
+
+### Consequences
+
+The most confusing OAuth failure mode - "it logged in but nothing happened" - now self-corrects, and an
+already-stuck credential is a one-command fix. Cost/risk: the harness now WRITES to omp's otherwise-private
+vault. Mitigated by touching exactly one column, never the token; by failing closed/quiet on any error; and by
+keeping it OUT of the security path (this is a convenience repair, not a gate - invariant #3 is about the
+scanner). If a future omp changes the column name or starts clearing the flag itself, this degrades to a
+harmless no-op.
+
+### Invariants preserved
+
+#1 extend-omp-don't-fork preserved - we compensate for omp behavior through a tiny vault helper, no fork, no
+omp source change. #2 language boundary (TypeScript, `bun:sqlite`; no new `.py`). #3 fail-closed UNTOUCHED -
+this never feeds the gate and emits no allow/block verdict; it only re-enables a credential the user already
+obtained. #10 (DuckDB schema-freeze) untouched - this is omp's SQLite vault, not our DuckDB. New first-party
+files carry the BUSL-1.1 header (ADR-0086).
+
+### Relates to
+
+ADR-0090 (the netdiag watcher whose investigation surfaced this), `desktop/dev.ts` (`startOauthBroker` success
+path), new `desktop/auth_vault.ts` + `desktop/auth_vault.test.ts`, new `tools/omp_auth_reenable.ts`,
+`tools/omp_auth_status.ts` (read-only sibling), `desktop/auth_status.ts` (the `!disabled_cause` active filter
+this unblocks).
+
+## ADR-0092 - P-DOC.1: Role-based user guides (per-role capability docs with screenshot placeholders, Tips, and cited Notes & References)
+
+**Date:** 2026-06-29
+**Status:** Accepted - SCOPE/PLAN + first pass shipped.
+**Increment:** P-DOC.1.
+
+### Context
+
+ADR-0088 shaped the product into four roles (Developer / Security / Manager / Executive) that change
+*defaults and chrome, never enforcement*, and ADR-0089 added a first-run coachmark tour that teaches each
+role its foregrounded surfaces. But onboarding teaches the UI in ten seconds and then disappears; there is
+no durable, role-shaped **reference** a user can read end to end, link a teammate to, or hand an auditor.
+The repo's prose is engineer-facing (`README.md` capability tour, `DECISIONS.md` ADRs, `CLAUDE.md`
+invariants, `CHEATSHEET.md` commands) - none of it is organized around *what a given role does, step by
+step, with a picture of the screen in front of them.* A Security engineer triaging quarantine, a Manager
+reading the cost ledger, and an Executive glancing at a posture light each need a different document, not
+the same wall of features.
+
+### Decision
+
+Ship **one user guide per role** under `docs/guides/`, plus an index, each generated to a **fixed
+structure** so the four read as a family and a fifth role (if one is ever added) slots in unchanged. Docs
+only - no code, no schema, no prompt-prefix bytes - so every invariant is trivially preserved (the guides
+*describe* the fail-closed gate, they never touch it).
+
+- **Files.** `docs/guides/README.md` (index + "which guide is me?"), `docs/guides/developer-guide.md`,
+  `security-guide.md`, `manager-guide.md`, `executive-guide.md`. Markdown carries **no SPDX header**
+  (matches the existing `docs/*.md` convention; the header set is `harness/ desktop/ tools/
+  scanner-sidecar/` only, ADR-0086). Screenshot binaries live under `docs/guides/images/` and are
+  **placeholders in the first pass** (referenced, not committed) - the guide names exactly what each
+  capture should show so a designer can fill them later.
+
+- **Fixed per-guide structure** (the load-bearing contract this ADR freezes):
+  1. **Title + role one-liner** and a **"Who this is for / What you'll see"** block - the role's landing
+     surface and default rails, taken verbatim-in-spirit from ADR-0088's foregrounding map.
+  2. **Getting started** - the onboarding recap (role picker -> email -> tour; switch in Settings ->
+     Profile; replay the tour from About), scoped to that role.
+  3. **Capability walkthroughs** - the role's foregrounded capabilities, each a numbered **step-by-step**
+     with two mandatory ingredients:
+     - a **screenshot placeholder**: `![alt text](images/<name>.png)` immediately followed by an italic
+       *Figure N -* caption that explains **what the image shows and what to capture** (so the placeholder
+       is self-documenting before the PNG exists);
+     - one or more **Tips** as GitHub callouts (`> [!TIP]`) for design considerations, shortcuts, and
+       gotchas. Risk/safety asides use `> [!NOTE]` / `> [!WARNING]`.
+  4. **Notes and References** - a numbered list mixing (a) **LUCID public-repo documentation** the user
+     should read next (specific `README.md` sections, ADRs, `CLAUDE.md`/`AGENTS.md`, `CHEATSHEET.md`,
+     `PROGRESS.md`) and (b) **external design-pattern / research** sources with short relevance snippets,
+     **all in MLA 9 format**. In-text superscript-style references (`[1]`, `[2]`) point back into this list.
+
+- **Scope per role** (mirrors ADR-0088 so the guide foregrounds what the chrome does):
+  - *Developer* - chat + composer (model picker, edit modes, thinking), the Memory inspector
+    (context / cache / cost), Knowledge/RAG, the read-write gated IDE, `/goal` loop basics, command palette.
+  - *Security* - the Security inspector + badge, quarantine/approvals queue, the fail-closed gate &
+    scanner, exec-approval + Speed<->Risk dial, egress approval, the OCSF audit-export, Dev-logs.
+  - *Manager* - the Cost & Savings ledger + showback, AI-authorship LOC ledger, `/goal` loop success-rate
+    & after-action reports, budget kill switch, AskSage gov-usage.
+  - *Executive* - the posture + spend summary, the Engineering Update brief + podcast (P-BRIEF),
+    governance posture (gov-lockdown / FIPS / CUI-isolated / audit-export-ready).
+
+- **Citations are real or they don't ship.** Every LUCID reference points to a file/section/ADR that
+  exists in this repo at authoring time; external citations are to real, locatable works. A reference whose
+  target cannot be verified is dropped, not faked (fail-closed applied to prose).
+
+### Phasing
+
+- **P-DOC.1** *(this increment)* - the structure + a first-pass of all four guides + the index, wired into
+  the README "Project docs" table. Screenshots are documented placeholders.
+- **P-DOC.2** *(later)* - capture and commit the real PNGs against each placeholder caption; add a
+  link-check to CI so a renamed ADR/section can't silently rot a guide reference.
+- **P-DOC.3** *(later)* - a "generate/refresh guides" maintenance pass keyed off new ADRs, and optional
+  in-app deep-links (a role guide opens from the About panel next to "Take the tour").
+
+### Consequences
+
+- Each role gets a durable, linkable reference in its own language, consistent across the four because the
+  structure is fixed - and a new role is a new file, not a redesign.
+- Docs-only and additive: no schema change, no migration, no prompt-prefix byte, no enforcement path
+  touched. The guides can never weaken the gate; they only explain it.
+- The screenshot-placeholder convention lets the prose ship now and the images land later without churning
+  the guide structure (the caption is the spec for the capture).
+- Risk: a guide reference (ADR number, README anchor) can rot when the repo moves. Mitigated now by
+  verifying every cited target exists at authoring time, and deferred-hardened by the P-DOC.2 CI link-check.
+- Cost: the guides duplicate some README capability prose by design (role-scoped, step-by-step) - accepted;
+  the README is a feature tour, the guides are task walkthroughs.
+
+### Invariants preserved
+
+Docs-only + additive. #3 fail-closed untouched (the guides describe the gate, never gate anything),
+#5/#7 untrusted-delimiting + closed trust-label set untouched, #6 frozen prefix untouched (no prompt bytes),
+#8 event emission unaffected, #10 DuckDB schema untouched. Markdown docs carry no SPDX header per the
+existing `docs/*.md` convention (ADR-0086 scopes the header to source trees only).
+
+### Relates to
+
+ADR-0088 (role onboarding - the foregrounding map each guide mirrors), ADR-0089 (the coachmark tour - the
+guides are its durable, re-readable counterpart), ADR-0087 (About panel - future deep-link target, P-DOC.3),
+ADR-0086 (BUSL licensing + the source-only header scope), `README.md` (the capability tour the guides
+task-scope per role), `CLAUDE.md`/`AGENTS.md` (invariants the Security guide cites), `CHEATSHEET.md`
+(commands the Developer guide cites), new `docs/guides/` (the four guides + index this ADR defines).
+
+## ADR-0093 - P-TOOLFAIL.1: An honest chip for a failed/rejected tool call (distinguish failure from denial, surface omp's reason)
+
+**Date:** 2026-06-29
+**Status:** Accepted - shipped.
+**Increment:** P-TOOLFAIL.1.
+
+### Context
+
+A live turn (build a Minesweeper game) ended with two grey "tool call rejected" chips - a browser-open
+("Opening game in browser") and a JS syntax-check ("execute [js]") - and no approval prompt. The user (and
+the agent, which narrated "both tool calls were denied") read this as a security/permission DENIAL. It was
+not. Investigation of `~/.omp/lucid-audit.jsonl` showed NO `exec_decision`/`egress_decision` block for that
+turn, and every gate block path calls `emitSecurityEvent` (which appends there). So the gate never ran:
+omp could not run those two tools (no browser-open / JS-execute capability in the session) and returned
+the calls as `failed`/`rejected` BEFORE any permission request reached the gate.
+
+The defect is in the messaging. omp's `tool_call_update` fires one generic signal for two very different
+outcomes - a tool that RAN and errored (`status: "failed"`) and a tool that DID NOT run (`status:
+"rejected"`: refused, unavailable, or cancelled) - and the desktop flattened both, verbatim, to the single
+string `"tool call rejected"` (`acp_backend.ts`), discarding omp's own status and message. "Rejected" reads
+as "denied"; the chip implied a decision was made when none was, and gave neither the user nor the agent
+anything to act on.
+
+This sits next to two related gaps the same investigation surfaced, each its own future increment: the
+egress classifier would gate a LOCAL-file browser preview as internet egress purely because the tool name
+contains "browser" (P-EGRESS.2, future), and the egress no-live-listener block at `acp_backend.ts` returns
+`cancelled` with NO `emitSecurityEvent`, so a silent egress block leaves no audit trail (P-ENT.3, future).
+The AI-LOC ledger discoverability fix (it renders only as a buried, conditionally-shown Memory accordion)
+is also queued separately (P-LOC.3, future).
+
+### Decision
+
+Replace the hardcoded `"tool call rejected"` with omp's actual outcome, via a PURE, over-tested helper
+`desktop/tool_failure.ts` so the chip explains itself and is never mistaken for a security denial.
+
+- **`toolFailureReason(u)` → `{ didRun, reason }`** (pure; no I/O). `status === "failed"` ⇒ `didRun: true`
+  ("tool failed"); anything else (`"rejected"`) ⇒ `didRun: false` ("tool did not run"). The fallback wording
+  deliberately AVOIDS "rejected"/"denied" so an unavailable tool is not read as a gate block.
+- **`toolFailureMessage(u)`** pulls omp's message wherever omp puts it - a `content[]` array (direct `text`
+  or nested `content.text`), a `rawOutput` string or `{ error }`, or a top-level `message`/`error`/`reason`
+  - normalized (collapsed whitespace) and capped at 160 chars. When present it is folded into the chip
+  ("tool failed: syntax error at line 3" / "tool did not run: no such tool: execute").
+- **The chip stays NEUTRAL.** This path emits `block` with `quarantined: false`; a real security quarantine
+  is the gate's own stderr signal (unchanged). The renderer tooltip now reads "Tool call was not completed
+  (failed or refused) - not a security block", making the not-a-quarantine distinction explicit.
+
+No frozen-contract bytes change: the `block` `ChatEvent` already carried a `reason` field (we were
+wasting it), the prompt prefix, scanner IPC, DuckDB schema, and `contracts.ts`/`result_adapter.ts` are
+untouched.
+
+### Consequences
+
+A failed/unavailable tool now says WHY, and a denial is visibly distinct from a failure - the exact
+ambiguity that made this turn unreadable. Limitation: when omp attaches no message to a `rejected` update
+(as in the originating case), the chip is the bare "tool did not run" - honest, but it still cannot name
+"the tool isn't enabled" vs "omp refused it" because omp itself does not tell us. Surfacing that would need
+an omp-side change (out of scope; extend-don't-fork). The two egress gaps and the AI-LOC discoverability
+fix remain queued as their own increments.
+
+### Relates to
+
+`acp_backend.ts` (the `tool_call_update` emit site + the egress no-listener block noted for P-ENT.3),
+`desktop/renderer/app.ts` (`onBlock` neutral chip + tooltip), new `desktop/tool_failure.ts` +
+`desktop/tool_failure.test.ts`, new `desktop/scripts/demo_p_toolfail_1.ts`, ADR-0062 (egress gate -
+P-EGRESS.2 local-file follow-up), ADR-0066/0067 (exec gate - the other "blocked" path), ADR-0069 (the OCSF
+audit feed whose absence proved the gate never ran), ADR-0031 (the AI-LOC ledger - P-LOC.3 discoverability).
+
+## ADR-0094 - P-EGRESS.2: A local-file browser open is labeled (and audited) as a local file, not a website — plus audit the no-listener egress block (P-ENT.3)
+
+**Date:** 2026-06-29
+**Status:** Accepted - shipped.
+**Increment:** P-EGRESS.2 (folds in P-ENT.3).
+
+> Numbering: ADR-0093 (P-TOOLFAIL.1) lands in a sibling PR; this ADR is 0094 so the two never collide.
+> They append to DECISIONS.md independently and are merged in order.
+
+### Context
+
+The same investigation that produced ADR-0093 (the "tool call rejected" mislabel) surfaced two real edge
+cases in the egress gate (ADR-0062), in `acp_backend.ts`:
+
+1. **A local-file browser open was treated identically to a website visit.** `isEgress` matches any tool
+   whose name contains "browser", so "Opening game in browser" pointed at a local path
+   (`C:\…\hormuz-minesweeper.html`) was routed to the per-WEBSITE dialog — "The agent wants to visit a
+   website", a Cloudflare-Radar check on a file path (nonsense), and a "Always allow this site" pin that
+   would persist a junk host key for a path. Opening a local file is not, strictly, the agent reaching the
+   internet — but a rendered local HTML page CAN load remote resources, so the right answer is not "stop
+   gating it" (that weakens the gate) but "label it accurately and keep prompting".
+2. **The no-live-listener egress block was silent.** When there was no UI to ask, the egress path returned
+   `cancelled` with NO `emitSecurityEvent` — the one gate path that left no audit trail (every exec block
+   and every answered egress decision emits one). A fail-closed block that no one can see is a gap.
+
+### Decision
+
+- **Local-file detection (pure, tested).** New `isLocalFileTarget(target)` in `egress_policy.ts`:
+  `file://` or a clearly-absolute local path (Windows drive / UNC / POSIX / `~`) ⇒ local; any other scheme
+  (http(s), ftp, …), a bare host, or a relative/ambiguous string ⇒ NOT local (so it falls through to the
+  normal egress prompt — fail-safe).
+- **Accurate local-file approval (still a PROMPT).** A recognized local file is routed to
+  `askEgress(localFile=true)`: it SKIPS the host-based `egressDecision` auto-allow (a path has no host),
+  shows a distinct dialog ("open a local file in your browser", with the path and a "can still load remote
+  resources" warning, no Radar), offers only **open-once / block** (`EGRESS_LOCAL_OPTIONS`), and persists
+  NO host decision. The gate is preserved — a local-file open is never silently auto-approved, even in
+  Agent mode. http(s) egress is completely unchanged.
+- **Audit the no-listener block (P-ENT.3).** The no-UI egress block now emits an `egress_decision` /
+  `decision: block` SecurityEvent (`tool: "egress"` or `"egress-local-file"`), so a fail-closed block is
+  always traceable in the OCSF feed (ADR-0069).
+
+`bridge.ts`'s `permission` `ChatEvent` gains an optional `localFile?: boolean` (renderer-side type, not a
+frozen contract). No frozen-contract bytes change: the prompt prefix, scanner IPC, DuckDB schema, and
+`contracts.ts`/`result_adapter.ts` are untouched; the in-process gate's blocking behavior is unchanged
+(this only relabels a prompt and adds an audit emit).
+
+### Consequences
+
+A "preview the file I just made" no longer masquerades as a website visit, and a silent egress block is
+now auditable. The gate is not weakened — local-file opens still require explicit approval. Limitation:
+detection is conservative and path-shaped; a browser tool that passes a local file as a relative path (no
+scheme, no leading slash) is treated as ambiguous and gets the website-style prompt rather than the
+local-file one — acceptable (it still PROMPTS), and widening it risks misclassifying real bare-host targets.
+
+### Relates to
+
+`acp_backend.ts` (the egress decision block + `askEgress` + the audited no-listener block + the
+`EGRESS_LOCAL_OPTIONS` set), `desktop/egress_policy.ts` (`isLocalFileTarget`) + `egress_policy.test.ts`,
+`desktop/renderer/app.ts` (the local-file permission card + confirmation toast), `desktop/renderer/bridge.ts`
+(`localFile?` on the permission event), new `desktop/scripts/demo_p_egress_2.ts`, ADR-0062 (the egress gate
+this refines), ADR-0069 (the OCSF audit feed P-ENT.3 completes), ADR-0093 (the sibling chip fix from the
+same investigation).
+
+## ADR-0095 - P-LOC.3: The AI-authored code ledger is discoverable and never silently vanishes
+
+**Date:** 2026-06-29
+**Status:** Accepted - shipped.
+**Increment:** P-LOC.3.
+
+### Context
+
+Third fix from the same session's investigation. The AI-authored code ledger (P-LOC.2, ADR-0031) is real
+and persisted — a frozen DuckDB table `ai_loc_ledger`, written at the gate on every AI edit that passes,
+read back by `aiLocSummary()` — but a user reported "where did the AI-LOC go? I don't see it anymore in any
+menu." Two UI reasons, both confirmed:
+
+1. **No entry point.** The ledger renders only as an accordion (`mem.ailoc`) inside the Memory panel, below
+   the cost ledger. There is no rail glyph, no command-palette entry, no tab — you have to already know it
+   is there and scroll to it.
+2. **It silently vanishes when empty.** The section was gated `if (d?.aiLoc)`. `aiLocSummary()` returns
+   `null` when the obs DB is missing/unreadable or has zero rows, so the WHOLE section disappeared with no
+   placeholder — indistinguishable from "the feature was removed."
+
+(The data itself was never at risk; this is purely surfacing.)
+
+### Decision
+
+- **Always render the section while a session is active, with an explicit empty state.** `memoryHtml`
+  now renders `mem.ailoc` inside `if (d) { … }` and branches on a pure helper: data card when there is at
+  least one recorded edit, else "No AI-authored lines recorded yet — they'll appear here … as the agent
+  edits files through the gate." The section is therefore present in both states; it never just disappears.
+- **A pure, tested visibility rule.** New `desktop/ailoc_view.ts` `aiLocHasData(aiLoc)` (null-safe; true iff
+  `totals.edits > 0`) encodes the data-vs-empty decision out of the DOM-bound renderer, mirroring the
+  `tool_failure.ts` pattern (ADR-0093) so the "never vanish" intent is locked by a unit test.
+- **A command-palette entry point.** A new action — "Open AI-authored code ledger" — opens the Memory panel
+  with the `mem.ailoc` accordion expanded (`OPEN.add("mem.ailoc"); focusInspector("memory")`), the same
+  reveal idiom the Security panel uses for a live block. The ledger is now reachable without hunting.
+
+No frozen-contract bytes change: storage (`ai_loc_ledger`, migration 0007), the prompt prefix, scanner IPC,
+and `contracts.ts`/`result_adapter.ts` are untouched. This is presentation only.
+
+### Consequences
+
+The Manager-role headline metric (ADR-0088 foregrounds it; the manager guide leads with it) is now both
+discoverable and self-explaining when empty. Limitation: it is still surfaced inside the Memory panel
+rather than a dedicated dashboard — a fuller Manager/Exec aggregate view remains P-ROLE.4. The empty-state
+copy assumes the gate-write path (ADR-0031); if that ever regresses, the section would read "none yet"
+rather than erroring — acceptable (fail-quiet for a read-only dashboard), and the gate's own tests guard
+the write path.
+
+### Relates to
+
+`desktop/renderer/app.ts` (the always-on section + empty state + the palette action), new
+`desktop/ailoc_view.ts` + `desktop/ailoc_view.test.ts`, new `desktop/scripts/demo_p_loc_3.ts`, ADR-0031
+(P-LOC.1/.2 — the ledger this surfaces), ADR-0088 (role foregrounding — Manager leads with this metric),
+ADR-0093 (the sibling pure-helper pattern), the P-DOC.1 manager guide (which documents the ledger).
+
+## ADR-0096 - P-PREVIEW.1-3: An in-app browser preview the agent can drive and screenshot (resizable fly-out)
+
+**Date:** 2026-06-29
+**Status:** Accepted - SCOPE/PLAN + P-PREVIEW.1 shipped (panel + local-file preview + screenshot-to-chat).
+**Increment:** P-PREVIEW.1 (this); P-PREVIEW.2/.3 phased below.
+
+### Context
+
+LUCID writes web apps but cannot *run* them: the minesweeper turn (ADR-0093) wrote a self-contained HTML
+game, tried to "open in browser", and dead-ended because no such capability exists — the agent (and the
+user) had no way to see whether the UI actually worked. The product can author code but not close the
+build→see→fix loop. A reviewer's natural ask: let the agent preview and screenshot the app it just built,
+shown in a panel the user can watch — like the Knowledge Graph fly-out, resizable on the right.
+
+The pieces already exist: LUCID is an **Electron** shell (so a page can be rendered in-app and the window
+captured to a PNG), the **Knowledge Graph** panel is a resizable right-edge `<aside>` with a drag handle
+and mutual-exclusion with the other right surfaces (the exact UX to clone), tool results already flow back
+as `ToolResult`, and the **egress gate** (ADR-0062 / ADR-0094) already governs reaching out — a rendered
+local page that fetches remote resources is exactly an egress concern.
+
+### Decision
+
+Add a **Preview** fly-out panel and (phased) the agent tools to drive it. Extend-don't-fork throughout: a
+renderer panel + a thin Electron capture seam in the existing preload + (later) omp custom tools.
+
+**P-PREVIEW.1 (this increment) — the panel + user-driven local preview + screenshot-to-chat:**
+- A new right-edge `<aside id="preview">` cloned from the KG panel: a `data-resize="preview"` left-edge
+  drag handle, persisted width, a rail glyph, and mutual exclusion with the inspector / KG / IDE / settings
+  (reusing the existing `closeKnowledge`/`closeIde`/`closeSettings` idiom). A path/URL bar + Open + Reload.
+- The page renders in a **sandboxed `<iframe sandbox="allow-scripts allow-forms">`** (works in both the
+  Electron app and the dev-server browser; no `webviewTag` attack surface added). Local targets resolve to
+  `file://`; the resolver is pure and shared.
+- A pure `desktop/preview_resolve.ts` `resolvePreview(target)` → `{ kind: "local" | "remote" | "blocked",
+  src, label }`, reusing `isLocalFileTarget` (ADR-0094). Remote (`http(s)`) is recognized but, in this
+  increment, **not auto-loaded** — it is surfaced as `remote` and gated in P-PREVIEW.3; junk/empty ⇒
+  `blocked`. Fail-safe: anything not clearly local is not silently rendered.
+- **Screenshot-to-chat**: a button captures the panel via the existing window's `webContents.capturePage(rect)`
+  (cropped to the iframe's bounding rect) through a new `lucid.capturePreview(rect)` preload→IPC seam, and
+  drops the PNG into the composer as an attachment for the agent to react to. Electron-only; in the
+  dev-server browser the button is disabled with a tooltip (no `capturePage` outside Electron).
+
+**P-PREVIEW.2 (next) — the agent drives it.** Gated omp **custom tools** so the agent itself can
+`preview_open(path)`, `preview_screenshot()` (returns the PNG as a `ToolResult` image so the agent *sees*
+its own UI), `preview_snapshot()` (the DOM/a11y tree as text — cheap "does the element exist / what does it
+say"), and `preview_click/fill/console`. The user watches the agent drive the panel live. Each tool call
+is surfaced like any other (and the screenshot inline in chat).
+
+**P-PREVIEW.3 (later) — remote + hardening.** Egress-gated remote URLs (a page load and any fetch it makes
+route through ADR-0062/0094, or are blocked in a strict profile), a managed **preview profile**
+(off / local-only / gated-remote) under ADR-0068, and sandbox hardening (CSP, partition isolation).
+
+### Security
+
+The preview renders **untrusted, agent-authored code**, so it is sandboxed (`<iframe sandbox>`, no
+`allow-same-origin` for remote, no node access — the main window stays `contextIsolation: true,
+nodeIntegration: false`). A local file open reuses the P-EGRESS.2 prompt/audit; remote loads are deferred
+to the egress-gated P-PREVIEW.3 rather than shipped open. Screenshots are metadata-safe (they show only
+what the user already sees on screen). Fail-closed: the resolver never renders an ambiguous target, and the
+capture seam is absent (button disabled) outside Electron.
+
+### Verification boundary (honest)
+
+The pure resolver + the panel DOM are verified here (unit tests + a dev-server DOM snapshot). The Electron
+**`capturePage` path cannot run in this sandbox** (no Electron/display), so it is implemented behind the
+preload seam and verified live in the packaged app — called out in the PR, not claimed as tested.
+
+### Relates to
+
+`desktop/renderer/app.ts` (the panel + rail + resizer + screenshot button), `desktop/preload.ts` +
+`desktop/main.ts` (`capturePreview` IPC), `desktop/renderer/bridge.ts` (the `capturePreview` seam), new
+`desktop/preview_resolve.ts` + `desktop/preview_resolve.test.ts` + `desktop/scripts/demo_p_preview_1.ts`,
+ADR-0062/0094 (egress gate the resolver + P-PREVIEW.3 build on), ADR-0093 (the minesweeper turn that
+motivated this), the Knowledge-graph fly-out (the UX pattern cloned).
+
+### Addendum (2026-06-30) — P-PREVIEW.2 re-scoped to "auto-on-write"; the custom-tool version moves later
+
+Building P-PREVIEW.2 surfaced a feasibility constraint. The originally-planned version — the agent itself
+calling `preview_open`/`preview_screenshot` custom tools and receiving its own screenshot as a multimodal
+`ToolResult` — requires (a) a custom agent-tool registered through omp's `pi` plugin interface, which LUCID
+does **not do anywhere today** (every extension uses only `pi.on(...)` hooks + `pi.registerProvider(...)`;
+omp is a CLI, `@oh-my-pi/pi-agent-core`, and its custom-tool factory shape is unconfirmed — CLAUDE.md lists
+confirming it as an open task), and (b) a cross-process round-trip (omp tool → desktop → renderer
+`capturePage` → back to the tool) that **cannot be verified without live omp + Electron** (absent in CI/this
+environment). Shipping that blind would put unverified code on the agent-tool surface of a security product.
+
+So **P-PREVIEW.2 ships as the verifiable, equally-faithful "auto-on-write"**: LUCID already sees the agent's
+`tool_call` stream, so when a write/edit produces a browser-previewable file (`.html`/`.svg`), a pure
+`previewablePath()` detects it and the backend emits a `preview-available` event; the renderer auto-surfaces
+it (renders live if the panel is open, else a one-click "Open preview" toast), and the panel defaults to the
+agent's most recent previewable write. The user watches what the agent builds appear — desktop+renderer only,
+unit-tested + DOM-verifiable, no omp custom tool. The surfaced path still flows through the fail-safe resolver
+(local-only) before anything renders.
+
+**Re-phasing:** the true agent-*invoked* preview (custom omp tools + screenshot-as-multimodal-ToolResult,
+so the model sees and self-corrects on its own UI) becomes **P-PREVIEW.3a**, to be built where omp+Electron
+can verify it, gated on confirming omp's custom-tool API. Egress-gated remote URLs + sandbox hardening +
+managed preview profile remain **P-PREVIEW.3b**. New: `previewablePath()` in `preview_resolve.ts` (+ tests),
+the `preview-available` `ChatEvent` (acp_backend + bridge), `onPreviewAvailable` in the renderer,
+`desktop/scripts/demo_p_preview_2.ts`.
+
+### Addendum (2026-06-30) — P-PREVIEW.3 sandbox hardening shipped; 3a feasibility CONFIRMED, deferred to a live env
+
+**P-PREVIEW.3 (shipped):** hardened the sandbox the preview `<iframe>` runs untrusted, agent-authored code
+in. A single source of truth (`PREVIEW_SANDBOX` / `PREVIEW_ALLOW` / `PREVIEW_SANDBOX_FORBIDDEN` in
+`preview_resolve.ts`, used by the markup) keeps the policy and its security tests from drifting:
+`sandbox="allow-scripts allow-forms"` (scripts run, but **opaque-origin** — no `allow-same-origin`, so the
+page can't read LUCID's origin/cookies/localStorage), `allow=""` (Permissions-Policy denies camera, mic,
+geolocation, and every other powerful feature), and a forbidden-token test that fails if `allow-same-origin`
+/ `allow-top-navigation` / `allow-popups` / `allow-modals` / `allow-pointer-lock` / `allow-downloads` ever
+creep in. 3 sandbox tests + `make demo-P-PREVIEW.3`.
+
+**P-PREVIEW.3a feasibility — CONFIRMED (the open question is resolved).** omp's `pi` plugin interface **does**
+expose `pi.registerTool({ name, parameters, execute })` ("Register tools the LLM can call" — omp CHANGELOG;
+the built-in autoresearch extension uses `f.registerTool(...)` + `f.setActiveTools(...)`), and
+`AgentToolResult.content` accepts `ImageContent` — so `preview_open` AND `preview_screenshot` (the agent
+receiving its own screenshot as a multimodal result, then self-correcting) are buildable **without forking
+omp** (invariant #1 holds). What blocks shipping it *now*: it requires a **new `-e` extension**, and a faulty
+extension can break omp launch — unacceptable to ship into a tagged release **without live omp+Electron
+verification** (absent here). So 3a is **ready to build in a live env**, not deferred for feasibility.
+Its cross-process screenshot round-trip (omp tool ⇄ desktop `capturePage`) is the one piece still to design.
+
+**Final phasing:** P-PREVIEW.1 (panel), .2 (auto-on-write), .3 (sandbox hardening) — **shipped**.
+P-PREVIEW.3a (agent-invoked `preview_open`/`preview_screenshot` via `pi.registerTool`) and P-PREVIEW.3b
+(egress-gated remote URLs + managed preview profile) — **ready, pending a live omp+Electron session**.
+New here: `PREVIEW_SANDBOX`/`PREVIEW_ALLOW`/`PREVIEW_SANDBOX_FORBIDDEN` (+ tests),
+`desktop/scripts/demo_p_preview_3.ts`. Shipped in **v1.8.14** (v1.8.13 skipped).
+
+## ADR-0097 - P-SKILL.4: the Agent Skill directory + management menu (SCOPE/PLAN)
 
 **Date:** 2026-06-28
 **Status:** Accepted - SCOPE/PLAN. Designed here; build is its own increment. Renderer + desktop-server
 only; no `contracts.ts`, scanner, prompt-prefix, or schema change. This is the local foundation the
-enterprise skills registry (ADR-0089) plugs into.
+enterprise skills registry (ADR-0098) plugs into.
 **Increment:** P-SKILL.4. Unifies the EXISTING skill surfaces (ADR-0029 bundled corpus, ADR-0045
 scan-gated import, omp's `discoverSkills`, the `.agents/skills/` curated tree) under one directory + a
 management menu. Invents no new trust mechanism.
@@ -6749,7 +7476,7 @@ Skills already enter the app through four doors, but there is no single place to
 The ADR-0029 picker shows bundled + project skills "under one roof" *for invocation*, but it is not a
 management surface: you cannot see a skill's **source root** or **trust label** side by side, inspect its
 body + bundled resources, enable/disable it, remove an imported one, re-scan it, or check it against the
-whitepaper's deployment-readiness bar. With the registry add-on coming (ADR-0089), the app needs a real
+whitepaper's deployment-readiness bar. With the registry add-on coming (ADR-0098), the app needs a real
 directory the registry can register as just another source.
 
 ### Decision - one Skill Directory view + a per-skill management menu
@@ -6759,7 +7486,7 @@ A **Skills** view in the desktop app that ENUMERATES every skill from every root
 **Directory (the catalog).** One list, grouped by source, each row carrying:
 - `name` (kebab-case), one-line `description` (the routing/trigger text), invocation id `/skill:<name>`.
 - **Source root**: `bundled | project (.omp/skills) | user (~/.omp/agent/skills) | agents (.agents/skills) |
-  plugin | registry` (the last reserved for ADR-0089).
+  plugin | registry` (the last reserved for ADR-0098).
 - **Trust label** from the closed set (`trusted | untrusted | suspicious | quarantined`, invariant #7):
   bundled + `.agents` vendor-curated = `trusted` (frozen, reviewed); imported/project/user carry the
   scan verdict from the P-SKILL.1 gate; anything unscanned is shown as `untrusted` until scanned.
@@ -6783,9 +7510,9 @@ A **Skills** view in the desktop app that ENUMERATES every skill from every root
   confinement check, mirroring the import write). **Bundled + `.agents` are immutable** (read-only).
 - **Readiness checklist** - surface the whitepaper's deployment bar per skill (frontmatter validates;
   description has what + when + when-not; security scan clean; no hard-coded secrets/paths). Advisory, not
-  blocking; it is the same bar the registry (ADR-0089) will enforce at publish time.
+  blocking; it is the same bar the registry (ADR-0098) will enforce at publish time.
 
-**The registry seam.** ADR-0089's registry is modeled as one more **source root** (`registry`): the
+**The registry seam.** ADR-0098's registry is modeled as one more **source root** (`registry`): the
 directory enumerates remote skills the same way, and "install" = fetch → verify signature → scan-gate →
 write into a local root → it appears as a normal row. The public app ships only this READER seam; the
 hosting/runbooks are private add-on IP. This is the same public-seam / private-IP split as managed-config
@@ -6818,19 +7545,19 @@ New first-party files carry the BUSL-1.1 header (ADR-0086).
 
 ADR-0029 (P-IDE.2 bundled corpus + the under-one-roof picker), ADR-0045 (P-SKILL.1/2/3 scan-gated import +
 builder + session-derived), `desktop/skills_data.ts` / `desktop/renderer/skills.ts`, `.agents/skills/` +
-`SOURCES.md`, ADR-0019 (gate + Security-panel block surfacing), ADR-0089 (the enterprise registry that
+`SOURCES.md`, ADR-0019 (gate + Security-panel block surfacing), ADR-0098 (the enterprise registry that
 registers as a `registry` source), and CLAUDE.md invariants #3/#5/#6/#7 + keystone #2.
 
-## ADR-0089 - P-SKILLREG.1: enterprise Agent Skills registry - capability spike (SCOPE/PLAN)
+## ADR-0098 - P-SKILLREG.1: enterprise Agent Skills registry - capability spike (SCOPE/PLAN)
 
 **Date:** 2026-06-28
 **Status:** Accepted - SCOPE/PLAN (capability spike). This ADR records the cross-provider research and the
-build-vs-adopt decision. The public repo ships only the **registry-reader seam** (ADR-0088's `registry`
+build-vs-adopt decision. The public repo ships only the **registry-reader seam** (ADR-0097's `registry`
 source). The registry server, the per-provider Terraform runbooks, and their development ADRs are
 **private add-on IP** (`mlcyclops/lucidagentIDEaddon`): ADR-A012 (reference architecture + distribution
 model) and ADR-A013 (per-provider Terraform runbook framework + IL5). Same public-seam / private-IP split
 as ADR-0068 (managed-config) and ADR-0069 (SIEM `Sink`).
-**Increment:** P-SKILLREG.1. Builds on ADR-0088 (the local skill directory the registry plugs into) and
+**Increment:** P-SKILLREG.1. Builds on ADR-0097 (the local skill directory the registry plugs into) and
 ADR-0045 (the fail-closed scan-gate every installed skill must clear).
 
 ### Context
@@ -6888,7 +7615,7 @@ up the OCI+S3 registry on each substrate; where a first-party preview registry e
 commercial), an **optional** connector publishes/syncs metadata into it for native discovery. **In IL5 we
 self-host, period** - the preview registries aren't accredited and IL5 uses separate API partitions.
 
-**3. The public app is a read-only registry consumer.** Per ADR-0088, a registry is one more `registry`
+**3. The public app is a read-only registry consumer.** Per ADR-0097, a registry is one more `registry`
 source root: the app fetches a skill, **verifies its signature, runs it through the same fail-closed scan
 gate, and only then installs it** into a local skill root. The public, source-available repo ships ONLY
 this reader seam (signature verify + scan-gate + install). The registry server config and the runbooks are
@@ -6927,7 +7654,7 @@ In `mlcyclops/lucidagentIDEaddon` (not this public repo):
 ### Public-repo deliverables (this increment)
 
 - This ADR (the spike + research of record).
-- The ADR-0088 `registry` source seam (the reader the registry plugs into).
+- The ADR-0097 `registry` source seam (the reader the registry plugs into).
 - README "Enterprise Skills Registry (coming soon)" - the public-facing "coming soon" marker.
 
 ### Invariants preserved
@@ -6941,6 +7668,6 @@ repo (ADR-0086 licensing model). New first-party files carry the BUSL-1.1 header
 
 ### Relates to
 
-ADR-0088 (the skill directory + `registry` source), ADR-0045 (the scan-gate every install clears), ADR-0029
+ADR-0097 (the skill directory + `registry` source), ADR-0045 (the scan-gate every install clears), ADR-0029
 (bundled-corpus trust model), ADR-0068/0069 (the public-seam / private-IP pattern this mirrors), the private
 ADR-A012/A013 (the architecture + runbooks), and CLAUDE.md invariants #1/#3/#5/#6/#7 + keystone #2.

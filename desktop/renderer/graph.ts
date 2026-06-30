@@ -1,9 +1,9 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/renderer/graph.ts — a tiny, dependency-free force-directed SVG graph for the
+// desktop/renderer/graph.ts - a tiny, dependency-free force-directed SVG graph for the
 // personalization Knowledge view (ADR-0010 P9.3). Nodes = entities, edges = links; click
-// a node to drill in. Hand-rolled simulation (O(n^2) — personal KGs are small). Supports
+// a node to drill in. Hand-rolled simulation (O(n^2) - personal KGs are small). Supports
 // drag, pan, wheel-zoom, and a kind/trust colour lens.
 //
 // P9.3+ polish (ideas ported from vasturiano's force-graph, kept ZERO-DEP per ADR-0010):
@@ -123,7 +123,7 @@ export function mountGraph(host: HTMLElement, data: PersonalGraphData, onSelect:
 
   let phase = 0; // advances every (animating) frame to drive particle flow
   // The EXPENSIVE pass: edge paths, node transforms, viewport transform. Only run when geometry actually
-  // changed (sim stepping / fit easing / drag / pan / selection / lens) — see #114. It also caches each
+  // changed (sim stepping / fit easing / drag / pan / selection / lens) - see #114. It also caches each
   // edge's endpoints + control point so the cheap particle pass below needs no recompute while idle.
   const paintLayout = () => {
     for (const ed of edgeEls) {

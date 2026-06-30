@@ -283,6 +283,35 @@ demo-P-GOAL.13: ## P-GOAL.13 (ADR-0067): unattended loop Speed↔Risk dial — g
 demo-P-ENT.2: ## P-ENT.2 (ADR-0069): OCSF security audit export — each source → valid OCSF Detection Finding, fail-safe dispatcher (dead sink never blocks a turn)
 	$(BUN) run desktop/scripts/demo_p_ent_2.ts
 
+.PHONY: demo-P-ROLE.1
+demo-P-ROLE.1: ## P-ROLE.1 (ADR-0088): role-based onboarding — closed role set, fail-safe normalize (unknown->developer), calm per-role default landing surface, cosmetic-only (gate untouched)
+	$(BUN) run desktop/scripts/demo_p_role_1.ts
+
+.PHONY: demo-P-ROLE.1b
+demo-P-ROLE.1b: ## P-ROLE.1b (ADR-0089): first-run guided walkthrough — tailored per-role coachmark tour (opens on composer, closes on closer, no dangling targets), Back/Next/Skip card, replay-guard
+	$(BUN) run desktop/scripts/demo_p_role_1b.ts
+
+demo-P-NETDIAG.1: ## P-NETDIAG.1 (ADR-0090): in-app OAuth localhost-callback watcher - netstat/lsof parse, keeps loopback + all-interface listeners, flags a new callback-port listener as the bind-or-not evidence, read-only diagnostics (no gate verdict)
+	$(BUN) run desktop/scripts/demo_p_netdiag_1.ts
+
+demo-P-TOOLFAIL.1: ## P-TOOLFAIL.1 (ADR-0093): honest failed/rejected tool-call chip - distinguishes ran-and-errored (failed) from did-not-run (rejected/unavailable), surfaces omp's own message, never implies a security denial
+	$(BUN) run desktop/scripts/demo_p_toolfail_1.ts
+
+demo-P-EGRESS.2: ## P-EGRESS.2 (ADR-0094): a local-file browser open is labeled a local-file open (open-once/block, no host pin) not a website visit, http(s) egress unchanged, and the no-listener block is audited (folds in P-ENT.3)
+	$(BUN) run desktop/scripts/demo_p_egress_2.ts
+
+demo-P-LOC.3: ## P-LOC.3 (ADR-0095): the AI-authored code ledger is discoverable (command-palette entry) and never silently vanishes (always rendered when a session is active, with an explicit empty state)
+	$(BUN) run desktop/scripts/demo_p_loc_3.ts
+
+demo-P-PREVIEW.1: ## P-PREVIEW.1 (ADR-0096): in-app browser preview - resolver renders local files the agent builds, gates remote (egress, P-PREVIEW.3), blocks the ambiguous; panel + screenshot-to-chat seam
+	$(BUN) run desktop/scripts/demo_p_preview_1.ts
+
+demo-P-PREVIEW.2: ## P-PREVIEW.2 (ADR-0096): auto-surface the agent's freshly-written app - a write/edit of a previewable file (.html/.svg) lights up the Preview panel; reads + non-page writes never do
+	$(BUN) run desktop/scripts/demo_p_preview_2.ts
+
+demo-P-PREVIEW.3: ## P-PREVIEW.3 (ADR-0096): hardened preview sandbox - opaque-origin <iframe> (scripts on, same-origin off), no escape tokens, all powerful features denied
+	$(BUN) run desktop/scripts/demo_p_preview_3.ts
+
 .PHONY: dashboards
 dashboards: ## Materialize dashboard CSVs from a DuckDB into observable/docs/data (DB=path)
 	$(BUN) run harness/scripts/materialize_dashboards.ts $(DB) observable/docs/data

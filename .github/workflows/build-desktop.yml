@@ -86,15 +86,31 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y rpm
 
+      # electron-builder's pkg target resolves the signing cert even for an unsigned (identity:null)
+      # build. An EMPTY CSC_LINK is NOT the same as unset: '' != null in JS, so electron-builder treats
+      # '' as a cert path, resolves it to the project dir, and dies "<projectDir> not a file" (only the
+      # pkg target trips this — the zip/app path short-circuits on identity:null). So export CSC_LINK /
+      # CSC_KEY_PASSWORD ONLY when a real cert secret exists; never as empty strings.
+      - name: Configure code-signing (only when a cert secret exists)
+        shell: bash
+        env:
+          MAC_CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          MAC_CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+        run: |
+          if [[ "$RUNNER_OS" == "macOS" && -n "$MAC_CSC_LINK" ]]; then
+            { echo "CSC_LINK=$MAC_CSC_LINK"; echo "CSC_KEY_PASSWORD=$MAC_CSC_KEY_PASSWORD"; } >> "$GITHUB_ENV"
+          elif [[ "$RUNNER_OS" == "Windows" && -n "$WIN_CSC_LINK" ]]; then
+            { echo "CSC_LINK=$WIN_CSC_LINK"; echo "CSC_KEY_PASSWORD=$WIN_CSC_KEY_PASSWORD"; } >> "$GITHUB_ENV"
+          fi
+
       - name: Build installer (${{ matrix.script }})
         run: bun run ${{ matrix.script }}
         working-directory: desktop
         env:
-          # --- Code signing (all optional; absent secrets ⇒ unsigned build) ---
-          # Per-OS Authenticode / Apple Developer cert as base64-encoded PKCS#12. Linux (AppImage) is
-          # unsigned, so it must resolve to empty — don't let it inherit the Windows cert.
-          CSC_LINK: ${{ runner.os == 'macOS' && secrets.MAC_CSC_LINK || runner.os == 'Windows' && secrets.WIN_CSC_LINK || '' }}
-          CSC_KEY_PASSWORD: ${{ runner.os == 'macOS' && secrets.MAC_CSC_KEY_PASSWORD || runner.os == 'Windows' && secrets.WIN_CSC_KEY_PASSWORD || '' }}
+          # CSC_LINK / CSC_KEY_PASSWORD come from the "Configure code-signing" step above — set ONLY
+          # when a real cert secret exists, never as '' (an empty CSC_LINK crashes the pkg build).
           # Only hunt the keychain for a mac identity when a mac cert is provided.
           CSC_IDENTITY_AUTO_DISCOVERY: ${{ runner.os == 'macOS' && secrets.MAC_CSC_LINK != '' }}
           # macOS notarization (electron-builder runs notarytool when these are set).

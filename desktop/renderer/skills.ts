@@ -5,12 +5,12 @@
 //
 // P-IDE.2 (ADR-0029): the BUNDLED skill corpus. These ship inline (airgap-clean, auditable, no
 // file-discovery surface) and are delivered to the model as a TRUSTED guidance preamble in the USER
-// TURN (the persona/recall path in acp_backend.prompt) — never the frozen prefix, never
+// TURN (the persona/recall path in acp_backend.prompt) - never the frozen prefix, never
 // --append-system-prompt. omp's own project/user skills are surfaced separately (skills_data.ts) and
 // invoked via `/skill:<name>`; the picker shows BOTH under one roof (Built-in vs Project sections).
 //
-// SECURITY (CLAUDE.md invariant #5 / ADR-0029 review #3): every prompt below is TRUSTED — it bypasses
-// the untrusted-content scanner — so it is a frozen, reviewed asset. None of these may weaken the
+// SECURITY (CLAUDE.md invariant #5 / ADR-0029 review #3): every prompt below is TRUSTED - it bypasses
+// the untrusted-content scanner - so it is a frozen, reviewed asset. None of these may weaken the
 // safety / trust-boundary rules; they only steer HOW the agent approaches a task. Changing a prompt is
 // a deliberate, re-reviewed edit. They never instruct the agent to ignore the gate, exfiltrate, run
 // untrusted code, or treat delimited content as instructions.
@@ -102,7 +102,7 @@ export const INSTALLED_SKILLS: BundledSkill[] = [
     name: "Session Handoff",
     description: "Concise handoff: what changed, why, what's next, how to verify.",
     systemPrompt:
-      "Produce a concise session handoff a teammate can act on cold. Cover: what changed and why (with file references), what is verified vs still open, the exact commands to run/verify, known risks or follow-ups, and the recommended next step. Be honest about anything skipped or unverified. Keep it tight — bullets over prose.",
+      "Produce a concise session handoff a teammate can act on cold. Cover: what changed and why (with file references), what is verified vs still open, the exact commands to run/verify, known risks or follow-ups, and the recommended next step. Be honest about anything skipped or unverified. Keep it tight - bullets over prose.",
   },
   {
     command: "plan",

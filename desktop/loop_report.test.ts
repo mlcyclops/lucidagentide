@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/loop_report.test.ts — P-GOAL.9 (ADR-0054): the After-Action Report's pure core.
+// desktop/loop_report.test.ts - P-GOAL.9 (ADR-0054): the After-Action Report's pure core.
 
 import { describe, expect, test } from "bun:test";
 import {
@@ -158,7 +158,7 @@ describe("renderLoopReport", () => {
     expect(md).not.toContain("```mermaid\npie showData title Tool calls by type\n```");
   });
 
-  test("is deterministic — same metrics, same bytes", () => {
+  test("is deterministic - same metrics, same bytes", () => {
     expect(renderLoopReport(metrics())).toBe(renderLoopReport(metrics()));
   });
 
@@ -190,7 +190,7 @@ describe("summarizeLoop", () => {
 describe("renderBlocks", () => {
   test("an unconfigured dial reports the safest default posture", () => {
     const out = renderBlocks([], undefined);
-    expect(out).toContain("default — safest");
+    expect(out).toContain("default - safest");
     expect(out).toContain("Nothing blocked");
   });
   test("shows the dial posture this run used", () => {
@@ -212,7 +212,7 @@ describe("renderBlocks", () => {
   });
 });
 
-describe("renderLoopReport — Blocks section", () => {
+describe("renderLoopReport - Blocks section", () => {
   test("always renders a Blocks section, with the dial posture", () => {
     const md = renderLoopReport(metrics({ blocks: [{ iter: 1, tool: "rm", tier: "T4", reason: "catastrophic" }] }));
     expect(md).toContain("## Blocks");

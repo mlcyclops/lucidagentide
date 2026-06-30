@@ -21,7 +21,7 @@ test("blocked count appears only when nonzero", () => {
 
 test("done is 100% and final", () => {
   const r = formatImportLine({ state: "done", messages: 10, totalMessages: 10, learned: 7, blocked: 0 });
-  expect(r).toEqual({ pct: 100, line: "Done — learned 7 facts from 10 messages", done: true });
+  expect(r).toEqual({ pct: 100, line: "Done - learned 7 facts from 10 messages", done: true });
 });
 
 test("cancelled keeps the partial facts", () => {

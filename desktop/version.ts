@@ -8,5 +8,11 @@
 // MIRRORS this string (electron's app.getVersion() / electron-builder read package.json);
 // version.test.ts asserts the two stay equal, so a bump in one is forced into the other.
 //
-// Launch baseline: v1.8.7.
-export const APP_VERSION = "1.8.7";
+// Launch baseline: v1.8.7. v1.8.8 = role onboarding + tour + providers reorg.
+// v1.8.10 = Perplexity→Providers, set-note readability, Gemini model cards, macOS .pkg/cask.
+// v1.8.11 = in-app network diagnostics (OAuth callback watcher) + OAuth re-login self-heal.
+// v1.8.12 = OAuth broker lifespan fix (stdin:pipe) + device-flow support + auto-refresh.
+// v1.8.14 = agent-trust UX (honest tool-failure chip, local-file egress, AI-LOC discoverability) +
+//           role user guides + in-app browser Preview (panel, auto-surface-on-write, hardened sandbox).
+//           (v1.8.13 skipped.)
+export const APP_VERSION = "1.8.14";
