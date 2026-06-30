@@ -7422,3 +7422,30 @@ can verify it, gated on confirming omp's custom-tool API. Egress-gated remote UR
 managed preview profile remain **P-PREVIEW.3b**. New: `previewablePath()` in `preview_resolve.ts` (+ tests),
 the `preview-available` `ChatEvent` (acp_backend + bridge), `onPreviewAvailable` in the renderer,
 `desktop/scripts/demo_p_preview_2.ts`.
+
+### Addendum (2026-06-30) — P-PREVIEW.3 sandbox hardening shipped; 3a feasibility CONFIRMED, deferred to a live env
+
+**P-PREVIEW.3 (shipped):** hardened the sandbox the preview `<iframe>` runs untrusted, agent-authored code
+in. A single source of truth (`PREVIEW_SANDBOX` / `PREVIEW_ALLOW` / `PREVIEW_SANDBOX_FORBIDDEN` in
+`preview_resolve.ts`, used by the markup) keeps the policy and its security tests from drifting:
+`sandbox="allow-scripts allow-forms"` (scripts run, but **opaque-origin** — no `allow-same-origin`, so the
+page can't read LUCID's origin/cookies/localStorage), `allow=""` (Permissions-Policy denies camera, mic,
+geolocation, and every other powerful feature), and a forbidden-token test that fails if `allow-same-origin`
+/ `allow-top-navigation` / `allow-popups` / `allow-modals` / `allow-pointer-lock` / `allow-downloads` ever
+creep in. 3 sandbox tests + `make demo-P-PREVIEW.3`.
+
+**P-PREVIEW.3a feasibility — CONFIRMED (the open question is resolved).** omp's `pi` plugin interface **does**
+expose `pi.registerTool({ name, parameters, execute })` ("Register tools the LLM can call" — omp CHANGELOG;
+the built-in autoresearch extension uses `f.registerTool(...)` + `f.setActiveTools(...)`), and
+`AgentToolResult.content` accepts `ImageContent` — so `preview_open` AND `preview_screenshot` (the agent
+receiving its own screenshot as a multimodal result, then self-correcting) are buildable **without forking
+omp** (invariant #1 holds). What blocks shipping it *now*: it requires a **new `-e` extension**, and a faulty
+extension can break omp launch — unacceptable to ship into a tagged release **without live omp+Electron
+verification** (absent here). So 3a is **ready to build in a live env**, not deferred for feasibility.
+Its cross-process screenshot round-trip (omp tool ⇄ desktop `capturePage`) is the one piece still to design.
+
+**Final phasing:** P-PREVIEW.1 (panel), .2 (auto-on-write), .3 (sandbox hardening) — **shipped**.
+P-PREVIEW.3a (agent-invoked `preview_open`/`preview_screenshot` via `pi.registerTool`) and P-PREVIEW.3b
+(egress-gated remote URLs + managed preview profile) — **ready, pending a live omp+Electron session**.
+New here: `PREVIEW_SANDBOX`/`PREVIEW_ALLOW`/`PREVIEW_SANDBOX_FORBIDDEN` (+ tests),
+`desktop/scripts/demo_p_preview_3.ts`. Shipped in **v1.8.14** (v1.8.13 skipped).

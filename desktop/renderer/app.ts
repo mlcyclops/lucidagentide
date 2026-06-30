@@ -12,7 +12,7 @@ import { bridge, type ChatEvent, type ConfigOption, type GoalDial, type MemorySn
 import { ROLE_META, USER_ROLE_LIST, coachHtml, roleDefaultTab, stepsForRole, type TourStep } from "./tour.ts";
 import { modCombo, modSymbol } from "./platform.ts";
 import { aiLocHasData } from "../ailoc_view.ts";
-import { resolvePreview } from "../preview_resolve.ts";
+import { PREVIEW_ALLOW, PREVIEW_SANDBOX, resolvePreview } from "../preview_resolve.ts";
 import { roleIcon } from "./role_icons.ts";
 import { providerHasApiKey, providerKeywords } from "./budget_gate.ts";
 import { cachedSessions, cachedTranscript, setCachedSessions, setCachedTranscript, transcriptSig } from "./swr_cache.ts";
@@ -251,7 +251,7 @@ function buildShell(): void {
           </div>
         </div>
         <div class="preview-body" id="prevBody">
-          <iframe id="prevFrame" class="preview-frame" sandbox="allow-scripts allow-forms" referrerpolicy="no-referrer" title="App preview" hidden></iframe>
+          <iframe id="prevFrame" class="preview-frame" sandbox="${PREVIEW_SANDBOX}" allow="${PREVIEW_ALLOW}" referrerpolicy="no-referrer" title="App preview" hidden></iframe>
           <div class="empty preview-empty" id="prevEmpty"><span class="preview-empty-msg" id="prevEmptyMsg">Open a local HTML file to preview it here - paste its path above and press <b>Open</b>. (The agent driving this itself is coming next; remote URLs are egress-gated.)</span></div>
         </div>
       </aside>
