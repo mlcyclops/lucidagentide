@@ -390,6 +390,9 @@ export interface LucidBridge {
   // P-PREVIEW.1 (ADR-0096): capture the preview region (window capturePage, cropped) → PNG data URL.
   // Electron-only; resolves null in a plain browser (no capturePage).
   capturePreview(rect: { x: number; y: number; width: number; height: number }): Promise<string | null>;
+  // P-PREVIEW.3b (ADR-0096): may this remote URL load in the preview iframe? True only if the egress
+  // allow-list (honoring the managed ceiling) already approves the site; else it stays gated.
+  previewEgressAllows(url: string): Promise<boolean>;
   listDir(path?: string): Promise<FsList | null>; // in-app folder browser (works everywhere)
   revealPath(path: string): Promise<boolean>; // open a folder in the OS file manager (Electron only; false in browser)
   canRevealPath(): boolean; // whether the native shell can reveal a folder (Electron only)
@@ -588,6 +591,7 @@ export const bridge: LucidBridge = {
   cloneWorkspace: (url) => post("/api/workspace/clone", { url }),
   pickFolder: () => (shell?.pickFolder ? shell.pickFolder() : Promise.resolve(null)),
   capturePreview: (rect) => (shell?.capturePreview ? shell.capturePreview(rect) : Promise.resolve(null)), // P-PREVIEW.1
+  previewEgressAllows: async (url) => { const d = await getData(`/api/preview/egress-check?url=${encodeURIComponent(url)}`); return !!(d as { allow?: boolean } | null)?.allow; }, // P-PREVIEW.3b
 
   listDir: (path) => getData(`/api/fs/list${path ? `?path=${encodeURIComponent(path)}` : ""}`),
   revealPath: (path) => (shell?.revealPath ? shell.revealPath(path) : Promise.resolve(false)),
