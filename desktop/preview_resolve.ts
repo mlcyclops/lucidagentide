@@ -35,6 +35,31 @@ export function toFileUrl(target: string): string {
   return `file://${p}`;
 }
 
+// P-PREVIEW.2 (ADR-0096): auto-surface the app the agent just built. When the agent's write/edit tool
+// produces a browser-previewable file, LUCID lights up the Preview panel on it — no custom agent tool, just
+// the desktop reacting to the tool stream it already sees. This pure helper decides whether a tool call is
+// such a write, and returns the path to preview (else null). Tested + demoed.
+
+/** File extensions we can render directly in the sandboxed preview iframe (a self-contained page). */
+const PREVIEWABLE_EXT = /\.(html?|svg)$/i;
+/** Tool names that WRITE a file (omp's write/edit family). Read/search/etc. never auto-surface a preview. */
+const WRITE_TOOLS = /\b(write|edit|create|save)\b/i;
+
+/** If `toolName` is a write/edit of a browser-previewable file, return its path; else null. Pure, defensive:
+ *  pulls the path from the common rawInput shapes (path/file_path/filename/file), trims, and requires both a
+ *  write-class tool AND a previewable extension — so a `read` of an .html, or a write of a .ts, won't fire. */
+export function previewablePath(toolName: string | null | undefined, rawInput: any): string | null {
+  const name = (toolName ?? "").toLowerCase();
+  if (!WRITE_TOOLS.test(name)) return null;
+  const ri = rawInput ?? {};
+  let path = "";
+  for (const k of ["path", "file_path", "filePath", "filename", "file", "target"]) {
+    if (typeof ri[k] === "string" && ri[k].trim()) { path = ri[k].trim(); break; }
+  }
+  if (!path || !PREVIEWABLE_EXT.test(path)) return null;
+  return path;
+}
+
 /** Resolve a preview target into a safe, labeled render decision. Fail-safe: only a clearly-local file is
  *  rendered; http(s) is flagged `remote` (not loaded here — P-PREVIEW.3); everything else is `blocked`. */
 export function resolvePreview(target: string | null | undefined): PreviewTarget {

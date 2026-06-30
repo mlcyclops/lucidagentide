@@ -306,6 +306,9 @@ demo-P-LOC.3: ## P-LOC.3 (ADR-0095): the AI-authored code ledger is discoverable
 demo-P-PREVIEW.1: ## P-PREVIEW.1 (ADR-0096): in-app browser preview - resolver renders local files the agent builds, gates remote (egress, P-PREVIEW.3), blocks the ambiguous; panel + screenshot-to-chat seam
 	$(BUN) run desktop/scripts/demo_p_preview_1.ts
 
+demo-P-PREVIEW.2: ## P-PREVIEW.2 (ADR-0096): auto-surface the agent's freshly-written app - a write/edit of a previewable file (.html/.svg) lights up the Preview panel; reads + non-page writes never do
+	$(BUN) run desktop/scripts/demo_p_preview_2.ts
+
 .PHONY: dashboards
 dashboards: ## Materialize dashboard CSVs from a DuckDB into observable/docs/data (DB=path)
 	$(BUN) run harness/scripts/materialize_dashboards.ts $(DB) observable/docs/data
