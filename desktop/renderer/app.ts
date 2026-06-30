@@ -251,7 +251,7 @@ function buildShell(): void {
         </div>
         <div class="preview-body" id="prevBody">
           <iframe id="prevFrame" class="preview-frame" sandbox="allow-scripts allow-forms" referrerpolicy="no-referrer" title="App preview" hidden></iframe>
-          <div class="empty preview-empty" id="prevEmpty">Open a local HTML file to preview it here - paste its path above and press <b>Open</b>. (The agent driving this itself is coming next; remote URLs are egress-gated.)</div>
+          <div class="empty preview-empty" id="prevEmpty"><span class="preview-empty-msg" id="prevEmptyMsg">Open a local HTML file to preview it here - paste its path above and press <b>Open</b>. (The agent driving this itself is coming next; remote URLs are egress-gated.)</span></div>
         </div>
       </aside>
     </div>
@@ -1915,7 +1915,9 @@ function loadPreview(target: string): void {
     frame.src = encodeURI(r.src); frame.hidden = false; empty.hidden = true;
   } else {
     frame.removeAttribute("src"); frame.hidden = true; empty.hidden = false;
-    empty.textContent = r.kind === "remote"
+    // Set the message on the inner span (not the flex container) so its width/contrast styling persists.
+    const msg = ($("#prevEmptyMsg") as HTMLElement | null) ?? empty;
+    msg.textContent = r.kind === "remote"
       ? `Remote URLs are egress-gated and not previewed yet (P-PREVIEW.3): ${r.label}`
       : `Can't preview that - ${r.reason ?? "open a local HTML file"}.`;
   }
