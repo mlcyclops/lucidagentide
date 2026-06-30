@@ -2303,6 +2303,8 @@ function devHtml(d: import("./bridge.ts").DevView | null): string {
   const tel = d.snapshot?.telemetry ?? [], runs = d.snapshot?.runs ?? [], exp = d.snapshot?.exports ?? [], blk = d.blocks?.quarantined ?? [], turns = d.turns ?? [];
   const ask = d.asksage ?? [];
   const askAnoms = ask.filter((r) => r.anomaly || r.ok === false).length;
+  const gate = d.gate ?? []; // P-GATE-DIAG.1
+  const gateBlocks = gate.filter((r) => String(r.decision ?? "").startsWith("block")).length;
   h += chips([
     { cls: "f", n: tel.length, l: "events" },
     { cls: "g", n: runs.length, l: "runs" },
@@ -2310,6 +2312,7 @@ function devHtml(d: import("./bridge.ts").DevView | null): string {
     { cls: "q", n: blk.length, l: "live blocks" },
     { cls: "a", n: exp.length, l: "exports" },
     ...(ask.length ? [{ cls: askAnoms ? "q" : "g", n: ask.length, l: "AskSage calls" } as const] : []),
+    ...(gate.length ? [{ cls: gateBlocks ? "q" : "g", n: gate.length, l: "gate decisions" } as const] : []),
     ...(d.netdiag ? [{ cls: d.netdiag.events.some((e) => e.candidate) ? "q" : "f", n: d.netdiag.events.length, l: "net events" } as const] : []),
   ]);
   // P-ASKSAGE.1 (ADR-0059): AskSage tool-loop diagnostics. One row per non-streamed call. An `anomaly`
@@ -2328,6 +2331,21 @@ function devHtml(d: import("./bridge.ts").DevView | null): string {
   h += accordion("dev.asksage", "AskSage tool calls", "non-streamed loop · developer diagnostics",
     table([{ key: "when", label: "when", mono: true }, { key: "route", label: "route" }, { key: "model", label: "model", mono: true }, { key: "via", label: "parsed via", mono: true }, { key: "text", label: "txt", mono: true }, { key: "calls", label: "tool calls" }, { key: "stop", label: "loop", mono: true }, { key: "finish", label: "raw", mono: true }, { key: "flag", label: "flag", pill: true }], askRows as unknown as Record<string, unknown>[]),
     OPEN.has("dev.asksage") || askAnoms > 0, askAnoms ? `${ask.length} · ${askAnoms}⚠` : String(ask.length));
+  // P-GATE-DIAG.1 (ADR-0066/0062): exec/egress gate decisions — WHY each was allowed/prompted/auto-denied.
+  // A "block(no-ui)" row with askActive=NO or listener=NO is the smoking gun for "I never got a prompt".
+  const gateRows = gate.slice().reverse().map((r) => ({
+    when: estTime(r.at as number),
+    kind: String(r.kind ?? ""),
+    tool: String(r.tool ?? "").slice(0, 28),
+    target: String(r.target ?? "").slice(0, 38),
+    ask: r.askActive ? "yes" : "NO",
+    listener: r.listener ? "yes" : "NO",
+    loop: r.goalActive ? "goal" : r.autoRunning ? "auto" : "-",
+    decision: String(r.decision ?? ""),
+  }));
+  h += accordion("dev.gate", "Exec / egress gate decisions", "why a tool was prompted vs auto-denied",
+    table([{ key: "when", label: "when", mono: true }, { key: "kind", label: "kind" }, { key: "tool", label: "tool", mono: true }, { key: "target", label: "target", mono: true }, { key: "ask", label: "askActive", mono: true }, { key: "listener", label: "listener", mono: true }, { key: "loop", label: "loop", mono: true }, { key: "decision", label: "decision", pill: true }], gateRows as unknown as Record<string, unknown>[]),
+    OPEN.has("dev.gate") || gateBlocks > 0, gateBlocks ? `${gate.length} · ${gateBlocks}⛔` : String(gate.length));
   h += accordion("dev.telemetry", "Telemetry stream", "recent · metadata only",
     table([{ key: "event", label: "event" }, { key: "run_id", label: "run", mono: true }, { key: "session_id", label: "session", mono: true }, { key: "created_at", label: "at", mono: true }], tel),
     true, String(tel.length));

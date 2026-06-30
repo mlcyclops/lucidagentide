@@ -321,6 +321,9 @@ demo-P-PREVIEW.3a: ## P-PREVIEW.3a (ADR-0096, DRAFT): agent-invoked preview_open
 demo-P-ENT.4: ## P-ENT.4 (ADR-0069): every per-action gate denial is auditable + attributed - explicit "denied by you" vs "fail-closed (turn ended / no response)"; closes the silent fail-closed-timeout gap
 	$(BUN) run desktop/scripts/demo_p_ent_4.ts
 
+demo-P-GATE-DIAG.1: ## P-GATE-DIAG.1 (ADR-0066/0062): dev-mode diagnostics recording the interactive-check inputs + decision for every exec/egress permission request (Logs → Exec / egress gate decisions) — reveals WHY a tool was auto-denied with no prompt
+	$(BUN) run desktop/scripts/demo_p_gate_diag_1.ts
+
 .PHONY: demo-P-FS.1
 demo-P-FS.1: ## P-FS.1 (ADR-0103): full-tree workspace folder browser - browse above home to the FS root / drives, with an optional managed workspaceRoots confinement
 	$(BUN) run desktop/scripts/demo_p_fs_1.ts
