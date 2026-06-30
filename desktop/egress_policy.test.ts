@@ -4,7 +4,32 @@
 // desktop/egress_policy.test.ts — pure egress decision + choice-folding (P-EGRESS.1, ADR-0062).
 
 import { describe, expect, test } from "bun:test";
-import { applyEgressChoice, clampEgress, egressVerdict, extractHost, type EgressStore } from "./egress_policy.ts";
+import { applyEgressChoice, clampEgress, egressVerdict, extractHost, isLocalFileTarget, type EgressStore } from "./egress_policy.ts";
+
+describe("isLocalFileTarget (P-EGRESS.2, ADR-0094)", () => {
+  test("file:// URLs are local", () => {
+    expect(isLocalFileTarget("file:///C:/Users/n/game.html")).toBe(true);
+    expect(isLocalFileTarget("FILE://localhost/tmp/x.html")).toBe(true);
+  });
+  test("absolute local paths are local (Windows drive, UNC, POSIX, home)", () => {
+    expect(isLocalFileTarget("C:\\Users\\n\\game.html")).toBe(true);
+    expect(isLocalFileTarget("C:/Users/n/game.html")).toBe(true);
+    expect(isLocalFileTarget("\\\\server\\share\\x.html")).toBe(true);
+    expect(isLocalFileTarget("/home/n/game.html")).toBe(true);
+    expect(isLocalFileTarget("~/game.html")).toBe(true);
+  });
+  test("http(s) and other schemes are NOT local (still real egress)", () => {
+    expect(isLocalFileTarget("https://example.com/game.html")).toBe(false);
+    expect(isLocalFileTarget("http://localhost:3000/")).toBe(false);
+    expect(isLocalFileTarget("ftp://host/x")).toBe(false);
+  });
+  test("ambiguous targets are NOT local (fail to the safe egress prompt)", () => {
+    expect(isLocalFileTarget("example.com/path")).toBe(false); // bare host
+    expect(isLocalFileTarget("game.html")).toBe(false);        // relative path
+    expect(isLocalFileTarget("")).toBe(false);
+    expect(isLocalFileTarget("   ")).toBe(false);
+  });
+});
 
 describe("extractHost", () => {
   test("pulls the lowercased hostname from a URL", () => {

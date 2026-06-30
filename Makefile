@@ -297,6 +297,9 @@ demo-P-NETDIAG.1: ## P-NETDIAG.1 (ADR-0090): in-app OAuth localhost-callback wat
 demo-P-TOOLFAIL.1: ## P-TOOLFAIL.1 (ADR-0093): honest failed/rejected tool-call chip - distinguishes ran-and-errored (failed) from did-not-run (rejected/unavailable), surfaces omp's own message, never implies a security denial
 	$(BUN) run desktop/scripts/demo_p_toolfail_1.ts
 
+demo-P-EGRESS.2: ## P-EGRESS.2 (ADR-0094): a local-file browser open is labeled a local-file open (open-once/block, no host pin) not a website visit, http(s) egress unchanged, and the no-listener block is audited (folds in P-ENT.3)
+	$(BUN) run desktop/scripts/demo_p_egress_2.ts
+
 .PHONY: dashboards
 dashboards: ## Materialize dashboard CSVs from a DuckDB into observable/docs/data (DB=path)
 	$(BUN) run harness/scripts/materialize_dashboards.ts $(DB) observable/docs/data

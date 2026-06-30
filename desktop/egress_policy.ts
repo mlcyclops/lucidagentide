@@ -43,6 +43,24 @@ export function extractHost(url: string): string | null {
   }
 }
 
+/** P-EGRESS.2 (ADR-0094): a browser/open tool may be pointed at a LOCAL file (a filesystem path or a
+ *  `file://` URL) rather than a website. That is not a network reach in the usual sense — but a rendered
+ *  local HTML page CAN still load remote resources, so we keep PROMPTING; we just present it accurately
+ *  (a local-file open, not a website visit) and never persist a host decision for it. Pure, conservative:
+ *  only an explicit `file://` or a clearly-absolute local path counts; anything ambiguous (a bare host, a
+ *  relative path, any other scheme) is NOT local, so it falls through to the normal egress prompt. */
+export function isLocalFileTarget(target: string): boolean {
+  if (!target) return false;
+  const t = target.trim();
+  if (/^file:\/\//i.test(t)) return true;             // explicit file URL
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(t)) return false; // any other scheme (http(s), ftp, …) → not local
+  if (/^[A-Za-z]:[\\/]/.test(t)) return true;          // Windows drive path: C:\… or C:/…
+  if (/^\\\\/.test(t)) return true;                    // Windows UNC: \\server\share
+  if (/^~[\\/]/.test(t)) return true;                  // home-relative: ~/…
+  if (/^\//.test(t)) return true;                      // POSIX absolute: /…
+  return false;
+}
+
 /** Pure decision: does this URL auto-allow, or must we PROMPT? Fail-closed to prompt on anything unknown
  *  (including an unparseable URL — we can't reason about a site we can't name). `ask-site` pins win over
  *  danger mode, honoring an explicit "always ask me for this one". */
