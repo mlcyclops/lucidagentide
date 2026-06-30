@@ -11,6 +11,7 @@
 import { bridge, type ChatEvent, type ConfigOption, type GoalDial, type MemorySnapshot, type OmpCommand, type ProviderAuth, type SecuritySnapshot, type SessionInfo, type SessionList, type UserRole, type WorkspaceInfo } from "./bridge.ts";
 import { ROLE_META, USER_ROLE_LIST, coachHtml, roleDefaultTab, stepsForRole, type TourStep } from "./tour.ts";
 import { modCombo, modSymbol } from "./platform.ts";
+import { aiLocHasData } from "../ailoc_view.ts";
 import { roleIcon } from "./role_icons.ts";
 import { providerHasApiKey, providerKeywords } from "./budget_gate.ts";
 import { cachedSessions, cachedTranscript, setCachedSessions, setCachedTranscript, transcriptSig } from "./swr_cache.ts";
@@ -2301,7 +2302,16 @@ function memoryHtml(d: MemorySnapshot | null): string {
   }
   // P-LOC.2 (ADR-0031): the AI-authored code counterpart to the cost ledger - lines the AI wrote,
   // per model/repo, attributed to the identity. Counted at the gate (ADR-0031), not git (ADR-0030).
-  if (d?.aiLoc) h += accordion("mem.ailoc", "AI-authored code", `+${fmtNum(d.aiLoc.totals.added)} / −${fmtNum(d.aiLoc.totals.removed)} lines`, aiLocBody(d.aiLoc), OPEN.has("mem.ailoc"), `${d.aiLoc.totals.models}`);
+  // P-LOC.3 (ADR-0095): ALWAYS render this section when a session is active (with an explicit empty
+  // state when the ledger is empty or momentarily unreadable) so it is discoverable - a command-palette
+  // target - and never silently vanishes (the "where did the AI-LOC go?" report).
+  if (d) {
+    if (aiLocHasData(d.aiLoc)) {
+      h += accordion("mem.ailoc", "AI-authored code", `+${fmtNum(d.aiLoc!.totals.added)} / −${fmtNum(d.aiLoc!.totals.removed)} lines`, aiLocBody(d.aiLoc!), OPEN.has("mem.ailoc"), `${d.aiLoc!.totals.models}`);
+    } else {
+      h += accordion("mem.ailoc", "AI-authored code", "none yet", `<div class="empty">No AI-authored lines recorded yet — they'll appear here, per model and repo, as the agent edits files through the gate.</div>`, OPEN.has("mem.ailoc"));
+    }
+  }
   if (!d) return h || `<div class="empty">No omp session yet - launch omp and send a message.</div>`;
   const s = d.session;
   if (s) {
@@ -4282,6 +4292,9 @@ const palette = createPalette(() => {
     { id: "cfg", title: "Choose model · mode · thinking…", icon: "spark", hint: "config", run: () => openConfigPopover($("#modelBadge")!) },
     { id: "sec", title: "Open Security panel", icon: "shield", hint: "panel", run: () => focusInspector("security") },
     { id: "mem", title: "Open Memory & context panel", icon: "brain", hint: "panel", run: () => focusInspector("memory") },
+    // P-LOC.3 (ADR-0095): a discoverable entry point for the AI-authored code ledger — opens Memory with
+    // the section expanded, so it no longer has to be hunted for inside the panel.
+    { id: "ailoc", title: "Open AI-authored code ledger", icon: "brain", hint: "panel", run: () => { OPEN.add("mem.ailoc"); focusInspector("memory"); } },
     { id: "zin", title: "Zoom in", icon: "plus", hint: modSymbol("+"), run: () => nudgeZoom(0.1) },
     { id: "zout", title: "Zoom out", icon: "minus", hint: modSymbol("−"), run: () => nudgeZoom(-0.1) },
     { id: "zreset", title: "Reset text zoom to 100%", icon: "refresh", hint: modSymbol("0"), run: () => resetZoom() },

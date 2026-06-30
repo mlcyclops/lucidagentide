@@ -7268,3 +7268,57 @@ local-file one — acceptable (it still PROMPTS), and widening it risks misclass
 (`localFile?` on the permission event), new `desktop/scripts/demo_p_egress_2.ts`, ADR-0062 (the egress gate
 this refines), ADR-0069 (the OCSF audit feed P-ENT.3 completes), ADR-0093 (the sibling chip fix from the
 same investigation).
+
+## ADR-0095 - P-LOC.3: The AI-authored code ledger is discoverable and never silently vanishes
+
+**Date:** 2026-06-29
+**Status:** Accepted - shipped.
+**Increment:** P-LOC.3.
+
+### Context
+
+Third fix from the same session's investigation. The AI-authored code ledger (P-LOC.2, ADR-0031) is real
+and persisted — a frozen DuckDB table `ai_loc_ledger`, written at the gate on every AI edit that passes,
+read back by `aiLocSummary()` — but a user reported "where did the AI-LOC go? I don't see it anymore in any
+menu." Two UI reasons, both confirmed:
+
+1. **No entry point.** The ledger renders only as an accordion (`mem.ailoc`) inside the Memory panel, below
+   the cost ledger. There is no rail glyph, no command-palette entry, no tab — you have to already know it
+   is there and scroll to it.
+2. **It silently vanishes when empty.** The section was gated `if (d?.aiLoc)`. `aiLocSummary()` returns
+   `null` when the obs DB is missing/unreadable or has zero rows, so the WHOLE section disappeared with no
+   placeholder — indistinguishable from "the feature was removed."
+
+(The data itself was never at risk; this is purely surfacing.)
+
+### Decision
+
+- **Always render the section while a session is active, with an explicit empty state.** `memoryHtml`
+  now renders `mem.ailoc` inside `if (d) { … }` and branches on a pure helper: data card when there is at
+  least one recorded edit, else "No AI-authored lines recorded yet — they'll appear here … as the agent
+  edits files through the gate." The section is therefore present in both states; it never just disappears.
+- **A pure, tested visibility rule.** New `desktop/ailoc_view.ts` `aiLocHasData(aiLoc)` (null-safe; true iff
+  `totals.edits > 0`) encodes the data-vs-empty decision out of the DOM-bound renderer, mirroring the
+  `tool_failure.ts` pattern (ADR-0093) so the "never vanish" intent is locked by a unit test.
+- **A command-palette entry point.** A new action — "Open AI-authored code ledger" — opens the Memory panel
+  with the `mem.ailoc` accordion expanded (`OPEN.add("mem.ailoc"); focusInspector("memory")`), the same
+  reveal idiom the Security panel uses for a live block. The ledger is now reachable without hunting.
+
+No frozen-contract bytes change: storage (`ai_loc_ledger`, migration 0007), the prompt prefix, scanner IPC,
+and `contracts.ts`/`result_adapter.ts` are untouched. This is presentation only.
+
+### Consequences
+
+The Manager-role headline metric (ADR-0088 foregrounds it; the manager guide leads with it) is now both
+discoverable and self-explaining when empty. Limitation: it is still surfaced inside the Memory panel
+rather than a dedicated dashboard — a fuller Manager/Exec aggregate view remains P-ROLE.4. The empty-state
+copy assumes the gate-write path (ADR-0031); if that ever regresses, the section would read "none yet"
+rather than erroring — acceptable (fail-quiet for a read-only dashboard), and the gate's own tests guard
+the write path.
+
+### Relates to
+
+`desktop/renderer/app.ts` (the always-on section + empty state + the palette action), new
+`desktop/ailoc_view.ts` + `desktop/ailoc_view.test.ts`, new `desktop/scripts/demo_p_loc_3.ts`, ADR-0031
+(P-LOC.1/.2 — the ledger this surfaces), ADR-0088 (role foregrounding — Manager leads with this metric),
+ADR-0093 (the sibling pure-helper pattern), the P-DOC.1 manager guide (which documents the ledger).
