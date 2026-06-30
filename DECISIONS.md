@@ -7671,3 +7671,239 @@ repo (ADR-0086 licensing model). New first-party files carry the BUSL-1.1 header
 ADR-0097 (the skill directory + `registry` source), ADR-0045 (the scan-gate every install clears), ADR-0029
 (bundled-corpus trust model), ADR-0068/0069 (the public-seam / private-IP pattern this mirrors), the private
 ADR-A012/A013 (the architecture + runbooks), and CLAUDE.md invariants #1/#3/#5/#6/#7 + keystone #2.
+
+## ADR-0099 - P-KB.1: the compiled KB (OpenKB-style), a sibling to the vector RAG spine (SCOPE/PLAN)
+
+**Date:** 2026-06-30
+**Status:** Accepted - SCOPE/PLAN. Designed here; build is its own increment. TypeScript + DuckDB only
+(**no Python** - invariant #2). A NEW subsystem `harness/kb/` that sits ALONGSIDE the vector RAG spine
+(ADR-0058 `kb_chunks`); it does not replace it and is not the personal KG (ADR-0010).
+**Increment:** P-KB.1. Reuses the scan gate (ADR-0058/gate.ts), the `Db`/migration runner (ADR-0001),
+the embedder seam (ADR-0063), and `backend.complete()` (ADR-0046). Models the OpenKB "compiled wiki".
+
+### Context
+
+The existing RAG spine (ADR-0058) is **pure vector RAG**: parse -> chunk -> scan -> embed -> cosine. Nothing
+*accumulates* - knowledge is rediscovered per query. The user wants a redesign that mimics **OpenKB**
+(github.com/VectifyAI/OpenKB): instead of opaque chunks, an LLM **compiles** documents into a persistent
+substrate of **pages** - a *summary page* per source, *concept pages* synthesizing ideas across documents,
+and *entity pages* (people/orgs/products) - all joined by **cross-reference wikilinks** and **kept in sync**.
+Long documents get a **PageIndex-style hierarchical tree** for vectorless, reasoning-based retrieval. OpenKB
+itself is Python (markitdown/pymupdf/PageIndex) writing Markdown files; we must instead build it in
+**TypeScript + DuckDB**, reusing existing infra, and make it a **sibling** to the vector KB usable **in
+parallel or individually** (ADR-0100 routes between them).
+
+### Decision - a DuckDB-backed compiled-page graph, compiled by the most-used model, gated like everything else
+
+**New `kb_graph.duckdb`** (own migration dir `harness/kb/migrations/`, frozen numbered files `0011_*`):
+- `kb_documents` - the source registry: `document_id`, `source_path`, `title`, `sha256`, `classification`
+  ('U'|'CUI'), `trust_label`, `status` ('compiled'|'quarantined'|'stale'), `ingested_at`.
+- `kb_pages` - the compiled wiki, first-class objects: `page_id`, `kind` ('summary'|'concept'|'entity'|
+  'source'), `slug`, `title`, `body_md`, `trust_label`, `classification`, `created_at`, `updated_at`.
+- `kb_links` - cross-references (wikilinks): `link_id`, `from_page_id`, `to_page_id`, `relation`
+  (default 'related'), `created_at`. (Same shape as the personal KG's `PersonalLink`, deliberately, so the
+  ADR-0075 graph renderer can draw it.)
+- `kb_page_sources` - provenance/citations: `page_id` -> `document_id` + `ordinal`/quote, soft-ref to
+  `content_artifacts` (the citation trail OpenKB keeps).
+- `kb_changelog` - append-only "kept in sync" log: what each (re)compilation added/changed/flagged
+  (incl. contradiction flags), so the substrate is auditable and re-runs are idempotent-ish.
+- `kb_page_embeddings` (optional, hybrid) - reuse the `Embedder` seam to embed page bodies for cosine,
+  so retrieval can be structural OR vector OR both (ADR-0100).
+
+**Pipeline (`harness/kb/ingest.ts` + `harness/kb/compiler.ts`):**
+1. **Parse** - reuse `ingestPdf`/`unpdf` (ADR-0064) and the chunker only for building the long-doc tree.
+2. **Scan-gate, fail-closed** - `scanAndDecide(scanner, rawText, DEFAULT_POLICY)` on the source BEFORE any
+   compilation. Blocked -> `kb_documents.status='quarantined'`, `recordBlock`, **never compiled** (#3).
+3. **Compile** - `backend.complete(compileSystem, docText, {model: usageLedger().models[0]})` produces/updates
+   summary + concept + entity pages + links (the most-used model, like P-SKILL.2/ADR-0046).
+4. **Re-scan derived pages** - every model-generated page body is **untrusted structure**: run it back
+   through `scanAndDecide` before store. A flagged page is quarantined, never trusted (keystone #2 - derived
+   content never auto-promotes). This is the load-bearing rule that separates a *compiled* KB from a poisoned one.
+5. **Store + changelog + events** - write pages/links/sources, append `kb_changelog`, emit telemetry.
+
+**Sibling, not replacement.** `kb_chunks` (vector) and `kb_pages` (compiled) are independent stores in
+independent DuckDB files; a workspace may use one, the other, or both. The personal KG (encrypted, FIPS,
+user facts) is untouched - this is a *document* KB.
+
+### Plumbing (build increment, when scheduled)
+
+- `harness/kb/migrations/0011_kb_graph.sql` (+ later numbered files); `harness/kb/store.ts` (wraps `Db.open`),
+  `harness/kb/compiler.ts` (the `backend.complete` compile prompts + page diff/merge), `harness/kb/ingest.ts`
+  (parse -> scan -> compile -> re-scan -> store). `make demo-P-KB.1` (real scanner + temp DB: a clean doc
+  compiles to >=1 summary/concept/entity page with links; a poisoned doc is quarantined and never compiled;
+  a model page that fails the re-scan is quarantined).
+- Tests mirror `harness/knowledge/ingest.test.ts` (clean compiles, poison blocked, dead-scanner fail-closed,
+  derived-page re-scan blocks).
+
+### Invariants preserved
+
+No Python (#2). Fail-closed (#3): source AND every derived page scanned; dead scanner = quarantine. Keystone
+#2: compiled pages never auto-trusted. Trust labels are the closed set (#7). DuckDB schema frozen via numbered
+migrations (#10). New EventName values (`kb_document_ingested`, `kb_page_compiled`, `kb_page_quarantined`) are
+a **deferred `contracts.ts` increment** (#8) - named here, not added this round. BUSL header on new files.
+
+### Relates to
+
+ADR-0058/0063/0064 (the vector RAG spine + embedder + PDF parse this siblings), ADR-0001 (Db/migrations),
+ADR-0046 (`backend.complete` + most-used model), ADR-0010/0075 (personal KG store shape + graph renderer
+reused for viz), ADR-0100 (the retrieval router over both stores), and CLAUDE.md #2/#3/#7/#10 + keystone #2.
+
+## ADR-0100 - P-KB.2: hybrid retrieval router (vector | compiled | both) + sync + graph viz (SCOPE/PLAN)
+
+**Date:** 2026-06-30
+**Status:** Accepted - SCOPE/PLAN. Designed here; build follows P-KB.1. Pure-TS router + a renderer reuse;
+no new trust path, no schema change beyond P-KB.1.
+**Increment:** P-KB.2. Sits on top of ADR-0099 (`kb_pages`) and ADR-0058 (`kb_chunks`).
+
+### Context
+
+With two sibling stores (vector `kb_chunks`, compiled `kb_pages`), the user wants them usable **in parallel or
+individually**. We need a router that can answer from either or both, plus the "kept in sync" + visualization
+generators OpenKB ships.
+
+### Decision
+
+**Retrieval router (`harness/kb/retrieve.ts`).** One entry point `retrieveKnowledge(query, {mode})` where
+`mode in {'vector','compiled','hybrid'}` (default `hybrid`):
+- `vector` -> existing `KnowledgeStore.retrieve()` cosine (ADR-0058), unchanged.
+- `compiled` -> **structural/reasoning retrieval** over `kb_pages`: walk the PageIndex tree + entity/concept
+  links to the most relevant pages (vectorless), optionally re-ranked by cosine over `kb_page_embeddings`.
+- `hybrid` -> run both, merge + dedupe by source, return a single ranked, **delimited + cited** set wrapped in
+  `UNTRUSTED_START/END` (reuse `wrapRetrieved`), each item labelled with its store + citation
+  (`page:slug` or `source_path#ordinal`). The model is told which substrate each hit came from.
+
+**Sync (the "kept in sync" generator).** Re-ingesting a changed document re-compiles its pages, appends a
+`kb_changelog` entry, relinks cross-references, and **flags contradictions** (a new fact conflicting with an
+existing page surfaces in the changelog for review rather than silently overwriting). Idempotent on unchanged
+`sha256`.
+
+**Visualization.** Reuse `desktop/renderer/graph.ts` (ADR-0075 zero-dep SVG force layout): concept/entity
+pages are nodes, `kb_links` are edges; clicking a node opens the page body (read-only, rendered as DATA).
+This is OpenKB's "visualization" generator with zero new dependencies.
+
+### Plumbing (build increment)
+
+- `harness/kb/retrieve.ts` (router + merge/dedupe), `harness/kb/sync.ts` (re-compile diff + contradiction
+  flag). Desktop: a Knowledge view toggle (vector | compiled | both) + reuse the graph panel for the page
+  graph. `make demo-P-KB.2` (router returns vector-only, compiled-only, and merged-cited results; a
+  re-ingest appends a changelog entry and relinks). EventName `kb_retrieved` deferred to the contracts increment.
+
+### Invariants preserved
+
+Untrusted retrieved content stays delimited + post-cache (#5/#6). No new trust values (#7). Router is pure
+read; sync writes via the P-KB.1 gated path only. Renderer reuse = no new dep (extend-don't-fork, #1).
+
+### Relates to
+
+ADR-0099 (the compiled store), ADR-0058 (vector retrieval reused), ADR-0075 (graph renderer), ADR-0053
+(delimited injection), keystone #2.
+
+## ADR-0101 - P-SKILL.5: Skill Studio - analyze recent work, draft skills (SCOPE/PLAN)
+
+**Date:** 2026-06-30
+**Status:** Accepted - SCOPE/PLAN. Designed here; build is its own increment. Concretizes the deferred
+P-SKILL.2 (builder) and P-SKILL.3 (session-derived) from ADR-0045 into one user-facing button, and is the
+OpenKB "skill distillation" generator applied to the user's OWN work.
+**Increment:** P-SKILL.5. Reuses `backend.complete()` (ADR-0046), the work-history sources, and the
+`importSkill` scan-gate seam (ADR-0045/P-SKILL.1).
+
+### Context
+
+The user wants a **button** that analyzes their **current day's** or **past week's** work and recommends +
+drafts Agent Skills it can codify. All the inputs already exist: sessions + transcripts (`listSessions()` /
+`sessionMessages()`, preamble-stripped), AI-authorship (`aiLoc`), the `/goal` loop run-log
+(`aggregateRuns()`), and the usage ledger (most-used model). P-SKILL.2/.3 already designed the model-assisted
++ session-derived skill builders behind the same fail-closed gate; this ADR makes them a concrete surface.
+
+### Decision - a "Skill Studio" panel: gather -> analyze -> draft -> gate -> review -> codify
+
+- **Gather (`desktop/skill_studio.ts`, designed).** A window selector (Today | Past 7 days) collects: recent
+  sessions + stripped transcripts, AI-LOC by repo/file, loop outcomes + recurring stall signatures, and the
+  most-used model. No raw content leaves the host.
+- **Analyze.** `backend.complete(analysisSystem, workDigest, {model: usageLedger().models[0]})` returns N
+  **candidate skills**, each with a name (kebab-case), a *what + when + when-not* description (the routing
+  text), and a draft `SKILL.md` body - "crystallize what the agent just did" (the whitepaper's Path B).
+- **Gate + review.** Each draft is **untrusted model output**: run it through the `importSkill` seam
+  (`scanAndDecide` fail-closed). Clean -> written to the local skill root `.omp/skills/<slug>/SKILL.md` via
+  `pathWithin` confinement and surfaced in the ADR-0097 directory (source `project`/`studio`); flagged ->
+  `recordBlock` + held in a review queue. The user **reviews/edits before codifying** (keystone #2; the
+  whitepaper's "a reviewed agent-drafted skill can be excellent; an un-reviewed one is worse than none").
+- **Publish.** A codified skill can be served locally and (spiked, ADR-0102) pushed to a remote registry.
+
+### Plumbing (build increment)
+
+- `desktop/skill_studio.ts` (gather + digest + parse the model's candidate list), a renderer panel + rail
+  button (mirror the Knowledge/graph panel structure in `app.ts`), `POST /api/skill-studio/analyze` +
+  `/draft` routes (reuse `importSkill`). `make demo-P-SKILL.5` (a synthetic week of sessions yields >=1
+  scanned draft; a poisoned transcript yields a blocked draft). EventName `skill_drafted` deferred to the
+  contracts increment.
+
+### Invariants preserved
+
+Fail-closed (#3): drafts scanned before save; dead scanner blocks. Keystone #2: drafts never auto-trusted -
+human review gate. Confinement via `pathWithin` (no path escape). Untrusted transcript content stays DATA
+(#5). BUSL header on new files.
+
+### Relates to
+
+ADR-0045 (P-SKILL.1/2/3 - the builder/session-derived design this realizes + the import gate), ADR-0046
+(`complete` + most-used model), ADR-0097 (the directory the drafts appear in), ADR-0102 (publish), ADR-0099
+(shares the "compile with the most-used model, re-scan the output" pattern), keystone #2.
+
+## ADR-0102 - P-SKILLREG.2: skill publish seam - Local Skills Registry + remote-push spike (SCOPE/PLAN)
+
+**Date:** 2026-06-30
+**Status:** Accepted - SCOPE/PLAN (capability spike). Public ships ONLY the `RegistryPublisher` seam + a
+default **local** publisher; the **remote** publishers (enterprise clouds + git providers) are private
+add-on IP (`mlcyclops/lucidagentIDEaddon`): ADR-A014/A015. Same public-seam / private-IP split as ADR-0069
+(SIEM `Sink`) and ADR-0098 (the registry reader). README roadmap hint only.
+**Increment:** P-SKILLREG.2. The publish counterpart to ADR-0098's read/install reader; consumes ADR-0101's
+codified skills.
+
+### Context
+
+ADR-0098 designed the registry **reader** (fetch -> verify signature -> scan-gate -> install). The user now
+wants the **writer**: codified skills (from Skill Studio, ADR-0101) served to (1) a **Local Skills Registry**
+and (2) **pushed to a remote registry** in enterprise clouds (AWS/Azure/GCP/Oracle/IBM) or **custom git**
+(Enterprise GitLab/GitHub/Azure DevOps), implemented in the private add-on but **planned + spiked + hinted**
+here. There is no git-push or git-provider-auth code in the repo today, so the remote side is net-new and
+correctly belongs behind a seam.
+
+### Decision - one publisher interface; local impl public, remote impls private
+
+- **`RegistryPublisher` interface** (mirrors the SIEM `Sink`): `publish(artifact: SkillArtifact) ->
+  Promise<PublishReceipt>` + `name`/`status`. A `SkillArtifact` is the ADR-0098 unit: the signed SKILL.md
+  folder (Cosign + SLSA), versioned by digest. Public ships the interface, the `SkillArtifact`/`PublishReceipt`
+  schema, a `PublishDispatcher` (fail-safe, never throws into a turn), and a config schema in `managed_config`.
+- **Default `LocalRegistryPublisher` (public).** Serves the local skill roots as the **Local Skills Registry**
+  (the ADR-0097 `registry` source, OCI-artifact-or-folder per ADR-0098), with local signing optional. This is
+  buildable in the public core.
+- **Remote publishers (private add-on IP, ADR-A014).** Implement the SAME interface:
+  - **Cloud OCI registries:** AWS ECR/CodeArtifact, Azure ACR, GCP Artifact Registry, OCI Container Registry,
+    IBM ICR (skills-as-OCI-artifacts per ADR-0098).
+  - **Custom git:** Enterprise GitLab, GitHub, Azure DevOps - push the signed SKILL.md folder to a versioned
+    path/branch via the provider API (PAT/OAuth/workload identity).
+- **Egress + policy.** Every remote publish routes through `egress_policy` (`egressDecision`) and is clamped
+  by managed-config (allowed hosts, IL5 partition rules per ADR-0098); a publish is a network-reaching action
+  and is gated like any other. IL5: self-hosted/partitioned endpoints only.
+
+### Plumbing (build increment - public part only)
+
+- `desktop/skill_publish.ts`: the `RegistryPublisher` interface + `SkillArtifact`/`PublishReceipt` types +
+  `PublishDispatcher` + `LocalRegistryPublisher`; `sinksFor`-style `publishersFor()` reading managed-config.
+  `make demo-P-SKILLREG.2` (a codified skill publishes to the local registry and re-appears as an installable
+  `registry`-source row; a remote target with no configured publisher is a clean no-op, never a throw).
+  EventName `skill_published` deferred to the contracts increment. Remote publishers are NOT in this repo.
+
+### Invariants preserved
+
+Public ships seam + local impl; remote IP stays private (ADR-0086 licensing). Fail-closed (#3): a dead/missing
+publisher never throws into a turn (mirrors the `AuditDispatcher`); a published artifact is still
+verify-signature -> scan-gate -> install on the READ side (ADR-0098). Egress-gated (#3 spirit). No contract
+bytes this round.
+
+### Relates to
+
+ADR-0098 (the reader half + OCI-artifact model), ADR-0097 (the `registry` source row), ADR-0101 (produces the
+skills), ADR-0069 (the `Sink`/dispatcher pattern mirrored), ADR-0068/egress_policy (managed + egress gating),
+the private ADR-A014/A015 (the remote publishers + runbooks).
