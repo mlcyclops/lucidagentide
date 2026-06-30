@@ -1932,9 +1932,22 @@ function loadPreview(target: string): void {
   // target; the explicit scheme allowlist here is the security barrier — DOM input can NEVER reach the
   // iframe src as any other scheme (no javascript:/data:/http(s):), which also clears js/xss-through-dom.
   const msg = ($("#prevEmptyMsg") as HTMLElement | null) ?? empty;
-  const showEmpty = (text: string) => { frame.removeAttribute("src"); frame.hidden = true; empty.hidden = false; msg.textContent = text; };
+  const showEmpty = (text: string) => { frame.removeAttribute("srcdoc"); frame.removeAttribute("src"); frame.hidden = true; empty.hidden = false; msg.textContent = text; };
   if (r.kind === "local" && /^file:\/\//i.test(r.src)) {
-    frame.src = encodeURI(r.src); frame.hidden = false; empty.hidden = true;
+    // P-PREVIEW.4 (ADR-0096): the renderer is served over http, so a file:// iframe is blocked by Chromium.
+    // Fetch the file's content (authenticated, behind the transport gate) and render it via srcdoc in the
+    // same hardened opaque-origin sandbox. Works in dev + packaged; ideal for self-contained single-file apps.
+    if (kind) kind.textContent = `loading ${r.label}…`;
+    showEmpty(`Loading ${r.label}…`);
+    void bridge.previewFile(target).then((html) => {
+      if (($("#prevPath") as HTMLInputElement | null)?.value.trim() !== target.trim()) return; // superseded by a newer Open
+      if (typeof html === "string") {
+        if (kind) kind.textContent = r.label; frame.removeAttribute("src"); frame.srcdoc = html; frame.hidden = false; empty.hidden = true;
+      } else {
+        if (kind) kind.textContent = "";
+        showEmpty(`Couldn't read ${r.label} — check the path points to a local .html/.svg file.`);
+      }
+    }).catch(() => showEmpty(`Couldn't read ${r.label}.`));
   } else if (r.kind === "remote") {
     // P-PREVIEW.3b (ADR-0096): a remote URL reaches the internet — only load it if the egress allow-list
     // already approves the site (honoring the managed ceiling). Otherwise it stays gated; the agent must

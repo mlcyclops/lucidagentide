@@ -7530,6 +7530,26 @@ launches with the extension and the model can invoke `preview_open`. New: `harne
 `preview_open` detection in `acp_backend.ts`, `desktop/scripts/demo_p_preview_3a.ts`. P-PREVIEW.3a-shot
 (screenshot-as-multimodal-ToolResult via a cross-process file-handshake) remains the final preview piece.
 
+### Addendum (2026-06-30) — P-PREVIEW.4: the panel now actually RENDERS a local file (the file:// gap, fixed)
+
+A live test revealed the Preview panel never *rendered* a local file - it only ever set `iframe.src = file://…`,
+which **Chromium blocks from an http origin** (the renderer is served over `http://localhost`, in dev AND in
+the packaged Electron app: "Not allowed to load local resource"). So the feature was visually broken since
+P-PREVIEW.1 (my earlier check only confirmed the `src` was *set*, not that it rendered - the boundary I'd
+flagged was real). Diagnosed alongside the gate work: the agent kept trying to open its built games in a
+browser (no browser tool → denied) precisely because the in-app Preview wasn't rendering.
+
+Fix: serve the local file's **content** same-origin behind the transport gate (`/api/preview/file?path=` →
+pure `readPreviewFile()` in `desktop/preview_file.ts`, gated to a local `.html`/`.svg`, existing, ≤ 5 MB),
+fetched by the authenticated bridge (`previewFile()`), and rendered via the iframe's **`srcdoc`** in the SAME
+hardened opaque-origin sandbox (`PREVIEW_SANDBOX`, no `allow-same-origin`). Works in dev + packaged; ideal for
+the self-contained single-file apps the agent builds. **Live-verified** end-to-end via the dev server: a real
+local game renders (DOM + screenshot - "LUCID PREVIEW WORKS ✓" with CSS animation), through the actual Open
+button → `loadPreview` → `previewFile` → `srcdoc` flow. Limitation: `srcdoc` has no base URL, so a multi-file
+app's RELATIVE assets (external CSS/JS/images) won't load - fine for single-file games; a base-aware
+http-served preview is a future P-PREVIEW.4b. New: `desktop/preview_file.ts` (+ test), the `/api/preview/file`
+endpoint, `bridge.previewFile()`, the renderer srcdoc path, `desktop/scripts/demo_p_preview_4.ts`.
+
 ## ADR-0103 - P-FS.1: full-tree workspace folder browser (supersedes ADR-0022 M1's home confinement)
 
 **Date:** 2026-06-30

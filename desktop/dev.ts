@@ -25,6 +25,7 @@ import { clearIngestSessions, deleteSession, listSessions, sessionMessages } fro
 import { providerAuth } from "./auth_status.ts";
 import { cloneRepo, setWorkspace, workspaceInfo } from "./workspace.ts";
 import { egressDecision } from "./egress_policy.ts"; // P-PREVIEW.3b: gate a remote preview by the egress allow-list
+import { readPreviewFile } from "./preview_file.ts"; // P-PREVIEW.4: serve a local file's content for srcdoc render
 import { applyEnv, attribution, chinaModelsAcknowledged, listMcpServers, load as loadSettings, removeMcpServer, roleChosen, setAsksage, setAttributionSkip, setChinaModelsAcknowledged, setDeveloperMode, setKey, setMcpServerEnabled, setPersonalAiExtract, setProfile, setRateLimitProbe, setThirdPartyProvidersAcknowledged, setTourSeen, setUserRole, thirdPartyProvidersAcknowledged, tourSeen, upsertMcpServer, USER_ROLES, userRole, type UserRole } from "./settings_store.ts";
 
 // ADR-0088/0089: the /api/settings payload — profile + attribution + the cosmetic role/tour state.
@@ -377,6 +378,16 @@ const server = Bun.serve({
       if (p === "/api/preview/egress-check") {
         const target = url.searchParams.get("url") ?? "";
         return json({ ok: true, data: { allow: !!target && egressDecision(target) === "allow" } });
+      }
+      // P-PREVIEW.4 (ADR-0096): return a LOCAL previewable file's CONTENT so the renderer can show it via
+      // the iframe's `srcdoc`. Needed because the renderer is served over http and Chromium blocks a
+      // `file://` iframe from an http origin — so `iframe.src = file://…` never rendered. The authenticated
+      // bridge fetches this (transport gate: loopback + token), then sets srcdoc (same hardened sandbox).
+      // Gated to a local .html/.htm/.svg file, existing, ≤ 5 MB. Read-only; the local user could read it anyway.
+      if (p === "/api/preview/file") {
+        const target = (url.searchParams.get("path") ?? "").trim();
+        const r = readPreviewFile(target);
+        return json(r.ok ? { ok: true, data: { html: r.html, label: r.label } } : { ok: false, error: r.error });
       }
 
       // real omp ACP backend (genuine model replies + live session config)

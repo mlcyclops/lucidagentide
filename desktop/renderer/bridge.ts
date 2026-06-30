@@ -396,6 +396,9 @@ export interface LucidBridge {
   // P-PREVIEW.3b (ADR-0096): may this remote URL load in the preview iframe? True only if the egress
   // allow-list (honoring the managed ceiling) already approves the site; else it stays gated.
   previewEgressAllows(url: string): Promise<boolean>;
+  // P-PREVIEW.4 (ADR-0096): a local file's content for the iframe's srcdoc (file:// can't load from an http
+  // origin). Returns the HTML, or null if the path isn't a readable local previewable file.
+  previewFile(path: string): Promise<string | null>;
   listDir(path?: string): Promise<FsList | null>; // in-app folder browser (works everywhere)
   revealPath(path: string): Promise<boolean>; // open a folder in the OS file manager (Electron only; false in browser)
   canRevealPath(): boolean; // whether the native shell can reveal a folder (Electron only)
@@ -595,6 +598,7 @@ export const bridge: LucidBridge = {
   pickFolder: () => (shell?.pickFolder ? shell.pickFolder() : Promise.resolve(null)),
   capturePreview: (rect) => (shell?.capturePreview ? shell.capturePreview(rect) : Promise.resolve(null)), // P-PREVIEW.1
   previewEgressAllows: async (url) => { const d = await getData(`/api/preview/egress-check?url=${encodeURIComponent(url)}`); return !!(d as { allow?: boolean } | null)?.allow; }, // P-PREVIEW.3b
+  previewFile: async (path) => { const d = await getData(`/api/preview/file?path=${encodeURIComponent(path)}`); const h = (d as { html?: unknown } | null)?.html; return typeof h === "string" ? h : null; }, // P-PREVIEW.4
 
   listDir: (path) => getData(`/api/fs/list${path ? `?path=${encodeURIComponent(path)}` : ""}`),
   revealPath: (path) => (shell?.revealPath ? shell.revealPath(path) : Promise.resolve(false)),

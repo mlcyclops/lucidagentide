@@ -324,6 +324,9 @@ demo-P-ENT.4: ## P-ENT.4 (ADR-0069): every per-action gate denial is auditable +
 demo-P-GATE-DIAG.1: ## P-GATE-DIAG.1 (ADR-0066/0062): dev-mode diagnostics recording the interactive-check inputs + decision for every exec/egress permission request (Logs → Exec / egress gate decisions) — reveals WHY a tool was auto-denied with no prompt
 	$(BUN) run desktop/scripts/demo_p_gate_diag_1.ts
 
+demo-P-PREVIEW.4: ## P-PREVIEW.4 (ADR-0096): RENDER local files in Preview via served-content + iframe srcdoc (Chromium blocks file:// from an http origin, so iframe.src=file:// never rendered)
+	$(BUN) run desktop/scripts/demo_p_preview_4.ts
+
 .PHONY: demo-P-FS.1
 demo-P-FS.1: ## P-FS.1 (ADR-0103): full-tree workspace folder browser - browse above home to the FS root / drives, with an optional managed workspaceRoots confinement
 	$(BUN) run desktop/scripts/demo_p_fs_1.ts
