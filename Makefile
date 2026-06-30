@@ -303,6 +303,9 @@ demo-P-EGRESS.2: ## P-EGRESS.2 (ADR-0094): a local-file browser open is labeled 
 demo-P-LOC.3: ## P-LOC.3 (ADR-0095): the AI-authored code ledger is discoverable (command-palette entry) and never silently vanishes (always rendered when a session is active, with an explicit empty state)
 	$(BUN) run desktop/scripts/demo_p_loc_3.ts
 
+demo-P-PREVIEW.1: ## P-PREVIEW.1 (ADR-0096): in-app browser preview - resolver renders local files the agent builds, gates remote (egress, P-PREVIEW.3), blocks the ambiguous; panel + screenshot-to-chat seam
+	$(BUN) run desktop/scripts/demo_p_preview_1.ts
+
 .PHONY: dashboards
 dashboards: ## Materialize dashboard CSVs from a DuckDB into observable/docs/data (DB=path)
 	$(BUN) run harness/scripts/materialize_dashboards.ts $(DB) observable/docs/data

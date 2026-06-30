@@ -386,6 +386,9 @@ export interface LucidBridge {
   setWorkspace(path: string): Promise<WorkspaceInfo | null>;
   cloneWorkspace(url: string): Promise<WorkspaceInfo | null>;
   pickFolder(): Promise<string | null>; // native dialog in Electron; null in browser
+  // P-PREVIEW.1 (ADR-0096): capture the preview region (window capturePage, cropped) → PNG data URL.
+  // Electron-only; resolves null in a plain browser (no capturePage).
+  capturePreview(rect: { x: number; y: number; width: number; height: number }): Promise<string | null>;
   listDir(path?: string): Promise<FsList | null>; // in-app folder browser (works everywhere)
   revealPath(path: string): Promise<boolean>; // open a folder in the OS file manager (Electron only; false in browser)
   canRevealPath(): boolean; // whether the native shell can reveal a folder (Electron only)
@@ -396,6 +399,7 @@ interface NativeShell {
   isElectron?: boolean;
   setZoom?(factor: number): void;
   pickFolder?(): Promise<string | null>;
+  capturePreview?(rect: { x: number; y: number; width: number; height: number }): Promise<string | null>;
   revealPath?(path: string): Promise<boolean>;
   win?: { minimize(): void; toggleMaximize(): void; close(): void };
 }
@@ -582,6 +586,8 @@ export const bridge: LucidBridge = {
   setWorkspace: (path) => post("/api/workspace", { path }),
   cloneWorkspace: (url) => post("/api/workspace/clone", { url }),
   pickFolder: () => (shell?.pickFolder ? shell.pickFolder() : Promise.resolve(null)),
+  capturePreview: (rect) => (shell?.capturePreview ? shell.capturePreview(rect) : Promise.resolve(null)), // P-PREVIEW.1
+
   listDir: (path) => getData(`/api/fs/list${path ? `?path=${encodeURIComponent(path)}` : ""}`),
   revealPath: (path) => (shell?.revealPath ? shell.revealPath(path) : Promise.resolve(false)),
   canRevealPath: () => !!shell?.revealPath,

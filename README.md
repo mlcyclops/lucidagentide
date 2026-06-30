@@ -573,7 +573,7 @@ robustness (Windows + macOS installers).
 | Doc | What's in it |
 |:--|:--|
 | [`CLAUDE.md`](CLAUDE.md) | **Read first.** The load-bearing invariants (fail-closed, extend-don't-fork, frozen contracts, byte-stable prefix) |
-| [`DECISIONS.md`](DECISIONS.md) | Architecture decision records (ADR-0001 … ADR-0095) |
+| [`DECISIONS.md`](DECISIONS.md) | Architecture decision records (ADR-0001 … ADR-0096) |
 | [`PROGRESS.md`](PROGRESS.md) | Per-session build log: shipped / stubbed / next |
 | [`desktop/README.md`](desktop/README.md) | The desktop GUI + dev server |
 | [`CHEATSHEET.md`](CHEATSHEET.md) | Day-to-day commands |
