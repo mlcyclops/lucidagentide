@@ -943,7 +943,10 @@ function onBlock(e: Extract<ChatEvent, { type: "block" }>): void {
   // security event - show a quiet, neutral chip and stop. Only the gate's authoritative
   // quarantine (quarantined !== false) gets the loud treatment + Security-panel review.
   if (e.quarantined === false) {
-    addEvent(`<div class="evt" data-tip="Tool call did not run">${icon("close", 14)}<span><b>${esc(e.tool)}</b> · ${esc(e.reason)}</span></div>`);
+    // P-TOOLFAIL.1 (ADR-0093): a tool that failed or didn't run — NOT a security block. The reason now
+    // carries omp's own status/message (tool_failure.ts), so the chip explains itself; the tooltip makes
+    // the not-a-quarantine distinction explicit so a failure is never read as a denial.
+    addEvent(`<div class="evt" data-tip="Tool call was not completed (failed or refused) — not a security block">${icon("close", 14)}<span><b>${esc(e.tool)}</b> · ${esc(e.reason)}</span></div>`);
     return;
   }
   const review = () => { OPEN.add("sec.live"); focusInspector("security"); void refresh(); };

@@ -7138,3 +7138,70 @@ guides are its durable, re-readable counterpart), ADR-0087 (About panel - future
 ADR-0086 (BUSL licensing + the source-only header scope), `README.md` (the capability tour the guides
 task-scope per role), `CLAUDE.md`/`AGENTS.md` (invariants the Security guide cites), `CHEATSHEET.md`
 (commands the Developer guide cites), new `docs/guides/` (the four guides + index this ADR defines).
+
+## ADR-0093 - P-TOOLFAIL.1: An honest chip for a failed/rejected tool call (distinguish failure from denial, surface omp's reason)
+
+**Date:** 2026-06-29
+**Status:** Accepted - shipped.
+**Increment:** P-TOOLFAIL.1.
+
+### Context
+
+A live turn (build a Minesweeper game) ended with two grey "tool call rejected" chips - a browser-open
+("Opening game in browser") and a JS syntax-check ("execute [js]") - and no approval prompt. The user (and
+the agent, which narrated "both tool calls were denied") read this as a security/permission DENIAL. It was
+not. Investigation of `~/.omp/lucid-audit.jsonl` showed NO `exec_decision`/`egress_decision` block for that
+turn, and every gate block path calls `emitSecurityEvent` (which appends there). So the gate never ran:
+omp could not run those two tools (no browser-open / JS-execute capability in the session) and returned
+the calls as `failed`/`rejected` BEFORE any permission request reached the gate.
+
+The defect is in the messaging. omp's `tool_call_update` fires one generic signal for two very different
+outcomes - a tool that RAN and errored (`status: "failed"`) and a tool that DID NOT run (`status:
+"rejected"`: refused, unavailable, or cancelled) - and the desktop flattened both, verbatim, to the single
+string `"tool call rejected"` (`acp_backend.ts`), discarding omp's own status and message. "Rejected" reads
+as "denied"; the chip implied a decision was made when none was, and gave neither the user nor the agent
+anything to act on.
+
+This sits next to two related gaps the same investigation surfaced, each its own future increment: the
+egress classifier would gate a LOCAL-file browser preview as internet egress purely because the tool name
+contains "browser" (P-EGRESS.2, future), and the egress no-live-listener block at `acp_backend.ts` returns
+`cancelled` with NO `emitSecurityEvent`, so a silent egress block leaves no audit trail (P-ENT.3, future).
+The AI-LOC ledger discoverability fix (it renders only as a buried, conditionally-shown Memory accordion)
+is also queued separately (P-LOC.3, future).
+
+### Decision
+
+Replace the hardcoded `"tool call rejected"` with omp's actual outcome, via a PURE, over-tested helper
+`desktop/tool_failure.ts` so the chip explains itself and is never mistaken for a security denial.
+
+- **`toolFailureReason(u)` → `{ didRun, reason }`** (pure; no I/O). `status === "failed"` ⇒ `didRun: true`
+  ("tool failed"); anything else (`"rejected"`) ⇒ `didRun: false` ("tool did not run"). The fallback wording
+  deliberately AVOIDS "rejected"/"denied" so an unavailable tool is not read as a gate block.
+- **`toolFailureMessage(u)`** pulls omp's message wherever omp puts it - a `content[]` array (direct `text`
+  or nested `content.text`), a `rawOutput` string or `{ error }`, or a top-level `message`/`error`/`reason`
+  - normalized (collapsed whitespace) and capped at 160 chars. When present it is folded into the chip
+  ("tool failed: syntax error at line 3" / "tool did not run: no such tool: execute").
+- **The chip stays NEUTRAL.** This path emits `block` with `quarantined: false`; a real security quarantine
+  is the gate's own stderr signal (unchanged). The renderer tooltip now reads "Tool call was not completed
+  (failed or refused) - not a security block", making the not-a-quarantine distinction explicit.
+
+No frozen-contract bytes change: the `block` `ChatEvent` already carried a `reason` field (we were
+wasting it), the prompt prefix, scanner IPC, DuckDB schema, and `contracts.ts`/`result_adapter.ts` are
+untouched.
+
+### Consequences
+
+A failed/unavailable tool now says WHY, and a denial is visibly distinct from a failure - the exact
+ambiguity that made this turn unreadable. Limitation: when omp attaches no message to a `rejected` update
+(as in the originating case), the chip is the bare "tool did not run" - honest, but it still cannot name
+"the tool isn't enabled" vs "omp refused it" because omp itself does not tell us. Surfacing that would need
+an omp-side change (out of scope; extend-don't-fork). The two egress gaps and the AI-LOC discoverability
+fix remain queued as their own increments.
+
+### Relates to
+
+`acp_backend.ts` (the `tool_call_update` emit site + the egress no-listener block noted for P-ENT.3),
+`desktop/renderer/app.ts` (`onBlock` neutral chip + tooltip), new `desktop/tool_failure.ts` +
+`desktop/tool_failure.test.ts`, new `desktop/scripts/demo_p_toolfail_1.ts`, ADR-0062 (egress gate -
+P-EGRESS.2 local-file follow-up), ADR-0066/0067 (exec gate - the other "blocked" path), ADR-0069 (the OCSF
+audit feed whose absence proved the gate never ran), ADR-0031 (the AI-LOC ledger - P-LOC.3 discoverability).
