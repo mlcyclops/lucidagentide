@@ -15,6 +15,8 @@ contextBridge.exposeInMainWorld("lucid", {
   isElectron: true,
   setZoom: (factor: number) => { try { webFrame.setZoomFactor(factor); } catch { /* ignore */ } },
   pickFolder: (): Promise<string | null> => ipcRenderer.invoke("lucid:pickFolder"),
+  // P-PREVIEW.1 (ADR-0096): capture the preview region of the window → PNG data URL (main uses capturePage).
+  capturePreview: (rect: { x: number; y: number; width: number; height: number }): Promise<string | null> => ipcRenderer.invoke("lucid:capturePreview", rect),
   revealPath: (path: string): Promise<boolean> => ipcRenderer.invoke("lucid:revealPath", path),
   win: {
     minimize: () => ipcRenderer.send("lucid:win", "minimize"),

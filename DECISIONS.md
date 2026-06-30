@@ -7322,3 +7322,77 @@ the write path.
 `desktop/ailoc_view.ts` + `desktop/ailoc_view.test.ts`, new `desktop/scripts/demo_p_loc_3.ts`, ADR-0031
 (P-LOC.1/.2 — the ledger this surfaces), ADR-0088 (role foregrounding — Manager leads with this metric),
 ADR-0093 (the sibling pure-helper pattern), the P-DOC.1 manager guide (which documents the ledger).
+
+## ADR-0096 - P-PREVIEW.1-3: An in-app browser preview the agent can drive and screenshot (resizable fly-out)
+
+**Date:** 2026-06-29
+**Status:** Accepted - SCOPE/PLAN + P-PREVIEW.1 shipped (panel + local-file preview + screenshot-to-chat).
+**Increment:** P-PREVIEW.1 (this); P-PREVIEW.2/.3 phased below.
+
+### Context
+
+LUCID writes web apps but cannot *run* them: the minesweeper turn (ADR-0093) wrote a self-contained HTML
+game, tried to "open in browser", and dead-ended because no such capability exists — the agent (and the
+user) had no way to see whether the UI actually worked. The product can author code but not close the
+build→see→fix loop. A reviewer's natural ask: let the agent preview and screenshot the app it just built,
+shown in a panel the user can watch — like the Knowledge Graph fly-out, resizable on the right.
+
+The pieces already exist: LUCID is an **Electron** shell (so a page can be rendered in-app and the window
+captured to a PNG), the **Knowledge Graph** panel is a resizable right-edge `<aside>` with a drag handle
+and mutual-exclusion with the other right surfaces (the exact UX to clone), tool results already flow back
+as `ToolResult`, and the **egress gate** (ADR-0062 / ADR-0094) already governs reaching out — a rendered
+local page that fetches remote resources is exactly an egress concern.
+
+### Decision
+
+Add a **Preview** fly-out panel and (phased) the agent tools to drive it. Extend-don't-fork throughout: a
+renderer panel + a thin Electron capture seam in the existing preload + (later) omp custom tools.
+
+**P-PREVIEW.1 (this increment) — the panel + user-driven local preview + screenshot-to-chat:**
+- A new right-edge `<aside id="preview">` cloned from the KG panel: a `data-resize="preview"` left-edge
+  drag handle, persisted width, a rail glyph, and mutual exclusion with the inspector / KG / IDE / settings
+  (reusing the existing `closeKnowledge`/`closeIde`/`closeSettings` idiom). A path/URL bar + Open + Reload.
+- The page renders in a **sandboxed `<iframe sandbox="allow-scripts allow-forms">`** (works in both the
+  Electron app and the dev-server browser; no `webviewTag` attack surface added). Local targets resolve to
+  `file://`; the resolver is pure and shared.
+- A pure `desktop/preview_resolve.ts` `resolvePreview(target)` → `{ kind: "local" | "remote" | "blocked",
+  src, label }`, reusing `isLocalFileTarget` (ADR-0094). Remote (`http(s)`) is recognized but, in this
+  increment, **not auto-loaded** — it is surfaced as `remote` and gated in P-PREVIEW.3; junk/empty ⇒
+  `blocked`. Fail-safe: anything not clearly local is not silently rendered.
+- **Screenshot-to-chat**: a button captures the panel via the existing window's `webContents.capturePage(rect)`
+  (cropped to the iframe's bounding rect) through a new `lucid.capturePreview(rect)` preload→IPC seam, and
+  drops the PNG into the composer as an attachment for the agent to react to. Electron-only; in the
+  dev-server browser the button is disabled with a tooltip (no `capturePage` outside Electron).
+
+**P-PREVIEW.2 (next) — the agent drives it.** Gated omp **custom tools** so the agent itself can
+`preview_open(path)`, `preview_screenshot()` (returns the PNG as a `ToolResult` image so the agent *sees*
+its own UI), `preview_snapshot()` (the DOM/a11y tree as text — cheap "does the element exist / what does it
+say"), and `preview_click/fill/console`. The user watches the agent drive the panel live. Each tool call
+is surfaced like any other (and the screenshot inline in chat).
+
+**P-PREVIEW.3 (later) — remote + hardening.** Egress-gated remote URLs (a page load and any fetch it makes
+route through ADR-0062/0094, or are blocked in a strict profile), a managed **preview profile**
+(off / local-only / gated-remote) under ADR-0068, and sandbox hardening (CSP, partition isolation).
+
+### Security
+
+The preview renders **untrusted, agent-authored code**, so it is sandboxed (`<iframe sandbox>`, no
+`allow-same-origin` for remote, no node access — the main window stays `contextIsolation: true,
+nodeIntegration: false`). A local file open reuses the P-EGRESS.2 prompt/audit; remote loads are deferred
+to the egress-gated P-PREVIEW.3 rather than shipped open. Screenshots are metadata-safe (they show only
+what the user already sees on screen). Fail-closed: the resolver never renders an ambiguous target, and the
+capture seam is absent (button disabled) outside Electron.
+
+### Verification boundary (honest)
+
+The pure resolver + the panel DOM are verified here (unit tests + a dev-server DOM snapshot). The Electron
+**`capturePage` path cannot run in this sandbox** (no Electron/display), so it is implemented behind the
+preload seam and verified live in the packaged app — called out in the PR, not claimed as tested.
+
+### Relates to
+
+`desktop/renderer/app.ts` (the panel + rail + resizer + screenshot button), `desktop/preload.ts` +
+`desktop/main.ts` (`capturePreview` IPC), `desktop/renderer/bridge.ts` (the `capturePreview` seam), new
+`desktop/preview_resolve.ts` + `desktop/preview_resolve.test.ts` + `desktop/scripts/demo_p_preview_1.ts`,
+ADR-0062/0094 (egress gate the resolver + P-PREVIEW.3 build on), ADR-0093 (the minesweeper turn that
+motivated this), the Knowledge-graph fly-out (the UX pattern cloned).

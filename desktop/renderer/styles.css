@@ -1451,6 +1451,14 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .set-body{flex:1;min-height:0;overflow:auto;padding:12px 14px 20px}
 /* knowledge graph view (P9.3) */
 .kg{position:relative;width:var(--kg-w,min(900px,70vw));background:var(--bg-1);border-left:1px solid var(--line-soft);display:flex;flex-direction:column;overflow:hidden;animation:slideInR var(--t-slow) var(--ease-out)}
+/* P-PREVIEW.1 (ADR-0096): in-app browser preview fly-out — reuses the .kg shell but its own width var. */
+#preview{width:var(--preview-w,min(820px,68vw))}
+.preview-body{flex:1;min-height:0;position:relative;display:flex;background:var(--bg-0)}
+.preview-frame{flex:1;min-width:0;border:0;background:#fff}
+.preview-frame[hidden]{display:none}
+.preview-empty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;padding:0 36px;color:var(--txt-4);font-size:13px;line-height:1.6}
+.preview-shot{flex-direction:column;align-items:flex-start;gap:6px}
+.preview-shot-img{max-width:100%;border:1px solid var(--line);border-radius:8px;margin-top:4px}
 .kg-tools{display:flex;align-items:center;gap:10px}
 .seg.kg-lens{display:flex;gap:3px;background:var(--bg-2);border:1px solid var(--line);border-radius:8px;padding:3px}
 .kg-lens button{-webkit-app-region:no-drag;border:0;background:transparent;color:var(--txt-3);font-size:11px;font-weight:600;padding:4px 11px;border-radius:6px;cursor:pointer;transition:background var(--t),color var(--t),box-shadow var(--t)}

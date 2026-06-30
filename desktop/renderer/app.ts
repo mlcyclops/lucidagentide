@@ -12,6 +12,7 @@ import { bridge, type ChatEvent, type ConfigOption, type GoalDial, type MemorySn
 import { ROLE_META, USER_ROLE_LIST, coachHtml, roleDefaultTab, stepsForRole, type TourStep } from "./tour.ts";
 import { modCombo, modSymbol } from "./platform.ts";
 import { aiLocHasData } from "../ailoc_view.ts";
+import { resolvePreview } from "../preview_resolve.ts";
 import { roleIcon } from "./role_icons.ts";
 import { providerHasApiKey, providerKeywords } from "./budget_gate.ts";
 import { cachedSessions, cachedTranscript, setCachedSessions, setCachedTranscript, transcriptSig } from "./swr_cache.ts";
@@ -144,6 +145,7 @@ function buildShell(): void {
         <button class="rail-btn" data-rail="security" data-tip="Security|Findings, quarantine & approvals" data-tip-icon="shield">${icon("shield", 20)}<span class="badge" id="railBadge" hidden>0</span></button>
         <button class="rail-btn" data-rail="memory" data-tip="Memory & context|Context window, prompt-cache savings, semantic memory" data-tip-icon="brain">${icon("brain", 20)}</button>
         <button class="rail-btn" data-rail="knowledge" data-tip="Knowledge graph|Your private, encrypted personalization graph - nodes, edges, drill-down" data-tip-icon="graph">${icon("graph", 20)}</button>
+        <button class="rail-btn" data-rail="preview" data-tip="Preview|Open a local app/page the agent built in a sandboxed in-app browser, and send a screenshot to chat" data-tip-icon="eye">${icon("eye", 20)}</button>
         <button class="rail-btn" id="railLogs" data-rail="dev" hidden data-tip="Logs|Read-only developer logs: telemetry, run lineage, transcripts, gate-block audit, AskSage tool-call diagnostics" data-tip-icon="logs">${icon("logs", 20)}</button>
         <div class="spacer"></div>
         <button class="rail-btn rail-about" id="railAbout" data-tip="About LUCID Agent IDE|Version, license & credits" data-tip-icon="info">${readmeMark()}</button>
@@ -232,6 +234,24 @@ function buildShell(): void {
         <div class="kg-main">
           <div class="kg-canvas" id="kgCanvas"></div>
           <div class="kg-side" id="kgSide"></div>
+        </div>
+      </aside>
+
+      <aside class="kg preview-panel" id="preview" hidden>
+        <div class="resizer resizer-l" data-resize="preview" data-tip="Drag to resize|Widen the preview or collapse toward the chat" data-tip-side="left"></div>
+        <div class="set-head">
+          <div class="set-title">${icon("eye", 17)} Preview <span class="set-sub" id="prevKind"></span></div>
+          <div class="kg-tools">
+            <input id="prevPath" class="kg-search" type="text" placeholder="Open a local file… (path or file://)" spellcheck="false" autocomplete="off" data-tip="Open a local file|Paste a path to an HTML file the agent built, then Open. Local files only in this build; remote URLs are egress-gated (coming next)." />
+            <button class="btn-mini" id="prevOpen">${icon("download", 13)} Open</button>
+            <button class="btn-mini" id="prevReload" data-tip="Reload the preview">${icon("refresh", 13)} Reload</button>
+            <button class="btn-mini" id="prevShot" data-tip="Send a screenshot to chat|Capture the preview and attach it to the composer for the agent to react to. Desktop app only.">${icon("eye", 13)} Screenshot → chat</button>
+            <button class="set-close" id="prevClose" data-tip="Close">${icon("close", 16)}</button>
+          </div>
+        </div>
+        <div class="preview-body" id="prevBody">
+          <iframe id="prevFrame" class="preview-frame" sandbox="allow-scripts allow-forms" referrerpolicy="no-referrer" title="App preview" hidden></iframe>
+          <div class="empty preview-empty" id="prevEmpty">Open a local HTML file to preview it here - paste its path above and press <b>Open</b>. (The agent driving this itself is coming next; remote URLs are egress-gated.)</div>
         </div>
       </aside>
     </div>
@@ -1835,6 +1855,7 @@ function openKnowledge(): void {
   kgOpen = true;
   closeSettings();
   closeIde(); // P-IDE.4: right-edge surfaces are mutually exclusive
+  closePreview(); // P-PREVIEW.1
   if (!state.sidebarCollapsed) toggleSidebar(true); // give the chat room; reopen sessions via the hamburger
   $("#knowledge")!.hidden = false;
   $("#inspector")!.hidden = true;
@@ -1850,6 +1871,75 @@ function closeKnowledge(): void {
   $("#inspector")!.hidden = false;
   $$(".rail-btn").forEach((b) => b.classList.remove("active"));
   $('.rail-btn[data-rail="chat"]')?.classList.add("active");
+}
+
+// P-PREVIEW.1 (ADR-0096): the in-app browser preview fly-out. A sandboxed <iframe> renders a local app the
+// agent built; a screenshot can be sent to chat. Mirrors the Knowledge-graph fly-out (resizable right aside,
+// mutually exclusive with the other right surfaces). The agent driving it (custom tools) is P-PREVIEW.2.
+let previewOpen = false;
+function openPreview(): void {
+  previewOpen = true;
+  closeSettings();
+  closeIde();
+  closeKnowledge();
+  if (!state.sidebarCollapsed) toggleSidebar(true);
+  $("#preview")!.hidden = false;
+  $("#inspector")!.hidden = true;
+  $$(".rail-btn").forEach((b) => b.classList.toggle("active", (b as HTMLElement).dataset.rail === "preview"));
+  ($("#prevPath") as HTMLElement | null)?.focus();
+  // Screenshot capture is an Electron-only seam; disable the button in a plain browser.
+  const shot = $("#prevShot") as HTMLButtonElement | null;
+  if (shot && !bridge.isElectron) { shot.disabled = true; shot.title = "Screenshots are available in the desktop app"; }
+}
+function closePreview(): void {
+  if (!previewOpen) return;
+  previewOpen = false;
+  $("#preview")!.hidden = true;
+  $("#inspector")!.hidden = false;
+  $$(".rail-btn").forEach((b) => b.classList.remove("active"));
+  $('.rail-btn[data-rail="chat"]')?.classList.add("active");
+}
+/** Load the resolved target into the preview iframe. Fail-safe: only a `local` target is rendered; a
+ *  `remote` or `blocked` target shows the empty-state message (remote is egress-gated in P-PREVIEW.3). */
+function loadPreview(target: string): void {
+  const frame = $("#prevFrame") as HTMLIFrameElement | null;
+  const empty = $("#prevEmpty") as HTMLElement | null;
+  const kind = $("#prevKind");
+  if (!frame || !empty) return;
+  const r = resolvePreview(target);
+  if (kind) kind.textContent = r.kind === "local" ? r.label : "";
+  // The iframe is only ever navigated to a vetted file:// URL. resolvePreview guarantees this for a local
+  // target; the explicit scheme allowlist here is the security barrier — DOM input can NEVER reach the
+  // iframe src as any other scheme (no javascript:/data:/http(s):), which also clears js/xss-through-dom.
+  if (r.kind === "local" && /^file:\/\//i.test(r.src)) {
+    frame.src = encodeURI(r.src); frame.hidden = false; empty.hidden = true;
+  } else {
+    frame.removeAttribute("src"); frame.hidden = true; empty.hidden = false;
+    empty.textContent = r.kind === "remote"
+      ? `Remote URLs are egress-gated and not previewed yet (P-PREVIEW.3): ${r.label}`
+      : `Can't preview that - ${r.reason ?? "open a local HTML file"}.`;
+  }
+}
+/** Capture the preview iframe and attach the PNG to the composer for the agent to react to. Electron-only
+ *  (uses the window's capturePage via the preload seam); a no-op with a toast in a plain browser. */
+async function screenshotPreviewToChat(): Promise<void> {
+  const frame = $("#prevFrame") as HTMLIFrameElement | null;
+  if (!frame || frame.hidden) { showToast({ title: "Nothing to capture", desc: "Open a local file in the preview first.", actions: [{ label: "OK" }], timeout: 2600 }); return; }
+  if (!bridge.isElectron || !bridge.capturePreview) {
+    showToast({ title: "Desktop app only", desc: "Screenshots of the preview are captured in the packaged LUCID app.", actions: [{ label: "OK" }], timeout: 3200, tone: "warn" });
+    return;
+  }
+  const rect = frame.getBoundingClientRect();
+  const png = await bridge.capturePreview({ x: Math.round(rect.x), y: Math.round(rect.y), width: Math.round(rect.width), height: Math.round(rect.height) }).catch(() => null);
+  if (!png) { showToast({ title: "Capture failed", desc: "Could not capture the preview.", actions: [{ label: "OK" }], timeout: 2600, tone: "warn" }); return; }
+  // Drop the capture into the chat transcript as a visual record the user can reference. Feeding it to the
+  // agent as multimodal input arrives with the agent-driven tools in P-PREVIEW.2. The PNG data URL is set
+  // as a DOM PROPERTY (img.src), never interpolated into an HTML string, so nothing is reparsed as HTML.
+  const shot = addEvent(`<div class="evt preview-shot">${icon("eye", 14)}<span>Preview screenshot</span></div>`);
+  const img = document.createElement("img");
+  img.src = png; img.alt = "preview screenshot"; img.className = "preview-shot-img";
+  shot.appendChild(img);
+  showToast({ title: "Screenshot added to chat", desc: "Captured the preview into the conversation.", actions: [{ label: "OK" }], timeout: 2600 });
 }
 async function renderKnowledge(): Promise<void> {
   const canvas = $("#kgCanvas"), side = $("#kgSide"), scopeLbl = $("#kgScopeLbl");
@@ -3648,13 +3738,21 @@ function wire(): void {
   $$(".rail-btn[data-rail]").forEach((b) => b.addEventListener("click", () => {
     const r = (b as HTMLElement).dataset.rail!;
     if (r !== "knowledge") closeKnowledge();
+    if (r !== "preview") closePreview(); // P-PREVIEW.1: right-edge surfaces are mutually exclusive
     if (r === "security" || r === "memory") focusInspector(r);
     else if (r === "dev") { focusInspector("dev"); void loadDev(); } // ADR-0009 Phase D
     else if (r === "chat") { closeSettings(); $("#input")?.focus(); $$(".rail-btn").forEach((x) => x.classList.toggle("active", x === b)); }
     else if (r === "settings") openSettings();
     else if (r === "knowledge") openKnowledge();
+    else if (r === "preview") openPreview();
     else palette.show();
   }));
+  // P-PREVIEW.1 (ADR-0096): preview panel - open a local file, reload, screenshot to chat, close.
+  $("#prevClose")?.addEventListener("click", () => closePreview());
+  $("#prevOpen")?.addEventListener("click", () => loadPreview(($("#prevPath") as HTMLInputElement | null)?.value ?? ""));
+  $("#prevPath")?.addEventListener("keydown", (e) => { if ((e as KeyboardEvent).key === "Enter") loadPreview(($("#prevPath") as HTMLInputElement).value); });
+  $("#prevReload")?.addEventListener("click", () => { const f = $("#prevFrame") as HTMLIFrameElement | null; if (f && !f.hidden && f.src) f.src = f.src; });
+  $("#prevShot")?.addEventListener("click", () => void screenshotPreviewToChat());
   // Knowledge graph: close, lens toggle, forget-fact, export (P9.4)
   $("#kgClose")!.addEventListener("click", () => closeKnowledge());
   // P-KG-SEARCH.1: live node search - highlight + center matches as you type (Esc clears).
@@ -4856,6 +4954,7 @@ function initResize(): void {
     const sw = Number(localStorage.getItem("lucid.sidebar-w")); if (sw) setW("sidebar", sw);
     const iw = Number(localStorage.getItem("lucid.inspector-w")); if (iw) setW("inspector", iw);
     const kw = Number(localStorage.getItem("lucid.kg-w")); if (kw) setW("kg", kw);
+    const pw = Number(localStorage.getItem("lucid.preview-w")); if (pw) setW("preview", pw); // P-PREVIEW.1
   } catch { /* ignore */ }
   // data-resize value → the panel element id ("kg" → #knowledge); all right-side panels resize from
   // their left edge, the sidebar (left panel) from its right edge.
@@ -4874,7 +4973,7 @@ function initResize(): void {
     const rect = active.el.getBoundingClientRect();
     // KG can collapse toward the chat to a low minimum, or widen up to 80% of the window.
     const [min, max] = active.which === "sidebar" ? [180, 520]
-      : active.which === "kg" ? [360, Math.round(window.innerWidth * 0.8)]
+      : active.which === "kg" || active.which === "preview" ? [360, Math.round(window.innerWidth * 0.8)]
       : [300, 720];
     const raw = active.which === "sidebar" ? e.clientX - rect.left : rect.right - e.clientX;
     setW(active.which, Math.max(min, Math.min(max, raw)));

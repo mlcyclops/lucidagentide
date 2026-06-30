@@ -84,6 +84,21 @@ ipcMain.handle("lucid:pickFolder", async (e) => {
   return r.canceled || !r.filePaths[0] ? null : r.filePaths[0];
 });
 
+// P-PREVIEW.1 (ADR-0096): capture the preview region of the window into a PNG data URL. Crops the live
+// window capture to the iframe's rect (sent by the renderer), so the agent/user gets just the previewed
+// page. Metadata-safe (shows only what is already on screen); returns null on any failure, never throws.
+ipcMain.handle("lucid:capturePreview", async (e, rect: unknown) => {
+  const w = BrowserWindow.fromWebContents(e.sender);
+  if (!w) return null;
+  const r = (rect ?? {}) as { x?: unknown; y?: unknown; width?: unknown; height?: unknown };
+  const n = (v: unknown) => (typeof v === "number" && isFinite(v) && v >= 0 ? Math.round(v) : 0);
+  const crop = { x: n(r.x), y: n(r.y), width: n(r.width), height: n(r.height) };
+  try {
+    const img = crop.width > 0 && crop.height > 0 ? await w.webContents.capturePage(crop) : await w.webContents.capturePage();
+    return img.isEmpty() ? null : img.toDataURL();
+  } catch { return null; }
+});
+
 // Reveal an export location in the OS file manager (#115). Only opens a path that actually exists, so a
 // stray/forged request can't probe the filesystem. shell.openPath returns "" on success, else an error.
 ipcMain.handle("lucid:revealPath", async (_e, p: unknown) => {
