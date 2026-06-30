@@ -22,8 +22,9 @@ console.log("== P-ABOUT.1 — About panel + dynamic version ==");
 const pkg = JSON.parse(readFileSync(join(import.meta.dir, "..", "package.json"), "utf8")) as { version: string };
 if (pkg.version !== APP_VERSION) fail(`desktop/package.json (${pkg.version}) and version.ts (${APP_VERSION}) drifted`);
 ok(`version single-sourced: version.ts === desktop/package.json === ${APP_VERSION}`);
-if (APP_VERSION !== "1.8.11") fail(`app version must be 1.8.11, got ${APP_VERSION}`);
-ok("app version is v1.8.11");
+// Version is single-sourced in version.ts; assert SHAPE (semver), not a literal, so this never rots on a bump.
+if (!/^\d+\.\d+\.\d+$/.test(APP_VERSION)) fail(`app version must be semver, got ${APP_VERSION}`);
+ok(`app version is v${APP_VERSION}`);
 
 // 2. The panel surfaces identity, company, license, and the live version (no hardcoded duplicate).
 const html = aboutHtml(APP_VERSION);

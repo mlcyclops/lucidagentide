@@ -15,4 +15,6 @@
 // v1.8.14 = agent-trust UX (honest tool-failure chip, local-file egress, AI-LOC discoverability) +
 //           role user guides + in-app browser Preview (panel, auto-surface-on-write, hardened sandbox).
 //           (v1.8.13 skipped.)
-export const APP_VERSION = "1.8.14";
+// v1.8.15 = full-tree workspace folder browser (open a folder anywhere, ADR-0103) + bun trustedDependencies
+//           so a from-source `bun install` actually installs Electron's binary.
+export const APP_VERSION = "1.8.15";
