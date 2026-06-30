@@ -4,7 +4,29 @@
 // desktop/preview_resolve.test.ts — P-PREVIEW.1 (ADR-0096): the fail-safe preview-target resolver.
 
 import { describe, expect, test } from "bun:test";
-import { resolvePreview, toFileUrl } from "./preview_resolve.ts";
+import { previewablePath, resolvePreview, toFileUrl } from "./preview_resolve.ts";
+
+describe("previewablePath (P-PREVIEW.2, ADR-0096): auto-surface a written app", () => {
+  test("a write of an .html file → its path", () => {
+    expect(previewablePath("write", { path: "C:\\Users\\n\\game.html" })).toBe("C:\\Users\\n\\game.html");
+    expect(previewablePath("edit", { file_path: "/home/n/app.htm" })).toBe("/home/n/app.htm");
+    expect(previewablePath("Write", { filename: "diagram.svg" })).toBe("diagram.svg");
+  });
+  test("a write of a NON-previewable file → null (only browser docs auto-surface)", () => {
+    expect(previewablePath("write", { path: "src/index.ts" })).toBeNull();
+    expect(previewablePath("edit", { path: "notes.md" })).toBeNull();
+  });
+  test("a non-write tool (read/search/bash) → null, even on an .html", () => {
+    expect(previewablePath("read", { path: "game.html" })).toBeNull();
+    expect(previewablePath("bash", { command: "cat game.html" })).toBeNull();
+  });
+  test("missing/empty path → null", () => {
+    expect(previewablePath("write", {})).toBeNull();
+    expect(previewablePath("write", { path: "   " })).toBeNull();
+    expect(previewablePath("write", null)).toBeNull();
+    expect(previewablePath(null, { path: "x.html" })).toBeNull();
+  });
+});
 
 describe("toFileUrl", () => {
   test("leaves an existing file:// URL alone", () => {

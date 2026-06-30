@@ -7396,3 +7396,29 @@ preload seam and verified live in the packaged app — called out in the PR, not
 `desktop/preview_resolve.ts` + `desktop/preview_resolve.test.ts` + `desktop/scripts/demo_p_preview_1.ts`,
 ADR-0062/0094 (egress gate the resolver + P-PREVIEW.3 build on), ADR-0093 (the minesweeper turn that
 motivated this), the Knowledge-graph fly-out (the UX pattern cloned).
+
+### Addendum (2026-06-30) — P-PREVIEW.2 re-scoped to "auto-on-write"; the custom-tool version moves later
+
+Building P-PREVIEW.2 surfaced a feasibility constraint. The originally-planned version — the agent itself
+calling `preview_open`/`preview_screenshot` custom tools and receiving its own screenshot as a multimodal
+`ToolResult` — requires (a) a custom agent-tool registered through omp's `pi` plugin interface, which LUCID
+does **not do anywhere today** (every extension uses only `pi.on(...)` hooks + `pi.registerProvider(...)`;
+omp is a CLI, `@oh-my-pi/pi-agent-core`, and its custom-tool factory shape is unconfirmed — CLAUDE.md lists
+confirming it as an open task), and (b) a cross-process round-trip (omp tool → desktop → renderer
+`capturePage` → back to the tool) that **cannot be verified without live omp + Electron** (absent in CI/this
+environment). Shipping that blind would put unverified code on the agent-tool surface of a security product.
+
+So **P-PREVIEW.2 ships as the verifiable, equally-faithful "auto-on-write"**: LUCID already sees the agent's
+`tool_call` stream, so when a write/edit produces a browser-previewable file (`.html`/`.svg`), a pure
+`previewablePath()` detects it and the backend emits a `preview-available` event; the renderer auto-surfaces
+it (renders live if the panel is open, else a one-click "Open preview" toast), and the panel defaults to the
+agent's most recent previewable write. The user watches what the agent builds appear — desktop+renderer only,
+unit-tested + DOM-verifiable, no omp custom tool. The surfaced path still flows through the fail-safe resolver
+(local-only) before anything renders.
+
+**Re-phasing:** the true agent-*invoked* preview (custom omp tools + screenshot-as-multimodal-ToolResult,
+so the model sees and self-corrects on its own UI) becomes **P-PREVIEW.3a**, to be built where omp+Electron
+can verify it, gated on confirming omp's custom-tool API. Egress-gated remote URLs + sandbox hardening +
+managed preview profile remain **P-PREVIEW.3b**. New: `previewablePath()` in `preview_resolve.ts` (+ tests),
+the `preview-available` `ChatEvent` (acp_backend + bridge), `onPreviewAvailable` in the renderer,
+`desktop/scripts/demo_p_preview_2.ts`.

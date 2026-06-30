@@ -41,6 +41,7 @@ import { TokenSpeedEngine } from "../../harness/metrics/token_speed.ts";
 type Tab = "security" | "memory" | "dev";
 const state = {
   inspectorTab: "memory" as Tab, // ADR-0021: default to Memory; overridden to Security when active blocks exist
+  lastPreviewablePath: "" as string, // P-PREVIEW.2 (ADR-0096): the agent's most recent browser-previewable write
   sidebarCollapsed: false,
   inspectorRail: false,
   model: "claude-opus-4-8",
@@ -958,6 +959,7 @@ async function send(): Promise<void> {
       else { hud.before(card.el); scrollChat(); }
     }
     else if (e.type === "block") onBlock(e);
+    else if (e.type === "preview-available") onPreviewAvailable(e.path);
     else if (e.type === "usage") { tok = e.used; cost = e.cost; state.liveUsage = { used: e.used, size: e.size, cost: e.cost }; paintHud(); renderStatus(); renderMetricsRail(); }
     else if (e.type === "done") { if (e.text && e.text.length > buf.length) buf = e.text; /* reconcile a lossy stream with the server's full reply */ streamEl.innerHTML = renderMarkdown(buf); enhanceCodeBlocks(streamEl); (node as MsgNode)._md = buf; finishHud(); state.streaming = false; setSendEnabled(); }
   };
@@ -1886,7 +1888,10 @@ function openPreview(): void {
   $("#preview")!.hidden = false;
   $("#inspector")!.hidden = true;
   $$(".rail-btn").forEach((b) => b.classList.toggle("active", (b as HTMLElement).dataset.rail === "preview"));
-  ($("#prevPath") as HTMLElement | null)?.focus();
+  // P-PREVIEW.2: default to the agent's most recent previewable write, and render it straight away.
+  const path = $("#prevPath") as HTMLInputElement | null;
+  if (path && !path.value && state.lastPreviewablePath) path.value = state.lastPreviewablePath;
+  if (path?.value) loadPreview(path.value); else path?.focus();
   // Screenshot capture is an Electron-only seam; disable the button in a plain browser.
   const shot = $("#prevShot") as HTMLButtonElement | null;
   if (shot && !bridge.isElectron) { shot.disabled = true; shot.title = "Screenshots are available in the desktop app"; }
@@ -1898,6 +1903,21 @@ function closePreview(): void {
   $("#inspector")!.hidden = false;
   $$(".rail-btn").forEach((b) => b.classList.remove("active"));
   $('.rail-btn[data-rail="chat"]')?.classList.add("active");
+}
+/** P-PREVIEW.2 (ADR-0096): the agent just wrote a browser-previewable file — auto-surface it. If the Preview
+ *  panel is already open, render it live; otherwise remember it and offer a one-click "Open preview" toast so
+ *  the user watches what the agent built appear without hunting for it. */
+function onPreviewAvailable(path: string): void {
+  if (!path) return;
+  state.lastPreviewablePath = path;
+  const name = path.split(/[\\/]/).pop() || path;
+  if (previewOpen) { const p = $("#prevPath") as HTMLInputElement | null; if (p) p.value = path; loadPreview(path); return; }
+  showToast({
+    title: "App ready to preview",
+    desc: `The agent wrote ${name}.`,
+    actions: [{ label: "Open preview", run: () => openPreview() }, { label: "Dismiss" }],
+    timeout: 6000,
+  });
 }
 /** Load the resolved target into the preview iframe. Fail-safe: only a `local` target is rendered; a
  *  `remote` or `blocked` target shows the empty-state message (remote is egress-gated in P-PREVIEW.3). */

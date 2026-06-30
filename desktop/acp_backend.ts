@@ -38,6 +38,7 @@ import { assessReadiness, maturedGoalFrom, mergeMatured, parsePreflightJson, typ
 import { execFileSync } from "node:child_process";
 import { type Automation, listAutomations, nextDueAutomation, updateAutomation } from "./automations.ts";
 import { type EgressChoice, egressDecision, isLocalFileTarget, recordEgress } from "./egress_policy.ts";
+import { previewablePath } from "./preview_resolve.ts";
 import { type ExecChoice, type ExecClass, classifyCommand, classifyEval, execStore, execVerdict, recordExec } from "./exec_policy.ts";
 import { toolFailureReason } from "./tool_failure.ts";
 
@@ -119,6 +120,7 @@ export type ChatEvent =
   | { type: "subagent"; id: string; agent: string; title: string; assignments: string[] }
   | { type: "block"; tool: string; reason: string; severity: string; findings: string; id?: string; quarantined?: boolean }
   | { type: "permission"; id: string; tool: string; detail: string; options: { optionId: string; name: string; kind?: string }[]; url?: string; egress?: boolean; localFile?: boolean; exec?: boolean; program?: string; reason?: string; danger?: boolean }
+  | { type: "preview-available"; path: string } // P-PREVIEW.2 (ADR-0096): the agent wrote a previewable file
   | { type: "usage"; used: number; size: number; cost: number }
   // P-GOAL.1 (ADR-0046): /goal loop events — an iteration begins, the separate checker's verdict,
   // the loop met its condition, or it stopped (cap / no-progress).
@@ -269,6 +271,11 @@ class Backend {
                 // bookkeeping while a task runs — don't surface them as separate tool chips.
               } else {
                 this.emit({ type: "tool", name: String(u.kind ?? u.title ?? "tool"), detail: String(u.title ?? ri.command ?? "") });
+                // P-PREVIEW.2 (ADR-0096): if this write/edit produced a browser-previewable file, tell the UI
+                // so it can auto-surface it in the Preview panel. Pure detection (previewablePath); the path
+                // is still gated by the resolver before anything renders.
+                const pv = previewablePath(String(u.kind ?? u.title ?? ""), ri);
+                if (pv) this.emit({ type: "preview-available", path: pv });
               }
               break;
             }
