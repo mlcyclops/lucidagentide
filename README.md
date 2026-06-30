@@ -192,7 +192,7 @@ acknowledgement, and an enterprise policy can pin the org to the gov gateway onl
 | **Anyone leaving ChatGPT / Claude / Gemini** | **One-command import** brings your history in (gated + distilled into an encrypted personal graph) and keeps your context **across sessions**. |
 | **Agent-platform builders** | A worked, test-backed example of adding security, provenance, and memory **around** a fast runtime via hooks/tools/SDK - **extend, never fork**. |
 
-It's a **desktop app you can just download and run** (Windows installer/portable + macOS), and a **source-available codebase** you can study, run from source, and build on.
+It's a **desktop app you can just download and run** (Windows installer/portable + macOS), and a **source-available codebase** you can study, run from source, and build on. Each role gets a tailored first view plus a written, end-to-end **[role guide](docs/guides/README.md)** (Developer / Security / Manager / Executive).
 
 ## 💰 Token Cost Savings & Showback
 
@@ -405,12 +405,18 @@ cd scanner-sidecar && uv sync     # pinned Python sidecar venv
 
 # prove it end-to-end
 bun run demo-00                   # omp echo round-trip + scanner + fail-closed proof
-bun test harness                  # harness suite (incl. the fail-closed keystone)
+make test                         # full suite: harness + desktop + scanner sidecar (1,100+ tests)
 bun run demo-P4.3                 # poisoned memory can't auto-promote (keystone #2)
+bun run demo-P2.1                 # unicode scanner: every finding fires, clean corpus is FP-free
 ```
 
 Requires [Bun](https://bun.sh) and [uv](https://docs.astral.sh/uv/). `make` is optional - the
 [`Makefile`](Makefile) is the canonical task spec, mirrored as bun scripts on hosts without `make`.
+
+**Verification.** Every increment ships a runnable proof - `make demo-<id>` (e.g. `demo-P-EXEC.1`,
+`demo-P-TOOLFAIL.1`, `demo-P-EGRESS.2`; `make help` lists them all) - and CI runs the full test suite plus
+`tsc --noEmit` across all three TypeScript projects on every push. New work lands one increment per session
+behind its own ADR + demo + tests; see [`CLAUDE.md`](CLAUDE.md) for the invariants and session ritual.
 
 ## <img src=".github/assets/icons/desktop.svg" width="28" align="top" alt=""> Desktop app
 
@@ -502,6 +508,21 @@ hints render per-OS (`⌘K` on macOS, `Ctrl+K` on Windows/Linux).
 <sub><b>↑ The guided walkthrough (coachmark)</b> - a dimmed, dismissable spotlight on each panel that matters to your role, in the model-picker card style; Back / Next / Skip, replayable any time from About.</sub>
 </div>
 
+### Role guides
+
+The onboarding tour teaches the UI in seconds then vanishes; for a durable, read-end-to-end reference each
+role has its own **user guide** under [`docs/guides/`](docs/guides/README.md) - task-oriented walkthroughs in
+that role's language, with step-by-step capability tours, tips/warnings, and a cited *Notes and References*
+section. Read your own, link a teammate to theirs, or hand the security guide to an auditor:
+
+- **[Developer guide](docs/guides/developer-guide.md)** - chat + model picker, edit modes, the Memory inspector (context / cache / cost), Knowledge & RAG, the gated Save, and the `/goal` loop.
+- **[Security guide](docs/guides/security-guide.md)** - the fail-closed gate + scanner, the quarantine/approvals queue, the promotion gate, per-action exec + the Speed↔Risk dial, egress approval, and the OCSF audit export.
+- **[Manager guide](docs/guides/manager-guide.md)** - the cost & savings ledger + showback, the AI-authorship LOC ledger, `/goal` after-action reports, the budget kill switch, and AskSage gov usage.
+- **[Executive guide](docs/guides/executive-guide.md)** - the posture + spend summary, the Engineering Update brief, and the governance posture tiles.
+
+> Guides ship with documented screenshot placeholders ([`docs/guides/`](docs/guides/README.md) explains the
+> capture spec); the captured images land in a follow-up pass.
+
 ## <img src=".github/assets/icons/roadmap.svg" width="28" align="top" alt=""> Roadmap
 
 **Shipped and green.** The full security lifecycle, provenance lineage + replay, the cache-optimized prompt,
@@ -511,7 +532,9 @@ Obsidian-vault export), AI-authorship attribution, one-command import, a read-wr
 and the **`/goal` loop** with full loop-engineering (after-action reports, a budget kill switch, and stall
 guards). **Newest:** a local **RAG knowledge spine** (scan-gated PDF → air-gapped vector store), per-action
 **exec approval** for `bash`/`eval` + a per-command **Speed↔Risk dial** for the unattended loop,
-centrally-managed (GPO/MDM) policy, and a SIEM-ready **OCSF audit-export** seam.
+centrally-managed (GPO/MDM) policy, and a SIEM-ready **OCSF audit-export** seam. **Newest:** **role-based
+user guides** (Dev/Sec/Mgr/Exec) and a sweep of agent-trust UX fixes - an honest failed/rejected tool-call
+chip, accurate + audited handling of a local-file browser open, and a discoverable AI-authorship ledger.
 
 Every test suite passes and `tsc --noEmit` is clean across all three projects (TypeScript + Python). The
 table below is the recent slice; [`PROGRESS.md`](PROGRESS.md) has the full per-session log.
@@ -520,6 +543,8 @@ table below is the recent slice; [`PROGRESS.md`](PROGRESS.md) has the full per-s
 
 | Phase | Feature | ADR |
 |:--|:--|:--|
+| **P-DOC.1** | **Role-based user guides** - per-role (Dev/Sec/Mgr/Exec) end-to-end walkthroughs under [`docs/guides/`](docs/guides/README.md): step-by-step capability tours, tips/warnings, screenshot placeholders, and cited *Notes and References* | [ADR-0092](DECISIONS.md) |
+| **P-TOOLFAIL.1 · P-EGRESS.2 · P-LOC.3** | **Agent-trust UX** - an honest failed/rejected tool-call chip (distinguishes a tool that *failed* from one that *didn't run*, never implies a denial), a local-file browser open labeled + audited as a local file (not a website), and the AI-authorship ledger made discoverable (palette entry) + never silently vanishing | [ADR-0093/0094/0095](DECISIONS.md) |
 | **P-EXEC.1 · P-GOAL.13** | **Exec-tool safety** - per-action approval for `bash`/`eval` (read-only auto-runs, risky prompts, a catastrophic set *always* prompts/blocks) + a per-command **Speed↔Risk dial** governing the unattended `/goal` loop, with tools & blocks in the After-Action Report | [ADR-0066/0067](DECISIONS.md) |
 | **P-ENT.1-2** | **Enterprise governance** - centrally-managed (GPO/MDM) security policy that only ever *tightens* the knobs, plus a SIEM-ready, **OCSF-aligned**, metadata-only **security-audit export** seam (fail-safe sinks) | [ADR-0068/0069](DECISIONS.md) |
 | **P-RAG.1-1c** | **Local knowledge spine (RAG)** - scan-gated PDF ingest into an air-gapped DuckDB vector store, real bge-small **semantic** retrieval, delimited post-cache injection | [ADR-0058/0063/0064](DECISIONS.md) |
