@@ -39,6 +39,7 @@ import { execFileSync } from "node:child_process";
 import { type Automation, listAutomations, nextDueAutomation, updateAutomation } from "./automations.ts";
 import { type EgressChoice, egressDecision, recordEgress } from "./egress_policy.ts";
 import { type ExecChoice, type ExecClass, classifyCommand, classifyEval, execStore, execVerdict, recordExec } from "./exec_policy.ts";
+import { toolFailureReason } from "./tool_failure.ts";
 
 // P-EGRESS.1 (ADR-0062): the network-reaching tools omp is told to PROMPT for (acp_config.yml). When omp
 // requests permission for one of these, the desktop shows the per-website approval dialog instead of
@@ -269,7 +270,11 @@ class Backend {
             // gate AND for ordinary tool failures, so it must NOT claim "blocked by the security
             // gate" (that mislabel made benign failures look like quarantines). The authoritative
             // security block is the gate's own stderr signal, handled in onStderr below.
-            case "tool_call_update": if (u.status === "failed" || u.status === "rejected") this.emit({ type: "block", tool: String(u.kind ?? "tool"), reason: "tool call rejected", severity: "low", findings: "", quarantined: false }); break;
+            // P-TOOLFAIL.1 (ADR-0093): surface omp's ACTUAL status + message instead of a flat
+            // "tool call rejected" — distinguish a tool that ran-and-errored ("failed") from one that
+            // never ran ("rejected": refused / unavailable / cancelled), so the neutral chip says WHY
+            // and is never mistaken for a security denial. (toolFailureReason is pure; see tool_failure.ts.)
+            case "tool_call_update": if (u.status === "failed" || u.status === "rejected") this.emit({ type: "block", tool: String(u.kind ?? "tool"), reason: toolFailureReason(u).reason, severity: "low", findings: "", quarantined: false }); break;
             case "usage_update": this.emit({ type: "usage", used: Number(u.used ?? 0), size: Number(u.size ?? 0), cost: Number(u.cost?.amount ?? 0) }); break;
             case "available_commands_update": this.commands = u.availableCommands ?? []; break;
             case "config_option_update": if (u.configOptions) { this.configOptions = u.configOptions; this.syncModelEnv(); } break;

@@ -294,6 +294,9 @@ demo-P-ROLE.1b: ## P-ROLE.1b (ADR-0089): first-run guided walkthrough — tailor
 demo-P-NETDIAG.1: ## P-NETDIAG.1 (ADR-0090): in-app OAuth localhost-callback watcher - netstat/lsof parse, keeps loopback + all-interface listeners, flags a new callback-port listener as the bind-or-not evidence, read-only diagnostics (no gate verdict)
 	$(BUN) run desktop/scripts/demo_p_netdiag_1.ts
 
+demo-P-TOOLFAIL.1: ## P-TOOLFAIL.1 (ADR-0093): honest failed/rejected tool-call chip - distinguishes ran-and-errored (failed) from did-not-run (rejected/unavailable), surfaces omp's own message, never implies a security denial
+	$(BUN) run desktop/scripts/demo_p_toolfail_1.ts
+
 .PHONY: dashboards
 dashboards: ## Materialize dashboard CSVs from a DuckDB into observable/docs/data (DB=path)
 	$(BUN) run harness/scripts/materialize_dashboards.ts $(DB) observable/docs/data
