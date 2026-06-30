@@ -17,4 +17,6 @@
 //           (v1.8.13 skipped.)
 // v1.8.15 = full-tree workspace folder browser (open a folder anywhere, ADR-0103) + bun trustedDependencies
 //           so a from-source `bun install` actually installs Electron's binary.
-export const APP_VERSION = "1.8.15";
+// v1.8.16 = preview remote egress-gating (P-PREVIEW.3b) + every gate denial auditable & attributed
+//           (P-ENT.4). Also carries the defensive, functionally-unverified agent preview_open (P-PREVIEW.3a).
+export const APP_VERSION = "1.8.16";
