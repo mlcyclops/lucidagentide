@@ -312,6 +312,9 @@ demo-P-PREVIEW.2: ## P-PREVIEW.2 (ADR-0096): auto-surface the agent's freshly-wr
 demo-P-PREVIEW.3: ## P-PREVIEW.3 (ADR-0096): hardened preview sandbox - opaque-origin <iframe> (scripts on, same-origin off), no escape tokens, all powerful features denied
 	$(BUN) run desktop/scripts/demo_p_preview_3.ts
 
+demo-P-PREVIEW.3b: ## P-PREVIEW.3b (ADR-0096): a remote URL previews only through the egress gate - loads iff egress-approved AND https, opaque-origin; else stays gated (agent requests via egress flow)
+	$(BUN) run desktop/scripts/demo_p_preview_3b.ts
+
 .PHONY: demo-P-FS.1
 demo-P-FS.1: ## P-FS.1 (ADR-0103): full-tree workspace folder browser - browse above home to the FS root / drives, with an optional managed workspaceRoots confinement
 	$(BUN) run desktop/scripts/demo_p_fs_1.ts

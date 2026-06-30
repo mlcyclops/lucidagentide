@@ -7450,6 +7450,23 @@ P-PREVIEW.3a (agent-invoked `preview_open`/`preview_screenshot` via `pi.register
 New here: `PREVIEW_SANDBOX`/`PREVIEW_ALLOW`/`PREVIEW_SANDBOX_FORBIDDEN` (+ tests),
 `desktop/scripts/demo_p_preview_3.ts`. Shipped in **v1.8.14** (v1.8.13 skipped).
 
+### Addendum (2026-06-30) — P-PREVIEW.3b shipped: remote URLs preview only through the egress gate
+
+A remote URL in the preview reaches the internet, so it is gated by the **existing egress allow-list**
+(ADR-0062 / ADR-0094, honoring the managed ceiling) rather than a new approval path. Flow: the resolver
+classifies an `http(s)` target as `remote`; the renderer asks the backend `/api/preview/egress-check?url=`
+(→ `egressDecision(url)`), and a pure `canPreviewRemote(url, egressAllowed)` decides — it loads **iff the
+site is already egress-approved AND the URL is https** (no plaintext into the sandbox). Otherwise it stays
+gated with a message telling the user the agent must visit the site first (which triggers the normal egress
+prompt). A loaded remote page uses the SAME hardened, opaque-origin sandbox as a local file (no
+`allow-same-origin`). No new approval UI, no weakening of the gate; new sites still flow through the agent's
+egress request. New: `canPreviewRemote()` in `preview_resolve.ts` (+ tests), `bridge.previewEgressAllows()`,
+the `/api/preview/egress-check` endpoint, `desktop/scripts/demo_p_preview_3b.ts`.
+
+**Remaining:** P-PREVIEW.3a (agent-invoked `preview_open`/`preview_screenshot` via `pi.registerTool` + the
+cross-process screenshot round-trip) — the one piece that still needs a live omp+Electron session to verify
+(a faulty `-e` extension can break omp launch).
+
 ## ADR-0103 - P-FS.1: full-tree workspace folder browser (supersedes ADR-0022 M1's home confinement)
 
 **Date:** 2026-06-30

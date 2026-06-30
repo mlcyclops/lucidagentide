@@ -54,6 +54,13 @@ export function toFileUrl(target: string): string {
 // the desktop reacting to the tool stream it already sees. This pure helper decides whether a tool call is
 // such a write, and returns the path to preview (else null). Tested + demoed.
 
+/** P-PREVIEW.3b (ADR-0096): may a REMOTE URL load in the preview iframe? Two conditions, both required:
+ *  the egress allow-list already approves the site (`egressAllowed`, decided desktop-side by the egress gate
+ *  ADR-0062/0094), AND it's https (no plaintext http into the sandbox). Pure — the gating is testable. */
+export function canPreviewRemote(url: string | null | undefined, egressAllowed: boolean): boolean {
+  return egressAllowed && /^https:\/\//i.test((url ?? "").trim());
+}
+
 /** File extensions we can render directly in the sandboxed preview iframe (a self-contained page). */
 const PREVIEWABLE_EXT = /\.(html?|svg)$/i;
 /** Tool names that WRITE a file (omp's write/edit family). Read/search/etc. never auto-surface a preview. */

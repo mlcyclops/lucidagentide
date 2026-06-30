@@ -24,6 +24,7 @@ import { backend } from "./acp_backend.ts";
 import { clearIngestSessions, deleteSession, listSessions, sessionMessages } from "./sessions.ts";
 import { providerAuth } from "./auth_status.ts";
 import { cloneRepo, setWorkspace, workspaceInfo } from "./workspace.ts";
+import { egressDecision } from "./egress_policy.ts"; // P-PREVIEW.3b: gate a remote preview by the egress allow-list
 import { applyEnv, attribution, chinaModelsAcknowledged, listMcpServers, load as loadSettings, removeMcpServer, roleChosen, setAsksage, setAttributionSkip, setChinaModelsAcknowledged, setDeveloperMode, setKey, setMcpServerEnabled, setPersonalAiExtract, setProfile, setRateLimitProbe, setThirdPartyProvidersAcknowledged, setTourSeen, setUserRole, thirdPartyProvidersAcknowledged, tourSeen, upsertMcpServer, USER_ROLES, userRole, type UserRole } from "./settings_store.ts";
 
 // ADR-0088/0089: the /api/settings payload — profile + attribution + the cosmetic role/tour state.
@@ -369,6 +370,13 @@ const server = Bun.serve({
       // ADR-0022's still-intact transport gates — loopback bind (H1) + Origin/Host/CSRF + token (H2).
       if (p === "/api/fs/list") {
         return json({ ok: true, data: listDir(url.searchParams.get("path"), { allowedRoots: managedWorkspaceRoots() }) });
+      }
+      // P-PREVIEW.3b (ADR-0096): may a remote URL load in the preview iframe? Reuses the egress allow-list /
+      // managed ceiling (ADR-0062/0094) — a remote preview reaches the internet, so it only loads for a site
+      // the user already approved; anything else stays gated (the agent requests it via the normal flow).
+      if (p === "/api/preview/egress-check") {
+        const target = url.searchParams.get("url") ?? "";
+        return json({ ok: true, data: { allow: !!target && egressDecision(target) === "allow" } });
       }
 
       // real omp ACP backend (genuine model replies + live session config)

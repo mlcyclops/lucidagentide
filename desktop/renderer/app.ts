@@ -12,7 +12,7 @@ import { bridge, type ChatEvent, type ConfigOption, type GoalDial, type MemorySn
 import { ROLE_META, USER_ROLE_LIST, coachHtml, roleDefaultTab, stepsForRole, type TourStep } from "./tour.ts";
 import { modCombo, modSymbol } from "./platform.ts";
 import { aiLocHasData } from "../ailoc_view.ts";
-import { PREVIEW_ALLOW, PREVIEW_SANDBOX, resolvePreview } from "../preview_resolve.ts";
+import { PREVIEW_ALLOW, PREVIEW_SANDBOX, canPreviewRemote, resolvePreview } from "../preview_resolve.ts";
 import { roleIcon } from "./role_icons.ts";
 import { providerHasApiKey, providerKeywords } from "./budget_gate.ts";
 import { cachedSessions, cachedTranscript, setCachedSessions, setCachedTranscript, transcriptSig } from "./swr_cache.ts";
@@ -1931,15 +1931,30 @@ function loadPreview(target: string): void {
   // The iframe is only ever navigated to a vetted file:// URL. resolvePreview guarantees this for a local
   // target; the explicit scheme allowlist here is the security barrier — DOM input can NEVER reach the
   // iframe src as any other scheme (no javascript:/data:/http(s):), which also clears js/xss-through-dom.
+  const msg = ($("#prevEmptyMsg") as HTMLElement | null) ?? empty;
+  const showEmpty = (text: string) => { frame.removeAttribute("src"); frame.hidden = true; empty.hidden = false; msg.textContent = text; };
   if (r.kind === "local" && /^file:\/\//i.test(r.src)) {
     frame.src = encodeURI(r.src); frame.hidden = false; empty.hidden = true;
+  } else if (r.kind === "remote") {
+    // P-PREVIEW.3b (ADR-0096): a remote URL reaches the internet — only load it if the egress allow-list
+    // already approves the site (honoring the managed ceiling). Otherwise it stays gated; the agent must
+    // request the site via the normal egress flow (which prompts the user). The iframe is opaque-origin
+    // (no allow-same-origin), and only an http(s) URL ever reaches src here.
+    const remoteUrl = target.trim(); // for a remote target, the input IS the URL (resolver label === URL)
+    if (kind) kind.textContent = "checking…";
+    showEmpty(`Checking whether ${r.label} is approved to load…`);
+    void bridge.previewEgressAllows(remoteUrl).then((allowed) => {
+      if (($("#prevPath") as HTMLInputElement | null)?.value.trim() !== remoteUrl) return; // a newer Open superseded this
+      if (canPreviewRemote(remoteUrl, allowed)) {
+        if (kind) kind.textContent = r.label; frame.src = encodeURI(remoteUrl); frame.hidden = false; empty.hidden = true;
+      } else {
+        if (kind) kind.textContent = "";
+        showEmpty(`Remote site not approved for preview: ${r.label}. Ask the agent to visit it — you'll get an egress approval prompt, then it can preview here.`);
+      }
+    }).catch(() => showEmpty(`Couldn't check egress approval for ${r.label}.`));
   } else {
-    frame.removeAttribute("src"); frame.hidden = true; empty.hidden = false;
-    // Set the message on the inner span (not the flex container) so its width/contrast styling persists.
-    const msg = ($("#prevEmptyMsg") as HTMLElement | null) ?? empty;
-    msg.textContent = r.kind === "remote"
-      ? `Remote URLs are egress-gated and not previewed yet (P-PREVIEW.3): ${r.label}`
-      : `Can't preview that - ${r.reason ?? "open a local HTML file"}.`;
+    if (kind) kind.textContent = "";
+    showEmpty(`Can't preview that - ${r.reason ?? "open a local HTML file"}.`);
   }
 }
 /** Capture the preview iframe and attach the PNG to the composer for the agent to react to. Electron-only

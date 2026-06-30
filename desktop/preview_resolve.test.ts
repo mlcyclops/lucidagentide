@@ -4,7 +4,23 @@
 // desktop/preview_resolve.test.ts — P-PREVIEW.1 (ADR-0096): the fail-safe preview-target resolver.
 
 import { describe, expect, test } from "bun:test";
-import { PREVIEW_ALLOW, PREVIEW_SANDBOX, PREVIEW_SANDBOX_FORBIDDEN, previewablePath, resolvePreview, toFileUrl } from "./preview_resolve.ts";
+import { PREVIEW_ALLOW, PREVIEW_SANDBOX, PREVIEW_SANDBOX_FORBIDDEN, canPreviewRemote, previewablePath, resolvePreview, toFileUrl } from "./preview_resolve.ts";
+
+describe("canPreviewRemote (P-PREVIEW.3b, ADR-0096)", () => {
+  test("loads only when egress-approved AND https", () => {
+    expect(canPreviewRemote("https://example.com/app", true)).toBe(true);
+  });
+  test("never loads an egress-approved but non-https URL (no plaintext into the sandbox)", () => {
+    expect(canPreviewRemote("http://example.com/app", true)).toBe(false);
+  });
+  test("never loads when egress is not approved, even for https", () => {
+    expect(canPreviewRemote("https://example.com/app", false)).toBe(false);
+  });
+  test("null/empty → false", () => {
+    expect(canPreviewRemote("", true)).toBe(false);
+    expect(canPreviewRemote(null, true)).toBe(false);
+  });
+});
 
 describe("preview sandbox policy (P-PREVIEW.3, ADR-0096)", () => {
   const tokens = PREVIEW_SANDBOX.split(/\s+/).filter(Boolean);
