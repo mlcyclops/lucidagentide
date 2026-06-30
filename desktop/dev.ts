@@ -47,11 +47,11 @@ import { destroyCui, enablePersonal, estimateChatExport, exportCuiArchive, expor
 import { readEditorFile, saveEditorFile } from "./editor.ts";
 import { cancelImport, importJobStatus, startImport } from "./import_job.ts";
 import { homedir } from "node:os";
-import { existsSync, readdirSync, statSync } from "node:fs";
-import { dirname } from "node:path";
+import { existsSync, readdirSync } from "node:fs";
+import { listDir } from "./fs_browse.ts";
 import { DIAL_TYPES, type LoopDial } from "./exec_policy.ts";
 import { audit } from "./audit_export.ts";
-import { isRiskTier } from "./managed_config.ts";
+import { isRiskTier, managedWorkspaceRoots } from "./managed_config.ts";
 import { isAllowedRequest, reqShape, tokenValid } from "./origin_guard.ts";
 
 /** Sanitize an untrusted /api/goal `dial` payload into a LoopDial — only known command types + valid
@@ -363,27 +363,12 @@ const server = Bun.serve({
         const counts = { shipped: u.recentlyShipped.length, loadBearing: u.loadBearingDependencies.length, techDebt: u.techDebt.length, decisions: u.upcomingDecisions.length, risks: u.risks.length };
         return json({ ok: true, data: { brief: renderEngineeringBrief(u), scriptText: renderScript(buildPodcastScript(u)), counts } });
       }
-      // In-app folder browser (works in the browser build AND Electron — the dev server
-      // reads the local FS in both). Lists subdirectories + flags git repos, for Workspace.
+      // In-app folder browser (works in the browser build AND Electron). Full-tree traversal
+      // (ADR-0103/P-FS.1, superseding ADR-0022 M1): the local authenticated user can browse anywhere on
+      // the machine, optionally confined to an org's managed `workspaceRoots`. The endpoint stays behind
+      // ADR-0022's still-intact transport gates — loopback bind (H1) + Origin/Host/CSRF + token (H2).
       if (p === "/api/fs/list") {
-        // M1 (ADR-0022): the folder browser is confined to the user's home subtree.
-        // pathWithin canonicalizes (collapsing any ../) and rejects anything outside,
-        // so the request path can't turn this into an arbitrary directory-listing oracle.
-        const want = url.searchParams.get("path");
-        const safe = want ? pathWithin(homedir(), want) : null;
-        const base = safe && existsSync(safe) ? safe : homedir();
-        const dirs: { name: string; path: string; isGit: boolean }[] = [];
-        try {
-          for (const name of readdirSync(base)) {
-            if (name.startsWith(".")) continue; // hide dotfiles
-            const full = join(base, name);
-            try { if (statSync(full).isDirectory()) dirs.push({ name, path: full, isGit: existsSync(join(full, ".git")) }); } catch { /* unreadable */ }
-          }
-        } catch { /* unreadable dir */ }
-        dirs.sort((a, b) => a.name.localeCompare(b.name));
-        const parentDir = dirname(base);
-        const parent = parentDir !== base && pathWithin(homedir(), parentDir) ? parentDir : null; // never offer a parent above home
-        return json({ ok: true, data: { path: base, parent, home: homedir(), isGit: existsSync(join(base, ".git")), dirs } });
+        return json({ ok: true, data: listDir(url.searchParams.get("path"), { allowedRoots: managedWorkspaceRoots() }) });
       }
 
       // real omp ACP backend (genuine model replies + live session config)
