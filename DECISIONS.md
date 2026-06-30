@@ -7467,6 +7467,31 @@ the `/api/preview/egress-check` endpoint, `desktop/scripts/demo_p_preview_3b.ts`
 cross-process screenshot round-trip) — the one piece that still needs a live omp+Electron session to verify
 (a faulty `-e` extension can break omp launch).
 
+### Addendum (2026-06-30) — P-PREVIEW.3a "preview_open" landed as a DRAFT (verify omp launch live before merge)
+
+Built the agent-invoked **`preview_open`** half of 3a, as a flagged draft (the `preview_screenshot`
+round-trip — the model seeing its own UI — is **P-PREVIEW.3a-shot**, still ahead). "The agent drives the
+preview": a new `harness/omp/preview_extension.ts` registers a `preview_open(path)` tool via
+`pi.registerTool`; the tool runs in the omp subprocess, validates a local `.html`/`.svg` path, and
+acknowledges. The actual panel-opening is a desktop side effect: the `preview_open` tool_call streams to
+acp_backend over ACP, which detects it (pure `previewOpenPath()`) and emits the existing `preview-available`
+event → the renderer opens the panel and re-gates the path through `resolvePreview` before rendering.
+
+**Why DRAFT, and how it's de-risked.** The genuinely-unverifiable-here parts are: (a) omp launches with the
+new `-e` extension, (b) the exact `pi.registerTool` parameter-schema format the installed omp wants, (c) the
+model invoking the tool. To keep this from ever **breaking omp launch**: the extension is verified to import
+cleanly (no syntax/import error), registration is fully `try/catch`-wrapped (a missing or schema-rejecting
+`registerTool` is a silent no-op — unit-tested: `previewExtension` NEVER throws), and the `-e` arg is added
+only `existsSync`-guarded. So worst case `preview_open` is simply absent and the gate/chat/auto-on-write
+preview keep working. The pure logic (registration, exec path-gating, `previewOpenPath` extraction) is
+unit-tested with a mock `pi`; the desktop detection reuses the already-verified `preview-available` path.
+
+**Merge discipline:** opened as a **draft PR** — merge only after a live omp+Electron run confirms omp
+launches with the extension and the model can invoke `preview_open`. New: `harness/omp/preview_extension.ts`
+(+ `preview_extension.test.ts`), `previewOpenPath()` in `preview_resolve.ts` (+ tests), the `-e` wiring +
+`preview_open` detection in `acp_backend.ts`, `desktop/scripts/demo_p_preview_3a.ts`. P-PREVIEW.3a-shot
+(screenshot-as-multimodal-ToolResult via a cross-process file-handshake) remains the final preview piece.
+
 ## ADR-0103 - P-FS.1: full-tree workspace folder browser (supersedes ADR-0022 M1's home confinement)
 
 **Date:** 2026-06-30

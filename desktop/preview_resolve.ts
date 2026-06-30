@@ -61,6 +61,15 @@ export function canPreviewRemote(url: string | null | undefined, egressAllowed: 
   return egressAllowed && /^https:\/\//i.test((url ?? "").trim());
 }
 
+/** P-PREVIEW.3a (ADR-0096): if this tool_call is the agent's `preview_open`, return the path it asked to
+ *  preview (else null). Lets acp_backend drive the panel from the agent's own tool call — "the agent drives
+ *  the preview". Pure; the path is still re-gated by resolvePreview before anything renders. */
+export function previewOpenPath(toolName: string | null | undefined, rawInput: any): string | null {
+  if (!/\bpreview_open\b/i.test(toolName ?? "")) return null;
+  const p = typeof (rawInput ?? {}).path === "string" ? rawInput.path.trim() : "";
+  return p || null;
+}
+
 /** File extensions we can render directly in the sandboxed preview iframe (a self-contained page). */
 const PREVIEWABLE_EXT = /\.(html?|svg)$/i;
 /** Tool names that WRITE a file (omp's write/edit family). Read/search/etc. never auto-surface a preview. */
