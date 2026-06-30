@@ -11,6 +11,20 @@
 
 import { isLocalFileTarget } from "./egress_policy.ts";
 
+// P-PREVIEW.3 (ADR-0096): the hardened sandbox the preview <iframe> runs untrusted, agent-authored code in.
+// Single source of truth so the markup and the security tests can't drift. The allowlist is deliberately
+// MINIMAL — every powerful capability stays OFF:
+//   allow-scripts  → the app needs to run JS (without allow-same-origin this is an OPAQUE origin: the page
+//                    cannot read LUCID's origin, cookies, or localStorage).
+//   allow-forms    → a previewed app may submit a form to itself; harmless in an opaque origin.
+//   EXCLUDED on purpose: allow-same-origin (would let it read LUCID's storage), allow-top-navigation
+//   (would let it navigate LUCID away), allow-popups, allow-modals, allow-pointer-lock, allow-downloads.
+export const PREVIEW_SANDBOX = "allow-scripts allow-forms";
+// Permissions-Policy for the frame: deny every powerful feature (camera, mic, geolocation, etc.). Empty = none.
+export const PREVIEW_ALLOW = "";
+/** Sandbox tokens that must NEVER appear (they'd defeat the opaque-origin isolation). Used by the test. */
+export const PREVIEW_SANDBOX_FORBIDDEN = ["allow-same-origin", "allow-top-navigation", "allow-popups", "allow-modals", "allow-pointer-lock", "allow-downloads"] as const;
+
 export type PreviewKind = "local" | "remote" | "blocked";
 
 export interface PreviewTarget {

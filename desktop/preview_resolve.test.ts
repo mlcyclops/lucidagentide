@@ -4,7 +4,23 @@
 // desktop/preview_resolve.test.ts — P-PREVIEW.1 (ADR-0096): the fail-safe preview-target resolver.
 
 import { describe, expect, test } from "bun:test";
-import { previewablePath, resolvePreview, toFileUrl } from "./preview_resolve.ts";
+import { PREVIEW_ALLOW, PREVIEW_SANDBOX, PREVIEW_SANDBOX_FORBIDDEN, previewablePath, resolvePreview, toFileUrl } from "./preview_resolve.ts";
+
+describe("preview sandbox policy (P-PREVIEW.3, ADR-0096)", () => {
+  const tokens = PREVIEW_SANDBOX.split(/\s+/).filter(Boolean);
+  test("allows scripts (the app must run) but stays opaque-origin (no allow-same-origin)", () => {
+    expect(tokens).toContain("allow-scripts");
+    expect(tokens).not.toContain("allow-same-origin"); // opaque origin: can't read LUCID's storage/cookies
+  });
+  test("never grants any escape/escalation token", () => {
+    for (const forbidden of PREVIEW_SANDBOX_FORBIDDEN) {
+      expect(tokens).not.toContain(forbidden);
+    }
+  });
+  test("Permissions-Policy denies all powerful features (empty allow)", () => {
+    expect(PREVIEW_ALLOW).toBe("");
+  });
+});
 
 describe("previewablePath (P-PREVIEW.2, ADR-0096): auto-surface a written app", () => {
   test("a write of an .html file → its path", () => {

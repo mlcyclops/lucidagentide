@@ -12,4 +12,7 @@
 // v1.8.10 = Perplexity→Providers, set-note readability, Gemini model cards, macOS .pkg/cask.
 // v1.8.11 = in-app network diagnostics (OAuth callback watcher) + OAuth re-login self-heal.
 // v1.8.12 = OAuth broker lifespan fix (stdin:pipe) + device-flow support + auto-refresh.
-export const APP_VERSION = "1.8.12";
+// v1.8.14 = agent-trust UX (honest tool-failure chip, local-file egress, AI-LOC discoverability) +
+//           role user guides + in-app browser Preview (panel, auto-surface-on-write, hardened sandbox).
+//           (v1.8.13 skipped.)
+export const APP_VERSION = "1.8.14";
