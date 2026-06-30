@@ -1908,8 +1908,11 @@ function loadPreview(target: string): void {
   if (!frame || !empty) return;
   const r = resolvePreview(target);
   if (kind) kind.textContent = r.kind === "local" ? r.label : "";
-  if (r.kind === "local") {
-    frame.src = r.src; frame.hidden = false; empty.hidden = true;
+  // The iframe is only ever navigated to a vetted file:// URL. resolvePreview guarantees this for a local
+  // target; the explicit scheme allowlist here is the security barrier — DOM input can NEVER reach the
+  // iframe src as any other scheme (no javascript:/data:/http(s):), which also clears js/xss-through-dom.
+  if (r.kind === "local" && /^file:\/\//i.test(r.src)) {
+    frame.src = encodeURI(r.src); frame.hidden = false; empty.hidden = true;
   } else {
     frame.removeAttribute("src"); frame.hidden = true; empty.hidden = false;
     empty.textContent = r.kind === "remote"
@@ -1930,8 +1933,12 @@ async function screenshotPreviewToChat(): Promise<void> {
   const png = await bridge.capturePreview({ x: Math.round(rect.x), y: Math.round(rect.y), width: Math.round(rect.width), height: Math.round(rect.height) }).catch(() => null);
   if (!png) { showToast({ title: "Capture failed", desc: "Could not capture the preview.", actions: [{ label: "OK" }], timeout: 2600, tone: "warn" }); return; }
   // Drop the capture into the chat transcript as a visual record the user can reference. Feeding it to the
-  // agent as multimodal input arrives with the agent-driven tools in P-PREVIEW.2.
-  addEvent(`<div class="evt preview-shot">${icon("eye", 14)}<span>Preview screenshot</span><img src="${png}" alt="preview screenshot" class="preview-shot-img" /></div>`);
+  // agent as multimodal input arrives with the agent-driven tools in P-PREVIEW.2. The PNG data URL is set
+  // as a DOM PROPERTY (img.src), never interpolated into an HTML string, so nothing is reparsed as HTML.
+  const shot = addEvent(`<div class="evt preview-shot">${icon("eye", 14)}<span>Preview screenshot</span></div>`);
+  const img = document.createElement("img");
+  img.src = png; img.alt = "preview screenshot"; img.className = "preview-shot-img";
+  shot.appendChild(img);
   showToast({ title: "Screenshot added to chat", desc: "Captured the preview into the conversation.", actions: [{ label: "OK" }], timeout: 2600 });
 }
 async function renderKnowledge(): Promise<void> {
