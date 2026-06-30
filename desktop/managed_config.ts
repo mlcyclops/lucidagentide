@@ -124,7 +124,11 @@ export interface ManagedConfig {
   logging?: ManagedLogging;
   /** ADR-0068: central model-routing governance (generalizes `asksageOnly`). */
   models?: ManagedModels;
-  /** Reserved/extensible: pinned mcpServers, BI endpoint, locked workspace roots, etc. */
+  /** ADR-0103 (P-FS.1): restrict the in-app folder browser + workspace selection to these roots.
+   *  Unset/empty = the full filesystem (the individual-user default). When set, the browser is confined
+   *  to these subtrees and never offers a parent above them. Only TIGHTENS (mirrors ADR-0068). */
+  workspaceRoots?: string[];
+  /** Reserved/extensible: pinned mcpServers, BI endpoint, etc. */
   [k: string]: unknown;
 }
 
@@ -287,6 +291,8 @@ export function parseRegistryPolicy(regOutput: string): ManagedConfig | null {
   const mLock = bool("ModelsLock"); if (mLock !== undefined) models.lock = mLock;
   if (Object.keys(models).length) cfg.models = models;
 
+  const wsRoots = list("WorkspaceRoots"); if (wsRoots) cfg.workspaceRoots = wsRoots; // ADR-0103 (P-FS.1)
+
   const logging: ManagedLogging = { ...(cfg.logging ?? {}) };
   const lEnabled = bool("LoggingEnabled"); if (lEnabled !== undefined) logging.enabled = lEnabled;
   const lSink = str("LoggingSink");
@@ -362,6 +368,13 @@ export function modelAllowed(modelId: string, models: ManagedModels | undefined 
 /** The effective gov-gateway-only lock, OR-ing the legacy top-level flag and the new models block. */
 export function managedAsksageOnly(mc: ManagedConfig | null = managedConfig().config): boolean {
   return !!mc?.asksageOnly || !!mc?.models?.asksageOnly;
+}
+
+/** ADR-0103 (P-FS.1): the managed folder-browser/workspace root allowlist, or null when unmanaged
+ *  (full-filesystem browsing). Pure when given `mc`. */
+export function managedWorkspaceRoots(mc: ManagedConfig | null = managedConfig().config): string[] | null {
+  const r = mc?.workspaceRoots;
+  return Array.isArray(r) && r.length ? r.map(String).filter(Boolean) : null;
 }
 
 export interface ManagedLocks { exec: boolean; egress: boolean; loop: boolean; models: boolean; }

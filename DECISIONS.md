@@ -7449,3 +7449,66 @@ P-PREVIEW.3a (agent-invoked `preview_open`/`preview_screenshot` via `pi.register
 (egress-gated remote URLs + managed preview profile) — **ready, pending a live omp+Electron session**.
 New here: `PREVIEW_SANDBOX`/`PREVIEW_ALLOW`/`PREVIEW_SANDBOX_FORBIDDEN` (+ tests),
 `desktop/scripts/demo_p_preview_3.ts`. Shipped in **v1.8.14** (v1.8.13 skipped).
+
+## ADR-0103 - P-FS.1: full-tree workspace folder browser (supersedes ADR-0022 M1's home confinement)
+
+**Date:** 2026-06-30
+**Status:** Accepted - BUILT. Supersedes ONLY the **M1** decision of ADR-0022 (the folder browser's
+home-subtree confinement). ADR-0022's **H1** (loopback bind) and **H2** (Origin/Host/CSRF + token gate)
+are untouched and remain in force.
+**Increment:** P-FS.1. (Numbered after PR #154's ADR-0097-0102, which are unmerged on another branch; when
+both land the sequence is contiguous.)
+
+### Context
+
+ADR-0022 M1 confined the in-app folder browser (`/api/fs/list`) to the user's home subtree via
+`pathWithin(homedir(), …)`, to neutralize a CodeQL `js/path-injection` "arbitrary directory-listing oracle"
+finding. In practice this **locks the user into their home directory**: they cannot select a workspace that
+lives on another drive, under `/opt`, `/srv`, a mounted volume, `C:\work`, etc. A desktop IDE (VS Code,
+JetBrains, etc.) must be able to open a project folder ANYWHERE on the machine; the home confinement makes
+the Workspace picker unable to do its core job.
+
+### Decision - browse the whole machine; keep the transport gates; add a managed allowlist
+
+1. **Lift the home confinement.** `/api/fs/list` now lists any directory: it can navigate **above home up to
+   the filesystem root** (POSIX `/`) and, on Windows, to a **"computer" level that enumerates drives**
+   (`C:\`, `D:\`, …). `setWorkspace` already accepts any existing path, so selecting the folder works once
+   the browser can reach it. New pure module `desktop/fs_browse.ts` `listDir(want, opts)` owns the logic.
+2. **Why this is safe (the M1 threat is moot for the only caller).** `/api/fs/list` is reachable ONLY by the
+   local, authenticated user inside the Electron app, because ADR-0022's other two mitigations still stand:
+   **H1** binds the server to loopback (`127.0.0.1`) so the LAN can't reach it, and **H2** runs the
+   Origin/Host allowlist + JSON-content-type + per-session token gate before routing, defeating DNS-rebinding
+   and drive-by CSRF. A "directory-listing oracle" is only a threat against an *attacker* who can call the
+   endpoint; here the sole caller is the user browsing their own filesystem, which is the feature. Path
+   **canonicalization is preserved** (`resolve` collapses `..`/relative segments), so paths are still normalized.
+3. **Enterprise can re-confine (only tightens).** A new optional managed-config `workspaceRoots: string[]`
+   (ADR-0068 model; also via the Windows GPO value `WorkspaceRoots`) re-restricts the browser to an org's
+   allowlisted roots and never offers a parent above them. Unset = full filesystem (the individual-user
+   default). This mirrors how managed policy only ever ADDS constraints.
+
+### Plumbing (built this increment)
+
+- `desktop/fs_browse.ts` - pure, dependency-injected `listDir`: full-tree traversal, FS-root/drive-root
+  parent clamping, the `COMPUTER` drives sentinel (Windows), dotfile hiding, git flagging, and managed-root
+  confinement. Selects `path.win32`/`path.posix` by platform so Windows semantics are correct (and unit-
+  testable on POSIX CI).
+- `desktop/dev.ts` - `/api/fs/list` now delegates to `listDir(path, { allowedRoots: managedWorkspaceRoots() })`;
+  removed the now-unused `statSync`/`dirname` imports.
+- `desktop/managed_config.ts` - `ManagedConfig.workspaceRoots?` + `managedWorkspaceRoots()` accessor + the
+  `WorkspaceRoots` GPO list reader.
+- `desktop/fs_browse.test.ts` (9 tests) + `desktop/scripts/demo_p_fs_1.ts` + `make demo-P-FS.1`.
+- The renderer folder picker (`openFolderBrowser` in `app.ts`) is unchanged: it already renders whatever
+  `dirs`/`parent`/`home` the endpoint returns and round-trips the `parent` string (incl. the COMPUTER sentinel).
+
+### Invariants preserved
+
+Fail-closed transport unchanged (ADR-0022 H1/H2; invariant #3 for the control plane). The security gate,
+scanner, trust labels, and quarantine semantics are untouched - this is a *folder picker* scope change, not a
+data-trust change. Managed policy only tightens (ADR-0068). `listDir` never throws on an unreadable directory
+(returns an empty listing). New first-party files carry the BUSL-1.1 header.
+
+### Relates to
+
+ADR-0022 (supersedes M1; preserves H1/H2), ADR-0068 (the managed-config "only tightens" model + GPO reader),
+`desktop/workspace.ts` (`setWorkspace`, already unconfined), `desktop/path_guard.ts` (`pathWithin`, still
+used by the editor-save guard), and CLAUDE.md invariant #3 (the control-plane gates stay fail-closed).
