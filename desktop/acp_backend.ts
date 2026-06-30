@@ -38,7 +38,8 @@ import { assessReadiness, maturedGoalFrom, mergeMatured, parsePreflightJson, typ
 import { execFileSync } from "node:child_process";
 import { type Automation, listAutomations, nextDueAutomation, updateAutomation } from "./automations.ts";
 import { type EgressChoice, egressDecision, isLocalFileTarget, recordEgress } from "./egress_policy.ts";
-import { previewablePath } from "./preview_resolve.ts";
+import { previewOpenPath, previewablePath } from "./preview_resolve.ts";
+import { gateDenyReason } from "./gate_audit.ts";
 import { type ExecChoice, type ExecClass, classifyCommand, classifyEval, execStore, execVerdict, recordExec } from "./exec_policy.ts";
 import { toolFailureReason } from "./tool_failure.ts";
 
@@ -100,6 +101,9 @@ const GATE = join(REPO, "harness", "omp", "security_extension.ts");
 // AskSage gov-gateway provider extension, loaded alongside the gate (omp -e is
 // repeatable). No-op unless ASKSAGE_API_KEY is set in the spawn env. ADR-0007.
 const ASKSAGE = join(REPO, "harness", "omp", "asksage_extension.ts");
+// P-PREVIEW.3a (ADR-0096) — DRAFT: registers the agent-callable `preview_open` tool. Defensively wrapped so
+// a registration failure never breaks omp launch (see preview_extension.ts). Only added when the file exists.
+const PREVIEW_EXT = join(REPO, "harness", "omp", "preview_extension.ts");
 // P-TASK.3/4 (ADR-0028): config overlay that turns ON task isolation (mode: auto) so subagents
 // can run isolated and return a reviewable patch — containing the blast radius of a bad tool call.
 const ACP_CONFIG = join(REPO, "harness", "omp", "acp_config.yml");
@@ -241,7 +245,8 @@ class Backend {
         // ADR-0033: also append the build / anti-over-refusal policy so the chat model doesn't decline
         // a buildable task (e.g. "make a game/graphics/music in one HTML file") by mis-reading its scope.
         const appendedPolicy = `${DELEGATION_POLICY}\n\n${BUILD_POLICY}`;
-        const acp = new ACPClient(ompBin(), ["acp", "-e", GATE, "-e", ASKSAGE, ...isoCfg, "--append-system-prompt", appendedPolicy], currentWorkspace());
+        const previewArgs = existsSync(PREVIEW_EXT) ? ["-e", PREVIEW_EXT] : []; // P-PREVIEW.3a (draft)
+        const acp = new ACPClient(ompBin(), ["acp", "-e", GATE, "-e", ASKSAGE, ...previewArgs, ...isoCfg, "--append-system-prompt", appendedPolicy], currentWorkspace());
         acp.onNotify = (method, params) => {
           if (method !== "session/update") return;
           const u = params?.update ?? params;
@@ -274,7 +279,9 @@ class Backend {
                 // P-PREVIEW.2 (ADR-0096): if this write/edit produced a browser-previewable file, tell the UI
                 // so it can auto-surface it in the Preview panel. Pure detection (previewablePath); the path
                 // is still gated by the resolver before anything renders.
-                const pv = previewablePath(String(u.kind ?? u.title ?? ""), ri);
+                // P-PREVIEW.3a (ADR-0096, draft): the agent's own `preview_open` tool call drives the panel too
+                // — same `preview-available` path (the renderer re-gates via resolvePreview before rendering).
+                const pv = previewOpenPath(String(u.kind ?? u.title ?? ""), ri) ?? previewablePath(String(u.kind ?? u.title ?? ""), ri);
                 if (pv) this.emit({ type: "preview-available", path: pv });
               }
               break;
@@ -490,12 +497,17 @@ class Backend {
     const block = () => denyOpt ? { outcome: { outcome: "selected", optionId: denyOpt.optionId } } : { outcome: { outcome: "cancelled" } };
     return new Promise((resolve) => {
       const settle = (outcome: any) => { clearTimeout(t); this.permPending.delete(id); this.pendingPerms = Math.max(0, this.pendingPerms - 1); resolve(outcome); };
-      const t = setTimeout(() => settle(block()), Backend.PERM_MS); // fail-closed → block egress
+      // P-ENT.4 (ADR-0069): audit the fail-closed TIMEOUT block too (was silent).
+      const t = setTimeout(() => {
+        emitSecurityEvent({ category: "egress", type: "egress_decision", decision: "block", severity: "medium", tool: localFile ? "egress-local-file" : "egress", reason: `${gateDenyReason(null, true)} · ${target}`.slice(0, 200), sessionId: this.sessionId ?? undefined });
+        settle(block());
+      }, Backend.PERM_MS);
       this.permPending.set(id, (optionId) => {
         const choice = String(optionId ?? "").replace(/^egress:/, "") as EgressChoice;
         const denied = !optionId || choice === "deny";
-        // P-ENT.2 (ADR-0069): the egress (network-reach) decision as a SecurityEvent (fail-safe).
-        emitSecurityEvent({ category: "egress", type: "egress_decision", decision: denied ? "block" : "allow", severity: "medium", tool: localFile ? "egress-local-file" : "egress", reason: `${denied ? "blocked" : choice} · ${target}`.slice(0, 200), sessionId: this.sessionId ?? undefined });
+        // P-ENT.2 (ADR-0069): the egress decision as a SecurityEvent. P-ENT.4: distinguish you-blocked from
+        // a fail-closed (turn-ended) auto-deny so the audit answers "did I deny it, or did it auto-deny?".
+        emitSecurityEvent({ category: "egress", type: "egress_decision", decision: denied ? "block" : "allow", severity: "medium", tool: localFile ? "egress-local-file" : "egress", reason: `${denied ? gateDenyReason(optionId) : choice} · ${target}`.slice(0, 200), sessionId: this.sessionId ?? undefined });
         if (denied) { settle(block()); return; }
         // A local file has no host to remember (allow-once only), so persist nothing for it.
         if (!localFile) { try { recordEgress(target, choice); } catch { /* best-effort persistence */ } }
@@ -522,12 +534,18 @@ class Backend {
     const block = () => denyOpt ? { outcome: { outcome: "selected", optionId: denyOpt.optionId } } : { outcome: { outcome: "cancelled" } };
     return new Promise((resolve) => {
       const settle = (o: any) => { clearTimeout(t); this.permPending.delete(id); this.pendingPerms = Math.max(0, this.pendingPerms - 1); resolve(o); };
-      const t = setTimeout(() => settle(block()), Backend.PERM_MS); // fail-closed → block
+      // P-ENT.4 (ADR-0069): a fail-closed TIMEOUT is a real block — audit it too (it used to settle silently,
+      // so a denial could happen with no SecurityEvent — the "why did I get a deny with no record?" gap).
+      const t = setTimeout(() => {
+        emitSecurityEvent({ category: "exec", type: "exec_decision", decision: "block", severity: cls.alwaysPrompt ? "critical" : "high", tool: cls.key ?? "shell", tier: cls.tier, reason: `${gateDenyReason(null, true)} · ${cls.reason}`, sessionId: this.sessionId ?? undefined });
+        settle(block());
+      }, Backend.PERM_MS);
       this.permPending.set(id, (optionId) => {
         const choice = String(optionId ?? "").replace(/^exec:/, "") as ExecChoice;
-        // P-ENT.2 (ADR-0069): record the human's exec decision as a SecurityEvent (fail-safe).
+        // P-ENT.2 (ADR-0069): record the human's exec decision as a SecurityEvent (fail-safe). P-ENT.4: the
+        // reason distinguishes an explicit "denied by you" from a "fail-closed (turn ended)" auto-deny.
         const denied = !optionId || choice === "deny";
-        emitSecurityEvent({ category: "exec", type: "exec_decision", decision: denied ? "block" : "allow", severity: cls.alwaysPrompt ? "critical" : "medium", tool: cls.key ?? "shell", tier: cls.tier, reason: `${denied ? "denied" : choice} · ${cls.reason}`, sessionId: this.sessionId ?? undefined });
+        emitSecurityEvent({ category: "exec", type: "exec_decision", decision: denied ? "block" : "allow", severity: cls.alwaysPrompt ? "critical" : "medium", tool: cls.key ?? "shell", tier: cls.tier, reason: `${denied ? gateDenyReason(optionId) : choice} · ${cls.reason}`, sessionId: this.sessionId ?? undefined });
         if (denied) { settle(block()); return; }
         if (choice === "allow-turn") { if (cls.key) this.execTurnPrograms.add(cls.key); else this.execTurnAll = true; } // in-memory only
         else { try { recordExec(cls, choice); } catch { /* best-effort persistence */ } }
@@ -1027,7 +1045,7 @@ class Backend {
         try {
           this.applyAttributionEnv(); // same env threading as the chat spawn
           const isoCfg = existsSync(ACP_CONFIG) ? ["--config", ACP_CONFIG] : [];
-          const acp = new ACPClient(ompBin(), ["acp", "-e", GATE, "-e", ASKSAGE, ...isoCfg], currentWorkspace());
+          const acp = new ACPClient(ompBin(), ["acp", "-e", GATE, "-e", ASKSAGE, ...(existsSync(PREVIEW_EXT) ? ["-e", PREVIEW_EXT] : []), ...isoCfg], currentWorkspace());
           // A util completion is TEXT-ONLY: collect assistant text into the active sink, ignore everything
           // else (no tool calls, no permissions, no gate-block surfacing — that's the chat connection's job).
           acp.onNotify = (method: string, params: any) => {

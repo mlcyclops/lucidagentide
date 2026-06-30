@@ -4,7 +4,22 @@
 // desktop/preview_resolve.test.ts — P-PREVIEW.1 (ADR-0096): the fail-safe preview-target resolver.
 
 import { describe, expect, test } from "bun:test";
-import { PREVIEW_ALLOW, PREVIEW_SANDBOX, PREVIEW_SANDBOX_FORBIDDEN, canPreviewRemote, previewablePath, resolvePreview, toFileUrl } from "./preview_resolve.ts";
+import { PREVIEW_ALLOW, PREVIEW_SANDBOX, PREVIEW_SANDBOX_FORBIDDEN, canPreviewRemote, previewOpenPath, previewablePath, resolvePreview, toFileUrl } from "./preview_resolve.ts";
+
+describe("previewOpenPath (P-PREVIEW.3a, ADR-0096): the agent's preview_open tool call", () => {
+  test("a preview_open call → its path", () => {
+    expect(previewOpenPath("preview_open", { path: "C:/Users/n/game.html" })).toBe("C:/Users/n/game.html");
+  });
+  test("any other tool → null (even with a path)", () => {
+    expect(previewOpenPath("write", { path: "game.html" })).toBeNull();
+    expect(previewOpenPath("bash", { path: "x.html" })).toBeNull();
+  });
+  test("missing/empty path → null", () => {
+    expect(previewOpenPath("preview_open", {})).toBeNull();
+    expect(previewOpenPath("preview_open", { path: "  " })).toBeNull();
+    expect(previewOpenPath(null, { path: "x.html" })).toBeNull();
+  });
+});
 
 describe("canPreviewRemote (P-PREVIEW.3b, ADR-0096)", () => {
   test("loads only when egress-approved AND https", () => {

@@ -5811,6 +5811,24 @@ block records into the export schema without adding enum values. Frozen prefix u
 decisions exported), `contracts.ts` `EventName` (#8), and the private ADR-A011 (the per-SIEM connector
 shapes - the "how").
 
+### Addendum (2026-06-30) — P-ENT.4: every gate denial is auditable + attributed (close the silent fail-closed gap)
+
+A live turn showed several "tool call denied by user" chips (browser/bash/eval, while the agent tried to
+smoke-test a game it built) with **no matching record in the OCSF audit log**. Root cause: the per-action
+approval prompts (`askExec`/`askEgress`) emitted a `SecurityEvent` only on the RESOLVE path (you click a
+button); the **fail-closed TIMEOUT** path `setTimeout(() => settle(block()))` settled silently — a real
+denial with zero audit trail. So "did I deny it, or did it auto-deny?" was unanswerable.
+
+Fix: the timeout paths now `emitSecurityEvent(decision: block, …)` before settling, and a pure
+`gateDenyReason(optionId, timedOut)` (`desktop/gate_audit.ts`) attributes every denial honestly —
+**"denied by you"** (explicit Block) vs **"fail-closed (turn ended)"** (resolved with no optionId — the turn
+ended/disconnected while pending) vs **"fail-closed (no response in 5m)"** (timeout). Both the exec and
+egress deny paths use it. Now every per-action denial is in the audit feed with a cause; the omp-surfaced
+"denied by user" chip (ADR-0093) is no longer the only signal, and it's no longer ambiguous about whether it
+was the user. New: `gate_audit.ts` (+ test), the timeout emits + attribution in `acp_backend.ts`,
+`desktop/scripts/demo_p_ent_4.ts`. (Note: the chip text itself is omp's wording; making the CHIP say
+fail-closed-vs-you is a small follow-up — the audit trail is now authoritative.)
+
 ## ADR-0070 - P-BRIEF.1: Executive Engineering Update — repo logs → brief + podcast behind a vendor-agnostic audio seam
 
 **Date:** 2026-06-26
@@ -7466,6 +7484,31 @@ the `/api/preview/egress-check` endpoint, `desktop/scripts/demo_p_preview_3b.ts`
 **Remaining:** P-PREVIEW.3a (agent-invoked `preview_open`/`preview_screenshot` via `pi.registerTool` + the
 cross-process screenshot round-trip) — the one piece that still needs a live omp+Electron session to verify
 (a faulty `-e` extension can break omp launch).
+
+### Addendum (2026-06-30) — P-PREVIEW.3a "preview_open" landed as a DRAFT (verify omp launch live before merge)
+
+Built the agent-invoked **`preview_open`** half of 3a, as a flagged draft (the `preview_screenshot`
+round-trip — the model seeing its own UI — is **P-PREVIEW.3a-shot**, still ahead). "The agent drives the
+preview": a new `harness/omp/preview_extension.ts` registers a `preview_open(path)` tool via
+`pi.registerTool`; the tool runs in the omp subprocess, validates a local `.html`/`.svg` path, and
+acknowledges. The actual panel-opening is a desktop side effect: the `preview_open` tool_call streams to
+acp_backend over ACP, which detects it (pure `previewOpenPath()`) and emits the existing `preview-available`
+event → the renderer opens the panel and re-gates the path through `resolvePreview` before rendering.
+
+**Why DRAFT, and how it's de-risked.** The genuinely-unverifiable-here parts are: (a) omp launches with the
+new `-e` extension, (b) the exact `pi.registerTool` parameter-schema format the installed omp wants, (c) the
+model invoking the tool. To keep this from ever **breaking omp launch**: the extension is verified to import
+cleanly (no syntax/import error), registration is fully `try/catch`-wrapped (a missing or schema-rejecting
+`registerTool` is a silent no-op — unit-tested: `previewExtension` NEVER throws), and the `-e` arg is added
+only `existsSync`-guarded. So worst case `preview_open` is simply absent and the gate/chat/auto-on-write
+preview keep working. The pure logic (registration, exec path-gating, `previewOpenPath` extraction) is
+unit-tested with a mock `pi`; the desktop detection reuses the already-verified `preview-available` path.
+
+**Merge discipline:** opened as a **draft PR** — merge only after a live omp+Electron run confirms omp
+launches with the extension and the model can invoke `preview_open`. New: `harness/omp/preview_extension.ts`
+(+ `preview_extension.test.ts`), `previewOpenPath()` in `preview_resolve.ts` (+ tests), the `-e` wiring +
+`preview_open` detection in `acp_backend.ts`, `desktop/scripts/demo_p_preview_3a.ts`. P-PREVIEW.3a-shot
+(screenshot-as-multimodal-ToolResult via a cross-process file-handshake) remains the final preview piece.
 
 ## ADR-0103 - P-FS.1: full-tree workspace folder browser (supersedes ADR-0022 M1's home confinement)
 
