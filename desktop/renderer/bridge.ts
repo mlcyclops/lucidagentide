@@ -61,6 +61,9 @@ export interface DevView {
   turns: TurnView[];
   // P-ASKSAGE.1 (ADR-0059): recent AskSage tool-loop call diagnostics (developer mode only).
   asksage?: Array<Record<string, unknown>>;
+  // P-GATE-DIAG.1 (ADR-0066/0062): recent exec/egress gate-decision diagnostics (developer mode only) —
+  // shows WHY a tool was auto-denied vs prompted (askActive / listener / goalActive / autoRunning).
+  gate?: Array<Record<string, unknown>>;
   // P-ENT.2 (ADR-0069): the unified security-event stream (OCSF-ready) + per-sink delivery status.
   audit?: {
     events: { id: string; ts: string; category: string; type: string; severity: string; decision: string; tool?: string; reason?: string; tier?: string; host: string }[];

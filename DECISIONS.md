@@ -5606,6 +5606,26 @@ of it. Trust labels / event names are not redefined (no `contracts.ts` change in
 ADR-0062 (P-EGRESS.1 - the per-website pattern this mirrors), ADR-0028/0032 (the `task` tool + isolation,
 relevant to P-EXEC.2), CLAUDE.md invariant #3 (fail-closed) + the scanner keystone (defense in depth).
 
+### Addendum (2026-06-30) — P-GATE-DIAG.1: observe WHY the gate auto-denies (no-prompt diagnostics)
+
+Two live runs (Claude, then GPT-5.5) showed the agent's verification tools (browser/bash/eval) **denied with
+no approval prompt** — "I didn't even get an option to deny". omp is configured to forward these as permission
+requests (acp_config.yml `tools.approval`), so the silent deny is OUR `onRequest` hitting the no-prompt block
+path: the **interactive** check (`askActive && listener && !goalActive && !autoRunning`) was false when the
+request arrived, so exec/egress fell through to the immediate fail-closed block instead of `askExec`/`askEgress`.
+WHY it was false (a concurrency/state issue — chat `listener` clobbered by a concurrent utility completion? an
+`autoRunning`/`goalActive` overlap? a model/streaming-path timing?) can't be pinned without the runtime state,
+and the gate is too load-bearing to guess-fix (a wrong change could open an auto-allow hole).
+
+So, mirroring P-ASKSAGE.1 (ship diagnostics → capture live → fix with confidence): a dev-mode ring
+(`acp_backend.gateDiagnostics()`) records, for every exec/egress permission request, the interactive-check
+inputs (`askActive`, `listener`, `goalActive`, `autoRunning`) + the `verdict`/`decision`. Surfaced in Logs →
+**"Exec / egress gate decisions"** (with a chip + a ⛔ count on blocks). A `block(no-ui)` row then shows which
+input was false — the root cause to fix. Observability only: no change to the gate's actual deny behavior;
+fail-closed is preserved. New: the `gateDiag` ring + `recordGateDiag()` in `acp_backend.ts`, the two decision
+records (exec + egress), `gate` in the `/api/dev` snapshot + `DevView`, the Logs accordion in the renderer,
+`desktop/scripts/demo_p_gate_diag_1.ts`.
+
 ## ADR-0067 - P-GOAL.13: per-command Speed<->Risk dial for the loop + tools/blocks in the AAR (SCOPE/PLAN)
 
 **Date:** 2026-06-26

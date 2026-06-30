@@ -215,6 +215,17 @@ class Backend {
   /** Recent AskSage call diagnostics (most-recent last), capped. Empty unless developer mode is on. */
   asksageDiagnostics(): Array<Record<string, unknown>> { return this.asksageDiag.slice(-100); }
 
+  // P-GATE-DIAG.1 (ADR-0066/0062): a bounded ring recording the interactive-check inputs + decision for
+  // every exec/egress permission request. Surfaced (developer mode) in the Logs panel so the "I never got
+  // a prompt — it was just denied" anomaly is observable: it shows WHY the gate auto-denied (askActive /
+  // listener / goalActive / autoRunning) instead of prompting. Best-effort; never throws.
+  private gateDiag: Array<Record<string, unknown>> = [];
+  /** Recent exec/egress gate-decision diagnostics (most-recent last), capped. */
+  gateDiagnostics(): Array<Record<string, unknown>> { return this.gateDiag.slice(-100); }
+  private recordGateDiag(rec: Record<string, unknown>): void {
+    try { this.gateDiag.push({ at: Date.now(), ...rec }); if (this.gateDiag.length > 200) this.gateDiag.shift(); } catch { /* never break the gate on a log */ }
+  }
+
   // Turn-lifecycle diagnostics (developer mode). Prints to the dev-server console so a hung long
   // multi-tool turn reveals WHERE it stalls: did prompt() resolve (server finished, browser orphaned) or
   // never resolve (omp wedge)? did complete() clobber the chat listener? did the browser stream break?
@@ -329,6 +340,8 @@ class Backend {
               }
               const turnAllowed = interactive && (this.execTurnAll || (!!cls.key && this.execTurnPrograms.has(cls.key)));
               const verdict = execVerdict(execStore(), cls, { unattended: !interactive, turnAllowed });
+              // P-GATE-DIAG.1: record WHY this exec call gets its outcome (esp. a no-prompt block).
+              this.recordGateDiag({ kind: "exec", tool: cls.key ?? toolName, tier: cls.tier, askActive: this.askActive, listener: !!this.listener, goalActive: this.goalActive, autoRunning: this.autoRunning, interactive, verdict, decision: verdict === "allow" ? "allow" : (verdict === "prompt" && interactive) ? "prompt" : "block(no-ui)" });
               if (verdict === "allow") return approveOpt();
               if (verdict === "prompt" && interactive) return this.askExec(params, opts, cls, isEvalTool ? "eval" : (cmd ?? toolName));
               // P-ENT.2: an exec call blocked with no human to ask (unattended risky / catastrophic).
@@ -345,7 +358,10 @@ class Backend {
               // website visit — a host-based standing allow can't apply, so we still PROMPT, but with an
               // accurate local-file dialog (and never persist a host decision for it).
               const localFile = !!target && isLocalFileTarget(target);
-              if (!localFile && target && egressDecision(target) === "allow") {
+              const standingAllow = !localFile && !!target && egressDecision(target) === "allow";
+              // P-GATE-DIAG.1: record WHY this egress call gets its outcome (esp. a no-prompt block).
+              this.recordGateDiag({ kind: "egress", tool: toolName.slice(0, 40), target: (target ?? "").slice(0, 80), localFile, askActive: this.askActive, listener: !!this.listener, goalActive: this.goalActive, autoRunning: this.autoRunning, decision: standingAllow ? "allow(standing)" : (this.askActive && this.listener) ? "prompt" : "block(no-ui)" });
+              if (standingAllow) {
                 const a = opts.find((o) => /allow/i.test(o.kind ?? o.optionId ?? "")) ?? opts[0];
                 return a ? { outcome: { outcome: "selected", optionId: a.optionId } } : { outcome: { outcome: "cancelled" } };
               }
