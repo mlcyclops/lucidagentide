@@ -681,12 +681,23 @@ function createPermissionCard(e: Extract<ChatEvent, { type: "permission" }>): { 
     const url = e.url ?? e.detail ?? "";
     const egCls = (k?: string) => k === "reject" ? "eg-block" : k === "danger" ? "eg-danger" : "eg-allow";
     const btns = e.options.map((o) => `<button class="perm-btn ${egCls(o.kind)}" data-oid="${esc(o.optionId)}">${esc(o.name)}</button>`).join("");
-    win = el(`<div class="perm perm-egress" data-streaming="1">
-      <div class="perm-eg-head">${icon("git", 13)}<span>The agent wants to visit a website</span></div>
-      <div class="perm-egress-target"><code class="perm-url">${esc(url)}</code><button class="perm-copy" data-tip="Copy URL">${icon("copy", 12)}</button></div>
-      <button class="perm-radar" data-radar>${icon("search", 12)} Check it on Cloudflare Radar</button>
-      <div class="perm-actions perm-actions-col">${btns}</div>
-    </div>`);
+    if (e.localFile) {
+      // P-EGRESS.2 (ADR-0094): a LOCAL file open, not a website visit. Label it accurately and warn that a
+      // rendered local page can still load remote resources — no Cloudflare-Radar (there is no host to vet).
+      win = el(`<div class="perm perm-egress perm-egress-local" data-streaming="1">
+        <div class="perm-eg-head">${icon("logs", 13)}<span>The agent wants to open a local file in your browser</span></div>
+        <div class="perm-egress-target"><code class="perm-url">${esc(url)}</code><button class="perm-copy" data-tip="Copy path">${icon("copy", 12)}</button></div>
+        <div class="perm-exec-why">A local page can still load remote resources (images, scripts, trackers) once your browser opens it.</div>
+        <div class="perm-actions perm-actions-col">${btns}</div>
+      </div>`);
+    } else {
+      win = el(`<div class="perm perm-egress" data-streaming="1">
+        <div class="perm-eg-head">${icon("git", 13)}<span>The agent wants to visit a website</span></div>
+        <div class="perm-egress-target"><code class="perm-url">${esc(url)}</code><button class="perm-copy" data-tip="Copy URL">${icon("copy", 12)}</button></div>
+        <button class="perm-radar" data-radar>${icon("search", 12)} Check it on Cloudflare Radar</button>
+        <div class="perm-actions perm-actions-col">${btns}</div>
+      </div>`);
+    }
     const copyBtn = $(".perm-copy", win) as HTMLElement | null;
     copyBtn?.addEventListener("click", async () => {
       try { await navigator.clipboard.writeText(url); copyBtn.innerHTML = icon("check", 12); setTimeout(() => { copyBtn.innerHTML = icon("copy", 12); }, 1200); } catch { /* clipboard blocked */ }
@@ -735,6 +746,8 @@ function createPermissionCard(e: Extract<ChatEvent, { type: "permission" }>): { 
       // Docked card: confirm with a brief toast, then remove it (and the dock when empty).
       const desc = e.exec
         ? (ok ? "The agent can run the command." : "The agent won't run that command.")
+        : e.localFile
+        ? (ok ? "The agent can open the file." : "The agent won't open that file.")
         : (ok ? "The agent can reach the site." : "The agent won't reach that site.");
       showToast({ title: ok ? "Allowed" : "Blocked", desc, actions: [{ label: "OK" }], timeout: 2200, ...(ok ? {} : { tone: "warn" as const }) });
       win.remove();

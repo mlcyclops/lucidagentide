@@ -7205,3 +7205,66 @@ fix remain queued as their own increments.
 `desktop/tool_failure.test.ts`, new `desktop/scripts/demo_p_toolfail_1.ts`, ADR-0062 (egress gate -
 P-EGRESS.2 local-file follow-up), ADR-0066/0067 (exec gate - the other "blocked" path), ADR-0069 (the OCSF
 audit feed whose absence proved the gate never ran), ADR-0031 (the AI-LOC ledger - P-LOC.3 discoverability).
+
+## ADR-0094 - P-EGRESS.2: A local-file browser open is labeled (and audited) as a local file, not a website — plus audit the no-listener egress block (P-ENT.3)
+
+**Date:** 2026-06-29
+**Status:** Accepted - shipped.
+**Increment:** P-EGRESS.2 (folds in P-ENT.3).
+
+> Numbering: ADR-0093 (P-TOOLFAIL.1) lands in a sibling PR; this ADR is 0094 so the two never collide.
+> They append to DECISIONS.md independently and are merged in order.
+
+### Context
+
+The same investigation that produced ADR-0093 (the "tool call rejected" mislabel) surfaced two real edge
+cases in the egress gate (ADR-0062), in `acp_backend.ts`:
+
+1. **A local-file browser open was treated identically to a website visit.** `isEgress` matches any tool
+   whose name contains "browser", so "Opening game in browser" pointed at a local path
+   (`C:\…\hormuz-minesweeper.html`) was routed to the per-WEBSITE dialog — "The agent wants to visit a
+   website", a Cloudflare-Radar check on a file path (nonsense), and a "Always allow this site" pin that
+   would persist a junk host key for a path. Opening a local file is not, strictly, the agent reaching the
+   internet — but a rendered local HTML page CAN load remote resources, so the right answer is not "stop
+   gating it" (that weakens the gate) but "label it accurately and keep prompting".
+2. **The no-live-listener egress block was silent.** When there was no UI to ask, the egress path returned
+   `cancelled` with NO `emitSecurityEvent` — the one gate path that left no audit trail (every exec block
+   and every answered egress decision emits one). A fail-closed block that no one can see is a gap.
+
+### Decision
+
+- **Local-file detection (pure, tested).** New `isLocalFileTarget(target)` in `egress_policy.ts`:
+  `file://` or a clearly-absolute local path (Windows drive / UNC / POSIX / `~`) ⇒ local; any other scheme
+  (http(s), ftp, …), a bare host, or a relative/ambiguous string ⇒ NOT local (so it falls through to the
+  normal egress prompt — fail-safe).
+- **Accurate local-file approval (still a PROMPT).** A recognized local file is routed to
+  `askEgress(localFile=true)`: it SKIPS the host-based `egressDecision` auto-allow (a path has no host),
+  shows a distinct dialog ("open a local file in your browser", with the path and a "can still load remote
+  resources" warning, no Radar), offers only **open-once / block** (`EGRESS_LOCAL_OPTIONS`), and persists
+  NO host decision. The gate is preserved — a local-file open is never silently auto-approved, even in
+  Agent mode. http(s) egress is completely unchanged.
+- **Audit the no-listener block (P-ENT.3).** The no-UI egress block now emits an `egress_decision` /
+  `decision: block` SecurityEvent (`tool: "egress"` or `"egress-local-file"`), so a fail-closed block is
+  always traceable in the OCSF feed (ADR-0069).
+
+`bridge.ts`'s `permission` `ChatEvent` gains an optional `localFile?: boolean` (renderer-side type, not a
+frozen contract). No frozen-contract bytes change: the prompt prefix, scanner IPC, DuckDB schema, and
+`contracts.ts`/`result_adapter.ts` are untouched; the in-process gate's blocking behavior is unchanged
+(this only relabels a prompt and adds an audit emit).
+
+### Consequences
+
+A "preview the file I just made" no longer masquerades as a website visit, and a silent egress block is
+now auditable. The gate is not weakened — local-file opens still require explicit approval. Limitation:
+detection is conservative and path-shaped; a browser tool that passes a local file as a relative path (no
+scheme, no leading slash) is treated as ambiguous and gets the website-style prompt rather than the
+local-file one — acceptable (it still PROMPTS), and widening it risks misclassifying real bare-host targets.
+
+### Relates to
+
+`acp_backend.ts` (the egress decision block + `askEgress` + the audited no-listener block + the
+`EGRESS_LOCAL_OPTIONS` set), `desktop/egress_policy.ts` (`isLocalFileTarget`) + `egress_policy.test.ts`,
+`desktop/renderer/app.ts` (the local-file permission card + confirmation toast), `desktop/renderer/bridge.ts`
+(`localFile?` on the permission event), new `desktop/scripts/demo_p_egress_2.ts`, ADR-0062 (the egress gate
+this refines), ADR-0069 (the OCSF audit feed P-ENT.3 completes), ADR-0093 (the sibling chip fix from the
+same investigation).
