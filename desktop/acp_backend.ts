@@ -39,6 +39,7 @@ import { execFileSync } from "node:child_process";
 import { type Automation, listAutomations, nextDueAutomation, updateAutomation } from "./automations.ts";
 import { type EgressChoice, egressDecision, isLocalFileTarget, recordEgress } from "./egress_policy.ts";
 import { previewOpenPath, previewablePath } from "./preview_resolve.ts";
+import { gateDenyReason } from "./gate_audit.ts";
 import { type ExecChoice, type ExecClass, classifyCommand, classifyEval, execStore, execVerdict, recordExec } from "./exec_policy.ts";
 import { toolFailureReason } from "./tool_failure.ts";
 
@@ -496,12 +497,17 @@ class Backend {
     const block = () => denyOpt ? { outcome: { outcome: "selected", optionId: denyOpt.optionId } } : { outcome: { outcome: "cancelled" } };
     return new Promise((resolve) => {
       const settle = (outcome: any) => { clearTimeout(t); this.permPending.delete(id); this.pendingPerms = Math.max(0, this.pendingPerms - 1); resolve(outcome); };
-      const t = setTimeout(() => settle(block()), Backend.PERM_MS); // fail-closed → block egress
+      // P-ENT.4 (ADR-0069): audit the fail-closed TIMEOUT block too (was silent).
+      const t = setTimeout(() => {
+        emitSecurityEvent({ category: "egress", type: "egress_decision", decision: "block", severity: "medium", tool: localFile ? "egress-local-file" : "egress", reason: `${gateDenyReason(null, true)} · ${target}`.slice(0, 200), sessionId: this.sessionId ?? undefined });
+        settle(block());
+      }, Backend.PERM_MS);
       this.permPending.set(id, (optionId) => {
         const choice = String(optionId ?? "").replace(/^egress:/, "") as EgressChoice;
         const denied = !optionId || choice === "deny";
-        // P-ENT.2 (ADR-0069): the egress (network-reach) decision as a SecurityEvent (fail-safe).
-        emitSecurityEvent({ category: "egress", type: "egress_decision", decision: denied ? "block" : "allow", severity: "medium", tool: localFile ? "egress-local-file" : "egress", reason: `${denied ? "blocked" : choice} · ${target}`.slice(0, 200), sessionId: this.sessionId ?? undefined });
+        // P-ENT.2 (ADR-0069): the egress decision as a SecurityEvent. P-ENT.4: distinguish you-blocked from
+        // a fail-closed (turn-ended) auto-deny so the audit answers "did I deny it, or did it auto-deny?".
+        emitSecurityEvent({ category: "egress", type: "egress_decision", decision: denied ? "block" : "allow", severity: "medium", tool: localFile ? "egress-local-file" : "egress", reason: `${denied ? gateDenyReason(optionId) : choice} · ${target}`.slice(0, 200), sessionId: this.sessionId ?? undefined });
         if (denied) { settle(block()); return; }
         // A local file has no host to remember (allow-once only), so persist nothing for it.
         if (!localFile) { try { recordEgress(target, choice); } catch { /* best-effort persistence */ } }
@@ -528,12 +534,18 @@ class Backend {
     const block = () => denyOpt ? { outcome: { outcome: "selected", optionId: denyOpt.optionId } } : { outcome: { outcome: "cancelled" } };
     return new Promise((resolve) => {
       const settle = (o: any) => { clearTimeout(t); this.permPending.delete(id); this.pendingPerms = Math.max(0, this.pendingPerms - 1); resolve(o); };
-      const t = setTimeout(() => settle(block()), Backend.PERM_MS); // fail-closed → block
+      // P-ENT.4 (ADR-0069): a fail-closed TIMEOUT is a real block — audit it too (it used to settle silently,
+      // so a denial could happen with no SecurityEvent — the "why did I get a deny with no record?" gap).
+      const t = setTimeout(() => {
+        emitSecurityEvent({ category: "exec", type: "exec_decision", decision: "block", severity: cls.alwaysPrompt ? "critical" : "high", tool: cls.key ?? "shell", tier: cls.tier, reason: `${gateDenyReason(null, true)} · ${cls.reason}`, sessionId: this.sessionId ?? undefined });
+        settle(block());
+      }, Backend.PERM_MS);
       this.permPending.set(id, (optionId) => {
         const choice = String(optionId ?? "").replace(/^exec:/, "") as ExecChoice;
-        // P-ENT.2 (ADR-0069): record the human's exec decision as a SecurityEvent (fail-safe).
+        // P-ENT.2 (ADR-0069): record the human's exec decision as a SecurityEvent (fail-safe). P-ENT.4: the
+        // reason distinguishes an explicit "denied by you" from a "fail-closed (turn ended)" auto-deny.
         const denied = !optionId || choice === "deny";
-        emitSecurityEvent({ category: "exec", type: "exec_decision", decision: denied ? "block" : "allow", severity: cls.alwaysPrompt ? "critical" : "medium", tool: cls.key ?? "shell", tier: cls.tier, reason: `${denied ? "denied" : choice} · ${cls.reason}`, sessionId: this.sessionId ?? undefined });
+        emitSecurityEvent({ category: "exec", type: "exec_decision", decision: denied ? "block" : "allow", severity: cls.alwaysPrompt ? "critical" : "medium", tool: cls.key ?? "shell", tier: cls.tier, reason: `${denied ? gateDenyReason(optionId) : choice} · ${cls.reason}`, sessionId: this.sessionId ?? undefined });
         if (denied) { settle(block()); return; }
         if (choice === "allow-turn") { if (cls.key) this.execTurnPrograms.add(cls.key); else this.execTurnAll = true; } // in-memory only
         else { try { recordExec(cls, choice); } catch { /* best-effort persistence */ } }

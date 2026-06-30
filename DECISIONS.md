@@ -5811,6 +5811,24 @@ block records into the export schema without adding enum values. Frozen prefix u
 decisions exported), `contracts.ts` `EventName` (#8), and the private ADR-A011 (the per-SIEM connector
 shapes - the "how").
 
+### Addendum (2026-06-30) — P-ENT.4: every gate denial is auditable + attributed (close the silent fail-closed gap)
+
+A live turn showed several "tool call denied by user" chips (browser/bash/eval, while the agent tried to
+smoke-test a game it built) with **no matching record in the OCSF audit log**. Root cause: the per-action
+approval prompts (`askExec`/`askEgress`) emitted a `SecurityEvent` only on the RESOLVE path (you click a
+button); the **fail-closed TIMEOUT** path `setTimeout(() => settle(block()))` settled silently — a real
+denial with zero audit trail. So "did I deny it, or did it auto-deny?" was unanswerable.
+
+Fix: the timeout paths now `emitSecurityEvent(decision: block, …)` before settling, and a pure
+`gateDenyReason(optionId, timedOut)` (`desktop/gate_audit.ts`) attributes every denial honestly —
+**"denied by you"** (explicit Block) vs **"fail-closed (turn ended)"** (resolved with no optionId — the turn
+ended/disconnected while pending) vs **"fail-closed (no response in 5m)"** (timeout). Both the exec and
+egress deny paths use it. Now every per-action denial is in the audit feed with a cause; the omp-surfaced
+"denied by user" chip (ADR-0093) is no longer the only signal, and it's no longer ambiguous about whether it
+was the user. New: `gate_audit.ts` (+ test), the timeout emits + attribution in `acp_backend.ts`,
+`desktop/scripts/demo_p_ent_4.ts`. (Note: the chip text itself is omp's wording; making the CHIP say
+fail-closed-vs-you is a small follow-up — the audit trail is now authoritative.)
+
 ## ADR-0070 - P-BRIEF.1: Executive Engineering Update — repo logs → brief + podcast behind a vendor-agnostic audio seam
 
 **Date:** 2026-06-26

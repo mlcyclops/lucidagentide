@@ -318,6 +318,9 @@ demo-P-PREVIEW.3b: ## P-PREVIEW.3b (ADR-0096): a remote URL previews only throug
 demo-P-PREVIEW.3a: ## P-PREVIEW.3a (ADR-0096, DRAFT): agent-invoked preview_open tool - registration never breaks omp, execute gates local .html/.svg, acp_backend drives the panel (live omp+Electron verifies invocation)
 	$(BUN) run desktop/scripts/demo_p_preview_3a.ts
 
+demo-P-ENT.4: ## P-ENT.4 (ADR-0069): every per-action gate denial is auditable + attributed - explicit "denied by you" vs "fail-closed (turn ended / no response)"; closes the silent fail-closed-timeout gap
+	$(BUN) run desktop/scripts/demo_p_ent_4.ts
+
 .PHONY: demo-P-FS.1
 demo-P-FS.1: ## P-FS.1 (ADR-0103): full-tree workspace folder browser - browse above home to the FS root / drives, with an optional managed workspaceRoots confinement
 	$(BUN) run desktop/scripts/demo_p_fs_1.ts
