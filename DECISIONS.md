@@ -7860,3 +7860,264 @@ The native dialog is Electron-only, so it verifies in the packaged app (logic + 
 ADR-0104 (P-CHAT.1, the inline diff this feeds), ADR-0103 (the workspace browser this Browse path supersedes
 for the native case), CLAUDE.md invariant #1 (config overlay, not an omp fork) and #3 (the gate still scans
 every edit fail-closed).
+
+## ADR-0106 - P-NETWL.1: curated network whitelist (domains/IPs, trust scopes) + OS-encrypted credential vault
+
+**Date:** 2026-07-01
+**Status:** Accepted - BUILT (foundation increment; UI in P-NETWL.2-.4).
+**Increment:** P-NETWL.1.
+
+### Context
+
+The product already gates every network-reaching tool call per-website (P-EGRESS.1/ADR-0062: browser/web_search
+/web/fetch forced to prompt; the desktop shows an approval dialog; a standing "always allow this site" choice
+is remembered in `~/.omp/lucid-egress.json`; the enterprise-managed ceiling in `managed_config.ts` clamps it,
+tighten-only). That per-site memory is ad-hoc. Users need a **deliberate, structured whitelist** they curate up
+front: separate **internal (intranet)** vs **external (internet)** domain lists, both TLD-level (`*.com`) and
+sub-level exact (`api.example.com`); optional **IP / CIDR** ranges; a per-entry **trust scope** and **call
+budget** mirroring how tool-call approvals scope; and, for endpoints that require auth (JWT/OAuth/SAML/PEM/
+API-key/username+password), a way to store the secret **securely** with a native file-upload path for config/
+token/key files. This whitelist must also surface in the Goal Loop (authorized search engines + preference-
+ordered URLs) and be one click away from the netdiag DNS pills. That full surface is large; this increment lays
+the load-bearing foundation everything else depends on. The one hard new requirement over the existing plaintext
+-at-0600 API-key store (`settings_store.ts`): **secrets must be OS-encrypted, never plaintext** - this is a
+security product.
+
+### Decision
+
+1. **`network_whitelist.ts` (pure, Bun-side).** A `WhitelistStore` of `WhitelistEntry` records:
+   `{ id, kind: domain|ip, pattern, zone: internal|external, scope: always|project|loop, project?, callBudget?,
+   auth? }`. Matching is pure + self-contained: `matchDomain` (`*.example.com` matches the base + any subdomain;
+   exact matches only itself; case-insensitive), `matchIp` (IPv4 single + CIDR). `whitelistMatch` returns the
+   granting entry or null. **Trust scopes are a CLOSED set** (`always | project | loop`); the schema is frozen
+   now (WHITELIST_SCHEMA_VERSION = 1) so `.2/.3` add UI without a schema break. Persisted at
+   `~/.omp/lucid-whitelist.json` (mode 0600, non-secret). `sanitizeStore` drops any malformed entry (a dropped
+   entry = not whitelisted = fail-closed).
+2. **Only the `always` scope is ENFORCED in P-NETWL.1.** `project`/`loop` entries and `callBudget` round-trip
+   and persist but grant nothing yet - `project` lands with the Settings UI (.2), `loop` + the call budget with
+   the Goal Loop (.3). Enforcing them now without their UI would be untestable dead policy.
+3. **Wired into the live gate.** `egress_policy.egressDecision` now calls the new pure, store-injected
+   `egressWhitelistAllows(store, url, managed)` FIRST: a whitelist match auto-allows - **but the managed ceiling
+   still wins** (a managed-denied host, or one outside a restrictive managed allow-list, is never granted;
+   tighten-only, identical rule to `clampEgress`). Any error → not allowed (fail-closed). A whitelist allow takes
+   the same auto-allow path (and audit event) as a remembered `allowHosts` allow, so no acp_backend change is
+   needed and the existing `egress_decision` audit still fires.
+4. **`cred_vault.ts` + main-process IPC - the OS-encrypted credential vault.** Secrets are encrypted at rest by
+   the OS key store via Electron `safeStorage` (DPAPI on Windows, Keychain on macOS, libsecret on Linux). The
+   module is dependency-injected (`SafeStorageLike` + `VaultIo`) so it unit-tests without Electron. **Fail-closed
+   is non-negotiable: `storeCredential` THROWS if OS encryption is unavailable and writes nothing - there is no
+   plaintext fallback.** The whitelist entry carries only an opaque `vaultRef` (+ non-secret metadata); the
+   secret never touches the config JSON. `readCredential` (decrypt) is **main-process-only** - the renderer can
+   store/list/delete but never receive a plaintext back. Refs are traversal-proof (`[A-Za-z0-9_-]`). Blobs live
+   under `~/.omp/lucid-cred-vault/` (0600).
+5. **Native file picker + bridge plumbing.** `lucid:pickFile` (native `openFile` dialog, optional filters) for
+   uploading config/token/PEM/key files, and `lucid:credStore|credList|credDelete|credEncryptionAvailable` IPC,
+   all exposed through preload + the renderer `bridge` (Electron-only; in a plain browser `pickFile`→null,
+   `credList`→[], `credStore`→`{error:"os-encryption-unavailable"}`, i.e. fail-closed). The Settings section,
+   Goal-Loop field, and DNS-pill quick-add that CONSUME these land in P-NETWL.2-.4.
+
+### Why not just widen the existing egress allow-list?
+
+`allowHosts` is a flat list of exact hosts with no zones, no wildcards/CIDR, no scoping, and no auth. Bolting all
+of that onto it would overload a simple ad-hoc store and entangle the "remembered a click" semantics with a
+"curated policy" semantics. A sibling module keeps each concern clean and lets the whitelist feed the gate through
+one pure function that still defers to the same managed ceiling.
+
+### Verification
+
+`make demo-P-NETWL.1` (hermetic - injects a store + managed policy + a fake safeStorage, touches no user files):
+a `*.githubusercontent.com` wildcard and a `10.0.0.0/8` CIDR auto-allow while `evil.com` falls through; a
+managed-denied host and a host outside a restrictive managed allow-list are refused even though whitelisted;
+`project`/`loop` entries persist but grant nothing; the vault blob contains no plaintext, decrypt roundtrips,
+listing is metadata-only, and an unavailable-encryption store throws with nothing written. Tests: 27 new
+(`network_whitelist.test.ts` domain/CIDR/verdict/sanitize + `cred_vault.test.ts` fail-closed/roundtrip/traversal).
+Full desktop suite 844 pass / 5 fail (the 5 are pre-existing Windows-only path artifacts in `fs_browse.test.ts`,
+green on Linux CI). Typecheck + license-check clean. The native dialog + safeStorage verify in the packaged app.
+
+### Relates to
+
+ADR-0062 (P-EGRESS.1, the per-site gate this extends), ADR-0068 (P-ENT.1, the managed ceiling this defers to),
+CLAUDE.md invariant #1 (sibling module + config, not an omp fork), #3 (fail-closed: a whitelist can only grant,
+and only under the managed ceiling; the vault refuses rather than writing plaintext), and #7 (trust labels are a
+closed set - the trust SCOPES here are likewise a frozen closed set). Follow-ups: P-NETWL.2 (Settings UI +
+file-upload + tooltips), P-NETWL.3 (Goal-Loop authorized engines/URLs + per-loop call budgets), P-NETWL.4 (netdiag
+DNS-pill quick-add with trust/scope picker).
+
+### P-NETWL.2 addendum (2026-07-01) - the Network Whitelist Settings UI
+
+**Status:** BUILT + live-tested. v1.8.22.
+
+Builds the visible tier on the P-NETWL.1 foundation: a **"Network Whitelist"** section in Settings
+(`secWhitelist` in `desktop/renderer/app.ts`, between MCP connectors and More providers).
+
+- **CRUD backend** (`desktop/dev.ts`): `GET /api/whitelist` (list), `POST /api/whitelist` (upsert, mints an
+  id), `POST /api/whitelist/remove` - backed by the pure `network_whitelist` store (`upsertEntry`/`removeEntry`
+  /`saveWhitelist`). Entries are NON-secret (patterns + zone/scope + an opaque `vaultRef`); `bridge` gains
+  `whitelistList/Upsert/Remove` + `WhitelistEntryView`.
+- **The section** lists entries with `domain|IP` / `internal|external` / scope badges (a non-`always` scope
+  shows a "not yet enforced" tooltip - honest, since only `always` gates today) + a Remove button, and an add
+  form with SEPARATE inputs for the pattern, kind (domain/IP), zone (intranet vs internet), trust scope, and a
+  per-loop call budget. Every control carries a custom `data-tip` tooltip.
+- **Credential attach** (optional, in a disclosure): choose an auth kind (JWT/OAuth/SAML/PEM/API-key/basic),
+  a label, a username (basic), and the secret either **pasted** (`credStore`) or **uploaded as a file**
+  (`credStoreFile` - a new main-process IPC that opens the native file dialog, reads + encrypts the file
+  ENTIRELY in main; the secret bytes never cross to the renderer). Both paths store to the OS-encrypted vault
+  and the entry keeps only the returned `vaultRef`.
+
+**Live verification (real dev server, `preview_*`):** the section renders with all controls; adding
+`*.githubusercontent.com` (external/always) and `10.0.0.0/8` (internal/project) persisted with correct badges;
+**end-to-end the live egress gate now auto-allows the whitelisted host** (`/api/preview/egress-check` →
+`raw.githubusercontent.com` and `objects.githubusercontent.com` both `allow:true`, `evil.example.com`
+`allow:false`); the **fail-closed** path held - adding an entry with a pasted secret in the plain browser (no
+`safeStorage`) was REFUSED with neither the domain nor the secret persisted (no plaintext); UI Remove worked;
+test entries were cleaned up. The vault ENCRYPTION-success path + native file upload verify in the packaged
+Electron app (safeStorage is Electron-only). Typecheck + license clean; `about`/`version` tests bumped to
+1.8.22. Still deferred to later increments: `project`/`loop` scope + call-budget ENFORCEMENT (P-NETWL.3), last-4
+masking (ADR-0107 / P-KEYS.1), and the DNS-pill quick-add (P-NETWL.4).
+
+### P-NETWL.3 addendum (2026-07-01) - ENFORCE project/loop scope + per-loop call budget
+
+**Status:** BUILT + tested. v1.8.23.
+
+The scopes P-NETWL.1 only stored are now enforced. `whitelistMatch(store, target, ctx)` honors the trust scope
+against a context: `always` everywhere; `project` only when `ctx.project` equals the entry's workspace (path
+normalized - trailing-slash + case-insensitive); `loop` only when `ctx.loop` is true. `egress_policy` gains
+`egressWhitelistEntry` (returns the granting entry) + `egressDecisionDetailed(url, ctx)` ({verdict, via, entry});
+`egressDecision(url, ctx?)` now takes optional context. `acp_backend` threads `{ project: currentWorkspace(),
+loop: this.goalActive }` at the egress site. The **per-loop call budget** is enforced by the loop runner (it
+needs mutable state): a `loopHostCalls` Map (reset each `/goal` start) counts auto-allowed calls per host;
+`withinCallBudget(used, budget)` (pure) caps them - once exhausted the whitelist stops auto-allowing that host
+this loop (falls through to prompt / fail-closed block) and records a `call-budget` LoopBlock in the AAR. The
+managed ceiling still wins over every scope. **Verified:** demo-P-NETWL.3 (project only in its workspace; loop
+only in a loop; budget 3 → `allow allow allow block block`; managed-deny beats a project allow) + live
+(loop-scoped host → egress-check with no loop context → `allow:false`). Tests: +scope/budget/normProject.
+
+### P-NETWL.4 addendum (2026-07-01) - DNS-pill quick-add
+
+**Status:** BUILT + live-tested. v1.8.23.
+
+Each DNS pill in the Network-diagnostics panel (dev mode) is now click-to-whitelist: `openWhitelistQuickAdd`
+opens a small `popover` with a zone / trust-scope / call-budget picker (an IP host defaults to the `ip` kind),
+then `whitelistUpsert`s the host. **Live-verified:** generated real Gmail DNS resolutions (`Resolve-DnsName`,
+no account access), clicked the `mail.google.com` pill, added it with `scope=loop, callBudget=5`, confirmed it
+persisted and the popover closed; screenshot captured. Clean-up removed the test entry + restored dev mode.
+
+## ADR-0107 - Credential lifecycle (public tier): type documentation, last-4 masking, labels, rotation visibility + manual rotation, one on-prem KMS connector
+
+**Date:** 2026-07-01
+**Status:** Accepted (design); implementation deferred to P-KEYS.1+. No code this session.
+**Increment:** design ADR (paired with the add-on's ADR-A012 for the enterprise tier).
+
+### Context
+
+P-NETWL.1 (ADR-0106) shipped a local OS-encrypted credential vault (`cred_vault.ts`) that stores a credential's
+`kind`, `label`, and an opaque `vaultRef`, and never returns plaintext. Users now need to (a) see WHAT a stored
+credential is without exposing it, (b) rotate their own keys with good hygiene, and (c) optionally back a
+credential with a key-management system. This ADR fixes that design AND the public-vs-private product split.
+The main repo is **BUSL source-available (public)**; the enterprise/sellable capability lives in the private
+add-on (`TechLead187/lucidagentIDEaddon`, its own `ADR-A###` sequence - see **ADR-A012** there). This ADR
+covers only what belongs in the public IDE: the "help a user rotate their own keys" bucket.
+
+### Decision (public tier - what stays in this repo)
+
+1. **Documented, non-secret metadata.** Extend the vault's `CredMeta` with facts that are safe to persist and
+   show: `kind` (the credential TYPE - already stored), user `label` (already stored), **`last4`** (at most the
+   last 4 chars of the secret; for a PEM/cert, the last 4 of its fingerprint), `createdAt`, `rotatedAt`, optional
+   `expiresAt`, optional `rotationIntervalDays`, `source: local | kms`, and for a KMS-backed entry a key
+   REFERENCE only (provider + key id/URI). **Never store more than 4 chars.** The UI identifies a key as
+   `JWT · "prod-gateway" · ••••3F9A` - enough to know which key, never enough to use it.
+2. **Rotation visibility (pure/local).** Key age, last-rotated, a "rotation due" state when
+   `now - rotatedAt > rotationIntervalDays`, and expiry warnings, surfaced as badges in the whitelist/settings
+   UI. Pure math, no network - ideal for the public tier.
+3. **Manual local rotation.** Replace a secret in place: re-encrypt, KEEP the same `vaultRef` (so whitelist
+   entries never break), bump `rotatedAt`, refresh `last4`, best-effort overwrite of the old blob.
+4. **One generic on-prem / self-host KMS connector.** A `KmsProvider` interface (`getSecret`/`rotate`/
+   `describe`) with a single public backend targeting **HashiCorp Vault (OSS)** or a self-hosted endpoint - the
+   "personal KMS on-prem" path the user called out. Secrets are fetched just-in-time in the main process and
+   never persisted decrypted; the vault stores only the key reference. Fail-closed: a KMS fetch failure yields
+   no secret, never a fallback.
+5. **Audit.** Rotation/add/remove events (`credential_added` / `credential_rotated` / `credential_removed`)
+   will be added to the `EventName` enum in `contracts.ts` - a frozen-contract change (invariant #8), so it is
+   its own small increment when built.
+
+### Non-goals here (they live in the add-on, ADR-A012)
+
+Managed **cloud KMS** connectors (AWS KMS/Secrets Manager, Azure Key Vault, GCP Secret Manager/Cloud KMS,
+Oracle OCI Vault, IBM Key Protect); **automated / policy-driven rotation**; **org-mandated** rotation intervals
+and **KMS-only enforcement** (no local-vault secrets); **compliance** (rotation events → OCSF/SIEM, attestation
+reports); **HSM / PKCS#11 / FIPS**.
+
+### Rationale for the split
+
+Last-4 masking, labels, rotation reminders, manual rotation, and a single OSS/self-host connector are
+table-stakes hygiene that drive adoption and cost the enterprise offer nothing. The cloud connectors, rotation
+automation, org policy, and compliance/attestation are exactly what enterprises (and, in a lighter tier, small
+businesses) pay for - so they belong behind the private add-on.
+
+### Verification
+
+Design only this session. When built (P-KEYS.1): pure tests for `maskLast4` (never emits > 4 chars; handles a
+secret shorter than 4; PEM → fingerprint), the rotation-due predicate, and the `KmsProvider` contract against a
+fake backend; a demo proving `last4` is derived and stored as non-secret metadata and that manual rotation
+preserves the `vaultRef`.
+
+### Relates to
+
+ADR-0106 (P-NETWL.1, the vault this extends), ADR-0068 (P-ENT.1, the managed ceiling the enterprise policy tier
+builds on), the add-on's **ADR-A012** (the private counterpart), CLAUDE.md #3 (fail-closed: secrets never
+plaintext, decrypt main-only, KMS fetch has no fallback) and #8 (new `EventName`s are a contract change).
+
+### P-KEYS.1 addendum (2026-07-01) - last-4 masking (first slice of the public tier)
+
+**Status:** BUILT + tested. v1.8.23.
+
+Shipped the identify-without-revealing piece of ADR-0107: `cred_vault.deriveLast4(secret, kind)` (pure) derives
+at most the last four characters as NON-secret metadata (`CredMeta.last4`), stored at credential-store time and
+surfaced by `listCredentials`. For a PEM/cert the armor lines + whitespace are stripped so the last-4 identifies
+the KEY (base64 body), not the boilerplate. The Network-Whitelist UI looks up each entry's `auth.vaultRef` in the
+vault metadata and shows `••••XXXX` on the auth badge. **Verified:** unit tests (`deriveLast4` never > 4 chars,
+PEM body, short-secret-as-is; `listCredentials` surfaces `last4` but never the full secret). The full store →
+display roundtrip needs the packaged Electron app (safeStorage). Still deferred: rotation visibility + manual
+rotation + the self-host `KmsProvider` connector (the rest of P-KEYS.1/ADR-0107), and the enterprise KMS tier
+(add-on ADR-A012).
+
+### P-KEYS.2 addendum (2026-07-01) - rotation visibility + manual rotate-in-place
+
+**Status:** BUILT + tested. v1.8.24.
+
+The rotation slice of ADR-0107's public tier. `CredMeta` gains non-secret `rotatedAt` / `expiresAt` /
+`rotationIntervalDays`; `cred_vault` adds pure `rotationStatus(meta, now)` + `rotationLabel(status)` (worst
+state wins: `expired` > `rotation due` > `expires in Nd` / `rotate in Nd` > `rotated Nd ago`, with an ok/warn/
+danger tone) and `rotateCredential` - re-encrypts a new secret under the SAME `ref` (so a whitelist entry never
+breaks), bumps `rotatedAt`, refreshes `last4`, preserves createdAt/label/kind/interval. **Fail-closed:** if the
+OS keystore is unavailable `rotateCredential` throws and the old ciphertext is left intact (never clobbered or
+plaintext-written). Main IPC: `credRotate` (paste) + `credRotateFile` (native file, read+encrypted in main).
+UI: each whitelisted key shows a rotation badge (`••••XXXX` + `rotated Nd ago` / `rotation due` / `expired`),
+a **Rotate** button opens a paste-or-file popover, and the add form has an optional "rotate every N days"
+reminder. **Verified:** demo-P-KEYS.2 + 16 vault tests (rotationStatus/Label math, rotate roundtrip preserves
+ref + bumps rotatedAt + refreshes last4, fail-closed leaves the old secret intact); live - the Rotate button +
+popover render and the browser (no safeStorage) path fail-closes with "the old secret was left untouched". Still
+deferred: the self-host `KmsProvider` connector (P-KEYS.3) + the enterprise KMS tier (add-on ADR-A012).
+
+### P-KEYS.3 planning decision (2026-07-01) - external KMS is BYO + add-on-only; the public core ships NO KMS binary
+
+**Status:** Decided (planning); implementation is an add-on increment. Supersedes ADR-0107's public-tier item 4.
+
+Cost/size review of HashiCorp Vault (the intended self-host `KmsProvider` backend):
+- **License:** Community edition is **BUSL-1.1** since Aug 2023 - source-available, not OSI open-source; free for
+  internal/production use, only barred from *competing hosted/embedded* offerings. It is the **same license as
+  LUCID**, so bundling its binary = redistributing a BUSL binary inside our BUSL app (legally awkward, avoid).
+- **Size:** the binary is **large and growing** (~247 MB v1.14.1 → ~355 MB v1.14.2; container ~678 MB). Bundling
+  would bloat our installers 3-4x per platform.
+- **Our own vault has neither problem:** `cred_vault` rides Electron `safeStorage` = the OS keystore
+  (DPAPI/Keychain/libsecret), **$0 and ~0 added bytes** - no binary shipped.
+
+**Decision:** do NOT bundle Vault, and do NOT put an external-KMS connector in the public core at all. The public
+tier's storage backend is the OS keystore only (already shipped: vault + last-4 + rotation). **All external KMS -
+the self-host Vault BYO connector AND the managed cloud connectors - lives in the private add-on** (ADR-A012).
+The self-host path is **bring-your-own**: LUCID's `KmsProvider` talks to a Vault the customer already runs over
+its HTTP API (`VAULT_ADDR` + token/AppRole), fetching the secret just-in-time (never stored by us), configured
+via an in-app "connect your Vault" card + instructions - the same "install/run it yourself" model as the optional
+`headroom` proxy. This revises ADR-0107 item 4 (the "one self-host connector in the public tier") to: **no KMS
+connector in the public core.** ADR-A012 is updated to own both the self-host BYO Vault connector and the cloud
+connectors. P-KEYS.3 is therefore an ADR-A012 (add-on) increment, not a public-core one.

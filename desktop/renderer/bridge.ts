@@ -390,6 +390,21 @@ export interface LucidBridge {
   setWorkspace(path: string): Promise<WorkspaceInfo | null>;
   cloneWorkspace(url: string): Promise<WorkspaceInfo | null>;
   pickFolder(): Promise<string | null>; // native dialog in Electron; null in browser
+  // P-NETWL.1 (ADR-0106): native FILE picker + OS-encrypted credential vault. All Electron-only; in a plain
+  // browser pickFile/credList resolve null/[] and credStore reports the vault as unavailable (fail-closed).
+  pickFile(opts?: { title?: string; filters?: { name: string; extensions: string[] }[] }): Promise<string | null>;
+  credStore(input: { ref?: string; kind: string; secret: string; label?: string; expiresAt?: number; rotationIntervalDays?: number }): Promise<CredMetaView | { error: string }>;
+  credStoreFile(input: { kind: string; label?: string; expiresAt?: number; rotationIntervalDays?: number }): Promise<CredMetaView | { error: string } | null>;
+  // P-KEYS.2 (ADR-0107): rotate a stored secret in place (same ref) by paste or file.
+  credRotate(input: { ref: string; secret: string; expiresAt?: number }): Promise<CredMetaView | { error: string }>;
+  credRotateFile(input: { ref: string }): Promise<CredMetaView | { error: string } | null>;
+  credList(): Promise<CredMetaView[]>;
+  credDelete(ref: string): Promise<boolean>;
+  credEncryptionAvailable(): Promise<boolean>;
+  // P-NETWL.2 (ADR-0106): curated network-whitelist CRUD (persisted server-side; non-secret).
+  whitelistList(): Promise<WhitelistEntryView[]>;
+  whitelistUpsert(entry: Partial<WhitelistEntryView>): Promise<WhitelistEntryView | null>;
+  whitelistRemove(id: string): Promise<void>;
   // P-PREVIEW.1 (ADR-0096): capture the preview region (window capturePage, cropped) → PNG data URL.
   // Electron-only; resolves null in a plain browser (no capturePage).
   capturePreview(rect: { x: number; y: number; width: number; height: number }): Promise<string | null>;
@@ -412,6 +427,24 @@ export interface LucidBridge {
   canRevealPath(): boolean; // whether the native shell can reveal a folder (Electron only)
 }
 
+/** Non-secret metadata about a vault credential (P-NETWL.1, ADR-0106). No plaintext ever crosses this line;
+ *  `last4` (P-KEYS.1, ADR-0107) is at most the last 4 chars, to identify a key without revealing it. */
+export interface CredMetaView { ref: string; kind: string; label?: string; last4?: string; createdAt?: number; rotatedAt?: number; expiresAt?: number; rotationIntervalDays?: number }
+
+/** A curated network-whitelist entry (P-NETWL.2, ADR-0106). Non-secret: `auth` holds only an opaque
+ *  `vaultRef` into the credential vault, never the secret itself. Mirrors network_whitelist.ts WhitelistEntry. */
+export interface WhitelistEntryView {
+  id: string;
+  kind: "domain" | "ip";
+  pattern: string;
+  zone: "internal" | "external";
+  scope: "always" | "project" | "loop";
+  project?: string | null;
+  callBudget?: number | null;
+  auth?: { kind: string; vaultRef: string; username?: string; header?: string; note?: string } | null;
+  addedAt?: number;
+}
+
 /** Native shell injected by the Electron preload (window controls + crisp zoom). */
 interface NativeShell {
   isElectron?: boolean;
@@ -420,6 +453,15 @@ interface NativeShell {
   capturePreview?(rect: { x: number; y: number; width: number; height: number }): Promise<string | null>;
   revealPath?(path: string): Promise<boolean>;
   win?: { minimize(): void; toggleMaximize(): void; close(): void };
+  // P-NETWL.1 (ADR-0106): native file picker + OS-encrypted credential vault (Electron-only).
+  pickFile?(opts?: { title?: string; filters?: { name: string; extensions: string[] }[] }): Promise<string | null>;
+  credStore?(input: { ref?: string; kind: string; secret: string; label?: string; expiresAt?: number; rotationIntervalDays?: number }): Promise<CredMetaView | { error: string }>;
+  credStoreFile?(input: { kind: string; label?: string; expiresAt?: number; rotationIntervalDays?: number }): Promise<CredMetaView | { error: string } | null>;
+  credRotate?(input: { ref: string; secret: string; expiresAt?: number }): Promise<CredMetaView | { error: string }>;
+  credRotateFile?(input: { ref: string }): Promise<CredMetaView | { error: string } | null>;
+  credList?(): Promise<CredMetaView[]>;
+  credDelete?(ref: string): Promise<boolean>;
+  credEncryptionAvailable?(): Promise<boolean>;
 }
 declare global { interface Window { lucid?: NativeShell } }
 const shell: NativeShell | undefined = typeof window !== "undefined" ? window.lucid : undefined;
@@ -604,6 +646,17 @@ export const bridge: LucidBridge = {
   setWorkspace: (path) => post("/api/workspace", { path }),
   cloneWorkspace: (url) => post("/api/workspace/clone", { url }),
   pickFolder: () => (shell?.pickFolder ? shell.pickFolder() : Promise.resolve(null)),
+  pickFile: (opts) => (shell?.pickFile ? shell.pickFile(opts) : Promise.resolve(null)), // P-NETWL.1
+  credStore: (input) => (shell?.credStore ? shell.credStore(input) : Promise.resolve({ error: "os-encryption-unavailable" })), // P-NETWL.1 (fail-closed in browser)
+  credStoreFile: (input) => (shell?.credStoreFile ? shell.credStoreFile(input) : Promise.resolve({ error: "os-encryption-unavailable" })), // P-NETWL.2
+  credRotate: (input) => (shell?.credRotate ? shell.credRotate(input) : Promise.resolve({ error: "os-encryption-unavailable" })), // P-KEYS.2
+  credRotateFile: (input) => (shell?.credRotateFile ? shell.credRotateFile(input) : Promise.resolve({ error: "os-encryption-unavailable" })), // P-KEYS.2
+  credList: () => (shell?.credList ? shell.credList() : Promise.resolve([])), // P-NETWL.1
+  credDelete: (ref) => (shell?.credDelete ? shell.credDelete(ref) : Promise.resolve(false)), // P-NETWL.1
+  credEncryptionAvailable: () => (shell?.credEncryptionAvailable ? shell.credEncryptionAvailable() : Promise.resolve(false)), // P-NETWL.1
+  whitelistList: async () => (await getData("/api/whitelist")) ?? [], // P-NETWL.2
+  whitelistUpsert: (entry) => post("/api/whitelist", entry), // P-NETWL.2
+  whitelistRemove: async (id) => { await post("/api/whitelist/remove", { id }); }, // P-NETWL.2
   capturePreview: (rect) => (shell?.capturePreview ? shell.capturePreview(rect) : Promise.resolve(null)), // P-PREVIEW.1
   previewEgressAllows: async (url) => { const d = await getData(`/api/preview/egress-check?url=${encodeURIComponent(url)}`); return !!(d as { allow?: boolean } | null)?.allow; }, // P-PREVIEW.3b
   previewFile: async (path) => { const d = await getData(`/api/preview/file?path=${encodeURIComponent(path)}`); const h = (d as { html?: unknown } | null)?.html; return typeof h === "string" ? h : null; }, // P-PREVIEW.4

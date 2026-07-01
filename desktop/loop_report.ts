@@ -25,7 +25,7 @@ export interface LoopBlock {
   iter: number;
   tool: string;
   tier: RiskTier;
-  reason: "risk-dial" | "catastrophic" | "security-gate";
+  reason: "risk-dial" | "catastrophic" | "security-gate" | "call-budget";
 }
 
 export interface IterStat {
@@ -199,6 +199,7 @@ const BLOCK_REASON_LABEL: Record<LoopBlock["reason"], string> = {
   "risk-dial": "Risk dial",
   catastrophic: "Catastrophic (T4)",
   "security-gate": "Security gate (scanner)",
+  "call-budget": "Whitelist call budget",
 };
 
 /** Render the loop's Blocks section: the dial posture this run used, a by-reason/by-tier breakdown, and a

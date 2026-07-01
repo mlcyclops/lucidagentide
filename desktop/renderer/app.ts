@@ -80,6 +80,8 @@ const state = {
   developerMode: false, // ADR-0009 Phase D
   dev: null as import("./bridge.ts").DevView | null, // ADR-0009 Phase D logs snapshot
   mcpServers: [] as import("./bridge.ts").McpServerStatus[], // P-MCP.1 (ADR-0020)
+  whitelist: [] as import("./bridge.ts").WhitelistEntryView[], // P-NETWL.2 (ADR-0106) curated network whitelist
+  creds: [] as import("./bridge.ts").CredMetaView[], // P-KEYS.1 (ADR-0107) vault metadata (ref → kind/label/last4)
   managed: null as import("./bridge.ts").ManagedPolicy | null, // ADR-0068 (P-ENT.1) enterprise locks
   userRole: null as UserRole | null, // ADR-0088 (P-ROLE.1): chosen role; null until onboarding picks one
   tourSeen: false, // ADR-0089 (P-ROLE.1b): first-run walkthrough already shown (finished or skipped)
@@ -1642,6 +1644,163 @@ function hydrateMcp(): void {
   void bridge.mcpList().then((m) => { state.mcpServers = m ?? []; fillSec("mcp", secMcp(state.mcpServers)); });
 }
 
+// P-NETWL.2 (ADR-0106): the curated Network Whitelist section. Lets a user pre-authorize domains (`*.com`
+// TLD or exact `api.example.com`) and IP/CIDR ranges, split by internal (intranet) vs external (internet)
+// zone, with a trust scope + optional per-loop call budget, and optionally attach an auth credential whose
+// secret lives OS-encrypted in the vault (never in the config). A match auto-allows egress under the managed
+// ceiling (fail-closed). Only the `always` scope is enforced today; project/loop persist for P-NETWL.3.
+let wlPendingCred: { ref: string; kind: string; label?: string } | null = null; // a just-uploaded file credential, awaiting Add
+const WL_SCOPE_LABEL: Record<string, string> = { always: "Always", project: "Project", loop: "This loop" };
+const WL_SCOPE_TIP: Record<string, string> = {
+  always: "Auto-allows in every session, everywhere.",
+  project: "Auto-allows only while this workspace is open.",
+  loop: "Auto-allows only during a /goal loop run.",
+};
+// P-KEYS.2 (ADR-0107): renderer-side rotation badge. Deliberately mirrors cred_vault.rotationStatus/Label
+// (the backend versions are the unit-tested source of truth); kept tiny + pure to avoid a cross-boundary import.
+function wlRotationBadge(m: import("./bridge.ts").CredMetaView | undefined, now: number): { text: string; tone: "ok" | "warn" | "danger" } | null {
+  if (!m) return null;
+  const DAY = 86_400_000;
+  const rotatedAt = m.rotatedAt ?? m.createdAt;
+  if (m.expiresAt != null && now >= m.expiresAt) return { text: "expired", tone: "danger" };
+  if (m.rotationIntervalDays != null && m.rotationIntervalDays > 0 && rotatedAt != null && now >= rotatedAt + m.rotationIntervalDays * DAY) return { text: "rotation due", tone: "danger" };
+  if (m.expiresAt != null) { const d = Math.ceil((m.expiresAt - now) / DAY); if (d <= 7) return { text: `expires in ${Math.max(0, d)}d`, tone: "warn" }; }
+  if (m.rotationIntervalDays != null && m.rotationIntervalDays > 0 && rotatedAt != null) { const d = Math.ceil((rotatedAt + m.rotationIntervalDays * DAY - now) / DAY); if (d <= 7) return { text: `rotate in ${Math.max(0, d)}d`, tone: "warn" }; }
+  if (rotatedAt != null) return { text: `rotated ${Math.floor((now - rotatedAt) / DAY)}d ago`, tone: "ok" };
+  return null;
+}
+function secWhitelist(entries: import("./bridge.ts").WhitelistEntryView[], creds: import("./bridge.ts").CredMetaView[] = []): string {
+  const credByRef = new Map(creds.map((c) => [c.ref, c]));
+  const now = Date.now();
+  const rows = entries.length ? entries.map((e) => {
+    // P-KEYS.1 (ADR-0107): identify the attached key by its last-4 (never the secret), looked up from the vault.
+    const cred = e.auth ? credByRef.get(e.auth.vaultRef) : undefined;
+    const last4 = cred?.last4 ?? "";
+    const mask = last4 ? " ••••" + esc(last4) : "";
+    const rot = e.auth ? wlRotationBadge(cred, now) : null; // P-KEYS.2 rotation posture
+    const rotBadge = rot && rot.text ? `<span class="abadge ${rot.tone}" data-tip="Rotation|${esc(rot.text)}. Use Rotate to replace the secret in place.">${rot.text}</span>` : "";
+    return `<div class="prov">
+      <div class="prov-h"><span class="prov-name">${esc(e.pattern)}
+          <span class="abadge set">${e.kind === "ip" ? "IP" : "domain"}</span>
+          <span class="abadge ${e.zone === "internal" ? "ok" : "set"}">${e.zone}</span></span>
+        <span class="prov-status">
+          <span class="abadge ok" data-tip="Trust scope|${WL_SCOPE_TIP[e.scope] ?? ""}">${WL_SCOPE_LABEL[e.scope] ?? e.scope}</span>
+          ${e.callBudget != null ? `<span class="abadge set" data-tip="Call budget|Auto-allows at most ${e.callBudget} call(s) to this host per loop, then falls through to the gate.">${e.callBudget}/loop</span>` : ""}
+          ${e.auth ? `<span class="abadge set" data-tip="Auth attached|${esc(e.auth.kind)}${last4 ? ` key ••••${esc(last4)}` : ""} · stored OS-encrypted; the whitelist keeps only a reference, never the secret.">${icon("shield", 11)} ${esc(e.auth.kind)}${mask}${e.auth.username ? " · " + esc(e.auth.username) : ""}</span>${rotBadge}` : ""}
+        </span></div>
+      <div class="prov-body"><div class="prov-row">
+        ${e.auth ? `<button class="btn-mini" data-wl-rotate="${esc(e.auth.vaultRef)}" data-tip="Rotate credential|Replace the stored secret (paste or upload a file). The reference is preserved so this entry keeps working.">${icon("refresh", 12)} Rotate</button>` : ""}
+        <button class="btn-mini danger" data-wl-remove="${esc(e.id)}">${icon("close", 12)} Remove</button>
+      </div></div></div>`;
+  }).join("")
+    : `<div class="empty">No whitelisted sites yet. Add a domain or IP range below - a match auto-allows the agent's network calls to it (still under any managed policy).</div>`;
+  const form = `<div class="prov" style="border-style:dashed">
+      <div class="prov-h"><span class="prov-name">${icon("plus", 13)} Add to whitelist</span></div>
+      <div class="prov-body">
+        <div class="prov-row"><input id="wlPattern" class="prov-key" placeholder="*.example.com  ·  api.example.com  ·  10.0.0.0/8" spellcheck="false" data-tip="Pattern|A domain wildcard (*.com), an exact host (api.example.com), or an IP / CIDR range (10.0.0.0/8)." /></div>
+        <div class="prov-row wl-controls">
+          <select id="wlKind" class="prov-key" data-tip="Kind|A domain pattern, or a single IP / CIDR range."><option value="domain">Domain</option><option value="ip">IP / CIDR</option></select>
+          <select id="wlZone" class="prov-key" data-tip="Network zone|Internal = your intranet; External = the public internet."><option value="external">External</option><option value="internal">Internal</option></select>
+          <select id="wlScope" class="prov-key" data-tip="Trust scope|Always = every session; Project = only this workspace; This loop = only during a /goal run."><option value="always">Always</option><option value="project">Project</option><option value="loop">This loop</option></select>
+          <input id="wlBudget" class="prov-key wl-budget" type="number" min="0" placeholder="calls/loop" data-tip="Call budget|Max calls to this host per loop (enforced by the loop in P-NETWL.3)." />
+        </div>
+        <details class="wl-auth">
+          <summary>Requires an auth token? (optional)</summary>
+          <div class="prov-row">
+            <select id="wlAuthKind" class="prov-key" style="flex:none;width:120px"><option value="">No auth</option><option value="jwt">JWT</option><option value="oauth">OAuth</option><option value="saml">SAML</option><option value="pem">PEM</option><option value="apikey">API key</option><option value="basic">User / Pass</option></select>
+            <input id="wlAuthLabel" class="prov-key" placeholder="Label (e.g. prod-gateway)" />
+          </div>
+          <div class="prov-row"><input id="wlAuthUser" class="prov-key" placeholder="Username (User/Pass only, optional)" spellcheck="false" /></div>
+          <div class="prov-row"><input id="wlAuthRotate" class="prov-key" type="number" min="0" placeholder="Rotate every N days (optional)" data-tip="Rotation reminder|Flags the key as due N days after it's set. Visibility only - nothing auto-rotates; use the Rotate button to replace it." /></div>
+          <div class="prov-row">
+            <input id="wlAuthSecret" class="prov-key" type="password" placeholder="Paste token / password / API key" />
+            <button class="btn-mini" id="wlAuthFile" data-tip="Upload file|Pick a token / PEM / API-key / config file. It's read + encrypted in the vault; the secret never enters this window.">${icon("folder", 12)} Upload file</button>
+          </div>
+          <div class="set-note">${icon("shield", 12)} Secrets are stored <b>OS-encrypted</b> (Windows DPAPI / macOS Keychain / Linux libsecret). The whitelist keeps only a reference - never the secret itself.</div>
+        </details>
+        <div class="prov-row"><button class="btn-mini ok" id="wlAdd">${icon("check", 12)} Add</button></div>
+      </div></div>`;
+  const note = `<div class="set-note">${icon("info", 12)} A whitelist match <b>auto-allows</b> the agent's network calls to that site (no prompt), <b>always under your organization's managed policy ceiling</b> - a managed-denied host is never granted (fail-closed). Anything not whitelisted still goes through the normal per-site approval.</div>`;
+  return setCard("whitelist", "Network Whitelist", "domains · IPs · trust-scoped", rows + form + note, true);
+}
+function hydrateWhitelist(): void {
+  // Fetch entries + vault metadata together so each entry's attached key can show its last-4 (P-KEYS.1).
+  void Promise.all([bridge.whitelistList(), bridge.credList()]).then(([w, c]) => {
+    state.whitelist = w ?? []; state.creds = c ?? [];
+    fillSec("whitelist", secWhitelist(state.whitelist, state.creds));
+  });
+}
+
+// P-NETWL.4 (ADR-0106): quick-add a DNS pill (a host the agent resolved, from the Network diagnostics panel)
+// to the whitelist, choosing zone / trust-scope / call-budget in a small popover - so pre-authorizing a site
+// the agent is actually reaching is one click, right where you see the traffic.
+function openWhitelistQuickAdd(anchor: HTMLElement, raw: string): void {
+  const host = raw.trim().replace(/\.$/, ""); // DNS cache entries can carry a trailing dot
+  const isIp = /^\d{1,3}(\.\d{1,3}){3}$/.test(host);
+  const inner = `<div class="cfg-sec wl-quick">
+    <div class="cfg-lbl">${icon("shield", 13)} Whitelist <span class="cur mono">${esc(host)}</span></div>
+    <div class="prov-row wl-controls">
+      <select class="prov-key" data-q="kind"><option value="domain"${isIp ? "" : " selected"}>Domain</option><option value="ip"${isIp ? " selected" : ""}>IP / CIDR</option></select>
+      <select class="prov-key" data-q="zone" data-tip="Network zone|Internal = intranet; External = internet."><option value="external">External</option><option value="internal">Internal</option></select>
+      <select class="prov-key" data-q="scope" data-tip="Trust scope|Always = every session; Project = this workspace; This loop = only during a /goal run."><option value="always">Always</option><option value="project">Project</option><option value="loop">This loop</option></select>
+      <input class="prov-key wl-budget" data-q="budget" type="number" min="0" placeholder="calls/loop" data-tip="Call budget|Max auto-allowed calls to this host per loop." />
+    </div>
+    <div class="prov-row"><button class="btn-mini ok" data-q="add">${icon("check", 12)} Add to whitelist</button></div>
+  </div>`;
+  const { node, close } = popover(anchor, inner);
+  node.addEventListener("click", (ev) => {
+    if (!(ev.target as HTMLElement).closest('[data-q="add"]')) return;
+    void (async () => {
+      const kind = (node.querySelector('[data-q="kind"]') as HTMLSelectElement).value === "ip" ? "ip" : "domain";
+      const zone = (node.querySelector('[data-q="zone"]') as HTMLSelectElement).value === "internal" ? "internal" : "external";
+      const scope = ((node.querySelector('[data-q="scope"]') as HTMLSelectElement).value ?? "always") as "always" | "project" | "loop";
+      const budgetRaw = ((node.querySelector('[data-q="budget"]') as HTMLInputElement).value ?? "").trim();
+      const callBudget = budgetRaw ? Math.max(0, Math.floor(Number(budgetRaw))) : undefined;
+      const saved = await bridge.whitelistUpsert({ kind, pattern: host, zone, scope, callBudget });
+      close();
+      if (!saved) { showToast({ title: "Not added", desc: "That host was rejected - check it's a valid domain or IP.", actions: [{ label: "OK" }], timeout: 3500 }); return; }
+      if (state.settingsOpen) hydrateWhitelist();
+      showToast({ title: "Added to whitelist", desc: `${host} will auto-allow${scope === "always" ? "" : ` (${WL_SCOPE_LABEL[scope]!.toLowerCase()} scope)`}${callBudget != null ? ` · ${callBudget}/loop` : ""}.`, meta: "under the managed ceiling · fail-closed", timeout: 4200 });
+    })();
+  });
+}
+
+// P-KEYS.2 (ADR-0107): rotate a whitelist entry's attached credential IN PLACE - paste a new secret or upload
+// a file. The vaultRef is preserved so the entry keeps working; the backend bumps rotatedAt + refreshes last4.
+function openCredRotate(anchor: HTMLElement, ref: string): void {
+  const inner = `<div class="cfg-sec wl-quick">
+    <div class="cfg-lbl">${icon("refresh", 13)} Rotate credential</div>
+    <div class="prov-row"><input class="prov-key" data-q="secret" type="password" placeholder="Paste the new token / password / key" /></div>
+    <div class="prov-row">
+      <button class="btn-mini ok" data-q="rotate">${icon("check", 12)} Rotate</button>
+      <button class="btn-mini" data-q="rotatefile">${icon("folder", 12)} From file</button>
+    </div>
+    <div class="set-note">${icon("shield", 12)} Re-encrypted in place; the old secret is overwritten. Fail-closed if the OS keystore is unavailable.</div>
+  </div>`;
+  const { node, close } = popover(anchor, inner);
+  const done = (r: import("./bridge.ts").CredMetaView | { error: string } | null): void => {
+    if (r && "error" in r) {
+      const msg = r.error === "os-encryption-unavailable" ? "OS encryption isn't available; the old secret was left untouched (fail-closed)."
+        : r.error === "not-found" ? "That credential no longer exists." : r.error;
+      showToast({ title: "Rotation failed", desc: msg, actions: [{ label: "OK" }], timeout: 5000 });
+      return;
+    }
+    close();
+    if (!r) return; // user cancelled the file dialog
+    if (state.settingsOpen) hydrateWhitelist();
+    showToast({ title: "Credential rotated", desc: `New secret stored (••••${esc(r.last4 ?? "")}); the reference is unchanged so the entry keeps working.`, timeout: 3600 });
+  };
+  node.addEventListener("click", (ev) => {
+    if ((ev.target as HTMLElement).closest('[data-q="rotate"]')) {
+      const secret = (node.querySelector('[data-q="secret"]') as HTMLInputElement).value ?? "";
+      if (!secret) { showToast({ title: "Paste a secret", desc: "Enter the new secret, or use From file.", actions: [{ label: "OK" }], timeout: 3000 }); return; }
+      void bridge.credRotate({ ref, secret }).then(done);
+    } else if ((ev.target as HTMLElement).closest('[data-q="rotatefile"]')) {
+      void bridge.credRotateFile({ ref }).then(done);
+    }
+  });
+}
+
 function settingsShell(): string {
   return [
     `<div data-sec="workspace"></div>`,
@@ -1657,6 +1816,7 @@ function settingsShell(): string {
     `<div data-sec="sovereignty"></div>`, // P-IDE.1c: China-origin unlock (renders only when such models exist)
     setSkel("compression", "Token compression", "headroom · on-device · opt-in", true),
     setSkel("mcp", "MCP connectors", "model context protocol", true),
+    setSkel("whitelist", "Network Whitelist", "domains · IPs · trust-scoped", true), // P-NETWL.2 (ADR-0106)
     setSkel("others", "More providers", "", true),
     setSkel("developer", "Developer", "logs · diagnostics", true),
     `<div class="set-note">${icon("shield", 12)} Keys are stored on this machine and passed to omp as env vars - never sent anywhere else. OAuth uses omp's own secure credential vault.</div>`,
@@ -1690,6 +1850,7 @@ function hydrateSettings(): void {
   fillSec("developer", secDeveloper()); // ADR-0059: render from state.developerMode (loaded by loadDev)
   void hydratePersonal();
   hydrateMcp();
+  hydrateWhitelist(); // P-NETWL.2 (ADR-0106)
   void bridge.asksage().then(async (a) => {
     if (a) state.asksage = a;
     fillSec("asksage", secAsksage(a, null)); // paint immediately (token readout shows a spinner)
@@ -2518,7 +2679,8 @@ function devHtml(d: import("./bridge.ts").DevView | null): string {
       + (oauthRows.length ? table(evCols, oauthRows as unknown as Record<string, unknown>[]) : `<div class="empty">no OAuth-relevant events yet — click "Connect via OAuth" to start</div>`)
       // Separator + the rest.
       + (otherRows.length ? `<div class="dev-subh">Other network activity <span>${otherRows.length} events · loopback traffic unrelated to the callback port</span></div>` + table(evCols, otherRows as unknown as Record<string, unknown>[]) : "")
-      + (nd.dns.length ? `<div class="dev-subh">DNS resolutions <span>recent resolver-cache entries</span></div><div class="kvs">${nd.dns.slice().reverse().slice(0, 30).map((n) => `<span class="kv mono">${esc(n)}</span>`).join("")}</div>` : "");
+      // P-NETWL.4 (ADR-0106): each DNS pill is clickable → a quick-add popover to whitelist that host.
+      + (nd.dns.length ? `<div class="dev-subh">DNS resolutions <span>recent resolver-cache entries · click to whitelist</span></div><div class="kvs">${nd.dns.slice().reverse().slice(0, 30).map((n) => `<span class="kv mono kv-dns" data-dns-add="${esc(n)}" data-tip="Add to whitelist|Pre-authorize ${esc(n)} for the agent's network calls (choose scope + budget).">${esc(n)} ${icon("plus", 10)}</span>`).join("")}</div>` : "");
     h += accordion("dev.netdiag", "Network diagnostics", "OAuth localhost callback · live capture", body, OPEN.has("dev.netdiag") || cand > 0, cand ? `${nd.events.length} · ${cand}?` : String(nd.events.length));
   }
   return h;
@@ -4219,6 +4381,60 @@ function wire(): void {
     if (mcpToggle) { await bridge.mcpToggle(mcpToggle.dataset.mcpToggle!, mcpToggle.dataset.mcpOn === "1"); hydrateMcp(); return; }
     const mcpRemove = t.closest("[data-mcp-remove]") as HTMLElement | null;
     if (mcpRemove) { await bridge.mcpRemove(mcpRemove.dataset.mcpRemove!); hydrateMcp(); showToast({ title: "Connector removed", desc: "The MCP server was removed; the agent drops it on the next turn.", actions: [{ label: "OK" }], timeout: 3000 }); return; }
+    // ── Network Whitelist (P-NETWL.2, ADR-0106) ──
+    if (t.closest("#wlAuthFile")) {
+      const body = $("#setBody")!;
+      const kind = ($("#wlAuthKind", body) as HTMLSelectElement)?.value || "apikey";
+      const label = ($("#wlAuthLabel", body) as HTMLInputElement)?.value.trim() || undefined;
+      const rotRaw = (($("#wlAuthRotate", body) as HTMLInputElement)?.value ?? "").trim();
+      const rotationIntervalDays = rotRaw ? Math.max(0, Math.floor(Number(rotRaw))) : undefined;
+      const r = await bridge.credStoreFile({ kind, label, rotationIntervalDays });
+      if (!r) return; // user cancelled the native dialog
+      if ("error" in r) { showToast({ title: "Couldn't store file", desc: r.error === "os-encryption-unavailable" ? "OS encryption isn't available on this machine, so the secret can't be stored securely (fail-closed)." : r.error, actions: [{ label: "OK" }], timeout: 5000 }); return; }
+      wlPendingCred = { ref: r.ref, kind: r.kind, label: r.label };
+      const btn = t.closest("#wlAuthFile") as HTMLElement; btn.innerHTML = `${icon("check", 12)} ${esc(r.label ?? "file")}`;
+      showToast({ title: "Credential stored (encrypted)", desc: `Saved to the vault as "${esc(r.label ?? r.ref)}". Click Add to attach it to the entry.`, timeout: 3200 });
+      return;
+    }
+    if (t.closest("#wlAdd")) {
+      const body = $("#setBody")!;
+      const pattern = (($("#wlPattern", body) as HTMLInputElement)?.value ?? "").trim();
+      if (!pattern) { showToast({ title: "Pattern required", desc: "Enter a domain (*.example.com) or an IP / CIDR (10.0.0.0/8).", actions: [{ label: "OK" }], timeout: 3000 }); return; }
+      const kind = ($("#wlKind", body) as HTMLSelectElement)?.value === "ip" ? "ip" : "domain";
+      const zone = ($("#wlZone", body) as HTMLSelectElement)?.value === "internal" ? "internal" : "external";
+      const scope = (($("#wlScope", body) as HTMLSelectElement)?.value ?? "always") as "always" | "project" | "loop";
+      const budgetRaw = (($("#wlBudget", body) as HTMLInputElement)?.value ?? "").trim();
+      const callBudget = budgetRaw ? Math.max(0, Math.floor(Number(budgetRaw))) : undefined;
+      const authKind = ($("#wlAuthKind", body) as HTMLSelectElement)?.value ?? "";
+      const authUser = (($("#wlAuthUser", body) as HTMLInputElement)?.value ?? "").trim() || undefined;
+      const authSecret = ($("#wlAuthSecret", body) as HTMLInputElement)?.value ?? "";
+      const rotRaw = (($("#wlAuthRotate", body) as HTMLInputElement)?.value ?? "").trim();
+      const rotationIntervalDays = rotRaw ? Math.max(0, Math.floor(Number(rotRaw))) : undefined;
+      let auth: { kind: string; vaultRef: string; username?: string } | undefined;
+      if (authKind) {
+        let ref: string | undefined;
+        if (authSecret) {
+          const r = await bridge.credStore({ kind: authKind, secret: authSecret, label: (($("#wlAuthLabel", body) as HTMLInputElement)?.value ?? "").trim() || undefined, rotationIntervalDays });
+          if ("error" in r) { showToast({ title: "Couldn't store secret", desc: r.error === "os-encryption-unavailable" ? "OS encryption isn't available; the secret can't be stored securely (fail-closed)." : r.error, actions: [{ label: "OK" }], timeout: 5000 }); return; }
+          ref = r.ref;
+        } else if (wlPendingCred && wlPendingCred.kind === authKind) {
+          ref = wlPendingCred.ref;
+        }
+        if (!ref) { showToast({ title: "Secret needed", desc: "Paste a token / password / API key, or upload a file, for the selected auth type.", actions: [{ label: "OK" }], timeout: 4000 }); return; }
+        auth = { kind: authKind, vaultRef: ref, username: authUser };
+      }
+      const saved = await bridge.whitelistUpsert({ kind, pattern, zone, scope, callBudget, auth });
+      if (!saved) { showToast({ title: "Not added", desc: "That entry was rejected - check the pattern.", actions: [{ label: "OK" }], timeout: 4000 }); return; }
+      wlPendingCred = null;
+      hydrateWhitelist();
+      showToast({ title: "Added to whitelist", desc: `${pattern} will auto-allow${scope === "always" ? "" : ` (${WL_SCOPE_LABEL[scope]!.toLowerCase()} scope)`}${auth ? " · credential attached" : ""}.`, meta: "under the managed ceiling · fail-closed", timeout: 4200 });
+      return;
+    }
+    // P-KEYS.2 (ADR-0107): rotate the credential attached to a whitelist entry (paste or file), in place.
+    const wlRotate = t.closest("[data-wl-rotate]") as HTMLElement | null;
+    if (wlRotate) { openCredRotate(wlRotate, wlRotate.dataset.wlRotate!); return; }
+    const wlRemove = t.closest("[data-wl-remove]") as HTMLElement | null;
+    if (wlRemove) { await bridge.whitelistRemove(wlRemove.dataset.wlRemove!); hydrateWhitelist(); showToast({ title: "Removed", desc: "The whitelist entry was removed.", timeout: 2600 }); return; }
     // ── Personalization (ADR-0010/0012) ──
     if (t.closest("#personalToggle")) {
       const enabled = ($("#personalToggle", $("#setBody")!) as HTMLInputElement)?.checked ?? false;
@@ -4406,6 +4622,8 @@ function wire(): void {
       })();
       return;
     }
+    const dnsAdd = (e.target as HTMLElement).closest("[data-dns-add]") as HTMLElement | null;
+    if (dnsAdd) { openWhitelistQuickAdd(dnsAdd, dnsAdd.dataset.dnsAdd!); return; } // P-NETWL.4
     const head = (e.target as HTMLElement).closest("[data-acc-toggle]") as HTMLElement | null;
     if (head) { const k = head.dataset.accToggle!; const acc = head.closest(".acc")!; const open = acc.classList.toggle("open"); open ? OPEN.add(k) : OPEN.delete(k); return; }
     // Approve & retry: the audited fail-closed override for one live gate block (ADR-0019 C).

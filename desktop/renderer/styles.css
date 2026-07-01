@@ -1850,10 +1850,34 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .abadge.ok{background:var(--green-dim);color:#84e3a6;box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--green) 30%,transparent)}
 .abadge.set{background:var(--cyan-dim);color:#8fe0ee;font-family:var(--mono);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--cyan) 28%,transparent)}
 .abadge.none{background:var(--bg-3);color:var(--txt-4)}
+/* P-KEYS.2 (ADR-0107): rotation-status badge tones */
+.abadge.warn{background:color-mix(in srgb,var(--yellow,#e0a94f) 18%,transparent);color:#e9c583;box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--yellow,#e0a94f) 32%,transparent)}
+.abadge.danger{background:color-mix(in srgb,var(--red,#e06b6b) 16%,transparent);color:#f0a6a6;box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--red,#e06b6b) 32%,transparent)}
 .prov-body{display:flex;flex-direction:column;gap:8px}
 .prov-row{display:flex;align-items:center;gap:8px}
 .prov-hint{margin-top:2px;font-size:11px;color:var(--txt-3);line-height:1.45;display:flex;gap:5px;align-items:flex-start}
 .prov-hint svg{flex:none;margin-top:1px;opacity:.7}
+/* P-NETWL.2 (ADR-0106): whitelist add-form controls as a balanced 2x2 GRID. `minmax(0,1fr)` lets each cell
+   shrink with the panel (no overflow/clipping ever), and equal tracks keep the pair-of-selects layout even at
+   any width - then a single column on a very narrow panel. Selects need min-width:0 so a cell can shrink. */
+.wl-controls{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;align-items:center}
+.wl-controls>.prov-key{width:auto;min-width:0}
+@media (max-width:340px){ .wl-controls{grid-template-columns:1fr} }
+/* P-NETWL.4 (ADR-0106): DNS pills are click-to-whitelist */
+.kv-dns{cursor:pointer;transition:border-color var(--t),background var(--t),color var(--t)}
+.kv-dns:hover{border-color:var(--accent);background:color-mix(in srgb,var(--accent-dim) 30%,transparent);color:var(--txt-1)}
+.kv-dns svg{opacity:.55;vertical-align:-1px}
+.kv-dns:hover svg{opacity:1;color:var(--accent-2)}
+/* P-NETWL.4 (ADR-0106): the DNS-pill quick-add popover form */
+.wl-quick{min-width:300px}
+.wl-quick .wl-controls{margin:8px 0}
+/* P-NETWL.2 (ADR-0106): optional-auth disclosure inside the whitelist add form */
+.wl-auth{border:1px solid var(--line);border-radius:8px;padding:2px 8px;background:color-mix(in srgb,var(--bg-2) 60%,transparent);display:flex;flex-direction:column;gap:8px}
+.wl-auth>summary{cursor:pointer;font-size:12px;color:var(--txt-2);padding:6px 2px;user-select:none;list-style:none}
+.wl-auth>summary::-webkit-details-marker{display:none}
+.wl-auth>summary::before{content:"▸ ";color:var(--txt-3)}
+.wl-auth[open]>summary::before{content:"▾ "}
+.wl-auth[open]>summary{margin-bottom:2px}
 .prov-id{flex:1;font-family:var(--mono);font-size:11.5px;color:var(--txt-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .prov-key{flex:1;min-width:0;background:var(--bg-1);border:1px solid var(--line);border-radius:8px;padding:8px 11px;
   color:var(--txt);font-size:13px;font-family:inherit;outline:none;
