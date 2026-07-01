@@ -14,7 +14,7 @@ import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { ACPClient } from "./acp.ts";
-import { BUILD_POLICY, DELEGATION_POLICY } from "../harness/prompt/assembler.ts";
+import { BUILD_POLICY, DELEGATION_POLICY, PREVIEW_POLICY } from "../harness/prompt/assembler.ts";
 import { currentWorkspace } from "./workspace.ts";
 import { learnFromTurn, recallPreamble } from "./personal.ts";
 import { buildUserTurnPreamble } from "./preamble.ts";
@@ -255,7 +255,7 @@ class Backend {
         if (loadSettings().developerMode) process.env.LUCID_ASKSAGE_DEBUG = "1"; else delete process.env.LUCID_ASKSAGE_DEBUG;
         // ADR-0033: also append the build / anti-over-refusal policy so the chat model doesn't decline
         // a buildable task (e.g. "make a game/graphics/music in one HTML file") by mis-reading its scope.
-        const appendedPolicy = `${DELEGATION_POLICY}\n\n${BUILD_POLICY}`;
+        const appendedPolicy = `${DELEGATION_POLICY}\n\n${BUILD_POLICY}\n\n${PREVIEW_POLICY}`;
         const previewArgs = existsSync(PREVIEW_EXT) ? ["-e", PREVIEW_EXT] : []; // P-PREVIEW.3a (draft)
         const acp = new ACPClient(ompBin(), ["acp", "-e", GATE, "-e", ASKSAGE, ...previewArgs, ...isoCfg, "--append-system-prompt", appendedPolicy], currentWorkspace());
         acp.onNotify = (method, params) => {
@@ -290,9 +290,12 @@ class Backend {
                 // P-PREVIEW.2 (ADR-0096): if this write/edit produced a browser-previewable file, tell the UI
                 // so it can auto-surface it in the Preview panel. Pure detection (previewablePath); the path
                 // is still gated by the resolver before anything renders.
-                // P-PREVIEW.3a (ADR-0096, draft): the agent's own `preview_open` tool call drives the panel too
-                // — same `preview-available` path (the renderer re-gates via resolvePreview before rendering).
-                const pv = previewOpenPath(String(u.kind ?? u.title ?? ""), ri) ?? previewablePath(String(u.kind ?? u.title ?? ""), ri);
+                // P-PREVIEW.3a (ADR-0096): the agent's own `preview_open` tool call drives the panel too —
+                // same `preview-available` path (the renderer re-gates via resolvePreview before rendering).
+                // A CUSTOM tool's name does NOT survive as `u.kind` (ACP maps it to "other"); omp renders the
+                // call title as `"preview_open: <path>"`, so preview_open must be matched against the TITLE.
+                // A write/edit, by contrast, keeps a real `kind` ("edit"), which previewablePath keys on.
+                const pv = previewOpenPath(String(u.title ?? ""), ri) ?? previewablePath(String(u.kind ?? u.title ?? ""), ri);
                 if (pv) this.emit({ type: "preview-available", path: pv });
               }
               break;

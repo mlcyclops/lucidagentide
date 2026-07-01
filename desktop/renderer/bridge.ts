@@ -399,6 +399,10 @@ export interface LucidBridge {
   // P-PREVIEW.4 (ADR-0096): a local file's content for the iframe's srcdoc (file:// can't load from an http
   // origin). Returns the HTML, or null if the path isn't a readable local previewable file.
   previewFile(path: string): Promise<string | null>;
+  // P-PREVIEW.4b (ADR-0096): the same-origin URL that SERVES a local file as a document with its own
+  // per-frame CSP, for the iframe's `src`. Carries the transport token as a query param (an iframe src GET
+  // can't set a header). Used instead of srcdoc so the previewed app's inline scripts actually run.
+  previewServeUrl(path: string): string;
   listDir(path?: string): Promise<FsList | null>; // in-app folder browser (works everywhere)
   revealPath(path: string): Promise<boolean>; // open a folder in the OS file manager (Electron only; false in browser)
   canRevealPath(): boolean; // whether the native shell can reveal a folder (Electron only)
@@ -599,6 +603,7 @@ export const bridge: LucidBridge = {
   capturePreview: (rect) => (shell?.capturePreview ? shell.capturePreview(rect) : Promise.resolve(null)), // P-PREVIEW.1
   previewEgressAllows: async (url) => { const d = await getData(`/api/preview/egress-check?url=${encodeURIComponent(url)}`); return !!(d as { allow?: boolean } | null)?.allow; }, // P-PREVIEW.3b
   previewFile: async (path) => { const d = await getData(`/api/preview/file?path=${encodeURIComponent(path)}`); const h = (d as { html?: unknown } | null)?.html; return typeof h === "string" ? h : null; }, // P-PREVIEW.4
+  previewServeUrl: (path) => `/api/preview/serve?path=${encodeURIComponent(path)}${TOKEN ? `&t=${encodeURIComponent(TOKEN)}` : ""}`, // P-PREVIEW.4b
 
   listDir: (path) => getData(`/api/fs/list${path ? `?path=${encodeURIComponent(path)}` : ""}`),
   revealPath: (path) => (shell?.revealPath ? shell.revealPath(path) : Promise.resolve(false)),

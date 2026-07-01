@@ -4,11 +4,17 @@
 // desktop/preview_resolve.test.ts — P-PREVIEW.1 (ADR-0096): the fail-safe preview-target resolver.
 
 import { describe, expect, test } from "bun:test";
-import { PREVIEW_ALLOW, PREVIEW_SANDBOX, PREVIEW_SANDBOX_FORBIDDEN, canPreviewRemote, previewOpenPath, previewablePath, resolvePreview, toFileUrl } from "./preview_resolve.ts";
+import { PREVIEW_ALLOW, PREVIEW_FRAME_CSP, PREVIEW_SANDBOX, PREVIEW_SANDBOX_FORBIDDEN, canPreviewRemote, previewOpenPath, previewablePath, resolvePreview, toFileUrl } from "./preview_resolve.ts";
 
 describe("previewOpenPath (P-PREVIEW.3a, ADR-0096): the agent's preview_open tool call", () => {
   test("a preview_open call → its path", () => {
     expect(previewOpenPath("preview_open", { path: "C:/Users/n/game.html" })).toBe("C:/Users/n/game.html");
+  });
+  test("matches the ACP-rendered call title (custom tool name lands in the title, not kind)", () => {
+    // omp maps a custom tool's `kind` to "other" and renders the call title as `"preview_open: <path>"`,
+    // so acp_backend matches preview_open against the TITLE — this is the real-world input shape.
+    expect(previewOpenPath("preview_open: C:/Users/n/game.html", { path: "C:/Users/n/game.html" })).toBe("C:/Users/n/game.html");
+    expect(previewOpenPath("other", { path: "C:/Users/n/game.html" })).toBeNull(); // the bare kind never matches
   });
   test("any other tool → null (even with a path)", () => {
     expect(previewOpenPath("write", { path: "game.html" })).toBeNull();
@@ -50,6 +56,36 @@ describe("preview sandbox policy (P-PREVIEW.3, ADR-0096)", () => {
   });
   test("Permissions-Policy denies all powerful features (empty allow)", () => {
     expect(PREVIEW_ALLOW).toBe("");
+  });
+});
+
+describe("served-preview per-frame CSP (P-PREVIEW.4b, ADR-0096)", () => {
+  const dirs = new Map(
+    PREVIEW_FRAME_CSP.split(";").map((d) => {
+      const [name, ...vals] = d.trim().split(/\s+/);
+      return [name, vals];
+    }),
+  );
+  test("lets a self-contained app RUN: inline scripts/styles + data/blob media", () => {
+    // This is the whole point of 4b — a srcdoc frame inherits the renderer's script-src 'self' and blocks
+    // these; a served frame carries this policy so the previewed app's inline JS/CSS actually execute.
+    expect(dirs.get("script-src")).toContain("'unsafe-inline'");
+    expect(dirs.get("style-src")).toContain("'unsafe-inline'");
+    expect(dirs.get("img-src")).toEqual(expect.arrayContaining(["data:", "blob:"]));
+    expect(dirs.get("media-src")).toEqual(expect.arrayContaining(["data:", "blob:"]));
+  });
+  test("blocks ALL network egress so a previewed app can't bypass the egress gate", () => {
+    expect(dirs.get("connect-src")).toEqual(["'none'"]);
+    expect(dirs.get("default-src")).toEqual(["'none'"]); // nothing is allowed unless explicitly listed
+    expect(dirs.get("form-action")).toEqual(["'none'"]);
+    expect(dirs.get("base-uri")).toEqual(["'none'"]);
+  });
+  test("never allows arbitrary remote script/style hosts (only inline + blob)", () => {
+    for (const dir of ["script-src", "style-src"]) {
+      for (const v of dirs.get(dir) ?? []) {
+        expect(/^https?:/.test(v)).toBe(false); // no external origins — the app is self-contained
+      }
+    }
   });
 });
 

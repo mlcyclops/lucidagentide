@@ -7550,6 +7550,76 @@ app's RELATIVE assets (external CSS/JS/images) won't load - fine for single-file
 http-served preview is a future P-PREVIEW.4b. New: `desktop/preview_file.ts` (+ test), the `/api/preview/file`
 endpoint, `bridge.previewFile()`, the renderer srcdoc path, `desktop/scripts/demo_p_preview_4.ts`.
 
+### Addendum (2026-06-30) — P-PREVIEW.3a FINALIZED: the agent drives the preview (the draft is now real)
+
+The P-PREVIEW.3a `preview_open` tool shipped earlier as a DRAFT with two unverified guesses. Both are now
+resolved against the **installed** omp (`@oh-my-pi/pi-coding-agent` extension API,
+`dist/types/extensibility/extensions/types.d.ts`), and the draft is corrected to match:
+
+1. **`registerTool` IS exposed to `-e` extensions.** Confirmed — `ExtensionAPI.registerTool(ToolDefinition)`
+   is the same injected API that already gives `asksage_extension` its working `pi.registerProvider`. The
+   earlier worry that user `-e` extensions can't register tools was wrong.
+2. **The parameter schema must be a `TSchema`, not a raw JSON-schema object.** The draft's
+   `parameters: { type: "object", … }` placeholder would have been rejected. Fixed to author the schema via
+   the injected `pi.typebox` shim (`Type.Object({ path: Type.String(...) })`), which the API documents for
+   extension-tool parameters. If the shim is somehow absent the extension is a silent no-op (still launch-safe).
+3. **Approval tier.** `ToolDefinition.approval` defaults to `"exec"`; left unset, opening a preview would have
+   hit the exec gate and been *blocked* — exactly the flailing 3a exists to stop. Set to **`"read"`** so a
+   preview never trips exec/egress.
+
+A second bug surfaced in the desktop bridge: a **custom** tool's name does not survive as the ACP
+`session/update` `kind` (omp maps every custom tool to `kind: "other"`); omp renders the call **title** as
+`"preview_open: <path>"`. So `acp_backend` now matches `previewOpenPath` against the **title** (and keeps
+`previewablePath` on `kind`, which is `"edit"` for writes — that path already worked). Without this the agent's
+`preview_open` calls would never have surfaced the panel.
+
+**Root cause closed.** The live diagnostics showed the agent burning turns trying `browser`/`bash`/`eval` to
+view its own web apps — all security-gated, so all DENIED — and inventing relative-iframe wrapper files
+(whose relative child 404'd as "not found" under `srcdoc`). The fix is two-sided: (a) the now-real
+`preview_open` tool lets the agent open a file directly, and (b) a new **`PREVIEW_POLICY`** in the frozen
+prompt prefix (layer 3) tells the agent NOT to use browser/bash/eval to view its work — write the `.html`
+(LUCID auto-opens the panel) or call `preview_open`, and prefer ONE self-contained file so it renders. The
+prompt-prefix change is a deliberate **`PREFIX_VERSION` 5 → 6** bump (CLAUDE.md invariant #6).
+
+Touched: `harness/omp/preview_extension.ts` (real TSchema + `approval:"read"`), `desktop/acp_backend.ts`
+(title-keyed detection + appended `PREVIEW_POLICY`), `harness/prompt/assembler.ts` (`PREVIEW_POLICY` +
+version bump), tests (`preview_extension.test.ts`, `preview_resolve.test.ts`), `demo_p_preview_3a.ts`.
+Still ahead: **P-PREVIEW.3a-shot** (the `preview_screenshot` multimodal round-trip — the model seeing its own
+rendered UI).
+
+### Addendum (2026-06-30) — P-PREVIEW.4b: served preview with a per-frame CSP (why the game showed only its HUD)
+
+Live testing of P-PREVIEW.4 surfaced a deeper bug: a self-contained game rendered only its static HUD in the
+Preview panel while rendering FULLY when opened in a browser from `file://`. Root cause, proven by reproducing
+the exact iframe sandbox in a headless browser: the renderer's `index.html` sets
+`Content-Security-Policy: … script-src 'self'` (no `'unsafe-inline'`), and a **`srcdoc` iframe INHERITS its
+parent's CSP** — so the previewed app's inline `<script>` blocks were blocked, its JS never ran, and only its
+static HTML painted (`style-src 'unsafe-inline'` is why the HUD was still *styled*; the title overlay + canvas
+are JS-driven, so they vanished). Repro without a CSP → full render; repro with LUCID's exact CSP → inline
+scripts blocked. `srcdoc` can only *tighten* the inherited CSP, never re-enable inline scripts — so srcdoc can
+never run a self-contained app under our policy.
+
+Fix: serve the file via **`iframe.src`** from a new `/api/preview/serve?path=` endpoint that returns the
+document with its **own per-frame CSP** (`PREVIEW_FRAME_CSP` in `preview_resolve.ts`) — a document loaded via
+`src` carries its own policy instead of inheriting the parent's. That policy lets a self-contained app RUN
+(`script-src 'unsafe-inline' 'unsafe-eval' blob:`, `style-src 'unsafe-inline'`, data/blob img+media, blob
+workers) while **`default-src 'none'` + `connect-src 'none'`** block ALL network egress — so a previewed,
+agent-authored app can never bypass LUCID's egress gate (this protection used to ride on the inherited CSP;
+it's now explicit and frame-scoped). `base-uri`/`form-action` `'none'` close the redirect/exfil seams. The
+frame stays in the opaque-origin sandbox (`PREVIEW_SANDBOX`, no `allow-same-origin`), so it still can't read
+LUCID's origin/storage or navigate the top frame. An `<iframe src>` GET can't send a header, so this one
+endpoint accepts the per-launch transport token as a `?t=` query param — same token, still behind the
+loopback (H1) + Origin/Host/CSRF (H2) gate; a missing/wrong token is 403 (verified).
+
+**Verified end-to-end in the real dev server:** `/api/preview/serve` returns the 64 KB game with the exact
+`PREVIEW_FRAME_CSP` header (200 with token, 403 without), and driving the actual Preview panel renders the
+FULL game — title, legend, and the JS-drawn **Play** button — where srcdoc showed only the HUD. This
+supersedes P-PREVIEW.4's *render mechanism* (srcdoc → served frame) but reuses its pure reader
+(`readPreviewFile`). New/changed: `PREVIEW_FRAME_CSP`, the `/api/preview/serve` endpoint + token-via-query,
+`bridge.previewServeUrl()`, the renderer's `loadPreview` local branch, `preview_resolve.test.ts` (+CSP tests),
+`desktop/scripts/demo_p_preview_4b.ts`. Still ahead: multi-file apps with RELATIVE assets (external CSS/JS)
+need base-aware serving — a future increment; single-file apps (what the agent builds) render fully now.
+
 ## ADR-0103 - P-FS.1: full-tree workspace folder browser (supersedes ADR-0022 M1's home confinement)
 
 **Date:** 2026-06-30
