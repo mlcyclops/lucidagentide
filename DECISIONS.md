@@ -7620,6 +7620,32 @@ supersedes P-PREVIEW.4's *render mechanism* (srcdoc → served frame) but reuses
 `desktop/scripts/demo_p_preview_4b.ts`. Still ahead: multi-file apps with RELATIVE assets (external CSS/JS)
 need base-aware serving — a future increment; single-file apps (what the agent builds) render fully now.
 
+### Addendum (2026-07-01) — P-PREVIEW.3a-shot: the agent SEES its own rendered UI (`preview_screenshot`)
+
+Closes the "agent drives the preview" loop: a `preview_screenshot` tool that returns a PNG of the current
+preview as `ImageContent`, so the model actually SEES how its app renders and can self-correct — instead of a
+security-gated browser/bash/eval.
+
+The cross-process problem: `capturePage` lives in the **Electron main** process, `dev.ts` (server + acp_backend)
+is a **separate spawned** process, and the tool runs in the **omp subprocess** — three hops. Rather than a
+fragile call-time round-trip, the **renderer proactively caches** a PNG after each preview render (it can
+capture via the existing `capturePreview` IPC) by POSTing it to `/api/preview/shot-cache`; the tool just
+**fetches** the cached shot from `/api/preview/shot`. omp reaches it because it **inherits `process.env`** from
+`dev.ts`, which sets `LUCID_PREVIEW_SHOT_URL` (real bound port + token) after the server binds — so no
+`ACPClient` env plumbing was needed. Like `/serve`, the shot GET accepts the token via `?t=` (the subprocess
+gets a ready URL). The tool is **read-tier** (never trips the exec gate) and every failure path — no shot, no
+desktop, fetch error — degrades to helpful TEXT (never throws, never a bogus image block). `ImageContent` is
+`{ type:"image", data:<base64>, mimeType }` (confirmed against pi-ai) so the model genuinely sees it.
+
+**Verified:** the desktop cache round-trip live in the real dev server (empty → cached → exact round-trip;
+bad token → 403; a non-image body is rejected, not stored); the tool's fetch→`ImageContent` wrapping + all
+graceful-degradation paths by unit test (mocked `fetch`/env) and `make demo-P-PREVIEW.3a-shot`. The
+**model actually seeing the image** needs `capturePage`, i.e. the packaged/Electron app — the honest live
+boundary (same class as 3a's model-invocation). New/changed: `previewShotImage` + the `preview_screenshot`
+tool (`preview_extension.ts`), the shot cache state + `/api/preview/shot-cache` + `/api/preview/shot` +
+`LUCID_PREVIEW_SHOT_URL` (`dev.ts`), `bridge.cachePreviewShot()`, `cacheRenderedPreviewShot()` on iframe load
+(`app.ts`), tests (`preview_extension.test.ts`), `desktop/scripts/demo_p_preview_3a_shot.ts`.
+
 ## ADR-0103 - P-FS.1: full-tree workspace folder browser (supersedes ADR-0022 M1's home confinement)
 
 **Date:** 2026-06-30

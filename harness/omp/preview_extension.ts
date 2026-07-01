@@ -26,6 +26,15 @@
 const LOCAL_PATH = /^(file:\/\/|[A-Za-z]:[\\/]|\/|~[\\/]|\\\\)/;
 const PREVIEWABLE = /\.(html?|svg)$/i;
 
+/** P-PREVIEW.3a-shot (ADR-0096): parse a `data:image/…;base64,…` URL into omp `ImageContent`
+ *  (`{ type, data, mimeType }` — the shape the model actually sees), or null if it isn't a valid image
+ *  data URL. Pure + exported so it's unit-tested without a live desktop. */
+export function previewShotImage(dataUrl: string | null | undefined): { type: "image"; data: string; mimeType: string } | null {
+  const m = /^data:(image\/[a-z0-9.+-]+);base64,([A-Za-z0-9+/=]+)$/i.exec((dataUrl ?? "").trim());
+  const mimeType = m?.[1], data = m?.[2];
+  return mimeType && data ? { type: "image", data, mimeType } : null;
+}
+
 export default function previewExtension(pi: any): void {
   try {
     if (!pi || typeof pi.registerTool !== "function") return; // older omp / no custom-tool support → no-op
@@ -54,6 +63,38 @@ export default function previewExtension(pi: any): void {
         const name = path.split(/[\\/]/).pop() || path;
         // The desktop opens the panel from this tool_call (acp_backend → renderer). The tool just confirms.
         return { content: [{ type: "text", text: `Opening ${name} in the Preview panel for the user.` }] };
+      },
+    });
+
+    // P-PREVIEW.3a-shot (ADR-0096): let the agent SEE its own rendered UI. capturePage lives in the Electron
+    // process, unreachable from omp's subprocess — so the renderer proactively caches a PNG of the current
+    // preview to the desktop after each render, and this tool just FETCHES that cached shot (the desktop
+    // hands us a ready URL incl. the transport token via the LUCID_PREVIEW_SHOT_URL env var it inherits).
+    // The PNG is returned as ImageContent so the model actually sees it and can self-correct. Read-tier;
+    // fetch failures degrade to helpful text (never an exec-gate hit, never a throw).
+    pi.registerTool({
+      name: "preview_screenshot",
+      label: "Screenshot the preview",
+      description:
+        "Capture a screenshot of the CURRENT in-app preview so you can SEE how your app renders and self-correct. " +
+        "Returns an image of what the user sees. Open a preview first (write an .html/.svg, or call preview_open). " +
+        "Use this to verify graphics/layout instead of a browser or bash/eval, which are security-gated.",
+      approval: "read",
+      parameters: T.Object({}),
+      async execute() {
+        const text = (t: string) => ({ content: [{ type: "text", text: t }] });
+        const url = process.env.LUCID_PREVIEW_SHOT_URL;
+        if (!url) return text("Preview screenshots aren't available in this environment (the desktop preview isn't running).");
+        try {
+          const r = await fetch(url);
+          if (!r.ok) return text("No preview is open to screenshot yet — write an .html/.svg or call preview_open first, then retry.");
+          const body: any = await r.json().catch(() => null);
+          const img = previewShotImage(body?.png);
+          if (!img) return text("No preview screenshot is available yet — open a preview first, then retry.");
+          return { content: [img, { type: "text", text: "Screenshot of the current preview (what the user sees)." }] };
+        } catch {
+          return text("Couldn't capture the preview screenshot.");
+        }
       },
     });
   } catch (e) {

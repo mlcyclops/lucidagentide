@@ -1944,6 +1944,9 @@ function loadPreview(target: string): void {
     frame.removeAttribute("srcdoc");
     frame.src = bridge.previewServeUrl(target);
     frame.hidden = false; empty.hidden = true;
+    // P-PREVIEW.3a-shot: once it paints, cache a PNG desktop-side so the agent's preview_screenshot tool can
+    // see what it built. Small delay lets the app's first frame render (canvas/animation). Electron-only.
+    frame.onload = () => { window.setTimeout(() => void cacheRenderedPreviewShot(), 150); };
   } else if (r.kind === "remote") {
     // P-PREVIEW.3b (ADR-0096): a remote URL reaches the internet — only load it if the egress allow-list
     // already approves the site (honoring the managed ceiling). Otherwise it stays gated; the agent must
@@ -1965,6 +1968,17 @@ function loadPreview(target: string): void {
     if (kind) kind.textContent = "";
     showEmpty(`Can't preview that - ${r.reason ?? "open a local HTML file"}.`);
   }
+}
+/** P-PREVIEW.3a-shot: after the preview paints, cache a PNG of it desktop-side so the agent's
+ *  `preview_screenshot` tool can fetch what it built. Electron-only (capturePage); a silent no-op in a
+ *  plain browser or when the frame has no size. Never throws — a failed cache just means no shot this turn. */
+async function cacheRenderedPreviewShot(): Promise<void> {
+  const frame = $("#prevFrame") as HTMLIFrameElement | null;
+  if (!frame || frame.hidden || !bridge.isElectron || !bridge.capturePreview) return;
+  const rect = frame.getBoundingClientRect();
+  if (rect.width < 2 || rect.height < 2) return;
+  const png = await bridge.capturePreview({ x: Math.round(rect.x), y: Math.round(rect.y), width: Math.round(rect.width), height: Math.round(rect.height) }).catch(() => null);
+  if (png) await bridge.cachePreviewShot(png).catch(() => { /* best-effort */ });
 }
 /** Capture the preview iframe and attach the PNG to the composer for the agent to react to. Electron-only
  *  (uses the window's capturePage via the preload seam); a no-op with a toast in a plain browser. */

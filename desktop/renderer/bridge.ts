@@ -403,6 +403,10 @@ export interface LucidBridge {
   // per-frame CSP, for the iframe's `src`. Carries the transport token as a query param (an iframe src GET
   // can't set a header). Used instead of srcdoc so the previewed app's inline scripts actually run.
   previewServeUrl(path: string): string;
+  // P-PREVIEW.3a-shot (ADR-0096): cache a PNG of the just-rendered preview desktop-side so the agent's
+  // preview_screenshot tool can fetch it (capturePage is Electron-only + in the main process, unreachable
+  // from omp). No-op if the store rejects it. The agent SEEING the shot needs the packaged/Electron app.
+  cachePreviewShot(png: string): Promise<void>;
   listDir(path?: string): Promise<FsList | null>; // in-app folder browser (works everywhere)
   revealPath(path: string): Promise<boolean>; // open a folder in the OS file manager (Electron only; false in browser)
   canRevealPath(): boolean; // whether the native shell can reveal a folder (Electron only)
@@ -604,6 +608,8 @@ export const bridge: LucidBridge = {
   previewEgressAllows: async (url) => { const d = await getData(`/api/preview/egress-check?url=${encodeURIComponent(url)}`); return !!(d as { allow?: boolean } | null)?.allow; }, // P-PREVIEW.3b
   previewFile: async (path) => { const d = await getData(`/api/preview/file?path=${encodeURIComponent(path)}`); const h = (d as { html?: unknown } | null)?.html; return typeof h === "string" ? h : null; }, // P-PREVIEW.4
   previewServeUrl: (path) => `/api/preview/serve?path=${encodeURIComponent(path)}${TOKEN ? `&t=${encodeURIComponent(TOKEN)}` : ""}`, // P-PREVIEW.4b
+  cachePreviewShot: async (png) => { await post("/api/preview/shot-cache", { png }); }, // P-PREVIEW.3a-shot
+
 
   listDir: (path) => getData(`/api/fs/list${path ? `?path=${encodeURIComponent(path)}` : ""}`),
   revealPath: (path) => (shell?.revealPath ? shell.revealPath(path) : Promise.resolve(false)),

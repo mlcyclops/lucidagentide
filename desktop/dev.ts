@@ -92,6 +92,9 @@ const PORT = Number(process.env.PORT ?? 5319);
 // HTML (only a same-origin document can read it), and required on every sensitive /api call. A new
 // random value each launch means a token never outlives the process that issued it.
 const TOKEN = randomBytes(32).toString("hex");
+// P-PREVIEW.3a-shot (ADR-0096): latest PNG of the rendered preview, pushed by the renderer after each render
+// (Electron capturePage → /api/preview/shot-cache) and read by the agent's preview_screenshot tool. In-memory.
+let latestPreviewShot: string | null = null;
 const CT: Record<string, string> = { ".html": "text/html", ".css": "text/css", ".js": "text/javascript", ".svg": "image/svg+xml", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".woff2": "font/woff2", ".woff": "font/woff", ".ttf": "font/ttf" };
 // Text-ish types take a charset; binary (images/fonts) must not (a bogus "image/png; charset" suffix).
 const isTextCT = (ct: string) => /^(text\/|application\/(javascript|json)|image\/svg)/.test(ct);
@@ -241,9 +244,11 @@ const server = Bun.serve({
     // custom header, so this ONE endpoint also accepts the per-launch token as a `?t=` query param — same
     // token, still behind the loopback (H1) + Origin/Host/CSRF (H2) gate above. Every other /api needs the header.
     if (p.startsWith("/api/") && p !== "/api/health") {
-      const tok = p === "/api/preview/serve"
-        ? (req.headers.get("x-lucid-token") ?? url.searchParams.get("t"))
-        : req.headers.get("x-lucid-token");
+      // `/api/preview/serve` (iframe src) and `/api/preview/shot` (fetched by the omp subprocess, which
+      // inherits a ready URL incl. the token via LUCID_PREVIEW_SHOT_URL) can't set a header, so they also
+      // accept the per-launch token as a `?t=` query param — same token, still behind the H1/H2 gate above.
+      const queryTokenOk = p === "/api/preview/serve" || p === "/api/preview/shot";
+      const tok = queryTokenOk ? (req.headers.get("x-lucid-token") ?? url.searchParams.get("t")) : req.headers.get("x-lucid-token");
       if (!tokenValid(tok, TOKEN)) return new Response("forbidden", { status: 403 });
     }
     try {
@@ -404,6 +409,17 @@ const server = Bun.serve({
       // its static HTML). Served via `src`, the document carries PREVIEW_FRAME_CSP: inline JS/CSS run, but
       // `connect-src 'none'` blocks all network egress. The opaque-origin sandbox (set on the iframe) keeps
       // it off LUCID's origin. Behind the transport gate (loopback + token, here via `?t=`). Read-only.
+      // P-PREVIEW.3a-shot (ADR-0096): the renderer proactively caches a PNG of the current preview here after
+      // each render (capturePage is Electron-only and lives in the main process, unreachable from omp). The
+      // agent's `preview_screenshot` tool then FETCHES it from /api/preview/shot below. In-memory, last-writer-wins.
+      if (p === "/api/preview/shot-cache" && req.method === "POST") {
+        const b = await req.json().catch(() => null) as { png?: unknown } | null;
+        latestPreviewShot = typeof b?.png === "string" && b.png.startsWith("data:image/") ? b.png : latestPreviewShot;
+        return json({ ok: true, data: { cached: !!latestPreviewShot } });
+      }
+      if (p === "/api/preview/shot") {
+        return json({ ok: true, data: { png: latestPreviewShot } });
+      }
       if (p === "/api/preview/serve") {
         const target = (url.searchParams.get("path") ?? "").trim();
         const r = readPreviewFile(target);
@@ -773,6 +789,12 @@ const server = Bun.serve({
     return new Response("not found", { status: 404 });
   },
 });
+
+// P-PREVIEW.3a-shot (ADR-0096): hand the omp subprocess a ready-to-use URL (real bound port + token) for the
+// agent's preview_screenshot tool to fetch the cached shot. omp is spawned later (lazily, by acp_backend in
+// THIS process) and inherits process.env, so setting it here — after the server binds — is enough; no
+// ACPClient env plumbing needed. 127.0.0.1 (not localhost) matches the loopback bind.
+process.env.LUCID_PREVIEW_SHOT_URL = `http://127.0.0.1:${server.port}/api/preview/shot?t=${TOKEN}`;
 
 // Build recall once at startup — the FIRST session is created lazily on the first /api/chat (never
 // via /api/newSession), so this is what carries prior-session facts into it. Best-effort; the omp
