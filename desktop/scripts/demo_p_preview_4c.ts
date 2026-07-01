@@ -35,6 +35,12 @@ if (!out.includes("run()")) fail("js should be inline");
 if (!/<img src="data:image\/png;base64,/.test(out)) fail("img should be a data: URI");
 ok("link→<style>, script src→inline <script>, img→data:");
 
+console.log("\n1b) a relative <iframe src=app.html> wrapper → srcdoc with the target inlined recursively");
+const wrapped = inlinePreviewAssets(`<iframe src="game.html?selftest=1"></iframe>`, B, fs({ "/app/game.html": `<div class="hero">PLAY</div>` }));
+if (!wrapped.includes("srcdoc=") || wrapped.includes('src="game.html') || !wrapped.includes("PLAY")) fail("wrapper iframe should inline the target as srcdoc");
+if (!wrapped.includes("class=&quot;hero&quot;")) fail("srcdoc value must be attribute-escaped");
+ok("<iframe src=game.html> → srcdoc with the game folded in (escaped)");
+
 console.log("\n2) unsafe refs are left alone (CSP blocks them) and reads never escape the app dir");
 for (const bad of ["https://cdn/x.css", "//cdn/x.js", "/root.css", "../secret.css", "a/../../esc.js", "data:text/css,x"]) {
   if (resolveLocalRef(B, bad) !== null) fail(`resolveLocalRef must reject: ${bad}`);

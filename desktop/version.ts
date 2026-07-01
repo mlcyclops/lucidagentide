@@ -27,4 +27,8 @@
 //           ImageContent (P-PREVIEW.3a-shot) — renderer caches the shot, the read-tier tool fetches it.
 // v1.8.19 = MULTI-FILE apps preview: fold an app's own relative css/js/img/fonts inline before serving
 //           (P-PREVIEW.4c) so index.html + style.css + game.js renders under the same egress-blocked CSP.
-export const APP_VERSION = "1.8.19";
+// v1.8.20 = inline expandable code preview for tool steps (P-CHAT.1) — writes syntax-highlighted (Monaco),
+//           edits as red/green diffs, "Open in editor →" into the full Monaco panel; FIX file-edit failures
+//           via edit.mode=replace + native folder Browse (P-EDIT.1); preview auto-shows (no toast) + renders
+//           nested-iframe wrappers (P-PREVIEW.4c follow-up); bigger default zoom + memory→$ icon.
+export const APP_VERSION = "1.8.20";

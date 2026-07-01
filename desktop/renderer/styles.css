@@ -439,6 +439,36 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .thoughts-step .ts-k{color:var(--cyan);font-weight:600;flex:none}
 .thoughts-step .ts-d{color:var(--txt-3);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 @keyframes spin{to{transform:rotate(360deg)}}
+.thoughts.open .thoughts-body{max-height:70vh}
+
+/* P-CHAT.1 (ADR-0104): expandable tool step — click the row to reveal the written code / edit diff inline. */
+.thoughts-step.has-code{display:block;padding:0}
+.ts-row{display:flex;align-items:center;gap:8px;width:100%;padding:5px 11px;background:none;border:0;
+  cursor:pointer;text-align:left;font:inherit;color:inherit}
+.ts-row:hover{background:var(--line-soft)}
+.ts-row .ts-d{flex:1}
+.ts-diffstat{flex:none;font-size:11px;font-family:var(--mono)}
+.ts-diffstat .ts-add{color:#4caf50}
+.ts-diffstat .ts-del{color:#e5646a}
+.ts-chev{flex:none;color:var(--txt-4);display:inline-flex;transition:transform var(--t-fast) var(--ease)}
+.thoughts-step.has-code.open .ts-chev{transform:rotate(90deg)}
+.ts-code{border-top:1px solid var(--line-soft);max-height:52vh;overflow:auto;scrollbar-width:thin;
+  background:var(--bg-0, #0b0e14)}
+.tc-bar{display:flex;align-items:center;gap:8px;padding:5px 10px;border-bottom:1px solid var(--line-soft);
+  position:sticky;top:0;background:var(--bg-0, #0b0e14);z-index:1}
+.tc-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  color:var(--txt-3);font-family:var(--mono);font-size:11px}
+.tc-open{flex:none;display:inline-flex;align-items:center;gap:4px;font-size:11px;color:var(--txt-2);
+  background:none;border:1px solid var(--line);border-radius:6px;padding:2px 8px;cursor:pointer}
+.tc-open:hover{background:var(--line-soft);color:var(--txt-1)}
+.tc-open .ic{flex:none}
+.tc-code{margin:0;padding:10px 12px;font-family:var(--mono);font-size:12px;line-height:1.55;
+  white-space:pre;color:var(--txt-2)}
+.tc-diff{font-family:var(--mono);font-size:12px;line-height:1.55;padding:6px 0}
+.tc-line{padding:0 12px;white-space:pre;color:var(--txt-3)}
+.tc-line.tc-add{background:rgba(76,175,80,.13);color:#bfe6bf}
+.tc-line.tc-del{background:rgba(229,100,106,.13);color:#f0bcbe}
+.tc-line.tc-meta{color:var(--txt-4);opacity:.72}
 
 /* reasoning ("thinking") block - P-ACP.1 (ADR-0027). Sits ABOVE the answer; streams the model's
    thought text live, then auto-collapses to a "Thought for Ns" summary when the answer takes over. */

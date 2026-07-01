@@ -120,7 +120,10 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 export type ChatEvent =
   | { type: "token"; text: string }
   | { type: "thinking"; text: string }
-  | { type: "tool"; name: string; detail: string }
+  // P-CHAT.1 (ADR-0104): `code` carries the tool's authored content so the chat can show an inline,
+  // expandable code/diff preview — a write's `content`, or an edit's `oldText`/`newText` (rendered as a
+  // diff). Bounded server-side. Absent for tools with no authored code (read/search/bash command shown as detail).
+  | { type: "tool"; name: string; detail: string; code?: { path: string; content?: string; oldText?: string; newText?: string; patch?: string } }
   | { type: "subagent"; id: string; agent: string; title: string; assignments: string[] }
   | { type: "block"; tool: string; reason: string; severity: string; findings: string; id?: string; quarantined?: boolean }
   | { type: "permission"; id: string; tool: string; detail: string; options: { optionId: string; name: string; kind?: string }[]; url?: string; egress?: boolean; localFile?: boolean; exec?: boolean; program?: string; reason?: string; danger?: boolean }
@@ -286,7 +289,34 @@ class Backend {
                 // job-coordination calls (poll/list/cancel/wait of background subagents) are internal
                 // bookkeeping while a task runs — don't surface them as separate tool chips.
               } else {
-                this.emit({ type: "tool", name: String(u.kind ?? u.title ?? "tool"), detail: String(u.title ?? ri.command ?? "") });
+                // P-CHAT.1 (ADR-0104): carry the tool's authored code for the chat's inline preview. A
+                // write's `content`, or an edit's `oldText`/`newText` (→ diff). Bounded so a huge file can't
+                // bloat the event stream; the content is already gate-scanned (it's the same tool_call text).
+                const CODE_CAP = 64 * 1024;
+                const clip = (s: unknown) => (typeof s === "string" ? s.slice(0, CODE_CAP) : undefined);
+                // The agent often writes/edits with a RELATIVE path (relative to the workspace it runs in).
+                // Preview + "Open in editor" need an ABSOLUTE path, so resolve any relative path against the
+                // workspace here (a path that's already file://, a URL, or OS-absolute is left untouched).
+                const absPath = (p: string): string => {
+                  if (!p || /^(file:\/\/|https?:\/\/|[A-Za-z]:[\\/]|\/|\\\\|~[\\/])/i.test(p)) return p;
+                  try { return join(currentWorkspace(), p); } catch { return p; }
+                };
+                const codePath = absPath(typeof ri.path === "string" ? ri.path : typeof ri.file_path === "string" ? ri.file_path : "");
+                let code: { path: string; content?: string; oldText?: string; newText?: string; patch?: string } | undefined;
+                if (typeof ri.content === "string") code = { path: codePath, content: clip(ri.content) };
+                // `replace` mode (ADR-0105, our configured edit tool) sends `edits: [{ old_text, new_text }]`
+                // (one call may bundle several hunks) — join them into one before/after pair for the diff.
+                // camelCase + top-level are kept as fallbacks for other edit-tool variants.
+                else if (Array.isArray(ri.edits) && ri.edits.length) {
+                  const olds = ri.edits.map((e: any) => String(e?.old_text ?? e?.oldText ?? "")).join("\n");
+                  const news = ri.edits.map((e: any) => String(e?.new_text ?? e?.newText ?? "")).join("\n");
+                  code = { path: codePath, oldText: clip(olds) ?? "", newText: clip(news) ?? "" };
+                }
+                else if (typeof ri.old_text === "string" || typeof ri.new_text === "string") code = { path: codePath, oldText: clip(ri.old_text) ?? "", newText: clip(ri.new_text) ?? "" };
+                else if (typeof ri.oldText === "string" || typeof ri.newText === "string") code = { path: codePath, oldText: clip(ri.oldText) ?? "", newText: clip(ri.newText) ?? "" };
+                // omp's default `hashline` edit sends a patch in a single `input` string (kept for completeness).
+                else if (typeof ri.input === "string" && (u.kind === "edit" || /\bedit\b/i.test(String(u.title ?? "")))) code = { path: codePath, patch: clip(ri.input) };
+                this.emit({ type: "tool", name: String(u.kind ?? u.title ?? "tool"), detail: String(u.title ?? ri.command ?? ""), ...(code ? { code } : {}) });
                 // P-PREVIEW.2 (ADR-0096): if this write/edit produced a browser-previewable file, tell the UI
                 // so it can auto-surface it in the Preview panel. Pure detection (previewablePath); the path
                 // is still gated by the resolver before anything renders.
@@ -295,7 +325,8 @@ class Backend {
                 // A CUSTOM tool's name does NOT survive as `u.kind` (ACP maps it to "other"); omp renders the
                 // call title as `"preview_open: <path>"`, so preview_open must be matched against the TITLE.
                 // A write/edit, by contrast, keeps a real `kind` ("edit"), which previewablePath keys on.
-                const pv = previewOpenPath(String(u.title ?? ""), ri) ?? previewablePath(String(u.kind ?? u.title ?? ""), ri);
+                const pvRaw = previewOpenPath(String(u.title ?? ""), ri) ?? previewablePath(String(u.kind ?? u.title ?? ""), ri);
+                const pv = pvRaw ? absPath(pvRaw) : pvRaw; // resolve a relative write path to absolute so the panel can render it
                 if (pv) this.emit({ type: "preview-available", path: pv });
               }
               break;
