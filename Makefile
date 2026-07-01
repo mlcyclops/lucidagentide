@@ -330,6 +330,9 @@ demo-P-PREVIEW.4: ## P-PREVIEW.4 (ADR-0096): RENDER local files in Preview via s
 demo-P-PREVIEW.4b: ## P-PREVIEW.4b (ADR-0096): serve the preview with its OWN per-frame CSP (iframe.src, not srcdoc) so the app's inline scripts RUN - a srcdoc frame inherits script-src 'self' and blocked them; connect-src 'none' still blocks egress
 	$(BUN) run desktop/scripts/demo_p_preview_4b.ts
 
+demo-P-PREVIEW.3a-shot: ## P-PREVIEW.3a-shot (ADR-0096): the agent SEES its own UI - renderer caches a preview PNG, the preview_screenshot tool fetches it as ImageContent (read-tier); every failure path degrades to text
+	$(BUN) run desktop/scripts/demo_p_preview_3a_shot.ts
+
 .PHONY: demo-P-FS.1
 demo-P-FS.1: ## P-FS.1 (ADR-0103): full-tree workspace folder browser - browse above home to the FS root / drives, with an optional managed workspaceRoots confinement
 	$(BUN) run desktop/scripts/demo_p_fs_1.ts

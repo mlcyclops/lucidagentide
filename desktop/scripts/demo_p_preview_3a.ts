@@ -34,10 +34,11 @@ console.log("== P-PREVIEW.3a — agent-invoked preview_open ==");
 console.log("\n1) the extension registers preview_open (read-tier, real TSchema) and never breaks omp");
 const tools: any[] = [];
 previewExtension({ registerTool: (t: any) => tools.push(t), typebox });
-if (tools.length !== 1 || tools[0].name !== "preview_open") fail("should register exactly preview_open");
-if (tools[0].approval !== "read") fail("preview_open must be a read-tier tool (never hits the exec gate)");
-if (!tools[0].parameters?.required?.includes("path")) fail("parameters must be a TSchema requiring `path`");
-ok(`registered: preview_open (approval=${tools[0].approval}, params=${tools[0].parameters.required})`);
+const open = tools.find((t) => t.name === "preview_open");
+if (!open) fail("should register preview_open");                          // (preview_screenshot is P-PREVIEW.3a-shot)
+if (open.approval !== "read") fail("preview_open must be a read-tier tool (never hits the exec gate)");
+if (!open.parameters?.required?.includes("path")) fail("parameters must be a TSchema requiring `path`");
+ok(`registered: preview_open (approval=${open.approval}, params=${open.parameters.required})`);
 let threw = false;
 try {
   previewExtension(null);
@@ -49,7 +50,7 @@ if (threw) fail("registration must NEVER throw (would break omp launch)");
 ok("no-registerTool / no-typebox / throwing-registerTool → no throw (omp launch safe)");
 
 console.log("\n2) execute gates the path (local .html/.svg only)");
-const t = tools[0];
+const t = open;
 if ((await t.execute("id", { path: "C:/Users/n/game.html" })).isError) fail("valid path should pass");
 ok("C:/Users/n/game.html → opens");
 for (const bad of ["src/index.ts", "game.html", ""]) {

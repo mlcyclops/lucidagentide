@@ -23,4 +23,6 @@
 //           showed only their HUD (a srcdoc frame inherited script-src 'self' and blocked inline scripts) +
 //           agent-driven preview_open finalized against the real omp API + PREVIEW_POLICY steers the agent
 //           to the panel instead of browser/eval/bash (P-PREVIEW.3a, PREFIX_VERSION 6).
-export const APP_VERSION = "1.8.17";
+// v1.8.18 = the agent can SEE its own rendered UI: preview_screenshot returns a PNG of the live preview as
+//           ImageContent (P-PREVIEW.3a-shot) — renderer caches the shot, the read-tier tool fetches it.
+export const APP_VERSION = "1.8.18";
