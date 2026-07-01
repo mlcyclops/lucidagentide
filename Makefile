@@ -344,6 +344,10 @@ demo-P-CHAT.1: ## P-CHAT.1 (ADR-0104): inline expandable code preview for tool s
 demo-P-FS.1: ## P-FS.1 (ADR-0103): full-tree workspace folder browser - browse above home to the FS root / drives, with an optional managed workspaceRoots confinement
 	$(BUN) run desktop/scripts/demo_p_fs_1.ts
 
+.PHONY: demo-P-NETWL.1
+demo-P-NETWL.1: ## P-NETWL.1 (ADR-0106): curated network whitelist (domain wildcards + IP CIDR, internal/external, trust scopes) auto-allows egress under the managed ceiling; OS-encrypted credential vault fail-closes with no plaintext
+	$(BUN) run desktop/scripts/demo_p_netwl_1.ts
+
 .PHONY: dashboards
 dashboards: ## Materialize dashboard CSVs from a DuckDB into observable/docs/data (DB=path)
 	$(BUN) run harness/scripts/materialize_dashboards.ts $(DB) observable/docs/data

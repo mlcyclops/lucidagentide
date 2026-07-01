@@ -10,13 +10,16 @@
 // browser build and the desktop app share one real backend. The preload only
 // adds native window controls + crisp zoom.
 
-import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, safeStorage, shell } from "electron";
 import { spawn, type ChildProcess } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { initAutoUpdate } from "./updater.ts";
 import { ensureRuntimes, findBun, needsBootstrap } from "./runtime.ts";
 import { createSplash, setSplashStatus } from "./splash.ts";
+import { deleteCredential, listCredentials, storeCredential, type SafeStorageLike, type VaultIo } from "./cred_vault.ts";
+import type { AuthKind } from "./network_whitelist.ts";
 
 const PORT = Number(process.env.LUCID_PORT ?? 5319);
 let REPO = "";
@@ -86,6 +89,47 @@ ipcMain.handle("lucid:pickFolder", async (e) => {
   const r = await dialog.showOpenDialog(w!, { properties: ["openDirectory", "createDirectory"], title: "Choose or create a workspace folder" });
   return r.canceled || !r.filePaths[0] ? null : r.filePaths[0];
 });
+
+// P-NETWL.1 (ADR-0106): native FILE picker for uploading an auth config / token / PEM / API-key file. Like
+// pickFolder, it uses the real OS dialog (reach anywhere), and returns the chosen path or null on cancel.
+// Optional filters/title come from the renderer; unknown shapes fall back to "all files".
+ipcMain.handle("lucid:pickFile", async (e, opts: unknown) => {
+  const w = BrowserWindow.fromWebContents(e.sender) ?? undefined;
+  const o = (opts ?? {}) as { title?: unknown; filters?: unknown };
+  const filters = Array.isArray(o.filters) ? (o.filters as { name: string; extensions: string[] }[]) : undefined;
+  const r = await dialog.showOpenDialog(w!, {
+    properties: ["openFile"],
+    title: typeof o.title === "string" ? o.title : "Choose a file",
+    ...(filters ? { filters } : {}),
+  });
+  return r.canceled || !r.filePaths[0] ? null : r.filePaths[0];
+});
+
+// P-NETWL.1 (ADR-0106): the OS-encrypted credential vault (cred_vault.ts) lives in the main process because
+// Electron's safeStorage is main-only. The renderer can STORE, LIST, and DELETE secrets; it can never READ a
+// plaintext back (decrypt stays here, for future request injection). storeCredential FAIL-CLOSES if OS
+// encryption is unavailable - the handler surfaces { error } rather than ever writing plaintext.
+const CRED_DIR = () => join(homedir(), ".omp", "lucid-cred-vault");
+const ELECTRON_SAFE_STORAGE: SafeStorageLike = {
+  isEncryptionAvailable: () => safeStorage.isEncryptionAvailable(),
+  encryptString: (s) => safeStorage.encryptString(s),
+  decryptString: (b) => safeStorage.decryptString(b),
+};
+const VAULT_IO: VaultIo = {
+  ensureDir: (dir) => mkdirSync(dir, { recursive: true }),
+  writeFile: (p, data) => writeFileSync(p, data, { mode: 0o600 }),
+  readFile: (p) => readFileSync(p),
+  exists: (p) => existsSync(p),
+  remove: (p) => rmSync(p, { force: true }),
+  list: (dir) => (existsSync(dir) ? readdirSync(dir) : []),
+};
+ipcMain.handle("lucid:credStore", (_e, input: { ref?: string; kind: AuthKind; secret: string; label?: string }) => {
+  try { return storeCredential(ELECTRON_SAFE_STORAGE, VAULT_IO, CRED_DIR(), { ...input, createdAt: Date.now() }); }
+  catch (err) { return { error: (err as Error)?.message ?? String(err) }; }
+});
+ipcMain.handle("lucid:credList", () => { try { return listCredentials(VAULT_IO, CRED_DIR()); } catch { return []; } });
+ipcMain.handle("lucid:credDelete", (_e, ref: unknown) => { try { return deleteCredential(VAULT_IO, CRED_DIR(), typeof ref === "string" ? ref : ""); } catch { return false; } });
+ipcMain.handle("lucid:credEncryptionAvailable", () => { try { return safeStorage.isEncryptionAvailable(); } catch { return false; } });
 
 // P-PREVIEW.1 (ADR-0096): capture the preview region of the window into a PNG data URL. Crops the live
 // window capture to the iframe's rect (sent by the renderer), so the agent/user gets just the previewed

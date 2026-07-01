@@ -31,4 +31,10 @@
 //           edits as red/green diffs, "Open in editor →" into the full Monaco panel; FIX file-edit failures
 //           via edit.mode=replace + native folder Browse (P-EDIT.1); preview auto-shows (no toast) + renders
 //           nested-iframe wrappers (P-PREVIEW.4c follow-up); bigger default zoom + memory→$ icon.
-export const APP_VERSION = "1.8.20";
+// v1.8.21 = network whitelist FOUNDATION (P-NETWL.1, ADR-0106): a curated allow-list — internal/external
+//           domain patterns (TLD `*.com` + exact sub-level) and IP/CIDR ranges, per-entry trust scope
+//           (always|project|loop) + call budget — auto-allows egress on top of the per-site gate, always
+//           under the enterprise-managed ceiling (fail-closed). Adds an OS-encrypted credential vault
+//           (Electron safeStorage/DPAPI) for JWT/OAuth/SAML/PEM/API-key/basic secrets — stored encrypted or
+//           REFUSED (never plaintext); native file picker + vault IPC/bridge plumbing. UI lands in .2–.4.
+export const APP_VERSION = "1.8.21";

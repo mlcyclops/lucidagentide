@@ -20,6 +20,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { managedConfig, type ManagedEgressPolicy } from "./managed_config.ts";
+import { loadWhitelist, whitelistMatch, type WhitelistStore } from "./network_whitelist.ts";
 
 const FILE = join(homedir(), ".omp", "lucid-egress.json");
 
@@ -123,9 +124,29 @@ function saveEgress(s: EgressStore): void {
   try { writeFileSync(FILE, JSON.stringify(s, null, 2), "utf8"); } catch { /* best-effort; never break a turn */ }
 }
 
-/** Read-side: is this URL allowed without asking? Honors the enterprise-managed egress ceiling. */
+/** P-NETWL.1 (ADR-0106): PURE - may the curated network whitelist AUTO-ALLOW this URL? The managed ceiling
+ *  still wins: a managed-denied host, or one outside a restrictive managed allow-list, can never be granted
+ *  by a user whitelist (tighten-only, same rule as clampEgress). Fail-closed: any error → not allowed.
+ *  Store-injected so it's testable without touching disk. */
+export function egressWhitelistAllows(store: WhitelistStore | null | undefined, url: string, managed?: ManagedEgressPolicy): boolean {
+  try {
+    if (!whitelistMatch(store, url)) return false;
+    const host = extractHost(url);
+    if (!host) return false;
+    const norm = (h: string) => h.trim().toLowerCase();
+    if (new Set((managed?.deniedHosts ?? []).map(norm)).has(host)) return false; // managed deny beats user allow
+    const allowList = (managed?.allowedHosts ?? []).map(norm).filter(Boolean);
+    if (allowList.length && !allowList.includes(host)) return false;              // restrictive managed ceiling
+    return true;
+  } catch { return false; }
+}
+
+/** Read-side: is this URL allowed without asking? A curated whitelist match (P-NETWL.1) auto-allows first;
+ *  otherwise the standing egress store decides. Both honor the enterprise-managed egress ceiling. */
 export function egressDecision(url: string): EgressVerdict {
-  return egressVerdict(clampEgress(loadEgress(), managedConfig().config?.security?.egress), url);
+  const managed = managedConfig().config?.security?.egress;
+  if (egressWhitelistAllows(loadWhitelist(), url, managed)) return "allow";
+  return egressVerdict(clampEgress(loadEgress(), managed), url);
 }
 /** Write-side: persist the user's choice (allow-once/deny are no-ops on disk). */
 export function recordEgress(url: string, choice: EgressChoice): void { saveEgress(applyEgressChoice(loadEgress(), url, choice)); }
