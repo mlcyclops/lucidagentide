@@ -394,6 +394,7 @@ export interface LucidBridge {
   // browser pickFile/credList resolve null/[] and credStore reports the vault as unavailable (fail-closed).
   pickFile(opts?: { title?: string; filters?: { name: string; extensions: string[] }[] }): Promise<string | null>;
   credStore(input: { ref?: string; kind: string; secret: string; label?: string }): Promise<CredMetaView | { error: string }>;
+  credStoreFile(input: { kind: string; label?: string }): Promise<CredMetaView | { error: string } | null>;
   credList(): Promise<CredMetaView[]>;
   credDelete(ref: string): Promise<boolean>;
   credEncryptionAvailable(): Promise<boolean>;
@@ -423,8 +424,9 @@ export interface LucidBridge {
   canRevealPath(): boolean; // whether the native shell can reveal a folder (Electron only)
 }
 
-/** Non-secret metadata about a vault credential (P-NETWL.1, ADR-0106). No plaintext ever crosses this line. */
-export interface CredMetaView { ref: string; kind: string; label?: string; createdAt?: number }
+/** Non-secret metadata about a vault credential (P-NETWL.1, ADR-0106). No plaintext ever crosses this line;
+ *  `last4` (P-KEYS.1, ADR-0107) is at most the last 4 chars, to identify a key without revealing it. */
+export interface CredMetaView { ref: string; kind: string; label?: string; last4?: string; createdAt?: number }
 
 /** A curated network-whitelist entry (P-NETWL.2, ADR-0106). Non-secret: `auth` holds only an opaque
  *  `vaultRef` into the credential vault, never the secret itself. Mirrors network_whitelist.ts WhitelistEntry. */
@@ -451,6 +453,7 @@ interface NativeShell {
   // P-NETWL.1 (ADR-0106): native file picker + OS-encrypted credential vault (Electron-only).
   pickFile?(opts?: { title?: string; filters?: { name: string; extensions: string[] }[] }): Promise<string | null>;
   credStore?(input: { ref?: string; kind: string; secret: string; label?: string }): Promise<CredMetaView | { error: string }>;
+  credStoreFile?(input: { kind: string; label?: string }): Promise<CredMetaView | { error: string } | null>;
   credList?(): Promise<CredMetaView[]>;
   credDelete?(ref: string): Promise<boolean>;
   credEncryptionAvailable?(): Promise<boolean>;
@@ -640,6 +643,7 @@ export const bridge: LucidBridge = {
   pickFolder: () => (shell?.pickFolder ? shell.pickFolder() : Promise.resolve(null)),
   pickFile: (opts) => (shell?.pickFile ? shell.pickFile(opts) : Promise.resolve(null)), // P-NETWL.1
   credStore: (input) => (shell?.credStore ? shell.credStore(input) : Promise.resolve({ error: "os-encryption-unavailable" })), // P-NETWL.1 (fail-closed in browser)
+  credStoreFile: (input) => (shell?.credStoreFile ? shell.credStoreFile(input) : Promise.resolve({ error: "os-encryption-unavailable" })), // P-NETWL.2
   credList: () => (shell?.credList ? shell.credList() : Promise.resolve([])), // P-NETWL.1
   credDelete: (ref) => (shell?.credDelete ? shell.credDelete(ref) : Promise.resolve(false)), // P-NETWL.1
   credEncryptionAvailable: () => (shell?.credEncryptionAvailable ? shell.credEncryptionAvailable() : Promise.resolve(false)), // P-NETWL.1

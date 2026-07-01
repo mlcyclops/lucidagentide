@@ -37,4 +37,14 @@
 //           under the enterprise-managed ceiling (fail-closed). Adds an OS-encrypted credential vault
 //           (Electron safeStorage/DPAPI) for JWT/OAuth/SAML/PEM/API-key/basic secrets — stored encrypted or
 //           REFUSED (never plaintext); native file picker + vault IPC/bridge plumbing. UI lands in .2–.4.
-export const APP_VERSION = "1.8.21";
+// v1.8.22 = network whitelist Settings UI (P-NETWL.2, ADR-0106): a "Network Whitelist" section to add/list/
+//           remove domain patterns (`*.com` + exact) and IP/CIDR ranges by internal/external zone + trust
+//           scope + call budget, with an optional auth credential (paste or native file upload) stored in the
+//           OS-encrypted vault (fail-closed: refused, never plaintext). CRUD via /api/whitelist; a match is
+//           read by the live egress gate to auto-allow under the managed ceiling.
+// v1.8.23 = finish the whitelist set: ENFORCE project/loop trust scopes + per-loop call budget (P-NETWL.3 -
+//           egressDecisionDetailed threads project+loop context; the loop runner caps auto-allows per host);
+//           credential last-4 masking (P-KEYS.1, ADR-0107 - the vault stores <=4 chars, the UI shows ••••XXXX);
+//           and click-to-whitelist on the Network-diagnostics DNS pills (P-NETWL.4 - a quick-add popover with
+//           zone/scope/budget). All still under the managed ceiling, fail-closed.
+export const APP_VERSION = "1.8.23";

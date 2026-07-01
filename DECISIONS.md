@@ -7943,6 +7943,65 @@ closed set - the trust SCOPES here are likewise a frozen closed set). Follow-ups
 file-upload + tooltips), P-NETWL.3 (Goal-Loop authorized engines/URLs + per-loop call budgets), P-NETWL.4 (netdiag
 DNS-pill quick-add with trust/scope picker).
 
+### P-NETWL.2 addendum (2026-07-01) - the Network Whitelist Settings UI
+
+**Status:** BUILT + live-tested. v1.8.22.
+
+Builds the visible tier on the P-NETWL.1 foundation: a **"Network Whitelist"** section in Settings
+(`secWhitelist` in `desktop/renderer/app.ts`, between MCP connectors and More providers).
+
+- **CRUD backend** (`desktop/dev.ts`): `GET /api/whitelist` (list), `POST /api/whitelist` (upsert, mints an
+  id), `POST /api/whitelist/remove` - backed by the pure `network_whitelist` store (`upsertEntry`/`removeEntry`
+  /`saveWhitelist`). Entries are NON-secret (patterns + zone/scope + an opaque `vaultRef`); `bridge` gains
+  `whitelistList/Upsert/Remove` + `WhitelistEntryView`.
+- **The section** lists entries with `domain|IP` / `internal|external` / scope badges (a non-`always` scope
+  shows a "not yet enforced" tooltip - honest, since only `always` gates today) + a Remove button, and an add
+  form with SEPARATE inputs for the pattern, kind (domain/IP), zone (intranet vs internet), trust scope, and a
+  per-loop call budget. Every control carries a custom `data-tip` tooltip.
+- **Credential attach** (optional, in a disclosure): choose an auth kind (JWT/OAuth/SAML/PEM/API-key/basic),
+  a label, a username (basic), and the secret either **pasted** (`credStore`) or **uploaded as a file**
+  (`credStoreFile` - a new main-process IPC that opens the native file dialog, reads + encrypts the file
+  ENTIRELY in main; the secret bytes never cross to the renderer). Both paths store to the OS-encrypted vault
+  and the entry keeps only the returned `vaultRef`.
+
+**Live verification (real dev server, `preview_*`):** the section renders with all controls; adding
+`*.githubusercontent.com` (external/always) and `10.0.0.0/8` (internal/project) persisted with correct badges;
+**end-to-end the live egress gate now auto-allows the whitelisted host** (`/api/preview/egress-check` →
+`raw.githubusercontent.com` and `objects.githubusercontent.com` both `allow:true`, `evil.example.com`
+`allow:false`); the **fail-closed** path held - adding an entry with a pasted secret in the plain browser (no
+`safeStorage`) was REFUSED with neither the domain nor the secret persisted (no plaintext); UI Remove worked;
+test entries were cleaned up. The vault ENCRYPTION-success path + native file upload verify in the packaged
+Electron app (safeStorage is Electron-only). Typecheck + license clean; `about`/`version` tests bumped to
+1.8.22. Still deferred to later increments: `project`/`loop` scope + call-budget ENFORCEMENT (P-NETWL.3), last-4
+masking (ADR-0107 / P-KEYS.1), and the DNS-pill quick-add (P-NETWL.4).
+
+### P-NETWL.3 addendum (2026-07-01) - ENFORCE project/loop scope + per-loop call budget
+
+**Status:** BUILT + tested. v1.8.23.
+
+The scopes P-NETWL.1 only stored are now enforced. `whitelistMatch(store, target, ctx)` honors the trust scope
+against a context: `always` everywhere; `project` only when `ctx.project` equals the entry's workspace (path
+normalized - trailing-slash + case-insensitive); `loop` only when `ctx.loop` is true. `egress_policy` gains
+`egressWhitelistEntry` (returns the granting entry) + `egressDecisionDetailed(url, ctx)` ({verdict, via, entry});
+`egressDecision(url, ctx?)` now takes optional context. `acp_backend` threads `{ project: currentWorkspace(),
+loop: this.goalActive }` at the egress site. The **per-loop call budget** is enforced by the loop runner (it
+needs mutable state): a `loopHostCalls` Map (reset each `/goal` start) counts auto-allowed calls per host;
+`withinCallBudget(used, budget)` (pure) caps them - once exhausted the whitelist stops auto-allowing that host
+this loop (falls through to prompt / fail-closed block) and records a `call-budget` LoopBlock in the AAR. The
+managed ceiling still wins over every scope. **Verified:** demo-P-NETWL.3 (project only in its workspace; loop
+only in a loop; budget 3 → `allow allow allow block block`; managed-deny beats a project allow) + live
+(loop-scoped host → egress-check with no loop context → `allow:false`). Tests: +scope/budget/normProject.
+
+### P-NETWL.4 addendum (2026-07-01) - DNS-pill quick-add
+
+**Status:** BUILT + live-tested. v1.8.23.
+
+Each DNS pill in the Network-diagnostics panel (dev mode) is now click-to-whitelist: `openWhitelistQuickAdd`
+opens a small `popover` with a zone / trust-scope / call-budget picker (an IP host defaults to the `ip` kind),
+then `whitelistUpsert`s the host. **Live-verified:** generated real Gmail DNS resolutions (`Resolve-DnsName`,
+no account access), clicked the `mail.google.com` pill, added it with `scope=loop, callBudget=5`, confirmed it
+persisted and the popover closed; screenshot captured. Clean-up removed the test entry + restored dev mode.
+
 ## ADR-0107 - Credential lifecycle (public tier): type documentation, last-4 masking, labels, rotation visibility + manual rotation, one on-prem KMS connector
 
 **Date:** 2026-07-01
@@ -8007,3 +8066,17 @@ preserves the `vaultRef`.
 ADR-0106 (P-NETWL.1, the vault this extends), ADR-0068 (P-ENT.1, the managed ceiling the enterprise policy tier
 builds on), the add-on's **ADR-A012** (the private counterpart), CLAUDE.md #3 (fail-closed: secrets never
 plaintext, decrypt main-only, KMS fetch has no fallback) and #8 (new `EventName`s are a contract change).
+
+### P-KEYS.1 addendum (2026-07-01) - last-4 masking (first slice of the public tier)
+
+**Status:** BUILT + tested. v1.8.23.
+
+Shipped the identify-without-revealing piece of ADR-0107: `cred_vault.deriveLast4(secret, kind)` (pure) derives
+at most the last four characters as NON-secret metadata (`CredMeta.last4`), stored at credential-store time and
+surfaced by `listCredentials`. For a PEM/cert the armor lines + whitespace are stripped so the last-4 identifies
+the KEY (base64 body), not the boilerplate. The Network-Whitelist UI looks up each entry's `auth.vaultRef` in the
+vault metadata and shows `••••XXXX` on the auth badge. **Verified:** unit tests (`deriveLast4` never > 4 chars,
+PEM body, short-secret-as-is; `listCredentials` surfaces `last4` but never the full secret). The full store →
+display roundtrip needs the packaged Electron app (safeStorage). Still deferred: rotation visibility + manual
+rotation + the self-host `KmsProvider` connector (the rest of P-KEYS.1/ADR-0107), and the enterprise KMS tier
+(add-on ADR-A012).

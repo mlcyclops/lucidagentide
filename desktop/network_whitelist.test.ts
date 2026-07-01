@@ -7,8 +7,8 @@
 
 import { describe, expect, test } from "bun:test";
 import {
-  emptyStore, ipv4ToInt, isIpv4, matchDomain, matchIp, normalizeHost, removeEntry, sanitizeStore,
-  upsertEntry, whitelistMatch, whitelistVerdict, type WhitelistEntry, type WhitelistStore,
+  emptyStore, ipv4ToInt, isIpv4, matchDomain, matchIp, normalizeHost, normProject, removeEntry, sanitizeStore,
+  upsertEntry, whitelistMatch, whitelistVerdict, withinCallBudget, type WhitelistEntry, type WhitelistStore,
 } from "./network_whitelist.ts";
 
 const entry = (o: Partial<WhitelistEntry> & Pick<WhitelistEntry, "id" | "pattern">): WhitelistEntry =>
@@ -84,20 +84,30 @@ describe("ipv4ToInt / isIpv4 / matchIp", () => {
   });
 });
 
-describe("whitelistMatch — only `always` scope is enforced in P-NETWL.1", () => {
-  test("an always-scoped domain wildcard grants an otherwise-unknown host", () => {
+describe("whitelistMatch — scope enforcement (P-NETWL.3)", () => {
+  test("an always-scoped domain wildcard grants an otherwise-unknown host, in any context", () => {
     const s = store(entry({ id: "1", pattern: "*.example.com", scope: "always" }));
     expect(whitelistMatch(s, "https://api.example.com/x")?.id).toBe("1");
     expect(whitelistVerdict(s, "https://api.example.com/x")).toBe("allow");
+    expect(whitelistVerdict(s, "https://api.example.com/x", { loop: true, project: "/anything" })).toBe("allow");
   });
   test("an always-scoped IP CIDR grants a literal-IP host", () => {
     const s = store(entry({ id: "ip", kind: "ip", pattern: "10.0.0.0/8", zone: "internal", scope: "always" }));
     expect(whitelistVerdict(s, "http://10.1.2.3:9000")).toBe("allow");
     expect(whitelistVerdict(s, "http://11.1.2.3")).toBe("none");
   });
-  test("project + loop scoped entries do NOT grant yet (deferred to P-NETWL.2/.3)", () => {
-    expect(whitelistVerdict(store(entry({ id: "p", pattern: "*.example.com", scope: "project" })), "https://api.example.com")).toBe("none");
-    expect(whitelistVerdict(store(entry({ id: "l", pattern: "*.example.com", scope: "loop" })), "https://api.example.com")).toBe("none");
+  test("a project-scoped entry grants ONLY within its own workspace (path normalized)", () => {
+    const s = store(entry({ id: "p", pattern: "*.example.com", scope: "project", project: "C:/work/app" }));
+    expect(whitelistVerdict(s, "https://api.example.com", { project: "C:/work/app" })).toBe("allow");
+    expect(whitelistVerdict(s, "https://api.example.com", { project: "C:/WORK/app/" })).toBe("allow"); // case + trailing slash
+    expect(whitelistVerdict(s, "https://api.example.com", { project: "C:/work/other" })).toBe("none");
+    expect(whitelistVerdict(s, "https://api.example.com")).toBe("none"); // no project context → no grant
+  });
+  test("a loop-scoped entry grants ONLY inside a goal loop", () => {
+    const s = store(entry({ id: "l", pattern: "*.example.com", scope: "loop" }));
+    expect(whitelistVerdict(s, "https://api.example.com", { loop: true })).toBe("allow");
+    expect(whitelistVerdict(s, "https://api.example.com", { loop: false })).toBe("none");
+    expect(whitelistVerdict(s, "https://api.example.com")).toBe("none"); // no loop context → no grant
   });
   test("no match / empty store / null store → none (fail-closed)", () => {
     expect(whitelistVerdict(store(entry({ id: "1", pattern: "example.com" })), "https://other.com")).toBe("none");
@@ -109,6 +119,23 @@ describe("whitelistMatch — only `always` scope is enforced in P-NETWL.1", () =
     const bad = { id: "x", scope: "always" } as unknown as WhitelistEntry; // no pattern
     expect(whitelistVerdict(store(bad, entry({ id: "ok", pattern: "example.com" })), "https://example.com")).toBe("allow");
     expect(whitelistVerdict(store(bad), "https://example.com")).toBe("none");
+  });
+});
+
+describe("withinCallBudget (P-NETWL.3) + normProject", () => {
+  test("null/undefined budget is unlimited; otherwise used < budget", () => {
+    expect(withinCallBudget(0, null)).toBe(true);
+    expect(withinCallBudget(999, undefined)).toBe(true);
+    expect(withinCallBudget(0, 3)).toBe(true);
+    expect(withinCallBudget(2, 3)).toBe(true);
+    expect(withinCallBudget(3, 3)).toBe(false); // 4th call (used=3) exceeds a budget of 3
+    expect(withinCallBudget(4, 3)).toBe(false);
+    expect(withinCallBudget(0, 0)).toBe(false); // budget 0 blocks immediately
+  });
+  test("normProject trims trailing separators + lowercases", () => {
+    expect(normProject("C:/Work/App/")).toBe("c:/work/app");
+    expect(normProject("C:\\Work\\App\\")).toBe("c:\\work\\app");
+    expect(normProject("  /home/x  ")).toBe("/home/x");
   });
 });
 

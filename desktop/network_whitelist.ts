@@ -23,10 +23,10 @@
 // error, or unmatched target yields "no whitelist match", and the call falls through to the normal egress
 // prompt. No path here can turn a would-be prompt into a block being skipped for the wrong reason.
 //
-// SCOPE OF P-NETWL.1: only the `always` scope is ENFORCED here. `project` and `loop` entries are stored and
-// round-tripped (so the schema is frozen once) but are NOT yet granted by whitelistMatch - they land with
-// the Settings UI (P-NETWL.2) and the Goal Loop (P-NETWL.3). The call budget is likewise recorded now and
-// enforced by the loop later. Recognizing them now keeps the on-disk schema stable across those increments.
+// SCOPE ENFORCEMENT (P-NETWL.3): `whitelistMatch` now honors ALL scopes given a context - `always` grants
+// everywhere; `project` grants only when `ctx.project` equals the entry's workspace; `loop` grants only when
+// `ctx.loop` is true (inside a goal loop). The per-entry `callBudget` is a per-loop cap the loop RUNNER
+// enforces (it needs mutable per-loop counters), not this pure matcher - see acp_backend.ts.
 
 import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -155,18 +155,29 @@ export function matchDomain(pattern: string, host: string): boolean {
 
 // ── verdict (the load-bearing, fail-closed grant) ───────────────────────────────────────────────────
 
-/** Pure: does the whitelist AUTO-ALLOW this target, and via which entry? Returns the matching entry or
- *  null. P-NETWL.1 enforces ONLY scope `always`; `project`/`loop` are recognized but not yet granted.
- *  Fail-closed: a malformed entry is skipped, never granted. */
-export function whitelistMatch(store: WhitelistStore | null | undefined, target: string, _ctx: WhitelistContext = {}): WhitelistEntry | null {
+/** Normalize a project / workspace path for comparison: trim trailing separators, case-insensitive (the
+ *  primary Windows host treats paths case-insensitively). Pure. */
+export function normProject(p: string): string {
+  return p.trim().replace(/[\\/]+$/, "").toLowerCase();
+}
+
+/** Pure: does the whitelist AUTO-ALLOW this target, and via which entry? Returns the matching entry or null.
+ *  Honors the trust scope against the context (P-NETWL.3): `always` everywhere; `project` only when
+ *  `ctx.project` equals the entry's workspace; `loop` only when `ctx.loop` is true. Fail-closed: a malformed
+ *  entry, or one whose scope isn't satisfied, is skipped - never granted. */
+export function whitelistMatch(store: WhitelistStore | null | undefined, target: string, ctx: WhitelistContext = {}): WhitelistEntry | null {
   const host = normalizeHost(target);
   if (!host) return null;
   const entries = store?.entries;
   if (!Array.isArray(entries)) return null;
+  const proj = ctx.project ? normProject(ctx.project) : null;
   for (const e of entries) {
     try {
       if (!e || typeof e !== "object" || typeof e.pattern !== "string") continue;
-      if (e.scope !== "always") continue; // only `always` enforced in P-NETWL.1
+      // scope gate — the entry only participates if its scope is satisfied by the context.
+      if (e.scope === "project") { if (!proj || !e.project || normProject(e.project) !== proj) continue; }
+      else if (e.scope === "loop") { if (!ctx.loop) continue; }
+      // else "always": no scope constraint.
       const ok = e.kind === "ip" ? matchIp(e.pattern, host) : matchDomain(e.pattern, host);
       if (ok) return e;
     } catch { /* fail-closed: a bad entry never grants access */ }
@@ -177,6 +188,14 @@ export function whitelistMatch(store: WhitelistStore | null | undefined, target:
 /** Thin verdict wrapper. */
 export function whitelistVerdict(store: WhitelistStore | null | undefined, target: string, ctx: WhitelistContext = {}): "allow" | "none" {
   return whitelistMatch(store, target, ctx) ? "allow" : "none";
+}
+
+/** Per-loop call-budget check (P-NETWL.3): given how many times a host has ALREADY been auto-allowed this
+ *  loop and the entry's `callBudget`, may THIS call still auto-allow? A null/undefined budget = unlimited.
+ *  Pure; the loop runner owns the per-host counter (see acp_backend.ts loopHostCalls). */
+export function withinCallBudget(used: number, budget: number | null | undefined): boolean {
+  if (budget == null) return true;
+  return used < budget;
 }
 
 // ── pure store edits ─────────────────────────────────────────────────────────────────────────────────

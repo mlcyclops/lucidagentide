@@ -348,6 +348,10 @@ demo-P-FS.1: ## P-FS.1 (ADR-0103): full-tree workspace folder browser - browse a
 demo-P-NETWL.1: ## P-NETWL.1 (ADR-0106): curated network whitelist (domain wildcards + IP CIDR, internal/external, trust scopes) auto-allows egress under the managed ceiling; OS-encrypted credential vault fail-closes with no plaintext
 	$(BUN) run desktop/scripts/demo_p_netwl_1.ts
 
+.PHONY: demo-P-NETWL.3
+demo-P-NETWL.3: ## P-NETWL.3 (ADR-0106): enforce project/loop trust scopes + per-loop call budget (first N auto-allow, then block), all under the managed ceiling
+	$(BUN) run desktop/scripts/demo_p_netwl_3.ts
+
 .PHONY: dashboards
 dashboards: ## Materialize dashboard CSVs from a DuckDB into observable/docs/data (DB=path)
 	$(BUN) run harness/scripts/materialize_dashboards.ts $(DB) observable/docs/data

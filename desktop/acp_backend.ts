@@ -37,7 +37,8 @@ import { formatSpend } from "./loop_report.ts";
 import { assessReadiness, maturedGoalFrom, mergeMatured, parsePreflightJson, type PreflightSpec, preflightSystemPrompt, preflightUserPrompt, type ReadinessReport, relevantPriorRuns, renderLoopDesign, successCriteria, summarizePriorRuns } from "./loop_preflight.ts";
 import { execFileSync } from "node:child_process";
 import { type Automation, listAutomations, nextDueAutomation, updateAutomation } from "./automations.ts";
-import { type EgressChoice, egressDecision, isLocalFileTarget, recordEgress } from "./egress_policy.ts";
+import { type EgressChoice, egressDecisionDetailed, extractHost, isLocalFileTarget, recordEgress } from "./egress_policy.ts";
+import { withinCallBudget } from "./network_whitelist.ts";
 import { previewOpenPath, previewablePath } from "./preview_resolve.ts";
 import { gateDenyReason } from "./gate_audit.ts";
 import { type ExecChoice, type ExecClass, classifyCommand, classifyEval, execStore, execVerdict, recordExec } from "./exec_policy.ts";
@@ -192,6 +193,9 @@ class Backend {
   private loopDial: LoopDial | null = null;
   private loopBlocks: LoopBlock[] = [];
   private loopIter = 0;
+  // P-NETWL.3 (ADR-0106): per-loop count of auto-allowed calls to each whitelisted host, so a whitelist
+  // entry's `callBudget` caps how many times it auto-allows PER LOOP. Reset at each /goal loop start.
+  private loopHostCalls = new Map<string, number>();
   private permSeq = 0;
   private permPending = new Map<string, (optionId: string | null) => void>();
   private pendingPerms = 0;             // while > 0 the turn's idle/stall clock is paused
@@ -392,7 +396,24 @@ class Backend {
               // website visit — a host-based standing allow can't apply, so we still PROMPT, but with an
               // accurate local-file dialog (and never persist a host decision for it).
               const localFile = !!target && isLocalFileTarget(target);
-              const standingAllow = !localFile && !!target && egressDecision(target) === "allow";
+              // P-NETWL.3 (ADR-0106): decide WITH context so `project`/`loop`-scoped whitelist entries apply,
+              // and enforce a matched entry's per-loop `callBudget`. In a loop, once a budgeted host's calls
+              // are used up the whitelist stops auto-allowing it (falls through to prompt/fail-closed block).
+              const inLoop = this.goalActive;
+              const d = !localFile && !!target
+                ? egressDecisionDetailed(target, { project: currentWorkspace(), loop: inLoop })
+                : { verdict: "prompt" as const, via: "host" as const };
+              let standingAllow = d.verdict === "allow";
+              if (standingAllow && d.via === "whitelist" && inLoop && d.entry?.callBudget != null) {
+                const host = extractHost(target!) ?? target!;
+                const used = this.loopHostCalls.get(host) ?? 0;
+                if (!withinCallBudget(used, d.entry.callBudget)) {
+                  standingAllow = false; // budget exhausted this loop → no longer auto-allowed
+                  this.loopBlocks.push({ iter: this.loopIter, tool: "egress", tier: "T2", reason: "call-budget" });
+                } else {
+                  this.loopHostCalls.set(host, used + 1);
+                }
+              }
               // P-GATE-DIAG.1: record WHY this egress call gets its outcome (esp. a no-prompt block).
               this.recordGateDiag({ kind: "egress", tool: toolName.slice(0, 40), target: (target ?? "").slice(0, 80), localFile, askActive: this.askActive, listener: !!this.listener, goalActive: this.goalActive, autoRunning: this.autoRunning, decision: standingAllow ? "allow(standing)" : (this.askActive && this.listener) ? "prompt" : "block(no-ui)" });
               if (standingAllow) {
@@ -745,7 +766,7 @@ class Backend {
     const loopMax = managedConfig().config?.security?.loop?.maxAutoTier;
     const rawDial = opts.dial ?? {};
     this.loopDial = { shell: clampDialRow(rawDial.shell, loopMax), edit: clampDialRow(rawDial.edit, loopMax), delete: clampDialRow(rawDial.delete, loopMax), "web-fetch": clampDialRow(rawDial["web-fetch"], loopMax), "web-search": clampDialRow(rawDial["web-search"], loopMax), subagent: clampDialRow(rawDial.subagent, loopMax) };
-    this.loopBlocks = []; this.loopIter = 0;
+    this.loopBlocks = []; this.loopIter = 0; this.loopHostCalls.clear();
     // P-GOAL.3/4: durable on-disk memory (best-effort). `resume` continues an existing loop-memory file
     // and injects its prior progress; otherwise start a fresh record.
     const resumed = opts.resume ? resumeGoalMemory(currentWorkspace(), opts.resume) : null;

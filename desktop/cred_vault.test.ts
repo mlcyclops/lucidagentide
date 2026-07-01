@@ -8,7 +8,7 @@
 
 import { describe, expect, test } from "bun:test";
 import {
-  deleteCredential, isValidRef, listCredentials, readCredential, storeCredential,
+  deleteCredential, deriveLast4, isValidRef, listCredentials, readCredential, storeCredential,
   type SafeStorageLike, type VaultIo,
 } from "./cred_vault.ts";
 
@@ -35,6 +35,21 @@ function memIo(): VaultIo & { files: Map<string, Buffer> } {
 }
 
 const DIR = "/vault";
+
+describe("deriveLast4 (P-KEYS.1) — identify a key, never reveal it", () => {
+  test("returns at most the last 4 chars; trailing whitespace ignored; short secret as-is", () => {
+    expect(deriveLast4("sk-live-abcdEF99")).toBe("EF99");
+    expect(deriveLast4("abcdef")).toBe("cdef");
+    expect(deriveLast4("token-value\n\n")).toBe("alue");
+    expect(deriveLast4("ab")).toBe("ab");   // shorter than 4 (never a real secret) → as-is
+    expect(deriveLast4("")).toBe("");
+    expect(deriveLast4("wxyz").length).toBeLessThanOrEqual(4);
+  });
+  test("PEM uses the base64 body's last 4 (armor + whitespace stripped), so it IDs the key not the header", () => {
+    const pem = "-----BEGIN PRIVATE KEY-----\nMIIBVAIBADANBg==\n-----END PRIVATE KEY-----\n";
+    expect(deriveLast4(pem, "pem")).toBe("Bg==");
+  });
+});
 
 describe("isValidRef", () => {
   test("accepts safe handles, rejects traversal / bad chars / empty", () => {
@@ -89,15 +104,15 @@ describe("readCredential — fail-closed reads", () => {
 });
 
 describe("listCredentials / deleteCredential", () => {
-  test("list returns metadata only; delete removes blob + meta", () => {
+  test("list returns metadata only (incl. last4); delete removes blob + meta", () => {
     const io = memIo();
     const ss = fakeSafe(true);
-    storeCredential(ss, io, DIR, { ref: "a", kind: "jwt", secret: "s1", label: "one" });
-    storeCredential(ss, io, DIR, { ref: "b", kind: "pem", secret: "s2" });
+    storeCredential(ss, io, DIR, { ref: "a", kind: "jwt", secret: "jwt-body-AAAA", label: "one" });
+    storeCredential(ss, io, DIR, { ref: "b", kind: "pem", secret: "pem-body-BBBB" });
     const list = listCredentials(io, DIR).sort((x, y) => x.ref.localeCompare(y.ref));
     expect(list.map((m) => m.ref)).toEqual(["a", "b"]);
-    expect(list[0]).toMatchObject({ ref: "a", kind: "jwt", label: "one" });
-    expect(JSON.stringify(list)).not.toContain("s1"); // metadata carries no secret
+    expect(list[0]).toMatchObject({ ref: "a", kind: "jwt", label: "one", last4: "AAAA" }); // last4 surfaced
+    expect(JSON.stringify(list)).not.toContain("jwt-body"); // the FULL secret never leaks - only last4
     expect(deleteCredential(io, DIR, "a")).toBe(true);
     expect(io.files.has(`${DIR}/a.bin`)).toBe(false);
     expect(io.files.has(`${DIR}/a.meta.json`)).toBe(false);

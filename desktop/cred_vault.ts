@@ -39,12 +39,28 @@ export interface VaultIo {
   list(dir: string): string[];
 }
 
-/** Non-secret metadata about a stored credential - safe to return to the renderer for listing. */
+/** Non-secret metadata about a stored credential - safe to return to the renderer for listing. `last4` is at
+ *  MOST the last four characters, kept so the UI can identify WHICH key it is without revealing it. */
 export interface CredMeta {
   ref: string;
   kind: AuthKind;
   label?: string;
+  last4?: string;
   createdAt?: number;
+}
+
+/** P-KEYS.1 (ADR-0107): derive the non-secret last-4 identifier from a secret. Never returns more than four
+ *  characters. For a PEM/cert the armor lines are stripped so it identifies the KEY (base64 body), not the
+ *  boilerplate header. Trailing whitespace/newlines are ignored so a copy-pasted token isn't mis-tailed.
+ *  Pure. A secret shorter than 4 chars (never a real credential) returns as-is. */
+export function deriveLast4(secret: string, kind?: AuthKind): string {
+  let s = (secret ?? "").replace(/\s+$/, "");
+  if (kind === "pem") {
+    const body = s.replace(/-----[^-]*-----/g, "").replace(/\s+/g, "");
+    if (body) s = body;
+  }
+  s = s.trim();
+  return s.length <= 4 ? s : s.slice(-4);
 }
 
 export interface StoreCredentialInput {
@@ -70,7 +86,7 @@ export function storeCredential(ss: SafeStorageLike, io: VaultIo, dir: string, i
   const ref = input.ref && input.ref.length ? input.ref : mintRef(input.kind, input.createdAt);
   if (!isValidRef(ref)) throw new Error("invalid-ref");
   if (typeof input.secret !== "string" || input.secret.length === 0) throw new Error("empty-secret");
-  const meta: CredMeta = { ref, kind: input.kind, createdAt: input.createdAt };
+  const meta: CredMeta = { ref, kind: input.kind, createdAt: input.createdAt, last4: deriveLast4(input.secret, input.kind) };
   if (input.label) meta.label = input.label;
   io.ensureDir(dir);
   const enc = ss.encryptString(input.secret); // Buffer of OS-encrypted bytes
@@ -100,7 +116,7 @@ export function listCredentials(io: VaultIo, dir: string): CredMeta[] {
     if (!isValidRef(ref)) continue;
     try {
       const m = JSON.parse(io.readFile(path(dir, ref, "meta.json")).toString("utf8")) as CredMeta;
-      if (m && typeof m.ref === "string") out.push({ ref: m.ref, kind: m.kind, label: m.label, createdAt: m.createdAt });
+      if (m && typeof m.ref === "string") out.push({ ref: m.ref, kind: m.kind, label: m.label, last4: m.last4, createdAt: m.createdAt });
     } catch { /* skip unreadable metadata */ }
   }
   return out;
