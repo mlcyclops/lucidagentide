@@ -1850,6 +1850,9 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .abadge.ok{background:var(--green-dim);color:#84e3a6;box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--green) 30%,transparent)}
 .abadge.set{background:var(--cyan-dim);color:#8fe0ee;font-family:var(--mono);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--cyan) 28%,transparent)}
 .abadge.none{background:var(--bg-3);color:var(--txt-4)}
+/* P-KEYS.2 (ADR-0107): rotation-status badge tones */
+.abadge.warn{background:color-mix(in srgb,var(--yellow,#e0a94f) 18%,transparent);color:#e9c583;box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--yellow,#e0a94f) 32%,transparent)}
+.abadge.danger{background:color-mix(in srgb,var(--red,#e06b6b) 16%,transparent);color:#f0a6a6;box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--red,#e06b6b) 32%,transparent)}
 .prov-body{display:flex;flex-direction:column;gap:8px}
 .prov-row{display:flex;align-items:center;gap:8px}
 .prov-hint{margin-top:2px;font-size:11px;color:var(--txt-3);line-height:1.45;display:flex;gap:5px;align-items:flex-start}

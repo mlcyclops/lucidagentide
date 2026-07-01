@@ -8,8 +8,8 @@
 
 import { describe, expect, test } from "bun:test";
 import {
-  deleteCredential, deriveLast4, isValidRef, listCredentials, readCredential, storeCredential,
-  type SafeStorageLike, type VaultIo,
+  deleteCredential, deriveLast4, isValidRef, listCredentials, readCredential, rotateCredential,
+  rotationLabel, rotationStatus, storeCredential, type SafeStorageLike, type VaultIo,
 } from "./cred_vault.ts";
 
 // A fake safeStorage: reversible but genuinely OBSCURING (base64), so the blob never literally contains the
@@ -100,6 +100,52 @@ describe("readCredential — fail-closed reads", () => {
     expect(readCredential(fakeSafe(true), io, DIR, "nope")).toBeNull();
     expect(readCredential(fakeSafe(true), io, DIR, "../escape")).toBeNull();
     expect(readCredential(fakeSafe(false), io, DIR, "r1")).toBeNull(); // no decrypt when unavailable
+  });
+});
+
+describe("rotateCredential (P-KEYS.2) — replace in place, fail-closed", () => {
+  test("re-encrypts under the SAME ref, bumps rotatedAt + last4, preserves createdAt/label/kind/interval", () => {
+    const io = memIo(); const ss = fakeSafe(true);
+    storeCredential(ss, io, DIR, { ref: "k1", kind: "jwt", secret: "old-secret-AAAA", label: "prod", createdAt: 1000, rotationIntervalDays: 30 });
+    const m = rotateCredential(ss, io, DIR, { ref: "k1", secret: "new-secret-BBBB", rotatedAt: 5000 });
+    expect(m).not.toBeNull();
+    expect(m!).toMatchObject({ ref: "k1", kind: "jwt", label: "prod", createdAt: 1000, rotatedAt: 5000, last4: "BBBB", rotationIntervalDays: 30 });
+    expect(readCredential(ss, io, DIR, "k1")).toBe("new-secret-BBBB"); // decrypts to the NEW secret
+    expect(io.files.get(`${DIR}/k1.bin`)!.toString("utf8")).not.toContain("old-secret"); // old ciphertext overwritten
+  });
+  test("unknown ref → null, nothing written", () => {
+    const io = memIo();
+    expect(rotateCredential(fakeSafe(true), io, DIR, { ref: "nope", secret: "x", rotatedAt: 1 })).toBeNull();
+    expect(io.files.size).toBe(0);
+  });
+  test("fail-closed: encryption unavailable → throws and the OLD secret is left intact", () => {
+    const io = memIo();
+    storeCredential(fakeSafe(true), io, DIR, { ref: "k1", kind: "apikey", secret: "keep-me-OLD", createdAt: 1 });
+    expect(() => rotateCredential(fakeSafe(false), io, DIR, { ref: "k1", secret: "new", rotatedAt: 2 })).toThrow("os-encryption-unavailable");
+    expect(readCredential(fakeSafe(true), io, DIR, "k1")).toBe("keep-me-OLD"); // untouched
+  });
+  test("empty new secret → throws", () => {
+    const io = memIo();
+    storeCredential(fakeSafe(true), io, DIR, { ref: "k1", kind: "jwt", secret: "old", createdAt: 1 });
+    expect(() => rotateCredential(fakeSafe(true), io, DIR, { ref: "k1", secret: "", rotatedAt: 2 })).toThrow("empty-secret");
+  });
+});
+
+describe("rotationStatus / rotationLabel (P-KEYS.2)", () => {
+  const DAY = 86_400_000;
+  test("age / overdue / due / expiry math", () => {
+    const now = 100 * DAY;
+    expect(rotationStatus({ rotatedAt: 60 * DAY, rotationIntervalDays: 30 }, now)).toMatchObject({ ageDays: 40, overdue: true });
+    expect(rotationStatus({ rotatedAt: 95 * DAY, rotationIntervalDays: 30 }, now)).toMatchObject({ ageDays: 5, overdue: false, dueInDays: 25 });
+    expect(rotationStatus({ rotatedAt: 99 * DAY, expiresAt: 90 * DAY }, now).expired).toBe(true);
+    expect(rotationStatus({ createdAt: 98 * DAY }, now)).toMatchObject({ ageDays: 2, overdue: false }); // rotatedAt falls back to createdAt
+  });
+  test("label — worst state wins", () => {
+    expect(rotationLabel({ overdue: false, expired: true })).toMatchObject({ text: "expired", tone: "danger" });
+    expect(rotationLabel({ overdue: true, expired: false })).toMatchObject({ text: "rotation due", tone: "danger" });
+    expect(rotationLabel({ overdue: false, expired: false, expiresInDays: 3 }).tone).toBe("warn");
+    expect(rotationLabel({ overdue: false, expired: false, dueInDays: 2 }).tone).toBe("warn");
+    expect(rotationLabel({ overdue: false, expired: false, ageDays: 12 })).toMatchObject({ text: "rotated 12d ago", tone: "ok" });
   });
 });
 

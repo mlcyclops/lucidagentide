@@ -47,4 +47,9 @@
 //           credential last-4 masking (P-KEYS.1, ADR-0107 - the vault stores <=4 chars, the UI shows ••••XXXX);
 //           and click-to-whitelist on the Network-diagnostics DNS pills (P-NETWL.4 - a quick-add popover with
 //           zone/scope/budget). All still under the managed ceiling, fail-closed.
-export const APP_VERSION = "1.8.23";
+// v1.8.24 = credential rotation (P-KEYS.2, ADR-0107): rotation VISIBILITY on each whitelisted key
+//           (rotated Nd ago / rotation due / expires in Nd / expired - all from non-secret metadata) + manual
+//           ROTATE-in-place (paste or file, same vaultRef preserved, rotatedAt bumped, last-4 refreshed;
+//           fail-closed - the old secret is left intact if the OS keystore is unavailable). Optional
+//           "rotate every N days" reminder on the add form.
+export const APP_VERSION = "1.8.24";

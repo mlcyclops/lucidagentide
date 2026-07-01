@@ -18,7 +18,7 @@ import { join } from "node:path";
 import { initAutoUpdate } from "./updater.ts";
 import { ensureRuntimes, findBun, needsBootstrap } from "./runtime.ts";
 import { createSplash, setSplashStatus } from "./splash.ts";
-import { deleteCredential, listCredentials, storeCredential, type SafeStorageLike, type VaultIo } from "./cred_vault.ts";
+import { deleteCredential, listCredentials, rotateCredential, storeCredential, type SafeStorageLike, type VaultIo } from "./cred_vault.ts";
 import type { AuthKind } from "./network_whitelist.ts";
 
 const PORT = Number(process.env.LUCID_PORT ?? 5319);
@@ -123,9 +123,29 @@ const VAULT_IO: VaultIo = {
   remove: (p) => rmSync(p, { force: true }),
   list: (dir) => (existsSync(dir) ? readdirSync(dir) : []),
 };
-ipcMain.handle("lucid:credStore", (_e, input: { ref?: string; kind: AuthKind; secret: string; label?: string }) => {
+ipcMain.handle("lucid:credStore", (_e, input: { ref?: string; kind: AuthKind; secret: string; label?: string; expiresAt?: number; rotationIntervalDays?: number }) => {
   try { return storeCredential(ELECTRON_SAFE_STORAGE, VAULT_IO, CRED_DIR(), { ...input, createdAt: Date.now() }); }
   catch (err) { return { error: (err as Error)?.message ?? String(err) }; }
+});
+// P-KEYS.2 (ADR-0107): rotate a stored secret IN PLACE (same ref), by paste or by file. Fail-closed: throws
+// (surfaced as {error}) if OS encryption is unavailable, leaving the old secret intact; the secret bytes for
+// the file path are read + re-encrypted in main, never crossing to the renderer.
+ipcMain.handle("lucid:credRotate", (_e, input: { ref: string; secret: string; expiresAt?: number }) => {
+  try { return rotateCredential(ELECTRON_SAFE_STORAGE, VAULT_IO, CRED_DIR(), { ...input, rotatedAt: Date.now() }) ?? { error: "not-found" }; }
+  catch (err) { return { error: (err as Error)?.message ?? String(err) }; }
+});
+ipcMain.handle("lucid:credRotateFile", async (e, input: { ref: string }) => {
+  try {
+    const w = BrowserWindow.fromWebContents(e.sender) ?? undefined;
+    const r = await dialog.showOpenDialog(w!, {
+      properties: ["openFile"],
+      title: "Choose the new secret file (rotation)",
+      filters: [{ name: "Keys & tokens", extensions: ["pem", "key", "crt", "cer", "jwt", "json", "txt", "token"] }, { name: "All files", extensions: ["*"] }],
+    });
+    if (r.canceled || !r.filePaths[0]) return null;
+    const secret = readFileSync(r.filePaths[0], "utf8");
+    return rotateCredential(ELECTRON_SAFE_STORAGE, VAULT_IO, CRED_DIR(), { ref: input.ref, secret, rotatedAt: Date.now() }) ?? { error: "not-found" };
+  } catch (err) { return { error: (err as Error)?.message ?? String(err) }; }
 });
 ipcMain.handle("lucid:credList", () => { try { return listCredentials(VAULT_IO, CRED_DIR()); } catch { return []; } });
 ipcMain.handle("lucid:credDelete", (_e, ref: unknown) => { try { return deleteCredential(VAULT_IO, CRED_DIR(), typeof ref === "string" ? ref : ""); } catch { return false; } });
@@ -133,7 +153,7 @@ ipcMain.handle("lucid:credEncryptionAvailable", () => { try { return safeStorage
 // P-NETWL.2 (ADR-0106): upload an auth file (token / PEM / API-key / config) straight into the vault. The
 // file is picked + read + encrypted ENTIRELY in main - the secret bytes never cross to the renderer (unlike a
 // paste flow). Returns the credential metadata (+ the source filename as a default label) or { error }.
-ipcMain.handle("lucid:credStoreFile", async (e, input: { kind: AuthKind; label?: string }) => {
+ipcMain.handle("lucid:credStoreFile", async (e, input: { kind: AuthKind; label?: string; expiresAt?: number; rotationIntervalDays?: number }) => {
   try {
     const w = BrowserWindow.fromWebContents(e.sender) ?? undefined;
     const r = await dialog.showOpenDialog(w!, {
@@ -145,7 +165,7 @@ ipcMain.handle("lucid:credStoreFile", async (e, input: { kind: AuthKind; label?:
     const p = r.filePaths[0];
     const secret = readFileSync(p, "utf8");
     const label = input.label && input.label.trim() ? input.label : p.replace(/^.*[\\/]/, ""); // default label = filename
-    return storeCredential(ELECTRON_SAFE_STORAGE, VAULT_IO, CRED_DIR(), { kind: input.kind, secret, label, createdAt: Date.now() });
+    return storeCredential(ELECTRON_SAFE_STORAGE, VAULT_IO, CRED_DIR(), { kind: input.kind, secret, label, createdAt: Date.now(), expiresAt: input.expiresAt, rotationIntervalDays: input.rotationIntervalDays });
   } catch (err) { return { error: (err as Error)?.message ?? String(err) }; }
 });
 

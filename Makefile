@@ -352,6 +352,10 @@ demo-P-NETWL.1: ## P-NETWL.1 (ADR-0106): curated network whitelist (domain wildc
 demo-P-NETWL.3: ## P-NETWL.3 (ADR-0106): enforce project/loop trust scopes + per-loop call budget (first N auto-allow, then block), all under the managed ceiling
 	$(BUN) run desktop/scripts/demo_p_netwl_3.ts
 
+.PHONY: demo-P-KEYS.2
+demo-P-KEYS.2: ## P-KEYS.2 (ADR-0107): credential rotation visibility (age/due/expiry, non-secret) + manual rotate-in-place (same ref, fail-closed)
+	$(BUN) run desktop/scripts/demo_p_keys_2.ts
+
 .PHONY: dashboards
 dashboards: ## Materialize dashboard CSVs from a DuckDB into observable/docs/data (DB=path)
 	$(BUN) run harness/scripts/materialize_dashboards.ts $(DB) observable/docs/data

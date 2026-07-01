@@ -8080,3 +8080,21 @@ PEM body, short-secret-as-is; `listCredentials` surfaces `last4` but never the f
 display roundtrip needs the packaged Electron app (safeStorage). Still deferred: rotation visibility + manual
 rotation + the self-host `KmsProvider` connector (the rest of P-KEYS.1/ADR-0107), and the enterprise KMS tier
 (add-on ADR-A012).
+
+### P-KEYS.2 addendum (2026-07-01) - rotation visibility + manual rotate-in-place
+
+**Status:** BUILT + tested. v1.8.24.
+
+The rotation slice of ADR-0107's public tier. `CredMeta` gains non-secret `rotatedAt` / `expiresAt` /
+`rotationIntervalDays`; `cred_vault` adds pure `rotationStatus(meta, now)` + `rotationLabel(status)` (worst
+state wins: `expired` > `rotation due` > `expires in Nd` / `rotate in Nd` > `rotated Nd ago`, with an ok/warn/
+danger tone) and `rotateCredential` - re-encrypts a new secret under the SAME `ref` (so a whitelist entry never
+breaks), bumps `rotatedAt`, refreshes `last4`, preserves createdAt/label/kind/interval. **Fail-closed:** if the
+OS keystore is unavailable `rotateCredential` throws and the old ciphertext is left intact (never clobbered or
+plaintext-written). Main IPC: `credRotate` (paste) + `credRotateFile` (native file, read+encrypted in main).
+UI: each whitelisted key shows a rotation badge (`••••XXXX` + `rotated Nd ago` / `rotation due` / `expired`),
+a **Rotate** button opens a paste-or-file popover, and the add form has an optional "rotate every N days"
+reminder. **Verified:** demo-P-KEYS.2 + 16 vault tests (rotationStatus/Label math, rotate roundtrip preserves
+ref + bumps rotatedAt + refreshes last4, fail-closed leaves the old secret intact); live - the Rotate button +
+popover render and the browser (no safeStorage) path fail-closes with "the old secret was left untouched". Still
+deferred: the self-host `KmsProvider` connector (P-KEYS.3) + the enterprise KMS tier (add-on ADR-A012).

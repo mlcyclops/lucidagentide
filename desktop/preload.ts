@@ -20,7 +20,9 @@ contextBridge.exposeInMainWorld("lucid", {
   // P-NETWL.1 (ADR-0106): OS-encrypted credential vault (safeStorage). Store/list/delete only; a plaintext
   // secret never comes back to the renderer (decrypt is main-process-only).
   credStore: (input: { ref?: string; kind: string; secret: string; label?: string }) => ipcRenderer.invoke("lucid:credStore", input),
-  credStoreFile: (input: { kind: string; label?: string }) => ipcRenderer.invoke("lucid:credStoreFile", input),
+  credStoreFile: (input: { kind: string; label?: string; expiresAt?: number; rotationIntervalDays?: number }) => ipcRenderer.invoke("lucid:credStoreFile", input),
+  credRotate: (input: { ref: string; secret: string; expiresAt?: number }) => ipcRenderer.invoke("lucid:credRotate", input),
+  credRotateFile: (input: { ref: string }) => ipcRenderer.invoke("lucid:credRotateFile", input),
   credList: () => ipcRenderer.invoke("lucid:credList"),
   credDelete: (ref: string) => ipcRenderer.invoke("lucid:credDelete", ref),
   credEncryptionAvailable: (): Promise<boolean> => ipcRenderer.invoke("lucid:credEncryptionAvailable"),
