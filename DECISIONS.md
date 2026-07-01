@@ -7646,6 +7646,37 @@ tool (`preview_extension.ts`), the shot cache state + `/api/preview/shot-cache` 
 `LUCID_PREVIEW_SHOT_URL` (`dev.ts`), `bridge.cachePreviewShot()`, `cacheRenderedPreviewShot()` on iframe load
 (`app.ts`), tests (`preview_extension.test.ts`), `desktop/scripts/demo_p_preview_3a_shot.ts`.
 
+### Addendum (2026-07-01) — P-PREVIEW.4c: MULTI-FILE apps render (inline the app's own relative assets)
+
+The remaining preview gap: an app split into `index.html` + `style.css` + `game.js` (+ images/fonts) didn't
+render — a single served file's relative refs couldn't load. The preview frame is opaque-origin (so `'self'`
+matches nothing) and its CSP deliberately lists no remote origins, and we must NOT allow the serving origin
+(that would let the sandboxed frame reach LUCID's own same-origin URLs — /app.js, token-gated /api, …).
+
+**Chosen approach — inline, don't widen.** Before serving, fold the app's OWN *pure-relative* assets into the
+HTML: `<link rel=stylesheet href=x.css>` → `<style>…</style>`, `<script src=game.js>` → inline `<script>`,
+`<img src=…>` and CSS `url(…)` → `data:` URIs. This fits the EXISTING `PREVIEW_FRAME_CSP` exactly
+(`script-src`/`style-src 'unsafe-inline'`, `img/media/font data:` already allowed, `connect-src 'none'`
+preserved) — so it needs **no CSP change, no second server/origin, no base-URL widening**, and the egress
+block is untouched. Considered but rejected: (a) allowing the serving origin in the frame CSP — leaks
+same-origin reach into the sandbox; (b) a second isolated origin/port — more moving parts for no security
+gain over inlining.
+
+**Fail-safe + bounded** (`desktop/preview_inline.ts`, pure, I/O injected): only pure-relative refs are touched
+— never a scheme/`//`/root-absolute/`#`, never a `..` traversal, never outside the app's own directory; a ref
+that can't be read is left as-is (the CSP then blocks it); per-asset (2 MB) and total (12 MB) caps bound the
+inline; a `</script>` inside an inlined file is neutralized so it can't break out. Wired into `/api/preview/serve`
+(HTML only; `.svg` is self-contained) as best-effort — any inlining failure serves the raw HTML.
+
+**Verified end-to-end in the real dev server:** a 4-file app (`index.html` + external CSS + external JS + a
+PNG) served with `<link>`/`<script src>` gone and content folded in, and the actual Preview panel rendered it
+correctly — styled green box (external CSS), JS-set text "MULTI-FILE OK ✓" (external JS ran), and the image
+(inlined as `data:`) — under the unchanged opaque-origin/egress-blocked frame. New: `desktop/preview_inline.ts`
+(+ `preview_inline.test.ts`, 13 cases), `toFsPath` exported from `preview_file.ts`, the `/api/preview/serve`
+inlining step, `desktop/scripts/demo_p_preview_4c.ts`. This completes the preview render story for the apps the
+agent builds (self-contained AND multi-file); a page that pulls from a real CDN still (intentionally) can't —
+that's an egress concern, not a render bug.
+
 ## ADR-0103 - P-FS.1: full-tree workspace folder browser (supersedes ADR-0022 M1's home confinement)
 
 **Date:** 2026-06-30

@@ -25,4 +25,6 @@
 //           to the panel instead of browser/eval/bash (P-PREVIEW.3a, PREFIX_VERSION 6).
 // v1.8.18 = the agent can SEE its own rendered UI: preview_screenshot returns a PNG of the live preview as
 //           ImageContent (P-PREVIEW.3a-shot) — renderer caches the shot, the read-tier tool fetches it.
-export const APP_VERSION = "1.8.18";
+// v1.8.19 = MULTI-FILE apps preview: fold an app's own relative css/js/img/fonts inline before serving
+//           (P-PREVIEW.4c) so index.html + style.css + game.js renders under the same egress-blocked CSP.
+export const APP_VERSION = "1.8.19";

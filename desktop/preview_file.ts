@@ -21,8 +21,9 @@ export type PreviewFileResult =
   | { ok: true; html: string; label: string }
   | { ok: false; error: string };
 
-/** Strip a `file://` scheme to an OS path (the resolver/UI may hand us either form). */
-function toFsPath(target: string): string {
+/** Strip a `file://` scheme to an OS path (the resolver/UI may hand us either form). Exported so the
+ *  serve endpoint can derive the app's directory for relative-asset inlining (P-PREVIEW.4c). */
+export function toFsPath(target: string): string {
   const t = target.trim();
   if (!/^file:\/\//i.test(t)) return t;
   let p = t.replace(/^file:\/\//i, "");
