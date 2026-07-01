@@ -11,7 +11,7 @@
 //
 //   bun run desktop:web        # http://localhost:5319
 
-import { join } from "node:path";
+import { join, dirname } from "node:path";
 import { readFileSync } from "node:fs";
 import { buildEngineeringUpdate, renderEngineeringBrief, buildPodcastScript, renderScript } from "../harness/brief/engineering_update.ts";
 import { devSnapshot, securitySnapshot } from "../tools/web/data.ts";
@@ -25,8 +25,9 @@ import { clearIngestSessions, deleteSession, listSessions, sessionMessages } fro
 import { providerAuth } from "./auth_status.ts";
 import { cloneRepo, setWorkspace, workspaceInfo } from "./workspace.ts";
 import { egressDecision } from "./egress_policy.ts"; // P-PREVIEW.3b: gate a remote preview by the egress allow-list
-import { readPreviewFile } from "./preview_file.ts"; // P-PREVIEW.4: read a local file's content for the preview
+import { readPreviewFile, toFsPath } from "./preview_file.ts"; // P-PREVIEW.4: read a local file's content for the preview
 import { PREVIEW_FRAME_CSP } from "./preview_resolve.ts"; // P-PREVIEW.4b: per-frame CSP for the served preview doc
+import { inlinePreviewAssets } from "./preview_inline.ts"; // P-PREVIEW.4c: fold a multi-file app's relative assets inline
 import { applyEnv, attribution, chinaModelsAcknowledged, listMcpServers, load as loadSettings, removeMcpServer, roleChosen, setAsksage, setAttributionSkip, setChinaModelsAcknowledged, setDeveloperMode, setKey, setMcpServerEnabled, setPersonalAiExtract, setProfile, setRateLimitProbe, setThirdPartyProvidersAcknowledged, setTourSeen, setUserRole, thirdPartyProvidersAcknowledged, tourSeen, upsertMcpServer, USER_ROLES, userRole, type UserRole } from "./settings_store.ts";
 
 // ADR-0088/0089: the /api/settings payload — profile + attribution + the cosmetic role/tour state.
@@ -429,7 +430,21 @@ const server = Bun.serve({
           "content-security-policy": PREVIEW_FRAME_CSP,
           "x-content-type-options": "nosniff",
         };
-        if (r.ok) return new Response(r.html, { headers });
+        if (r.ok) {
+          // P-PREVIEW.4c (ADR-0096): fold the app's OWN relative assets (css/js/img/fonts) inline so a
+          // MULTI-FILE app renders under the opaque-origin, egress-blocked frame CSP. HTML only (an .svg is
+          // self-contained); best-effort — a read failure just serves the raw HTML (the CSP blocks the ref).
+          let body = r.html;
+          if (/\.html?$/i.test(toFsPath(target))) {
+            try {
+              body = inlinePreviewAssets(body, dirname(toFsPath(target)), {
+                readText: (pp) => readFileSync(pp, "utf8"),
+                readBytes: (pp) => readFileSync(pp),
+              });
+            } catch { /* serve raw HTML on any inlining failure */ }
+          }
+          return new Response(body, { headers });
+        }
         const safe = r.error.replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c]!));
         return new Response(
           `<!doctype html><meta charset="utf-8"><body style="margin:0;font:14px system-ui;color:#9aa;background:#0b0b10;padding:1.25rem">Can't preview this file - ${safe}.</body>`,
