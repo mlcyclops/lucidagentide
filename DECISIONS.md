@@ -8098,3 +8098,26 @@ reminder. **Verified:** demo-P-KEYS.2 + 16 vault tests (rotationStatus/Label mat
 ref + bumps rotatedAt + refreshes last4, fail-closed leaves the old secret intact); live - the Rotate button +
 popover render and the browser (no safeStorage) path fail-closes with "the old secret was left untouched". Still
 deferred: the self-host `KmsProvider` connector (P-KEYS.3) + the enterprise KMS tier (add-on ADR-A012).
+
+### P-KEYS.3 planning decision (2026-07-01) - external KMS is BYO + add-on-only; the public core ships NO KMS binary
+
+**Status:** Decided (planning); implementation is an add-on increment. Supersedes ADR-0107's public-tier item 4.
+
+Cost/size review of HashiCorp Vault (the intended self-host `KmsProvider` backend):
+- **License:** Community edition is **BUSL-1.1** since Aug 2023 - source-available, not OSI open-source; free for
+  internal/production use, only barred from *competing hosted/embedded* offerings. It is the **same license as
+  LUCID**, so bundling its binary = redistributing a BUSL binary inside our BUSL app (legally awkward, avoid).
+- **Size:** the binary is **large and growing** (~247 MB v1.14.1 → ~355 MB v1.14.2; container ~678 MB). Bundling
+  would bloat our installers 3-4x per platform.
+- **Our own vault has neither problem:** `cred_vault` rides Electron `safeStorage` = the OS keystore
+  (DPAPI/Keychain/libsecret), **$0 and ~0 added bytes** - no binary shipped.
+
+**Decision:** do NOT bundle Vault, and do NOT put an external-KMS connector in the public core at all. The public
+tier's storage backend is the OS keystore only (already shipped: vault + last-4 + rotation). **All external KMS -
+the self-host Vault BYO connector AND the managed cloud connectors - lives in the private add-on** (ADR-A012).
+The self-host path is **bring-your-own**: LUCID's `KmsProvider` talks to a Vault the customer already runs over
+its HTTP API (`VAULT_ADDR` + token/AppRole), fetching the secret just-in-time (never stored by us), configured
+via an in-app "connect your Vault" card + instructions - the same "install/run it yourself" model as the optional
+`headroom` proxy. This revises ADR-0107 item 4 (the "one self-host connector in the public tier") to: **no KMS
+connector in the public core.** ADR-A012 is updated to own both the self-host BYO Vault connector and the cloud
+connectors. P-KEYS.3 is therefore an ADR-A012 (add-on) increment, not a public-core one.
