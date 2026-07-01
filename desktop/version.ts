@@ -19,4 +19,8 @@
 //           so a from-source `bun install` actually installs Electron's binary.
 // v1.8.16 = preview remote egress-gating (P-PREVIEW.3b) + every gate denial auditable & attributed
 //           (P-ENT.4). Also carries the defensive, functionally-unverified agent preview_open (P-PREVIEW.3a).
-export const APP_VERSION = "1.8.16";
+// v1.8.17 = preview actually RENDERS the agent's apps: per-frame served CSP (P-PREVIEW.4b) fixes games that
+//           showed only their HUD (a srcdoc frame inherited script-src 'self' and blocked inline scripts) +
+//           agent-driven preview_open finalized against the real omp API + PREVIEW_POLICY steers the agent
+//           to the panel instead of browser/eval/bash (P-PREVIEW.3a, PREFIX_VERSION 6).
+export const APP_VERSION = "1.8.17";

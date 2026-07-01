@@ -25,7 +25,8 @@ import { clearIngestSessions, deleteSession, listSessions, sessionMessages } fro
 import { providerAuth } from "./auth_status.ts";
 import { cloneRepo, setWorkspace, workspaceInfo } from "./workspace.ts";
 import { egressDecision } from "./egress_policy.ts"; // P-PREVIEW.3b: gate a remote preview by the egress allow-list
-import { readPreviewFile } from "./preview_file.ts"; // P-PREVIEW.4: serve a local file's content for srcdoc render
+import { readPreviewFile } from "./preview_file.ts"; // P-PREVIEW.4: read a local file's content for the preview
+import { PREVIEW_FRAME_CSP } from "./preview_resolve.ts"; // P-PREVIEW.4b: per-frame CSP for the served preview doc
 import { applyEnv, attribution, chinaModelsAcknowledged, listMcpServers, load as loadSettings, removeMcpServer, roleChosen, setAsksage, setAttributionSkip, setChinaModelsAcknowledged, setDeveloperMode, setKey, setMcpServerEnabled, setPersonalAiExtract, setProfile, setRateLimitProbe, setThirdPartyProvidersAcknowledged, setTourSeen, setUserRole, thirdPartyProvidersAcknowledged, tourSeen, upsertMcpServer, USER_ROLES, userRole, type UserRole } from "./settings_store.ts";
 
 // ADR-0088/0089: the /api/settings payload — profile + attribution + the cosmetic role/tour state.
@@ -235,8 +236,16 @@ const server = Bun.serve({
     // ADR-0024: the sensitive /api surface additionally requires the per-launch token (carried by
     // the renderer from the injected HTML). /api/health is exempt — main.ts polls it before the
     // page (and thus the token) exists, and it returns no data. Static assets/HTML aren't /api/*.
-    if (p.startsWith("/api/") && p !== "/api/health" && !tokenValid(req.headers.get("x-lucid-token"), TOKEN))
-      return new Response("forbidden", { status: 403 });
+    // P-PREVIEW.4b (ADR-0096): `/api/preview/serve` is loaded via an <iframe src> (so the previewed app's
+    // OWN CSP applies instead of the renderer's strict inherited one). An iframe `src` GET cannot send a
+    // custom header, so this ONE endpoint also accepts the per-launch token as a `?t=` query param — same
+    // token, still behind the loopback (H1) + Origin/Host/CSRF (H2) gate above. Every other /api needs the header.
+    if (p.startsWith("/api/") && p !== "/api/health") {
+      const tok = p === "/api/preview/serve"
+        ? (req.headers.get("x-lucid-token") ?? url.searchParams.get("t"))
+        : req.headers.get("x-lucid-token");
+      if (!tokenValid(tok, TOKEN)) return new Response("forbidden", { status: 403 });
+    }
     try {
       if (p === "/app.js") {
         const { js } = await bundleApp();
@@ -388,6 +397,28 @@ const server = Bun.serve({
         const target = (url.searchParams.get("path") ?? "").trim();
         const r = readPreviewFile(target);
         return json(r.ok ? { ok: true, data: { html: r.html, label: r.label } } : { ok: false, error: r.error });
+      }
+      // P-PREVIEW.4b (ADR-0096): serve a local previewable file's CONTENT as an HTML document with its OWN
+      // per-frame CSP (PREVIEW_FRAME_CSP), loaded by the renderer via `iframe.src`. A `srcdoc` frame inherits
+      // the renderer's `script-src 'self'`, which blocked a previewed app's inline scripts (it rendered only
+      // its static HTML). Served via `src`, the document carries PREVIEW_FRAME_CSP: inline JS/CSS run, but
+      // `connect-src 'none'` blocks all network egress. The opaque-origin sandbox (set on the iframe) keeps
+      // it off LUCID's origin. Behind the transport gate (loopback + token, here via `?t=`). Read-only.
+      if (p === "/api/preview/serve") {
+        const target = (url.searchParams.get("path") ?? "").trim();
+        const r = readPreviewFile(target);
+        const headers: Record<string, string> = {
+          "content-type": "text/html; charset=utf-8",
+          "cache-control": "no-store",
+          "content-security-policy": PREVIEW_FRAME_CSP,
+          "x-content-type-options": "nosniff",
+        };
+        if (r.ok) return new Response(r.html, { headers });
+        const safe = r.error.replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c]!));
+        return new Response(
+          `<!doctype html><meta charset="utf-8"><body style="margin:0;font:14px system-ui;color:#9aa;background:#0b0b10;padding:1.25rem">Can't preview this file - ${safe}.</body>`,
+          { status: 200, headers },
+        );
       }
 
       // real omp ACP backend (genuine model replies + live session config)

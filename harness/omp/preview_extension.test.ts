@@ -8,9 +8,19 @@
 import { describe, expect, test } from "bun:test";
 import previewExtension from "./preview_extension.ts";
 
+// Minimal TypeBox shim mirroring what omp injects as `pi.typebox` (Type.Object/Type.String produce a
+// standard JSON-schema-ish object). The extension authors its parameters through this; the test asserts
+// the shape that reaches registerTool.
+const typebox = {
+  Type: {
+    Object: (properties: Record<string, any>) => ({ type: "object", properties, required: Object.keys(properties) }),
+    String: (opts: any = {}) => ({ type: "string", ...opts }),
+  },
+};
+
 function capture() {
   const tools: any[] = [];
-  return { pi: { registerTool: (t: any) => tools.push(t) }, tools };
+  return { pi: { registerTool: (t: any) => tools.push(t), typebox }, tools };
 }
 
 describe("preview_extension (mock pi)", () => {
@@ -21,6 +31,18 @@ describe("preview_extension (mock pi)", () => {
     expect(tools[0].name).toBe("preview_open");
     expect(tools[0].parameters.required).toContain("path");
     expect(typeof tools[0].execute).toBe("function");
+  });
+
+  test("registers as a `read`-tier tool so opening a preview never trips the exec gate", () => {
+    const { pi, tools } = capture();
+    previewExtension(pi);
+    expect(tools[0].approval).toBe("read");
+  });
+
+  test("never throws — and registers nothing — when the typebox shim is absent", () => {
+    const tools: any[] = [];
+    expect(() => previewExtension({ registerTool: (t: any) => tools.push(t) })).not.toThrow();
+    expect(tools).toHaveLength(0); // no TSchema authoring → silent no-op, omp launch unaffected
   });
 
   test("execute accepts a local .html/.svg path (no error)", async () => {

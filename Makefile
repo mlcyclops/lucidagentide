@@ -315,7 +315,7 @@ demo-P-PREVIEW.3: ## P-PREVIEW.3 (ADR-0096): hardened preview sandbox - opaque-o
 demo-P-PREVIEW.3b: ## P-PREVIEW.3b (ADR-0096): a remote URL previews only through the egress gate - loads iff egress-approved AND https, opaque-origin; else stays gated (agent requests via egress flow)
 	$(BUN) run desktop/scripts/demo_p_preview_3b.ts
 
-demo-P-PREVIEW.3a: ## P-PREVIEW.3a (ADR-0096, DRAFT): agent-invoked preview_open tool - registration never breaks omp, execute gates local .html/.svg, acp_backend drives the panel (live omp+Electron verifies invocation)
+demo-P-PREVIEW.3a: ## P-PREVIEW.3a (ADR-0096): agent-invoked preview_open tool (read-tier, real TSchema) - registration never breaks omp, execute gates local .html/.svg, acp_backend drives the panel off the call title (live omp+Electron verifies invocation)
 	$(BUN) run desktop/scripts/demo_p_preview_3a.ts
 
 demo-P-ENT.4: ## P-ENT.4 (ADR-0069): every per-action gate denial is auditable + attributed - explicit "denied by you" vs "fail-closed (turn ended / no response)"; closes the silent fail-closed-timeout gap
@@ -326,6 +326,9 @@ demo-P-GATE-DIAG.1: ## P-GATE-DIAG.1 (ADR-0066/0062): dev-mode diagnostics recor
 
 demo-P-PREVIEW.4: ## P-PREVIEW.4 (ADR-0096): RENDER local files in Preview via served-content + iframe srcdoc (Chromium blocks file:// from an http origin, so iframe.src=file:// never rendered)
 	$(BUN) run desktop/scripts/demo_p_preview_4.ts
+
+demo-P-PREVIEW.4b: ## P-PREVIEW.4b (ADR-0096): serve the preview with its OWN per-frame CSP (iframe.src, not srcdoc) so the app's inline scripts RUN - a srcdoc frame inherits script-src 'self' and blocked them; connect-src 'none' still blocks egress
+	$(BUN) run desktop/scripts/demo_p_preview_4b.ts
 
 .PHONY: demo-P-FS.1
 demo-P-FS.1: ## P-FS.1 (ADR-0103): full-tree workspace folder browser - browse above home to the FS root / drives, with an optional managed workspaceRoots confinement

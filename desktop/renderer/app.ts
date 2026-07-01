@@ -1928,26 +1928,22 @@ function loadPreview(target: string): void {
   if (!frame || !empty) return;
   const r = resolvePreview(target);
   if (kind) kind.textContent = r.kind === "local" ? r.label : "";
-  // The iframe is only ever navigated to a vetted file:// URL. resolvePreview guarantees this for a local
-  // target; the explicit scheme allowlist here is the security barrier — DOM input can NEVER reach the
-  // iframe src as any other scheme (no javascript:/data:/http(s):), which also clears js/xss-through-dom.
+  // The iframe src is never raw DOM input: a LOCAL target loads our fixed same-origin /api/preview/serve
+  // endpoint (the path is only an encoded query value), and a REMOTE target is an http(s) URL gated by the
+  // egress allow-list. resolvePreview classifies the target first; no javascript:/data: scheme can reach src.
   const msg = ($("#prevEmptyMsg") as HTMLElement | null) ?? empty;
   const showEmpty = (text: string) => { frame.removeAttribute("srcdoc"); frame.removeAttribute("src"); frame.hidden = true; empty.hidden = false; msg.textContent = text; };
   if (r.kind === "local" && /^file:\/\//i.test(r.src)) {
-    // P-PREVIEW.4 (ADR-0096): the renderer is served over http, so a file:// iframe is blocked by Chromium.
-    // Fetch the file's content (authenticated, behind the transport gate) and render it via srcdoc in the
-    // same hardened opaque-origin sandbox. Works in dev + packaged; ideal for self-contained single-file apps.
-    if (kind) kind.textContent = `loading ${r.label}…`;
-    showEmpty(`Loading ${r.label}…`);
-    void bridge.previewFile(target).then((html) => {
-      if (($("#prevPath") as HTMLInputElement | null)?.value.trim() !== target.trim()) return; // superseded by a newer Open
-      if (typeof html === "string") {
-        if (kind) kind.textContent = r.label; frame.removeAttribute("src"); frame.srcdoc = html; frame.hidden = false; empty.hidden = true;
-      } else {
-        if (kind) kind.textContent = "";
-        showEmpty(`Couldn't read ${r.label} — check the path points to a local .html/.svg file.`);
-      }
-    }).catch(() => showEmpty(`Couldn't read ${r.label}.`));
+    // P-PREVIEW.4b (ADR-0096): render via a SERVED document (iframe.src → /api/preview/serve), NOT srcdoc.
+    // A srcdoc frame inherits the renderer's strict `script-src 'self'` CSP and blocks the previewed app's
+    // inline scripts (it rendered only its static HTML). The served document carries its own per-frame CSP
+    // (PREVIEW_FRAME_CSP) so the app actually runs — while staying in the hardened opaque-origin sandbox
+    // and egress-blocked (`connect-src 'none'`). The src is a FIXED same-origin endpoint with the path only
+    // ever an encodeURIComponent'd query value (never the scheme/host) — so DOM input can't pick the scheme.
+    if (kind) kind.textContent = r.label;
+    frame.removeAttribute("srcdoc");
+    frame.src = bridge.previewServeUrl(target);
+    frame.hidden = false; empty.hidden = true;
   } else if (r.kind === "remote") {
     // P-PREVIEW.3b (ADR-0096): a remote URL reaches the internet — only load it if the egress allow-list
     // already approves the site (honoring the managed ceiling). Otherwise it stays gated; the agent must

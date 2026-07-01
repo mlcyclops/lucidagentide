@@ -1,44 +1,51 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// harness/omp/preview_extension.ts — P-PREVIEW.3a (ADR-0096) — DRAFT (needs live omp+Electron verification).
+// harness/omp/preview_extension.ts — P-PREVIEW.3a (ADR-0096): register an agent-callable `preview_open`
+// tool so the agent can open a local file it just wrote in LUCID's in-app Preview panel — "the agent
+// drives the preview". This replaces the old workaround where the agent tried browser/bash/eval to view
+// its own web apps (all security-gated → DENIED), burning turns and confusing the user with denials.
 //
-// Registers an agent-callable `preview_open` tool so the agent can open a local file it just wrote in
-// LUCID's in-app Preview panel — "the agent drives the preview". The tool runs in the omp SUBPROCESS, so it
-// only validates + ACKNOWLEDGES; the actual panel-opening is a desktop side effect: the tool_call streams to
-// acp_backend over ACP, which detects `preview_open` and drives the renderer (reusing the P-PREVIEW.2
-// `preview-available` path — already verified). No cross-process screenshot round-trip here; the agent
-// SEEING its own UI (`preview_screenshot` as a multimodal ToolResult image) is P-PREVIEW.3a-shot.
+// HOW IT REACHES THE PANEL: the tool runs in omp's SUBPROCESS, which has no channel to the Electron
+// renderer — so it only VALIDATES + acknowledges. The actual panel-opening is a desktop side effect:
+// the tool_call streams over ACP as a `session/update`, and acp_backend detects it (omp renders the call
+// title as `"preview_open: <path>"`) and drives the renderer via the already-verified P-PREVIEW.2
+// `preview-available` path. The renderer re-gates the path (resolvePreview → readPreviewFile) before
+// anything renders, so a bad path can never escape the sandbox.
 //
-// WHY DRAFT — three things can only be confirmed against a live omp + Electron:
-//   1. omp actually launches with this `-e` extension (a faulty extension would break startup);
-//   2. the EXACT pi.registerTool parameter-schema format the installed omp expects (typebox/arktype/zod —
-//      CustomToolAPI injects pi.typebox/pi.arktype/pi.zod; the JSON-schema-ish object below is a placeholder);
-//   3. the model actually invokes the tool.
-// Everything is defensively wrapped so a registration failure NEVER breaks omp: worst case `preview_open`
-// is simply absent and the user still gets auto-on-write preview (P-PREVIEW.2) + the manual panel.
+// CONFIRMED against the installed omp's ExtensionAPI (dist/types/.../extensions/types.d.ts):
+//   • `pi.registerTool(ToolDefinition)` IS exposed to `-e` extensions (same API as pi.registerProvider).
+//   • `parameters` must be a TSchema — authored here via the injected `pi.typebox` shim, NOT a raw
+//     JSON-schema object (the previous draft's placeholder would have been rejected).
+//   • `approval` defaults to `"exec"`; we set `"read"` so opening a preview never trips the exec gate.
+// Everything is still defensively wrapped: a registration failure NEVER breaks omp launch — worst case
+// `preview_open` is simply absent and the user keeps auto-on-write preview (P-PREVIEW.2) + the manual panel.
 
 /** Minimal, self-contained checks (no desktop import — this runs in omp's process). The renderer's
- *  resolvePreview is the authoritative gate before anything actually renders; this is belt-and-suspenders. */
+ *  resolvePreview/readPreviewFile is the authoritative gate before anything renders; this is belt-and-braces. */
 const LOCAL_PATH = /^(file:\/\/|[A-Za-z]:[\\/]|\/|~[\\/]|\\\\)/;
 const PREVIEWABLE = /\.(html?|svg)$/i;
 
 export default function previewExtension(pi: any): void {
   try {
     if (!pi || typeof pi.registerTool !== "function") return; // older omp / no custom-tool support → no-op
+    // Author the parameter schema with omp's injected TypeBox shim (a real TSchema). Fall back defensively
+    // if the shim is missing on some build — a registration that throws is swallowed below.
+    const T = pi.typebox?.Type;
+    if (!T) return;
     pi.registerTool({
       name: "preview_open",
       label: "Open in Preview",
       description:
         "Open a LOCAL HTML/SVG file you have written in LUCID's in-app Preview panel so the user can see it " +
-        "render. Pass the absolute path to the file. Local files only; the panel re-validates before rendering.",
-      // DRAFT: confirm the installed omp's expected schema type here (pi.typebox/pi.arktype/pi.zod). This
-      // JSON-schema-ish object is a placeholder; if registerTool rejects it, the catch below keeps omp alive.
-      parameters: {
-        type: "object",
-        properties: { path: { type: "string", description: "Absolute path to the local .html/.svg file to preview" } },
-        required: ["path"],
-      },
+        "render. Use this (or just write the .html/.svg file) instead of a browser/bash/eval to show your " +
+        "work — those are security-gated. Pass the absolute path; the panel re-validates before rendering.",
+      // Read-only from omp's view: it only acknowledges; the desktop opens the (sandboxed) panel. Setting
+      // "read" keeps preview_open out of the exec-approval flow so showing a preview is never blocked.
+      approval: "read",
+      parameters: T.Object({
+        path: T.String({ description: "Absolute path to the local .html/.svg file to preview" }),
+      }),
       async execute(_toolCallId: string, params: any) {
         const path = String(params?.path ?? "").trim();
         if (!path || !LOCAL_PATH.test(path) || !PREVIEWABLE.test(path)) {

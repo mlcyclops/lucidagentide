@@ -31,8 +31,11 @@ import type { TrustLabel } from "../contracts.ts";
  *      workspace (no patch-apply UI; fragile Windows merge). Agent now writes files DIRECTLY
  *      (gate-protected); isolation is reserved for running untrusted code.
  *  v5 (ADR-0033, fix): added the build/anti-over-refusal policy to layer 3 — some models refused
- *      buildable tasks ("can't make a game/graphics/music") by mis-reading their own scope. */
-export const PREFIX_VERSION = "5";
+ *      buildable tasks ("can't make a game/graphics/music") by mis-reading their own scope.
+ *  v6 (ADR-0096, P-PREVIEW.3a): added the preview policy to layer 3 — the agent was burning turns
+ *      trying browser/bash/eval (all security-gated, so DENIED) to view its own web apps. Tell it to
+ *      use LUCID's built-in Preview panel (write the .html, or call preview_open) instead. */
+export const PREFIX_VERSION = "6";
 
 export const UNTRUSTED_START = "UNTRUSTED_CONTENT_START";
 export const UNTRUSTED_END = "UNTRUSTED_CONTENT_END";
@@ -98,6 +101,20 @@ binaries. Deliver a complete, working result and write it to the location the us
 clarifying question only when the request is genuinely ambiguous — never to avoid the work.
 </build>`;
 
+// Preview policy (P-PREVIEW.3a, ADR-0096). Byte-stable and exported so the live omp ACP chat receives
+// the SAME text via `--append-system-prompt` (acp_backend), alongside DELEGATION_POLICY / BUILD_POLICY.
+// Without it the agent wastes turns trying browser/bash/eval to view its own web apps - all of which are
+// security-gated and DENIED. LUCID renders local web files itself, so point the agent at that instead.
+export const PREVIEW_POLICY = `<preview>
+LUCID has a built-in Preview panel that renders local web files (.html/.svg) in a sandboxed frame, so the
+user can SEE what you build without a browser. To show a web app, game, page, or visualization you wrote,
+do NOT open a browser and do NOT run bash/node/eval to serve or screenshot it - those are security-gated
+and will be denied, and you do not need them. Instead: just WRITE the file (LUCID auto-opens the Preview
+on any .html/.svg you write), or call the preview_open tool with the file's absolute path to surface a
+specific file. Prefer ONE self-contained HTML file (inline CSS/JS, no external assets) so it renders
+directly. Never claim you cannot preview your own work.
+</preview>`;
+
 const LAYER_3_CODING = `<coding>
 Match the surrounding code's idiom, naming, and comment density. Verification is
 part of completion: code is not done until the relevant checks (tests, lint,
@@ -107,7 +124,9 @@ results; if a step was skipped or a check failed, you say so plainly.
 
 ${DELEGATION_POLICY}
 
-${BUILD_POLICY}`;
+${BUILD_POLICY}
+
+${PREVIEW_POLICY}`;
 
 // ── Layer 4 — security policy & trust-boundary rules ────────────────────────
 // This layer defines the data/instruction boundary the whole product enforces.
