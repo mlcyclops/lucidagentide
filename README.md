@@ -338,6 +338,11 @@ is unavailable the store is *refused*, never written in plaintext. Each key show
 across AWS/Azure/GCP/Oracle/IBM, automated rotation, attestation) is a private add-on
 ([ADR-0107](DECISIONS.md) draws the public/private line).
 
+<div align="center">
+<img src=".github/assets/network-whitelist.png" alt="LucidAgentIDE Settings - the Network Whitelist: a curated domain and IP/CIDR allow-list split by internal/external zone, with enforced trust scopes (always / project / this-loop) and per-loop call budgets, plus per-site OS-encrypted credentials shown masked (last-4) with rotation status and a one-click Rotate" width="720" />
+<br><sub>Network Whitelist - scoped, budgeted, credential-aware egress allow-list (last-4 masking + rotation). <em>Screenshot placeholder.</em></sub>
+</div>
+
 ## <img src=".github/assets/icons/memory-animated.svg" width="28" align="top" alt=""> Memory and the personalization graph
 
 **Two memories, both shipped.**
