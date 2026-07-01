@@ -32,7 +32,8 @@ import { ASKSAGE_FAMILY_ORDER, familyOf, filterModels, groupByFamily, isAuxiliar
 import { INSTALLED_SKILLS, bumpSkillUsage, bundledSkillsByUsage, taskProforma } from "./skills.ts";
 import { CHECKER_TOKENS_PER_ITER, MAKER_TOKENS_PER_ITER, estimateGoalCost, estimateGoalTokens, formatTokens, formatUSD } from "../loop_estimate.ts";
 import { assumedCacheRate, priceFor } from "../model_pricing.ts";
-import { closeIde, openIde, setIdeExclusivity, setIdeHooks } from "./ide_panel.ts";
+import { closeIde, colorizeCode, guessLanguage, openIde, setIdeExclusivity, setIdeHooks } from "./ide_panel.ts";
+import { lineDiff, diffStat, patchLineType, patchStat, type DiffRow } from "./linediff.ts";
 // P-TPS.1 (ADR-0044): the shared output-token speedometer - same engine the omp
 // terminal adapter uses. Drives the HUD's live "tok out · tok/s" readout from the
 // streaming text/thinking deltas (output only; never the system prompt).
@@ -144,7 +145,7 @@ function buildShell(): void {
         <button class="rail-btn" id="sideToggle" data-tip="Sessions panel|Show / hide" data-tip-side="right">${icon("sidebar", 20)}</button>
         <button class="rail-btn active" data-rail="chat" data-tip="Conversation" data-tip-icon="chat">${icon("chat", 20)}</button>
         <button class="rail-btn" data-rail="security" data-tip="Security|Findings, quarantine & approvals" data-tip-icon="shield">${icon("shield", 20)}<span class="badge" id="railBadge" hidden>0</span></button>
-        <button class="rail-btn" data-rail="memory" data-tip="Memory & context|Context window, prompt-cache savings, semantic memory" data-tip-icon="brain">${icon("brain", 20)}</button>
+        <button class="rail-btn" data-rail="memory" data-tip="Memory & context|Context window, prompt-cache savings, semantic memory" data-tip-icon="savings">${icon("savings", 20)}</button>
         <button class="rail-btn" data-rail="knowledge" data-tip="Knowledge graph|Your private, encrypted personalization graph - nodes, edges, drill-down" data-tip-icon="graph">${icon("graph", 20)}</button>
         <button class="rail-btn" data-rail="preview" data-tip="Preview|Open a local app/page the agent built in a sandboxed in-app browser, and send a screenshot to chat" data-tip-icon="eye">${icon("eye", 20)}</button>
         <button class="rail-btn" id="railLogs" data-rail="dev" hidden data-tip="Logs|Read-only developer logs: telemetry, run lineage, transcripts, gate-block audit, AskSage tool-call diagnostics" data-tip-icon="logs">${icon("logs", 20)}</button>
@@ -190,7 +191,7 @@ function buildShell(): void {
         <div class="resizer resizer-l" data-resize="inspector" data-tip="Drag to resize" data-tip-side="left"></div>
         <div class="insp-tabs">
           <button class="insp-tab sec" data-insp="security">${icon("shield", 15)} Security</button>
-          <button class="insp-tab mem active" data-insp="memory">${icon("brain", 15)} Memory</button>
+          <button class="insp-tab mem active" data-insp="memory">${icon("savings", 15)} Memory</button>
           <button class="insp-collapse" id="inspCollapse" data-tip="Collapse to metrics|Slide into a live quick-metrics rail" data-tip-side="bottom">${icon("collapse", 16)}</button>
         </div>
         <div class="insp-body" id="inspBody"></div>
@@ -581,6 +582,59 @@ function phaseIcon(name: string): string {
 }
 const fmtClock = (ms: number): string => { const s = Math.max(0, Math.floor(ms / 1000)); return `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`; };
 
+// P-CHAT.1 (ADR-0104): the authored code a tool step can expand to preview inline.
+type ToolCode = { path: string; content?: string; oldText?: string; newText?: string; patch?: string };
+
+/** Fill an expandable step's panel with the tool's code — a write's content (syntax-highlighted via the
+ *  vendored Monaco), an edit's hashline `patch` (colored +/− lines), or an old→new pair as a line diff.
+ *  Safe: Monaco HTML escapes its own text; every diff/patch line is set via textContent. Lazy + best-effort. */
+/** P-CHAT.1 (ADR-0104): open the step's file in the full Monaco IDE panel for context (like Claude Code's
+ *  expand). Prefers the real file on disk (editable, gate-protected save); falls back to the in-hand
+ *  content/patch as a snippet when there's no readable path. */
+async function openStepInEditor(code: ToolCode): Promise<void> {
+  const path = (code.path || "").trim();
+  const name = path.split(/[\\/]/).pop() || "Code";
+  if (path && /^(file:\/\/|[A-Za-z]:[\\/]|\/|~[\\/]|\\\\)/.test(path)) {
+    const r = await bridge.editorRead(path).catch(() => null);
+    if (r?.ok && typeof r.content === "string") { await openIde({ path, code: r.content, sha256: r.sha256, mtime: r.mtime }); return; }
+  }
+  if (code.content !== undefined) { await openIde({ title: name, code: code.content, language: guessLanguage(path) }); return; }
+  await openIde({ title: `${name} — patch`, code: code.patch ?? "", language: "diff" });
+}
+
+async function renderToolCode(panel: HTMLElement, code: ToolCode): Promise<void> {
+  if (panel.dataset.filled) return;
+  panel.dataset.filled = "1";
+  // A small bar: the filename + "Open in editor" (expand into the full Monaco panel for context).
+  const barName = (code.path || "").split(/[\\/]/).pop() || code.path || "code";
+  const bar = el(`<div class="tc-bar"><span class="tc-name">${esc(barName)}</span><button class="tc-open" type="button" data-tip="Open in the editor for full context">Open in editor ${icon("arrowRight", 12)}</button></div>`);
+  ($(".tc-open", bar) as HTMLButtonElement).addEventListener("click", (e) => { e.stopPropagation(); void openStepInEditor(code); });
+  panel.appendChild(bar);
+  if (code.content !== undefined) {
+    const pre = el(`<pre class="tc-code"></pre>`);
+    pre.textContent = code.content;                         // readable default before highlight resolves
+    panel.appendChild(pre);
+    const html = await colorizeCode(code.content, code.path || "").catch(() => null);
+    if (html && panel.contains(pre)) pre.innerHTML = html;  // Monaco-highlighted HTML (its text is escaped)
+  } else if (code.patch !== undefined) {
+    const box = el(`<div class="tc-diff"></div>`);
+    for (const raw of code.patch.split("\n")) {
+      const line = el(`<div class="tc-line tc-${patchLineType(raw)}"></div>`);
+      line.textContent = raw;                               // hashline already carries its own +/− prefixes
+      box.appendChild(line);
+    }
+    panel.appendChild(box);
+  } else {
+    const box = el(`<div class="tc-diff"></div>`);
+    for (const r of lineDiff(code.oldText ?? "", code.newText ?? "")) {
+      const line = el(`<div class="tc-line tc-${r.type}"></div>`);
+      line.textContent = `${r.type === "add" ? "+" : r.type === "del" ? "−" : " "} ${r.text}`;
+      box.appendChild(line);
+    }
+    panel.appendChild(box);
+  }
+}
+
 // ── Consolidating activity window (the "working / agent thoughts" surface) ──
 // Instead of an ever-growing stack of raw .evt chips, the agent's tool calls collapse into
 // ONE compact window per turn: a head (live current step + a count) you can expand to see the
@@ -588,8 +642,8 @@ const fmtClock = (ms: number): string => { const s = Math.max(0, Math.floor(ms /
 // here - onBlock keeps emitting its own loud .evt.block chip alongside this window.
 interface ThoughtsWin {
   el: HTMLElement;
-  /** Record a tool/activity step. */
-  step(name: string, detail: string): void;
+  /** Record a tool/activity step. `code` (P-CHAT.1) makes the step expandable to an inline code/diff preview. */
+  step(name: string, detail: string, code?: ToolCode): void;
   /** Collapse into the final one-line summary (auto-collapse on done). */
   finish(ms: number): void;
 }
@@ -616,14 +670,38 @@ function createThoughts(): ThoughtsWin {
   headBtn.addEventListener("click", () => toggle(!win.classList.contains("open")));
   return {
     el: win,
-    step(name: string, detail: string) {
+    step(name: string, detail: string, code?: ToolCode) {
       steps++;
       const label = phaseForTool(name, detail);
       curEl.textContent = label;
       countEl.hidden = false;
       countEl.textContent = String(steps);
       if (/edit|write|notebook|patch|apply|create/i.test(name) && detail) files.add(detail.trim());
-      body.appendChild(el(`<div class="thoughts-step">${icon(phaseIcon(name), 13)}<span class="ts-k">${esc(name)}</span><span class="ts-d">${esc(detail)}</span></div>`));
+      const hasCode = !!code && (code.content !== undefined || code.patch !== undefined || code.oldText !== undefined || code.newText !== undefined);
+      if (!hasCode) {
+        body.appendChild(el(`<div class="thoughts-step">${icon(phaseIcon(name), 13)}<span class="ts-k">${esc(name)}</span><span class="ts-d">${esc(detail)}</span></div>`));
+      } else {
+        // P-CHAT.1: an expandable step — click the row to reveal the written code / the edit diff inline.
+        let badge = "";
+        if (code!.content === undefined) {
+          const { add, del } = code!.patch !== undefined ? patchStat(code!.patch) : diffStat(lineDiff(code!.oldText ?? "", code!.newText ?? ""));
+          badge = `<span class="ts-diffstat"><span class="ts-add">+${add}</span> <span class="ts-del">−${del}</span></span>`;
+        }
+        const row = el(`<div class="thoughts-step has-code">
+          <button class="ts-row" type="button" aria-expanded="false">${icon(phaseIcon(name), 13)}<span class="ts-k">${esc(name)}</span><span class="ts-d">${esc(detail)}</span>${badge}<span class="ts-chev">${icon("chevron", 13)}</span></button>
+          <div class="ts-code" hidden></div>
+        </div>`);
+        const btn = $(".ts-row", row) as HTMLButtonElement;
+        const codeEl = $(".ts-code", row) as HTMLElement;
+        btn.addEventListener("click", () => {
+          const opening = codeEl.hasAttribute("hidden");
+          if (opening) { void renderToolCode(codeEl, code!); codeEl.removeAttribute("hidden"); }
+          else codeEl.setAttribute("hidden", "");
+          btn.setAttribute("aria-expanded", String(opening));
+          row.classList.toggle("open", opening);
+        });
+        body.appendChild(row);
+      }
       // Keep the newest step in view while expanded, without stealing the page scroll.
       if (win.classList.contains("open")) body.scrollTop = body.scrollHeight;
     },
@@ -939,7 +1017,7 @@ async function send(): Promise<void> {
     else if (e.type === "tool") {
       sawTool = true; setPhase(phaseForTool(e.name, e.detail)); paintHud();
       if (!thoughts) { thoughts = createThoughts(); streamEl.after(thoughts.el); } // window sits below the answer
-      thoughts.step(e.name, e.detail);
+      thoughts.step(e.name, e.detail, e.code);
       scrollChat();
     }
     else if (e.type === "subagent") {
@@ -1904,20 +1982,16 @@ function closePreview(): void {
   $$(".rail-btn").forEach((b) => b.classList.remove("active"));
   $('.rail-btn[data-rail="chat"]')?.classList.add("active");
 }
-/** P-PREVIEW.2 (ADR-0096): the agent just wrote a browser-previewable file — auto-surface it. If the Preview
- *  panel is already open, render it live; otherwise remember it and offer a one-click "Open preview" toast so
- *  the user watches what the agent built appear without hunting for it. */
+/** P-PREVIEW.2 (ADR-0096; auto-show, 2026-07-01): the agent just wrote a browser-previewable file — show it in
+ *  the Preview panel automatically. It's just a preview, so we don't ask (the old toast disappeared before the
+ *  user could click it). If the panel is already open, swap to the new file; otherwise open it on this file. */
 function onPreviewAvailable(path: string): void {
   if (!path) return;
   state.lastPreviewablePath = path;
-  const name = path.split(/[\\/]/).pop() || path;
-  if (previewOpen) { const p = $("#prevPath") as HTMLInputElement | null; if (p) p.value = path; loadPreview(path); return; }
-  showToast({
-    title: "App ready to preview",
-    desc: `The agent wrote ${name}.`,
-    actions: [{ label: "Open preview", run: () => openPreview() }, { label: "Dismiss" }],
-    timeout: 6000,
-  });
+  const p = $("#prevPath") as HTMLInputElement | null;
+  if (p) p.value = path;                 // point at the new file explicitly (never a stale prior value)
+  if (previewOpen) loadPreview(path);
+  else openPreview();                    // opens the panel and renders p.value straight away
 }
 /** Load the resolved target into the preview iframe. Fail-safe: only a `local` target is rendered; a
  *  `remote` or `blocked` target shows the empty-state message (remote is egress-gated in P-PREVIEW.3). */
@@ -4012,9 +4086,10 @@ function wire(): void {
     if (head) { const k = head.dataset.accToggle!; (head.closest(".acc")!.classList.toggle("open")) ? OPEN.add(k) : OPEN.delete(k); return; }
     // workspace
     if (t.closest("#wsBrowse")) {
-      // In-app folder browser - works in both the packaged app and the browser build, and
-      // flags which folders are git repos (to open or initialize one).
-      const path = await openFolderBrowser();
+      // Prefer the NATIVE OS folder-open dialog (Electron): it browses the whole machine and can create new
+      // folders, with no home-folder confinement. Fall back to the in-app browser only in a plain browser
+      // build where no native dialog exists.
+      const path = bridge.isElectron && bridge.pickFolder ? await bridge.pickFolder() : await openFolderBrowser();
       if (path) await applyWorkspace(path);
       return;
     }
@@ -4467,10 +4542,10 @@ const palette = createPalette(() => {
   const acts: Action[] = [
     { id: "cfg", title: "Choose model · mode · thinking…", icon: "spark", hint: "config", run: () => openConfigPopover($("#modelBadge")!) },
     { id: "sec", title: "Open Security panel", icon: "shield", hint: "panel", run: () => focusInspector("security") },
-    { id: "mem", title: "Open Memory & context panel", icon: "brain", hint: "panel", run: () => focusInspector("memory") },
+    { id: "mem", title: "Open Memory & context panel", icon: "savings", hint: "panel", run: () => focusInspector("memory") },
     // P-LOC.3 (ADR-0095): a discoverable entry point for the AI-authored code ledger — opens Memory with
     // the section expanded, so it no longer has to be hunted for inside the panel.
-    { id: "ailoc", title: "Open AI-authored code ledger", icon: "brain", hint: "panel", run: () => { OPEN.add("mem.ailoc"); focusInspector("memory"); } },
+    { id: "ailoc", title: "Open AI-authored code ledger", icon: "savings", hint: "panel", run: () => { OPEN.add("mem.ailoc"); focusInspector("memory"); } },
     { id: "zin", title: "Zoom in", icon: "plus", hint: modSymbol("+"), run: () => nudgeZoom(0.1) },
     { id: "zout", title: "Zoom out", icon: "minus", hint: modSymbol("−"), run: () => nudgeZoom(-0.1) },
     { id: "zreset", title: "Reset text zoom to 100%", icon: "refresh", hint: modSymbol("0"), run: () => resetZoom() },
@@ -5011,16 +5086,25 @@ function openOptionDropdown(anchor: HTMLElement, configId: string): void {
 }
 
 // ───────────────────────── text zoom ─────────────────────────
+// The default UI was a touch small, so the baseline now renders 1.2× larger — what used to require 120%
+// zoom IS the new 100%. `state.zoom` stays the LOGICAL level shown in the % chip (default 1 = 100%); the
+// factor actually applied is `state.zoom * ZOOM_BASE`, so the chip still reads 100% at the bigger default.
+const ZOOM_BASE = 1.2;
 function applyZoom(): void {
   state.zoom = Math.max(0.7, Math.min(1.8, Math.round(state.zoom * 100) / 100));
-  bridge.setZoom(state.zoom);
+  bridge.setZoom(state.zoom * ZOOM_BASE);
   const lvl = $("#zoomLvl"); if (lvl) lvl.textContent = `${Math.round(state.zoom * 100)}%`;
   try { localStorage.setItem("lucid.zoom", String(state.zoom)); } catch { /* ignore */ }
 }
 function nudgeZoom(delta: number): void { state.zoom += delta; applyZoom(); }
 function resetZoom(): void { state.zoom = 1; applyZoom(); }
 function initZoom(): void {
-  try { const z = Number(localStorage.getItem("lucid.zoom")); if (z) state.zoom = z; } catch { /* ignore */ }
+  try {
+    // One-time rebaseline to the bigger default: drop any prior stored zoom so everyone lands on the new
+    // 100% (= old 120%) once; adjustments after that persist normally.
+    if (!localStorage.getItem("lucid.zoombase12")) { localStorage.removeItem("lucid.zoom"); localStorage.setItem("lucid.zoombase12", "1"); }
+    const z = Number(localStorage.getItem("lucid.zoom")); if (z) state.zoom = z;
+  } catch { /* ignore */ }
   applyZoom();
 }
 

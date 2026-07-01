@@ -7677,6 +7677,22 @@ inlining step, `desktop/scripts/demo_p_preview_4c.ts`. This completes the previe
 agent builds (self-contained AND multi-file); a page that pulls from a real CDN still (intentionally) can't —
 that's an egress concern, not a render bug.
 
+### Addendum (2026-07-01) — auto-show the preview (no toast) + inline a nested relative `<iframe>` (wrapper support)
+
+Two fixes from live use. (1) **Auto-show, don't ask.** P-PREVIEW.2 popped a "App ready to preview — Open /
+Dismiss" toast when the panel was closed, but it auto-dismissed before the user could click it. "It's just a
+preview" — so `onPreviewAvailable` now simply OPENS the Preview panel on the freshly-written file (or swaps to
+it if already open); the toast is gone, and it always points at the new file (no stale prior value). (2) **The
+self-test wrapper renders.** The agent often writes a tiny wrapper whose whole body is
+`<iframe src="game.html?selftest=1">` — a relative nested iframe, which the frame CSP (`default-src 'none'`,
+no `frame-src`) blocked. `inlinePreviewAssets` now also folds a relative `<iframe src="…​.html">` into `srcdoc`
+by reading the target, RECURSIVELY inlining its own assets, attribute-escaping, and dropping the query (the
+embedded page renders normally without it). Verified live: the wrapper you'd get from the agent now renders the
+full game in the panel; **no CSP change needed** — Chromium allows the same-document `srcdoc` child under
+`default-src 'none'`. Depth-capped (a self-referential wrapper can't loop) and budget-shared with the parent.
+Touched: `desktop/preview_inline.ts` (iframe→srcdoc + recursion), `desktop/renderer/app.ts` (auto-show),
+`preview_inline.test.ts` (+iframe cases), `demo_p_preview_4c.ts`.
+
 ## ADR-0103 - P-FS.1: full-tree workspace folder browser (supersedes ADR-0022 M1's home confinement)
 
 **Date:** 2026-06-30
@@ -7739,3 +7755,108 @@ data-trust change. Managed policy only tightens (ADR-0068). `listDir` never thro
 ADR-0022 (supersedes M1; preserves H1/H2), ADR-0068 (the managed-config "only tightens" model + GPO reader),
 `desktop/workspace.ts` (`setWorkspace`, already unconfined), `desktop/path_guard.ts` (`pathWithin`, still
 used by the editor-save guard), and CLAUDE.md invariant #3 (the control-plane gates stay fail-closed).
+
+## ADR-0104 - P-CHAT.1: inline expandable code preview for tool steps (writes highlighted, edits as diffs)
+
+**Date:** 2026-07-01
+**Status:** Accepted - BUILT.
+**Increment:** P-CHAT.1.
+
+### Context
+
+The chat folds a turn's tool calls into one compact "steps" window, but each step was a one-liner (kind +
+a short detail like the file path) - you couldn't see the code the agent actually wrote or changed. A user
+asked for the inline, expandable code preview they liked in Claude Code.
+
+### Decision
+
+Make each tool step that carries authored code EXPANDABLE to an inline preview: a `write`/`create` shows the
+new file, syntax-highlighted; an `edit` shows a green/red line diff (with a `+N −M` badge on the collapsed
+row). Full syntax highlighting reuses the ALREADY-vendored Monaco via its `colorize` API (main-thread
+tokenizer, no language-service worker, no new dependency) - lazy-loaded on first expand, with a plain-escaped
+fallback if it fails.
+
+- **Contract:** the `tool` ChatEvent gains an optional `code: { path, content?, patch?, oldText?, newText? }`
+  (added to BOTH parallel definitions - `acp_backend.ts` and `bridge.ts`). `acp_backend` fills it from the
+  tool_call's `rawInput`, bounded to 64 KB so a huge file can't bloat the event stream (the content is the
+  SAME text the gate already scanned). The exact edit shape was confirmed at RUNTIME (a debug capture, since
+  the minified omp bundle was inconclusive): omp's `edit` sends a **hashline patch** in a single `input`
+  string (`[path#hash]` header + `SWAP`/anchor directives + `+`/`−` lines), NOT `oldText`/`newText`. So:
+  `content` → a write; `input` on an edit-kind call → `patch`; `oldText`/`newText` and an `edits[]` array are
+  kept as fallbacks for edit tools that send explicit before/after.
+- **Rendering:** `createThoughts().step()` takes the `code` and, when present, renders the row as a toggle
+  with a `.ts-code` panel; on first expand it lazily fills it - Monaco-highlighted HTML for a write (Monaco
+  escapes its own text, safe to assign); a hashline `patch` colored per line via `patchLineType()`
+  (add/del/meta/ctx); or an `oldText`/`newText` pair via `lineDiff()` (pure, LCS-based). Every diff/patch line
+  is set with `textContent` (escaped) and colored by `.tc-add`/`.tc-del`/`.tc-meta`/`.tc-ctx`; the collapsed
+  row shows a `+N −M` badge (`patchStat` / `diffStat`). All unit-tested (`linediff.test.ts`).
+
+- **Open in editor:** each expanded preview has an "Open in editor" button that opens the file in the full
+  Monaco IDE panel (ADR-0029/0036) for context - like Claude Code's expand. It prefers the real file on disk
+  (`bridge.editorRead` → `openIde({path, sha256})`, so it's editable with a gate-protected save), and falls
+  back to the in-hand content/patch as a snippet when there's no readable path.
+
+### Safety
+
+Code text is only ever inserted as escaped text (`textContent`) or as Monaco's own escaped colorize output -
+never raw `innerHTML` of tool input. So agent/tool-authored code can't inject markup into the chat DOM. The
+inline preview is display-only; opening the editor reuses the existing gate-protected save path.
+
+### Scope / follow-ups
+
+This increment covers the authored code (writes + edits) - the "code preview" itself. Showing a `bash`
+command's OUTPUT and a `read`'s content inline needs correlating the tool_call with its later tool_result by
+id (the command already shows in the step detail); that's a fast follow-up, not in this increment.
+
+### Verification
+
+`lineDiff`/`diffStat` unit-tested (`linediff.test.ts`). Live in the real dev server: the app bundles + loads
+clean with the new imports; Monaco `colorize` returns highlighted token spans; and the injected step markup
+renders exactly as intended - a write step with syntax-highlighted JS and an edit step with a `+N −M` badge
+and a green/red diff. `make demo-P-CHAT.1`.
+
+### Relates to
+
+ADR-0029/0036 (the vendored Monaco + its same-origin worker setup this reuses), ADR-0027 (the reasoning/steps
+surfaces this extends), the frozen ChatEvent shape (extended, not redefined, in both definitions).
+
+## ADR-0105 - P-EDIT.1: use the `replace` edit tool (not omp's default `hashline`); native folder Browse
+
+**Date:** 2026-07-01
+**Status:** Accepted - BUILT.
+**Increment:** P-EDIT.1.
+
+### Context
+
+Real edit turns produced a stream of tool failures: "this edit anchors to lines … that [file#hash] never
+displayed", "anchor line X is already targeted by another hunk on line Y; issue ONE hunk per range". These are
+omp's DEFAULT `hashline` edit tool rejecting the model's patches - hashline anchors each hunk to line-hash
+markers the model must have "displayed", one hunk per range, which Claude/GPT frequently violate. Separately,
+the Workspace "Browse" button used the in-app folder browser, which the user found still confined to the home
+folder and couldn't create new folders.
+
+### Decision
+
+1. **`edit.mode: replace`** in `harness/omp/acp_config.yml`. omp's `edit.mode` accepts
+   `hashline | replace | patch | apply_patch`; `replace` is the classic find-old→put-new (search/replace)
+   format Claude Code / aider use - far more robust for these models, eliminating the anchor/hunk failures.
+   Only the edit FORMAT changes; the security gate still scans every edit in-process, fail-closed. Extends omp
+   via config (invariant #1). `replace` sends `edits: [{ old_text, new_text }]`, which also gives the inline
+   preview (P-CHAT.1) a clean old→new diff (acp_backend now reads `old_text`/`new_text`, camelCase + top-level
+   kept as fallbacks).
+2. **Native folder Browse.** The Workspace "Browse" button now calls the native OS dialog
+   (`bridge.pickFolder` → Electron `dialog.showOpenDialog` with `openDirectory` + `createDirectory`) - browse
+   anywhere on the machine AND create new folders, no confinement. `setWorkspace` already accepts any existing
+   path. Falls back to the in-app browser only in a plain-browser build (no native dialog).
+
+### Verification
+
+Live in the real dev server: a write+edit and follow-up edits ran with **zero** tool failures (vs the prior
+hashline stream), and the inline preview showed a clean red/green diff (`−Three −beta / +Final +gamma`, +2 −2).
+The native dialog is Electron-only, so it verifies in the packaged app (logic + typecheck clean).
+
+### Relates to
+
+ADR-0104 (P-CHAT.1, the inline diff this feeds), ADR-0103 (the workspace browser this Browse path supersedes
+for the native case), CLAUDE.md invariant #1 (config overlay, not an omp fork) and #3 (the gate still scans
+every edit fail-closed).

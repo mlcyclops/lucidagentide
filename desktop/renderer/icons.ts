@@ -16,6 +16,11 @@ const RAW: Record<string, string> = {
   brain:
     P("M12 4.5a3 3 0 0 0-3 3 2.6 2.6 0 0 0-1.6 4.6A2.7 2.7 0 0 0 9 16.8 2.4 2.4 0 0 0 12 19a2.4 2.4 0 0 0 3-2.2 2.7 2.7 0 0 0 1.6-4.7A2.6 2.6 0 0 0 15 7.5a3 3 0 0 0-3-3z") +
     P("M12 4.5v14.5"),
+  // P-CHAT.1: a plain right arrow (→) for "Open in editor" (the old `expand` glyph is double LEFT chevrons).
+  arrowRight: P("M5 12h13") + P("M13 6l6 6-6 6"),
+  // ROI / cost-savings ($ in a circle) — the "Memory & context" panel is mostly prompt-cache savings + showback.
+  savings: P("M12 3.5a8.5 8.5 0 1 0 0 17 8.5 8.5 0 0 0 0-17z") + P("M12 6.6v10.8")
+    + P("M14.6 9.2a2.5 2.5 0 0 0-2.6-1.6c-1.4 0-2.5.8-2.5 2s1 1.7 2.5 2 2.6.9 2.6 2.1-1.2 2.1-2.6 2.1a2.6 2.6 0 0 1-2.6-1.7"),
   // runs / lineage (branch)
   runs: P("M7 5v9") + P("M7 18.5a1.6 1.6 0 1 0 0-3.2 1.6 1.6 0 0 0 0 3.2z") + P("M7 8.2a1.6 1.6 0 1 0 0-3.2 1.6 1.6 0 0 0 0 3.2z") + P("M17 9.5a1.6 1.6 0 1 0 0-3.2 1.6 1.6 0 0 0 0 3.2z") + P("M17 8.2V11a3 3 0 0 1-3 3H7"),
   // knowledge graph (nodes + edges)

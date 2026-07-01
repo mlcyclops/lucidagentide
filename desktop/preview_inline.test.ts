@@ -83,4 +83,26 @@ describe("inlinePreviewAssets (P-PREVIEW.4c)", () => {
     const html = `<!doctype html><style>body{margin:0}</style><script>game()</script>`;
     expect(inlinePreviewAssets(html, B, fs({}))).toBe(html);
   });
+
+  test("a relative <iframe src=app.html> (self-test wrapper) → srcdoc with the target inlined recursively", () => {
+    const wrapper = `<body><iframe src="game.html?selftest=1"></iframe></body>`;
+    const files = { "/app/game.html": `<div class="hero">GAME</div><link rel="stylesheet" href="g.css">`, "/app/g.css": "div{color:red}" };
+    const out = inlinePreviewAssets(wrapper, B, fs(files));
+    expect(out).toContain("srcdoc=");
+    expect(out).not.toContain('src="game.html');          // src dropped
+    expect(out).toContain("GAME");                          // target folded in
+    expect(out).toContain("div{color:red}");               // target's OWN assets inlined too (recursive)
+    expect(out).toContain('class=&quot;hero&quot;');       // the srcdoc value is attribute-escaped
+    expect(out).not.toContain('<div class="hero"');        // raw quotes must NOT leak into the attribute
+  });
+  test("iframe recursion is depth-capped (a self-referential wrapper can't loop forever)", () => {
+    // a.html frames b.html frames a.html → bounded by MAX_IFRAME_DEPTH, returns without throwing/hanging
+    const files = { "/app/a.html": `<iframe src="b.html"></iframe>`, "/app/b.html": `<iframe src="a.html"></iframe>` };
+    const out = inlinePreviewAssets(`<iframe src="a.html"></iframe>`, B, fs(files));
+    expect(out).toContain("srcdoc=");                       // completed (did not overflow the stack)
+  });
+  test("a remote / non-html iframe src is left alone", () => {
+    const html = `<iframe src="https://x.com/a"></iframe><iframe src="data.json"></iframe>`;
+    expect(inlinePreviewAssets(html, B, fs({ "/app/data.json": "{}" }))).toBe(html);
+  });
 });

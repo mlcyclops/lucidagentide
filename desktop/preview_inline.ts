@@ -57,17 +57,24 @@ export function inlinePreviewAssets(
   opts: { maxAssetBytes?: number; maxTotalBytes?: number } = {},
 ): string {
   const maxAsset = opts.maxAssetBytes ?? DEFAULTS.maxAssetBytes;
-  const maxTotal = opts.maxTotalBytes ?? DEFAULTS.maxTotalBytes;
-  let budget = maxTotal;
+  const box = { budget: opts.maxTotalBytes ?? DEFAULTS.maxTotalBytes }; // shared across nested-iframe recursion
+  return inlineInto(html, baseDir, io, maxAsset, box, 0);
+}
 
+const MAX_IFRAME_DEPTH = 2; // wrapper → app → one more; caps recursion (and a self-referential wrapper)
+/** Escape a string for use as a double-quoted HTML attribute value (for `srcdoc`). */
+const attrEscape = (s: string): string => s.replace(/&/g, "&amp;").replace(/"/g, "&quot;");
+
+/** The recursive worker (see inlinePreviewAssets). `box.budget` is shared so nested iframes can't blow the cap. */
+function inlineInto(html: string, baseDir: string, io: InlineIO, maxAsset: number, box: { budget: number }, depth: number): string {
   const readTextAsset = (ref: string): string | null => {
     const p = resolveLocalRef(baseDir, ref);
     if (!p) return null;
     try {
       const t = io.readText(p);
       const bytes = Buffer.byteLength(t, "utf8");
-      if (bytes > maxAsset || bytes > budget) return null;
-      budget -= bytes;
+      if (bytes > maxAsset || bytes > box.budget) return null;
+      box.budget -= bytes;
       return t;
     } catch { return null; }
   };
@@ -76,8 +83,8 @@ export function inlinePreviewAssets(
     if (!p) return null;
     try {
       const b = io.readBytes(p);
-      if (b.length > maxAsset || b.length > budget) return null;
-      budget -= b.length;
+      if (b.length > maxAsset || b.length > box.budget) return null;
+      box.budget -= b.length;
       return `data:${mimeOf(p)};base64,${Buffer.from(b).toString("base64")}`;
     } catch { return null; }
   };
@@ -120,6 +127,22 @@ export function inlinePreviewAssets(
 
   // 4) url(REL) inside existing inline <style> blocks → data: (fonts/bg images the author wrote inline)
   out = out.replace(/(<style\b[^>]*>)([\s\S]*?)(<\/style>)/gi, (_m, open, body, close) => `${open}${inlineCssUrls(String(body))}${close}`);
+
+  // 5) <iframe src="REL.html"> → srcdoc with the target inlined (the "self-test wrapper" pattern the agent
+  //    writes: one page whose whole body is <iframe src="game.html">). The target is read, RECURSIVELY inlined
+  //    (its own assets), and folded into `srcdoc` so it renders under the same frame CSP. Any query is dropped
+  //    (srcdoc has no URL) — fine, since the embedded page renders normally without it. Depth-capped.
+  if (depth < MAX_IFRAME_DEPTH) {
+    out = out.replace(/(<iframe\b[^>]*?)\bsrc\s*=\s*["']([^"']+)["']([^>]*>)/gi, (tag, pre, src, post) => {
+      const p = resolveLocalRef(baseDir, String(src));
+      if (!p || !/\.html?$/i.test(p)) return tag;                 // only inline a local .html/.htm target
+      const child = readTextAsset(String(src));
+      if (child == null) return tag;
+      const childDir = p.replace(/[\\/][^\\/]*$/, "");
+      const inlined = inlineInto(child, childDir, io, maxAsset, box, depth + 1);
+      return `${pre} srcdoc="${attrEscape(inlined)}"${post}`;     // drop src; carry the inlined doc
+    });
+  }
 
   return out;
 }

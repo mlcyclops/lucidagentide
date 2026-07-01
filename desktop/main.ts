@@ -80,7 +80,10 @@ function createWindow(): void {
 
 ipcMain.handle("lucid:pickFolder", async (e) => {
   const w = BrowserWindow.fromWebContents(e.sender) ?? undefined;
-  const r = await dialog.showOpenDialog(w!, { properties: ["openDirectory"], title: "Choose a workspace folder" });
+  // Native OS folder dialog: browse anywhere on the machine and CREATE a new folder from within the dialog.
+  // `createDirectory` enables the New Folder button on macOS (Windows always offers it); the whole tree is
+  // reachable (no home confinement).
+  const r = await dialog.showOpenDialog(w!, { properties: ["openDirectory", "createDirectory"], title: "Choose or create a workspace folder" });
   return r.canceled || !r.filePaths[0] ? null : r.filePaths[0];
 });
 

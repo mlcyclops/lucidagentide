@@ -169,7 +169,7 @@ export interface WorkspaceInfo {
 export type ChatEvent =
   | { type: "token"; text: string }
   | { type: "thinking"; text: string }
-  | { type: "tool"; name: string; detail: string }
+  | { type: "tool"; name: string; detail: string; code?: { path: string; content?: string; oldText?: string; newText?: string; patch?: string } } // P-CHAT.1: inline code/diff preview
   | { type: "subagent"; id: string; agent: string; title: string; assignments: string[] }
   | { type: "block"; tool: string; reason: string; severity: string; findings: string; id?: string; quarantined?: boolean }
   | { type: "permission"; id: string; tool: string; detail: string; options: { optionId: string; name: string; kind?: string }[]; url?: string; egress?: boolean; localFile?: boolean; exec?: boolean; program?: string; reason?: string; danger?: boolean }

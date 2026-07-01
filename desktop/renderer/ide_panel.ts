@@ -83,6 +83,22 @@ function loadMonaco(): Promise<any> {
   return monacoLoading;
 }
 
+// P-CHAT.1 (ADR-0104): syntax-highlight a code snippet to HTML for the chat's inline preview, WITHOUT an
+// editor instance. Reuses the same lazily-loaded, vendored Monaco (no new dep) and its `colorize` tokenizer
+// (main-thread; no language-service worker needed). Returns Monaco-generated HTML (its own text is escaped,
+// so it's safe to assign), or null on any failure so the caller can fall back to plain escaped text.
+let colorizeThemeReady = false;
+export async function colorizeCode(code: string, langHint: string): Promise<string | null> {
+  try {
+    const m = await loadMonaco();
+    // colorize paints via `.mtkN` classes whose colors live in the theme stylesheet Monaco injects on
+    // setTheme; ensure it's applied once (no editor may have been created yet).
+    if (!colorizeThemeReady) { try { m.editor.setTheme("lucid-dark"); } catch { /* default theme */ } colorizeThemeReady = true; }
+    const lang = guessLanguage(langHint);
+    return await m.editor.colorize(code, lang === "plaintext" ? "" : lang, { tabSize: 2 });
+  } catch { return null; }
+}
+
 // filename/extension (or fenced-code language) → Monaco language id, and the reverse for Save-As.
 const EXT_LANG: Record<string, string> = {
   ts: "typescript", tsx: "typescript", js: "javascript", jsx: "javascript", mjs: "javascript", cjs: "javascript",

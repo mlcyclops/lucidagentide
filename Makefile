@@ -336,6 +336,10 @@ demo-P-PREVIEW.3a-shot: ## P-PREVIEW.3a-shot (ADR-0096): the agent SEES its own 
 demo-P-PREVIEW.4c: ## P-PREVIEW.4c (ADR-0096): MULTI-FILE apps render by inlining their own relative css/js/img/fonts (link→style, script src→inline, img/url→data:) under the SAME frame CSP; remote/traversal refs refused
 	$(BUN) run desktop/scripts/demo_p_preview_4c.ts
 
+.PHONY: demo-P-CHAT.1
+demo-P-CHAT.1: ## P-CHAT.1 (ADR-0104): inline expandable code preview for tool steps - writes syntax-highlighted (Monaco), edits as green/red line diffs; proves the pure diff logic
+	$(BUN) run desktop/scripts/demo_p_chat_1.ts
+
 .PHONY: demo-P-FS.1
 demo-P-FS.1: ## P-FS.1 (ADR-0103): full-tree workspace folder browser - browse above home to the FS root / drives, with an optional managed workspaceRoots confinement
 	$(BUN) run desktop/scripts/demo_p_fs_1.ts
