@@ -397,6 +397,10 @@ export interface LucidBridge {
   credList(): Promise<CredMetaView[]>;
   credDelete(ref: string): Promise<boolean>;
   credEncryptionAvailable(): Promise<boolean>;
+  // P-NETWL.2 (ADR-0106): curated network-whitelist CRUD (persisted server-side; non-secret).
+  whitelistList(): Promise<WhitelistEntryView[]>;
+  whitelistUpsert(entry: Partial<WhitelistEntryView>): Promise<WhitelistEntryView | null>;
+  whitelistRemove(id: string): Promise<void>;
   // P-PREVIEW.1 (ADR-0096): capture the preview region (window capturePage, cropped) → PNG data URL.
   // Electron-only; resolves null in a plain browser (no capturePage).
   capturePreview(rect: { x: number; y: number; width: number; height: number }): Promise<string | null>;
@@ -421,6 +425,20 @@ export interface LucidBridge {
 
 /** Non-secret metadata about a vault credential (P-NETWL.1, ADR-0106). No plaintext ever crosses this line. */
 export interface CredMetaView { ref: string; kind: string; label?: string; createdAt?: number }
+
+/** A curated network-whitelist entry (P-NETWL.2, ADR-0106). Non-secret: `auth` holds only an opaque
+ *  `vaultRef` into the credential vault, never the secret itself. Mirrors network_whitelist.ts WhitelistEntry. */
+export interface WhitelistEntryView {
+  id: string;
+  kind: "domain" | "ip";
+  pattern: string;
+  zone: "internal" | "external";
+  scope: "always" | "project" | "loop";
+  project?: string | null;
+  callBudget?: number | null;
+  auth?: { kind: string; vaultRef: string; username?: string; header?: string; note?: string } | null;
+  addedAt?: number;
+}
 
 /** Native shell injected by the Electron preload (window controls + crisp zoom). */
 interface NativeShell {
@@ -625,6 +643,9 @@ export const bridge: LucidBridge = {
   credList: () => (shell?.credList ? shell.credList() : Promise.resolve([])), // P-NETWL.1
   credDelete: (ref) => (shell?.credDelete ? shell.credDelete(ref) : Promise.resolve(false)), // P-NETWL.1
   credEncryptionAvailable: () => (shell?.credEncryptionAvailable ? shell.credEncryptionAvailable() : Promise.resolve(false)), // P-NETWL.1
+  whitelistList: async () => (await getData("/api/whitelist")) ?? [], // P-NETWL.2
+  whitelistUpsert: (entry) => post("/api/whitelist", entry), // P-NETWL.2
+  whitelistRemove: async (id) => { await post("/api/whitelist/remove", { id }); }, // P-NETWL.2
   capturePreview: (rect) => (shell?.capturePreview ? shell.capturePreview(rect) : Promise.resolve(null)), // P-PREVIEW.1
   previewEgressAllows: async (url) => { const d = await getData(`/api/preview/egress-check?url=${encodeURIComponent(url)}`); return !!(d as { allow?: boolean } | null)?.allow; }, // P-PREVIEW.3b
   previewFile: async (path) => { const d = await getData(`/api/preview/file?path=${encodeURIComponent(path)}`); const h = (d as { html?: unknown } | null)?.html; return typeof h === "string" ? h : null; }, // P-PREVIEW.4

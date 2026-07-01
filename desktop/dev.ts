@@ -25,6 +25,7 @@ import { clearIngestSessions, deleteSession, listSessions, sessionMessages } fro
 import { providerAuth } from "./auth_status.ts";
 import { cloneRepo, setWorkspace, workspaceInfo } from "./workspace.ts";
 import { egressDecision } from "./egress_policy.ts"; // P-PREVIEW.3b: gate a remote preview by the egress allow-list
+import { loadWhitelist, removeEntry, saveWhitelist, upsertEntry, type WhitelistEntry } from "./network_whitelist.ts"; // P-NETWL.2: whitelist CRUD
 import { readPreviewFile, toFsPath } from "./preview_file.ts"; // P-PREVIEW.4: read a local file's content for the preview
 import { PREVIEW_FRAME_CSP } from "./preview_resolve.ts"; // P-PREVIEW.4b: per-frame CSP for the served preview doc
 import { inlinePreviewAssets } from "./preview_inline.ts"; // P-PREVIEW.4c: fold a multi-file app's relative assets inline
@@ -325,6 +326,21 @@ const server = Bun.serve({
       }
       if (p === "/api/mcp/remove" && req.method === "POST") { const b = await readBody<{ id?: unknown }>(req); removeMcpServer(String(b.id ?? "")); backend.restart(); return json({ ok: true }); }
       if (p === "/api/mcp/toggle" && req.method === "POST") { const b = await readBody<{ id?: unknown; enabled?: unknown }>(req); setMcpServerEnabled(String(b.id ?? ""), !!b.enabled); backend.restart(); return json({ ok: true }); }
+      // P-NETWL.2 (ADR-0106): the curated network whitelist CRUD the Settings UI drives. The stored config is
+      // NON-secret (domain/IP patterns + zone/scope + an opaque vaultRef); the actual secret lives in the
+      // OS-encrypted credential vault (main-process safeStorage), never here. egressDecision reads this file to
+      // auto-allow. upsertEntry sanitizes (a malformed entry is dropped → data:null signals rejection).
+      if (p === "/api/whitelist") {
+        if (req.method === "POST") {
+          const b = await readBody<Partial<WhitelistEntry>>(req);
+          const id = typeof b.id === "string" && b.id ? b.id : `wl_${Date.now().toString(36)}_${Math.floor(Math.random() * 1e6).toString(36)}`;
+          const store = upsertEntry(loadWhitelist(), { ...b, id } as WhitelistEntry);
+          saveWhitelist(store);
+          return json({ ok: true, data: store.entries.find((e) => e.id === id) ?? null });
+        }
+        return json({ ok: true, data: loadWhitelist().entries }); // entries carry no secret, only an opaque vaultRef
+      }
+      if (p === "/api/whitelist/remove" && req.method === "POST") { const b = await readBody<{ id?: unknown }>(req); saveWhitelist(removeEntry(loadWhitelist(), String(b.id ?? ""))); return json({ ok: true }); }
       // ADR-0009 Phase D: developer-mode logging view. GET is gated server-side on developerMode
       // (returns null when off); POST {enabled} flips the mode. Read-only, metadata-only.
       if (p === "/api/dev") {
