@@ -7,7 +7,7 @@
 // grouped the throwaway extraction sessions; this deletes them in one click. Defense in depth: only files
 // that are BOTH this workspace's AND extractor throwaways are removed — real chats are never touched.
 
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { EXTRACT_SYSTEM } from "../../harness/personal/distiller.ts";
@@ -17,7 +17,7 @@ const fail = (msg: string): never => { console.error(`FAIL: ${msg}`); process.ex
 const ok = (msg: string): void => console.log(`   ${msg} ✓`);
 
 console.log("== #123 clear ingest sessions (chats + KG untouched) ==");
-const root = join(tmpdir(), `demo-ingest2-${process.pid}`);
+const root = mkdtempSync(join(tmpdir(), "demo-ingest2-")); // atomic, random name (js/insecure-temporary-file)
 const dir = join(root, "enc");
 mkdirSync(dir, { recursive: true });
 const ln = (o: unknown) => JSON.stringify(o);

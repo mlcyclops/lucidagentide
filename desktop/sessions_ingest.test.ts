@@ -5,7 +5,7 @@
 // import mints are detected and split out of the chat list into their own group.
 
 import { expect, test } from "bun:test";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { EXTRACT_SYSTEM } from "../harness/personal/distiller.ts";
@@ -24,7 +24,7 @@ test("ingestPreview shows the learned snippet, not the extractor prompt", () => 
 });
 
 test("listSessions splits ingest throwaways out of the chat list (titled by the snippet)", () => {
-  const root = join(tmpdir(), `lucid-sess-${process.pid}-${Math.floor(performance.now())}`);
+  const root = mkdtempSync(join(tmpdir(), "lucid-sess-")); // atomic, random name (js/insecure-temporary-file)
   const cwd = "/test/repo";
   const dir = join(root, "enc");
   mkdirSync(dir, { recursive: true });
@@ -59,7 +59,7 @@ test("listSessions splits ingest throwaways out of the chat list (titled by the 
 });
 
 test("clearIngestSessions only touches the CURRENT workspace's ingest sessions", () => {
-  const root = join(tmpdir(), `lucid-sess-ws-${process.pid}-${Math.floor(performance.now())}`);
+  const root = mkdtempSync(join(tmpdir(), "lucid-sess-ws-")); // atomic, random name (js/insecure-temporary-file)
   const dir = join(root, "enc");
   mkdirSync(dir, { recursive: true });
   const lnj = (o: unknown) => JSON.stringify(o);

@@ -241,6 +241,17 @@ export function execVerdict(
   return gate;
 }
 
+/** P-EXEC.2 (ADR-0110): omp (≥16.1) delivers its per-tool "Approve/Deny" approval — and plan-mode
+ *  approval — as an ACP FORM elicitation whose single `value` property carries the option strings. Pick
+ *  the affirmative option to ACCEPT (this elicitation is a redundant INNER gate that only fires after our
+ *  own `session/request_permission` gate already allowed the call), or null to DECLINE — a custom
+ *  question with no affirmative option must NOT be auto-answered. Pure; matches whole words only so a
+ *  "Deny"-only set never counts as approval. */
+export function elicitationApproval(options: readonly unknown[]): string | null {
+  const opts = (options ?? []).filter((v): v is string => typeof v === "string");
+  return opts.find((v) => /\b(approve|allow|yes|proceed|accept)\b/i.test(v)) ?? null;
+}
+
 /** Pure update: fold a user's choice into the store. Returns a NEW store (never mutates). allow-once /
  *  allow-turn / deny persist nothing (turn scope is in-memory on the backend). */
 export function applyExecChoice(store: ExecStore, cls: ExecClass, choice: ExecChoice): ExecStore {
