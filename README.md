@@ -71,6 +71,12 @@ personalization internals are proprietary and intentionally undocumented here - 
 <a href="#-roadmap"><b>Roadmap</b></a> ·
 <a href="DECISIONS.md"><b>Decisions (ADRs)</b></a>
 
+<br/>
+
+<h2 align="center">🌐 New in v1.8.25 — your agent is online out of the box, and Claude&nbsp;Fable&nbsp;5 has landed</h2>
+
+<p align="center"><b>“Allow all websites + local LAN” is now pre-checked</b>, so a fresh agent can browse the web and search immediately — while the curated, trust-scoped whitelist is one toggle away whenever you want to lock it down (it still asks before a public IP or a foreign-country site). And <b>Claude Fable 5</b> is now selectable the moment your Claude account is connected, with a clear U.S.-government privacy notice.</p>
+
 </div>
 
 ---
