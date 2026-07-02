@@ -52,4 +52,12 @@
 //           ROTATE-in-place (paste or file, same vaultRef preserved, rotatedAt bumped, last-4 refreshed;
 //           fail-closed - the old secret is left intact if the OS keystore is unavailable). Optional
 //           "rotate every N days" reminder on the add form.
-export const APP_VERSION = "1.8.24";
+// v1.8.25 = egress posture (P-NETWL.5, ADR-0108): two PRE-CHECKED personal-mode toggles - "Allow web search"
+//           and "Allow all websites + local LAN" - so agents reach the internet out of the box. The curated
+//           whitelist ENFORCES only when "Allow all" is off; with it on, egress auto-allows EXCEPT it still
+//           prompts for a public IP literal or a foreign-country-TLD site. An enterprise managed policy clamps
+//           allow-all off (the Support-Desk path). Scanner gate unchanged (still fail-closed).
+//           ALSO Fable 5 in the model picker (P-IDE.1e, ADR-0109): enabled when a Claude account is connected
+//           (OAuth or ANTHROPIC_API_KEY), it routes through Anthropic; carries a U.S.-government privacy notice
+//           (row marker + hover banner + a persistent notice when selected).
+export const APP_VERSION = "1.8.25";

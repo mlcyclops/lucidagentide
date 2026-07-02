@@ -7,13 +7,32 @@
 
 import { describe, expect, test } from "bun:test";
 import {
-  emptyStore, ipv4ToInt, isIpv4, matchDomain, matchIp, normalizeHost, normProject, removeEntry, sanitizeStore,
-  upsertEntry, whitelistMatch, whitelistVerdict, withinCallBudget, type WhitelistEntry, type WhitelistStore,
+  DEFAULT_POSTURE, emptyStore, ipv4ToInt, isIpv4, matchDomain, matchIp, normalizeHost, normProject, removeEntry,
+  sanitizePosture, sanitizeStore, setPosture, upsertEntry, whitelistMatch, whitelistVerdict, withinCallBudget,
+  type WhitelistEntry, type WhitelistStore,
 } from "./network_whitelist.ts";
 
 const entry = (o: Partial<WhitelistEntry> & Pick<WhitelistEntry, "id" | "pattern">): WhitelistEntry =>
   ({ kind: "domain", zone: "external", scope: "always", ...o });
-const store = (...es: WhitelistEntry[]): WhitelistStore => ({ version: 1, entries: es });
+const store = (...es: WhitelistEntry[]): WhitelistStore => ({ version: 1, entries: es, posture: { ...DEFAULT_POSTURE } });
+
+describe("posture (P-NETWL.5) — sanitize + set, permissive default", () => {
+  test("missing / partial / non-bool posture defaults to both ON (pre-checked)", () => {
+    expect(sanitizePosture(undefined)).toEqual({ allowAll: true, allowWebSearch: true });
+    expect(sanitizePosture({ allowAll: false })).toEqual({ allowAll: false, allowWebSearch: true });
+    expect(sanitizePosture({ allowWebSearch: false, junk: 1 })).toEqual({ allowAll: true, allowWebSearch: false });
+    expect(sanitizePosture({ allowAll: "yes" })).toEqual({ allowAll: true, allowWebSearch: true });
+  });
+  test("a posture-less store loads with the permissive default (upgrade path)", () => {
+    expect(sanitizeStore({ entries: [] }).posture).toEqual({ allowAll: true, allowWebSearch: true });
+  });
+  test("setPosture patches + preserves entries", () => {
+    let s = upsertEntry(emptyStore(), entry({ id: "1", pattern: "x.com" }));
+    s = setPosture(s, { allowAll: false });
+    expect(s.posture).toEqual({ allowAll: false, allowWebSearch: true });
+    expect(s.entries.length).toBe(1);
+  });
+});
 
 describe("normalizeHost", () => {
   test("pulls the host from a URL, a bare host, and a scheme-less URL; strips port + case", () => {

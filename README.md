@@ -71,6 +71,12 @@ personalization internals are proprietary and intentionally undocumented here - 
 <a href="#-roadmap"><b>Roadmap</b></a> ·
 <a href="DECISIONS.md"><b>Decisions (ADRs)</b></a>
 
+<br/>
+
+<h2 align="center">🌐 New in v1.8.25 — your agent is online out of the box, and Claude&nbsp;Fable&nbsp;5 has landed</h2>
+
+<p align="center"><b>“Allow all websites + local LAN” is now pre-checked</b>, so a fresh agent can browse the web and search immediately — while the curated, trust-scoped whitelist is one toggle away whenever you want to lock it down (it still asks before a public IP or a foreign-country site). And <b>Claude Fable 5</b> is now selectable the moment your Claude account is connected, with a clear U.S.-government privacy notice.</p>
+
 </div>
 
 ---
@@ -566,6 +572,7 @@ table below is the recent slice; [`PROGRESS.md`](PROGRESS.md) has the full per-s
 
 | Phase | Feature | ADR |
 |:--|:--|:--|
+| **P-NETWL.5 · P-IDE.1e** | **Easy egress + Fable 5** - two pre-checked toggles ("Allow web search", "Allow all websites + local LAN") so agents reach the internet out of the box; the curated whitelist enforces only when "Allow all" is off, and even on it still asks before a public IP or a foreign-country site (enterprise policy can force whitelist-only). Plus **Fable 5** in the model picker when a Claude account is connected, with a U.S.-government privacy notice | [ADR-0108/0109](DECISIONS.md) |
 | **P-NETWL.1-4 · P-KEYS.1-2** | **Network whitelist + credential vault** - a curated allow-list of domains (`*.com` TLD + exact) and IP/CIDR ranges by internal/external zone, managed in Settings, with **enforced** trust scopes (`always` / `project` / this-`loop`) + a per-loop **call budget**; a match auto-allows the agent's network calls *under* the enterprise-managed ceiling (fail-closed). Click a **DNS pill** in Network diagnostics to whitelist a host the agent just resolved. Optional per-site auth (JWT/OAuth/SAML/PEM/API-key/basic) is stored **OS-encrypted** (DPAPI/Keychain/libsecret) via paste or native file upload - refused, never plaintext, if encryption is unavailable - shown masked as `••••XXXX` (last-4 only), with **rotation visibility** (rotated Nd ago / rotation due / expired) and one-click **rotate-in-place** | [ADR-0106/0107](DECISIONS.md) |
 | **P-DOC.1** | **Role-based user guides** - per-role (Dev/Sec/Mgr/Exec) end-to-end walkthroughs under [`docs/guides/`](docs/guides/README.md): step-by-step capability tours, tips/warnings, screenshot placeholders, and cited *Notes and References* | [ADR-0092](DECISIONS.md) |
 | **P-TOOLFAIL.1 · P-EGRESS.2 · P-LOC.3** | **Agent-trust UX** - an honest failed/rejected tool-call chip (distinguishes a tool that *failed* from one that *didn't run*, never implies a denial), a local-file browser open labeled + audited as a local file (not a website), and the AI-authorship ledger made discoverable (palette entry) + never silently vanishing | [ADR-0093/0094/0095](DECISIONS.md) |

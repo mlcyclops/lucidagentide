@@ -8121,3 +8121,88 @@ via an in-app "connect your Vault" card + instructions - the same "install/run i
 `headroom` proxy. This revises ADR-0107 item 4 (the "one self-host connector in the public tier") to: **no KMS
 connector in the public core.** ADR-A012 is updated to own both the self-host BYO Vault connector and the cloud
 connectors. P-KEYS.3 is therefore an ADR-A012 (add-on) increment, not a public-core one.
+
+## ADR-0108 - P-NETWL.5: egress posture (allow-all + web-search toggles); whitelist enforces only when allow-all is off
+
+**Date:** 2026-07-01
+**Status:** Accepted - BUILT + tested. v1.8.25.
+**Increment:** P-NETWL.5.
+
+### Context
+
+The curated whitelist (P-NETWL.1-.4) is fail-closed: with nothing whitelisted, the agent can't reach the
+internet without a per-site prompt. For a **personal / non-enterprise** user that's too restrictive - "my agents
+can't access the internet." We need an easy, default-on way to let agents work, while keeping the whitelist as
+the opt-in restrictive mode and preserving the enterprise story.
+
+### Decision
+
+Add an **egress POSTURE** - two toggles, both **pre-checked** by default, stored in the whitelist store
+(`EgressPosture { allowAll, allowWebSearch }`, default both true; a posture-less file upgrades to permissive):
+
+1. **Allow web search** - `acp_backend` auto-approves the `web_search` tool (omp's built-in providers) when
+   `allowWebSearch` is on; else it prompts.
+2. **Allow all websites + local LAN** - when `allowAll` is on, `egressDecisionDetailed` auto-allows (`via:
+   "allow-all"`) EXCEPT the still-prompt set: a **public IP literal** (country unverifiable) and a **foreign
+   country-code TLD** (`isForeignTld`: a 2-letter ccTLD, excluding `.us` and generic-use `io/ai/co/me/tv/…`).
+   LAN / private / loopback / intranet hosts (`isPrivateOrLanHost`) always auto-allow ("+ local LAN"). **The
+   curated whitelist ENFORCES only when `allowAll` is OFF** - the UI dims it to "standby" while on.
+
+The order in `egressDecisionDetailed`: an explicit whitelist entry wins first (so you can approve a specific
+foreign site), then allow-all, then the standing egress store. **Fail-closed is preserved:** the scanner gate is
+untouched; an unparseable target still prompts; and an **enterprise managed policy clamps `allowAll` OFF**
+(`clampPosture`: a restrictive `allowedHosts` or `disableDangerMode` forces whitelist-enforced mode) - the
+"contact your Support Desk" path. `web_search` is left to the user's toggle. Posture is served (effective +
+`managedLocked`) at `/api/whitelist/posture`.
+
+### Verification
+
+`make demo-P-NETWL.5` + tests (allow-all classifier: LAN allow / public-IP + foreign-TLD prompt / US-generic
+allow; `clampPosture` managed override; posture sanitize/default). **Live** (real dev server, `egress-check`):
+with allow-all on, `github.com` + LAN auto-allow while `baidu.cn` + `8.8.8.8` still prompt; flip allow-all off →
+`github.com` prompts (whitelist-enforced); the two pre-checked toggles render with premium tooltips and the
+whitelist dims to standby. Full suite green; typecheck + license clean.
+
+### Relates to
+
+ADR-0062 (P-EGRESS.1, the per-site gate this sits over), ADR-0068 (P-ENT.1, the managed ceiling that clamps it),
+ADR-0106 (P-NETWL.1-.4, the whitelist this makes opt-in), CLAUDE.md #3 (the SCANNER gate stays fail-closed; this
+is the consent layer, defaulted permissive for personal use but clamped restrictive by managed policy and still
+prompting for public IPs / foreign sites).
+
+## ADR-0109 - P-IDE.1e: Fable 5 enabled behind a connected Claude account + a U.S.-government privacy notice
+
+**Date:** 2026-07-01
+**Status:** Accepted - BUILT + tested. v1.8.25.
+**Increment:** P-IDE.1e.
+
+### Context
+
+Fable 5 (`claude-fable-5`) shipped in omp's model catalog but the app kept it **visible-but-disabled** under an
+ITAR advisory (ADR-0029 P-IDE.1b). It's now to be **usable**, but it routes through Anthropic (so it needs a
+Claude account) and it carries a specific data-handling caveat the user must see.
+
+### Decision
+
+1. **Gate on Claude auth.** Drop Fable 5 from the ITAR `UNAVAILABLE` map (Mythos 5 stays gated). `unavailableReason`
+   now returns undefined for Fable **only when a Claude (Anthropic) account is connected** - `claudeAuthed()` =
+   the `anthropic` major has `oauthActive` OR `keySet`. Without it, Fable stays greyed with a "connect a Claude
+   account to enable" reason (not the ITAR one). `state.auth` loads from first paint, so the picker knows.
+2. **U.S.-government privacy notice, three surfaces.** A small shield **row marker**, a **hover-card banner**, and
+   a **persistent danger toast on selection** all state: *"Chat history for this model has NO expectation of
+   absolute privacy from the U.S. government."* Selecting Fable raises the notice instead of the routine "applied"
+   toast. Informational (not a typed-ACKNOWLEDGE wall like the China-origin unlock) - the user asked for a warning,
+   not a hard gate.
+
+### Verification
+
+Live (real dev server, Claude OAuth active): omp lists `anthropic/claude-fable-5`; the picker row is **selectable**
+with the shield marker; the hover card shows the privacy banner; selecting it switches to "Claude Fable 5" and
+raises the persistent privacy toast (screenshot captured). Typecheck + license clean; full suite green (the change
+is renderer-only UI logic).
+
+### Relates to
+
+ADR-0029 (P-IDE.1, model governance + the ITAR `UNAVAILABLE`/warning-wall pattern this extends), the Providers
+auth surface (`anthropic` OAuth / `ANTHROPIC_API_KEY`) that gates it. Note: this is a data-sovereignty disclosure
+in the same family as the AskSage gov advisory + the China-origin acknowledgment wall.

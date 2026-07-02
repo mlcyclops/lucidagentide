@@ -356,6 +356,10 @@ demo-P-NETWL.3: ## P-NETWL.3 (ADR-0106): enforce project/loop trust scopes + per
 demo-P-KEYS.2: ## P-KEYS.2 (ADR-0107): credential rotation visibility (age/due/expiry, non-secret) + manual rotate-in-place (same ref, fail-closed)
 	$(BUN) run desktop/scripts/demo_p_keys_2.ts
 
+.PHONY: demo-P-NETWL.5
+demo-P-NETWL.5: ## P-NETWL.5 (ADR-0108): egress posture — allow-all + web-search toggles; whitelist enforces only when allow-all is off; still prompts for public IPs / foreign TLDs; managed clamp
+	$(BUN) run desktop/scripts/demo_p_netwl_5.ts
+
 .PHONY: dashboards
 dashboards: ## Materialize dashboard CSVs from a DuckDB into observable/docs/data (DB=path)
 	$(BUN) run harness/scripts/materialize_dashboards.ts $(DB) observable/docs/data
