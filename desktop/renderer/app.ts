@@ -82,6 +82,7 @@ const state = {
   mcpServers: [] as import("./bridge.ts").McpServerStatus[], // P-MCP.1 (ADR-0020)
   whitelist: [] as import("./bridge.ts").WhitelistEntryView[], // P-NETWL.2 (ADR-0106) curated network whitelist
   creds: [] as import("./bridge.ts").CredMetaView[], // P-KEYS.1 (ADR-0107) vault metadata (ref → kind/label/last4)
+  posture: { allowAll: true, allowWebSearch: true, managedLocked: false } as import("./bridge.ts").EgressPostureView, // P-NETWL.5 (ADR-0108)
   managed: null as import("./bridge.ts").ManagedPolicy | null, // ADR-0068 (P-ENT.1) enterprise locks
   userRole: null as UserRole | null, // ADR-0088 (P-ROLE.1): chosen role; null until onboarding picks one
   tourSeen: false, // ADR-0089 (P-ROLE.1b): first-run walkthrough already shown (finished or skipped)
@@ -1669,7 +1670,7 @@ function wlRotationBadge(m: import("./bridge.ts").CredMetaView | undefined, now:
   if (rotatedAt != null) return { text: `rotated ${Math.floor((now - rotatedAt) / DAY)}d ago`, tone: "ok" };
   return null;
 }
-function secWhitelist(entries: import("./bridge.ts").WhitelistEntryView[], creds: import("./bridge.ts").CredMetaView[] = []): string {
+function secWhitelist(entries: import("./bridge.ts").WhitelistEntryView[], creds: import("./bridge.ts").CredMetaView[] = [], posture: import("./bridge.ts").EgressPostureView = state.posture): string {
   const credByRef = new Map(creds.map((c) => [c.ref, c]));
   const now = Date.now();
   const rows = entries.length ? entries.map((e) => {
@@ -1721,13 +1722,38 @@ function secWhitelist(entries: import("./bridge.ts").WhitelistEntryView[], creds
         <div class="prov-row"><button class="btn-mini ok" id="wlAdd">${icon("check", 12)} Add</button></div>
       </div></div>`;
   const note = `<div class="set-note">${icon("info", 12)} A whitelist match <b>auto-allows</b> the agent's network calls to that site (no prompt), <b>always under your organization's managed policy ceiling</b> - a managed-denied host is never granted (fail-closed). Anything not whitelisted still goes through the normal per-site approval.</div>`;
-  return setCard("whitelist", "Network Whitelist", "domains · IPs · trust-scoped", rows + form + note, true);
+  // P-NETWL.5 (ADR-0108): the two pre-checked personal-mode toggles. Premium tooltips: these are for personal /
+  // non-enterprise users; enterprise users' policy is managed (Support Desk). The curated whitelist below only
+  // ENFORCES when "Allow all" is off, so `.wl-standby` dims the list/form while allow-all is on.
+  const p = posture;
+  const searchTip = "For personal / non-enterprise use|Lets the agent search the web with the built-in search providers, no prompt each time. Enterprise users: web access is managed by your organization - contact your Support Desk to request it.";
+  const allTip = "For personal / non-enterprise use|The agent can reach any website AND your local network (LAN) without asking. It STILL asks before a public IP address or a site on a foreign country's domain. Turn this OFF to enforce the curated whitelist below instead. Enterprise users: contact your Support Desk to request whitelisted sites.";
+  const lock = p.managedLocked ? " disabled" : "";
+  const toggles = `<div class="wl-posture">
+    <div class="wl-toggle-row">
+      <label class="set-toggle"><input type="checkbox" id="wlAllowSearch" ${p.allowWebSearch ? "checked" : ""}${lock} />
+        <span><b>Allow web search</b> - let the agent search the web (built-in providers).</span></label>
+      <button class="info-dot" type="button" data-tip="${searchTip}" data-tip-icon="shield" data-tip-side="left">${icon("info", 12)}</button>
+    </div>
+    <div class="wl-toggle-row">
+      <label class="set-toggle"><input type="checkbox" id="wlAllowAll" ${p.allowAll ? "checked" : ""}${lock} />
+        <span><b>Allow all websites + local LAN</b> - reach any site + your local network without asking.</span></label>
+      <button class="info-dot" type="button" data-tip="${allTip}" data-tip-icon="shield" data-tip-side="left">${icon("info", 12)}</button>
+    </div>
+    ${p.managedLocked
+      ? `<div class="set-note">${icon("shield", 12)} Managed by your organization - the curated whitelist is enforced. Contact your <b>Support Desk</b> to request a site.</div>`
+      : `<div class="set-note">${icon("info", 12)} The curated whitelist below is <b>enforced only when "Allow all" is off</b>. Even with allow-all on, the agent still asks before a public IP or a foreign-country site.</div>`}
+  </div>`;
+  const body = p.allowAll && !p.managedLocked
+    ? toggles + `<div class="wl-standby">${rows + form}</div>` + note
+    : toggles + rows + form + note;
+  return setCard("whitelist", "Network Whitelist", "domains · IPs · trust-scoped", body, true);
 }
 function hydrateWhitelist(): void {
-  // Fetch entries + vault metadata together so each entry's attached key can show its last-4 (P-KEYS.1).
-  void Promise.all([bridge.whitelistList(), bridge.credList()]).then(([w, c]) => {
-    state.whitelist = w ?? []; state.creds = c ?? [];
-    fillSec("whitelist", secWhitelist(state.whitelist, state.creds));
+  // Fetch entries + vault metadata + posture together (P-KEYS.1 last-4 needs the vault; P-NETWL.5 needs posture).
+  void Promise.all([bridge.whitelistList(), bridge.credList(), bridge.whitelistPosture()]).then(([w, c, p]) => {
+    state.whitelist = w ?? []; state.creds = c ?? []; if (p) state.posture = p;
+    fillSec("whitelist", secWhitelist(state.whitelist, state.creds, state.posture));
   });
 }
 
@@ -4433,6 +4459,23 @@ function wire(): void {
     // P-KEYS.2 (ADR-0107): rotate the credential attached to a whitelist entry (paste or file), in place.
     const wlRotate = t.closest("[data-wl-rotate]") as HTMLElement | null;
     if (wlRotate) { openCredRotate(wlRotate, wlRotate.dataset.wlRotate!); return; }
+    // P-NETWL.5 (ADR-0108): the two egress-posture toggles.
+    if (t.closest("#wlAllowSearch")) {
+      const on = ($("#wlAllowSearch", $("#setBody")!) as HTMLInputElement)?.checked ?? true;
+      const r = await bridge.setWhitelistPosture({ allowWebSearch: on });
+      if (r) state.posture = r;
+      fillSec("whitelist", secWhitelist(state.whitelist, state.creds, state.posture));
+      showToast({ title: on ? "Web search on" : "Web search off", desc: on ? "The agent can search the web with the built-in providers, no prompt." : "The agent will ask before each web search.", timeout: 2600 });
+      return;
+    }
+    if (t.closest("#wlAllowAll")) {
+      const on = ($("#wlAllowAll", $("#setBody")!) as HTMLInputElement)?.checked ?? true;
+      const r = await bridge.setWhitelistPosture({ allowAll: on });
+      if (r) state.posture = r;
+      fillSec("whitelist", secWhitelist(state.whitelist, state.creds, state.posture));
+      showToast({ title: on ? "Allow all on" : "Whitelist enforced", desc: on ? "The agent can reach any site + your LAN (it still asks for public IPs and foreign-country sites)." : "Only whitelisted sites auto-allow now - everything else asks first.", meta: "applies immediately, no restart", timeout: 3400 });
+      return;
+    }
     const wlRemove = t.closest("[data-wl-remove]") as HTMLElement | null;
     if (wlRemove) { await bridge.whitelistRemove(wlRemove.dataset.wlRemove!); hydrateWhitelist(); showToast({ title: "Removed", desc: "The whitelist entry was removed.", timeout: 2600 }); return; }
     // ── Personalization (ADR-0010/0012) ──
@@ -4914,20 +4957,38 @@ async function applyConfig(configId: string, value: string): Promise<void> {
   const o = state.config.find((c) => c.id === configId); if (o) o.currentValue = value;
   if (configId === "model") { state.model = value; const mn = $("#modelName"); if (mn) mn.textContent = modelLabel(value); renderStatus(); }
   updateComposerTools();
+  // P-IDE.1e (ADR-0109): selecting Fable 5 raises a persistent privacy notice (no absolute privacy from the
+  // U.S. government) instead of the routine "applied" toast.
+  if (configId === "model" && shortModelId(value) === FABLE_ID) {
+    showToast({ title: "Fable 5 selected - privacy notice", desc: `${FABLE_PRIVACY_WARN} New turns use Fable 5; you can switch models anytime.`, tone: "danger", actions: [{ label: "I understand" }], timeout: 0 });
+    return;
+  }
   showToast({ title: `${opt?.name ?? configId} → ${label}`, desc: configId === "model" ? "New turns use this model." : "Applied to the active session.", actions: [{ label: "OK" }], timeout: 2400 });
 }
 
 const isAsksage = (v: string) => /asksage/i.test(v);
 // Models present in the catalog but NOT currently selectable. Keyed by short id; the value is the
-// reason shown (greyed row + hover banner). Fable 5 + Mythos 5 are ITAR-restricted until the U.S.
-// government clears them - keep them visible-but-disabled so users know they're coming, not missing.
-// (ADR-0029 P-IDE.1b/1d)
+// reason shown (greyed row + hover banner). (ADR-0029 P-IDE.1b/1d)
 const ITAR_REASON = "Currently unavailable - restricted under U.S. ITAR export controls until the government clears it for use (expected soon).";
 const UNAVAILABLE: Record<string, string> = {
-  "claude-fable-5": ITAR_REASON,
-  "claude-mythos-5": ITAR_REASON,
+  "claude-mythos-5": ITAR_REASON, // Mythos 5 stays ITAR-gated until cleared.
 };
-const unavailableReason = (value: string): string | undefined => UNAVAILABLE[shortModelId(value)];
+// P-IDE.1e (ADR-0109): Fable 5 is enabled, but ONLY when a Claude account is connected (it routes through
+// Anthropic), and it carries a U.S.-government privacy notice.
+const FABLE_ID = "claude-fable-5";
+const FABLE_NEEDS_AUTH = "Connect a Claude account to enable Fable 5 - sign in with Claude OAuth or add an ANTHROPIC_API_KEY in Providers.";
+const FABLE_PRIVACY_WARN = "Chat history for this model has NO expectation of absolute privacy from the U.S. government.";
+/** Is a Claude (Anthropic) OAuth session or API key connected? Gates Fable 5. */
+function claudeAuthed(): boolean {
+  const m = (state.auth?.majors ?? []).find((x) => x.id === "anthropic");
+  return !!m && (!!m.oauthActive || !!m.keySet);
+}
+/** Why a model is non-selectable, or undefined if it's available. Fable 5 needs a connected Claude account. */
+function unavailableReason(value: string): string | undefined {
+  const short = shortModelId(value);
+  if (short === FABLE_ID) return claudeAuthed() ? undefined : FABLE_NEEDS_AUTH;
+  return UNAVAILABLE[short];
+}
 // Advisory shown on gov-gateway (AskSage) models until they're cleared for production use.
 const GOV_ADVISORY = "Government (AskSage) model - restricted to internal prototype use only until cleared for production by the U.S. government.";
 // 5-star rating renderer (filled + dimmed). `cls` colors the filled stars.
@@ -4966,7 +5027,9 @@ const modelRow = (o: { value: string; name: string }, sel: string) => {
   const iq = `<span class="row-iq" aria-label="Intelligence ${info.iq} of 5">${"★".repeat(info.iq)}<span class="row-iq-dim">${"☆".repeat(5 - info.iq)}</span></span>`;
   const ctxLbl = info.ctx ?? "";
   const ctx = ctxLbl ? `<span class="row-ctx" data-tip="Context window">${esc(ctxLbl)}</span>` : "";
-  return `<div class="cfg-opt ${o.value === sel ? "on" : ""}" data-val="${esc(o.value)}" data-model="${esc(o.value)}"><span class="tick">${icon("check", 13)}</span><span class="nm">${esc(cleanModelName(o.name))}</span>${prov}${isAsksage(o.value) ? `<span class="gov-pill">Gov</span>` : ""}${ctx}${iq}</div>`;
+  // P-IDE.1e (ADR-0109): a small privacy marker on the Fable 5 row (the hover card + selection toast carry the full notice).
+  const warnPill = shortModelId(o.value) === FABLE_ID ? `<span class="row-warn" data-tip="U.S.-gov privacy notice|${esc(FABLE_PRIVACY_WARN)}">${icon("shield", 10)}</span>` : "";
+  return `<div class="cfg-opt ${o.value === sel ? "on" : ""}" data-val="${esc(o.value)}" data-model="${esc(o.value)}"><span class="tick">${icon("check", 13)}</span><span class="nm">${esc(cleanModelName(o.name))}</span>${prov}${warnPill}${isAsksage(o.value) ? `<span class="gov-pill">Gov</span>` : ""}${ctx}${iq}</div>`;
 };
 
 // ── P-IDE.1 (ADR-0029): model family grouping ────────────────────────────────
@@ -5090,6 +5153,8 @@ function modelTipHTML(value: string): string {
   const gov = isAsksage(value);
   // ITAR-unavailable reason + gov-prototype-only advisory sit above the (always-present) ratings.
   const banner = reason ? `<div class="mt-banner warn">${esc(reason)}</div>` : "";
+  // P-IDE.1e (ADR-0109): Fable 5, once selectable (Claude connected), carries the U.S.-gov privacy notice.
+  const privacyBanner = shortModelId(value) === FABLE_ID && !reason ? `<div class="mt-banner warn">${icon("shield", 12)} ${esc(FABLE_PRIVACY_WARN)}</div>` : "";
   const govNote = gov ? `<div class="mt-banner gov">${esc(GOV_ADVISORY)}</div>` : "";
   const ratings = `<div class="mt-rate">${stars5(info.exp, "exp")}<span class="mt-rlabel">Token Expense</span></div>
     <div class="mt-rate">${stars5(info.iq, "iq")}<span class="mt-rlabel">Intelligence Level</span></div>
@@ -5097,7 +5162,7 @@ function modelTipHTML(value: string): string {
     <div class="mt-row"><span class="mt-k">Best for</span><span class="mt-v">${esc(info.best)}</span></div>
     ${info.ctx ? `<div class="mt-row"><span class="mt-k">Context</span><span class="mt-v">${esc(info.ctx)} tokens</span></div>` : ""}`;
   return `<div class="mt-h"><span class="mt-name">${esc(modelLabel(value))}</span>${gov ? `<span class="gov-pill">Gov</span>` : ""}</div>
-    ${banner}${govNote}${ratings}
+    ${banner}${privacyBanner}${govNote}${ratings}
     <div class="mt-row"><span class="mt-k">Model&nbsp;id</span><span class="mt-v mt-id">${esc(shortModelId(value))}</span></div>
     <div class="mt-foot">Practical guidance · not a benchmark</div>`;
 }

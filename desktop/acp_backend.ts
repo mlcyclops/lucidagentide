@@ -37,7 +37,7 @@ import { formatSpend } from "./loop_report.ts";
 import { assessReadiness, maturedGoalFrom, mergeMatured, parsePreflightJson, type PreflightSpec, preflightSystemPrompt, preflightUserPrompt, type ReadinessReport, relevantPriorRuns, renderLoopDesign, successCriteria, summarizePriorRuns } from "./loop_preflight.ts";
 import { execFileSync } from "node:child_process";
 import { type Automation, listAutomations, nextDueAutomation, updateAutomation } from "./automations.ts";
-import { type EgressChoice, egressDecisionDetailed, extractHost, isLocalFileTarget, recordEgress } from "./egress_policy.ts";
+import { type EgressChoice, egressDecisionDetailed, egressPosture, extractHost, isLocalFileTarget, recordEgress } from "./egress_policy.ts";
 import { withinCallBudget } from "./network_whitelist.ts";
 import { previewOpenPath, previewablePath } from "./preview_resolve.ts";
 import { gateDenyReason } from "./gate_audit.ts";
@@ -392,6 +392,13 @@ class Backend {
             // EVEN in Agent mode (egress is never silently auto-approved). Fail-closed: no live UI ⇒ deny.
             const isEgress = [...EGRESS_TOOLS].some((t) => toolName.includes(t)) || (!!target && /^https?:\/\//i.test(target));
             if (isEgress) {
+              // P-NETWL.5 (ADR-0108): a web_search call (omp's default search providers, no arbitrary browse)
+              // auto-approves when the user's posture allows web search - the pre-checked personal default.
+              if ((toolName.includes("web_search") || toolName.includes("web-search")) && egressPosture().allowWebSearch) {
+                this.recordGateDiag({ kind: "egress", tool: toolName.slice(0, 40), target: (target ?? "").slice(0, 80), localFile: false, askActive: this.askActive, listener: !!this.listener, goalActive: this.goalActive, autoRunning: this.autoRunning, decision: "allow(web-search)" });
+                const a = opts.find((o) => /allow/i.test(o.kind ?? o.optionId ?? "")) ?? opts[0];
+                return a ? { outcome: { outcome: "selected", optionId: a.optionId } } : { outcome: { outcome: "cancelled" } };
+              }
               // P-EGRESS.2 (ADR-0094): a browser-open of a LOCAL file (file:// or an absolute path) is not a
               // website visit — a host-based standing allow can't apply, so we still PROMPT, but with an
               // accurate local-file dialog (and never persist a host decision for it).

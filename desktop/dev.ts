@@ -24,8 +24,8 @@ import { backend } from "./acp_backend.ts";
 import { clearIngestSessions, deleteSession, listSessions, sessionMessages } from "./sessions.ts";
 import { providerAuth } from "./auth_status.ts";
 import { cloneRepo, setWorkspace, workspaceInfo } from "./workspace.ts";
-import { egressDecision } from "./egress_policy.ts"; // P-PREVIEW.3b: gate a remote preview by the egress allow-list
-import { loadWhitelist, removeEntry, saveWhitelist, upsertEntry, type WhitelistEntry } from "./network_whitelist.ts"; // P-NETWL.2: whitelist CRUD
+import { egressAllowAllManaged, egressDecision, egressPosture } from "./egress_policy.ts"; // P-PREVIEW.3b + P-NETWL.5
+import { loadWhitelist, removeEntry, saveWhitelist, setPosture, upsertEntry, type WhitelistEntry } from "./network_whitelist.ts"; // P-NETWL.2/.5: whitelist CRUD + posture
 import { readPreviewFile, toFsPath } from "./preview_file.ts"; // P-PREVIEW.4: read a local file's content for the preview
 import { PREVIEW_FRAME_CSP } from "./preview_resolve.ts"; // P-PREVIEW.4b: per-frame CSP for the served preview doc
 import { inlinePreviewAssets } from "./preview_inline.ts"; // P-PREVIEW.4c: fold a multi-file app's relative assets inline
@@ -341,6 +341,19 @@ const server = Bun.serve({
         return json({ ok: true, data: loadWhitelist().entries }); // entries carry no secret, only an opaque vaultRef
       }
       if (p === "/api/whitelist/remove" && req.method === "POST") { const b = await readBody<{ id?: unknown }>(req); saveWhitelist(removeEntry(loadWhitelist(), String(b.id ?? ""))); return json({ ok: true }); }
+      // P-NETWL.5 (ADR-0108): the egress posture (allow-all + web-search toggles). GET returns the EFFECTIVE
+      // posture (clamped by any managed policy) + `managedLocked` so the UI can lock the toggle for enterprises.
+      if (p === "/api/whitelist/posture") {
+        if (req.method === "POST") {
+          const b = await readBody<{ allowAll?: unknown; allowWebSearch?: unknown }>(req);
+          const patch: { allowAll?: boolean; allowWebSearch?: boolean } = {};
+          if (typeof b.allowAll === "boolean") patch.allowAll = b.allowAll;
+          if (typeof b.allowWebSearch === "boolean") patch.allowWebSearch = b.allowWebSearch;
+          saveWhitelist(setPosture(loadWhitelist(), patch)); // stored raw; the effective value is clamped on read
+          return json({ ok: true, data: { ...egressPosture(), managedLocked: egressAllowAllManaged() } });
+        }
+        return json({ ok: true, data: { ...egressPosture(), managedLocked: egressAllowAllManaged() } });
+      }
       // ADR-0009 Phase D: developer-mode logging view. GET is gated server-side on developerMode
       // (returns null when off); POST {enabled} flips the mode. Read-only, metadata-only.
       if (p === "/api/dev") {

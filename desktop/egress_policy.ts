@@ -20,7 +20,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { managedConfig, type ManagedEgressPolicy } from "./managed_config.ts";
-import { loadWhitelist, whitelistMatch, type WhitelistContext, type WhitelistEntry, type WhitelistStore } from "./network_whitelist.ts";
+import { DEFAULT_POSTURE, type EgressPosture, isIpv4, loadWhitelist, matchIp, whitelistMatch, type WhitelistContext, type WhitelistEntry, type WhitelistStore } from "./network_whitelist.ts";
 
 const FILE = join(homedir(), ".omp", "lucid-egress.json");
 
@@ -151,15 +151,74 @@ export function egressWhitelistAllows(store: WhitelistStore | null | undefined, 
   return !!egressWhitelistEntry(store, url, managed, ctx);
 }
 
-export interface EgressDecision { verdict: EgressVerdict; via: "whitelist" | "host"; entry?: WhitelistEntry }
+// ── P-NETWL.5 (ADR-0108): egress posture + the allow-all classifier ───────────────────────────────────
+// LAN / private / loopback IPv4 (and localhost / *.local / bare hostnames) are "internal" - auto-allowed in
+// allow-all mode ("+ local LAN access"). Everything else public auto-allows too, EXCEPT the still-prompt set:
+// a public IP literal (we can't cheaply verify its country) and a foreign country-code TLD.
+const PRIVATE_CIDRS = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8", "169.254.0.0/16", "100.64.0.0/10"];
+// 2-letter TLDs that are ccTLDs but overwhelmingly used generically - kept quiet so normal dev/AI sites don't prompt.
+const GENERIC_CCTLD = new Set(["io", "ai", "co", "me", "tv", "cc", "ly", "gg", "fm", "to", "ws", "sh"]);
 
-/** Read-side, detailed: how this URL is decided. A curated whitelist match auto-allows first (and returns the
- *  granting entry, so the caller can enforce its per-loop call budget); otherwise the standing egress store
- *  decides. Both honor the enterprise-managed egress ceiling. */
+/** Is this host on the local network / loopback / intranet (so allow-all should permit it)? Pure. */
+export function isPrivateOrLanHost(host: string): boolean {
+  if (isIpv4(host)) return PRIVATE_CIDRS.some((c) => matchIp(c, host));
+  const h = host.toLowerCase();
+  if (h === "localhost" || h.endsWith(".local") || h.endsWith(".lan") || h.endsWith(".internal") || h.endsWith(".home")) return true;
+  if (!h.includes(".")) return true; // a bare single-label hostname is an intranet name, not a public site
+  return false;
+}
+
+/** Does this host end in a FOREIGN country-code TLD (a 2-letter ccTLD, excluding .us and the generic-use set)? Pure. */
+export function isForeignTld(host: string): boolean {
+  if (!host || isIpv4(host)) return false;
+  const tld = host.toLowerCase().split(".").pop() ?? "";
+  return tld.length === 2 && tld !== "us" && !GENERIC_CCTLD.has(tld);
+}
+
+/** P-NETWL.5: in ALLOW-ALL mode, may this URL auto-allow, or must it still PROMPT? Prompts for a public IP
+ *  literal, a foreign ccTLD, or an unparseable target; allows LAN/private + ordinary US/generic domains. Pure. */
+export function egressAllowAllVerdict(url: string): EgressVerdict {
+  const host = extractHost(url);
+  if (!host) return "prompt";                    // unparseable → still prompt
+  if (isPrivateOrLanHost(host)) return "allow";  // LAN / private / localhost / intranet
+  if (isIpv4(host)) return "prompt";             // public IP literal (country unknown) → prompt
+  if (isForeignTld(host)) return "prompt";       // foreign country-code TLD → prompt
+  return "allow";                                 // ordinary US / generic-TLD domain
+}
+
+/** The managed policy CLAMPS the posture: a restrictive allow-list or a disabled danger mode forces allowAll
+ *  OFF (enterprise = whitelist-enforced; the "contact your Support Desk" path). Pure. */
+export function clampPosture(posture: EgressPosture, managed?: ManagedEgressPolicy): EgressPosture {
+  if (!managed) return posture;
+  const restrictive = !!managed.disableDangerMode || (managed.allowedHosts?.length ?? 0) > 0;
+  return { allowAll: restrictive ? false : posture.allowAll, allowWebSearch: posture.allowWebSearch };
+}
+
+/** The effective egress posture (user's toggles, clamped by any managed policy). */
+export function egressPosture(): EgressPosture {
+  return clampPosture(loadWhitelist().posture ?? DEFAULT_POSTURE, managedConfig().config?.security?.egress);
+}
+
+/** True when an enterprise-managed policy forces the whitelist on (allow-all is not the user's to toggle) -
+ *  the "contact your Support Desk" case; the UI shows the toggle locked. */
+export function egressAllowAllManaged(): boolean {
+  const m = managedConfig().config?.security?.egress;
+  return !!m && (!!m.disableDangerMode || (m.allowedHosts?.length ?? 0) > 0);
+}
+
+export interface EgressDecision { verdict: EgressVerdict; via: "whitelist" | "allow-all" | "host"; entry?: WhitelistEntry }
+
+/** Read-side, detailed: how this URL is decided. (1) an explicit curated whitelist match auto-allows first and
+ *  returns the granting entry (so the caller can enforce its per-loop call budget); (2) else, in ALLOW-ALL mode,
+ *  auto-allow unless the target is still-prompt (public IP / foreign ccTLD); (3) else the standing egress store
+ *  decides. All honor the enterprise-managed ceiling (which also clamps allow-all off). */
 export function egressDecisionDetailed(url: string, ctx?: EgressContext): EgressDecision {
   const managed = managedConfig().config?.security?.egress;
-  const entry = egressWhitelistEntry(loadWhitelist(), url, managed, ctx);
+  const store = loadWhitelist();
+  const entry = egressWhitelistEntry(store, url, managed, ctx);
   if (entry) return { verdict: "allow", via: "whitelist", entry };
+  const posture = clampPosture(store.posture ?? DEFAULT_POSTURE, managed);
+  if (posture.allowAll && egressAllowAllVerdict(url) === "allow") return { verdict: "allow", via: "allow-all" };
   return { verdict: egressVerdict(clampEgress(loadEgress(), managed), url), via: "host" };
 }
 

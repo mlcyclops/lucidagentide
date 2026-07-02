@@ -72,9 +72,20 @@ export interface WhitelistEntry {
   addedAt?: number;
 }
 
+/** P-NETWL.5 (ADR-0108): the egress POSTURE - the two pre-checked toggles that decide whether the curated
+ *  whitelist actually gates. `allowAll` (default true) = "allow all websites + local LAN" (permissive personal
+ *  default; the whitelist enforces only when this is OFF). `allowWebSearch` (default true) = let the agent use
+ *  omp's default web-search providers without prompting. An enterprise managed policy can clamp allowAll off. */
+export interface EgressPosture {
+  allowAll: boolean;
+  allowWebSearch: boolean;
+}
+export const DEFAULT_POSTURE: EgressPosture = { allowAll: true, allowWebSearch: true };
+
 export interface WhitelistStore {
   version: number;
   entries: WhitelistEntry[];
+  posture: EgressPosture;
 }
 
 /** Context for a verdict (the current project / whether we're inside a goal loop). Reserved for the
@@ -84,7 +95,7 @@ export interface WhitelistContext {
   loop?: boolean;
 }
 
-export const emptyStore = (): WhitelistStore => ({ version: WHITELIST_SCHEMA_VERSION, entries: [] });
+export const emptyStore = (): WhitelistStore => ({ version: WHITELIST_SCHEMA_VERSION, entries: [], posture: { ...DEFAULT_POSTURE } });
 
 // ── host / ip primitives (self-contained; egress_policy has its own extractHost) ─────────────────────
 
@@ -203,7 +214,7 @@ export function withinCallBudget(used: number, budget: number | null | undefined
 /** Coerce arbitrary parsed JSON into a valid store, dropping any entry that can't be validated. A dropped
  *  entry means "not whitelisted" (fail-closed) - never a silent widening. */
 export function sanitizeStore(raw: unknown): WhitelistStore {
-  const r = (raw ?? {}) as { entries?: unknown };
+  const r = (raw ?? {}) as { entries?: unknown; posture?: unknown };
   const out: WhitelistEntry[] = [];
   if (Array.isArray(r.entries)) {
     for (const e of r.entries) {
@@ -211,7 +222,22 @@ export function sanitizeStore(raw: unknown): WhitelistStore {
       if (v) out.push(v);
     }
   }
-  return { version: WHITELIST_SCHEMA_VERSION, entries: out };
+  return { version: WHITELIST_SCHEMA_VERSION, entries: out, posture: sanitizePosture(r.posture) };
+}
+
+/** Coerce a posture; a missing/partial posture defaults to the permissive personal default (both ON) - which
+ *  is exactly the "pre-checked" behavior an existing (posture-less) config should get on upgrade. */
+export function sanitizePosture(raw: unknown): EgressPosture {
+  const o = (raw ?? {}) as Record<string, unknown>;
+  return {
+    allowAll: typeof o.allowAll === "boolean" ? o.allowAll : DEFAULT_POSTURE.allowAll,
+    allowWebSearch: typeof o.allowWebSearch === "boolean" ? o.allowWebSearch : DEFAULT_POSTURE.allowWebSearch,
+  };
+}
+
+/** Pure: set the posture, preserving entries. */
+export function setPosture(store: WhitelistStore, posture: Partial<EgressPosture>): WhitelistStore {
+  return { version: WHITELIST_SCHEMA_VERSION, entries: [...(store.entries ?? [])], posture: sanitizePosture({ ...store.posture, ...posture }) };
 }
 
 function sanitizeEntry(e: unknown): WhitelistEntry | null {
@@ -244,17 +270,18 @@ function sanitizeAuth(a: unknown): AuthRef | null {
   return ref;
 }
 
-/** Add or replace an entry by id. Pure - returns a NEW store, never mutates. */
+/** Add or replace an entry by id. Pure - returns a NEW store, never mutates; preserves the posture. */
 export function upsertEntry(store: WhitelistStore, entry: WhitelistEntry): WhitelistStore {
+  const posture = sanitizePosture(store.posture);
   const clean = sanitizeEntry(entry);
-  if (!clean) return { version: WHITELIST_SCHEMA_VERSION, entries: [...(store.entries ?? [])] };
+  if (!clean) return { version: WHITELIST_SCHEMA_VERSION, entries: [...(store.entries ?? [])], posture };
   const rest = (store.entries ?? []).filter((e) => e.id !== clean.id);
-  return { version: WHITELIST_SCHEMA_VERSION, entries: [...rest, clean] };
+  return { version: WHITELIST_SCHEMA_VERSION, entries: [...rest, clean], posture };
 }
 
-/** Remove an entry by id. Pure. */
+/** Remove an entry by id. Pure; preserves the posture. */
 export function removeEntry(store: WhitelistStore, id: string): WhitelistStore {
-  return { version: WHITELIST_SCHEMA_VERSION, entries: (store.entries ?? []).filter((e) => e.id !== id) };
+  return { version: WHITELIST_SCHEMA_VERSION, entries: (store.entries ?? []).filter((e) => e.id !== id), posture: sanitizePosture(store.posture) };
 }
 
 // ── thin persistence (machine-level, like egress_policy / settings) ──────────────────────────────────

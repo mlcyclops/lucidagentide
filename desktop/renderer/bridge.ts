@@ -405,6 +405,9 @@ export interface LucidBridge {
   whitelistList(): Promise<WhitelistEntryView[]>;
   whitelistUpsert(entry: Partial<WhitelistEntryView>): Promise<WhitelistEntryView | null>;
   whitelistRemove(id: string): Promise<void>;
+  // P-NETWL.5 (ADR-0108): the egress posture (allow-all + web-search toggles; managedLocked when enterprise-forced).
+  whitelistPosture(): Promise<EgressPostureView>;
+  setWhitelistPosture(patch: { allowAll?: boolean; allowWebSearch?: boolean }): Promise<EgressPostureView | null>;
   // P-PREVIEW.1 (ADR-0096): capture the preview region (window capturePage, cropped) → PNG data URL.
   // Electron-only; resolves null in a plain browser (no capturePage).
   capturePreview(rect: { x: number; y: number; width: number; height: number }): Promise<string | null>;
@@ -430,6 +433,9 @@ export interface LucidBridge {
 /** Non-secret metadata about a vault credential (P-NETWL.1, ADR-0106). No plaintext ever crosses this line;
  *  `last4` (P-KEYS.1, ADR-0107) is at most the last 4 chars, to identify a key without revealing it. */
 export interface CredMetaView { ref: string; kind: string; label?: string; last4?: string; createdAt?: number; rotatedAt?: number; expiresAt?: number; rotationIntervalDays?: number }
+
+/** The egress posture (P-NETWL.5, ADR-0108): the two pre-checked toggles + whether an enterprise policy locks them. */
+export interface EgressPostureView { allowAll: boolean; allowWebSearch: boolean; managedLocked: boolean }
 
 /** A curated network-whitelist entry (P-NETWL.2, ADR-0106). Non-secret: `auth` holds only an opaque
  *  `vaultRef` into the credential vault, never the secret itself. Mirrors network_whitelist.ts WhitelistEntry. */
@@ -657,6 +663,8 @@ export const bridge: LucidBridge = {
   whitelistList: async () => (await getData("/api/whitelist")) ?? [], // P-NETWL.2
   whitelistUpsert: (entry) => post("/api/whitelist", entry), // P-NETWL.2
   whitelistRemove: async (id) => { await post("/api/whitelist/remove", { id }); }, // P-NETWL.2
+  whitelistPosture: async () => (await getData("/api/whitelist/posture")) ?? { allowAll: true, allowWebSearch: true, managedLocked: false }, // P-NETWL.5
+  setWhitelistPosture: (patch) => post("/api/whitelist/posture", patch), // P-NETWL.5
   capturePreview: (rect) => (shell?.capturePreview ? shell.capturePreview(rect) : Promise.resolve(null)), // P-PREVIEW.1
   previewEgressAllows: async (url) => { const d = await getData(`/api/preview/egress-check?url=${encodeURIComponent(url)}`); return !!(d as { allow?: boolean } | null)?.allow; }, // P-PREVIEW.3b
   previewFile: async (path) => { const d = await getData(`/api/preview/file?path=${encodeURIComponent(path)}`); const h = (d as { html?: unknown } | null)?.html; return typeof h === "string" ? h : null; }, // P-PREVIEW.4
