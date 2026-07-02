@@ -8206,3 +8206,65 @@ is renderer-only UI logic).
 ADR-0029 (P-IDE.1, model governance + the ITAR `UNAVAILABLE`/warning-wall pattern this extends), the Providers
 auth surface (`anthropic` OAuth / `ANTHROPIC_API_KEY`) that gates it. Note: this is a data-sovereignty disclosure
 in the same family as the AskSage gov advisory + the China-origin acknowledgment wall.
+
+## ADR-0110 - P-EXEC.2: answer omp's FORM-elicitation tool approval (fixes every gated tool call silently failing "denied by user")
+
+**Date:** 2026-07-01
+**Status:** Accepted - BUILT + tested (live chat).
+**Increment:** P-EXEC.2.
+
+### Context
+
+Live chat regressed: EVERY bash/eval/edit/delete tool call failed with a neutral "block" chip reading
+`tool failed: … Tool call denied by user: bash`, and the user was **never shown an approve/deny prompt**.
+Reproduced against the real dev server: a plain `echo hello123` was denied just like `node -e "…"`.
+
+Root cause (omp `@oh-my-pi/pi-coding-agent` 16.1.20): a tool call now passes through **two** gates.
+1. `#wrapToolForAcpPermission` (OUTER) → our `session/request_permission` handler - our authoritative gate.
+   The gate-diagnostic (P-GATE-DIAG.1) confirmed we correctly returned `allow` (`optionId: allow_once`).
+2. `ExtensionToolWrapper` (INNER) - applied to every tool **because we launch omp with `-e GATE -e ASKSAGE`**.
+   Its approval check calls `uiContext.select(["Approve","Deny"])`, which in ACP mode maps to a FORM
+   **elicitation** (`elicitation/create`) - but only if the client advertised `elicitation.form`. We advertised
+   only `fs` capabilities, so omp's `select()` returned `undefined`, which `wrapper.ts` treats as **deny** →
+   `throw "Tool call denied by user"`. The inner gate fires only AFTER the outer one allowed, so our allow was
+   real but a redundant second gate we couldn't answer killed the call.
+
+There is **no config-only fix**: forcing `tools.approvalMode: yolo` would silence the inner gate but also make
+`#isExplicitAutoApproveMode()` true, which SKIPS our outer `session/request_permission` gate - losing our
+classifier/prompt entirely. The two gates are driven by the same signal in opposite directions.
+
+### Decision
+
+1. **Advertise `elicitation: { form: {} }`** in the main session's ACP `initialize` (NOT the KG-extraction
+   client, which answers every request with `{}` and calls no gated tools).
+2. **Answer `elicitation/create`** in the ACP `onRequest` handler via `answerElicitation` →
+   `elicitationApproval(options)` (pure, in `exec_policy.ts`, unit-tested). It reads the elicitation's single
+   `value` enum and **accepts the affirmative option** (`/\b(approve|allow|yes|proceed|accept)\b/i`, whole-word
+   so a `["Deny"]`-only set is never approval), returning `{ action: "accept", content: { value } }`; with no
+   affirmative option (a custom question) it returns `{ action: "decline" }` - matching the pre-capability
+   behavior where such prompts returned no value. Recorded in the gate diagnostics (`kind: "elicitation"`).
+
+**Why auto-accept is safe (not a gate bypass):** the elicitation is omp's redundant INNER approval; it fires
+only after our OUTER `session/request_permission` gate already ran (classify → prompt the user for a risky
+unpinned command, or allow a pinned/danger-mode one). The real approve/deny decision is made there. Also
+handles plan-mode approval (its select carries "Approve and execute"), preserving prior auto-approve.
+
+### Verification
+
+Live (real dev server, Claude OAuth, developer mode):
+- **Before:** `node -e "console.log(2+2)"` and `echo hello123` → `block: Tool call denied by user: bash`; gate
+  diag showed our verdict was `allow` yet the tool died. Raw omp options captured: `allow_once/allow_always/
+  reject_once/reject_always`.
+- **After:** `node` (pinned, `allowPrograms:["node"]`) → runs, reply `4`; gate diag shows `exec allow` +
+  `elicitation accept:Approve`. An **unpinned** `python --version` → a real `permission` event surfaced
+  (`program: python`), resolving it `exec:allow-once` ran the tool (reply `Python 3.14.2`). No more silent denies;
+  the approve/deny prompt loop works end-to-end.
+- `elicitationApproval` unit-tested (tool-approval, plan-mode, case-insensitivity, whole-word, junk input,
+  decline-on-no-affirmative). Full `exec_policy.test.ts` green (164), desktop typecheck clean.
+
+### Relates to
+
+ADR-0066 (P-EXEC.1, the exec classifier + `session/request_permission` gate this complements), P-GATE-DIAG.1
+(the gate-decision ring that pinpointed the bug), ADR-0062/0094 (egress gate on the same permission path).
+Carries forward the CLAUDE.md wrinkle that omp seams must be confirmed against the installed version: 16.1.20
+moved per-tool approval to a FORM elicitation that a client must now explicitly support.

@@ -166,7 +166,9 @@ function startOauthBroker(oauthId: string): Promise<{ started: boolean; url: str
   // "ignore" closes stdin immediately → broker sees EOF → shuts down its callback server
   // before the browser redirect arrives. "pipe" keeps it open; for device-flow providers (xAI)
   // we also WRITE the user-pasted code to it via sendOauthCode().
-  catch (e) { return Promise.resolve({ started: false, url: "", output: String((e as Error)?.message ?? e) }); }
+  // js/stack-trace-exposure: log the real spawn error server-side; hand the client a generic message
+  // so an internal exception/stack never reaches the renderer (this object is returned via json()).
+  catch (e) { console.error(`[oauth] broker spawn failed for ${oauthId}:`, e); return Promise.resolve({ started: false, url: "", output: "could not start login" }); }
   oauthBrokers.set(oauthId, proc);
   proc.exited.finally(() => { if (oauthBrokers.get(oauthId) === proc) oauthBrokers.delete(oauthId); });
   // On a SUCCESSFUL login the credential lands in omp's vault, but the already-running omp child
@@ -201,7 +203,8 @@ function sendOauthCode(oauthId: string, code: string): { sent: boolean; reason?:
   const proc = oauthBrokers.get(oauthId);
   if (!proc) return { sent: false, reason: "no broker running for " + oauthId };
   try { proc.stdin.write(new TextEncoder().encode(code.trim() + "\n")); return { sent: true }; }
-  catch (e) { return { sent: false, reason: String((e as Error)?.message ?? e) }; }
+  // js/stack-trace-exposure: log detail server-side, return a generic reason to the client (goes via json()).
+  catch (e) { console.error(`[oauth] send code failed for ${oauthId}:`, e); return { sent: false, reason: "could not send code" }; }
 }
 
 // Stream NDJSON ChatEvents to the browser with a HEARTBEAT. A long maker tool call (e.g. a broad

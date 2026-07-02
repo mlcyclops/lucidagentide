@@ -7,7 +7,7 @@
 
 import { describe, expect, test } from "bun:test";
 import {
-  applyExecChoice, classifyCommand, classifyEval, clampDialRow, clampExec, execVerdict,
+  applyExecChoice, classifyCommand, classifyEval, clampDialRow, clampExec, elicitationApproval, execVerdict,
   loopVerdict, type ExecStore, type RiskTier,
 } from "./exec_policy.ts";
 
@@ -231,5 +231,35 @@ describe("clampDialRow — managed loop ceiling, tighten-only", () => {
   });
   test("absent row defaults to T0", () => {
     expect(clampDialRow(undefined, "T3")).toBe("T0");
+  });
+});
+
+// ── P-EXEC.2 (ADR-0110): the FORM-elicitation approval picker ────────────────────────────────────────
+// omp routes its per-tool "Approve/Deny" approval (and plan-mode approval) through an ACP form
+// elicitation; elicitationApproval picks the affirmative option to accept, or null to decline.
+describe("elicitationApproval (omp form-elicitation approve/deny)", () => {
+  test("accepts a tool-approval select", () => {
+    expect(elicitationApproval(["Approve", "Deny"])).toBe("Approve");
+  });
+  test("accepts plan-mode approval", () => {
+    expect(elicitationApproval(["Approve and execute", "Keep planning", "Cancel"])).toBe("Approve and execute");
+  });
+  test("matches other affirmatives case-insensitively", () => {
+    expect(elicitationApproval(["Allow"])).toBe("Allow");
+    expect(elicitationApproval(["yes", "no"])).toBe("yes");
+    expect(elicitationApproval(["Proceed anyway", "Abort"])).toBe("Proceed anyway");
+  });
+  test("declines (null) when there is NO affirmative option — a custom question", () => {
+    expect(elicitationApproval(["Deny"])).toBeNull();          // a deny-only set is never approval
+    expect(elicitationApproval(["Red", "Green", "Blue"])).toBeNull();
+    expect(elicitationApproval([])).toBeNull();
+  });
+  test("matches whole words only — 'disallow'/'yesterday' are not approval", () => {
+    expect(elicitationApproval(["disallowed"])).toBeNull();
+    expect(elicitationApproval(["yesterday"])).toBeNull();
+  });
+  test("fail-safe on junk input (non-strings, non-array)", () => {
+    expect(elicitationApproval([1, null, {}, "Deny"] as unknown[])).toBeNull();
+    expect(elicitationApproval([1, "Approve"] as unknown[])).toBe("Approve");
   });
 });

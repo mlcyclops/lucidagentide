@@ -41,7 +41,7 @@ import { type EgressChoice, egressDecisionDetailed, egressPosture, extractHost, 
 import { withinCallBudget } from "./network_whitelist.ts";
 import { previewOpenPath, previewablePath } from "./preview_resolve.ts";
 import { gateDenyReason } from "./gate_audit.ts";
-import { type ExecChoice, type ExecClass, classifyCommand, classifyEval, execStore, execVerdict, recordExec } from "./exec_policy.ts";
+import { type ExecChoice, type ExecClass, classifyCommand, classifyEval, elicitationApproval, execStore, execVerdict, recordExec } from "./exec_policy.ts";
 import { toolFailureReason } from "./tool_failure.ts";
 
 // P-EGRESS.1 (ADR-0062): the network-reaching tools omp is told to PROMPT for (acp_config.yml). When omp
@@ -233,6 +233,21 @@ class Backend {
     try { this.gateDiag.push({ at: Date.now(), ...rec }); if (this.gateDiag.length > 200) this.gateDiag.shift(); } catch { /* never break the gate on a log */ }
   }
 
+  /** P-EXEC.2 (ADR-0110): answer omp's FORM elicitation — its per-tool "Approve/Deny" approval and
+   *  plan-mode approval. omp maps a `select` to a one-property schema `{ value: { enum: [...] } }`; we
+   *  accept the affirmative option (Approve/Allow/Yes/Proceed) because this elicitation is a redundant
+   *  INNER gate that only fires AFTER our authoritative `session/request_permission` gate already
+   *  allowed the call. A non-approval elicitation (a custom question with no affirmative option) gets no
+   *  synthesized answer — declined, matching the pre-capability behavior where such prompts returned no
+   *  value. Surfaced in the gate diagnostics (developer mode) for the Logs panel. */
+  private answerElicitation(params: any): { action: string; content?: { value: string } } {
+    const enumVals: unknown = params?.requestedSchema?.properties?.value?.enum;
+    const opts: string[] = Array.isArray(enumVals) ? enumVals.filter((v): v is string => typeof v === "string") : [];
+    const approve = elicitationApproval(opts);
+    this.recordGateDiag({ kind: "elicitation", options: opts.slice(0, 8), decision: approve ? `accept:${approve}` : "decline" });
+    return approve ? { action: "accept", content: { value: approve } } : { action: "decline" };
+  }
+
   // Turn-lifecycle diagnostics (developer mode). Prints to the dev-server console so a hung long
   // multi-tool turn reveals WHERE it stalls: did prompt() resolve (server finished, browser orphaned) or
   // never resolve (omp wedge)? did complete() clobber the chat listener? did the browser stream break?
@@ -351,6 +366,15 @@ class Backend {
           }
         };
         acp.onRequest = async (m, params) => {
+          // P-EXEC.2 (ADR-0110): omp (≥16.1) routes its per-tool "Approve/Deny" approval — and plan-mode
+          // approval — through an ACP FORM elicitation (`elicitation/create`), gated on the client
+          // advertising `elicitation.form`. This approval runs as an INNER wrapper, AFTER (and only if)
+          // our `session/request_permission` gate already allowed the call — so it is a redundant second
+          // gate. We advertise the capability (in `initialize`) and answer here: pick the affirmative
+          // option so an already-gated call proceeds. Without this omp's `select()` returned `undefined`,
+          // which its tool wrapper treats as "Tool call denied by user" — silently failing EVERY
+          // bash/eval/edit/delete call with no prompt (the exact "denied without being asked" bug).
+          if (m === "elicitation/create") return this.answerElicitation(params);
           if (m === "session/request_permission") {
             const opts: any[] = params?.options ?? [];
             const tc = params?.toolCall ?? params?.tool_call ?? {};
@@ -468,7 +492,10 @@ class Backend {
           }
         };
         acp.start();
-        await acp.request("initialize", { protocolVersion: 1, clientCapabilities: { fs: { readTextFile: false, writeTextFile: false } } });
+        // P-EXEC.2 (ADR-0110): advertise `elicitation.form` so omp delivers its per-tool approval (and
+        // plan-mode approval) as an `elicitation/create` we can answer (see answerElicitation). Without it
+        // omp's tool wrapper silently denies every gated tool call ("Tool call denied by user").
+        await acp.request("initialize", { protocolVersion: 1, clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, elicitation: { form: {} } } });
         this.acp = acp;
       })();
     }

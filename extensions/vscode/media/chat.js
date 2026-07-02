@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
 // media/chat.js — the Lucid chat webview. No deps; talks to the extension host over postMessage.
 // The extension owns the gated ACP session; this view only renders + sends intents. Fail-closed
 // permission handling lives in the extension (timeout/close ⇒ deny).
@@ -42,6 +45,10 @@
 
   // ── extension → webview ───────────────────────────────────────────────────────
   window.addEventListener("message", (e) => {
+    // js/missing-origin-check (CWE-345): only trust messages from the VS Code extension host, which
+    // arrive on the webview's own `vscode-webview://` origin. Reject anything from an injected
+    // cross-origin frame before acting on it. (Older hosts may deliver an empty origin — allow that.)
+    if (e.origin && !e.origin.startsWith("vscode-webview://")) return;
     const m = e.data;
     switch (m.type) {
       case "ready": banner.hidden = true; break;

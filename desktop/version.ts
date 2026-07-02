@@ -60,4 +60,10 @@
 //           ALSO Fable 5 in the model picker (P-IDE.1e, ADR-0109): enabled when a Claude account is connected
 //           (OAuth or ANTHROPIC_API_KEY), it routes through Anthropic; carries a U.S.-government privacy notice
 //           (row marker + hover banner + a persistent notice when selected).
-export const APP_VERSION = "1.8.25";
+// v1.8.26 = FIX live-chat tool calls (P-EXEC.2, ADR-0110): omp 16.1 moved per-tool approval to a FORM
+//           elicitation the client must advertise; without it EVERY bash/eval/edit/delete call silently
+//           failed with "Tool call denied by user" and no prompt. LUCID now advertises `elicitation.form`
+//           + answers the approval (accept the affirmative option), so the approve/deny prompt surfaces and
+//           gated commands run once approved (our session/request_permission gate stays authoritative).
+//           ALSO fixes 12 CodeQL findings (stack-trace exposure, insecure temp files, postMessage origin).
+export const APP_VERSION = "1.8.26";
