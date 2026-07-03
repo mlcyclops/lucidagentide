@@ -14,7 +14,7 @@ import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { ACPClient } from "./acp.ts";
-import { BUILD_POLICY, DELEGATION_POLICY, PREVIEW_POLICY } from "../harness/prompt/assembler.ts";
+import { BUILD_POLICY, DELEGATION_POLICY, ENGAGEMENT_POLICY, PREVIEW_POLICY } from "../harness/prompt/assembler.ts";
 import { currentWorkspace } from "./workspace.ts";
 import { learnFromTurn, recallPreamble } from "./personal.ts";
 import { buildUserTurnPreamble } from "./preamble.ts";
@@ -105,6 +105,9 @@ const ASKSAGE = join(REPO, "harness", "omp", "asksage_extension.ts");
 // P-PREVIEW.3a (ADR-0096) — DRAFT: registers the agent-callable `preview_open` tool. Defensively wrapped so
 // a registration failure never breaks omp launch (see preview_extension.ts). Only added when the file exists.
 const PREVIEW_EXT = join(REPO, "harness", "omp", "preview_extension.ts");
+// P-KG-SYM.1: registers the read-only `codegraph_query` tool. Added ONLY when the user opted in
+// (settings.codeGraphAgent) AND the file exists — so a bad/absent extension never blocks omp launch.
+const CODEGRAPH_EXT = join(REPO, "harness", "omp", "codegraph_extension.ts");
 // P-TASK.3/4 (ADR-0028): config overlay that turns ON task isolation (mode: auto) so subagents
 // can run isolated and return a reviewable patch — containing the blast radius of a bad tool call.
 const ACP_CONFIG = join(REPO, "harness", "omp", "acp_config.yml");
@@ -277,9 +280,10 @@ class Backend {
         if (loadSettings().developerMode) process.env.LUCID_ASKSAGE_DEBUG = "1"; else delete process.env.LUCID_ASKSAGE_DEBUG;
         // ADR-0033: also append the build / anti-over-refusal policy so the chat model doesn't decline
         // a buildable task (e.g. "make a game/graphics/music in one HTML file") by mis-reading its scope.
-        const appendedPolicy = `${DELEGATION_POLICY}\n\n${BUILD_POLICY}\n\n${PREVIEW_POLICY}`;
+        const appendedPolicy = `${DELEGATION_POLICY}\n\n${BUILD_POLICY}\n\n${PREVIEW_POLICY}\n\n${ENGAGEMENT_POLICY}`;
         const previewArgs = existsSync(PREVIEW_EXT) ? ["-e", PREVIEW_EXT] : []; // P-PREVIEW.3a (draft)
-        const acp = new ACPClient(ompBin(), ["acp", "-e", GATE, "-e", ASKSAGE, ...previewArgs, ...isoCfg, "--append-system-prompt", appendedPolicy], currentWorkspace());
+        const codegraphArgs = loadSettings().codeGraphAgent && existsSync(CODEGRAPH_EXT) ? ["-e", CODEGRAPH_EXT] : []; // P-KG-SYM.1: opt-in
+        const acp = new ACPClient(ompBin(), ["acp", "-e", GATE, "-e", ASKSAGE, ...previewArgs, ...codegraphArgs, ...isoCfg, "--append-system-prompt", appendedPolicy], currentWorkspace());
         acp.onNotify = (method, params) => {
           if (method !== "session/update") return;
           const u = params?.update ?? params;

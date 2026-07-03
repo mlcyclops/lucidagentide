@@ -13,7 +13,16 @@
 
 import { join, dirname } from "node:path";
 import { readFileSync } from "node:fs";
-import { buildEngineeringUpdate, renderEngineeringBrief, buildPodcastScript, renderScript } from "../harness/brief/engineering_update.ts";
+import { buildEngineeringUpdate, renderEngineeringBrief, buildPodcastScript, renderScript, type PodcastBackend, type BriefRole } from "../harness/brief/engineering_update.ts";
+import { buildComplianceRows, renderPoamCsv, renderCkl } from "../harness/brief/compliance.ts"; // P-REPORT.6/.8: POA&M + CKL
+import { buildChangeGraph, buildSchemaChanges, renderAnnexes } from "../harness/brief/change_graph.ts"; // P-REPORT.8: report annexes
+import { loadChatBg, saveChatBg, type ChatBg } from "./chat_bg.ts"; // P-APPEAR.1: personalized chat background
+import { ingestCodeGraph, loadCodeGraph } from "./code_graph.ts"; // P-KG-CODE.1: workspace code graph
+import { ingestSymbolGraph, loadSymbolGraph } from "./symbol_graph.ts"; // P-KG-SYM.1: AST symbol graph
+import { archiveBrief, deleteBrief, listBriefs, readBrief, restoreBrief, saveBrief } from "./report_store.ts";
+import { OpenAiCompatibleTtsBackend } from "../harness/brief/tts_backend.ts";
+import { ElevenLabsTtsBackend, ElevenLabsSttBackend, listElevenVoices } from "../harness/voice/elevenlabs.ts";
+import { OpenAiCompatibleSttBackend, type TranscriptionBackend } from "../harness/voice/transcription.ts";
 import { devSnapshot, securitySnapshot } from "../tools/web/data.ts";
 import { ensureNetdiagWatch, startNetdiagWatch, stopNetdiagWatch, netdiagView } from "./netdiag.ts";
 import { clearDisabledCredential } from "./auth_vault.ts";
@@ -29,7 +38,7 @@ import { loadWhitelist, removeEntry, saveWhitelist, setPosture, upsertEntry, typ
 import { readPreviewFile, toFsPath } from "./preview_file.ts"; // P-PREVIEW.4: read a local file's content for the preview
 import { PREVIEW_FRAME_CSP } from "./preview_resolve.ts"; // P-PREVIEW.4b: per-frame CSP for the served preview doc
 import { inlinePreviewAssets } from "./preview_inline.ts"; // P-PREVIEW.4c: fold a multi-file app's relative assets inline
-import { applyEnv, attribution, chinaModelsAcknowledged, listMcpServers, load as loadSettings, removeMcpServer, roleChosen, setAsksage, setAttributionSkip, setChinaModelsAcknowledged, setDeveloperMode, setKey, setMcpServerEnabled, setPersonalAiExtract, setProfile, setRateLimitProbe, setThirdPartyProvidersAcknowledged, setTourSeen, setUserRole, thirdPartyProvidersAcknowledged, tourSeen, upsertMcpServer, USER_ROLES, userRole, type UserRole } from "./settings_store.ts";
+import { applyEnv, attribution, chinaModelsAcknowledged, listMcpServers, load as loadSettings, removeMcpServer, roleChosen, setAsksage, setAttributionSkip, setChinaModelsAcknowledged, setCodeGraphAgent, setDeveloperMode, setKey, setMcpServerEnabled, setPersonalAiExtract, setProfile, setRateLimitProbe, setThirdPartyProvidersAcknowledged, setTourSeen, setUserRole, setVoiceSettings, thirdPartyProvidersAcknowledged, tourSeen, upsertMcpServer, USER_ROLES, userRole, voiceSettings, type UserRole } from "./settings_store.ts";
 
 // ADR-0088/0089: the /api/settings payload — profile + attribution + the cosmetic role/tour state.
 // `role` is null until the user has EXPLICITLY chosen one (so the renderer can fire the first-run role
@@ -42,13 +51,15 @@ import { emailDomainAllowed, managedAsksageOnly, managedConfig, managedLocks, sk
 import { asksageConfig, listDatasets, listPersonas, monthlyTokens, scanPersona, wrapPersona } from "./asksage.ts";
 import { listSkills } from "./skills_data.ts";
 import { importSkill } from "./skills_import.ts";
-import { listResumableLoops } from "./goal_memory.ts";
+import { archiveGoalReport, deleteGoalReport, listResumableLoops, listGoalReports, readGoalReport, restoreGoalReport } from "./goal_memory.ts";
 import { createAutomation, deleteAutomation, listAutomations, normalizeCadence, updateAutomation } from "./automations.ts";
 import { currentWorkspace } from "./workspace.ts";
 import { recordSkillActivated } from "./skills_log.ts";
 import { recentTurns } from "./turns_log.ts";
 import { headroomStatus, setHeadroomEnabled, startHeadroom } from "./headroom.ts";
-import { destroyCui, enablePersonal, estimateChatExport, exportCuiArchive, exportHistory, exportVault, forgetFact, importChatExport, lockCui, lockPersonal, migrateCuiIntoStore, personalGraph, personalStatus, relateEntities, setScope, setupCui, setupPersonal, unlockCui, unlockPersonal, unrelateEntities } from "./personal.ts";
+import { addReportToKg, destroyCui, enablePersonal, estimateChatExport, exportCuiArchive, exportHistory, exportVault, forgetFact, importChatExport, lockCui, lockPersonal, migrateCuiIntoStore, personalGraph, personalStatus, relateEntities, setScope, setupCui, setupPersonal, unlockCui, unlockPersonal, unrelateEntities } from "./personal.ts";
+import { explainCommand } from "./explain_command.ts";
+import type { PersonalScope } from "../harness/personal/store.ts";
 import { readEditorFile, saveEditorFile } from "./editor.ts";
 import { cancelImport, importJobStatus, startImport } from "./import_job.ts";
 import { homedir } from "node:os";
@@ -149,6 +160,22 @@ const json = (data: unknown) =>
 // Fields the handler funnels through String()/typeof guards are left `unknown` (the guard narrows them).
 async function readBody<T>(req: Request): Promise<T> {
   return (await req.json()) as T;
+}
+
+// P-REPORT.8: gather the git change inputs (numstat + name-status) for the report annexes. Default range
+// is the recent cycle (up to the last 10 commits); on a shallow/single-commit repo it falls back to the
+// working tree. Fail-soft: any git error → empty strings (the annex then reports "no changes detected").
+function gitOut(repo: string, args: string[]): string {
+  try {
+    const r = Bun.spawnSync(["git", ...args], { cwd: repo, stdout: "pipe", stderr: "ignore", timeout: 8000 });
+    return r.exitCode === 0 ? r.stdout.toString() : "";
+  } catch { return ""; }
+}
+function gitChangeInputs(repo: string): { numstat: string; nameStatus: string; range: string } {
+  const cnt = Number(gitOut(repo, ["rev-list", "--count", "HEAD"]).trim());
+  const range = Number.isFinite(cnt) && cnt > 1 ? `HEAD~${Math.min(10, cnt - 1)}..HEAD` : "";
+  const args = range ? [range] : [];
+  return { numstat: gitOut(repo, ["diff", "--numstat", ...args]), nameStatus: gitOut(repo, ["diff", "--name-status", ...args]), range: range ? `the last ${Math.min(10, cnt - 1)} commits` : "the working tree" };
 }
 
 // OAuth via omp's `auth-broker login` — it opens the provider, runs a LOCAL callback server
@@ -406,11 +433,205 @@ const server = Bun.serve({
       // air-gap (reads DECISIONS.md/PROGRESS.md from the repo root); returns the written brief + the
       // two-host podcast script. Audio synthesis (a TTS backend) is a later slice; this is the brief.
       if (p === "/api/brief") {
+        // P-REPORT.1 (ADR-0116): `?role=` tailors which sections lead + the framing; `?save=1` persists the
+        // brief to the report store (so the Reports panel lists it). The goal-modal preview omits save.
+        const roleRaw = url.searchParams.get("role");
+        const role: BriefRole | undefined = roleRaw === "developer" || roleRaw === "security" || roleRaw === "manager" || roleRaw === "executive" ? roleRaw : undefined;
         const repo = join(import.meta.dir, "..");
         const rd = (f: string) => { try { return existsSync(join(repo, f)) ? readFileSync(join(repo, f), "utf8") : ""; } catch { return ""; } };
         const u = buildEngineeringUpdate({ label: "LucidAgentIDE", progressMd: rd("PROGRESS.md"), decisionsMd: rd("DECISIONS.md") });
         const counts = { shipped: u.recentlyShipped.length, loadBearing: u.loadBearingDependencies.length, techDebt: u.techDebt.length, decisions: u.upcomingDecisions.length, risks: u.risks.length };
-        return json({ ok: true, data: { brief: renderEngineeringBrief(u), scriptText: renderScript(buildPodcastScript(u)), counts } });
+        let brief = renderEngineeringBrief(u, role);
+        // P-REPORT.8: technical audiences (developer/security) get the change-annotated dependency graph +
+        // schema-change annexes appended (page-broken in print). Non-technical roles skip them.
+        if (role === "developer" || role === "security") {
+          const gi = gitChangeInputs(repo);
+          brief += "\n\n" + renderAnnexes(buildChangeGraph(gi.numstat, gi.nameStatus, gi.range), buildSchemaChanges(gi.numstat, gi.nameStatus));
+        }
+        const savedRel = url.searchParams.get("save") === "1" ? saveBrief(Date.now().toString(36), role ?? "executive", brief) : null;
+        return json({ ok: true, data: { brief, scriptText: renderScript(buildPodcastScript(u, role)), counts, role: role ?? "", savedRel } });
+      }
+      // P-REPORT.8: STIG Viewer .ckl export of the security control crosswalk (native XML checklist).
+      if (p === "/api/brief/ckl") {
+        const repo = join(import.meta.dir, "..");
+        const rd = (f: string) => { try { return existsSync(join(repo, f)) ? readFileSync(join(repo, f), "utf8") : ""; } catch { return ""; } };
+        const u = buildEngineeringUpdate({ label: "LucidAgentIDE", progressMd: rd("PROGRESS.md"), decisionsMd: rd("DECISIONS.md") });
+        const ckl = renderCkl(u, "LucidAgentIDE");
+        return json({ ok: true, data: { ckl, rows: buildComplianceRows(u).length, filename: "lucidagentide-crosswalk.ckl" } });
+      }
+      // P-REPORT.6: POA&M export - the security control crosswalk as an eMASS-aligned POA&M CSV.
+      if (p === "/api/brief/poam") {
+        const repo = join(import.meta.dir, "..");
+        const rd = (f: string) => { try { return existsSync(join(repo, f)) ? readFileSync(join(repo, f), "utf8") : ""; } catch { return ""; } };
+        const u = buildEngineeringUpdate({ label: "LucidAgentIDE", progressMd: rd("PROGRESS.md"), decisionsMd: rd("DECISIONS.md") });
+        const csv = renderPoamCsv(u, "LucidAgentIDE");
+        const rows = buildComplianceRows(u).length;
+        return json({ ok: true, data: { csv, rows, filename: "lucidagentide-poam.csv" } });
+      }
+      // P-REPORT.1 (ADR-0116): the unified Reports list - per-workspace loop AARs + repo-wide saved briefs,
+      // most-recent first. GET `/api/report?kind=aar|brief&rel=` reads one (confined to its store).
+      if (p === "/api/reports") {
+        const archived = url.searchParams.get("archived") === "1"; // P-REPORT.2: the archive view
+        const aars = listGoalReports(currentWorkspace(), 50, archived).map((r) => ({ kind: "aar" as const, id: r.id, title: r.goal, outcome: r.outcome, role: "", updatedAt: r.updatedAt, rel: r.rel }));
+        const briefs = listBriefs(50, archived).map((b) => ({ kind: "brief" as const, id: b.id, title: b.title, outcome: "", role: b.role, updatedAt: b.updatedAt, rel: b.rel }));
+        return json({ ok: true, data: [...aars, ...briefs].sort((a, b) => b.updatedAt - a.updatedAt) });
+      }
+      if (p === "/api/report") {
+        const kind = url.searchParams.get("kind"); const rel = url.searchParams.get("rel") ?? "";
+        const archived = url.searchParams.get("archived") === "1";
+        const md = kind === "brief" ? readBrief(rel, archived) : readGoalReport(currentWorkspace(), rel);
+        return md != null ? json({ ok: true, data: { kind, rel, markdown: md } }) : json({ ok: false, error: "report not found" });
+      }
+      // P-REPORT.2 (ADR-0117): two-stage lifecycle. `archive` = soft-delete (active → Archive); `restore` =
+      // Archive → active; `delete` = PERMANENT and only ever operates on an archived item (the second delete).
+      if (p === "/api/report/archive" && req.method === "POST") {
+        const b = await readBody<{ kind?: unknown; rel?: unknown }>(req); const rel = String(b.rel ?? "");
+        const ok = b.kind === "brief" ? archiveBrief(rel) : archiveGoalReport(currentWorkspace(), rel);
+        return json({ ok: true, data: { archived: ok } });
+      }
+      if (p === "/api/report/restore" && req.method === "POST") {
+        const b = await readBody<{ kind?: unknown; rel?: unknown }>(req); const rel = String(b.rel ?? "");
+        const ok = b.kind === "brief" ? restoreBrief(rel) : restoreGoalReport(currentWorkspace(), rel);
+        return json({ ok: true, data: { restored: ok } });
+      }
+      if (p === "/api/report/delete" && req.method === "POST") {
+        const b = await readBody<{ kind?: unknown; rel?: unknown }>(req); const rel = String(b.rel ?? "");
+        const ok = b.kind === "brief" ? deleteBrief(rel) : deleteGoalReport(currentWorkspace(), rel);
+        return json({ ok, data: { deleted: ok }, error: ok ? undefined : "only archived reports can be permanently deleted" });
+      }
+      // P-REPORT.3 (ADR-0117): push a report into the personalization KG as ONE trusted node, in the chosen
+      // compartment. `scope` must be an unlocked compartment (the store enforces cui isolation, fail-closed).
+      if (p === "/api/report/to-kg" && req.method === "POST") {
+        const b = await readBody<{ kind?: unknown; rel?: unknown; scope?: unknown; archived?: unknown }>(req);
+        const kind = b.kind === "brief" ? "brief" : "aar", rel = String(b.rel ?? "");
+        const scope: PersonalScope = b.scope === "work" || b.scope === "cui" ? b.scope : "personal";
+        const md = kind === "brief" ? readBrief(rel, !!b.archived) : readGoalReport(currentWorkspace(), rel);
+        if (md == null) return json({ ok: false, error: "report not found" });
+        const title = /^#\s+(.+)$/m.exec(md)?.[1]?.trim() ?? (kind === "brief" ? "Engineering Update" : "After-Action Report");
+        const r = addReportToKg(scope, title, md);
+        return json({ ok: r.ok, data: r, error: r.error });
+      }
+      // P-KG-CODE.1: the workspace CODE graph (file → import dependency graph). GET = status + the stored
+      // graph (nodes/edges) if already ingested; POST = ingest/re-sync the cwd and return the fresh graph.
+      if (p === "/api/codegraph") {
+        const root = currentWorkspace();
+        // P-KG-SYM.1: `level` = file (import graph) | symbol (AST call/reference graph).
+        const bodyLevel = req.method === "POST" ? (await readBody<{ level?: unknown }>(req)).level : url.searchParams.get("level");
+        const level = bodyLevel === "symbol" ? "symbol" : "file";
+        if (req.method === "POST") {
+          if (level === "symbol") { const g = ingestSymbolGraph(root); return json({ ok: true, data: { level, ingested: true, root, fileCount: g.fileCount, symbolCount: g.symbolCount, edgeCount: g.edgeCount, updatedAt: g.updatedAt, nodes: g.nodes, edges: g.edges } }); }
+          const g = ingestCodeGraph(root); return json({ ok: true, data: { level, ingested: true, root, fileCount: g.fileCount, symbolCount: 0, edgeCount: g.edgeCount, updatedAt: g.updatedAt, nodes: g.nodes, edges: g.edges } });
+        }
+        const g = level === "symbol" ? loadSymbolGraph(root) : loadCodeGraph(root);
+        const symCount = level === "symbol" ? ((g as { symbolCount?: number } | null)?.symbolCount ?? 0) : 0;
+        return json({ ok: true, data: { level, ingested: !!g, root, fileCount: g?.fileCount ?? 0, symbolCount: symCount, edgeCount: g?.edgeCount ?? 0, updatedAt: g?.updatedAt ?? 0, nodes: g?.nodes ?? [], edges: g?.edges ?? [] } });
+      }
+      // P-KG-SYM.1: expose the code graph to the agent (adds the `codegraph_query` omp tool). POST restarts
+      // the backend so the extension loads/unloads; GET reports the current setting.
+      if (p === "/api/codegraph/agent") {
+        if (req.method === "POST") { const b = await readBody<{ enabled?: unknown }>(req); setCodeGraphAgent(!!b.enabled); backend.restart(); return json({ ok: true, data: { enabled: !!b.enabled } }); }
+        return json({ ok: true, data: { enabled: !!loadSettings().codeGraphAgent } });
+      }
+      // P-APPEAR.1: the personalized chat-interface background (image + display mode). Its own file, so
+      // the hot settings load() never parses the image data URL.
+      if (p === "/api/chat-bg") {
+        if (req.method === "POST") { const b = await readBody<Partial<ChatBg>>(req); const r = saveChatBg(b); return json({ ok: r.ok, data: r.ok ? r.data : null, error: r.error }); }
+        return json({ ok: true, data: loadChatBg() });
+      }
+      // P-EXEC.3: "TLDR" - explain an intimidating command in plain terms via a cheap keyed model.
+      if (p === "/api/explain" && req.method === "POST") {
+        const b = await readBody<{ command?: unknown }>(req);
+        const r = await explainCommand(String(b.command ?? ""));
+        return json({ ok: r.ok, data: r, error: r.error });
+      }
+      // P-BRIEF.4 (ADR-0113) + P-VOICE.1 (ADR-0115): SYNTHESIZE the podcast to WAV via a TTS backend,
+      // returned base64 for the renderer to play + download. Providers:
+      //   local-tts  → self-hosted Kokoro (air-gap; no key; LUCID_TTS_URL, default :8880)
+      //   openai-tts → ChatGPT/OpenAI TTS (needs OPENAI_API_KEY)
+      //   elevenlabs → ElevenLabs (needs ELEVENLABS_API_KEY; two-host uses the user's favorite voices)
+      // Fail-safe: a missing key is an actionable note; a synth failure returns the note (never a 500).
+      if (p === "/api/brief/audio" && req.method === "POST") {
+        const b = await readBody<{ provider?: unknown; voiceId?: unknown }>(req);
+        const provider = b.provider === "local-tts" ? "local-tts" : b.provider === "elevenlabs" ? "elevenlabs" : "openai-tts";
+        const pickedVoice = typeof b.voiceId === "string" && b.voiceId ? b.voiceId : "";
+        const repo = join(import.meta.dir, "..");
+        const rd = (f: string) => { try { return existsSync(join(repo, f)) ? readFileSync(join(repo, f), "utf8") : ""; } catch { return ""; } };
+        const script = buildPodcastScript(buildEngineeringUpdate({ label: "LucidAgentIDE", progressMd: rd("PROGRESS.md"), decisionsMd: rd("DECISIONS.md") }));
+        let backend: PodcastBackend;
+        if (provider === "local-tts") {
+          backend = new OpenAiCompatibleTtsBackend({ baseUrl: process.env.LUCID_TTS_URL || "http://localhost:8880", model: process.env.LUCID_TTS_MODEL || "kokoro", voices: { Host: "af_heart", Engineer: "am_onyx", default: "af_heart" } });
+        } else if (provider === "elevenlabs") {
+          const key = process.env.ELEVENLABS_API_KEY;
+          if (!key) return json({ ok: true, data: { note: "Add your ElevenLabs API key (Settings → Voice) to use ElevenLabs TTS.", audioB64: null, mime: "audio/wav", turns: 0 } });
+          const v = voiceSettings();
+          const host = pickedVoice || v.ttsVoice || v.ttsVoiceFavorites[0]; // the picker's choice wins for this run
+          const engineer = v.ttsVoiceFavorites.find((id) => id !== host) || host;
+          backend = new ElevenLabsTtsBackend({ apiKey: key, voices: { ...(host ? { Host: host } : {}), ...(engineer ? { Engineer: engineer } : {}), ...(host ? { default: host } : {}) } });
+        } else {
+          const key = process.env.OPENAI_API_KEY;
+          if (!key) return json({ ok: true, data: { note: "Add your OpenAI API key (Providers → OpenAI) to use ChatGPT TTS, or choose Local TTS (Kokoro) / ElevenLabs.", audioB64: null, mime: "audio/wav", turns: 0 } });
+          backend = new OpenAiCompatibleTtsBackend({ baseUrl: process.env.OPENAI_TTS_URL || "https://api.openai.com", apiKey: key, model: process.env.OPENAI_TTS_MODEL || "gpt-4o-mini-tts", voices: { Host: "nova", Engineer: "onyx", default: "alloy" } });
+        }
+        const result = await backend.synthesize(script);
+        const audioB64 = result.audio ? Buffer.from(result.audio).toString("base64") : null;
+        return json({ ok: !!audioB64, data: { note: result.note, audioB64, mime: "audio/wav", turns: script.turns.length }, error: audioB64 ? undefined : result.note });
+      }
+      // P-VOICE.1 (ADR-0115): voice config (STT engine + TTS voice/favorites). GET reads; POST patches.
+      if (p === "/api/voice-settings") {
+        if (req.method === "POST") { const b = await readBody<Record<string, unknown>>(req); return json({ ok: true, data: setVoiceSettings(b as never) }); }
+        return json({ ok: true, data: voiceSettings() });
+      }
+      // P-VOICE.1: list the account's ElevenLabs voices for the picker (favorites first), + the selection.
+      if (p === "/api/voices") {
+        const key = process.env.ELEVENLABS_API_KEY;
+        const v = voiceSettings();
+        if (!key) return json({ ok: true, data: { voices: [], favorites: v.ttsVoiceFavorites, selected: v.ttsVoice, note: "Add your ElevenLabs API key (Settings → Voice) to list voices." } });
+        try { return json({ ok: true, data: { voices: await listElevenVoices({ apiKey: key }), favorites: v.ttsVoiceFavorites, selected: v.ttsVoice } }); }
+        catch (e) { return json({ ok: true, data: { voices: [], favorites: v.ttsVoiceFavorites, selected: v.ttsVoice, note: `Could not list voices: ${String((e as Error)?.message ?? e)}` } }); }
+      }
+      // P-VOICE.1: transcribe recorded mic audio → text. Provider from settings: elevenlabs (cloud Scribe)
+      // or whisper (offline OpenAI-compatible server). The transcript is ordinary user input (scanned on send).
+      if (p === "/api/transcribe" && req.method === "POST") {
+        const b = await readBody<{ audioB64?: unknown; mime?: unknown; language?: unknown }>(req);
+        const audio = typeof b.audioB64 === "string" && b.audioB64 ? new Uint8Array(Buffer.from(b.audioB64, "base64")) : new Uint8Array();
+        const v = voiceSettings();
+        let stt: TranscriptionBackend;
+        if (v.sttProvider === "elevenlabs") {
+          const key = process.env.ELEVENLABS_API_KEY;
+          if (!key) return json({ ok: true, data: { text: "", note: "Add your ElevenLabs API key (Settings → Voice), or switch STT to offline Whisper." } });
+          stt = new ElevenLabsSttBackend({ apiKey: key });
+        } else {
+          stt = new OpenAiCompatibleSttBackend({ baseUrl: v.sttUrl, apiKey: process.env.OPENAI_API_KEY, model: process.env.LUCID_STT_MODEL || "whisper-1" });
+        }
+        const r = await stt.transcribe(audio, { mimeType: typeof b.mime === "string" ? b.mime : undefined, language: typeof b.language === "string" ? b.language : undefined });
+        return json({ ok: true, data: { text: r.text, note: r.note } });
+      }
+      // P-VOICE.1: read arbitrary text aloud (assistant replies, an AAR summary) with the selected voice.
+      if (p === "/api/tts/speak" && req.method === "POST") {
+        const b = await readBody<{ text?: unknown; voiceId?: unknown; provider?: unknown }>(req);
+        const text = String(b.text ?? "").slice(0, 8000);
+        if (!text.trim()) return json({ ok: true, data: { audioB64: null, mime: "audio/mpeg", note: "nothing to speak" } });
+        const v = voiceSettings();
+        const provider = b.provider === "openai-tts" || b.provider === "local-tts" ? String(b.provider) : (v.ttsProvider || "elevenlabs");
+        try {
+          if (provider === "elevenlabs") {
+            const key = process.env.ELEVENLABS_API_KEY;
+            if (!key) return json({ ok: true, data: { audioB64: null, mime: "audio/mpeg", note: "Add your ElevenLabs API key (Settings → Voice)." } });
+            const { elevenLabsSpeak } = await import("../harness/voice/elevenlabs.ts");
+            const voiceId = (typeof b.voiceId === "string" && b.voiceId) || v.ttsVoice || v.ttsVoiceFavorites[0];
+            const out = await elevenLabsSpeak(text, { apiKey: key, voiceId, format: "mp3" });
+            return json({ ok: true, data: { audioB64: Buffer.from(out.audio).toString("base64"), mime: out.mime, note: "" } });
+          }
+          const kokoro = provider === "local-tts";
+          const key = kokoro ? undefined : process.env.OPENAI_API_KEY;
+          if (!kokoro && !key) return json({ ok: true, data: { audioB64: null, mime: "audio/wav", note: "Add your OpenAI API key (Providers → OpenAI), or pick ElevenLabs / Kokoro." } });
+          const backend = new OpenAiCompatibleTtsBackend({ baseUrl: kokoro ? (process.env.LUCID_TTS_URL || "http://localhost:8880") : (process.env.OPENAI_TTS_URL || "https://api.openai.com"), apiKey: key, model: kokoro ? (process.env.LUCID_TTS_MODEL || "kokoro") : (process.env.OPENAI_TTS_MODEL || "gpt-4o-mini-tts"), voices: { default: kokoro ? "af_heart" : "alloy" } });
+          const r = await backend.synthesize({ title: "read", turns: [{ speaker: "default", text }] });
+          const audioB64 = r.audio ? Buffer.from(r.audio).toString("base64") : null;
+          return json({ ok: true, data: { audioB64, mime: "audio/wav", note: audioB64 ? "" : r.note } });
+        } catch (e) {
+          return json({ ok: true, data: { audioB64: null, mime: "audio/mpeg", note: `TTS failed: ${String((e as Error)?.message ?? e)}` } });
+        }
       }
       // In-app folder browser (works in the browser build AND Electron). Full-tree traversal
       // (ADR-0103/P-FS.1, superseding ADR-0022 M1): the local authenticated user can browse anywhere on
@@ -762,6 +983,13 @@ const server = Bun.serve({
         return json({ ok: true, data: backend.setCheckerModelChoice(String(b.value ?? "")) });
       }
       if (p === "/api/goal/resumable") return json({ ok: true, data: listResumableLoops(currentWorkspace()) });
+      // P-GOAL.14 (ADR-0112): browse PAST After-Action Reports for this workspace. GET lists them
+      // (most-recent first); GET with ?rel= returns one report's markdown (confined to .omp/loops/).
+      if (p === "/api/goal/reports") {
+        const rel = url.searchParams.get("rel");
+        if (rel) { const md = readGoalReport(currentWorkspace(), rel); return md != null ? json({ ok: true, data: { rel, markdown: md } }) : json({ ok: false, error: "report not found" }); }
+        return json({ ok: true, data: listGoalReports(currentWorkspace()) });
+      }
       // P-GOAL.10 (ADR-0055): cross-run evaluation — success rate / avg iters / failure breakdown + recent runs.
       if (p === "/api/goal/stats") return json({ ok: true, data: backend.loopRunStats() });
       // P-GOAL.12 (ADR-0057): Pre-Flight Audit — git scopes for the picker, and the readiness/design pass.

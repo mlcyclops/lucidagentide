@@ -31,6 +31,8 @@ import { formatImportLine } from "./import_progress.ts";
 import { ASKSAGE_FAMILY_ORDER, familyOf, filterModels, groupByFamily, isAuxiliaryModel, isChinaModel, isDeprecatedModel, isGovModel, sortGovFirstNewest } from "./model_families.ts";
 import { INSTALLED_SKILLS, bumpSkillUsage, bundledSkillsByUsage, taskProforma } from "./skills.ts";
 import { CHECKER_TOKENS_PER_ITER, MAKER_TOKENS_PER_ITER, estimateGoalCost, estimateGoalTokens, formatTokens, formatUSD } from "../loop_estimate.ts";
+import { speakable } from "../../harness/brief/engineering_update.ts"; // P-REPORT.7: make read-aloud text TTS-friendly
+import { changeGraphSvg, schemaSvg, type ChangeGraph, type ModuleChange, type GraphEdge, type StoreChange } from "../../harness/brief/change_graph.ts"; // P-REPORT.8: report annex graphs
 import { assumedCacheRate, priceFor } from "../model_pricing.ts";
 import { closeIde, colorizeCode, guessLanguage, openIde, setIdeExclusivity, setIdeHooks } from "./ide_panel.ts";
 import { lineDiff, diffStat, patchLineType, patchStat, type DiffRow } from "./linediff.ts";
@@ -61,6 +63,8 @@ const state = {
   email: "" as string, // corporate email - attribution identity (ADR-0030); prompted on first open
   attribution: null as import("./bridge.ts").ProfileSettings["attribution"] | null, // identity + source (email|workstation)
   budgetWarned: new Set<string>(), // provider budgets we've already warned about this window
+  chatBg: { image: "", mode: "off" as "off" | "ambient" | "flashlight", opacity: 0.25 }, // P-APPEAR.1: personalized chat background
+  codeGraphAgent: false, // P-KG-SYM.1: expose the code graph to the agent as a queryable tool
   workspace: null as WorkspaceInfo | null,
   asksage: null as { configured: boolean; base: string; only: boolean; limit: number; datasets: string[]; queryModel: string; persona: string } | null,
   asksageTokens: null as { used: number; remaining: number | null; limit: number } | null,
@@ -131,11 +135,10 @@ function buildShell(): void {
       </button>
       <div class="tb-spacer"></div>
       <div class="zoom" role="group" aria-label="Text zoom">
-        <button id="zoomOut" data-tip="Zoom out|${modSymbol("−")}">${icon("minus", 15)}</button>
+        <button id="zoomOut" data-tip="Zoom out|${modSymbol("−")}">${icon("minus", 13)}</button>
         <span class="lvl" id="zoomLvl" data-tip="Reset zoom|${modSymbol("0")}">100%</span>
-        <button id="zoomIn" data-tip="Zoom in|${modSymbol("+")}">${icon("plus", 15)}</button>
+        <button id="zoomIn" data-tip="Zoom in|${modSymbol("+")}">${icon("plus", 13)}</button>
       </div>
-      <button class="model-badge" id="cmdkBtn" data-tip="Command palette|${modCombo("K")}" data-tip-icon="command">${icon("command", 14)}<span>Commands</span></button>
       <div class="win-ctrls">
         <button id="winMin" data-tip="Minimise">${icon("minus", 15)}</button>
         <button id="winMax" data-tip="Maximise">${icon("square", 13)}</button>
@@ -151,6 +154,7 @@ function buildShell(): void {
         <button class="rail-btn" data-rail="memory" data-tip="Memory & context|Context window, prompt-cache savings, semantic memory" data-tip-icon="savings">${icon("savings", 20)}</button>
         <button class="rail-btn" data-rail="knowledge" data-tip="Knowledge graph|Your private, encrypted personalization graph - nodes, edges, drill-down" data-tip-icon="graph">${icon("graph", 20)}</button>
         <button class="rail-btn" data-rail="preview" data-tip="Preview|Open a local app/page the agent built in a sandboxed in-app browser, and send a screenshot to chat" data-tip-icon="eye">${icon("eye", 20)}</button>
+        <button class="rail-btn" id="railReports" data-tip="Engineering Reports|Generate a role-tailored engineering brief (with podcast audio), and browse every past loop After-Action Report + brief" data-tip-icon="report">${icon("report", 20)}</button>
         <button class="rail-btn" id="railLogs" data-rail="dev" hidden data-tip="Logs|Read-only developer logs: telemetry, run lineage, transcripts, gate-block audit, AskSage tool-call diagnostics" data-tip-icon="logs">${icon("logs", 20)}</button>
         <div class="spacer"></div>
         <button class="rail-btn rail-about" id="railAbout" data-tip="About LUCID Agent IDE|Version, license & credits" data-tip-icon="info">${readmeMark()}</button>
@@ -170,21 +174,22 @@ function buildShell(): void {
       </aside>
 
       <main class="center">
+        <div class="chat-bg" id="chatBg" aria-hidden="true"></div>
         <div class="chat" id="chat"><div class="thread" id="thread"></div></div>
         <button class="jump-down" id="jumpDown" type="button" aria-label="Jump down a page" data-tip="Jump down a page">${icon("chevronsDown", 18)}</button>
         <div class="composer-wrap">
           <div class="composer-row">
             <div class="composer">
-              <textarea id="input" rows="1" placeholder="Ask the agent…  every tool call is scanned before it runs"></textarea>
+              <textarea id="input" rows="1" spellcheck="true" placeholder="Ask the agent…  every tool call is scanned before it runs"></textarea>
             </div>
             <button class="send-btn" id="send" data-tip="Send|Enter" disabled>${icon("send", 18)}</button>
           </div>
           <div class="composer-tools" id="composerTools">
-            <button class="ctool" id="ctModel" data-tip="Model|Click to change the model">${icon("spark", 14)}<span id="ctModelName">${esc(modelLabel(state.model))}</span>${icon("chevron", 11)}</button>
-            <button class="ctool" id="ctMode" data-tip="Mode|Agent edits files · Plan drafts read-only">${icon("bolt", 14)}<span id="ctModeName">Agent</span>${icon("chevron", 11)}</button>
-            <button class="ctool" id="ctThink" data-tip="Thinking depth|How hard the model reasons">${icon("bulb", 14)}<span id="ctThinkName">High</span>${icon("chevron", 11)}</button>
+            <!-- Model · mode · thinking live in the top #modelBadge picker (which covers all three); the
+                 composer keeps only the controls that AREN'T up there: persona, skills, and voice input. -->
             <button class="ctool" id="ctPersona" data-tip="AskSage persona|Server-supplied role guidance - scanned before use" hidden>${icon("user", 14)}<span id="ctPersonaName">Persona</span>${icon("chevron", 11)}</button>
             <button class="ctool" id="ctSkill" data-tip="Skills|Built-in skills, /task delegation, and project skills" hidden>${icon("bolt", 14)}<span>Skills</span>${icon("chevron", 11)}</button>
+            <button class="ctool ctool-icon" id="ctMic" data-tip="Voice input · ${modCombo("D")}|Click (or press ${modCombo("D")}) to record, again to stop - transcribed into the composer (Settings → Voice sets the engine)">${icon("mic", 15)}</button>
             <span class="ctool-hint"><span class="kh"><kbd>↵</kbd> send</span><span class="kh"><kbd>⇧↵</kbd> newline</span><span class="kh"><kbd>${modCombo("K")}</kbd> commands</span></span>
           </div>
         </div>
@@ -221,7 +226,11 @@ function buildShell(): void {
             <div class="seg kg-lens" data-kg-lens>
               <button class="on" data-lens="kind">Kind</button><button data-lens="trust">Trust</button>
             </div>
-            <button class="btn-mini" id="kgRelate" data-tip="Relate nodes|Turn on relate mode, then drag one node onto another - or click two or more nodes and press Relate - to add your OWN relationships. They're saved to your private graph (first-party, never sent to be scanned as instructions).">${icon("git", 13)} Relate</button>
+            <div class="kg-relate-stack">
+              <button class="btn-mini" id="kgRelate" data-tip="Relate nodes|Turn on relate mode, then drag one node onto another - or click two or more nodes and press Relate - to add your OWN relationships. They're saved to your private graph (first-party, never sent to be scanned as instructions).">${icon("git", 13)} Relate</button>
+              <button class="btn-mini" id="kgCode" data-tip="Code graph|Ingest THIS workspace into a code knowledge graph - source files as nodes, imports as edges (colbymchenry/codegraph-style, in your own canvas). Click to build + view; click again to return to your personal graph. Needs no personalization unlock.">${icon("graph", 13)} Code graph</button>
+            </div>
+            <button class="btn-mini btn-icon" id="kgCodeUpdate" data-tip="Re-sync the code graph|Re-ingest the workspace to pick up new files + import changes since the last build." hidden>${icon("refresh", 14)}</button>
             <label class="kg-ai" data-tip="AI extraction|Use the model to pull richer facts + real relationships from each message, instead of the fast offline heuristic. Slower and uses model quota; capped at 500 messages per import. Leave off for a free, instant pass."><input type="checkbox" id="kgImportAI"/> AI</label>
             <button class="btn-mini" id="kgImport" data-tip="Import chat history|Bring in a ChatGPT, Claude, or Gemini data export to seed your graph. Easiest: just pick the unzipped export FOLDER (a modern ChatGPT export has no single conversations.json - it ships conversations-000.json, -001.json … and we merge them for you) - or point at the .zip / conversations.json / MyActivity.json directly. Every message is scanned by the security gate before anything is learned; only your own messages teach the profile.">${icon("download", 13)} Import history</button>
             <button class="btn-mini" id="kgExport" data-tip="Export Obsidian vault|Decrypt and write your Personal + Work knowledge to a portable Obsidian vault (notes, [[wikilinks]], escaped). CUI is excluded by design. The export is audited.">${icon("folder", 13)} Export vault</button>
@@ -238,6 +247,8 @@ function buildShell(): void {
         </div>
         <div class="kg-main">
           <div class="kg-canvas" id="kgCanvas"></div>
+          <button class="kg-center-btn" id="kgCenter" type="button" data-tip="Re-center the graph|Fit the whole graph back into view." data-tip-side="left" hidden>${icon("center", 17)}</button>
+          <div class="resizer resizer-l kg-side-resizer" id="kgSideResizer" data-resize="kgside" data-tip="Drag to resize the panel" data-tip-side="left" hidden></div>
           <div class="kg-side" id="kgSide"></div>
         </div>
       </aside>
@@ -249,13 +260,16 @@ function buildShell(): void {
           <div class="kg-tools">
             <input id="prevPath" class="kg-search" type="text" placeholder="Open a local file… (path or file://)" spellcheck="false" autocomplete="off" data-tip="Open a local file|Paste a path to an HTML file the agent built, then Open. Local files only in this build; remote URLs are egress-gated (coming next)." />
             <button class="btn-mini" id="prevOpen">${icon("download", 13)} Open</button>
+            <button class="btn-mini" id="prevBrowse" data-tip="Browse your workspace|Open a file from the current working directory to preview it yourself (native file picker).">${icon("folder", 13)} Browse…</button>
             <button class="btn-mini" id="prevReload" data-tip="Reload the preview">${icon("refresh", 13)} Reload</button>
-            <button class="btn-mini" id="prevShot" data-tip="Send a screenshot to chat|Capture the preview and attach it to the composer for the agent to react to. Desktop app only.">${icon("eye", 13)} Screenshot → chat</button>
+            <button class="btn-mini" id="prevMarkup" data-tip="Markup tools|Draw on the preview - pen, rectangle, text - then send the marked-up screenshot to chat.">${icon("markup", 14)} Markup ${icon("chevron", 10)}</button>
+            <button class="btn-mini" id="prevShot" data-tip="Send a screenshot to chat|Capture the preview (with your markup) and attach it to the composer for the agent to react to. Desktop app only.">${icon("eye", 13)} Screenshot → chat</button>
             <button class="set-close" id="prevClose" data-tip="Close">${icon("close", 16)}</button>
           </div>
         </div>
         <div class="preview-body" id="prevBody">
           <iframe id="prevFrame" class="preview-frame" sandbox="${PREVIEW_SANDBOX}" allow="${PREVIEW_ALLOW}" referrerpolicy="no-referrer" title="App preview" hidden></iframe>
+          <canvas id="prevCanvas" class="preview-canvas" aria-hidden="true"></canvas>
           <div class="empty preview-empty" id="prevEmpty"><span class="preview-empty-msg" id="prevEmptyMsg">Open a local HTML file to preview it here - paste its path above and press <b>Open</b>. (The agent driving this itself is coming next; remote URLs are egress-gated.)</span></div>
         </div>
       </aside>
@@ -351,7 +365,9 @@ function seedThread(): void {
 function addMessage(role: "user" | "assistant", text: string): HTMLElement {
   $("#chatHint")?.remove();
   // Copy + Save .md on BOTH roles (copy your own prompts too).
-  const actions = `<div class="msg-actions"><button class="msg-act" data-msg-copy data-tip="Copy markdown">${icon("copy", 13)}</button><button class="msg-act" data-msg-save data-tip="Save as .md">${icon("download", 13)}</button></div>`;
+  // P-VOICE.1 (ADR-0115): read-aloud (TTS) only on the assistant's replies.
+  const speakBtn = role === "assistant" ? `<button class="msg-act" data-msg-speak data-tip="Read aloud|Speak this reply (Settings → Voice sets the engine)">${icon("volume", 13)}</button>` : "";
+  const actions = `<div class="msg-actions"><button class="msg-act" data-msg-copy data-tip="Copy markdown">${icon("copy", 13)}</button><button class="msg-act" data-msg-save data-tip="Save as .md">${icon("download", 13)}</button>${speakBtn}</div>`;
   const who = role === "user" ? (state.username || "You") : "LucidAgent";
   const node = el(`<div class="msg ${role}">
     <div class="who">${esc(who)}</div>
@@ -440,7 +456,7 @@ async function runPersonalImport(folder: string, useModel: boolean): Promise<voi
       desc: `${r.learned} facts learned from ${r.messages} messages across ${r.conversations} conversations.`,
       meta: notes, actions: [{ label: "OK" }], timeout: 9000,
     });
-    if (kgOpen) void renderKnowledge(); // redraw with the new nodes + edges (only if the panel is open)
+    if (kgOpen && !kgCodeMode) void renderKnowledge(); // redraw with the new nodes + edges (personal graph only)
   };
   void poll();
 }
@@ -602,7 +618,7 @@ async function openStepInEditor(code: ToolCode): Promise<void> {
     if (r?.ok && typeof r.content === "string") { await openIde({ path, code: r.content, sha256: r.sha256, mtime: r.mtime }); return; }
   }
   if (code.content !== undefined) { await openIde({ title: name, code: code.content, language: guessLanguage(path) }); return; }
-  await openIde({ title: `${name} — patch`, code: code.patch ?? "", language: "diff" });
+  await openIde({ title: `${name} - patch`, code: code.patch ?? "", language: "diff" });
 }
 
 async function renderToolCode(panel: HTMLElement, code: ToolCode): Promise<void> {
@@ -820,13 +836,39 @@ function createPermissionCard(e: Extract<ChatEvent, { type: "permission" }>): { 
     const btns = e.options.map((o) => `<button class="perm-btn ${exCls(o.kind)}" data-oid="${esc(o.optionId)}">${esc(o.name)}</button>`).join("");
     win = el(`<div class="perm perm-egress perm-exec${e.danger ? " perm-exec-danger" : ""}" data-streaming="1">
       <div class="perm-eg-head">${icon(e.danger ? "shield" : "bolt", 13)}<span>${e.danger ? "The agent wants to run a HIGH-RISK command" : "The agent wants to run a command"}</span></div>
-      <div class="perm-egress-target"><code class="perm-url">${esc(cmd)}</code><button class="perm-copy" data-tip="Copy command">${icon("copy", 12)}</button></div>
+      <div class="perm-egress-target"><code class="perm-url">${esc(cmd)}</code>
+        <span class="perm-cmd-btns">
+          <button class="perm-copy" data-tip="Copy command">${icon("copy", 12)}</button>
+          <button class="perm-tldr" data-tip="Explain this command in plain terms (uses a cheap model)">TLDR</button>
+        </span></div>
+      <div class="perm-tldr-out" hidden></div>
       ${e.reason || e.program ? `<div class="perm-exec-why">${e.program ? `<code class="perm-prog">${esc(e.program)}</code> · ` : ""}${esc(e.reason ?? "")}</div>` : ""}
       <div class="perm-actions perm-actions-col">${btns}</div>
     </div>`);
     const copyBtn = $(".perm-copy", win) as HTMLElement | null;
     copyBtn?.addEventListener("click", async () => {
       try { await navigator.clipboard.writeText(cmd); copyBtn.innerHTML = icon("check", 12); setTimeout(() => { copyBtn.innerHTML = icon("copy", 12); }, 1200); } catch { /* clipboard blocked */ }
+    });
+    // TLDR: one-shot plain-language explanation from a cheap keyed model, shown inline. Cached per card.
+    const tldrBtn = $(".perm-tldr", win) as HTMLButtonElement | null;
+    const tldrOut = $(".perm-tldr-out", win) as HTMLElement | null;
+    let tldrDone = false;
+    tldrBtn?.addEventListener("click", async () => {
+      if (!tldrOut) return;
+      if (tldrDone) { tldrOut.hidden = !tldrOut.hidden; return; } // toggle once fetched
+      tldrBtn.disabled = true;
+      tldrOut.hidden = false;
+      tldrOut.className = "perm-tldr-out";
+      tldrOut.innerHTML = `${icon("refresh", 12, "spin")} <span>Explaining…</span>`;
+      const r = await bridge.explainCommand(cmd).catch(() => null);
+      tldrBtn.disabled = false;
+      if (r?.ok && r.text) {
+        tldrDone = true;
+        tldrOut.innerHTML = `<div class="tldr-body">${esc(r.text)}</div>${r.model ? `<div class="tldr-model">${icon("spark", 10)} explained by ${esc(r.model)}</div>` : ""}`;
+      } else {
+        tldrOut.className = "perm-tldr-out tldr-err";
+        tldrOut.innerHTML = `${icon("info", 12)} <span>${esc(r?.error ?? "Could not explain - the model was unreachable.")}</span>`;
+      }
     });
   } else {
     const btns = e.options.map((o) => `<button class="perm-btn ${isAllowOpt(o.kind, o.optionId) ? "ok" : "no"}" data-oid="${esc(o.optionId)}">${esc(o.name)}</button>`).join("");
@@ -982,10 +1024,8 @@ async function send(): Promise<void> {
     // The streaming OUTPUT count - what the model is generating right now, with no
     // system prompt / cached prefix in it (the user's "minus the whole prompt" ask).
     const out = tps.tokenCount;
-    // averageTps (not the windowed tps): ACP delivers reasoning/text in big lumps,
-    // so the running average reads steady where a windowed rate would strobe.
-    if (out > 0) { const r = tps.averageTps; tpsEl.textContent = `· ${fmtNum(out)} tokens out${r > 0 ? ` · ${r.toFixed(1)} tokens/s` : ""}`; }
-    else tpsEl.textContent = "";
+    // The per-turn OUTPUT count. (Tokens/s was removed - it read as noise on the done line.)
+    tpsEl.textContent = out > 0 ? `· ${fmtNum(out)} tokens out` : "";
     // The CONTEXT figure (window fill + turn cost) genuinely includes the prompt -
     // labelled "context" so it's never mistaken for the per-turn output above. Cost
     // is shown to the cent ($0.00) - the sub-cent precision read as noise.
@@ -1063,7 +1103,7 @@ function onBlock(e: Extract<ChatEvent, { type: "block" }>): void {
     // P-TOOLFAIL.1 (ADR-0093): a tool that failed or didn't run — NOT a security block. The reason now
     // carries omp's own status/message (tool_failure.ts), so the chip explains itself; the tooltip makes
     // the not-a-quarantine distinction explicit so a failure is never read as a denial.
-    addEvent(`<div class="evt" data-tip="Tool call was not completed (failed or refused) — not a security block">${icon("close", 14)}<span><b>${esc(e.tool)}</b> · ${esc(e.reason)}</span></div>`);
+    addEvent(`<div class="evt" data-tip="Tool call was not completed (failed or refused) - not a security block">${icon("close", 14)}<span><b>${esc(e.tool)}</b> · ${esc(e.reason)}</span></div>`);
     return;
   }
   const review = () => { OPEN.add("sec.live"); focusInspector("security"); void refresh(); };
@@ -1196,6 +1236,14 @@ function renderInspector(): void {
 }
 
 // ───────────────────────── quick-metrics rail (collapsed inspector) ─────────────────────────
+// P-REPORT.4: the tiles read NEUTRAL by default and only bloom into their own accent color for a
+// beat when their value CHANGES (so color = "this just moved"), and a tile that needs triage
+// (findings / quarantine > 0) gets a slow clockwise light sweep. We remember the last-rendered
+// values to detect the delta, and skip the DOM write when nothing moved so the sweep animation on
+// an attention tile keeps running smoothly instead of restarting every poll.
+const prevMetrics: Record<string, string> = {};
+let lastRailSig = "";
+let railPrimed = false; // first paint must not flash every tile as "changed"
 function renderMetricsRail(): void {
   const tiles = $("#railTiles");
   if (!tiles) return;
@@ -1207,16 +1255,31 @@ function renderMetricsRail(): void {
   const findings = sec ? sec.findings.reduce((a, r) => a + Number(r.n || 0), 0) : 0;
   const quar = sec ? sec.quarantine.length : 0;
   const ca = state.codeActivity; // ADR-0030 P-CODE.1: this month's repo activity
-  const tile = (n: string, label: string, cls: string, tip: string) =>
-    `<div class="tile ${cls}" data-tip="${esc(label)}|${esc(tip)}" data-tip-side="left"><div class="n">${esc(n)}</div><div class="l">${esc(label)}</div></div>`;
-  tiles.innerHTML =
-    tile(`${Math.round(hit * 100)}%`, "savings", "g", "How much the prompt cache saves you. The AI re-reads the same background every turn; that repeated part is billed at about one-tenth the price - roughly 90% off. This is how much of this turn was that cheap repeat, so a higher number means a smaller bill.") +
-    tile(fmtNum(avg), "avg/turn", "c", "Average tokens per turn") +
-    tile(fmtNum(cur), "context", "b", "Context tokens in use this turn") +
-    tile(String(turns), "turns", "b2", "Agent turns in this session") +
-    (ca && ca.totals.files > 0 ? tile(`+${fmtNum(ca.totals.added)}`, "lines", "g", `Workspace activity this month (${ca.month}): ${fmtNum(ca.totals.added)} lines added, ${fmtNum(ca.totals.deleted)} deleted across ${fmtNum(ca.totals.files)} files. This is REPO activity (all commits), not AI-authored lines.`) : "") +
-    tile(String(findings), "findings", "m", "Scanner findings so far") +
-    tile(String(quar), "quarantd", "r", "Artifacts currently quarantined");
+
+  type T = { n: string; label: string; cls: string; tip: string; attn?: boolean };
+  const rows: T[] = [
+    { n: `${Math.round(hit * 100)}%`, label: "savings", cls: "g", tip: "How much the prompt cache saves you. The AI re-reads the same background every turn; that repeated part is billed at about one-tenth the price - roughly 90% off. This is how much of this turn was that cheap repeat, so a higher number means a smaller bill." },
+    { n: fmtNum(avg), label: "avg/turn", cls: "c", tip: "Average tokens per turn" },
+    { n: fmtNum(cur), label: "context", cls: "b", tip: "Context tokens in use this turn" },
+    { n: String(turns), label: "turns", cls: "b2", tip: "Agent turns in this session" },
+    ...(ca && ca.totals.files > 0 ? [{ n: `+${fmtNum(ca.totals.added)}`, label: "lines", cls: "g", tip: `Workspace activity this month (${ca.month}): ${fmtNum(ca.totals.added)} lines added, ${fmtNum(ca.totals.deleted)} deleted across ${fmtNum(ca.totals.files)} files. This is REPO activity (all commits), not AI-authored lines.` } as T] : []),
+    { n: String(findings), label: "findings", cls: "m", tip: "Scanner findings so far", attn: findings > 0 },
+    { n: String(quar), label: "quarantd", cls: "r", tip: "Artifacts currently quarantined", attn: quar > 0 },
+  ];
+
+  // Signature: value + attention state per tile. Unchanged → leave the DOM alone (keep the pulse smooth).
+  const sig = rows.map((t) => `${t.label}:${t.n}:${t.attn ? 1 : 0}`).join("|");
+  if (sig === lastRailSig) return;
+  lastRailSig = sig;
+
+  // Same neutral look at rest; a tile that just CHANGED gets the game-like clockwise racing pulse + shine.
+  tiles.innerHTML = rows.map((t) => {
+    const changed = railPrimed && prevMetrics[t.label] !== undefined && prevMetrics[t.label] !== t.n;
+    prevMetrics[t.label] = t.n;
+    const cl = `tile ${t.cls}${changed ? " changed" : ""}${t.attn ? " attn" : ""}`;
+    return `<div class="${cl}" data-tip="${esc(t.label)}|${esc(t.tip)}" data-tip-side="left"><div class="n">${esc(t.n)}</div><div class="l">${esc(t.label)}</div></div>`;
+  }).join("");
+  railPrimed = true;
 }
 function setInspectorRail(rail: boolean): void {
   state.inspectorRail = rail;
@@ -1234,6 +1297,7 @@ function setInspectorRail(rail: boolean): void {
 // OAuth here signs in a SUBSCRIPTION/CLI tier; the full commercial catalog comes from an API key.
 // Spell that out where it bites (OpenAI/Gemini), and steer Perplexity to its working key path.
 const PROV_HINTS: Record<string, string> = {
+  elevenlabs: `Cloud voice (paid) for read-aloud, the podcast, and speech-to-text. Get a key at <a href="https://elevenlabs.io/app/settings/api-keys" target="_blank" rel="noopener">elevenlabs.io → API keys ↗</a>. Billed per character: a brief/AAR narration (~2-3k chars) runs <b>~$0.10-$0.30</b>; one reply is a few cents. Audio leaves the device, so for air-gap/DoD use offline Whisper / Kokoro below.`,
   openai: "OAuth signs in your ChatGPT / Codex subscription (those models). For the full commercial catalog - gpt-4o, o-series - add an OPENAI_API_KEY below.",
   google: "OAuth uses the Gemini CLI / Code Assist tier. For the full commercial Gemini catalog, add a GEMINI_API_KEY below.",
   anthropic: "OAuth signs in your Claude subscription. For pay-as-you-go API access, add an ANTHROPIC_API_KEY below.",
@@ -1246,7 +1310,9 @@ function provCard(p: ProviderAuth): string {
     (p.oauthActive ? `<span class="abadge ok">${icon("check", 11)} OAuth active</span>` : "") +
     (p.keySet ? `<span class="abadge set">key ••${last4}</span>` : "") +
     (!p.oauthActive && !p.keySet ? `<span class="abadge none">not set</span>` : "");
-  const hint = PROV_HINTS[p.id] ? `<div class="prov-hint">${icon("info", 11)} ${PROV_HINTS[p.id]}</div>` : "";
+  // The hint text goes in ONE <span> so rich markup (<b>/<a>) stays inline instead of becoming separate
+  // flex items in the flex `.prov-hint` (that squished multi-tag hints into clipped narrow columns).
+  const hint = PROV_HINTS[p.id] ? `<div class="prov-hint">${icon("info", 11)}<span>${PROV_HINTS[p.id]}</span></div>` : "";
   const oauthRow = p.canOauth
     ? `<div class="prov-row">${p.oauthActive
         ? `<span class="prov-id">${esc(p.oauthIdentity ?? "connected")}</span><button class="btn-mini danger" data-oauth-logout="${esc(p.oauthId)}">Disconnect</button>`
@@ -1608,7 +1674,9 @@ function secDeveloper(): string {
 // ACKNOWLEDGE gate (mirrors the China-origin unlock) because these route outside U.S. jurisdiction or
 // aggregate many origins. Expanding the section shows the warning first; the list appears once acknowledged.
 function secOthers(auth: import("./bridge.ts").AuthStatus | null): string {
-  const list = (auth?.others ?? []).map(provCard).join("") || `<div class="empty">none</div>`;
+  // P-VOICE.1: ElevenLabs rides the `others` auth plumbing for keySet/last4, but it's a VOICE provider —
+  // render it in the Voice card, not here.
+  const list = (auth?.others ?? []).filter((p) => p.id !== "elevenlabs").map(provCard).join("") || `<div class="empty">none</div>`;
   if (state.thirdPartyAck) {
     return setCard("others", "More providers", "third-party · non-U.S. / custom",
       `<div class="set-note ok">${icon("check", 12)} You acknowledged the third-party risk. <button class="btn-link" id="thirdPartyRelock">Re-lock</button></div>${list}`, true);
@@ -1616,6 +1684,58 @@ function secOthers(auth: import("./bridge.ts").AuthStatus | null): string {
   return setCard("others", "More providers", "acknowledge to reveal",
     `<div class="set-note danger">${icon("shield", 12)} <b>Third-party models (non-U.S. / custom)</b> - OpenRouter, DeepSeek, Kimi/Moonshot, Groq. These route to third-party or non-U.S. servers (or aggregate many origins) with <b>no U.S. data-sovereignty guarantee</b>; review each provider's terms before use.</div>
      <div class="china-unlock"><input id="thirdPartyAckInput" placeholder="Type ACKNOWLEDGE to reveal" autocomplete="off" spellcheck="false" /><button class="btn-mini" id="thirdPartyAckBtn" disabled>Reveal</button></div>`, true);
+}
+// P-VOICE.1 (ADR-0115): the Voice card — ElevenLabs key (with get-key link + cost estimate), the STT
+// engine (offline Whisper = air-gap/DoD default, or ElevenLabs Scribe cloud), the TTS engine, and the
+// voice picker (favorites first). The voice list loads async (needs the ElevenLabs key).
+function secVoice(auth: import("./bridge.ts").AuthStatus | null, vset: import("./bridge.ts").VoiceSettingsView | null): string {
+  const elKey = (auth?.others ?? []).find((p) => p.id === "elevenlabs");
+  const keyCard = elKey ? provCard(elKey) : "";
+  const stt = vset?.sttProvider ?? "whisper";
+  const ttsp = vset?.ttsProvider ?? "elevenlabs";
+  const sel = (v: boolean) => (v ? " selected" : "");
+  const body = `${keyCard}
+    <div class="set-note">${icon("mic", 12)} <b>Speech-to-text</b> powers the mic button by the composer. <b>Offline Whisper</b> keeps audio on-device (air-gap / DoD); <b>ElevenLabs Scribe</b> is cloud (higher accuracy, audio leaves the device).</div>
+    <div class="voice-row"><label class="voice-lbl" for="voiceStt">STT engine</label>
+      <select id="voiceStt" class="prov-key" data-voice-set="sttProvider">
+        <option value="whisper"${sel(stt === "whisper")}>Offline Whisper - air-gap / DoD</option>
+        <option value="elevenlabs"${sel(stt === "elevenlabs")}>ElevenLabs Scribe - cloud</option>
+      </select></div>
+    <div class="voice-row" id="voiceSttUrlRow"${stt === "whisper" ? "" : " hidden"}>
+      <label class="voice-lbl" for="voiceSttUrl">Whisper URL</label>
+      <input id="voiceSttUrl" class="prov-key" data-voice-set="sttUrl" spellcheck="false" placeholder="http://localhost:9000 (self-hosted whisper.cpp / faster-whisper)" value="${esc(vset?.sttUrl ?? "")}" /></div>
+    <div class="voice-row"><label class="voice-lbl" for="voiceTts">TTS engine</label>
+      <select id="voiceTts" class="prov-key" data-voice-set="ttsProvider">
+        <option value="elevenlabs"${sel(ttsp === "elevenlabs")}>ElevenLabs - cloud, custom voices</option>
+        <option value="openai-tts"${sel(ttsp === "openai-tts")}>ChatGPT / OpenAI - cloud</option>
+        <option value="local-tts"${sel(ttsp === "local-tts")}>Kokoro - offline, air-gap</option>
+      </select></div>
+    <div class="voice-row voice-pick"><label class="voice-lbl" for="voiceSelect">Voice</label>
+      <select id="voiceSelect" class="prov-key" data-voice-set="ttsVoice"><option value="">loading voices…</option></select>
+      <button class="btn-mini" id="voiceFav" data-tip="Favorite|Star the selected voice - favorites are listed first">${icon("spark", 12)}</button></div>
+    <div class="set-note" id="voiceNote"></div>`;
+  return setCard("voice", "Voice", "TTS · STT · ElevenLabs", body, true);
+}
+/** Populate the Voice card's voice picker (favorites first) from the ElevenLabs account. Best-effort;
+ *  shows a note when no key / no voices. Called after the card renders and after the key changes. */
+async function loadVoices(): Promise<void> {
+  const selEl = $("#voiceSelect") as HTMLSelectElement | null;
+  if (!selEl) return;
+  const data = await bridge.voices().catch(() => null);
+  const note = $("#voiceNote");
+  if (!data || !data.voices.length) {
+    selEl.innerHTML = `<option value="">no voices${data?.note ? "" : ""}</option>`;
+    if (note) note.textContent = data?.note || "Add an ElevenLabs key to list voices.";
+    return;
+  }
+  if (note) note.textContent = "";
+  const favs = new Set(data.favorites);
+  const opt = (v: import("./bridge.ts").ElevenVoiceView) => `<option value="${esc(v.voiceId)}"${v.voiceId === data.selected ? " selected" : ""}>${esc(v.name)}${v.category ? ` · ${esc(v.category)}` : ""}</option>`;
+  const favList = data.voices.filter((v) => favs.has(v.voiceId));
+  const rest = data.voices.filter((v) => !favs.has(v.voiceId));
+  selEl.innerHTML =
+    (favList.length ? `<optgroup label="★ Favorites">${favList.map(opt).join("")}</optgroup>` : "") +
+    `<optgroup label="All voices">${rest.map(opt).join("")}</optgroup>`;
 }
 // P-MCP.1 (ADR-0020): MCP connectors - auth + config only; omp owns the MCP transport.
 function secMcp(servers: import("./bridge.ts").McpServerStatus[]): string {
@@ -1827,6 +1947,59 @@ function openCredRotate(anchor: HTMLElement, ref: string): void {
   });
 }
 
+// ── P-APPEAR.1: personalized chat background (ambient wash / flashlight-on-hover) ──
+// `ambient` = the image faintly (25%) behind the whole chat; `flashlight` = black background, with the
+// image revealed only under the cursor via a masked radial spotlight tracked on mousemove. Off/no image → hidden.
+function applyChatBg(cfg = state.chatBg): void {
+  const el = $("#chatBg");
+  if (!el) return;
+  const active = !!cfg.image && cfg.mode !== "off";
+  el.classList.toggle("ambient", active && cfg.mode === "ambient");
+  el.classList.toggle("flashlight", active && cfg.mode === "flashlight");
+  el.style.setProperty("--bg-op", String(cfg.opacity || 0.25));
+  el.style.backgroundImage = active ? `url("${cfg.image}")` : "";
+  if (active && cfg.mode === "flashlight") ensureChatBgTracking();
+}
+let chatBgTracking = false;
+function ensureChatBgTracking(): void {
+  if (chatBgTracking) return;
+  const center = document.querySelector(".center") as HTMLElement | null;
+  if (!center) return;
+  chatBgTracking = true;
+  center.addEventListener("mousemove", (e) => {
+    const bg = $("#chatBg");
+    if (!bg || !bg.classList.contains("flashlight")) return;
+    const r = center.getBoundingClientRect();
+    bg.style.setProperty("--mx", `${(e as MouseEvent).clientX - r.left}px`);
+    bg.style.setProperty("--my", `${(e as MouseEvent).clientY - r.top}px`);
+  });
+  center.addEventListener("mouseleave", () => { const bg = $("#chatBg"); bg?.style.setProperty("--mx", "-600px"); bg?.style.setProperty("--my", "-600px"); });
+}
+async function updateChatBg(patch: { image?: string; mode?: "off" | "ambient" | "flashlight"; opacity?: number }): Promise<void> {
+  const r = await bridge.setChatBackground(patch).catch(() => null);
+  if (!r) { showToast({ tone: "warn", title: "Couldn't update background", desc: "The image may be too large - try one under ~9 MB.", timeout: 3600 }); return; }
+  state.chatBg = r; applyChatBg(r);
+  if (state.settingsOpen) fillSec("appearance", secAppearance());
+}
+function secAppearance(): string {
+  const c = state.chatBg;
+  const modeOpt = (v: string, l: string) => `<option value="${v}"${c.mode === v ? " selected" : ""}>${l}</option>`;
+  const thumb = c.image
+    ? `<div class="bg-thumb" style="background-image:url('${c.image}')"></div>`
+    : `<div class="bg-thumb empty">no image</div>`;
+  const inner = `
+    <div class="bg-row">${thumb}
+      <div class="bg-controls">
+        <input type="file" id="bgFile" accept="image/png,image/jpeg,image/webp,image/gif" hidden />
+        <button type="button" class="btn-mini" id="bgUpload">${icon("folder", 12)} ${c.image ? "Replace image…" : "Choose image…"}</button>
+        ${c.image ? `<button type="button" class="btn-mini danger" id="bgClear">Remove</button>` : ""}
+      </div></div>
+    <div class="goal-row"><label class="goal-lbl" for="bgMode">Display</label>
+      <select id="bgMode" class="prov-key">${modeOpt("off", "Off")}${modeOpt("ambient", "Ambient - faint 25% wash")}${modeOpt("flashlight", "Flashlight - reveal on hover")}</select></div>
+    <div class="set-note">${icon("info", 12)} <b>Ambient</b> shows your image faintly (25%) behind the whole chat. <b>Flashlight</b> keeps the background black and reveals the image only under your cursor - like a flashlight sweeping a dark room.</div>`;
+  return setCard("appearance", "Chat background", "personalize · 25% opacity", inner, true);
+}
+
 function settingsShell(): string {
   return [
     `<div data-sec="workspace"></div>`,
@@ -1844,6 +2017,8 @@ function settingsShell(): string {
     setSkel("mcp", "MCP connectors", "model context protocol", true),
     setSkel("whitelist", "Network Whitelist", "domains · IPs · trust-scoped", true), // P-NETWL.2 (ADR-0106)
     setSkel("others", "More providers", "", true),
+    setSkel("voice", "Voice", "TTS · STT · ElevenLabs", true), // P-VOICE.1 (ADR-0115)
+    secAppearance(), // P-APPEAR.1: chat background (rendered from state - loaded at boot, no fetch wait)
     setSkel("developer", "Developer", "logs · diagnostics", true),
     `<div class="set-note">${icon("shield", 12)} Keys are stored on this machine and passed to omp as env vars - never sent anywhere else. OAuth uses omp's own secure credential vault.</div>`,
   ].join("");
@@ -1869,6 +2044,8 @@ function hydrateSettings(): void {
     state.auth = a; // store so the AskSage gateway card can render its key entry from auth.gateway
     fillSec("providers", secProviders(a)); fillSec("others", secOthers(a));
     fillSec("asksage", secAsksage(state.asksage, null)); // inject the ASKSAGE_API_KEY row now that gateway auth is known
+    // P-VOICE.1 (ADR-0115): the Voice card needs auth (ElevenLabs key state) + the voice settings, then loads voices.
+    void bridge.voiceSettings().then((vset) => { fillSec("voice", secVoice(a, vset)); void loadVoices(); });
     renderStatus(); // a just-added/removed key flips the OAuth-vs-key budget-pill gate
   });
   fillSec("sovereignty", secSovereignty()); // P-IDE.1c: only renders a card when China-origin models exist
@@ -2036,6 +2213,9 @@ let kgLens: "kind" | "trust" = "kind";
 let kgOpen = false;
 let kgSelId: string | null = null;
 let kgSig = ""; // signature of the last-rendered graph, to skip no-op live refreshes
+let kgCodeMode = false; // P-KG-CODE.1: the canvas is showing the workspace CODE graph, not the personal graph
+let codeGraphRoot = ""; // P-KG-CODE.1d: workspace root, so a code node's relative path opens the real file in the IDE
+let codeGraphLevel: "file" | "symbol" = "file"; // P-KG-SYM.1: which graph the canvas is showing
 const forgettingIds = new Set<string>(); // in-flight "forget" fact ids - de-dups mashed clicks (#113)
 // P-KG-REL.1 (#109): manual relationship authoring state.
 let kgRelateMode = false;
@@ -2102,7 +2282,7 @@ function kgSignature(d: PersonalGraphData | null): string {
 /** Live-refresh the open KG without a full remount: merge new facts/edges into the running
  *  simulation (positions preserved). No-op if the panel is closed or nothing changed. */
 async function refreshKnowledgeLive(): Promise<void> {
-  if (!kgOpen || !kgHandle) return;
+  if (!kgOpen || !kgHandle || kgCodeMode) return; // code-graph mode isn't the live personal graph
   const data = await bridge.personalGraph().catch(() => null);
   if (!data || data.nodes.length === 0) return;
   const sig = kgSignature(data);
@@ -2127,6 +2307,7 @@ function openKnowledge(): void {
   $("#knowledge")!.hidden = false;
   $("#inspector")!.hidden = true;
   $$(".rail-btn").forEach((b) => b.classList.toggle("active", (b as HTMLElement).dataset.rail === "knowledge"));
+  updateCodeGraphButtons(false); // always open on the personal graph; the Code-graph button re-enters code mode
   void renderKnowledge();
 }
 function closeKnowledge(): void {
@@ -2134,6 +2315,7 @@ function closeKnowledge(): void {
   kgOpen = false;
   if (kgRelateMode) setRelateMode(false); // leave relate mode clean for next open
   kgHandle?.destroy(); kgHandle = null;
+  showKgCenter(false);
   $("#knowledge")!.hidden = true;
   $("#inspector")!.hidden = false;
   $$(".rail-btn").forEach((b) => b.classList.remove("active"));
@@ -2205,9 +2387,10 @@ function loadPreview(target: string): void {
     frame.removeAttribute("srcdoc");
     frame.src = bridge.previewServeUrl(target);
     frame.hidden = false; empty.hidden = true;
+    clearPreviewCanvas(); // P-PREVIEW.5: a fresh file starts with a clean markup layer
     // P-PREVIEW.3a-shot: once it paints, cache a PNG desktop-side so the agent's preview_screenshot tool can
     // see what it built. Small delay lets the app's first frame render (canvas/animation). Electron-only.
-    frame.onload = () => { window.setTimeout(() => void cacheRenderedPreviewShot(), 150); };
+    frame.onload = () => { wirePreviewCanvas(); syncPreviewCanvas(); window.setTimeout(() => void cacheRenderedPreviewShot(), 150); };
   } else if (r.kind === "remote") {
     // P-PREVIEW.3b (ADR-0096): a remote URL reaches the internet — only load it if the egress allow-list
     // already approves the site (honoring the managed ceiling). Otherwise it stays gated; the agent must
@@ -2222,7 +2405,7 @@ function loadPreview(target: string): void {
         if (kind) kind.textContent = r.label; frame.src = encodeURI(remoteUrl); frame.hidden = false; empty.hidden = true;
       } else {
         if (kind) kind.textContent = "";
-        showEmpty(`Remote site not approved for preview: ${r.label}. Ask the agent to visit it — you'll get an egress approval prompt, then it can preview here.`);
+        showEmpty(`Remote site not approved for preview: ${r.label}. Ask the agent to visit it - you'll get an egress approval prompt, then it can preview here.`);
       }
     }).catch(() => showEmpty(`Couldn't check egress approval for ${r.label}.`));
   } else {
@@ -2241,6 +2424,121 @@ async function cacheRenderedPreviewShot(): Promise<void> {
   const png = await bridge.capturePreview({ x: Math.round(rect.x), y: Math.round(rect.y), width: Math.round(rect.width), height: Math.round(rect.height) }).catch(() => null);
   if (png) await bridge.cachePreviewShot(png).catch(() => { /* best-effort */ });
 }
+// ── P-PREVIEW.5: markup overlay (pen / rectangle / text) ─────────────────────────
+// A <canvas> sits ON TOP of the preview iframe. Because "Screenshot → chat" uses Electron's capturePage
+// on the frame's screen region, the canvas markup is captured TOGETHER with the rendered app - no
+// compositing needed. Arming a tool enables the canvas's pointer-events (so it catches the mouse);
+// "Cursor" disarms it so the iframe is interactive again.
+let drawTool: "off" | "pen" | "rect" | "text" = "off";
+let drawColor = "#ff4d4d";
+let drawing = false;
+let drawSnapshot: ImageData | null = null; // committed pixels, restored while rubber-banding a rectangle
+let drawStart = { x: 0, y: 0 };
+const previewCanvas = (): HTMLCanvasElement | null => $("#prevCanvas") as HTMLCanvasElement | null;
+
+/** Match the canvas backing size to the frame, preserving any existing drawing. */
+function syncPreviewCanvas(): void {
+  const frame = $("#prevFrame") as HTMLIFrameElement | null, cv = previewCanvas();
+  if (!frame || !cv || frame.hidden) return;
+  const r = frame.getBoundingClientRect();
+  const w = Math.max(1, Math.round(r.width)), h = Math.max(1, Math.round(r.height));
+  if (cv.width === w && cv.height === h) return;
+  const ctx = cv.getContext("2d");
+  const prev = ctx && cv.width && cv.height ? ctx.getImageData(0, 0, cv.width, cv.height) : null;
+  cv.width = w; cv.height = h;
+  if (prev && ctx) try { ctx.putImageData(prev, 0, 0); } catch { /* size shrank - drop */ }
+}
+function clearPreviewCanvas(): void { const cv = previewCanvas(); const c = cv?.getContext("2d"); if (cv && c) c.clearRect(0, 0, cv.width, cv.height); }
+function setDrawTool(t: "off" | "pen" | "rect" | "text"): void {
+  drawTool = t;
+  const cv = previewCanvas();
+  if (cv) { cv.style.pointerEvents = t === "off" ? "none" : "auto"; cv.style.cursor = t === "text" ? "text" : t === "off" ? "default" : "crosshair"; syncPreviewCanvas(); }
+  $("#prevMarkup")?.classList.toggle("on", t !== "off");
+}
+let previewCanvasWired = false;
+function wirePreviewCanvas(): void {
+  const cv = previewCanvas();
+  if (!cv || previewCanvasWired) return;
+  previewCanvasWired = true;
+  const ctx = () => cv.getContext("2d")!;
+  const at = (e: MouseEvent) => { const r = cv.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; };
+  cv.addEventListener("mousedown", (e) => {
+    if (drawTool === "off") return;
+    const p = at(e as MouseEvent);
+    if (drawTool === "text") { addPreviewTextBox(p); return; }
+    drawing = true; drawStart = p;
+    const c = ctx(); c.lineWidth = drawTool === "pen" ? 3 : 2.6; c.lineCap = "round"; c.lineJoin = "round"; c.strokeStyle = drawColor;
+    drawSnapshot = c.getImageData(0, 0, cv.width, cv.height);
+    if (drawTool === "pen") { c.beginPath(); c.moveTo(p.x, p.y); }
+  });
+  cv.addEventListener("mousemove", (e) => {
+    if (!drawing) return;
+    const c = ctx(), p = at(e as MouseEvent);
+    if (drawTool === "pen") { c.lineTo(p.x, p.y); c.stroke(); }
+    else if (drawTool === "rect") { if (drawSnapshot) c.putImageData(drawSnapshot, 0, 0); c.strokeRect(drawStart.x, drawStart.y, p.x - drawStart.x, p.y - drawStart.y); }
+  });
+  const end = () => { drawing = false; drawSnapshot = null; };
+  cv.addEventListener("mouseup", end);
+  cv.addEventListener("mouseleave", end);
+  // keep the canvas backing-size matched to the frame as the panel/window resizes (preserves the drawing)
+  const frame = $("#prevFrame") as HTMLIFrameElement | null;
+  if (frame && typeof ResizeObserver !== "undefined") new ResizeObserver(() => syncPreviewCanvas()).observe(frame);
+}
+/** A floating input for the text tool - type, Enter commits the text to the canvas, Esc cancels. */
+function addPreviewTextBox(p: { x: number; y: number }): void {
+  const body = $("#prevBody") as HTMLElement | null;
+  if (!body) return;
+  const inp = el(`<input class="prev-textin" spellcheck="false" placeholder="type, Enter to place" />`) as HTMLInputElement;
+  inp.style.left = `${p.x}px`; inp.style.top = `${p.y}px`; inp.style.color = drawColor;
+  body.appendChild(inp);
+  inp.focus();
+  let done = false;
+  const commit = () => {
+    if (done) return; done = true;
+    const text = inp.value.trim();
+    const cv = previewCanvas();
+    if (text && cv) { const c = cv.getContext("2d")!; c.fillStyle = drawColor; c.font = "600 18px ui-sans-serif,system-ui,Segoe UI,sans-serif"; c.textBaseline = "top"; c.fillText(text, p.x, p.y); }
+    inp.remove();
+  };
+  inp.addEventListener("keydown", (e) => { if (e.key === "Enter") commit(); else if (e.key === "Escape") { done = true; inp.remove(); } });
+  inp.addEventListener("blur", commit);
+}
+/** The markup tools dropdown: pen / rectangle / text, a colour row, Cursor (disarm), and Clear. */
+function openMarkupMenu(anchor: HTMLElement): void {
+  document.querySelector(".markup-pop")?.remove();
+  const tool = (id: string, ic: string, label: string) => `<button class="mk-tool${drawTool === id ? " on" : ""}" data-tool="${id}">${icon(ic, 15)}<span>${label}</span></button>`;
+  const swatch = (c: string) => `<button class="mk-swatch${drawColor === c ? " on" : ""}" data-color="${c}" style="background:${c}" aria-label="${c}"></button>`;
+  const pop = el(`<div class="markup-pop">
+    <div class="mk-tools">${tool("pen", "pen", "Pen")}${tool("rect", "square", "Rectangle")}${tool("text", "textT", "Text")}</div>
+    <div class="mk-colors">${["#ff4d4d", "#ffd23f", "#46d27e", "#5e8df2", "#ffffff"].map(swatch).join("")}</div>
+    <div class="mk-foot"><button class="mk-tool" data-tool="off">${icon("eye", 13)}<span>Cursor</span></button><button class="btn-mini danger" data-mk-clear>${icon("trash", 12)} Clear</button></div>
+  </div>`);
+  document.body.appendChild(pop);
+  const r = anchor.getBoundingClientRect();
+  pop.style.left = `${Math.max(8, Math.min(r.left, window.innerWidth - pop.offsetWidth - 12))}px`;
+  pop.style.top = `${r.bottom + 6}px`;
+  const close = () => { pop.remove(); document.removeEventListener("mousedown", onDoc, true); };
+  const onDoc = (e: MouseEvent) => { if (!pop.contains(e.target as Node) && !anchor.contains(e.target as Node)) close(); };
+  setTimeout(() => document.addEventListener("mousedown", onDoc, true), 0);
+  pop.addEventListener("click", (e) => {
+    const t = e.target as HTMLElement;
+    const toolBtn = t.closest("[data-tool]") as HTMLElement | null;
+    if (toolBtn) { setDrawTool(toolBtn.dataset.tool as "off" | "pen" | "rect" | "text"); close(); return; }
+    const sw = t.closest("[data-color]") as HTMLElement | null;
+    if (sw) { drawColor = sw.dataset.color!; pop.querySelectorAll(".mk-swatch").forEach((s) => s.classList.toggle("on", s === sw)); if (drawTool === "off") setDrawTool("pen"); return; }
+    if (t.closest("[data-mk-clear]")) { clearPreviewCanvas(); return; }
+  });
+}
+/** Browse the workspace for a file to preview (native OS picker; the user opens the cwd themselves). */
+async function browsePreviewFile(): Promise<void> {
+  if (!bridge.isElectron) { showToast({ title: "Desktop app only", desc: "File browsing uses the native picker in the packaged LUCID app. In the browser, paste a path above.", actions: [{ label: "OK" }], timeout: 3400, tone: "warn" }); ($("#prevPath") as HTMLElement | null)?.focus(); return; }
+  const picked = await bridge.pickFile?.({ title: "Open a file to preview", filters: [{ name: "Previewable", extensions: ["html", "htm", "svg", "md", "png", "jpg", "jpeg", "gif", "pdf"] }, { name: "All files", extensions: ["*"] }] }).catch(() => null);
+  if (!picked) return;
+  const p = $("#prevPath") as HTMLInputElement | null;
+  if (p) p.value = picked;
+  loadPreview(picked);
+}
+
 /** Capture the preview iframe and attach the PNG to the composer for the agent to react to. Electron-only
  *  (uses the window's capturePage via the preload seam); a no-op with a toast in a plain browser. */
 async function screenshotPreviewToChat(): Promise<void> {
@@ -2275,7 +2573,7 @@ async function renderKnowledge(): Promise<void> {
   try { status = await bridge.personal(); }
   catch { canvas.innerHTML = `<div class="kg-empty">${icon("graph", 30)}<div>Couldn't load your graph. Try reopening this panel.</div></div>`; return; }
   if (scopeLbl) scopeLbl.textContent = status?.scope ? `· ${status.scope}` : "";
-  const gate = (msg: string) => { canvas.innerHTML = `<div class="kg-empty">${icon("graph", 30)}<div>${msg}</div></div>`; (side as HTMLElement).hidden = true; side.innerHTML = ""; };
+  const gate = (msg: string) => { canvas.innerHTML = `<div class="kg-empty">${icon("graph", 30)}<div>${msg}</div></div>`; (side as HTMLElement).hidden = true; side.innerHTML = ""; showKgCenter(false); syncKgSideOpen(); };
   if (!status?.enabled) return gate("Personalization is off. Enable it in Settings to build a knowledge graph.");
   if (!status.unlocked) {
     // Configured-but-locked → unlock right here (no trip to Settings). Not yet set up → Settings.
@@ -2287,11 +2585,144 @@ async function renderKnowledge(): Promise<void> {
   if (!kgData || kgData.nodes.length === 0) return gate("Nothing learned yet. It remembers durable facts about <b>you</b> - not what we discuss. Tell me things like <i>“I prefer Rust”</i>, <i>“I use vim”</i>, <i>“I decided to go with Postgres”</i>, or <i>“remember that I deploy with Kubernetes”</i> and they'll appear here (each is security-scanned first).");
   (side as HTMLElement).hidden = true; side.innerHTML = ""; // appears only when a node is clicked
   kgHandle = mountGraph(canvas as HTMLElement, kgData, (id) => renderKgSide(id), { onRelate: relateNodes, onRelatePick: onRelatePick });
+  showKgCenter(true); syncKgSideOpen();
   if (kgRelateMode) { kgHandle.setRelateMode(true); onRelatePick([]); } // preserve relate mode across a live remount
   const sq = ($("#kgSearch") as HTMLInputElement | null)?.value; // P-KG-SEARCH.1: preserve an active search across a remount
   if (sq?.trim()) kgHandle.setSearch(matchNodes(kgData.nodes, sq));
   kgHandle.setLens(kgLens);
   kgSig = kgSignature(kgData); // baseline so live refreshes only fire on real changes
+}
+
+// P-KG-CODE.1b: the floating "re-center" button (bottom-right of the canvas) + the side-panel open state
+// (drives the resizer + shifts the center button left of the flyout). The center button re-fits the graph.
+function showKgCenter(on: boolean): void { const b = $("#kgCenter") as HTMLElement | null; if (b) b.hidden = !on; }
+function syncKgSideOpen(): void {
+  const side = $("#kgSide") as HTMLElement | null, main = document.querySelector(".kg-main") as HTMLElement | null, rsz = $("#kgSideResizer") as HTMLElement | null;
+  const open = !!side && !side.hidden;
+  main?.classList.toggle("side-open", open);
+  if (rsz) rsz.hidden = !open;
+}
+// ── P-KG-CODE.1 / P-KG-SYM.1: the workspace CODE graph (file imports OR symbol AST), in the same canvas ──
+function updateCodeGraphButtons(active: boolean, meta?: import("./bridge.ts").CodeGraphView | null): void {
+  kgCodeMode = active;
+  const btn = $("#kgCode"), upd = $("#kgCodeUpdate"), scopeLbl = $("#kgScopeLbl") as HTMLElement | null;
+  btn?.classList.toggle("on", active);
+  if (btn) btn.innerHTML = `${icon("graph", 13)} Code graph${active ? " ✓" : ""}`;
+  if (upd) (upd as HTMLElement).hidden = !active;
+  if (scopeLbl) scopeLbl.textContent = active && meta
+    ? (meta.level === "symbol" ? `· symbols · ${meta.symbolCount} symbols · ${meta.edgeCount} refs` : `· code · ${meta.fileCount} files · ${meta.edgeCount} imports`)
+    : "";
+}
+/** Render the workspace code graph at `level`. `ingest` forces a fresh (re)build; otherwise load the stored
+ *  graph (building on first use). Bypasses the personalization gate - the code graph isn't private user data. */
+async function renderCodeGraph(ingest: boolean, level: "file" | "symbol" = codeGraphLevel): Promise<void> {
+  codeGraphLevel = level;
+  const canvas = $("#kgCanvas"), side = $("#kgSide") as HTMLElement | null;
+  if (!canvas) return;
+  kgHandle?.destroy(); kgHandle = null;
+  const busy = ingest ? (level === "symbol" ? "Parsing symbols (AST)…" : "Ingesting the workspace…") : "Loading the code graph…";
+  canvas.innerHTML = `<div class="skel-kg">${icon("refresh", 26, "spin")}<div>${busy}</div></div>`;
+  if (side) { side.hidden = true; side.innerHTML = ""; }
+  let data = ingest ? await bridge.codeGraphIngest(level).catch(() => null) : await bridge.codeGraph(level).catch(() => null);
+  if (data && !data.ingested && !ingest) data = await bridge.codeGraphIngest(level).catch(() => null); // never built → build now
+  if (!data || !data.nodes.length) {
+    canvas.innerHTML = `<div class="kg-empty">${icon("graph", 30)}<div>No ${level === "symbol" ? "symbols" : "source files"} found to graph in this workspace. Open a code repo as your workspace, then try again.</div></div>`;
+    updateCodeGraphButtons(true, null); showKgCenter(false); return;
+  }
+  // A big repo is 1000s of nodes - keep the canvas readable by rendering the MOST-CONNECTED hubs (the full
+  // graph is still ingested + stored + queryable; only the drawing is capped).
+  let nodes = data.nodes, edges = data.edges, capped = 0;
+  const CAP = 600;
+  if (nodes.length > CAP) {
+    const keep = new Set([...nodes].sort((a, b) => b.count - a.count).slice(0, CAP).map((n) => n.id));
+    capped = nodes.length - CAP;
+    nodes = nodes.filter((n) => keep.has(n.id));
+    edges = edges.filter((e) => keep.has(e.from) && keep.has(e.to));
+  }
+  codeGraphRoot = data.root || "";
+  kgData = { nodes, edges, facts: [] };
+  kgHandle = mountGraph(canvas as HTMLElement, kgData, (id) => renderCodeSide(id), {});
+  kgHandle.setLens(kgLens);
+  kgSig = kgSignature(kgData);
+  updateCodeGraphButtons(true, data);
+  showKgCenter(true); syncKgSideOpen();
+  if (capped) { const s = $("#kgScopeLbl") as HTMLElement | null; if (s) s.textContent += ` · showing top ${CAP} hubs`; }
+}
+/** Toggle personal ↔ code graph. Entering code mode opens the level picker (file vs symbol + agent option). */
+async function toggleCodeGraph(): Promise<void> {
+  if (kgCodeMode) { updateCodeGraphButtons(false); await renderKnowledge(); return; }
+  openCodeGraphPicker();
+}
+/** The "build a code graph" popup: choose file-level (fast) vs symbol-level (AST), and whether to expose it
+ *  to the agent as a queryable tool. */
+function openCodeGraphPicker(): void {
+  document.querySelector(".goal-scrim .cg-picker")?.closest(".goal-scrim")?.remove();
+  const agentOn = state.codeGraphAgent;
+  const ov = el(`<div class="goal-scrim"><div class="goal-modal cg-picker">
+    <div class="goal-modal-h"><span class="goal-h-title">${icon("graph", 15)} Build a code graph</span><button type="button" class="btn-mini" id="cgpClose">Close</button></div>
+    <div class="goal-modal-sub">Ingest THIS workspace into a knowledge graph you (and optionally the agent) can explore. Pick how deep to go.</div>
+    <div class="cg-levels">
+      <button type="button" class="cg-level" data-level="file">
+        <div class="cg-level-h">${icon("graph", 16)} File graph <span class="cg-level-fast">fast</span></div>
+        <div class="cg-level-d">Files as nodes, <b>imports</b> as edges - the module dependency map. Builds in a second or two; great for architecture orientation and "what depends on what".</div>
+      </button>
+      <button type="button" class="cg-level" data-level="symbol">
+        <div class="cg-level-h">${icon("markup", 16)} Symbol graph <span class="cg-level-slow">AST</span></div>
+        <div class="cg-level-d">Functions, classes, methods, types &amp; consts as nodes, <b>references/calls</b> as edges - real TypeScript-AST parsing for precise blast-radius ("what actually uses this symbol?"). Slower to build (usually a few seconds; longer on very large repos), and it's a symbol-DEPENDENCY graph, not a fully type-resolved call graph.</div>
+      </button>
+    </div>
+    <label class="cg-agent-opt" data-tip="Expose to agent|When on, the agent gets a read-only codegraph_query tool it can call to ask what imports/uses a file or symbol - so it reads a precise answer instead of many whole files. Toggling this restarts the agent backend.">
+      <input type="checkbox" id="cgAgent"${agentOn ? " checked" : ""}/> <span>Let the agent query this graph <span class="cg-agent-sub">(adds a read-only tool; restarts the agent)</span></span></label>
+  </div></div>`);
+  document.body.appendChild(ov);
+  const close = () => ov.remove();
+  $("#cgpClose", ov)?.addEventListener("click", close);
+  ov.addEventListener("mousedown", (e) => { if (e.target === ov) close(); });
+  $("#cgAgent", ov)?.addEventListener("change", (e) => void setCodeGraphAgent((e.target as HTMLInputElement).checked));
+  ov.querySelectorAll("[data-level]").forEach((b) => b.addEventListener("click", () => {
+    close();
+    void renderCodeGraph(false, (b as HTMLElement).dataset.level === "symbol" ? "symbol" : "file");
+  }));
+}
+/** Persist the "expose to agent" toggle + restart the backend so the codegraph tool loads/unloads. */
+async function setCodeGraphAgent(on: boolean): Promise<void> {
+  state.codeGraphAgent = on;
+  const r = await bridge.setCodeGraphAgent(on).catch(() => null);
+  showToast(r ? { title: on ? "Code graph tool enabled" : "Code graph tool disabled", desc: on ? "The agent can now query the code graph. Restarting the agent…" : "Removed the agent's code-graph tool. Restarting the agent…", timeout: 3600 } : { tone: "warn", title: "Couldn't update", desc: "The setting didn't save.", timeout: 2600 });
+}
+/** Side panel for a code node: its path, what it imports, and what imports it. */
+function renderCodeSide(id: string | null): void {
+  const side = $("#kgSide") as HTMLElement | null;
+  if (!side) return;
+  const node = id ? kgData?.nodes.find((n) => n.id === id) : null;
+  if (!node) { side.hidden = true; side.innerHTML = ""; syncKgSideOpen(); return; }
+  const outs = (kgData?.edges ?? []).filter((e) => e.from === id).map((e) => e.to);
+  const ins = (kgData?.edges ?? []).filter((e) => e.to === id).map((e) => e.from);
+  // Each entry is a link that opens the real file in the Monaco IDE (P-KG-CODE.1d). For a symbol id
+  // (`file#symbol`) the label shows the symbol + its file; clicking opens the file (openCodeFile strips the #).
+  const sym = codeGraphLevel === "symbol";
+  const label = (id: string) => sym && id.includes("#") ? `${id.split("#")[1]} <span class="cg-open-file">${id.split("#")[0]}</span>` : esc(id);
+  const fileLink = (id: string, extra = "") => `<button type="button" class="cg-open${extra}" data-cg-open="${esc(id)}" data-tip="Open the file in the editor">${label(id)}</button>`;
+  const list = (xs: string[]) => xs.length ? `<ol class="cg-side-list">${xs.slice(0, 80).map((x) => `<li>${fileLink(x)}</li>`).join("")}</ol>` : `<div class="cg-side-none">none</div>`;
+  const outLbl = sym ? "Uses" : "Imports", inLbl = sym ? "Used by" : "Imported by";
+  side.hidden = false;
+  side.innerHTML = `<div class="cg-side">
+    <div class="cg-side-h">${icon(sym ? "markup" : "graph", 14)} <b>${esc(node.name)}</b>${sym ? ` <span class="cg-side-kind">${esc(node.kind)}</span>` : ""}</div>
+    ${fileLink(node.id, " cg-side-path")}
+    <div class="cg-side-sec"><span class="cg-side-lbl">${outLbl} (${outs.length})</span>${list(outs)}</div>
+    <div class="cg-side-sec"><span class="cg-side-lbl">${inLbl} (${ins.length})</span>${list(ins)}</div>
+  </div>`;
+  syncKgSideOpen();
+}
+/** Open a code-graph file (relative to the workspace root) in the Monaco IDE panel. */
+async function openCodeFile(id: string): Promise<void> {
+  const rel = (id || "").split("#")[0]!; // a symbol id is `file#symbol` - open the file
+  if (!rel) return;
+  if (!codeGraphRoot) { showToast({ tone: "warn", title: "Can't open", desc: "The workspace root is unknown - re-run the code graph.", timeout: 2600 }); return; }
+  const abs = `${codeGraphRoot.replace(/[\\/]+$/, "")}/${rel}`;
+  const r = await bridge.editorRead(abs).catch(() => null);
+  if (r?.ok && typeof r.content === "string") { await openIde({ path: abs, code: r.content, sha256: r.sha256, mtime: r.mtime }); return; }
+  showToast({ tone: "warn", title: "Couldn't open the file", desc: `${rel} wasn't readable on disk (it may have moved since the last ingest - try Update).`, timeout: 3400 });
 }
 // Inline unlock for the Knowledge graph - enter the passphrase here instead of going to Settings.
 // Validates (non-empty), warns on Caps Lock, and has a show/hide toggle. On success the graph mounts.
@@ -2702,7 +3133,7 @@ function devHtml(d: import("./bridge.ts").DevView | null): string {
       + table([{ key: "watch", label: "", mono: true }, { key: "port", label: "port", mono: true }, { key: "addr", label: "local address", mono: true }, { key: "proc", label: "process" }], lisRows as unknown as Record<string, unknown>[])
       // OAuth-relevant events: pinned at top, highlighted, newest first.
       + `<div class="dev-subh nd-oauth-hdr">🔑 OAuth / port ${nd.ports.join(", :")} events <span>newest first · candidates, probes, and callback-port traffic</span></div>`
-      + (oauthRows.length ? table(evCols, oauthRows as unknown as Record<string, unknown>[]) : `<div class="empty">no OAuth-relevant events yet — click "Connect via OAuth" to start</div>`)
+      + (oauthRows.length ? table(evCols, oauthRows as unknown as Record<string, unknown>[]) : `<div class="empty">no OAuth-relevant events yet - click "Connect via OAuth" to start</div>`)
       // Separator + the rest.
       + (otherRows.length ? `<div class="dev-subh">Other network activity <span>${otherRows.length} events · loopback traffic unrelated to the callback port</span></div>` + table(evCols, otherRows as unknown as Record<string, unknown>[]) : "")
       // P-NETWL.4 (ADR-0106): each DNS pill is clickable → a quick-add popover to whitelist that host.
@@ -2739,7 +3170,7 @@ function memoryHtml(d: MemorySnapshot | null): string {
     if (aiLocHasData(d.aiLoc)) {
       h += accordion("mem.ailoc", "AI-authored code", `+${fmtNum(d.aiLoc!.totals.added)} / −${fmtNum(d.aiLoc!.totals.removed)} lines`, aiLocBody(d.aiLoc!), OPEN.has("mem.ailoc"), `${d.aiLoc!.totals.models}`);
     } else {
-      h += accordion("mem.ailoc", "AI-authored code", "none yet", `<div class="empty">No AI-authored lines recorded yet — they'll appear here, per model and repo, as the agent edits files through the gate.</div>`, OPEN.has("mem.ailoc"));
+      h += accordion("mem.ailoc", "AI-authored code", "none yet", `<div class="empty">No AI-authored lines recorded yet - they'll appear here, per model and repo, as the agent edits files through the gate.</div>`, OPEN.has("mem.ailoc"));
     }
   }
   if (!d) return h || `<div class="empty">No omp session yet - launch omp and send a message.</div>`;
@@ -3038,14 +3469,9 @@ function toggleSidebar(force?: boolean): void {
   $("#app-inner")?.classList.toggle("sidebar-collapsed", state.sidebarCollapsed);
   try { localStorage.setItem("lucid.sidebar-collapsed", state.sidebarCollapsed ? "1" : "0"); } catch { /* ignore */ }
 }
-/** Update the composer's quick agent-controls (model · mode · thinking) labels. */
+/** Update the composer's quick controls (persona · skills). Model/mode/thinking live in the top picker. */
 function updateComposerTools(): void {
-  const model = state.config.find((c) => c.id === "model");
-  const think = state.config.find((c) => c.id === "thinking");
   const set = (sel: string, v: string) => { const e = $(sel); if (e) e.textContent = v; };
-  if (model) set("#ctModelName", modelLabel(model.currentValue));
-  set("#ctModeName", state.uiMode === "ask" ? "Ask" : state.uiMode === "plan" ? "Plan" : "Agent");
-  if (think) { const cur = think.options.find((o) => o.value === think.currentValue); set("#ctThinkName", prettyLevel(cur?.name ?? think.currentValue)); }
   const pBtn = $("#ctPersona");
   if (pBtn) {
     (pBtn as HTMLElement).hidden = !state.asksage?.configured;
@@ -3276,6 +3702,105 @@ function wireCmdSuggest(ov: HTMLElement): void {
   });
 }
 
+// ── P-VOICE.1 (ADR-0115): read-aloud (text-to-speech) ─────────────────────────
+// Speak arbitrary text (an assistant reply, an AAR summary) via /api/tts/speak using the engine + voice
+// from Settings → Voice. Click again while playing to STOP. Fail-safe: a missing key/engine shows a note.
+/** Decode base64 audio into a Blob URL. A large WAV as a `data:` URL frequently fails to play in
+ *  <audio>/Audio() even though it downloads fine; a Blob URL plays reliably. Callers should not leak these
+ *  for long-lived players (the podcast slot is short-lived); speakText revokes on end. */
+function audioBlobUrl(b64: string, mime: string): string {
+  const bin = atob(b64);
+  const arr = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+  return URL.createObjectURL(new Blob([arr], { type: mime || "audio/mpeg" }));
+}
+let ttsAudio: HTMLAudioElement | null = null;
+const speakOrig = new WeakMap<HTMLElement, string>();
+function restoreSpeakBtn(btn?: HTMLElement | null): void {
+  if (!btn) return;
+  btn.classList.remove("busy", "playing");
+  const o = speakOrig.get(btn);
+  if (o != null) btn.innerHTML = o;
+}
+// P-REPORT.5b: the Listen/read-aloud button SYNTHESIZES on demand (independent of the Generate panel's
+// audio option) - click it any time. It shows a spinner while the model synthesizes, flips to a Stop
+// control while playing, and surfaces the real engine error if TTS isn't configured.
+async function speakText(text: string, btn?: HTMLElement | null): Promise<void> {
+  if (ttsAudio && !ttsAudio.paused) { ttsAudio.pause(); ttsAudio = null; restoreSpeakBtn(btn); return; }
+  // P-REPORT.7: sanitize per line so the TTS reads flowing speech, not codes/symbols/markdown artifacts.
+  const clean = (text || "").split(/\n+/).map((ln) => speakable(ln)).filter(Boolean).join(" ").trim();
+  if (!clean) return;
+  const orig = btn?.innerHTML ?? "";
+  const labelled = /listen/i.test(orig); // the report's "Listen" button carries a label; message read-aloud is icon-only
+  if (btn) {
+    speakOrig.set(btn, orig);
+    btn.classList.add("busy");
+    btn.innerHTML = `${icon("refresh", 16, "spin")}${labelled ? " <span>Synthesizing…</span>" : ""}`;
+  }
+  const r = await bridge.speak(clean.slice(0, 8000)).catch(() => null);
+  if (!r?.audioB64) {
+    restoreSpeakBtn(btn);
+    showToast({ tone: "warn", title: "Couldn't read it aloud", desc: r?.note || "Choose a TTS engine in Settings → Voice (ElevenLabs, OpenAI, or offline Kokoro).", actions: [{ label: "OK" }], timeout: 5000 });
+    return;
+  }
+  const url = audioBlobUrl(r.audioB64, r.mime);
+  ttsAudio = new Audio(url);
+  if (btn) { btn.classList.remove("busy"); btn.classList.add("playing"); btn.innerHTML = `${icon("close", 16)}${labelled ? " <span>Stop</span>" : ""}`; }
+  ttsAudio.onended = () => { restoreSpeakBtn(btn); URL.revokeObjectURL(url); ttsAudio = null; };
+  ttsAudio.play().catch(() => { restoreSpeakBtn(btn); URL.revokeObjectURL(url); });
+}
+
+// ── P-VOICE.1 (ADR-0115): mic → speech-to-text into the composer ──────────────
+// Click the mic to record, click again to stop. The blob is sent to /api/transcribe (ElevenLabs Scribe
+// or an offline Whisper server, per Settings → Voice) and the transcript is INSERTED into the composer for
+// review before you send — it's ordinary user input, scanned on send like anything typed.
+let micRecorder: MediaRecorder | null = null;
+let micChunks: Blob[] = [];
+function blobToBase64(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onerror = () => reject(new Error("read failed"));
+    r.onload = () => resolve(String(r.result).replace(/^data:[^,]*,/, "")); // strip the data: prefix
+    r.readAsDataURL(blob);
+  });
+}
+async function toggleMicRecording(): Promise<void> {
+  const btn = $("#ctMic");
+  if (micRecorder && micRecorder.state === "recording") { micRecorder.stop(); return; } // second click = stop
+  if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+    showToast({ tone: "warn", title: "No microphone", desc: "This environment can't capture audio.", timeout: 2600 }); return;
+  }
+  let stream: MediaStream;
+  try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
+  catch { showToast({ tone: "warn", title: "Microphone blocked", desc: "Allow microphone access to use voice input.", timeout: 2800 }); return; }
+  micChunks = [];
+  const mime = MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm" : "";
+  micRecorder = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+  micRecorder.ondataavailable = (e) => { if (e.data.size) micChunks.push(e.data); };
+  micRecorder.onstop = async () => {
+    stream.getTracks().forEach((t) => t.stop());
+    btn?.classList.remove("recording");
+    const type = micRecorder?.mimeType || "audio/webm";
+    micRecorder = null;
+    const blob = new Blob(micChunks, { type });
+    if (!blob.size) return;
+    btn?.classList.add("busy");
+    try {
+      const r = await bridge.transcribe(await blobToBase64(blob), blob.type).catch(() => null);
+      if (r?.text) {
+        const ta = $("#input") as HTMLTextAreaElement;
+        ta.value = (ta.value ? ta.value.replace(/\s*$/, "") + " " : "") + r.text;
+        ta.focus(); autosize(ta); setSendEnabled();
+      } else {
+        showToast({ tone: "warn", title: "No transcript", desc: r?.note || "The speech-to-text engine returned nothing. Check Settings → Voice.", timeout: 3200 });
+      }
+    } finally { btn?.classList.remove("busy"); }
+  };
+  micRecorder.start();
+  btn?.classList.add("recording");
+  showToast({ title: "Recording…", desc: "Click the mic again to stop and transcribe.", timeout: 1800 });
+}
+
 function openGoalForm(): void {
   const ov = el(`<div class="scrim goal-scrim"><div class="goal-modal" data-mode="guided">
     <div class="goal-modal-h">
@@ -3345,14 +3870,19 @@ function openGoalForm(): void {
           <input id="goalCadTime" class="prov-key goal-cadt" type="time" value="09:00" hidden />
         </div>
         <details class="goal-eu">
-          <summary>${icon("spark", 13)} Engineering Update <span class="goal-opt">an exec brief + podcast from this run</span> ${goalInfoDot("Why an Engineering Update|As the goal loop runs round after round, the ADRs, run-logs and decisions pile up, and a tired reader starts to tune out. This curated executive brief and podcast mitigates Cognitive Surrender and Information Overload, surfacing the signal in the noise during orchestration looping: what shipped, what is load-bearing, the tech debt, and the decisions that need you.")}</summary>
+          <summary>${icon("spark", 13)} Engineering Update <span class="goal-opt">exec brief + podcast · from your repo logs</span> ${goalInfoDot("Engineering Update (repo brief + podcast)|A curated executive brief and two-host podcast built from this repo's DECISIONS.md + PROGRESS.md - NOT the loop's After-Action Report (that appears in chat after a loop finishes). Pick an audio provider to turn the script into a downloadable WAV: Local TTS (Kokoro, air-gap, no key) or ChatGPT/OpenAI TTS (uses your OpenAI key). 'Script only' just writes the two-host script.")}</summary>
           <div class="goal-eu-body">
-            <div class="goal-row"><label class="goal-lbl">Audio</label>
+            <div class="goal-row"><label class="goal-lbl" for="euProvider">Audio</label>
               <select id="euProvider" class="prov-key">
                 <option value="script-only">Script only (no audio)</option>
-                <option value="local-tts">Local TTS - Kokoro (air-gap)</option>
+                <option value="elevenlabs">ElevenLabs · custom voices (uses your ElevenLabs key)</option>
+                <option value="openai-tts">ChatGPT · OpenAI TTS (uses your OpenAI key)</option>
+                <option value="local-tts">Local TTS · Kokoro (air-gap, no key)</option>
               </select>
             </div>
+            <div class="goal-row" id="euVoiceRow" hidden><label class="goal-lbl" for="euVoice">Voice</label>
+              <select id="euVoice" class="prov-key"><option value="">default voice</option></select></div>
+            <div class="goal-eu-cost" id="euCost" hidden></div>
             <button type="button" class="btn-mini ok" id="euGenerate">${icon("bolt", 12)} Generate update now</button>
             <div class="goal-eu-result" id="euResult" hidden></div>
           </div>
@@ -3457,9 +3987,39 @@ function openGoalForm(): void {
   // P-BRIEF.3 (ADR-0072): the Engineering Update accordion - the audio-provider choice persists; Generate
   // fetches the curated brief from the repo's logs and renders it inline (audio backend is a later slice).
   const euProv = $("#euProvider", ov) as HTMLSelectElement | null;
+  const euVoiceRow = $("#euVoiceRow", ov) as HTMLElement | null;
+  const euVoiceSel = $("#euVoice", ov) as HTMLSelectElement | null;
+  const euCost = $("#euCost", ov) as HTMLElement | null;
+  // Per-generation cost note so users know a cloud TTS run costs money (measured ~10¢ per brief).
+  const EU_COST: Record<string, string> = {
+    elevenlabs: `${icon("info", 11)} ElevenLabs is billed per character - this brief costs <b>about $0.10 (~10¢) each time</b> you Generate.`,
+    "openai-tts": `${icon("info", 11)} OpenAI TTS is billed per character - this brief costs <b>about $0.10 each time</b> you Generate.`,
+  };
+  let euVoicesLoaded = false;
+  // P-VOICE.1: show the voice picker (ElevenLabs only) + the cost note, and lazy-load voices so the user
+  // can change voice BEFORE generating. Re-runs on provider change.
+  const syncEu = async (): Promise<void> => {
+    const p = euProv?.value ?? "script-only";
+    if (euVoiceRow) euVoiceRow.hidden = p !== "elevenlabs";
+    if (euCost) { const c = EU_COST[p]; euCost.hidden = !c; euCost.innerHTML = c ?? ""; }
+    if (p === "elevenlabs" && !euVoicesLoaded && euVoiceSel) {
+      euVoicesLoaded = true;
+      const data = await bridge.voices().catch(() => null);
+      if (data?.voices?.length) {
+        const favs = new Set(data.favorites);
+        const opt = (v: import("./bridge.ts").ElevenVoiceView) => `<option value="${esc(v.voiceId)}"${v.voiceId === data.selected ? " selected" : ""}>${esc(v.name)}${v.category ? ` · ${esc(v.category)}` : ""}</option>`;
+        const fav = data.voices.filter((v) => favs.has(v.voiceId)), rest = data.voices.filter((v) => !favs.has(v.voiceId));
+        euVoiceSel.innerHTML = `<option value="">default voice</option>` + (fav.length ? `<optgroup label="★ Favorites">${fav.map(opt).join("")}</optgroup>` : "") + `<optgroup label="All voices">${rest.map(opt).join("")}</optgroup>`;
+      } else {
+        euVoiceSel.innerHTML = `<option value="">${esc(data?.note || "add an ElevenLabs key in Settings → Voice")}</option>`;
+        euVoicesLoaded = false; // let it retry next time
+      }
+    }
+  };
   if (euProv) {
     euProv.value = localStorage.getItem("lucid.euProvider") || "script-only";
-    euProv.addEventListener("change", () => localStorage.setItem("lucid.euProvider", euProv.value));
+    euProv.addEventListener("change", () => { localStorage.setItem("lucid.euProvider", euProv.value); void syncEu(); });
+    void syncEu();
   }
   $("#euGenerate", ov)?.addEventListener("click", async () => {
     const btn = $("#euGenerate", ov) as HTMLButtonElement;
@@ -3471,10 +4031,24 @@ function openGoalForm(): void {
       if (!data) { showToast({ tone: "warn", title: "Could not generate", desc: "The local engine didn't return a brief.", timeout: 2600 }); return; }
       out.hidden = false;
       const counts = `<div class="goal-eu-counts">${Object.entries(data.counts).map(([k, v]) => `<b>${v}</b> ${k}`).join(" · ")}</div>`;
-      const audioNote = euProv?.value === "local-tts"
-        ? `<div class="goal-opt">Audio: point a local TTS endpoint (Kokoro) at the app to render the podcast - the two-host script is ready.</div>`
-        : "";
-      out.innerHTML = counts + audioNote + renderMarkdown(data.brief);
+      out.innerHTML = counts + `<div id="euAudio"></div>` + renderMarkdown(data.brief);
+      // P-BRIEF.4 (ADR-0113): synthesize the podcast to audio, played via a BLOB URL (a big WAV as a data:
+      // URL often won't play in <audio>, even though it downloads fine - the reported bug) + a Download link.
+      const provider = euProv?.value;
+      if (provider === "openai-tts" || provider === "local-tts" || provider === "elevenlabs") {
+        const slot = $("#euAudio", ov) as HTMLElement;
+        slot.innerHTML = `<div class="goal-opt">${icon("spark", 11)} Synthesizing podcast audio…</div>`;
+        const a = await bridge.engineeringBriefAudio(provider, euVoiceSel?.value || undefined).catch(() => null);
+        if (a?.audioB64) {
+          const url = audioBlobUrl(a.audioB64, a.mime);
+          const ext = a.mime.includes("wav") ? "wav" : "mp3";
+          slot.innerHTML =
+            `<audio controls src="${url}" style="width:100%;margin:6px 0"></audio>` +
+            `<a class="btn-mini" download="engineering-update.${ext}" href="${url}">${icon("download", 12)} Download ${ext.toUpperCase()}</a>`;
+        } else {
+          slot.innerHTML = `<div class="goal-opt">Audio not generated - ${esc(a?.note ?? "the TTS endpoint was unreachable")}.</div>`;
+        }
+      }
     } finally { btn.disabled = false; btn.innerHTML = prev; }
   });
   $("#goalRun", ov)?.addEventListener("click", async () => {
@@ -3666,28 +4240,553 @@ function updateGoalEstimate(ov: HTMLElement): void {
 // history (a first-time user sees nothing extra).
 async function loadLoopStats(ov: HTMLElement): Promise<void> {
   const sec = $("#goalStatsSec", ov); if (!sec) return;
-  const data = await bridge.loopRunStats().catch(() => null);
+  // P-GOAL.14 (ADR-0112): fetch cross-run stats AND the list of past After-Action Reports together.
+  const [data, reports] = await Promise.all([
+    bridge.loopRunStats().catch(() => null),
+    bridge.pastReports().catch(() => null),
+  ]);
   const s = data?.stats;
-  if (!s || s.runs === 0) { sec.innerHTML = ""; return; }
-  const pct = Math.round(s.successRate * 100);
-  const tone = pct >= 75 ? "ok" : pct >= 40 ? "mid" : "low";
-  const iters = s.avgItersToSucceed ? `${s.avgItersToSucceed.toFixed(1)}` : "-";
-  const dur = s.avgDurationMs ? formatLoopDur(s.avgDurationMs) : "-";
-  const blocker = s.topBlockers[0];
-  const spend = s.totalSpendUsd > 0 ? `<span class="gs-tool">spend <b>$${s.totalSpendUsd.toFixed(2)}</b></span>` : "";
-  const mix = spend + Object.entries(s.toolsByType).sort((a, b) => b[1] - a[1]).slice(0, 4)
-    .map(([k, v]) => `<span class="gs-tool">${esc(k)} <b>${v}</b></span>`).join("");
-  sec.innerHTML = `<div class="goal-stats" data-tone="${tone}">
-    <div class="gs-head">${icon("graph", 13)} Loop history <span class="gs-sum">${esc(data!.summary)}</span><span class="gs-caret">${icon("chevron", 12)}</span></div>
-    <div class="gs-grid">
-      <div class="gs-cell"><span class="gs-n">${pct}%</span><span class="gs-l">met</span></div>
-      <div class="gs-cell"><span class="gs-n">${esc(iters)}</span><span class="gs-l">avg iters to win</span></div>
-      <div class="gs-cell"><span class="gs-n">${esc(dur)}</span><span class="gs-l">avg duration</span></div>
-      <div class="gs-cell"><span class="gs-n">${s.totalTools}</span><span class="gs-l">tool calls</span></div>
+  let html = "";
+  if (s && s.runs > 0) {
+    const pct = Math.round(s.successRate * 100);
+    const tone = pct >= 75 ? "ok" : pct >= 40 ? "mid" : "low";
+    const iters = s.avgItersToSucceed ? `${s.avgItersToSucceed.toFixed(1)}` : "-";
+    const dur = s.avgDurationMs ? formatLoopDur(s.avgDurationMs) : "-";
+    const blocker = s.topBlockers[0];
+    const spend = s.totalSpendUsd > 0 ? `<span class="gs-tool">spend <b>$${s.totalSpendUsd.toFixed(2)}</b></span>` : "";
+    const mix = spend + Object.entries(s.toolsByType).sort((a, b) => b[1] - a[1]).slice(0, 4)
+      .map(([k, v]) => `<span class="gs-tool">${esc(k)} <b>${v}</b></span>`).join("");
+    html += `<div class="goal-stats" data-tone="${tone}">
+      <div class="gs-head">${icon("graph", 13)} Loop history <span class="gs-sum">${esc(data!.summary)}</span><span class="gs-caret">${icon("chevron", 12)}</span></div>
+      <div class="gs-grid">
+        <div class="gs-cell"><span class="gs-n">${pct}%</span><span class="gs-l">met</span></div>
+        <div class="gs-cell"><span class="gs-n">${esc(iters)}</span><span class="gs-l">avg iters to win</span></div>
+        <div class="gs-cell"><span class="gs-n">${esc(dur)}</span><span class="gs-l">avg duration</span></div>
+        <div class="gs-cell"><span class="gs-n">${s.totalTools}</span><span class="gs-l">tool calls</span></div>
+      </div>
+      ${mix ? `<div class="gs-mix">${mix}</div>` : ""}
+      ${blocker ? `<div class="gs-blocker">${icon("info", 11)} most-common stop: <span>${esc(blocker.reason.slice(0, 90))}</span>${blocker.count > 1 ? ` ·&nbsp;${blocker.count}×` : ""}</div>` : ""}
+    </div>`;
+  }
+  // P-GOAL.14: the browsable list of past After-Action Reports (each opens its full markdown). Shown
+  // whenever report files exist, even if the run-log ledger is empty (older loops predate the ledger).
+  if (reports && reports.length) {
+    const rows = reports.slice(0, 30).map((r) => {
+      const when = r.updatedAt ? new Date(r.updatedAt).toLocaleString() : "";
+      return `<button type="button" class="gr-row" data-report-rel="${esc(r.rel)}">
+        <span class="gr-outcome">${esc(r.outcome || "report")}</span>
+        <span class="gr-goal">${esc(r.goal)}</span>
+        <span class="gr-when">${esc(when)}</span>
+      </button>`;
+    }).join("");
+    html += `<details class="goal-stats goal-reports"${s && s.runs ? "" : " open"}>
+      <summary class="gs-head">${icon("graph", 13)} Past After-Action Reports <span class="gs-sum">${reports.length} saved</span></summary>
+      <div class="gr-list">${rows}</div>
+    </details>`;
+  }
+  sec.innerHTML = html;
+  sec.querySelectorAll<HTMLElement>("[data-report-rel]").forEach((b) =>
+    b.addEventListener("click", () => void openReportViewer(b.dataset.reportRel!)));
+}
+
+/** P-GOAL.14 (ADR-0112): open one saved After-Action Report's full markdown in a viewer modal. */
+async function openReportViewer(rel: string): Promise<void> {
+  const r = await bridge.pastReport(rel).catch(() => null);
+  if (!r) { showToast({ tone: "warn", title: "Could not open", desc: "The report file wasn't found.", timeout: 2400 }); return; }
+  const ov = el(`<div class="goal-scrim"><div class="goal-modal aar-viewer">
+    <div class="goal-modal-h"><span class="goal-h-title">${icon("graph", 15)} After-Action Report</span>
+      <span style="margin-left:auto;display:flex;gap:6px">
+        <button type="button" class="btn-mini" id="arListen" data-tip="Narrate this report (Settings → Voice sets the engine)">${icon("volume", 12)} Listen</button>
+        <button type="button" class="btn-mini" id="arClose">Close</button></span></div>
+    <div class="goal-modal-sub"><code>${esc(rel)}</code></div>
+    <div class="goal-aar-body">${renderMarkdown(r.markdown)}</div>
+  </div></div>`);
+  document.body.appendChild(ov);
+  const close = () => { if (ttsAudio && !ttsAudio.paused) { ttsAudio.pause(); ttsAudio = null; } ov.remove(); };
+  $("#arClose", ov)?.addEventListener("click", close);
+  // P-VOICE.1 (ADR-0115): narrate the report's readable text (no markdown/table symbols).
+  $("#arListen", ov)?.addEventListener("click", (e) => {
+    const plain = ($(".goal-aar-body", ov) as HTMLElement | null)?.innerText?.trim() ?? "";
+    void speakText(plain, e.currentTarget as HTMLElement);
+  });
+  ov.addEventListener("mousedown", (e) => { if (e.target === ov) close(); });
+}
+
+// ── P-REPORT.1 (ADR-0116): the Engineering Reports rail panel ─────────────────
+// Available to every role. Generate a role-tailored brief (with optional podcast audio), and browse every
+// past loop After-Action Report + saved brief. Reuses the P-VOICE.1 audio (blob-URL player) + TTS.
+const REPORT_TTS_COST: Record<string, string> = {
+  elevenlabs: `${icon("info", 11)}<span>ElevenLabs bills per character. Generating this report's audio costs <b>about $0.10 (~10¢)</b> each time.</span>`,
+  "openai-tts": `${icon("info", 11)}<span>OpenAI TTS bills per character. Generating this report's audio costs <b>about $0.10</b> each time.</span>`,
+};
+
+/** P-REPORT.2: copy report markdown to the clipboard + download it as a .md file. */
+function reportFilename(title: string): string {
+  return `${(title || "report").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60) || "report"}.md`;
+}
+async function copyMarkdown(md: string): Promise<void> {
+  try { await navigator.clipboard.writeText(md); showToast({ title: "Copied", desc: "Report markdown is on your clipboard.", timeout: 1600 }); }
+  catch { showToast({ tone: "danger", title: "Copy failed", desc: "Clipboard unavailable in this view.", timeout: 2400 }); }
+}
+function downloadMarkdown(md: string, filename: string): void {
+  const url = URL.createObjectURL(new Blob([md], { type: "text/markdown;charset=utf-8" }));
+  const a = document.createElement("a"); a.href = url; a.download = filename; a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+/** P-REPORT.3 (ADR-0117): push a report into the personalization KG. Compartment = an unlocked one; if only
+ *  one is unlocked it's the default, otherwise a popover lets the user pick (work / personal / cui). */
+async function pushReportToKg(kind: string, rel: string, archived: boolean, anchor: HTMLElement): Promise<void> {
+  const st = await bridge.personal().catch(() => null);
+  if (!st?.enabled) { showToast({ tone: "warn", title: "Personalization is off", desc: "Turn it on in Settings → Personalization to push reports to your knowledge graph.", timeout: 3400 }); return; }
+  const targets: { scope: string; label: string }[] = [];
+  if (st.unlocked) targets.push({ scope: "work", label: "Work graph" }, { scope: "personal", label: "Personal graph" });
+  if (st.cuiUnlocked) targets.push({ scope: "cui", label: "CUI graph" });
+  if (!targets.length) { showToast({ tone: "warn", title: "Knowledge graph locked", desc: "Unlock a compartment in Settings → Personalization first.", timeout: 3600 }); return; }
+  const push = async (scope: string, label: string): Promise<void> => {
+    const r = await bridge.reportToKg(kind, rel, scope, archived).catch(() => null);
+    showToast(r?.ok
+      ? { title: "Pushed to the knowledge graph", desc: `Saved to your ${label} as a report node.`, timeout: 2600 }
+      : { tone: "warn", title: "Not pushed", desc: r?.error || "Could not write to the knowledge graph.", timeout: 3600 });
+  };
+  if (targets.length === 1) { await push(targets[0]!.scope, targets[0]!.label); return; }
+  const { node, close } = popover(anchor, `<div class="kg-pick"><div class="kg-pick-h">Push to which graph?</div>${targets.map((t) => `<button type="button" class="kg-pick-opt" data-scope="${t.scope}">${icon("graph", 12)} ${esc(t.label)}</button>`).join("")}</div>`);
+  node.addEventListener("click", (e) => {
+    const b = (e.target as HTMLElement).closest("[data-scope]") as HTMLElement | null; if (!b) return;
+    close(); void push(b.dataset.scope!, targets.find((t) => t.scope === b.dataset.scope)?.label ?? b.dataset.scope!);
+  });
+}
+
+/** Open one Reports-list entry (a loop AAR or a saved brief): Listen, Copy, Download .md (+ Archive/Delete
+ *  via the row actions). `archived` reads from the archive store. `onChange` refreshes the list on lifecycle. */
+// ── P-REPORT.4: premium report-body enhancer (viewer only) ──
+// Rendered report markdown carries a duplicate title H1, an emoji outcome badge, and unrenderable
+// ASCII / mermaid "charts". In the viewer we (1) drop the doubled H1 (the modal header already shows
+// the title), (2) swap the emoji for a custom SVG badge, and (3) turn every ASCII scoreboard + mermaid
+// pie/bar block into a colour bar chart with a plasma-on-hover fill. Purely presentational - the stored
+// markdown bytes are untouched (loop_report stays byte-stable / test-frozen).
+const OUTCOME_ICON: Record<string, { glyph: string; cls: string }> = {
+  "✅": { glyph: "checkBadge", cls: "ro-met" },
+  "⏹️": { glyph: "stopBadge", cls: "ro-stopped" },
+  "⏹": { glyph: "stopBadge", cls: "ro-stopped" },
+  "🛑": { glyph: "stopBadge", cls: "ro-cancelled" },
+  "❗": { glyph: "alertBadge", cls: "ro-error" },
+};
+const CHART_PALETTE = ["var(--blue)", "var(--green)", "var(--accent-2)", "var(--cyan)", "var(--amber)", "#8aa6f5", "#e07bf0"];
+function scoreColor(label: string, i: number): string {
+  const l = label.toLowerCase();
+  if (l.includes("add")) return "var(--green)";
+  if (l.includes("remov") || l.includes("delet")) return "var(--red)";
+  if (l.includes("error")) return "var(--amber)";
+  if (l.includes("website") || l.includes("site") || l.includes("visit")) return "var(--accent-2)";
+  if (l.includes("tool") || l.includes("call")) return "var(--blue)";
+  return CHART_PALETTE[i % CHART_PALETTE.length];
+}
+type ChartRow = { label: string; val: string; num: number };
+function buildScoreChart(rows: ChartRow[]): HTMLElement {
+  const max = Math.max(1, ...rows.map((r) => Math.abs(r.num)));
+  return el(`<div class="rchart">${rows.map((r, i) => {
+    const pct = Math.max(2.5, Math.round((Math.abs(r.num) / max) * 100));
+    return `<div class="rchart-row" style="--c:${scoreColor(r.label, i)}">
+      <span class="rchart-lbl" title="${esc(r.label)}">${esc(r.label)}</span>
+      <span class="rchart-track"><i class="rchart-fill" style="width:${pct}%"></i></span>
+      <b class="rchart-val">${esc(r.val)}</b></div>`;
+  }).join("")}</div>`);
+}
+/** Parse an ASCII scoreboard / mermaid pie / mermaid xychart code block into chart rows, or null. */
+function parseChartRows(text: string): ChartRow[] | null {
+  const t = (text || "").trim();
+  if (/[█░]/.test(t)) { // ASCII scoreboard: "Label   ██░░  value"
+    const rows = t.split("\n").map((line) => {
+      const m = /^(.+?)\s+[█░]+\s+([+-]?\d[\d,]*)\s*$/.exec(line.trimEnd());
+      return m ? { label: m[1].trim(), val: m[2], num: Number(m[2].replace(/[+,]/g, "")) } : null;
+    }).filter(Boolean) as ChartRow[];
+    return rows.length ? rows : null;
+  }
+  if (/^pie\b/.test(t)) { // mermaid pie:  "Label" : value
+    const rows: ChartRow[] = [];
+    for (const line of t.split("\n")) {
+      const m = /^\s*"(.+?)"\s*:\s*([\d.]+)/.exec(line);
+      if (m) rows.push({ label: m[1], val: m[2], num: Number(m[2]) });
+    }
+    return rows.length ? rows : null;
+  }
+  if (/xychart/.test(t)) { // mermaid xychart-beta:  x-axis [..] + bar [..]
+    const xs = /x-axis\s*\[(.+?)\]/.exec(t)?.[1], bars = /bar\s*\[(.+?)\]/.exec(t)?.[1];
+    if (xs && bars) {
+      const labels = xs.split(",").map((s) => s.trim().replace(/^"|"$/g, ""));
+      const vals = bars.split(",").map((s) => Number(s.trim()));
+      const rows = labels.map((label, i) => ({ label, val: String(vals[i] ?? 0), num: vals[i] ?? 0 }));
+      return rows.length ? rows : null;
+    }
+  }
+  return null;
+}
+// P-REPORT.8: reconstruct the change graph / schema map from OUR Mermaid (single source of truth in the
+// stored .md) so the viewer can render the styled SVG while keeping the exact Mermaid copyable for draw.io.
+function parseChangeGraphMermaid(text: string): ChangeGraph {
+  const modules: ModuleChange[] = [], edges: GraphEdge[] = [];
+  for (const line of text.split("\n")) {
+    let m = /^\s*(\w+)\["(.+?)"\]:::(added|removed|changed)/.exec(line);
+    if (m) {
+      const lm = /^(.*?)\s*\+(\d+)\/-(\d+)\s*\((\d+)f\)$/.exec(m[2]);
+      modules.push({ id: m[1], label: lm ? lm[1].trim() : m[2], added: lm ? +lm[2] : 0, removed: lm ? +lm[3] : 0, files: lm ? +lm[4] : 0, status: m[3] as ModuleChange["status"] });
+      continue;
+    }
+    m = /^\s*(\w+)\s*-->\s*(\w+)/.exec(line);
+    if (m && !/:::/.test(line)) edges.push({ from: m[1], to: m[2] });
+  }
+  return { modules, edges, range: "", totalAdded: 0, totalRemoved: 0, totalFiles: 0 };
+}
+function parseSchemaMermaid(text: string): StoreChange[] {
+  const stores = new Map<string, string>(), files = new Map<string, { path: string; added: number; removed: number }>(), links: [string, string][] = [];
+  for (const line of text.split("\n")) {
+    let m = /^\s*(\w+)\[\("(.+?)"\)\]:::store/.exec(line);
+    if (m) { stores.set(m[1], m[2]); continue; }
+    m = /^\s*(\w+)\["(.+?)"\]:::(grew|shrank)/.exec(line);
+    if (m) { const lm = /^(.*?)\s*\+(\d+)\/-(\d+)$/.exec(m[2]); files.set(m[1], { path: lm ? lm[1].trim() : m[2], added: lm ? +lm[2] : 0, removed: lm ? +lm[3] : 0 }); continue; }
+    m = /^\s*(\w+)\s*-->\s*(\w+)/.exec(line);
+    if (m) links.push([m[1], m[2]]);
+  }
+  const out = new Map<string, StoreChange>();
+  for (const [fid, sid] of links) {
+    const store = stores.get(sid), f = files.get(fid); if (!store || !f) continue;
+    const sc = out.get(store) ?? { store, files: [], added: 0, removed: 0 };
+    sc.files.push({ path: f.path, added: f.added, removed: f.removed, status: "M" }); sc.added += f.added; sc.removed += f.removed;
+    out.set(store, sc);
+  }
+  return [...out.values()];
+}
+/** A rendered graph block: the styled SVG image + a Copy-Mermaid button (draw.io) + the raw code (collapsible). */
+function renderGraphBlock(mermaidText: string, svg: string): HTMLElement {
+  const wrap = el(`<div class="cg-block">
+    <div class="cg-image">${svg || '<div class="goal-opt">Diagram unavailable.</div>'}</div>
+    <div class="cg-tools"><button type="button" class="btn-mini cg-copy">${icon("copy", 13)} Copy Mermaid (draw.io)</button></div>
+    <details class="cg-code"><summary>Mermaid source</summary><pre><code></code></pre></details>
+  </div>`);
+  ($(".cg-code code", wrap) as HTMLElement).textContent = mermaidText;
+  $(".cg-copy", wrap)?.addEventListener("click", () => void copyMarkdown(mermaidText));
+  return wrap;
+}
+function enhanceReportBody(body: HTMLElement | null, _title: string): void {
+  if (!body) return;
+  const h1 = body.querySelector("h1"); // drop the leading title H1 (header already shows it)
+  if (h1 && !h1.previousElementSibling) h1.remove();
+  for (const strong of Array.from(body.querySelectorAll("strong")).slice(0, 4)) { // outcome emoji → SVG badge
+    const txt = strong.textContent ?? "";
+    const key = Object.keys(OUTCOME_ICON).find((e) => txt.startsWith(e));
+    if (!key) continue;
+    const { glyph, cls } = OUTCOME_ICON[key];
+    strong.classList.add("ro-badge", cls);
+    strong.innerHTML = `${icon(glyph, 17)}<span>${esc(txt.slice(key.length).trim())}</span>`;
+    break;
+  }
+  for (const pre of Array.from(body.querySelectorAll("pre"))) { // graphs (our mermaid) → styled SVG; charts → bars
+    const txt = pre.textContent ?? "";
+    if (/%%\s*lucid:changegraph/.test(txt)) { pre.replaceWith(renderGraphBlock(txt, changeGraphSvg(parseChangeGraphMermaid(txt)))); continue; }
+    if (/%%\s*lucid:schema/.test(txt)) { pre.replaceWith(renderGraphBlock(txt, schemaSvg(parseSchemaMermaid(txt)))); continue; }
+    const rows = parseChartRows(txt);
+    if (rows) pre.replaceWith(buildScoreChart(rows));
+  }
+  // P-REPORT.8: each Annex starts on a new printed page (page-break honored by the print CSS).
+  for (const h of Array.from(body.querySelectorAll("h2"))) if (/^\s*annex\b/i.test(h.textContent ?? "")) h.classList.add("annex-break");
+}
+
+// P-REPORT.5: print / save-as-PDF. The on-screen viewer is dark; paper wants the opposite. We drop the
+// already-enhanced report HTML (light-friendly classes: headings, tables, .rchart bars, .ro-badge) into a
+// hidden same-origin iframe with a SELF-CONTAINED light stylesheet (white bg, dark text, print-safe colours,
+// no glows), then invoke the OS print dialog - which offers "Save as PDF" as well as any printer.
+const PRINT_CSS = `
+  @page{margin:16mm}
+  :root{--txt:#14181d;--txt-1:#1b1f26;--txt-2:#3b424b;--txt-3:#5b626d;--txt-4:#8b929c;
+    --bg-1:#fff;--bg-2:#f4f6f9;--bg-3:#e9ecf1;--bg-4:#dfe3e9;--line:#d6dae1;--line-soft:#e5e8ed;--line-strong:#c6ccd4;
+    --accent:#6f3ccb;--accent-2:#9350d6;--green:#1f9b57;--red:#cf4139;--blue:#2f6cd0;--cyan:#1789a2;--amber:#bd8619;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  *{box-sizing:border-box;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  html,body{background:#fff;color:var(--txt-1);margin:0;padding:0}
+  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;font-size:11.5pt;line-height:1.62}
+  .print-title{font-size:19pt;font-weight:700;margin:0 0 3pt;color:#0f1216;letter-spacing:-.01em}
+  .print-sub{font-size:9pt;color:var(--txt-4);font-family:var(--mono);margin:0 0 14pt;padding-bottom:10pt;border-bottom:1px solid var(--line)}
+  .report h1{font-size:14pt;margin:2pt 0 8pt;padding-bottom:5pt;border-bottom:1px solid var(--line);font-weight:700}
+  .report h2{font-size:10pt;text-transform:uppercase;letter-spacing:.05em;color:var(--txt-2);font-weight:700;margin:18pt 0 7pt;padding-left:9pt;border-left:3px solid var(--accent);break-after:avoid}
+  .report h3{font-size:11.5pt;margin:12pt 0 5pt;font-weight:650}
+  .report p{margin:0 0 8pt}
+  .report ul,.report ol{margin:0 0 9pt;padding-left:18pt}
+  .report li{margin:3pt 0}
+  .report li::marker{color:var(--accent)}
+  .report strong,.report b{font-weight:660;color:#0f1216}
+  .report a{color:var(--accent);text-decoration:underline}
+  .report code{font-family:var(--mono);font-size:.86em;background:var(--bg-3);border:1px solid var(--line);border-radius:4px;padding:.5pt 4pt}
+  .report pre{background:var(--bg-2);border:1px solid var(--line);border-radius:8px;padding:9pt 11pt;margin:0 0 10pt;overflow:hidden;white-space:pre-wrap;word-break:break-word;break-inside:avoid}
+  .report pre code{background:none;border:0;padding:0;font-size:9.5pt}
+  .report hr{border:0;border-top:1px solid var(--line);margin:12pt 0}
+  .report blockquote{margin:0 0 9pt;padding:2pt 0 2pt 11pt;border-left:3px solid var(--line-strong);color:var(--txt-2)}
+  .report table{border-collapse:collapse;width:100%;margin:0 0 10pt;font-size:10.5pt;break-inside:avoid}
+  .report th,.report td{border:1px solid var(--line);padding:5pt 8pt;text-align:left;vertical-align:top}
+  .report th{background:var(--bg-3);font-weight:640}
+  .ro-badge{display:inline-flex;align-items:center;gap:5pt;padding:2pt 9pt 2pt 6pt;border-radius:7px;font-weight:640;
+    background:color-mix(in srgb,var(--tc,var(--green)) 15%,#fff);border:1px solid color-mix(in srgb,var(--tc,var(--green)) 40%,var(--line));color:var(--tc,var(--green))}
+  .ro-badge svg{width:14px;height:14px}
+  .ro-badge.ro-met{--tc:var(--green)}.ro-badge.ro-stopped{--tc:var(--amber)}.ro-badge.ro-cancelled{--tc:var(--red)}.ro-badge.ro-error{--tc:var(--red)}
+  .rchart{display:flex;flex-direction:column;gap:8pt;margin:0 0 11pt;padding:11pt 13pt;border:1px solid var(--line);border-radius:10px;background:var(--bg-2);break-inside:avoid}
+  .rchart-row{display:grid;grid-template-columns:96pt 1fr auto;align-items:center;gap:10pt;break-inside:avoid}
+  .rchart-lbl{font-size:10pt;color:var(--txt-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .rchart-track{position:relative;height:11pt;border-radius:6px;overflow:hidden;background:color-mix(in srgb,var(--c) 12%,var(--bg-4))}
+  .rchart-fill{display:block;height:100%;border-radius:6px;min-width:4pt;background:linear-gradient(90deg,color-mix(in srgb,var(--c) 70%,#000),var(--c))}
+  .rchart-val{font-family:var(--mono);font-size:10.5pt;font-weight:700;color:color-mix(in srgb,var(--c) 78%,#000);min-width:30pt;text-align:right}
+  .tldr-model,.tldr-body{color:var(--txt-2)}
+  .print-foot{position:fixed;bottom:6mm;left:0;right:0;font-size:8pt;color:#777;font-family:-apple-system,"Segoe UI",Roboto,sans-serif}
+  /* P-REPORT.8: each Annex starts a new page; the styled graph SVG prints as an image (its Mermaid source is hidden in print). */
+  .annex-break{break-before:page;page-break-before:always}
+  .cg-block{border:1px solid var(--line);border-radius:10px;background:var(--bg-2);margin:0 0 12pt;padding:8pt;break-inside:avoid}
+  .cg-image{overflow:visible}
+  .cg-svg{width:100%;height:auto}
+  .cg-tools,.cg-code{display:none}
+`;
+function printReport(title: string, bodyHtml: string): void {
+  // "Prepared for" identity: corporate email if set, else the attribution identity (workstation-name fallback).
+  const who = (state.email || state.attribution?.identity || state.attribution?.workstation || "").trim();
+  const foot = who ? `<div class="print-foot">Prepared for: ${esc(who)}</div>` : "";
+  const doc = `<!doctype html><html><head><meta charset="utf-8"><title>${esc(title)}</title><style>${PRINT_CSS}</style></head>`
+    + `<body><h1 class="print-title">${esc(title)}</h1><div class="report">${bodyHtml}</div>${foot}</body></html>`;
+  const iframe = document.createElement("iframe");
+  iframe.setAttribute("aria-hidden", "true");
+  iframe.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden";
+  document.body.appendChild(iframe);
+  const cw = iframe.contentWindow;
+  if (!cw) { iframe.remove(); return; }
+  cw.document.open(); cw.document.write(doc); cw.document.close();
+  const fire = () => { try { cw.focus(); cw.print(); } catch { /* print unavailable */ } setTimeout(() => iframe.remove(), 1500); };
+  // give layout + web fonts a beat so the first page isn't blank
+  if (cw.document.readyState === "complete") setTimeout(fire, 150);
+  else iframe.addEventListener("load", () => setTimeout(fire, 150));
+}
+
+async function openReportEntry(kind: string, rel: string, title: string, archived = false): Promise<void> {
+  const r = await bridge.report(kind, rel, archived).catch(() => null);
+  if (!r) { showToast({ tone: "warn", title: "Could not open", desc: "The report file wasn't found.", timeout: 2400 }); return; }
+  const ov = el(`<div class="goal-scrim"><div class="goal-modal aar-viewer">
+    <div class="goal-modal-h"><span class="goal-h-title">${esc(title)}</span>
+      <span class="re-acts">
+        <button type="button" class="btn-mini" id="reListen" data-tip="Read this report aloud · ${modCombo("Space")}|Synthesizes the FULL report on demand (Settings → Voice). On ElevenLabs this runs ~$0.50-1.50; a podcast summary is shorter and cheaper. Press ${modCombo("Space")} to toggle.">${icon("headphones", 16)} Listen</button>
+        <button type="button" class="btn-mini" id="reCopy" data-tip="Copy the report markdown">${icon("copy", 16)} Copy</button>
+        <button type="button" class="btn-mini" id="reDownload" data-tip="Download as .md">${icon("download", 16)} .md</button>
+        <button type="button" class="btn-mini" id="rePrint" data-tip="Print, or save as PDF - opens the system dialog with a clean white layout">${icon("print", 16)} Print</button>
+        <button type="button" class="btn-mini" id="reKg" data-tip="Push to the knowledge graph">${icon("graph", 16)} KG</button>
+        <button type="button" class="btn-mini re-close" id="reClose" data-tip="Close">${icon("close", 16)}</button></span></div>
+    <div class="goal-modal-sub"><code>${esc(rel)}</code></div>
+    <div class="re-note">${icon("info", 12)}<span><b>Listen</b> narrates the whole report (ElevenLabs runs about <b>$0.50-1.50</b>); a <b>podcast summary</b> is shorter and cheaper. For a free, natural-sounding two-host podcast, <a href="#" id="reNotebook">open it in NotebookLM ↗</a> - the report is copied so you can paste it in.</span></div>
+    <div class="goal-aar-body">${renderMarkdown(r.markdown)}</div>
+  </div></div>`);
+  document.body.appendChild(ov);
+  const bodyEl = $(".goal-aar-body", ov) as HTMLElement;
+  enhanceReportBody(bodyEl, title); // dedupe title H1, custom badges + score chart
+  $("#reNotebook", ov)?.addEventListener("click", async (e) => {
+    e.preventDefault();
+    await copyMarkdown(r.markdown).catch(() => {});
+    window.open("https://notebooklm.google.com", "_blank", "noopener");
+    showToast({ title: "Report copied · NotebookLM opened", desc: "In NotebookLM, add a source (paste the report or upload the .md), then click Audio Overview to generate a podcast.", actions: [{ label: "OK" }], timeout: 6000 });
+  });
+  // Ctrl/⌘+Space toggles read-aloud while the report is open (mirrors the reListen button + its tooltip).
+  const onKey = (ev: KeyboardEvent) => {
+    if ((ev.ctrlKey || ev.metaKey) && (ev.code === "Space" || ev.key === " ")) {
+      ev.preventDefault();
+      ($("#reListen", ov) as HTMLElement | null)?.click();
+    }
+  };
+  document.addEventListener("keydown", onKey);
+  const close = () => { document.removeEventListener("keydown", onKey); if (ttsAudio && !ttsAudio.paused) { ttsAudio.pause(); ttsAudio = null; } ov.remove(); };
+  $("#reClose", ov)?.addEventListener("click", close);
+  $("#rePrint", ov)?.addEventListener("click", () => printReport(title, bodyEl.innerHTML));
+  $("#reListen", ov)?.addEventListener("click", (e) => {
+    const plain = ($(".goal-aar-body", ov) as HTMLElement | null)?.innerText?.trim() ?? "";
+    void speakText(plain, e.currentTarget as HTMLElement);
+  });
+  $("#reCopy", ov)?.addEventListener("click", () => void copyMarkdown(r.markdown));
+  $("#reDownload", ov)?.addEventListener("click", () => downloadMarkdown(r.markdown, reportFilename(title)));
+  $("#reKg", ov)?.addEventListener("click", (e) => void pushReportToKg(kind, rel, archived, e.currentTarget as HTMLElement));
+  ov.addEventListener("mousedown", (e) => { if (e.target === ov) close(); });
+}
+
+function openReportsPanel(): void {
+  // Single instance: a second click on the rail glyph TOGGLES (closes) it instead of stacking another panel
+  // (stacked panels also collided on the rpRole/rpProvider/rpVoice ids - the duplicate-id warning).
+  const open = document.querySelector(".reports-modal")?.closest(".goal-scrim");
+  if (open) { if (ttsAudio && !ttsAudio.paused) { ttsAudio.pause(); ttsAudio = null; } open.remove(); return; }
+  const curRole = state.userRole ?? "developer";
+  const rOpt = (r: string, label: string) => `<option value="${r}"${r === curRole ? " selected" : ""}>${label}</option>`;
+  const ov = el(`<div class="goal-scrim"><div class="goal-modal reports-modal">
+    <div class="goal-modal-h"><span class="goal-h-title">${icon("report", 15)} Engineering Reports</span><button type="button" class="btn-mini" id="rpClose">Close</button></div>
+    <div class="goal-modal-sub">Generate a role-tailored engineering brief from the app's DECISIONS + PROGRESS logs, with optional podcast audio. Every past loop After-Action Report and saved brief is listed on the right.</div>
+    <div class="reports-grid">
+      <div class="rp-gen">
+        <div class="goal-row"><label class="goal-lbl" for="rpRole">Report for</label>
+          <select id="rpRole" class="prov-key">${rOpt("developer", "Developer")}${rOpt("security", "Security")}${rOpt("manager", "Manager")}${rOpt("executive", "Executive")}</select></div>
+        <div class="goal-row"><label class="goal-lbl" for="rpProvider">Audio</label>
+          <select id="rpProvider" class="prov-key">
+            <option value="script-only">Script only (no audio)</option>
+            <option value="elevenlabs">ElevenLabs · custom voices</option>
+            <option value="openai-tts">ChatGPT · OpenAI TTS</option>
+            <option value="local-tts">Local TTS · Kokoro (air-gap)</option>
+          </select></div>
+        <div class="goal-row" id="rpVoiceRow" hidden><label class="goal-lbl" for="rpVoice">Voice</label><select id="rpVoice" class="prov-key"><option value="">default voice</option></select></div>
+        <div class="goal-eu-cost" id="rpCost" hidden></div>
+        <div class="rp-nb-tip">${icon("info", 11)}<span>Want a free, natural-sounding two-host podcast? Generate the report, then <a href="https://notebooklm.google.com" target="_blank" rel="noopener" id="rpNotebook">open NotebookLM ↗</a> and paste it in for an Audio Overview.</span></div>
+        <button type="button" class="btn-mini ok" id="rpGenerate">${icon("bolt", 12)} Generate report</button>
+        <div class="rp-sec-exports" id="rpSecExports" hidden>
+          <button type="button" class="btn-mini" id="rpPoam" data-tip="Export a Plan of Actions & Milestones (eMASS-aligned CSV) from the security control crosswalk. Draft - validate mappings against your baseline.">${icon("download", 12)} POA&M (CSV)</button>
+          <button type="button" class="btn-mini" id="rpCkl" data-tip="Export a STIG Viewer checklist (.ckl) of the control crosswalk. Draft - synthetic Vuln IDs keyed by CCI, for analyst validation.">${icon("download", 12)} STIG (.ckl)</button>
+        </div>
+        <div class="goal-eu-result" id="rpResult" hidden></div>
+      </div>
+      <div class="rp-past">
+        <div class="rp-past-h">
+          <span class="rp-tabs" id="rpTabs"><button type="button" class="rp-tab on" data-tab="active">Active</button><button type="button" class="rp-tab" data-tab="archived">Archived</button></span>
+          <span class="gs-sum" id="rpCount"></span></div>
+        <div class="rp-list" id="rpList"><div class="goal-opt">loading…</div></div>
+      </div>
     </div>
-    ${mix ? `<div class="gs-mix">${mix}</div>` : ""}
-    ${blocker ? `<div class="gs-blocker">${icon("info", 11)} most-common stop: <span>${esc(blocker.reason.slice(0, 90))}</span>${blocker.count > 1 ? ` ·&nbsp;${blocker.count}×` : ""}</div>` : ""}
-  </div>`;
+  </div></div>`);
+  document.body.appendChild(ov);
+  const close = () => { if (ttsAudio && !ttsAudio.paused) { ttsAudio.pause(); ttsAudio = null; } ov.remove(); };
+  $("#rpClose", ov)?.addEventListener("click", close);
+  ov.addEventListener("mousedown", (e) => { if (e.target === ov) close(); });
+
+  // provider → voice picker + cost note (ElevenLabs only), lazy-loading voices so a voice is chosen pre-Generate.
+  const prov = $("#rpProvider", ov) as HTMLSelectElement;
+  const voiceRow = $("#rpVoiceRow", ov) as HTMLElement;
+  const voiceSel = $("#rpVoice", ov) as HTMLSelectElement;
+  const cost = $("#rpCost", ov) as HTMLElement;
+  let voicesLoaded = false;
+  const sync = async (): Promise<void> => {
+    const p = prov.value;
+    voiceRow.hidden = p !== "elevenlabs";
+    const c = REPORT_TTS_COST[p]; cost.hidden = !c; cost.innerHTML = c ?? "";
+    if (p === "elevenlabs" && !voicesLoaded) {
+      voicesLoaded = true;
+      const data = await bridge.voices().catch(() => null);
+      if (data?.voices?.length) {
+        const favs = new Set(data.favorites);
+        const opt = (v: import("./bridge.ts").ElevenVoiceView) => `<option value="${esc(v.voiceId)}"${v.voiceId === data.selected ? " selected" : ""}>${esc(v.name)}${v.category ? ` · ${esc(v.category)}` : ""}</option>`;
+        const fav = data.voices.filter((v) => favs.has(v.voiceId)), rest = data.voices.filter((v) => !favs.has(v.voiceId));
+        voiceSel.innerHTML = `<option value="">default voice</option>` + (fav.length ? `<optgroup label="★ Favorites">${fav.map(opt).join("")}</optgroup>` : "") + `<optgroup label="All voices">${rest.map(opt).join("")}</optgroup>`;
+      } else { voiceSel.innerHTML = `<option value="">${esc(data?.note || "add an ElevenLabs key in Settings → Voice")}</option>`; voicesLoaded = false; }
+    }
+  };
+  prov.addEventListener("change", () => void sync());
+  void sync();
+
+  // P-REPORT.6/.8: the POA&M (eMASS CSV) + STIG (.ckl) exports are Security-report artifacts - show only for that role.
+  const roleSel = $("#rpRole", ov) as HTMLSelectElement;
+  const secExports = $("#rpSecExports", ov) as HTMLElement;
+  const syncPoam = () => { secExports.hidden = roleSel.value !== "security"; };
+  roleSel.addEventListener("change", syncPoam);
+  syncPoam();
+  const downloadExport = (blob: Blob, filename: string) => {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a"); a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
+  $("#rpPoam", ov)?.addEventListener("click", async (e) => {
+    const btn = e.currentTarget as HTMLButtonElement; const prev = btn.innerHTML; btn.disabled = true; btn.textContent = "Building POA&M…";
+    try {
+      const r = await bridge.engineeringBriefPoam().catch(() => null);
+      if (!r?.csv) { showToast({ tone: "warn", title: "Could not export", desc: "The POA&M generator returned nothing.", timeout: 2800 }); return; }
+      downloadExport(new Blob([r.csv], { type: "text/csv" }), r.filename || "poam.csv");
+      showToast({ title: "POA&M exported", desc: `${r.rows} control-mapped item${r.rows === 1 ? "" : "s"}. Draft - validate the control/CCI mappings against your baseline before eMASS import.`, timeout: 5200 });
+    } finally { btn.disabled = false; btn.innerHTML = prev; }
+  });
+  $("#rpCkl", ov)?.addEventListener("click", async (e) => {
+    const btn = e.currentTarget as HTMLButtonElement; const prev = btn.innerHTML; btn.disabled = true; btn.textContent = "Building .ckl…";
+    try {
+      const r = await bridge.engineeringBriefCkl().catch(() => null);
+      if (!r?.ckl) { showToast({ tone: "warn", title: "Could not export", desc: "The checklist generator returned nothing.", timeout: 2800 }); return; }
+      downloadExport(new Blob([r.ckl], { type: "application/xml" }), r.filename || "crosswalk.ckl");
+      showToast({ title: "STIG checklist exported", desc: `${r.rows} item${r.rows === 1 ? "" : "s"} as .ckl. Open in STIG Viewer. Draft - Vuln IDs are synthetic, keyed by CCI; validate before use.`, timeout: 5600 });
+    } finally { btn.disabled = false; btn.innerHTML = prev; }
+  });
+
+  // P-REPORT.2 (ADR-0117): the Active/Archived tabs + per-row Copy / Download / Archive (soft) / Restore /
+  // Delete (permanent, archive only). Delete twice = gone: active row → Archive, archived row → Delete.
+  let archived = false;
+  const loadList = async (): Promise<void> => {
+    const list = $("#rpList", ov) as HTMLElement;
+    const reports = await bridge.reports(archived).catch(() => null);
+    ($("#rpCount", ov) as HTMLElement).textContent = reports ? `${reports.length} ${archived ? "archived" : "saved"}` : "";
+    if (!reports || !reports.length) {
+      list.innerHTML = `<div class="goal-opt">${archived ? "The archive is empty." : "No reports yet - generate one, or run a /goal loop to produce an After-Action Report."}</div>`;
+      return;
+    }
+    list.innerHTML = reports.slice(0, 80).map((r) => {
+      const when = r.updatedAt ? new Date(r.updatedAt).toLocaleString() : "";
+      const badge = r.kind === "aar" ? `<span class="rp-badge aar">AAR</span>` : `<span class="rp-badge brief">Brief${r.role ? ` · ${esc(r.role)}` : ""}</span>`;
+      const acts = archived
+        ? `<button type="button" class="rp-act" data-rp-restore data-tip="Restore to active">${icon("restore", 13)}</button>
+           <button type="button" class="rp-act danger" data-rp-delete data-tip="Delete permanently">${icon("trash", 13)}</button>`
+        : `<button type="button" class="rp-act" data-rp-archive data-tip="Archive (soft-delete)">${icon("archive", 13)}</button>`;
+      return `<div class="rp-row" data-kind="${r.kind}" data-rel="${esc(r.rel)}" data-title="${esc(r.title)}">
+        <button type="button" class="rp-open" data-rp-open>${badge}<span class="rp-title">${esc(r.title)}</span><span class="rp-when">${esc(when)}</span></button>
+        <span class="rp-acts">
+          <button type="button" class="rp-act" data-rp-copy data-tip="Copy markdown">${icon("copy", 13)}</button>
+          <button type="button" class="rp-act" data-rp-dl data-tip="Download .md">${icon("download", 13)}</button>
+          <button type="button" class="rp-act" data-rp-kg data-tip="Push to the knowledge graph">${icon("graph", 13)}</button>
+          ${acts}</span></div>`;
+    }).join("");
+  };
+  // Delegated row actions (open / copy / download / archive / restore / delete).
+  ($("#rpList", ov) as HTMLElement).addEventListener("click", async (e) => {
+    const t = e.target as HTMLElement;
+    const row = t.closest(".rp-row") as HTMLElement | null; if (!row) return;
+    const kind = row.dataset.kind!, rel = row.dataset.rel!, title = row.dataset.title || "Report";
+    if (t.closest("[data-rp-open]")) { void openReportEntry(kind, rel, title, archived); return; }
+    if (t.closest("[data-rp-copy]") || t.closest("[data-rp-dl]")) {
+      const r = await bridge.report(kind, rel, archived).catch(() => null);
+      if (!r) { showToast({ tone: "warn", title: "Could not read", desc: "The report file wasn't found.", timeout: 2200 }); return; }
+      if (t.closest("[data-rp-copy]")) void copyMarkdown(r.markdown); else downloadMarkdown(r.markdown, reportFilename(title));
+      return;
+    }
+    if (t.closest("[data-rp-kg]")) { void pushReportToKg(kind, rel, archived, t.closest("[data-rp-kg]") as HTMLElement); return; }
+    if (t.closest("[data-rp-archive]")) { await bridge.reportArchive(kind, rel); showToast({ title: "Archived", desc: "Moved to the archive. Delete again there to remove it for good.", timeout: 2400 }); void loadList(); return; }
+    if (t.closest("[data-rp-restore]")) { await bridge.reportRestore(kind, rel); showToast({ title: "Restored", desc: "Back in the active list.", timeout: 1800 }); void loadList(); return; }
+    if (t.closest("[data-rp-delete]")) {
+      const r = await bridge.reportDelete(kind, rel).catch(() => null);
+      showToast(r?.deleted ? { title: "Deleted", desc: "Permanently removed.", timeout: 1800 } : { tone: "warn", title: "Not deleted", desc: "Only archived reports can be permanently deleted.", timeout: 2600 });
+      void loadList(); return;
+    }
+  });
+  // Active / Archived tab switch.
+  ($("#rpTabs", ov) as HTMLElement).addEventListener("click", (e) => {
+    const tab = (e.target as HTMLElement).closest("[data-tab]") as HTMLElement | null; if (!tab) return;
+    archived = tab.dataset.tab === "archived";
+    ov.querySelectorAll(".rp-tab").forEach((b) => b.classList.toggle("on", (b as HTMLElement).dataset.tab === tab.dataset.tab));
+    void loadList();
+  });
+  void loadList();
+
+  $("#rpGenerate", ov)?.addEventListener("click", async () => {
+    const btn = $("#rpGenerate", ov) as HTMLButtonElement;
+    const out = $("#rpResult", ov) as HTMLElement;
+    const role = ($("#rpRole", ov) as HTMLSelectElement).value;
+    const provider = prov.value;
+    const prev = btn.innerHTML; btn.disabled = true; btn.textContent = "Generating…";
+    try {
+      const data = await bridge.engineeringBrief(role, true).catch(() => null); // save=1 → lands in the list
+      if (!data) { showToast({ tone: "warn", title: "Could not generate", desc: "The local engine didn't return a brief.", timeout: 2600 }); return; }
+      out.hidden = false;
+      const counts = `<div class="goal-eu-counts">${Object.entries(data.counts).map(([k, v]) => `<b>${v}</b> ${k}`).join(" · ")}</div>`;
+      out.innerHTML = counts + `<div id="rpAudio"></div>` + renderMarkdown(data.brief);
+      enhanceReportBody(out, ""); // P-REPORT.8: render the annex graphs + charts in the preview too
+      if (provider === "elevenlabs" || provider === "openai-tts" || provider === "local-tts") {
+        const slot = $("#rpAudio", ov) as HTMLElement;
+        slot.innerHTML = `<div class="goal-opt">${icon("spark", 11)} Synthesizing audio…</div>`;
+        const a = await bridge.engineeringBriefAudio(provider as never, voiceSel.value || undefined).catch(() => null);
+        if (a?.audioB64) {
+          const url = audioBlobUrl(a.audioB64, a.mime); const ext = a.mime.includes("wav") ? "wav" : "mp3";
+          slot.innerHTML = `<audio controls src="${url}" style="width:100%;margin:6px 0"></audio><a class="btn-mini" download="engineering-report.${ext}" href="${url}">${icon("download", 12)} Download ${ext.toUpperCase()}</a>`;
+        } else { slot.innerHTML = `<div class="goal-opt">Audio not generated - ${esc(a?.note ?? "the TTS endpoint was unreachable")}.</div>`; }
+      }
+      void loadList(); // the just-saved brief now appears in the list
+    } finally { btn.disabled = false; btn.innerHTML = prev; }
+  });
 }
 
 /** Compact duration for the eval banner (mirrors loop_report.formatDuration, kept local to the renderer). */
@@ -4092,9 +5191,24 @@ function wire(): void {
   $("#prevOpen")?.addEventListener("click", () => loadPreview(($("#prevPath") as HTMLInputElement | null)?.value ?? ""));
   $("#prevPath")?.addEventListener("keydown", (e) => { if ((e as KeyboardEvent).key === "Enter") loadPreview(($("#prevPath") as HTMLInputElement).value); });
   $("#prevReload")?.addEventListener("click", () => { const f = $("#prevFrame") as HTMLIFrameElement | null; if (f && !f.hidden && f.src) f.src = f.src; });
+  $("#prevBrowse")?.addEventListener("click", () => void browsePreviewFile()); // P-PREVIEW.5: open cwd file
+  $("#prevMarkup")?.addEventListener("click", (e) => openMarkupMenu(e.currentTarget as HTMLElement)); // P-PREVIEW.5: markup tools
   $("#prevShot")?.addEventListener("click", () => void screenshotPreviewToChat());
   // Knowledge graph: close, lens toggle, forget-fact, export (P9.4)
   $("#kgClose")!.addEventListener("click", () => closeKnowledge());
+  // P-KG-CODE.1: workspace code graph - toggle personal ↔ code; Update re-ingests.
+  $("#kgCode")?.addEventListener("click", () => void toggleCodeGraph());
+  $("#kgCodeUpdate")?.addEventListener("click", () => void renderCodeGraph(true));
+  // P-KG-CODE.1b: re-center button + keep the flyout state (resizer + center offset) in sync however the
+  // side panel is toggled (a MutationObserver on its `hidden` attribute catches every path).
+  $("#kgCenter")?.addEventListener("click", () => kgHandle?.fit());
+  const kgSideEl = $("#kgSide");
+  if (kgSideEl) new MutationObserver(() => syncKgSideOpen()).observe(kgSideEl, { attributes: true, attributeFilter: ["hidden"] });
+  // P-KG-CODE.1d: a code-node path (or an Imports/Imported-by entry) opens that file in the IDE.
+  $("#kgSide")?.addEventListener("click", (e) => {
+    const b = (e.target as HTMLElement).closest("[data-cg-open]") as HTMLElement | null;
+    if (b) void openCodeFile(b.dataset.cgOpen!);
+  });
   // P-KG-SEARCH.1: live node search - highlight + center matches as you type (Esc clears).
   $("#kgSearch")?.addEventListener("input", (e) => {
     const q = (e.target as HTMLInputElement).value;
@@ -4204,13 +5318,22 @@ function wire(): void {
     }
   });
   $("#railCmd")!.addEventListener("click", () => palette.show());
-  $("#cmdkBtn")!.addEventListener("click", () => palette.show());
+  // (the titlebar "Commands" button was removed - the palette opens from the rail glyph #railCmd + Ctrl/⌘+K)
+  $("#cmdkBtn")?.addEventListener("click", () => palette.show());
   $("#railAbout")?.addEventListener("click", () => openAbout());
+  $("#railReports")?.addEventListener("click", () => openReportsPanel()); // P-REPORT.1 (ADR-0116)
   // Per-message copy (markdown) + save-as-.md
   $("#thread")!.addEventListener("click", async (e) => {
     const t = e.target as HTMLElement;
     const copyBtn = t.closest("[data-msg-copy]") as HTMLElement | null;
     const saveBtn = t.closest("[data-msg-save]") as HTMLElement | null;
+    const speakBtn = t.closest("[data-msg-speak]") as HTMLElement | null;
+    if (speakBtn) { // P-VOICE.1: read-aloud — the RENDERED text (no markdown symbols)
+      const plain = (t.closest(".msg")?.querySelector(".text") as HTMLElement | null)?.innerText?.trim()
+        || ((t.closest(".msg") as MsgNode | null)?._md ?? "").trim();
+      if (!plain) { showToast({ tone: "warn", title: "Nothing to read yet", desc: "Wait for the reply to finish.", timeout: 2000 }); return; }
+      void speakText(plain, speakBtn); return;
+    }
     if (!copyBtn && !saveBtn) return;
     const md = ((t.closest(".msg") as MsgNode | null)?._md ?? "").trim();
     if (!md) { showToast({ tone: "warn", title: "Nothing to copy yet", desc: "Wait for the reply to finish.", actions: [{ label: "OK" }], timeout: 2000 }); return; }
@@ -4247,6 +5370,8 @@ function wire(): void {
     if (e.key === "=" || e.key === "+") { e.preventDefault(); nudgeZoom(0.1); }
     else if (e.key === "-" || e.key === "_") { e.preventDefault(); nudgeZoom(-0.1); }
     else if (e.key === "0") { e.preventDefault(); resetZoom(); }
+    // P-REPORT.5b: Ctrl/⌘+D toggles the mic (voice input), matching the mic button's tooltip.
+    else if ((e.key === "d" || e.key === "D") && !e.shiftKey && !e.altKey) { e.preventDefault(); void toggleMicRecording(); }
   });
 
   // inspector collapse ↔ metrics rail
@@ -4254,11 +5379,10 @@ function wire(): void {
   $("#railExpand")!.addEventListener("click", () => setInspectorRail(false));
 
   // composer agent controls → focused per-control dropdowns
-  $("#ctModel")!.addEventListener("click", () => openOptionDropdown($("#ctModel")!, "model"));
-  $("#ctMode")!.addEventListener("click", () => openOptionDropdown($("#ctMode")!, "mode"));
-  $("#ctThink")!.addEventListener("click", () => openOptionDropdown($("#ctThink")!, "thinking"));
+  // (model / mode / thinking dropdowns are reached from the top #modelBadge picker - not duplicated here)
   $("#ctPersona")!.addEventListener("click", () => openPersonaDropdown($("#ctPersona")!));
   $("#ctSkill")!.addEventListener("click", () => openSkillDropdown($("#ctSkill")!));
+  $("#ctMic")?.addEventListener("click", () => void toggleMicRecording()); // P-VOICE.1 (ADR-0115)
 
   // settings page actions (delegated)
   $("#setClose")!.addEventListener("click", () => closeSettings());
@@ -4268,10 +5392,33 @@ function wire(): void {
     if (t.id === "chinaAckInput") { const b = $("#chinaAckBtn", $("#setBody")!) as HTMLButtonElement | null; if (b) b.disabled = (t as HTMLInputElement).value.trim() !== "ACKNOWLEDGE"; }
     if (t.id === "thirdPartyAckInput") { const b = $("#thirdPartyAckBtn", $("#setBody")!) as HTMLButtonElement | null; if (b) b.disabled = (t as HTMLInputElement).value.trim() !== "ACKNOWLEDGE"; }
   });
+  // P-VOICE.1 (ADR-0115): persist a voice setting when a Voice-card control changes.
+  $("#setBody")!.addEventListener("change", async (e) => {
+    const t0 = e.target as HTMLElement;
+    // P-APPEAR.1: chat-background mode + image upload
+    if (t0.id === "bgMode") { void updateChatBg({ mode: (t0 as HTMLSelectElement).value as "off" | "ambient" | "flashlight" }); return; }
+    if (t0.id === "bgFile") {
+      const f = (t0 as HTMLInputElement).files?.[0]; if (!f) return;
+      if (f.size > 9 * 1024 * 1024) { showToast({ tone: "warn", title: "Image too large", desc: "Pick an image under ~9 MB (or compress it first).", timeout: 3400 }); return; }
+      const reader = new FileReader();
+      reader.onload = () => void updateChatBg({ image: String(reader.result), mode: state.chatBg.mode === "off" ? "ambient" : state.chatBg.mode });
+      reader.readAsDataURL(f);
+      return;
+    }
+    const vs = t0.closest("[data-voice-set]") as HTMLInputElement | HTMLSelectElement | null;
+    if (!vs) return;
+    const key = vs.dataset.voiceSet!;
+    await bridge.setVoiceSettings({ [key]: vs.value } as never).catch(() => {});
+    if (key === "sttProvider") { const row = $("#voiceSttUrlRow"); if (row) (row as HTMLElement).hidden = vs.value !== "whisper"; }
+    if (key === "ttsProvider") void loadVoices(); // only ElevenLabs lists custom voices
+  });
   $("#setBody")!.addEventListener("click", async (e) => {
     const t = e.target as HTMLElement;
     const head = t.closest("[data-acc-toggle]") as HTMLElement | null;
     if (head) { const k = head.dataset.accToggle!; (head.closest(".acc")!.classList.toggle("open")) ? OPEN.add(k) : OPEN.delete(k); return; }
+    // P-APPEAR.1: chat-background upload / remove
+    if (t.closest("#bgUpload")) { ($("#bgFile") as HTMLInputElement | null)?.click(); return; }
+    if (t.closest("#bgClear")) { void updateChatBg({ image: "", mode: "off" }); return; }
     // workspace
     if (t.closest("#wsBrowse")) {
       // Prefer the NATIVE OS folder-open dialog (Electron): it browses the whole machine and can create new
@@ -4321,6 +5468,17 @@ function wire(): void {
       state.thirdPartyAck = !!(await bridge.setThirdPartyAck(false))?.acknowledged;
       fillSec("others", secOthers(state.auth));
       showToast({ title: "Re-locked", desc: "Third-party providers are hidden again behind the acknowledgement.", actions: [{ label: "OK" }], timeout: 2600 });
+      return;
+    }
+    if (t.closest("#voiceFav")) { // P-VOICE.1: star/unstar the selected voice (favorites list first)
+      const vid = ($("#voiceSelect", $("#setBody")!) as HTMLSelectElement | null)?.value;
+      if (!vid) { showToast({ tone: "warn", title: "Pick a voice", desc: "Select a voice to favorite.", timeout: 2000 }); return; }
+      const data = await bridge.voices().catch(() => null);
+      const favs = new Set(data?.favorites ?? []);
+      const nowFav = !favs.has(vid); if (nowFav) favs.add(vid); else favs.delete(vid);
+      await bridge.setVoiceSettings({ ttsVoiceFavorites: [...favs] });
+      await loadVoices();
+      showToast({ title: nowFav ? "Added to favorites" : "Removed from favorites", desc: nowFav ? "This voice now appears first in the picker." : "Removed from your favorites.", timeout: 1800 });
       return;
     }
     const save = t.closest("[data-savekey]") as HTMLElement | null;
@@ -4628,7 +5786,7 @@ function wire(): void {
           ($(`#deviceCode_${oauthId}`, card) as HTMLInputElement)?.focus();
         }
       } else {
-        showToast({ title: "OAuth started", desc: r?.url ? "Complete the sign-in in your browser, then return — the model list updates automatically." : (r?.output?.slice(0, 160) || "Follow omp's prompt in the GUI server window."), actions: [{ label: "OK" }], timeout: 6000 });
+        showToast({ title: "OAuth started", desc: r?.url ? "Complete the sign-in in your browser, then return - the model list updates automatically." : (r?.output?.slice(0, 160) || "Follow omp's prompt in the GUI server window."), actions: [{ label: "OK" }], timeout: 6000 });
       }
       setTimeout(() => void renderSettings(), 4000);
       void pollOauthThenRefresh(oauthId); // watch for completion, then refresh models
@@ -4923,7 +6081,7 @@ async function pollOauthThenRefresh(oauthId: string): Promise<void> {
       resolved = true;
       await loadConfig();
       if (state.settingsOpen) renderSettings();
-      showToast({ title: "Connected — models updated", desc: `${prov.name} is ready in the model picker.`, actions: [{ label: "OK" }], timeout: 6000 });
+      showToast({ title: "Connected - models updated", desc: `${prov.name} is ready in the model picker.`, actions: [{ label: "OK" }], timeout: 6000 });
       return true;
     }
     return false;
@@ -5400,10 +6558,11 @@ function initResize(): void {
     const iw = Number(localStorage.getItem("lucid.inspector-w")); if (iw) setW("inspector", iw);
     const kw = Number(localStorage.getItem("lucid.kg-w")); if (kw) setW("kg", kw);
     const pw = Number(localStorage.getItem("lucid.preview-w")); if (pw) setW("preview", pw); // P-PREVIEW.1
+    const ksw = Number(localStorage.getItem("lucid.kgside-w")); if (ksw) setW("kgside", ksw); // P-KG-CODE.1b
   } catch { /* ignore */ }
-  // data-resize value → the panel element id ("kg" → #knowledge); all right-side panels resize from
-  // their left edge, the sidebar (left panel) from its right edge.
-  const elFor = (which: string) => $(`#${which === "kg" ? "knowledge" : which}`)!;
+  // data-resize value → the panel element id ("kg" → #knowledge, "kgside" → the KG side flyout); all
+  // right-side panels resize from their left edge, the sidebar (left panel) from its right edge.
+  const elFor = (which: string) => $(`#${which === "kg" ? "knowledge" : which === "kgside" ? "kgSide" : which}`)!;
   let active: { which: string; el: HTMLElement } | null = null;
   for (const r of $$(".resizer")) {
     r.addEventListener("mousedown", (e) => {
@@ -5419,6 +6578,7 @@ function initResize(): void {
     // KG can collapse toward the chat to a low minimum, or widen up to 80% of the window.
     const [min, max] = active.which === "sidebar" ? [180, 520]
       : active.which === "kg" || active.which === "preview" ? [360, Math.round(window.innerWidth * 0.8)]
+      : active.which === "kgside" ? [200, Math.round(window.innerWidth * 0.6)] // P-KG-CODE.1b: the KG side flyout
       : [300, 720];
     const raw = active.which === "sidebar" ? e.clientX - rect.left : rect.right - e.clientX;
     setW(active.which, Math.max(min, Math.min(max, raw)));
@@ -5462,6 +6622,8 @@ void bridge.getSettings().then((s) => { // your saved name → the "You" label o
   runOnboarding(); // ADR-0088/0089: role pick (if needed) → email → first-run tour, in sequence
 });
 refresh();
+void bridge.chatBackground().then((c) => { if (c) { state.chatBg = c; applyChatBg(c); } }); // P-APPEAR.1: paint the saved chat background
+void bridge.codeGraphAgent().then((a) => { if (a) state.codeGraphAgent = a.enabled; }); // P-KG-SYM.1: reflect the agent-tool opt-in
 void maybeOnboardPersonal(); // P-IMP.2: first-run nudge + expand Personalization until it's configured
 void bridge.auth().then((a) => { if (a) { state.auth = a; renderStatus(); } }); // gate the budget pill (OAuth vs API key) from first paint
 scheduleBudgetPoll(); // provider budget: re-check every 5 min for the current model

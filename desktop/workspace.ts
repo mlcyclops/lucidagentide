@@ -16,9 +16,23 @@ import { load, save } from "./settings_store.ts";
 
 const REPO = join(import.meta.dir, "..");
 
+/** A STABLE, version-independent default workspace (ADR-0111). Chat sessions are matched by the cwd
+ *  recorded INSIDE each session file (sessions.ts: `norm(scwd) === norm(currentWorkspace())`), so the
+ *  default cwd must never change across app versions — otherwise every prior chat is orphaned on upgrade
+ *  (the exact "I lose my chat history when I update" bug).
+ *  - Dev-from-source: the checkout is a real git repo and a good default, so keep REPO.
+ *  - Packaged app: `import.meta.dir` points into the versioned install dir (resources/repo, no .git),
+ *    which changes every release. Fall back to a fixed `~/.omp/lucid-workspaces/default` instead. */
+export function defaultWorkspace(): string {
+  if (existsSync(join(REPO, ".git"))) return REPO; // dev-from-source: the repo itself
+  const dir = join(homedir(), ".omp", "lucid-workspaces", "default");
+  try { mkdirSync(dir, { recursive: true }); } catch { /* best-effort */ }
+  return existsSync(dir) ? dir : REPO; // only fall back to the install dir if we truly can't create it
+}
+
 export function currentWorkspace(): string {
   const w = load().workspace;
-  return w && existsSync(w) ? w : REPO;
+  return w && existsSync(w) ? w : defaultWorkspace();
 }
 export function isGitRepo(p: string): boolean { return existsSync(join(p, ".git")); }
 export function wsName(p: string): string { return basename(p.replace(/[\\/]+$/, "")) || p; }

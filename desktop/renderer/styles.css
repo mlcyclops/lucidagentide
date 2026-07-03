@@ -112,16 +112,16 @@ button{font-family:inherit}
 .titlebar .model-badge .dot{position:relative;background:var(--green);
   box-shadow:0 0 0 2px rgba(70,210,126,.16),0 0 9px var(--green)}
 /* text-zoom controls */
-.zoom{-webkit-app-region:no-drag;display:flex;align-items:center;gap:1px;
+.zoom{-webkit-app-region:no-drag;display:flex;align-items:center;gap:0;
   background:linear-gradient(180deg,var(--bg-1),var(--bg-2));
-  border:1px solid var(--line);border-radius:999px;padding:2px;
+  border:1px solid var(--line);border-radius:999px;padding:1px;
   box-shadow:inset 0 1px 1px rgba(0,0,0,.3)}
-.zoom button{width:26px;height:24px;border:0;background:transparent;color:var(--txt-3);border-radius:999px;
+.zoom button{width:20px;height:18px;border:0;background:transparent;color:var(--txt-3);border-radius:999px;
   cursor:pointer;display:grid;place-items:center;
   transition:background var(--t-fast) var(--ease),color var(--t-fast) var(--ease),transform var(--t-fast) var(--ease)}
 .zoom button:hover{background:var(--bg-4);color:var(--txt)}
 .zoom button:active{transform:scale(.9);background:var(--bg-3)}
-.zoom .lvl{min-width:42px;text-align:center;font-family:var(--mono);font-size:11.5px;
+.zoom .lvl{min-width:32px;text-align:center;font-family:var(--mono);font-size:10.5px;
   font-variant-numeric:tabular-nums;color:var(--txt-2);cursor:pointer;user-select:none;
   transition:color var(--t-fast) var(--ease)}
 .zoom .lvl:hover{color:var(--txt)}
@@ -271,6 +271,16 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 
 /* ───────────────────────── centre / chat ───────────────────────── */
 .center{position:relative;display:flex;flex-direction:column;min-width:0;min-height:0;background:var(--bg-0)}
+/* P-APPEAR.1: personalized chat background. Sits BEHIND the chat content (which gets z-index:1); the image
+   is set inline. `ambient` = a faint 25% wash; `flashlight` = revealed only under the cursor via a radial
+   mask tracked on mousemove (--mx/--my), like a flashlight sweeping a dark room. */
+.chat-bg{position:absolute;inset:0;z-index:0;pointer-events:none;background-size:cover;background-position:center;background-repeat:no-repeat;opacity:0;transition:opacity .4s var(--ease,ease)}
+.center>.chat,.center>.composer-wrap,.center>.jump-down{position:relative;z-index:1}
+.chat-bg.ambient{opacity:var(--bg-op,.25)}
+.chat-bg.flashlight{opacity:var(--bg-op,.25);
+  -webkit-mask:radial-gradient(circle var(--bg-r,190px) at var(--mx,-600px) var(--my,-600px),#000 0%,#000 32%,transparent 74%);
+  mask:radial-gradient(circle var(--bg-r,190px) at var(--mx,-600px) var(--my,-600px),#000 0%,#000 32%,transparent 74%)}
+@media (prefers-reduced-motion:reduce){.chat-bg{transition:none}}
 .chat{flex:1;min-height:0;overflow-y:auto;padding:22px 0 8px}
 /* Jump-to-latest: double-down-arrow in the LucidAgent accent, tucked just inside the scrollbar.
    `bottom` is set in JS to sit a hair above the composer. Hidden until there's a page-plus below. */
@@ -311,7 +321,7 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .stream>:first-child{margin-top:0}
 .stream>:last-child{margin-bottom:0}
 /* P10.1 response activity HUD: live timer + semantic phase + running cost */
-.hud{display:flex;align-items:center;gap:6px;font-family:var(--mono);font-size:11px;color:var(--txt-3);margin:9px 0 0;line-height:1}
+.hud{display:flex;align-items:center;gap:6px;font-family:var(--mono);font-size:11px;color:var(--txt-2);margin:9px 0 0;line-height:1}
 .hud .ic{flex:none;display:block}
 .hud-ic{flex:none;display:inline-flex;transition:color var(--t) var(--ease)}
 .hud.streaming .hud-ic{color:var(--accent-2)}
@@ -323,14 +333,15 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 /* phase label: a tasteful crossfade when it changes; reduced-motion neutralises it via the global rule */
 .hud-phase{color:var(--txt-2)}
 .hud-phase.swap{animation:phasein 260ms var(--ease-out)}
-.hud.done .hud-phase{color:var(--txt-4)}
+.hud.done .hud-phase{color:var(--txt-2)}
 /* P-TPS.1: live OUTPUT-token readout (tok out · tok/s). The headline streaming
    number, so it tracks the pulsing accent while streaming and settles to a calm
    tone when done. Tabular figures so the rate doesn't jitter the layout. */
-.hud-tps{color:var(--txt-3);font-variant-numeric:tabular-nums}
+.hud-tps{color:var(--txt-2);font-variant-numeric:tabular-nums}
 .hud.streaming .hud-tps{color:var(--accent-2)}
-.hud.done .hud-tps{color:var(--txt-4)}
-.hud-meta{color:var(--txt-4)}
+.hud.done .hud-tps{color:var(--txt-2)}
+.hud-meta{color:var(--txt-2)}
+.hud-sep{opacity:.6}
 @keyframes hudpulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.4;transform:scale(.9)}}
 @keyframes checkpop{0%{transform:scale(.6);opacity:.4}60%{transform:scale(1.12)}100%{transform:scale(1);opacity:1}}
 @keyframes phasein{from{opacity:0;transform:translateY(2px)}to{opacity:1;transform:none}}
@@ -368,8 +379,10 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .msg .text hr{border:0;height:1px;margin:18px 0;background:linear-gradient(90deg,transparent,var(--line-strong) 18%,var(--line-strong) 82%,transparent)}
 .msg .text blockquote{margin:0 0 12px;padding:6px 0 6px 15px;border-left:3px solid color-mix(in srgb,var(--accent) 60%,var(--line-strong));color:var(--txt-2);font-style:italic}
 .msg .text blockquote p:last-child{margin-bottom:0}
-.msg .text code{font-family:var(--mono);font-size:.86em;background:var(--cyan-dim);
-  border:1px solid color-mix(in srgb,var(--cyan) 22%,var(--line-soft));padding:1.5px 6px;border-radius:5px;color:color-mix(in srgb,var(--cyan) 86%,#fff)}
+/* Inline code reads as subdued mono type (matching the model readout in the lower-left status bar) -
+   a neutral chip, not the loud cyan it used to be. */
+.msg .text code{font-family:var(--mono);font-size:.86em;background:color-mix(in srgb,var(--txt-4) 13%,var(--bg-2));
+  border:1px solid var(--line-soft);padding:1.5px 6px;border-radius:5px;color:var(--txt-2)}
 /* code blocks: embossed premium panel - distinct surface, accent edge, inset highlight, smooth scroll */
 .msg .text pre{position:relative;margin:0 0 14px;padding:14px 16px;background:linear-gradient(180deg,#0e1119,#0b0d14);border:1px solid var(--line-strong);
   border-left:3px solid color-mix(in srgb,var(--accent) 58%,var(--line-strong));border-radius:11px;overflow-x:auto;max-width:100%;
@@ -529,6 +542,24 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .perm-copy{flex:none;display:inline-flex;align-items:center;border:1px solid var(--line);background:var(--bg-1);color:var(--txt-3);
   border-radius:7px;padding:4px 6px;cursor:pointer;transition:color var(--t) var(--ease),border-color var(--t) var(--ease)}
 .perm-copy:hover,.perm-copy.ok{border-color:var(--green);color:var(--green)}
+/* P-EXEC.3: the command buttons stack (Copy on top, TLDR under it) so TLDR sits under Copy with tight
+   padding; the explanation drops in below the command row. */
+.perm-exec .perm-egress-target{align-items:flex-start}
+.perm-cmd-btns{flex:none;display:flex;flex-direction:column;gap:4px;align-items:stretch}
+.perm-cmd-btns .perm-copy{justify-content:center;padding:3px 6px}
+.perm-tldr{flex:none;font-family:inherit;font-size:10px;font-weight:700;letter-spacing:.04em;color:var(--txt-3);
+  border:1px solid var(--line);background:var(--bg-1);border-radius:6px;padding:2px 6px;cursor:pointer;
+  transition:color var(--t) var(--ease),border-color var(--t) var(--ease),background var(--t) var(--ease)}
+.perm-tldr:hover{border-color:var(--accent-2);color:var(--accent-2);background:color-mix(in srgb,var(--accent-2) 10%,transparent)}
+.perm-tldr:disabled{opacity:.55;cursor:default}
+.perm-tldr-out{margin:0 12px 8px;padding:8px 11px;border-radius:9px;font-size:12.5px;line-height:1.55;color:var(--txt-1);
+  background:radial-gradient(120% 120% at 0% 0%,color-mix(in srgb,var(--accent-2) 9%,transparent),transparent 60%),var(--bg-2);
+  border:1px solid color-mix(in srgb,var(--accent-2) 24%,var(--line));display:flex;flex-direction:column;gap:5px}
+.perm-tldr-out>.ic,.perm-tldr-out .spin{color:var(--accent-2)}
+.perm-tldr-out .tldr-body{white-space:pre-wrap}
+.perm-tldr-out .tldr-model{display:flex;align-items:center;gap:5px;font-size:10.5px;color:var(--txt-4);text-transform:none}
+.perm-tldr-out.tldr-err{border-color:color-mix(in srgb,var(--amber,#e0a64e) 34%,var(--line));color:var(--txt-2);flex-direction:row;align-items:center;gap:7px}
+.perm-tldr-out.tldr-err>.ic{color:var(--amber,#e0a64e)}
 .perm-radar{margin:0 12px 9px;align-self:flex-start;display:inline-flex;align-items:center;gap:6px;font-family:inherit;font-size:12px;font-weight:500;
   border:1px solid var(--line);background:var(--bg-1);color:var(--txt-3);border-radius:8px;padding:5px 10px;cursor:pointer;
   transition:color var(--t) var(--ease),border-color var(--t) var(--ease)}
@@ -762,6 +793,133 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .goal-stats.collapsed .gs-grid,.goal-stats.collapsed .gs-mix,.goal-stats.collapsed .gs-blocker{display:none}
 .goal-stats.collapsed{padding-top:9px;padding-bottom:9px}
 .gs-blocker span{color:var(--txt-3)}
+/* P-GOAL.14 (ADR-0112): the browsable list of past After-Action Reports + the report viewer. */
+.goal-reports{padding:0}
+.goal-reports>summary{list-style:none;cursor:pointer;user-select:none;padding:10px 12px}
+.goal-reports>summary::-webkit-details-marker{display:none}
+.gr-list{display:flex;flex-direction:column;gap:4px;padding:0 10px 10px}
+.gr-row{display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:9px;width:100%;text-align:left;background:var(--bg-1);border:1px solid var(--line);border-radius:8px;padding:7px 9px;cursor:pointer;font:inherit;color:var(--txt-2)}
+.gr-row:hover{border-color:var(--accent);color:var(--txt-1)}
+.gr-outcome{font-size:11px;white-space:nowrap}
+.gr-goal{font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.gr-when{font-size:10px;color:var(--txt-4);white-space:nowrap}
+.aar-viewer{width:min(860px,95vw);max-height:90vh;overflow:auto}
+/* P-REPORT.4: readable, premium report typography (scoped to the viewer so the loop's inline AAR is
+   untouched). Larger default body, comfortable measure + rhythm, styled headings / lists / code. */
+.aar-viewer .goal-aar-body{margin-top:10px;font-size:15.5px;line-height:1.72;color:var(--txt-1);letter-spacing:.002em}
+.aar-viewer .goal-aar-body>*:first-child{margin-top:0}
+.aar-viewer .goal-aar-body h1,.aar-viewer .goal-aar-body h2,.aar-viewer .goal-aar-body h3{line-height:1.32;font-weight:680;color:var(--txt);letter-spacing:-.01em}
+.aar-viewer .goal-aar-body h1{font-size:17px;margin:2px 0 12px;padding-bottom:9px;border-bottom:1px solid var(--line)}
+.aar-viewer .goal-aar-body h2{font-size:13px;margin:24px 0 10px;padding-left:12px;position:relative;text-transform:uppercase;letter-spacing:.05em;color:var(--txt-2);font-weight:700}
+.aar-viewer .goal-aar-body h2::before{content:"";position:absolute;left:0;top:.05em;bottom:.05em;width:3px;border-radius:3px;background:linear-gradient(180deg,var(--accent),var(--accent-2))}
+.aar-viewer .goal-aar-body h3{font-size:14.5px;margin:17px 0 7px;color:var(--txt-1)}
+.aar-viewer .goal-aar-body p{margin:0 0 12px}
+.aar-viewer .goal-aar-body ul,.aar-viewer .goal-aar-body ol{margin:0 0 13px;padding-left:22px}
+.aar-viewer .goal-aar-body li{margin:5px 0}
+.aar-viewer .goal-aar-body li::marker{color:var(--accent-2)}
+.aar-viewer .goal-aar-body strong,.aar-viewer .goal-aar-body b{color:var(--txt);font-weight:660}
+.aar-viewer .goal-aar-body a{color:var(--accent-2);text-underline-offset:2px}
+.aar-viewer .goal-aar-body code{font-family:var(--mono);font-size:.85em;background:color-mix(in srgb,var(--accent) 12%,var(--bg-1));border:1px solid color-mix(in srgb,var(--accent) 16%,var(--line));border-radius:5px;padding:1px 5px;color:var(--txt-1)}
+.aar-viewer .goal-aar-body pre{background:var(--bg-1);border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin:0 0 13px;line-height:1.5}
+.aar-viewer .goal-aar-body pre code{background:none;border:0;padding:0;font-size:12.5px}
+.aar-viewer .goal-aar-body hr{border:0;border-top:1px solid var(--line);margin:18px 0}
+.aar-viewer .goal-aar-body blockquote{margin:0 0 12px;padding:2px 0 2px 13px;border-left:3px solid color-mix(in srgb,var(--accent) 40%,var(--line));color:var(--txt-2)}
+.aar-viewer .goal-aar-body table{border-collapse:collapse;width:100%;margin:0 0 14px;font-size:14px}
+.aar-viewer .goal-aar-body th,.aar-viewer .goal-aar-body td{border:1px solid var(--line);padding:7px 11px;text-align:left}
+.aar-viewer .goal-aar-body th{background:var(--bg-2);color:var(--txt-1);font-weight:640}
+/* outcome badge (custom SVG replacing the emoji) */
+.aar-viewer .goal-aar-body .ro-badge{display:inline-flex;align-items:center;gap:7px;padding:3px 11px 3px 7px;border-radius:9px;font-weight:640;
+  background:color-mix(in srgb,var(--tc,var(--green)) 14%,var(--bg-1));border:1px solid color-mix(in srgb,var(--tc,var(--green)) 30%,var(--line));color:var(--tc,var(--green))}
+.aar-viewer .goal-aar-body .ro-badge .ic{flex:none}
+.aar-viewer .goal-aar-body .ro-badge span{color:var(--txt)}
+.ro-badge.ro-met{--tc:var(--green)} .ro-badge.ro-stopped{--tc:var(--amber)} .ro-badge.ro-cancelled{--tc:var(--red)} .ro-badge.ro-error{--tc:var(--red)}
+/* ── P-REPORT.4: the report Scoreboard as a beautiful colour bar chart with plasma-on-hover ── */
+.rchart{display:flex;flex-direction:column;gap:11px;margin:2px 0 15px;padding:15px 17px;border:1px solid var(--line);border-radius:13px;
+  background:radial-gradient(120% 120% at 0% 0%,color-mix(in srgb,var(--accent) 7%,transparent),transparent 55%),linear-gradient(160deg,var(--bg-2),var(--bg-1));
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.04)}
+.rchart-row{display:grid;grid-template-columns:104px 1fr auto;align-items:center;gap:13px}
+.rchart-lbl{font-size:12.5px;color:var(--txt-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rchart-track{position:relative;height:15px;border-radius:9px;overflow:hidden;
+  background:color-mix(in srgb,var(--c) 9%,var(--bg-3));box-shadow:inset 0 1px 3px rgba(0,0,0,.45),inset 0 0 0 1px rgba(255,255,255,.02)}
+.rchart-fill{display:block;height:100%;border-radius:9px;position:relative;min-width:5px;
+  background:linear-gradient(90deg,color-mix(in srgb,var(--c) 55%,#000) 0%,var(--c) 100%);
+  box-shadow:0 0 14px -2px color-mix(in srgb,var(--c) 75%,transparent),inset 0 1px 0 rgba(255,255,255,.25);
+  transition:width .9s cubic-bezier(.2,.85,.25,1),filter var(--t),box-shadow var(--t)}
+.rchart-val{font-family:var(--mono);font-size:13.5px;font-weight:700;color:var(--c);text-shadow:0 0 10px color-mix(in srgb,var(--c) 30%,transparent);min-width:34px;text-align:right}
+/* plasma: on hover the fill lights up with a moving multi-hue sheen + brighter glow */
+.rchart-row:hover .rchart-fill{filter:brightness(1.18) saturate(1.25);box-shadow:0 0 20px -1px color-mix(in srgb,var(--c) 90%,transparent),inset 0 1px 0 rgba(255,255,255,.35)}
+.rchart-row:hover .rchart-fill::after{content:"";position:absolute;inset:0;border-radius:inherit;mix-blend-mode:screen;
+  background:linear-gradient(100deg,transparent 8%,color-mix(in srgb,var(--c) 30%,#fff) 24%,color-mix(in srgb,var(--accent-2) 55%,transparent) 44%,transparent 60%,color-mix(in srgb,#fff 60%,var(--c)) 78%,transparent 92%);
+  background-size:260% 100%;animation:rchartPlasma 1.15s linear infinite}
+@keyframes rchartPlasma{to{background-position:-260% 0}}
+@media (prefers-reduced-motion:reduce){.rchart-row:hover .rchart-fill::after{animation:none}}
+/* compact, icon-forward action buttons in the viewer header (smaller pad, larger glyphs, never wrap) */
+.re-acts{margin-left:auto;display:flex;align-items:center;gap:5px;flex:none;flex-wrap:nowrap}
+.re-acts .btn-mini{padding:4px 9px;font-size:11px;gap:5px;border-radius:8px;white-space:nowrap;flex:none}
+.re-acts .btn-mini .ic{width:16px;height:16px}
+.re-acts .btn-mini.re-close{padding:4px;width:28px;justify-content:center;color:var(--txt-3)}
+.re-acts .btn-mini.re-close:hover{color:var(--txt);border-color:var(--line-strong)}
+.aar-viewer .goal-modal-h{align-items:flex-start}
+.aar-viewer .goal-h-title{min-width:0;font-size:14.5px}
+/* P-REPORT.7: the Listen-cost + NotebookLM note under the report viewer header, and the generate-panel tip */
+.re-note,.rp-nb-tip{display:flex;align-items:flex-start;gap:6px;margin:2px 0 4px;font-size:11.5px;line-height:1.45;color:var(--txt-2);
+  background:color-mix(in srgb,var(--accent-2) 8%,var(--bg-2));border:1px solid color-mix(in srgb,var(--accent-2) 20%,var(--line));border-radius:8px;padding:7px 10px}
+.re-note>.ic,.rp-nb-tip>.ic{flex:none;margin-top:1px;color:var(--accent-2)}
+.re-note>span,.rp-nb-tip>span{flex:1;min-width:0}
+.re-note b,.rp-nb-tip b{color:var(--txt)}
+.re-note a,.rp-nb-tip a{color:var(--accent-2);font-weight:600;text-underline-offset:2px}
+/* P-REPORT.8: the annex dependency-/schema-graph block (styled SVG image + copyable Mermaid) */
+.cg-block{margin:2px 0 16px;border:1px solid var(--line);border-radius:12px;overflow:hidden;
+  background:radial-gradient(120% 120% at 0% 0%,color-mix(in srgb,var(--accent) 8%,transparent),transparent 55%),linear-gradient(160deg,var(--bg-2),var(--bg-1))}
+.cg-image{padding:14px 14px 6px;overflow-x:auto}
+.cg-image .cg-svg{display:block;min-width:420px}
+.cg-tools{display:flex;gap:6px;padding:0 12px 10px}
+.cg-code{padding:0 12px 10px;font-size:12px;color:var(--txt-3)}
+.cg-code>summary{cursor:pointer;user-select:none;color:var(--txt-2);padding:4px 0}
+.cg-code pre{margin:4px 0 0;background:var(--bg-1);border:1px solid var(--line);border-radius:8px;padding:10px 12px;overflow:auto;max-height:220px}
+.cg-code code{font-family:var(--mono);font-size:11.5px;color:var(--txt-2);white-space:pre}
+.annex-break{margin-top:22px}
+/* the two Security-report exports (POA&M CSV + STIG .ckl) sit on one row */
+.rp-sec-exports{display:flex;gap:6px;flex-wrap:wrap}
+.rp-sec-exports .btn-mini{flex:1 1 auto;justify-content:center}
+/* P-APPEAR.1: chat-background settings card */
+.bg-row{display:flex;gap:12px;align-items:center;margin-bottom:9px}
+.bg-thumb{width:96px;height:60px;border-radius:9px;background-size:cover;background-position:center;border:1px solid var(--line);flex:none;display:grid;place-items:center;color:var(--txt-4);font-size:10px;text-transform:uppercase;letter-spacing:.04em;box-shadow:inset 0 1px 0 rgba(255,255,255,.04)}
+.bg-thumb.empty{background:var(--bg-2)}
+.bg-controls{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+/* P-REPORT.1 (ADR-0116): the Engineering Reports panel - generate (left) + past-reports list (right). */
+.reports-modal{width:min(940px,96vw);max-height:90vh;overflow:hidden;display:flex;flex-direction:column}
+/* P-REPORT.5: a little larger + more readable intro for the reports module */
+.reports-modal>.goal-modal-sub{font-size:13.5px;line-height:1.55;color:var(--txt-1)}
+.reports-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:14px;margin-top:10px;min-height:0;overflow:hidden}
+@media (max-width:720px){.reports-grid{grid-template-columns:1fr}}
+.rp-gen{display:flex;flex-direction:column;gap:8px;min-width:0;overflow:auto;max-height:72vh;padding-right:2px}
+.rp-past{display:flex;flex-direction:column;gap:8px;min-width:0;border-left:1px solid var(--line);padding-left:14px}
+.rp-past-h{display:flex;align-items:center;gap:7px;font-size:12px;color:var(--txt-2)}
+.rp-past-h .gs-sum{margin-left:auto;font-size:11px;color:var(--txt-4)}
+.rp-list{display:flex;flex-direction:column;gap:4px;overflow:auto;max-height:66vh}
+.rp-row{display:flex;align-items:center;gap:6px;width:100%;background:var(--bg-1);border:1px solid var(--line);border-radius:8px;padding:4px 6px 4px 9px;color:var(--txt-2)}
+.rp-row:hover{border-color:var(--accent)}
+.rp-open{display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:9px;flex:1;min-width:0;text-align:left;background:none;border:0;padding:3px 0;cursor:pointer;font:inherit;color:inherit}
+.rp-open:hover{color:var(--txt-1)}
+.rp-badge{font-size:9.5px;font-weight:700;letter-spacing:.03em;padding:2px 6px;border-radius:5px;white-space:nowrap}
+.rp-badge.aar{background:color-mix(in srgb,var(--green) 18%,var(--bg-2));color:var(--green)}
+.rp-badge.brief{background:color-mix(in srgb,var(--accent) 18%,var(--bg-2));color:var(--accent-2)}
+.rp-title{font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rp-when{font-size:10px;color:var(--txt-4);white-space:nowrap}
+/* P-REPORT.2: per-row actions (copy / download / archive / restore / delete) + Active/Archived tabs. */
+.rp-acts{display:flex;align-items:center;gap:2px;flex:none}
+.rp-act{display:grid;place-items:center;width:26px;height:26px;border:1px solid transparent;border-radius:6px;background:none;color:var(--txt-4);cursor:pointer}
+.rp-act:hover{background:var(--bg-3);color:var(--txt-1);border-color:var(--line)}
+.rp-act.danger:hover{color:var(--red,#e05a5a);border-color:color-mix(in srgb,var(--red,#e05a5a) 40%,var(--line))}
+.rp-tabs{display:inline-flex;gap:2px;background:var(--bg-2);border:1px solid var(--line);border-radius:7px;padding:2px}
+.rp-tab{font-size:11px;padding:2px 9px;border-radius:5px;border:0;background:none;color:var(--txt-4);cursor:pointer;font-family:inherit}
+.rp-tab.on{background:var(--bg-4);color:var(--txt-1)}
+/* P-REPORT.3: the "push to which graph?" compartment picker (shown only when >1 is unlocked). */
+.kg-pick{display:flex;flex-direction:column;gap:3px;min-width:150px}
+.kg-pick-h{font-size:11px;color:var(--txt-4);padding:2px 6px 4px}
+.kg-pick-opt{display:flex;align-items:center;gap:7px;padding:6px 9px;border:0;border-radius:6px;background:none;color:var(--txt-2);cursor:pointer;font:inherit;font-size:12px;text-align:left}
+.kg-pick-opt:hover{background:var(--bg-3);color:var(--txt-1)}
 /* P-GOAL.12: Pre-Flight Audit - the optional design/readiness pass that pauses the builder. */
 .goal-preflight-btn{margin:0 0 8px;display:inline-flex;align-items:center;gap:6px}
 .preflight-modal{width:min(720px,94vw);max-height:90vh;overflow:auto;background:var(--bg-1);border:1px solid var(--line);border-radius:14px;padding:16px 18px;display:flex;flex-direction:column;gap:10px}
@@ -1255,6 +1413,17 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .ctool .ic{color:var(--txt-3);transition:color var(--t) var(--ease),transform var(--t) var(--ease-out)}
 .ctool:hover .ic{color:var(--accent-2);transform:scale(1.08)}
 .ctool-hint{margin-left:auto;flex:none;white-space:nowrap;display:inline-flex;align-items:center;gap:6px;font-size:11px;color:var(--txt-4)}
+/* P-VOICE.1 (ADR-0115): the mic (STT) button — icon-only, and a red pulse while recording. */
+.ctool-icon{padding:5px 8px}
+.ctool.recording{border-color:var(--red,#e05a5a);color:var(--red,#e05a5a);background:color-mix(in srgb,var(--red,#e05a5a) 16%,var(--bg-2));animation:micpulse 1.2s ease-in-out infinite}
+.ctool.recording .ic{color:var(--red,#e05a5a)}
+.ctool.busy,.msg-act.busy{opacity:.6;pointer-events:none}
+@keyframes micpulse{0%,100%{box-shadow:0 0 0 0 color-mix(in srgb,var(--red,#e05a5a) 45%,transparent)}50%{box-shadow:0 0 0 4px transparent}}
+/* P-VOICE.1: Voice settings-card rows (label + control). */
+.voice-row{display:flex;align-items:center;gap:8px;margin-top:8px}
+.voice-lbl{flex:none;width:82px;font-size:12px;color:var(--txt-3)}
+.voice-row .prov-key{flex:1}
+.voice-pick .btn-mini{flex:none}
 .ctool-hint .kh{display:inline-flex;align-items:center;gap:4px}
 .ctool-hint kbd{font-family:var(--mono);background:linear-gradient(180deg,var(--bg-3),var(--bg-2));
   border:1px solid var(--line);border-bottom-width:2px;border-bottom-color:var(--line-strong);
@@ -1456,20 +1625,51 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .rail-expand{-webkit-app-region:no-drag;border:1px solid var(--line);background:var(--bg-2);color:var(--txt-3);align-self:center;
   width:32px;height:30px;border-radius:8px;display:grid;place-items:center;cursor:pointer;transition:background var(--t),color var(--t)}
 .rail-expand:hover{background:var(--bg-3);color:var(--accent-2)}
-.rail-tiles{display:flex;flex-direction:column;gap:6px;align-self:stretch}
-.tile{background:linear-gradient(180deg,var(--bg-3),var(--bg-2));border:1px solid var(--line);border-radius:10px;min-width:48px;
-  display:flex;flex-direction:column;align-items:center;text-align:center;justify-content:center;gap:2px;padding:5px 6px;cursor:default;
-  box-shadow:var(--emboss,inset 0 1px 0 rgba(255,255,255,.03));
-  transition:border-color var(--t),transform var(--t),box-shadow var(--t)}
-.tile:hover{transform:translateY(-1.5px);box-shadow:var(--shadow-md,0 6px 16px -8px rgba(0,0,0,.6)),inset 0 1px 0 rgba(255,255,255,.05)}
-.tile .n{font-family:var(--mono);font-size:14px;font-weight:700;line-height:1.05;white-space:nowrap;font-variant-numeric:tabular-nums;letter-spacing:-.01em}
-.tile .l{font-size:7.5px;color:var(--txt-3);letter-spacing:.2px;text-transform:uppercase;white-space:nowrap}
-.tile.g{border-color:rgba(70,210,126,.32)} .tile.g .n{color:var(--green)}
-.tile.c{border-color:rgba(70,200,220,.32)} .tile.c .n{color:var(--cyan)}
-.tile.b{border-color:rgba(94,141,242,.32)} .tile.b .n{color:var(--blue)}
-.tile.b2{border-color:var(--line-strong)} .tile.b2 .n{color:#8aa6f5}
-.tile.m{border-color:rgba(198,75,214,.32)} .tile.m .n{color:var(--accent-2)}
-.tile.r{border-color:rgba(239,95,95,.32)} .tile.r .n{color:var(--red)}
+.rail-tiles{display:flex;flex-direction:column;gap:7px;align-self:stretch}
+/* P-REPORT.4 scoreboard: every tile is the SAME calm neutral at rest (no icons, no per-metric colour).
+   When a value CHANGES the tile reacts like a game — a clockwise light races around its border and a
+   shine sweeps across, with the number briefly glowing its accent — then it settles back to neutral.
+   A tile that needs triage (.attn: findings / quarantine > 0) keeps a slow clockwise pulse. */
+.tile{--tc:var(--accent-2);position:relative;overflow:hidden;isolation:isolate;
+  background:linear-gradient(162deg,var(--bg-3),var(--bg-2));
+  border:1px solid var(--line);border-radius:12px;min-width:48px;
+  display:flex;flex-direction:column;align-items:center;text-align:center;justify-content:center;gap:3px;padding:9px 6px 8px;cursor:default;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.045),inset 0 -6px 14px -10px rgba(0,0,0,.55),0 2px 6px -4px rgba(0,0,0,.5);
+  transition:border-color var(--t),transform var(--t-fast) var(--ease-out),box-shadow var(--t)}
+.tile:hover{transform:translateY(-2px);border-color:color-mix(in srgb,var(--tc) 34%,var(--line));
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.06),0 10px 22px -12px color-mix(in srgb,var(--tc) 55%,#000),0 2px 6px -4px rgba(0,0,0,.6)}
+.tile .n{font-family:var(--mono);font-size:15px;font-weight:700;line-height:1;white-space:nowrap;font-variant-numeric:tabular-nums;letter-spacing:-.02em;color:var(--txt-1);transition:color var(--t),text-shadow var(--t)}
+.tile .l{font-size:7.5px;color:var(--txt-3);letter-spacing:.4px;text-transform:uppercase;white-space:nowrap;font-weight:600}
+/* per-tile accent — only ever *expressed* during a reaction, never on the resting tile */
+.tile.g{--tc:var(--green)} .tile.c{--tc:var(--cyan)} .tile.b{--tc:var(--blue)}
+.tile.b2{--tc:#8aa6f5} .tile.m{--tc:var(--accent-2)} .tile.r{--tc:var(--red)}
+
+/* ── the "something changed" reaction: racing clockwise ring + diagonal shine + number flash ── */
+.tile.changed .n{animation:tileNumBloom 1.5s var(--ease-out)}
+@keyframes tileNumBloom{0%{color:var(--txt-1)}14%{color:var(--tc);text-shadow:0 0 14px color-mix(in srgb,var(--tc) 70%,transparent)}100%{color:var(--txt-1);text-shadow:none}}
+/* shine sweep (::before) */
+.tile.changed::before{content:"";position:absolute;inset:0;z-index:2;pointer-events:none;border-radius:inherit;
+  background:linear-gradient(115deg,transparent 32%,color-mix(in srgb,var(--tc) 30%,#fff) 50%,transparent 68%);
+  transform:translateX(-130%);animation:tileShine 1.5s var(--ease-out)}
+@keyframes tileShine{0%{transform:translateX(-130%)}55%,100%{transform:translateX(130%)}}
+/* racing clockwise ring (::after) — 2 fast laps, fades out. Not applied while .attn owns ::after. */
+.tile.changed:not(.attn)::after{content:"";position:absolute;inset:0;border-radius:inherit;padding:1.5px;z-index:3;pointer-events:none;
+  background:conic-gradient(from var(--sweep,0deg),transparent 0 52%,color-mix(in srgb,var(--tc) 55%,transparent) 70%,var(--tc) 84%,#fff 89%,transparent 95%);
+  -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask-composite:exclude;
+  animation:tileRace 1.5s var(--ease-out)}
+@keyframes tileRace{0%{--sweep:0deg;opacity:0}12%{opacity:1}100%{--sweep:720deg;opacity:0}}
+
+/* needs attention (findings / quarantine > 0) → persistent accent + slow clockwise pulse */
+.tile.attn{border-color:color-mix(in srgb,var(--tc) 42%,var(--line));
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.05),0 0 20px -7px color-mix(in srgb,var(--tc) 65%,transparent)}
+.tile.attn .n{color:var(--tc);text-shadow:0 0 12px color-mix(in srgb,var(--tc) 45%,transparent)}
+.tile.attn::after{content:"";position:absolute;inset:0;border-radius:inherit;padding:1.4px;z-index:3;pointer-events:none;
+  background:conic-gradient(from var(--sweep,0deg),transparent 0 58%,color-mix(in srgb,var(--tc) 70%,transparent) 76%,var(--tc) 86%,transparent 96%);
+  -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask-composite:exclude;
+  animation:tileSweep 2.6s linear infinite}
+@property --sweep{syntax:"<angle>";inherits:false;initial-value:0deg}
+@keyframes tileSweep{to{--sweep:360deg}}
+@media (prefers-reduced-motion:reduce){.tile.changed .n,.tile.changed::before,.tile.changed:not(.attn)::after,.tile.attn::after{animation:none}.tile.changed::before{display:none}}
 
 .side-actions{display:flex;gap:4px}
 
@@ -1486,9 +1686,84 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .kg{position:relative;width:var(--kg-w,min(900px,70vw));background:var(--bg-1);border-left:1px solid var(--line-soft);display:flex;flex-direction:column;overflow:hidden;animation:slideInR var(--t-slow) var(--ease-out)}
 /* P-PREVIEW.1 (ADR-0096): in-app browser preview fly-out — reuses the .kg shell but its own width var. */
 #preview{width:var(--preview-w,min(820px,68vw))}
+/* P-KG-CODE.1: trim the Knowledge-graph header's vertical padding too (ID beats the shared .set-head rule). */
+#knowledge .set-head{padding-top:6px;padding-bottom:6px}
+/* Relate + Code-graph + Update stack vertically (2px gap) in the toolbar; buttons stay compact. */
+.kg-relate-stack{display:flex;flex-direction:column;gap:2px;flex:none}
+.kg-relate-stack .btn-mini{padding:4px 9px;font-size:11px;justify-content:flex-start}
+/* icon-only button (the code-graph re-sync sits between Code graph and the AI checkbox) */
+.btn-mini.btn-icon{padding:0;width:30px;justify-content:center;flex:none}
+.btn-mini.btn-icon .ic{width:14px;height:14px}
+#kgCode.on{border-color:var(--accent-2);color:var(--accent-2);background:color-mix(in srgb,var(--accent-2) 12%,transparent)}
+/* code-node side panel */
+.cg-side{padding:12px 14px;font-size:12px;color:var(--txt-2);overflow:auto;height:100%}
+.cg-side-h{display:flex;align-items:center;gap:7px;font-size:13px;color:var(--txt-1);margin-bottom:3px}
+.cg-side-h b{color:var(--txt)}
+/* P-KG-CODE.1d: file paths are clickable buttons that open the file in the IDE */
+.cg-open{display:block;width:100%;text-align:left;background:none;border:0;padding:0;margin:0;font-family:var(--mono);font-size:11px;color:var(--txt-2);word-break:break-all;line-height:1.4;cursor:pointer;transition:color var(--t)}
+.cg-open:hover{color:var(--accent-2);text-decoration:underline;text-underline-offset:2px}
+.cg-side-path.cg-open{font-size:10.5px;color:var(--txt-3);margin-bottom:12px}
+.cg-side-path.cg-open:hover{color:var(--accent-2)}
+.cg-side-sec{margin-bottom:12px}
+.cg-side-lbl{display:block;font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--txt-3);font-weight:700;margin-bottom:5px}
+.cg-side-list{margin:0;padding-left:26px;display:flex;flex-direction:column;gap:3px;list-style:decimal}
+.cg-side-list li{font-family:var(--mono);font-size:11px;color:var(--txt-2);word-break:break-all}
+.cg-side-list li::marker{color:var(--accent-2);font-weight:700;font-family:var(--sans,inherit)}
+.cg-side-none{font-size:11px;color:var(--txt-4);font-style:italic}
+/* P-KG-SYM.1: symbol-node bits + the file hint after a symbol name */
+.cg-side-kind{font-size:9.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--accent-2);border:1px solid color-mix(in srgb,var(--accent-2) 30%,var(--line));border-radius:5px;padding:1px 5px;font-family:var(--sans,inherit)}
+.cg-open-file{color:var(--txt-4);font-size:9.5px}
+/* the "build a code graph" level picker */
+.cg-picker{width:min(660px,95vw)}
+.cg-levels{display:flex;flex-direction:column;gap:14px;margin:14px 0 8px}
+/* each level is a clearly separated card: darker fill than the modal, strong border + shadow, left-aligned */
+.cg-level{display:block;text-align:left;background:var(--bg-1);border:1px solid var(--line-strong);border-radius:12px;padding:15px 17px;cursor:pointer;color:var(--txt-1);
+  box-shadow:0 3px 10px -6px rgba(0,0,0,.55);transition:border-color var(--t),background var(--t),box-shadow var(--t),transform var(--t-fast)}
+.cg-level:hover{border-color:var(--accent-2);background:color-mix(in srgb,var(--accent-2) 10%,var(--bg-1));box-shadow:0 8px 22px -8px color-mix(in srgb,var(--accent-2) 55%,#000)}
+.cg-level:active{transform:scale(.99)}
+.cg-level-h{display:flex;align-items:center;gap:10px;font-size:15.5px;font-weight:680;color:var(--txt);margin-bottom:7px;text-align:left}
+.cg-level-h .ic{color:var(--accent-2);flex:none}
+.cg-level-fast,.cg-level-slow{font-size:10px;text-transform:uppercase;letter-spacing:.06em;font-weight:700;padding:2px 9px;border-radius:20px;margin-left:auto;flex:none}
+.cg-level-fast{color:var(--green);background:color-mix(in srgb,var(--green) 18%,transparent)}
+.cg-level-slow{color:var(--amber,#d9a441);background:color-mix(in srgb,var(--amber,#d9a441) 18%,transparent)}
+.cg-level-d{font-size:13px;line-height:1.6;color:var(--txt-1);text-align:left}
+.cg-level-d b{color:var(--txt);font-weight:660}
+.cg-agent-opt{display:flex;align-items:flex-start;gap:9px;margin-top:6px;padding:12px 14px;border-radius:10px;background:color-mix(in srgb,var(--accent-2) 9%,var(--bg-1));border:1px solid color-mix(in srgb,var(--accent-2) 26%,var(--line));font-size:13px;line-height:1.5;color:var(--txt-1);cursor:pointer}
+.cg-agent-opt input{margin-top:2px;flex:none}
+.cg-agent-sub{color:var(--txt-4);font-size:11.5px}
+/* P-PREVIEW.5b: the preview header is a compact toolbar - trim vertical padding (Settings keeps 13px) and
+   keep it to ONE row (the input shrinks, buttons stay tight) so it doesn't wrap and steal height. */
+.preview-panel .set-head{padding:5px 12px;gap:8px;flex-wrap:nowrap}
+.preview-panel .set-title{min-width:0;flex:0 1 auto;font-size:13px;overflow:hidden}
+.preview-panel .set-title .set-sub{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.preview-panel .kg-tools{gap:6px;flex:1 1 auto;justify-content:flex-end;min-width:0;flex-wrap:nowrap}
+.preview-panel .kg-tools .kg-search{flex:1 1 64px;min-width:50px}
+.preview-panel .kg-tools .btn-mini{flex:none;padding:4px 8px;font-size:11px}
+.preview-panel .kg-tools .btn-mini .ic{width:13px;height:13px}
 .preview-body{flex:1;min-height:0;position:relative;display:flex;background:var(--bg-0)}
 .preview-frame{flex:1;min-width:0;border:0;background:#fff}
 .preview-frame[hidden]{display:none}
+/* P-PREVIEW.5: markup canvas over the frame (pointer-events toggled per tool) + the text-tool input */
+.preview-canvas{position:absolute;inset:0;z-index:2;pointer-events:none}
+.prev-textin{position:absolute;z-index:3;min-width:120px;background:rgba(10,12,18,.82);border:1px solid var(--accent-2);border-radius:6px;
+  padding:3px 7px;font:600 16px/1.2 ui-sans-serif,system-ui,"Segoe UI",sans-serif;outline:none;box-shadow:0 4px 16px -6px rgba(0,0,0,.7)}
+.prev-textin::placeholder{color:rgba(255,255,255,.4);font-weight:400}
+#prevMarkup.on{border-color:var(--accent-2);color:var(--accent-2);background:color-mix(in srgb,var(--accent-2) 12%,transparent)}
+/* the markup tools dropdown */
+@keyframes popfade{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}
+.markup-pop{position:fixed;z-index:1000;min-width:190px;background:var(--bg-1);border:1px solid var(--line-strong);border-radius:11px;
+  padding:8px;box-shadow:0 16px 40px -14px rgba(0,0,0,.7),inset 0 1px 0 rgba(255,255,255,.05);animation:popfade var(--t) var(--ease-out)}
+.mk-tools{display:flex;flex-direction:column;gap:2px}
+.mk-tool{display:flex;align-items:center;gap:9px;width:100%;padding:7px 9px;border:1px solid transparent;border-radius:8px;background:none;color:var(--txt-2);cursor:pointer;font:inherit;font-size:12.5px;text-align:left;transition:background var(--t),color var(--t)}
+.mk-tool:hover{background:var(--bg-3);color:var(--txt-1)}
+.mk-tool.on{background:color-mix(in srgb,var(--accent-2) 16%,var(--bg-2));border-color:color-mix(in srgb,var(--accent-2) 40%,var(--line));color:var(--accent-2)}
+.mk-tool .ic{flex:none}
+.mk-colors{display:flex;gap:6px;padding:9px 4px 6px;margin-top:5px;border-top:1px solid var(--line)}
+.mk-swatch{width:22px;height:22px;border-radius:50%;border:2px solid transparent;cursor:pointer;box-shadow:inset 0 0 0 1px rgba(0,0,0,.35)}
+.mk-swatch.on{border-color:var(--txt-1);transform:scale(1.08)}
+.mk-foot{display:flex;align-items:center;gap:6px;margin-top:5px;padding-top:6px;border-top:1px solid var(--line)}
+.mk-foot .mk-tool{flex:1}
+.mk-foot .btn-mini{flex:none}
 /* The flex container only CENTERS; the message lives in one inline child so its text + <b> never split into
    separate flex items (that put "Open" alone in the middle). Brighter than --txt-4 + capped width for reading. */
 .preview-empty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;padding:0 36px}
@@ -1503,13 +1778,26 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .kg-lens button.on{background:var(--bg-4);color:var(--txt);box-shadow:inset 0 0 0 1px var(--line-strong),0 1px 2px rgba(0,0,0,.35)}
 .kg-ai{-webkit-app-region:no-drag;display:flex;align-items:center;gap:5px;font-size:11px;font-weight:600;color:var(--txt-3);cursor:pointer;user-select:none}
 .kg-ai input{accent-color:var(--accent);cursor:pointer;margin:0}
-.kg-main{flex:1;min-height:0;display:flex}
+.kg-main{flex:1;min-height:0;display:flex;position:relative}
 .kg-canvas{flex:1;min-width:0;position:relative;background:radial-gradient(120% 90% at 50% 34%,#12141d 0%,var(--bg-1) 42%,var(--bg-0) 100%);overflow:hidden;cursor:grab}
 /* faint vignette so nodes feel lit from within the canvas rather than floating on flat fill */
 .kg-canvas::after{content:"";position:absolute;inset:0;pointer-events:none;background:radial-gradient(130% 100% at 50% 42%,transparent 58%,rgba(0,0,0,.32) 100%)}
 .kg-canvas:active{cursor:grabbing}
-.kg-side{width:250px;flex:none;border-left:1px solid var(--line-soft);overflow:auto;padding:14px 14px 24px}
+/* P-KG-CODE.1b: the side flyout is horizontally resizable (--kgside-w, dragged via .kg-side-resizer). */
+.kg-side{width:var(--kgside-w,250px);flex:none;border-left:1px solid var(--line-soft);overflow:auto;padding:14px 14px 24px}
 .kg-side[hidden]{display:none} /* only shown when a node is selected - the graph re-fits to full width */
+/* resize handle sitting on the left edge of the flyout (right edge of the canvas) */
+.kg-side-resizer{right:var(--kgside-w,250px);left:auto}
+.kg-side-resizer[hidden]{display:none}
+/* floating re-center button, bottom-right of the canvas; slides left of the flyout when it's open */
+.kg-center-btn{position:absolute;bottom:16px;right:16px;z-index:6;width:34px;height:34px;border-radius:50%;
+  display:grid;place-items:center;background:var(--bg-2);border:1px solid var(--line-strong);color:var(--txt-2);cursor:pointer;
+  box-shadow:0 6px 18px -8px rgba(0,0,0,.6),inset 0 1px 0 rgba(255,255,255,.05);
+  transition:right var(--t) var(--ease),background var(--t),color var(--t),border-color var(--t),transform var(--t-fast)}
+.kg-center-btn[hidden]{display:none}
+.kg-center-btn:hover{background:var(--bg-3);color:var(--accent-2);border-color:var(--accent-2)}
+.kg-center-btn:active{transform:scale(.92)}
+.kg-main.side-open .kg-center-btn{right:calc(var(--kgside-w,250px) + 16px)}
 .kg-empty{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;color:var(--txt-4);font-size:13px;text-align:center;padding:0 36px}
 .kg-empty .ic{opacity:.55}
 /* inline Knowledge-graph unlock (passphrase under the locked message) */
@@ -1860,6 +2148,8 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .prov-row{display:flex;align-items:center;gap:8px}
 .prov-hint{margin-top:2px;font-size:11px;color:var(--txt-3);line-height:1.45;display:flex;gap:5px;align-items:flex-start}
 .prov-hint svg{flex:none;margin-top:1px;opacity:.7}
+.prov-hint>span{flex:1;min-width:0;overflow-wrap:anywhere}
+.prov-hint a{color:var(--accent-2);text-decoration:underline}
 /* P-NETWL.2 (ADR-0106): whitelist add-form controls as a balanced 2x2 GRID. `minmax(0,1fr)` lets each cell
    shrink with the panel (no overflow/clipping ever), and equal tracks keep the pair-of-selects layout even at
    any width - then a single column on a very narrow panel. Selects need min-width:0 so a cell can shrink. */
@@ -2106,10 +2396,23 @@ pre:hover .code-ide-btn,pre:focus-within .code-ide-btn{opacity:1}
 .goal-eu > summary::-webkit-details-marker { display: none; }
 .goal-eu > summary:hover { color: var(--accent); }
 .goal-eu-body { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }
-.goal-eu-result { margin-top: 8px; max-height: 300px; overflow: auto; font-size: 12px; line-height: 1.55; border: 1px solid var(--line-soft); border-radius: 8px; padding: 10px 12px; background: var(--bg-2); color: var(--txt-2); }
-.goal-eu-result h1, .goal-eu-result h2 { font-size: 13px; margin: 10px 0 4px; color: var(--txt); }
-.goal-eu-counts { font-size: 11px; color: var(--txt-3); margin-bottom: 8px; }
+/* P-REPORT.6: larger, higher-contrast brief preview for readability. */
+.goal-eu-result { margin-top: 8px; max-height: 340px; overflow: auto; font-size: 13.5px; line-height: 1.62; border: 1px solid var(--line-soft); border-radius: 8px; padding: 12px 14px; background: var(--bg-2); color: var(--txt-1); }
+.goal-eu-result h1 { font-size: 16px; margin: 8px 0 6px; color: var(--txt); font-weight: 680; }
+.goal-eu-result h2 { font-size: 12.5px; text-transform: uppercase; letter-spacing: .04em; margin: 15px 0 6px; color: var(--txt-2); font-weight: 700; }
+.goal-eu-result p, .goal-eu-result li { color: var(--txt-1); }
+.goal-eu-result strong, .goal-eu-result b { color: var(--txt); }
+.goal-eu-result em { color: var(--txt-2); }
+.goal-eu-result table { font-size: 12.5px; }
+.goal-eu-counts { font-size: 12px; color: var(--txt-2); margin-bottom: 8px; }
 .goal-eu-counts b { color: var(--accent); }
+/* P-VOICE.1: per-generation cost note (~10¢) so a paid cloud TTS run is never a surprise. */
+.goal-eu-cost { display: flex; align-items: flex-start; gap: 6px; font-size: 11.5px; line-height: 1.45; color: var(--amber, #d9a441); background: color-mix(in srgb, var(--amber, #d9a441) 12%, var(--bg-2)); border: 1px solid color-mix(in srgb, var(--amber, #d9a441) 30%, var(--line)); border-radius: 7px; padding: 7px 10px; }
+/* the message is ONE flex item (a span) so it wraps as normal prose instead of fragmenting the <b> and
+   text nodes into separate flex columns; the icon is the only other item. */
+.goal-eu-cost > .ic { flex: none; margin-top: 1px; }
+.goal-eu-cost > span { flex: 1; min-width: 0; }
+.goal-eu-cost b { color: var(--txt); }
 
 /* P-KG-INGEST.1 (ADR-0076): background-import status pill - persistent, non-blocking, with a live
    countdown + Cancel. Sits bottom-right so the rest of the app stays usable during a long ingest. */

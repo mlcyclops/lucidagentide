@@ -74,3 +74,7 @@ tools/seed_personal_facts.ts
 # P-EXT.4: compiled lucid launcher (built during desktop dist)
 /bin/
 netwatch.log
+
+# P-KG-CODE.1: generated per-workspace code-graph cache (the tracked .omp/commands stays)
+.omp/codegraph.json
+.omp/codegraph-symbol.json

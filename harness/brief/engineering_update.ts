@@ -18,6 +18,8 @@
 // Minimal structural view of the goal-loop After-Action Report (desktop/loop_report.ts `LoopMetrics`),
 // declared locally so this harness module never imports the desktop layer (clean layering). The desktop
 // caller passes its real LoopMetrics, which structurally satisfies this.
+import { renderComplianceSection } from "./compliance.ts"; // P-REPORT.6: Security-brief control crosswalk
+
 export interface AarLike {
   outcome?: string;
   outcomeReason?: string;
@@ -146,28 +148,96 @@ export function buildEngineeringUpdate(args: {
 
 // ── written brief ───────────────────────────────────────────────────────────
 
-function section(title: string, items: UpdateItem[], emptyNote: string): string[] {
+// P-REPORT.1 (ADR-0116): per-role tailoring. The extraction (buildEngineeringUpdate) stays audience-neutral;
+// tailoring is a pure RENDER concern that ACTUALLY CHANGES CONTENT per audience - which sections appear, an
+// item filter, a cap, and whether the ADR/increment codes + source tags show. Only the DEVELOPER view keeps
+// the ADR/source detail; Security/Manager/Executive get a role-filtered, plain-language report with no ADRs.
+export type BriefRole = "developer" | "security" | "manager" | "executive";
+type SectionKey = "recentlyShipped" | "loadBearingDependencies" | "techDebt" | "upcomingDecisions" | "risks";
+const SECTION_META: Record<SectionKey, { title: string; empty: string }> = {
+  recentlyShipped: { title: "Recently shipped", empty: "Nothing recorded." },
+  loadBearingDependencies: { title: "Load-bearing dependencies", empty: "No cross-increment dependencies recorded." },
+  techDebt: { title: "Tech debt", empty: "No deferred/stubbed work recorded. 🎉" },
+  upcomingDecisions: { title: "Upcoming decisions", empty: "No open decisions recorded." },
+  risks: { title: "Risks", empty: "No risks recorded." },
+};
+
+/** Remove ADR IDs, increment codes (P-EXEC.2), issue/PR refs (#123), and version tags anywhere in a string,
+ *  then tidy the leftover punctuation - so a non-developer audience never sees a code. Pure. */
+function scrubCodes(s: string): string {
+  return (s || "")
+    .replace(/\bADR-\d+\b/gi, "")
+    .replace(/\bP-[A-Z]+(?:\.[A-Za-z0-9]+)*\b/g, "")
+    .replace(/\b[A-Z]{2,}-\d+\b/g, "")        // TASK-017, PR-style codes
+    .replace(/#\d+\b/g, "")
+    .replace(/\bv?\d+\.\d+\.\d+\b/g, "")        // version tags like 1.8.26
+    .replace(/\(\s*[,·;/-]*\s*\)/g, "")          // empty parens left behind
+    .replace(/^[\s,·;:/-]+/, "")                 // leading orphaned punctuation
+    .replace(/\s+([,.;:·])/g, "$1")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+/** Strip a leading increment/ADR code + separator from a title, then scrub any remaining codes, then
+ *  sentence-case, so non-developer audiences read plain English: "P-EXEC.2 - answer omp's…" → "Answer omp's…". */
+function stripCode(title: string): string {
+  const lead = (title || "").replace(/^\s*(?:ADR-\d+|[A-Z][A-Z0-9]*-[A-Z0-9.]+|P-[A-Z]+(?:\.[A-Za-z0-9]+)*)\s*[-–·:]\s*/i, "");
+  const t = scrubCodes(lead);
+  return t ? t.charAt(0).toUpperCase() + t.slice(1) : (scrubCodes(title) || title);
+}
+/** Does an item touch security (for the Security view's filter)? Matches title + detail + source. */
+function isSecurityItem(it: UpdateItem): boolean {
+  return /secur|\bgate\b|egress|\bauth\b|vulnerab|codeql|quarantin|\bscan|credential|\bvault\b|\bcui\b|\bfips\b|sovereign|permission|sandbox|inject|isolat|encrypt|blast.?radius|whitelist|\bnetwork\b|privacy|approval|attribut|audit|trust|exfiltrat|malicious|threat/i.test(`${it.title} ${it.detail ?? ""} ${it.source}`);
+}
+
+interface RoleView { order: SectionKey[]; filter?: (it: UpdateItem) => boolean; cap: number; showSources: boolean; stripCodes: boolean; dropDetail?: boolean; label: string; intro: string }
+// cap 0 = no cap. showSources/stripCodes false → hide "(ADR-XXXX)" tags + scrub codes. dropDetail = title-only.
+const DEFAULT_VIEW: RoleView = { order: ["recentlyShipped", "loadBearingDependencies", "techDebt", "upcomingDecisions", "risks"], cap: 0, showSources: true, stripCodes: false, label: "", intro: "" };
+const ROLE_VIEW: Record<BriefRole, RoleView> = {
+  // Developer: EVERYTHING, with the ADR/increment codes + source tags - the full technical picture.
+  developer: { order: ["techDebt", "loadBearingDependencies", "recentlyShipped", "upcomingDecisions", "risks"], cap: 0, showSources: true, stripCodes: false,
+    label: "Developer", intro: "Engineering view - the full picture with ADR references: load-bearing work, the debt we're carrying, what shipped, and open technical decisions." },
+  // Security: ONLY security-relevant items, no ADR IDs - risks + the decisions/dependencies that shape posture.
+  security: { order: ["risks", "upcomingDecisions", "loadBearingDependencies", "recentlyShipped"], filter: isSecurityItem, cap: 0, showSources: false, stripCodes: true,
+    label: "Security", intro: "Security view - only the security-relevant work: risks, the decisions that gate our posture, and the dependencies that widen the blast radius. No ADR IDs." },
+  // Manager: delivery view - what shipped, decisions waiting on you, risks. No tech-debt/dependencies, no ADRs.
+  manager: { order: ["recentlyShipped", "upcomingDecisions", "risks"], cap: 10, showSources: false, stripCodes: true,
+    label: "Manager", intro: "Delivery view - what shipped, the decisions waiting on you, and the risks to the plan. Plain language, no ADR references." },
+  // Executive: the headlines only - top outcomes, risks, and the calls that need leadership. Title-only, no ADRs.
+  executive: { order: ["recentlyShipped", "risks", "upcomingDecisions"], cap: 4, showSources: false, stripCodes: true, dropDetail: true,
+    label: "Executive", intro: "Executive view - the headline outcomes, the risks, and the decisions that need leadership. No technical detail or ADR references." },
+};
+
+function section(title: string, items: UpdateItem[], emptyNote: string, v: RoleView): string[] {
   const out = [`## ${title}`, ""];
   if (!items.length) { out.push(`_${emptyNote}_`, ""); return out; }
-  for (const it of items) out.push(`- **${it.title}** ${it.detail ? `- ${it.detail}` : ""} _(${it.source})_`.replace(/\s+-\s+$/, ""));
+  for (const it of items) {
+    const t = v.stripCodes ? stripCode(it.title) : it.title;
+    const detail = v.dropDetail ? "" : (v.stripCodes ? scrubCodes(it.detail ?? "") : (it.detail ?? ""));
+    const src = v.showSources ? ` _(${it.source})_` : "";
+    out.push(`- **${t}**${detail ? ` - ${detail}` : ""}${src}`);
+  }
   out.push("");
   return out;
 }
 
-/** Render the written Executive Engineering Update (deterministic markdown). */
-export function renderEngineeringBrief(u: EngineeringUpdate): string {
+/** Render the written Engineering Update (deterministic markdown), tailored to `role` - which sections show,
+ *  a security/delivery filter, a cap, and whether ADR/source detail appears. Unset = the full default view. */
+export function renderEngineeringBrief(u: EngineeringUpdate, role?: BriefRole): string {
+  const v = role ? ROLE_VIEW[role] : DEFAULT_VIEW;
+  const sel = (key: SectionKey): UpdateItem[] => {
+    let items = u[key];
+    if (v.filter) items = items.filter(v.filter);
+    return v.cap > 0 ? items.slice(0, v.cap) : items;
+  };
   const out: string[] = [];
-  out.push(`# Executive Engineering Update - ${u.label}`, "");
-  out.push(
-    `> ${u.recentlyShipped.length} shipped · ${u.loadBearingDependencies.length} load-bearing dependencies · ` +
-    `${u.techDebt.length} tech-debt items · ${u.upcomingDecisions.length} upcoming decisions · ${u.risks.length} risks`,
-    "",
-  );
-  out.push(...section("Recently shipped", u.recentlyShipped, "Nothing recorded."));
-  out.push(...section("Load-bearing dependencies", u.loadBearingDependencies, "No cross-increment dependencies recorded."));
-  out.push(...section("Tech debt", u.techDebt, "No deferred/stubbed work recorded. 🎉"));
-  out.push(...section("Upcoming decisions", u.upcomingDecisions, "No open decisions recorded."));
-  out.push(...section("Risks", u.risks, "No risks recorded."));
+  out.push(`# ${v.label ? `${v.label} ` : ""}Engineering Update - ${u.label}`, "");
+  if (role) out.push(`_${v.intro}_`, "");
+  // Scoreboard: only the categories THIS view actually shows (so an exec line never mentions tech-debt).
+  const counts = v.order.map((k) => `${sel(k).length} ${SECTION_META[k].title.toLowerCase()}`).join(" · ");
+  out.push(`> ${counts}`, "");
+  for (const key of v.order) out.push(...section(SECTION_META[key].title, sel(key), SECTION_META[key].empty, v));
+  // P-REPORT.6: the Security brief ends with a NIST 800-171/800-53 + STIG-CCI crosswalk of what changed.
+  if (role === "security") out.push(renderComplianceSection(u));
   return out.join("\n");
 }
 
@@ -206,39 +276,76 @@ export class ScriptOnlyBackend implements PodcastBackend {
 const ANCHOR = "Host";
 const ANALYST = "Engineer";
 
+// P-REPORT.7: make text SPEAKABLE. Read aloud, technical tokens sound wrong - "ADR-0066" becomes
+// "ay-dee-arr dash zero zero six six", a middot is silence, `code` keeps its backticks, "P-EXEC.2"
+// is noise. This strips markdown + codes, turns symbols into words/pauses, and expands the acronyms
+// that mangle worst - so both the podcast script AND the read-aloud flow like speech. Pure.
+export function speakable(s: string): string {
+  let t = (s || "")
+    .replace(/```[\s\S]*?```/g, " ")                       // fenced code blocks - never read a code block aloud
+    .replace(/`([^`]*)`/g, "$1")                            // inline code: drop the backticks, keep the word
+    .replace(/\*\*?([^*]+)\*\*?/g, "$1").replace(/[_~]/g, " ") // bold/italic/underscore markers
+    .replace(/^#{1,6}\s+/gm, "")                            // heading hashes
+    .replace(/\bPOA&M\b/gi, "plan of action and milestones")
+    .replace(/\bAAR\b/g, "after-action report")
+    .replace(/\bTTS\b/g, "text to speech").replace(/\bSTT\b/g, "speech to text")
+    .replace(/\bKG\b/g, "knowledge graph").replace(/\bCUI\b/g, "controlled unclassified information")
+    .replace(/\bADR-\d+\b/gi, "").replace(/\bP-[A-Z]+(?:\.[A-Za-z0-9]+)*\b/g, "") // increment / decision codes
+    .replace(/\b[A-Z]{2,}-\d+\b/g, "")                      // CCI-002450, TASK-017, …
+    .replace(/#\d+\b/g, "").replace(/\bv?\d+\.\d+(?:\.\d+)*\b/g, "") // issue refs + version / control numbers
+    .replace(/\s*[·|•]\s*/g, ", ").replace(/\s*[→➜]\s*/g, " to ") // middot/pipe → pause, arrow → "to"
+    .replace(/\s*\/\s*/g, " ").replace(/&/g, " and ").replace(/\+/g, " plus ").replace(/%/g, " percent")
+    .replace(/\(\s*[,;/·-]*\s*\)/g, "")                     // empty parens left after scrubbing
+    .replace(/\s+([,.;:!?])/g, "$1").replace(/([,.;:])(?=\S)/g, "$1 ") // tidy punctuation spacing
+    .replace(/\s{2,}/g, " ").trim();
+  // guarantee it ends like a sentence so TTS lands the intonation
+  if (t && !/[.!?]$/.test(t)) t += ".";
+  return t;
+}
+
 /** Build a NotebookLM-style two-host dialogue from the update - the TTS-ready input a PodcastBackend
  *  consumes. Deterministic; reads like a briefing, leads with what shipped, lands on the decisions. */
-export function buildPodcastScript(u: EngineeringUpdate): PodcastScript {
+export function buildPodcastScript(u: EngineeringUpdate, role?: BriefRole): PodcastScript {
+  const v = role ? ROLE_VIEW[role] : null;
   const turns: PodcastTurn[] = [];
-  const say = (speaker: string, text: string) => turns.push({ speaker, text });
-  const list = (items: UpdateItem[], max = 4) => items.slice(0, max).map((i) => i.title).join("; ");
+  // P-REPORT.7: every spoken line is run through speakable() so the audio never reads a code/symbol/markdown.
+  const say = (speaker: string, text: string) => turns.push({ speaker, text: speakable(text) });
+  // Spoken list: role-filtered + capped + plain (codes stripped) so the AUDIO matches the written brief.
+  const pick = (key: SectionKey): UpdateItem[] => {
+    let items = u[key];
+    if (v?.filter) items = items.filter(v.filter);
+    return v && v.cap > 0 ? items.slice(0, v.cap) : items;
+  };
+  const shows = (key: SectionKey) => !v || v.order.includes(key);
+  const list = (items: UpdateItem[], max = 4) => items.slice(0, max).map((i) => (v && v.stripCodes ? stripCode(i.title) : i.title)).join("; ");
+  const shipped = pick("recentlyShipped"), deps = pick("loadBearingDependencies"), debt = pick("techDebt"), decisions = pick("upcomingDecisions"), risks = pick("risks");
+  const roleName = v ? v.label : "Executive";
 
-  say(ANCHOR, `Welcome to the Executive Engineering Update for ${u.label}. I'm here with our engineering lead to walk through where things stand.`);
-  if (u.recentlyShipped.length) {
-    say(ANALYST, `The headline is what shipped: ${list(u.recentlyShipped)}.`);
-    say(ANCHOR, `Good momentum. What's holding the weight underneath all that?`);
-  } else {
-    say(ANALYST, `Quiet cycle on shipping, so let's focus on what's load-bearing and what's coming.`);
+  say(ANCHOR, `Welcome to the ${roleName} Engineering Update for ${u.label}. I'm here with our engineering lead to walk through where things stand${role ? `, from a ${roleName.toLowerCase()} angle` : ""}.`);
+  if (v) say(ANALYST, v.intro);
+  if (shows("recentlyShipped") && shipped.length) {
+    say(ANALYST, `The headline is what shipped: ${list(shipped)}.`);
+    say(ANCHOR, shows("loadBearingDependencies") ? `Good momentum. What's holding the weight underneath all that?` : `Good momentum.`);
+  } else if (shows("recentlyShipped")) {
+    say(ANALYST, `Quiet cycle on shipping, so let's focus on what's coming.`);
   }
-  if (u.loadBearingDependencies.length) {
-    say(ANALYST, `On load-bearing dependencies: ${list(u.loadBearingDependencies)}. If any of those move, the work stacked on them moves with it.`);
-  } else {
-    say(ANALYST, `No tightly-coupled cross-dependencies recorded this cycle, which keeps our options open.`);
+  if (shows("loadBearingDependencies") && deps.length) {
+    say(ANALYST, `On load-bearing dependencies: ${list(deps)}. If any of those move, the work stacked on them moves with it.`);
   }
-  if (u.techDebt.length) {
+  if (shows("techDebt") && debt.length) {
     say(ANCHOR, `Let's be honest about the debt.`);
-    say(ANALYST, `Tech debt we're carrying forward: ${list(u.techDebt)}. None of it is on fire, but it's the interest we'll pay later.`);
+    say(ANALYST, `Tech debt we're carrying forward: ${list(debt)}. None of it is on fire, but it's the interest we'll pay later.`);
   }
-  if (u.upcomingDecisions.length) {
+  if (shows("upcomingDecisions") && decisions.length) {
     say(ANCHOR, `So what needs a decision?`);
-    say(ANALYST, `The open calls are: ${list(u.upcomingDecisions, 5)}. Those are the forks where leadership input changes the next increment.`);
+    say(ANALYST, `The open calls are: ${list(decisions, 5)}. Those are the forks where leadership input changes the next increment.`);
   }
-  if (u.risks.length) {
+  if (shows("risks") && risks.length) {
     say(ANCHOR, `Anything that should worry us?`);
-    say(ANALYST, `Risks from the latest automated run: ${list(u.risks)}.`);
+    say(ANALYST, `${role === "security" ? "Security risks" : "Risks"} to flag: ${list(risks)}.`);
   }
-  say(ANCHOR, `That's the update - shipped work is landing, the dependencies are mapped, and the decisions are queued. We'll check back next cycle.`);
-  return { title: `Executive Engineering Update - ${u.label}`, turns };
+  say(ANCHOR, `That's the ${roleName.toLowerCase()} update. We'll check back next cycle.`);
+  return { title: `${roleName} Engineering Update - ${u.label}`, turns };
 }
 
 /** Render a script as plain readable text (for the written report's appendix or a script-only export). */

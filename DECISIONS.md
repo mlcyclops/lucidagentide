@@ -8268,3 +8268,775 @@ ADR-0066 (P-EXEC.1, the exec classifier + `session/request_permission` gate this
 (the gate-decision ring that pinpointed the bug), ADR-0062/0094 (egress gate on the same permission path).
 Carries forward the CLAUDE.md wrinkle that omp seams must be confirmed against the installed version: 16.1.20
 moved per-tool approval to a FORM elicitation that a client must now explicitly support.
+
+## ADR-0111 - Chat history survives app upgrades: a STABLE default workspace (never the install dir)
+
+**Date:** 2026-07-02
+**Status:** Accepted - BUILT + tested.
+**Increment:** P-WS.1.
+
+### Context
+
+Users lost their chat history on every version update. Root cause: chat sessions live in `~/.omp/agent/
+sessions/` (user home - survives upgrades), but `listSessions` shows only sessions whose recorded `cwd`
+equals `currentWorkspace()`. The default workspace was `REPO = join(import.meta.dir, "..")` - the app's
+**install directory**, which `import.meta.dir` reports differently for every packaged version. On upgrade the
+default cwd changed, so all prior sessions (recorded under the old install path) were filtered out - present
+on disk, invisible in the UI.
+
+### Decision
+
+`currentWorkspace()` falls back to a new `defaultWorkspace()` that is **version-independent**:
+- **Dev-from-source:** the checkout is a real git repo (`REPO/.git` exists) and a good default → keep REPO.
+- **Packaged app:** no `.git` in `resources/repo` → use a fixed `~/.omp/lucid-workspaces/default` (created on
+  demand). Never the versioned install dir. An explicitly-set workspace is always honored as before.
+
+This stops the bleeding going forward (the default cwd is now stable across releases). Sessions created under
+a *prior* version's install-dir default remain on disk but orphaned; they can be re-attached by opening that
+old path as a workspace if it still exists (a future migration could re-home them by rewriting recorded cwd).
+
+### Verification
+
+Dev-from-source keeps REPO (has `.git`) - no behavior change for contributors; the packaged branch resolves to
+the stable path. Typecheck clean; sessions continue to match by recorded cwd (sessions.ts unchanged).
+
+### Relates to
+
+sessions.ts (`listSessions` matches by recorded `cwd`), workspace.ts, settings persisted at `~/.omp/lucid-gui.json`.
+
+## ADR-0112 - P-GOAL.14: browse PAST After-Action Reports
+
+**Date:** 2026-07-02
+**Status:** Accepted - BUILT + tested (live).
+**Increment:** P-GOAL.14.
+
+### Context
+
+The loop After-Action Report (ADR-0054) streams into chat once, when a loop finishes, and is written to
+`<workspace>/.omp/loops/<id>-<slug>.report.md`. There was no way to reopen a past AAR - the report files
+existed on disk but nothing listed them. The cross-run stats banner (ADR-0055) showed aggregates, not the
+individual reports.
+
+### Decision
+
+Pure/fs helpers in `goal_memory.ts`: `summarizeReport` (pull goal title + outcome badge from a report's
+markdown), `listGoalReports` (list `*.report.md` most-recent first, confined to the loops root),
+`readGoalReport` (read one back, traversal-rejected). Endpoint `GET /api/goal/reports` (list) and
+`?rel=` (one). The goal modal's Loop-history area now renders a **"Past After-Action Reports"** list; each row
+opens the full report markdown in a viewer modal. Shown whenever report files exist, even if the run-log
+ledger is empty.
+
+### Verification
+
+Live: pointed the workspace at a project with a saved AAR → the list showed the report (✅ Goal met, correct
+goal), clicking it opened the full report (Scoreboard, $5.33 spend). Unit tests for summarizeReport +
+listGoalReports/readGoalReport (incl. traversal rejection). Typecheck clean.
+
+## ADR-0113 - P-BRIEF.4: synthesize the podcast to real audio (WAV) + download; wire the P-BRIEF.2 TTS backend
+
+**Date:** 2026-07-02
+**Status:** Accepted - BUILT + tested (endpoint live, fail-safe path verified).
+**Increment:** P-BRIEF.4.
+
+### Context
+
+The Engineering Update (ADR-0072) produced a two-host podcast **script** but no audio - `/api/brief` returned
+text only ("audio synthesis is a later slice"). The TTS backend (ADR-0071, `harness/brief/tts_backend.ts`, an
+OpenAI-compatible `/v1/audio/speech` client) was built + unit-tested but wired to nothing, so the UI's
+"podcast" promise (and the "Local TTS - Kokoro" option) generated no sound. The accordion was also mislabeled
+"from this run", which users conflated with the loop AAR.
+
+### Decision
+
+1. **Wire audio.** New `POST /api/brief/audio` builds the podcast script and synthesizes it via the existing
+   `OpenAiCompatibleTtsBackend`, returning a base64 WAV. Two providers, both the same OpenAI `/v1/audio/speech`
+   shape:
+   - **local-tts** - a self-hosted Kokoro server (air-gap, no key; `LUCID_TTS_URL`, default `:8880`).
+   - **openai-tts (ChatGPT)** - `https://api.openai.com`, the stored `OPENAI_API_KEY`, model
+     `gpt-4o-mini-tts` (override `OPENAI_TTS_MODEL`), voices Host=`nova`/Engineer=`onyx`. A missing key is an
+     actionable note, not an error; a synth failure returns the fail-safe note (never a 500).
+2. **Download.** The renderer plays the WAV inline (`<audio>`) and offers **Download WAV** (`engineering-update.wav`).
+3. **Relabel.** The accordion now reads "exec brief + podcast · from your repo logs" and its tooltip states it
+   is NOT the loop AAR (which appears in chat after a loop). Added the ChatGPT option to the provider select.
+
+WAV (not MP3) because the backend already emits WAV and MP3 needs an encoder dependency; the user accepted
+"whichever is easier". The synthesis runs in the desktop process (not omp's egress gate), so it's a
+user-initiated network call to the chosen endpoint.
+
+### Verification
+
+Live: `/api/brief/audio` with local-tts (no Kokoro running) fail-safed to "TTS unavailable … returning script
+only" with `ok:false` + note (the exact UI-degrade path). Bundle builds with the audio + download UI; the
+provider select shows script-only / ChatGPT / Kokoro. `openai-tts` uses the same verified backend path (not
+exercised live to avoid real OpenAI charges). Typecheck clean.
+
+### Relates to
+
+ADR-0070 (podcast backend seam + vendor research), ADR-0071 (the TTS backend), ADR-0072 (the brief). Enabling
+ChatGPT TTS = add an OpenAI key in Providers; the rest is automatic.
+
+## ADR-0114 - P-CHAT.2: engagement policy — no autonomous action on a greeting; opt-in numbered next steps (PREFIX v7)
+
+**Date:** 2026-07-02
+**Status:** Accepted - BUILT + tested (live).
+**Increment:** P-CHAT.2.
+
+### Context
+
+A user said only "hi" to Grok on a fresh session and it began scanning the working directory and making
+unrequested edits/"improvements". The agentic system prompt (omp's default + our BUILD/DELEGATION policies)
+plus the mere presence of files led some models to invent a task from the cwd. The user wants the agent to
+respond only to what's asked, and on a low-signal opener to ask whether to review the cwd (or use the
+knowledge-graph recall for hints), offering easy numbered next steps to choose from.
+
+### Decision
+
+Add a byte-stable `ENGAGEMENT_POLICY` (layer 3) delivered to the live omp ACP chat via
+`--append-system-prompt` (like DELEGATION/BUILD/PREVIEW) and embedded in `LAYER_3_CODING`:
+- Opening a chat is NOT a task; the directory's contents are NOT a request. On a new session and any
+  low-signal opener (greeting/emoji/thanks/no concrete ask), do NOT scan/read-broadly/edit/run tools -
+  reply briefly and WAIT. Take substantive action only on a concrete request or an explicitly chosen option.
+- On a low-signal opener, offer a SHORT numbered list (2-4) of choose-by-number next steps drawn from the
+  conversation + any recalled user-memory / KG hints in the prompt (NOT a fresh scan), always including
+  "review the current working directory" as an explicit opt-IN. Numbered next steps are also the preferred
+  way to close a reply when sensible follow-ups exist.
+
+Because this changes the cached prefix (layer 3), `PREFIX_VERSION` bumps **6 → 7** (CLAUDE.md invariant #6:
+a deliberate prefix change is its own increment + ADR). The prefix-hash test asserts stability + version-
+binding (no hardcoded hash), so it stays green; re-ran demo02.
+
+### Verification
+
+Live (real dev server, fresh session, model claude-opus-4-8): sending "hi" produced ONLY token/usage/done
+events - no tool calls, no edits, no cwd scan - and the reply was conversational ("Hey! What are you
+working on?") followed by 4 numbered opt-in next steps, referencing the project from KG/recall context.
+Prefix tests (assembler + prefix_compaction) green; demo02 green; typecheck clean. The policy is model-
+agnostic (every model gets it via the appended system prompt), so it applies to Grok as well.
+
+### Relates to
+
+ADR-0028 (DELEGATION_POLICY), ADR-0033 (BUILD_POLICY), ADR-0096 (PREVIEW_POLICY) - the sibling layer-3
+policies in the same `--append-system-prompt` set; the KG recall / user-profile preamble that supplies the
+"what they're working on now" hints (buildUserTurnPreamble).
+
+## ADR-0115 - P-VOICE.1: ElevenLabs TTS/STT + mic button + read-aloud + offline-STT engine choice
+
+**Date:** 2026-07-02
+**Status:** Accepted - BUILT + tested (endpoints + UI live; live ElevenLabs/mic pending a user key + mic grant).
+**Increment:** P-VOICE.1.
+
+### Context
+
+The user wanted voice in the composer: an ElevenLabs API-key option for TTS (with a voice picker + favorites)
+and STT (a mic button next to Skills), without bloating the install, plus offline STT options DoD can
+approve. Foundations existed but were unwired: a `PodcastBackend` TTS seam (ADR-0071) and a
+`TranscriptionBackend` STT seam (ADR-0073, never wired to any UI/endpoint).
+
+### Decision
+
+1. **ElevenLabs backends** (`harness/voice/elevenlabs.ts`, pure `fetch` clients - ZERO install bloat, no SDK):
+   `ElevenLabsTtsBackend` (PodcastBackend; `/v1/text-to-speech/{voice}`, PCM→WAV concat, `eleven_turbo_v2_5`),
+   `elevenLabsSpeak` (single-clip MP3 for read-aloud), `listElevenVoices` (`/v1/voices`), `ElevenLabsSttBackend`
+   (`/v1/speech-to-text`, `scribe_v1`). `xi-api-key` header. Fail-safe throughout (unit-tested).
+2. **Cloud vs air-gap split** (mirrors the app's gov-vs-personal posture): ElevenLabs is the PERSONAL path
+   (audio leaves the device); the DoD/air-gap path is the self-hosted OpenAI-compatible Whisper (STT) / Kokoro
+   (TTS) adapters. STT engine is user-selectable, **offline Whisper is the default**.
+3. **Key + settings**: `ELEVENLABS_API_KEY` rides the existing provider key plumbing (auth `others`) but renders
+   in a dedicated **Voice** settings card (excluded from the model-provider list; never in the model picker),
+   with a **get-key link** and a **per-AAR cost estimate** (~$0.10–$0.30 per brief, a few cents per reply). New
+   `GuiSettings`: `sttProvider`/`sttUrl`/`ttsProvider`/`ttsVoice`/`ttsVoiceFavorites` (`voiceSettings()`).
+4. **Endpoints**: `/api/voices` (favorites first), `/api/voice-settings` (GET/POST), `/api/transcribe`
+   (engine per settings), `/api/tts/speak` (read-aloud), and `/api/brief/audio` extended with `elevenlabs`.
+5. **UI**: a mic **STT button** (custom SVG) next to Skills in the composer - click to record, click to stop,
+   MediaRecorder → transcribe → INSERT into the composer for review (transcript is ordinary user input, scanned
+   on send). TTS surfaces (all three requested): the Engineering Update **podcast** (ElevenLabs provider option
+   + voice picker), **read-aloud** speaker button on assistant replies, and **AAR narration** ("Listen" in the
+   report viewer). Voice picker lists **favorites first** with a ★ toggle.
+
+### Offline STT for DoD (documented for the user)
+
+whisper.cpp self-host (already supported via `OpenAiCompatibleSttBackend`, strongest fit) · in-app WASM Whisper
+(transformers.js, no server/Python, same pattern as the RAG embedder) · faster-whisper (BYO server) · Vosk ·
+NVIDIA Parakeet/Canary · Moonshine. Avoid Windows/Web Speech (routes to cloud). The discriminator is
+on-device / no egress / open source.
+
+### Verification
+
+Live (dev server, no keys): bundle builds; `/api/voice-settings` returns defaults (whisper STT / elevenlabs
+TTS); `/api/voices` + `/api/transcribe` (Whisper down) + `/api/tts/speak` (no key) all **fail-safe to notes**,
+never 500. DOM: mic button present, Voice card renders (STT/TTS selects, voice picker, ElevenLabs key field +
+get-key link + cost hint); STT toggle hides the Whisper-URL row + persists. `elevenlabs.test.ts` green (voice
+parse, PCM→WAV, xi-api-key, fail-safe). Typecheck clean. Live ElevenLabs synth + mic recording pending the
+user's key + a mic grant (backends unit-tested; endpoints fail-safe). NO version bump (batched for the weekly release).
+
+### Relates to
+
+ADR-0071 (TTS seam), ADR-0073 (STT seam), ADR-0113 (brief audio), the egress-posture / gov-gateway personal-vs-DoD split.
+
+## ADR-0116 - P-REPORT.1: Engineering Reports rail feature - role-tailored briefs + a unified past-reports browser
+
+**Date:** 2026-07-02
+**Status:** Accepted - BUILT + tested (live). NO version bump (batched for the weekly release).
+**Increment:** P-REPORT.1.
+
+### Context
+
+The Engineering Update lived buried in goal-form step 5 and produced one audience-neutral brief. The user
+wanted it (a) a dedicated left-rail feature for ALL roles, (b) role-tailored so Dev/Security/Manager/Exec
+each get a report framed for them, (c) with a right-side browser of ALL past reports - both the per-workspace
+loop After-Action Reports and the repo-wide Engineering Update briefs - plus the P-VOICE.1 fixes (pre-generate
+voice pick, ~10c cost note, and the inline-player bug).
+
+### Decision
+
+1. **Rail feature** (all roles): a new `report` rail glyph opens the **Engineering Reports** panel - generate
+   (left) + past-reports list (right). Not gated by role.
+2. **Role tailoring** (pure, ADR-0116, `renderEngineeringBrief(u, role)` + `buildPodcastScript(u, role)`):
+   extraction stays audience-neutral; RENDER genuinely CHANGES CONTENT per audience - a per-role section set,
+   an item filter, a cap, and whether ADR/increment codes appear. Only the **Developer** view keeps the ADR
+   IDs, increment codes, and source tags (all 5 sections). Non-developers get **zero ADR references** (codes
+   scrubbed from titles AND details via `scrubCodes`): **Security** shows only security-relevant items
+   (`isSecurityItem` filter: gate/egress/auth/credential/vault/CUI/…) across Risks + Decisions + Dependencies +
+   Shipped; **Manager** shows Shipped + Decisions + Risks in plain language (capped); **Executive** shows the
+   top-4 Shipped + Risks + Decisions as **title-only headlines** (`dropDetail`), no tech-debt/dependencies.
+   The scoreboard line only counts the sections that view shows. Default (no role) = the full "Engineering Update".
+3. **Persisted briefs** (`desktop/report_store.ts`): a generated brief is saved to a global
+   `~/.omp/lucid-briefs/<ts36>-<role>.md` (briefs are repo-wide) when `?save=1`. The goal-modal preview omits
+   save; the Reports panel Generate saves.
+4. **Unified list**: `GET /api/reports` merges per-workspace loop AARs (`listGoalReports`) + saved briefs
+   (`listBriefs`), most-recent first, each tagged `kind: "aar" | "brief"`. `GET /api/report?kind=&rel=` reads
+   one (confined to its store). Each row opens a viewer with a **Listen** (TTS) button.
+5. **Reused P-VOICE.1**: the panel carries the voice picker (favorites, pre-generate), the ~10c cost note, and
+   the blob-URL audio player + Download. The player bug (a big WAV as a `data:` URL wouldn't play) is fixed by
+   a `URL.createObjectURL` blob URL, applied to the podcast, read-aloud, and AAR narration.
+
+### Verification
+
+Live (dev server): the rail glyph opens the panel (role select dev/sec/mgr/exec, provider, voice, cost). A
+developer brief generated + saved + tailored (leads with "Tech debt", title "Developer Engineering Update").
+`/api/reports` returns both a `brief` and the loop `aar`, and the panel's list renders both with badges;
+clicking opens the viewer + Listen. Role-tailoring unit-tested (order per role, all sections present, role
+label + framing, podcast title). Typecheck clean; engineering_update tests green (14).
+
+### Relates to
+
+ADR-0070/0072 (the brief), ADR-0113/0115 (audio + voice), ADR-0112 (the past-AAR browser this generalizes),
+ADR-0088 (the roles this tailors to).
+
+## ADR-0117 - P-REPORT.2/.3: report lifecycle - copy, download .md, two-stage archive/delete, push to KG
+
+**Date:** 2026-07-02
+**Status:** Accepted - BUILT + tested (both slices). NO version bump.
+**Increment:** P-REPORT.2 (lifecycle) + P-REPORT.3 (KG push).
+
+### Decision
+
+Both report kinds (per-workspace loop AARs + repo-wide saved briefs) gain, in the Reports panel row + the viewer:
+1. **Copy to clipboard** (the report markdown) and **Download .md** (`URL.createObjectURL` blob, `<title>.md`).
+2. **Two-stage archive/delete**: the active row's action is **Archive** (soft-delete → an `archived/` subfolder,
+   not gone). An **Active / Archived** tab switch reveals the archive, where a row's actions are **Restore**
+   (→ active) and **Delete** (PERMANENT). So "delete twice = gone": first delete archives, second (in the
+   archive) removes for good. Endpoints: `/api/report/{archive,restore,delete}`; `/api/reports?archived=1`.
+   **Guard (invariant):** permanent delete only ever operates on an archived item - `deleteGoalReport` rejects
+   any rel not under `.omp/loops/archived/`, and `deleteBrief` targets only the archive dir (no `force`, so a
+   non-archived rel → false). Unit-tested: delete on an active report is refused; archive→restore and
+   archive→delete round-trip.
+
+### P-REPORT.3: push to the Knowledge Graph - BUILT (2026-07-02, no version bump)
+
+The user asked to optionally **push a report into the personalization KG**, choosing the compartment when
+more than one is unlocked and defaulting to the sole unlocked one. Now built.
+
+- **Ingest shape (user-confirmed): "One report node."** The whole report enters as a single trusted node,
+  not distilled/atomized facts. `addReportToKg(scope, title, markdown)` in `desktop/personal.ts`:
+  `upsertEntity("Engineering Report: <title>", "user:decision", "trusted")` + one
+  `addFact({ entityId, statement: markdown.slice(0, 20_000), trustLabel: "trusted", scope })`. Reports are
+  first-party, so they enter **trusted** - the semantic-promotion gate (CLAUDE.md keystone) is not bypassed:
+  it exists to stop *suspicious-source* content auto-promoting; a first-party report is an explicit,
+  user-initiated trusted write, never an auto-promotion.
+- **Compartment selection.** Client reads `bridge.personal()`; unlocked `main` store yields **work** +
+  **personal** targets, unlocked `cui` yields **cui**. Zero unlocked → fail-closed toast ("Knowledge graph
+  locked - unlock a compartment in Settings"). Exactly one → push directly, no prompt. More than one → a
+  `.kg-pick` popover to choose. Endpoint `/api/report/to-kg` (kind, rel, scope, archived) re-derives the
+  markdown server-side and calls `addReportToKg`, which **also** fail-closes if personalization is off or the
+  chosen compartment is locked (defense in depth - never trust the client's unlock view alone).
+- **Verified:** typecheck clean (root + desktop); endpoint returns `ok:false, "...locked - unlock it in
+  Settings"` when the compartment is locked; UI renders the KG button on both the row and the viewer, and a
+  locked click surfaces the fail-closed toast.
+
+### Relates to
+
+ADR-0116 (the Reports panel this extends), ADR-0010/P9.x (the personalization KG + compartments), the
+semantic-promotion gate (P4.3).
+
+## ADR-0118 - P-REPORT.4: premium UI pass on the Scoreboard + Engineering Reports
+
+**Date:** 2026-07-02
+**Status:** Accepted - BUILT + verified. NO version bump.
+**Increment:** P-REPORT.4.
+
+### Decision
+
+A dedicated UX/visual pass on the two surfaces the user singled out as feeling "basic": the collapsed
+quick-metrics **Scoreboard** rail and the **Engineering Report** viewer. Purely presentational - no data,
+storage, or security path changes.
+
+**Scoreboard (metrics rail tiles).** Every tile is the SAME calm neutral at rest - no per-metric colour, and
+(per the user's second-round feedback) **no icons**. The interest is entirely in the *reaction*:
+- **Neutral by default, react on *change* - like a game.** When a value changes the tile fires a short,
+  eye-catching reaction: a **clockwise light races around its border** (2 fast laps then fades), a **diagonal
+  shine sweeps** across it, and the number briefly flashes its accent. Then it settles back to neutral.
+  `renderMetricsRail` remembers the last value per label (`prevMetrics`) + a `railPrimed` flag so the first
+  paint never false-flashes, and signature-guards the DOM write so an idle poll doesn't restart animations.
+- **Persistent clockwise pulse on attention.** A tile that needs triage - findings > 0 or quarantine > 0 -
+  keeps a slow **clockwise** conic light pulse + accent border. The ring (both the racing and the pulse
+  variants) is a masked pseudo-element animated via a registered `@property --sweep` angle, so the highlight
+  travels the border instead of rotating a clipped square. `prefers-reduced-motion` disables all of it.
+- (Reverted from the first attempt: an always-on custom-SVG icon chip per tile. The user explicitly did not
+  want icons on the rail - the ask was uniform-until-it-changes, with a cool reaction. Icons removed.)
+
+**Engineering Report viewer.** Scoped to `.aar-viewer` (the loop's inline AAR is untouched):
+- **No more doubled title.** The stored report opens with a big `# After-Action Report: <goal>` H1 that just
+  restated the modal-header title. `enhanceReportBody` drops that leading H1 in the viewer (header keeps the
+  title). Body bumped 12.5px → **15.5px**, line-height 1.72; H2s become small uppercase section eyebrows with
+  a gradient accent bar; styled lists / code / `pre` / blockquotes / tables.
+- **Custom SVG outcome badge.** The `✅ / ⏹ / 🛑 / ❗` emoji in the outcome line is swapped for a real duotone
+  glyph (`checkBadge` / `stopBadge` / `alertBadge`) in a coloured pill - the "checkbox" the user pointed at.
+- **Beautiful charts (plasma-on-hover).** `enhanceReportBody` parses the report's ASCII "Scoreboard" block AND
+  the raw (unrenderable) mermaid **pie** + **xychart** blocks and replaces each with a colour bar chart
+  (`.rchart`): gradient fills, glow, per-metric colour (green add / red remove / amber errors / blue tools /
+  palette rotation), and on hover a moving multi-hue **plasma** sheen + brighter glow. No raw code blocks are
+  left in the report. The stored markdown is untouched (loop_report stays byte-stable / test-frozen).
+- **Compact, non-wrapping buttons.** Header actions: less padding (5x10 → 4x9), larger **16px** glyphs, the
+  Close becomes an icon-only `×`, Listen uses a duotone `headphones` glyph, and **"To KG" → "KG"** (it was
+  wrapping onto two lines); the action row is `nowrap`.
+
+### Why
+
+Uniform-until-it-changes makes the Scoreboard read like a live game HUD: colour/motion means "this just moved
+/ needs you," nothing competes at rest. The report pass fixes a genuinely duplicated title, too-small body,
+an emoji standing in for a custom glyph, unreadable raw-mermaid "charts," and a two-line KG button.
+
+### Verified
+
+Typecheck clean (root + desktop). Live preview: 6 rail tiles render neutral with NO icons; forcing a change
+resolves `tileRace` (racing ring) + `tileShine` (sweep) + `tileNumBloom` (number flash); an attention tile
+resolves the persistent `tileSweep`. Report viewer: leading H1 removed (`h1Count 0`, first node is the badge
+line), outcome badge is a real `<svg>` in a `.ro-badge.ro-met` pill, **4 charts built / 0 `<pre>` left**
+(Scoreboard + pie + 2 xychart bars), body computes to 15.5px, KG button single-line, `rchartPlasma` keyframe
+present. No console errors.
+
+### Relates to
+
+ADR-0116/0117 (the Reports panel + lifecycle this polishes), the metrics rail (ADR-0021), `icons.ts` (the
+hand-drawn line-icon set this extends).
+
+## ADR-0119 - P-EXEC.3: "TLDR" command explainer + spell-check + report-title cleanup
+
+**Date:** 2026-07-02
+**Status:** Accepted - BUILT + verified. NO version bump.
+**Increment:** P-EXEC.3.
+
+### Decision
+
+Three small usability fixes, the substantive one being a plain-language command explainer.
+
+**"TLDR" - explain an intimidating command with a cheap model.** The exec approval card (`The agent wants
+to run a [HIGH-RISK] command`) now stacks a **TLDR** button directly under the Copy button (tight padding).
+Clicking it makes ONE one-shot call to the cheapest available keyed model and drops a plain-English
+explanation + risk flag inline; a second click toggles it. New surfaces:
+- `desktop/explain_command.ts` - `explainCommand(cmd)`: picks the cheapest keyed provider (Anthropic
+  `claude-haiku-4-5` → OpenAI `gpt-4o-mini` → Gemini `gemini-2.0-flash`), one request, 320-token cap,
+  20s timeout. The command is handed to the explainer as clearly-delimited `<command>` DATA with a system
+  instruction that it is inert and any embedded instructions are part of the data (same trust-boundary
+  posture as the harness). **Fail-soft:** no key → an actionable "add an Anthropic/OpenAI/Gemini key"
+  message; any HTTP/parse error → a calm message, never a crash. Mirrors the direct-keyed-fetch pattern
+  already used by `ratelimit_probe.ts`.
+- `POST /api/explain` in `dev.ts`; `bridge.explainCommand`; the card UI + `.perm-tldr` / `.perm-tldr-out`
+  styling (accent-tinted panel, model attribution line).
+- Why keyed-model-only: TLDR is user-initiated and wants a *cheaper* model than the maker; the OAuth path is
+  managed by omp and not a clean one-shot. If only OAuth is configured, the fail-soft message points the user
+  to add a small key (a Haiku/mini explanation is a fraction of a cent).
+
+**Spell-check in the composer.** The prompt `<textarea>` gains `spellcheck="true"` (browser red-squiggles),
+and - because Electron underlines misspellings but won't build the correction menu itself - `main.ts` adds a
+`context-menu` handler that, ONLY when there's a misspelled word (so it never fights Monaco's own menu),
+pops the dictionary suggestions (`replaceMisspelling`) + "Add to dictionary".
+
+**Report title de-cluttered.** Removed the small glyph the report viewer printed before the title in its
+header (the user pointed at it) - the title now stands alone.
+
+### Verified
+
+Typecheck clean (root + desktop); license-header check green (new file carries BUSL-1.1). Live: `/api/explain`
+returns the fail-soft "add a key" message with no key set (endpoint + provider-selection wired); a mock exec
+card renders the TLDR button stacked under Copy (2px 6px pad) with the explanation panel; composer `#input`
+has `spellcheck="true"`; report viewer title has no leading `<svg>`. No console errors.
+
+### Relates to
+
+ADR-0066/0110 (the exec approval card this extends), `ratelimit_probe.ts` (the keyed-fetch pattern reused),
+ADR-0118 (the report viewer this touches).
+
+## ADR-0120 - P-REPORT.5: print / save-as-PDF, report-panel polish, subdued inline code
+
+**Date:** 2026-07-02
+**Status:** Accepted - BUILT + verified. NO version bump.
+**Increment:** P-REPORT.5.
+
+### Decision
+
+Four presentational fixes from a report + chat review.
+
+**Print / Save-as-PDF (white paper).** The report viewer gains a **Print** button (new `print` glyph) between
+`.md` and `KG`. `printReport(title, bodyHtml)` drops the ALREADY-ENHANCED report HTML (light-friendly classes:
+headings, tables, `.rchart` bars, `.ro-badge`) into a hidden same-origin `<iframe>` carrying a self-contained
+**light** stylesheet (`PRINT_CSS`: white bg, dark text, print-safe colours re-mapped from the dark theme, no
+glows, `-webkit-print-color-adjust:exact`, `@page{margin:16mm}`, `break-inside:avoid` on rows/tables/charts),
+then calls the iframe's `print()` - the OS dialog offers **Save as PDF** and any printer. Same-origin iframe +
+`window.print()` works in both the browser build and Electron (where `window.open` to non-http is denied). The
+title (dropped from the body as a duplicate on screen) is re-added as the print `<h1>`.
+
+**Report-panel polish.** Removed the little `graph` glyph the panel drew before the Active/Archived tabs (the
+user pointed at it). Bumped the panel's intro paragraph to 13.5px / brighter for readability.
+
+**Subdued inline code in chat.** `.msg .text code` was a loud cyan chip (`--cyan-dim` bg + cyan text). Re-toned
+to a neutral mono chip (`color-mix(--txt-4 13% over --bg-2)` bg, `--line-soft` border, `--txt-2` text) so it
+reads like the standard mono type in the lower-left status-bar model readout - present but calm.
+
+### Verified
+
+Typecheck clean (root + desktop). Live preview: reports panel tab-row has no `<svg>`, intro computes to 13.5px;
+report viewer shows the Print button (Listen · Copy · .md · Print · KG · ×); a light-CSS render of the actual
+report body shows a clean WHITE page - title, light tables, and the Scoreboard/Tool-call bars in print-safe
+colour; chat inline code computes to a neutral gray chip (text `--txt-2`), no cyan. No console errors.
+
+### Relates to
+
+ADR-0116/0117/0118 (the reports panel + viewer this polishes), `icons.ts` (adds `print`).
+
+## ADR-0121 - P-REPORT.5b: print "Prepared for" footer, cost-notice fix, Listen UX + voice hotkeys
+
+**Date:** 2026-07-02
+**Status:** Accepted - BUILT + verified. NO version bump.
+**Increment:** P-REPORT.5b.
+
+### Decision
+
+Follow-ups from a print + voice review.
+
+**Print "Prepared for:" footer.** The print document now carries its own bottom-left footer -
+`Prepared for: <identity>` - where identity is the corporate email if set, else the attribution identity
+(the workstation-name fallback). `position:fixed;bottom:6mm;left:0` so it repeats on every printed page.
+(The dev browser's own URL footer, "localhost:5323", is a Chrome print-UI artifact not present in the
+packaged Electron app; our content footer is what carries the intended "Prepared for" line.)
+
+**Cost-notice layout fix.** The ElevenLabs/OpenAI TTS cost note (`REPORT_TTS_COST`) fragmented into 3 flex
+columns because its `<b>` and text nodes were direct children of the flex `.goal-eu-cost`. Wrapped the
+message in ONE `<span>` (so it wraps as prose), pinned the icon to `flex:none` and the span to `flex:1`, and
+rewrote the copy: "ElevenLabs bills per character. Generating this report's audio costs about $0.10 (~10¢)
+each time."
+
+**Listen button - it already synthesizes on demand.** Clarified + hardened: the Listen / read-aloud button
+is INDEPENDENT of the Generate panel's audio option - it calls `bridge.speak` fresh on each click, so it
+works any time. `speakText` now shows a spinner + "Synthesizing…" while the model runs, flips to a "Stop"
+control while playing, and on failure surfaces the real engine note ("Couldn't read it aloud - choose a TTS
+engine in Settings → Voice…") instead of a quiet "No audio". (If it wasn't working before, the TTS engine
+wasn't configured / the ElevenLabs key lacked `text_to_speech` - now the reason is shown.)
+
+**Voice hotkeys.** `Ctrl/⌘+Space` toggles read-aloud while a report is open (listener added on open, removed
+on close), and `Ctrl/⌘+D` toggles the mic from anywhere. Both are shown in their button tooltips via
+`modCombo(...)` (OS-aware label).
+
+### Verified
+
+Typecheck clean (root + desktop). Live preview: cost note renders as one span (svg + span, single line);
+mic tooltip shows "Ctrl+D", Listen tooltip shows "Ctrl+Space"; Ctrl+Space dispatched into the open viewer
+fires the Listen handler; the real print doc built from a saved brief has `body{background:#fff}`, a
+`.print-title`, and a `.print-foot` reading "Prepared for: nicholas.chadwick.ctr@gmail.com". No console errors.
+
+### Relates to
+
+ADR-0120 (the print/report pass this extends), ADR-0115 (voice: TTS/mic), ADR-0030 (attribution identity used
+for "Prepared for").
+
+## ADR-0122 - P-REPORT.6: Security-brief compliance crosswalk (NIST 800-171/800-53 + STIG CCIs) + POA&M CSV
+
+**Date:** 2026-07-02
+**Status:** Accepted - BUILT + tested. NO version bump.
+**Increment:** P-REPORT.6.
+
+### Decision
+
+The **Security** engineering report now ends with a compliance crosswalk, and can export an eMASS-aligned
+**POA&M**. Plus a readability bump on the brief preview.
+
+- **New pure module `harness/brief/compliance.ts`.** From the SAME `EngineeringUpdate` the brief is built
+  from, `buildComplianceRows` maps each security-relevant item (by keyword) to the control families its area
+  touches - NIST **SP 800-171** paras, **800-53** controls, and representative **DISA STIG CCIs** - and tags a
+  **disposition** derived from the source section + wording: shipped → Fixed/Improved, risk → Regressed/Open,
+  debt → Open, upcoming → Planned. `renderComplianceSection` appends a table (Change · Disposition · 800-171 ·
+  800-53 · STIG CCIs) + a fixed/improved/regressed/open/planned **rollup** to the security brief (codes scrubbed
+  from the change title to honor the security view's no-ADR-IDs rule). `renderPoamCsv` emits a CSV whose column
+  order matches the **eMASS POA&M import template** (Control Vulnerability Description, Security Control Number,
+  Security Checks=CCIs, Status[Completed/Ongoing], Severity[CAT II/III], Mitigations, Recommendations, …), one
+  row per mapped item, fully quoted/escaped; the "Source Identifying Vulnerability" column carries the change
+  source (ADR/increment) for analyst traceability.
+- **HONESTY (load-bearing):** this is a **DRAFT keyword crosswalk, not an authoritative assessment.** The
+  section, the CSV recommendation column, and the export toast all say the control/CCI selections MUST be
+  validated by a security analyst against the applicable RMF baseline + current STIG/CCI list before use in an
+  assessment or eMASS. We generate a defensible STARTING POINT, never a compliance claim.
+- **Wiring:** `GET /api/brief/poam` (builds the update, returns `{csv, rows, filename}`); `bridge.engineeringBriefPoam`;
+  an **Export POA&M (CSV)** button in the Reports panel shown ONLY for the Security role, downloading the CSV
+  via a Blob. Brief preview text enlarged (12→13.5px) + higher contrast (`--txt-1`, styled H1/H2).
+- **Tested:** `compliance.test.ts` (6) - maps only security items, correct control families/CCIs/disposition,
+  markdown has the disclaimer+table+rollup, CSV has the eMASS headers + one row per item + escaping, empty
+  update degrades honestly. All 31 brief tests green; the security-brief "no ADR IDs" test still passes.
+
+### Relates to
+
+ADR-0116/0117 (the reports panel this extends), ADR-0070 (the engineering-update generator this maps from).
+
+## ADR-0123 - P-REPORT.7: TTS-friendly podcast/read-aloud, Listen cost note, NotebookLM link
+
+**Date:** 2026-07-02
+**Status:** Accepted - BUILT + tested. NO version bump.
+**Increment:** P-REPORT.7.
+
+### Decision
+
+Three voice/report tweaks.
+
+- **speakable(text) (exported, pure, in engineering_update.ts).** Read aloud, technical tokens sound wrong -
+  ADR/increment codes become letters-and-digits, a middot is silence, inline-code keeps its backticks. It
+  strips fenced/inline code + markdown + heading hashes, removes ADR/increment/issue/version codes AND
+  CCI-style AA-1234 + control numbers (3.13.11), turns symbols into words/pauses, expands the worst acronyms
+  (POA&M, AAR, TTS, STT, KG, CUI), and sentence-ends each line. Applied to EVERY podcast turn (say wraps it)
+  and to the read-aloud text in speakText (per-line), so both flow like speech.
+- **Listen cost note.** The report viewer shows a banner: Listen narrates the WHOLE report (ElevenLabs ~
+  $0.50-1.50); a podcast summary is shorter/cheaper. Same cost in the Listen tooltip.
+- **NotebookLM link.** The viewer banner + a generate-panel tip link to notebooklm.google.com for a free
+  two-host podcast; the viewer link COPIES the report markdown first (opens external via the window-open
+  handler) so the user pastes it into a NotebookLM source and hits Audio Overview.
+
+### Verified
+
+Typecheck clean; 35 brief tests green (4 new speakable tests). Live: security podcast scriptText has no
+ADR/increment/CCI tokens; viewer note shows the $0.50-1.50 cost + NotebookLM link; generate-panel tip present.
+
+### Relates to
+
+ADR-0115 (voice TTS/mic), ADR-0070/0116 (the podcast/brief this speaks), ADR-0121 (the Listen UX this notes).
+
+## ADR-0124 - P-REPORT.8: change-annotated dependency graph + schema map annexes + STIG .ckl
+
+**Date:** 2026-07-02
+**Status:** Accepted - BUILT + tested. NO version bump.
+**Increment:** P-REPORT.8.
+
+### Decision
+
+The technical engineering reports (developer + security) gain two visual ANNEXES, and the security report can
+export a native STIG Viewer checklist.
+
+- **New pure module harness/brief/change_graph.ts.** From git `diff --numstat` + `--name-status` over a range
+  (default: the last up-to-10 commits; working-tree fallback on a shallow repo), it groups changed files into
+  the architecture layers (renderer / desktop / harness / scanner / tools / extensions / core), sums +added /
+  -removed lines per layer + file count, tags each by net direction, and links the dependency edges. It emits
+  BOTH a hand-built styled **SVG** (layered by dependency depth, green=grew / red=shrank / blue=changed, with
+  the line counts + a magnitude bar) AND **Mermaid flowchart** code marked `%% lucid:changegraph` (copyable,
+  importable into draw.io). A parallel **data-schema map** (`buildSchemaChanges`) flags changed files that back
+  a data store (DuckDB, personalization KG, settings, cred-vault/whitelist, sessions, report store) and draws
+  file → store links, again as SVG + Mermaid (`%% lucid:schema`). `renderAnnexes` appends "Annex A - dependency
+  graph" and "Annex B - data schema changes" (heading + change table + copyable Mermaid).
+- **Backend (dev.ts):** `/api/brief` runs git (Bun.spawnSync, fail-soft) and appends the annexes for the
+  developer + security roles only; `/api/brief/ckl` returns the STIG checklist.
+- **Renderer:** `enhanceReportBody` (now also run on the generate-panel preview) swaps our marked Mermaid blocks
+  for the styled SVG + a "Copy Mermaid (draw.io)" button + the raw Mermaid in a collapsible; it tags each Annex
+  H2 `.annex-break` so the print doc starts each annex on a NEW PAGE (`break-before:page`) with the SVG printed
+  as an image (Mermaid source hidden in print). Security-report exports row now offers **POA&M (CSV)** +
+  **STIG (.ckl)**.
+- **STIG .ckl (compliance.ts `renderCkl`):** one `<VULN>` per control-mapped change, each with the CCIs as
+  `CCI_REF` STIG_DATA, disposition → STATUS (NotAFinding / Open / Not_Reviewed), CAT II/III → severity, and the
+  change source in FINDING_DETAILS. Opens directly in STIG Viewer.
+- **HONESTY:** the .ckl `Vuln_Num`/`Rule_ID` are SYNTHETIC (`LUCID-Vnnn`), not from a published benchmark, and
+  every artifact (checklist COMMENTS, export toast, annex text) says it is a DRAFT crosswalk for analyst
+  validation - not a benchmark scan or an authoritative control assessment.
+
+### Verified
+
+Typecheck clean; 43 brief tests green (7 change-graph: numstat/name-status parse skipping binaries, layer
+grouping + net status, marked/classed Mermaid, SVG nodes, schema map, annex markdown, empty-degrades; 1 CKL:
+well-formed XML, one VULN per item, CCI_REFs, mapped statuses). Live: developer brief carries both annexes +
+Mermaid over real git ("+4326 / -142 across 52 files"); the viewer + preview render 2 styled SVGs (20-rect
+dependency graph) + Copy-Mermaid buttons; print doc has `.annex-break` + `break-before:page` + the SVG; the
+`.ckl` export downloads 17 VULNs. License header green on the new module. No console errors.
+
+### Relates to
+
+ADR-0120/0122 (the report print + compliance crosswalk this extends), ADR-0001 (the layered architecture the
+graph mirrors), CLAUDE.md invariant 10 (the frozen-schema contract Annex B watches).
+
+## ADR-0125 - P-APPEAR.1: personalized chat background (ambient 25% wash + flashlight-on-hover)
+
+**Date:** 2026-07-02
+**Status:** Accepted - BUILT + verified. NO version bump.
+**Increment:** P-APPEAR.1.
+
+### Decision
+
+The user can set a personal background image for the chat interface, shown two ways:
+- **Ambient** - the image faintly (25% opacity) behind the whole chat, subtle enough not to distract.
+- **Flashlight** ("dark room") - the chat background stays black, and the image is revealed ONLY under the
+  cursor, at 25%, via a radial mask that follows the mouse - like sweeping a flashlight across a dark room.
+
+- **Storage (own file):** `desktop/chat_bg.ts` persists `{ image (data URL), mode, opacity }` to
+  `~/.omp/lucid-chatbg.json` - deliberately SEPARATE from the main settings JSON so the hot `settings load()`
+  never parses a multi-MB image. A ~9 MB image cap (12 MB data URL), mode/opacity validated, read-directly
+  (no stat-then-read / CodeQL TOCTOU). `GET/POST /api/chat-bg`; `bridge.chatBackground/setChatBackground`.
+- **Render:** a `.chat-bg` layer sits behind the chat content (which gets `z-index:1`). `applyChatBg` sets the
+  inline `background-image` (data URL - allowed by `img-src data:`) and toggles `.ambient` / `.flashlight`.
+  Flashlight masks the layer with `radial-gradient(circle var(--bg-r) at var(--mx) var(--my), ...)`, and a
+  `mousemove` on `.center` writes `--mx/--my` (mouseleave parks it off-screen). Reduced-motion drops the fade.
+  Loaded + applied at boot.
+- **Settings:** a new "Chat background" card (Settings, above Developer) with an image picker (file → FileReader
+  → data URL), a Display select (Off / Ambient / Flashlight), a thumbnail preview + Remove, and a note
+  explaining both modes. Uploading with no mode set defaults to Ambient. Client caps the file at ~9 MB with a
+  clear toast before upload.
+
+### Verified
+
+Typecheck clean; license header on the new module. Live preview: endpoint saves/loads + reports the mode; a
+test gradient at Ambient shows a faint 25% wash behind the readable chat; Flashlight shows the image revealed
+only in a soft cursor-tracked spotlight over black; the settings card renders the picker + Display select +
+note; boot loads + applies. No console errors. (Test image reset afterward so users start clean.)
+
+### Relates to
+
+ADR-0011 (settings store this sits beside), the renderer CSP (`img-src data:` already permits the background).
+
+## ADR-0126 - P-PREVIEW.5: preview markup tools (pen/rect/text) + Browse-cwd + status-line cleanup
+
+**Date:** 2026-07-02
+**Status:** Accepted - BUILT + verified. NO version bump.
+**Increment:** P-PREVIEW.5.
+
+### Decision
+
+- **Markup on the preview.** A `<canvas>` overlays the preview iframe. A single **Markup** toolbar button
+  drops a tools popover - **Pen** (freehand), **Rectangle** (rubber-band), **Text** (a floating input that
+  commits to the canvas) - each a mini hand-drawn SVG icon, plus a colour row (red/yellow/green/blue/white),
+  a **Cursor** (disarm) entry, and **Clear**. Arming a tool enables the canvas's pointer-events (so it catches
+  the mouse) and sets a crosshair/text cursor; Cursor disarms so the iframe is interactive again. Because
+  "Screenshot → chat" uses Electron's `capturePage` on the frame's screen region, the canvas markup is
+  captured TOGETHER with the rendered app - the marked-up screenshot goes to the composer for the agent with
+  NO compositing. The canvas backing-size tracks the frame via a ResizeObserver (drawing preserved on resize);
+  loading a new file clears it. New icons: `pen`, `textT`, `markup`.
+- **Browse the cwd.** A **Browse…** button opens the native OS file picker (`bridge.pickFile`, Electron) so the
+  user can open a file from their working directory and preview it themselves; in a plain browser it toasts
+  "desktop app only" and focuses the path input.
+- **Status line.** Removed **tokens/s** from the HUD done/stream line (read as noise); the readout is now just
+  "N tokens out · N context · ~$X". Raised the HUD text contrast (`--txt-3/4` → `--txt-2`) so the done line is
+  legible.
+
+### Verified
+
+Typecheck clean. Live preview: toolbar shows Open · Browse… · Reload · Markup · Screenshot→chat; the Markup
+dropdown lists Pen/Rectangle/Text (SVG icons) + 5 colour swatches + Cursor + Clear; selecting Pen closes the
+menu, arms the canvas (pointer-events auto, crosshair) and lights the Markup button; the canvas draws a pen
+stroke (exact colour), rectangle, and text (pixels confirmed). No console errors.
+
+### Relates to
+
+ADR-0096 (P-PREVIEW.* - the panel + capturePage screenshot this builds on).
+
+## ADR-0127 - P-KG-CODE.1: workspace code graph (colbymchenry/codegraph-style) + KG header padding
+
+**Date:** 2026-07-03
+**Status:** Accepted - BUILT + tested. NO version bump.
+**Increment:** P-KG-CODE.1.
+
+### Decision
+
+A **code knowledge graph** for the current workspace, in the spirit of colbymchenry/codegraph but rendered in
+LucidAgentIDE's own graph canvas - plus a vertical-padding trim on the KG header.
+
+- **New pure-ish module `desktop/code_graph.ts`.** Walks the workspace's source tree (skipping node_modules,
+  .git, .claude/worktrees, dist, vendor, .omp, …), parses each file's `import`/`require`/dynamic-import
+  specifiers, resolves the RELATIVE ones to files in the tree, and builds a file → file dependency graph in the
+  EXACT shape the graph component already consumes (`{nodes:{id,name,kind,trust,count}, edges:{from,to,relation}}`).
+  `kind` = the top-level directory so files colour by module under the existing Kind lens; `count` = degree.
+  Persisted per-workspace at `<root>/.omp/codegraph.json` (gitignored), so the panel knows whether the cwd is
+  already ingested and offers a re-sync instead of a first ingest. External packages are ignored (this is the
+  internal architecture graph, not a dependency manifest).
+- **Endpoint `/api/codegraph`:** GET = status + stored graph; POST = ingest/re-sync + fresh graph.
+- **UI:** below the KG **Relate** button, a 2px-gap vertical **stack** adds **Code graph** (toggle) and
+  **Update** (re-ingest, shown once ingested). Clicking Code graph ingests-on-first-use and renders the graph
+  in the canvas (bypassing the personalization unlock - the code graph isn't private user data); clicking again
+  returns to the personal graph. The live personal-graph refresh is suppressed in code mode. A big repo is
+  capped to the top-600 most-connected hubs for readability (full graph still stored); the scope label shows
+  `code · N files · M imports [· showing top 600 hubs]`. Selecting a node opens a side panel with its path,
+  what it imports, and what imports it.
+- **KG header padding** trimmed to 6px (ID selector, Settings unaffected).
+
+### Verified
+
+Typecheck clean; 3 code-graph unit tests green (resolves relative edges, skips node_modules/externals, node
+kind = top dir, degree counts, ingest/status/load round-trip); license header on the new module. Live: the
+builder graphs the real repo (354 source files, 754 imports across desktop/harness/tools/extensions/observable);
+the stacked buttons render (Relate / Code graph / Update, 2px), toggling ingests + renders the force graph
+(top-600 hubs), the Update button appears once ingested, and a node click shows the imports side panel. No
+console errors. `.omp/codegraph.json` added to .gitignore.
+
+### Relates to
+
+ADR-0010/P9.x (the KG canvas + graph component this reuses), ADR-0124 (the layer change-graph - this is the
+file-level companion), colbymchenry/codegraph (the inspiration).
+
+## ADR-0128 - P-KG-SYM.1: symbol-level (AST) code graph, level-picker popup, agent codegraph_query tool
+
+**Date:** 2026-07-03
+**Status:** Accepted - BUILT + tested. NO version bump.
+**Increment:** P-KG-SYM.1.
+
+### Decision
+
+The developer can build a **symbol-level** code graph (real TypeScript AST), choose file-vs-symbol in a popup
+during ingest, and optionally expose the graph to the **agent** as a queryable tool via a dedicated checkbox.
+(Directions confirmed with the user: full AST call graph · queryable tool · dedicated checkbox.)
+
+- **`desktop/symbol_graph.ts`** parses each source file with the real `typescript` compiler (`createSourceFile`,
+  JSX-aware ScriptKind) and builds a **symbol → symbol reference graph**: nodes = top-level declarations
+  (functions, classes, methods, types/interfaces, enums, consts) with their `kind`; edges = "symbol A
+  references symbol B", resolved **across files through named imports** and **within a file** through its own
+  top-level names. Node id = `file#symbol`; degree = reference count. Persisted at
+  `<root>/.omp/codegraph-symbol.json`. **HONESTY:** AST-accurate for identifier usage + import resolution
+  (far better than regex), but it is a symbol-DEPENDENCY graph, NOT a fully type-resolved call graph - it
+  doesn't resolve `obj.method()` value-typed dispatch, overloads, or dynamic dispatch. The UI + tool say so.
+  On the real repo: 355 files → 3093 symbols / 5449 refs in <1s.
+- **Level-picker popup.** Clicking Code graph now opens a modal: **File graph (fast)** vs **Symbol graph (AST,
+  a few seconds)** with the trade-offs spelled out, plus a **"Let the agent query this graph"** checkbox. The
+  chosen level threads through `/api/codegraph?level=` (GET load / POST build); the canvas caps to the top-600
+  hubs (full graph still stored). The node side panel switches to symbol semantics (kind badge, **Uses / Used
+  by**, `file#symbol` links that open the file in the IDE).
+- **Agent tool (`harness/omp/codegraph_extension.ts`).** A read-only omp `-e` extension registering
+  **`codegraph_query`**: `target` = a file/symbol/`file#symbol`, `level` = file|symbol → returns what it
+  imports/uses + what imports/uses it (blast radius), or a hubs summary. It runs in omp's subprocess (cwd =
+  workspace) and reads the stored graphs directly, so the agent gets a precise, compact answer instead of
+  grepping + reading many whole files - the token-saving payoff. Loaded ONLY when the user opts in
+  (`settings.codeGraphAgent`, `/api/codegraph/agent` POST restarts the backend); registration is defensively
+  wrapped (a failure never blocks omp launch). Dedicated toggle - the existing "AI" box stays scoped to
+  personalization-import AI extraction.
+
+### Verified
+
+Typecheck clean (root + desktop); 6 graph tests green (3 file + 3 symbol: kinds, cross-file + intra-file
+reference resolution, ingest/load); `codegraph_query` match/describe logic exercised; license headers pass.
+Live: the picker popup lists File/Symbol + the agent checkbox; building the symbol graph rendered 5095
+symbols / 1672 refs on the user's project; the symbol side panel shows kind + Uses/Used-by + file links; the
+agent toggle persists + restarts. `.omp/codegraph-symbol.json` gitignored. No console errors.
+
+### Relates to
+
+ADR-0127 (the file-level code graph this extends), ADR-0096 (the omp `-e` tool-extension pattern reused),
+`typescript` compiler API.

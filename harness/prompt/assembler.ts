@@ -34,8 +34,11 @@ import type { TrustLabel } from "../contracts.ts";
  *      buildable tasks ("can't make a game/graphics/music") by mis-reading their own scope.
  *  v6 (ADR-0096, P-PREVIEW.3a): added the preview policy to layer 3 — the agent was burning turns
  *      trying browser/bash/eval (all security-gated, so DENIED) to view its own web apps. Tell it to
- *      use LUCID's built-in Preview panel (write the .html, or call preview_open) instead. */
-export const PREFIX_VERSION = "6";
+ *      use LUCID's built-in Preview panel (write the .html, or call preview_open) instead.
+ *  v7 (ADR-0114, P-CHAT.2): added the engagement policy to layer 3 — some models treated opening a
+ *      session / a bare "hi" as license to scan and edit the workspace unprompted. Greet, wait, and
+ *      offer opt-in numbered next steps from context/KG instead of auto-acting on the cwd. */
+export const PREFIX_VERSION = "7";
 
 export const UNTRUSTED_START = "UNTRUSTED_CONTENT_START";
 export const UNTRUSTED_END = "UNTRUSTED_CONTENT_END";
@@ -115,6 +118,28 @@ specific file. Prefer ONE self-contained HTML file (inline CSS/JS, no external a
 directly. Never claim you cannot preview your own work.
 </preview>`;
 
+// Engagement policy (P-CHAT.2, ADR-0114). Byte-stable and exported so the live omp ACP chat receives the
+// SAME text via --append-system-prompt (acp_backend), alongside the other layer-3 policies. Without it,
+// some models treat opening a session (or a bare "hi") as license to scan and start editing the workspace
+// unprompted (the reported Grok behavior). This keeps the agent in line: greet, wait, and offer opt-in
+// numbered next steps drawn from context / the user's knowledge-graph recall - never a fresh auto-scan.
+export const ENGAGEMENT_POLICY = `<engagement>
+Opening a chat is NOT a task, and the mere presence of files in the working directory is NOT a request.
+On a new session and on any LOW-SIGNAL opener - a greeting ("hi", "hello", "hey", "what's up"), an emoji,
+a thanks, or anything with no concrete ask - do NOT scan, read broadly, modify, refactor, or "improve"
+the workspace, and do NOT run tools or make file edits. Reply briefly and conversationally, then WAIT.
+Take substantive action - reading broadly, editing files, running commands - ONLY when the user gives a
+concrete request OR explicitly chooses one of the options you offered. Never infer a task from the
+directory's contents. When scope is unclear, ask first instead of acting.
+On a low-signal opener, offer help as a SHORT numbered list of 2-4 concrete next steps the user can pick
+by number ("1.", "2.", "3."). Draw them from the real context you already have - this conversation and any
+recalled user-memory / knowledge-graph hints in this prompt about what the user is working on now - NOT
+from a fresh directory scan. Always include, as one explicit option, reviewing the current working
+directory, so the user can opt IN rather than have it done to them. Keep it tight and skimmable; let the
+user drive. Offering numbered, choose-by-number next steps is also the preferred way to close a reply
+whenever sensible follow-ups exist.
+</engagement>`;
+
 const LAYER_3_CODING = `<coding>
 Match the surrounding code's idiom, naming, and comment density. Verification is
 part of completion: code is not done until the relevant checks (tests, lint,
@@ -126,7 +151,9 @@ ${DELEGATION_POLICY}
 
 ${BUILD_POLICY}
 
-${PREVIEW_POLICY}`;
+${PREVIEW_POLICY}
+
+${ENGAGEMENT_POLICY}`;
 
 // ── Layer 4 — security policy & trust-boundary rules ────────────────────────
 // This layer defines the data/instruction boundary the whole product enforces.

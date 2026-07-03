@@ -66,4 +66,33 @@
 //           + answers the approval (accept the affirmative option), so the approve/deny prompt surfaces and
 //           gated commands run once approved (our session/request_permission gate stays authoritative).
 //           ALSO fixes 12 CodeQL findings (stack-trace exposure, insecure temp files, postMessage origin).
-export const APP_VERSION = "1.8.26";
+// v1.8.27 = loop AAR + brief podcast + persistence fixes: chat history now SURVIVES app upgrades (stable
+//           default workspace, not the versioned install dir - ADR-0111/P-WS.1); BROWSE past After-Action
+//           Reports from the goal modal (ADR-0112/P-GOAL.14); the Engineering Update podcast now SYNTHESIZES
+//           real audio (WAV) with inline play + Download, via Kokoro (air-gap) or ChatGPT/OpenAI TTS
+//           (ADR-0113/P-BRIEF.4); the brief accordion relabeled so it's not mistaken for the loop AAR.
+// v1.8.28 = engagement policy (P-CHAT.2, ADR-0114, PREFIX v7): a bare "hi" / new session no longer makes
+//           the agent scan or edit the cwd unprompted - it greets, waits, and offers opt-in numbered next
+//           steps drawn from context + KG recall (with "review the working directory" as an explicit choice).
+// v1.9.0  = a big feature batch (ADR-0115..0128):
+//   • VOICE (ADR-0115): ElevenLabs read-aloud + speech-to-text mic in the composer, offline Whisper/Kokoro
+//     for air-gap, per-report cost hints, and TTS-friendly narration (codes/symbols/markdown stripped).
+//   • ENGINEERING REPORTS rail (ADR-0116/0117): role-tailored briefs (developer/security/manager/executive)
+//     + every loop After-Action Report, with copy / download .md / PRINT-to-PDF (white paper + "Prepared for")
+//     / two-stage archive-delete / push-to-KG, plus a Ctrl/⌘+Space read-aloud hotkey and a NotebookLM link.
+//   • SECURITY COMPLIANCE (ADR-0122): the Security brief ends with a NIST 800-171/800-53 + DISA STIG CCI
+//     crosswalk, and exports an eMASS-aligned POA&M CSV + a native STIG-Viewer .ckl (DRAFT, analyst-validate).
+//   • REPORT ANNEXES (ADR-0124): a change-annotated dependency graph + data-schema map (styled SVG image AND
+//     copyable Mermaid for draw.io), page-broken as print annexes; green/red by lines added/removed.
+//   • UI REVAMP (ADR-0118/0120): live "game-HUD" scoreboard (neutral-until-changed + clockwise racing pulse),
+//     beautiful colour report charts with plasma-on-hover, custom premium SVG icons, print/PDF.
+//   • EXEC TLDR (ADR-0119): a "TLDR" button explains an intimidating command in plain terms via a cheap model;
+//     plus composer spell-check with correction suggestions.
+//   • CHAT BACKGROUND (ADR-0125): a personal background image at 25% - ambient wash, or a flashlight that
+//     reveals it only under the cursor like a dark room.
+//   • PREVIEW MARKUP (ADR-0126): pen / rectangle / text markup over the preview (captured with the screenshot
+//     to chat) + Browse-the-cwd; the token/s readout removed and the done-line contrast raised.
+//   • CODE KNOWLEDGE GRAPH (ADR-0127/0128): ingest the workspace into a file-import OR TypeScript-AST symbol
+//     graph in the KG canvas (click a node → open the file in the IDE), with a level-picker and an opt-in
+//     read-only `codegraph_query` tool the AGENT can call to get blast-radius instead of reading many files.
+export const APP_VERSION = "1.9.0";
