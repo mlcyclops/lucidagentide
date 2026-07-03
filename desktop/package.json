@@ -65,7 +65,6 @@
           "!node_modules/onnxruntime-node/**",
           "!node_modules/onnxruntime-web/**",
           "!node_modules/@opentelemetry/**",
-          "!node_modules/typescript/**",
           "!node_modules/date-fns/**",
           "!node_modules/lucide-react/**"
         ]
