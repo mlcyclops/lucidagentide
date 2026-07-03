@@ -95,7 +95,7 @@ export interface Action { id: string; title: string; icon: string; hint?: string
 export function createPalette(getActions: () => Action[]) {
   const scrim = $("#scrim")!;
   const node = el(`<div class="palette" role="dialog" aria-label="Command palette">
-    <div class="pal-input">${icon("search", 17)}<input type="text" placeholder="Type a command… (try: model, scan, dashboard)" /></div>
+    <div class="pal-input">${icon("search", 17)}<input type="text" name="command-search" aria-label="Search commands" placeholder="Type a command… (try: model, scan, dashboard)" /></div>
     <div class="pal-list"></div></div>`);
   document.body.appendChild(node);
   const input = $("input", node) as HTMLInputElement;

@@ -80,11 +80,62 @@ const RAW: Record<string, string> = {
   copy: P("M9.5 9.5h8v8h-8z") + P("M6.5 14.5H6A1.5 1.5 0 0 1 4.5 13V6A1.5 1.5 0 0 1 6 4.5h7A1.5 1.5 0 0 1 14.5 6v.5"),
   // download (save to disk)
   download: P("M12 4v9.5") + P("M8 10.5l4 4 4-4") + P("M5 18.5h14"),
+  // P-VOICE.1: microphone (speech-to-text) — capsule + stand + base
+  mic: P("M12 4.5a2.5 2.5 0 0 0-2.5 2.5v4a2.5 2.5 0 0 0 5 0v-4A2.5 2.5 0 0 0 12 4.5z") + P("M6.5 11a5.5 5.5 0 0 0 11 0") + P("M12 16.5v3") + P("M9 19.5h6"),
+  // P-VOICE.1: speaker / read-aloud (text-to-speech) — cone + two sound waves
+  volume: P("M5 9.5h3l4-3v11l-4-3H5z") + P("M15 9a4 4 0 0 1 0 6") + P("M17.5 7a7 7 0 0 1 0 10"),
+  // P-REPORT.1: engineering reports — a document (folded corner) with two text lines
+  report: P("M6.5 4.5h7l4 4v10.5a1 1 0 0 1-1 1h-10a1 1 0 0 1-1-1v-13.5a1 1 0 0 1 1-1z") + P("M13.5 4.5v4h4") + P("M8.8 12.5h6.4") + P("M8.8 15.3h6.4"),
+  // P-REPORT.2: archive (box + lid + handle), restore (counter-clockwise arrow). `trash` already exists.
+  archive: P("M4.5 6h15v3.5h-15z") + P("M6 9.5v8.5a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1V9.5") + P("M9.5 13h5"),
+  restore: P("M5 12a7 7 0 1 0 2-4.9") + P("M5 4.5V8h3.5"),
   // lightbulb (thinking) - glass dome + neck, filament tick, two base lines
   bulb: P("M12 4.2a5 5 0 0 0-3 9c.7.5 1.1 1.3 1.2 2.1h3.6c.1-.8.5-1.6 1.2-2.1a5 5 0 0 0-3-9z")
     + P("M10.4 18.6h3.2") + P("M10.9 20.6h2.2") + P("M12 9.2v2.4") + P("M10.7 10.4h2.6"),
   // double chevron down (jump-to-latest) - two stacked downward carets
   chevronsDown: P("M6.5 7.5 12 13l5.5-5.5") + P("M6.5 13 12 18.5 17.5 13"),
+  // center / re-fit the graph (crosshair) — P-KG-CODE.1b
+  center: P("M12 3.5v3.2") + P("M12 17.3v3.2") + P("M3.5 12h3.2") + P("M17.3 12h3.2")
+    + "<circle cx='12' cy='12' r='4.3' fill='none'/>" + "<circle cx='12' cy='12' r='1' fill='currentColor' stroke='none'/>",
+  // ── preview markup tools (P-PREVIEW.5) ──
+  // pen (freehand draw) — nib + body
+  pen: P("M5.4 18.6l-1.4 1.4.9-3.6L15.2 5.6a1.6 1.6 0 0 1 2.3 0l.9.9a1.6 1.6 0 0 1 0 2.3L7.6 19.5z") + P("M13.6 7.2l3.2 3.2"),
+  // text tool — a capital T with a small base serif
+  textT: P("M6.5 7h11") + P("M12 7v11") + P("M9.5 18h5"),
+  // markup (the tools dropdown) — a marker over a baseline
+  markup: P("M4.5 19.5h15") + P("M8 16l1.3-3.5 6.3-6.3a1.5 1.5 0 0 1 2.1 0l.6.6a1.5 1.5 0 0 1 0 2.1L11.5 15z"),
+  // printer (print / save-as-PDF) — paper feed, body, output tray, ink light
+  print: P("M7.5 8.5V5a.5.5 0 0 1 .5-.5h8a.5.5 0 0 1 .5.5v3.5")
+    + P("M7.5 16H6a2 2 0 0 1-2-2v-3.4a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2V14a2 2 0 0 1-2 2h-1.5")
+    + P("M7.5 13.5h9v5.5a.4.4 0 0 1-.4.4H7.9a.4.4 0 0 1-.4-.4z")
+    + "<circle cx='16.4' cy='11.2' r='.75' fill='currentColor' stroke='none'/>",
+
+  // ── premium scoreboard glyphs (P-REPORT.4) ──
+  // gauge / speedometer (avg per turn) — dial arc, needle, hub
+  gauge: P("M5 16.5a7 7 0 0 1 14 0") + P("M12 16.5l3.4-3.9")
+    + "<circle cx='12' cy='16.5' r='1.35' fill='currentColor' stroke='none'/>"
+    + P("M6.5 16.4h.02") + P("M8 12.3h.02") + P("M12 10.6h.02") + P("M16 12.3h.02") + P("M17.5 16.4h.02"),
+  // loop / cycles (turns) — near-full ring with an arrowhead
+  loop: P("M18.7 8.6A7 7 0 1 0 19 12") + P("M18.7 5v3.8h-3.8"),
+  // scan / finder (findings) — corner brackets + a sweeping scan line + node
+  scan: P("M5 8.4V6.6A1.6 1.6 0 0 1 6.6 5H8.4") + P("M15.6 5h1.8A1.6 1.6 0 0 1 19 6.6V8.4")
+    + P("M19 15.6v1.8a1.6 1.6 0 0 1-1.6 1.6H15.6") + P("M8.4 19H6.6A1.6 1.6 0 0 1 5 17.4V15.6")
+    + P("M6.8 12h10.4") + "<circle cx='12' cy='12' r='1.15' fill='currentColor' stroke='none'/>",
+  // headphones (Listen / narrate) — duotone: stroked band + filled ear cups
+  headphones: P("M5 14v-2a7 7 0 0 1 14 0v2")
+    + "<path d='M4.6 13.4h1.6a1.1 1.1 0 0 1 1.1 1.1v3.4a1.1 1.1 0 0 1-1.1 1.1H6a1.4 1.4 0 0 1-1.4-1.4z' fill='currentColor' fill-opacity='.2'/>"
+    + "<path d='M19.4 13.4h-1.6a1.1 1.1 0 0 0-1.1 1.1v3.4a1.1 1.1 0 0 0 1.1 1.1H18a1.4 1.4 0 0 0 1.4-1.4z' fill='currentColor' fill-opacity='.2'/>",
+  // ── outcome badges (replace the ✅/⏹/🛑/❗ emoji in report headers with real glyphs) ──
+  // duotone rounded-square backing (tinted) + the mark on top
+  checkBadge: "<rect x='4' y='4' width='16' height='16' rx='5.2' fill='currentColor' fill-opacity='.17'/>"
+    + "<rect x='4' y='4' width='16' height='16' rx='5.2' fill='none' stroke='currentColor' stroke-opacity='.5'/>"
+    + P("M8.2 12.2 10.9 15 15.8 9.2"),
+  stopBadge: "<rect x='4' y='4' width='16' height='16' rx='5.2' fill='currentColor' fill-opacity='.17'/>"
+    + "<rect x='4' y='4' width='16' height='16' rx='5.2' fill='none' stroke='currentColor' stroke-opacity='.5'/>"
+    + "<rect x='9' y='9' width='6' height='6' rx='1.6' fill='currentColor' stroke='none'/>",
+  alertBadge: "<rect x='4' y='4' width='16' height='16' rx='5.2' fill='currentColor' fill-opacity='.17'/>"
+    + "<rect x='4' y='4' width='16' height='16' rx='5.2' fill='none' stroke='currentColor' stroke-opacity='.5'/>"
+    + P("M12 8.3v4.4") + P("M12 15.9h.01"),
 };
 
 // Action glyphs that read as "do something now" - they get the .ic-action hook

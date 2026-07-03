@@ -10,7 +10,7 @@
 // browser build and the desktop app share one real backend. The preload only
 // adds native window controls + crisp zoom.
 
-import { app, BrowserWindow, dialog, ipcMain, safeStorage, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, safeStorage, shell } from "electron";
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -69,6 +69,21 @@ function createWindow(): void {
     webPreferences: { preload: preloadPath(), contextIsolation: true, nodeIntegration: false },
   });
   win.once("ready-to-show", () => win!.show());
+  // Spell-check suggestions: Electron's spellchecker underlines misspellings but the app must build the
+  // correction menu itself. Only intercept when there's a misspelled word (so we don't fight Monaco's own
+  // context menu elsewhere); offer the dictionary suggestions + "Add to dictionary".
+  win.webContents.on("context-menu", (_e, params) => {
+    if (!params.misspelledWord) return;
+    const suggestions = params.dictionarySuggestions.slice(0, 6);
+    const template: Electron.MenuItemConstructorOptions[] = suggestions.length
+      ? suggestions.map((s) => ({ label: s, click: () => win?.webContents.replaceMisspelling(s) }))
+      : [{ label: "No suggestions", enabled: false }];
+    template.push(
+      { type: "separator" },
+      { label: "Add to dictionary", click: () => win?.webContents.session.addWordToSpellCheckerDictionary(params.misspelledWord) },
+    );
+    Menu.buildFromTemplate(template).popup({ window: win ?? undefined });
+  });
   // external links (e.g. duckdb.org) open in the OS browser, not a new Electron window
   win.webContents.setWindowOpenHandler(({ url }) => { if (/^https?:/.test(url)) shell.openExternal(url); return { action: "deny" }; });
   // If the dev server isn't answering yet (slow first launch), the load fails — retry a bounded number

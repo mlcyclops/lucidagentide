@@ -98,6 +98,43 @@ personalization internals are proprietary and intentionally undocumented here - 
 
 ---
 
+## ✨ What's new in v1.9.0
+
+> A big feature batch. Screenshots below are **placeholders** — drop the real captures into
+> `.github/assets/screenshots/v1.9.0/` (filenames referenced here) and they render automatically.
+
+- **🎙️ Voice** — ElevenLabs read-aloud + a speech-to-text mic in the composer; offline Whisper / Kokoro for
+  air-gap; TTS-friendly narration that skips codes and symbols.
+- **📊 Engineering Reports rail** — role-tailored briefs (developer · security · manager · executive) plus every
+  loop After-Action Report, with copy · download `.md` · **print / save-as-PDF** (clean white paper + a
+  "Prepared for" line) · two-stage archive-delete · push-to-knowledge-graph. `Ctrl/⌘+Space` reads a report aloud.
+- **🛡️ Security compliance** — the Security brief ends with a **NIST 800-171 / 800-53 + DISA STIG CCI**
+  crosswalk and exports an **eMASS-aligned POA&M CSV** and a native **STIG-Viewer `.ckl`** (draft — analyst-validate).
+- **🕸️ Code knowledge graph** — ingest the workspace into a **file-import** or a **TypeScript-AST symbol** graph
+  in the KG canvas (click a node → open the file in the IDE); an opt-in read-only `codegraph_query` tool lets the
+  **agent** get blast-radius answers instead of reading many whole files.
+- **🎨 UI revamp** — a live "game-HUD" scoreboard, colour report charts with plasma-on-hover, premium custom SVG
+  icons; a personalizable **chat background** (ambient 25% wash, or a flashlight that reveals it under the cursor).
+- **🖊️ Preview markup** — pen / rectangle / text markup over the in-app preview, captured with the screenshot to
+  chat; plus a **TLDR** button that explains an intimidating command in plain terms via a cheap model.
+
+<p align="center">
+  <img src=".github/assets/screenshots/v1.9.0/engineering-reports.png" alt="Engineering Reports rail — role-tailored briefs, POA&M/STIG export, print-to-PDF (screenshot placeholder)" width="90%" />
+  <br/><sub><i>Engineering Reports — role-tailored briefs, POA&amp;M / STIG export, print-to-PDF. (screenshot placeholder)</i></sub>
+</p>
+
+<p align="center">
+  <img src=".github/assets/screenshots/v1.9.0/code-graph.png" alt="Code knowledge graph — file-import and AST symbol graph in the KG canvas (screenshot placeholder)" width="90%" />
+  <br/><sub><i>Code knowledge graph — file-import &amp; AST symbol graph, click a node to open the file. (screenshot placeholder)</i></sub>
+</p>
+
+<p align="center">
+  <img src=".github/assets/screenshots/v1.9.0/report-charts.png" alt="Report charts and the live scoreboard (screenshot placeholder)" width="90%" />
+  <br/><sub><i>Colour report charts + the live scoreboard. (screenshot placeholder)</i></sub>
+</p>
+
+---
+
 ## Table of contents
 
 - [<img src=".github/assets/icons/overview.svg" width="16" alt=""> Overview](#-overview)

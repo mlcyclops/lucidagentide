@@ -11,7 +11,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { appendGoalIteration, finishGoalMemory, listResumableLoops, parseGoalMemory, resumeGoalMemory, saveGoalReport, startGoalMemory } from "./goal_memory.ts";
+import { appendGoalIteration, archiveGoalReport, deleteGoalReport, finishGoalMemory, listGoalReports, listResumableLoops, parseGoalMemory, readGoalReport, restoreGoalReport, resumeGoalMemory, saveGoalReport, startGoalMemory, summarizeReport } from "./goal_memory.ts";
 
 describe("goal_memory", () => {
   test("writes a durable markdown record under .omp/loops/", () => {
@@ -130,6 +130,68 @@ describe("saveGoalReport (P-GOAL.9)", () => {
       expect(rel).not.toBeNull();
       expect(rel!).not.toContain("..");
       expect(rel!.replace(/\\/g, "/")).toContain(".omp/loops/");
+    } finally { rmSync(ws, { recursive: true, force: true }); }
+  });
+
+  // P-GOAL.14 (ADR-0112): browse past After-Action Reports.
+  test("summarizeReport pulls the goal title + outcome badge from a report", () => {
+    const md = "# After-Action Report: Fix the auth flow\n\n**✅ Goal met** - all tests pass\n\n## Scoreboard\n";
+    expect(summarizeReport(md)).toEqual({ goal: "Fix the auth flow", outcome: "✅ Goal met" });
+    const stopped = "# After-Action Report: Big job\n\n**⏹️ Stopped** - hit the iteration cap\n";
+    expect(summarizeReport(stopped).outcome).toBe("⏹️ Stopped");
+    expect(summarizeReport("not a report").goal).toBe("loop"); // fallback
+  });
+
+  test("listGoalReports lists saved reports (recent-first) and readGoalReport reads one back", () => {
+    const ws = mkdtempSync(join(homedir(), ".lucid-reports-"));
+    try {
+      expect(listGoalReports(ws)).toEqual([]); // none yet
+      saveGoalReport(ws, "aaa", "First goal", "# After-Action Report: First goal\n\n**✅ Goal met** - done\n");
+      saveGoalReport(ws, "bbb", "Second goal", "# After-Action Report: Second goal\n\n**🛑 Cancelled** - stopped by you\n");
+      const reports = listGoalReports(ws);
+      expect(reports.length).toBe(2);
+      expect(reports.map((r) => r.id).sort()).toEqual(["aaa", "bbb"]);
+      const one = reports.find((r) => r.id === "aaa")!;
+      expect(one.goal).toBe("First goal");
+      expect(one.outcome).toBe("✅ Goal met");
+      const md = readGoalReport(ws, one.rel);
+      expect(md).toContain("After-Action Report: First goal");
+      // confinement: a traversal rel is rejected
+      expect(readGoalReport(ws, "../../../etc/passwd")).toBeNull();
+    } finally { rmSync(ws, { recursive: true, force: true }); }
+  });
+
+  // P-REPORT.2 (ADR-0117): two-stage lifecycle - archive (soft) → restore, or archive → permanent delete.
+  test("archive → restore, and archive → delete; delete NEVER touches an active report", () => {
+    const ws = mkdtempSync(join(homedir(), ".lucid-lifecycle-"));
+    try {
+      const rel = saveGoalReport(ws, "aaa", "Some goal", "# After-Action Report: Some goal\n\n**✅ Goal met** - done\n")!;
+      expect(listGoalReports(ws).length).toBe(1);
+      expect(listGoalReports(ws, 50, true).length).toBe(0);       // archive empty
+
+      // GUARD: deleting an ACTIVE report is refused (only archived can be permanently deleted).
+      expect(deleteGoalReport(ws, rel)).toBe(false);
+      expect(listGoalReports(ws).length).toBe(1);                  // still there
+
+      // Archive → active empty, archive has 1.
+      expect(archiveGoalReport(ws, rel)).toBe(true);
+      expect(listGoalReports(ws).length).toBe(0);
+      const arch = listGoalReports(ws, 50, true);
+      expect(arch.length).toBe(1);
+      expect(arch[0]!.rel.replace(/\\/g, "/")).toContain(".omp/loops/archived/");
+
+      // Restore → back to active.
+      expect(restoreGoalReport(ws, arch[0]!.rel)).toBe(true);
+      expect(listGoalReports(ws).length).toBe(1);
+      expect(listGoalReports(ws, 50, true).length).toBe(0);
+
+      // Archive again, then PERMANENT delete → both empty.
+      const rel2 = listGoalReports(ws)[0]!.rel;
+      archiveGoalReport(ws, rel2);
+      const archRel = listGoalReports(ws, 50, true)[0]!.rel;
+      expect(deleteGoalReport(ws, archRel)).toBe(true);
+      expect(listGoalReports(ws).length).toBe(0);
+      expect(listGoalReports(ws, 50, true).length).toBe(0);
     } finally { rmSync(ws, { recursive: true, force: true }); }
   });
 });

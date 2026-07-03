@@ -73,6 +73,8 @@ export interface GuiSettings {
   // ADR-0009 Phase D: developer-mode logging view (telemetry + lineage + audit trails, read-only).
   // OFF by default; flips on the "Logs" rail tab. Gated server-side too.
   developerMode?: boolean;
+  // P-KG-SYM.1: expose the workspace code graph to the agent as a read-only `codegraph_query` tool.
+  codeGraphAgent?: boolean;
   // P-MCP.1 (ADR-0020): configured MCP servers, fed into omp's session/new mcpServers. Tokens live
   // in THIS git-ignored file (mode 0600) like provider keys; safeStorage custody is a later phase.
   mcpServers?: McpServerEntry[];
@@ -102,6 +104,16 @@ export interface GuiSettings {
   // ADR-0089 (P-ROLE.1b): the first-run guided walkthrough has been shown (finished OR skipped).
   // Replay-guard so the tour never re-appears uninvited; the About "Take the tour" button ignores it.
   tourSeen?: boolean;
+  // P-VOICE.1 (ADR-0115): voice (TTS/STT) config.
+  // sttProvider: mic engine — "elevenlabs" (cloud Scribe) or "whisper" (offline, air-gap/DoD). Default whisper.
+  sttProvider?: "elevenlabs" | "whisper";
+  // sttUrl: the offline OpenAI-compatible Whisper server (whisper.cpp / faster-whisper). Default :9000.
+  sttUrl?: string;
+  // ttsProvider: default engine for the brief podcast + read-aloud — "elevenlabs" | "openai-tts" | "local-tts".
+  ttsProvider?: "elevenlabs" | "openai-tts" | "local-tts";
+  // ttsVoice: selected ElevenLabs voice id; ttsVoiceFavorites: starred voice ids (favorites shown first).
+  ttsVoice?: string;
+  ttsVoiceFavorites?: string[];
 }
 
 export const ASKSAGE_DEFAULT_LIMIT = 200_000;
@@ -141,6 +153,38 @@ export function setRateLimitProbe(enabled: boolean): GuiSettings {
 }
 export function setDeveloperMode(enabled: boolean): GuiSettings {
   const s = load(); s.developerMode = enabled; save(s); return s;
+}
+export function setCodeGraphAgent(enabled: boolean): GuiSettings {
+  const s = load(); s.codeGraphAgent = enabled; save(s); return s;
+}
+
+// P-VOICE.1 (ADR-0115): voice (TTS/STT) config. Effective values with defaults, for the server + UI.
+export interface VoiceSettings {
+  sttProvider: "elevenlabs" | "whisper";
+  sttUrl: string;
+  ttsProvider: "elevenlabs" | "openai-tts" | "local-tts";
+  ttsVoice: string;
+  ttsVoiceFavorites: string[];
+}
+export function voiceSettings(): VoiceSettings {
+  const s = load();
+  return {
+    sttProvider: s.sttProvider === "elevenlabs" ? "elevenlabs" : "whisper", // offline is the safe default
+    sttUrl: s.sttUrl || process.env.LUCID_STT_URL || "http://localhost:9000",
+    ttsProvider: s.ttsProvider ?? "elevenlabs",
+    ttsVoice: s.ttsVoice ?? "",
+    ttsVoiceFavorites: Array.isArray(s.ttsVoiceFavorites) ? s.ttsVoiceFavorites : [],
+  };
+}
+/** Merge a partial voice-settings patch. Favorites are replaced wholesale (the UI sends the full list). */
+export function setVoiceSettings(patch: Partial<VoiceSettings>): VoiceSettings {
+  const s = load();
+  if (patch.sttProvider) s.sttProvider = patch.sttProvider === "elevenlabs" ? "elevenlabs" : "whisper";
+  if (patch.sttUrl !== undefined) s.sttUrl = patch.sttUrl.trim() || undefined;
+  if (patch.ttsProvider) s.ttsProvider = patch.ttsProvider;
+  if (patch.ttsVoice !== undefined) s.ttsVoice = patch.ttsVoice.trim() || undefined;
+  if (patch.ttsVoiceFavorites) s.ttsVoiceFavorites = patch.ttsVoiceFavorites.slice(0, 100);
+  save(s); return voiceSettings();
 }
 
 // ── ADR-0088 / ADR-0089 (P-ROLE.1 / .1b): onboarding role + first-run tour state ──────────────

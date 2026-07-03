@@ -54,7 +54,7 @@ export class OpenAiCompatibleSttBackend implements TranscriptionBackend {
   constructor(private readonly opts: OpenAiSttOptions) {}
 
   async transcribe(audio: Uint8Array, opts: TranscribeOptions = {}): Promise<TranscriptionResult> {
-    if (audio.length === 0) return { backendId: this.id, text: "", note: "empty audio — nothing to transcribe" };
+    if (audio.length === 0) return { backendId: this.id, text: "", note: "empty audio - nothing to transcribe" };
     const f = this.opts.fetchImpl ?? fetch;
     const url = `${this.opts.baseUrl.replace(/\/$/, "")}/v1/audio/transcriptions`;
     try {

@@ -105,6 +105,17 @@ export interface ConfigOption {
   id: string; name: string; category: string; type: string;
   currentValue: string; options: { value: string; name: string }[];
 }
+// P-VOICE.1 (ADR-0115): voice config + ElevenLabs voice for the pickers.
+export interface VoiceSettingsView {
+  sttProvider: "elevenlabs" | "whisper";
+  sttUrl: string;
+  ttsProvider: "elevenlabs" | "openai-tts" | "local-tts";
+  ttsVoice: string;
+  ttsVoiceFavorites: string[];
+}
+export interface ElevenVoiceView { voiceId: string; name: string; category?: string; description?: string; labels?: Record<string, string> }
+// P-REPORT.1 (ADR-0116): a unified Reports-list row - a loop AAR or a saved Engineering Update brief.
+export interface ReportEntry { kind: "aar" | "brief"; id: string; title: string; outcome: string; role: string; updatedAt: number; rel: string }
 export interface ModeOption { id: string; name: string; description?: string }
 export interface ModeState { available: ModeOption[]; current: string; ui?: "agent" | "ask" | "plan"; permissionMode?: "auto" | "ask" }
 export interface OmpCommand { name: string; description?: string; hint?: string }
@@ -143,6 +154,8 @@ export interface GraphNode { id: string; name: string; kind: string; trust: stri
 export interface GraphEdge { from: string; to: string; relation: string }
 export interface GraphFact { id: string; entity_id: string; statement: string; scope: string; trust: string; confidence: number; session?: string; at: string }
 export interface PersonalGraphData { nodes: GraphNode[]; edges: GraphEdge[]; facts: GraphFact[] }
+/** P-KG-CODE.1: the workspace code graph (file → import edges) + ingest status. Nodes/edges reuse the graph shapes. */
+export interface CodeGraphView { level: "file" | "symbol"; ingested: boolean; root: string; fileCount: number; symbolCount: number; edgeCount: number; updatedAt: number; nodes: GraphNode[]; edges: GraphEdge[] }
 export interface PersonalImportResult { ok: boolean; error?: string; vendor?: "openai" | "anthropic" | "gemini"; conversations?: number; messages?: number; learned?: number; blocked?: number; skipped?: number; extractor?: "heuristic" | "model"; cancelled?: boolean }
 // P-KG-INGEST.1 (ADR-0076): the background import job - start returns a jobId; status is polled for a live countdown.
 export interface PersonalImportStart { ok: boolean; jobId?: string; error?: string }
@@ -252,8 +265,46 @@ export interface LucidBridge {
   /** Release one quarantined call - the audited fail-closed override (ADR-0019 C). */
   securityApprove(id: string): Promise<BlockRecord | null>;
   securityDismiss(id: string): Promise<BlockRecord | null>;
-  /** P-BRIEF.3 (ADR-0072): the Executive Engineering Update generated from the repo's own logs. */
-  engineeringBrief(): Promise<{ brief: string; scriptText: string; counts: Record<string, number> } | null>;
+  /** P-BRIEF.3 (ADR-0072) / P-REPORT.1 (ADR-0116): the Engineering Update from the repo's own logs,
+   *  optionally tailored to a role and persisted (save) so the Reports panel lists it. */
+  engineeringBrief(role?: string, save?: boolean): Promise<{ brief: string; scriptText: string; counts: Record<string, number>; role: string; savedRel: string | null } | null>;
+  /** P-REPORT.1: the unified Reports list (loop AARs + saved briefs) and reading one. `archived` = the archive view. */
+  reports(archived?: boolean): Promise<ReportEntry[] | null>;
+  report(kind: string, rel: string, archived?: boolean): Promise<{ kind: string; rel: string; markdown: string } | null>;
+  /** P-REPORT.2 (ADR-0117): two-stage lifecycle - archive (soft), restore, and permanent delete (archive only). */
+  reportArchive(kind: string, rel: string): Promise<{ archived: boolean } | null>;
+  reportRestore(kind: string, rel: string): Promise<{ restored: boolean } | null>;
+  reportDelete(kind: string, rel: string): Promise<{ deleted: boolean } | null>;
+  /** P-REPORT.3 (ADR-0117): push a report into the KG as one trusted node, in the chosen compartment. */
+  reportToKg(kind: string, rel: string, scope: string, archived?: boolean): Promise<{ ok: boolean; error?: string } | null>;
+  /** P-EXEC.3: "TLDR" - plain-language explanation of a command via a cheap keyed model. */
+  explainCommand(command: string): Promise<{ ok: boolean; text?: string; model?: string; error?: string } | null>;
+  /** P-REPORT.6: the Security control crosswalk as an eMASS-aligned POA&M CSV. */
+  engineeringBriefPoam(): Promise<{ csv: string; rows: number; filename: string } | null>;
+  /** P-REPORT.8: the Security control crosswalk as a STIG Viewer .ckl checklist. */
+  engineeringBriefCkl(): Promise<{ ckl: string; rows: number; filename: string } | null>;
+  /** P-KG-CODE.1 / P-KG-SYM.1: the workspace code graph at `level` (file imports | symbol AST). `codeGraph` reads
+   *  the stored graph; `codeGraphIngest` (re-)builds it. */
+  codeGraph(level: "file" | "symbol"): Promise<CodeGraphView | null>;
+  codeGraphIngest(level: "file" | "symbol"): Promise<CodeGraphView | null>;
+  /** P-KG-SYM.1: read / set whether the agent gets the read-only codegraph_query tool (set restarts the backend). */
+  codeGraphAgent(): Promise<{ enabled: boolean } | null>;
+  setCodeGraphAgent(enabled: boolean): Promise<{ enabled: boolean } | null>;
+  /** P-APPEAR.1: the personalized chat background (image data URL + display mode + opacity). */
+  chatBackground(): Promise<{ image: string; mode: "off" | "ambient" | "flashlight"; opacity: number } | null>;
+  setChatBackground(patch: { image?: string; mode?: "off" | "ambient" | "flashlight"; opacity?: number }): Promise<{ image: string; mode: "off" | "ambient" | "flashlight"; opacity: number } | null>;
+  /** P-BRIEF.4 (ADR-0113): synthesize the podcast to WAV audio (base64) via a TTS provider. */
+  engineeringBriefAudio(provider: "openai-tts" | "local-tts" | "elevenlabs", voiceId?: string): Promise<{ note: string; audioB64: string | null; mime: string } | null>;
+  // P-VOICE.1 (ADR-0115): voice config (STT engine + TTS voice/favorites), the ElevenLabs voice list,
+  // mic transcription, and read-aloud TTS.
+  voiceSettings(): Promise<VoiceSettingsView | null>;
+  setVoiceSettings(patch: Partial<VoiceSettingsView>): Promise<VoiceSettingsView | null>;
+  voices(): Promise<{ voices: ElevenVoiceView[]; favorites: string[]; selected: string; note?: string } | null>;
+  transcribe(audioB64: string, mime: string, language?: string): Promise<{ text: string; note: string } | null>;
+  speak(text: string, voiceId?: string, provider?: string): Promise<{ audioB64: string | null; mime: string; note: string } | null>;
+  /** P-GOAL.14 (ADR-0112): list past After-Action Reports, and read one by its workspace-relative path. */
+  pastReports(): Promise<{ rel: string; id: string; goal: string; outcome: string; updatedAt: number }[] | null>;
+  pastReport(rel: string): Promise<{ rel: string; markdown: string } | null>;
   memory(): Promise<MemorySnapshot | null>;
   budget(): Promise<{ label: string; used: number; status: string; resetsAt: number | null }[] | null>;
   // P10.3: live API-key rate-limit probe (opt-in). `rateLimits()` returns probed limits ([] when off);
@@ -543,7 +594,30 @@ export const bridge: LucidBridge = {
   security: () => getData("/api/security"),
   securityApprove: (id) => post("/api/security/approve", { id }),
   securityDismiss: (id) => post("/api/security/dismiss", { id }),
-  engineeringBrief: () => getData("/api/brief"),
+  engineeringBrief: (role, save) => getData(`/api/brief${role || save ? "?" : ""}${role ? `role=${encodeURIComponent(role)}` : ""}${save ? `${role ? "&" : ""}save=1` : ""}`),
+  reports: (archived) => getData(`/api/reports${archived ? "?archived=1" : ""}`),
+  report: (kind, rel, archived) => getData(`/api/report?kind=${encodeURIComponent(kind)}&rel=${encodeURIComponent(rel)}${archived ? "&archived=1" : ""}`),
+  reportArchive: (kind, rel) => post("/api/report/archive", { kind, rel }),
+  reportRestore: (kind, rel) => post("/api/report/restore", { kind, rel }),
+  reportDelete: (kind, rel) => post("/api/report/delete", { kind, rel }),
+  reportToKg: (kind, rel, scope, archived) => post("/api/report/to-kg", { kind, rel, scope, archived }),
+  explainCommand: (command) => post("/api/explain", { command }),
+  engineeringBriefPoam: () => getData("/api/brief/poam"),
+  engineeringBriefCkl: () => getData("/api/brief/ckl"),
+  codeGraph: (level) => getData(`/api/codegraph?level=${level}`),
+  codeGraphIngest: (level) => post("/api/codegraph", { level }),
+  codeGraphAgent: () => getData("/api/codegraph/agent"),
+  setCodeGraphAgent: (enabled) => post("/api/codegraph/agent", { enabled }),
+  chatBackground: () => getData("/api/chat-bg"),
+  setChatBackground: (patch) => post("/api/chat-bg", patch),
+  engineeringBriefAudio: (provider, voiceId) => post("/api/brief/audio", { provider, voiceId }),
+  voiceSettings: () => getData("/api/voice-settings"),
+  setVoiceSettings: (patch) => post("/api/voice-settings", patch),
+  voices: () => getData("/api/voices"),
+  transcribe: (audioB64, mime, language) => post("/api/transcribe", { audioB64, mime, language }),
+  speak: (text, voiceId, provider) => post("/api/tts/speak", { text, voiceId, provider }),
+  pastReports: () => getData("/api/goal/reports"),
+  pastReport: (rel) => getData(`/api/goal/reports?rel=${encodeURIComponent(rel)}`),
   memory: () => getData("/api/memory"),
   budget: () => getData("/api/budget"),
   rateLimits: (force) => getData(`/api/ratelimits${force ? "?force=1" : ""}`),
