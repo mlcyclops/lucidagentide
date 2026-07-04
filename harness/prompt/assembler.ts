@@ -181,7 +181,9 @@ LUCID's Agent Builder - the user does NOT have to configure the canvas themselve
   \`{method:"jit-ticket", instructions, ticket:{system, template, rationale}}\` when the user's organization
   issues Just-In-Time tokens from a KMS via IT ticketing - name the system (e.g. ServiceNow), give sample
   ticket fields (catalog item, assignment group, short description, justification), and a rationale the user
-  can paste. A LUCID importing this agent shows that guidance to its user - values are NEVER in the file.
+  can paste. When the org runs a KMS LUCID can reach (enterprise connector), also add provider
+  {kind: "vault"|"aws-sm"|"azure-kv"|"gcp-sm"|"infisical", ref} so runs fetch the token just-in-time with no
+  human in the loop. A LUCID importing this agent shows that guidance to its user - values are NEVER in the file.
 </agent-builder>`;
 
 // P-CMD.1 (ADR-0146): steer the chat agent to let the user CREATE their own reusable "/" slash commands just by

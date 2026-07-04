@@ -30,6 +30,7 @@ export function collectSpecText(spec: AgentSpec): string {
     if (r.provisioning?.instructions) parts.push(r.provisioning.instructions);
     if (r.provisioning?.ticket?.system) parts.push(r.provisioning.ticket.system);
     if (r.provisioning?.ticket?.rationale) parts.push(r.provisioning.ticket.rationale);
+    if (r.provisioning?.provider?.ref) parts.push(r.provisioning.provider.ref);
     for (const v of Object.values(r.provisioning?.ticket?.template ?? {})) parts.push(v);
   }
   for (const n of spec.nodes) {

@@ -55,6 +55,7 @@ function specTextFields(spec: AgentSpec): Array<{ where: string; text: string }>
     add(`secret ${r.name} provisioning instructions`, r.provisioning?.instructions);
     add(`secret ${r.name} provisioning ticket system`, r.provisioning?.ticket?.system);
     add(`secret ${r.name} provisioning ticket rationale`, r.provisioning?.ticket?.rationale);
+    add(`secret ${r.name} provisioning provider ref`, r.provisioning?.provider?.ref); // a VALUE pasted as a "ref" is a leak
     for (const [k, v] of Object.entries(r.provisioning?.ticket?.template ?? {})) add(`secret ${r.name} provisioning ticket ${k}`, v);
   }
   return out;

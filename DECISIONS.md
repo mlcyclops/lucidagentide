@@ -9887,7 +9887,17 @@ n8n export - instead of prose hopes.
 ## ADR-0144 - P-AGENT.16: external secret providers via the add-on (DESIGN - ENTERPRISE)
 
 **Date:** 2026-07-04
-**Status:** Accepted - DESIGN. Public seam only in core; providers are add-on IP.
+**Status:** Accepted. **CORE WIRING BUILT + tested** (post-#200/#201 merge; the private connector shipped as
+add-on ADR-A014/TASK-019): `SecretProvisioning.provider {kind, ref}` (closed kinds vault/aws-sm/azure-kv/
+gcp-sm/infisical; the ref's scheme MUST match the kind, fail-closed; refs are scanned by secret_guard — a
+pasted VALUE is a guardrail violation — and by the import gate). Pure `harness/agent/kms.ts` builds the
+ADR-A014 request artifact; `resolveProviderSecrets` (agent_run.ts) dispatches `kms fetch` through the
+add-on seam, reads the 0600 env file, and DELETES both artifacts immediately (inject-then-drop; values
+live only in process memory + the child run env). Wired into one-shot, segmented, and sub-agent paths —
+a CHILD fetches under its OWN declarations, never the parent's. FAIL-CLOSED on a failed or lying fetch
+attempt (missing values ⇒ refusal, no partial credential set); HONEST SKIP when no refs are declared or
+no connector is installed (today's vault flow). Trace kind "secrets" records fetch outcomes (never
+values). Managed-config “require provider-sourced secrets” remains design.
 
 **Context.** P-AGENT.9 ships JIT *guidance* (ticket templates); n8n enterprise fetches from Vault/ASM/AKV/GCP
 at runtime. The add-on already has a kms/vault connector tree (lucidagentIDEaddon/connectors/kms).

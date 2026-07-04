@@ -11,7 +11,7 @@
 // invalid spec is refused. Runs in an isolated per-agent dir under `.omp/agent-runs/` (v1 doesn't touch the
 // user's workspace). Bounded by a hard timeout so a wedged run can't hang the engine.
 
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { buildAgent } from "../harness/agent/compiler.ts";
@@ -20,6 +20,8 @@ import { canAutoRun } from "../harness/agent/import_gate.ts";
 import { SegmentedRun, subagentGuard, parseBranchChoice, type SubagentBoundary } from "../harness/agent/segments.ts";
 import { loadSpecFile, loadSpecTrust } from "../harness/agent/file_store.ts";
 import { TraceRecorder } from "../harness/agent/trace.ts"; // P-AGENT.13: best-effort run provenance
+import { buildKmsFetchRequest } from "../harness/agent/kms.ts"; // P-AGENT.16: provider-sourced secrets
+import { connectorStatus, runConnector } from "./addon_seam.ts"; // P-AGENT.16: enterprise kms connector
 import { validateSpec, type AgentSpec } from "../harness/agent/spec.ts";
 import type { TrustLabel } from "../harness/contracts.ts";
 
@@ -46,6 +48,48 @@ export interface AgentRunResult {
   paused?: { runId: string; nodeId: string; label: string; outputSoFar: string };
 }
 
+/** P-AGENT.16: outcome of resolving a spec's provider-sourced secrets through the kms connector.
+ *  `skipped` = nothing to fetch, or no connector installed (ADR-0144: the connector is an enhancement —
+ *  absent connector keeps today's vault flow). A FAILED fetch attempt is fail-closed: the run refuses
+ *  rather than executing half-credentialed (mirrors the connector's all-or-nothing batches). */
+export interface ProviderSecretsResult {
+  ok: boolean;
+  env?: Record<string, string>;
+  skipped?: boolean;
+  detail: string;
+}
+
+export function resolveProviderSecrets(spec: AgentSpec, runDir: string): ProviderSecretsResult {
+  const outFile = join(runDir, "secrets.env.json");
+  const request = buildKmsFetchRequest(spec, outFile);
+  if (!request) return { ok: true, skipped: true, detail: "no provider-sourced secrets declared" };
+  if (!connectorStatus("kms").installed)
+    return { ok: true, skipped: true, detail: `${request.requests.length} provider ref(s) declared but the enterprise kms connector is not installed — using the local vault flow` };
+  const requestFile = join(runDir, "secrets.request.json");
+  try {
+    mkdirSync(runDir, { recursive: true });
+    writeFileSync(requestFile, JSON.stringify(request), { mode: 0o600 });
+    const r = runConnector("kms", "fetch", requestFile);
+    if (!r.ok) return { ok: false, detail: r.detail };
+    // inject-then-DROP: read the 0600 env file and delete it immediately — values live only in this
+    // process's memory and the child run env, never on disk beyond this block.
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(readFileSync(outFile, "utf8"));
+    } catch (e) {
+      return { ok: false, detail: `connector reported success but the env file was unreadable: ${e instanceof Error ? e.message : String(e)}` };
+    }
+    if (typeof parsed !== "object" || parsed === null) return { ok: false, detail: "env file was not an object" };
+    const env: Record<string, string> = {};
+    for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) if (typeof v === "string") env[k] = v;
+    if (Object.keys(env).length !== request.requests.length) return { ok: false, detail: "env file was missing requested secrets (refusing a partial credential set)" };
+    return { ok: true, env, detail: `fetched ${request.requests.length} provider secret(s) just-in-time` };
+  } finally {
+    try { rmSync(requestFile); } catch { /* never written */ }
+    try { rmSync(outFile); } catch { /* never written or already dropped */ }
+  }
+}
+
 export interface AgentRunOpts {
   spec: AgentSpec;
   prompt: string;
@@ -54,6 +98,8 @@ export interface AgentRunOpts {
   trustLabel?: TrustLabel; // defaults to "trusted" (locally authored); imported specs pass their stored label
   withGate?: boolean; // default true — load the fail-closed security gate first (invariant #4)
   timeoutMs?: number;
+  /** P-AGENT.16: provider-fetched secrets for this run's child env (set by startAgentRun / execChildAgent). */
+  env?: Record<string, string>;
 }
 
 /** Run a built agent one-shot. Returns its final text, a trust-gate refusal, or a runtime error. Never throws
@@ -69,22 +115,7 @@ export async function runBuiltAgent(opts: AgentRunOpts): Promise<AgentRunResult>
 
   const runDir = join(opts.workspace, ".omp", "agent-runs", v.spec!.spec_id);
   const run = materializeBundle(buildAgent(v.spec!), runDir);
-
-  const gateArgs = opts.withGate !== false && existsSync(GATE) ? ["-e", GATE] : []; // gate FIRST (invariant #4)
-  const args = [
-    "-p",
-    "--model",
-    opts.model,
-    "--no-lsp",
-    "--no-session",
-    ...gateArgs,
-    ...run.ompExtensionArgs, // the agent's generated allow-list extension, AFTER the gate
-    "--append-system-prompt",
-    run.systemPrompt,
-    opts.prompt,
-  ];
-
-  return spawnGatedOmp({ runDir, model: opts.model, systemPrompt: run.systemPrompt, ompExtensionArgs: run.ompExtensionArgs, prompt: opts.prompt, withGate: opts.withGate, timeoutMs: opts.timeoutMs });
+  return spawnGatedOmp({ runDir, model: opts.model, systemPrompt: run.systemPrompt, ompExtensionArgs: run.ompExtensionArgs, prompt: opts.prompt, withGate: opts.withGate, timeoutMs: opts.timeoutMs, env: opts.env });
 }
 
 interface SpawnOpts {
@@ -95,6 +126,8 @@ interface SpawnOpts {
   prompt: string;
   withGate?: boolean;
   timeoutMs?: number;
+  /** P-AGENT.16: provider-fetched secrets for THIS run's child env only (inject-then-drop). */
+  env?: Record<string, string>;
 }
 
 /** One gated `omp -p` invocation (shared by the one-shot path and the P-AGENT.11a segment runner). The
@@ -109,6 +142,7 @@ function spawnGatedOmp(o: SpawnOpts): AgentRunResult {
       stderr: "pipe",
       timeout: o.timeoutMs ?? 120_000,
       killSignal: "SIGKILL",
+      ...(o.env ? { env: { ...process.env, ...o.env } } : {}), // P-AGENT.16: child env only, never persisted
     });
     const output = new TextDecoder().decode(proc.stdout).trim();
     const err = new TextDecoder().decode(proc.stderr).trim();
@@ -138,6 +172,7 @@ interface PausedEntry {
   lineage: string[]; // P-AGENT.11b: spec_id chain root→current for the cycle/depth guards
   runId: string; // P-AGENT.13: stable run/trace id; ALSO the approval-resume handle (one id per run)
   recorder: TraceRecorder; // P-AGENT.13: fail-soft provenance — recording never breaks the run
+  env?: Record<string, string>; // P-AGENT.16: provider-fetched secrets (memory-only; parked runs keep them ≤ TTL)
 }
 
 const PAUSE_TTL_MS = 30 * 60_000;
@@ -162,6 +197,18 @@ function execChildAgent(entry: PausedEntry, boundary: SubagentBoundary): AgentRu
   const childPrompt = `You are delegated the step \"${boundary.label}\" by a parent agent. Parent task: ${entry.prompt}${prior ? `\n\nContext from the parent agent's work so far:\n${prior}` : ""}`;
   const childRunId = `run_${crypto.randomUUID()}`;
   const childLineage = [...entry.lineage, childSpec!.spec_id];
+  const childRecorder = new TraceRecorder(entry.workspace, { run_id: childRunId, spec_id: childSpec!.spec_id, name: childSpec!.name, model: entry.model, prompt: childPrompt, lineage: childLineage });
+  // P-AGENT.16: the CHILD's own provider-sourced secrets, fetched under the CHILD's declarations — a parent
+  // never hands its credentials down. A failed fetch attempt refuses the child (fail-closed), which fails
+  // the parent's subagent step exactly like any other child failure.
+  const secretsT0 = Date.now();
+  const childSecrets = resolveProviderSecrets(childSpec!, childDir);
+  if (!childSecrets.skipped)
+    childRecorder.step({ kind: "secrets", node_ids: [], label: "provider secrets", started_at: secretsT0, finished_at: Date.now(), ok: childSecrets.ok, detail: childSecrets.detail });
+  if (!childSecrets.ok) {
+    childRecorder.status("blocked");
+    return { ok: false, blocked: true, reason: `sub-agent "${childSpec!.name}" secrets: ${childSecrets.detail}`, runId: childRunId };
+  }
   const child = driveSegments({
     machine: new SegmentedRun(childSpec!),
     runDir: childDir,
@@ -174,7 +221,8 @@ function execChildAgent(entry: PausedEntry, boundary: SubagentBoundary): AgentRu
     workspace: entry.workspace,
     lineage: childLineage,
     runId: childRunId,
-    recorder: new TraceRecorder(entry.workspace, { run_id: childRunId, spec_id: childSpec!.spec_id, name: childSpec!.name, model: entry.model, prompt: childPrompt, lineage: childLineage }),
+    recorder: childRecorder,
+    env: childSecrets.env,
   });
   // Defensive: the guard refuses children with approval nodes, so a nested park is unreachable — but if it
   // ever happened it would strand a machine; fail loudly instead.
@@ -204,6 +252,7 @@ function driveSegments(entry: PausedEntry): AgentRunResult {
           prompt: entry.prompt,
           withGate: entry.withGate,
           timeoutMs: seg.policy.timeoutMs ?? entry.timeoutMs,
+          env: entry.env, // P-AGENT.16
         });
         rec.step({
           kind: "segment",
@@ -274,8 +323,17 @@ export async function startAgentRun(opts: AgentRunOpts): Promise<AgentRunResult>
       prompt: opts.prompt,
       lineage: [opts.spec.spec_id ?? "unknown"],
     });
+    // P-AGENT.16: provider-sourced secrets, fetched just-in-time (skipped when none declared / no connector).
+    const secretsT0 = Date.now();
+    const secrets = resolveProviderSecrets(opts.spec, join(opts.workspace, ".omp", "agent-runs", opts.spec.spec_id ?? "unknown"));
+    if (!secrets.skipped)
+      rec.step({ kind: "secrets", node_ids: [], label: "provider secrets", started_at: secretsT0, finished_at: Date.now(), ok: secrets.ok, detail: secrets.detail });
+    if (!secrets.ok) {
+      rec.status("blocked");
+      return { ok: false, blocked: true, reason: `provider secrets: ${secrets.detail}`, runId };
+    }
     const t0 = Date.now();
-    const r = await runBuiltAgent(opts);
+    const r = await runBuiltAgent({ ...opts, env: secrets.env });
     rec.step({ kind: "segment", node_ids: (opts.spec.nodes ?? []).map((n) => n.id), label: "one-shot run", started_at: t0, finished_at: Date.now(), ok: r.ok, detail: r.ok ? (r.output ?? "") : (r.error ?? r.reason ?? "run failed") });
     rec.status(r.ok ? "completed" : r.blocked ? "blocked" : "error", r.output);
     return { ...r, runId };
@@ -290,6 +348,16 @@ export async function startAgentRun(opts: AgentRunOpts): Promise<AgentRunResult>
 
   const runDir = join(opts.workspace, ".omp", "agent-runs", v.spec!.spec_id);
   const run = materializeBundle(buildAgent(v.spec!), runDir);
+  const recorder = new TraceRecorder(opts.workspace, { run_id: runId, spec_id: v.spec!.spec_id, name: v.spec!.name, model: opts.model, prompt: opts.prompt, lineage: [v.spec!.spec_id] });
+  // P-AGENT.16: provider-sourced secrets before the first segment; a failed attempt refuses the run.
+  const secretsT0 = Date.now();
+  const secrets = resolveProviderSecrets(v.spec!, runDir);
+  if (!secrets.skipped)
+    recorder.step({ kind: "secrets", node_ids: [], label: "provider secrets", started_at: secretsT0, finished_at: Date.now(), ok: secrets.ok, detail: secrets.detail });
+  if (!secrets.ok) {
+    recorder.status("blocked");
+    return { ok: false, blocked: true, reason: `provider secrets: ${secrets.detail}`, runId };
+  }
   return driveSegments({
     machine: new SegmentedRun(v.spec!),
     runDir,
@@ -302,7 +370,8 @@ export async function startAgentRun(opts: AgentRunOpts): Promise<AgentRunResult>
     workspace: opts.workspace,
     lineage: [v.spec!.spec_id],
     runId,
-    recorder: new TraceRecorder(opts.workspace, { run_id: runId, spec_id: v.spec!.spec_id, name: v.spec!.name, model: opts.model, prompt: opts.prompt, lineage: [v.spec!.spec_id] }),
+    recorder,
+    env: secrets.env,
   });
 }
 
