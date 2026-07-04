@@ -11,6 +11,8 @@ import {
   toolChipsHtml,
   trustBannerHtml,
   runApprovalHtml,
+  runsPanelHtml,
+  traceDetailHtml,
   runPanelHtml,
   secretsPanelHtml,
   agentInterviewPrompt,
@@ -173,6 +175,30 @@ describe("agent builder panel (P-AGENT.2)", () => {
     expect(h).toContain("found 3 papers");
     // no output yet → no empty output block
     expect(runApprovalHtml("Gate", "")).not.toContain("ab-run-approval-out");
+  });
+
+  test("runs flyout: rows per trace with status + steps; detail lists steps and escapes content (P-AGENT.13)", () => {
+    const list = runsPanelHtml([
+      { run_id: "run_1", spec_id: "s", name: "researcher", status: "completed", started_at: 1_700_000_000_000, finished_at: 1_700_000_009_000, steps: 3 },
+      { run_id: "run_2", spec_id: "s", name: "researcher", status: "awaiting-approval", started_at: 1_700_000_100_000, steps: 1 },
+    ]);
+    expect(list).toContain('data-run="run_1"');
+    expect(list).toContain("3 steps");
+    expect(list).toContain("awaiting-approval");
+    expect(runsPanelHtml([])).toContain("No runs yet");
+    const detail = traceDetailHtml({
+      run_id: "run_1", spec_id: "s", name: "researcher", model: "haiku", prompt: "p", lineage: ["s"],
+      started_at: 1_700_000_000_000, finished_at: 1_700_000_009_000, status: "denied",
+      steps: [
+        { kind: "segment", index: 0, node_ids: ["a"], label: "part 1", started_at: 1, finished_at: 2, ok: true, detail: "found <stuff>" },
+        { kind: "approval", index: 1, node_ids: ["g"], label: "Review", started_at: 3, finished_at: 4, ok: false, detail: "denied by the user" },
+      ],
+      final_output: "partial",
+    });
+    expect(detail).toContain('id="abRunsBack"');
+    expect(detail).toContain("found &lt;stuff&gt;"); // escaped, never raw HTML
+    expect(detail).toContain("denied by the user");
+    expect(detail).toContain("partial");
   });
 
   test("trust banner: empty for trusted; approve offered for untrusted/suspicious; NOT for quarantined (P-AGENT.9)", () => {

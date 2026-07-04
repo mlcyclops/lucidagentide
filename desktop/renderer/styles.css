@@ -2487,6 +2487,20 @@ pre:hover .code-ide-btn,pre:focus-within .code-ide-btn{opacity:1}
 .ab-run{display:flex;flex-direction:column;gap:10px}
 .ab-run-model{margin-left:auto;font-size:11px;color:var(--cyan);background:color-mix(in srgb,var(--cyan) 14%,var(--bg-2));padding:2px 8px;border-radius:999px}
 .ab-run-out{white-space:pre-wrap;font-size:12px;line-height:1.55;color:var(--txt);background:var(--bg-1);border:1px solid var(--line);border-radius:var(--r-sm);padding:9px 10px;max-height:340px;overflow:auto}
+/* P-AGENT.13: the Runs flyout (trace list + per-step detail) */
+.ab-runs{display:flex;flex-direction:column;gap:9px}
+.ab-run-list,.ab-trace-steps{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
+.ab-runrow{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--txt-2);background:var(--bg-1);border:1px solid var(--line);border-radius:var(--r-sm);padding:7px 9px;cursor:pointer}
+.ab-runrow:hover{border-color:var(--line-strong,var(--line));background:var(--bg-2)}
+.ab-runrow-empty{cursor:default;color:var(--txt-4);border-style:dashed}
+.ab-runrow-when{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ab-runrow-meta{flex:none;color:var(--txt-4);font-size:11px}
+.ab-trace-step{font-size:12px;color:var(--txt-2);background:var(--bg-1);border:1px solid var(--line);border-radius:var(--r-sm);padding:7px 9px}
+.ab-trace-step.fail{border-color:color-mix(in srgb,var(--red) 40%,var(--line))}
+.ab-trace-ic{margin-right:6px}
+.ab-trace-step.ok .ab-trace-ic{color:var(--green)}
+.ab-trace-step.fail .ab-trace-ic{color:var(--red)}
+.ab-trace-detail{margin-top:5px;font-size:11.5px;color:var(--txt-3);white-space:pre-wrap;max-height:120px;overflow:auto}
 /* P-AGENT.11a: the enforced approval-halt card inside the Run flyout */
 .ab-run-approval{display:flex;flex-direction:column;gap:9px;border:1px solid color-mix(in srgb,var(--amber) 45%,var(--line));background:var(--amber-dim);border-radius:var(--r-sm);padding:10px}
 .ab-run-approval-head{font-size:12.5px;color:var(--txt)}

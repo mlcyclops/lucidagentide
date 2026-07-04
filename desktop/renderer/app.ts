@@ -26,7 +26,7 @@ import { type GraphHandle, kindLabel, mountGraph } from "./graph.ts";
 import { addEdgeOptimistic, applyForget, chainPairs, matchNodes, removeEdgeOptimistic, resolveRelationLabel } from "./kg_ops.ts";
 import { capGraph, graphOpts, pollDelay, watchPerfTier } from "./perf_tier.ts";
 import type { PersonalGraphData } from "./bridge.ts";
-import { agentBuilderPanelHtml, specToGraphData, nodeEditorHtml, saveErrors, newCanvasSpec, runPanelHtml, secretsPanelHtml, agentInterviewPrompt, toolChipsHtml, trustBannerHtml, runApprovalHtml } from "./agent_builder.ts"; // P-AGENT.2b/.4-live/.8/.9/.11a
+import { agentBuilderPanelHtml, specToGraphData, nodeEditorHtml, saveErrors, newCanvasSpec, runPanelHtml, secretsPanelHtml, agentInterviewPrompt, toolChipsHtml, trustBannerHtml, runApprovalHtml, runsPanelHtml, traceDetailHtml } from "./agent_builder.ts"; // P-AGENT.2b/.4-live/.8/.9/.11a/.13
 import type { TrustLabel } from "../../harness/contracts.ts"; // P-AGENT.9: imported-agent trust banner
 import type { AgentSpec, NodeKind } from "../../harness/agent/spec.ts"; // P-AGENT.2b
 import { expandCommandBody, type UserCommand } from "../../harness/commands/spec.ts"; // P-CMD.1: user "/" commands
@@ -2766,6 +2766,28 @@ async function importAgentFile(file: File): Promise<void> {
       : `Held for review (${label}). Check every step, tool, and connection, add credentials via Secrets & connections, then Approve.${r.notes?.length ? ` Mapping: ${r.notes[0]}.` : ""}`,
   });
 }
+// P-AGENT.13: the Runs flyout — recent traces for the current agent; click a row for the per-step detail.
+async function openAbRunsPanel(): Promise<void> {
+  if (!abSpec) return;
+  const side = $("#abSide");
+  if (!side) return;
+  const traces = await bridge.agentTraces(abSpec.spec_id);
+  side.innerHTML = runsPanelHtml(traces);
+  side.hidden = false;
+  $$(".ab-runrow[data-run]", side).forEach((row) =>
+    row.addEventListener("click", () => void openAbTraceDetail((row as HTMLElement).dataset.run ?? "")),
+  );
+}
+async function openAbTraceDetail(runId: string): Promise<void> {
+  if (!runId) return;
+  const side = $("#abSide");
+  if (!side) return;
+  const trace = await bridge.agentTrace(runId);
+  if (!trace) { showToast({ tone: "warn", title: "Trace unavailable", desc: "That run's trace file is missing or corrupted." }); return; }
+  side.innerHTML = traceDetailHtml(trace);
+  side.hidden = false;
+  $("#abRunsBack", side)?.addEventListener("click", () => void openAbRunsPanel());
+}
 // P-AGENT.4-live: open the Run flyout and let the user run the agent live inside LUCID.
 function openAbRunPanel(): void {
   if (!abSpec) return;
@@ -3047,7 +3069,7 @@ function paintPerfChip(): void {
   const b = $("#kgPerf");
   if (!b) return;
   const m = perfWatch.mode();
-  b.innerHTML = `${icon("gauge", 13)} ${m === "auto" ? `Auto \u00b7 ${perfWatch.tier()}` : m}`;
+  b.innerHTML = `${icon("gauge", 13)} ${m === "auto" ? `Auto · ${perfWatch.tier()}` : m}`;
 }
 async function renderKnowledge(): Promise<void> {
   const canvas = $("#kgCanvas"), side = $("#kgSide"), scopeLbl = $("#kgScopeLbl");
@@ -3084,7 +3106,7 @@ async function renderKnowledge(): Promise<void> {
     positions: kgLayoutCache.get("personal"),
     onPositions: (pos) => kgLayoutCache.set("personal", pos),
   });
-  if (kgCapped && scopeLbl) scopeLbl.textContent += ` \u00b7 top ${kgDraw.nodes.length} of ${kgData.nodes.length} nodes`;
+  if (kgCapped && scopeLbl) scopeLbl.textContent += ` · top ${kgDraw.nodes.length} of ${kgData.nodes.length} nodes`;
   showKgCenter(true); syncKgSideOpen();
   if (kgRelateMode) { kgHandle.setRelateMode(true); onRelatePick([]); } // preserve relate mode across a live remount
   const sq = ($("#kgSearch") as HTMLInputElement | null)?.value; // P-KG-SEARCH.1: preserve an active search across a remount
@@ -5778,6 +5800,7 @@ function wire(): void {
   $("#abRun")?.addEventListener("click", () => openAbRunPanel());
   $("#abSecrets")?.addEventListener("click", () => void openAbSecretsPanel());
   $("#abToolsBtn")?.addEventListener("click", () => openAbToolsPanel()); // P-AGENT.9: allow-list chips
+  $("#abRunsBtn")?.addEventListener("click", () => void openAbRunsPanel()); // P-AGENT.13: run traces
   $("#abShare")?.addEventListener("click", () => void shareAgentBuilder()); // P-AGENT.9: portable share
   $("#abN8n")?.addEventListener("click", () => void n8nExportAgentBuilder()); // P-AGENT.10: n8n export
   $("#abN8nPush")?.addEventListener("click", () => void n8nPushAgentBuilder()); // P-AGENT.10: add-on push

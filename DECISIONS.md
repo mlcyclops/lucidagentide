@@ -9669,7 +9669,15 @@ treadmill; the catalog stub in ADR-0135 closes.
 ## ADR-0139 - P-AGENT.13: per-run execution trace in the canvas (DESIGN)
 
 **Date:** 2026-07-04
-**Status:** Accepted - DESIGN.
+**Status:** Accepted. **BUILT + tested** (same day) with one recorded DELTA from the sketch below: the desktop
+engine holds agent_obs.duckdb READ-ONLY (omp's gate child is the single writer — the same constraint that
+put authored specs in workspace files, ADR-0133), so v1 traces are FILES under `.omp/agent-runs/traces/
+<run_id>.json` (`harness/agent/trace.ts`: fail-soft TraceRecorder — recording never breaks a run; snippet
+truncation; corrupted files skipped; path-safe ids). DuckDB ingestion + EventName wiring move to the future
+gate-child pipeline increment. Instrumented: one-shot runs, segments, approval decisions, sub-agent hops
+(child runs get their OWN trace, linked by run id + lineage); the run's stable run_id doubles as the
+approval-resume handle (invariant #9). Canvas: Runs flyout → trace list → per-step detail. Node-highlighting
+on the canvas from a selected trace stays future polish.
 
 **Context.** n8n shows every execution with per-node I/O; our Run panel returns final text only, while the
 harness already owns lineage (runs/lineage.ts), replay (runs/replay.ts) and the agent_obs DuckDB.

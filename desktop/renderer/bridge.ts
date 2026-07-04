@@ -13,6 +13,7 @@
 import type { AgentSpec } from "../../harness/agent/spec.ts"; // P-AGENT.2b: Agent Builder spec type
 import type { SpecFileSummary } from "../../harness/agent/file_store.ts"; // P-AGENT.2b: spec list summary
 import type { UserCommand } from "../../harness/commands/spec.ts"; // P-CMD.1: user-authored slash commands
+import type { AgentRunTrace, TraceSummary } from "../../harness/agent/trace.ts"; // P-AGENT.13: run traces
 
 export interface BlockRecord { id: string; tool: string; severity: string; findings: string; reason: string; at: string; status: "quarantined" | "approved" | "dismissed"; reviewer?: string }
 
@@ -24,6 +25,7 @@ export interface AgentRunReply {
   blocked: boolean;
   reason: string;
   paused?: { runId: string; nodeId: string; label: string; outputSoFar: string } | null;
+  runId?: string; // P-AGENT.13: the run's stable trace id
 }
 export interface SecuritySnapshot {
   findings: any[]; unicode: any[]; approvals: any[]; quarantine: any[];
@@ -321,6 +323,9 @@ export interface LucidBridge {
   agentRun(spec: AgentSpec, prompt: string, model: string): Promise<AgentRunReply | null>;
   /** P-AGENT.11a: resolve a run parked at an approval checkpoint (deny is terminal). */
   agentRunApprove(runId: string, approve: boolean): Promise<AgentRunReply | null>;
+  /** P-AGENT.13: run traces — summaries per spec, and one full trace by run id. */
+  agentTraces(specId: string): Promise<TraceSummary[]>;
+  agentTrace(runId: string): Promise<AgentRunTrace | null>;
   setCodeGraphAgent(enabled: boolean): Promise<{ enabled: boolean } | null>;
   /** P-APPEAR.1: the personalized chat background (image data URL + display mode + opacity). */
   chatBackground(): Promise<{ image: string; mode: "off" | "ambient" | "flashlight"; opacity: number } | null>;
@@ -657,6 +662,8 @@ export const bridge: LucidBridge = {
   agentN8nPush: (spec) => post("/api/agent/n8n-push", { spec }), // P-AGENT.10
   agentRun: (spec, prompt, model) => post("/api/agent/run", { spec, prompt, model }), // P-AGENT.4-live/.11a
   agentRunApprove: (runId, approve) => post("/api/agent/run/approve", { runId, approve }), // P-AGENT.11a
+  agentTraces: async (specId) => (await getData(`/api/agent/traces?spec=${encodeURIComponent(specId)}`))?.traces ?? [], // P-AGENT.13
+  agentTrace: async (runId) => (await getData(`/api/agent/trace?id=${encodeURIComponent(runId)}`))?.trace ?? null, // P-AGENT.13
   setCodeGraphAgent: (enabled) => post("/api/codegraph/agent", { enabled }),
   chatBackground: () => getData("/api/chat-bg"),
   setChatBackground: (patch) => post("/api/chat-bg", patch),

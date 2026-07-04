@@ -19,6 +19,7 @@ import { materializeBundle } from "../harness/agent/runner.ts";
 import { canAutoRun } from "../harness/agent/import_gate.ts";
 import { SegmentedRun, subagentGuard, type SubagentBoundary } from "../harness/agent/segments.ts";
 import { loadSpecFile, loadSpecTrust } from "../harness/agent/file_store.ts";
+import { TraceRecorder } from "../harness/agent/trace.ts"; // P-AGENT.13: best-effort run provenance
 import { validateSpec, type AgentSpec } from "../harness/agent/spec.ts";
 import type { TrustLabel } from "../harness/contracts.ts";
 
@@ -39,6 +40,8 @@ export interface AgentRunResult {
   error?: string;
   blocked?: boolean; // true when refused by the trust gate (not a runtime error)
   reason?: string;
+  /** P-AGENT.13: the run's stable trace id (invariant #9) — look the trace up via /api/agent/trace. */
+  runId?: string;
   /** P-AGENT.11a: set when the run is HALTED at an approval boundary — resume via approveAgentRun(). */
   paused?: { runId: string; nodeId: string; label: string; outputSoFar: string };
 }
@@ -133,6 +136,8 @@ interface PausedEntry {
   parkedAt: number;
   workspace: string; // P-AGENT.11b: child specs + trust labels are loaded from here
   lineage: string[]; // P-AGENT.11b: spec_id chain root→current for the cycle/depth guards
+  runId: string; // P-AGENT.13: stable run/trace id; ALSO the approval-resume handle (one id per run)
+  recorder: TraceRecorder; // P-AGENT.13: fail-soft provenance — recording never breaks the run
 }
 
 const PAUSE_TTL_MS = 30 * 60_000;
@@ -154,7 +159,9 @@ function execChildAgent(entry: PausedEntry, boundary: SubagentBoundary): AgentRu
   const childDir = join(entry.workspace, ".omp", "agent-runs", childSpec!.spec_id);
   const run = materializeBundle(buildAgent(childSpec!), childDir); // the CHILD's bundle: its own allow-list extension
   const prior = entry.machine.transcript().filter((t) => t.trim()).join("\n\n");
-  const childPrompt = `You are delegated the step "${boundary.label}" by a parent agent. Parent task: ${entry.prompt}${prior ? `\n\nContext from the parent agent's work so far:\n${prior}` : ""}`;
+  const childPrompt = `You are delegated the step \"${boundary.label}\" by a parent agent. Parent task: ${entry.prompt}${prior ? `\n\nContext from the parent agent's work so far:\n${prior}` : ""}`;
+  const childRunId = `run_${crypto.randomUUID()}`;
+  const childLineage = [...entry.lineage, childSpec!.spec_id];
   const child = driveSegments({
     machine: new SegmentedRun(childSpec!),
     runDir: childDir,
@@ -165,7 +172,9 @@ function execChildAgent(entry: PausedEntry, boundary: SubagentBoundary): AgentRu
     timeoutMs: entry.timeoutMs,
     parkedAt: Date.now(),
     workspace: entry.workspace,
-    lineage: [...entry.lineage, childSpec!.spec_id],
+    lineage: childLineage,
+    runId: childRunId,
+    recorder: new TraceRecorder(entry.workspace, { run_id: childRunId, spec_id: childSpec!.spec_id, name: childSpec!.name, model: entry.model, prompt: childPrompt, lineage: childLineage }),
   });
   // Defensive: the guard refuses children with approval nodes, so a nested park is unreachable — but if it
   // ever happened it would strand a machine; fail loudly instead.
@@ -177,9 +186,11 @@ function execChildAgent(entry: PausedEntry, boundary: SubagentBoundary): AgentRu
  *  resolved INLINE (the child runs now, under its own allow-list); approval boundaries park the run. */
 function driveSegments(entry: PausedEntry): AgentRunResult {
   const m = entry.machine;
+  const rec = entry.recorder;
   for (;;) {
     if (m.state === "running") {
       const seg = m.currentSegment(); // the ONLY source of an executable prompt (keystone)
+      const t0 = Date.now();
       const r = spawnGatedOmp({
         runDir: entry.runDir,
         model: entry.model,
@@ -189,36 +200,56 @@ function driveSegments(entry: PausedEntry): AgentRunResult {
         withGate: entry.withGate,
         timeoutMs: entry.timeoutMs,
       });
-      if (!r.ok) return r; // a failed segment fails the run — never skipped, never auto-approved
+      rec.step({ kind: "segment", node_ids: seg.nodeIds, label: `part ${seg.index + 1}`, started_at: t0, finished_at: Date.now(), ok: r.ok, detail: r.ok ? (r.output ?? "") : (r.error ?? "segment failed") });
+      if (!r.ok) { rec.status("error"); return { ...r, runId: entry.runId }; } // a failed segment fails the run
       m.recordSegmentOutput(r.output ?? "");
       continue;
     }
     if (m.state === "awaiting-subagent") {
       const boundary = m.pendingSubagent()!;
+      const t0 = Date.now();
       const child = execChildAgent(entry, boundary);
-      if (!child.ok) return child; // guard/trust/run failure fails the parent run — never silently skipped
-      m.recordSubagentOutput(`Sub-agent "${boundary.label}" output:\n${child.output ?? ""}`);
+      rec.step({ kind: "subagent", node_ids: [boundary.nodeId], label: boundary.label, started_at: t0, finished_at: Date.now(), ok: child.ok, detail: child.ok ? `child ${child.runId ?? "?"}: ${child.output ?? ""}` : (child.error ?? child.reason ?? "sub-agent failed") });
+      if (!child.ok) { rec.status(child.blocked ? "blocked" : "error"); return { ...child, runId: entry.runId }; }
+      m.recordSubagentOutput(`Sub-agent \"${boundary.label}\" output:\n${child.output ?? ""}`);
       continue;
     }
     break;
   }
   if (m.state === "awaiting-approval") {
-    const runId = `segrun_${crypto.randomUUID()}`;
     entry.parkedAt = Date.now();
-    pausedRuns.set(runId, entry);
+    pausedRuns.set(entry.runId, entry); // the run's stable id IS the approval handle (invariant #9)
     const halt = m.pendingApproval()!;
-    return { ok: true, paused: { runId, nodeId: halt.nodeId, label: halt.label, outputSoFar: m.transcript().filter((t) => t.trim()).join("\n\n") } };
+    rec.status("awaiting-approval");
+    return { ok: true, runId: entry.runId, paused: { runId: entry.runId, nodeId: halt.nodeId, label: halt.label, outputSoFar: m.transcript().filter((t) => t.trim()).join("\n\n") } };
   }
-  if (m.state === "denied") return { ok: false, blocked: true, reason: m.denyReason };
-  return { ok: true, output: m.finalOutput() };
+  if (m.state === "denied") { rec.status("denied"); return { ok: false, blocked: true, reason: m.denyReason, runId: entry.runId }; }
+  rec.status("completed", m.finalOutput());
+  return { ok: true, output: m.finalOutput(), runId: entry.runId };
 }
 
 /** Entry point used by /api/agent/run: one-shot for approval-free specs, segmented otherwise. */
 export async function startAgentRun(opts: AgentRunOpts): Promise<AgentRunResult> {
   prunePaused(Date.now());
+  const runId = `run_${crypto.randomUUID()}`; // stable per run (invariant #9): trace id + approval handle
   // P-AGENT.11a/.11b: approval or subagent nodes need the segment runner; plain specs stay one-shot.
   const hasBoundary = opts.spec.nodes?.some?.((n) => n.kind === "approval" || n.kind === "subagent");
-  if (!hasBoundary) return runBuiltAgent(opts);
+  if (!hasBoundary) {
+    // P-AGENT.13: the one-shot path is a single-step trace (refusals + errors are audit-worthy too).
+    const rec = new TraceRecorder(opts.workspace, {
+      run_id: runId,
+      spec_id: opts.spec.spec_id ?? "unknown",
+      name: opts.spec.name ?? "agent",
+      model: opts.model,
+      prompt: opts.prompt,
+      lineage: [opts.spec.spec_id ?? "unknown"],
+    });
+    const t0 = Date.now();
+    const r = await runBuiltAgent(opts);
+    rec.step({ kind: "segment", node_ids: (opts.spec.nodes ?? []).map((n) => n.id), label: "one-shot run", started_at: t0, finished_at: Date.now(), ok: r.ok, detail: r.ok ? (r.output ?? "") : (r.error ?? r.reason ?? "run failed") });
+    rec.status(r.ok ? "completed" : r.blocked ? "blocked" : "error", r.output);
+    return { ...r, runId };
+  }
 
   // Same fail-closed pre-flight as the one-shot path: trust gate, then validation, then materialize.
   const gate = canAutoRun(opts.trustLabel ?? "trusted");
@@ -240,6 +271,8 @@ export async function startAgentRun(opts: AgentRunOpts): Promise<AgentRunResult>
     parkedAt: Date.now(),
     workspace: opts.workspace,
     lineage: [v.spec!.spec_id],
+    runId,
+    recorder: new TraceRecorder(opts.workspace, { run_id: runId, spec_id: v.spec!.spec_id, name: v.spec!.name, model: opts.model, prompt: opts.prompt, lineage: [v.spec!.spec_id] }),
   });
 }
 
@@ -248,11 +281,16 @@ export function approveAgentRun(runId: string, approve: boolean, reason?: string
   prunePaused(Date.now());
   const entry = pausedRuns.get(runId);
   if (!entry) return { ok: false, error: "unknown or expired approval — run the agent again" };
-  pausedRuns.delete(runId); // consumed either way; a re-pause mints a fresh id
+  pausedRuns.delete(runId); // consumed either way; a resumed run re-parks under the SAME stable id
+  const halt = entry.machine.pendingApproval();
+  const t0 = Date.now();
   if (!approve) {
     entry.machine.deny(reason || "denied by the user at the approval checkpoint");
-    return { ok: false, blocked: true, reason: entry.machine.denyReason };
+    entry.recorder.step({ kind: "approval", node_ids: halt ? [halt.nodeId] : [], label: halt?.label ?? "approval", started_at: t0, finished_at: Date.now(), ok: false, detail: entry.machine.denyReason });
+    entry.recorder.status("denied");
+    return { ok: false, blocked: true, reason: entry.machine.denyReason, runId: entry.runId };
   }
+  entry.recorder.step({ kind: "approval", node_ids: halt ? [halt.nodeId] : [], label: halt?.label ?? "approval", started_at: t0, finished_at: Date.now(), ok: true, detail: "approved by the user" });
   entry.machine.approve();
   return driveSegments(entry);
 }

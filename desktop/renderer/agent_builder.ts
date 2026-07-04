@@ -23,6 +23,7 @@ import {
   type NodeKind,
 } from "../../harness/agent/spec.ts";
 import type { TrustLabel } from "../../harness/contracts.ts";
+import type { AgentRunTrace, TraceSummary } from "../../harness/agent/trace.ts"; // P-AGENT.13
 
 /** P-AGENT.8: the `/agent` command's kickoff. Turns a (possibly empty) one-line description into a prompt that
  *  makes the chat agent run the "what kind of agent do you want to build" INTERVIEW — steered by the frozen
@@ -111,6 +112,7 @@ export function agentBuilderPanelHtml(): string {
         ${addNodeButtons()}
         <button class="ab-btn" id="abConnect" data-tip="Connect mode|Drag from one node to another to add a step edge; toggle off to reposition nodes">Connect</button>
         <button class="ab-btn" id="abToolsBtn" data-tip="Tools|Manage the tool allow-list — remove a tool to BLOCK the agent from ever calling it">Tools</button>
+                <button class="ab-btn" id="abRunsBtn" data-tip="Runs|Recent executions of this agent — per-step trace, approvals, sub-agent hops">Runs</button>
         <button class="ab-btn" id="abValidate" data-tip="Check the workflow is a valid DAG">Validate</button>
         <button class="ab-btn ok" id="abSave" data-tip="Validate + save this agent">Save</button>
         <button class="ab-btn" id="abSecrets" data-tip="Secrets & connections|Add the API credentials this agent needs to the encrypted vault (never to the agent), and confirm the sites it may reach">Secrets &amp; connections</button>
@@ -271,6 +273,41 @@ export function toolChipsHtml(spec: AgentSpec): string {
     <div class="ab-conn-note">The agent may ONLY call tools on this list — every other tool call is denied at run time by its compiled allow-list and LUCID's security gate. Remove a tool to block it.</div>
     <ul class="ab-chip-list">${chips}</ul>
     ${adder}
+  </div>`;
+}
+
+/** P-AGENT.13: one line per recent run of the current agent (status pill + when + step count). */
+export function runsPanelHtml(traces: TraceSummary[]): string {
+  const rows = traces.length
+    ? traces
+        .map((t) => {
+          const when = new Date(t.started_at).toLocaleString();
+          const dur = t.finished_at ? `${Math.max(1, Math.round((t.finished_at - t.started_at) / 1000))}s` : "—";
+          return `<li class="ab-runrow" data-run="${esc(t.run_id)}"><span class="pill ${esc(t.status)}">${esc(t.status)}</span><span class="ab-runrow-when">${esc(when)}</span><span class="ab-runrow-meta">${t.steps} step${t.steps === 1 ? "" : "s"} · ${esc(dur)}</span></li>`;
+        })
+        .join("")
+    : `<li class="ab-runrow ab-runrow-empty">No runs yet — use Run ▸ and the trace lands here.</li>`;
+  return `<div class="ab-runs">
+    <div class="ab-ed-head"><span class="ab-kind">Recent runs</span></div>
+    <ul class="ab-run-list">${rows}</ul>
+  </div>`;
+}
+
+/** P-AGENT.13: one run's full trace — status, duration, and a per-step list (segments, approvals,
+ *  sub-agent hops) with truncated detail snippets. Node ids let a future increment highlight the canvas. */
+export function traceDetailHtml(trace: AgentRunTrace): string {
+  const dur = trace.finished_at ? `${Math.max(1, Math.round((trace.finished_at - trace.started_at) / 1000))}s` : "still open";
+  const steps = trace.steps
+    .map((s) => {
+      const icon = s.ok ? "✓" : "✗";
+      return `<li class="ab-trace-step ${s.ok ? "ok" : "fail"}"><span class="ab-trace-ic">${icon}</span><b>${esc(s.kind)}</b> ${esc(s.label)}${s.detail ? `<div class="ab-trace-detail">${esc(s.detail)}</div>` : ""}</li>`;
+    })
+    .join("");
+  return `<div class="ab-runs">
+    <div class="ab-ed-head"><button class="ab-btn" id="abRunsBack">← Runs</button><span class="pill ${esc(trace.status)}">${esc(trace.status)}</span></div>
+    <div class="ab-conn-note">${esc(trace.name)} · ${esc(new Date(trace.started_at).toLocaleString())} · ${esc(dur)} · model ${esc(trace.model)}${trace.lineage.length > 1 ? ` · depth ${trace.lineage.length}` : ""}</div>
+    <ul class="ab-trace-steps">${steps || "<li class='ab-trace-step'>no steps recorded</li>"}</ul>
+    ${trace.final_output ? `<div class="ab-run-out">${esc(trace.final_output)}</div>` : ""}
   </div>`;
 }
 

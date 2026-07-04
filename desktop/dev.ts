@@ -29,6 +29,7 @@ import { connectorStatus, runConnector } from "./addon_seam.ts"; // P-AGENT.10: 
 import { importSpec } from "../harness/agent/import_gate.ts"; // P-AGENT.5/.9: fail-closed imported spec scan + trust label
 import { ScannerClient } from "../harness/security/scanner_client.ts";
 import { startAgentRun, approveAgentRun } from "./agent_run.ts"; // P-AGENT.4-live/.11a: gated runs + enforced approval halts
+import { listTraces, loadTrace } from "../harness/agent/trace.ts"; // P-AGENT.13: run traces
 import { archiveBrief, deleteBrief, listBriefs, readBrief, restoreBrief, saveBrief } from "./report_store.ts";
 import { OpenAiCompatibleTtsBackend } from "../harness/brief/tts_backend.ts";
 import { ElevenLabsTtsBackend, ElevenLabsSttBackend, listElevenVoices } from "../harness/voice/elevenlabs.ts";
@@ -735,14 +736,24 @@ const server = Bun.serve({
         // machine (the post-approval prompt does not exist until approve), not by model compliance.
         const trust = loadSpecTrust(currentWorkspace(), v.spec!.spec_id);
         const r = await startAgentRun({ spec: v.spec!, prompt, model, workspace: currentWorkspace(), trustLabel: trust.trustLabel });
-        return json({ ok: r.ok, data: { output: r.output ?? "", error: r.error ?? "", blocked: !!r.blocked, reason: r.reason ?? "", paused: r.paused ?? null } });
+        return json({ ok: r.ok, data: { output: r.output ?? "", error: r.error ?? "", blocked: !!r.blocked, reason: r.reason ?? "", paused: r.paused ?? null, runId: r.runId ?? "" } });
+      }
+      // P-AGENT.13: run traces — file-backed provenance under .omp/agent-runs/traces/ (the desktop holds
+      // agent_obs.duckdb read-only, so files are the v1 store; see ADR-0139 delta note).
+      if (p === "/api/agent/traces") {
+        const spec = url.searchParams.get("spec") ?? "";
+        return json({ ok: true, data: { traces: listTraces(currentWorkspace(), spec || undefined) } });
+      }
+      if (p === "/api/agent/trace") {
+        const id = url.searchParams.get("id") ?? "";
+        return json({ ok: true, data: { trace: loadTrace(currentWorkspace(), id) } });
       }
       // P-AGENT.11a: resolve a parked approval checkpoint. Deny is terminal; unknown/expired ids refuse.
       if (p === "/api/agent/run/approve" && req.method === "POST") {
         const b = await readBody<{ runId?: unknown; approve?: unknown; reason?: unknown }>(req);
         const runId = typeof b.runId === "string" ? b.runId : "";
         const r = approveAgentRun(runId, b.approve === true, typeof b.reason === "string" ? b.reason : undefined);
-        return json({ ok: r.ok, data: { output: r.output ?? "", error: r.error ?? "", blocked: !!r.blocked, reason: r.reason ?? "", paused: r.paused ?? null } });
+        return json({ ok: r.ok, data: { output: r.output ?? "", error: r.error ?? "", blocked: !!r.blocked, reason: r.reason ?? "", paused: r.paused ?? null, runId: r.runId ?? "" } });
       }
       // P-APPEAR.1: the personalized chat-interface background (image + display mode). Its own file, so
       // the hot settings load() never parses the image data URL.
