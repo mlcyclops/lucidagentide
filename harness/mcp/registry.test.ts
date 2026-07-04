@@ -3,7 +3,7 @@
 
 // harness/mcp/registry.test.ts
 //
-// P-AGENTFW.1 (ADR-0135): the remote-agent registry — round-trip, the ACP McpServerStdio assembly shape,
+// P-AGENTFW.1 (ADR-0147): the remote-agent registry — round-trip, the ACP McpServerStdio assembly shape,
 // and the 0600 custody perms (the token-adjacent config must never be world-readable).
 
 import { test, expect, beforeEach, afterEach } from "bun:test";

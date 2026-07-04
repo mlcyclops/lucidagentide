@@ -1,6 +1,6 @@
 # Agent Firewall — connecting LUCID to remote ACP agents (Hermes / OpenClaw)
 
-> Increment **P-AGENTFW.1** · design **ADR-0135** (`DECISIONS.md`) · issue **#198**
+> Increment **P-AGENTFW.1** · design **ADR-0147** (`DECISIONS.md`) · issue **#198**
 
 LUCID can drive remote agent runtimes that speak the **Agent Client Protocol (ACP)** — such as
 [Hermes Agent](#setting-up-hermes-agent) and [OpenClaw](#setting-up-openclaw) — through a first-party
@@ -46,7 +46,7 @@ Additional guarantees:
 - **omp's in-process `tool_call` gate is unchanged** and remains the load-bearing backstop for any action the
   model attempts (invariant #4).
 
-> **Scope note (ADR-0135).** This closes the "scan + delimit MCP output" guardrail *at the firewall boundary*
+> **Scope note (ADR-0147).** This closes the "scan + delimit MCP output" guardrail *at the firewall boundary*
 > for hermes/openclaw. The equivalent in-process gate for **all** MCP servers (the ADR-0020 gap) is tracked
 > separately as P-MCP-GATE.1.
 
@@ -271,6 +271,6 @@ model being reachable.
   gateway-backed ACP bridge, session mapping, and the per-session `mcpServers` rejection.
 - "Agent Client Protocol." *agentclientprotocol/agent-client-protocol*, 2026. — the `McpServer` transport
   union (stdio mandatory) and the `session/*` methods.
-- "ADR-0135 — Agent Firewall MCP." *LucidAgentIDE DECISIONS.md*, 2026,
+- "ADR-0147 — Agent Firewall MCP." *LucidAgentIDE DECISIONS.md*, 2026,
   github.com/mlcyclops/lucidagentide/blob/master/DECISIONS.md. Accessed 4 July 2026. — the design + security
   rationale this guide implements.

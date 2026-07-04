@@ -402,7 +402,7 @@ demo-P-AGENT.8.1: ## P-AGENT.8.1 (ADR-0134): secret guardrail — agents DECLARE
 	$(BUN) run harness/scripts/demo_p_agent_8_1.ts
 
 .PHONY: demo-P-AGENTFW.1
-demo-P-AGENTFW.1: ## P-AGENTFW.1 (ADR-0135): agent-firewall MCP — scans both directions vs a remote ACP agent (hermes/openclaw); quarantines poisoned replies, neutralizes delimiter breakout, blocks outbound hidden vectors, fails closed when the scanner dies
+demo-P-AGENTFW.1: ## P-AGENTFW.1 (ADR-0147): agent-firewall MCP — scans both directions vs a remote ACP agent (hermes/openclaw); quarantines poisoned replies, neutralizes delimiter breakout, blocks outbound hidden vectors, fails closed when the scanner dies
 	$(BUN) run harness/scripts/demo_pagentfw1.ts
 
 .PHONY: dashboards

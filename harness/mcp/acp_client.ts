@@ -3,7 +3,7 @@
 
 // harness/mcp/acp_client.ts
 //
-// P-AGENTFW.1 (ADR-0135): a harness-side Agent Client Protocol client — the SAME line-delimited JSON-RPC
+// P-AGENTFW.1 (ADR-0147): a harness-side Agent Client Protocol client — the SAME line-delimited JSON-RPC
 // transport as desktop/acp.ts, copied into the harness so the security core does not import the desktop
 // shell (clean layering). The agent-firewall uses it to reach a remote ACP agent (hermes / openclaw): it
 // spawns the remote's `… acp` command, runs the ACP handshake with LEAST PRIVILEGE (no client filesystem),

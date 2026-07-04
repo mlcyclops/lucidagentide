@@ -9525,7 +9525,7 @@ ADR-0133 (the Agent Builder this extends), ADR-0096 (the `preview_open` handoff 
 network whitelist + OS-encrypted credential vault this builds on), ADR-0114 (the ENGAGEMENT_POLICY pattern for a
 new frozen policy block), the P-AGENT.5 import gate (the sibling untrusted-content guard).
 
-## ADR-0135 - P-AGENTFW.1: Agent Firewall MCP - a fail-closed security proxy between LUCID and external ACP agent runtimes (hermes / openclaw)
+## ADR-0147 - P-AGENTFW.1: Agent Firewall MCP - a fail-closed security proxy between LUCID and external ACP agent runtimes (hermes / openclaw)
 
 **Date:** 2026-07-04
 **Status:** Accepted. **P-AGENTFW.1 BUILT + tested** (the firewall core + registry + `lucid agent-firewall`

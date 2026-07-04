@@ -3,7 +3,7 @@
 
 // harness/mcp/agent_firewall.ts
 //
-// P-AGENTFW.1 (ADR-0135): the Agent Firewall — a security proxy that LUCID (omp) reaches as a stdio MCP
+// P-AGENTFW.1 (ADR-0147): the Agent Firewall — a security proxy that LUCID (omp) reaches as a stdio MCP
 // server and that forwards to a remote ACP agent runtime (hermes / openclaw). It mediates BOTH directions
 // through the existing fail-closed gate (scanAndDecide, keystone #1), fail-closed by law (invariant #3):
 //
@@ -135,7 +135,7 @@ export function blockedResult(reason: string): McpToolResult {
 
 /** Neutralize the UNTRUSTED_CONTENT delimiter literals inside adversarial remote text so it cannot break out
  *  of the envelope (a hostile agent embedding `UNTRUSTED_CONTENT_END` would otherwise escape the block — and
- *  the Unicode scanner does NOT catch ASCII tokens; ADR-0135). Each literal becomes a token-free marker. */
+ *  the Unicode scanner does NOT catch ASCII tokens; ADR-0147). Each literal becomes a token-free marker. */
 export function neutralizeDelimiters(s: string): string {
   return s.split(UNTRUSTED_END).join("[lucid-neutralized-delimiter]").split(UNTRUSTED_START).join("[lucid-neutralized-delimiter]");
 }

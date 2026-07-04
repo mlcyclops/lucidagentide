@@ -3,11 +3,11 @@
 
 // harness/mcp/registry.ts
 //
-// P-AGENTFW.1 (ADR-0135): the registry of remote ACP agent runtimes (hermes / openclaw / any ACP agent)
+// P-AGENTFW.1 (ADR-0147): the registry of remote ACP agent runtimes (hermes / openclaw / any ACP agent)
 // that LUCID connects to THROUGH the agent-firewall MCP proxy. One entry describes how to reach a remote
 // agent (the command to spawn its ACP server, e.g. `hermes acp` or `openclaw acp --url … --token-file …`).
 //
-// CUSTODY (ADR-0135, mirrors ADR-0020 L1706): this file is written mode 0600 (dir ~/.omp 0700). It stores
+// CUSTODY (ADR-0147, mirrors ADR-0020 L1706): this file is written mode 0600 (dir ~/.omp 0700). It stores
 // command/args, NOT secrets — the recommended pattern is `openclaw acp --token-file <path>` so the gateway
 // token stays in the remote agent's own file and never lands here. Plaintext-at-0600 (like lucid-gui.json
 // pre-P-MCP.2), not Electron safeStorage, because the omp-spawned firewall subprocess can't reach the
@@ -109,7 +109,7 @@ export function setRemoteAgentEnabled(id: string, enabled: boolean): void {
 }
 
 /** The ACP `session/new.mcpServers` entries for ENABLED connections — each an `McpServerStdio` that spawns
- *  the firewall for that one connection (ADR-0135). omp discriminates stdio by the presence of `command`
+ *  the firewall for that one connection (ADR-0147). omp discriminates stdio by the presence of `command`
  *  (no `url`, no `type`); env is the ACP `EnvVariable[]` shape. */
 export function remoteAgentMcpServers(lucidBin: string = lucidBinPath()): Record<string, unknown>[] {
   const file = process.env.LUCID_AGENTS_FILE;

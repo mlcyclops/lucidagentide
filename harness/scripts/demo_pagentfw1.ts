@@ -3,7 +3,7 @@
 
 // harness/scripts/demo_pagentfw1.ts
 //
-// P-AGENTFW.1 (ADR-0135): the Agent Firewall MCP — a fail-closed security proxy between LUCID and a remote
+// P-AGENTFW.1 (ADR-0147): the Agent Firewall MCP — a fail-closed security proxy between LUCID and a remote
 // ACP agent (hermes / openclaw). This demo drives the firewall with the REAL scanner sidecar and a FAKE
 // remote agent, and proves the load-bearing properties:
 //   1. a clean remote reply is returned wrapped as UNTRUSTED_CONTENT + trust-labeled (never `trusted`);

@@ -3,7 +3,7 @@
 
 // harness/mcp/mcp_server.ts
 //
-// P-AGENTFW.1 (ADR-0135): a minimal Model Context Protocol server over stdio — the SAME line-delimited
+// P-AGENTFW.1 (ADR-0147): a minimal Model Context Protocol server over stdio — the SAME line-delimited
 // JSON-RPC 2.0 we hand-roll for ACP (desktop/acp.ts), so no MCP SDK dependency (air-gap clean). It handles
 // exactly the three methods omp drives against a stdio MCP server: `initialize`, `tools/list`, `tools/call`
 // (+ the `notifications/initialized` no-op). The wire shapes mirror omp's bundled MCP types.

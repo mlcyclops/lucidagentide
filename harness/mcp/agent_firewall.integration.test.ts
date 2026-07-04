@@ -3,7 +3,7 @@
 
 // harness/mcp/agent_firewall.integration.test.ts
 //
-// P-AGENTFW.1 (ADR-0135) END-TO-END: the firewall driving a REAL remote-agent subprocess over the actual
+// P-AGENTFW.1 (ADR-0147) END-TO-END: the firewall driving a REAL remote-agent subprocess over the actual
 // AcpAgentClient stdio transport (a faithful fake `hermes acp`, testing/fake_acp_agent.ts) — not the
 // in-process fake used by the unit tests. Proves: handshake yields a session id; a clean reply round-trips
 // as delimited UNTRUSTED_CONTENT; a poisoned reply is quarantined + withheld; a breakout attempt is

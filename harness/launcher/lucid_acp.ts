@@ -213,7 +213,7 @@ export async function main(argv: string[], env: Env = process.env): Promise<numb
       "usage: lucid acp [--isolate] | lucid check | lucid agent-firewall --conn <id>\n" +
         "  acp             Start the gated Lucid ACP agent (omp + the in-process security gate) for an IDE client.\n" +
         "  check           Run the fail-closed preflight (gate + scanner) and exit 0 (ready) / 1 (unavailable).\n" +
-        "  agent-firewall  Serve the stdio MCP firewall proxy to a remote ACP agent (hermes/openclaw) — ADR-0135.\n" +
+        "  agent-firewall  Serve the stdio MCP firewall proxy to a remote ACP agent (hermes/openclaw) — ADR-0147.\n" +
         "  Fail-closed: `acp` refuses to start if the gate or scanner sidecar is unavailable.\n",
     );
     return sub === undefined || sub === "-h" || sub === "--help" ? 0 : 2;

@@ -3,7 +3,7 @@
 
 // harness/mcp/agent_firewall.test.ts
 //
-// P-AGENTFW.1 (ADR-0135): the security keystones of the agent-firewall, over-tested (CLAUDE.md). Each test
+// P-AGENTFW.1 (ADR-0147): the security keystones of the agent-firewall, over-tested (CLAUDE.md). Each test
 // fails if a specific guarantee regresses: fail-closed on a dead scanner, quarantine WITHHELDS poisoned
 // remote output, an outbound hidden vector is blocked BEFORE relay, a remote delimiter-breakout is
 // neutralized, remote content is labeled untrusted (never trusted), and the MCP server is long-lived.

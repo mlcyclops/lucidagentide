@@ -231,7 +231,7 @@ export function mcpServersForAcp(): Record<string, unknown>[] {
   const http = (load().mcpServers ?? [])
     .filter((e) => e.enabled && e.url)
     .map((e) => ({ type: e.transport, name: e.name, url: e.url, headers: e.token ? [{ name: "Authorization", value: `Bearer ${e.token}` }] : [] }));
-  // P-AGENTFW.1 (ADR-0135): enabled remote ACP agents (hermes/openclaw) attach as stdio "agent-firewall"
+  // P-AGENTFW.1 (ADR-0147): enabled remote ACP agents (hermes/openclaw) attach as stdio "agent-firewall"
   // MCP servers — omp spawns `lucid agent-firewall --conn <id>`, which scans both directions fail-closed.
   return [...http, ...remoteAgentMcpServers()];
 }
