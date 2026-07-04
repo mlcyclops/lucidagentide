@@ -2171,7 +2171,7 @@ async function deleteLocalProvider(id: string): Promise<void> {
 /** Reachability/TLS probe of an endpoint (no key sent). */
 async function testLocalProviderConn(baseUrl: string): Promise<void> {
   const u = (baseUrl || "").trim();
-  if (!u) { showToast({ tone: "warn", title: "Enter a base URL first" }); return; }
+  if (!u) { showToast({ tone: "warn", title: "Enter a base URL first", desc: "Type the endpoint's base URL, then test it." }); return; }
   showToast({ title: "Testing connection…", desc: u, timeout: 1400 });
   const r = await bridge.localProviderTest(u).catch(() => null);
   if (r?.reachable) {
