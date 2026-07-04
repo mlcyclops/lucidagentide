@@ -38,6 +38,7 @@ export interface AgentTemplateInfo {
   steps: number;
   tools: string[];
 }
+import type { LocalProviderDef } from "../local_providers.ts"; // P-LOCAL.3: self-hosted/custom LLM providers
 
 export interface BlockRecord { id: string; tool: string; severity: string; findings: string; reason: string; at: string; status: "quarantined" | "approved" | "dismissed"; reviewer?: string }
 
@@ -361,6 +362,16 @@ export interface LucidBridge {
   agentHistoryRestore(id: string, ts: number): Promise<{ spec?: AgentSpec; error?: string } | null>;
   agentTemplates(): Promise<AgentTemplateInfo[]>;
   agentTemplateUse(file: string): Promise<{ spec?: AgentSpec; trustLabel?: string; reason?: string; setup?: string; notes?: string[]; error?: string } | null>;
+  /** P-LOCAL.3 (ADR-0135): Local Providers (self-hosted/custom OpenAI-compatible LLMs). Declarations only —
+   *  the API key is stored via credStore into the OS-encrypted vault, never through these. */
+  localProvidersList(): Promise<LocalProviderDef[]>;
+  localProviderUpsert(provider: LocalProviderDef): Promise<{ saved?: boolean; id?: string; errors?: string[] } | null>;
+  localProviderDelete(id: string): Promise<{ deleted: boolean } | null>;
+  localProviderEnable(id: string, enabled: boolean): Promise<{ ok: boolean } | null>;
+  /** Reachability/TLS probe of a base URL's /models endpoint (no key sent). */
+  localProviderTest(baseUrl: string): Promise<{ reachable: boolean; status?: number; authed?: boolean; error?: string } | null>;
+  /** Restart the desktop app so a spawned omp picks up new local providers (Electron only; no-op in browser). */
+  relaunch(): Promise<void>;
   setCodeGraphAgent(enabled: boolean): Promise<{ enabled: boolean } | null>;
   /** P-APPEAR.1: the personalized chat background (image data URL + display mode + opacity). */
   chatBackground(): Promise<{ image: string; mode: "off" | "ambient" | "flashlight"; opacity: number } | null>;
@@ -393,7 +404,7 @@ export interface LucidBridge {
   mcpToggle(id: string, enabled: boolean): Promise<unknown>;
   usage(): Promise<UsageLedger | null>;
   codeActivity(): Promise<CodeActivity | null>;
-  sendPrompt(text: string, onEvent: (e: ChatEvent) => void): Promise<void>;
+  sendPrompt(text: string, onEvent: (e: ChatEvent) => void, images?: { data: string; mimeType: string }[]): Promise<void>;
   // P-GOAL.1 (ADR-0046): run a /goal loop - streams the same events plus goal-iter/check/done/stop.
   runGoal(opts: GoalOpts, onEvent: (e: ChatEvent) => void): Promise<void>;
   resumableLoops(): Promise<ResumableLoop[] | null>; // P-GOAL.4: loops that stopped without meeting their condition
@@ -587,6 +598,7 @@ interface NativeShell {
   pickFolder?(): Promise<string | null>;
   capturePreview?(rect: { x: number; y: number; width: number; height: number }): Promise<string | null>;
   revealPath?(path: string): Promise<boolean>;
+  relaunch?(): Promise<void>; // P-LOCAL.3 polish: restart the app to apply local-provider changes
   win?: { minimize(): void; toggleMaximize(): void; close(): void };
   // P-NETWL.1 (ADR-0106): native file picker + OS-encrypted credential vault (Electron-only).
   pickFile?(opts?: { title?: string; filters?: { name: string; extensions: string[] }[] }): Promise<string | null>;
@@ -661,10 +673,10 @@ async function streamNdjson(path: string, body: unknown, onEvent: (e: ChatEvent)
 // Stop must always recover the UI: aborting this controller ends the client read immediately, so the
 // turn's finally runs even when omp is wedged. cancelChat() aborts it AND posts the server cancel.
 let chatAbort: AbortController | null = null;
-const streamChat = (text: string, onEvent: (e: ChatEvent) => void) => {
+const streamChat = (text: string, onEvent: (e: ChatEvent) => void, images?: { data: string; mimeType: string }[]) => {
   chatAbort?.abort();
   chatAbort = new AbortController();
-  return streamNdjson("/api/chat", { text }, onEvent, chatAbort.signal).finally(() => { chatAbort = null; });
+  return streamNdjson("/api/chat", { text, ...(images?.length ? { images } : {}) }, onEvent, chatAbort.signal).finally(() => { chatAbort = null; });
 };
 
 export const bridge: LucidBridge = {
@@ -704,6 +716,12 @@ export const bridge: LucidBridge = {
   agentHistoryRestore: (id, ts) => post("/api/agent/history/restore", { id, ts }), // P-AGENT.17
   agentTemplates: async () => (await getData("/api/agent/templates"))?.templates ?? [], // P-AGENT.17
   agentTemplateUse: (file) => post("/api/agent/template-use", { file }), // P-AGENT.17 (standard gated import path)
+  localProvidersList: async () => (await getData("/api/local-providers"))?.providers ?? [], // P-LOCAL.3
+  localProviderUpsert: (provider) => post("/api/local-providers", { provider }), // P-LOCAL.3 (server validates fail-closed)
+  localProviderDelete: (id) => post("/api/local-providers/delete", { id }), // P-LOCAL.3
+  localProviderEnable: (id, enabled) => post("/api/local-providers/enable", { id, enabled }), // P-LOCAL.3
+  localProviderTest: (baseUrl) => post("/api/local-providers/test", { baseUrl }), // P-LOCAL.3 polish
+  relaunch: () => (shell?.relaunch ? shell.relaunch() : Promise.resolve()), // P-LOCAL.3 polish (Electron only)
   setCodeGraphAgent: (enabled) => post("/api/codegraph/agent", { enabled }),
   chatBackground: () => getData("/api/chat-bg"),
   setChatBackground: (patch) => post("/api/chat-bg", patch),

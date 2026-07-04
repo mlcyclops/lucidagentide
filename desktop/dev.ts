@@ -50,6 +50,8 @@ import { loadWhitelist, removeEntry, saveWhitelist, setPosture, upsertEntry, typ
 import { readPreviewFile, toFsPath } from "./preview_file.ts"; // P-PREVIEW.4: read a local file's content for the preview
 import { PREVIEW_FRAME_CSP } from "./preview_resolve.ts"; // P-PREVIEW.4b: per-frame CSP for the served preview doc
 import { inlinePreviewAssets } from "./preview_inline.ts"; // P-PREVIEW.4c: fold a multi-file app's relative assets inline
+import { listLocalProviders, upsertLocalProvider, removeLocalProvider, setLocalProviderEnabled } from "./settings_store.ts";
+import { providerModelsUrl, type LocalProviderDef } from "./local_providers.ts";
 import { applyEnv, attribution, chinaModelsAcknowledged, listMcpServers, load as loadSettings, removeMcpServer, roleChosen, setAsksage, setAttributionSkip, setChinaModelsAcknowledged, setCodeGraphAgent, setDeveloperMode, setKey, setMcpServerEnabled, setPersonalAiExtract, setProfile, setRateLimitProbe, setThirdPartyProvidersAcknowledged, setTourSeen, setUserRole, setVoiceSettings, thirdPartyProvidersAcknowledged, tourSeen, upsertMcpServer, USER_ROLES, userRole, voiceSettings, type UserRole } from "./settings_store.ts";
 
 // ADR-0088/0089: the /api/settings payload — profile + attribution + the cosmetic role/tour state.
@@ -637,6 +639,46 @@ const server = Bun.serve({
         const b = await readBody<{ id?: unknown }>(req);
         const deleted = typeof b.id === "string" ? deleteSpecFile(currentWorkspace(), b.id) : false;
         return json({ ok: true, data: { deleted } });
+      }
+      // P-LOCAL.3 (ADR-0135): Local Providers CRUD. Declarations only — the API key lives in the OS-encrypted
+      // vault (stored via the credStore IPC in the desktop app), never through this route. upsert validates
+      // fail-closed (an invalid provider is refused, never persisted).
+      if (p === "/api/local-providers") {
+        if (req.method === "POST") {
+          const b = await readBody<{ provider?: unknown }>(req);
+          try {
+            const saved = upsertLocalProvider(b.provider as LocalProviderDef);
+            return json({ ok: true, data: { saved: true, id: saved.id } });
+          } catch (e) {
+            const msg = String((e as { message?: unknown })?.message ?? e);
+            return json({ ok: false, error: msg, data: { errors: [msg] } });
+          }
+        }
+        return json({ ok: true, data: { providers: listLocalProviders() } });
+      }
+      if (p === "/api/local-providers/delete" && req.method === "POST") {
+        const b = await readBody<{ id?: unknown }>(req);
+        if (typeof b.id === "string") removeLocalProvider(b.id);
+        return json({ ok: true, data: { deleted: true } });
+      }
+      if (p === "/api/local-providers/enable" && req.method === "POST") {
+        const b = await readBody<{ id?: unknown; enabled?: unknown }>(req);
+        if (typeof b.id === "string") setLocalProviderEnabled(b.id, !!b.enabled);
+        return json({ ok: true, data: { ok: true } });
+      }
+      // P-LOCAL.3 polish: reachability/TLS probe. Hits the OpenAI-compatible /models endpoint with a short
+      // timeout and NO key (the vault secret never leaves main) — any HTTP response (even 401/403) proves the
+      // host is reachable + the TLS handshake succeeded; a network/TLS/timeout error means it's not.
+      if (p === "/api/local-providers/test" && req.method === "POST") {
+        const b = await readBody<{ baseUrl?: unknown }>(req);
+        const target = typeof b.baseUrl === "string" ? providerModelsUrl(b.baseUrl) : null;
+        if (!target) return json({ ok: true, data: { reachable: false, error: "invalid base URL" } });
+        try {
+          const r = await fetch(target, { method: "GET", redirect: "manual", signal: AbortSignal.timeout(4500) });
+          return json({ ok: true, data: { reachable: true, status: r.status, authed: r.status === 401 || r.status === 403 } });
+        } catch (e) {
+          return json({ ok: true, data: { reachable: false, error: String((e as { message?: unknown })?.message ?? e).slice(0, 160) } });
+        }
       }
       // P-AGENT.6: enterprise export — compile the spec + write a portable, tamper-evident bundle (with a
       // SHA-256 content digest) for a deploy target under .omp/agent-exports/<spec_id>/<target>/. Fail-closed:
@@ -1297,8 +1339,12 @@ const server = Bun.serve({
       // ADR-0009 Phase A: re-load the cross-session recall block for the fresh session (read-only).
       if (p === "/api/newSession" && req.method === "POST") { await backend.newSession(); await refreshRecall(); return json({ ok: true }); }
       if (p === "/api/chat" && req.method === "POST") {
-        const { text } = await readBody<{ text?: unknown }>(req);
-        return ndjsonStream("chat", (emit) => backend.prompt(String(text ?? ""), emit));
+        const { text, images } = await readBody<{ text?: unknown; images?: unknown }>(req);
+        // P-VISION.1 (ADR-0136): pasted-image content blocks ride alongside the text (defensively filtered).
+        const imgs = Array.isArray(images)
+          ? images.filter((im): im is { data: string; mimeType: string } => !!im && typeof (im as { data?: unknown }).data === "string" && typeof (im as { mimeType?: unknown }).mimeType === "string").slice(0, 6)
+          : undefined;
+        return ndjsonStream("chat", (emit) => backend.prompt(String(text ?? ""), emit, imgs));
       }
       // P-GOAL.1 (ADR-0046): run a /goal loop — maker iterations + a separate verifiable checker, capped
       // and gated. Streams the same NDJSON chat events plus goal-iter / goal-check / goal-done / goal-stop.

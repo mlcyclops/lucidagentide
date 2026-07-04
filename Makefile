@@ -401,6 +401,14 @@ demo-P-AGENT.4-live: ## P-AGENT.4-live (ADR-0133): run a BUILT agent on a REAL C
 demo-P-AGENT.8.1: ## P-AGENT.8.1 (ADR-0134): secret guardrail — agents DECLARE credential names (SecretRef); a secret VALUE embedded in a spec is refused at compile + save (secrets belong in the vault)
 	$(BUN) run harness/scripts/demo_p_agent_8_1.ts
 
+.PHONY: demo-P-LOCAL.1
+demo-P-LOCAL.1: ## P-LOCAL.1 (ADR-0135): Local Providers — declare a self-hosted / custom OpenAI-compatible LLM (Ollama, llama.cpp, vLLM, DGX-over-VPN); validate fail-closed, emit the omp --config overlay (secret from the vault, skipped if absent), persist WITHOUT the secret
+	$(BUN) run desktop/scripts/demo_p_local_1.ts
+
+.PHONY: demo-P-VISION.1
+demo-P-VISION.1: ## P-VISION.1 (ADR-0136): paste/drop a screenshot into the prompt bar — validate fail-closed (image-only, size/count caps), emit an omp image content block (base64, prefix stripped), and render a thumbnail strip that never interpolates the data URL (XSS-safe)
+	$(BUN) run desktop/scripts/demo_p_vision_1.ts
+
 .PHONY: dashboards
 dashboards: ## Materialize dashboard CSVs from a DuckDB into observable/docs/data (DB=path)
 	$(BUN) run harness/scripts/materialize_dashboards.ts $(DB) observable/docs/data

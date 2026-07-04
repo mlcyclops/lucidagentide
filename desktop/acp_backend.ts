@@ -749,7 +749,7 @@ class Backend {
   /** Run one turn, streaming events to onEvent; resolves after `done`. Captures the
    *  assistant reply so the personalization distiller can learn from the turn (P9.2).
    *  A stall (no activity for IDLE_MS) ends the turn with a clear error instead of hanging. */
-  async prompt(text: string, onEvent: (e: ChatEvent) => void): Promise<void> {
+  async prompt(text: string, onEvent: (e: ChatEvent) => void, images?: { data: string; mimeType: string }[]): Promise<void> {
     let assistant = "";
     let stalled = false;
     let idle: ReturnType<typeof setTimeout> | undefined;
@@ -780,10 +780,15 @@ class Backend {
       });
       this.memoryRecallDelivered = built.memoryRecallDelivered;
       const body = built.preamble + text;
+      // P-VISION.1 (ADR-0136): user-attached images ride as ACP image content blocks after the text. omp's
+      // session/prompt accepts `(text|image)[]` (same shape the preview_screenshot tool returns). Only
+      // well-formed blocks (base64 data + image mime) are appended — the renderer already validated them.
+      const imageBlocks = (images ?? []).filter((im) => im?.data && im?.mimeType).map((im) => ({ type: "image" as const, data: im.data, mimeType: im.mimeType }));
+      const promptContent = [{ type: "text" as const, text: body }, ...imageBlocks];
       arm(); // start the idle clock now (covers a stall BEFORE the first token)
       const stall = new Promise<never>((_, reject) => { onStall = reject; });
       const promptRes = await Promise.race<any>([
-        this.acp!.request("session/prompt", { sessionId: this.sessionId, prompt: [{ type: "text", text: body }] }),
+        this.acp!.request("session/prompt", { sessionId: this.sessionId, prompt: promptContent }),
         stall,
       ]);
       // P-GOAL-DIAG.1 (ADR-0074): the omp turn's stopReason tells us WHY a maker turn ended (e.g. an

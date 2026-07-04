@@ -28,6 +28,8 @@ import { capGraph, graphOpts, pollDelay, watchPerfTier } from "./perf_tier.ts";
 import type { PersonalGraphData } from "./bridge.ts";
 import { agentBuilderPanelHtml, specToGraphData, nodeEditorHtml, saveErrors, newCanvasSpec, runPanelHtml, secretsPanelHtml, agentInterviewPrompt, toolChipsHtml, trustBannerHtml, runApprovalHtml, runsPanelHtml, traceDetailHtml, schedulePanelHtml, historyPanelHtml, templatesPanelHtml } from "./agent_builder.ts"; // P-AGENT.2b/.4-live/.8/.9/.11a/.13/.14/.17
 import type { TrustLabel } from "../../harness/contracts.ts"; // P-AGENT.9: imported-agent trust banner
+import { localProvidersCardBody, draftFromForm } from "./local_providers_ui.ts"; // P-LOCAL.3 (ADR-0135): Settings → Local Providers
+import { acceptAttachment, promptImageBlocks, thumbStripHtml, MAX_ATTACHMENT_BYTES, type Attachment } from "./composer_attachments.ts"; // P-VISION.1 (ADR-0136): pasted images
 import type { AgentSpec, NodeKind } from "../../harness/agent/spec.ts"; // P-AGENT.2b
 import { expandCommandBody, type UserCommand } from "../../harness/commands/spec.ts"; // P-CMD.1: user "/" commands
 import { type Action, type ToastAction, attachRichTip, createPalette, initTooltips, popover, showToast } from "./ui.ts";
@@ -92,6 +94,8 @@ const state = {
   mcpServers: [] as import("./bridge.ts").McpServerStatus[], // P-MCP.1 (ADR-0020)
   whitelist: [] as import("./bridge.ts").WhitelistEntryView[], // P-NETWL.2 (ADR-0106) curated network whitelist
   creds: [] as import("./bridge.ts").CredMetaView[], // P-KEYS.1 (ADR-0107) vault metadata (ref → kind/label/last4)
+  localProviders: [] as import("../local_providers.ts").LocalProviderDef[], // P-LOCAL.3 (ADR-0135) self-hosted/custom LLM endpoints
+  attachments: [] as Attachment[], // P-VISION.1 (ADR-0136) pasted/dropped images staged for the next message
   posture: { allowAll: true, allowWebSearch: true, managedLocked: false } as import("./bridge.ts").EgressPostureView, // P-NETWL.5 (ADR-0108)
   managed: null as import("./bridge.ts").ManagedPolicy | null, // ADR-0068 (P-ENT.1) enterprise locks
   userRole: null as UserRole | null, // ADR-0088 (P-ROLE.1): chosen role; null until onboarding picks one
@@ -188,6 +192,9 @@ function buildShell(): void {
         <div class="chat" id="chat"><div class="thread" id="thread"></div></div>
         <button class="jump-down" id="jumpDown" type="button" aria-label="Jump down a page" data-tip="Jump down a page">${icon("chevronsDown", 18)}</button>
         <div class="composer-wrap">
+          <!-- P-VISION.1 (ADR-0136): thumbnails of pasted/dropped images, just above the prompt bar; sent
+               with the next message only when the user hits Enter/Send. -->
+          <div class="composer-thumbs" id="composerThumbs" hidden></div>
           <div class="composer-row">
             <div class="composer">
               <textarea id="input" rows="1" spellcheck="true" placeholder="Ask the agent…  every tool call is scanned before it runs"></textarea>
@@ -390,7 +397,7 @@ function seedThread(): void {
     <div class="h">Ask the agent anything</div>
     <div class="d">Secure prompting and code generation</div></div>`;
 }
-function addMessage(role: "user" | "assistant", text: string): HTMLElement {
+function addMessage(role: "user" | "assistant", text: string, attachments?: Attachment[]): HTMLElement {
   $("#chatHint")?.remove();
   // Copy + Save .md on BOTH roles (copy your own prompts too).
   // P-VOICE.1 (ADR-0115): read-aloud (TTS) only on the assistant's replies.
@@ -405,9 +412,55 @@ function addMessage(role: "user" | "assistant", text: string): HTMLElement {
   const textEl = $(".text", node) as HTMLElement;
   textEl.innerHTML = renderMarkdown(text);
   enhanceCodeBlocks(textEl);
+  // P-VISION.1 (ADR-0136): render attached images inline. Each img.src is set as a DOM PROPERTY (never
+  // interpolated into the HTML) so a data URL can't break out of the markup.
+  if (attachments?.length) {
+    const row = el(`<div class="msg-imgs"></div>`);
+    for (const a of attachments) {
+      const img = document.createElement("img");
+      img.className = "msg-img"; img.alt = "attached image"; img.loading = "lazy"; img.src = a.dataUrl;
+      row.appendChild(img);
+    }
+    textEl.appendChild(row);
+  }
   $("#thread")!.appendChild(node);
   scrollChat();
   return node;
+}
+
+// ── P-VISION.1 (ADR-0136): composer image attachments ────────────────────────────────────────────
+let attSeq = 0;
+/** Re-paint the thumbnail strip above the composer and set each thumb's img.src as a PROPERTY. */
+function renderComposerThumbs(): void {
+  const strip = $("#composerThumbs") as HTMLElement | null; if (!strip) return;
+  strip.innerHTML = thumbStripHtml(state.attachments);
+  strip.hidden = state.attachments.length === 0;
+  for (const a of state.attachments) {
+    const img = strip.querySelector(`.cx-thumb[data-att="${a.id}"] .cx-thumb-img`) as HTMLImageElement | null;
+    if (img) img.src = a.dataUrl; // property, never interpolated
+  }
+  setSendEnabled();
+}
+/** Validate + stage a pasted/dropped image (data URL) for the next message. */
+function addPastedImage(dataUrl: string, name?: string): void {
+  const r = acceptAttachment(state.attachments, dataUrl, `att_${++attSeq}`, name);
+  if (!r.ok || !r.attachment) { showToast({ tone: "warn", title: "Couldn't attach image", desc: r.reason ?? "" }); return; }
+  state.attachments.push(r.attachment);
+  renderComposerThumbs();
+  showToast({ title: "Image attached", desc: "Add instructions, then press Enter to send.", timeout: 1800 });
+}
+/** Read image files (from paste or drop) into staged attachments. Returns true if any were image files. */
+function stageImageFiles(files: FileList | File[] | null | undefined): boolean {
+  let any = false;
+  for (const f of Array.from(files ?? [])) {
+    if (!f.type.startsWith("image/")) continue;
+    any = true;
+    if (f.size > MAX_ATTACHMENT_BYTES) { showToast({ tone: "warn", title: "Image too large", desc: `${f.name || "image"} exceeds the limit.` }); continue; }
+    const reader = new FileReader();
+    reader.onload = () => addPastedImage(String(reader.result), f.name);
+    reader.readAsDataURL(f);
+  }
+  return any;
 }
 interface MsgNode extends HTMLElement { _md?: string }
 
@@ -992,7 +1045,10 @@ function createSubagentCard(e: Extract<ChatEvent, { type: "subagent" }>): { el: 
 async function send(): Promise<void> {
   const ta = $("#input") as HTMLTextAreaElement;
   const text = ta.value.trim();
-  if (!text) return;
+  // P-VISION.1 (ADR-0136): capture any staged image attachments for this turn.
+  const atts = state.attachments.slice();
+  const images = promptImageBlocks(atts);
+  if (!text && images.length === 0) return;
   // P-CMD.1: a user-authored SKILL-mode "/" command ACTIVATES its body as a persistent instruction (no turn
   // sent) — same behaviour as a bundled skill. Handle it before we open an assistant node.
   const cmdTok = /^\/([a-z][a-z0-9-]{0,31})\b/i.exec(text)?.[1]?.toLowerCase();
@@ -1012,8 +1068,9 @@ async function send(): Promise<void> {
   // we never fight a user who reopens it mid-chat.
   if (!autoCollapsedSessions) { autoCollapsedSessions = true; if (!state.sidebarCollapsed) toggleSidebar(true); }
   state.lastPrompt = text; // remembered so an Approve & retry can re-send it
-  ta.value = ""; autosize(ta); setSendEnabled();
-  addMessage("user", text);
+  ta.value = ""; autosize(ta);
+  state.attachments = []; renderComposerThumbs(); // clear the thumb strip on send (also refreshes send-enabled)
+  addMessage("user", text, atts);
   state.streaming = true; setSendEnabled();
 
   const node = addMessage("assistant", "");
@@ -1125,7 +1182,7 @@ async function send(): Promise<void> {
     else if (e.type === "usage") { tok = e.used; cost = e.cost; state.liveUsage = { used: e.used, size: e.size, cost: e.cost }; paintHud(); renderStatus(); renderMetricsRail(); }
     else if (e.type === "done") { if (e.text && e.text.length > buf.length) buf = e.text; /* reconcile a lossy stream with the server's full reply */ streamEl.innerHTML = renderMarkdown(buf); enhanceCodeBlocks(streamEl); (node as MsgNode)._md = buf; finishHud(); state.streaming = false; setSendEnabled(); }
   };
-  try { await bridge.sendPrompt(sendText, onEvent); }
+  try { await bridge.sendPrompt(sendText, onEvent, images); }
   finally {
     (node as MsgNode)._md = buf;
     if (state.streaming) { streamEl.innerHTML = renderMarkdown(buf); enhanceCodeBlocks(streamEl); finishHud(); state.streaming = false; setSendEnabled(); } else { finishHud(); }
@@ -1186,7 +1243,7 @@ function setSendEnabled(): void {
     btn.innerHTML = icon("square", 16);
     btn.setAttribute("data-tip", "Stop|Interrupt the reply + tool calls");
   } else {
-    btn.disabled = !ta.value.trim();
+    btn.disabled = !ta.value.trim() && state.attachments.length === 0; // P-VISION.1: image-only messages can send
     btn.classList.remove("stop");
     btn.innerHTML = icon("send", 18);
     btn.setAttribute("data-tip", "Send|Enter");
@@ -2053,6 +2110,7 @@ function settingsShell(): string {
     setSkel("asksage", "AskSage gov gateway", "accredited proxy", true),
     `<div data-sec="asksageQuota"></div>`, // AskSage Monthly-tokens bar - ONLY when the gov gateway is configured (filled in hydrateSettings)
     setSkel("providers", "Providers", "U.S. frontier · key or OAuth", true),
+    setSkel("localProviders", "Local Providers", "self-hosted · Ollama · vLLM · VPN", true), // P-LOCAL.3 (ADR-0135); auto-collapsed
     `<div data-sec="sovereignty"></div>`, // P-IDE.1c: China-origin unlock (renders only when such models exist)
     setSkel("compression", "Token compression", "headroom · on-device · opt-in", true),
     setSkel("mcp", "MCP connectors", "model context protocol", true),
@@ -2094,6 +2152,7 @@ function hydrateSettings(): void {
   fillSec("developer", secDeveloper()); // ADR-0059: render from state.developerMode (loaded by loadDev)
   void hydratePersonal();
   hydrateMcp();
+  void hydrateLocalProviders(); // P-LOCAL.3 (ADR-0135)
   hydrateWhitelist(); // P-NETWL.2 (ADR-0106)
   void bridge.asksage().then(async (a) => {
     if (a) state.asksage = a;
@@ -2130,6 +2189,79 @@ const SCOPE_ORDER = ["personal", "work", "combined", "cui"] as const;
 /** Re-render just the Personalization card (instant - the endpoint is local). */
 function hydratePersonal(): Promise<void> {
   return bridge.personal().then((p) => fillSec("personal", secPersonal(p)));
+}
+
+// ── P-LOCAL.3 (ADR-0135): Settings → Local Providers ─────────────────────────────────────────────
+/** Re-render the Local Providers card from the current list + which credential refs are in the vault. */
+async function hydrateLocalProviders(): Promise<void> {
+  const [providers, creds] = await Promise.all([
+    bridge.localProvidersList().catch(() => [] as import("../local_providers.ts").LocalProviderDef[]),
+    bridge.credList().catch(() => [] as import("./bridge.ts").CredMetaView[]),
+  ]);
+  state.localProviders = providers ?? [];
+  const vaultRefs = new Set((creds ?? []).map((c) => c.ref));
+  fillSec("localProviders", localProvidersCardBody(state.localProviders, vaultRefs, bridge.isElectron));
+}
+
+/** Add a provider from the card's form: validate → (if authed) store the key in the vault → save the def. */
+async function addLocalProviderFromForm(): Promise<void> {
+  const val = (id: string): string => (($(`#${id}`, $("#setBody")!) as HTMLInputElement | HTMLSelectElement | null)?.value ?? "");
+  const external = ($("#lpExternal", $("#setBody")!) as HTMLInputElement | null)?.checked ?? false;
+  const draft = draftFromForm({ name: val("lpName"), baseUrl: val("lpBaseUrl"), auth: val("lpAuth"), models: val("lpModels"), external }, Date.now());
+  if (draft.errors.length || !draft.def) { showToast({ tone: "warn", title: "Check the provider details", desc: draft.errors[0] ?? "invalid" }); return; }
+  const def = draft.def;
+  if (draft.needsKey) {
+    const key = val("lpKey").trim();
+    if (!key) { showToast({ tone: "warn", title: "Paste the API key", desc: "It goes straight to the OS-encrypted vault." }); return; }
+    if (!bridge.isElectron || !bridge.credStore) { showToast({ tone: "danger", title: "Vault is desktop-only", desc: "Open the LUCID desktop app to store the key securely." }); return; }
+    const ref = `lpkey_${def.id}`;
+    const r = await bridge.credStore({ ref, kind: def.authKind === "basic" ? "basic" : "apikey", secret: key, label: `Local Provider · ${def.name}` });
+    if (!r || "error" in r) { showToast({ tone: "danger", title: "Couldn't store the key", desc: (r as { error?: string })?.error ?? "vault error" }); return; }
+    def.vaultRef = ref;
+  }
+  const saved = await bridge.localProviderUpsert(def);
+  if (saved && "saved" in saved && saved.saved) {
+    showToast({ tone: "ok", title: "Local provider added", desc: `${def.name} - takes effect on the next app restart.` });
+    void hydrateLocalProviders();
+  } else {
+    showToast({ tone: "danger", title: "Couldn't save the provider", desc: (saved as { errors?: string[] })?.errors?.[0] ?? "save error" });
+  }
+}
+
+/** Remove a provider (its vault key is left in the vault; the user can delete it from the whitelist/vault UI). */
+async function deleteLocalProvider(id: string): Promise<void> {
+  await bridge.localProviderDelete(id).catch(() => null);
+  void hydrateLocalProviders();
+}
+
+/** Reachability/TLS probe of an endpoint (no key sent). */
+async function testLocalProviderConn(baseUrl: string): Promise<void> {
+  const u = (baseUrl || "").trim();
+  if (!u) { showToast({ tone: "warn", title: "Enter a base URL first", desc: "Type the endpoint's base URL, then test it." }); return; }
+  showToast({ title: "Testing connection…", desc: u, timeout: 1400 });
+  const r = await bridge.localProviderTest(u).catch(() => null);
+  if (r?.reachable) {
+    showToast({ tone: "ok", title: "Endpoint reachable", desc: `HTTP ${r.status}${r.authed ? " · auth required (the key is sent at run time, from the vault)" : ""}.` });
+  } else {
+    const hint = u.startsWith("https") ? " Check the VPN tunnel, TLS cert, and port." : " Check the host/port - is the server running?";
+    showToast({ tone: "danger", title: "Not reachable", desc: (r?.error ?? "no response.") + hint });
+  }
+}
+
+/** Store (or rotate) an authed provider's key straight into the OS-encrypted vault, from the inline row. */
+async function saveLocalProviderKey(wrap: HTMLElement): Promise<void> {
+  const id = wrap.dataset.lpId ?? "";
+  const def = state.localProviders.find((p) => p.id === id);
+  if (!def) return;
+  const key = (($(".lp-rekey-input", wrap) as HTMLInputElement | null)?.value ?? "").trim();
+  if (!key) { showToast({ tone: "warn", title: "Paste the key first", desc: "It goes straight to the OS-encrypted vault." }); return; }
+  if (!bridge.isElectron || !bridge.credStore) { showToast({ tone: "danger", title: "Vault is desktop-only", desc: "Open the LUCID desktop app." }); return; }
+  const ref = def.vaultRef || `lpkey_${def.id}`;
+  const r = await bridge.credStore({ ref, kind: def.authKind === "basic" ? "basic" : "apikey", secret: key, label: `Local Provider · ${def.name}` });
+  if (!r || "error" in r) { showToast({ tone: "danger", title: "Couldn't store the key", desc: (r as { error?: string })?.error ?? "vault error" }); return; }
+  if (def.vaultRef !== ref) { def.vaultRef = ref; await bridge.localProviderUpsert(def).catch(() => null); }
+  showToast({ tone: "ok", title: "Key stored in the vault", desc: `${def.name} - restart to apply.` });
+  void hydrateLocalProviders();
 }
 // Settings → Personalization (ADR-0010/0012): opt-in encrypted KG + the
 // Work/Personal/Combined/CUI compartment selector with per-mode risk notices.
@@ -6171,6 +6303,12 @@ function wire(): void {
       reader.readAsDataURL(f);
       return;
     }
+    // P-LOCAL.3 (ADR-0135): enable/disable a Local Provider
+    if (t0.matches("[data-lp-toggle]")) {
+      const row = t0.closest("[data-lp-id]") as HTMLElement | null;
+      if (row?.dataset.lpId) { await bridge.localProviderEnable(row.dataset.lpId, (t0 as HTMLInputElement).checked).catch(() => {}); }
+      return;
+    }
     const vs = t0.closest("[data-voice-set]") as HTMLInputElement | HTMLSelectElement | null;
     if (!vs) return;
     const key = vs.dataset.voiceSet!;
@@ -6185,6 +6323,17 @@ function wire(): void {
     // P-APPEAR.1: chat-background upload / remove
     if (t.closest("#bgUpload")) { ($("#bgFile") as HTMLInputElement | null)?.click(); return; }
     if (t.closest("#bgClear")) { void updateChatBg({ image: "", mode: "off" }); return; }
+    // P-LOCAL.3 (ADR-0135): Local Providers card
+    if (t.closest("[data-lp-addtoggle]")) { (t.closest(".lp-add") as HTMLElement | null)?.classList.toggle("open"); return; }
+    if (t.closest("[data-lp-add]")) { await addLocalProviderFromForm(); return; }
+    if (t.closest("[data-lp-test-form]")) { await testLocalProviderConn(($("#lpBaseUrl", $("#setBody")!) as HTMLInputElement | null)?.value ?? ""); return; }
+    const lpTest = t.closest("[data-lp-test]") as HTMLElement | null;
+    if (lpTest) { await testLocalProviderConn(lpTest.dataset.url ?? ""); return; }
+    if (t.closest("[data-lp-rekey-save]")) { const w = t.closest("[data-lp-id]") as HTMLElement | null; if (w) await saveLocalProviderKey(w); return; }
+    if (t.closest("[data-lp-rekey]")) { const rk = (t.closest("[data-lp-id]") as HTMLElement | null)?.querySelector(".lp-rekey") as HTMLElement | null; if (rk) rk.hidden = !rk.hidden; return; }
+    if (t.closest("[data-lp-apply]")) { showToast({ title: "Restarting LUCID…", desc: "Applying your local providers.", timeout: 2000 }); await bridge.relaunch().catch(() => {}); return; }
+    const lpDel = t.closest("[data-lp-del]") as HTMLElement | null;
+    if (lpDel) { const id = (lpDel.closest("[data-lp-id]") as HTMLElement | null)?.dataset.lpId; if (id) await deleteLocalProvider(id); return; }
     // workspace
     if (t.closest("#wsBrowse")) {
       // Prefer the NATIVE OS folder-open dialog (Electron): it browses the whole machine and can create new
@@ -6647,6 +6796,32 @@ function wire(): void {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
   });
   ta.addEventListener("blur", () => window.setTimeout(closeSlashAC, 120)); // dismiss when focus leaves (after a click lands)
+  // P-VISION.1 (ADR-0136): paste a snipping-tool / desktop screenshot straight into the prompt bar. Image
+  // clipboard items are staged as thumbnails (NOT auto-sent); text paste passes through untouched.
+  ta.addEventListener("paste", (e) => {
+    const items = (e as ClipboardEvent).clipboardData?.items;
+    const files: File[] = [];
+    for (const it of Array.from(items ?? [])) if (it.kind === "file" && it.type.startsWith("image/")) { const f = it.getAsFile(); if (f) files.push(f); }
+    if (files.length && stageImageFiles(files)) e.preventDefault(); // consumed as images; don't also paste junk text
+  });
+  // Drag-and-drop image files onto the composer.
+  const cw = $(".composer-wrap") as HTMLElement | null;
+  cw?.addEventListener("dragover", (e) => { if ((e as DragEvent).dataTransfer?.types?.includes("Files")) { e.preventDefault(); cw.classList.add("drag"); } });
+  cw?.addEventListener("dragleave", (e) => { if (e.target === cw) cw.classList.remove("drag"); });
+  cw?.addEventListener("drop", (e) => {
+    cw.classList.remove("drag");
+    const files = (e as DragEvent).dataTransfer?.files;
+    if (files?.length && stageImageFiles(files)) e.preventDefault();
+  });
+  // Remove a staged thumbnail.
+  $("#composerThumbs")?.addEventListener("click", (e) => {
+    const btn = (e.target as HTMLElement).closest("[data-att-remove]") as HTMLElement | null;
+    if (!btn) return;
+    const id = btn.dataset.attRemove;
+    state.attachments = state.attachments.filter((a) => a.id !== id);
+    renderComposerThumbs();
+    ($("#input") as HTMLTextAreaElement)?.focus();
+  });
   // P-ACP.4: while a turn runs the Send button is a Stop control (interrupt the turn); else it sends.
   $("#send")!.addEventListener("click", () => { if (state.streaming) void stopTurn(); else void send(); });
 
