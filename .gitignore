@@ -41,6 +41,8 @@ desktop/dist/
 # --- secrets / credentials (NEVER commit keys or tokens) ---
 lucid-gui.json
 **/lucid-gui.json
+lucid-agents.json
+**/lucid-agents.json
 .env
 .env.*
 *.env
