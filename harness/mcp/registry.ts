@@ -40,6 +40,8 @@ export interface RemoteAgentEntry {
   env?: Record<string, string>;
   /** Display/audit only: the endpoint the remote reaches (e.g. openclaw's wss gateway). */
   remoteUrl?: string;
+  /** How to answer the remote's permission asks: "deny" (default, fail-closed) or "allow". */
+  permissionPolicy?: "deny" | "allow";
   enabled: boolean;
 }
 
@@ -77,6 +79,7 @@ export function upsertRemoteAgent(e: {
   cwd?: string;
   env?: Record<string, string>;
   remoteUrl?: string;
+  permissionPolicy?: "deny" | "allow";
   enabled?: boolean;
 }): RemoteAgentEntry {
   const agents = listRemoteAgents();
@@ -90,6 +93,7 @@ export function upsertRemoteAgent(e: {
     cwd: e.cwd?.trim() || undefined,
     env: e.env && Object.keys(e.env).length ? e.env : undefined,
     remoteUrl: e.remoteUrl?.trim() || undefined,
+    permissionPolicy: e.permissionPolicy === "allow" ? "allow" : undefined,
     enabled: e.enabled ?? true,
   };
   const i = agents.findIndex((a) => a.id === id);
