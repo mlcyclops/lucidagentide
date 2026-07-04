@@ -25,6 +25,7 @@ import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
 import { BUILD_POLICY, DELEGATION_POLICY } from "../prompt/assembler.ts";
 import { ScannerClient, ScanUnavailableError } from "../security/scanner_client.ts";
+import { runAgentFirewall } from "../mcp/agent_firewall.ts";
 
 type Env = Record<string, string | undefined>;
 const EXE = process.platform === "win32" ? ".exe" : "";
@@ -198,11 +199,21 @@ export async function main(argv: string[], env: Env = process.env): Promise<numb
     process.stdout.write(pf.ok ? "[lucid check] OK — gate + scanner ready\n" : `[lucid check] FAIL-CLOSED — ${pf.reason}\n`);
     return pf.ok ? 0 : 1;
   }
+  if (sub === "agent-firewall") {
+    const ci = rest.indexOf("--conn");
+    const connId = ci >= 0 ? rest[ci + 1] : undefined;
+    if (!connId) { process.stderr.write("usage: lucid agent-firewall --conn <id>\n"); return 2; }
+    // Point the scanner at the real on-disk sidecar so the fail-closed gate runs from a standalone launch.
+    resolveScannerEnv(process.env, assets().repo);
+    await runAgentFirewall(connId); // long-lived: resolves only when the process is signalled to exit
+    return 0;
+  }
   if (sub !== "acp") {
     process.stderr.write(
-      "usage: lucid acp [--isolate] | lucid check\n" +
-        "  acp    Start the gated Lucid ACP agent (omp + the in-process security gate) for an IDE client.\n" +
-        "  check  Run the fail-closed preflight (gate + scanner) and exit 0 (ready) / 1 (unavailable).\n" +
+      "usage: lucid acp [--isolate] | lucid check | lucid agent-firewall --conn <id>\n" +
+        "  acp             Start the gated Lucid ACP agent (omp + the in-process security gate) for an IDE client.\n" +
+        "  check           Run the fail-closed preflight (gate + scanner) and exit 0 (ready) / 1 (unavailable).\n" +
+        "  agent-firewall  Serve the stdio MCP firewall proxy to a remote ACP agent (hermes/openclaw) — ADR-0147.\n" +
         "  Fail-closed: `acp` refuses to start if the gate or scanner sidecar is unavailable.\n",
     );
     return sub === undefined || sub === "-h" || sub === "--help" ? 0 : 2;

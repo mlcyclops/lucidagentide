@@ -17,6 +17,7 @@ import { randomUUID } from "node:crypto";
 import { homedir, hostname } from "node:os";
 import { join } from "node:path";
 import { emailDomainAllowed, managedConfig, skipAllowed } from "./managed_config.ts";
+import { remoteAgentMcpServers } from "../harness/mcp/registry.ts";
 import { validateLocalProvider, type LocalProviderDef } from "./local_providers.ts";
 
 // LUCID_GUI_SETTINGS_FILE: test seam - point the store at a temp file (never set in production).
@@ -232,9 +233,12 @@ export function setMcpServerEnabled(id: string, enabled: boolean): void { const 
 /** The ACP `session/new.mcpServers` array for ENABLED servers (ADR-0020 Decision 6: omp owns the
  *  MCP transport; we only assemble the authenticated config). Bearer token → Authorization header. */
 export function mcpServersForAcp(): Record<string, unknown>[] {
-  return (load().mcpServers ?? [])
+  const http = (load().mcpServers ?? [])
     .filter((e) => e.enabled && e.url)
     .map((e) => ({ type: e.transport, name: e.name, url: e.url, headers: e.token ? [{ name: "Authorization", value: `Bearer ${e.token}` }] : [] }));
+  // P-AGENTFW.1 (ADR-0147): enabled remote ACP agents (hermes/openclaw) attach as stdio "agent-firewall"
+  // MCP servers — omp spawns `lucid agent-firewall --conn <id>`, which scans both directions fail-closed.
+  return [...http, ...remoteAgentMcpServers()];
 }
 export function setPersonalScope(scope: GuiSettings["personalScope"]): GuiSettings {
   const s = load(); s.personalScope = scope; save(s); return s;

@@ -9964,3 +9964,142 @@ lesson recorded so the next parallel session avoids the same collision.
 **Consequences.** Users mint personal automation vocabulary conversationally; nothing enters the "/" menu
 without passing the same fail-closed content gates as imported agents; command JSONs are personal workspace
 data (gitignored), never repo content.
+
+## ADR-0147 - P-AGENTFW.1: Agent Firewall MCP - a fail-closed security proxy between LUCID and external ACP agent runtimes (hermes / openclaw)
+
+**Date:** 2026-07-04
+**Status:** Accepted. **P-AGENTFW.1 BUILT + tested** (the firewall core + registry + `lucid agent-firewall`
+launcher subcommand + `remoteAgentMcpServers()` registration seam). Desktop Settings UI to add/edit
+connections is the follow-up P-AGENTFW.2 (not built this increment).
+**Increment:** P-AGENTFW.1. New surface (a first-party MCP server + a harness-side ACP client), not a refinement.
+
+### Context
+
+The user wants LUCID to connect to remote instances of **hermes** (NousResearch/hermes-agent, a Python ACP
+runtime: `hermes acp`) and **openclaw** (openclaw/openclaw, a TS gateway-backed ACP bridge:
+`openclaw acp --url wss://gateway`). Both are full coding-agent runtimes exposed over the **Agent Client
+Protocol** (JSON-RPC over stdio) with a vast tool surface (terminal/exec, file writes, `execute_code`,
+`delegate_task`, browser, vision). Talking to such an agent directly would splice its entire attack surface -
+prompt-injection in its streamed output, exfiltration of anything we send it, its `session/request_permission`
+asks - straight into LUCID's context. The ask: mediate the connection through **an MCP that acts as a firewall**,
+bidirectional, leveraging LUCID's existing security stack (the Unicode scanner + fail-closed gate, trust labels,
+quarantine, UNTRUSTED_CONTENT delimiting).
+
+### Decision - the architecture
+
+```
+LUCID (omp) ──MCP (stdio)──▶ [ Agent Firewall ] ──ACP client (stdio)──▶ remote hermes / openclaw
+                              scan ⇄ gate ⇄ label
+```
+
+1. **The firewall is a first-party MCP *server*, stdio transport.** omp spawns it as a subprocess and speaks
+   MCP (`initialize` / `tools/list` / `tools/call`) over line-delimited JSON-RPC - the SAME wire we already
+   hand-roll for ACP (`desktop/acp.ts`), so no MCP SDK dependency (air-gap clean). Stdio is chosen because ACP's
+   `McpServer` union makes **stdio mandatory** ("All Agents MUST support this transport") while http/sse are
+   capability-gated; stdio also means **no localhost port, no bearer, no HTTP server** - the smallest surface.
+   Registered via the ACP `session/new.mcpServers` array as an `McpServerStdio` (`{name, command, args, env}`).
+2. **The remote side is a harness ACP *client*** (`harness/mcp/acp_client.ts`, the proven `desktop/acp.ts`
+   pattern copied into the harness so the core does not import the desktop shell). It spawns the configured
+   remote command (`hermes acp` / `openclaw acp --url … --token-file …`), runs the ACP handshake with
+   **least privilege** (`clientCapabilities.fs.read/write = false` - we never offer the remote our filesystem),
+   and drives `session/new` -> `session/prompt`, collecting `agent_message_chunk` text from `session/update`.
+3. **Exposed tool: `prompt`** (`{ prompt: string }`). One firewall process serves ONE connection (spawned
+   `lucid agent-firewall --conn <id>`); omp namespaces the tool by server name, so a plain `prompt` is
+   unambiguous. `session/new` is lazy + reused for conversation continuity.
+
+### The bidirectional gate (the "firewall")
+
+Both directions run through the existing fail-closed `scanAndDecide` (keystone #1) over the same Python scanner
+sidecar, **fail-closed by law** (invariant #3): any scan failure => BLOCK, never "safe".
+
+- **Outbound (LUCID -> remote), injection-relay direction.** Before a prompt is forwarded, it is scanned with
+  the strict `DEFAULT_POLICY`. A hidden-vector payload (bidi / zero-width / homoglyph / PUA) that LUCID was
+  coerced into relaying is **blocked and never sent** - so the firewall can't be turned into a relay for
+  hidden-Unicode injection aimed at the remote. NOTE: `scanAndDecide` is the pure Unicode scanner, so this is
+  NOT secret/PII DLP - a plaintext exfil instruction sails through (LUCID has no secret detector today).
+  Outbound DLP, if wanted, is a separate capability + increment.
+- **Inbound (remote -> LUCID), prompt-injection direction.** The assembled remote response is scanned. A
+  quarantine verdict **withholds the response entirely** (an `isError` result carrying only a redacted reason -
+  the poison never reaches LUCID's model). A clean/suspicious response is **wrapped in
+  `UNTRUSTED_CONTENT_START/END` and trust-labeled** (`untrusted`, or `suspicious` for sub-threshold findings) so
+  the model can only ever read it as delimited data, in the tool-result tail, never as instructions (invariant
+  #5). Trust is **never** `trusted`.
+- **Remote permission requests denied by default.** If the remote agent sends `session/request_permission`
+  (asking our client to approve one of ITS privileged actions), the firewall **denies** (fail-closed) - LUCID
+  is not a confused deputy for the remote's exec. Surfacing these for user approval is a follow-up.
+- **Delimiter-injection breakout closed.** The remote is the adversary by design, so before wrapping, the
+  firewall neutralizes any literal `UNTRUSTED_CONTENT_START/END` inside the remote's text/tool-activity
+  (`neutralizeDelimiters`) - otherwise a hostile agent could embed the closing token to escape the envelope
+  and have trailing bytes read as instructions. The Unicode scanner would NOT catch that ASCII token, so this
+  is a distinct, required step. (`wrapRetrieved` in the RAG path shares this gap on less-adversarial input -
+  fold `neutralizeDelimiters` in when P-MCP-GATE.1 / the RAG hardening lands.)
+- **Egress:** deliberately NOT re-gated here. The remote endpoint is an explicitly user/admin-configured
+  connection (like a P-MCP.1 server URL), not the agent autonomously reaching the internet; `egress_policy`
+  governs the latter and is unchanged.
+
+### Load-bearing finding - ADR-0020's MCP-output guardrail is UNIMPLEMENTED (flagged, not inherited)
+
+ADR-0020 (L1677-1680) asserts that "any [MCP] tool result that re-enters the prompt passes the existing
+fail-closed gate and is wrapped in `UNTRUSTED_CONTENT_START/END`." **This is not true in code today:**
+`security_extension.ts`'s `tool_result` hook only does LOC attribution + `<task-result>` promotion gating; it
+does NOT `scanAndDecide` general MCP results nor delimit them. So **every** P-MCP.1 connector currently feeds
+un-scanned external text into the prompt. This ADR does not silently inherit that false claim. Scope decision:
+- **This increment CLOSES it for hermes/openclaw at the firewall boundary** - the firewall owns the text it
+  returns, so it scans + quarantines + delimits its own output (the guardrail, actually implemented, for this
+  path).
+- **omp's in-process `tool_call` gate remains the load-bearing backstop** (invariant #4): even if a poisoned
+  result slipped through, any action an injected model then attempts is a `tool_call` and is gated in-process.
+- **The general fix - an in-process `tool_result` scan+delimit for ALL MCP servers - is recommended as its own
+  follow-up increment (P-MCP-GATE.1),** because it touches the core gate (perf + false-positive tuning on large
+  file-read results) and is a distinct concern from this proxy.
+
+### Custody
+
+The connection registry (`~/.omp/lucid-agents.json`) is written **mode 0600** (dir `~/.omp` 0700), matching the
+P-MCP.1 baseline (ADR-0020 L1706). It stores command/args, NOT secrets: the recommended pattern is
+`openclaw acp --token-file <path>` so the gateway token stays in the remote agent's own file and never lands in
+our store. This is plaintext-at-0600 (like `lucid-gui.json` pre-P-MCP.2), not Electron `safeStorage`, because
+the omp-spawned firewall subprocess cannot reach the Electron main-process oracle.
+
+### Invariants preserved
+
+#1 extend-omp (a custom MCP server + ACP client through the native `mcpServers` seam - no fork); #3 fail-closed
+(every scan failure blocks, both directions; the firewall refuses to serve tool calls when the scanner is
+unavailable); #4 the in-process omp gate is untouched and remains the backstop; #5 remote output is scanned +
+delimited + late; #7 trust labels stay the closed set (`untrusted`/`suspicious`/`quarantined`, never
+`trusted`). **No frozen-contract change:** reuses existing `EventName`s (`mcp_server_connected`,
+`artifact_quarantined`, `tool_call_blocked`) - `contracts.ts` is untouched. **Landmine avoided:** omp treats a
+stdio MCP server that exits after the handshake as a fork loop, so the firewall process stays long-lived.
+
+### File-by-file (P-AGENTFW.1)
+
+- `harness/mcp/registry.ts` (new) - `RemoteAgentEntry` + 0600 read/write of `~/.omp/lucid-agents.json` +
+  `remoteAgentMcpServers(lucidBin)` (the enabled connections as ACP `McpServerStdio[]`).
+- `harness/mcp/acp_client.ts` (new) - harness ACP client (initialize/session/new/prompt/cancel; deny
+  permissions; collect message chunks).
+- `harness/mcp/mcp_server.ts` (new) - a minimal, injectable-I/O MCP stdio JSON-RPC server (initialize /
+  tools/list / tools/call).
+- `harness/mcp/agent_firewall.ts` (new) - the orchestration: bidirectional `scanAndDecide`, quarantine, trust
+  label + `UNTRUSTED_CONTENT` wrap, fail-closed, `runAgentFirewall(connId)`.
+- `harness/launcher/lucid_acp.ts` (edit) - `lucid agent-firewall --conn <id>` subcommand (fail-closed scanner
+  preflight, then serve).
+- `desktop/settings_store.ts` (edit) - `mcpServersForAcp()` concats `remoteAgentMcpServers()` so an enabled
+  connection attaches to the live desktop session.
+- Tests + `make demo-P-AGENTFW.1` (real scanner + a fake remote ACP agent: clean -> delimited untrusted;
+  poisoned -> quarantined + withheld; kill the sidecar -> fail-closed block).
+
+### Phased roadmap
+
+- **P-AGENTFW.1 (BUILT):** the firewall core + registry + launcher + registration seam (this ADR).
+- **P-AGENTFW.2:** a "Remote agents" Settings section (add/edit/enable hermes/openclaw connections; mirrors the
+  P-MCP.1 connectors card) so connecting needs no hand-edited JSON.
+- **P-AGENTFW.3:** surface the remote's denied `session/request_permission` asks to the user (opt-in approval),
+  and forward richer ACP updates (tool activity, diffs) as scanned, labeled evidence.
+- **P-MCP-GATE.1 (recommended, separate):** the in-process `tool_result` scan+delimit for ALL MCP servers -
+  closes the general ADR-0020 gap.
+
+### Relates to
+
+ADR-0020 (P-MCP.1 - the `mcpServers` seam this reuses, and the guardrail this partially implements + flags),
+ADR-0038 (the `lucid` launcher this extends), ADR-0002 (the scanner IPC), ADR-0019 (the gate policy), the
+P-RAG.1 `wrapRetrieved` pattern (UNTRUSTED_CONTENT delimiting), invariants #3/#4/#5.
