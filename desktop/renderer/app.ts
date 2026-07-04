@@ -27,6 +27,7 @@ import { addEdgeOptimistic, applyForget, chainPairs, matchNodes, removeEdgeOptim
 import { capGraph, graphOpts, pollDelay, watchPerfTier } from "./perf_tier.ts";
 import type { PersonalGraphData } from "./bridge.ts";
 import { agentBuilderPanelHtml, specToGraphData, nodeEditorHtml, saveErrors, newCanvasSpec, runPanelHtml, secretsPanelHtml, agentInterviewPrompt } from "./agent_builder.ts"; // P-AGENT.2b/.4-live/.8
+import { localProvidersCardBody, draftFromForm } from "./local_providers_ui.ts"; // P-LOCAL.3 (ADR-0135): Settings → Local Providers
 import type { AgentSpec, NodeKind } from "../../harness/agent/spec.ts"; // P-AGENT.2b
 import { type Action, type ToastAction, attachRichTip, createPalette, initTooltips, popover, showToast } from "./ui.ts";
 import { exportActionPlan } from "./kg_export.ts";
@@ -89,6 +90,7 @@ const state = {
   mcpServers: [] as import("./bridge.ts").McpServerStatus[], // P-MCP.1 (ADR-0020)
   whitelist: [] as import("./bridge.ts").WhitelistEntryView[], // P-NETWL.2 (ADR-0106) curated network whitelist
   creds: [] as import("./bridge.ts").CredMetaView[], // P-KEYS.1 (ADR-0107) vault metadata (ref → kind/label/last4)
+  localProviders: [] as import("../local_providers.ts").LocalProviderDef[], // P-LOCAL.3 (ADR-0135) self-hosted/custom LLM endpoints
   posture: { allowAll: true, allowWebSearch: true, managedLocked: false } as import("./bridge.ts").EgressPostureView, // P-NETWL.5 (ADR-0108)
   managed: null as import("./bridge.ts").ManagedPolicy | null, // ADR-0068 (P-ENT.1) enterprise locks
   userRole: null as UserRole | null, // ADR-0088 (P-ROLE.1): chosen role; null until onboarding picks one
@@ -2042,6 +2044,7 @@ function settingsShell(): string {
     setSkel("asksage", "AskSage gov gateway", "accredited proxy", true),
     `<div data-sec="asksageQuota"></div>`, // AskSage Monthly-tokens bar - ONLY when the gov gateway is configured (filled in hydrateSettings)
     setSkel("providers", "Providers", "U.S. frontier · key or OAuth", true),
+    setSkel("localProviders", "Local Providers", "self-hosted · Ollama · vLLM · VPN", true), // P-LOCAL.3 (ADR-0135); auto-collapsed
     `<div data-sec="sovereignty"></div>`, // P-IDE.1c: China-origin unlock (renders only when such models exist)
     setSkel("compression", "Token compression", "headroom · on-device · opt-in", true),
     setSkel("mcp", "MCP connectors", "model context protocol", true),
@@ -2083,6 +2086,7 @@ function hydrateSettings(): void {
   fillSec("developer", secDeveloper()); // ADR-0059: render from state.developerMode (loaded by loadDev)
   void hydratePersonal();
   hydrateMcp();
+  void hydrateLocalProviders(); // P-LOCAL.3 (ADR-0135)
   hydrateWhitelist(); // P-NETWL.2 (ADR-0106)
   void bridge.asksage().then(async (a) => {
     if (a) state.asksage = a;
@@ -2119,6 +2123,79 @@ const SCOPE_ORDER = ["personal", "work", "combined", "cui"] as const;
 /** Re-render just the Personalization card (instant - the endpoint is local). */
 function hydratePersonal(): Promise<void> {
   return bridge.personal().then((p) => fillSec("personal", secPersonal(p)));
+}
+
+// ── P-LOCAL.3 (ADR-0135): Settings → Local Providers ─────────────────────────────────────────────
+/** Re-render the Local Providers card from the current list + which credential refs are in the vault. */
+async function hydrateLocalProviders(): Promise<void> {
+  const [providers, creds] = await Promise.all([
+    bridge.localProvidersList().catch(() => [] as import("../local_providers.ts").LocalProviderDef[]),
+    bridge.credList().catch(() => [] as import("./bridge.ts").CredMetaView[]),
+  ]);
+  state.localProviders = providers ?? [];
+  const vaultRefs = new Set((creds ?? []).map((c) => c.ref));
+  fillSec("localProviders", localProvidersCardBody(state.localProviders, vaultRefs, bridge.isElectron));
+}
+
+/** Add a provider from the card's form: validate → (if authed) store the key in the vault → save the def. */
+async function addLocalProviderFromForm(): Promise<void> {
+  const val = (id: string): string => (($(`#${id}`, $("#setBody")!) as HTMLInputElement | HTMLSelectElement | null)?.value ?? "");
+  const external = ($("#lpExternal", $("#setBody")!) as HTMLInputElement | null)?.checked ?? false;
+  const draft = draftFromForm({ name: val("lpName"), baseUrl: val("lpBaseUrl"), auth: val("lpAuth"), models: val("lpModels"), external }, Date.now());
+  if (draft.errors.length || !draft.def) { showToast({ tone: "warn", title: "Check the provider details", desc: draft.errors[0] ?? "invalid" }); return; }
+  const def = draft.def;
+  if (draft.needsKey) {
+    const key = val("lpKey").trim();
+    if (!key) { showToast({ tone: "warn", title: "Paste the API key", desc: "It goes straight to the OS-encrypted vault." }); return; }
+    if (!bridge.isElectron || !bridge.credStore) { showToast({ tone: "danger", title: "Vault is desktop-only", desc: "Open the LUCID desktop app to store the key securely." }); return; }
+    const ref = `lpkey_${def.id}`;
+    const r = await bridge.credStore({ ref, kind: def.authKind === "basic" ? "basic" : "apikey", secret: key, label: `Local Provider · ${def.name}` });
+    if (!r || "error" in r) { showToast({ tone: "danger", title: "Couldn't store the key", desc: (r as { error?: string })?.error ?? "vault error" }); return; }
+    def.vaultRef = ref;
+  }
+  const saved = await bridge.localProviderUpsert(def);
+  if (saved && "saved" in saved && saved.saved) {
+    showToast({ tone: "ok", title: "Local provider added", desc: `${def.name} - takes effect on the next app restart.` });
+    void hydrateLocalProviders();
+  } else {
+    showToast({ tone: "danger", title: "Couldn't save the provider", desc: (saved as { errors?: string[] })?.errors?.[0] ?? "save error" });
+  }
+}
+
+/** Remove a provider (its vault key is left in the vault; the user can delete it from the whitelist/vault UI). */
+async function deleteLocalProvider(id: string): Promise<void> {
+  await bridge.localProviderDelete(id).catch(() => null);
+  void hydrateLocalProviders();
+}
+
+/** Reachability/TLS probe of an endpoint (no key sent). */
+async function testLocalProviderConn(baseUrl: string): Promise<void> {
+  const u = (baseUrl || "").trim();
+  if (!u) { showToast({ tone: "warn", title: "Enter a base URL first", desc: "Type the endpoint's base URL, then test it." }); return; }
+  showToast({ title: "Testing connection…", desc: u, timeout: 1400 });
+  const r = await bridge.localProviderTest(u).catch(() => null);
+  if (r?.reachable) {
+    showToast({ tone: "ok", title: "Endpoint reachable", desc: `HTTP ${r.status}${r.authed ? " · auth required (the key is sent at run time, from the vault)" : ""}.` });
+  } else {
+    const hint = u.startsWith("https") ? " Check the VPN tunnel, TLS cert, and port." : " Check the host/port - is the server running?";
+    showToast({ tone: "danger", title: "Not reachable", desc: (r?.error ?? "no response.") + hint });
+  }
+}
+
+/** Store (or rotate) an authed provider's key straight into the OS-encrypted vault, from the inline row. */
+async function saveLocalProviderKey(wrap: HTMLElement): Promise<void> {
+  const id = wrap.dataset.lpId ?? "";
+  const def = state.localProviders.find((p) => p.id === id);
+  if (!def) return;
+  const key = (($(".lp-rekey-input", wrap) as HTMLInputElement | null)?.value ?? "").trim();
+  if (!key) { showToast({ tone: "warn", title: "Paste the key first", desc: "It goes straight to the OS-encrypted vault." }); return; }
+  if (!bridge.isElectron || !bridge.credStore) { showToast({ tone: "danger", title: "Vault is desktop-only", desc: "Open the LUCID desktop app." }); return; }
+  const ref = def.vaultRef || `lpkey_${def.id}`;
+  const r = await bridge.credStore({ ref, kind: def.authKind === "basic" ? "basic" : "apikey", secret: key, label: `Local Provider · ${def.name}` });
+  if (!r || "error" in r) { showToast({ tone: "danger", title: "Couldn't store the key", desc: (r as { error?: string })?.error ?? "vault error" }); return; }
+  if (def.vaultRef !== ref) { def.vaultRef = ref; await bridge.localProviderUpsert(def).catch(() => null); }
+  showToast({ tone: "ok", title: "Key stored in the vault", desc: `${def.name} - restart to apply.` });
+  void hydrateLocalProviders();
 }
 // Settings → Personalization (ADR-0010/0012): opt-in encrypted KG + the
 // Work/Personal/Combined/CUI compartment selector with per-mode risk notices.
@@ -5763,6 +5840,12 @@ function wire(): void {
       reader.readAsDataURL(f);
       return;
     }
+    // P-LOCAL.3 (ADR-0135): enable/disable a Local Provider
+    if (t0.matches("[data-lp-toggle]")) {
+      const row = t0.closest("[data-lp-id]") as HTMLElement | null;
+      if (row?.dataset.lpId) { await bridge.localProviderEnable(row.dataset.lpId, (t0 as HTMLInputElement).checked).catch(() => {}); }
+      return;
+    }
     const vs = t0.closest("[data-voice-set]") as HTMLInputElement | HTMLSelectElement | null;
     if (!vs) return;
     const key = vs.dataset.voiceSet!;
@@ -5777,6 +5860,17 @@ function wire(): void {
     // P-APPEAR.1: chat-background upload / remove
     if (t.closest("#bgUpload")) { ($("#bgFile") as HTMLInputElement | null)?.click(); return; }
     if (t.closest("#bgClear")) { void updateChatBg({ image: "", mode: "off" }); return; }
+    // P-LOCAL.3 (ADR-0135): Local Providers card
+    if (t.closest("[data-lp-addtoggle]")) { (t.closest(".lp-add") as HTMLElement | null)?.classList.toggle("open"); return; }
+    if (t.closest("[data-lp-add]")) { await addLocalProviderFromForm(); return; }
+    if (t.closest("[data-lp-test-form]")) { await testLocalProviderConn(($("#lpBaseUrl", $("#setBody")!) as HTMLInputElement | null)?.value ?? ""); return; }
+    const lpTest = t.closest("[data-lp-test]") as HTMLElement | null;
+    if (lpTest) { await testLocalProviderConn(lpTest.dataset.url ?? ""); return; }
+    if (t.closest("[data-lp-rekey-save]")) { const w = t.closest("[data-lp-id]") as HTMLElement | null; if (w) await saveLocalProviderKey(w); return; }
+    if (t.closest("[data-lp-rekey]")) { const rk = (t.closest("[data-lp-id]") as HTMLElement | null)?.querySelector(".lp-rekey") as HTMLElement | null; if (rk) rk.hidden = !rk.hidden; return; }
+    if (t.closest("[data-lp-apply]")) { showToast({ title: "Restarting LUCID…", desc: "Applying your local providers.", timeout: 2000 }); await bridge.relaunch().catch(() => {}); return; }
+    const lpDel = t.closest("[data-lp-del]") as HTMLElement | null;
+    if (lpDel) { const id = (lpDel.closest("[data-lp-id]") as HTMLElement | null)?.dataset.lpId; if (id) await deleteLocalProvider(id); return; }
     // workspace
     if (t.closest("#wsBrowse")) {
       // Prefer the NATIVE OS folder-open dialog (Electron): it browses the whole machine and can create new

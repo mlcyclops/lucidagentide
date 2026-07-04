@@ -9524,3 +9524,87 @@ the handoff reuses the proven `preview_open` tool_call detection (#1 extend-omp,
 ADR-0133 (the Agent Builder this extends), ADR-0096 (the `preview_open` handoff pattern), ADR-0106/0107 (the
 network whitelist + OS-encrypted credential vault this builds on), ADR-0114 (the ENGAGEMENT_POLICY pattern for a
 new frozen policy block), the P-AGENT.5 import gate (the sibling untrusted-content guard).
+
+## ADR-0135 - P-LOCAL: Local Providers - securely point LUCID at self-hosted / custom / VPN-routed LLMs
+
+**Date:** 2026-07-04
+**Status:** Accepted. **P-LOCAL.1 (foundation) + P-LOCAL.2 core BUILT + verified live.** Pure core
+(`desktop/local_providers.ts`) + vault-backed persistence (`settings_store.ts`) + 20 unit tests +
+`make demo-P-LOCAL.1`. The omp delivery mechanism is RESOLVED + verified against omp 16.0.8: the registry is
+`~/.omp/agent/models.yml` (an open provider needs `auth:"none"`; `api` = `openai-completions`), and secrets
+are delivered securely by **env-var reference** (`toOmpRuntimeOverlay` writes the env-var NAME in models.yml;
+omp's `resolveConfigValue` reads it from the child env, which LUCID injects from the vault - the secret never
+touches the file). Live: an overlay with an open Ollama + a bearer DGX-over-VPN provider made `omp models` list
+BOTH. **P-LOCAL.2 delivery WIRED + verified:** `local_providers_runtime.ts` (safe models.yml merge + vault→child
+env + egress) is called from `main.ts` at dev-server spawn (the omp acp runs in the dev child, but the vault is
+main-only, so MAIN resolves secrets and injects them into the child env; models.yml holds only env-var refs).
+Integrated live proof: the real materializer wrote `~/.omp/agent/models.yml` and `omp models` with the injected
+env listed both providers. Remaining .2 = a runtime apply/restart trigger (a provider added after launch takes
+effect on restart); .3 = the Settings UI.
+**Increment:** P-LOCAL.1 .. P-LOCAL.3 (this ADR covers the epic; each phase is its own session/demo).
+
+### Context
+
+The user wants to run **privately hosted / custom LLMs** from inside LUCID: Ollama, llama.cpp, vLLM, LM Studio,
+or a box reachable only over a **VPN tunnel** (e.g. a NVIDIA DGX Spark in a Vienna, VA office behind a SonicWall
+VPN). It must be **easy and secure**: multiple servers + models, the API token/OAuth stored the most secure way,
+and it must work "regardless of the model." A new **default-collapsed "Local Providers"** subsection sits under
+Settings → Providers.
+
+**Feasibility (verified against the installed omp 16.0.8 / `@oh-my-pi/pi-ai`):** omp already has first-class
+**Ollama + any-OpenAI-compatible** provider support. Its `models.json` / `--config` overlay accepts a
+`providers` map keyed by provider id, each carrying `baseUrl`, `apiKey`, `api`, `headers`, `compat`, and a
+`models[]` list (fields `id/name/reasoning/input/cost/contextWindow/maxTokens`). So LUCID does **no inference of
+its own** - it captures the declaration + secret, emits the overlay, and registers egress. Custom models then
+appear in the existing picker automatically.
+
+### Decision - the architecture (reuse LUCID's proven surfaces; extend omp, don't fork)
+
+- **A Local Provider is a DECLARATION, never a secret** (`LocalProviderDef`: id, name, `ompProvider` slug,
+  `baseUrl`, `api`, `authKind` none|bearer|apikey|basic, `zone` internal|external, `models[]`, `vaultRef`). The
+  API key/token lives ONLY in the **OS-encrypted vault** (`cred_vault.ts`, safeStorage/DPAPI) - strictly better
+  than the status-quo plaintext `lucid-gui.json` that frontier keys still use. The def carries an **opaque
+  `vaultRef`**, never the value; the settings file never holds a secret (proven by a test + the demo).
+- **Fail-closed validation** (`validateLocalProvider`): non-http(s) base URL, bad slug, zero models, duplicate
+  model ids rejected; a provider id that would **shadow a built-in vendor** (anthropic/openai/…) is refused so a
+  local box can never hijack real-vendor routing. `scanForInlineSecret` refuses a def where a key was pasted
+  into a name/URL/model field (mirrors the ADR-0134 Agent Builder secret guardrail).
+- **omp overlay emitter** (`toOmpConfigOverlay`): emits the exact `{ providers: { <id>: {...} } }` shape for the
+  ENABLED, runnable providers; the secret is injected by the MAIN process from the vault at spawn time. A
+  provider whose required secret is **absent is SKIPPED, never emitted half-authenticated** (fail-closed).
+- **Egress** (`egressProposal`): the endpoint host becomes a whitelist proposal (domain or IP, honoring
+  internal/external zone) with an `AuthRef → vaultRef`. The existing whitelist already matches internal IPs and
+  CIDR - exactly what a LAN/VPN endpoint needs.
+- **VPN posture (route-to-tunnel, user-chosen):** the OS VPN client (SonicWall NetExtender / Mobile Connect)
+  brings up the tunnel; LUCID **routes to the tunnel endpoint** (internal DNS/IP:port), stores the key in the
+  vault, and (P-LOCAL.2/.3) adds a reachability/TLS health check. LUCID does NOT manage the VPN client itself -
+  smaller attack surface, keeps the tunnel under the enterprise's audited client.
+
+### Phased roadmap
+
+- **P-LOCAL.1 (BUILT):** pure core `local_providers.ts` (types, validation, overlay emitter, egress proposal,
+  inline-secret guard) + `settings_store` CRUD (`listLocalProviders`/`upsertLocalProvider`/`remove`/`setEnabled`).
+  17 tests + demo. No frozen-contract touch.
+- **P-LOCAL.2:** materialize the overlay for `omp acp` at spawn (`acp_backend`/`dev.ts`): decrypt the vault
+  secret in MAIN, deliver via a transient 0600 main-only overlay (or child env for known ids), pass `--config`;
+  auto-register the endpoint in the whitelist with an `AuthRef`. Live-verify a custom model routes to a local
+  OpenAI-compatible endpoint (and that `omp models --config` lists it).
+- **P-LOCAL.3 (BUILT):** the default-collapsed "Local Providers" card under Settings → Providers -
+  `desktop/renderer/local_providers_ui.ts` (`localProvidersCardBody`/`draftFromForm`/`providerStatus`) + app.ts
+  wiring (`hydrateLocalProviders`/`addLocalProviderFromForm`/delete/enable) + `/api/local-providers` CRUD in
+  dev.ts + bridge methods. Add a provider from the form; an authed provider's key is stored to the vault
+  (`bridge.credStore`) and the def saved with only the `vaultRef`. 8 tests. Verified live: the card renders
+  after "Providers", auto-collapsed, expands on click. Remaining polish: inline edit/re-key, a reachability/TLS
+  "test connection", an external-zone toggle, and an apply-without-restart trigger.
+
+### Invariants preserved
+
+#3 fail-closed (missing-secret providers are dropped, never run open); secrets never leave the OS vault and never
+reach the renderer (invariant carried from ADR-0107); #1 extend-omp-not-fork (omp's own custom-provider overlay);
+the whitelist + vault are reused, not reinvented. No app version bump; no EventName/contract change in .1.
+
+### Relates to
+
+ADR-0106/0107 (network whitelist + OS-encrypted credential vault reused here), ADR-0007 (AskSage's custom
+base-URL provider - the closest prior art), ADR-0134 (the secret-guardrail ethos `scanForInlineSecret` mirrors),
+ADR-0029 (the model-picker gating a custom model flows through).

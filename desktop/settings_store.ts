@@ -17,6 +17,7 @@ import { randomUUID } from "node:crypto";
 import { homedir, hostname } from "node:os";
 import { join } from "node:path";
 import { emailDomainAllowed, managedConfig, skipAllowed } from "./managed_config.ts";
+import { validateLocalProvider, type LocalProviderDef } from "./local_providers.ts";
 
 // LUCID_GUI_SETTINGS_FILE: test seam - point the store at a temp file (never set in production).
 // Read per call (not at module init) so the seam is immune to module-cache order in the test runner.
@@ -116,6 +117,10 @@ export interface GuiSettings {
   // ttsVoice: selected ElevenLabs voice id; ttsVoiceFavorites: starred voice ids (favorites shown first).
   ttsVoice?: string;
   ttsVoiceFavorites?: string[];
+  // P-LOCAL.1 (ADR-0135): self-hosted / custom OpenAI-compatible LLM endpoints (Ollama, llama.cpp,
+  // vLLM, a DGX box over a VPN tunnel, …). DECLARATIONS only — each carries an opaque `vaultRef`; the
+  // API key/token lives ONLY in the OS-encrypted vault (cred_vault.ts), never in this file.
+  localProviders?: LocalProviderDef[];
 }
 
 export const ASKSAGE_DEFAULT_LIMIT = 200_000;
@@ -233,6 +238,38 @@ export function mcpServersForAcp(): Record<string, unknown>[] {
 }
 export function setPersonalScope(scope: GuiSettings["personalScope"]): GuiSettings {
   const s = load(); s.personalScope = scope; save(s); return s;
+}
+
+// ── P-LOCAL.1 (ADR-0135): Local Providers registry ────────────────────────────────────────────
+// Persist ONLY the declaration. `vaultRef` is an opaque handle into the OS-encrypted vault; the
+// secret itself never reaches this file (fail-closed: a def failing validateLocalProvider throws,
+// and any stray secret-ish field is stripped before write).
+export function listLocalProviders(): LocalProviderDef[] { return load().localProviders ?? []; }
+/** Add or update (by id) a Local Provider. Validates first (invalid → throws, never persisted) and
+ *  writes a CLEAN copy carrying only known fields (no inline secret can ride along). */
+export function upsertLocalProvider(def: LocalProviderDef): LocalProviderDef {
+  const clean: LocalProviderDef = {
+    id: def.id, name: def.name?.trim() ?? "", ompProvider: def.ompProvider, baseUrl: def.baseUrl?.trim() ?? "",
+    api: def.api, authKind: def.authKind, vaultRef: def.vaultRef || undefined, headerName: def.headerName?.trim() || undefined,
+    zone: def.zone, enabled: def.enabled !== false,
+    models: (def.models ?? []).map((m) => ({
+      id: m.id, name: m.name?.trim() || undefined, contextWindow: m.contextWindow, maxTokens: m.maxTokens,
+      reasoning: m.reasoning || undefined, vision: m.vision || undefined, supportsTools: m.supportsTools,
+    })),
+    createdAt: def.createdAt, updatedAt: def.updatedAt,
+  };
+  const errs = validateLocalProvider(clean);
+  if (errs.length) throw new Error("invalid local provider: " + errs.join("; "));
+  const s = load(); s.localProviders = s.localProviders ?? [];
+  const i = s.localProviders.findIndex((x) => x.id === clean.id);
+  if (i >= 0) s.localProviders[i] = clean; else s.localProviders.push(clean);
+  save(s); return clean;
+}
+export function removeLocalProvider(id: string): void {
+  const s = load(); s.localProviders = (s.localProviders ?? []).filter((x) => x.id !== id); save(s);
+}
+export function setLocalProviderEnabled(id: string, enabled: boolean): void {
+  const s = load(); const e = (s.localProviders ?? []).find((x) => x.id === id); if (e) { e.enabled = enabled; save(s); }
 }
 
 // P-PERF.5 (ADR-0132): load() used to read + JSON.parse the file on EVERY call - and nearly every

@@ -18,7 +18,9 @@ import { join } from "node:path";
 import { initAutoUpdate } from "./updater.ts";
 import { ensureRuntimes, findBun, needsBootstrap } from "./runtime.ts";
 import { createSplash, setSplashStatus } from "./splash.ts";
-import { deleteCredential, listCredentials, rotateCredential, storeCredential, type SafeStorageLike, type VaultIo } from "./cred_vault.ts";
+import { deleteCredential, listCredentials, readCredential, rotateCredential, storeCredential, type SafeStorageLike, type VaultIo } from "./cred_vault.ts";
+import { materializeLocalProviders, registerLocalProviderEgress } from "./local_providers_runtime.ts";
+import { listLocalProviders } from "./settings_store.ts";
 import type { AuthKind } from "./network_whitelist.ts";
 
 const PORT = Number(process.env.LUCID_PORT ?? 5319);
@@ -34,9 +36,14 @@ function startDevServer(): void {
   // findBun() prefers the bundled runtime in packaged builds, falling back to the
   // user's bun. runtimeEnv carries LUCID_OMP_BIN / SCANNER_PYTHON / PATH down to
   // the dev server and its omp + scanner children.
+  // P-LOCAL.2 (ADR-0135): the omp acp runs in this dev child, but the OS-encrypted vault (safeStorage) is
+  // main-only. So MAIN materializes the Local Providers here — writes omp's ~/.omp/agent/models.yml and
+  // resolves each provider's secret from the vault — and injects the keys into the dev child's env (models.yml
+  // holds only the env-var NAME; omp resolves it from this env). Best-effort: never blocks the server start.
+  const lpEnv = prepareLocalProviders();
   dev = spawn(findBun(), ["run", "desktop/dev.ts"], {
     cwd: REPO,
-    env: { ...process.env, ...runtimeEnv, PORT: String(PORT) },
+    env: { ...process.env, ...runtimeEnv, ...lpEnv, PORT: String(PORT) },
     // NOT "inherit": in a packaged GUI app the Electron main has no console, so inheriting
     // makes the console-subsystem Bun allocate its OWN console window (the black pop-up).
     // Pipe instead + windowsHide so no window ever appears; forward output for dev runs.
@@ -138,6 +145,25 @@ const VAULT_IO: VaultIo = {
   remove: (p) => rmSync(p, { force: true }),
   list: (dir) => (existsSync(dir) ? readdirSync(dir) : []),
 };
+// P-LOCAL.2 (ADR-0135): materialize the Local Providers for the omp child. Reads each declared provider's
+// secret from the OS-encrypted vault (main-only), writes omp's models.yml (env-var references, never the
+// secret), registers each endpoint in the network whitelist, and returns { ENV_VAR: secret } to inject into
+// the dev-server child env so the omp grandchild can resolve them. Fail-soft: any error yields {} and the
+// server still starts (authed local providers simply won't be available until fixed).
+function prepareLocalProviders(): Record<string, string> {
+  try {
+    const defs = listLocalProviders();
+    if (defs.length === 0) return {};
+    const r = materializeLocalProviders({
+      defs,
+      readSecret: (ref) => { try { return readCredential(ELECTRON_SAFE_STORAGE, VAULT_IO, CRED_DIR(), ref); } catch { return null; } },
+    });
+    try { registerLocalProviderEgress(defs, Date.now()); } catch { /* egress registration is best-effort */ }
+    if (r.wrote) console.error(`[LOCAL_PROVIDERS] ${r.included.length} provider(s) → ~/.omp/agent/models.yml${r.skipped.length ? `; skipped ${r.skipped.map((s) => s.id).join(", ")}` : ""}`);
+    else if (r.writeReason) console.error(`[LOCAL_PROVIDERS] models.yml not written: ${r.writeReason}`);
+    return r.childEnv;
+  } catch (err) { console.error("[LOCAL_PROVIDERS] prepare failed:", err); return {}; }
+}
 ipcMain.handle("lucid:credStore", (_e, input: { ref?: string; kind: AuthKind; secret: string; label?: string; expiresAt?: number; rotationIntervalDays?: number }) => {
   try { return storeCredential(ELECTRON_SAFE_STORAGE, VAULT_IO, CRED_DIR(), { ...input, createdAt: Date.now() }); }
   catch (err) { return { error: (err as Error)?.message ?? String(err) }; }
@@ -205,6 +231,14 @@ ipcMain.handle("lucid:revealPath", async (_e, p: unknown) => {
   const target = typeof p === "string" ? p : "";
   if (!target || !existsSync(target)) return false;
   return (await shell.openPath(target)) === "";
+});
+
+// P-LOCAL.3 polish: restart the app so the freshly-spawned dev server + omp pick up the current Local
+// Providers (their secrets are injected into the dev child env at spawn — a restart is the clean apply).
+ipcMain.handle("lucid:relaunch", () => {
+  try { dev?.kill(); } catch { /* best-effort */ }
+  app.relaunch();
+  app.quit();
 });
 
 ipcMain.on("lucid:win", (e, action: string) => {
