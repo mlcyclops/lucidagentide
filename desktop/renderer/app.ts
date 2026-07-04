@@ -8,7 +8,7 @@
 // agent turn. Same renderer in Electron (real omp ACP via window.lucid) and in
 // the browser dev server (simulated). Pure DOM, no framework.
 
-import { bridge, type AgentRunReply, type ChatEvent, type ConfigOption, type GoalDial, type MemorySnapshot, type OmpCommand, type ProviderAuth, type SecuritySnapshot, type SessionInfo, type SessionList, type UserRole, type WorkspaceInfo } from "./bridge.ts";
+import { bridge, type AgentRunReply, type McpCatalogTool, type ChatEvent, type ConfigOption, type GoalDial, type MemorySnapshot, type OmpCommand, type ProviderAuth, type SecuritySnapshot, type SessionInfo, type SessionList, type UserRole, type WorkspaceInfo } from "./bridge.ts";
 import { ROLE_META, USER_ROLE_LIST, coachHtml, roleDefaultTab, stepsForRole, type TourStep } from "./tour.ts";
 import { modCombo, modSymbol } from "./platform.ts";
 import { aiLocHasData } from "../ailoc_view.ts";
@@ -2505,9 +2505,20 @@ let abConnectMode = false;
 // P-AGENT.9: trust state of the CURRENT canvas spec (imported agents open untrusted/suspicious/quarantined
 // and cannot run until approved). null = locally authored (trusted).
 let abTrust: { label: TrustLabel; reason: string } | null = null;
+// P-AGENT.12: MCP-discovered catalog entries (omp runtime names). Refreshed fire-and-forget when the
+// builder opens; empty = static catalog only (fail-soft).
+let abMcpTools: McpCatalogTool[] = [];
+async function refreshAbMcpTools(): Promise<void> {
+  try {
+    abMcpTools = (await bridge.agentMcpTools()).tools;
+  } catch {
+    abMcpTools = []; // probe unavailable → built-ins only
+  }
+}
 
 function openAgentBuilder(): void {
   abOpen = true;
+  void refreshAbMcpTools(); // P-AGENT.12: warm the MCP catalog for the pickers (fail-soft, never blocks)
   closeSettings();
   closeKnowledge();
   closeIde();
@@ -2562,7 +2573,7 @@ function selectAbNode(id: string | null): void {
   if (!side) return;
   const node = abSpec?.nodes.find((n) => n.id === id);
   if (!node || !abSpec) { side.hidden = true; return; }
-  side.innerHTML = nodeEditorHtml(node, abSpec.tools);
+  side.innerHTML = nodeEditorHtml(node, abSpec.tools, abMcpTools); // P-AGENT.12: built-ins + MCP
   side.hidden = false;
   $("#abLabel", side)?.addEventListener("input", (e) => { node.label = (e.target as HTMLInputElement).value; markAbDirty(); reRenderAbGraph(); });
   $("#abPrompt", side)?.addEventListener("input", (e) => { node.prompt = (e.target as HTMLTextAreaElement).value; markAbDirty(); });
@@ -2666,7 +2677,7 @@ function openAbToolsPanel(): void {
   if (!abSpec) return;
   const side = $("#abSide");
   if (!side) return;
-  side.innerHTML = toolChipsHtml(abSpec);
+  side.innerHTML = toolChipsHtml(abSpec, abMcpTools); // P-AGENT.12: built-ins + MCP
   side.hidden = false;
   $$("[data-rm-tool]", side).forEach((b) =>
     b.addEventListener("click", () => {

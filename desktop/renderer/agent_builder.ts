@@ -24,6 +24,7 @@ import {
 } from "../../harness/agent/spec.ts";
 import type { TrustLabel } from "../../harness/contracts.ts";
 import type { AgentRunTrace, TraceSummary } from "../../harness/agent/trace.ts"; // P-AGENT.13
+import type { McpCatalogTool } from "./bridge.ts"; // P-AGENT.12: MCP-discovered catalog entries
 
 /** P-AGENT.8: the `/agent` command's kickoff. Turns a (possibly empty) one-line description into a prompt that
  *  makes the chat agent run the "what kind of agent do you want to build" INTERVIEW — steered by the frozen
@@ -248,9 +249,10 @@ const TOOL_DESC: Record<string, string> = Object.fromEntries(TOOL_CATALOG.map((t
  *  Removing a chip BLOCKS the agent from calling that tool at run time (the compiled per-agent allow-list
  *  extension and LUCID's security gate deny anything off-list). A removed tool still referenced by a step is
  *  flagged by the validator until the step is fixed or the tool re-added — nothing fails silently. */
-export function toolChipsHtml(spec: AgentSpec): string {
+export function toolChipsHtml(spec: AgentSpec, mcpTools: McpCatalogTool[] = []): string {
   const inUse = new Map<string, number>(); // dynamic count of tool-node references per tool
   for (const n of spec.nodes) if (n.kind === "tool" && n.tool) inUse.set(n.tool, (inUse.get(n.tool) ?? 0) + 1);
+  const mcpByName = new Map(mcpTools.map((t) => [t.name, t])); // dynamic per-call lookup
   const chips = spec.tools.length
     ? spec.tools
         .map((t) => {
@@ -258,15 +260,22 @@ export function toolChipsHtml(spec: AgentSpec): string {
           const badge = uses
             ? `<span class="ab-chip-uses" title="Used by ${uses} step${uses > 1 ? "s" : ""} — removing blocks the call and flags the step">${uses} step${uses > 1 ? "s" : ""}</span>`
             : "";
-          return `<li class="ab-chip" data-tool="${esc(t)}"><span class="ab-chip-name"${TOOL_DESC[t] ? ` title="${esc(TOOL_DESC[t])}"` : ""}>${esc(t)}</span>${badge}<button class="ab-chip-rm" data-rm-tool="${esc(t)}" data-tip="Remove ${esc(t)} — the agent will be BLOCKED from calling it">×</button></li>`;
+          const mcp = mcpByName.get(t);
+          const title = mcp ? `${mcp.desc} — third-party MCP tool from "${mcp.server}"` : t.startsWith("mcp__") ? "Third-party MCP tool" : TOOL_DESC[t];
+          return `<li class="ab-chip" data-tool="${esc(t)}"><span class="ab-chip-name"${title ? ` title="${esc(title)}"` : ""}>${esc(t)}</span>${badge}<button class="ab-chip-rm" data-rm-tool="${esc(t)}" data-tip="Remove ${esc(t)} — the agent will be BLOCKED from calling it">×</button></li>`;
         })
         .join("")
     : `<li class="ab-chip ab-chip-empty">No tools allow-listed — this agent cannot call any tools.</li>`;
   const addable = TOOL_CATALOG.filter((t) => !spec.tools.includes(t.name));
-  const adder = addable.length
-    ? `<div class="ab-chip-add"><select class="ab-in" id="abToolAdd"><option value="" selected disabled>Add a tool to the allow-list…</option>${addable
-        .map((t) => `<option value="${esc(t.name)}" title="${esc(t.desc)}">${esc(t.name)}</option>`)
-        .join("")}</select></div>`
+  const addableMcp = mcpTools.filter((t) => !spec.tools.includes(t.name));
+  const adder = addable.length || addableMcp.length
+    ? `<div class="ab-chip-add"><select class="ab-in" id="abToolAdd"><option value="" selected disabled>Add a tool to the allow-list…</option>${
+        addable.length ? `<optgroup label="omp tools">${addable.map((t) => `<option value="${esc(t.name)}" title="${esc(t.desc)}">${esc(t.name)}</option>`).join("")}</optgroup>` : ""
+      }${
+        addableMcp.length
+          ? `<optgroup label="MCP tools (third-party)">${addableMcp.map((t) => `<option value="${esc(t.name)}" title="${esc(`${t.desc} — third-party MCP tool from \"${t.server}\"`)}">${esc(t.name)}</option>`).join("")}</optgroup>`
+          : ""
+      }</select></div>`
     : "";
   return `<div class="ab-toolchips">
     <div class="ab-ed-head"><span class="ab-kind">Tool allow-list</span></div>
@@ -338,7 +347,7 @@ export function trustBannerHtml(label: TrustLabel, reason: string): string {
 /** The node-editor flyout for a selected node. Fields are kind-specific; `tools` is the spec's allow-list.
  *  The tool dropdown offers the allow-list PLUS the omp TOOL_CATALOG (picking an un-listed tool auto-adds it
  *  to the allow-list in app.ts — enforced again by the validator + the runtime extension). */
-export function nodeEditorHtml(node: AgentNode, tools: string[]): string {
+export function nodeEditorHtml(node: AgentNode, tools: string[], mcpTools: McpCatalogTool[] = []): string {
   const label = `<label class="ab-fld"><span>Label</span>
     <input class="ab-in" id="abLabel" value="${esc(node.label)}" /></label>`;
   let kindFields = "";
@@ -346,18 +355,23 @@ export function nodeEditorHtml(node: AgentNode, tools: string[]): string {
     kindFields = `<label class="ab-fld"><span>Prompt</span>
       <textarea class="ab-in ab-ta" id="abPrompt">${esc(node.prompt ?? "")}</textarea></label>`;
   } else if (node.kind === "tool") {
-    // Selectable = allow-list ∪ catalog ∪ this node's current tool (kept visible even if it's in neither —
-    // the validator flags it rather than the dropdown silently dropping the selection).
-    const names = [...new Set([...tools, ...TOOL_CATALOG.map((t) => t.name), ...(node.tool ? [node.tool] : [])])];
+    // Selectable = allow-list ∪ built-in catalog ∪ MCP-discovered tools (P-AGENT.12) ∪ this node's current
+    // tool (kept visible even if it's in none — the validator flags it rather than silently dropping it).
+    const mcpByName = new Map(mcpTools.map((t) => [t.name, t])); // dynamic per-call lookup
+    const names = [...new Set([...tools, ...TOOL_CATALOG.map((t) => t.name), ...mcpTools.map((t) => t.name), ...(node.tool ? [node.tool] : [])])];
     const inList = new Set(tools);
-    const opt = (t: string) =>
-      `<option value="${esc(t)}"${t === node.tool ? " selected" : ""}${TOOL_DESC[t] ? ` title="${esc(TOOL_DESC[t])}"` : ""}>${esc(t)}</option>`;
+    const opt = (t: string) => {
+      const mcp = mcpByName.get(t);
+      const title = mcp ? `${mcp.desc} — third-party MCP tool from "${mcp.server}"; calls leave LUCID via that server` : TOOL_DESC[t];
+      return `<option value="${esc(t)}"${t === node.tool ? " selected" : ""}${title ? ` title="${esc(title)}"` : ""}>${esc(t)}</option>`;
+    };
     const listed = names.filter((t) => inList.has(t)).map(opt).join("");
-    const rest = names.filter((t) => !inList.has(t)).map(opt).join("");
+    const builtin = names.filter((t) => !inList.has(t) && !mcpByName.has(t)).map(opt).join("");
+    const mcp = names.filter((t) => !inList.has(t) && mcpByName.has(t)).map(opt).join("");
     const placeholder = node.tool ? "" : `<option value="" selected disabled>(choose a tool)</option>`;
     kindFields = `<label class="ab-fld"><span>Tool</span>
-      <select class="ab-in" id="abTool">${placeholder}${listed ? `<optgroup label="In the allow-list">${listed}</optgroup>` : ""}${rest ? `<optgroup label="omp tools — picking one adds it to the allow-list">${rest}</optgroup>` : ""}</select></label>
-    <div class="ab-conn-note">This agent may only call allow-listed tools; choosing a tool here allow-lists it automatically.</div>`;
+      <select class="ab-in" id="abTool">${placeholder}${listed ? `<optgroup label="In the allow-list">${listed}</optgroup>` : ""}${builtin ? `<optgroup label="omp tools — picking one adds it to the allow-list">${builtin}</optgroup>` : ""}${mcp ? `<optgroup label="MCP tools (third-party) — picking one adds it to the allow-list">${mcp}</optgroup>` : ""}</select></label>
+    <div class="ab-conn-note">This agent may only call allow-listed tools; choosing a tool here allow-lists it automatically.${mcp ? " MCP tools run on the third-party server that provides them." : ""}</div>`;
   } else if (node.kind === "subagent") {
     kindFields = `<label class="ab-fld"><span>Sub-agent spec id</span>
       <input class="ab-in" id="abSub" value="${esc(node.subagentSpecId ?? "")}" /></label>`;

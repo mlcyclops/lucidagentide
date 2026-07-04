@@ -177,6 +177,22 @@ describe("agent builder panel (P-AGENT.2)", () => {
     expect(runApprovalHtml("Gate", "")).not.toContain("ab-run-approval-out");
   });
 
+  test("MCP tools appear as a third-party group in both pickers, with provenance titles (P-AGENT.12)", () => {
+    const mcp = [{ name: "mcp__crm_search", desc: "Search the CRM", server: "crm" }];
+    const ed = nodeEditorHtml({ id: "b", kind: "tool", label: "Step" }, [], mcp);
+    expect(ed).toContain('optgroup label="MCP tools (third-party)');
+    expect(ed).toContain('<option value="mcp__crm_search"');
+    expect(ed).toContain("third-party MCP tool from &quot;crm&quot;");
+    // chips: an allow-listed MCP tool renders a chip with provenance; the add-picker groups MCP separately
+    const s = spec({ tools: ["web_search", "mcp__crm_search"] });
+    const chips = toolChipsHtml(s, mcp);
+    expect(chips).toContain('data-rm-tool="mcp__crm_search"');
+    expect(chips).toContain("third-party MCP tool");
+    // no MCP tools discovered → both pickers degrade to exactly the built-in behavior
+    const plain = nodeEditorHtml({ id: "b", kind: "tool", label: "Step" }, []);
+    expect(plain).not.toContain("MCP tools (third-party)");
+  });
+
   test("runs flyout: rows per trace with status + steps; detail lists steps and escapes content (P-AGENT.13)", () => {
     const list = runsPanelHtml([
       { run_id: "run_1", spec_id: "s", name: "researcher", status: "completed", started_at: 1_700_000_000_000, finished_at: 1_700_000_009_000, steps: 3 },

@@ -9650,7 +9650,16 @@ symmetric with LUCID behavior; the compiler keeps emitting the same prompt text 
 ## ADR-0138 - P-AGENT.12: dynamic tool catalog - MCP servers + live omp discovery (DESIGN)
 
 **Date:** 2026-07-04
-**Status:** Accepted - DESIGN.
+**Status:** Accepted. **BUILT + tested** (same day). Naming VERIFIED against the pinned omp bundle: MCP tools
+register as `mcp__<server>_<tool>` with the `<server>_` prefix de-duplicated — the catalog offers EXACTLY
+those names so the compiled allow-list matches at tool_call time (a mismatch denies, fail-closed).
+desktop/mcp_probe.ts speaks MCP JSON-RPC over streamable HTTP (initialize → initialized → tools/list,
+mcp-session-id honored, SSE-framed bodies tolerated, bearer token from the server entry), 5-min cache,
+tested against a LIVE in-process fixture server; legacy SSE-transport entries are skipped with an honest
+note. `/api/agent/tools` serves the dynamic half; the renderer merges it with the static TOOL_CATALOG —
+no MCP servers (or probe failure) degrades to exactly the built-in picker. Both pickers group
+“MCP tools (third-party)” with per-tool provenance titles; AGENT_BUILDER_POLICY's risk bullet now names the
+MCP server when warning (prefix regression re-run green). Live-omp tool enumeration remains future work.
 
 **Context.** TOOL_CATALOG is a hand-curated 17-entry renderer constant (ADR-0135 stub). n8n's moat is 1,500
 integrations; ours is MCP - the user's configured MCP servers (settings_store `listMcpServers`) already carry

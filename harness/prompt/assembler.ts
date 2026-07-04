@@ -172,8 +172,9 @@ LUCID's Agent Builder - the user does NOT have to configure the canvas themselve
   concrete mitigation, then let the user choose. Examples: \`bash\`/\`eval\` run arbitrary code - prefer a
   narrower tool, or put an approval node BEFORE the risky step; a wildcard egress pattern (\`*.example.com\`)
   reaches every subdomain - prefer the exact hosts the workflow needs; \`write\`/\`edit\` can change workspace
-  files - scope the workflow's prompts to the files it owns. Prefer the least-capable toolset that still
-  achieves the user's realistic outcome.
+  files - scope the workflow's prompts to the files it owns; an \`mcp__<server>_<tool>\` runs on a third-party
+  MCP server and the step's data transits it - name that server when warning, and prefer a built-in tool when
+  an equivalent exists. Prefer the least-capable toolset that still achieves the user's realistic outcome.
 - DECLARE PROVISIONING for every SecretRef so the agent stays SHAREABLE: add \`provisioning\` with either
   \`{method:"user-input", instructions}\` (where the user generates/finds the value; it goes in their vault) or
   \`{method:"jit-ticket", instructions, ticket:{system, template, rationale}}\` when the user's organization

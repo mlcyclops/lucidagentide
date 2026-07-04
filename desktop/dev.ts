@@ -30,6 +30,7 @@ import { importSpec } from "../harness/agent/import_gate.ts"; // P-AGENT.5/.9: f
 import { ScannerClient } from "../harness/security/scanner_client.ts";
 import { startAgentRun, approveAgentRun } from "./agent_run.ts"; // P-AGENT.4-live/.11a: gated runs + enforced approval halts
 import { listTraces, loadTrace } from "../harness/agent/trace.ts"; // P-AGENT.13: run traces
+import { probeEnabledServers } from "./mcp_probe.ts"; // P-AGENT.12: MCP tool discovery for the Builder catalog
 import { archiveBrief, deleteBrief, listBriefs, readBrief, restoreBrief, saveBrief } from "./report_store.ts";
 import { OpenAiCompatibleTtsBackend } from "../harness/brief/tts_backend.ts";
 import { ElevenLabsTtsBackend, ElevenLabsSttBackend, listElevenVoices } from "../harness/voice/elevenlabs.ts";
@@ -740,6 +741,20 @@ const server = Bun.serve({
       }
       // P-AGENT.13: run traces — file-backed provenance under .omp/agent-runs/traces/ (the desktop holds
       // agent_obs.duckdb read-only, so files are the v1 store; see ADR-0139 delta note).
+      // P-AGENT.12: the DYNAMIC half of the Builder's tool catalog: tools discovered from the user's
+      // ENABLED MCP servers, under the exact `mcp__<server>_<tool>` names omp registers at runtime (so the
+      // compiled allow-list matches). Fail-soft: unreachable servers report an error and the picker just
+      // shows the built-ins; a probe can never break the Builder.
+      if (p === "/api/agent/tools") {
+        const results = await probeEnabledServers(listMcpServers());
+        return json({
+          ok: true,
+          data: {
+            tools: results.flatMap((r) => r.tools),
+            servers: results.map((r) => ({ server: r.server, ok: r.ok, count: r.tools.length, error: r.error ?? "" })),
+          },
+        });
+      }
       if (p === "/api/agent/traces") {
         const spec = url.searchParams.get("spec") ?? "";
         return json({ ok: true, data: { traces: listTraces(currentWorkspace(), spec || undefined) } });
