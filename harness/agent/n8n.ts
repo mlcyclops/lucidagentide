@@ -234,7 +234,9 @@ export function n8nToSpec(wf: N8nWorkflow, now: number = Date.now()): N8nImportR
     if (m?.[1]) return { embeddedPortableJson: m[1].trim(), notes: ["restored the embedded portable LUCID agent (lossless round-trip)"] };
   }
 
-  const isTrigger = (t: string): boolean => /trigger|webhook$/i.test(t);
+  // n8n trigger-node types end with "Trigger" (manualTrigger, scheduleTrigger, chatTrigger, …) or ARE the
+  // webhook node; anchor BOTH alternatives (CodeQL js/regex/missing-regexp-anchor — `a|b$` binds only b).
+  const isTrigger = (t: string): boolean => /(?:trigger|webhook)$/i.test(t);
   const stepSources = allNodes.filter((n) => !n.type.endsWith("stickyNote") && !isTrigger(n.type));
   const dropped = allNodes.filter((n) => !n.type.endsWith("stickyNote") && isTrigger(n.type));
   if (dropped.length) notes.push(`trigger nodes have no LUCID equivalent yet (P-AGENT.14) and were noted, not mapped: ${dropped.map((n) => n.name).join(", ")}`);

@@ -160,8 +160,10 @@ async function bundleApp(): Promise<{ js: string; ok: boolean }> {
     // A THROW from Bun.build (e.g. an unresolved import in a packaged build where a renderer dep
     // wasn't bundled) must NOT fall through to the generic JSON error handler — that ships as
     // <script>{"ok":false,...}</script>, an invalid-JS blob that leaves the window a silent dark
-    // shell (the katex-missing dark-screen bug). Surface the real error in the page instead.
-    return bundleError(`Renderer build failed:\n${String((e as Error)?.stack ?? e)}`);
+    // shell (the katex-missing dark-screen bug). Surface the error MESSAGE in the page; the full
+    // stack stays in the server log (CodeQL js/stack-trace-exposure — never ship stack frames).
+    console.error("[bundleApp] renderer build failed:", e);
+    return bundleError(`Renderer build failed:\n${e instanceof Error ? e.message : String(e)}`);
   }
 }
 
