@@ -30,7 +30,7 @@ export type Cadence =
 
 export interface Automation {
   id: string;
-  goal: string;
+  goal: string; // goal text, or the display label for kind "agent"
   condition: string;
   command?: string;
   maxIters: number;
@@ -39,6 +39,11 @@ export interface Automation {
   createdAt: number;
   lastRunAt?: number;
   lastResult?: string;
+  // P-AGENT.14 (ADR-0140): scheduled BUILT-AGENT runs. kind defaults to "goal" for every legacy record.
+  kind?: "goal" | "agent";
+  agentSpecId?: string; // kind "agent": the built agent to run
+  agentPrompt?: string; // kind "agent": the task each tick runs with
+  agentModel?: string; // kind "agent": model override (runner default when unset)
 }
 
 /** Spec the UI/API supplies to create one (everything else is server-assigned). */
@@ -48,6 +53,28 @@ export interface AutomationSpec {
   command?: string;
   maxIters?: number;
   cadence: Cadence;
+  kind?: "goal" | "agent";
+  agentSpecId?: string;
+  agentPrompt?: string;
+  agentModel?: string;
+}
+
+/** P-AGENT.14: the PURE fail-closed gate the scheduler consults before running an agent automation.
+ *  Only a TRUSTED, loadable, approval-free spec runs unattended:
+ *  - missing spec        → disable (it can never succeed until re-created)
+ *  - trust ≠ trusted     → disable (a label downgrade SUSPENDS the schedule — ADR-0140)
+ *  - approval checkpoints → refuse this tick but stay armed (unattended runs can't answer approval cards;
+ *    the user may edit the agent, so the schedule survives) */
+export function agentAutomationGate(
+  spec: { name: string; nodes: Array<{ kind: string }> } | null,
+  trustLabel: string,
+): { run: boolean; result?: string; disable?: boolean } {
+  if (!spec) return { run: false, disable: true, result: "suspended: the agent no longer exists in this workspace" };
+  if (trustLabel !== "trusted")
+    return { run: false, disable: true, result: `suspended: the agent is ${trustLabel} — review + approve it in the Agent Builder, then re-arm` };
+  if (spec.nodes.some((n) => n.kind === "approval"))
+    return { run: false, result: "refused: the workflow has human-approval checkpoints — run it manually from the Builder" };
+  return { run: true };
 }
 
 const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
@@ -113,7 +140,16 @@ export function createAutomation(workspace: string, spec: AutomationSpec, id: st
   const command = spec.command?.trim() || undefined;
   const condition = String(spec.condition ?? "").trim() || command || goal;
   const maxIters = Math.min(20, Math.max(1, Math.floor(Number(spec.maxIters)) || 6));
-  const auto: Automation = { id, goal, condition, command, maxIters, cadence, enabled: false, createdAt };
+  // P-AGENT.14: an agent-run automation must fully name its work (spec id + task) or it never exists.
+  const kind: "goal" | "agent" = spec.kind === "agent" ? "agent" : "goal";
+  const agentSpecId = spec.agentSpecId?.trim() || undefined;
+  const agentPrompt = spec.agentPrompt?.trim() || undefined;
+  const agentModel = spec.agentModel?.trim() || undefined;
+  if (kind === "agent" && (!agentSpecId || !agentPrompt)) return null;
+  const auto: Automation = {
+    id, goal, condition, command, maxIters, cadence, enabled: false, createdAt,
+    ...(kind === "agent" ? { kind, agentSpecId, agentPrompt, ...(agentModel ? { agentModel } : {}) } : {}),
+  };
   const list = listAutomations(workspace);
   list.unshift(auto);
   return writeAutomations(workspace, list) ? auto : null;

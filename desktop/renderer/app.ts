@@ -26,7 +26,7 @@ import { type GraphHandle, kindLabel, mountGraph } from "./graph.ts";
 import { addEdgeOptimistic, applyForget, chainPairs, matchNodes, removeEdgeOptimistic, resolveRelationLabel } from "./kg_ops.ts";
 import { capGraph, graphOpts, pollDelay, watchPerfTier } from "./perf_tier.ts";
 import type { PersonalGraphData } from "./bridge.ts";
-import { agentBuilderPanelHtml, specToGraphData, nodeEditorHtml, saveErrors, newCanvasSpec, runPanelHtml, secretsPanelHtml, agentInterviewPrompt, toolChipsHtml, trustBannerHtml, runApprovalHtml, runsPanelHtml, traceDetailHtml } from "./agent_builder.ts"; // P-AGENT.2b/.4-live/.8/.9/.11a/.13
+import { agentBuilderPanelHtml, specToGraphData, nodeEditorHtml, saveErrors, newCanvasSpec, runPanelHtml, secretsPanelHtml, agentInterviewPrompt, toolChipsHtml, trustBannerHtml, runApprovalHtml, runsPanelHtml, traceDetailHtml, schedulePanelHtml } from "./agent_builder.ts"; // P-AGENT.2b/.4-live/.8/.9/.11a/.13/.14
 import type { TrustLabel } from "../../harness/contracts.ts"; // P-AGENT.9: imported-agent trust banner
 import type { AgentSpec, NodeKind } from "../../harness/agent/spec.ts"; // P-AGENT.2b
 import { expandCommandBody, type UserCommand } from "../../harness/commands/spec.ts"; // P-CMD.1: user "/" commands
@@ -2827,6 +2827,39 @@ async function openAbTraceDetail(runId: string): Promise<void> {
   side.innerHTML = traceDetailHtml(trace);
   side.hidden = false;
   $("#abRunsBack", side)?.addEventListener("click", () => void openAbRunsPanel());
+}
+// P-AGENT.14: the Schedule flyout — a DISARMED agent-run automation for the current agent. Untrusted or
+// approval-carrying specs get the honest refusal here, mirroring the scheduler's own fail-closed gate.
+function openAbSchedulePanel(): void {
+  if (!abSpec) return;
+  const side = $("#abSide");
+  if (!side) return;
+  const blockedWhy = abTrust
+    ? `This agent is ${abTrust.label} — review and approve it before scheduling unattended runs.`
+    : abSpec.nodes.some((n) => n.kind === "approval")
+      ? "This workflow has human-approval checkpoints, so it can't run unattended — approval cards would go unanswered. Run it manually, or remove the checkpoints."
+      : saveErrors(abSpec)[0] ?? null;
+  side.innerHTML = schedulePanelHtml(abSpec, blockedWhy);
+  side.hidden = false;
+  $("#abSchedCreate", side)?.addEventListener("click", () => void createAbSchedule());
+}
+async function createAbSchedule(): Promise<void> {
+  if (!abSpec) return;
+  const prompt = ($("#abSchedPrompt") as HTMLTextAreaElement | null)?.value.trim() ?? "";
+  const kind = ($("#abSchedKind") as HTMLSelectElement | null)?.value === "daily" ? "daily" : "interval";
+  const value = ($("#abSchedValue") as HTMLInputElement | null)?.value.trim() ?? "";
+  if (!prompt) { showToast({ tone: "warn", title: "Enter a task", desc: "What should each scheduled run do?" }); return; }
+  const cadence = kind === "daily" ? { kind: "daily" as const, hhmm: value } : { kind: "interval" as const, everyMin: Math.round(Number(value)) };
+  const a = await bridge.automationCreate({
+    goal: `Run agent: ${abSpec.name}`,
+    cadence,
+    kind: "agent",
+    agentSpecId: abSpec.spec_id,
+    agentPrompt: prompt,
+    agentModel: state.model,
+  });
+  if (a) showToast({ tone: "ok", title: "Schedule created (disarmed)", desc: `“${abSpec.name}” ${a.cadence.kind === "interval" ? `every ${a.cadence.everyMin} min` : `daily at ${a.cadence.hhmm}`} — arm it in the Goal panel's Automations.` });
+  else showToast({ tone: "danger", title: "Couldn't create the schedule", desc: kind === "daily" ? "Use HH:MM (24h), e.g. 09:30." : "Interval must be a number of minutes ≥ 1." });
 }
 // P-AGENT.4-live: open the Run flyout and let the user run the agent live inside LUCID.
 function openAbRunPanel(): void {
@@ -5841,6 +5874,7 @@ function wire(): void {
   $("#abSecrets")?.addEventListener("click", () => void openAbSecretsPanel());
   $("#abToolsBtn")?.addEventListener("click", () => openAbToolsPanel()); // P-AGENT.9: allow-list chips
   $("#abRunsBtn")?.addEventListener("click", () => void openAbRunsPanel()); // P-AGENT.13: run traces
+  $("#abScheduleBtn")?.addEventListener("click", () => openAbSchedulePanel()); // P-AGENT.14: cadence runs
   $("#abShare")?.addEventListener("click", () => void shareAgentBuilder()); // P-AGENT.9: portable share
   $("#abN8n")?.addEventListener("click", () => void n8nExportAgentBuilder()); // P-AGENT.10: n8n export
   $("#abN8nPush")?.addEventListener("click", () => void n8nPushAgentBuilder()); // P-AGENT.10: add-on push

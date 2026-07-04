@@ -116,6 +116,7 @@ export function agentBuilderPanelHtml(): string {
         <button class="ab-btn" id="abConnect" data-tip="Connect mode|Drag from one node to another to add a step edge; toggle off to reposition nodes">Connect</button>
         <button class="ab-btn" id="abToolsBtn" data-tip="Tools|Manage the tool allow-list — remove a tool to BLOCK the agent from ever calling it">Tools</button>
                 <button class="ab-btn" id="abRunsBtn" data-tip="Runs|Recent executions of this agent — per-step trace, approvals, sub-agent hops">Runs</button>
+                <button class="ab-btn" id="abScheduleBtn" data-tip="Schedule|Run this agent on a cadence while LUCID is open. Only TRUSTED, approval-free agents run unattended; schedules are created disarmed">Schedule</button>
         <button class="ab-btn" id="abValidate" data-tip="Check the workflow is a valid DAG">Validate</button>
         <button class="ab-btn ok" id="abSave" data-tip="Validate + save this agent">Save</button>
         <button class="ab-btn" id="abSecrets" data-tip="Secrets & connections|Add the API credentials this agent needs to the encrypted vault (never to the agent), and confirm the sites it may reach">Secrets &amp; connections</button>
@@ -284,6 +285,31 @@ export function toolChipsHtml(spec: AgentSpec, mcpTools: McpCatalogTool[] = []):
     <div class="ab-conn-note">The agent may ONLY call tools on this list — every other tool call is denied at run time by its compiled allow-list and LUCID's security gate. Remove a tool to block it.</div>
     <ul class="ab-chip-list">${chips}</ul>
     ${adder}
+  </div>`;
+}
+
+/** P-AGENT.14: the Schedule flyout — create a DISARMED agent-run automation for this agent. `blockedWhy`
+ *  (untrusted spec / approval checkpoints) replaces the form with the honest reason: those can never run
+ *  unattended, so we refuse at authoring time exactly like the scheduler's fail-closed gate would. */
+export function schedulePanelHtml(spec: AgentSpec, blockedWhy: string | null): string {
+  if (blockedWhy) {
+    return `<div class="ab-runs">
+    <div class="ab-ed-head"><span class="ab-kind">Schedule</span></div>
+    <div class="ab-conn-note">${esc(blockedWhy)}</div>
+  </div>`;
+  }
+  return `<div class="ab-runs">
+    <div class="ab-ed-head"><span class="ab-kind">Schedule “${esc(spec.name)}”</span></div>
+    <label class="ab-fld"><span>Task each run</span>
+      <textarea class="ab-in ab-ta" id="abSchedPrompt">${esc(spec.description?.trim() ? `Run the workflow: ${spec.description.trim()}` : "Run the workflow.")}</textarea></label>
+    <div class="ab-fld-row">
+      <label class="ab-fld"><span>Cadence</span>
+        <select class="ab-in" id="abSchedKind"><option value="interval" selected>Every N minutes</option><option value="daily">Daily at HH:MM</option></select></label>
+      <label class="ab-fld"><span>Value</span>
+        <input class="ab-in" id="abSchedValue" value="60" placeholder="60  |  09:30" /></label>
+    </div>
+    <div class="ab-conn-note">Runs only while LUCID is open, through the same gate + allow-list + trust checks as Run ▸, and each run leaves a trace in Runs. Created DISARMED — arm it in the Goal panel's Automations list. If this agent is ever un-trusted, the schedule suspends itself.</div>
+    <button class="ab-btn ok" id="abSchedCreate">Create schedule (disarmed)</button>
   </div>`;
 }
 

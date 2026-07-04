@@ -254,8 +254,12 @@ export type Cadence = { kind: "interval"; everyMin: number } | { kind: "daily"; 
 export interface Automation {
   id: string; goal: string; condition: string; command?: string; maxIters: number;
   cadence: Cadence; enabled: boolean; createdAt: number; lastRunAt?: number; lastResult?: string;
+  kind?: "goal" | "agent"; agentSpecId?: string; agentPrompt?: string; agentModel?: string; // P-AGENT.14
 }
-export interface AutomationSpec { goal: string; condition?: string; command?: string; maxIters?: number; cadence: Cadence }
+export interface AutomationSpec {
+  goal: string; condition?: string; command?: string; maxIters?: number; cadence: Cadence;
+  kind?: "goal" | "agent"; agentSpecId?: string; agentPrompt?: string; agentModel?: string; // P-AGENT.14
+}
 // P-GOAL.6: the /goal checker-model picker state.
 export interface ModelOption { value: string; name?: string; description?: string }
 export interface CheckerModelInfo { selected: string; recommended: string; recommendedWhy: string; current: string; options: ModelOption[] }

@@ -9709,7 +9709,13 @@ for free.
 ## ADR-0140 - P-AGENT.14: triggers - scheduled runs first, gated webhooks second (DESIGN)
 
 **Date:** 2026-07-04
-**Status:** Accepted - DESIGN.
+**Status:** Accepted. **Phase 1 (scheduled runs) BUILT + tested** (same day): automations grew kind
+"agent" {agentSpecId, agentPrompt, agentModel} — created DISARMED like every automation; the pure
+`agentAutomationGate` is the fail-closed pre-flight (missing spec or ANY non-trusted label ⇒ the schedule
+SUSPENDS itself; approval checkpoints ⇒ the tick refuses but stays armed — unattended runs can't answer
+approval cards); the run goes through the SAME startAgentRun pipeline (gate first, allow-list, stored
+trust, P-AGENT.13 trace) and lastResult carries the outcome + run id. Builder grew a Schedule flyout
+that mirrors the gate's refusals at authoring time. Phase 2 (token-gated webhooks) remains DESIGN.
 
 **Context.** Built agents only run from the Run panel. n8n's trigger surface (cron/webhook/events) is the
 feature gap users feel daily; LUCID already ships an automations engine (desktop/automations.ts, cadence

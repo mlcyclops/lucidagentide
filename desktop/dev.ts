@@ -1268,13 +1268,20 @@ const server = Bun.serve({
       // cadence (interval or daily) while the app is open. Created DISABLED; the user arms each explicitly.
       if (p === "/api/automations" && req.method === "GET") return json({ ok: true, data: listAutomations(currentWorkspace()) });
       if (p === "/api/automations" && req.method === "POST") {
-        const b = await readBody<{ goal?: unknown; condition?: unknown; command?: unknown; maxIters?: unknown; cadence?: unknown }>(req);
+        const b = await readBody<{ goal?: unknown; condition?: unknown; command?: unknown; maxIters?: unknown; cadence?: unknown; kind?: unknown; agentSpecId?: unknown; agentPrompt?: unknown; agentModel?: unknown }>(req);
         const cadence = normalizeCadence(b.cadence);
         if (!cadence) return json({ ok: false, error: "invalid cadence" });
         const a = createAutomation(currentWorkspace(),
-          { goal: String(b.goal ?? ""), condition: b.condition ? String(b.condition) : undefined, command: b.command ? String(b.command) : undefined, maxIters: Number(b.maxIters) || 6, cadence },
+          {
+            goal: String(b.goal ?? ""), condition: b.condition ? String(b.condition) : undefined, command: b.command ? String(b.command) : undefined, maxIters: Number(b.maxIters) || 6, cadence,
+            // P-AGENT.14: scheduled built-agent runs (created DISARMED like every automation)
+            kind: b.kind === "agent" ? "agent" : undefined,
+            agentSpecId: b.agentSpecId ? String(b.agentSpecId) : undefined,
+            agentPrompt: b.agentPrompt ? String(b.agentPrompt) : undefined,
+            agentModel: b.agentModel ? String(b.agentModel) : undefined,
+          },
           Date.now().toString(36) + Math.floor(Math.random() * 1e6).toString(36), Date.now());
-        return a ? json({ ok: true, data: a }) : json({ ok: false, error: "could not create (check the goal)" });
+        return a ? json({ ok: true, data: a }) : json({ ok: false, error: "could not create (check the goal/agent fields)" });
       }
       if (p === "/api/automations/enable" && req.method === "POST") {
         const b = await readBody<{ id?: unknown; enabled?: unknown }>(req);
