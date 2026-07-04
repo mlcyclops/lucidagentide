@@ -6,7 +6,7 @@
 // treat a regression here like a failing scanner test.
 
 import { test, expect, describe } from "bun:test";
-import { splitSegments, renderSegmentPrompt, SegmentedRun, subagentGuard, SUBAGENT_MAX_DEPTH } from "./segments.ts";
+import { splitSegments, renderSegmentPrompt, SegmentedRun, subagentGuard, SUBAGENT_MAX_DEPTH, parseBranchChoice, segmentPolicy } from "./segments.ts";
 import { newSpecId, SPEC_VERSION, type AgentSpec } from "./spec.ts";
 
 function spec(over: Partial<AgentSpec> = {}): AgentSpec {
@@ -194,6 +194,112 @@ describe("SegmentedRun — subagent boundaries (P-AGENT.11b)", () => {
   test("recordSubagentOutput outside the halt throws (no fabricated child runs)", () => {
     const run = new SegmentedRun(subSpec());
     expect(() => run.recordSubagentOutput("forged")).toThrow(/running/);
+  });
+});
+
+/** assess → [Risky?] → yes: escalate → approval → wrap  |  no: proceed → wrap  (wrap = join node) */
+function branchSpec(): AgentSpec {
+  return spec({
+    nodes: [
+      { id: "a", kind: "prompt", label: "Assess", prompt: "assess the request" },
+      { id: "d", kind: "branch", label: "Risky?" },
+      { id: "y", kind: "prompt", label: "Escalate", prompt: "escalate" },
+      { id: "g", kind: "approval", label: "Security sign-off" },
+      { id: "n", kind: "prompt", label: "Proceed", prompt: "proceed" },
+      { id: "w", kind: "prompt", label: "Wrap up", prompt: "summarize" },
+    ],
+    edges: [
+      { id: "e1", from: "a", to: "d" },
+      { id: "e2", from: "d", to: "y", label: "yes" },
+      { id: "e3", from: "d", to: "n", label: "no" },
+      { id: "e4", from: "y", to: "g" },
+      { id: "e5", from: "g", to: "w" },
+      { id: "e6", from: "n", to: "w" },
+    ],
+  });
+}
+
+describe("branch nodes (P-AGENT.11c)", () => {
+  test("splitSegments emits a branch boundary with labeled options", () => {
+    const segs = splitSegments(branchSpec());
+    const b = segs.find((s) => s.branchAfter)!;
+    expect(b.branchAfter!.label).toBe("Risky?");
+    expect(b.branchAfter!.options.map((o) => o.label).sort()).toEqual(["no", "yes"]);
+  });
+
+  test("the branch segment's prompt demands a CHOICE line naming the options", () => {
+    const s = branchSpec();
+    const segs = splitSegments(s);
+    const b = segs.find((x) => x.branchAfter)!;
+    const prompt = renderSegmentPrompt(s, b, 0, segs.length, "");
+    expect(prompt).toContain("CHOICE: <option>");
+    expect(prompt).toContain("yes | no");
+  });
+
+  test("parseBranchChoice: last CHOICE line wins, case-insensitive; garbage → null", () => {
+    const options = [
+      { edgeId: "e2", label: "yes", to: "y" },
+      { edgeId: "e3", label: "no", to: "n" },
+    ];
+    expect(parseBranchChoice("reasoning…\nCHOICE: yes", options)!.edgeId).toBe("e2");
+    expect(parseBranchChoice("CHOICE: yes\nwait no\nCHOICE: NO", options)!.edgeId).toBe("e3");
+    expect(parseBranchChoice("I pick the first one", options)).toBeNull();
+    expect(parseBranchChoice("CHOICE: maybe", options)).toBeNull();
+  });
+
+  test("KEYSTONE-grade: the not-taken subtree is skipped INCLUDING its approval — but the join still runs", () => {
+    const run = new SegmentedRun(branchSpec());
+    run.recordSegmentOutput("assessed: low risk");
+    expect(run.state).toBe("at-branch");
+    expect(() => run.currentSegment()).toThrow(/at-branch/); // no prompt exists until the decision is taken
+    run.takeBranch("e3"); // "no" → proceed
+    // The yes-path approval must NOT halt the run — it was never chosen.
+    const outputs: string[] = [];
+    while (run.state === "running") {
+      const seg = run.currentSegment();
+      outputs.push(seg.nodeIds.join(","));
+      expect(seg.systemPrompt).not.toContain("Escalate"); // skipped step never reaches a prompt
+      run.recordSegmentOutput(`did ${seg.nodeIds.join(",")}`);
+    }
+    expect(run.state).toBe("completed"); // never awaiting-approval
+    expect(outputs.join("|")).toContain("w"); // the join node ran
+    expect(outputs.join("|")).not.toContain("y");
+  });
+
+  test("taking the risky path keeps ITS approval halt intact", () => {
+    const run = new SegmentedRun(branchSpec());
+    run.recordSegmentOutput("assessed: high risk");
+    run.takeBranch("e2"); // "yes" → escalate → approval
+    while (run.state === "running") {
+      const seg = run.currentSegment();
+      run.recordSegmentOutput(`did ${seg.nodeIds.join(",")}`);
+    }
+    expect(run.state).toBe("awaiting-approval");
+    expect(run.pendingApproval()!.label).toBe("Security sign-off");
+  });
+
+  test("takeBranch outside at-branch, or with a non-option edge, throws", () => {
+    const run = new SegmentedRun(branchSpec());
+    expect(() => run.takeBranch("e2")).toThrow(/running/);
+    run.recordSegmentOutput("assessed");
+    expect(() => run.takeBranch("e1")).toThrow(/not an option/);
+  });
+});
+
+describe("segmentPolicy (P-AGENT.15) — segment-granular reliability", () => {
+  test("max retry, max backoff, MIN timeout (clamped); defaults when unset", () => {
+    const s = spec({
+      nodes: [
+        { id: "a", kind: "prompt", label: "A", prompt: "x", retry: { max: 2, backoffMs: 2000 }, timeoutMs: 60_000 },
+        { id: "b", kind: "tool", label: "B", tool: "web_search", retry: { max: 1 }, timeoutMs: 30_000 },
+      ],
+      edges: [{ id: "e1", from: "a", to: "b" }],
+    });
+    expect(segmentPolicy(s, ["a", "b"])).toEqual({ retryMax: 2, backoffMs: 2000, timeoutMs: 30_000 });
+    expect(segmentPolicy(s, [])).toEqual({ retryMax: 0, backoffMs: 500 });
+    // currentSegment carries the policy
+    const run = new SegmentedRun(s);
+    expect(run.currentSegment().policy).toEqual({ retryMax: 2, backoffMs: 2000, timeoutMs: 30_000 });
   });
 });
 

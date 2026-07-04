@@ -122,6 +122,34 @@ describe("n8nToSpec (P-AGENT.10)", () => {
     expect(r.notes.join()).toContain("trigger");
   });
 
+  test("n8n IF nodes become branch nodes with true/false edge labels; underconnected ones demote (P-AGENT.11c)", () => {
+    const wf: N8nWorkflow = {
+      name: "Triage",
+      nodes: [
+        { parameters: {}, name: "Check", type: "n8n-nodes-base.if", typeVersion: 2, position: [0, 0] },
+        { parameters: {}, name: "High", type: "n8n-nodes-base.code", typeVersion: 2, position: [200, 0] },
+        { parameters: {}, name: "Low", type: "n8n-nodes-base.code", typeVersion: 2, position: [200, 200] },
+        { parameters: {}, name: "Lonely", type: "n8n-nodes-base.if", typeVersion: 2, position: [400, 0] },
+      ],
+      connections: {
+        Check: { main: [[{ node: "High", type: "main", index: 0 }], [{ node: "Low", type: "main", index: 0 }]] },
+        High: { main: [[{ node: "Lonely", type: "main", index: 0 }]] },
+      },
+      settings: {},
+    };
+    const r = n8nToSpec(wf, 42);
+    const v = validateSpec(r.spec);
+    expect(v.ok).toBe(true);
+    const s = v.spec!;
+    const check = s.nodes.find((n) => n.label === "Check")!;
+    expect(check.kind).toBe("branch");
+    const labels = s.edges.filter((e) => e.from === check.id).map((e) => e.label).sort();
+    expect(labels).toEqual(["false", "true"]); // IF lane 0 = true, lane 1 = false
+    // the IF with a single connected output is demoted, not refused
+    expect(s.nodes.find((n) => n.label === "Lonely")!.kind).toBe("prompt");
+    expect(r.notes.join()).toContain("demoted");
+  });
+
   test("loop-back connections are dropped so the result stays a DAG", () => {
     const wf: N8nWorkflow = {
       name: "Loopy",

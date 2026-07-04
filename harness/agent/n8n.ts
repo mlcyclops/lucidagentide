@@ -253,6 +253,9 @@ export function n8nToSpec(wf: N8nWorkflow, now: number = Date.now()): N8nImportR
     let node: AgentNode;
     if (t.includes("wait")) {
       node = { id, kind: "approval", label };
+    } else if (t.endsWith(".if") || t.endsWith(".switch")) {
+      // P-AGENT.11c: n8n IF/Switch → a LUCID branch node; output lanes become labeled choice edges below.
+      node = { id, kind: "branch", label };
     } else if (t.includes("executeworkflow")) {
       node = { id, kind: "subagent", label };
       notes.push(`"${n.name}": link the sub-agent manually (n8n workflow ids don't map to LUCID spec ids)`);
@@ -289,13 +292,15 @@ export function n8nToSpec(wf: N8nWorkflow, now: number = Date.now()): N8nImportR
   // Edges: follow n8n connections between mapped steps; keep the DAG invariant by dropping back-edges
   // (n8n permits loops; our validator rejects cycles — P-AGENT.11c will bring native branching/loops).
   const rankOf = new Map(nodes.map((n, i) => [n.id, i]));
+  const kindOf = new Map(nodes.map((n) => [n.id, n.kind]));
   const edges: AgentSpec["edges"] = [];
   let droppedEdges = 0;
   for (const [fromName, outs] of Object.entries(wf.connections)) {
     const from = idByName.get(fromName);
     if (!from || !outs || typeof outs !== "object") continue; // trigger/sticky source or malformed entry
     const lanes = Array.isArray(outs.main) ? outs.main : [];
-    for (const lane of lanes) {
+    const fromBranch = kindOf.get(from) === "branch";
+    for (const [laneIdx, lane] of lanes.entries()) {
       if (!Array.isArray(lane)) continue;
       for (const ref of lane) {
         const to = ref && typeof ref === "object" && typeof ref.node === "string" ? idByName.get(ref.node) : undefined;
@@ -304,11 +309,25 @@ export function n8nToSpec(wf: N8nWorkflow, now: number = Date.now()): N8nImportR
           droppedEdges++;
           continue;
         }
-        edges.push({ id: `e${edges.length + 1}`, from, to });
+        // P-AGENT.11c: n8n IF lanes are positional (0 = true, 1 = false); Switch lanes are case indices.
+        const label = fromBranch ? (laneIdx === 0 ? "true" : laneIdx === 1 ? "false" : `case ${laneIdx}`) : undefined;
+        edges.push({ id: `e${edges.length + 1}`, from, to, ...(label ? { label } : {}) });
       }
     }
   }
   if (droppedEdges) notes.push(`${droppedEdges} loop-back connection(s) dropped to keep the workflow a DAG (LUCID v1 has no loops)`);
+
+  // P-AGENT.11c: a branch that ended up with <2 outgoing edges isn't a decision — demote it to a prompt
+  // step (the validator would refuse it, and refusing the whole import over it helps nobody).
+  for (const n of nodes) {
+    if (n.kind !== "branch") continue;
+    const outs = edges.filter((e) => e.from === n.id).length;
+    if (outs < 2) {
+      n.kind = "prompt";
+      n.prompt = "Decision step imported from n8n (it had fewer than two connected outputs); decide how to proceed and continue.";
+      notes.push(`"${n.label}": branch demoted to a prompt step (fewer than two connected outputs)`);
+    }
+  }
 
   if (!nodes.length) nodes.push({ id: "n1", kind: "prompt", label: "Imported workflow", prompt: `The n8n workflow "${wf.name}" had no mappable steps.` });
 

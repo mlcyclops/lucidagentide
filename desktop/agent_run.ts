@@ -17,7 +17,7 @@ import { join } from "node:path";
 import { buildAgent } from "../harness/agent/compiler.ts";
 import { materializeBundle } from "../harness/agent/runner.ts";
 import { canAutoRun } from "../harness/agent/import_gate.ts";
-import { SegmentedRun, subagentGuard, type SubagentBoundary } from "../harness/agent/segments.ts";
+import { SegmentedRun, subagentGuard, parseBranchChoice, type SubagentBoundary } from "../harness/agent/segments.ts";
 import { loadSpecFile, loadSpecTrust } from "../harness/agent/file_store.ts";
 import { TraceRecorder } from "../harness/agent/trace.ts"; // P-AGENT.13: best-effort run provenance
 import { validateSpec, type AgentSpec } from "../harness/agent/spec.ts";
@@ -190,19 +190,49 @@ function driveSegments(entry: PausedEntry): AgentRunResult {
   for (;;) {
     if (m.state === "running") {
       const seg = m.currentSegment(); // the ONLY source of an executable prompt (keystone)
-      const t0 = Date.now();
-      const r = spawnGatedOmp({
-        runDir: entry.runDir,
-        model: entry.model,
-        systemPrompt: seg.systemPrompt,
-        ompExtensionArgs: entry.ompExtensionArgs,
-        prompt: entry.prompt,
-        withGate: entry.withGate,
-        timeoutMs: entry.timeoutMs,
-      });
-      rec.step({ kind: "segment", node_ids: seg.nodeIds, label: `part ${seg.index + 1}`, started_at: t0, finished_at: Date.now(), ok: r.ok, detail: r.ok ? (r.output ?? "") : (r.error ?? "segment failed") });
-      if (!r.ok) { rec.status("error"); return { ...r, runId: entry.runId }; } // a failed segment fails the run
+      // P-AGENT.15: the segment's reliability policy — bounded retries with linear backoff, and the
+      // TIGHTEST node timeout constraining the whole segment spawn.
+      let r: AgentRunResult = { ok: false, error: "segment did not run" };
+      for (let attempt = 0; attempt <= seg.policy.retryMax; attempt++) {
+        if (attempt > 0) Bun.sleepSync(Math.min(10_000, seg.policy.backoffMs * attempt));
+        const t0 = Date.now();
+        r = spawnGatedOmp({
+          runDir: entry.runDir,
+          model: entry.model,
+          systemPrompt: seg.systemPrompt,
+          ompExtensionArgs: entry.ompExtensionArgs,
+          prompt: entry.prompt,
+          withGate: entry.withGate,
+          timeoutMs: seg.policy.timeoutMs ?? entry.timeoutMs,
+        });
+        rec.step({
+          kind: "segment",
+          node_ids: seg.nodeIds,
+          label: attempt ? `part ${seg.index + 1} (retry ${attempt}/${seg.policy.retryMax})` : `part ${seg.index + 1}`,
+          started_at: t0,
+          finished_at: Date.now(),
+          ok: r.ok,
+          detail: r.ok ? (r.output ?? "") : (r.error ?? "segment failed"),
+        });
+        if (r.ok) break;
+      }
+      if (!r.ok) { rec.status("error"); return { ...r, runId: entry.runId }; } // retries exhausted — the run fails
       m.recordSegmentOutput(r.output ?? "");
+      continue;
+    }
+    if (m.state === "at-branch") {
+      // P-AGENT.11c: the decision came back in the segment output as a `CHOICE: <option>` line. No parseable
+      // choice → the run FAILS with the expected options named — the runner never guesses a path.
+      const b = m.pendingBranch()!;
+      const choice = parseBranchChoice(m.transcript().at(-1) ?? "", b.options);
+      if (!choice) {
+        const expected = b.options.map((o) => o.label).join(", ");
+        rec.step({ kind: "branch", node_ids: [b.nodeId], label: b.label, started_at: Date.now(), finished_at: Date.now(), ok: false, detail: `no parseable CHOICE line; expected one of: ${expected}` });
+        rec.status("error");
+        return { ok: false, error: `branch "${b.label}": the agent did not emit a parseable CHOICE line (expected one of: ${expected})`, runId: entry.runId };
+      }
+      m.takeBranch(choice.edgeId);
+      rec.step({ kind: "branch", node_ids: [b.nodeId], label: b.label, started_at: Date.now(), finished_at: Date.now(), ok: true, detail: `chose "${choice.label}" — the not-taken path is skipped` });
       continue;
     }
     if (m.state === "awaiting-subagent") {

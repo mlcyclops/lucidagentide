@@ -16,7 +16,7 @@
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-export type RunStepKind = "segment" | "subagent" | "approval";
+export type RunStepKind = "segment" | "subagent" | "approval" | "branch";
 export type RunTraceStatus = "running" | "awaiting-approval" | "completed" | "denied" | "blocked" | "error";
 
 export interface RunStepRecord {

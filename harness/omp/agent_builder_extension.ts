@@ -28,7 +28,8 @@ export default function agentBuilderExtension(pi: any): void {
         "and confirm it. Use this AFTER you've described the plan and confirmed the specifics in chat, and call " +
         "it AGAIN with the updated spec (same spec_id) each turn the draft changes — the open canvas updates " +
         "LIVE so the user watches the workflow evolve. Pass the drafted Agent Spec as a JSON string in " +
-        "`specJson`: nodes (prompt/tool/subagent/approval) + edges (a DAG) + tools (the allow-list) + egress " +
+        "`specJson`: nodes (prompt/tool/subagent/approval/branch) + edges (a DAG; label a branch's outgoing edges " +
+        "with the choice names) + tools (the allow-list) + egress " +
         "(domains/APIs to reach) + secrets (credential NAMES only, e.g. SALESFORCE_API_TOKEN with kind apikey, " +
         "optionally with `provisioning` guidance: method user-input, or jit-ticket with the IT ticketing " +
         "system + sample ticket fields + rationale for orgs that issue Just-In-Time tokens from a KMS). NEVER " +

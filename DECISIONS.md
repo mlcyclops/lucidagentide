@@ -9620,8 +9620,12 @@ are boundaries too — `SegmentedRun` halts in "awaiting-subagent" and desktop/a
 via its own compiled bundle (child allow-list) under the child's STORED trust label (canAutoRun — a
 non-trusted child refuses); `subagentGuard` fail-closes unset child / missing spec / cycle / depth >
 SUBAGENT_MAX_DEPTH(3) / child-with-approvals (nested human halts refused, not parked); child output flows
-into the parent's next segment prompt. Recursion covers grandchildren (guards re-run per level). 11c
-(branching) remains design.
+into the parent's next segment prompt. Recursion covers grandchildren (guards re-run per level). **11c BUILT + tested** (same day): `branch`
+node kind (spec v2) with labeled outgoing edges; the branch segment's prompt demands a terminal
+`CHOICE: <option>` line; `parseBranchChoice` is strict (no parseable choice ⇒ the run FAILS with the
+options named — the runner never guesses); `takeBranch` skips the not-taken subtree via reachability
+(descendants of the branch minus those reachable from the chosen edge) — skipped approvals/subagents
+never halt, join nodes and parallel chains are untouched; decisions land in the run trace.
 
 **Context.** The v1 compiler lowers the DAG into a numbered system prompt; `approval` lowers to "pause for
 human approval" PROSE and `subagent` to "run sub-agent <id>" prose (compiler.ts stepLine). A guarantee the
@@ -9725,7 +9729,12 @@ runs unattended, and webhook payloads are data, never instructions.
 ## ADR-0141 - P-AGENT.15: spec v2 - retry, timeout, and on-error edges (DESIGN)
 
 **Date:** 2026-07-04
-**Status:** Accepted - DESIGN. Build AFTER P-AGENT.11 (the runner these fields configure).
+**Status:** Accepted. **PARTIALLY BUILT** (same day, with 11c's spec v2 bump as planned): `node.retry`
+{max≤3, backoffMs} + `node.timeoutMs` (bounded, fail-closed validation; node-editor inputs) lowered to
+SEGMENT policy — retry budget = MAX of the segment's nodes, timeout = MIN (tightest step constrains the
+spawn), linear backoff capped at 10s, every attempt traced. spec_version 2 accepted alongside 1 (v1
+files stay valid forever; validation is field-driven). `edge.kind: onError` REMAINS DESIGN — additive
+optional fields need no further version bump when it lands.
 
 **Context.** One spawnSync + 120s hard timeout is the whole reliability story; n8n has retry-on-fail, error
 workflows, DLQ patterns.

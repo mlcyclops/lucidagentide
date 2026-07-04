@@ -54,10 +54,46 @@ describe("validateSpec (P-AGENT.1)", () => {
     expect(r.spec?.selfEdit).toBe("individual");
   });
 
-  test("rejects non-objects and wrong spec_version fail-closed", () => {
+  test("rejects non-objects and unknown spec_versions fail-closed; v1 files stay valid (P-AGENT.15)", () => {
     expect(validateSpec(null).ok).toBe(false);
     expect(validateSpec("nope").ok).toBe(false);
-    expect(validateSpec(validSpec({ spec_version: 2 as never })).ok).toBe(false);
+    expect(validateSpec(validSpec({ spec_version: 3 as never })).ok).toBe(false);
+    expect(validateSpec(validSpec({ spec_version: 1 })).ok).toBe(true); // pre-branch files load forever
+  });
+
+  test("v2: branch nodes need ≥2 outgoing edges; choice labels ride the edges (P-AGENT.11c)", () => {
+    const branchy = validSpec({
+      nodes: [
+        { id: "a", kind: "prompt", label: "Assess", prompt: "assess" },
+        { id: "d", kind: "branch", label: "Risky?" },
+        { id: "y", kind: "prompt", label: "Escalate", prompt: "escalate" },
+        { id: "n", kind: "prompt", label: "Proceed", prompt: "proceed" },
+      ],
+      edges: [
+        { id: "e1", from: "a", to: "d" },
+        { id: "e2", from: "d", to: "y", label: "yes" },
+        { id: "e3", from: "d", to: "n", label: "no" },
+      ],
+    });
+    expect(validateSpec(branchy).ok).toBe(true);
+    const lonely = validSpec({
+      nodes: [
+        { id: "a", kind: "prompt", label: "Assess", prompt: "assess" },
+        { id: "d", kind: "branch", label: "Risky?" },
+      ],
+      edges: [{ id: "e1", from: "a", to: "d" }],
+    });
+    const r = validateSpec(lonely);
+    expect(r.ok).toBe(false);
+    expect(r.errors.join()).toContain("at least two outgoing edges");
+  });
+
+  test("v2: retry/timeout bounds are fail-closed (P-AGENT.15)", () => {
+    const good = validSpec({ nodes: [{ id: "a", kind: "prompt", label: "P", prompt: "x", retry: { max: 2, backoffMs: 250 }, timeoutMs: 30_000 }], edges: [] });
+    expect(validateSpec(good).ok).toBe(true);
+    expect(validateSpec(validSpec({ nodes: [{ id: "a", kind: "prompt", label: "P", retry: { max: 9 } }], edges: [] })).errors.join()).toContain("retry.max");
+    expect(validateSpec(validSpec({ nodes: [{ id: "a", kind: "prompt", label: "P", timeoutMs: 100 }], edges: [] })).errors.join()).toContain("timeoutMs");
+    expect(validateSpec(validSpec({ edges: [{ id: "e1", from: "a", to: "b", label: 7 }] } as unknown as Partial<AgentSpec>)).errors.join()).toContain("label");
   });
 
   test("rejects an unknown mode (closed set, invariant #7-style)", () => {

@@ -2573,10 +2573,39 @@ function selectAbNode(id: string | null): void {
   if (!side) return;
   const node = abSpec?.nodes.find((n) => n.id === id);
   if (!node || !abSpec) { side.hidden = true; return; }
-  side.innerHTML = nodeEditorHtml(node, abSpec.tools, abMcpTools); // P-AGENT.12: built-ins + MCP
+  side.innerHTML = nodeEditorHtml(node, abSpec.tools, abMcpTools, abSpec); // P-AGENT.12 catalog + P-AGENT.11c branch edges
   side.hidden = false;
   $("#abLabel", side)?.addEventListener("input", (e) => { node.label = (e.target as HTMLInputElement).value; markAbDirty(); reRenderAbGraph(); });
   $("#abPrompt", side)?.addEventListener("input", (e) => { node.prompt = (e.target as HTMLTextAreaElement).value; markAbDirty(); });
+  // P-AGENT.11c: branch choice labels ride the outgoing edges.
+  $$("[data-edge-label]", side).forEach((inp) =>
+    inp.addEventListener("input", (e) => {
+      const edgeId = (inp as HTMLElement).dataset.edgeLabel ?? "";
+      const edge = abSpec?.edges.find((x) => x.id === edgeId);
+      if (!edge) return;
+      const v = (e.target as HTMLInputElement).value.trim();
+      if (v) edge.label = v;
+      else delete edge.label;
+      markAbDirty();
+      reRenderAbGraph(); // the canvas shows choice labels as edge relations
+    }),
+  );
+  // P-AGENT.15: reliability knobs — cleared inputs remove the field (spec stays minimal).
+  $("#abRetry", side)?.addEventListener("change", (e) => {
+    const v = Math.round(Number((e.target as HTMLInputElement).value));
+    if (Number.isFinite(v) && v >= 1) node.retry = { ...(node.retry ?? {}), max: Math.min(3, v) };
+    else delete node.retry;
+    markAbDirty();
+    renderAbErrors();
+  });
+  $("#abTimeout", side)?.addEventListener("change", (e) => {
+    const raw = (e.target as HTMLInputElement).value.trim();
+    const v = Math.round(Number(raw));
+    if (raw && Number.isFinite(v)) node.timeoutMs = Math.min(600, Math.max(5, v)) * 1000;
+    else delete node.timeoutMs;
+    markAbDirty();
+    renderAbErrors();
+  });
   $("#abTool", side)?.addEventListener("change", (e) => {
     const t = (e.target as HTMLSelectElement).value;
     if (!t) return; // the disabled "(choose a tool)" placeholder

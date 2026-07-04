@@ -57,6 +57,8 @@ export function kindLabel(kind: NodeKind): string {
       return "Sub-agent";
     case "approval":
       return "Approval";
+    case "branch":
+      return "Branch";
   }
 }
 
@@ -76,7 +78,7 @@ export function specToGraphData(spec: AgentSpec): PersonalGraphData {
       trust: "trusted",
       count: degree.get(n.id) ?? 0,
     })),
-    edges: spec.edges.map((ed) => ({ from: ed.from, to: ed.to, relation: "then" })),
+    edges: spec.edges.map((ed) => ({ from: ed.from, to: ed.to, relation: ed.label?.trim() || "then" })), // P-AGENT.11c: choice labels ride the edge
     facts: [],
   };
 }
@@ -347,7 +349,7 @@ export function trustBannerHtml(label: TrustLabel, reason: string): string {
 /** The node-editor flyout for a selected node. Fields are kind-specific; `tools` is the spec's allow-list.
  *  The tool dropdown offers the allow-list PLUS the omp TOOL_CATALOG (picking an un-listed tool auto-adds it
  *  to the allow-list in app.ts — enforced again by the validator + the runtime extension). */
-export function nodeEditorHtml(node: AgentNode, tools: string[], mcpTools: McpCatalogTool[] = []): string {
+export function nodeEditorHtml(node: AgentNode, tools: string[], mcpTools: McpCatalogTool[] = [], spec?: AgentSpec): string {
   const label = `<label class="ab-fld"><span>Label</span>
     <input class="ab-in" id="abLabel" value="${esc(node.label)}" /></label>`;
   let kindFields = "";
@@ -375,11 +377,30 @@ export function nodeEditorHtml(node: AgentNode, tools: string[], mcpTools: McpCa
   } else if (node.kind === "subagent") {
     kindFields = `<label class="ab-fld"><span>Sub-agent spec id</span>
       <input class="ab-in" id="abSub" value="${esc(node.subagentSpecId ?? "")}" /></label>`;
+  } else if (node.kind === "branch") {
+    // P-AGENT.11c: name each outgoing choice. The agent picks EXACTLY one path at run time; the not-taken
+    // subtree (steps, approvals, sub-agents) is skipped.
+    const outs = spec ? spec.edges.filter((e) => e.from === node.id) : [];
+    const nodeById = new Map((spec?.nodes ?? []).map((n) => [n.id, n])); // dynamic per-call lookup
+    kindFields = outs.length
+      ? `<div class="ab-conn-note">Name each choice — the agent picks exactly one path at run time.</div>${outs
+          .map((e) => `<label class="ab-fld"><span>Choice → ${esc(nodeById.get(e.to)?.label ?? e.to)}</span><input class="ab-in" data-edge-label="${esc(e.id)}" value="${esc(e.label ?? "")}" placeholder="e.g. yes / no / escalate" /></label>`)
+          .join("")}`
+      : `<div class="ab-conn-note">Connect this branch to at least two next steps (Connect mode), then name the choices here.</div>`;
   }
+  // P-AGENT.15: reliability knobs for executable step kinds (segment-granular at run time — see ADR-0141).
+  const reliability =
+    node.kind === "prompt" || node.kind === "tool" || node.kind === "subagent"
+      ? `<div class="ab-fld-row">
+      <label class="ab-fld"><span>Retries (0–3)</span><input class="ab-in" id="abRetry" type="number" min="0" max="3" value="${node.retry?.max ?? 0}" /></label>
+      <label class="ab-fld"><span>Timeout (s)</span><input class="ab-in" id="abTimeout" type="number" min="5" max="600" value="${node.timeoutMs ? String(Math.round(node.timeoutMs / 1000)) : ""}" placeholder="default" /></label>
+    </div>`
+      : "";
   return `<div class="ab-editor" data-node="${esc(node.id)}">
     <div class="ab-ed-head"><span class="ab-kind ab-kind-${esc(node.kind)}">${esc(kindLabel(node.kind))}</span></div>
     ${label}
     ${kindFields}
+    ${reliability}
     <button class="ab-del" id="abDelNode" data-tip="Remove this node + its edges">Delete node</button>
   </div>`;
 }
