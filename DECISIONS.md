@@ -10113,3 +10113,67 @@ stdio MCP server that exits after the handshake as a fork loop, so the firewall 
 ADR-0020 (P-MCP.1 - the `mcpServers` seam this reuses, and the guardrail this partially implements + flags),
 ADR-0038 (the `lucid` launcher this extends), ADR-0002 (the scanner IPC), ADR-0019 (the gate policy), the
 P-RAG.1 `wrapRetrieved` pattern (UNTRUSTED_CONTENT delimiting), invariants #3/#4/#5.
+
+## ADR-0148 - P-MCP-GATE.1: in-process gate for MCP tool RESULTS (closing the ADR-0020 guardrail for every MCP server)
+
+**Date:** 2026-07-04
+**Status:** Accepted. **P-MCP-GATE.1 BUILT + tested.** Follows P-AGENTFW.1 (ADR-0147), which flagged this gap.
+**Increment:** P-MCP-GATE.1. Modifies the security-gate surface (a NEW, separately-loaded extension; the
+`security_extension.ts` keystone is left untouched).
+
+### Context
+
+ADR-0020 (L1677-1680) promised that "any [MCP] tool result that re-enters the prompt passes the existing
+fail-closed gate (`scanAndDecide`) and is wrapped in `UNTRUSTED_CONTENT_START/END`." ADR-0147 discovered this
+was **never implemented**: `security_extension.ts`'s `tool_result` hook only does LOC attribution +
+`<task-result>` promotion gating. So **every** P-MCP.1 connector's OUTPUT re-entered the model's context
+**unscanned** — a standing prompt-injection hole. P-AGENTFW.1 closed it only for the agent-firewall's own
+output; this closes it for ALL MCP servers.
+
+### Decision
+
+A **new omp extension**, `harness/omp/mcp_result_gate.ts`, registered on the `tool_result` hook. omp's
+`tool_result` handler may **replace** the result (`ToolResultEventResult`), and the hook runner captures the
+last handler's return; `security_extension` returns nothing for `tool_result`, so this gate's result wins
+regardless of load order. It is a separate `-e` extension so the over-tested keystone is not modified.
+
+- **Source-scoped to MCP results only.** A result is gated iff it comes from an MCP server — `toolName`
+  starts with `mcp__` OR `details.serverName` is set (omp's `mcp/tool-bridge.ts` naming). Local built-in
+  tools (`read`/`bash`/`write`/`edit`/`grep`/`glob`) are **left untouched**: scanning a user's own file read
+  is semantically wrong (not untrusted-external), a false-positive magnet (legit Unicode in source), and a
+  per-result perf cost. This is the same source-scoping philosophy as ADR-0019.
+- **Fail-closed (inv #3).** The result text is run through `scanAndDecide` (strict `DEFAULT_POLICY`, external
+  content). Any scan failure ⇒ block. Quarantine ⇒ the result content is **replaced** with a redacted block
+  notice + `isError: true` — the poison never reaches the model.
+- **Delimited + labeled (inv #5).** A clean/suspicious MCP result is wrapped in `UNTRUSTED_CONTENT_START/END`
+  with a `[mcp-server name=… trust=…]` header, trust-labeled `untrusted`/`suspicious` (**never `trusted`**);
+  embedded delimiter literals are neutralized so a hostile server can't break out of the envelope. Image
+  content blocks pass through after the wrapped text.
+
+### Why a separate extension (not editing security_extension.ts)
+
+`security_extension.ts` + its tests are a load-bearing keystone (AGENTS.md: a failing test there is
+stop-the-line). Adding the result gate as an independent `-e` extension keeps that surface untouched, makes
+the new behavior independently testable, and lets the runner's last-non-undefined-wins semantics compose the
+two cleanly.
+
+### Invariants preserved
+
+#3 fail-closed (unscannable/quarantined MCP result ⇒ withheld); #4 the gate runs in-process in omp's runtime
+(this IS the in-process seam ADR-0020 intended); #5 MCP output is scanned + delimited + trust-labeled; #7
+trust stays the closed set (never `trusted`). **No frozen-contract change** (no `contracts.ts` edit; reuses
+the scanner IPC + gate). The frozen prompt prefix is untouched (the extension adds no prefix bytes).
+
+### File-by-file
+
+- `harness/omp/mcp_result_gate.ts` (new) - the extension + its pure core (`isMcpToolResult`, `mcpServerName`,
+  `neutralizeDelimiters`, `blockNotice`, `wrapUntrusted`).
+- `harness/launcher/lucid_acp.ts` + `desktop/acp_backend.ts` (edit) - load the new `-e` extension alongside
+  the gate (guarded by existsSync; safe if absent).
+- Tests + `make demo-P-MCP-GATE.1`.
+
+### Relates to
+
+ADR-0020 (the guardrail this finally implements), ADR-0147 (the agent-firewall that flagged it; folding its
+`neutralizeDelimiters` into a shared home is a possible later cleanup), ADR-0019 (source-scoped gating),
+ADR-0002 (scanner IPC). Supersedes the "recommended P-MCP-GATE.1 follow-up" noted in ADR-0147.
