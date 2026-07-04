@@ -5830,6 +5830,7 @@ function wire(): void {
     if (t.closest("#bgUpload")) { ($("#bgFile") as HTMLInputElement | null)?.click(); return; }
     if (t.closest("#bgClear")) { void updateChatBg({ image: "", mode: "off" }); return; }
     // P-LOCAL.3 (ADR-0135): Local Providers card
+    if (t.closest("[data-lp-addtoggle]")) { (t.closest(".lp-add") as HTMLElement | null)?.classList.toggle("open"); return; }
     if (t.closest("[data-lp-add]")) { await addLocalProviderFromForm(); return; }
     const lpDel = t.closest("[data-lp-del]") as HTMLElement | null;
     if (lpDel) { const id = (lpDel.closest("[data-lp-id]") as HTMLElement | null)?.dataset.lpId; if (id) await deleteLocalProvider(id); return; }

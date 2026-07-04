@@ -2485,8 +2485,13 @@ pre:hover .code-ide-btn,pre:focus-within .code-ide-btn{opacity:1}
 .lp-pill{font-size:10.5px;font-weight:600;padding:1px 7px;border-radius:999px;border:1px solid var(--line)}
 .lp-pill.ok{color:var(--ok,#4caf50);border-color:color-mix(in srgb,var(--ok,#4caf50) 45%,transparent);background:color-mix(in srgb,var(--ok,#4caf50) 12%,transparent)}
 .lp-pill.warn{color:var(--warn,#e0a030);border-color:color-mix(in srgb,var(--warn,#e0a030) 45%,transparent);background:color-mix(in srgb,var(--warn,#e0a030) 12%,transparent)}
-.lp-add{display:flex;flex-direction:column;gap:6px;background:var(--bg-1);border:1px dashed var(--line);border-radius:var(--r-sm);padding:9px 10px;margin-top:8px}
-.lp-add-h{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--txt-2);font-weight:600}
+.lp-add{background:var(--bg-1);border:1px dashed var(--line);border-radius:var(--r-sm);padding:9px 10px;margin-top:8px}
+.lp-add-h{display:flex;align-items:center;gap:6px;width:100%;background:none;border:none;padding:0;margin:0;cursor:pointer;font-size:12px;color:var(--txt-2);font-weight:600;text-align:left}
+.lp-add-h:hover{color:var(--txt)}
+.lp-add-chev{margin-left:auto;display:inline-flex;transition:transform .15s ease}
+.lp-add.open .lp-add-chev{transform:rotate(180deg)}
+.lp-add-body{display:none;flex-direction:column;gap:6px;margin-top:8px}
+.lp-add.open .lp-add-body{display:flex}
 .lp-add-row{display:flex;gap:6px}
 .lp-add-row .lp-auth-sel{flex:0 0 auto;max-width:52%}
 .lp-add-row #lpKey{flex:1;min-width:0}

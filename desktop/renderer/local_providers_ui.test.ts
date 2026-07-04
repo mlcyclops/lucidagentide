@@ -17,7 +17,7 @@ function def(over: Partial<LocalProviderDef> = {}): LocalProviderDef {
 }
 
 describe("card body", () => {
-  test("empty state prompts to add; add form has the fields + the add button", () => {
+  test("empty state prompts to add; add form has the fields + the add button, inside a collapsible section", () => {
     const h = localProvidersCardBody([], new Set(), true);
     expect(h).toContain("No local providers yet");
     expect(h).toContain('id="lpName"');
@@ -26,6 +26,10 @@ describe("card body", () => {
     expect(h).toContain('id="lpAuth"');
     expect(h).toContain('id="lpKey"');
     expect(h).toContain("data-lp-add");
+    // the add form is its own accordion (collapsed by default — no `open` class on .lp-add)
+    expect(h).toContain("data-lp-addtoggle");
+    expect(h).toContain("lp-add-body");
+    expect(h).not.toContain('class="lp-add open"');
   });
   test("lists a provider with its endpoint, a delete button, and a per-row id", () => {
     const h = localProvidersCardBody([def()], new Set(["lpkey_lp_dgx"]), true);

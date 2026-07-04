@@ -64,15 +64,17 @@ export function localProvidersCardBody(providers: LocalProviderDef[], vaultRefs:
     ${list}
     ${vaultWarn}
     <div class="lp-add">
-      <div class="lp-add-h">${icon("plus", 12)} Add a local provider</div>
-      <input class="prov-key" id="lpName" placeholder="Name (e.g. DGX Spark · Vienna VA)" />
-      <input class="prov-key" id="lpBaseUrl" placeholder="Base URL (e.g. http://localhost:11434/v1)" />
-      <input class="prov-key" id="lpModels" placeholder="Model ids, comma-separated (e.g. llama3.1:8b, qwen2.5:14b)" />
-      <div class="lp-add-row">
-        <select class="prov-key lp-auth-sel" id="lpAuth">${authOpts}</select>
-        <input class="prov-key" id="lpKey" type="password" placeholder="API key / token (stored in the vault)" autocomplete="off" />
+      <button class="lp-add-h" data-lp-addtoggle type="button">${icon("plus", 12)} <span>Add a local provider</span><span class="lp-add-chev">${icon("chevron", 14)}</span></button>
+      <div class="lp-add-body">
+        <input class="prov-key" id="lpName" placeholder="Name (e.g. Hybrid/Private Cloud LLM)" />
+        <input class="prov-key" id="lpBaseUrl" placeholder="Base URL (e.g. http://localhost:11434/v1)" />
+        <input class="prov-key" id="lpModels" placeholder="Model ids, comma-separated (e.g. llama3.1:8b, gemma3:12b)" />
+        <div class="lp-add-row">
+          <select class="prov-key lp-auth-sel" id="lpAuth">${authOpts}</select>
+          <input class="prov-key" id="lpKey" type="password" placeholder="API key / token (stored in the vault)" autocomplete="off" />
+        </div>
+        <button class="btn-mini ok" data-lp-add>${icon("check", 12)} Add provider</button>
       </div>
-      <button class="btn-mini ok" data-lp-add>${icon("check", 12)} Add provider</button>
     </div>`;
 }
 
