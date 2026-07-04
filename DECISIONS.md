@@ -9040,3 +9040,260 @@ agent toggle persists + restarts. `.omp/codegraph-symbol.json` gitignored. No co
 
 ADR-0127 (the file-level code graph this extends), ADR-0096 (the omp `-e` tool-extension pattern reused),
 `typescript` compiler API.
+
+## ADR-0129 - P-AGENT: Agent Builder - visual workflow canvas that compiles to gated LUCID agents (DESIGN)
+
+**Date:** 2026-07-03
+**Status:** Accepted. Design + kickoff decisions RESOLVED. **The core epic is COMPLETE: P-AGENT.1/.2/.3/.4/.5/.6
+BUILT + tested, and P-AGENT.4-live wired end-to-end (in-app "Run ▸" button) + VERIFIED against a live Claude
+model.** A Builder-authored agent can be authored on the canvas, compiled, quarantine-gated, RUN live inside
+LUCID under the security gate + its tool allow-list (returned "Paris is the capital of France." on Haiku; the
+allow-list extension hard-blocks disallowed tools, A/B proven), and exported portably. Remaining: streaming +
+`agent_run_*` provenance events + egress registration (additive), and the deferred ADK adapters (ADR-A013). P-AGENT.1: Agent Spec + fail-closed DAG
+validator + DuckDB store + migration 0010 + new contracts values. .2: workflow canvas (`agent_builder.ts` +
+`file_store.ts` + `/api/agent` + `app.ts` wiring), verified live. .3: compiler `compiler.ts` `buildAgent(spec)
+-> AgentBundle` (tail prompt + generated try/catch-wrapped BUSL-headered omp allow-list `-e` extension +
+manifest; fail-closed + injection-safe; a test imports+runs the emitted extension). .4a: `runner.ts`
+`materializeBundle` + `composeBuiltAgentArgs` (gate-ALWAYS-first argv). .5: `import_gate.ts` untrusted-spec
+quarantine gate (keystone-#2 analogue: only a clean LOCAL spec auto-runs; imported/poisoned -> quarantined,
+proven vs the real scanner). .6: `export.ts` portable, tamper-evident (SHA-256 digest) per-target export
+(electron/web/cloud); deploy adapters + KMS signing are add-on. ADKs planned, not built (user's directive).
+**Increment:** design ADR for the P-AGENT epic (P-AGENT.1 .. P-AGENT.7). Each phase below is its own future
+session/increment with its own demo target; the frozen-contract touches (contracts.ts, a DuckDB migration,
+the prompt prefix) each get their own ADR when built.
+
+### Context
+
+The user wants a **major new "Agent Builder" capability**: a visual **workflow canvas** on which the user
+describes an agent, and **LUCID generates the agent's code for them** (they never hand-write it). The built
+agents must:
+
+1. **Run inside LUCID** through the same security-gated omp runtime, so they inherit LUCID's protections
+   (fail-closed scanner gate, delimited/untrusted content, egress whitelist + credential vault, provenance).
+2. Carry **all instructions needed to use LUCID's core features** when hosted inside LUCID.
+3. For **enterprise**, be exportable from the **private add-on repo** (`lucidagentIDEaddon`) as a standalone
+   **Electron app, web-hosted service, or cloud deployment**, and - as an enterprise-only extra - target the
+   **Google Agent Development Kit (ADK)**, the **AWS Strands Agents SDK**, and the **Azure AI Foundry Agent
+   Service (Microsoft Agent Framework)** for easy hosting. The ADK work is **planned only** in this ADR.
+4. Bake in the **lessons learned** across this project (fail-closed, lazy-load heavy deps, try/catch-wrapped
+   tool registration, delimited untrusted content, stable IDs, licensing headers, DuckDB migrations).
+
+This ADR is the architecture + phased roadmap. It deliberately writes **no feature code** yet: a capability
+this size violates "one increment per session" if built blind, and the user asked to plan the ADKs and hold.
+
+### Decision - the architecture
+
+Five layers, each mapping onto an EXISTING proven surface so we extend omp and reuse patterns (invariant #1):
+
+**1. The Agent Spec (the single source of truth).** A canonical, versioned, validated JSON document that fully
+describes an agent: identity/persona, model, the ordered **workflow** (nodes = steps: prompt / tool-call /
+sub-agent / branch / loop / human-approval; edges = control+data flow), the **tool allow-list** (only tools
+the agent may call), egress needs (whitelist entries it requests), and memory scope. The canvas edits it; the
+compiler reads it; nothing else is authoritative. Validated with the omp-injected TypeBox (same shim the tools
+use) so an invalid spec is rejected fail-closed. Every spec + node + edge has a stable `*_id` (invariant #9).
+The spec is **untrusted data** when imported from outside and is scanned before use (invariant #5).
+
+**2. The Canvas (visual workflow editor).** A new right-edge surface `#agentBuilder` (rail glyph + panel),
+built exactly like the KG canvas: reuse the hand-rolled zero-dep SVG graph in `desktop/renderer/graph.ts`
+(`mountGraph` / `GraphHandle`) and the node/side-panel/resizer patterns from the KG panel, plus the
+mutual-exclusivity rule (opening it closes Settings/KG/Preview/IDE). Nodes are workflow steps; the side panel
+edits the selected node; drag creates edges. No new dependency. New pure builder `desktop/renderer/
+agent_builder.ts` (HTML/markup, testable without a browser, like `about.ts`), new `/api/agent/*` routes on the
+bridge. The canvas serializes to / hydrates from the Agent Spec.
+
+**3. The Compiler (spec -> generated agent code).** A pure function `buildAgent(spec) -> AgentBundle` that emits
+a self-contained bundle following the FROZEN TEMPLATES already in the repo:
+   - a system prompt assembled through `harness/prompt/assembler.ts` (frozen prefix layers 1-4 unchanged; the
+     agent's persona/skills/workflow go in the volatile TAIL - invariant #6, no prefix churn);
+   - one or more omp `-e` extensions in the **exact `codegraph_extension.ts` shape** - a try/catch-wrapped
+     `export default function ext(pi){ pi.registerTool({name,label,description,approval,parameters:T.Object(..),
+     execute}) }` so a broken generated tool is simply ABSENT and never blocks the runtime (fail-soft, the
+     lesson from the `symbol_graph` lazy-load hardening this same session);
+   - the LUCID core-feature instructions (how to use the gate, preview, egress vault, codegraph_query) as
+     generated prompt/policy text;
+   - the BUSL-1.1 SPDX header on every emitted first-party file (the pre-commit hook + CI check enforce it).
+The compiler is where "lessons learned" are codified once and stamped into every agent it produces.
+
+**4. The In-LUCID Runtime.** A built agent runs through the SAME `desktop/acp_backend.ts` -> `omp acp` path as
+chat, with the **mandatory fail-closed security gate loaded first** (`harness/omp/security_extension.ts`) and
+its tool allow-list + egress whitelist applied. The autonomous multi-step case reuses the **goal loop**
+(`Backend.runGoal`, `desktop/goal_memory.ts`, `desktop/loop_report.ts`) - it is already "run a built agent to
+a condition, gated, with an After-Action Report." A built agent is thus a saved spec + its compiled bundle +
+a Run action; every tool call is scanned, every egress gated, every step a provenance event. No new trust path.
+
+**5. Persistence.** A new numbered DuckDB migration `harness/memory/migrations/0010_agent_specs.sql` (never edit
+in place - invariant #10) storing specs + build/run lineage, reusing omp Snowflake ids where available.
+
+**Enterprise export (public core writes a portable bundle; the add-on deploys it).** The public core's job ends
+at emitting a **portable, signed AgentBundle** (spec + generated code + LUCID-core instructions + manifest).
+The `lucidagentIDEaddon` private repo owns the **deploy targets**: Electron packaging, web hosting, and cloud
+deployment, plus the ADK adapters below. This mirrors the existing public/add-on split (ADR-0068/0069/A012:
+public ships schema + enforcement; the add-on ships the enterprise connectors). Export is entitlement-gated
+through the existing managed-config path.
+
+### The ADK plan (enterprise, add-on repo, PLANNED - no work yet)
+
+Deferred to a future **add-on ADR (ADR-A013)**. The AgentBundle is the neutral intermediate representation; each
+adapter lowers it to a vendor SDK. Three targets, each an enterprise "easy hosting" option:
+
+| Target | SDK / service | Lowering sketch | Hosting |
+|--------|---------------|-----------------|---------|
+| Google | **Agent Development Kit (ADK)** (open-source, Python/Java) | spec workflow -> ADK agents/tools; LUCID tools -> ADK `FunctionTool` | Vertex AI Agent Engine / Cloud Run |
+| AWS | **Strands Agents SDK** (model-driven) | spec -> Strands `Agent` + `@tool` fns; allow-list -> tool registry | Lambda / Fargate / EKS / Bedrock AgentCore |
+| Azure | **Azure AI Foundry Agent Service** (Microsoft Agent Framework, the Semantic-Kernel + AutoGen successor) | spec -> Foundry agent + tool definitions | Azure AI Foundry / Container Apps |
+
+Each adapter must preserve the LUCID invariants it can (tool allow-list, egress whitelist, delimited untrusted
+content) and clearly LABEL which host-side protections are outside LUCID's fail-closed gate once the agent runs
+off-platform. This honesty note is a hard requirement, not a footnote. Scope, feasibility, and the
+protection-parity matrix are the first deliverable of ADR-A013; nothing is built until then.
+
+### Lessons-learned the generator codifies into every agent
+
+Fail-closed on any missing scan; heavy/optional deps lazy-loaded so a missing dep degrades one feature not the
+engine (the `symbol_graph` fix this session, ADR from packaging incident); tool registration try/catch-wrapped
+(broken tool = absent, never a crash); untrusted content always delimited and late; stable `*_id`s; BUSL-1.1
+headers; DuckDB via numbered migrations; no em dashes in UI copy; never widen a managed-policy ceiling.
+
+### Invariants preserved
+
+#1 extend-omp (canvas + `-e` extensions + hooks, no fork); #3 fail-closed (invalid spec / failed scan / dead
+sidecar -> block, never run); #4 in-process gate (built agents run under the same live `pre` hook); #5 untrusted
+specs delimited + scanned before use; #6 frozen prefix (agent content lives in the tail; no PREFIX_VERSION bump
+unless a layer 1-4 change is truly needed, then its own ADR); #7/#8 any new TrustLabel is disallowed (closed
+set) and new EventNames (e.g. `agent_spec_saved`, `agent_built`, `agent_run_started`, `agent_run_gated`) land in
+`contracts.ts` as their own frozen-contract increment; #9 stable ids; #10 DuckDB migration `0010`, additive only.
+
+### Phased roadmap (each = one increment + `make demo-*` + PROGRESS 3 lines)
+
+- **P-AGENT.1** - Agent Spec contract + TypeBox validator + `0010_agent_specs.sql` + new EventNames. Demo:
+  round-trip a valid spec through save/load; a malformed spec is rejected fail-closed.
+- **P-AGENT.2** - Canvas UI (rail + `#agentBuilder` panel + `agent_builder.ts` builder + `mountGraph` reuse +
+  `/api/agent/*`). Demo: build a 3-node workflow on the canvas and serialize it to a valid spec.
+- **P-AGENT.3** - Compiler `buildAgent(spec) -> AgentBundle` emitting header-carrying, try/catch-wrapped omp
+  extensions + tail-only prompt. Demo: compile a spec; the emitted extension typechecks + passes the license check.
+- **P-AGENT.4** - In-LUCID run through omp + the fail-closed gate (Run action, provenance events, goal-loop reuse
+  for autonomous agents). Demo: run a built agent end-to-end; the gate blocks an injected malicious step.
+- **P-AGENT.5** - Untrusted-spec safety: scan + a promotion-style gate so an imported/suspicious spec can never
+  auto-run (keystone #2 analogue). Demo: a spec from an untrusted source is quarantined, not executed.
+- **P-AGENT.6** - Enterprise export: emit a portable, signed AgentBundle + target manifest (Electron/web/cloud),
+  entitlement-gated; the add-on consumes it. Demo: export a bundle whose structure matches each target contract.
+- **P-AGENT.7** (add-on, ADR-A013, DEFERRED) - Google ADK / AWS Strands / Azure Foundry adapters. Planned only.
+
+### Kickoff decisions (resolved 2026-07-03, confirmed with the user)
+
+1. **Workflow model: v1 = DAG only** (nodes + directed acyclic edges). The validator rejects cycles fail-closed.
+   Branch/loop nodes are a later P-AGENT increment, added once the spine is proven.
+2. **Trust identity: new values in `contracts.ts`** - a dedicated `AgentMode` (e.g. `built-agent`) and a dedicated
+   `ExecutionProfile` so built agents are distinctly labeled in provenance/audit. Frozen-contract change =
+   folded into P-AGENT.1 as its own contract touch (its own ADR note).
+3. **Self-modification (spec self-editing at runtime): POLICY-GATED, split by tier.**
+   - **Enterprise: OFF by default, controlled via managed policy** on the add-on's policy-management surfaces
+     (`lucidagentIDEaddon`). Reuse the `clampToManaged` ceiling (ADR-0068): managed config can deny self-edit;
+     tighten-only, never widened by the user.
+   - **Individuals: ON (easier adoption, fewer functional breaks) but SANDBOXED:** self-edits + first runs
+     execute in **audit mode / non-destructive dry-run** first (reuse the Goal Loop preflight + exec-gate dry-run
+     posture); a **lessons-learned feedback loop** writes outcomes to memory + `.md` files (mirror
+     `goal_memory.ts` + the After-Action Report); **secrets** flow through the OS-encrypted credential vault
+     (ADR-0107) and the builder **always tells the user where + how secrets are stored and advises on safety** -
+     never silent.
+4. **Bundle signing:** scheme deferred to P-AGENT.6; not blocking P-AGENT.1.
+
+### Cross-cutting Builder principles (user directive, apply across the whole epic)
+
+- **Don't assume user expertise.** The Builder **lints, tests, and uses TDD** when generating agents - it emits
+  tests and runs them (reuse the repo's test + preflight patterns), never just dumps code.
+- **Offer authoritative docs.** When a choice depends on an external SDK/API, the Builder **asks whether the user
+  wants LUCID to search official developer docs**, then **recommends an easy-to-understand course of action**.
+- **Safety-first secrets UX** (see 3 above): disclose storage location + method and advise on safety every time.
+- **Reuse Goal Loop engineering** for autonomous / self-editing runs: preflight, budget, stall detection, AAR.
+
+These sharpen the roadmap: **P-AGENT.1** now explicitly ships the new `AgentMode`/`ExecutionProfile` values, a
+`selfEdit` policy field on the spec (default on for individual, clampable off by managed config), and the
+DAG-only (cycle-rejecting) validator. **P-AGENT.4/.5** add the audit-mode dry-run + the lessons-learned feedback
+loop before any destructive self-edit runs.
+
+### Relates to
+
+ADR-0096 (omp `-e` tool-extension pattern - the generated-agent template), ADR-0128 (`codegraph_extension.ts`,
+the exact try/catch-wrapped `registerTool` shape reused), ADR-0046 (the goal loop = the autonomous run harness),
+ADR-0106/0107 (network whitelist + credential vault = built-agent egress), ADR-0068/0069/A012 (public-core vs
+private-add-on split for the enterprise surface), the same-session `symbol_graph` lazy-load hardening (the
+lazy-heavy-dep + fail-soft lesson the compiler stamps in). Future: ADR-A013 (the ADK adapters).
+
+## ADR-0130 - P-AGENT.8: Conversational Agent Builder - chat drafts a secure agent, then hands off to the canvas (DESIGN + P-AGENT.8.1 BUILT)
+
+**Date:** 2026-07-03
+**Status:** Accepted. **FEATURE-COMPLETE + verified live against Opus.** P-AGENT.8.1 (secret guardrail) + .8.2
+(chat->canvas handoff `agent_builder_open`) + .8.3 (`AGENT_BUILDER_POLICY`, frozen-prefix v7->v8) + .8.4
+(Secrets & connections panel) + .8.5 (Approve connection -> whitelist `upsertEntry`, "How do I get this?"
+doc-assist) + .8.6 (the `/agent` command that starts the interview) all BUILT + tested. Verified live: typing a
+build request (or `/agent`) makes the agent interview the user, draft a spec, call `agent_builder_open`; the
+canvas opens pre-populated; the Secrets & connections panel adds credentials to the vault (agent never sees
+values), approves connections into the whitelist, and doc-assists token setup. Detection keys on the unique
+`specJson` arg (omp renders a custom tool's TITLE as a summary, not the name). Optional future: tighten the
+policy to invoke sooner; per-entry auth binding; the site-login->screen-capture->ingest collab.
+**Increment:** P-AGENT.8.1 .. P-AGENT.8.6. Extends ADR-0129 (the Agent Builder). PREFIX_VERSION bump for .3 is
+its own increment.
+
+### Context
+
+The user wants a SEAMLESS, guardrailed on-ramp: in a normal chat window, describe a goal ("search the internet
+for DoD/DoW business-development opportunities, find who's applying, connect to my GovWin account, connect to
+Salesforce…"), and LUCID (a) recognizes it's automatable, (b) explains how it would be built, (c) confirms the
+spec, then (d) OPENS the Agent Builder pre-populated and builds the workflow - so the user never has to learn
+the canvas. It must be GUARDRAILED so the user can't accidentally build something insecure. The load-bearing
+rule (user's words): the agent must NEVER collect secret values. Credentials (GovWin password, a Salesforce API
+token the user may not know how to generate) go in the OS-encrypted vault; the agent DECLARES which secrets it
+needs and, where the user needs help, READS the official docs to walk them through generating a token - but the
+token itself only ever lands in the vault.
+
+### Decision - the flow + the guardrails
+
+The chat agent, steered by a new **AGENT_BUILDER_POLICY**, recognizes an automatable request, explains the plan
+in plain language, confirms specifics, and calls an **`agent_builder_open`** tool with a DRAFTED Agent Spec.
+`acp_backend` detects that tool_call (the `preview_open` -> `previewOpenPath` -> `preview-available` pattern,
+ADR-0096) and opens the Agent Builder canvas PRE-POPULATED with the draft; the user reviews/adjusts and
+confirms. Secrets + egress are handled by dedicated UI, never by the agent collecting values.
+
+**The security spine (grounded in the existing vault + whitelist):**
+- **Secrets are DECLARATIONS, never values.** The Agent Spec gains `secrets: SecretRef[]` (`{ name, kind,
+  purpose }`, kinds mirror `cred_vault.ts` AuthKind: jwt/oauth/saml/pem/apikey/basic). The value lives ONLY in
+  the OS-encrypted vault (`storeCredential`, never crosses to the renderer); the runtime injects it. A SecretRef
+  has NO value field - and the validator rejects a `secrets[]` entry that carries `value`/`secret`.
+- **The secret GUARDRAIL (keystone).** `harness/agent/secret_guard.ts` `scanSpecForSecrets` inspects every
+  free-text field (name/description/persona/node labels+prompts/secret purpose) for APPARENT secret VALUES
+  (PEM keys, AWS/OpenAI-style/GitHub/Slack/Google key shapes, bearer tokens, `password/api_key = <value>`).
+  `assertSecretFree` throws on any hit and is wired into `buildAgent` (compile), `saveSpecFile` + `saveSpec`
+  (persist), and (transitively via compile) the run path - so a credential can NEVER be compiled, saved, or run
+  inside an agent. Declared refs + env-var NAMES + prose stay clean (high-signal detectors, proven by tests).
+- **Egress = declared + approved.** The spec's `egress[]` become PROPOSED `WhitelistEntry`s the user approves
+  (existing `network_whitelist.ts` / `egress_policy.ts`); an entry's `auth?: AuthRef` points at a vault ref.
+- **Doc-assisted setup.** When the user doesn't know how to make a token, the agent reads the vendor's OFFICIAL
+  docs (web/RAG) and walks them through it - the resulting secret is pasted into the vault UI, not the chat.
+
+### Phased roadmap
+
+- **P-AGENT.8.1 (BUILT):** `SecretRef` in the spec + validator + `secret_guard.ts` (`scanSpecForSecrets` /
+  `assertSecretFree`) wired into compile + both save paths. `make demo-P-AGENT.8.1`. 9 new tests; full suite
+  1191 pass. This is the security FOUNDATION - everything below builds a secure spec that can't embed a secret.
+- **P-AGENT.8.2:** the `agent_builder_open` omp tool (`harness/omp/agent_builder_extension.ts`) + `acp_backend`
+  detection + the renderer opens the canvas pre-populated with the drafted spec (runs `assertSecretFree` +
+  `validateSpec` first; a leaky/invalid draft is refused, never opened).
+- **P-AGENT.8.3:** `AGENT_BUILDER_POLICY` in `assembler.ts` (the guardrail prompt: recognize automatable asks,
+  explain, NEVER collect secret values - declare refs + point to the vault, declare egress for approval, read
+  official docs for token setup, confirm before opening). PREFIX_VERSION 7 -> 8 + its own ADR note.
+- **P-AGENT.8.4:** a "Secrets & connections" panel in the canvas - lists the spec's SecretRefs with "Add to
+  vault" buttons (-> `cred_vault` via the existing IPC) + the egress domains to approve (-> whitelist).
+- **P-AGENT.8.5:** doc-assisted API setup surfaced in the flow (read official docs -> step-by-step token guide).
+
+### Invariants preserved
+
+Secrets never leave the vault (the guardrail + the no-value SecretRef); #5 untrusted content (a drafted spec is
+scanned - the import gate + the secret guard); #6 frozen prefix (the policy bump is its own increment w/ ADR);
+the handoff reuses the proven `preview_open` tool_call detection (#1 extend-omp, no fork).
+
+### Relates to
+
+ADR-0129 (the Agent Builder this extends), ADR-0096 (the `preview_open` handoff pattern), ADR-0106/0107 (the
+network whitelist + OS-encrypted credential vault this builds on), ADR-0114 (the ENGAGEMENT_POLICY pattern for a
+new frozen policy block), the P-AGENT.5 import gate (the sibling untrusted-content guard).

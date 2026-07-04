@@ -30,6 +30,9 @@ export const PROFILE_CAPS: Record<ExecutionProfile, ProfileCaps> = {
   "remote-runner": { canWrite: true, canExec: true, canNetwork: true, isolation: "worktree" },
   "read-only-audit": { canWrite: false, canExec: false, canNetwork: false, isolation: "worktree" },
   quarantine: { canWrite: false, canExec: false, canNetwork: false, isolation: "worktree" },
+  // ADR-0129 (P-AGENT.1): a Builder-authored agent runs capable but ISOLATED (worktree) and always under the
+  // fail-closed gate + its tool allow-list + egress whitelist. Its non-destructive dry-run uses read-only-audit.
+  "built-agent": { canWrite: true, canExec: true, canNetwork: true, isolation: "worktree" },
 };
 
 export function caps(profile: ExecutionProfile): ProfileCaps {
@@ -39,13 +42,16 @@ export function isReadOnly(profile: ExecutionProfile): boolean {
   return !PROFILE_CAPS[profile].canWrite && !PROFILE_CAPS[profile].canExec;
 }
 
-/** Restrictiveness rank (higher = more restrictive). Used to detect downgrades. */
+/** Restrictiveness rank (higher = more restrictive). Used to detect downgrades. Only relative order matters.
+ *  built-agent sits just above trusted-local: capable, but isolated + gated, so a request for it that gets
+ *  downgraded (suspicious chain) still registers as a downgrade. */
 const RANK: Record<ExecutionProfile, number> = {
   "trusted-local": 0,
-  "remote-runner": 1,
-  "container-local": 2,
-  "read-only-audit": 3,
-  quarantine: 4,
+  "built-agent": 1,
+  "remote-runner": 2,
+  "container-local": 3,
+  "read-only-audit": 4,
+  quarantine: 5,
 };
 
 export interface ProfileDecisionInput {

@@ -14,7 +14,7 @@ import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { ACPClient } from "./acp.ts";
-import { BUILD_POLICY, DELEGATION_POLICY, ENGAGEMENT_POLICY, PREVIEW_POLICY } from "../harness/prompt/assembler.ts";
+import { AGENT_BUILDER_POLICY, BUILD_POLICY, DELEGATION_POLICY, ENGAGEMENT_POLICY, PREVIEW_POLICY } from "../harness/prompt/assembler.ts";
 import { currentWorkspace } from "./workspace.ts";
 import { learnFromTurn, recallPreamble } from "./personal.ts";
 import { buildUserTurnPreamble } from "./preamble.ts";
@@ -40,6 +40,8 @@ import { type Automation, listAutomations, nextDueAutomation, updateAutomation }
 import { type EgressChoice, egressDecisionDetailed, egressPosture, extractHost, isLocalFileTarget, recordEgress } from "./egress_policy.ts";
 import { withinCallBudget } from "./network_whitelist.ts";
 import { previewOpenPath, previewablePath } from "./preview_resolve.ts";
+import { agentBuilderOpenSpec } from "../harness/agent/handoff.ts"; // P-AGENT.8.2: chat -> Agent Builder handoff
+import type { AgentSpec } from "../harness/agent/spec.ts";
 import { gateDenyReason } from "./gate_audit.ts";
 import { type ExecChoice, type ExecClass, classifyCommand, classifyEval, elicitationApproval, execStore, execVerdict, recordExec } from "./exec_policy.ts";
 import { toolFailureReason } from "./tool_failure.ts";
@@ -105,6 +107,7 @@ const ASKSAGE = join(REPO, "harness", "omp", "asksage_extension.ts");
 // P-PREVIEW.3a (ADR-0096) — DRAFT: registers the agent-callable `preview_open` tool. Defensively wrapped so
 // a registration failure never breaks omp launch (see preview_extension.ts). Only added when the file exists.
 const PREVIEW_EXT = join(REPO, "harness", "omp", "preview_extension.ts");
+const AGENT_BUILDER_EXT = join(REPO, "harness", "omp", "agent_builder_extension.ts"); // P-AGENT.8.2: chat -> canvas handoff tool
 // P-KG-SYM.1: registers the read-only `codegraph_query` tool. Added ONLY when the user opted in
 // (settings.codeGraphAgent) AND the file exists — so a bad/absent extension never blocks omp launch.
 const CODEGRAPH_EXT = join(REPO, "harness", "omp", "codegraph_extension.ts");
@@ -132,6 +135,7 @@ export type ChatEvent =
   | { type: "block"; tool: string; reason: string; severity: string; findings: string; id?: string; quarantined?: boolean }
   | { type: "permission"; id: string; tool: string; detail: string; options: { optionId: string; name: string; kind?: string }[]; url?: string; egress?: boolean; localFile?: boolean; exec?: boolean; program?: string; reason?: string; danger?: boolean }
   | { type: "preview-available"; path: string } // P-PREVIEW.2 (ADR-0096): the agent wrote a previewable file
+  | { type: "agent-builder-open"; spec: AgentSpec } // P-AGENT.8.2 (ADR-0130): open the Agent Builder pre-populated
   | { type: "usage"; used: number; size: number; cost: number }
   // P-GOAL.1 (ADR-0046): /goal loop events — an iteration begins, the separate checker's verdict,
   // the loop met its condition, or it stopped (cap / no-progress).
@@ -280,10 +284,11 @@ class Backend {
         if (loadSettings().developerMode) process.env.LUCID_ASKSAGE_DEBUG = "1"; else delete process.env.LUCID_ASKSAGE_DEBUG;
         // ADR-0033: also append the build / anti-over-refusal policy so the chat model doesn't decline
         // a buildable task (e.g. "make a game/graphics/music in one HTML file") by mis-reading its scope.
-        const appendedPolicy = `${DELEGATION_POLICY}\n\n${BUILD_POLICY}\n\n${PREVIEW_POLICY}\n\n${ENGAGEMENT_POLICY}`;
+        const appendedPolicy = `${DELEGATION_POLICY}\n\n${BUILD_POLICY}\n\n${PREVIEW_POLICY}\n\n${ENGAGEMENT_POLICY}\n\n${AGENT_BUILDER_POLICY}`;
         const previewArgs = existsSync(PREVIEW_EXT) ? ["-e", PREVIEW_EXT] : []; // P-PREVIEW.3a (draft)
         const codegraphArgs = loadSettings().codeGraphAgent && existsSync(CODEGRAPH_EXT) ? ["-e", CODEGRAPH_EXT] : []; // P-KG-SYM.1: opt-in
-        const acp = new ACPClient(ompBin(), ["acp", "-e", GATE, "-e", ASKSAGE, ...previewArgs, ...codegraphArgs, ...isoCfg, "--append-system-prompt", appendedPolicy], currentWorkspace());
+        const agentBuilderArgs = existsSync(AGENT_BUILDER_EXT) ? ["-e", AGENT_BUILDER_EXT] : []; // P-AGENT.8.2: agent_builder_open
+        const acp = new ACPClient(ompBin(), ["acp", "-e", GATE, "-e", ASKSAGE, ...previewArgs, ...codegraphArgs, ...agentBuilderArgs, ...isoCfg, "--append-system-prompt", appendedPolicy], currentWorkspace());
         acp.onNotify = (method, params) => {
           if (method !== "session/update") return;
           const u = params?.update ?? params;
@@ -351,6 +356,14 @@ class Backend {
                 const pvRaw = previewOpenPath(String(u.title ?? ""), ri) ?? previewablePath(String(u.kind ?? u.title ?? ""), ri);
                 const pv = pvRaw ? absPath(pvRaw) : pvRaw; // resolve a relative write path to absolute so the panel can render it
                 if (pv) this.emit({ type: "preview-available", path: pv });
+                // P-AGENT.8.2 (ADR-0130): the agent's `agent_builder_open` tool call opens the Agent Builder
+                // pre-populated. Re-parsed + validated + secret-scanned here (authoritative) before it opens.
+                // NOTE: omp renders a custom tool's call TITLE as a human summary (e.g. "Opening agent builder
+                // for X"), NOT the tool name — so we key on the unique `specJson` arg (in rawInput OR input),
+                // not the title. Fail-closed: a leaky/invalid draft parses to null here and never opens.
+                const abArgs = (u.rawInput ?? (u as { input?: unknown }).input ?? ri) as unknown;
+                const abSpec = agentBuilderOpenSpec(String(u.title ?? ""), abArgs);
+                if (abSpec) this.emit({ type: "agent-builder-open", spec: abSpec });
               }
               break;
             }

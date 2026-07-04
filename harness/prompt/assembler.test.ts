@@ -47,6 +47,13 @@ test("prefix changes ONLY when the version is bumped", () => {
   expect(__test.sha256(__test.buildPrefix("1"))).not.toBe(__test.sha256(__test.buildPrefix("2")));
 });
 
+test("the agent-builder guardrail is in the frozen prefix (P-AGENT.8.3)", () => {
+  // The chat agent must always be steered to build agents securely + never collect secret values.
+  expect(FROZEN_PREFIX).toContain("<agent-builder>");
+  expect(FROZEN_PREFIX).toContain("agent_builder_open");
+  expect(FROZEN_PREFIX).toContain("NEVER ask for, accept, or embed a secret VALUE");
+});
+
 test("untrusted retrieved content never appears before the breakpoint", () => {
   const marker = "IGNORE_ALL_PREVIOUS_INSTRUCTIONS_marker_42";
   const out = assemblePrompt({

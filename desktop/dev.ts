@@ -19,6 +19,11 @@ import { buildChangeGraph, buildSchemaChanges, renderAnnexes } from "../harness/
 import { loadChatBg, saveChatBg, type ChatBg } from "./chat_bg.ts"; // P-APPEAR.1: personalized chat background
 import { ingestCodeGraph, loadCodeGraph } from "./code_graph.ts"; // P-KG-CODE.1: workspace code graph
 import { ingestSymbolGraph, loadSymbolGraph } from "./symbol_graph.ts"; // P-KG-SYM.1: AST symbol graph
+import { saveSpecFile, loadSpecFile, listSpecFiles, deleteSpecFile } from "../harness/agent/file_store.ts"; // P-AGENT.2b: Agent Builder spec persistence
+import { validateSpec } from "../harness/agent/spec.ts"; // P-AGENT.1: fail-closed Agent Spec validation
+import { buildAgent } from "../harness/agent/compiler.ts"; // P-AGENT.3: spec -> AgentBundle
+import { exportBundle, writeExportPackage, EXPORT_TARGETS, type ExportTarget } from "../harness/agent/export.ts"; // P-AGENT.6: enterprise export
+import { runBuiltAgent } from "./agent_run.ts"; // P-AGENT.4-live: run a built agent through omp under the gate
 import { archiveBrief, deleteBrief, listBriefs, readBrief, restoreBrief, saveBrief } from "./report_store.ts";
 import { OpenAiCompatibleTtsBackend } from "../harness/brief/tts_backend.ts";
 import { ElevenLabsTtsBackend, ElevenLabsSttBackend, listElevenVoices } from "../harness/voice/elevenlabs.ts";
@@ -364,7 +369,9 @@ const server = Bun.serve({
         if (req.method === "POST") {
           const b = await readBody<Partial<WhitelistEntry>>(req);
           const id = typeof b.id === "string" && b.id ? b.id : `wl_${Date.now().toString(36)}_${Math.floor(Math.random() * 1e6).toString(36)}`;
-          const store = upsertEntry(loadWhitelist(), { ...b, id } as WhitelistEntry);
+          // A project-scoped entry (e.g. an Agent Builder connection the user approved) binds to THIS workspace.
+          const project = b.scope === "project" && !b.project ? currentWorkspace() : b.project;
+          const store = upsertEntry(loadWhitelist(), { ...b, id, project } as WhitelistEntry);
           saveWhitelist(store);
           return json({ ok: true, data: store.entries.find((e) => e.id === id) ?? null });
         }
@@ -531,6 +538,61 @@ const server = Bun.serve({
       if (p === "/api/codegraph/agent") {
         if (req.method === "POST") { const b = await readBody<{ enabled?: unknown }>(req); setCodeGraphAgent(!!b.enabled); backend.restart(); return json({ ok: true, data: { enabled: !!b.enabled } }); }
         return json({ ok: true, data: { enabled: !!loadSettings().codeGraphAgent } });
+      }
+      // P-AGENT.2b (ADR-0129): Agent Builder spec persistence as workspace files (.omp/agents/). GET = list
+      // all specs (or one via ?id=); POST body {spec} = validate-then-save FAIL-CLOSED (an invalid spec is
+      // refused, never written). The engine writes workspace files here because it holds agent_obs.duckdb
+      // READ-ONLY (omp's gate child is the DB writer) — so authored specs live with the workspace.
+      if (p === "/api/agent") {
+        const root = currentWorkspace();
+        if (req.method === "POST") {
+          const b = await readBody<{ spec?: unknown }>(req);
+          const v = validateSpec(b.spec);
+          if (!v.ok) return json({ ok: false, error: v.errors.join("; "), data: { errors: v.errors } });
+          try {
+            saveSpecFile(root, v.spec!);
+            return json({ ok: true, data: { saved: true, spec_id: v.spec!.spec_id } });
+          } catch (e) {
+            return json({ ok: false, error: String((e as { message?: unknown })?.message ?? e) });
+          }
+        }
+        const id = url.searchParams.get("id");
+        if (id) return json({ ok: true, data: { spec: loadSpecFile(root, id) } });
+        return json({ ok: true, data: { specs: listSpecFiles(root) } });
+      }
+      if (p === "/api/agent/delete" && req.method === "POST") {
+        const b = await readBody<{ id?: unknown }>(req);
+        const deleted = typeof b.id === "string" ? deleteSpecFile(currentWorkspace(), b.id) : false;
+        return json({ ok: true, data: { deleted } });
+      }
+      // P-AGENT.6: enterprise export — compile the spec + write a portable, tamper-evident bundle (with a
+      // SHA-256 content digest) for a deploy target under .omp/agent-exports/<spec_id>/<target>/. Fail-closed:
+      // an invalid spec is refused before anything is compiled or written.
+      if (p === "/api/agent/export" && req.method === "POST") {
+        const b = await readBody<{ spec?: unknown; target?: unknown }>(req);
+        const v = validateSpec(b.spec);
+        if (!v.ok) return json({ ok: false, error: v.errors.join("; ") });
+        const target: ExportTarget = (EXPORT_TARGETS as readonly string[]).includes(b.target as string) ? (b.target as ExportTarget) : "electron";
+        try {
+          const pkg = exportBundle(buildAgent(v.spec!), target);
+          const dir = join(currentWorkspace(), ".omp", "agent-exports", v.spec!.spec_id, target);
+          const written = writeExportPackage(pkg, dir);
+          return json({ ok: true, data: { dir, target, digest: pkg.manifest.digest, files: written.length } });
+        } catch (e) {
+          return json({ ok: false, error: String((e as { message?: unknown })?.message ?? e) });
+        }
+      }
+      // P-AGENT.4-live: run a built agent one-shot through omp (gate + generated allow-list + compiled prompt).
+      // Fail-closed: an invalid or non-runnable-trust spec is refused before anything spawns. Returns the
+      // agent's final text (or a refusal/error). model defaults to a fast model for cheap runs.
+      if (p === "/api/agent/run" && req.method === "POST") {
+        const b = await readBody<{ spec?: unknown; prompt?: unknown; model?: unknown }>(req);
+        const v = validateSpec(b.spec);
+        if (!v.ok) return json({ ok: false, error: v.errors.join("; ") });
+        const prompt = typeof b.prompt === "string" ? b.prompt : "";
+        const model = typeof b.model === "string" && b.model.trim() ? b.model.trim() : "haiku";
+        const r = await runBuiltAgent({ spec: v.spec!, prompt, model, workspace: currentWorkspace() });
+        return json({ ok: r.ok, data: { output: r.output ?? "", error: r.error ?? "", blocked: !!r.blocked, reason: r.reason ?? "" } });
       }
       // P-APPEAR.1: the personalized chat-interface background (image + display mode). Its own file, so
       // the hot settings load() never parses the image data URL.

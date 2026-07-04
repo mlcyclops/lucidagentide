@@ -36,9 +36,12 @@ export function lucidLogo(): string {
 
 /** The TechLead 187 brand avatar - the real logo image inside a premium animated gradient ring. */
 export function techLeadLogo(): string {
+  // Load EAGERLY: this sits above the fold in a modal the user just opened, so `loading="lazy"` +
+  // `decoding="async"` made the ring paint first and the logo pop in a beat later (worst right after an
+  // upgrade, when the freshly-written asset isn't cached yet). Eager + sync decode paints it with the ring.
   return `<span class="about-tl-avatar" aria-hidden="true">
     <span class="about-tl-ring"></span>
-    <img class="about-tl-img" src="assets/techlead187-avatar.png" alt="" width="46" height="46" loading="lazy" decoding="async" />
+    <img class="about-tl-img" src="assets/techlead187-avatar.png" alt="" width="46" height="46" loading="eager" decoding="sync" fetchpriority="high" />
   </span>`;
 }
 

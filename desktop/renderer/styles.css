@@ -109,6 +109,16 @@ button{font-family:inherit}
   box-shadow:var(--shadow-md, 0 3px 8px rgba(0,0,0,.4)),
     inset 0 1px 0 rgba(255,255,255,.07)}
 .titlebar .model-badge:active{box-shadow:inset 0 1px 2px rgba(0,0,0,.4)}
+/* Persona + Skills pills in the titlebar (moved out of the composer so they never squish). Match the model-badge family. */
+.titlebar .tb-chip{-webkit-app-region:no-drag;display:inline-flex;align-items:center;gap:5px;flex:none;white-space:nowrap;
+  background:linear-gradient(180deg,var(--bg-3),var(--bg-2));border:1px solid var(--line);border-radius:999px;
+  padding:4px 10px;font-size:12px;color:var(--txt-2);cursor:pointer;
+  box-shadow:var(--shadow-sm, 0 1px 2px rgba(0,0,0,.4)),inset 0 1px 0 rgba(255,255,255,.05);
+  transition:border-color var(--t) var(--ease),color var(--t) var(--ease),box-shadow var(--t) var(--ease)}
+.titlebar .tb-chip:hover{border-color:var(--line-strong);color:var(--txt);
+  box-shadow:var(--shadow-md, 0 3px 8px rgba(0,0,0,.4)),inset 0 1px 0 rgba(255,255,255,.07)}
+.titlebar .tb-chip .ic{opacity:.85;transition:color var(--t),transform var(--t)}
+.titlebar .tb-chip:hover .ic{color:var(--accent-2);transform:none}
 .titlebar .model-badge .dot{position:relative;background:var(--green);
   box-shadow:0 0 0 2px rgba(70,210,126,.16),0 0 9px var(--green)}
 /* text-zoom controls */
@@ -2424,3 +2434,52 @@ pre:hover .code-ide-btn,pre:focus-within .code-ide-btn{opacity:1}
 .import-pill-fill{height:100%;width:0;background:var(--accent);border-radius:3px;transition:width .4s var(--ease-out)}
 .import-pill-row{display:flex;align-items:center;gap:10px}
 .import-pill-text{flex:1;min-width:0;font-size:11.5px;color:var(--txt-2)}
+
+/* P-AGENT.2b (ADR-0129): the Agent Builder workflow canvas. Reuses .kg layout (aside + header + canvas). */
+.ab-panel .ab-tools{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.ab-add,.ab-btn{font:inherit;font-size:12px;color:var(--txt-2);background:var(--bg-2);border:1px solid var(--line);border-radius:var(--r-sm);padding:4px 9px;cursor:pointer;transition:background var(--t-fast),color var(--t-fast),border-color var(--t-fast)}
+.ab-add:hover,.ab-btn:hover{background:var(--bg-3);color:var(--txt)}
+.ab-add{color:var(--txt-3)}
+.ab-btn.ok{border-color:color-mix(in srgb,var(--accent) 55%,var(--line));color:var(--txt)}
+.ab-btn.ok:hover{background:color-mix(in srgb,var(--accent) 22%,var(--bg-2))}
+.ab-btn.active{background:color-mix(in srgb,var(--accent) 26%,var(--bg-2));color:var(--txt);border-color:var(--accent)}
+.ab-errs{margin:0 12px 8px;padding:7px 10px;border-radius:var(--r-sm);font-size:12px;color:#ffd7d7;background:color-mix(in srgb,var(--red) 16%,var(--bg-1));border:1px solid color-mix(in srgb,var(--red) 45%,var(--line))}
+.ab-main{flex:1;display:flex;min-height:0}
+.ab-canvas{flex:1;min-width:0}
+.ab-side{width:280px;flex:none;border-left:1px solid var(--line);overflow:auto;padding:12px}
+.ab-editor{display:flex;flex-direction:column;gap:10px}
+.ab-ed-head{display:flex;align-items:center;gap:8px}
+.ab-kind{font-size:11px;letter-spacing:.02em;padding:2px 8px;border-radius:999px;background:var(--bg-3);color:var(--txt-2)}
+.ab-kind-prompt{background:color-mix(in srgb,var(--cyan) 22%,var(--bg-2));color:var(--txt)}
+.ab-kind-tool{background:color-mix(in srgb,var(--accent) 24%,var(--bg-2));color:var(--txt)}
+.ab-kind-subagent{background:color-mix(in srgb,var(--amber) 22%,var(--bg-2));color:var(--txt)}
+.ab-kind-approval{background:color-mix(in srgb,var(--green) 20%,var(--bg-2));color:var(--txt)}
+.ab-fld{display:flex;flex-direction:column;gap:4px;font-size:11.5px;color:var(--txt-3)}
+.ab-in{font:inherit;font-size:12.5px;color:var(--txt);background:var(--bg-1);border:1px solid var(--line);border-radius:var(--r-sm);padding:6px 8px}
+.ab-in:focus{outline:none;border-color:var(--accent)}
+.ab-ta{min-height:84px;resize:vertical;line-height:1.5}
+.ab-del{align-self:flex-start;font:inherit;font-size:11.5px;color:var(--red);background:transparent;border:1px solid color-mix(in srgb,var(--red) 40%,var(--line));border-radius:var(--r-sm);padding:4px 9px;cursor:pointer}
+.ab-del:hover{background:color-mix(in srgb,var(--red) 14%,var(--bg-2))}
+.ab-run{display:flex;flex-direction:column;gap:10px}
+.ab-run-model{margin-left:auto;font-size:11px;color:var(--cyan);background:color-mix(in srgb,var(--cyan) 14%,var(--bg-2));padding:2px 8px;border-radius:999px}
+.ab-run-out{white-space:pre-wrap;font-size:12px;line-height:1.55;color:var(--txt);background:var(--bg-1);border:1px solid var(--line);border-radius:var(--r-sm);padding:9px 10px;max-height:340px;overflow:auto}
+.ab-conn{display:flex;flex-direction:column;gap:9px}
+.ab-conn-note{font-size:11.5px;line-height:1.5;color:var(--txt-3)}
+.ab-conn-sec{font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--txt-4);margin-top:4px}
+.ab-conn-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
+.ab-conn-row{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--txt-2);background:var(--bg-1);border:1px solid var(--line);border-radius:var(--r-sm);padding:6px 9px}
+.ab-conn-host{flex:1;min-width:0;color:var(--cyan);word-break:break-all}
+.ab-conn-tag{font-size:10.5px;color:var(--txt-4)}
+.ab-conn-empty{color:var(--txt-4);justify-content:center}
+.ab-cred-row{display:flex;flex-direction:column;gap:6px;background:var(--bg-1);border:1px solid var(--line);border-radius:var(--r-sm);padding:8px 9px}
+.ab-cred-head{display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--txt)}
+.ab-cred-status{margin-left:auto;font-size:10.5px;padding:1px 7px;border-radius:999px}
+.ab-cred-status.ok{color:var(--green);background:color-mix(in srgb,var(--green) 16%,var(--bg-2))}
+.ab-cred-status.need{color:var(--amber);background:color-mix(in srgb,var(--amber) 16%,var(--bg-2))}
+.ab-cred-purpose{font-size:11.5px;color:var(--txt-3);line-height:1.45}
+.ab-cred-add{display:flex;gap:6px}
+.ab-cred-secret{flex:1;min-width:0}
+.ab-conn-row .ab-btn{padding:3px 9px;font-size:11px}
+.ab-conn-tag.ok{color:var(--green)}
+.ab-cred-help{align-self:flex-start;font:inherit;font-size:11px;color:var(--cyan);background:none;border:none;padding:2px 0;cursor:pointer;text-decoration:underline;text-underline-offset:2px}
+.ab-cred-help:hover{color:var(--txt)}
