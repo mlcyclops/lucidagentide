@@ -61,6 +61,26 @@ export type SecretKind = (typeof SECRET_KINDS)[number];
 // guardrail violation) and by the import gate (injection surface on an imported spec).
 export const PROVISIONING_METHODS = ["user-input", "jit-ticket"] as const;
 export type ProvisioningMethod = (typeof PROVISIONING_METHODS)[number];
+
+// P-AGENT.16 (ADR-0144): an OPTIONAL machine-resolvable source for the credential — when the org runs a
+// KMS and the enterprise kms connector is installed, LUCID fetches the value just-in-time at run start and
+// injects it into that run's child env only (inject-then-drop). Without the connector, the guidance fields
+// above remain the human path. `ref` is a provider reference ("vault:secret/data/lucid/crm#token"), never a
+// value — it is scanned by secret_guard like every other provisioning field.
+export const SECRET_PROVIDER_KINDS = ["vault", "aws-sm", "azure-kv", "gcp-sm", "infisical"] as const;
+export type SecretProviderKind = (typeof SECRET_PROVIDER_KINDS)[number];
+/** The ref scheme each provider kind must use — a kind/ref mismatch is a validation error (fail-closed). */
+export const KMS_SCHEME_BY_KIND: Record<SecretProviderKind, string> = {
+  vault: "vault:",
+  "aws-sm": "aws:",
+  "azure-kv": "azure:",
+  "gcp-sm": "gcp:",
+  infisical: "infisical:",
+};
+export interface SecretProviderRef {
+  kind: SecretProviderKind;
+  ref: string; // e.g. "vault:secret/data/lucid/crm#token" — a REFERENCE, never a secret value
+}
 export interface TicketGuide {
   system: string; // the ticketing system, e.g. "ServiceNow" or "Jira Service Management"
   template?: Record<string, string>; // sample ticket fields (catalog item, assignment group, short description, …)
@@ -70,6 +90,7 @@ export interface SecretProvisioning {
   method: ProvisioningMethod;
   instructions?: string; // step-by-step help shown on import — NEVER a secret value
   ticket?: TicketGuide; // for "jit-ticket": how to request the JIT token
+  provider?: SecretProviderRef; // P-AGENT.16: machine-resolvable source (enterprise kms connector)
 }
 export interface SecretRef {
   name: string; // stable ref, e.g. "SALESFORCE_API_TOKEN" — maps to a vault credential; NEVER the value
@@ -231,6 +252,21 @@ export function validateSpec(input: unknown): ValidationResult {
             if (p.instructions !== undefined && !isStr(p.instructions))
               errors.push(`secrets[${i}].provisioning.instructions must be a string when present`);
             if ("value" in p || "secret" in p) errors.push(`secrets[${i}].provisioning must NOT carry a value`);
+            // P-AGENT.16: provider ref — closed kind set, and the ref's scheme must match the kind.
+            if (p.provider !== undefined) {
+              if (typeof p.provider !== "object" || p.provider === null) {
+                errors.push(`secrets[${i}].provisioning.provider must be an object when present`);
+              } else {
+                const prov = p.provider as Record<string, unknown>;
+                if (!(SECRET_PROVIDER_KINDS as readonly string[]).includes(prov.kind as string)) {
+                  errors.push(`secrets[${i}].provisioning.provider.kind must be one of: ${SECRET_PROVIDER_KINDS.join(", ")}`);
+                } else if (!isNonEmpty(prov.ref)) {
+                  errors.push(`secrets[${i}].provisioning.provider.ref must be a non-empty provider reference`);
+                } else if (!(prov.ref as string).startsWith(KMS_SCHEME_BY_KIND[prov.kind as SecretProviderKind])) {
+                  errors.push(`secrets[${i}].provisioning.provider.ref must start with "${KMS_SCHEME_BY_KIND[prov.kind as SecretProviderKind]}" for kind ${String(prov.kind)}`);
+                }
+              }
+            }
             if (p.ticket !== undefined) {
               if (typeof p.ticket !== "object" || p.ticket === null) {
                 errors.push(`secrets[${i}].provisioning.ticket must be an object when present`);

@@ -178,6 +178,8 @@ export function secretsPanelHtml(spec: AgentSpec, inVault: Set<string>, isElectr
           // (paste an existing value, or request a Just-In-Time token via their org's KMS / IT ticketing).
           const p = s.provisioning;
           const provBits: string[] = [];
+          if (p?.provider)
+            provBits.push(`<div class="ab-cred-purpose">Fetched just-in-time from <b>${esc(p.provider.kind)}</b> (${esc(p.provider.ref)}) when a run starts — requires the enterprise KMS connector; no value is stored in LUCID.</div>`);
           if (p?.instructions) provBits.push(`<div class="ab-cred-purpose">${esc(p.instructions)}</div>`);
           if (p?.method === "jit-ticket") {
             provBits.push(`<div class="ab-cred-purpose">Request a Just-In-Time token via <b>${esc(p.ticket?.system ?? "your IT ticketing system")}</b>, then paste the issued value below — it goes to the vault, never into the agent.</div>`);
