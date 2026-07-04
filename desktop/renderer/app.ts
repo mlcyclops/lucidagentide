@@ -2140,7 +2140,8 @@ async function hydrateLocalProviders(): Promise<void> {
 /** Add a provider from the card's form: validate → (if authed) store the key in the vault → save the def. */
 async function addLocalProviderFromForm(): Promise<void> {
   const val = (id: string): string => (($(`#${id}`, $("#setBody")!) as HTMLInputElement | HTMLSelectElement | null)?.value ?? "");
-  const draft = draftFromForm({ name: val("lpName"), baseUrl: val("lpBaseUrl"), auth: val("lpAuth"), models: val("lpModels") }, Date.now());
+  const external = ($("#lpExternal", $("#setBody")!) as HTMLInputElement | null)?.checked ?? false;
+  const draft = draftFromForm({ name: val("lpName"), baseUrl: val("lpBaseUrl"), auth: val("lpAuth"), models: val("lpModels"), external }, Date.now());
   if (draft.errors.length || !draft.def) { showToast({ tone: "warn", title: "Check the provider details", desc: draft.errors[0] ?? "invalid" }); return; }
   const def = draft.def;
   if (draft.needsKey) {
@@ -2164,6 +2165,36 @@ async function addLocalProviderFromForm(): Promise<void> {
 /** Remove a provider (its vault key is left in the vault; the user can delete it from the whitelist/vault UI). */
 async function deleteLocalProvider(id: string): Promise<void> {
   await bridge.localProviderDelete(id).catch(() => null);
+  void hydrateLocalProviders();
+}
+
+/** Reachability/TLS probe of an endpoint (no key sent). */
+async function testLocalProviderConn(baseUrl: string): Promise<void> {
+  const u = (baseUrl || "").trim();
+  if (!u) { showToast({ tone: "warn", title: "Enter a base URL first" }); return; }
+  showToast({ title: "Testing connection…", desc: u, timeout: 1400 });
+  const r = await bridge.localProviderTest(u).catch(() => null);
+  if (r?.reachable) {
+    showToast({ tone: "ok", title: "Endpoint reachable", desc: `HTTP ${r.status}${r.authed ? " · auth required (the key is sent at run time, from the vault)" : ""}.` });
+  } else {
+    const hint = u.startsWith("https") ? " Check the VPN tunnel, TLS cert, and port." : " Check the host/port - is the server running?";
+    showToast({ tone: "danger", title: "Not reachable", desc: (r?.error ?? "no response.") + hint });
+  }
+}
+
+/** Store (or rotate) an authed provider's key straight into the OS-encrypted vault, from the inline row. */
+async function saveLocalProviderKey(wrap: HTMLElement): Promise<void> {
+  const id = wrap.dataset.lpId ?? "";
+  const def = state.localProviders.find((p) => p.id === id);
+  if (!def) return;
+  const key = (($(".lp-rekey-input", wrap) as HTMLInputElement | null)?.value ?? "").trim();
+  if (!key) { showToast({ tone: "warn", title: "Paste the key first", desc: "It goes straight to the OS-encrypted vault." }); return; }
+  if (!bridge.isElectron || !bridge.credStore) { showToast({ tone: "danger", title: "Vault is desktop-only", desc: "Open the LUCID desktop app." }); return; }
+  const ref = def.vaultRef || `lpkey_${def.id}`;
+  const r = await bridge.credStore({ ref, kind: def.authKind === "basic" ? "basic" : "apikey", secret: key, label: `Local Provider · ${def.name}` });
+  if (!r || "error" in r) { showToast({ tone: "danger", title: "Couldn't store the key", desc: (r as { error?: string })?.error ?? "vault error" }); return; }
+  if (def.vaultRef !== ref) { def.vaultRef = ref; await bridge.localProviderUpsert(def).catch(() => null); }
+  showToast({ tone: "ok", title: "Key stored in the vault", desc: `${def.name} - restart to apply.` });
   void hydrateLocalProviders();
 }
 // Settings → Personalization (ADR-0010/0012): opt-in encrypted KG + the
@@ -5832,6 +5863,12 @@ function wire(): void {
     // P-LOCAL.3 (ADR-0135): Local Providers card
     if (t.closest("[data-lp-addtoggle]")) { (t.closest(".lp-add") as HTMLElement | null)?.classList.toggle("open"); return; }
     if (t.closest("[data-lp-add]")) { await addLocalProviderFromForm(); return; }
+    if (t.closest("[data-lp-test-form]")) { await testLocalProviderConn(($("#lpBaseUrl", $("#setBody")!) as HTMLInputElement | null)?.value ?? ""); return; }
+    const lpTest = t.closest("[data-lp-test]") as HTMLElement | null;
+    if (lpTest) { await testLocalProviderConn(lpTest.dataset.url ?? ""); return; }
+    if (t.closest("[data-lp-rekey-save]")) { const w = t.closest("[data-lp-id]") as HTMLElement | null; if (w) await saveLocalProviderKey(w); return; }
+    if (t.closest("[data-lp-rekey]")) { const rk = (t.closest("[data-lp-id]") as HTMLElement | null)?.querySelector(".lp-rekey") as HTMLElement | null; if (rk) rk.hidden = !rk.hidden; return; }
+    if (t.closest("[data-lp-apply]")) { showToast({ title: "Restarting LUCID…", desc: "Applying your local providers.", timeout: 2000 }); await bridge.relaunch().catch(() => {}); return; }
     const lpDel = t.closest("[data-lp-del]") as HTMLElement | null;
     if (lpDel) { const id = (lpDel.closest("[data-lp-id]") as HTMLElement | null)?.dataset.lpId; if (id) await deleteLocalProvider(id); return; }
     // workspace

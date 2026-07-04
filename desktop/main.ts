@@ -233,6 +233,14 @@ ipcMain.handle("lucid:revealPath", async (_e, p: unknown) => {
   return (await shell.openPath(target)) === "";
 });
 
+// P-LOCAL.3 polish: restart the app so the freshly-spawned dev server + omp pick up the current Local
+// Providers (their secrets are injected into the dev child env at spawn — a restart is the clean apply).
+ipcMain.handle("lucid:relaunch", () => {
+  try { dev?.kill(); } catch { /* best-effort */ }
+  app.relaunch();
+  app.quit();
+});
+
 ipcMain.on("lucid:win", (e, action: string) => {
   const w = BrowserWindow.fromWebContents(e.sender);
   if (!w) return;

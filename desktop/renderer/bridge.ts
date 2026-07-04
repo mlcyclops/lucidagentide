@@ -307,6 +307,10 @@ export interface LucidBridge {
   localProviderUpsert(provider: LocalProviderDef): Promise<{ saved?: boolean; id?: string; errors?: string[] } | null>;
   localProviderDelete(id: string): Promise<{ deleted: boolean } | null>;
   localProviderEnable(id: string, enabled: boolean): Promise<{ ok: boolean } | null>;
+  /** Reachability/TLS probe of a base URL's /models endpoint (no key sent). */
+  localProviderTest(baseUrl: string): Promise<{ reachable: boolean; status?: number; authed?: boolean; error?: string } | null>;
+  /** Restart the desktop app so a spawned omp picks up new local providers (Electron only; no-op in browser). */
+  relaunch(): Promise<void>;
   setCodeGraphAgent(enabled: boolean): Promise<{ enabled: boolean } | null>;
   /** P-APPEAR.1: the personalized chat background (image data URL + display mode + opacity). */
   chatBackground(): Promise<{ image: string; mode: "off" | "ambient" | "flashlight"; opacity: number } | null>;
@@ -528,6 +532,7 @@ interface NativeShell {
   pickFolder?(): Promise<string | null>;
   capturePreview?(rect: { x: number; y: number; width: number; height: number }): Promise<string | null>;
   revealPath?(path: string): Promise<boolean>;
+  relaunch?(): Promise<void>; // P-LOCAL.3 polish: restart the app to apply local-provider changes
   win?: { minimize(): void; toggleMaximize(): void; close(): void };
   // P-NETWL.1 (ADR-0106): native file picker + OS-encrypted credential vault (Electron-only).
   pickFile?(opts?: { title?: string; filters?: { name: string; extensions: string[] }[] }): Promise<string | null>;
@@ -636,6 +641,8 @@ export const bridge: LucidBridge = {
   localProviderUpsert: (provider) => post("/api/local-providers", { provider }), // P-LOCAL.3 (server validates fail-closed)
   localProviderDelete: (id) => post("/api/local-providers/delete", { id }), // P-LOCAL.3
   localProviderEnable: (id, enabled) => post("/api/local-providers/enable", { id, enabled }), // P-LOCAL.3
+  localProviderTest: (baseUrl) => post("/api/local-providers/test", { baseUrl }), // P-LOCAL.3 polish
+  relaunch: () => (shell?.relaunch ? shell.relaunch() : Promise.resolve()), // P-LOCAL.3 polish (Electron only)
   setCodeGraphAgent: (enabled) => post("/api/codegraph/agent", { enabled }),
   chatBackground: () => getData("/api/chat-bg"),
   setChatBackground: (patch) => post("/api/chat-bg", patch),

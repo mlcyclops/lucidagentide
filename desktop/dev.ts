@@ -44,7 +44,7 @@ import { readPreviewFile, toFsPath } from "./preview_file.ts"; // P-PREVIEW.4: r
 import { PREVIEW_FRAME_CSP } from "./preview_resolve.ts"; // P-PREVIEW.4b: per-frame CSP for the served preview doc
 import { inlinePreviewAssets } from "./preview_inline.ts"; // P-PREVIEW.4c: fold a multi-file app's relative assets inline
 import { listLocalProviders, upsertLocalProvider, removeLocalProvider, setLocalProviderEnabled } from "./settings_store.ts";
-import type { LocalProviderDef } from "./local_providers.ts";
+import { providerModelsUrl, type LocalProviderDef } from "./local_providers.ts";
 import { applyEnv, attribution, chinaModelsAcknowledged, listMcpServers, load as loadSettings, removeMcpServer, roleChosen, setAsksage, setAttributionSkip, setChinaModelsAcknowledged, setCodeGraphAgent, setDeveloperMode, setKey, setMcpServerEnabled, setPersonalAiExtract, setProfile, setRateLimitProbe, setThirdPartyProvidersAcknowledged, setTourSeen, setUserRole, setVoiceSettings, thirdPartyProvidersAcknowledged, tourSeen, upsertMcpServer, USER_ROLES, userRole, voiceSettings, type UserRole } from "./settings_store.ts";
 
 // ADR-0088/0089: the /api/settings payload — profile + attribution + the cosmetic role/tour state.
@@ -592,6 +592,20 @@ const server = Bun.serve({
         const b = await readBody<{ id?: unknown; enabled?: unknown }>(req);
         if (typeof b.id === "string") setLocalProviderEnabled(b.id, !!b.enabled);
         return json({ ok: true, data: { ok: true } });
+      }
+      // P-LOCAL.3 polish: reachability/TLS probe. Hits the OpenAI-compatible /models endpoint with a short
+      // timeout and NO key (the vault secret never leaves main) — any HTTP response (even 401/403) proves the
+      // host is reachable + the TLS handshake succeeded; a network/TLS/timeout error means it's not.
+      if (p === "/api/local-providers/test" && req.method === "POST") {
+        const b = await readBody<{ baseUrl?: unknown }>(req);
+        const target = typeof b.baseUrl === "string" ? providerModelsUrl(b.baseUrl) : null;
+        if (!target) return json({ ok: true, data: { reachable: false, error: "invalid base URL" } });
+        try {
+          const r = await fetch(target, { method: "GET", redirect: "manual", signal: AbortSignal.timeout(4500) });
+          return json({ ok: true, data: { reachable: true, status: r.status, authed: r.status === 401 || r.status === 403 } });
+        } catch (e) {
+          return json({ ok: true, data: { reachable: false, error: String((e as { message?: unknown })?.message ?? e).slice(0, 160) } });
+        }
       }
       // P-AGENT.6: enterprise export — compile the spec + write a portable, tamper-evident bundle (with a
       // SHA-256 content digest) for a deploy target under .omp/agent-exports/<spec_id>/<target>/. Fail-closed:

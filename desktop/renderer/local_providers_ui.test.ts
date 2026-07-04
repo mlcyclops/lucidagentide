@@ -30,8 +30,13 @@ describe("card body", () => {
     expect(h).toContain("data-lp-addtoggle");
     expect(h).toContain("lp-add-body");
     expect(h).not.toContain('class="lp-add open"');
+    // polish: an external-zone toggle + a Test-connection button live in the add form
+    expect(h).toContain('id="lpExternal"');
+    expect(h).toContain("data-lp-test-form");
+    // basic auth is not offered (unsupported)
+    expect(h).not.toContain('value="basic"');
   });
-  test("lists a provider with its endpoint, a delete button, and a per-row id", () => {
+  test("lists a provider with endpoint, delete/test buttons, a per-row id; authed rows get a Key + re-key field", () => {
     const h = localProvidersCardBody([def()], new Set(["lpkey_lp_dgx"]), true);
     expect(h).toContain('data-lp-id="lp_dgx"');
     expect(h).toContain("DGX Vienna");
@@ -39,6 +44,18 @@ describe("card body", () => {
     expect(h).toContain("data-lp-del");
     expect(h).toContain("data-lp-toggle");
     expect(h).toContain("key in vault"); // ref present in the vault set
+    expect(h).toContain("data-lp-test"); // per-row reachability probe
+    expect(h).toContain('data-url="https://10.20.30.40:8000/v1"');
+    expect(h).toContain("data-lp-rekey"); // authed → a Key affordance + inline paste field
+    expect(h).toContain("lp-rekey-input");
+  });
+  test("an open provider has no Key affordance; the Apply/Restart button shows only in Electron with enabled providers", () => {
+    const open = localProvidersCardBody([def({ authKind: "none", vaultRef: undefined })], new Set(), true);
+    expect(open).not.toContain("data-lp-rekey");
+    expect(open).toContain("data-lp-apply"); // electron + an enabled provider
+    // no Apply button in the browser build, or when there are no enabled providers
+    expect(localProvidersCardBody([def()], new Set(), false)).not.toContain("data-lp-apply");
+    expect(localProvidersCardBody([def({ enabled: false })], new Set(), true)).not.toContain("data-lp-apply");
   });
   test("non-Electron warns the vault is desktop-only; the key field is never pre-filled", () => {
     const h = localProvidersCardBody([def()], new Set(), false);
@@ -73,6 +90,10 @@ describe("draftFromForm", () => {
     expect(r.def!.api).toBe("openai-completions");
     const authed = draftFromForm({ name: "DGX", baseUrl: "https://10.0.0.1:8000/v1", auth: "bearer", models: "m" }, now);
     expect(authed.needsKey).toBe(true);
+  });
+  test("the external checkbox drives the zone (default internal)", () => {
+    expect(draftFromForm({ name: "x", baseUrl: "http://h/v1", auth: "none", models: "m" }, now).def!.zone).toBe("internal");
+    expect(draftFromForm({ name: "x", baseUrl: "https://api.example.com/v1", auth: "none", models: "m", external: true }, now).def!.zone).toBe("external");
   });
   test("fail-closed: a bad base URL or no models surfaces errors and yields no def", () => {
     expect(draftFromForm({ name: "x", baseUrl: "not-a-url", auth: "none", models: "m" }, now).errors.join()).toContain("base URL");

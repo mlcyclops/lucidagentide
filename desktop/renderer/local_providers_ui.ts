@@ -41,13 +41,22 @@ function modelSummary(models: LocalModelDef[]): string {
 
 function providerRow(p: LocalProviderDef, vaultRefs: Set<string>): string {
   const st = providerStatus(p, vaultRefs);
-  return `<div class="lp-row" data-lp-id="${esc(p.id)}">
-    <label class="set-toggle lp-en" title="Enable / disable"><input type="checkbox" data-lp-toggle ${p.enabled ? "checked" : ""}/><span class="lp-en-box"></span></label>
-    <div class="lp-meta">
-      <div class="lp-name">${esc(p.name)} <span class="lp-pill ${st.tone}">${esc(st.label)}</span></div>
-      <div class="lp-sub">${esc(p.baseUrl)} · ${modelSummary(p.models)}</div>
+  const authed = p.authKind !== "none";
+  return `<div class="lp-row-wrap" data-lp-id="${esc(p.id)}">
+    <div class="lp-row">
+      <label class="set-toggle lp-en" title="Enable / disable"><input type="checkbox" data-lp-toggle ${p.enabled ? "checked" : ""}/><span class="lp-en-box"></span></label>
+      <div class="lp-meta">
+        <div class="lp-name">${esc(p.name)} <span class="lp-pill ${st.tone}">${esc(st.label)}</span></div>
+        <div class="lp-sub">${esc(p.baseUrl)} · ${modelSummary(p.models)}</div>
+      </div>
+      <button class="btn-mini" data-lp-test data-url="${esc(p.baseUrl)}" title="Check the endpoint is reachable (no key sent)">Test</button>
+      ${authed ? `<button class="btn-mini" data-lp-rekey title="Add / update the key in the vault">Key</button>` : ""}
+      <button class="btn-mini danger" data-lp-del title="Remove this provider">${icon("close", 12)}</button>
     </div>
-    <button class="btn-mini danger" data-lp-del title="Remove this provider">${icon("close", 12)}</button>
+    ${authed ? `<div class="lp-rekey" hidden>
+      <input class="prov-key lp-rekey-input" type="password" placeholder="Paste the key/token → OS-encrypted vault" autocomplete="off" />
+      <button class="btn-mini ok" data-lp-rekey-save>${icon("check", 12)} Save key</button>
+    </div>` : ""}
   </div>`;
 }
 
@@ -57,11 +66,15 @@ export function localProvidersCardBody(providers: LocalProviderDef[], vaultRefs:
   const list = providers.length
     ? `<div class="lp-list">${providers.map((p) => providerRow(p, vaultRefs)).join("")}</div>`
     : `<div class="set-note">${icon("info", 12)} No local providers yet. Add a self-hosted or custom OpenAI-compatible endpoint below.</div>`;
-  const authOpts = LOCAL_AUTH_KINDS.map((k) => `<option value="${k}">${esc(authLabel(k))}</option>`).join("");
+  const authOpts = LOCAL_AUTH_KINDS.filter((k) => k !== "basic").map((k) => `<option value="${k}">${esc(authLabel(k))}</option>`).join(""); // basic not yet supported
   const vaultWarn = isElectron ? "" : `<div class="set-note">${icon("info", 12)} Storing a key needs the LUCID desktop app (the OS-encrypted vault). You can still add an open (no-auth) endpoint here.</div>`;
+  const applyBtn = isElectron && providers.some((p) => p.enabled)
+    ? `<div class="lp-apply-row"><button class="btn-mini" data-lp-apply title="Restart LUCID so the agent picks up your local providers">${icon("shield", 12)} Restart to apply</button><span class="lp-apply-note">New or changed providers apply after a restart.</span></div>`
+    : "";
   return `
     <div class="set-note">${icon("info", 12)} Point LUCID at a self-hosted or custom OpenAI-compatible LLM - Ollama, llama.cpp, vLLM, LM Studio, or a box reached over a VPN tunnel (bring the tunnel up in your VPN client first). The endpoint + models live here; the API key goes only into the OS-encrypted vault. Changes apply on the next app restart.</div>
     ${list}
+    ${applyBtn}
     ${vaultWarn}
     <div class="lp-add">
       <button class="lp-add-h" data-lp-addtoggle type="button">${icon("plus", 12)} <span>Add a local provider</span><span class="lp-add-chev">${icon("chevron", 14)}</span></button>
@@ -73,12 +86,16 @@ export function localProvidersCardBody(providers: LocalProviderDef[], vaultRefs:
           <select class="prov-key lp-auth-sel" id="lpAuth">${authOpts}</select>
           <input class="prov-key" id="lpKey" type="password" placeholder="API key / token (stored in the vault)" autocomplete="off" />
         </div>
-        <button class="btn-mini ok" data-lp-add>${icon("check", 12)} Add provider</button>
+        <label class="lp-ext"><input type="checkbox" id="lpExternal" /> <span>This endpoint is on the public internet (external). Leave off for a LAN / VPN / localhost box.</span></label>
+        <div class="lp-add-actions">
+          <button class="btn-mini" data-lp-test-form title="Check the endpoint is reachable (no key sent)">${icon("shield", 12)} Test connection</button>
+          <button class="btn-mini ok" data-lp-add>${icon("check", 12)} Add provider</button>
+        </div>
       </div>
     </div>`;
 }
 
-export interface LpFormInput { name: string; baseUrl: string; auth: string; models: string; headerName?: string }
+export interface LpFormInput { name: string; baseUrl: string; auth: string; models: string; headerName?: string; external?: boolean }
 
 /** PURE: build a validated LocalProviderDef draft from the add-form values (no vaultRef yet — app.ts stores
  *  the key in the vault and sets it). Returns `errors` (fail-closed) when the draft is malformed. */
@@ -94,7 +111,7 @@ export function draftFromForm(inp: LpFormInput, now: number): { def?: LocalProvi
     baseUrl: (inp.baseUrl || "").trim(),
     api: "openai-completions",
     authKind,
-    zone: "internal",
+    zone: inp.external ? "external" : "internal",
     headerName: authKind === "apikey" ? (inp.headerName?.trim() || undefined) : undefined,
     models,
     enabled: true,

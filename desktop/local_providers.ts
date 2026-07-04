@@ -81,6 +81,13 @@ export function newLocalProviderId(name: string, now: number): string {
   return `lp_${slugify(name)}_${Math.floor(now).toString(36)}`;
 }
 
+/** The OpenAI-compatible list-models endpoint for a base URL (used by the reachability probe). Returns
+ *  null for an unparseable base URL. `<baseUrl>/models` — reachable on Ollama/vLLM/llama.cpp/LM Studio. */
+export function providerModelsUrl(baseUrl: string): string | null {
+  if (!hostFromBaseUrl(baseUrl)) return null;
+  return `${baseUrl.trim().replace(/\/+$/, "")}/models`;
+}
+
 /** Parse the host out of a base URL. Returns null for a non-http(s) or unparseable URL. */
 export function hostFromBaseUrl(url: string): { host: string; port: string; isIp: boolean } | null {
   let u: URL;
@@ -215,6 +222,7 @@ export function toOmpConfigOverlay(defs: LocalProviderDef[], secretFor: (ref: st
   const included: string[] = [];
   const skipped: { id: string; reason: string }[] = [];
   for (const def of defs ?? []) {
+    if (def.authKind === "basic") { skipped.push({ id: def.ompProvider || def.id, reason: "basic auth is not yet supported" }); continue; }
     const secret = def.authKind !== "none" && def.vaultRef ? secretFor(def.vaultRef) : undefined;
     const run = providerRunnable(def, !!secret);
     if (!run.ok) { skipped.push({ id: def.ompProvider || def.id, reason: run.reason ?? "not runnable" }); continue; }
@@ -257,6 +265,7 @@ export function toOmpRuntimeOverlay(defs: LocalProviderDef[], availableRefs: Rea
     if (!def.enabled) { skipped.push({ id: label, reason: "disabled" }); continue; }
     const errs = validateLocalProvider(def);
     if (errs.length) { skipped.push({ id: label, reason: errs[0] ?? "invalid" }); continue; }
+    if (def.authKind === "basic") { skipped.push({ id: label, reason: "basic auth is not yet supported" }); continue; }
     if (providers[def.ompProvider]) { skipped.push({ id: def.ompProvider, reason: "duplicate provider id" }); continue; }
     if (def.authKind === "none") {
       providers[def.ompProvider] = toOmpProviderEntry(def); // auth:none, no secret

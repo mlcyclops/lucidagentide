@@ -2478,7 +2478,10 @@ pre:hover .code-ide-btn,pre:focus-within .code-ide-btn{opacity:1}
 .ab-conn-empty{color:var(--txt-4);justify-content:center}
 /* P-LOCAL.3 (ADR-0135): Settings → Local Providers card */
 .lp-list{display:flex;flex-direction:column;gap:7px;margin:8px 0}
-.lp-row{display:flex;align-items:center;gap:10px;background:var(--bg-1);border:1px solid var(--line);border-radius:var(--r-sm);padding:8px 10px}
+.lp-row-wrap{background:var(--bg-1);border:1px solid var(--line);border-radius:var(--r-sm);overflow:hidden}
+.lp-row{display:flex;align-items:center;gap:8px;padding:8px 10px}
+.lp-rekey{display:flex;gap:6px;align-items:center;padding:8px 10px;border-top:1px solid var(--line)}
+.lp-rekey-input{flex:1;min-width:0}
 .lp-meta{flex:1;min-width:0}
 .lp-name{display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--txt);font-weight:600}
 .lp-sub{font-size:11.5px;color:var(--txt-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px}
@@ -2493,6 +2496,11 @@ pre:hover .code-ide-btn,pre:focus-within .code-ide-btn{opacity:1}
 .lp-add-body{display:none;flex-direction:column;gap:6px;margin-top:8px}
 .lp-add.open .lp-add-body{display:flex}
 .lp-add-row{display:flex;gap:6px}
+.lp-ext{display:flex;align-items:flex-start;gap:7px;font-size:11.5px;color:var(--txt-2);cursor:pointer;line-height:1.4}
+.lp-ext input{margin-top:2px;flex:0 0 auto}
+.lp-add-actions{display:flex;gap:6px;margin-top:2px}
+.lp-apply-row{display:flex;align-items:center;gap:9px;margin:8px 0 2px;flex-wrap:wrap}
+.lp-apply-note{font-size:11px;color:var(--txt-2)}
 .lp-add-row .lp-auth-sel{flex:0 0 auto;max-width:52%}
 .lp-add-row #lpKey{flex:1;min-width:0}
 .ab-cred-row{display:flex;flex-direction:column;gap:6px;background:var(--bg-1);border:1px solid var(--line);border-radius:var(--r-sm);padding:8px 9px}

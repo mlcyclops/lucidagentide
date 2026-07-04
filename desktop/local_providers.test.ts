@@ -14,6 +14,7 @@ import {
   toOmpProviderEntry,
   toOmpRuntimeOverlay,
   providerEnvVar,
+  providerModelsUrl,
   egressProposal,
   scanForInlineSecret,
   hostFromBaseUrl,
@@ -138,6 +139,19 @@ describe("runtime overlay (secure env-ref delivery)", () => {
     expect(included).toEqual([]);
     expect(env).toEqual({});
     expect(skipped[0]).toMatchObject({ id: "dgx-vienna" });
+  });
+  test("unsupported 'basic' auth is skipped (never mis-emitted as a bearer)", () => {
+    const { included, skipped } = toOmpRuntimeOverlay([def({ authKind: "basic" })], new Set(["cred_apikey_1_abc"]));
+    expect(included).toEqual([]);
+    expect(skipped[0]).toMatchObject({ id: "dgx-vienna", reason: "basic auth is not yet supported" });
+  });
+});
+
+describe("providerModelsUrl", () => {
+  test("appends /models to the base (trimming trailing slashes); null for a bad URL", () => {
+    expect(providerModelsUrl("http://localhost:11434/v1")).toBe("http://localhost:11434/v1/models");
+    expect(providerModelsUrl("https://10.0.0.1:8000/v1/")).toBe("https://10.0.0.1:8000/v1/models");
+    expect(providerModelsUrl("not-a-url")).toBeNull();
   });
 });
 
