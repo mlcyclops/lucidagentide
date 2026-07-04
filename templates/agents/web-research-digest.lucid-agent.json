@@ -1,0 +1,79 @@
+{
+  "format": "lucid-agent",
+  "version": 1,
+  "exported_at": 1751600000000,
+  "spec_digest": "eda59cea76ac01bed57345996f5c6d61bb0180f0e5c0da18ad8dbbd4c25fc9bb",
+  "setup_md": "# Setup for web-research-digest\n\nThis portable LUCID agent file does not contain credential values. It carries only credential ref names, tool allow-list data, and requested network egress patterns.\n\n## Tool allow-list\n- web_search\n- read\n\n## Network egress requested\n- No outbound network hosts requested.\n\n## Credentials to configure\n- No credentials declared.\n\nAfter import, review the workflow, approve the imported trust banner if acceptable, add credentials to the local vault, then run the agent.",
+  "spec": {
+    "spec_id": "agent_0d7d79ed-04d1-49f4-8311-3bf74126593b",
+    "spec_version": 2,
+    "mode": "built-agent",
+    "selfEdit": "individual",
+    "tools": [
+      "web_search",
+      "read"
+    ],
+    "egress": [],
+    "nodes": [
+      {
+        "id": "plan",
+        "kind": "prompt",
+        "label": "Plan the research",
+        "prompt": "Break the user's topic into 3-5 concrete questions worth answering."
+      },
+      {
+        "id": "search",
+        "kind": "tool",
+        "label": "Search the web",
+        "tool": "web_search",
+        "retry": {
+          "max": 2
+        }
+      },
+      {
+        "id": "read",
+        "kind": "tool",
+        "label": "Read the best sources",
+        "tool": "read"
+      },
+      {
+        "id": "review",
+        "kind": "approval",
+        "label": "Review findings before the write-up"
+      },
+      {
+        "id": "digest",
+        "kind": "prompt",
+        "label": "Write the digest",
+        "prompt": "Write a concise digest: findings, sources, open questions."
+      }
+    ],
+    "edges": [
+      {
+        "id": "e1",
+        "from": "plan",
+        "to": "search"
+      },
+      {
+        "id": "e2",
+        "from": "search",
+        "to": "read"
+      },
+      {
+        "id": "e3",
+        "from": "read",
+        "to": "review"
+      },
+      {
+        "id": "e4",
+        "from": "review",
+        "to": "digest"
+      }
+    ],
+    "created_at": 1751600000000,
+    "updated_at": 1751600000000,
+    "name": "web-research-digest",
+    "description": "Research a topic on the web and produce a sourced digest, with a human review before the final write-up.",
+    "persona": "You are a careful research assistant. Cite every claim with its source URL. Say when evidence is thin."
+  }
+}

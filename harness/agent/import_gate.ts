@@ -25,6 +25,13 @@ export function collectSpecText(spec: AgentSpec): string {
   const parts: string[] = [spec.name];
   if (spec.description) parts.push(spec.description);
   if (spec.persona) parts.push(spec.persona);
+  for (const r of spec.secrets ?? []) {
+    if (r.purpose) parts.push(r.purpose);
+    if (r.provisioning?.instructions) parts.push(r.provisioning.instructions);
+    if (r.provisioning?.ticket?.system) parts.push(r.provisioning.ticket.system);
+    if (r.provisioning?.ticket?.rationale) parts.push(r.provisioning.ticket.rationale);
+    for (const v of Object.values(r.provisioning?.ticket?.template ?? {})) parts.push(v);
+  }
   for (const n of spec.nodes) {
     parts.push(n.label);
     if (n.prompt) parts.push(n.prompt);

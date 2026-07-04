@@ -87,14 +87,15 @@ export function topoOrder(spec: AgentSpec): string[] {
   return order;
 }
 
-/** One workflow step line for the system prompt. */
-function stepLine(node: AgentNode, i: number): string {
+/** One workflow step line for the system prompt (also used by the P-AGENT.11 segment runner). */
+export function stepLine(node: AgentNode, i: number): string {
   const kind = node.kind[0]!.toUpperCase() + node.kind.slice(1);
   let detail = "";
   if (node.kind === "prompt" && node.prompt?.trim()) detail = ` — ${node.prompt.trim()}`;
   else if (node.kind === "tool" && node.tool) detail = ` — call the \`${node.tool}\` tool`;
   else if (node.kind === "subagent" && node.subagentSpecId) detail = ` — run sub-agent ${node.subagentSpecId}`;
   else if (node.kind === "approval") detail = " — pause for human approval before continuing";
+  else if (node.kind === "branch") detail = " — decision point: follow exactly one outgoing path";
   return `${i + 1}. [${kind}] ${node.label}${detail}`;
 }
 

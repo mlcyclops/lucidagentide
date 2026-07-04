@@ -14,7 +14,7 @@ import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { ACPClient } from "./acp.ts";
-import { AGENT_BUILDER_POLICY, BUILD_POLICY, DELEGATION_POLICY, ENGAGEMENT_POLICY, PREVIEW_POLICY } from "../harness/prompt/assembler.ts";
+import { AGENT_BUILDER_POLICY, BUILD_POLICY, DELEGATION_POLICY, ENGAGEMENT_POLICY, PREVIEW_POLICY, SLASH_COMMAND_POLICY } from "../harness/prompt/assembler.ts";
 import { currentWorkspace } from "./workspace.ts";
 import { learnFromTurn, recallPreamble } from "./personal.ts";
 import { buildUserTurnPreamble } from "./preamble.ts";
@@ -36,12 +36,16 @@ import { addTurnSpend, type LoopSpend, newLoopSpend, normalizeBudget, overBudget
 import { formatSpend } from "./loop_report.ts";
 import { assessReadiness, maturedGoalFrom, mergeMatured, parsePreflightJson, type PreflightSpec, preflightSystemPrompt, preflightUserPrompt, type ReadinessReport, relevantPriorRuns, renderLoopDesign, successCriteria, summarizePriorRuns } from "./loop_preflight.ts";
 import { execFileSync } from "node:child_process";
-import { type Automation, listAutomations, nextDueAutomation, updateAutomation } from "./automations.ts";
+import { type Automation, agentAutomationGate, listAutomations, nextDueAutomation, updateAutomation } from "./automations.ts";
+import { loadSpecFile, loadSpecTrust } from "../harness/agent/file_store.ts"; // P-AGENT.14: scheduled agent runs
+import { startAgentRun } from "./agent_run.ts"; // P-AGENT.14: same gated pipeline as the Builder's Run
 import { type EgressChoice, egressDecisionDetailed, egressPosture, extractHost, isLocalFileTarget, recordEgress } from "./egress_policy.ts";
 import { withinCallBudget } from "./network_whitelist.ts";
 import { previewOpenPath, previewablePath } from "./preview_resolve.ts";
 import { agentBuilderOpenSpec } from "../harness/agent/handoff.ts"; // P-AGENT.8.2: chat -> Agent Builder handoff
 import type { AgentSpec } from "../harness/agent/spec.ts";
+import { slashCommandCreateDraft } from "../harness/commands/handoff.ts"; // P-CMD.1: chat -> user slash command
+import type { UserCommand } from "../harness/commands/spec.ts";
 import { gateDenyReason } from "./gate_audit.ts";
 import { type ExecChoice, type ExecClass, classifyCommand, classifyEval, elicitationApproval, execStore, execVerdict, recordExec } from "./exec_policy.ts";
 import { toolFailureReason } from "./tool_failure.ts";
@@ -108,6 +112,7 @@ const ASKSAGE = join(REPO, "harness", "omp", "asksage_extension.ts");
 // a registration failure never breaks omp launch (see preview_extension.ts). Only added when the file exists.
 const PREVIEW_EXT = join(REPO, "harness", "omp", "preview_extension.ts");
 const AGENT_BUILDER_EXT = join(REPO, "harness", "omp", "agent_builder_extension.ts"); // P-AGENT.8.2: chat -> canvas handoff tool
+const SLASH_CMD_EXT = join(REPO, "harness", "omp", "slash_command_extension.ts"); // P-CMD.1: slash_command_create tool
 // P-KG-SYM.1: registers the read-only `codegraph_query` tool. Added ONLY when the user opted in
 // (settings.codeGraphAgent) AND the file exists — so a bad/absent extension never blocks omp launch.
 const CODEGRAPH_EXT = join(REPO, "harness", "omp", "codegraph_extension.ts");
@@ -136,6 +141,7 @@ export type ChatEvent =
   | { type: "permission"; id: string; tool: string; detail: string; options: { optionId: string; name: string; kind?: string }[]; url?: string; egress?: boolean; localFile?: boolean; exec?: boolean; program?: string; reason?: string; danger?: boolean }
   | { type: "preview-available"; path: string } // P-PREVIEW.2 (ADR-0096): the agent wrote a previewable file
   | { type: "agent-builder-open"; spec: AgentSpec } // P-AGENT.8.2 (ADR-0134): open the Agent Builder pre-populated
+  | { type: "slash-command-created"; command: UserCommand } // P-CMD.1 (ADR-0146): the agent created a user "/" command
   | { type: "usage"; used: number; size: number; cost: number }
   // P-GOAL.1 (ADR-0046): /goal loop events — an iteration begins, the separate checker's verdict,
   // the loop met its condition, or it stopped (cap / no-progress).
@@ -284,11 +290,12 @@ class Backend {
         if (loadSettings().developerMode) process.env.LUCID_ASKSAGE_DEBUG = "1"; else delete process.env.LUCID_ASKSAGE_DEBUG;
         // ADR-0033: also append the build / anti-over-refusal policy so the chat model doesn't decline
         // a buildable task (e.g. "make a game/graphics/music in one HTML file") by mis-reading its scope.
-        const appendedPolicy = `${DELEGATION_POLICY}\n\n${BUILD_POLICY}\n\n${PREVIEW_POLICY}\n\n${ENGAGEMENT_POLICY}\n\n${AGENT_BUILDER_POLICY}`;
+        const appendedPolicy = `${DELEGATION_POLICY}\n\n${BUILD_POLICY}\n\n${PREVIEW_POLICY}\n\n${ENGAGEMENT_POLICY}\n\n${AGENT_BUILDER_POLICY}\n\n${SLASH_COMMAND_POLICY}`;
         const previewArgs = existsSync(PREVIEW_EXT) ? ["-e", PREVIEW_EXT] : []; // P-PREVIEW.3a (draft)
         const codegraphArgs = loadSettings().codeGraphAgent && existsSync(CODEGRAPH_EXT) ? ["-e", CODEGRAPH_EXT] : []; // P-KG-SYM.1: opt-in
         const agentBuilderArgs = existsSync(AGENT_BUILDER_EXT) ? ["-e", AGENT_BUILDER_EXT] : []; // P-AGENT.8.2: agent_builder_open
-        const acp = new ACPClient(ompBin(), ["acp", "-e", GATE, "-e", ASKSAGE, ...previewArgs, ...codegraphArgs, ...agentBuilderArgs, ...isoCfg, "--append-system-prompt", appendedPolicy], currentWorkspace());
+        const slashCmdArgs = existsSync(SLASH_CMD_EXT) ? ["-e", SLASH_CMD_EXT] : []; // P-CMD.1: slash_command_create
+        const acp = new ACPClient(ompBin(), ["acp", "-e", GATE, "-e", ASKSAGE, ...previewArgs, ...codegraphArgs, ...agentBuilderArgs, ...slashCmdArgs, ...isoCfg, "--append-system-prompt", appendedPolicy], currentWorkspace());
         acp.onNotify = (method, params) => {
           if (method !== "session/update") return;
           const u = params?.update ?? params;
@@ -364,6 +371,12 @@ class Backend {
                 const abArgs = (u.rawInput ?? (u as { input?: unknown }).input ?? ri) as unknown;
                 const abSpec = agentBuilderOpenSpec(String(u.title ?? ""), abArgs);
                 if (abSpec) this.emit({ type: "agent-builder-open", spec: abSpec });
+                // P-CMD.1 (ADR-0146): the agent's `slash_command_create` tool call creates a user "/" command.
+                // Same detection shape as agent_builder_open — key on the unique `commandJson` arg, re-parse +
+                // validate + secret-scan here (fail-closed: a leaky/invalid draft parses to null and is ignored).
+                // The renderer then persists it authoritatively through the gate (createUserCommand).
+                const scCommand = slashCommandCreateDraft(String(u.title ?? ""), abArgs);
+                if (scCommand) this.emit({ type: "slash-command-created", command: scCommand });
               }
               break;
             }
@@ -1065,6 +1078,31 @@ class Backend {
     this.autoRunning = true;
     // Stamp lastRunAt up-front so a slow run can't be re-fired by the next tick before it finishes.
     updateAutomation(ws, id, { lastRunAt: Date.now() });
+    // P-AGENT.14 (ADR-0142): scheduled BUILT-AGENT runs. Fail-closed gate first: only a trusted, loadable,
+    // approval-free spec runs unattended. A missing/untrusted agent SUSPENDS the schedule (disable + reason);
+    // approval checkpoints refuse the tick but keep the schedule armed. The run itself goes through the SAME
+    // startAgentRun pipeline as the Builder's Run button — gate first, allow-list, stored trust, run trace.
+    if (a.kind === "agent") {
+      let result = "ran";
+      try {
+        const spec = a.agentSpecId ? loadSpecFile(ws, a.agentSpecId) : null;
+        const trust = a.agentSpecId ? loadSpecTrust(ws, a.agentSpecId) : { trustLabel: "quarantined" as const, reason: "no agent" };
+        const gate = agentAutomationGate(spec, trust.trustLabel);
+        if (!gate.run) {
+          result = gate.result ?? "refused";
+          if (gate.disable) updateAutomation(ws, id, { enabled: false });
+        } else {
+          const r = await startAgentRun({ spec: spec!, prompt: a.agentPrompt ?? "", model: a.agentModel || "haiku", workspace: ws, trustLabel: trust.trustLabel });
+          result = r.blocked ? `blocked: ${r.reason ?? "refused"}` : r.error ? `error: ${r.error}` : r.paused ? "refused: halted at an approval checkpoint" : `ok: ${(r.output ?? "").slice(0, 160) || "(no output)"}${r.runId ? ` [${r.runId}]` : ""}`;
+        }
+      } catch (e) {
+        result = `error: ${e instanceof Error ? e.message : String(e)}`;
+      } finally {
+        this.autoRunning = false;
+        updateAutomation(ws, id, { lastRunAt: Date.now(), lastResult: result.slice(0, 200) });
+      }
+      return { ran: true, result };
+    }
     let result = "ran";
     try {
       await this.runGoal(
