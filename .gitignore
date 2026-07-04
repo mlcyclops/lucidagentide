@@ -53,6 +53,9 @@ lucid-gui.json
 *secret*
 *credentials*
 **/auth.json
+# ...but these are first-party SOURCE files (the Agent Builder secret guardrail), not secrets:
+!**/secret_guard.ts
+!**/secret_guard.test.ts
 
 # desktop electron-builder output
 desktop/release/
