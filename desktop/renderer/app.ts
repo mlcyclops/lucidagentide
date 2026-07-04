@@ -28,6 +28,7 @@ import { capGraph, graphOpts, pollDelay, watchPerfTier } from "./perf_tier.ts";
 import type { PersonalGraphData } from "./bridge.ts";
 import { agentBuilderPanelHtml, specToGraphData, nodeEditorHtml, saveErrors, newCanvasSpec, runPanelHtml, secretsPanelHtml, agentInterviewPrompt } from "./agent_builder.ts"; // P-AGENT.2b/.4-live/.8
 import { localProvidersCardBody, draftFromForm } from "./local_providers_ui.ts"; // P-LOCAL.3 (ADR-0135): Settings → Local Providers
+import { acceptAttachment, promptImageBlocks, thumbStripHtml, MAX_ATTACHMENT_BYTES, type Attachment } from "./composer_attachments.ts"; // P-VISION.1 (ADR-0136): pasted images
 import type { AgentSpec, NodeKind } from "../../harness/agent/spec.ts"; // P-AGENT.2b
 import { type Action, type ToastAction, attachRichTip, createPalette, initTooltips, popover, showToast } from "./ui.ts";
 import { exportActionPlan } from "./kg_export.ts";
@@ -91,6 +92,7 @@ const state = {
   whitelist: [] as import("./bridge.ts").WhitelistEntryView[], // P-NETWL.2 (ADR-0106) curated network whitelist
   creds: [] as import("./bridge.ts").CredMetaView[], // P-KEYS.1 (ADR-0107) vault metadata (ref → kind/label/last4)
   localProviders: [] as import("../local_providers.ts").LocalProviderDef[], // P-LOCAL.3 (ADR-0135) self-hosted/custom LLM endpoints
+  attachments: [] as Attachment[], // P-VISION.1 (ADR-0136) pasted/dropped images staged for the next message
   posture: { allowAll: true, allowWebSearch: true, managedLocked: false } as import("./bridge.ts").EgressPostureView, // P-NETWL.5 (ADR-0108)
   managed: null as import("./bridge.ts").ManagedPolicy | null, // ADR-0068 (P-ENT.1) enterprise locks
   userRole: null as UserRole | null, // ADR-0088 (P-ROLE.1): chosen role; null until onboarding picks one
@@ -187,6 +189,9 @@ function buildShell(): void {
         <div class="chat" id="chat"><div class="thread" id="thread"></div></div>
         <button class="jump-down" id="jumpDown" type="button" aria-label="Jump down a page" data-tip="Jump down a page">${icon("chevronsDown", 18)}</button>
         <div class="composer-wrap">
+          <!-- P-VISION.1 (ADR-0136): thumbnails of pasted/dropped images, just above the prompt bar; sent
+               with the next message only when the user hits Enter/Send. -->
+          <div class="composer-thumbs" id="composerThumbs" hidden></div>
           <div class="composer-row">
             <div class="composer">
               <textarea id="input" rows="1" spellcheck="true" placeholder="Ask the agent…  every tool call is scanned before it runs"></textarea>
@@ -389,7 +394,7 @@ function seedThread(): void {
     <div class="h">Ask the agent anything</div>
     <div class="d">Secure prompting and code generation</div></div>`;
 }
-function addMessage(role: "user" | "assistant", text: string): HTMLElement {
+function addMessage(role: "user" | "assistant", text: string, attachments?: Attachment[]): HTMLElement {
   $("#chatHint")?.remove();
   // Copy + Save .md on BOTH roles (copy your own prompts too).
   // P-VOICE.1 (ADR-0115): read-aloud (TTS) only on the assistant's replies.
@@ -404,9 +409,55 @@ function addMessage(role: "user" | "assistant", text: string): HTMLElement {
   const textEl = $(".text", node) as HTMLElement;
   textEl.innerHTML = renderMarkdown(text);
   enhanceCodeBlocks(textEl);
+  // P-VISION.1 (ADR-0136): render attached images inline. Each img.src is set as a DOM PROPERTY (never
+  // interpolated into the HTML) so a data URL can't break out of the markup.
+  if (attachments?.length) {
+    const row = el(`<div class="msg-imgs"></div>`);
+    for (const a of attachments) {
+      const img = document.createElement("img");
+      img.className = "msg-img"; img.alt = "attached image"; img.loading = "lazy"; img.src = a.dataUrl;
+      row.appendChild(img);
+    }
+    textEl.appendChild(row);
+  }
   $("#thread")!.appendChild(node);
   scrollChat();
   return node;
+}
+
+// ── P-VISION.1 (ADR-0136): composer image attachments ────────────────────────────────────────────
+let attSeq = 0;
+/** Re-paint the thumbnail strip above the composer and set each thumb's img.src as a PROPERTY. */
+function renderComposerThumbs(): void {
+  const strip = $("#composerThumbs") as HTMLElement | null; if (!strip) return;
+  strip.innerHTML = thumbStripHtml(state.attachments);
+  strip.hidden = state.attachments.length === 0;
+  for (const a of state.attachments) {
+    const img = strip.querySelector(`.cx-thumb[data-att="${a.id}"] .cx-thumb-img`) as HTMLImageElement | null;
+    if (img) img.src = a.dataUrl; // property, never interpolated
+  }
+  setSendEnabled();
+}
+/** Validate + stage a pasted/dropped image (data URL) for the next message. */
+function addPastedImage(dataUrl: string, name?: string): void {
+  const r = acceptAttachment(state.attachments, dataUrl, `att_${++attSeq}`, name);
+  if (!r.ok || !r.attachment) { showToast({ tone: "warn", title: "Couldn't attach image", desc: r.reason ?? "" }); return; }
+  state.attachments.push(r.attachment);
+  renderComposerThumbs();
+  showToast({ title: "Image attached", desc: "Add instructions, then press Enter to send.", timeout: 1800 });
+}
+/** Read image files (from paste or drop) into staged attachments. Returns true if any were image files. */
+function stageImageFiles(files: FileList | File[] | null | undefined): boolean {
+  let any = false;
+  for (const f of Array.from(files ?? [])) {
+    if (!f.type.startsWith("image/")) continue;
+    any = true;
+    if (f.size > MAX_ATTACHMENT_BYTES) { showToast({ tone: "warn", title: "Image too large", desc: `${f.name || "image"} exceeds the limit.` }); continue; }
+    const reader = new FileReader();
+    reader.onload = () => addPastedImage(String(reader.result), f.name);
+    reader.readAsDataURL(f);
+  }
+  return any;
 }
 interface MsgNode extends HTMLElement { _md?: string }
 
@@ -991,7 +1042,10 @@ function createSubagentCard(e: Extract<ChatEvent, { type: "subagent" }>): { el: 
 async function send(): Promise<void> {
   const ta = $("#input") as HTMLTextAreaElement;
   const text = ta.value.trim();
-  if (!text) return;
+  // P-VISION.1 (ADR-0136): capture any staged image attachments for this turn.
+  const atts = state.attachments.slice();
+  const images = promptImageBlocks(atts);
+  if (!text && images.length === 0) return;
   // P-AGENT.8: `/agent [description]` kicks off the Agent Builder interview — the chat agent (steered by the
   // frozen AGENT_BUILDER_POLICY) asks what to build, then calls `agent_builder_open`. We show the user's
   // `/agent …` in the transcript but send the interview-kickoff prompt to the model.
@@ -1004,8 +1058,9 @@ async function send(): Promise<void> {
   // we never fight a user who reopens it mid-chat.
   if (!autoCollapsedSessions) { autoCollapsedSessions = true; if (!state.sidebarCollapsed) toggleSidebar(true); }
   state.lastPrompt = text; // remembered so an Approve & retry can re-send it
-  ta.value = ""; autosize(ta); setSendEnabled();
-  addMessage("user", text);
+  ta.value = ""; autosize(ta);
+  state.attachments = []; renderComposerThumbs(); // clear the thumb strip on send (also refreshes send-enabled)
+  addMessage("user", text, atts);
   state.streaming = true; setSendEnabled();
 
   const node = addMessage("assistant", "");
@@ -1116,7 +1171,7 @@ async function send(): Promise<void> {
     else if (e.type === "usage") { tok = e.used; cost = e.cost; state.liveUsage = { used: e.used, size: e.size, cost: e.cost }; paintHud(); renderStatus(); renderMetricsRail(); }
     else if (e.type === "done") { if (e.text && e.text.length > buf.length) buf = e.text; /* reconcile a lossy stream with the server's full reply */ streamEl.innerHTML = renderMarkdown(buf); enhanceCodeBlocks(streamEl); (node as MsgNode)._md = buf; finishHud(); state.streaming = false; setSendEnabled(); }
   };
-  try { await bridge.sendPrompt(sendText, onEvent); }
+  try { await bridge.sendPrompt(sendText, onEvent, images); }
   finally {
     (node as MsgNode)._md = buf;
     if (state.streaming) { streamEl.innerHTML = renderMarkdown(buf); enhanceCodeBlocks(streamEl); finishHud(); state.streaming = false; setSendEnabled(); } else { finishHud(); }
@@ -1177,7 +1232,7 @@ function setSendEnabled(): void {
     btn.innerHTML = icon("square", 16);
     btn.setAttribute("data-tip", "Stop|Interrupt the reply + tool calls");
   } else {
-    btn.disabled = !ta.value.trim();
+    btn.disabled = !ta.value.trim() && state.attachments.length === 0; // P-VISION.1: image-only messages can send
     btn.classList.remove("stop");
     btn.innerHTML = icon("send", 18);
     btn.setAttribute("data-tip", "Send|Enter");
@@ -6333,6 +6388,32 @@ function wire(): void {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
   });
   ta.addEventListener("blur", () => window.setTimeout(closeSlashAC, 120)); // dismiss when focus leaves (after a click lands)
+  // P-VISION.1 (ADR-0136): paste a snipping-tool / desktop screenshot straight into the prompt bar. Image
+  // clipboard items are staged as thumbnails (NOT auto-sent); text paste passes through untouched.
+  ta.addEventListener("paste", (e) => {
+    const items = (e as ClipboardEvent).clipboardData?.items;
+    const files: File[] = [];
+    for (const it of Array.from(items ?? [])) if (it.kind === "file" && it.type.startsWith("image/")) { const f = it.getAsFile(); if (f) files.push(f); }
+    if (files.length && stageImageFiles(files)) e.preventDefault(); // consumed as images; don't also paste junk text
+  });
+  // Drag-and-drop image files onto the composer.
+  const cw = $(".composer-wrap") as HTMLElement | null;
+  cw?.addEventListener("dragover", (e) => { if ((e as DragEvent).dataTransfer?.types?.includes("Files")) { e.preventDefault(); cw.classList.add("drag"); } });
+  cw?.addEventListener("dragleave", (e) => { if (e.target === cw) cw.classList.remove("drag"); });
+  cw?.addEventListener("drop", (e) => {
+    cw.classList.remove("drag");
+    const files = (e as DragEvent).dataTransfer?.files;
+    if (files?.length && stageImageFiles(files)) e.preventDefault();
+  });
+  // Remove a staged thumbnail.
+  $("#composerThumbs")?.addEventListener("click", (e) => {
+    const btn = (e.target as HTMLElement).closest("[data-att-remove]") as HTMLElement | null;
+    if (!btn) return;
+    const id = btn.dataset.attRemove;
+    state.attachments = state.attachments.filter((a) => a.id !== id);
+    renderComposerThumbs();
+    ($("#input") as HTMLTextAreaElement)?.focus();
+  });
   // P-ACP.4: while a turn runs the Send button is a Stop control (interrupt the turn); else it sends.
   $("#send")!.addEventListener("click", () => { if (state.streaming) void stopTurn(); else void send(); });
 

@@ -343,7 +343,7 @@ export interface LucidBridge {
   mcpToggle(id: string, enabled: boolean): Promise<unknown>;
   usage(): Promise<UsageLedger | null>;
   codeActivity(): Promise<CodeActivity | null>;
-  sendPrompt(text: string, onEvent: (e: ChatEvent) => void): Promise<void>;
+  sendPrompt(text: string, onEvent: (e: ChatEvent) => void, images?: { data: string; mimeType: string }[]): Promise<void>;
   // P-GOAL.1 (ADR-0046): run a /goal loop - streams the same events plus goal-iter/check/done/stop.
   runGoal(opts: GoalOpts, onEvent: (e: ChatEvent) => void): Promise<void>;
   resumableLoops(): Promise<ResumableLoop[] | null>; // P-GOAL.4: loops that stopped without meeting their condition
@@ -607,10 +607,10 @@ async function streamNdjson(path: string, body: unknown, onEvent: (e: ChatEvent)
 // Stop must always recover the UI: aborting this controller ends the client read immediately, so the
 // turn's finally runs even when omp is wedged. cancelChat() aborts it AND posts the server cancel.
 let chatAbort: AbortController | null = null;
-const streamChat = (text: string, onEvent: (e: ChatEvent) => void) => {
+const streamChat = (text: string, onEvent: (e: ChatEvent) => void, images?: { data: string; mimeType: string }[]) => {
   chatAbort?.abort();
   chatAbort = new AbortController();
-  return streamNdjson("/api/chat", { text }, onEvent, chatAbort.signal).finally(() => { chatAbort = null; });
+  return streamNdjson("/api/chat", { text, ...(images?.length ? { images } : {}) }, onEvent, chatAbort.signal).finally(() => { chatAbort = null; });
 };
 
 export const bridge: LucidBridge = {

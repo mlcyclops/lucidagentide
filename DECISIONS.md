@@ -9608,3 +9608,48 @@ the whitelist + vault are reused, not reinvented. No app version bump; no EventN
 ADR-0106/0107 (network whitelist + OS-encrypted credential vault reused here), ADR-0007 (AskSage's custom
 base-URL provider - the closest prior art), ADR-0134 (the secret-guardrail ethos `scanForInlineSecret` mirrors),
 ADR-0029 (the model-picker gating a custom model flows through).
+
+## ADR-0136 - P-VISION.1: paste / drop images into the composer (multimodal user prompts)
+
+**Date:** 2026-07-04
+**Status:** Accepted - **BUILT + verified live.** Pure `desktop/renderer/composer_attachments.ts` + composer
+wiring + the send pipeline (renderer → `/api/chat` → `acp_backend.prompt` → ACP `session/prompt`). 11 unit
+tests; full suite 1293 pass; tsc clean. First step of the broader multimodal/preview-review work (agent live
+DOM review is P-PREVIEW.6; screenshot→RAG is deferred P-RAG.2).
+**Increment:** P-VISION.1.
+
+### Context
+
+The user wants to paste a snipping-tool / desktop screenshot straight into the prompt bar, see a **mini
+thumbnail just above the prompt bar**, add instructions, and send **only on Enter/Send** (no auto-push). Today
+the composer is text-only: `/api/chat` takes `{ text }` → `session/prompt: [{type:text}]`. But omp's ACP
+`session/prompt` already accepts `(text|image)[]` content (verified against `pi-ai` `ImageContent = {type:"image",
+data:<base64>, mimeType}`; the agent's own `preview_screenshot` tool proves the image round-trip) - so only the
+USER-input pipeline needed wiring.
+
+### Decision
+
+- **Attachments are validated image data URLs** (`composer_attachments.ts`, pure): `parseImageDataUrl` accepts
+  only `image/(png|jpeg|webp|gif)` base64 (SVG excluded - script risk); `acceptAttachment` enforces
+  count (≤6) + size (≤12 MB) fail-closed; `promptImageBlocks` → the `{type:"image",data,mimeType}` blocks omp
+  wants. **No data URL is ever interpolated into HTML** - `thumbStripHtml` renders `<img>` shells and the
+  caller sets `img.src` as a DOM PROPERTY (mirrors the existing `screenshotPreviewToChat` rule).
+- **Staged, never auto-sent.** Pasted/dropped images land in `state.attachments` and render as thumbnails in a
+  `#composerThumbs` strip above the prompt bar (each with a remove button). They travel only when the user
+  hits Enter or Send; the thread message renders the images inline; the strip clears on send.
+- **The pipeline carries content blocks.** `send()` computes `promptImageBlocks(state.attachments)` →
+  `bridge.sendPrompt(text, onEvent, images)` → `/api/chat { text, images }` (defensively filtered) →
+  `backend.prompt(text, emit, images)` → `session/prompt: [{type:text,text:body}, ...imageBlocks]`. All
+  existing callers (goal loop) pass no images and are unchanged.
+
+### Invariants preserved
+
+No frozen-prefix change (the image blocks ride in the user-turn tail, like text); no new EventName; the XSS
+rule (data URLs set as properties, strict data-URL regex) holds; existing text-only send path unchanged.
+No app version bump.
+
+### Relates to
+
+ADR-0096 (the preview screenshot→image-content pattern this generalizes to user input), the agent
+`preview_screenshot` tool (proves omp's image round-trip), P-PREVIEW.6 (agent live DOM review - next),
+P-RAG.2 (screenshot→RAG ingest - deferred until RAG lands).
