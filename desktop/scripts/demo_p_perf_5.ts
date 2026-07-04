@@ -9,7 +9,7 @@
 // Now: the switch paints optimistically (round-trip reconciles in the background - wired in app.ts),
 // lastModel is a debounced write-behind with read-your-writes, and load() is memoized on mtime+size.
 
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { flushPendingSettings, lastModel, load, save, setLastModel } from "../settings_store.ts";
@@ -24,13 +24,13 @@ const file = join(dir, "gui.json");
 process.env.LUCID_GUI_SETTINGS_FILE = file;
 
 try {
-  // 1) a burst of model flips (the picker scroll-through) coalesces into ONE deferred write
+  // 1) a burst of model flips (the picker scroll-through) coalesces into ONE deferred write.
+  //    Asserted on file CONTENT (not mtime) - stronger, and no stat-then-read pair (js/file-system-race).
   save({ lastModel: "m-start" });
-  const mtime0 = statSync(file).mtimeMs;
   setLastModel("m-1");
   setLastModel("m-2");
   setLastModel("m-3");
-  if (statSync(file).mtimeMs !== mtime0) fail("no write may happen during the burst (write-behind)");
+  if (JSON.parse(readFileSync(file, "utf8")).lastModel !== "m-start") fail("no write may happen during the burst (write-behind)");
   if (lastModel() !== "m-3") fail("read-your-writes: the pending value must be visible immediately");
   flushPendingSettings();
   if (JSON.parse(readFileSync(file, "utf8")).lastModel !== "m-3") fail("the flush must persist the LAST value");

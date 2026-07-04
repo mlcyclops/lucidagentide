@@ -12,7 +12,7 @@
 // (OAuth is handled separately via omp's own credential vault / auth-broker -
 //  that's the more secure path and omp owns the storage there.)
 
-import { chmodSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, fchmodSync, fstatSync, openSync, readFileSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { homedir, hostname } from "node:os";
 import { join } from "node:path";
@@ -238,30 +238,38 @@ export function setPersonalScope(scope: GuiSettings["personalScope"]): GuiSettin
 // P-PERF.5 (ADR-0132): load() used to read + JSON.parse the file on EVERY call - and nearly every
 // request handler calls it (often several times). Memoize the parse on the file's mtime; callers get a
 // structuredClone so today's read-modify-save pattern keeps its exact semantics (every load() is an
-// independent object - a caller mutating without save() can never corrupt the memo). stat-then-read
-// (no existsSync pair - the TOCTOU shape CodeQL flags); a missing/corrupt file is just {}.
+// independent object - a caller mutating without save() can never corrupt the memo). A missing or
+// corrupt file is just {}.
 // Memo key = mtime AND size: two writes can land in the same mtime tick, but a content change almost
 // always changes the byte length too. (Residual blind spot - same-ms, same-size external rewrite -
 // is accepted: this process is the file's only writer in practice.)
+// stat and read/write go through ONE file descriptor (fstat on the open fd), so the metadata the memo
+// is keyed on always describes the exact bytes read/written - no check-then-use race (js/file-system-race).
 let loadMemo: { file: string; mtimeMs: number; size: number; s: GuiSettings } | null = null;
 export function load(): GuiSettings {
   const file = settingsFile();
   try {
-    const st = statSync(file); // throws when missing -> {}
-    if (!loadMemo || loadMemo.file !== file || loadMemo.mtimeMs !== st.mtimeMs || loadMemo.size !== st.size) {
-      loadMemo = { file, mtimeMs: st.mtimeMs, size: st.size, s: JSON.parse(readFileSync(file, "utf8")) as GuiSettings };
-    }
+    const fd = openSync(file, "r"); // throws when missing -> {}
+    try {
+      const st = fstatSync(fd);
+      if (!loadMemo || loadMemo.file !== file || loadMemo.mtimeMs !== st.mtimeMs || loadMemo.size !== st.size) {
+        loadMemo = { file, mtimeMs: st.mtimeMs, size: st.size, s: JSON.parse(readFileSync(fd, "utf8")) as GuiSettings };
+      }
+    } finally { closeSync(fd); }
     return structuredClone(loadMemo.s);
   } catch { return {}; }
 }
 export function save(s: GuiSettings): void {
   const file = settingsFile();
-  writeFileSync(file, JSON.stringify(s, null, 2), "utf8");
-  try { chmodSync(file, 0o600); } catch { /* best-effort on Windows */ }
+  const fd = openSync(file, "w");
   try {
-    const st = statSync(file);
-    loadMemo = { file, mtimeMs: st.mtimeMs, size: st.size, s: structuredClone(s) };
-  } catch { loadMemo = null; }
+    writeFileSync(fd, JSON.stringify(s, null, 2), "utf8");
+    try { fchmodSync(fd, 0o600); } catch { /* best-effort on Windows */ }
+    try {
+      const st = fstatSync(fd);
+      loadMemo = { file, mtimeMs: st.mtimeMs, size: st.size, s: structuredClone(s) };
+    } catch { loadMemo = null; }
+  } finally { closeSync(fd); }
 }
 
 /** Push stored keys + AskSage base URL into process.env so child `omp acp`
