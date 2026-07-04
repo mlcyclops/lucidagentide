@@ -1800,6 +1800,11 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .kg-main.side-open .kg-center-btn{right:calc(var(--kgside-w,250px) + 16px)}
 .kg-empty{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;color:var(--txt-4);font-size:13px;text-align:center;padding:0 36px}
 .kg-empty .ic{opacity:.55}
+/* P-PERF.4: truncation hint atop a tail-loaded resumed transcript */
+.thread-tail-note{text-align:center;color:var(--txt-4);font-size:11px;padding:6px 0 10px;letter-spacing:.02em}
+/* P-PERF.2: minimal-tier pause card - readable copy width + a clear opt-in button */
+.kg-paused>div{color:var(--txt-3);max-width:380px;line-height:1.5}
+.kg-paused .btn-mini{margin-top:2px}
 /* inline Knowledge-graph unlock (passphrase under the locked message) */
 .kg-unlock{gap:10px}
 .kg-unlock>div:first-of-type{color:var(--txt-3);max-width:340px}

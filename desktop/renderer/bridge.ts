@@ -361,7 +361,8 @@ export interface LucidBridge {
   // P-IDE.3: record a skill activation as telemetry (metadata only).
   skillActivated(command: string, name: string, source: "bundled" | "project" | "task"): Promise<unknown>;
   sessions(): Promise<SessionList | null>;
-  sessionMessages(id: string): Promise<{ role: string; text: string }[] | null>;
+  // P-PERF.4: tail-first transcript page - `limit` returns only the last N messages (+ the true total).
+  sessionMessages(id: string, limit?: number): Promise<{ messages: { role: string; text: string }[]; total: number } | null>;
   resumeSession(id: string): Promise<void>;
   deleteSession(id: string): Promise<{ ok: boolean; error?: string }>;
   clearIngestSessions(): Promise<{ ok: boolean; cleared: number } | null>; // P-KG-INGEST.2: bulk-delete ingest throwaways
@@ -668,7 +669,13 @@ export const bridge: LucidBridge = {
       return data ?? { sessions: [], ingest: [] };
     } catch { return null; }
   },
-  sessionMessages: (id) => getData(`/api/session?id=${encodeURIComponent(id)}`),
+  sessionMessages: async (id, limit = 0) => {
+    const data: { messages: { role: string; text: string }[]; total: number } | { role: string; text: string }[] | null =
+      await getData(`/api/session?id=${encodeURIComponent(id)}&limit=${limit}`);
+    if (!data) return null;
+    // Tolerate an older server that returned the bare array (pre-P-PERF.4): wrap it as a full page.
+    return Array.isArray(data) ? { messages: data, total: data.length } : data;
+  },
   resumeSession: async (id) => { await post("/api/session/load", { id }); },
   deleteSession: async (id) => (await post("/api/session/delete", { id })) ?? { ok: false, error: "no response" },
   clearIngestSessions: () => post("/api/sessions/ingest/clear", {}),

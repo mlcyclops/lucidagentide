@@ -24,6 +24,7 @@ import { APP_VERSION } from "../version.ts";
 import { renderMarkdown } from "./markdown.ts";
 import { type GraphHandle, kindLabel, mountGraph } from "./graph.ts";
 import { addEdgeOptimistic, applyForget, chainPairs, matchNodes, removeEdgeOptimistic, resolveRelationLabel } from "./kg_ops.ts";
+import { capGraph, graphOpts, pollDelay, watchPerfTier } from "./perf_tier.ts";
 import type { PersonalGraphData } from "./bridge.ts";
 import { type Action, type ToastAction, attachRichTip, createPalette, initTooltips, popover, showToast } from "./ui.ts";
 import { exportActionPlan } from "./kg_export.ts";
@@ -226,6 +227,7 @@ function buildShell(): void {
             <div class="seg kg-lens" data-kg-lens>
               <button class="on" data-lens="kind">Kind</button><button data-lens="trust">Trust</button>
             </div>
+            <button class="btn-mini" id="kgPerf" data-tip="Performance mode|Auto adapts rendering to battery + CPU: on battery the graph goes calm (no particle flow, shorter settle, capped nodes); LOW battery pauses the visualization entirely - the agent still uses your knowledge. Click to cycle auto \u2192 full \u2192 reduced \u2192 minimal.">${icon("gauge", 13)} Auto</button>
             <div class="kg-relate-stack">
               <button class="btn-mini" id="kgRelate" data-tip="Relate nodes|Turn on relate mode, then drag one node onto another - or click two or more nodes and press Relate - to add your OWN relationships. They're saved to your private graph (first-party, never sent to be scanned as instructions).">${icon("git", 13)} Relate</button>
               <button class="btn-mini" id="kgCode" data-tip="Code graph|Ingest THIS workspace into a code knowledge graph - source files as nodes, imports as edges (colbymchenry/codegraph-style, in your own canvas). Click to build + view; click again to return to your personal graph. Needs no personalization unlock.">${icon("graph", 13)} Code graph</button>
@@ -335,6 +337,25 @@ async function renderSessions(): Promise<void> {
   }
   renderSessionList(data);
   setCachedSessions(data); // refresh the cache for next launch
+  void warmTranscripts(data); // P-PERF.4: AC-only idle prefetch (no-op on battery tiers)
+}
+// P-PERF.4 (ADR-0131): warm the transcript cache for the most-recent sessions so clicking one paints
+// instantly even on the FIRST visit. Strictly AC-only (perf tier `full`) - prefetch is anti-battery -
+// and off the interactive path via requestIdleCallback; sequential fetches keep the server load flat.
+let warmedTranscripts = false;
+async function warmTranscripts(data: SessionList): Promise<void> {
+  if (warmedTranscripts || perfWatch.tier() !== "full") return;
+  warmedTranscripts = true;
+  const run = async (): Promise<void> => {
+    for (const s of data.sessions.slice(0, 5)) {
+      if (perfWatch.tier() !== "full") break; // unplugged mid-warm -> stop spending
+      if (cachedTranscript(s.id)) continue;
+      const page = await bridge.sessionMessages(s.id, RESUME_TAIL).catch(() => null);
+      if (page?.messages.length) setCachedTranscript(s.id, page.messages, Date.now());
+    }
+  };
+  if (typeof requestIdleCallback === "function") requestIdleCallback(() => void run());
+  else window.setTimeout(() => void run(), 1500);
 }
 // P-KG-INGEST.2: bulk-delete the throwaway extraction sessions (chats + knowledge graph untouched).
 function confirmClearIngest(): void {
@@ -2208,6 +2229,13 @@ async function maybeOnboardPersonal(): Promise<void> {
 
 // ───────────────────────── Knowledge graph (P9.3) ─────────────────────────
 let kgHandle: GraphHandle | null = null;
+const perfWatch = watchPerfTier(); // P-PERF.2 (ADR-0129): battery/spec-aware render tier
+let kgForceRender = false; // P-PERF.2: one-shot "Render anyway" override of the minimal-tier pause (per run)
+// P-PERF.3 (ADR-0130): layout continuity across mounts - re-opening the KG (rail switch, live-refresh
+// remount) paints nodes where the user last saw them instead of re-exploding from a circle. IN-MEMORY
+// only, per the ADR-0084 privacy boundary: entity-id-keyed positions are structural metadata of the
+// encrypted store and never touch disk. Keyed per graph (personal vs code:file vs code:symbol).
+const kgLayoutCache = new Map<string, Map<string, { x: number; y: number }>>();
 let kgData: PersonalGraphData | null = null;
 let kgLens: "kind" | "trust" = "kind";
 let kgOpen = false;
@@ -2560,6 +2588,26 @@ async function screenshotPreviewToChat(): Promise<void> {
   shot.appendChild(img);
   showToast({ title: "Screenshot added to chat", desc: "Captured the preview into the conversation.", actions: [{ label: "OK" }], timeout: 2600 });
 }
+// P-PERF.2 (ADR-0129): the minimal-tier pause card. The agent keeps FULL knowledge access - only the
+// CPU-hungry visualization is skipped (the O(n^2) settle + particle loop is what spikes a battery-throttled
+// laptop). "Render anyway" is a one-shot, per-run override that mounts at minimal fidelity.
+function renderKgPaused(canvas: HTMLElement): void {
+  const side = $("#kgSide") as HTMLElement | null;
+  if (side) { side.hidden = true; side.innerHTML = ""; }
+  canvas.innerHTML = `<div class="kg-empty kg-paused">${icon("gauge", 30)}
+    <div><b>Graph rendering is paused to save power.</b><br/>
+    Minimal performance mode is active (low battery, or your override). The agent still reads and writes
+    your knowledge - only this visualization is off.</div>
+    <button class="btn-mini" id="kgRenderAnyway">Render anyway</button></div>`;
+  showKgCenter(false); syncKgSideOpen();
+  $("#kgRenderAnyway")?.addEventListener("click", () => { kgForceRender = true; void renderKnowledge(); });
+}
+function paintPerfChip(): void {
+  const b = $("#kgPerf");
+  if (!b) return;
+  const m = perfWatch.mode();
+  b.innerHTML = `${icon("gauge", 13)} ${m === "auto" ? `Auto \u00b7 ${perfWatch.tier()}` : m}`;
+}
 async function renderKnowledge(): Promise<void> {
   const canvas = $("#kgCanvas"), side = $("#kgSide"), scopeLbl = $("#kgScopeLbl");
   if (!canvas || !side) return;
@@ -2580,11 +2628,22 @@ async function renderKnowledge(): Promise<void> {
     if (status.configured) return renderKgLocked(canvas as HTMLElement);
     return gate("Personalization isn't set up yet. Create a passphrase in Settings to start your private graph.");
   }
+  // P-PERF.2: pause BEFORE the decrypt - skipping the render should skip its cost too.
+  if (perfWatch.tier() === "minimal" && !kgForceRender) return renderKgPaused(canvas as HTMLElement);
   try { kgData = await bridge.personalGraph(); }
   catch { return gate("Couldn't decrypt your graph. Try reopening this panel."); }
   if (!kgData || kgData.nodes.length === 0) return gate("Nothing learned yet. It remembers durable facts about <b>you</b> - not what we discuss. Tell me things like <i>“I prefer Rust”</i>, <i>“I use vim”</i>, <i>“I decided to go with Postgres”</i>, or <i>“remember that I deploy with Kubernetes”</i> and they'll appear here (each is security-scanned first).");
   (side as HTMLElement).hidden = true; side.innerHTML = ""; // appears only when a node is clicked
-  kgHandle = mountGraph(canvas as HTMLElement, kgData, (id) => renderKgSide(id), { onRelate: relateNodes, onRelatePick: onRelatePick });
+  // P-PERF.2: tier-scaled fidelity - calm + shorter settle + a top-hubs cap off AC power. kgData stays
+  // FULL (search, facts, signature); only the DRAWN subset is capped.
+  const gOpts = graphOpts(perfWatch.tier());
+  const { data: kgDraw, capped: kgCapped } = capGraph(kgData, gOpts.nodeCap);
+  kgHandle = mountGraph(canvas as HTMLElement, kgDraw, (id) => renderKgSide(id), { onRelate: relateNodes, onRelatePick: onRelatePick }, {
+    ...gOpts, // P-PERF.3: seed from + harvest into the per-graph layout cache (no re-explosion on re-open)
+    positions: kgLayoutCache.get("personal"),
+    onPositions: (pos) => kgLayoutCache.set("personal", pos),
+  });
+  if (kgCapped && scopeLbl) scopeLbl.textContent += ` \u00b7 top ${kgDraw.nodes.length} of ${kgData.nodes.length} nodes`;
   showKgCenter(true); syncKgSideOpen();
   if (kgRelateMode) { kgHandle.setRelateMode(true); onRelatePick([]); } // preserve relate mode across a live remount
   const sq = ($("#kgSearch") as HTMLInputElement | null)?.value; // P-KG-SEARCH.1: preserve an active search across a remount
@@ -2632,7 +2691,10 @@ async function renderCodeGraph(ingest: boolean, level: "file" | "symbol" = codeG
   // A big repo is 1000s of nodes - keep the canvas readable by rendering the MOST-CONNECTED hubs (the full
   // graph is still ingested + stored + queryable; only the drawing is capped).
   let nodes = data.nodes, edges = data.edges, capped = 0;
-  const CAP = 600;
+  // P-PERF.2: an explicit "Code graph" click renders even at minimal tier (the user asked), but the
+  // tier tightens the hub cap and calms the sim so a battery-throttled laptop isn't pegged.
+  const gOpts = graphOpts(perfWatch.tier());
+  const CAP = Math.min(600, gOpts.nodeCap ?? 600);
   if (nodes.length > CAP) {
     const keep = new Set([...nodes].sort((a, b) => b.count - a.count).slice(0, CAP).map((n) => n.id));
     capped = nodes.length - CAP;
@@ -2641,7 +2703,11 @@ async function renderCodeGraph(ingest: boolean, level: "file" | "symbol" = codeG
   }
   codeGraphRoot = data.root || "";
   kgData = { nodes, edges, facts: [] };
-  kgHandle = mountGraph(canvas as HTMLElement, kgData, (id) => renderCodeSide(id), {});
+  kgHandle = mountGraph(canvas as HTMLElement, kgData, (id) => renderCodeSide(id), {}, {
+    ...gOpts, // P-PERF.3: same layout continuity for the code graph, keyed by level
+    positions: kgLayoutCache.get(`code:${level}`),
+    onPositions: (pos) => kgLayoutCache.set(`code:${level}`, pos),
+  });
   kgHandle.setLens(kgLens);
   kgSig = kgSignature(kgData);
   updateCodeGraphButtons(true, data);
@@ -2864,6 +2930,9 @@ function renderThread(msgs: { role: string; text: string }[] | null | undefined)
   if (msgs && msgs.length) for (const m of msgs) addMessage(m.role === "user" ? "user" : "assistant", m.text);
   else seedThread();
 }
+// P-PERF.4 (ADR-0131): resume loads only the transcript TAIL - matches the SWR cache cap, so the IPC
+// payload and the DOM stay bounded no matter how long the chat grew. The full history stays on disk.
+const RESUME_TAIL = 400;
 async function resumeSession(id: string): Promise<void> {
   closeSettings();
   $$(".sess").forEach((s) => s.classList.toggle("active", (s as HTMLElement).dataset.sid === id));
@@ -2871,12 +2940,18 @@ async function resumeSession(id: string): Promise<void> {
   const cached = cachedTranscript(id);
   let shownSig = "";
   if (cached && cached.length) { renderThread(cached); shownSig = transcriptSig(cached); }
-  const msgs = await bridge.sessionMessages(id);
-  if (msgs) {
-    if (transcriptSig(msgs) !== shownSig) renderThread(msgs); // re-render only if it actually changed (no flicker)
-    setCachedTranscript(id, msgs, Date.now());
+  const page = await bridge.sessionMessages(id, RESUME_TAIL);
+  if (page) {
+    if (transcriptSig(page.messages) !== shownSig) renderThread(page.messages); // re-render only if it actually changed (no flicker)
+    setCachedTranscript(id, page.messages, Date.now());
+    if (page.total > page.messages.length) { // honest truncation hint - never silent
+      const note = document.createElement("div");
+      note.className = "thread-tail-note";
+      note.textContent = `Showing the last ${page.messages.length} of ${page.total} messages`;
+      $("#thread")?.prepend(note);
+    }
   } else if (!shownSig) {
-    renderThread(null); // no cache AND the fetch failed → a fresh empty thread
+    renderThread(null); // no cache AND the fetch failed -> a fresh empty thread
   }
   await bridge.resumeSession(id);
   $("#input")?.focus();
@@ -5217,6 +5292,25 @@ function wire(): void {
   $("#kgSearch")?.addEventListener("keydown", (e) => {
     if ((e as KeyboardEvent).key === "Escape") { (e.target as HTMLInputElement).value = ""; kgHandle?.setSearch(null); }
   });
+  // P-PERF.2: the performance-mode chip - cycle auto -> full -> reduced -> minimal; auto follows battery/CPU.
+  $("#kgPerf")?.addEventListener("click", () => {
+    const m = perfWatch.cycleMode();
+    paintPerfChip();
+    kgForceRender = false; // a mode change re-evaluates the minimal-tier pause
+    showToast({
+      title: `Performance mode: ${m}`,
+      desc: m === "auto" ? `Following battery + CPU (now: ${perfWatch.tier()}).`
+        : m === "minimal" ? "Graph visualization pauses; the agent keeps full knowledge access."
+        : m === "reduced" ? "Calm graph: no particle flow, shorter settle, capped nodes."
+        : "Full fidelity.",
+      timeout: 2600,
+    });
+    if (kgOpen) void (kgCodeMode ? renderCodeGraph(false) : renderKnowledge());
+  });
+  // Auto-tier flips (plug/unplug, battery level) repaint the chip and calm/wake a LIVE graph in place -
+  // no remount, so the layout the user is looking at never jumps.
+  perfWatch.onChange(() => { paintPerfChip(); kgHandle?.setCalm(perfWatch.tier() !== "full"); });
+  paintPerfChip();
   $("#kgImport")!.addEventListener("click", async () => {
     const folder = await openFolderBrowser({ title: "Choose your ChatGPT / Claude / Gemini export", confirm: "Import from here" });
     if (!folder) return;
@@ -6111,10 +6205,20 @@ async function applyConfig(configId: string, value: string): Promise<void> {
   }
   const opt = state.config.find((c) => c.id === configId);
   const label = opt?.options.find((o) => o.value === value)?.name ?? value;
-  try { state.config = await bridge.setConfig(configId, value); } catch { /* keep optimistic */ }
-  const o = state.config.find((c) => c.id === configId); if (o) o.currentValue = value;
+  // P-PERF.5 (ADR-0132): OPTIMISTIC - paint the switch NOW; the omp round-trip reconciles in the
+  // background. A busy backend used to hold the badge + status hostage for the whole request (the
+  // "model switching feels stuck" complaint). Failure keeps the optimistic value (as before) but is
+  // no longer silent - a warn toast says the backend didn't confirm.
+  if (opt) opt.currentValue = value;
   if (configId === "model") { state.model = value; const mn = $("#modelName"); if (mn) mn.textContent = modelLabel(value); renderStatus(); }
   updateComposerTools();
+  void bridge.setConfig(configId, value)
+    .then((cfg) => {
+      state.config = cfg;
+      const o = state.config.find((c) => c.id === configId); if (o) o.currentValue = value;
+      updateComposerTools();
+    })
+    .catch(() => showToast({ title: `Couldn't confirm ${opt?.name ?? configId}`, desc: "The backend didn't acknowledge the change - it may not have applied. Try again if new turns don't use it.", tone: "warn", actions: [{ label: "OK" }], timeout: 4200 }));
   // P-IDE.1e (ADR-0109): selecting Fable 5 raises a persistent privacy notice (no absolute privacy from the
   // U.S. government) instead of the routine "applied" toast.
   if (configId === "model" && shortModelId(value) === FABLE_ID) {
@@ -6407,6 +6511,10 @@ const MODE_DESC: Record<string, string> = {
 };
 const prettyLevel = (name: string) => { const v = String(name).toLowerCase(); return v === "xhigh" ? "X-High" : v.charAt(0).toUpperCase() + v.slice(1); };
 let cfgClose: (() => void) | null = null;
+// P-PERF.5 (ADR-0132): the picker rows are memoized - reopening the popover (the common flip-between-
+// models flow) reuses the last build instead of re-sorting + re-rendering 100-200 rows. The key covers
+// everything the HTML derives from: the curated list, selection, query, collapse state, gov ordering.
+let pickerMemo: { key: string; html: string } | null = null;
 
 function openConfigPopover(anchor: HTMLElement): void {
   cfgClose?.(); // close any popover already open
@@ -6442,8 +6550,11 @@ function openConfigPopover(anchor: HTMLElement): void {
     const draw = (q = "") => {
       const m = state.config.find((c) => c.id === "model");
       const list2 = m ? curatedModels(m) : [];
-      list.innerHTML = familyListHTML(list2, m?.currentValue ?? model.currentValue, q);
-      search.placeholder = `Search ${list2.length} models…`;
+      const cur = m?.currentValue ?? model.currentValue;
+      const key = `${list2.map((o) => o.value).join(",")}|${cur}|${q}|${[...collapsedFamilies()].sort().join(",")}|${state.asksage?.configured ? 1 : 0}`;
+      if (pickerMemo?.key !== key) pickerMemo = { key, html: familyListHTML(list2, cur, q) }; // P-PERF.5 memo
+      list.innerHTML = pickerMemo.html;
+      search.placeholder = `Search ${list2.length} models\u2026`;
       const ld = $("#cfgLoading", node) as HTMLElement | null; if (ld) ld.hidden = !state.configCached;
     };
     draw();
@@ -6627,6 +6738,16 @@ void bridge.codeGraphAgent().then((a) => { if (a) state.codeGraphAgent = a.enabl
 void maybeOnboardPersonal(); // P-IMP.2: first-run nudge + expand Personalization until it's configured
 void bridge.auth().then((a) => { if (a) { state.auth = a; renderStatus(); } }); // gate the budget pill (OAuth vs API key) from first paint
 scheduleBudgetPoll(); // provider budget: re-check every 5 min for the current model
-setInterval(refresh, 4000);
-setInterval(renderStatus, 1000);
-setInterval(() => void renderSessions(), 15000);
+// P-PERF.2 (ADR-0129): battery/visibility-aware polling. Work is SKIPPED while the window is hidden and
+// the period stretches on battery tiers (pollDelay); a visibilitychange back to visible catches up at once.
+const adaptivePoll = (baseMs: number, fn: () => void): void => {
+  const loop = (): void => {
+    if (!document.hidden) fn();
+    window.setTimeout(loop, pollDelay(baseMs, perfWatch.tier(), document.hidden));
+  };
+  window.setTimeout(loop, pollDelay(baseMs, perfWatch.tier(), document.hidden));
+};
+adaptivePoll(4000, refresh);
+adaptivePoll(1000, renderStatus);
+adaptivePoll(15000, () => void renderSessions());
+document.addEventListener("visibilitychange", () => { if (!document.hidden) { refresh(); renderStatus(); void renderSessions(); } });
