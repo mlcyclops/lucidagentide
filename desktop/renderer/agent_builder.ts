@@ -22,6 +22,7 @@ import {
   type AgentNode,
   type NodeKind,
 } from "../../harness/agent/spec.ts";
+import type { TrustLabel } from "../../harness/contracts.ts";
 
 /** P-AGENT.8: the `/agent` command's kickoff. Turns a (possibly empty) one-line description into a prompt that
  *  makes the chat agent run the "what kind of agent do you want to build" INTERVIEW — steered by the frozen
@@ -109,13 +110,20 @@ export function agentBuilderPanelHtml(): string {
       <div class="ab-tools">
         ${addNodeButtons()}
         <button class="ab-btn" id="abConnect" data-tip="Connect mode|Drag from one node to another to add a step edge; toggle off to reposition nodes">Connect</button>
+        <button class="ab-btn" id="abToolsBtn" data-tip="Tools|Manage the tool allow-list — remove a tool to BLOCK the agent from ever calling it">Tools</button>
         <button class="ab-btn" id="abValidate" data-tip="Check the workflow is a valid DAG">Validate</button>
         <button class="ab-btn ok" id="abSave" data-tip="Validate + save this agent">Save</button>
         <button class="ab-btn" id="abSecrets" data-tip="Secrets & connections|Add the API credentials this agent needs to the encrypted vault (never to the agent), and confirm the sites it may reach">Secrets &amp; connections</button>
         <button class="ab-btn" id="abRun" data-tip="Run|Give the agent a task and run it live inside LUCID (under the security gate + its tool allow-list)">Run ▸</button>
         <button class="ab-btn" id="abExport" data-tip="Export|Compile + package this agent (electron target) as a portable, tamper-evident bundle for the enterprise add-on">Export</button>
+        <button class="ab-btn" id="abShare" data-tip="Share|Save a portable .lucid-agent.json another LUCID Agent IDE can import. Carries the workflow + credential NAMES and setup guidance — never credential values">Share</button>
+        <button class="ab-btn" id="abImportBtn" data-tip="Import|Load a shared .lucid-agent.json OR an n8n workflow JSON. Either is security-scanned and held for YOUR review before it can run">Import</button>
+        <button class="ab-btn" id="abN8n" data-tip="Export for n8n|Save this workflow as an importable n8n workflow JSON — approvals become real Wait nodes; a provenance sticky embeds the portable LUCID agent for lossless round-trip">n8n ⇩</button>
+        <button class="ab-btn" id="abN8nPush" data-tip="Push to n8n|Send this workflow straight to your private hosted n8n instance. Requires the LUCID enterprise add-on's n8n connector">n8n ⇧</button>
+        <input type="file" id="abImportFile" accept=".json,application/json" hidden />
       </div>
     </div>
+    <div class="ab-trust" id="abTrust" hidden></div>
     <div class="ab-errs" id="abErrs" hidden></div>
     <div class="ab-main">
       <div class="kg-canvas ab-canvas" id="abCanvas"></div>
@@ -158,9 +166,22 @@ export function secretsPanelHtml(spec: AgentSpec, inVault: Set<string>, isElectr
                  <input type="password" class="ab-in ab-cred-secret" placeholder="paste the secret value" autocomplete="off" spellcheck="false" />
                  <button class="ab-btn ok ab-cred-save">Add to vault</button>
                </div>`;
+          // P-AGENT.9: provisioning guidance carried by a SHARED agent — how THIS user obtains the credential
+          // (paste an existing value, or request a Just-In-Time token via their org's KMS / IT ticketing).
+          const p = s.provisioning;
+          const provBits: string[] = [];
+          if (p?.instructions) provBits.push(`<div class="ab-cred-purpose">${esc(p.instructions)}</div>`);
+          if (p?.method === "jit-ticket") {
+            provBits.push(`<div class="ab-cred-purpose">Request a Just-In-Time token via <b>${esc(p.ticket?.system ?? "your IT ticketing system")}</b>, then paste the issued value below — it goes to the vault, never into the agent.</div>`);
+            if (p.ticket?.rationale) provBits.push(`<div class="ab-cred-purpose">Ticket rationale: ${esc(p.ticket.rationale)}</div>`);
+            const tpl = Object.entries(p.ticket?.template ?? {});
+            if (tpl.length)
+              provBits.push(`<ul class="ab-cred-tpl">${tpl.map(([k, v]) => `<li><b>${esc(k)}</b>: ${esc(v)}</li>`).join("")}</ul>`);
+          }
           return `<li class="ab-cred-row" data-cred="${esc(s.name)}" data-kind="${esc(s.kind)}">
               <div class="ab-cred-head"><b>${esc(s.name)}</b><span class="ab-kind ab-kind-tool">${esc(s.kind)}</span>${status}</div>
               ${s.purpose ? `<div class="ab-cred-purpose">${esc(s.purpose)}</div>` : ""}
+              ${provBits.join("")}
               ${help}
               ${adder}
             </li>`;
@@ -192,8 +213,81 @@ export function runPanelHtml(model: string): string {
   </div>`;
 }
 
-/** The node-editor flyout for a selected node. Fields are kind-specific; `tools` is the spec's allow-list
- *  (a tool node may only reference an allow-listed tool — enforced again by the validator). */
+/** The omp tools a Builder-authored agent can call. The tool node's dropdown offers this CATALOG (plus
+ *  anything already allow-listed, e.g. from a chat-drafted spec) — picking a tool that isn't allow-listed yet
+ *  AUTO-ADDS it to `spec.tools` in app.ts, so the validator invariant (a tool node references an allow-listed
+ *  tool) always holds. Names match omp's registered tool names 1:1; at run time the generated allow-list
+ *  extension + the security gate deny anything outside the list, so the catalog is a UX affordance, not a
+ *  security boundary. */
+export const TOOL_CATALOG: ReadonlyArray<{ name: string; desc: string }> = [
+  { name: "read", desc: "Read files, directories, and URLs" },
+  { name: "write", desc: "Create or overwrite a file" },
+  { name: "edit", desc: "Surgical text edits in an existing file" },
+  { name: "search", desc: "Regex search across file contents" },
+  { name: "find", desc: "Find files by name or glob" },
+  { name: "ast_grep", desc: "Structural (AST) code search" },
+  { name: "ast_edit", desc: "Structural (AST) codemods" },
+  { name: "lsp", desc: "Code intelligence: definitions, references, rename" },
+  { name: "bash", desc: "Run shell commands (under the security gate)" },
+  { name: "eval", desc: "Run code in a persistent kernel" },
+  { name: "web_search", desc: "Search the web" },
+  { name: "browser", desc: "Drive a real browser tab" },
+  { name: "github", desc: "GitHub repos, issues, and pull requests" },
+  { name: "inspect_image", desc: "Analyze an image with a vision model" },
+  { name: "generate_image", desc: "Generate or edit an image" },
+  { name: "tts", desc: "Generate speech audio from text" },
+  { name: "codegraph_query", desc: "Query the workspace code graph" },
+];
+
+/** Static tool → description lookup derived from the catalog (for option tooltips). */
+const TOOL_DESC: Record<string, string> = Object.fromEntries(TOOL_CATALOG.map((t) => [t.name, t.desc]));
+
+/** The Tools flyout (P-AGENT.9): the allow-list as removable CHIPS + an add-picker from the omp catalog.
+ *  Removing a chip BLOCKS the agent from calling that tool at run time (the compiled per-agent allow-list
+ *  extension and LUCID's security gate deny anything off-list). A removed tool still referenced by a step is
+ *  flagged by the validator until the step is fixed or the tool re-added — nothing fails silently. */
+export function toolChipsHtml(spec: AgentSpec): string {
+  const inUse = new Map<string, number>(); // dynamic count of tool-node references per tool
+  for (const n of spec.nodes) if (n.kind === "tool" && n.tool) inUse.set(n.tool, (inUse.get(n.tool) ?? 0) + 1);
+  const chips = spec.tools.length
+    ? spec.tools
+        .map((t) => {
+          const uses = inUse.get(t) ?? 0;
+          const badge = uses
+            ? `<span class="ab-chip-uses" title="Used by ${uses} step${uses > 1 ? "s" : ""} — removing blocks the call and flags the step">${uses} step${uses > 1 ? "s" : ""}</span>`
+            : "";
+          return `<li class="ab-chip" data-tool="${esc(t)}"><span class="ab-chip-name"${TOOL_DESC[t] ? ` title="${esc(TOOL_DESC[t])}"` : ""}>${esc(t)}</span>${badge}<button class="ab-chip-rm" data-rm-tool="${esc(t)}" data-tip="Remove ${esc(t)} — the agent will be BLOCKED from calling it">×</button></li>`;
+        })
+        .join("")
+    : `<li class="ab-chip ab-chip-empty">No tools allow-listed — this agent cannot call any tools.</li>`;
+  const addable = TOOL_CATALOG.filter((t) => !spec.tools.includes(t.name));
+  const adder = addable.length
+    ? `<div class="ab-chip-add"><select class="ab-in" id="abToolAdd"><option value="" selected disabled>Add a tool to the allow-list…</option>${addable
+        .map((t) => `<option value="${esc(t.name)}" title="${esc(t.desc)}">${esc(t.name)}</option>`)
+        .join("")}</select></div>`
+    : "";
+  return `<div class="ab-toolchips">
+    <div class="ab-ed-head"><span class="ab-kind">Tool allow-list</span></div>
+    <div class="ab-conn-note">The agent may ONLY call tools on this list — every other tool call is denied at run time by its compiled allow-list and LUCID's security gate. Remove a tool to block it.</div>
+    <ul class="ab-chip-list">${chips}</ul>
+    ${adder}
+  </div>`;
+}
+
+/** The trust banner (P-AGENT.9) for an imported agent. Empty for "trusted". Approval (the human-review step)
+ *  is offered for untrusted/suspicious; a QUARANTINED spec cannot be approved from the UI — fix + re-import. */
+export function trustBannerHtml(label: TrustLabel, reason: string): string {
+  if (label === "trusted") return "";
+  const approve =
+    label === "quarantined"
+      ? ""
+      : `<button class="ab-btn ok" id="abApprove" data-tip="Approve|Mark this agent trusted so it can run. Only approve after reviewing every step, tool, connection, and credential it declares.">Approve after review</button>`;
+  return `<span class="ab-trust-label ab-trust-${esc(label)}">${esc(label)}</span><span class="ab-trust-reason">${esc(reason)}</span>${approve}`;
+}
+
+/** The node-editor flyout for a selected node. Fields are kind-specific; `tools` is the spec's allow-list.
+ *  The tool dropdown offers the allow-list PLUS the omp TOOL_CATALOG (picking an un-listed tool auto-adds it
+ *  to the allow-list in app.ts — enforced again by the validator + the runtime extension). */
 export function nodeEditorHtml(node: AgentNode, tools: string[]): string {
   const label = `<label class="ab-fld"><span>Label</span>
     <input class="ab-in" id="abLabel" value="${esc(node.label)}" /></label>`;
@@ -202,13 +296,18 @@ export function nodeEditorHtml(node: AgentNode, tools: string[]): string {
     kindFields = `<label class="ab-fld"><span>Prompt</span>
       <textarea class="ab-in ab-ta" id="abPrompt">${esc(node.prompt ?? "")}</textarea></label>`;
   } else if (node.kind === "tool") {
-    const opts = tools.length
-      ? tools
-          .map((t) => `<option value="${esc(t)}"${t === node.tool ? " selected" : ""}>${esc(t)}</option>`)
-          .join("")
-      : `<option value="">(no tools in the allow-list)</option>`;
+    // Selectable = allow-list ∪ catalog ∪ this node's current tool (kept visible even if it's in neither —
+    // the validator flags it rather than the dropdown silently dropping the selection).
+    const names = [...new Set([...tools, ...TOOL_CATALOG.map((t) => t.name), ...(node.tool ? [node.tool] : [])])];
+    const inList = new Set(tools);
+    const opt = (t: string) =>
+      `<option value="${esc(t)}"${t === node.tool ? " selected" : ""}${TOOL_DESC[t] ? ` title="${esc(TOOL_DESC[t])}"` : ""}>${esc(t)}</option>`;
+    const listed = names.filter((t) => inList.has(t)).map(opt).join("");
+    const rest = names.filter((t) => !inList.has(t)).map(opt).join("");
+    const placeholder = node.tool ? "" : `<option value="" selected disabled>(choose a tool)</option>`;
     kindFields = `<label class="ab-fld"><span>Tool</span>
-      <select class="ab-in" id="abTool">${opts}</select></label>`;
+      <select class="ab-in" id="abTool">${placeholder}${listed ? `<optgroup label="In the allow-list">${listed}</optgroup>` : ""}${rest ? `<optgroup label="omp tools — picking one adds it to the allow-list">${rest}</optgroup>` : ""}</select></label>
+    <div class="ab-conn-note">This agent may only call allow-listed tools; choosing a tool here allow-lists it automatically.</div>`;
   } else if (node.kind === "subagent") {
     kindFields = `<label class="ab-fld"><span>Sub-agent spec id</span>
       <input class="ab-in" id="abSub" value="${esc(node.subagentSpecId ?? "")}" /></label>`;

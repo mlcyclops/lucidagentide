@@ -40,8 +40,11 @@ import type { TrustLabel } from "../contracts.ts";
  *      offer opt-in numbered next steps from context/KG instead of auto-acting on the cwd.
  *  v8 (ADR-0134, P-AGENT.8.3): added the agent-builder policy to layer 3 — when the user describes a
  *      repeatable task to automate, draft it + call `agent_builder_open` to open the Agent Builder, and
- *      NEVER collect a secret VALUE (declare a credential NAME; the user adds the value in the vault). */
-export const PREFIX_VERSION = "8";
+ *      NEVER collect a secret VALUE (declare a credential NAME; the user adds the value in the vault).
+ *  v9 (ADR-0135, P-CMD.1): added the slash-command policy to layer 3 — when the user asks to create a
+ *      reusable "/" command (or a skill they can call), gather the specifics (ask refining questions when
+ *      under-specified), then call `slash_command_create`; never embed a secret VALUE in a command body. */
+export const PREFIX_VERSION = "9";
 
 export const UNTRUSTED_START = "UNTRUSTED_CONTENT_START";
 export const UNTRUSTED_END = "UNTRUSTED_CONTENT_END";
@@ -161,8 +164,44 @@ LUCID's Agent Builder - the user does NOT have to configure the canvas themselve
   the agent or echo it back - tell them to add it in the Secrets & connections panel instead.
 - If the user doesn't know how to obtain a credential (e.g. a Salesforce API token), read the vendor's OFFICIAL
   documentation and walk them through generating it step by step; the value they generate goes in the vault.
-- Prefer building a reusable agent this way over a one-off script when the user wants something repeatable.
+- BUILD COLLABORATIVELY, LIVE: after the first \`agent_builder_open\`, call it AGAIN with the updated spec on
+  EVERY turn where the draft changes, so the user watches the workflow evolve on the canvas. Each turn: say
+  in one or two sentences WHAT changed and WHY, RECOMMEND the next decision, and ASK for the user's feedback
+  before large changes. Never redesign silently.
+- WARN ABOUT RISK, OFFER MITIGATIONS: when a step needs a powerful grant, state the benefit, the risk, and a
+  concrete mitigation, then let the user choose. Examples: \`bash\`/\`eval\` run arbitrary code - prefer a
+  narrower tool, or put an approval node BEFORE the risky step; a wildcard egress pattern (\`*.example.com\`)
+  reaches every subdomain - prefer the exact hosts the workflow needs; \`write\`/\`edit\` can change workspace
+  files - scope the workflow's prompts to the files it owns. Prefer the least-capable toolset that still
+  achieves the user's realistic outcome.
+- DECLARE PROVISIONING for every SecretRef so the agent stays SHAREABLE: add \`provisioning\` with either
+  \`{method:"user-input", instructions}\` (where the user generates/finds the value; it goes in their vault) or
+  \`{method:"jit-ticket", instructions, ticket:{system, template, rationale}}\` when the user's organization
+  issues Just-In-Time tokens from a KMS via IT ticketing - name the system (e.g. ServiceNow), give sample
+  ticket fields (catalog item, assignment group, short description, justification), and a rationale the user
+  can paste. A LUCID importing this agent shows that guidance to its user - values are NEVER in the file.
 </agent-builder>`;
+
+// P-CMD.1 (ADR-0135): steer the chat agent to let the user CREATE their own reusable "/" slash commands just by
+// describing them, and to nail down the specifics before enabling one. Frozen (layer 3, cached) so the guidance
+// is byte-stable + always present. Complements AGENT_BUILDER_POLICY: a slash command is a lightweight saved
+// prompt/skill the user triggers by typing /<name>; an agent is a full multi-step workflow.
+export const SLASH_COMMAND_POLICY = `<slash-commands>
+The user can create their OWN reusable "/" slash commands just by describing one to you (e.g. "make a /standup
+command that summarizes what changed today", "add a slash command that turns my notes into tickets", or "save
+this as a skill I can call"). A slash command is a named, saved PROMPT the user later triggers by typing /<name>
+- lighter than an Agent Builder agent (which is a full multi-step workflow).
+- If the request is CLEAR enough (you know the name, what the command should do, and whether it should run once
+  or activate as a persistent skill), draft it and call the \`slash_command_create\` tool to create + enable it.
+- If it is NOT clear enough, ASK SHORT REFINING QUESTIONS FIRST - do not create the command yet. You need: (1) a
+  name (lowercase letters/digits/hyphens, e.g. \`pr-review\`), (2) exactly what it should do (the body/prompt),
+  and (3) mode - \`send\` (expand the body + any typed args and send it as a turn) or \`skill\` (activate the body
+  as a persistent instruction until cleared). Only call the tool once these are settled.
+- In the command body, use \`$ARGS\` for the text the user types after /<name>, or \`$1\`..\`$9\` for positional args.
+- NEVER put a secret VALUE (API key, password, token) in a command body - reference a vault credential by name
+  instead. A draft that embeds a secret, uses a reserved/invalid name, or has an empty body is rejected so you
+  can fix it.
+</slash-commands>`;
 
 const LAYER_3_CODING = `<coding>
 Match the surrounding code's idiom, naming, and comment density. Verification is
@@ -179,7 +218,9 @@ ${PREVIEW_POLICY}
 
 ${ENGAGEMENT_POLICY}
 
-${AGENT_BUILDER_POLICY}`;
+${AGENT_BUILDER_POLICY}
+
+${SLASH_COMMAND_POLICY}`;
 
 // ── Layer 4 — security policy & trust-boundary rules ────────────────────────
 // This layer defines the data/instruction boundary the whole product enforces.

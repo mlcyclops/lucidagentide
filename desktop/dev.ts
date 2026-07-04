@@ -12,17 +12,22 @@
 //   bun run desktop:web        # http://localhost:5319
 
 import { join, dirname } from "node:path";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { buildEngineeringUpdate, renderEngineeringBrief, buildPodcastScript, renderScript, type PodcastBackend, type BriefRole } from "../harness/brief/engineering_update.ts";
 import { buildComplianceRows, renderPoamCsv, renderCkl } from "../harness/brief/compliance.ts"; // P-REPORT.6/.8: POA&M + CKL
 import { buildChangeGraph, buildSchemaChanges, renderAnnexes } from "../harness/brief/change_graph.ts"; // P-REPORT.8: report annexes
 import { loadChatBg, saveChatBg, type ChatBg } from "./chat_bg.ts"; // P-APPEAR.1: personalized chat background
 import { ingestCodeGraph, loadCodeGraph } from "./code_graph.ts"; // P-KG-CODE.1: workspace code graph
 import { ingestSymbolGraph, loadSymbolGraph } from "./symbol_graph.ts"; // P-KG-SYM.1: AST symbol graph
-import { saveSpecFile, loadSpecFile, listSpecFiles, deleteSpecFile } from "../harness/agent/file_store.ts"; // P-AGENT.2b: Agent Builder spec persistence
+import { saveSpecFile, loadSpecFile, listSpecFiles, deleteSpecFile, saveSpecTrust, loadSpecTrust } from "../harness/agent/file_store.ts"; // P-AGENT.2b/.9: Agent Builder spec persistence + trust sidecar
 import { validateSpec } from "../harness/agent/spec.ts"; // P-AGENT.1: fail-closed Agent Spec validation
 import { buildAgent } from "../harness/agent/compiler.ts"; // P-AGENT.3: spec -> AgentBundle
 import { exportBundle, writeExportPackage, EXPORT_TARGETS, type ExportTarget } from "../harness/agent/export.ts"; // P-AGENT.6: enterprise export
+import { exportPortableAgent, parsePortableAgentJson, setupInstructions } from "../harness/agent/portable.ts"; // P-AGENT.9: shareable .lucid-agent JSON
+import { specToN8n, n8nToSpec, isN8nWorkflowJson } from "../harness/agent/n8n.ts"; // P-AGENT.10: n8n interop
+import { connectorStatus, runConnector } from "./addon_seam.ts"; // P-AGENT.10: enterprise add-on seam
+import { importSpec } from "../harness/agent/import_gate.ts"; // P-AGENT.5/.9: fail-closed imported spec scan + trust label
+import { ScannerClient } from "../harness/security/scanner_client.ts";
 import { runBuiltAgent } from "./agent_run.ts"; // P-AGENT.4-live: run a built agent through omp under the gate
 import { archiveBrief, deleteBrief, listBriefs, readBrief, restoreBrief, saveBrief } from "./report_store.ts";
 import { OpenAiCompatibleTtsBackend } from "../harness/brief/tts_backend.ts";
@@ -56,6 +61,7 @@ import { emailDomainAllowed, managedAsksageOnly, managedConfig, managedLocks, sk
 import { asksageConfig, listDatasets, listPersonas, monthlyTokens, scanPersona, wrapPersona } from "./asksage.ts";
 import { listSkills } from "./skills_data.ts";
 import { importSkill } from "./skills_import.ts";
+import { createUserCommand, deleteUserCommand, listUserCommands } from "./user_commands.ts"; // P-CMD.1
 import { archiveGoalReport, deleteGoalReport, listResumableLoops, listGoalReports, readGoalReport, restoreGoalReport } from "./goal_memory.ts";
 import { createAutomation, deleteAutomation, listAutomations, normalizeCadence, updateAutomation } from "./automations.ts";
 import { currentWorkspace } from "./workspace.ts";
@@ -165,6 +171,18 @@ const json = (data: unknown) =>
 // Fields the handler funnels through String()/typeof guards are left `unknown` (the guard narrows them).
 async function readBody<T>(req: Request): Promise<T> {
   return (await req.json()) as T;
+}
+
+// P-AGENT.9: lazy scanner sidecar for imported agent files. Shared across imports; FAIL-CLOSED by design —
+// if the sidecar is dead or slow, importSpec quarantines the spec (ScanUnavailableError becomes a blocking
+// decision), it never passes unscanned.
+let _agentScanner: ScannerClient | null = null;
+function agentScanner(): ScannerClient {
+  if (!_agentScanner) {
+    _agentScanner = new ScannerClient({ timeoutMs: 8000 });
+    _agentScanner.start();
+  }
+  return _agentScanner;
 }
 
 // P-REPORT.8: gather the git change inputs (numstat + name-status) for the report annexes. Default range
@@ -582,6 +600,126 @@ const server = Bun.serve({
           return json({ ok: false, error: String((e as { message?: unknown })?.message ?? e) });
         }
       }
+      // P-AGENT.9: SHARE — write a portable .lucid-agent.json (spec + setup guidance + spec digest; NEVER
+      // credential values) under .omp/agent-shares/ and return the JSON so the renderer can offer a download.
+      if (p === "/api/agent/share" && req.method === "POST") {
+        const b = await readBody<{ spec?: unknown }>(req);
+        const v = validateSpec(b.spec);
+        if (!v.ok) return json({ ok: false, error: v.errors.join("; "), data: { error: v.errors.join("; ") } });
+        try {
+          const file = exportPortableAgent(v.spec!);
+          const dir = join(currentWorkspace(), ".omp", "agent-shares");
+          mkdirSync(dir, { recursive: true });
+          const base = v.spec!.name.replace(/[^A-Za-z0-9._-]+/g, "_").slice(0, 40) || "agent";
+          const fileName = `${base}.lucid-agent.json`;
+          const text = `${JSON.stringify(file, null, 2)}\n`;
+          writeFileSync(join(dir, fileName), text);
+          writeFileSync(join(dir, `${base}.SETUP.md`), file.setup_md);
+          return json({ ok: true, data: { path: join(dir, fileName), fileName, json: text, setup: file.setup_md, digest: file.spec_digest } });
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          return json({ ok: false, error: msg, data: { error: msg } });
+        }
+      }
+      // P-AGENT.9/.10: IMPORT — accepts BOTH share formats: a portable .lucid-agent.json (digest-checked)
+      // and a raw n8n workflow JSON (translated; an embedded LUCID block wins for lossless round-trip). Either
+      // way the result runs the P-AGENT.5 quarantine gate (scanner sidecar, FAIL-CLOSED: scan unavailable =>
+      // quarantined, never "safe") and persists WITH its trust label; non-trusted can't run until approved.
+      if (p === "/api/agent/import" && req.method === "POST") {
+        const b = await readBody<{ raw?: unknown }>(req);
+        const raw = typeof b.raw === "string" ? b.raw : "";
+        let specJson: string | null = null;
+        let importNotes: string[] = [];
+        const portable = parsePortableAgentJson(raw);
+        if (portable.ok && portable.spec) {
+          specJson = JSON.stringify(portable.spec);
+        } else {
+          try {
+            const parsedRaw: unknown = JSON.parse(raw);
+            if (isN8nWorkflowJson(parsedRaw)) {
+              const conv = n8nToSpec(parsedRaw);
+              importNotes = conv.notes;
+              if (conv.embeddedPortableJson) {
+                const embedded = parsePortableAgentJson(conv.embeddedPortableJson);
+                if (!embedded.ok || !embedded.spec) { const msg = `embedded LUCID agent is invalid: ${embedded.errors.join("; ")}`; return json({ ok: false, error: msg, data: { error: msg } }); }
+                specJson = JSON.stringify(embedded.spec);
+              } else if (conv.spec) {
+                specJson = JSON.stringify(conv.spec);
+              }
+            }
+          } catch { /* not JSON at all — falls through to the honest error below */ }
+        }
+        if (!specJson) { const msg = portable.errors.join("; ") || "not a portable LUCID agent or an n8n workflow"; return json({ ok: false, error: msg, data: { error: msg } }); }
+        try {
+          const r = await importSpec(agentScanner(), specJson, "import");
+          if (!r.ok || !r.spec) { const msg = r.errors.join("; ") || r.reason; return json({ ok: false, error: msg, data: { error: msg } }); }
+          saveSpecFile(currentWorkspace(), r.spec);
+          saveSpecTrust(currentWorkspace(), r.spec.spec_id, { trustLabel: r.trustLabel, reason: r.reason });
+          return json({ ok: true, data: { spec: r.spec, trustLabel: r.trustLabel, canRun: r.canRun, reason: r.reason, findings: r.findings.length, setup: setupInstructions(r.spec), notes: importNotes } });
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          return json({ ok: false, error: msg, data: { error: msg } });
+        }
+      }
+      // P-AGENT.10: EXPORT FOR n8n — lower the spec into an importable n8n workflow scaffold (real wait
+      // nodes for approvals; provenance sticky embeds the portable agent for lossless round-trip). Written
+      // under .omp/agent-shares/ and returned for download. Never carries credential values.
+      if (p === "/api/agent/n8n-export" && req.method === "POST") {
+        const b = await readBody<{ spec?: unknown }>(req);
+        const v = validateSpec(b.spec);
+        if (!v.ok) return json({ ok: false, error: v.errors.join("; "), data: { error: v.errors.join("; ") } });
+        try {
+          const portable = `${JSON.stringify(exportPortableAgent(v.spec!), null, 2)}\n`;
+          const wf = specToN8n(v.spec!, portable);
+          const dir = join(currentWorkspace(), ".omp", "agent-shares");
+          mkdirSync(dir, { recursive: true });
+          const base = v.spec!.name.replace(/[^A-Za-z0-9._-]+/g, "_").slice(0, 40) || "agent";
+          const fileName = `${base}.n8n.json`;
+          const text = `${JSON.stringify(wf, null, 2)}\n`;
+          writeFileSync(join(dir, fileName), text);
+          const push = connectorStatus("n8n");
+          return json({ ok: true, data: { path: join(dir, fileName), fileName, json: text, pushAvailable: push.installed, pushNote: push.note } });
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          return json({ ok: false, error: msg, data: { error: msg } });
+        }
+      }
+      // P-AGENT.10: PUSH to a private hosted n8n — the CONNECTOR lives in the enterprise add-on
+      // (lucidagentIDEaddon/connectors/n8n); this public seam exports the artifact and dispatches it. With
+      // no add-on installed the reply is an honest "not installed" note, never a fake success.
+      if (p === "/api/agent/n8n-push" && req.method === "POST") {
+        const b = await readBody<{ spec?: unknown }>(req);
+        const v = validateSpec(b.spec);
+        if (!v.ok) return json({ ok: false, error: v.errors.join("; "), data: { error: v.errors.join("; ") } });
+        try {
+          const portable = `${JSON.stringify(exportPortableAgent(v.spec!), null, 2)}\n`;
+          const wf = specToN8n(v.spec!, portable);
+          const dir = join(currentWorkspace(), ".omp", "agent-shares");
+          mkdirSync(dir, { recursive: true });
+          const base = v.spec!.name.replace(/[^A-Za-z0-9._-]+/g, "_").slice(0, 40) || "agent";
+          const file = join(dir, `${base}.n8n.json`);
+          writeFileSync(file, `${JSON.stringify(wf, null, 2)}\n`);
+          const r = runConnector("n8n", "push", file);
+          return json({ ok: r.ok, data: { ok: r.ok, detail: r.detail, url: r.url ?? "" }, error: r.ok ? undefined : r.detail });
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          return json({ ok: false, error: msg, data: { error: msg } });
+        }
+      }
+      // P-AGENT.9: APPROVE — the explicit human-review step for an imported agent. untrusted/suspicious can
+      // be promoted to trusted after review; a QUARANTINED spec stays blocked (fix the content + re-import).
+      if (p === "/api/agent/trust" && req.method === "POST") {
+        const b = await readBody<{ id?: unknown }>(req);
+        const id = typeof b.id === "string" ? b.id : "";
+        if (!loadSpecFile(currentWorkspace(), id)) return json({ ok: false, error: "unknown agent id", data: { error: "unknown agent id" } });
+        const cur = loadSpecTrust(currentWorkspace(), id);
+        if (cur.trustLabel === "quarantined") {
+          const msg = "this agent is quarantined (flagged content) — it cannot be approved; fix the source and re-import";
+          return json({ ok: false, error: msg, data: { error: msg } });
+        }
+        saveSpecTrust(currentWorkspace(), id, { trustLabel: "trusted", reason: "approved by the user after review", reviewed_at: Date.now() });
+        return json({ ok: true, data: { trustLabel: "trusted" } });
+      }
       // P-AGENT.4-live: run a built agent one-shot through omp (gate + generated allow-list + compiled prompt).
       // Fail-closed: an invalid or non-runnable-trust spec is refused before anything spawns. Returns the
       // agent's final text (or a refusal/error). model defaults to a fast model for cheap runs.
@@ -591,7 +729,9 @@ const server = Bun.serve({
         if (!v.ok) return json({ ok: false, error: v.errors.join("; ") });
         const prompt = typeof b.prompt === "string" ? b.prompt : "";
         const model = typeof b.model === "string" && b.model.trim() ? b.model.trim() : "haiku";
-        const r = await runBuiltAgent({ spec: v.spec!, prompt, model, workspace: currentWorkspace() });
+        // P-AGENT.9: run under the STORED trust label — an imported, not-yet-approved spec is refused here.
+        const trust = loadSpecTrust(currentWorkspace(), v.spec!.spec_id);
+        const r = await runBuiltAgent({ spec: v.spec!, prompt, model, workspace: currentWorkspace(), trustLabel: trust.trustLabel });
         return json({ ok: r.ok, data: { output: r.output ?? "", error: r.error ?? "", blocked: !!r.blocked, reason: r.reason ?? "" } });
       }
       // P-APPEAR.1: the personalized chat-interface background (image + display mode). Its own file, so
@@ -914,6 +1054,17 @@ const server = Bun.serve({
           results.push(await importSkill(String(f?.name ?? "skill.md"), content));
         }
         return json({ ok: true, data: { results } });
+      }
+      // P-CMD.1 (ADR-0135): user-authored "/" slash commands. GET = list stored commands; POST = create one
+      // (validate → secret-scan → Unicode-scan, all fail-closed → persist). The delete route removes one.
+      if (p === "/api/usercommand" && req.method === "GET") return json({ ok: true, data: listUserCommands() });
+      if (p === "/api/usercommand" && req.method === "POST") {
+        const b = await readBody<{ command?: unknown }>(req);
+        return json({ ok: true, data: await createUserCommand(b.command) });
+      }
+      if (p === "/api/usercommand/delete" && req.method === "POST") {
+        const b = await readBody<{ name?: unknown }>(req);
+        return json({ ok: true, data: { deleted: deleteUserCommand(String(b.name ?? "")) } });
       }
       if (p === "/api/headroom") {
         if (req.method === "POST") { const b = await readBody<{ enabled?: unknown }>(req); return json({ ok: true, data: setHeadroomEnabled(!!b.enabled) }); }

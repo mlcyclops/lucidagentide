@@ -7,6 +7,9 @@ import { test, expect, describe } from "bun:test";
 import {
   agentBuilderPanelHtml,
   nodeEditorHtml,
+  TOOL_CATALOG,
+  toolChipsHtml,
+  trustBannerHtml,
   runPanelHtml,
   secretsPanelHtml,
   agentInterviewPrompt,
@@ -119,9 +122,80 @@ describe("agent builder panel (P-AGENT.2)", () => {
     expect(toolEd).toContain("web_search");
   });
 
+  test("tool dropdown offers the omp catalog even when the allow-list is empty", () => {
+    // The original bug: an empty allow-list rendered an empty dropdown with nothing to pick.
+    const ed = nodeEditorHtml({ id: "b", kind: "tool", label: "Step" }, []);
+    expect(ed).not.toContain("no tools in the allow-list");
+    expect(TOOL_CATALOG.length).toBeGreaterThan(0);
+    for (const t of TOOL_CATALOG) expect(ed).toContain(`<option value="${t.name}"`);
+    // no tool chosen yet: a disabled placeholder is selected, not a silently-picked tool
+    expect(ed).toContain("(choose a tool)");
+    expect(ed).not.toMatch(/<option value="[^"]+" selected/);
+  });
+
+  test("tool dropdown groups allow-listed tools first and keeps the node's current selection", () => {
+    const ed = nodeEditorHtml({ id: "b", kind: "tool", label: "Step", tool: "web_search" }, ["web_search"]);
+    expect(ed).toContain('optgroup label="In the allow-list"');
+    expect(ed).toContain('<option value="web_search" selected');
+    expect(ed).not.toContain("(choose a tool)");
+    // a spec allow-list entry OUTSIDE the catalog (e.g. an MCP tool from a chat-drafted spec) still appears,
+    // and a current tool in NEITHER list is kept visible + selected (the validator flags it, not the dropdown)
+    const custom = nodeEditorHtml({ id: "b", kind: "tool", label: "Step", tool: "mcp_orphan" }, ["mcp_crm_query"]);
+    expect(custom).toContain('<option value="mcp_crm_query"');
+    expect(custom).toContain('<option value="mcp_orphan" selected');
+  });
+
   test("kindLabel is sentence case for each kind", () => {
     expect(kindLabel("prompt")).toBe("Prompt");
     expect(kindLabel("subagent")).toBe("Sub-agent");
+  });
+
+  test("tool chips: removable chip per allow-listed tool, in-use badge, add-picker for the rest (P-AGENT.9)", () => {
+    const h = toolChipsHtml(spec());
+    // one removable chip for the allow-listed tool, marked in-use by the tool node
+    expect(h).toContain('data-rm-tool="web_search"');
+    expect(h).toContain("1 step");
+    // the add-picker offers catalog tools not yet allow-listed
+    expect(h).toContain('id="abToolAdd"');
+    const notListed = TOOL_CATALOG.find((t) => t.name !== "web_search")!;
+    expect(h).toContain(`<option value="${notListed.name}"`);
+    // empty allow-list renders the explicit "cannot call any tools" state, not a blank panel
+    const empty = toolChipsHtml(spec({ tools: [], nodes: [{ id: "a", kind: "prompt", label: "Plan", prompt: "" }], edges: [] }));
+    expect(empty).toContain("cannot call any tools");
+  });
+
+  test("trust banner: empty for trusted; approve offered for untrusted/suspicious; NOT for quarantined (P-AGENT.9)", () => {
+    expect(trustBannerHtml("trusted", "local")).toBe("");
+    const u = trustBannerHtml("untrusted", "imported from an external source");
+    expect(u).toContain('id="abApprove"');
+    expect(u).toContain("imported from an external source");
+    expect(trustBannerHtml("suspicious", "findings")).toContain('id="abApprove"');
+    const q = trustBannerHtml("quarantined", "blocked");
+    expect(q).not.toContain('id="abApprove"');
+    expect(q).toContain("quarantined");
+  });
+
+  test("secrets panel renders provisioning guidance: JIT ticket system, rationale, sample fields (P-AGENT.9)", () => {
+    const s = spec({
+      secrets: [{
+        name: "CRM_JIT_TOKEN",
+        kind: "jwt" as const,
+        purpose: "CRM API",
+        provisioning: {
+          method: "jit-ticket" as const,
+          instructions: "File the IAM request first.",
+          ticket: { system: "ServiceNow", rationale: "agent needs CRM write access", template: { catalog_item: "JIT API Token" } },
+        },
+      }],
+    });
+    const h = secretsPanelHtml(s, new Set(), true);
+    expect(h).toContain("Just-In-Time");
+    expect(h).toContain("ServiceNow");
+    expect(h).toContain("File the IAM request first.");
+    expect(h).toContain("agent needs CRM write access");
+    expect(h).toContain("catalog_item");
+    // the vault story is still front and center; no value field beyond the paste-to-vault input
+    expect(h).toContain("vault");
   });
 
   test("node editor escapes interpolated values (no raw injection)", () => {

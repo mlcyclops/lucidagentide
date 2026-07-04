@@ -100,6 +100,36 @@ describe("validateSpec (P-AGENT.1)", () => {
     expect(r.errors.join()).toContain("duplicate node id");
   });
 
+  test("accepts provisioning guidance on a SecretRef and rejects malformed provisioning (P-AGENT.9)", () => {
+    const withProv = validSpec({
+      secrets: [{
+        name: "CRM_JIT_TOKEN",
+        kind: "jwt",
+        purpose: "CRM REST API",
+        provisioning: {
+          method: "jit-ticket",
+          instructions: "Request a 4-hour token from the KMS.",
+          ticket: { system: "ServiceNow", rationale: "Automated CRM logging agent needs API access.", template: { catalog_item: "JIT API Token", assignment_group: "IAM" } },
+        },
+      }],
+    });
+    expect(validateSpec(withProv).ok).toBe(true);
+    // bad method → closed set
+    const badMethod = validSpec({ secrets: [{ name: "X", kind: "apikey", provisioning: { method: "email-me" } }] } as unknown as Partial<AgentSpec>);
+    const r1 = validateSpec(badMethod);
+    expect(r1.ok).toBe(false);
+    expect(r1.errors.join()).toContain("provisioning.method");
+    // jit ticket without a system name
+    const noSystem = validSpec({ secrets: [{ name: "X", kind: "apikey", provisioning: { method: "jit-ticket", ticket: {} } }] } as unknown as Partial<AgentSpec>);
+    expect(validateSpec(noSystem).errors.join()).toContain("ticket.system");
+    // template values must be strings
+    const badTpl = validSpec({ secrets: [{ name: "X", kind: "apikey", provisioning: { method: "jit-ticket", ticket: { system: "Jira", template: { hours: 4 } } } }] } as unknown as Partial<AgentSpec>);
+    expect(validateSpec(badTpl).errors.join()).toContain("template");
+    // a value smuggled into provisioning is refused
+    const smuggled = validSpec({ secrets: [{ name: "X", kind: "apikey", provisioning: { method: "user-input", value: "hunter2" } }] } as unknown as Partial<AgentSpec>);
+    expect(validateSpec(smuggled).errors.join()).toContain("must NOT carry a value");
+  });
+
   test("rejects a tool node whose tool is not in the allow-list", () => {
     const r = validateSpec(
       validSpec({

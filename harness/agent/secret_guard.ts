@@ -6,7 +6,7 @@
 // live only in the OS-encrypted vault (desktop/cred_vault.ts), referenced by name (SecretRef).
 //
 // `scanSpecForSecrets` inspects every piece of FREE TEXT in a spec (name/description/persona/node
-// labels+prompts + secret `purpose` help-text) for APPARENT secret values: PEM private keys, vendor API-key
+// labels+prompts + secret `purpose` / provisioning help-text) for APPARENT secret values: PEM private keys, vendor API-key
 // shapes (AWS/OpenAI-style/GitHub/Slack/Google), bearer tokens, and `password/secret/token = <value>`
 // assignments. `assertSecretFree` throws on any hit — wired into save/compile/open so a spec carrying a
 // credential can NEVER be persisted, compiled, or run. High-signal patterns only (declared SecretRefs, env-var
@@ -50,20 +50,34 @@ function specTextFields(spec: AgentSpec): Array<{ where: string; text: string }>
     add(`node ${n.id} label`, n.label);
     add(`node ${n.id} prompt`, n.prompt);
   }
-  for (const r of spec.secrets ?? []) add(`secret ${r.name} purpose`, r.purpose); // help-text only; the NAME is skipped
+  for (const r of spec.secrets ?? []) {
+    add(`secret ${r.name} purpose`, r.purpose); // help-text only; the NAME is skipped
+    add(`secret ${r.name} provisioning instructions`, r.provisioning?.instructions);
+    add(`secret ${r.name} provisioning ticket system`, r.provisioning?.ticket?.system);
+    add(`secret ${r.name} provisioning ticket rationale`, r.provisioning?.ticket?.rationale);
+    for (const [k, v] of Object.entries(r.provisioning?.ticket?.template ?? {})) add(`secret ${r.name} provisioning ticket ${k}`, v);
+  }
   return out;
 }
 
-/** Scan a spec for APPARENT embedded secret values. Returns one leak per (field, detector) hit; empty = clean. */
-export function scanSpecForSecrets(spec: AgentSpec): SecretLeak[] {
+/** Scan a set of tagged free-text fields for APPARENT embedded secret values. Returns one leak per
+ *  (field, detector) hit; empty = clean. Shared by `scanSpecForSecrets` (Agent Builder) and the user-command
+ *  guardrail (P-CMD.1) so the SAME high-precision detector list is the single source of truth. */
+export function scanTextsForSecrets(fields: Array<{ where: string; text: unknown }>): SecretLeak[] {
   const leaks: SecretLeak[] = [];
-  for (const { where, text } of specTextFields(spec)) {
+  for (const { where, text } of fields) {
+    if (typeof text !== "string" || !text) continue;
     for (const d of DETECTORS) {
       const m = d.re.exec(text);
       if (m) leaks.push({ where, pattern: d.label, snippet: `${m[0].slice(0, 6)}…(redacted)` });
     }
   }
   return leaks;
+}
+
+/** Scan a spec for APPARENT embedded secret values. Returns one leak per (field, detector) hit; empty = clean. */
+export function scanSpecForSecrets(spec: AgentSpec): SecretLeak[] {
+  return scanTextsForSecrets(specTextFields(spec));
 }
 
 /** Throw (fail-closed) if the spec embeds any apparent secret. Wired into save/compile/open/run so a

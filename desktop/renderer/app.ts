@@ -26,8 +26,10 @@ import { type GraphHandle, kindLabel, mountGraph } from "./graph.ts";
 import { addEdgeOptimistic, applyForget, chainPairs, matchNodes, removeEdgeOptimistic, resolveRelationLabel } from "./kg_ops.ts";
 import { capGraph, graphOpts, pollDelay, watchPerfTier } from "./perf_tier.ts";
 import type { PersonalGraphData } from "./bridge.ts";
-import { agentBuilderPanelHtml, specToGraphData, nodeEditorHtml, saveErrors, newCanvasSpec, runPanelHtml, secretsPanelHtml, agentInterviewPrompt } from "./agent_builder.ts"; // P-AGENT.2b/.4-live/.8
+import { agentBuilderPanelHtml, specToGraphData, nodeEditorHtml, saveErrors, newCanvasSpec, runPanelHtml, secretsPanelHtml, agentInterviewPrompt, toolChipsHtml, trustBannerHtml } from "./agent_builder.ts"; // P-AGENT.2b/.4-live/.8/.9
+import type { TrustLabel } from "../../harness/contracts.ts"; // P-AGENT.9: imported-agent trust banner
 import type { AgentSpec, NodeKind } from "../../harness/agent/spec.ts"; // P-AGENT.2b
+import { expandCommandBody, type UserCommand } from "../../harness/commands/spec.ts"; // P-CMD.1: user "/" commands
 import { type Action, type ToastAction, attachRichTip, createPalette, initTooltips, popover, showToast } from "./ui.ts";
 import { exportActionPlan } from "./kg_export.ts";
 import { formatImportLine } from "./import_progress.ts";
@@ -60,6 +62,7 @@ const state = {
   uiMode: "agent" as "agent" | "ask" | "plan", // P-ACP.2/3: composer Plan/Ask/Agent (derived from backend)
   commands: [] as OmpCommand[],
   skills: [] as { name: string; description: string; source: string }[],
+  userCommands: [] as UserCommand[], // P-CMD.1: user-authored "/" slash commands (workspace .omp/commands/)
   activeSkill: null as { command: string; name: string } | null, // P-IDE.2: active bundled skill
   liveUsage: null as { used: number; size: number; cost: number } | null,
   username: "" as string, // the "You" label on your messages (Settings → Profile)
@@ -230,7 +233,7 @@ function buildShell(): void {
             <div class="seg kg-lens" data-kg-lens>
               <button class="on" data-lens="kind">Kind</button><button data-lens="trust">Trust</button>
             </div>
-            <button class="btn-mini" id="kgPerf" data-tip="Performance mode|Auto adapts rendering to battery + CPU: on battery the graph goes calm (no particle flow, shorter settle, capped nodes); LOW battery pauses the visualization entirely - the agent still uses your knowledge. Click to cycle auto \u2192 full \u2192 reduced \u2192 minimal.">${icon("gauge", 13)} Auto</button>
+            <button class="btn-mini" id="kgPerf" data-tip="Performance mode|Auto adapts rendering to battery + CPU: on battery the graph goes calm (no particle flow, shorter settle, capped nodes); LOW battery pauses the visualization entirely - the agent still uses your knowledge. Click to cycle auto → full → reduced → minimal.">${icon("gauge", 13)} Auto</button>
             <div class="kg-relate-stack">
               <button class="btn-mini" id="kgRelate" data-tip="Relate nodes|Turn on relate mode, then drag one node onto another - or click two or more nodes and press Relate - to add your OWN relationships. They're saved to your private graph (first-party, never sent to be scanned as instructions).">${icon("git", 13)} Relate</button>
               <button class="btn-mini" id="kgCode" data-tip="Code graph|Ingest THIS workspace into a code knowledge graph - source files as nodes, imports as edges (colbymchenry/codegraph-style, in your own canvas). Click to build + view; click again to return to your personal graph. Needs no personalization unlock.">${icon("graph", 13)} Code graph</button>
@@ -990,10 +993,17 @@ async function send(): Promise<void> {
   const ta = $("#input") as HTMLTextAreaElement;
   const text = ta.value.trim();
   if (!text) return;
-  // P-AGENT.8: `/agent [description]` kicks off the Agent Builder interview — the chat agent (steered by the
-  // frozen AGENT_BUILDER_POLICY) asks what to build, then calls `agent_builder_open`. We show the user's
-  // `/agent …` in the transcript but send the interview-kickoff prompt to the model.
-  const sendText = /^\/agent\b/i.test(text) ? agentInterviewPrompt(text.replace(/^\/agent\b/i, "").trim()) : text;
+  // P-CMD.1: a user-authored SKILL-mode "/" command ACTIVATES its body as a persistent instruction (no turn
+  // sent) — same behaviour as a bundled skill. Handle it before we open an assistant node.
+  const cmdTok = /^\/([a-z][a-z0-9-]{0,31})\b/i.exec(text)?.[1]?.toLowerCase();
+  if (cmdTok && !state.streaming) {
+    const uc = state.userCommands.find((c) => c.name === cmdTok);
+    if (uc && uc.mode === "skill") { ta.value = ""; autosize(ta); setSendEnabled(); void activateUserCommandSkill(uc); return; }
+  }
+  // What actually goes to the model. `/agent` and `/command` kick off builder interviews (the chat agent,
+  // steered by the frozen policies, asks what to build then calls the matching tool); a SEND-mode user
+  // command expands its body (+ any typed args). The TRANSCRIPT still shows exactly what the user typed.
+  const sendText = resolveSendText(text, cmdTok);
   // P-ACP.4: a turn is already running → pre-stage this prompt instead of dropping it. It auto-sends
   // when the current turn ends (naturally or via Stop). One slot - a newer entry replaces the old.
   if (state.streaming) { state.queued = text; ta.value = ""; autosize(ta); renderQueued(); setSendEnabled(); return; }
@@ -1111,6 +1121,7 @@ async function send(): Promise<void> {
     else if (e.type === "block") onBlock(e);
     else if (e.type === "preview-available") onPreviewAvailable(e.path);
     else if (e.type === "agent-builder-open") openAgentBuilderWithSpec(e.spec); // P-AGENT.8.2
+    else if (e.type === "slash-command-created") void onSlashCommandCreated(e.command); // P-CMD.1
     else if (e.type === "usage") { tok = e.used; cost = e.cost; state.liveUsage = { used: e.used, size: e.size, cost: e.cost }; paintHud(); renderStatus(); renderMetricsRail(); }
     else if (e.type === "done") { if (e.text && e.text.length > buf.length) buf = e.text; /* reconcile a lossy stream with the server's full reply */ streamEl.innerHTML = renderMarkdown(buf); enhanceCodeBlocks(streamEl); (node as MsgNode)._md = buf; finishHud(); state.streaming = false; setSendEnabled(); }
   };
@@ -2491,6 +2502,9 @@ let abOpen = false;
 let abSpec: AgentSpec | null = null;
 let abHandle: GraphHandle | null = null;
 let abConnectMode = false;
+// P-AGENT.9: trust state of the CURRENT canvas spec (imported agents open untrusted/suspicious/quarantined
+// and cannot run until approved). null = locally authored (trusted).
+let abTrust: { label: TrustLabel; reason: string } | null = null;
 
 function openAgentBuilder(): void {
   abOpen = true;
@@ -2522,6 +2536,11 @@ async function renderAgentBuilder(): Promise<void> {
     // Resume the most-recently-saved agent for this workspace, else start a fresh one-node spec.
     const list = await bridge.agentList().catch(() => []);
     abSpec = (list[0] ? await bridge.agentLoad(list[0].spec_id) : null) ?? newCanvasSpec("New agent", Date.now());
+    // P-AGENT.9: resume the stored trust state too — an imported agent stays gated across sessions.
+    const t = list[0];
+    abTrust = t && t.trust_label && t.trust_label !== "trusted" && t.spec_id === abSpec.spec_id
+      ? { label: t.trust_label, reason: t.trust_reason ?? "imported agent — review before running" }
+      : null;
   }
   abHandle?.destroy();
   abHandle = mountGraph(canvas as HTMLElement, specToGraphData(abSpec), (id) => selectAbNode(id), {
@@ -2529,6 +2548,7 @@ async function renderAgentBuilder(): Promise<void> {
   });
   abHandle.setRelateMode(abConnectMode);
   renderAbErrors();
+  renderAbTrust(); // P-AGENT.9
 }
 function reRenderAbGraph(): void {
   if (abSpec && abHandle) abHandle.update(specToGraphData(abSpec));
@@ -2546,7 +2566,16 @@ function selectAbNode(id: string | null): void {
   side.hidden = false;
   $("#abLabel", side)?.addEventListener("input", (e) => { node.label = (e.target as HTMLInputElement).value; markAbDirty(); reRenderAbGraph(); });
   $("#abPrompt", side)?.addEventListener("input", (e) => { node.prompt = (e.target as HTMLTextAreaElement).value; markAbDirty(); });
-  $("#abTool", side)?.addEventListener("change", (e) => { node.tool = (e.target as HTMLSelectElement).value; markAbDirty(); renderAbErrors(); });
+  $("#abTool", side)?.addEventListener("change", (e) => {
+    const t = (e.target as HTMLSelectElement).value;
+    if (!t) return; // the disabled "(choose a tool)" placeholder
+    node.tool = t;
+    // Picking a tool outside the allow-list AUTO-ADDS it: the validator requires membership, and the
+    // dropdown offers the whole omp catalog (see TOOL_CATALOG in agent_builder.ts).
+    if (abSpec && !abSpec.tools.includes(t)) abSpec.tools.push(t);
+    markAbDirty();
+    renderAbErrors();
+  });
   $("#abSub", side)?.addEventListener("input", (e) => { node.subagentSpecId = (e.target as HTMLInputElement).value; markAbDirty(); });
   $("#abDelNode", side)?.addEventListener("click", () => deleteAbNode(node.id));
 }
@@ -2584,6 +2613,28 @@ function toggleAbConnect(): void {
   abHandle?.setRelateMode(abConnectMode);
   $("#abConnect")?.classList.toggle("active", abConnectMode);
 }
+// P-AGENT.9: the trust banner for an imported spec. Hidden for trusted/local specs; shows the label + reason
+// and (for untrusted/suspicious) the “Approve after review” human step. Quarantined can only be re-imported.
+function renderAbTrust(): void {
+  const box = $("#abTrust");
+  if (!box) return;
+  const html = abTrust ? trustBannerHtml(abTrust.label, abTrust.reason) : "";
+  box.innerHTML = html;
+  box.hidden = !html;
+  box.className = `ab-trust${abTrust && html ? ` ab-trust-${abTrust.label}` : ""}`;
+  $("#abApprove", box)?.addEventListener("click", () => void approveAbTrust());
+}
+async function approveAbTrust(): Promise<void> {
+  if (!abSpec) return;
+  const r = await bridge.agentTrust(abSpec.spec_id);
+  if (r?.trustLabel === "trusted") {
+    abTrust = null;
+    renderAbTrust();
+    showToast({ tone: "ok", title: "Agent approved", desc: `“${abSpec.name}” is now trusted and can run.` });
+  } else {
+    showToast({ tone: "danger", title: "Couldn't approve", desc: r?.error ?? "approval was refused" });
+  }
+}
 function renderAbErrors(): void {
   const box = $("#abErrs");
   if (!box || !abSpec) return;
@@ -2607,6 +2658,113 @@ async function exportAgentBuilder(): Promise<void> {
   const r = await bridge.agentExport(abSpec, "electron"); // P-AGENT.6: portable, tamper-evident bundle
   if (r?.dir) showToast({ tone: "ok", title: "Agent exported", desc: `${r.files} files → ${r.dir}`, meta: r.digest });
   else showToast({ tone: "danger", title: "Export failed", desc: "The server refused the spec." });
+}
+// P-AGENT.9: the Tools flyout — the allow-list as removable chips. Removing a chip immediately blocks the
+// agent from calling that tool (spec.tools drives the compiled allow-list extension + the run-time gate);
+// a step still referencing it is flagged by the validator until fixed or re-added.
+function openAbToolsPanel(): void {
+  if (!abSpec) return;
+  const side = $("#abSide");
+  if (!side) return;
+  side.innerHTML = toolChipsHtml(abSpec);
+  side.hidden = false;
+  $$("[data-rm-tool]", side).forEach((b) =>
+    b.addEventListener("click", () => {
+      const t = (b as HTMLElement).dataset.rmTool ?? "";
+      if (!abSpec || !t) return;
+      abSpec.tools = abSpec.tools.filter((x) => x !== t);
+      const brokenSteps = abSpec.nodes.filter((n) => n.kind === "tool" && n.tool === t).length;
+      markAbDirty();
+      renderAbErrors();
+      openAbToolsPanel(); // refresh the chips
+      showToast(
+        brokenSteps
+          ? { tone: "warn", title: `${t} blocked`, desc: `Removed from the allow-list. ${brokenSteps} step${brokenSteps > 1 ? "s" : ""} still reference it — fix or delete ${brokenSteps > 1 ? "them" : "it"} (or re-add the tool) before saving.` }
+          : { tone: "ok", title: `${t} blocked`, desc: "Removed from the allow-list — this agent can no longer call it." },
+      );
+    }),
+  );
+  $("#abToolAdd", side)?.addEventListener("change", (e) => {
+    const t = (e.target as HTMLSelectElement).value;
+    if (!abSpec || !t) return;
+    if (!abSpec.tools.includes(t)) abSpec.tools.push(t);
+    markAbDirty();
+    renderAbErrors();
+    openAbToolsPanel();
+  });
+}
+// P-AGENT.9: SHARE — portable .lucid-agent.json (credential NAMES + setup guidance, never values). Written
+// under .omp/agent-shares/ and offered as a browser download for easy hand-off to another LUCID.
+async function shareAgentBuilder(): Promise<void> {
+  if (!abSpec) return;
+  const errs = saveErrors(abSpec);
+  if (errs.length) { renderAbErrors(); showToast({ tone: "danger", title: "Can't share yet", desc: errs[0]! }); return; }
+  const r = await bridge.agentShare(abSpec);
+  if (!r || r.error || !r.json) { showToast({ tone: "danger", title: "Share failed", desc: r?.error ?? "The server refused the spec." }); return; }
+  try {
+    const url = URL.createObjectURL(new Blob([r.json], { type: "application/json" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = r.fileName ?? "agent.lucid-agent.json";
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 10_000);
+  } catch { /* download is a convenience; the file is already on disk */ }
+  showToast({ tone: "ok", title: "Portable agent saved", desc: `${r.fileName} — no credential values inside; the recipient adds their own via Secrets & connections.`, meta: r.path });
+}
+// P-AGENT.10: export the canvas as an importable n8n workflow JSON (approvals become REAL Wait nodes; the
+// provenance sticky embeds the portable agent so another LUCID can round-trip it losslessly).
+async function n8nExportAgentBuilder(): Promise<void> {
+  if (!abSpec) return;
+  const errs = saveErrors(abSpec);
+  if (errs.length) { renderAbErrors(); showToast({ tone: "danger", title: "Can't export yet", desc: errs[0]! }); return; }
+  const r = await bridge.agentN8nExport(abSpec);
+  if (!r || r.error || !r.json) { showToast({ tone: "danger", title: "n8n export failed", desc: r?.error ?? "The server refused the spec." }); return; }
+  try {
+    const url = URL.createObjectURL(new Blob([r.json], { type: "application/json" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = r.fileName ?? "agent.n8n.json";
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 10_000);
+  } catch { /* download is a convenience; the file is already on disk */ }
+  showToast({
+    tone: "ok",
+    title: "n8n workflow saved",
+    desc: r.pushAvailable
+      ? `${r.fileName} — import it in n8n, or use “n8n ⇧” to push it straight to your instance.`
+      : `${r.fileName} — import it in your n8n instance (Workflows → Import from File). Direct push needs the enterprise add-on.`,
+    meta: r.path,
+  });
+}
+// P-AGENT.10: push to a private hosted n8n via the enterprise add-on connector (honest refusal without it).
+async function n8nPushAgentBuilder(): Promise<void> {
+  if (!abSpec) return;
+  const errs = saveErrors(abSpec);
+  if (errs.length) { renderAbErrors(); showToast({ tone: "danger", title: "Can't push yet", desc: errs[0]! }); return; }
+  const r = await bridge.agentN8nPush(abSpec);
+  if (r?.ok) showToast({ tone: "ok", title: "Pushed to n8n", desc: r.url ? `Created: ${r.url}` : r.detail ?? "workflow created" });
+  else showToast({ tone: "warn", title: "Couldn't push to n8n", desc: r?.detail ?? r?.error ?? "The n8n connector is part of the enterprise add-on." });
+}
+// P-AGENT.9/.10: IMPORT — a shared .lucid-agent.json or an n8n workflow JSON. The backend detects the
+// format, digest-checks/translates, security-scans (fail-closed) and stores it with a trust label; anything
+// not trusted opens for REVIEW and cannot run until approved.
+async function importAgentFile(file: File): Promise<void> {
+  const raw = await file.text();
+  const r = await bridge.agentImport(raw);
+  if (!r || r.error || !r.spec) { showToast({ tone: "danger", title: "Import refused", desc: r?.error ?? "not a valid portable agent file" }); return; }
+  abSpec = r.spec;
+  const label = (r.trustLabel ?? "untrusted") as TrustLabel;
+  abTrust = label === "trusted" ? null : { label, reason: r.reason ?? "imported from an external source" };
+  openAgentBuilder();
+  renderAbTrust();
+  if ((r.spec.secrets?.length ?? 0) > 0 || (r.spec.egress?.length ?? 0) > 0) void openAbSecretsPanel();
+  showToast({
+    tone: label === "quarantined" ? "danger" : "warn",
+    title: `Imported: ${r.spec.name}`,
+    desc: label === "quarantined"
+      ? `Quarantined — ${r.findings ?? 0} finding(s). It cannot run; review the flagged content.`
+      : `Held for review (${label}). Check every step, tool, and connection, add credentials via Secrets & connections, then Approve.${r.notes?.length ? ` Mapping: ${r.notes[0]}.` : ""}`,
+  });
 }
 // P-AGENT.4-live: open the Run flyout and let the user run the agent live inside LUCID.
 function openAbRunPanel(): void {
@@ -2639,10 +2797,24 @@ async function runAgentBuilder(): Promise<void> {
 function openAgentBuilderWithSpec(spec: AgentSpec): void {
   const errs = saveErrors(spec); // defense-in-depth: the backend already gated this, re-check before opening
   if (errs.length) { showToast({ tone: "danger", title: "Couldn't open the drafted agent", desc: errs[0]! }); return; }
+  // P-AGENT.9: LIVE collaboration — the chat agent re-calls agent_builder_open each turn the draft changes.
+  // If the canvas is already open on this draft, update it IN PLACE so the user watches it evolve.
+  const isUpdate = abOpen && !!abSpec && abSpec.spec_id === spec.spec_id;
+  const hadNeeds = isUpdate ? (abSpec!.secrets?.length ?? 0) + (abSpec!.egress?.length ?? 0) : 0;
   abSpec = spec;
+  abTrust = null; // drafted in THIS session's chat: locally authored (the backend re-validated + secret-scanned)
+  if (isUpdate) {
+    reRenderAbGraph();
+    renderAbErrors();
+    renderAbTrust();
+    // surface Secrets & connections only when the draft GAINS credential/egress needs mid-conversation
+    if ((spec.secrets?.length ?? 0) + (spec.egress?.length ?? 0) > hadNeeds) void openAbSecretsPanel();
+    showToast({ tone: "info", title: "Draft updated", desc: `“${spec.name}” — ${spec.nodes.length} steps. Review the changes; reply in chat to steer.` });
+    return;
+  }
   openAgentBuilder(); // renderAgentBuilder keeps abSpec since it's already set
   if ((spec.secrets?.length ?? 0) > 0 || (spec.egress?.length ?? 0) > 0) void openAbSecretsPanel();
-  showToast({ tone: "ok", title: "Agent Builder opened", desc: `Review "${spec.name}", add any credentials, then confirm.` });
+  showToast({ tone: "ok", title: "Agent Builder opened", desc: `Review “${spec.name}”, add any credentials, then confirm.` });
 }
 
 // P-AGENT.8.4: the Secrets & connections flyout — the easy-to-find place to add API credentials (to the vault)
@@ -3924,6 +4096,64 @@ async function clearBundledSkill(): Promise<void> {
   state.activeSkill = null; updateSkillButton();
   await bridge.clearActiveSkill();
   showToast({ title: "Skill cleared", desc: "No bundled skill is steering the agent.", timeout: 2000 });
+}
+
+// ── P-CMD.1 (ADR-0135): user-authored "/" slash commands ──────────────────────
+// Resolve the text actually sent to the model. `/agent` + `/command` open builder interviews; a SEND-mode
+// user command expands its saved body with any typed args. Anything else passes through verbatim. Pure.
+function resolveSendText(text: string, cmdTok: string | undefined): string {
+  if (/^\/agent\b/i.test(text)) return agentInterviewPrompt(text.replace(/^\/agent\b/i, "").trim());
+  if (/^\/command\b/i.test(text)) return commandBuilderPrompt(text.replace(/^\/command\b/i, "").trim());
+  if (cmdTok) {
+    const uc = state.userCommands.find((c) => c.name === cmdTok && c.mode === "send");
+    if (uc) return expandCommandBody(uc.body, text.replace(new RegExp(`^/${cmdTok}\\s*`, "i"), ""));
+  }
+  return text;
+}
+
+/** Kickoff for `/command [description]`: steer the chat agent to interview the user then call
+ *  slash_command_create (mirrors agentInterviewPrompt). Frozen SLASH_COMMAND_POLICY reinforces this. */
+function commandBuilderPrompt(desc: string): string {
+  const focus = desc ? `\n\nThe user's starting idea: ${desc}` : "";
+  return (
+    `The user wants to CREATE a reusable "/" slash command - a saved prompt they trigger by typing /<name>. ` +
+    `Interview them briefly (skip anything already clear), then create it with the slash_command_create tool.` +
+    focus +
+    `\n\nYou need: (1) a NAME (lowercase letters/digits/hyphens, e.g. pr-review); (2) exactly WHAT it should do ` +
+    `- the prompt body it runs (use $ARGS for the text typed after the name, or $1..$9 for positional args); ` +
+    `(3) MODE - "send" (expand the body + args and send it as a turn) or "skill" (activate the body as a ` +
+    `persistent instruction until cleared). If it's already clear, skip straight to creating it. Then call ` +
+    `slash_command_create with { name, description, body, mode }. NEVER put a secret value in the body - ` +
+    `reference a vault credential by name instead.`
+  );
+}
+
+/** SKILL-mode user command: activate its body as a persistent instruction (reuses the bundled-skill seam). */
+async function activateUserCommandSkill(uc: UserCommand): Promise<void> {
+  state.activeSkill = { command: `cmd:${uc.name}`, name: `/${uc.name}` };
+  updateSkillButton();
+  await bridge.setActiveSkill(`/${uc.name}`, uc.body);
+  void bridge.skillActivated(`cmd:${uc.name}`, `/${uc.name}`, "project"); // P-IDE.3 telemetry (metadata only)
+  showToast({ title: `Skill on: /${uc.name}`, desc: "Guides the agent until you clear it (Skills → Clear).", timeout: 2800 });
+}
+
+// The agent called slash_command_create → acp_backend parsed + emitted the command. Persist it AUTHORITATIVELY
+// through the gate (createUserCommand validates + secret-scans + Unicode-scans server-side), then register it
+// in the live "/" menu. A blocked/invalid command surfaces as a danger toast and is never enabled.
+async function onSlashCommandCreated(command: UserCommand): Promise<void> {
+  const res = await bridge.userCommandCreate(command);
+  if (!res?.ok) {
+    showToast({ tone: "danger", title: "Couldn't create the command", desc: res?.reason ?? res?.errors?.[0] ?? "rejected at the security gate" });
+    return;
+  }
+  const saved = res.command ?? command;
+  state.userCommands = [saved, ...state.userCommands.filter((c) => c.name !== saved.name)];
+  const takesArgs = /\$ARGS\b|\$[1-9]/.test(saved.body);
+  showToast({
+    title: `Created /${saved.name}`,
+    desc: saved.mode === "skill" ? `Type /${saved.name} to activate it as a skill.` : `Type /${saved.name} to run it${takesArgs ? " (takes arguments)" : ""}.`,
+    timeout: 4200,
+  });
 }
 /** /task proforma: append a multi-line subagent-delegation template, preserving existing input. */
 function insertTaskProforma(): void {
@@ -5330,8 +5560,12 @@ function slashSource(): SlashItem[] {
   // P-AGENT.8: the flagship /agent command — start the Agent Builder interview. Promoted (high `uses`) so it
   // surfaces near the top; `complete` lets the user optionally add a one-line description before sending.
   out.push({ label: "/agent", hint: "Build an AI agent — LUCID interviews you, then opens the Agent Builder", kind: "command", complete: "/agent ", uses: 9000 + (uses["agent"] ?? 0) });
+  // P-CMD.1: create your OWN reusable "/" command by describing it — LUCID interviews you, then saves it.
+  out.push({ label: "/command", hint: "Create your own /command — describe it, LUCID interviews you and saves it", kind: "command", complete: "/command ", uses: 8500 + (uses["command"] ?? 0) });
   for (const s of bundledSkillsByUsage()) out.push({ label: s.name, hint: s.description, kind: "bundled", activate: s.command, uses: uses[s.command] ?? 0 });
   for (const s of state.skills) out.push({ label: `/skill:${s.name}`, hint: s.description || s.source, kind: "project", complete: `/skill:${s.name} `, uses: 0 });
+  // P-CMD.1: the user's own saved commands. Ranked above omp commands (uses:100) so they surface first.
+  for (const c of state.userCommands) out.push({ label: `/${c.name}`, hint: c.description || (c.mode === "skill" ? "your skill" : "your command"), kind: "command", complete: `/${c.name} `, uses: 100 });
   for (const c of state.commands) out.push({ label: `/${c.name}`, hint: c.description ?? "", kind: "command", complete: `/${c.name} `, uses: 0 });
   return out;
 }
@@ -5525,6 +5759,17 @@ function wire(): void {
   $("#abExport")?.addEventListener("click", () => void exportAgentBuilder());
   $("#abRun")?.addEventListener("click", () => openAbRunPanel());
   $("#abSecrets")?.addEventListener("click", () => void openAbSecretsPanel());
+  $("#abToolsBtn")?.addEventListener("click", () => openAbToolsPanel()); // P-AGENT.9: allow-list chips
+  $("#abShare")?.addEventListener("click", () => void shareAgentBuilder()); // P-AGENT.9: portable share
+  $("#abN8n")?.addEventListener("click", () => void n8nExportAgentBuilder()); // P-AGENT.10: n8n export
+  $("#abN8nPush")?.addEventListener("click", () => void n8nPushAgentBuilder()); // P-AGENT.10: add-on push
+  $("#abImportBtn")?.addEventListener("click", () => ($("#abImportFile") as HTMLInputElement | null)?.click()); // P-AGENT.9
+  $("#abImportFile")?.addEventListener("change", (e) => {
+    const input = e.target as HTMLInputElement;
+    const f = input.files?.[0];
+    input.value = ""; // allow re-importing the same file
+    if (f) void importAgentFile(f);
+  });
   // P-PREVIEW.1 (ADR-0096): preview panel - open a local file, reload, screenshot to chat, close.
   $("#prevClose")?.addEventListener("click", () => closePreview());
   $("#prevOpen")?.addEventListener("click", () => loadPreview(($("#prevPath") as HTMLInputElement | null)?.value ?? ""));
@@ -6369,6 +6614,7 @@ async function loadConfig(): Promise<void> {
   try {
     const live = await bridge.config();
     state.commands = await bridge.commands();
+    state.userCommands = (await bridge.userCommands()) ?? []; // P-CMD.1: workspace-local user "/" commands
     state.chinaAck = !!(await bridge.chinaAck())?.acknowledged; // P-IDE.1c: gate China-origin models
     state.thirdPartyAck = !!(await bridge.thirdPartyAck())?.acknowledged; // gate the "More providers" list
     state.managed = await bridge.managed(); // ADR-0068 (P-ENT.1): enterprise lock view for the UI
@@ -6818,7 +7064,7 @@ function openConfigPopover(anchor: HTMLElement): void {
       const key = `${list2.map((o) => o.value).join(",")}|${cur}|${q}|${[...collapsedFamilies()].sort().join(",")}|${state.asksage?.configured ? 1 : 0}`;
       if (pickerMemo?.key !== key) pickerMemo = { key, html: familyListHTML(list2, cur, q) }; // P-PERF.5 memo
       list.innerHTML = pickerMemo.html;
-      search.placeholder = `Search ${list2.length} models\u2026`;
+      search.placeholder = `Search ${list2.length} models…`;
       const ld = $("#cfgLoading", node) as HTMLElement | null; if (ld) ld.hidden = !state.configCached;
     };
     draw();

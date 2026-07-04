@@ -9524,3 +9524,227 @@ the handoff reuses the proven `preview_open` tool_call detection (#1 extend-omp,
 ADR-0133 (the Agent Builder this extends), ADR-0096 (the `preview_open` handoff pattern), ADR-0106/0107 (the
 network whitelist + OS-encrypted credential vault this builds on), ADR-0114 (the ENGAGEMENT_POLICY pattern for a
 new frozen policy block), the P-AGENT.5 import gate (the sibling untrusted-content guard).
+
+## ADR-0135 - P-AGENT.9: allow-list chip editor, live per-turn canvas collaboration, portable share/import with credential provisioning
+
+**Date:** 2026-07-04
+**Status:** Accepted - BUILT + tested. NO version bump.
+
+**Context.** Three gaps after the P-AGENT.8 epic: (1) the tool allow-list had no management UI - the node
+dropdown could ADD tools (auto-allow-list) but nothing could REMOVE one, so there was no way to block a tool
+without deleting steps; (2) the chat->canvas handoff opened the Agent Builder once - during a collaborative
+build the user couldn't watch the draft evolve; (3) the enterprise export (P-AGENT.6) targets deploy adapters,
+not user-to-user sharing - and a shared agent said nothing about HOW its next user obtains the credentials it
+declares.
+
+**Decision.**
+1. **Chips (renderer-only).** `toolChipsHtml` renders `spec.tools` as removable chips (in-use badge per
+   tool-node reference) + an add-picker from `TOOL_CATALOG`. Removing a chip edits `spec.tools`; enforcement is
+   unchanged - the compiled per-agent allow-list extension + the fail-closed gate already deny off-list calls,
+   and the validator flags steps referencing a removed tool (nothing fails silently).
+2. **Live collaboration.** `agent_builder_open` is now re-callable per turn: `openAgentBuilderWithSpec`
+   detects `abOpen && same spec_id` and updates the canvas IN PLACE ("Draft updated" toast; Secrets flyout only
+   re-surfaces when the draft GAINS secret/egress needs). AGENT_BUILDER_POLICY (frozen layer 3) grew three
+   rules: re-open per changed turn + explain/recommend/ask, warn benefit/risk/mitigation for powerful grants
+   (bash/eval/wildcard egress/write), and declare `provisioning` per SecretRef. Prefix-hash regression re-run
+   green (the prefix stays byte-stable - content changed BY an increment, not per-request).
+3. **Portable share/import.** New `harness/agent/portable.ts`: `.lucid-agent.json` = {format, version,
+   exported_at, spec_digest (sha256 over canonical key-sorted JSON), setup_md, spec}. Export refuses invalid or
+   secret-carrying specs (assertSecretFree); parse re-validates, digest-checks (tamper-evidence), re-scans.
+   `SecretRef.provisioning` (spec.ts, additive+optional): {method: "user-input"|"jit-ticket", instructions,
+   ticket:{system, template (string map), rationale}} - so an imported agent TELLS its user to paste a value
+   into the OS-encrypted vault, or to request a Just-In-Time token from their KMS via IT ticketing (sample
+   ServiceNow-style fields + rationale). Provisioning free text is scanned by secret_guard (a pasted value is a
+   guardrail violation) AND included in `collectSpecText` (imported help-text is injection surface).
+4. **Import trust is persistent.** Trust sidecar `<id>.trust.json` in file_store (spec stays pure/portable);
+   `/api/agent/import` runs the P-AGENT.5 gate (scanner sidecar via lazy ScannerClient in dev.ts, fail-closed)
+   and persists the label; `/api/agent/run` now loads the STORED label (imported-not-approved is refused);
+   `/api/agent/trust` promotes untrusted/suspicious -> trusted after explicit review; QUARANTINED can never be
+   approved from the UI. Renderer shows a trust banner with "Approve after review".
+
+**Consequences.** A shared agent file carries workflow + credential NAMES + acquisition guidance, never
+values; recipients re-scan on import and must approve before it runs. The chip editor makes the allow-list the
+user-facing control surface it was designed to be. The catalog remains hand-curated (renderer constant) -
+deriving it from the live omp instance stays future work.
+
+## ADR-0136 - P-AGENT.10: n8n interop (export/import translator) + enterprise connector seam
+
+**Date:** 2026-07-04
+**Status:** Accepted - BUILT + tested. NO version bump.
+
+**Context.** The n8n comparison (see PROGRESS 2026-07-04) surfaced two ownership asks: move a LUCID-built
+workflow into a privately hosted n8n (maximize compatibility), and pull an n8n workflow into LUCID (own your
+workflow). Also needed: a documented public/private seam for connector-class features, following the
+established split (ADR-0068/0069/A012): public core ships complete features on portable artifacts; the
+private add-on (`lucidagentIDEaddon`, sibling checkout) ships the connectors into private infrastructure.
+
+**Decision.**
+1. **Translator is public + pure** (`harness/agent/n8n.ts`). Export: manualTrigger + one node per LUCID step
+   wired along spec edges; approval steps become REAL `n8n-nodes-base.wait` nodes (n8n genuinely halts -
+   stronger than our v1 prompt-line approvals, closing that gap on the n8n side first); subagent ->
+   `executeWorkflow` placeholder; prompt/tool -> `noOp` carrying instructions in node `notes`. A provenance
+   stickyNote embeds setup guidance + the full portable `.lucid-agent` file in a ```lucid-agent fence - the
+   ROUND-TRIP ANCHOR: re-importing the exported workflow restores the exact spec, digest-checked.
+2. **Rejected: emitting `@n8n/n8n-nodes-langchain.agent` wiring.** It couples the export to n8n model
+   credentials + fast-moving typeVersions; a scaffold of core nodes imports cleanly on any n8n and the human
+   finishes the wiring with the sticky's guidance.
+3. **Import maps honestly, never silently.** wait->approval, executeWorkflow->subagent, httpRequest->`read`
+   tool + URL host harvested into egress, code/AI/unknown -> prompt steps carrying node intent + compacted
+   parameters; node credentials -> SecretRef NAMES (kind guessed from cred type) with user-input provisioning;
+   loop-back connections dropped (DAG invariant; native loops arrive with P-AGENT.11c); trigger nodes noted,
+   not mapped (P-AGENT.14). Every mapping compromise lands in `notes[]` -> description + import toast.
+4. **Both import formats, one gate.** `/api/agent/import` detects portable vs n8n JSON; EITHER path funnels
+   through the P-AGENT.5 quarantine gate (scanner, fail-closed) + trust sidecar + human approval. Translation
+   never widens trust.
+5. **Enterprise seam** (`desktop/addon_seam.ts`): add-on root = env `LUCID_ADDON_DIR` else sibling
+   `lucidagentIDEaddon` (the folder the user calls "LUCIDagentideadd-on" - the env override covers any
+   rename). Connector contract: `connectors/<name>/src/cli.ts <verb> --file <artifact>` printing ONE JSON
+   line {ok, detail, url?}. The seam only probes presence + dispatches child processes - add-on code is NEVER
+   loaded into the engine process (isolation + licensing hygiene). Absent add-on => honest "not installed"
+   note in the UI, never a fake success. The n8n PUSH connector (POST <instance>/api/v1/workflows,
+   X-N8N-API-KEY) is add-on work, spec'd by this contract.
+
+**Consequences.** `n8n ⇩` exports a file n8n imports as-is; `n8n ⇧` pushes when the add-on is present;
+importing either share format stays review-gated. Fidelity is deliberately scaffold-grade in v1; the
+round-trip anchor keeps LUCID<->LUCID lossless even when the file traveled through n8n.
+
+## ADR-0137 - P-AGENT.11: the step-runner - enforced approvals, real sub-agents, then branching (DESIGN)
+
+**Date:** 2026-07-04
+**Status:** Accepted - DESIGN. Next build increment (11a first).
+
+**Context.** The v1 compiler lowers the DAG into a numbered system prompt; `approval` lowers to "pause for
+human approval" PROSE and `subagent` to "run sub-agent <id>" prose (compiler.ts stepLine). A guarantee the
+model can skip is not a guarantee. n8n's engine executes nodes discretely; we adopt the piece of that that
+matters for security first.
+
+**Decision (phased).**
+- **11a - enforced approval halts.** Split topo order into SEGMENTS at approval boundaries. Run each segment
+   as its own gated `omp -p` (existing runBuiltAgent mechanics), carry the prior segment's final text forward
+   as context. At a boundary, STOP; surface an approval card in the canvas (who/what/segment output); only an
+   explicit approve starts the next segment. Deny ends the run with a recorded reason. Keystone test: a
+   workflow with an approval node NEVER emits post-approval output without the approve action - treat like
+   the P4.3 promotion gate (stop-the-line on regression).
+- **11b - real sub-agents.** `subagent` steps invoke `runBuiltAgent` on the CHILD spec: child's own compiled
+   allow-list + stored trust label enforced (a non-trusted child refuses exactly like a top-level run); depth
+   cap 3; cycle guard on the spec_id chain. Keystone test: child runs under ITS allow-list, not the parent's.
+- **11c - branching.** New node kind `branch` + edge `label` ("yes"/"no"/custom). v1 semantics: the model
+   running the branch segment picks the outgoing edge and must emit a machine-parseable choice line; the
+   runner follows only that edge and records the rationale in the run trace. Deterministic expression
+   predicates deferred until P-AGENT.13 traces exist to debug them. NODE_KINDS widens - spec_version bump
+   bundled with P-AGENT.15's v2 (one migration, not two).
+
+**Consequences.** Approvals become real security controls; the n8n export's wait-node mapping becomes
+symmetric with LUCID behavior; the compiler keeps emitting the same prompt text as fallback for one-shot mode.
+
+## ADR-0138 - P-AGENT.12: dynamic tool catalog - MCP servers + live omp discovery (DESIGN)
+
+**Date:** 2026-07-04
+**Status:** Accepted - DESIGN.
+
+**Context.** TOOL_CATALOG is a hand-curated 17-entry renderer constant (ADR-0135 stub). n8n's moat is 1,500
+integrations; ours is MCP - the user's configured MCP servers (settings_store `listMcpServers`) already carry
+exactly the integrations they chose, and omp exposes their tools at runtime.
+
+**Decision.** New `/api/agent/tools`: static catalog ∪ enabled MCP server tools (namespaced
+`mcp:<server>:<tool>`, described from the server's tool listing) ∪ omp-registered tool names when a session
+is live. Renderer picker groups by source with a provenance chip (built-in vs MCP); MCP tools carry a
+risk note (third-party surface) in the picker AND in the chat agent's risk-warning policy. The compiled
+allow-list extension already string-matches names, so namespaced entries enforce unchanged. Fail-soft: no
+MCP servers => exactly today's static catalog.
+
+**Consequences.** The Builder's integration surface scales with the user's MCP config; no bespoke connector
+treadmill; the catalog stub in ADR-0135 closes.
+
+## ADR-0139 - P-AGENT.13: per-run execution trace in the canvas (DESIGN)
+
+**Date:** 2026-07-04
+**Status:** Accepted - DESIGN.
+
+**Context.** n8n shows every execution with per-node I/O; our Run panel returns final text only, while the
+harness already owns lineage (runs/lineage.ts), replay (runs/replay.ts) and the agent_obs DuckDB.
+
+**Decision.** agent_run.ts parses the gated child's event stream (gate stderr lines + omp output) into step
+records {run_id, spec_id, node_id?, tool, started_at, finished_at, blocked, reason} written via a NEW numbered
+migration (invariant #10) to agent_obs. Attribution v1 maps tool calls to tool-kind steps by allow-list name
+(prompt steps get segment-level attribution until P-AGENT.11 segments exist - ordering noted). Canvas: a Runs
+flyout lists recent runs; selecting one highlights nodes with per-step status + a detail panel. Any new event
+names extend the EventName enum in contracts.ts - frozen-contract change, done as its own micro-increment
+within the build (invariant #8, exact names only).
+
+**Consequences.** "Click a node, see what it did" - and P-AGENT.11's approval cards get their audit surface
+for free.
+
+## ADR-0140 - P-AGENT.14: triggers - scheduled runs first, gated webhooks second (DESIGN)
+
+**Date:** 2026-07-04
+**Status:** Accepted - DESIGN.
+
+**Context.** Built agents only run from the Run panel. n8n's trigger surface (cron/webhook/events) is the
+feature gap users feel daily; LUCID already ships an automations engine (desktop/automations.ts, cadence
+normalization + scheduling).
+
+**Decision.** Phase 1: an automation kind "agent-run" {spec_id, prompt, model, cadence} - the scheduler calls
+`runBuiltAgent` with the STORED trust label; only `trusted` specs are schedulable (an imported spec must be
+approved first; a label downgrade suspends the schedule - fail-closed). Results land in the P-AGENT.13 trace
++ a notification. Phase 2: webhook trigger via dev.ts `POST /api/agent/hook/<spec_id>`: DISABLED by default,
+per-spec random token minted on enable, request body enters the run as UNTRUSTED delimited content (invariant
+#5), managed ceiling can force webhooks off org-wide. n8n-import then maps trigger nodes instead of dropping
+them to notes.
+
+**Consequences.** "Repeatable" finally means unattended - without widening trust: nothing non-trusted ever
+runs unattended, and webhook payloads are data, never instructions.
+
+## ADR-0141 - P-AGENT.15: spec v2 - retry, timeout, and on-error edges (DESIGN)
+
+**Date:** 2026-07-04
+**Status:** Accepted - DESIGN. Build AFTER P-AGENT.11 (the runner these fields configure).
+
+**Context.** One spawnSync + 120s hard timeout is the whole reliability story; n8n has retry-on-fail, error
+workflows, DLQ patterns.
+
+**Decision.** spec_version 2 (single bump shared with P-AGENT.11c's `branch` kind): optional
+`node.retry {max<=3, backoffMs}`, `node.timeoutMs` (runner-clamped), `edge.kind: "then"|"onError"` (an
+onError edge routes a step's failure to a handler subgraph; no handler => run fails with the recorded error,
+never silent). Loader upgrades v1 files in place (validate v1 -> rewrite v2) - the frozen-schema rule applies
+to DuckDB, not workspace JSON, but the upgrade is still one-way + logged. Validator: closed sets, clamps,
+onError edges may not form cycles with retry. Compiler lowers fields to runner policy; one-shot mode ignores
+them (documented).
+
+**Consequences.** Failure handling becomes reviewable workflow structure - visible on the canvas and in the
+n8n export - instead of prose hopes.
+
+## ADR-0142 - P-AGENT.16: external secret providers via the add-on (DESIGN - ENTERPRISE)
+
+**Date:** 2026-07-04
+**Status:** Accepted - DESIGN. Public seam only in core; providers are add-on IP.
+
+**Context.** P-AGENT.9 ships JIT *guidance* (ticket templates); n8n enterprise fetches from Vault/ASM/AKV/GCP
+at runtime. The add-on already has a kms/vault connector tree (lucidagentIDEaddon/connectors/kms).
+
+**Decision.** Public core: `SecretProvisioning` gains optional `provider {kind: "vault"|"aws-sm"|"azure-kv"|
+"gcp-sm"|"infisical", ref}` (validated closed set; guidance fields unchanged). At run start, when a declared
+secret has a provider AND the kms connector is installed (addon_seam contract, verb `fetch`), the value is
+injected into the CHILD omp process env for that run only - never persisted, never in the spec, never echoed
+to chat (secret_guard already scans provisioning text; fetched values never touch a scanned surface). No
+connector => today's vault flow with the provisioning guidance. Managed config can REQUIRE provider-sourced
+secrets (forbid local vault) for org policy.
+
+**Consequences.** JIT tokens stop transiting humans where org infrastructure allows it; parity with n8n
+enterprise external secrets; the private/public split stays: capability descriptor public, provider code IP.
+
+## ADR-0143 - P-AGENT.17: spec revision history + template gallery (DESIGN)
+
+**Date:** 2026-07-04
+**Status:** Accepted - DESIGN. Low-risk increments, schedulable anytime.
+
+**Decision.** (a) History: `saveSpecFile` also writes `.omp/agents/history/<spec_id>/<updated_at>.json`,
+pruned to the newest 20; endpoints list/read/restore (restore = save-as-current with fresh updated_at, itself
+versioned); canvas History flyout with restore + a name/step-count diff summary. Trust sidecar is NOT
+versioned - trust applies to the spec identity, and a restore of an untrusted import stays untrusted.
+(b) Gallery: a curated `templates/` of `.lucid-agent.json` files in-repo, listed in the Builder; "Use
+template" routes through the STANDARD import path (scan + trust: local curated files still get scanned -
+cheap consistency, no special path). Community submissions deferred until signing lands (ADR-A012 KMS).
+
+**Consequences.** Undo-across-sessions for authored agents; a first-run experience that starts from working,
+reviewed examples; zero new trust paths.

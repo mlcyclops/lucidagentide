@@ -12,6 +12,7 @@
 
 import type { AgentSpec } from "../../harness/agent/spec.ts"; // P-AGENT.2b: Agent Builder spec type
 import type { SpecFileSummary } from "../../harness/agent/file_store.ts"; // P-AGENT.2b: spec list summary
+import type { UserCommand } from "../../harness/commands/spec.ts"; // P-CMD.1: user-authored slash commands
 
 export interface BlockRecord { id: string; tool: string; severity: string; findings: string; reason: string; at: string; status: "quarantined" | "approved" | "dismissed"; reviewer?: string }
 export interface SecuritySnapshot {
@@ -191,6 +192,7 @@ export type ChatEvent =
   | { type: "permission"; id: string; tool: string; detail: string; options: { optionId: string; name: string; kind?: string }[]; url?: string; egress?: boolean; localFile?: boolean; exec?: boolean; program?: string; reason?: string; danger?: boolean }
   | { type: "preview-available"; path: string } // P-PREVIEW.2 (ADR-0096): the agent wrote a previewable file
   | { type: "agent-builder-open"; spec: AgentSpec } // P-AGENT.8.2 (ADR-0134): open the Agent Builder pre-populated
+  | { type: "slash-command-created"; command: UserCommand } // P-CMD.1 (ADR-0135): the agent created a user "/" command
   | { type: "usage"; used: number; size: number; cost: number }
   // P-GOAL.1/3 (ADR-0046): /goal loop events (kept in parity with desktop/acp_backend.ts).
   | { type: "goal-memory"; path: string }
@@ -299,6 +301,13 @@ export interface LucidBridge {
   agentSave(spec: AgentSpec): Promise<{ saved?: boolean; spec_id?: string; errors?: string[] } | null>;
   agentDelete(id: string): Promise<{ deleted: boolean } | null>;
   agentExport(spec: AgentSpec, target: string): Promise<{ dir: string; target: string; digest: string; files: number } | null>;
+  /** P-AGENT.9: portable share/import (.lucid-agent.json, credential NAMES only) + the human approval step. */
+  agentShare(spec: AgentSpec): Promise<{ path?: string; fileName?: string; json?: string; setup?: string; digest?: string; error?: string } | null>;
+  agentImport(raw: string): Promise<{ spec?: AgentSpec; trustLabel?: string; canRun?: boolean; reason?: string; findings?: number; setup?: string; notes?: string[]; error?: string } | null>;
+  agentTrust(id: string): Promise<{ trustLabel?: string; error?: string } | null>;
+  /** P-AGENT.10: n8n interop — export a workflow scaffold; push via the enterprise add-on connector. */
+  agentN8nExport(spec: AgentSpec): Promise<{ path?: string; fileName?: string; json?: string; pushAvailable?: boolean; pushNote?: string; error?: string } | null>;
+  agentN8nPush(spec: AgentSpec): Promise<{ ok?: boolean; detail?: string; url?: string; error?: string } | null>;
   agentRun(spec: AgentSpec, prompt: string, model: string): Promise<{ output: string; error: string; blocked: boolean; reason: string } | null>;
   setCodeGraphAgent(enabled: boolean): Promise<{ enabled: boolean } | null>;
   /** P-APPEAR.1: the personalized chat background (image data URL + display mode + opacity). */
@@ -363,6 +372,11 @@ export interface LucidBridge {
   cancelGoal(): Promise<unknown>; // P-GOAL.2: stop a running /goal loop
   commands(): Promise<OmpCommand[]>;
   skills(): Promise<{ name: string; description: string; source: string }[] | null>;
+  // P-CMD.1 (ADR-0135): user-authored "/" slash commands (workspace .omp/commands/). Create validates +
+  // scans fail-closed server-side. `list` = stored commands; `create` returns the persisted command or errors.
+  userCommands(): Promise<UserCommand[]>;
+  userCommandCreate(command: UserCommand): Promise<{ ok: boolean; command?: UserCommand; errors?: string[]; blocked?: boolean; reason?: string } | null>;
+  userCommandDelete(name: string): Promise<{ deleted: boolean } | null>;
   // P-SKILL.1 (ADR-0045): import dropped .md skill files - each is scanned at the gate; clean ones are
   // written under .omp/skills/, flagged ones are held for Security-panel review.
   skillImport(files: { name: string; content: string }[]): Promise<{ results: SkillImportResult[] } | null>;
@@ -624,6 +638,11 @@ export const bridge: LucidBridge = {
   agentSave: (spec) => post("/api/agent", { spec }), // P-AGENT.2b (server validates fail-closed)
   agentDelete: (id) => post("/api/agent/delete", { id }), // P-AGENT.2b
   agentExport: (spec, target) => post("/api/agent/export", { spec, target }), // P-AGENT.6
+  agentShare: (spec) => post("/api/agent/share", { spec }), // P-AGENT.9
+  agentImport: (raw) => post("/api/agent/import", { raw }), // P-AGENT.9
+  agentTrust: (id) => post("/api/agent/trust", { id }), // P-AGENT.9
+  agentN8nExport: (spec) => post("/api/agent/n8n-export", { spec }), // P-AGENT.10
+  agentN8nPush: (spec) => post("/api/agent/n8n-push", { spec }), // P-AGENT.10
   agentRun: (spec, prompt, model) => post("/api/agent/run", { spec, prompt, model }), // P-AGENT.4-live
   setCodeGraphAgent: (enabled) => post("/api/codegraph/agent", { enabled }),
   chatBackground: () => getData("/api/chat-bg"),
@@ -672,6 +691,9 @@ export const bridge: LucidBridge = {
   cancelGoal: () => post("/api/goal/cancel", {}),
   commands: async () => (await getData("/api/commands")) ?? [],
   skills: () => getData("/api/skills"),
+  userCommands: async () => (await getData("/api/usercommand")) ?? [], // P-CMD.1
+  userCommandCreate: (command) => post("/api/usercommand", { command }), // P-CMD.1 (server validates + scans fail-closed)
+  userCommandDelete: (name) => post("/api/usercommand/delete", { name }), // P-CMD.1
   skillImport: (files) => post("/api/skills/import", { files }),
   setActiveSkill: (name, prompt) => post("/api/skill", { name, prompt }),
   clearActiveSkill: () => post("/api/skill", { clear: true }),

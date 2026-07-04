@@ -33,10 +33,30 @@ export type NodeKind = (typeof NODE_KINDS)[number];
 // guardrail violation caught by secret_guard.ts.
 export const SECRET_KINDS = ["jwt", "oauth", "saml", "pem", "apikey", "basic"] as const;
 export type SecretKind = (typeof SECRET_KINDS)[number];
+
+// Provisioning guidance (P-AGENT.9): HOW the next user of a SHARED agent obtains this credential on their
+// machine. "user-input" = paste an existing value into Secrets & connections (stored in the OS-encrypted
+// vault); "jit-ticket" = request a Just-In-Time token from the org's KMS via its IT ticketing process —
+// `ticket` carries the system name (ServiceNow, Jira SM, …), sample request fields, and the access rationale
+// to paste into the ticket. GUIDANCE ONLY: free text here is scanned by secret_guard (a pasted value is a
+// guardrail violation) and by the import gate (injection surface on an imported spec).
+export const PROVISIONING_METHODS = ["user-input", "jit-ticket"] as const;
+export type ProvisioningMethod = (typeof PROVISIONING_METHODS)[number];
+export interface TicketGuide {
+  system: string; // the ticketing system, e.g. "ServiceNow" or "Jira Service Management"
+  template?: Record<string, string>; // sample ticket fields (catalog item, assignment group, short description, …)
+  rationale?: string; // the access justification to include in the ticket
+}
+export interface SecretProvisioning {
+  method: ProvisioningMethod;
+  instructions?: string; // step-by-step help shown on import — NEVER a secret value
+  ticket?: TicketGuide; // for "jit-ticket": how to request the JIT token
+}
 export interface SecretRef {
   name: string; // stable ref, e.g. "SALESFORCE_API_TOKEN" — maps to a vault credential; NEVER the value
   kind: SecretKind;
   purpose?: string; // what it's for / where the user gets it (help text) — NEVER the secret
+  provisioning?: SecretProvisioning; // P-AGENT.9: how a SHARED agent's next user obtains this credential
 }
 
 export interface AgentNode {
@@ -177,6 +197,34 @@ export function validateSpec(input: unknown): ValidationResult {
         if (!(SECRET_KINDS as readonly string[]).includes(r.kind as string))
           errors.push(`secrets[${i}].kind must be one of: ${SECRET_KINDS.join(", ")}`);
         if ("value" in r || "secret" in r) errors.push(`secrets[${i}] must NOT carry a value — secrets live in the vault`);
+        // provisioning (P-AGENT.9) is optional guidance for obtaining the credential on another machine.
+        if (r.provisioning !== undefined) {
+          if (typeof r.provisioning !== "object" || r.provisioning === null) {
+            errors.push(`secrets[${i}].provisioning must be an object when present`);
+          } else {
+            const p = r.provisioning as Record<string, unknown>;
+            if (!(PROVISIONING_METHODS as readonly string[]).includes(p.method as string))
+              errors.push(`secrets[${i}].provisioning.method must be one of: ${PROVISIONING_METHODS.join(", ")}`);
+            if (p.instructions !== undefined && !isStr(p.instructions))
+              errors.push(`secrets[${i}].provisioning.instructions must be a string when present`);
+            if ("value" in p || "secret" in p) errors.push(`secrets[${i}].provisioning must NOT carry a value`);
+            if (p.ticket !== undefined) {
+              if (typeof p.ticket !== "object" || p.ticket === null) {
+                errors.push(`secrets[${i}].provisioning.ticket must be an object when present`);
+              } else {
+                const t = p.ticket as Record<string, unknown>;
+                if (!isNonEmpty(t.system)) errors.push(`secrets[${i}].provisioning.ticket.system must name the ticketing system`);
+                if (t.rationale !== undefined && !isStr(t.rationale))
+                  errors.push(`secrets[${i}].provisioning.ticket.rationale must be a string when present`);
+                if (t.template !== undefined) {
+                  const tpl = t.template;
+                  if (typeof tpl !== "object" || tpl === null || Array.isArray(tpl) || !Object.values(tpl).every(isStr))
+                    errors.push(`secrets[${i}].provisioning.ticket.template must map field names to string values`);
+                }
+              }
+            }
+          }
+        }
       }
     }
   }
