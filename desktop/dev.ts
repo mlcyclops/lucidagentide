@@ -1076,8 +1076,12 @@ const server = Bun.serve({
       // ADR-0009 Phase A: re-load the cross-session recall block for the fresh session (read-only).
       if (p === "/api/newSession" && req.method === "POST") { await backend.newSession(); await refreshRecall(); return json({ ok: true }); }
       if (p === "/api/chat" && req.method === "POST") {
-        const { text } = await readBody<{ text?: unknown }>(req);
-        return ndjsonStream("chat", (emit) => backend.prompt(String(text ?? ""), emit));
+        const { text, images } = await readBody<{ text?: unknown; images?: unknown }>(req);
+        // P-VISION.1 (ADR-0136): pasted-image content blocks ride alongside the text (defensively filtered).
+        const imgs = Array.isArray(images)
+          ? images.filter((im): im is { data: string; mimeType: string } => !!im && typeof (im as { data?: unknown }).data === "string" && typeof (im as { mimeType?: unknown }).mimeType === "string").slice(0, 6)
+          : undefined;
+        return ndjsonStream("chat", (emit) => backend.prompt(String(text ?? ""), emit, imgs));
       }
       // P-GOAL.1 (ADR-0046): run a /goal loop — maker iterations + a separate verifiable checker, capped
       // and gated. Streams the same NDJSON chat events plus goal-iter / goal-check / goal-done / goal-stop.
