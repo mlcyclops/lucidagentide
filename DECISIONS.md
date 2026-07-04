@@ -9535,8 +9535,12 @@ new frozen policy block), the P-AGENT.5 import gate (the sibling untrusted-conte
 are delivered securely by **env-var reference** (`toOmpRuntimeOverlay` writes the env-var NAME in models.yml;
 omp's `resolveConfigValue` reads it from the child env, which LUCID injects from the vault - the secret never
 touches the file). Live: an overlay with an open Ollama + a bearer DGX-over-VPN provider made `omp models` list
-BOTH. Remaining .2 = the MAIN-process wiring (safe models.yml writer + `omp acp` spawn env injection + egress
-registration); .3 = the Settings UI.
+BOTH. **P-LOCAL.2 delivery WIRED + verified:** `local_providers_runtime.ts` (safe models.yml merge + vault→child
+env + egress) is called from `main.ts` at dev-server spawn (the omp acp runs in the dev child, but the vault is
+main-only, so MAIN resolves secrets and injects them into the child env; models.yml holds only env-var refs).
+Integrated live proof: the real materializer wrote `~/.omp/agent/models.yml` and `omp models` with the injected
+env listed both providers. Remaining .2 = a runtime apply/restart trigger (a provider added after launch takes
+effect on restart); .3 = the Settings UI.
 **Increment:** P-LOCAL.1 .. P-LOCAL.3 (this ADR covers the epic; each phase is its own session/demo).
 
 ### Context
