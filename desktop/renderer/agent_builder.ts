@@ -24,7 +24,7 @@ import {
 } from "../../harness/agent/spec.ts";
 import type { TrustLabel } from "../../harness/contracts.ts";
 import type { AgentRunTrace, TraceSummary } from "../../harness/agent/trace.ts"; // P-AGENT.13
-import type { McpCatalogTool } from "./bridge.ts"; // P-AGENT.12: MCP-discovered catalog entries
+import type { McpCatalogTool, SpecRevisionSummary, AgentTemplateInfo } from "./bridge.ts"; // P-AGENT.12/.17
 
 /** P-AGENT.8: the `/agent` command's kickoff. Turns a (possibly empty) one-line description into a prompt that
  *  makes the chat agent run the "what kind of agent do you want to build" INTERVIEW — steered by the frozen
@@ -117,6 +117,8 @@ export function agentBuilderPanelHtml(): string {
         <button class="ab-btn" id="abToolsBtn" data-tip="Tools|Manage the tool allow-list — remove a tool to BLOCK the agent from ever calling it">Tools</button>
                 <button class="ab-btn" id="abRunsBtn" data-tip="Runs|Recent executions of this agent — per-step trace, approvals, sub-agent hops">Runs</button>
                 <button class="ab-btn" id="abScheduleBtn" data-tip="Schedule|Run this agent on a cadence while LUCID is open. Only TRUSTED, approval-free agents run unattended; schedules are created disarmed">Schedule</button>
+        <button class="ab-btn" id="abHistoryBtn" data-tip="History|The last 20 saved revisions of this agent — restore any of them (the restore is itself a new revision)">History</button>
+        <button class="ab-btn" id="abTemplatesBtn" data-tip="Templates|Start from a curated example workflow. Templates go through the same scan + review as any import">Templates</button>
         <button class="ab-btn" id="abValidate" data-tip="Check the workflow is a valid DAG">Validate</button>
         <button class="ab-btn ok" id="abSave" data-tip="Validate + save this agent">Save</button>
         <button class="ab-btn" id="abSecrets" data-tip="Secrets & connections|Add the API credentials this agent needs to the encrypted vault (never to the agent), and confirm the sites it may reach">Secrets &amp; connections</button>
@@ -285,6 +287,40 @@ export function toolChipsHtml(spec: AgentSpec, mcpTools: McpCatalogTool[] = []):
     <div class="ab-conn-note">The agent may ONLY call tools on this list — every other tool call is denied at run time by its compiled allow-list and LUCID's security gate. Remove a tool to block it.</div>
     <ul class="ab-chip-list">${chips}</ul>
     ${adder}
+  </div>`;
+}
+
+/** P-AGENT.17: the History flyout — saved revisions, newest first, each restorable. */
+export function historyPanelHtml(revisions: SpecRevisionSummary[]): string {
+  const rows = revisions.length
+    ? revisions
+        .map(
+          (r) =>
+            `<li class="ab-runrow" data-rev="${r.updated_at}"><span class="ab-runrow-when">${esc(new Date(r.updated_at).toLocaleString())}</span><span class="ab-runrow-meta">${esc(r.name)} · ${r.nodes} node${r.nodes === 1 ? "" : "s"} / ${r.edges} edge${r.edges === 1 ? "" : "s"}</span><button class="ab-btn" data-restore="${r.updated_at}" data-tip="Restore this revision as the current spec (the restore itself is versioned — nothing is lost)">Restore</button></li>`,
+        )
+        .join("")
+    : `<li class="ab-runrow ab-runrow-empty">No revisions yet — every save snapshots one (the newest 20 are kept).</li>`;
+  return `<div class="ab-runs">
+    <div class="ab-ed-head"><span class="ab-kind">Revision history</span></div>
+    <ul class="ab-run-list">${rows}</ul>
+  </div>`;
+}
+
+/** P-AGENT.17: the Templates flyout — curated starter workflows. Using one goes through the STANDARD
+ *  import gate (scan + trust + review); curated files are not exempt from the pipeline. */
+export function templatesPanelHtml(templates: AgentTemplateInfo[]): string {
+  const rows = templates.length
+    ? templates
+        .map(
+          (t) =>
+            `<li class="ab-runrow" data-tpl="${esc(t.file)}"><div class="ab-tpl-main"><b>${esc(t.name)}</b><div class="ab-tpl-desc">${esc(t.description)}</div><div class="ab-runrow-meta">${t.steps} steps · tools: ${esc(t.tools.join(", ") || "none")}</div></div><button class="ab-btn ok" data-use-tpl="${esc(t.file)}">Use</button></li>`,
+        )
+        .join("")
+    : `<li class="ab-runrow ab-runrow-empty">No templates found in this build.</li>`;
+  return `<div class="ab-runs">
+    <div class="ab-ed-head"><span class="ab-kind">Starter templates</span></div>
+    <div class="ab-conn-note">Templates are scanned and held for your review exactly like any imported agent — then they're yours to edit.</div>
+    <ul class="ab-run-list">${rows}</ul>
   </div>`;
 }
 

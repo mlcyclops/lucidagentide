@@ -21,6 +21,10 @@ import type { TrustLabel } from "../contracts.ts";
 const agentsDir = (root: string): string => join(root, ".omp", "agents");
 const specFile = (root: string, id: string): string => join(agentsDir(root), `${id}.json`);
 const trustFile = (root: string, id: string): string => join(agentsDir(root), `${id}.trust.json`);
+const historyDir = (root: string, id: string): string => join(agentsDir(root), "history", id);
+
+/** P-AGENT.17 (ADR-0143): revisions kept per spec. Old snapshots are pruned newest-first. */
+export const SPEC_HISTORY_KEEP = 20;
 
 export interface SpecFileSummary {
   spec_id: string;
@@ -52,6 +56,65 @@ export function saveSpecFile(root: string, spec: AgentSpec): void {
   if (!id) throw new Error(`invalid spec_id: ${String(spec.spec_id)}`);
   mkdirSync(agentsDir(root), { recursive: true });
   writeFileSync(specFile(root, id), JSON.stringify(spec, null, 2));
+  // P-AGENT.17: revision snapshot, keyed by updated_at (the canvas bumps it on every edit — identical
+  // timestamps are re-saves of the same revision and simply overwrite). History is best-effort provenance:
+  // a snapshot/prune failure NEVER fails the save that matters.
+  try {
+    const dir = historyDir(root, id);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, `${spec.updated_at}.json`), JSON.stringify(spec, null, 2));
+    const snaps = readdirSync(dir).filter((f) => /^\d+\.json$/.test(f)).sort((a, b) => Number.parseInt(b) - Number.parseInt(a));
+    for (const stale of snaps.slice(SPEC_HISTORY_KEEP)) rmSync(join(dir, stale));
+  } catch {
+    /* provenance only */
+  }
+}
+
+export interface SpecRevisionSummary {
+  updated_at: number;
+  name: string;
+  nodes: number;
+  edges: number;
+}
+
+/** P-AGENT.17: list a spec's revisions, newest first. Corrupted snapshots are skipped, never fatal. */
+export function listSpecHistory(root: string, id: string): SpecRevisionSummary[] {
+  const sid = safeId(id);
+  if (!sid) return [];
+  let files: string[];
+  try {
+    files = readdirSync(historyDir(root, sid)).filter((f) => /^\d+\.json$/.test(f));
+  } catch {
+    return [];
+  }
+  const out: SpecRevisionSummary[] = [];
+  for (const f of files) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(readFileSync(join(historyDir(root, sid), f), "utf8"));
+    } catch {
+      continue;
+    }
+    if (typeof parsed !== "object" || parsed === null) continue;
+    const s = parsed as Record<string, unknown>;
+    if (typeof s.name !== "string" || typeof s.updated_at !== "number" || !Array.isArray(s.nodes) || !Array.isArray(s.edges)) continue;
+    out.push({ updated_at: s.updated_at, name: s.name, nodes: s.nodes.length, edges: s.edges.length });
+  }
+  return out.sort((a, b) => b.updated_at - a.updated_at);
+}
+
+/** P-AGENT.17: load ONE full revision (fully re-validated — a corrupted snapshot is never restored). */
+export function loadSpecRevision(root: string, id: string, updatedAt: number): AgentSpec | null {
+  const sid = safeId(id);
+  if (!sid || !Number.isInteger(updatedAt) || updatedAt <= 0) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(join(historyDir(root, sid), `${updatedAt}.json`), "utf8"));
+  } catch {
+    return null;
+  }
+  const v = validateSpec(parsed);
+  return v.ok ? v.spec! : null;
 }
 
 /** Load + re-validate a spec by id. Returns null if absent, unreadable, or invalid (a corrupted file is

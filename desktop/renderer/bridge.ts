@@ -22,6 +22,23 @@ export interface McpCatalogTool {
   server: string;
 }
 
+/** P-AGENT.17: one revision snapshot of a saved agent (written on every save, pruned to the newest 20). */
+export interface SpecRevisionSummary {
+  updated_at: number;
+  name: string;
+  nodes: number;
+  edges: number;
+}
+
+/** P-AGENT.17: one curated starter template (an in-repo .lucid-agent.json, digest-checked before listing). */
+export interface AgentTemplateInfo {
+  file: string;
+  name: string;
+  description: string;
+  steps: number;
+  tools: string[];
+}
+
 export interface BlockRecord { id: string; tool: string; severity: string; findings: string; reason: string; at: string; status: "quarantined" | "approved" | "dismissed"; reviewer?: string }
 
 /** P-AGENT.4-live/.11a: a built-agent run reply. `paused` = halted at an approval checkpoint (ENFORCED by
@@ -339,6 +356,11 @@ export interface LucidBridge {
   agentTrace(runId: string): Promise<AgentRunTrace | null>;
   /** P-AGENT.12: tools discovered from enabled MCP servers (omp runtime names) + per-server probe status. */
   agentMcpTools(): Promise<{ tools: McpCatalogTool[]; servers: { server: string; ok: boolean; count: number; error: string }[] }>;
+  /** P-AGENT.17: revision history (snapshots per save) + restore; the starter-template gallery. */
+  agentHistory(id: string): Promise<SpecRevisionSummary[]>;
+  agentHistoryRestore(id: string, ts: number): Promise<{ spec?: AgentSpec; error?: string } | null>;
+  agentTemplates(): Promise<AgentTemplateInfo[]>;
+  agentTemplateUse(file: string): Promise<{ spec?: AgentSpec; trustLabel?: string; reason?: string; setup?: string; notes?: string[]; error?: string } | null>;
   setCodeGraphAgent(enabled: boolean): Promise<{ enabled: boolean } | null>;
   /** P-APPEAR.1: the personalized chat background (image data URL + display mode + opacity). */
   chatBackground(): Promise<{ image: string; mode: "off" | "ambient" | "flashlight"; opacity: number } | null>;
@@ -678,6 +700,10 @@ export const bridge: LucidBridge = {
   agentTraces: async (specId) => (await getData(`/api/agent/traces?spec=${encodeURIComponent(specId)}`))?.traces ?? [], // P-AGENT.13
   agentTrace: async (runId) => (await getData(`/api/agent/trace?id=${encodeURIComponent(runId)}`))?.trace ?? null, // P-AGENT.13
   agentMcpTools: async () => (await getData("/api/agent/tools")) ?? { tools: [], servers: [] }, // P-AGENT.12 (fail-soft: static catalog only)
+  agentHistory: async (id) => (await getData(`/api/agent/history?id=${encodeURIComponent(id)}`))?.revisions ?? [], // P-AGENT.17
+  agentHistoryRestore: (id, ts) => post("/api/agent/history/restore", { id, ts }), // P-AGENT.17
+  agentTemplates: async () => (await getData("/api/agent/templates"))?.templates ?? [], // P-AGENT.17
+  agentTemplateUse: (file) => post("/api/agent/template-use", { file }), // P-AGENT.17 (standard gated import path)
   setCodeGraphAgent: (enabled) => post("/api/codegraph/agent", { enabled }),
   chatBackground: () => getData("/api/chat-bg"),
   setChatBackground: (patch) => post("/api/chat-bg", patch),

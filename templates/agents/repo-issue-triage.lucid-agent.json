@@ -1,0 +1,90 @@
+{
+  "format": "lucid-agent",
+  "version": 1,
+  "exported_at": 1751600000000,
+  "spec_digest": "c7146edbd23f9ec537062a51a5745c60ee999482ab7dc6ec6858c2279e6874eb",
+  "setup_md": "# Setup for repo-issue-triage\n\nThis portable LUCID agent file does not contain credential values. It carries only credential ref names, tool allow-list data, and requested network egress patterns.\n\n## Tool allow-list\n- search\n- read\n\n## Network egress requested\n- No outbound network hosts requested.\n\n## Credentials to configure\n- No credentials declared.\n\nAfter import, review the workflow, approve the imported trust banner if acceptable, add credentials to the local vault, then run the agent.",
+  "spec": {
+    "spec_id": "agent_17a9567d-6a6e-4ef5-8670-1112869a0974",
+    "spec_version": 2,
+    "mode": "built-agent",
+    "selfEdit": "individual",
+    "tools": [
+      "search",
+      "read"
+    ],
+    "egress": [],
+    "nodes": [
+      {
+        "id": "scan",
+        "kind": "tool",
+        "label": "Scan for TODO/FIXME",
+        "tool": "search",
+        "timeoutMs": 60000
+      },
+      {
+        "id": "assess",
+        "kind": "prompt",
+        "label": "Assess the debt",
+        "prompt": "Group the findings by subsystem and judge overall severity."
+      },
+      {
+        "id": "decide",
+        "kind": "branch",
+        "label": "Serious debt?"
+      },
+      {
+        "id": "deep",
+        "kind": "tool",
+        "label": "Read the worst offenders",
+        "tool": "read"
+      },
+      {
+        "id": "plan",
+        "kind": "prompt",
+        "label": "Write the cleanup plan",
+        "prompt": "Produce a prioritized, small-steps cleanup plan."
+      },
+      {
+        "id": "note",
+        "kind": "prompt",
+        "label": "Write the all-clear note",
+        "prompt": "Summarize why the debt level is acceptable right now."
+      }
+    ],
+    "edges": [
+      {
+        "id": "e1",
+        "from": "scan",
+        "to": "assess"
+      },
+      {
+        "id": "e2",
+        "from": "assess",
+        "to": "decide"
+      },
+      {
+        "id": "e3",
+        "from": "decide",
+        "to": "deep",
+        "label": "yes"
+      },
+      {
+        "id": "e4",
+        "from": "decide",
+        "to": "note",
+        "label": "no"
+      },
+      {
+        "id": "e5",
+        "from": "deep",
+        "to": "plan"
+      }
+    ],
+    "created_at": 1751600000000,
+    "updated_at": 1751600000000,
+    "name": "repo-issue-triage",
+    "description": "Scan the workspace for TODO/FIXME debt, branch on severity, and file a prioritized cleanup plan.",
+    "persona": "You are a pragmatic maintainer. Prefer small, safe cleanups; never propose risky rewrites."
+  }
+}

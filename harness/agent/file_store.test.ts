@@ -7,7 +7,7 @@ import { test, expect, describe } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { saveSpecFile, loadSpecFile, listSpecFiles, deleteSpecFile, saveSpecTrust, loadSpecTrust } from "./file_store.ts";
+import { saveSpecFile, loadSpecFile, listSpecFiles, deleteSpecFile, saveSpecTrust, loadSpecTrust, listSpecHistory, loadSpecRevision, SPEC_HISTORY_KEEP } from "./file_store.ts";
 import { newSpecId, SPEC_VERSION, type AgentSpec } from "./spec.ts";
 
 function root(): string {
@@ -102,6 +102,41 @@ describe("agent spec file store (P-AGENT.2b)", () => {
       expect(deleteSpecFile(r, s.spec_id)).toBe(true);
       expect(deleteSpecFile(r, s.spec_id)).toBe(false);
       expect(loadSpecFile(r, s.spec_id)).toBeNull();
+    } finally {
+      rmSync(r, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("spec revision history (P-AGENT.17)", () => {
+  test("every save snapshots a revision; restore-style load round-trips the exact old spec", () => {
+    const r = root();
+    try {
+      const s1 = spec("v-one", 1000);
+      saveSpecFile(r, s1);
+      const s2 = { ...s1, name: "v-two", updated_at: 2000 };
+      saveSpecFile(r, s2);
+      const hist = listSpecHistory(r, s1.spec_id);
+      expect(hist.map((h) => h.name)).toEqual(["v-two", "v-one"]); // newest first
+      expect(hist[1]).toMatchObject({ updated_at: 1000, nodes: 2, edges: 1 });
+      expect(loadSpecRevision(r, s1.spec_id, 1000)).toEqual(s1); // the old revision restores byte-equal
+      expect(loadSpecRevision(r, s1.spec_id, 9999)).toBeNull(); // unknown ts → null, never a guess
+    } finally {
+      rmSync(r, { recursive: true, force: true });
+    }
+  });
+
+  test(`history prunes to the newest ${SPEC_HISTORY_KEEP}; re-saving the same revision doesn't multiply`, () => {
+    const r = root();
+    try {
+      const s = spec("pruner", 1);
+      for (let i = 1; i <= SPEC_HISTORY_KEEP + 5; i++) saveSpecFile(r, { ...s, updated_at: i * 100 });
+      const hist = listSpecHistory(r, s.spec_id);
+      expect(hist).toHaveLength(SPEC_HISTORY_KEEP);
+      expect(hist[0]!.updated_at).toBe((SPEC_HISTORY_KEEP + 5) * 100); // newest kept
+      expect(hist.at(-1)!.updated_at).toBe(600); // oldest five pruned
+      saveSpecFile(r, { ...s, updated_at: (SPEC_HISTORY_KEEP + 5) * 100 }); // identical re-save
+      expect(listSpecHistory(r, s.spec_id)).toHaveLength(SPEC_HISTORY_KEEP);
     } finally {
       rmSync(r, { recursive: true, force: true });
     }

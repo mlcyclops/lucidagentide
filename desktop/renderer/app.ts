@@ -26,7 +26,7 @@ import { type GraphHandle, kindLabel, mountGraph } from "./graph.ts";
 import { addEdgeOptimistic, applyForget, chainPairs, matchNodes, removeEdgeOptimistic, resolveRelationLabel } from "./kg_ops.ts";
 import { capGraph, graphOpts, pollDelay, watchPerfTier } from "./perf_tier.ts";
 import type { PersonalGraphData } from "./bridge.ts";
-import { agentBuilderPanelHtml, specToGraphData, nodeEditorHtml, saveErrors, newCanvasSpec, runPanelHtml, secretsPanelHtml, agentInterviewPrompt, toolChipsHtml, trustBannerHtml, runApprovalHtml, runsPanelHtml, traceDetailHtml, schedulePanelHtml } from "./agent_builder.ts"; // P-AGENT.2b/.4-live/.8/.9/.11a/.13/.14
+import { agentBuilderPanelHtml, specToGraphData, nodeEditorHtml, saveErrors, newCanvasSpec, runPanelHtml, secretsPanelHtml, agentInterviewPrompt, toolChipsHtml, trustBannerHtml, runApprovalHtml, runsPanelHtml, traceDetailHtml, schedulePanelHtml, historyPanelHtml, templatesPanelHtml } from "./agent_builder.ts"; // P-AGENT.2b/.4-live/.8/.9/.11a/.13/.14/.17
 import type { TrustLabel } from "../../harness/contracts.ts"; // P-AGENT.9: imported-agent trust banner
 import type { AgentSpec, NodeKind } from "../../harness/agent/spec.ts"; // P-AGENT.2b
 import { expandCommandBody, type UserCommand } from "../../harness/commands/spec.ts"; // P-CMD.1: user "/" commands
@@ -2860,6 +2860,52 @@ async function createAbSchedule(): Promise<void> {
   });
   if (a) showToast({ tone: "ok", title: "Schedule created (disarmed)", desc: `“${abSpec.name}” ${a.cadence.kind === "interval" ? `every ${a.cadence.everyMin} min` : `daily at ${a.cadence.hhmm}`} — arm it in the Goal panel's Automations.` });
   else showToast({ tone: "danger", title: "Couldn't create the schedule", desc: kind === "daily" ? "Use HH:MM (24h), e.g. 09:30." : "Interval must be a number of minutes ≥ 1." });
+}
+// P-AGENT.17: the History flyout — restore any of the last 20 saved revisions (a restore is itself saved,
+// so nothing is ever lost). The trust sidecar is untouched by restores.
+async function openAbHistoryPanel(): Promise<void> {
+  if (!abSpec) return;
+  const side = $("#abSide");
+  if (!side) return;
+  const revisions = await bridge.agentHistory(abSpec.spec_id);
+  side.innerHTML = historyPanelHtml(revisions);
+  side.hidden = false;
+  $$("[data-restore]", side).forEach((b) =>
+    b.addEventListener("click", async () => {
+      const ts = Number((b as HTMLElement).dataset.restore);
+      const r = await bridge.agentHistoryRestore(abSpec!.spec_id, ts);
+      if (r?.spec) {
+        abSpec = r.spec;
+        reRenderAbGraph();
+        renderAbErrors();
+        showToast({ tone: "ok", title: "Revision restored", desc: `Now editing the ${new Date(ts).toLocaleString()} revision (saved as current).` });
+        void openAbHistoryPanel();
+      } else {
+        showToast({ tone: "danger", title: "Couldn't restore", desc: r?.error ?? "unknown or corrupted revision" });
+      }
+    }),
+  );
+}
+// P-AGENT.17: the Templates flyout — curated starters that go through the STANDARD gated import path.
+async function openAbTemplatesPanel(): Promise<void> {
+  const side = $("#abSide");
+  if (!side) return;
+  const templates = await bridge.agentTemplates();
+  side.innerHTML = templatesPanelHtml(templates);
+  side.hidden = false;
+  $$("[data-use-tpl]", side).forEach((b) =>
+    b.addEventListener("click", async () => {
+      const file = (b as HTMLElement).dataset.useTpl ?? "";
+      const r = await bridge.agentTemplateUse(file);
+      if (!r || r.error || !r.spec) { showToast({ tone: "danger", title: "Couldn't use the template", desc: r?.error ?? "template unavailable" }); return; }
+      abSpec = r.spec;
+      const label = (r.trustLabel ?? "untrusted") as TrustLabel;
+      abTrust = label === "trusted" ? null : { label, reason: r.reason ?? "created from a template — review before running" };
+      openAgentBuilder();
+      renderAbTrust();
+      showToast({ tone: "ok", title: `Template loaded: ${r.spec.name}`, desc: "Review the steps, rename it, approve it, and it's yours." });
+    }),
+  );
 }
 // P-AGENT.4-live: open the Run flyout and let the user run the agent live inside LUCID.
 function openAbRunPanel(): void {
@@ -5875,6 +5921,8 @@ function wire(): void {
   $("#abToolsBtn")?.addEventListener("click", () => openAbToolsPanel()); // P-AGENT.9: allow-list chips
   $("#abRunsBtn")?.addEventListener("click", () => void openAbRunsPanel()); // P-AGENT.13: run traces
   $("#abScheduleBtn")?.addEventListener("click", () => openAbSchedulePanel()); // P-AGENT.14: cadence runs
+  $("#abHistoryBtn")?.addEventListener("click", () => void openAbHistoryPanel()); // P-AGENT.17: revisions
+  $("#abTemplatesBtn")?.addEventListener("click", () => void openAbTemplatesPanel()); // P-AGENT.17: gallery
   $("#abShare")?.addEventListener("click", () => void shareAgentBuilder()); // P-AGENT.9: portable share
   $("#abN8n")?.addEventListener("click", () => void n8nExportAgentBuilder()); // P-AGENT.10: n8n export
   $("#abN8nPush")?.addEventListener("click", () => void n8nPushAgentBuilder()); // P-AGENT.10: add-on push

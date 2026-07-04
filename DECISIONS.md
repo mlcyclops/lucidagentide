@@ -9778,7 +9778,16 @@ enterprise external secrets; the private/public split stays: capability descript
 ## ADR-0143 - P-AGENT.17: spec revision history + template gallery (DESIGN)
 
 **Date:** 2026-07-04
-**Status:** Accepted - DESIGN. Low-risk increments, schedulable anytime.
+**Status:** Accepted. **BUILT + tested** (same day). History: saveSpecFile snapshots
+`.omp/agents/history/<id>/<updated_at>.json` (identical re-saves overwrite; pruned to the newest 20;
+snapshot failure never fails the save), listSpecHistory/loadSpecRevision (corrupted ⇒ skipped/null),
+restore = re-save-as-current with a fresh updated_at (itself snapshotted — undoable); trust sidecar
+untouched by restores. Gallery: `templates/agents/*.lucid-agent.json` (2 starters: web-research-digest
+w/ approval checkpoint + retry, repo-issue-triage w/ branch + timeout — they demo the v2 features);
+only digest-valid files list; "Use" mints a FRESH spec_id and routes through the STANDARD gated import
+(scanner + trust + review — curated ≠ exempt), factored as dev.ts `gatedAgentImport` shared with
+share/n8n imports. A CI-time test re-validates every shipped template (rot fails loud). Community
+submissions still deferred until signing (ADR-A012).
 
 **Decision.** (a) History: `saveSpecFile` also writes `.omp/agents/history/<spec_id>/<updated_at>.json`,
 pruned to the newest 20; endpoints list/read/restore (restore = save-as-current with fresh updated_at, itself

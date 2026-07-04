@@ -19,7 +19,7 @@ import { buildChangeGraph, buildSchemaChanges, renderAnnexes } from "../harness/
 import { loadChatBg, saveChatBg, type ChatBg } from "./chat_bg.ts"; // P-APPEAR.1: personalized chat background
 import { ingestCodeGraph, loadCodeGraph } from "./code_graph.ts"; // P-KG-CODE.1: workspace code graph
 import { ingestSymbolGraph, loadSymbolGraph } from "./symbol_graph.ts"; // P-KG-SYM.1: AST symbol graph
-import { saveSpecFile, loadSpecFile, listSpecFiles, deleteSpecFile, saveSpecTrust, loadSpecTrust } from "../harness/agent/file_store.ts"; // P-AGENT.2b/.9: Agent Builder spec persistence + trust sidecar
+import { saveSpecFile, loadSpecFile, listSpecFiles, deleteSpecFile, saveSpecTrust, loadSpecTrust, listSpecHistory, loadSpecRevision } from "../harness/agent/file_store.ts"; // P-AGENT.2b/.9/.17: spec persistence + trust sidecar + revisions
 import { validateSpec } from "../harness/agent/spec.ts"; // P-AGENT.1: fail-closed Agent Spec validation
 import { buildAgent } from "../harness/agent/compiler.ts"; // P-AGENT.3: spec -> AgentBundle
 import { exportBundle, writeExportPackage, EXPORT_TARGETS, type ExportTarget } from "../harness/agent/export.ts"; // P-AGENT.6: enterprise export
@@ -185,6 +185,59 @@ function agentScanner(): ScannerClient {
     _agentScanner.start();
   }
   return _agentScanner;
+}
+
+// P-AGENT.9/.10/.17: the ONE gated import path — every external spec (share file, n8n workflow, template)
+// runs the P-AGENT.5 scanner gate and persists WITH its trust label; nothing external skips the gate.
+interface GatedImportReply {
+  ok: boolean;
+  error?: string;
+  data: Record<string, unknown>;
+}
+async function gatedAgentImport(specJson: string, notes: string[]): Promise<GatedImportReply> {
+  try {
+    const r = await importSpec(agentScanner(), specJson, "import");
+    if (!r.ok || !r.spec) {
+      const msg = r.errors.join("; ") || r.reason;
+      return { ok: false, error: msg, data: { error: msg } };
+    }
+    saveSpecFile(currentWorkspace(), r.spec);
+    saveSpecTrust(currentWorkspace(), r.spec.spec_id, { trustLabel: r.trustLabel, reason: r.reason });
+    return { ok: true, data: { spec: r.spec, trustLabel: r.trustLabel, canRun: r.canRun, reason: r.reason, findings: r.findings.length, setup: setupInstructions(r.spec), notes } };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return { ok: false, error: msg, data: { error: msg } };
+  }
+}
+
+// P-AGENT.17: the in-repo starter-template gallery. Only digest-valid portable files are listed; a
+// corrupted/tampered template simply disappears from the gallery (fail-soft for the UI, fail-closed for use).
+const TEMPLATES_DIR = join(import.meta.dir, "..", "templates", "agents");
+interface AgentTemplateSummary {
+  file: string;
+  name: string;
+  description: string;
+  steps: number;
+  tools: string[];
+}
+function listAgentTemplates(): AgentTemplateSummary[] {
+  let files: string[];
+  try {
+    files = readdirSync(TEMPLATES_DIR).filter((f) => f.endsWith(".lucid-agent.json"));
+  } catch {
+    return [];
+  }
+  const out: AgentTemplateSummary[] = [];
+  for (const f of files.sort()) {
+    try {
+      const parsed = parsePortableAgentJson(readFileSync(join(TEMPLATES_DIR, f), "utf8"));
+      if (!parsed.ok || !parsed.spec) continue;
+      out.push({ file: f, name: parsed.spec.name, description: parsed.spec.description ?? "", steps: parsed.spec.nodes.length, tools: parsed.spec.tools });
+    } catch {
+      /* unreadable template → not listed */
+    }
+  }
+  return out;
 }
 
 // P-REPORT.8: gather the git change inputs (numstat + name-status) for the report annexes. Default range
@@ -652,16 +705,39 @@ const server = Bun.serve({
           } catch { /* not JSON at all — falls through to the honest error below */ }
         }
         if (!specJson) { const msg = portable.errors.join("; ") || "not a portable LUCID agent or an n8n workflow"; return json({ ok: false, error: msg, data: { error: msg } }); }
-        try {
-          const r = await importSpec(agentScanner(), specJson, "import");
-          if (!r.ok || !r.spec) { const msg = r.errors.join("; ") || r.reason; return json({ ok: false, error: msg, data: { error: msg } }); }
-          saveSpecFile(currentWorkspace(), r.spec);
-          saveSpecTrust(currentWorkspace(), r.spec.spec_id, { trustLabel: r.trustLabel, reason: r.reason });
-          return json({ ok: true, data: { spec: r.spec, trustLabel: r.trustLabel, canRun: r.canRun, reason: r.reason, findings: r.findings.length, setup: setupInstructions(r.spec), notes: importNotes } });
-        } catch (e) {
-          const msg = e instanceof Error ? e.message : String(e);
-          return json({ ok: false, error: msg, data: { error: msg } });
-        }
+        return json(await gatedAgentImport(specJson, importNotes));
+      }
+      // P-AGENT.17: revision history — snapshots written on every save; restore re-saves an old revision as
+      // the CURRENT spec (itself snapshotted, so restores are undoable). The trust sidecar is untouched:
+      // trust applies to the spec identity, and restoring an untrusted import keeps it untrusted.
+      if (p === "/api/agent/history") {
+        const id = url.searchParams.get("id") ?? "";
+        return json({ ok: true, data: { revisions: listSpecHistory(currentWorkspace(), id) } });
+      }
+      if (p === "/api/agent/history/restore" && req.method === "POST") {
+        const b = await readBody<{ id?: unknown; ts?: unknown }>(req);
+        const id = typeof b.id === "string" ? b.id : "";
+        const rev = loadSpecRevision(currentWorkspace(), id, Number(b.ts));
+        if (!rev) return json({ ok: false, error: "unknown or corrupted revision", data: { error: "unknown or corrupted revision" } });
+        const restored = { ...rev, updated_at: Date.now() };
+        saveSpecFile(currentWorkspace(), restored);
+        return json({ ok: true, data: { spec: restored } });
+      }
+      // P-AGENT.17: the starter-template gallery — curated .lucid-agent.json files shipped in-repo. \"Use\"
+      // routes through the STANDARD import path (scanner gate + trust + approval); curated ≠ exempt.
+      if (p === "/api/agent/templates") {
+        return json({ ok: true, data: { templates: listAgentTemplates() } });
+      }
+      if (p === "/api/agent/template-use" && req.method === "POST") {
+        const b = await readBody<{ file?: unknown }>(req);
+        const file = typeof b.file === "string" ? b.file : "";
+        const tpl = listAgentTemplates().find((t) => t.file === file);
+        if (!tpl) return json({ ok: false, error: "unknown template", data: { error: "unknown template" } });
+        const parsed = parsePortableAgentJson(readFileSync(join(TEMPLATES_DIR, tpl.file), "utf8"));
+        if (!parsed.ok || !parsed.spec) return json({ ok: false, error: parsed.errors.join("; "), data: { error: parsed.errors.join("; ") } });
+        // fresh identity per use — two users of the same template edit independent agents
+        const spec = { ...parsed.spec, spec_id: `agent_${crypto.randomUUID()}`, created_at: Date.now(), updated_at: Date.now() };
+        return json(await gatedAgentImport(JSON.stringify(spec), [`created from template ${tpl.file}`]));
       }
       // P-AGENT.10: EXPORT FOR n8n — lower the spec into an importable n8n workflow scaffold (real wait
       // nodes for approvals; provenance sticky embeds the portable agent for lossless round-trip). Written
