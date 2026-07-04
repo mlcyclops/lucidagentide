@@ -95,4 +95,12 @@
 //   • CODE KNOWLEDGE GRAPH (ADR-0127/0128): ingest the workspace into a file-import OR TypeScript-AST symbol
 //     graph in the KG canvas (click a node → open the file in the IDE), with a level-picker and an opt-in
 //     read-only `codegraph_query` tool the AGENT can call to get blast-radius instead of reading many files.
-export const APP_VERSION = "1.9.0";
+// v1.9.1  = tag-only hotfix release (the #192 typescript-bundle fix so the packaged app starts); the in-repo
+//           version strings were not bumped for it - reconciled here.
+// v1.9.2  = battery-aware PERFORMANCE epic (ADR-0129..0132, #193): power/spec-aware render tiers (on battery
+//           the KG goes calm/capped; LOW battery pauses the visualization - the agent's knowledge access is
+//           never gated) + a #kgPerf mode chip; KG layout continuity (re-open = static paint, 0 sim frames)
+//           + kinetic-energy early settle (~87% of the O(n²) budget skipped); incremental session index
+//           (warm sidebar polls parse NOTHING) + tail-first transcript pages ("last N of M") + AC-only
+//           idle prefetch; optimistic model switch + write-behind lastModel + memoized settings load/picker.
+export const APP_VERSION = "1.9.2";
