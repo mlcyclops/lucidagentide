@@ -13,6 +13,7 @@ import { join } from "node:path";
 import {
   validateLocalProvider,
   toOmpConfigOverlay,
+  toOmpRuntimeOverlay,
   egressProposal,
   newLocalProviderId,
   type LocalProviderDef,
@@ -80,4 +81,12 @@ try {
   delete process.env.LUCID_GUI_SETTINGS_FILE;
 }
 
-console.log("\n✓ P-LOCAL.1 demo passed — declarations validated, overlay emitted, secrets stayed in the vault.");
+console.log("\n[6] RUNTIME overlay — the secret is referenced by ENV VAR NAME, never written to the file");
+const rt = toOmpRuntimeOverlay([ollama, dgx], new Set(["cred_apikey_dgx_001"]));
+assert(rt.overlay.providers["dgx-vienna"].apiKey === "LUCID_LP_DGX_VIENNA_KEY", "authed provider references an env var NAME (omp resolves it from the child env at call time)");
+assert(!JSON.stringify(rt.overlay).includes("sk-live"), "the models.yml overlay contains NO secret value");
+assert(rt.env["LUCID_LP_DGX_VIENNA_KEY"] === "cred_apikey_dgx_001", "the env plan maps the var name → the vault ref (MAIN resolves ref→secret and sets it on the omp child only)");
+assert(rt.overlay.providers["ollama-local"].auth === "none", "the open provider emits auth:none (required by omp; no key)");
+console.log("    (verified live: `omp models` with this overlay at ~/.omp/agent/models.yml lists both custom providers)");
+
+console.log("\n✓ P-LOCAL.1/.2 core demo passed — declarations validated, overlay emitted (inline + secure env-ref), secrets stayed in the vault.");

@@ -9528,9 +9528,15 @@ new frozen policy block), the P-AGENT.5 import gate (the sibling untrusted-conte
 ## ADR-0135 - P-LOCAL: Local Providers - securely point LUCID at self-hosted / custom / VPN-routed LLMs
 
 **Date:** 2026-07-04
-**Status:** Accepted. **P-LOCAL.1 (foundation) BUILT + green.** Pure core (`desktop/local_providers.ts`) +
-vault-backed persistence (`settings_store.ts`) + 17 unit tests + `make demo-P-LOCAL.1`. Routing into
-`omp acp` (.2) and the Settings UI (.3) are the next increments.
+**Status:** Accepted. **P-LOCAL.1 (foundation) + P-LOCAL.2 core BUILT + verified live.** Pure core
+(`desktop/local_providers.ts`) + vault-backed persistence (`settings_store.ts`) + 20 unit tests +
+`make demo-P-LOCAL.1`. The omp delivery mechanism is RESOLVED + verified against omp 16.0.8: the registry is
+`~/.omp/agent/models.yml` (an open provider needs `auth:"none"`; `api` = `openai-completions`), and secrets
+are delivered securely by **env-var reference** (`toOmpRuntimeOverlay` writes the env-var NAME in models.yml;
+omp's `resolveConfigValue` reads it from the child env, which LUCID injects from the vault - the secret never
+touches the file). Live: an overlay with an open Ollama + a bearer DGX-over-VPN provider made `omp models` list
+BOTH. Remaining .2 = the MAIN-process wiring (safe models.yml writer + `omp acp` spawn env injection + egress
+registration); .3 = the Settings UI.
 **Increment:** P-LOCAL.1 .. P-LOCAL.3 (this ADR covers the epic; each phase is its own session/demo).
 
 ### Context

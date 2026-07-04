@@ -12,6 +12,8 @@ import {
   providerRunnable,
   toOmpConfigOverlay,
   toOmpProviderEntry,
+  toOmpRuntimeOverlay,
+  providerEnvVar,
   egressProposal,
   scanForInlineSecret,
   hostFromBaseUrl,
@@ -96,8 +98,9 @@ describe("omp config overlay emission", () => {
     expect(e.headers).toEqual({ "X-API-Key": "K" });
     expect(e.apiKey).toBeUndefined();
   });
-  test("open (no-auth) provider emits no secret; vision model advertises image input", () => {
+  test("open (no-auth) provider emits auth:none (omp requires it) + no secret; vision model advertises image input", () => {
     const e = toOmpProviderEntry(def({ authKind: "none", vaultRef: undefined, models: [{ id: "llava", vision: true }] }), undefined);
+    expect(e.auth).toBe("none"); // omp drops the whole file for an open provider lacking this
     expect(e.apiKey).toBeUndefined();
     expect(e.headers).toBeUndefined();
     expect(e.models[0].input).toEqual(["text", "image"]);
@@ -111,6 +114,30 @@ describe("omp config overlay emission", () => {
   test("disabled providers are excluded from the overlay", () => {
     const { included } = toOmpConfigOverlay([def({ enabled: false })], () => "S");
     expect(included).toEqual([]);
+  });
+});
+
+describe("runtime overlay (secure env-ref delivery)", () => {
+  test("authed provider references its secret by ENV VAR NAME, never the value; env maps name→vaultRef", () => {
+    const { overlay, env, included } = toOmpRuntimeOverlay([def()], new Set(["cred_apikey_1_abc"]));
+    expect(included).toEqual(["dgx-vienna"]);
+    const p = overlay.providers["dgx-vienna"];
+    expect(p.apiKey).toBe("LUCID_LP_DGX_VIENNA_KEY"); // an env-var NAME, not a secret
+    expect(env).toEqual({ LUCID_LP_DGX_VIENNA_KEY: "cred_apikey_1_abc" }); // name → vault ref (still no secret)
+    expect(providerEnvVar(def())).toBe("LUCID_LP_DGX_VIENNA_KEY");
+  });
+  test("open provider needs no env; a custom apikey header references the env var by name", () => {
+    const open = toOmpRuntimeOverlay([def({ authKind: "none", vaultRef: undefined })], new Set());
+    expect(open.overlay.providers["dgx-vienna"].auth).toBe("none");
+    expect(open.env).toEqual({});
+    const hdr = toOmpRuntimeOverlay([def({ authKind: "apikey", headerName: "X-API-Key" })], new Set(["cred_apikey_1_abc"]));
+    expect(hdr.overlay.providers["dgx-vienna"].headers).toEqual({ "X-API-Key": "LUCID_LP_DGX_VIENNA_KEY" });
+  });
+  test("fail-closed: an authed provider whose vault ref is NOT available is skipped, no env leaked", () => {
+    const { included, env, skipped } = toOmpRuntimeOverlay([def()], new Set()); // ref not available
+    expect(included).toEqual([]);
+    expect(env).toEqual({});
+    expect(skipped[0]).toMatchObject({ id: "dgx-vienna" });
   });
 });
 

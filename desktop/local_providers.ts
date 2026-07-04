@@ -22,8 +22,11 @@
 // The runtime wiring (materialize the overlay for `omp acp`, register egress in the whitelist) and the
 // Settings UI are their own increments (P-LOCAL.2 / .3) built on this contract.
 
-export type LocalProviderApi = "openai-completions" | "ollama-chat";
-export const LOCAL_PROVIDER_APIS: LocalProviderApi[] = ["openai-completions", "ollama-chat"];
+// The omp transport. v1 uses "openai-completions" — the universal OpenAI-compatible path that Ollama
+// (via its /v1 endpoint), llama.cpp, vLLM and LM Studio all speak, and the only value omp's models.json
+// `api` enum accepts for a self-hosted box. (Ollama's native /api/chat transport is a future add.)
+export type LocalProviderApi = "openai-completions";
+export const LOCAL_PROVIDER_APIS: LocalProviderApi[] = ["openai-completions"];
 
 // How the endpoint authenticates. "none" = open local runtime (Ollama default); "bearer"/"apikey" =
 // a token in the vault (bearer → Authorization: Bearer <t>; apikey → a custom header). "basic" is
@@ -164,6 +167,7 @@ export interface OmpModelEntry {
 export interface OmpProviderEntry {
   baseUrl: string;
   api: LocalProviderApi;
+  auth?: "none"; // REQUIRED by omp for an open endpoint — without it omp demands an apiKey and drops the whole file
   apiKey?: string;
   headers?: Record<string, string>;
   models: OmpModelEntry[];
@@ -187,7 +191,9 @@ function toModelEntry(m: LocalModelDef): OmpModelEntry {
  *  where omp expects: a custom apikey header → `headers`; bearer/default → `apiKey`. */
 export function toOmpProviderEntry(def: LocalProviderDef, secret?: string): OmpProviderEntry {
   const entry: OmpProviderEntry = { baseUrl: def.baseUrl.trim(), api: def.api, models: def.models.map(toModelEntry) };
-  if (secret && def.authKind !== "none") {
+  if (def.authKind === "none") {
+    entry.auth = "none"; // omp requires this for an unauthenticated endpoint (else it demands an apiKey)
+  } else if (secret) {
     const header = def.headerName?.trim();
     if (def.authKind === "apikey" && header && header.toLowerCase() !== "authorization") entry.headers = { [header]: secret };
     else entry.apiKey = secret; // bearer, or apikey via Authorization
@@ -217,6 +223,57 @@ export function toOmpConfigOverlay(defs: LocalProviderDef[], secretFor: (ref: st
     included.push(def.ompProvider);
   }
   return { overlay: { providers }, included, skipped };
+}
+
+// ── runtime overlay (secure env-ref delivery) ────────────────────────────────────────────────────
+// omp's models.yml value resolver (`resolveConfigValue`) reads a value as an ENV VAR NAME first
+// (`Bun.env[value]`), else a literal. So at `omp acp` launch LUCID writes the provider's secret as an
+// env-var NAME into models.yml and injects the real value into the omp CHILD's env from the vault - the
+// secret never lands in the file. This is the delivery used at runtime (vs. `toOmpConfigOverlay`, which
+// inlines a secret for tests/preview).
+
+/** The env var a provider's secret is injected under (referenced from models.yml, resolved by omp). */
+export function providerEnvVar(def: Pick<LocalProviderDef, "ompProvider" | "id">): string {
+  return `LUCID_LP_${(def.ompProvider || def.id).toUpperCase().replace(/[^A-Z0-9]+/g, "_")}_KEY`;
+}
+
+export interface RuntimeOverlayResult {
+  overlay: OmpConfigOverlay; // apiKey/header values are ENV VAR NAMES here, never secrets
+  env: Record<string, string>; // envVarName -> vaultRef; the MAIN process resolves the ref to the secret
+  included: string[];
+  skipped: { id: string; reason: string }[];
+}
+
+/** Build the runtime overlay for `omp acp`. Authed providers reference their secret by ENV VAR NAME
+ *  (resolved by omp from the child env at call time); the pure module NEVER sees a secret. A provider
+ *  whose vault ref isn't in `availableRefs` is skipped (fail-closed - never emitted un-authed). */
+export function toOmpRuntimeOverlay(defs: LocalProviderDef[], availableRefs: ReadonlySet<string>): RuntimeOverlayResult {
+  const providers: Record<string, OmpProviderEntry> = {};
+  const env: Record<string, string> = {};
+  const included: string[] = [];
+  const skipped: { id: string; reason: string }[] = [];
+  for (const def of defs ?? []) {
+    const label = def.ompProvider || def.id;
+    if (!def.enabled) { skipped.push({ id: label, reason: "disabled" }); continue; }
+    const errs = validateLocalProvider(def);
+    if (errs.length) { skipped.push({ id: label, reason: errs[0] ?? "invalid" }); continue; }
+    if (providers[def.ompProvider]) { skipped.push({ id: def.ompProvider, reason: "duplicate provider id" }); continue; }
+    if (def.authKind === "none") {
+      providers[def.ompProvider] = toOmpProviderEntry(def); // auth:none, no secret
+    } else {
+      const ref = def.vaultRef;
+      if (!ref || !availableRefs.has(ref)) { skipped.push({ id: label, reason: "needs a credential in the vault" }); continue; }
+      const envVar = providerEnvVar(def);
+      const entry: OmpProviderEntry = { baseUrl: def.baseUrl.trim(), api: def.api, models: def.models.map(toModelEntry) };
+      const header = def.headerName?.trim();
+      if (def.authKind === "apikey" && header && header.toLowerCase() !== "authorization") entry.headers = { [header]: envVar };
+      else entry.apiKey = envVar; // omp resolves this env-var NAME to the injected secret
+      providers[def.ompProvider] = entry;
+      env[envVar] = ref;
+    }
+    included.push(def.ompProvider);
+  }
+  return { overlay: { providers }, env, included, skipped };
 }
 
 // ── egress proposal ─────────────────────────────────────────────────────────────────────────────
