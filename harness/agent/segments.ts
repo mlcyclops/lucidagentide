@@ -1,7 +1,8 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// harness/agent/segments.ts — P-AGENT.11a (ADR-0137): the segment runner that makes approval nodes REAL.
+// harness/agent/segments.ts — P-AGENT.11a/.11b (ADR-0137): the segment runner that makes approval AND
+// subagent nodes REAL.
 //
 // v1 lowered `approval` to prose in one big system prompt — a guarantee the model could skip. This module
 // splits the topological order into SEGMENTS at approval boundaries and drives them through a small state
@@ -15,6 +16,12 @@
 // there is no prompt to hand omp. This is the keystone property; its regression test is stop-the-line
 // (AGENTS.md "over-test the keystones").
 //
+// P-AGENT.11b extends the same boundary mechanism to `subagent` nodes: the machine halts in
+// "awaiting-subagent" and the ORCHESTRATOR runs the child agent — under the CHILD's compiled allow-list and
+// the CHILD's stored trust label (a non-trusted child refuses exactly like a top-level run) — then records
+// its output. `subagentGuard` fail-closes the holes: unset child, cycles, depth > SUBAGENT_MAX_DEPTH,
+// missing spec, or a child with approval checkpoints (nested human halts are not parkable in v1).
+//
 // Segment prompts are TAIL content built from the same pieces as the one-shot compiler (stepLine +
 // LUCID_CORE_INSTRUCTIONS); the frozen prefix is never touched (invariant #6). Prior segment output is
 // agent-generated within the same run (same trust domain) and is carried forward as plain context.
@@ -27,16 +34,43 @@ export interface ApprovalBoundary {
   label: string;
 }
 
-export interface RunSegment {
-  /** Topo-ordered non-approval node ids executed in this segment (may be empty, e.g. approval-first specs). */
-  nodeIds: string[];
-  /** Present when the segment ends at an approval node — the machine halts there until a human decides. */
-  approvalAfter?: ApprovalBoundary;
+export interface SubagentBoundary {
+  nodeId: string;
+  label: string;
+  specId?: string; // the child agent's spec_id (unset in a half-built canvas — the orchestrator refuses)
 }
 
-/** Split the spec's topological order into segments at approval boundaries. The approval node itself is
- *  a BOUNDARY, not an executed step. A trailing non-empty run of steps forms the final segment; a spec
- *  whose last node is an approval simply completes right after that approval. */
+export interface RunSegment {
+  /** Topo-ordered plain node ids executed in this segment (may be empty, e.g. approval-first specs). */
+  nodeIds: string[];
+  /** Present when the segment ends at an approval node — the machine halts until a human decides. */
+  approvalAfter?: ApprovalBoundary;
+  /** P-AGENT.11b: present when the segment ends at a subagent node — the machine halts until the
+   *  orchestrator has run the CHILD agent (under the child's own allow-list + trust) and recorded its output. */
+  subagentAfter?: SubagentBoundary;
+}
+
+/** P-AGENT.11b: delegation depth cap — parent + children + grandchildren, no deeper. */
+export const SUBAGENT_MAX_DEPTH = 3;
+
+/** Pure pre-flight for executing a subagent boundary. `lineage` = spec_id chain from the root run down to
+ *  (excluding) the child. Fail-closed on every hole: unset child, self/ancestor cycle, depth, a child that
+ *  isn't loadable, or a child with approval checkpoints (v1 cannot park a nested human halt — run that agent
+ *  directly instead). */
+export function subagentGuard(lineage: readonly string[], boundary: SubagentBoundary, childSpec: AgentSpec | null): { ok: boolean; error?: string } {
+  if (!boundary.specId) return { ok: false, error: `sub-agent step "${boundary.label}" has no agent selected` };
+  if (lineage.includes(boundary.specId)) return { ok: false, error: `sub-agent cycle: ${[...lineage, boundary.specId].join(" → ")}` };
+  if (lineage.length >= SUBAGENT_MAX_DEPTH) return { ok: false, error: `sub-agent depth limit (${SUBAGENT_MAX_DEPTH}) reached at "${boundary.label}"` };
+  if (!childSpec) return { ok: false, error: `sub-agent "${boundary.label}" (${boundary.specId}) is not a saved agent in this workspace` };
+  if (childSpec.nodes.some((n) => n.kind === "approval"))
+    return { ok: false, error: `sub-agent "${childSpec.name}" has approval checkpoints; run it directly — nested human halts aren't supported (yet)` };
+  return { ok: true };
+}
+
+/** Split the spec's topological order into segments at approval AND subagent boundaries. The boundary node
+ *  itself is never an executed prompt step: an approval waits for a human, a subagent waits for the child
+ *  run. A trailing non-empty run of steps forms the final segment; a spec ending on a boundary completes
+ *  right after it. */
 export function splitSegments(spec: AgentSpec): RunSegment[] {
   const byId = new Map(spec.nodes.map((n) => [n.id, n]));
   const segments: RunSegment[] = [];
@@ -45,6 +79,9 @@ export function splitSegments(spec: AgentSpec): RunSegment[] {
     const node = byId.get(id)!;
     if (node.kind === "approval") {
       segments.push({ nodeIds: acc, approvalAfter: { nodeId: node.id, label: node.label } });
+      acc = [];
+    } else if (node.kind === "subagent") {
+      segments.push({ nodeIds: acc, subagentAfter: { nodeId: node.id, label: node.label, ...(node.subagentSpecId ? { specId: node.subagentSpecId } : {}) } });
       acc = [];
     } else {
       acc.push(id);
@@ -81,7 +118,7 @@ export function renderSegmentPrompt(spec: AgentSpec, segment: RunSegment, segmen
     .join("\n");
 }
 
-export type SegmentedRunState = "running" | "awaiting-approval" | "completed" | "denied";
+export type SegmentedRunState = "running" | "awaiting-approval" | "awaiting-subagent" | "completed" | "denied";
 
 export interface CurrentSegment {
   index: number;
@@ -121,6 +158,11 @@ export class SegmentedRun {
     return this.#state === "awaiting-approval" ? (this.#segments[this.#index]!.approvalAfter ?? null) : null;
   }
 
+  /** P-AGENT.11b: the subagent boundary the machine is halted at, when awaiting the child run. */
+  pendingSubagent(): SubagentBoundary | null {
+    return this.#state === "awaiting-subagent" ? (this.#segments[this.#index]!.subagentAfter ?? null) : null;
+  }
+
   /** All segment outputs so far (empty string for checkpoint-only segments). */
   transcript(): readonly string[] {
     return this.#outputs;
@@ -146,7 +188,7 @@ export class SegmentedRun {
     };
   }
 
-  /** Record the finished segment's output and advance: to the boundary halt, the next segment, or done. */
+  /** Record the finished segment's output and advance: to a boundary halt, the next segment, or done. */
   recordSegmentOutput(output: string): void {
     if (this.#state !== "running") throw new Error(`cannot record output in state "${this.#state}"`);
     this.#outputs.push(output);
@@ -155,7 +197,21 @@ export class SegmentedRun {
       this.#state = "awaiting-approval";
       return;
     }
+    if (seg.subagentAfter) {
+      this.#state = "awaiting-subagent";
+      return;
+    }
     this.#index++;
+    this.#advanceOrComplete();
+  }
+
+  /** P-AGENT.11b: record the CHILD agent's output at the current subagent boundary and continue. Only the
+   *  orchestrator that actually ran the child (under the child's allow-list + trust) may call this. */
+  recordSubagentOutput(output: string): void {
+    if (this.#state !== "awaiting-subagent") throw new Error(`no sub-agent pending in state "${this.#state}"`);
+    this.#outputs.push(output);
+    this.#index++;
+    this.#state = "running";
     this.#advanceOrComplete();
   }
 
@@ -193,6 +249,10 @@ export class SegmentedRun {
       this.#outputs.push("");
       if (seg.approvalAfter) {
         this.#state = "awaiting-approval";
+        return;
+      }
+      if (seg.subagentAfter) {
+        this.#state = "awaiting-subagent";
         return;
       }
       this.#index++;

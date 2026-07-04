@@ -9615,8 +9615,13 @@ round-trip anchor keeps LUCID<->LUCID lossless even when the file traveled throu
 (splitSegments + renderSegmentPrompt + the `SegmentedRun` keystone machine — the post-approval prompt does not
 EXIST until approve()), segment orchestration + 30-min-TTL paused-run registry in desktop/agent_run.ts
 (expired approval = refusal, fail-closed), `/api/agent/run` returns `paused`, `/api/agent/run/approve`
-resolves, Run-flyout approval card. 10 keystone tests green. 11b (real sub-agents) + 11c (branching) remain
-design.
+resolves, Run-flyout approval card. 10 keystone tests green. **11b BUILT + tested** (same day): subagent nodes
+are boundaries too — `SegmentedRun` halts in "awaiting-subagent" and desktop/agent_run.ts runs the CHILD spec
+via its own compiled bundle (child allow-list) under the child's STORED trust label (canAutoRun — a
+non-trusted child refuses); `subagentGuard` fail-closes unset child / missing spec / cycle / depth >
+SUBAGENT_MAX_DEPTH(3) / child-with-approvals (nested human halts refused, not parked); child output flows
+into the parent's next segment prompt. Recursion covers grandchildren (guards re-run per level). 11c
+(branching) remains design.
 
 **Context.** The v1 compiler lowers the DAG into a numbered system prompt; `approval` lowers to "pause for
 human approval" PROSE and `subagent` to "run sub-agent <id>" prose (compiler.ts stepLine). A guarantee the

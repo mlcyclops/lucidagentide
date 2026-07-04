@@ -6,7 +6,7 @@
 // treat a regression here like a failing scanner test.
 
 import { test, expect, describe } from "bun:test";
-import { splitSegments, renderSegmentPrompt, SegmentedRun } from "./segments.ts";
+import { splitSegments, renderSegmentPrompt, SegmentedRun, subagentGuard, SUBAGENT_MAX_DEPTH } from "./segments.ts";
 import { newSpecId, SPEC_VERSION, type AgentSpec } from "./spec.ts";
 
 function spec(over: Partial<AgentSpec> = {}): AgentSpec {
@@ -150,5 +150,76 @@ describe("SegmentedRun — KEYSTONE: no post-approval execution without approve(
 
   test("an invalid spec is refused fail-closed", () => {
     expect(() => new SegmentedRun({ ...spec(), nodes: [] } as unknown as AgentSpec)).toThrow(/invalid spec/);
+  });
+});
+
+function subSpec(): AgentSpec {
+  return spec({
+    nodes: [
+      { id: "a", kind: "prompt", label: "Plan", prompt: "Plan" },
+      { id: "s", kind: "subagent", label: "Log to CRM", subagentSpecId: "agent_child" },
+      { id: "c", kind: "prompt", label: "Summarize", prompt: "Summarize" },
+    ],
+    edges: [
+      { id: "e1", from: "a", to: "s" },
+      { id: "e2", from: "s", to: "c" },
+    ],
+  });
+}
+
+describe("SegmentedRun — subagent boundaries (P-AGENT.11b)", () => {
+  test("splitSegments cuts at subagent nodes and carries the child spec id", () => {
+    const segs = splitSegments(subSpec());
+    expect(segs).toHaveLength(2);
+    expect(segs[0]!.nodeIds).toEqual(["a"]);
+    expect(segs[0]!.subagentAfter).toEqual({ nodeId: "s", label: "Log to CRM", specId: "agent_child" });
+    expect(segs[1]!.nodeIds).toEqual(["c"]);
+  });
+
+  test("the post-subagent segment is unreachable until the child's output is recorded", () => {
+    const run = new SegmentedRun(subSpec());
+    run.recordSegmentOutput("planned");
+    expect(run.state).toBe("awaiting-subagent");
+    expect(run.pendingSubagent()).toEqual({ nodeId: "s", label: "Log to CRM", specId: "agent_child" });
+    expect(() => run.currentSegment()).toThrow(/awaiting-subagent/);
+    expect(() => run.approve()).toThrow(/awaiting-subagent/);
+    run.recordSubagentOutput("child logged 3 rows");
+    expect(run.state).toBe("running");
+    expect(run.currentSegment().systemPrompt).toContain("child logged 3 rows"); // child work flows forward
+    run.recordSegmentOutput("done");
+    expect(run.state).toBe("completed");
+    expect(run.transcript()).toEqual(["planned", "child logged 3 rows", "done"]);
+  });
+
+  test("recordSubagentOutput outside the halt throws (no fabricated child runs)", () => {
+    const run = new SegmentedRun(subSpec());
+    expect(() => run.recordSubagentOutput("forged")).toThrow(/running/);
+  });
+});
+
+describe("subagentGuard (P-AGENT.11b) — fail-closed delegation pre-flight", () => {
+  const child = spec({ spec_id: "agent_child", nodes: [{ id: "a", kind: "prompt", label: "Work", prompt: "do" }], edges: [] });
+  const boundary = { nodeId: "s", label: "Log to CRM", specId: "agent_child" };
+
+  test("a clean child passes", () => {
+    expect(subagentGuard(["agent_parent"], boundary, child).ok).toBe(true);
+  });
+  test("unset child, missing spec, cycle, and depth are each refused with a reason", () => {
+    expect(subagentGuard(["p"], { nodeId: "s", label: "x" }, null).error).toContain("no agent selected");
+    expect(subagentGuard(["p"], boundary, null).error).toContain("not a saved agent");
+    expect(subagentGuard(["p", "agent_child"], boundary, child).error).toContain("cycle");
+    const deep = Array.from({ length: SUBAGENT_MAX_DEPTH }, (_, i) => `agent_${i}`);
+    expect(subagentGuard(deep, boundary, child).error).toContain("depth limit");
+  });
+  test("a child with approval checkpoints is refused (nested human halts are not parkable)", () => {
+    const gated = spec({
+      spec_id: "agent_child",
+      nodes: [
+        { id: "a", kind: "prompt", label: "Work", prompt: "do" },
+        { id: "g", kind: "approval", label: "Gate" },
+      ],
+      edges: [{ id: "e1", from: "a", to: "g" }],
+    });
+    expect(subagentGuard(["p"], boundary, gated).error).toContain("approval checkpoints");
   });
 });

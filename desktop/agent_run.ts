@@ -17,7 +17,8 @@ import { join } from "node:path";
 import { buildAgent } from "../harness/agent/compiler.ts";
 import { materializeBundle } from "../harness/agent/runner.ts";
 import { canAutoRun } from "../harness/agent/import_gate.ts";
-import { SegmentedRun } from "../harness/agent/segments.ts";
+import { SegmentedRun, subagentGuard, type SubagentBoundary } from "../harness/agent/segments.ts";
+import { loadSpecFile, loadSpecTrust } from "../harness/agent/file_store.ts";
 import { validateSpec, type AgentSpec } from "../harness/agent/spec.ts";
 import type { TrustLabel } from "../harness/contracts.ts";
 
@@ -130,6 +131,8 @@ interface PausedEntry {
   withGate?: boolean;
   timeoutMs?: number;
   parkedAt: number;
+  workspace: string; // P-AGENT.11b: child specs + trust labels are loaded from here
+  lineage: string[]; // P-AGENT.11b: spec_id chain root→current for the cycle/depth guards
 }
 
 const PAUSE_TTL_MS = 30 * 60_000;
@@ -139,22 +142,65 @@ function prunePaused(now: number): void {
   for (const [id, e] of pausedRuns) if (now - e.parkedAt > PAUSE_TTL_MS) pausedRuns.delete(id);
 }
 
-/** Drive the machine until it halts (approval), completes, or a segment fails. */
+/** P-AGENT.11b: execute a subagent boundary — the CHILD agent under the CHILD's allow-list + trust label.
+ *  Every guard hole is a run failure (fail-closed), never a skipped step. */
+function execChildAgent(entry: PausedEntry, boundary: SubagentBoundary): AgentRunResult {
+  const childSpec = boundary.specId ? loadSpecFile(entry.workspace, boundary.specId) : null;
+  const guard = subagentGuard(entry.lineage, boundary, childSpec);
+  if (!guard.ok) return { ok: false, error: guard.error };
+  const trust = loadSpecTrust(entry.workspace, boundary.specId!);
+  const gate = canAutoRun(trust.trustLabel);
+  if (!gate.allowed) return { ok: false, blocked: true, reason: `sub-agent "${childSpec!.name}": ${gate.reason}` };
+  const childDir = join(entry.workspace, ".omp", "agent-runs", childSpec!.spec_id);
+  const run = materializeBundle(buildAgent(childSpec!), childDir); // the CHILD's bundle: its own allow-list extension
+  const prior = entry.machine.transcript().filter((t) => t.trim()).join("\n\n");
+  const childPrompt = `You are delegated the step "${boundary.label}" by a parent agent. Parent task: ${entry.prompt}${prior ? `\n\nContext from the parent agent's work so far:\n${prior}` : ""}`;
+  const child = driveSegments({
+    machine: new SegmentedRun(childSpec!),
+    runDir: childDir,
+    model: entry.model,
+    ompExtensionArgs: run.ompExtensionArgs,
+    prompt: childPrompt,
+    withGate: entry.withGate,
+    timeoutMs: entry.timeoutMs,
+    parkedAt: Date.now(),
+    workspace: entry.workspace,
+    lineage: [...entry.lineage, childSpec!.spec_id],
+  });
+  // Defensive: the guard refuses children with approval nodes, so a nested park is unreachable — but if it
+  // ever happened it would strand a machine; fail loudly instead.
+  if (child.paused) return { ok: false, error: `sub-agent "${childSpec!.name}" halted at a nested approval — unsupported` };
+  return child;
+}
+
+/** Drive the machine until it halts (approval), completes, or a segment fails. Subagent boundaries are
+ *  resolved INLINE (the child runs now, under its own allow-list); approval boundaries park the run. */
 function driveSegments(entry: PausedEntry): AgentRunResult {
   const m = entry.machine;
-  while (m.state === "running") {
-    const seg = m.currentSegment(); // the ONLY source of an executable prompt (keystone)
-    const r = spawnGatedOmp({
-      runDir: entry.runDir,
-      model: entry.model,
-      systemPrompt: seg.systemPrompt,
-      ompExtensionArgs: entry.ompExtensionArgs,
-      prompt: entry.prompt,
-      withGate: entry.withGate,
-      timeoutMs: entry.timeoutMs,
-    });
-    if (!r.ok) return r; // a failed segment fails the run — never skipped, never auto-approved
-    m.recordSegmentOutput(r.output ?? "");
+  for (;;) {
+    if (m.state === "running") {
+      const seg = m.currentSegment(); // the ONLY source of an executable prompt (keystone)
+      const r = spawnGatedOmp({
+        runDir: entry.runDir,
+        model: entry.model,
+        systemPrompt: seg.systemPrompt,
+        ompExtensionArgs: entry.ompExtensionArgs,
+        prompt: entry.prompt,
+        withGate: entry.withGate,
+        timeoutMs: entry.timeoutMs,
+      });
+      if (!r.ok) return r; // a failed segment fails the run — never skipped, never auto-approved
+      m.recordSegmentOutput(r.output ?? "");
+      continue;
+    }
+    if (m.state === "awaiting-subagent") {
+      const boundary = m.pendingSubagent()!;
+      const child = execChildAgent(entry, boundary);
+      if (!child.ok) return child; // guard/trust/run failure fails the parent run — never silently skipped
+      m.recordSubagentOutput(`Sub-agent "${boundary.label}" output:\n${child.output ?? ""}`);
+      continue;
+    }
+    break;
   }
   if (m.state === "awaiting-approval") {
     const runId = `segrun_${crypto.randomUUID()}`;
@@ -170,8 +216,9 @@ function driveSegments(entry: PausedEntry): AgentRunResult {
 /** Entry point used by /api/agent/run: one-shot for approval-free specs, segmented otherwise. */
 export async function startAgentRun(opts: AgentRunOpts): Promise<AgentRunResult> {
   prunePaused(Date.now());
-  const hasApproval = opts.spec.nodes?.some?.((n) => n.kind === "approval");
-  if (!hasApproval) return runBuiltAgent(opts);
+  // P-AGENT.11a/.11b: approval or subagent nodes need the segment runner; plain specs stay one-shot.
+  const hasBoundary = opts.spec.nodes?.some?.((n) => n.kind === "approval" || n.kind === "subagent");
+  if (!hasBoundary) return runBuiltAgent(opts);
 
   // Same fail-closed pre-flight as the one-shot path: trust gate, then validation, then materialize.
   const gate = canAutoRun(opts.trustLabel ?? "trusted");
@@ -191,6 +238,8 @@ export async function startAgentRun(opts: AgentRunOpts): Promise<AgentRunResult>
     withGate: opts.withGate,
     timeoutMs: opts.timeoutMs,
     parkedAt: Date.now(),
+    workspace: opts.workspace,
+    lineage: [v.spec!.spec_id],
   });
 }
 
