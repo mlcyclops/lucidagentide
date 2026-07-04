@@ -1,0 +1,331 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
+// harness/agent/segments.test.ts — P-AGENT.11a (ADR-0139): the segment runner. The KEYSTONE property —
+// no post-approval segment is reachable without an explicit approve() — is stop-the-line (AGENTS.md):
+// treat a regression here like a failing scanner test.
+
+import { test, expect, describe } from "bun:test";
+import { splitSegments, renderSegmentPrompt, SegmentedRun, subagentGuard, SUBAGENT_MAX_DEPTH, parseBranchChoice, segmentPolicy } from "./segments.ts";
+import { newSpecId, SPEC_VERSION, type AgentSpec } from "./spec.ts";
+
+function spec(over: Partial<AgentSpec> = {}): AgentSpec {
+  const now = 1_700_000_000_000;
+  return {
+    spec_id: newSpecId(),
+    spec_version: SPEC_VERSION,
+    name: "researcher",
+    mode: "built-agent",
+    tools: ["web_search"],
+    egress: [],
+    selfEdit: "individual",
+    nodes: [
+      { id: "a", kind: "prompt", label: "Plan", prompt: "Plan the research" },
+      { id: "b", kind: "tool", label: "Search", tool: "web_search" },
+      { id: "g", kind: "approval", label: "Review findings" },
+      { id: "c", kind: "prompt", label: "Publish", prompt: "Write the final summary" },
+    ],
+    edges: [
+      { id: "e1", from: "a", to: "b" },
+      { id: "e2", from: "b", to: "g" },
+      { id: "e3", from: "g", to: "c" },
+    ],
+    created_at: now,
+    updated_at: now,
+    ...over,
+  };
+}
+
+describe("splitSegments (P-AGENT.11a)", () => {
+  test("no approvals → one segment, no boundary", () => {
+    const s = spec({ nodes: spec().nodes.filter((n) => n.kind !== "approval"), edges: [{ id: "e1", from: "a", to: "b" }, { id: "e2", from: "b", to: "c" }] });
+    const segs = splitSegments(s);
+    expect(segs).toHaveLength(1);
+    expect(segs[0]!.nodeIds).toEqual(["a", "b", "c"]);
+    expect(segs[0]!.approvalAfter).toBeUndefined();
+  });
+
+  test("a middle approval splits into pre/post segments; the approval is a boundary, not a step", () => {
+    const segs = splitSegments(spec());
+    expect(segs).toHaveLength(2);
+    expect(segs[0]!.nodeIds).toEqual(["a", "b"]);
+    expect(segs[0]!.approvalAfter).toEqual({ nodeId: "g", label: "Review findings" });
+    expect(segs[1]!.nodeIds).toEqual(["c"]);
+    expect(segs[1]!.approvalAfter).toBeUndefined();
+  });
+
+  test("approval-first and approval-last shapes produce checkpoint segments, never lost steps", () => {
+    const s = spec({
+      nodes: [
+        { id: "g0", kind: "approval", label: "Pre-flight sign-off" },
+        { id: "a", kind: "prompt", label: "Work", prompt: "do it" },
+        { id: "g1", kind: "approval", label: "Final sign-off" },
+      ],
+      edges: [
+        { id: "e1", from: "g0", to: "a" },
+        { id: "e2", from: "a", to: "g1" },
+      ],
+    });
+    const segs = splitSegments(s);
+    expect(segs.map((x) => x.nodeIds)).toEqual([[], ["a"]]);
+    expect(segs[0]!.approvalAfter!.label).toBe("Pre-flight sign-off");
+    expect(segs[1]!.approvalAfter!.label).toBe("Final sign-off");
+  });
+});
+
+describe("renderSegmentPrompt (P-AGENT.11a)", () => {
+  test("carries ONLY the segment's steps (global numbering), the halt notice, and prior output", () => {
+    const s = spec();
+    const segs = splitSegments(s);
+    const first = renderSegmentPrompt(s, segs[0]!, 0, 2, "");
+    expect(first).toContain("1. [Prompt] Plan");
+    expect(first).toContain("2. [Tool] Search");
+    expect(first).not.toContain("Publish"); // post-approval step is NOT in the pre-approval prompt
+    expect(first).toContain('approval checkpoint "Review findings"');
+    const second = renderSegmentPrompt(s, segs[1]!, 1, 2, "findings: 3 candidate papers");
+    expect(second).toContain("4. [Prompt] Publish"); // global topo index survives segmentation
+    expect(second).toContain("findings: 3 candidate papers");
+    expect(second).toContain("final steps");
+  });
+});
+
+describe("SegmentedRun — KEYSTONE: no post-approval execution without approve()", () => {
+  test("the post-approval prompt is UNREACHABLE while awaiting approval", () => {
+    const run = new SegmentedRun(spec());
+    const seg0 = run.currentSegment();
+    expect(seg0.systemPrompt).not.toContain("Publish");
+    run.recordSegmentOutput("found 3 papers");
+    expect(run.state).toBe("awaiting-approval");
+    expect(run.pendingApproval()).toEqual({ nodeId: "g", label: "Review findings" });
+    // the ONLY source of an executable prompt refuses in this state — the halt is structural
+    expect(() => run.currentSegment()).toThrow(/awaiting-approval/);
+    expect(() => run.recordSegmentOutput("smuggled")).toThrow(/awaiting-approval/);
+  });
+
+  test("deny is terminal: the workflow can never produce post-approval output", () => {
+    const run = new SegmentedRun(spec());
+    run.recordSegmentOutput("found 3 papers");
+    run.deny("looks wrong");
+    expect(run.state).toBe("denied");
+    expect(run.denyReason).toBe("looks wrong");
+    expect(() => run.currentSegment()).toThrow(/denied/);
+    expect(() => run.approve()).toThrow(/denied/);
+    expect(run.finalOutput()).toBe("found 3 papers"); // what existed before the halt, nothing more
+  });
+
+  test("approve resumes exactly at the next segment and completes", () => {
+    const run = new SegmentedRun(spec());
+    run.recordSegmentOutput("found 3 papers");
+    run.approve();
+    expect(run.state).toBe("running");
+    const seg1 = run.currentSegment();
+    expect(seg1.systemPrompt).toContain("Publish");
+    expect(seg1.systemPrompt).toContain("found 3 papers"); // prior work carried forward
+    run.recordSegmentOutput("summary written");
+    expect(run.state).toBe("completed");
+    expect(run.finalOutput()).toBe("summary written");
+    expect(run.transcript()).toEqual(["found 3 papers", "summary written"]);
+  });
+
+  test("approval-first spec halts IMMEDIATELY — nothing runnable before the first human decision", () => {
+    const s = spec({
+      nodes: [
+        { id: "g0", kind: "approval", label: "Pre-flight sign-off" },
+        { id: "a", kind: "prompt", label: "Work", prompt: "do it" },
+      ],
+      edges: [{ id: "e1", from: "g0", to: "a" }],
+    });
+    const run = new SegmentedRun(s);
+    expect(run.state).toBe("awaiting-approval");
+    expect(() => run.currentSegment()).toThrow();
+    run.approve();
+    expect(run.currentSegment().systemPrompt).toContain("Work");
+  });
+
+  test("approvals may not be approved pre-emptively while a segment is still running", () => {
+    const run = new SegmentedRun(spec());
+    expect(() => run.approve()).toThrow(/running/);
+    expect(() => run.deny()).toThrow(/running/);
+  });
+
+  test("an invalid spec is refused fail-closed", () => {
+    expect(() => new SegmentedRun({ ...spec(), nodes: [] } as unknown as AgentSpec)).toThrow(/invalid spec/);
+  });
+});
+
+function subSpec(): AgentSpec {
+  return spec({
+    nodes: [
+      { id: "a", kind: "prompt", label: "Plan", prompt: "Plan" },
+      { id: "s", kind: "subagent", label: "Log to CRM", subagentSpecId: "agent_child" },
+      { id: "c", kind: "prompt", label: "Summarize", prompt: "Summarize" },
+    ],
+    edges: [
+      { id: "e1", from: "a", to: "s" },
+      { id: "e2", from: "s", to: "c" },
+    ],
+  });
+}
+
+describe("SegmentedRun — subagent boundaries (P-AGENT.11b)", () => {
+  test("splitSegments cuts at subagent nodes and carries the child spec id", () => {
+    const segs = splitSegments(subSpec());
+    expect(segs).toHaveLength(2);
+    expect(segs[0]!.nodeIds).toEqual(["a"]);
+    expect(segs[0]!.subagentAfter).toEqual({ nodeId: "s", label: "Log to CRM", specId: "agent_child" });
+    expect(segs[1]!.nodeIds).toEqual(["c"]);
+  });
+
+  test("the post-subagent segment is unreachable until the child's output is recorded", () => {
+    const run = new SegmentedRun(subSpec());
+    run.recordSegmentOutput("planned");
+    expect(run.state).toBe("awaiting-subagent");
+    expect(run.pendingSubagent()).toEqual({ nodeId: "s", label: "Log to CRM", specId: "agent_child" });
+    expect(() => run.currentSegment()).toThrow(/awaiting-subagent/);
+    expect(() => run.approve()).toThrow(/awaiting-subagent/);
+    run.recordSubagentOutput("child logged 3 rows");
+    expect(run.state).toBe("running");
+    expect(run.currentSegment().systemPrompt).toContain("child logged 3 rows"); // child work flows forward
+    run.recordSegmentOutput("done");
+    expect(run.state).toBe("completed");
+    expect(run.transcript()).toEqual(["planned", "child logged 3 rows", "done"]);
+  });
+
+  test("recordSubagentOutput outside the halt throws (no fabricated child runs)", () => {
+    const run = new SegmentedRun(subSpec());
+    expect(() => run.recordSubagentOutput("forged")).toThrow(/running/);
+  });
+});
+
+/** assess → [Risky?] → yes: escalate → approval → wrap  |  no: proceed → wrap  (wrap = join node) */
+function branchSpec(): AgentSpec {
+  return spec({
+    nodes: [
+      { id: "a", kind: "prompt", label: "Assess", prompt: "assess the request" },
+      { id: "d", kind: "branch", label: "Risky?" },
+      { id: "y", kind: "prompt", label: "Escalate", prompt: "escalate" },
+      { id: "g", kind: "approval", label: "Security sign-off" },
+      { id: "n", kind: "prompt", label: "Proceed", prompt: "proceed" },
+      { id: "w", kind: "prompt", label: "Wrap up", prompt: "summarize" },
+    ],
+    edges: [
+      { id: "e1", from: "a", to: "d" },
+      { id: "e2", from: "d", to: "y", label: "yes" },
+      { id: "e3", from: "d", to: "n", label: "no" },
+      { id: "e4", from: "y", to: "g" },
+      { id: "e5", from: "g", to: "w" },
+      { id: "e6", from: "n", to: "w" },
+    ],
+  });
+}
+
+describe("branch nodes (P-AGENT.11c)", () => {
+  test("splitSegments emits a branch boundary with labeled options", () => {
+    const segs = splitSegments(branchSpec());
+    const b = segs.find((s) => s.branchAfter)!;
+    expect(b.branchAfter!.label).toBe("Risky?");
+    expect(b.branchAfter!.options.map((o) => o.label).sort()).toEqual(["no", "yes"]);
+  });
+
+  test("the branch segment's prompt demands a CHOICE line naming the options", () => {
+    const s = branchSpec();
+    const segs = splitSegments(s);
+    const b = segs.find((x) => x.branchAfter)!;
+    const prompt = renderSegmentPrompt(s, b, 0, segs.length, "");
+    expect(prompt).toContain("CHOICE: <option>");
+    expect(prompt).toContain("yes | no");
+  });
+
+  test("parseBranchChoice: last CHOICE line wins, case-insensitive; garbage → null", () => {
+    const options = [
+      { edgeId: "e2", label: "yes", to: "y" },
+      { edgeId: "e3", label: "no", to: "n" },
+    ];
+    expect(parseBranchChoice("reasoning…\nCHOICE: yes", options)!.edgeId).toBe("e2");
+    expect(parseBranchChoice("CHOICE: yes\nwait no\nCHOICE: NO", options)!.edgeId).toBe("e3");
+    expect(parseBranchChoice("I pick the first one", options)).toBeNull();
+    expect(parseBranchChoice("CHOICE: maybe", options)).toBeNull();
+  });
+
+  test("KEYSTONE-grade: the not-taken subtree is skipped INCLUDING its approval — but the join still runs", () => {
+    const run = new SegmentedRun(branchSpec());
+    run.recordSegmentOutput("assessed: low risk");
+    expect(run.state).toBe("at-branch");
+    expect(() => run.currentSegment()).toThrow(/at-branch/); // no prompt exists until the decision is taken
+    run.takeBranch("e3"); // "no" → proceed
+    // The yes-path approval must NOT halt the run — it was never chosen.
+    const outputs: string[] = [];
+    while (run.state === "running") {
+      const seg = run.currentSegment();
+      outputs.push(seg.nodeIds.join(","));
+      expect(seg.systemPrompt).not.toContain("Escalate"); // skipped step never reaches a prompt
+      run.recordSegmentOutput(`did ${seg.nodeIds.join(",")}`);
+    }
+    expect(run.state).toBe("completed"); // never awaiting-approval
+    expect(outputs.join("|")).toContain("w"); // the join node ran
+    expect(outputs.join("|")).not.toContain("y");
+  });
+
+  test("taking the risky path keeps ITS approval halt intact", () => {
+    const run = new SegmentedRun(branchSpec());
+    run.recordSegmentOutput("assessed: high risk");
+    run.takeBranch("e2"); // "yes" → escalate → approval
+    while (run.state === "running") {
+      const seg = run.currentSegment();
+      run.recordSegmentOutput(`did ${seg.nodeIds.join(",")}`);
+    }
+    expect(run.state).toBe("awaiting-approval");
+    expect(run.pendingApproval()!.label).toBe("Security sign-off");
+  });
+
+  test("takeBranch outside at-branch, or with a non-option edge, throws", () => {
+    const run = new SegmentedRun(branchSpec());
+    expect(() => run.takeBranch("e2")).toThrow(/running/);
+    run.recordSegmentOutput("assessed");
+    expect(() => run.takeBranch("e1")).toThrow(/not an option/);
+  });
+});
+
+describe("segmentPolicy (P-AGENT.15) — segment-granular reliability", () => {
+  test("max retry, max backoff, MIN timeout (clamped); defaults when unset", () => {
+    const s = spec({
+      nodes: [
+        { id: "a", kind: "prompt", label: "A", prompt: "x", retry: { max: 2, backoffMs: 2000 }, timeoutMs: 60_000 },
+        { id: "b", kind: "tool", label: "B", tool: "web_search", retry: { max: 1 }, timeoutMs: 30_000 },
+      ],
+      edges: [{ id: "e1", from: "a", to: "b" }],
+    });
+    expect(segmentPolicy(s, ["a", "b"])).toEqual({ retryMax: 2, backoffMs: 2000, timeoutMs: 30_000 });
+    expect(segmentPolicy(s, [])).toEqual({ retryMax: 0, backoffMs: 500 });
+    // currentSegment carries the policy
+    const run = new SegmentedRun(s);
+    expect(run.currentSegment().policy).toEqual({ retryMax: 2, backoffMs: 2000, timeoutMs: 30_000 });
+  });
+});
+
+describe("subagentGuard (P-AGENT.11b) — fail-closed delegation pre-flight", () => {
+  const child = spec({ spec_id: "agent_child", nodes: [{ id: "a", kind: "prompt", label: "Work", prompt: "do" }], edges: [] });
+  const boundary = { nodeId: "s", label: "Log to CRM", specId: "agent_child" };
+
+  test("a clean child passes", () => {
+    expect(subagentGuard(["agent_parent"], boundary, child).ok).toBe(true);
+  });
+  test("unset child, missing spec, cycle, and depth are each refused with a reason", () => {
+    expect(subagentGuard(["p"], { nodeId: "s", label: "x" }, null).error).toContain("no agent selected");
+    expect(subagentGuard(["p"], boundary, null).error).toContain("not a saved agent");
+    expect(subagentGuard(["p", "agent_child"], boundary, child).error).toContain("cycle");
+    const deep = Array.from({ length: SUBAGENT_MAX_DEPTH }, (_, i) => `agent_${i}`);
+    expect(subagentGuard(deep, boundary, child).error).toContain("depth limit");
+  });
+  test("a child with approval checkpoints is refused (nested human halts are not parkable)", () => {
+    const gated = spec({
+      spec_id: "agent_child",
+      nodes: [
+        { id: "a", kind: "prompt", label: "Work", prompt: "do" },
+        { id: "g", kind: "approval", label: "Gate" },
+      ],
+      edges: [{ id: "e1", from: "a", to: "g" }],
+    });
+    expect(subagentGuard(["p"], boundary, gated).error).toContain("approval checkpoints");
+  });
+});

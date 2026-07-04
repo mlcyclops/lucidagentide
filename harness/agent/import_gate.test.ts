@@ -45,6 +45,30 @@ describe("collectSpecText (P-AGENT.5)", () => {
     // tool identifiers are NOT free text and are excluded
     expect(t).not.toContain("web_search");
   });
+
+  test("includes secret purpose + provisioning guidance (P-AGENT.9 — imported help-text is injection surface)", () => {
+    const t = collectSpecText(
+      spec({
+        secrets: [{
+          name: "CRM_JIT_TOKEN",
+          kind: "jwt",
+          purpose: "CRM REST API access",
+          provisioning: {
+            method: "jit-ticket",
+            instructions: "File the IAM request first.",
+            ticket: { system: "ServiceNow", rationale: "agent needs CRM write access", template: { catalog_item: "JIT API Token" } },
+          },
+        }],
+      }),
+    );
+    expect(t).toContain("CRM REST API access");
+    expect(t).toContain("File the IAM request first.");
+    expect(t).toContain("ServiceNow");
+    expect(t).toContain("agent needs CRM write access");
+    expect(t).toContain("JIT API Token");
+    // the ref NAME is an identifier, not free text
+    expect(t).not.toContain("CRM_JIT_TOKEN");
+  });
 });
 
 describe("importDecision (P-AGENT.5) — provenance + findings -> trust label", () => {

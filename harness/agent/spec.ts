@@ -6,14 +6,21 @@
 // authoritative. This module is PURE (types + a fail-closed validator + tiny helpers, no I/O) so it is cheap
 // to import anywhere and trivial to over-test.
 //
-// v1 is a DAG (confirmed with the user): nodes + directed edges, NO cycles. The validator rejects cycles,
-// dangling edges, duplicate ids, and tool nodes whose tool isn't in the spec's allow-list. `validateSpec`
-// takes `unknown` and is fail-closed: any problem → { ok: false } with reasons, and an imported/untrusted
-// spec must pass it before it is ever persisted or run. Branch/loop nodes are a later increment.
+// The spec is a DAG (confirmed with the user): nodes + directed edges, NO cycles. The validator rejects
+// cycles, dangling edges, duplicate ids, and tool nodes whose tool isn't in the spec's allow-list.
+// `validateSpec` takes `unknown` and is fail-closed: any problem → { ok: false } with reasons, and an
+// imported/untrusted spec must pass it before it is ever persisted or run.
+//
+// v2 (P-AGENT.11c/.15, ADR-0139/0141): adds the `branch` node kind (a decision point — the segment runner
+// follows exactly ONE labeled outgoing edge), optional edge `label`s, and per-node reliability knobs
+// (`retry`, `timeoutMs`). v1 files stay valid forever (additive fields; the version list is a compatibility
+// marker, validation is field-driven). Loops remain out — still a DAG.
 
 import { AGENT_MODES, isAgentMode, type AgentMode } from "../contracts.ts";
 
-export const SPEC_VERSION = 1 as const;
+export const SPEC_VERSION = 2 as const;
+/** Accepted on load — v1 files (pre-branch/reliability) remain valid without rewriting. */
+export const SPEC_VERSIONS = [1, 2] as const;
 
 // Self-edit policy (ADR-0133 kickoff decision). "individual" = the user's own agents may self-edit their spec
 // at runtime (sandboxed to audit-mode dry-runs in later increments); "off" = never. Enterprise managed policy
@@ -21,10 +28,22 @@ export const SPEC_VERSION = 1 as const;
 export const SELF_EDIT_POLICIES = ["off", "individual"] as const;
 export type SelfEditPolicy = (typeof SELF_EDIT_POLICIES)[number];
 
-// Node kinds for v1. "prompt" = an LLM step; "tool" = call one allow-listed tool; "subagent" = invoke another
-// built agent; "approval" = a human-approval checkpoint. Kind-specific config is validated loosely in v1.
-export const NODE_KINDS = ["prompt", "tool", "subagent", "approval"] as const;
+// Node kinds. "prompt" = an LLM step; "tool" = call one allow-listed tool; "subagent" = invoke another
+// built agent; "approval" = a human-approval checkpoint; "branch" (v2) = a decision point with ≥2 labeled
+// outgoing edges — the runner follows exactly one. Kind-specific config is validated loosely.
+export const NODE_KINDS = ["prompt", "tool", "subagent", "approval", "branch"] as const;
 export type NodeKind = (typeof NODE_KINDS)[number];
+
+// Reliability knobs (P-AGENT.15, v2). Applied at SEGMENT granularity by the runner: a segment's retry
+// budget is the MAX of its nodes' `retry.max`; its timeout is the MIN of its nodes' `timeoutMs` (tightest
+// constraint wins), clamped to sane bounds. Documented in ADR-0143.
+export const RETRY_MAX_LIMIT = 3;
+export const TIMEOUT_MS_MIN = 5_000;
+export const TIMEOUT_MS_MAX = 600_000;
+export interface NodeRetry {
+  max: number; // 1..RETRY_MAX_LIMIT re-attempts after the first failure
+  backoffMs?: number; // base backoff between attempts (linear × attempt), default runner-chosen
+}
 
 // Secret DECLARATIONS (P-AGENT.8 / ADR-0134). An agent declares WHICH credentials it needs — it NEVER holds
 // the value. `name` maps to an OS-encrypted vault entry (the user fills it in via the vault UI; the runtime
@@ -33,10 +52,30 @@ export type NodeKind = (typeof NODE_KINDS)[number];
 // guardrail violation caught by secret_guard.ts.
 export const SECRET_KINDS = ["jwt", "oauth", "saml", "pem", "apikey", "basic"] as const;
 export type SecretKind = (typeof SECRET_KINDS)[number];
+
+// Provisioning guidance (P-AGENT.9): HOW the next user of a SHARED agent obtains this credential on their
+// machine. "user-input" = paste an existing value into Secrets & connections (stored in the OS-encrypted
+// vault); "jit-ticket" = request a Just-In-Time token from the org's KMS via its IT ticketing process —
+// `ticket` carries the system name (ServiceNow, Jira SM, …), sample request fields, and the access rationale
+// to paste into the ticket. GUIDANCE ONLY: free text here is scanned by secret_guard (a pasted value is a
+// guardrail violation) and by the import gate (injection surface on an imported spec).
+export const PROVISIONING_METHODS = ["user-input", "jit-ticket"] as const;
+export type ProvisioningMethod = (typeof PROVISIONING_METHODS)[number];
+export interface TicketGuide {
+  system: string; // the ticketing system, e.g. "ServiceNow" or "Jira Service Management"
+  template?: Record<string, string>; // sample ticket fields (catalog item, assignment group, short description, …)
+  rationale?: string; // the access justification to include in the ticket
+}
+export interface SecretProvisioning {
+  method: ProvisioningMethod;
+  instructions?: string; // step-by-step help shown on import — NEVER a secret value
+  ticket?: TicketGuide; // for "jit-ticket": how to request the JIT token
+}
 export interface SecretRef {
   name: string; // stable ref, e.g. "SALESFORCE_API_TOKEN" — maps to a vault credential; NEVER the value
   kind: SecretKind;
   purpose?: string; // what it's for / where the user gets it (help text) — NEVER the secret
+  provisioning?: SecretProvisioning; // P-AGENT.9: how a SHARED agent's next user obtains this credential
 }
 
 export interface AgentNode {
@@ -46,17 +85,20 @@ export interface AgentNode {
   prompt?: string; // kind "prompt"
   tool?: string; // kind "tool" — MUST be in spec.tools (the allow-list)
   subagentSpecId?: string; // kind "subagent"
+  retry?: NodeRetry; // v2 (P-AGENT.15): re-attempts on failure, segment-granular
+  timeoutMs?: number; // v2 (P-AGENT.15): per-step ceiling, TIMEOUT_MS_MIN..TIMEOUT_MS_MAX
 }
 
 export interface AgentEdge {
   id: string;
   from: string; // an AgentNode id
   to: string; // an AgentNode id
+  label?: string; // v2 (P-AGENT.11c): the choice name on a branch node's outgoing edge ("yes", "retry", …)
 }
 
 export interface AgentSpec {
   spec_id: string; // stable minted id (invariant #9)
-  spec_version: typeof SPEC_VERSION;
+  spec_version: (typeof SPEC_VERSIONS)[number];
   name: string;
   description?: string;
   persona?: string; // system persona text (scanned as untrusted when imported)
@@ -146,7 +188,8 @@ export function validateSpec(input: unknown): ValidationResult {
   const s = input as Record<string, unknown>;
 
   if (!isNonEmpty(s.spec_id)) errors.push("spec_id must be a non-empty string");
-  if (s.spec_version !== SPEC_VERSION) errors.push(`spec_version must be ${SPEC_VERSION}`);
+  if (!(SPEC_VERSIONS as readonly number[]).includes(s.spec_version as number))
+    errors.push(`spec_version must be one of: ${SPEC_VERSIONS.join(", ")}`);
   if (!isNonEmpty(s.name)) errors.push("name must be a non-empty string");
   if (!isAgentMode(s.mode)) errors.push(`mode must be one of: ${AGENT_MODES.join(", ")}`);
   if (!(SELF_EDIT_POLICIES as readonly string[]).includes(s.selfEdit as string))
@@ -177,6 +220,34 @@ export function validateSpec(input: unknown): ValidationResult {
         if (!(SECRET_KINDS as readonly string[]).includes(r.kind as string))
           errors.push(`secrets[${i}].kind must be one of: ${SECRET_KINDS.join(", ")}`);
         if ("value" in r || "secret" in r) errors.push(`secrets[${i}] must NOT carry a value — secrets live in the vault`);
+        // provisioning (P-AGENT.9) is optional guidance for obtaining the credential on another machine.
+        if (r.provisioning !== undefined) {
+          if (typeof r.provisioning !== "object" || r.provisioning === null) {
+            errors.push(`secrets[${i}].provisioning must be an object when present`);
+          } else {
+            const p = r.provisioning as Record<string, unknown>;
+            if (!(PROVISIONING_METHODS as readonly string[]).includes(p.method as string))
+              errors.push(`secrets[${i}].provisioning.method must be one of: ${PROVISIONING_METHODS.join(", ")}`);
+            if (p.instructions !== undefined && !isStr(p.instructions))
+              errors.push(`secrets[${i}].provisioning.instructions must be a string when present`);
+            if ("value" in p || "secret" in p) errors.push(`secrets[${i}].provisioning must NOT carry a value`);
+            if (p.ticket !== undefined) {
+              if (typeof p.ticket !== "object" || p.ticket === null) {
+                errors.push(`secrets[${i}].provisioning.ticket must be an object when present`);
+              } else {
+                const t = p.ticket as Record<string, unknown>;
+                if (!isNonEmpty(t.system)) errors.push(`secrets[${i}].provisioning.ticket.system must name the ticketing system`);
+                if (t.rationale !== undefined && !isStr(t.rationale))
+                  errors.push(`secrets[${i}].provisioning.ticket.rationale must be a string when present`);
+                if (t.template !== undefined) {
+                  const tpl = t.template;
+                  if (typeof tpl !== "object" || tpl === null || Array.isArray(tpl) || !Object.values(tpl).every(isStr))
+                    errors.push(`secrets[${i}].provisioning.ticket.template must map field names to string values`);
+                }
+              }
+            }
+          }
+        }
       }
     }
   }
@@ -203,6 +274,21 @@ export function validateSpec(input: unknown): ValidationResult {
         else if (Array.isArray(tools) && !tools.includes(n.tool))
           errors.push(`tool node "${n.tool}" is not in the tools allow-list`);
       }
+      // v2 reliability knobs (P-AGENT.15) — optional, bounded, fail-closed on nonsense.
+      if (n.retry !== undefined) {
+        const r = n.retry as unknown;
+        if (typeof r !== "object" || r === null) {
+          errors.push(`nodes[${i}].retry must be an object when present`);
+        } else {
+          const retry = r as Record<string, unknown>;
+          if (typeof retry.max !== "number" || !Number.isInteger(retry.max) || retry.max < 1 || retry.max > RETRY_MAX_LIMIT)
+            errors.push(`nodes[${i}].retry.max must be an integer 1..${RETRY_MAX_LIMIT}`);
+          if (retry.backoffMs !== undefined && (typeof retry.backoffMs !== "number" || retry.backoffMs < 0))
+            errors.push(`nodes[${i}].retry.backoffMs must be a non-negative number when present`);
+        }
+      }
+      if (n.timeoutMs !== undefined && (typeof n.timeoutMs !== "number" || n.timeoutMs < TIMEOUT_MS_MIN || n.timeoutMs > TIMEOUT_MS_MAX))
+        errors.push(`nodes[${i}].timeoutMs must be ${TIMEOUT_MS_MIN}..${TIMEOUT_MS_MAX}`);
     }
   }
 
@@ -223,6 +309,18 @@ export function validateSpec(input: unknown): ValidationResult {
       if (!isStr(e.from) || !nodeIds.has(e.from)) errors.push(`edges[${i}].from is not an existing node id`);
       if (!isStr(e.to) || !nodeIds.has(e.to)) errors.push(`edges[${i}].to is not an existing node id`);
       if (isStr(e.from) && e.from === e.to) errors.push(`edges[${i}] is a self-loop (${e.from})`);
+      if (e.label !== undefined && !isStr(e.label)) errors.push(`edges[${i}].label must be a string when present`);
+    }
+  }
+
+  // v2 (P-AGENT.11c): a branch is only a decision if there is something to decide — ≥2 outgoing edges.
+  if (Array.isArray(nodes) && Array.isArray(edges)) {
+    for (const n0 of nodes) {
+      if (typeof n0 !== "object" || n0 === null) continue;
+      const n = n0 as Record<string, unknown>;
+      if (n.kind !== "branch" || !isStr(n.id)) continue;
+      const outs = (edges as unknown[]).filter((e0) => typeof e0 === "object" && e0 !== null && (e0 as Record<string, unknown>).from === n.id);
+      if (outs.length < 2) errors.push(`branch node "${String(n.label ?? n.id)}" needs at least two outgoing edges`);
     }
   }
 

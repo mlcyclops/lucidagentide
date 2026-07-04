@@ -71,6 +71,35 @@ describe("scanSpecForSecrets (P-AGENT.8) — apparent secret VALUES are caught",
   });
 });
 
+describe("scanSpecForSecrets (P-AGENT.9) — provisioning guidance is scanned too", () => {
+  test("clean provisioning guidance (instructions + JIT ticket template) stays clean", () => {
+    const s = spec({
+      secrets: [{
+        name: "CRM_JIT_TOKEN", kind: "jwt", purpose: "CRM API",
+        provisioning: {
+          method: "jit-ticket",
+          instructions: "File a ticket with IAM; paste the issued token into the vault.",
+          ticket: { system: "ServiceNow", rationale: "Agent needs CRM API access for opportunity logging.", template: { catalog_item: "JIT API Token", assignment_group: "IAM-Access" } },
+        },
+      }],
+    });
+    expect(scanSpecForSecrets(s)).toEqual([]);
+  });
+  test("a token pasted into provisioning instructions is flagged with its location", () => {
+    const s = spec({
+      secrets: [{ name: "GH", kind: "apikey", provisioning: { method: "user-input", instructions: "use ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345" } }],
+    });
+    const leaks = scanSpecForSecrets(s);
+    expect(leaks.some((l) => l.where.includes("provisioning instructions"))).toBe(true);
+  });
+  test("a secret smuggled into a JIT ticket template VALUE is flagged", () => {
+    const s = spec({
+      secrets: [{ name: "AWS", kind: "apikey", provisioning: { method: "jit-ticket", ticket: { system: "ServiceNow", template: { note: "key AKIAIOSFODNN7EXAMPLE" } } } }],
+    });
+    expect(scanSpecForSecrets(s).some((l) => l.pattern.includes("AWS"))).toBe(true);
+  });
+});
+
 describe("assertSecretFree (P-AGENT.8)", () => {
   test("does not throw for a clean spec (declared refs only)", () => {
     expect(() => assertSecretFree(spec())).not.toThrow();

@@ -12,8 +12,46 @@
 
 import type { AgentSpec } from "../../harness/agent/spec.ts"; // P-AGENT.2b: Agent Builder spec type
 import type { SpecFileSummary } from "../../harness/agent/file_store.ts"; // P-AGENT.2b: spec list summary
+import type { UserCommand } from "../../harness/commands/spec.ts"; // P-CMD.1: user-authored slash commands
+import type { AgentRunTrace, TraceSummary } from "../../harness/agent/trace.ts"; // P-AGENT.13: run traces
+
+/** P-AGENT.12: an MCP-discovered catalog entry (name is the omp runtime name: mcp__<server>_<tool>). */
+export interface McpCatalogTool {
+  name: string;
+  desc: string;
+  server: string;
+}
+
+/** P-AGENT.17: one revision snapshot of a saved agent (written on every save, pruned to the newest 20). */
+export interface SpecRevisionSummary {
+  updated_at: number;
+  name: string;
+  nodes: number;
+  edges: number;
+}
+
+/** P-AGENT.17: one curated starter template (an in-repo .lucid-agent.json, digest-checked before listing). */
+export interface AgentTemplateInfo {
+  file: string;
+  name: string;
+  description: string;
+  steps: number;
+  tools: string[];
+}
+import type { LocalProviderDef } from "../local_providers.ts"; // P-LOCAL.3: self-hosted/custom LLM providers
 
 export interface BlockRecord { id: string; tool: string; severity: string; findings: string; reason: string; at: string; status: "quarantined" | "approved" | "dismissed"; reviewer?: string }
+
+/** P-AGENT.4-live/.11a: a built-agent run reply. `paused` = halted at an approval checkpoint (ENFORCED by
+ *  the SegmentedRun machine server-side); resume with agentRunApprove. */
+export interface AgentRunReply {
+  output: string;
+  error: string;
+  blocked: boolean;
+  reason: string;
+  paused?: { runId: string; nodeId: string; label: string; outputSoFar: string } | null;
+  runId?: string; // P-AGENT.13: the run's stable trace id
+}
 export interface SecuritySnapshot {
   findings: any[]; unicode: any[]; approvals: any[]; quarantine: any[];
   promotion: any[]; exports: any[]; runs: any[];
@@ -191,6 +229,7 @@ export type ChatEvent =
   | { type: "permission"; id: string; tool: string; detail: string; options: { optionId: string; name: string; kind?: string }[]; url?: string; egress?: boolean; localFile?: boolean; exec?: boolean; program?: string; reason?: string; danger?: boolean }
   | { type: "preview-available"; path: string } // P-PREVIEW.2 (ADR-0096): the agent wrote a previewable file
   | { type: "agent-builder-open"; spec: AgentSpec } // P-AGENT.8.2 (ADR-0134): open the Agent Builder pre-populated
+  | { type: "slash-command-created"; command: UserCommand } // P-CMD.1 (ADR-0146): the agent created a user "/" command
   | { type: "usage"; used: number; size: number; cost: number }
   // P-GOAL.1/3 (ADR-0046): /goal loop events (kept in parity with desktop/acp_backend.ts).
   | { type: "goal-memory"; path: string }
@@ -233,8 +272,12 @@ export type Cadence = { kind: "interval"; everyMin: number } | { kind: "daily"; 
 export interface Automation {
   id: string; goal: string; condition: string; command?: string; maxIters: number;
   cadence: Cadence; enabled: boolean; createdAt: number; lastRunAt?: number; lastResult?: string;
+  kind?: "goal" | "agent"; agentSpecId?: string; agentPrompt?: string; agentModel?: string; // P-AGENT.14
 }
-export interface AutomationSpec { goal: string; condition?: string; command?: string; maxIters?: number; cadence: Cadence }
+export interface AutomationSpec {
+  goal: string; condition?: string; command?: string; maxIters?: number; cadence: Cadence;
+  kind?: "goal" | "agent"; agentSpecId?: string; agentPrompt?: string; agentModel?: string; // P-AGENT.14
+}
 // P-GOAL.6: the /goal checker-model picker state.
 export interface ModelOption { value: string; name?: string; description?: string }
 export interface CheckerModelInfo { selected: string; recommended: string; recommendedWhy: string; current: string; options: ModelOption[] }
@@ -299,7 +342,36 @@ export interface LucidBridge {
   agentSave(spec: AgentSpec): Promise<{ saved?: boolean; spec_id?: string; errors?: string[] } | null>;
   agentDelete(id: string): Promise<{ deleted: boolean } | null>;
   agentExport(spec: AgentSpec, target: string): Promise<{ dir: string; target: string; digest: string; files: number } | null>;
-  agentRun(spec: AgentSpec, prompt: string, model: string): Promise<{ output: string; error: string; blocked: boolean; reason: string } | null>;
+  /** P-AGENT.9: portable share/import (.lucid-agent.json, credential NAMES only) + the human approval step. */
+  agentShare(spec: AgentSpec): Promise<{ path?: string; fileName?: string; json?: string; setup?: string; digest?: string; error?: string } | null>;
+  agentImport(raw: string): Promise<{ spec?: AgentSpec; trustLabel?: string; canRun?: boolean; reason?: string; findings?: number; setup?: string; notes?: string[]; error?: string } | null>;
+  agentTrust(id: string): Promise<{ trustLabel?: string; error?: string } | null>;
+  /** P-AGENT.10: n8n interop — export a workflow scaffold; push via the enterprise add-on connector. */
+  agentN8nExport(spec: AgentSpec): Promise<{ path?: string; fileName?: string; json?: string; pushAvailable?: boolean; pushNote?: string; error?: string } | null>;
+  agentN8nPush(spec: AgentSpec): Promise<{ ok?: boolean; detail?: string; url?: string; error?: string } | null>;
+  agentRun(spec: AgentSpec, prompt: string, model: string): Promise<AgentRunReply | null>;
+  /** P-AGENT.11a: resolve a run parked at an approval checkpoint (deny is terminal). */
+  agentRunApprove(runId: string, approve: boolean): Promise<AgentRunReply | null>;
+  /** P-AGENT.13: run traces — summaries per spec, and one full trace by run id. */
+  agentTraces(specId: string): Promise<TraceSummary[]>;
+  agentTrace(runId: string): Promise<AgentRunTrace | null>;
+  /** P-AGENT.12: tools discovered from enabled MCP servers (omp runtime names) + per-server probe status. */
+  agentMcpTools(): Promise<{ tools: McpCatalogTool[]; servers: { server: string; ok: boolean; count: number; error: string }[] }>;
+  /** P-AGENT.17: revision history (snapshots per save) + restore; the starter-template gallery. */
+  agentHistory(id: string): Promise<SpecRevisionSummary[]>;
+  agentHistoryRestore(id: string, ts: number): Promise<{ spec?: AgentSpec; error?: string } | null>;
+  agentTemplates(): Promise<AgentTemplateInfo[]>;
+  agentTemplateUse(file: string): Promise<{ spec?: AgentSpec; trustLabel?: string; reason?: string; setup?: string; notes?: string[]; error?: string } | null>;
+  /** P-LOCAL.3 (ADR-0135): Local Providers (self-hosted/custom OpenAI-compatible LLMs). Declarations only —
+   *  the API key is stored via credStore into the OS-encrypted vault, never through these. */
+  localProvidersList(): Promise<LocalProviderDef[]>;
+  localProviderUpsert(provider: LocalProviderDef): Promise<{ saved?: boolean; id?: string; errors?: string[] } | null>;
+  localProviderDelete(id: string): Promise<{ deleted: boolean } | null>;
+  localProviderEnable(id: string, enabled: boolean): Promise<{ ok: boolean } | null>;
+  /** Reachability/TLS probe of a base URL's /models endpoint (no key sent). */
+  localProviderTest(baseUrl: string): Promise<{ reachable: boolean; status?: number; authed?: boolean; error?: string } | null>;
+  /** Restart the desktop app so a spawned omp picks up new local providers (Electron only; no-op in browser). */
+  relaunch(): Promise<void>;
   setCodeGraphAgent(enabled: boolean): Promise<{ enabled: boolean } | null>;
   /** P-APPEAR.1: the personalized chat background (image data URL + display mode + opacity). */
   chatBackground(): Promise<{ image: string; mode: "off" | "ambient" | "flashlight"; opacity: number } | null>;
@@ -332,7 +404,7 @@ export interface LucidBridge {
   mcpToggle(id: string, enabled: boolean): Promise<unknown>;
   usage(): Promise<UsageLedger | null>;
   codeActivity(): Promise<CodeActivity | null>;
-  sendPrompt(text: string, onEvent: (e: ChatEvent) => void): Promise<void>;
+  sendPrompt(text: string, onEvent: (e: ChatEvent) => void, images?: { data: string; mimeType: string }[]): Promise<void>;
   // P-GOAL.1 (ADR-0046): run a /goal loop - streams the same events plus goal-iter/check/done/stop.
   runGoal(opts: GoalOpts, onEvent: (e: ChatEvent) => void): Promise<void>;
   resumableLoops(): Promise<ResumableLoop[] | null>; // P-GOAL.4: loops that stopped without meeting their condition
@@ -363,6 +435,11 @@ export interface LucidBridge {
   cancelGoal(): Promise<unknown>; // P-GOAL.2: stop a running /goal loop
   commands(): Promise<OmpCommand[]>;
   skills(): Promise<{ name: string; description: string; source: string }[] | null>;
+  // P-CMD.1 (ADR-0146): user-authored "/" slash commands (workspace .omp/commands/). Create validates +
+  // scans fail-closed server-side. `list` = stored commands; `create` returns the persisted command or errors.
+  userCommands(): Promise<UserCommand[]>;
+  userCommandCreate(command: UserCommand): Promise<{ ok: boolean; command?: UserCommand; errors?: string[]; blocked?: boolean; reason?: string } | null>;
+  userCommandDelete(name: string): Promise<{ deleted: boolean } | null>;
   // P-SKILL.1 (ADR-0045): import dropped .md skill files - each is scanned at the gate; clean ones are
   // written under .omp/skills/, flagged ones are held for Security-panel review.
   skillImport(files: { name: string; content: string }[]): Promise<{ results: SkillImportResult[] } | null>;
@@ -521,6 +598,7 @@ interface NativeShell {
   pickFolder?(): Promise<string | null>;
   capturePreview?(rect: { x: number; y: number; width: number; height: number }): Promise<string | null>;
   revealPath?(path: string): Promise<boolean>;
+  relaunch?(): Promise<void>; // P-LOCAL.3 polish: restart the app to apply local-provider changes
   win?: { minimize(): void; toggleMaximize(): void; close(): void };
   // P-NETWL.1 (ADR-0106): native file picker + OS-encrypted credential vault (Electron-only).
   pickFile?(opts?: { title?: string; filters?: { name: string; extensions: string[] }[] }): Promise<string | null>;
@@ -595,10 +673,10 @@ async function streamNdjson(path: string, body: unknown, onEvent: (e: ChatEvent)
 // Stop must always recover the UI: aborting this controller ends the client read immediately, so the
 // turn's finally runs even when omp is wedged. cancelChat() aborts it AND posts the server cancel.
 let chatAbort: AbortController | null = null;
-const streamChat = (text: string, onEvent: (e: ChatEvent) => void) => {
+const streamChat = (text: string, onEvent: (e: ChatEvent) => void, images?: { data: string; mimeType: string }[]) => {
   chatAbort?.abort();
   chatAbort = new AbortController();
-  return streamNdjson("/api/chat", { text }, onEvent, chatAbort.signal).finally(() => { chatAbort = null; });
+  return streamNdjson("/api/chat", { text, ...(images?.length ? { images } : {}) }, onEvent, chatAbort.signal).finally(() => { chatAbort = null; });
 };
 
 export const bridge: LucidBridge = {
@@ -624,7 +702,26 @@ export const bridge: LucidBridge = {
   agentSave: (spec) => post("/api/agent", { spec }), // P-AGENT.2b (server validates fail-closed)
   agentDelete: (id) => post("/api/agent/delete", { id }), // P-AGENT.2b
   agentExport: (spec, target) => post("/api/agent/export", { spec, target }), // P-AGENT.6
-  agentRun: (spec, prompt, model) => post("/api/agent/run", { spec, prompt, model }), // P-AGENT.4-live
+  agentShare: (spec) => post("/api/agent/share", { spec }), // P-AGENT.9
+  agentImport: (raw) => post("/api/agent/import", { raw }), // P-AGENT.9
+  agentTrust: (id) => post("/api/agent/trust", { id }), // P-AGENT.9
+  agentN8nExport: (spec) => post("/api/agent/n8n-export", { spec }), // P-AGENT.10
+  agentN8nPush: (spec) => post("/api/agent/n8n-push", { spec }), // P-AGENT.10
+  agentRun: (spec, prompt, model) => post("/api/agent/run", { spec, prompt, model }), // P-AGENT.4-live/.11a
+  agentRunApprove: (runId, approve) => post("/api/agent/run/approve", { runId, approve }), // P-AGENT.11a
+  agentTraces: async (specId) => (await getData(`/api/agent/traces?spec=${encodeURIComponent(specId)}`))?.traces ?? [], // P-AGENT.13
+  agentTrace: async (runId) => (await getData(`/api/agent/trace?id=${encodeURIComponent(runId)}`))?.trace ?? null, // P-AGENT.13
+  agentMcpTools: async () => (await getData("/api/agent/tools")) ?? { tools: [], servers: [] }, // P-AGENT.12 (fail-soft: static catalog only)
+  agentHistory: async (id) => (await getData(`/api/agent/history?id=${encodeURIComponent(id)}`))?.revisions ?? [], // P-AGENT.17
+  agentHistoryRestore: (id, ts) => post("/api/agent/history/restore", { id, ts }), // P-AGENT.17
+  agentTemplates: async () => (await getData("/api/agent/templates"))?.templates ?? [], // P-AGENT.17
+  agentTemplateUse: (file) => post("/api/agent/template-use", { file }), // P-AGENT.17 (standard gated import path)
+  localProvidersList: async () => (await getData("/api/local-providers"))?.providers ?? [], // P-LOCAL.3
+  localProviderUpsert: (provider) => post("/api/local-providers", { provider }), // P-LOCAL.3 (server validates fail-closed)
+  localProviderDelete: (id) => post("/api/local-providers/delete", { id }), // P-LOCAL.3
+  localProviderEnable: (id, enabled) => post("/api/local-providers/enable", { id, enabled }), // P-LOCAL.3
+  localProviderTest: (baseUrl) => post("/api/local-providers/test", { baseUrl }), // P-LOCAL.3 polish
+  relaunch: () => (shell?.relaunch ? shell.relaunch() : Promise.resolve()), // P-LOCAL.3 polish (Electron only)
   setCodeGraphAgent: (enabled) => post("/api/codegraph/agent", { enabled }),
   chatBackground: () => getData("/api/chat-bg"),
   setChatBackground: (patch) => post("/api/chat-bg", patch),
@@ -672,6 +769,9 @@ export const bridge: LucidBridge = {
   cancelGoal: () => post("/api/goal/cancel", {}),
   commands: async () => (await getData("/api/commands")) ?? [],
   skills: () => getData("/api/skills"),
+  userCommands: async () => (await getData("/api/usercommand")) ?? [], // P-CMD.1
+  userCommandCreate: (command) => post("/api/usercommand", { command }), // P-CMD.1 (server validates + scans fail-closed)
+  userCommandDelete: (name) => post("/api/usercommand/delete", { name }), // P-CMD.1
   skillImport: (files) => post("/api/skills/import", { files }),
   setActiveSkill: (name, prompt) => post("/api/skill", { name, prompt }),
   clearActiveSkill: () => post("/api/skill", { clear: true }),

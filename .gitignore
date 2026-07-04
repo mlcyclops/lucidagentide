@@ -89,3 +89,10 @@ netwatch.log
 .omp/agent-exports/
 # P-AGENT.4-live: materialized agent run dirs (generated artifacts)
 .omp/agent-runs/
+
+# P-AGENT.10: portable share files are user artifacts, not repo content
+.omp/agent-shares/
+# goal-loop runtime memory
+.omp/loops/
+# P-CMD.1: user-authored slash commands are personal workspace data (the tracked lucid-* dirs stay)
+.omp/commands/*.json
