@@ -3,7 +3,7 @@
 
 // harness/scripts/demo_p_agent_5.ts
 //
-// P-AGENT.5 (ADR-0129): the untrusted-spec quarantine gate, end-to-end against the REAL scanner sidecar.
+// P-AGENT.5 (ADR-0133): the untrusted-spec quarantine gate, end-to-end against the REAL scanner sidecar.
 // Keystone-#2 analogue: a spec carrying an injection can never auto-run; an imported (external) spec is never
 // auto-trusted; only a locally-authored, clean spec is trusted + auto-runnable.
 

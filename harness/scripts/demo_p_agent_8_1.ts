@@ -3,7 +3,7 @@
 
 // harness/scripts/demo_p_agent_8_1.ts
 //
-// P-AGENT.8.1 (ADR-0130): the SECRET guardrail for the conversational Agent Builder. Proves the user's #1
+// P-AGENT.8.1 (ADR-0134): the SECRET guardrail for the conversational Agent Builder. Proves the user's #1
 // rule: an agent may DECLARE which credentials it needs (SecretRef names), but a secret VALUE embedded in a
 // spec is REFUSED everywhere it could land — save, compile, run. Secrets live only in the OS-encrypted vault.
 

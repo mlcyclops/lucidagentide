@@ -356,33 +356,49 @@ demo-P-NETWL.3: ## P-NETWL.3 (ADR-0106): enforce project/loop trust scopes + per
 demo-P-KEYS.2: ## P-KEYS.2 (ADR-0107): credential rotation visibility (age/due/expiry, non-secret) + manual rotate-in-place (same ref, fail-closed)
 	$(BUN) run desktop/scripts/demo_p_keys_2.ts
 
+.PHONY: demo-P-PERF.2
+demo-P-PERF.2: ## P-PERF.2 (ADR-0129): power/spec-aware perf tiers — battery→calm capped graph, low battery→viz paused (agent access untouched), poll backoff, user override
+	$(BUN) run desktop/scripts/demo_p_perf_2.ts
+
+.PHONY: demo-P-PERF.3
+demo-P-PERF.3: ## P-PERF.3 (ADR-0130): KG layout continuity — re-open is a static paint (0 sim frames), refresh nestles newcomers, cold open exits on energy, positions never touch disk
+	$(BUN) run desktop/scripts/demo_p_perf_3.ts
+
+.PHONY: demo-P-PERF.4
+demo-P-PERF.4: ## P-PERF.4 (ADR-0131): incremental session index (warm polls parse nothing) + tail-first transcript pages + AC-only prefetch gate
+	$(BUN) run desktop/scripts/demo_p_perf_4.ts
+
+.PHONY: demo-P-PERF.5
+demo-P-PERF.5: ## P-PERF.5 (ADR-0132): switch hygiene - optimistic model switch, debounced lastModel write-behind (read-your-writes), memoized settings load, memoized picker
+	$(BUN) run desktop/scripts/demo_p_perf_5.ts
+
 .PHONY: demo-P-NETWL.5
 demo-P-NETWL.5: ## P-NETWL.5 (ADR-0108): egress posture — allow-all + web-search toggles; whitelist enforces only when allow-all is off; still prompts for public IPs / foreign TLDs; managed clamp
 	$(BUN) run desktop/scripts/demo_p_netwl_5.ts
 
 .PHONY: demo-P-AGENT.1
-demo-P-AGENT.1: ## P-AGENT.1 (ADR-0129): Agent Spec — a valid v1 DAG round-trips through DuckDB (migration 0010); a cyclic/invalid spec is refused fail-closed and never persisted
+demo-P-AGENT.1: ## P-AGENT.1 (ADR-0133): Agent Spec — a valid v1 DAG round-trips through DuckDB (migration 0010); a cyclic/invalid spec is refused fail-closed and never persisted
 	$(BUN) run harness/scripts/demo_p_agent_1.ts
 
 .PHONY: demo-P-AGENT.3
-demo-P-AGENT.3: ## P-AGENT.3 (ADR-0129): the compiler buildAgent(spec) -> AgentBundle (system prompt + generated omp allow-list extension + manifest); the emitted extension enforces the allow-list; invalid spec refused
+demo-P-AGENT.3: ## P-AGENT.3 (ADR-0133): the compiler buildAgent(spec) -> AgentBundle (system prompt + generated omp allow-list extension + manifest); the emitted extension enforces the allow-list; invalid spec refused
 	$(BUN) run harness/scripts/demo_p_agent_3.ts
 
 .PHONY: demo-P-AGENT.5
-demo-P-AGENT.5: ## P-AGENT.5 (ADR-0129): untrusted-spec quarantine gate vs the real scanner — imported/poisoned specs are quarantined + blocked from auto-running; only a clean local spec is trusted + runnable
+demo-P-AGENT.5: ## P-AGENT.5 (ADR-0133): untrusted-spec quarantine gate vs the real scanner — imported/poisoned specs are quarantined + blocked from auto-running; only a clean local spec is trusted + runnable
 	$(BUN) run harness/scripts/demo_p_agent_5.ts
 
 .PHONY: demo-P-AGENT.6
-demo-P-AGENT.6: ## P-AGENT.6 (ADR-0129): enterprise export — package a compiled agent portably for electron/web/cloud with a tamper-evident content digest; verifyExport catches modification
+demo-P-AGENT.6: ## P-AGENT.6 (ADR-0133): enterprise export — package a compiled agent portably for electron/web/cloud with a tamper-evident content digest; verifyExport catches modification
 	$(BUN) run harness/scripts/demo_p_agent_6.ts
 
 .PHONY: demo-P-AGENT.4-live
-demo-P-AGENT.4-live: ## P-AGENT.4-live (ADR-0129): run a BUILT agent on a REAL Claude model (Haiku). NEEDS a model + network — NOT part of `make test`. Proves the agent runs + follows its compiled spec, AND its allow-list extension hard-blocks disallowed tools.
+demo-P-AGENT.4-live: ## P-AGENT.4-live (ADR-0133): run a BUILT agent on a REAL Claude model (Haiku). NEEDS a model + network — NOT part of `make test`. Proves the agent runs + follows its compiled spec, AND its allow-list extension hard-blocks disallowed tools.
 	$(BUN) run harness/scripts/demo_p_agent_4_live.ts
 	$(BUN) run harness/scripts/demo_p_agent_4_live_enforce.ts
 
 .PHONY: demo-P-AGENT.8.1
-demo-P-AGENT.8.1: ## P-AGENT.8.1 (ADR-0130): secret guardrail — agents DECLARE credential names (SecretRef); a secret VALUE embedded in a spec is refused at compile + save (secrets belong in the vault)
+demo-P-AGENT.8.1: ## P-AGENT.8.1 (ADR-0134): secret guardrail — agents DECLARE credential names (SecretRef); a secret VALUE embedded in a spec is refused at compile + save (secrets belong in the vault)
 	$(BUN) run harness/scripts/demo_p_agent_8_1.ts
 
 .PHONY: dashboards

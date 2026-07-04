@@ -3,7 +3,7 @@
 
 // harness/scripts/demo_p_agent_4_live.ts
 //
-// P-AGENT.4-live (ADR-0129): run a BUILT agent against a REAL Claude model (Haiku — the right size to test
+// P-AGENT.4-live (ADR-0133): run a BUILT agent against a REAL Claude model (Haiku — the right size to test
 // with). Proves the whole pipeline end-to-end: spec -> compile -> materialize -> spawn omp with the generated
 // allow-list extension + the compiled system prompt -> a live model follows the agent's spec.
 //

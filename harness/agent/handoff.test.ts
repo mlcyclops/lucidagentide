@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// harness/agent/handoff.test.ts — P-AGENT.8.2 (ADR-0130): the chat -> Agent-Builder handoff gate.
+// harness/agent/handoff.test.ts — P-AGENT.8.2 (ADR-0134): the chat -> Agent-Builder handoff gate.
 
 import { test, expect, describe } from "bun:test";
 import { parseDraftedSpec, agentBuilderOpenSpec } from "./handoff.ts";

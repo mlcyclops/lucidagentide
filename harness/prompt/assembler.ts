@@ -38,7 +38,7 @@ import type { TrustLabel } from "../contracts.ts";
  *  v7 (ADR-0114, P-CHAT.2): added the engagement policy to layer 3 — some models treated opening a
  *      session / a bare "hi" as license to scan and edit the workspace unprompted. Greet, wait, and
  *      offer opt-in numbered next steps from context/KG instead of auto-acting on the cwd.
- *  v8 (ADR-0130, P-AGENT.8.3): added the agent-builder policy to layer 3 — when the user describes a
+ *  v8 (ADR-0134, P-AGENT.8.3): added the agent-builder policy to layer 3 — when the user describes a
  *      repeatable task to automate, draft it + call `agent_builder_open` to open the Agent Builder, and
  *      NEVER collect a secret VALUE (declare a credential NAME; the user adds the value in the vault). */
 export const PREFIX_VERSION = "8";
@@ -143,7 +143,7 @@ user drive. Offering numbered, choose-by-number next steps is also the preferred
 whenever sensible follow-ups exist.
 </engagement>`;
 
-// P-AGENT.8.3 (ADR-0130): steer the chat agent to BUILD reusable agents in the Agent Builder, and hard-forbid
+// P-AGENT.8.3 (ADR-0134): steer the chat agent to BUILD reusable agents in the Agent Builder, and hard-forbid
 // collecting secret VALUES (the load-bearing guardrail — the agent declares credential NAMES; the user adds
 // values in the OS-encrypted vault). Frozen (layer 3, cached) so the guidance is byte-stable + always present.
 export const AGENT_BUILDER_POLICY = `<agent-builder>

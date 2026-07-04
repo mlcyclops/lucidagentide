@@ -3,7 +3,7 @@
 
 // harness/scripts/demo_p_agent_6.ts
 //
-// P-AGENT.6 (ADR-0129): enterprise EXPORT. The public core packages a compiled agent into a portable,
+// P-AGENT.6 (ADR-0133): enterprise EXPORT. The public core packages a compiled agent into a portable,
 // tamper-evident bundle for each deploy target (electron / web / cloud); `verifyExport` catches any tampering.
 // The actual deploy adapters live in the private add-on.
 

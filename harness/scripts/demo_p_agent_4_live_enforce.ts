@@ -3,7 +3,7 @@
 
 // harness/scripts/demo_p_agent_4_live_enforce.ts
 //
-// P-AGENT.4-live (ADR-0129): prove the generated allow-list extension ENFORCES at runtime against a REAL
+// P-AGENT.4-live (ADR-0133): prove the generated allow-list extension ENFORCES at runtime against a REAL
 // Claude model (Haiku), A/B:
 //   • CONTROL run (no allow-list extension): the agent uses a tool to read a secret file and echoes the token.
 //   • ENFORCED run (allow-list = [], so every tool is denied): the same request is BLOCKED, so the token never

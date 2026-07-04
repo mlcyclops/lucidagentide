@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// harness/agent/compiler.ts — P-AGENT.3 (ADR-0129): the Agent Builder COMPILER. Pure function
+// harness/agent/compiler.ts — P-AGENT.3 (ADR-0133): the Agent Builder COMPILER. Pure function
 // `buildAgent(spec) -> AgentBundle`: lowers a validated Agent Spec into a self-contained, portable bundle
 // that P-AGENT.4 runs inside LUCID and P-AGENT.6 exports for the enterprise add-on.
 //

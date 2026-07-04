@@ -30,7 +30,7 @@ export const PROFILE_CAPS: Record<ExecutionProfile, ProfileCaps> = {
   "remote-runner": { canWrite: true, canExec: true, canNetwork: true, isolation: "worktree" },
   "read-only-audit": { canWrite: false, canExec: false, canNetwork: false, isolation: "worktree" },
   quarantine: { canWrite: false, canExec: false, canNetwork: false, isolation: "worktree" },
-  // ADR-0129 (P-AGENT.1): a Builder-authored agent runs capable but ISOLATED (worktree) and always under the
+  // ADR-0133 (P-AGENT.1): a Builder-authored agent runs capable but ISOLATED (worktree) and always under the
   // fail-closed gate + its tool allow-list + egress whitelist. Its non-destructive dry-run uses read-only-audit.
   "built-agent": { canWrite: true, canExec: true, canNetwork: true, isolation: "worktree" },
 };

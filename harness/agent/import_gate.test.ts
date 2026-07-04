@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// harness/agent/import_gate.test.ts — P-AGENT.5 (ADR-0129): the untrusted-spec quarantine gate (pure logic).
+// harness/agent/import_gate.test.ts — P-AGENT.5 (ADR-0133): the untrusted-spec quarantine gate (pure logic).
 // The scanner-integrated end-to-end path is proven in demo_p_agent_5.ts (it starts the real sidecar).
 
 import { test, expect, describe } from "bun:test";

@@ -3,7 +3,7 @@
 
 // harness/scripts/demo_p_agent_1.ts
 //
-// P-AGENT.1 (ADR-0129): the Agent Spec is the single source of truth for a Builder-authored agent. This demo
+// P-AGENT.1 (ADR-0133): the Agent Spec is the single source of truth for a Builder-authored agent. This demo
 // proves the two fail-closed properties the Agent Builder is built on:
 //   1. a valid v1 DAG spec round-trips through DuckDB (migration 0010) save → load unchanged;
 //   2. a malformed spec (here: a cycle — v1 is a DAG) is REFUSED by the store and never persisted.

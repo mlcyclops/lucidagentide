@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// harness/agent/handoff.ts — P-AGENT.8.2 (ADR-0130): the chat -> Agent-Builder handoff. Pure + fail-closed,
+// harness/agent/handoff.ts — P-AGENT.8.2 (ADR-0134): the chat -> Agent-Builder handoff. Pure + fail-closed,
 // shared by the `agent_builder_open` omp tool (agent feedback) and acp_backend (the authoritative gate before
 // the canvas opens). A drafted spec is only accepted if it PARSES, VALIDATES (v1 DAG), and is SECRET-FREE
 // (secret_guard) — so the handoff can never open the builder pre-populated with an invalid or credential-

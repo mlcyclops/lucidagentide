@@ -6,7 +6,44 @@
 
 import { describe, expect, test } from "bun:test";
 import type { PersonalGraphData } from "./bridge.ts";
-import { addEdgeOptimistic, applyForget, chainPairs, fitTransform, frameWork, matchNodes, nodeAtPoint, removeEdgeOptimistic, resolveRelationLabel, togglePick } from "./kg_ops.ts";
+import { KE_REST, addEdgeOptimistic, applyForget, chainPairs, fitTransform, frameWork, matchNodes, nodeAtPoint, removeEdgeOptimistic, resolveRelationLabel, settleDone, settleStart, togglePick } from "./kg_ops.ts";
+
+describe("ADR-0130 settleStart (P-PERF.3 layout continuity)", () => {
+  test("fully seeded mount = static paint: full budget consumed up front + a one-time fit", () => {
+    expect(settleStart(40, 40, 480)).toEqual({ frames: 480, needsFit: true });
+  });
+  test("mostly seeded (≥80%) = short nestle for the newcomers, no static fit", () => {
+    expect(settleStart(36, 40, 480)).toEqual({ frames: 360, needsFit: false });
+    expect(settleStart(32, 40, 480)).toEqual({ frames: 360, needsFit: false }); // exactly 80%
+  });
+  test("cold or barely-seeded mount = the full settle", () => {
+    expect(settleStart(0, 40, 480)).toEqual({ frames: 0, needsFit: false });
+    expect(settleStart(10, 40, 480)).toEqual({ frames: 0, needsFit: false });
+  });
+  test("a tiny tier budget never goes negative on the nestle path", () => {
+    expect(settleStart(9, 10, 100).frames).toBe(0);
+  });
+  test("empty graph = nothing to do (no static fit on zero nodes)", () => {
+    expect(settleStart(0, 0, 480)).toEqual({ frames: 0, needsFit: false });
+  });
+});
+
+describe("ADR-0130 settleDone (P-PERF.3 energy-based early exit)", () => {
+  test("motion below the rest threshold after the grace period stops the sim", () => {
+    expect(settleDone(40 * KE_REST * 0.5, 40, 100)).toBe(true);
+  });
+  test("still-moving layouts keep simulating", () => {
+    expect(settleDone(40 * KE_REST * 10, 40, 100)).toBe(false);
+  });
+  test("never exits during the grace period (young layouts start near-still)", () => {
+    expect(settleDone(0, 40, 10)).toBe(false);
+    expect(settleDone(0, 40, 30)).toBe(false); // boundary: grace is exclusive
+    expect(settleDone(0, 40, 31)).toBe(true);
+  });
+  test("an empty graph never reports done (nothing to settle)", () => {
+    expect(settleDone(0, 0, 100)).toBe(false);
+  });
+});
 
 describe("#131 matchNodes (P-KG-SEARCH.1)", () => {
   const nodes = [

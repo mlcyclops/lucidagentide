@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/renderer/agent_builder.ts — P-AGENT.2 (ADR-0129): the Agent Builder workflow canvas.
+// desktop/renderer/agent_builder.ts — P-AGENT.2 (ADR-0133): the Agent Builder workflow canvas.
 //
 // Pure builders + spec↔graph adapters (NO DOM), so the panel markup, the node editor, and the
 // serialization are unit-testable without a browser (the about.ts convention). The INTERACTIVE canvas reuses

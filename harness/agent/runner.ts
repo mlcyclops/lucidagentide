@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// harness/agent/runner.ts — P-AGENT.4a (ADR-0129): materialize a compiled AgentBundle onto disk and produce
+// harness/agent/runner.ts — P-AGENT.4a (ADR-0133): materialize a compiled AgentBundle onto disk and produce
 // the omp launch inputs to run it INSIDE LUCID. This is the seam P-AGENT.4b uses to actually spawn omp; it is
 // kept PURE-of-omp (just fs + arg assembly) so it's unit-testable without a live model.
 //

@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// harness/agent/runner.test.ts — P-AGENT.4a (ADR-0129): materialize a bundle + produce omp launch inputs.
+// harness/agent/runner.test.ts — P-AGENT.4a (ADR-0133): materialize a bundle + produce omp launch inputs.
 
 import { test, expect, describe } from "bun:test";
 import { mkdtempSync, rmSync, readFileSync, existsSync } from "node:fs";

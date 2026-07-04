@@ -190,7 +190,7 @@ export type ChatEvent =
   | { type: "block"; tool: string; reason: string; severity: string; findings: string; id?: string; quarantined?: boolean }
   | { type: "permission"; id: string; tool: string; detail: string; options: { optionId: string; name: string; kind?: string }[]; url?: string; egress?: boolean; localFile?: boolean; exec?: boolean; program?: string; reason?: string; danger?: boolean }
   | { type: "preview-available"; path: string } // P-PREVIEW.2 (ADR-0096): the agent wrote a previewable file
-  | { type: "agent-builder-open"; spec: AgentSpec } // P-AGENT.8.2 (ADR-0130): open the Agent Builder pre-populated
+  | { type: "agent-builder-open"; spec: AgentSpec } // P-AGENT.8.2 (ADR-0134): open the Agent Builder pre-populated
   | { type: "usage"; used: number; size: number; cost: number }
   // P-GOAL.1/3 (ADR-0046): /goal loop events (kept in parity with desktop/acp_backend.ts).
   | { type: "goal-memory"; path: string }
@@ -372,7 +372,8 @@ export interface LucidBridge {
   // P-IDE.3: record a skill activation as telemetry (metadata only).
   skillActivated(command: string, name: string, source: "bundled" | "project" | "task"): Promise<unknown>;
   sessions(): Promise<SessionList | null>;
-  sessionMessages(id: string): Promise<{ role: string; text: string }[] | null>;
+  // P-PERF.4: tail-first transcript page - `limit` returns only the last N messages (+ the true total).
+  sessionMessages(id: string, limit?: number): Promise<{ messages: { role: string; text: string }[]; total: number } | null>;
   resumeSession(id: string): Promise<void>;
   deleteSession(id: string): Promise<{ ok: boolean; error?: string }>;
   clearIngestSessions(): Promise<{ ok: boolean; cleared: number } | null>; // P-KG-INGEST.2: bulk-delete ingest throwaways
@@ -685,7 +686,13 @@ export const bridge: LucidBridge = {
       return data ?? { sessions: [], ingest: [] };
     } catch { return null; }
   },
-  sessionMessages: (id) => getData(`/api/session?id=${encodeURIComponent(id)}`),
+  sessionMessages: async (id, limit = 0) => {
+    const data: { messages: { role: string; text: string }[]; total: number } | { role: string; text: string }[] | null =
+      await getData(`/api/session?id=${encodeURIComponent(id)}&limit=${limit}`);
+    if (!data) return null;
+    // Tolerate an older server that returned the bare array (pre-P-PERF.4): wrap it as a full page.
+    return Array.isArray(data) ? { messages: data, total: data.length } : data;
+  },
   resumeSession: async (id) => { await post("/api/session/load", { id }); },
   deleteSession: async (id) => (await post("/api/session/delete", { id })) ?? { ok: false, error: "no response" },
   clearIngestSessions: () => post("/api/sessions/ingest/clear", {}),

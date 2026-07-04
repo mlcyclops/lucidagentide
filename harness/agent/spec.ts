@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// harness/agent/spec.ts — P-AGENT.1 (ADR-0129): the Agent Spec, the single source of truth for a
+// harness/agent/spec.ts — P-AGENT.1 (ADR-0133): the Agent Spec, the single source of truth for a
 // Builder-authored agent. The canvas edits it, the compiler reads it, the runtime runs it; nothing else is
 // authoritative. This module is PURE (types + a fail-closed validator + tiny helpers, no I/O) so it is cheap
 // to import anywhere and trivial to over-test.
@@ -15,7 +15,7 @@ import { AGENT_MODES, isAgentMode, type AgentMode } from "../contracts.ts";
 
 export const SPEC_VERSION = 1 as const;
 
-// Self-edit policy (ADR-0129 kickoff decision). "individual" = the user's own agents may self-edit their spec
+// Self-edit policy (ADR-0133 kickoff decision). "individual" = the user's own agents may self-edit their spec
 // at runtime (sandboxed to audit-mode dry-runs in later increments); "off" = never. Enterprise managed policy
 // clamps this to "off" via `clampSelfEdit` (tighten-only, mirrors clampToManaged / ADR-0068).
 export const SELF_EDIT_POLICIES = ["off", "individual"] as const;
@@ -26,7 +26,7 @@ export type SelfEditPolicy = (typeof SELF_EDIT_POLICIES)[number];
 export const NODE_KINDS = ["prompt", "tool", "subagent", "approval"] as const;
 export type NodeKind = (typeof NODE_KINDS)[number];
 
-// Secret DECLARATIONS (P-AGENT.8 / ADR-0130). An agent declares WHICH credentials it needs — it NEVER holds
+// Secret DECLARATIONS (P-AGENT.8 / ADR-0134). An agent declares WHICH credentials it needs — it NEVER holds
 // the value. `name` maps to an OS-encrypted vault entry (the user fills it in via the vault UI; the runtime
 // injects it). Kinds mirror the credential vault's AuthKind (desktop/cred_vault.ts) so a SecretRef.name lines
 // up 1:1 with a stored credential. There is deliberately NO `value` field — a secret value in a spec is a

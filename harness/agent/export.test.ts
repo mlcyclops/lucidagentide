@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// harness/agent/export.test.ts — P-AGENT.6 (ADR-0129): enterprise export (portable, tamper-evident bundle).
+// harness/agent/export.test.ts — P-AGENT.6 (ADR-0133): enterprise export (portable, tamper-evident bundle).
 
 import { test, expect, describe } from "bun:test";
 import { mkdtempSync, rmSync, existsSync, readFileSync } from "node:fs";

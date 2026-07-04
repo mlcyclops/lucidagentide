@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// harness/agent/store.ts — P-AGENT.1 (ADR-0129): persist Agent Specs to DuckDB (migration 0010), fail-closed.
+// harness/agent/store.ts — P-AGENT.1 (ADR-0133): persist Agent Specs to DuckDB (migration 0010), fail-closed.
 //
 // Two fail-closed gates around the frozen `agent_specs` table:
 //   • saveSpec REFUSES to persist a spec that doesn't pass validateSpec (a malformed/adversarial spec never

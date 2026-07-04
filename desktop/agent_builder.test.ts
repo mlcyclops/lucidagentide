@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/agent_builder.test.ts — P-AGENT.2 (ADR-0129): the Agent Builder canvas pure builders + adapters.
+// desktop/agent_builder.test.ts — P-AGENT.2 (ADR-0133): the Agent Builder canvas pure builders + adapters.
 
 import { test, expect, describe } from "bun:test";
 import {

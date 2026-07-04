@@ -3,7 +3,7 @@
 
 // harness/scripts/demo_p_agent_3.ts
 //
-// P-AGENT.3 (ADR-0129): the Agent Builder COMPILER. Proves buildAgent(spec) -> AgentBundle:
+// P-AGENT.3 (ADR-0133): the Agent Builder COMPILER. Proves buildAgent(spec) -> AgentBundle:
 //   1. a valid spec compiles into a portable bundle (system prompt + generated omp extension + manifest);
 //   2. the generated extension actually ENFORCES the allow-list when imported (blocks a non-listed tool);
 //   3. an invalid spec is REFUSED fail-closed (no bundle emitted).

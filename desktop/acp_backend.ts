@@ -135,7 +135,7 @@ export type ChatEvent =
   | { type: "block"; tool: string; reason: string; severity: string; findings: string; id?: string; quarantined?: boolean }
   | { type: "permission"; id: string; tool: string; detail: string; options: { optionId: string; name: string; kind?: string }[]; url?: string; egress?: boolean; localFile?: boolean; exec?: boolean; program?: string; reason?: string; danger?: boolean }
   | { type: "preview-available"; path: string } // P-PREVIEW.2 (ADR-0096): the agent wrote a previewable file
-  | { type: "agent-builder-open"; spec: AgentSpec } // P-AGENT.8.2 (ADR-0130): open the Agent Builder pre-populated
+  | { type: "agent-builder-open"; spec: AgentSpec } // P-AGENT.8.2 (ADR-0134): open the Agent Builder pre-populated
   | { type: "usage"; used: number; size: number; cost: number }
   // P-GOAL.1 (ADR-0046): /goal loop events — an iteration begins, the separate checker's verdict,
   // the loop met its condition, or it stopped (cap / no-progress).
@@ -356,7 +356,7 @@ class Backend {
                 const pvRaw = previewOpenPath(String(u.title ?? ""), ri) ?? previewablePath(String(u.kind ?? u.title ?? ""), ri);
                 const pv = pvRaw ? absPath(pvRaw) : pvRaw; // resolve a relative write path to absolute so the panel can render it
                 if (pv) this.emit({ type: "preview-available", path: pv });
-                // P-AGENT.8.2 (ADR-0130): the agent's `agent_builder_open` tool call opens the Agent Builder
+                // P-AGENT.8.2 (ADR-0134): the agent's `agent_builder_open` tool call opens the Agent Builder
                 // pre-populated. Re-parsed + validated + secret-scanned here (authoritative) before it opens.
                 // NOTE: omp renders a custom tool's call TITLE as a human summary (e.g. "Opening agent builder
                 // for X"), NOT the tool name — so we key on the unique `specJson` arg (in rawInput OR input),

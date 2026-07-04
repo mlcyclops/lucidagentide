@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// harness/agent/compiler.test.ts — P-AGENT.3 (ADR-0129): the Agent Builder compiler (spec -> AgentBundle).
+// harness/agent/compiler.test.ts — P-AGENT.3 (ADR-0133): the Agent Builder compiler (spec -> AgentBundle).
 
 import { test, expect, describe } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";

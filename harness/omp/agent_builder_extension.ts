@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// harness/omp/agent_builder_extension.ts — P-AGENT.8.2 (ADR-0130): register an agent-callable
+// harness/omp/agent_builder_extension.ts — P-AGENT.8.2 (ADR-0134): register an agent-callable
 // `agent_builder_open` tool so the CHAT agent can hand a drafted workflow off to LUCID's Agent Builder — the
 // user describes a goal in chat, the agent confirms the plan, then calls this to OPEN the canvas pre-populated.
 //

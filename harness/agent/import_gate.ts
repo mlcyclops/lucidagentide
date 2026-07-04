@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// harness/agent/import_gate.ts — P-AGENT.5 (ADR-0129): the untrusted-spec quarantine gate. The keystone-#2
+// harness/agent/import_gate.ts — P-AGENT.5 (ADR-0133): the untrusted-spec quarantine gate. The keystone-#2
 // analogue for agents: a spec that arrives from an EXTERNAL source, or whose text carries an injection /
 // unicode attack, can NEVER auto-run. Only a locally-authored, clean spec is "trusted" and auto-runnable;
 // everything else is held for explicit human review.

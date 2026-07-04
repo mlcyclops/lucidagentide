@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/agent_run.ts — P-AGENT.4-live (ADR-0129): run a BUILT agent one-shot INSIDE LUCID.
+// desktop/agent_run.ts — P-AGENT.4-live (ADR-0133): run a BUILT agent one-shot INSIDE LUCID.
 //
 // Reuses the mechanism proven against a live model (demo_p_agent_4_live*): compile -> materialize -> spawn
 // `omp -p` with the mandatory security gate loaded FIRST, then the agent's generated allow-list extension,

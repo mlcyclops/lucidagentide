@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// harness/agent/store.test.ts — P-AGENT.1 (ADR-0129): DuckDB persistence for Agent Specs, fail-closed.
+// harness/agent/store.test.ts — P-AGENT.1 (ADR-0133): DuckDB persistence for Agent Specs, fail-closed.
 
 import { test, expect, describe } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";

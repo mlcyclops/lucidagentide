@@ -539,7 +539,7 @@ const server = Bun.serve({
         if (req.method === "POST") { const b = await readBody<{ enabled?: unknown }>(req); setCodeGraphAgent(!!b.enabled); backend.restart(); return json({ ok: true, data: { enabled: !!b.enabled } }); }
         return json({ ok: true, data: { enabled: !!loadSettings().codeGraphAgent } });
       }
-      // P-AGENT.2b (ADR-0129): Agent Builder spec persistence as workspace files (.omp/agents/). GET = list
+      // P-AGENT.2b (ADR-0133): Agent Builder spec persistence as workspace files (.omp/agents/). GET = list
       // all specs (or one via ?id=); POST body {spec} = validate-then-save FAIL-CLOSED (an invalid spec is
       // refused, never written). The engine writes workspace files here because it holds agent_obs.duckdb
       // READ-ONLY (omp's gate child is the DB writer) — so authored specs live with the workspace.
@@ -770,7 +770,10 @@ const server = Bun.serve({
       // real omp ACP backend (genuine model replies + live session config)
       if (p === "/api/sessions") return json({ ok: true, data: listSessions() });
       if (p === "/api/sessions/ingest/clear" && req.method === "POST") return json({ ok: true, data: clearIngestSessions() }); // P-KG-INGEST.2
-      if (p === "/api/session" && url.searchParams.get("id")) return json({ ok: true, data: sessionMessages(url.searchParams.get("id")!) });
+      if (p === "/api/session" && url.searchParams.get("id")) { // P-PERF.4: tail-first page (limit=0 = all)
+        const lim = Math.max(0, Math.trunc(Number(url.searchParams.get("limit")) || 0));
+        return json({ ok: true, data: sessionMessages(url.searchParams.get("id")!, lim) });
+      }
       if (p === "/api/session/load" && req.method === "POST") { const { id } = await readBody<{ id?: unknown }>(req); await backend.loadSession(String(id)); return json({ ok: true }); }
       if (p === "/api/session/delete" && req.method === "POST") {
         const { id } = await readBody<{ id?: unknown }>(req);

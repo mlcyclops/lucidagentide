@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// harness/agent/file_store.test.ts — P-AGENT.2b (ADR-0129): workspace-local Agent Spec file persistence.
+// harness/agent/file_store.test.ts — P-AGENT.2b (ADR-0133): workspace-local Agent Spec file persistence.
 
 import { test, expect, describe } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync } from "node:fs";

@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// harness/agent/file_store.ts — P-AGENT.2b (ADR-0129): workspace-local Agent Spec persistence as JSON files
+// harness/agent/file_store.ts — P-AGENT.2b (ADR-0133): workspace-local Agent Spec persistence as JSON files
 // under `<root>/.omp/agents/<spec_id>.json`.
 //
 // The DESKTOP engine uses this (not the DuckDB store in store.ts): it opens the shared agent_obs.duckdb

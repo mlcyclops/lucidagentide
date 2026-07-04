@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/agent_run.test.ts — P-AGENT.4-live (ADR-0129): the fail-closed guards BEFORE a built agent is
+// desktop/agent_run.test.ts — P-AGENT.4-live (ADR-0133): the fail-closed guards BEFORE a built agent is
 // spawned. The live-spawn path is covered by demo_p_agent_4_live* (needs a model); these hermetic tests prove
 // the refusal paths never reach omp.
 

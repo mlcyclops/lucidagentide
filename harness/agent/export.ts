@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// harness/agent/export.ts — P-AGENT.6 (ADR-0129): enterprise EXPORT. The public core emits a portable,
+// harness/agent/export.ts — P-AGENT.6 (ADR-0133): enterprise EXPORT. The public core emits a portable,
 // tamper-evident AgentBundle plus a per-target manifest (electron / web / cloud); the DEPLOY adapters live in
 // the private add-on (lucidagentIDEaddon), matching the public-vs-add-on split (ADR-0068/0069/A012).
 //

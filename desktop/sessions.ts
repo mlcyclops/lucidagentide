@@ -83,10 +83,49 @@ function firstUserText(message: any): string {
   return "";
 }
 
+// P-PERF.4 (ADR-0131): incremental session index. listSessions used to re-read + re-parse EVERY .jsonl
+// on EVERY call - and the sidebar polls it - so a long history meant megabytes of synchronous I/O per
+// poll (the single biggest UI stall found in the battery investigation). Each file's parsed metadata is
+// cached keyed by mtime+size (append-only .jsonl always changes both); a poll now re-parses only what
+// changed and stat()s the rest. Entries for deleted files are pruned each scan.
+interface IndexEntry { mtimeMs: number; size: number; scwd: string; meta: Omit<SessionInfo, "updatedAt"> | null }
+const sessionIndex = new Map<string, IndexEntry>();
+let indexParses = 0; // test seam: how many files were actually (re)parsed
+
+/** Parse one session .jsonl into list metadata. `meta: null` = an empty/probe session (cached too, so
+ *  it isn't re-parsed every poll just to be skipped again). */
+function parseSessionFile(p: string, f: string): { scwd: string; meta: Omit<SessionInfo, "updatedAt"> | null } {
+  indexParses++;
+  let id = "", scwd = "", model = "", title = "", turns = 0;
+  let kind: "chat" | "kg-ingest" = "chat";
+  for (const ln of readFileSync(p, "utf8").split("\n")) {
+    if (!ln) continue;
+    let o: any;
+    try { o = JSON.parse(ln); } catch { continue; }
+    if (o.type === "session") { id = o.id ?? f; scwd = o.cwd ?? ""; }
+    else if (o.type === "model_change" && o.model) model = o.model;
+    else if (o.type === "message" && o.message) {
+      if (o.message.role === "user" && !title) {
+        const raw = firstUserText(o.message);
+        // An extractor throwaway -> group it; its title is the snippet it learned from, not the prompt.
+        if (isIngestPrompt(raw)) { kind = "kg-ingest"; const t = ingestPreview(raw); if (t.trim()) title = t.trim().slice(0, 64); }
+        else { const t = stripInjectedPreamble(raw); if (t.trim()) title = t.trim().slice(0, 64); }
+      }
+      if (o.message.role === "assistant" && o.message.usage) { turns++; if (o.message.model) model = o.message.model; }
+    }
+  }
+  if (!title && turns === 0) return { scwd, meta: null }; // empty/probe session - remembered, skipped
+  return { scwd, meta: { id: id || f, title: title || "Untitled session", model: model.replace(/^anthropic\//, "") || "-", turns, kind } };
+}
+
+export function __sessionIndexStats(): { parses: number; entries: number } { return { parses: indexParses, entries: sessionIndex.size }; }
+export function __resetSessionIndex(): void { sessionIndex.clear(); indexParses = 0; }
+
 export function listSessions(cwd: string = currentWorkspace(), root: string = join(homedir(), ".omp", "agent", "sessions")): SessionList {
   if (!existsSync(root)) return { sessions: [], ingest: [] };
   const want = norm(cwd);
   const all: SessionInfo[] = [];
+  const seen = new Set<string>();
   for (const d of readdirSync(root)) {
     const dir = join(root, d);
     try {
@@ -95,31 +134,21 @@ export function listSessions(cwd: string = currentWorkspace(), root: string = jo
         if (!f.endsWith(".jsonl")) continue;
         const p = join(dir, f);
         try {
-          let id = "", scwd = "", model = "", title = "", turns = 0;
-          let kind: "chat" | "kg-ingest" = "chat";
-          for (const ln of readFileSync(p, "utf8").split("\n")) {
-            if (!ln) continue;
-            let o: any;
-            try { o = JSON.parse(ln); } catch { continue; }
-            if (o.type === "session") { id = o.id ?? f; scwd = o.cwd ?? ""; }
-            else if (o.type === "model_change" && o.model) model = o.model;
-            else if (o.type === "message" && o.message) {
-              if (o.message.role === "user" && !title) {
-                const raw = firstUserText(o.message);
-                // An extractor throwaway → group it; its title is the snippet it learned from, not the prompt.
-                if (isIngestPrompt(raw)) { kind = "kg-ingest"; const t = ingestPreview(raw); if (t.trim()) title = t.trim().slice(0, 64); }
-                else { const t = stripInjectedPreamble(raw); if (t.trim()) title = t.trim().slice(0, 64); }
-              }
-              if (o.message.role === "assistant" && o.message.usage) { turns++; if (o.message.model) model = o.message.model; }
-            }
+          const st = statSync(p);
+          seen.add(p);
+          let e = sessionIndex.get(p);
+          if (!e || e.mtimeMs !== st.mtimeMs || e.size !== st.size) {
+            e = { mtimeMs: st.mtimeMs, size: st.size, ...parseSessionFile(p, f) };
+            sessionIndex.set(p, e);
           }
-          if (norm(scwd) !== want) continue;
-          if (!title && turns === 0) continue; // skip empty/probe sessions with no prompt
-          all.push({ id: id || f, title: title || "Untitled session", model: model.replace(/^anthropic\//, "") || "-", updatedAt: statSync(p).mtimeMs, turns, kind });
+          if (!e.meta || norm(e.scwd) !== want) continue;
+          all.push({ ...e.meta, updatedAt: st.mtimeMs });
         } catch { /* skip unreadable file */ }
       }
     } catch { /* skip dir */ }
   }
+  // Prune index entries for files deleted under THIS root (other roots - e.g. tests - are untouched).
+  for (const k of sessionIndex.keys()) if (k.startsWith(root) && !seen.has(k)) sessionIndex.delete(k);
   all.sort((a, b) => b.updatedAt - a.updatedAt);
   // Split: real chats (capped) vs the collapsed ingest group — so a big import can't crowd out chats.
   return {
@@ -166,10 +195,14 @@ function msgText(message: any): string {
   return "";
 }
 
-/** Read a session's user/assistant transcript (for resuming into the chat). */
-export function sessionMessages(id: string): { role: string; text: string }[] {
-  const root = join(homedir(), ".omp", "agent", "sessions");
-  if (!existsSync(root)) return [];
+// P-PERF.4 (ADR-0131): tail-first transcript page. A resume used to ship the WHOLE transcript over
+// IPC and into the DOM - unbounded for a long chat. `limit` returns only the LAST N messages plus the
+// true total so the UI can say "showing the last N of M". limit 0 = everything (export paths etc.).
+export interface TranscriptPage { messages: { role: string; text: string }[]; total: number }
+
+/** Read a session's user/assistant transcript (for resuming into the chat), tail-first when limited. */
+export function sessionMessages(id: string, limit = 0, root: string = join(homedir(), ".omp", "agent", "sessions")): TranscriptPage {
+  if (!existsSync(root)) return { messages: [], total: 0 };
   for (const d of readdirSync(root)) {
     const dir = join(root, d);
     try {
@@ -191,11 +224,11 @@ export function sessionMessages(id: string): { role: string; text: string }[] {
             if (t.trim()) out.push({ role: o.message.role, text: t });
           }
         }
-        return out;
+        return { messages: limit > 0 && out.length > limit ? out.slice(-limit) : out, total: out.length };
       }
     } catch { /* skip */ }
   }
-  return [];
+  return { messages: [], total: 0 };
 }
 
 /** Delete a session's omp `.jsonl` transcript from disk. Restricted to the CURRENT
