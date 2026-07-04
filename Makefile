@@ -376,6 +376,31 @@ demo-P-PERF.5: ## P-PERF.5 (ADR-0132): switch hygiene - optimistic model switch,
 demo-P-NETWL.5: ## P-NETWL.5 (ADR-0108): egress posture — allow-all + web-search toggles; whitelist enforces only when allow-all is off; still prompts for public IPs / foreign TLDs; managed clamp
 	$(BUN) run desktop/scripts/demo_p_netwl_5.ts
 
+.PHONY: demo-P-AGENT.1
+demo-P-AGENT.1: ## P-AGENT.1 (ADR-0133): Agent Spec — a valid v1 DAG round-trips through DuckDB (migration 0010); a cyclic/invalid spec is refused fail-closed and never persisted
+	$(BUN) run harness/scripts/demo_p_agent_1.ts
+
+.PHONY: demo-P-AGENT.3
+demo-P-AGENT.3: ## P-AGENT.3 (ADR-0133): the compiler buildAgent(spec) -> AgentBundle (system prompt + generated omp allow-list extension + manifest); the emitted extension enforces the allow-list; invalid spec refused
+	$(BUN) run harness/scripts/demo_p_agent_3.ts
+
+.PHONY: demo-P-AGENT.5
+demo-P-AGENT.5: ## P-AGENT.5 (ADR-0133): untrusted-spec quarantine gate vs the real scanner — imported/poisoned specs are quarantined + blocked from auto-running; only a clean local spec is trusted + runnable
+	$(BUN) run harness/scripts/demo_p_agent_5.ts
+
+.PHONY: demo-P-AGENT.6
+demo-P-AGENT.6: ## P-AGENT.6 (ADR-0133): enterprise export — package a compiled agent portably for electron/web/cloud with a tamper-evident content digest; verifyExport catches modification
+	$(BUN) run harness/scripts/demo_p_agent_6.ts
+
+.PHONY: demo-P-AGENT.4-live
+demo-P-AGENT.4-live: ## P-AGENT.4-live (ADR-0133): run a BUILT agent on a REAL Claude model (Haiku). NEEDS a model + network — NOT part of `make test`. Proves the agent runs + follows its compiled spec, AND its allow-list extension hard-blocks disallowed tools.
+	$(BUN) run harness/scripts/demo_p_agent_4_live.ts
+	$(BUN) run harness/scripts/demo_p_agent_4_live_enforce.ts
+
+.PHONY: demo-P-AGENT.8.1
+demo-P-AGENT.8.1: ## P-AGENT.8.1 (ADR-0134): secret guardrail — agents DECLARE credential names (SecretRef); a secret VALUE embedded in a spec is refused at compile + save (secrets belong in the vault)
+	$(BUN) run harness/scripts/demo_p_agent_8_1.ts
+
 .PHONY: dashboards
 dashboards: ## Materialize dashboard CSVs from a DuckDB into observable/docs/data (DB=path)
 	$(BUN) run harness/scripts/materialize_dashboards.ts $(DB) observable/docs/data

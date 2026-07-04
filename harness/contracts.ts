@@ -17,6 +17,8 @@ export const TRUST_LABELS = ["trusted", "untrusted", "suspicious", "quarantined"
 export type TrustLabel = (typeof TRUST_LABELS)[number];
 
 // ── Agent modes (PRD "Required modes"). ─────────────────────────────────────
+// "built-agent" (ADR-0133, P-AGENT.1) — an agent authored in the Agent Builder and run inside LUCID; given
+// its own mode so its turns are distinctly labeled in provenance/audit, separate from the interactive agent.
 export const AGENT_MODES = [
   "plan",
   "build",
@@ -24,16 +26,20 @@ export const AGENT_MODES = [
   "subagent",
   "replay",
   "security-review",
+  "built-agent",
 ] as const;
 export type AgentMode = (typeof AGENT_MODES)[number];
 
 // ── Execution / sandbox profiles (PRD "Required execution profiles"). ───────
+// "built-agent" (ADR-0133, P-AGENT.1) — the profile a Builder-authored agent runs under; its non-destructive
+// audit-mode dry-run reuses the existing "read-only-audit" profile.
 export const EXECUTION_PROFILES = [
   "trusted-local",
   "container-local",
   "remote-runner",
   "read-only-audit",
   "quarantine",
+  "built-agent",
 ] as const;
 export type ExecutionProfile = (typeof EXECUTION_PROFILES)[number];
 
@@ -94,6 +100,17 @@ export const EVENT_NAMES = [
   // P-IDE.3 (ADR-0029) — a skill was activated from the picker (bundled / project / task proforma).
   // Metadata only: command, name, source — never user content.
   "skill_activated",
+  // P-AGENT (ADR-0133) — the Agent Builder lifecycle. Metadata only (spec_id/name/counts/verdict),
+  // never spec bodies or user content. `agent_spec_rejected` fires on fail-closed validation;
+  // `agent_run_gated` when the security gate blocks a built agent's tool call; `agent_self_edit_blocked`
+  // when the self-edit policy (managed ceiling or "off") denies a runtime spec mutation.
+  "agent_spec_saved",
+  "agent_spec_rejected",
+  "agent_built",
+  "agent_run_started",
+  "agent_run_gated",
+  "agent_run_finished",
+  "agent_self_edit_blocked",
 ] as const;
 export type EventName = (typeof EVENT_NAMES)[number];
 

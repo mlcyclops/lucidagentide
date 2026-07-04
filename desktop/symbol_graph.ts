@@ -13,10 +13,17 @@
 // regex heuristic - but it is NOT a full type-checked call graph. It doesn't resolve method calls on values
 // whose type it would need to infer (`obj.foo()`), overloads, or dynamic dispatch. It's a precise
 // symbol-DEPENDENCY graph, labeled as such. Fail-soft per file: a file that won't parse is skipped.
+//
+// The TypeScript compiler is a HEAVY, LAZY dependency: we import it for types only (erased at load) and
+// resolve the runtime module on first build via `loadTs()`. If the compiler can't be loaded (missing /
+// broken package), the symbol-graph feature degrades to an empty graph - it must NEVER crash the module at
+// import time, because dev.ts imports this file on the engine's boot path (a top-level throw here bricks the
+// whole engine and the app never binds its port). This mirrors the existing fail-soft-per-file behavior.
 
-import ts from "typescript";
+import type * as TS from "typescript";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { createRequire } from "node:module";
 import { listSourceFiles, resolveImport } from "./code_graph.ts";
 
 export interface SymNode { id: string; name: string; kind: string; trust: "trusted"; count: number }
@@ -24,16 +31,31 @@ export interface SymEdge { from: string; to: string; relation: string }
 export interface SymbolGraph { level: "symbol"; nodes: SymNode[]; edges: SymEdge[]; root: string; fileCount: number; symbolCount: number; edgeCount: number; updatedAt: number }
 
 const symbolPath = (root: string) => join(root, ".omp", "codegraph-symbol.json");
-const scriptKind = (rel: string): ts.ScriptKind =>
+
+/** Lazily resolve the TypeScript compiler at runtime. Returns null (never throws) if the package is missing
+ *  or broken, so a bad `typescript` install degrades ONLY the symbol graph rather than the whole engine. */
+let tsHandle: typeof TS | null | undefined; // undefined = not tried yet; null = tried and unavailable
+export function loadTs(): typeof TS | null {
+  if (tsHandle !== undefined) return tsHandle;
+  try { tsHandle = createRequire(import.meta.url)("typescript") as typeof TS; }
+  catch { tsHandle = null; }
+  return tsHandle;
+}
+
+/** The fail-soft result when the compiler can't be loaded: a valid, empty symbol graph. */
+const emptyGraph = (root: string): SymbolGraph =>
+  ({ level: "symbol", nodes: [], edges: [], root, fileCount: 0, symbolCount: 0, edgeCount: 0, updatedAt: Date.now() });
+
+const scriptKind = (ts: typeof TS, rel: string): TS.ScriptKind =>
   rel.endsWith(".tsx") ? ts.ScriptKind.TSX : rel.endsWith(".jsx") ? ts.ScriptKind.JSX
     : rel.endsWith(".js") || rel.endsWith(".mjs") || rel.endsWith(".cjs") ? ts.ScriptKind.JS : ts.ScriptKind.TS;
 
-interface Decl { name: string; kind: string; node: ts.Node; refs: Set<string> }
+interface Decl { name: string; kind: string; node: TS.Node; refs: Set<string> }
 interface ParsedFile { decls: Decl[]; imports: Map<string, { module: string; imported: string }> } // localName → source
 
 /** Extract this file's top-level declarations + import bindings + each declaration's referenced identifiers. */
-function parseFile(rel: string, content: string): ParsedFile {
-  const sf = ts.createSourceFile(rel, content, ts.ScriptTarget.Latest, /*setParentNodes*/ true, scriptKind(rel));
+function parseFile(ts: typeof TS, rel: string, content: string): ParsedFile {
+  const sf = ts.createSourceFile(rel, content, ts.ScriptTarget.Latest, /*setParentNodes*/ true, scriptKind(ts, rel));
   const imports = new Map<string, { module: string; imported: string }>();
   const decls: Decl[] = [];
 
@@ -48,7 +70,7 @@ function parseFile(rel: string, content: string): ParsedFile {
       if (nb && ts.isNamedImports(nb)) for (const e of nb.elements) imports.set(e.name.text, { module: mod, imported: (e.propertyName ?? e.name).text });
       continue;
     }
-    const add = (name: string, kind: string, node: ts.Node) => decls.push({ name, kind, node, refs: refsOf(node, name) });
+    const add = (name: string, kind: string, node: TS.Node) => decls.push({ name, kind, node, refs: refsOf(ts, node, name) });
     if (ts.isFunctionDeclaration(st) && st.name) add(st.name.text, "function", st);
     else if (ts.isClassDeclaration(st) && st.name) {
       add(st.name.text, "class", st);
@@ -68,9 +90,9 @@ function parseFile(rel: string, content: string): ParsedFile {
 }
 
 /** Every identifier NAME referenced inside a declaration node (excluding its own name + property keys). */
-function refsOf(node: ts.Node, ownName: string): Set<string> {
+function refsOf(ts: typeof TS, node: TS.Node, ownName: string): Set<string> {
   const out = new Set<string>();
-  const visit = (n: ts.Node) => {
+  const visit = (n: TS.Node) => {
     // don't count `a` in `x.a` (property access) as a free identifier - only the base object matters
     if (ts.isPropertyAccessExpression(n)) { visit(n.expression); return; }
     if (ts.isIdentifier(n) && n.text !== ownName && n.text.split(".")[0] !== ownName) out.add(n.text);
@@ -80,8 +102,12 @@ function refsOf(node: ts.Node, ownName: string): Set<string> {
   return out;
 }
 
-/** Build the symbol graph for `root` (pure over the filesystem read; no persistence). */
-export function buildSymbolGraph(root: string): SymbolGraph {
+/** Build the symbol graph for `root` (pure over the filesystem read; no persistence). `loadCompiler` is
+ *  injectable for tests; by default it lazily resolves the real TypeScript compiler. If the compiler can't
+ *  be loaded, we return an empty graph rather than throwing - fail-soft for the whole feature. */
+export function buildSymbolGraph(root: string, loadCompiler: () => typeof TS | null = loadTs): SymbolGraph {
+  const ts = loadCompiler();
+  if (!ts) return emptyGraph(root); // TypeScript compiler unavailable: degrade to an empty graph
   const rels = listSourceFiles(root);
   const files = new Set(rels);
   const parsed = new Map<string, ParsedFile>();
@@ -90,7 +116,7 @@ export function buildSymbolGraph(root: string): SymbolGraph {
     let content = "";
     try { content = readFileSync(join(root, rel), "utf8"); } catch { continue; }
     let pf: ParsedFile;
-    try { pf = parseFile(rel, content); } catch { continue; } // fail-soft on an unparseable file
+    try { pf = parseFile(ts, rel, content); } catch { continue; } // fail-soft on an unparseable file
     parsed.set(rel, pf);
     fileSymbols.set(rel, new Set(pf.decls.map((d) => d.name.split(".")[0]!)));
   }
@@ -135,8 +161,8 @@ export function buildSymbolGraph(root: string): SymbolGraph {
 }
 
 /** Build + persist the symbol graph (the ingest / re-sync action). */
-export function ingestSymbolGraph(root: string): SymbolGraph {
-  const g = buildSymbolGraph(root);
+export function ingestSymbolGraph(root: string, loadCompiler: () => typeof TS | null = loadTs): SymbolGraph {
+  const g = buildSymbolGraph(root, loadCompiler);
   try { mkdirSync(join(root, ".omp"), { recursive: true }); writeFileSync(symbolPath(root), JSON.stringify(g)); } catch { /* best-effort */ }
   return g;
 }

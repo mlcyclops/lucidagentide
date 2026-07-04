@@ -10,6 +10,9 @@
 // native-only is window controls + crisp text zoom, exposed by the Electron
 // preload as `window.lucid`; in a plain browser those fall back to CSS zoom.
 
+import type { AgentSpec } from "../../harness/agent/spec.ts"; // P-AGENT.2b: Agent Builder spec type
+import type { SpecFileSummary } from "../../harness/agent/file_store.ts"; // P-AGENT.2b: spec list summary
+
 export interface BlockRecord { id: string; tool: string; severity: string; findings: string; reason: string; at: string; status: "quarantined" | "approved" | "dismissed"; reviewer?: string }
 export interface SecuritySnapshot {
   findings: any[]; unicode: any[]; approvals: any[]; quarantine: any[];
@@ -187,6 +190,7 @@ export type ChatEvent =
   | { type: "block"; tool: string; reason: string; severity: string; findings: string; id?: string; quarantined?: boolean }
   | { type: "permission"; id: string; tool: string; detail: string; options: { optionId: string; name: string; kind?: string }[]; url?: string; egress?: boolean; localFile?: boolean; exec?: boolean; program?: string; reason?: string; danger?: boolean }
   | { type: "preview-available"; path: string } // P-PREVIEW.2 (ADR-0096): the agent wrote a previewable file
+  | { type: "agent-builder-open"; spec: AgentSpec } // P-AGENT.8.2 (ADR-0134): open the Agent Builder pre-populated
   | { type: "usage"; used: number; size: number; cost: number }
   // P-GOAL.1/3 (ADR-0046): /goal loop events (kept in parity with desktop/acp_backend.ts).
   | { type: "goal-memory"; path: string }
@@ -289,6 +293,13 @@ export interface LucidBridge {
   codeGraphIngest(level: "file" | "symbol"): Promise<CodeGraphView | null>;
   /** P-KG-SYM.1: read / set whether the agent gets the read-only codegraph_query tool (set restarts the backend). */
   codeGraphAgent(): Promise<{ enabled: boolean } | null>;
+  /** P-AGENT.2b: Agent Builder spec persistence (workspace .omp/agents/). Save validates fail-closed server-side. */
+  agentList(): Promise<SpecFileSummary[]>;
+  agentLoad(id: string): Promise<AgentSpec | null>;
+  agentSave(spec: AgentSpec): Promise<{ saved?: boolean; spec_id?: string; errors?: string[] } | null>;
+  agentDelete(id: string): Promise<{ deleted: boolean } | null>;
+  agentExport(spec: AgentSpec, target: string): Promise<{ dir: string; target: string; digest: string; files: number } | null>;
+  agentRun(spec: AgentSpec, prompt: string, model: string): Promise<{ output: string; error: string; blocked: boolean; reason: string } | null>;
   setCodeGraphAgent(enabled: boolean): Promise<{ enabled: boolean } | null>;
   /** P-APPEAR.1: the personalized chat background (image data URL + display mode + opacity). */
   chatBackground(): Promise<{ image: string; mode: "off" | "ambient" | "flashlight"; opacity: number } | null>;
@@ -608,6 +619,12 @@ export const bridge: LucidBridge = {
   codeGraph: (level) => getData(`/api/codegraph?level=${level}`),
   codeGraphIngest: (level) => post("/api/codegraph", { level }),
   codeGraphAgent: () => getData("/api/codegraph/agent"),
+  agentList: async () => (await getData("/api/agent"))?.specs ?? [], // P-AGENT.2b
+  agentLoad: async (id) => (await getData(`/api/agent?id=${encodeURIComponent(id)}`))?.spec ?? null, // P-AGENT.2b
+  agentSave: (spec) => post("/api/agent", { spec }), // P-AGENT.2b (server validates fail-closed)
+  agentDelete: (id) => post("/api/agent/delete", { id }), // P-AGENT.2b
+  agentExport: (spec, target) => post("/api/agent/export", { spec, target }), // P-AGENT.6
+  agentRun: (spec, prompt, model) => post("/api/agent/run", { spec, prompt, model }), // P-AGENT.4-live
   setCodeGraphAgent: (enabled) => post("/api/codegraph/agent", { enabled }),
   chatBackground: () => getData("/api/chat-bg"),
   setChatBackground: (patch) => post("/api/chat-bg", patch),

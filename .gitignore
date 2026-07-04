@@ -78,3 +78,9 @@ netwatch.log
 # P-KG-CODE.1: generated per-workspace code-graph cache (the tracked .omp/commands stays)
 .omp/codegraph.json
 .omp/codegraph-symbol.json
+# P-AGENT.2b: per-workspace authored Agent Builder specs (runtime data, not source)
+.omp/agents/
+# P-AGENT.6: exported agent bundles (generated artifacts)
+.omp/agent-exports/
+# P-AGENT.4-live: materialized agent run dirs (generated artifacts)
+.omp/agent-runs/
