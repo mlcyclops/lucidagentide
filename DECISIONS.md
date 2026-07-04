@@ -9040,3 +9040,231 @@ agent toggle persists + restarts. `.omp/codegraph-symbol.json` gitignored. No co
 
 ADR-0127 (the file-level code graph this extends), ADR-0096 (the omp `-e` tool-extension pattern reused),
 `typescript` compiler API.
+
+## ADR-0129 - P-PERF.2: power/spec-aware performance tiers (battery-adaptive KG rendering + poll backoff)
+
+**Date:** 2026-07-03
+**Status:** Accepted - BUILT + tested. NO version bump.
+**Increment:** P-PERF.2.
+
+### Context
+
+On a battery-throttled laptop the app went sluggish while model calls stayed fine: the renderer main
+thread is one event loop, and the KG force simulation monopolized it. `graph.ts` runs an O(n^2)
+pairwise kernel every frame for `SETTLE=480` frames (~8s) on every mount, re-fits the camera three
+times mid-settle (the "nodes wildly pulled around" effect), and - unless the OS sets
+prefers-reduced-motion - the particle loop never parks (~30fps forever, drop-shadow filter per
+particle). Fixed `setInterval`s (1s status / 4s refresh / 15s sessions) polled regardless of battery
+or window visibility. Toasts (revealed via rAF, `ui.ts`) queued behind the sim - hence "late toast on
+KG lock." Windows power-saver stretches each frame 3-5x on battery, so work invisible on AC starves
+everything queued behind it. No code adapted to battery/CPU (audit: zero uses of the Battery API,
+`hardwareConcurrency`, or powerMonitor).
+
+### Decision
+
+A render TIER, never a data gate. New `desktop/renderer/perf_tier.ts` (pure core, kg_ops.ts pattern):
+
+- **`resolveTier(mode, signals)`** - explicit user mode always wins; `auto` derives: discharging at
+  ≤20% → `minimal`; on battery, ≤4 cores, or OS reduced-motion → `reduced`; else `full`. Unknown
+  signals NEVER degrade (no Battery API reads as plugged in) - degrade only on evidence.
+- **`pollDelay(base, tier, hidden)`** - battery tiers stretch polls 4x; a hidden window compounds 4x
+  more; work is SKIPPED while hidden and caught up on visibilitychange. The 1s/4s/15s loops in app.ts
+  now run through this (`adaptivePoll`).
+- **`graphOpts(tier)`** → `mountGraph` knobs: `full` = today (no calm, 480 settle, uncapped);
+  `reduced` = forceCalm + 240 settle + 400-node cap; `minimal` = forceCalm + 120 + 250 (reached only
+  via "Render anyway"). `capGraph` generalizes the P-KG-CODE.1 top-hubs CAP, non-mutating - the FULL
+  graph stays with the caller (search/facts/signature); only the DRAWN subset shrinks.
+- **graph.ts** gains `GraphPerfOpts` (`forceCalm`, `settleFrames`) + `setCalm()` on the handle, so a
+  plug/unplug event calms or wakes a LIVE graph in place (chip repaints; no remount, layout preserved).
+- **Minimal tier pauses the visualization, not the knowledge.** Opening the KG at `minimal` paints a
+  pause card BEFORE the decrypt ("Graph rendering is paused to save power... the agent still reads and
+  writes your knowledge") with a one-shot per-run "Render anyway". An explicit Code-graph click still
+  renders (the user asked) at minimal fidelity. The agent's KG access takes NO tier input anywhere -
+  rejecting the "lock KG to plugged-in devices" framing: data access costs milliseconds; the
+  visualization was the drain.
+- **`watchPerfTier`** samples the Chromium Battery API (`getBattery`, chargingchange/levelchange),
+  `hardwareConcurrency`, and reduced-motion in the RENDERER (works in Electron AND the dev.ts browser;
+  no main-process/powerMonitor plumbing needed). User mode persists at localStorage `lucid.perfMode`
+  (device-local like the ADR-0084 cache - a perf preference is per-machine by nature), fail-safe
+  normalized (junk → `auto`, the P-ROLE.1 pattern). A `#kgPerf` chip in the KG toolbar shows
+  `Auto · <tier>` and cycles auto → full → reduced → minimal with a toast.
+
+### Verified
+
+19 new tests (`perf_tier.test.ts`: tier matrix incl. charging-at-low-level ≠ minimal + never-degrade-
+without-evidence, backoff math, per-tier knobs, cap top-hubs/no-mutate/identity, mode persistence +
+fail-safe + notify) - suite green (1133 pass; the 5 pre-existing fs_browse Windows-host failures are
+untouched and unrelated). `make demo-P-PERF.2` proves the contract end-to-end. Typecheck clean (root +
+desktop); renderer bundle builds; sidecar pytest green. Prompt prefix untouched.
+
+### Relates to
+
+ADR-0084 (P-PERF.1 SWR cache - the sessions half of the perf epic), B-KG.1/#114 (idle-CPU frameWork
+this extends), P-KG-CODE.1 (the CAP=600 pattern generalized), P-ROLE.1 (fail-safe normalize).
+Follow-ups: P-PERF.3 (KG layout persistence + energy-based settle exit), P-PERF.4 (main-process
+session index + paginated transcripts + AC-only prefetch), P-PERF.5 (async settings write, optimistic
+model switch, build-once model picker).
+
+## ADR-0130 - P-PERF.3: KG layout continuity (in-memory) + energy-based settle exit
+
+**Date:** 2026-07-03
+**Status:** Accepted - BUILT + tested. NO version bump.
+**Increment:** P-PERF.3.
+
+### Context
+
+The "nodes wildly pulled around" complaint (and most of the KG's CPU bill) came from every mount
+re-seeding nodes on a circle and running a FIXED 480-frame O(n^2) settle with three mid-settle camera
+re-fits - on every re-open (rail switch, lock/unlock, live-refresh remount), not just first launch.
+Most layouts converge in 100-150 frames; the rest of the budget burned for nothing.
+
+### Decision
+
+Two pure helpers in `kg_ops.ts` (headless-testable, the B-KG.1 pattern), wired into `graph.ts`:
+
+- **Layout continuity.** `GraphPerfOpts` gains `positions` (seed) + `onPositions` (harvest on destroy).
+  `mountGraph` seeds every returning node at its previous x/y; only genuinely NEW nodes take the circle
+  seeding. `settleStart(seeded, total, settle)` decides the budget: fully seeded → **static paint, zero
+  sim frames** (plus the one-time zoom-to-fit the frame-checkpoint fits would have done); ≥80% seeded
+  (live refresh added a few) → short 120-frame nestle; else the full budget. `app.ts` holds
+  `kgLayoutCache` - a module-level `Map` keyed `personal` / `code:file` / `code:symbol`.
+- **Privacy boundary (ADR-0084) kept:** positions are entity-id-keyed structural metadata of the
+  ENCRYPTED store, so the cache is IN-MEMORY ONLY - never localStorage, never disk. Cold app starts
+  therefore still simulate; that cost is bounded by the second half:
+- **Energy-based early exit.** The integration loop accumulates Σv² per frame; `settleDone(ke, n,
+  frames)` ends the sim once mean per-node kinetic energy falls under `KE_REST = 0.02` (~0.14px/frame,
+  visually still) after a 30-frame grace (young layouts are near-still before forces unfold them). On
+  exit it runs the final fit (unless the user has panned/zoomed). A simulated 8%/frame decay exits at
+  frame ~64 - ~87% of the fixed budget never runs. Drag-reheats converge the same way.
+
+Non-goals, unchanged: `update()`'s position-preserving merge (already good), the reheat-on-update
+behavior, and any on-disk persistence for the (non-private) code graph - deferred until proven needed.
+
+### Verified
+
+9 new tests in `kg_ops.test.ts` (settleStart: static/nestle/cold/tiny-budget/empty; settleDone:
+rest-threshold, still-moving, grace boundary, empty graph) - suite 1142 green (the 5 pre-existing
+fs_browse Windows-host failures untouched). `make demo-P-PERF.3` proves: re-open = 0 sim frames; +4-node
+refresh = 120-frame nestle; cold open exits at frame 64 (~87% saved); grace period holds; in-memory-only
+contract stated. Typecheck clean (root + desktop); renderer bundle builds; license headers pass. Prompt
+prefix untouched.
+
+### Relates to
+
+ADR-0129 (P-PERF.2 - the tier knobs this composes with: a reduced-tier re-open is now calm AND static),
+ADR-0084 (the privacy boundary that keeps this cache off disk), B-KG.1/#114 (frameWork idle parking -
+the loop still parks after the early exit), #54 (update()'s position-preserving merge, the same idea
+applied across mounts). Follow-ups: P-PERF.4 (session index + paginated transcripts + AC-only prefetch),
+P-PERF.5 (async settings write, optimistic model switch, build-once model picker).
+
+## ADR-0131 - P-PERF.4: incremental session index, tail-first transcript pages, AC-only prefetch
+
+**Date:** 2026-07-03
+**Status:** Accepted - BUILT + tested. NO version bump.
+**Increment:** P-PERF.4.
+
+### Context
+
+The battery investigation's biggest I/O stall: `sessions.ts listSessions()` re-read and re-parsed EVERY
+session `.jsonl` under `~/.omp/agent/sessions/` on EVERY call - and the sidebar polls it (15s base) -
+so a long history cost megabytes of synchronous main-process reads per poll. `sessionMessages()` shipped
+the WHOLE transcript over the wire and into the DOM on resume, unbounded for a long chat. The ADR-0084
+SWR cache hid the PAINT latency but never reduced the backend I/O.
+
+### Decision
+
+- **Incremental index (`sessions.ts`).** A module-level `sessionIndex: Map<path, {mtimeMs, size, scwd,
+  meta}>`. `listSessions` stat()s each file and re-parses ONLY on an mtime/size change (append-only
+  .jsonl always changes both); empty/probe verdicts (`meta: null`) are cached too, so they aren't
+  re-parsed every poll just to be skipped again. Entries for deleted files are pruned per scan, scoped
+  to the scanned root (other roots - tests - untouched). The cache is cwd-agnostic (scwd stored, cwd
+  filtered at query time) so workspace switches don't invalidate it. Test seams `__sessionIndexStats` /
+  `__resetSessionIndex` (the swr_cache `__resetCache` precedent). A warm poll is now O(stat).
+- **Tail-first transcript pages.** `sessionMessages(id, limit=0, root?)` returns `TranscriptPage
+  { messages, total }` - the LAST `limit` messages (0 = all: export/audit paths unchanged in behavior).
+  Threaded through `GET /api/session?id&limit` (dev.ts) and `bridge.sessionMessages(id, limit?)`, which
+  tolerates an older server's bare array (the pre-1b wrap precedent). `app.ts resumeSession` requests
+  `RESUME_TAIL = 400` - matching the ADR-0084 cache cap - and when `total > messages.length` prepends an
+  honest `.thread-tail-note` ("Showing the last N of M") instead of truncating silently.
+- **AC-only prefetch warm.** After a session-list refresh, `warmTranscripts` (once per run) fills the
+  SWR transcript cache for the 5 most-recent uncached sessions - so even a FIRST click paints instantly -
+  but ONLY at perf tier `full` (ADR-0129): prefetch is anti-battery by definition. It runs via
+  `requestIdleCallback` (setTimeout fallback), fetches sequentially, and aborts mid-warm if the machine
+  unplugs (tier re-checked per iteration).
+
+Contract note: `sessionMessages`'s return type changed shape (array -> page) - a deliberate clean
+cutover; all three consumers (dev.ts endpoint, bridge, resumeSession) migrated in this increment, no
+compatibility alias left behind.
+
+### Verified
+
+5 new tests (`sessions_index.test.ts`: warm poll parses nothing / appended file re-parses only itself
+with fresh results, deleted-file pruning scoped per root, cached skip verdicts, tail page + true total,
+unknown-id empty page) - suite 1147 green (the 5 pre-existing fs_browse Windows-host failures untouched,
+sidecar pytest green). `make demo-P-PERF.4`: 30-session corpus - cold scan 30 parses, 10 polls add zero,
+one appended turn costs exactly 1 re-parse (fresh turn count shown), tail page last-6-of-20, AC/battery
+prefetch gate proven via resolveTier. Typecheck clean (root + desktop); renderer bundle builds; license
+headers pass. Prompt prefix untouched.
+
+### Relates to
+
+ADR-0084 (P-PERF.1 - the renderer SWR cache this feeds and bounds), ADR-0129 (P-PERF.2 - the tier gate
+the prefetch reuses), ADR-0079/0076 (ingest-session grouping the parser preserves). Follow-up:
+P-PERF.5 (async settings write, optimistic model switch, build-once model picker) - the last item from
+the battery investigation.
+
+## ADR-0132 - P-PERF.5: switch-path hygiene (optimistic model switch, write-behind lastModel, memoized load + picker)
+
+**Date:** 2026-07-03
+**Status:** Accepted - BUILT + tested. NO version bump.
+**Increment:** P-PERF.5. Closes the battery-investigation epic (ADR-0129/0130/0131).
+
+### Context
+
+Switching models/modules felt stuck on a battery-throttled laptop: `applyConfig` AWAITED the omp
+`session/set_config_option` round-trip before painting the new model name (a busy backend held the badge
+hostage); `setLastModel` did a synchronous read-parse-write-chmod on EVERY model report from omp (the
+P-LOC.1 `syncModelEnv` hook fires repeatedly); `settings_store.load()` re-read + re-parsed the file on
+every call from nearly every request handler; and the model picker re-sorted + re-rendered 100-200 rows
+on every open and keystroke.
+
+### Decision
+
+- **Optimistic switch (`app.ts applyConfig`).** Paint the switch immediately (config value, badge,
+  status, composer tools) and fire the round-trip in the background; on success adopt the server's
+  config array (source of truth), on failure KEEP the optimistic value (the prior semantic) but warn
+  honestly ("the backend didn't acknowledge") instead of failing silently. Toasts (incl. the ADR-0109
+  Fable privacy notice) now appear instantly.
+- **Write-behind lastModel (`settings_store.ts`).** `setLastModel` defers the write 250ms via a
+  generation token (no stored timer handle); a burst of flips coalesces to ONE write of the final pick.
+  `lastModel()` is read-your-writes (serves the pending value); `flushPendingSettings()` (exported;
+  used by the `process.on("exit")` hook and tests) makes flushing deterministic. ONLY this low-stakes,
+  high-frequency setter is deferred - keys/MCP/scopes stay synchronous (losing a just-saved API key to
+  a crash would be unacceptable; losing <=250ms of lastModel is not).
+- **Memoized `load()`.** Parse memoized on the file's mtime AND size (two writes can share an mtime
+  tick; a content change almost always changes byte length - the residual same-ms-same-size external
+  blind spot is accepted: this process is the file's only writer). Callers receive `structuredClone`s,
+  so today's read-modify-save pattern keeps exact semantics and a mutate-without-save bug can never
+  poison other readers. stat-then-read replaces the existsSync/read TOCTOU pair. The path is resolved
+  per call via `LUCID_GUI_SETTINGS_FILE` (test seam, immune to module-cache order; never set in prod).
+- **Memoized picker (`app.ts`).** The built rows HTML is memoized on a key covering the curated list,
+  selection, query, family-collapse state, and gov ordering - reopening the popover (the common
+  flip-between-models flow) reuses the last build instead of re-rendering.
+
+### Verified
+
+6 new tests (`settings_perf.test.ts`: read-your-writes before flush + persisted after, burst coalescing
++ idempotent flush, blank guard, external-edit invalidation (which CAUGHT a real same-mtime-tick
+staleness bug - fixed by adding size to the memo key), clone independence, missing-file behavior; no
+wall-clock waits - flush is driven deterministically) - suite 1152 green; the remaining failures are the
+5 pre-existing fs_browse Windows-host artifacts plus the known LUCID_ASKSAGE_DEBUG env leak on this
+machine (test passes with the env unset; the variable comes from a developer-mode launch, not the repo).
+`make demo-P-PERF.5`: burst -> zero writes -> one flush; 1000 memo-served loads; external-edit
+invalidation; clone safety. Typecheck clean (root + desktop); renderer bundle builds; sidecar pytest
+green; license headers pass. Prompt prefix untouched.
+
+### Relates to
+
+ADR-0129/0130/0131 (the battery epic this closes), ADR-0031/P-LOC.1 (syncModelEnv - the hot caller the
+write-behind protects), ADR-0109 (the Fable notice that now fires instantly), P-IDE.1/1d (the family
+picker the memo wraps).

@@ -13,7 +13,7 @@
 //   - smooth zoom-to-fit on first layout + double-click to re-fit
 
 import type { GraphNode, PersonalGraphData } from "./bridge.ts";
-import { fitTransform, frameWork, nodeAtPoint, togglePick } from "./kg_ops.ts";
+import { fitTransform, frameWork, nodeAtPoint, settleDone, settleStart, togglePick } from "./kg_ops.ts";
 
 const KIND_COLOR: Record<string, string> = {
   preference: "#46c8dc", interest: "#7ef0a8", decision: "#5e8df2", behavior: "#e8b23c",
@@ -30,6 +30,16 @@ export interface GraphHandle {
   destroy: () => void; setLens: (l: "kind" | "trust") => void; fit: () => void; update: (data: PersonalGraphData) => void;
   setRelateMode: (on: boolean) => void; clearRelatePicks: () => void;
   setSearch: (ids: Set<string> | null) => void; // P-KG-SEARCH.1: highlight + center matching nodes
+  setCalm: (on: boolean) => void; // P-PERF.2: live calm toggle (plug/unplug) - no remount, layout preserved
+}
+// P-PERF.2 (ADR-0129): per-mount fidelity knobs from the power/spec tier (see perf_tier.ts graphOpts).
+// P-PERF.3 (ADR-0130): layout continuity - `positions` seeds nodes from a previous mount (a fully seeded
+// mount is a STATIC paint, no settle explosion); `onPositions` harvests the layout back on destroy.
+export interface GraphPerfOpts {
+  forceCalm?: boolean;
+  settleFrames?: number;
+  positions?: ReadonlyMap<string, { x: number; y: number }>;
+  onPositions?: (pos: Map<string, { x: number; y: number }>) => void;
 }
 
 const NS = "http://www.w3.org/2000/svg";
@@ -38,9 +48,11 @@ const make = <K extends keyof SVGElementTagNameMap>(t: K): SVGElementTagNameMap[
 const reducedMotion = (): boolean =>
   typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-export function mountGraph(host: HTMLElement, data: PersonalGraphData, onSelect: (id: string | null) => void, hooks: GraphHooks = {}): GraphHandle {
+export function mountGraph(host: HTMLElement, data: PersonalGraphData, onSelect: (id: string | null) => void, hooks: GraphHooks = {}, perf: GraphPerfOpts = {}): GraphHandle {
   host.innerHTML = "";
-  const calm = reducedMotion(); // reduced-motion: no particle flow, instant fit, gentler settle
+  // calm: no particle flow, instant fit, loop parks when idle. From the OS reduced-motion preference OR
+  // forced by the power tier (P-PERF.2) - mutable so plugging in / unplugging adapts a LIVE graph.
+  let calm = !!perf.forceCalm || reducedMotion();
   // Mutable so the layout re-fits when the canvas resizes (side panel toggles, KG resizer, window).
   let W = host.clientWidth || 600, H = host.clientHeight || 420;
   let cx = W / 2, cy = H / 2;
@@ -56,7 +68,12 @@ export function mountGraph(host: HTMLElement, data: PersonalGraphData, onSelect:
   let linkDrag: { from: SimNode; x: number; y: number } | null = null;
   let searchIds: Set<string> | null = null; // P-KG-SEARCH.1: matching nodes (null = no active search)
 
+  // P-PERF.3: seed from the previous layout when we have it - a returning node lands where the user
+  // last saw it; only genuinely NEW nodes take the circle seeding (and then only they need to settle).
+  let seededCount = 0;
   const nodes: SimNode[] = data.nodes.map((n, i) => {
+    const p = perf.positions?.get(n.id);
+    if (p) { seededCount++; return { ...n, x: p.x, y: p.y, vx: 0, vy: 0, r: 7 + Math.min(15, n.count * 2.5) }; }
     const a = (i / Math.max(1, data.nodes.length)) * Math.PI * 2;
     return { ...n, x: cx + Math.cos(a) * 130 + (i % 7) * 4, y: cy + Math.sin(a) * 130 + (i % 5) * 4, vx: 0, vy: 0, r: 7 + Math.min(15, n.count * 2.5) };
   });
@@ -172,8 +189,11 @@ export function mountGraph(host: HTMLElement, data: PersonalGraphData, onSelect:
   };
 
   let drag: SimNode | null = null;
-  let frames = 0, raf = 0, idleParity = 0;
-  const SETTLE = 480;
+  // P-PERF.2: the settle budget is tier-scaled - fewer O(n^2) frames on battery/weak machines.
+  const SETTLE = Math.max(60, Math.min(1200, Math.round(perf.settleFrames ?? 480)));
+  // P-PERF.3: a seeded mount skips some or ALL of the settle (static paint / short nestle).
+  const startPlan = settleStart(seededCount, nodes.length, SETTLE);
+  let frames = startPlan.frames, raf = 0, idleParity = 0;
   // Restart the rAF loop if it parked itself while idle (reduced-motion). No-op if already running.
   const kick = () => { if (!stopped && raf === 0) raf = requestAnimationFrame(tick); };
   const tick = () => {
@@ -195,8 +215,16 @@ export function mountGraph(host: HTMLElement, data: PersonalGraphData, onSelect:
       }
       // settling damping eases from looser → tighter so motion glides to rest instead of buzzing
       const damp = frames < 120 ? 0.86 : 0.8;
-      for (const n of nodes) { if (n === drag) { n.vx = n.vy = 0; continue; } n.vx += (cx - n.x) * 0.0025; n.vy += (cy - n.y) * 0.0025; n.vx *= damp; n.vy *= damp; n.x += n.vx; n.y += n.vy; }
+      let kinetic = 0; // P-PERF.3: Σv² this frame, for the energy-based early exit below
+      for (const n of nodes) { if (n === drag) { n.vx = n.vy = 0; continue; } n.vx += (cx - n.x) * 0.0025; n.vy += (cy - n.y) * 0.0025; n.vx *= damp; n.vy *= damp; n.x += n.vx; n.y += n.vy; kinetic += n.vx * n.vx + n.vy * n.vy; }
       frames++;
+      // P-PERF.3 (ADR-0130): stop the O(n^2) sim as soon as motion visibly dies instead of burning the
+      // whole budget - most graphs converge in 100-150 frames. Ends with the final fit the frame-
+      // checkpoint fits would have delivered.
+      if (!drag && settleDone(kinetic, nodes.length, frames) && frames < SETTLE) {
+        frames = SETTLE;
+        if (!userMoved) computeFit();
+      }
       // Re-fit at a few checkpoints (not just frame 90) so a LARGE graph that's still spreading gets a
       // corrected fit as it settles (#112). Each eases smoothly, so it reads as one continuous settle.
       if (!userMoved && (frames === 90 || frames === 240 || frames === SETTLE - 2)) computeFit();
@@ -270,6 +298,9 @@ export function mountGraph(host: HTMLElement, data: PersonalGraphData, onSelect:
   ro.observe(host);
 
   paint();
+  // P-PERF.3: a fully seeded (static) mount runs no sim frames, so the frame-checkpoint fits never
+  // fire - do the one-time zoom-to-fit here (calm mode snaps instantly, otherwise it eases).
+  if (startPlan.needsFit && !userMoved) computeFit();
 
   // Position-preserving merge of fresh data into the LIVE simulation (issue #54 follow-up): keep
   // existing nodes AND their x/y (so the layout doesn't jump), add new nodes near the centre so they
@@ -316,7 +347,10 @@ export function mountGraph(host: HTMLElement, data: PersonalGraphData, onSelect:
   };
 
   return {
-    destroy() { stopped = true; cancelAnimationFrame(raf); ro.disconnect(); window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); host.innerHTML = ""; },
+    destroy() {
+      stopped = true; cancelAnimationFrame(raf); ro.disconnect(); window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); host.innerHTML = "";
+      perf.onPositions?.(new Map(nodes.map((n) => [n.id, { x: n.x, y: n.y }]))); // P-PERF.3: harvest the layout for the next mount
+    },
     setLens(l) { lens = l; paint(); },
     fit() { userMoved = true; computeFit(); },
     update,
@@ -331,6 +365,13 @@ export function mountGraph(host: HTMLElement, data: PersonalGraphData, onSelect:
       searchIds = ids && ids.size ? ids : null;
       if (searchIds) { userMoved = true; computeFit(nodes.filter((n) => searchIds!.has(n.id))); } // center on the matches
       paint(); // apply / clear the dim+match classes
+    },
+    setCalm(on) { // P-PERF.2: unplugging calms a live graph in place; plugging in resumes the flow
+      if (calm === on) return;
+      calm = on;
+      partG.style.display = on ? "none" : "";
+      if (!on) kick(); // particles need the loop running again (it may have parked while calm)
+      paint();
     },
   };
 }

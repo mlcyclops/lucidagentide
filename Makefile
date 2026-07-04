@@ -356,6 +356,22 @@ demo-P-NETWL.3: ## P-NETWL.3 (ADR-0106): enforce project/loop trust scopes + per
 demo-P-KEYS.2: ## P-KEYS.2 (ADR-0107): credential rotation visibility (age/due/expiry, non-secret) + manual rotate-in-place (same ref, fail-closed)
 	$(BUN) run desktop/scripts/demo_p_keys_2.ts
 
+.PHONY: demo-P-PERF.2
+demo-P-PERF.2: ## P-PERF.2 (ADR-0129): power/spec-aware perf tiers — battery→calm capped graph, low battery→viz paused (agent access untouched), poll backoff, user override
+	$(BUN) run desktop/scripts/demo_p_perf_2.ts
+
+.PHONY: demo-P-PERF.3
+demo-P-PERF.3: ## P-PERF.3 (ADR-0130): KG layout continuity — re-open is a static paint (0 sim frames), refresh nestles newcomers, cold open exits on energy, positions never touch disk
+	$(BUN) run desktop/scripts/demo_p_perf_3.ts
+
+.PHONY: demo-P-PERF.4
+demo-P-PERF.4: ## P-PERF.4 (ADR-0131): incremental session index (warm polls parse nothing) + tail-first transcript pages + AC-only prefetch gate
+	$(BUN) run desktop/scripts/demo_p_perf_4.ts
+
+.PHONY: demo-P-PERF.5
+demo-P-PERF.5: ## P-PERF.5 (ADR-0132): switch hygiene - optimistic model switch, debounced lastModel write-behind (read-your-writes), memoized settings load, memoized picker
+	$(BUN) run desktop/scripts/demo_p_perf_5.ts
+
 .PHONY: demo-P-NETWL.5
 demo-P-NETWL.5: ## P-NETWL.5 (ADR-0108): egress posture — allow-all + web-search toggles; whitelist enforces only when allow-all is off; still prompts for public IPs / foreign TLDs; managed clamp
 	$(BUN) run desktop/scripts/demo_p_netwl_5.ts

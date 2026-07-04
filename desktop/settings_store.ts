@@ -12,13 +12,15 @@
 // (OAuth is handled separately via omp's own credential vault / auth-broker -
 //  that's the more secure path and omp owns the storage there.)
 
-import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { homedir, hostname } from "node:os";
 import { join } from "node:path";
 import { emailDomainAllowed, managedConfig, skipAllowed } from "./managed_config.ts";
 
-const FILE = join(homedir(), ".omp", "lucid-gui.json");
+// LUCID_GUI_SETTINGS_FILE: test seam - point the store at a temp file (never set in production).
+// Read per call (not at module init) so the seam is immune to module-cache order in the test runner.
+const settingsFile = (): string => process.env.LUCID_GUI_SETTINGS_FILE || join(homedir(), ".omp", "lucid-gui.json");
 
 // P-MCP.1 (ADR-0020): one configured MCP server. The token is a bearer credential sent as an
 // Authorization header to a remote (HTTP/SSE) MCP server.
@@ -233,12 +235,33 @@ export function setPersonalScope(scope: GuiSettings["personalScope"]): GuiSettin
   const s = load(); s.personalScope = scope; save(s); return s;
 }
 
+// P-PERF.5 (ADR-0132): load() used to read + JSON.parse the file on EVERY call - and nearly every
+// request handler calls it (often several times). Memoize the parse on the file's mtime; callers get a
+// structuredClone so today's read-modify-save pattern keeps its exact semantics (every load() is an
+// independent object - a caller mutating without save() can never corrupt the memo). stat-then-read
+// (no existsSync pair - the TOCTOU shape CodeQL flags); a missing/corrupt file is just {}.
+// Memo key = mtime AND size: two writes can land in the same mtime tick, but a content change almost
+// always changes the byte length too. (Residual blind spot - same-ms, same-size external rewrite -
+// is accepted: this process is the file's only writer in practice.)
+let loadMemo: { file: string; mtimeMs: number; size: number; s: GuiSettings } | null = null;
 export function load(): GuiSettings {
-  try { return existsSync(FILE) ? JSON.parse(readFileSync(FILE, "utf8")) : {}; } catch { return {}; }
+  const file = settingsFile();
+  try {
+    const st = statSync(file); // throws when missing -> {}
+    if (!loadMemo || loadMemo.file !== file || loadMemo.mtimeMs !== st.mtimeMs || loadMemo.size !== st.size) {
+      loadMemo = { file, mtimeMs: st.mtimeMs, size: st.size, s: JSON.parse(readFileSync(file, "utf8")) as GuiSettings };
+    }
+    return structuredClone(loadMemo.s);
+  } catch { return {}; }
 }
 export function save(s: GuiSettings): void {
-  writeFileSync(FILE, JSON.stringify(s, null, 2), "utf8");
-  try { chmodSync(FILE, 0o600); } catch { /* best-effort on Windows */ }
+  const file = settingsFile();
+  writeFileSync(file, JSON.stringify(s, null, 2), "utf8");
+  try { chmodSync(file, 0o600); } catch { /* best-effort on Windows */ }
+  try {
+    const st = statSync(file);
+    loadMemo = { file, mtimeMs: st.mtimeMs, size: st.size, s: structuredClone(s) };
+  } catch { loadMemo = null; }
 }
 
 /** Push stored keys + AskSage base URL into process.env so child `omp acp`
@@ -303,10 +326,25 @@ export function setThirdPartyProvidersAcknowledged(on: boolean): GuiSettings {
 }
 /** P-LOC.1 (ADR-0031): the last omp-reported active model, used to tag AI-LOC ledger rows from the
  *  first edit of a session. Empty until omp reports one (then the gate records model 'unknown'). */
-export function lastModel(): string { return load().lastModel ?? ""; }
+export function lastModel(): string { return lastModelPending ?? load().lastModel ?? ""; }
+// P-PERF.5 (ADR-0132): omp reports its active model repeatedly and picker flips can burst, so the
+// lastModel write is DEBOUNCED write-behind (250ms, generation-token - no stored timer handle).
+// ONLY this low-stakes, high-frequency setter is deferred; keys/MCP/scopes stay synchronous.
+// lastModel() reads its own pending write; a pending value is flushed on process exit.
+let lastModelPending: string | null = null;
+let lastModelGen = 0;
+export function flushPendingSettings(): void {
+  if (lastModelPending === null) return;
+  const m = lastModelPending;
+  lastModelPending = null; lastModelGen++;
+  const s = load(); if (s.lastModel !== m) { s.lastModel = m; save(s); }
+}
+process.on("exit", flushPendingSettings);
 export function setLastModel(model: string): void {
   const m = (model ?? "").trim(); if (!m) return;
-  const s = load(); if (s.lastModel === m) return; s.lastModel = m; save(s);
+  lastModelPending = m;
+  const gen = ++lastModelGen;
+  setTimeout(() => { if (gen === lastModelGen) flushPendingSettings(); }, 250);
 }
 /** Whether the user has set the "AskSage only" model lock (the org-managed lock is OR'd in by callers). */
 export function asksageOnly(): boolean { return !!load().asksageOnly; }
