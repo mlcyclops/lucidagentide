@@ -9589,8 +9589,13 @@ appear in the existing picker automatically.
   secret in MAIN, deliver via a transient 0600 main-only overlay (or child env for known ids), pass `--config`;
   auto-register the endpoint in the whitelist with an `AuthRef`. Live-verify a custom model routes to a local
   OpenAI-compatible endpoint (and that `omp models --config` lists it).
-- **P-LOCAL.3:** the default-collapsed "Local Providers" card under Settings → Providers - add/edit/delete
-  servers + models, store the key to the vault, a reachability/TLS health check + "test connection".
+- **P-LOCAL.3 (BUILT):** the default-collapsed "Local Providers" card under Settings → Providers -
+  `desktop/renderer/local_providers_ui.ts` (`localProvidersCardBody`/`draftFromForm`/`providerStatus`) + app.ts
+  wiring (`hydrateLocalProviders`/`addLocalProviderFromForm`/delete/enable) + `/api/local-providers` CRUD in
+  dev.ts + bridge methods. Add a provider from the form; an authed provider's key is stored to the vault
+  (`bridge.credStore`) and the def saved with only the `vaultRef`. 8 tests. Verified live: the card renders
+  after "Providers", auto-collapsed, expands on click. Remaining polish: inline edit/re-key, a reachability/TLS
+  "test connection", an external-zone toggle, and an apply-without-restart trigger.
 
 ### Invariants preserved
 
