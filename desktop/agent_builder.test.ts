@@ -10,6 +10,7 @@ import {
   TOOL_CATALOG,
   toolChipsHtml,
   trustBannerHtml,
+  runApprovalHtml,
   runPanelHtml,
   secretsPanelHtml,
   agentInterviewPrompt,
@@ -162,6 +163,16 @@ describe("agent builder panel (P-AGENT.2)", () => {
     // empty allow-list renders the explicit "cannot call any tools" state, not a blank panel
     const empty = toolChipsHtml(spec({ tools: [], nodes: [{ id: "a", kind: "prompt", label: "Plan", prompt: "" }], edges: [] }));
     expect(empty).toContain("cannot call any tools");
+  });
+
+  test("run approval card: label + output + approve/deny controls, HTML-escaped (P-AGENT.11a)", () => {
+    const h = runApprovalHtml("Review <findings>", "found 3 papers");
+    expect(h).toContain('id="abRunApprove"');
+    expect(h).toContain('id="abRunDeny"');
+    expect(h).toContain("Review &lt;findings&gt;"); // escaped, not raw HTML
+    expect(h).toContain("found 3 papers");
+    // no output yet → no empty output block
+    expect(runApprovalHtml("Gate", "")).not.toContain("ab-run-approval-out");
   });
 
   test("trust banner: empty for trusted; approve offered for untrusted/suspicious; NOT for quarantined (P-AGENT.9)", () => {

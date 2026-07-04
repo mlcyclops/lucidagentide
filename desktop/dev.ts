@@ -28,7 +28,7 @@ import { specToN8n, n8nToSpec, isN8nWorkflowJson } from "../harness/agent/n8n.ts
 import { connectorStatus, runConnector } from "./addon_seam.ts"; // P-AGENT.10: enterprise add-on seam
 import { importSpec } from "../harness/agent/import_gate.ts"; // P-AGENT.5/.9: fail-closed imported spec scan + trust label
 import { ScannerClient } from "../harness/security/scanner_client.ts";
-import { runBuiltAgent } from "./agent_run.ts"; // P-AGENT.4-live: run a built agent through omp under the gate
+import { startAgentRun, approveAgentRun } from "./agent_run.ts"; // P-AGENT.4-live/.11a: gated runs + enforced approval halts
 import { archiveBrief, deleteBrief, listBriefs, readBrief, restoreBrief, saveBrief } from "./report_store.ts";
 import { OpenAiCompatibleTtsBackend } from "../harness/brief/tts_backend.ts";
 import { ElevenLabsTtsBackend, ElevenLabsSttBackend, listElevenVoices } from "../harness/voice/elevenlabs.ts";
@@ -730,9 +730,19 @@ const server = Bun.serve({
         const prompt = typeof b.prompt === "string" ? b.prompt : "";
         const model = typeof b.model === "string" && b.model.trim() ? b.model.trim() : "haiku";
         // P-AGENT.9: run under the STORED trust label — an imported, not-yet-approved spec is refused here.
+        // P-AGENT.11a: a spec with approval nodes runs SEGMENTED — it halts at each boundary and returns
+        // `paused`; the human resumes via /api/agent/run/approve. The halt is enforced by the SegmentedRun
+        // machine (the post-approval prompt does not exist until approve), not by model compliance.
         const trust = loadSpecTrust(currentWorkspace(), v.spec!.spec_id);
-        const r = await runBuiltAgent({ spec: v.spec!, prompt, model, workspace: currentWorkspace(), trustLabel: trust.trustLabel });
-        return json({ ok: r.ok, data: { output: r.output ?? "", error: r.error ?? "", blocked: !!r.blocked, reason: r.reason ?? "" } });
+        const r = await startAgentRun({ spec: v.spec!, prompt, model, workspace: currentWorkspace(), trustLabel: trust.trustLabel });
+        return json({ ok: r.ok, data: { output: r.output ?? "", error: r.error ?? "", blocked: !!r.blocked, reason: r.reason ?? "", paused: r.paused ?? null } });
+      }
+      // P-AGENT.11a: resolve a parked approval checkpoint. Deny is terminal; unknown/expired ids refuse.
+      if (p === "/api/agent/run/approve" && req.method === "POST") {
+        const b = await readBody<{ runId?: unknown; approve?: unknown; reason?: unknown }>(req);
+        const runId = typeof b.runId === "string" ? b.runId : "";
+        const r = approveAgentRun(runId, b.approve === true, typeof b.reason === "string" ? b.reason : undefined);
+        return json({ ok: r.ok, data: { output: r.output ?? "", error: r.error ?? "", blocked: !!r.blocked, reason: r.reason ?? "", paused: r.paused ?? null } });
       }
       // P-APPEAR.1: the personalized chat-interface background (image + display mode). Its own file, so
       // the hot settings load() never parses the image data URL.

@@ -15,6 +15,16 @@ import type { SpecFileSummary } from "../../harness/agent/file_store.ts"; // P-A
 import type { UserCommand } from "../../harness/commands/spec.ts"; // P-CMD.1: user-authored slash commands
 
 export interface BlockRecord { id: string; tool: string; severity: string; findings: string; reason: string; at: string; status: "quarantined" | "approved" | "dismissed"; reviewer?: string }
+
+/** P-AGENT.4-live/.11a: a built-agent run reply. `paused` = halted at an approval checkpoint (ENFORCED by
+ *  the SegmentedRun machine server-side); resume with agentRunApprove. */
+export interface AgentRunReply {
+  output: string;
+  error: string;
+  blocked: boolean;
+  reason: string;
+  paused?: { runId: string; nodeId: string; label: string; outputSoFar: string } | null;
+}
 export interface SecuritySnapshot {
   findings: any[]; unicode: any[]; approvals: any[]; quarantine: any[];
   promotion: any[]; exports: any[]; runs: any[];
@@ -308,7 +318,9 @@ export interface LucidBridge {
   /** P-AGENT.10: n8n interop — export a workflow scaffold; push via the enterprise add-on connector. */
   agentN8nExport(spec: AgentSpec): Promise<{ path?: string; fileName?: string; json?: string; pushAvailable?: boolean; pushNote?: string; error?: string } | null>;
   agentN8nPush(spec: AgentSpec): Promise<{ ok?: boolean; detail?: string; url?: string; error?: string } | null>;
-  agentRun(spec: AgentSpec, prompt: string, model: string): Promise<{ output: string; error: string; blocked: boolean; reason: string } | null>;
+  agentRun(spec: AgentSpec, prompt: string, model: string): Promise<AgentRunReply | null>;
+  /** P-AGENT.11a: resolve a run parked at an approval checkpoint (deny is terminal). */
+  agentRunApprove(runId: string, approve: boolean): Promise<AgentRunReply | null>;
   setCodeGraphAgent(enabled: boolean): Promise<{ enabled: boolean } | null>;
   /** P-APPEAR.1: the personalized chat background (image data URL + display mode + opacity). */
   chatBackground(): Promise<{ image: string; mode: "off" | "ambient" | "flashlight"; opacity: number } | null>;
@@ -643,7 +655,8 @@ export const bridge: LucidBridge = {
   agentTrust: (id) => post("/api/agent/trust", { id }), // P-AGENT.9
   agentN8nExport: (spec) => post("/api/agent/n8n-export", { spec }), // P-AGENT.10
   agentN8nPush: (spec) => post("/api/agent/n8n-push", { spec }), // P-AGENT.10
-  agentRun: (spec, prompt, model) => post("/api/agent/run", { spec, prompt, model }), // P-AGENT.4-live
+  agentRun: (spec, prompt, model) => post("/api/agent/run", { spec, prompt, model }), // P-AGENT.4-live/.11a
+  agentRunApprove: (runId, approve) => post("/api/agent/run/approve", { runId, approve }), // P-AGENT.11a
   setCodeGraphAgent: (enabled) => post("/api/codegraph/agent", { enabled }),
   chatBackground: () => getData("/api/chat-bg"),
   setChatBackground: (patch) => post("/api/chat-bg", patch),

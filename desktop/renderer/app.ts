@@ -8,7 +8,7 @@
 // agent turn. Same renderer in Electron (real omp ACP via window.lucid) and in
 // the browser dev server (simulated). Pure DOM, no framework.
 
-import { bridge, type ChatEvent, type ConfigOption, type GoalDial, type MemorySnapshot, type OmpCommand, type ProviderAuth, type SecuritySnapshot, type SessionInfo, type SessionList, type UserRole, type WorkspaceInfo } from "./bridge.ts";
+import { bridge, type AgentRunReply, type ChatEvent, type ConfigOption, type GoalDial, type MemorySnapshot, type OmpCommand, type ProviderAuth, type SecuritySnapshot, type SessionInfo, type SessionList, type UserRole, type WorkspaceInfo } from "./bridge.ts";
 import { ROLE_META, USER_ROLE_LIST, coachHtml, roleDefaultTab, stepsForRole, type TourStep } from "./tour.ts";
 import { modCombo, modSymbol } from "./platform.ts";
 import { aiLocHasData } from "../ailoc_view.ts";
@@ -26,7 +26,7 @@ import { type GraphHandle, kindLabel, mountGraph } from "./graph.ts";
 import { addEdgeOptimistic, applyForget, chainPairs, matchNodes, removeEdgeOptimistic, resolveRelationLabel } from "./kg_ops.ts";
 import { capGraph, graphOpts, pollDelay, watchPerfTier } from "./perf_tier.ts";
 import type { PersonalGraphData } from "./bridge.ts";
-import { agentBuilderPanelHtml, specToGraphData, nodeEditorHtml, saveErrors, newCanvasSpec, runPanelHtml, secretsPanelHtml, agentInterviewPrompt, toolChipsHtml, trustBannerHtml } from "./agent_builder.ts"; // P-AGENT.2b/.4-live/.8/.9
+import { agentBuilderPanelHtml, specToGraphData, nodeEditorHtml, saveErrors, newCanvasSpec, runPanelHtml, secretsPanelHtml, agentInterviewPrompt, toolChipsHtml, trustBannerHtml, runApprovalHtml } from "./agent_builder.ts"; // P-AGENT.2b/.4-live/.8/.9/.11a
 import type { TrustLabel } from "../../harness/contracts.ts"; // P-AGENT.9: imported-agent trust banner
 import type { AgentSpec, NodeKind } from "../../harness/agent/spec.ts"; // P-AGENT.2b
 import { expandCommandBody, type UserCommand } from "../../harness/commands/spec.ts"; // P-CMD.1: user "/" commands
@@ -2781,15 +2781,33 @@ function openAbRunPanel(): void {
 async function runAgentBuilder(): Promise<void> {
   if (!abSpec) return;
   const promptEl = $("#abRunPrompt") as HTMLTextAreaElement | null;
-  const out = $("#abRunOut");
   const task = (promptEl?.value ?? "").trim();
   if (!task) { showToast({ tone: "warn", title: "Enter a task", desc: "Tell the agent what to do." }); return; }
+  const out = $("#abRunOut");
   if (out) { out.hidden = false; out.textContent = "Running the agent…"; }
-  const r = await bridge.agentRun(abSpec, task, state.model); // P-AGENT.4-live (gated omp run)
+  renderAbRunReply(await bridge.agentRun(abSpec, task, state.model)); // P-AGENT.4-live/.11a (gated omp run)
+}
+// P-AGENT.11a: render a run reply — final output, refusal, error, or an ENFORCED approval halt. The halt
+// card's Approve/Deny resolve the parked run server-side; the post-approval steps have no prompt until then.
+function renderAbRunReply(r: AgentRunReply | null): void {
+  const out = $("#abRunOut");
   if (!out) return;
+  out.hidden = false;
+  if (r?.paused) {
+    const runId = r.paused.runId;
+    out.innerHTML = runApprovalHtml(r.paused.label, r.paused.outputSoFar);
+    $("#abRunApprove", out)?.addEventListener("click", () => void resolveAbRunApproval(runId, true));
+    $("#abRunDeny", out)?.addEventListener("click", () => void resolveAbRunApproval(runId, false));
+    return;
+  }
   if (r?.blocked) out.textContent = `Blocked: ${r.reason}`;
   else if (r?.error) out.textContent = `Error: ${r.error}`;
   else out.textContent = r?.output || "(the agent produced no output)";
+}
+async function resolveAbRunApproval(runId: string, approve: boolean): Promise<void> {
+  const out = $("#abRunOut");
+  if (out) out.textContent = approve ? "Approved — continuing…" : "Stopping…";
+  renderAbRunReply(await bridge.agentRunApprove(runId, approve));
 }
 
 // P-AGENT.8.2: the chat -> canvas handoff. The agent called `agent_builder_open` with a drafted (validated,

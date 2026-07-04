@@ -2487,6 +2487,11 @@ pre:hover .code-ide-btn,pre:focus-within .code-ide-btn{opacity:1}
 .ab-run{display:flex;flex-direction:column;gap:10px}
 .ab-run-model{margin-left:auto;font-size:11px;color:var(--cyan);background:color-mix(in srgb,var(--cyan) 14%,var(--bg-2));padding:2px 8px;border-radius:999px}
 .ab-run-out{white-space:pre-wrap;font-size:12px;line-height:1.55;color:var(--txt);background:var(--bg-1);border:1px solid var(--line);border-radius:var(--r-sm);padding:9px 10px;max-height:340px;overflow:auto}
+/* P-AGENT.11a: the enforced approval-halt card inside the Run flyout */
+.ab-run-approval{display:flex;flex-direction:column;gap:9px;border:1px solid color-mix(in srgb,var(--amber) 45%,var(--line));background:var(--amber-dim);border-radius:var(--r-sm);padding:10px}
+.ab-run-approval-head{font-size:12.5px;color:var(--txt)}
+.ab-run-approval-out{max-height:200px}
+.ab-run-approval-acts{display:flex;gap:8px}
 .ab-conn{display:flex;flex-direction:column;gap:9px}
 .ab-conn-note{font-size:11.5px;line-height:1.5;color:var(--txt-3)}
 .ab-conn-sec{font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--txt-4);margin-top:4px}

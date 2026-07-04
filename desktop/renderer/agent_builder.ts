@@ -274,6 +274,19 @@ export function toolChipsHtml(spec: AgentSpec): string {
   </div>`;
 }
 
+/** The in-run approval card (P-AGENT.11a): shown when a run HALTS at an approval checkpoint. The halt is
+ *  enforced server-side by the SegmentedRun machine — this card is the resume/deny control, not the guard. */
+export function runApprovalHtml(label: string, outputSoFar: string): string {
+  return `<div class="ab-run-approval">
+    <div class="ab-run-approval-head">⏸ Waiting for your approval — <b>${esc(label)}</b></div>
+    ${outputSoFar.trim() ? `<div class="ab-run-out ab-run-approval-out">${esc(outputSoFar)}</div>` : ""}
+    <div class="ab-run-approval-acts">
+      <button class="ab-btn ok" id="abRunApprove" data-tip="Approve|Continue the workflow past this checkpoint">Approve — continue</button>
+      <button class="ab-btn" id="abRunDeny" data-tip="Deny|Stop the workflow here. The remaining steps never run">Deny — stop</button>
+    </div>
+  </div>`;
+}
+
 /** The trust banner (P-AGENT.9) for an imported agent. Empty for "trusted". Approval (the human-review step)
  *  is offered for untrusted/suspicious; a QUARANTINED spec cannot be approved from the UI — fix + re-import. */
 export function trustBannerHtml(label: TrustLabel, reason: string): string {

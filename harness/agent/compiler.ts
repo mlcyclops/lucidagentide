@@ -87,8 +87,8 @@ export function topoOrder(spec: AgentSpec): string[] {
   return order;
 }
 
-/** One workflow step line for the system prompt. */
-function stepLine(node: AgentNode, i: number): string {
+/** One workflow step line for the system prompt (also used by the P-AGENT.11 segment runner). */
+export function stepLine(node: AgentNode, i: number): string {
   const kind = node.kind[0]!.toUpperCase() + node.kind.slice(1);
   let detail = "";
   if (node.kind === "prompt" && node.prompt?.trim()) detail = ` — ${node.prompt.trim()}`;

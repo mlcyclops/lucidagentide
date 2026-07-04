@@ -9611,7 +9611,12 @@ round-trip anchor keeps LUCID<->LUCID lossless even when the file traveled throu
 ## ADR-0137 - P-AGENT.11: the step-runner - enforced approvals, real sub-agents, then branching (DESIGN)
 
 **Date:** 2026-07-04
-**Status:** Accepted - DESIGN. Next build increment (11a first).
+**Status:** Accepted. **11a BUILT + tested** (same day, continued at user direction): `harness/agent/segments.ts`
+(splitSegments + renderSegmentPrompt + the `SegmentedRun` keystone machine — the post-approval prompt does not
+EXIST until approve()), segment orchestration + 30-min-TTL paused-run registry in desktop/agent_run.ts
+(expired approval = refusal, fail-closed), `/api/agent/run` returns `paused`, `/api/agent/run/approve`
+resolves, Run-flyout approval card. 10 keystone tests green. 11b (real sub-agents) + 11c (branching) remain
+design.
 
 **Context.** The v1 compiler lowers the DAG into a numbered system prompt; `approval` lowers to "pause for
 human approval" PROSE and `subagent` to "run sub-agent <id>" prose (compiler.ts stepLine). A guarantee the
