@@ -11,7 +11,7 @@
 // `validateSpec` takes `unknown` and is fail-closed: any problem → { ok: false } with reasons, and an
 // imported/untrusted spec must pass it before it is ever persisted or run.
 //
-// v2 (P-AGENT.11c/.15, ADR-0137/0141): adds the `branch` node kind (a decision point — the segment runner
+// v2 (P-AGENT.11c/.15, ADR-0139/0141): adds the `branch` node kind (a decision point — the segment runner
 // follows exactly ONE labeled outgoing edge), optional edge `label`s, and per-node reliability knobs
 // (`retry`, `timeoutMs`). v1 files stay valid forever (additive fields; the version list is a compatibility
 // marker, validation is field-driven). Loops remain out — still a DAG.
@@ -36,7 +36,7 @@ export type NodeKind = (typeof NODE_KINDS)[number];
 
 // Reliability knobs (P-AGENT.15, v2). Applied at SEGMENT granularity by the runner: a segment's retry
 // budget is the MAX of its nodes' `retry.max`; its timeout is the MIN of its nodes' `timeoutMs` (tightest
-// constraint wins), clamped to sane bounds. Documented in ADR-0141.
+// constraint wins), clamped to sane bounds. Documented in ADR-0143.
 export const RETRY_MAX_LIMIT = 3;
 export const TIMEOUT_MS_MIN = 5_000;
 export const TIMEOUT_MS_MAX = 600_000;

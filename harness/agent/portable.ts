@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// harness/agent/portable.ts — P-AGENT.9 (ADR-0135): shareable Agent Builder export/import format.
+// harness/agent/portable.ts — P-AGENT.9 (ADR-0137): shareable Agent Builder export/import format.
 //
 // This is the USER-SHARE format, distinct from the enterprise deploy bundle in export.ts. It carries the
 // AgentSpec and setup instructions, never credential values. The spec itself still declares SecretRef NAMES;

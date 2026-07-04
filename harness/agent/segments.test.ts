@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// harness/agent/segments.test.ts — P-AGENT.11a (ADR-0137): the segment runner. The KEYSTONE property —
+// harness/agent/segments.test.ts — P-AGENT.11a (ADR-0139): the segment runner. The KEYSTONE property —
 // no post-approval segment is reachable without an explicit approve() — is stop-the-line (AGENTS.md):
 // treat a regression here like a failing scanner test.
 

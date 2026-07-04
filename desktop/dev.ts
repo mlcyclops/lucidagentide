@@ -816,7 +816,7 @@ const server = Bun.serve({
         return json({ ok: r.ok, data: { output: r.output ?? "", error: r.error ?? "", blocked: !!r.blocked, reason: r.reason ?? "", paused: r.paused ?? null, runId: r.runId ?? "" } });
       }
       // P-AGENT.13: run traces — file-backed provenance under .omp/agent-runs/traces/ (the desktop holds
-      // agent_obs.duckdb read-only, so files are the v1 store; see ADR-0139 delta note).
+      // agent_obs.duckdb read-only, so files are the v1 store; see ADR-0141 delta note).
       // P-AGENT.12: the DYNAMIC half of the Builder's tool catalog: tools discovered from the user's
       // ENABLED MCP servers, under the exact `mcp__<server>_<tool>` names omp registers at runtime (so the
       // compiled allow-list matches). Fail-soft: unreachable servers report an error and the picker just
@@ -1167,7 +1167,7 @@ const server = Bun.serve({
         }
         return json({ ok: true, data: { results } });
       }
-      // P-CMD.1 (ADR-0135): user-authored "/" slash commands. GET = list stored commands; POST = create one
+      // P-CMD.1 (ADR-0146): user-authored "/" slash commands. GET = list stored commands; POST = create one
       // (validate → secret-scan → Unicode-scan, all fail-closed → persist). The delete route removes one.
       if (p === "/api/usercommand" && req.method === "GET") return json({ ok: true, data: listUserCommands() });
       if (p === "/api/usercommand" && req.method === "POST") {

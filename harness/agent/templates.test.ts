@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// harness/agent/templates.test.ts — P-AGENT.17 (ADR-0143): the in-repo starter templates MUST stay valid
+// harness/agent/templates.test.ts — P-AGENT.17 (ADR-0145): the in-repo starter templates MUST stay valid
 // portable agents (parse + digest + validator + secret-free). A rotted template silently vanishes from the
 // gallery at run time; this test makes the rot loud at CI time instead.
 

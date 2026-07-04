@@ -9525,7 +9525,7 @@ ADR-0133 (the Agent Builder this extends), ADR-0096 (the `preview_open` handoff 
 network whitelist + OS-encrypted credential vault this builds on), ADR-0114 (the ENGAGEMENT_POLICY pattern for a
 new frozen policy block), the P-AGENT.5 import gate (the sibling untrusted-content guard).
 
-## ADR-0135 - P-AGENT.9: allow-list chip editor, live per-turn canvas collaboration, portable share/import with credential provisioning
+## ADR-0137 - P-AGENT.9: allow-list chip editor, live per-turn canvas collaboration, portable share/import with credential provisioning
 
 **Date:** 2026-07-04
 **Status:** Accepted - BUILT + tested. NO version bump.
@@ -9567,7 +9567,7 @@ values; recipients re-scan on import and must approve before it runs. The chip e
 user-facing control surface it was designed to be. The catalog remains hand-curated (renderer constant) -
 deriving it from the live omp instance stays future work.
 
-## ADR-0136 - P-AGENT.10: n8n interop (export/import translator) + enterprise connector seam
+## ADR-0138 - P-AGENT.10: n8n interop (export/import translator) + enterprise connector seam
 
 **Date:** 2026-07-04
 **Status:** Accepted - BUILT + tested. NO version bump.
@@ -9608,7 +9608,7 @@ private add-on (`lucidagentIDEaddon`, sibling checkout) ships the connectors int
 importing either share format stays review-gated. Fidelity is deliberately scaffold-grade in v1; the
 round-trip anchor keeps LUCID<->LUCID lossless even when the file traveled through n8n.
 
-## ADR-0137 - P-AGENT.11: the step-runner - enforced approvals, real sub-agents, then branching (DESIGN)
+## ADR-0139 - P-AGENT.11: the step-runner - enforced approvals, real sub-agents, then branching (DESIGN)
 
 **Date:** 2026-07-04
 **Status:** Accepted. **11a BUILT + tested** (same day, continued at user direction): `harness/agent/segments.ts`
@@ -9651,7 +9651,7 @@ matters for security first.
 **Consequences.** Approvals become real security controls; the n8n export's wait-node mapping becomes
 symmetric with LUCID behavior; the compiler keeps emitting the same prompt text as fallback for one-shot mode.
 
-## ADR-0138 - P-AGENT.12: dynamic tool catalog - MCP servers + live omp discovery (DESIGN)
+## ADR-0140 - P-AGENT.12: dynamic tool catalog - MCP servers + live omp discovery (DESIGN)
 
 **Date:** 2026-07-04
 **Status:** Accepted. **BUILT + tested** (same day). Naming VERIFIED against the pinned omp bundle: MCP tools
@@ -9665,7 +9665,7 @@ no MCP servers (or probe failure) degrades to exactly the built-in picker. Both 
 “MCP tools (third-party)” with per-tool provenance titles; AGENT_BUILDER_POLICY's risk bullet now names the
 MCP server when warning (prefix regression re-run green). Live-omp tool enumeration remains future work.
 
-**Context.** TOOL_CATALOG is a hand-curated 17-entry renderer constant (ADR-0135 stub). n8n's moat is 1,500
+**Context.** TOOL_CATALOG is a hand-curated 17-entry renderer constant (ADR-0137 stub). n8n's moat is 1,500
 integrations; ours is MCP - the user's configured MCP servers (settings_store `listMcpServers`) already carry
 exactly the integrations they chose, and omp exposes their tools at runtime.
 
@@ -9677,9 +9677,9 @@ allow-list extension already string-matches names, so namespaced entries enforce
 MCP servers => exactly today's static catalog.
 
 **Consequences.** The Builder's integration surface scales with the user's MCP config; no bespoke connector
-treadmill; the catalog stub in ADR-0135 closes.
+treadmill; the catalog stub in ADR-0137 closes.
 
-## ADR-0139 - P-AGENT.13: per-run execution trace in the canvas (DESIGN)
+## ADR-0141 - P-AGENT.13: per-run execution trace in the canvas (DESIGN)
 
 **Date:** 2026-07-04
 **Status:** Accepted. **BUILT + tested** (same day) with one recorded DELTA from the sketch below: the desktop
@@ -9706,7 +9706,7 @@ within the build (invariant #8, exact names only).
 **Consequences.** "Click a node, see what it did" - and P-AGENT.11's approval cards get their audit surface
 for free.
 
-## ADR-0140 - P-AGENT.14: triggers - scheduled runs first, gated webhooks second (DESIGN)
+## ADR-0142 - P-AGENT.14: triggers - scheduled runs first, gated webhooks second (DESIGN)
 
 **Date:** 2026-07-04
 **Status:** Accepted. **Phase 1 (scheduled runs) BUILT + tested** (same day): automations grew kind
@@ -9732,7 +9732,7 @@ them to notes.
 **Consequences.** "Repeatable" finally means unattended - without widening trust: nothing non-trusted ever
 runs unattended, and webhook payloads are data, never instructions.
 
-## ADR-0141 - P-AGENT.15: spec v2 - retry, timeout, and on-error edges (DESIGN)
+## ADR-0143 - P-AGENT.15: spec v2 - retry, timeout, and on-error edges (DESIGN)
 
 **Date:** 2026-07-04
 **Status:** Accepted. **PARTIALLY BUILT** (same day, with 11c's spec v2 bump as planned): `node.retry`
@@ -9756,7 +9756,7 @@ them (documented).
 **Consequences.** Failure handling becomes reviewable workflow structure - visible on the canvas and in the
 n8n export - instead of prose hopes.
 
-## ADR-0142 - P-AGENT.16: external secret providers via the add-on (DESIGN - ENTERPRISE)
+## ADR-0144 - P-AGENT.16: external secret providers via the add-on (DESIGN - ENTERPRISE)
 
 **Date:** 2026-07-04
 **Status:** Accepted - DESIGN. Public seam only in core; providers are add-on IP.
@@ -9775,7 +9775,7 @@ secrets (forbid local vault) for org policy.
 **Consequences.** JIT tokens stop transiting humans where org infrastructure allows it; parity with n8n
 enterprise external secrets; the private/public split stays: capability descriptor public, provider code IP.
 
-## ADR-0143 - P-AGENT.17: spec revision history + template gallery (DESIGN)
+## ADR-0145 - P-AGENT.17: spec revision history + template gallery (DESIGN)
 
 **Date:** 2026-07-04
 **Status:** Accepted. **BUILT + tested** (same day). History: saveSpecFile snapshots
@@ -9799,3 +9799,40 @@ cheap consistency, no special path). Community submissions deferred until signin
 
 **Consequences.** Undo-across-sessions for authored agents; a first-run experience that starts from working,
 reviewed examples; zero new trust paths.
+
+## ADR-0146 - P-CMD.1: user-authored "/" slash commands - describe it in chat, LUCID interviews, saves, gates
+
+**Date:** 2026-07-04
+**Status:** Accepted - BUILT + tested (authored across sessions; landed + numbered here).
+
+**Context.** Users wanted their own "/" shortcuts ("make a /pr command that reviews the diff", "save this as
+a skill I can call") without editing files. The Agent Builder epic already proved the pattern: a frozen
+policy steers the chat agent, a custom omp tool hands the draft to LUCID, and LUCID re-validates
+authoritatively, fail-closed.
+
+**Decision.**
+1. **UserCommand** (`harness/commands/spec.ts`, pure): a named PROMPT TEMPLATE with two modes - "send"
+   (`/name args` expands `body` with $ARGS/$1..$9/$$ and sends it as the turn) and "skill" (activates the
+   body as a persistent per-session instruction, same path as a bundled skill). The NAME is the stable id
+   (invariant #9) AND the filename: `^[a-z][a-z0-9-]{0,31}$`, reserved tokens (agent/goal/help/…) refused,
+   body ≤ 8000 chars. `validateUserCommand` is fail-closed on unknown input.
+2. **Store** (`harness/commands/file_store.ts`): `.omp/commands/<name>.json`, charset-guarded filenames (no
+   traversal), validate-on-save AND re-validate-on-load; corrupted files skipped, never returned.
+3. **Three gates before a command exists** (`desktop/user_commands.ts`): validator → secret guard (a
+   credential VALUE in a body is refused and pointed at the vault - same detectors as the Agent Builder
+   guardrail) → the Python Unicode scanner (fail-closed: scan unavailable = rejected, the P-AGENT.5 seam).
+   Metadata-only telemetry: EventName gains `command_created`/`command_rejected` (frozen contracts.ts
+   change - acknowledged as part of THIS increment; names only, never bodies).
+4. **Chat authoring loop**: frozen `SLASH_COMMAND_POLICY` (layer 3; PREFIX_VERSION 8→9 - prefix-hash
+   regression green) + the `slash_command_create` omp tool (`harness/omp/slash_command_extension.ts`,
+   validates + acknowledges; acp_backend detects via the unique `commandJson` arg and persists through the
+   gates) + `/command` interview kickoff + "/" autocomplete ranking user commands first.
+
+**Numbering note.** This work was authored referencing ADR-0135 before two upstream PRs (#197 local
+providers, #199 vision) and this branch's Agent Builder ADRs consumed 0135-0145; every reference was
+renumbered to ADR-0146 when landing. ADR numbers are minted at MERGE time from origin/master's tip - the
+lesson recorded so the next parallel session avoids the same collision.
+
+**Consequences.** Users mint personal automation vocabulary conversationally; nothing enters the "/" menu
+without passing the same fail-closed content gates as imported agents; command JSONs are personal workspace
+data (gitignored), never repo content.

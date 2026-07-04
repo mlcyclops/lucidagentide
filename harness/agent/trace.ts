@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// harness/agent/trace.ts — P-AGENT.13 (ADR-0139): per-run execution traces for built agents.
+// harness/agent/trace.ts — P-AGENT.13 (ADR-0141): per-run execution traces for built agents.
 //
 // DELTA vs the ADR's first sketch: the DESKTOP engine opens agent_obs.duckdb READ-ONLY (omp's gate child is
 // the single writer — see file_store.ts), so v1 traces are workspace JSON files under

@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// harness/agent/portable.test.ts — P-AGENT.9 (ADR-0135): the shareable .lucid-agent format. Round-trip,
+// harness/agent/portable.test.ts — P-AGENT.9 (ADR-0137): the shareable .lucid-agent format. Round-trip,
 // tamper-evidence, the no-credential guarantee, and the import setup guidance (vault + JIT ticketing).
 
 import { test, expect, describe } from "bun:test";

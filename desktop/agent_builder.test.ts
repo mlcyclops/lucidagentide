@@ -13,6 +13,9 @@ import {
   runApprovalHtml,
   runsPanelHtml,
   traceDetailHtml,
+  schedulePanelHtml,
+  historyPanelHtml,
+  templatesPanelHtml,
   runPanelHtml,
   secretsPanelHtml,
   agentInterviewPrompt,
@@ -191,6 +194,31 @@ describe("agent builder panel (P-AGENT.2)", () => {
     // no MCP tools discovered → both pickers degrade to exactly the built-in behavior
     const plain = nodeEditorHtml({ id: "b", kind: "tool", label: "Step" }, []);
     expect(plain).not.toContain("MCP tools (third-party)");
+  });
+
+  test("history + templates flyouts: restore per revision; Use per template; escaped content (P-AGENT.17)", () => {
+    const h = historyPanelHtml([
+      { updated_at: 1_700_000_000_000, name: "v2 <edit>", nodes: 4, edges: 3 },
+      { updated_at: 1_600_000_000_000, name: "v1", nodes: 2, edges: 1 },
+    ]);
+    expect(h).toContain('data-restore="1700000000000"');
+    expect(h).toContain("v2 &lt;edit&gt;");
+    expect(h).toContain("4 nodes / 3 edges");
+    expect(historyPanelHtml([])).toContain("No revisions yet");
+    const t = templatesPanelHtml([{ file: "a.lucid-agent.json", name: "web-research", description: "Search & digest", steps: 5, tools: ["web_search"] }]);
+    expect(t).toContain('data-use-tpl="a.lucid-agent.json"');
+    expect(t).toContain("scanned and held for your review"); // templates are NOT exempt from the gate
+    expect(templatesPanelHtml([])).toContain("No templates");
+  });
+
+  test("schedule flyout: form for schedulable agents; honest refusal replaces it when blocked (P-AGENT.14)", () => {
+    const ok = schedulePanelHtml(spec(), null);
+    expect(ok).toContain('id="abSchedPrompt"');
+    expect(ok).toContain('id="abSchedCreate"');
+    expect(ok).toContain("DISARMED");
+    const blocked = schedulePanelHtml(spec(), "This workflow has human-approval checkpoints, so it can't run unattended.");
+    expect(blocked).not.toContain('id="abSchedCreate"');
+    expect(blocked).toContain("approval checkpoints");
   });
 
   test("runs flyout: rows per trace with status + steps; detail lists steps and escapes content (P-AGENT.13)", () => {

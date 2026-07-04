@@ -111,6 +111,11 @@ export const EVENT_NAMES = [
   "agent_run_gated",
   "agent_run_finished",
   "agent_self_edit_blocked",
+  // P-CMD.1 (ADR-0146) — user-authored "/" slash commands. Metadata only (name/mode/verdict), never the
+  // command body or user content. `command_created` fires when a drafted command passes the gate + is
+  // persisted; `command_rejected` when validation/secret-guard/scan blocks it fail-closed.
+  "command_created",
+  "command_rejected",
 ] as const;
 export type EventName = (typeof EVENT_NAMES)[number];
 

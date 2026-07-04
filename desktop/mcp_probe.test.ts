@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/mcp_probe.test.ts — P-AGENT.12 (ADR-0138): MCP tool discovery. The probe is exercised against a
+// desktop/mcp_probe.test.ts — P-AGENT.12 (ADR-0140): MCP tool discovery. The probe is exercised against a
 // REAL in-process HTTP server speaking the MCP JSON-RPC handshake (no mocks), plus the pure naming/parsing
 // helpers omp-name fidelity depends on.
 

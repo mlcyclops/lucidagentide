@@ -450,7 +450,7 @@ export function nodeEditorHtml(node: AgentNode, tools: string[], mcpTools: McpCa
           .join("")}`
       : `<div class="ab-conn-note">Connect this branch to at least two next steps (Connect mode), then name the choices here.</div>`;
   }
-  // P-AGENT.15: reliability knobs for executable step kinds (segment-granular at run time — see ADR-0141).
+  // P-AGENT.15: reliability knobs for executable step kinds (segment-granular at run time — see ADR-0143).
   const reliability =
     node.kind === "prompt" || node.kind === "tool" || node.kind === "subagent"
       ? `<div class="ab-fld-row">

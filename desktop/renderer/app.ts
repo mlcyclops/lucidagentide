@@ -4257,7 +4257,7 @@ async function clearBundledSkill(): Promise<void> {
   showToast({ title: "Skill cleared", desc: "No bundled skill is steering the agent.", timeout: 2000 });
 }
 
-// ── P-CMD.1 (ADR-0135): user-authored "/" slash commands ──────────────────────
+// ── P-CMD.1 (ADR-0146): user-authored "/" slash commands ──────────────────────
 // Resolve the text actually sent to the model. `/agent` + `/command` open builder interviews; a SEND-mode
 // user command expands its saved body with any typed args. Anything else passes through verbatim. Pure.
 function resolveSendText(text: string, cmdTok: string | undefined): string {

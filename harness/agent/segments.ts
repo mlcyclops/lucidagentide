@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// harness/agent/segments.ts — P-AGENT.11a/.11b (ADR-0137): the segment runner that makes approval AND
+// harness/agent/segments.ts — P-AGENT.11a/.11b (ADR-0139): the segment runner that makes approval AND
 // subagent nodes REAL.
 //
 // v1 lowered `approval` to prose in one big system prompt — a guarantee the model could skip. This module
@@ -62,7 +62,7 @@ export interface RunSegment {
 }
 
 /** P-AGENT.15: the runner policy for one segment, derived from its nodes' reliability knobs. Segment
- *  granularity (documented in ADR-0141): retry budget = MAX of the nodes' retry.max; backoff = MAX of their
+ *  granularity (documented in ADR-0143): retry budget = MAX of the nodes' retry.max; backoff = MAX of their
  *  backoffMs (default 500); timeout = MIN of their timeoutMs (tightest step constrains the segment), clamped
  *  to the spec bounds; undefined when no node sets one (the runner default applies). */
 export interface SegmentPolicy {

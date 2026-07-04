@@ -119,7 +119,7 @@ function spawnGatedOmp(o: SpawnOpts): AgentRunResult {
   }
 }
 
-// ── P-AGENT.11a (ADR-0137): segmented runs with ENFORCED approval halts ─────────────────────────────────
+// ── P-AGENT.11a (ADR-0139): segmented runs with ENFORCED approval halts ─────────────────────────────────
 //
 // The SegmentedRun machine (harness/agent/segments.ts) owns the halt; this registry only parks paused
 // machines between the /api/agent/run request and the human's approve/deny. Entries expire after 30

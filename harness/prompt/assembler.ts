@@ -41,7 +41,7 @@ import type { TrustLabel } from "../contracts.ts";
  *  v8 (ADR-0134, P-AGENT.8.3): added the agent-builder policy to layer 3 — when the user describes a
  *      repeatable task to automate, draft it + call `agent_builder_open` to open the Agent Builder, and
  *      NEVER collect a secret VALUE (declare a credential NAME; the user adds the value in the vault).
- *  v9 (ADR-0135, P-CMD.1): added the slash-command policy to layer 3 — when the user asks to create a
+ *  v9 (ADR-0146, P-CMD.1): added the slash-command policy to layer 3 — when the user asks to create a
  *      reusable "/" command (or a skill they can call), gather the specifics (ask refining questions when
  *      under-specified), then call `slash_command_create`; never embed a secret VALUE in a command body. */
 export const PREFIX_VERSION = "9";
@@ -184,7 +184,7 @@ LUCID's Agent Builder - the user does NOT have to configure the canvas themselve
   can paste. A LUCID importing this agent shows that guidance to its user - values are NEVER in the file.
 </agent-builder>`;
 
-// P-CMD.1 (ADR-0135): steer the chat agent to let the user CREATE their own reusable "/" slash commands just by
+// P-CMD.1 (ADR-0146): steer the chat agent to let the user CREATE their own reusable "/" slash commands just by
 // describing them, and to nail down the specifics before enabling one. Frozen (layer 3, cached) so the guidance
 // is byte-stable + always present. Complements AGENT_BUILDER_POLICY: a slash command is a lightweight saved
 // prompt/skill the user triggers by typing /<name>; an agent is a full multi-step workflow.

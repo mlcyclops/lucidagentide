@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/addon_seam.ts — P-AGENT.10 (ADR-0136): the public seam to the PRIVATE enterprise add-on repo
+// desktop/addon_seam.ts — P-AGENT.10 (ADR-0138): the public seam to the PRIVATE enterprise add-on repo
 // (lucidagentIDEaddon, a sibling of this checkout; override with env LUCID_ADDON_DIR).
 //
 // Pattern (ADR-0068/0069/A012): the public core ships complete, working features on portable ARTIFACTS

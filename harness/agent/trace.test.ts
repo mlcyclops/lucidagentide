@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// harness/agent/trace.test.ts — P-AGENT.13 (ADR-0139): file-backed run traces. Round-trip, truncation,
+// harness/agent/trace.test.ts — P-AGENT.13 (ADR-0141): file-backed run traces. Round-trip, truncation,
 // fail-soft reads, path-safety, spec scoping, newest-first ordering.
 
 import { test, expect, describe } from "bun:test";

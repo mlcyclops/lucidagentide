@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// harness/agent/n8n.ts — P-AGENT.10 (ADR-0136): n8n interop, both directions.
+// harness/agent/n8n.ts — P-AGENT.10 (ADR-0138): n8n interop, both directions.
 //
 // EXPORT (`specToN8n`): lowers an AgentSpec into an importable n8n workflow JSON "scaffold": a manual
 // trigger, one n8n node per LUCID step wired along the spec's edges, a REAL `wait` node per approval step

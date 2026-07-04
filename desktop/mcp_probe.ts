@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/mcp_probe.ts — P-AGENT.12 (ADR-0138): discover the TOOL NAMES a configured MCP server exposes, so
+// desktop/mcp_probe.ts — P-AGENT.12 (ADR-0140): discover the TOOL NAMES a configured MCP server exposes, so
 // the Agent Builder's catalog can offer them under the EXACT names omp registers at runtime.
 //
 // Naming (verified against the pinned omp bundle): an MCP tool becomes `mcp__<server>_<tool>`, and when the

@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/addon_seam.test.ts — P-AGENT.10 (ADR-0136): the enterprise add-on seam. Honest absence, presence
+// desktop/addon_seam.test.ts — P-AGENT.10 (ADR-0138): the enterprise add-on seam. Honest absence, presence
 // probing, and the one-JSON-line CLI dispatch contract (fail-honest on every bad reply shape).
 
 import { test, expect, describe, afterEach } from "bun:test";

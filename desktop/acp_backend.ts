@@ -141,7 +141,7 @@ export type ChatEvent =
   | { type: "permission"; id: string; tool: string; detail: string; options: { optionId: string; name: string; kind?: string }[]; url?: string; egress?: boolean; localFile?: boolean; exec?: boolean; program?: string; reason?: string; danger?: boolean }
   | { type: "preview-available"; path: string } // P-PREVIEW.2 (ADR-0096): the agent wrote a previewable file
   | { type: "agent-builder-open"; spec: AgentSpec } // P-AGENT.8.2 (ADR-0134): open the Agent Builder pre-populated
-  | { type: "slash-command-created"; command: UserCommand } // P-CMD.1 (ADR-0135): the agent created a user "/" command
+  | { type: "slash-command-created"; command: UserCommand } // P-CMD.1 (ADR-0146): the agent created a user "/" command
   | { type: "usage"; used: number; size: number; cost: number }
   // P-GOAL.1 (ADR-0046): /goal loop events — an iteration begins, the separate checker's verdict,
   // the loop met its condition, or it stopped (cap / no-progress).
@@ -371,7 +371,7 @@ class Backend {
                 const abArgs = (u.rawInput ?? (u as { input?: unknown }).input ?? ri) as unknown;
                 const abSpec = agentBuilderOpenSpec(String(u.title ?? ""), abArgs);
                 if (abSpec) this.emit({ type: "agent-builder-open", spec: abSpec });
-                // P-CMD.1 (ADR-0135): the agent's `slash_command_create` tool call creates a user "/" command.
+                // P-CMD.1 (ADR-0146): the agent's `slash_command_create` tool call creates a user "/" command.
                 // Same detection shape as agent_builder_open — key on the unique `commandJson` arg, re-parse +
                 // validate + secret-scan here (fail-closed: a leaky/invalid draft parses to null and is ignored).
                 // The renderer then persists it authoritatively through the gate (createUserCommand).
@@ -1073,7 +1073,7 @@ class Backend {
     this.autoRunning = true;
     // Stamp lastRunAt up-front so a slow run can't be re-fired by the next tick before it finishes.
     updateAutomation(ws, id, { lastRunAt: Date.now() });
-    // P-AGENT.14 (ADR-0140): scheduled BUILT-AGENT runs. Fail-closed gate first: only a trusted, loadable,
+    // P-AGENT.14 (ADR-0142): scheduled BUILT-AGENT runs. Fail-closed gate first: only a trusted, loadable,
     // approval-free spec runs unattended. A missing/untrusted agent SUSPENDS the schedule (disable + reason);
     // approval checkpoints refuse the tick but keep the schedule armed. The run itself goes through the SAME
     // startAgentRun pipeline as the Builder's Run button — gate first, allow-list, stored trust, run trace.

@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// harness/agent/n8n.test.ts — P-AGENT.10 (ADR-0136): the n8n interop translator. Round-trip via the
+// harness/agent/n8n.test.ts — P-AGENT.10 (ADR-0138): the n8n interop translator. Round-trip via the
 // embedded portable block, honest lossy mapping on generic imports, DAG preservation, credential NAMES only.
 
 import { test, expect, describe } from "bun:test";

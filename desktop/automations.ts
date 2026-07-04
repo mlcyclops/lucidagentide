@@ -39,7 +39,7 @@ export interface Automation {
   createdAt: number;
   lastRunAt?: number;
   lastResult?: string;
-  // P-AGENT.14 (ADR-0140): scheduled BUILT-AGENT runs. kind defaults to "goal" for every legacy record.
+  // P-AGENT.14 (ADR-0142): scheduled BUILT-AGENT runs. kind defaults to "goal" for every legacy record.
   kind?: "goal" | "agent";
   agentSpecId?: string; // kind "agent": the built agent to run
   agentPrompt?: string; // kind "agent": the task each tick runs with
@@ -62,7 +62,7 @@ export interface AutomationSpec {
 /** P-AGENT.14: the PURE fail-closed gate the scheduler consults before running an agent automation.
  *  Only a TRUSTED, loadable, approval-free spec runs unattended:
  *  - missing spec        → disable (it can never succeed until re-created)
- *  - trust ≠ trusted     → disable (a label downgrade SUSPENDS the schedule — ADR-0140)
+ *  - trust ≠ trusted     → disable (a label downgrade SUSPENDS the schedule — ADR-0142)
  *  - approval checkpoints → refuse this tick but stay armed (unattended runs can't answer approval cards;
  *    the user may edit the agent, so the schedule survives) */
 export function agentAutomationGate(

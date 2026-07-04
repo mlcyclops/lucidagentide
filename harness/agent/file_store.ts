@@ -23,7 +23,7 @@ const specFile = (root: string, id: string): string => join(agentsDir(root), `${
 const trustFile = (root: string, id: string): string => join(agentsDir(root), `${id}.trust.json`);
 const historyDir = (root: string, id: string): string => join(agentsDir(root), "history", id);
 
-/** P-AGENT.17 (ADR-0143): revisions kept per spec. Old snapshots are pruned newest-first. */
+/** P-AGENT.17 (ADR-0145): revisions kept per spec. Old snapshots are pruned newest-first. */
 export const SPEC_HISTORY_KEEP = 20;
 
 export interface SpecFileSummary {
