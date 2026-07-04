@@ -8,7 +8,7 @@ import { test, expect, describe } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildSymbolGraph, ingestSymbolGraph, loadSymbolGraph } from "./symbol_graph.ts";
+import { buildSymbolGraph, ingestSymbolGraph, loadSymbolGraph, loadTs } from "./symbol_graph.ts";
 
 function fixture(): string {
   const root = mkdtempSync(join(tmpdir(), "sg-"));
@@ -62,5 +62,48 @@ describe("symbol graph (P-KG-SYM.1)", () => {
       expect(loaded?.symbolCount).toBe(g.symbolCount);
       expect(loaded?.edgeCount).toBe(g.edgeCount);
     } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  // The module must not hard-depend on the TypeScript compiler at import time: dev.ts imports it on the
+  // engine boot path, so a missing/broken `typescript` must degrade ONLY the symbol graph, not the engine.
+  describe("compiler-unavailable fail-soft (packaging regression: v1.9.0 boot crash)", () => {
+    const unavailable = () => null; // simulate `require("typescript")` throwing / package missing
+
+    test("the module loads without touching the compiler (type-only import)", () => {
+      // Reaching this line at all proves importing ./symbol_graph.ts did not require the runtime compiler.
+      expect(typeof buildSymbolGraph).toBe("function");
+      expect(typeof loadTs).toBe("function");
+    });
+
+    test("buildSymbolGraph degrades to an empty graph when the compiler can't be loaded", () => {
+      const root = fixture();
+      try {
+        const g = buildSymbolGraph(root, unavailable);
+        expect(g.level).toBe("symbol");
+        expect(g.nodes).toEqual([]);
+        expect(g.edges).toEqual([]);
+        expect(g.symbolCount).toBe(0);
+        expect(g.edgeCount).toBe(0);
+        expect(g.fileCount).toBe(0);
+        expect(g.root).toBe(root);
+      } finally { rmSync(root, { recursive: true, force: true }); }
+    });
+
+    test("ingestSymbolGraph stays fail-soft (empty graph, no throw) when the compiler is unavailable", () => {
+      const root = fixture();
+      try {
+        const g = ingestSymbolGraph(root, unavailable);
+        expect(g.symbolCount).toBe(0);
+        const loaded = loadSymbolGraph(root); // persisted the empty graph, still round-trips
+        expect(loaded?.symbolCount).toBe(0);
+        expect(loaded?.edgeCount).toBe(0);
+      } finally { rmSync(root, { recursive: true, force: true }); }
+    });
+
+    test("the real loadTs() resolves the compiler in this environment", () => {
+      const ts = loadTs();
+      expect(ts).not.toBeNull();
+      expect(typeof ts!.createSourceFile).toBe("function");
+    });
   });
 });

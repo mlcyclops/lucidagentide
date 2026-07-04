@@ -37,8 +37,11 @@ import type { TrustLabel } from "../contracts.ts";
  *      use LUCID's built-in Preview panel (write the .html, or call preview_open) instead.
  *  v7 (ADR-0114, P-CHAT.2): added the engagement policy to layer 3 — some models treated opening a
  *      session / a bare "hi" as license to scan and edit the workspace unprompted. Greet, wait, and
- *      offer opt-in numbered next steps from context/KG instead of auto-acting on the cwd. */
-export const PREFIX_VERSION = "7";
+ *      offer opt-in numbered next steps from context/KG instead of auto-acting on the cwd.
+ *  v8 (ADR-0134, P-AGENT.8.3): added the agent-builder policy to layer 3 — when the user describes a
+ *      repeatable task to automate, draft it + call `agent_builder_open` to open the Agent Builder, and
+ *      NEVER collect a secret VALUE (declare a credential NAME; the user adds the value in the vault). */
+export const PREFIX_VERSION = "8";
 
 export const UNTRUSTED_START = "UNTRUSTED_CONTENT_START";
 export const UNTRUSTED_END = "UNTRUSTED_CONTENT_END";
@@ -140,6 +143,27 @@ user drive. Offering numbered, choose-by-number next steps is also the preferred
 whenever sensible follow-ups exist.
 </engagement>`;
 
+// P-AGENT.8.3 (ADR-0134): steer the chat agent to BUILD reusable agents in the Agent Builder, and hard-forbid
+// collecting secret VALUES (the load-bearing guardrail — the agent declares credential NAMES; the user adds
+// values in the OS-encrypted vault). Frozen (layer 3, cached) so the guidance is byte-stable + always present.
+export const AGENT_BUILDER_POLICY = `<agent-builder>
+When the user describes a REPEATABLE, multi-step task they want to automate or hand to an AGENT (e.g. "I want
+something that searches for X and logs it to Y", "connect to my CRM and do Z"), you can BUILD it for them in
+LUCID's Agent Builder - the user does NOT have to configure the canvas themselves.
+- First, briefly explain in plain language how you'd build it: the workflow steps, the tools it needs, the
+  sites/APIs it will reach, and the credentials it requires. Confirm the specifics with the user.
+- Then call the \`agent_builder_open\` tool with the drafted spec (\`specJson\`) to OPEN the Agent Builder
+  pre-populated: nodes as a DAG (prompt/tool/subagent/approval), a tool allow-list, egress patterns, and each
+  needed credential declared as a NAME only - a SecretRef {name, kind, purpose}.
+- NEVER ask for, accept, or embed a secret VALUE (password, API key, token, connection string) - not in chat,
+  not in the spec. The user adds credential VALUES in the "Secrets & connections" panel, which stores them in
+  LUCID's OS-encrypted vault; you only ever see the NAME. If the user pastes a secret to you, do NOT put it in
+  the agent or echo it back - tell them to add it in the Secrets & connections panel instead.
+- If the user doesn't know how to obtain a credential (e.g. a Salesforce API token), read the vendor's OFFICIAL
+  documentation and walk them through generating it step by step; the value they generate goes in the vault.
+- Prefer building a reusable agent this way over a one-off script when the user wants something repeatable.
+</agent-builder>`;
+
 const LAYER_3_CODING = `<coding>
 Match the surrounding code's idiom, naming, and comment density. Verification is
 part of completion: code is not done until the relevant checks (tests, lint,
@@ -153,7 +177,9 @@ ${BUILD_POLICY}
 
 ${PREVIEW_POLICY}
 
-${ENGAGEMENT_POLICY}`;
+${ENGAGEMENT_POLICY}
+
+${AGENT_BUILDER_POLICY}`;
 
 // ── Layer 4 — security policy & trust-boundary rules ────────────────────────
 // This layer defines the data/instruction boundary the whole product enforces.

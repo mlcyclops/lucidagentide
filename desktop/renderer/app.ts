@@ -26,6 +26,8 @@ import { type GraphHandle, kindLabel, mountGraph } from "./graph.ts";
 import { addEdgeOptimistic, applyForget, chainPairs, matchNodes, removeEdgeOptimistic, resolveRelationLabel } from "./kg_ops.ts";
 import { capGraph, graphOpts, pollDelay, watchPerfTier } from "./perf_tier.ts";
 import type { PersonalGraphData } from "./bridge.ts";
+import { agentBuilderPanelHtml, specToGraphData, nodeEditorHtml, saveErrors, newCanvasSpec, runPanelHtml, secretsPanelHtml, agentInterviewPrompt } from "./agent_builder.ts"; // P-AGENT.2b/.4-live/.8
+import type { AgentSpec, NodeKind } from "../../harness/agent/spec.ts"; // P-AGENT.2b
 import { type Action, type ToastAction, attachRichTip, createPalette, initTooltips, popover, showToast } from "./ui.ts";
 import { exportActionPlan } from "./kg_export.ts";
 import { formatImportLine } from "./import_progress.ts";
@@ -134,6 +136,9 @@ function buildShell(): void {
       <button class="model-badge" id="modelBadge" data-tip="Model · mode · thinking|Click to choose" data-tip-icon="spark">
         <span class="dot"></span><span id="modelName">${esc(modelLabel(state.model))}</span>${icon("chevron", 13)}
       </button>
+      <!-- Persona + Skills live in the titlebar (full-width, so they don't squish when a right surface opens). -->
+      <button class="ctool tb-chip" id="ctPersona" data-tip="AskSage persona|Server-supplied role guidance - scanned before use" hidden>${icon("user", 14)}<span id="ctPersonaName">Persona</span>${icon("chevron", 11)}</button>
+      <button class="ctool tb-chip" id="ctSkill" data-tip="Skills|Built-in skills, /task delegation, and project skills" hidden>${icon("bolt", 14)}<span>Skills</span>${icon("chevron", 11)}</button>
       <div class="tb-spacer"></div>
       <div class="zoom" role="group" aria-label="Text zoom">
         <button id="zoomOut" data-tip="Zoom out|${modSymbol("−")}">${icon("minus", 13)}</button>
@@ -155,6 +160,7 @@ function buildShell(): void {
         <button class="rail-btn" data-rail="memory" data-tip="Memory & context|Context window, prompt-cache savings, semantic memory" data-tip-icon="savings">${icon("savings", 20)}</button>
         <button class="rail-btn" data-rail="knowledge" data-tip="Knowledge graph|Your private, encrypted personalization graph - nodes, edges, drill-down" data-tip-icon="graph">${icon("graph", 20)}</button>
         <button class="rail-btn" data-rail="preview" data-tip="Preview|Open a local app/page the agent built in a sandboxed in-app browser, and send a screenshot to chat" data-tip-icon="eye">${icon("eye", 20)}</button>
+        <button class="rail-btn" data-rail="agentBuilder" data-tip="Agent Builder|Design an AI agent on a visual workflow canvas - LUCID builds the gated code for you" data-tip-icon="spark">${icon("spark", 20)}</button>
         <button class="rail-btn" id="railReports" data-tip="Engineering Reports|Generate a role-tailored engineering brief (with podcast audio), and browse every past loop After-Action Report + brief" data-tip-icon="report">${icon("report", 20)}</button>
         <button class="rail-btn" id="railLogs" data-rail="dev" hidden data-tip="Logs|Read-only developer logs: telemetry, run lineage, transcripts, gate-block audit, AskSage tool-call diagnostics" data-tip-icon="logs">${icon("logs", 20)}</button>
         <div class="spacer"></div>
@@ -186,12 +192,9 @@ function buildShell(): void {
             <button class="send-btn" id="send" data-tip="Send|Enter" disabled>${icon("send", 18)}</button>
           </div>
           <div class="composer-tools" id="composerTools">
-            <!-- Model · mode · thinking live in the top #modelBadge picker (which covers all three); the
-                 composer keeps only the controls that AREN'T up there: persona, skills, and voice input. -->
-            <button class="ctool" id="ctPersona" data-tip="AskSage persona|Server-supplied role guidance - scanned before use" hidden>${icon("user", 14)}<span id="ctPersonaName">Persona</span>${icon("chevron", 11)}</button>
-            <button class="ctool" id="ctSkill" data-tip="Skills|Built-in skills, /task delegation, and project skills" hidden>${icon("bolt", 14)}<span>Skills</span>${icon("chevron", 11)}</button>
+            <!-- Persona + Skills moved to the titlebar (next to the model picker); the composer keeps only the
+                 mic so it never squishes when a right-edge surface (KG / IDE / Agent Builder) narrows the center. -->
             <button class="ctool ctool-icon" id="ctMic" data-tip="Voice input · ${modCombo("D")}|Click (or press ${modCombo("D")}) to record, again to stop - transcribed into the composer (Settings → Voice sets the engine)">${icon("mic", 15)}</button>
-            <span class="ctool-hint"><span class="kh"><kbd>↵</kbd> send</span><span class="kh"><kbd>⇧↵</kbd> newline</span><span class="kh"><kbd>${modCombo("K")}</kbd> commands</span></span>
           </div>
         </div>
       </main>
@@ -275,6 +278,7 @@ function buildShell(): void {
           <div class="empty preview-empty" id="prevEmpty"><span class="preview-empty-msg" id="prevEmptyMsg">Open a local HTML file to preview it here - paste its path above and press <b>Open</b>. (The agent driving this itself is coming next; remote URLs are egress-gated.)</span></div>
         </div>
       </aside>
+      ${agentBuilderPanelHtml()}
     </div>
 
     <div class="statusbar" id="statusbar"></div>
@@ -986,6 +990,10 @@ async function send(): Promise<void> {
   const ta = $("#input") as HTMLTextAreaElement;
   const text = ta.value.trim();
   if (!text) return;
+  // P-AGENT.8: `/agent [description]` kicks off the Agent Builder interview — the chat agent (steered by the
+  // frozen AGENT_BUILDER_POLICY) asks what to build, then calls `agent_builder_open`. We show the user's
+  // `/agent …` in the transcript but send the interview-kickoff prompt to the model.
+  const sendText = /^\/agent\b/i.test(text) ? agentInterviewPrompt(text.replace(/^\/agent\b/i, "").trim()) : text;
   // P-ACP.4: a turn is already running → pre-stage this prompt instead of dropping it. It auto-sends
   // when the current turn ends (naturally or via Stop). One slot - a newer entry replaces the old.
   if (state.streaming) { state.queued = text; ta.value = ""; autosize(ta); renderQueued(); setSendEnabled(); return; }
@@ -1102,10 +1110,11 @@ async function send(): Promise<void> {
     }
     else if (e.type === "block") onBlock(e);
     else if (e.type === "preview-available") onPreviewAvailable(e.path);
+    else if (e.type === "agent-builder-open") openAgentBuilderWithSpec(e.spec); // P-AGENT.8.2
     else if (e.type === "usage") { tok = e.used; cost = e.cost; state.liveUsage = { used: e.used, size: e.size, cost: e.cost }; paintHud(); renderStatus(); renderMetricsRail(); }
     else if (e.type === "done") { if (e.text && e.text.length > buf.length) buf = e.text; /* reconcile a lossy stream with the server's full reply */ streamEl.innerHTML = renderMarkdown(buf); enhanceCodeBlocks(streamEl); (node as MsgNode)._md = buf; finishHud(); state.streaming = false; setSendEnabled(); }
   };
-  try { await bridge.sendPrompt(text, onEvent); }
+  try { await bridge.sendPrompt(sendText, onEvent); }
   finally {
     (node as MsgNode)._md = buf;
     if (state.streaming) { streamEl.innerHTML = renderMarkdown(buf); enhanceCodeBlocks(streamEl); finishHud(); state.streaming = false; setSendEnabled(); } else { finishHud(); }
@@ -2359,6 +2368,7 @@ function openPreview(): void {
   closeSettings();
   closeIde();
   closeKnowledge();
+  closeAgentBuilder(); // P-AGENT.2b
   if (!state.sidebarCollapsed) toggleSidebar(true);
   $("#preview")!.hidden = false;
   $("#inspector")!.hidden = true;
@@ -2367,6 +2377,7 @@ function openPreview(): void {
   const path = $("#prevPath") as HTMLInputElement | null;
   if (path && !path.value && state.lastPreviewablePath) path.value = state.lastPreviewablePath;
   if (path?.value) loadPreview(path.value); else path?.focus();
+  startPreviewShotLoop(); // keep the agent's preview_screenshot shot fresh while the panel is open
   // Screenshot capture is an Electron-only seam; disable the button in a plain browser.
   const shot = $("#prevShot") as HTMLButtonElement | null;
   if (shot && !bridge.isElectron) { shot.disabled = true; shot.title = "Screenshots are available in the desktop app"; }
@@ -2374,6 +2385,7 @@ function openPreview(): void {
 function closePreview(): void {
   if (!previewOpen) return;
   previewOpen = false;
+  stopPreviewShotLoop();
   $("#preview")!.hidden = true;
   $("#inspector")!.hidden = false;
   $$(".rail-btn").forEach((b) => b.classList.remove("active"));
@@ -2451,6 +2463,245 @@ async function cacheRenderedPreviewShot(): Promise<void> {
   if (rect.width < 2 || rect.height < 2) return;
   const png = await bridge.capturePreview({ x: Math.round(rect.x), y: Math.round(rect.y), width: Math.round(rect.width), height: Math.round(rect.height) }).catch(() => null);
   if (png) await bridge.cachePreviewShot(png).catch(() => { /* best-effort */ });
+}
+// P-PREVIEW.3a-shot freshness: the single on-load capture froze the shot at load+150ms, so the agent's
+// preview_screenshot saw an empty/early/stale frame the moment the previewed app animated or the file was
+// re-edited — and it gave up and read the DOM instead. Re-capture on a light cadence WHILE the preview panel
+// is visible so the cached PNG tracks what the user actually sees (cacheRenderedPreviewShot no-ops when the
+// frame is hidden / non-Electron, so this is a cheap visibility check when there's nothing to capture).
+let previewShotTimer: number | null = null;
+function startPreviewShotLoop(): void {
+  if (previewShotTimer !== null) return;
+  void cacheRenderedPreviewShot(); // refresh immediately on open, then keep it current
+  previewShotTimer = window.setInterval(() => {
+    if (document.visibilityState === "visible") void cacheRenderedPreviewShot();
+  }, 1500);
+}
+function stopPreviewShotLoop(): void {
+  if (previewShotTimer === null) return;
+  window.clearInterval(previewShotTimer);
+  previewShotTimer = null;
+}
+
+// ── P-AGENT.2b (ADR-0133): the Agent Builder workflow canvas ─────────────────────────────────────────────
+// A right-edge surface (mutually exclusive with the other right surfaces). The spec is edited in memory and
+// rendered through the SAME zero-dep graph engine as the KG (specToGraphData → mountGraph). Save validates
+// fail-closed both client-side (instant) and server-side (authoritative).
+let abOpen = false;
+let abSpec: AgentSpec | null = null;
+let abHandle: GraphHandle | null = null;
+let abConnectMode = false;
+
+function openAgentBuilder(): void {
+  abOpen = true;
+  closeSettings();
+  closeKnowledge();
+  closeIde();
+  closePreview();
+  if (!state.sidebarCollapsed) toggleSidebar(true);
+  $("#agentBuilder")!.hidden = false;
+  $("#inspector")!.hidden = true;
+  $$(".rail-btn").forEach((b) => b.classList.toggle("active", (b as HTMLElement).dataset.rail === "agentBuilder"));
+  void renderAgentBuilder();
+}
+function closeAgentBuilder(): void {
+  if (!abOpen) return;
+  abOpen = false;
+  abHandle?.destroy();
+  abHandle = null;
+  $("#agentBuilder")!.hidden = true;
+  $("#inspector")!.hidden = false;
+  $$(".rail-btn").forEach((b) => b.classList.remove("active"));
+  $('.rail-btn[data-rail="chat"]')?.classList.add("active");
+}
+
+async function renderAgentBuilder(): Promise<void> {
+  const canvas = $("#abCanvas");
+  if (!canvas) return;
+  if (!abSpec) {
+    // Resume the most-recently-saved agent for this workspace, else start a fresh one-node spec.
+    const list = await bridge.agentList().catch(() => []);
+    abSpec = (list[0] ? await bridge.agentLoad(list[0].spec_id) : null) ?? newCanvasSpec("New agent", Date.now());
+  }
+  abHandle?.destroy();
+  abHandle = mountGraph(canvas as HTMLElement, specToGraphData(abSpec), (id) => selectAbNode(id), {
+    onRelate: (from, to) => addAbEdge(from, to),
+  });
+  abHandle.setRelateMode(abConnectMode);
+  renderAbErrors();
+}
+function reRenderAbGraph(): void {
+  if (abSpec && abHandle) abHandle.update(specToGraphData(abSpec));
+}
+function markAbDirty(): void {
+  if (abSpec) abSpec.updated_at = Date.now();
+}
+
+function selectAbNode(id: string | null): void {
+  const side = $("#abSide");
+  if (!side) return;
+  const node = abSpec?.nodes.find((n) => n.id === id);
+  if (!node || !abSpec) { side.hidden = true; return; }
+  side.innerHTML = nodeEditorHtml(node, abSpec.tools);
+  side.hidden = false;
+  $("#abLabel", side)?.addEventListener("input", (e) => { node.label = (e.target as HTMLInputElement).value; markAbDirty(); reRenderAbGraph(); });
+  $("#abPrompt", side)?.addEventListener("input", (e) => { node.prompt = (e.target as HTMLTextAreaElement).value; markAbDirty(); });
+  $("#abTool", side)?.addEventListener("change", (e) => { node.tool = (e.target as HTMLSelectElement).value; markAbDirty(); renderAbErrors(); });
+  $("#abSub", side)?.addEventListener("input", (e) => { node.subagentSpecId = (e.target as HTMLInputElement).value; markAbDirty(); });
+  $("#abDelNode", side)?.addEventListener("click", () => deleteAbNode(node.id));
+}
+
+function addAbNode(kind: NodeKind): void {
+  if (!abSpec) return;
+  const id = `n_${crypto.randomUUID()}`;
+  const node = { id, kind, label: `New ${kind}`, ...(kind === "prompt" ? { prompt: "" } : {}) };
+  abSpec.nodes.push(node);
+  markAbDirty();
+  reRenderAbGraph();
+  selectAbNode(id);
+  renderAbErrors();
+}
+function addAbEdge(from: string, to: string): void {
+  if (!abSpec || from === to) return;
+  if (abSpec.edges.some((e) => e.from === from && e.to === to)) return;
+  abSpec.edges.push({ id: `e_${crypto.randomUUID()}`, from, to });
+  markAbDirty();
+  reRenderAbGraph();
+  renderAbErrors();
+}
+function deleteAbNode(id: string): void {
+  if (!abSpec) return;
+  abSpec.nodes = abSpec.nodes.filter((n) => n.id !== id);
+  abSpec.edges = abSpec.edges.filter((e) => e.from !== id && e.to !== id);
+  const side = $("#abSide");
+  if (side) side.hidden = true;
+  markAbDirty();
+  reRenderAbGraph();
+  renderAbErrors();
+}
+function toggleAbConnect(): void {
+  abConnectMode = !abConnectMode;
+  abHandle?.setRelateMode(abConnectMode);
+  $("#abConnect")?.classList.toggle("active", abConnectMode);
+}
+function renderAbErrors(): void {
+  const box = $("#abErrs");
+  if (!box || !abSpec) return;
+  const errs = saveErrors(abSpec);
+  if (errs.length === 0) { box.hidden = true; box.textContent = ""; return; }
+  box.hidden = false;
+  box.textContent = `${errs.length} issue${errs.length > 1 ? "s" : ""} to fix before saving: ${errs.join("; ")}`;
+}
+async function saveAgentBuilder(): Promise<void> {
+  if (!abSpec) return;
+  const errs = saveErrors(abSpec);
+  if (errs.length) { renderAbErrors(); showToast({ tone: "danger", title: "Can't save yet", desc: errs[0]! }); return; }
+  const r = await bridge.agentSave(abSpec);
+  if (r?.saved) showToast({ tone: "ok", title: "Agent saved", desc: `"${abSpec.name}"` });
+  else showToast({ tone: "danger", title: "Save failed", desc: r?.errors?.[0] ?? "The server refused the spec." });
+}
+async function exportAgentBuilder(): Promise<void> {
+  if (!abSpec) return;
+  const errs = saveErrors(abSpec);
+  if (errs.length) { renderAbErrors(); showToast({ tone: "danger", title: "Can't export yet", desc: errs[0]! }); return; }
+  const r = await bridge.agentExport(abSpec, "electron"); // P-AGENT.6: portable, tamper-evident bundle
+  if (r?.dir) showToast({ tone: "ok", title: "Agent exported", desc: `${r.files} files → ${r.dir}`, meta: r.digest });
+  else showToast({ tone: "danger", title: "Export failed", desc: "The server refused the spec." });
+}
+// P-AGENT.4-live: open the Run flyout and let the user run the agent live inside LUCID.
+function openAbRunPanel(): void {
+  if (!abSpec) return;
+  const errs = saveErrors(abSpec);
+  if (errs.length) { renderAbErrors(); showToast({ tone: "danger", title: "Can't run yet", desc: errs[0]! }); return; }
+  const side = $("#abSide");
+  if (!side) return;
+  side.innerHTML = runPanelHtml(state.model);
+  side.hidden = false;
+  ($("#abRunPrompt", side) as HTMLTextAreaElement | null)?.focus();
+  $("#abRunGo", side)?.addEventListener("click", () => void runAgentBuilder());
+}
+async function runAgentBuilder(): Promise<void> {
+  if (!abSpec) return;
+  const promptEl = $("#abRunPrompt") as HTMLTextAreaElement | null;
+  const out = $("#abRunOut");
+  const task = (promptEl?.value ?? "").trim();
+  if (!task) { showToast({ tone: "warn", title: "Enter a task", desc: "Tell the agent what to do." }); return; }
+  if (out) { out.hidden = false; out.textContent = "Running the agent…"; }
+  const r = await bridge.agentRun(abSpec, task, state.model); // P-AGENT.4-live (gated omp run)
+  if (!out) return;
+  if (r?.blocked) out.textContent = `Blocked: ${r.reason}`;
+  else if (r?.error) out.textContent = `Error: ${r.error}`;
+  else out.textContent = r?.output || "(the agent produced no output)";
+}
+
+// P-AGENT.8.2: the chat -> canvas handoff. The agent called `agent_builder_open` with a drafted (validated,
+// secret-free) spec; open the Agent Builder pre-populated + auto-surface Secrets & connections if it needs any.
+function openAgentBuilderWithSpec(spec: AgentSpec): void {
+  const errs = saveErrors(spec); // defense-in-depth: the backend already gated this, re-check before opening
+  if (errs.length) { showToast({ tone: "danger", title: "Couldn't open the drafted agent", desc: errs[0]! }); return; }
+  abSpec = spec;
+  openAgentBuilder(); // renderAgentBuilder keeps abSpec since it's already set
+  if ((spec.secrets?.length ?? 0) > 0 || (spec.egress?.length ?? 0) > 0) void openAbSecretsPanel();
+  showToast({ tone: "ok", title: "Agent Builder opened", desc: `Review "${spec.name}", add any credentials, then confirm.` });
+}
+
+// P-AGENT.8.4: the Secrets & connections flyout — the easy-to-find place to add API credentials (to the vault)
+// and confirm the sites this agent may reach. The agent directs the user here; it also opens from the toolbar.
+async function openAbSecretsPanel(): Promise<void> {
+  if (!abSpec) return;
+  const side = $("#abSide");
+  if (!side) return;
+  let inVault = new Set<string>();
+  try { if (bridge.isElectron && bridge.credList) inVault = new Set((await bridge.credList()).map((c) => c.ref)); } catch { /* vault unavailable → all show "needs a value" */ }
+  let approved = new Set<string>();
+  try { approved = new Set((await bridge.whitelistList()).map((e) => e.pattern)); } catch { /* whitelist unavailable → all show "Approve" */ }
+  side.innerHTML = secretsPanelHtml(abSpec, inVault, !!bridge.isElectron, approved);
+  side.hidden = false;
+  $$(".ab-cred-save", side).forEach((b) => b.addEventListener("click", () => void addCredentialFromRow(b as HTMLElement)));
+  $$(".ab-conn-approve", side).forEach((b) => b.addEventListener("click", () => void approveConnectionFromRow(b as HTMLElement))); // P-AGENT.8.5
+  $$(".ab-cred-help", side).forEach((b) => b.addEventListener("click", () => askCredentialHelp(b as HTMLElement))); // P-AGENT.8.5
+}
+// P-AGENT.8.5: approve a declared connection → write a project-scoped WhitelistEntry so the agent's egress to
+// that host is allowed under the managed ceiling (the whitelist itself enforces + can be tightened by policy).
+async function approveConnectionFromRow(btn: HTMLElement): Promise<void> {
+  const pattern = (btn.closest(".ab-conn-row") as HTMLElement | null)?.dataset.conn ?? "";
+  if (!pattern) return;
+  const r = await bridge.whitelistUpsert({ kind: "domain", pattern, zone: "external", scope: "project" });
+  if (r) { showToast({ tone: "ok", title: "Connection approved", desc: `${pattern} added to this workspace's network whitelist.` }); void openAbSecretsPanel(); }
+  else showToast({ tone: "danger", title: "Couldn't approve", desc: `${pattern} was rejected (malformed host pattern?).` });
+}
+// P-AGENT.8.5: doc-assisted setup — ask the agent to read the vendor's official docs and walk the user through
+// generating this credential (the value goes to the vault, never the chat — the AGENT_BUILDER_POLICY enforces).
+function askCredentialHelp(btn: HTMLElement): void {
+  const row = btn.closest(".ab-cred-row") as HTMLElement | null;
+  const name = row?.dataset.cred ?? "";
+  const kind = row?.dataset.kind ?? "";
+  const purpose = btn.dataset.purpose ?? "";
+  const q = `Walk me through generating the credential "${name}" (kind: ${kind}${purpose ? `; for: ${purpose}` : ""}). Read the vendor's official documentation and give me clear, numbered step-by-step instructions to obtain it. Do NOT ask me for the value — I'll paste it into the Secrets & connections panel, which stores it in the encrypted vault.`;
+  const ta = $("#input") as HTMLTextAreaElement | null;
+  if (ta) { ta.value = q; autosize(ta); setSendEnabled(); }
+  void send();
+}
+async function addCredentialFromRow(btn: HTMLElement): Promise<void> {
+  const row = btn.closest(".ab-cred-row") as HTMLElement | null;
+  if (!row) return;
+  const name = row.dataset.cred ?? "";
+  const kind = row.dataset.kind ?? "apikey";
+  const input = $(".ab-cred-secret", row) as HTMLInputElement | null;
+  const secret = (input?.value ?? "").trim();
+  if (!secret) { showToast({ tone: "warn", title: "Paste the secret first", desc: "The value goes straight to the encrypted vault." }); return; }
+  if (!bridge.isElectron || !bridge.credStore) {
+    showToast({ tone: "danger", title: "Vault is desktop-only", desc: "Open the LUCID desktop app to store credentials securely." });
+    return;
+  }
+  const r = await bridge.credStore({ ref: name, kind, secret, label: name });
+  if (input) input.value = "";
+  if (r && !("error" in r)) {
+    showToast({ tone: "ok", title: "Stored in the vault", desc: `${name} (••••${(r as { last4?: string }).last4 ?? ""}) — encrypted; the agent never sees the value.` });
+    void openAbSecretsPanel(); // refresh statuses
+  } else {
+    showToast({ tone: "danger", title: "Couldn't store the credential", desc: (r as { error?: string })?.error ?? "vault error" });
+  }
 }
 // ── P-PREVIEW.5: markup overlay (pen / rectangle / text) ─────────────────────────
 // A <canvas> sits ON TOP of the preview iframe. Because "Screenshot → chat" uses Electron's capturePage
@@ -5076,6 +5327,9 @@ function slashSource(): SlashItem[] {
   let uses: Record<string, number> = {};
   try { uses = JSON.parse(localStorage.getItem("lucid.skill-usage") || "{}"); } catch { /* none */ }
   const out: SlashItem[] = [];
+  // P-AGENT.8: the flagship /agent command — start the Agent Builder interview. Promoted (high `uses`) so it
+  // surfaces near the top; `complete` lets the user optionally add a one-line description before sending.
+  out.push({ label: "/agent", hint: "Build an AI agent — LUCID interviews you, then opens the Agent Builder", kind: "command", complete: "/agent ", uses: 9000 + (uses["agent"] ?? 0) });
   for (const s of bundledSkillsByUsage()) out.push({ label: s.name, hint: s.description, kind: "bundled", activate: s.command, uses: uses[s.command] ?? 0 });
   for (const s of state.skills) out.push({ label: `/skill:${s.name}`, hint: s.description || s.source, kind: "project", complete: `/skill:${s.name} `, uses: 0 });
   for (const c of state.commands) out.push({ label: `/${c.name}`, hint: c.description ?? "", kind: "command", complete: `/${c.name} `, uses: 0 });
@@ -5253,14 +5507,24 @@ function wire(): void {
     const r = (b as HTMLElement).dataset.rail!;
     if (r !== "knowledge") closeKnowledge();
     if (r !== "preview") closePreview(); // P-PREVIEW.1: right-edge surfaces are mutually exclusive
+    if (r !== "agentBuilder") closeAgentBuilder(); // P-AGENT.2b
     if (r === "security" || r === "memory") focusInspector(r);
     else if (r === "dev") { focusInspector("dev"); void loadDev(); } // ADR-0009 Phase D
     else if (r === "chat") { closeSettings(); $("#input")?.focus(); $$(".rail-btn").forEach((x) => x.classList.toggle("active", x === b)); }
     else if (r === "settings") openSettings();
     else if (r === "knowledge") openKnowledge();
     else if (r === "preview") openPreview();
+    else if (r === "agentBuilder") openAgentBuilder(); // P-AGENT.2b
     else palette.show();
   }));
+  // P-AGENT.2b: Agent Builder toolbar (add-node kinds · connect mode · validate · save).
+  $$("[data-ab-add]").forEach((b) => b.addEventListener("click", () => addAbNode((b as HTMLElement).dataset.abAdd as NodeKind)));
+  $("#abConnect")?.addEventListener("click", () => toggleAbConnect());
+  $("#abValidate")?.addEventListener("click", () => renderAbErrors());
+  $("#abSave")?.addEventListener("click", () => void saveAgentBuilder());
+  $("#abExport")?.addEventListener("click", () => void exportAgentBuilder());
+  $("#abRun")?.addEventListener("click", () => openAbRunPanel());
+  $("#abSecrets")?.addEventListener("click", () => void openAbSecretsPanel());
   // P-PREVIEW.1 (ADR-0096): preview panel - open a local file, reload, screenshot to chat, close.
   $("#prevClose")?.addEventListener("click", () => closePreview());
   $("#prevOpen")?.addEventListener("click", () => loadPreview(($("#prevPath") as HTMLInputElement | null)?.value ?? ""));
@@ -5985,7 +6249,7 @@ function wire(): void {
 
   // P-IDE.4: "View in IDE" on chat code blocks → open the read-only Monaco panel (delegated, one
   // listener for all current + future blocks). Exclusivity: opening the IDE closes Settings + KG.
-  setIdeExclusivity(() => { closeSettings(); closeKnowledge(); });
+  setIdeExclusivity(() => { closeSettings(); closeKnowledge(); closeAgentBuilder(); });
   // P-IDE.5: the IDE drops edited code into the chat composer ("Send to chat"), and resolves a
   // Save-As destination (folder pick → filename prompt) for snippets with no bound path.
   setIdeHooks({
