@@ -1,0 +1,12 @@
+LucidAgentIDE — lucid.nvim
+Copyright (c) 2026 TechLead 187 LLC
+SPDX-License-Identifier: BUSL-1.1
+
+This plugin is part of LucidAgentIDE and is distributed under the Business Source
+License 1.1. The authoritative license text, Additional Use Grant, Change Date,
+and Change License are in the canonical LICENSE at the repository root:
+
+    https://github.com/mlcyclops/lucidagentide/blob/master/LICENSE
+
+The plugin's source of truth is `extensions/neovim/` in that repository; the
+`lucid.nvim` branch is generated from it (git subtree split) for installation.

@@ -77,3 +77,15 @@ jobs:
           name: vscode-extension
           path: extensions/vscode/lucidagentide.vsix
           if-no-files-found: warn
+
+  neovim:
+    name: Neovim plugin (headless nvim helpers)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: rhysd/action-setup-vim@v1
+        with:
+          neovim: true
+      # Runs the plugin's pure-helper assertions the same way the Bun suite + `make demo-P-NVIM.1` do.
+      - name: Headless helper assertions
+        run: nvim --headless --clean --cmd 'set rtp^=extensions/neovim' -l extensions/neovim/test/helpers_spec.lua

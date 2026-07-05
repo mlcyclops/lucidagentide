@@ -16,12 +16,14 @@ import {
   APPENDED_POLICY,
   assets,
   buildAcpArgs,
+  buildTuiArgs,
   main,
   preflight,
   repoRoot,
   resolveOmp,
   resolveScannerEnv,
   runAcp,
+  runTui,
   type SpawnFn,
 } from "./lucid_acp.ts";
 import { BUILD_POLICY, DELEGATION_POLICY } from "../prompt/assembler.ts";
@@ -162,4 +164,52 @@ test("main rejects unknown subcommands (exit 2) and accepts --help (exit 0) with
   expect(await main(["frobnicate"])).toBe(2);
   expect(await main(["--help"])).toBe(0);
   expect(await main([])).toBe(0);
+});
+
+// ── lucid tui: the gated native terminal UI ──────────────────────────────────
+test("buildTuiArgs reproduces the gated command WITHOUT the acp subcommand (gate first, passthru last)", () => {
+  const a = assets("/repo");
+  const args = buildTuiArgs({ gate: a.gate, asksage: a.asksage, passthru: ["--model", "haiku", "-p", "hi"] });
+  expect(args).not.toContain("acp"); // native TUI, not the ACP stdio passthrough
+  expect(args[0]).toBe("-e");
+  expect(args[1]).toBe(a.gate); // the security gate is the FIRST -e (mandatory)
+  expect(args).toContain(a.asksage);
+  const p = args.indexOf("--append-system-prompt");
+  expect(args[p + 1]).toBe(APPENDED_POLICY);
+  expect(args.slice(-4)).toEqual(["--model", "haiku", "-p", "hi"]); // passthru appended verbatim, last
+  expect(p + 1).toBeLessThan(args.length - 4); // policy comes BEFORE the passthru
+});
+
+test("buildTuiArgs omits asksage when absent and needs no passthru", () => {
+  expect(buildTuiArgs({ gate: "/g/gate.ts" })).toEqual(["-e", "/g/gate.ts", "--append-system-prompt", APPENDED_POLICY]);
+});
+
+test("runTui NEVER spawns omp when the scanner is down — returns 1, no ungated terminal agent", async () => {
+  const spy = spawnSpy({ exit: 0 });
+  let errOut = "";
+  const code = await runTui({ scannerProbe: deadProbe, spawnFn: spy.fn, stderr: (s) => (errOut += s) });
+  expect(code).toBe(1);
+  expect(spy.calls.length).toBe(0); // omp was NOT launched
+  expect(errOut).toMatch(/FAIL-CLOSED/);
+});
+
+test("runTui spawns the gated omp (native TUI, no acp) with passthru + workspace cwd", async () => {
+  const spy = spawnSpy({ exit: 0 });
+  const code = await runTui({ scannerProbe: okProbe, spawnFn: spy.fn, cwd: "/work/dir", passthru: ["--model", "haiku"], env: {} });
+  expect(code).toBe(0);
+  expect(spy.calls.length).toBe(1);
+  const call = spy.calls[0]!;
+  expect(call.args).not.toContain("acp");
+  expect(call.args[0]).toBe("-e");
+  expect(call.args.some((a) => a.endsWith("security_extension.ts"))).toBe(true); // gate loaded
+  expect(call.args).toContain("--append-system-prompt");
+  expect(call.args.slice(-2)).toEqual(["--model", "haiku"]); // passthru threaded through
+  expect(call.cwd).toBe("/work/dir");
+});
+
+test("runTui returns the child's exit code, and 127 on spawn error", async () => {
+  const exited = await runTui({ scannerProbe: okProbe, spawnFn: spawnSpy({ exit: 7 }).fn, env: {} });
+  expect(exited).toBe(7);
+  const errored = await runTui({ scannerProbe: okProbe, spawnFn: spawnSpy({ error: new Error("ENOENT") }).fn, stderr: () => {}, env: {} });
+  expect(errored).toBe(127);
 });
