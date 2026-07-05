@@ -91,6 +91,8 @@ export interface ProbedLimit { provider: string; label: string; used: number; re
 
 // P-MCP.1 (ADR-0020): a configured MCP server's masked status (token never crosses the wire).
 export interface McpServerStatus { id: string; name: string; transport: "http" | "sse"; url: string; enabled: boolean; hasToken: boolean; tokenLast4?: string }
+// P-AGENTFW.2 (ADR-0149): a configured remote ACP agent connection (command/args, never a secret).
+export interface RemoteAgentStatus { id: string; name: string; kind: string; command: string; args: string[]; remoteUrl?: string; permissionPolicy: "deny" | "allow"; enabled: boolean }
 
 // ADR-0009 Phase D: read-only developer Logs view (gated on Developer mode).
 export interface TurnView { id: string; sessionId: string; seq: number; role: string; sanitized: string; rawSha256: string; trust: string; at: string }
@@ -402,6 +404,11 @@ export interface LucidBridge {
   mcpUpsert(e: { id?: string; name: string; transport?: "http" | "sse"; url: string; token?: string; enabled?: boolean }): Promise<McpServerStatus | null>;
   mcpRemove(id: string): Promise<unknown>;
   mcpToggle(id: string, enabled: boolean): Promise<unknown>;
+  // P-AGENTFW.2 (ADR-0149): remote ACP agent (hermes/openclaw) connections proxied through the firewall.
+  remoteAgentList(): Promise<RemoteAgentStatus[] | null>;
+  remoteAgentUpsert(e: { id?: string; name: string; kind?: string; command: string; args?: string; cwd?: string; remoteUrl?: string; permissionPolicy?: string; enabled?: boolean }): Promise<RemoteAgentStatus | null>;
+  remoteAgentRemove(id: string): Promise<unknown>;
+  remoteAgentToggle(id: string, enabled: boolean): Promise<unknown>;
   usage(): Promise<UsageLedger | null>;
   codeActivity(): Promise<CodeActivity | null>;
   sendPrompt(text: string, onEvent: (e: ChatEvent) => void, images?: { data: string; mimeType: string }[]): Promise<void>;
@@ -743,6 +750,10 @@ export const bridge: LucidBridge = {
   mcpUpsert: (e) => post("/api/mcp", e),
   mcpRemove: (id) => post("/api/mcp/remove", { id }),
   mcpToggle: (id, enabled) => post("/api/mcp/toggle", { id, enabled }),
+  remoteAgentList: () => getData("/api/agents"),
+  remoteAgentUpsert: (e) => post("/api/agents", e),
+  remoteAgentRemove: (id) => post("/api/agents/remove", { id }),
+  remoteAgentToggle: (id, enabled) => post("/api/agents/toggle", { id, enabled }),
   usage: () => getData("/api/usage"),
   codeActivity: () => getData("/api/code-activity"),
   sendPrompt: streamChat,
