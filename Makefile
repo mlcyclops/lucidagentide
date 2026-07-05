@@ -413,6 +413,18 @@ demo-P-LOCAL.1: ## P-LOCAL.1 (ADR-0135): Local Providers — declare a self-host
 demo-P-VISION.1: ## P-VISION.1 (ADR-0136): paste/drop a screenshot into the prompt bar — validate fail-closed (image-only, size/count caps), emit an omp image content block (base64, prefix stripped), and render a thumbnail strip that never interpolates the data URL (XSS-safe)
 	$(BUN) run desktop/scripts/demo_p_vision_1.ts
 
+.PHONY: demo-P-PREVIEW.6a
+demo-P-PREVIEW.6a: ## P-PREVIEW.6a (ADR-0148): the agent reviews its work live in the preview — a preview tool-call (screenshot/open/inspect/action) maps to a user-facing label that glows the panel + shows a "reviewing/testing" pill; non-preview tools never trigger it
+	$(BUN) run desktop/scripts/demo_p_preview_6a.ts
+
+.PHONY: demo-P-PREVIEW.6b
+demo-P-PREVIEW.6b: ## P-PREVIEW.6b (ADR-0148): the agent READS the live preview DOM — a held tool→server→renderer→iframe relay + a READ-ONLY postMessage bridge injected into the sandboxed preview (no eval/mutation), fail-closed on timeout
+	$(BUN) run desktop/scripts/demo_p_preview_6b.ts
+
+.PHONY: demo-P-PREVIEW.6c
+demo-P-PREVIEW.6c: ## P-PREVIEW.6c (ADR-0148): the agent CLICKS/TYPES in the live preview by CSS selector — structured actions through the same relay + bridge (fixed allowlist click/type/focus/scroll; still no eval/innerHTML)
+	$(BUN) run desktop/scripts/demo_p_preview_6c.ts
+
 .PHONY: dashboards
 dashboards: ## Materialize dashboard CSVs from a DuckDB into observable/docs/data (DB=path)
 	$(BUN) run harness/scripts/materialize_dashboards.ts $(DB) observable/docs/data

@@ -10113,3 +10113,68 @@ stdio MCP server that exits after the handshake as a fork loop, so the firewall 
 ADR-0020 (P-MCP.1 - the `mcpServers` seam this reuses, and the guardrail this partially implements + flags),
 ADR-0038 (the `lucid` launcher this extends), ADR-0002 (the scanner IPC), ADR-0019 (the gate policy), the
 P-RAG.1 `wrapRetrieved` pattern (UNTRUSTED_CONTENT delimiting), invariants #3/#4/#5.
+
+## ADR-0148 - P-PREVIEW.6: the agent reviews its work live in the Preview panel (glow + testing pill; DOM review phased)
+
+**Date:** 2026-07-04
+**Status:** Accepted - **P-PREVIEW.6a + .6b + .6c BUILT + verified live (epic COMPLETE).** .6a = the
+"reviewing/testing" indicator (panel glow + pill). .6b = the agent READS the live preview DOM
+(`preview_inspect`) over a held relay + a read-only postMessage bridge. .6c = the agent CLICKS/TYPES
+(`preview_click`/`preview_type`) by CSS selector through the same relay/bridge (fixed action allowlist; no
+eval). All live-verified end to end (6c: a click fired a button's handler → the DOM actually changed;
+`preview_type` set an input value).
+**Increment:** P-PREVIEW.6a (indicator) → .6b (DOM inspect) → .6c (structured actions) - all BUILT.
+**Also fixed here:** the `preview_screenshot` tool read `body?.png` while the endpoint wraps `{ok,data:{png}}`,
+so the agent had never actually SEEN its screenshots - now reads `body.data.png` (the review-your-work loop
+works).
+
+### Context
+
+The user wants the agent to **screenshot and manipulate the live preview DOM**, and to **visually notify the
+user while it's testing** by glowing the Preview panel + showing a "testing" pill - so the user watches the
+agent review its work live. Two capabilities and one signal. The agent already screenshots the preview
+(`preview_screenshot`, ADR-0096). The hard part is DOM manipulation, because the preview iframe is
+**opaque-origin sandboxed** (`sandbox="allow-scripts allow-forms"`, `connect-src 'none'`) - the renderer
+CANNOT touch the iframe DOM directly. So live DOM work needs a **postMessage bridge** injected into the served
+preview; that is its own increment. The VISIBLE signal (glow + pill), by contrast, is self-contained and
+delivers the "review in front of the user" experience immediately on top of the tools that already exist.
+
+### Decision - phased
+
+- **P-PREVIEW.6a (BUILT): the live indicator.** Pure `desktop/preview_activity.ts` `previewActivityLabel(title)`
+  maps a preview tool-call title (screenshot / open / inspect / a future action) to a user-facing label
+  (matching omp's tool-name titles AND human-summarized ones), else null. `acp_backend` emits a new
+  `preview-activity` ChatEvent in the tool_call block (visuals-only, never a gate); the renderer
+  `flashPreviewTesting(label)` adds `.testing` to `#preview` (a pulsing glow on `.preview-body`) + shows the
+  `#prevPill` pill, surfaces the panel if a loaded preview is hidden, debounces (fades ~4.5s after the last
+  signal), and clears on turn `done`. No frozen-prefix/contract change beyond the additive ChatEvent variant.
+- **P-PREVIEW.6b (BUILT): DOM inspect via a postMessage bridge.** `preview_bridge.ts` injects a READ-ONLY
+  bridge into the served preview HTML (in `/api/preview/serve`; inline JS is CSP-allowed, `connect-src 'none'`
+  keeps egress blocked). It answers `postMessage` queries from the LUCID renderer (page text, headings,
+  controls, element details by CSS selector, captured console errors) and posts a compact/clipped snapshot
+  back - NO arbitrary eval, NO mutation (proven by tests: no `eval`/`Function`/`.click`/`.value=`/`innerHTML=`).
+  `preview_inspect_relay.ts` (`InspectRelay`, unit-tested) is the held command/result queue: the agent's
+  `preview_inspect` tool GETs `LUCID_PREVIEW_INSPECT_URL`; the dev server HOLDS the request; the renderer polls
+  `/api/preview/inspect/next` (every 450ms while the panel is open), runs the query on the frame via the
+  bridge, and POSTs `/api/preview/inspect/result` - resolving the held tool call (8s fail-closed timeout →
+  "open a preview first"). New READ-tiered `preview_inspect` tool. Verified live end to end.
+- **P-PREVIEW.6c (BUILT): structured actions.** `preview_click` / `preview_type` (by CSS selector) go through
+  the SAME relay + bridge — the `InspectCommand` gained `action`/`value`, the bridge routes `cmd.action ? act
+  : inspect`, and `act()` is a FIXED allowlist (click / type / focus / scroll): it only calls `el.click()`,
+  sets `el.value`/`textContent` + dispatches input/change, or scrolls — never `eval`/`Function`/`innerHTML`
+  (proven by tests). New `/api/preview/act` endpoint + `LUCID_PREVIEW_ACT_URL`. Read-tier (the preview is
+  sandboxed + egress-blocked, so acting on it is safe) and the `preview_click`/`preview_type` calls light the
+  6a "Testing the preview" pill. Verified live: `preview_click` on a button fired its onclick (the page's h1
+  changed), `preview_type` set an input's value.
+
+### Invariants preserved
+
+Fail-closed unaffected (the indicator is display-only); the preview sandbox is NOT loosened (6b/6c use a
+postMessage bridge, keeping opaque-origin isolation); #1 extend-omp (new tools are omp `-e` tools like the
+existing preview ones). No app version bump.
+
+### Relates to
+
+ADR-0096 (the preview panel, `preview_open` / `preview_screenshot`, the shot-cache the relay extends),
+ADR-0126 (the markup canvas overlaying the same iframe), P-VISION.1/ADR-0136 (the sibling multimodal work),
+the streaming-state UI patterns (`.streaming` / `data-streaming`) the indicator mirrors.

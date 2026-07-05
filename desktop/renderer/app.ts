@@ -283,6 +283,8 @@ function buildShell(): void {
           </div>
         </div>
         <div class="preview-body" id="prevBody">
+          <!-- P-PREVIEW.6a (ADR-0148): a live "reviewing / testing" pill shown while the agent looks at the preview. -->
+          <div class="preview-pill" id="prevPill" hidden aria-live="polite"><span class="preview-pill-dot"></span><span id="prevPillLabel">Reviewing the preview</span></div>
           <iframe id="prevFrame" class="preview-frame" sandbox="${PREVIEW_SANDBOX}" allow="${PREVIEW_ALLOW}" referrerpolicy="no-referrer" title="App preview" hidden></iframe>
           <canvas id="prevCanvas" class="preview-canvas" aria-hidden="true"></canvas>
           <div class="empty preview-empty" id="prevEmpty"><span class="preview-empty-msg" id="prevEmptyMsg">Open a local HTML file to preview it here - paste its path above and press <b>Open</b>. (The agent driving this itself is coming next; remote URLs are egress-gated.)</span></div>
@@ -1177,10 +1179,11 @@ async function send(): Promise<void> {
     }
     else if (e.type === "block") onBlock(e);
     else if (e.type === "preview-available") onPreviewAvailable(e.path);
+    else if (e.type === "preview-activity") flashPreviewTesting(e.label); // P-PREVIEW.6a (ADR-0148)
     else if (e.type === "agent-builder-open") openAgentBuilderWithSpec(e.spec); // P-AGENT.8.2
     else if (e.type === "slash-command-created") void onSlashCommandCreated(e.command); // P-CMD.1
     else if (e.type === "usage") { tok = e.used; cost = e.cost; state.liveUsage = { used: e.used, size: e.size, cost: e.cost }; paintHud(); renderStatus(); renderMetricsRail(); }
-    else if (e.type === "done") { if (e.text && e.text.length > buf.length) buf = e.text; /* reconcile a lossy stream with the server's full reply */ streamEl.innerHTML = renderMarkdown(buf); enhanceCodeBlocks(streamEl); (node as MsgNode)._md = buf; finishHud(); state.streaming = false; setSendEnabled(); }
+    else if (e.type === "done") { if (e.text && e.text.length > buf.length) buf = e.text; /* reconcile a lossy stream with the server's full reply */ streamEl.innerHTML = renderMarkdown(buf); enhanceCodeBlocks(streamEl); (node as MsgNode)._md = buf; finishHud(); state.streaming = false; setSendEnabled(); clearPreviewTesting(); }
   };
   try { await bridge.sendPrompt(sendText, onEvent, images); }
   finally {
@@ -2521,6 +2524,7 @@ function openPreview(): void {
   if (path && !path.value && state.lastPreviewablePath) path.value = state.lastPreviewablePath;
   if (path?.value) loadPreview(path.value); else path?.focus();
   startPreviewShotLoop(); // keep the agent's preview_screenshot shot fresh while the panel is open
+  startPreviewInspectRelay(); // P-PREVIEW.6b: serve the agent's preview_inspect queries while the panel is open
   // Screenshot capture is an Electron-only seam; disable the button in a plain browser.
   const shot = $("#prevShot") as HTMLButtonElement | null;
   if (shot && !bridge.isElectron) { shot.disabled = true; shot.title = "Screenshots are available in the desktop app"; }
@@ -2529,6 +2533,7 @@ function closePreview(): void {
   if (!previewOpen) return;
   previewOpen = false;
   stopPreviewShotLoop();
+  stopPreviewInspectRelay(); // P-PREVIEW.6b
   $("#preview")!.hidden = true;
   $("#inspector")!.hidden = false;
   $$(".rail-btn").forEach((b) => b.classList.remove("active"));
@@ -2544,6 +2549,28 @@ function onPreviewAvailable(path: string): void {
   if (p) p.value = path;                 // point at the new file explicitly (never a stale prior value)
   if (previewOpen) loadPreview(path);
   else openPreview();                    // opens the panel and renders p.value straight away
+}
+
+// ── P-PREVIEW.6a (ADR-0148): live "reviewing / testing" indicator ────────────────────────────────
+let previewTestingTimer: ReturnType<typeof setTimeout> | undefined;
+/** Glow the Preview panel + show a "reviewing/testing" pill while the agent looks at / tests the preview.
+ *  Surfaces the panel if a preview is loaded but hidden, so the user SEES the review happen live.
+ *  Debounced — repeated activity keeps it lit; fades ~4.5s after the last signal (or on turn done). */
+function flashPreviewTesting(label: string): void {
+  const panel = $("#preview") as HTMLElement | null;
+  const pill = $("#prevPill") as HTMLElement | null;
+  if (!panel || !pill) return;
+  if (panel.hidden && state.lastPreviewablePath) openPreview(); // make the review visible
+  panel.classList.add("testing");
+  const lbl = $("#prevPillLabel"); if (lbl) lbl.textContent = label || "Reviewing the preview";
+  pill.hidden = false;
+  if (previewTestingTimer) clearTimeout(previewTestingTimer);
+  previewTestingTimer = setTimeout(clearPreviewTesting, 4500);
+}
+function clearPreviewTesting(): void {
+  if (previewTestingTimer) { clearTimeout(previewTestingTimer); previewTestingTimer = undefined; }
+  ($("#preview") as HTMLElement | null)?.classList.remove("testing");
+  const pill = $("#prevPill") as HTMLElement | null; if (pill) pill.hidden = true;
 }
 /** Load the resolved target into the preview iframe. Fail-safe: only a `local` target is rendered; a
  *  `remote` or `blocked` target shows the empty-state message (remote is egress-gated in P-PREVIEW.3). */
@@ -2624,6 +2651,45 @@ function stopPreviewShotLoop(): void {
   if (previewShotTimer === null) return;
   window.clearInterval(previewShotTimer);
   previewShotTimer = null;
+}
+
+// ── P-PREVIEW.6b (ADR-0148): DOM-inspect relay ───────────────────────────────────────────────────
+// The agent's `preview_inspect` tool enqueues a query on the dev server; the renderer polls for it, runs it
+// on the sandboxed iframe via the postMessage bridge, and posts the result back. Only runs while the panel is
+// open; a query with no preview loaded simply times out server-side with a helpful message.
+let previewInspectTimer: number | null = null;
+function startPreviewInspectRelay(): void {
+  if (previewInspectTimer !== null) return;
+  previewInspectTimer = window.setInterval(() => { void pollPreviewInspect(); }, 450);
+}
+function stopPreviewInspectRelay(): void {
+  if (previewInspectTimer === null) return;
+  window.clearInterval(previewInspectTimer);
+  previewInspectTimer = null;
+}
+async function pollPreviewInspect(): Promise<void> {
+  const frame = $("#prevFrame") as HTMLIFrameElement | null;
+  if (!frame || frame.hidden) return; // no preview rendered yet → let it time out server-side
+  const next = await bridge.previewInspectNext().catch(() => null);
+  if (!next || next.none || !next.id) return;
+  const result = await runInspectOnFrame(frame, next.id, next.command ?? {});
+  await bridge.previewInspectResult(next.id, result).catch(() => { /* the tool will time out */ });
+}
+/** Ask the sandboxed preview's bridge to run a read-only query; resolve with its result (or a timeout note). */
+function runInspectOnFrame(frame: HTMLIFrameElement, id: string, command: unknown): Promise<unknown> {
+  return new Promise((resolve) => {
+    const win = frame.contentWindow;
+    if (!win) { resolve({ error: "the preview isn't ready" }); return; }
+    const done = (r: unknown) => { window.removeEventListener("message", onMsg); window.clearTimeout(to); resolve(r); };
+    const to = window.setTimeout(() => done({ error: "the preview didn't respond (no inspect bridge, or it's still loading)" }), 3000);
+    function onMsg(ev: MessageEvent): void {
+      const d = ev.data as { __lucid?: string; id?: string; result?: unknown } | null;
+      if (ev.source !== win || !d || d.__lucid !== "inspect-result" || d.id !== id) return;
+      done(d.result);
+    }
+    window.addEventListener("message", onMsg);
+    win.postMessage({ __lucid: "inspect", id, cmd: command }, "*");
+  });
 }
 
 // ── P-AGENT.2b (ADR-0133): the Agent Builder workflow canvas ─────────────────────────────────────────────
