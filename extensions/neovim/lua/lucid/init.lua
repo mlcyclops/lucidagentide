@@ -32,7 +32,10 @@ local defaults = {
     toggle = "<leader>lc", -- toggle the Lucid terminal
     send = "<leader>ls", -- send visual selection / current file to Lucid
     check = "<leader>lC", -- run the fail-closed gate preflight (`lucid check`)
+    stats = "<leader>lm", -- open the session metrics panel (:LucidStats)
   },
+  -- Statusline component (require("lucid").statusline()), polled from `lucid stats --json`.
+  statusline = { interval = 5000, prefix = "Lucid" },
 }
 
 M.config = vim.deepcopy(defaults)
@@ -236,6 +239,127 @@ function M.check()
   end)
 end
 
+-- ── session metrics (spend · KV-cache · context) — mirrors the GUI Memory inspector ─────────
+
+--- Format a 0..1 fraction as a rounded percent, e.g. "87%".
+function M._pct(x)
+  return string.format("%d%%", math.floor((x or 0) * 100 + 0.5))
+end
+
+--- A text progress bar for a 0..1 fraction.
+function M._bar(frac, width)
+  width = width or 16
+  local filled = math.max(0, math.min(width, math.floor((frac or 0) * width + 0.5)))
+  return "[" .. string.rep("#", filled) .. string.rep("-", width - filled) .. "]"
+end
+
+--- Compact statusline string from a `lucid stats --json` session block (nil-safe).
+function M._fmt_statusline(session, prefix)
+  if not session then
+    return ""
+  end
+  return string.format(
+    "%s $%.2f · cache %s · ctx %s",
+    prefix or "Lucid",
+    session.cost or 0,
+    M._pct((session.cache or {}).hit or 0),
+    M._pct(session.contextFill or 0)
+  )
+end
+
+--- Lines for the :LucidStats float from a `lucid stats --json --budgets` payload (nil-safe).
+function M._fmt_stats_lines(data)
+  local s = data and data.session or nil
+  if not s then
+    return { "Lucid — no omp session yet", "", "Start one with :Lucid (or `lucid tui`)." }
+  end
+  local c = s.cache or {}
+  local lines = {
+    "Lucid — session metrics",
+    "",
+    string.format("  model    %s", s.model or "?"),
+    string.format("  turns    %d", s.turns or 0),
+    string.format("  spend    $%.4f", s.cost or 0),
+    string.format("  cache    %s hit", M._pct(c.hit or 0)),
+    string.format("  context  %s %s  %d / %d", M._pct(s.contextFill or 0), M._bar(s.contextFill or 0), s.current or 0, s.window or 0),
+  }
+  if data.budgets and #data.budgets > 0 then
+    local parts = {}
+    for _, b in ipairs(data.budgets) do
+      parts[#parts + 1] = string.format("%s %s", b.label, M._pct(b.used or 0))
+    end
+    lines[#lines + 1] = "  budgets  " .. table.concat(parts, " · ")
+  end
+  return lines
+end
+
+-- Cached statusline value, refreshed off a timer the first time statusline() is called.
+M._status = ""
+local status_timer = nil
+
+local function refresh_status()
+  local cmd = M._resolve_cmd(M.config)
+  if not cmd then
+    M._status = ""
+    return
+  end
+  vim.system({ cmd, "stats", "--json" }, { text = true }, function(res)
+    local ok, data = pcall(vim.json.decode, res.stdout or "")
+    vim.schedule(function()
+      M._status = (ok and data) and M._fmt_statusline(data.session, M.config.statusline.prefix) or ""
+    end)
+  end)
+end
+
+--- Statusline component: `require("lucid").statusline()`. Returns a cached
+--- "Lucid $x · cache y% · ctx z%" string; the first call starts a lightweight poll
+--- (config.statusline.interval ms) reading `lucid stats --json` (session-only fast path).
+function M.statusline()
+  if not status_timer then
+    refresh_status()
+    status_timer = (vim.uv or vim.loop).new_timer()
+    status_timer:start(M.config.statusline.interval, M.config.statusline.interval, vim.schedule_wrap(refresh_status))
+  end
+  return M._status
+end
+
+--- `:LucidStats` — open a float with the current session's spend / KV-cache / context metrics.
+function M.stats()
+  local cmd = M._resolve_cmd(M.config)
+  if not cmd then
+    notify_missing(M.config)
+    return
+  end
+  vim.system({ cmd, "stats", "--json", "--budgets" }, { text = true }, function(res)
+    local ok, data = pcall(vim.json.decode, res.stdout or "")
+    vim.schedule(function()
+      local lines = M._fmt_stats_lines(ok and data or {})
+      local buf = vim.api.nvim_create_buf(false, true)
+      vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+      vim.bo[buf].modifiable = false
+      local width = 40
+      for _, l in ipairs(lines) do
+        width = math.max(width, #l + 4)
+      end
+      width = math.min(width, vim.o.columns - 4)
+      local win = vim.api.nvim_open_win(buf, true, {
+        relative = "editor",
+        width = width,
+        height = #lines + 1,
+        row = math.floor((vim.o.lines - #lines) / 2),
+        col = math.floor((vim.o.columns - width) / 2),
+        style = "minimal",
+        border = "rounded",
+        title = " Lucid ",
+        title_pos = "center",
+      })
+      vim.keymap.set("n", "q", "<Cmd>close<CR>", { buffer = buf, silent = true })
+      vim.keymap.set("n", "<Esc>", "<Cmd>close<CR>", { buffer = buf, silent = true })
+      vim.api.nvim_set_current_win(win)
+    end)
+  end)
+end
+
 --- Merge user opts over defaults and install the default keymaps.
 function M.setup(opts)
   M.config = vim.tbl_deep_extend("force", vim.deepcopy(defaults), opts or {})
@@ -252,6 +376,9 @@ function M.setup(opts)
   end
   if km.check then
     vim.keymap.set("n", km.check, "<Cmd>LucidCheck<CR>", { silent = true, desc = "Lucid: gate check" })
+  end
+  if km.stats then
+    vim.keymap.set("n", km.stats, "<Cmd>LucidStats<CR>", { silent = true, desc = "Lucid: session metrics" })
   end
 end
 

@@ -16,134 +16,27 @@
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
-import { Database as Sqlite } from "bun:sqlite";
 import { DuckDBInstance } from "@duckdb/node-api";
 import { pathWithin } from "../desktop/path_guard.ts";
 
-// ── model context windows (tokens) ────────────────────────────────────────────
-// Keyed by the SHORT model id (provider prefix stripped). Keep in sync with
-// desktop/renderer/app.ts MODEL_CTX. omp's reported window is unreliable for the
-// AskSage gateway models, so this map is the source of truth for the denominator.
-export const CTX_WINDOW: Record<string, number> = {
-  "claude-fable-5": 1_000_000, "claude-opus-4-8": 1_000_000, "claude-opus-4-7": 1_000_000,
-  "claude-opus-4-6": 1_000_000, "claude-sonnet-4-6": 1_000_000, "claude-sonnet-4-5": 1_000_000,
-  "claude-haiku-4-5": 200_000,
-  "gpt-5.2": 256_000, "gpt-5.5": 256_000, "gpt-5.4": 256_000, "gpt-5.1": 256_000, "gpt-5": 256_000,
-  "gpt-5-mini": 256_000, "gpt-4.1": 1_000_000, "gpt-o3": 200_000, "gpt-o3-mini": 200_000, "gpt-o4-mini": 200_000,
-  "google-claude-45-opus": 200_000, "google-claude-45-sonnet": 200_000,
-  "aws-bedrock-claude-45-sonnet-gov": 200_000, "claude-opus-4": 200_000, "claude-sonnet-4": 200_000,
-  "google-gemini-3.1-pro-com": 1_000_000, "google-gemini-3.5-flash-gov": 1_000_000,
-  "google-gemini-2.5-pro": 1_000_000, "google-gemini-2.5-flash": 1_000_000,
-  "rag": 256_000,
-};
-const shortModelId = (m: string): string => m.replace(/^anthropic\//, "").replace(/^asksage-[a-z]+\//, "");
-export const ctxWindow = (model: string): number => CTX_WINDOW[shortModelId(model)] ?? CTX_WINDOW[model] ?? 200_000;
+// Session / context / KV-cache / spend metrics live in the DuckDB-FREE session_metrics.ts (so the
+// `lucid` launcher can read them without loading the DuckDB addon). Re-exported here so this module
+// stays the single import surface for the TUI / web dashboard / desktop.
+import {
+  CTX_WINDOW,
+  shortModelId,
+  ctxWindow,
+  findSession,
+  sessionPathById,
+  parseSession,
+  rateLimits,
+  type Turn,
+  type Session,
+  type Budget,
+} from "./session_metrics.ts";
+export { CTX_WINDOW, ctxWindow, findSession, sessionPathById, parseSession, rateLimits };
+export type { Turn, Session, Budget };
 
-// ── omp session transcript ────────────────────────────────────────────────────
-export interface Turn {
-  prompt: number; // input + cacheRead + cacheWrite  (= context occupancy that turn)
-  output: number;
-  cacheRead: number;
-  cacheWrite: number;
-  input: number;
-  cost: number;
-}
-export interface Session {
-  path: string;
-  cwd: string;
-  started: string;
-  model: string;
-  turns: Turn[];
-}
-
-/** Newest session whose `session.cwd` matches our cwd; else newest overall. */
-export function findSession(explicit?: string): string | undefined {
-  if (explicit) return existsSync(explicit) ? explicit : undefined;
-  const root = join(homedir(), ".omp", "agent", "sessions");
-  if (!existsSync(root)) return undefined;
-  const cwd = process.cwd();
-  const files: { p: string; mtime: number }[] = [];
-  for (const d of readdirSync(root)) {
-    const dir = join(root, d);
-    try {
-      if (!statSync(dir).isDirectory()) continue;
-      for (const f of readdirSync(dir)) {
-        if (f.endsWith(".jsonl")) files.push({ p: join(dir, f), mtime: statSync(join(dir, f)).mtimeMs });
-      }
-    } catch {
-      /* skip unreadable dir */
-    }
-  }
-  files.sort((a, b) => b.mtime - a.mtime);
-  for (const { p } of files) {
-    try {
-      const first = readFileSync(p, "utf8").split("\n", 1)[0] ?? "";
-      const o = JSON.parse(first);
-      if (o?.type === "session" && o.cwd === cwd) return p;
-    } catch {
-      /* skip */
-    }
-  }
-  return files[0]?.p;
-}
-
-/** Resolve an omp session id (Snowflake) to its on-disk `.jsonl` transcript, if present. Session
- *  files are named `<timestamp>_<sessionId>.jsonl`, so we match the id within the filename and return
- *  the most-recently-modified hit. This lets the live UI anchor the memory snapshot to the ACTIVE chat
- *  session rather than falling back to `findSession`'s cwd match — which picks by `process.cwd()` (the
- *  app's dir) while chats actually run in the user's selected workspace, so the fallback can lock onto
- *  a stale, empty session and show "0 turns" with empty gauges. */
-export function sessionPathById(id: string | null | undefined): string | undefined {
-  if (!id) return undefined;
-  const root = join(homedir(), ".omp", "agent", "sessions");
-  if (!existsSync(root)) return undefined;
-  const matches: { p: string; mtime: number }[] = [];
-  for (const d of readdirSync(root)) {
-    const dir = join(root, d);
-    try {
-      if (!statSync(dir).isDirectory()) continue;
-      for (const f of readdirSync(dir)) if (f.endsWith(".jsonl") && f.includes(id)) matches.push({ p: join(dir, f), mtime: statSync(join(dir, f)).mtimeMs });
-    } catch {
-      /* skip unreadable dir */
-    }
-  }
-  matches.sort((a, b) => b.mtime - a.mtime);
-  return matches[0]?.p;
-}
-
-export function parseSession(path: string): Session {
-  const s: Session = { path, cwd: "?", started: "?", model: "?", turns: [] };
-  for (const line of readFileSync(path, "utf8").split("\n")) {
-    if (!line) continue;
-    let o: any;
-    try {
-      o = JSON.parse(line);
-    } catch {
-      continue;
-    }
-    if (o.type === "session") {
-      s.cwd = o.cwd ?? s.cwd;
-      s.started = o.timestamp ?? s.started;
-    } else if (o.type === "model_change" && o.model) {
-      s.model = o.model;
-    } else if (o.type === "message" && o.message?.usage) {
-      const u = o.message.usage;
-      if (o.message.model) s.model = o.message.model;
-      const input = u.input ?? 0,
-        cacheRead = u.cacheRead ?? 0,
-        cacheWrite = u.cacheWrite ?? 0;
-      s.turns.push({
-        prompt: input + cacheRead + cacheWrite,
-        output: u.output ?? 0,
-        cacheRead,
-        cacheWrite,
-        input,
-        cost: u.cost?.total ?? 0,
-      });
-    }
-  }
-  return s;
-}
 
 // ── cross-model usage & cost ledger (P10.2, ADR-0011) ─────────────────────────
 // Aggregate per-model tokens + cost across ALL omp sessions, with an estimated
@@ -417,34 +310,6 @@ export function compactionPolicy(): Record<string, string> | undefined {
   }
 }
 
-// ── rate-limit budget (omp agent.db) ──────────────────────────────────────────
-export interface Budget {
-  label: string;
-  used: number;
-  status: string;
-  resetsAt: number | null;
-}
-export function rateLimits(): Budget[] | null {
-  const p = join(homedir(), ".omp", "agent", "agent.db");
-  if (!existsSync(p)) return null;
-  try {
-    const db = new Sqlite(p, { readonly: true });
-    try {
-      return db
-        .query(
-          `select label, used_fraction as used, status, resets_at as resetsAt
-           from usage_history u
-           where recorded_at = (select max(recorded_at) from usage_history u2 where u2.label = u.label)
-           order by used_fraction desc`,
-        )
-        .all() as Budget[];
-    } finally {
-      db.close();
-    }
-  } catch {
-    return null;
-  }
-}
 
 // ── Lucid harness memory (agent_obs.duckdb, READ_ONLY) ────────────────────────
 export interface HarnessMemory {
