@@ -713,20 +713,25 @@ const server = Bun.serve({
           if (fileRes.status === 404) return fail("Figma file not found (404) — check the file URL/key.");
           if (!fileRes.ok) return fail(`Figma API error ${fileRes.status}.`);
           const file = (await fileRes.json()) as { name?: string; document?: unknown };
-          const fileName = String(file?.name ?? "Figma file");
+          const fileName = String(file?.name ?? "Figma file").slice(0, 200); // bound the network-derived title we persist
           const frames = collectTopFrames(file?.document as never);
           let board: BoardFrame[] = [];
           if (frames.length) {
             const ids = frames.map((f) => f.id).join(",");
             const imgRes = await fetch(`${FIGMA_API}/images/${key}?ids=${encodeURIComponent(ids)}&format=png&scale=2`, { ...hdr, signal: AbortSignal.timeout(25000) });
             const imgMap: Record<string, string | null> = imgRes.ok ? ((await imgRes.json())?.images ?? {}) : {};
+            const MAX_IMG_BYTES = 8 * 1024 * 1024; // cap per-frame render we inline + persist to disk
             board = await Promise.all(frames.map(async (f) => {
               const src = imgMap[f.id];
               let dataUrl = "";
-              if (src) {
+              // The render URL comes from Figma's API response (network-controlled / untrusted, CodeQL
+              // js/http-to-file-access): fetch it ONLY when it's an https URL (no file://, http://localhost,
+              // or other SSRF targets) and BOUND the bytes we inline + write to the local board file.
+              if (typeof src === "string" && /^https:\/\//i.test(src)) {
                 try {
                   const r = await fetch(src, { signal: AbortSignal.timeout(20000) });
-                  if (r.ok) dataUrl = `data:image/png;base64,${Buffer.from(await r.arrayBuffer()).toString("base64")}`;
+                  const buf = r.ok ? Buffer.from(await r.arrayBuffer()) : null;
+                  if (buf && buf.length > 0 && buf.length <= MAX_IMG_BYTES) dataUrl = `data:image/png;base64,${buf.toString("base64")}`;
                 } catch { /* leaves a placeholder */ }
               }
               return { name: f.name, page: f.page, dataUrl };
