@@ -23,3 +23,7 @@ end, { range = true, desc = "Send the visual selection (or current file) to Luci
 vim.api.nvim_create_user_command("LucidCheck", function()
   require("lucid").check()
 end, { desc = "Run the fail-closed gate preflight (lucid check)" })
+
+vim.api.nvim_create_user_command("LucidStats", function()
+  require("lucid").stats()
+end, { desc = "Show session spend / KV-cache / context metrics" })

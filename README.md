@@ -77,6 +77,7 @@ Outside LazyVim, `setup()` is optional — the commands work the moment the plug
 | `:LucidToggle` | Show/hide the Lucid window (session keeps running while hidden) |
 | `:LucidSend` | Visual range → send selection; else send the current file as `@path` |
 | `:LucidCheck` | Run the fail-closed preflight (`lucid check`) |
+| `:LucidStats` | Session spend + KV-cache % + context-fill (float; the GUI Memory inspector) |
 | `:checkhealth lucid` | Launcher present + gate/scanner ready |
 
 ## Default keymaps
@@ -86,8 +87,16 @@ Outside LazyVim, `setup()` is optional — the commands work the moment the plug
 | `<leader>lc` | `:LucidToggle` |
 | `<leader>ls` | `:LucidSend` |
 | `<leader>lC` | `:LucidCheck` |
+| `<leader>lm` | `:LucidStats` |
 
 Set `keymaps = false` (or a per-entry `false`) to opt out and map the commands yourself.
+
+Statusline component (spend · cache% · ctx%), for lualine / native `statusline`:
+
+```lua
+require("lualine").setup({ sections = { lualine_x = { function() return require("lucid").statusline() end } } })
+-- or: vim.o.statusline = "%{v:lua.require'lucid'.statusline()}"
+```
 
 ## Configuration
 
