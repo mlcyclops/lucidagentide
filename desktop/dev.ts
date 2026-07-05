@@ -50,6 +50,8 @@ import { loadWhitelist, removeEntry, saveWhitelist, setPosture, upsertEntry, typ
 import { readPreviewFile, toFsPath } from "./preview_file.ts"; // P-PREVIEW.4: read a local file's content for the preview
 import { PREVIEW_FRAME_CSP } from "./preview_resolve.ts"; // P-PREVIEW.4b: per-frame CSP for the served preview doc
 import { inlinePreviewAssets } from "./preview_inline.ts"; // P-PREVIEW.4c: fold a multi-file app's relative assets inline
+import { injectPreviewBridge } from "./preview_bridge.ts"; // P-PREVIEW.6b (ADR-0153): read-only DOM-inspect bridge
+import { InspectRelay } from "./preview_inspect_relay.ts"; // P-PREVIEW.6b: agent preview_inspect ↔ renderer relay
 import { listLocalProviders, upsertLocalProvider, removeLocalProvider, setLocalProviderEnabled } from "./settings_store.ts";
 import { providerModelsUrl, type LocalProviderDef } from "./local_providers.ts";
 import { listRemoteAgents, upsertRemoteAgent, removeRemoteAgent, setRemoteAgentEnabled } from "../harness/mcp/registry.ts";
@@ -124,6 +126,8 @@ const TOKEN = randomBytes(32).toString("hex");
 // P-PREVIEW.3a-shot (ADR-0096): latest PNG of the rendered preview, pushed by the renderer after each render
 // (Electron capturePage → /api/preview/shot-cache) and read by the agent's preview_screenshot tool. In-memory.
 let latestPreviewShot: string | null = null;
+// P-PREVIEW.6b (ADR-0153): relay for the agent's read-only DOM inspect of the sandboxed preview.
+const inspectRelay = new InspectRelay();
 const CT: Record<string, string> = { ".html": "text/html", ".css": "text/css", ".js": "text/javascript", ".svg": "image/svg+xml", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".woff2": "font/woff2", ".woff": "font/woff", ".ttf": "font/ttf" };
 // Text-ish types take a charset; binary (images/fonts) must not (a bogus "image/png; charset" suffix).
 const isTextCT = (ct: string) => /^(text\/|application\/(javascript|json)|image\/svg)/.test(ct);
@@ -364,7 +368,7 @@ const server = Bun.serve({
       // `/api/preview/serve` (iframe src) and `/api/preview/shot` (fetched by the omp subprocess, which
       // inherits a ready URL incl. the token via LUCID_PREVIEW_SHOT_URL) can't set a header, so they also
       // accept the per-launch token as a `?t=` query param — same token, still behind the H1/H2 gate above.
-      const queryTokenOk = p === "/api/preview/serve" || p === "/api/preview/shot";
+      const queryTokenOk = p === "/api/preview/serve" || p === "/api/preview/shot" || p === "/api/preview/inspect" || p === "/api/preview/act";
       const tok = queryTokenOk ? (req.headers.get("x-lucid-token") ?? url.searchParams.get("t")) : req.headers.get("x-lucid-token");
       if (!tokenValid(tok, TOKEN)) return new Response("forbidden", { status: 403 });
     }
@@ -1048,6 +1052,34 @@ const server = Bun.serve({
         latestPreviewShot = typeof b?.png === "string" && b.png.startsWith("data:image/") ? b.png : latestPreviewShot;
         return json({ ok: true, data: { cached: !!latestPreviewShot } });
       }
+      // P-PREVIEW.6b (ADR-0153): the agent's `preview_inspect` tool (omp subprocess) reads the live preview
+      // DOM. The iframe is opaque-origin sandboxed, so this request is HELD here until the RENDERER runs the
+      // query on the frame (via the postMessage bridge) and posts the result back — or an 8s timeout returns a
+      // helpful "no preview open" message. Read-only by construction (the command only describes a query).
+      if (p === "/api/preview/inspect") {
+        const { id, promise } = inspectRelay.enqueue({ selector: url.searchParams.get("selector") ?? undefined, what: url.searchParams.get("what") ?? undefined });
+        const t = setTimeout(() => inspectRelay.abandon(id, { error: "no preview is open (or it didn't respond) — open a preview first, then inspect it" }), 8000);
+        const result = await promise; clearTimeout(t);
+        return json({ ok: true, data: { result } });
+      }
+      // P-PREVIEW.6c (ADR-0153): the agent's preview_click / preview_type tools — a STRUCTURED action (a named
+      // op on a CSS selector) through the same held relay + bridge. Same fail-closed timeout. No arbitrary JS.
+      if (p === "/api/preview/act") {
+        const { id, promise } = inspectRelay.enqueue({ action: url.searchParams.get("action") ?? undefined, selector: url.searchParams.get("selector") ?? undefined, value: url.searchParams.get("value") ?? undefined });
+        const t = setTimeout(() => inspectRelay.abandon(id, { error: "no preview is open (or it didn't respond) — open a preview first, then act on it" }), 8000);
+        const result = await promise; clearTimeout(t);
+        return json({ ok: true, data: { result } });
+      }
+      // The renderer pulls the next queued inspect command (poll while a preview is open) …
+      if (p === "/api/preview/inspect/next") {
+        return json({ ok: true, data: inspectRelay.next() ?? { none: true } });
+      }
+      // … runs it on the sandboxed frame via postMessage, and posts the result back (resolves the held tool call).
+      if (p === "/api/preview/inspect/result" && req.method === "POST") {
+        const b = await readBody<{ id?: unknown; result?: unknown }>(req);
+        const resolved = typeof b.id === "string" ? inspectRelay.resolve(b.id, b.result) : false;
+        return json({ ok: true, data: { resolved } });
+      }
       if (p === "/api/preview/shot") {
         return json({ ok: true, data: { png: latestPreviewShot } });
       }
@@ -1073,6 +1105,10 @@ const server = Bun.serve({
               });
             } catch { /* serve raw HTML on any inlining failure */ }
           }
+          // P-PREVIEW.6b (ADR-0153): inject the read-only DOM-inspect bridge (inline JS, CSP-allowed; egress
+          // still blocked by connect-src 'none'). Only for HTML — an .svg is self-contained + has no DOM to
+          // inspect. It answers postMessage queries from the LUCID renderer; it never mutates or evals.
+          if (/\.html?$/i.test(toFsPath(target))) body = injectPreviewBridge(body);
           return new Response(body, { headers });
         }
         const safe = r.error.replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c]!));
@@ -1472,6 +1508,10 @@ const server = Bun.serve({
 // THIS process) and inherits process.env, so setting it here — after the server binds — is enough; no
 // ACPClient env plumbing needed. 127.0.0.1 (not localhost) matches the loopback bind.
 process.env.LUCID_PREVIEW_SHOT_URL = `http://127.0.0.1:${server.port}/api/preview/shot?t=${TOKEN}`;
+// P-PREVIEW.6b (ADR-0153): the agent's preview_inspect tool GETs this (with ?selector=&what=) to read the DOM.
+process.env.LUCID_PREVIEW_INSPECT_URL = `http://127.0.0.1:${server.port}/api/preview/inspect?t=${TOKEN}`;
+// P-PREVIEW.6c (ADR-0153): preview_click / preview_type GET this (with ?action=&selector=&value=) to act.
+process.env.LUCID_PREVIEW_ACT_URL = `http://127.0.0.1:${server.port}/api/preview/act?t=${TOKEN}`;
 
 // Build recall once at startup — the FIRST session is created lazily on the first /api/chat (never
 // via /api/newSession), so this is what carries prior-session facts into it. Best-effort; the omp

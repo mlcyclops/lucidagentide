@@ -16,6 +16,7 @@ import { join } from "node:path";
 import { ACPClient } from "./acp.ts";
 import { AGENT_BUILDER_POLICY, BUILD_POLICY, DELEGATION_POLICY, ENGAGEMENT_POLICY, PREVIEW_POLICY, SLASH_COMMAND_POLICY } from "../harness/prompt/assembler.ts";
 import { currentWorkspace } from "./workspace.ts";
+import { previewActivityLabel } from "./preview_activity.ts"; // P-PREVIEW.6a (ADR-0153): reviewing/testing pill
 import { learnFromTurn, recallPreamble } from "./personal.ts";
 import { buildUserTurnPreamble } from "./preamble.ts";
 import { ChatGate } from "./chat_gate.ts";
@@ -143,6 +144,7 @@ export type ChatEvent =
   | { type: "block"; tool: string; reason: string; severity: string; findings: string; id?: string; quarantined?: boolean }
   | { type: "permission"; id: string; tool: string; detail: string; options: { optionId: string; name: string; kind?: string }[]; url?: string; egress?: boolean; localFile?: boolean; exec?: boolean; program?: string; reason?: string; danger?: boolean }
   | { type: "preview-available"; path: string } // P-PREVIEW.2 (ADR-0096): the agent wrote a previewable file
+  | { type: "preview-activity"; label: string } // P-PREVIEW.6a (ADR-0153): the agent is reviewing/testing the live preview
   | { type: "agent-builder-open"; spec: AgentSpec } // P-AGENT.8.2 (ADR-0134): open the Agent Builder pre-populated
   | { type: "slash-command-created"; command: UserCommand } // P-CMD.1 (ADR-0146): the agent created a user "/" command
   | { type: "usage"; used: number; size: number; cost: number }
@@ -367,6 +369,10 @@ class Backend {
                 const pvRaw = previewOpenPath(String(u.title ?? ""), ri) ?? previewablePath(String(u.kind ?? u.title ?? ""), ri);
                 const pv = pvRaw ? absPath(pvRaw) : pvRaw; // resolve a relative write path to absolute so the panel can render it
                 if (pv) this.emit({ type: "preview-available", path: pv });
+                // P-PREVIEW.6a (ADR-0153): the agent is looking at / testing the live preview (screenshot,
+                // inspect, open, structured action) — tell the UI to glow the panel + show a "reviewing" pill.
+                const paLabel = previewActivityLabel(String(u.title ?? u.kind ?? ""));
+                if (paLabel) this.emit({ type: "preview-activity", label: paLabel });
                 // P-AGENT.8.2 (ADR-0134): the agent's `agent_builder_open` tool call opens the Agent Builder
                 // pre-populated. Re-parsed + validated + secret-scanned here (authoritative) before it opens.
                 // NOTE: omp renders a custom tool's call TITLE as a human summary (e.g. "Opening agent builder

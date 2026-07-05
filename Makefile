@@ -427,6 +427,18 @@ nvim-plugin-split: ## Split extensions/neovim -> the standalone `lucid.nvim` bra
 	echo "lucid.nvim split -> $$sha"; \
 	if [ "$(PUSH)" = "1" ]; then git push -f origin "$$sha:refs/heads/lucid.nvim"; else echo "(dry run — add PUSH=1 to publish; CI does this on every master push)"; fi
 
+.PHONY: demo-P-PREVIEW.6a
+demo-P-PREVIEW.6a: ## P-PREVIEW.6a (ADR-0153): the agent reviews its work live in the preview — a preview tool-call (screenshot/open/inspect/action) maps to a user-facing label that glows the panel + shows a "reviewing/testing" pill; non-preview tools never trigger it
+	$(BUN) run desktop/scripts/demo_p_preview_6a.ts
+
+.PHONY: demo-P-PREVIEW.6b
+demo-P-PREVIEW.6b: ## P-PREVIEW.6b (ADR-0153): the agent READS the live preview DOM — a held tool→server→renderer→iframe relay + a READ-ONLY postMessage bridge injected into the sandboxed preview (no eval/mutation), fail-closed on timeout
+	$(BUN) run desktop/scripts/demo_p_preview_6b.ts
+
+.PHONY: demo-P-PREVIEW.6c
+demo-P-PREVIEW.6c: ## P-PREVIEW.6c (ADR-0153): the agent CLICKS/TYPES in the live preview by CSS selector — structured actions through the same relay + bridge (fixed allowlist click/type/focus/scroll; still no eval/innerHTML)
+	$(BUN) run desktop/scripts/demo_p_preview_6c.ts
+
 .PHONY: dashboards
 dashboards: ## Materialize dashboard CSVs from a DuckDB into observable/docs/data (DB=path)
 	$(BUN) run harness/scripts/materialize_dashboards.ts $(DB) observable/docs/data
