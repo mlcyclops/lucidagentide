@@ -180,40 +180,31 @@ personalization internals are proprietary and intentionally undocumented here - 
 
 ---
 
-## ✨ What's new in v1.9.0
+## ✨ What's new in v1.10.0
 
-> A big feature batch. Screenshots below are **placeholders** — drop the real captures into
-> `.github/assets/screenshots/v1.9.0/` (filenames referenced here) and they render automatically.
+> The biggest batch since 1.9 — run **local models**, a multimodal agent that **reviews its own UI**, native
+> **Figma** import, an **Agent Builder**, and a **security firewall** for remote agents. (v1.9.2 also shipped a
+> battery-aware performance epic — calmer knowledge-graph rendering and faster switches on battery.)
 
-- **🎙️ Voice** — ElevenLabs read-aloud + a speech-to-text mic in the composer; offline Whisper / Kokoro for
-  air-gap; TTS-friendly narration that skips codes and symbols.
-- **📊 Engineering Reports rail** — role-tailored briefs (developer · security · manager · executive) plus every
-  loop After-Action Report, with copy · download `.md` · **print / save-as-PDF** (clean white paper + a
-  "Prepared for" line) · two-stage archive-delete · push-to-knowledge-graph. `Ctrl/⌘+Space` reads a report aloud.
-- **🛡️ Security compliance** — the Security brief ends with a **NIST 800-171 / 800-53 + DISA STIG CCI**
-  crosswalk and exports an **eMASS-aligned POA&M CSV** and a native **STIG-Viewer `.ckl`** (draft — analyst-validate).
-- **🕸️ Code knowledge graph** — ingest the workspace into a **file-import** or a **TypeScript-AST symbol** graph
-  in the KG canvas (click a node → open the file in the IDE); an opt-in read-only `codegraph_query` tool lets the
-  **agent** get blast-radius answers instead of reading many whole files.
-- **🎨 UI revamp** — a live "game-HUD" scoreboard, colour report charts with plasma-on-hover, premium custom SVG
-  icons; a personalizable **chat background** (ambient 25% wash, or a flashlight that reveals it under the cursor).
-- **🖊️ Preview markup** — pen / rectangle / text markup over the in-app preview, captured with the screenshot to
-  chat; plus a **TLDR** button that explains an intimidating command in plain terms via a cheap model.
-
-<p align="center">
-  <img src=".github/assets/screenshots/v1.9.0/engineering-reports.png" alt="Engineering Reports rail — role-tailored briefs, POA&M/STIG export, print-to-PDF (screenshot placeholder)" width="90%" />
-  <br/><sub><i>Engineering Reports — role-tailored briefs, POA&amp;M / STIG export, print-to-PDF. (screenshot placeholder)</i></sub>
-</p>
-
-<p align="center">
-  <img src=".github/assets/screenshots/v1.9.0/code-graph.png" alt="Code knowledge graph — file-import and AST symbol graph in the KG canvas (screenshot placeholder)" width="90%" />
-  <br/><sub><i>Code knowledge graph — file-import &amp; AST symbol graph, click a node to open the file. (screenshot placeholder)</i></sub>
-</p>
-
-<p align="center">
-  <img src=".github/assets/screenshots/v1.9.0/report-charts.png" alt="Report charts and the live scoreboard (screenshot placeholder)" width="90%" />
-  <br/><sub><i>Colour report charts + the live scoreboard. (screenshot placeholder)</i></sub>
-</p>
+- **🖥️ Local & hybrid providers** — point LUCID at a **self-hosted or custom LLM** (Ollama · llama.cpp · vLLM ·
+  any OpenAI-compatible endpoint), including a private box reached **over a VPN** (e.g. a DGX behind SonicWall).
+  Keys live in the **OS-encrypted vault** and never reach the renderer or the agent; add, key, and test each one
+  from a Settings card. *(ADR-0135)*
+- **🖼️ Multimodal prompts** — **paste or drop a screenshot** straight into the prompt bar; it shows as a thumbnail
+  above the composer and travels to the model as an image **only when you hit send** — no auto-push. *(ADR-0136)*
+- **👁️ The agent reviews & tests its work live** — as it screenshots, reads the DOM, and **clicks / types** in the
+  in-app Preview to verify its UI, the panel **glows** and a **"testing" pill** shows you exactly what it's doing —
+  all over a sandboxed postMessage bridge (no eval, egress stays blocked). *(ADR-0153)*
+- **🎨 DESIGN.md + native Figma** — a project **`DESIGN.md`** is honored every turn like `CLAUDE.md`; **`/figma`**
+  imports a design into the Preview (token in the vault, used server-side only), then the agent **reviews it** or
+  **builds a DESIGN.md** from it for you to edit in the IDE. *(ADR-0154)*
+- **🤖 Agent Builder** — **describe an agent and LUCID builds it**: an allow-list chip editor, live per-turn canvas
+  collaboration, portable **share / import** with credential provisioning, **n8n** interop, and your own saved
+  **`/command`s**. *(ADR-0137–0146)*
+- **🧯 Agent Firewall** — reach remote **hermes / openclaw** agent runtimes through a **fail-closed security proxy**
+  that scans both directions (blocks injected instructions outbound, quarantines + delimits replies inbound), with
+  per-connection permission policy — plus an in-process gate for **every MCP tool result**. *(ADR-0147–0152)*
+- **⌨️ Neovim & terminal** — drive LUCID from **Neovim** and the terminal, not just the desktop app. *(ADR-0150/0151)*
 
 ---
 
