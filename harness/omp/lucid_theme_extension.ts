@@ -20,7 +20,7 @@
 // Escape hatch: LUCID_THEME=off|0|false disables; LUCID_THEME=<name> applies that theme instead
 // (no provisioning — the name must already resolve for omp).
 
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { createAgentSession } from "@oh-my-pi/pi-coding-agent";
@@ -54,7 +54,9 @@ export function requestedTheme(env: Env = process.env): string | null {
 }
 
 /** Idempotently install the theme JSON into `dir`. Read-then-compare (never existsSync-then-read —
- *  TOCTOU) and write only when bytes differ, so omp's theme file-watcher isn't poked on every launch. */
+ *  TOCTOU) and write only when bytes differ, so omp's theme file-watcher isn't poked on every launch.
+ *  The write is remove-then-EXCLUSIVE-create (`wx`, owner-only mode): it never follows a pre-existing
+ *  symlink and never clobbers a racing writer (CodeQL js/insecure-temporary-file). */
 export function provisionTheme(dir: string, sourceJson: string): "written" | "unchanged" {
   const dest = join(dir, `${THEME_NAME}.json`);
   let existing: string | undefined;
@@ -65,7 +67,8 @@ export function provisionTheme(dir: string, sourceJson: string): "written" | "un
   }
   if (existing === sourceJson) return "unchanged";
   mkdirSync(dir, { recursive: true });
-  writeFileSync(dest, sourceJson, "utf8");
+  rmSync(dest, { force: true });
+  writeFileSync(dest, sourceJson, { encoding: "utf8", mode: 0o600, flag: "wx" });
   return "written";
 }
 
