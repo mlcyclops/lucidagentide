@@ -21,6 +21,7 @@ import { ageStr, esc, fmtUSD, goodColor, loadColor } from "./format.ts";
 import { icon, piMark } from "./icons.ts";
 import { aboutHtml, readmeMark } from "./about.ts";
 import { MARKET_PLUGINS, marketplaceHtml, marketRowsHtml } from "./marketplace.ts"; // P-MARKET.1 (ADR-0158)
+import { toolfailGroupHtml, type ToolFailEntry } from "./toolfail_group.ts"; // P-TOOLFAIL.2 (ADR-0163)
 import { APP_VERSION } from "../version.ts";
 import { renderMarkdown } from "./markdown.ts";
 import { type GraphHandle, kindLabel, mountGraph } from "./graph.ts";
@@ -564,6 +565,28 @@ function addEvent(html: string): HTMLElement {
   $("#thread")!.appendChild(node);
   scrollChat();
   return node;
+}
+// P-TOOLFAIL.2 (ADR-0163): consecutive failed/didn't-run tool calls collapse into ONE small red
+// toolbox badge (toolfail_group.ts builds the HTML); clicking the badge toggles the "Tool Call
+// Actions" list. A group closes the moment anything else lands in the thread (it is no longer the
+// last child), so failures from different phases of a turn never merge misleadingly.
+let tfGroup: { el: HTMLElement; entries: ToolFailEntry[] } | null = null;
+function addToolFailure(entry: ToolFailEntry): void {
+  const thread = $("#thread")!;
+  if (!tfGroup || tfGroup.el !== thread.lastElementChild) {
+    const g = { el: el(`<div class="toolfail"></div>`), entries: [] as ToolFailEntry[] };
+    // Delegated click (survives innerHTML repaints): only the badge toggles.
+    g.el.addEventListener("click", (ev) => {
+      if (!(ev.target as HTMLElement).closest(".tf-head")) return;
+      g.el.classList.toggle("open");
+      g.el.innerHTML = toolfailGroupHtml(g.entries, g.el.classList.contains("open"));
+    });
+    thread.appendChild(g.el);
+    tfGroup = g;
+  }
+  tfGroup.entries.push(entry);
+  tfGroup.el.innerHTML = toolfailGroupHtml(tfGroup.entries, tfGroup.el.classList.contains("open"));
+  scrollChat();
 }
 // Stick-to-bottom autoscroll, rAF-batched for buttery playback under rapid tokens.
 // Many scrollChat() calls within one frame coalesce into a SINGLE scrollTop write, so the
@@ -1222,10 +1245,11 @@ function onBlock(e: Extract<ChatEvent, { type: "block" }>): void {
   // security event - show a quiet, neutral chip and stop. Only the gate's authoritative
   // quarantine (quarantined !== false) gets the loud treatment + Security-panel review.
   if (e.quarantined === false) {
-    // P-TOOLFAIL.1 (ADR-0093): a tool that failed or didn't run — NOT a security block. The reason now
-    // carries omp's own status/message (tool_failure.ts), so the chip explains itself; the tooltip makes
-    // the not-a-quarantine distinction explicit so a failure is never read as a denial.
-    addEvent(`<div class="evt" data-tip="Tool call was not completed (failed or refused) - not a security block">${icon("close", 14)}<span><b>${esc(e.tool)}</b> · ${esc(e.reason)}</span></div>`);
+    // P-TOOLFAIL.1/.2 (ADR-0093/0163): a tool that failed or didn't run — NOT a security block.
+    // Consecutive failures collapse into ONE small toolbox badge; click = the "Tool Call Actions"
+    // list (command attempted + full error). Never mistaken for a denial — the gate's quarantine
+    // keeps its own loud .evt.block path below.
+    addToolFailure({ tool: e.tool, reason: e.reason, command: e.command, detail: e.detail });
     return;
   }
   const review = () => { OPEN.add("sec.live"); focusInspector("security"); void refresh(); };
