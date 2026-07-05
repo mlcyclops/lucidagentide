@@ -31,7 +31,7 @@ import type { TrustLabel } from "../../harness/contracts.ts"; // P-AGENT.9: impo
 import { localProvidersCardBody, draftFromForm } from "./local_providers_ui.ts"; // P-LOCAL.3 (ADR-0135): Settings → Local Providers
 import { acceptAttachment, promptImageBlocks, thumbStripHtml, MAX_ATTACHMENT_BYTES, type Attachment } from "./composer_attachments.ts"; // P-VISION.1 (ADR-0136): pasted images
 import type { AgentSpec, NodeKind } from "../../harness/agent/spec.ts"; // P-AGENT.2b
-import { expandCommandBody, type UserCommand } from "../../harness/commands/spec.ts"; // P-CMD.1: user "/" commands
+import { expandCommandBody, expandInlineCommands, slashTokenBeforeCaret, type UserCommand } from "../../harness/commands/spec.ts"; // P-CMD.1/.2: user "/" commands, body-wide
 import { type Action, type ToastAction, attachRichTip, createPalette, initTooltips, popover, showToast } from "./ui.ts";
 import { exportActionPlan } from "./kg_export.ts";
 import { formatImportLine } from "./import_progress.ts";
@@ -92,6 +92,7 @@ const state = {
   developerMode: false, // ADR-0009 Phase D
   dev: null as import("./bridge.ts").DevView | null, // ADR-0009 Phase D logs snapshot
   mcpServers: [] as import("./bridge.ts").McpServerStatus[], // P-MCP.1 (ADR-0020)
+  agents: [] as import("./bridge.ts").RemoteAgentStatus[], // P-AGENTFW.2 (ADR-0149) remote ACP agent connections
   whitelist: [] as import("./bridge.ts").WhitelistEntryView[], // P-NETWL.2 (ADR-0106) curated network whitelist
   creds: [] as import("./bridge.ts").CredMetaView[], // P-KEYS.1 (ADR-0107) vault metadata (ref → kind/label/last4)
   localProviders: [] as import("../local_providers.ts").LocalProviderDef[], // P-LOCAL.3 (ADR-0135) self-hosted/custom LLM endpoints
@@ -1059,7 +1060,22 @@ async function send(): Promise<void> {
   // What actually goes to the model. `/agent` and `/command` kick off builder interviews (the chat agent,
   // steered by the frozen policies, asks what to build then calls the matching tool); a SEND-mode user
   // command expands its body (+ any typed args). The TRANSCRIPT still shows exactly what the user typed.
-  const sendText = resolveSendText(text, cmdTok);
+  let sendText = resolveSendText(text, cmdTok);
+  // P-CMD.2: "/" commands work ANYWHERE in the body — but only when NO start-anchored command consumed
+  // the text above (start-anchored keeps the P-CMD.1 args contract, and never re-scanning an expanded body
+  // keeps expansion non-recursive). Embedded skill-mode tokens activate their skills and are stripped.
+  if (sendText === text) {
+    const inline = expandInlineCommands(text, state.userCommands);
+    for (const name of inline.skillNames) {
+      const uc = state.userCommands.find((c) => c.name === name);
+      if (uc) void activateUserCommandSkill(uc);
+    }
+    if (!inline.text && images.length === 0) {
+      // the prompt was ONLY skill tokens — skills are active for the next turn; nothing to send now
+      if (inline.skillNames.length) { ta.value = ""; autosize(ta); setSendEnabled(); return; }
+    }
+    sendText = inline.text || text;
+  }
   // P-ACP.4: a turn is already running → pre-stage this prompt instead of dropping it. It auto-sends
   // when the current turn ends (naturally or via Stop). One slot - a newer entry replaces the old.
   if (state.streaming) { state.queued = text; ta.value = ""; autosize(ta); renderQueued(); setSendEnabled(); return; }
@@ -1862,6 +1878,35 @@ function secMcp(servers: import("./bridge.ts").McpServerStatus[]): string {
 function hydrateMcp(): void {
   void bridge.mcpList().then((m) => { state.mcpServers = m ?? []; fillSec("mcp", secMcp(state.mcpServers)); });
 }
+// P-AGENTFW.2 (ADR-0149): Remote agents (hermes/openclaw) reached THROUGH the Lucid agent-firewall.
+function secAgents(agents: import("./bridge.ts").RemoteAgentStatus[]): string {
+  const rows = agents.length ? agents.map((a) => `<div class="prov">
+      <div class="prov-h"><span class="prov-name">${esc(a.name)} <span class="abadge set">${esc(a.kind)}</span></span>
+        <span class="prov-status">${a.enabled ? `<span class="abadge ok">${icon("check", 11)} on</span>` : `<span class="abadge none">off</span>`}<span class="abadge set">perm: ${esc(a.permissionPolicy)}</span></span></div>
+      <div class="prov-body">
+        <div class="prov-row"><code>${esc(a.command)} ${esc(a.args.join(" "))}</code></div>
+        <div class="prov-row">
+          <button class="btn-mini" data-agent-toggle="${esc(a.id)}" data-agent-on="${a.enabled ? "0" : "1"}">${a.enabled ? "Disable" : "Enable"}</button>
+          <button class="btn-mini danger" data-agent-remove="${esc(a.id)}">${icon("close", 12)} Remove</button>
+        </div></div></div>`).join("")
+    : `<div class="empty">No remote agents yet. Add a hermes/openclaw connection below — it's proxied through the Lucid security firewall.</div>`;
+  const form = `<div class="prov" style="border-style:dashed">
+      <div class="prov-h"><span class="prov-name">${icon("plus", 13)} Add a remote agent</span></div>
+      <div class="prov-body">
+        <div class="prov-row"><input id="agentName" class="prov-key" placeholder="Name (e.g. Hermes prod)" />
+          <select id="agentKind" class="prov-key" style="flex:none;width:110px"><option value="hermes">hermes</option><option value="openclaw">openclaw</option><option value="acp">acp</option></select></div>
+        <div class="prov-row"><input id="agentCommand" class="prov-key" placeholder="Command (e.g. hermes, openclaw, uvx)" /></div>
+        <div class="prov-row"><input id="agentArgs" class="prov-key" placeholder="Args (e.g. acp --url wss://host:18789 --token-file /abs/path)" /></div>
+        <div class="prov-row">
+          <select id="agentPerm" class="prov-key" style="flex:none;width:160px"><option value="deny">permissions: deny</option><option value="allow">permissions: allow</option></select>
+          <button class="btn-mini ok" id="agentAdd">${icon("check", 12)} Connect</button></div>
+      </div></div>`;
+  const note = `<div class="set-note">${icon("shield", 12)} Remote agents (hermes/openclaw) are reached through the <b>Lucid agent-firewall</b>: every prompt is scanned before it leaves and every reply is scanned + returned as <code>UNTRUSTED_CONTENT</code>; the remote's permission asks default to <b>deny</b>. Prefer <code>--token-file</code> (absolute path) so no secret is stored here. See <code>docs/AGENT-FIREWALL.md</code>.</div>`;
+  return setCard("agents", "Remote agents", "hermes · openclaw · ACP firewall", rows + form + note, true);
+}
+function hydrateAgents(): void {
+  void bridge.remoteAgentList().then((a) => { state.agents = a ?? []; fillSec("agents", secAgents(state.agents)); });
+}
 
 // P-NETWL.2 (ADR-0106): the curated Network Whitelist section. Lets a user pre-authorize domains (`*.com`
 // TLD or exact `api.example.com`) and IP/CIDR ranges, split by internal (intranet) vs external (internet)
@@ -2114,6 +2159,7 @@ function settingsShell(): string {
     `<div data-sec="sovereignty"></div>`, // P-IDE.1c: China-origin unlock (renders only when such models exist)
     setSkel("compression", "Token compression", "headroom · on-device · opt-in", true),
     setSkel("mcp", "MCP connectors", "model context protocol", true),
+    setSkel("agents", "Remote agents", "hermes · openclaw · ACP firewall", true), // P-AGENTFW.2 (ADR-0149)
     setSkel("whitelist", "Network Whitelist", "domains · IPs · trust-scoped", true), // P-NETWL.2 (ADR-0106)
     setSkel("others", "More providers", "", true),
     setSkel("voice", "Voice", "TTS · STT · ElevenLabs", true), // P-VOICE.1 (ADR-0115)
@@ -2152,6 +2198,7 @@ function hydrateSettings(): void {
   fillSec("developer", secDeveloper()); // ADR-0059: render from state.developerMode (loaded by loadDev)
   void hydratePersonal();
   hydrateMcp();
+  hydrateAgents(); // P-AGENTFW.2 (ADR-0149)
   void hydrateLocalProviders(); // P-LOCAL.3 (ADR-0135)
   hydrateWhitelist(); // P-NETWL.2 (ADR-0106)
   void bridge.asksage().then(async (a) => {
@@ -5877,9 +5924,12 @@ function filterSlash(prefix: string): SlashItem[] {
 function closeSlashAC(): void { slashEl?.remove(); slashEl = null; slashItems = []; slashSel = 0; }
 function updateSlashAC(): void {
   const ta = $("#input") as HTMLTextAreaElement | null; if (!ta) return;
-  const m = /^\/(\S*)$/.exec(ta.value); // the whole input is a single "/…" token (no space yet)
-  if (!m || state.streaming) { closeSlashAC(); return; }
-  slashItems = filterSlash(m[1]);
+  // P-CMD.2: complete the "/" token AT THE CARET — commands work anywhere in the body, so the menu opens
+  // mid-sentence too ("fix this /lic…"), not only when the whole input is one token.
+  const caret = ta.selectionStart ?? ta.value.length;
+  const tok = slashTokenBeforeCaret(ta.value.slice(0, caret));
+  if (!tok || state.streaming) { closeSlashAC(); return; }
+  slashItems = filterSlash(tok.slice(1));
   if (!slashItems.length) { closeSlashAC(); return; }
   if (slashSel >= slashItems.length) slashSel = slashItems.length - 1;
   const rows = slashItems.map((it, i) =>
@@ -5894,9 +5944,23 @@ function applySlash(it: SlashItem | undefined): void {
   if (!it) return;
   const ta = $("#input") as HTMLTextAreaElement;
   closeSlashAC();
-  if (it.activate === "goal") { ta.value = ""; autosize(ta); setSendEnabled(); openGoalForm(); return; } // /goal is the REAL loop primitive (P-GOAL.1)
-  if (it.activate) { void activateBundledSkill(it.activate); ta.value = ""; } // built-in skill rides the next turn
-  else if (it.complete) { ta.value = it.complete; }                          // command / project skill: finish typing args
+  // P-CMD.2: operate on the "/" token AT THE CARET so completing/activating mid-body preserves the
+  // surrounding prose instead of clobbering the whole input.
+  const caret = ta.selectionStart ?? ta.value.length;
+  const tok = slashTokenBeforeCaret(ta.value.slice(0, caret));
+  const start = tok ? caret - tok.length : 0;
+  const replaceToken = (replacement: string): void => {
+    if (tok) {
+      ta.value = ta.value.slice(0, start) + replacement + ta.value.slice(caret);
+      const pos = start + replacement.length;
+      ta.setSelectionRange(pos, pos);
+    } else {
+      ta.value = replacement;
+    }
+  };
+  if (it.activate === "goal") { replaceToken(""); autosize(ta); setSendEnabled(); openGoalForm(); return; } // /goal is the REAL loop primitive (P-GOAL.1)
+  if (it.activate) { void activateBundledSkill(it.activate); replaceToken(""); } // built-in skill rides the next turn
+  else if (it.complete) { replaceToken(it.complete); }                           // command / project skill: finish typing args
   autosize(ta); setSendEnabled(); ta.focus();
 }
 /** Intercept a composer keydown while the "/" autocomplete is open. Returns true if it consumed the key. */
@@ -6480,6 +6544,23 @@ function wire(): void {
     if (mcpToggle) { await bridge.mcpToggle(mcpToggle.dataset.mcpToggle!, mcpToggle.dataset.mcpOn === "1"); hydrateMcp(); return; }
     const mcpRemove = t.closest("[data-mcp-remove]") as HTMLElement | null;
     if (mcpRemove) { await bridge.mcpRemove(mcpRemove.dataset.mcpRemove!); hydrateMcp(); showToast({ title: "Connector removed", desc: "The MCP server was removed; the agent drops it on the next turn.", actions: [{ label: "OK" }], timeout: 3000 }); return; }
+    if (t.closest("#agentAdd")) {
+      const body = $("#setBody")!;
+      const name = (($("#agentName", body) as HTMLInputElement)?.value ?? "").trim();
+      const kind = ($("#agentKind", body) as HTMLSelectElement)?.value ?? "acp";
+      const command = (($("#agentCommand", body) as HTMLInputElement)?.value ?? "").trim();
+      const args = (($("#agentArgs", body) as HTMLInputElement)?.value ?? "").trim();
+      const permissionPolicy = ($("#agentPerm", body) as HTMLSelectElement)?.value ?? "deny";
+      if (!command) { showToast({ title: "Command required", desc: "Enter the command that starts the remote agent's ACP server (e.g. hermes acp).", actions: [{ label: "OK" }], timeout: 4000 }); return; }
+      await bridge.remoteAgentUpsert({ name: name || "Remote agent", kind, command, args, permissionPolicy });
+      hydrateAgents();
+      showToast({ title: "Remote agent added", desc: `${name || "Agent"} is proxied through the Lucid firewall — the agent picks it up on your next turn.`, meta: "scanned both ways · permissions default deny", actions: [{ label: "OK" }], timeout: 5000 });
+      return;
+    }
+    const agentToggle = t.closest("[data-agent-toggle]") as HTMLElement | null;
+    if (agentToggle) { await bridge.remoteAgentToggle(agentToggle.dataset.agentToggle!, agentToggle.dataset.agentOn === "1"); hydrateAgents(); return; }
+    const agentRemove = t.closest("[data-agent-remove]") as HTMLElement | null;
+    if (agentRemove) { await bridge.remoteAgentRemove(agentRemove.dataset.agentRemove!); hydrateAgents(); showToast({ title: "Connection removed", desc: "The remote agent was removed; the agent drops it next turn.", actions: [{ label: "OK" }], timeout: 3000 }); return; }
     // ── Network Whitelist (P-NETWL.2, ADR-0106) ──
     if (t.closest("#wlAuthFile")) {
       const body = $("#setBody")!;

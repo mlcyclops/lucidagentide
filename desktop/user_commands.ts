@@ -15,6 +15,7 @@ import { DEFAULT_POLICY, scanAndDecide, type GateDecision } from "../harness/sec
 import { validateUserCommand, type UserCommand } from "../harness/commands/spec.ts";
 import { scanTextsForSecrets } from "../harness/agent/secret_guard.ts";
 import { deleteCommandFile, listCommandFiles, saveCommandFile } from "../harness/commands/file_store.ts";
+import { withBuiltins } from "../harness/commands/builtins.ts"; // P-CMD.2: shipped "/" commands (/licensing)
 import { Telemetry } from "../harness/telemetry/events.ts";
 import { Snowflake } from "@oh-my-pi/pi-utils";
 import { currentWorkspace } from "./workspace.ts";
@@ -109,9 +110,10 @@ export async function createUserCommand(draft: unknown, workspace: string = curr
   return { ok: true, name: cmd.name, command: cmd, trustLabel: decision.trustLabel, findings: decision.findings.length };
 }
 
-/** List valid stored user commands (newest first). */
+/** List valid stored user commands (newest first) plus LUCID's builtins (P-CMD.2). A user-saved command
+ *  with a builtin's name SHADOWS it; deleting that user command resurfaces the builtin. */
 export function listUserCommands(workspace: string = currentWorkspace()): UserCommand[] {
-  return listCommandFiles(workspace);
+  return withBuiltins(listCommandFiles(workspace));
 }
 
 /** Delete a user command by name. Returns true if a file was removed. */

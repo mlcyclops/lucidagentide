@@ -52,6 +52,7 @@ import { PREVIEW_FRAME_CSP } from "./preview_resolve.ts"; // P-PREVIEW.4b: per-f
 import { inlinePreviewAssets } from "./preview_inline.ts"; // P-PREVIEW.4c: fold a multi-file app's relative assets inline
 import { listLocalProviders, upsertLocalProvider, removeLocalProvider, setLocalProviderEnabled } from "./settings_store.ts";
 import { providerModelsUrl, type LocalProviderDef } from "./local_providers.ts";
+import { listRemoteAgents, upsertRemoteAgent, removeRemoteAgent, setRemoteAgentEnabled } from "../harness/mcp/registry.ts";
 import { applyEnv, attribution, chinaModelsAcknowledged, listMcpServers, load as loadSettings, removeMcpServer, roleChosen, setAsksage, setAttributionSkip, setChinaModelsAcknowledged, setCodeGraphAgent, setDeveloperMode, setKey, setMcpServerEnabled, setPersonalAiExtract, setProfile, setRateLimitProbe, setThirdPartyProvidersAcknowledged, setTourSeen, setUserRole, setVoiceSettings, thirdPartyProvidersAcknowledged, tourSeen, upsertMcpServer, USER_ROLES, userRole, voiceSettings, type UserRole } from "./settings_store.ts";
 
 // ADR-0088/0089: the /api/settings payload — profile + attribution + the cosmetic role/tour state.
@@ -311,7 +312,9 @@ function startOauthBroker(oauthId: string): Promise<{ started: boolean; url: str
 function sendOauthCode(oauthId: string, code: string): { sent: boolean; reason?: string } {
   const proc = oauthBrokers.get(oauthId);
   if (!proc) return { sent: false, reason: "no broker running for " + oauthId };
-  try { proc.stdin.write(new TextEncoder().encode(code.trim() + "\n")); return { sent: true }; }
+  const sink = proc.stdin; // Bun types this number | FileSink | undefined; the broker spawns with stdin:"pipe" → FileSink
+  if (!sink || typeof sink === "number") return { sent: false, reason: "broker stdin is not writable" };
+  try { sink.write(new TextEncoder().encode(code.trim() + "\n")); return { sent: true }; }
   // js/stack-trace-exposure: log detail server-side, return a generic reason to the client (goes via json()).
   catch (e) { console.error(`[oauth] send code failed for ${oauthId}:`, e); return { sent: false, reason: "could not send code" }; }
 }
@@ -438,6 +441,22 @@ const server = Bun.serve({
       }
       if (p === "/api/mcp/remove" && req.method === "POST") { const b = await readBody<{ id?: unknown }>(req); removeMcpServer(String(b.id ?? "")); backend.restart(); return json({ ok: true }); }
       if (p === "/api/mcp/toggle" && req.method === "POST") { const b = await readBody<{ id?: unknown; enabled?: unknown }>(req); setMcpServerEnabled(String(b.id ?? ""), !!b.enabled); backend.restart(); return json({ ok: true }); }
+      // P-AGENTFW.2 (ADR-0149): remote ACP agent (hermes/openclaw) connections the firewall proxies to. The
+      // registry stores command/args (NOT secrets — prefer --token-file); a change respawns omp so enabled
+      // connections attach as `agentfw-*` MCP servers on the next session.
+      if (p === "/api/agents") {
+        if (req.method === "POST") {
+          const b = await readBody<{ id?: string; name?: unknown; kind?: unknown; command?: unknown; args?: unknown; cwd?: unknown; remoteUrl?: unknown; permissionPolicy?: unknown; enabled?: boolean }>(req);
+          const kind = b.kind === "hermes" || b.kind === "openclaw" ? b.kind : "acp";
+          const args = Array.isArray(b.args) ? b.args.map((a) => String(a)) : typeof b.args === "string" ? b.args.split(/\s+/).filter(Boolean) : [];
+          const e = upsertRemoteAgent({ id: b.id, name: String(b.name ?? ""), kind, command: String(b.command ?? ""), args, cwd: b.cwd != null ? String(b.cwd) : undefined, remoteUrl: b.remoteUrl != null ? String(b.remoteUrl) : undefined, permissionPolicy: b.permissionPolicy === "allow" ? "allow" : "deny", enabled: b.enabled });
+          backend.restart();
+          return json({ ok: true, data: { id: e.id, name: e.name, kind: e.kind, command: e.command, args: e.args, remoteUrl: e.remoteUrl, permissionPolicy: e.permissionPolicy ?? "deny", enabled: e.enabled } });
+        }
+        return json({ ok: true, data: listRemoteAgents().map((e) => ({ id: e.id, name: e.name, kind: e.kind, command: e.command, args: e.args, remoteUrl: e.remoteUrl, permissionPolicy: e.permissionPolicy ?? "deny", enabled: e.enabled })) });
+      }
+      if (p === "/api/agents/remove" && req.method === "POST") { const b = await readBody<{ id?: unknown }>(req); removeRemoteAgent(String(b.id ?? "")); backend.restart(); return json({ ok: true }); }
+      if (p === "/api/agents/toggle" && req.method === "POST") { const b = await readBody<{ id?: unknown; enabled?: unknown }>(req); setRemoteAgentEnabled(String(b.id ?? ""), !!b.enabled); backend.restart(); return json({ ok: true }); }
       // P-NETWL.2 (ADR-0106): the curated network whitelist CRUD the Settings UI drives. The stored config is
       // NON-secret (domain/IP patterns + zone/scope + an opaque vaultRef); the actual secret lives in the
       // OS-encrypted credential vault (main-process safeStorage), never here. egressDecision reads this file to

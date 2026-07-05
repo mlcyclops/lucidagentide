@@ -3,7 +3,7 @@
 
 // harness/omp/mcp_result_gate.ts
 //
-// P-MCP-GATE.1 (ADR-0148): the in-process gate for MCP tool RESULTS — closing the ADR-0020 guardrail that
+// P-MCP-GATE.1 (ADR-0152): the in-process gate for MCP tool RESULTS — closing the ADR-0020 guardrail that
 // was declared but never implemented (security_extension.ts only gates tool_call ARGS + <task-result>
 // promotion, so every MCP server's OUTPUT re-entered the prompt UNSCANNED).
 //

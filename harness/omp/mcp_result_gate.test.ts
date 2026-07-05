@@ -3,7 +3,7 @@
 
 // harness/omp/mcp_result_gate.test.ts
 //
-// P-MCP-GATE.1 (ADR-0148): the in-process MCP tool_result gate. Over-tested — source-scoping (local tools
+// P-MCP-GATE.1 (ADR-0152): the in-process MCP tool_result gate. Over-tested — source-scoping (local tools
 // must NOT be gated), quarantine → withheld, clean → delimited/labeled (never trusted), delimiter-breakout
 // neutralized, and the real-scanner decision→result mapping incl. fail-closed.
 

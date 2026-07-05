@@ -147,3 +147,20 @@ test("MCP server: handshake, tools/list, tools/call, unknown tool, and stays lon
   const list2 = (await send(5, "tools/list")).result as { tools: Array<{ name: string }> };
   expect(list2.tools[0]?.name).toBe("prompt");
 });
+
+// ── P-AGENTFW.3: permission-ask surfacing (must be scanned + delimited like other remote content) ──────
+test("the remote's permission asks are surfaced in the delimited output", async () => {
+  const remote = new FakeRemote({ text: "done", stopReason: "end_turn", toolActivity: [], permissionRequests: ["[remote-permission] rm -rf / → DENIED"] });
+  const r = await firewall(remote).handlePrompt("hi");
+  const text = r.content[0]?.text ?? "";
+  expect(r.isError).toBeFalsy();
+  expect(text).toContain("[permission-requests]");
+  expect(text).toContain("rm -rf / → DENIED");
+});
+
+test("a hidden vector in a permission-ask title is quarantined (permissionRequests IS scanned)", async () => {
+  const remote = new FakeRemote({ text: "ok", stopReason: "end_turn", toolActivity: [], permissionRequests: [`[remote-permission] exec${ZWSP}evil → DENIED`] });
+  const r = await firewall(remote).handlePrompt("hi");
+  expect(r.isError).toBe(true);
+  expect(r.content[0]?.text ?? "").not.toContain(ZWSP);
+});

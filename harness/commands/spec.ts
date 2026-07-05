@@ -153,3 +153,42 @@ export function expandCommandBody(body: string, args: string): string {
   if (!hasPlaceholder && trimmedArgs.length) return `${expanded.trimEnd()}\n\n${trimmedArgs}`;
   return expanded;
 }
+
+// ── P-CMD.2 (ADR-0148): "/" commands anywhere in the prompt body ───────────────────────────────
+
+/** A "/" token counts ONLY when preceded by start-of-text or whitespace AND followed by end/whitespace/
+ *  sentence punctuation — so paths (`src/foo`, `/usr/bin`, `/licensing/docs`) and URLs never match. */
+const INLINE_TOKEN = /(^|\s)\/([a-z][a-z0-9-]{0,31})(?=$|[\s.,;:!?)])/gi;
+
+export interface InlineExpansion {
+  text: string;
+  /** skill-mode command names whose tokens were stripped — the caller activates them. */
+  skillNames: string[];
+}
+
+/** Expand KNOWN "/" commands ANYWHERE in a prompt body (P-CMD.2). Rules, in order of the surprises they
+ *  prevent: only KNOWN names expand (prose mentioning /unknown stays verbatim); send-mode bodies replace
+ *  the token IN PLACE with no args (mid-sentence usage — the surrounding prose is the context); skill-mode
+ *  tokens are stripped and reported for activation (deduped); expansion is NEVER recursive (an expanded
+ *  body's own "/words" are not re-scanned — single pass over the ORIGINAL text only). Start-anchored
+ *  send-mode commands keep the P-CMD.1 args contract and are the CALLER's job before this runs. */
+export function expandInlineCommands(text: string, commands: readonly UserCommand[]): InlineExpansion {
+  const skillNames: string[] = [];
+  const out = text.replace(INLINE_TOKEN, (whole: string, pre: string, name: string) => {
+    const uc = commands.find((c) => c.name === name.toLowerCase());
+    if (!uc) return whole;
+    if (uc.mode === "skill") {
+      if (!skillNames.includes(uc.name)) skillNames.push(uc.name);
+      return pre.trimEnd(); // strip the token (and don't leave doubled spaces at the seam)
+    }
+    return `${pre}${expandCommandBody(uc.body, "")}`;
+  });
+  return { text: out.trim(), skillNames };
+}
+
+/** The "/" token immediately before the caret (including the slash), or null. Drives the composer's
+ *  autocomplete ANYWHERE in the body — not just when the whole input is one "/" token. */
+export function slashTokenBeforeCaret(textUpToCaret: string): string | null {
+  const m = /(^|\s)(\/\S*)$/.exec(textUpToCaret);
+  return m ? m[2]! : null;
+}
