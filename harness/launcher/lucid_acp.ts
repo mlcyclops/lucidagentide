@@ -124,8 +124,8 @@ export interface BuildTuiOpts {
   gate: string;
   /** Included when present; a missing asksage extension is not security-critical, so it's omitted, not fatal. */
   asksage?: string;
-  /** Forward-compat: the MCP tool-result gate extension (P-MCP-GATE.1, in flight on #206). Nothing on
-   *  master populates it yet; once #206 lands, thread it in exactly like `buildAcpArgs`. */
+  /** The MCP tool-result gate extension (P-MCP-GATE.1, ADR-0152); included when present so `lucid tui`
+   *  scans external MCP tool results exactly like `lucid acp`. */
   mcpResultGate?: string;
   /** omp args appended verbatim after the gated flags (initial prompt, --model, --continue, --resume, -p). */
   passthru?: string[];
@@ -258,7 +258,8 @@ export async function runTui(o: RunTuiOpts = {}): Promise<number> {
 
   const omp = resolveOmp(env, a.repo);
   const asksage = existsSync(a.asksage) ? a.asksage : undefined;
-  const args = buildTuiArgs({ gate: a.gate, asksage, passthru: o.passthru });
+  const mcpResultGate = existsSync(a.mcpResultGate) ? a.mcpResultGate : undefined;
+  const args = buildTuiArgs({ gate: a.gate, asksage, mcpResultGate, passthru: o.passthru });
   const cwd = o.cwd ?? env.LUCID_WORKSPACE ?? process.cwd();
   const spawnFn = o.spawnFn ?? ((c, ar, op) => nodeSpawn(c, ar, op as never) as unknown as SpawnedLike);
 
