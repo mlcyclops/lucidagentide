@@ -38,6 +38,7 @@ import { OpenAiCompatibleTtsBackend } from "../harness/brief/tts_backend.ts";
 import { ElevenLabsTtsBackend, ElevenLabsSttBackend, listElevenVoices } from "../harness/voice/elevenlabs.ts";
 import { OpenAiCompatibleSttBackend, type TranscriptionBackend } from "../harness/voice/transcription.ts";
 import { devSnapshot, securitySnapshot } from "../tools/web/data.ts";
+import { sandboxStatus } from "./sandbox_status.ts"; // P-SANDBOX.5 (ADR-0169)
 import { ensureNetdiagWatch, startNetdiagWatch, stopNetdiagWatch, netdiagView } from "./netdiag.ts";
 import { clearDisabledCredential } from "./auth_vault.ts";
 import { approveBlock, dismissBlock, liveBlocks } from "./security_log.ts";
@@ -426,7 +427,7 @@ const server = Bun.serve({
       // in even when the DuckDB snapshot is null, so a fresh machine still shows quarantines.
       if (p === "/api/security") {
         const snap = await securitySnapshot();
-        return json({ ok: true, data: { ...(snap ?? {}), live: liveBlocks() } });
+        return json({ ok: true, data: { ...(snap ?? {}), live: liveBlocks(), sandbox: sandboxStatus() } });
       }
       // Audited fail-closed override: release one quarantined call (ADR-0019 C).
       if (p === "/api/security/approve" && req.method === "POST") { const b = await readBody<{ id?: unknown }>(req); return json({ ok: true, data: approveBlock(String(b.id ?? "")) }); }

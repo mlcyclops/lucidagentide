@@ -1331,6 +1331,21 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .lb-foot{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:8px}
 .lb-meta{font-family:var(--mono);font-size:10.5px;color:var(--txt-4);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .lb-approved{margin-top:6px;font-size:11px;color:var(--green);display:flex;align-items:center;gap:5px}
+/* P-SANDBOX.5 (ADR-0169): the Runtime-sandbox Security-panel section. */
+.sbx-row{display:flex;align-items:flex-start;gap:9px;font-size:12.5px;line-height:1.5;color:var(--txt-2);padding:5px 0}
+.sbx-row b{color:var(--txt)}
+.sbx-row .pill{flex:none;margin-top:1px}
+.sbx-row.good .pill{background:var(--green-dim);color:#8ee8ad;border-color:rgba(70,210,126,.3)}
+.sbx-row.warn .pill{background:var(--amber-dim);color:#f3cf7a;border-color:rgba(232,178,60,.3)}
+.sbx-row.bad .pill{background:var(--red-dim);color:#ffb0b0;border-color:rgba(239,95,95,.32)}
+.sbx-row.muted{color:var(--txt-4);font-size:11.5px}
+.sbx-blocks{margin-top:9px;border-top:1px solid var(--line);padding-top:9px}
+.sbx-blocks-hd{display:flex;align-items:center;gap:6px;font-size:11px;font-weight:600;color:var(--txt-3);text-transform:uppercase;letter-spacing:.03em;margin-bottom:7px}
+.sbx-blk{border:1px solid color-mix(in srgb,var(--red) 22%,var(--line));border-radius:8px;
+  background:linear-gradient(150deg,var(--red-dim),transparent 72%);padding:7px 10px;margin-bottom:6px}
+.sbx-blk-head{display:flex;align-items:center;gap:8px;font-size:12px;min-width:0}
+.sbx-host{color:var(--txt);font-family:var(--mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sbx-blk-reason{margin-top:3px;font-size:11px;color:var(--txt-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .btn-mini{-webkit-app-region:no-drag;border:1px solid var(--line);background:var(--bg-2);color:var(--txt-2);
   font-size:11.5px;font-weight:600;padding:5px 10px;border-radius:7px;cursor:pointer;display:inline-flex;align-items:center;gap:6px;
   transition:background var(--t),color var(--t),border-color var(--t)}

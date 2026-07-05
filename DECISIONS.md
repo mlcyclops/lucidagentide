@@ -12012,3 +12012,58 @@ new EventName).
 ADR-0157 (the P-SANDBOX epic + threat model), ADR-0159/0166/0167 (P-SANDBOX.1/.2/.3 - the seam, proxy, and
 audit this extends to macOS), ADR-0028 (omp `--isolate` - the filesystem containment Seatbelt leaves in
 place, same as bwrap), ADR-0068 (P-ENT.1 - the managed require-isolation knob now satisfiable on macOS).
+
+-----
+
+## ADR-0169 - P-SANDBOX.5: the runtime-execution boundary, made visible in the Security panel, BUILT
+
+**Date:** 2026-07-05
+**Status:** Accepted / Built. Increment 5 of the ADR-0157 epic; the "Security-panel surfacing" ADR-0167
+flagged as a follow-up. Backend follow-ups (Windows AppContainer, Linux slirp) remain their own increments.
+
+### What shipped
+
+P-SANDBOX.1-.4 built the runtime boundary (bwrap / Seatbelt / disclosed passthrough), the mediated-egress
+proxy, and its audit trail - all correct, but the user could not SEE any of it: nothing said whether THIS
+session's exec was actually runtime-isolated, or which subprocess reach-outs the proxy refused. This makes
+it visible in the Security panel:
+
+- **`desktop/sandbox_status.ts`** (new): a small GUI-owned store. `setSandboxState` records the resolved
+  posture (backend / isolated / disclosed / managed-block / mediated-proxy / platform); `recordEgressBlockView`
+  keeps a bounded (50), newest-first ring of refused reach-outs; `sandboxStatus()` returns a defensive copy.
+- **`desktop/renderer/sandbox_panel.ts`** (new, PURE - the model_favorites.ts builder convention): a
+  `SandboxStatusView` in → the "Runtime sandbox" accordion out. Green (isolated, named backend + mediated
+  line) / amber (disclosed passthrough, platform named) / red (fail-closed exec-blocked + reason); AUTO-OPENS
+  when NOT isolated so the posture is the first thing a reviewer sees; lists refused reach-outs with a count.
+  Untrusted host/reason text is `esc`-escaped (no HTML injection - over-tested).
+- **Wiring**: `acp_backend.resolveSandboxPlan` calls `setSandboxState` in every branch (blocked / disclosed /
+  isolated); the `egress_audit` sink now also feeds `recordEgressBlockView` (host-deduped, best-effort, an
+  injectable `recordView` keeps the unit tests off the global store); `dev.ts` merges `sandbox: sandboxStatus()`
+  into `/api/security` beside `live`; `bridge.ts` mirrors the view types; `securityHtml` renders the section
+  up top. CSS added for the `.sbx-*` classes.
+
+### No new enforcement, no new trust surface
+
+This is a READ-ONLY visibility increment: it surfaces state the .1-.4 code already computed. It adds no
+EventName (inv #8), no trust label (inv #7), no enforcement path - and never weakens fail-closed (the panel
+store is best-effort; a throwing `recordView` is swallowed exactly like the audit `emit`, inv #3). Metadata
+only: a backend name, booleans, a host, a reason - never raw scanned content.
+
+### Verification
+
+`sandbox_status.test.ts` (store: empty-start, replace-on-respawn, ring cap + newest-first, defensive copy,
+reset) + `sandbox_panel.test.ts` (render: null→"", isolated/disclosed/blocked postures, auto-open when not
+isolated, refused-reach-out list + count, HTML-escaping of hostile host/reason) + the `egress_audit.test.ts`
+sink still green (now injects a no-op `recordView`). `demo-P-SANDBOX.5` green. The renderer BUNDLES with the
+new import (Bun.build `/app.js` served 200) and all three tsconfigs typecheck clean. `make test` green but
+for the pre-existing Windows-only fs_browse/theme-asset failures (green on Linux CI). NOTE: a live
+pixel-screenshot of the panel was not taken - the preview MCP targets the primary checkout (a concurrent
+agent is working there) not this isolated worktree, and the `/api/security` token gate + the need for a live
+omp spawn block a headless capture; the rendering is instead pinned by the pure-builder unit tests + demo
+(exact HTML asserted) and the successful bundle. Built in an isolated git worktree.
+
+### Relates to
+
+ADR-0157 (the P-SANDBOX epic), ADR-0159/0166/0167/0168 (P-SANDBOX.1-.4 - the posture + refused reach-outs
+this surfaces), ADR-0019 C (`security_log.ts` liveBlocks - the sibling panel channel this sits beside),
+ADR-0164/0069 (the SecurityEvent audit trail the egress sink also feeds).

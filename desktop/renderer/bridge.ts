@@ -57,7 +57,18 @@ export interface SecuritySnapshot {
   promotion: any[]; exports: any[]; runs: any[];
   // GUI-owned LIVE gate blocks (ADR-0019 C) - present even when the DuckDB views are empty.
   live?: { quarantined: BlockRecord[]; approved: BlockRecord[]; dismissed: BlockRecord[]; total: number };
+  // P-SANDBOX.5 (ADR-0169): the live runtime-sandbox posture + refused subprocess reach-outs. Mirrors
+  // desktop/sandbox_status.ts (SandboxStatus) - the client-side shape, kept in sync by hand like the rest
+  // of this snapshot. Absent until the first omp spawn resolves a state.
+  sandbox?: SandboxStatusView;
 }
+export interface SandboxStateView {
+  backend: "bwrap" | "seatbelt" | "noop" | null;
+  isolated: boolean; disclosed: boolean; platform: string;
+  execBlocked: string | null; proxied: boolean; at: string;
+}
+export interface SandboxBlockView { host: string; channel: string; type: string; reason: string; at: string }
+export interface SandboxStatusView { state: SandboxStateView | null; egressBlocks: SandboxBlockView[] }
 export interface MemorySnapshot {
   session: null | {
     path: string; model: string; turns: number; window: number;
