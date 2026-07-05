@@ -76,13 +76,15 @@ export interface LaunchAssets {
   mcpResultGate: string;
   /** The AskSage gov-gateway provider extension — no-op without ASKSAGE_API_KEY. */
   asksage: string;
+  /** The LUCID skin extension (P-THEME.1) — cosmetic, fail-open; skins the TUI session only. */
+  lucidTheme: string;
   /** Task-isolation config overlay (ADR-0028) — used only with --isolate. */
   acpConfig: string;
 }
 
 export function assets(repo: string = repoRoot()): LaunchAssets {
   const omp = (f: string) => join(repo, "harness", "omp", f);
-  return { repo, gate: omp("security_extension.ts"), asksage: omp("asksage_extension.ts"), acpConfig: omp("acp_config.yml"), mcpResultGate: omp("mcp_result_gate.ts") };
+  return { repo, gate: omp("security_extension.ts"), asksage: omp("asksage_extension.ts"), acpConfig: omp("acp_config.yml"), mcpResultGate: omp("mcp_result_gate.ts"), lucidTheme: omp("lucid_theme_extension.ts") };
 }
 
 /** Resolve the omp binary: explicit env → the bundled copy in the repo node_modules → the user's bun
@@ -130,6 +132,9 @@ export interface BuildTuiOpts {
   /** The MCP tool-result gate extension (P-MCP-GATE.1, ADR-0152); included when present so `lucid tui`
    *  scans external MCP tool results exactly like `lucid acp`. */
   mcpResultGate?: string;
+  /** The LUCID skin extension (P-THEME.1, ADR-0160); included when present so the gated terminal wears
+   *  the brand theme. Cosmetic + fail-open — never load-bearing, so absence is fine. */
+  lucidTheme?: string;
   /** omp args appended verbatim after the gated flags (initial prompt, --model, --continue, --resume, -p). */
   passthru?: string[];
 }
@@ -141,6 +146,7 @@ export function buildTuiArgs(o: BuildTuiOpts): string[] {
   const args = ["-e", o.gate];
   if (o.mcpResultGate) args.push("-e", o.mcpResultGate);
   if (o.asksage) args.push("-e", o.asksage);
+  if (o.lucidTheme) args.push("-e", o.lucidTheme);
   args.push("--append-system-prompt", APPENDED_POLICY);
   if (o.passthru?.length) args.push(...o.passthru);
   return args;
@@ -281,7 +287,8 @@ export async function runTui(o: RunTuiOpts = {}): Promise<number> {
   const omp = resolveOmp(env, a.repo);
   const asksage = existsSync(a.asksage) ? a.asksage : undefined;
   const mcpResultGate = existsSync(a.mcpResultGate) ? a.mcpResultGate : undefined;
-  const args = buildTuiArgs({ gate: a.gate, asksage, mcpResultGate, passthru: o.passthru });
+  const lucidTheme = existsSync(a.lucidTheme) ? a.lucidTheme : undefined;
+  const args = buildTuiArgs({ gate: a.gate, asksage, mcpResultGate, lucidTheme, passthru: o.passthru });
   const cwd = o.cwd ?? env.LUCID_WORKSPACE ?? process.cwd();
   const spawnFn = o.spawnFn ?? ((c, ar, op) => nodeSpawn(c, ar, op as never) as unknown as SpawnedLike);
 
