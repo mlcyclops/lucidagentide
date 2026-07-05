@@ -30,7 +30,8 @@
 // why $HOME is bound rw (omp session state, config, credentials live there). The mediated egress
 // proxy for `canNetwork:true` profiles is wired in P-SANDBOX.2 (ADR-0166) via `ctx.proxy` — when a
 // running proxy endpoint is supplied, `wrap` steers the child's DNS + HTTP(S) through it instead of
-// unsharing the net. macOS Seatbelt / Windows AppContainer are P-SANDBOX.4. Pure + hermetic: `which`
+// unsharing the net. macOS Seatbelt is P-SANDBOX.4 (SeatbeltBackend, ADR-0168); Windows AppContainer
+// (native) and Linux slirp raw-socket forwarding are their own follow-ups. Pure + hermetic: `which`
 // is injectable and `ctx.proxy` is a plain path/URL record — nothing here touches the real system.
 
 import { homedir } from "node:os";
@@ -77,7 +78,7 @@ export interface SandboxPlan {
 }
 
 export interface SandboxBackend {
-  readonly name: "bwrap" | "noop";
+  readonly name: "bwrap" | "seatbelt" | "noop";
   /** true ⇒ this backend provides REAL OS-level containment (namespaces), not a passthrough. */
   readonly isolates: boolean;
   available(): boolean;
@@ -138,6 +139,54 @@ export class BwrapBackend implements SandboxBackend {
   }
 }
 
+/** PURE: build the macOS Seatbelt (`sandbox-exec`) profile for `caps`/`ctx`. Mirrors the BwrapBackend
+ *  network posture, but Seatbelt lets us do something bwrap can't cheaply: confine egress to LOOPBACK
+ *  ONLY, so a raw-IP socket that ignores HTTP_PROXY is DENIED by the kernel (bwrap merely drops it via
+ *  --unshare-net; the slirp funnel is still Linux follow-up work). FS stays permissive — filesystem
+ *  containment remains omp `--isolate`'s job (ADR-0028), exactly as the bwrap plan binds $HOME rw.
+ *
+ *  Three network states, matching BwrapBackend:
+ *   (a) canNetwork:false          → deny ALL network + deny mDNSResponder mach-lookup (DNS truly cut).
+ *   (b) canNetwork:true + proxy    → deny outbound EXCEPT loopback (the proxy), set HTTP(S)_PROXY. Every
+ *       TCP/HTTP reach-out is forced through the proxy or denied. (Residual: getaddrinfo still resolves
+ *       via mDNSResponder, so a DNS-TXT *name* lookup can leak until a resolver interception lands — the
+ *       macOS analogue of Linux's privileged-:53 item; recorded in ADR-0168.)
+ *   (c) canNetwork:true + NO proxy → same total deny as (a): no mediator ⇒ no network (fail-closed). */
+export function seatbeltProfile(caps: ProfileCaps, ctx: SandboxCtx): string {
+  const lines = ["(version 1)", "(allow default)"];
+  const mediated = caps.canNetwork && !!ctx.proxy;
+  if (mediated) {
+    // Confine egress to loopback so the ONLY route out is the proxy the harness runs.
+    lines.push("(deny network-outbound)", '(allow network-outbound (remote ip "localhost:*"))', "(allow network-outbound (remote unix-socket))");
+  } else {
+    // network-off, or network-capable but unmediated (fail-closed): cut network AND DNS.
+    lines.push("(deny network*)", '(deny mach-lookup (global-name "com.apple.mDNSResponder"))');
+  }
+  return lines.join("\n");
+}
+
+/** macOS Seatbelt backend (P-SANDBOX.4, ADR-0168): wrap the spawn in `sandbox-exec -p <profile>`. Real
+ *  OS-level containment (the App Sandbox / TrustedBSD MAC layer), so `isolates` is true and a network-off
+ *  profile genuinely cuts the network on macOS. `available()` = `sandbox-exec` on PATH (present on every
+ *  supported macOS). Pure: `which` injectable, profile is a pure function of caps/ctx. */
+export class SeatbeltBackend implements SandboxBackend {
+  readonly name = "seatbelt" as const;
+  readonly isolates = true;
+  constructor(private readonly which: WhichFn = defaultWhich) {}
+  available(): boolean {
+    return this.which("sandbox-exec");
+  }
+  wrap(argv: string[], caps: ProfileCaps, ctx: SandboxCtx): SandboxPlan {
+    const env: Record<string, string> = {};
+    if (caps.canNetwork && ctx.proxy) {
+      env.HTTP_PROXY = env.HTTPS_PROXY = env.http_proxy = env.https_proxy = ctx.proxy.httpProxyUrl;
+      env.NO_PROXY = env.no_proxy = "localhost,127.0.0.1,::1";
+    }
+    // `sandbox-exec -p <profile> <cmd> <args...>` — the wrapped argv is preserved verbatim as the tail.
+    return { cmd: "sandbox-exec", args: ["-p", seatbeltProfile(caps, ctx), ...argv], env };
+  }
+}
+
 /** The disclosed passthrough: identical spawn, zero containment. Callers MUST surface
  *  `sandboxDisclosure()` when this backend runs (the "loud signal" of ADR-0157). */
 export class NoopBackend implements SandboxBackend {
@@ -156,7 +205,7 @@ export class NoopBackend implements SandboxBackend {
 export function sandboxDisclosure(platform: NodeJS.Platform = process.platform): string {
   return (
     `[sandbox] exec is NOT runtime-isolated on this platform (${platform}) — no sandbox backend available. ` +
-    `The argv gate + in-process scanner gate still apply (ADR-0157 P-SANDBOX.1; Linux bwrap leads, macOS/Windows land in P-SANDBOX.4).`
+    `The argv gate + in-process scanner gate still apply (ADR-0157 P-SANDBOX.1; Linux bwrap + macOS Seatbelt lead, Windows AppContainer is a follow-up).`
   );
 }
 
@@ -185,13 +234,20 @@ export function resolveBackend(opts: ResolveBackendOpts = {}): BackendResolution
     const bwrap = new BwrapBackend(which);
     if (bwrap.available()) return { ok: true, backend: bwrap, disclosed: false };
   }
+  if (platform === "darwin") {
+    // P-SANDBOX.4 (ADR-0168): macOS gets real containment via Seatbelt (sandbox-exec ships with macOS).
+    const seatbelt = new SeatbeltBackend(which);
+    if (seatbelt.available()) return { ok: true, backend: seatbelt, disclosed: false };
+  }
   if (opts.requireIsolation) {
     return {
       ok: false,
       reason:
         platform === "linux"
           ? "managed policy requires runtime isolation, but bwrap is not installed (install bubblewrap)"
-          : `managed policy requires runtime isolation, but no sandbox backend exists for ${platform} yet (P-SANDBOX.4)`,
+          : platform === "darwin"
+            ? "managed policy requires runtime isolation, but sandbox-exec is not available (macOS Seatbelt)"
+            : `managed policy requires runtime isolation, but no sandbox backend exists for ${platform} yet (Windows AppContainer needs native support — tracked as a follow-up increment)`,
     };
   }
   return { ok: true, backend: new NoopBackend(), disclosed: true };

@@ -11937,3 +11937,78 @@ enum is deliberately NOT changed; the SecurityEvent `type` free-string channel i
 ADR-0157 (the P-SANDBOX epic), ADR-0166 (P-SANDBOX.2, the proxy whose blocks this records), ADR-0164
 (P-REPORT.10, the reach-out-audit precedent this mirrors), ADR-0069 (the SecurityEvent / OCSF export seam
 reused), `desktop/audit_export.ts` (`emitSecurityEvent`, category `egress`).
+
+-----
+
+## ADR-0168 - P-SANDBOX.4: the macOS Seatbelt backend (runtime containment lands on macOS), BUILT
+
+**Date:** 2026-07-05
+**Status:** Accepted / Built. Increment 4 of the ADR-0157 epic. SPLITS the original ".4 (later)" catch-all
+(see Scope below): macOS Seatbelt ships here; Windows AppContainer + Linux slirp are named follow-ups.
+
+### What shipped
+
+P-SANDBOX.1-.3 made the execution boundary real, mediated, and audited - but only on **Linux** (bwrap).
+macOS was the disclosed passthrough: `resolveBackend` returned `NoopBackend` for darwin, so a Mac user got
+the argv gate + scanner but **no runtime containment** (and managed require-isolation could only fail-closed,
+bricking their exec). This closes that for macOS:
+
+- **`SeatbeltBackend` (`harness/runs/sandbox_exec.ts`)**: wraps the omp spawn in `sandbox-exec -p <profile>`
+  (the App Sandbox / TrustedBSD MAC layer that ships with every supported macOS). `isolates:true`,
+  `available()` = `sandbox-exec` on PATH. A PURE `seatbeltProfile(caps, ctx)` builds the profile - the SAME
+  three network states as `BwrapBackend`:
+  - `canNetwork:false` → `(deny network*)` **plus** `(deny mach-lookup (global-name "com.apple.mDNSResponder"))`
+    so DNS is genuinely cut (not just sockets - the mach path to the resolver too).
+  - `canNetwork:true` + proxy → `(deny network-outbound)` + `(allow network-outbound (remote ip "localhost:*"))`:
+    egress is **confined to LOOPBACK**, so a raw-IP socket that ignores `HTTP_PROXY` is **kernel-DENIED** -
+    strictly better than bwrap v1, which only DROPS it via `--unshare-net` (no route). HTTP(S)_PROXY is set.
+  - `canNetwork:true` + no proxy → same total deny as network-off (no mediator ⇒ no network, fail-closed).
+- **`resolveBackend`**: darwin + `sandbox-exec` → the Seatbelt backend; else the disclosed passthrough
+  (or fail-closed under managed require-isolation, with a macOS-specific reason). Windows unchanged.
+- **`sandboxDisclosure` + the require-isolation reasons** updated: macOS now leads with Linux; the Windows
+  no-backend message names AppContainer's native-support requirement.
+
+### Scope - why ".4" is SPLIT (recorded, deliberate)
+
+ADR-0157 sketched ".4 (later)" as *macOS Seatbelt + Windows AppContainer backends + slirp4netns raw-socket
+forwarding* - three items, each needing a different capability. Bundling them would be one oversized,
+half-testable increment (against the CLAUDE.md one-increment ritual). So:
+- **macOS Seatbelt = P-SANDBOX.4 (this ADR).** A pure `sandbox-exec` argv-wrapper - buildable + fully
+  unit-tested + demo'd via the same injected-`which` seam as bwrap, on any host.
+- **Windows AppContainer = its own future increment + ADR.** There is NO argv-wrapper for AppContainer;
+  it requires `CreateProcess` with `PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES` via native Win32 APIs -
+  a **native code surface** LUCID does not yet have (and which, like a second Python surface, is a drift
+  signal that must be its own ADR per CLAUDE.md inv #2's spirit). Until then Windows stays the disclosed
+  passthrough / managed-fail-closed, exactly as in .1 - honestly, not silently.
+- **Linux slirp4netns raw-socket forwarding = its own future increment.** Needs the `slirp4netns` binary
+  to funnel a raw-IP socket through the proxy instead of dropping it (bwrap v1 drops). Seatbelt's
+  loopback-confinement achieves the same *effect* on macOS in this increment; Linux parity is the follow-up.
+
+### Honest residual (recorded, not silent)
+
+On macOS the mediated profile leaves `getaddrinfo` reaching `mDNSResponder` (a mach service, not a network
+socket), so a DNS-TXT *name* lookup can still resolve via the system resolver even though every TCP/HTTP
+reach-out is confined to the proxy. Fully closing that needs a resolver interception (the macOS analogue of
+Linux's privileged in-namespace `:53`) - a follow-up alongside the slirp item. The network-OFF profile has
+no such residual: it denies the mDNSResponder mach-lookup outright.
+
+### Verification
+
+`sandbox_exec.test.ts` (+ Seatbelt cases: resolution per platform, the three network states, loopback
+confinement, DNS cut, argv preserved, require-isolation satisfied/refused per platform, the downgrade path
+through `wrapForProfile`). `demo-P-SANDBOX.4` green; P-SANDBOX.1/.2/.3 demos still green. `make test` green
+but for the pre-existing Windows-only fs_browse/theme-asset failures (green on Linux CI).
+
+### Invariants preserved
+
+Inv #1 (wrap the omp process; no fork). **Inv #2 (all TS/Bun; no new native/Python surface - which is
+exactly WHY Windows AppContainer is deferred to its own ADR rather than smuggled in here).** Inv #3
+(fail-closed: no backend under managed-require ⇒ refuse; no proxy ⇒ total deny). Inv #4 (the in-process
+gate is untouched, still runs beneath). Inv #6 (runtime only). Inv #7 (no new trust labels). Inv #8 (no
+new EventName).
+
+### Relates to
+
+ADR-0157 (the P-SANDBOX epic + threat model), ADR-0159/0166/0167 (P-SANDBOX.1/.2/.3 - the seam, proxy, and
+audit this extends to macOS), ADR-0028 (omp `--isolate` - the filesystem containment Seatbelt leaves in
+place, same as bwrap), ADR-0068 (P-ENT.1 - the managed require-isolation knob now satisfiable on macOS).
