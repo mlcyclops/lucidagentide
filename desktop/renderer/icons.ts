@@ -136,6 +136,8 @@ const RAW: Record<string, string> = {
   // P-MARKET.1: plugin marketplace — a package cube (lid fold + seam)
   market: P("M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z")
     + P("M3.3 7 12 12l8.7-5") + P("M12 12v9.4") + P("M16.5 9.4 7.5 4.2"),
+  // P-FAV.1: favorite star (model picker) - filled via CSS when starred
+  star: P("M12 4.4l2.35 4.9 5.15.65-3.8 3.55 1 5.1L12 16.05 7.3 18.6l1-5.1-3.8-3.55 5.15-.65z"),
   // P-TOOLFAIL.2: toolbox (failed tool-call actions) — box + lid fold + top handle + latch
   toolbox: P("M4 10.5h16v7a1.6 1.6 0 0 1-1.6 1.6H5.6A1.6 1.6 0 0 1 4 17.5z")
     + P("M4 10.5 5 8.1A1.7 1.7 0 0 1 6.6 7h10.8a1.7 1.7 0 0 1 1.6 1.1l1 2.4")
