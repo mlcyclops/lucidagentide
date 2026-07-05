@@ -418,6 +418,19 @@ function safeSystemResolver(): string {
   }
 }
 
+/** P-SANDBOX.3 (ADR-0167): the audit fields for a BLOCKED subprocess reach-out, or null when the event
+ *  was allowed (the audit trail records refusals, not every resolve — an allowed reach-out is normal
+ *  traffic). Neutral shape (no desktop types) so the harness stays decoupled; the desktop sink maps this
+ *  to a canonical SecurityEvent (category `egress`) and emits it through the SAME audit/OCSF pipeline
+ *  P-REPORT.10's network reach-outs use. Pure. The `type` values mirror ADR-0157's names. */
+export function egressBlockAudit(ev: ProxyEvent): { type: string; tool: string; host: string; reason: string } | null {
+  if (ev.decision.action !== "deny") return null;
+  const host = ev.decision.host || "(unparsed)";
+  return ev.channel === "dns"
+    ? { type: "dns_query_blocked", tool: "subprocess-dns", host, reason: `subprocess DNS to ${host} denied (${ev.decision.reason})` }
+    : { type: "subprocess_egress_blocked", tool: "subprocess-connect", host, reason: `subprocess CONNECT to ${host} denied (${ev.decision.reason})` };
+}
+
 /** Best-effort host from an absolute-URI request line (`GET http://host/path HTTP/1.1`) so the deny is
  *  still logged with the intended host. Returns "" when it can't parse (⇒ deny). Pure. */
 export function hostFromAbsoluteUri(line: string): string {
@@ -437,9 +450,10 @@ let shared: EgressProxy | null = null;
  *  endpoint, or null if it could not come up — in which case the sandbox wiring FALLS BACK to network-off
  *  (`--unshare-net`), never to raw unmediated network (fail-closed, invariant #3). Callers gate this on an
  *  ISOLATING backend + `canNetwork:true`; on a passthrough there is nothing to steer, so they skip it. */
-export async function ensureEgressProxy(o: { host?: string; dnsPort?: number; httpPort?: number } = {}): Promise<EgressProxyEndpoint | null> {
+export async function ensureEgressProxy(o: { host?: string; dnsPort?: number; httpPort?: number; onEvent?: (e: ProxyEvent) => void } = {}): Promise<EgressProxyEndpoint | null> {
   try {
-    if (!shared) shared = new EgressProxy();
+    // The first caller's audit sink wins (one proxy per process); a later call just reuses it.
+    if (!shared) shared = new EgressProxy({ onEvent: o.onEvent });
     if (shared.running()) return shared.endpoint();
     return await shared.start(o);
   } catch {

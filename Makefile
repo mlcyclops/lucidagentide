@@ -467,6 +467,10 @@ demo-P-SANDBOX.1: ## P-SANDBOX.1 (ADR-0157): the runtime execution boundary — 
 demo-P-SANDBOX.2: ## P-SANDBOX.2 (ADR-0166): mediated subprocess egress — a loopback DNS + CONNECT proxy decided by the agent's own egressDecisionDetailed brain (only allow passes; prompt/foreign-ccTLD/IP-literal/unparseable/thrown all DENY). Live: denied gethostbyname → REFUSED, upstream never contacted; allowed → forwarded. Proxy dead ⇒ egress denied but local exec still runs; wired at the omp spawn (HTTP(S)_PROXY + resolv.conf steer)
 	$(BUN) run harness/scripts/demo_p_sandbox_2.ts
 
+.PHONY: demo-P-SANDBOX.3
+demo-P-SANDBOX.3: ## P-SANDBOX.3 (ADR-0167): the mediated-egress audit trail — a BLOCKED subprocess reach-out becomes one canonical `egress` SecurityEvent (block/high) on the audit/OCSF pipeline (P-REPORT.10 precedent; no new EventName, no approvable live-block); deduped by host so a looping exfil can't flood the SIEM; allowed reach-outs emit nothing; auditing never weakens the fail-closed guarantee (throwing sink swallowed, dead proxy still denies)
+	$(BUN) run harness/scripts/demo_p_sandbox_3.ts
+
 .PHONY: demo-P-REPORT.9
 demo-P-REPORT.9: ## P-REPORT.9 (ADR-0162): multi-repo remote fetch + PR aggregation for the Engineering Report — remote-URL parse (GitHub vs not), commits aggregated across branches (deduped) + line totals, the Cross-repo activity annex, fail-soft on a failed fetch (local refs still shown), PRs skipped with a reason on non-GitHub/unauthed remotes, and untrusted commit/PR text neutralized (no HTML/fence breakout)
 	$(BUN) run desktop/scripts/demo_p_report_9.ts

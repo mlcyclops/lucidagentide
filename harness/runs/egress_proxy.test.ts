@@ -17,6 +17,7 @@ import {
   buildRefusal,
   decideEgress,
   defaultDecide,
+  egressBlockAudit,
   EgressProxy,
   ensureEgressProxy,
   hostFromAbsoluteUri,
@@ -24,6 +25,7 @@ import {
   parseDnsQuestion,
   stopEgressProxy,
   type DecideFn,
+  type ProxyEvent,
 } from "./egress_proxy.ts";
 
 // ── the decision keystone (pure, injected brain) ───────────────────────────────────────────────────
@@ -104,6 +106,18 @@ test("buildRefusal echoes the header/question with QR=1, RCODE=5 (REFUSED), zero
 test("hostFromAbsoluteUri pulls the host from a proxied absolute-URI request line", () => {
   expect(hostFromAbsoluteUri("GET http://evil.example/path HTTP/1.1")).toBe("evil.example");
   expect(hostFromAbsoluteUri("GET /relative HTTP/1.1")).toBe("");
+});
+
+// ── P-SANDBOX.3 audit fields (the block → SecurityEvent mapping) ─────────────────────────────────────
+
+test("egressBlockAudit maps a DENY to audit fields per channel; an ALLOW → null (audit records refusals)", () => {
+  const deny = (channel: "dns" | "connect", host: string): ProxyEvent => ({ channel, decision: { action: "deny", host, reason: "prompt-not-auto-allowed", via: "allow-all" } });
+  const dns = egressBlockAudit(deny("dns", "attacker.cn"));
+  expect(dns).toEqual({ type: "dns_query_blocked", tool: "subprocess-dns", host: "attacker.cn", reason: "subprocess DNS to attacker.cn denied (prompt-not-auto-allowed)" });
+  const con = egressBlockAudit(deny("connect", "evil.example"));
+  expect(con?.type).toBe("subprocess_egress_blocked");
+  expect(con?.tool).toBe("subprocess-connect");
+  expect(egressBlockAudit({ channel: "dns", decision: { action: "allow", host: "pypi.org", reason: "allowed", via: "whitelist" } })).toBeNull();
 });
 
 // ── the live proxy on loopback ───────────────────────────────────────────────────────────────────────
