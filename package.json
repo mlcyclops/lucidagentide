@@ -53,6 +53,7 @@
     "demo-P-ASKSAGE.1": "bun run harness/scripts/demo_paskage1.ts",
     "demo-P-ENT.1": "bun run harness/scripts/demo_pent1.ts",
     "demo-P-AGENTFW.1": "bun run harness/scripts/demo_pagentfw1.ts",
+    "demo-P-NVIM.1": "bun run harness/scripts/demo_pnvim1.ts",
     "dashboards": "bun run harness/scripts/materialize_dashboards.ts",
     "omp:secure": "omp -e harness/omp/security_extension.ts -e harness/omp/token_speed_extension.ts",
     "dashboard:tui": "bun run tools/dashboard_tui.ts",
