@@ -101,50 +101,76 @@ A small first-party plugin (in `extensions/neovim/`) that wraps Path 1 with comm
 helper, a health check, and keymaps. It is deliberately terminal-based — it hosts the real, already-gated
 omp TUI rather than reimplementing a chat UI — so it is robust and low-maintenance.
 
-### Install
+### Install (standalone, from this repo)
+
+The plugin is published as a **`lucid.nvim` branch of this same repo** — generated automatically from
+`extensions/neovim/` by CI (`git subtree split`), so there is no separate project to track. Install it
+with any plugin manager via the `branch` field.
 
 <details open>
-<summary><b>lazy.nvim</b></summary>
+<summary><b>LazyVim / lazy.nvim</b> (recommended)</summary>
+
+Drop this in `~/.config/nvim/lua/plugins/lucid.lua`:
 
 ```lua
-{
-  -- point `dir` at the bundled plugin, or mirror extensions/neovim/ to its own repo
-  dir = "/path/to/lucidagentide/extensions/neovim",
-  config = function()
-    require("lucid").setup({
-      -- cmd = "/absolute/path/to/lucid",   -- if `lucid` isn't on PATH
-      -- tui_args = { "--model", "claude-haiku-4-5" },
-      -- window = "float",                    -- "float" | "vsplit" | "split" | "tab"
-    })
-  end,
+return {
+  {
+    "mlcyclops/lucidagentide",
+    name = "lucid.nvim",
+    branch = "lucid.nvim",             -- plugin-at-root branch; source lives in extensions/neovim/
+    main = "lucid",                    -- else lazy infers the module from the repo name and setup() no-ops
+    cmd = { "Lucid", "LucidToggle", "LucidSend", "LucidCheck" },
+    keys = {
+      { "<leader>al", "<cmd>LucidToggle<cr>", desc = "Lucid: toggle" },
+      { "<leader>as", "<cmd>LucidSend<cr>", desc = "Lucid: send file" },
+      { "<leader>as", ":LucidSend<cr>", mode = "x", desc = "Lucid: send selection" },
+      { "<leader>aC", "<cmd>LucidCheck<cr>", desc = "Lucid: gate check" },
+    },
+    opts = { keymaps = false },        -- keys are declared above; `opts` auto-runs require("lucid").setup(opts)
+    -- opts = { keymaps = false, cmd = "/absolute/path/to/lucid" },  -- if `lucid` isn't on PATH
+  },
 }
 ```
+
+Three things matter under LazyVim:
+- **`main = "lucid"`** — with `opts`, lazy auto-calls `require(main).setup(opts)`; without it lazy infers the module from the repo name (`lucidagentide`) and setup never runs.
+- **`cmd`/`keys` are required, not optional** — LazyVim defaults plugins to lazy-loaded, so with no trigger the plugin never loads and its commands never register.
+- **Visual-mode send uses the `:` form** (`:LucidSend<cr>`, not `<cmd>…`) so Neovim applies the `'<,'>` range; the `<cmd>` form would send the whole file instead of the selection. `<leader>l…` is avoided because LazyVim owns it (`:Lazy`).
 </details>
 
 <details>
 <summary><b>packer.nvim</b></summary>
 
 ```lua
-use({
-  "/path/to/lucidagentide/extensions/neovim",
-  config = function() require("lucid").setup({}) end,
-})
+use({ "mlcyclops/lucidagentide", branch = "lucid.nvim", as = "lucid.nvim",
+  config = function() require("lucid").setup({}) end })
 ```
 </details>
 
 <details>
-<summary><b>vim-plug</b> (manual setup)</summary>
+<summary><b>vim-plug</b></summary>
 
 ```vim
-Plug '/path/to/lucidagentide/extensions/neovim'
+Plug 'mlcyclops/lucidagentide', { 'branch': 'lucid.nvim' }
 ```
 ```lua
 require("lucid").setup({})
 ```
 </details>
 
-Calling `setup()` is optional — the commands work with defaults as soon as the plugin is on your
-`runtimepath`. `setup()` only overrides config and installs the default keymaps.
+### Install (local dev checkout)
+
+Working inside the monorepo, point the manager at the on-disk plugin instead of the published branch:
+
+```lua
+-- lazy.nvim
+{ dir = vim.fn.expand("~/projects/personal/lucidagentide/extensions/neovim"),
+  name = "lucid.nvim", main = "lucid",
+  cmd = { "Lucid", "LucidToggle", "LucidSend", "LucidCheck" }, opts = {} }
+```
+
+Calling `setup()` is optional outside LazyVim — the commands work with defaults as soon as the plugin is
+on your `runtimepath`. `setup()` only overrides config and installs the default keymaps.
 
 ### Commands
 

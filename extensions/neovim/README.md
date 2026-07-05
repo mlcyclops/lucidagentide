@@ -23,23 +23,51 @@ Verify the gate is live first: `lucid check` → `[lucid check] OK — gate + sc
 
 ## Install
 
-**lazy.nvim**
+Published as a **`lucid.nvim` branch of the main repo** (generated from `extensions/neovim/` by CI), so
+you install it standalone via the `branch` field — no separate repo, no local checkout required.
+
+**LazyVim / lazy.nvim** — `~/.config/nvim/lua/plugins/lucid.lua`:
 
 ```lua
-{
-  dir = "/path/to/lucidagentide/extensions/neovim",
-  config = function() require("lucid").setup({}) end,
+return {
+  {
+    "mlcyclops/lucidagentide",
+    name = "lucid.nvim",
+    branch = "lucid.nvim",
+    main = "lucid",                    -- required so `opts` runs require("lucid").setup()
+    cmd = { "Lucid", "LucidToggle", "LucidSend", "LucidCheck" },
+    keys = {
+      { "<leader>al", "<cmd>LucidToggle<cr>", desc = "Lucid: toggle" },
+      { "<leader>as", "<cmd>LucidSend<cr>", desc = "Lucid: send file" },
+      { "<leader>as", ":LucidSend<cr>", mode = "x", desc = "Lucid: send selection" },
+      { "<leader>aC", "<cmd>LucidCheck<cr>", desc = "Lucid: gate check" },
+    },
+    opts = { keymaps = false },
+  },
 }
 ```
+
+LazyVim notes: `main = "lucid"` (else lazy infers the module from the repo name); `cmd`/`keys` are
+required (LazyVim lazy-loads by default); visual send uses `:LucidSend<cr>` (not `<cmd>`) so the `'<,'>`
+range is applied; avoid `<leader>l…` (LazyVim's `:Lazy`).
 
 **packer.nvim**
 
 ```lua
-use({ "/path/to/lucidagentide/extensions/neovim", config = function() require("lucid").setup({}) end })
+use({ "mlcyclops/lucidagentide", branch = "lucid.nvim", as = "lucid.nvim",
+  config = function() require("lucid").setup({}) end })
 ```
 
-The commands work with defaults the moment the plugin is on your `runtimepath`; `setup()` only overrides
-config and installs the default keymaps.
+**Local dev checkout** (working inside the monorepo):
+
+```lua
+{ dir = vim.fn.expand("~/projects/personal/lucidagentide/extensions/neovim"),
+  name = "lucid.nvim", main = "lucid",
+  cmd = { "Lucid", "LucidToggle", "LucidSend", "LucidCheck" }, opts = {} }
+```
+
+Outside LazyVim, `setup()` is optional — the commands work the moment the plugin is on your
+`runtimepath`; `setup()` only overrides config and installs the default keymaps.
 
 ## Commands
 

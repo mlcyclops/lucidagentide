@@ -10197,3 +10197,71 @@ plus `make demo-P-NVIM.1` green; root `tsc --noEmit` clean.
 
 ADR-0038 (the `lucid` launcher + untrusted-editor/trust-anchor model this extends), invariants #2/#3/#4/#6,
 ADR-0148/P-MCP-GATE.1 (the MCP result-gate to thread into `lucid tui` post-merge, #206).
+
+## ADR-0151 - P-NVIM.2: distribute lucid.nvim as a standalone branch WITHOUT leaving the monorepo
+
+**Status:** Accepted / Built.
+
+### Context
+
+P-NVIM.1 (ADR-0150) landed the Neovim plugin under `extensions/neovim/`. lazy.nvim / LazyVim - the
+dominant Neovim plugin managers - install a plugin from a git repo via an `owner/repo` short name, and
+CANNOT install a subdirectory of a monorepo. So the plugin was only installable via a local `dir` path (a
+full monorepo checkout), not as a normal standalone plugin. The ask: a standalone, short-name-installable
+plugin whose source still lives in the main IDE repo (no separate project to maintain).
+
+### Decision
+
+Publish the plugin as a generated **`lucid.nvim` branch of THIS repo** - plugin files at the tree root,
+produced by `git subtree split --prefix=extensions/neovim`. lazy.nvim's `branch` field installs it:
+
+```lua
+{ "mlcyclops/lucidagentide", name = "lucid.nvim", branch = "lucid.nvim", main = "lucid", ... }
+```
+
+- **Source of truth stays `extensions/neovim/` on master** - all dev happens there.
+- **CI publishes it** (`.github/workflows/nvim-plugin-mirror.yml`): on every master push touching
+  `extensions/neovim/**`, subtree-split -> force-push `refs/heads/lucid.nvim` (permissions: contents:write).
+- **`make nvim-plugin-split`** does the same locally (dry-run by default; `PUSH=1` force-pushes).
+- One repo, no fork, no second project. Installers do a shallow single-branch clone, so the plugin branch
+  never drags the monorepo's history/size.
+
+### Why a branch, not a second repo or a submodule
+
+A mirror repo or submodule is a second project to create, permission, and keep in sync - the exact thing
+the ask rules out. A same-repo generated branch keeps everything in one place; `git subtree split`
+preserves the plugin's own file history at root, and lazy/packer/vim-plug all support a `branch`.
+
+### LazyVim specifics (documented in docs/NEOVIM.md)
+
+- `main = "lucid"` - with `opts`, lazy auto-runs `require(main).setup(opts)`; without it lazy infers the
+  module from the repo name (`lucidagentide`) and setup never runs.
+- `cmd`/`keys` are required, not optional - LazyVim defaults plugins to lazy-loaded.
+- Visual-mode send maps the `:LucidSend<cr>` colon form (applies the `'<,'>` range); the `<cmd>` form would
+  send the whole file instead of the selection. `<leader>l...` is avoided (LazyVim's `:Lazy`).
+
+### Consequences
+
+- New CI workflow with `contents: write` (scoped: only force-pushes `lucid.nvim`). A `neovim` job added to
+  `extensions.yml` runs the headless helper spec alongside the VS Code / JetBrains jobs.
+- `extensions/neovim/LICENSE` added so the standalone branch is self-contained (BUSL-1.1, pointing at the
+  canonical root LICENSE).
+- The `lucid.nvim` branch is GENERATED - never hand-edit it; edit `extensions/neovim/` and let CI (or
+  `make nvim-plugin-split PUSH=1`) regenerate it. Until #207 merges to master, publish manually if needed.
+
+### Files
+
+- `.github/workflows/nvim-plugin-mirror.yml`, `.github/workflows/extensions.yml` (neovim job), `Makefile`
+  (`nvim-plugin-split`), `extensions/neovim/LICENSE`, `docs/NEOVIM.md` + `extensions/neovim/README.md`
+  (branch-install docs).
+
+### Verification
+
+`git subtree split --prefix=extensions/neovim HEAD` produces a branch whose ROOT is the plugin
+(`README.md`, `lua/lucid/*`, `plugin/lucid.lua`, `test/`, `LICENSE`) - confirmed locally; `make
+nvim-plugin-split` dry-run prints the split sha. lazy.nvim `branch` + short-name install confirmed against
+the lazy.nvim docs (`/folke/lazy.nvim`).
+
+### Relates to
+
+ADR-0150 (P-NVIM.1, the plugin this distributes), ADR-0038 (the marketplace/extension distribution model).
