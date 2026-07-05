@@ -103,4 +103,12 @@
 //           + kinetic-energy early settle (~87% of the O(n²) budget skipped); incremental session index
 //           (warm sidebar polls parse NOTHING) + tail-first transcript pages ("last N of M") + AC-only
 //           idle prefetch; optimistic model switch + write-behind lastModel + memoized settings load/picker.
-export const APP_VERSION = "1.9.2";
+// v1.10.0 = big feature batch since 1.9.2: LOCAL/hybrid PROVIDERS (self-hosted / custom / VPN-routed
+//           OpenAI-compatible LLMs, keys in the OS vault, ADR-0135); MULTIMODAL prompts (paste/drop
+//           screenshots, ADR-0136); the agent REVIEWS + TESTS its work live in the preview (glow/pill +
+//           read-DOM + click/type over a sandboxed postMessage bridge, ADR-0153); DESIGN.md invariants
+//           honored per-turn + native FIGMA import & guided review via /figma (ADR-0154); Agent Builder
+//           epic (allow-list chips, live canvas, portable share/import, n8n interop, /command authoring);
+//           the Agent FIREWALL (fail-closed proxy to remote hermes/openclaw ACP agents) + in-process MCP
+//           tool-result gate; and NEOVIM / terminal integration.
+export const APP_VERSION = "1.10.0";

@@ -98,6 +98,88 @@ personalization internals are proprietary and intentionally undocumented here - 
 
 ---
 
+## 💰 Token Cost Savings & Showback
+
+<div align="center">
+
+<table><tr><td>
+
+> **Real-time cost visibility across every model and session.**
+>
+> LucidAgentIDE's **Cost & Savings Ledger** (P10.2 · [ADR-0011](DECISIONS.md)) tracks token usage,
+> estimated cache savings, and per-model cost breakdowns - giving you full showback visibility over
+> your AI spend. No surprises, no black-box billing.
+
+<br/>
+
+| Metric | Value |
+|:--|--:|
+| **Total Spend (all models)** | **$35.73** |
+| **Est. Cache Savings** | **$73.66** *(67% off full price)* |
+| **Cache Hit-Rate** | **82%** |
+| **Tokens Processed** | **21.34M** across 1,998 turns |
+| **Models Used** | **29** across 1,041 sessions |
+
+<br/>
+
+**Per-model breakdown** *(top models · 24 more in the ledger):*
+
+| Model | Turns | Tokens | Cost | Saved | Cache % |
+|:--|--:|--:|--:|--:|--:|
+| claude-opus-4-8 | 242 | 18.26M | $32.51 | $67.89 | **84%** |
+| claude-opus-4-6 | 14 | 791.7k | $1.32 | $3.17 | **92%** |
+| gpt-5.5 | 21 | 659.8k | $1.15 | $2.24 | 76% |
+| claude-sonnet-4-5 | 4 | 114.6k | $0.31 | $0.18 | 64% |
+| claude-sonnet-4-6 | 4 | 141.9k | $0.30 | $0.18 | 48% |
+
+</td></tr></table>
+
+<table>
+<tr>
+<td align="center" valign="top">
+<img src=".github/assets/memory-cost-panel.7.4.26-2.JPG" alt="LucidAgentIDE Cost & Savings Ledger - real-time cross-model token usage, estimated prompt-cache savings, cache hit-rate, and per-model cost showback" width="420" />
+<br/>
+<sub><b>↑ Cost &amp; Savings Ledger</b> - spend, cache savings, and cost per model, live</sub>
+</td>
+<td align="center" valign="top">
+<img src=".github/assets/ai-loc-dashboard.png" alt="LucidAgentIDE AI-authored code ledger - lines of code attributed per model, repo, and identity (AI authorship attribution / provenance)" width="420" />
+<br/>
+<sub><b>↑ AI-authored Code Ledger</b> - which model wrote which lines, by repo &amp; identity</sub>
+</td>
+</tr>
+</table>
+
+</div>
+
+<br/>
+
+**Key capabilities:**
+
+- 📊 **Cross-model cost ledger** - unified spend view across Claude, GPT, Gemini, and all AskSage-routed models
+- 💵 **Estimated cache savings** - see how much the KV-cache-optimized prompt prefix saves you in real dollars
+- 📈 **Cache hit-rate tracking** - per-model cache efficiency metrics updated in real time
+- 🔍 **Per-session drill-down** - break costs down by model, turn count, and token volume
+- 🏷️ **Showback-ready** - built for teams that need to attribute AI costs to projects or users
+- 🪪 **AI-authored code ledger** - a tamper-evident count of *which model wrote which lines*, per repo and identity (authorship attribution, not just git activity)
+
+> **🏛️ Enterprise rollups (premium, coming soon).** A separately-licensed add-on rolls this showback
+> up into executive **BI dashboards** - Power BI (GCC-High), QuickSight, Looker, SharePoint, or an
+> airgap-friendly single-file HTML view - and adds **loop-efficiency and ROI** reporting per model and
+> per program: cost-per-outcome, productivity, and security posture in one pane for the CFO / CIO / CISO.
+> Read-only and **metadata-only** by construction (no code, prompts, or CUI leave the host); the
+> analytics methodology is proprietary.
+
+> **🛡️ Central policy & SIEM audit (premium, coming soon).** The same per-action safety the app enforces
+> locally - the exec-approval gate and the loop's Speed↔Risk dial - becomes **centrally governable** by an
+> org admin through the tools you already run (**Group Policy / Intune / Jamf / Ansible**): set and **lock**
+> the risk posture fleet-wide, and stream a **metadata-only security-audit feed** to your **SIEM**
+> (Splunk, Elastic, ACAS, and AWS / Azure / GCP security logging) for SOC visibility. The enabling seams
+> are in this source-available core (managed-config + an audit-export interface); the policy templates and SIEM
+> connectors are a separately-licensed add-on. Metadata-only by construction - no code, prompts, or CUI
+> leave the host.
+
+---
+
 ## ✨ What's new in v1.9.0
 
 > A big feature batch. Screenshots below are **placeholders** — drop the real captures into
@@ -253,86 +335,6 @@ acknowledgement, and an enterprise policy can pin the org to the gov gateway onl
 | **Agent-platform builders** | A worked, test-backed example of adding security, provenance, and memory **around** a fast runtime via hooks/tools/SDK - **extend, never fork**. |
 
 It's a **desktop app you can just download and run** (Windows installer/portable + macOS), and a **source-available codebase** you can study, run from source, and build on. Each role gets a tailored first view plus a written, end-to-end **[role guide](docs/guides/README.md)** (Developer / Security / Manager / Executive).
-
-## 💰 Token Cost Savings & Showback
-
-<div align="center">
-
-<table><tr><td>
-
-> **Real-time cost visibility across every model and session.**
->
-> LucidAgentIDE's **Cost & Savings Ledger** (P10.2 · [ADR-0011](DECISIONS.md)) tracks token usage,
-> estimated cache savings, and per-model cost breakdowns - giving you full showback visibility over
-> your AI spend. No surprises, no black-box billing.
-
-<br/>
-
-| Metric | Value |
-|:--|--:|
-| **Total Spend (all models)** | **$35.73** |
-| **Est. Cache Savings** | **$73.66** *(67% off full price)* |
-| **Cache Hit-Rate** | **82%** |
-| **Tokens Processed** | **21.34M** across 1,998 turns |
-| **Models Used** | **29** across 1,041 sessions |
-
-<br/>
-
-**Per-model breakdown** *(top models · 24 more in the ledger):*
-
-| Model | Turns | Tokens | Cost | Saved | Cache % |
-|:--|--:|--:|--:|--:|--:|
-| claude-opus-4-8 | 242 | 18.26M | $32.51 | $67.89 | **84%** |
-| claude-opus-4-6 | 14 | 791.7k | $1.32 | $3.17 | **92%** |
-| gpt-5.5 | 21 | 659.8k | $1.15 | $2.24 | 76% |
-| claude-sonnet-4-5 | 4 | 114.6k | $0.31 | $0.18 | 64% |
-| claude-sonnet-4-6 | 4 | 141.9k | $0.30 | $0.18 | 48% |
-
-</td></tr></table>
-
-<table>
-<tr>
-<td align="center" valign="top">
-<img src=".github/assets/cost-savings-dashboard.png" alt="LucidAgentIDE Cost & Savings Ledger - real-time cross-model token usage, estimated prompt-cache savings, cache hit-rate, and per-model cost showback" width="420" />
-<br/>
-<sub><b>↑ Cost &amp; Savings Ledger</b> - spend, cache savings, and cost per model, live</sub>
-</td>
-<td align="center" valign="top">
-<img src=".github/assets/ai-loc-dashboard.png" alt="LucidAgentIDE AI-authored code ledger - lines of code attributed per model, repo, and identity (AI authorship attribution / provenance)" width="420" />
-<br/>
-<sub><b>↑ AI-authored Code Ledger</b> - which model wrote which lines, by repo &amp; identity</sub>
-</td>
-</tr>
-</table>
-
-</div>
-
-<br/>
-
-**Key capabilities:**
-
-- 📊 **Cross-model cost ledger** - unified spend view across Claude, GPT, Gemini, and all AskSage-routed models
-- 💵 **Estimated cache savings** - see how much the KV-cache-optimized prompt prefix saves you in real dollars
-- 📈 **Cache hit-rate tracking** - per-model cache efficiency metrics updated in real time
-- 🔍 **Per-session drill-down** - break costs down by model, turn count, and token volume
-- 🏷️ **Showback-ready** - built for teams that need to attribute AI costs to projects or users
-- 🪪 **AI-authored code ledger** - a tamper-evident count of *which model wrote which lines*, per repo and identity (authorship attribution, not just git activity)
-
-> **🏛️ Enterprise rollups (premium, coming soon).** A separately-licensed add-on rolls this showback
-> up into executive **BI dashboards** - Power BI (GCC-High), QuickSight, Looker, SharePoint, or an
-> airgap-friendly single-file HTML view - and adds **loop-efficiency and ROI** reporting per model and
-> per program: cost-per-outcome, productivity, and security posture in one pane for the CFO / CIO / CISO.
-> Read-only and **metadata-only** by construction (no code, prompts, or CUI leave the host); the
-> analytics methodology is proprietary.
-
-> **🛡️ Central policy & SIEM audit (premium, coming soon).** The same per-action safety the app enforces
-> locally - the exec-approval gate and the loop's Speed↔Risk dial - becomes **centrally governable** by an
-> org admin through the tools you already run (**Group Policy / Intune / Jamf / Ansible**): set and **lock**
-> the risk posture fleet-wide, and stream a **metadata-only security-audit feed** to your **SIEM**
-> (Splunk, Elastic, ACAS, and AWS / Azure / GCP security logging) for SOC visibility. The enabling seams
-> are in this source-available core (managed-config + an audit-export interface); the policy templates and SIEM
-> connectors are a separately-licensed add-on. Metadata-only by construction - no code, prompts, or CUI
-> leave the host.
 
 ---
 
