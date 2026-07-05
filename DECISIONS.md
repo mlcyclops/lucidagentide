@@ -11068,3 +11068,60 @@ test harness` 580 pass / 4 skip / 0 fail; root `tsc --noEmit` clean; headless nv
 
 ADR-0150/0151 (the Neovim plugin this extends), ADR-0011 (the usage/cost ledger in memory_data), the
 GUI Memory inspector (ADR-0036 developer view).
+
+## ADR-0156 - P-NVIM.4: Neovim top-notch pass - gate block banner, context sparkline, three real bugs
+
+**Status:** Accepted / Built.
+
+### Context
+
+A deliberate review of the Neovim integration (P-NVIM.1-3) against the GUI asked: what does the GUI show
+that Neovim doesn't, what's missing in the `lucid tui` path, and is the implementation sound? Findings:
+three real bugs, and two GUI features worth porting. (A third - the ADR-0011 all-time usage ledger - was
+considered and explicitly descoped by the user; the statusline poll stays session-only.)
+
+### Bugs fixed
+
+1. **Neovim 0.10 compat:** the plugin used `jobstart({term=true})`, which is 0.11+, while the README
+   promises >= 0.10. `start_term()` now feature-detects: `jobstart{term=true}` on 0.11+, `termopen()`
+   on 0.10 (same semantics - both attach to the current buffer, which `spawn()` sets first).
+2. **`:10,20LucidSend` sent the wrong text:** a cmdline range was read through the `'<`/`'>` marks,
+   which are STALE outside a genuine visual invocation. `send_range` now distinguishes: marks matching
+   the passed range = fresh visual (charwise-precise selection); anything else = the requested LINES.
+3. **`statusline = false` crashed:** `statusline()` indexed `config.statusline.interval` on a boolean.
+   Now returns "" without starting the poll; `refresh_status` hardened the same way.
+
+### GUI parity added
+
+- **Security block banner.** The gate's authoritative `[BLOCKED tool_call:<n>] ... severity=<s>
+  findings=<f>` stderr line - the exact signal the GUI banner and ide_client.ts BLOCK_RE parse, pinned
+  by `harness/launcher/ext_parity.json` - is now parsed from the Lucid terminal's output stream
+  (`_parse_block_line`, all four parity cases asserted) and raised as a `vim.notify` ERROR. Delivery is
+  PROVEN, not assumed: the headless spec runs a real PTY job that prints the parity line to STDERR and
+  asserts `on_stdout` delivered it parseably (PTY merges stderr; `%S+` stops before the PTY's CR).
+- **Context sparkline.** `SessionStats` gains `prompts: number[]` (per-turn context occupancy - the
+  series the GUI/memory-TUI graph draws); `:LucidStats` renders it as a `history` sparkline row
+  (`_sparkline`: downsampled, min-max scaled, flat/empty-safe).
+
+### Files
+
+- `extensions/neovim/lua/lucid/init.lua` - `start_term`, `scan_block_output`, `_parse_block_line`,
+  `_sparkline`, `send_range` fix, `statusline`/`refresh_status` guards, float `history` row.
+- `tools/session_metrics.ts` - `prompts` in `SessionStats`.
+- Tests: `extensions/neovim/test/helpers_spec.lua` (+16 assertions: 4 ext_parity block cases, sparkline
+  shapes, statusline=false, float history row, the PTY wiring proof);
+  `harness/launcher/session_metrics.test.ts` (prompts); `harness/scripts/demo_pnvim1.ts` now also
+  asserts the MCP result-gate is loaded (locks the parity fix).
+- Docs: `docs/NEOVIM.md` + `extensions/neovim/README.md` (banner, sparkline, `statusline=false`,
+  cmdline ranges, 0.10 fallback).
+
+### Verification
+
+Headless spec green (all assertions incl. the live-PTY wiring proof); `bun test harness` green; root
+`tsc --noEmit` clean; `make demo-P-NVIM.1` green; live `lucid stats --json` carries the real 117-point
+`prompts` series for the current session.
+
+### Relates to
+
+ADR-0150/0151/0155 (the Neovim integration this hardens), ADR-0038 (ext_parity block-line contract),
+ADR-0152 (the MCP result-gate the demo now asserts).

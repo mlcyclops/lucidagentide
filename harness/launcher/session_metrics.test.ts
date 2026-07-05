@@ -46,6 +46,7 @@ test("sessionStats computes spend, KV-cache hit, and context-fill from the sessi
   // context occupancy = last turn prompt (input+cacheRead+cacheWrite) = 500+9500+0
   expect(st.current).toBe(10000);
   expect(st.peak).toBe(10500); // first turn was bigger
+  expect(st.prompts).toEqual([10500, 10000]); // per-turn context occupancy (feeds the editor sparkline)
   expect(st.window).toBe(200000); // claude-haiku-4-5 context window
   expect(st.contextFill).toBeCloseTo(10000 / 200000, 10);
 });

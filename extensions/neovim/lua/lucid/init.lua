@@ -138,6 +138,41 @@ local function notify_missing(cfg)
   )
 end
 
+-- Terminal output scanning: the security gate prints an authoritative
+--   [BLOCKED tool_call:<name>] … severity=<s> … findings=<f>
+-- line when it quarantines a tool call — the SAME signal the GUI block banner and ide_client.ts
+-- BLOCK_RE parse. The PTY merges stderr into the terminal stream, so we watch on_stdout and raise an
+-- error-notify: the GUI's security block banner, in editor form.
+local outbuf = ""
+local function scan_block_output(_, data)
+  if type(data) ~= "table" then
+    return
+  end
+  outbuf = outbuf .. table.concat(data, "\n")
+  local pieces = vim.split(outbuf, "\n", { plain = true })
+  outbuf = table.remove(pieces) or ""
+  for _, l in ipairs(pieces) do
+    local b = M._parse_block_line(l)
+    if b then
+      vim.schedule(function()
+        vim.notify(
+          ("Lucid gate BLOCKED tool `%s` — severity %s (%s)"):format(b.tool, b.severity, b.findings),
+          vim.log.levels.ERROR
+        )
+      end)
+    end
+  end
+end
+
+--- Start the terminal job: `jobstart{term=true}` on Neovim 0.11+, `termopen` on 0.10 (same semantics —
+--- both run in the CURRENT buffer, which spawn() sets first).
+local function start_term(argv, opts)
+  if vim.fn.has("nvim-0.11") == 1 then
+    return vim.fn.jobstart(argv, vim.tbl_extend("force", opts, { term = true }))
+  end
+  return vim.fn.termopen(argv, opts)
+end
+
 --- Spawn a fresh gated `lucid tui` in a terminal buffer. Returns true on spawn, false if fail-closed.
 local function spawn(cfg, extra)
   local cmd = M._resolve_cmd(cfg)
@@ -150,9 +185,9 @@ local function spawn(cfg, extra)
   state.bufnr = vim.api.nvim_create_buf(false, true)
   M._open_window(cfg)
   vim.api.nvim_set_current_buf(state.bufnr)
-  state.chan = vim.fn.jobstart(argv, {
-    term = true,
+  state.chan = start_term(argv, {
     cwd = cfg.cwd,
+    on_stdout = scan_block_output,
     on_exit = function()
       state.chan = nil
     end,
@@ -209,10 +244,17 @@ end
 --- reference (omp reads it through the gate).
 function M.send_range(opts)
   if opts and opts.range and opts.range > 0 then
+    local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
     local sr, sc = unpack(vim.api.nvim_buf_get_mark(0, "<"))
     local er, ec = unpack(vim.api.nvim_buf_get_mark(0, ">"))
-    local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
-    M.send(M._selection_text(lines, sr, sc + 1, er, ec + 1))
+    -- A genuine visual :'<,'>LucidSend passes exactly the mark lines as its range — the marks are fresh,
+    -- send the precise (charwise) selection. Any OTHER range (`:10,20LucidSend`, `:%LucidSend`) arrives
+    -- with STALE visual marks: send the requested LINES instead.
+    if sr == opts.line1 and er == opts.line2 then
+      M.send(M._selection_text(lines, sr, sc + 1, er, ec + 1))
+    else
+      M.send(table.concat(vim.list_slice(lines, opts.line1, opts.line2), "\n"))
+    end
   else
     local rel = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(0), ":.")
     if rel == "" then
@@ -253,6 +295,49 @@ function M._bar(frac, width)
   return "[" .. string.rep("#", filled) .. string.rep("-", width - filled) .. "]"
 end
 
+--- Parse the security gate's authoritative block line — the SAME contract the GUI banner and
+--- ide_client.ts BLOCK_RE parse (cases pinned by harness/launcher/ext_parity.json).
+--- @return table|nil {tool,severity,findings}
+function M._parse_block_line(line)
+  local tool, severity, findings = string.match(line or "", "%[BLOCKED tool_call:([%w_]+)%].-severity=(%w+).-findings=(%S+)")
+  if not tool then
+    return nil
+  end
+  return { tool = tool, severity = severity, findings = findings }
+end
+
+--- Unicode sparkline for a numeric series (downsampled to `width` points); "" for an empty series.
+function M._sparkline(values, width)
+  width = width or 24
+  if not values or #values == 0 then
+    return ""
+  end
+  local n = #values
+  local pts = {}
+  if n <= width then
+    for i = 1, n do
+      pts[i] = values[i]
+    end
+  else
+    for i = 1, width do
+      pts[i] = values[math.max(1, math.floor(i * n / width))]
+    end
+  end
+  local lo, hi = math.huge, -math.huge
+  for _, v in ipairs(pts) do
+    lo = math.min(lo, v)
+    hi = math.max(hi, v)
+  end
+  local ticks = { "▁", "▂", "▃", "▄", "▅", "▆", "▇", "█" }
+  local span = hi - lo
+  local out = {}
+  for i, v in ipairs(pts) do
+    local idx = span > 0 and (1 + math.floor((v - lo) / span * 7 + 0.5)) or 1
+    out[i] = ticks[math.max(1, math.min(8, idx))]
+  end
+  return table.concat(out)
+end
+
 --- Compact statusline string from a `lucid stats --json` session block (nil-safe).
 function M._fmt_statusline(session, prefix)
   if not session then
@@ -283,6 +368,10 @@ function M._fmt_stats_lines(data)
     string.format("  cache    %s hit", M._pct(c.hit or 0)),
     string.format("  context  %s %s  %d / %d", M._pct(s.contextFill or 0), M._bar(s.contextFill or 0), s.current or 0, s.window or 0),
   }
+  local spark = M._sparkline(s.prompts, 24)
+  if spark ~= "" then
+    lines[#lines + 1] = "  history  " .. spark
+  end
   if data.budgets and #data.budgets > 0 then
     local parts = {}
     for _, b in ipairs(data.budgets) do
@@ -306,7 +395,9 @@ local function refresh_status()
   vim.system({ cmd, "stats", "--json" }, { text = true }, function(res)
     local ok, data = pcall(vim.json.decode, res.stdout or "")
     vim.schedule(function()
-      M._status = (ok and data) and M._fmt_statusline(data.session, M.config.statusline.prefix) or ""
+      local sl = M.config.statusline
+      local prefix = type(sl) == "table" and sl.prefix or "Lucid"
+      M._status = (ok and data) and M._fmt_statusline(data.session, prefix) or ""
     end)
   end)
 end
@@ -315,10 +406,16 @@ end
 --- "Lucid $x · cache y% · ctx z%" string; the first call starts a lightweight poll
 --- (config.statusline.interval ms) reading `lucid stats --json` (session-only fast path).
 function M.statusline()
+  local sl = M.config.statusline
+  if sl == false then
+    return ""
+  end
+  sl = type(sl) == "table" and sl or {}
   if not status_timer then
     refresh_status()
+    local interval = sl.interval or 5000
     status_timer = (vim.uv or vim.loop).new_timer()
-    status_timer:start(M.config.statusline.interval, M.config.statusline.interval, vim.schedule_wrap(refresh_status))
+    status_timer:start(interval, interval, vim.schedule_wrap(refresh_status))
   end
   return M._status
 end
