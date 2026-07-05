@@ -467,6 +467,20 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .toolfail .tf-detail{margin:5px 0 0;font-family:var(--mono);font-size:11px;line-height:1.5;color:var(--txt-3);
   white-space:pre-wrap;word-break:break-word;max-height:180px;overflow:auto}
 
+/* ── P-FAV.1 (ADR-0165): model-picker favorite stars ──
+   A ghost star on every selectable model row; starred models pin into a gold "Favorites"
+   pseudo-section at the top of the picker (they stay in their family too). Same collapse
+   mechanics as real families (data-fam="favs"). */
+.cfg-opt .fav-star{margin-left:4px;flex:none;display:inline-flex;align-items:center;background:none;border:0;
+  padding:2px;border-radius:5px;color:var(--txt-4);opacity:.35;cursor:pointer;
+  transition:opacity var(--t-fast),color var(--t-fast)}
+.cfg-opt:hover .fav-star{opacity:.8}
+.cfg-opt .fav-star:hover{color:var(--amber);opacity:1}
+.cfg-opt .fav-star.on{opacity:1;color:var(--amber)}
+.cfg-opt .fav-star.on .ic{fill:var(--amber)}
+.cfg-fam-favs .cfg-fam-name{display:inline-flex;align-items:center;gap:5px;color:var(--amber)}
+.cfg-fam-favs .fam-star{fill:var(--amber)}
+
 /* ── Consolidating activity / "thoughts" window ──
    One compact, collapsible surface per turn: a head with the live current step + a count,
    expandable to the full step list. Auto-collapses to a one-line summary on done. */

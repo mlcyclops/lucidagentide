@@ -11735,3 +11735,57 @@ SecurityEvent export seam / OCSF sinks reused), ADR-0159 (P-SANDBOX.1, the "audi
 SecurityEvent, no new EventNames" precedent), ADR-0111 (`cloneRepo` first-party git egress),
 ADR-0022/0024 (the loopback + token gate), CLAUDE.md invariants #8 (exact event names / frozen contract),
 #5 (metadata-only audit), #3 (fail-safe logging never weakens fail-closed).
+
+-----
+
+## ADR-0165 - P-FAV.1: model-picker favorite stars (a pinned Favorites section)
+
+**Date:** 2026-07-05
+**Status:** Accepted. **P-FAV.1 BUILT + tested.**
+
+### Context
+
+User-queued increment (requested alongside P-SANDBOX.2 scoping): the curated picker (P-IDE.1,
+ADR-0029) orders models family/gov/version-first - correct, but a user flipping between the same
+two or three models re-scrolls family sections every time. Ask: a star on each model row;
+starred models pin to the top.
+
+### Decision
+
+1. **Pure layer** (`desktop/renderer/model_favorites.ts`, marketplace.ts convention):
+   `parseFavs` (defensive against corrupted localStorage - bad JSON/shape => empty, never a
+   throw; dedupe; MAX_FAVS=24 cap), `toggleFav` (pure; adding beyond the cap evicts the OLDEST
+   so the newest star sticks), `starredOf` (the starred subset in the CATALOG's curated order -
+   the Favorites section inherits gov-first/newest-first, not click order; stale favorites hide
+   but are NOT pruned, so a disconnected provider's stars survive reconnecting).
+2. **Persistence tier = the family-collapse precedent**: renderer localStorage
+   (`lucid.model-favs`), a local UI preference - never synced, never a security surface.
+3. **Render**: every selectable row (both pickers share `modelRow`) gets a ghost `.fav-star`
+   button (new `star` icon; gold + filled when on). Starred models render in a `Favorites`
+   pseudo-section pinned ABOVE the families AND stay in their family (muscle memory preserved).
+   The section collapses/persists through the SAME `data-fam-toggle` mechanism (id `favs`).
+4. **Interaction invariant**: the star sits inside a `[data-val]` row, so both pickers' click
+   delegation checks `[data-fav]` FIRST - starring never selects a model, never closes the
+   picker. The P-PERF.5 picker memo key now includes the favorites list (stars invalidate it).
+
+### Consequences
+
+- Files: renderer/model_favorites.ts (+.test.ts, new), app.ts (favSet/favsOf/saveFavs, star
+  button in modelRow, Favorites section in familyListHTML, memo key, both click handlers),
+  icons.ts (`star`), styles.css (`.fav-star`, `.cfg-fam-favs`), scripts/demo_p_fav_1.ts,
+  `demo-P-FAV.1` Makefile target.
+- Unavailable (ITAR-blocked) rows keep NO star - they are not selectable, pinning one would
+  imply otherwise.
+
+### Verification
+
+`bun test desktop/renderer/model_favorites.test.ts` 8 pass (defensive parse, cap eviction,
+immutability, catalog-order selection, stale-favorite survival). `demo-P-FAV.1` green. Root
+`tsc --noEmit` clean; license check green. Full `bun test desktop` in a clean master worktree:
+905 pass / 5 fail - the pre-existing Windows fs_browse.test.ts set only (ADR-0158/0163 note).
+In-app visual pass deferred with the ADR-0163 one (same packaged-Electron debt).
+
+### Relates to
+
+ADR-0029 (P-IDE.1 - the curated picker this pins on top of), ADR-0132 (P-PERF.5 memo key
+extended), ADR-0158/0163 (pure-builder + localStorage-preference conventions reused).

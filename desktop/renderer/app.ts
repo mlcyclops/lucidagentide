@@ -38,6 +38,7 @@ import { type Action, type ToastAction, attachRichTip, createPalette, initToolti
 import { exportActionPlan } from "./kg_export.ts";
 import { formatImportLine } from "./import_progress.ts";
 import { ASKSAGE_FAMILY_ORDER, familyOf, filterModels, groupByFamily, isAuxiliaryModel, isChinaModel, isDeprecatedModel, isGovModel, sortGovFirstNewest } from "./model_families.ts";
+import { FAVS_KEY, parseFavs, starredOf, toggleFav } from "./model_favorites.ts"; // P-FAV.1 (ADR-0165)
 import { INSTALLED_SKILLS, bumpSkillUsage, bundledSkillsByUsage, taskProforma } from "./skills.ts";
 import { CHECKER_TOKENS_PER_ITER, MAKER_TOKENS_PER_ITER, estimateGoalCost, estimateGoalTokens, formatTokens, formatUSD } from "../loop_estimate.ts";
 import { speakable } from "../../harness/brief/engineering_update.ts"; // P-REPORT.7: make read-aloud text TTS-friendly
@@ -7533,7 +7534,11 @@ const modelRow = (o: { value: string; name: string }, sel: string) => {
   const ctx = ctxLbl ? `<span class="row-ctx" data-tip="Context window">${esc(ctxLbl)}</span>` : "";
   // P-IDE.1e (ADR-0109): a small privacy marker on the Fable 5 row (the hover card + selection toast carry the full notice).
   const warnPill = shortModelId(o.value) === FABLE_ID ? `<span class="row-warn" data-tip="U.S.-gov privacy notice|${esc(FABLE_PRIVACY_WARN)}">${icon("shield", 10)}</span>` : "";
-  return `<div class="cfg-opt ${o.value === sel ? "on" : ""}" data-val="${esc(o.value)}" data-model="${esc(o.value)}"><span class="tick">${icon("check", 13)}</span><span class="nm">${esc(cleanModelName(o.name))}</span>${prov}${warnPill}${isAsksage(o.value) ? `<span class="gov-pill">Gov</span>` : ""}${ctx}${iq}</div>`;
+  // P-FAV.1: the star toggles membership in the pinned Favorites section; it must never SELECT the
+  // row, so the click handlers check [data-fav] before [data-val].
+  const fav = favSet.has(o.value);
+  const star = `<button class="fav-star${fav ? " on" : ""}" type="button" data-fav="${esc(o.value)}" data-tip="${fav ? "Unstar|Remove from Favorites" : "Star|Pin to a Favorites section at the top of the picker"}">${icon("star", 12)}</button>`;
+  return `<div class="cfg-opt ${o.value === sel ? "on" : ""}" data-val="${esc(o.value)}" data-model="${esc(o.value)}"><span class="tick">${icon("check", 13)}</span><span class="nm">${esc(cleanModelName(o.name))}</span>${prov}${warnPill}${isAsksage(o.value) ? `<span class="gov-pill">Gov</span>` : ""}${ctx}${iq}${star}</div>`;
 };
 
 // ── P-IDE.1 (ADR-0029): model family grouping ────────────────────────────────
@@ -7547,6 +7552,14 @@ function toggleFamilyCollapsed(id: string): void {
   const s = collapsedFamilies();
   if (s.has(id)) s.delete(id); else s.add(id);
   try { localStorage.setItem(FAM_COLLAPSE_KEY, JSON.stringify([...s])); } catch { /* ignore */ }
+}
+// P-FAV.1 (ADR-0165): favorite stars. Same persistence tier as the collapse state above; the pure
+// parse/toggle/selection layer is model_favorites.ts. `favSet` is refreshed by familyListHTML each
+// render so modelRow (shared by both pickers) can paint the star without threading a param through.
+let favSet = new Set<string>();
+function favsOf(): string[] { return parseFavs(localStorage.getItem(FAVS_KEY)); }
+function saveFavs(favs: string[]): void {
+  try { localStorage.setItem(FAVS_KEY, JSON.stringify(favs)); } catch { /* ignore */ }
 }
 /** Render the model list as collapsible family sections. `q` filters across ALL families (empty/
  *  no-match families are omitted); while searching, every shown family is force-expanded. When the
@@ -7563,7 +7576,16 @@ function familyListHTML(models: { value: string; name: string }[], sel: string, 
   const searching = q.trim().length > 0;
   const collapsed = collapsedFamilies();
   const order = state.asksage?.configured ? ASKSAGE_FAMILY_ORDER : undefined;
-  return groupByFamily(filtered, order).map(({ fam, models: ms }) => {
+  // P-FAV.1: pinned Favorites pseudo-section. Starred models render here AND in their family (family
+  // muscle memory preserved); it collapses/persists via the same data-fam-toggle mechanism ("favs").
+  const favs = favsOf();
+  favSet = new Set(favs);
+  const starred = starredOf(filtered, favs);
+  const favSec = starred.length === 0 ? "" : `<div class="cfg-fam cfg-fam-favs${!searching && collapsed.has("favs") ? " collapsed" : ""}" data-fam="favs">
+      <button class="cfg-fam-h" type="button" data-fam-toggle="favs"><span class="cfg-fam-name">${icon("star", 12, "fam-star")} Favorites</span><span class="cfg-fam-n">${starred.length}</span>${icon("chevron", 13, "cfg-fam-chev")}</button>
+      <div class="cfg-fam-list">${starred.map((o) => modelRow(o, sel)).join("")}</div>
+    </div>`;
+  return favSec + groupByFamily(filtered, order).map(({ fam, models: ms }) => {
     const isCollapsed = !searching && collapsed.has(fam.id);
     return `<div class="cfg-fam${isCollapsed ? " collapsed" : ""}" data-fam="${fam.id}">
       <button class="cfg-fam-h" type="button" data-fam-toggle="${fam.id}"><span class="cfg-fam-name">${esc(fam.label)}</span><span class="cfg-fam-n">${ms.length}</span>${icon("chevron", 13, "cfg-fam-chev")}</button>
@@ -7793,7 +7815,7 @@ function openConfigPopover(anchor: HTMLElement): void {
       const m = state.config.find((c) => c.id === "model");
       const list2 = m ? curatedModels(m) : [];
       const cur = m?.currentValue ?? model.currentValue;
-      const key = `${list2.map((o) => o.value).join(",")}|${cur}|${q}|${[...collapsedFamilies()].sort().join(",")}|${state.asksage?.configured ? 1 : 0}`;
+      const key = `${list2.map((o) => o.value).join(",")}|${cur}|${q}|${[...collapsedFamilies()].sort().join(",")}|${state.asksage?.configured ? 1 : 0}|${favsOf().join(",")}`; // P-FAV.1: stars invalidate the memo
       if (pickerMemo?.key !== key) pickerMemo = { key, html: familyListHTML(list2, cur, q) }; // P-PERF.5 memo
       list.innerHTML = pickerMemo.html;
       search.placeholder = `Search ${list2.length} models…`;
@@ -7804,6 +7826,9 @@ function openConfigPopover(anchor: HTMLElement): void {
     attachModelTips(list); // premium per-model hover cards (delegated → survives re-render)
     search.addEventListener("input", (e) => draw((e.target as HTMLInputElement).value));
     list.addEventListener("click", (e) => {
+      // P-FAV.1: the star is INSIDE a [data-val] row - check it first so starring never selects.
+      const fs = (e.target as HTMLElement).closest("[data-fav]") as HTMLElement | null;
+      if (fs) { saveFavs(toggleFav(favsOf(), fs.dataset.fav!)); draw(search.value); return; }
       const tgl = (e.target as HTMLElement).closest("[data-fam-toggle]") as HTMLElement | null;
       if (tgl) { toggleFamilyCollapsed(tgl.dataset.famToggle!); draw(search.value); return; }
       const it = (e.target as HTMLElement).closest("[data-val]") as HTMLElement | null;
@@ -7871,6 +7896,9 @@ function openOptionDropdown(anchor: HTMLElement, configId: string): void {
   }
   listEl.addEventListener("click", (e) => {
     if (configId === "model") {
+      // P-FAV.1: star toggle first (inside a [data-val] row) - starring never selects.
+      const fs = (e.target as HTMLElement).closest("[data-fav]") as HTMLElement | null;
+      if (fs) { saveFavs(toggleFav(favsOf(), fs.dataset.fav!)); listEl.innerHTML = familyListHTML(opts, c.currentValue, ($("#miniSearch", node) as HTMLInputElement)?.value ?? ""); return; }
       const tgl = (e.target as HTMLElement).closest("[data-fam-toggle]") as HTMLElement | null;
       if (tgl) { toggleFamilyCollapsed(tgl.dataset.famToggle!); listEl.innerHTML = familyListHTML(opts, c.currentValue, ($("#miniSearch", node) as HTMLInputElement)?.value ?? ""); return; }
     }

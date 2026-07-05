@@ -475,6 +475,10 @@ demo-P-TOOLFAIL.2: ## P-TOOLFAIL.2 (ADR-0163): failed tool calls collapse into a
 demo-P-REPORT.10: ## P-REPORT.10 (ADR-0164): a formal SecurityEvent per fetch/PR reach-out — the report collector's first-party git fetch / gh PR list (which bypass the agent gate) each emit a canonical egress/allow SecurityEvent (OCSF/SIEM), metadata-only (host, no credential), skipped PR lists emit nothing, proven live+offline via a local bare-origin fetch through the real dispatcher
 	$(BUN) run desktop/scripts/demo_p_report_10.ts
 
+.PHONY: demo-P-FAV.1
+demo-P-FAV.1: ## P-FAV.1 (ADR-0165): model-picker favorite stars - star a model to pin it into a Favorites section at the top of the picker; catalog order preserved, corrupted storage degrades safely, stale stars survive provider reconnects
+	$(BUN) run desktop/scripts/demo_p_fav_1.ts
+
 .PHONY: dashboards
 dashboards: ## Materialize dashboard CSVs from a DuckDB into observable/docs/data (DB=path)
 	$(BUN) run harness/scripts/materialize_dashboards.ts $(DB) observable/docs/data
