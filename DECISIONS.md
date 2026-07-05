@@ -11514,3 +11514,75 @@ subcommand; `acp` never routes to tui; help flags exit 0 spawning nothing) via t
 
 **Related.** ADR-0150 (`lucid tui`), ADR-0155/0156 (Neovim surface), ADR-0038 (launcher trust anchor),
 invariants #3/#4 (fail-closed, gate can't be omitted - both untouched).
+## ADR-0162 - P-REPORT.9: multi-repo remote fetch + PR aggregation for the Engineering Report
+
+**Date:** 2026-07-05
+**Status:** Accepted. **P-REPORT.9 BUILT + tested.**
+
+### Context
+
+Product ask: the Engineering Report was blind to anything not already committed on ONE repo's local
+default branch. It reads `DECISIONS.md`/`PROGRESS.md` from the app repo plus a local `git diff
+HEAD~10..HEAD` (`gitChangeInputs`, dev.ts) - it never fetched remotes, never spanned other branches,
+never saw the other repos a user tracks, and had no concept of pull requests. Users running against
+several remote repos (feature branches, PRs, `master` moving upstream) got a report missing the newest
+work. They asked to pick which repos to include, verify their remotes, add missing ones, pull the latest,
+and fold recent commits + PRs into one comprehensive report - targeting only the repos they choose.
+
+### Decision
+
+1. **Fetch-only sync, never pull.** The user picked fetch-only over `git pull`: `git fetch --prune
+   --no-tags origin` per selected repo downloads remote commits/branches READ-ONLY - it never mutates the
+   working tree or current branch, so it can't conflict across many repos with uncommitted work. `pull`
+   and merge modes are deliberately out of scope (recorded as a follow-up, not a silent omission).
+2. **A PURE renderer + a desktop collector, mirroring change_graph.ts / gitOut.**
+   `harness/brief/repo_activity.ts` is pure (raw git/gh strings → `RepoActivity` → a "Cross-repo activity"
+   annex markdown; no I/O, no Date) so it is fixture-tested. `desktop/repo_collect.ts` does the spawning:
+   fetch, `git for-each-ref` branch enumeration (local heads + `origin/*`, remote HEAD symref filtered,
+   capped at 8 by recency), `git log` per branch, the window diff for line totals, and gh for PRs.
+3. **PRs via the `gh` CLI, opt-in per repo, GitHub only.** A per-row toggle, enabled only when the remote
+   is GitHub AND `gh auth status` succeeds (cached 60s). Non-GitHub / unauthed / not-requested each yield
+   an explicit `prStatus` that the annex renders as an honest "PRs skipped: <reason>" line. gh runs with
+   `cwd` = the repo so it reads the origin remote itself.
+4. **Repo source = workspaces ∪ recents ∪ a new `reportRepos` list** (settings_store.ts). "Add repo"
+   takes a local path (validated `isGitRepo`) or a clone URL (reusing `cloneRepo`) and persists into
+   `reportRepos` WITHOUT calling `setWorkspace`/`backend.restart()` - tracking a repo for reporting must
+   never hijack the active omp session. The picker shows each repo's remote URL as the "verify" surface.
+5. **`/api/brief` gains a POST path** `{ role, save, repos:[{path,fetch,prs}], window }`; when `repos` is
+   present it appends the cross-repo annex for ALL roles. GET (single-repo default) is unchanged, so a
+   plain Generate reproduces the prior brief exactly (back-compat). Two new endpoints: `GET
+   /api/report/repos` (candidates + gh-auth) and `POST /api/report/repos/add`.
+
+### Security
+
+- **First-party control-plane egress**, exactly like `cloneRepo` (ADR-0111): server-side `Bun.spawn` of
+  git/gh behind the loopback + per-launch-token gate (ADR-0022/0024), NOT the agent tool gate. Fetch is
+  read-only with a 25s per-repo timeout; every step is fail-soft (a failed fetch still yields local refs,
+  flagged; a bad repo contributes an empty labeled entry, never a throw or a blank).
+- **Untrusted external content (invariant #5).** Commit subjects, PR titles, and author names are
+  externally authored. `clean()` collapses newlines, strips code-fence/inline-code breakout, escapes HTML,
+  escapes table pipes, and length-caps every field before it enters the markdown. The annex carries a
+  provenance line stating the text is DATA, never instructions - it holds when the brief later flows to
+  TTS / NotebookLM / the KG (`reportToKg`).
+
+### Deliberate deltas / scope
+
+The brief NARRATIVE still comes from the primary repo's DECISIONS/PROGRESS; only the additive annex is
+cross-repo (broadening the narrative source is a follow-up). Non-GitHub PR providers (GitLab MRs, Azure
+DevOps) are out of scope - detected and skipped with a reason, not half-supported.
+
+### Verification
+
+`bun test harness` 826 pass / 0 fail (+25 `repo_activity.test.ts`: URL parse GitHub-vs-not, commit/PR
+parse, cross-branch dedup + totals, fetch-failure surfacing, each PR-skip reason, per-branch cap, and
+untrusted-text escaping / fence-breakout). `make demo-P-REPORT.9` green. Renderer bundles clean. Live
+against real repos: `listReportRepos()` resolved GitHub + GitLab + Azure-DevOps remotes and flagged
+non-git folders; `collectRepoActivity` enumerated commits across feature/master/release branches with
+line totals, and the annex escaped `&`. The 5 pre-existing `fs_browse.test.ts` env failures are unrelated.
+
+### Relates to
+
+ADR-0116/0117 (the Reports panel + brief store this extends), ADR-0072 (the Engineering Update engine),
+ADR-0030 (`gitChangeInputs`, reused pattern), ADR-0111 (`cloneRepo` first-party git precedent),
+ADR-0022/0024 (the loopback + token gate the endpoints sit behind), CLAUDE.md invariants #3 (fail-closed),
+#5 (untrusted content delimited/as-data), #9 (stable ids).

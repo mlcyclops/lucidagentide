@@ -53,6 +53,10 @@ export interface GuiSettings {
   keys?: Record<string, string>;
   workspace?: string;
   recentWorkspaces?: string[];
+  // P-REPORT.9 (ADR-0162): repos the user wants INCLUDED IN REPORTS but not necessarily opened as the
+  // active workspace. Tracked separately from `workspace`/`recentWorkspaces` so adding a report target
+  // never restarts the omp session. The Reports repo picker offers the union of all three.
+  reportRepos?: string[];
   // AskSage gov gateway (ADR-0007): non-secret base URL + lockdown flag. The key
   // itself lives in `keys.ASKSAGE_API_KEY` like any other provider key.
   asksageBaseUrl?: string;
