@@ -160,7 +160,7 @@ export interface ElevenVoiceView { voiceId: string; name: string; category?: str
 // P-REPORT.1 (ADR-0116): a unified Reports-list row - a loop AAR or a saved Engineering Update brief.
 export interface ReportEntry { kind: "aar" | "brief"; id: string; title: string; outcome: string; role: string; updatedAt: number; rel: string }
 // P-REPORT.9 (ADR-0162): a candidate repo for cross-repo aggregation, and the per-repo selection sent back.
-export interface ReportRepo { path: string; name: string; isGit: boolean; remoteUrl: string; host: string; isGitHub: boolean }
+export interface ReportRepo { path: string; name: string; isGit: boolean; remoteUrl: string; host: string; isGitHub: boolean; lastActive: number }
 export interface ReportRepoSelection { path: string; fetch?: boolean; prs?: boolean }
 export interface ModeOption { id: string; name: string; description?: string }
 export interface ModeState { available: ModeOption[]; current: string; ui?: "agent" | "ask" | "plan"; permissionMode?: "auto" | "ask" }

@@ -5685,7 +5685,8 @@ function openReportsPanel(): void {
         <div class="goal-row" id="rpVoiceRow" hidden><label class="goal-lbl" for="rpVoice">Voice</label><select id="rpVoice" class="prov-key"><option value="">default voice</option></select></div>
         <div class="goal-eu-cost" id="rpCost" hidden></div>
         <div class="rp-repos" id="rpRepos">
-          <div class="rp-repos-h"><label class="goal-lbl">${icon("git", 12)} Repositories</label><span class="goal-opt">tick repos to fold their remote commits &amp; PRs into the report</span></div>
+          <div class="rp-repos-h"><label class="goal-lbl">${icon("git", 12)} Repositories</label><span class="goal-opt">tick repos to fold their remote commits &amp; PRs into the report</span>
+            <select id="rpRepoSort" class="rp-repo-sort" data-tip="Sort order|Order the repo list by most recent activity, or alphabetically by name"><option value="recent">Recent</option><option value="name">Name</option></select></div>
           <div class="rp-repo-list" id="rpRepoList"><div class="goal-opt">loading repos…</div></div>
           <div class="rp-repo-add">
             <input id="rpRepoAdd" class="prov-key" placeholder="Add a repo: local path or https:// clone URL" />
@@ -5753,9 +5754,14 @@ function openReportsPanel(): void {
   let ghAuth = false;
   const repoChecked = new Set<string>();
   const repoPrs = new Set<string>();
+  // P-REPORT.9: repo list sort order (user preference, persisted). "recent" = most-recently-committed
+  // first; "name" = alphabetical. The active-workspace pre-check keys off the server order, not this.
+  let repoSort = (localStorage.getItem("lucid.reportRepoSort") === "name" ? "name" : "recent") as "recent" | "name";
+  const sortedRepos = (): import("./bridge.ts").ReportRepo[] => [...repoState].sort((a, b) =>
+    repoSort === "name" ? a.name.localeCompare(b.name, undefined, { sensitivity: "base" }) : (b.lastActive - a.lastActive) || a.name.localeCompare(b.name));
   const renderRepos = (): void => {
     if (!repoState.length) { repoList.innerHTML = `<div class="goal-opt">No git repositories found. Add one below.</div>`; return; }
-    repoList.innerHTML = repoState.map((r) => {
+    repoList.innerHTML = sortedRepos().map((r) => {
       const on = repoChecked.has(r.path);
       const prOn = repoPrs.has(r.path);
       const prCap = r.isGitHub && ghAuth;
@@ -5776,6 +5782,11 @@ function openReportsPanel(): void {
     renderRepos();
   };
   void bridge.reportRepos().then(applyRepos).catch(() => applyRepos(null));
+  const sortSel = $("#rpRepoSort", ov) as HTMLSelectElement | null;
+  if (sortSel) {
+    sortSel.value = repoSort;
+    sortSel.addEventListener("change", () => { repoSort = sortSel.value === "name" ? "name" : "recent"; localStorage.setItem("lucid.reportRepoSort", repoSort); renderRepos(); });
+  }
   repoList.addEventListener("change", (e) => {
     const t = e.target as HTMLElement;
     const row = t.closest(".rp-repo") as HTMLElement | null;

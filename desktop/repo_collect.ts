@@ -18,7 +18,7 @@ import { load, save } from "./settings_store.ts";
 import { cloneRepo, currentWorkspace, isGitRepo, wsName } from "./workspace.ts";
 import { buildRepoActivity, parseRemoteUrl, type PrStatus, type RepoActivity, type RepoRaw } from "../harness/brief/repo_activity.ts";
 
-export interface ReportRepo { path: string; name: string; isGit: boolean; remoteUrl: string; host: string; isGitHub: boolean }
+export interface ReportRepo { path: string; name: string; isGit: boolean; remoteUrl: string; host: string; isGitHub: boolean; lastActive: number }
 export interface CollectOptions { fetch: boolean; prs: boolean; window: number }
 export interface RepoSelection { path: string; fetch?: boolean; prs?: boolean }
 
@@ -72,10 +72,20 @@ export function reportRepoPaths(): string[] {
 export async function listReportRepos(): Promise<ReportRepo[]> {
   return Promise.all(reportRepoPaths().map(async (path) => {
     const git = isGitRepo(path);
-    const url = git ? await remoteUrlAsync(path) : "";
+    // remote URL + last-commit time (epoch secs, for the "most recently active" sort) — concurrent.
+    const [url, lastActive] = git
+      ? await Promise.all([remoteUrlAsync(path), lastCommitEpoch(path)])
+      : ["", 0];
     const ref = parseRemoteUrl(url);
-    return { path, name: wsName(path), isGit: git, remoteUrl: url, host: ref.host, isGitHub: ref.isGitHub };
+    return { path, name: wsName(path), isGit: git, remoteUrl: url, host: ref.host, isGitHub: ref.isGitHub, lastActive };
   }));
+}
+
+/** Unix time (secs) of the repo's most recent commit on any branch; 0 if unknown. Feeds the "Recent" sort. */
+async function lastCommitEpoch(repo: string): Promise<number> {
+  const r = await gitOut(repo, ["for-each-ref", "--sort=-committerdate", "--count=1", "--format=%(committerdate:unix)", "refs/heads", "refs/remotes"]);
+  const n = Number(r.out.trim());
+  return Number.isFinite(n) ? n : 0;
 }
 
 // ── gh auth availability (cached 60s; a spawn per poll would be wasteful) ─────────────────────────────

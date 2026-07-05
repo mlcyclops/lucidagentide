@@ -146,13 +146,19 @@ button{font-family:inherit}
 .win-ctrls button.close:hover{background:var(--red);color:#fff;
   box-shadow:0 1px 6px -1px rgba(239,95,95,.6)}
 
-.body{display:grid;grid-template-columns:auto auto 1fr auto auto;min-height:0}
+/* The single implicit row defaults to `auto` (content-sized), so a tall column (the chat + its composer,
+   or a full rail) overflowed the viewport and CLIPPED the prompt bar / mic when the window was shrunk
+   vertically. `minmax(0,1fr)` pins the row to the available height and lets columns shrink below content,
+   so the composer stays pinned at the bottom and the thread just gets shorter (still scrollable). */
+.body{display:grid;grid-template-columns:auto auto 1fr auto auto;grid-template-rows:minmax(0,1fr);min-height:0}
 
 /* ───────────────────────── activity rail ───────────────────────── */
 .rail{
   width:54px;background:var(--bg-1);border-right:1px solid var(--line-soft);
   display:flex;flex-direction:column;align-items:center;padding:10px 0;gap:4px;
+  min-height:0;overflow-y:auto;overflow-x:hidden;scrollbar-width:none;
   transition:opacity var(--t) var(--ease)}
+.rail::-webkit-scrollbar{width:0} /* the nav rail scrolls on a short window without showing a bar */
 /* When the sessions panel is collapsed the nav recedes to ~55% so it isn't distracting; the
    hamburger (#sideToggle) still reads, and hovering the rail brings it fully back. */
 #app-inner.sidebar-collapsed .rail{opacity:.55}
@@ -989,6 +995,14 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .reports-modal .goal-lbl{font-size:13.5px;color:var(--txt)}
 /* left column: repo picker + hints + tip */
 .reports-modal .rp-repos-h .goal-opt{color:var(--txt-2);font-size:13px}
+/* P-REPORT.9: repo sort-order picker (Recent / Name), pushed to the right of the Repositories header */
+.rp-repo-sort{margin-left:auto;flex:none;font-size:12px;color:var(--txt);background:var(--bg);border:1px solid var(--line);border-radius:7px;padding:3px 6px;cursor:pointer;font-family:inherit;color-scheme:dark}
+.rp-repo-sort:hover{border-color:var(--line-strong);color:var(--txt)}
+.rp-repo-sort:focus{outline:none;border-color:var(--accent-2)}
+/* The native dropdown list itself: force a solid dark popup with bright text so the options are legible
+   (the default inherited grey rendered low-contrast when opened). */
+.rp-repo-sort option{background:var(--bg-1);color:var(--txt);font-weight:500}
+.rp-repo-sort option:checked{background:var(--bg-3);color:#fff}
 .reports-modal .rp-repo-txt b{font-size:13.5px;color:var(--txt)}
 .reports-modal .rp-repo-url{font-size:12.5px;color:var(--txt-2)}
 .reports-modal .rp-repo-pr{font-size:12px;color:var(--txt-2)}
@@ -1115,6 +1129,13 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .composer-hint{max-width:min(1080px,94vw);margin:7px auto 0;font-size:11.5px;color:var(--txt-4);display:flex;gap:14px}
 .composer-hint kbd{font-family:var(--mono);background:var(--bg-2);border:1px solid var(--line);
   border-bottom-width:2px;border-radius:5px;padding:0 5px;color:var(--txt-3);font-size:11px}
+/* On a really short window, shrink the composer's footprint so a buffer of the thread (~3 lines) stays
+   visible above it — the keyboard hint is informational, and the padding + tools can tighten up. */
+@media (max-height:560px){
+  .composer-wrap{padding:6px 26px 9px}
+  .composer-hint{display:none}
+  .composer-tools{margin-top:6px}
+}
 
 /* ───────────────────────── inspector (right) ───────────────────────── */
 /* Default width fits the Prompt-cache chip row through "spend $…" on one line (~430px is the no-wrap
@@ -1749,7 +1770,8 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
   transition:width var(--t-slow) var(--ease-out),opacity var(--t) var(--ease)}
 .inspector.rail:hover{opacity:1}
 .inspector.rail .insp-tabs,.inspector.rail .insp-body{display:none}
-.inspector.rail .metrics-rail{display:flex;flex-direction:column;align-items:stretch;gap:6px;padding:8px 6px;overflow:auto}
+.inspector.rail .metrics-rail{display:flex;flex-direction:column;align-items:stretch;gap:6px;padding:8px 6px;flex:1;min-height:0;overflow-y:auto;scrollbar-width:none}
+.inspector.rail .metrics-rail::-webkit-scrollbar{width:0} /* metric tiles scroll on a short window, no bar */
 .rail-expand{-webkit-app-region:no-drag;border:1px solid var(--line);background:var(--bg-2);color:var(--txt-3);align-self:center;
   width:32px;height:30px;border-radius:8px;display:grid;place-items:center;cursor:pointer;transition:background var(--t),color var(--t)}
 .rail-expand:hover{background:var(--bg-3);color:var(--accent-2)}
