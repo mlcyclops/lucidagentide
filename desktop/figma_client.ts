@@ -19,7 +19,7 @@ export function parseFigmaFileKey(input: string): string | null {
   const s = (input || "").trim();
   if (!s) return null;
   const m = /figma\.com\/(?:file|design|proto)\/([A-Za-z0-9]{10,})/i.exec(s);
-  if (m) return m[1];
+  if (m?.[1]) return m[1]; // group 1 always captures on a match; the guard narrows for noUncheckedIndexedAccess
   // a bare key (what the user might paste directly)
   if (/^[A-Za-z0-9]{10,}$/.test(s)) return s;
   return null;

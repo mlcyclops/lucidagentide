@@ -719,7 +719,14 @@ const server = Bun.serve({
           if (frames.length) {
             const ids = frames.map((f) => f.id).join(",");
             const imgRes = await fetch(`${FIGMA_API}/images/${key}?ids=${encodeURIComponent(ids)}&format=png&scale=2`, { ...hdr, signal: AbortSignal.timeout(25000) });
-            const imgMap: Record<string, string | null> = imgRes.ok ? ((await imgRes.json())?.images ?? {}) : {};
+            // external API reply: narrow the images map with a guard instead of trusting the shape
+            let imgMap: Record<string, string | null> = {};
+            if (imgRes.ok) {
+              const parsed: unknown = await imgRes.json();
+              if (parsed && typeof parsed === "object" && "images" in parsed && parsed.images && typeof parsed.images === "object") {
+                imgMap = parsed.images as Record<string, string | null>; // Figma /images contract: id → url | null
+              }
+            }
             const MAX_IMG_BYTES = 8 * 1024 * 1024; // cap per-frame render we inline + persist to disk
             board = await Promise.all(frames.map(async (f) => {
               const src = imgMap[f.id];
