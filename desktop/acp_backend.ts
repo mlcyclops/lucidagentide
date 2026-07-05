@@ -27,7 +27,8 @@ import { isLearnableAssistantText } from "./thinking_governance.ts";
 import { recordBlock } from "./security_log.ts";
 import { asksageOnly, attribution, checkerModel, lastModel, load as loadSettings, mcpServersForAcp, setCheckerModel, setLastModel } from "./settings_store.ts";
 import { managedAsksageOnly, managedConfig, managedRequireIsolation } from "./managed_config.ts";
-import { resolveBackend, sandboxDisclosure, wrapForProfile, type SandboxDecision } from "../harness/runs/sandbox_exec.ts"; // P-SANDBOX.1 (ADR-0157)
+import { resolveBackend, sandboxDisclosure, wrapForProfile, type SandboxDecision, type SandboxProxy } from "../harness/runs/sandbox_exec.ts"; // P-SANDBOX.1 (ADR-0157)
+import { ensureEgressProxy } from "../harness/runs/egress_proxy.ts"; // P-SANDBOX.2 (ADR-0166)
 import { caps } from "../harness/runs/profiles.ts";
 import { recommendCheckerModel, resolveCheckerModel, type ModelOption } from "./checker_model.ts";
 import { parseGoalVerdict } from "./goal_verdict.ts";
@@ -295,23 +296,34 @@ class Backend {
 
   /** ADR-0157: resolve the runtime-sandbox spawn plan for the omp argv. bwrap wrap on Linux; the
    *  DISCLOSED passthrough elsewhere; managed require-isolation without a backend = spawn with exec
-   *  DENIED (chat/read tools stay useful - the ADR's "block exec rather than disclose"). */
-  private resolveSandboxPlan(argv: string[]): { cmd: string; args: string[] } {
+   *  DENIED (chat/read tools stay useful - the ADR's "block exec rather than disclose").
+   *
+   *  P-SANDBOX.2 (ADR-0166): on an ISOLATING backend, egress is routed through the mediated proxy — its
+   *  HTTP(S)_PROXY env rides back in `env` (applied to the child only, never process.env). If the proxy
+   *  can't start, `wrap` falls back to network-off (fail-closed). Async because starting the proxy is. */
+  private async resolveSandboxPlan(argv: string[]): Promise<{ cmd: string; args: string[]; env: Record<string, string> }> {
     const res = resolveBackend({ requireIsolation: managedRequireIsolation(managedConfig().config) });
     if (!res.ok) {
       this.sandboxExecBlock = res.reason;
       console.error(`[sandbox] FAIL-CLOSED: ${res.reason} - exec is BLOCKED for this session (ADR-0157).`);
-      return { cmd: argv[0]!, args: argv.slice(1) };
+      return { cmd: argv[0]!, args: argv.slice(1), env: {} };
     }
-    const d: SandboxDecision = wrapForProfile({ argv, caps: caps("trusted-local"), ctx: { workspace: currentWorkspace() }, resolution: res });
+    const profileCaps = caps("trusted-local");
+    let proxy: SandboxProxy | undefined;
+    if (res.backend.isolates && profileCaps.canNetwork) {
+      const ep = await ensureEgressProxy({ dnsPort: 53 });
+      if (ep) proxy = { host: ep.host, httpPort: ep.httpPort, httpProxyUrl: ep.httpProxyUrl, resolvConfPath: ep.dnsPort === 53 ? ep.resolvConfPath : undefined };
+      else console.error("[sandbox] mediated egress proxy unavailable - this session runs network-off (fail-closed, ADR-0166).");
+    }
+    const d: SandboxDecision = wrapForProfile({ argv, caps: profileCaps, ctx: { workspace: currentWorkspace(), proxy }, resolution: res });
     if (d.action === "refuse") { // unreachable for trusted-local caps, but never assume: fail closed
       this.sandboxExecBlock = d.reason;
       console.error(`[sandbox] FAIL-CLOSED: ${d.reason} - exec is BLOCKED for this session (ADR-0157).`);
-      return { cmd: argv[0]!, args: argv.slice(1) };
+      return { cmd: argv[0]!, args: argv.slice(1), env: {} };
     }
     this.sandboxExecBlock = null;
     if (d.disclosed) console.error(sandboxDisclosure());
-    return { cmd: d.plan.cmd, args: d.plan.args };
+    return { cmd: d.plan.cmd, args: d.plan.args, env: d.plan.env };
   }
 
   private async start(): Promise<void> {
@@ -348,8 +360,8 @@ class Backend {
         // unisolated: the spawn still happens (chat/read tools stay useful) but every exec permission
         // is denied at the session/request_permission seam below.
         const ompArgv = [ompBin(), "acp", "-e", GATE, ...mcpGateArgs, "-e", ASKSAGE, ...previewArgs, ...codegraphArgs, ...agentBuilderArgs, ...slashCmdArgs, ...isoCfg, "--append-system-prompt", appendedPolicy];
-        const spawnPlan = this.resolveSandboxPlan(ompArgv);
-        const acp = new ACPClient(spawnPlan.cmd, spawnPlan.args, currentWorkspace());
+        const spawnPlan = await this.resolveSandboxPlan(ompArgv);
+        const acp = new ACPClient(spawnPlan.cmd, spawnPlan.args, currentWorkspace(), spawnPlan.env);
         acp.onNotify = (method, params) => {
           if (method !== "session/update") return;
           const u = params?.update ?? params;

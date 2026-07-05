@@ -80,9 +80,27 @@ test("canNetwork:false maps to --unshare-net (total network deny, DNS included)"
   expect(plan.args).toContain("--unshare-net");
 });
 
-test("canNetwork:true does NOT unshare the network (the mediated proxy is P-SANDBOX.2)", () => {
+test("canNetwork:true WITHOUT a proxy falls back to --unshare-net (P-SANDBOX.2: no mediator ⇒ no net, fail-closed)", () => {
   const plan = new BwrapBackend(hasBwrap).wrap(ARGV, caps("trusted-local"), CTX);
+  expect(plan.args).toContain("--unshare-net");
+});
+
+test("canNetwork:true WITH a proxy is MEDIATED — no --unshare-net, HTTP(S)_PROXY set, resolv.conf steered (P-SANDBOX.2)", () => {
+  const proxy = { host: "127.0.0.1", httpPort: 8888, httpProxyUrl: "http://127.0.0.1:8888", resolvConfPath: "/tmp/lucid-egress-x/resolv.conf" };
+  const plan = new BwrapBackend(hasBwrap).wrap(ARGV, caps("trusted-local"), { ...CTX, proxy });
   expect(plan.args).not.toContain("--unshare-net");
+  expect(plan.args.join(" ")).toContain("--ro-bind /tmp/lucid-egress-x/resolv.conf /etc/resolv.conf");
+  expect(plan.env.HTTPS_PROXY).toBe("http://127.0.0.1:8888");
+  expect(plan.env.HTTP_PROXY).toBe("http://127.0.0.1:8888");
+  expect(plan.env.NO_PROXY).toContain("127.0.0.1");
+});
+
+test("canNetwork:true WITH a proxy but no privileged :53 mediates HTTP only — no resolv.conf bind (P-SANDBOX.2)", () => {
+  const proxy = { host: "127.0.0.1", httpPort: 8888, httpProxyUrl: "http://127.0.0.1:8888" }; // resolvConfPath omitted
+  const plan = new BwrapBackend(hasBwrap).wrap(ARGV, caps("trusted-local"), { ...CTX, proxy });
+  expect(plan.args).not.toContain("--unshare-net");
+  expect(plan.args.join(" ")).not.toContain("/etc/resolv.conf");
+  expect(plan.env.HTTPS_PROXY).toBe("http://127.0.0.1:8888");
 });
 
 test("bwrap binds the workspace rw, home rw (omp state; fs containment stays omp --isolate's), system ro", () => {
