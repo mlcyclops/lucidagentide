@@ -180,6 +180,7 @@ on your `runtimepath`. `setup()` only overrides config and installs the default 
 | `:LucidToggle` | Show/hide the Lucid window (the session keeps running while hidden) |
 | `:LucidSend` | Visual range → send the selection; otherwise send the current file as `@path` |
 | `:LucidCheck` | Run the fail-closed preflight (`lucid check`) and report the verdict |
+| `:LucidStats` | Session spend + KV-cache % + context-fill (float; the GUI Memory inspector) |
 | `:checkhealth lucid` | Full health: launcher found + `lucid check` passes |
 
 ### Default keymaps (set by `setup()`)
@@ -189,6 +190,7 @@ on your `runtimepath`. `setup()` only overrides config and installs the default 
 | `<leader>lc` | `:LucidToggle` |
 | `<leader>ls` | `:LucidSend` (normal: current file · visual: selection) |
 | `<leader>lC` | `:LucidCheck` |
+| `<leader>lm` | `:LucidStats` |
 
 Disable them with `keymaps = false` (or per-entry, e.g. `keymaps = { send = false }`) and map the
 commands yourself.
@@ -203,7 +205,8 @@ require("lucid").setup({
   window = "float",                                -- "float" | "vsplit" | "split" | "tab"
   float = { width = 0.85, height = 0.85, border = "rounded" },
   start_insert = true,                             -- enter terminal insert-mode on open
-  keymaps = { toggle = "<leader>lc", send = "<leader>ls", check = "<leader>lC" },
+  keymaps = { toggle = "<leader>lc", send = "<leader>ls", check = "<leader>lC", stats = "<leader>lm" },
+  statusline = { interval = 5000, prefix = "Lucid" }, -- for require("lucid").statusline()
 })
 ```
 
@@ -211,6 +214,38 @@ require("lucid").setup({
 > There is intentionally **no setting to run a different agent command**. `cmd` must resolve to a `lucid`
 > launcher; if it can't be found the plugin reports an error and does nothing — it never falls back to a
 > bare `omp`. That's the fail-closed guarantee, in Neovim form.[3]
+
+### Metrics: spend, KV-cache, context — the Memory inspector, in Neovim
+
+The same numbers the GUI's Memory inspector shows are available in Neovim, read from the omp session
+transcript (session-only fast path — no DuckDB, no omp subprocess):
+
+- **`:LucidStats`** (or `<leader>lm`) opens a float with session **spend**, **KV-cache hit %**, and
+  **context-fill** (+ rate-limit budgets):
+
+  ```
+  Lucid — session metrics
+    model    claude-opus-4-8
+    turns    117
+    spend    $15.5611
+    cache    99% hit
+    context  28% [####------------]  280899 / 1000000
+    budgets  Claude 5 Hour 17% · Claude 7 Day 11%
+  ```
+
+- **Statusline component** — add `require("lucid").statusline()` to lualine / heirline / your native
+  `statusline`. It returns a cached `Lucid $15.56 · cache 99% · ctx 28%` and refreshes on a light poll
+  (`config.statusline.interval`, default 5s):
+
+  ```lua
+  -- lualine
+  require("lualine").setup({ sections = { lualine_x = { function() return require("lucid").statusline() end } } })
+  -- native statusline
+  vim.o.statusline = "%{v:lua.require'lucid'.statusline()}"
+  ```
+
+The raw JSON the plugin consumes is `lucid stats --json` (add `--budgets` for rate limits) — handy for
+building your own components.
 
 ---
 

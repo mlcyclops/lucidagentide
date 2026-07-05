@@ -41,6 +41,29 @@ eq(lucid._resolve_cmd({ cmd = "/opt/lucid" }, function(c)
   return c == "/opt/lucid"
 end), "/opt/lucid", "resolve_cmd: present launcher -> the command")
 
+-- _pct / _bar: metric formatting.
+eq(lucid._pct(0.876), "88%", "pct: rounds")
+eq(lucid._pct(0.05), "5%", "pct: small")
+eq(lucid._pct(nil), "0%", "pct: nil-safe")
+eq(lucid._bar(0.5, 4), "[##--]", "bar: half")
+eq(lucid._bar(0, 4), "[----]", "bar: empty")
+eq(lucid._bar(1, 4), "[####]", "bar: full")
+
+-- _fmt_statusline: compact spend/cache/ctx line (nil-safe).
+eq(lucid._fmt_statusline(nil), "", "statusline: nil session -> empty")
+eq(
+  lucid._fmt_statusline({ cost = 0.42, cache = { hit = 0.87 }, contextFill = 0.34 }, "Lucid"),
+  "Lucid $0.42 · cache 87% · ctx 34%",
+  "statusline: spend + cache% + ctx%"
+)
+
+-- _fmt_stats_lines: float body (nil-safe + populated).
+eq(lucid._fmt_stats_lines({})[1], "Lucid — no omp session yet", "stats lines: no session")
+local sl = lucid._fmt_stats_lines({ session = { model = "m", turns = 2, cost = 0.08, cache = { hit = 0.9 }, contextFill = 0.05, current = 100, window = 1000 } })
+eq(sl[1], "Lucid — session metrics", "stats lines: header")
+eq(sl[5], "  spend    $0.0800", "stats lines: spend")
+eq(sl[6], "  cache    90% hit", "stats lines: cache")
+
 if failures == 0 then
   io.stdout:write("LUCID_NVIM_OK\n")
   os.exit(0)
