@@ -71,3 +71,10 @@ test("the registry file is written 0600 (never world-readable)", () => {
     expect(statSync(file).mode & 0o777).toBe(0o600);
   }
 });
+
+test("permissionPolicy round-trips ('allow' persists; absent → undefined so the firewall defaults to deny)", () => {
+  const a = upsertRemoteAgent({ name: "h", command: "hermes", args: ["acp"], permissionPolicy: "allow" });
+  expect(getRemoteAgent(a.id)?.permissionPolicy).toBe("allow");
+  const b = upsertRemoteAgent({ name: "o", command: "openclaw", args: ["acp"] });
+  expect(getRemoteAgent(b.id)?.permissionPolicy).toBeUndefined();
+});

@@ -405,6 +405,10 @@ demo-P-AGENT.8.1: ## P-AGENT.8.1 (ADR-0134): secret guardrail — agents DECLARE
 demo-P-AGENTFW.1: ## P-AGENTFW.1 (ADR-0147): agent-firewall MCP — scans both directions vs a remote ACP agent (hermes/openclaw); quarantines poisoned replies, neutralizes delimiter breakout, blocks outbound hidden vectors, fails closed when the scanner dies
 	$(BUN) run harness/scripts/demo_pagentfw1.ts
 
+.PHONY: demo-P-MCP-GATE.1
+demo-P-MCP-GATE.1: ## P-MCP-GATE.1 (ADR-0148): in-process MCP tool_result gate — poisoned MCP result withheld, clean result delimited+labeled untrusted, LOCAL tool results untouched (source-scoped), fail-closed
+	$(BUN) run harness/scripts/demo_pmcpgate1.ts
+
 .PHONY: demo-P-LOCAL.1
 demo-P-LOCAL.1: ## P-LOCAL.1 (ADR-0135): Local Providers — declare a self-hosted / custom OpenAI-compatible LLM (Ollama, llama.cpp, vLLM, DGX-over-VPN); validate fail-closed, emit the omp --config overlay (secret from the vault, skipped if absent), persist WITHOUT the secret
 	$(BUN) run desktop/scripts/demo_p_local_1.ts

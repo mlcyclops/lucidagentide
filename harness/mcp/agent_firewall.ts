@@ -95,8 +95,9 @@ export class AgentFirewall {
       return blockedResult(`Remote agent "${this.deps.connName}" error: ${why}`);
     }
 
-    // 3. Inbound scan of the full remote output — fail-closed. Poison never reaches LUCID's model.
-    const combined = [res.text, ...res.toolActivity].join("\n");
+    // 3. Inbound scan of the FULL remote output (text + tool activity + permission asks) — fail-closed.
+    //    Everything #wrap surfaces to the model MUST be scanned, incl. remote-controlled permission titles.
+    const combined = [res.text, ...res.toolActivity, ...(res.permissionRequests ?? [])].join("\n");
     const inbound = await scanAndDecide(this.deps.scanner, combined, INBOUND_POLICY);
     if (inbound.block) {
       this.#emit({ direction: "inbound", blocked: true, reason: inbound.reason, trustLabel: inbound.trustLabel, failClosed: inbound.failClosed });
@@ -120,11 +121,12 @@ export class AgentFirewall {
   }
 
   #wrap(trust: TrustLabel, res: AcpPromptResult): string {
-    // The header is first-party; the remote's text/activity are neutralized so they cannot forge the envelope.
+    // The header is first-party; the remote's text/activity/permission-asks are neutralized so they can't forge the envelope.
     const header = `[remote-agent name="${this.deps.connName}" kind="${this.deps.connKind}" trust="${trust}" stop="${res.stopReason}"]`;
     const body = res.text.trim() ? neutralizeDelimiters(res.text) : "(the remote agent returned no text)";
     const activity = res.toolActivity.length ? `\n\n[tool-activity]\n${res.toolActivity.map(neutralizeDelimiters).join("\n")}` : "";
-    return `${UNTRUSTED_START}\n${header}\n${body}${activity}\n${UNTRUSTED_END}`;
+    const perms = res.permissionRequests && res.permissionRequests.length ? `\n\n[permission-requests]\n${res.permissionRequests.map(neutralizeDelimiters).join("\n")}` : "";
+    return `${UNTRUSTED_START}\n${header}\n${body}${activity}${perms}\n${UNTRUSTED_END}`;
   }
 }
 
@@ -153,7 +155,7 @@ export async function runAgentFirewall(connId: string, opts: { scanner?: Scanner
 
   const remote = new AcpAgentClient(
     { command: entry.command, args: entry.args, cwd: entry.cwd, env: entry.env },
-    { onLog: (l) => process.stderr.write(`[${entry.name}] ${l}\n`) },
+    { onLog: (l) => process.stderr.write(`[${entry.name}] ${l}\n`), permissionPolicy: entry.permissionPolicy ?? "deny" },
   );
 
   const firewall = new AgentFirewall({

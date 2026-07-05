@@ -68,6 +68,8 @@ export interface LaunchAssets {
   repo: string;
   /** The security gate omp extension — MANDATORY (its absence is fail-closed). */
   gate: string;
+  /** The MCP tool-result gate omp extension (P-MCP-GATE.1) — scans/withholds external MCP output. */
+  mcpResultGate: string;
   /** The AskSage gov-gateway provider extension — no-op without ASKSAGE_API_KEY. */
   asksage: string;
   /** Task-isolation config overlay (ADR-0028) — used only with --isolate. */
@@ -76,7 +78,7 @@ export interface LaunchAssets {
 
 export function assets(repo: string = repoRoot()): LaunchAssets {
   const omp = (f: string) => join(repo, "harness", "omp", f);
-  return { repo, gate: omp("security_extension.ts"), asksage: omp("asksage_extension.ts"), acpConfig: omp("acp_config.yml") };
+  return { repo, gate: omp("security_extension.ts"), asksage: omp("asksage_extension.ts"), acpConfig: omp("acp_config.yml"), mcpResultGate: omp("mcp_result_gate.ts") };
 }
 
 /** Resolve the omp binary: explicit env → the bundled copy in the repo node_modules → the user's bun
@@ -101,6 +103,8 @@ export interface BuildArgsOpts {
   /** Included when present; a missing asksage extension is not security-critical, so it's omitted, not fatal. */
   asksage?: string;
   acpConfig?: string;
+  /** The MCP tool-result gate extension (P-MCP-GATE.1); included when present. */
+  mcpResultGate?: string;
   /** Opt-in task isolation (ADR-0028 containment). */
   isolate?: boolean;
 }
@@ -108,6 +112,7 @@ export interface BuildArgsOpts {
 /** Assemble the omp argv for the gated ACP session. The gate `-e` is mandatory and first. */
 export function buildAcpArgs(o: BuildArgsOpts): string[] {
   const args = ["acp", "-e", o.gate];
+  if (o.mcpResultGate) args.push("-e", o.mcpResultGate);
   if (o.asksage) args.push("-e", o.asksage);
   if (o.isolate && o.acpConfig) args.push("--isolate", o.acpConfig);
   args.push("--append-system-prompt", APPENDED_POLICY);
@@ -211,7 +216,7 @@ export async function runAcp(o: RunAcpOpts = {}): Promise<number> {
 
   const omp = resolveOmp(env, a.repo);
   const asksage = existsSync(a.asksage) ? a.asksage : undefined;
-  const args = buildAcpArgs({ gate: a.gate, asksage, acpConfig: a.acpConfig, isolate: o.isolate });
+  const args = buildAcpArgs({ gate: a.gate, asksage, acpConfig: a.acpConfig, isolate: o.isolate, mcpResultGate: existsSync(a.mcpResultGate) ? a.mcpResultGate : undefined });
   const cwd = o.cwd ?? env.LUCID_WORKSPACE ?? process.cwd();
   const spawnFn = o.spawnFn ?? ((c, ar, op) => nodeSpawn(c, ar, op as never) as unknown as SpawnedLike);
 

@@ -10114,6 +10114,169 @@ ADR-0020 (P-MCP.1 - the `mcpServers` seam this reuses, and the guardrail this pa
 ADR-0038 (the `lucid` launcher this extends), ADR-0002 (the scanner IPC), ADR-0019 (the gate policy), the
 P-RAG.1 `wrapRetrieved` pattern (UNTRUSTED_CONTENT delimiting), invariants #3/#4/#5.
 
+## ADR-0148 - P-CMD.2: builtin /licensing walkthrough + "/" commands anywhere in the prompt body
+
+**Date:** 2026-07-05
+**Status:** Accepted - BUILT + tested.
+
+**Context.** Two user asks: a guided command that applies their company's licensing across a codebase, and
+"/" commands that work in the WHOLE composer body (P-CMD.1 only recognized a start-anchored token, and the
+autocomplete only opened when the entire input was one "/" token).
+
+**Decision.**
+1. **Builtin commands** (`harness/commands/builtins.ts`): shipped commands in the SAME UserCommand shape as
+   user-authored ones — same validator (tested), same expansion, same autocomplete; merged server-side by
+   `withBuiltins` where a user-saved command SHADOWS a builtin by name and deleting it resurfaces the
+   builtin. Builtins are code (PR-reviewed), so the workspace scanner path does not apply to them.
+2. **/licensing** is the first builtin: a guided, APPROVAL-GATED walkthrough — discover the repo's existing
+   convention + counts first, ONE interview round (owner, SPDX id or proprietary text, years, first-party vs
+   vendored trees), show the exact per-language header plan, WAIT for approval, apply idempotently
+   (SPDX-line skip, shebang/XML-decl aware, read-then-write per the AGENTS.md TOCTOU rule), finish with
+   totals + optional CI check/pre-commit hook/LICENSE file. Vendored trees are excluded loudly — the
+   command's body forbids relicensing vendor/, node_modules/, dist/, or third-party code.
+3. **Body-wide expansion** (`expandInlineCommands`, pure): a token counts only when preceded by
+   start/whitespace AND followed by end/whitespace/sentence punctuation — paths (`src/foo`, `/usr/bin`,
+   `/licensing/docs`) and URLs never match. Only KNOWN names expand; send-mode bodies replace the token IN
+   PLACE with no args (surrounding prose is the context); skill-mode tokens are stripped + activated
+   (deduped); expansion is single-pass over the ORIGINAL text (an expanded body's own "/words" are never
+   re-scanned — no recursion). START-anchored commands keep the P-CMD.1 args contract exactly, and when one
+   fires the inline pass is skipped for that turn.
+4. **Autocomplete at the caret** (`slashTokenBeforeCaret`, pure): the "/" menu opens for the token at the
+   caret anywhere in the body; completion/activation replaces ONLY that token, preserving surrounding prose
+   (previously applySlash clobbered the whole input).
+
+**Also.** Cleared the two long-standing server-tsconfig strictness debts (netdiag.ts ×9 noUncheckedIndexedAccess,
+dev.ts oauth-broker stdin narrowing ×2) — `bun run typecheck` is green across all three configs for the
+first time; netdiag's behavior tests unchanged.
+
+**Consequences.** "/licensing Apache-2.0 for Acme Corp" works from a fresh install with zero setup; prose
+like "run /pr-review before merging" now does what it reads like; mentioning paths or unknown "/words"
+remains inert. 13 new tests (builtin validity + shadowing, the expansion matrix incl. path/URL immunity and
+non-recursion, caret tokenization).
+## ADR-0149 - P-AGENTFW.2 + .3: Remote-agents Settings UI + per-connection permission policy & surfaced ACP updates
+
+**Date:** 2026-07-04
+**Status:** Accepted. **BUILT + tested.** The two agent-firewall follow-ups flagged in ADR-0147, delivered
+together (same subsystem). Based on `feat/agent-firewall-mcp` (#201). (ADR-0152 is the sibling P-MCP-GATE.1
+PR.)
+**Increment:** P-AGENTFW.2 (desktop UI) + P-AGENTFW.3 (permission policy + richer surfaced updates).
+
+### P-AGENTFW.2 - "Remote agents" Settings card
+
+A Settings card mirroring the P-MCP.1 "MCP connectors" card, so connecting a hermes/openclaw instance needs
+no hand-edited `~/.omp/lucid-agents.json`. `GET/POST /api/agents` + `/api/agents/remove` + `/api/agents/toggle`
+in `dev.ts` call the harness registry (`listRemoteAgents`/`upsertRemoteAgent`/`removeRemoteAgent`/
+`setRemoteAgentEnabled`); a change `backend.restart()`s omp so enabled connections attach as `agentfw-*` MCP
+servers next session. `bridge.remoteAgent*` (renamed off `agent*` to avoid colliding with the Agent-Builder
+`agentList`), `RemoteAgentStatus`, and a `secAgents()` card (name/kind, command+args, permission badge,
+enable/remove + an add form: name, kind, command, args, permission policy). No secret crosses the wire - the
+registry stores command/args only (the note steers users to `--token-file`).
+
+### P-AGENTFW.3 - per-connection permission policy + surfaced permission asks
+
+The firewall used to hard-deny every remote `session/request_permission` (fail-closed). Now:
+- **`RemoteAgentEntry.permissionPolicy: "deny" | "allow"`** (default **deny**). The `AcpAgentClient` honors
+  it: `deny` → the ask is answered `cancelled`; `allow` → an approve option is selected (`pickApproveOption`).
+  "allow" is an explicit per-connection opt-in for a trusted remote (e.g. a local dev gateway).
+- **Every permission ask is RECORDED and SURFACED** (`AcpPromptResult.permissionRequests`): the firewall
+  includes a `[permission-requests]` section in the delimited output so the user/model sees what the remote
+  wanted and the decision. **This content is remote-controlled** (the toolCall title), so it is added to the
+  inbound `scanAndDecide` text and neutralized - a hidden vector in a permission-ask title is quarantined
+  exactly like the reply body (regression-tested).
+- **Richer updates:** the client now also notes `plan` updates alongside `tool_call`/`tool_call_update`, all
+  carried in `toolActivity` (scanned + delimited).
+
+**Deliberately deferred:** a TRUE interactive per-request approval prompt. The firewall runs as an
+omp-spawned MCP subprocess with no channel to the desktop UI, so live "ask the user now" isn't possible
+without a new IPC surface; the per-connection policy + the surfaced-in-output record are the bounded MVP.
+That interactive path is the next follow-up if wanted.
+
+### Invariants preserved
+
+#3 fail-closed (permission default deny; permissionRequests are scanned; a poisoned title quarantines); #5
+remote content (incl. permission titles) is scanned + delimited + labeled untrusted; #7 trust stays the
+closed set. **No frozen-contract change** (no `contracts.ts`; `permissionRequests` is an optional field on the
+internal `AcpPromptResult`). The desktop UI is cosmetic chrome over the existing 0600 registry.
+
+### File-by-file
+
+- `harness/mcp/registry.ts` - `permissionPolicy` on the entry + upsert.
+- `harness/mcp/acp_client.ts` - `permissionPolicy` option, `permissionRequestSummary`/`pickApproveOption`
+  (pure), policy-driven `#answer`, `permissionRequests` capture, `plan` update note.
+- `harness/mcp/agent_firewall.ts` - pass the connection's policy to the client; include permissionRequests in
+  the SCANNED combined text AND the wrapped output.
+- `desktop/dev.ts` - `/api/agents` CRUD. `desktop/renderer/bridge.ts` - `remoteAgent*` + `RemoteAgentStatus`.
+  `desktop/renderer/app.ts` - `secAgents` card + hydrate + handlers.
+- Tests: `acp_client.test.ts` (helpers), `registry.test.ts` (+policy), `agent_firewall.test.ts` (+surfacing,
+  +poisoned-title quarantine). Docs: `docs/AGENT-FIREWALL.md` updated.
+
+### Relates to
+
+ADR-0147 (the agent-firewall these extend), ADR-0152 (the sibling MCP-result gate), ADR-0020 (the P-MCP.1
+connectors card this UI mirrors).
+## ADR-0152 - P-MCP-GATE.1: in-process gate for MCP tool RESULTS (closing the ADR-0020 guardrail for every MCP server)
+
+**Date:** 2026-07-04
+**Status:** Accepted. **P-MCP-GATE.1 BUILT + tested.** Follows P-AGENTFW.1 (ADR-0147), which flagged this gap.
+**Increment:** P-MCP-GATE.1. Modifies the security-gate surface (a NEW, separately-loaded extension; the
+`security_extension.ts` keystone is left untouched).
+
+### Context
+
+ADR-0020 (L1677-1680) promised that "any [MCP] tool result that re-enters the prompt passes the existing
+fail-closed gate (`scanAndDecide`) and is wrapped in `UNTRUSTED_CONTENT_START/END`." ADR-0147 discovered this
+was **never implemented**: `security_extension.ts`'s `tool_result` hook only does LOC attribution +
+`<task-result>` promotion gating. So **every** P-MCP.1 connector's OUTPUT re-entered the model's context
+**unscanned** — a standing prompt-injection hole. P-AGENTFW.1 closed it only for the agent-firewall's own
+output; this closes it for ALL MCP servers.
+
+### Decision
+
+A **new omp extension**, `harness/omp/mcp_result_gate.ts`, registered on the `tool_result` hook. omp's
+`tool_result` handler may **replace** the result (`ToolResultEventResult`), and the hook runner captures the
+last handler's return; `security_extension` returns nothing for `tool_result`, so this gate's result wins
+regardless of load order. It is a separate `-e` extension so the over-tested keystone is not modified.
+
+- **Source-scoped to MCP results only.** A result is gated iff it comes from an MCP server — `toolName`
+  starts with `mcp__` OR `details.serverName` is set (omp's `mcp/tool-bridge.ts` naming). Local built-in
+  tools (`read`/`bash`/`write`/`edit`/`grep`/`glob`) are **left untouched**: scanning a user's own file read
+  is semantically wrong (not untrusted-external), a false-positive magnet (legit Unicode in source), and a
+  per-result perf cost. This is the same source-scoping philosophy as ADR-0019.
+- **Fail-closed (inv #3).** The result text is run through `scanAndDecide` (strict `DEFAULT_POLICY`, external
+  content). Any scan failure ⇒ block. Quarantine ⇒ the result content is **replaced** with a redacted block
+  notice + `isError: true` — the poison never reaches the model.
+- **Delimited + labeled (inv #5).** A clean/suspicious MCP result is wrapped in `UNTRUSTED_CONTENT_START/END`
+  with a `[mcp-server name=… trust=…]` header, trust-labeled `untrusted`/`suspicious` (**never `trusted`**);
+  embedded delimiter literals are neutralized so a hostile server can't break out of the envelope. Image
+  content blocks pass through after the wrapped text.
+
+### Why a separate extension (not editing security_extension.ts)
+
+`security_extension.ts` + its tests are a load-bearing keystone (AGENTS.md: a failing test there is
+stop-the-line). Adding the result gate as an independent `-e` extension keeps that surface untouched, makes
+the new behavior independently testable, and lets the runner's last-non-undefined-wins semantics compose the
+two cleanly.
+
+### Invariants preserved
+
+#3 fail-closed (unscannable/quarantined MCP result ⇒ withheld); #4 the gate runs in-process in omp's runtime
+(this IS the in-process seam ADR-0020 intended); #5 MCP output is scanned + delimited + trust-labeled; #7
+trust stays the closed set (never `trusted`). **No frozen-contract change** (no `contracts.ts` edit; reuses
+the scanner IPC + gate). The frozen prompt prefix is untouched (the extension adds no prefix bytes).
+
+### File-by-file
+
+- `harness/omp/mcp_result_gate.ts` (new) - the extension + its pure core (`isMcpToolResult`, `mcpServerName`,
+  `neutralizeDelimiters`, `blockNotice`, `wrapUntrusted`).
+- `harness/launcher/lucid_acp.ts` + `desktop/acp_backend.ts` (edit) - load the new `-e` extension alongside
+  the gate (guarded by existsSync; safe if absent).
+- Tests + `make demo-P-MCP-GATE.1`.
+
+### Relates to
+
+ADR-0020 (the guardrail this finally implements), ADR-0147 (the agent-firewall that flagged it; folding its
+`neutralizeDelimiters` into a shared home is a possible later cleanup), ADR-0019 (source-scoped gating),
+ADR-0002 (scanner IPC). Supersedes the "recommended P-MCP-GATE.1 follow-up" noted in ADR-0147.
 ## ADR-0150 - P-NVIM.1: Neovim & terminal integration for the gated agent (`lucid tui` + `lucid.nvim`)
 
 **Status:** Accepted / Built.

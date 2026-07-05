@@ -105,6 +105,9 @@ function egressTarget(tc: any): string | null {
 const REPO = join(import.meta.dir, "..");
 // Absolute so the gate loads from THIS repo even when omp runs in another workspace.
 const GATE = join(REPO, "harness", "omp", "security_extension.ts");
+// P-MCP-GATE.1 (ADR-0148): scans/withholds MCP tool RESULTS in-process (closes the ADR-0020 gap). Loaded
+// alongside the gate; source-scoped to MCP results (leaves local tools untouched).
+const MCP_RESULT_GATE = join(REPO, "harness", "omp", "mcp_result_gate.ts");
 // AskSage gov-gateway provider extension, loaded alongside the gate (omp -e is
 // repeatable). No-op unless ASKSAGE_API_KEY is set in the spawn env. ADR-0007.
 const ASKSAGE = join(REPO, "harness", "omp", "asksage_extension.ts");
@@ -295,7 +298,8 @@ class Backend {
         const codegraphArgs = loadSettings().codeGraphAgent && existsSync(CODEGRAPH_EXT) ? ["-e", CODEGRAPH_EXT] : []; // P-KG-SYM.1: opt-in
         const agentBuilderArgs = existsSync(AGENT_BUILDER_EXT) ? ["-e", AGENT_BUILDER_EXT] : []; // P-AGENT.8.2: agent_builder_open
         const slashCmdArgs = existsSync(SLASH_CMD_EXT) ? ["-e", SLASH_CMD_EXT] : []; // P-CMD.1: slash_command_create
-        const acp = new ACPClient(ompBin(), ["acp", "-e", GATE, "-e", ASKSAGE, ...previewArgs, ...codegraphArgs, ...agentBuilderArgs, ...slashCmdArgs, ...isoCfg, "--append-system-prompt", appendedPolicy], currentWorkspace());
+        const mcpGateArgs = existsSync(MCP_RESULT_GATE) ? ["-e", MCP_RESULT_GATE] : []; // P-MCP-GATE.1
+        const acp = new ACPClient(ompBin(), ["acp", "-e", GATE, ...mcpGateArgs, "-e", ASKSAGE, ...previewArgs, ...codegraphArgs, ...agentBuilderArgs, ...slashCmdArgs, ...isoCfg, "--append-system-prompt", appendedPolicy], currentWorkspace());
         acp.onNotify = (method, params) => {
           if (method !== "session/update") return;
           const u = params?.update ?? params;
