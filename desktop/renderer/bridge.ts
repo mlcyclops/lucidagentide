@@ -159,6 +159,9 @@ export interface VoiceSettingsView {
 export interface ElevenVoiceView { voiceId: string; name: string; category?: string; description?: string; labels?: Record<string, string> }
 // P-REPORT.1 (ADR-0116): a unified Reports-list row - a loop AAR or a saved Engineering Update brief.
 export interface ReportEntry { kind: "aar" | "brief"; id: string; title: string; outcome: string; role: string; updatedAt: number; rel: string }
+// P-REPORT.9 (ADR-0162): a candidate repo for cross-repo aggregation, and the per-repo selection sent back.
+export interface ReportRepo { path: string; name: string; isGit: boolean; remoteUrl: string; host: string; isGitHub: boolean; lastActive: number }
+export interface ReportRepoSelection { path: string; fetch?: boolean; prs?: boolean }
 export interface ModeOption { id: string; name: string; description?: string }
 export interface ModeState { available: ModeOption[]; current: string; ui?: "agent" | "ask" | "plan"; permissionMode?: "auto" | "ask" }
 export interface OmpCommand { name: string; description?: string; hint?: string }
@@ -227,7 +230,7 @@ export type ChatEvent =
   | { type: "thinking"; text: string }
   | { type: "tool"; name: string; detail: string; code?: { path: string; content?: string; oldText?: string; newText?: string; patch?: string } } // P-CHAT.1: inline code/diff preview
   | { type: "subagent"; id: string; agent: string; title: string; assignments: string[] }
-  | { type: "block"; tool: string; reason: string; severity: string; findings: string; id?: string; quarantined?: boolean }
+  | { type: "block"; tool: string; reason: string; severity: string; findings: string; id?: string; quarantined?: boolean; command?: string; detail?: string }
   | { type: "permission"; id: string; tool: string; detail: string; options: { optionId: string; name: string; kind?: string }[]; url?: string; egress?: boolean; localFile?: boolean; exec?: boolean; program?: string; reason?: string; danger?: boolean }
   | { type: "preview-available"; path: string } // P-PREVIEW.2 (ADR-0096): the agent wrote a previewable file
   | { type: "preview-activity"; label: string } // P-PREVIEW.6a (ADR-0153): the agent is reviewing/testing the live preview
@@ -317,8 +320,14 @@ export interface LucidBridge {
   securityApprove(id: string): Promise<BlockRecord | null>;
   securityDismiss(id: string): Promise<BlockRecord | null>;
   /** P-BRIEF.3 (ADR-0072) / P-REPORT.1 (ADR-0116): the Engineering Update from the repo's own logs,
-   *  optionally tailored to a role and persisted (save) so the Reports panel lists it. */
-  engineeringBrief(role?: string, save?: boolean): Promise<{ brief: string; scriptText: string; counts: Record<string, number>; role: string; savedRel: string | null } | null>;
+   *  optionally tailored to a role and persisted (save) so the Reports panel lists it.
+   *  P-REPORT.9 (ADR-0162): pass `repos` to also aggregate recent commits + PRs across the selected repos
+   *  (fetched read-only) into a Cross-repo activity annex; that path POSTs. `window` = commits per branch. */
+  engineeringBrief(role?: string, save?: boolean, repos?: ReportRepoSelection[], window?: number): Promise<{ brief: string; scriptText: string; counts: Record<string, number>; role: string; savedRel: string | null } | null>;
+  /** P-REPORT.9: the candidate repos for a report (workspace ∪ recents ∪ report-only tracked) + gh-auth state. */
+  reportRepos(): Promise<{ repos: ReportRepo[]; ghAuth: boolean } | null>;
+  /** P-REPORT.9: add a report-target repo by local path or clone URL (does NOT change the active workspace). */
+  addReportRepo(input: { path?: string; url?: string }): Promise<{ repos: ReportRepo[]; ghAuth: boolean; error?: string } | null>;
   /** P-REPORT.1: the unified Reports list (loop AARs + saved briefs) and reading one. `archived` = the archive view. */
   reports(archived?: boolean): Promise<ReportEntry[] | null>;
   report(kind: string, rel: string, archived?: boolean): Promise<{ kind: string; rel: string; markdown: string } | null>;
@@ -702,7 +711,11 @@ export const bridge: LucidBridge = {
   security: () => getData("/api/security"),
   securityApprove: (id) => post("/api/security/approve", { id }),
   securityDismiss: (id) => post("/api/security/dismiss", { id }),
-  engineeringBrief: (role, save) => getData(`/api/brief${role || save ? "?" : ""}${role ? `role=${encodeURIComponent(role)}` : ""}${save ? `${role ? "&" : ""}save=1` : ""}`),
+  engineeringBrief: (role, save, repos, window) => (repos && repos.length
+    ? post("/api/brief", { role, save, repos, window }) // P-REPORT.9: multi-repo path POSTs the selection
+    : getData(`/api/brief${role || save ? "?" : ""}${role ? `role=${encodeURIComponent(role)}` : ""}${save ? `${role ? "&" : ""}save=1` : ""}`)),
+  reportRepos: () => getData("/api/report/repos"),
+  addReportRepo: (input) => post("/api/report/repos/add", input),
   reports: (archived) => getData(`/api/reports${archived ? "?archived=1" : ""}`),
   report: (kind, rel, archived) => getData(`/api/report?kind=${encodeURIComponent(kind)}&rel=${encodeURIComponent(rel)}${archived ? "&archived=1" : ""}`),
   reportArchive: (kind, rel) => post("/api/report/archive", { kind, rel }),

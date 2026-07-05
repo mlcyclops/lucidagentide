@@ -16,6 +16,8 @@ import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { buildEngineeringUpdate, renderEngineeringBrief, buildPodcastScript, renderScript, type PodcastBackend, type BriefRole } from "../harness/brief/engineering_update.ts";
 import { buildComplianceRows, renderPoamCsv, renderCkl } from "../harness/brief/compliance.ts"; // P-REPORT.6/.8: POA&M + CKL
 import { buildChangeGraph, buildSchemaChanges, renderAnnexes } from "../harness/brief/change_graph.ts"; // P-REPORT.8: report annexes
+import { renderRepoActivityAnnex } from "../harness/brief/repo_activity.ts"; // P-REPORT.9: cross-repo activity annex
+import { addReportRepo, collectRepoActivity, ghAvailable, listReportRepos, type RepoSelection } from "./repo_collect.ts"; // P-REPORT.9 (ADR-0162)
 import { loadChatBg, saveChatBg, type ChatBg } from "./chat_bg.ts"; // P-APPEAR.1: personalized chat background
 import { ingestCodeGraph, loadCodeGraph } from "./code_graph.ts"; // P-KG-CODE.1: workspace code graph
 import { ingestSymbolGraph, loadSymbolGraph } from "./symbol_graph.ts"; // P-KG-SYM.1: AST symbol graph
@@ -544,7 +546,10 @@ const server = Bun.serve({
       if (p === "/api/brief") {
         // P-REPORT.1 (ADR-0116): `?role=` tailors which sections lead + the framing; `?save=1` persists the
         // brief to the report store (so the Reports panel lists it). The goal-modal preview omits save.
-        const roleRaw = url.searchParams.get("role");
+        // P-REPORT.9 (ADR-0162): a POST body `{ role, save, repos, window }` additionally aggregates recent
+        // commits + PRs across the SELECTED repos (fetched read-only) into a Cross-repo activity annex.
+        const body = req.method === "POST" ? await readBody<{ role?: unknown; save?: unknown; repos?: unknown; window?: unknown }>(req) : {};
+        const roleRaw = url.searchParams.get("role") ?? (body.role != null ? String(body.role) : null);
         const role: BriefRole | undefined = roleRaw === "developer" || roleRaw === "security" || roleRaw === "manager" || roleRaw === "executive" ? roleRaw : undefined;
         const repo = join(import.meta.dir, "..");
         const rd = (f: string) => { try { return existsSync(join(repo, f)) ? readFileSync(join(repo, f), "utf8") : ""; } catch { return ""; } };
@@ -557,8 +562,30 @@ const server = Bun.serve({
           const gi = gitChangeInputs(repo);
           brief += "\n\n" + renderAnnexes(buildChangeGraph(gi.numstat, gi.nameStatus, gi.range), buildSchemaChanges(gi.numstat, gi.nameStatus));
         }
-        const savedRel = url.searchParams.get("save") === "1" ? saveBrief(Date.now().toString(36), role ?? "executive", brief) : null;
+        // P-REPORT.9: cross-repo activity annex, only when repos were selected (POST). Fetch is read-only;
+        // the annex is appended for ALL roles (it's the whole point of selecting extra repos).
+        const rawRepos = Array.isArray(body.repos) ? (body.repos as unknown[]) : [];
+        const sel: RepoSelection[] = rawRepos
+          .map((r) => (r && typeof r === "object" ? r as Record<string, unknown> : {}))
+          .filter((r) => typeof r.path === "string" && r.path)
+          .map((r) => ({ path: String(r.path), fetch: r.fetch !== false, prs: r.prs === true }));
+        if (sel.length) {
+          const window = Number(body.window) || 10;
+          const activities = await collectRepoActivity(sel, { fetch: true, prs: false, window });
+          brief += "\n\n" + renderRepoActivityAnnex(activities);
+        }
+        const doSave = url.searchParams.get("save") === "1" || body.save === true;
+        const savedRel = doSave ? saveBrief(Date.now().toString(36), role ?? "executive", brief) : null;
         return json({ ok: true, data: { brief, scriptText: renderScript(buildPodcastScript(u, role)), counts, role: role ?? "", savedRel } });
+      }
+      // P-REPORT.9 (ADR-0162): the candidate repos for a report (workspace ∪ recents ∪ report-only tracked)
+      // + whether `gh` is authenticated (drives the PR toggle). Read-only; safe to poll.
+      if (p === "/api/report/repos") return json({ ok: true, data: { repos: await listReportRepos(), ghAuth: await ghAvailable() } });
+      // Add a report-target repo by local path or clone URL. Does NOT change the active workspace.
+      if (p === "/api/report/repos/add" && req.method === "POST") {
+        const b = await readBody<{ path?: unknown; url?: unknown }>(req);
+        const r = await addReportRepo({ path: b.path != null ? String(b.path) : undefined, url: b.url != null ? String(b.url) : undefined });
+        return json({ ok: r.ok, data: { repos: await listReportRepos(), ghAuth: await ghAvailable(), error: r.error } });
       }
       // P-REPORT.8: STIG Viewer .ckl export of the security control crosswalk (native XML checklist).
       if (p === "/api/brief/ckl") {

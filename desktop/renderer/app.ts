@@ -5684,8 +5684,18 @@ function openReportsPanel(): void {
           </select></div>
         <div class="goal-row" id="rpVoiceRow" hidden><label class="goal-lbl" for="rpVoice">Voice</label><select id="rpVoice" class="prov-key"><option value="">default voice</option></select></div>
         <div class="goal-eu-cost" id="rpCost" hidden></div>
+        <div class="rp-repos" id="rpRepos">
+          <div class="rp-repos-h"><label class="goal-lbl">${icon("git", 12)} Repositories</label><span class="goal-opt">tick repos to fold their remote commits &amp; PRs into the report</span>
+            <select id="rpRepoSort" class="rp-repo-sort" data-tip="Sort order|Order the repo list by most recent activity, or alphabetically by name"><option value="recent">Recent</option><option value="name">Name</option></select></div>
+          <div class="rp-repo-list" id="rpRepoList"><div class="goal-opt">loading repos…</div></div>
+          <div class="rp-repo-add">
+            <input id="rpRepoAdd" class="prov-key" placeholder="Add a repo: local path or https:// clone URL" />
+            <button type="button" class="btn-mini" id="rpRepoAddBtn">${icon("plus", 12)} Add</button>
+          </div>
+          <label class="rp-repo-fetch"><input type="checkbox" id="rpFetch" checked /> <span>Fetch latest from remotes first <span class="goal-opt">(read-only · never modifies your working tree)</span></span></label>
+        </div>
         <div class="rp-nb-tip">${icon("info", 11)}<span>Want a free, natural-sounding two-host podcast? Generate the report, then <a href="https://notebooklm.google.com" target="_blank" rel="noopener" id="rpNotebook">open NotebookLM ↗</a> and paste it in for an Audio Overview.</span></div>
-        <button type="button" class="btn-mini ok" id="rpGenerate">${icon("bolt", 12)} Generate report</button>
+        <button type="button" class="btn-mini ok rp-generate" id="rpGenerate">${icon("bolt", 15)} Generate report</button>
         <div class="rp-sec-exports" id="rpSecExports" hidden>
           <button type="button" class="btn-mini" id="rpPoam" data-tip="Export a Plan of Actions & Milestones (eMASS-aligned CSV) from the security control crosswalk. Draft - validate mappings against your baseline.">${icon("download", 12)} POA&M (CSV)</button>
           <button type="button" class="btn-mini" id="rpCkl" data-tip="Export a STIG Viewer checklist (.ckl) of the control crosswalk. Draft - synthetic Vuln IDs keyed by CCI, for analyst validation.">${icon("download", 12)} STIG (.ckl)</button>
@@ -5735,6 +5745,78 @@ function openReportsPanel(): void {
   const syncPoam = () => { secExports.hidden = roleSel.value !== "security"; };
   roleSel.addEventListener("change", syncPoam);
   syncPoam();
+
+  // P-REPORT.9 (ADR-0162): the multi-repo picker. Rows are checkable repos (workspace ∪ recents ∪ tracked);
+  // each GitHub repo with `gh` authed gets a per-row PR toggle. `reportRepoState` holds the tick/PR choices
+  // so the Generate handler can read the selection. "Add repo" clones a URL or adds a local path.
+  const repoList = $("#rpRepoList", ov) as HTMLElement;
+  let repoState: import("./bridge.ts").ReportRepo[] = [];
+  let ghAuth = false;
+  const repoChecked = new Set<string>();
+  const repoPrs = new Set<string>();
+  // P-REPORT.9: repo list sort order (user preference, persisted). "recent" = most-recently-committed
+  // first; "name" = alphabetical. The active-workspace pre-check keys off the server order, not this.
+  let repoSort = (localStorage.getItem("lucid.reportRepoSort") === "name" ? "name" : "recent") as "recent" | "name";
+  const sortedRepos = (): import("./bridge.ts").ReportRepo[] => [...repoState].sort((a, b) =>
+    repoSort === "name" ? a.name.localeCompare(b.name, undefined, { sensitivity: "base" }) : (b.lastActive - a.lastActive) || a.name.localeCompare(b.name));
+  const renderRepos = (): void => {
+    if (!repoState.length) { repoList.innerHTML = `<div class="goal-opt">No git repositories found. Add one below.</div>`; return; }
+    repoList.innerHTML = sortedRepos().map((r) => {
+      const on = repoChecked.has(r.path);
+      const prOn = repoPrs.has(r.path);
+      const prCap = r.isGitHub && ghAuth;
+      const prTip = !r.isGit ? "not a git repo" : !r.remoteUrl ? "no remote configured" : !r.isGitHub ? "not a GitHub remote" : !ghAuth ? "run `gh auth login` to enable PRs" : "include open + recently-merged pull requests";
+      const remote = r.remoteUrl ? esc(r.remoteUrl) : "local only (no remote)";
+      return `<div class="rp-repo${on ? " on" : ""}" data-path="${esc(r.path)}">
+        <label class="rp-repo-main"><input type="checkbox" class="rp-repo-ck"${on ? " checked" : ""} />
+          <span class="rp-repo-txt"><b>${esc(r.name)}</b><span class="rp-repo-url">${remote}</span></span></label>
+        <label class="rp-repo-pr${prCap ? "" : " off"}" data-tip="${esc(prTip)}"><input type="checkbox" class="rp-repo-prck"${prOn ? " checked" : ""}${prCap ? "" : " disabled"} /> PRs</label>
+      </div>`;
+    }).join("");
+  };
+  const applyRepos = (data: { repos: import("./bridge.ts").ReportRepo[]; ghAuth: boolean } | null): void => {
+    repoState = data?.repos ?? [];
+    ghAuth = !!data?.ghAuth;
+    // Pre-check the active workspace (first row) on first load so a plain Generate still includes it.
+    if (!repoChecked.size && repoState[0]) repoChecked.add(repoState[0].path);
+    renderRepos();
+  };
+  void bridge.reportRepos().then(applyRepos).catch(() => applyRepos(null));
+  const sortSel = $("#rpRepoSort", ov) as HTMLSelectElement | null;
+  if (sortSel) {
+    sortSel.value = repoSort;
+    sortSel.addEventListener("change", () => { repoSort = sortSel.value === "name" ? "name" : "recent"; localStorage.setItem("lucid.reportRepoSort", repoSort); renderRepos(); });
+  }
+  repoList.addEventListener("change", (e) => {
+    const t = e.target as HTMLElement;
+    const row = t.closest(".rp-repo") as HTMLElement | null;
+    const path = row?.dataset.path; if (!path) return;
+    if (t.classList.contains("rp-repo-ck")) {
+      (t as HTMLInputElement).checked ? repoChecked.add(path) : repoChecked.delete(path);
+      row!.classList.toggle("on", (t as HTMLInputElement).checked);
+    } else if (t.classList.contains("rp-repo-prck")) {
+      (t as HTMLInputElement).checked ? repoPrs.add(path) : repoPrs.delete(path);
+    }
+  });
+  const addInput = $("#rpRepoAdd", ov) as HTMLInputElement;
+  const addRepo = async (): Promise<void> => {
+    const v = addInput.value.trim(); if (!v) return;
+    const btn = $("#rpRepoAddBtn", ov) as HTMLButtonElement; const prev = btn.innerHTML; btn.disabled = true; btn.textContent = "Adding…";
+    try {
+      const isUrl = /^(https?:\/\/|git@|ssh:\/\/)/.test(v);
+      const r = await bridge.addReportRepo(isUrl ? { url: v } : { path: v }).catch(() => null);
+      if (!r || r.error) { showToast({ tone: "warn", title: "Could not add repo", desc: r?.error || "Check the path or URL.", timeout: 3600 }); return; }
+      addInput.value = "";
+      // Auto-select the newly added repo (it's the freshest tracked entry).
+      const added = r.repos.find((x) => !repoState.some((o) => o.path === x.path));
+      applyRepos(r);
+      if (added) { repoChecked.add(added.path); renderRepos(); }
+      showToast({ title: "Repo added", desc: "It's now selectable for reports.", timeout: 2400 });
+    } finally { btn.disabled = false; btn.innerHTML = prev; }
+  };
+  $("#rpRepoAddBtn", ov)?.addEventListener("click", () => void addRepo());
+  addInput.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); void addRepo(); } });
+
   const downloadExport = (blob: Blob, filename: string) => {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a"); a.href = url; a.download = filename;
@@ -5762,9 +5844,16 @@ function openReportsPanel(): void {
   // P-REPORT.2 (ADR-0117): the Active/Archived tabs + per-row Copy / Download / Archive (soft) / Restore /
   // Delete (permanent, archive only). Delete twice = gone: active row → Archive, archived row → Delete.
   let archived = false;
+  let loadSeq = 0; // guards against an out-of-order response (fast tab toggles) painting a stale list
   const loadList = async (): Promise<void> => {
     const list = $("#rpList", ov) as HTMLElement;
+    const seq = ++loadSeq;
+    // Immediate skeleton so a multi-second read (or a just-generated report) doesn't look like nothing
+    // happened - the right pane visibly shows it's loading instead of freezing on the stale list.
+    ($("#rpCount", ov) as HTMLElement).textContent = "…";
+    list.innerHTML = `<div class="rp-skels">${`<div class="rp-skel"></div>`.repeat(5)}</div>`;
     const reports = await bridge.reports(archived).catch(() => null);
+    if (seq !== loadSeq) return; // a newer load started (e.g. user flipped tabs) - drop this stale result
     ($("#rpCount", ov) as HTMLElement).textContent = reports ? `${reports.length} ${archived ? "archived" : "saved"}` : "";
     if (!reports || !reports.length) {
       list.innerHTML = `<div class="goal-opt">${archived ? "The archive is empty." : "No reports yet - generate one, or run a /goal loop to produce an After-Action Report."}</div>`;
@@ -5821,9 +5910,13 @@ function openReportsPanel(): void {
     const out = $("#rpResult", ov) as HTMLElement;
     const role = ($("#rpRole", ov) as HTMLSelectElement).value;
     const provider = prov.value;
-    const prev = btn.innerHTML; btn.disabled = true; btn.textContent = "Generating…";
+    // P-REPORT.9: gather the ticked repos + per-repo PR choice; a fetch checkbox gates the read-only sync.
+    const doFetch = ($("#rpFetch", ov) as HTMLInputElement)?.checked ?? true;
+    const repos = repoState.filter((r) => repoChecked.has(r.path)).map((r) => ({ path: r.path, fetch: doFetch, prs: repoPrs.has(r.path) }));
+    const prev = btn.innerHTML; btn.disabled = true;
+    btn.textContent = repos.length ? `Fetching ${repos.length} repo${repos.length === 1 ? "" : "s"}…` : "Generating…";
     try {
-      const data = await bridge.engineeringBrief(role, true).catch(() => null); // save=1 → lands in the list
+      const data = await bridge.engineeringBrief(role, true, repos.length ? repos : undefined).catch(() => null); // save=1 → lands in the list
       if (!data) { showToast({ tone: "warn", title: "Could not generate", desc: "The local engine didn't return a brief.", timeout: 2600 }); return; }
       out.hidden = false;
       const counts = `<div class="goal-eu-counts">${Object.entries(data.counts).map(([k, v]) => `<b>${v}</b> ${k}`).join(" · ")}</div>`;
@@ -6282,6 +6375,12 @@ function wire(): void {
   // rail
   $$(".rail-btn[data-rail]").forEach((b) => b.addEventListener("click", () => {
     const r = (b as HTMLElement).dataset.rail!;
+    // Toggle: clicking the rail icon of a fly-out that's ALREADY open slides it back away (and the
+    // close() restores the inspector + re-activates the chat rail). Second click = dismiss.
+    if (r === "knowledge" && kgOpen) return closeKnowledge();
+    if (r === "preview" && previewOpen) return closePreview();
+    if (r === "agentBuilder" && abOpen) return closeAgentBuilder();
+    if (r === "settings" && state.settingsOpen) return closeSettings();
     if (r !== "knowledge") closeKnowledge();
     if (r !== "preview") closePreview(); // P-PREVIEW.1: right-edge surfaces are mutually exclusive
     if (r !== "agentBuilder") closeAgentBuilder(); // P-AGENT.2b

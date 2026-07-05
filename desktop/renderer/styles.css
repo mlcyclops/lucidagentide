@@ -146,13 +146,19 @@ button{font-family:inherit}
 .win-ctrls button.close:hover{background:var(--red);color:#fff;
   box-shadow:0 1px 6px -1px rgba(239,95,95,.6)}
 
-.body{display:grid;grid-template-columns:auto auto 1fr auto auto;min-height:0}
+/* The single implicit row defaults to `auto` (content-sized), so a tall column (the chat + its composer,
+   or a full rail) overflowed the viewport and CLIPPED the prompt bar / mic when the window was shrunk
+   vertically. `minmax(0,1fr)` pins the row to the available height and lets columns shrink below content,
+   so the composer stays pinned at the bottom and the thread just gets shorter (still scrollable). */
+.body{display:grid;grid-template-columns:auto auto 1fr auto auto;grid-template-rows:minmax(0,1fr);min-height:0}
 
 /* ───────────────────────── activity rail ───────────────────────── */
 .rail{
   width:54px;background:var(--bg-1);border-right:1px solid var(--line-soft);
   display:flex;flex-direction:column;align-items:center;padding:10px 0;gap:4px;
+  min-height:0;overflow-y:auto;overflow-x:hidden;scrollbar-width:none;
   transition:opacity var(--t) var(--ease)}
+.rail::-webkit-scrollbar{width:0} /* the nav rail scrolls on a short window without showing a bar */
 /* When the sessions panel is collapsed the nav recedes to ~55% so it isn't distracting; the
    hamburger (#sideToggle) still reads, and hovering the rail brings it fully back. */
 #app-inner.sidebar-collapsed .rail{opacity:.55}
@@ -937,15 +943,79 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 /* the two Security-report exports (POA&M CSV + STIG .ckl) sit on one row */
 .rp-sec-exports{display:flex;gap:6px;flex-wrap:wrap}
 .rp-sec-exports .btn-mini{flex:1 1 auto;justify-content:center}
+/* P-REPORT.9 (ADR-0162): the multi-repo picker in the Reports panel */
+.rp-repos{display:flex;flex-direction:column;gap:7px;padding:9px;border:1px solid var(--line);border-radius:10px;background:var(--bg-2)}
+.rp-repos-h{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.rp-repos-h .goal-lbl{display:flex;align-items:center;gap:5px;margin:0}
+.rp-repo-list{display:flex;flex-direction:column;gap:4px;max-height:168px;overflow:auto}
+.rp-repo{display:flex;align-items:center;gap:8px;padding:5px 8px;border:1px solid var(--line);border-radius:8px;background:var(--bg);transition:border-color .12s,background .12s}
+.rp-repo.on{border-color:var(--accent-2);background:color-mix(in srgb,var(--accent-2) 8%,var(--bg))}
+.rp-repo-main{display:flex;align-items:center;gap:8px;flex:1;min-width:0;cursor:pointer}
+.rp-repo-txt{display:flex;flex-direction:column;min-width:0;line-height:1.25}
+.rp-repo-txt b{font-size:12.5px;color:var(--txt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rp-repo-url{font-size:10.5px;color:var(--txt-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-family:var(--mono,ui-monospace,monospace)}
+.rp-repo-pr{display:flex;align-items:center;gap:4px;flex:none;font-size:11px;color:var(--txt-2);cursor:pointer;white-space:nowrap}
+.rp-repo-pr.off{color:var(--txt-4);cursor:not-allowed}
+.rp-repo-add{display:flex;gap:6px}
+.rp-repo-add .prov-key{flex:1;min-width:0}
+.rp-repo-fetch{display:flex;align-items:flex-start;gap:6px;font-size:11.5px;color:var(--txt-2);line-height:1.4}
+.rp-repo-fetch input{margin-top:2px;flex:none}
+/* P-REPORT.9 (ADR-0162): the HERO Generate button — a larger, elegant CTA wearing the same chasing-light
+   pulse border as the collapsed right-rail pills (.tile.attn::after — masked conic ring driven by the
+   @property --sweep angle + the shared `tileSweep` keyframes). We want people to SEE this button. */
+.rp-generate#rpGenerate{position:relative;isolation:isolate;width:100%;justify-content:center;gap:9px;margin-top:2px;
+  padding:14px 18px;font-size:14px;font-weight:700;letter-spacing:.015em;border-radius:13px;
+  color:#fff;border:1px solid transparent;
+  background:linear-gradient(135deg,color-mix(in srgb,var(--accent) 92%,#000),color-mix(in srgb,var(--accent-2) 90%,#000));
+  box-shadow:0 8px 22px -9px color-mix(in srgb,var(--accent-2) 70%,transparent),inset 0 1px 0 rgba(255,255,255,.16);
+  transition:transform var(--t-fast) var(--ease-out),box-shadow var(--t),filter var(--t)}
+.rp-generate#rpGenerate:hover{transform:translateY(-1.5px);filter:brightness(1.07);border-color:transparent;
+  color:#fff;box-shadow:0 12px 30px -9px color-mix(in srgb,var(--accent-2) 82%,transparent),inset 0 1px 0 rgba(255,255,255,.2)}
+.rp-generate#rpGenerate:active{transform:translateY(0)}
+.rp-generate#rpGenerate:disabled{filter:saturate(.6) brightness(.9);cursor:default;transform:none}
+.rp-generate#rpGenerate .ic{width:16px;height:16px}
+/* the chasing light — a thin conic ring masked to the border, sweeping clockwise forever */
+.rp-generate#rpGenerate::after{content:"";position:absolute;inset:0;border-radius:inherit;padding:1.7px;z-index:1;pointer-events:none;
+  background:conic-gradient(from var(--sweep,0deg),transparent 0 54%,color-mix(in srgb,var(--accent-2) 55%,transparent) 71%,var(--accent-2) 82%,#fff 88%,var(--accent) 93%,transparent 98%);
+  -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask-composite:exclude;
+  animation:tileSweep 2.6s linear infinite}
+@media (prefers-reduced-motion:reduce){.rp-generate#rpGenerate::after{animation:none;opacity:.6}}
 /* P-APPEAR.1: chat-background settings card */
 .bg-row{display:flex;gap:12px;align-items:center;margin-bottom:9px}
 .bg-thumb{width:96px;height:60px;border-radius:9px;background-size:cover;background-position:center;border:1px solid var(--line);flex:none;display:grid;place-items:center;color:var(--txt-4);font-size:10px;text-transform:uppercase;letter-spacing:.04em;box-shadow:inset 0 1px 0 rgba(255,255,255,.04)}
 .bg-thumb.empty{background:var(--bg-2)}
 .bg-controls{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
 /* P-REPORT.1 (ADR-0116): the Engineering Reports panel - generate (left) + past-reports list (right). */
-.reports-modal{width:min(940px,96vw);max-height:90vh;overflow:hidden;display:flex;flex-direction:column}
-/* P-REPORT.5: a little larger + more readable intro for the reports module */
-.reports-modal>.goal-modal-sub{font-size:13.5px;line-height:1.55;color:var(--txt-1)}
+/* Bigger popup (more room = larger, more legible text throughout). */
+.reports-modal{width:min(1080px,96vw);max-height:92vh;overflow:hidden;display:flex;flex-direction:column}
+/* P-REPORT.5 / readability pass: lighter + larger text across the whole panel (scoped to Reports only).
+   The secondary text read too dim and small on the dark background — every tier is lifted up + enlarged. */
+.reports-modal>.goal-modal-sub{font-size:14.5px;line-height:1.55;color:var(--txt)}
+/* form labels (Report for / Audio / Voice) */
+.reports-modal .goal-lbl{font-size:13.5px;color:var(--txt)}
+/* left column: repo picker + hints + tip */
+.reports-modal .rp-repos-h .goal-opt{color:var(--txt-2);font-size:13px}
+/* P-REPORT.9: repo sort-order picker (Recent / Name), pushed to the right of the Repositories header */
+.rp-repo-sort{margin-left:auto;flex:none;font-size:12px;color:var(--txt);background:var(--bg);border:1px solid var(--line);border-radius:7px;padding:3px 6px;cursor:pointer;font-family:inherit;color-scheme:dark}
+.rp-repo-sort:hover{border-color:var(--line-strong);color:var(--txt)}
+.rp-repo-sort:focus{outline:none;border-color:var(--accent-2)}
+/* The native dropdown list itself: force a solid dark popup with bright text so the options are legible
+   (the default inherited grey rendered low-contrast when opened). */
+.rp-repo-sort option{background:var(--bg-1);color:var(--txt);font-weight:500}
+.rp-repo-sort option:checked{background:var(--bg-3);color:#fff}
+.reports-modal .rp-repo-txt b{font-size:13.5px;color:var(--txt)}
+.reports-modal .rp-repo-url{font-size:12.5px;color:var(--txt-2)}
+.reports-modal .rp-repo-pr{font-size:12px;color:var(--txt-2)}
+.reports-modal .rp-repo-fetch{font-size:13px;color:var(--txt)}
+.reports-modal .rp-repo-fetch .goal-opt{color:var(--txt-2);font-size:12.5px}
+.reports-modal .rp-nb-tip{font-size:13px;color:var(--txt-2)}
+.reports-modal .rp-nb-tip b{color:var(--txt)}
+/* right column: the saved-report list (dates/titles/badges/tabs read tiny + very dim) */
+.reports-modal .rp-title{font-size:13px;color:var(--txt)}
+.reports-modal .rp-when{font-size:11.5px;color:var(--txt-3)}
+.reports-modal .rp-badge{font-size:10.5px}
+.reports-modal .rp-tab{font-size:12px;color:var(--txt-2)}
+.reports-modal .rp-past-h .gs-sum{font-size:12px;color:var(--txt-2)}
 .reports-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:14px;margin-top:10px;min-height:0;overflow:hidden}
 @media (max-width:720px){.reports-grid{grid-template-columns:1fr}}
 .rp-gen{display:flex;flex-direction:column;gap:8px;min-width:0;overflow:auto;max-height:72vh;padding-right:2px}
@@ -953,6 +1023,13 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .rp-past-h{display:flex;align-items:center;gap:7px;font-size:12px;color:var(--txt-2)}
 .rp-past-h .gs-sum{margin-left:auto;font-size:11px;color:var(--txt-4)}
 .rp-list{display:flex;flex-direction:column;gap:4px;overflow:auto;max-height:66vh}
+/* Loading skeleton for the saved-report list — shown while bridge.reports() reads (and after Generate),
+   so a multi-second load / tab switch reads as "loading", not "nothing happened". */
+.rp-skels{display:flex;flex-direction:column;gap:4px}
+.rp-skel{height:32px;border-radius:8px;background:linear-gradient(100deg,var(--bg-1) 28%,var(--bg-3) 50%,var(--bg-1) 72%);background-size:220% 100%;animation:rpSkel 1.15s linear infinite;opacity:.8}
+.rp-skel:nth-child(2){opacity:.62}.rp-skel:nth-child(3){opacity:.46}.rp-skel:nth-child(4){opacity:.32}.rp-skel:nth-child(5){opacity:.2}
+@keyframes rpSkel{to{background-position:-220% 0}}
+@media (prefers-reduced-motion:reduce){.rp-skel{animation:none}}
 .rp-row{display:flex;align-items:center;gap:6px;width:100%;background:var(--bg-1);border:1px solid var(--line);border-radius:8px;padding:4px 6px 4px 9px;color:var(--txt-2)}
 .rp-row:hover{border-color:var(--accent)}
 .rp-open{display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:9px;flex:1;min-width:0;text-align:left;background:none;border:0;padding:3px 0;cursor:pointer;font:inherit;color:inherit}
@@ -1052,6 +1129,13 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .composer-hint{max-width:min(1080px,94vw);margin:7px auto 0;font-size:11.5px;color:var(--txt-4);display:flex;gap:14px}
 .composer-hint kbd{font-family:var(--mono);background:var(--bg-2);border:1px solid var(--line);
   border-bottom-width:2px;border-radius:5px;padding:0 5px;color:var(--txt-3);font-size:11px}
+/* On a really short window, shrink the composer's footprint so a buffer of the thread (~3 lines) stays
+   visible above it — the keyboard hint is informational, and the padding + tools can tighten up. */
+@media (max-height:560px){
+  .composer-wrap{padding:6px 26px 9px}
+  .composer-hint{display:none}
+  .composer-tools{margin-top:6px}
+}
 
 /* ───────────────────────── inspector (right) ───────────────────────── */
 /* Default width fits the Prompt-cache chip row through "spend $…" on one line (~430px is the no-wrap
@@ -1686,7 +1770,8 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
   transition:width var(--t-slow) var(--ease-out),opacity var(--t) var(--ease)}
 .inspector.rail:hover{opacity:1}
 .inspector.rail .insp-tabs,.inspector.rail .insp-body{display:none}
-.inspector.rail .metrics-rail{display:flex;flex-direction:column;align-items:stretch;gap:6px;padding:8px 6px;overflow:auto}
+.inspector.rail .metrics-rail{display:flex;flex-direction:column;align-items:stretch;gap:6px;padding:8px 6px;flex:1;min-height:0;overflow-y:auto;scrollbar-width:none}
+.inspector.rail .metrics-rail::-webkit-scrollbar{width:0} /* metric tiles scroll on a short window, no bar */
 .rail-expand{-webkit-app-region:no-drag;border:1px solid var(--line);background:var(--bg-2);color:var(--txt-3);align-self:center;
   width:32px;height:30px;border-radius:8px;display:grid;place-items:center;cursor:pointer;transition:background var(--t),color var(--t)}
 .rail-expand:hover{background:var(--bg-3);color:var(--accent-2)}
