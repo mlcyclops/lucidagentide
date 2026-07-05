@@ -1,0 +1,38 @@
+# Publish the Neovim plugin as an installable, standalone branch WITHOUT leaving the monorepo
+# (P-NVIM.2, ADR-0151). Source of truth is extensions/neovim/. On every master push that touches it,
+# `git subtree split` extracts the plugin — its own history, files at the tree ROOT — and force-pushes
+# it to the `lucid.nvim` branch of THIS repo. Users then install with lazy.nvim/LazyVim via
+#   { "mlcyclops/lucidagentide", branch = "lucid.nvim" }
+# One repo, no fork, no second project to maintain.
+
+name: Neovim plugin mirror
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "extensions/neovim/**"
+      - ".github/workflows/nvim-plugin-mirror.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: nvim-plugin-mirror
+  cancel-in-progress: false
+
+jobs:
+  mirror:
+    name: split extensions/neovim -> lucid.nvim branch
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # subtree split walks the full history of the prefix
+      - name: Split and force-push the lucid.nvim branch
+        run: |
+          set -euo pipefail
+          sha="$(git subtree split --prefix=extensions/neovim HEAD)"
+          echo "lucid.nvim split -> $sha"
+          git push -f origin "$sha:refs/heads/lucid.nvim"

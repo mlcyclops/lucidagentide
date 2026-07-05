@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/preview_bridge.ts — P-PREVIEW.6b (ADR-0148): a tiny READ-ONLY DOM-inspect bridge injected into the
+// desktop/preview_bridge.ts — P-PREVIEW.6b (ADR-0153): a tiny READ-ONLY DOM-inspect bridge injected into the
 // served preview HTML. The preview iframe is opaque-origin sandboxed (the renderer can't touch its DOM), so
 // this script — running INSIDE the frame — answers `postMessage` inspect queries from its parent (the LUCID
 // renderer) and posts a compact, redacted snapshot back. It only READS (query text/attributes/roles/rects,

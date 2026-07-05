@@ -91,6 +91,8 @@ export interface ProbedLimit { provider: string; label: string; used: number; re
 
 // P-MCP.1 (ADR-0020): a configured MCP server's masked status (token never crosses the wire).
 export interface McpServerStatus { id: string; name: string; transport: "http" | "sse"; url: string; enabled: boolean; hasToken: boolean; tokenLast4?: string }
+// P-AGENTFW.2 (ADR-0149): a configured remote ACP agent connection (command/args, never a secret).
+export interface RemoteAgentStatus { id: string; name: string; kind: string; command: string; args: string[]; remoteUrl?: string; permissionPolicy: "deny" | "allow"; enabled: boolean }
 
 // ADR-0009 Phase D: read-only developer Logs view (gated on Developer mode).
 export interface TurnView { id: string; sessionId: string; seq: number; role: string; sanitized: string; rawSha256: string; trust: string; at: string }
@@ -228,7 +230,7 @@ export type ChatEvent =
   | { type: "block"; tool: string; reason: string; severity: string; findings: string; id?: string; quarantined?: boolean }
   | { type: "permission"; id: string; tool: string; detail: string; options: { optionId: string; name: string; kind?: string }[]; url?: string; egress?: boolean; localFile?: boolean; exec?: boolean; program?: string; reason?: string; danger?: boolean }
   | { type: "preview-available"; path: string } // P-PREVIEW.2 (ADR-0096): the agent wrote a previewable file
-  | { type: "preview-activity"; label: string } // P-PREVIEW.6a (ADR-0148): the agent is reviewing/testing the live preview
+  | { type: "preview-activity"; label: string } // P-PREVIEW.6a (ADR-0153): the agent is reviewing/testing the live preview
   | { type: "agent-builder-open"; spec: AgentSpec } // P-AGENT.8.2 (ADR-0134): open the Agent Builder pre-populated
   | { type: "slash-command-created"; command: UserCommand } // P-CMD.1 (ADR-0146): the agent created a user "/" command
   | { type: "usage"; used: number; size: number; cost: number }
@@ -403,6 +405,11 @@ export interface LucidBridge {
   mcpUpsert(e: { id?: string; name: string; transport?: "http" | "sse"; url: string; token?: string; enabled?: boolean }): Promise<McpServerStatus | null>;
   mcpRemove(id: string): Promise<unknown>;
   mcpToggle(id: string, enabled: boolean): Promise<unknown>;
+  // P-AGENTFW.2 (ADR-0149): remote ACP agent (hermes/openclaw) connections proxied through the firewall.
+  remoteAgentList(): Promise<RemoteAgentStatus[] | null>;
+  remoteAgentUpsert(e: { id?: string; name: string; kind?: string; command: string; args?: string; cwd?: string; remoteUrl?: string; permissionPolicy?: string; enabled?: boolean }): Promise<RemoteAgentStatus | null>;
+  remoteAgentRemove(id: string): Promise<unknown>;
+  remoteAgentToggle(id: string, enabled: boolean): Promise<unknown>;
   usage(): Promise<UsageLedger | null>;
   codeActivity(): Promise<CodeActivity | null>;
   sendPrompt(text: string, onEvent: (e: ChatEvent) => void, images?: { data: string; mimeType: string }[]): Promise<void>;
@@ -566,7 +573,7 @@ export interface LucidBridge {
   // preview_screenshot tool can fetch it (capturePage is Electron-only + in the main process, unreachable
   // from omp). No-op if the store rejects it. The agent SEEING the shot needs the packaged/Electron app.
   cachePreviewShot(png: string): Promise<void>;
-  // P-PREVIEW.6b (ADR-0148): the DOM-inspect relay. The renderer polls for the agent's next queued inspect
+  // P-PREVIEW.6b (ADR-0153): the DOM-inspect relay. The renderer polls for the agent's next queued inspect
   // command, runs it on the sandboxed iframe (via the postMessage bridge), and posts the result back.
   previewInspectNext(): Promise<{ id?: string; command?: { selector?: string; what?: string }; none?: boolean } | null>;
   previewInspectResult(id: string, result: unknown): Promise<void>;
@@ -748,6 +755,10 @@ export const bridge: LucidBridge = {
   mcpUpsert: (e) => post("/api/mcp", e),
   mcpRemove: (id) => post("/api/mcp/remove", { id }),
   mcpToggle: (id, enabled) => post("/api/mcp/toggle", { id, enabled }),
+  remoteAgentList: () => getData("/api/agents"),
+  remoteAgentUpsert: (e) => post("/api/agents", e),
+  remoteAgentRemove: (id) => post("/api/agents/remove", { id }),
+  remoteAgentToggle: (id, enabled) => post("/api/agents/toggle", { id, enabled }),
   usage: () => getData("/api/usage"),
   codeActivity: () => getData("/api/code-activity"),
   sendPrompt: streamChat,

@@ -16,7 +16,7 @@ import { join } from "node:path";
 import { ACPClient } from "./acp.ts";
 import { AGENT_BUILDER_POLICY, BUILD_POLICY, DELEGATION_POLICY, ENGAGEMENT_POLICY, PREVIEW_POLICY, SLASH_COMMAND_POLICY } from "../harness/prompt/assembler.ts";
 import { currentWorkspace } from "./workspace.ts";
-import { previewActivityLabel } from "./preview_activity.ts"; // P-PREVIEW.6a (ADR-0148): reviewing/testing pill
+import { previewActivityLabel } from "./preview_activity.ts"; // P-PREVIEW.6a (ADR-0153): reviewing/testing pill
 import { learnFromTurn, recallPreamble } from "./personal.ts";
 import { buildUserTurnPreamble } from "./preamble.ts";
 import { ChatGate } from "./chat_gate.ts";
@@ -106,6 +106,9 @@ function egressTarget(tc: any): string | null {
 const REPO = join(import.meta.dir, "..");
 // Absolute so the gate loads from THIS repo even when omp runs in another workspace.
 const GATE = join(REPO, "harness", "omp", "security_extension.ts");
+// P-MCP-GATE.1 (ADR-0148): scans/withholds MCP tool RESULTS in-process (closes the ADR-0020 gap). Loaded
+// alongside the gate; source-scoped to MCP results (leaves local tools untouched).
+const MCP_RESULT_GATE = join(REPO, "harness", "omp", "mcp_result_gate.ts");
 // AskSage gov-gateway provider extension, loaded alongside the gate (omp -e is
 // repeatable). No-op unless ASKSAGE_API_KEY is set in the spawn env. ADR-0007.
 const ASKSAGE = join(REPO, "harness", "omp", "asksage_extension.ts");
@@ -141,7 +144,7 @@ export type ChatEvent =
   | { type: "block"; tool: string; reason: string; severity: string; findings: string; id?: string; quarantined?: boolean }
   | { type: "permission"; id: string; tool: string; detail: string; options: { optionId: string; name: string; kind?: string }[]; url?: string; egress?: boolean; localFile?: boolean; exec?: boolean; program?: string; reason?: string; danger?: boolean }
   | { type: "preview-available"; path: string } // P-PREVIEW.2 (ADR-0096): the agent wrote a previewable file
-  | { type: "preview-activity"; label: string } // P-PREVIEW.6a (ADR-0148): the agent is reviewing/testing the live preview
+  | { type: "preview-activity"; label: string } // P-PREVIEW.6a (ADR-0153): the agent is reviewing/testing the live preview
   | { type: "agent-builder-open"; spec: AgentSpec } // P-AGENT.8.2 (ADR-0134): open the Agent Builder pre-populated
   | { type: "slash-command-created"; command: UserCommand } // P-CMD.1 (ADR-0146): the agent created a user "/" command
   | { type: "usage"; used: number; size: number; cost: number }
@@ -297,7 +300,8 @@ class Backend {
         const codegraphArgs = loadSettings().codeGraphAgent && existsSync(CODEGRAPH_EXT) ? ["-e", CODEGRAPH_EXT] : []; // P-KG-SYM.1: opt-in
         const agentBuilderArgs = existsSync(AGENT_BUILDER_EXT) ? ["-e", AGENT_BUILDER_EXT] : []; // P-AGENT.8.2: agent_builder_open
         const slashCmdArgs = existsSync(SLASH_CMD_EXT) ? ["-e", SLASH_CMD_EXT] : []; // P-CMD.1: slash_command_create
-        const acp = new ACPClient(ompBin(), ["acp", "-e", GATE, "-e", ASKSAGE, ...previewArgs, ...codegraphArgs, ...agentBuilderArgs, ...slashCmdArgs, ...isoCfg, "--append-system-prompt", appendedPolicy], currentWorkspace());
+        const mcpGateArgs = existsSync(MCP_RESULT_GATE) ? ["-e", MCP_RESULT_GATE] : []; // P-MCP-GATE.1
+        const acp = new ACPClient(ompBin(), ["acp", "-e", GATE, ...mcpGateArgs, "-e", ASKSAGE, ...previewArgs, ...codegraphArgs, ...agentBuilderArgs, ...slashCmdArgs, ...isoCfg, "--append-system-prompt", appendedPolicy], currentWorkspace());
         acp.onNotify = (method, params) => {
           if (method !== "session/update") return;
           const u = params?.update ?? params;
@@ -365,7 +369,7 @@ class Backend {
                 const pvRaw = previewOpenPath(String(u.title ?? ""), ri) ?? previewablePath(String(u.kind ?? u.title ?? ""), ri);
                 const pv = pvRaw ? absPath(pvRaw) : pvRaw; // resolve a relative write path to absolute so the panel can render it
                 if (pv) this.emit({ type: "preview-available", path: pv });
-                // P-PREVIEW.6a (ADR-0148): the agent is looking at / testing the live preview (screenshot,
+                // P-PREVIEW.6a (ADR-0153): the agent is looking at / testing the live preview (screenshot,
                 // inspect, open, structured action) — tell the UI to glow the panel + show a "reviewing" pill.
                 const paLabel = previewActivityLabel(String(u.title ?? u.kind ?? ""));
                 if (paLabel) this.emit({ type: "preview-activity", label: paLabel });

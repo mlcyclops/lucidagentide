@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/preview_inspect_relay.test.ts — P-PREVIEW.6b (ADR-0148): the inspect relay queue/waiter core.
+// desktop/preview_inspect_relay.test.ts — P-PREVIEW.6b (ADR-0153): the inspect relay queue/waiter core.
 
 import { test, expect, describe } from "bun:test";
 import { InspectRelay } from "./preview_inspect_relay.ts";

@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/preview_bridge.test.ts — P-PREVIEW.6b (ADR-0148): the injected inspect bridge.
+// desktop/preview_bridge.test.ts — P-PREVIEW.6b (ADR-0153): the injected inspect bridge.
 
 import { test, expect, describe } from "bun:test";
 import { injectPreviewBridge, PREVIEW_BRIDGE_JS } from "./preview_bridge.ts";

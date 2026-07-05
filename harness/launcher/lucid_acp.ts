@@ -68,6 +68,8 @@ export interface LaunchAssets {
   repo: string;
   /** The security gate omp extension — MANDATORY (its absence is fail-closed). */
   gate: string;
+  /** The MCP tool-result gate omp extension (P-MCP-GATE.1) — scans/withholds external MCP output. */
+  mcpResultGate: string;
   /** The AskSage gov-gateway provider extension — no-op without ASKSAGE_API_KEY. */
   asksage: string;
   /** Task-isolation config overlay (ADR-0028) — used only with --isolate. */
@@ -76,7 +78,7 @@ export interface LaunchAssets {
 
 export function assets(repo: string = repoRoot()): LaunchAssets {
   const omp = (f: string) => join(repo, "harness", "omp", f);
-  return { repo, gate: omp("security_extension.ts"), asksage: omp("asksage_extension.ts"), acpConfig: omp("acp_config.yml") };
+  return { repo, gate: omp("security_extension.ts"), asksage: omp("asksage_extension.ts"), acpConfig: omp("acp_config.yml"), mcpResultGate: omp("mcp_result_gate.ts") };
 }
 
 /** Resolve the omp binary: explicit env → the bundled copy in the repo node_modules → the user's bun
@@ -101,6 +103,8 @@ export interface BuildArgsOpts {
   /** Included when present; a missing asksage extension is not security-critical, so it's omitted, not fatal. */
   asksage?: string;
   acpConfig?: string;
+  /** The MCP tool-result gate extension (P-MCP-GATE.1); included when present. */
+  mcpResultGate?: string;
   /** Opt-in task isolation (ADR-0028 containment). */
   isolate?: boolean;
 }
@@ -108,9 +112,33 @@ export interface BuildArgsOpts {
 /** Assemble the omp argv for the gated ACP session. The gate `-e` is mandatory and first. */
 export function buildAcpArgs(o: BuildArgsOpts): string[] {
   const args = ["acp", "-e", o.gate];
+  if (o.mcpResultGate) args.push("-e", o.mcpResultGate);
   if (o.asksage) args.push("-e", o.asksage);
   if (o.isolate && o.acpConfig) args.push("--isolate", o.acpConfig);
   args.push("--append-system-prompt", APPENDED_POLICY);
+  return args;
+}
+
+export interface BuildTuiOpts {
+  gate: string;
+  /** Included when present; a missing asksage extension is not security-critical, so it's omitted, not fatal. */
+  asksage?: string;
+  /** Forward-compat: the MCP tool-result gate extension (P-MCP-GATE.1, in flight on #206). Nothing on
+   *  master populates it yet; once #206 lands, thread it in exactly like `buildAcpArgs`. */
+  mcpResultGate?: string;
+  /** omp args appended verbatim after the gated flags (initial prompt, --model, --continue, --resume, -p). */
+  passthru?: string[];
+}
+
+/** Assemble the omp argv for the gated INTERACTIVE terminal session. Same gated `-e` extensions (gate
+ *  first) + byte-identical appended policy as `buildAcpArgs`, but WITHOUT the `acp` subcommand — so omp
+ *  runs its native TUI. User passthru args come last (omp reads them as flags + the initial prompt). */
+export function buildTuiArgs(o: BuildTuiOpts): string[] {
+  const args = ["-e", o.gate];
+  if (o.mcpResultGate) args.push("-e", o.mcpResultGate);
+  if (o.asksage) args.push("-e", o.asksage);
+  args.push("--append-system-prompt", APPENDED_POLICY);
+  if (o.passthru?.length) args.push(...o.passthru);
   return args;
 }
 
@@ -154,6 +182,17 @@ export interface RunAcpOpts {
   stderr?: (s: string) => void;
 }
 
+/** Spawn the gated omp over inherited stdio; resolve the child's exit code (127 on spawn error). The
+ *  single spawn path shared by `lucid acp` (ACP passthrough) and `lucid tui` (native terminal), so both
+ *  surfaces inherit the same fail-closed launch. */
+function execGated(o: { omp: string; args: string[]; cwd: string; env: Env; spawnFn: SpawnFn; err: (s: string) => void; label: string }): Promise<number> {
+  const child = o.spawnFn(o.omp, o.args, { cwd: o.cwd, stdio: "inherit", env: o.env });
+  return new Promise<number>((resolve) => {
+    child.on("exit", (code: number | null) => resolve(code ?? 0));
+    child.on("error", (e: unknown) => { o.err(`[${o.label}] failed to launch omp: ${String(e)}\n`); resolve(127); });
+  });
+}
+
 /**
  * Run `lucid acp`: preflight (fail-closed), then exec the gated omp over INHERITED stdio (a transparent
  * ACP passthrough between the IDE and omp). Returns the child's exit code. On preflight failure it
@@ -177,15 +216,52 @@ export async function runAcp(o: RunAcpOpts = {}): Promise<number> {
 
   const omp = resolveOmp(env, a.repo);
   const asksage = existsSync(a.asksage) ? a.asksage : undefined;
-  const args = buildAcpArgs({ gate: a.gate, asksage, acpConfig: a.acpConfig, isolate: o.isolate });
+  const args = buildAcpArgs({ gate: a.gate, asksage, acpConfig: a.acpConfig, isolate: o.isolate, mcpResultGate: existsSync(a.mcpResultGate) ? a.mcpResultGate : undefined });
   const cwd = o.cwd ?? env.LUCID_WORKSPACE ?? process.cwd();
   const spawnFn = o.spawnFn ?? ((c, ar, op) => nodeSpawn(c, ar, op as never) as unknown as SpawnedLike);
 
-  const child = spawnFn(omp, args, { cwd, stdio: "inherit", env });
-  return await new Promise<number>((resolve) => {
-    child.on("exit", (code: number | null) => resolve(code ?? 0));
-    child.on("error", (e: unknown) => { err(`[lucid acp] failed to launch omp: ${String(e)}\n`); resolve(127); });
-  });
+  return await execGated({ omp, args, cwd, env, spawnFn, err, label: "lucid acp" });
+}
+
+export interface RunTuiOpts {
+  cwd?: string;
+  /** User-supplied omp args appended verbatim (initial prompt, --model, --continue, --resume, -p). */
+  passthru?: string[];
+  env?: Env;
+  /** Injectable for tests; defaults to the real sidecar probe. */
+  scannerProbe?: () => Promise<PreflightResult>;
+  /** Injectable for tests; defaults to node child_process.spawn. */
+  spawnFn?: SpawnFn;
+  stderr?: (s: string) => void;
+}
+
+/**
+ * Run `lucid tui`: the SAME fail-closed preflight + gated omp command as `lucid acp`, but launched in
+ * omp's native interactive TERMINAL UI instead of the ACP stdio passthrough — the terminal-native /
+ * Neovim-friendly way to use the gated agent. stdio is inherited so omp owns the tty; extra args pass
+ * through to omp (initial prompt, --model, --continue, --resume, -p). Fail-closes identically: a dead
+ * scanner or missing gate returns 1 and NEVER spawns omp (never an ungated terminal agent).
+ */
+export async function runTui(o: RunTuiOpts = {}): Promise<number> {
+  const env = o.env ?? process.env;
+  const err = o.stderr ?? ((s) => void process.stderr.write(s));
+  const a = assets();
+
+  if (!o.scannerProbe) resolveScannerEnv(process.env, a.repo);
+
+  const pf = await preflight({ gate: a.gate, scannerProbe: o.scannerProbe });
+  if (!pf.ok) {
+    err(`[lucid tui] FAIL-CLOSED: ${pf.reason}\n[lucid tui] refusing to start — the Lucid security gate must be loaded (never an ungated agent).\n`);
+    return 1;
+  }
+
+  const omp = resolveOmp(env, a.repo);
+  const asksage = existsSync(a.asksage) ? a.asksage : undefined;
+  const args = buildTuiArgs({ gate: a.gate, asksage, passthru: o.passthru });
+  const cwd = o.cwd ?? env.LUCID_WORKSPACE ?? process.cwd();
+  const spawnFn = o.spawnFn ?? ((c, ar, op) => nodeSpawn(c, ar, op as never) as unknown as SpawnedLike);
+
+  return await execGated({ omp, args, cwd, env, spawnFn, err, label: "lucid tui" });
 }
 
 /** CLI entry. `lucid acp [--isolate]` starts the gated session; `lucid check` runs the fail-closed
@@ -208,13 +284,16 @@ export async function main(argv: string[], env: Env = process.env): Promise<numb
     await runAgentFirewall(connId); // long-lived: resolves only when the process is signalled to exit
     return 0;
   }
+  if (sub === "tui") return runTui({ passthru: rest, env });
+
   if (sub !== "acp") {
     process.stderr.write(
-      "usage: lucid acp [--isolate] | lucid check | lucid agent-firewall --conn <id>\n" +
+      "usage: lucid acp [--isolate] | lucid tui [omp args…] | lucid check | lucid agent-firewall --conn <id>\n" +
         "  acp             Start the gated Lucid ACP agent (omp + the in-process security gate) for an IDE client.\n" +
+        "  tui             Start the gated Lucid agent in omp's native TERMINAL UI (interactive; extra args pass through to omp).\n" +
         "  check           Run the fail-closed preflight (gate + scanner) and exit 0 (ready) / 1 (unavailable).\n" +
         "  agent-firewall  Serve the stdio MCP firewall proxy to a remote ACP agent (hermes/openclaw) — ADR-0147.\n" +
-        "  Fail-closed: `acp` refuses to start if the gate or scanner sidecar is unavailable.\n",
+        "  Fail-closed: `acp`/`tui` refuse to start if the gate or scanner sidecar is unavailable.\n",
     );
     return sub === undefined || sub === "-h" || sub === "--help" ? 0 : 2;
   }

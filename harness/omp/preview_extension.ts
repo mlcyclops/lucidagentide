@@ -99,7 +99,7 @@ export default function previewExtension(pi: any): void {
       },
     });
 
-    // P-PREVIEW.6b (ADR-0148): let the agent READ the live preview DOM to review its work — text, headings,
+    // P-PREVIEW.6b (ADR-0153): let the agent READ the live preview DOM to review its work — text, headings,
     // controls, element details by CSS selector, or captured console errors. The DOM lives in the renderer's
     // opaque-origin sandboxed iframe (unreachable from omp), so this tool GETs LUCID_PREVIEW_INSPECT_URL; the
     // dev server HOLDS the request until the renderer runs the query on the frame (via a postMessage bridge)
@@ -140,7 +140,7 @@ export default function previewExtension(pi: any): void {
       },
     });
 
-    // P-PREVIEW.6c (ADR-0148): structured ACTIONS on the live preview — click or type by CSS selector, so the
+    // P-PREVIEW.6c (ADR-0153): structured ACTIONS on the live preview — click or type by CSS selector, so the
     // agent can TEST its UI (fill a field, press a button) and then inspect/screenshot the result. Bounded:
     // only these named operations reach the preview (the bridge performs el.click() / sets .value + dispatches
     // input/change) — never arbitrary JS. The preview is sandboxed + egress-blocked, so acting on it is safe.

@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/preview_activity.test.ts — P-PREVIEW.6a (ADR-0148): the preview-activity label detector.
+// desktop/preview_activity.test.ts — P-PREVIEW.6a (ADR-0153): the preview-activity label detector.
 
 import { test, expect, describe } from "bun:test";
 import { previewActivityLabel, isPreviewActivity } from "./preview_activity.ts";

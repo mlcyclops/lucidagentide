@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// Increment P-PREVIEW.6a — live "reviewing / testing" indicator (ADR-0148). When the agent looks at / tests
+// Increment P-PREVIEW.6a — live "reviewing / testing" indicator (ADR-0153). When the agent looks at / tests
 // the live preview (screenshot, inspect, open, or a future structured action), LUCID glows the Preview panel
 // and shows a pill so the user SEES the review happen. This demo proves the pure detector that drives it.
 
@@ -12,7 +12,7 @@ function assert(cond: unknown, msg: string): void {
   console.log("  ✓ " + msg);
 }
 
-console.log("== #ADR-0148 P-PREVIEW.6a: a preview tool-call → a user-facing 'reviewing/testing' label ==\n");
+console.log("== #ADR-0153 P-PREVIEW.6a: a preview tool-call → a user-facing 'reviewing/testing' label ==\n");
 
 console.log("[1] each preview tool maps to a label the pill shows");
 assert(previewActivityLabel("preview_screenshot") === "Reviewing the preview", "preview_screenshot → Reviewing the preview");

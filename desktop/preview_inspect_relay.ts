@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/preview_inspect_relay.ts — P-PREVIEW.6b (ADR-0148): the cross-process relay that lets the agent's
+// desktop/preview_inspect_relay.ts — P-PREVIEW.6b (ADR-0153): the cross-process relay that lets the agent's
 // `preview_inspect` tool READ the live preview DOM. The preview iframe is opaque-origin sandboxed, so only the
 // RENDERER (via a postMessage bridge, preview_bridge.ts) can read it — not the omp subprocess. Flow:
 //

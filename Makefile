@@ -405,6 +405,10 @@ demo-P-AGENT.8.1: ## P-AGENT.8.1 (ADR-0134): secret guardrail — agents DECLARE
 demo-P-AGENTFW.1: ## P-AGENTFW.1 (ADR-0147): agent-firewall MCP — scans both directions vs a remote ACP agent (hermes/openclaw); quarantines poisoned replies, neutralizes delimiter breakout, blocks outbound hidden vectors, fails closed when the scanner dies
 	$(BUN) run harness/scripts/demo_pagentfw1.ts
 
+.PHONY: demo-P-MCP-GATE.1
+demo-P-MCP-GATE.1: ## P-MCP-GATE.1 (ADR-0148): in-process MCP tool_result gate — poisoned MCP result withheld, clean result delimited+labeled untrusted, LOCAL tool results untouched (source-scoped), fail-closed
+	$(BUN) run harness/scripts/demo_pmcpgate1.ts
+
 .PHONY: demo-P-LOCAL.1
 demo-P-LOCAL.1: ## P-LOCAL.1 (ADR-0135): Local Providers — declare a self-hosted / custom OpenAI-compatible LLM (Ollama, llama.cpp, vLLM, DGX-over-VPN); validate fail-closed, emit the omp --config overlay (secret from the vault, skipped if absent), persist WITHOUT the secret
 	$(BUN) run desktop/scripts/demo_p_local_1.ts
@@ -413,16 +417,26 @@ demo-P-LOCAL.1: ## P-LOCAL.1 (ADR-0135): Local Providers — declare a self-host
 demo-P-VISION.1: ## P-VISION.1 (ADR-0136): paste/drop a screenshot into the prompt bar — validate fail-closed (image-only, size/count caps), emit an omp image content block (base64, prefix stripped), and render a thumbnail strip that never interpolates the data URL (XSS-safe)
 	$(BUN) run desktop/scripts/demo_p_vision_1.ts
 
+.PHONY: demo-P-NVIM.1
+demo-P-NVIM.1: ## P-NVIM.1 (ADR-0150): Neovim + terminal integration — `lucid tui` is the gated command minus `acp` (gate first, policy, passthru last), fail-closes (dead scanner ⇒ no spawn), and the Neovim plugin's pure helpers pass headless nvim
+	$(BUN) run harness/scripts/demo_pnvim1.ts
+
+.PHONY: nvim-plugin-split
+nvim-plugin-split: ## Split extensions/neovim -> the standalone `lucid.nvim` branch (add PUSH=1 to force-push to origin)
+	@sha=$$(git subtree split --prefix=extensions/neovim HEAD); \
+	echo "lucid.nvim split -> $$sha"; \
+	if [ "$(PUSH)" = "1" ]; then git push -f origin "$$sha:refs/heads/lucid.nvim"; else echo "(dry run — add PUSH=1 to publish; CI does this on every master push)"; fi
+
 .PHONY: demo-P-PREVIEW.6a
-demo-P-PREVIEW.6a: ## P-PREVIEW.6a (ADR-0148): the agent reviews its work live in the preview — a preview tool-call (screenshot/open/inspect/action) maps to a user-facing label that glows the panel + shows a "reviewing/testing" pill; non-preview tools never trigger it
+demo-P-PREVIEW.6a: ## P-PREVIEW.6a (ADR-0153): the agent reviews its work live in the preview — a preview tool-call (screenshot/open/inspect/action) maps to a user-facing label that glows the panel + shows a "reviewing/testing" pill; non-preview tools never trigger it
 	$(BUN) run desktop/scripts/demo_p_preview_6a.ts
 
 .PHONY: demo-P-PREVIEW.6b
-demo-P-PREVIEW.6b: ## P-PREVIEW.6b (ADR-0148): the agent READS the live preview DOM — a held tool→server→renderer→iframe relay + a READ-ONLY postMessage bridge injected into the sandboxed preview (no eval/mutation), fail-closed on timeout
+demo-P-PREVIEW.6b: ## P-PREVIEW.6b (ADR-0153): the agent READS the live preview DOM — a held tool→server→renderer→iframe relay + a READ-ONLY postMessage bridge injected into the sandboxed preview (no eval/mutation), fail-closed on timeout
 	$(BUN) run desktop/scripts/demo_p_preview_6b.ts
 
 .PHONY: demo-P-PREVIEW.6c
-demo-P-PREVIEW.6c: ## P-PREVIEW.6c (ADR-0148): the agent CLICKS/TYPES in the live preview by CSS selector — structured actions through the same relay + bridge (fixed allowlist click/type/focus/scroll; still no eval/innerHTML)
+demo-P-PREVIEW.6c: ## P-PREVIEW.6c (ADR-0153): the agent CLICKS/TYPES in the live preview by CSS selector — structured actions through the same relay + bridge (fixed allowlist click/type/focus/scroll; still no eval/innerHTML)
 	$(BUN) run desktop/scripts/demo_p_preview_6c.ts
 
 .PHONY: dashboards

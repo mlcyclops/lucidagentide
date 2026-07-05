@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// Increment P-PREVIEW.6b — the agent READS the live preview DOM (ADR-0148). The preview iframe is opaque-origin
+// Increment P-PREVIEW.6b — the agent READS the live preview DOM (ADR-0153). The preview iframe is opaque-origin
 // sandboxed, so the agent's `preview_inspect` tool (in omp's subprocess) can't touch it; instead the dev server
 // HOLDS the tool's request while the renderer runs the query on the frame via an injected postMessage bridge
 // and posts the result back. This demo proves the pure relay + the read-only bridge injection headlessly.
@@ -14,7 +14,7 @@ function assert(cond: unknown, msg: string): void {
   console.log("  ✓ " + msg);
 }
 
-console.log("== #ADR-0148 P-PREVIEW.6b: agent reads the sandboxed preview DOM via a held relay + a read-only bridge ==\n");
+console.log("== #ADR-0153 P-PREVIEW.6b: agent reads the sandboxed preview DOM via a held relay + a read-only bridge ==\n");
 
 console.log("[1] the relay: tool enqueues + awaits → renderer takes next → posts result → tool resolves");
 const relay = new InspectRelay();

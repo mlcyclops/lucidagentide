@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// Increment P-PREVIEW.6c — structured actions on the live preview (ADR-0148). The agent's preview_click /
+// Increment P-PREVIEW.6c — structured actions on the live preview (ADR-0153). The agent's preview_click /
 // preview_type tools act on the preview by CSS selector, through the SAME held relay + bridge as 6b's inspect
 // (the bridge routes on `action`). Bounded to click/type/focus/scroll — never arbitrary JS. This demo proves
 // the relay carries action commands and the injected bridge exposes ONLY the named action allowlist.
@@ -14,7 +14,7 @@ function assert(cond: unknown, msg: string): void {
   console.log("  ✓ " + msg);
 }
 
-console.log("== #ADR-0148 P-PREVIEW.6c: agent clicks/types in the sandboxed preview via the same relay + bridge ==\n");
+console.log("== #ADR-0153 P-PREVIEW.6c: agent clicks/types in the sandboxed preview via the same relay + bridge ==\n");
 
 console.log("[1] the relay carries a structured action command (action + selector + value), length-capped");
 const relay = new InspectRelay();

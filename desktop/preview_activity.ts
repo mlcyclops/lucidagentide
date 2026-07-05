@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/preview_activity.ts — P-PREVIEW.6a (ADR-0148): detect when the agent is LOOKING AT / testing the
+// desktop/preview_activity.ts — P-PREVIEW.6a (ADR-0153): detect when the agent is LOOKING AT / testing the
 // live preview (screenshot, open, inspect, or a future structured action) so the UI can glow the Preview
 // panel + show a "reviewing / testing" pill. Pure + testable; drives visuals only (never a gate).
 //

@@ -10114,7 +10114,321 @@ ADR-0020 (P-MCP.1 - the `mcpServers` seam this reuses, and the guardrail this pa
 ADR-0038 (the `lucid` launcher this extends), ADR-0002 (the scanner IPC), ADR-0019 (the gate policy), the
 P-RAG.1 `wrapRetrieved` pattern (UNTRUSTED_CONTENT delimiting), invariants #3/#4/#5.
 
-## ADR-0148 - P-PREVIEW.6: the agent reviews its work live in the Preview panel (glow + testing pill; DOM review phased)
+## ADR-0148 - P-CMD.2: builtin /licensing walkthrough + "/" commands anywhere in the prompt body
+
+**Date:** 2026-07-05
+**Status:** Accepted - BUILT + tested.
+
+**Context.** Two user asks: a guided command that applies their company's licensing across a codebase, and
+"/" commands that work in the WHOLE composer body (P-CMD.1 only recognized a start-anchored token, and the
+autocomplete only opened when the entire input was one "/" token).
+
+**Decision.**
+1. **Builtin commands** (`harness/commands/builtins.ts`): shipped commands in the SAME UserCommand shape as
+   user-authored ones — same validator (tested), same expansion, same autocomplete; merged server-side by
+   `withBuiltins` where a user-saved command SHADOWS a builtin by name and deleting it resurfaces the
+   builtin. Builtins are code (PR-reviewed), so the workspace scanner path does not apply to them.
+2. **/licensing** is the first builtin: a guided, APPROVAL-GATED walkthrough — discover the repo's existing
+   convention + counts first, ONE interview round (owner, SPDX id or proprietary text, years, first-party vs
+   vendored trees), show the exact per-language header plan, WAIT for approval, apply idempotently
+   (SPDX-line skip, shebang/XML-decl aware, read-then-write per the AGENTS.md TOCTOU rule), finish with
+   totals + optional CI check/pre-commit hook/LICENSE file. Vendored trees are excluded loudly — the
+   command's body forbids relicensing vendor/, node_modules/, dist/, or third-party code.
+3. **Body-wide expansion** (`expandInlineCommands`, pure): a token counts only when preceded by
+   start/whitespace AND followed by end/whitespace/sentence punctuation — paths (`src/foo`, `/usr/bin`,
+   `/licensing/docs`) and URLs never match. Only KNOWN names expand; send-mode bodies replace the token IN
+   PLACE with no args (surrounding prose is the context); skill-mode tokens are stripped + activated
+   (deduped); expansion is single-pass over the ORIGINAL text (an expanded body's own "/words" are never
+   re-scanned — no recursion). START-anchored commands keep the P-CMD.1 args contract exactly, and when one
+   fires the inline pass is skipped for that turn.
+4. **Autocomplete at the caret** (`slashTokenBeforeCaret`, pure): the "/" menu opens for the token at the
+   caret anywhere in the body; completion/activation replaces ONLY that token, preserving surrounding prose
+   (previously applySlash clobbered the whole input).
+
+**Also.** Cleared the two long-standing server-tsconfig strictness debts (netdiag.ts ×9 noUncheckedIndexedAccess,
+dev.ts oauth-broker stdin narrowing ×2) — `bun run typecheck` is green across all three configs for the
+first time; netdiag's behavior tests unchanged.
+
+**Consequences.** "/licensing Apache-2.0 for Acme Corp" works from a fresh install with zero setup; prose
+like "run /pr-review before merging" now does what it reads like; mentioning paths or unknown "/words"
+remains inert. 13 new tests (builtin validity + shadowing, the expansion matrix incl. path/URL immunity and
+non-recursion, caret tokenization).
+## ADR-0149 - P-AGENTFW.2 + .3: Remote-agents Settings UI + per-connection permission policy & surfaced ACP updates
+
+**Date:** 2026-07-04
+**Status:** Accepted. **BUILT + tested.** The two agent-firewall follow-ups flagged in ADR-0147, delivered
+together (same subsystem). Based on `feat/agent-firewall-mcp` (#201). (ADR-0152 is the sibling P-MCP-GATE.1
+PR.)
+**Increment:** P-AGENTFW.2 (desktop UI) + P-AGENTFW.3 (permission policy + richer surfaced updates).
+
+### P-AGENTFW.2 - "Remote agents" Settings card
+
+A Settings card mirroring the P-MCP.1 "MCP connectors" card, so connecting a hermes/openclaw instance needs
+no hand-edited `~/.omp/lucid-agents.json`. `GET/POST /api/agents` + `/api/agents/remove` + `/api/agents/toggle`
+in `dev.ts` call the harness registry (`listRemoteAgents`/`upsertRemoteAgent`/`removeRemoteAgent`/
+`setRemoteAgentEnabled`); a change `backend.restart()`s omp so enabled connections attach as `agentfw-*` MCP
+servers next session. `bridge.remoteAgent*` (renamed off `agent*` to avoid colliding with the Agent-Builder
+`agentList`), `RemoteAgentStatus`, and a `secAgents()` card (name/kind, command+args, permission badge,
+enable/remove + an add form: name, kind, command, args, permission policy). No secret crosses the wire - the
+registry stores command/args only (the note steers users to `--token-file`).
+
+### P-AGENTFW.3 - per-connection permission policy + surfaced permission asks
+
+The firewall used to hard-deny every remote `session/request_permission` (fail-closed). Now:
+- **`RemoteAgentEntry.permissionPolicy: "deny" | "allow"`** (default **deny**). The `AcpAgentClient` honors
+  it: `deny` → the ask is answered `cancelled`; `allow` → an approve option is selected (`pickApproveOption`).
+  "allow" is an explicit per-connection opt-in for a trusted remote (e.g. a local dev gateway).
+- **Every permission ask is RECORDED and SURFACED** (`AcpPromptResult.permissionRequests`): the firewall
+  includes a `[permission-requests]` section in the delimited output so the user/model sees what the remote
+  wanted and the decision. **This content is remote-controlled** (the toolCall title), so it is added to the
+  inbound `scanAndDecide` text and neutralized - a hidden vector in a permission-ask title is quarantined
+  exactly like the reply body (regression-tested).
+- **Richer updates:** the client now also notes `plan` updates alongside `tool_call`/`tool_call_update`, all
+  carried in `toolActivity` (scanned + delimited).
+
+**Deliberately deferred:** a TRUE interactive per-request approval prompt. The firewall runs as an
+omp-spawned MCP subprocess with no channel to the desktop UI, so live "ask the user now" isn't possible
+without a new IPC surface; the per-connection policy + the surfaced-in-output record are the bounded MVP.
+That interactive path is the next follow-up if wanted.
+
+### Invariants preserved
+
+#3 fail-closed (permission default deny; permissionRequests are scanned; a poisoned title quarantines); #5
+remote content (incl. permission titles) is scanned + delimited + labeled untrusted; #7 trust stays the
+closed set. **No frozen-contract change** (no `contracts.ts`; `permissionRequests` is an optional field on the
+internal `AcpPromptResult`). The desktop UI is cosmetic chrome over the existing 0600 registry.
+
+### File-by-file
+
+- `harness/mcp/registry.ts` - `permissionPolicy` on the entry + upsert.
+- `harness/mcp/acp_client.ts` - `permissionPolicy` option, `permissionRequestSummary`/`pickApproveOption`
+  (pure), policy-driven `#answer`, `permissionRequests` capture, `plan` update note.
+- `harness/mcp/agent_firewall.ts` - pass the connection's policy to the client; include permissionRequests in
+  the SCANNED combined text AND the wrapped output.
+- `desktop/dev.ts` - `/api/agents` CRUD. `desktop/renderer/bridge.ts` - `remoteAgent*` + `RemoteAgentStatus`.
+  `desktop/renderer/app.ts` - `secAgents` card + hydrate + handlers.
+- Tests: `acp_client.test.ts` (helpers), `registry.test.ts` (+policy), `agent_firewall.test.ts` (+surfacing,
+  +poisoned-title quarantine). Docs: `docs/AGENT-FIREWALL.md` updated.
+
+### Relates to
+
+ADR-0147 (the agent-firewall these extend), ADR-0152 (the sibling MCP-result gate), ADR-0020 (the P-MCP.1
+connectors card this UI mirrors).
+## ADR-0152 - P-MCP-GATE.1: in-process gate for MCP tool RESULTS (closing the ADR-0020 guardrail for every MCP server)
+
+**Date:** 2026-07-04
+**Status:** Accepted. **P-MCP-GATE.1 BUILT + tested.** Follows P-AGENTFW.1 (ADR-0147), which flagged this gap.
+**Increment:** P-MCP-GATE.1. Modifies the security-gate surface (a NEW, separately-loaded extension; the
+`security_extension.ts` keystone is left untouched).
+
+### Context
+
+ADR-0020 (L1677-1680) promised that "any [MCP] tool result that re-enters the prompt passes the existing
+fail-closed gate (`scanAndDecide`) and is wrapped in `UNTRUSTED_CONTENT_START/END`." ADR-0147 discovered this
+was **never implemented**: `security_extension.ts`'s `tool_result` hook only does LOC attribution +
+`<task-result>` promotion gating. So **every** P-MCP.1 connector's OUTPUT re-entered the model's context
+**unscanned** — a standing prompt-injection hole. P-AGENTFW.1 closed it only for the agent-firewall's own
+output; this closes it for ALL MCP servers.
+
+### Decision
+
+A **new omp extension**, `harness/omp/mcp_result_gate.ts`, registered on the `tool_result` hook. omp's
+`tool_result` handler may **replace** the result (`ToolResultEventResult`), and the hook runner captures the
+last handler's return; `security_extension` returns nothing for `tool_result`, so this gate's result wins
+regardless of load order. It is a separate `-e` extension so the over-tested keystone is not modified.
+
+- **Source-scoped to MCP results only.** A result is gated iff it comes from an MCP server — `toolName`
+  starts with `mcp__` OR `details.serverName` is set (omp's `mcp/tool-bridge.ts` naming). Local built-in
+  tools (`read`/`bash`/`write`/`edit`/`grep`/`glob`) are **left untouched**: scanning a user's own file read
+  is semantically wrong (not untrusted-external), a false-positive magnet (legit Unicode in source), and a
+  per-result perf cost. This is the same source-scoping philosophy as ADR-0019.
+- **Fail-closed (inv #3).** The result text is run through `scanAndDecide` (strict `DEFAULT_POLICY`, external
+  content). Any scan failure ⇒ block. Quarantine ⇒ the result content is **replaced** with a redacted block
+  notice + `isError: true` — the poison never reaches the model.
+- **Delimited + labeled (inv #5).** A clean/suspicious MCP result is wrapped in `UNTRUSTED_CONTENT_START/END`
+  with a `[mcp-server name=… trust=…]` header, trust-labeled `untrusted`/`suspicious` (**never `trusted`**);
+  embedded delimiter literals are neutralized so a hostile server can't break out of the envelope. Image
+  content blocks pass through after the wrapped text.
+
+### Why a separate extension (not editing security_extension.ts)
+
+`security_extension.ts` + its tests are a load-bearing keystone (AGENTS.md: a failing test there is
+stop-the-line). Adding the result gate as an independent `-e` extension keeps that surface untouched, makes
+the new behavior independently testable, and lets the runner's last-non-undefined-wins semantics compose the
+two cleanly.
+
+### Invariants preserved
+
+#3 fail-closed (unscannable/quarantined MCP result ⇒ withheld); #4 the gate runs in-process in omp's runtime
+(this IS the in-process seam ADR-0020 intended); #5 MCP output is scanned + delimited + trust-labeled; #7
+trust stays the closed set (never `trusted`). **No frozen-contract change** (no `contracts.ts` edit; reuses
+the scanner IPC + gate). The frozen prompt prefix is untouched (the extension adds no prefix bytes).
+
+### File-by-file
+
+- `harness/omp/mcp_result_gate.ts` (new) - the extension + its pure core (`isMcpToolResult`, `mcpServerName`,
+  `neutralizeDelimiters`, `blockNotice`, `wrapUntrusted`).
+- `harness/launcher/lucid_acp.ts` + `desktop/acp_backend.ts` (edit) - load the new `-e` extension alongside
+  the gate (guarded by existsSync; safe if absent).
+- Tests + `make demo-P-MCP-GATE.1`.
+
+### Relates to
+
+ADR-0020 (the guardrail this finally implements), ADR-0147 (the agent-firewall that flagged it; folding its
+`neutralizeDelimiters` into a shared home is a possible later cleanup), ADR-0019 (source-scoped gating),
+ADR-0002 (scanner IPC). Supersedes the "recommended P-MCP-GATE.1 follow-up" noted in ADR-0147.
+## ADR-0150 - P-NVIM.1: Neovim & terminal integration for the gated agent (`lucid tui` + `lucid.nvim`)
+
+**Status:** Accepted / Built.
+
+### Context
+
+The marketplace IDE story (ADR-0038) covers VS Code + JetBrains, both thin ACP clients of the fail-closed
+`lucid acp` launcher. Neovim users - a large, tooling-loyal audience - had no first-party path: no editor
+plugin, and no way to get the gate in a pure-terminal workflow. omp itself is a full terminal agent (`omp`
+bare = interactive TUI) AND a conformant ACP v1 server, so the missing piece was a Lucid-owned, fail-closed
+way to reach either from Neovim without ever exposing an ungated command.
+
+### Decision
+
+Add TWO integration paths, both anchored on the existing `lucid` launcher (extend, never fork; invariants
+#3/#4 unchanged):
+
+1. **`lucid tui` subcommand** (`harness/launcher/lucid_acp.ts`). Runs omp's native interactive terminal UI
+   with the SAME fail-closed preflight and the SAME gated command as `lucid acp`, minus the `acp`
+   subcommand (so omp owns the tty). `buildTuiArgs` mirrors `buildAcpArgs`: gate `-e` first (mandatory),
+   the byte-identical `APPENDED_POLICY` (DELEGATION+BUILD, invariant #6), then user passthru args (initial
+   prompt, --model, --continue, --resume, -p) appended verbatim last. `runTui` reuses `preflight` +
+   `resolveScannerEnv` + `resolveOmp`; the spawn was factored into a shared `execGated` so `acp` and `tui`
+   share ONE inherited-stdio launch path. Fail-closed identically: a dead scanner or missing gate returns 1
+   and NEVER spawns omp. A Neovim user gets the whole gated agent with just `:terminal lucid tui`.
+
+2. **First-party Neovim plugin** (`extensions/neovim/`, `lucid.nvim`). A thin, untrusted client exactly like
+   the VS Code/JetBrains extensions: it only ever spawns the `lucid` launcher, resolved fail-closed
+   (`_resolve_cmd` returns nil rather than any non-lucid fallback). It hosts `lucid tui` inside a Neovim
+   terminal buffer rather than reimplementing an ACP chat UI - maximally robust, zero protocol risk, gate
+   stays in `lucid`. Surface: `:Lucid`/`:LucidToggle`/`:LucidSend` (visual selection or current file as
+   `@path`)/`:LucidCheck`, `:checkhealth lucid` (runs `lucid check`), default keymaps. Pure helpers
+   (`_build_tui_args`, `_selection_text`, `_resolve_cmd`) carry the logic and are asserted headlessly.
+
+3. **Documented ACP-client path** (`docs/NEOVIM.md`). For inline buffer chat, an existing Neovim ACP plugin
+   (e.g. CodeCompanion.nvim) can point its ACP adapter at `lucid acp`. The security guarantee doesn't
+   depend on the plugin: `lucid acp` self-verifies + fail-closes regardless of which client spawned it.
+
+### Why terminal-first for the plugin (not a hand-rolled ACP UI)
+
+omp's terminal UI already implements streaming, thinking blocks, tool rendering, Plan/Ask/Agent modes, and
+tool-approval prompts - all behind the gate. Re-building that in Lua would be a large, fragile surface with
+weak test coverage. Hosting the real, already-gated TUI is the YAGNI-correct choice; the ACP path (Path 3)
+remains available for those who want tighter buffer integration and accept a third-party dependency.
+
+### Language-boundary note
+
+`extensions/neovim/` introduces Lua - but as EDITOR-CLIENT code under `extensions/` (like the VS Code TS and
+JetBrains Kotlin clients), NOT harness code. Invariant #2 (the harness is TypeScript; the only Python is the
+scanner sidecar) governs the *harness*; `extensions/` has always been a per-editor polyglot client tree
+outside the license-header roots. No harness Lua, no second Python surface.
+
+### Consequences
+
+- `buildAcpArgs`/`runAcp` behavior is unchanged (the `execGated` refactor is behavior-preserving, proven by
+  the existing launcher tests). `buildTuiArgs` carries a forward-compat optional `mcpResultGate?` param;
+  nothing populates it on master (the extension + `assets().mcpResultGate` live in the unmerged
+  P-MCP-GATE.1 PR #206) - thread it through `runTui` once that lands.
+- New CLI surface: `lucid tui` (usage text updated). No new EventNames, no `contracts.ts` change, no schema
+  change, prompt prefix untouched (the appended policy is byte-identical to `acp`).
+- `bin/lucid` (the compiled launcher) predates `tui`; a fresh signed build ships it. Until then, dev/live
+  use runs from source.
+
+### Files
+
+- `harness/launcher/lucid_acp.ts` - `BuildTuiOpts`/`buildTuiArgs`, `RunTuiOpts`/`runTui`, `execGated`, the
+  `main` `tui` route + usage.
+- `extensions/neovim/{lua/lucid/init.lua, lua/lucid/health.lua, plugin/lucid.lua, test/helpers_spec.lua,
+  README.md}`.
+- `docs/NEOVIM.md`.
+- Tests: `harness/launcher/lucid_acp.test.ts` (tui cases), `harness/launcher/neovim_plugin.test.ts`
+  (headless-nvim driver). Demo: `harness/scripts/demo_pnvim1.ts` + `make demo-P-NVIM.1`.
+
+### Verification
+
+Live (Neovim 0.12, omp 16.3.6): `lucid check` OK; `lucid tui --model claude-haiku-4-5 -p ...` returned a
+gated real turn (exit 0); `lucid acp` initialize -> protocol v1, loadSession, auth agent. `bun test harness`
+plus `make demo-P-NVIM.1` green; root `tsc --noEmit` clean.
+
+### Relates to
+
+ADR-0038 (the `lucid` launcher + untrusted-editor/trust-anchor model this extends), invariants #2/#3/#4/#6,
+ADR-0148/P-MCP-GATE.1 (the MCP result-gate to thread into `lucid tui` post-merge, #206).
+
+## ADR-0151 - P-NVIM.2: distribute lucid.nvim as a standalone branch WITHOUT leaving the monorepo
+
+**Status:** Accepted / Built.
+
+### Context
+
+P-NVIM.1 (ADR-0150) landed the Neovim plugin under `extensions/neovim/`. lazy.nvim / LazyVim - the
+dominant Neovim plugin managers - install a plugin from a git repo via an `owner/repo` short name, and
+CANNOT install a subdirectory of a monorepo. So the plugin was only installable via a local `dir` path (a
+full monorepo checkout), not as a normal standalone plugin. The ask: a standalone, short-name-installable
+plugin whose source still lives in the main IDE repo (no separate project to maintain).
+
+### Decision
+
+Publish the plugin as a generated **`lucid.nvim` branch of THIS repo** - plugin files at the tree root,
+produced by `git subtree split --prefix=extensions/neovim`. lazy.nvim's `branch` field installs it:
+
+```lua
+{ "mlcyclops/lucidagentide", name = "lucid.nvim", branch = "lucid.nvim", main = "lucid", ... }
+```
+
+- **Source of truth stays `extensions/neovim/` on master** - all dev happens there.
+- **CI publishes it** (`.github/workflows/nvim-plugin-mirror.yml`): on every master push touching
+  `extensions/neovim/**`, subtree-split -> force-push `refs/heads/lucid.nvim` (permissions: contents:write).
+- **`make nvim-plugin-split`** does the same locally (dry-run by default; `PUSH=1` force-pushes).
+- One repo, no fork, no second project. Installers do a shallow single-branch clone, so the plugin branch
+  never drags the monorepo's history/size.
+
+### Why a branch, not a second repo or a submodule
+
+A mirror repo or submodule is a second project to create, permission, and keep in sync - the exact thing
+the ask rules out. A same-repo generated branch keeps everything in one place; `git subtree split`
+preserves the plugin's own file history at root, and lazy/packer/vim-plug all support a `branch`.
+
+### LazyVim specifics (documented in docs/NEOVIM.md)
+
+- `main = "lucid"` - with `opts`, lazy auto-runs `require(main).setup(opts)`; without it lazy infers the
+  module from the repo name (`lucidagentide`) and setup never runs.
+- `cmd`/`keys` are required, not optional - LazyVim defaults plugins to lazy-loaded.
+- Visual-mode send maps the `:LucidSend<cr>` colon form (applies the `'<,'>` range); the `<cmd>` form would
+  send the whole file instead of the selection. `<leader>l...` is avoided (LazyVim's `:Lazy`).
+
+### Consequences
+
+- New CI workflow with `contents: write` (scoped: only force-pushes `lucid.nvim`). A `neovim` job added to
+  `extensions.yml` runs the headless helper spec alongside the VS Code / JetBrains jobs.
+- `extensions/neovim/LICENSE` added so the standalone branch is self-contained (BUSL-1.1, pointing at the
+  canonical root LICENSE).
+- The `lucid.nvim` branch is GENERATED - never hand-edit it; edit `extensions/neovim/` and let CI (or
+  `make nvim-plugin-split PUSH=1`) regenerate it. Until #207 merges to master, publish manually if needed.
+
+### Files
+
+- `.github/workflows/nvim-plugin-mirror.yml`, `.github/workflows/extensions.yml` (neovim job), `Makefile`
+  (`nvim-plugin-split`), `extensions/neovim/LICENSE`, `docs/NEOVIM.md` + `extensions/neovim/README.md`
+  (branch-install docs).
+
+### Verification
+
+`git subtree split --prefix=extensions/neovim HEAD` produces a branch whose ROOT is the plugin
+(`README.md`, `lua/lucid/*`, `plugin/lucid.lua`, `test/`, `LICENSE`) - confirmed locally; `make
+nvim-plugin-split` dry-run prints the split sha. lazy.nvim `branch` + short-name install confirmed against
+the lazy.nvim docs (`/folke/lazy.nvim`).
+
+### Relates to
+
+ADR-0150 (P-NVIM.1, the plugin this distributes), ADR-0038 (the marketplace/extension distribution model).
+## ADR-0153 - P-PREVIEW.6: the agent reviews its work live in the Preview panel (glow + testing pill; DOM review phased)
 
 **Date:** 2026-07-04
 **Status:** Accepted - **P-PREVIEW.6a + .6b + .6c BUILT + verified live (epic COMPLETE).** .6a = the
