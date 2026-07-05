@@ -12,6 +12,12 @@
 // "rejected" with NO approval prompt and NO audit record — because the gate never ran; the
 // tools simply weren't available, and the chip mislabeled a failure as a denial.)
 //
+// P-TOOLFAIL.2 (ADR-0163) adds the EXPANDED view's raw material: `toolFailureCommand`
+// (the command/code the call attempted, from rawInput or omp's `$ …` title) and
+// `toolFailureDetail` (the full multi-line error text, newlines preserved) — so the
+// collapsed toolbox badge can expand into a "Tool Call Actions" list that shows exactly
+// what was attempted and exactly what came back.
+//
 // This module is PURE (no I/O) so it is over-testable. The gate's own security blocks do NOT
 // flow through here — those are surfaced from the gate's stderr signal (acp_backend onStderr).
 // A reason produced here is therefore NEVER a security quarantine; it means "the tool failed
@@ -25,35 +31,74 @@ export interface ToolFailure {
   reason: string;
 }
 
-/** Pull any human-readable message omp attached to a tool_call_update — across the shapes it
- *  uses: a `content[]` array (text directly, or nested `content.text`), a `rawOutput` string or
- *  `{ error }`, or a top-level `message`/`error`/`reason`. Normalized whitespace, length-capped.
- *  Returns "" when omp gave us nothing to show. */
-export function toolFailureMessage(u: any): string {
+const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null;
+const str = (v: unknown): string => (typeof v === "string" ? v : "");
+
+/** Every human-readable fragment omp attached to a tool_call_update, in order — across the
+ *  shapes it uses: a `content[]` array (text directly, or nested `content.text`), a `rawOutput`
+ *  string or `{ error }`, or a top-level `message`/`error`/`reason`. */
+function messageParts(u: unknown): string[] {
+  if (!isRecord(u)) return [];
   const parts: string[] = [];
-  const content = u?.content;
-  if (Array.isArray(content)) {
-    for (const c of content) {
-      const t = typeof c?.text === "string" ? c.text
-        : typeof c?.content?.text === "string" ? c.content.text
-        : "";
+  if (Array.isArray(u.content)) {
+    for (const c of u.content) {
+      if (!isRecord(c)) continue;
+      const nested = isRecord(c.content) ? str(c.content.text) : "";
+      const t = str(c.text) || nested;
       if (t) parts.push(t);
     }
   }
-  const ro = u?.rawOutput;
+  const ro = u.rawOutput;
   if (typeof ro === "string") parts.push(ro);
-  else if (ro && typeof ro.error === "string") parts.push(ro.error);
-  for (const k of ["message", "error", "reason"]) {
-    if (typeof u?.[k] === "string") parts.push(u[k]);
+  else if (isRecord(ro) && typeof ro.error === "string") parts.push(ro.error);
+  for (const k of ["message", "error", "reason"] as const) {
+    const v = str(u[k]);
+    if (v) parts.push(v);
   }
-  return parts.join(" ").replace(/\s+/g, " ").trim().slice(0, 160);
+  return parts;
+}
+
+/** Pull any human-readable message omp attached to a tool_call_update. Normalized whitespace,
+ *  length-capped for the one-line chip. Returns "" when omp gave us nothing to show. */
+export function toolFailureMessage(u: unknown): string {
+  return messageParts(u).join(" ").replace(/\s+/g, " ").trim().slice(0, 160);
+}
+
+/** P-TOOLFAIL.2: the FULL error text for the expanded "Tool Call Actions" row — same sources as
+ *  toolFailureMessage, but line structure preserved (CRLF normalized, trailing space trimmed) and
+ *  a much higher cap, so a multi-line tool error reads like the terminal output it came from. */
+export function toolFailureDetail(u: unknown): string {
+  return messageParts(u)
+    .join("\n")
+    .replace(/\r\n?/g, "\n")
+    .split("\n")
+    .map((l) => l.replace(/\s+$/g, ""))
+    .join("\n")
+    .trim()
+    .slice(0, 2000);
+}
+
+/** P-TOOLFAIL.2: the command/code the failed call ATTEMPTED. Prefers the tool's own rawInput
+ *  (same key set the exec-approval path reads); falls back to omp's call title, which for exec
+ *  tools is the `$ <command>` summary (the `$ ` marker is stripped — the renderer adds its own).
+ *  Returns "" when nothing command-like exists (e.g. a browser tool). */
+export function toolFailureCommand(u: unknown): string {
+  if (!isRecord(u)) return "";
+  const ri = isRecord(u.rawInput) ? u.rawInput : isRecord(u.input) ? u.input : {};
+  for (const k of ["command", "cmd", "script", "code", "source", "input"] as const) {
+    const v = str(ri[k]).trim();
+    if (v) return v.slice(0, 400);
+  }
+  const title = str(u.title).trim();
+  if (title.startsWith("$ ")) return title.slice(2).trim().slice(0, 400);
+  return "";
 }
 
 /** Build the neutral chip text for a failed/rejected tool call. `failed` ⇒ ran and errored;
  *  anything else (`rejected`) ⇒ did not run. Surfaces omp's message when present; otherwise a
  *  clear fallback that does NOT imply a security denial (the old "tool call rejected" did). */
-export function toolFailureReason(u: any): ToolFailure {
-  const didRun = u?.status === "failed";
+export function toolFailureReason(u: unknown): ToolFailure {
+  const didRun = isRecord(u) && u.status === "failed";
   const msg = toolFailureMessage(u);
   const label = didRun ? "tool failed" : "tool did not run";
   return { didRun, reason: msg ? `${label}: ${msg}` : label };

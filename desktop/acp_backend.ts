@@ -52,7 +52,7 @@ import { slashCommandCreateDraft } from "../harness/commands/handoff.ts"; // P-C
 import type { UserCommand } from "../harness/commands/spec.ts";
 import { gateDenyReason } from "./gate_audit.ts";
 import { type ExecChoice, type ExecClass, classifyCommand, classifyEval, elicitationApproval, execStore, execVerdict, recordExec } from "./exec_policy.ts";
-import { toolFailureReason } from "./tool_failure.ts";
+import { toolFailureCommand, toolFailureDetail, toolFailureReason } from "./tool_failure.ts";
 
 // P-EGRESS.1 (ADR-0062): the network-reaching tools omp is told to PROMPT for (acp_config.yml). When omp
 // requests permission for one of these, the desktop shows the per-website approval dialog instead of
@@ -155,7 +155,7 @@ export type ChatEvent =
   // diff). Bounded server-side. Absent for tools with no authored code (read/search/bash command shown as detail).
   | { type: "tool"; name: string; detail: string; code?: { path: string; content?: string; oldText?: string; newText?: string; patch?: string } }
   | { type: "subagent"; id: string; agent: string; title: string; assignments: string[] }
-  | { type: "block"; tool: string; reason: string; severity: string; findings: string; id?: string; quarantined?: boolean }
+  | { type: "block"; tool: string; reason: string; severity: string; findings: string; id?: string; quarantined?: boolean; command?: string; detail?: string }
   | { type: "permission"; id: string; tool: string; detail: string; options: { optionId: string; name: string; kind?: string }[]; url?: string; egress?: boolean; localFile?: boolean; exec?: boolean; program?: string; reason?: string; danger?: boolean }
   | { type: "preview-available"; path: string } // P-PREVIEW.2 (ADR-0096): the agent wrote a previewable file
   | { type: "preview-activity"; label: string } // P-PREVIEW.6a (ADR-0153): the agent is reviewing/testing the live preview
@@ -449,7 +449,9 @@ class Backend {
             // "tool call rejected" — distinguish a tool that ran-and-errored ("failed") from one that
             // never ran ("rejected": refused / unavailable / cancelled), so the neutral chip says WHY
             // and is never mistaken for a security denial. (toolFailureReason is pure; see tool_failure.ts.)
-            case "tool_call_update": if (u.status === "failed" || u.status === "rejected") this.emit({ type: "block", tool: String(u.kind ?? "tool"), reason: toolFailureReason(u).reason, severity: "low", findings: "", quarantined: false }); break;
+            // P-TOOLFAIL.2 (ADR-0163): also carry the COMMAND the call attempted + the full error
+            // text, so the renderer's collapsed toolbox badge can expand into an honest per-action view.
+            case "tool_call_update": if (u.status === "failed" || u.status === "rejected") this.emit({ type: "block", tool: String(u.kind ?? "tool"), reason: toolFailureReason(u).reason, command: toolFailureCommand(u) || undefined, detail: toolFailureDetail(u) || undefined, severity: "low", findings: "", quarantined: false }); break;
             case "usage_update": this.emit({ type: "usage", used: Number(u.used ?? 0), size: Number(u.size ?? 0), cost: Number(u.cost?.amount ?? 0) }); break;
             case "available_commands_update": this.commands = u.availableCommands ?? []; break;
             case "config_option_update": if (u.configOptions) { this.configOptions = u.configOptions; this.syncModelEnv(); } break;

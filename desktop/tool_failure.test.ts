@@ -6,7 +6,7 @@
 // failure read as a security denial.
 
 import { describe, expect, test } from "bun:test";
-import { toolFailureMessage, toolFailureReason } from "./tool_failure.ts";
+import { toolFailureCommand, toolFailureDetail, toolFailureMessage, toolFailureReason } from "./tool_failure.ts";
 
 describe("toolFailureReason — failed vs did-not-run", () => {
   test('"failed" status reports the tool RAN and errored', () => {
@@ -59,6 +59,48 @@ describe("toolFailureMessage — surfaces omp's own message across shapes", () =
 
   test("nothing to show → empty string (caller falls back to the bare label)", () => {
     expect(toolFailureMessage({ status: "rejected" })).toBe("");
+  });
+});
+
+describe("toolFailureCommand — the command the failed call attempted (P-TOOLFAIL.2)", () => {
+  test("rawInput.command wins over the title", () => {
+    expect(toolFailureCommand({ rawInput: { command: "make demo" }, title: "$ something-else" })).toBe("make demo");
+  });
+
+  test("falls back through the exec key set (cmd/script/code/source/input)", () => {
+    expect(toolFailureCommand({ rawInput: { script: "pip install requests" } })).toBe("pip install requests");
+    expect(toolFailureCommand({ input: { code: "1 + 1" } })).toBe("1 + 1");
+  });
+
+  test('omp\'s "$ cmd" title is used bare (the renderer adds its own $ marker)', () => {
+    expect(toolFailureCommand({ title: "$ grep -n x Makefile" })).toBe("grep -n x Makefile");
+  });
+
+  test("a non-exec title or nothing command-like → empty string", () => {
+    expect(toolFailureCommand({ title: "Opening game in browser" })).toBe("");
+    expect(toolFailureCommand({})).toBe("");
+    expect(toolFailureCommand(null)).toBe("");
+  });
+
+  test("length-capped at 400", () => {
+    expect(toolFailureCommand({ rawInput: { command: "x".repeat(900) } }).length).toBe(400);
+  });
+});
+
+describe("toolFailureDetail — full error text for the expanded row (P-TOOLFAIL.2)", () => {
+  test("preserves line structure (CRLF normalized, trailing space trimmed)", () => {
+    expect(toolFailureDetail({ rawOutput: "error: not found\r\nexit code 127  " }))
+      .toBe("error: not found\nexit code 127");
+  });
+
+  test("joins multiple sources on newlines instead of flattening", () => {
+    expect(toolFailureDetail({ content: [{ type: "text", text: "line one" }], message: "line two" }))
+      .toBe("line one\nline two");
+  });
+
+  test("caps at 2000 and returns empty when nothing was attached", () => {
+    expect(toolFailureDetail({ message: "y".repeat(5000) }).length).toBe(2000);
+    expect(toolFailureDetail({ status: "rejected" })).toBe("");
   });
 });
 

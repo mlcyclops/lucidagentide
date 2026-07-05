@@ -11587,6 +11587,74 @@ ADR-0030 (`gitChangeInputs`, reused pattern), ADR-0111 (`cloneRepo` first-party 
 ADR-0022/0024 (the loopback + token gate the endpoints sit behind), CLAUDE.md invariants #3 (fail-closed),
 #5 (untrusted content delimited/as-data), #9 (stable ids).
 
+-----
+
+## ADR-0163 - P-TOOLFAIL.2: failed tool calls collapse into a toolbox badge (Tool Call Actions)
+
+**Date:** 2026-07-05
+**Status:** Accepted. **P-TOOLFAIL.2 BUILT + tested.**
+
+### Context
+
+Product ask (from a live session, screenshot evidence): three benign probe failures - a `grep`
+that matched nothing (exit 1), `make` on a Windows box without make (exit 127), and an
+"Async job manager unavailable" refusal - rendered as three full-width "tool failed" rows that
+read like an alarm wall. P-TOOLFAIL.1 (ADR-0093) fixed the WORDING (failure ≠ denial); this
+increment fixes the WEIGHT: a run of failures should be one small, quiet, clickable artifact,
+with the detail available on demand - per failed action, the tool, the one-line reason, the
+COMMAND ATTEMPTED, and the full error text.
+
+### Decision
+
+1. **Extraction (pure, `desktop/tool_failure.ts`):** `toolFailureCommand(u)` pulls what the call
+   attempted - `rawInput`/`input` first across the SAME key set the exec-approval path reads
+   (`command|cmd|script|code|source|input`), else omp's `$ …` call title (bare, `$ ` stripped;
+   cap 400). `toolFailureDetail(u)` is the full multi-line error (same sources as
+   `toolFailureMessage`, CRLF-normalized, line structure preserved, cap 2000). The module also
+   converted from `any` to `unknown` + type guards (ts-no-any rule); behavior locked by the
+   existing P-TOOLFAIL.1 tests, all green unmodified except the new imports.
+2. **Event plumbing:** the `quarantined:false` block ChatEvent gains optional `command`/`detail`
+   (acp_backend.ts emission + the bridge.ts union kept in sync). Security-block emissions are
+   untouched - this stays the NEUTRAL path of ADR-0093.
+3. **Rendering (`desktop/renderer/toolfail_group.ts`, pure builders like marketplace.ts):**
+   consecutive failures collapse into ONE badge - a red `toolbox` icon (new icons.ts glyph) +
+   count. Click toggles the "Tool Call Actions" list: per row the tool, reason, `$ command`,
+   and a `<pre>` detail (skipped when the flattened detail adds nothing over the one-line
+   reason). app.ts owns grouping: a group ends the moment anything else lands in the thread
+   (the group element is no longer `#thread`'s last child), so failures from different phases
+   never merge. Delegated click survives innerHTML repaints. Everything escaped; hostile tool
+   output renders inert (tested).
+4. **Not a security surface, still:** the badge tooltip carries "not a security block"; the
+   gate's quarantine keeps its own loud `.evt.block` chip + toast path, byte-for-byte untouched.
+
+### Consequences
+
+- Files: tool_failure.ts (+command/detail, `unknown` conversion), acp_backend.ts + bridge.ts
+  (event fields), renderer/toolfail_group.ts (+.test.ts, new), renderer/app.ts
+  (addToolFailure + onBlock branch), icons.ts (`toolbox`), styles.css (`.toolfail`),
+  scripts/demo_p_toolfail_2.ts, `demo-P-TOOLFAIL.2` Makefile target.
+- The one-line `.evt` failure chip is REPLACED by the badge on this path; ADR-0093's honest
+  wording lives on inside the rows (and the tests asserting it are unchanged).
+
+### Verification
+
+`bun test desktop/tool_failure.test.ts desktop/renderer/toolfail_group.test.ts` 28 pass
+(command/detail extraction incl. caps + `$ `-title stripping; collapsed = badge only;
+expanded = all rows; escaping of hostile tool/reason/command/detail; singular/plural tooltip).
+`demo-P-TOOLFAIL.2` green against the EXACT three payloads from the reporting session;
+demo-P-TOOLFAIL.1 still green (wording contract intact). Root `tsc --noEmit` clean. Full
+`bun test desktop`: 1072 pass / 5 fail - all five are the PRE-EXISTING Windows
+fs_browse.test.ts failures also named in ADR-0158's verification; none touch this change.
+In-app visual pass on the packaged Electron build not yet done (pure-builder tests + demo
+cover the HTML contract) - noted in PROGRESS.
+
+### Relates to
+
+ADR-0093 (P-TOOLFAIL.1 - the honest wording this keeps), ADR-0158 (pure-builder renderer
+convention reused), ADR-0021 (quiet-vs-loud event discipline).
+
+-----
+
 > **ADR numbering note.** 0163 is the sibling increment **P-TOOLFAIL.2** (failed tool calls collapse into
 > a toolbox badge), developed in parallel on `p-toolfail-2-toolbox-badge` / PR #223 and not yet on master
 > when this branch forked. This increment therefore takes **0164**; on master the two are contiguous. The
