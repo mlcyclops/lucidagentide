@@ -28,7 +28,9 @@ console.log("== P-REPORT.10 — a SecurityEvent per fetch/PR reach-out ==");
 const gh = parseRemoteUrl("git@github.com:acme/widgets.git");
 const f = reachoutAuditEvents(gh, { fetched: true, fetchOk: true, prStatus: "skipped-off" });
 if (f.length !== 1 || f[0]!.category !== "egress" || f[0]!.type !== "report_fetch" || f[0]!.decision !== "allow" || f[0]!.severity !== "info" || f[0]!.tool !== "git") fail("fetch event shape wrong");
-if (!f[0]!.reason?.includes("github.com")) fail("host missing from fetch reason");
+// Exact-match on the whole reason line (not a URL substring test - CodeQL js/incomplete-url-substring-sanitization):
+// proves the reason is the host-only metadata line, nothing more, nothing less.
+if (f[0]!.reason !== `report: git fetch ${gh.host} (ok)`) fail(`fetch reason must be the exact host-only line, got: ${f[0]!.reason}`);
 ok("pure: git fetch → egress/report_fetch/allow/info, host github.com in reason");
 
 // (2) a SKIPPED PR list performed no reach-out → no event; a real gh pr list (ok) → one report_pr_list.
