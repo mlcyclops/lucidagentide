@@ -71,8 +71,8 @@ describe("clean (untrusted-text hygiene)", () => {
   test("collapses newlines (no markdown-structure injection)", () => {
     expect(clean("line1\n## heading\n- item")).not.toContain("\n");
   });
-  test("escapes table pipes and length-caps with ellipsis", () => {
-    expect(clean("a|b")).toBe("a\\|b");
+  test("neutralizes table pipes (entity, no backslash) and length-caps with ellipsis", () => {
+    expect(clean("a|b")).toBe("a&#124;b"); // pipe → entity: table-safe, renders as `|`, no backslash escaping
     expect(clean("xxxxxxxxxx", 5)).toBe("xxxx…");
   });
   test("empty → dash placeholder", () => expect(clean("")).toBe("-"));

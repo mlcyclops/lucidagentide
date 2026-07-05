@@ -137,7 +137,10 @@ export function clean(s: string, max = 140): string {
   let t = (s || "").replace(/[\r\n\t\x00-\x1f]+/g, " ").trim();
   t = t.replace(/`+/g, "'"); // no inline-code / fence breakout
   t = t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  t = t.replace(/\|/g, "\\|"); // safe even if a caller drops it into a table cell
+  // Pipe → HTML entity (runs AFTER the &-escape, so this & stays literal). Table-safe (the markdown
+  // parser sees the entity, not a `|`) and renders as `|` - and, unlike a `\|` escape, it introduces no
+  // backslash escaping (which would be an incomplete-sanitization scheme; CodeQL js/incomplete-sanitization).
+  t = t.replace(/\|/g, "&#124;");
   if (t.length > max) t = t.slice(0, max - 1).trimEnd() + "…";
   return t || "-";
 }
