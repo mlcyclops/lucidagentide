@@ -198,11 +198,14 @@ function msgText(message: any): string {
 // P-PERF.4 (ADR-0131): tail-first transcript page. A resume used to ship the WHOLE transcript over
 // IPC and into the DOM - unbounded for a long chat. `limit` returns only the LAST N messages plus the
 // true total so the UI can say "showing the last N of M". limit 0 = everything (export paths etc.).
-export interface TranscriptPage { messages: { role: string; text: string }[]; total: number }
+// P-RESUME.1 (ADR-0171): user messages carry their 1-based user ordinal (`turn`) so restored agent
+// activity (thinking/tool steps from the lucid-steps sidecar) anchors to the right message even in a
+// tail-limited page; `userTotal` re-syncs the recorder's turn counter on every resume read.
+export interface TranscriptPage { messages: { role: string; text: string; turn?: number }[]; total: number; userTotal: number }
 
 /** Read a session's user/assistant transcript (for resuming into the chat), tail-first when limited. */
 export function sessionMessages(id: string, limit = 0, root: string = join(homedir(), ".omp", "agent", "sessions")): TranscriptPage {
-  if (!existsSync(root)) return { messages: [], total: 0 };
+  if (!existsSync(root)) return { messages: [], total: 0, userTotal: 0 };
   for (const d of readdirSync(root)) {
     const dir = join(root, d);
     try {
@@ -213,7 +216,8 @@ export function sessionMessages(id: string, limit = 0, root: string = join(homed
         let sid = f;
         try { sid = JSON.parse(content.split("\n", 1)[0] ?? "")?.id ?? f; } catch { /* keep f */ }
         if (sid !== id && f !== id) continue;
-        const out: { role: string; text: string }[] = [];
+        const out: { role: string; text: string; turn?: number }[] = [];
+        let users = 0;
         for (const ln of content.split("\n")) {
           if (!ln) continue;
           let o: any; try { o = JSON.parse(ln); } catch { continue; }
@@ -221,14 +225,17 @@ export function sessionMessages(id: string, limit = 0, root: string = join(homed
             // Strip the injected preamble from USER turns only (assistant text never carries it).
             const raw = msgText(o.message);
             const t = o.message.role === "user" ? stripInjectedPreamble(raw) : raw;
-            if (t.trim()) out.push({ role: o.message.role, text: t });
+            if (t.trim()) {
+              if (o.message.role === "user") { users++; out.push({ role: "user", text: t, turn: users }); }
+              else out.push({ role: "assistant", text: t });
+            }
           }
         }
-        return { messages: limit > 0 && out.length > limit ? out.slice(-limit) : out, total: out.length };
+        return { messages: limit > 0 && out.length > limit ? out.slice(-limit) : out, total: out.length, userTotal: users };
       }
     } catch { /* skip */ }
   }
-  return { messages: [], total: 0 };
+  return { messages: [], total: 0, userTotal: 0 };
 }
 
 /** Delete a session's omp `.jsonl` transcript from disk. Restricted to the CURRENT

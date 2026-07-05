@@ -2762,3 +2762,27 @@ pre:hover .code-ide-btn,pre:focus-within .code-ide-btn{opacity:1}
 .ab-conn-tag.ok{color:var(--green)}
 .ab-cred-help{align-self:flex-start;font:inherit;font-size:11px;color:var(--cyan);background:none;border:none;padding:2px 0;cursor:pointer;text-decoration:underline;text-underline-offset:2px}
 .ab-cred-help:hover{color:var(--txt)}
+
+/* ───────── P-SECACK.1 (ADR-0170): reviewed shelf + per-row ack in the Security tables ───────── */
+td.row-act{text-align:right;white-space:nowrap;width:1%}
+td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
+.sec-reviewed{margin-top:8px}
+.sec-reviewed>summary{cursor:pointer;font-size:11px;color:var(--txt-4);padding:4px 2px;user-select:none;list-style-position:inside}
+.sec-reviewed>summary:hover{color:var(--txt-2)}
+.sec-reviewed .tbl{opacity:.62}
+
+/* ───────── P-SECACK.1 (ADR-0170): right-click clipboard menu for text fields ───────── */
+.ctx-menu{position:fixed;z-index:400;min-width:172px;padding:4px;background:var(--bg-2);
+  border:1px solid var(--line-strong);border-radius:10px;
+  box-shadow:0 12px 34px rgba(0,0,0,.5),inset 0 1px 0 rgba(255,255,255,.04);animation:rise var(--t) var(--ease-out)}
+.ctx-it{display:flex;align-items:center;gap:10px;width:100%;padding:7px 10px;border:0;border-radius:7px;
+  background:transparent;color:var(--txt);font:inherit;font-size:12.5px;text-align:left;cursor:pointer}
+.ctx-it:hover{background:var(--bg-3)}
+.ctx-it:disabled{opacity:.38;cursor:default}
+.ctx-it:disabled:hover{background:transparent}
+.ctx-it .kbd{margin-left:auto;font-size:10.5px;color:var(--txt-4);font-family:var(--mono);font-variant-numeric:tabular-nums}
+
+/* ───────── P-RESUME.1 (ADR-0171): restored agent activity in a resumed thread ───────── */
+.restored-steps{margin:2px 0 10px;display:flex;flex-direction:column;gap:6px}
+.restored-steps .reasoning,.restored-steps .thoughts{opacity:.92}
+.restored-steps .tf-body.restored{margin-top:6px;border-top:1px solid var(--line-soft);padding-top:6px}
