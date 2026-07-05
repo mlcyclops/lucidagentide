@@ -20,6 +20,7 @@ import { $, $$, accordion, el, fmtNum, gauge, spark, table, type Col } from "./d
 import { ageStr, esc, fmtUSD, goodColor, loadColor } from "./format.ts";
 import { icon, piMark } from "./icons.ts";
 import { aboutHtml, readmeMark } from "./about.ts";
+import { MARKET_PLUGINS, marketplaceHtml, marketRowsHtml } from "./marketplace.ts"; // P-MARKET.1 (ADR-0158)
 import { APP_VERSION } from "../version.ts";
 import { renderMarkdown } from "./markdown.ts";
 import { type GraphHandle, kindLabel, mountGraph } from "./graph.ts";
@@ -169,6 +170,7 @@ function buildShell(): void {
         <button class="rail-btn" data-rail="knowledge" data-tip="Knowledge graph|Your private, encrypted personalization graph - nodes, edges, drill-down" data-tip-icon="graph">${icon("graph", 20)}</button>
         <button class="rail-btn" data-rail="preview" data-tip="Preview|Open a local app/page the agent built in a sandboxed in-app browser, and send a screenshot to chat" data-tip-icon="eye">${icon("eye", 20)}</button>
         <button class="rail-btn" data-rail="agentBuilder" data-tip="Agent Builder|Design an AI agent on a visual workflow canvas - LUCID builds the gated code for you" data-tip-icon="spark">${icon("spark", 20)}</button>
+        <button class="rail-btn" id="railMarket" data-tip="Plugin Marketplace|Curated integrations ordered by community popularity - Excalidraw, Git, Remotely Save & more" data-tip-icon="market">${icon("market", 20)}</button>
         <button class="rail-btn" id="railReports" data-tip="Engineering Reports|Generate a role-tailored engineering brief (with podcast audio), and browse every past loop After-Action Report + brief" data-tip-icon="report">${icon("report", 20)}</button>
         <button class="rail-btn" id="railLogs" data-rail="dev" hidden data-tip="Logs|Read-only developer logs: telemetry, run lineage, transcripts, gate-block audit, AskSage tool-call diagnostics" data-tip-icon="logs">${icon("logs", 20)}</button>
         <div class="spacer"></div>
@@ -1372,8 +1374,14 @@ function renderMetricsRail(): void {
   const turns = s?.turns ?? 0;
   const hit = s?.cache.hit ?? 0;
   const avg = turns ? Math.round(cur / turns) : 0;
-  const findings = sec ? sec.findings.reduce((a, r) => a + Number(r.n || 0), 0) : 0;
-  const quar = sec ? sec.quarantine.length : 0;
+  // The /api/security payload is `{ ...(snapshot ?? {}), live }` - so when the DuckDB snapshot is null
+  // (fresh machine with no obs DB yet, OR the DB momentarily held read-write by the live gate DURING a
+  // turn), `findings`/`quarantine` are ABSENT while `state.security` is still a truthy `{ live }` object.
+  // A bare `sec.findings.reduce(...)` then threw a TypeError that aborted this whole render every poll,
+  // freezing the rail at its initial zeros (renderInspector/renderStatus survived - they guard the same
+  // way below). Coalesce to empty so the rail keeps painting the live/session tiles regardless.
+  const findings = (sec?.findings ?? []).reduce((a, r) => a + Number(r.n || 0), 0);
+  const quar = sec?.quarantine?.length ?? 0;
   const ca = state.codeActivity; // ADR-0030 P-CODE.1: this month's repo activity
 
   type T = { n: string; label: string; cls: string; tip: string; attn?: boolean };
@@ -6244,6 +6252,32 @@ function openAbout(): void {
   document.body.append(ov);
 }
 
+// P-MARKET.1 (ADR-0158): the Plugin Marketplace popup - a curated, searchable catalog (Excalidraw pinned
+// first, then Obsidian's top-ranked integrations by community downloads). Same conventions as About:
+// single instance; closes on the X, a backdrop click, or Escape. The catalog is static - the only live
+// action is opening a row's GitHub repo in the system browser; installs are P-MARKET.2 (gated).
+function openMarketplace(): void {
+  if ($("#mktModal")) return; // already open - don't stack
+  const ov = el(`<div id="mktModal" class="mkt-scrim">${marketplaceHtml(MARKET_PLUGINS, "")}</div>`);
+  const close = () => { ov.remove(); document.removeEventListener("keydown", onKey); };
+  const onKey = (ev: KeyboardEvent) => { if (ev.key === "Escape") { ev.preventDefault(); close(); } };
+  ov.addEventListener("click", (ev) => {
+    const t = ev.target as HTMLElement;
+    const repo = t.closest("[data-mkt-repo]") as HTMLElement | null;
+    if (repo) { window.open(repo.dataset.mktRepo!, "_blank", "noopener"); return; }
+    if (t === ov || t.closest("[data-mkt-close]")) close(); // backdrop or the X
+  });
+  ov.addEventListener("input", (ev) => { // live search: re-render just the rows
+    const t = ev.target as HTMLElement;
+    if (t.id !== "mktSearch") return;
+    const list = ov.querySelector("#mktList");
+    if (list) list.innerHTML = marketRowsHtml(MARKET_PLUGINS, (t as HTMLInputElement).value);
+  });
+  document.addEventListener("keydown", onKey);
+  document.body.append(ov);
+  (ov.querySelector("#mktSearch") as HTMLInputElement | null)?.focus();
+}
+
 function wire(): void {
   // rail
   $$(".rail-btn[data-rail]").forEach((b) => b.addEventListener("click", () => {
@@ -6437,6 +6471,7 @@ function wire(): void {
   // (the titlebar "Commands" button was removed - the palette opens from the rail glyph #railCmd + Ctrl/⌘+K)
   $("#cmdkBtn")?.addEventListener("click", () => palette.show());
   $("#railAbout")?.addEventListener("click", () => openAbout());
+  $("#railMarket")?.addEventListener("click", () => openMarketplace()); // P-MARKET.1 (ADR-0158)
   $("#railReports")?.addEventListener("click", () => openReportsPanel()); // P-REPORT.1 (ADR-0116)
   // Per-message copy (markdown) + save-as-.md
   $("#thread")!.addEventListener("click", async (e) => {
@@ -7138,6 +7173,7 @@ const palette = createPalette(() => {
     { id: "cfg", title: "Choose model · mode · thinking…", icon: "spark", hint: "config", run: () => openConfigPopover($("#modelBadge")!) },
     { id: "sec", title: "Open Security panel", icon: "shield", hint: "panel", run: () => focusInspector("security") },
     { id: "mem", title: "Open Memory & context panel", icon: "savings", hint: "panel", run: () => focusInspector("memory") },
+    { id: "mkt", title: "Open Plugin Marketplace", icon: "market", hint: "popup", run: () => openMarketplace() }, // P-MARKET.1
     // P-LOC.3 (ADR-0095): a discoverable entry point for the AI-authored code ledger — opens Memory with
     // the section expanded, so it no longer has to be hunted for inside the panel.
     { id: "ailoc", title: "Open AI-authored code ledger", icon: "savings", hint: "panel", run: () => { OPEN.add("mem.ailoc"); focusInspector("memory"); } },

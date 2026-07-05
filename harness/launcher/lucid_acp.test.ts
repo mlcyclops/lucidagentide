@@ -27,9 +27,15 @@ import {
   type SpawnFn,
 } from "./lucid_acp.ts";
 import { BUILD_POLICY, DELEGATION_POLICY } from "../prompt/assembler.ts";
+import { BwrapBackend, NoopBackend, type BackendResolution } from "../runs/sandbox_exec.ts";
 
 const okProbe = async () => ({ ok: true });
 const deadProbe = async () => ({ ok: false, reason: "scanner sidecar unavailable: exited code=1" });
+// P-SANDBOX.1 (ADR-0157): hermetic sandbox resolutions so spawn-shape assertions never depend on the
+// HOST platform/PATH (a Linux machine with bwrap installed would otherwise wrap the argv).
+const NOOP_SANDBOX: BackendResolution = { ok: true, backend: new NoopBackend(), disclosed: true };
+const BWRAP_SANDBOX: BackendResolution = { ok: true, backend: new BwrapBackend(() => true), disclosed: false };
+const REFUSED_SANDBOX: BackendResolution = { ok: false, reason: "managed policy requires runtime isolation, but no sandbox backend exists for win32 yet (P-SANDBOX.4)" };
 
 /** A spawn spy that records the call and drives a fake child to the given exit code (or error). */
 function spawnSpy(opts: { exit?: number; error?: Error } = {}) {
@@ -141,7 +147,7 @@ test("runAcp NEVER spawns omp when the scanner is down — returns 1, no ungated
 
 test("runAcp spawns the gated omp when preflight passes, and threads the workspace as cwd", async () => {
   const spy = spawnSpy({ exit: 0 });
-  const code = await runAcp({ scannerProbe: okProbe, spawnFn: spy.fn, cwd: "/work/dir", env: {} });
+  const code = await runAcp({ scannerProbe: okProbe, spawnFn: spy.fn, cwd: "/work/dir", env: {}, sandbox: NOOP_SANDBOX, stderr: () => {} });
   expect(code).toBe(0);
   expect(spy.calls.length).toBe(1);
   const call = spy.calls[0]!;
@@ -153,10 +159,43 @@ test("runAcp spawns the gated omp when preflight passes, and threads the workspa
 });
 
 test("runAcp returns the child's exit code, and 127 on spawn error", async () => {
-  const exited = await runAcp({ scannerProbe: okProbe, spawnFn: spawnSpy({ exit: 42 }).fn, env: {} });
+  const exited = await runAcp({ scannerProbe: okProbe, spawnFn: spawnSpy({ exit: 42 }).fn, env: {}, sandbox: NOOP_SANDBOX, stderr: () => {} });
   expect(exited).toBe(42);
-  const errored = await runAcp({ scannerProbe: okProbe, spawnFn: spawnSpy({ error: new Error("ENOENT") }).fn, stderr: () => {}, env: {} });
+  const errored = await runAcp({ scannerProbe: okProbe, spawnFn: spawnSpy({ error: new Error("ENOENT") }).fn, stderr: () => {}, env: {}, sandbox: NOOP_SANDBOX });
   expect(errored).toBe(127);
+});
+
+// -- P-SANDBOX.1 (ADR-0157): the runtime execution boundary at THE spawn --
+test("managed require-isolation with no backend FAIL-CLOSES the launch - never an unisolated spawn", async () => {
+  const spy = spawnSpy({ exit: 0 });
+  let errOut = "";
+  const code = await runAcp({ scannerProbe: okProbe, spawnFn: spy.fn, env: {}, sandbox: REFUSED_SANDBOX, stderr: (s) => (errOut += s) });
+  expect(code).toBe(1);
+  expect(spy.calls.length).toBe(0); // omp was NOT launched
+  expect(errOut).toMatch(/FAIL-CLOSED/);
+  expect(errOut).toMatch(/runtime isolation/);
+});
+
+test("the disclosed passthrough spawns the UNCHANGED argv and prints the loud disclosure line", async () => {
+  const spy = spawnSpy({ exit: 0 });
+  let errOut = "";
+  const code = await runAcp({ scannerProbe: okProbe, spawnFn: spy.fn, cwd: "/work/dir", env: {}, sandbox: NOOP_SANDBOX, stderr: (s) => (errOut += s) });
+  expect(code).toBe(0);
+  expect(spy.calls[0]!.args[0]).toBe("acp"); // argv identical to the ungated-of-sandbox shape
+  expect(errOut).toMatch(/NOT runtime-isolated/);
+  expect(errOut).toMatch(/ADR-0157/);
+});
+
+test("an isolating backend WRAPS the spawn: cmd becomes bwrap, the omp argv preserved after --", async () => {
+  const spy = spawnSpy({ exit: 0 });
+  const code = await runAcp({ scannerProbe: okProbe, spawnFn: spy.fn, cwd: "/work/dir", env: {}, sandbox: BWRAP_SANDBOX, stderr: () => {} });
+  expect(code).toBe(0);
+  const call = spy.calls[0]!;
+  expect(call.cmd).toBe("bwrap");
+  const sep = call.args.indexOf("--");
+  expect(sep).toBeGreaterThan(0);
+  expect(call.args[sep + 2]).toBe("acp"); // [omp, "acp", ...] preserved verbatim
+  expect(call.args).not.toContain("--unshare-net"); // trusted-local session keeps network (proxy = P-SANDBOX.2)
 });
 
 // ── CLI surface ───────────────────────────────────────────────────────────────
@@ -193,9 +232,18 @@ test("runTui NEVER spawns omp when the scanner is down — returns 1, no ungated
   expect(errOut).toMatch(/FAIL-CLOSED/);
 });
 
+test("runTui fail-closes identically under managed require-isolation with no backend", async () => {
+  const spy = spawnSpy({ exit: 0 });
+  let errOut = "";
+  const code = await runTui({ scannerProbe: okProbe, spawnFn: spy.fn, env: {}, sandbox: REFUSED_SANDBOX, stderr: (s) => (errOut += s) });
+  expect(code).toBe(1);
+  expect(spy.calls.length).toBe(0);
+  expect(errOut).toMatch(/FAIL-CLOSED/);
+});
+
 test("runTui spawns the gated omp (native TUI, no acp) with passthru + workspace cwd", async () => {
   const spy = spawnSpy({ exit: 0 });
-  const code = await runTui({ scannerProbe: okProbe, spawnFn: spy.fn, cwd: "/work/dir", passthru: ["--model", "haiku"], env: {} });
+  const code = await runTui({ scannerProbe: okProbe, spawnFn: spy.fn, cwd: "/work/dir", passthru: ["--model", "haiku"], env: {}, sandbox: NOOP_SANDBOX, stderr: () => {} });
   expect(code).toBe(0);
   expect(spy.calls.length).toBe(1);
   const call = spy.calls[0]!;
@@ -209,8 +257,8 @@ test("runTui spawns the gated omp (native TUI, no acp) with passthru + workspace
 });
 
 test("runTui returns the child's exit code, and 127 on spawn error", async () => {
-  const exited = await runTui({ scannerProbe: okProbe, spawnFn: spawnSpy({ exit: 7 }).fn, env: {} });
+  const exited = await runTui({ scannerProbe: okProbe, spawnFn: spawnSpy({ exit: 7 }).fn, env: {}, sandbox: NOOP_SANDBOX, stderr: () => {} });
   expect(exited).toBe(7);
-  const errored = await runTui({ scannerProbe: okProbe, spawnFn: spawnSpy({ error: new Error("ENOENT") }).fn, stderr: () => {}, env: {} });
+  const errored = await runTui({ scannerProbe: okProbe, spawnFn: spawnSpy({ error: new Error("ENOENT") }).fn, stderr: () => {}, env: {}, sandbox: NOOP_SANDBOX });
   expect(errored).toBe(127);
 });

@@ -26,7 +26,9 @@ import { recordTurns } from "./turns_log.ts";
 import { isLearnableAssistantText } from "./thinking_governance.ts";
 import { recordBlock } from "./security_log.ts";
 import { asksageOnly, attribution, checkerModel, lastModel, load as loadSettings, mcpServersForAcp, setCheckerModel, setLastModel } from "./settings_store.ts";
-import { managedAsksageOnly, managedConfig } from "./managed_config.ts";
+import { managedAsksageOnly, managedConfig, managedRequireIsolation } from "./managed_config.ts";
+import { resolveBackend, sandboxDisclosure, wrapForProfile, type SandboxDecision } from "../harness/runs/sandbox_exec.ts"; // P-SANDBOX.1 (ADR-0157)
+import { caps } from "../harness/runs/profiles.ts";
 import { recommendCheckerModel, resolveCheckerModel, type ModelOption } from "./checker_model.ts";
 import { parseGoalVerdict } from "./goal_verdict.ts";
 import { appendGoalIteration, appendRunLog, finishGoalMemory, type GoalMemory, readRunLog, resumeGoalMemory, saveGoalReport, savePreflightReport, startGoalMemory } from "./goal_memory.ts";
@@ -287,6 +289,31 @@ class Backend {
     try { console.error(`[TURN_DIAG] ${msg}`); } catch { /* never break a turn on a log */ }
   }
 
+  // P-SANDBOX.1 (ADR-0157): non-null means managed policy requires runtime isolation this machine
+  // cannot provide - every exec permission is DENIED (fail-closed) at the request_permission seam.
+  private sandboxExecBlock: string | null = null;
+
+  /** ADR-0157: resolve the runtime-sandbox spawn plan for the omp argv. bwrap wrap on Linux; the
+   *  DISCLOSED passthrough elsewhere; managed require-isolation without a backend = spawn with exec
+   *  DENIED (chat/read tools stay useful - the ADR's "block exec rather than disclose"). */
+  private resolveSandboxPlan(argv: string[]): { cmd: string; args: string[] } {
+    const res = resolveBackend({ requireIsolation: managedRequireIsolation(managedConfig().config) });
+    if (!res.ok) {
+      this.sandboxExecBlock = res.reason;
+      console.error(`[sandbox] FAIL-CLOSED: ${res.reason} - exec is BLOCKED for this session (ADR-0157).`);
+      return { cmd: argv[0]!, args: argv.slice(1) };
+    }
+    const d: SandboxDecision = wrapForProfile({ argv, caps: caps("trusted-local"), ctx: { workspace: currentWorkspace() }, resolution: res });
+    if (d.action === "refuse") { // unreachable for trusted-local caps, but never assume: fail closed
+      this.sandboxExecBlock = d.reason;
+      console.error(`[sandbox] FAIL-CLOSED: ${d.reason} - exec is BLOCKED for this session (ADR-0157).`);
+      return { cmd: argv[0]!, args: argv.slice(1) };
+    }
+    this.sandboxExecBlock = null;
+    if (d.disclosed) console.error(sandboxDisclosure());
+    return { cmd: d.plan.cmd, args: d.plan.args };
+  }
+
   private async start(): Promise<void> {
     if (this.acp) return;
     if (!this.starting) {
@@ -314,7 +341,15 @@ class Backend {
         const agentBuilderArgs = existsSync(AGENT_BUILDER_EXT) ? ["-e", AGENT_BUILDER_EXT] : []; // P-AGENT.8.2: agent_builder_open
         const slashCmdArgs = existsSync(SLASH_CMD_EXT) ? ["-e", SLASH_CMD_EXT] : []; // P-CMD.1: slash_command_create
         const mcpGateArgs = existsSync(MCP_RESULT_GATE) ? ["-e", MCP_RESULT_GATE] : []; // P-MCP-GATE.1
-        const acp = new ACPClient(ompBin(), ["acp", "-e", GATE, ...mcpGateArgs, "-e", ASKSAGE, ...previewArgs, ...codegraphArgs, ...agentBuilderArgs, ...slashCmdArgs, ...isoCfg, "--append-system-prompt", appendedPolicy], currentWorkspace());
+        // P-SANDBOX.1 (ADR-0157): the runtime execution boundary, decided at THE spawn. On Linux with
+        // bwrap the whole omp process tree (bash/eval/python/pip children included) is namespaced; on
+        // platforms without a backend this is the DISCLOSED passthrough - unless managed policy
+        // requires isolation, in which case exec fail-closes (this.sandboxExecBlock) rather than runs
+        // unisolated: the spawn still happens (chat/read tools stay useful) but every exec permission
+        // is denied at the session/request_permission seam below.
+        const ompArgv = [ompBin(), "acp", "-e", GATE, ...mcpGateArgs, "-e", ASKSAGE, ...previewArgs, ...codegraphArgs, ...agentBuilderArgs, ...slashCmdArgs, ...isoCfg, "--append-system-prompt", appendedPolicy];
+        const spawnPlan = this.resolveSandboxPlan(ompArgv);
+        const acp = new ACPClient(spawnPlan.cmd, spawnPlan.args, currentWorkspace());
         acp.onNotify = (method, params) => {
           if (method !== "session/update") return;
           const u = params?.update ?? params;
@@ -442,6 +477,13 @@ class Backend {
             const isEvalTool = /\beval\b/.test(toolName);
             const cmd = execCommand(tc);
             if (isEvalTool || cmd !== null || EXEC_TOOLS.test(toolName)) {
+              // P-SANDBOX.1 (ADR-0157): managed policy requires runtime isolation this machine cannot
+              // provide - exec fail-closes outright (never prompted, never auto-approved), audited.
+              if (this.sandboxExecBlock) {
+                emitSecurityEvent({ category: "exec", type: "exec_decision", decision: "block", severity: "high", tool: "shell", reason: `runtime isolation required by managed policy but unavailable: ${this.sandboxExecBlock}`.slice(0, 200), sessionId: this.sessionId ?? undefined });
+                this.recordGateDiag({ kind: "exec", tool: toolName.slice(0, 40), decision: "block(sandbox-required)" });
+                return { outcome: { outcome: "cancelled" } };
+              }
               const cls: ExecClass = isEvalTool ? classifyEval() : classifyCommand(cmd ?? toolName);
               // Interactive = a live chat turn with a UI listener and NOT an unattended loop/automation.
               const interactive = this.askActive && !!this.listener && !this.goalActive && !this.autoRunning;

@@ -133,6 +133,9 @@ const RAW: Record<string, string> = {
   stopBadge: "<rect x='4' y='4' width='16' height='16' rx='5.2' fill='currentColor' fill-opacity='.17'/>"
     + "<rect x='4' y='4' width='16' height='16' rx='5.2' fill='none' stroke='currentColor' stroke-opacity='.5'/>"
     + "<rect x='9' y='9' width='6' height='6' rx='1.6' fill='currentColor' stroke='none'/>",
+  // P-MARKET.1: plugin marketplace — a package cube (lid fold + seam)
+  market: P("M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z")
+    + P("M3.3 7 12 12l8.7-5") + P("M12 12v9.4") + P("M16.5 9.4 7.5 4.2"),
   alertBadge: "<rect x='4' y='4' width='16' height='16' rx='5.2' fill='currentColor' fill-opacity='.17'/>"
     + "<rect x='4' y='4' width='16' height='16' rx='5.2' fill='none' stroke='currentColor' stroke-opacity='.5'/>"
     + P("M12 8.3v4.4") + P("M12 15.9h.01"),

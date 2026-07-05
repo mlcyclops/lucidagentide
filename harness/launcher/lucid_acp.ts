@@ -27,6 +27,9 @@ import { BUILD_POLICY, DELEGATION_POLICY } from "../prompt/assembler.ts";
 import { ScannerClient, ScanUnavailableError } from "../security/scanner_client.ts";
 import { runAgentFirewall } from "../mcp/agent_firewall.ts";
 import { formatStats, rateLimits, sessionStats } from "../../tools/session_metrics.ts";
+import { resolveBackend, sandboxDisclosure, wrapForProfile, type BackendResolution } from "../runs/sandbox_exec.ts";
+import { caps } from "../runs/profiles.ts";
+import { managedConfig, managedRequireIsolation } from "../../desktop/managed_config.ts";
 
 type Env = Record<string, string | undefined>;
 const EXE = process.platform === "win32" ? ".exe" : "";
@@ -180,14 +183,31 @@ export interface RunAcpOpts {
   scannerProbe?: () => Promise<PreflightResult>;
   /** Injectable for tests; defaults to node child_process.spawn. */
   spawnFn?: SpawnFn;
+  /** Injectable for tests; defaults to the real platform/PATH/managed-policy resolution (ADR-0157). */
+  sandbox?: BackendResolution;
   stderr?: (s: string) => void;
+}
+
+/** ADR-0157 (P-SANDBOX.1): the real backend resolution for this machine — platform + PATH + the
+ *  managed require-isolation knob (admin-only file/registry, never env-forgeable). */
+function liveSandboxResolution(): BackendResolution {
+  return resolveBackend({ requireIsolation: managedRequireIsolation(managedConfig().config) });
 }
 
 /** Spawn the gated omp over inherited stdio; resolve the child's exit code (127 on spawn error). The
  *  single spawn path shared by `lucid acp` (ACP passthrough) and `lucid tui` (native terminal), so both
  *  surfaces inherit the same fail-closed launch. */
-function execGated(o: { omp: string; args: string[]; cwd: string; env: Env; spawnFn: SpawnFn; err: (s: string) => void; label: string }): Promise<number> {
-  const child = o.spawnFn(o.omp, o.args, { cwd: o.cwd, stdio: "inherit", env: o.env });
+function execGated(o: { omp: string; args: string[]; cwd: string; env: Env; spawnFn: SpawnFn; sandbox: BackendResolution; err: (s: string) => void; label: string }): Promise<number> {
+  // P-SANDBOX.1 (ADR-0157): the runtime execution boundary, decided at THE spawn. The interactive
+  // launcher session runs trusted-local caps; wrapForProfile owns the fail-closed rules (a managed
+  // require-isolation with no backend refuses here, exactly like the scanner preflight).
+  const d = wrapForProfile({ argv: [o.omp, ...o.args], caps: caps("trusted-local"), ctx: { workspace: o.cwd }, resolution: o.sandbox });
+  if (d.action === "refuse") {
+    o.err(`[${o.label}] FAIL-CLOSED: ${d.reason}\n[${o.label}] refusing to start — exec must be runtime-isolated under this org's policy (ADR-0157).\n`);
+    return Promise.resolve(1);
+  }
+  if (d.disclosed) o.err(`[${o.label}] ${sandboxDisclosure()}\n`);
+  const child = o.spawnFn(d.plan.cmd, d.plan.args, { cwd: o.cwd, stdio: "inherit", env: { ...o.env, ...d.plan.env } });
   return new Promise<number>((resolve) => {
     child.on("exit", (code: number | null) => resolve(code ?? 0));
     child.on("error", (e: unknown) => { o.err(`[${o.label}] failed to launch omp: ${String(e)}\n`); resolve(127); });
@@ -221,7 +241,7 @@ export async function runAcp(o: RunAcpOpts = {}): Promise<number> {
   const cwd = o.cwd ?? env.LUCID_WORKSPACE ?? process.cwd();
   const spawnFn = o.spawnFn ?? ((c, ar, op) => nodeSpawn(c, ar, op as never) as unknown as SpawnedLike);
 
-  return await execGated({ omp, args, cwd, env, spawnFn, err, label: "lucid acp" });
+  return await execGated({ omp, args, cwd, env, spawnFn, sandbox: o.sandbox ?? liveSandboxResolution(), err, label: "lucid acp" });
 }
 
 export interface RunTuiOpts {
@@ -233,6 +253,8 @@ export interface RunTuiOpts {
   scannerProbe?: () => Promise<PreflightResult>;
   /** Injectable for tests; defaults to node child_process.spawn. */
   spawnFn?: SpawnFn;
+  /** Injectable for tests; defaults to the real platform/PATH/managed-policy resolution (ADR-0157). */
+  sandbox?: BackendResolution;
   stderr?: (s: string) => void;
 }
 
@@ -263,7 +285,7 @@ export async function runTui(o: RunTuiOpts = {}): Promise<number> {
   const cwd = o.cwd ?? env.LUCID_WORKSPACE ?? process.cwd();
   const spawnFn = o.spawnFn ?? ((c, ar, op) => nodeSpawn(c, ar, op as never) as unknown as SpawnedLike);
 
-  return await execGated({ omp, args, cwd, env, spawnFn, err, label: "lucid tui" });
+  return await execGated({ omp, args, cwd, env, spawnFn, sandbox: o.sandbox ?? liveSandboxResolution(), err, label: "lucid tui" });
 }
 
 /** CLI entry. `lucid acp [--isolate]` starts the gated session; `lucid check` runs the fail-closed

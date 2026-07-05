@@ -11283,3 +11283,133 @@ ADR-0062/0106/0108 (P-EGRESS/P-NETWL - the egress brain + posture this REUSES fo
 ADR-0028/0032 (omp `--isolate` = filesystem-only containment; this adds the network/exec dimension it lacks),
 ADR-0068 (P-ENT.1 - the managed ceiling that can require isolation), `harness/runs/profiles.ts` (the declared
 `canNetwork`/`canExec` this finally enforces), CLAUDE.md invariants #1/#2/#3/#4.
+
+-----
+
+## ADR-0158 - P-MARKET.1: the Plugin Marketplace popup (Excalidraw first, Obsidian-ranked integrations)
+
+**Date:** 2026-07-05
+**Status:** Accepted. **P-MARKET.1 BUILT + tested.** Install mechanics deferred to P-MARKET.2 (design below).
+
+### Context
+
+Product ask (goal loop): a plugin marketplace in a new popup menu, similar to the other menus, simple to
+use, with https://github.com/excalidraw/excalidraw as the first option; then plan integrations that
+Obsidian ranks highly in its integrations category, popularity-first. Obsidian's community directory is
+JS-rendered, so popularity was sourced from obsidianstats.com (2026-07): the "3rd Party Integrations"
+category ranks Git (2,765,510 downloads), Remotely Save (2,008,001), Copilot (1,496,747), then Importer,
+BRAT, Advanced URI, Zotero, Paste URL into selection, LanguageTool, Readwise. Excalidraw itself is the
+most-downloaded Obsidian plugin overall (6,487,654) though it lives in a different category - the pin to
+first place is a product requirement, and the popularity data supports it anyway.
+
+NOT ADR-0038: that draft is about distributing LUCID as a JetBrains/VS Code extension on THEIR
+marketplaces; this is a marketplace INSIDE LUCID.
+
+### Decision
+
+1. **A curated, STATIC registry** (`desktop/renderer/marketplace.ts`, `MARKET_PLUGINS`). Nothing is
+   fetched, executed, or installed from the catalog in P-MARKET.1 - each row's only live action is
+   `window.open(repo, "_blank", "noopener")` on its GitHub URL. Fail-closed posture: a marketplace that
+   cannot run code cannot be a supply-chain vector. Registry entries carry stable string ids
+   (invariant 9), a closed status set (`featured | built-in | planned`), verified download counts where
+   sourced (null renders no badge - never fabricated numbers), and a one-line `lucidPlan` mapping each
+   entry onto LUCID's architecture.
+2. **Popup on the About-modal conventions** (`openMarketplace()` in app.ts): single instance, scrim +
+   centered dialog, closes on X / backdrop / Escape; opened from a new rail button (`#railMarket`,
+   `market` package icon) and a command-palette action. One search box live-filters the rows
+   (re-renders `#mktList` only). Pure builders (`marketplaceHtml`/`marketRowsHtml`) keep the module
+   DOM-free and unit-testable, mirroring local_providers_ui.ts (ADR-0135).
+3. **Ordering is the requirement, encoded:** `sortMarket` pins `featured` first, then canonical `rank`
+   (the Obsidian category order). Excalidraw-first is a TESTED invariant, not registry luck.
+4. **The integrations roadmap** (the "plan relevant integrations" half of the goal), popularity-first:
+   - **Git** (planned): dedicated git panel over the agent's existing gated git tooling.
+   - **Remotely Save** (planned): encrypted sync of sessions + semantic memory to user-owned
+     S3/WebDAV, vault-held keys, scanner-gated on the way back in.
+   - **Copilot** (built-in): LUCID core chat + Local Providers (ADR-0135) already cover BYOM.
+   - **Importer** (planned): external notes into the knowledge graph, through the scanner gate,
+     labeled untrusted (invariant 5/7).
+   - **BRAT -> P-MARKET.2**: install a marketplace entry from a GitHub URL, gated exactly like
+     agent-template import (digest check + scanner + trust label + approval; fail-closed).
+   - **Advanced URI** (planned): lucid:// deep links (open session / run command / launch agent).
+   - **Zotero, Paste-URL, LanguageTool, Readwise** (planned): research citations, editor nicety,
+     self-hosted grammar pass, highlights-as-untrusted-sources respectively.
+   Excalidraw itself: embed the whiteboard in the sandboxed Preview panel; sketches feed the agent as
+   design context (pairs with DESIGN.md honoring, ADR-0154).
+
+### Consequences
+
+- Files: `desktop/renderer/marketplace.ts` (+`.test.ts`), `market` icon in icons.ts, `openMarketplace()`
+  + rail button + palette action in app.ts, `.mkt-*` styles, `desktop/scripts/demo_p_market_1.ts`,
+  `demo-P-MARKET.1` Makefile target.
+- P-MARKET.2 (install path) MUST reuse the agent-template import gate seam, not invent a second one.
+- Registry updates (new entries, refreshed download counts) are ordinary PRs touching one array.
+
+### Verification
+
+`bun test desktop/renderer/marketplace.test.ts` 14 pass (Excalidraw-first invariant, closed status set,
+unique ids/ranks, https-GitHub-only repos, category-rank ordering, filter/format edges, escaping of
+registry strings and hostile queries). `bun run desktop/scripts/demo_p_market_1.ts` green. Root
+`tsc --noEmit` clean. Full `bun test`: no new failures (pre-existing: vendor/oh-my-pi environment
+failures + desktop/fs_browse.test.ts, verified identical with the change stashed).
+
+### Relates to
+
+ADR-0135 (local-providers card, the pure-builder pattern reused), ADR-0087 (About modal conventions),
+ADR-0038 (LUCID on external marketplaces - disambiguated), ADR-0020/0152 (the gate seams P-MARKET.2
+must reuse).
+
+-----
+
+## ADR-0159 - P-SANDBOX.1: the runtime sandbox seam, BUILT (declared caps enforced at the omp spawn)
+
+**Date:** 2026-07-05
+**Status:** Accepted / Built. Increment 1 of the ADR-0157 epic (P-SANDBOX.2 proxy next).
+
+### What shipped
+
+`harness/runs/sandbox_exec.ts` - the portable seam exactly as scoped: `SandboxBackend`
+(`bwrap` | `noop`), pure `resolveBackend(platform, requireIsolation, which)`, and
+`wrapForProfile(argv, caps, ctx, resolution)` as the SINGLE fail-closed decision point:
+
+- managed require-isolation + no isolating backend  => refuse (never a silent passthrough);
+- `canExec:false` (read-only-audit / quarantine)    => refuse to spawn an exec-capable omp;
+- `canNetwork:false` on a non-isolating backend     => refuse (never silently networked);
+- `canNetwork:false` under bwrap                    => `--unshare-net` (total deny, DNS included).
+
+The `chooseProfile` suspicious-chain downgrade to `container-local` now yields a genuinely
+network-denied plan - the profiles.ts gap ADR-0157 named is closed. Wired at BOTH spawns:
+`lucid_acp.ts` `execGated` (acp + tui share it; refused resolution = exit 1 before spawn, like the
+scanner preflight) and `acp_backend.ts` `resolveSandboxPlan` at the ACPClient argv. Managed knob:
+`security.exec.requireIsolation` (+ GPO flat value `ExecRequireIsolation`), tighten-only, read via
+the tamper-guarded managed_config channels only - never env.
+
+### Deliberate deltas from the ADR-0157 text (recorded, not silent)
+
+1. **Launcher fail-closes the WHOLE start** under managed-require+no-backend, while the DESKTOP
+   blocks exec selectively (spawn proceeds; every exec permission at the session/request_permission
+   seam is denied + audited via the existing SecurityEvent plumbing - no new EventNames, honoring the
+   P-SANDBOX.3 quarantine). Rationale: `lucid acp`/`tui` hand permission decisions to the IDE
+   client, so a spawned-but-exec-blocked session cannot be guaranteed from our side of the boundary;
+   the desktop CAN guarantee it and keeps chat/read useful.
+2. **bwrap v1 binds $HOME rw.** omp session state/config/credentials live there; ADR-0157's v1 scope
+   is the NETWORK + process boundary - filesystem containment remains omp `--isolate`'s job
+   (ADR-0028). Tightening the mount plan is P-SANDBOX.2+ work alongside the proxy.
+3. **Seccomp deferred.** `bwrap --seccomp` wants a compiled BPF program fd; shipping one is its own
+   careful change, not a side effect. `--unshare-net` + `--die-with-parent` + ro system mounts are
+   the v1 containment.
+4. **Launcher tests inject the sandbox resolution** (`RunAcpOpts.sandbox`) - otherwise the spawn-
+   shape assertions would depend on the HOST (a Linux dev box with bwrap would wrap the argv).
+
+### Verification
+
+`bun test harness` 801 pass / 0 fail (+21: sandbox_exec.test.ts 16, lucid_acp.test.ts wiring 4, and
+the hermetic updates); desktop/managed_config.test.ts 28 pass; root + desktop + server `tsc --noEmit`
+clean; `bun build --compile` of the standalone launcher still bundles (the new desktop/managed_config
+import is node-builtins only); `make demo-P-SANDBOX.1` green (backend resolution, cap->flag mapping,
+all four fail-closed rules, GPO knob, launcher wiring); `make demo-P-MARKET.1` still green.
+
+### Relates to
+
+ADR-0157 (the epic + threat model), ADR-0066/0068 (the argv gate this sits beneath; the managed-knob
+pattern reused), ADR-0028 (omp --isolate owns the fs dimension), ADR-0038 (launcher trust anchor),
+AGENTS.md invariants #1/#2/#3/#4.

@@ -644,6 +644,40 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .fg-status.err{color:var(--danger,#e0574a)}
 .fg-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:10px}
 
+/* P-MARKET.1 (ADR-0158): the Plugin Marketplace popup — scrim + centered modal, same family as figma/goal. */
+.mkt-scrim{position:fixed;inset:0;z-index:200;background:rgba(0,0,0,.55);display:grid;place-items:center;animation:fade var(--t) var(--ease)}
+.mkt-modal{width:min(600px,93vw);background:var(--bg-1);border:1px solid var(--line-strong);border-radius:16px;padding:20px;
+  box-shadow:0 20px 60px rgba(0,0,0,.55);display:flex;flex-direction:column;gap:9px;animation:rise var(--t-slow) var(--ease-out);
+  max-height:88vh}
+.mkt-h{display:flex;align-items:center;gap:8px;font-size:15px;font-weight:650;color:var(--txt)}
+.mkt-h .ic{color:var(--accent-2)}
+.mkt-close{margin-left:auto;display:grid;place-items:center;width:26px;height:26px;border-radius:7px;border:1px solid var(--line);
+  background:var(--bg-2);color:var(--txt-3);cursor:pointer;transition:background var(--t),color var(--t)}
+.mkt-close:hover{background:var(--bg-3);color:var(--txt)}
+.mkt-sub{font-size:12.5px;color:var(--txt-2);line-height:1.5}
+.mkt-search{width:100%;box-sizing:border-box;padding:8px 11px;border:1px solid var(--line-strong);border-radius:9px;
+  background:var(--bg-2);color:var(--txt);font-size:13px;outline:none;transition:border-color var(--t)}
+.mkt-search:focus{border-color:color-mix(in srgb,var(--accent) 45%,var(--line-strong))}
+.mkt-list{display:flex;flex-direction:column;gap:6px;overflow-y:auto;scrollbar-gutter:stable;min-height:120px}
+.mkt-row{display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--line);border-radius:11px;
+  background:var(--bg-2);transition:border-color var(--t),background var(--t)}
+.mkt-row:hover{background:var(--bg-3);border-color:color-mix(in srgb,var(--accent) 35%,var(--line))}
+.mkt-main{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;gap:3px}
+.mkt-name{display:flex;align-items:center;gap:7px;font-size:13.5px;font-weight:600;color:var(--txt)}
+.mkt-cat{font-size:10.5px;color:var(--txt-4);border:1px solid var(--line);border-radius:999px;padding:1px 8px;white-space:nowrap}
+.mkt-dl{display:inline-flex;align-items:center;gap:3px;font-size:10.5px;font-family:var(--mono);color:var(--txt-3);white-space:nowrap}
+.mkt-chip{font-size:10px;font-weight:650;letter-spacing:.03em;text-transform:uppercase;border-radius:999px;padding:1.5px 8px;white-space:nowrap}
+.mkt-featured{color:var(--accent-2);background:var(--accent-dim);border:1px solid color-mix(in srgb,var(--accent) 35%,var(--line))}
+.mkt-builtin{color:var(--ok,#4cbf7a);background:color-mix(in srgb,var(--ok,#4cbf7a) 12%,transparent);border:1px solid color-mix(in srgb,var(--ok,#4cbf7a) 35%,var(--line))}
+.mkt-planned{color:var(--txt-3);background:var(--bg-3);border:1px solid var(--line)}
+.mkt-desc{font-size:12.5px;color:var(--txt-2);line-height:1.45}
+.mkt-plan{display:flex;align-items:flex-start;gap:5px;font-size:11.5px;color:var(--txt-3);line-height:1.4}
+.mkt-plan .ic{flex:none;margin-top:1px;color:var(--accent-2);opacity:.8}
+.mkt-repo{flex:none;font-size:12px;font-weight:600;color:var(--txt-2);background:var(--bg-3);border:1px solid var(--line);
+  border-radius:8px;padding:6px 11px;cursor:pointer;white-space:nowrap;transition:background var(--t),color var(--t),border-color var(--t)}
+.mkt-repo:hover{background:var(--accent-dim);color:var(--txt);border-color:color-mix(in srgb,var(--accent) 40%,var(--line))}
+.mkt-empty{padding:22px 0;text-align:center;font-size:12.5px;color:var(--txt-3)}
+
 /* P-GOAL.1: /goal loop launcher modal + the in-chat loop rendering. */
 .goal-scrim{position:fixed;inset:0;z-index:200;background:rgba(0,0,0,.55);display:grid;place-items:center;animation:fade var(--t) var(--ease)}
 /* P-GOAL.7: larger, higher-contrast text across the whole module for easier reading */
