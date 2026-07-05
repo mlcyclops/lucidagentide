@@ -93,6 +93,19 @@ require("toggleterm.terminal").Terminal
 > policy). The only difference is the front end: `tui` is omp's terminal UI; `acp` is the machine protocol
 > an editor drives. Neither can start without the gate.[1]
 
+### The LUCID skin (P-THEME.1)
+
+Gated terminal sessions wear the desktop design system: `lucid tui` loads a small theme extension that
+installs `lucid` into omp's custom-themes dir (`~/.omp/agent/themes/lucid.json`) and applies it **for
+that session only** — it never persists `theme.dark`, so a bare `omp` keeps your own theme. The magenta
+accent doubles as the visible tell that you're in a *gated* terminal. Purely cosmetic and fail-open: if
+theming ever fails, the session runs on omp's default theme (the security gate is unaffected).
+
+- `LUCID_THEME=off lucid tui` — disable the skin.
+- `LUCID_THEME=<name> lucid tui` — wear another omp theme instead.
+- Because `lucid` is also a normal omp custom theme, you can select it for bare omp too
+  (omp Settings → Appearance), or live-tweak `~/.omp/agent/themes/lucid.json` — omp hot-reloads it.
+
 ---
 
 ## Path 2 — the `lucid.nvim` plugin

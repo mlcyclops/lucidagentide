@@ -11414,6 +11414,75 @@ ADR-0157 (the epic + threat model), ADR-0066/0068 (the argv gate this sits benea
 pattern reused), ADR-0028 (omp --isolate owns the fs dimension), ADR-0038 (launcher trust anchor),
 AGENTS.md invariants #1/#2/#3/#4.
 
+## ADR-0160 - P-THEME.1: the LUCID skin for gated terminals (an omp theme + a per-session `-e` apply)
+
+**Date:** 2026-07-05
+**Status:** Accepted / Built.
+
+### Context
+
+`lucid tui` is deliberately "just omp" (ADR-0150): the product is the invisible gate, not the chrome.
+The user asked the fair follow-up — can gated terminals at least LOOK like LUCID? omp ships a full
+supported theming surface (docs/theme.md: JSON themes in `~/.omp/agent/themes/`, 66 required color
+tokens, live file-watch reload) and an extension API with `ctx.ui.setTheme(name)` on the handler
+context, wired to the real theme switcher in interactive mode and stubbed to a graceful
+`{success:false}` in ACP/RPC/print modes. Crucially `setTheme(name)` swaps the in-memory theme
+singleton WITHOUT persisting `theme.dark` to config.yml — a per-session skin needs no settings write.
+
+### Decision
+
+1. **`harness/omp/themes/lucid.json`** — the desktop design system (desktop/renderer/styles.css)
+   translated to omp's theme schema: bg scale `#0a0b0f→#222736`, magenta accent `#c64bd6`/`#e07bf0`,
+   cyan-for-data `#46c8dc`, semantic green/amber/red, `vars`-based so the palette is stated once.
+   Alpha "dim" tints are flattened onto `--bg-1` (terminals have no alpha): toolSuccessBg `#162a24`,
+   toolErrorBg `#2e1c21`, selectedBg `#2d1f3c`.
+2. **`harness/omp/lucid_theme_extension.ts`** — a tiny `-e` extension: on `session_start` it
+   provisions the JSON into omp's custom-themes dir (`$PI_CODING_AGENT_DIR/themes` else
+   `~/.omp/agent/themes`; read-then-compare, write only on byte drift so omp's theme watcher isn't
+   poked per launch) and calls `ctx.ui.setTheme("lucid")`. Escape hatch: `LUCID_THEME=off|0|false`
+   disables, `LUCID_THEME=<name>` wears another theme (no provisioning). Pure core
+   (`themesDir`/`requestedTheme`/`provisionTheme`/`applyLucidTheme`) exported for tests; the omp
+   handler is a thin wrapper, defensively typed off `createAgentSession` like mcp_result_gate.ts.
+3. **Launcher wiring** — `LaunchAssets.lucidTheme` + optional `BuildTuiOpts.lucidTheme`; `runTui`
+   passes the `-e` when the file exists, AFTER the mandatory gate `-e` (gate stays first), before the
+   byte-identical appended policy (invariant #6 untouched — the prefix-hash test still pins it).
+   **TUI only**: ACP mode stubs setTheme as unavailable and the desktop shell has its own skin, so
+   `buildAcpArgs` is deliberately not threaded.
+
+### FAIL-OPEN, explicitly (the inverse of the gate)
+
+Invariant #3 (fail-closed) governs scan results, not paint. The skin is cosmetic: every failure —
+unwritable themes dir, malformed JSON, headless/ACP stub, setTheme rejection — degrades to
+"not applied" on omp's default theme, logged at debug, NEVER thrown, and can never block or kill a
+session. The demo + tests pin both directions: cosmetic fail-open AND untouched security fail-closed
+(dead scanner still ⇒ exit 1, zero spawns). The skin also gives the gate a visible tell: a branded
+terminal IS a gated terminal; bare omp keeps the user's own theme because nothing persists.
+
+### Session note — baseline repair (pre-increment, recorded here)
+
+The start-ritual baseline was red from two pre-existing rots, fixed before this increment's code:
+(1) `desktop/platform.test.ts` assumed the Bun test runtime has no `navigator`; Bun ≥1.x ships one,
+so on a mac host `isMac()` was correctly true — tests now stub a throwing accessor (the guard's
+catch path) / a Linux navigator, and the tour assertion pins the LIVE `modCombo("K")` resolution
+portably. (2) bare `bun test` crawled the GENERATED `desktop/release/**` packaged repo copies
+(gitignored, but Bun's crawler doesn't honor gitignore) — `make test-harness` now runs with
+`--path-ignore-patterns='desktop/release/**'` (suite: 340→156 real files).
+
+### Verification
+
+`make demo-P-THEME.1` green (token resolution, idempotent provisioning + setTheme via a fake ctx,
+fail-open × fail-closed, argv order, truecolor palette swatches). Live: `lucid tui --model
+claude-haiku-4-5 -p …` through the real launcher returned a gated turn (exit 0) and re-provisioned
+`~/.omp/agent/themes/lucid.json` byte-identical after deletion — the extension loads under real omp
+and session_start fires; interactive paint rides the verified extension-ui-controller setTheme path.
+`bun test harness/omp/lucid_theme_extension.test.ts harness/launcher/lucid_acp.test.ts` green
+(Tester-authored); full `make test` green (see PROGRESS.md for counts); root `tsc --noEmit` clean.
+
+### Relates to
+
+ADR-0150 (`lucid tui` — the surface this skins), ADR-0152 (the sibling optional `-e` pattern),
+ADR-0038 (launcher trust anchor), P-IDE.4 (the desktop lucid-dark the palette mirrors),
+AGENTS.md invariants #1 (extend, never fork — a theme file + a supported API), #3/#6 (untouched).
 ## ADR-0161 - P-NVIM.5: bare `lucid` starts the gated TUI (default subcommand)
 
 **Status:** Accepted / Built.

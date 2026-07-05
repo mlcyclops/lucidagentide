@@ -287,3 +287,39 @@ test("runTui returns the child's exit code, and 127 on spawn error", async () =>
   const errored = await runTui({ scannerProbe: okProbe, spawnFn: spawnSpy({ error: new Error("ENOENT") }).fn, stderr: () => {}, env: {}, sandbox: NOOP_SANDBOX });
   expect(errored).toBe(127);
 });
+
+// ── lucid theme: the cosmetic skin -e (P-THEME.1, ADR-0160) ──────────────────
+test("buildTuiArgs threads the theme -e AFTER the gate (gate first, policy after the -e block, passthru last)", () => {
+  const a = assets("/repo");
+  const args = buildTuiArgs({ gate: a.gate, mcpResultGate: a.mcpResultGate, asksage: a.asksage, lucidTheme: a.lucidTheme, passthru: ["-p", "hi"] });
+  expect(args[0]).toBe("-e");
+  expect(args[1]).toBe(a.gate); // the skin NEVER displaces the mandatory first -e
+  const themeIdx = args.indexOf(a.lucidTheme);
+  expect(args[themeIdx - 1]).toBe("-e");
+  expect(themeIdx).toBeGreaterThan(args.indexOf(a.gate));
+  expect(themeIdx).toBeGreaterThan(args.indexOf(a.mcpResultGate));
+  expect(themeIdx).toBeLessThan(args.indexOf("--append-system-prompt"));
+  expect(args.slice(-2)).toEqual(["-p", "hi"]);
+});
+
+test("buildTuiArgs without lucidTheme carries no theme extension (cosmetic = optional, never load-bearing)", () => {
+  const a = assets("/repo");
+  const args = buildTuiArgs({ gate: a.gate, asksage: a.asksage });
+  expect(args.some((x) => x.endsWith("lucid_theme_extension.ts"))).toBe(false);
+});
+
+test("assets exposes the theme extension beside the gates", () => {
+  expect(assets("/repo").lucidTheme).toBe("/repo/harness/omp/lucid_theme_extension.ts");
+});
+
+test("runTui loads the skin -e in the spawned argv (repo asset exists), gate still first", async () => {
+  expect(existsSync(assets().lucidTheme)).toBe(true); // the bundled asset ships with the repo
+  const spy = spawnSpy({ exit: 0 });
+  const code = await runTui({ scannerProbe: okProbe, spawnFn: spy.fn, env: {}, sandbox: NOOP_SANDBOX, stderr: () => {} });
+  expect(code).toBe(0);
+  const call = spy.calls[0]!;
+  expect(call.args[0]).toBe("-e");
+  expect(call.args.some((x) => x.endsWith("security_extension.ts"))).toBe(true);
+  expect(call.args.some((x) => x.endsWith("lucid_theme_extension.ts"))).toBe(true); // the skin rides along
+  expect(call.args.indexOf(call.args.find((x) => x.endsWith("lucid_theme_extension.ts"))!)).toBeGreaterThan(call.args.indexOf(call.args.find((x) => x.endsWith("security_extension.ts"))!));
+});
