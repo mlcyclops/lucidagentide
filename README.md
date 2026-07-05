@@ -98,6 +98,16 @@ require("lualine").setup({ sections = { lualine_x = { function() return require(
 -- or: vim.o.statusline = "%{v:lua.require'lucid'.statusline()}"
 ```
 
+Also built in:
+
+- **Security block banner** — when the gate quarantines a tool call, its `[BLOCKED tool_call:…]` line
+  (the same signal the GUI banner parses; `ext_parity.json` contract) raises a red `vim.notify` even if
+  the TUI scroll moved past it.
+- **Context sparkline** — `:LucidStats` shows per-turn context growth (`history ▁▂▃▅▇`).
+- `:10,20LucidSend` sends a cmdline line range (visual selections stay charwise-precise).
+- `statusline = false` disables the statusline component and its poll.
+- Neovim 0.10 works via a `termopen` fallback (0.11+ uses `jobstart{term=true}`).
+
 ## Configuration
 
 ```lua
