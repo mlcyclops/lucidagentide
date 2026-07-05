@@ -11715,8 +11715,9 @@ providers remain out of scope (still `skipped-nonhub`, no reach-out, no event) -
 
 ### Verification
 
-`bun test desktop` 893 pass / **5 fail** (the 5 are the pre-existing `fs_browse` / `listDir` env failures
-unrelated to this change - the desktop suite is where this code lives); `bun test harness` 843 pass / **1
+`bun test desktop` 910 pass / **5 fail** (post-merge with #223's toolfail tests folded in; the 5 are the
+pre-existing `fs_browse` / `listDir` Windows env failures unrelated to this change - the desktop suite is
+where this code lives); `bun test harness` 843 pass / **1
 fail** (a pre-existing Windows path-separator assertion in the P-THEME.1 theme-asset test - harness
 untouched here). The **+13** new `desktop/repo_collect.test.ts` all pass: `reachoutAuditEvents` across
 fetch ok/fail, not-fetched, network vs local/blank host, PR `ok`/`error`, every `skipped-*` (no event),
