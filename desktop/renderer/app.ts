@@ -1059,6 +1059,8 @@ async function send(): Promise<void> {
     const uc = state.userCommands.find((c) => c.name === cmdTok);
     if (uc && uc.mode === "skill") { ta.value = ""; autosize(ta); setSendEnabled(); void activateUserCommandSkill(uc); return; }
   }
+  // P-FIGMA.1 (ADR-0154): typing `/figma` opens the secure import form (URL + token) rather than sending text.
+  if (/^\/figma\b/i.test(text)) { ta.value = ""; autosize(ta); setSendEnabled(); openFigmaForm(); return; }
   // What actually goes to the model. `/agent` and `/command` kick off builder interviews (the chat agent,
   // steered by the frozen policies, asks what to build then calls the matching tool); a SEND-mode user
   // command expands its body (+ any typed args). The TRANSCRIPT still shows exactly what the user typed.
@@ -1196,6 +1198,7 @@ async function send(): Promise<void> {
     else if (e.type === "block") onBlock(e);
     else if (e.type === "preview-available") onPreviewAvailable(e.path);
     else if (e.type === "preview-activity") flashPreviewTesting(e.label); // P-PREVIEW.6a (ADR-0153)
+    else if (e.type === "design-available") showToast({ tone: "ok", title: "DESIGN.md is ready", desc: "The agent wrote your design invariants — review + edit them in the IDE.", actions: [{ label: "Review in the IDE", kind: "ok", run: () => void openDesignInIde() }], timeout: 10000 }); // P-FIGMA.2 (ADR-0154)
     else if (e.type === "agent-builder-open") openAgentBuilderWithSpec(e.spec); // P-AGENT.8.2
     else if (e.type === "slash-command-created") void onSlashCommandCreated(e.command); // P-CMD.1
     else if (e.type === "usage") { tok = e.used; cost = e.cost; state.liveUsage = { used: e.used, size: e.size, cost: e.cost }; paintHud(); renderStatus(); renderMetricsRail(); }
@@ -2618,6 +2621,89 @@ function clearPreviewTesting(): void {
   if (previewTestingTimer) { clearTimeout(previewTestingTimer); previewTestingTimer = undefined; }
   ($("#preview") as HTMLElement | null)?.classList.remove("testing");
   const pill = $("#prevPill") as HTMLElement | null; if (pill) pill.hidden = true;
+}
+
+// ── P-FIGMA.1/.2 (ADR-0154): /figma — import a Figma design, then a guided step (review / build-or-open DESIGN.md).
+function figmaImportStepHtml(savedToken: boolean): string {
+  return `<div class="figma-modal-h">${icon("eye", 15)} Import a Figma design</div>
+    <div class="figma-modal-sub">Paste a Figma file URL and a personal access token. The token is stored in the OS-encrypted vault and used only on this machine to fetch the frames — it never reaches the agent. The design opens in the Preview panel as a board you (and the agent) can review.</div>
+    <label class="fg-lbl">Figma file URL</label>
+    <input id="fgUrl" class="prov-key" placeholder="https://www.figma.com/design/…/…" autocomplete="off" spellcheck="false" />
+    <label class="fg-lbl">Personal access token ${savedToken ? `<span class="fg-opt">— a token is saved; leave blank to reuse it</span>` : `<span class="fg-opt">— Figma → Settings → Personal access tokens</span>`}</label>
+    <input id="fgPat" class="prov-key" type="password" placeholder="${savedToken ? "•••••• (using the saved token)" : "figd_…"}" autocomplete="off" />
+    <div class="fg-status" id="fgStatus" hidden></div>
+    <div class="fg-actions"><button class="btn-mini" data-fg="cancel">Cancel</button><button class="btn-mini ok" data-fg="import">${icon("download", 12)} Import</button></div>`;
+}
+function figmaNextStepsHtml(res: { fileName?: string; frames?: number; hasDesign?: boolean }): string {
+  const name = esc(res.fileName ?? "the design");
+  const designBtn = res.hasDesign
+    ? `<button class="btn-mini" data-fg="opendesign">${icon("markup", 12)} Review DESIGN.md in the IDE</button>`
+    : `<div class="fg-note">${icon("info", 12)} This project has no DESIGN.md yet.</div><button class="btn-mini" data-fg="builddesign">${icon("plus", 12)} Build a DESIGN.md from this design</button>`;
+  return `<div class="figma-modal-h">${icon("check", 15)} Imported ${name}</div>
+    <div class="figma-modal-sub">${res.frames ?? 0} frame${res.frames === 1 ? "" : "s"} are now in the Preview panel. What next?</div>
+    <div class="fg-next">
+      <button class="btn-mini ok" data-fg="review">${icon("eye", 12)} Have the agent review the design</button>
+      ${designBtn}
+    </div>
+    <div class="fg-actions"><button class="btn-mini" data-fg="done">Done</button></div>`;
+}
+function openFigmaForm(): void {
+  const savedToken = state.creds.some((c) => c.ref === "figma_pat"); // a PAT already in the vault?
+  const modal = el(`<div class="figma-modal">${figmaImportStepHtml(savedToken)}</div>`) as HTMLElement;
+  const ov = el(`<div class="scrim figma-scrim"></div>`) as HTMLElement;
+  ov.appendChild(modal);
+  document.body.appendChild(ov);
+  let fileName = "the design";
+  const close = () => ov.remove();
+  const status = (msg: string, err = false) => { const s = $("#fgStatus", modal) as HTMLElement | null; if (s) { s.hidden = false; s.textContent = msg; s.classList.toggle("err", err); } };
+  ($("#fgUrl", modal) as HTMLInputElement | null)?.focus();
+  ov.addEventListener("click", (e) => { if (e.target === ov) close(); });
+  modal.addEventListener("click", async (e) => {
+    const btn = (e.target as HTMLElement).closest("[data-fg]") as HTMLElement | null;
+    if (!btn) return;
+    const act = btn.dataset.fg;
+    if (act === "cancel" || act === "done") { close(); return; }
+    if (act === "review") { close(); seedFigmaReview(fileName); return; }
+    if (act === "opendesign") { close(); void openDesignInIde(); return; }
+    if (act === "builddesign") { close(); seedFigmaBuildDesign(fileName); return; }
+    if (act === "import") {
+      const url = ($("#fgUrl", modal) as HTMLInputElement).value.trim();
+      const pat = ($("#fgPat", modal) as HTMLInputElement).value.trim();
+      if (!url) { status("Enter a Figma file URL.", true); return; }
+      if (!pat && !savedToken) { status("Enter your Figma personal access token.", true); return; }
+      status("Importing… fetching the frames from Figma.");
+      if (pat && bridge.isElectron && bridge.credStore) { // persist the token in the OS-encrypted vault
+        const r = await bridge.credStore({ ref: "figma_pat", kind: "apikey", secret: pat, label: "Figma personal access token" });
+        if (r && !("error" in r)) void bridge.credList().then((c) => { state.creds = c ?? state.creds; });
+      }
+      const res = await bridge.figmaImport(url, pat || undefined).catch(() => null);
+      if (res && res.path) {
+        fileName = res.fileName ?? "the design";
+        onPreviewAvailable(res.path); // open + load the design board in the Preview panel
+        modal.innerHTML = figmaNextStepsHtml(res); // guided next step (review / DESIGN.md)
+      } else {
+        status(res?.error ?? "Couldn't import — check the file URL and token.", true);
+      }
+    }
+  });
+}
+/** Seed a design-review turn: the agent screenshots + inspects the imported board and checks it against DESIGN.md. */
+function seedFigmaReview(fileName: string): void {
+  const ta = $("#input") as HTMLTextAreaElement | null; if (!ta) return;
+  ta.value = `I've imported the Figma design "${fileName}" into the Preview panel — it's a board of the design's frames. Please review it: use preview_screenshot to look at it and preview_inspect to read it, and if this project has a DESIGN.md check the design against those invariants. Then give me (1) a short summary of what the design is, (2) any issues you see (spacing, color, typography, hierarchy, states, accessibility), and (3) concrete, actionable follow-up recommendations.`;
+  autosize(ta); setSendEnabled(); void send();
+}
+/** Seed a turn where the agent AUTHORS DESIGN.md from the imported design; the design-available event then pops it out. */
+function seedFigmaBuildDesign(fileName: string): void {
+  const ta = $("#input") as HTMLTextAreaElement | null; if (!ta) return;
+  ta.value = `This project has no DESIGN.md. Review the imported Figma design "${fileName}" in the Preview (use preview_screenshot and preview_inspect), then WRITE a DESIGN.md at the workspace root capturing its design invariants as concise, enforceable bullet points: the spacing / grid system, the color palette (with hex values), the typography scale, key component patterns, copy / voice tone, and accessibility rules. Keep it tight and specific so future UI work can adhere to it. When you've written DESIGN.md, tell me it's ready to review.`;
+  autosize(ta); setSendEnabled(); void send();
+}
+/** Pop the workspace DESIGN.md out in the Monaco IDE for the user to review + edit. */
+async function openDesignInIde(): Promise<void> {
+  const d = await bridge.designDoc().catch(() => null);
+  if (!d || !d.exists) { showToast({ tone: "warn", title: "No DESIGN.md yet", desc: "Ask the agent to build one from your design first (/figma → Build a DESIGN.md)." }); return; }
+  await openIde({ title: d.name ?? "DESIGN.md", path: d.path ?? "DESIGN.md", code: d.content ?? "", language: "markdown" });
 }
 /** Load the resolved target into the preview iframe. Fail-safe: only a `local` target is rendered; a
  *  `remote` or `blocked` target shows the empty-state message (remote is egress-gated in P-PREVIEW.3). */
@@ -5966,6 +6052,7 @@ function slashSource(): SlashItem[] {
   out.push({ label: "/agent", hint: "Build an AI agent — LUCID interviews you, then opens the Agent Builder", kind: "command", complete: "/agent ", uses: 9000 + (uses["agent"] ?? 0) });
   // P-CMD.1: create your OWN reusable "/" command by describing it — LUCID interviews you, then saves it.
   out.push({ label: "/command", hint: "Create your own /command — describe it, LUCID interviews you and saves it", kind: "command", complete: "/command ", uses: 8500 + (uses["command"] ?? 0) });
+  out.push({ label: "/figma", hint: "Import a Figma design into the Preview and have the agent review it", kind: "command", activate: "figma", uses: 8900 + (uses["figma"] ?? 0) }); // P-FIGMA.1 (ADR-0154)
   for (const s of bundledSkillsByUsage()) out.push({ label: s.name, hint: s.description, kind: "bundled", activate: s.command, uses: uses[s.command] ?? 0 });
   for (const s of state.skills) out.push({ label: `/skill:${s.name}`, hint: s.description || s.source, kind: "project", complete: `/skill:${s.name} `, uses: 0 });
   // P-CMD.1: the user's own saved commands. Ranked above omp commands (uses:100) so they surface first.
@@ -6025,6 +6112,7 @@ function applySlash(it: SlashItem | undefined): void {
     }
   };
   if (it.activate === "goal") { replaceToken(""); autosize(ta); setSendEnabled(); openGoalForm(); return; } // /goal is the REAL loop primitive (P-GOAL.1)
+  if (it.activate === "figma") { replaceToken(""); autosize(ta); setSendEnabled(); openFigmaForm(); return; } // P-FIGMA.1 (ADR-0154)
   if (it.activate) { void activateBundledSkill(it.activate); replaceToken(""); } // built-in skill rides the next turn
   else if (it.complete) { replaceToken(it.complete); }                           // command / project skill: finish typing args
   autosize(ta); setSendEnabled(); ta.focus();

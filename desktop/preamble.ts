@@ -19,6 +19,9 @@ export interface PreambleState {
   skill: string | null;
   /** Live <user-profile> personalization block (recallPreamble()), re-read each turn; "" when off. */
   profile: string;
+  /** P-DESIGN.1 (ADR-0154): the project's DESIGN.md invariants (already `<design-invariants>`-wrapped), or ""
+   *  when there's no DESIGN.md. STANDING guidance — re-delivered every turn so design work keeps honoring it. */
+  designInvariants?: string;
   /** Cross-session <recalled-memory> block, or null. Delivered once per session. */
   memoryRecall: string | null;
   /** Whether the cross-session recall has already been delivered this session. */
@@ -39,6 +42,7 @@ export function buildUserTurnPreamble(s: PreambleState): PreambleResult {
   if (s.persona) preamble += `${s.persona}\n\n`;
   if (s.skill) preamble += `${s.skill}\n\n`;
   if (s.profile) preamble += `${s.profile}\n\n`;
+  if (s.designInvariants) preamble += `${s.designInvariants}\n\n`; // P-DESIGN.1: honor DESIGN.md every turn
   let memoryRecallDelivered = s.memoryRecallDelivered;
   if (s.memoryRecall && !memoryRecallDelivered) {
     preamble += `${s.memoryRecall}\n\n`;

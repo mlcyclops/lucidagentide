@@ -52,6 +52,8 @@ import { PREVIEW_FRAME_CSP } from "./preview_resolve.ts"; // P-PREVIEW.4b: per-f
 import { inlinePreviewAssets } from "./preview_inline.ts"; // P-PREVIEW.4c: fold a multi-file app's relative assets inline
 import { injectPreviewBridge } from "./preview_bridge.ts"; // P-PREVIEW.6b (ADR-0153): read-only DOM-inspect bridge
 import { InspectRelay } from "./preview_inspect_relay.ts"; // P-PREVIEW.6b: agent preview_inspect ↔ renderer relay
+import { parseFigmaFileKey, collectTopFrames, figmaBoardHtml, FIGMA_API, type BoardFrame } from "./figma_client.ts"; // P-FIGMA.1 (ADR-0154)
+import { designDocPath, DESIGN_DOC_NAME } from "./design_doc.ts"; // P-FIGMA.2 / P-DESIGN.1 (ADR-0154)
 import { listLocalProviders, upsertLocalProvider, removeLocalProvider, setLocalProviderEnabled } from "./settings_store.ts";
 import { providerModelsUrl, type LocalProviderDef } from "./local_providers.ts";
 import { listRemoteAgents, upsertRemoteAgent, removeRemoteAgent, setRemoteAgentEnabled } from "../harness/mcp/registry.ts";
@@ -694,6 +696,62 @@ const server = Bun.serve({
       // P-LOCAL.3 polish: reachability/TLS probe. Hits the OpenAI-compatible /models endpoint with a short
       // timeout and NO key (the vault secret never leaves main) — any HTTP response (even 401/403) proves the
       // host is reachable + the TLS handshake succeeded; a network/TLS/timeout error means it's not.
+      // P-FIGMA.1 (ADR-0154): import a Figma file's frames as inlined PNGs into a local design-board HTML,
+      // loaded through the normal preview pipeline. The PAT is used SERVER-side only (from the request on the
+      // first import, or LUCID_FIGMA_TOKEN injected from the vault by main); it never returns to renderer/agent.
+      if (p === "/api/figma/import" && req.method === "POST") {
+        const fail = (error: string) => json({ ok: false, error, data: { error } }); // error rides in data (post() unwraps .data)
+        const b = await readBody<{ fileUrl?: unknown; pat?: unknown }>(req);
+        const pat = typeof b.pat === "string" && b.pat.trim() ? b.pat.trim() : (process.env.LUCID_FIGMA_TOKEN ?? "");
+        if (!pat) return fail("Enter a Figma personal access token.");
+        const key = parseFigmaFileKey(String(b.fileUrl ?? ""));
+        if (!key) return fail("That doesn't look like a Figma file URL or key.");
+        try {
+          const hdr = { headers: { "X-Figma-Token": pat } };
+          const fileRes = await fetch(`${FIGMA_API}/files/${key}?depth=2`, { ...hdr, signal: AbortSignal.timeout(20000) });
+          if (fileRes.status === 403) return fail("Figma rejected the token (403) — check the PAT and that it can read this file.");
+          if (fileRes.status === 404) return fail("Figma file not found (404) — check the file URL/key.");
+          if (!fileRes.ok) return fail(`Figma API error ${fileRes.status}.`);
+          const file = (await fileRes.json()) as { name?: string; document?: unknown };
+          const fileName = String(file?.name ?? "Figma file");
+          const frames = collectTopFrames(file?.document as never);
+          let board: BoardFrame[] = [];
+          if (frames.length) {
+            const ids = frames.map((f) => f.id).join(",");
+            const imgRes = await fetch(`${FIGMA_API}/images/${key}?ids=${encodeURIComponent(ids)}&format=png&scale=2`, { ...hdr, signal: AbortSignal.timeout(25000) });
+            const imgMap: Record<string, string | null> = imgRes.ok ? ((await imgRes.json())?.images ?? {}) : {};
+            board = await Promise.all(frames.map(async (f) => {
+              const src = imgMap[f.id];
+              let dataUrl = "";
+              if (src) {
+                try {
+                  const r = await fetch(src, { signal: AbortSignal.timeout(20000) });
+                  if (r.ok) dataUrl = `data:image/png;base64,${Buffer.from(await r.arrayBuffer()).toString("base64")}`;
+                } catch { /* leaves a placeholder */ }
+              }
+              return { name: f.name, page: f.page, dataUrl };
+            }));
+          }
+          const dir = join(currentWorkspace(), ".omp", "figma");
+          mkdirSync(dir, { recursive: true });
+          const outPath = join(dir, `${key}.html`);
+          writeFileSync(outPath, figmaBoardHtml(fileName, board), "utf8");
+          // P-FIGMA.2: tell the UI whether this project already has a DESIGN.md, to drive the guided next step.
+          const hasDesign = existsSync(designDocPath(currentWorkspace()));
+          return json({ ok: true, data: { path: outPath, fileName, frames: board.length, hasDesign } });
+        } catch (e) {
+          return fail(`Couldn't import the Figma file: ${String((e as { message?: unknown })?.message ?? e).slice(0, 160)}`);
+        }
+      }
+      // P-FIGMA.2 / P-DESIGN.1 (ADR-0154): read the workspace DESIGN.md so the renderer can pop it out in the
+      // Monaco IDE for the user to review/edit. Content only — the agent honors it via the preamble (P-DESIGN.1).
+      if (p === "/api/design") {
+        const dp = designDocPath(currentWorkspace());
+        const exists = existsSync(dp);
+        let content = "";
+        if (exists) { try { content = readFileSync(dp, "utf8"); } catch { /* leave empty */ } }
+        return json({ ok: true, data: { exists, path: dp, name: DESIGN_DOC_NAME, content } });
+      }
       if (p === "/api/local-providers/test" && req.method === "POST") {
         const b = await readBody<{ baseUrl?: unknown }>(req);
         const target = typeof b.baseUrl === "string" ? providerModelsUrl(b.baseUrl) : null;
