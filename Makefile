@@ -443,6 +443,10 @@ demo-P-PREVIEW.6c: ## P-PREVIEW.6c (ADR-0153): the agent CLICKS/TYPES in the liv
 demo-P-DESIGN.1: ## P-DESIGN.1 (ADR-0154): the agent honors a workspace DESIGN.md — read + wrapped as a <design-invariants> block and re-delivered in the user-turn preamble EVERY turn (never the frozen prefix); no DESIGN.md → no block
 	$(BUN) run desktop/scripts/demo_p_design_1.ts
 
+.PHONY: demo-P-MARKET.1
+demo-P-MARKET.1: ## P-MARKET.1 (ADR-0158): the Plugin Marketplace popup - Excalidraw pinned first, then Obsidian's top-ranked integrations by community downloads; searchable scrim-modal on the About//goal conventions; rows only open their GitHub repo (installs are P-MARKET.2)
+	$(BUN) run desktop/scripts/demo_p_market_1.ts
+
 .PHONY: demo-P-FIGMA.1
 demo-P-FIGMA.1: ## P-FIGMA.1 (ADR-0154): /figma — parse a Figma file URL → key, walk the doc → top frames (capped), build a design-board HTML with frames inlined as PNG data URLs (names escaped, only data:image src) for the sandboxed preview
 	$(BUN) run desktop/scripts/demo_p_figma_1.ts
@@ -450,6 +454,10 @@ demo-P-FIGMA.1: ## P-FIGMA.1 (ADR-0154): /figma — parse a Figma file URL → k
 .PHONY: demo-P-FIGMA.2
 demo-P-FIGMA.2: ## P-FIGMA.2 (ADR-0154): after /figma import, a guided step — review the design / open-or-build DESIGN.md; an agent write to DESIGN.md is detected (no false positives) → `design-available` pops it out in the IDE, then it's honored as standing guidance
 	$(BUN) run desktop/scripts/demo_p_figma_2.ts
+
+.PHONY: demo-P-SANDBOX.1
+demo-P-SANDBOX.1: ## P-SANDBOX.1 (ADR-0157): the runtime execution boundary — sandbox seam (bwrap/noop), canNetwork/canExec caps ENFORCED at the omp spawn (suspicious-chain downgrade = real --unshare-net), managed require-isolation fail-closes, disclosed passthrough elsewhere
+	$(BUN) run harness/scripts/demo_p_sandbox_1.ts
 
 .PHONY: dashboards
 dashboards: ## Materialize dashboard CSVs from a DuckDB into observable/docs/data (DB=path)

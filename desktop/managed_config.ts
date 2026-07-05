@@ -56,6 +56,10 @@ export interface ManagedExecPolicy {
   disableDangerMode?: boolean;
   /** Programs (argv0) the org forbids from any standing allow — they ALWAYS prompt/block. */
   denylist?: string[];
+  /** ADR-0157 (P-SANDBOX.1): REQUIRE runtime isolation for exec. When true and no isolating sandbox
+   *  backend is available on this machine, exec fail-closes to BLOCKED — never the disclosed
+   *  passthrough. Tighten-only, like every managed knob. */
+  requireIsolation?: boolean;
   /** Lock the exec controls in the UI ("Managed by <org>"). */
   lock?: boolean;
 }
@@ -267,6 +271,7 @@ export function parseRegistryPolicy(regOutput: string): ManagedConfig | null {
   const execDanger = bool("ExecDisableDangerMode"); if (execDanger !== undefined) exec.disableDangerMode = execDanger;
   const execLock = bool("ExecLock"); if (execLock !== undefined) exec.lock = execLock;
   const execDeny = list("ExecDenylist"); if (execDeny) exec.denylist = execDeny;
+  const execIso = bool("ExecRequireIsolation"); if (execIso !== undefined) exec.requireIsolation = execIso; // ADR-0157
 
   const egress: ManagedEgressPolicy = { ...(cfg.security?.egress ?? {}) };
   const egAllowed = list("EgressAllowedHosts"); if (egAllowed) egress.allowedHosts = egAllowed;
@@ -368,6 +373,13 @@ export function modelAllowed(modelId: string, models: ManagedModels | undefined 
 /** The effective gov-gateway-only lock, OR-ing the legacy top-level flag and the new models block. */
 export function managedAsksageOnly(mc: ManagedConfig | null = managedConfig().config): boolean {
   return !!mc?.asksageOnly || !!mc?.models?.asksageOnly;
+}
+
+/** ADR-0157 (P-SANDBOX.1): whether managed policy REQUIRES runtime isolation for exec (the tighten-only
+ *  "require-isolation" knob). Absent/unmanaged/false = no requirement (personal default = the disclosed
+ *  passthrough). Pure when given `mc`. */
+export function managedRequireIsolation(mc: ManagedConfig | null = managedConfig().config): boolean {
+  return !!mc?.security?.exec?.requireIsolation;
 }
 
 /** ADR-0103 (P-FS.1): the managed folder-browser/workspace root allowlist, or null when unmanaged
