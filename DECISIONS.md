@@ -10359,7 +10359,7 @@ plus `make demo-P-NVIM.1` green; root `tsc --noEmit` clean.
 ### Relates to
 
 ADR-0038 (the `lucid` launcher + untrusted-editor/trust-anchor model this extends), invariants #2/#3/#4/#6,
-ADR-0148/P-MCP-GATE.1 (the MCP result-gate to thread into `lucid tui` post-merge, #206).
+ADR-0152/P-MCP-GATE.1 (the MCP result-gate to thread into `lucid tui` post-merge, #206).
 
 ## ADR-0151 - P-NVIM.2: distribute lucid.nvim as a standalone branch WITHOUT leaving the monorepo
 
@@ -10492,3 +10492,66 @@ existing preview ones). No app version bump.
 ADR-0096 (the preview panel, `preview_open` / `preview_screenshot`, the shot-cache the relay extends),
 ADR-0126 (the markup canvas overlaying the same iframe), P-VISION.1/ADR-0136 (the sibling multimodal work),
 the streaming-state UI patterns (`.streaming` / `data-streaming`) the indicator mirrors.
+
+## ADR-0154 - P-NVIM.3: session metrics in Neovim (`lucid stats` + statusline + `:LucidStats`)
+
+**Status:** Accepted / Built.
+
+### Context
+
+The GUI's Memory inspector shows session **spend**, **KV-cache hit %**, and **context-fill**. Neovim
+users (P-NVIM.1/2) had the gated agent but not those numbers. The data already exists: `tools/
+memory_data.ts` reads per-turn tokens + KV-cache + cost from the omp session `.jsonl` and exposes
+`memorySnapshot()` (the web dashboard's JSON). The problem: `memory_data.ts` imports `@duckdb/node-api`
+at the top level (for its harness / AI-LOC views), and `memorySnapshot()` also spawns `omp config list`
+and opens DuckDB twice — far too heavy for a launcher subcommand an editor statusline polls.
+
+### Decision
+
+1. **Extract a DuckDB-free `tools/session_metrics.ts`** — the session-transcript pieces (`CTX_WINDOW`,
+   `shortModelId`, `ctxWindow`, `Turn`, `Session`, `findSession`, `sessionPathById`, `parseSession`,
+   `Budget`, `rateLimits`) plus a new `sessionStats()` (spend + cache{read,write,fresh,hit} + context
+   current/peak/fill) and `formatStats()`. `memory_data.ts` now IMPORTS and RE-EXPORTS these, so it
+   stays the single import surface for the TUI / web dashboard / desktop (single source of truth, no
+   duplication). The launcher imports ONLY `session_metrics.ts` — no DuckDB in the `lucid` binary.
+2. **`lucid stats [--json] [--budgets] [--session <id|path>]`** — session-only fast path (plain `.jsonl`
+   reads, one optional sqlite read for budgets). `--json` for editors; default is a human summary.
+3. **`lucid.nvim`** renders it two ways: **`:LucidStats`** (a float mirroring the Memory inspector) and
+   **`require("lucid").statusline()`** (a cached `Lucid $x · cache y% · ctx z%`, refreshed by a light
+   poll of `lucid stats --json` — the session-only fast path, so no DuckDB / no omp subprocess per tick).
+
+### Why not memorySnapshot() for the poll
+
+`memorySnapshot()` unconditionally runs `omp config list --json` (compaction) + opens DuckDB twice
+(harness + AI-LOC) + a sqlite read. Everything the user asked for (spend + KV-cache + context) is in the
+cheap session block alone. The statusline polls the fast path; the fuller snapshot stays in the GUI /
+`memory:tui` / web dashboard.
+
+### Consequences
+
+- `memory_data.ts` no longer defines the session-transcript primitives (imports them); all existing
+  consumers (memory_tui, web/data, desktop/dev, code_activity/usage_ledger tests) resolve via the
+  re-exports — verified by tsc + the full harness suite (580 pass / 0 fail).
+- New CLI surface `lucid stats`; no new EventNames / contracts / schema; prompt prefix untouched.
+- The numbers are computed from the SAME session `.jsonl` fields the GUI reads, so Neovim and the GUI
+  agree.
+
+### Files
+
+- `tools/session_metrics.ts` (new), `tools/memory_data.ts` (import + re-export), `harness/launcher/
+  lucid_acp.ts` (`stats` subcommand), `extensions/neovim/lua/lucid/init.lua` (`_pct`/`_bar`/
+  `_fmt_statusline`/`_fmt_stats_lines`, `statusline()`, `stats()`), `plugin/lucid.lua` (`:LucidStats`),
+  `docs/NEOVIM.md` + `extensions/neovim/README.md` (metrics section).
+- Tests: `harness/launcher/session_metrics.test.ts` (sessionStats/formatStats over a fixture .jsonl);
+  the headless nvim spec gains `_pct`/`_bar`/`_fmt_statusline`/`_fmt_stats_lines` assertions.
+
+### Verification
+
+Live: `lucid stats` on a real session printed model / turns / `$15.5611` spend / `99%` cache hit /
+`28%` context-fill / rate-limit budgets; `lucid stats --json --budgets` emits the matching payload. `bun
+test harness` 580 pass / 4 skip / 0 fail; root `tsc --noEmit` clean; headless nvim helper spec green.
+
+### Relates to
+
+ADR-0150/0151 (the Neovim plugin this extends), ADR-0011 (the usage/cost ledger in memory_data), the
+GUI Memory inspector (ADR-0036 developer view).
