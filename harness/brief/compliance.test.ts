@@ -59,6 +59,16 @@ describe("compliance crosswalk (P-REPORT.6)", () => {
     expect(md).toContain("**Rollup:**");
   });
 
+  test("table cell escapes backslashes AND pipes so a title can't break the columns (js/incomplete-sanitization)", () => {
+    const u: EngineeringUpdate = {
+      label: "TestRepo", loadBearingDependencies: [], techDebt: [], upcomingDecisions: [], risks: [],
+      recentlyShipped: [{ title: "Harden credential vault path C:\\keys | tokens", detail: "x", source: "PROGRESS.md" }],
+    };
+    const md = renderComplianceSection(u);
+    expect(md).toContain("C:\\\\keys");  // `\` escaped to `\\` (FIRST) so a trailing backslash can't eat the delimiter
+    expect(md).toContain("\\| tokens");  // `|` escaped to `\|` so it renders in-cell instead of splitting columns
+  });
+
   test("POA&M CSV has the eMASS headers, one row per mapped item, escaped", () => {
     const csv = renderPoamCsv(U, "TestRepo");
     const lines = csv.split("\r\n");

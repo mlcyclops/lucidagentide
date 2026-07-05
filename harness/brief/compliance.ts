@@ -123,7 +123,9 @@ export function renderComplianceSection(u: EngineeringUpdate): string {
   if (!rows.length) { out.push("_No security-relevant changes mapped to a control this cycle._", ""); return out.join("\n"); }
   out.push("| Change | Disposition | 800-171 | 800-53 | STIG CCIs |", "|---|---|---|---|---|");
   for (const r of rows) {
-    const title = plainTitle(r.item.title).replace(/\|/g, "\\|");
+    // Escape backslashes FIRST, then pipes — otherwise a title ending in `\` would turn the cell
+    // delimiter into an escaped `\|` and merge columns (js/incomplete-sanitization).
+    const title = plainTitle(r.item.title).replace(/\\/g, "\\\\").replace(/\|/g, "\\|");
     out.push(`| ${title} | ${r.disposition} | ${r.nist800171.join(", ")} | ${r.nist80053.join(", ")} | ${r.ccis.join(", ")} |`);
   }
   out.push("");

@@ -46,9 +46,9 @@
   // ── extension → webview ───────────────────────────────────────────────────────
   window.addEventListener("message", (e) => {
     // js/missing-origin-check (CWE-345): only trust messages from the VS Code extension host, which
-    // arrive on the webview's own `vscode-webview://` origin. Reject anything from an injected
-    // cross-origin frame before acting on it. (Older hosts may deliver an empty origin — allow that.)
-    if (e.origin && !e.origin.startsWith("vscode-webview://")) return;
+    // arrive on the webview's own `vscode-webview://` origin. Reject anything else — an injected
+    // cross-origin frame OR a message with no/empty origin — before touching e.data.
+    if (!e.origin || !e.origin.startsWith("vscode-webview://")) return;
     const m = e.data;
     switch (m.type) {
       case "ready": banner.hidden = true; break;
