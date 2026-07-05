@@ -39,6 +39,7 @@ import { exportActionPlan } from "./kg_export.ts";
 import { formatImportLine } from "./import_progress.ts";
 import { ASKSAGE_FAMILY_ORDER, familyOf, filterModels, groupByFamily, isAuxiliaryModel, isChinaModel, isDeprecatedModel, isGovModel, sortGovFirstNewest } from "./model_families.ts";
 import { FAVS_KEY, parseFavs, starredOf, toggleFav } from "./model_favorites.ts"; // P-FAV.1 (ADR-0165)
+import { renderSandboxSection } from "./sandbox_panel.ts"; // P-SANDBOX.5 (ADR-0169)
 import { INSTALLED_SKILLS, bumpSkillUsage, bundledSkillsByUsage, taskProforma } from "./skills.ts";
 import { CHECKER_TOKENS_PER_ITER, MAKER_TOKENS_PER_ITER, estimateGoalCost, estimateGoalTokens, formatTokens, formatUSD } from "../loop_estimate.ts";
 import { speakable } from "../../harness/brief/engineering_update.ts"; // P-REPORT.7: make read-aloud text TTS-friendly
@@ -3975,6 +3976,10 @@ function securityHtml(d: SecuritySnapshot | null): string {
     { cls: "f", n: totFind, l: "findings" },
     { cls: "g", n: promoted, l: "promoted facts" },
   ]);
+  // P-SANDBOX.5 (ADR-0169): the live runtime-execution boundary for THIS session (bwrap / Seatbelt /
+  // disclosed passthrough / fail-closed blocked) + the subprocess reach-outs the mediated proxy refused.
+  // Placed up top and auto-opened when NOT isolated, so the posture is the first thing a reviewer sees.
+  h += renderSandboxSection(d?.sandbox, OPEN.has("sec.sandbox"));
   // Live blocks (this session) - what the gate actually stopped in THIS GUI, with the audited
   // "Approve & retry" override. Sits up top so the toast "Review" lands on something actionable.
   if (live.quarantined.length || live.approved.length || live.dismissed.length) {

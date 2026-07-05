@@ -23,11 +23,16 @@
 import { egressBlockAudit } from "../harness/runs/egress_proxy.ts";
 import type { ProxyEvent } from "../harness/runs/egress_proxy.ts";
 import { emitSecurityEvent, type SecurityEventInput } from "./audit_export.ts";
+import { recordEgressBlockView, type EgressBlockView } from "./sandbox_status.ts"; // P-SANDBOX.5 (ADR-0169)
 
 /** Build a deduped audit sink for the proxy's `onEvent`. Denied reach-outs → one SecurityEvent per host
- *  (category `egress`, decision `block`, high severity). Allowed reach-outs and repeats emit nothing.
- *  `emit` is injectable (default the real dispatcher) so the dedupe logic is unit-tested without disk. */
-export function egressAuditSink(emit: (e: SecurityEventInput) => void = emitSecurityEvent): (e: ProxyEvent) => void {
+ *  (category `egress`, decision `block`, high severity) AND one Security-panel view row (P-SANDBOX.5).
+ *  Allowed reach-outs and repeats emit nothing. `emit`/`recordView` are injectable (defaults = the real
+ *  dispatcher + the panel store) so the dedupe logic is unit-tested without disk or global state. */
+export function egressAuditSink(
+  emit: (e: SecurityEventInput) => void = emitSecurityEvent,
+  recordView: (b: EgressBlockView) => void = recordEgressBlockView,
+): (e: ProxyEvent) => void {
   const seen = new Set<string>();
   return (ev: ProxyEvent) => {
     const a = egressBlockAudit(ev);
@@ -38,6 +43,11 @@ export function egressAuditSink(emit: (e: SecurityEventInput) => void = emitSecu
       emit({ category: "egress", type: a.type, decision: "block", severity: "high", tool: a.tool, reason: a.reason });
     } catch {
       /* auditing must never break mediation — a dead sink still leaves the reach-out DENIED */
+    }
+    try {
+      recordView({ host: a.host, channel: ev.channel, type: a.type, reason: a.reason, at: new Date().toISOString() });
+    } catch {
+      /* the panel view is best-effort; never let it break mediation */
     }
   };
 }

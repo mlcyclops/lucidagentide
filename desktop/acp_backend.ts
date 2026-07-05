@@ -30,6 +30,7 @@ import { managedAsksageOnly, managedConfig, managedRequireIsolation } from "./ma
 import { resolveBackend, sandboxDisclosure, wrapForProfile, type SandboxDecision, type SandboxProxy } from "../harness/runs/sandbox_exec.ts"; // P-SANDBOX.1 (ADR-0157)
 import { ensureEgressProxy } from "../harness/runs/egress_proxy.ts"; // P-SANDBOX.2 (ADR-0166)
 import { egressAuditSink } from "./egress_audit.ts"; // P-SANDBOX.3 (ADR-0167)
+import { setSandboxState } from "./sandbox_status.ts"; // P-SANDBOX.5 (ADR-0169)
 import { caps } from "../harness/runs/profiles.ts";
 import { recommendCheckerModel, resolveCheckerModel, type ModelOption } from "./checker_model.ts";
 import { parseGoalVerdict } from "./goal_verdict.ts";
@@ -308,9 +309,11 @@ class Backend {
    *  HTTP(S)_PROXY env rides back in `env` (applied to the child only, never process.env). If the proxy
    *  can't start, `wrap` falls back to network-off (fail-closed). Async because starting the proxy is. */
   private async resolveSandboxPlan(argv: string[]): Promise<{ cmd: string; args: string[]; env: Record<string, string> }> {
+    const at = new Date().toISOString(); // P-SANDBOX.5 (ADR-0169): surface the posture in the Security panel
     const res = resolveBackend({ requireIsolation: managedRequireIsolation(managedConfig().config) });
     if (!res.ok) {
       this.sandboxExecBlock = res.reason;
+      setSandboxState({ backend: null, isolated: false, disclosed: false, platform: process.platform, execBlocked: res.reason, proxied: false, at });
       console.error(`[sandbox] FAIL-CLOSED: ${res.reason} - exec is BLOCKED for this session (ADR-0157).`);
       return { cmd: argv[0]!, args: argv.slice(1), env: {} };
     }
@@ -324,10 +327,12 @@ class Backend {
     const d: SandboxDecision = wrapForProfile({ argv, caps: profileCaps, ctx: { workspace: currentWorkspace(), proxy }, resolution: res });
     if (d.action === "refuse") { // unreachable for trusted-local caps, but never assume: fail closed
       this.sandboxExecBlock = d.reason;
+      setSandboxState({ backend: res.backend.name, isolated: res.backend.isolates, disclosed: res.disclosed, platform: process.platform, execBlocked: d.reason, proxied: false, at });
       console.error(`[sandbox] FAIL-CLOSED: ${d.reason} - exec is BLOCKED for this session (ADR-0157).`);
       return { cmd: argv[0]!, args: argv.slice(1), env: {} };
     }
     this.sandboxExecBlock = null;
+    setSandboxState({ backend: res.backend.name, isolated: d.isolated, disclosed: d.disclosed, platform: process.platform, execBlocked: null, proxied: !!proxy, at });
     if (d.disclosed) console.error(sandboxDisclosure());
     return { cmd: d.plan.cmd, args: d.plan.args, env: d.plan.env };
   }

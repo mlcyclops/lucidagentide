@@ -19,7 +19,7 @@ const allow = (host: string): ProxyEvent => ({ channel: "dns", decision: { actio
 
 test("a blocked reach-out emits one canonical egress SecurityEvent (category/decision/severity)", () => {
   const out: SecurityEventInput[] = [];
-  egressAuditSink((e) => out.push(e))(deny("dns", "attacker.cn"));
+  egressAuditSink((e) => out.push(e), () => {})(deny("dns", "attacker.cn"));
   expect(out).toHaveLength(1);
   expect(out[0]).toMatchObject({ category: "egress", type: "dns_query_blocked", decision: "block", severity: "high", tool: "subprocess-dns" });
   expect(out[0]!.reason).toContain("attacker.cn");
@@ -27,13 +27,13 @@ test("a blocked reach-out emits one canonical egress SecurityEvent (category/dec
 
 test("an ALLOWED reach-out emits nothing (the audit trail records refusals, not normal traffic)", () => {
   const out: SecurityEventInput[] = [];
-  egressAuditSink((e) => out.push(e))(allow("pypi.org"));
+  egressAuditSink((e) => out.push(e), () => {})(allow("pypi.org"));
   expect(out).toHaveLength(0);
 });
 
 test("repeats for the same host are deduped — a looping gethostbyname can't flood the SIEM", () => {
   const out: SecurityEventInput[] = [];
-  const sink = egressAuditSink((e) => out.push(e));
+  const sink = egressAuditSink((e) => out.push(e), () => {});
   for (let i = 0; i < 100; i++) sink(deny("dns", "attacker.cn"));
   sink(deny("dns", "other.cn")); // a DIFFERENT host is still reported
   expect(out).toHaveLength(2);
@@ -41,7 +41,7 @@ test("repeats for the same host are deduped — a looping gethostbyname can't fl
 });
 
 test("a throwing emit never propagates — auditing must not break mediation (the reach-out stays denied)", () => {
-  const sink = egressAuditSink(() => { throw new Error("sink down"); });
+  const sink = egressAuditSink(() => { throw new Error("sink down"); }, () => {});
   expect(() => sink(deny("connect", "evil.example"))).not.toThrow();
 });
 
@@ -69,7 +69,7 @@ function udpSend(port: number, msg: Uint8Array): Promise<Buffer> {
 
 test("end-to-end: a denied DNS query flows through the proxy into exactly one audit event", async () => {
   const out: SecurityEventInput[] = [];
-  proxy = new EgressProxy({ decide: allowOnly([]), onEvent: egressAuditSink((e) => out.push(e)) });
+  proxy = new EgressProxy({ decide: allowOnly([]), onEvent: egressAuditSink((e) => out.push(e), () => {}) });
   const ep = await proxy.start();
   const reply = await udpSend(ep.dnsPort, dnsQuery("s0m3b64.attacker.cn"));
   expect(reply[3]! & 0x0f).toBe(5); // REFUSED
