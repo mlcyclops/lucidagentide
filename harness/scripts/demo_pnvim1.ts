@@ -71,6 +71,7 @@ console.log("3) runTui preflight passes ⇒ spawns the gated omp in the workspac
   const call = spy.calls[0]!;
   if (call.args.includes("acp")) fail("native TUI must not pass acp");
   if (!call.args.some((x) => x.endsWith("security_extension.ts"))) fail("the gate must be loaded");
+  if (!call.args.some((x) => x.endsWith("mcp_result_gate.ts"))) fail("the MCP result gate must be loaded (parity with acp)");
   if (call.cwd !== "/work/dir") fail("workspace cwd must be threaded");
   ok(`spawned ${call.cmd.split("/").slice(-1)[0]} with the gate loaded, cwd=${call.cwd}`);
 }
