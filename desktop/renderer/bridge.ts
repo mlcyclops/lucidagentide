@@ -231,6 +231,7 @@ export type ChatEvent =
   | { type: "permission"; id: string; tool: string; detail: string; options: { optionId: string; name: string; kind?: string }[]; url?: string; egress?: boolean; localFile?: boolean; exec?: boolean; program?: string; reason?: string; danger?: boolean }
   | { type: "preview-available"; path: string } // P-PREVIEW.2 (ADR-0096): the agent wrote a previewable file
   | { type: "preview-activity"; label: string } // P-PREVIEW.6a (ADR-0153): the agent is reviewing/testing the live preview
+  | { type: "design-available"; path: string } // P-FIGMA.2 (ADR-0154): the agent wrote/updated DESIGN.md
   | { type: "agent-builder-open"; spec: AgentSpec } // P-AGENT.8.2 (ADR-0134): open the Agent Builder pre-populated
   | { type: "slash-command-created"; command: UserCommand } // P-CMD.1 (ADR-0146): the agent created a user "/" command
   | { type: "usage"; used: number; size: number; cost: number }
@@ -375,6 +376,11 @@ export interface LucidBridge {
   localProviderTest(baseUrl: string): Promise<{ reachable: boolean; status?: number; authed?: boolean; error?: string } | null>;
   /** Restart the desktop app so a spawned omp picks up new local providers (Electron only; no-op in browser). */
   relaunch(): Promise<void>;
+  /** P-FIGMA.1 (ADR-0154): import a Figma file's frames as a design board → returns the local HTML path to
+   *  preview. The PAT (if passed) is used server-side + should already be stored in the vault by the caller. */
+  figmaImport(fileUrl: string, pat?: string): Promise<{ path?: string; fileName?: string; frames?: number; hasDesign?: boolean; error?: string } | null>;
+  /** P-FIGMA.2 (ADR-0154): read the workspace DESIGN.md (content) so it can be popped out in the IDE. */
+  designDoc(): Promise<{ exists: boolean; path?: string; name?: string; content?: string } | null>;
   setCodeGraphAgent(enabled: boolean): Promise<{ enabled: boolean } | null>;
   /** P-APPEAR.1: the personalized chat background (image data URL + display mode + opacity). */
   chatBackground(): Promise<{ image: string; mode: "off" | "ambient" | "flashlight"; opacity: number } | null>;
@@ -734,6 +740,8 @@ export const bridge: LucidBridge = {
   localProviderEnable: (id, enabled) => post("/api/local-providers/enable", { id, enabled }), // P-LOCAL.3
   localProviderTest: (baseUrl) => post("/api/local-providers/test", { baseUrl }), // P-LOCAL.3 polish
   relaunch: () => (shell?.relaunch ? shell.relaunch() : Promise.resolve()), // P-LOCAL.3 polish (Electron only)
+  figmaImport: (fileUrl, pat) => post("/api/figma/import", { fileUrl, ...(pat ? { pat } : {}) }), // P-FIGMA.1
+  designDoc: () => getData("/api/design"), // P-FIGMA.2
   setCodeGraphAgent: (enabled) => post("/api/codegraph/agent", { enabled }),
   chatBackground: () => getData("/api/chat-bg"),
   setChatBackground: (patch) => post("/api/chat-bg", patch),

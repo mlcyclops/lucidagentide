@@ -10949,3 +10949,60 @@ existing preview ones). No app version bump.
 ADR-0096 (the preview panel, `preview_open` / `preview_screenshot`, the shot-cache the relay extends),
 ADR-0126 (the markup canvas overlaying the same iframe), P-VISION.1/ADR-0136 (the sibling multimodal work),
 the streaming-state UI patterns (`.streaming` / `data-streaming`) the indicator mirrors.
+
+## ADR-0154 - P-DESIGN / P-FIGMA: honor DESIGN.md invariants + native Figma import/review (`/figma`)
+
+**Date:** 2026-07-04
+**Status:** Accepted. **FEATURE-COMPLETE — P-DESIGN.1 (DESIGN.md honoring) + P-FIGMA.1 (import + preview) +
+P-FIGMA.2 (guided review + build/pop-out DESIGN.md) all BUILT + green.**
+P-FIGMA.1 verified live: `/figma` opens the secure form and the import endpoint validates end to end (a bad
+URL is refused in the form). The successful-fetch path is unit-tested (URL parse, frame collection, board HTML)
++ loads through the existing preview pipeline; a real end-to-end import needs the user's PAT + file.
+P-FIGMA.2 (2026-07-04): after import, a guided next-steps card offers review / open-or-build DESIGN.md; the
+agent authoring a DESIGN.md emits an additive `design-available` event (pure `isDesignDocPath`, no false
+positives) that pops the doc out in the Monaco IDE (`/api/design` GET) for the user to review/edit — then
+P-DESIGN.1 honors it every turn. Unit-tested + renderer bundles clean (same `Bun.build` the dev server runs);
+a full click-through needs a real PAT + file (token-gated API + preview-harness flakiness on this host).
+**Increment:** P-DESIGN.1 (honor) → P-FIGMA.1 (import) → P-FIGMA.2 (review + build/pop-out DESIGN.md). DONE.
+
+### Context
+
+The user wants (a) a project's **DESIGN.md** to be honored as design invariants, and (b) a single **`/figma`**
+command to enter a Figma file + API key SECURELY, view it in the Preview panel, have the agent review the
+design (preview + snapshot + DESIGN.md), recommend follow-ups, and - if there's no DESIGN.md - offer to build
+one (popped out in the IDE for the user to review/edit) that future design work adheres to.
+
+### Decision - the architecture (recommended defaults; user did not override)
+
+- **DESIGN.md is standing design guidance (like CLAUDE.md is for coding).** `desktop/design_doc.ts`
+  `designInvariantsBlock` wraps a workspace-root `DESIGN.md` into a `<design-invariants>` block; `acp_backend`
+  reads it EACH turn (`readDesignInvariants(workspace)`) and passes it to `buildUserTurnPreamble` (a new
+  `designInvariants` field) so it rides in the user-turn tail (never the frozen prefix - no cache bust) and is
+  re-delivered every turn (never fades). It's the user's OWN file → trusted INSTRUCTIONS (the point is the agent
+  obeys it), not untrusted-delimited data. Clipped to 12k chars; absent DESIGN.md → no block, fail-soft.
+- **Figma auth = Personal Access Token → the OS-encrypted vault** (like Local Providers). PAT (not OAuth) for
+  v1: simplest, air-gap-friendly, user controls scope/revocation. main reads it from the vault and passes it to
+  the dev child (`LUCID_FIGMA_TOKEN`) so `api.figma.com` is called SERVER-side; the key never reaches the
+  renderer or the agent.
+- **"View in the preview" = rendered frame IMAGES, not a live embed.** The preview iframe is opaque-origin +
+  `connect-src 'none'`, so a live figma.com embed can't load (and loosening that is a security regression).
+  Instead: server-side call `GET /v1/files/:key` + `GET /v1/images/:key` (PNG renders), inline the images as
+  data URLs into a generated `.omp/figma/<key>.html`, and load it via the EXISTING preview pipeline (serve +
+  inline + the P-PREVIEW.6b bridge). The agent then reviews it with `preview_screenshot` + `preview_inspect`.
+- **`/figma` guided flow** (P-FIGMA.2): a client-side command (like `/goal`/`/agent`) → a secure form (file URL
+  + PAT → vault) → import → "review the design?" → the agent screenshots + inspects the preview + reads
+  DESIGN.md → recommendations → if no DESIGN.md, offer to build one → `openIde({path:"DESIGN.md",…})` pops it
+  out for the user to review/edit.
+
+### Invariants preserved
+
+#6 frozen prefix (DESIGN.md rides in the volatile tail, not the cached prefix); secrets never leave the OS
+vault / reach the renderer (the Figma PAT is server-side only); the preview sandbox is NOT loosened (Figma is
+rendered as inlined images through the existing egress-blocked pipeline); #1 extend-omp. No version bump.
+
+### Relates to
+
+ADR-0107 (the OS-encrypted vault reused for the Figma PAT), ADR-0135 (Local Providers - the vault-key →
+server-side pattern this mirrors), ADR-0137/P-PREVIEW.6 (the preview review tools the Figma review reuses),
+ADR-0096 (the preview pipeline the Figma board loads through), the `buildUserTurnPreamble` standing-guidance
+pattern (persona/skill/profile) that DESIGN.md joins.
