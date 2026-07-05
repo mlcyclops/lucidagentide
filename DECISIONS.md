@@ -7488,6 +7488,463 @@ P-PREVIEW.3a (agent-invoked `preview_open`/`preview_screenshot` via `pi.register
 New here: `PREVIEW_SANDBOX`/`PREVIEW_ALLOW`/`PREVIEW_SANDBOX_FORBIDDEN` (+ tests),
 `desktop/scripts/demo_p_preview_3.ts`. Shipped in **v1.8.14** (v1.8.13 skipped).
 
+## ADR-0097 - P-SKILL.4: the Agent Skill directory + management menu (SCOPE/PLAN)
+
+**Date:** 2026-06-28
+**Status:** Accepted - SCOPE/PLAN. Designed here; build is its own increment. Renderer + desktop-server
+only; no `contracts.ts`, scanner, prompt-prefix, or schema change. This is the local foundation the
+enterprise skills registry (ADR-0098) plugs into.
+**Increment:** P-SKILL.4. Unifies the EXISTING skill surfaces (ADR-0029 bundled corpus, ADR-0045
+scan-gated import, omp's `discoverSkills`, the `.agents/skills/` curated tree) under one directory + a
+management menu. Invents no new trust mechanism.
+
+### Context
+
+Skills already enter the app through four doors, but there is no single place to SEE and GOVERN them:
+
+- **Bundled corpus** - `desktop/renderer/skills.ts` `INSTALLED_SKILLS`: airgap-clean, TRUSTED frozen
+  guidance delivered in the user turn (ADR-0029). Immutable, reviewed assets.
+- **omp-discovered** - `desktop/skills_data.ts` `listSkills()` wraps omp's `discoverSkills(workspace)`
+  over project (`.omp/skills`), user (`~/.omp/agent/skills`), and plugin roots; invoked `/skill:<name>`.
+- **Scan-gated import** - ADR-0045 / P-SKILL.1: a dropped `.md` is scanned fail-closed and, if clean,
+  written to `<workspace>/.omp/skills/<slug>/SKILL.md`; suspicious/quarantined is recorded as a block.
+- **Curated `.agents/skills/`** - operator-curated, vendor-trusted, with `SOURCES.md` as the provenance
+  manifest (every entry's origin + trust).
+
+The ADR-0029 picker shows bundled + project skills "under one roof" *for invocation*, but it is not a
+management surface: you cannot see a skill's **source root** or **trust label** side by side, inspect its
+body + bundled resources, enable/disable it, remove an imported one, re-scan it, or check it against the
+whitepaper's deployment-readiness bar. With the registry add-on coming (ADR-0098), the app needs a real
+directory the registry can register as just another source.
+
+### Decision - one Skill Directory view + a per-skill management menu
+
+A **Skills** view in the desktop app that ENUMERATES every skill from every root and exposes governance:
+
+**Directory (the catalog).** One list, grouped by source, each row carrying:
+- `name` (kebab-case), one-line `description` (the routing/trigger text), invocation id `/skill:<name>`.
+- **Source root**: `bundled | project (.omp/skills) | user (~/.omp/agent/skills) | agents (.agents/skills) |
+  plugin | registry` (the last reserved for ADR-0098).
+- **Trust label** from the closed set (`trusted | untrusted | suspicious | quarantined`, invariant #7):
+  bundled + `.agents` vendor-curated = `trusted` (frozen, reviewed); imported/project/user carry the
+  scan verdict from the P-SKILL.1 gate; anything unscanned is shown as `untrusted` until scanned.
+- **Progressive-disclosure cost note**: metadata only is always-loaded (~tens of tokens); the SKILL.md
+  body + resources load on trigger - surfaced so the user sees the real token model (whitepaper §"Token
+  budget: isolation is a trap").
+
+**Per-skill management menu.** Actions, all renderer/desktop-server, all additive:
+- **Inspect** - read-only view of the SKILL.md body + a tree of bundled `scripts/`/`references/`/`assets/`,
+  with provenance (origin + trust from `.agents/skills/SOURCES.md` where present). Content is rendered as
+  DATA inside the trust-boundary delimiters - never executed, never promoted to instructions (invariant #5).
+- **Enable / disable** - a per-skill toggle persisted locally (extends the `lucid.skill-usage`
+  localStorage pattern in `skills.ts`). A **disabled skill is never offered and never loaded** - the
+  bundled-skill delivery path and the `/skill:` resolver both skip it. Default-on for trusted; **default-off
+  and non-enableable for `suspicious`/`quarantined`** (fail-closed, invariant #3; keystone-#2 aligned -
+  a flagged skill cannot become active guidance).
+- **Re-scan** - run the EXISTING fail-closed gate (`scanAndDecide(scanner, text, DEFAULT_POLICY)`, the
+  P-SKILL.1 path) over the skill's content on demand; show the verdict + update the trust label; a dead
+  scanner = `quarantined` (never "safe").
+- **Remove** - project/user/imported skills only (delete the `<slug>/` dir under a `pathWithin`
+  confinement check, mirroring the import write). **Bundled + `.agents` are immutable** (read-only).
+- **Readiness checklist** - surface the whitepaper's deployment bar per skill (frontmatter validates;
+  description has what + when + when-not; security scan clean; no hard-coded secrets/paths). Advisory, not
+  blocking; it is the same bar the registry (ADR-0098) will enforce at publish time.
+
+**The registry seam.** ADR-0098's registry is modeled as one more **source root** (`registry`): the
+directory enumerates remote skills the same way, and "install" = fetch → verify signature → scan-gate →
+write into a local root → it appears as a normal row. The public app ships only this READER seam; the
+hosting/runbooks are private add-on IP. This is the same public-seam / private-IP split as managed-config
+(ADR-0068) and the SIEM `Sink` (ADR-0069).
+
+### Plumbing (build increment, when scheduled)
+
+- `desktop/skills_data.ts` - widen `SkillInfo` to `{ name, description, source, trust, enabled, root,
+  invocation }`; merge bundled (`INSTALLED_SKILLS`) + `discoverSkills` + `.agents/skills` into one list;
+  read enable/disable + trust from local state and the recorded scan verdicts.
+- `desktop/renderer/skills.ts` - the bundled-skill delivery path and `/skill:` resolver SKIP disabled and
+  non-`trusted`-enableable skills.
+- New renderer **Skills** view (directory + the per-row menu) + a desktop-server route for inspect /
+  re-scan / remove (reusing `importSkill`'s scan + `pathWithin` confinement; `recordBlock` on a flagged
+  re-scan so it surfaces in the Security panel).
+- Tests - a disabled skill is not delivered/invokable; a `suspicious` skill cannot be enabled; remove is
+  confined to project/user roots and refuses bundled/`.agents`; re-scan with a dead scanner ⇒ `quarantined`.
+- `make demo-P-SKILL.4`.
+
+### Invariants preserved
+
+Fail-closed (#3): disabled/suspicious/quarantined skills are never loaded; a dead scanner on re-scan =
+quarantine. Trust labels are the closed set (#7). Untrusted skill bodies stay delimited DATA, never
+instructions, never in the frozen prefix (#5/#6). Extend-don't-fork (#1): omp's `discoverSkills` stays
+authoritative for discovery; we add a governance layer around it. No `contracts.ts` change (an
+`skill_enabled`/`skill_removed` EventName, if we log governance actions, is a separate contracts increment).
+New first-party files carry the BUSL-1.1 header (ADR-0086).
+
+### Relates to
+
+ADR-0029 (P-IDE.2 bundled corpus + the under-one-roof picker), ADR-0045 (P-SKILL.1/2/3 scan-gated import +
+builder + session-derived), `desktop/skills_data.ts` / `desktop/renderer/skills.ts`, `.agents/skills/` +
+`SOURCES.md`, ADR-0019 (gate + Security-panel block surfacing), ADR-0098 (the enterprise registry that
+registers as a `registry` source), and CLAUDE.md invariants #3/#5/#6/#7 + keystone #2.
+
+## ADR-0098 - P-SKILLREG.1: enterprise Agent Skills registry - capability spike (SCOPE/PLAN)
+
+**Date:** 2026-06-28
+**Status:** Accepted - SCOPE/PLAN (capability spike). This ADR records the cross-provider research and the
+build-vs-adopt decision. The public repo ships only the **registry-reader seam** (ADR-0097's `registry`
+source). The registry server, the per-provider Terraform runbooks, and their development ADRs are
+**private add-on IP** (`mlcyclops/lucidagentIDEaddon`): ADR-A012 (reference architecture + distribution
+model) and ADR-A013 (per-provider Terraform runbook framework + IL5). Same public-seam / private-IP split
+as ADR-0068 (managed-config) and ADR-0069 (SIEM `Sink`).
+**Increment:** P-SKILLREG.1. Builds on ADR-0097 (the local skill directory the registry plugs into) and
+ADR-0045 (the fail-closed scan-gate every installed skill must clear).
+
+### Context
+
+Agent Skills (the agentskills.io open standard: a `SKILL.md` folder + optional `scripts/`/`references/`/
+`assets/`, progressive disclosure) are becoming the portable unit of agent capability; public marketplaces
+crossed ~40,000 listings by early 2026. Enterprises need to **publish, version, govern, sign, scan, and
+distribute** skills privately - across the cloud they run AND on-prem/airgapped/IL5 - not pull from public
+GitHub. The question this spike answers: **does a first-party skills registry already exist for each target
+substrate, and where it doesn't, what do we build?**
+
+Targets: AWS, Microsoft Azure, Google Cloud, Oracle Cloud Infrastructure (OCI), VMware vSphere/vCenter,
+Nutanix Prism (AHV HCI), NetApp ONTAP, KVM/libvirt, IBM Cloud - plus the **separate-API IL5 government
+partitions** for the providers that have them.
+
+### Research findings (mid-2026; "if a registry exists yet, and if there are plans")
+
+A first-party SKILL.md-aware registry now exists at the three hyperscalers, **all in preview, none GA, and
+none with a Terraform resource for the registry itself** - Terraform covers only the surrounding artifact/
+storage primitives. OCI, IBM Cloud, and every on-prem/HCI platform have **no** first-party skills registry.
+
+| Substrate | First-party SKILL.md registry? | Maturity | TF for the registry itself | Best primitive to build/host on |
+|:--|:--|:--|:--|:--|
+| **AWS** (commercial) | **Partial** - Agent Registry in Bedrock AgentCore; SKILL.md-aware but stores **metadata only**, not the folder | Preview (Apr 2026) | **No** (FR #48381) | CodeArtifact generic packages (folders) · ECR/OCI · S3 |
+| **Azure** (commercial) | **Yes** - Microsoft Foundry Agent Service "Skills" API (versioned, project-scoped, MCP-discoverable); Copilot Studio also consumes SKILL.md | Preview (Build 2026) | **No** (azapi/REST only) | ACR + ORAS (signed OCI artifacts) · Azure Artifacts Universal Packages · Blob |
+| **Google Cloud** (commercial) | **Yes** - Skill Registry in Gemini Enterprise Agent Platform (governed, ADK-consumed) | Preview (I/O 2026) | **No** | Artifact Registry generic/OCI repos (IAM-governed) · GCS |
+| **Oracle OCI** | **No** (GenAI Agents uses RAG/SQL/function/API tools + Knowledge Bases, not a skill catalog) | - | n/a | OCI Artifact Registry (`oci_artifacts_repository`) · Container Registry · Object Storage |
+| **IBM Cloud** | **No** - watsonx Orchestrate "skills" are an older app-connector/RPA concept, NOT SKILL.md; ADK builder specs are authoring aids | - | n/a | IBM Cloud Container Registry (OCI artifacts) · Cloud Object Storage |
+| **VMware vSphere/vCenter** | **No** (hypervisor platform) | - | n/a | Self-host Harbor/Zot on a VM; MinIO for S3 (no native object store) |
+| **Nutanix Prism (AHV)** | **No** (HCI platform) | - | n/a | Self-host VM + **Nutanix Objects** (S3-compatible; `nutanix_object_store_v2`) - best all-in-one TF story |
+| **NetApp ONTAP** | **No** (storage platform; runs no compute) | - | n/a | Registry compute elsewhere; **ONTAP S3** (`netapp-ontap_s3_bucket`) or StorageGRID as the artifact backend |
+| **KVM/libvirt** | **No** (virtualization layer) | - | n/a | Self-host Harbor/Zot on a `libvirt_domain`; MinIO/Ceph-RGW for S3 (or Harvester HCI) |
+| **IL5 partitions (all)** | **No** accredited skills registry | - | separate partitions | **Always self-host** the OCI+S3 registry inside the partition |
+
+**Plans / direction.** AWS/Azure/Google have all publicly committed to expanding these registries (Google
+stated Skill Registry will fold into a broader Agent Registry "shortly"); but as of this spike none is GA,
+none is Terraform-manageable, AWS stores metadata only, and none is accredited for IL5. OCI, IBM, and the
+on-prem platforms show **no plans** for a SKILL.md registry - expected, as those are infra/storage/agent-
+tool platforms, not skill-distribution platforms.
+
+### Decision
+
+**1. The portable unit is skills-as-OCI-artifacts on an S3-compatible backend.** Every skill is packaged as
+a signed (Cosign), versioned **OCI artifact** in an OCI-distribution registry (Harbor or Zot self-hosted;
+or the cloud's native OCI repo - ECR / ACR / Artifact Registry / OCI Container Registry / ICR), with the
+skill tarball + provenance (SLSA) backed by S3-compatible object storage. This is the one pattern that
+works **identically** on every substrate above, GA today everywhere, and Terraform-able everywhere - unlike
+the preview first-party registries. It matches the emerging community "Agent Skills as OCI artifacts"
+convention.
+
+**2. Build the portable registry everywhere; integrate the first-party registries only as optional sync in
+commercial regions.** Because no first-party registry is GA, Terraform-manageable, or IL5-accredited, and
+AWS's is metadata-only, we do **not** depend on them as the system of record. The Terraform runbooks stand
+up the OCI+S3 registry on each substrate; where a first-party preview registry exists (AWS/Azure/GCP
+commercial), an **optional** connector publishes/syncs metadata into it for native discovery. **In IL5 we
+self-host, period** - the preview registries aren't accredited and IL5 uses separate API partitions.
+
+**3. The public app is a read-only registry consumer.** Per ADR-0097, a registry is one more `registry`
+source root: the app fetches a skill, **verifies its signature, runs it through the same fail-closed scan
+gate, and only then installs it** into a local skill root. The public, source-available repo ships ONLY
+this reader seam (signature verify + scan-gate + install). The registry server config and the runbooks are
+private add-on IP. Fail-closed throughout: an unsigned, signature-mismatched, or scan-flagged skill is
+**blocked**, never installed (invariant #3; keystone #2 - a registry skill never auto-promotes to trusted).
+
+**4. IL5 is a first-class, separate-partition target.** The "separate APIs for IL5 regions" are real and
+each runbook must handle them as a distinct Terraform provider configuration:
+- **AWS** - partition `aws-us-gov` (`us-gov-west-1/east-1`); `arn:aws-us-gov:...`; FIPS endpoints; separate
+  tenancy/IAM; gov Marketplace. Use the `aws_partition` data source - never hardcode `aws`.
+- **Azure** - `environment = "usgovernment"`; `.us` endpoints (`management.usgovcloudapi.net`,
+  `*.core.usgovcloudapi.net`, `login.microsoftonline.us`); separate Entra tenant; Azure Government Secret = IL6.
+- **Oracle** - `oraclegovcloud.com`, realms **OC2** (US Defense / DoD, IL5/IL6) and **OC3** (US Gov,
+  FedRAMP High); FIPS-compatible provider + realm-specific endpoint templates; no cross-realm subscription.
+- **Google** - **same `googleapis.com` endpoints**, scoped by an **Assured Workloads** folder with the IL5
+  control package (US regions, US-person support); guardrails are org-policy, not a separate partition.
+- **IBM** - FedRAMP High (IC4G) confirmed; **DoD IL5 currency is weak/historical** and IBM's newest gov AI
+  (watsonx) actually runs on **AWS GovCloud** - verify against the live DISA catalog before committing IL5
+  to IC4G.
+
+### Private add-on deliverables (the "build our own runbooks" path)
+
+In `mlcyclops/lucidagentIDEaddon` (not this public repo):
+- **ADR-A012** - Enterprise Skills Registry reference architecture + the skills-as-OCI-artifacts distribution
+  model (Harbor/Zot, Cosign signing, SLSA provenance, the scan-gate-on-install contract the public reader honors).
+- **ADR-A013** - the per-provider Terraform runbook framework: a shared `skills-registry` module (registry
+  VM/cluster + OCI repo + S3 bucket + IAM/policy) instantiated per provider, plus the IL5 partition matrix
+  (separate provider configs above). Notes the substrate gotchas: VMware provider moved to `vmware/vsphere`
+  (Broadcom); Nutanix `nutanix_object_store_v2` is the strongest single-platform story; ONTAP runs no
+  compute (pair with a hypervisor); StorageGRID's community TF provider is at-risk; libvirt/Harvester need
+  MinIO/Ceph for S3.
+- **`terraform/<provider>/`** skeleton runbooks (provider block + key resources stubbed + variables +
+  README) for: aws, azure, gcp, oci, vmware-vsphere, nutanix, netapp-ontap, kvm-libvirt, ibmcloud, and an
+  `il5/` overlay - enough to begin real development; not apply-ready (no creds to `terraform validate` here).
+
+### Public-repo deliverables (this increment)
+
+- This ADR (the spike + research of record).
+- The ADR-0097 `registry` source seam (the reader the registry plugs into).
+- README "Enterprise Skills Registry (coming soon)" - the public-facing "coming soon" marker.
+
+### Invariants preserved
+
+Fail-closed (#3): unsigned / signature-mismatched / scan-flagged registry skills are blocked, never
+installed. Keystone #2: a registry skill is never auto-promoted to trusted guidance - it clears the gate
+first. Extend-don't-fork (#1): the registry is an external source the existing directory consumes; omp's
+discovery is untouched. Untrusted registry content stays delimited DATA (#5), never in the frozen prefix
+(#6). Trust labels are the closed set (#7). Public ships seams only; the IP stays in the private add-on
+repo (ADR-0086 licensing model). New first-party files carry the BUSL-1.1 header.
+
+### Relates to
+
+ADR-0097 (the skill directory + `registry` source), ADR-0045 (the scan-gate every install clears), ADR-0029
+(bundled-corpus trust model), ADR-0068/0069 (the public-seam / private-IP pattern this mirrors), the private
+ADR-A012/A013 (the architecture + runbooks), and CLAUDE.md invariants #1/#3/#5/#6/#7 + keystone #2.
+
+## ADR-0099 - P-KB.1: the compiled KB (OpenKB-style), a sibling to the vector RAG spine (SCOPE/PLAN)
+
+**Date:** 2026-06-30
+**Status:** Accepted - SCOPE/PLAN. Designed here; build is its own increment. TypeScript + DuckDB only
+(**no Python** - invariant #2). A NEW subsystem `harness/kb/` that sits ALONGSIDE the vector RAG spine
+(ADR-0058 `kb_chunks`); it does not replace it and is not the personal KG (ADR-0010).
+**Increment:** P-KB.1. Reuses the scan gate (ADR-0058/gate.ts), the `Db`/migration runner (ADR-0001),
+the embedder seam (ADR-0063), and `backend.complete()` (ADR-0046). Models the OpenKB "compiled wiki".
+
+### Context
+
+The existing RAG spine (ADR-0058) is **pure vector RAG**: parse -> chunk -> scan -> embed -> cosine. Nothing
+*accumulates* - knowledge is rediscovered per query. The user wants a redesign that mimics **OpenKB**
+(github.com/VectifyAI/OpenKB): instead of opaque chunks, an LLM **compiles** documents into a persistent
+substrate of **pages** - a *summary page* per source, *concept pages* synthesizing ideas across documents,
+and *entity pages* (people/orgs/products) - all joined by **cross-reference wikilinks** and **kept in sync**.
+Long documents get a **PageIndex-style hierarchical tree** for vectorless, reasoning-based retrieval. OpenKB
+itself is Python (markitdown/pymupdf/PageIndex) writing Markdown files; we must instead build it in
+**TypeScript + DuckDB**, reusing existing infra, and make it a **sibling** to the vector KB usable **in
+parallel or individually** (ADR-0100 routes between them).
+
+### Decision - a DuckDB-backed compiled-page graph, compiled by the most-used model, gated like everything else
+
+**New `kb_graph.duckdb`** (own migration dir `harness/kb/migrations/`, frozen numbered files `0011_*`):
+- `kb_documents` - the source registry: `document_id`, `source_path`, `title`, `sha256`, `classification`
+  ('U'|'CUI'), `trust_label`, `status` ('compiled'|'quarantined'|'stale'), `ingested_at`.
+- `kb_pages` - the compiled wiki, first-class objects: `page_id`, `kind` ('summary'|'concept'|'entity'|
+  'source'), `slug`, `title`, `body_md`, `trust_label`, `classification`, `created_at`, `updated_at`.
+- `kb_links` - cross-references (wikilinks): `link_id`, `from_page_id`, `to_page_id`, `relation`
+  (default 'related'), `created_at`. (Same shape as the personal KG's `PersonalLink`, deliberately, so the
+  ADR-0075 graph renderer can draw it.)
+- `kb_page_sources` - provenance/citations: `page_id` -> `document_id` + `ordinal`/quote, soft-ref to
+  `content_artifacts` (the citation trail OpenKB keeps).
+- `kb_changelog` - append-only "kept in sync" log: what each (re)compilation added/changed/flagged
+  (incl. contradiction flags), so the substrate is auditable and re-runs are idempotent-ish.
+- `kb_page_embeddings` (optional, hybrid) - reuse the `Embedder` seam to embed page bodies for cosine,
+  so retrieval can be structural OR vector OR both (ADR-0100).
+
+**Pipeline (`harness/kb/ingest.ts` + `harness/kb/compiler.ts`):**
+1. **Parse** - reuse `ingestPdf`/`unpdf` (ADR-0064) and the chunker only for building the long-doc tree.
+2. **Scan-gate, fail-closed** - `scanAndDecide(scanner, rawText, DEFAULT_POLICY)` on the source BEFORE any
+   compilation. Blocked -> `kb_documents.status='quarantined'`, `recordBlock`, **never compiled** (#3).
+3. **Compile** - `backend.complete(compileSystem, docText, {model: usageLedger().models[0]})` produces/updates
+   summary + concept + entity pages + links (the most-used model, like P-SKILL.2/ADR-0046).
+4. **Re-scan derived pages** - every model-generated page body is **untrusted structure**: run it back
+   through `scanAndDecide` before store. A flagged page is quarantined, never trusted (keystone #2 - derived
+   content never auto-promotes). This is the load-bearing rule that separates a *compiled* KB from a poisoned one.
+5. **Store + changelog + events** - write pages/links/sources, append `kb_changelog`, emit telemetry.
+
+**Sibling, not replacement.** `kb_chunks` (vector) and `kb_pages` (compiled) are independent stores in
+independent DuckDB files; a workspace may use one, the other, or both. The personal KG (encrypted, FIPS,
+user facts) is untouched - this is a *document* KB.
+
+### Plumbing (build increment, when scheduled)
+
+- `harness/kb/migrations/0011_kb_graph.sql` (+ later numbered files); `harness/kb/store.ts` (wraps `Db.open`),
+  `harness/kb/compiler.ts` (the `backend.complete` compile prompts + page diff/merge), `harness/kb/ingest.ts`
+  (parse -> scan -> compile -> re-scan -> store). `make demo-P-KB.1` (real scanner + temp DB: a clean doc
+  compiles to >=1 summary/concept/entity page with links; a poisoned doc is quarantined and never compiled;
+  a model page that fails the re-scan is quarantined).
+- Tests mirror `harness/knowledge/ingest.test.ts` (clean compiles, poison blocked, dead-scanner fail-closed,
+  derived-page re-scan blocks).
+
+### Invariants preserved
+
+No Python (#2). Fail-closed (#3): source AND every derived page scanned; dead scanner = quarantine. Keystone
+#2: compiled pages never auto-trusted. Trust labels are the closed set (#7). DuckDB schema frozen via numbered
+migrations (#10). New EventName values (`kb_document_ingested`, `kb_page_compiled`, `kb_page_quarantined`) are
+a **deferred `contracts.ts` increment** (#8) - named here, not added this round. BUSL header on new files.
+
+### Relates to
+
+ADR-0058/0063/0064 (the vector RAG spine + embedder + PDF parse this siblings), ADR-0001 (Db/migrations),
+ADR-0046 (`backend.complete` + most-used model), ADR-0010/0075 (personal KG store shape + graph renderer
+reused for viz), ADR-0100 (the retrieval router over both stores), and CLAUDE.md #2/#3/#7/#10 + keystone #2.
+
+## ADR-0100 - P-KB.2: hybrid retrieval router (vector | compiled | both) + sync + graph viz (SCOPE/PLAN)
+
+**Date:** 2026-06-30
+**Status:** Accepted - SCOPE/PLAN. Designed here; build follows P-KB.1. Pure-TS router + a renderer reuse;
+no new trust path, no schema change beyond P-KB.1.
+**Increment:** P-KB.2. Sits on top of ADR-0099 (`kb_pages`) and ADR-0058 (`kb_chunks`).
+
+### Context
+
+With two sibling stores (vector `kb_chunks`, compiled `kb_pages`), the user wants them usable **in parallel or
+individually**. We need a router that can answer from either or both, plus the "kept in sync" + visualization
+generators OpenKB ships.
+
+### Decision
+
+**Retrieval router (`harness/kb/retrieve.ts`).** One entry point `retrieveKnowledge(query, {mode})` where
+`mode in {'vector','compiled','hybrid'}` (default `hybrid`):
+- `vector` -> existing `KnowledgeStore.retrieve()` cosine (ADR-0058), unchanged.
+- `compiled` -> **structural/reasoning retrieval** over `kb_pages`: walk the PageIndex tree + entity/concept
+  links to the most relevant pages (vectorless), optionally re-ranked by cosine over `kb_page_embeddings`.
+- `hybrid` -> run both, merge + dedupe by source, return a single ranked, **delimited + cited** set wrapped in
+  `UNTRUSTED_START/END` (reuse `wrapRetrieved`), each item labelled with its store + citation
+  (`page:slug` or `source_path#ordinal`). The model is told which substrate each hit came from.
+
+**Sync (the "kept in sync" generator).** Re-ingesting a changed document re-compiles its pages, appends a
+`kb_changelog` entry, relinks cross-references, and **flags contradictions** (a new fact conflicting with an
+existing page surfaces in the changelog for review rather than silently overwriting). Idempotent on unchanged
+`sha256`.
+
+**Visualization.** Reuse `desktop/renderer/graph.ts` (ADR-0075 zero-dep SVG force layout): concept/entity
+pages are nodes, `kb_links` are edges; clicking a node opens the page body (read-only, rendered as DATA).
+This is OpenKB's "visualization" generator with zero new dependencies.
+
+### Plumbing (build increment)
+
+- `harness/kb/retrieve.ts` (router + merge/dedupe), `harness/kb/sync.ts` (re-compile diff + contradiction
+  flag). Desktop: a Knowledge view toggle (vector | compiled | both) + reuse the graph panel for the page
+  graph. `make demo-P-KB.2` (router returns vector-only, compiled-only, and merged-cited results; a
+  re-ingest appends a changelog entry and relinks). EventName `kb_retrieved` deferred to the contracts increment.
+
+### Invariants preserved
+
+Untrusted retrieved content stays delimited + post-cache (#5/#6). No new trust values (#7). Router is pure
+read; sync writes via the P-KB.1 gated path only. Renderer reuse = no new dep (extend-don't-fork, #1).
+
+### Relates to
+
+ADR-0099 (the compiled store), ADR-0058 (vector retrieval reused), ADR-0075 (graph renderer), ADR-0053
+(delimited injection), keystone #2.
+
+## ADR-0101 - P-SKILL.5: Skill Studio - analyze recent work, draft skills (SCOPE/PLAN)
+
+**Date:** 2026-06-30
+**Status:** Accepted - SCOPE/PLAN. Designed here; build is its own increment. Concretizes the deferred
+P-SKILL.2 (builder) and P-SKILL.3 (session-derived) from ADR-0045 into one user-facing button, and is the
+OpenKB "skill distillation" generator applied to the user's OWN work.
+**Increment:** P-SKILL.5. Reuses `backend.complete()` (ADR-0046), the work-history sources, and the
+`importSkill` scan-gate seam (ADR-0045/P-SKILL.1).
+
+### Context
+
+The user wants a **button** that analyzes their **current day's** or **past week's** work and recommends +
+drafts Agent Skills it can codify. All the inputs already exist: sessions + transcripts (`listSessions()` /
+`sessionMessages()`, preamble-stripped), AI-authorship (`aiLoc`), the `/goal` loop run-log
+(`aggregateRuns()`), and the usage ledger (most-used model). P-SKILL.2/.3 already designed the model-assisted
++ session-derived skill builders behind the same fail-closed gate; this ADR makes them a concrete surface.
+
+### Decision - a "Skill Studio" panel: gather -> analyze -> draft -> gate -> review -> codify
+
+- **Gather (`desktop/skill_studio.ts`, designed).** A window selector (Today | Past 7 days) collects: recent
+  sessions + stripped transcripts, AI-LOC by repo/file, loop outcomes + recurring stall signatures, and the
+  most-used model. No raw content leaves the host.
+- **Analyze.** `backend.complete(analysisSystem, workDigest, {model: usageLedger().models[0]})` returns N
+  **candidate skills**, each with a name (kebab-case), a *what + when + when-not* description (the routing
+  text), and a draft `SKILL.md` body - "crystallize what the agent just did" (the whitepaper's Path B).
+- **Gate + review.** Each draft is **untrusted model output**: run it through the `importSkill` seam
+  (`scanAndDecide` fail-closed). Clean -> written to the local skill root `.omp/skills/<slug>/SKILL.md` via
+  `pathWithin` confinement and surfaced in the ADR-0097 directory (source `project`/`studio`); flagged ->
+  `recordBlock` + held in a review queue. The user **reviews/edits before codifying** (keystone #2; the
+  whitepaper's "a reviewed agent-drafted skill can be excellent; an un-reviewed one is worse than none").
+- **Publish.** A codified skill can be served locally and (spiked, ADR-0102) pushed to a remote registry.
+
+### Plumbing (build increment)
+
+- `desktop/skill_studio.ts` (gather + digest + parse the model's candidate list), a renderer panel + rail
+  button (mirror the Knowledge/graph panel structure in `app.ts`), `POST /api/skill-studio/analyze` +
+  `/draft` routes (reuse `importSkill`). `make demo-P-SKILL.5` (a synthetic week of sessions yields >=1
+  scanned draft; a poisoned transcript yields a blocked draft). EventName `skill_drafted` deferred to the
+  contracts increment.
+
+### Invariants preserved
+
+Fail-closed (#3): drafts scanned before save; dead scanner blocks. Keystone #2: drafts never auto-trusted -
+human review gate. Confinement via `pathWithin` (no path escape). Untrusted transcript content stays DATA
+(#5). BUSL header on new files.
+
+### Relates to
+
+ADR-0045 (P-SKILL.1/2/3 - the builder/session-derived design this realizes + the import gate), ADR-0046
+(`complete` + most-used model), ADR-0097 (the directory the drafts appear in), ADR-0102 (publish), ADR-0099
+(shares the "compile with the most-used model, re-scan the output" pattern), keystone #2.
+
+## ADR-0102 - P-SKILLREG.2: skill publish seam - Local Skills Registry + remote-push spike (SCOPE/PLAN)
+
+**Date:** 2026-06-30
+**Status:** Accepted - SCOPE/PLAN (capability spike). Public ships ONLY the `RegistryPublisher` seam + a
+default **local** publisher; the **remote** publishers (enterprise clouds + git providers) are private
+add-on IP (`mlcyclops/lucidagentIDEaddon`): ADR-A014/A015. Same public-seam / private-IP split as ADR-0069
+(SIEM `Sink`) and ADR-0098 (the registry reader). README roadmap hint only.
+**Increment:** P-SKILLREG.2. The publish counterpart to ADR-0098's read/install reader; consumes ADR-0101's
+codified skills.
+
+### Context
+
+ADR-0098 designed the registry **reader** (fetch -> verify signature -> scan-gate -> install). The user now
+wants the **writer**: codified skills (from Skill Studio, ADR-0101) served to (1) a **Local Skills Registry**
+and (2) **pushed to a remote registry** in enterprise clouds (AWS/Azure/GCP/Oracle/IBM) or **custom git**
+(Enterprise GitLab/GitHub/Azure DevOps), implemented in the private add-on but **planned + spiked + hinted**
+here. There is no git-push or git-provider-auth code in the repo today, so the remote side is net-new and
+correctly belongs behind a seam.
+
+### Decision - one publisher interface; local impl public, remote impls private
+
+- **`RegistryPublisher` interface** (mirrors the SIEM `Sink`): `publish(artifact: SkillArtifact) ->
+  Promise<PublishReceipt>` + `name`/`status`. A `SkillArtifact` is the ADR-0098 unit: the signed SKILL.md
+  folder (Cosign + SLSA), versioned by digest. Public ships the interface, the `SkillArtifact`/`PublishReceipt`
+  schema, a `PublishDispatcher` (fail-safe, never throws into a turn), and a config schema in `managed_config`.
+- **Default `LocalRegistryPublisher` (public).** Serves the local skill roots as the **Local Skills Registry**
+  (the ADR-0097 `registry` source, OCI-artifact-or-folder per ADR-0098), with local signing optional. This is
+  buildable in the public core.
+- **Remote publishers (private add-on IP, ADR-A014).** Implement the SAME interface:
+  - **Cloud OCI registries:** AWS ECR/CodeArtifact, Azure ACR, GCP Artifact Registry, OCI Container Registry,
+    IBM ICR (skills-as-OCI-artifacts per ADR-0098).
+  - **Custom git:** Enterprise GitLab, GitHub, Azure DevOps - push the signed SKILL.md folder to a versioned
+    path/branch via the provider API (PAT/OAuth/workload identity).
+- **Egress + policy.** Every remote publish routes through `egress_policy` (`egressDecision`) and is clamped
+  by managed-config (allowed hosts, IL5 partition rules per ADR-0098); a publish is a network-reaching action
+  and is gated like any other. IL5: self-hosted/partitioned endpoints only.
+
+### Plumbing (build increment - public part only)
+
+- `desktop/skill_publish.ts`: the `RegistryPublisher` interface + `SkillArtifact`/`PublishReceipt` types +
+  `PublishDispatcher` + `LocalRegistryPublisher`; `sinksFor`-style `publishersFor()` reading managed-config.
+  `make demo-P-SKILLREG.2` (a codified skill publishes to the local registry and re-appears as an installable
+  `registry`-source row; a remote target with no configured publisher is a clean no-op, never a throw).
+  EventName `skill_published` deferred to the contracts increment. Remote publishers are NOT in this repo.
+
+### Invariants preserved
+
+Public ships seam + local impl; remote IP stays private (ADR-0086 licensing). Fail-closed (#3): a dead/missing
+publisher never throws into a turn (mirrors the `AuditDispatcher`); a published artifact is still
+verify-signature -> scan-gate -> install on the READ side (ADR-0098). Egress-gated (#3 spirit). No contract
+bytes this round.
+
+### Relates to
+
+ADR-0098 (the reader half + OCI-artifact model), ADR-0097 (the `registry` source row), ADR-0101 (produces the
+skills), ADR-0069 (the `Sink`/dispatcher pattern mirrored), ADR-0068/egress_policy (managed + egress gating),
+the private ADR-A014/A015 (the remote publishers + runbooks).
 ### Addendum (2026-06-30) — P-PREVIEW.3b shipped: remote URLs preview only through the egress gate
 
 A remote URL in the preview reaches the internet, so it is gated by the **existing egress allow-list**

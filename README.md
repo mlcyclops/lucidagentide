@@ -464,6 +464,30 @@ be enabled to stretch a gov token quota ([ADR-0008](DECISIONS.md)).
 Every ingested chunk runs the **same lifecycle as everything else** - scanned, trust-labeled, and quarantined
 if poisoned, *before* it can ever be embedded or recalled. (Keystone #2 holds for RAG too.)
 
+> **🧠 Compiled KB - a knowledge base that accumulates (coming soon).** Designed in
+> [ADR-0099](DECISIONS.md)/[ADR-0100](DECISIONS.md) (`P-KB.1-2`), a **sibling** to the vector spine you can
+> use in parallel or on its own. Instead of opaque chunks, an LLM **compiles** your documents into a
+> persistent wiki of **summary, concept, and entity pages** joined by **cross-reference links** and **kept in
+> sync** - structural, citation-backed retrieval inspired by [OpenKB](https://github.com/VectifyAI/OpenKB),
+> rebuilt in **TypeScript + DuckDB (no Python)**. Same fail-closed gate on the source **and** on every
+> model-compiled page (derived content never auto-trusts - keystone #2). One retrieval router answers from
+> **vector, compiled, or both**, and the page graph renders in the existing graph view.
+
+## 🧩 Agent Skills directory & enterprise registry (Coming Soon)
+
+> **Designed in [ADR-0097](DECISIONS.md) (the directory + management menu) and [ADR-0098](DECISIONS.md)
+> (the enterprise registry spike).** An [Agent Skill](https://agentskills.io) is a `SKILL.md` folder the
+> agent loads on demand - procedural memory that costs only a few metadata tokens until it triggers.
+> LucidAgentIDE already ships a curated bundled corpus and scan-gated skill import; next is one place to
+> **see and govern every skill** - and a path to host your own private registry.
+
+- 🗂️ **One directory, every source.** Bundled, project (`.omp/skills`), user, and curated `.agents/skills/` skills in a single view - each with its **source root**, **trust label**, invocation id, and real progressive-disclosure token cost.
+- 🎛️ **Manage, don't just list.** Inspect a skill's body + bundled scripts/references read-only, **enable/disable** it, **re-scan** it through the fail-closed gate, and remove imported ones - bundled assets stay immutable.
+- 🛡️ **Fail-closed by construction.** A `suspicious`/`quarantined` skill is shown but **cannot be enabled or loaded**; a dead scanner on re-scan means quarantine, never "safe." Skill bodies are delimited *data*, never instructions (keystone #2 holds for skills too).
+- 🛠️ **Skill Studio - turn your week into skills (coming soon).** Designed in [ADR-0101](DECISIONS.md) (`P-SKILL.5`), a one-click button that analyzes your **day's or week's** work (sessions, AI-authored edits, loop outcomes) and **drafts Agent Skills** with your most-used model - each one **scanned before it's saved** and **reviewed before it's codified** (a reviewed draft is excellent; an un-reviewed one is worse than none). Codified skills land in your **Local Skills Registry**.
+- 🏛️ **Enterprise skills registry (premium, coming soon).** Publish, version, **sign (Cosign + SLSA provenance)**, scan, and distribute skills privately - as portable **OCI artifacts on an S3-compatible backend** that stands up identically on **AWS, Azure, Google Cloud, OCI, IBM Cloud, VMware, Nutanix, NetApp ONTAP, and KVM** via Terraform, including **air-gapped and IL5** government partitions. Install = fetch → **verify signature → scan-gate → install**; an unsigned or flagged skill is blocked. The app ships the read-only registry-reader seam; the hosting runbooks are a separately-licensed add-on.
+- 🚀 **Push to where your org already lives (premium, coming soon).** Designed in [ADR-0102](DECISIONS.md) (`P-SKILLREG.2`), a single **publish seam** ships in the core with a default **local** publisher; the remote publishers - enterprise cloud registries (AWS/Azure/GCP/Oracle/IBM) and **custom git** (Enterprise GitLab, GitHub, Azure DevOps) - are a separately-licensed add-on. Every push is **egress-gated** and centrally policy-clamped.
+
 ## <img src=".github/assets/icons/builton.svg" width="28" align="top" alt=""> Built on
 
 LucidAgentIDE is a thin, principled layer over best-in-class building blocks - credit where it's due:
@@ -649,6 +673,11 @@ table below is the recent slice; [`PROGRESS.md`](PROGRESS.md) has the full per-s
 
 | Theme | ADR |
 |:--|:--|
+| **Agent Skill directory + management menu P-SKILL.4** - one governed view of every skill (bundled · project · user · `.agents`) with source, trust label, enable/disable, inspect, re-scan, and remove | [ADR-0097](DECISIONS.md) |
+| **Enterprise Skills Registry P-SKILLREG.1** - sign/scan/version/distribute skills as portable OCI artifacts (S3 backend) across AWS/Azure/GCP/OCI/IBM + VMware/Nutanix/ONTAP/KVM, incl. IL5; public ships the registry-reader seam, runbooks are private add-on IP | [ADR-0098](DECISIONS.md) |
+| **Compiled KB P-KB.1-2** - an OpenKB-style document KB (summary/concept/entity pages + cross-links, kept in sync) as a TS+DuckDB **sibling** to the vector spine, with a router that answers from vector / compiled / both | [ADR-0099/0100](DECISIONS.md) |
+| **Skill Studio P-SKILL.5** - analyze your day/week of work → draft scanned, reviewable Agent Skills into the Local Skills Registry | [ADR-0101](DECISIONS.md) |
+| **Skill publish seam P-SKILLREG.2** - a `RegistryPublisher` interface + default local publisher in core; remote cloud + git (GitLab/GitHub/Azure DevOps) publishers are private add-on IP, egress-gated | [ADR-0102](DECISIONS.md) |
 | **Exec-tool safety P-EXEC.2** - extend the per-action gate to `ssh` (key = host) and `task` sub-agents | [ADR-0066](DECISIONS.md) |
 | **SIEM connectors** - Splunk HEC / syslog-CEF / Elastic / cloud sinks behind the now-shipped OCSF audit-export `Sink` interface | [ADR-0069](DECISIONS.md) |
 | **AskSage dataset training** - ground the gov gateway on the local knowledge spine | [ADR-0053](DECISIONS.md) |
@@ -662,7 +691,7 @@ Built in the open, **one disciplined increment at a time.** If you want to run i
 or propose a change, start here:
 
 - **Read [`CLAUDE.md`](CLAUDE.md) first.** It's the load-bearing contract - fail-closed, extend omp (don't fork), frozen contracts, a byte-stable prompt. A change that silently breaks an invariant won't land.
-- **ADR-first.** Non-trivial work begins as an ADR in [`DECISIONS.md`](DECISIONS.md) (87 and counting) - pick one up, or propose your own.
+- **ADR-first.** Non-trivial work begins as an ADR in [`DECISIONS.md`](DECISIONS.md) (102 and counting) - pick one up, or propose your own.
 - **One increment per change.** Small, verifiable, with a demo and tests. See [`CHEATSHEET.md`](CHEATSHEET.md) for day-to-day commands.
 - **Tests are the gate.** `bun test harness && bun test desktop` stay green and `tsc --noEmit` is clean; CI runs the build + CodeQL on every push.
 - **The only Python is the scanner sidecar.** Everything else is TypeScript on Bun - please don't add a second Python surface.
