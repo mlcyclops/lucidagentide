@@ -155,17 +155,20 @@ rem  if its binary is installed; otherwise opens the browser GUI and the browser
 echo.
 echo    [ Lucid desktop GUI ]
 where bun >nul 2>&1 || ( echo    bun not found - cannot start the GUI. & goto :eof )
-rem  Kill any stale GUI server on the port so a fresh one (with the chat backend) starts.
-for /f "tokens=5" %%P in ('netstat -ano ^| findstr ":5319" ^| findstr LISTENING') do taskkill /F /PID %%P >nul 2>&1
+rem  Pick a free port instead of stomping on port 5319. If another LUCID app (or a stale
+rem  server) already holds 5319, we roll a free high port and use THAT - we never kill it.
+rem  The chosen port flows into the app: Electron (main.ts) reads LUCID_PORT and passes it
+rem  to dev.ts; the browser fallback sets PORT for dev.ts and opens the matching URL.
+call :pickport
 if exist "%REPO%\desktop\node_modules\electron\dist\electron.exe" (
-  echo    Launching the native Electron app in a new window...
-  start "LucidAgentIDE GUI" cmd /k "chcp 65001>nul & cd /d "%REPO%\desktop" & set "ANTHROPIC_API_KEY=%ANTHROPIC_API_KEY%" & bun run start"
+  echo    Launching the native Electron app on port !GUIPORT! in a new window...
+  start "LucidAgentIDE GUI" cmd /k "chcp 65001>nul & cd /d "%REPO%\desktop" & set "LUCID_PORT=!GUIPORT!" & set "ANTHROPIC_API_KEY=%ANTHROPIC_API_KEY%" & bun run start"
 ) else (
   echo    Electron isn't installed yet - opening the browser GUI instead.
   echo    ^(For the native app:  cd desktop  ^&^&  bun install  ^&^&  bun run start^)
-  start "LucidAgentIDE GUI (web)" cmd /k "chcp 65001>nul & cd /d "%REPO%" & set "ANTHROPIC_API_KEY=%ANTHROPIC_API_KEY%" & bun run desktop:web"
+  start "LucidAgentIDE GUI (web)" cmd /k "chcp 65001>nul & cd /d "%REPO%" & set "PORT=!GUIPORT!" & set "ANTHROPIC_API_KEY=%ANTHROPIC_API_KEY%" & bun run desktop:web"
   timeout /t 3 >nul
-  start "" "http://localhost:5319"
+  start "" "http://localhost:!GUIPORT!"
 )
 echo    Done.
 echo.
@@ -294,6 +297,33 @@ echo    Keys (env var):    ANTHROPIC_API_KEY . OPENAI_API_KEY . OPENROUTER_API_K
 echo    =====================================================================
 echo.
 goto :eof
+
+rem ===========================================================================
+rem  Pick a free GUI port. Prefer the default 5319; if it's already held (a separate
+rem  installed LUCID app, or a stale server), roll a random high port in the dynamic
+rem  range (49152-65151) until a free one is found. We NEVER kill the holding process.
+:pickport
+set "GUIPORT=5319"
+call :portfree 5319 && goto :eof
+echo    Port 5319 is already in use ^(another LUCID app?^) - selecting a free port instead...
+set /a _pp=0
+:pp_roll
+set /a _pp+=1
+set /a GUIPORT=49152 + ^(!RANDOM! %% 16000^)
+call :portfree !GUIPORT! && goto :pp_done
+if !_pp! lss 50 goto :pp_roll
+echo    ^(could not find a free port after 50 tries - trying !GUIPORT! anyway^)
+:pp_done
+echo    GUI port: !GUIPORT!
+goto :eof
+
+rem  Port-free test. Sets errorlevel 0 if the port is FREE, 1 if in use in ANY TCP state
+rem  (so we never lose a bind race). The ":<port> " match (colon prefix + trailing space)
+rem  avoids false hits on longer ports (:53190) and on a bare PID column.
+:portfree
+netstat -ano | findstr /c:":%~1 " >nul 2>&1
+if errorlevel 1 ( exit /b 0 )
+exit /b 1
 
 rem ===========================================================================
 :ensurepath
