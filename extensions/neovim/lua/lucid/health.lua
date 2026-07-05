@@ -1,7 +1,7 @@
 -- extensions/neovim/lua/lucid/health.lua
 --
 -- `:checkhealth lucid` — verify the launcher is present and the fail-closed gate + scanner are ready by
--- running `lucid check` (the same preflight `lucid acp`/`lucid tui` run before spawning). A red health
+-- running `lucid check` (the same preflight `lucid acp`/the gated TUI run before spawning). A red health
 -- check here is the fail-closed gate refusing an ungated agent, not a plugin bug.
 
 local M = {}

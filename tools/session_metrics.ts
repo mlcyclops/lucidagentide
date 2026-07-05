@@ -218,7 +218,7 @@ const ktok = (n: number): string => (n >= 1000 ? `${(n / 1000).toFixed(n >= 100_
 
 /** Human-readable one-screen summary for `lucid stats` (no --json). */
 export function formatStats(s: SessionStats | null, budgets?: Budget[] | null): string {
-  if (!s) return "lucid: no omp session found yet (start one with `lucid tui`).\n";
+  if (!s) return "lucid: no omp session found yet (start one with `lucid`).\n";
   const lines = [
     "Lucid session metrics",
     `  model    ${s.model}   ·   turns ${s.turns}`,
