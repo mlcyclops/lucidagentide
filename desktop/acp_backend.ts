@@ -29,6 +29,7 @@ import { asksageOnly, attribution, checkerModel, lastModel, load as loadSettings
 import { managedAsksageOnly, managedConfig, managedRequireIsolation } from "./managed_config.ts";
 import { resolveBackend, sandboxDisclosure, wrapForProfile, type SandboxDecision, type SandboxProxy } from "../harness/runs/sandbox_exec.ts"; // P-SANDBOX.1 (ADR-0157)
 import { ensureEgressProxy } from "../harness/runs/egress_proxy.ts"; // P-SANDBOX.2 (ADR-0166)
+import { egressAuditSink } from "./egress_audit.ts"; // P-SANDBOX.3 (ADR-0167)
 import { caps } from "../harness/runs/profiles.ts";
 import { recommendCheckerModel, resolveCheckerModel, type ModelOption } from "./checker_model.ts";
 import { parseGoalVerdict } from "./goal_verdict.ts";
@@ -294,6 +295,11 @@ class Backend {
   // cannot provide - every exec permission is DENIED (fail-closed) at the request_permission seam.
   private sandboxExecBlock: string | null = null;
 
+  // P-SANDBOX.3 (ADR-0167): one deduped audit sink for this session's mediated-egress proxy — a blocked
+  // subprocess reach-out becomes a canonical `egress` SecurityEvent (audit / OCSF). Created once (the
+  // dedupe set is stateful); the proxy singleton keeps the first sink it is given.
+  private egressAudit = egressAuditSink();
+
   /** ADR-0157: resolve the runtime-sandbox spawn plan for the omp argv. bwrap wrap on Linux; the
    *  DISCLOSED passthrough elsewhere; managed require-isolation without a backend = spawn with exec
    *  DENIED (chat/read tools stay useful - the ADR's "block exec rather than disclose").
@@ -311,7 +317,7 @@ class Backend {
     const profileCaps = caps("trusted-local");
     let proxy: SandboxProxy | undefined;
     if (res.backend.isolates && profileCaps.canNetwork) {
-      const ep = await ensureEgressProxy({ dnsPort: 53 });
+      const ep = await ensureEgressProxy({ dnsPort: 53, onEvent: this.egressAudit });
       if (ep) proxy = { host: ep.host, httpPort: ep.httpPort, httpProxyUrl: ep.httpProxyUrl, resolvConfPath: ep.dnsPort === 53 ? ep.resolvConfPath : undefined };
       else console.error("[sandbox] mediated egress proxy unavailable - this session runs network-off (fail-closed, ADR-0166).");
     }

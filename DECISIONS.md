@@ -11875,3 +11875,65 @@ ADR-0157 (the P-SANDBOX epic + threat model this fulfils), ADR-0159 (P-SANDBOX.1
 ADR-0062/0106/0108 (P-EGRESS/P-NETWL - the `egressDecisionDetailed` brain + still-prompt posture REUSED
 for subprocess traffic), ADR-0068 (P-ENT.1 - the managed ceiling that also governs subprocess egress),
 `harness/runs/profiles.ts` (the `canNetwork` cap this finally mediates rather than merely denies).
+
+-----
+
+## ADR-0167 - P-SANDBOX.3: the mediated-egress audit trail (blocked subprocess reach-outs become events), BUILT
+
+**Date:** 2026-07-05
+**Status:** Accepted / Built. Increment 3 of the ADR-0157 epic (P-SANDBOX.4 macOS/Windows backends + slirp next).
+**Increment:** P-SANDBOX.3.
+
+### What shipped
+
+P-SANDBOX.2 gave the proxy an in-memory event log (observable by tests) but nothing durable - a blocked
+`gethostbyname` exfil was refused, yet left no record a defender could see or export. ADR-0157 named
+exactly this ("a resolver event we SEE, LOG, and can refuse"). This closes it:
+
+- **`harness/runs/egress_proxy.ts`**: a PURE `egressBlockAudit(ev)` - a DENY event → neutral audit fields
+  (`type` = `dns_query_blocked` | `subprocess_egress_blocked`, `tool`, `host`, `reason`); an ALLOW → null.
+  Neutral shape (no desktop types) so the harness stays decoupled. `ensureEgressProxy` gained an `onEvent`.
+- **`desktop/egress_audit.ts`** (new): `egressAuditSink(emit?)` - a stateful, host-DEDUPED `onEvent` that
+  maps a blocked reach-out to a canonical `egress` SecurityEvent (`decision:block`, `severity:high`) and
+  emits it through the SAME audit / OCSF pipeline (`audit_export.ts`, ADR-0069) that P-REPORT.10's network
+  reach-outs use. `emit` is injectable (default the real dispatcher), so the dedupe is unit-tested off-disk.
+- **Wired at BOTH omp spawns**: `desktop/acp_backend.ts` (one sink per session) and
+  `harness/launcher/lucid_acp.ts` (one sink per launcher process) pass the sink to `ensureEgressProxy`.
+
+### Deliberate deltas from the ADR-0157 text (recorded, not silent)
+
+1. **No new `contracts.ts` EventName - reuse the SecurityEvent `type` string (inv #8).** ADR-0157 sketched
+   `.3` as adding `exec_sandboxed` / `subprocess_egress_blocked` / `dns_query_blocked` to the harness
+   `EVENT_NAMES` enum. But the codebase's actual Security-panel / audit channel is the desktop
+   `SecurityEvent` (audit_export.ts), whose `type` is a FREE string - which is why P-SANDBOX.1 and
+   P-REPORT.10 both surfaced their events WITHOUT touching the frozen enum. Following that established
+   precedent, `.3` emits `type: "dns_query_blocked" | "subprocess_egress_blocked"` as SecurityEvent
+   `type` values. The frozen `EVENT_NAMES` enum (a different sink: the harness event log) is untouched, so
+   inv #8 ("unknown event name must raise") is not exercised and no frozen contract changed.
+2. **Audit-only channel, not an approvable live-block.** Denied reach-outs go through `emitSecurityEvent`
+   (audit / OCSF), NOT `recordBlock` (security_log.ts). `recordBlock` is for user-RELEASABLE gate blocks;
+   a subprocess reach-out already happened and is not releasable - the audit-only home is correct, exactly
+   as P-REPORT.10 chose for its `git fetch` / `gh` reach-outs. Any richer per-event PANEL view beyond the
+   existing audit/OCSF surfacing is a UI follow-up, not this security increment.
+3. **Deduped by host** so a hostile package looping `gethostbyname` emits ONE event per host, not thousands
+   - a defensive-flooding guard the ADR did not call out but the SIEM demands.
+
+### Verification
+
+`egress_proxy.test.ts` (+ the `egressBlockAudit` cases) and `desktop/egress_audit.test.ts` (sink mapping;
+allowed → nothing; 100x/500x host dedupe; throwing-emit swallowed; end-to-end: a denied DNS query through
+a real proxy → exactly one audit event; kill-the-proxy ⇒ resolves nothing). `demo-P-SANDBOX.3` green.
+`make test` green but for the pre-existing Windows-only fs_browse/theme-asset failures (green on Linux CI).
+
+### Invariants preserved
+
+Inv #1 (no omp fork). Inv #2 (TS/Bun only; scanner stays the only Python). Inv #3 (auditing never weakens
+fail-closed: a throwing sink is swallowed, a dead proxy still denies). Inv #4 (in-process gate untouched).
+Inv #6 (runtime only). Inv #7 (no new trust labels). **Inv #8 (no new EventName - the frozen `EVENT_NAMES`
+enum is deliberately NOT changed; the SecurityEvent `type` free-string channel is reused per precedent).**
+
+### Relates to
+
+ADR-0157 (the P-SANDBOX epic), ADR-0166 (P-SANDBOX.2, the proxy whose blocks this records), ADR-0164
+(P-REPORT.10, the reach-out-audit precedent this mirrors), ADR-0069 (the SecurityEvent / OCSF export seam
+reused), `desktop/audit_export.ts` (`emitSecurityEvent`, category `egress`).

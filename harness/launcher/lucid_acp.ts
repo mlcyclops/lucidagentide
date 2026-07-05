@@ -29,6 +29,7 @@ import { runAgentFirewall } from "../mcp/agent_firewall.ts";
 import { formatStats, rateLimits, sessionStats } from "../../tools/session_metrics.ts";
 import { resolveBackend, sandboxDisclosure, wrapForProfile, type BackendResolution, type SandboxProxy } from "../runs/sandbox_exec.ts";
 import { ensureEgressProxy } from "../runs/egress_proxy.ts"; // P-SANDBOX.2 (ADR-0166)
+import { egressAuditSink } from "../../desktop/egress_audit.ts"; // P-SANDBOX.3 (ADR-0167)
 import { caps } from "../runs/profiles.ts";
 import { managedConfig, managedRequireIsolation } from "../../desktop/managed_config.ts";
 
@@ -207,10 +208,14 @@ function liveSandboxResolution(): BackendResolution {
  *  to steer the child at it, or null if it could not come up (⇒ the wrap falls back to network-off). */
 export type ProxyStartFn = () => Promise<SandboxProxy | null>;
 
+// P-SANDBOX.3 (ADR-0167): one deduped audit sink for the launcher process's proxy (blocked subprocess
+// reach-outs → `egress` SecurityEvents on the audit / OCSF trail).
+const launcherEgressAudit = egressAuditSink();
+
 const liveProxyStart: ProxyStartFn = async () => {
   // Best-effort privileged :53 so a bound resolv.conf can point at us; degrades to ephemeral (HTTP(S)
   // mediation only) if unprivileged. Loopback HTTP bind failing ⇒ null ⇒ caller runs network-off.
-  const ep = await ensureEgressProxy({ dnsPort: 53 });
+  const ep = await ensureEgressProxy({ dnsPort: 53, onEvent: launcherEgressAudit });
   if (!ep) return null;
   return {
     host: ep.host,
