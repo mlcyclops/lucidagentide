@@ -179,6 +179,8 @@ export interface SessionStats {
   current: number;
   peak: number;
   contextFill: number;
+  /** Per-turn context occupancy (input+cacheRead+cacheWrite per turn) — feeds the editor sparkline. */
+  prompts: number[];
   cache: { read: number; write: number; fresh: number; hit: number };
   cost: number;
   started: string;
@@ -204,6 +206,7 @@ export function sessionStats(sessionArg?: string): SessionStats | null {
     current,
     peak: prompts.length ? Math.max(...prompts) : 0,
     contextFill: win > 0 ? current / win : 0,
+    prompts,
     cache: { read, write, fresh, hit },
     cost,
     started: s.started,

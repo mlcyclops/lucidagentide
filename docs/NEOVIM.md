@@ -178,7 +178,7 @@ on your `runtimepath`. `setup()` only overrides config and installs the default 
 |---------|--------|
 | `:Lucid [prompt]` | Open/focus the gated Lucid terminal; optional text seeds the prompt |
 | `:LucidToggle` | Show/hide the Lucid window (the session keeps running while hidden) |
-| `:LucidSend` | Visual range → send the selection; otherwise send the current file as `@path` |
+| `:LucidSend` | Visual range → send the selection; `:10,20LucidSend` → send those lines; otherwise send the current file as `@path` |
 | `:LucidCheck` | Run the fail-closed preflight (`lucid check`) and report the verdict |
 | `:LucidStats` | Session spend + KV-cache % + context-fill (float; the GUI Memory inspector) |
 | `:checkhealth lucid` | Full health: launcher found + `lucid check` passes |
@@ -230,6 +230,7 @@ transcript (session-only fast path — no DuckDB, no omp subprocess):
     spend    $15.5611
     cache    99% hit
     context  28% [####------------]  280899 / 1000000
+    history  ▁▁▁▂▂▂▂▃▃▃▃▄▄▄▅▅▅▆▆▆▇▇██
     budgets  Claude 5 Hour 17% · Claude 7 Day 11%
   ```
 
@@ -244,8 +245,20 @@ transcript (session-only fast path — no DuckDB, no omp subprocess):
   vim.o.statusline = "%{v:lua.require'lucid'.statusline()}"
   ```
 
+  Set `statusline = false` in `setup()` to disable the component and its poll entirely.
+
 The raw JSON the plugin consumes is `lucid stats --json` (add `--budgets` for rate limits) — handy for
 building your own components.
+
+### Security block banner — the gate's block, as a Neovim notification
+
+When the in-process gate quarantines a tool call it prints an authoritative
+`[BLOCKED tool_call:<name>] … severity=<s> findings=<f>` line — the **same** signal the GUI's block
+banner and the VS Code/JetBrains clients parse (contract pinned by `harness/launcher/ext_parity.json`).
+The plugin watches the Lucid terminal's output stream and raises a `vim.notify` **ERROR** banner, so a
+security block interrupts you even if the TUI scroll has moved past it. The delivery path is proven in
+the headless spec: a real PTY job emits the line on stderr and `_parse_block_line` receives it via
+`on_stdout` (PTY streams merge stderr; the CR artifact is handled).
 
 ---
 
