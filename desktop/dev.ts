@@ -312,7 +312,9 @@ function startOauthBroker(oauthId: string): Promise<{ started: boolean; url: str
 function sendOauthCode(oauthId: string, code: string): { sent: boolean; reason?: string } {
   const proc = oauthBrokers.get(oauthId);
   if (!proc) return { sent: false, reason: "no broker running for " + oauthId };
-  try { proc.stdin.write(new TextEncoder().encode(code.trim() + "\n")); return { sent: true }; }
+  const sink = proc.stdin; // Bun types this number | FileSink | undefined; the broker spawns with stdin:"pipe" → FileSink
+  if (!sink || typeof sink === "number") return { sent: false, reason: "broker stdin is not writable" };
+  try { sink.write(new TextEncoder().encode(code.trim() + "\n")); return { sent: true }; }
   // js/stack-trace-exposure: log detail server-side, return a generic reason to the client (goes via json()).
   catch (e) { console.error(`[oauth] send code failed for ${oauthId}:`, e); return { sent: false, reason: "could not send code" }; }
 }

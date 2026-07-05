@@ -15,10 +15,13 @@ import {
   sanitizeCommandName,
   isValidCommandName,
   expandCommandBody,
+  expandInlineCommands,
+  slashTokenBeforeCaret,
   RESERVED_COMMAND_NAMES,
   MAX_BODY_LEN,
   type UserCommand,
 } from "./spec.ts";
+import { BUILTIN_COMMANDS, withBuiltins } from "./builtins.ts";
 import { saveCommandFile, loadCommandFile, listCommandFiles, deleteCommandFile } from "./file_store.ts";
 import { parseDraftedCommand, slashCommandCreateDraft } from "./handoff.ts";
 
@@ -69,6 +72,81 @@ describe("expandCommandBody (P-CMD.1)", () => {
   test("a placeholder-free body still forwards typed args as a trailing paragraph", () => {
     expect(expandCommandBody("Summarize the day.", "include the failed builds")).toBe("Summarize the day.\n\ninclude the failed builds");
     expect(expandCommandBody("Summarize the day.", "")).toBe("Summarize the day.");
+  });
+});
+
+describe("builtin commands (P-CMD.2) — shipped like user commands, shadowable", () => {
+  test("every builtin passes the SAME validator as user-authored commands", () => {
+    expect(BUILTIN_COMMANDS.length).toBeGreaterThan(0);
+    for (const b of BUILTIN_COMMANDS) {
+      const r = validateUserCommand(b);
+      expect(r.ok).toBe(true);
+      expect(r.command!.name).toBe(b.name);
+    }
+  });
+  test("/licensing is a guided, approval-gated send-mode walkthrough that never relicenses vendored code", () => {
+    const lic = BUILTIN_COMMANDS.find((b) => b.name === "licensing")!;
+    expect(lic.mode).toBe("send");
+    expect(lic.body).toContain("$ARGS"); // a seed like “/licensing Apache-2.0 for Acme” flows in
+    expect(lic.body).toContain("NEVER write a file before I approve");
+    expect(lic.body).toContain("SPDX");
+    expect(lic.body).toContain("vendor/"); // exclusions are explicit, not implied
+    expect(lic.body).toContain("shebang"); // insertion correctness
+    expect(lic.body).toContain("read each file then write it"); // the AGENTS.md TOCTOU rule rides along
+  });
+  test("withBuiltins: user-saved commands shadow builtins by name; deletion resurfaces them", () => {
+    const merged = withBuiltins([]);
+    expect(merged.some((c) => c.name === "licensing")).toBe(true);
+    const mine = cmd({ name: "licensing", body: "my own licensing flow" });
+    const shadowed = withBuiltins([mine]);
+    expect(shadowed.filter((c) => c.name === "licensing")).toHaveLength(1);
+    expect(shadowed.find((c) => c.name === "licensing")!.body).toBe("my own licensing flow");
+  });
+});
+
+describe("expandInlineCommands (P-CMD.2) — slash commands anywhere in the body", () => {
+  const cmds: UserCommand[] = [
+    cmd({ name: "pr-review", body: "Review the current git diff.", mode: "send" }),
+    cmd({ name: "tone", body: "Answer tersely.", mode: "skill" }),
+  ];
+  test("a send-mode token mid-sentence expands IN PLACE with no args", () => {
+    const r = expandInlineCommands("Please run /pr-review on the auth module.", cmds);
+    expect(r.text).toBe("Please run Review the current git diff. on the auth module.");
+    expect(r.skillNames).toEqual([]);
+  });
+  test("paths, URLs, and unknown names are NEVER mangled", () => {
+    const untouched = "open src/pr-review.ts and /usr/bin/env plus https://x.dev/pr-review?a=1 and /unknown-cmd";
+    const r = expandInlineCommands(untouched, cmds);
+    expect(r.text).toBe(untouched);
+    // a known name followed by a slash is a PATH, not a command
+    expect(expandInlineCommands("see /pr-review/notes.md", cmds).text).toBe("see /pr-review/notes.md");
+  });
+  test("skill-mode tokens are stripped, reported once, and the remaining prose survives", () => {
+    const r = expandInlineCommands("/tone summarize the incident /tone", cmds);
+    expect(r.skillNames).toEqual(["tone"]);
+    expect(r.text).toBe("summarize the incident");
+  });
+  test("multiple send-mode tokens all expand; expansion is single-pass (never recursive)", () => {
+    const selfRef = [cmd({ name: "loop", body: "see /loop for details", mode: "send" })];
+    const r = expandInlineCommands("do /loop now", selfRef);
+    expect(r.text).toBe("do see /loop for details now"); // the body's own /loop is NOT re-expanded
+    const multi = expandInlineCommands("/pr-review then also /pr-review", cmds);
+    expect(multi.text).toBe("Review the current git diff. then also Review the current git diff.");
+  });
+  test("sentence punctuation ends a token; case-insensitive match", () => {
+    expect(expandInlineCommands("(run /pr-review)", cmds).text).toBe("(run Review the current git diff.)");
+    expect(expandInlineCommands("run /PR-Review.", cmds).text).toBe("run Review the current git diff..");
+  });
+});
+
+describe("slashTokenBeforeCaret (P-CMD.2) — autocomplete anywhere", () => {
+  test("finds the token at the caret mid-body; whitespace or start required before the slash", () => {
+    expect(slashTokenBeforeCaret("/lic")).toBe("/lic");
+    expect(slashTokenBeforeCaret("fix this /lic")).toBe("/lic");
+    expect(slashTokenBeforeCaret("fix this /")).toBe("/");
+    expect(slashTokenBeforeCaret("src/lic")).toBeNull(); // a path, not a token
+    expect(slashTokenBeforeCaret("fix this /lic done ")).toBeNull(); // caret past the token
+    expect(slashTokenBeforeCaret("")).toBeNull();
   });
 });
 

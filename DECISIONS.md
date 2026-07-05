@@ -10114,6 +10114,45 @@ ADR-0020 (P-MCP.1 - the `mcpServers` seam this reuses, and the guardrail this pa
 ADR-0038 (the `lucid` launcher this extends), ADR-0002 (the scanner IPC), ADR-0019 (the gate policy), the
 P-RAG.1 `wrapRetrieved` pattern (UNTRUSTED_CONTENT delimiting), invariants #3/#4/#5.
 
+## ADR-0148 - P-CMD.2: builtin /licensing walkthrough + "/" commands anywhere in the prompt body
+
+**Date:** 2026-07-05
+**Status:** Accepted - BUILT + tested.
+
+**Context.** Two user asks: a guided command that applies their company's licensing across a codebase, and
+"/" commands that work in the WHOLE composer body (P-CMD.1 only recognized a start-anchored token, and the
+autocomplete only opened when the entire input was one "/" token).
+
+**Decision.**
+1. **Builtin commands** (`harness/commands/builtins.ts`): shipped commands in the SAME UserCommand shape as
+   user-authored ones — same validator (tested), same expansion, same autocomplete; merged server-side by
+   `withBuiltins` where a user-saved command SHADOWS a builtin by name and deleting it resurfaces the
+   builtin. Builtins are code (PR-reviewed), so the workspace scanner path does not apply to them.
+2. **/licensing** is the first builtin: a guided, APPROVAL-GATED walkthrough — discover the repo's existing
+   convention + counts first, ONE interview round (owner, SPDX id or proprietary text, years, first-party vs
+   vendored trees), show the exact per-language header plan, WAIT for approval, apply idempotently
+   (SPDX-line skip, shebang/XML-decl aware, read-then-write per the AGENTS.md TOCTOU rule), finish with
+   totals + optional CI check/pre-commit hook/LICENSE file. Vendored trees are excluded loudly — the
+   command's body forbids relicensing vendor/, node_modules/, dist/, or third-party code.
+3. **Body-wide expansion** (`expandInlineCommands`, pure): a token counts only when preceded by
+   start/whitespace AND followed by end/whitespace/sentence punctuation — paths (`src/foo`, `/usr/bin`,
+   `/licensing/docs`) and URLs never match. Only KNOWN names expand; send-mode bodies replace the token IN
+   PLACE with no args (surrounding prose is the context); skill-mode tokens are stripped + activated
+   (deduped); expansion is single-pass over the ORIGINAL text (an expanded body's own "/words" are never
+   re-scanned — no recursion). START-anchored commands keep the P-CMD.1 args contract exactly, and when one
+   fires the inline pass is skipped for that turn.
+4. **Autocomplete at the caret** (`slashTokenBeforeCaret`, pure): the "/" menu opens for the token at the
+   caret anywhere in the body; completion/activation replaces ONLY that token, preserving surrounding prose
+   (previously applySlash clobbered the whole input).
+
+**Also.** Cleared the two long-standing server-tsconfig strictness debts (netdiag.ts ×9 noUncheckedIndexedAccess,
+dev.ts oauth-broker stdin narrowing ×2) — `bun run typecheck` is green across all three configs for the
+first time; netdiag's behavior tests unchanged.
+
+**Consequences.** "/licensing Apache-2.0 for Acme Corp" works from a fresh install with zero setup; prose
+like "run /pr-review before merging" now does what it reads like; mentioning paths or unknown "/words"
+remains inert. 13 new tests (builtin validity + shadowing, the expansion matrix incl. path/URL immunity and
+non-recursion, caret tokenization).
 ## ADR-0149 - P-AGENTFW.2 + .3: Remote-agents Settings UI + per-connection permission policy & surfaced ACP updates
 
 **Date:** 2026-07-04
