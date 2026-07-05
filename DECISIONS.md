@@ -11586,3 +11586,83 @@ ADR-0116/0117 (the Reports panel + brief store this extends), ADR-0072 (the Engi
 ADR-0030 (`gitChangeInputs`, reused pattern), ADR-0111 (`cloneRepo` first-party git precedent),
 ADR-0022/0024 (the loopback + token gate the endpoints sit behind), CLAUDE.md invariants #3 (fail-closed),
 #5 (untrusted content delimited/as-data), #9 (stable ids).
+
+> **ADR numbering note.** 0163 is the sibling increment **P-TOOLFAIL.2** (failed tool calls collapse into
+> a toolbox badge), developed in parallel on `p-toolfail-2-toolbox-badge` / PR #223 and not yet on master
+> when this branch forked. This increment therefore takes **0164**; on master the two are contiguous. The
+> earlier P-REPORT.9 collision (0160 vs P-THEME.1) was already resolved to 0162 in merge #222.
+
+## ADR-0164 - P-REPORT.10: a formal SecurityEvent per fetch / PR reach-out (Engineering Report)
+
+**Date:** 2026-07-05
+**Status:** Accepted. **P-REPORT.10 BUILT + tested.**
+
+### Context
+
+P-REPORT.9 (ADR-0162) gave the Engineering Report a multi-repo collector: for each selected repo it
+`git fetch`es the remote read-only and (opt-in, GitHub + gh-authed) `gh pr list`s. Those are FIRST-PARTY
+control-plane reach-outs - server-side `Bun.spawn` behind the loopback + token gate, deliberately NOT
+routed through the agent tool security gate (that gate scans the AGENT's tool calls; these are the app
+reaching out on the user's behalf). The gap ADR-0162 recorded as a follow-up: those network reach-outs
+emitted NO audit record, so an operator watching the SIEM/OCSF stream (ADR-0069) saw exec/egress/scanner
+gate decisions but was blind to the report generator dialing out - the one place the app egresses OUTSIDE
+the agent gate. "Generate a report" could touch N remotes with no trace.
+
+### Decision
+
+1. **Emit a canonical desktop `SecurityEvent` per ACTUAL reach-out**, via the existing `emitSecurityEvent`
+   seam (`audit_export.ts`, ADR-0069) - the SAME dispatcher, ring buffer, OCSF mapper, and file/SIEM sinks
+   as every gate decision. A git fetch and a gh PR list each map to `category:"egress"`,
+   `decision:"allow"` (a permitted first-party op, not a block), `severity:"info"`, with `type`
+   `report_fetch` / `report_pr_list` and `tool` `git` / `gh`.
+2. **Reuse the SecurityEvent seam - add NO `contracts.ts` EventName values.** `category:"egress"` already
+   exists; a report reach-out IS network egress. This keeps the frozen contract untouched (invariant #8),
+   matching the P-SANDBOX.1 precedent ("audited via existing SecurityEvent - no new EventNames").
+3. **A PURE, total builder decides what fires.** `reachoutAuditEvents(ref, {fetched, fetchOk, prStatus})`
+   returns the 0-2 events from what the collector already knows after a reach-out. A fetch event fires iff
+   a fetch was ATTEMPTED (`fetched`); a PR event fires iff gh actually RAN (`prStatus` is `ok`=succeeded or
+   `error`=ran-but-failed). The `skipped-*` PR statuses never spawned gh, so they emit NOTHING - the audit
+   reflects reality, never a reach-out that did not happen. `collectRepoActivity` gains an injectable
+   `emit` param (default `emitSecurityEvent`) so the wiring is unit-testable with zero network.
+
+### Security
+
+- **Metadata ONLY, no credential leak.** The `reason` carries the remote HOST (`ref.host`, already
+  lowercased and credential-free - `parseRemoteUrl` strips any `user:token@` userinfo), never the raw
+  remote URL (which can embed a token). A local / unparsed remote (blank host) is recorded as
+  `(local/unparsed remote)` - the raw path is never echoed. Over-recording a benign local fetch is
+  harmless; the posture is fail-toward-recording so a non-obvious reach-out (e.g. a UNC/SMB remote) is
+  never silently un-audited.
+- **Observability, never a gate.** Emission is best-effort and fail-safe (the dispatcher never throws
+  into a turn); a dead sink never affects report generation. The reach-out itself is unchanged - this adds
+  a record, not a decision. The existing first-party-egress posture (loopback + token gate, read-only
+  fetch, 25s timeout, fail-soft) is untouched.
+
+### Deliberate deltas / scope
+
+One fetch event and one PR-list event per repo (the gh open+merged pair is one logical reach-out, one
+event). `decision` is always `allow` - these are permitted first-party ops, not gate verdicts; a future
+managed "no report egress" clamp could emit `block`, but no such policy exists today. Non-GitHub PR
+providers remain out of scope (still `skipped-nonhub`, no reach-out, no event) - a P-REPORT.11 item.
+
+### Verification
+
+`bun test desktop` 893 pass / **5 fail** (the 5 are the pre-existing `fs_browse` / `listDir` env failures
+unrelated to this change - the desktop suite is where this code lives); `bun test harness` 843 pass / **1
+fail** (a pre-existing Windows path-separator assertion in the P-THEME.1 theme-asset test - harness
+untouched here). The **+13** new `desktop/repo_collect.test.ts` all pass: `reachoutAuditEvents` across
+fetch ok/fail, not-fetched, network vs local/blank host, PR `ok`/`error`, every `skipped-*` (no event),
+the combined 2-event case, and a no-credential-leak assertion (a token-bearing URL never leaks the token
+or `user:` / `@` into the reason); plus an OFFLINE wiring test - a temp repo with a LOCAL bare origin
+fetched through `collectRepoActivity` with an injected recorder fires exactly one `report_fetch` event,
+and `fetch:false` fires none. `demo-P-REPORT.10` green (pure builder + a LIVE offline reach-out through
+the REAL dispatcher into an OCSF Detection Finding a SOC can ingest, `class_uid` 2004 / `disposition_id` 1); `demo-P-REPORT.9`
+still green. Root + desktop `tsc --noEmit` report no errors in the touched files.
+
+### Relates to
+
+ADR-0162 (P-REPORT.9, the collector this audits + the follow-up it closes), ADR-0069 (P-ENT.2, the
+SecurityEvent export seam / OCSF sinks reused), ADR-0159 (P-SANDBOX.1, the "audit via existing
+SecurityEvent, no new EventNames" precedent), ADR-0111 (`cloneRepo` first-party git egress),
+ADR-0022/0024 (the loopback + token gate), CLAUDE.md invariants #8 (exact event names / frozen contract),
+#5 (metadata-only audit), #3 (fail-safe logging never weakens fail-closed).

@@ -16,7 +16,8 @@
 import { existsSync } from "node:fs";
 import { load, save } from "./settings_store.ts";
 import { cloneRepo, currentWorkspace, isGitRepo, wsName } from "./workspace.ts";
-import { buildRepoActivity, parseRemoteUrl, type PrStatus, type RepoActivity, type RepoRaw } from "../harness/brief/repo_activity.ts";
+import { buildRepoActivity, parseRemoteUrl, type PrStatus, type RemoteRef, type RepoActivity, type RepoRaw } from "../harness/brief/repo_activity.ts";
+import { emitSecurityEvent, type SecurityEventInput } from "./audit_export.ts";
 
 export interface ReportRepo { path: string; name: string; isGit: boolean; remoteUrl: string; host: string; isGitHub: boolean; lastActive: number }
 export interface CollectOptions { fetch: boolean; prs: boolean; window: number }
@@ -191,9 +192,38 @@ async function collectPrs(repo: string, isGitHub: boolean, wantPrs: boolean): Pr
   return { prJson: JSON.stringify(arr), prStatus: "ok" };
 }
 
+// ── P-REPORT.10 (ADR-0164): audit every first-party network reach-out ─────────────────────────────────
+// The report collector reaches out to the network on the user's behalf (git fetch of a remote; gh PR
+// list) as a FIRST-PARTY control-plane action - deliberately NOT routed through the agent tool security
+// gate (see the file header). That left those reach-outs invisible to the audit trail. Each ACTUAL
+// reach-out now emits a canonical desktop SecurityEvent (audit_export.ts / ADR-0069) into the same
+// OCSF/SIEM stream as gate decisions: category "egress", decision "allow" (a permitted first-party op),
+// severity "info". Metadata ONLY - the reason carries the remote HOST (credential-free; parseRemoteUrl
+// strips any user:token@ userinfo), never the raw URL. Reuses the existing SecurityEvent seam, so it adds
+// NO contracts.ts EventName values (invariant #8), matching the P-SANDBOX.1 precedent.
+//
+// PURE + total: given what the collector already knows after a reach-out (was a fetch attempted, did it
+// succeed, and the PR-list outcome), it returns the 0-2 events to emit. A SKIPPED PR list (non-GitHub /
+// unauthed / off) performed NO reach-out, so it emits nothing - the audit reflects reality.
+export interface ReachoutOutcome { fetched: boolean; fetchOk: boolean; prStatus: PrStatus }
+export function reachoutAuditEvents(ref: RemoteRef, o: ReachoutOutcome): SecurityEventInput[] {
+  const events: SecurityEventInput[] = [];
+  if (o.fetched) {
+    const target = ref.host || "(local/unparsed remote)";
+    events.push({ category: "egress", type: "report_fetch", decision: "allow", severity: "info", tool: "git", reason: `report: git fetch ${target} (${o.fetchOk ? "ok" : "failed"})` });
+  }
+  // A gh PR list only reaches out when it actually ran: "ok" = succeeded, "error" = ran-but-failed. The
+  // skipped-* statuses never spawned gh (no egress), so they emit nothing.
+  if (o.prStatus === "ok" || o.prStatus === "error") {
+    events.push({ category: "egress", type: "report_pr_list", decision: "allow", severity: "info", tool: "gh", reason: `report: gh pr list ${ref.host || "github.com"} (${o.prStatus === "ok" ? "ok" : "failed"})` });
+  }
+  return events;
+}
+
 /** Collect (read-only) activity for each selected repo. Fail-soft per repo: a fetch failure still yields
- *  local history (flagged); a bad repo contributes an empty-but-labeled entry rather than throwing. */
-export async function collectRepoActivity(sel: RepoSelection[], opts: CollectOptions): Promise<RepoActivity[]> {
+ *  local history (flagged); a bad repo contributes an empty-but-labeled entry rather than throwing.
+ *  `emit` (default the real SecurityEvent dispatcher) audits each network reach-out; injectable for tests. */
+export async function collectRepoActivity(sel: RepoSelection[], opts: CollectOptions, emit: (e: SecurityEventInput) => void = emitSecurityEvent): Promise<RepoActivity[]> {
   const window = Math.min(50, Math.max(1, opts.window || 10));
   const out: RepoActivity[] = [];
   for (const s of sel) {
@@ -219,6 +249,8 @@ export async function collectRepoActivity(sel: RepoSelection[], opts: CollectOpt
     const [branchLogs, { numstat, nameStatus }] = await Promise.all([branchCommits(repo, window), windowDiff(repo, window)]);
     // 3) pull requests (opt-in, GitHub + gh-authed)
     const { prJson, prStatus } = await collectPrs(repo, ref.isGitHub, s.prs ?? opts.prs);
+    // P-REPORT.10 (ADR-0164): audit the actual network reach-outs this repo triggered (fetch / gh PR list).
+    for (const ev of reachoutAuditEvents(ref, { fetched: wantFetch, fetchOk, prStatus })) emit(ev);
     out.push(buildRepoActivity({ label, path: repo, remoteUrl: url, fetchOk, fetchReason, branchLogs, numstat, nameStatus, prJson, prStatus }));
   }
   return out;
