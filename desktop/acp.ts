@@ -27,10 +27,14 @@ export class ACPClient {
   onStderr: (chunk: string) => void = () => {};
   onExit: (code: number | null) => void = () => {};
 
-  constructor(private cmd: string, private args: string[], private cwd: string) {}
+  // `env` (P-SANDBOX.2, ADR-0166) is an OVERLAY added on top of the inherited process.env for THIS child
+  // only — the mediated-egress proxy sets HTTP(S)_PROXY here so the omp child (and its bash/pip children)
+  // tunnel through the proxy, WITHOUT polluting the desktop process's own environment. Default {} ⇒ the
+  // child inherits process.env exactly as before.
+  constructor(private cmd: string, private args: string[], private cwd: string, private env: Record<string, string> = {}) {}
 
   start(): void {
-    this.proc = spawn(this.cmd, this.args, { cwd: this.cwd, stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
+    this.proc = spawn(this.cmd, this.args, { cwd: this.cwd, stdio: ["pipe", "pipe", "pipe"], windowsHide: true, env: { ...process.env, ...this.env } });
     this.proc.stdout!.on("data", (d) => this.onData(String(d)));
     this.proc.stderr!.on("data", (d) => this.onStderr(String(d)));
     this.proc.on("exit", (code) => this.onExit(code));

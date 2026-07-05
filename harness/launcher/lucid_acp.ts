@@ -27,7 +27,8 @@ import { BUILD_POLICY, DELEGATION_POLICY } from "../prompt/assembler.ts";
 import { ScannerClient, ScanUnavailableError } from "../security/scanner_client.ts";
 import { runAgentFirewall } from "../mcp/agent_firewall.ts";
 import { formatStats, rateLimits, sessionStats } from "../../tools/session_metrics.ts";
-import { resolveBackend, sandboxDisclosure, wrapForProfile, type BackendResolution } from "../runs/sandbox_exec.ts";
+import { resolveBackend, sandboxDisclosure, wrapForProfile, type BackendResolution, type SandboxProxy } from "../runs/sandbox_exec.ts";
+import { ensureEgressProxy } from "../runs/egress_proxy.ts"; // P-SANDBOX.2 (ADR-0166)
 import { caps } from "../runs/profiles.ts";
 import { managedConfig, managedRequireIsolation } from "../../desktop/managed_config.ts";
 
@@ -191,6 +192,8 @@ export interface RunAcpOpts {
   spawnFn?: SpawnFn;
   /** Injectable for tests; defaults to the real platform/PATH/managed-policy resolution (ADR-0157). */
   sandbox?: BackendResolution;
+  /** Injectable for tests; defaults to starting the real mediated-egress proxy (ADR-0166). */
+  proxyStart?: ProxyStartFn;
   stderr?: (s: string) => void;
 }
 
@@ -200,14 +203,41 @@ function liveSandboxResolution(): BackendResolution {
   return resolveBackend({ requireIsolation: managedRequireIsolation(managedConfig().config) });
 }
 
+/** P-SANDBOX.2 (ADR-0166): start (once) the mediated-egress proxy and hand back what the sandbox needs
+ *  to steer the child at it, or null if it could not come up (⇒ the wrap falls back to network-off). */
+export type ProxyStartFn = () => Promise<SandboxProxy | null>;
+
+const liveProxyStart: ProxyStartFn = async () => {
+  // Best-effort privileged :53 so a bound resolv.conf can point at us; degrades to ephemeral (HTTP(S)
+  // mediation only) if unprivileged. Loopback HTTP bind failing ⇒ null ⇒ caller runs network-off.
+  const ep = await ensureEgressProxy({ dnsPort: 53 });
+  if (!ep) return null;
+  return {
+    host: ep.host,
+    httpPort: ep.httpPort,
+    httpProxyUrl: ep.httpProxyUrl,
+    resolvConfPath: ep.dnsPort === 53 ? ep.resolvConfPath : undefined,
+  };
+};
+
 /** Spawn the gated omp over inherited stdio; resolve the child's exit code (127 on spawn error). The
  *  single spawn path shared by `lucid acp` (ACP passthrough) and `lucid tui` (native terminal), so both
  *  surfaces inherit the same fail-closed launch. */
-function execGated(o: { omp: string; args: string[]; cwd: string; env: Env; spawnFn: SpawnFn; sandbox: BackendResolution; err: (s: string) => void; label: string }): Promise<number> {
+async function execGated(o: { omp: string; args: string[]; cwd: string; env: Env; spawnFn: SpawnFn; sandbox: BackendResolution; proxyStart?: ProxyStartFn; err: (s: string) => void; label: string }): Promise<number> {
   // P-SANDBOX.1 (ADR-0157): the runtime execution boundary, decided at THE spawn. The interactive
   // launcher session runs trusted-local caps; wrapForProfile owns the fail-closed rules (a managed
   // require-isolation with no backend refuses here, exactly like the scanner preflight).
-  const d = wrapForProfile({ argv: [o.omp, ...o.args], caps: caps("trusted-local"), ctx: { workspace: o.cwd }, resolution: o.sandbox });
+  const profileCaps = caps("trusted-local");
+  // P-SANDBOX.2 (ADR-0166): on an ISOLATING backend, a network-capable profile routes egress through the
+  // mediated proxy. If the proxy cannot start, `proxy` stays undefined and `wrap` falls back to
+  // --unshare-net (network-off) — fail-closed: no mediator ⇒ no raw network. A passthrough backend has
+  // nothing to steer, so we skip the proxy (it discloses as un-isolated).
+  let proxy: SandboxProxy | undefined;
+  if (o.sandbox.ok && o.sandbox.backend.isolates && profileCaps.canNetwork) {
+    proxy = (await (o.proxyStart ?? liveProxyStart)()) ?? undefined;
+    if (!proxy) o.err(`[${o.label}] mediated egress proxy unavailable — running network-off (fail-closed, ADR-0166).\n`);
+  }
+  const d = wrapForProfile({ argv: [o.omp, ...o.args], caps: profileCaps, ctx: { workspace: o.cwd, proxy }, resolution: o.sandbox });
   if (d.action === "refuse") {
     o.err(`[${o.label}] FAIL-CLOSED: ${d.reason}\n[${o.label}] refusing to start — exec must be runtime-isolated under this org's policy (ADR-0157).\n`);
     return Promise.resolve(1);
@@ -247,7 +277,7 @@ export async function runAcp(o: RunAcpOpts = {}): Promise<number> {
   const cwd = o.cwd ?? env.LUCID_WORKSPACE ?? process.cwd();
   const spawnFn = o.spawnFn ?? ((c, ar, op) => nodeSpawn(c, ar, op as never) as unknown as SpawnedLike);
 
-  return await execGated({ omp, args, cwd, env, spawnFn, sandbox: o.sandbox ?? liveSandboxResolution(), err, label: "lucid acp" });
+  return await execGated({ omp, args, cwd, env, spawnFn, sandbox: o.sandbox ?? liveSandboxResolution(), proxyStart: o.proxyStart, err, label: "lucid acp" });
 }
 
 export interface RunTuiOpts {
@@ -261,6 +291,8 @@ export interface RunTuiOpts {
   spawnFn?: SpawnFn;
   /** Injectable for tests; defaults to the real platform/PATH/managed-policy resolution (ADR-0157). */
   sandbox?: BackendResolution;
+  /** Injectable for tests; defaults to starting the real mediated-egress proxy (ADR-0166). */
+  proxyStart?: ProxyStartFn;
   stderr?: (s: string) => void;
 }
 
@@ -292,7 +324,7 @@ export async function runTui(o: RunTuiOpts = {}): Promise<number> {
   const cwd = o.cwd ?? env.LUCID_WORKSPACE ?? process.cwd();
   const spawnFn = o.spawnFn ?? ((c, ar, op) => nodeSpawn(c, ar, op as never) as unknown as SpawnedLike);
 
-  return await execGated({ omp, args, cwd, env, spawnFn, sandbox: o.sandbox ?? liveSandboxResolution(), err, label: "lucid tui" });
+  return await execGated({ omp, args, cwd, env, spawnFn, sandbox: o.sandbox ?? liveSandboxResolution(), proxyStart: o.proxyStart, err, label: "lucid tui" });
 }
 
 /** CLI entry. Bare `lucid` (no subcommand — optionally with omp passthru args like an initial prompt,

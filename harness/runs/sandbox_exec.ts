@@ -28,8 +28,10 @@
 // v1 scope note: bwrap here contains the NETWORK + process boundary (the ADR-0157 threat). The
 // FILESYSTEM story stays with omp `--isolate` (ADR-0028: worktree / fuse-overlay / ProjFS), which is
 // why $HOME is bound rw (omp session state, config, credentials live there). The mediated egress
-// proxy for `canNetwork:true` profiles is P-SANDBOX.2; macOS Seatbelt / Windows AppContainer are
-// P-SANDBOX.4. Pure + hermetic: `which` is injectable, nothing here touches the real system.
+// proxy for `canNetwork:true` profiles is wired in P-SANDBOX.2 (ADR-0166) via `ctx.proxy` — when a
+// running proxy endpoint is supplied, `wrap` steers the child's DNS + HTTP(S) through it instead of
+// unsharing the net. macOS Seatbelt / Windows AppContainer are P-SANDBOX.4. Pure + hermetic: `which`
+// is injectable and `ctx.proxy` is a plain path/URL record — nothing here touches the real system.
 
 import { homedir } from "node:os";
 import type { ProfileCaps } from "./profiles.ts";
@@ -44,6 +46,27 @@ export interface SandboxCtx {
   workspace: string;
   /** $HOME override (tests); defaults to os.homedir(). */
   home?: string;
+  /** P-SANDBOX.2 (ADR-0166): the running loopback egress proxy for `canNetwork:true` profiles. When
+   *  present, the sandbox steers the child's DNS + HTTP(S) egress THROUGH it (mediated) instead of
+   *  granting raw network: a generated resolv.conf is bound over /etc/resolv.conf and HTTP(S)_PROXY is
+   *  set. When ABSENT on a network-capable profile, `wrap` falls back to `--unshare-net` (network-off) —
+   *  no mediator ⇒ no network, never raw unmediated egress (fail-closed, invariant #3). Only meaningful
+   *  on an isolating backend; the passthrough discloses and ignores it. */
+  proxy?: SandboxProxy;
+}
+
+/** The subset of the egress proxy's endpoint the sandbox needs to steer a child at it. Mirrors
+ *  `EgressProxyEndpoint` (harness/runs/egress_proxy.ts) without importing it — the seam stays pure. */
+export interface SandboxProxy {
+  host: string;
+  httpPort: number;
+  /** `http://host:httpPort` — set as HTTP(S)_PROXY so libcurl/requests/pip tunnel through the proxy. */
+  httpProxyUrl: string;
+  /** Absolute path to the generated resolv.conf the proxy wrote at start(), bound read-only over
+   *  /etc/resolv.conf to steer the child's stub resolver at us. OMITTED when the proxy could not claim a
+   *  privileged :53 — DNS then stays with the host resolver and we mediate HTTP(S) only, with full
+   *  in-namespace DNS steering completed in P-SANDBOX.4. When present, DNS is mediated too. */
+  resolvConfPath?: string;
 }
 
 /** A concrete spawn plan: what to ACTUALLY exec. `env` entries are ADDED to the child env. */
@@ -90,9 +113,28 @@ export class BwrapBackend implements SandboxBackend {
       "--bind-try", home, home,
       "--bind", ctx.workspace, ctx.workspace,
     ];
-    if (!caps.canNetwork) args.push("--unshare-net");
+    const env: Record<string, string> = {};
+    // P-SANDBOX.2 (ADR-0166): three network states for the wrap —
+    //   (a) canNetwork:false           → --unshare-net (total deny; the DNS-TXT exfil dies at the syscall).
+    //   (b) canNetwork:true + proxy     → MEDIATED: bind the generated resolv.conf over /etc/resolv.conf so
+    //       the child's stub resolver targets the proxy, and set HTTP(S)_PROXY so pip/requests/curl tunnel
+    //       through it. Every DNS/CONNECT is then decided by egressDecisionDetailed (the agent's own brain).
+    //   (c) canNetwork:true + NO proxy  → fail-closed to --unshare-net: no mediator ⇒ no network, never raw
+    //       unmediated egress (invariant #3). The live wiring only omits the proxy when it could not start.
+    if (!caps.canNetwork) {
+      args.push("--unshare-net");
+    } else if (ctx.proxy) {
+      env.HTTP_PROXY = env.HTTPS_PROXY = env.http_proxy = env.https_proxy = ctx.proxy.httpProxyUrl;
+      // Loopback + our own hosts must bypass the HTTP proxy so the proxy's own upstream isn't self-tunnelled.
+      env.NO_PROXY = env.no_proxy = "localhost,127.0.0.1,::1";
+      // Steer the stub resolver at us too WHEN we hold a privileged :53 (resolvConfPath present). The bind
+      // is last-writer-wins over the /etc mount above (bwrap applies binds in order).
+      if (ctx.proxy.resolvConfPath) args.push("--ro-bind", ctx.proxy.resolvConfPath, "/etc/resolv.conf");
+    } else {
+      args.push("--unshare-net");
+    }
     args.push("--", ...argv);
-    return { cmd: "bwrap", args, env: {} };
+    return { cmd: "bwrap", args, env };
   }
 }
 

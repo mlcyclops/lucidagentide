@@ -463,6 +463,10 @@ demo-P-FIGMA.2: ## P-FIGMA.2 (ADR-0154): after /figma import, a guided step — 
 demo-P-SANDBOX.1: ## P-SANDBOX.1 (ADR-0157): the runtime execution boundary — sandbox seam (bwrap/noop), canNetwork/canExec caps ENFORCED at the omp spawn (suspicious-chain downgrade = real --unshare-net), managed require-isolation fail-closes, disclosed passthrough elsewhere
 	$(BUN) run harness/scripts/demo_p_sandbox_1.ts
 
+.PHONY: demo-P-SANDBOX.2
+demo-P-SANDBOX.2: ## P-SANDBOX.2 (ADR-0166): mediated subprocess egress — a loopback DNS + CONNECT proxy decided by the agent's own egressDecisionDetailed brain (only allow passes; prompt/foreign-ccTLD/IP-literal/unparseable/thrown all DENY). Live: denied gethostbyname → REFUSED, upstream never contacted; allowed → forwarded. Proxy dead ⇒ egress denied but local exec still runs; wired at the omp spawn (HTTP(S)_PROXY + resolv.conf steer)
+	$(BUN) run harness/scripts/demo_p_sandbox_2.ts
+
 .PHONY: demo-P-REPORT.9
 demo-P-REPORT.9: ## P-REPORT.9 (ADR-0162): multi-repo remote fetch + PR aggregation for the Engineering Report — remote-URL parse (GitHub vs not), commits aggregated across branches (deduped) + line totals, the Cross-repo activity annex, fail-soft on a failed fetch (local refs still shown), PRs skipped with a reason on non-GitHub/unauthed remotes, and untrusted commit/PR text neutralized (no HTML/fence breakout)
 	$(BUN) run desktop/scripts/demo_p_report_9.ts

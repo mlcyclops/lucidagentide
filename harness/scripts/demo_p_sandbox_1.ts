@@ -54,8 +54,11 @@ const denied = wrapForProfile({ argv, caps: caps(downgraded.profile), ctx, resol
 ok(denied.action === "spawn" && denied.plan.args.includes("--unshare-net"),
   "container-local under bwrap → --unshare-net: the DNS-TXT exfil fails at the syscall");
 const open = wrapForProfile({ argv, caps: caps("trusted-local"), ctx, resolution: bwrapRes });
-ok(open.action === "spawn" && !open.plan.args.includes("--unshare-net"),
-  "trusted-local keeps network (the mediated proxy is P-SANDBOX.2)");
+ok(open.action === "spawn" && open.plan.args.includes("--unshare-net"),
+  "trusted-local with NO proxy now fails closed to --unshare-net (mediation is P-SANDBOX.2; see demo_p_sandbox_2)");
+const mediated = wrapForProfile({ argv, caps: caps("trusted-local"), ctx: { ...ctx, proxy: { host: "127.0.0.1", httpPort: 8888, httpProxyUrl: "http://127.0.0.1:8888" } }, resolution: bwrapRes });
+ok(mediated.action === "spawn" && !mediated.plan.args.includes("--unshare-net") && mediated.plan.env.HTTPS_PROXY === "http://127.0.0.1:8888",
+  "trusted-local WITH a proxy → mediated egress (HTTP(S)_PROXY set, network kept)");
 
 // ── [3] fail-closed rules (invariant #3) ────────────────────────────────────
 console.log("\n[3] fail-closed: cannot-enforce NEVER means run-anyway");
