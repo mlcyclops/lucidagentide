@@ -467,6 +467,10 @@ demo-P-SANDBOX.1: ## P-SANDBOX.1 (ADR-0157): the runtime execution boundary — 
 demo-P-REPORT.9: ## P-REPORT.9 (ADR-0162): multi-repo remote fetch + PR aggregation for the Engineering Report — remote-URL parse (GitHub vs not), commits aggregated across branches (deduped) + line totals, the Cross-repo activity annex, fail-soft on a failed fetch (local refs still shown), PRs skipped with a reason on non-GitHub/unauthed remotes, and untrusted commit/PR text neutralized (no HTML/fence breakout)
 	$(BUN) run desktop/scripts/demo_p_report_9.ts
 
+.PHONY: demo-P-TOOLFAIL.2
+demo-P-TOOLFAIL.2: ## P-TOOLFAIL.2 (ADR-0163): failed tool calls collapse into a red toolbox badge, click expands the Tool Call Actions list (command attempted + full error); never a security surface
+	$(BUN) run desktop/scripts/demo_p_toolfail_2.ts
+
 .PHONY: dashboards
 dashboards: ## Materialize dashboard CSVs from a DuckDB into observable/docs/data (DB=path)
 	$(BUN) run harness/scripts/materialize_dashboards.ts $(DB) observable/docs/data
