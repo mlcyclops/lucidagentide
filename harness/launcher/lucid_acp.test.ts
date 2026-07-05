@@ -202,6 +202,7 @@ test("runTui spawns the gated omp (native TUI, no acp) with passthru + workspace
   expect(call.args).not.toContain("acp");
   expect(call.args[0]).toBe("-e");
   expect(call.args.some((a) => a.endsWith("security_extension.ts"))).toBe(true); // gate loaded
+  expect(call.args.some((a) => a.endsWith("mcp_result_gate.ts"))).toBe(true); // MCP result gate loaded too (parity with acp)
   expect(call.args).toContain("--append-system-prompt");
   expect(call.args.slice(-2)).toEqual(["--model", "haiku"]); // passthru threaded through
   expect(call.cwd).toBe("/work/dir");
