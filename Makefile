@@ -44,8 +44,8 @@ install-sidecar: ## Create/sync the pinned Python sidecar venv
 test: test-harness test-sidecar ## Run all tests
 
 .PHONY: test-harness
-test-harness: ## Bun test suite (empty-green to start)
-	$(BUN) test
+test-harness: ## Bun test suite (desktop/release is GENERATED — packaged repo copies must never be tested)
+	$(BUN) test --path-ignore-patterns='desktop/release/**'
 
 .PHONY: test-sidecar
 test-sidecar: ## Sidecar smoke test: one request in, well-formed response out
@@ -420,6 +420,10 @@ demo-P-VISION.1: ## P-VISION.1 (ADR-0136): paste/drop a screenshot into the prom
 .PHONY: demo-P-NVIM.1
 demo-P-NVIM.1: ## P-NVIM.1 (ADR-0150): Neovim + terminal integration — `lucid tui` is the gated command minus `acp` (gate first, policy, passthru last), fail-closes (dead scanner ⇒ no spawn), and the Neovim plugin's pure helpers pass headless nvim
 	$(BUN) run harness/scripts/demo_pnvim1.ts
+
+.PHONY: demo-P-THEME.1
+demo-P-THEME.1: ## P-THEME.1 (ADR-0160): the LUCID skin for gated terminals — themes/lucid.json resolves, session_start provisions (idempotent) + setTheme("lucid"), fail-OPEN cosmetics never weaken fail-CLOSED, and the theme -e rides behind the gate -e
+	$(BUN) run harness/scripts/demo_ptheme1.ts
 
 .PHONY: nvim-plugin-split
 nvim-plugin-split: ## Split extensions/neovim -> the standalone `lucid.nvim` branch (add PUSH=1 to force-push to origin)
