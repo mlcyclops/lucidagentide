@@ -14,8 +14,9 @@ import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { ACPClient } from "./acp.ts";
-import { BUILD_POLICY, DELEGATION_POLICY } from "../harness/prompt/assembler.ts";
+import { AGENT_BUILDER_POLICY, BUILD_POLICY, DELEGATION_POLICY, ENGAGEMENT_POLICY, PREVIEW_POLICY, SLASH_COMMAND_POLICY } from "../harness/prompt/assembler.ts";
 import { currentWorkspace } from "./workspace.ts";
+import { previewActivityLabel } from "./preview_activity.ts"; // P-PREVIEW.6a (ADR-0153): reviewing/testing pill
 import { learnFromTurn, recallPreamble } from "./personal.ts";
 import { buildUserTurnPreamble } from "./preamble.ts";
 import { ChatGate } from "./chat_gate.ts";
@@ -36,10 +37,18 @@ import { addTurnSpend, type LoopSpend, newLoopSpend, normalizeBudget, overBudget
 import { formatSpend } from "./loop_report.ts";
 import { assessReadiness, maturedGoalFrom, mergeMatured, parsePreflightJson, type PreflightSpec, preflightSystemPrompt, preflightUserPrompt, type ReadinessReport, relevantPriorRuns, renderLoopDesign, successCriteria, summarizePriorRuns } from "./loop_preflight.ts";
 import { execFileSync } from "node:child_process";
-import { type Automation, listAutomations, nextDueAutomation, updateAutomation } from "./automations.ts";
-import { type EgressChoice, egressDecision, isLocalFileTarget, recordEgress } from "./egress_policy.ts";
-import { previewablePath } from "./preview_resolve.ts";
-import { type ExecChoice, type ExecClass, classifyCommand, classifyEval, execStore, execVerdict, recordExec } from "./exec_policy.ts";
+import { type Automation, agentAutomationGate, listAutomations, nextDueAutomation, updateAutomation } from "./automations.ts";
+import { loadSpecFile, loadSpecTrust } from "../harness/agent/file_store.ts"; // P-AGENT.14: scheduled agent runs
+import { startAgentRun } from "./agent_run.ts"; // P-AGENT.14: same gated pipeline as the Builder's Run
+import { type EgressChoice, egressDecisionDetailed, egressPosture, extractHost, isLocalFileTarget, recordEgress } from "./egress_policy.ts";
+import { withinCallBudget } from "./network_whitelist.ts";
+import { previewOpenPath, previewablePath } from "./preview_resolve.ts";
+import { agentBuilderOpenSpec } from "../harness/agent/handoff.ts"; // P-AGENT.8.2: chat -> Agent Builder handoff
+import type { AgentSpec } from "../harness/agent/spec.ts";
+import { slashCommandCreateDraft } from "../harness/commands/handoff.ts"; // P-CMD.1: chat -> user slash command
+import type { UserCommand } from "../harness/commands/spec.ts";
+import { gateDenyReason } from "./gate_audit.ts";
+import { type ExecChoice, type ExecClass, classifyCommand, classifyEval, elicitationApproval, execStore, execVerdict, recordExec } from "./exec_policy.ts";
 import { toolFailureReason } from "./tool_failure.ts";
 
 // P-EGRESS.1 (ADR-0062): the network-reaching tools omp is told to PROMPT for (acp_config.yml). When omp
@@ -97,9 +106,20 @@ function egressTarget(tc: any): string | null {
 const REPO = join(import.meta.dir, "..");
 // Absolute so the gate loads from THIS repo even when omp runs in another workspace.
 const GATE = join(REPO, "harness", "omp", "security_extension.ts");
+// P-MCP-GATE.1 (ADR-0148): scans/withholds MCP tool RESULTS in-process (closes the ADR-0020 gap). Loaded
+// alongside the gate; source-scoped to MCP results (leaves local tools untouched).
+const MCP_RESULT_GATE = join(REPO, "harness", "omp", "mcp_result_gate.ts");
 // AskSage gov-gateway provider extension, loaded alongside the gate (omp -e is
 // repeatable). No-op unless ASKSAGE_API_KEY is set in the spawn env. ADR-0007.
 const ASKSAGE = join(REPO, "harness", "omp", "asksage_extension.ts");
+// P-PREVIEW.3a (ADR-0096) — DRAFT: registers the agent-callable `preview_open` tool. Defensively wrapped so
+// a registration failure never breaks omp launch (see preview_extension.ts). Only added when the file exists.
+const PREVIEW_EXT = join(REPO, "harness", "omp", "preview_extension.ts");
+const AGENT_BUILDER_EXT = join(REPO, "harness", "omp", "agent_builder_extension.ts"); // P-AGENT.8.2: chat -> canvas handoff tool
+const SLASH_CMD_EXT = join(REPO, "harness", "omp", "slash_command_extension.ts"); // P-CMD.1: slash_command_create tool
+// P-KG-SYM.1: registers the read-only `codegraph_query` tool. Added ONLY when the user opted in
+// (settings.codeGraphAgent) AND the file exists — so a bad/absent extension never blocks omp launch.
+const CODEGRAPH_EXT = join(REPO, "harness", "omp", "codegraph_extension.ts");
 // P-TASK.3/4 (ADR-0028): config overlay that turns ON task isolation (mode: auto) so subagents
 // can run isolated and return a reviewable patch — containing the blast radius of a bad tool call.
 const ACP_CONFIG = join(REPO, "harness", "omp", "acp_config.yml");
@@ -116,11 +136,17 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 export type ChatEvent =
   | { type: "token"; text: string }
   | { type: "thinking"; text: string }
-  | { type: "tool"; name: string; detail: string }
+  // P-CHAT.1 (ADR-0104): `code` carries the tool's authored content so the chat can show an inline,
+  // expandable code/diff preview — a write's `content`, or an edit's `oldText`/`newText` (rendered as a
+  // diff). Bounded server-side. Absent for tools with no authored code (read/search/bash command shown as detail).
+  | { type: "tool"; name: string; detail: string; code?: { path: string; content?: string; oldText?: string; newText?: string; patch?: string } }
   | { type: "subagent"; id: string; agent: string; title: string; assignments: string[] }
   | { type: "block"; tool: string; reason: string; severity: string; findings: string; id?: string; quarantined?: boolean }
   | { type: "permission"; id: string; tool: string; detail: string; options: { optionId: string; name: string; kind?: string }[]; url?: string; egress?: boolean; localFile?: boolean; exec?: boolean; program?: string; reason?: string; danger?: boolean }
   | { type: "preview-available"; path: string } // P-PREVIEW.2 (ADR-0096): the agent wrote a previewable file
+  | { type: "preview-activity"; label: string } // P-PREVIEW.6a (ADR-0153): the agent is reviewing/testing the live preview
+  | { type: "agent-builder-open"; spec: AgentSpec } // P-AGENT.8.2 (ADR-0134): open the Agent Builder pre-populated
+  | { type: "slash-command-created"; command: UserCommand } // P-CMD.1 (ADR-0146): the agent created a user "/" command
   | { type: "usage"; used: number; size: number; cost: number }
   // P-GOAL.1 (ADR-0046): /goal loop events — an iteration begins, the separate checker's verdict,
   // the loop met its condition, or it stopped (cap / no-progress).
@@ -185,6 +211,9 @@ class Backend {
   private loopDial: LoopDial | null = null;
   private loopBlocks: LoopBlock[] = [];
   private loopIter = 0;
+  // P-NETWL.3 (ADR-0106): per-loop count of auto-allowed calls to each whitelisted host, so a whitelist
+  // entry's `callBudget` caps how many times it auto-allows PER LOOP. Reset at each /goal loop start.
+  private loopHostCalls = new Map<string, number>();
   private permSeq = 0;
   private permPending = new Map<string, (optionId: string | null) => void>();
   private pendingPerms = 0;             // while > 0 the turn's idle/stall clock is paused
@@ -210,6 +239,32 @@ class Backend {
   private asksageDiag: Array<Record<string, unknown>> = [];
   /** Recent AskSage call diagnostics (most-recent last), capped. Empty unless developer mode is on. */
   asksageDiagnostics(): Array<Record<string, unknown>> { return this.asksageDiag.slice(-100); }
+
+  // P-GATE-DIAG.1 (ADR-0066/0062): a bounded ring recording the interactive-check inputs + decision for
+  // every exec/egress permission request. Surfaced (developer mode) in the Logs panel so the "I never got
+  // a prompt — it was just denied" anomaly is observable: it shows WHY the gate auto-denied (askActive /
+  // listener / goalActive / autoRunning) instead of prompting. Best-effort; never throws.
+  private gateDiag: Array<Record<string, unknown>> = [];
+  /** Recent exec/egress gate-decision diagnostics (most-recent last), capped. */
+  gateDiagnostics(): Array<Record<string, unknown>> { return this.gateDiag.slice(-100); }
+  private recordGateDiag(rec: Record<string, unknown>): void {
+    try { this.gateDiag.push({ at: Date.now(), ...rec }); if (this.gateDiag.length > 200) this.gateDiag.shift(); } catch { /* never break the gate on a log */ }
+  }
+
+  /** P-EXEC.2 (ADR-0110): answer omp's FORM elicitation — its per-tool "Approve/Deny" approval and
+   *  plan-mode approval. omp maps a `select` to a one-property schema `{ value: { enum: [...] } }`; we
+   *  accept the affirmative option (Approve/Allow/Yes/Proceed) because this elicitation is a redundant
+   *  INNER gate that only fires AFTER our authoritative `session/request_permission` gate already
+   *  allowed the call. A non-approval elicitation (a custom question with no affirmative option) gets no
+   *  synthesized answer — declined, matching the pre-capability behavior where such prompts returned no
+   *  value. Surfaced in the gate diagnostics (developer mode) for the Logs panel. */
+  private answerElicitation(params: any): { action: string; content?: { value: string } } {
+    const enumVals: unknown = params?.requestedSchema?.properties?.value?.enum;
+    const opts: string[] = Array.isArray(enumVals) ? enumVals.filter((v): v is string => typeof v === "string") : [];
+    const approve = elicitationApproval(opts);
+    this.recordGateDiag({ kind: "elicitation", options: opts.slice(0, 8), decision: approve ? `accept:${approve}` : "decline" });
+    return approve ? { action: "accept", content: { value: approve } } : { action: "decline" };
+  }
 
   // Turn-lifecycle diagnostics (developer mode). Prints to the dev-server console so a hung long
   // multi-tool turn reveals WHERE it stalls: did prompt() resolve (server finished, browser orphaned) or
@@ -240,8 +295,13 @@ class Backend {
         if (loadSettings().developerMode) process.env.LUCID_ASKSAGE_DEBUG = "1"; else delete process.env.LUCID_ASKSAGE_DEBUG;
         // ADR-0033: also append the build / anti-over-refusal policy so the chat model doesn't decline
         // a buildable task (e.g. "make a game/graphics/music in one HTML file") by mis-reading its scope.
-        const appendedPolicy = `${DELEGATION_POLICY}\n\n${BUILD_POLICY}`;
-        const acp = new ACPClient(ompBin(), ["acp", "-e", GATE, "-e", ASKSAGE, ...isoCfg, "--append-system-prompt", appendedPolicy], currentWorkspace());
+        const appendedPolicy = `${DELEGATION_POLICY}\n\n${BUILD_POLICY}\n\n${PREVIEW_POLICY}\n\n${ENGAGEMENT_POLICY}\n\n${AGENT_BUILDER_POLICY}\n\n${SLASH_COMMAND_POLICY}`;
+        const previewArgs = existsSync(PREVIEW_EXT) ? ["-e", PREVIEW_EXT] : []; // P-PREVIEW.3a (draft)
+        const codegraphArgs = loadSettings().codeGraphAgent && existsSync(CODEGRAPH_EXT) ? ["-e", CODEGRAPH_EXT] : []; // P-KG-SYM.1: opt-in
+        const agentBuilderArgs = existsSync(AGENT_BUILDER_EXT) ? ["-e", AGENT_BUILDER_EXT] : []; // P-AGENT.8.2: agent_builder_open
+        const slashCmdArgs = existsSync(SLASH_CMD_EXT) ? ["-e", SLASH_CMD_EXT] : []; // P-CMD.1: slash_command_create
+        const mcpGateArgs = existsSync(MCP_RESULT_GATE) ? ["-e", MCP_RESULT_GATE] : []; // P-MCP-GATE.1
+        const acp = new ACPClient(ompBin(), ["acp", "-e", GATE, ...mcpGateArgs, "-e", ASKSAGE, ...previewArgs, ...codegraphArgs, ...agentBuilderArgs, ...slashCmdArgs, ...isoCfg, "--append-system-prompt", appendedPolicy], currentWorkspace());
         acp.onNotify = (method, params) => {
           if (method !== "session/update") return;
           const u = params?.update ?? params;
@@ -270,12 +330,63 @@ class Backend {
                 // job-coordination calls (poll/list/cancel/wait of background subagents) are internal
                 // bookkeeping while a task runs — don't surface them as separate tool chips.
               } else {
-                this.emit({ type: "tool", name: String(u.kind ?? u.title ?? "tool"), detail: String(u.title ?? ri.command ?? "") });
+                // P-CHAT.1 (ADR-0104): carry the tool's authored code for the chat's inline preview. A
+                // write's `content`, or an edit's `oldText`/`newText` (→ diff). Bounded so a huge file can't
+                // bloat the event stream; the content is already gate-scanned (it's the same tool_call text).
+                const CODE_CAP = 64 * 1024;
+                const clip = (s: unknown) => (typeof s === "string" ? s.slice(0, CODE_CAP) : undefined);
+                // The agent often writes/edits with a RELATIVE path (relative to the workspace it runs in).
+                // Preview + "Open in editor" need an ABSOLUTE path, so resolve any relative path against the
+                // workspace here (a path that's already file://, a URL, or OS-absolute is left untouched).
+                const absPath = (p: string): string => {
+                  if (!p || /^(file:\/\/|https?:\/\/|[A-Za-z]:[\\/]|\/|\\\\|~[\\/])/i.test(p)) return p;
+                  try { return join(currentWorkspace(), p); } catch { return p; }
+                };
+                const codePath = absPath(typeof ri.path === "string" ? ri.path : typeof ri.file_path === "string" ? ri.file_path : "");
+                let code: { path: string; content?: string; oldText?: string; newText?: string; patch?: string } | undefined;
+                if (typeof ri.content === "string") code = { path: codePath, content: clip(ri.content) };
+                // `replace` mode (ADR-0105, our configured edit tool) sends `edits: [{ old_text, new_text }]`
+                // (one call may bundle several hunks) — join them into one before/after pair for the diff.
+                // camelCase + top-level are kept as fallbacks for other edit-tool variants.
+                else if (Array.isArray(ri.edits) && ri.edits.length) {
+                  const olds = ri.edits.map((e: any) => String(e?.old_text ?? e?.oldText ?? "")).join("\n");
+                  const news = ri.edits.map((e: any) => String(e?.new_text ?? e?.newText ?? "")).join("\n");
+                  code = { path: codePath, oldText: clip(olds) ?? "", newText: clip(news) ?? "" };
+                }
+                else if (typeof ri.old_text === "string" || typeof ri.new_text === "string") code = { path: codePath, oldText: clip(ri.old_text) ?? "", newText: clip(ri.new_text) ?? "" };
+                else if (typeof ri.oldText === "string" || typeof ri.newText === "string") code = { path: codePath, oldText: clip(ri.oldText) ?? "", newText: clip(ri.newText) ?? "" };
+                // omp's default `hashline` edit sends a patch in a single `input` string (kept for completeness).
+                else if (typeof ri.input === "string" && (u.kind === "edit" || /\bedit\b/i.test(String(u.title ?? "")))) code = { path: codePath, patch: clip(ri.input) };
+                this.emit({ type: "tool", name: String(u.kind ?? u.title ?? "tool"), detail: String(u.title ?? ri.command ?? ""), ...(code ? { code } : {}) });
                 // P-PREVIEW.2 (ADR-0096): if this write/edit produced a browser-previewable file, tell the UI
                 // so it can auto-surface it in the Preview panel. Pure detection (previewablePath); the path
                 // is still gated by the resolver before anything renders.
-                const pv = previewablePath(String(u.kind ?? u.title ?? ""), ri);
+                // P-PREVIEW.3a (ADR-0096): the agent's own `preview_open` tool call drives the panel too —
+                // same `preview-available` path (the renderer re-gates via resolvePreview before rendering).
+                // A CUSTOM tool's name does NOT survive as `u.kind` (ACP maps it to "other"); omp renders the
+                // call title as `"preview_open: <path>"`, so preview_open must be matched against the TITLE.
+                // A write/edit, by contrast, keeps a real `kind` ("edit"), which previewablePath keys on.
+                const pvRaw = previewOpenPath(String(u.title ?? ""), ri) ?? previewablePath(String(u.kind ?? u.title ?? ""), ri);
+                const pv = pvRaw ? absPath(pvRaw) : pvRaw; // resolve a relative write path to absolute so the panel can render it
                 if (pv) this.emit({ type: "preview-available", path: pv });
+                // P-PREVIEW.6a (ADR-0153): the agent is looking at / testing the live preview (screenshot,
+                // inspect, open, structured action) — tell the UI to glow the panel + show a "reviewing" pill.
+                const paLabel = previewActivityLabel(String(u.title ?? u.kind ?? ""));
+                if (paLabel) this.emit({ type: "preview-activity", label: paLabel });
+                // P-AGENT.8.2 (ADR-0134): the agent's `agent_builder_open` tool call opens the Agent Builder
+                // pre-populated. Re-parsed + validated + secret-scanned here (authoritative) before it opens.
+                // NOTE: omp renders a custom tool's call TITLE as a human summary (e.g. "Opening agent builder
+                // for X"), NOT the tool name — so we key on the unique `specJson` arg (in rawInput OR input),
+                // not the title. Fail-closed: a leaky/invalid draft parses to null here and never opens.
+                const abArgs = (u.rawInput ?? (u as { input?: unknown }).input ?? ri) as unknown;
+                const abSpec = agentBuilderOpenSpec(String(u.title ?? ""), abArgs);
+                if (abSpec) this.emit({ type: "agent-builder-open", spec: abSpec });
+                // P-CMD.1 (ADR-0146): the agent's `slash_command_create` tool call creates a user "/" command.
+                // Same detection shape as agent_builder_open — key on the unique `commandJson` arg, re-parse +
+                // validate + secret-scan here (fail-closed: a leaky/invalid draft parses to null and is ignored).
+                // The renderer then persists it authoritatively through the gate (createUserCommand).
+                const scCommand = slashCommandCreateDraft(String(u.title ?? ""), abArgs);
+                if (scCommand) this.emit({ type: "slash-command-created", command: scCommand });
               }
               break;
             }
@@ -295,6 +406,15 @@ class Backend {
           }
         };
         acp.onRequest = async (m, params) => {
+          // P-EXEC.2 (ADR-0110): omp (≥16.1) routes its per-tool "Approve/Deny" approval — and plan-mode
+          // approval — through an ACP FORM elicitation (`elicitation/create`), gated on the client
+          // advertising `elicitation.form`. This approval runs as an INNER wrapper, AFTER (and only if)
+          // our `session/request_permission` gate already allowed the call — so it is a redundant second
+          // gate. We advertise the capability (in `initialize`) and answer here: pick the affirmative
+          // option so an already-gated call proceeds. Without this omp's `select()` returned `undefined`,
+          // which its tool wrapper treats as "Tool call denied by user" — silently failing EVERY
+          // bash/eval/edit/delete call with no prompt (the exact "denied without being asked" bug).
+          if (m === "elicitation/create") return this.answerElicitation(params);
           if (m === "session/request_permission") {
             const opts: any[] = params?.options ?? [];
             const tc = params?.toolCall ?? params?.tool_call ?? {};
@@ -322,6 +442,8 @@ class Backend {
               }
               const turnAllowed = interactive && (this.execTurnAll || (!!cls.key && this.execTurnPrograms.has(cls.key)));
               const verdict = execVerdict(execStore(), cls, { unattended: !interactive, turnAllowed });
+              // P-GATE-DIAG.1: record WHY this exec call gets its outcome (esp. a no-prompt block).
+              this.recordGateDiag({ kind: "exec", tool: cls.key ?? toolName, tier: cls.tier, askActive: this.askActive, listener: !!this.listener, goalActive: this.goalActive, autoRunning: this.autoRunning, interactive, verdict, decision: verdict === "allow" ? "allow" : (verdict === "prompt" && interactive) ? "prompt" : "block(no-ui)" });
               if (verdict === "allow") return approveOpt();
               if (verdict === "prompt" && interactive) return this.askExec(params, opts, cls, isEvalTool ? "eval" : (cmd ?? toolName));
               // P-ENT.2: an exec call blocked with no human to ask (unattended risky / catastrophic).
@@ -334,11 +456,38 @@ class Backend {
             // EVEN in Agent mode (egress is never silently auto-approved). Fail-closed: no live UI ⇒ deny.
             const isEgress = [...EGRESS_TOOLS].some((t) => toolName.includes(t)) || (!!target && /^https?:\/\//i.test(target));
             if (isEgress) {
+              // P-NETWL.5 (ADR-0108): a web_search call (omp's default search providers, no arbitrary browse)
+              // auto-approves when the user's posture allows web search - the pre-checked personal default.
+              if ((toolName.includes("web_search") || toolName.includes("web-search")) && egressPosture().allowWebSearch) {
+                this.recordGateDiag({ kind: "egress", tool: toolName.slice(0, 40), target: (target ?? "").slice(0, 80), localFile: false, askActive: this.askActive, listener: !!this.listener, goalActive: this.goalActive, autoRunning: this.autoRunning, decision: "allow(web-search)" });
+                const a = opts.find((o) => /allow/i.test(o.kind ?? o.optionId ?? "")) ?? opts[0];
+                return a ? { outcome: { outcome: "selected", optionId: a.optionId } } : { outcome: { outcome: "cancelled" } };
+              }
               // P-EGRESS.2 (ADR-0094): a browser-open of a LOCAL file (file:// or an absolute path) is not a
               // website visit — a host-based standing allow can't apply, so we still PROMPT, but with an
               // accurate local-file dialog (and never persist a host decision for it).
               const localFile = !!target && isLocalFileTarget(target);
-              if (!localFile && target && egressDecision(target) === "allow") {
+              // P-NETWL.3 (ADR-0106): decide WITH context so `project`/`loop`-scoped whitelist entries apply,
+              // and enforce a matched entry's per-loop `callBudget`. In a loop, once a budgeted host's calls
+              // are used up the whitelist stops auto-allowing it (falls through to prompt/fail-closed block).
+              const inLoop = this.goalActive;
+              const d = !localFile && !!target
+                ? egressDecisionDetailed(target, { project: currentWorkspace(), loop: inLoop })
+                : { verdict: "prompt" as const, via: "host" as const };
+              let standingAllow = d.verdict === "allow";
+              if (standingAllow && d.via === "whitelist" && inLoop && d.entry?.callBudget != null) {
+                const host = extractHost(target!) ?? target!;
+                const used = this.loopHostCalls.get(host) ?? 0;
+                if (!withinCallBudget(used, d.entry.callBudget)) {
+                  standingAllow = false; // budget exhausted this loop → no longer auto-allowed
+                  this.loopBlocks.push({ iter: this.loopIter, tool: "egress", tier: "T2", reason: "call-budget" });
+                } else {
+                  this.loopHostCalls.set(host, used + 1);
+                }
+              }
+              // P-GATE-DIAG.1: record WHY this egress call gets its outcome (esp. a no-prompt block).
+              this.recordGateDiag({ kind: "egress", tool: toolName.slice(0, 40), target: (target ?? "").slice(0, 80), localFile, askActive: this.askActive, listener: !!this.listener, goalActive: this.goalActive, autoRunning: this.autoRunning, decision: standingAllow ? "allow(standing)" : (this.askActive && this.listener) ? "prompt" : "block(no-ui)" });
+              if (standingAllow) {
                 const a = opts.find((o) => /allow/i.test(o.kind ?? o.optionId ?? "")) ?? opts[0];
                 return a ? { outcome: { outcome: "selected", optionId: a.optionId } } : { outcome: { outcome: "cancelled" } };
               }
@@ -383,7 +532,10 @@ class Backend {
           }
         };
         acp.start();
-        await acp.request("initialize", { protocolVersion: 1, clientCapabilities: { fs: { readTextFile: false, writeTextFile: false } } });
+        // P-EXEC.2 (ADR-0110): advertise `elicitation.form` so omp delivers its per-tool approval (and
+        // plan-mode approval) as an `elicitation/create` we can answer (see answerElicitation). Without it
+        // omp's tool wrapper silently denies every gated tool call ("Tool call denied by user").
+        await acp.request("initialize", { protocolVersion: 1, clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, elicitation: { form: {} } } });
         this.acp = acp;
       })();
     }
@@ -490,12 +642,17 @@ class Backend {
     const block = () => denyOpt ? { outcome: { outcome: "selected", optionId: denyOpt.optionId } } : { outcome: { outcome: "cancelled" } };
     return new Promise((resolve) => {
       const settle = (outcome: any) => { clearTimeout(t); this.permPending.delete(id); this.pendingPerms = Math.max(0, this.pendingPerms - 1); resolve(outcome); };
-      const t = setTimeout(() => settle(block()), Backend.PERM_MS); // fail-closed → block egress
+      // P-ENT.4 (ADR-0069): audit the fail-closed TIMEOUT block too (was silent).
+      const t = setTimeout(() => {
+        emitSecurityEvent({ category: "egress", type: "egress_decision", decision: "block", severity: "medium", tool: localFile ? "egress-local-file" : "egress", reason: `${gateDenyReason(null, true)} · ${target}`.slice(0, 200), sessionId: this.sessionId ?? undefined });
+        settle(block());
+      }, Backend.PERM_MS);
       this.permPending.set(id, (optionId) => {
         const choice = String(optionId ?? "").replace(/^egress:/, "") as EgressChoice;
         const denied = !optionId || choice === "deny";
-        // P-ENT.2 (ADR-0069): the egress (network-reach) decision as a SecurityEvent (fail-safe).
-        emitSecurityEvent({ category: "egress", type: "egress_decision", decision: denied ? "block" : "allow", severity: "medium", tool: localFile ? "egress-local-file" : "egress", reason: `${denied ? "blocked" : choice} · ${target}`.slice(0, 200), sessionId: this.sessionId ?? undefined });
+        // P-ENT.2 (ADR-0069): the egress decision as a SecurityEvent. P-ENT.4: distinguish you-blocked from
+        // a fail-closed (turn-ended) auto-deny so the audit answers "did I deny it, or did it auto-deny?".
+        emitSecurityEvent({ category: "egress", type: "egress_decision", decision: denied ? "block" : "allow", severity: "medium", tool: localFile ? "egress-local-file" : "egress", reason: `${denied ? gateDenyReason(optionId) : choice} · ${target}`.slice(0, 200), sessionId: this.sessionId ?? undefined });
         if (denied) { settle(block()); return; }
         // A local file has no host to remember (allow-once only), so persist nothing for it.
         if (!localFile) { try { recordEgress(target, choice); } catch { /* best-effort persistence */ } }
@@ -522,12 +679,18 @@ class Backend {
     const block = () => denyOpt ? { outcome: { outcome: "selected", optionId: denyOpt.optionId } } : { outcome: { outcome: "cancelled" } };
     return new Promise((resolve) => {
       const settle = (o: any) => { clearTimeout(t); this.permPending.delete(id); this.pendingPerms = Math.max(0, this.pendingPerms - 1); resolve(o); };
-      const t = setTimeout(() => settle(block()), Backend.PERM_MS); // fail-closed → block
+      // P-ENT.4 (ADR-0069): a fail-closed TIMEOUT is a real block — audit it too (it used to settle silently,
+      // so a denial could happen with no SecurityEvent — the "why did I get a deny with no record?" gap).
+      const t = setTimeout(() => {
+        emitSecurityEvent({ category: "exec", type: "exec_decision", decision: "block", severity: cls.alwaysPrompt ? "critical" : "high", tool: cls.key ?? "shell", tier: cls.tier, reason: `${gateDenyReason(null, true)} · ${cls.reason}`, sessionId: this.sessionId ?? undefined });
+        settle(block());
+      }, Backend.PERM_MS);
       this.permPending.set(id, (optionId) => {
         const choice = String(optionId ?? "").replace(/^exec:/, "") as ExecChoice;
-        // P-ENT.2 (ADR-0069): record the human's exec decision as a SecurityEvent (fail-safe).
+        // P-ENT.2 (ADR-0069): record the human's exec decision as a SecurityEvent (fail-safe). P-ENT.4: the
+        // reason distinguishes an explicit "denied by you" from a "fail-closed (turn ended)" auto-deny.
         const denied = !optionId || choice === "deny";
-        emitSecurityEvent({ category: "exec", type: "exec_decision", decision: denied ? "block" : "allow", severity: cls.alwaysPrompt ? "critical" : "medium", tool: cls.key ?? "shell", tier: cls.tier, reason: `${denied ? "denied" : choice} · ${cls.reason}`, sessionId: this.sessionId ?? undefined });
+        emitSecurityEvent({ category: "exec", type: "exec_decision", decision: denied ? "block" : "allow", severity: cls.alwaysPrompt ? "critical" : "medium", tool: cls.key ?? "shell", tier: cls.tier, reason: `${denied ? gateDenyReason(optionId) : choice} · ${cls.reason}`, sessionId: this.sessionId ?? undefined });
         if (denied) { settle(block()); return; }
         if (choice === "allow-turn") { if (cls.key) this.execTurnPrograms.add(cls.key); else this.execTurnAll = true; } // in-memory only
         else { try { recordExec(cls, choice); } catch { /* best-effort persistence */ } }
@@ -596,7 +759,7 @@ class Backend {
   /** Run one turn, streaming events to onEvent; resolves after `done`. Captures the
    *  assistant reply so the personalization distiller can learn from the turn (P9.2).
    *  A stall (no activity for IDLE_MS) ends the turn with a clear error instead of hanging. */
-  async prompt(text: string, onEvent: (e: ChatEvent) => void): Promise<void> {
+  async prompt(text: string, onEvent: (e: ChatEvent) => void, images?: { data: string; mimeType: string }[]): Promise<void> {
     let assistant = "";
     let stalled = false;
     let idle: ReturnType<typeof setTimeout> | undefined;
@@ -627,10 +790,15 @@ class Backend {
       });
       this.memoryRecallDelivered = built.memoryRecallDelivered;
       const body = built.preamble + text;
+      // P-VISION.1 (ADR-0136): user-attached images ride as ACP image content blocks after the text. omp's
+      // session/prompt accepts `(text|image)[]` (same shape the preview_screenshot tool returns). Only
+      // well-formed blocks (base64 data + image mime) are appended — the renderer already validated them.
+      const imageBlocks = (images ?? []).filter((im) => im?.data && im?.mimeType).map((im) => ({ type: "image" as const, data: im.data, mimeType: im.mimeType }));
+      const promptContent = [{ type: "text" as const, text: body }, ...imageBlocks];
       arm(); // start the idle clock now (covers a stall BEFORE the first token)
       const stall = new Promise<never>((_, reject) => { onStall = reject; });
       const promptRes = await Promise.race<any>([
-        this.acp!.request("session/prompt", { sessionId: this.sessionId, prompt: [{ type: "text", text: body }] }),
+        this.acp!.request("session/prompt", { sessionId: this.sessionId, prompt: promptContent }),
         stall,
       ]);
       // P-GOAL-DIAG.1 (ADR-0074): the omp turn's stopReason tells us WHY a maker turn ended (e.g. an
@@ -677,7 +845,7 @@ class Backend {
     const loopMax = managedConfig().config?.security?.loop?.maxAutoTier;
     const rawDial = opts.dial ?? {};
     this.loopDial = { shell: clampDialRow(rawDial.shell, loopMax), edit: clampDialRow(rawDial.edit, loopMax), delete: clampDialRow(rawDial.delete, loopMax), "web-fetch": clampDialRow(rawDial["web-fetch"], loopMax), "web-search": clampDialRow(rawDial["web-search"], loopMax), subagent: clampDialRow(rawDial.subagent, loopMax) };
-    this.loopBlocks = []; this.loopIter = 0;
+    this.loopBlocks = []; this.loopIter = 0; this.loopHostCalls.clear();
     // P-GOAL.3/4: durable on-disk memory (best-effort). `resume` continues an existing loop-memory file
     // and injects its prior progress; otherwise start a fresh record.
     const resumed = opts.resume ? resumeGoalMemory(currentWorkspace(), opts.resume) : null;
@@ -920,6 +1088,31 @@ class Backend {
     this.autoRunning = true;
     // Stamp lastRunAt up-front so a slow run can't be re-fired by the next tick before it finishes.
     updateAutomation(ws, id, { lastRunAt: Date.now() });
+    // P-AGENT.14 (ADR-0142): scheduled BUILT-AGENT runs. Fail-closed gate first: only a trusted, loadable,
+    // approval-free spec runs unattended. A missing/untrusted agent SUSPENDS the schedule (disable + reason);
+    // approval checkpoints refuse the tick but keep the schedule armed. The run itself goes through the SAME
+    // startAgentRun pipeline as the Builder's Run button — gate first, allow-list, stored trust, run trace.
+    if (a.kind === "agent") {
+      let result = "ran";
+      try {
+        const spec = a.agentSpecId ? loadSpecFile(ws, a.agentSpecId) : null;
+        const trust = a.agentSpecId ? loadSpecTrust(ws, a.agentSpecId) : { trustLabel: "quarantined" as const, reason: "no agent" };
+        const gate = agentAutomationGate(spec, trust.trustLabel);
+        if (!gate.run) {
+          result = gate.result ?? "refused";
+          if (gate.disable) updateAutomation(ws, id, { enabled: false });
+        } else {
+          const r = await startAgentRun({ spec: spec!, prompt: a.agentPrompt ?? "", model: a.agentModel || "haiku", workspace: ws, trustLabel: trust.trustLabel });
+          result = r.blocked ? `blocked: ${r.reason ?? "refused"}` : r.error ? `error: ${r.error}` : r.paused ? "refused: halted at an approval checkpoint" : `ok: ${(r.output ?? "").slice(0, 160) || "(no output)"}${r.runId ? ` [${r.runId}]` : ""}`;
+        }
+      } catch (e) {
+        result = `error: ${e instanceof Error ? e.message : String(e)}`;
+      } finally {
+        this.autoRunning = false;
+        updateAutomation(ws, id, { lastRunAt: Date.now(), lastResult: result.slice(0, 200) });
+      }
+      return { ran: true, result };
+    }
     let result = "ran";
     try {
       await this.runGoal(
@@ -1027,7 +1220,7 @@ class Backend {
         try {
           this.applyAttributionEnv(); // same env threading as the chat spawn
           const isoCfg = existsSync(ACP_CONFIG) ? ["--config", ACP_CONFIG] : [];
-          const acp = new ACPClient(ompBin(), ["acp", "-e", GATE, "-e", ASKSAGE, ...isoCfg], currentWorkspace());
+          const acp = new ACPClient(ompBin(), ["acp", "-e", GATE, "-e", ASKSAGE, ...(existsSync(PREVIEW_EXT) ? ["-e", PREVIEW_EXT] : []), ...isoCfg], currentWorkspace());
           // A util completion is TEXT-ONLY: collect assistant text into the active sink, ignore everything
           // else (no tool calls, no permissions, no gate-block surfacing — that's the chat connection's job).
           acp.onNotify = (method: string, params: any) => {

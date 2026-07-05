@@ -11,7 +11,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { cadenceLabel, createAutomation, deleteAutomation, isDue, listAutomations, nextDueAutomation, normalizeCadence, updateAutomation, type Automation } from "./automations.ts";
+import { agentAutomationGate, cadenceLabel, createAutomation, deleteAutomation, isDue, listAutomations, nextDueAutomation, normalizeCadence, updateAutomation, type Automation } from "./automations.ts";
 
 const ws = () => mkdtempSync(join(homedir(), ".lucid-autom-"));
 
@@ -28,6 +28,46 @@ describe("automations store", () => {
       expect(list.length).toBe(1);
       expect(list[0].goal).toBe("Sweep for new TODOs");
     } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  test("agent-kind automations require spec id + prompt; legacy goal records are untouched (P-AGENT.14)", () => {
+    const dir = ws();
+    try {
+      // fully-named agent automation round-trips with its fields
+      const a = createAutomation(dir, { goal: "Run agent: crm-logger", cadence: { kind: "interval", everyMin: 30 }, kind: "agent", agentSpecId: "agent_1", agentPrompt: "log new opportunities", agentModel: "haiku" }, "idA", 1000);
+      expect(a).not.toBeNull();
+      expect(a!.kind).toBe("agent");
+      expect(a!.enabled).toBe(false); // disarmed like every automation
+      expect(listAutomations(dir)[0]!.agentPrompt).toBe("log new opportunities");
+      // half-named agent automations never exist
+      expect(createAutomation(dir, { goal: "g", cadence: { kind: "interval", everyMin: 5 }, kind: "agent", agentPrompt: "x" }, "idB", 1000)).toBeNull();
+      expect(createAutomation(dir, { goal: "g", cadence: { kind: "interval", everyMin: 5 }, kind: "agent", agentSpecId: "agent_1" }, "idC", 1000)).toBeNull();
+      // a goal automation stays kind-less (legacy shape)
+      const g = createAutomation(dir, { goal: "sweep", cadence: { kind: "interval", everyMin: 5 } }, "idD", 1000);
+      expect(g!.kind).toBeUndefined();
+      expect(g!.agentSpecId).toBeUndefined();
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  test("agentAutomationGate: only a trusted, loadable, approval-free spec runs unattended (P-AGENT.14)", () => {
+    const spec = { name: "crm", nodes: [{ kind: "prompt" }, { kind: "tool" }] };
+    expect(agentAutomationGate(spec, "trusted")).toEqual({ run: true });
+    // missing spec suspends the schedule
+    const missing = agentAutomationGate(null, "trusted");
+    expect(missing.run).toBe(false);
+    expect(missing.disable).toBe(true);
+    // any non-trusted label suspends (a downgrade after arming suspends too — fail-closed)
+    for (const label of ["untrusted", "suspicious", "quarantined"]) {
+      const r = agentAutomationGate(spec, label);
+      expect(r.run).toBe(false);
+      expect(r.disable).toBe(true);
+      expect(r.result).toContain(label);
+    }
+    // approval checkpoints refuse the tick but keep the schedule armed
+    const gated = agentAutomationGate({ name: "g", nodes: [{ kind: "approval" }] }, "trusted");
+    expect(gated.run).toBe(false);
+    expect(gated.disable).toBeUndefined();
+    expect(gated.result).toContain("approval");
   });
 
   test("update enables, delete removes; unknown id ⇒ null/false", () => {

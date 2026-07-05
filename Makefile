@@ -312,6 +312,133 @@ demo-P-PREVIEW.2: ## P-PREVIEW.2 (ADR-0096): auto-surface the agent's freshly-wr
 demo-P-PREVIEW.3: ## P-PREVIEW.3 (ADR-0096): hardened preview sandbox - opaque-origin <iframe> (scripts on, same-origin off), no escape tokens, all powerful features denied
 	$(BUN) run desktop/scripts/demo_p_preview_3.ts
 
+demo-P-PREVIEW.3b: ## P-PREVIEW.3b (ADR-0096): a remote URL previews only through the egress gate - loads iff egress-approved AND https, opaque-origin; else stays gated (agent requests via egress flow)
+	$(BUN) run desktop/scripts/demo_p_preview_3b.ts
+
+demo-P-PREVIEW.3a: ## P-PREVIEW.3a (ADR-0096): agent-invoked preview_open tool (read-tier, real TSchema) - registration never breaks omp, execute gates local .html/.svg, acp_backend drives the panel off the call title (live omp+Electron verifies invocation)
+	$(BUN) run desktop/scripts/demo_p_preview_3a.ts
+
+demo-P-ENT.4: ## P-ENT.4 (ADR-0069): every per-action gate denial is auditable + attributed - explicit "denied by you" vs "fail-closed (turn ended / no response)"; closes the silent fail-closed-timeout gap
+	$(BUN) run desktop/scripts/demo_p_ent_4.ts
+
+demo-P-GATE-DIAG.1: ## P-GATE-DIAG.1 (ADR-0066/0062): dev-mode diagnostics recording the interactive-check inputs + decision for every exec/egress permission request (Logs → Exec / egress gate decisions) — reveals WHY a tool was auto-denied with no prompt
+	$(BUN) run desktop/scripts/demo_p_gate_diag_1.ts
+
+demo-P-PREVIEW.4: ## P-PREVIEW.4 (ADR-0096): RENDER local files in Preview via served-content + iframe srcdoc (Chromium blocks file:// from an http origin, so iframe.src=file:// never rendered)
+	$(BUN) run desktop/scripts/demo_p_preview_4.ts
+
+demo-P-PREVIEW.4b: ## P-PREVIEW.4b (ADR-0096): serve the preview with its OWN per-frame CSP (iframe.src, not srcdoc) so the app's inline scripts RUN - a srcdoc frame inherits script-src 'self' and blocked them; connect-src 'none' still blocks egress
+	$(BUN) run desktop/scripts/demo_p_preview_4b.ts
+
+demo-P-PREVIEW.3a-shot: ## P-PREVIEW.3a-shot (ADR-0096): the agent SEES its own UI - renderer caches a preview PNG, the preview_screenshot tool fetches it as ImageContent (read-tier); every failure path degrades to text
+	$(BUN) run desktop/scripts/demo_p_preview_3a_shot.ts
+
+demo-P-PREVIEW.4c: ## P-PREVIEW.4c (ADR-0096): MULTI-FILE apps render by inlining their own relative css/js/img/fonts (link→style, script src→inline, img/url→data:) under the SAME frame CSP; remote/traversal refs refused
+	$(BUN) run desktop/scripts/demo_p_preview_4c.ts
+
+.PHONY: demo-P-CHAT.1
+demo-P-CHAT.1: ## P-CHAT.1 (ADR-0104): inline expandable code preview for tool steps - writes syntax-highlighted (Monaco), edits as green/red line diffs; proves the pure diff logic
+	$(BUN) run desktop/scripts/demo_p_chat_1.ts
+
+.PHONY: demo-P-FS.1
+demo-P-FS.1: ## P-FS.1 (ADR-0103): full-tree workspace folder browser - browse above home to the FS root / drives, with an optional managed workspaceRoots confinement
+	$(BUN) run desktop/scripts/demo_p_fs_1.ts
+
+.PHONY: demo-P-NETWL.1
+demo-P-NETWL.1: ## P-NETWL.1 (ADR-0106): curated network whitelist (domain wildcards + IP CIDR, internal/external, trust scopes) auto-allows egress under the managed ceiling; OS-encrypted credential vault fail-closes with no plaintext
+	$(BUN) run desktop/scripts/demo_p_netwl_1.ts
+
+.PHONY: demo-P-NETWL.3
+demo-P-NETWL.3: ## P-NETWL.3 (ADR-0106): enforce project/loop trust scopes + per-loop call budget (first N auto-allow, then block), all under the managed ceiling
+	$(BUN) run desktop/scripts/demo_p_netwl_3.ts
+
+.PHONY: demo-P-KEYS.2
+demo-P-KEYS.2: ## P-KEYS.2 (ADR-0107): credential rotation visibility (age/due/expiry, non-secret) + manual rotate-in-place (same ref, fail-closed)
+	$(BUN) run desktop/scripts/demo_p_keys_2.ts
+
+.PHONY: demo-P-PERF.2
+demo-P-PERF.2: ## P-PERF.2 (ADR-0129): power/spec-aware perf tiers — battery→calm capped graph, low battery→viz paused (agent access untouched), poll backoff, user override
+	$(BUN) run desktop/scripts/demo_p_perf_2.ts
+
+.PHONY: demo-P-PERF.3
+demo-P-PERF.3: ## P-PERF.3 (ADR-0130): KG layout continuity — re-open is a static paint (0 sim frames), refresh nestles newcomers, cold open exits on energy, positions never touch disk
+	$(BUN) run desktop/scripts/demo_p_perf_3.ts
+
+.PHONY: demo-P-PERF.4
+demo-P-PERF.4: ## P-PERF.4 (ADR-0131): incremental session index (warm polls parse nothing) + tail-first transcript pages + AC-only prefetch gate
+	$(BUN) run desktop/scripts/demo_p_perf_4.ts
+
+.PHONY: demo-P-PERF.5
+demo-P-PERF.5: ## P-PERF.5 (ADR-0132): switch hygiene - optimistic model switch, debounced lastModel write-behind (read-your-writes), memoized settings load, memoized picker
+	$(BUN) run desktop/scripts/demo_p_perf_5.ts
+
+.PHONY: demo-P-NETWL.5
+demo-P-NETWL.5: ## P-NETWL.5 (ADR-0108): egress posture — allow-all + web-search toggles; whitelist enforces only when allow-all is off; still prompts for public IPs / foreign TLDs; managed clamp
+	$(BUN) run desktop/scripts/demo_p_netwl_5.ts
+
+.PHONY: demo-P-AGENT.1
+demo-P-AGENT.1: ## P-AGENT.1 (ADR-0133): Agent Spec — a valid v1 DAG round-trips through DuckDB (migration 0010); a cyclic/invalid spec is refused fail-closed and never persisted
+	$(BUN) run harness/scripts/demo_p_agent_1.ts
+
+.PHONY: demo-P-AGENT.3
+demo-P-AGENT.3: ## P-AGENT.3 (ADR-0133): the compiler buildAgent(spec) -> AgentBundle (system prompt + generated omp allow-list extension + manifest); the emitted extension enforces the allow-list; invalid spec refused
+	$(BUN) run harness/scripts/demo_p_agent_3.ts
+
+.PHONY: demo-P-AGENT.5
+demo-P-AGENT.5: ## P-AGENT.5 (ADR-0133): untrusted-spec quarantine gate vs the real scanner — imported/poisoned specs are quarantined + blocked from auto-running; only a clean local spec is trusted + runnable
+	$(BUN) run harness/scripts/demo_p_agent_5.ts
+
+.PHONY: demo-P-AGENT.6
+demo-P-AGENT.6: ## P-AGENT.6 (ADR-0133): enterprise export — package a compiled agent portably for electron/web/cloud with a tamper-evident content digest; verifyExport catches modification
+	$(BUN) run harness/scripts/demo_p_agent_6.ts
+
+.PHONY: demo-P-AGENT.4-live
+demo-P-AGENT.4-live: ## P-AGENT.4-live (ADR-0133): run a BUILT agent on a REAL Claude model (Haiku). NEEDS a model + network — NOT part of `make test`. Proves the agent runs + follows its compiled spec, AND its allow-list extension hard-blocks disallowed tools.
+	$(BUN) run harness/scripts/demo_p_agent_4_live.ts
+	$(BUN) run harness/scripts/demo_p_agent_4_live_enforce.ts
+
+.PHONY: demo-P-AGENT.8.1
+demo-P-AGENT.8.1: ## P-AGENT.8.1 (ADR-0134): secret guardrail — agents DECLARE credential names (SecretRef); a secret VALUE embedded in a spec is refused at compile + save (secrets belong in the vault)
+	$(BUN) run harness/scripts/demo_p_agent_8_1.ts
+
+.PHONY: demo-P-AGENTFW.1
+demo-P-AGENTFW.1: ## P-AGENTFW.1 (ADR-0147): agent-firewall MCP — scans both directions vs a remote ACP agent (hermes/openclaw); quarantines poisoned replies, neutralizes delimiter breakout, blocks outbound hidden vectors, fails closed when the scanner dies
+	$(BUN) run harness/scripts/demo_pagentfw1.ts
+
+.PHONY: demo-P-MCP-GATE.1
+demo-P-MCP-GATE.1: ## P-MCP-GATE.1 (ADR-0148): in-process MCP tool_result gate — poisoned MCP result withheld, clean result delimited+labeled untrusted, LOCAL tool results untouched (source-scoped), fail-closed
+	$(BUN) run harness/scripts/demo_pmcpgate1.ts
+
+.PHONY: demo-P-LOCAL.1
+demo-P-LOCAL.1: ## P-LOCAL.1 (ADR-0135): Local Providers — declare a self-hosted / custom OpenAI-compatible LLM (Ollama, llama.cpp, vLLM, DGX-over-VPN); validate fail-closed, emit the omp --config overlay (secret from the vault, skipped if absent), persist WITHOUT the secret
+	$(BUN) run desktop/scripts/demo_p_local_1.ts
+
+.PHONY: demo-P-VISION.1
+demo-P-VISION.1: ## P-VISION.1 (ADR-0136): paste/drop a screenshot into the prompt bar — validate fail-closed (image-only, size/count caps), emit an omp image content block (base64, prefix stripped), and render a thumbnail strip that never interpolates the data URL (XSS-safe)
+	$(BUN) run desktop/scripts/demo_p_vision_1.ts
+
+.PHONY: demo-P-NVIM.1
+demo-P-NVIM.1: ## P-NVIM.1 (ADR-0150): Neovim + terminal integration — `lucid tui` is the gated command minus `acp` (gate first, policy, passthru last), fail-closes (dead scanner ⇒ no spawn), and the Neovim plugin's pure helpers pass headless nvim
+	$(BUN) run harness/scripts/demo_pnvim1.ts
+
+.PHONY: nvim-plugin-split
+nvim-plugin-split: ## Split extensions/neovim -> the standalone `lucid.nvim` branch (add PUSH=1 to force-push to origin)
+	@sha=$$(git subtree split --prefix=extensions/neovim HEAD); \
+	echo "lucid.nvim split -> $$sha"; \
+	if [ "$(PUSH)" = "1" ]; then git push -f origin "$$sha:refs/heads/lucid.nvim"; else echo "(dry run — add PUSH=1 to publish; CI does this on every master push)"; fi
+
+.PHONY: demo-P-PREVIEW.6a
+demo-P-PREVIEW.6a: ## P-PREVIEW.6a (ADR-0153): the agent reviews its work live in the preview — a preview tool-call (screenshot/open/inspect/action) maps to a user-facing label that glows the panel + shows a "reviewing/testing" pill; non-preview tools never trigger it
+	$(BUN) run desktop/scripts/demo_p_preview_6a.ts
+
+.PHONY: demo-P-PREVIEW.6b
+demo-P-PREVIEW.6b: ## P-PREVIEW.6b (ADR-0153): the agent READS the live preview DOM — a held tool→server→renderer→iframe relay + a READ-ONLY postMessage bridge injected into the sandboxed preview (no eval/mutation), fail-closed on timeout
+	$(BUN) run desktop/scripts/demo_p_preview_6b.ts
+
+.PHONY: demo-P-PREVIEW.6c
+demo-P-PREVIEW.6c: ## P-PREVIEW.6c (ADR-0153): the agent CLICKS/TYPES in the live preview by CSS selector — structured actions through the same relay + bridge (fixed allowlist click/type/focus/scroll; still no eval/innerHTML)
+	$(BUN) run desktop/scripts/demo_p_preview_6c.ts
+
 .PHONY: dashboards
 dashboards: ## Materialize dashboard CSVs from a DuckDB into observable/docs/data (DB=path)
 	$(BUN) run harness/scripts/materialize_dashboards.ts $(DB) observable/docs/data

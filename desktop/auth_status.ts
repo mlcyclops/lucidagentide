@@ -43,6 +43,10 @@ export const OTHERS = [
   { id: "deepseek", name: "DeepSeek", env: "DEEPSEEK_API_KEY", oauthId: "deepseek", canOauth: false },
   { id: "moonshot", name: "Moonshot · Kimi", env: "MOONSHOT_API_KEY", oauthId: "moonshot", canOauth: false },
   { id: "groq", name: "Groq", env: "GROQ_API_KEY", oauthId: "", canOauth: false },
+  // P-VOICE.1 (ADR-0115): ElevenLabs is a VOICE provider (TTS/STT), not a chat model. It's listed here so
+  // the key gets the same masked keySet/last4 plumbing, but the Settings UI renders it in a dedicated
+  // "Voice" card (secVoice) and EXCLUDES it from the model-provider list — it never enters the model picker.
+  { id: "elevenlabs", name: "ElevenLabs · Voice", env: "ELEVENLABS_API_KEY", oauthId: "", canOauth: false },
 ];
 
 function vaultRows(): any[] {

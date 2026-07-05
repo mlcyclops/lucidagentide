@@ -143,3 +143,27 @@ export function removeEdgeOptimistic(data: PersonalGraphData, from: string, to: 
   const edges = data.edges.filter((e) => !(e.from === from && e.to === to && e.relation === relation));
   return edges.length === data.edges.length ? data : { ...data, edges };
 }
+
+// ───────────── P-PERF.3 layout continuity + energy-based settle (ADR-0130) ─────────────
+
+/** How much of the settle budget a fresh mount still needs, given how many nodes were seeded from a
+ *  previous layout. Fully seeded → NO simulation at all (static paint; the caller does the one-time
+ *  zoom-to-fit the frame-checkpoint fits would have done). Mostly seeded (≥80% - a live refresh added
+ *  a few nodes) → a short nestle so newcomers settle among their pinned-by-inertia neighbors. Anything
+ *  less → the full budget (a cold layout needs to unfold). */
+export interface SettleStart { frames: number; needsFit: boolean }
+export function settleStart(seeded: number, total: number, settle: number): SettleStart {
+  if (total > 0 && seeded >= total) return { frames: settle, needsFit: true };
+  if (seeded > 0 && seeded >= Math.ceil(total * 0.8)) return { frames: Math.max(0, settle - 120), needsFit: false };
+  return { frames: 0, needsFit: false };
+}
+
+/** Per-node mean kinetic energy below which the layout has visibly stopped moving (~0.14px/frame). */
+export const KE_REST = 0.02;
+
+/** True when the force sim should stop EARLY: motion has died (mean Σv² under KE_REST) after a short
+ *  grace period (young layouts have near-zero velocity for a frame or two before forces unfold them).
+ *  Most graphs converge in 100-150 frames - the fixed 480-frame budget burned the rest for nothing. */
+export function settleDone(kinetic: number, count: number, frames: number, grace = 30): boolean {
+  return count > 0 && frames > grace && kinetic < count * KE_REST;
+}

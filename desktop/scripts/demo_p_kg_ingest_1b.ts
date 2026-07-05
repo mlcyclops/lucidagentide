@@ -8,7 +8,7 @@
 // extractor prompt, so the chat list filled with "Extract DURABLE facts about…" rows. Now they're
 // detected and split into one collapsible "Knowledge Graph Ingest" group, titled by the learned snippet.
 
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { EXTRACT_SYSTEM } from "../../harness/personal/distiller.ts";
@@ -26,7 +26,7 @@ ok("extractor throwaways detected by the EXTRACT_SYSTEM sentinel; real chats are
 if (ingestPreview(`${EXTRACT_SYSTEM}\n\nI deploy with Kubernetes`) !== "I deploy with Kubernetes") fail("ingest title should be the learned snippet");
 ok('ingest sessions are titled by the learned snippet, not "Extract DURABLE facts…"');
 
-const root = join(tmpdir(), `demo-ingest1b-${process.pid}`);
+const root = mkdtempSync(join(tmpdir(), "demo-ingest1b-")); // atomic, random name (js/insecure-temporary-file)
 const cwd = "/demo/repo";
 const dir = join(root, "enc");
 mkdirSync(dir, { recursive: true });

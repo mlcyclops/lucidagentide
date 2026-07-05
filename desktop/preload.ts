@@ -15,9 +15,22 @@ contextBridge.exposeInMainWorld("lucid", {
   isElectron: true,
   setZoom: (factor: number) => { try { webFrame.setZoomFactor(factor); } catch { /* ignore */ } },
   pickFolder: (): Promise<string | null> => ipcRenderer.invoke("lucid:pickFolder"),
+  // P-NETWL.1 (ADR-0106): native FILE picker (auth config / token / PEM / API-key upload).
+  pickFile: (opts?: { title?: string; filters?: { name: string; extensions: string[] }[] }): Promise<string | null> => ipcRenderer.invoke("lucid:pickFile", opts ?? {}),
+  // P-NETWL.1 (ADR-0106): OS-encrypted credential vault (safeStorage). Store/list/delete only; a plaintext
+  // secret never comes back to the renderer (decrypt is main-process-only).
+  credStore: (input: { ref?: string; kind: string; secret: string; label?: string }) => ipcRenderer.invoke("lucid:credStore", input),
+  credStoreFile: (input: { kind: string; label?: string; expiresAt?: number; rotationIntervalDays?: number }) => ipcRenderer.invoke("lucid:credStoreFile", input),
+  credRotate: (input: { ref: string; secret: string; expiresAt?: number }) => ipcRenderer.invoke("lucid:credRotate", input),
+  credRotateFile: (input: { ref: string }) => ipcRenderer.invoke("lucid:credRotateFile", input),
+  credList: () => ipcRenderer.invoke("lucid:credList"),
+  credDelete: (ref: string) => ipcRenderer.invoke("lucid:credDelete", ref),
+  credEncryptionAvailable: (): Promise<boolean> => ipcRenderer.invoke("lucid:credEncryptionAvailable"),
   // P-PREVIEW.1 (ADR-0096): capture the preview region of the window → PNG data URL (main uses capturePage).
   capturePreview: (rect: { x: number; y: number; width: number; height: number }): Promise<string | null> => ipcRenderer.invoke("lucid:capturePreview", rect),
   revealPath: (path: string): Promise<boolean> => ipcRenderer.invoke("lucid:revealPath", path),
+  // P-LOCAL.3 polish: restart the app so a freshly-spawned omp picks up new/changed local providers.
+  relaunch: (): Promise<void> => ipcRenderer.invoke("lucid:relaunch"),
   win: {
     minimize: () => ipcRenderer.send("lucid:win", "minimize"),
     toggleMaximize: () => ipcRenderer.send("lucid:win", "toggleMaximize"),

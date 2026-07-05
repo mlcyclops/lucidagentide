@@ -5606,6 +5606,26 @@ of it. Trust labels / event names are not redefined (no `contracts.ts` change in
 ADR-0062 (P-EGRESS.1 - the per-website pattern this mirrors), ADR-0028/0032 (the `task` tool + isolation,
 relevant to P-EXEC.2), CLAUDE.md invariant #3 (fail-closed) + the scanner keystone (defense in depth).
 
+### Addendum (2026-06-30) — P-GATE-DIAG.1: observe WHY the gate auto-denies (no-prompt diagnostics)
+
+Two live runs (Claude, then GPT-5.5) showed the agent's verification tools (browser/bash/eval) **denied with
+no approval prompt** — "I didn't even get an option to deny". omp is configured to forward these as permission
+requests (acp_config.yml `tools.approval`), so the silent deny is OUR `onRequest` hitting the no-prompt block
+path: the **interactive** check (`askActive && listener && !goalActive && !autoRunning`) was false when the
+request arrived, so exec/egress fell through to the immediate fail-closed block instead of `askExec`/`askEgress`.
+WHY it was false (a concurrency/state issue — chat `listener` clobbered by a concurrent utility completion? an
+`autoRunning`/`goalActive` overlap? a model/streaming-path timing?) can't be pinned without the runtime state,
+and the gate is too load-bearing to guess-fix (a wrong change could open an auto-allow hole).
+
+So, mirroring P-ASKSAGE.1 (ship diagnostics → capture live → fix with confidence): a dev-mode ring
+(`acp_backend.gateDiagnostics()`) records, for every exec/egress permission request, the interactive-check
+inputs (`askActive`, `listener`, `goalActive`, `autoRunning`) + the `verdict`/`decision`. Surfaced in Logs →
+**"Exec / egress gate decisions"** (with a chip + a ⛔ count on blocks). A `block(no-ui)` row then shows which
+input was false — the root cause to fix. Observability only: no change to the gate's actual deny behavior;
+fail-closed is preserved. New: the `gateDiag` ring + `recordGateDiag()` in `acp_backend.ts`, the two decision
+records (exec + egress), `gate` in the `/api/dev` snapshot + `DevView`, the Logs accordion in the renderer,
+`desktop/scripts/demo_p_gate_diag_1.ts`.
+
 ## ADR-0067 - P-GOAL.13: per-command Speed<->Risk dial for the loop + tools/blocks in the AAR (SCOPE/PLAN)
 
 **Date:** 2026-06-26
@@ -5810,6 +5830,24 @@ block records into the export schema without adding enum values. Frozen prefix u
 `security_log.ts` (the audit extended), ADR-0068 (carries the sink config), ADR-0066/0067/0062 (the
 decisions exported), `contracts.ts` `EventName` (#8), and the private ADR-A011 (the per-SIEM connector
 shapes - the "how").
+
+### Addendum (2026-06-30) — P-ENT.4: every gate denial is auditable + attributed (close the silent fail-closed gap)
+
+A live turn showed several "tool call denied by user" chips (browser/bash/eval, while the agent tried to
+smoke-test a game it built) with **no matching record in the OCSF audit log**. Root cause: the per-action
+approval prompts (`askExec`/`askEgress`) emitted a `SecurityEvent` only on the RESOLVE path (you click a
+button); the **fail-closed TIMEOUT** path `setTimeout(() => settle(block()))` settled silently — a real
+denial with zero audit trail. So "did I deny it, or did it auto-deny?" was unanswerable.
+
+Fix: the timeout paths now `emitSecurityEvent(decision: block, …)` before settling, and a pure
+`gateDenyReason(optionId, timedOut)` (`desktop/gate_audit.ts`) attributes every denial honestly —
+**"denied by you"** (explicit Block) vs **"fail-closed (turn ended)"** (resolved with no optionId — the turn
+ended/disconnected while pending) vs **"fail-closed (no response in 5m)"** (timeout). Both the exec and
+egress deny paths use it. Now every per-action denial is in the audit feed with a cause; the omp-surfaced
+"denied by user" chip (ADR-0093) is no longer the only signal, and it's no longer ambiguous about whether it
+was the user. New: `gate_audit.ts` (+ test), the timeout emits + attribution in `acp_backend.ts`,
+`desktop/scripts/demo_p_ent_4.ts`. (Note: the chip text itself is omp's wording; making the CHIP say
+fail-closed-vs-you is a small follow-up — the audit trail is now authoritative.)
 
 ## ADR-0070 - P-BRIEF.1: Executive Engineering Update — repo logs → brief + podcast behind a vendor-agnostic audio seam
 
@@ -7907,3 +7945,3007 @@ bytes this round.
 ADR-0098 (the reader half + OCI-artifact model), ADR-0097 (the `registry` source row), ADR-0101 (produces the
 skills), ADR-0069 (the `Sink`/dispatcher pattern mirrored), ADR-0068/egress_policy (managed + egress gating),
 the private ADR-A014/A015 (the remote publishers + runbooks).
+### Addendum (2026-06-30) — P-PREVIEW.3b shipped: remote URLs preview only through the egress gate
+
+A remote URL in the preview reaches the internet, so it is gated by the **existing egress allow-list**
+(ADR-0062 / ADR-0094, honoring the managed ceiling) rather than a new approval path. Flow: the resolver
+classifies an `http(s)` target as `remote`; the renderer asks the backend `/api/preview/egress-check?url=`
+(→ `egressDecision(url)`), and a pure `canPreviewRemote(url, egressAllowed)` decides — it loads **iff the
+site is already egress-approved AND the URL is https** (no plaintext into the sandbox). Otherwise it stays
+gated with a message telling the user the agent must visit the site first (which triggers the normal egress
+prompt). A loaded remote page uses the SAME hardened, opaque-origin sandbox as a local file (no
+`allow-same-origin`). No new approval UI, no weakening of the gate; new sites still flow through the agent's
+egress request. New: `canPreviewRemote()` in `preview_resolve.ts` (+ tests), `bridge.previewEgressAllows()`,
+the `/api/preview/egress-check` endpoint, `desktop/scripts/demo_p_preview_3b.ts`.
+
+**Remaining:** P-PREVIEW.3a (agent-invoked `preview_open`/`preview_screenshot` via `pi.registerTool` + the
+cross-process screenshot round-trip) — the one piece that still needs a live omp+Electron session to verify
+(a faulty `-e` extension can break omp launch).
+
+### Addendum (2026-06-30) — P-PREVIEW.3a "preview_open" landed as a DRAFT (verify omp launch live before merge)
+
+Built the agent-invoked **`preview_open`** half of 3a, as a flagged draft (the `preview_screenshot`
+round-trip — the model seeing its own UI — is **P-PREVIEW.3a-shot**, still ahead). "The agent drives the
+preview": a new `harness/omp/preview_extension.ts` registers a `preview_open(path)` tool via
+`pi.registerTool`; the tool runs in the omp subprocess, validates a local `.html`/`.svg` path, and
+acknowledges. The actual panel-opening is a desktop side effect: the `preview_open` tool_call streams to
+acp_backend over ACP, which detects it (pure `previewOpenPath()`) and emits the existing `preview-available`
+event → the renderer opens the panel and re-gates the path through `resolvePreview` before rendering.
+
+**Why DRAFT, and how it's de-risked.** The genuinely-unverifiable-here parts are: (a) omp launches with the
+new `-e` extension, (b) the exact `pi.registerTool` parameter-schema format the installed omp wants, (c) the
+model invoking the tool. To keep this from ever **breaking omp launch**: the extension is verified to import
+cleanly (no syntax/import error), registration is fully `try/catch`-wrapped (a missing or schema-rejecting
+`registerTool` is a silent no-op — unit-tested: `previewExtension` NEVER throws), and the `-e` arg is added
+only `existsSync`-guarded. So worst case `preview_open` is simply absent and the gate/chat/auto-on-write
+preview keep working. The pure logic (registration, exec path-gating, `previewOpenPath` extraction) is
+unit-tested with a mock `pi`; the desktop detection reuses the already-verified `preview-available` path.
+
+**Merge discipline:** opened as a **draft PR** — merge only after a live omp+Electron run confirms omp
+launches with the extension and the model can invoke `preview_open`. New: `harness/omp/preview_extension.ts`
+(+ `preview_extension.test.ts`), `previewOpenPath()` in `preview_resolve.ts` (+ tests), the `-e` wiring +
+`preview_open` detection in `acp_backend.ts`, `desktop/scripts/demo_p_preview_3a.ts`. P-PREVIEW.3a-shot
+(screenshot-as-multimodal-ToolResult via a cross-process file-handshake) remains the final preview piece.
+
+### Addendum (2026-06-30) — P-PREVIEW.4: the panel now actually RENDERS a local file (the file:// gap, fixed)
+
+A live test revealed the Preview panel never *rendered* a local file - it only ever set `iframe.src = file://…`,
+which **Chromium blocks from an http origin** (the renderer is served over `http://localhost`, in dev AND in
+the packaged Electron app: "Not allowed to load local resource"). So the feature was visually broken since
+P-PREVIEW.1 (my earlier check only confirmed the `src` was *set*, not that it rendered - the boundary I'd
+flagged was real). Diagnosed alongside the gate work: the agent kept trying to open its built games in a
+browser (no browser tool → denied) precisely because the in-app Preview wasn't rendering.
+
+Fix: serve the local file's **content** same-origin behind the transport gate (`/api/preview/file?path=` →
+pure `readPreviewFile()` in `desktop/preview_file.ts`, gated to a local `.html`/`.svg`, existing, ≤ 5 MB),
+fetched by the authenticated bridge (`previewFile()`), and rendered via the iframe's **`srcdoc`** in the SAME
+hardened opaque-origin sandbox (`PREVIEW_SANDBOX`, no `allow-same-origin`). Works in dev + packaged; ideal for
+the self-contained single-file apps the agent builds. **Live-verified** end-to-end via the dev server: a real
+local game renders (DOM + screenshot - "LUCID PREVIEW WORKS ✓" with CSS animation), through the actual Open
+button → `loadPreview` → `previewFile` → `srcdoc` flow. Limitation: `srcdoc` has no base URL, so a multi-file
+app's RELATIVE assets (external CSS/JS/images) won't load - fine for single-file games; a base-aware
+http-served preview is a future P-PREVIEW.4b. New: `desktop/preview_file.ts` (+ test), the `/api/preview/file`
+endpoint, `bridge.previewFile()`, the renderer srcdoc path, `desktop/scripts/demo_p_preview_4.ts`.
+
+### Addendum (2026-06-30) — P-PREVIEW.3a FINALIZED: the agent drives the preview (the draft is now real)
+
+The P-PREVIEW.3a `preview_open` tool shipped earlier as a DRAFT with two unverified guesses. Both are now
+resolved against the **installed** omp (`@oh-my-pi/pi-coding-agent` extension API,
+`dist/types/extensibility/extensions/types.d.ts`), and the draft is corrected to match:
+
+1. **`registerTool` IS exposed to `-e` extensions.** Confirmed — `ExtensionAPI.registerTool(ToolDefinition)`
+   is the same injected API that already gives `asksage_extension` its working `pi.registerProvider`. The
+   earlier worry that user `-e` extensions can't register tools was wrong.
+2. **The parameter schema must be a `TSchema`, not a raw JSON-schema object.** The draft's
+   `parameters: { type: "object", … }` placeholder would have been rejected. Fixed to author the schema via
+   the injected `pi.typebox` shim (`Type.Object({ path: Type.String(...) })`), which the API documents for
+   extension-tool parameters. If the shim is somehow absent the extension is a silent no-op (still launch-safe).
+3. **Approval tier.** `ToolDefinition.approval` defaults to `"exec"`; left unset, opening a preview would have
+   hit the exec gate and been *blocked* — exactly the flailing 3a exists to stop. Set to **`"read"`** so a
+   preview never trips exec/egress.
+
+A second bug surfaced in the desktop bridge: a **custom** tool's name does not survive as the ACP
+`session/update` `kind` (omp maps every custom tool to `kind: "other"`); omp renders the call **title** as
+`"preview_open: <path>"`. So `acp_backend` now matches `previewOpenPath` against the **title** (and keeps
+`previewablePath` on `kind`, which is `"edit"` for writes — that path already worked). Without this the agent's
+`preview_open` calls would never have surfaced the panel.
+
+**Root cause closed.** The live diagnostics showed the agent burning turns trying `browser`/`bash`/`eval` to
+view its own web apps — all security-gated, so all DENIED — and inventing relative-iframe wrapper files
+(whose relative child 404'd as "not found" under `srcdoc`). The fix is two-sided: (a) the now-real
+`preview_open` tool lets the agent open a file directly, and (b) a new **`PREVIEW_POLICY`** in the frozen
+prompt prefix (layer 3) tells the agent NOT to use browser/bash/eval to view its work — write the `.html`
+(LUCID auto-opens the panel) or call `preview_open`, and prefer ONE self-contained file so it renders. The
+prompt-prefix change is a deliberate **`PREFIX_VERSION` 5 → 6** bump (CLAUDE.md invariant #6).
+
+Touched: `harness/omp/preview_extension.ts` (real TSchema + `approval:"read"`), `desktop/acp_backend.ts`
+(title-keyed detection + appended `PREVIEW_POLICY`), `harness/prompt/assembler.ts` (`PREVIEW_POLICY` +
+version bump), tests (`preview_extension.test.ts`, `preview_resolve.test.ts`), `demo_p_preview_3a.ts`.
+Still ahead: **P-PREVIEW.3a-shot** (the `preview_screenshot` multimodal round-trip — the model seeing its own
+rendered UI).
+
+### Addendum (2026-06-30) — P-PREVIEW.4b: served preview with a per-frame CSP (why the game showed only its HUD)
+
+Live testing of P-PREVIEW.4 surfaced a deeper bug: a self-contained game rendered only its static HUD in the
+Preview panel while rendering FULLY when opened in a browser from `file://`. Root cause, proven by reproducing
+the exact iframe sandbox in a headless browser: the renderer's `index.html` sets
+`Content-Security-Policy: … script-src 'self'` (no `'unsafe-inline'`), and a **`srcdoc` iframe INHERITS its
+parent's CSP** — so the previewed app's inline `<script>` blocks were blocked, its JS never ran, and only its
+static HTML painted (`style-src 'unsafe-inline'` is why the HUD was still *styled*; the title overlay + canvas
+are JS-driven, so they vanished). Repro without a CSP → full render; repro with LUCID's exact CSP → inline
+scripts blocked. `srcdoc` can only *tighten* the inherited CSP, never re-enable inline scripts — so srcdoc can
+never run a self-contained app under our policy.
+
+Fix: serve the file via **`iframe.src`** from a new `/api/preview/serve?path=` endpoint that returns the
+document with its **own per-frame CSP** (`PREVIEW_FRAME_CSP` in `preview_resolve.ts`) — a document loaded via
+`src` carries its own policy instead of inheriting the parent's. That policy lets a self-contained app RUN
+(`script-src 'unsafe-inline' 'unsafe-eval' blob:`, `style-src 'unsafe-inline'`, data/blob img+media, blob
+workers) while **`default-src 'none'` + `connect-src 'none'`** block ALL network egress — so a previewed,
+agent-authored app can never bypass LUCID's egress gate (this protection used to ride on the inherited CSP;
+it's now explicit and frame-scoped). `base-uri`/`form-action` `'none'` close the redirect/exfil seams. The
+frame stays in the opaque-origin sandbox (`PREVIEW_SANDBOX`, no `allow-same-origin`), so it still can't read
+LUCID's origin/storage or navigate the top frame. An `<iframe src>` GET can't send a header, so this one
+endpoint accepts the per-launch transport token as a `?t=` query param — same token, still behind the
+loopback (H1) + Origin/Host/CSRF (H2) gate; a missing/wrong token is 403 (verified).
+
+**Verified end-to-end in the real dev server:** `/api/preview/serve` returns the 64 KB game with the exact
+`PREVIEW_FRAME_CSP` header (200 with token, 403 without), and driving the actual Preview panel renders the
+FULL game — title, legend, and the JS-drawn **Play** button — where srcdoc showed only the HUD. This
+supersedes P-PREVIEW.4's *render mechanism* (srcdoc → served frame) but reuses its pure reader
+(`readPreviewFile`). New/changed: `PREVIEW_FRAME_CSP`, the `/api/preview/serve` endpoint + token-via-query,
+`bridge.previewServeUrl()`, the renderer's `loadPreview` local branch, `preview_resolve.test.ts` (+CSP tests),
+`desktop/scripts/demo_p_preview_4b.ts`. Still ahead: multi-file apps with RELATIVE assets (external CSS/JS)
+need base-aware serving — a future increment; single-file apps (what the agent builds) render fully now.
+
+### Addendum (2026-07-01) — P-PREVIEW.3a-shot: the agent SEES its own rendered UI (`preview_screenshot`)
+
+Closes the "agent drives the preview" loop: a `preview_screenshot` tool that returns a PNG of the current
+preview as `ImageContent`, so the model actually SEES how its app renders and can self-correct — instead of a
+security-gated browser/bash/eval.
+
+The cross-process problem: `capturePage` lives in the **Electron main** process, `dev.ts` (server + acp_backend)
+is a **separate spawned** process, and the tool runs in the **omp subprocess** — three hops. Rather than a
+fragile call-time round-trip, the **renderer proactively caches** a PNG after each preview render (it can
+capture via the existing `capturePreview` IPC) by POSTing it to `/api/preview/shot-cache`; the tool just
+**fetches** the cached shot from `/api/preview/shot`. omp reaches it because it **inherits `process.env`** from
+`dev.ts`, which sets `LUCID_PREVIEW_SHOT_URL` (real bound port + token) after the server binds — so no
+`ACPClient` env plumbing was needed. Like `/serve`, the shot GET accepts the token via `?t=` (the subprocess
+gets a ready URL). The tool is **read-tier** (never trips the exec gate) and every failure path — no shot, no
+desktop, fetch error — degrades to helpful TEXT (never throws, never a bogus image block). `ImageContent` is
+`{ type:"image", data:<base64>, mimeType }` (confirmed against pi-ai) so the model genuinely sees it.
+
+**Verified:** the desktop cache round-trip live in the real dev server (empty → cached → exact round-trip;
+bad token → 403; a non-image body is rejected, not stored); the tool's fetch→`ImageContent` wrapping + all
+graceful-degradation paths by unit test (mocked `fetch`/env) and `make demo-P-PREVIEW.3a-shot`. The
+**model actually seeing the image** needs `capturePage`, i.e. the packaged/Electron app — the honest live
+boundary (same class as 3a's model-invocation). New/changed: `previewShotImage` + the `preview_screenshot`
+tool (`preview_extension.ts`), the shot cache state + `/api/preview/shot-cache` + `/api/preview/shot` +
+`LUCID_PREVIEW_SHOT_URL` (`dev.ts`), `bridge.cachePreviewShot()`, `cacheRenderedPreviewShot()` on iframe load
+(`app.ts`), tests (`preview_extension.test.ts`), `desktop/scripts/demo_p_preview_3a_shot.ts`.
+
+### Addendum (2026-07-01) — P-PREVIEW.4c: MULTI-FILE apps render (inline the app's own relative assets)
+
+The remaining preview gap: an app split into `index.html` + `style.css` + `game.js` (+ images/fonts) didn't
+render — a single served file's relative refs couldn't load. The preview frame is opaque-origin (so `'self'`
+matches nothing) and its CSP deliberately lists no remote origins, and we must NOT allow the serving origin
+(that would let the sandboxed frame reach LUCID's own same-origin URLs — /app.js, token-gated /api, …).
+
+**Chosen approach — inline, don't widen.** Before serving, fold the app's OWN *pure-relative* assets into the
+HTML: `<link rel=stylesheet href=x.css>` → `<style>…</style>`, `<script src=game.js>` → inline `<script>`,
+`<img src=…>` and CSS `url(…)` → `data:` URIs. This fits the EXISTING `PREVIEW_FRAME_CSP` exactly
+(`script-src`/`style-src 'unsafe-inline'`, `img/media/font data:` already allowed, `connect-src 'none'`
+preserved) — so it needs **no CSP change, no second server/origin, no base-URL widening**, and the egress
+block is untouched. Considered but rejected: (a) allowing the serving origin in the frame CSP — leaks
+same-origin reach into the sandbox; (b) a second isolated origin/port — more moving parts for no security
+gain over inlining.
+
+**Fail-safe + bounded** (`desktop/preview_inline.ts`, pure, I/O injected): only pure-relative refs are touched
+— never a scheme/`//`/root-absolute/`#`, never a `..` traversal, never outside the app's own directory; a ref
+that can't be read is left as-is (the CSP then blocks it); per-asset (2 MB) and total (12 MB) caps bound the
+inline; a `</script>` inside an inlined file is neutralized so it can't break out. Wired into `/api/preview/serve`
+(HTML only; `.svg` is self-contained) as best-effort — any inlining failure serves the raw HTML.
+
+**Verified end-to-end in the real dev server:** a 4-file app (`index.html` + external CSS + external JS + a
+PNG) served with `<link>`/`<script src>` gone and content folded in, and the actual Preview panel rendered it
+correctly — styled green box (external CSS), JS-set text "MULTI-FILE OK ✓" (external JS ran), and the image
+(inlined as `data:`) — under the unchanged opaque-origin/egress-blocked frame. New: `desktop/preview_inline.ts`
+(+ `preview_inline.test.ts`, 13 cases), `toFsPath` exported from `preview_file.ts`, the `/api/preview/serve`
+inlining step, `desktop/scripts/demo_p_preview_4c.ts`. This completes the preview render story for the apps the
+agent builds (self-contained AND multi-file); a page that pulls from a real CDN still (intentionally) can't —
+that's an egress concern, not a render bug.
+
+### Addendum (2026-07-01) — auto-show the preview (no toast) + inline a nested relative `<iframe>` (wrapper support)
+
+Two fixes from live use. (1) **Auto-show, don't ask.** P-PREVIEW.2 popped a "App ready to preview — Open /
+Dismiss" toast when the panel was closed, but it auto-dismissed before the user could click it. "It's just a
+preview" — so `onPreviewAvailable` now simply OPENS the Preview panel on the freshly-written file (or swaps to
+it if already open); the toast is gone, and it always points at the new file (no stale prior value). (2) **The
+self-test wrapper renders.** The agent often writes a tiny wrapper whose whole body is
+`<iframe src="game.html?selftest=1">` — a relative nested iframe, which the frame CSP (`default-src 'none'`,
+no `frame-src`) blocked. `inlinePreviewAssets` now also folds a relative `<iframe src="…​.html">` into `srcdoc`
+by reading the target, RECURSIVELY inlining its own assets, attribute-escaping, and dropping the query (the
+embedded page renders normally without it). Verified live: the wrapper you'd get from the agent now renders the
+full game in the panel; **no CSP change needed** — Chromium allows the same-document `srcdoc` child under
+`default-src 'none'`. Depth-capped (a self-referential wrapper can't loop) and budget-shared with the parent.
+Touched: `desktop/preview_inline.ts` (iframe→srcdoc + recursion), `desktop/renderer/app.ts` (auto-show),
+`preview_inline.test.ts` (+iframe cases), `demo_p_preview_4c.ts`.
+
+## ADR-0103 - P-FS.1: full-tree workspace folder browser (supersedes ADR-0022 M1's home confinement)
+
+**Date:** 2026-06-30
+**Status:** Accepted - BUILT. Supersedes ONLY the **M1** decision of ADR-0022 (the folder browser's
+home-subtree confinement). ADR-0022's **H1** (loopback bind) and **H2** (Origin/Host/CSRF + token gate)
+are untouched and remain in force.
+**Increment:** P-FS.1. (Numbered after PR #154's ADR-0097-0102, which are unmerged on another branch; when
+both land the sequence is contiguous.)
+
+### Context
+
+ADR-0022 M1 confined the in-app folder browser (`/api/fs/list`) to the user's home subtree via
+`pathWithin(homedir(), …)`, to neutralize a CodeQL `js/path-injection` "arbitrary directory-listing oracle"
+finding. In practice this **locks the user into their home directory**: they cannot select a workspace that
+lives on another drive, under `/opt`, `/srv`, a mounted volume, `C:\work`, etc. A desktop IDE (VS Code,
+JetBrains, etc.) must be able to open a project folder ANYWHERE on the machine; the home confinement makes
+the Workspace picker unable to do its core job.
+
+### Decision - browse the whole machine; keep the transport gates; add a managed allowlist
+
+1. **Lift the home confinement.** `/api/fs/list` now lists any directory: it can navigate **above home up to
+   the filesystem root** (POSIX `/`) and, on Windows, to a **"computer" level that enumerates drives**
+   (`C:\`, `D:\`, …). `setWorkspace` already accepts any existing path, so selecting the folder works once
+   the browser can reach it. New pure module `desktop/fs_browse.ts` `listDir(want, opts)` owns the logic.
+2. **Why this is safe (the M1 threat is moot for the only caller).** `/api/fs/list` is reachable ONLY by the
+   local, authenticated user inside the Electron app, because ADR-0022's other two mitigations still stand:
+   **H1** binds the server to loopback (`127.0.0.1`) so the LAN can't reach it, and **H2** runs the
+   Origin/Host allowlist + JSON-content-type + per-session token gate before routing, defeating DNS-rebinding
+   and drive-by CSRF. A "directory-listing oracle" is only a threat against an *attacker* who can call the
+   endpoint; here the sole caller is the user browsing their own filesystem, which is the feature. Path
+   **canonicalization is preserved** (`resolve` collapses `..`/relative segments), so paths are still normalized.
+3. **Enterprise can re-confine (only tightens).** A new optional managed-config `workspaceRoots: string[]`
+   (ADR-0068 model; also via the Windows GPO value `WorkspaceRoots`) re-restricts the browser to an org's
+   allowlisted roots and never offers a parent above them. Unset = full filesystem (the individual-user
+   default). This mirrors how managed policy only ever ADDS constraints.
+
+### Plumbing (built this increment)
+
+- `desktop/fs_browse.ts` - pure, dependency-injected `listDir`: full-tree traversal, FS-root/drive-root
+  parent clamping, the `COMPUTER` drives sentinel (Windows), dotfile hiding, git flagging, and managed-root
+  confinement. Selects `path.win32`/`path.posix` by platform so Windows semantics are correct (and unit-
+  testable on POSIX CI).
+- `desktop/dev.ts` - `/api/fs/list` now delegates to `listDir(path, { allowedRoots: managedWorkspaceRoots() })`;
+  removed the now-unused `statSync`/`dirname` imports.
+- `desktop/managed_config.ts` - `ManagedConfig.workspaceRoots?` + `managedWorkspaceRoots()` accessor + the
+  `WorkspaceRoots` GPO list reader.
+- `desktop/fs_browse.test.ts` (9 tests) + `desktop/scripts/demo_p_fs_1.ts` + `make demo-P-FS.1`.
+- The renderer folder picker (`openFolderBrowser` in `app.ts`) is unchanged: it already renders whatever
+  `dirs`/`parent`/`home` the endpoint returns and round-trips the `parent` string (incl. the COMPUTER sentinel).
+
+### Invariants preserved
+
+Fail-closed transport unchanged (ADR-0022 H1/H2; invariant #3 for the control plane). The security gate,
+scanner, trust labels, and quarantine semantics are untouched - this is a *folder picker* scope change, not a
+data-trust change. Managed policy only tightens (ADR-0068). `listDir` never throws on an unreadable directory
+(returns an empty listing). New first-party files carry the BUSL-1.1 header.
+
+### Relates to
+
+ADR-0022 (supersedes M1; preserves H1/H2), ADR-0068 (the managed-config "only tightens" model + GPO reader),
+`desktop/workspace.ts` (`setWorkspace`, already unconfined), `desktop/path_guard.ts` (`pathWithin`, still
+used by the editor-save guard), and CLAUDE.md invariant #3 (the control-plane gates stay fail-closed).
+
+## ADR-0104 - P-CHAT.1: inline expandable code preview for tool steps (writes highlighted, edits as diffs)
+
+**Date:** 2026-07-01
+**Status:** Accepted - BUILT.
+**Increment:** P-CHAT.1.
+
+### Context
+
+The chat folds a turn's tool calls into one compact "steps" window, but each step was a one-liner (kind +
+a short detail like the file path) - you couldn't see the code the agent actually wrote or changed. A user
+asked for the inline, expandable code preview they liked in Claude Code.
+
+### Decision
+
+Make each tool step that carries authored code EXPANDABLE to an inline preview: a `write`/`create` shows the
+new file, syntax-highlighted; an `edit` shows a green/red line diff (with a `+N −M` badge on the collapsed
+row). Full syntax highlighting reuses the ALREADY-vendored Monaco via its `colorize` API (main-thread
+tokenizer, no language-service worker, no new dependency) - lazy-loaded on first expand, with a plain-escaped
+fallback if it fails.
+
+- **Contract:** the `tool` ChatEvent gains an optional `code: { path, content?, patch?, oldText?, newText? }`
+  (added to BOTH parallel definitions - `acp_backend.ts` and `bridge.ts`). `acp_backend` fills it from the
+  tool_call's `rawInput`, bounded to 64 KB so a huge file can't bloat the event stream (the content is the
+  SAME text the gate already scanned). The exact edit shape was confirmed at RUNTIME (a debug capture, since
+  the minified omp bundle was inconclusive): omp's `edit` sends a **hashline patch** in a single `input`
+  string (`[path#hash]` header + `SWAP`/anchor directives + `+`/`−` lines), NOT `oldText`/`newText`. So:
+  `content` → a write; `input` on an edit-kind call → `patch`; `oldText`/`newText` and an `edits[]` array are
+  kept as fallbacks for edit tools that send explicit before/after.
+- **Rendering:** `createThoughts().step()` takes the `code` and, when present, renders the row as a toggle
+  with a `.ts-code` panel; on first expand it lazily fills it - Monaco-highlighted HTML for a write (Monaco
+  escapes its own text, safe to assign); a hashline `patch` colored per line via `patchLineType()`
+  (add/del/meta/ctx); or an `oldText`/`newText` pair via `lineDiff()` (pure, LCS-based). Every diff/patch line
+  is set with `textContent` (escaped) and colored by `.tc-add`/`.tc-del`/`.tc-meta`/`.tc-ctx`; the collapsed
+  row shows a `+N −M` badge (`patchStat` / `diffStat`). All unit-tested (`linediff.test.ts`).
+
+- **Open in editor:** each expanded preview has an "Open in editor" button that opens the file in the full
+  Monaco IDE panel (ADR-0029/0036) for context - like Claude Code's expand. It prefers the real file on disk
+  (`bridge.editorRead` → `openIde({path, sha256})`, so it's editable with a gate-protected save), and falls
+  back to the in-hand content/patch as a snippet when there's no readable path.
+
+### Safety
+
+Code text is only ever inserted as escaped text (`textContent`) or as Monaco's own escaped colorize output -
+never raw `innerHTML` of tool input. So agent/tool-authored code can't inject markup into the chat DOM. The
+inline preview is display-only; opening the editor reuses the existing gate-protected save path.
+
+### Scope / follow-ups
+
+This increment covers the authored code (writes + edits) - the "code preview" itself. Showing a `bash`
+command's OUTPUT and a `read`'s content inline needs correlating the tool_call with its later tool_result by
+id (the command already shows in the step detail); that's a fast follow-up, not in this increment.
+
+### Verification
+
+`lineDiff`/`diffStat` unit-tested (`linediff.test.ts`). Live in the real dev server: the app bundles + loads
+clean with the new imports; Monaco `colorize` returns highlighted token spans; and the injected step markup
+renders exactly as intended - a write step with syntax-highlighted JS and an edit step with a `+N −M` badge
+and a green/red diff. `make demo-P-CHAT.1`.
+
+### Relates to
+
+ADR-0029/0036 (the vendored Monaco + its same-origin worker setup this reuses), ADR-0027 (the reasoning/steps
+surfaces this extends), the frozen ChatEvent shape (extended, not redefined, in both definitions).
+
+## ADR-0105 - P-EDIT.1: use the `replace` edit tool (not omp's default `hashline`); native folder Browse
+
+**Date:** 2026-07-01
+**Status:** Accepted - BUILT.
+**Increment:** P-EDIT.1.
+
+### Context
+
+Real edit turns produced a stream of tool failures: "this edit anchors to lines … that [file#hash] never
+displayed", "anchor line X is already targeted by another hunk on line Y; issue ONE hunk per range". These are
+omp's DEFAULT `hashline` edit tool rejecting the model's patches - hashline anchors each hunk to line-hash
+markers the model must have "displayed", one hunk per range, which Claude/GPT frequently violate. Separately,
+the Workspace "Browse" button used the in-app folder browser, which the user found still confined to the home
+folder and couldn't create new folders.
+
+### Decision
+
+1. **`edit.mode: replace`** in `harness/omp/acp_config.yml`. omp's `edit.mode` accepts
+   `hashline | replace | patch | apply_patch`; `replace` is the classic find-old→put-new (search/replace)
+   format Claude Code / aider use - far more robust for these models, eliminating the anchor/hunk failures.
+   Only the edit FORMAT changes; the security gate still scans every edit in-process, fail-closed. Extends omp
+   via config (invariant #1). `replace` sends `edits: [{ old_text, new_text }]`, which also gives the inline
+   preview (P-CHAT.1) a clean old→new diff (acp_backend now reads `old_text`/`new_text`, camelCase + top-level
+   kept as fallbacks).
+2. **Native folder Browse.** The Workspace "Browse" button now calls the native OS dialog
+   (`bridge.pickFolder` → Electron `dialog.showOpenDialog` with `openDirectory` + `createDirectory`) - browse
+   anywhere on the machine AND create new folders, no confinement. `setWorkspace` already accepts any existing
+   path. Falls back to the in-app browser only in a plain-browser build (no native dialog).
+
+### Verification
+
+Live in the real dev server: a write+edit and follow-up edits ran with **zero** tool failures (vs the prior
+hashline stream), and the inline preview showed a clean red/green diff (`−Three −beta / +Final +gamma`, +2 −2).
+The native dialog is Electron-only, so it verifies in the packaged app (logic + typecheck clean).
+
+### Relates to
+
+ADR-0104 (P-CHAT.1, the inline diff this feeds), ADR-0103 (the workspace browser this Browse path supersedes
+for the native case), CLAUDE.md invariant #1 (config overlay, not an omp fork) and #3 (the gate still scans
+every edit fail-closed).
+
+## ADR-0106 - P-NETWL.1: curated network whitelist (domains/IPs, trust scopes) + OS-encrypted credential vault
+
+**Date:** 2026-07-01
+**Status:** Accepted - BUILT (foundation increment; UI in P-NETWL.2-.4).
+**Increment:** P-NETWL.1.
+
+### Context
+
+The product already gates every network-reaching tool call per-website (P-EGRESS.1/ADR-0062: browser/web_search
+/web/fetch forced to prompt; the desktop shows an approval dialog; a standing "always allow this site" choice
+is remembered in `~/.omp/lucid-egress.json`; the enterprise-managed ceiling in `managed_config.ts` clamps it,
+tighten-only). That per-site memory is ad-hoc. Users need a **deliberate, structured whitelist** they curate up
+front: separate **internal (intranet)** vs **external (internet)** domain lists, both TLD-level (`*.com`) and
+sub-level exact (`api.example.com`); optional **IP / CIDR** ranges; a per-entry **trust scope** and **call
+budget** mirroring how tool-call approvals scope; and, for endpoints that require auth (JWT/OAuth/SAML/PEM/
+API-key/username+password), a way to store the secret **securely** with a native file-upload path for config/
+token/key files. This whitelist must also surface in the Goal Loop (authorized search engines + preference-
+ordered URLs) and be one click away from the netdiag DNS pills. That full surface is large; this increment lays
+the load-bearing foundation everything else depends on. The one hard new requirement over the existing plaintext
+-at-0600 API-key store (`settings_store.ts`): **secrets must be OS-encrypted, never plaintext** - this is a
+security product.
+
+### Decision
+
+1. **`network_whitelist.ts` (pure, Bun-side).** A `WhitelistStore` of `WhitelistEntry` records:
+   `{ id, kind: domain|ip, pattern, zone: internal|external, scope: always|project|loop, project?, callBudget?,
+   auth? }`. Matching is pure + self-contained: `matchDomain` (`*.example.com` matches the base + any subdomain;
+   exact matches only itself; case-insensitive), `matchIp` (IPv4 single + CIDR). `whitelistMatch` returns the
+   granting entry or null. **Trust scopes are a CLOSED set** (`always | project | loop`); the schema is frozen
+   now (WHITELIST_SCHEMA_VERSION = 1) so `.2/.3` add UI without a schema break. Persisted at
+   `~/.omp/lucid-whitelist.json` (mode 0600, non-secret). `sanitizeStore` drops any malformed entry (a dropped
+   entry = not whitelisted = fail-closed).
+2. **Only the `always` scope is ENFORCED in P-NETWL.1.** `project`/`loop` entries and `callBudget` round-trip
+   and persist but grant nothing yet - `project` lands with the Settings UI (.2), `loop` + the call budget with
+   the Goal Loop (.3). Enforcing them now without their UI would be untestable dead policy.
+3. **Wired into the live gate.** `egress_policy.egressDecision` now calls the new pure, store-injected
+   `egressWhitelistAllows(store, url, managed)` FIRST: a whitelist match auto-allows - **but the managed ceiling
+   still wins** (a managed-denied host, or one outside a restrictive managed allow-list, is never granted;
+   tighten-only, identical rule to `clampEgress`). Any error → not allowed (fail-closed). A whitelist allow takes
+   the same auto-allow path (and audit event) as a remembered `allowHosts` allow, so no acp_backend change is
+   needed and the existing `egress_decision` audit still fires.
+4. **`cred_vault.ts` + main-process IPC - the OS-encrypted credential vault.** Secrets are encrypted at rest by
+   the OS key store via Electron `safeStorage` (DPAPI on Windows, Keychain on macOS, libsecret on Linux). The
+   module is dependency-injected (`SafeStorageLike` + `VaultIo`) so it unit-tests without Electron. **Fail-closed
+   is non-negotiable: `storeCredential` THROWS if OS encryption is unavailable and writes nothing - there is no
+   plaintext fallback.** The whitelist entry carries only an opaque `vaultRef` (+ non-secret metadata); the
+   secret never touches the config JSON. `readCredential` (decrypt) is **main-process-only** - the renderer can
+   store/list/delete but never receive a plaintext back. Refs are traversal-proof (`[A-Za-z0-9_-]`). Blobs live
+   under `~/.omp/lucid-cred-vault/` (0600).
+5. **Native file picker + bridge plumbing.** `lucid:pickFile` (native `openFile` dialog, optional filters) for
+   uploading config/token/PEM/key files, and `lucid:credStore|credList|credDelete|credEncryptionAvailable` IPC,
+   all exposed through preload + the renderer `bridge` (Electron-only; in a plain browser `pickFile`→null,
+   `credList`→[], `credStore`→`{error:"os-encryption-unavailable"}`, i.e. fail-closed). The Settings section,
+   Goal-Loop field, and DNS-pill quick-add that CONSUME these land in P-NETWL.2-.4.
+
+### Why not just widen the existing egress allow-list?
+
+`allowHosts` is a flat list of exact hosts with no zones, no wildcards/CIDR, no scoping, and no auth. Bolting all
+of that onto it would overload a simple ad-hoc store and entangle the "remembered a click" semantics with a
+"curated policy" semantics. A sibling module keeps each concern clean and lets the whitelist feed the gate through
+one pure function that still defers to the same managed ceiling.
+
+### Verification
+
+`make demo-P-NETWL.1` (hermetic - injects a store + managed policy + a fake safeStorage, touches no user files):
+a `*.githubusercontent.com` wildcard and a `10.0.0.0/8` CIDR auto-allow while `evil.com` falls through; a
+managed-denied host and a host outside a restrictive managed allow-list are refused even though whitelisted;
+`project`/`loop` entries persist but grant nothing; the vault blob contains no plaintext, decrypt roundtrips,
+listing is metadata-only, and an unavailable-encryption store throws with nothing written. Tests: 27 new
+(`network_whitelist.test.ts` domain/CIDR/verdict/sanitize + `cred_vault.test.ts` fail-closed/roundtrip/traversal).
+Full desktop suite 844 pass / 5 fail (the 5 are pre-existing Windows-only path artifacts in `fs_browse.test.ts`,
+green on Linux CI). Typecheck + license-check clean. The native dialog + safeStorage verify in the packaged app.
+
+### Relates to
+
+ADR-0062 (P-EGRESS.1, the per-site gate this extends), ADR-0068 (P-ENT.1, the managed ceiling this defers to),
+CLAUDE.md invariant #1 (sibling module + config, not an omp fork), #3 (fail-closed: a whitelist can only grant,
+and only under the managed ceiling; the vault refuses rather than writing plaintext), and #7 (trust labels are a
+closed set - the trust SCOPES here are likewise a frozen closed set). Follow-ups: P-NETWL.2 (Settings UI +
+file-upload + tooltips), P-NETWL.3 (Goal-Loop authorized engines/URLs + per-loop call budgets), P-NETWL.4 (netdiag
+DNS-pill quick-add with trust/scope picker).
+
+### P-NETWL.2 addendum (2026-07-01) - the Network Whitelist Settings UI
+
+**Status:** BUILT + live-tested. v1.8.22.
+
+Builds the visible tier on the P-NETWL.1 foundation: a **"Network Whitelist"** section in Settings
+(`secWhitelist` in `desktop/renderer/app.ts`, between MCP connectors and More providers).
+
+- **CRUD backend** (`desktop/dev.ts`): `GET /api/whitelist` (list), `POST /api/whitelist` (upsert, mints an
+  id), `POST /api/whitelist/remove` - backed by the pure `network_whitelist` store (`upsertEntry`/`removeEntry`
+  /`saveWhitelist`). Entries are NON-secret (patterns + zone/scope + an opaque `vaultRef`); `bridge` gains
+  `whitelistList/Upsert/Remove` + `WhitelistEntryView`.
+- **The section** lists entries with `domain|IP` / `internal|external` / scope badges (a non-`always` scope
+  shows a "not yet enforced" tooltip - honest, since only `always` gates today) + a Remove button, and an add
+  form with SEPARATE inputs for the pattern, kind (domain/IP), zone (intranet vs internet), trust scope, and a
+  per-loop call budget. Every control carries a custom `data-tip` tooltip.
+- **Credential attach** (optional, in a disclosure): choose an auth kind (JWT/OAuth/SAML/PEM/API-key/basic),
+  a label, a username (basic), and the secret either **pasted** (`credStore`) or **uploaded as a file**
+  (`credStoreFile` - a new main-process IPC that opens the native file dialog, reads + encrypts the file
+  ENTIRELY in main; the secret bytes never cross to the renderer). Both paths store to the OS-encrypted vault
+  and the entry keeps only the returned `vaultRef`.
+
+**Live verification (real dev server, `preview_*`):** the section renders with all controls; adding
+`*.githubusercontent.com` (external/always) and `10.0.0.0/8` (internal/project) persisted with correct badges;
+**end-to-end the live egress gate now auto-allows the whitelisted host** (`/api/preview/egress-check` →
+`raw.githubusercontent.com` and `objects.githubusercontent.com` both `allow:true`, `evil.example.com`
+`allow:false`); the **fail-closed** path held - adding an entry with a pasted secret in the plain browser (no
+`safeStorage`) was REFUSED with neither the domain nor the secret persisted (no plaintext); UI Remove worked;
+test entries were cleaned up. The vault ENCRYPTION-success path + native file upload verify in the packaged
+Electron app (safeStorage is Electron-only). Typecheck + license clean; `about`/`version` tests bumped to
+1.8.22. Still deferred to later increments: `project`/`loop` scope + call-budget ENFORCEMENT (P-NETWL.3), last-4
+masking (ADR-0107 / P-KEYS.1), and the DNS-pill quick-add (P-NETWL.4).
+
+### P-NETWL.3 addendum (2026-07-01) - ENFORCE project/loop scope + per-loop call budget
+
+**Status:** BUILT + tested. v1.8.23.
+
+The scopes P-NETWL.1 only stored are now enforced. `whitelistMatch(store, target, ctx)` honors the trust scope
+against a context: `always` everywhere; `project` only when `ctx.project` equals the entry's workspace (path
+normalized - trailing-slash + case-insensitive); `loop` only when `ctx.loop` is true. `egress_policy` gains
+`egressWhitelistEntry` (returns the granting entry) + `egressDecisionDetailed(url, ctx)` ({verdict, via, entry});
+`egressDecision(url, ctx?)` now takes optional context. `acp_backend` threads `{ project: currentWorkspace(),
+loop: this.goalActive }` at the egress site. The **per-loop call budget** is enforced by the loop runner (it
+needs mutable state): a `loopHostCalls` Map (reset each `/goal` start) counts auto-allowed calls per host;
+`withinCallBudget(used, budget)` (pure) caps them - once exhausted the whitelist stops auto-allowing that host
+this loop (falls through to prompt / fail-closed block) and records a `call-budget` LoopBlock in the AAR. The
+managed ceiling still wins over every scope. **Verified:** demo-P-NETWL.3 (project only in its workspace; loop
+only in a loop; budget 3 → `allow allow allow block block`; managed-deny beats a project allow) + live
+(loop-scoped host → egress-check with no loop context → `allow:false`). Tests: +scope/budget/normProject.
+
+### P-NETWL.4 addendum (2026-07-01) - DNS-pill quick-add
+
+**Status:** BUILT + live-tested. v1.8.23.
+
+Each DNS pill in the Network-diagnostics panel (dev mode) is now click-to-whitelist: `openWhitelistQuickAdd`
+opens a small `popover` with a zone / trust-scope / call-budget picker (an IP host defaults to the `ip` kind),
+then `whitelistUpsert`s the host. **Live-verified:** generated real Gmail DNS resolutions (`Resolve-DnsName`,
+no account access), clicked the `mail.google.com` pill, added it with `scope=loop, callBudget=5`, confirmed it
+persisted and the popover closed; screenshot captured. Clean-up removed the test entry + restored dev mode.
+
+## ADR-0107 - Credential lifecycle (public tier): type documentation, last-4 masking, labels, rotation visibility + manual rotation, one on-prem KMS connector
+
+**Date:** 2026-07-01
+**Status:** Accepted (design); implementation deferred to P-KEYS.1+. No code this session.
+**Increment:** design ADR (paired with the add-on's ADR-A012 for the enterprise tier).
+
+### Context
+
+P-NETWL.1 (ADR-0106) shipped a local OS-encrypted credential vault (`cred_vault.ts`) that stores a credential's
+`kind`, `label`, and an opaque `vaultRef`, and never returns plaintext. Users now need to (a) see WHAT a stored
+credential is without exposing it, (b) rotate their own keys with good hygiene, and (c) optionally back a
+credential with a key-management system. This ADR fixes that design AND the public-vs-private product split.
+The main repo is **BUSL source-available (public)**; the enterprise/sellable capability lives in the private
+add-on (`TechLead187/lucidagentIDEaddon`, its own `ADR-A###` sequence - see **ADR-A012** there). This ADR
+covers only what belongs in the public IDE: the "help a user rotate their own keys" bucket.
+
+### Decision (public tier - what stays in this repo)
+
+1. **Documented, non-secret metadata.** Extend the vault's `CredMeta` with facts that are safe to persist and
+   show: `kind` (the credential TYPE - already stored), user `label` (already stored), **`last4`** (at most the
+   last 4 chars of the secret; for a PEM/cert, the last 4 of its fingerprint), `createdAt`, `rotatedAt`, optional
+   `expiresAt`, optional `rotationIntervalDays`, `source: local | kms`, and for a KMS-backed entry a key
+   REFERENCE only (provider + key id/URI). **Never store more than 4 chars.** The UI identifies a key as
+   `JWT · "prod-gateway" · ••••3F9A` - enough to know which key, never enough to use it.
+2. **Rotation visibility (pure/local).** Key age, last-rotated, a "rotation due" state when
+   `now - rotatedAt > rotationIntervalDays`, and expiry warnings, surfaced as badges in the whitelist/settings
+   UI. Pure math, no network - ideal for the public tier.
+3. **Manual local rotation.** Replace a secret in place: re-encrypt, KEEP the same `vaultRef` (so whitelist
+   entries never break), bump `rotatedAt`, refresh `last4`, best-effort overwrite of the old blob.
+4. **One generic on-prem / self-host KMS connector.** A `KmsProvider` interface (`getSecret`/`rotate`/
+   `describe`) with a single public backend targeting **HashiCorp Vault (OSS)** or a self-hosted endpoint - the
+   "personal KMS on-prem" path the user called out. Secrets are fetched just-in-time in the main process and
+   never persisted decrypted; the vault stores only the key reference. Fail-closed: a KMS fetch failure yields
+   no secret, never a fallback.
+5. **Audit.** Rotation/add/remove events (`credential_added` / `credential_rotated` / `credential_removed`)
+   will be added to the `EventName` enum in `contracts.ts` - a frozen-contract change (invariant #8), so it is
+   its own small increment when built.
+
+### Non-goals here (they live in the add-on, ADR-A012)
+
+Managed **cloud KMS** connectors (AWS KMS/Secrets Manager, Azure Key Vault, GCP Secret Manager/Cloud KMS,
+Oracle OCI Vault, IBM Key Protect); **automated / policy-driven rotation**; **org-mandated** rotation intervals
+and **KMS-only enforcement** (no local-vault secrets); **compliance** (rotation events → OCSF/SIEM, attestation
+reports); **HSM / PKCS#11 / FIPS**.
+
+### Rationale for the split
+
+Last-4 masking, labels, rotation reminders, manual rotation, and a single OSS/self-host connector are
+table-stakes hygiene that drive adoption and cost the enterprise offer nothing. The cloud connectors, rotation
+automation, org policy, and compliance/attestation are exactly what enterprises (and, in a lighter tier, small
+businesses) pay for - so they belong behind the private add-on.
+
+### Verification
+
+Design only this session. When built (P-KEYS.1): pure tests for `maskLast4` (never emits > 4 chars; handles a
+secret shorter than 4; PEM → fingerprint), the rotation-due predicate, and the `KmsProvider` contract against a
+fake backend; a demo proving `last4` is derived and stored as non-secret metadata and that manual rotation
+preserves the `vaultRef`.
+
+### Relates to
+
+ADR-0106 (P-NETWL.1, the vault this extends), ADR-0068 (P-ENT.1, the managed ceiling the enterprise policy tier
+builds on), the add-on's **ADR-A012** (the private counterpart), CLAUDE.md #3 (fail-closed: secrets never
+plaintext, decrypt main-only, KMS fetch has no fallback) and #8 (new `EventName`s are a contract change).
+
+### P-KEYS.1 addendum (2026-07-01) - last-4 masking (first slice of the public tier)
+
+**Status:** BUILT + tested. v1.8.23.
+
+Shipped the identify-without-revealing piece of ADR-0107: `cred_vault.deriveLast4(secret, kind)` (pure) derives
+at most the last four characters as NON-secret metadata (`CredMeta.last4`), stored at credential-store time and
+surfaced by `listCredentials`. For a PEM/cert the armor lines + whitespace are stripped so the last-4 identifies
+the KEY (base64 body), not the boilerplate. The Network-Whitelist UI looks up each entry's `auth.vaultRef` in the
+vault metadata and shows `••••XXXX` on the auth badge. **Verified:** unit tests (`deriveLast4` never > 4 chars,
+PEM body, short-secret-as-is; `listCredentials` surfaces `last4` but never the full secret). The full store →
+display roundtrip needs the packaged Electron app (safeStorage). Still deferred: rotation visibility + manual
+rotation + the self-host `KmsProvider` connector (the rest of P-KEYS.1/ADR-0107), and the enterprise KMS tier
+(add-on ADR-A012).
+
+### P-KEYS.2 addendum (2026-07-01) - rotation visibility + manual rotate-in-place
+
+**Status:** BUILT + tested. v1.8.24.
+
+The rotation slice of ADR-0107's public tier. `CredMeta` gains non-secret `rotatedAt` / `expiresAt` /
+`rotationIntervalDays`; `cred_vault` adds pure `rotationStatus(meta, now)` + `rotationLabel(status)` (worst
+state wins: `expired` > `rotation due` > `expires in Nd` / `rotate in Nd` > `rotated Nd ago`, with an ok/warn/
+danger tone) and `rotateCredential` - re-encrypts a new secret under the SAME `ref` (so a whitelist entry never
+breaks), bumps `rotatedAt`, refreshes `last4`, preserves createdAt/label/kind/interval. **Fail-closed:** if the
+OS keystore is unavailable `rotateCredential` throws and the old ciphertext is left intact (never clobbered or
+plaintext-written). Main IPC: `credRotate` (paste) + `credRotateFile` (native file, read+encrypted in main).
+UI: each whitelisted key shows a rotation badge (`••••XXXX` + `rotated Nd ago` / `rotation due` / `expired`),
+a **Rotate** button opens a paste-or-file popover, and the add form has an optional "rotate every N days"
+reminder. **Verified:** demo-P-KEYS.2 + 16 vault tests (rotationStatus/Label math, rotate roundtrip preserves
+ref + bumps rotatedAt + refreshes last4, fail-closed leaves the old secret intact); live - the Rotate button +
+popover render and the browser (no safeStorage) path fail-closes with "the old secret was left untouched". Still
+deferred: the self-host `KmsProvider` connector (P-KEYS.3) + the enterprise KMS tier (add-on ADR-A012).
+
+### P-KEYS.3 planning decision (2026-07-01) - external KMS is BYO + add-on-only; the public core ships NO KMS binary
+
+**Status:** Decided (planning); implementation is an add-on increment. Supersedes ADR-0107's public-tier item 4.
+
+Cost/size review of HashiCorp Vault (the intended self-host `KmsProvider` backend):
+- **License:** Community edition is **BUSL-1.1** since Aug 2023 - source-available, not OSI open-source; free for
+  internal/production use, only barred from *competing hosted/embedded* offerings. It is the **same license as
+  LUCID**, so bundling its binary = redistributing a BUSL binary inside our BUSL app (legally awkward, avoid).
+- **Size:** the binary is **large and growing** (~247 MB v1.14.1 → ~355 MB v1.14.2; container ~678 MB). Bundling
+  would bloat our installers 3-4x per platform.
+- **Our own vault has neither problem:** `cred_vault` rides Electron `safeStorage` = the OS keystore
+  (DPAPI/Keychain/libsecret), **$0 and ~0 added bytes** - no binary shipped.
+
+**Decision:** do NOT bundle Vault, and do NOT put an external-KMS connector in the public core at all. The public
+tier's storage backend is the OS keystore only (already shipped: vault + last-4 + rotation). **All external KMS -
+the self-host Vault BYO connector AND the managed cloud connectors - lives in the private add-on** (ADR-A012).
+The self-host path is **bring-your-own**: LUCID's `KmsProvider` talks to a Vault the customer already runs over
+its HTTP API (`VAULT_ADDR` + token/AppRole), fetching the secret just-in-time (never stored by us), configured
+via an in-app "connect your Vault" card + instructions - the same "install/run it yourself" model as the optional
+`headroom` proxy. This revises ADR-0107 item 4 (the "one self-host connector in the public tier") to: **no KMS
+connector in the public core.** ADR-A012 is updated to own both the self-host BYO Vault connector and the cloud
+connectors. P-KEYS.3 is therefore an ADR-A012 (add-on) increment, not a public-core one.
+
+## ADR-0108 - P-NETWL.5: egress posture (allow-all + web-search toggles); whitelist enforces only when allow-all is off
+
+**Date:** 2026-07-01
+**Status:** Accepted - BUILT + tested. v1.8.25.
+**Increment:** P-NETWL.5.
+
+### Context
+
+The curated whitelist (P-NETWL.1-.4) is fail-closed: with nothing whitelisted, the agent can't reach the
+internet without a per-site prompt. For a **personal / non-enterprise** user that's too restrictive - "my agents
+can't access the internet." We need an easy, default-on way to let agents work, while keeping the whitelist as
+the opt-in restrictive mode and preserving the enterprise story.
+
+### Decision
+
+Add an **egress POSTURE** - two toggles, both **pre-checked** by default, stored in the whitelist store
+(`EgressPosture { allowAll, allowWebSearch }`, default both true; a posture-less file upgrades to permissive):
+
+1. **Allow web search** - `acp_backend` auto-approves the `web_search` tool (omp's built-in providers) when
+   `allowWebSearch` is on; else it prompts.
+2. **Allow all websites + local LAN** - when `allowAll` is on, `egressDecisionDetailed` auto-allows (`via:
+   "allow-all"`) EXCEPT the still-prompt set: a **public IP literal** (country unverifiable) and a **foreign
+   country-code TLD** (`isForeignTld`: a 2-letter ccTLD, excluding `.us` and generic-use `io/ai/co/me/tv/…`).
+   LAN / private / loopback / intranet hosts (`isPrivateOrLanHost`) always auto-allow ("+ local LAN"). **The
+   curated whitelist ENFORCES only when `allowAll` is OFF** - the UI dims it to "standby" while on.
+
+The order in `egressDecisionDetailed`: an explicit whitelist entry wins first (so you can approve a specific
+foreign site), then allow-all, then the standing egress store. **Fail-closed is preserved:** the scanner gate is
+untouched; an unparseable target still prompts; and an **enterprise managed policy clamps `allowAll` OFF**
+(`clampPosture`: a restrictive `allowedHosts` or `disableDangerMode` forces whitelist-enforced mode) - the
+"contact your Support Desk" path. `web_search` is left to the user's toggle. Posture is served (effective +
+`managedLocked`) at `/api/whitelist/posture`.
+
+### Verification
+
+`make demo-P-NETWL.5` + tests (allow-all classifier: LAN allow / public-IP + foreign-TLD prompt / US-generic
+allow; `clampPosture` managed override; posture sanitize/default). **Live** (real dev server, `egress-check`):
+with allow-all on, `github.com` + LAN auto-allow while `baidu.cn` + `8.8.8.8` still prompt; flip allow-all off →
+`github.com` prompts (whitelist-enforced); the two pre-checked toggles render with premium tooltips and the
+whitelist dims to standby. Full suite green; typecheck + license clean.
+
+### Relates to
+
+ADR-0062 (P-EGRESS.1, the per-site gate this sits over), ADR-0068 (P-ENT.1, the managed ceiling that clamps it),
+ADR-0106 (P-NETWL.1-.4, the whitelist this makes opt-in), CLAUDE.md #3 (the SCANNER gate stays fail-closed; this
+is the consent layer, defaulted permissive for personal use but clamped restrictive by managed policy and still
+prompting for public IPs / foreign sites).
+
+## ADR-0109 - P-IDE.1e: Fable 5 enabled behind a connected Claude account + a U.S.-government privacy notice
+
+**Date:** 2026-07-01
+**Status:** Accepted - BUILT + tested. v1.8.25.
+**Increment:** P-IDE.1e.
+
+### Context
+
+Fable 5 (`claude-fable-5`) shipped in omp's model catalog but the app kept it **visible-but-disabled** under an
+ITAR advisory (ADR-0029 P-IDE.1b). It's now to be **usable**, but it routes through Anthropic (so it needs a
+Claude account) and it carries a specific data-handling caveat the user must see.
+
+### Decision
+
+1. **Gate on Claude auth.** Drop Fable 5 from the ITAR `UNAVAILABLE` map (Mythos 5 stays gated). `unavailableReason`
+   now returns undefined for Fable **only when a Claude (Anthropic) account is connected** - `claudeAuthed()` =
+   the `anthropic` major has `oauthActive` OR `keySet`. Without it, Fable stays greyed with a "connect a Claude
+   account to enable" reason (not the ITAR one). `state.auth` loads from first paint, so the picker knows.
+2. **U.S.-government privacy notice, three surfaces.** A small shield **row marker**, a **hover-card banner**, and
+   a **persistent danger toast on selection** all state: *"Chat history for this model has NO expectation of
+   absolute privacy from the U.S. government."* Selecting Fable raises the notice instead of the routine "applied"
+   toast. Informational (not a typed-ACKNOWLEDGE wall like the China-origin unlock) - the user asked for a warning,
+   not a hard gate.
+
+### Verification
+
+Live (real dev server, Claude OAuth active): omp lists `anthropic/claude-fable-5`; the picker row is **selectable**
+with the shield marker; the hover card shows the privacy banner; selecting it switches to "Claude Fable 5" and
+raises the persistent privacy toast (screenshot captured). Typecheck + license clean; full suite green (the change
+is renderer-only UI logic).
+
+### Relates to
+
+ADR-0029 (P-IDE.1, model governance + the ITAR `UNAVAILABLE`/warning-wall pattern this extends), the Providers
+auth surface (`anthropic` OAuth / `ANTHROPIC_API_KEY`) that gates it. Note: this is a data-sovereignty disclosure
+in the same family as the AskSage gov advisory + the China-origin acknowledgment wall.
+
+## ADR-0110 - P-EXEC.2: answer omp's FORM-elicitation tool approval (fixes every gated tool call silently failing "denied by user")
+
+**Date:** 2026-07-01
+**Status:** Accepted - BUILT + tested (live chat).
+**Increment:** P-EXEC.2.
+
+### Context
+
+Live chat regressed: EVERY bash/eval/edit/delete tool call failed with a neutral "block" chip reading
+`tool failed: … Tool call denied by user: bash`, and the user was **never shown an approve/deny prompt**.
+Reproduced against the real dev server: a plain `echo hello123` was denied just like `node -e "…"`.
+
+Root cause (omp `@oh-my-pi/pi-coding-agent` 16.1.20): a tool call now passes through **two** gates.
+1. `#wrapToolForAcpPermission` (OUTER) → our `session/request_permission` handler - our authoritative gate.
+   The gate-diagnostic (P-GATE-DIAG.1) confirmed we correctly returned `allow` (`optionId: allow_once`).
+2. `ExtensionToolWrapper` (INNER) - applied to every tool **because we launch omp with `-e GATE -e ASKSAGE`**.
+   Its approval check calls `uiContext.select(["Approve","Deny"])`, which in ACP mode maps to a FORM
+   **elicitation** (`elicitation/create`) - but only if the client advertised `elicitation.form`. We advertised
+   only `fs` capabilities, so omp's `select()` returned `undefined`, which `wrapper.ts` treats as **deny** →
+   `throw "Tool call denied by user"`. The inner gate fires only AFTER the outer one allowed, so our allow was
+   real but a redundant second gate we couldn't answer killed the call.
+
+There is **no config-only fix**: forcing `tools.approvalMode: yolo` would silence the inner gate but also make
+`#isExplicitAutoApproveMode()` true, which SKIPS our outer `session/request_permission` gate - losing our
+classifier/prompt entirely. The two gates are driven by the same signal in opposite directions.
+
+### Decision
+
+1. **Advertise `elicitation: { form: {} }`** in the main session's ACP `initialize` (NOT the KG-extraction
+   client, which answers every request with `{}` and calls no gated tools).
+2. **Answer `elicitation/create`** in the ACP `onRequest` handler via `answerElicitation` →
+   `elicitationApproval(options)` (pure, in `exec_policy.ts`, unit-tested). It reads the elicitation's single
+   `value` enum and **accepts the affirmative option** (`/\b(approve|allow|yes|proceed|accept)\b/i`, whole-word
+   so a `["Deny"]`-only set is never approval), returning `{ action: "accept", content: { value } }`; with no
+   affirmative option (a custom question) it returns `{ action: "decline" }` - matching the pre-capability
+   behavior where such prompts returned no value. Recorded in the gate diagnostics (`kind: "elicitation"`).
+
+**Why auto-accept is safe (not a gate bypass):** the elicitation is omp's redundant INNER approval; it fires
+only after our OUTER `session/request_permission` gate already ran (classify → prompt the user for a risky
+unpinned command, or allow a pinned/danger-mode one). The real approve/deny decision is made there. Also
+handles plan-mode approval (its select carries "Approve and execute"), preserving prior auto-approve.
+
+### Verification
+
+Live (real dev server, Claude OAuth, developer mode):
+- **Before:** `node -e "console.log(2+2)"` and `echo hello123` → `block: Tool call denied by user: bash`; gate
+  diag showed our verdict was `allow` yet the tool died. Raw omp options captured: `allow_once/allow_always/
+  reject_once/reject_always`.
+- **After:** `node` (pinned, `allowPrograms:["node"]`) → runs, reply `4`; gate diag shows `exec allow` +
+  `elicitation accept:Approve`. An **unpinned** `python --version` → a real `permission` event surfaced
+  (`program: python`), resolving it `exec:allow-once` ran the tool (reply `Python 3.14.2`). No more silent denies;
+  the approve/deny prompt loop works end-to-end.
+- `elicitationApproval` unit-tested (tool-approval, plan-mode, case-insensitivity, whole-word, junk input,
+  decline-on-no-affirmative). Full `exec_policy.test.ts` green (164), desktop typecheck clean.
+
+### Relates to
+
+ADR-0066 (P-EXEC.1, the exec classifier + `session/request_permission` gate this complements), P-GATE-DIAG.1
+(the gate-decision ring that pinpointed the bug), ADR-0062/0094 (egress gate on the same permission path).
+Carries forward the CLAUDE.md wrinkle that omp seams must be confirmed against the installed version: 16.1.20
+moved per-tool approval to a FORM elicitation that a client must now explicitly support.
+
+## ADR-0111 - Chat history survives app upgrades: a STABLE default workspace (never the install dir)
+
+**Date:** 2026-07-02
+**Status:** Accepted - BUILT + tested.
+**Increment:** P-WS.1.
+
+### Context
+
+Users lost their chat history on every version update. Root cause: chat sessions live in `~/.omp/agent/
+sessions/` (user home - survives upgrades), but `listSessions` shows only sessions whose recorded `cwd`
+equals `currentWorkspace()`. The default workspace was `REPO = join(import.meta.dir, "..")` - the app's
+**install directory**, which `import.meta.dir` reports differently for every packaged version. On upgrade the
+default cwd changed, so all prior sessions (recorded under the old install path) were filtered out - present
+on disk, invisible in the UI.
+
+### Decision
+
+`currentWorkspace()` falls back to a new `defaultWorkspace()` that is **version-independent**:
+- **Dev-from-source:** the checkout is a real git repo (`REPO/.git` exists) and a good default → keep REPO.
+- **Packaged app:** no `.git` in `resources/repo` → use a fixed `~/.omp/lucid-workspaces/default` (created on
+  demand). Never the versioned install dir. An explicitly-set workspace is always honored as before.
+
+This stops the bleeding going forward (the default cwd is now stable across releases). Sessions created under
+a *prior* version's install-dir default remain on disk but orphaned; they can be re-attached by opening that
+old path as a workspace if it still exists (a future migration could re-home them by rewriting recorded cwd).
+
+### Verification
+
+Dev-from-source keeps REPO (has `.git`) - no behavior change for contributors; the packaged branch resolves to
+the stable path. Typecheck clean; sessions continue to match by recorded cwd (sessions.ts unchanged).
+
+### Relates to
+
+sessions.ts (`listSessions` matches by recorded `cwd`), workspace.ts, settings persisted at `~/.omp/lucid-gui.json`.
+
+## ADR-0112 - P-GOAL.14: browse PAST After-Action Reports
+
+**Date:** 2026-07-02
+**Status:** Accepted - BUILT + tested (live).
+**Increment:** P-GOAL.14.
+
+### Context
+
+The loop After-Action Report (ADR-0054) streams into chat once, when a loop finishes, and is written to
+`<workspace>/.omp/loops/<id>-<slug>.report.md`. There was no way to reopen a past AAR - the report files
+existed on disk but nothing listed them. The cross-run stats banner (ADR-0055) showed aggregates, not the
+individual reports.
+
+### Decision
+
+Pure/fs helpers in `goal_memory.ts`: `summarizeReport` (pull goal title + outcome badge from a report's
+markdown), `listGoalReports` (list `*.report.md` most-recent first, confined to the loops root),
+`readGoalReport` (read one back, traversal-rejected). Endpoint `GET /api/goal/reports` (list) and
+`?rel=` (one). The goal modal's Loop-history area now renders a **"Past After-Action Reports"** list; each row
+opens the full report markdown in a viewer modal. Shown whenever report files exist, even if the run-log
+ledger is empty.
+
+### Verification
+
+Live: pointed the workspace at a project with a saved AAR → the list showed the report (✅ Goal met, correct
+goal), clicking it opened the full report (Scoreboard, $5.33 spend). Unit tests for summarizeReport +
+listGoalReports/readGoalReport (incl. traversal rejection). Typecheck clean.
+
+## ADR-0113 - P-BRIEF.4: synthesize the podcast to real audio (WAV) + download; wire the P-BRIEF.2 TTS backend
+
+**Date:** 2026-07-02
+**Status:** Accepted - BUILT + tested (endpoint live, fail-safe path verified).
+**Increment:** P-BRIEF.4.
+
+### Context
+
+The Engineering Update (ADR-0072) produced a two-host podcast **script** but no audio - `/api/brief` returned
+text only ("audio synthesis is a later slice"). The TTS backend (ADR-0071, `harness/brief/tts_backend.ts`, an
+OpenAI-compatible `/v1/audio/speech` client) was built + unit-tested but wired to nothing, so the UI's
+"podcast" promise (and the "Local TTS - Kokoro" option) generated no sound. The accordion was also mislabeled
+"from this run", which users conflated with the loop AAR.
+
+### Decision
+
+1. **Wire audio.** New `POST /api/brief/audio` builds the podcast script and synthesizes it via the existing
+   `OpenAiCompatibleTtsBackend`, returning a base64 WAV. Two providers, both the same OpenAI `/v1/audio/speech`
+   shape:
+   - **local-tts** - a self-hosted Kokoro server (air-gap, no key; `LUCID_TTS_URL`, default `:8880`).
+   - **openai-tts (ChatGPT)** - `https://api.openai.com`, the stored `OPENAI_API_KEY`, model
+     `gpt-4o-mini-tts` (override `OPENAI_TTS_MODEL`), voices Host=`nova`/Engineer=`onyx`. A missing key is an
+     actionable note, not an error; a synth failure returns the fail-safe note (never a 500).
+2. **Download.** The renderer plays the WAV inline (`<audio>`) and offers **Download WAV** (`engineering-update.wav`).
+3. **Relabel.** The accordion now reads "exec brief + podcast · from your repo logs" and its tooltip states it
+   is NOT the loop AAR (which appears in chat after a loop). Added the ChatGPT option to the provider select.
+
+WAV (not MP3) because the backend already emits WAV and MP3 needs an encoder dependency; the user accepted
+"whichever is easier". The synthesis runs in the desktop process (not omp's egress gate), so it's a
+user-initiated network call to the chosen endpoint.
+
+### Verification
+
+Live: `/api/brief/audio` with local-tts (no Kokoro running) fail-safed to "TTS unavailable … returning script
+only" with `ok:false` + note (the exact UI-degrade path). Bundle builds with the audio + download UI; the
+provider select shows script-only / ChatGPT / Kokoro. `openai-tts` uses the same verified backend path (not
+exercised live to avoid real OpenAI charges). Typecheck clean.
+
+### Relates to
+
+ADR-0070 (podcast backend seam + vendor research), ADR-0071 (the TTS backend), ADR-0072 (the brief). Enabling
+ChatGPT TTS = add an OpenAI key in Providers; the rest is automatic.
+
+## ADR-0114 - P-CHAT.2: engagement policy — no autonomous action on a greeting; opt-in numbered next steps (PREFIX v7)
+
+**Date:** 2026-07-02
+**Status:** Accepted - BUILT + tested (live).
+**Increment:** P-CHAT.2.
+
+### Context
+
+A user said only "hi" to Grok on a fresh session and it began scanning the working directory and making
+unrequested edits/"improvements". The agentic system prompt (omp's default + our BUILD/DELEGATION policies)
+plus the mere presence of files led some models to invent a task from the cwd. The user wants the agent to
+respond only to what's asked, and on a low-signal opener to ask whether to review the cwd (or use the
+knowledge-graph recall for hints), offering easy numbered next steps to choose from.
+
+### Decision
+
+Add a byte-stable `ENGAGEMENT_POLICY` (layer 3) delivered to the live omp ACP chat via
+`--append-system-prompt` (like DELEGATION/BUILD/PREVIEW) and embedded in `LAYER_3_CODING`:
+- Opening a chat is NOT a task; the directory's contents are NOT a request. On a new session and any
+  low-signal opener (greeting/emoji/thanks/no concrete ask), do NOT scan/read-broadly/edit/run tools -
+  reply briefly and WAIT. Take substantive action only on a concrete request or an explicitly chosen option.
+- On a low-signal opener, offer a SHORT numbered list (2-4) of choose-by-number next steps drawn from the
+  conversation + any recalled user-memory / KG hints in the prompt (NOT a fresh scan), always including
+  "review the current working directory" as an explicit opt-IN. Numbered next steps are also the preferred
+  way to close a reply when sensible follow-ups exist.
+
+Because this changes the cached prefix (layer 3), `PREFIX_VERSION` bumps **6 → 7** (CLAUDE.md invariant #6:
+a deliberate prefix change is its own increment + ADR). The prefix-hash test asserts stability + version-
+binding (no hardcoded hash), so it stays green; re-ran demo02.
+
+### Verification
+
+Live (real dev server, fresh session, model claude-opus-4-8): sending "hi" produced ONLY token/usage/done
+events - no tool calls, no edits, no cwd scan - and the reply was conversational ("Hey! What are you
+working on?") followed by 4 numbered opt-in next steps, referencing the project from KG/recall context.
+Prefix tests (assembler + prefix_compaction) green; demo02 green; typecheck clean. The policy is model-
+agnostic (every model gets it via the appended system prompt), so it applies to Grok as well.
+
+### Relates to
+
+ADR-0028 (DELEGATION_POLICY), ADR-0033 (BUILD_POLICY), ADR-0096 (PREVIEW_POLICY) - the sibling layer-3
+policies in the same `--append-system-prompt` set; the KG recall / user-profile preamble that supplies the
+"what they're working on now" hints (buildUserTurnPreamble).
+
+## ADR-0115 - P-VOICE.1: ElevenLabs TTS/STT + mic button + read-aloud + offline-STT engine choice
+
+**Date:** 2026-07-02
+**Status:** Accepted - BUILT + tested (endpoints + UI live; live ElevenLabs/mic pending a user key + mic grant).
+**Increment:** P-VOICE.1.
+
+### Context
+
+The user wanted voice in the composer: an ElevenLabs API-key option for TTS (with a voice picker + favorites)
+and STT (a mic button next to Skills), without bloating the install, plus offline STT options DoD can
+approve. Foundations existed but were unwired: a `PodcastBackend` TTS seam (ADR-0071) and a
+`TranscriptionBackend` STT seam (ADR-0073, never wired to any UI/endpoint).
+
+### Decision
+
+1. **ElevenLabs backends** (`harness/voice/elevenlabs.ts`, pure `fetch` clients - ZERO install bloat, no SDK):
+   `ElevenLabsTtsBackend` (PodcastBackend; `/v1/text-to-speech/{voice}`, PCM→WAV concat, `eleven_turbo_v2_5`),
+   `elevenLabsSpeak` (single-clip MP3 for read-aloud), `listElevenVoices` (`/v1/voices`), `ElevenLabsSttBackend`
+   (`/v1/speech-to-text`, `scribe_v1`). `xi-api-key` header. Fail-safe throughout (unit-tested).
+2. **Cloud vs air-gap split** (mirrors the app's gov-vs-personal posture): ElevenLabs is the PERSONAL path
+   (audio leaves the device); the DoD/air-gap path is the self-hosted OpenAI-compatible Whisper (STT) / Kokoro
+   (TTS) adapters. STT engine is user-selectable, **offline Whisper is the default**.
+3. **Key + settings**: `ELEVENLABS_API_KEY` rides the existing provider key plumbing (auth `others`) but renders
+   in a dedicated **Voice** settings card (excluded from the model-provider list; never in the model picker),
+   with a **get-key link** and a **per-AAR cost estimate** (~$0.10–$0.30 per brief, a few cents per reply). New
+   `GuiSettings`: `sttProvider`/`sttUrl`/`ttsProvider`/`ttsVoice`/`ttsVoiceFavorites` (`voiceSettings()`).
+4. **Endpoints**: `/api/voices` (favorites first), `/api/voice-settings` (GET/POST), `/api/transcribe`
+   (engine per settings), `/api/tts/speak` (read-aloud), and `/api/brief/audio` extended with `elevenlabs`.
+5. **UI**: a mic **STT button** (custom SVG) next to Skills in the composer - click to record, click to stop,
+   MediaRecorder → transcribe → INSERT into the composer for review (transcript is ordinary user input, scanned
+   on send). TTS surfaces (all three requested): the Engineering Update **podcast** (ElevenLabs provider option
+   + voice picker), **read-aloud** speaker button on assistant replies, and **AAR narration** ("Listen" in the
+   report viewer). Voice picker lists **favorites first** with a ★ toggle.
+
+### Offline STT for DoD (documented for the user)
+
+whisper.cpp self-host (already supported via `OpenAiCompatibleSttBackend`, strongest fit) · in-app WASM Whisper
+(transformers.js, no server/Python, same pattern as the RAG embedder) · faster-whisper (BYO server) · Vosk ·
+NVIDIA Parakeet/Canary · Moonshine. Avoid Windows/Web Speech (routes to cloud). The discriminator is
+on-device / no egress / open source.
+
+### Verification
+
+Live (dev server, no keys): bundle builds; `/api/voice-settings` returns defaults (whisper STT / elevenlabs
+TTS); `/api/voices` + `/api/transcribe` (Whisper down) + `/api/tts/speak` (no key) all **fail-safe to notes**,
+never 500. DOM: mic button present, Voice card renders (STT/TTS selects, voice picker, ElevenLabs key field +
+get-key link + cost hint); STT toggle hides the Whisper-URL row + persists. `elevenlabs.test.ts` green (voice
+parse, PCM→WAV, xi-api-key, fail-safe). Typecheck clean. Live ElevenLabs synth + mic recording pending the
+user's key + a mic grant (backends unit-tested; endpoints fail-safe). NO version bump (batched for the weekly release).
+
+### Relates to
+
+ADR-0071 (TTS seam), ADR-0073 (STT seam), ADR-0113 (brief audio), the egress-posture / gov-gateway personal-vs-DoD split.
+
+## ADR-0116 - P-REPORT.1: Engineering Reports rail feature - role-tailored briefs + a unified past-reports browser
+
+**Date:** 2026-07-02
+**Status:** Accepted - BUILT + tested (live). NO version bump (batched for the weekly release).
+**Increment:** P-REPORT.1.
+
+### Context
+
+The Engineering Update lived buried in goal-form step 5 and produced one audience-neutral brief. The user
+wanted it (a) a dedicated left-rail feature for ALL roles, (b) role-tailored so Dev/Security/Manager/Exec
+each get a report framed for them, (c) with a right-side browser of ALL past reports - both the per-workspace
+loop After-Action Reports and the repo-wide Engineering Update briefs - plus the P-VOICE.1 fixes (pre-generate
+voice pick, ~10c cost note, and the inline-player bug).
+
+### Decision
+
+1. **Rail feature** (all roles): a new `report` rail glyph opens the **Engineering Reports** panel - generate
+   (left) + past-reports list (right). Not gated by role.
+2. **Role tailoring** (pure, ADR-0116, `renderEngineeringBrief(u, role)` + `buildPodcastScript(u, role)`):
+   extraction stays audience-neutral; RENDER genuinely CHANGES CONTENT per audience - a per-role section set,
+   an item filter, a cap, and whether ADR/increment codes appear. Only the **Developer** view keeps the ADR
+   IDs, increment codes, and source tags (all 5 sections). Non-developers get **zero ADR references** (codes
+   scrubbed from titles AND details via `scrubCodes`): **Security** shows only security-relevant items
+   (`isSecurityItem` filter: gate/egress/auth/credential/vault/CUI/…) across Risks + Decisions + Dependencies +
+   Shipped; **Manager** shows Shipped + Decisions + Risks in plain language (capped); **Executive** shows the
+   top-4 Shipped + Risks + Decisions as **title-only headlines** (`dropDetail`), no tech-debt/dependencies.
+   The scoreboard line only counts the sections that view shows. Default (no role) = the full "Engineering Update".
+3. **Persisted briefs** (`desktop/report_store.ts`): a generated brief is saved to a global
+   `~/.omp/lucid-briefs/<ts36>-<role>.md` (briefs are repo-wide) when `?save=1`. The goal-modal preview omits
+   save; the Reports panel Generate saves.
+4. **Unified list**: `GET /api/reports` merges per-workspace loop AARs (`listGoalReports`) + saved briefs
+   (`listBriefs`), most-recent first, each tagged `kind: "aar" | "brief"`. `GET /api/report?kind=&rel=` reads
+   one (confined to its store). Each row opens a viewer with a **Listen** (TTS) button.
+5. **Reused P-VOICE.1**: the panel carries the voice picker (favorites, pre-generate), the ~10c cost note, and
+   the blob-URL audio player + Download. The player bug (a big WAV as a `data:` URL wouldn't play) is fixed by
+   a `URL.createObjectURL` blob URL, applied to the podcast, read-aloud, and AAR narration.
+
+### Verification
+
+Live (dev server): the rail glyph opens the panel (role select dev/sec/mgr/exec, provider, voice, cost). A
+developer brief generated + saved + tailored (leads with "Tech debt", title "Developer Engineering Update").
+`/api/reports` returns both a `brief` and the loop `aar`, and the panel's list renders both with badges;
+clicking opens the viewer + Listen. Role-tailoring unit-tested (order per role, all sections present, role
+label + framing, podcast title). Typecheck clean; engineering_update tests green (14).
+
+### Relates to
+
+ADR-0070/0072 (the brief), ADR-0113/0115 (audio + voice), ADR-0112 (the past-AAR browser this generalizes),
+ADR-0088 (the roles this tailors to).
+
+## ADR-0117 - P-REPORT.2/.3: report lifecycle - copy, download .md, two-stage archive/delete, push to KG
+
+**Date:** 2026-07-02
+**Status:** Accepted - BUILT + tested (both slices). NO version bump.
+**Increment:** P-REPORT.2 (lifecycle) + P-REPORT.3 (KG push).
+
+### Decision
+
+Both report kinds (per-workspace loop AARs + repo-wide saved briefs) gain, in the Reports panel row + the viewer:
+1. **Copy to clipboard** (the report markdown) and **Download .md** (`URL.createObjectURL` blob, `<title>.md`).
+2. **Two-stage archive/delete**: the active row's action is **Archive** (soft-delete → an `archived/` subfolder,
+   not gone). An **Active / Archived** tab switch reveals the archive, where a row's actions are **Restore**
+   (→ active) and **Delete** (PERMANENT). So "delete twice = gone": first delete archives, second (in the
+   archive) removes for good. Endpoints: `/api/report/{archive,restore,delete}`; `/api/reports?archived=1`.
+   **Guard (invariant):** permanent delete only ever operates on an archived item - `deleteGoalReport` rejects
+   any rel not under `.omp/loops/archived/`, and `deleteBrief` targets only the archive dir (no `force`, so a
+   non-archived rel → false). Unit-tested: delete on an active report is refused; archive→restore and
+   archive→delete round-trip.
+
+### P-REPORT.3: push to the Knowledge Graph - BUILT (2026-07-02, no version bump)
+
+The user asked to optionally **push a report into the personalization KG**, choosing the compartment when
+more than one is unlocked and defaulting to the sole unlocked one. Now built.
+
+- **Ingest shape (user-confirmed): "One report node."** The whole report enters as a single trusted node,
+  not distilled/atomized facts. `addReportToKg(scope, title, markdown)` in `desktop/personal.ts`:
+  `upsertEntity("Engineering Report: <title>", "user:decision", "trusted")` + one
+  `addFact({ entityId, statement: markdown.slice(0, 20_000), trustLabel: "trusted", scope })`. Reports are
+  first-party, so they enter **trusted** - the semantic-promotion gate (CLAUDE.md keystone) is not bypassed:
+  it exists to stop *suspicious-source* content auto-promoting; a first-party report is an explicit,
+  user-initiated trusted write, never an auto-promotion.
+- **Compartment selection.** Client reads `bridge.personal()`; unlocked `main` store yields **work** +
+  **personal** targets, unlocked `cui` yields **cui**. Zero unlocked → fail-closed toast ("Knowledge graph
+  locked - unlock a compartment in Settings"). Exactly one → push directly, no prompt. More than one → a
+  `.kg-pick` popover to choose. Endpoint `/api/report/to-kg` (kind, rel, scope, archived) re-derives the
+  markdown server-side and calls `addReportToKg`, which **also** fail-closes if personalization is off or the
+  chosen compartment is locked (defense in depth - never trust the client's unlock view alone).
+- **Verified:** typecheck clean (root + desktop); endpoint returns `ok:false, "...locked - unlock it in
+  Settings"` when the compartment is locked; UI renders the KG button on both the row and the viewer, and a
+  locked click surfaces the fail-closed toast.
+
+### Relates to
+
+ADR-0116 (the Reports panel this extends), ADR-0010/P9.x (the personalization KG + compartments), the
+semantic-promotion gate (P4.3).
+
+## ADR-0118 - P-REPORT.4: premium UI pass on the Scoreboard + Engineering Reports
+
+**Date:** 2026-07-02
+**Status:** Accepted - BUILT + verified. NO version bump.
+**Increment:** P-REPORT.4.
+
+### Decision
+
+A dedicated UX/visual pass on the two surfaces the user singled out as feeling "basic": the collapsed
+quick-metrics **Scoreboard** rail and the **Engineering Report** viewer. Purely presentational - no data,
+storage, or security path changes.
+
+**Scoreboard (metrics rail tiles).** Every tile is the SAME calm neutral at rest - no per-metric colour, and
+(per the user's second-round feedback) **no icons**. The interest is entirely in the *reaction*:
+- **Neutral by default, react on *change* - like a game.** When a value changes the tile fires a short,
+  eye-catching reaction: a **clockwise light races around its border** (2 fast laps then fades), a **diagonal
+  shine sweeps** across it, and the number briefly flashes its accent. Then it settles back to neutral.
+  `renderMetricsRail` remembers the last value per label (`prevMetrics`) + a `railPrimed` flag so the first
+  paint never false-flashes, and signature-guards the DOM write so an idle poll doesn't restart animations.
+- **Persistent clockwise pulse on attention.** A tile that needs triage - findings > 0 or quarantine > 0 -
+  keeps a slow **clockwise** conic light pulse + accent border. The ring (both the racing and the pulse
+  variants) is a masked pseudo-element animated via a registered `@property --sweep` angle, so the highlight
+  travels the border instead of rotating a clipped square. `prefers-reduced-motion` disables all of it.
+- (Reverted from the first attempt: an always-on custom-SVG icon chip per tile. The user explicitly did not
+  want icons on the rail - the ask was uniform-until-it-changes, with a cool reaction. Icons removed.)
+
+**Engineering Report viewer.** Scoped to `.aar-viewer` (the loop's inline AAR is untouched):
+- **No more doubled title.** The stored report opens with a big `# After-Action Report: <goal>` H1 that just
+  restated the modal-header title. `enhanceReportBody` drops that leading H1 in the viewer (header keeps the
+  title). Body bumped 12.5px → **15.5px**, line-height 1.72; H2s become small uppercase section eyebrows with
+  a gradient accent bar; styled lists / code / `pre` / blockquotes / tables.
+- **Custom SVG outcome badge.** The `✅ / ⏹ / 🛑 / ❗` emoji in the outcome line is swapped for a real duotone
+  glyph (`checkBadge` / `stopBadge` / `alertBadge`) in a coloured pill - the "checkbox" the user pointed at.
+- **Beautiful charts (plasma-on-hover).** `enhanceReportBody` parses the report's ASCII "Scoreboard" block AND
+  the raw (unrenderable) mermaid **pie** + **xychart** blocks and replaces each with a colour bar chart
+  (`.rchart`): gradient fills, glow, per-metric colour (green add / red remove / amber errors / blue tools /
+  palette rotation), and on hover a moving multi-hue **plasma** sheen + brighter glow. No raw code blocks are
+  left in the report. The stored markdown is untouched (loop_report stays byte-stable / test-frozen).
+- **Compact, non-wrapping buttons.** Header actions: less padding (5x10 → 4x9), larger **16px** glyphs, the
+  Close becomes an icon-only `×`, Listen uses a duotone `headphones` glyph, and **"To KG" → "KG"** (it was
+  wrapping onto two lines); the action row is `nowrap`.
+
+### Why
+
+Uniform-until-it-changes makes the Scoreboard read like a live game HUD: colour/motion means "this just moved
+/ needs you," nothing competes at rest. The report pass fixes a genuinely duplicated title, too-small body,
+an emoji standing in for a custom glyph, unreadable raw-mermaid "charts," and a two-line KG button.
+
+### Verified
+
+Typecheck clean (root + desktop). Live preview: 6 rail tiles render neutral with NO icons; forcing a change
+resolves `tileRace` (racing ring) + `tileShine` (sweep) + `tileNumBloom` (number flash); an attention tile
+resolves the persistent `tileSweep`. Report viewer: leading H1 removed (`h1Count 0`, first node is the badge
+line), outcome badge is a real `<svg>` in a `.ro-badge.ro-met` pill, **4 charts built / 0 `<pre>` left**
+(Scoreboard + pie + 2 xychart bars), body computes to 15.5px, KG button single-line, `rchartPlasma` keyframe
+present. No console errors.
+
+### Relates to
+
+ADR-0116/0117 (the Reports panel + lifecycle this polishes), the metrics rail (ADR-0021), `icons.ts` (the
+hand-drawn line-icon set this extends).
+
+## ADR-0119 - P-EXEC.3: "TLDR" command explainer + spell-check + report-title cleanup
+
+**Date:** 2026-07-02
+**Status:** Accepted - BUILT + verified. NO version bump.
+**Increment:** P-EXEC.3.
+
+### Decision
+
+Three small usability fixes, the substantive one being a plain-language command explainer.
+
+**"TLDR" - explain an intimidating command with a cheap model.** The exec approval card (`The agent wants
+to run a [HIGH-RISK] command`) now stacks a **TLDR** button directly under the Copy button (tight padding).
+Clicking it makes ONE one-shot call to the cheapest available keyed model and drops a plain-English
+explanation + risk flag inline; a second click toggles it. New surfaces:
+- `desktop/explain_command.ts` - `explainCommand(cmd)`: picks the cheapest keyed provider (Anthropic
+  `claude-haiku-4-5` → OpenAI `gpt-4o-mini` → Gemini `gemini-2.0-flash`), one request, 320-token cap,
+  20s timeout. The command is handed to the explainer as clearly-delimited `<command>` DATA with a system
+  instruction that it is inert and any embedded instructions are part of the data (same trust-boundary
+  posture as the harness). **Fail-soft:** no key → an actionable "add an Anthropic/OpenAI/Gemini key"
+  message; any HTTP/parse error → a calm message, never a crash. Mirrors the direct-keyed-fetch pattern
+  already used by `ratelimit_probe.ts`.
+- `POST /api/explain` in `dev.ts`; `bridge.explainCommand`; the card UI + `.perm-tldr` / `.perm-tldr-out`
+  styling (accent-tinted panel, model attribution line).
+- Why keyed-model-only: TLDR is user-initiated and wants a *cheaper* model than the maker; the OAuth path is
+  managed by omp and not a clean one-shot. If only OAuth is configured, the fail-soft message points the user
+  to add a small key (a Haiku/mini explanation is a fraction of a cent).
+
+**Spell-check in the composer.** The prompt `<textarea>` gains `spellcheck="true"` (browser red-squiggles),
+and - because Electron underlines misspellings but won't build the correction menu itself - `main.ts` adds a
+`context-menu` handler that, ONLY when there's a misspelled word (so it never fights Monaco's own menu),
+pops the dictionary suggestions (`replaceMisspelling`) + "Add to dictionary".
+
+**Report title de-cluttered.** Removed the small glyph the report viewer printed before the title in its
+header (the user pointed at it) - the title now stands alone.
+
+### Verified
+
+Typecheck clean (root + desktop); license-header check green (new file carries BUSL-1.1). Live: `/api/explain`
+returns the fail-soft "add a key" message with no key set (endpoint + provider-selection wired); a mock exec
+card renders the TLDR button stacked under Copy (2px 6px pad) with the explanation panel; composer `#input`
+has `spellcheck="true"`; report viewer title has no leading `<svg>`. No console errors.
+
+### Relates to
+
+ADR-0066/0110 (the exec approval card this extends), `ratelimit_probe.ts` (the keyed-fetch pattern reused),
+ADR-0118 (the report viewer this touches).
+
+## ADR-0120 - P-REPORT.5: print / save-as-PDF, report-panel polish, subdued inline code
+
+**Date:** 2026-07-02
+**Status:** Accepted - BUILT + verified. NO version bump.
+**Increment:** P-REPORT.5.
+
+### Decision
+
+Four presentational fixes from a report + chat review.
+
+**Print / Save-as-PDF (white paper).** The report viewer gains a **Print** button (new `print` glyph) between
+`.md` and `KG`. `printReport(title, bodyHtml)` drops the ALREADY-ENHANCED report HTML (light-friendly classes:
+headings, tables, `.rchart` bars, `.ro-badge`) into a hidden same-origin `<iframe>` carrying a self-contained
+**light** stylesheet (`PRINT_CSS`: white bg, dark text, print-safe colours re-mapped from the dark theme, no
+glows, `-webkit-print-color-adjust:exact`, `@page{margin:16mm}`, `break-inside:avoid` on rows/tables/charts),
+then calls the iframe's `print()` - the OS dialog offers **Save as PDF** and any printer. Same-origin iframe +
+`window.print()` works in both the browser build and Electron (where `window.open` to non-http is denied). The
+title (dropped from the body as a duplicate on screen) is re-added as the print `<h1>`.
+
+**Report-panel polish.** Removed the little `graph` glyph the panel drew before the Active/Archived tabs (the
+user pointed at it). Bumped the panel's intro paragraph to 13.5px / brighter for readability.
+
+**Subdued inline code in chat.** `.msg .text code` was a loud cyan chip (`--cyan-dim` bg + cyan text). Re-toned
+to a neutral mono chip (`color-mix(--txt-4 13% over --bg-2)` bg, `--line-soft` border, `--txt-2` text) so it
+reads like the standard mono type in the lower-left status-bar model readout - present but calm.
+
+### Verified
+
+Typecheck clean (root + desktop). Live preview: reports panel tab-row has no `<svg>`, intro computes to 13.5px;
+report viewer shows the Print button (Listen · Copy · .md · Print · KG · ×); a light-CSS render of the actual
+report body shows a clean WHITE page - title, light tables, and the Scoreboard/Tool-call bars in print-safe
+colour; chat inline code computes to a neutral gray chip (text `--txt-2`), no cyan. No console errors.
+
+### Relates to
+
+ADR-0116/0117/0118 (the reports panel + viewer this polishes), `icons.ts` (adds `print`).
+
+## ADR-0121 - P-REPORT.5b: print "Prepared for" footer, cost-notice fix, Listen UX + voice hotkeys
+
+**Date:** 2026-07-02
+**Status:** Accepted - BUILT + verified. NO version bump.
+**Increment:** P-REPORT.5b.
+
+### Decision
+
+Follow-ups from a print + voice review.
+
+**Print "Prepared for:" footer.** The print document now carries its own bottom-left footer -
+`Prepared for: <identity>` - where identity is the corporate email if set, else the attribution identity
+(the workstation-name fallback). `position:fixed;bottom:6mm;left:0` so it repeats on every printed page.
+(The dev browser's own URL footer, "localhost:5323", is a Chrome print-UI artifact not present in the
+packaged Electron app; our content footer is what carries the intended "Prepared for" line.)
+
+**Cost-notice layout fix.** The ElevenLabs/OpenAI TTS cost note (`REPORT_TTS_COST`) fragmented into 3 flex
+columns because its `<b>` and text nodes were direct children of the flex `.goal-eu-cost`. Wrapped the
+message in ONE `<span>` (so it wraps as prose), pinned the icon to `flex:none` and the span to `flex:1`, and
+rewrote the copy: "ElevenLabs bills per character. Generating this report's audio costs about $0.10 (~10¢)
+each time."
+
+**Listen button - it already synthesizes on demand.** Clarified + hardened: the Listen / read-aloud button
+is INDEPENDENT of the Generate panel's audio option - it calls `bridge.speak` fresh on each click, so it
+works any time. `speakText` now shows a spinner + "Synthesizing…" while the model runs, flips to a "Stop"
+control while playing, and on failure surfaces the real engine note ("Couldn't read it aloud - choose a TTS
+engine in Settings → Voice…") instead of a quiet "No audio". (If it wasn't working before, the TTS engine
+wasn't configured / the ElevenLabs key lacked `text_to_speech` - now the reason is shown.)
+
+**Voice hotkeys.** `Ctrl/⌘+Space` toggles read-aloud while a report is open (listener added on open, removed
+on close), and `Ctrl/⌘+D` toggles the mic from anywhere. Both are shown in their button tooltips via
+`modCombo(...)` (OS-aware label).
+
+### Verified
+
+Typecheck clean (root + desktop). Live preview: cost note renders as one span (svg + span, single line);
+mic tooltip shows "Ctrl+D", Listen tooltip shows "Ctrl+Space"; Ctrl+Space dispatched into the open viewer
+fires the Listen handler; the real print doc built from a saved brief has `body{background:#fff}`, a
+`.print-title`, and a `.print-foot` reading "Prepared for: nicholas.chadwick.ctr@gmail.com". No console errors.
+
+### Relates to
+
+ADR-0120 (the print/report pass this extends), ADR-0115 (voice: TTS/mic), ADR-0030 (attribution identity used
+for "Prepared for").
+
+## ADR-0122 - P-REPORT.6: Security-brief compliance crosswalk (NIST 800-171/800-53 + STIG CCIs) + POA&M CSV
+
+**Date:** 2026-07-02
+**Status:** Accepted - BUILT + tested. NO version bump.
+**Increment:** P-REPORT.6.
+
+### Decision
+
+The **Security** engineering report now ends with a compliance crosswalk, and can export an eMASS-aligned
+**POA&M**. Plus a readability bump on the brief preview.
+
+- **New pure module `harness/brief/compliance.ts`.** From the SAME `EngineeringUpdate` the brief is built
+  from, `buildComplianceRows` maps each security-relevant item (by keyword) to the control families its area
+  touches - NIST **SP 800-171** paras, **800-53** controls, and representative **DISA STIG CCIs** - and tags a
+  **disposition** derived from the source section + wording: shipped → Fixed/Improved, risk → Regressed/Open,
+  debt → Open, upcoming → Planned. `renderComplianceSection` appends a table (Change · Disposition · 800-171 ·
+  800-53 · STIG CCIs) + a fixed/improved/regressed/open/planned **rollup** to the security brief (codes scrubbed
+  from the change title to honor the security view's no-ADR-IDs rule). `renderPoamCsv` emits a CSV whose column
+  order matches the **eMASS POA&M import template** (Control Vulnerability Description, Security Control Number,
+  Security Checks=CCIs, Status[Completed/Ongoing], Severity[CAT II/III], Mitigations, Recommendations, …), one
+  row per mapped item, fully quoted/escaped; the "Source Identifying Vulnerability" column carries the change
+  source (ADR/increment) for analyst traceability.
+- **HONESTY (load-bearing):** this is a **DRAFT keyword crosswalk, not an authoritative assessment.** The
+  section, the CSV recommendation column, and the export toast all say the control/CCI selections MUST be
+  validated by a security analyst against the applicable RMF baseline + current STIG/CCI list before use in an
+  assessment or eMASS. We generate a defensible STARTING POINT, never a compliance claim.
+- **Wiring:** `GET /api/brief/poam` (builds the update, returns `{csv, rows, filename}`); `bridge.engineeringBriefPoam`;
+  an **Export POA&M (CSV)** button in the Reports panel shown ONLY for the Security role, downloading the CSV
+  via a Blob. Brief preview text enlarged (12→13.5px) + higher contrast (`--txt-1`, styled H1/H2).
+- **Tested:** `compliance.test.ts` (6) - maps only security items, correct control families/CCIs/disposition,
+  markdown has the disclaimer+table+rollup, CSV has the eMASS headers + one row per item + escaping, empty
+  update degrades honestly. All 31 brief tests green; the security-brief "no ADR IDs" test still passes.
+
+### Relates to
+
+ADR-0116/0117 (the reports panel this extends), ADR-0070 (the engineering-update generator this maps from).
+
+## ADR-0123 - P-REPORT.7: TTS-friendly podcast/read-aloud, Listen cost note, NotebookLM link
+
+**Date:** 2026-07-02
+**Status:** Accepted - BUILT + tested. NO version bump.
+**Increment:** P-REPORT.7.
+
+### Decision
+
+Three voice/report tweaks.
+
+- **speakable(text) (exported, pure, in engineering_update.ts).** Read aloud, technical tokens sound wrong -
+  ADR/increment codes become letters-and-digits, a middot is silence, inline-code keeps its backticks. It
+  strips fenced/inline code + markdown + heading hashes, removes ADR/increment/issue/version codes AND
+  CCI-style AA-1234 + control numbers (3.13.11), turns symbols into words/pauses, expands the worst acronyms
+  (POA&M, AAR, TTS, STT, KG, CUI), and sentence-ends each line. Applied to EVERY podcast turn (say wraps it)
+  and to the read-aloud text in speakText (per-line), so both flow like speech.
+- **Listen cost note.** The report viewer shows a banner: Listen narrates the WHOLE report (ElevenLabs ~
+  $0.50-1.50); a podcast summary is shorter/cheaper. Same cost in the Listen tooltip.
+- **NotebookLM link.** The viewer banner + a generate-panel tip link to notebooklm.google.com for a free
+  two-host podcast; the viewer link COPIES the report markdown first (opens external via the window-open
+  handler) so the user pastes it into a NotebookLM source and hits Audio Overview.
+
+### Verified
+
+Typecheck clean; 35 brief tests green (4 new speakable tests). Live: security podcast scriptText has no
+ADR/increment/CCI tokens; viewer note shows the $0.50-1.50 cost + NotebookLM link; generate-panel tip present.
+
+### Relates to
+
+ADR-0115 (voice TTS/mic), ADR-0070/0116 (the podcast/brief this speaks), ADR-0121 (the Listen UX this notes).
+
+## ADR-0124 - P-REPORT.8: change-annotated dependency graph + schema map annexes + STIG .ckl
+
+**Date:** 2026-07-02
+**Status:** Accepted - BUILT + tested. NO version bump.
+**Increment:** P-REPORT.8.
+
+### Decision
+
+The technical engineering reports (developer + security) gain two visual ANNEXES, and the security report can
+export a native STIG Viewer checklist.
+
+- **New pure module harness/brief/change_graph.ts.** From git `diff --numstat` + `--name-status` over a range
+  (default: the last up-to-10 commits; working-tree fallback on a shallow repo), it groups changed files into
+  the architecture layers (renderer / desktop / harness / scanner / tools / extensions / core), sums +added /
+  -removed lines per layer + file count, tags each by net direction, and links the dependency edges. It emits
+  BOTH a hand-built styled **SVG** (layered by dependency depth, green=grew / red=shrank / blue=changed, with
+  the line counts + a magnitude bar) AND **Mermaid flowchart** code marked `%% lucid:changegraph` (copyable,
+  importable into draw.io). A parallel **data-schema map** (`buildSchemaChanges`) flags changed files that back
+  a data store (DuckDB, personalization KG, settings, cred-vault/whitelist, sessions, report store) and draws
+  file → store links, again as SVG + Mermaid (`%% lucid:schema`). `renderAnnexes` appends "Annex A - dependency
+  graph" and "Annex B - data schema changes" (heading + change table + copyable Mermaid).
+- **Backend (dev.ts):** `/api/brief` runs git (Bun.spawnSync, fail-soft) and appends the annexes for the
+  developer + security roles only; `/api/brief/ckl` returns the STIG checklist.
+- **Renderer:** `enhanceReportBody` (now also run on the generate-panel preview) swaps our marked Mermaid blocks
+  for the styled SVG + a "Copy Mermaid (draw.io)" button + the raw Mermaid in a collapsible; it tags each Annex
+  H2 `.annex-break` so the print doc starts each annex on a NEW PAGE (`break-before:page`) with the SVG printed
+  as an image (Mermaid source hidden in print). Security-report exports row now offers **POA&M (CSV)** +
+  **STIG (.ckl)**.
+- **STIG .ckl (compliance.ts `renderCkl`):** one `<VULN>` per control-mapped change, each with the CCIs as
+  `CCI_REF` STIG_DATA, disposition → STATUS (NotAFinding / Open / Not_Reviewed), CAT II/III → severity, and the
+  change source in FINDING_DETAILS. Opens directly in STIG Viewer.
+- **HONESTY:** the .ckl `Vuln_Num`/`Rule_ID` are SYNTHETIC (`LUCID-Vnnn`), not from a published benchmark, and
+  every artifact (checklist COMMENTS, export toast, annex text) says it is a DRAFT crosswalk for analyst
+  validation - not a benchmark scan or an authoritative control assessment.
+
+### Verified
+
+Typecheck clean; 43 brief tests green (7 change-graph: numstat/name-status parse skipping binaries, layer
+grouping + net status, marked/classed Mermaid, SVG nodes, schema map, annex markdown, empty-degrades; 1 CKL:
+well-formed XML, one VULN per item, CCI_REFs, mapped statuses). Live: developer brief carries both annexes +
+Mermaid over real git ("+4326 / -142 across 52 files"); the viewer + preview render 2 styled SVGs (20-rect
+dependency graph) + Copy-Mermaid buttons; print doc has `.annex-break` + `break-before:page` + the SVG; the
+`.ckl` export downloads 17 VULNs. License header green on the new module. No console errors.
+
+### Relates to
+
+ADR-0120/0122 (the report print + compliance crosswalk this extends), ADR-0001 (the layered architecture the
+graph mirrors), CLAUDE.md invariant 10 (the frozen-schema contract Annex B watches).
+
+## ADR-0125 - P-APPEAR.1: personalized chat background (ambient 25% wash + flashlight-on-hover)
+
+**Date:** 2026-07-02
+**Status:** Accepted - BUILT + verified. NO version bump.
+**Increment:** P-APPEAR.1.
+
+### Decision
+
+The user can set a personal background image for the chat interface, shown two ways:
+- **Ambient** - the image faintly (25% opacity) behind the whole chat, subtle enough not to distract.
+- **Flashlight** ("dark room") - the chat background stays black, and the image is revealed ONLY under the
+  cursor, at 25%, via a radial mask that follows the mouse - like sweeping a flashlight across a dark room.
+
+- **Storage (own file):** `desktop/chat_bg.ts` persists `{ image (data URL), mode, opacity }` to
+  `~/.omp/lucid-chatbg.json` - deliberately SEPARATE from the main settings JSON so the hot `settings load()`
+  never parses a multi-MB image. A ~9 MB image cap (12 MB data URL), mode/opacity validated, read-directly
+  (no stat-then-read / CodeQL TOCTOU). `GET/POST /api/chat-bg`; `bridge.chatBackground/setChatBackground`.
+- **Render:** a `.chat-bg` layer sits behind the chat content (which gets `z-index:1`). `applyChatBg` sets the
+  inline `background-image` (data URL - allowed by `img-src data:`) and toggles `.ambient` / `.flashlight`.
+  Flashlight masks the layer with `radial-gradient(circle var(--bg-r) at var(--mx) var(--my), ...)`, and a
+  `mousemove` on `.center` writes `--mx/--my` (mouseleave parks it off-screen). Reduced-motion drops the fade.
+  Loaded + applied at boot.
+- **Settings:** a new "Chat background" card (Settings, above Developer) with an image picker (file → FileReader
+  → data URL), a Display select (Off / Ambient / Flashlight), a thumbnail preview + Remove, and a note
+  explaining both modes. Uploading with no mode set defaults to Ambient. Client caps the file at ~9 MB with a
+  clear toast before upload.
+
+### Verified
+
+Typecheck clean; license header on the new module. Live preview: endpoint saves/loads + reports the mode; a
+test gradient at Ambient shows a faint 25% wash behind the readable chat; Flashlight shows the image revealed
+only in a soft cursor-tracked spotlight over black; the settings card renders the picker + Display select +
+note; boot loads + applies. No console errors. (Test image reset afterward so users start clean.)
+
+### Relates to
+
+ADR-0011 (settings store this sits beside), the renderer CSP (`img-src data:` already permits the background).
+
+## ADR-0126 - P-PREVIEW.5: preview markup tools (pen/rect/text) + Browse-cwd + status-line cleanup
+
+**Date:** 2026-07-02
+**Status:** Accepted - BUILT + verified. NO version bump.
+**Increment:** P-PREVIEW.5.
+
+### Decision
+
+- **Markup on the preview.** A `<canvas>` overlays the preview iframe. A single **Markup** toolbar button
+  drops a tools popover - **Pen** (freehand), **Rectangle** (rubber-band), **Text** (a floating input that
+  commits to the canvas) - each a mini hand-drawn SVG icon, plus a colour row (red/yellow/green/blue/white),
+  a **Cursor** (disarm) entry, and **Clear**. Arming a tool enables the canvas's pointer-events (so it catches
+  the mouse) and sets a crosshair/text cursor; Cursor disarms so the iframe is interactive again. Because
+  "Screenshot → chat" uses Electron's `capturePage` on the frame's screen region, the canvas markup is
+  captured TOGETHER with the rendered app - the marked-up screenshot goes to the composer for the agent with
+  NO compositing. The canvas backing-size tracks the frame via a ResizeObserver (drawing preserved on resize);
+  loading a new file clears it. New icons: `pen`, `textT`, `markup`.
+- **Browse the cwd.** A **Browse…** button opens the native OS file picker (`bridge.pickFile`, Electron) so the
+  user can open a file from their working directory and preview it themselves; in a plain browser it toasts
+  "desktop app only" and focuses the path input.
+- **Status line.** Removed **tokens/s** from the HUD done/stream line (read as noise); the readout is now just
+  "N tokens out · N context · ~$X". Raised the HUD text contrast (`--txt-3/4` → `--txt-2`) so the done line is
+  legible.
+
+### Verified
+
+Typecheck clean. Live preview: toolbar shows Open · Browse… · Reload · Markup · Screenshot→chat; the Markup
+dropdown lists Pen/Rectangle/Text (SVG icons) + 5 colour swatches + Cursor + Clear; selecting Pen closes the
+menu, arms the canvas (pointer-events auto, crosshair) and lights the Markup button; the canvas draws a pen
+stroke (exact colour), rectangle, and text (pixels confirmed). No console errors.
+
+### Relates to
+
+ADR-0096 (P-PREVIEW.* - the panel + capturePage screenshot this builds on).
+
+## ADR-0127 - P-KG-CODE.1: workspace code graph (colbymchenry/codegraph-style) + KG header padding
+
+**Date:** 2026-07-03
+**Status:** Accepted - BUILT + tested. NO version bump.
+**Increment:** P-KG-CODE.1.
+
+### Decision
+
+A **code knowledge graph** for the current workspace, in the spirit of colbymchenry/codegraph but rendered in
+LucidAgentIDE's own graph canvas - plus a vertical-padding trim on the KG header.
+
+- **New pure-ish module `desktop/code_graph.ts`.** Walks the workspace's source tree (skipping node_modules,
+  .git, .claude/worktrees, dist, vendor, .omp, …), parses each file's `import`/`require`/dynamic-import
+  specifiers, resolves the RELATIVE ones to files in the tree, and builds a file → file dependency graph in the
+  EXACT shape the graph component already consumes (`{nodes:{id,name,kind,trust,count}, edges:{from,to,relation}}`).
+  `kind` = the top-level directory so files colour by module under the existing Kind lens; `count` = degree.
+  Persisted per-workspace at `<root>/.omp/codegraph.json` (gitignored), so the panel knows whether the cwd is
+  already ingested and offers a re-sync instead of a first ingest. External packages are ignored (this is the
+  internal architecture graph, not a dependency manifest).
+- **Endpoint `/api/codegraph`:** GET = status + stored graph; POST = ingest/re-sync + fresh graph.
+- **UI:** below the KG **Relate** button, a 2px-gap vertical **stack** adds **Code graph** (toggle) and
+  **Update** (re-ingest, shown once ingested). Clicking Code graph ingests-on-first-use and renders the graph
+  in the canvas (bypassing the personalization unlock - the code graph isn't private user data); clicking again
+  returns to the personal graph. The live personal-graph refresh is suppressed in code mode. A big repo is
+  capped to the top-600 most-connected hubs for readability (full graph still stored); the scope label shows
+  `code · N files · M imports [· showing top 600 hubs]`. Selecting a node opens a side panel with its path,
+  what it imports, and what imports it.
+- **KG header padding** trimmed to 6px (ID selector, Settings unaffected).
+
+### Verified
+
+Typecheck clean; 3 code-graph unit tests green (resolves relative edges, skips node_modules/externals, node
+kind = top dir, degree counts, ingest/status/load round-trip); license header on the new module. Live: the
+builder graphs the real repo (354 source files, 754 imports across desktop/harness/tools/extensions/observable);
+the stacked buttons render (Relate / Code graph / Update, 2px), toggling ingests + renders the force graph
+(top-600 hubs), the Update button appears once ingested, and a node click shows the imports side panel. No
+console errors. `.omp/codegraph.json` added to .gitignore.
+
+### Relates to
+
+ADR-0010/P9.x (the KG canvas + graph component this reuses), ADR-0124 (the layer change-graph - this is the
+file-level companion), colbymchenry/codegraph (the inspiration).
+
+## ADR-0128 - P-KG-SYM.1: symbol-level (AST) code graph, level-picker popup, agent codegraph_query tool
+
+**Date:** 2026-07-03
+**Status:** Accepted - BUILT + tested. NO version bump.
+**Increment:** P-KG-SYM.1.
+
+### Decision
+
+The developer can build a **symbol-level** code graph (real TypeScript AST), choose file-vs-symbol in a popup
+during ingest, and optionally expose the graph to the **agent** as a queryable tool via a dedicated checkbox.
+(Directions confirmed with the user: full AST call graph · queryable tool · dedicated checkbox.)
+
+- **`desktop/symbol_graph.ts`** parses each source file with the real `typescript` compiler (`createSourceFile`,
+  JSX-aware ScriptKind) and builds a **symbol → symbol reference graph**: nodes = top-level declarations
+  (functions, classes, methods, types/interfaces, enums, consts) with their `kind`; edges = "symbol A
+  references symbol B", resolved **across files through named imports** and **within a file** through its own
+  top-level names. Node id = `file#symbol`; degree = reference count. Persisted at
+  `<root>/.omp/codegraph-symbol.json`. **HONESTY:** AST-accurate for identifier usage + import resolution
+  (far better than regex), but it is a symbol-DEPENDENCY graph, NOT a fully type-resolved call graph - it
+  doesn't resolve `obj.method()` value-typed dispatch, overloads, or dynamic dispatch. The UI + tool say so.
+  On the real repo: 355 files → 3093 symbols / 5449 refs in <1s.
+- **Level-picker popup.** Clicking Code graph now opens a modal: **File graph (fast)** vs **Symbol graph (AST,
+  a few seconds)** with the trade-offs spelled out, plus a **"Let the agent query this graph"** checkbox. The
+  chosen level threads through `/api/codegraph?level=` (GET load / POST build); the canvas caps to the top-600
+  hubs (full graph still stored). The node side panel switches to symbol semantics (kind badge, **Uses / Used
+  by**, `file#symbol` links that open the file in the IDE).
+- **Agent tool (`harness/omp/codegraph_extension.ts`).** A read-only omp `-e` extension registering
+  **`codegraph_query`**: `target` = a file/symbol/`file#symbol`, `level` = file|symbol → returns what it
+  imports/uses + what imports/uses it (blast radius), or a hubs summary. It runs in omp's subprocess (cwd =
+  workspace) and reads the stored graphs directly, so the agent gets a precise, compact answer instead of
+  grepping + reading many whole files - the token-saving payoff. Loaded ONLY when the user opts in
+  (`settings.codeGraphAgent`, `/api/codegraph/agent` POST restarts the backend); registration is defensively
+  wrapped (a failure never blocks omp launch). Dedicated toggle - the existing "AI" box stays scoped to
+  personalization-import AI extraction.
+
+### Verified
+
+Typecheck clean (root + desktop); 6 graph tests green (3 file + 3 symbol: kinds, cross-file + intra-file
+reference resolution, ingest/load); `codegraph_query` match/describe logic exercised; license headers pass.
+Live: the picker popup lists File/Symbol + the agent checkbox; building the symbol graph rendered 5095
+symbols / 1672 refs on the user's project; the symbol side panel shows kind + Uses/Used-by + file links; the
+agent toggle persists + restarts. `.omp/codegraph-symbol.json` gitignored. No console errors.
+
+### Relates to
+
+ADR-0127 (the file-level code graph this extends), ADR-0096 (the omp `-e` tool-extension pattern reused),
+`typescript` compiler API.
+
+## ADR-0129 - P-PERF.2: power/spec-aware performance tiers (battery-adaptive KG rendering + poll backoff)
+
+**Date:** 2026-07-03
+**Status:** Accepted - BUILT + tested. NO version bump.
+**Increment:** P-PERF.2.
+
+### Context
+
+On a battery-throttled laptop the app went sluggish while model calls stayed fine: the renderer main
+thread is one event loop, and the KG force simulation monopolized it. `graph.ts` runs an O(n^2)
+pairwise kernel every frame for `SETTLE=480` frames (~8s) on every mount, re-fits the camera three
+times mid-settle (the "nodes wildly pulled around" effect), and - unless the OS sets
+prefers-reduced-motion - the particle loop never parks (~30fps forever, drop-shadow filter per
+particle). Fixed `setInterval`s (1s status / 4s refresh / 15s sessions) polled regardless of battery
+or window visibility. Toasts (revealed via rAF, `ui.ts`) queued behind the sim - hence "late toast on
+KG lock." Windows power-saver stretches each frame 3-5x on battery, so work invisible on AC starves
+everything queued behind it. No code adapted to battery/CPU (audit: zero uses of the Battery API,
+`hardwareConcurrency`, or powerMonitor).
+
+### Decision
+
+A render TIER, never a data gate. New `desktop/renderer/perf_tier.ts` (pure core, kg_ops.ts pattern):
+
+- **`resolveTier(mode, signals)`** - explicit user mode always wins; `auto` derives: discharging at
+  ≤20% → `minimal`; on battery, ≤4 cores, or OS reduced-motion → `reduced`; else `full`. Unknown
+  signals NEVER degrade (no Battery API reads as plugged in) - degrade only on evidence.
+- **`pollDelay(base, tier, hidden)`** - battery tiers stretch polls 4x; a hidden window compounds 4x
+  more; work is SKIPPED while hidden and caught up on visibilitychange. The 1s/4s/15s loops in app.ts
+  now run through this (`adaptivePoll`).
+- **`graphOpts(tier)`** → `mountGraph` knobs: `full` = today (no calm, 480 settle, uncapped);
+  `reduced` = forceCalm + 240 settle + 400-node cap; `minimal` = forceCalm + 120 + 250 (reached only
+  via "Render anyway"). `capGraph` generalizes the P-KG-CODE.1 top-hubs CAP, non-mutating - the FULL
+  graph stays with the caller (search/facts/signature); only the DRAWN subset shrinks.
+- **graph.ts** gains `GraphPerfOpts` (`forceCalm`, `settleFrames`) + `setCalm()` on the handle, so a
+  plug/unplug event calms or wakes a LIVE graph in place (chip repaints; no remount, layout preserved).
+- **Minimal tier pauses the visualization, not the knowledge.** Opening the KG at `minimal` paints a
+  pause card BEFORE the decrypt ("Graph rendering is paused to save power... the agent still reads and
+  writes your knowledge") with a one-shot per-run "Render anyway". An explicit Code-graph click still
+  renders (the user asked) at minimal fidelity. The agent's KG access takes NO tier input anywhere -
+  rejecting the "lock KG to plugged-in devices" framing: data access costs milliseconds; the
+  visualization was the drain.
+- **`watchPerfTier`** samples the Chromium Battery API (`getBattery`, chargingchange/levelchange),
+  `hardwareConcurrency`, and reduced-motion in the RENDERER (works in Electron AND the dev.ts browser;
+  no main-process/powerMonitor plumbing needed). User mode persists at localStorage `lucid.perfMode`
+  (device-local like the ADR-0084 cache - a perf preference is per-machine by nature), fail-safe
+  normalized (junk → `auto`, the P-ROLE.1 pattern). A `#kgPerf` chip in the KG toolbar shows
+  `Auto · <tier>` and cycles auto → full → reduced → minimal with a toast.
+
+### Verified
+
+19 new tests (`perf_tier.test.ts`: tier matrix incl. charging-at-low-level ≠ minimal + never-degrade-
+without-evidence, backoff math, per-tier knobs, cap top-hubs/no-mutate/identity, mode persistence +
+fail-safe + notify) - suite green (1133 pass; the 5 pre-existing fs_browse Windows-host failures are
+untouched and unrelated). `make demo-P-PERF.2` proves the contract end-to-end. Typecheck clean (root +
+desktop); renderer bundle builds; sidecar pytest green. Prompt prefix untouched.
+
+### Relates to
+
+ADR-0084 (P-PERF.1 SWR cache - the sessions half of the perf epic), B-KG.1/#114 (idle-CPU frameWork
+this extends), P-KG-CODE.1 (the CAP=600 pattern generalized), P-ROLE.1 (fail-safe normalize).
+Follow-ups: P-PERF.3 (KG layout persistence + energy-based settle exit), P-PERF.4 (main-process
+session index + paginated transcripts + AC-only prefetch), P-PERF.5 (async settings write, optimistic
+model switch, build-once model picker).
+
+## ADR-0130 - P-PERF.3: KG layout continuity (in-memory) + energy-based settle exit
+
+**Date:** 2026-07-03
+**Status:** Accepted - BUILT + tested. NO version bump.
+**Increment:** P-PERF.3.
+
+### Context
+
+The "nodes wildly pulled around" complaint (and most of the KG's CPU bill) came from every mount
+re-seeding nodes on a circle and running a FIXED 480-frame O(n^2) settle with three mid-settle camera
+re-fits - on every re-open (rail switch, lock/unlock, live-refresh remount), not just first launch.
+Most layouts converge in 100-150 frames; the rest of the budget burned for nothing.
+
+### Decision
+
+Two pure helpers in `kg_ops.ts` (headless-testable, the B-KG.1 pattern), wired into `graph.ts`:
+
+- **Layout continuity.** `GraphPerfOpts` gains `positions` (seed) + `onPositions` (harvest on destroy).
+  `mountGraph` seeds every returning node at its previous x/y; only genuinely NEW nodes take the circle
+  seeding. `settleStart(seeded, total, settle)` decides the budget: fully seeded → **static paint, zero
+  sim frames** (plus the one-time zoom-to-fit the frame-checkpoint fits would have done); ≥80% seeded
+  (live refresh added a few) → short 120-frame nestle; else the full budget. `app.ts` holds
+  `kgLayoutCache` - a module-level `Map` keyed `personal` / `code:file` / `code:symbol`.
+- **Privacy boundary (ADR-0084) kept:** positions are entity-id-keyed structural metadata of the
+  ENCRYPTED store, so the cache is IN-MEMORY ONLY - never localStorage, never disk. Cold app starts
+  therefore still simulate; that cost is bounded by the second half:
+- **Energy-based early exit.** The integration loop accumulates Σv² per frame; `settleDone(ke, n,
+  frames)` ends the sim once mean per-node kinetic energy falls under `KE_REST = 0.02` (~0.14px/frame,
+  visually still) after a 30-frame grace (young layouts are near-still before forces unfold them). On
+  exit it runs the final fit (unless the user has panned/zoomed). A simulated 8%/frame decay exits at
+  frame ~64 - ~87% of the fixed budget never runs. Drag-reheats converge the same way.
+
+Non-goals, unchanged: `update()`'s position-preserving merge (already good), the reheat-on-update
+behavior, and any on-disk persistence for the (non-private) code graph - deferred until proven needed.
+
+### Verified
+
+9 new tests in `kg_ops.test.ts` (settleStart: static/nestle/cold/tiny-budget/empty; settleDone:
+rest-threshold, still-moving, grace boundary, empty graph) - suite 1142 green (the 5 pre-existing
+fs_browse Windows-host failures untouched). `make demo-P-PERF.3` proves: re-open = 0 sim frames; +4-node
+refresh = 120-frame nestle; cold open exits at frame 64 (~87% saved); grace period holds; in-memory-only
+contract stated. Typecheck clean (root + desktop); renderer bundle builds; license headers pass. Prompt
+prefix untouched.
+
+### Relates to
+
+ADR-0129 (P-PERF.2 - the tier knobs this composes with: a reduced-tier re-open is now calm AND static),
+ADR-0084 (the privacy boundary that keeps this cache off disk), B-KG.1/#114 (frameWork idle parking -
+the loop still parks after the early exit), #54 (update()'s position-preserving merge, the same idea
+applied across mounts). Follow-ups: P-PERF.4 (session index + paginated transcripts + AC-only prefetch),
+P-PERF.5 (async settings write, optimistic model switch, build-once model picker).
+
+## ADR-0131 - P-PERF.4: incremental session index, tail-first transcript pages, AC-only prefetch
+
+**Date:** 2026-07-03
+**Status:** Accepted - BUILT + tested. NO version bump.
+**Increment:** P-PERF.4.
+
+### Context
+
+The battery investigation's biggest I/O stall: `sessions.ts listSessions()` re-read and re-parsed EVERY
+session `.jsonl` under `~/.omp/agent/sessions/` on EVERY call - and the sidebar polls it (15s base) -
+so a long history cost megabytes of synchronous main-process reads per poll. `sessionMessages()` shipped
+the WHOLE transcript over the wire and into the DOM on resume, unbounded for a long chat. The ADR-0084
+SWR cache hid the PAINT latency but never reduced the backend I/O.
+
+### Decision
+
+- **Incremental index (`sessions.ts`).** A module-level `sessionIndex: Map<path, {mtimeMs, size, scwd,
+  meta}>`. `listSessions` stat()s each file and re-parses ONLY on an mtime/size change (append-only
+  .jsonl always changes both); empty/probe verdicts (`meta: null`) are cached too, so they aren't
+  re-parsed every poll just to be skipped again. Entries for deleted files are pruned per scan, scoped
+  to the scanned root (other roots - tests - untouched). The cache is cwd-agnostic (scwd stored, cwd
+  filtered at query time) so workspace switches don't invalidate it. Test seams `__sessionIndexStats` /
+  `__resetSessionIndex` (the swr_cache `__resetCache` precedent). A warm poll is now O(stat).
+- **Tail-first transcript pages.** `sessionMessages(id, limit=0, root?)` returns `TranscriptPage
+  { messages, total }` - the LAST `limit` messages (0 = all: export/audit paths unchanged in behavior).
+  Threaded through `GET /api/session?id&limit` (dev.ts) and `bridge.sessionMessages(id, limit?)`, which
+  tolerates an older server's bare array (the pre-1b wrap precedent). `app.ts resumeSession` requests
+  `RESUME_TAIL = 400` - matching the ADR-0084 cache cap - and when `total > messages.length` prepends an
+  honest `.thread-tail-note` ("Showing the last N of M") instead of truncating silently.
+- **AC-only prefetch warm.** After a session-list refresh, `warmTranscripts` (once per run) fills the
+  SWR transcript cache for the 5 most-recent uncached sessions - so even a FIRST click paints instantly -
+  but ONLY at perf tier `full` (ADR-0129): prefetch is anti-battery by definition. It runs via
+  `requestIdleCallback` (setTimeout fallback), fetches sequentially, and aborts mid-warm if the machine
+  unplugs (tier re-checked per iteration).
+
+Contract note: `sessionMessages`'s return type changed shape (array -> page) - a deliberate clean
+cutover; all three consumers (dev.ts endpoint, bridge, resumeSession) migrated in this increment, no
+compatibility alias left behind.
+
+### Verified
+
+5 new tests (`sessions_index.test.ts`: warm poll parses nothing / appended file re-parses only itself
+with fresh results, deleted-file pruning scoped per root, cached skip verdicts, tail page + true total,
+unknown-id empty page) - suite 1147 green (the 5 pre-existing fs_browse Windows-host failures untouched,
+sidecar pytest green). `make demo-P-PERF.4`: 30-session corpus - cold scan 30 parses, 10 polls add zero,
+one appended turn costs exactly 1 re-parse (fresh turn count shown), tail page last-6-of-20, AC/battery
+prefetch gate proven via resolveTier. Typecheck clean (root + desktop); renderer bundle builds; license
+headers pass. Prompt prefix untouched.
+
+### Relates to
+
+ADR-0084 (P-PERF.1 - the renderer SWR cache this feeds and bounds), ADR-0129 (P-PERF.2 - the tier gate
+the prefetch reuses), ADR-0079/0076 (ingest-session grouping the parser preserves). Follow-up:
+P-PERF.5 (async settings write, optimistic model switch, build-once model picker) - the last item from
+the battery investigation.
+
+## ADR-0132 - P-PERF.5: switch-path hygiene (optimistic model switch, write-behind lastModel, memoized load + picker)
+
+**Date:** 2026-07-03
+**Status:** Accepted - BUILT + tested. NO version bump.
+**Increment:** P-PERF.5. Closes the battery-investigation epic (ADR-0129/0130/0131).
+
+### Context
+
+Switching models/modules felt stuck on a battery-throttled laptop: `applyConfig` AWAITED the omp
+`session/set_config_option` round-trip before painting the new model name (a busy backend held the badge
+hostage); `setLastModel` did a synchronous read-parse-write-chmod on EVERY model report from omp (the
+P-LOC.1 `syncModelEnv` hook fires repeatedly); `settings_store.load()` re-read + re-parsed the file on
+every call from nearly every request handler; and the model picker re-sorted + re-rendered 100-200 rows
+on every open and keystroke.
+
+### Decision
+
+- **Optimistic switch (`app.ts applyConfig`).** Paint the switch immediately (config value, badge,
+  status, composer tools) and fire the round-trip in the background; on success adopt the server's
+  config array (source of truth), on failure KEEP the optimistic value (the prior semantic) but warn
+  honestly ("the backend didn't acknowledge") instead of failing silently. Toasts (incl. the ADR-0109
+  Fable privacy notice) now appear instantly.
+- **Write-behind lastModel (`settings_store.ts`).** `setLastModel` defers the write 250ms via a
+  generation token (no stored timer handle); a burst of flips coalesces to ONE write of the final pick.
+  `lastModel()` is read-your-writes (serves the pending value); `flushPendingSettings()` (exported;
+  used by the `process.on("exit")` hook and tests) makes flushing deterministic. ONLY this low-stakes,
+  high-frequency setter is deferred - keys/MCP/scopes stay synchronous (losing a just-saved API key to
+  a crash would be unacceptable; losing <=250ms of lastModel is not).
+- **Memoized `load()`.** Parse memoized on the file's mtime AND size (two writes can share an mtime
+  tick; a content change almost always changes byte length - the residual same-ms-same-size external
+  blind spot is accepted: this process is the file's only writer). Callers receive `structuredClone`s,
+  so today's read-modify-save pattern keeps exact semantics and a mutate-without-save bug can never
+  poison other readers. stat-then-read replaces the existsSync/read TOCTOU pair. The path is resolved
+  per call via `LUCID_GUI_SETTINGS_FILE` (test seam, immune to module-cache order; never set in prod).
+- **Memoized picker (`app.ts`).** The built rows HTML is memoized on a key covering the curated list,
+  selection, query, family-collapse state, and gov ordering - reopening the popover (the common
+  flip-between-models flow) reuses the last build instead of re-rendering.
+
+### Verified
+
+6 new tests (`settings_perf.test.ts`: read-your-writes before flush + persisted after, burst coalescing
++ idempotent flush, blank guard, external-edit invalidation (which CAUGHT a real same-mtime-tick
+staleness bug - fixed by adding size to the memo key), clone independence, missing-file behavior; no
+wall-clock waits - flush is driven deterministically) - suite 1152 green; the remaining failures are the
+5 pre-existing fs_browse Windows-host artifacts plus the known LUCID_ASKSAGE_DEBUG env leak on this
+machine (test passes with the env unset; the variable comes from a developer-mode launch, not the repo).
+`make demo-P-PERF.5`: burst -> zero writes -> one flush; 1000 memo-served loads; external-edit
+invalidation; clone safety. Typecheck clean (root + desktop); renderer bundle builds; sidecar pytest
+green; license headers pass. Prompt prefix untouched.
+
+### Relates to
+
+ADR-0129/0130/0131 (the battery epic this closes), ADR-0031/P-LOC.1 (syncModelEnv - the hot caller the
+write-behind protects), ADR-0109 (the Fable notice that now fires instantly), P-IDE.1/1d (the family
+picker the memo wraps).
+## ADR-0133 - P-AGENT: Agent Builder - visual workflow canvas that compiles to gated LUCID agents (DESIGN)
+
+**Date:** 2026-07-03
+**Status:** Accepted. Design + kickoff decisions RESOLVED. **The core epic is COMPLETE: P-AGENT.1/.2/.3/.4/.5/.6
+BUILT + tested, and P-AGENT.4-live wired end-to-end (in-app "Run ▸" button) + VERIFIED against a live Claude
+model.** A Builder-authored agent can be authored on the canvas, compiled, quarantine-gated, RUN live inside
+LUCID under the security gate + its tool allow-list (returned "Paris is the capital of France." on Haiku; the
+allow-list extension hard-blocks disallowed tools, A/B proven), and exported portably. Remaining: streaming +
+`agent_run_*` provenance events + egress registration (additive), and the deferred ADK adapters (ADR-A013). P-AGENT.1: Agent Spec + fail-closed DAG
+validator + DuckDB store + migration 0010 + new contracts values. .2: workflow canvas (`agent_builder.ts` +
+`file_store.ts` + `/api/agent` + `app.ts` wiring), verified live. .3: compiler `compiler.ts` `buildAgent(spec)
+-> AgentBundle` (tail prompt + generated try/catch-wrapped BUSL-headered omp allow-list `-e` extension +
+manifest; fail-closed + injection-safe; a test imports+runs the emitted extension). .4a: `runner.ts`
+`materializeBundle` + `composeBuiltAgentArgs` (gate-ALWAYS-first argv). .5: `import_gate.ts` untrusted-spec
+quarantine gate (keystone-#2 analogue: only a clean LOCAL spec auto-runs; imported/poisoned -> quarantined,
+proven vs the real scanner). .6: `export.ts` portable, tamper-evident (SHA-256 digest) per-target export
+(electron/web/cloud); deploy adapters + KMS signing are add-on. ADKs planned, not built (user's directive).
+**Increment:** design ADR for the P-AGENT epic (P-AGENT.1 .. P-AGENT.7). Each phase below is its own future
+session/increment with its own demo target; the frozen-contract touches (contracts.ts, a DuckDB migration,
+the prompt prefix) each get their own ADR when built.
+
+### Context
+
+The user wants a **major new "Agent Builder" capability**: a visual **workflow canvas** on which the user
+describes an agent, and **LUCID generates the agent's code for them** (they never hand-write it). The built
+agents must:
+
+1. **Run inside LUCID** through the same security-gated omp runtime, so they inherit LUCID's protections
+   (fail-closed scanner gate, delimited/untrusted content, egress whitelist + credential vault, provenance).
+2. Carry **all instructions needed to use LUCID's core features** when hosted inside LUCID.
+3. For **enterprise**, be exportable from the **private add-on repo** (`lucidagentIDEaddon`) as a standalone
+   **Electron app, web-hosted service, or cloud deployment**, and - as an enterprise-only extra - target the
+   **Google Agent Development Kit (ADK)**, the **AWS Strands Agents SDK**, and the **Azure AI Foundry Agent
+   Service (Microsoft Agent Framework)** for easy hosting. The ADK work is **planned only** in this ADR.
+4. Bake in the **lessons learned** across this project (fail-closed, lazy-load heavy deps, try/catch-wrapped
+   tool registration, delimited untrusted content, stable IDs, licensing headers, DuckDB migrations).
+
+This ADR is the architecture + phased roadmap. It deliberately writes **no feature code** yet: a capability
+this size violates "one increment per session" if built blind, and the user asked to plan the ADKs and hold.
+
+### Decision - the architecture
+
+Five layers, each mapping onto an EXISTING proven surface so we extend omp and reuse patterns (invariant #1):
+
+**1. The Agent Spec (the single source of truth).** A canonical, versioned, validated JSON document that fully
+describes an agent: identity/persona, model, the ordered **workflow** (nodes = steps: prompt / tool-call /
+sub-agent / branch / loop / human-approval; edges = control+data flow), the **tool allow-list** (only tools
+the agent may call), egress needs (whitelist entries it requests), and memory scope. The canvas edits it; the
+compiler reads it; nothing else is authoritative. Validated with the omp-injected TypeBox (same shim the tools
+use) so an invalid spec is rejected fail-closed. Every spec + node + edge has a stable `*_id` (invariant #9).
+The spec is **untrusted data** when imported from outside and is scanned before use (invariant #5).
+
+**2. The Canvas (visual workflow editor).** A new right-edge surface `#agentBuilder` (rail glyph + panel),
+built exactly like the KG canvas: reuse the hand-rolled zero-dep SVG graph in `desktop/renderer/graph.ts`
+(`mountGraph` / `GraphHandle`) and the node/side-panel/resizer patterns from the KG panel, plus the
+mutual-exclusivity rule (opening it closes Settings/KG/Preview/IDE). Nodes are workflow steps; the side panel
+edits the selected node; drag creates edges. No new dependency. New pure builder `desktop/renderer/
+agent_builder.ts` (HTML/markup, testable without a browser, like `about.ts`), new `/api/agent/*` routes on the
+bridge. The canvas serializes to / hydrates from the Agent Spec.
+
+**3. The Compiler (spec -> generated agent code).** A pure function `buildAgent(spec) -> AgentBundle` that emits
+a self-contained bundle following the FROZEN TEMPLATES already in the repo:
+   - a system prompt assembled through `harness/prompt/assembler.ts` (frozen prefix layers 1-4 unchanged; the
+     agent's persona/skills/workflow go in the volatile TAIL - invariant #6, no prefix churn);
+   - one or more omp `-e` extensions in the **exact `codegraph_extension.ts` shape** - a try/catch-wrapped
+     `export default function ext(pi){ pi.registerTool({name,label,description,approval,parameters:T.Object(..),
+     execute}) }` so a broken generated tool is simply ABSENT and never blocks the runtime (fail-soft, the
+     lesson from the `symbol_graph` lazy-load hardening this same session);
+   - the LUCID core-feature instructions (how to use the gate, preview, egress vault, codegraph_query) as
+     generated prompt/policy text;
+   - the BUSL-1.1 SPDX header on every emitted first-party file (the pre-commit hook + CI check enforce it).
+The compiler is where "lessons learned" are codified once and stamped into every agent it produces.
+
+**4. The In-LUCID Runtime.** A built agent runs through the SAME `desktop/acp_backend.ts` -> `omp acp` path as
+chat, with the **mandatory fail-closed security gate loaded first** (`harness/omp/security_extension.ts`) and
+its tool allow-list + egress whitelist applied. The autonomous multi-step case reuses the **goal loop**
+(`Backend.runGoal`, `desktop/goal_memory.ts`, `desktop/loop_report.ts`) - it is already "run a built agent to
+a condition, gated, with an After-Action Report." A built agent is thus a saved spec + its compiled bundle +
+a Run action; every tool call is scanned, every egress gated, every step a provenance event. No new trust path.
+
+**5. Persistence.** A new numbered DuckDB migration `harness/memory/migrations/0010_agent_specs.sql` (never edit
+in place - invariant #10) storing specs + build/run lineage, reusing omp Snowflake ids where available.
+
+**Enterprise export (public core writes a portable bundle; the add-on deploys it).** The public core's job ends
+at emitting a **portable, signed AgentBundle** (spec + generated code + LUCID-core instructions + manifest).
+The `lucidagentIDEaddon` private repo owns the **deploy targets**: Electron packaging, web hosting, and cloud
+deployment, plus the ADK adapters below. This mirrors the existing public/add-on split (ADR-0068/0069/A012:
+public ships schema + enforcement; the add-on ships the enterprise connectors). Export is entitlement-gated
+through the existing managed-config path.
+
+### The ADK plan (enterprise, add-on repo, PLANNED - no work yet)
+
+Deferred to a future **add-on ADR (ADR-A013)**. The AgentBundle is the neutral intermediate representation; each
+adapter lowers it to a vendor SDK. Three targets, each an enterprise "easy hosting" option:
+
+| Target | SDK / service | Lowering sketch | Hosting |
+|--------|---------------|-----------------|---------|
+| Google | **Agent Development Kit (ADK)** (open-source, Python/Java) | spec workflow -> ADK agents/tools; LUCID tools -> ADK `FunctionTool` | Vertex AI Agent Engine / Cloud Run |
+| AWS | **Strands Agents SDK** (model-driven) | spec -> Strands `Agent` + `@tool` fns; allow-list -> tool registry | Lambda / Fargate / EKS / Bedrock AgentCore |
+| Azure | **Azure AI Foundry Agent Service** (Microsoft Agent Framework, the Semantic-Kernel + AutoGen successor) | spec -> Foundry agent + tool definitions | Azure AI Foundry / Container Apps |
+
+Each adapter must preserve the LUCID invariants it can (tool allow-list, egress whitelist, delimited untrusted
+content) and clearly LABEL which host-side protections are outside LUCID's fail-closed gate once the agent runs
+off-platform. This honesty note is a hard requirement, not a footnote. Scope, feasibility, and the
+protection-parity matrix are the first deliverable of ADR-A013; nothing is built until then.
+
+### Lessons-learned the generator codifies into every agent
+
+Fail-closed on any missing scan; heavy/optional deps lazy-loaded so a missing dep degrades one feature not the
+engine (the `symbol_graph` fix this session, ADR from packaging incident); tool registration try/catch-wrapped
+(broken tool = absent, never a crash); untrusted content always delimited and late; stable `*_id`s; BUSL-1.1
+headers; DuckDB via numbered migrations; no em dashes in UI copy; never widen a managed-policy ceiling.
+
+### Invariants preserved
+
+#1 extend-omp (canvas + `-e` extensions + hooks, no fork); #3 fail-closed (invalid spec / failed scan / dead
+sidecar -> block, never run); #4 in-process gate (built agents run under the same live `pre` hook); #5 untrusted
+specs delimited + scanned before use; #6 frozen prefix (agent content lives in the tail; no PREFIX_VERSION bump
+unless a layer 1-4 change is truly needed, then its own ADR); #7/#8 any new TrustLabel is disallowed (closed
+set) and new EventNames (e.g. `agent_spec_saved`, `agent_built`, `agent_run_started`, `agent_run_gated`) land in
+`contracts.ts` as their own frozen-contract increment; #9 stable ids; #10 DuckDB migration `0010`, additive only.
+
+### Phased roadmap (each = one increment + `make demo-*` + PROGRESS 3 lines)
+
+- **P-AGENT.1** - Agent Spec contract + TypeBox validator + `0010_agent_specs.sql` + new EventNames. Demo:
+  round-trip a valid spec through save/load; a malformed spec is rejected fail-closed.
+- **P-AGENT.2** - Canvas UI (rail + `#agentBuilder` panel + `agent_builder.ts` builder + `mountGraph` reuse +
+  `/api/agent/*`). Demo: build a 3-node workflow on the canvas and serialize it to a valid spec.
+- **P-AGENT.3** - Compiler `buildAgent(spec) -> AgentBundle` emitting header-carrying, try/catch-wrapped omp
+  extensions + tail-only prompt. Demo: compile a spec; the emitted extension typechecks + passes the license check.
+- **P-AGENT.4** - In-LUCID run through omp + the fail-closed gate (Run action, provenance events, goal-loop reuse
+  for autonomous agents). Demo: run a built agent end-to-end; the gate blocks an injected malicious step.
+- **P-AGENT.5** - Untrusted-spec safety: scan + a promotion-style gate so an imported/suspicious spec can never
+  auto-run (keystone #2 analogue). Demo: a spec from an untrusted source is quarantined, not executed.
+- **P-AGENT.6** - Enterprise export: emit a portable, signed AgentBundle + target manifest (Electron/web/cloud),
+  entitlement-gated; the add-on consumes it. Demo: export a bundle whose structure matches each target contract.
+- **P-AGENT.7** (add-on, ADR-A013, DEFERRED) - Google ADK / AWS Strands / Azure Foundry adapters. Planned only.
+
+### Kickoff decisions (resolved 2026-07-03, confirmed with the user)
+
+1. **Workflow model: v1 = DAG only** (nodes + directed acyclic edges). The validator rejects cycles fail-closed.
+   Branch/loop nodes are a later P-AGENT increment, added once the spine is proven.
+2. **Trust identity: new values in `contracts.ts`** - a dedicated `AgentMode` (e.g. `built-agent`) and a dedicated
+   `ExecutionProfile` so built agents are distinctly labeled in provenance/audit. Frozen-contract change =
+   folded into P-AGENT.1 as its own contract touch (its own ADR note).
+3. **Self-modification (spec self-editing at runtime): POLICY-GATED, split by tier.**
+   - **Enterprise: OFF by default, controlled via managed policy** on the add-on's policy-management surfaces
+     (`lucidagentIDEaddon`). Reuse the `clampToManaged` ceiling (ADR-0068): managed config can deny self-edit;
+     tighten-only, never widened by the user.
+   - **Individuals: ON (easier adoption, fewer functional breaks) but SANDBOXED:** self-edits + first runs
+     execute in **audit mode / non-destructive dry-run** first (reuse the Goal Loop preflight + exec-gate dry-run
+     posture); a **lessons-learned feedback loop** writes outcomes to memory + `.md` files (mirror
+     `goal_memory.ts` + the After-Action Report); **secrets** flow through the OS-encrypted credential vault
+     (ADR-0107) and the builder **always tells the user where + how secrets are stored and advises on safety** -
+     never silent.
+4. **Bundle signing:** scheme deferred to P-AGENT.6; not blocking P-AGENT.1.
+
+### Cross-cutting Builder principles (user directive, apply across the whole epic)
+
+- **Don't assume user expertise.** The Builder **lints, tests, and uses TDD** when generating agents - it emits
+  tests and runs them (reuse the repo's test + preflight patterns), never just dumps code.
+- **Offer authoritative docs.** When a choice depends on an external SDK/API, the Builder **asks whether the user
+  wants LUCID to search official developer docs**, then **recommends an easy-to-understand course of action**.
+- **Safety-first secrets UX** (see 3 above): disclose storage location + method and advise on safety every time.
+- **Reuse Goal Loop engineering** for autonomous / self-editing runs: preflight, budget, stall detection, AAR.
+
+These sharpen the roadmap: **P-AGENT.1** now explicitly ships the new `AgentMode`/`ExecutionProfile` values, a
+`selfEdit` policy field on the spec (default on for individual, clampable off by managed config), and the
+DAG-only (cycle-rejecting) validator. **P-AGENT.4/.5** add the audit-mode dry-run + the lessons-learned feedback
+loop before any destructive self-edit runs.
+
+### Relates to
+
+ADR-0096 (omp `-e` tool-extension pattern - the generated-agent template), ADR-0128 (`codegraph_extension.ts`,
+the exact try/catch-wrapped `registerTool` shape reused), ADR-0046 (the goal loop = the autonomous run harness),
+ADR-0106/0107 (network whitelist + credential vault = built-agent egress), ADR-0068/0069/A012 (public-core vs
+private-add-on split for the enterprise surface), the same-session `symbol_graph` lazy-load hardening (the
+lazy-heavy-dep + fail-soft lesson the compiler stamps in). Future: ADR-A013 (the ADK adapters).
+
+## ADR-0134 - P-AGENT.8: Conversational Agent Builder - chat drafts a secure agent, then hands off to the canvas (DESIGN + P-AGENT.8.1 BUILT)
+
+**Date:** 2026-07-03
+**Status:** Accepted. **FEATURE-COMPLETE + verified live against Opus.** P-AGENT.8.1 (secret guardrail) + .8.2
+(chat->canvas handoff `agent_builder_open`) + .8.3 (`AGENT_BUILDER_POLICY`, frozen-prefix v7->v8) + .8.4
+(Secrets & connections panel) + .8.5 (Approve connection -> whitelist `upsertEntry`, "How do I get this?"
+doc-assist) + .8.6 (the `/agent` command that starts the interview) all BUILT + tested. Verified live: typing a
+build request (or `/agent`) makes the agent interview the user, draft a spec, call `agent_builder_open`; the
+canvas opens pre-populated; the Secrets & connections panel adds credentials to the vault (agent never sees
+values), approves connections into the whitelist, and doc-assists token setup. Detection keys on the unique
+`specJson` arg (omp renders a custom tool's TITLE as a summary, not the name). Optional future: tighten the
+policy to invoke sooner; per-entry auth binding; the site-login->screen-capture->ingest collab.
+**Increment:** P-AGENT.8.1 .. P-AGENT.8.6. Extends ADR-0133 (the Agent Builder). PREFIX_VERSION bump for .3 is
+its own increment.
+
+### Context
+
+The user wants a SEAMLESS, guardrailed on-ramp: in a normal chat window, describe a goal ("search the internet
+for DoD/DoW business-development opportunities, find who's applying, connect to my GovWin account, connect to
+Salesforce…"), and LUCID (a) recognizes it's automatable, (b) explains how it would be built, (c) confirms the
+spec, then (d) OPENS the Agent Builder pre-populated and builds the workflow - so the user never has to learn
+the canvas. It must be GUARDRAILED so the user can't accidentally build something insecure. The load-bearing
+rule (user's words): the agent must NEVER collect secret values. Credentials (GovWin password, a Salesforce API
+token the user may not know how to generate) go in the OS-encrypted vault; the agent DECLARES which secrets it
+needs and, where the user needs help, READS the official docs to walk them through generating a token - but the
+token itself only ever lands in the vault.
+
+### Decision - the flow + the guardrails
+
+The chat agent, steered by a new **AGENT_BUILDER_POLICY**, recognizes an automatable request, explains the plan
+in plain language, confirms specifics, and calls an **`agent_builder_open`** tool with a DRAFTED Agent Spec.
+`acp_backend` detects that tool_call (the `preview_open` -> `previewOpenPath` -> `preview-available` pattern,
+ADR-0096) and opens the Agent Builder canvas PRE-POPULATED with the draft; the user reviews/adjusts and
+confirms. Secrets + egress are handled by dedicated UI, never by the agent collecting values.
+
+**The security spine (grounded in the existing vault + whitelist):**
+- **Secrets are DECLARATIONS, never values.** The Agent Spec gains `secrets: SecretRef[]` (`{ name, kind,
+  purpose }`, kinds mirror `cred_vault.ts` AuthKind: jwt/oauth/saml/pem/apikey/basic). The value lives ONLY in
+  the OS-encrypted vault (`storeCredential`, never crosses to the renderer); the runtime injects it. A SecretRef
+  has NO value field - and the validator rejects a `secrets[]` entry that carries `value`/`secret`.
+- **The secret GUARDRAIL (keystone).** `harness/agent/secret_guard.ts` `scanSpecForSecrets` inspects every
+  free-text field (name/description/persona/node labels+prompts/secret purpose) for APPARENT secret VALUES
+  (PEM keys, AWS/OpenAI-style/GitHub/Slack/Google key shapes, bearer tokens, `password/api_key = <value>`).
+  `assertSecretFree` throws on any hit and is wired into `buildAgent` (compile), `saveSpecFile` + `saveSpec`
+  (persist), and (transitively via compile) the run path - so a credential can NEVER be compiled, saved, or run
+  inside an agent. Declared refs + env-var NAMES + prose stay clean (high-signal detectors, proven by tests).
+- **Egress = declared + approved.** The spec's `egress[]` become PROPOSED `WhitelistEntry`s the user approves
+  (existing `network_whitelist.ts` / `egress_policy.ts`); an entry's `auth?: AuthRef` points at a vault ref.
+- **Doc-assisted setup.** When the user doesn't know how to make a token, the agent reads the vendor's OFFICIAL
+  docs (web/RAG) and walks them through it - the resulting secret is pasted into the vault UI, not the chat.
+
+### Phased roadmap
+
+- **P-AGENT.8.1 (BUILT):** `SecretRef` in the spec + validator + `secret_guard.ts` (`scanSpecForSecrets` /
+  `assertSecretFree`) wired into compile + both save paths. `make demo-P-AGENT.8.1`. 9 new tests; full suite
+  1191 pass. This is the security FOUNDATION - everything below builds a secure spec that can't embed a secret.
+- **P-AGENT.8.2:** the `agent_builder_open` omp tool (`harness/omp/agent_builder_extension.ts`) + `acp_backend`
+  detection + the renderer opens the canvas pre-populated with the drafted spec (runs `assertSecretFree` +
+  `validateSpec` first; a leaky/invalid draft is refused, never opened).
+- **P-AGENT.8.3:** `AGENT_BUILDER_POLICY` in `assembler.ts` (the guardrail prompt: recognize automatable asks,
+  explain, NEVER collect secret values - declare refs + point to the vault, declare egress for approval, read
+  official docs for token setup, confirm before opening). PREFIX_VERSION 7 -> 8 + its own ADR note.
+- **P-AGENT.8.4:** a "Secrets & connections" panel in the canvas - lists the spec's SecretRefs with "Add to
+  vault" buttons (-> `cred_vault` via the existing IPC) + the egress domains to approve (-> whitelist).
+- **P-AGENT.8.5:** doc-assisted API setup surfaced in the flow (read official docs -> step-by-step token guide).
+
+### Invariants preserved
+
+Secrets never leave the vault (the guardrail + the no-value SecretRef); #5 untrusted content (a drafted spec is
+scanned - the import gate + the secret guard); #6 frozen prefix (the policy bump is its own increment w/ ADR);
+the handoff reuses the proven `preview_open` tool_call detection (#1 extend-omp, no fork).
+
+### Relates to
+
+ADR-0133 (the Agent Builder this extends), ADR-0096 (the `preview_open` handoff pattern), ADR-0106/0107 (the
+network whitelist + OS-encrypted credential vault this builds on), ADR-0114 (the ENGAGEMENT_POLICY pattern for a
+new frozen policy block), the P-AGENT.5 import gate (the sibling untrusted-content guard).
+
+## ADR-0135 - P-LOCAL: Local Providers - securely point LUCID at self-hosted / custom / VPN-routed LLMs
+
+**Date:** 2026-07-04
+**Status:** Accepted. **P-LOCAL.1 (foundation) + P-LOCAL.2 core BUILT + verified live.** Pure core
+(`desktop/local_providers.ts`) + vault-backed persistence (`settings_store.ts`) + 20 unit tests +
+`make demo-P-LOCAL.1`. The omp delivery mechanism is RESOLVED + verified against omp 16.0.8: the registry is
+`~/.omp/agent/models.yml` (an open provider needs `auth:"none"`; `api` = `openai-completions`), and secrets
+are delivered securely by **env-var reference** (`toOmpRuntimeOverlay` writes the env-var NAME in models.yml;
+omp's `resolveConfigValue` reads it from the child env, which LUCID injects from the vault - the secret never
+touches the file). Live: an overlay with an open Ollama + a bearer DGX-over-VPN provider made `omp models` list
+BOTH. **P-LOCAL.2 delivery WIRED + verified:** `local_providers_runtime.ts` (safe models.yml merge + vault→child
+env + egress) is called from `main.ts` at dev-server spawn (the omp acp runs in the dev child, but the vault is
+main-only, so MAIN resolves secrets and injects them into the child env; models.yml holds only env-var refs).
+Integrated live proof: the real materializer wrote `~/.omp/agent/models.yml` and `omp models` with the injected
+env listed both providers. Remaining .2 = a runtime apply/restart trigger (a provider added after launch takes
+effect on restart); .3 = the Settings UI.
+**Increment:** P-LOCAL.1 .. P-LOCAL.3 (this ADR covers the epic; each phase is its own session/demo).
+
+### Context
+
+The user wants to run **privately hosted / custom LLMs** from inside LUCID: Ollama, llama.cpp, vLLM, LM Studio,
+or a box reachable only over a **VPN tunnel** (e.g. a NVIDIA DGX Spark in a Vienna, VA office behind a SonicWall
+VPN). It must be **easy and secure**: multiple servers + models, the API token/OAuth stored the most secure way,
+and it must work "regardless of the model." A new **default-collapsed "Local Providers"** subsection sits under
+Settings → Providers.
+
+**Feasibility (verified against the installed omp 16.0.8 / `@oh-my-pi/pi-ai`):** omp already has first-class
+**Ollama + any-OpenAI-compatible** provider support. Its `models.json` / `--config` overlay accepts a
+`providers` map keyed by provider id, each carrying `baseUrl`, `apiKey`, `api`, `headers`, `compat`, and a
+`models[]` list (fields `id/name/reasoning/input/cost/contextWindow/maxTokens`). So LUCID does **no inference of
+its own** - it captures the declaration + secret, emits the overlay, and registers egress. Custom models then
+appear in the existing picker automatically.
+
+### Decision - the architecture (reuse LUCID's proven surfaces; extend omp, don't fork)
+
+- **A Local Provider is a DECLARATION, never a secret** (`LocalProviderDef`: id, name, `ompProvider` slug,
+  `baseUrl`, `api`, `authKind` none|bearer|apikey|basic, `zone` internal|external, `models[]`, `vaultRef`). The
+  API key/token lives ONLY in the **OS-encrypted vault** (`cred_vault.ts`, safeStorage/DPAPI) - strictly better
+  than the status-quo plaintext `lucid-gui.json` that frontier keys still use. The def carries an **opaque
+  `vaultRef`**, never the value; the settings file never holds a secret (proven by a test + the demo).
+- **Fail-closed validation** (`validateLocalProvider`): non-http(s) base URL, bad slug, zero models, duplicate
+  model ids rejected; a provider id that would **shadow a built-in vendor** (anthropic/openai/…) is refused so a
+  local box can never hijack real-vendor routing. `scanForInlineSecret` refuses a def where a key was pasted
+  into a name/URL/model field (mirrors the ADR-0134 Agent Builder secret guardrail).
+- **omp overlay emitter** (`toOmpConfigOverlay`): emits the exact `{ providers: { <id>: {...} } }` shape for the
+  ENABLED, runnable providers; the secret is injected by the MAIN process from the vault at spawn time. A
+  provider whose required secret is **absent is SKIPPED, never emitted half-authenticated** (fail-closed).
+- **Egress** (`egressProposal`): the endpoint host becomes a whitelist proposal (domain or IP, honoring
+  internal/external zone) with an `AuthRef → vaultRef`. The existing whitelist already matches internal IPs and
+  CIDR - exactly what a LAN/VPN endpoint needs.
+- **VPN posture (route-to-tunnel, user-chosen):** the OS VPN client (SonicWall NetExtender / Mobile Connect)
+  brings up the tunnel; LUCID **routes to the tunnel endpoint** (internal DNS/IP:port), stores the key in the
+  vault, and (P-LOCAL.2/.3) adds a reachability/TLS health check. LUCID does NOT manage the VPN client itself -
+  smaller attack surface, keeps the tunnel under the enterprise's audited client.
+
+### Phased roadmap
+
+- **P-LOCAL.1 (BUILT):** pure core `local_providers.ts` (types, validation, overlay emitter, egress proposal,
+  inline-secret guard) + `settings_store` CRUD (`listLocalProviders`/`upsertLocalProvider`/`remove`/`setEnabled`).
+  17 tests + demo. No frozen-contract touch.
+- **P-LOCAL.2:** materialize the overlay for `omp acp` at spawn (`acp_backend`/`dev.ts`): decrypt the vault
+  secret in MAIN, deliver via a transient 0600 main-only overlay (or child env for known ids), pass `--config`;
+  auto-register the endpoint in the whitelist with an `AuthRef`. Live-verify a custom model routes to a local
+  OpenAI-compatible endpoint (and that `omp models --config` lists it).
+- **P-LOCAL.3 (BUILT):** the default-collapsed "Local Providers" card under Settings → Providers -
+  `desktop/renderer/local_providers_ui.ts` (`localProvidersCardBody`/`draftFromForm`/`providerStatus`) + app.ts
+  wiring (`hydrateLocalProviders`/`addLocalProviderFromForm`/delete/enable) + `/api/local-providers` CRUD in
+  dev.ts + bridge methods. Add a provider from the form; an authed provider's key is stored to the vault
+  (`bridge.credStore`) and the def saved with only the `vaultRef`. 8 tests. Verified live: the card renders
+  after "Providers", auto-collapsed, expands on click. Remaining polish: inline edit/re-key, a reachability/TLS
+  "test connection", an external-zone toggle, and an apply-without-restart trigger.
+
+### Invariants preserved
+
+#3 fail-closed (missing-secret providers are dropped, never run open); secrets never leave the OS vault and never
+reach the renderer (invariant carried from ADR-0107); #1 extend-omp-not-fork (omp's own custom-provider overlay);
+the whitelist + vault are reused, not reinvented. No app version bump; no EventName/contract change in .1.
+
+### Relates to
+
+ADR-0106/0107 (network whitelist + OS-encrypted credential vault reused here), ADR-0007 (AskSage's custom
+base-URL provider - the closest prior art), ADR-0134 (the secret-guardrail ethos `scanForInlineSecret` mirrors),
+ADR-0029 (the model-picker gating a custom model flows through).
+
+## ADR-0136 - P-VISION.1: paste / drop images into the composer (multimodal user prompts)
+
+**Date:** 2026-07-04
+**Status:** Accepted - **BUILT + verified live.** Pure `desktop/renderer/composer_attachments.ts` + composer
+wiring + the send pipeline (renderer → `/api/chat` → `acp_backend.prompt` → ACP `session/prompt`). 11 unit
+tests; full suite 1293 pass; tsc clean. First step of the broader multimodal/preview-review work (agent live
+DOM review is P-PREVIEW.6; screenshot→RAG is deferred P-RAG.2).
+**Increment:** P-VISION.1.
+
+### Context
+
+The user wants to paste a snipping-tool / desktop screenshot straight into the prompt bar, see a **mini
+thumbnail just above the prompt bar**, add instructions, and send **only on Enter/Send** (no auto-push). Today
+the composer is text-only: `/api/chat` takes `{ text }` → `session/prompt: [{type:text}]`. But omp's ACP
+`session/prompt` already accepts `(text|image)[]` content (verified against `pi-ai` `ImageContent = {type:"image",
+data:<base64>, mimeType}`; the agent's own `preview_screenshot` tool proves the image round-trip) - so only the
+USER-input pipeline needed wiring.
+
+### Decision
+
+- **Attachments are validated image data URLs** (`composer_attachments.ts`, pure): `parseImageDataUrl` accepts
+  only `image/(png|jpeg|webp|gif)` base64 (SVG excluded - script risk); `acceptAttachment` enforces
+  count (≤6) + size (≤12 MB) fail-closed; `promptImageBlocks` → the `{type:"image",data,mimeType}` blocks omp
+  wants. **No data URL is ever interpolated into HTML** - `thumbStripHtml` renders `<img>` shells and the
+  caller sets `img.src` as a DOM PROPERTY (mirrors the existing `screenshotPreviewToChat` rule).
+- **Staged, never auto-sent.** Pasted/dropped images land in `state.attachments` and render as thumbnails in a
+  `#composerThumbs` strip above the prompt bar (each with a remove button). They travel only when the user
+  hits Enter or Send; the thread message renders the images inline; the strip clears on send.
+- **The pipeline carries content blocks.** `send()` computes `promptImageBlocks(state.attachments)` →
+  `bridge.sendPrompt(text, onEvent, images)` → `/api/chat { text, images }` (defensively filtered) →
+  `backend.prompt(text, emit, images)` → `session/prompt: [{type:text,text:body}, ...imageBlocks]`. All
+  existing callers (goal loop) pass no images and are unchanged.
+
+### Invariants preserved
+
+No frozen-prefix change (the image blocks ride in the user-turn tail, like text); no new EventName; the XSS
+rule (data URLs set as properties, strict data-URL regex) holds; existing text-only send path unchanged.
+No app version bump.
+
+### Relates to
+
+ADR-0096 (the preview screenshot→image-content pattern this generalizes to user input), the agent
+`preview_screenshot` tool (proves omp's image round-trip), P-PREVIEW.6 (agent live DOM review - next),
+P-RAG.2 (screenshot→RAG ingest - deferred until RAG lands).
+## ADR-0137 - P-AGENT.9: allow-list chip editor, live per-turn canvas collaboration, portable share/import with credential provisioning
+
+**Date:** 2026-07-04
+**Status:** Accepted - BUILT + tested. NO version bump.
+
+**Context.** Three gaps after the P-AGENT.8 epic: (1) the tool allow-list had no management UI - the node
+dropdown could ADD tools (auto-allow-list) but nothing could REMOVE one, so there was no way to block a tool
+without deleting steps; (2) the chat->canvas handoff opened the Agent Builder once - during a collaborative
+build the user couldn't watch the draft evolve; (3) the enterprise export (P-AGENT.6) targets deploy adapters,
+not user-to-user sharing - and a shared agent said nothing about HOW its next user obtains the credentials it
+declares.
+
+**Decision.**
+1. **Chips (renderer-only).** `toolChipsHtml` renders `spec.tools` as removable chips (in-use badge per
+   tool-node reference) + an add-picker from `TOOL_CATALOG`. Removing a chip edits `spec.tools`; enforcement is
+   unchanged - the compiled per-agent allow-list extension + the fail-closed gate already deny off-list calls,
+   and the validator flags steps referencing a removed tool (nothing fails silently).
+2. **Live collaboration.** `agent_builder_open` is now re-callable per turn: `openAgentBuilderWithSpec`
+   detects `abOpen && same spec_id` and updates the canvas IN PLACE ("Draft updated" toast; Secrets flyout only
+   re-surfaces when the draft GAINS secret/egress needs). AGENT_BUILDER_POLICY (frozen layer 3) grew three
+   rules: re-open per changed turn + explain/recommend/ask, warn benefit/risk/mitigation for powerful grants
+   (bash/eval/wildcard egress/write), and declare `provisioning` per SecretRef. Prefix-hash regression re-run
+   green (the prefix stays byte-stable - content changed BY an increment, not per-request).
+3. **Portable share/import.** New `harness/agent/portable.ts`: `.lucid-agent.json` = {format, version,
+   exported_at, spec_digest (sha256 over canonical key-sorted JSON), setup_md, spec}. Export refuses invalid or
+   secret-carrying specs (assertSecretFree); parse re-validates, digest-checks (tamper-evidence), re-scans.
+   `SecretRef.provisioning` (spec.ts, additive+optional): {method: "user-input"|"jit-ticket", instructions,
+   ticket:{system, template (string map), rationale}} - so an imported agent TELLS its user to paste a value
+   into the OS-encrypted vault, or to request a Just-In-Time token from their KMS via IT ticketing (sample
+   ServiceNow-style fields + rationale). Provisioning free text is scanned by secret_guard (a pasted value is a
+   guardrail violation) AND included in `collectSpecText` (imported help-text is injection surface).
+4. **Import trust is persistent.** Trust sidecar `<id>.trust.json` in file_store (spec stays pure/portable);
+   `/api/agent/import` runs the P-AGENT.5 gate (scanner sidecar via lazy ScannerClient in dev.ts, fail-closed)
+   and persists the label; `/api/agent/run` now loads the STORED label (imported-not-approved is refused);
+   `/api/agent/trust` promotes untrusted/suspicious -> trusted after explicit review; QUARANTINED can never be
+   approved from the UI. Renderer shows a trust banner with "Approve after review".
+
+**Consequences.** A shared agent file carries workflow + credential NAMES + acquisition guidance, never
+values; recipients re-scan on import and must approve before it runs. The chip editor makes the allow-list the
+user-facing control surface it was designed to be. The catalog remains hand-curated (renderer constant) -
+deriving it from the live omp instance stays future work.
+
+## ADR-0138 - P-AGENT.10: n8n interop (export/import translator) + enterprise connector seam
+
+**Date:** 2026-07-04
+**Status:** Accepted - BUILT + tested. NO version bump.
+
+**Context.** The n8n comparison (see PROGRESS 2026-07-04) surfaced two ownership asks: move a LUCID-built
+workflow into a privately hosted n8n (maximize compatibility), and pull an n8n workflow into LUCID (own your
+workflow). Also needed: a documented public/private seam for connector-class features, following the
+established split (ADR-0068/0069/A012): public core ships complete features on portable artifacts; the
+private add-on (`lucidagentIDEaddon`, sibling checkout) ships the connectors into private infrastructure.
+
+**Decision.**
+1. **Translator is public + pure** (`harness/agent/n8n.ts`). Export: manualTrigger + one node per LUCID step
+   wired along spec edges; approval steps become REAL `n8n-nodes-base.wait` nodes (n8n genuinely halts -
+   stronger than our v1 prompt-line approvals, closing that gap on the n8n side first); subagent ->
+   `executeWorkflow` placeholder; prompt/tool -> `noOp` carrying instructions in node `notes`. A provenance
+   stickyNote embeds setup guidance + the full portable `.lucid-agent` file in a ```lucid-agent fence - the
+   ROUND-TRIP ANCHOR: re-importing the exported workflow restores the exact spec, digest-checked.
+2. **Rejected: emitting `@n8n/n8n-nodes-langchain.agent` wiring.** It couples the export to n8n model
+   credentials + fast-moving typeVersions; a scaffold of core nodes imports cleanly on any n8n and the human
+   finishes the wiring with the sticky's guidance.
+3. **Import maps honestly, never silently.** wait->approval, executeWorkflow->subagent, httpRequest->`read`
+   tool + URL host harvested into egress, code/AI/unknown -> prompt steps carrying node intent + compacted
+   parameters; node credentials -> SecretRef NAMES (kind guessed from cred type) with user-input provisioning;
+   loop-back connections dropped (DAG invariant; native loops arrive with P-AGENT.11c); trigger nodes noted,
+   not mapped (P-AGENT.14). Every mapping compromise lands in `notes[]` -> description + import toast.
+4. **Both import formats, one gate.** `/api/agent/import` detects portable vs n8n JSON; EITHER path funnels
+   through the P-AGENT.5 quarantine gate (scanner, fail-closed) + trust sidecar + human approval. Translation
+   never widens trust.
+5. **Enterprise seam** (`desktop/addon_seam.ts`): add-on root = env `LUCID_ADDON_DIR` else sibling
+   `lucidagentIDEaddon` (the folder the user calls "LUCIDagentideadd-on" - the env override covers any
+   rename). Connector contract: `connectors/<name>/src/cli.ts <verb> --file <artifact>` printing ONE JSON
+   line {ok, detail, url?}. The seam only probes presence + dispatches child processes - add-on code is NEVER
+   loaded into the engine process (isolation + licensing hygiene). Absent add-on => honest "not installed"
+   note in the UI, never a fake success. The n8n PUSH connector (POST <instance>/api/v1/workflows,
+   X-N8N-API-KEY) is add-on work, spec'd by this contract.
+
+**Consequences.** `n8n ⇩` exports a file n8n imports as-is; `n8n ⇧` pushes when the add-on is present;
+importing either share format stays review-gated. Fidelity is deliberately scaffold-grade in v1; the
+round-trip anchor keeps LUCID<->LUCID lossless even when the file traveled through n8n.
+
+## ADR-0139 - P-AGENT.11: the step-runner - enforced approvals, real sub-agents, then branching (DESIGN)
+
+**Date:** 2026-07-04
+**Status:** Accepted. **11a BUILT + tested** (same day, continued at user direction): `harness/agent/segments.ts`
+(splitSegments + renderSegmentPrompt + the `SegmentedRun` keystone machine — the post-approval prompt does not
+EXIST until approve()), segment orchestration + 30-min-TTL paused-run registry in desktop/agent_run.ts
+(expired approval = refusal, fail-closed), `/api/agent/run` returns `paused`, `/api/agent/run/approve`
+resolves, Run-flyout approval card. 10 keystone tests green. **11b BUILT + tested** (same day): subagent nodes
+are boundaries too — `SegmentedRun` halts in "awaiting-subagent" and desktop/agent_run.ts runs the CHILD spec
+via its own compiled bundle (child allow-list) under the child's STORED trust label (canAutoRun — a
+non-trusted child refuses); `subagentGuard` fail-closes unset child / missing spec / cycle / depth >
+SUBAGENT_MAX_DEPTH(3) / child-with-approvals (nested human halts refused, not parked); child output flows
+into the parent's next segment prompt. Recursion covers grandchildren (guards re-run per level). **11c BUILT + tested** (same day): `branch`
+node kind (spec v2) with labeled outgoing edges; the branch segment's prompt demands a terminal
+`CHOICE: <option>` line; `parseBranchChoice` is strict (no parseable choice ⇒ the run FAILS with the
+options named — the runner never guesses); `takeBranch` skips the not-taken subtree via reachability
+(descendants of the branch minus those reachable from the chosen edge) — skipped approvals/subagents
+never halt, join nodes and parallel chains are untouched; decisions land in the run trace.
+
+**Context.** The v1 compiler lowers the DAG into a numbered system prompt; `approval` lowers to "pause for
+human approval" PROSE and `subagent` to "run sub-agent <id>" prose (compiler.ts stepLine). A guarantee the
+model can skip is not a guarantee. n8n's engine executes nodes discretely; we adopt the piece of that that
+matters for security first.
+
+**Decision (phased).**
+- **11a - enforced approval halts.** Split topo order into SEGMENTS at approval boundaries. Run each segment
+   as its own gated `omp -p` (existing runBuiltAgent mechanics), carry the prior segment's final text forward
+   as context. At a boundary, STOP; surface an approval card in the canvas (who/what/segment output); only an
+   explicit approve starts the next segment. Deny ends the run with a recorded reason. Keystone test: a
+   workflow with an approval node NEVER emits post-approval output without the approve action - treat like
+   the P4.3 promotion gate (stop-the-line on regression).
+- **11b - real sub-agents.** `subagent` steps invoke `runBuiltAgent` on the CHILD spec: child's own compiled
+   allow-list + stored trust label enforced (a non-trusted child refuses exactly like a top-level run); depth
+   cap 3; cycle guard on the spec_id chain. Keystone test: child runs under ITS allow-list, not the parent's.
+- **11c - branching.** New node kind `branch` + edge `label` ("yes"/"no"/custom). v1 semantics: the model
+   running the branch segment picks the outgoing edge and must emit a machine-parseable choice line; the
+   runner follows only that edge and records the rationale in the run trace. Deterministic expression
+   predicates deferred until P-AGENT.13 traces exist to debug them. NODE_KINDS widens - spec_version bump
+   bundled with P-AGENT.15's v2 (one migration, not two).
+
+**Consequences.** Approvals become real security controls; the n8n export's wait-node mapping becomes
+symmetric with LUCID behavior; the compiler keeps emitting the same prompt text as fallback for one-shot mode.
+
+## ADR-0140 - P-AGENT.12: dynamic tool catalog - MCP servers + live omp discovery (DESIGN)
+
+**Date:** 2026-07-04
+**Status:** Accepted. **BUILT + tested** (same day). Naming VERIFIED against the pinned omp bundle: MCP tools
+register as `mcp__<server>_<tool>` with the `<server>_` prefix de-duplicated — the catalog offers EXACTLY
+those names so the compiled allow-list matches at tool_call time (a mismatch denies, fail-closed).
+desktop/mcp_probe.ts speaks MCP JSON-RPC over streamable HTTP (initialize → initialized → tools/list,
+mcp-session-id honored, SSE-framed bodies tolerated, bearer token from the server entry), 5-min cache,
+tested against a LIVE in-process fixture server; legacy SSE-transport entries are skipped with an honest
+note. `/api/agent/tools` serves the dynamic half; the renderer merges it with the static TOOL_CATALOG —
+no MCP servers (or probe failure) degrades to exactly the built-in picker. Both pickers group
+“MCP tools (third-party)” with per-tool provenance titles; AGENT_BUILDER_POLICY's risk bullet now names the
+MCP server when warning (prefix regression re-run green). Live-omp tool enumeration remains future work.
+
+**Context.** TOOL_CATALOG is a hand-curated 17-entry renderer constant (ADR-0137 stub). n8n's moat is 1,500
+integrations; ours is MCP - the user's configured MCP servers (settings_store `listMcpServers`) already carry
+exactly the integrations they chose, and omp exposes their tools at runtime.
+
+**Decision.** New `/api/agent/tools`: static catalog ∪ enabled MCP server tools (namespaced
+`mcp:<server>:<tool>`, described from the server's tool listing) ∪ omp-registered tool names when a session
+is live. Renderer picker groups by source with a provenance chip (built-in vs MCP); MCP tools carry a
+risk note (third-party surface) in the picker AND in the chat agent's risk-warning policy. The compiled
+allow-list extension already string-matches names, so namespaced entries enforce unchanged. Fail-soft: no
+MCP servers => exactly today's static catalog.
+
+**Consequences.** The Builder's integration surface scales with the user's MCP config; no bespoke connector
+treadmill; the catalog stub in ADR-0137 closes.
+
+## ADR-0141 - P-AGENT.13: per-run execution trace in the canvas (DESIGN)
+
+**Date:** 2026-07-04
+**Status:** Accepted. **BUILT + tested** (same day) with one recorded DELTA from the sketch below: the desktop
+engine holds agent_obs.duckdb READ-ONLY (omp's gate child is the single writer — the same constraint that
+put authored specs in workspace files, ADR-0133), so v1 traces are FILES under `.omp/agent-runs/traces/
+<run_id>.json` (`harness/agent/trace.ts`: fail-soft TraceRecorder — recording never breaks a run; snippet
+truncation; corrupted files skipped; path-safe ids). DuckDB ingestion + EventName wiring move to the future
+gate-child pipeline increment. Instrumented: one-shot runs, segments, approval decisions, sub-agent hops
+(child runs get their OWN trace, linked by run id + lineage); the run's stable run_id doubles as the
+approval-resume handle (invariant #9). Canvas: Runs flyout → trace list → per-step detail. Node-highlighting
+on the canvas from a selected trace stays future polish.
+
+**Context.** n8n shows every execution with per-node I/O; our Run panel returns final text only, while the
+harness already owns lineage (runs/lineage.ts), replay (runs/replay.ts) and the agent_obs DuckDB.
+
+**Decision.** agent_run.ts parses the gated child's event stream (gate stderr lines + omp output) into step
+records {run_id, spec_id, node_id?, tool, started_at, finished_at, blocked, reason} written via a NEW numbered
+migration (invariant #10) to agent_obs. Attribution v1 maps tool calls to tool-kind steps by allow-list name
+(prompt steps get segment-level attribution until P-AGENT.11 segments exist - ordering noted). Canvas: a Runs
+flyout lists recent runs; selecting one highlights nodes with per-step status + a detail panel. Any new event
+names extend the EventName enum in contracts.ts - frozen-contract change, done as its own micro-increment
+within the build (invariant #8, exact names only).
+
+**Consequences.** "Click a node, see what it did" - and P-AGENT.11's approval cards get their audit surface
+for free.
+
+## ADR-0142 - P-AGENT.14: triggers - scheduled runs first, gated webhooks second (DESIGN)
+
+**Date:** 2026-07-04
+**Status:** Accepted. **Phase 1 (scheduled runs) BUILT + tested** (same day): automations grew kind
+"agent" {agentSpecId, agentPrompt, agentModel} — created DISARMED like every automation; the pure
+`agentAutomationGate` is the fail-closed pre-flight (missing spec or ANY non-trusted label ⇒ the schedule
+SUSPENDS itself; approval checkpoints ⇒ the tick refuses but stays armed — unattended runs can't answer
+approval cards); the run goes through the SAME startAgentRun pipeline (gate first, allow-list, stored
+trust, P-AGENT.13 trace) and lastResult carries the outcome + run id. Builder grew a Schedule flyout
+that mirrors the gate's refusals at authoring time. Phase 2 (token-gated webhooks) remains DESIGN.
+
+**Context.** Built agents only run from the Run panel. n8n's trigger surface (cron/webhook/events) is the
+feature gap users feel daily; LUCID already ships an automations engine (desktop/automations.ts, cadence
+normalization + scheduling).
+
+**Decision.** Phase 1: an automation kind "agent-run" {spec_id, prompt, model, cadence} - the scheduler calls
+`runBuiltAgent` with the STORED trust label; only `trusted` specs are schedulable (an imported spec must be
+approved first; a label downgrade suspends the schedule - fail-closed). Results land in the P-AGENT.13 trace
++ a notification. Phase 2: webhook trigger via dev.ts `POST /api/agent/hook/<spec_id>`: DISABLED by default,
+per-spec random token minted on enable, request body enters the run as UNTRUSTED delimited content (invariant
+#5), managed ceiling can force webhooks off org-wide. n8n-import then maps trigger nodes instead of dropping
+them to notes.
+
+**Consequences.** "Repeatable" finally means unattended - without widening trust: nothing non-trusted ever
+runs unattended, and webhook payloads are data, never instructions.
+
+## ADR-0143 - P-AGENT.15: spec v2 - retry, timeout, and on-error edges (DESIGN)
+
+**Date:** 2026-07-04
+**Status:** Accepted. **PARTIALLY BUILT** (same day, with 11c's spec v2 bump as planned): `node.retry`
+{max≤3, backoffMs} + `node.timeoutMs` (bounded, fail-closed validation; node-editor inputs) lowered to
+SEGMENT policy — retry budget = MAX of the segment's nodes, timeout = MIN (tightest step constrains the
+spawn), linear backoff capped at 10s, every attempt traced. spec_version 2 accepted alongside 1 (v1
+files stay valid forever; validation is field-driven). `edge.kind: onError` REMAINS DESIGN — additive
+optional fields need no further version bump when it lands.
+
+**Context.** One spawnSync + 120s hard timeout is the whole reliability story; n8n has retry-on-fail, error
+workflows, DLQ patterns.
+
+**Decision.** spec_version 2 (single bump shared with P-AGENT.11c's `branch` kind): optional
+`node.retry {max<=3, backoffMs}`, `node.timeoutMs` (runner-clamped), `edge.kind: "then"|"onError"` (an
+onError edge routes a step's failure to a handler subgraph; no handler => run fails with the recorded error,
+never silent). Loader upgrades v1 files in place (validate v1 -> rewrite v2) - the frozen-schema rule applies
+to DuckDB, not workspace JSON, but the upgrade is still one-way + logged. Validator: closed sets, clamps,
+onError edges may not form cycles with retry. Compiler lowers fields to runner policy; one-shot mode ignores
+them (documented).
+
+**Consequences.** Failure handling becomes reviewable workflow structure - visible on the canvas and in the
+n8n export - instead of prose hopes.
+
+## ADR-0144 - P-AGENT.16: external secret providers via the add-on (DESIGN - ENTERPRISE)
+
+**Date:** 2026-07-04
+**Status:** Accepted. **CORE WIRING BUILT + tested** (post-#200/#201 merge; the private connector shipped as
+add-on ADR-A014/TASK-019): `SecretProvisioning.provider {kind, ref}` (closed kinds vault/aws-sm/azure-kv/
+gcp-sm/infisical; the ref's scheme MUST match the kind, fail-closed; refs are scanned by secret_guard — a
+pasted VALUE is a guardrail violation — and by the import gate). Pure `harness/agent/kms.ts` builds the
+ADR-A014 request artifact; `resolveProviderSecrets` (agent_run.ts) dispatches `kms fetch` through the
+add-on seam, reads the 0600 env file, and DELETES both artifacts immediately (inject-then-drop; values
+live only in process memory + the child run env). Wired into one-shot, segmented, and sub-agent paths —
+a CHILD fetches under its OWN declarations, never the parent's. FAIL-CLOSED on a failed or lying fetch
+attempt (missing values ⇒ refusal, no partial credential set); HONEST SKIP when no refs are declared or
+no connector is installed (today's vault flow). Trace kind "secrets" records fetch outcomes (never
+values). Managed-config “require provider-sourced secrets” remains design.
+
+**Context.** P-AGENT.9 ships JIT *guidance* (ticket templates); n8n enterprise fetches from Vault/ASM/AKV/GCP
+at runtime. The add-on already has a kms/vault connector tree (lucidagentIDEaddon/connectors/kms).
+
+**Decision.** Public core: `SecretProvisioning` gains optional `provider {kind: "vault"|"aws-sm"|"azure-kv"|
+"gcp-sm"|"infisical", ref}` (validated closed set; guidance fields unchanged). At run start, when a declared
+secret has a provider AND the kms connector is installed (addon_seam contract, verb `fetch`), the value is
+injected into the CHILD omp process env for that run only - never persisted, never in the spec, never echoed
+to chat (secret_guard already scans provisioning text; fetched values never touch a scanned surface). No
+connector => today's vault flow with the provisioning guidance. Managed config can REQUIRE provider-sourced
+secrets (forbid local vault) for org policy.
+
+**Consequences.** JIT tokens stop transiting humans where org infrastructure allows it; parity with n8n
+enterprise external secrets; the private/public split stays: capability descriptor public, provider code IP.
+
+## ADR-0145 - P-AGENT.17: spec revision history + template gallery (DESIGN)
+
+**Date:** 2026-07-04
+**Status:** Accepted. **BUILT + tested** (same day). History: saveSpecFile snapshots
+`.omp/agents/history/<id>/<updated_at>.json` (identical re-saves overwrite; pruned to the newest 20;
+snapshot failure never fails the save), listSpecHistory/loadSpecRevision (corrupted ⇒ skipped/null),
+restore = re-save-as-current with a fresh updated_at (itself snapshotted — undoable); trust sidecar
+untouched by restores. Gallery: `templates/agents/*.lucid-agent.json` (2 starters: web-research-digest
+w/ approval checkpoint + retry, repo-issue-triage w/ branch + timeout — they demo the v2 features);
+only digest-valid files list; "Use" mints a FRESH spec_id and routes through the STANDARD gated import
+(scanner + trust + review — curated ≠ exempt), factored as dev.ts `gatedAgentImport` shared with
+share/n8n imports. A CI-time test re-validates every shipped template (rot fails loud). Community
+submissions still deferred until signing (ADR-A012).
+
+**Decision.** (a) History: `saveSpecFile` also writes `.omp/agents/history/<spec_id>/<updated_at>.json`,
+pruned to the newest 20; endpoints list/read/restore (restore = save-as-current with fresh updated_at, itself
+versioned); canvas History flyout with restore + a name/step-count diff summary. Trust sidecar is NOT
+versioned - trust applies to the spec identity, and a restore of an untrusted import stays untrusted.
+(b) Gallery: a curated `templates/` of `.lucid-agent.json` files in-repo, listed in the Builder; "Use
+template" routes through the STANDARD import path (scan + trust: local curated files still get scanned -
+cheap consistency, no special path). Community submissions deferred until signing lands (ADR-A012 KMS).
+
+**Consequences.** Undo-across-sessions for authored agents; a first-run experience that starts from working,
+reviewed examples; zero new trust paths.
+
+## ADR-0146 - P-CMD.1: user-authored "/" slash commands - describe it in chat, LUCID interviews, saves, gates
+
+**Date:** 2026-07-04
+**Status:** Accepted - BUILT + tested (authored across sessions; landed + numbered here).
+
+**Context.** Users wanted their own "/" shortcuts ("make a /pr command that reviews the diff", "save this as
+a skill I can call") without editing files. The Agent Builder epic already proved the pattern: a frozen
+policy steers the chat agent, a custom omp tool hands the draft to LUCID, and LUCID re-validates
+authoritatively, fail-closed.
+
+**Decision.**
+1. **UserCommand** (`harness/commands/spec.ts`, pure): a named PROMPT TEMPLATE with two modes - "send"
+   (`/name args` expands `body` with $ARGS/$1..$9/$$ and sends it as the turn) and "skill" (activates the
+   body as a persistent per-session instruction, same path as a bundled skill). The NAME is the stable id
+   (invariant #9) AND the filename: `^[a-z][a-z0-9-]{0,31}$`, reserved tokens (agent/goal/help/…) refused,
+   body ≤ 8000 chars. `validateUserCommand` is fail-closed on unknown input.
+2. **Store** (`harness/commands/file_store.ts`): `.omp/commands/<name>.json`, charset-guarded filenames (no
+   traversal), validate-on-save AND re-validate-on-load; corrupted files skipped, never returned.
+3. **Three gates before a command exists** (`desktop/user_commands.ts`): validator → secret guard (a
+   credential VALUE in a body is refused and pointed at the vault - same detectors as the Agent Builder
+   guardrail) → the Python Unicode scanner (fail-closed: scan unavailable = rejected, the P-AGENT.5 seam).
+   Metadata-only telemetry: EventName gains `command_created`/`command_rejected` (frozen contracts.ts
+   change - acknowledged as part of THIS increment; names only, never bodies).
+4. **Chat authoring loop**: frozen `SLASH_COMMAND_POLICY` (layer 3; PREFIX_VERSION 8→9 - prefix-hash
+   regression green) + the `slash_command_create` omp tool (`harness/omp/slash_command_extension.ts`,
+   validates + acknowledges; acp_backend detects via the unique `commandJson` arg and persists through the
+   gates) + `/command` interview kickoff + "/" autocomplete ranking user commands first.
+
+**Numbering note.** This work was authored referencing ADR-0135 before two upstream PRs (#197 local
+providers, #199 vision) and this branch's Agent Builder ADRs consumed 0135-0145; every reference was
+renumbered to ADR-0146 when landing. ADR numbers are minted at MERGE time from origin/master's tip - the
+lesson recorded so the next parallel session avoids the same collision.
+
+**Consequences.** Users mint personal automation vocabulary conversationally; nothing enters the "/" menu
+without passing the same fail-closed content gates as imported agents; command JSONs are personal workspace
+data (gitignored), never repo content.
+
+## ADR-0147 - P-AGENTFW.1: Agent Firewall MCP - a fail-closed security proxy between LUCID and external ACP agent runtimes (hermes / openclaw)
+
+**Date:** 2026-07-04
+**Status:** Accepted. **P-AGENTFW.1 BUILT + tested** (the firewall core + registry + `lucid agent-firewall`
+launcher subcommand + `remoteAgentMcpServers()` registration seam). Desktop Settings UI to add/edit
+connections is the follow-up P-AGENTFW.2 (not built this increment).
+**Increment:** P-AGENTFW.1. New surface (a first-party MCP server + a harness-side ACP client), not a refinement.
+
+### Context
+
+The user wants LUCID to connect to remote instances of **hermes** (NousResearch/hermes-agent, a Python ACP
+runtime: `hermes acp`) and **openclaw** (openclaw/openclaw, a TS gateway-backed ACP bridge:
+`openclaw acp --url wss://gateway`). Both are full coding-agent runtimes exposed over the **Agent Client
+Protocol** (JSON-RPC over stdio) with a vast tool surface (terminal/exec, file writes, `execute_code`,
+`delegate_task`, browser, vision). Talking to such an agent directly would splice its entire attack surface -
+prompt-injection in its streamed output, exfiltration of anything we send it, its `session/request_permission`
+asks - straight into LUCID's context. The ask: mediate the connection through **an MCP that acts as a firewall**,
+bidirectional, leveraging LUCID's existing security stack (the Unicode scanner + fail-closed gate, trust labels,
+quarantine, UNTRUSTED_CONTENT delimiting).
+
+### Decision - the architecture
+
+```
+LUCID (omp) ──MCP (stdio)──▶ [ Agent Firewall ] ──ACP client (stdio)──▶ remote hermes / openclaw
+                              scan ⇄ gate ⇄ label
+```
+
+1. **The firewall is a first-party MCP *server*, stdio transport.** omp spawns it as a subprocess and speaks
+   MCP (`initialize` / `tools/list` / `tools/call`) over line-delimited JSON-RPC - the SAME wire we already
+   hand-roll for ACP (`desktop/acp.ts`), so no MCP SDK dependency (air-gap clean). Stdio is chosen because ACP's
+   `McpServer` union makes **stdio mandatory** ("All Agents MUST support this transport") while http/sse are
+   capability-gated; stdio also means **no localhost port, no bearer, no HTTP server** - the smallest surface.
+   Registered via the ACP `session/new.mcpServers` array as an `McpServerStdio` (`{name, command, args, env}`).
+2. **The remote side is a harness ACP *client*** (`harness/mcp/acp_client.ts`, the proven `desktop/acp.ts`
+   pattern copied into the harness so the core does not import the desktop shell). It spawns the configured
+   remote command (`hermes acp` / `openclaw acp --url … --token-file …`), runs the ACP handshake with
+   **least privilege** (`clientCapabilities.fs.read/write = false` - we never offer the remote our filesystem),
+   and drives `session/new` -> `session/prompt`, collecting `agent_message_chunk` text from `session/update`.
+3. **Exposed tool: `prompt`** (`{ prompt: string }`). One firewall process serves ONE connection (spawned
+   `lucid agent-firewall --conn <id>`); omp namespaces the tool by server name, so a plain `prompt` is
+   unambiguous. `session/new` is lazy + reused for conversation continuity.
+
+### The bidirectional gate (the "firewall")
+
+Both directions run through the existing fail-closed `scanAndDecide` (keystone #1) over the same Python scanner
+sidecar, **fail-closed by law** (invariant #3): any scan failure => BLOCK, never "safe".
+
+- **Outbound (LUCID -> remote), injection-relay direction.** Before a prompt is forwarded, it is scanned with
+  the strict `DEFAULT_POLICY`. A hidden-vector payload (bidi / zero-width / homoglyph / PUA) that LUCID was
+  coerced into relaying is **blocked and never sent** - so the firewall can't be turned into a relay for
+  hidden-Unicode injection aimed at the remote. NOTE: `scanAndDecide` is the pure Unicode scanner, so this is
+  NOT secret/PII DLP - a plaintext exfil instruction sails through (LUCID has no secret detector today).
+  Outbound DLP, if wanted, is a separate capability + increment.
+- **Inbound (remote -> LUCID), prompt-injection direction.** The assembled remote response is scanned. A
+  quarantine verdict **withholds the response entirely** (an `isError` result carrying only a redacted reason -
+  the poison never reaches LUCID's model). A clean/suspicious response is **wrapped in
+  `UNTRUSTED_CONTENT_START/END` and trust-labeled** (`untrusted`, or `suspicious` for sub-threshold findings) so
+  the model can only ever read it as delimited data, in the tool-result tail, never as instructions (invariant
+  #5). Trust is **never** `trusted`.
+- **Remote permission requests denied by default.** If the remote agent sends `session/request_permission`
+  (asking our client to approve one of ITS privileged actions), the firewall **denies** (fail-closed) - LUCID
+  is not a confused deputy for the remote's exec. Surfacing these for user approval is a follow-up.
+- **Delimiter-injection breakout closed.** The remote is the adversary by design, so before wrapping, the
+  firewall neutralizes any literal `UNTRUSTED_CONTENT_START/END` inside the remote's text/tool-activity
+  (`neutralizeDelimiters`) - otherwise a hostile agent could embed the closing token to escape the envelope
+  and have trailing bytes read as instructions. The Unicode scanner would NOT catch that ASCII token, so this
+  is a distinct, required step. (`wrapRetrieved` in the RAG path shares this gap on less-adversarial input -
+  fold `neutralizeDelimiters` in when P-MCP-GATE.1 / the RAG hardening lands.)
+- **Egress:** deliberately NOT re-gated here. The remote endpoint is an explicitly user/admin-configured
+  connection (like a P-MCP.1 server URL), not the agent autonomously reaching the internet; `egress_policy`
+  governs the latter and is unchanged.
+
+### Load-bearing finding - ADR-0020's MCP-output guardrail is UNIMPLEMENTED (flagged, not inherited)
+
+ADR-0020 (L1677-1680) asserts that "any [MCP] tool result that re-enters the prompt passes the existing
+fail-closed gate and is wrapped in `UNTRUSTED_CONTENT_START/END`." **This is not true in code today:**
+`security_extension.ts`'s `tool_result` hook only does LOC attribution + `<task-result>` promotion gating; it
+does NOT `scanAndDecide` general MCP results nor delimit them. So **every** P-MCP.1 connector currently feeds
+un-scanned external text into the prompt. This ADR does not silently inherit that false claim. Scope decision:
+- **This increment CLOSES it for hermes/openclaw at the firewall boundary** - the firewall owns the text it
+  returns, so it scans + quarantines + delimits its own output (the guardrail, actually implemented, for this
+  path).
+- **omp's in-process `tool_call` gate remains the load-bearing backstop** (invariant #4): even if a poisoned
+  result slipped through, any action an injected model then attempts is a `tool_call` and is gated in-process.
+- **The general fix - an in-process `tool_result` scan+delimit for ALL MCP servers - is recommended as its own
+  follow-up increment (P-MCP-GATE.1),** because it touches the core gate (perf + false-positive tuning on large
+  file-read results) and is a distinct concern from this proxy.
+
+### Custody
+
+The connection registry (`~/.omp/lucid-agents.json`) is written **mode 0600** (dir `~/.omp` 0700), matching the
+P-MCP.1 baseline (ADR-0020 L1706). It stores command/args, NOT secrets: the recommended pattern is
+`openclaw acp --token-file <path>` so the gateway token stays in the remote agent's own file and never lands in
+our store. This is plaintext-at-0600 (like `lucid-gui.json` pre-P-MCP.2), not Electron `safeStorage`, because
+the omp-spawned firewall subprocess cannot reach the Electron main-process oracle.
+
+### Invariants preserved
+
+#1 extend-omp (a custom MCP server + ACP client through the native `mcpServers` seam - no fork); #3 fail-closed
+(every scan failure blocks, both directions; the firewall refuses to serve tool calls when the scanner is
+unavailable); #4 the in-process omp gate is untouched and remains the backstop; #5 remote output is scanned +
+delimited + late; #7 trust labels stay the closed set (`untrusted`/`suspicious`/`quarantined`, never
+`trusted`). **No frozen-contract change:** reuses existing `EventName`s (`mcp_server_connected`,
+`artifact_quarantined`, `tool_call_blocked`) - `contracts.ts` is untouched. **Landmine avoided:** omp treats a
+stdio MCP server that exits after the handshake as a fork loop, so the firewall process stays long-lived.
+
+### File-by-file (P-AGENTFW.1)
+
+- `harness/mcp/registry.ts` (new) - `RemoteAgentEntry` + 0600 read/write of `~/.omp/lucid-agents.json` +
+  `remoteAgentMcpServers(lucidBin)` (the enabled connections as ACP `McpServerStdio[]`).
+- `harness/mcp/acp_client.ts` (new) - harness ACP client (initialize/session/new/prompt/cancel; deny
+  permissions; collect message chunks).
+- `harness/mcp/mcp_server.ts` (new) - a minimal, injectable-I/O MCP stdio JSON-RPC server (initialize /
+  tools/list / tools/call).
+- `harness/mcp/agent_firewall.ts` (new) - the orchestration: bidirectional `scanAndDecide`, quarantine, trust
+  label + `UNTRUSTED_CONTENT` wrap, fail-closed, `runAgentFirewall(connId)`.
+- `harness/launcher/lucid_acp.ts` (edit) - `lucid agent-firewall --conn <id>` subcommand (fail-closed scanner
+  preflight, then serve).
+- `desktop/settings_store.ts` (edit) - `mcpServersForAcp()` concats `remoteAgentMcpServers()` so an enabled
+  connection attaches to the live desktop session.
+- Tests + `make demo-P-AGENTFW.1` (real scanner + a fake remote ACP agent: clean -> delimited untrusted;
+  poisoned -> quarantined + withheld; kill the sidecar -> fail-closed block).
+
+### Phased roadmap
+
+- **P-AGENTFW.1 (BUILT):** the firewall core + registry + launcher + registration seam (this ADR).
+- **P-AGENTFW.2:** a "Remote agents" Settings section (add/edit/enable hermes/openclaw connections; mirrors the
+  P-MCP.1 connectors card) so connecting needs no hand-edited JSON.
+- **P-AGENTFW.3:** surface the remote's denied `session/request_permission` asks to the user (opt-in approval),
+  and forward richer ACP updates (tool activity, diffs) as scanned, labeled evidence.
+- **P-MCP-GATE.1 (recommended, separate):** the in-process `tool_result` scan+delimit for ALL MCP servers -
+  closes the general ADR-0020 gap.
+
+### Relates to
+
+ADR-0020 (P-MCP.1 - the `mcpServers` seam this reuses, and the guardrail this partially implements + flags),
+ADR-0038 (the `lucid` launcher this extends), ADR-0002 (the scanner IPC), ADR-0019 (the gate policy), the
+P-RAG.1 `wrapRetrieved` pattern (UNTRUSTED_CONTENT delimiting), invariants #3/#4/#5.
+
+## ADR-0148 - P-CMD.2: builtin /licensing walkthrough + "/" commands anywhere in the prompt body
+
+**Date:** 2026-07-05
+**Status:** Accepted - BUILT + tested.
+
+**Context.** Two user asks: a guided command that applies their company's licensing across a codebase, and
+"/" commands that work in the WHOLE composer body (P-CMD.1 only recognized a start-anchored token, and the
+autocomplete only opened when the entire input was one "/" token).
+
+**Decision.**
+1. **Builtin commands** (`harness/commands/builtins.ts`): shipped commands in the SAME UserCommand shape as
+   user-authored ones — same validator (tested), same expansion, same autocomplete; merged server-side by
+   `withBuiltins` where a user-saved command SHADOWS a builtin by name and deleting it resurfaces the
+   builtin. Builtins are code (PR-reviewed), so the workspace scanner path does not apply to them.
+2. **/licensing** is the first builtin: a guided, APPROVAL-GATED walkthrough — discover the repo's existing
+   convention + counts first, ONE interview round (owner, SPDX id or proprietary text, years, first-party vs
+   vendored trees), show the exact per-language header plan, WAIT for approval, apply idempotently
+   (SPDX-line skip, shebang/XML-decl aware, read-then-write per the AGENTS.md TOCTOU rule), finish with
+   totals + optional CI check/pre-commit hook/LICENSE file. Vendored trees are excluded loudly — the
+   command's body forbids relicensing vendor/, node_modules/, dist/, or third-party code.
+3. **Body-wide expansion** (`expandInlineCommands`, pure): a token counts only when preceded by
+   start/whitespace AND followed by end/whitespace/sentence punctuation — paths (`src/foo`, `/usr/bin`,
+   `/licensing/docs`) and URLs never match. Only KNOWN names expand; send-mode bodies replace the token IN
+   PLACE with no args (surrounding prose is the context); skill-mode tokens are stripped + activated
+   (deduped); expansion is single-pass over the ORIGINAL text (an expanded body's own "/words" are never
+   re-scanned — no recursion). START-anchored commands keep the P-CMD.1 args contract exactly, and when one
+   fires the inline pass is skipped for that turn.
+4. **Autocomplete at the caret** (`slashTokenBeforeCaret`, pure): the "/" menu opens for the token at the
+   caret anywhere in the body; completion/activation replaces ONLY that token, preserving surrounding prose
+   (previously applySlash clobbered the whole input).
+
+**Also.** Cleared the two long-standing server-tsconfig strictness debts (netdiag.ts ×9 noUncheckedIndexedAccess,
+dev.ts oauth-broker stdin narrowing ×2) — `bun run typecheck` is green across all three configs for the
+first time; netdiag's behavior tests unchanged.
+
+**Consequences.** "/licensing Apache-2.0 for Acme Corp" works from a fresh install with zero setup; prose
+like "run /pr-review before merging" now does what it reads like; mentioning paths or unknown "/words"
+remains inert. 13 new tests (builtin validity + shadowing, the expansion matrix incl. path/URL immunity and
+non-recursion, caret tokenization).
+## ADR-0149 - P-AGENTFW.2 + .3: Remote-agents Settings UI + per-connection permission policy & surfaced ACP updates
+
+**Date:** 2026-07-04
+**Status:** Accepted. **BUILT + tested.** The two agent-firewall follow-ups flagged in ADR-0147, delivered
+together (same subsystem). Based on `feat/agent-firewall-mcp` (#201). (ADR-0152 is the sibling P-MCP-GATE.1
+PR.)
+**Increment:** P-AGENTFW.2 (desktop UI) + P-AGENTFW.3 (permission policy + richer surfaced updates).
+
+### P-AGENTFW.2 - "Remote agents" Settings card
+
+A Settings card mirroring the P-MCP.1 "MCP connectors" card, so connecting a hermes/openclaw instance needs
+no hand-edited `~/.omp/lucid-agents.json`. `GET/POST /api/agents` + `/api/agents/remove` + `/api/agents/toggle`
+in `dev.ts` call the harness registry (`listRemoteAgents`/`upsertRemoteAgent`/`removeRemoteAgent`/
+`setRemoteAgentEnabled`); a change `backend.restart()`s omp so enabled connections attach as `agentfw-*` MCP
+servers next session. `bridge.remoteAgent*` (renamed off `agent*` to avoid colliding with the Agent-Builder
+`agentList`), `RemoteAgentStatus`, and a `secAgents()` card (name/kind, command+args, permission badge,
+enable/remove + an add form: name, kind, command, args, permission policy). No secret crosses the wire - the
+registry stores command/args only (the note steers users to `--token-file`).
+
+### P-AGENTFW.3 - per-connection permission policy + surfaced permission asks
+
+The firewall used to hard-deny every remote `session/request_permission` (fail-closed). Now:
+- **`RemoteAgentEntry.permissionPolicy: "deny" | "allow"`** (default **deny**). The `AcpAgentClient` honors
+  it: `deny` → the ask is answered `cancelled`; `allow` → an approve option is selected (`pickApproveOption`).
+  "allow" is an explicit per-connection opt-in for a trusted remote (e.g. a local dev gateway).
+- **Every permission ask is RECORDED and SURFACED** (`AcpPromptResult.permissionRequests`): the firewall
+  includes a `[permission-requests]` section in the delimited output so the user/model sees what the remote
+  wanted and the decision. **This content is remote-controlled** (the toolCall title), so it is added to the
+  inbound `scanAndDecide` text and neutralized - a hidden vector in a permission-ask title is quarantined
+  exactly like the reply body (regression-tested).
+- **Richer updates:** the client now also notes `plan` updates alongside `tool_call`/`tool_call_update`, all
+  carried in `toolActivity` (scanned + delimited).
+
+**Deliberately deferred:** a TRUE interactive per-request approval prompt. The firewall runs as an
+omp-spawned MCP subprocess with no channel to the desktop UI, so live "ask the user now" isn't possible
+without a new IPC surface; the per-connection policy + the surfaced-in-output record are the bounded MVP.
+That interactive path is the next follow-up if wanted.
+
+### Invariants preserved
+
+#3 fail-closed (permission default deny; permissionRequests are scanned; a poisoned title quarantines); #5
+remote content (incl. permission titles) is scanned + delimited + labeled untrusted; #7 trust stays the
+closed set. **No frozen-contract change** (no `contracts.ts`; `permissionRequests` is an optional field on the
+internal `AcpPromptResult`). The desktop UI is cosmetic chrome over the existing 0600 registry.
+
+### File-by-file
+
+- `harness/mcp/registry.ts` - `permissionPolicy` on the entry + upsert.
+- `harness/mcp/acp_client.ts` - `permissionPolicy` option, `permissionRequestSummary`/`pickApproveOption`
+  (pure), policy-driven `#answer`, `permissionRequests` capture, `plan` update note.
+- `harness/mcp/agent_firewall.ts` - pass the connection's policy to the client; include permissionRequests in
+  the SCANNED combined text AND the wrapped output.
+- `desktop/dev.ts` - `/api/agents` CRUD. `desktop/renderer/bridge.ts` - `remoteAgent*` + `RemoteAgentStatus`.
+  `desktop/renderer/app.ts` - `secAgents` card + hydrate + handlers.
+- Tests: `acp_client.test.ts` (helpers), `registry.test.ts` (+policy), `agent_firewall.test.ts` (+surfacing,
+  +poisoned-title quarantine). Docs: `docs/AGENT-FIREWALL.md` updated.
+
+### Relates to
+
+ADR-0147 (the agent-firewall these extend), ADR-0152 (the sibling MCP-result gate), ADR-0020 (the P-MCP.1
+connectors card this UI mirrors).
+## ADR-0152 - P-MCP-GATE.1: in-process gate for MCP tool RESULTS (closing the ADR-0020 guardrail for every MCP server)
+
+**Date:** 2026-07-04
+**Status:** Accepted. **P-MCP-GATE.1 BUILT + tested.** Follows P-AGENTFW.1 (ADR-0147), which flagged this gap.
+**Increment:** P-MCP-GATE.1. Modifies the security-gate surface (a NEW, separately-loaded extension; the
+`security_extension.ts` keystone is left untouched).
+
+### Context
+
+ADR-0020 (L1677-1680) promised that "any [MCP] tool result that re-enters the prompt passes the existing
+fail-closed gate (`scanAndDecide`) and is wrapped in `UNTRUSTED_CONTENT_START/END`." ADR-0147 discovered this
+was **never implemented**: `security_extension.ts`'s `tool_result` hook only does LOC attribution +
+`<task-result>` promotion gating. So **every** P-MCP.1 connector's OUTPUT re-entered the model's context
+**unscanned** — a standing prompt-injection hole. P-AGENTFW.1 closed it only for the agent-firewall's own
+output; this closes it for ALL MCP servers.
+
+### Decision
+
+A **new omp extension**, `harness/omp/mcp_result_gate.ts`, registered on the `tool_result` hook. omp's
+`tool_result` handler may **replace** the result (`ToolResultEventResult`), and the hook runner captures the
+last handler's return; `security_extension` returns nothing for `tool_result`, so this gate's result wins
+regardless of load order. It is a separate `-e` extension so the over-tested keystone is not modified.
+
+- **Source-scoped to MCP results only.** A result is gated iff it comes from an MCP server — `toolName`
+  starts with `mcp__` OR `details.serverName` is set (omp's `mcp/tool-bridge.ts` naming). Local built-in
+  tools (`read`/`bash`/`write`/`edit`/`grep`/`glob`) are **left untouched**: scanning a user's own file read
+  is semantically wrong (not untrusted-external), a false-positive magnet (legit Unicode in source), and a
+  per-result perf cost. This is the same source-scoping philosophy as ADR-0019.
+- **Fail-closed (inv #3).** The result text is run through `scanAndDecide` (strict `DEFAULT_POLICY`, external
+  content). Any scan failure ⇒ block. Quarantine ⇒ the result content is **replaced** with a redacted block
+  notice + `isError: true` — the poison never reaches the model.
+- **Delimited + labeled (inv #5).** A clean/suspicious MCP result is wrapped in `UNTRUSTED_CONTENT_START/END`
+  with a `[mcp-server name=… trust=…]` header, trust-labeled `untrusted`/`suspicious` (**never `trusted`**);
+  embedded delimiter literals are neutralized so a hostile server can't break out of the envelope. Image
+  content blocks pass through after the wrapped text.
+
+### Why a separate extension (not editing security_extension.ts)
+
+`security_extension.ts` + its tests are a load-bearing keystone (AGENTS.md: a failing test there is
+stop-the-line). Adding the result gate as an independent `-e` extension keeps that surface untouched, makes
+the new behavior independently testable, and lets the runner's last-non-undefined-wins semantics compose the
+two cleanly.
+
+### Invariants preserved
+
+#3 fail-closed (unscannable/quarantined MCP result ⇒ withheld); #4 the gate runs in-process in omp's runtime
+(this IS the in-process seam ADR-0020 intended); #5 MCP output is scanned + delimited + trust-labeled; #7
+trust stays the closed set (never `trusted`). **No frozen-contract change** (no `contracts.ts` edit; reuses
+the scanner IPC + gate). The frozen prompt prefix is untouched (the extension adds no prefix bytes).
+
+### File-by-file
+
+- `harness/omp/mcp_result_gate.ts` (new) - the extension + its pure core (`isMcpToolResult`, `mcpServerName`,
+  `neutralizeDelimiters`, `blockNotice`, `wrapUntrusted`).
+- `harness/launcher/lucid_acp.ts` + `desktop/acp_backend.ts` (edit) - load the new `-e` extension alongside
+  the gate (guarded by existsSync; safe if absent).
+- Tests + `make demo-P-MCP-GATE.1`.
+
+### Relates to
+
+ADR-0020 (the guardrail this finally implements), ADR-0147 (the agent-firewall that flagged it; folding its
+`neutralizeDelimiters` into a shared home is a possible later cleanup), ADR-0019 (source-scoped gating),
+ADR-0002 (scanner IPC). Supersedes the "recommended P-MCP-GATE.1 follow-up" noted in ADR-0147.
+## ADR-0150 - P-NVIM.1: Neovim & terminal integration for the gated agent (`lucid tui` + `lucid.nvim`)
+
+**Status:** Accepted / Built.
+
+### Context
+
+The marketplace IDE story (ADR-0038) covers VS Code + JetBrains, both thin ACP clients of the fail-closed
+`lucid acp` launcher. Neovim users - a large, tooling-loyal audience - had no first-party path: no editor
+plugin, and no way to get the gate in a pure-terminal workflow. omp itself is a full terminal agent (`omp`
+bare = interactive TUI) AND a conformant ACP v1 server, so the missing piece was a Lucid-owned, fail-closed
+way to reach either from Neovim without ever exposing an ungated command.
+
+### Decision
+
+Add TWO integration paths, both anchored on the existing `lucid` launcher (extend, never fork; invariants
+#3/#4 unchanged):
+
+1. **`lucid tui` subcommand** (`harness/launcher/lucid_acp.ts`). Runs omp's native interactive terminal UI
+   with the SAME fail-closed preflight and the SAME gated command as `lucid acp`, minus the `acp`
+   subcommand (so omp owns the tty). `buildTuiArgs` mirrors `buildAcpArgs`: gate `-e` first (mandatory),
+   the byte-identical `APPENDED_POLICY` (DELEGATION+BUILD, invariant #6), then user passthru args (initial
+   prompt, --model, --continue, --resume, -p) appended verbatim last. `runTui` reuses `preflight` +
+   `resolveScannerEnv` + `resolveOmp`; the spawn was factored into a shared `execGated` so `acp` and `tui`
+   share ONE inherited-stdio launch path. Fail-closed identically: a dead scanner or missing gate returns 1
+   and NEVER spawns omp. A Neovim user gets the whole gated agent with just `:terminal lucid tui`.
+
+2. **First-party Neovim plugin** (`extensions/neovim/`, `lucid.nvim`). A thin, untrusted client exactly like
+   the VS Code/JetBrains extensions: it only ever spawns the `lucid` launcher, resolved fail-closed
+   (`_resolve_cmd` returns nil rather than any non-lucid fallback). It hosts `lucid tui` inside a Neovim
+   terminal buffer rather than reimplementing an ACP chat UI - maximally robust, zero protocol risk, gate
+   stays in `lucid`. Surface: `:Lucid`/`:LucidToggle`/`:LucidSend` (visual selection or current file as
+   `@path`)/`:LucidCheck`, `:checkhealth lucid` (runs `lucid check`), default keymaps. Pure helpers
+   (`_build_tui_args`, `_selection_text`, `_resolve_cmd`) carry the logic and are asserted headlessly.
+
+3. **Documented ACP-client path** (`docs/NEOVIM.md`). For inline buffer chat, an existing Neovim ACP plugin
+   (e.g. CodeCompanion.nvim) can point its ACP adapter at `lucid acp`. The security guarantee doesn't
+   depend on the plugin: `lucid acp` self-verifies + fail-closes regardless of which client spawned it.
+
+### Why terminal-first for the plugin (not a hand-rolled ACP UI)
+
+omp's terminal UI already implements streaming, thinking blocks, tool rendering, Plan/Ask/Agent modes, and
+tool-approval prompts - all behind the gate. Re-building that in Lua would be a large, fragile surface with
+weak test coverage. Hosting the real, already-gated TUI is the YAGNI-correct choice; the ACP path (Path 3)
+remains available for those who want tighter buffer integration and accept a third-party dependency.
+
+### Language-boundary note
+
+`extensions/neovim/` introduces Lua - but as EDITOR-CLIENT code under `extensions/` (like the VS Code TS and
+JetBrains Kotlin clients), NOT harness code. Invariant #2 (the harness is TypeScript; the only Python is the
+scanner sidecar) governs the *harness*; `extensions/` has always been a per-editor polyglot client tree
+outside the license-header roots. No harness Lua, no second Python surface.
+
+### Consequences
+
+- `buildAcpArgs`/`runAcp` behavior is unchanged (the `execGated` refactor is behavior-preserving, proven by
+  the existing launcher tests). `buildTuiArgs` carries a forward-compat optional `mcpResultGate?` param;
+  nothing populates it on master (the extension + `assets().mcpResultGate` live in the unmerged
+  P-MCP-GATE.1 PR #206) - thread it through `runTui` once that lands.
+- New CLI surface: `lucid tui` (usage text updated). No new EventNames, no `contracts.ts` change, no schema
+  change, prompt prefix untouched (the appended policy is byte-identical to `acp`).
+- `bin/lucid` (the compiled launcher) predates `tui`; a fresh signed build ships it. Until then, dev/live
+  use runs from source.
+
+### Files
+
+- `harness/launcher/lucid_acp.ts` - `BuildTuiOpts`/`buildTuiArgs`, `RunTuiOpts`/`runTui`, `execGated`, the
+  `main` `tui` route + usage.
+- `extensions/neovim/{lua/lucid/init.lua, lua/lucid/health.lua, plugin/lucid.lua, test/helpers_spec.lua,
+  README.md}`.
+- `docs/NEOVIM.md`.
+- Tests: `harness/launcher/lucid_acp.test.ts` (tui cases), `harness/launcher/neovim_plugin.test.ts`
+  (headless-nvim driver). Demo: `harness/scripts/demo_pnvim1.ts` + `make demo-P-NVIM.1`.
+
+### Verification
+
+Live (Neovim 0.12, omp 16.3.6): `lucid check` OK; `lucid tui --model claude-haiku-4-5 -p ...` returned a
+gated real turn (exit 0); `lucid acp` initialize -> protocol v1, loadSession, auth agent. `bun test harness`
+plus `make demo-P-NVIM.1` green; root `tsc --noEmit` clean.
+
+### Relates to
+
+ADR-0038 (the `lucid` launcher + untrusted-editor/trust-anchor model this extends), invariants #2/#3/#4/#6,
+ADR-0148/P-MCP-GATE.1 (the MCP result-gate to thread into `lucid tui` post-merge, #206).
+
+## ADR-0151 - P-NVIM.2: distribute lucid.nvim as a standalone branch WITHOUT leaving the monorepo
+
+**Status:** Accepted / Built.
+
+### Context
+
+P-NVIM.1 (ADR-0150) landed the Neovim plugin under `extensions/neovim/`. lazy.nvim / LazyVim - the
+dominant Neovim plugin managers - install a plugin from a git repo via an `owner/repo` short name, and
+CANNOT install a subdirectory of a monorepo. So the plugin was only installable via a local `dir` path (a
+full monorepo checkout), not as a normal standalone plugin. The ask: a standalone, short-name-installable
+plugin whose source still lives in the main IDE repo (no separate project to maintain).
+
+### Decision
+
+Publish the plugin as a generated **`lucid.nvim` branch of THIS repo** - plugin files at the tree root,
+produced by `git subtree split --prefix=extensions/neovim`. lazy.nvim's `branch` field installs it:
+
+```lua
+{ "mlcyclops/lucidagentide", name = "lucid.nvim", branch = "lucid.nvim", main = "lucid", ... }
+```
+
+- **Source of truth stays `extensions/neovim/` on master** - all dev happens there.
+- **CI publishes it** (`.github/workflows/nvim-plugin-mirror.yml`): on every master push touching
+  `extensions/neovim/**`, subtree-split -> force-push `refs/heads/lucid.nvim` (permissions: contents:write).
+- **`make nvim-plugin-split`** does the same locally (dry-run by default; `PUSH=1` force-pushes).
+- One repo, no fork, no second project. Installers do a shallow single-branch clone, so the plugin branch
+  never drags the monorepo's history/size.
+
+### Why a branch, not a second repo or a submodule
+
+A mirror repo or submodule is a second project to create, permission, and keep in sync - the exact thing
+the ask rules out. A same-repo generated branch keeps everything in one place; `git subtree split`
+preserves the plugin's own file history at root, and lazy/packer/vim-plug all support a `branch`.
+
+### LazyVim specifics (documented in docs/NEOVIM.md)
+
+- `main = "lucid"` - with `opts`, lazy auto-runs `require(main).setup(opts)`; without it lazy infers the
+  module from the repo name (`lucidagentide`) and setup never runs.
+- `cmd`/`keys` are required, not optional - LazyVim defaults plugins to lazy-loaded.
+- Visual-mode send maps the `:LucidSend<cr>` colon form (applies the `'<,'>` range); the `<cmd>` form would
+  send the whole file instead of the selection. `<leader>l...` is avoided (LazyVim's `:Lazy`).
+
+### Consequences
+
+- New CI workflow with `contents: write` (scoped: only force-pushes `lucid.nvim`). A `neovim` job added to
+  `extensions.yml` runs the headless helper spec alongside the VS Code / JetBrains jobs.
+- `extensions/neovim/LICENSE` added so the standalone branch is self-contained (BUSL-1.1, pointing at the
+  canonical root LICENSE).
+- The `lucid.nvim` branch is GENERATED - never hand-edit it; edit `extensions/neovim/` and let CI (or
+  `make nvim-plugin-split PUSH=1`) regenerate it. Until #207 merges to master, publish manually if needed.
+
+### Files
+
+- `.github/workflows/nvim-plugin-mirror.yml`, `.github/workflows/extensions.yml` (neovim job), `Makefile`
+  (`nvim-plugin-split`), `extensions/neovim/LICENSE`, `docs/NEOVIM.md` + `extensions/neovim/README.md`
+  (branch-install docs).
+
+### Verification
+
+`git subtree split --prefix=extensions/neovim HEAD` produces a branch whose ROOT is the plugin
+(`README.md`, `lua/lucid/*`, `plugin/lucid.lua`, `test/`, `LICENSE`) - confirmed locally; `make
+nvim-plugin-split` dry-run prints the split sha. lazy.nvim `branch` + short-name install confirmed against
+the lazy.nvim docs (`/folke/lazy.nvim`).
+
+### Relates to
+
+ADR-0150 (P-NVIM.1, the plugin this distributes), ADR-0038 (the marketplace/extension distribution model).
+## ADR-0153 - P-PREVIEW.6: the agent reviews its work live in the Preview panel (glow + testing pill; DOM review phased)
+
+**Date:** 2026-07-04
+**Status:** Accepted - **P-PREVIEW.6a + .6b + .6c BUILT + verified live (epic COMPLETE).** .6a = the
+"reviewing/testing" indicator (panel glow + pill). .6b = the agent READS the live preview DOM
+(`preview_inspect`) over a held relay + a read-only postMessage bridge. .6c = the agent CLICKS/TYPES
+(`preview_click`/`preview_type`) by CSS selector through the same relay/bridge (fixed action allowlist; no
+eval). All live-verified end to end (6c: a click fired a button's handler → the DOM actually changed;
+`preview_type` set an input value).
+**Increment:** P-PREVIEW.6a (indicator) → .6b (DOM inspect) → .6c (structured actions) - all BUILT.
+**Also fixed here:** the `preview_screenshot` tool read `body?.png` while the endpoint wraps `{ok,data:{png}}`,
+so the agent had never actually SEEN its screenshots - now reads `body.data.png` (the review-your-work loop
+works).
+
+### Context
+
+The user wants the agent to **screenshot and manipulate the live preview DOM**, and to **visually notify the
+user while it's testing** by glowing the Preview panel + showing a "testing" pill - so the user watches the
+agent review its work live. Two capabilities and one signal. The agent already screenshots the preview
+(`preview_screenshot`, ADR-0096). The hard part is DOM manipulation, because the preview iframe is
+**opaque-origin sandboxed** (`sandbox="allow-scripts allow-forms"`, `connect-src 'none'`) - the renderer
+CANNOT touch the iframe DOM directly. So live DOM work needs a **postMessage bridge** injected into the served
+preview; that is its own increment. The VISIBLE signal (glow + pill), by contrast, is self-contained and
+delivers the "review in front of the user" experience immediately on top of the tools that already exist.
+
+### Decision - phased
+
+- **P-PREVIEW.6a (BUILT): the live indicator.** Pure `desktop/preview_activity.ts` `previewActivityLabel(title)`
+  maps a preview tool-call title (screenshot / open / inspect / a future action) to a user-facing label
+  (matching omp's tool-name titles AND human-summarized ones), else null. `acp_backend` emits a new
+  `preview-activity` ChatEvent in the tool_call block (visuals-only, never a gate); the renderer
+  `flashPreviewTesting(label)` adds `.testing` to `#preview` (a pulsing glow on `.preview-body`) + shows the
+  `#prevPill` pill, surfaces the panel if a loaded preview is hidden, debounces (fades ~4.5s after the last
+  signal), and clears on turn `done`. No frozen-prefix/contract change beyond the additive ChatEvent variant.
+- **P-PREVIEW.6b (BUILT): DOM inspect via a postMessage bridge.** `preview_bridge.ts` injects a READ-ONLY
+  bridge into the served preview HTML (in `/api/preview/serve`; inline JS is CSP-allowed, `connect-src 'none'`
+  keeps egress blocked). It answers `postMessage` queries from the LUCID renderer (page text, headings,
+  controls, element details by CSS selector, captured console errors) and posts a compact/clipped snapshot
+  back - NO arbitrary eval, NO mutation (proven by tests: no `eval`/`Function`/`.click`/`.value=`/`innerHTML=`).
+  `preview_inspect_relay.ts` (`InspectRelay`, unit-tested) is the held command/result queue: the agent's
+  `preview_inspect` tool GETs `LUCID_PREVIEW_INSPECT_URL`; the dev server HOLDS the request; the renderer polls
+  `/api/preview/inspect/next` (every 450ms while the panel is open), runs the query on the frame via the
+  bridge, and POSTs `/api/preview/inspect/result` - resolving the held tool call (8s fail-closed timeout →
+  "open a preview first"). New READ-tiered `preview_inspect` tool. Verified live end to end.
+- **P-PREVIEW.6c (BUILT): structured actions.** `preview_click` / `preview_type` (by CSS selector) go through
+  the SAME relay + bridge — the `InspectCommand` gained `action`/`value`, the bridge routes `cmd.action ? act
+  : inspect`, and `act()` is a FIXED allowlist (click / type / focus / scroll): it only calls `el.click()`,
+  sets `el.value`/`textContent` + dispatches input/change, or scrolls — never `eval`/`Function`/`innerHTML`
+  (proven by tests). New `/api/preview/act` endpoint + `LUCID_PREVIEW_ACT_URL`. Read-tier (the preview is
+  sandboxed + egress-blocked, so acting on it is safe) and the `preview_click`/`preview_type` calls light the
+  6a "Testing the preview" pill. Verified live: `preview_click` on a button fired its onclick (the page's h1
+  changed), `preview_type` set an input's value.
+
+### Invariants preserved
+
+Fail-closed unaffected (the indicator is display-only); the preview sandbox is NOT loosened (6b/6c use a
+postMessage bridge, keeping opaque-origin isolation); #1 extend-omp (new tools are omp `-e` tools like the
+existing preview ones). No app version bump.
+
+### Relates to
+
+ADR-0096 (the preview panel, `preview_open` / `preview_screenshot`, the shot-cache the relay extends),
+ADR-0126 (the markup canvas overlaying the same iframe), P-VISION.1/ADR-0136 (the sibling multimodal work),
+the streaming-state UI patterns (`.streaming` / `data-streaming`) the indicator mirrors.

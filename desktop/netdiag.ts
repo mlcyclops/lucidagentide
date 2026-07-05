@@ -69,10 +69,11 @@ export function parseLsofLine(raw: string): NetSocket | null {
   const t = raw.trim().split(/\s+/);
   if (t.length < 9 || t[0] === "COMMAND") return null;
   const proc = t[0], pid = t[1], addr = t[8];
+  if (!proc || !pid || !addr) return null; // length-checked above; this narrows for noUncheckedIndexedAccess
   const sm = raw.match(/\(([A-Z_]+)\)/);
-  const state = sm ? (sm[1] === "LISTEN" ? "LISTENING" : sm[1]) : "";
+  const state = sm ? (sm[1] === "LISTEN" ? "LISTENING" : (sm[1] ?? "")) : "";
   let local = addr, foreign = "";
-  if (addr.includes("->")) { const parts = addr.split("->"); local = parts[0]; foreign = parts[1] ?? ""; }
+  if (addr.includes("->")) { const parts = addr.split("->"); local = parts[0] ?? addr; foreign = parts[1] ?? ""; }
   return { proto: "TCP", local, foreign, state, pid, proc, port: portOf(local), loopback: isLoopback(local) || isLoopback(foreign) };
 }
 export function parseTasklistCsv(out: string): Map<string, string> {
@@ -80,7 +81,9 @@ export function parseTasklistCsv(out: string): Map<string, string> {
   for (const line of out.split(/\r?\n/)) {
     const cols = line.match(/"([^"]*)"/g);
     if (!cols || cols.length < 2) continue;
-    const name = cols[0].slice(1, -1), pid = cols[1].slice(1, -1);
+    const c0 = cols[0], c1 = cols[1];
+    if (c0 === undefined || c1 === undefined) continue; // length-checked; narrows for noUncheckedIndexedAccess
+    const name = c0.slice(1, -1), pid = c1.slice(1, -1);
     if (pid) m.set(pid, name);
   }
   return m;

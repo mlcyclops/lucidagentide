@@ -10,7 +10,48 @@
 // native-only is window controls + crisp text zoom, exposed by the Electron
 // preload as `window.lucid`; in a plain browser those fall back to CSS zoom.
 
+import type { AgentSpec } from "../../harness/agent/spec.ts"; // P-AGENT.2b: Agent Builder spec type
+import type { SpecFileSummary } from "../../harness/agent/file_store.ts"; // P-AGENT.2b: spec list summary
+import type { UserCommand } from "../../harness/commands/spec.ts"; // P-CMD.1: user-authored slash commands
+import type { AgentRunTrace, TraceSummary } from "../../harness/agent/trace.ts"; // P-AGENT.13: run traces
+
+/** P-AGENT.12: an MCP-discovered catalog entry (name is the omp runtime name: mcp__<server>_<tool>). */
+export interface McpCatalogTool {
+  name: string;
+  desc: string;
+  server: string;
+}
+
+/** P-AGENT.17: one revision snapshot of a saved agent (written on every save, pruned to the newest 20). */
+export interface SpecRevisionSummary {
+  updated_at: number;
+  name: string;
+  nodes: number;
+  edges: number;
+}
+
+/** P-AGENT.17: one curated starter template (an in-repo .lucid-agent.json, digest-checked before listing). */
+export interface AgentTemplateInfo {
+  file: string;
+  name: string;
+  description: string;
+  steps: number;
+  tools: string[];
+}
+import type { LocalProviderDef } from "../local_providers.ts"; // P-LOCAL.3: self-hosted/custom LLM providers
+
 export interface BlockRecord { id: string; tool: string; severity: string; findings: string; reason: string; at: string; status: "quarantined" | "approved" | "dismissed"; reviewer?: string }
+
+/** P-AGENT.4-live/.11a: a built-agent run reply. `paused` = halted at an approval checkpoint (ENFORCED by
+ *  the SegmentedRun machine server-side); resume with agentRunApprove. */
+export interface AgentRunReply {
+  output: string;
+  error: string;
+  blocked: boolean;
+  reason: string;
+  paused?: { runId: string; nodeId: string; label: string; outputSoFar: string } | null;
+  runId?: string; // P-AGENT.13: the run's stable trace id
+}
 export interface SecuritySnapshot {
   findings: any[]; unicode: any[]; approvals: any[]; quarantine: any[];
   promotion: any[]; exports: any[]; runs: any[];
@@ -50,6 +91,8 @@ export interface ProbedLimit { provider: string; label: string; used: number; re
 
 // P-MCP.1 (ADR-0020): a configured MCP server's masked status (token never crosses the wire).
 export interface McpServerStatus { id: string; name: string; transport: "http" | "sse"; url: string; enabled: boolean; hasToken: boolean; tokenLast4?: string }
+// P-AGENTFW.2 (ADR-0149): a configured remote ACP agent connection (command/args, never a secret).
+export interface RemoteAgentStatus { id: string; name: string; kind: string; command: string; args: string[]; remoteUrl?: string; permissionPolicy: "deny" | "allow"; enabled: boolean }
 
 // ADR-0009 Phase D: read-only developer Logs view (gated on Developer mode).
 export interface TurnView { id: string; sessionId: string; seq: number; role: string; sanitized: string; rawSha256: string; trust: string; at: string }
@@ -61,6 +104,9 @@ export interface DevView {
   turns: TurnView[];
   // P-ASKSAGE.1 (ADR-0059): recent AskSage tool-loop call diagnostics (developer mode only).
   asksage?: Array<Record<string, unknown>>;
+  // P-GATE-DIAG.1 (ADR-0066/0062): recent exec/egress gate-decision diagnostics (developer mode only) —
+  // shows WHY a tool was auto-denied vs prompted (askActive / listener / goalActive / autoRunning).
+  gate?: Array<Record<string, unknown>>;
   // P-ENT.2 (ADR-0069): the unified security-event stream (OCSF-ready) + per-sink delivery status.
   audit?: {
     events: { id: string; ts: string; category: string; type: string; severity: string; decision: string; tool?: string; reason?: string; tier?: string; host: string }[];
@@ -102,6 +148,17 @@ export interface ConfigOption {
   id: string; name: string; category: string; type: string;
   currentValue: string; options: { value: string; name: string }[];
 }
+// P-VOICE.1 (ADR-0115): voice config + ElevenLabs voice for the pickers.
+export interface VoiceSettingsView {
+  sttProvider: "elevenlabs" | "whisper";
+  sttUrl: string;
+  ttsProvider: "elevenlabs" | "openai-tts" | "local-tts";
+  ttsVoice: string;
+  ttsVoiceFavorites: string[];
+}
+export interface ElevenVoiceView { voiceId: string; name: string; category?: string; description?: string; labels?: Record<string, string> }
+// P-REPORT.1 (ADR-0116): a unified Reports-list row - a loop AAR or a saved Engineering Update brief.
+export interface ReportEntry { kind: "aar" | "brief"; id: string; title: string; outcome: string; role: string; updatedAt: number; rel: string }
 export interface ModeOption { id: string; name: string; description?: string }
 export interface ModeState { available: ModeOption[]; current: string; ui?: "agent" | "ask" | "plan"; permissionMode?: "auto" | "ask" }
 export interface OmpCommand { name: string; description?: string; hint?: string }
@@ -140,6 +197,8 @@ export interface GraphNode { id: string; name: string; kind: string; trust: stri
 export interface GraphEdge { from: string; to: string; relation: string }
 export interface GraphFact { id: string; entity_id: string; statement: string; scope: string; trust: string; confidence: number; session?: string; at: string }
 export interface PersonalGraphData { nodes: GraphNode[]; edges: GraphEdge[]; facts: GraphFact[] }
+/** P-KG-CODE.1: the workspace code graph (file → import edges) + ingest status. Nodes/edges reuse the graph shapes. */
+export interface CodeGraphView { level: "file" | "symbol"; ingested: boolean; root: string; fileCount: number; symbolCount: number; edgeCount: number; updatedAt: number; nodes: GraphNode[]; edges: GraphEdge[] }
 export interface PersonalImportResult { ok: boolean; error?: string; vendor?: "openai" | "anthropic" | "gemini"; conversations?: number; messages?: number; learned?: number; blocked?: number; skipped?: number; extractor?: "heuristic" | "model"; cancelled?: boolean }
 // P-KG-INGEST.1 (ADR-0076): the background import job - start returns a jobId; status is polled for a live countdown.
 export interface PersonalImportStart { ok: boolean; jobId?: string; error?: string }
@@ -166,11 +225,14 @@ export interface WorkspaceInfo {
 export type ChatEvent =
   | { type: "token"; text: string }
   | { type: "thinking"; text: string }
-  | { type: "tool"; name: string; detail: string }
+  | { type: "tool"; name: string; detail: string; code?: { path: string; content?: string; oldText?: string; newText?: string; patch?: string } } // P-CHAT.1: inline code/diff preview
   | { type: "subagent"; id: string; agent: string; title: string; assignments: string[] }
   | { type: "block"; tool: string; reason: string; severity: string; findings: string; id?: string; quarantined?: boolean }
   | { type: "permission"; id: string; tool: string; detail: string; options: { optionId: string; name: string; kind?: string }[]; url?: string; egress?: boolean; localFile?: boolean; exec?: boolean; program?: string; reason?: string; danger?: boolean }
   | { type: "preview-available"; path: string } // P-PREVIEW.2 (ADR-0096): the agent wrote a previewable file
+  | { type: "preview-activity"; label: string } // P-PREVIEW.6a (ADR-0153): the agent is reviewing/testing the live preview
+  | { type: "agent-builder-open"; spec: AgentSpec } // P-AGENT.8.2 (ADR-0134): open the Agent Builder pre-populated
+  | { type: "slash-command-created"; command: UserCommand } // P-CMD.1 (ADR-0146): the agent created a user "/" command
   | { type: "usage"; used: number; size: number; cost: number }
   // P-GOAL.1/3 (ADR-0046): /goal loop events (kept in parity with desktop/acp_backend.ts).
   | { type: "goal-memory"; path: string }
@@ -213,8 +275,12 @@ export type Cadence = { kind: "interval"; everyMin: number } | { kind: "daily"; 
 export interface Automation {
   id: string; goal: string; condition: string; command?: string; maxIters: number;
   cadence: Cadence; enabled: boolean; createdAt: number; lastRunAt?: number; lastResult?: string;
+  kind?: "goal" | "agent"; agentSpecId?: string; agentPrompt?: string; agentModel?: string; // P-AGENT.14
 }
-export interface AutomationSpec { goal: string; condition?: string; command?: string; maxIters?: number; cadence: Cadence }
+export interface AutomationSpec {
+  goal: string; condition?: string; command?: string; maxIters?: number; cadence: Cadence;
+  kind?: "goal" | "agent"; agentSpecId?: string; agentPrompt?: string; agentModel?: string; // P-AGENT.14
+}
 // P-GOAL.6: the /goal checker-model picker state.
 export interface ModelOption { value: string; name?: string; description?: string }
 export interface CheckerModelInfo { selected: string; recommended: string; recommendedWhy: string; current: string; options: ModelOption[] }
@@ -249,8 +315,82 @@ export interface LucidBridge {
   /** Release one quarantined call - the audited fail-closed override (ADR-0019 C). */
   securityApprove(id: string): Promise<BlockRecord | null>;
   securityDismiss(id: string): Promise<BlockRecord | null>;
-  /** P-BRIEF.3 (ADR-0072): the Executive Engineering Update generated from the repo's own logs. */
-  engineeringBrief(): Promise<{ brief: string; scriptText: string; counts: Record<string, number> } | null>;
+  /** P-BRIEF.3 (ADR-0072) / P-REPORT.1 (ADR-0116): the Engineering Update from the repo's own logs,
+   *  optionally tailored to a role and persisted (save) so the Reports panel lists it. */
+  engineeringBrief(role?: string, save?: boolean): Promise<{ brief: string; scriptText: string; counts: Record<string, number>; role: string; savedRel: string | null } | null>;
+  /** P-REPORT.1: the unified Reports list (loop AARs + saved briefs) and reading one. `archived` = the archive view. */
+  reports(archived?: boolean): Promise<ReportEntry[] | null>;
+  report(kind: string, rel: string, archived?: boolean): Promise<{ kind: string; rel: string; markdown: string } | null>;
+  /** P-REPORT.2 (ADR-0117): two-stage lifecycle - archive (soft), restore, and permanent delete (archive only). */
+  reportArchive(kind: string, rel: string): Promise<{ archived: boolean } | null>;
+  reportRestore(kind: string, rel: string): Promise<{ restored: boolean } | null>;
+  reportDelete(kind: string, rel: string): Promise<{ deleted: boolean } | null>;
+  /** P-REPORT.3 (ADR-0117): push a report into the KG as one trusted node, in the chosen compartment. */
+  reportToKg(kind: string, rel: string, scope: string, archived?: boolean): Promise<{ ok: boolean; error?: string } | null>;
+  /** P-EXEC.3: "TLDR" - plain-language explanation of a command via a cheap keyed model. */
+  explainCommand(command: string): Promise<{ ok: boolean; text?: string; model?: string; error?: string } | null>;
+  /** P-REPORT.6: the Security control crosswalk as an eMASS-aligned POA&M CSV. */
+  engineeringBriefPoam(): Promise<{ csv: string; rows: number; filename: string } | null>;
+  /** P-REPORT.8: the Security control crosswalk as a STIG Viewer .ckl checklist. */
+  engineeringBriefCkl(): Promise<{ ckl: string; rows: number; filename: string } | null>;
+  /** P-KG-CODE.1 / P-KG-SYM.1: the workspace code graph at `level` (file imports | symbol AST). `codeGraph` reads
+   *  the stored graph; `codeGraphIngest` (re-)builds it. */
+  codeGraph(level: "file" | "symbol"): Promise<CodeGraphView | null>;
+  codeGraphIngest(level: "file" | "symbol"): Promise<CodeGraphView | null>;
+  /** P-KG-SYM.1: read / set whether the agent gets the read-only codegraph_query tool (set restarts the backend). */
+  codeGraphAgent(): Promise<{ enabled: boolean } | null>;
+  /** P-AGENT.2b: Agent Builder spec persistence (workspace .omp/agents/). Save validates fail-closed server-side. */
+  agentList(): Promise<SpecFileSummary[]>;
+  agentLoad(id: string): Promise<AgentSpec | null>;
+  agentSave(spec: AgentSpec): Promise<{ saved?: boolean; spec_id?: string; errors?: string[] } | null>;
+  agentDelete(id: string): Promise<{ deleted: boolean } | null>;
+  agentExport(spec: AgentSpec, target: string): Promise<{ dir: string; target: string; digest: string; files: number } | null>;
+  /** P-AGENT.9: portable share/import (.lucid-agent.json, credential NAMES only) + the human approval step. */
+  agentShare(spec: AgentSpec): Promise<{ path?: string; fileName?: string; json?: string; setup?: string; digest?: string; error?: string } | null>;
+  agentImport(raw: string): Promise<{ spec?: AgentSpec; trustLabel?: string; canRun?: boolean; reason?: string; findings?: number; setup?: string; notes?: string[]; error?: string } | null>;
+  agentTrust(id: string): Promise<{ trustLabel?: string; error?: string } | null>;
+  /** P-AGENT.10: n8n interop — export a workflow scaffold; push via the enterprise add-on connector. */
+  agentN8nExport(spec: AgentSpec): Promise<{ path?: string; fileName?: string; json?: string; pushAvailable?: boolean; pushNote?: string; error?: string } | null>;
+  agentN8nPush(spec: AgentSpec): Promise<{ ok?: boolean; detail?: string; url?: string; error?: string } | null>;
+  agentRun(spec: AgentSpec, prompt: string, model: string): Promise<AgentRunReply | null>;
+  /** P-AGENT.11a: resolve a run parked at an approval checkpoint (deny is terminal). */
+  agentRunApprove(runId: string, approve: boolean): Promise<AgentRunReply | null>;
+  /** P-AGENT.13: run traces — summaries per spec, and one full trace by run id. */
+  agentTraces(specId: string): Promise<TraceSummary[]>;
+  agentTrace(runId: string): Promise<AgentRunTrace | null>;
+  /** P-AGENT.12: tools discovered from enabled MCP servers (omp runtime names) + per-server probe status. */
+  agentMcpTools(): Promise<{ tools: McpCatalogTool[]; servers: { server: string; ok: boolean; count: number; error: string }[] }>;
+  /** P-AGENT.17: revision history (snapshots per save) + restore; the starter-template gallery. */
+  agentHistory(id: string): Promise<SpecRevisionSummary[]>;
+  agentHistoryRestore(id: string, ts: number): Promise<{ spec?: AgentSpec; error?: string } | null>;
+  agentTemplates(): Promise<AgentTemplateInfo[]>;
+  agentTemplateUse(file: string): Promise<{ spec?: AgentSpec; trustLabel?: string; reason?: string; setup?: string; notes?: string[]; error?: string } | null>;
+  /** P-LOCAL.3 (ADR-0135): Local Providers (self-hosted/custom OpenAI-compatible LLMs). Declarations only —
+   *  the API key is stored via credStore into the OS-encrypted vault, never through these. */
+  localProvidersList(): Promise<LocalProviderDef[]>;
+  localProviderUpsert(provider: LocalProviderDef): Promise<{ saved?: boolean; id?: string; errors?: string[] } | null>;
+  localProviderDelete(id: string): Promise<{ deleted: boolean } | null>;
+  localProviderEnable(id: string, enabled: boolean): Promise<{ ok: boolean } | null>;
+  /** Reachability/TLS probe of a base URL's /models endpoint (no key sent). */
+  localProviderTest(baseUrl: string): Promise<{ reachable: boolean; status?: number; authed?: boolean; error?: string } | null>;
+  /** Restart the desktop app so a spawned omp picks up new local providers (Electron only; no-op in browser). */
+  relaunch(): Promise<void>;
+  setCodeGraphAgent(enabled: boolean): Promise<{ enabled: boolean } | null>;
+  /** P-APPEAR.1: the personalized chat background (image data URL + display mode + opacity). */
+  chatBackground(): Promise<{ image: string; mode: "off" | "ambient" | "flashlight"; opacity: number } | null>;
+  setChatBackground(patch: { image?: string; mode?: "off" | "ambient" | "flashlight"; opacity?: number }): Promise<{ image: string; mode: "off" | "ambient" | "flashlight"; opacity: number } | null>;
+  /** P-BRIEF.4 (ADR-0113): synthesize the podcast to WAV audio (base64) via a TTS provider. */
+  engineeringBriefAudio(provider: "openai-tts" | "local-tts" | "elevenlabs", voiceId?: string): Promise<{ note: string; audioB64: string | null; mime: string } | null>;
+  // P-VOICE.1 (ADR-0115): voice config (STT engine + TTS voice/favorites), the ElevenLabs voice list,
+  // mic transcription, and read-aloud TTS.
+  voiceSettings(): Promise<VoiceSettingsView | null>;
+  setVoiceSettings(patch: Partial<VoiceSettingsView>): Promise<VoiceSettingsView | null>;
+  voices(): Promise<{ voices: ElevenVoiceView[]; favorites: string[]; selected: string; note?: string } | null>;
+  transcribe(audioB64: string, mime: string, language?: string): Promise<{ text: string; note: string } | null>;
+  speak(text: string, voiceId?: string, provider?: string): Promise<{ audioB64: string | null; mime: string; note: string } | null>;
+  /** P-GOAL.14 (ADR-0112): list past After-Action Reports, and read one by its workspace-relative path. */
+  pastReports(): Promise<{ rel: string; id: string; goal: string; outcome: string; updatedAt: number }[] | null>;
+  pastReport(rel: string): Promise<{ rel: string; markdown: string } | null>;
   memory(): Promise<MemorySnapshot | null>;
   budget(): Promise<{ label: string; used: number; status: string; resetsAt: number | null }[] | null>;
   // P10.3: live API-key rate-limit probe (opt-in). `rateLimits()` returns probed limits ([] when off);
@@ -265,9 +405,14 @@ export interface LucidBridge {
   mcpUpsert(e: { id?: string; name: string; transport?: "http" | "sse"; url: string; token?: string; enabled?: boolean }): Promise<McpServerStatus | null>;
   mcpRemove(id: string): Promise<unknown>;
   mcpToggle(id: string, enabled: boolean): Promise<unknown>;
+  // P-AGENTFW.2 (ADR-0149): remote ACP agent (hermes/openclaw) connections proxied through the firewall.
+  remoteAgentList(): Promise<RemoteAgentStatus[] | null>;
+  remoteAgentUpsert(e: { id?: string; name: string; kind?: string; command: string; args?: string; cwd?: string; remoteUrl?: string; permissionPolicy?: string; enabled?: boolean }): Promise<RemoteAgentStatus | null>;
+  remoteAgentRemove(id: string): Promise<unknown>;
+  remoteAgentToggle(id: string, enabled: boolean): Promise<unknown>;
   usage(): Promise<UsageLedger | null>;
   codeActivity(): Promise<CodeActivity | null>;
-  sendPrompt(text: string, onEvent: (e: ChatEvent) => void): Promise<void>;
+  sendPrompt(text: string, onEvent: (e: ChatEvent) => void, images?: { data: string; mimeType: string }[]): Promise<void>;
   // P-GOAL.1 (ADR-0046): run a /goal loop - streams the same events plus goal-iter/check/done/stop.
   runGoal(opts: GoalOpts, onEvent: (e: ChatEvent) => void): Promise<void>;
   resumableLoops(): Promise<ResumableLoop[] | null>; // P-GOAL.4: loops that stopped without meeting their condition
@@ -298,6 +443,11 @@ export interface LucidBridge {
   cancelGoal(): Promise<unknown>; // P-GOAL.2: stop a running /goal loop
   commands(): Promise<OmpCommand[]>;
   skills(): Promise<{ name: string; description: string; source: string }[] | null>;
+  // P-CMD.1 (ADR-0146): user-authored "/" slash commands (workspace .omp/commands/). Create validates +
+  // scans fail-closed server-side. `list` = stored commands; `create` returns the persisted command or errors.
+  userCommands(): Promise<UserCommand[]>;
+  userCommandCreate(command: UserCommand): Promise<{ ok: boolean; command?: UserCommand; errors?: string[]; blocked?: boolean; reason?: string } | null>;
+  userCommandDelete(name: string): Promise<{ deleted: boolean } | null>;
   // P-SKILL.1 (ADR-0045): import dropped .md skill files - each is scanned at the gate; clean ones are
   // written under .omp/skills/, flagged ones are held for Security-panel review.
   skillImport(files: { name: string; content: string }[]): Promise<{ results: SkillImportResult[] } | null>;
@@ -307,7 +457,8 @@ export interface LucidBridge {
   // P-IDE.3: record a skill activation as telemetry (metadata only).
   skillActivated(command: string, name: string, source: "bundled" | "project" | "task"): Promise<unknown>;
   sessions(): Promise<SessionList | null>;
-  sessionMessages(id: string): Promise<{ role: string; text: string }[] | null>;
+  // P-PERF.4: tail-first transcript page - `limit` returns only the last N messages (+ the true total).
+  sessionMessages(id: string, limit?: number): Promise<{ messages: { role: string; text: string }[]; total: number } | null>;
   resumeSession(id: string): Promise<void>;
   deleteSession(id: string): Promise<{ ok: boolean; error?: string }>;
   clearIngestSessions(): Promise<{ ok: boolean; cleared: number } | null>; // P-KG-INGEST.2: bulk-delete ingest throwaways
@@ -387,12 +538,69 @@ export interface LucidBridge {
   setWorkspace(path: string): Promise<WorkspaceInfo | null>;
   cloneWorkspace(url: string): Promise<WorkspaceInfo | null>;
   pickFolder(): Promise<string | null>; // native dialog in Electron; null in browser
+  // P-NETWL.1 (ADR-0106): native FILE picker + OS-encrypted credential vault. All Electron-only; in a plain
+  // browser pickFile/credList resolve null/[] and credStore reports the vault as unavailable (fail-closed).
+  pickFile(opts?: { title?: string; filters?: { name: string; extensions: string[] }[] }): Promise<string | null>;
+  credStore(input: { ref?: string; kind: string; secret: string; label?: string; expiresAt?: number; rotationIntervalDays?: number }): Promise<CredMetaView | { error: string }>;
+  credStoreFile(input: { kind: string; label?: string; expiresAt?: number; rotationIntervalDays?: number }): Promise<CredMetaView | { error: string } | null>;
+  // P-KEYS.2 (ADR-0107): rotate a stored secret in place (same ref) by paste or file.
+  credRotate(input: { ref: string; secret: string; expiresAt?: number }): Promise<CredMetaView | { error: string }>;
+  credRotateFile(input: { ref: string }): Promise<CredMetaView | { error: string } | null>;
+  credList(): Promise<CredMetaView[]>;
+  credDelete(ref: string): Promise<boolean>;
+  credEncryptionAvailable(): Promise<boolean>;
+  // P-NETWL.2 (ADR-0106): curated network-whitelist CRUD (persisted server-side; non-secret).
+  whitelistList(): Promise<WhitelistEntryView[]>;
+  whitelistUpsert(entry: Partial<WhitelistEntryView>): Promise<WhitelistEntryView | null>;
+  whitelistRemove(id: string): Promise<void>;
+  // P-NETWL.5 (ADR-0108): the egress posture (allow-all + web-search toggles; managedLocked when enterprise-forced).
+  whitelistPosture(): Promise<EgressPostureView>;
+  setWhitelistPosture(patch: { allowAll?: boolean; allowWebSearch?: boolean }): Promise<EgressPostureView | null>;
   // P-PREVIEW.1 (ADR-0096): capture the preview region (window capturePage, cropped) → PNG data URL.
   // Electron-only; resolves null in a plain browser (no capturePage).
   capturePreview(rect: { x: number; y: number; width: number; height: number }): Promise<string | null>;
+  // P-PREVIEW.3b (ADR-0096): may this remote URL load in the preview iframe? True only if the egress
+  // allow-list (honoring the managed ceiling) already approves the site; else it stays gated.
+  previewEgressAllows(url: string): Promise<boolean>;
+  // P-PREVIEW.4 (ADR-0096): a local file's content for the iframe's srcdoc (file:// can't load from an http
+  // origin). Returns the HTML, or null if the path isn't a readable local previewable file.
+  previewFile(path: string): Promise<string | null>;
+  // P-PREVIEW.4b (ADR-0096): the same-origin URL that SERVES a local file as a document with its own
+  // per-frame CSP, for the iframe's `src`. Carries the transport token as a query param (an iframe src GET
+  // can't set a header). Used instead of srcdoc so the previewed app's inline scripts actually run.
+  previewServeUrl(path: string): string;
+  // P-PREVIEW.3a-shot (ADR-0096): cache a PNG of the just-rendered preview desktop-side so the agent's
+  // preview_screenshot tool can fetch it (capturePage is Electron-only + in the main process, unreachable
+  // from omp). No-op if the store rejects it. The agent SEEING the shot needs the packaged/Electron app.
+  cachePreviewShot(png: string): Promise<void>;
+  // P-PREVIEW.6b (ADR-0153): the DOM-inspect relay. The renderer polls for the agent's next queued inspect
+  // command, runs it on the sandboxed iframe (via the postMessage bridge), and posts the result back.
+  previewInspectNext(): Promise<{ id?: string; command?: { selector?: string; what?: string }; none?: boolean } | null>;
+  previewInspectResult(id: string, result: unknown): Promise<void>;
   listDir(path?: string): Promise<FsList | null>; // in-app folder browser (works everywhere)
   revealPath(path: string): Promise<boolean>; // open a folder in the OS file manager (Electron only; false in browser)
   canRevealPath(): boolean; // whether the native shell can reveal a folder (Electron only)
+}
+
+/** Non-secret metadata about a vault credential (P-NETWL.1, ADR-0106). No plaintext ever crosses this line;
+ *  `last4` (P-KEYS.1, ADR-0107) is at most the last 4 chars, to identify a key without revealing it. */
+export interface CredMetaView { ref: string; kind: string; label?: string; last4?: string; createdAt?: number; rotatedAt?: number; expiresAt?: number; rotationIntervalDays?: number }
+
+/** The egress posture (P-NETWL.5, ADR-0108): the two pre-checked toggles + whether an enterprise policy locks them. */
+export interface EgressPostureView { allowAll: boolean; allowWebSearch: boolean; managedLocked: boolean }
+
+/** A curated network-whitelist entry (P-NETWL.2, ADR-0106). Non-secret: `auth` holds only an opaque
+ *  `vaultRef` into the credential vault, never the secret itself. Mirrors network_whitelist.ts WhitelistEntry. */
+export interface WhitelistEntryView {
+  id: string;
+  kind: "domain" | "ip";
+  pattern: string;
+  zone: "internal" | "external";
+  scope: "always" | "project" | "loop";
+  project?: string | null;
+  callBudget?: number | null;
+  auth?: { kind: string; vaultRef: string; username?: string; header?: string; note?: string } | null;
+  addedAt?: number;
 }
 
 /** Native shell injected by the Electron preload (window controls + crisp zoom). */
@@ -402,7 +610,17 @@ interface NativeShell {
   pickFolder?(): Promise<string | null>;
   capturePreview?(rect: { x: number; y: number; width: number; height: number }): Promise<string | null>;
   revealPath?(path: string): Promise<boolean>;
+  relaunch?(): Promise<void>; // P-LOCAL.3 polish: restart the app to apply local-provider changes
   win?: { minimize(): void; toggleMaximize(): void; close(): void };
+  // P-NETWL.1 (ADR-0106): native file picker + OS-encrypted credential vault (Electron-only).
+  pickFile?(opts?: { title?: string; filters?: { name: string; extensions: string[] }[] }): Promise<string | null>;
+  credStore?(input: { ref?: string; kind: string; secret: string; label?: string; expiresAt?: number; rotationIntervalDays?: number }): Promise<CredMetaView | { error: string }>;
+  credStoreFile?(input: { kind: string; label?: string; expiresAt?: number; rotationIntervalDays?: number }): Promise<CredMetaView | { error: string } | null>;
+  credRotate?(input: { ref: string; secret: string; expiresAt?: number }): Promise<CredMetaView | { error: string }>;
+  credRotateFile?(input: { ref: string }): Promise<CredMetaView | { error: string } | null>;
+  credList?(): Promise<CredMetaView[]>;
+  credDelete?(ref: string): Promise<boolean>;
+  credEncryptionAvailable?(): Promise<boolean>;
 }
 declare global { interface Window { lucid?: NativeShell } }
 const shell: NativeShell | undefined = typeof window !== "undefined" ? window.lucid : undefined;
@@ -467,10 +685,10 @@ async function streamNdjson(path: string, body: unknown, onEvent: (e: ChatEvent)
 // Stop must always recover the UI: aborting this controller ends the client read immediately, so the
 // turn's finally runs even when omp is wedged. cancelChat() aborts it AND posts the server cancel.
 let chatAbort: AbortController | null = null;
-const streamChat = (text: string, onEvent: (e: ChatEvent) => void) => {
+const streamChat = (text: string, onEvent: (e: ChatEvent) => void, images?: { data: string; mimeType: string }[]) => {
   chatAbort?.abort();
   chatAbort = new AbortController();
-  return streamNdjson("/api/chat", { text }, onEvent, chatAbort.signal).finally(() => { chatAbort = null; });
+  return streamNdjson("/api/chat", { text, ...(images?.length ? { images } : {}) }, onEvent, chatAbort.signal).finally(() => { chatAbort = null; });
 };
 
 export const bridge: LucidBridge = {
@@ -478,7 +696,55 @@ export const bridge: LucidBridge = {
   security: () => getData("/api/security"),
   securityApprove: (id) => post("/api/security/approve", { id }),
   securityDismiss: (id) => post("/api/security/dismiss", { id }),
-  engineeringBrief: () => getData("/api/brief"),
+  engineeringBrief: (role, save) => getData(`/api/brief${role || save ? "?" : ""}${role ? `role=${encodeURIComponent(role)}` : ""}${save ? `${role ? "&" : ""}save=1` : ""}`),
+  reports: (archived) => getData(`/api/reports${archived ? "?archived=1" : ""}`),
+  report: (kind, rel, archived) => getData(`/api/report?kind=${encodeURIComponent(kind)}&rel=${encodeURIComponent(rel)}${archived ? "&archived=1" : ""}`),
+  reportArchive: (kind, rel) => post("/api/report/archive", { kind, rel }),
+  reportRestore: (kind, rel) => post("/api/report/restore", { kind, rel }),
+  reportDelete: (kind, rel) => post("/api/report/delete", { kind, rel }),
+  reportToKg: (kind, rel, scope, archived) => post("/api/report/to-kg", { kind, rel, scope, archived }),
+  explainCommand: (command) => post("/api/explain", { command }),
+  engineeringBriefPoam: () => getData("/api/brief/poam"),
+  engineeringBriefCkl: () => getData("/api/brief/ckl"),
+  codeGraph: (level) => getData(`/api/codegraph?level=${level}`),
+  codeGraphIngest: (level) => post("/api/codegraph", { level }),
+  codeGraphAgent: () => getData("/api/codegraph/agent"),
+  agentList: async () => (await getData("/api/agent"))?.specs ?? [], // P-AGENT.2b
+  agentLoad: async (id) => (await getData(`/api/agent?id=${encodeURIComponent(id)}`))?.spec ?? null, // P-AGENT.2b
+  agentSave: (spec) => post("/api/agent", { spec }), // P-AGENT.2b (server validates fail-closed)
+  agentDelete: (id) => post("/api/agent/delete", { id }), // P-AGENT.2b
+  agentExport: (spec, target) => post("/api/agent/export", { spec, target }), // P-AGENT.6
+  agentShare: (spec) => post("/api/agent/share", { spec }), // P-AGENT.9
+  agentImport: (raw) => post("/api/agent/import", { raw }), // P-AGENT.9
+  agentTrust: (id) => post("/api/agent/trust", { id }), // P-AGENT.9
+  agentN8nExport: (spec) => post("/api/agent/n8n-export", { spec }), // P-AGENT.10
+  agentN8nPush: (spec) => post("/api/agent/n8n-push", { spec }), // P-AGENT.10
+  agentRun: (spec, prompt, model) => post("/api/agent/run", { spec, prompt, model }), // P-AGENT.4-live/.11a
+  agentRunApprove: (runId, approve) => post("/api/agent/run/approve", { runId, approve }), // P-AGENT.11a
+  agentTraces: async (specId) => (await getData(`/api/agent/traces?spec=${encodeURIComponent(specId)}`))?.traces ?? [], // P-AGENT.13
+  agentTrace: async (runId) => (await getData(`/api/agent/trace?id=${encodeURIComponent(runId)}`))?.trace ?? null, // P-AGENT.13
+  agentMcpTools: async () => (await getData("/api/agent/tools")) ?? { tools: [], servers: [] }, // P-AGENT.12 (fail-soft: static catalog only)
+  agentHistory: async (id) => (await getData(`/api/agent/history?id=${encodeURIComponent(id)}`))?.revisions ?? [], // P-AGENT.17
+  agentHistoryRestore: (id, ts) => post("/api/agent/history/restore", { id, ts }), // P-AGENT.17
+  agentTemplates: async () => (await getData("/api/agent/templates"))?.templates ?? [], // P-AGENT.17
+  agentTemplateUse: (file) => post("/api/agent/template-use", { file }), // P-AGENT.17 (standard gated import path)
+  localProvidersList: async () => (await getData("/api/local-providers"))?.providers ?? [], // P-LOCAL.3
+  localProviderUpsert: (provider) => post("/api/local-providers", { provider }), // P-LOCAL.3 (server validates fail-closed)
+  localProviderDelete: (id) => post("/api/local-providers/delete", { id }), // P-LOCAL.3
+  localProviderEnable: (id, enabled) => post("/api/local-providers/enable", { id, enabled }), // P-LOCAL.3
+  localProviderTest: (baseUrl) => post("/api/local-providers/test", { baseUrl }), // P-LOCAL.3 polish
+  relaunch: () => (shell?.relaunch ? shell.relaunch() : Promise.resolve()), // P-LOCAL.3 polish (Electron only)
+  setCodeGraphAgent: (enabled) => post("/api/codegraph/agent", { enabled }),
+  chatBackground: () => getData("/api/chat-bg"),
+  setChatBackground: (patch) => post("/api/chat-bg", patch),
+  engineeringBriefAudio: (provider, voiceId) => post("/api/brief/audio", { provider, voiceId }),
+  voiceSettings: () => getData("/api/voice-settings"),
+  setVoiceSettings: (patch) => post("/api/voice-settings", patch),
+  voices: () => getData("/api/voices"),
+  transcribe: (audioB64, mime, language) => post("/api/transcribe", { audioB64, mime, language }),
+  speak: (text, voiceId, provider) => post("/api/tts/speak", { text, voiceId, provider }),
+  pastReports: () => getData("/api/goal/reports"),
+  pastReport: (rel) => getData(`/api/goal/reports?rel=${encodeURIComponent(rel)}`),
   memory: () => getData("/api/memory"),
   budget: () => getData("/api/budget"),
   rateLimits: (force) => getData(`/api/ratelimits${force ? "?force=1" : ""}`),
@@ -489,6 +755,10 @@ export const bridge: LucidBridge = {
   mcpUpsert: (e) => post("/api/mcp", e),
   mcpRemove: (id) => post("/api/mcp/remove", { id }),
   mcpToggle: (id, enabled) => post("/api/mcp/toggle", { id, enabled }),
+  remoteAgentList: () => getData("/api/agents"),
+  remoteAgentUpsert: (e) => post("/api/agents", e),
+  remoteAgentRemove: (id) => post("/api/agents/remove", { id }),
+  remoteAgentToggle: (id, enabled) => post("/api/agents/toggle", { id, enabled }),
   usage: () => getData("/api/usage"),
   codeActivity: () => getData("/api/code-activity"),
   sendPrompt: streamChat,
@@ -515,6 +785,9 @@ export const bridge: LucidBridge = {
   cancelGoal: () => post("/api/goal/cancel", {}),
   commands: async () => (await getData("/api/commands")) ?? [],
   skills: () => getData("/api/skills"),
+  userCommands: async () => (await getData("/api/usercommand")) ?? [], // P-CMD.1
+  userCommandCreate: (command) => post("/api/usercommand", { command }), // P-CMD.1 (server validates + scans fail-closed)
+  userCommandDelete: (name) => post("/api/usercommand/delete", { name }), // P-CMD.1
   skillImport: (files) => post("/api/skills/import", { files }),
   setActiveSkill: (name, prompt) => post("/api/skill", { name, prompt }),
   clearActiveSkill: () => post("/api/skill", { clear: true }),
@@ -529,7 +802,13 @@ export const bridge: LucidBridge = {
       return data ?? { sessions: [], ingest: [] };
     } catch { return null; }
   },
-  sessionMessages: (id) => getData(`/api/session?id=${encodeURIComponent(id)}`),
+  sessionMessages: async (id, limit = 0) => {
+    const data: { messages: { role: string; text: string }[]; total: number } | { role: string; text: string }[] | null =
+      await getData(`/api/session?id=${encodeURIComponent(id)}&limit=${limit}`);
+    if (!data) return null;
+    // Tolerate an older server that returned the bare array (pre-P-PERF.4): wrap it as a full page.
+    return Array.isArray(data) ? { messages: data, total: data.length } : data;
+  },
   resumeSession: async (id) => { await post("/api/session/load", { id }); },
   deleteSession: async (id) => (await post("/api/session/delete", { id })) ?? { ok: false, error: "no response" },
   clearIngestSessions: () => post("/api/sessions/ingest/clear", {}),
@@ -587,7 +866,27 @@ export const bridge: LucidBridge = {
   setWorkspace: (path) => post("/api/workspace", { path }),
   cloneWorkspace: (url) => post("/api/workspace/clone", { url }),
   pickFolder: () => (shell?.pickFolder ? shell.pickFolder() : Promise.resolve(null)),
+  pickFile: (opts) => (shell?.pickFile ? shell.pickFile(opts) : Promise.resolve(null)), // P-NETWL.1
+  credStore: (input) => (shell?.credStore ? shell.credStore(input) : Promise.resolve({ error: "os-encryption-unavailable" })), // P-NETWL.1 (fail-closed in browser)
+  credStoreFile: (input) => (shell?.credStoreFile ? shell.credStoreFile(input) : Promise.resolve({ error: "os-encryption-unavailable" })), // P-NETWL.2
+  credRotate: (input) => (shell?.credRotate ? shell.credRotate(input) : Promise.resolve({ error: "os-encryption-unavailable" })), // P-KEYS.2
+  credRotateFile: (input) => (shell?.credRotateFile ? shell.credRotateFile(input) : Promise.resolve({ error: "os-encryption-unavailable" })), // P-KEYS.2
+  credList: () => (shell?.credList ? shell.credList() : Promise.resolve([])), // P-NETWL.1
+  credDelete: (ref) => (shell?.credDelete ? shell.credDelete(ref) : Promise.resolve(false)), // P-NETWL.1
+  credEncryptionAvailable: () => (shell?.credEncryptionAvailable ? shell.credEncryptionAvailable() : Promise.resolve(false)), // P-NETWL.1
+  whitelistList: async () => (await getData("/api/whitelist")) ?? [], // P-NETWL.2
+  whitelistUpsert: (entry) => post("/api/whitelist", entry), // P-NETWL.2
+  whitelistRemove: async (id) => { await post("/api/whitelist/remove", { id }); }, // P-NETWL.2
+  whitelistPosture: async () => (await getData("/api/whitelist/posture")) ?? { allowAll: true, allowWebSearch: true, managedLocked: false }, // P-NETWL.5
+  setWhitelistPosture: (patch) => post("/api/whitelist/posture", patch), // P-NETWL.5
   capturePreview: (rect) => (shell?.capturePreview ? shell.capturePreview(rect) : Promise.resolve(null)), // P-PREVIEW.1
+  previewEgressAllows: async (url) => { const d = await getData(`/api/preview/egress-check?url=${encodeURIComponent(url)}`); return !!(d as { allow?: boolean } | null)?.allow; }, // P-PREVIEW.3b
+  previewFile: async (path) => { const d = await getData(`/api/preview/file?path=${encodeURIComponent(path)}`); const h = (d as { html?: unknown } | null)?.html; return typeof h === "string" ? h : null; }, // P-PREVIEW.4
+  previewServeUrl: (path) => `/api/preview/serve?path=${encodeURIComponent(path)}${TOKEN ? `&t=${encodeURIComponent(TOKEN)}` : ""}`, // P-PREVIEW.4b
+  cachePreviewShot: async (png) => { await post("/api/preview/shot-cache", { png }); }, // P-PREVIEW.3a-shot
+  previewInspectNext: () => getData("/api/preview/inspect/next"), // P-PREVIEW.6b
+  previewInspectResult: async (id, result) => { await post("/api/preview/inspect/result", { id, result }); }, // P-PREVIEW.6b
+
 
   listDir: (path) => getData(`/api/fs/list${path ? `?path=${encodeURIComponent(path)}` : ""}`),
   revealPath: (path) => (shell?.revealPath ? shell.revealPath(path) : Promise.resolve(false)),

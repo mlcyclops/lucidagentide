@@ -8,11 +8,11 @@
 // agent turn. Same renderer in Electron (real omp ACP via window.lucid) and in
 // the browser dev server (simulated). Pure DOM, no framework.
 
-import { bridge, type ChatEvent, type ConfigOption, type GoalDial, type MemorySnapshot, type OmpCommand, type ProviderAuth, type SecuritySnapshot, type SessionInfo, type SessionList, type UserRole, type WorkspaceInfo } from "./bridge.ts";
+import { bridge, type AgentRunReply, type McpCatalogTool, type ChatEvent, type ConfigOption, type GoalDial, type MemorySnapshot, type OmpCommand, type ProviderAuth, type SecuritySnapshot, type SessionInfo, type SessionList, type UserRole, type WorkspaceInfo } from "./bridge.ts";
 import { ROLE_META, USER_ROLE_LIST, coachHtml, roleDefaultTab, stepsForRole, type TourStep } from "./tour.ts";
 import { modCombo, modSymbol } from "./platform.ts";
 import { aiLocHasData } from "../ailoc_view.ts";
-import { PREVIEW_ALLOW, PREVIEW_SANDBOX, resolvePreview } from "../preview_resolve.ts";
+import { PREVIEW_ALLOW, PREVIEW_SANDBOX, canPreviewRemote, resolvePreview } from "../preview_resolve.ts";
 import { roleIcon } from "./role_icons.ts";
 import { providerHasApiKey, providerKeywords } from "./budget_gate.ts";
 import { cachedSessions, cachedTranscript, setCachedSessions, setCachedTranscript, transcriptSig } from "./swr_cache.ts";
@@ -24,15 +24,25 @@ import { APP_VERSION } from "../version.ts";
 import { renderMarkdown } from "./markdown.ts";
 import { type GraphHandle, kindLabel, mountGraph } from "./graph.ts";
 import { addEdgeOptimistic, applyForget, chainPairs, matchNodes, removeEdgeOptimistic, resolveRelationLabel } from "./kg_ops.ts";
+import { capGraph, graphOpts, pollDelay, watchPerfTier } from "./perf_tier.ts";
 import type { PersonalGraphData } from "./bridge.ts";
+import { agentBuilderPanelHtml, specToGraphData, nodeEditorHtml, saveErrors, newCanvasSpec, runPanelHtml, secretsPanelHtml, agentInterviewPrompt, toolChipsHtml, trustBannerHtml, runApprovalHtml, runsPanelHtml, traceDetailHtml, schedulePanelHtml, historyPanelHtml, templatesPanelHtml } from "./agent_builder.ts"; // P-AGENT.2b/.4-live/.8/.9/.11a/.13/.14/.17
+import type { TrustLabel } from "../../harness/contracts.ts"; // P-AGENT.9: imported-agent trust banner
+import { localProvidersCardBody, draftFromForm } from "./local_providers_ui.ts"; // P-LOCAL.3 (ADR-0135): Settings → Local Providers
+import { acceptAttachment, promptImageBlocks, thumbStripHtml, MAX_ATTACHMENT_BYTES, type Attachment } from "./composer_attachments.ts"; // P-VISION.1 (ADR-0136): pasted images
+import type { AgentSpec, NodeKind } from "../../harness/agent/spec.ts"; // P-AGENT.2b
+import { expandCommandBody, expandInlineCommands, slashTokenBeforeCaret, type UserCommand } from "../../harness/commands/spec.ts"; // P-CMD.1/.2: user "/" commands, body-wide
 import { type Action, type ToastAction, attachRichTip, createPalette, initTooltips, popover, showToast } from "./ui.ts";
 import { exportActionPlan } from "./kg_export.ts";
 import { formatImportLine } from "./import_progress.ts";
 import { ASKSAGE_FAMILY_ORDER, familyOf, filterModels, groupByFamily, isAuxiliaryModel, isChinaModel, isDeprecatedModel, isGovModel, sortGovFirstNewest } from "./model_families.ts";
 import { INSTALLED_SKILLS, bumpSkillUsage, bundledSkillsByUsage, taskProforma } from "./skills.ts";
 import { CHECKER_TOKENS_PER_ITER, MAKER_TOKENS_PER_ITER, estimateGoalCost, estimateGoalTokens, formatTokens, formatUSD } from "../loop_estimate.ts";
+import { speakable } from "../../harness/brief/engineering_update.ts"; // P-REPORT.7: make read-aloud text TTS-friendly
+import { changeGraphSvg, schemaSvg, type ChangeGraph, type ModuleChange, type GraphEdge, type StoreChange } from "../../harness/brief/change_graph.ts"; // P-REPORT.8: report annex graphs
 import { assumedCacheRate, priceFor } from "../model_pricing.ts";
-import { closeIde, openIde, setIdeExclusivity, setIdeHooks } from "./ide_panel.ts";
+import { closeIde, colorizeCode, guessLanguage, openIde, setIdeExclusivity, setIdeHooks } from "./ide_panel.ts";
+import { lineDiff, diffStat, patchLineType, patchStat, type DiffRow } from "./linediff.ts";
 // P-TPS.1 (ADR-0044): the shared output-token speedometer - same engine the omp
 // terminal adapter uses. Drives the HUD's live "tok out · tok/s" readout from the
 // streaming text/thinking deltas (output only; never the system prompt).
@@ -54,12 +64,15 @@ const state = {
   uiMode: "agent" as "agent" | "ask" | "plan", // P-ACP.2/3: composer Plan/Ask/Agent (derived from backend)
   commands: [] as OmpCommand[],
   skills: [] as { name: string; description: string; source: string }[],
+  userCommands: [] as UserCommand[], // P-CMD.1: user-authored "/" slash commands (workspace .omp/commands/)
   activeSkill: null as { command: string; name: string } | null, // P-IDE.2: active bundled skill
   liveUsage: null as { used: number; size: number; cost: number } | null,
   username: "" as string, // the "You" label on your messages (Settings → Profile)
   email: "" as string, // corporate email - attribution identity (ADR-0030); prompted on first open
   attribution: null as import("./bridge.ts").ProfileSettings["attribution"] | null, // identity + source (email|workstation)
   budgetWarned: new Set<string>(), // provider budgets we've already warned about this window
+  chatBg: { image: "", mode: "off" as "off" | "ambient" | "flashlight", opacity: 0.25 }, // P-APPEAR.1: personalized chat background
+  codeGraphAgent: false, // P-KG-SYM.1: expose the code graph to the agent as a queryable tool
   workspace: null as WorkspaceInfo | null,
   asksage: null as { configured: boolean; base: string; only: boolean; limit: number; datasets: string[]; queryModel: string; persona: string } | null,
   asksageTokens: null as { used: number; remaining: number | null; limit: number } | null,
@@ -79,6 +92,12 @@ const state = {
   developerMode: false, // ADR-0009 Phase D
   dev: null as import("./bridge.ts").DevView | null, // ADR-0009 Phase D logs snapshot
   mcpServers: [] as import("./bridge.ts").McpServerStatus[], // P-MCP.1 (ADR-0020)
+  agents: [] as import("./bridge.ts").RemoteAgentStatus[], // P-AGENTFW.2 (ADR-0149) remote ACP agent connections
+  whitelist: [] as import("./bridge.ts").WhitelistEntryView[], // P-NETWL.2 (ADR-0106) curated network whitelist
+  creds: [] as import("./bridge.ts").CredMetaView[], // P-KEYS.1 (ADR-0107) vault metadata (ref → kind/label/last4)
+  localProviders: [] as import("../local_providers.ts").LocalProviderDef[], // P-LOCAL.3 (ADR-0135) self-hosted/custom LLM endpoints
+  attachments: [] as Attachment[], // P-VISION.1 (ADR-0136) pasted/dropped images staged for the next message
+  posture: { allowAll: true, allowWebSearch: true, managedLocked: false } as import("./bridge.ts").EgressPostureView, // P-NETWL.5 (ADR-0108)
   managed: null as import("./bridge.ts").ManagedPolicy | null, // ADR-0068 (P-ENT.1) enterprise locks
   userRole: null as UserRole | null, // ADR-0088 (P-ROLE.1): chosen role; null until onboarding picks one
   tourSeen: false, // ADR-0089 (P-ROLE.1b): first-run walkthrough already shown (finished or skipped)
@@ -125,13 +144,15 @@ function buildShell(): void {
       <button class="model-badge" id="modelBadge" data-tip="Model · mode · thinking|Click to choose" data-tip-icon="spark">
         <span class="dot"></span><span id="modelName">${esc(modelLabel(state.model))}</span>${icon("chevron", 13)}
       </button>
+      <!-- Persona + Skills live in the titlebar (full-width, so they don't squish when a right surface opens). -->
+      <button class="ctool tb-chip" id="ctPersona" data-tip="AskSage persona|Server-supplied role guidance - scanned before use" hidden>${icon("user", 14)}<span id="ctPersonaName">Persona</span>${icon("chevron", 11)}</button>
+      <button class="ctool tb-chip" id="ctSkill" data-tip="Skills|Built-in skills, /task delegation, and project skills" hidden>${icon("bolt", 14)}<span>Skills</span>${icon("chevron", 11)}</button>
       <div class="tb-spacer"></div>
       <div class="zoom" role="group" aria-label="Text zoom">
-        <button id="zoomOut" data-tip="Zoom out|${modSymbol("−")}">${icon("minus", 15)}</button>
+        <button id="zoomOut" data-tip="Zoom out|${modSymbol("−")}">${icon("minus", 13)}</button>
         <span class="lvl" id="zoomLvl" data-tip="Reset zoom|${modSymbol("0")}">100%</span>
-        <button id="zoomIn" data-tip="Zoom in|${modSymbol("+")}">${icon("plus", 15)}</button>
+        <button id="zoomIn" data-tip="Zoom in|${modSymbol("+")}">${icon("plus", 13)}</button>
       </div>
-      <button class="model-badge" id="cmdkBtn" data-tip="Command palette|${modCombo("K")}" data-tip-icon="command">${icon("command", 14)}<span>Commands</span></button>
       <div class="win-ctrls">
         <button id="winMin" data-tip="Minimise">${icon("minus", 15)}</button>
         <button id="winMax" data-tip="Maximise">${icon("square", 13)}</button>
@@ -144,9 +165,11 @@ function buildShell(): void {
         <button class="rail-btn" id="sideToggle" data-tip="Sessions panel|Show / hide" data-tip-side="right">${icon("sidebar", 20)}</button>
         <button class="rail-btn active" data-rail="chat" data-tip="Conversation" data-tip-icon="chat">${icon("chat", 20)}</button>
         <button class="rail-btn" data-rail="security" data-tip="Security|Findings, quarantine & approvals" data-tip-icon="shield">${icon("shield", 20)}<span class="badge" id="railBadge" hidden>0</span></button>
-        <button class="rail-btn" data-rail="memory" data-tip="Memory & context|Context window, prompt-cache savings, semantic memory" data-tip-icon="brain">${icon("brain", 20)}</button>
+        <button class="rail-btn" data-rail="memory" data-tip="Memory & context|Context window, prompt-cache savings, semantic memory" data-tip-icon="savings">${icon("savings", 20)}</button>
         <button class="rail-btn" data-rail="knowledge" data-tip="Knowledge graph|Your private, encrypted personalization graph - nodes, edges, drill-down" data-tip-icon="graph">${icon("graph", 20)}</button>
         <button class="rail-btn" data-rail="preview" data-tip="Preview|Open a local app/page the agent built in a sandboxed in-app browser, and send a screenshot to chat" data-tip-icon="eye">${icon("eye", 20)}</button>
+        <button class="rail-btn" data-rail="agentBuilder" data-tip="Agent Builder|Design an AI agent on a visual workflow canvas - LUCID builds the gated code for you" data-tip-icon="spark">${icon("spark", 20)}</button>
+        <button class="rail-btn" id="railReports" data-tip="Engineering Reports|Generate a role-tailored engineering brief (with podcast audio), and browse every past loop After-Action Report + brief" data-tip-icon="report">${icon("report", 20)}</button>
         <button class="rail-btn" id="railLogs" data-rail="dev" hidden data-tip="Logs|Read-only developer logs: telemetry, run lineage, transcripts, gate-block audit, AskSage tool-call diagnostics" data-tip-icon="logs">${icon("logs", 20)}</button>
         <div class="spacer"></div>
         <button class="rail-btn rail-about" id="railAbout" data-tip="About LUCID Agent IDE|Version, license & credits" data-tip-icon="info">${readmeMark()}</button>
@@ -166,22 +189,23 @@ function buildShell(): void {
       </aside>
 
       <main class="center">
+        <div class="chat-bg" id="chatBg" aria-hidden="true"></div>
         <div class="chat" id="chat"><div class="thread" id="thread"></div></div>
         <button class="jump-down" id="jumpDown" type="button" aria-label="Jump down a page" data-tip="Jump down a page">${icon("chevronsDown", 18)}</button>
         <div class="composer-wrap">
+          <!-- P-VISION.1 (ADR-0136): thumbnails of pasted/dropped images, just above the prompt bar; sent
+               with the next message only when the user hits Enter/Send. -->
+          <div class="composer-thumbs" id="composerThumbs" hidden></div>
           <div class="composer-row">
             <div class="composer">
-              <textarea id="input" rows="1" placeholder="Ask the agent…  every tool call is scanned before it runs"></textarea>
+              <textarea id="input" rows="1" spellcheck="true" placeholder="Ask the agent…  every tool call is scanned before it runs"></textarea>
             </div>
             <button class="send-btn" id="send" data-tip="Send|Enter" disabled>${icon("send", 18)}</button>
           </div>
           <div class="composer-tools" id="composerTools">
-            <button class="ctool" id="ctModel" data-tip="Model|Click to change the model">${icon("spark", 14)}<span id="ctModelName">${esc(modelLabel(state.model))}</span>${icon("chevron", 11)}</button>
-            <button class="ctool" id="ctMode" data-tip="Mode|Agent edits files · Plan drafts read-only">${icon("bolt", 14)}<span id="ctModeName">Agent</span>${icon("chevron", 11)}</button>
-            <button class="ctool" id="ctThink" data-tip="Thinking depth|How hard the model reasons">${icon("bulb", 14)}<span id="ctThinkName">High</span>${icon("chevron", 11)}</button>
-            <button class="ctool" id="ctPersona" data-tip="AskSage persona|Server-supplied role guidance - scanned before use" hidden>${icon("user", 14)}<span id="ctPersonaName">Persona</span>${icon("chevron", 11)}</button>
-            <button class="ctool" id="ctSkill" data-tip="Skills|Built-in skills, /task delegation, and project skills" hidden>${icon("bolt", 14)}<span>Skills</span>${icon("chevron", 11)}</button>
-            <span class="ctool-hint"><span class="kh"><kbd>↵</kbd> send</span><span class="kh"><kbd>⇧↵</kbd> newline</span><span class="kh"><kbd>${modCombo("K")}</kbd> commands</span></span>
+            <!-- Persona + Skills moved to the titlebar (next to the model picker); the composer keeps only the
+                 mic so it never squishes when a right-edge surface (KG / IDE / Agent Builder) narrows the center. -->
+            <button class="ctool ctool-icon" id="ctMic" data-tip="Voice input · ${modCombo("D")}|Click (or press ${modCombo("D")}) to record, again to stop - transcribed into the composer (Settings → Voice sets the engine)">${icon("mic", 15)}</button>
           </div>
         </div>
       </main>
@@ -190,7 +214,7 @@ function buildShell(): void {
         <div class="resizer resizer-l" data-resize="inspector" data-tip="Drag to resize" data-tip-side="left"></div>
         <div class="insp-tabs">
           <button class="insp-tab sec" data-insp="security">${icon("shield", 15)} Security</button>
-          <button class="insp-tab mem active" data-insp="memory">${icon("brain", 15)} Memory</button>
+          <button class="insp-tab mem active" data-insp="memory">${icon("savings", 15)} Memory</button>
           <button class="insp-collapse" id="inspCollapse" data-tip="Collapse to metrics|Slide into a live quick-metrics rail" data-tip-side="bottom">${icon("collapse", 16)}</button>
         </div>
         <div class="insp-body" id="inspBody"></div>
@@ -217,7 +241,12 @@ function buildShell(): void {
             <div class="seg kg-lens" data-kg-lens>
               <button class="on" data-lens="kind">Kind</button><button data-lens="trust">Trust</button>
             </div>
-            <button class="btn-mini" id="kgRelate" data-tip="Relate nodes|Turn on relate mode, then drag one node onto another - or click two or more nodes and press Relate - to add your OWN relationships. They're saved to your private graph (first-party, never sent to be scanned as instructions).">${icon("git", 13)} Relate</button>
+            <button class="btn-mini" id="kgPerf" data-tip="Performance mode|Auto adapts rendering to battery + CPU: on battery the graph goes calm (no particle flow, shorter settle, capped nodes); LOW battery pauses the visualization entirely - the agent still uses your knowledge. Click to cycle auto → full → reduced → minimal.">${icon("gauge", 13)} Auto</button>
+            <div class="kg-relate-stack">
+              <button class="btn-mini" id="kgRelate" data-tip="Relate nodes|Turn on relate mode, then drag one node onto another - or click two or more nodes and press Relate - to add your OWN relationships. They're saved to your private graph (first-party, never sent to be scanned as instructions).">${icon("git", 13)} Relate</button>
+              <button class="btn-mini" id="kgCode" data-tip="Code graph|Ingest THIS workspace into a code knowledge graph - source files as nodes, imports as edges (colbymchenry/codegraph-style, in your own canvas). Click to build + view; click again to return to your personal graph. Needs no personalization unlock.">${icon("graph", 13)} Code graph</button>
+            </div>
+            <button class="btn-mini btn-icon" id="kgCodeUpdate" data-tip="Re-sync the code graph|Re-ingest the workspace to pick up new files + import changes since the last build." hidden>${icon("refresh", 14)}</button>
             <label class="kg-ai" data-tip="AI extraction|Use the model to pull richer facts + real relationships from each message, instead of the fast offline heuristic. Slower and uses model quota; capped at 500 messages per import. Leave off for a free, instant pass."><input type="checkbox" id="kgImportAI"/> AI</label>
             <button class="btn-mini" id="kgImport" data-tip="Import chat history|Bring in a ChatGPT, Claude, or Gemini data export to seed your graph. Easiest: just pick the unzipped export FOLDER (a modern ChatGPT export has no single conversations.json - it ships conversations-000.json, -001.json … and we merge them for you) - or point at the .zip / conversations.json / MyActivity.json directly. Every message is scanned by the security gate before anything is learned; only your own messages teach the profile.">${icon("download", 13)} Import history</button>
             <button class="btn-mini" id="kgExport" data-tip="Export Obsidian vault|Decrypt and write your Personal + Work knowledge to a portable Obsidian vault (notes, [[wikilinks]], escaped). CUI is excluded by design. The export is audited.">${icon("folder", 13)} Export vault</button>
@@ -234,6 +263,8 @@ function buildShell(): void {
         </div>
         <div class="kg-main">
           <div class="kg-canvas" id="kgCanvas"></div>
+          <button class="kg-center-btn" id="kgCenter" type="button" data-tip="Re-center the graph|Fit the whole graph back into view." data-tip-side="left" hidden>${icon("center", 17)}</button>
+          <div class="resizer resizer-l kg-side-resizer" id="kgSideResizer" data-resize="kgside" data-tip="Drag to resize the panel" data-tip-side="left" hidden></div>
           <div class="kg-side" id="kgSide"></div>
         </div>
       </aside>
@@ -245,16 +276,22 @@ function buildShell(): void {
           <div class="kg-tools">
             <input id="prevPath" class="kg-search" type="text" placeholder="Open a local file… (path or file://)" spellcheck="false" autocomplete="off" data-tip="Open a local file|Paste a path to an HTML file the agent built, then Open. Local files only in this build; remote URLs are egress-gated (coming next)." />
             <button class="btn-mini" id="prevOpen">${icon("download", 13)} Open</button>
+            <button class="btn-mini" id="prevBrowse" data-tip="Browse your workspace|Open a file from the current working directory to preview it yourself (native file picker).">${icon("folder", 13)} Browse…</button>
             <button class="btn-mini" id="prevReload" data-tip="Reload the preview">${icon("refresh", 13)} Reload</button>
-            <button class="btn-mini" id="prevShot" data-tip="Send a screenshot to chat|Capture the preview and attach it to the composer for the agent to react to. Desktop app only.">${icon("eye", 13)} Screenshot → chat</button>
+            <button class="btn-mini" id="prevMarkup" data-tip="Markup tools|Draw on the preview - pen, rectangle, text - then send the marked-up screenshot to chat.">${icon("markup", 14)} Markup ${icon("chevron", 10)}</button>
+            <button class="btn-mini" id="prevShot" data-tip="Send a screenshot to chat|Capture the preview (with your markup) and attach it to the composer for the agent to react to. Desktop app only.">${icon("eye", 13)} Screenshot → chat</button>
             <button class="set-close" id="prevClose" data-tip="Close">${icon("close", 16)}</button>
           </div>
         </div>
         <div class="preview-body" id="prevBody">
+          <!-- P-PREVIEW.6a (ADR-0153): a live "reviewing / testing" pill shown while the agent looks at the preview. -->
+          <div class="preview-pill" id="prevPill" hidden aria-live="polite"><span class="preview-pill-dot"></span><span id="prevPillLabel">Reviewing the preview</span></div>
           <iframe id="prevFrame" class="preview-frame" sandbox="${PREVIEW_SANDBOX}" allow="${PREVIEW_ALLOW}" referrerpolicy="no-referrer" title="App preview" hidden></iframe>
+          <canvas id="prevCanvas" class="preview-canvas" aria-hidden="true"></canvas>
           <div class="empty preview-empty" id="prevEmpty"><span class="preview-empty-msg" id="prevEmptyMsg">Open a local HTML file to preview it here - paste its path above and press <b>Open</b>. (The agent driving this itself is coming next; remote URLs are egress-gated.)</span></div>
         </div>
       </aside>
+      ${agentBuilderPanelHtml()}
     </div>
 
     <div class="statusbar" id="statusbar"></div>
@@ -317,6 +354,25 @@ async function renderSessions(): Promise<void> {
   }
   renderSessionList(data);
   setCachedSessions(data); // refresh the cache for next launch
+  void warmTranscripts(data); // P-PERF.4: AC-only idle prefetch (no-op on battery tiers)
+}
+// P-PERF.4 (ADR-0131): warm the transcript cache for the most-recent sessions so clicking one paints
+// instantly even on the FIRST visit. Strictly AC-only (perf tier `full`) - prefetch is anti-battery -
+// and off the interactive path via requestIdleCallback; sequential fetches keep the server load flat.
+let warmedTranscripts = false;
+async function warmTranscripts(data: SessionList): Promise<void> {
+  if (warmedTranscripts || perfWatch.tier() !== "full") return;
+  warmedTranscripts = true;
+  const run = async (): Promise<void> => {
+    for (const s of data.sessions.slice(0, 5)) {
+      if (perfWatch.tier() !== "full") break; // unplugged mid-warm -> stop spending
+      if (cachedTranscript(s.id)) continue;
+      const page = await bridge.sessionMessages(s.id, RESUME_TAIL).catch(() => null);
+      if (page?.messages.length) setCachedTranscript(s.id, page.messages, Date.now());
+    }
+  };
+  if (typeof requestIdleCallback === "function") requestIdleCallback(() => void run());
+  else window.setTimeout(() => void run(), 1500);
 }
 // P-KG-INGEST.2: bulk-delete the throwaway extraction sessions (chats + knowledge graph untouched).
 function confirmClearIngest(): void {
@@ -344,10 +400,12 @@ function seedThread(): void {
     <div class="h">Ask the agent anything</div>
     <div class="d">Secure prompting and code generation</div></div>`;
 }
-function addMessage(role: "user" | "assistant", text: string): HTMLElement {
+function addMessage(role: "user" | "assistant", text: string, attachments?: Attachment[]): HTMLElement {
   $("#chatHint")?.remove();
   // Copy + Save .md on BOTH roles (copy your own prompts too).
-  const actions = `<div class="msg-actions"><button class="msg-act" data-msg-copy data-tip="Copy markdown">${icon("copy", 13)}</button><button class="msg-act" data-msg-save data-tip="Save as .md">${icon("download", 13)}</button></div>`;
+  // P-VOICE.1 (ADR-0115): read-aloud (TTS) only on the assistant's replies.
+  const speakBtn = role === "assistant" ? `<button class="msg-act" data-msg-speak data-tip="Read aloud|Speak this reply (Settings → Voice sets the engine)">${icon("volume", 13)}</button>` : "";
+  const actions = `<div class="msg-actions"><button class="msg-act" data-msg-copy data-tip="Copy markdown">${icon("copy", 13)}</button><button class="msg-act" data-msg-save data-tip="Save as .md">${icon("download", 13)}</button>${speakBtn}</div>`;
   const who = role === "user" ? (state.username || "You") : "LucidAgent";
   const node = el(`<div class="msg ${role}">
     <div class="who">${esc(who)}</div>
@@ -357,9 +415,55 @@ function addMessage(role: "user" | "assistant", text: string): HTMLElement {
   const textEl = $(".text", node) as HTMLElement;
   textEl.innerHTML = renderMarkdown(text);
   enhanceCodeBlocks(textEl);
+  // P-VISION.1 (ADR-0136): render attached images inline. Each img.src is set as a DOM PROPERTY (never
+  // interpolated into the HTML) so a data URL can't break out of the markup.
+  if (attachments?.length) {
+    const row = el(`<div class="msg-imgs"></div>`);
+    for (const a of attachments) {
+      const img = document.createElement("img");
+      img.className = "msg-img"; img.alt = "attached image"; img.loading = "lazy"; img.src = a.dataUrl;
+      row.appendChild(img);
+    }
+    textEl.appendChild(row);
+  }
   $("#thread")!.appendChild(node);
   scrollChat();
   return node;
+}
+
+// ── P-VISION.1 (ADR-0136): composer image attachments ────────────────────────────────────────────
+let attSeq = 0;
+/** Re-paint the thumbnail strip above the composer and set each thumb's img.src as a PROPERTY. */
+function renderComposerThumbs(): void {
+  const strip = $("#composerThumbs") as HTMLElement | null; if (!strip) return;
+  strip.innerHTML = thumbStripHtml(state.attachments);
+  strip.hidden = state.attachments.length === 0;
+  for (const a of state.attachments) {
+    const img = strip.querySelector(`.cx-thumb[data-att="${a.id}"] .cx-thumb-img`) as HTMLImageElement | null;
+    if (img) img.src = a.dataUrl; // property, never interpolated
+  }
+  setSendEnabled();
+}
+/** Validate + stage a pasted/dropped image (data URL) for the next message. */
+function addPastedImage(dataUrl: string, name?: string): void {
+  const r = acceptAttachment(state.attachments, dataUrl, `att_${++attSeq}`, name);
+  if (!r.ok || !r.attachment) { showToast({ tone: "warn", title: "Couldn't attach image", desc: r.reason ?? "" }); return; }
+  state.attachments.push(r.attachment);
+  renderComposerThumbs();
+  showToast({ title: "Image attached", desc: "Add instructions, then press Enter to send.", timeout: 1800 });
+}
+/** Read image files (from paste or drop) into staged attachments. Returns true if any were image files. */
+function stageImageFiles(files: FileList | File[] | null | undefined): boolean {
+  let any = false;
+  for (const f of Array.from(files ?? [])) {
+    if (!f.type.startsWith("image/")) continue;
+    any = true;
+    if (f.size > MAX_ATTACHMENT_BYTES) { showToast({ tone: "warn", title: "Image too large", desc: `${f.name || "image"} exceeds the limit.` }); continue; }
+    const reader = new FileReader();
+    reader.onload = () => addPastedImage(String(reader.result), f.name);
+    reader.readAsDataURL(f);
+  }
+  return any;
 }
 interface MsgNode extends HTMLElement { _md?: string }
 
@@ -436,7 +540,7 @@ async function runPersonalImport(folder: string, useModel: boolean): Promise<voi
       desc: `${r.learned} facts learned from ${r.messages} messages across ${r.conversations} conversations.`,
       meta: notes, actions: [{ label: "OK" }], timeout: 9000,
     });
-    if (kgOpen) void renderKnowledge(); // redraw with the new nodes + edges (only if the panel is open)
+    if (kgOpen && !kgCodeMode) void renderKnowledge(); // redraw with the new nodes + edges (personal graph only)
   };
   void poll();
 }
@@ -581,6 +685,59 @@ function phaseIcon(name: string): string {
 }
 const fmtClock = (ms: number): string => { const s = Math.max(0, Math.floor(ms / 1000)); return `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`; };
 
+// P-CHAT.1 (ADR-0104): the authored code a tool step can expand to preview inline.
+type ToolCode = { path: string; content?: string; oldText?: string; newText?: string; patch?: string };
+
+/** Fill an expandable step's panel with the tool's code — a write's content (syntax-highlighted via the
+ *  vendored Monaco), an edit's hashline `patch` (colored +/− lines), or an old→new pair as a line diff.
+ *  Safe: Monaco HTML escapes its own text; every diff/patch line is set via textContent. Lazy + best-effort. */
+/** P-CHAT.1 (ADR-0104): open the step's file in the full Monaco IDE panel for context (like Claude Code's
+ *  expand). Prefers the real file on disk (editable, gate-protected save); falls back to the in-hand
+ *  content/patch as a snippet when there's no readable path. */
+async function openStepInEditor(code: ToolCode): Promise<void> {
+  const path = (code.path || "").trim();
+  const name = path.split(/[\\/]/).pop() || "Code";
+  if (path && /^(file:\/\/|[A-Za-z]:[\\/]|\/|~[\\/]|\\\\)/.test(path)) {
+    const r = await bridge.editorRead(path).catch(() => null);
+    if (r?.ok && typeof r.content === "string") { await openIde({ path, code: r.content, sha256: r.sha256, mtime: r.mtime }); return; }
+  }
+  if (code.content !== undefined) { await openIde({ title: name, code: code.content, language: guessLanguage(path) }); return; }
+  await openIde({ title: `${name} - patch`, code: code.patch ?? "", language: "diff" });
+}
+
+async function renderToolCode(panel: HTMLElement, code: ToolCode): Promise<void> {
+  if (panel.dataset.filled) return;
+  panel.dataset.filled = "1";
+  // A small bar: the filename + "Open in editor" (expand into the full Monaco panel for context).
+  const barName = (code.path || "").split(/[\\/]/).pop() || code.path || "code";
+  const bar = el(`<div class="tc-bar"><span class="tc-name">${esc(barName)}</span><button class="tc-open" type="button" data-tip="Open in the editor for full context">Open in editor ${icon("arrowRight", 12)}</button></div>`);
+  ($(".tc-open", bar) as HTMLButtonElement).addEventListener("click", (e) => { e.stopPropagation(); void openStepInEditor(code); });
+  panel.appendChild(bar);
+  if (code.content !== undefined) {
+    const pre = el(`<pre class="tc-code"></pre>`);
+    pre.textContent = code.content;                         // readable default before highlight resolves
+    panel.appendChild(pre);
+    const html = await colorizeCode(code.content, code.path || "").catch(() => null);
+    if (html && panel.contains(pre)) pre.innerHTML = html;  // Monaco-highlighted HTML (its text is escaped)
+  } else if (code.patch !== undefined) {
+    const box = el(`<div class="tc-diff"></div>`);
+    for (const raw of code.patch.split("\n")) {
+      const line = el(`<div class="tc-line tc-${patchLineType(raw)}"></div>`);
+      line.textContent = raw;                               // hashline already carries its own +/− prefixes
+      box.appendChild(line);
+    }
+    panel.appendChild(box);
+  } else {
+    const box = el(`<div class="tc-diff"></div>`);
+    for (const r of lineDiff(code.oldText ?? "", code.newText ?? "")) {
+      const line = el(`<div class="tc-line tc-${r.type}"></div>`);
+      line.textContent = `${r.type === "add" ? "+" : r.type === "del" ? "−" : " "} ${r.text}`;
+      box.appendChild(line);
+    }
+    panel.appendChild(box);
+  }
+}
+
 // ── Consolidating activity window (the "working / agent thoughts" surface) ──
 // Instead of an ever-growing stack of raw .evt chips, the agent's tool calls collapse into
 // ONE compact window per turn: a head (live current step + a count) you can expand to see the
@@ -588,8 +745,8 @@ const fmtClock = (ms: number): string => { const s = Math.max(0, Math.floor(ms /
 // here - onBlock keeps emitting its own loud .evt.block chip alongside this window.
 interface ThoughtsWin {
   el: HTMLElement;
-  /** Record a tool/activity step. */
-  step(name: string, detail: string): void;
+  /** Record a tool/activity step. `code` (P-CHAT.1) makes the step expandable to an inline code/diff preview. */
+  step(name: string, detail: string, code?: ToolCode): void;
   /** Collapse into the final one-line summary (auto-collapse on done). */
   finish(ms: number): void;
 }
@@ -616,14 +773,38 @@ function createThoughts(): ThoughtsWin {
   headBtn.addEventListener("click", () => toggle(!win.classList.contains("open")));
   return {
     el: win,
-    step(name: string, detail: string) {
+    step(name: string, detail: string, code?: ToolCode) {
       steps++;
       const label = phaseForTool(name, detail);
       curEl.textContent = label;
       countEl.hidden = false;
       countEl.textContent = String(steps);
       if (/edit|write|notebook|patch|apply|create/i.test(name) && detail) files.add(detail.trim());
-      body.appendChild(el(`<div class="thoughts-step">${icon(phaseIcon(name), 13)}<span class="ts-k">${esc(name)}</span><span class="ts-d">${esc(detail)}</span></div>`));
+      const hasCode = !!code && (code.content !== undefined || code.patch !== undefined || code.oldText !== undefined || code.newText !== undefined);
+      if (!hasCode) {
+        body.appendChild(el(`<div class="thoughts-step">${icon(phaseIcon(name), 13)}<span class="ts-k">${esc(name)}</span><span class="ts-d">${esc(detail)}</span></div>`));
+      } else {
+        // P-CHAT.1: an expandable step — click the row to reveal the written code / the edit diff inline.
+        let badge = "";
+        if (code!.content === undefined) {
+          const { add, del } = code!.patch !== undefined ? patchStat(code!.patch) : diffStat(lineDiff(code!.oldText ?? "", code!.newText ?? ""));
+          badge = `<span class="ts-diffstat"><span class="ts-add">+${add}</span> <span class="ts-del">−${del}</span></span>`;
+        }
+        const row = el(`<div class="thoughts-step has-code">
+          <button class="ts-row" type="button" aria-expanded="false">${icon(phaseIcon(name), 13)}<span class="ts-k">${esc(name)}</span><span class="ts-d">${esc(detail)}</span>${badge}<span class="ts-chev">${icon("chevron", 13)}</span></button>
+          <div class="ts-code" hidden></div>
+        </div>`);
+        const btn = $(".ts-row", row) as HTMLButtonElement;
+        const codeEl = $(".ts-code", row) as HTMLElement;
+        btn.addEventListener("click", () => {
+          const opening = codeEl.hasAttribute("hidden");
+          if (opening) { void renderToolCode(codeEl, code!); codeEl.removeAttribute("hidden"); }
+          else codeEl.setAttribute("hidden", "");
+          btn.setAttribute("aria-expanded", String(opening));
+          row.classList.toggle("open", opening);
+        });
+        body.appendChild(row);
+      }
       // Keep the newest step in view while expanded, without stealing the page scroll.
       if (win.classList.contains("open")) body.scrollTop = body.scrollHeight;
     },
@@ -739,13 +920,39 @@ function createPermissionCard(e: Extract<ChatEvent, { type: "permission" }>): { 
     const btns = e.options.map((o) => `<button class="perm-btn ${exCls(o.kind)}" data-oid="${esc(o.optionId)}">${esc(o.name)}</button>`).join("");
     win = el(`<div class="perm perm-egress perm-exec${e.danger ? " perm-exec-danger" : ""}" data-streaming="1">
       <div class="perm-eg-head">${icon(e.danger ? "shield" : "bolt", 13)}<span>${e.danger ? "The agent wants to run a HIGH-RISK command" : "The agent wants to run a command"}</span></div>
-      <div class="perm-egress-target"><code class="perm-url">${esc(cmd)}</code><button class="perm-copy" data-tip="Copy command">${icon("copy", 12)}</button></div>
+      <div class="perm-egress-target"><code class="perm-url">${esc(cmd)}</code>
+        <span class="perm-cmd-btns">
+          <button class="perm-copy" data-tip="Copy command">${icon("copy", 12)}</button>
+          <button class="perm-tldr" data-tip="Explain this command in plain terms (uses a cheap model)">TLDR</button>
+        </span></div>
+      <div class="perm-tldr-out" hidden></div>
       ${e.reason || e.program ? `<div class="perm-exec-why">${e.program ? `<code class="perm-prog">${esc(e.program)}</code> · ` : ""}${esc(e.reason ?? "")}</div>` : ""}
       <div class="perm-actions perm-actions-col">${btns}</div>
     </div>`);
     const copyBtn = $(".perm-copy", win) as HTMLElement | null;
     copyBtn?.addEventListener("click", async () => {
       try { await navigator.clipboard.writeText(cmd); copyBtn.innerHTML = icon("check", 12); setTimeout(() => { copyBtn.innerHTML = icon("copy", 12); }, 1200); } catch { /* clipboard blocked */ }
+    });
+    // TLDR: one-shot plain-language explanation from a cheap keyed model, shown inline. Cached per card.
+    const tldrBtn = $(".perm-tldr", win) as HTMLButtonElement | null;
+    const tldrOut = $(".perm-tldr-out", win) as HTMLElement | null;
+    let tldrDone = false;
+    tldrBtn?.addEventListener("click", async () => {
+      if (!tldrOut) return;
+      if (tldrDone) { tldrOut.hidden = !tldrOut.hidden; return; } // toggle once fetched
+      tldrBtn.disabled = true;
+      tldrOut.hidden = false;
+      tldrOut.className = "perm-tldr-out";
+      tldrOut.innerHTML = `${icon("refresh", 12, "spin")} <span>Explaining…</span>`;
+      const r = await bridge.explainCommand(cmd).catch(() => null);
+      tldrBtn.disabled = false;
+      if (r?.ok && r.text) {
+        tldrDone = true;
+        tldrOut.innerHTML = `<div class="tldr-body">${esc(r.text)}</div>${r.model ? `<div class="tldr-model">${icon("spark", 10)} explained by ${esc(r.model)}</div>` : ""}`;
+      } else {
+        tldrOut.className = "perm-tldr-out tldr-err";
+        tldrOut.innerHTML = `${icon("info", 12)} <span>${esc(r?.error ?? "Could not explain - the model was unreachable.")}</span>`;
+      }
     });
   } else {
     const btns = e.options.map((o) => `<button class="perm-btn ${isAllowOpt(o.kind, o.optionId) ? "ok" : "no"}" data-oid="${esc(o.optionId)}">${esc(o.name)}</button>`).join("");
@@ -841,7 +1048,36 @@ function createSubagentCard(e: Extract<ChatEvent, { type: "subagent" }>): { el: 
 async function send(): Promise<void> {
   const ta = $("#input") as HTMLTextAreaElement;
   const text = ta.value.trim();
-  if (!text) return;
+  // P-VISION.1 (ADR-0136): capture any staged image attachments for this turn.
+  const atts = state.attachments.slice();
+  const images = promptImageBlocks(atts);
+  if (!text && images.length === 0) return;
+  // P-CMD.1: a user-authored SKILL-mode "/" command ACTIVATES its body as a persistent instruction (no turn
+  // sent) — same behaviour as a bundled skill. Handle it before we open an assistant node.
+  const cmdTok = /^\/([a-z][a-z0-9-]{0,31})\b/i.exec(text)?.[1]?.toLowerCase();
+  if (cmdTok && !state.streaming) {
+    const uc = state.userCommands.find((c) => c.name === cmdTok);
+    if (uc && uc.mode === "skill") { ta.value = ""; autosize(ta); setSendEnabled(); void activateUserCommandSkill(uc); return; }
+  }
+  // What actually goes to the model. `/agent` and `/command` kick off builder interviews (the chat agent,
+  // steered by the frozen policies, asks what to build then calls the matching tool); a SEND-mode user
+  // command expands its body (+ any typed args). The TRANSCRIPT still shows exactly what the user typed.
+  let sendText = resolveSendText(text, cmdTok);
+  // P-CMD.2: "/" commands work ANYWHERE in the body — but only when NO start-anchored command consumed
+  // the text above (start-anchored keeps the P-CMD.1 args contract, and never re-scanning an expanded body
+  // keeps expansion non-recursive). Embedded skill-mode tokens activate their skills and are stripped.
+  if (sendText === text) {
+    const inline = expandInlineCommands(text, state.userCommands);
+    for (const name of inline.skillNames) {
+      const uc = state.userCommands.find((c) => c.name === name);
+      if (uc) void activateUserCommandSkill(uc);
+    }
+    if (!inline.text && images.length === 0) {
+      // the prompt was ONLY skill tokens — skills are active for the next turn; nothing to send now
+      if (inline.skillNames.length) { ta.value = ""; autosize(ta); setSendEnabled(); return; }
+    }
+    sendText = inline.text || text;
+  }
   // P-ACP.4: a turn is already running → pre-stage this prompt instead of dropping it. It auto-sends
   // when the current turn ends (naturally or via Stop). One slot - a newer entry replaces the old.
   if (state.streaming) { state.queued = text; ta.value = ""; autosize(ta); renderQueued(); setSendEnabled(); return; }
@@ -850,8 +1086,9 @@ async function send(): Promise<void> {
   // we never fight a user who reopens it mid-chat.
   if (!autoCollapsedSessions) { autoCollapsedSessions = true; if (!state.sidebarCollapsed) toggleSidebar(true); }
   state.lastPrompt = text; // remembered so an Approve & retry can re-send it
-  ta.value = ""; autosize(ta); setSendEnabled();
-  addMessage("user", text);
+  ta.value = ""; autosize(ta);
+  state.attachments = []; renderComposerThumbs(); // clear the thumb strip on send (also refreshes send-enabled)
+  addMessage("user", text, atts);
   state.streaming = true; setSendEnabled();
 
   const node = addMessage("assistant", "");
@@ -901,10 +1138,8 @@ async function send(): Promise<void> {
     // The streaming OUTPUT count - what the model is generating right now, with no
     // system prompt / cached prefix in it (the user's "minus the whole prompt" ask).
     const out = tps.tokenCount;
-    // averageTps (not the windowed tps): ACP delivers reasoning/text in big lumps,
-    // so the running average reads steady where a windowed rate would strobe.
-    if (out > 0) { const r = tps.averageTps; tpsEl.textContent = `· ${fmtNum(out)} tokens out${r > 0 ? ` · ${r.toFixed(1)} tokens/s` : ""}`; }
-    else tpsEl.textContent = "";
+    // The per-turn OUTPUT count. (Tokens/s was removed - it read as noise on the done line.)
+    tpsEl.textContent = out > 0 ? `· ${fmtNum(out)} tokens out` : "";
     // The CONTEXT figure (window fill + turn cost) genuinely includes the prompt -
     // labelled "context" so it's never mistaken for the per-turn output above. Cost
     // is shown to the cent ($0.00) - the sub-cent precision read as noise.
@@ -939,7 +1174,7 @@ async function send(): Promise<void> {
     else if (e.type === "tool") {
       sawTool = true; setPhase(phaseForTool(e.name, e.detail)); paintHud();
       if (!thoughts) { thoughts = createThoughts(); streamEl.after(thoughts.el); } // window sits below the answer
-      thoughts.step(e.name, e.detail);
+      thoughts.step(e.name, e.detail, e.code);
       scrollChat();
     }
     else if (e.type === "subagent") {
@@ -960,10 +1195,13 @@ async function send(): Promise<void> {
     }
     else if (e.type === "block") onBlock(e);
     else if (e.type === "preview-available") onPreviewAvailable(e.path);
+    else if (e.type === "preview-activity") flashPreviewTesting(e.label); // P-PREVIEW.6a (ADR-0153)
+    else if (e.type === "agent-builder-open") openAgentBuilderWithSpec(e.spec); // P-AGENT.8.2
+    else if (e.type === "slash-command-created") void onSlashCommandCreated(e.command); // P-CMD.1
     else if (e.type === "usage") { tok = e.used; cost = e.cost; state.liveUsage = { used: e.used, size: e.size, cost: e.cost }; paintHud(); renderStatus(); renderMetricsRail(); }
-    else if (e.type === "done") { if (e.text && e.text.length > buf.length) buf = e.text; /* reconcile a lossy stream with the server's full reply */ streamEl.innerHTML = renderMarkdown(buf); enhanceCodeBlocks(streamEl); (node as MsgNode)._md = buf; finishHud(); state.streaming = false; setSendEnabled(); }
+    else if (e.type === "done") { if (e.text && e.text.length > buf.length) buf = e.text; /* reconcile a lossy stream with the server's full reply */ streamEl.innerHTML = renderMarkdown(buf); enhanceCodeBlocks(streamEl); (node as MsgNode)._md = buf; finishHud(); state.streaming = false; setSendEnabled(); clearPreviewTesting(); }
   };
-  try { await bridge.sendPrompt(text, onEvent); }
+  try { await bridge.sendPrompt(sendText, onEvent, images); }
   finally {
     (node as MsgNode)._md = buf;
     if (state.streaming) { streamEl.innerHTML = renderMarkdown(buf); enhanceCodeBlocks(streamEl); finishHud(); state.streaming = false; setSendEnabled(); } else { finishHud(); }
@@ -982,7 +1220,7 @@ function onBlock(e: Extract<ChatEvent, { type: "block" }>): void {
     // P-TOOLFAIL.1 (ADR-0093): a tool that failed or didn't run — NOT a security block. The reason now
     // carries omp's own status/message (tool_failure.ts), so the chip explains itself; the tooltip makes
     // the not-a-quarantine distinction explicit so a failure is never read as a denial.
-    addEvent(`<div class="evt" data-tip="Tool call was not completed (failed or refused) — not a security block">${icon("close", 14)}<span><b>${esc(e.tool)}</b> · ${esc(e.reason)}</span></div>`);
+    addEvent(`<div class="evt" data-tip="Tool call was not completed (failed or refused) - not a security block">${icon("close", 14)}<span><b>${esc(e.tool)}</b> · ${esc(e.reason)}</span></div>`);
     return;
   }
   const review = () => { OPEN.add("sec.live"); focusInspector("security"); void refresh(); };
@@ -1024,7 +1262,7 @@ function setSendEnabled(): void {
     btn.innerHTML = icon("square", 16);
     btn.setAttribute("data-tip", "Stop|Interrupt the reply + tool calls");
   } else {
-    btn.disabled = !ta.value.trim();
+    btn.disabled = !ta.value.trim() && state.attachments.length === 0; // P-VISION.1: image-only messages can send
     btn.classList.remove("stop");
     btn.innerHTML = icon("send", 18);
     btn.setAttribute("data-tip", "Send|Enter");
@@ -1115,6 +1353,14 @@ function renderInspector(): void {
 }
 
 // ───────────────────────── quick-metrics rail (collapsed inspector) ─────────────────────────
+// P-REPORT.4: the tiles read NEUTRAL by default and only bloom into their own accent color for a
+// beat when their value CHANGES (so color = "this just moved"), and a tile that needs triage
+// (findings / quarantine > 0) gets a slow clockwise light sweep. We remember the last-rendered
+// values to detect the delta, and skip the DOM write when nothing moved so the sweep animation on
+// an attention tile keeps running smoothly instead of restarting every poll.
+const prevMetrics: Record<string, string> = {};
+let lastRailSig = "";
+let railPrimed = false; // first paint must not flash every tile as "changed"
 function renderMetricsRail(): void {
   const tiles = $("#railTiles");
   if (!tiles) return;
@@ -1126,16 +1372,31 @@ function renderMetricsRail(): void {
   const findings = sec ? sec.findings.reduce((a, r) => a + Number(r.n || 0), 0) : 0;
   const quar = sec ? sec.quarantine.length : 0;
   const ca = state.codeActivity; // ADR-0030 P-CODE.1: this month's repo activity
-  const tile = (n: string, label: string, cls: string, tip: string) =>
-    `<div class="tile ${cls}" data-tip="${esc(label)}|${esc(tip)}" data-tip-side="left"><div class="n">${esc(n)}</div><div class="l">${esc(label)}</div></div>`;
-  tiles.innerHTML =
-    tile(`${Math.round(hit * 100)}%`, "savings", "g", "How much the prompt cache saves you. The AI re-reads the same background every turn; that repeated part is billed at about one-tenth the price - roughly 90% off. This is how much of this turn was that cheap repeat, so a higher number means a smaller bill.") +
-    tile(fmtNum(avg), "avg/turn", "c", "Average tokens per turn") +
-    tile(fmtNum(cur), "context", "b", "Context tokens in use this turn") +
-    tile(String(turns), "turns", "b2", "Agent turns in this session") +
-    (ca && ca.totals.files > 0 ? tile(`+${fmtNum(ca.totals.added)}`, "lines", "g", `Workspace activity this month (${ca.month}): ${fmtNum(ca.totals.added)} lines added, ${fmtNum(ca.totals.deleted)} deleted across ${fmtNum(ca.totals.files)} files. This is REPO activity (all commits), not AI-authored lines.`) : "") +
-    tile(String(findings), "findings", "m", "Scanner findings so far") +
-    tile(String(quar), "quarantd", "r", "Artifacts currently quarantined");
+
+  type T = { n: string; label: string; cls: string; tip: string; attn?: boolean };
+  const rows: T[] = [
+    { n: `${Math.round(hit * 100)}%`, label: "savings", cls: "g", tip: "How much the prompt cache saves you. The AI re-reads the same background every turn; that repeated part is billed at about one-tenth the price - roughly 90% off. This is how much of this turn was that cheap repeat, so a higher number means a smaller bill." },
+    { n: fmtNum(avg), label: "avg/turn", cls: "c", tip: "Average tokens per turn" },
+    { n: fmtNum(cur), label: "context", cls: "b", tip: "Context tokens in use this turn" },
+    { n: String(turns), label: "turns", cls: "b2", tip: "Agent turns in this session" },
+    ...(ca && ca.totals.files > 0 ? [{ n: `+${fmtNum(ca.totals.added)}`, label: "lines", cls: "g", tip: `Workspace activity this month (${ca.month}): ${fmtNum(ca.totals.added)} lines added, ${fmtNum(ca.totals.deleted)} deleted across ${fmtNum(ca.totals.files)} files. This is REPO activity (all commits), not AI-authored lines.` } as T] : []),
+    { n: String(findings), label: "findings", cls: "m", tip: "Scanner findings so far", attn: findings > 0 },
+    { n: String(quar), label: "quarantd", cls: "r", tip: "Artifacts currently quarantined", attn: quar > 0 },
+  ];
+
+  // Signature: value + attention state per tile. Unchanged → leave the DOM alone (keep the pulse smooth).
+  const sig = rows.map((t) => `${t.label}:${t.n}:${t.attn ? 1 : 0}`).join("|");
+  if (sig === lastRailSig) return;
+  lastRailSig = sig;
+
+  // Same neutral look at rest; a tile that just CHANGED gets the game-like clockwise racing pulse + shine.
+  tiles.innerHTML = rows.map((t) => {
+    const changed = railPrimed && prevMetrics[t.label] !== undefined && prevMetrics[t.label] !== t.n;
+    prevMetrics[t.label] = t.n;
+    const cl = `tile ${t.cls}${changed ? " changed" : ""}${t.attn ? " attn" : ""}`;
+    return `<div class="${cl}" data-tip="${esc(t.label)}|${esc(t.tip)}" data-tip-side="left"><div class="n">${esc(t.n)}</div><div class="l">${esc(t.label)}</div></div>`;
+  }).join("");
+  railPrimed = true;
 }
 function setInspectorRail(rail: boolean): void {
   state.inspectorRail = rail;
@@ -1153,6 +1414,7 @@ function setInspectorRail(rail: boolean): void {
 // OAuth here signs in a SUBSCRIPTION/CLI tier; the full commercial catalog comes from an API key.
 // Spell that out where it bites (OpenAI/Gemini), and steer Perplexity to its working key path.
 const PROV_HINTS: Record<string, string> = {
+  elevenlabs: `Cloud voice (paid) for read-aloud, the podcast, and speech-to-text. Get a key at <a href="https://elevenlabs.io/app/settings/api-keys" target="_blank" rel="noopener">elevenlabs.io → API keys ↗</a>. Billed per character: a brief/AAR narration (~2-3k chars) runs <b>~$0.10-$0.30</b>; one reply is a few cents. Audio leaves the device, so for air-gap/DoD use offline Whisper / Kokoro below.`,
   openai: "OAuth signs in your ChatGPT / Codex subscription (those models). For the full commercial catalog - gpt-4o, o-series - add an OPENAI_API_KEY below.",
   google: "OAuth uses the Gemini CLI / Code Assist tier. For the full commercial Gemini catalog, add a GEMINI_API_KEY below.",
   anthropic: "OAuth signs in your Claude subscription. For pay-as-you-go API access, add an ANTHROPIC_API_KEY below.",
@@ -1165,7 +1427,9 @@ function provCard(p: ProviderAuth): string {
     (p.oauthActive ? `<span class="abadge ok">${icon("check", 11)} OAuth active</span>` : "") +
     (p.keySet ? `<span class="abadge set">key ••${last4}</span>` : "") +
     (!p.oauthActive && !p.keySet ? `<span class="abadge none">not set</span>` : "");
-  const hint = PROV_HINTS[p.id] ? `<div class="prov-hint">${icon("info", 11)} ${PROV_HINTS[p.id]}</div>` : "";
+  // The hint text goes in ONE <span> so rich markup (<b>/<a>) stays inline instead of becoming separate
+  // flex items in the flex `.prov-hint` (that squished multi-tag hints into clipped narrow columns).
+  const hint = PROV_HINTS[p.id] ? `<div class="prov-hint">${icon("info", 11)}<span>${PROV_HINTS[p.id]}</span></div>` : "";
   const oauthRow = p.canOauth
     ? `<div class="prov-row">${p.oauthActive
         ? `<span class="prov-id">${esc(p.oauthIdentity ?? "connected")}</span><button class="btn-mini danger" data-oauth-logout="${esc(p.oauthId)}">Disconnect</button>`
@@ -1527,7 +1791,9 @@ function secDeveloper(): string {
 // ACKNOWLEDGE gate (mirrors the China-origin unlock) because these route outside U.S. jurisdiction or
 // aggregate many origins. Expanding the section shows the warning first; the list appears once acknowledged.
 function secOthers(auth: import("./bridge.ts").AuthStatus | null): string {
-  const list = (auth?.others ?? []).map(provCard).join("") || `<div class="empty">none</div>`;
+  // P-VOICE.1: ElevenLabs rides the `others` auth plumbing for keySet/last4, but it's a VOICE provider —
+  // render it in the Voice card, not here.
+  const list = (auth?.others ?? []).filter((p) => p.id !== "elevenlabs").map(provCard).join("") || `<div class="empty">none</div>`;
   if (state.thirdPartyAck) {
     return setCard("others", "More providers", "third-party · non-U.S. / custom",
       `<div class="set-note ok">${icon("check", 12)} You acknowledged the third-party risk. <button class="btn-link" id="thirdPartyRelock">Re-lock</button></div>${list}`, true);
@@ -1535,6 +1801,58 @@ function secOthers(auth: import("./bridge.ts").AuthStatus | null): string {
   return setCard("others", "More providers", "acknowledge to reveal",
     `<div class="set-note danger">${icon("shield", 12)} <b>Third-party models (non-U.S. / custom)</b> - OpenRouter, DeepSeek, Kimi/Moonshot, Groq. These route to third-party or non-U.S. servers (or aggregate many origins) with <b>no U.S. data-sovereignty guarantee</b>; review each provider's terms before use.</div>
      <div class="china-unlock"><input id="thirdPartyAckInput" placeholder="Type ACKNOWLEDGE to reveal" autocomplete="off" spellcheck="false" /><button class="btn-mini" id="thirdPartyAckBtn" disabled>Reveal</button></div>`, true);
+}
+// P-VOICE.1 (ADR-0115): the Voice card — ElevenLabs key (with get-key link + cost estimate), the STT
+// engine (offline Whisper = air-gap/DoD default, or ElevenLabs Scribe cloud), the TTS engine, and the
+// voice picker (favorites first). The voice list loads async (needs the ElevenLabs key).
+function secVoice(auth: import("./bridge.ts").AuthStatus | null, vset: import("./bridge.ts").VoiceSettingsView | null): string {
+  const elKey = (auth?.others ?? []).find((p) => p.id === "elevenlabs");
+  const keyCard = elKey ? provCard(elKey) : "";
+  const stt = vset?.sttProvider ?? "whisper";
+  const ttsp = vset?.ttsProvider ?? "elevenlabs";
+  const sel = (v: boolean) => (v ? " selected" : "");
+  const body = `${keyCard}
+    <div class="set-note">${icon("mic", 12)} <b>Speech-to-text</b> powers the mic button by the composer. <b>Offline Whisper</b> keeps audio on-device (air-gap / DoD); <b>ElevenLabs Scribe</b> is cloud (higher accuracy, audio leaves the device).</div>
+    <div class="voice-row"><label class="voice-lbl" for="voiceStt">STT engine</label>
+      <select id="voiceStt" class="prov-key" data-voice-set="sttProvider">
+        <option value="whisper"${sel(stt === "whisper")}>Offline Whisper - air-gap / DoD</option>
+        <option value="elevenlabs"${sel(stt === "elevenlabs")}>ElevenLabs Scribe - cloud</option>
+      </select></div>
+    <div class="voice-row" id="voiceSttUrlRow"${stt === "whisper" ? "" : " hidden"}>
+      <label class="voice-lbl" for="voiceSttUrl">Whisper URL</label>
+      <input id="voiceSttUrl" class="prov-key" data-voice-set="sttUrl" spellcheck="false" placeholder="http://localhost:9000 (self-hosted whisper.cpp / faster-whisper)" value="${esc(vset?.sttUrl ?? "")}" /></div>
+    <div class="voice-row"><label class="voice-lbl" for="voiceTts">TTS engine</label>
+      <select id="voiceTts" class="prov-key" data-voice-set="ttsProvider">
+        <option value="elevenlabs"${sel(ttsp === "elevenlabs")}>ElevenLabs - cloud, custom voices</option>
+        <option value="openai-tts"${sel(ttsp === "openai-tts")}>ChatGPT / OpenAI - cloud</option>
+        <option value="local-tts"${sel(ttsp === "local-tts")}>Kokoro - offline, air-gap</option>
+      </select></div>
+    <div class="voice-row voice-pick"><label class="voice-lbl" for="voiceSelect">Voice</label>
+      <select id="voiceSelect" class="prov-key" data-voice-set="ttsVoice"><option value="">loading voices…</option></select>
+      <button class="btn-mini" id="voiceFav" data-tip="Favorite|Star the selected voice - favorites are listed first">${icon("spark", 12)}</button></div>
+    <div class="set-note" id="voiceNote"></div>`;
+  return setCard("voice", "Voice", "TTS · STT · ElevenLabs", body, true);
+}
+/** Populate the Voice card's voice picker (favorites first) from the ElevenLabs account. Best-effort;
+ *  shows a note when no key / no voices. Called after the card renders and after the key changes. */
+async function loadVoices(): Promise<void> {
+  const selEl = $("#voiceSelect") as HTMLSelectElement | null;
+  if (!selEl) return;
+  const data = await bridge.voices().catch(() => null);
+  const note = $("#voiceNote");
+  if (!data || !data.voices.length) {
+    selEl.innerHTML = `<option value="">no voices${data?.note ? "" : ""}</option>`;
+    if (note) note.textContent = data?.note || "Add an ElevenLabs key to list voices.";
+    return;
+  }
+  if (note) note.textContent = "";
+  const favs = new Set(data.favorites);
+  const opt = (v: import("./bridge.ts").ElevenVoiceView) => `<option value="${esc(v.voiceId)}"${v.voiceId === data.selected ? " selected" : ""}>${esc(v.name)}${v.category ? ` · ${esc(v.category)}` : ""}</option>`;
+  const favList = data.voices.filter((v) => favs.has(v.voiceId));
+  const rest = data.voices.filter((v) => !favs.has(v.voiceId));
+  selEl.innerHTML =
+    (favList.length ? `<optgroup label="★ Favorites">${favList.map(opt).join("")}</optgroup>` : "") +
+    `<optgroup label="All voices">${rest.map(opt).join("")}</optgroup>`;
 }
 // P-MCP.1 (ADR-0020): MCP connectors - auth + config only; omp owns the MCP transport.
 function secMcp(servers: import("./bridge.ts").McpServerStatus[]): string {
@@ -1563,6 +1881,270 @@ function secMcp(servers: import("./bridge.ts").McpServerStatus[]): string {
 function hydrateMcp(): void {
   void bridge.mcpList().then((m) => { state.mcpServers = m ?? []; fillSec("mcp", secMcp(state.mcpServers)); });
 }
+// P-AGENTFW.2 (ADR-0149): Remote agents (hermes/openclaw) reached THROUGH the Lucid agent-firewall.
+function secAgents(agents: import("./bridge.ts").RemoteAgentStatus[]): string {
+  const rows = agents.length ? agents.map((a) => `<div class="prov">
+      <div class="prov-h"><span class="prov-name">${esc(a.name)} <span class="abadge set">${esc(a.kind)}</span></span>
+        <span class="prov-status">${a.enabled ? `<span class="abadge ok">${icon("check", 11)} on</span>` : `<span class="abadge none">off</span>`}<span class="abadge set">perm: ${esc(a.permissionPolicy)}</span></span></div>
+      <div class="prov-body">
+        <div class="prov-row"><code>${esc(a.command)} ${esc(a.args.join(" "))}</code></div>
+        <div class="prov-row">
+          <button class="btn-mini" data-agent-toggle="${esc(a.id)}" data-agent-on="${a.enabled ? "0" : "1"}">${a.enabled ? "Disable" : "Enable"}</button>
+          <button class="btn-mini danger" data-agent-remove="${esc(a.id)}">${icon("close", 12)} Remove</button>
+        </div></div></div>`).join("")
+    : `<div class="empty">No remote agents yet. Add a hermes/openclaw connection below — it's proxied through the Lucid security firewall.</div>`;
+  const form = `<div class="prov" style="border-style:dashed">
+      <div class="prov-h"><span class="prov-name">${icon("plus", 13)} Add a remote agent</span></div>
+      <div class="prov-body">
+        <div class="prov-row"><input id="agentName" class="prov-key" placeholder="Name (e.g. Hermes prod)" />
+          <select id="agentKind" class="prov-key" style="flex:none;width:110px"><option value="hermes">hermes</option><option value="openclaw">openclaw</option><option value="acp">acp</option></select></div>
+        <div class="prov-row"><input id="agentCommand" class="prov-key" placeholder="Command (e.g. hermes, openclaw, uvx)" /></div>
+        <div class="prov-row"><input id="agentArgs" class="prov-key" placeholder="Args (e.g. acp --url wss://host:18789 --token-file /abs/path)" /></div>
+        <div class="prov-row">
+          <select id="agentPerm" class="prov-key" style="flex:none;width:160px"><option value="deny">permissions: deny</option><option value="allow">permissions: allow</option></select>
+          <button class="btn-mini ok" id="agentAdd">${icon("check", 12)} Connect</button></div>
+      </div></div>`;
+  const note = `<div class="set-note">${icon("shield", 12)} Remote agents (hermes/openclaw) are reached through the <b>Lucid agent-firewall</b>: every prompt is scanned before it leaves and every reply is scanned + returned as <code>UNTRUSTED_CONTENT</code>; the remote's permission asks default to <b>deny</b>. Prefer <code>--token-file</code> (absolute path) so no secret is stored here. See <code>docs/AGENT-FIREWALL.md</code>.</div>`;
+  return setCard("agents", "Remote agents", "hermes · openclaw · ACP firewall", rows + form + note, true);
+}
+function hydrateAgents(): void {
+  void bridge.remoteAgentList().then((a) => { state.agents = a ?? []; fillSec("agents", secAgents(state.agents)); });
+}
+
+// P-NETWL.2 (ADR-0106): the curated Network Whitelist section. Lets a user pre-authorize domains (`*.com`
+// TLD or exact `api.example.com`) and IP/CIDR ranges, split by internal (intranet) vs external (internet)
+// zone, with a trust scope + optional per-loop call budget, and optionally attach an auth credential whose
+// secret lives OS-encrypted in the vault (never in the config). A match auto-allows egress under the managed
+// ceiling (fail-closed). Only the `always` scope is enforced today; project/loop persist for P-NETWL.3.
+let wlPendingCred: { ref: string; kind: string; label?: string } | null = null; // a just-uploaded file credential, awaiting Add
+const WL_SCOPE_LABEL: Record<string, string> = { always: "Always", project: "Project", loop: "This loop" };
+const WL_SCOPE_TIP: Record<string, string> = {
+  always: "Auto-allows in every session, everywhere.",
+  project: "Auto-allows only while this workspace is open.",
+  loop: "Auto-allows only during a /goal loop run.",
+};
+// P-KEYS.2 (ADR-0107): renderer-side rotation badge. Deliberately mirrors cred_vault.rotationStatus/Label
+// (the backend versions are the unit-tested source of truth); kept tiny + pure to avoid a cross-boundary import.
+function wlRotationBadge(m: import("./bridge.ts").CredMetaView | undefined, now: number): { text: string; tone: "ok" | "warn" | "danger" } | null {
+  if (!m) return null;
+  const DAY = 86_400_000;
+  const rotatedAt = m.rotatedAt ?? m.createdAt;
+  if (m.expiresAt != null && now >= m.expiresAt) return { text: "expired", tone: "danger" };
+  if (m.rotationIntervalDays != null && m.rotationIntervalDays > 0 && rotatedAt != null && now >= rotatedAt + m.rotationIntervalDays * DAY) return { text: "rotation due", tone: "danger" };
+  if (m.expiresAt != null) { const d = Math.ceil((m.expiresAt - now) / DAY); if (d <= 7) return { text: `expires in ${Math.max(0, d)}d`, tone: "warn" }; }
+  if (m.rotationIntervalDays != null && m.rotationIntervalDays > 0 && rotatedAt != null) { const d = Math.ceil((rotatedAt + m.rotationIntervalDays * DAY - now) / DAY); if (d <= 7) return { text: `rotate in ${Math.max(0, d)}d`, tone: "warn" }; }
+  if (rotatedAt != null) return { text: `rotated ${Math.floor((now - rotatedAt) / DAY)}d ago`, tone: "ok" };
+  return null;
+}
+function secWhitelist(entries: import("./bridge.ts").WhitelistEntryView[], creds: import("./bridge.ts").CredMetaView[] = [], posture: import("./bridge.ts").EgressPostureView = state.posture): string {
+  const credByRef = new Map(creds.map((c) => [c.ref, c]));
+  const now = Date.now();
+  const rows = entries.length ? entries.map((e) => {
+    // P-KEYS.1 (ADR-0107): identify the attached key by its last-4 (never the secret), looked up from the vault.
+    const cred = e.auth ? credByRef.get(e.auth.vaultRef) : undefined;
+    const last4 = cred?.last4 ?? "";
+    const mask = last4 ? " ••••" + esc(last4) : "";
+    const rot = e.auth ? wlRotationBadge(cred, now) : null; // P-KEYS.2 rotation posture
+    const rotBadge = rot && rot.text ? `<span class="abadge ${rot.tone}" data-tip="Rotation|${esc(rot.text)}. Use Rotate to replace the secret in place.">${rot.text}</span>` : "";
+    return `<div class="prov">
+      <div class="prov-h"><span class="prov-name">${esc(e.pattern)}
+          <span class="abadge set">${e.kind === "ip" ? "IP" : "domain"}</span>
+          <span class="abadge ${e.zone === "internal" ? "ok" : "set"}">${e.zone}</span></span>
+        <span class="prov-status">
+          <span class="abadge ok" data-tip="Trust scope|${WL_SCOPE_TIP[e.scope] ?? ""}">${WL_SCOPE_LABEL[e.scope] ?? e.scope}</span>
+          ${e.callBudget != null ? `<span class="abadge set" data-tip="Call budget|Auto-allows at most ${e.callBudget} call(s) to this host per loop, then falls through to the gate.">${e.callBudget}/loop</span>` : ""}
+          ${e.auth ? `<span class="abadge set" data-tip="Auth attached|${esc(e.auth.kind)}${last4 ? ` key ••••${esc(last4)}` : ""} · stored OS-encrypted; the whitelist keeps only a reference, never the secret.">${icon("shield", 11)} ${esc(e.auth.kind)}${mask}${e.auth.username ? " · " + esc(e.auth.username) : ""}</span>${rotBadge}` : ""}
+        </span></div>
+      <div class="prov-body"><div class="prov-row">
+        ${e.auth ? `<button class="btn-mini" data-wl-rotate="${esc(e.auth.vaultRef)}" data-tip="Rotate credential|Replace the stored secret (paste or upload a file). The reference is preserved so this entry keeps working.">${icon("refresh", 12)} Rotate</button>` : ""}
+        <button class="btn-mini danger" data-wl-remove="${esc(e.id)}">${icon("close", 12)} Remove</button>
+      </div></div></div>`;
+  }).join("")
+    : `<div class="empty">No whitelisted sites yet. Add a domain or IP range below - a match auto-allows the agent's network calls to it (still under any managed policy).</div>`;
+  const form = `<div class="prov" style="border-style:dashed">
+      <div class="prov-h"><span class="prov-name">${icon("plus", 13)} Add to whitelist</span></div>
+      <div class="prov-body">
+        <div class="prov-row"><input id="wlPattern" class="prov-key" placeholder="*.example.com  ·  api.example.com  ·  10.0.0.0/8" spellcheck="false" data-tip="Pattern|A domain wildcard (*.com), an exact host (api.example.com), or an IP / CIDR range (10.0.0.0/8)." /></div>
+        <div class="prov-row wl-controls">
+          <select id="wlKind" class="prov-key" data-tip="Kind|A domain pattern, or a single IP / CIDR range."><option value="domain">Domain</option><option value="ip">IP / CIDR</option></select>
+          <select id="wlZone" class="prov-key" data-tip="Network zone|Internal = your intranet; External = the public internet."><option value="external">External</option><option value="internal">Internal</option></select>
+          <select id="wlScope" class="prov-key" data-tip="Trust scope|Always = every session; Project = only this workspace; This loop = only during a /goal run."><option value="always">Always</option><option value="project">Project</option><option value="loop">This loop</option></select>
+          <input id="wlBudget" class="prov-key wl-budget" type="number" min="0" placeholder="calls/loop" data-tip="Call budget|Max calls to this host per loop (enforced by the loop in P-NETWL.3)." />
+        </div>
+        <details class="wl-auth">
+          <summary>Requires an auth token? (optional)</summary>
+          <div class="prov-row">
+            <select id="wlAuthKind" class="prov-key" style="flex:none;width:120px"><option value="">No auth</option><option value="jwt">JWT</option><option value="oauth">OAuth</option><option value="saml">SAML</option><option value="pem">PEM</option><option value="apikey">API key</option><option value="basic">User / Pass</option></select>
+            <input id="wlAuthLabel" class="prov-key" placeholder="Label (e.g. prod-gateway)" />
+          </div>
+          <div class="prov-row"><input id="wlAuthUser" class="prov-key" placeholder="Username (User/Pass only, optional)" spellcheck="false" /></div>
+          <div class="prov-row"><input id="wlAuthRotate" class="prov-key" type="number" min="0" placeholder="Rotate every N days (optional)" data-tip="Rotation reminder|Flags the key as due N days after it's set. Visibility only - nothing auto-rotates; use the Rotate button to replace it." /></div>
+          <div class="prov-row">
+            <input id="wlAuthSecret" class="prov-key" type="password" placeholder="Paste token / password / API key" />
+            <button class="btn-mini" id="wlAuthFile" data-tip="Upload file|Pick a token / PEM / API-key / config file. It's read + encrypted in the vault; the secret never enters this window.">${icon("folder", 12)} Upload file</button>
+          </div>
+          <div class="set-note">${icon("shield", 12)} Secrets are stored <b>OS-encrypted</b> (Windows DPAPI / macOS Keychain / Linux libsecret). The whitelist keeps only a reference - never the secret itself.</div>
+        </details>
+        <div class="prov-row"><button class="btn-mini ok" id="wlAdd">${icon("check", 12)} Add</button></div>
+      </div></div>`;
+  const note = `<div class="set-note">${icon("info", 12)} A whitelist match <b>auto-allows</b> the agent's network calls to that site (no prompt), <b>always under your organization's managed policy ceiling</b> - a managed-denied host is never granted (fail-closed). Anything not whitelisted still goes through the normal per-site approval.</div>`;
+  // P-NETWL.5 (ADR-0108): the two pre-checked personal-mode toggles. Premium tooltips: these are for personal /
+  // non-enterprise users; enterprise users' policy is managed (Support Desk). The curated whitelist below only
+  // ENFORCES when "Allow all" is off, so `.wl-standby` dims the list/form while allow-all is on.
+  const p = posture;
+  const searchTip = "For personal / non-enterprise use|Lets the agent search the web with the built-in search providers, no prompt each time. Enterprise users: web access is managed by your organization - contact your Support Desk to request it.";
+  const allTip = "For personal / non-enterprise use|The agent can reach any website AND your local network (LAN) without asking. It STILL asks before a public IP address or a site on a foreign country's domain. Turn this OFF to enforce the curated whitelist below instead. Enterprise users: contact your Support Desk to request whitelisted sites.";
+  const lock = p.managedLocked ? " disabled" : "";
+  const toggles = `<div class="wl-posture">
+    <div class="wl-toggle-row">
+      <label class="set-toggle"><input type="checkbox" id="wlAllowSearch" ${p.allowWebSearch ? "checked" : ""}${lock} />
+        <span><b>Allow web search</b> - let the agent search the web (built-in providers).</span></label>
+      <button class="info-dot" type="button" data-tip="${searchTip}" data-tip-icon="shield" data-tip-side="left">${icon("info", 12)}</button>
+    </div>
+    <div class="wl-toggle-row">
+      <label class="set-toggle"><input type="checkbox" id="wlAllowAll" ${p.allowAll ? "checked" : ""}${lock} />
+        <span><b>Allow all websites + local LAN</b> - reach any site + your local network without asking.</span></label>
+      <button class="info-dot" type="button" data-tip="${allTip}" data-tip-icon="shield" data-tip-side="left">${icon("info", 12)}</button>
+    </div>
+    ${p.managedLocked
+      ? `<div class="set-note">${icon("shield", 12)} Managed by your organization - the curated whitelist is enforced. Contact your <b>Support Desk</b> to request a site.</div>`
+      : `<div class="set-note">${icon("info", 12)} The curated whitelist below is <b>enforced only when "Allow all" is off</b>. Even with allow-all on, the agent still asks before a public IP or a foreign-country site.</div>`}
+  </div>`;
+  const body = p.allowAll && !p.managedLocked
+    ? toggles + `<div class="wl-standby">${rows + form}</div>` + note
+    : toggles + rows + form + note;
+  return setCard("whitelist", "Network Whitelist", "domains · IPs · trust-scoped", body, true);
+}
+function hydrateWhitelist(): void {
+  // Fetch entries + vault metadata + posture together (P-KEYS.1 last-4 needs the vault; P-NETWL.5 needs posture).
+  void Promise.all([bridge.whitelistList(), bridge.credList(), bridge.whitelistPosture()]).then(([w, c, p]) => {
+    state.whitelist = w ?? []; state.creds = c ?? []; if (p) state.posture = p;
+    fillSec("whitelist", secWhitelist(state.whitelist, state.creds, state.posture));
+  });
+}
+
+// P-NETWL.4 (ADR-0106): quick-add a DNS pill (a host the agent resolved, from the Network diagnostics panel)
+// to the whitelist, choosing zone / trust-scope / call-budget in a small popover - so pre-authorizing a site
+// the agent is actually reaching is one click, right where you see the traffic.
+function openWhitelistQuickAdd(anchor: HTMLElement, raw: string): void {
+  const host = raw.trim().replace(/\.$/, ""); // DNS cache entries can carry a trailing dot
+  const isIp = /^\d{1,3}(\.\d{1,3}){3}$/.test(host);
+  const inner = `<div class="cfg-sec wl-quick">
+    <div class="cfg-lbl">${icon("shield", 13)} Whitelist <span class="cur mono">${esc(host)}</span></div>
+    <div class="prov-row wl-controls">
+      <select class="prov-key" data-q="kind"><option value="domain"${isIp ? "" : " selected"}>Domain</option><option value="ip"${isIp ? " selected" : ""}>IP / CIDR</option></select>
+      <select class="prov-key" data-q="zone" data-tip="Network zone|Internal = intranet; External = internet."><option value="external">External</option><option value="internal">Internal</option></select>
+      <select class="prov-key" data-q="scope" data-tip="Trust scope|Always = every session; Project = this workspace; This loop = only during a /goal run."><option value="always">Always</option><option value="project">Project</option><option value="loop">This loop</option></select>
+      <input class="prov-key wl-budget" data-q="budget" type="number" min="0" placeholder="calls/loop" data-tip="Call budget|Max auto-allowed calls to this host per loop." />
+    </div>
+    <div class="prov-row"><button class="btn-mini ok" data-q="add">${icon("check", 12)} Add to whitelist</button></div>
+  </div>`;
+  const { node, close } = popover(anchor, inner);
+  node.addEventListener("click", (ev) => {
+    if (!(ev.target as HTMLElement).closest('[data-q="add"]')) return;
+    void (async () => {
+      const kind = (node.querySelector('[data-q="kind"]') as HTMLSelectElement).value === "ip" ? "ip" : "domain";
+      const zone = (node.querySelector('[data-q="zone"]') as HTMLSelectElement).value === "internal" ? "internal" : "external";
+      const scope = ((node.querySelector('[data-q="scope"]') as HTMLSelectElement).value ?? "always") as "always" | "project" | "loop";
+      const budgetRaw = ((node.querySelector('[data-q="budget"]') as HTMLInputElement).value ?? "").trim();
+      const callBudget = budgetRaw ? Math.max(0, Math.floor(Number(budgetRaw))) : undefined;
+      const saved = await bridge.whitelistUpsert({ kind, pattern: host, zone, scope, callBudget });
+      close();
+      if (!saved) { showToast({ title: "Not added", desc: "That host was rejected - check it's a valid domain or IP.", actions: [{ label: "OK" }], timeout: 3500 }); return; }
+      if (state.settingsOpen) hydrateWhitelist();
+      showToast({ title: "Added to whitelist", desc: `${host} will auto-allow${scope === "always" ? "" : ` (${WL_SCOPE_LABEL[scope]!.toLowerCase()} scope)`}${callBudget != null ? ` · ${callBudget}/loop` : ""}.`, meta: "under the managed ceiling · fail-closed", timeout: 4200 });
+    })();
+  });
+}
+
+// P-KEYS.2 (ADR-0107): rotate a whitelist entry's attached credential IN PLACE - paste a new secret or upload
+// a file. The vaultRef is preserved so the entry keeps working; the backend bumps rotatedAt + refreshes last4.
+function openCredRotate(anchor: HTMLElement, ref: string): void {
+  const inner = `<div class="cfg-sec wl-quick">
+    <div class="cfg-lbl">${icon("refresh", 13)} Rotate credential</div>
+    <div class="prov-row"><input class="prov-key" data-q="secret" type="password" placeholder="Paste the new token / password / key" /></div>
+    <div class="prov-row">
+      <button class="btn-mini ok" data-q="rotate">${icon("check", 12)} Rotate</button>
+      <button class="btn-mini" data-q="rotatefile">${icon("folder", 12)} From file</button>
+    </div>
+    <div class="set-note">${icon("shield", 12)} Re-encrypted in place; the old secret is overwritten. Fail-closed if the OS keystore is unavailable.</div>
+  </div>`;
+  const { node, close } = popover(anchor, inner);
+  const done = (r: import("./bridge.ts").CredMetaView | { error: string } | null): void => {
+    if (r && "error" in r) {
+      const msg = r.error === "os-encryption-unavailable" ? "OS encryption isn't available; the old secret was left untouched (fail-closed)."
+        : r.error === "not-found" ? "That credential no longer exists." : r.error;
+      showToast({ title: "Rotation failed", desc: msg, actions: [{ label: "OK" }], timeout: 5000 });
+      return;
+    }
+    close();
+    if (!r) return; // user cancelled the file dialog
+    if (state.settingsOpen) hydrateWhitelist();
+    showToast({ title: "Credential rotated", desc: `New secret stored (••••${esc(r.last4 ?? "")}); the reference is unchanged so the entry keeps working.`, timeout: 3600 });
+  };
+  node.addEventListener("click", (ev) => {
+    if ((ev.target as HTMLElement).closest('[data-q="rotate"]')) {
+      const secret = (node.querySelector('[data-q="secret"]') as HTMLInputElement).value ?? "";
+      if (!secret) { showToast({ title: "Paste a secret", desc: "Enter the new secret, or use From file.", actions: [{ label: "OK" }], timeout: 3000 }); return; }
+      void bridge.credRotate({ ref, secret }).then(done);
+    } else if ((ev.target as HTMLElement).closest('[data-q="rotatefile"]')) {
+      void bridge.credRotateFile({ ref }).then(done);
+    }
+  });
+}
+
+// ── P-APPEAR.1: personalized chat background (ambient wash / flashlight-on-hover) ──
+// `ambient` = the image faintly (25%) behind the whole chat; `flashlight` = black background, with the
+// image revealed only under the cursor via a masked radial spotlight tracked on mousemove. Off/no image → hidden.
+function applyChatBg(cfg = state.chatBg): void {
+  const el = $("#chatBg");
+  if (!el) return;
+  const active = !!cfg.image && cfg.mode !== "off";
+  el.classList.toggle("ambient", active && cfg.mode === "ambient");
+  el.classList.toggle("flashlight", active && cfg.mode === "flashlight");
+  el.style.setProperty("--bg-op", String(cfg.opacity || 0.25));
+  el.style.backgroundImage = active ? `url("${cfg.image}")` : "";
+  if (active && cfg.mode === "flashlight") ensureChatBgTracking();
+}
+let chatBgTracking = false;
+function ensureChatBgTracking(): void {
+  if (chatBgTracking) return;
+  const center = document.querySelector(".center") as HTMLElement | null;
+  if (!center) return;
+  chatBgTracking = true;
+  center.addEventListener("mousemove", (e) => {
+    const bg = $("#chatBg");
+    if (!bg || !bg.classList.contains("flashlight")) return;
+    const r = center.getBoundingClientRect();
+    bg.style.setProperty("--mx", `${(e as MouseEvent).clientX - r.left}px`);
+    bg.style.setProperty("--my", `${(e as MouseEvent).clientY - r.top}px`);
+  });
+  center.addEventListener("mouseleave", () => { const bg = $("#chatBg"); bg?.style.setProperty("--mx", "-600px"); bg?.style.setProperty("--my", "-600px"); });
+}
+async function updateChatBg(patch: { image?: string; mode?: "off" | "ambient" | "flashlight"; opacity?: number }): Promise<void> {
+  const r = await bridge.setChatBackground(patch).catch(() => null);
+  if (!r) { showToast({ tone: "warn", title: "Couldn't update background", desc: "The image may be too large - try one under ~9 MB.", timeout: 3600 }); return; }
+  state.chatBg = r; applyChatBg(r);
+  if (state.settingsOpen) fillSec("appearance", secAppearance());
+}
+function secAppearance(): string {
+  const c = state.chatBg;
+  const modeOpt = (v: string, l: string) => `<option value="${v}"${c.mode === v ? " selected" : ""}>${l}</option>`;
+  const thumb = c.image
+    ? `<div class="bg-thumb" style="background-image:url('${c.image}')"></div>`
+    : `<div class="bg-thumb empty">no image</div>`;
+  const inner = `
+    <div class="bg-row">${thumb}
+      <div class="bg-controls">
+        <input type="file" id="bgFile" accept="image/png,image/jpeg,image/webp,image/gif" hidden />
+        <button type="button" class="btn-mini" id="bgUpload">${icon("folder", 12)} ${c.image ? "Replace image…" : "Choose image…"}</button>
+        ${c.image ? `<button type="button" class="btn-mini danger" id="bgClear">Remove</button>` : ""}
+      </div></div>
+    <div class="goal-row"><label class="goal-lbl" for="bgMode">Display</label>
+      <select id="bgMode" class="prov-key">${modeOpt("off", "Off")}${modeOpt("ambient", "Ambient - faint 25% wash")}${modeOpt("flashlight", "Flashlight - reveal on hover")}</select></div>
+    <div class="set-note">${icon("info", 12)} <b>Ambient</b> shows your image faintly (25%) behind the whole chat. <b>Flashlight</b> keeps the background black and reveals the image only under your cursor - like a flashlight sweeping a dark room.</div>`;
+  return setCard("appearance", "Chat background", "personalize · 25% opacity", inner, true);
+}
 
 function settingsShell(): string {
   return [
@@ -1576,10 +2158,15 @@ function settingsShell(): string {
     setSkel("asksage", "AskSage gov gateway", "accredited proxy", true),
     `<div data-sec="asksageQuota"></div>`, // AskSage Monthly-tokens bar - ONLY when the gov gateway is configured (filled in hydrateSettings)
     setSkel("providers", "Providers", "U.S. frontier · key or OAuth", true),
+    setSkel("localProviders", "Local Providers", "self-hosted · Ollama · vLLM · VPN", true), // P-LOCAL.3 (ADR-0135); auto-collapsed
     `<div data-sec="sovereignty"></div>`, // P-IDE.1c: China-origin unlock (renders only when such models exist)
     setSkel("compression", "Token compression", "headroom · on-device · opt-in", true),
     setSkel("mcp", "MCP connectors", "model context protocol", true),
+    setSkel("agents", "Remote agents", "hermes · openclaw · ACP firewall", true), // P-AGENTFW.2 (ADR-0149)
+    setSkel("whitelist", "Network Whitelist", "domains · IPs · trust-scoped", true), // P-NETWL.2 (ADR-0106)
     setSkel("others", "More providers", "", true),
+    setSkel("voice", "Voice", "TTS · STT · ElevenLabs", true), // P-VOICE.1 (ADR-0115)
+    secAppearance(), // P-APPEAR.1: chat background (rendered from state - loaded at boot, no fetch wait)
     setSkel("developer", "Developer", "logs · diagnostics", true),
     `<div class="set-note">${icon("shield", 12)} Keys are stored on this machine and passed to omp as env vars - never sent anywhere else. OAuth uses omp's own secure credential vault.</div>`,
   ].join("");
@@ -1605,6 +2192,8 @@ function hydrateSettings(): void {
     state.auth = a; // store so the AskSage gateway card can render its key entry from auth.gateway
     fillSec("providers", secProviders(a)); fillSec("others", secOthers(a));
     fillSec("asksage", secAsksage(state.asksage, null)); // inject the ASKSAGE_API_KEY row now that gateway auth is known
+    // P-VOICE.1 (ADR-0115): the Voice card needs auth (ElevenLabs key state) + the voice settings, then loads voices.
+    void bridge.voiceSettings().then((vset) => { fillSec("voice", secVoice(a, vset)); void loadVoices(); });
     renderStatus(); // a just-added/removed key flips the OAuth-vs-key budget-pill gate
   });
   fillSec("sovereignty", secSovereignty()); // P-IDE.1c: only renders a card when China-origin models exist
@@ -1612,6 +2201,9 @@ function hydrateSettings(): void {
   fillSec("developer", secDeveloper()); // ADR-0059: render from state.developerMode (loaded by loadDev)
   void hydratePersonal();
   hydrateMcp();
+  hydrateAgents(); // P-AGENTFW.2 (ADR-0149)
+  void hydrateLocalProviders(); // P-LOCAL.3 (ADR-0135)
+  hydrateWhitelist(); // P-NETWL.2 (ADR-0106)
   void bridge.asksage().then(async (a) => {
     if (a) state.asksage = a;
     fillSec("asksage", secAsksage(a, null)); // paint immediately (token readout shows a spinner)
@@ -1647,6 +2239,79 @@ const SCOPE_ORDER = ["personal", "work", "combined", "cui"] as const;
 /** Re-render just the Personalization card (instant - the endpoint is local). */
 function hydratePersonal(): Promise<void> {
   return bridge.personal().then((p) => fillSec("personal", secPersonal(p)));
+}
+
+// ── P-LOCAL.3 (ADR-0135): Settings → Local Providers ─────────────────────────────────────────────
+/** Re-render the Local Providers card from the current list + which credential refs are in the vault. */
+async function hydrateLocalProviders(): Promise<void> {
+  const [providers, creds] = await Promise.all([
+    bridge.localProvidersList().catch(() => [] as import("../local_providers.ts").LocalProviderDef[]),
+    bridge.credList().catch(() => [] as import("./bridge.ts").CredMetaView[]),
+  ]);
+  state.localProviders = providers ?? [];
+  const vaultRefs = new Set((creds ?? []).map((c) => c.ref));
+  fillSec("localProviders", localProvidersCardBody(state.localProviders, vaultRefs, bridge.isElectron));
+}
+
+/** Add a provider from the card's form: validate → (if authed) store the key in the vault → save the def. */
+async function addLocalProviderFromForm(): Promise<void> {
+  const val = (id: string): string => (($(`#${id}`, $("#setBody")!) as HTMLInputElement | HTMLSelectElement | null)?.value ?? "");
+  const external = ($("#lpExternal", $("#setBody")!) as HTMLInputElement | null)?.checked ?? false;
+  const draft = draftFromForm({ name: val("lpName"), baseUrl: val("lpBaseUrl"), auth: val("lpAuth"), models: val("lpModels"), external }, Date.now());
+  if (draft.errors.length || !draft.def) { showToast({ tone: "warn", title: "Check the provider details", desc: draft.errors[0] ?? "invalid" }); return; }
+  const def = draft.def;
+  if (draft.needsKey) {
+    const key = val("lpKey").trim();
+    if (!key) { showToast({ tone: "warn", title: "Paste the API key", desc: "It goes straight to the OS-encrypted vault." }); return; }
+    if (!bridge.isElectron || !bridge.credStore) { showToast({ tone: "danger", title: "Vault is desktop-only", desc: "Open the LUCID desktop app to store the key securely." }); return; }
+    const ref = `lpkey_${def.id}`;
+    const r = await bridge.credStore({ ref, kind: def.authKind === "basic" ? "basic" : "apikey", secret: key, label: `Local Provider · ${def.name}` });
+    if (!r || "error" in r) { showToast({ tone: "danger", title: "Couldn't store the key", desc: (r as { error?: string })?.error ?? "vault error" }); return; }
+    def.vaultRef = ref;
+  }
+  const saved = await bridge.localProviderUpsert(def);
+  if (saved && "saved" in saved && saved.saved) {
+    showToast({ tone: "ok", title: "Local provider added", desc: `${def.name} - takes effect on the next app restart.` });
+    void hydrateLocalProviders();
+  } else {
+    showToast({ tone: "danger", title: "Couldn't save the provider", desc: (saved as { errors?: string[] })?.errors?.[0] ?? "save error" });
+  }
+}
+
+/** Remove a provider (its vault key is left in the vault; the user can delete it from the whitelist/vault UI). */
+async function deleteLocalProvider(id: string): Promise<void> {
+  await bridge.localProviderDelete(id).catch(() => null);
+  void hydrateLocalProviders();
+}
+
+/** Reachability/TLS probe of an endpoint (no key sent). */
+async function testLocalProviderConn(baseUrl: string): Promise<void> {
+  const u = (baseUrl || "").trim();
+  if (!u) { showToast({ tone: "warn", title: "Enter a base URL first", desc: "Type the endpoint's base URL, then test it." }); return; }
+  showToast({ title: "Testing connection…", desc: u, timeout: 1400 });
+  const r = await bridge.localProviderTest(u).catch(() => null);
+  if (r?.reachable) {
+    showToast({ tone: "ok", title: "Endpoint reachable", desc: `HTTP ${r.status}${r.authed ? " · auth required (the key is sent at run time, from the vault)" : ""}.` });
+  } else {
+    const hint = u.startsWith("https") ? " Check the VPN tunnel, TLS cert, and port." : " Check the host/port - is the server running?";
+    showToast({ tone: "danger", title: "Not reachable", desc: (r?.error ?? "no response.") + hint });
+  }
+}
+
+/** Store (or rotate) an authed provider's key straight into the OS-encrypted vault, from the inline row. */
+async function saveLocalProviderKey(wrap: HTMLElement): Promise<void> {
+  const id = wrap.dataset.lpId ?? "";
+  const def = state.localProviders.find((p) => p.id === id);
+  if (!def) return;
+  const key = (($(".lp-rekey-input", wrap) as HTMLInputElement | null)?.value ?? "").trim();
+  if (!key) { showToast({ tone: "warn", title: "Paste the key first", desc: "It goes straight to the OS-encrypted vault." }); return; }
+  if (!bridge.isElectron || !bridge.credStore) { showToast({ tone: "danger", title: "Vault is desktop-only", desc: "Open the LUCID desktop app." }); return; }
+  const ref = def.vaultRef || `lpkey_${def.id}`;
+  const r = await bridge.credStore({ ref, kind: def.authKind === "basic" ? "basic" : "apikey", secret: key, label: `Local Provider · ${def.name}` });
+  if (!r || "error" in r) { showToast({ tone: "danger", title: "Couldn't store the key", desc: (r as { error?: string })?.error ?? "vault error" }); return; }
+  if (def.vaultRef !== ref) { def.vaultRef = ref; await bridge.localProviderUpsert(def).catch(() => null); }
+  showToast({ tone: "ok", title: "Key stored in the vault", desc: `${def.name} - restart to apply.` });
+  void hydrateLocalProviders();
 }
 // Settings → Personalization (ADR-0010/0012): opt-in encrypted KG + the
 // Work/Personal/Combined/CUI compartment selector with per-mode risk notices.
@@ -1766,11 +2431,21 @@ async function maybeOnboardPersonal(): Promise<void> {
 
 // ───────────────────────── Knowledge graph (P9.3) ─────────────────────────
 let kgHandle: GraphHandle | null = null;
+const perfWatch = watchPerfTier(); // P-PERF.2 (ADR-0129): battery/spec-aware render tier
+let kgForceRender = false; // P-PERF.2: one-shot "Render anyway" override of the minimal-tier pause (per run)
+// P-PERF.3 (ADR-0130): layout continuity across mounts - re-opening the KG (rail switch, live-refresh
+// remount) paints nodes where the user last saw them instead of re-exploding from a circle. IN-MEMORY
+// only, per the ADR-0084 privacy boundary: entity-id-keyed positions are structural metadata of the
+// encrypted store and never touch disk. Keyed per graph (personal vs code:file vs code:symbol).
+const kgLayoutCache = new Map<string, Map<string, { x: number; y: number }>>();
 let kgData: PersonalGraphData | null = null;
 let kgLens: "kind" | "trust" = "kind";
 let kgOpen = false;
 let kgSelId: string | null = null;
 let kgSig = ""; // signature of the last-rendered graph, to skip no-op live refreshes
+let kgCodeMode = false; // P-KG-CODE.1: the canvas is showing the workspace CODE graph, not the personal graph
+let codeGraphRoot = ""; // P-KG-CODE.1d: workspace root, so a code node's relative path opens the real file in the IDE
+let codeGraphLevel: "file" | "symbol" = "file"; // P-KG-SYM.1: which graph the canvas is showing
 const forgettingIds = new Set<string>(); // in-flight "forget" fact ids - de-dups mashed clicks (#113)
 // P-KG-REL.1 (#109): manual relationship authoring state.
 let kgRelateMode = false;
@@ -1837,7 +2512,7 @@ function kgSignature(d: PersonalGraphData | null): string {
 /** Live-refresh the open KG without a full remount: merge new facts/edges into the running
  *  simulation (positions preserved). No-op if the panel is closed or nothing changed. */
 async function refreshKnowledgeLive(): Promise<void> {
-  if (!kgOpen || !kgHandle) return;
+  if (!kgOpen || !kgHandle || kgCodeMode) return; // code-graph mode isn't the live personal graph
   const data = await bridge.personalGraph().catch(() => null);
   if (!data || data.nodes.length === 0) return;
   const sig = kgSignature(data);
@@ -1862,6 +2537,7 @@ function openKnowledge(): void {
   $("#knowledge")!.hidden = false;
   $("#inspector")!.hidden = true;
   $$(".rail-btn").forEach((b) => b.classList.toggle("active", (b as HTMLElement).dataset.rail === "knowledge"));
+  updateCodeGraphButtons(false); // always open on the personal graph; the Code-graph button re-enters code mode
   void renderKnowledge();
 }
 function closeKnowledge(): void {
@@ -1869,6 +2545,7 @@ function closeKnowledge(): void {
   kgOpen = false;
   if (kgRelateMode) setRelateMode(false); // leave relate mode clean for next open
   kgHandle?.destroy(); kgHandle = null;
+  showKgCenter(false);
   $("#knowledge")!.hidden = true;
   $("#inspector")!.hidden = false;
   $$(".rail-btn").forEach((b) => b.classList.remove("active"));
@@ -1884,6 +2561,7 @@ function openPreview(): void {
   closeSettings();
   closeIde();
   closeKnowledge();
+  closeAgentBuilder(); // P-AGENT.2b
   if (!state.sidebarCollapsed) toggleSidebar(true);
   $("#preview")!.hidden = false;
   $("#inspector")!.hidden = true;
@@ -1892,6 +2570,8 @@ function openPreview(): void {
   const path = $("#prevPath") as HTMLInputElement | null;
   if (path && !path.value && state.lastPreviewablePath) path.value = state.lastPreviewablePath;
   if (path?.value) loadPreview(path.value); else path?.focus();
+  startPreviewShotLoop(); // keep the agent's preview_screenshot shot fresh while the panel is open
+  startPreviewInspectRelay(); // P-PREVIEW.6b: serve the agent's preview_inspect queries while the panel is open
   // Screenshot capture is an Electron-only seam; disable the button in a plain browser.
   const shot = $("#prevShot") as HTMLButtonElement | null;
   if (shot && !bridge.isElectron) { shot.disabled = true; shot.title = "Screenshots are available in the desktop app"; }
@@ -1899,25 +2579,45 @@ function openPreview(): void {
 function closePreview(): void {
   if (!previewOpen) return;
   previewOpen = false;
+  stopPreviewShotLoop();
+  stopPreviewInspectRelay(); // P-PREVIEW.6b
   $("#preview")!.hidden = true;
   $("#inspector")!.hidden = false;
   $$(".rail-btn").forEach((b) => b.classList.remove("active"));
   $('.rail-btn[data-rail="chat"]')?.classList.add("active");
 }
-/** P-PREVIEW.2 (ADR-0096): the agent just wrote a browser-previewable file — auto-surface it. If the Preview
- *  panel is already open, render it live; otherwise remember it and offer a one-click "Open preview" toast so
- *  the user watches what the agent built appear without hunting for it. */
+/** P-PREVIEW.2 (ADR-0096; auto-show, 2026-07-01): the agent just wrote a browser-previewable file — show it in
+ *  the Preview panel automatically. It's just a preview, so we don't ask (the old toast disappeared before the
+ *  user could click it). If the panel is already open, swap to the new file; otherwise open it on this file. */
 function onPreviewAvailable(path: string): void {
   if (!path) return;
   state.lastPreviewablePath = path;
-  const name = path.split(/[\\/]/).pop() || path;
-  if (previewOpen) { const p = $("#prevPath") as HTMLInputElement | null; if (p) p.value = path; loadPreview(path); return; }
-  showToast({
-    title: "App ready to preview",
-    desc: `The agent wrote ${name}.`,
-    actions: [{ label: "Open preview", run: () => openPreview() }, { label: "Dismiss" }],
-    timeout: 6000,
-  });
+  const p = $("#prevPath") as HTMLInputElement | null;
+  if (p) p.value = path;                 // point at the new file explicitly (never a stale prior value)
+  if (previewOpen) loadPreview(path);
+  else openPreview();                    // opens the panel and renders p.value straight away
+}
+
+// ── P-PREVIEW.6a (ADR-0153): live "reviewing / testing" indicator ────────────────────────────────
+let previewTestingTimer: ReturnType<typeof setTimeout> | undefined;
+/** Glow the Preview panel + show a "reviewing/testing" pill while the agent looks at / tests the preview.
+ *  Surfaces the panel if a preview is loaded but hidden, so the user SEES the review happen live.
+ *  Debounced — repeated activity keeps it lit; fades ~4.5s after the last signal (or on turn done). */
+function flashPreviewTesting(label: string): void {
+  const panel = $("#preview") as HTMLElement | null;
+  const pill = $("#prevPill") as HTMLElement | null;
+  if (!panel || !pill) return;
+  if (panel.hidden && state.lastPreviewablePath) openPreview(); // make the review visible
+  panel.classList.add("testing");
+  const lbl = $("#prevPillLabel"); if (lbl) lbl.textContent = label || "Reviewing the preview";
+  pill.hidden = false;
+  if (previewTestingTimer) clearTimeout(previewTestingTimer);
+  previewTestingTimer = setTimeout(clearPreviewTesting, 4500);
+}
+function clearPreviewTesting(): void {
+  if (previewTestingTimer) { clearTimeout(previewTestingTimer); previewTestingTimer = undefined; }
+  ($("#preview") as HTMLElement | null)?.classList.remove("testing");
+  const pill = $("#prevPill") as HTMLElement | null; if (pill) pill.hidden = true;
 }
 /** Load the resolved target into the preview iframe. Fail-safe: only a `local` target is rendered; a
  *  `remote` or `blocked` target shows the empty-state message (remote is egress-gated in P-PREVIEW.3). */
@@ -1928,20 +2628,772 @@ function loadPreview(target: string): void {
   if (!frame || !empty) return;
   const r = resolvePreview(target);
   if (kind) kind.textContent = r.kind === "local" ? r.label : "";
-  // The iframe is only ever navigated to a vetted file:// URL. resolvePreview guarantees this for a local
-  // target; the explicit scheme allowlist here is the security barrier — DOM input can NEVER reach the
-  // iframe src as any other scheme (no javascript:/data:/http(s):), which also clears js/xss-through-dom.
+  // The iframe src is never raw DOM input: a LOCAL target loads our fixed same-origin /api/preview/serve
+  // endpoint (the path is only an encoded query value), and a REMOTE target is an http(s) URL gated by the
+  // egress allow-list. resolvePreview classifies the target first; no javascript:/data: scheme can reach src.
+  const msg = ($("#prevEmptyMsg") as HTMLElement | null) ?? empty;
+  const showEmpty = (text: string) => { frame.removeAttribute("srcdoc"); frame.removeAttribute("src"); frame.hidden = true; empty.hidden = false; msg.textContent = text; };
   if (r.kind === "local" && /^file:\/\//i.test(r.src)) {
-    frame.src = encodeURI(r.src); frame.hidden = false; empty.hidden = true;
+    // P-PREVIEW.4b (ADR-0096): render via a SERVED document (iframe.src → /api/preview/serve), NOT srcdoc.
+    // A srcdoc frame inherits the renderer's strict `script-src 'self'` CSP and blocks the previewed app's
+    // inline scripts (it rendered only its static HTML). The served document carries its own per-frame CSP
+    // (PREVIEW_FRAME_CSP) so the app actually runs — while staying in the hardened opaque-origin sandbox
+    // and egress-blocked (`connect-src 'none'`). The src is a FIXED same-origin endpoint with the path only
+    // ever an encodeURIComponent'd query value (never the scheme/host) — so DOM input can't pick the scheme.
+    if (kind) kind.textContent = r.label;
+    frame.removeAttribute("srcdoc");
+    frame.src = bridge.previewServeUrl(target);
+    frame.hidden = false; empty.hidden = true;
+    clearPreviewCanvas(); // P-PREVIEW.5: a fresh file starts with a clean markup layer
+    // P-PREVIEW.3a-shot: once it paints, cache a PNG desktop-side so the agent's preview_screenshot tool can
+    // see what it built. Small delay lets the app's first frame render (canvas/animation). Electron-only.
+    frame.onload = () => { wirePreviewCanvas(); syncPreviewCanvas(); window.setTimeout(() => void cacheRenderedPreviewShot(), 150); };
+  } else if (r.kind === "remote") {
+    // P-PREVIEW.3b (ADR-0096): a remote URL reaches the internet — only load it if the egress allow-list
+    // already approves the site (honoring the managed ceiling). Otherwise it stays gated; the agent must
+    // request the site via the normal egress flow (which prompts the user). The iframe is opaque-origin
+    // (no allow-same-origin), and only an http(s) URL ever reaches src here.
+    const remoteUrl = target.trim(); // for a remote target, the input IS the URL (resolver label === URL)
+    if (kind) kind.textContent = "checking…";
+    showEmpty(`Checking whether ${r.label} is approved to load…`);
+    void bridge.previewEgressAllows(remoteUrl).then((allowed) => {
+      if (($("#prevPath") as HTMLInputElement | null)?.value.trim() !== remoteUrl) return; // a newer Open superseded this
+      if (canPreviewRemote(remoteUrl, allowed)) {
+        if (kind) kind.textContent = r.label; frame.src = encodeURI(remoteUrl); frame.hidden = false; empty.hidden = true;
+      } else {
+        if (kind) kind.textContent = "";
+        showEmpty(`Remote site not approved for preview: ${r.label}. Ask the agent to visit it - you'll get an egress approval prompt, then it can preview here.`);
+      }
+    }).catch(() => showEmpty(`Couldn't check egress approval for ${r.label}.`));
   } else {
-    frame.removeAttribute("src"); frame.hidden = true; empty.hidden = false;
-    // Set the message on the inner span (not the flex container) so its width/contrast styling persists.
-    const msg = ($("#prevEmptyMsg") as HTMLElement | null) ?? empty;
-    msg.textContent = r.kind === "remote"
-      ? `Remote URLs are egress-gated and not previewed yet (P-PREVIEW.3): ${r.label}`
-      : `Can't preview that - ${r.reason ?? "open a local HTML file"}.`;
+    if (kind) kind.textContent = "";
+    showEmpty(`Can't preview that - ${r.reason ?? "open a local HTML file"}.`);
   }
 }
+/** P-PREVIEW.3a-shot: after the preview paints, cache a PNG of it desktop-side so the agent's
+ *  `preview_screenshot` tool can fetch what it built. Electron-only (capturePage); a silent no-op in a
+ *  plain browser or when the frame has no size. Never throws — a failed cache just means no shot this turn. */
+async function cacheRenderedPreviewShot(): Promise<void> {
+  const frame = $("#prevFrame") as HTMLIFrameElement | null;
+  if (!frame || frame.hidden || !bridge.isElectron || !bridge.capturePreview) return;
+  const rect = frame.getBoundingClientRect();
+  if (rect.width < 2 || rect.height < 2) return;
+  const png = await bridge.capturePreview({ x: Math.round(rect.x), y: Math.round(rect.y), width: Math.round(rect.width), height: Math.round(rect.height) }).catch(() => null);
+  if (png) await bridge.cachePreviewShot(png).catch(() => { /* best-effort */ });
+}
+// P-PREVIEW.3a-shot freshness: the single on-load capture froze the shot at load+150ms, so the agent's
+// preview_screenshot saw an empty/early/stale frame the moment the previewed app animated or the file was
+// re-edited — and it gave up and read the DOM instead. Re-capture on a light cadence WHILE the preview panel
+// is visible so the cached PNG tracks what the user actually sees (cacheRenderedPreviewShot no-ops when the
+// frame is hidden / non-Electron, so this is a cheap visibility check when there's nothing to capture).
+let previewShotTimer: number | null = null;
+function startPreviewShotLoop(): void {
+  if (previewShotTimer !== null) return;
+  void cacheRenderedPreviewShot(); // refresh immediately on open, then keep it current
+  previewShotTimer = window.setInterval(() => {
+    if (document.visibilityState === "visible") void cacheRenderedPreviewShot();
+  }, 1500);
+}
+function stopPreviewShotLoop(): void {
+  if (previewShotTimer === null) return;
+  window.clearInterval(previewShotTimer);
+  previewShotTimer = null;
+}
+
+// ── P-PREVIEW.6b (ADR-0153): DOM-inspect relay ───────────────────────────────────────────────────
+// The agent's `preview_inspect` tool enqueues a query on the dev server; the renderer polls for it, runs it
+// on the sandboxed iframe via the postMessage bridge, and posts the result back. Only runs while the panel is
+// open; a query with no preview loaded simply times out server-side with a helpful message.
+let previewInspectTimer: number | null = null;
+function startPreviewInspectRelay(): void {
+  if (previewInspectTimer !== null) return;
+  previewInspectTimer = window.setInterval(() => { void pollPreviewInspect(); }, 450);
+}
+function stopPreviewInspectRelay(): void {
+  if (previewInspectTimer === null) return;
+  window.clearInterval(previewInspectTimer);
+  previewInspectTimer = null;
+}
+async function pollPreviewInspect(): Promise<void> {
+  const frame = $("#prevFrame") as HTMLIFrameElement | null;
+  if (!frame || frame.hidden) return; // no preview rendered yet → let it time out server-side
+  const next = await bridge.previewInspectNext().catch(() => null);
+  if (!next || next.none || !next.id) return;
+  const result = await runInspectOnFrame(frame, next.id, next.command ?? {});
+  await bridge.previewInspectResult(next.id, result).catch(() => { /* the tool will time out */ });
+}
+/** Ask the sandboxed preview's bridge to run a read-only query; resolve with its result (or a timeout note). */
+function runInspectOnFrame(frame: HTMLIFrameElement, id: string, command: unknown): Promise<unknown> {
+  return new Promise((resolve) => {
+    const win = frame.contentWindow;
+    if (!win) { resolve({ error: "the preview isn't ready" }); return; }
+    const done = (r: unknown) => { window.removeEventListener("message", onMsg); window.clearTimeout(to); resolve(r); };
+    const to = window.setTimeout(() => done({ error: "the preview didn't respond (no inspect bridge, or it's still loading)" }), 3000);
+    function onMsg(ev: MessageEvent): void {
+      const d = ev.data as { __lucid?: string; id?: string; result?: unknown } | null;
+      if (ev.source !== win || !d || d.__lucid !== "inspect-result" || d.id !== id) return;
+      done(d.result);
+    }
+    window.addEventListener("message", onMsg);
+    win.postMessage({ __lucid: "inspect", id, cmd: command }, "*");
+  });
+}
+
+// ── P-AGENT.2b (ADR-0133): the Agent Builder workflow canvas ─────────────────────────────────────────────
+// A right-edge surface (mutually exclusive with the other right surfaces). The spec is edited in memory and
+// rendered through the SAME zero-dep graph engine as the KG (specToGraphData → mountGraph). Save validates
+// fail-closed both client-side (instant) and server-side (authoritative).
+let abOpen = false;
+let abSpec: AgentSpec | null = null;
+let abHandle: GraphHandle | null = null;
+let abConnectMode = false;
+// P-AGENT.9: trust state of the CURRENT canvas spec (imported agents open untrusted/suspicious/quarantined
+// and cannot run until approved). null = locally authored (trusted).
+let abTrust: { label: TrustLabel; reason: string } | null = null;
+// P-AGENT.12: MCP-discovered catalog entries (omp runtime names). Refreshed fire-and-forget when the
+// builder opens; empty = static catalog only (fail-soft).
+let abMcpTools: McpCatalogTool[] = [];
+async function refreshAbMcpTools(): Promise<void> {
+  try {
+    abMcpTools = (await bridge.agentMcpTools()).tools;
+  } catch {
+    abMcpTools = []; // probe unavailable → built-ins only
+  }
+}
+
+function openAgentBuilder(): void {
+  abOpen = true;
+  void refreshAbMcpTools(); // P-AGENT.12: warm the MCP catalog for the pickers (fail-soft, never blocks)
+  closeSettings();
+  closeKnowledge();
+  closeIde();
+  closePreview();
+  if (!state.sidebarCollapsed) toggleSidebar(true);
+  $("#agentBuilder")!.hidden = false;
+  $("#inspector")!.hidden = true;
+  $$(".rail-btn").forEach((b) => b.classList.toggle("active", (b as HTMLElement).dataset.rail === "agentBuilder"));
+  void renderAgentBuilder();
+}
+function closeAgentBuilder(): void {
+  if (!abOpen) return;
+  abOpen = false;
+  abHandle?.destroy();
+  abHandle = null;
+  $("#agentBuilder")!.hidden = true;
+  $("#inspector")!.hidden = false;
+  $$(".rail-btn").forEach((b) => b.classList.remove("active"));
+  $('.rail-btn[data-rail="chat"]')?.classList.add("active");
+}
+
+async function renderAgentBuilder(): Promise<void> {
+  const canvas = $("#abCanvas");
+  if (!canvas) return;
+  if (!abSpec) {
+    // Resume the most-recently-saved agent for this workspace, else start a fresh one-node spec.
+    const list = await bridge.agentList().catch(() => []);
+    abSpec = (list[0] ? await bridge.agentLoad(list[0].spec_id) : null) ?? newCanvasSpec("New agent", Date.now());
+    // P-AGENT.9: resume the stored trust state too — an imported agent stays gated across sessions.
+    const t = list[0];
+    abTrust = t && t.trust_label && t.trust_label !== "trusted" && t.spec_id === abSpec.spec_id
+      ? { label: t.trust_label, reason: t.trust_reason ?? "imported agent — review before running" }
+      : null;
+  }
+  abHandle?.destroy();
+  abHandle = mountGraph(canvas as HTMLElement, specToGraphData(abSpec), (id) => selectAbNode(id), {
+    onRelate: (from, to) => addAbEdge(from, to),
+  });
+  abHandle.setRelateMode(abConnectMode);
+  renderAbErrors();
+  renderAbTrust(); // P-AGENT.9
+}
+function reRenderAbGraph(): void {
+  if (abSpec && abHandle) abHandle.update(specToGraphData(abSpec));
+}
+function markAbDirty(): void {
+  if (abSpec) abSpec.updated_at = Date.now();
+}
+
+function selectAbNode(id: string | null): void {
+  const side = $("#abSide");
+  if (!side) return;
+  const node = abSpec?.nodes.find((n) => n.id === id);
+  if (!node || !abSpec) { side.hidden = true; return; }
+  side.innerHTML = nodeEditorHtml(node, abSpec.tools, abMcpTools, abSpec); // P-AGENT.12 catalog + P-AGENT.11c branch edges
+  side.hidden = false;
+  $("#abLabel", side)?.addEventListener("input", (e) => { node.label = (e.target as HTMLInputElement).value; markAbDirty(); reRenderAbGraph(); });
+  $("#abPrompt", side)?.addEventListener("input", (e) => { node.prompt = (e.target as HTMLTextAreaElement).value; markAbDirty(); });
+  // P-AGENT.11c: branch choice labels ride the outgoing edges.
+  $$("[data-edge-label]", side).forEach((inp) =>
+    inp.addEventListener("input", (e) => {
+      const edgeId = (inp as HTMLElement).dataset.edgeLabel ?? "";
+      const edge = abSpec?.edges.find((x) => x.id === edgeId);
+      if (!edge) return;
+      const v = (e.target as HTMLInputElement).value.trim();
+      if (v) edge.label = v;
+      else delete edge.label;
+      markAbDirty();
+      reRenderAbGraph(); // the canvas shows choice labels as edge relations
+    }),
+  );
+  // P-AGENT.15: reliability knobs — cleared inputs remove the field (spec stays minimal).
+  $("#abRetry", side)?.addEventListener("change", (e) => {
+    const v = Math.round(Number((e.target as HTMLInputElement).value));
+    if (Number.isFinite(v) && v >= 1) node.retry = { ...(node.retry ?? {}), max: Math.min(3, v) };
+    else delete node.retry;
+    markAbDirty();
+    renderAbErrors();
+  });
+  $("#abTimeout", side)?.addEventListener("change", (e) => {
+    const raw = (e.target as HTMLInputElement).value.trim();
+    const v = Math.round(Number(raw));
+    if (raw && Number.isFinite(v)) node.timeoutMs = Math.min(600, Math.max(5, v)) * 1000;
+    else delete node.timeoutMs;
+    markAbDirty();
+    renderAbErrors();
+  });
+  $("#abTool", side)?.addEventListener("change", (e) => {
+    const t = (e.target as HTMLSelectElement).value;
+    if (!t) return; // the disabled "(choose a tool)" placeholder
+    node.tool = t;
+    // Picking a tool outside the allow-list AUTO-ADDS it: the validator requires membership, and the
+    // dropdown offers the whole omp catalog (see TOOL_CATALOG in agent_builder.ts).
+    if (abSpec && !abSpec.tools.includes(t)) abSpec.tools.push(t);
+    markAbDirty();
+    renderAbErrors();
+  });
+  $("#abSub", side)?.addEventListener("input", (e) => { node.subagentSpecId = (e.target as HTMLInputElement).value; markAbDirty(); });
+  $("#abDelNode", side)?.addEventListener("click", () => deleteAbNode(node.id));
+}
+
+function addAbNode(kind: NodeKind): void {
+  if (!abSpec) return;
+  const id = `n_${crypto.randomUUID()}`;
+  const node = { id, kind, label: `New ${kind}`, ...(kind === "prompt" ? { prompt: "" } : {}) };
+  abSpec.nodes.push(node);
+  markAbDirty();
+  reRenderAbGraph();
+  selectAbNode(id);
+  renderAbErrors();
+}
+function addAbEdge(from: string, to: string): void {
+  if (!abSpec || from === to) return;
+  if (abSpec.edges.some((e) => e.from === from && e.to === to)) return;
+  abSpec.edges.push({ id: `e_${crypto.randomUUID()}`, from, to });
+  markAbDirty();
+  reRenderAbGraph();
+  renderAbErrors();
+}
+function deleteAbNode(id: string): void {
+  if (!abSpec) return;
+  abSpec.nodes = abSpec.nodes.filter((n) => n.id !== id);
+  abSpec.edges = abSpec.edges.filter((e) => e.from !== id && e.to !== id);
+  const side = $("#abSide");
+  if (side) side.hidden = true;
+  markAbDirty();
+  reRenderAbGraph();
+  renderAbErrors();
+}
+function toggleAbConnect(): void {
+  abConnectMode = !abConnectMode;
+  abHandle?.setRelateMode(abConnectMode);
+  $("#abConnect")?.classList.toggle("active", abConnectMode);
+}
+// P-AGENT.9: the trust banner for an imported spec. Hidden for trusted/local specs; shows the label + reason
+// and (for untrusted/suspicious) the “Approve after review” human step. Quarantined can only be re-imported.
+function renderAbTrust(): void {
+  const box = $("#abTrust");
+  if (!box) return;
+  const html = abTrust ? trustBannerHtml(abTrust.label, abTrust.reason) : "";
+  box.innerHTML = html;
+  box.hidden = !html;
+  box.className = `ab-trust${abTrust && html ? ` ab-trust-${abTrust.label}` : ""}`;
+  $("#abApprove", box)?.addEventListener("click", () => void approveAbTrust());
+}
+async function approveAbTrust(): Promise<void> {
+  if (!abSpec) return;
+  const r = await bridge.agentTrust(abSpec.spec_id);
+  if (r?.trustLabel === "trusted") {
+    abTrust = null;
+    renderAbTrust();
+    showToast({ tone: "ok", title: "Agent approved", desc: `“${abSpec.name}” is now trusted and can run.` });
+  } else {
+    showToast({ tone: "danger", title: "Couldn't approve", desc: r?.error ?? "approval was refused" });
+  }
+}
+function renderAbErrors(): void {
+  const box = $("#abErrs");
+  if (!box || !abSpec) return;
+  const errs = saveErrors(abSpec);
+  if (errs.length === 0) { box.hidden = true; box.textContent = ""; return; }
+  box.hidden = false;
+  box.textContent = `${errs.length} issue${errs.length > 1 ? "s" : ""} to fix before saving: ${errs.join("; ")}`;
+}
+async function saveAgentBuilder(): Promise<void> {
+  if (!abSpec) return;
+  const errs = saveErrors(abSpec);
+  if (errs.length) { renderAbErrors(); showToast({ tone: "danger", title: "Can't save yet", desc: errs[0]! }); return; }
+  const r = await bridge.agentSave(abSpec);
+  if (r?.saved) showToast({ tone: "ok", title: "Agent saved", desc: `"${abSpec.name}"` });
+  else showToast({ tone: "danger", title: "Save failed", desc: r?.errors?.[0] ?? "The server refused the spec." });
+}
+async function exportAgentBuilder(): Promise<void> {
+  if (!abSpec) return;
+  const errs = saveErrors(abSpec);
+  if (errs.length) { renderAbErrors(); showToast({ tone: "danger", title: "Can't export yet", desc: errs[0]! }); return; }
+  const r = await bridge.agentExport(abSpec, "electron"); // P-AGENT.6: portable, tamper-evident bundle
+  if (r?.dir) showToast({ tone: "ok", title: "Agent exported", desc: `${r.files} files → ${r.dir}`, meta: r.digest });
+  else showToast({ tone: "danger", title: "Export failed", desc: "The server refused the spec." });
+}
+// P-AGENT.9: the Tools flyout — the allow-list as removable chips. Removing a chip immediately blocks the
+// agent from calling that tool (spec.tools drives the compiled allow-list extension + the run-time gate);
+// a step still referencing it is flagged by the validator until fixed or re-added.
+function openAbToolsPanel(): void {
+  if (!abSpec) return;
+  const side = $("#abSide");
+  if (!side) return;
+  side.innerHTML = toolChipsHtml(abSpec, abMcpTools); // P-AGENT.12: built-ins + MCP
+  side.hidden = false;
+  $$("[data-rm-tool]", side).forEach((b) =>
+    b.addEventListener("click", () => {
+      const t = (b as HTMLElement).dataset.rmTool ?? "";
+      if (!abSpec || !t) return;
+      abSpec.tools = abSpec.tools.filter((x) => x !== t);
+      const brokenSteps = abSpec.nodes.filter((n) => n.kind === "tool" && n.tool === t).length;
+      markAbDirty();
+      renderAbErrors();
+      openAbToolsPanel(); // refresh the chips
+      showToast(
+        brokenSteps
+          ? { tone: "warn", title: `${t} blocked`, desc: `Removed from the allow-list. ${brokenSteps} step${brokenSteps > 1 ? "s" : ""} still reference it — fix or delete ${brokenSteps > 1 ? "them" : "it"} (or re-add the tool) before saving.` }
+          : { tone: "ok", title: `${t} blocked`, desc: "Removed from the allow-list — this agent can no longer call it." },
+      );
+    }),
+  );
+  $("#abToolAdd", side)?.addEventListener("change", (e) => {
+    const t = (e.target as HTMLSelectElement).value;
+    if (!abSpec || !t) return;
+    if (!abSpec.tools.includes(t)) abSpec.tools.push(t);
+    markAbDirty();
+    renderAbErrors();
+    openAbToolsPanel();
+  });
+}
+// P-AGENT.9: SHARE — portable .lucid-agent.json (credential NAMES + setup guidance, never values). Written
+// under .omp/agent-shares/ and offered as a browser download for easy hand-off to another LUCID.
+async function shareAgentBuilder(): Promise<void> {
+  if (!abSpec) return;
+  const errs = saveErrors(abSpec);
+  if (errs.length) { renderAbErrors(); showToast({ tone: "danger", title: "Can't share yet", desc: errs[0]! }); return; }
+  const r = await bridge.agentShare(abSpec);
+  if (!r || r.error || !r.json) { showToast({ tone: "danger", title: "Share failed", desc: r?.error ?? "The server refused the spec." }); return; }
+  try {
+    const url = URL.createObjectURL(new Blob([r.json], { type: "application/json" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = r.fileName ?? "agent.lucid-agent.json";
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 10_000);
+  } catch { /* download is a convenience; the file is already on disk */ }
+  showToast({ tone: "ok", title: "Portable agent saved", desc: `${r.fileName} — no credential values inside; the recipient adds their own via Secrets & connections.`, meta: r.path });
+}
+// P-AGENT.10: export the canvas as an importable n8n workflow JSON (approvals become REAL Wait nodes; the
+// provenance sticky embeds the portable agent so another LUCID can round-trip it losslessly).
+async function n8nExportAgentBuilder(): Promise<void> {
+  if (!abSpec) return;
+  const errs = saveErrors(abSpec);
+  if (errs.length) { renderAbErrors(); showToast({ tone: "danger", title: "Can't export yet", desc: errs[0]! }); return; }
+  const r = await bridge.agentN8nExport(abSpec);
+  if (!r || r.error || !r.json) { showToast({ tone: "danger", title: "n8n export failed", desc: r?.error ?? "The server refused the spec." }); return; }
+  try {
+    const url = URL.createObjectURL(new Blob([r.json], { type: "application/json" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = r.fileName ?? "agent.n8n.json";
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 10_000);
+  } catch { /* download is a convenience; the file is already on disk */ }
+  showToast({
+    tone: "ok",
+    title: "n8n workflow saved",
+    desc: r.pushAvailable
+      ? `${r.fileName} — import it in n8n, or use “n8n ⇧” to push it straight to your instance.`
+      : `${r.fileName} — import it in your n8n instance (Workflows → Import from File). Direct push needs the enterprise add-on.`,
+    meta: r.path,
+  });
+}
+// P-AGENT.10: push to a private hosted n8n via the enterprise add-on connector (honest refusal without it).
+async function n8nPushAgentBuilder(): Promise<void> {
+  if (!abSpec) return;
+  const errs = saveErrors(abSpec);
+  if (errs.length) { renderAbErrors(); showToast({ tone: "danger", title: "Can't push yet", desc: errs[0]! }); return; }
+  const r = await bridge.agentN8nPush(abSpec);
+  if (r?.ok) showToast({ tone: "ok", title: "Pushed to n8n", desc: r.url ? `Created: ${r.url}` : r.detail ?? "workflow created" });
+  else showToast({ tone: "warn", title: "Couldn't push to n8n", desc: r?.detail ?? r?.error ?? "The n8n connector is part of the enterprise add-on." });
+}
+// P-AGENT.9/.10: IMPORT — a shared .lucid-agent.json or an n8n workflow JSON. The backend detects the
+// format, digest-checks/translates, security-scans (fail-closed) and stores it with a trust label; anything
+// not trusted opens for REVIEW and cannot run until approved.
+async function importAgentFile(file: File): Promise<void> {
+  const raw = await file.text();
+  const r = await bridge.agentImport(raw);
+  if (!r || r.error || !r.spec) { showToast({ tone: "danger", title: "Import refused", desc: r?.error ?? "not a valid portable agent file" }); return; }
+  abSpec = r.spec;
+  const label = (r.trustLabel ?? "untrusted") as TrustLabel;
+  abTrust = label === "trusted" ? null : { label, reason: r.reason ?? "imported from an external source" };
+  openAgentBuilder();
+  renderAbTrust();
+  if ((r.spec.secrets?.length ?? 0) > 0 || (r.spec.egress?.length ?? 0) > 0) void openAbSecretsPanel();
+  showToast({
+    tone: label === "quarantined" ? "danger" : "warn",
+    title: `Imported: ${r.spec.name}`,
+    desc: label === "quarantined"
+      ? `Quarantined — ${r.findings ?? 0} finding(s). It cannot run; review the flagged content.`
+      : `Held for review (${label}). Check every step, tool, and connection, add credentials via Secrets & connections, then Approve.${r.notes?.length ? ` Mapping: ${r.notes[0]}.` : ""}`,
+  });
+}
+// P-AGENT.13: the Runs flyout — recent traces for the current agent; click a row for the per-step detail.
+async function openAbRunsPanel(): Promise<void> {
+  if (!abSpec) return;
+  const side = $("#abSide");
+  if (!side) return;
+  const traces = await bridge.agentTraces(abSpec.spec_id);
+  side.innerHTML = runsPanelHtml(traces);
+  side.hidden = false;
+  $$(".ab-runrow[data-run]", side).forEach((row) =>
+    row.addEventListener("click", () => void openAbTraceDetail((row as HTMLElement).dataset.run ?? "")),
+  );
+}
+async function openAbTraceDetail(runId: string): Promise<void> {
+  if (!runId) return;
+  const side = $("#abSide");
+  if (!side) return;
+  const trace = await bridge.agentTrace(runId);
+  if (!trace) { showToast({ tone: "warn", title: "Trace unavailable", desc: "That run's trace file is missing or corrupted." }); return; }
+  side.innerHTML = traceDetailHtml(trace);
+  side.hidden = false;
+  $("#abRunsBack", side)?.addEventListener("click", () => void openAbRunsPanel());
+}
+// P-AGENT.14: the Schedule flyout — a DISARMED agent-run automation for the current agent. Untrusted or
+// approval-carrying specs get the honest refusal here, mirroring the scheduler's own fail-closed gate.
+function openAbSchedulePanel(): void {
+  if (!abSpec) return;
+  const side = $("#abSide");
+  if (!side) return;
+  const blockedWhy = abTrust
+    ? `This agent is ${abTrust.label} — review and approve it before scheduling unattended runs.`
+    : abSpec.nodes.some((n) => n.kind === "approval")
+      ? "This workflow has human-approval checkpoints, so it can't run unattended — approval cards would go unanswered. Run it manually, or remove the checkpoints."
+      : saveErrors(abSpec)[0] ?? null;
+  side.innerHTML = schedulePanelHtml(abSpec, blockedWhy);
+  side.hidden = false;
+  $("#abSchedCreate", side)?.addEventListener("click", () => void createAbSchedule());
+}
+async function createAbSchedule(): Promise<void> {
+  if (!abSpec) return;
+  const prompt = ($("#abSchedPrompt") as HTMLTextAreaElement | null)?.value.trim() ?? "";
+  const kind = ($("#abSchedKind") as HTMLSelectElement | null)?.value === "daily" ? "daily" : "interval";
+  const value = ($("#abSchedValue") as HTMLInputElement | null)?.value.trim() ?? "";
+  if (!prompt) { showToast({ tone: "warn", title: "Enter a task", desc: "What should each scheduled run do?" }); return; }
+  const cadence = kind === "daily" ? { kind: "daily" as const, hhmm: value } : { kind: "interval" as const, everyMin: Math.round(Number(value)) };
+  const a = await bridge.automationCreate({
+    goal: `Run agent: ${abSpec.name}`,
+    cadence,
+    kind: "agent",
+    agentSpecId: abSpec.spec_id,
+    agentPrompt: prompt,
+    agentModel: state.model,
+  });
+  if (a) showToast({ tone: "ok", title: "Schedule created (disarmed)", desc: `“${abSpec.name}” ${a.cadence.kind === "interval" ? `every ${a.cadence.everyMin} min` : `daily at ${a.cadence.hhmm}`} — arm it in the Goal panel's Automations.` });
+  else showToast({ tone: "danger", title: "Couldn't create the schedule", desc: kind === "daily" ? "Use HH:MM (24h), e.g. 09:30." : "Interval must be a number of minutes ≥ 1." });
+}
+// P-AGENT.17: the History flyout — restore any of the last 20 saved revisions (a restore is itself saved,
+// so nothing is ever lost). The trust sidecar is untouched by restores.
+async function openAbHistoryPanel(): Promise<void> {
+  if (!abSpec) return;
+  const side = $("#abSide");
+  if (!side) return;
+  const revisions = await bridge.agentHistory(abSpec.spec_id);
+  side.innerHTML = historyPanelHtml(revisions);
+  side.hidden = false;
+  $$("[data-restore]", side).forEach((b) =>
+    b.addEventListener("click", async () => {
+      const ts = Number((b as HTMLElement).dataset.restore);
+      const r = await bridge.agentHistoryRestore(abSpec!.spec_id, ts);
+      if (r?.spec) {
+        abSpec = r.spec;
+        reRenderAbGraph();
+        renderAbErrors();
+        showToast({ tone: "ok", title: "Revision restored", desc: `Now editing the ${new Date(ts).toLocaleString()} revision (saved as current).` });
+        void openAbHistoryPanel();
+      } else {
+        showToast({ tone: "danger", title: "Couldn't restore", desc: r?.error ?? "unknown or corrupted revision" });
+      }
+    }),
+  );
+}
+// P-AGENT.17: the Templates flyout — curated starters that go through the STANDARD gated import path.
+async function openAbTemplatesPanel(): Promise<void> {
+  const side = $("#abSide");
+  if (!side) return;
+  const templates = await bridge.agentTemplates();
+  side.innerHTML = templatesPanelHtml(templates);
+  side.hidden = false;
+  $$("[data-use-tpl]", side).forEach((b) =>
+    b.addEventListener("click", async () => {
+      const file = (b as HTMLElement).dataset.useTpl ?? "";
+      const r = await bridge.agentTemplateUse(file);
+      if (!r || r.error || !r.spec) { showToast({ tone: "danger", title: "Couldn't use the template", desc: r?.error ?? "template unavailable" }); return; }
+      abSpec = r.spec;
+      const label = (r.trustLabel ?? "untrusted") as TrustLabel;
+      abTrust = label === "trusted" ? null : { label, reason: r.reason ?? "created from a template — review before running" };
+      openAgentBuilder();
+      renderAbTrust();
+      showToast({ tone: "ok", title: `Template loaded: ${r.spec.name}`, desc: "Review the steps, rename it, approve it, and it's yours." });
+    }),
+  );
+}
+// P-AGENT.4-live: open the Run flyout and let the user run the agent live inside LUCID.
+function openAbRunPanel(): void {
+  if (!abSpec) return;
+  const errs = saveErrors(abSpec);
+  if (errs.length) { renderAbErrors(); showToast({ tone: "danger", title: "Can't run yet", desc: errs[0]! }); return; }
+  const side = $("#abSide");
+  if (!side) return;
+  side.innerHTML = runPanelHtml(state.model);
+  side.hidden = false;
+  ($("#abRunPrompt", side) as HTMLTextAreaElement | null)?.focus();
+  $("#abRunGo", side)?.addEventListener("click", () => void runAgentBuilder());
+}
+async function runAgentBuilder(): Promise<void> {
+  if (!abSpec) return;
+  const promptEl = $("#abRunPrompt") as HTMLTextAreaElement | null;
+  const task = (promptEl?.value ?? "").trim();
+  if (!task) { showToast({ tone: "warn", title: "Enter a task", desc: "Tell the agent what to do." }); return; }
+  const out = $("#abRunOut");
+  if (out) { out.hidden = false; out.textContent = "Running the agent…"; }
+  renderAbRunReply(await bridge.agentRun(abSpec, task, state.model)); // P-AGENT.4-live/.11a (gated omp run)
+}
+// P-AGENT.11a: render a run reply — final output, refusal, error, or an ENFORCED approval halt. The halt
+// card's Approve/Deny resolve the parked run server-side; the post-approval steps have no prompt until then.
+function renderAbRunReply(r: AgentRunReply | null): void {
+  const out = $("#abRunOut");
+  if (!out) return;
+  out.hidden = false;
+  if (r?.paused) {
+    const runId = r.paused.runId;
+    out.innerHTML = runApprovalHtml(r.paused.label, r.paused.outputSoFar);
+    $("#abRunApprove", out)?.addEventListener("click", () => void resolveAbRunApproval(runId, true));
+    $("#abRunDeny", out)?.addEventListener("click", () => void resolveAbRunApproval(runId, false));
+    return;
+  }
+  if (r?.blocked) out.textContent = `Blocked: ${r.reason}`;
+  else if (r?.error) out.textContent = `Error: ${r.error}`;
+  else out.textContent = r?.output || "(the agent produced no output)";
+}
+async function resolveAbRunApproval(runId: string, approve: boolean): Promise<void> {
+  const out = $("#abRunOut");
+  if (out) out.textContent = approve ? "Approved — continuing…" : "Stopping…";
+  renderAbRunReply(await bridge.agentRunApprove(runId, approve));
+}
+
+// P-AGENT.8.2: the chat -> canvas handoff. The agent called `agent_builder_open` with a drafted (validated,
+// secret-free) spec; open the Agent Builder pre-populated + auto-surface Secrets & connections if it needs any.
+function openAgentBuilderWithSpec(spec: AgentSpec): void {
+  const errs = saveErrors(spec); // defense-in-depth: the backend already gated this, re-check before opening
+  if (errs.length) { showToast({ tone: "danger", title: "Couldn't open the drafted agent", desc: errs[0]! }); return; }
+  // P-AGENT.9: LIVE collaboration — the chat agent re-calls agent_builder_open each turn the draft changes.
+  // If the canvas is already open on this draft, update it IN PLACE so the user watches it evolve.
+  const isUpdate = abOpen && !!abSpec && abSpec.spec_id === spec.spec_id;
+  const hadNeeds = isUpdate ? (abSpec!.secrets?.length ?? 0) + (abSpec!.egress?.length ?? 0) : 0;
+  abSpec = spec;
+  abTrust = null; // drafted in THIS session's chat: locally authored (the backend re-validated + secret-scanned)
+  if (isUpdate) {
+    reRenderAbGraph();
+    renderAbErrors();
+    renderAbTrust();
+    // surface Secrets & connections only when the draft GAINS credential/egress needs mid-conversation
+    if ((spec.secrets?.length ?? 0) + (spec.egress?.length ?? 0) > hadNeeds) void openAbSecretsPanel();
+    showToast({ tone: "info", title: "Draft updated", desc: `“${spec.name}” — ${spec.nodes.length} steps. Review the changes; reply in chat to steer.` });
+    return;
+  }
+  openAgentBuilder(); // renderAgentBuilder keeps abSpec since it's already set
+  if ((spec.secrets?.length ?? 0) > 0 || (spec.egress?.length ?? 0) > 0) void openAbSecretsPanel();
+  showToast({ tone: "ok", title: "Agent Builder opened", desc: `Review “${spec.name}”, add any credentials, then confirm.` });
+}
+
+// P-AGENT.8.4: the Secrets & connections flyout — the easy-to-find place to add API credentials (to the vault)
+// and confirm the sites this agent may reach. The agent directs the user here; it also opens from the toolbar.
+async function openAbSecretsPanel(): Promise<void> {
+  if (!abSpec) return;
+  const side = $("#abSide");
+  if (!side) return;
+  let inVault = new Set<string>();
+  try { if (bridge.isElectron && bridge.credList) inVault = new Set((await bridge.credList()).map((c) => c.ref)); } catch { /* vault unavailable → all show "needs a value" */ }
+  let approved = new Set<string>();
+  try { approved = new Set((await bridge.whitelistList()).map((e) => e.pattern)); } catch { /* whitelist unavailable → all show "Approve" */ }
+  side.innerHTML = secretsPanelHtml(abSpec, inVault, !!bridge.isElectron, approved);
+  side.hidden = false;
+  $$(".ab-cred-save", side).forEach((b) => b.addEventListener("click", () => void addCredentialFromRow(b as HTMLElement)));
+  $$(".ab-conn-approve", side).forEach((b) => b.addEventListener("click", () => void approveConnectionFromRow(b as HTMLElement))); // P-AGENT.8.5
+  $$(".ab-cred-help", side).forEach((b) => b.addEventListener("click", () => askCredentialHelp(b as HTMLElement))); // P-AGENT.8.5
+}
+// P-AGENT.8.5: approve a declared connection → write a project-scoped WhitelistEntry so the agent's egress to
+// that host is allowed under the managed ceiling (the whitelist itself enforces + can be tightened by policy).
+async function approveConnectionFromRow(btn: HTMLElement): Promise<void> {
+  const pattern = (btn.closest(".ab-conn-row") as HTMLElement | null)?.dataset.conn ?? "";
+  if (!pattern) return;
+  const r = await bridge.whitelistUpsert({ kind: "domain", pattern, zone: "external", scope: "project" });
+  if (r) { showToast({ tone: "ok", title: "Connection approved", desc: `${pattern} added to this workspace's network whitelist.` }); void openAbSecretsPanel(); }
+  else showToast({ tone: "danger", title: "Couldn't approve", desc: `${pattern} was rejected (malformed host pattern?).` });
+}
+// P-AGENT.8.5: doc-assisted setup — ask the agent to read the vendor's official docs and walk the user through
+// generating this credential (the value goes to the vault, never the chat — the AGENT_BUILDER_POLICY enforces).
+function askCredentialHelp(btn: HTMLElement): void {
+  const row = btn.closest(".ab-cred-row") as HTMLElement | null;
+  const name = row?.dataset.cred ?? "";
+  const kind = row?.dataset.kind ?? "";
+  const purpose = btn.dataset.purpose ?? "";
+  const q = `Walk me through generating the credential "${name}" (kind: ${kind}${purpose ? `; for: ${purpose}` : ""}). Read the vendor's official documentation and give me clear, numbered step-by-step instructions to obtain it. Do NOT ask me for the value — I'll paste it into the Secrets & connections panel, which stores it in the encrypted vault.`;
+  const ta = $("#input") as HTMLTextAreaElement | null;
+  if (ta) { ta.value = q; autosize(ta); setSendEnabled(); }
+  void send();
+}
+async function addCredentialFromRow(btn: HTMLElement): Promise<void> {
+  const row = btn.closest(".ab-cred-row") as HTMLElement | null;
+  if (!row) return;
+  const name = row.dataset.cred ?? "";
+  const kind = row.dataset.kind ?? "apikey";
+  const input = $(".ab-cred-secret", row) as HTMLInputElement | null;
+  const secret = (input?.value ?? "").trim();
+  if (!secret) { showToast({ tone: "warn", title: "Paste the secret first", desc: "The value goes straight to the encrypted vault." }); return; }
+  if (!bridge.isElectron || !bridge.credStore) {
+    showToast({ tone: "danger", title: "Vault is desktop-only", desc: "Open the LUCID desktop app to store credentials securely." });
+    return;
+  }
+  const r = await bridge.credStore({ ref: name, kind, secret, label: name });
+  if (input) input.value = "";
+  if (r && !("error" in r)) {
+    showToast({ tone: "ok", title: "Stored in the vault", desc: `${name} (••••${(r as { last4?: string }).last4 ?? ""}) — encrypted; the agent never sees the value.` });
+    void openAbSecretsPanel(); // refresh statuses
+  } else {
+    showToast({ tone: "danger", title: "Couldn't store the credential", desc: (r as { error?: string })?.error ?? "vault error" });
+  }
+}
+// ── P-PREVIEW.5: markup overlay (pen / rectangle / text) ─────────────────────────
+// A <canvas> sits ON TOP of the preview iframe. Because "Screenshot → chat" uses Electron's capturePage
+// on the frame's screen region, the canvas markup is captured TOGETHER with the rendered app - no
+// compositing needed. Arming a tool enables the canvas's pointer-events (so it catches the mouse);
+// "Cursor" disarms it so the iframe is interactive again.
+let drawTool: "off" | "pen" | "rect" | "text" = "off";
+let drawColor = "#ff4d4d";
+let drawing = false;
+let drawSnapshot: ImageData | null = null; // committed pixels, restored while rubber-banding a rectangle
+let drawStart = { x: 0, y: 0 };
+const previewCanvas = (): HTMLCanvasElement | null => $("#prevCanvas") as HTMLCanvasElement | null;
+
+/** Match the canvas backing size to the frame, preserving any existing drawing. */
+function syncPreviewCanvas(): void {
+  const frame = $("#prevFrame") as HTMLIFrameElement | null, cv = previewCanvas();
+  if (!frame || !cv || frame.hidden) return;
+  const r = frame.getBoundingClientRect();
+  const w = Math.max(1, Math.round(r.width)), h = Math.max(1, Math.round(r.height));
+  if (cv.width === w && cv.height === h) return;
+  const ctx = cv.getContext("2d");
+  const prev = ctx && cv.width && cv.height ? ctx.getImageData(0, 0, cv.width, cv.height) : null;
+  cv.width = w; cv.height = h;
+  if (prev && ctx) try { ctx.putImageData(prev, 0, 0); } catch { /* size shrank - drop */ }
+}
+function clearPreviewCanvas(): void { const cv = previewCanvas(); const c = cv?.getContext("2d"); if (cv && c) c.clearRect(0, 0, cv.width, cv.height); }
+function setDrawTool(t: "off" | "pen" | "rect" | "text"): void {
+  drawTool = t;
+  const cv = previewCanvas();
+  if (cv) { cv.style.pointerEvents = t === "off" ? "none" : "auto"; cv.style.cursor = t === "text" ? "text" : t === "off" ? "default" : "crosshair"; syncPreviewCanvas(); }
+  $("#prevMarkup")?.classList.toggle("on", t !== "off");
+}
+let previewCanvasWired = false;
+function wirePreviewCanvas(): void {
+  const cv = previewCanvas();
+  if (!cv || previewCanvasWired) return;
+  previewCanvasWired = true;
+  const ctx = () => cv.getContext("2d")!;
+  const at = (e: MouseEvent) => { const r = cv.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; };
+  cv.addEventListener("mousedown", (e) => {
+    if (drawTool === "off") return;
+    const p = at(e as MouseEvent);
+    if (drawTool === "text") { addPreviewTextBox(p); return; }
+    drawing = true; drawStart = p;
+    const c = ctx(); c.lineWidth = drawTool === "pen" ? 3 : 2.6; c.lineCap = "round"; c.lineJoin = "round"; c.strokeStyle = drawColor;
+    drawSnapshot = c.getImageData(0, 0, cv.width, cv.height);
+    if (drawTool === "pen") { c.beginPath(); c.moveTo(p.x, p.y); }
+  });
+  cv.addEventListener("mousemove", (e) => {
+    if (!drawing) return;
+    const c = ctx(), p = at(e as MouseEvent);
+    if (drawTool === "pen") { c.lineTo(p.x, p.y); c.stroke(); }
+    else if (drawTool === "rect") { if (drawSnapshot) c.putImageData(drawSnapshot, 0, 0); c.strokeRect(drawStart.x, drawStart.y, p.x - drawStart.x, p.y - drawStart.y); }
+  });
+  const end = () => { drawing = false; drawSnapshot = null; };
+  cv.addEventListener("mouseup", end);
+  cv.addEventListener("mouseleave", end);
+  // keep the canvas backing-size matched to the frame as the panel/window resizes (preserves the drawing)
+  const frame = $("#prevFrame") as HTMLIFrameElement | null;
+  if (frame && typeof ResizeObserver !== "undefined") new ResizeObserver(() => syncPreviewCanvas()).observe(frame);
+}
+/** A floating input for the text tool - type, Enter commits the text to the canvas, Esc cancels. */
+function addPreviewTextBox(p: { x: number; y: number }): void {
+  const body = $("#prevBody") as HTMLElement | null;
+  if (!body) return;
+  const inp = el(`<input class="prev-textin" spellcheck="false" placeholder="type, Enter to place" />`) as HTMLInputElement;
+  inp.style.left = `${p.x}px`; inp.style.top = `${p.y}px`; inp.style.color = drawColor;
+  body.appendChild(inp);
+  inp.focus();
+  let done = false;
+  const commit = () => {
+    if (done) return; done = true;
+    const text = inp.value.trim();
+    const cv = previewCanvas();
+    if (text && cv) { const c = cv.getContext("2d")!; c.fillStyle = drawColor; c.font = "600 18px ui-sans-serif,system-ui,Segoe UI,sans-serif"; c.textBaseline = "top"; c.fillText(text, p.x, p.y); }
+    inp.remove();
+  };
+  inp.addEventListener("keydown", (e) => { if (e.key === "Enter") commit(); else if (e.key === "Escape") { done = true; inp.remove(); } });
+  inp.addEventListener("blur", commit);
+}
+/** The markup tools dropdown: pen / rectangle / text, a colour row, Cursor (disarm), and Clear. */
+function openMarkupMenu(anchor: HTMLElement): void {
+  document.querySelector(".markup-pop")?.remove();
+  const tool = (id: string, ic: string, label: string) => `<button class="mk-tool${drawTool === id ? " on" : ""}" data-tool="${id}">${icon(ic, 15)}<span>${label}</span></button>`;
+  const swatch = (c: string) => `<button class="mk-swatch${drawColor === c ? " on" : ""}" data-color="${c}" style="background:${c}" aria-label="${c}"></button>`;
+  const pop = el(`<div class="markup-pop">
+    <div class="mk-tools">${tool("pen", "pen", "Pen")}${tool("rect", "square", "Rectangle")}${tool("text", "textT", "Text")}</div>
+    <div class="mk-colors">${["#ff4d4d", "#ffd23f", "#46d27e", "#5e8df2", "#ffffff"].map(swatch).join("")}</div>
+    <div class="mk-foot"><button class="mk-tool" data-tool="off">${icon("eye", 13)}<span>Cursor</span></button><button class="btn-mini danger" data-mk-clear>${icon("trash", 12)} Clear</button></div>
+  </div>`);
+  document.body.appendChild(pop);
+  const r = anchor.getBoundingClientRect();
+  pop.style.left = `${Math.max(8, Math.min(r.left, window.innerWidth - pop.offsetWidth - 12))}px`;
+  pop.style.top = `${r.bottom + 6}px`;
+  const close = () => { pop.remove(); document.removeEventListener("mousedown", onDoc, true); };
+  const onDoc = (e: MouseEvent) => { if (!pop.contains(e.target as Node) && !anchor.contains(e.target as Node)) close(); };
+  setTimeout(() => document.addEventListener("mousedown", onDoc, true), 0);
+  pop.addEventListener("click", (e) => {
+    const t = e.target as HTMLElement;
+    const toolBtn = t.closest("[data-tool]") as HTMLElement | null;
+    if (toolBtn) { setDrawTool(toolBtn.dataset.tool as "off" | "pen" | "rect" | "text"); close(); return; }
+    const sw = t.closest("[data-color]") as HTMLElement | null;
+    if (sw) { drawColor = sw.dataset.color!; pop.querySelectorAll(".mk-swatch").forEach((s) => s.classList.toggle("on", s === sw)); if (drawTool === "off") setDrawTool("pen"); return; }
+    if (t.closest("[data-mk-clear]")) { clearPreviewCanvas(); return; }
+  });
+}
+/** Browse the workspace for a file to preview (native OS picker; the user opens the cwd themselves). */
+async function browsePreviewFile(): Promise<void> {
+  if (!bridge.isElectron) { showToast({ title: "Desktop app only", desc: "File browsing uses the native picker in the packaged LUCID app. In the browser, paste a path above.", actions: [{ label: "OK" }], timeout: 3400, tone: "warn" }); ($("#prevPath") as HTMLElement | null)?.focus(); return; }
+  const picked = await bridge.pickFile?.({ title: "Open a file to preview", filters: [{ name: "Previewable", extensions: ["html", "htm", "svg", "md", "png", "jpg", "jpeg", "gif", "pdf"] }, { name: "All files", extensions: ["*"] }] }).catch(() => null);
+  if (!picked) return;
+  const p = $("#prevPath") as HTMLInputElement | null;
+  if (p) p.value = picked;
+  loadPreview(picked);
+}
+
 /** Capture the preview iframe and attach the PNG to the composer for the agent to react to. Electron-only
  *  (uses the window's capturePage via the preload seam); a no-op with a toast in a plain browser. */
 async function screenshotPreviewToChat(): Promise<void> {
@@ -1963,6 +3415,26 @@ async function screenshotPreviewToChat(): Promise<void> {
   shot.appendChild(img);
   showToast({ title: "Screenshot added to chat", desc: "Captured the preview into the conversation.", actions: [{ label: "OK" }], timeout: 2600 });
 }
+// P-PERF.2 (ADR-0129): the minimal-tier pause card. The agent keeps FULL knowledge access - only the
+// CPU-hungry visualization is skipped (the O(n^2) settle + particle loop is what spikes a battery-throttled
+// laptop). "Render anyway" is a one-shot, per-run override that mounts at minimal fidelity.
+function renderKgPaused(canvas: HTMLElement): void {
+  const side = $("#kgSide") as HTMLElement | null;
+  if (side) { side.hidden = true; side.innerHTML = ""; }
+  canvas.innerHTML = `<div class="kg-empty kg-paused">${icon("gauge", 30)}
+    <div><b>Graph rendering is paused to save power.</b><br/>
+    Minimal performance mode is active (low battery, or your override). The agent still reads and writes
+    your knowledge - only this visualization is off.</div>
+    <button class="btn-mini" id="kgRenderAnyway">Render anyway</button></div>`;
+  showKgCenter(false); syncKgSideOpen();
+  $("#kgRenderAnyway")?.addEventListener("click", () => { kgForceRender = true; void renderKnowledge(); });
+}
+function paintPerfChip(): void {
+  const b = $("#kgPerf");
+  if (!b) return;
+  const m = perfWatch.mode();
+  b.innerHTML = `${icon("gauge", 13)} ${m === "auto" ? `Auto · ${perfWatch.tier()}` : m}`;
+}
 async function renderKnowledge(): Promise<void> {
   const canvas = $("#kgCanvas"), side = $("#kgSide"), scopeLbl = $("#kgScopeLbl");
   if (!canvas || !side) return;
@@ -1976,23 +3448,174 @@ async function renderKnowledge(): Promise<void> {
   try { status = await bridge.personal(); }
   catch { canvas.innerHTML = `<div class="kg-empty">${icon("graph", 30)}<div>Couldn't load your graph. Try reopening this panel.</div></div>`; return; }
   if (scopeLbl) scopeLbl.textContent = status?.scope ? `· ${status.scope}` : "";
-  const gate = (msg: string) => { canvas.innerHTML = `<div class="kg-empty">${icon("graph", 30)}<div>${msg}</div></div>`; (side as HTMLElement).hidden = true; side.innerHTML = ""; };
+  const gate = (msg: string) => { canvas.innerHTML = `<div class="kg-empty">${icon("graph", 30)}<div>${msg}</div></div>`; (side as HTMLElement).hidden = true; side.innerHTML = ""; showKgCenter(false); syncKgSideOpen(); };
   if (!status?.enabled) return gate("Personalization is off. Enable it in Settings to build a knowledge graph.");
   if (!status.unlocked) {
     // Configured-but-locked → unlock right here (no trip to Settings). Not yet set up → Settings.
     if (status.configured) return renderKgLocked(canvas as HTMLElement);
     return gate("Personalization isn't set up yet. Create a passphrase in Settings to start your private graph.");
   }
+  // P-PERF.2: pause BEFORE the decrypt - skipping the render should skip its cost too.
+  if (perfWatch.tier() === "minimal" && !kgForceRender) return renderKgPaused(canvas as HTMLElement);
   try { kgData = await bridge.personalGraph(); }
   catch { return gate("Couldn't decrypt your graph. Try reopening this panel."); }
   if (!kgData || kgData.nodes.length === 0) return gate("Nothing learned yet. It remembers durable facts about <b>you</b> - not what we discuss. Tell me things like <i>“I prefer Rust”</i>, <i>“I use vim”</i>, <i>“I decided to go with Postgres”</i>, or <i>“remember that I deploy with Kubernetes”</i> and they'll appear here (each is security-scanned first).");
   (side as HTMLElement).hidden = true; side.innerHTML = ""; // appears only when a node is clicked
-  kgHandle = mountGraph(canvas as HTMLElement, kgData, (id) => renderKgSide(id), { onRelate: relateNodes, onRelatePick: onRelatePick });
+  // P-PERF.2: tier-scaled fidelity - calm + shorter settle + a top-hubs cap off AC power. kgData stays
+  // FULL (search, facts, signature); only the DRAWN subset is capped.
+  const gOpts = graphOpts(perfWatch.tier());
+  const { data: kgDraw, capped: kgCapped } = capGraph(kgData, gOpts.nodeCap);
+  kgHandle = mountGraph(canvas as HTMLElement, kgDraw, (id) => renderKgSide(id), { onRelate: relateNodes, onRelatePick: onRelatePick }, {
+    ...gOpts, // P-PERF.3: seed from + harvest into the per-graph layout cache (no re-explosion on re-open)
+    positions: kgLayoutCache.get("personal"),
+    onPositions: (pos) => kgLayoutCache.set("personal", pos),
+  });
+  if (kgCapped && scopeLbl) scopeLbl.textContent += ` · top ${kgDraw.nodes.length} of ${kgData.nodes.length} nodes`;
+  showKgCenter(true); syncKgSideOpen();
   if (kgRelateMode) { kgHandle.setRelateMode(true); onRelatePick([]); } // preserve relate mode across a live remount
   const sq = ($("#kgSearch") as HTMLInputElement | null)?.value; // P-KG-SEARCH.1: preserve an active search across a remount
   if (sq?.trim()) kgHandle.setSearch(matchNodes(kgData.nodes, sq));
   kgHandle.setLens(kgLens);
   kgSig = kgSignature(kgData); // baseline so live refreshes only fire on real changes
+}
+
+// P-KG-CODE.1b: the floating "re-center" button (bottom-right of the canvas) + the side-panel open state
+// (drives the resizer + shifts the center button left of the flyout). The center button re-fits the graph.
+function showKgCenter(on: boolean): void { const b = $("#kgCenter") as HTMLElement | null; if (b) b.hidden = !on; }
+function syncKgSideOpen(): void {
+  const side = $("#kgSide") as HTMLElement | null, main = document.querySelector(".kg-main") as HTMLElement | null, rsz = $("#kgSideResizer") as HTMLElement | null;
+  const open = !!side && !side.hidden;
+  main?.classList.toggle("side-open", open);
+  if (rsz) rsz.hidden = !open;
+}
+// ── P-KG-CODE.1 / P-KG-SYM.1: the workspace CODE graph (file imports OR symbol AST), in the same canvas ──
+function updateCodeGraphButtons(active: boolean, meta?: import("./bridge.ts").CodeGraphView | null): void {
+  kgCodeMode = active;
+  const btn = $("#kgCode"), upd = $("#kgCodeUpdate"), scopeLbl = $("#kgScopeLbl") as HTMLElement | null;
+  btn?.classList.toggle("on", active);
+  if (btn) btn.innerHTML = `${icon("graph", 13)} Code graph${active ? " ✓" : ""}`;
+  if (upd) (upd as HTMLElement).hidden = !active;
+  if (scopeLbl) scopeLbl.textContent = active && meta
+    ? (meta.level === "symbol" ? `· symbols · ${meta.symbolCount} symbols · ${meta.edgeCount} refs` : `· code · ${meta.fileCount} files · ${meta.edgeCount} imports`)
+    : "";
+}
+/** Render the workspace code graph at `level`. `ingest` forces a fresh (re)build; otherwise load the stored
+ *  graph (building on first use). Bypasses the personalization gate - the code graph isn't private user data. */
+async function renderCodeGraph(ingest: boolean, level: "file" | "symbol" = codeGraphLevel): Promise<void> {
+  codeGraphLevel = level;
+  const canvas = $("#kgCanvas"), side = $("#kgSide") as HTMLElement | null;
+  if (!canvas) return;
+  kgHandle?.destroy(); kgHandle = null;
+  const busy = ingest ? (level === "symbol" ? "Parsing symbols (AST)…" : "Ingesting the workspace…") : "Loading the code graph…";
+  canvas.innerHTML = `<div class="skel-kg">${icon("refresh", 26, "spin")}<div>${busy}</div></div>`;
+  if (side) { side.hidden = true; side.innerHTML = ""; }
+  let data = ingest ? await bridge.codeGraphIngest(level).catch(() => null) : await bridge.codeGraph(level).catch(() => null);
+  if (data && !data.ingested && !ingest) data = await bridge.codeGraphIngest(level).catch(() => null); // never built → build now
+  if (!data || !data.nodes.length) {
+    canvas.innerHTML = `<div class="kg-empty">${icon("graph", 30)}<div>No ${level === "symbol" ? "symbols" : "source files"} found to graph in this workspace. Open a code repo as your workspace, then try again.</div></div>`;
+    updateCodeGraphButtons(true, null); showKgCenter(false); return;
+  }
+  // A big repo is 1000s of nodes - keep the canvas readable by rendering the MOST-CONNECTED hubs (the full
+  // graph is still ingested + stored + queryable; only the drawing is capped).
+  let nodes = data.nodes, edges = data.edges, capped = 0;
+  // P-PERF.2: an explicit "Code graph" click renders even at minimal tier (the user asked), but the
+  // tier tightens the hub cap and calms the sim so a battery-throttled laptop isn't pegged.
+  const gOpts = graphOpts(perfWatch.tier());
+  const CAP = Math.min(600, gOpts.nodeCap ?? 600);
+  if (nodes.length > CAP) {
+    const keep = new Set([...nodes].sort((a, b) => b.count - a.count).slice(0, CAP).map((n) => n.id));
+    capped = nodes.length - CAP;
+    nodes = nodes.filter((n) => keep.has(n.id));
+    edges = edges.filter((e) => keep.has(e.from) && keep.has(e.to));
+  }
+  codeGraphRoot = data.root || "";
+  kgData = { nodes, edges, facts: [] };
+  kgHandle = mountGraph(canvas as HTMLElement, kgData, (id) => renderCodeSide(id), {}, {
+    ...gOpts, // P-PERF.3: same layout continuity for the code graph, keyed by level
+    positions: kgLayoutCache.get(`code:${level}`),
+    onPositions: (pos) => kgLayoutCache.set(`code:${level}`, pos),
+  });
+  kgHandle.setLens(kgLens);
+  kgSig = kgSignature(kgData);
+  updateCodeGraphButtons(true, data);
+  showKgCenter(true); syncKgSideOpen();
+  if (capped) { const s = $("#kgScopeLbl") as HTMLElement | null; if (s) s.textContent += ` · showing top ${CAP} hubs`; }
+}
+/** Toggle personal ↔ code graph. Entering code mode opens the level picker (file vs symbol + agent option). */
+async function toggleCodeGraph(): Promise<void> {
+  if (kgCodeMode) { updateCodeGraphButtons(false); await renderKnowledge(); return; }
+  openCodeGraphPicker();
+}
+/** The "build a code graph" popup: choose file-level (fast) vs symbol-level (AST), and whether to expose it
+ *  to the agent as a queryable tool. */
+function openCodeGraphPicker(): void {
+  document.querySelector(".goal-scrim .cg-picker")?.closest(".goal-scrim")?.remove();
+  const agentOn = state.codeGraphAgent;
+  const ov = el(`<div class="goal-scrim"><div class="goal-modal cg-picker">
+    <div class="goal-modal-h"><span class="goal-h-title">${icon("graph", 15)} Build a code graph</span><button type="button" class="btn-mini" id="cgpClose">Close</button></div>
+    <div class="goal-modal-sub">Ingest THIS workspace into a knowledge graph you (and optionally the agent) can explore. Pick how deep to go.</div>
+    <div class="cg-levels">
+      <button type="button" class="cg-level" data-level="file">
+        <div class="cg-level-h">${icon("graph", 16)} File graph <span class="cg-level-fast">fast</span></div>
+        <div class="cg-level-d">Files as nodes, <b>imports</b> as edges - the module dependency map. Builds in a second or two; great for architecture orientation and "what depends on what".</div>
+      </button>
+      <button type="button" class="cg-level" data-level="symbol">
+        <div class="cg-level-h">${icon("markup", 16)} Symbol graph <span class="cg-level-slow">AST</span></div>
+        <div class="cg-level-d">Functions, classes, methods, types &amp; consts as nodes, <b>references/calls</b> as edges - real TypeScript-AST parsing for precise blast-radius ("what actually uses this symbol?"). Slower to build (usually a few seconds; longer on very large repos), and it's a symbol-DEPENDENCY graph, not a fully type-resolved call graph.</div>
+      </button>
+    </div>
+    <label class="cg-agent-opt" data-tip="Expose to agent|When on, the agent gets a read-only codegraph_query tool it can call to ask what imports/uses a file or symbol - so it reads a precise answer instead of many whole files. Toggling this restarts the agent backend.">
+      <input type="checkbox" id="cgAgent"${agentOn ? " checked" : ""}/> <span>Let the agent query this graph <span class="cg-agent-sub">(adds a read-only tool; restarts the agent)</span></span></label>
+  </div></div>`);
+  document.body.appendChild(ov);
+  const close = () => ov.remove();
+  $("#cgpClose", ov)?.addEventListener("click", close);
+  ov.addEventListener("mousedown", (e) => { if (e.target === ov) close(); });
+  $("#cgAgent", ov)?.addEventListener("change", (e) => void setCodeGraphAgent((e.target as HTMLInputElement).checked));
+  ov.querySelectorAll("[data-level]").forEach((b) => b.addEventListener("click", () => {
+    close();
+    void renderCodeGraph(false, (b as HTMLElement).dataset.level === "symbol" ? "symbol" : "file");
+  }));
+}
+/** Persist the "expose to agent" toggle + restart the backend so the codegraph tool loads/unloads. */
+async function setCodeGraphAgent(on: boolean): Promise<void> {
+  state.codeGraphAgent = on;
+  const r = await bridge.setCodeGraphAgent(on).catch(() => null);
+  showToast(r ? { title: on ? "Code graph tool enabled" : "Code graph tool disabled", desc: on ? "The agent can now query the code graph. Restarting the agent…" : "Removed the agent's code-graph tool. Restarting the agent…", timeout: 3600 } : { tone: "warn", title: "Couldn't update", desc: "The setting didn't save.", timeout: 2600 });
+}
+/** Side panel for a code node: its path, what it imports, and what imports it. */
+function renderCodeSide(id: string | null): void {
+  const side = $("#kgSide") as HTMLElement | null;
+  if (!side) return;
+  const node = id ? kgData?.nodes.find((n) => n.id === id) : null;
+  if (!node) { side.hidden = true; side.innerHTML = ""; syncKgSideOpen(); return; }
+  const outs = (kgData?.edges ?? []).filter((e) => e.from === id).map((e) => e.to);
+  const ins = (kgData?.edges ?? []).filter((e) => e.to === id).map((e) => e.from);
+  // Each entry is a link that opens the real file in the Monaco IDE (P-KG-CODE.1d). For a symbol id
+  // (`file#symbol`) the label shows the symbol + its file; clicking opens the file (openCodeFile strips the #).
+  const sym = codeGraphLevel === "symbol";
+  const label = (id: string) => sym && id.includes("#") ? `${id.split("#")[1]} <span class="cg-open-file">${id.split("#")[0]}</span>` : esc(id);
+  const fileLink = (id: string, extra = "") => `<button type="button" class="cg-open${extra}" data-cg-open="${esc(id)}" data-tip="Open the file in the editor">${label(id)}</button>`;
+  const list = (xs: string[]) => xs.length ? `<ol class="cg-side-list">${xs.slice(0, 80).map((x) => `<li>${fileLink(x)}</li>`).join("")}</ol>` : `<div class="cg-side-none">none</div>`;
+  const outLbl = sym ? "Uses" : "Imports", inLbl = sym ? "Used by" : "Imported by";
+  side.hidden = false;
+  side.innerHTML = `<div class="cg-side">
+    <div class="cg-side-h">${icon(sym ? "markup" : "graph", 14)} <b>${esc(node.name)}</b>${sym ? ` <span class="cg-side-kind">${esc(node.kind)}</span>` : ""}</div>
+    ${fileLink(node.id, " cg-side-path")}
+    <div class="cg-side-sec"><span class="cg-side-lbl">${outLbl} (${outs.length})</span>${list(outs)}</div>
+    <div class="cg-side-sec"><span class="cg-side-lbl">${inLbl} (${ins.length})</span>${list(ins)}</div>
+  </div>`;
+  syncKgSideOpen();
+}
+/** Open a code-graph file (relative to the workspace root) in the Monaco IDE panel. */
+async function openCodeFile(id: string): Promise<void> {
+  const rel = (id || "").split("#")[0]!; // a symbol id is `file#symbol` - open the file
+  if (!rel) return;
+  if (!codeGraphRoot) { showToast({ tone: "warn", title: "Can't open", desc: "The workspace root is unknown - re-run the code graph.", timeout: 2600 }); return; }
+  const abs = `${codeGraphRoot.replace(/[\\/]+$/, "")}/${rel}`;
+  const r = await bridge.editorRead(abs).catch(() => null);
+  if (r?.ok && typeof r.content === "string") { await openIde({ path: abs, code: r.content, sha256: r.sha256, mtime: r.mtime }); return; }
+  showToast({ tone: "warn", title: "Couldn't open the file", desc: `${rel} wasn't readable on disk (it may have moved since the last ingest - try Update).`, timeout: 3400 });
 }
 // Inline unlock for the Knowledge graph - enter the passphrase here instead of going to Settings.
 // Validates (non-empty), warns on Caps Lock, and has a show/hide toggle. On success the graph mounts.
@@ -2134,6 +3757,9 @@ function renderThread(msgs: { role: string; text: string }[] | null | undefined)
   if (msgs && msgs.length) for (const m of msgs) addMessage(m.role === "user" ? "user" : "assistant", m.text);
   else seedThread();
 }
+// P-PERF.4 (ADR-0131): resume loads only the transcript TAIL - matches the SWR cache cap, so the IPC
+// payload and the DOM stay bounded no matter how long the chat grew. The full history stays on disk.
+const RESUME_TAIL = 400;
 async function resumeSession(id: string): Promise<void> {
   closeSettings();
   $$(".sess").forEach((s) => s.classList.toggle("active", (s as HTMLElement).dataset.sid === id));
@@ -2141,12 +3767,18 @@ async function resumeSession(id: string): Promise<void> {
   const cached = cachedTranscript(id);
   let shownSig = "";
   if (cached && cached.length) { renderThread(cached); shownSig = transcriptSig(cached); }
-  const msgs = await bridge.sessionMessages(id);
-  if (msgs) {
-    if (transcriptSig(msgs) !== shownSig) renderThread(msgs); // re-render only if it actually changed (no flicker)
-    setCachedTranscript(id, msgs, Date.now());
+  const page = await bridge.sessionMessages(id, RESUME_TAIL);
+  if (page) {
+    if (transcriptSig(page.messages) !== shownSig) renderThread(page.messages); // re-render only if it actually changed (no flicker)
+    setCachedTranscript(id, page.messages, Date.now());
+    if (page.total > page.messages.length) { // honest truncation hint - never silent
+      const note = document.createElement("div");
+      note.className = "thread-tail-note";
+      note.textContent = `Showing the last ${page.messages.length} of ${page.total} messages`;
+      $("#thread")?.prepend(note);
+    }
   } else if (!shownSig) {
-    renderThread(null); // no cache AND the fetch failed → a fresh empty thread
+    renderThread(null); // no cache AND the fetch failed -> a fresh empty thread
   }
   await bridge.resumeSession(id);
   $("#input")?.focus();
@@ -2288,6 +3920,8 @@ function devHtml(d: import("./bridge.ts").DevView | null): string {
   const tel = d.snapshot?.telemetry ?? [], runs = d.snapshot?.runs ?? [], exp = d.snapshot?.exports ?? [], blk = d.blocks?.quarantined ?? [], turns = d.turns ?? [];
   const ask = d.asksage ?? [];
   const askAnoms = ask.filter((r) => r.anomaly || r.ok === false).length;
+  const gate = d.gate ?? []; // P-GATE-DIAG.1
+  const gateBlocks = gate.filter((r) => String(r.decision ?? "").startsWith("block")).length;
   h += chips([
     { cls: "f", n: tel.length, l: "events" },
     { cls: "g", n: runs.length, l: "runs" },
@@ -2295,6 +3929,7 @@ function devHtml(d: import("./bridge.ts").DevView | null): string {
     { cls: "q", n: blk.length, l: "live blocks" },
     { cls: "a", n: exp.length, l: "exports" },
     ...(ask.length ? [{ cls: askAnoms ? "q" : "g", n: ask.length, l: "AskSage calls" } as const] : []),
+    ...(gate.length ? [{ cls: gateBlocks ? "q" : "g", n: gate.length, l: "gate decisions" } as const] : []),
     ...(d.netdiag ? [{ cls: d.netdiag.events.some((e) => e.candidate) ? "q" : "f", n: d.netdiag.events.length, l: "net events" } as const] : []),
   ]);
   // P-ASKSAGE.1 (ADR-0059): AskSage tool-loop diagnostics. One row per non-streamed call. An `anomaly`
@@ -2313,6 +3948,21 @@ function devHtml(d: import("./bridge.ts").DevView | null): string {
   h += accordion("dev.asksage", "AskSage tool calls", "non-streamed loop · developer diagnostics",
     table([{ key: "when", label: "when", mono: true }, { key: "route", label: "route" }, { key: "model", label: "model", mono: true }, { key: "via", label: "parsed via", mono: true }, { key: "text", label: "txt", mono: true }, { key: "calls", label: "tool calls" }, { key: "stop", label: "loop", mono: true }, { key: "finish", label: "raw", mono: true }, { key: "flag", label: "flag", pill: true }], askRows as unknown as Record<string, unknown>[]),
     OPEN.has("dev.asksage") || askAnoms > 0, askAnoms ? `${ask.length} · ${askAnoms}⚠` : String(ask.length));
+  // P-GATE-DIAG.1 (ADR-0066/0062): exec/egress gate decisions — WHY each was allowed/prompted/auto-denied.
+  // A "block(no-ui)" row with askActive=NO or listener=NO is the smoking gun for "I never got a prompt".
+  const gateRows = gate.slice().reverse().map((r) => ({
+    when: estTime(r.at as number),
+    kind: String(r.kind ?? ""),
+    tool: String(r.tool ?? "").slice(0, 28),
+    target: String(r.target ?? "").slice(0, 38),
+    ask: r.askActive ? "yes" : "NO",
+    listener: r.listener ? "yes" : "NO",
+    loop: r.goalActive ? "goal" : r.autoRunning ? "auto" : "-",
+    decision: String(r.decision ?? ""),
+  }));
+  h += accordion("dev.gate", "Exec / egress gate decisions", "why a tool was prompted vs auto-denied",
+    table([{ key: "when", label: "when", mono: true }, { key: "kind", label: "kind" }, { key: "tool", label: "tool", mono: true }, { key: "target", label: "target", mono: true }, { key: "ask", label: "askActive", mono: true }, { key: "listener", label: "listener", mono: true }, { key: "loop", label: "loop", mono: true }, { key: "decision", label: "decision", pill: true }], gateRows as unknown as Record<string, unknown>[]),
+    OPEN.has("dev.gate") || gateBlocks > 0, gateBlocks ? `${gate.length} · ${gateBlocks}⛔` : String(gate.length));
   h += accordion("dev.telemetry", "Telemetry stream", "recent · metadata only",
     table([{ key: "event", label: "event" }, { key: "run_id", label: "run", mono: true }, { key: "session_id", label: "session", mono: true }, { key: "created_at", label: "at", mono: true }], tel),
     true, String(tel.length));
@@ -2385,10 +4035,11 @@ function devHtml(d: import("./bridge.ts").DevView | null): string {
       + table([{ key: "watch", label: "", mono: true }, { key: "port", label: "port", mono: true }, { key: "addr", label: "local address", mono: true }, { key: "proc", label: "process" }], lisRows as unknown as Record<string, unknown>[])
       // OAuth-relevant events: pinned at top, highlighted, newest first.
       + `<div class="dev-subh nd-oauth-hdr">🔑 OAuth / port ${nd.ports.join(", :")} events <span>newest first · candidates, probes, and callback-port traffic</span></div>`
-      + (oauthRows.length ? table(evCols, oauthRows as unknown as Record<string, unknown>[]) : `<div class="empty">no OAuth-relevant events yet — click "Connect via OAuth" to start</div>`)
+      + (oauthRows.length ? table(evCols, oauthRows as unknown as Record<string, unknown>[]) : `<div class="empty">no OAuth-relevant events yet - click "Connect via OAuth" to start</div>`)
       // Separator + the rest.
       + (otherRows.length ? `<div class="dev-subh">Other network activity <span>${otherRows.length} events · loopback traffic unrelated to the callback port</span></div>` + table(evCols, otherRows as unknown as Record<string, unknown>[]) : "")
-      + (nd.dns.length ? `<div class="dev-subh">DNS resolutions <span>recent resolver-cache entries</span></div><div class="kvs">${nd.dns.slice().reverse().slice(0, 30).map((n) => `<span class="kv mono">${esc(n)}</span>`).join("")}</div>` : "");
+      // P-NETWL.4 (ADR-0106): each DNS pill is clickable → a quick-add popover to whitelist that host.
+      + (nd.dns.length ? `<div class="dev-subh">DNS resolutions <span>recent resolver-cache entries · click to whitelist</span></div><div class="kvs">${nd.dns.slice().reverse().slice(0, 30).map((n) => `<span class="kv mono kv-dns" data-dns-add="${esc(n)}" data-tip="Add to whitelist|Pre-authorize ${esc(n)} for the agent's network calls (choose scope + budget).">${esc(n)} ${icon("plus", 10)}</span>`).join("")}</div>` : "");
     h += accordion("dev.netdiag", "Network diagnostics", "OAuth localhost callback · live capture", body, OPEN.has("dev.netdiag") || cand > 0, cand ? `${nd.events.length} · ${cand}?` : String(nd.events.length));
   }
   return h;
@@ -2421,7 +4072,7 @@ function memoryHtml(d: MemorySnapshot | null): string {
     if (aiLocHasData(d.aiLoc)) {
       h += accordion("mem.ailoc", "AI-authored code", `+${fmtNum(d.aiLoc!.totals.added)} / −${fmtNum(d.aiLoc!.totals.removed)} lines`, aiLocBody(d.aiLoc!), OPEN.has("mem.ailoc"), `${d.aiLoc!.totals.models}`);
     } else {
-      h += accordion("mem.ailoc", "AI-authored code", "none yet", `<div class="empty">No AI-authored lines recorded yet — they'll appear here, per model and repo, as the agent edits files through the gate.</div>`, OPEN.has("mem.ailoc"));
+      h += accordion("mem.ailoc", "AI-authored code", "none yet", `<div class="empty">No AI-authored lines recorded yet - they'll appear here, per model and repo, as the agent edits files through the gate.</div>`, OPEN.has("mem.ailoc"));
     }
   }
   if (!d) return h || `<div class="empty">No omp session yet - launch omp and send a message.</div>`;
@@ -2720,14 +4371,9 @@ function toggleSidebar(force?: boolean): void {
   $("#app-inner")?.classList.toggle("sidebar-collapsed", state.sidebarCollapsed);
   try { localStorage.setItem("lucid.sidebar-collapsed", state.sidebarCollapsed ? "1" : "0"); } catch { /* ignore */ }
 }
-/** Update the composer's quick agent-controls (model · mode · thinking) labels. */
+/** Update the composer's quick controls (persona · skills). Model/mode/thinking live in the top picker. */
 function updateComposerTools(): void {
-  const model = state.config.find((c) => c.id === "model");
-  const think = state.config.find((c) => c.id === "thinking");
   const set = (sel: string, v: string) => { const e = $(sel); if (e) e.textContent = v; };
-  if (model) set("#ctModelName", modelLabel(model.currentValue));
-  set("#ctModeName", state.uiMode === "ask" ? "Ask" : state.uiMode === "plan" ? "Plan" : "Agent");
-  if (think) { const cur = think.options.find((o) => o.value === think.currentValue); set("#ctThinkName", prettyLevel(cur?.name ?? think.currentValue)); }
   const pBtn = $("#ctPersona");
   if (pBtn) {
     (pBtn as HTMLElement).hidden = !state.asksage?.configured;
@@ -2855,6 +4501,64 @@ async function clearBundledSkill(): Promise<void> {
   await bridge.clearActiveSkill();
   showToast({ title: "Skill cleared", desc: "No bundled skill is steering the agent.", timeout: 2000 });
 }
+
+// ── P-CMD.1 (ADR-0146): user-authored "/" slash commands ──────────────────────
+// Resolve the text actually sent to the model. `/agent` + `/command` open builder interviews; a SEND-mode
+// user command expands its saved body with any typed args. Anything else passes through verbatim. Pure.
+function resolveSendText(text: string, cmdTok: string | undefined): string {
+  if (/^\/agent\b/i.test(text)) return agentInterviewPrompt(text.replace(/^\/agent\b/i, "").trim());
+  if (/^\/command\b/i.test(text)) return commandBuilderPrompt(text.replace(/^\/command\b/i, "").trim());
+  if (cmdTok) {
+    const uc = state.userCommands.find((c) => c.name === cmdTok && c.mode === "send");
+    if (uc) return expandCommandBody(uc.body, text.replace(new RegExp(`^/${cmdTok}\\s*`, "i"), ""));
+  }
+  return text;
+}
+
+/** Kickoff for `/command [description]`: steer the chat agent to interview the user then call
+ *  slash_command_create (mirrors agentInterviewPrompt). Frozen SLASH_COMMAND_POLICY reinforces this. */
+function commandBuilderPrompt(desc: string): string {
+  const focus = desc ? `\n\nThe user's starting idea: ${desc}` : "";
+  return (
+    `The user wants to CREATE a reusable "/" slash command - a saved prompt they trigger by typing /<name>. ` +
+    `Interview them briefly (skip anything already clear), then create it with the slash_command_create tool.` +
+    focus +
+    `\n\nYou need: (1) a NAME (lowercase letters/digits/hyphens, e.g. pr-review); (2) exactly WHAT it should do ` +
+    `- the prompt body it runs (use $ARGS for the text typed after the name, or $1..$9 for positional args); ` +
+    `(3) MODE - "send" (expand the body + args and send it as a turn) or "skill" (activate the body as a ` +
+    `persistent instruction until cleared). If it's already clear, skip straight to creating it. Then call ` +
+    `slash_command_create with { name, description, body, mode }. NEVER put a secret value in the body - ` +
+    `reference a vault credential by name instead.`
+  );
+}
+
+/** SKILL-mode user command: activate its body as a persistent instruction (reuses the bundled-skill seam). */
+async function activateUserCommandSkill(uc: UserCommand): Promise<void> {
+  state.activeSkill = { command: `cmd:${uc.name}`, name: `/${uc.name}` };
+  updateSkillButton();
+  await bridge.setActiveSkill(`/${uc.name}`, uc.body);
+  void bridge.skillActivated(`cmd:${uc.name}`, `/${uc.name}`, "project"); // P-IDE.3 telemetry (metadata only)
+  showToast({ title: `Skill on: /${uc.name}`, desc: "Guides the agent until you clear it (Skills → Clear).", timeout: 2800 });
+}
+
+// The agent called slash_command_create → acp_backend parsed + emitted the command. Persist it AUTHORITATIVELY
+// through the gate (createUserCommand validates + secret-scans + Unicode-scans server-side), then register it
+// in the live "/" menu. A blocked/invalid command surfaces as a danger toast and is never enabled.
+async function onSlashCommandCreated(command: UserCommand): Promise<void> {
+  const res = await bridge.userCommandCreate(command);
+  if (!res?.ok) {
+    showToast({ tone: "danger", title: "Couldn't create the command", desc: res?.reason ?? res?.errors?.[0] ?? "rejected at the security gate" });
+    return;
+  }
+  const saved = res.command ?? command;
+  state.userCommands = [saved, ...state.userCommands.filter((c) => c.name !== saved.name)];
+  const takesArgs = /\$ARGS\b|\$[1-9]/.test(saved.body);
+  showToast({
+    title: `Created /${saved.name}`,
+    desc: saved.mode === "skill" ? `Type /${saved.name} to activate it as a skill.` : `Type /${saved.name} to run it${takesArgs ? " (takes arguments)" : ""}.`,
+    timeout: 4200,
+  });
+}
 /** /task proforma: append a multi-line subagent-delegation template, preserving existing input. */
 function insertTaskProforma(): void {
   const ta = $("#input") as HTMLTextAreaElement;
@@ -2958,6 +4662,105 @@ function wireCmdSuggest(ov: HTMLElement): void {
   });
 }
 
+// ── P-VOICE.1 (ADR-0115): read-aloud (text-to-speech) ─────────────────────────
+// Speak arbitrary text (an assistant reply, an AAR summary) via /api/tts/speak using the engine + voice
+// from Settings → Voice. Click again while playing to STOP. Fail-safe: a missing key/engine shows a note.
+/** Decode base64 audio into a Blob URL. A large WAV as a `data:` URL frequently fails to play in
+ *  <audio>/Audio() even though it downloads fine; a Blob URL plays reliably. Callers should not leak these
+ *  for long-lived players (the podcast slot is short-lived); speakText revokes on end. */
+function audioBlobUrl(b64: string, mime: string): string {
+  const bin = atob(b64);
+  const arr = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+  return URL.createObjectURL(new Blob([arr], { type: mime || "audio/mpeg" }));
+}
+let ttsAudio: HTMLAudioElement | null = null;
+const speakOrig = new WeakMap<HTMLElement, string>();
+function restoreSpeakBtn(btn?: HTMLElement | null): void {
+  if (!btn) return;
+  btn.classList.remove("busy", "playing");
+  const o = speakOrig.get(btn);
+  if (o != null) btn.innerHTML = o;
+}
+// P-REPORT.5b: the Listen/read-aloud button SYNTHESIZES on demand (independent of the Generate panel's
+// audio option) - click it any time. It shows a spinner while the model synthesizes, flips to a Stop
+// control while playing, and surfaces the real engine error if TTS isn't configured.
+async function speakText(text: string, btn?: HTMLElement | null): Promise<void> {
+  if (ttsAudio && !ttsAudio.paused) { ttsAudio.pause(); ttsAudio = null; restoreSpeakBtn(btn); return; }
+  // P-REPORT.7: sanitize per line so the TTS reads flowing speech, not codes/symbols/markdown artifacts.
+  const clean = (text || "").split(/\n+/).map((ln) => speakable(ln)).filter(Boolean).join(" ").trim();
+  if (!clean) return;
+  const orig = btn?.innerHTML ?? "";
+  const labelled = /listen/i.test(orig); // the report's "Listen" button carries a label; message read-aloud is icon-only
+  if (btn) {
+    speakOrig.set(btn, orig);
+    btn.classList.add("busy");
+    btn.innerHTML = `${icon("refresh", 16, "spin")}${labelled ? " <span>Synthesizing…</span>" : ""}`;
+  }
+  const r = await bridge.speak(clean.slice(0, 8000)).catch(() => null);
+  if (!r?.audioB64) {
+    restoreSpeakBtn(btn);
+    showToast({ tone: "warn", title: "Couldn't read it aloud", desc: r?.note || "Choose a TTS engine in Settings → Voice (ElevenLabs, OpenAI, or offline Kokoro).", actions: [{ label: "OK" }], timeout: 5000 });
+    return;
+  }
+  const url = audioBlobUrl(r.audioB64, r.mime);
+  ttsAudio = new Audio(url);
+  if (btn) { btn.classList.remove("busy"); btn.classList.add("playing"); btn.innerHTML = `${icon("close", 16)}${labelled ? " <span>Stop</span>" : ""}`; }
+  ttsAudio.onended = () => { restoreSpeakBtn(btn); URL.revokeObjectURL(url); ttsAudio = null; };
+  ttsAudio.play().catch(() => { restoreSpeakBtn(btn); URL.revokeObjectURL(url); });
+}
+
+// ── P-VOICE.1 (ADR-0115): mic → speech-to-text into the composer ──────────────
+// Click the mic to record, click again to stop. The blob is sent to /api/transcribe (ElevenLabs Scribe
+// or an offline Whisper server, per Settings → Voice) and the transcript is INSERTED into the composer for
+// review before you send — it's ordinary user input, scanned on send like anything typed.
+let micRecorder: MediaRecorder | null = null;
+let micChunks: Blob[] = [];
+function blobToBase64(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onerror = () => reject(new Error("read failed"));
+    r.onload = () => resolve(String(r.result).replace(/^data:[^,]*,/, "")); // strip the data: prefix
+    r.readAsDataURL(blob);
+  });
+}
+async function toggleMicRecording(): Promise<void> {
+  const btn = $("#ctMic");
+  if (micRecorder && micRecorder.state === "recording") { micRecorder.stop(); return; } // second click = stop
+  if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+    showToast({ tone: "warn", title: "No microphone", desc: "This environment can't capture audio.", timeout: 2600 }); return;
+  }
+  let stream: MediaStream;
+  try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
+  catch { showToast({ tone: "warn", title: "Microphone blocked", desc: "Allow microphone access to use voice input.", timeout: 2800 }); return; }
+  micChunks = [];
+  const mime = MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm" : "";
+  micRecorder = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+  micRecorder.ondataavailable = (e) => { if (e.data.size) micChunks.push(e.data); };
+  micRecorder.onstop = async () => {
+    stream.getTracks().forEach((t) => t.stop());
+    btn?.classList.remove("recording");
+    const type = micRecorder?.mimeType || "audio/webm";
+    micRecorder = null;
+    const blob = new Blob(micChunks, { type });
+    if (!blob.size) return;
+    btn?.classList.add("busy");
+    try {
+      const r = await bridge.transcribe(await blobToBase64(blob), blob.type).catch(() => null);
+      if (r?.text) {
+        const ta = $("#input") as HTMLTextAreaElement;
+        ta.value = (ta.value ? ta.value.replace(/\s*$/, "") + " " : "") + r.text;
+        ta.focus(); autosize(ta); setSendEnabled();
+      } else {
+        showToast({ tone: "warn", title: "No transcript", desc: r?.note || "The speech-to-text engine returned nothing. Check Settings → Voice.", timeout: 3200 });
+      }
+    } finally { btn?.classList.remove("busy"); }
+  };
+  micRecorder.start();
+  btn?.classList.add("recording");
+  showToast({ title: "Recording…", desc: "Click the mic again to stop and transcribe.", timeout: 1800 });
+}
+
 function openGoalForm(): void {
   const ov = el(`<div class="scrim goal-scrim"><div class="goal-modal" data-mode="guided">
     <div class="goal-modal-h">
@@ -3027,14 +4830,19 @@ function openGoalForm(): void {
           <input id="goalCadTime" class="prov-key goal-cadt" type="time" value="09:00" hidden />
         </div>
         <details class="goal-eu">
-          <summary>${icon("spark", 13)} Engineering Update <span class="goal-opt">an exec brief + podcast from this run</span> ${goalInfoDot("Why an Engineering Update|As the goal loop runs round after round, the ADRs, run-logs and decisions pile up, and a tired reader starts to tune out. This curated executive brief and podcast mitigates Cognitive Surrender and Information Overload, surfacing the signal in the noise during orchestration looping: what shipped, what is load-bearing, the tech debt, and the decisions that need you.")}</summary>
+          <summary>${icon("spark", 13)} Engineering Update <span class="goal-opt">exec brief + podcast · from your repo logs</span> ${goalInfoDot("Engineering Update (repo brief + podcast)|A curated executive brief and two-host podcast built from this repo's DECISIONS.md + PROGRESS.md - NOT the loop's After-Action Report (that appears in chat after a loop finishes). Pick an audio provider to turn the script into a downloadable WAV: Local TTS (Kokoro, air-gap, no key) or ChatGPT/OpenAI TTS (uses your OpenAI key). 'Script only' just writes the two-host script.")}</summary>
           <div class="goal-eu-body">
-            <div class="goal-row"><label class="goal-lbl">Audio</label>
+            <div class="goal-row"><label class="goal-lbl" for="euProvider">Audio</label>
               <select id="euProvider" class="prov-key">
                 <option value="script-only">Script only (no audio)</option>
-                <option value="local-tts">Local TTS - Kokoro (air-gap)</option>
+                <option value="elevenlabs">ElevenLabs · custom voices (uses your ElevenLabs key)</option>
+                <option value="openai-tts">ChatGPT · OpenAI TTS (uses your OpenAI key)</option>
+                <option value="local-tts">Local TTS · Kokoro (air-gap, no key)</option>
               </select>
             </div>
+            <div class="goal-row" id="euVoiceRow" hidden><label class="goal-lbl" for="euVoice">Voice</label>
+              <select id="euVoice" class="prov-key"><option value="">default voice</option></select></div>
+            <div class="goal-eu-cost" id="euCost" hidden></div>
             <button type="button" class="btn-mini ok" id="euGenerate">${icon("bolt", 12)} Generate update now</button>
             <div class="goal-eu-result" id="euResult" hidden></div>
           </div>
@@ -3139,9 +4947,39 @@ function openGoalForm(): void {
   // P-BRIEF.3 (ADR-0072): the Engineering Update accordion - the audio-provider choice persists; Generate
   // fetches the curated brief from the repo's logs and renders it inline (audio backend is a later slice).
   const euProv = $("#euProvider", ov) as HTMLSelectElement | null;
+  const euVoiceRow = $("#euVoiceRow", ov) as HTMLElement | null;
+  const euVoiceSel = $("#euVoice", ov) as HTMLSelectElement | null;
+  const euCost = $("#euCost", ov) as HTMLElement | null;
+  // Per-generation cost note so users know a cloud TTS run costs money (measured ~10¢ per brief).
+  const EU_COST: Record<string, string> = {
+    elevenlabs: `${icon("info", 11)} ElevenLabs is billed per character - this brief costs <b>about $0.10 (~10¢) each time</b> you Generate.`,
+    "openai-tts": `${icon("info", 11)} OpenAI TTS is billed per character - this brief costs <b>about $0.10 each time</b> you Generate.`,
+  };
+  let euVoicesLoaded = false;
+  // P-VOICE.1: show the voice picker (ElevenLabs only) + the cost note, and lazy-load voices so the user
+  // can change voice BEFORE generating. Re-runs on provider change.
+  const syncEu = async (): Promise<void> => {
+    const p = euProv?.value ?? "script-only";
+    if (euVoiceRow) euVoiceRow.hidden = p !== "elevenlabs";
+    if (euCost) { const c = EU_COST[p]; euCost.hidden = !c; euCost.innerHTML = c ?? ""; }
+    if (p === "elevenlabs" && !euVoicesLoaded && euVoiceSel) {
+      euVoicesLoaded = true;
+      const data = await bridge.voices().catch(() => null);
+      if (data?.voices?.length) {
+        const favs = new Set(data.favorites);
+        const opt = (v: import("./bridge.ts").ElevenVoiceView) => `<option value="${esc(v.voiceId)}"${v.voiceId === data.selected ? " selected" : ""}>${esc(v.name)}${v.category ? ` · ${esc(v.category)}` : ""}</option>`;
+        const fav = data.voices.filter((v) => favs.has(v.voiceId)), rest = data.voices.filter((v) => !favs.has(v.voiceId));
+        euVoiceSel.innerHTML = `<option value="">default voice</option>` + (fav.length ? `<optgroup label="★ Favorites">${fav.map(opt).join("")}</optgroup>` : "") + `<optgroup label="All voices">${rest.map(opt).join("")}</optgroup>`;
+      } else {
+        euVoiceSel.innerHTML = `<option value="">${esc(data?.note || "add an ElevenLabs key in Settings → Voice")}</option>`;
+        euVoicesLoaded = false; // let it retry next time
+      }
+    }
+  };
   if (euProv) {
     euProv.value = localStorage.getItem("lucid.euProvider") || "script-only";
-    euProv.addEventListener("change", () => localStorage.setItem("lucid.euProvider", euProv.value));
+    euProv.addEventListener("change", () => { localStorage.setItem("lucid.euProvider", euProv.value); void syncEu(); });
+    void syncEu();
   }
   $("#euGenerate", ov)?.addEventListener("click", async () => {
     const btn = $("#euGenerate", ov) as HTMLButtonElement;
@@ -3153,10 +4991,24 @@ function openGoalForm(): void {
       if (!data) { showToast({ tone: "warn", title: "Could not generate", desc: "The local engine didn't return a brief.", timeout: 2600 }); return; }
       out.hidden = false;
       const counts = `<div class="goal-eu-counts">${Object.entries(data.counts).map(([k, v]) => `<b>${v}</b> ${k}`).join(" · ")}</div>`;
-      const audioNote = euProv?.value === "local-tts"
-        ? `<div class="goal-opt">Audio: point a local TTS endpoint (Kokoro) at the app to render the podcast - the two-host script is ready.</div>`
-        : "";
-      out.innerHTML = counts + audioNote + renderMarkdown(data.brief);
+      out.innerHTML = counts + `<div id="euAudio"></div>` + renderMarkdown(data.brief);
+      // P-BRIEF.4 (ADR-0113): synthesize the podcast to audio, played via a BLOB URL (a big WAV as a data:
+      // URL often won't play in <audio>, even though it downloads fine - the reported bug) + a Download link.
+      const provider = euProv?.value;
+      if (provider === "openai-tts" || provider === "local-tts" || provider === "elevenlabs") {
+        const slot = $("#euAudio", ov) as HTMLElement;
+        slot.innerHTML = `<div class="goal-opt">${icon("spark", 11)} Synthesizing podcast audio…</div>`;
+        const a = await bridge.engineeringBriefAudio(provider, euVoiceSel?.value || undefined).catch(() => null);
+        if (a?.audioB64) {
+          const url = audioBlobUrl(a.audioB64, a.mime);
+          const ext = a.mime.includes("wav") ? "wav" : "mp3";
+          slot.innerHTML =
+            `<audio controls src="${url}" style="width:100%;margin:6px 0"></audio>` +
+            `<a class="btn-mini" download="engineering-update.${ext}" href="${url}">${icon("download", 12)} Download ${ext.toUpperCase()}</a>`;
+        } else {
+          slot.innerHTML = `<div class="goal-opt">Audio not generated - ${esc(a?.note ?? "the TTS endpoint was unreachable")}.</div>`;
+        }
+      }
     } finally { btn.disabled = false; btn.innerHTML = prev; }
   });
   $("#goalRun", ov)?.addEventListener("click", async () => {
@@ -3348,28 +5200,553 @@ function updateGoalEstimate(ov: HTMLElement): void {
 // history (a first-time user sees nothing extra).
 async function loadLoopStats(ov: HTMLElement): Promise<void> {
   const sec = $("#goalStatsSec", ov); if (!sec) return;
-  const data = await bridge.loopRunStats().catch(() => null);
+  // P-GOAL.14 (ADR-0112): fetch cross-run stats AND the list of past After-Action Reports together.
+  const [data, reports] = await Promise.all([
+    bridge.loopRunStats().catch(() => null),
+    bridge.pastReports().catch(() => null),
+  ]);
   const s = data?.stats;
-  if (!s || s.runs === 0) { sec.innerHTML = ""; return; }
-  const pct = Math.round(s.successRate * 100);
-  const tone = pct >= 75 ? "ok" : pct >= 40 ? "mid" : "low";
-  const iters = s.avgItersToSucceed ? `${s.avgItersToSucceed.toFixed(1)}` : "-";
-  const dur = s.avgDurationMs ? formatLoopDur(s.avgDurationMs) : "-";
-  const blocker = s.topBlockers[0];
-  const spend = s.totalSpendUsd > 0 ? `<span class="gs-tool">spend <b>$${s.totalSpendUsd.toFixed(2)}</b></span>` : "";
-  const mix = spend + Object.entries(s.toolsByType).sort((a, b) => b[1] - a[1]).slice(0, 4)
-    .map(([k, v]) => `<span class="gs-tool">${esc(k)} <b>${v}</b></span>`).join("");
-  sec.innerHTML = `<div class="goal-stats" data-tone="${tone}">
-    <div class="gs-head">${icon("graph", 13)} Loop history <span class="gs-sum">${esc(data!.summary)}</span><span class="gs-caret">${icon("chevron", 12)}</span></div>
-    <div class="gs-grid">
-      <div class="gs-cell"><span class="gs-n">${pct}%</span><span class="gs-l">met</span></div>
-      <div class="gs-cell"><span class="gs-n">${esc(iters)}</span><span class="gs-l">avg iters to win</span></div>
-      <div class="gs-cell"><span class="gs-n">${esc(dur)}</span><span class="gs-l">avg duration</span></div>
-      <div class="gs-cell"><span class="gs-n">${s.totalTools}</span><span class="gs-l">tool calls</span></div>
+  let html = "";
+  if (s && s.runs > 0) {
+    const pct = Math.round(s.successRate * 100);
+    const tone = pct >= 75 ? "ok" : pct >= 40 ? "mid" : "low";
+    const iters = s.avgItersToSucceed ? `${s.avgItersToSucceed.toFixed(1)}` : "-";
+    const dur = s.avgDurationMs ? formatLoopDur(s.avgDurationMs) : "-";
+    const blocker = s.topBlockers[0];
+    const spend = s.totalSpendUsd > 0 ? `<span class="gs-tool">spend <b>$${s.totalSpendUsd.toFixed(2)}</b></span>` : "";
+    const mix = spend + Object.entries(s.toolsByType).sort((a, b) => b[1] - a[1]).slice(0, 4)
+      .map(([k, v]) => `<span class="gs-tool">${esc(k)} <b>${v}</b></span>`).join("");
+    html += `<div class="goal-stats" data-tone="${tone}">
+      <div class="gs-head">${icon("graph", 13)} Loop history <span class="gs-sum">${esc(data!.summary)}</span><span class="gs-caret">${icon("chevron", 12)}</span></div>
+      <div class="gs-grid">
+        <div class="gs-cell"><span class="gs-n">${pct}%</span><span class="gs-l">met</span></div>
+        <div class="gs-cell"><span class="gs-n">${esc(iters)}</span><span class="gs-l">avg iters to win</span></div>
+        <div class="gs-cell"><span class="gs-n">${esc(dur)}</span><span class="gs-l">avg duration</span></div>
+        <div class="gs-cell"><span class="gs-n">${s.totalTools}</span><span class="gs-l">tool calls</span></div>
+      </div>
+      ${mix ? `<div class="gs-mix">${mix}</div>` : ""}
+      ${blocker ? `<div class="gs-blocker">${icon("info", 11)} most-common stop: <span>${esc(blocker.reason.slice(0, 90))}</span>${blocker.count > 1 ? ` ·&nbsp;${blocker.count}×` : ""}</div>` : ""}
+    </div>`;
+  }
+  // P-GOAL.14: the browsable list of past After-Action Reports (each opens its full markdown). Shown
+  // whenever report files exist, even if the run-log ledger is empty (older loops predate the ledger).
+  if (reports && reports.length) {
+    const rows = reports.slice(0, 30).map((r) => {
+      const when = r.updatedAt ? new Date(r.updatedAt).toLocaleString() : "";
+      return `<button type="button" class="gr-row" data-report-rel="${esc(r.rel)}">
+        <span class="gr-outcome">${esc(r.outcome || "report")}</span>
+        <span class="gr-goal">${esc(r.goal)}</span>
+        <span class="gr-when">${esc(when)}</span>
+      </button>`;
+    }).join("");
+    html += `<details class="goal-stats goal-reports"${s && s.runs ? "" : " open"}>
+      <summary class="gs-head">${icon("graph", 13)} Past After-Action Reports <span class="gs-sum">${reports.length} saved</span></summary>
+      <div class="gr-list">${rows}</div>
+    </details>`;
+  }
+  sec.innerHTML = html;
+  sec.querySelectorAll<HTMLElement>("[data-report-rel]").forEach((b) =>
+    b.addEventListener("click", () => void openReportViewer(b.dataset.reportRel!)));
+}
+
+/** P-GOAL.14 (ADR-0112): open one saved After-Action Report's full markdown in a viewer modal. */
+async function openReportViewer(rel: string): Promise<void> {
+  const r = await bridge.pastReport(rel).catch(() => null);
+  if (!r) { showToast({ tone: "warn", title: "Could not open", desc: "The report file wasn't found.", timeout: 2400 }); return; }
+  const ov = el(`<div class="goal-scrim"><div class="goal-modal aar-viewer">
+    <div class="goal-modal-h"><span class="goal-h-title">${icon("graph", 15)} After-Action Report</span>
+      <span style="margin-left:auto;display:flex;gap:6px">
+        <button type="button" class="btn-mini" id="arListen" data-tip="Narrate this report (Settings → Voice sets the engine)">${icon("volume", 12)} Listen</button>
+        <button type="button" class="btn-mini" id="arClose">Close</button></span></div>
+    <div class="goal-modal-sub"><code>${esc(rel)}</code></div>
+    <div class="goal-aar-body">${renderMarkdown(r.markdown)}</div>
+  </div></div>`);
+  document.body.appendChild(ov);
+  const close = () => { if (ttsAudio && !ttsAudio.paused) { ttsAudio.pause(); ttsAudio = null; } ov.remove(); };
+  $("#arClose", ov)?.addEventListener("click", close);
+  // P-VOICE.1 (ADR-0115): narrate the report's readable text (no markdown/table symbols).
+  $("#arListen", ov)?.addEventListener("click", (e) => {
+    const plain = ($(".goal-aar-body", ov) as HTMLElement | null)?.innerText?.trim() ?? "";
+    void speakText(plain, e.currentTarget as HTMLElement);
+  });
+  ov.addEventListener("mousedown", (e) => { if (e.target === ov) close(); });
+}
+
+// ── P-REPORT.1 (ADR-0116): the Engineering Reports rail panel ─────────────────
+// Available to every role. Generate a role-tailored brief (with optional podcast audio), and browse every
+// past loop After-Action Report + saved brief. Reuses the P-VOICE.1 audio (blob-URL player) + TTS.
+const REPORT_TTS_COST: Record<string, string> = {
+  elevenlabs: `${icon("info", 11)}<span>ElevenLabs bills per character. Generating this report's audio costs <b>about $0.10 (~10¢)</b> each time.</span>`,
+  "openai-tts": `${icon("info", 11)}<span>OpenAI TTS bills per character. Generating this report's audio costs <b>about $0.10</b> each time.</span>`,
+};
+
+/** P-REPORT.2: copy report markdown to the clipboard + download it as a .md file. */
+function reportFilename(title: string): string {
+  return `${(title || "report").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60) || "report"}.md`;
+}
+async function copyMarkdown(md: string): Promise<void> {
+  try { await navigator.clipboard.writeText(md); showToast({ title: "Copied", desc: "Report markdown is on your clipboard.", timeout: 1600 }); }
+  catch { showToast({ tone: "danger", title: "Copy failed", desc: "Clipboard unavailable in this view.", timeout: 2400 }); }
+}
+function downloadMarkdown(md: string, filename: string): void {
+  const url = URL.createObjectURL(new Blob([md], { type: "text/markdown;charset=utf-8" }));
+  const a = document.createElement("a"); a.href = url; a.download = filename; a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+/** P-REPORT.3 (ADR-0117): push a report into the personalization KG. Compartment = an unlocked one; if only
+ *  one is unlocked it's the default, otherwise a popover lets the user pick (work / personal / cui). */
+async function pushReportToKg(kind: string, rel: string, archived: boolean, anchor: HTMLElement): Promise<void> {
+  const st = await bridge.personal().catch(() => null);
+  if (!st?.enabled) { showToast({ tone: "warn", title: "Personalization is off", desc: "Turn it on in Settings → Personalization to push reports to your knowledge graph.", timeout: 3400 }); return; }
+  const targets: { scope: string; label: string }[] = [];
+  if (st.unlocked) targets.push({ scope: "work", label: "Work graph" }, { scope: "personal", label: "Personal graph" });
+  if (st.cuiUnlocked) targets.push({ scope: "cui", label: "CUI graph" });
+  if (!targets.length) { showToast({ tone: "warn", title: "Knowledge graph locked", desc: "Unlock a compartment in Settings → Personalization first.", timeout: 3600 }); return; }
+  const push = async (scope: string, label: string): Promise<void> => {
+    const r = await bridge.reportToKg(kind, rel, scope, archived).catch(() => null);
+    showToast(r?.ok
+      ? { title: "Pushed to the knowledge graph", desc: `Saved to your ${label} as a report node.`, timeout: 2600 }
+      : { tone: "warn", title: "Not pushed", desc: r?.error || "Could not write to the knowledge graph.", timeout: 3600 });
+  };
+  if (targets.length === 1) { await push(targets[0]!.scope, targets[0]!.label); return; }
+  const { node, close } = popover(anchor, `<div class="kg-pick"><div class="kg-pick-h">Push to which graph?</div>${targets.map((t) => `<button type="button" class="kg-pick-opt" data-scope="${t.scope}">${icon("graph", 12)} ${esc(t.label)}</button>`).join("")}</div>`);
+  node.addEventListener("click", (e) => {
+    const b = (e.target as HTMLElement).closest("[data-scope]") as HTMLElement | null; if (!b) return;
+    close(); void push(b.dataset.scope!, targets.find((t) => t.scope === b.dataset.scope)?.label ?? b.dataset.scope!);
+  });
+}
+
+/** Open one Reports-list entry (a loop AAR or a saved brief): Listen, Copy, Download .md (+ Archive/Delete
+ *  via the row actions). `archived` reads from the archive store. `onChange` refreshes the list on lifecycle. */
+// ── P-REPORT.4: premium report-body enhancer (viewer only) ──
+// Rendered report markdown carries a duplicate title H1, an emoji outcome badge, and unrenderable
+// ASCII / mermaid "charts". In the viewer we (1) drop the doubled H1 (the modal header already shows
+// the title), (2) swap the emoji for a custom SVG badge, and (3) turn every ASCII scoreboard + mermaid
+// pie/bar block into a colour bar chart with a plasma-on-hover fill. Purely presentational - the stored
+// markdown bytes are untouched (loop_report stays byte-stable / test-frozen).
+const OUTCOME_ICON: Record<string, { glyph: string; cls: string }> = {
+  "✅": { glyph: "checkBadge", cls: "ro-met" },
+  "⏹️": { glyph: "stopBadge", cls: "ro-stopped" },
+  "⏹": { glyph: "stopBadge", cls: "ro-stopped" },
+  "🛑": { glyph: "stopBadge", cls: "ro-cancelled" },
+  "❗": { glyph: "alertBadge", cls: "ro-error" },
+};
+const CHART_PALETTE = ["var(--blue)", "var(--green)", "var(--accent-2)", "var(--cyan)", "var(--amber)", "#8aa6f5", "#e07bf0"];
+function scoreColor(label: string, i: number): string {
+  const l = label.toLowerCase();
+  if (l.includes("add")) return "var(--green)";
+  if (l.includes("remov") || l.includes("delet")) return "var(--red)";
+  if (l.includes("error")) return "var(--amber)";
+  if (l.includes("website") || l.includes("site") || l.includes("visit")) return "var(--accent-2)";
+  if (l.includes("tool") || l.includes("call")) return "var(--blue)";
+  return CHART_PALETTE[i % CHART_PALETTE.length];
+}
+type ChartRow = { label: string; val: string; num: number };
+function buildScoreChart(rows: ChartRow[]): HTMLElement {
+  const max = Math.max(1, ...rows.map((r) => Math.abs(r.num)));
+  return el(`<div class="rchart">${rows.map((r, i) => {
+    const pct = Math.max(2.5, Math.round((Math.abs(r.num) / max) * 100));
+    return `<div class="rchart-row" style="--c:${scoreColor(r.label, i)}">
+      <span class="rchart-lbl" title="${esc(r.label)}">${esc(r.label)}</span>
+      <span class="rchart-track"><i class="rchart-fill" style="width:${pct}%"></i></span>
+      <b class="rchart-val">${esc(r.val)}</b></div>`;
+  }).join("")}</div>`);
+}
+/** Parse an ASCII scoreboard / mermaid pie / mermaid xychart code block into chart rows, or null. */
+function parseChartRows(text: string): ChartRow[] | null {
+  const t = (text || "").trim();
+  if (/[█░]/.test(t)) { // ASCII scoreboard: "Label   ██░░  value"
+    const rows = t.split("\n").map((line) => {
+      const m = /^(.+?)\s+[█░]+\s+([+-]?\d[\d,]*)\s*$/.exec(line.trimEnd());
+      return m ? { label: m[1].trim(), val: m[2], num: Number(m[2].replace(/[+,]/g, "")) } : null;
+    }).filter(Boolean) as ChartRow[];
+    return rows.length ? rows : null;
+  }
+  if (/^pie\b/.test(t)) { // mermaid pie:  "Label" : value
+    const rows: ChartRow[] = [];
+    for (const line of t.split("\n")) {
+      const m = /^\s*"(.+?)"\s*:\s*([\d.]+)/.exec(line);
+      if (m) rows.push({ label: m[1], val: m[2], num: Number(m[2]) });
+    }
+    return rows.length ? rows : null;
+  }
+  if (/xychart/.test(t)) { // mermaid xychart-beta:  x-axis [..] + bar [..]
+    const xs = /x-axis\s*\[(.+?)\]/.exec(t)?.[1], bars = /bar\s*\[(.+?)\]/.exec(t)?.[1];
+    if (xs && bars) {
+      const labels = xs.split(",").map((s) => s.trim().replace(/^"|"$/g, ""));
+      const vals = bars.split(",").map((s) => Number(s.trim()));
+      const rows = labels.map((label, i) => ({ label, val: String(vals[i] ?? 0), num: vals[i] ?? 0 }));
+      return rows.length ? rows : null;
+    }
+  }
+  return null;
+}
+// P-REPORT.8: reconstruct the change graph / schema map from OUR Mermaid (single source of truth in the
+// stored .md) so the viewer can render the styled SVG while keeping the exact Mermaid copyable for draw.io.
+function parseChangeGraphMermaid(text: string): ChangeGraph {
+  const modules: ModuleChange[] = [], edges: GraphEdge[] = [];
+  for (const line of text.split("\n")) {
+    let m = /^\s*(\w+)\["(.+?)"\]:::(added|removed|changed)/.exec(line);
+    if (m) {
+      const lm = /^(.*?)\s*\+(\d+)\/-(\d+)\s*\((\d+)f\)$/.exec(m[2]);
+      modules.push({ id: m[1], label: lm ? lm[1].trim() : m[2], added: lm ? +lm[2] : 0, removed: lm ? +lm[3] : 0, files: lm ? +lm[4] : 0, status: m[3] as ModuleChange["status"] });
+      continue;
+    }
+    m = /^\s*(\w+)\s*-->\s*(\w+)/.exec(line);
+    if (m && !/:::/.test(line)) edges.push({ from: m[1], to: m[2] });
+  }
+  return { modules, edges, range: "", totalAdded: 0, totalRemoved: 0, totalFiles: 0 };
+}
+function parseSchemaMermaid(text: string): StoreChange[] {
+  const stores = new Map<string, string>(), files = new Map<string, { path: string; added: number; removed: number }>(), links: [string, string][] = [];
+  for (const line of text.split("\n")) {
+    let m = /^\s*(\w+)\[\("(.+?)"\)\]:::store/.exec(line);
+    if (m) { stores.set(m[1], m[2]); continue; }
+    m = /^\s*(\w+)\["(.+?)"\]:::(grew|shrank)/.exec(line);
+    if (m) { const lm = /^(.*?)\s*\+(\d+)\/-(\d+)$/.exec(m[2]); files.set(m[1], { path: lm ? lm[1].trim() : m[2], added: lm ? +lm[2] : 0, removed: lm ? +lm[3] : 0 }); continue; }
+    m = /^\s*(\w+)\s*-->\s*(\w+)/.exec(line);
+    if (m) links.push([m[1], m[2]]);
+  }
+  const out = new Map<string, StoreChange>();
+  for (const [fid, sid] of links) {
+    const store = stores.get(sid), f = files.get(fid); if (!store || !f) continue;
+    const sc = out.get(store) ?? { store, files: [], added: 0, removed: 0 };
+    sc.files.push({ path: f.path, added: f.added, removed: f.removed, status: "M" }); sc.added += f.added; sc.removed += f.removed;
+    out.set(store, sc);
+  }
+  return [...out.values()];
+}
+/** A rendered graph block: the styled SVG image + a Copy-Mermaid button (draw.io) + the raw code (collapsible). */
+function renderGraphBlock(mermaidText: string, svg: string): HTMLElement {
+  const wrap = el(`<div class="cg-block">
+    <div class="cg-image">${svg || '<div class="goal-opt">Diagram unavailable.</div>'}</div>
+    <div class="cg-tools"><button type="button" class="btn-mini cg-copy">${icon("copy", 13)} Copy Mermaid (draw.io)</button></div>
+    <details class="cg-code"><summary>Mermaid source</summary><pre><code></code></pre></details>
+  </div>`);
+  ($(".cg-code code", wrap) as HTMLElement).textContent = mermaidText;
+  $(".cg-copy", wrap)?.addEventListener("click", () => void copyMarkdown(mermaidText));
+  return wrap;
+}
+function enhanceReportBody(body: HTMLElement | null, _title: string): void {
+  if (!body) return;
+  const h1 = body.querySelector("h1"); // drop the leading title H1 (header already shows it)
+  if (h1 && !h1.previousElementSibling) h1.remove();
+  for (const strong of Array.from(body.querySelectorAll("strong")).slice(0, 4)) { // outcome emoji → SVG badge
+    const txt = strong.textContent ?? "";
+    const key = Object.keys(OUTCOME_ICON).find((e) => txt.startsWith(e));
+    if (!key) continue;
+    const { glyph, cls } = OUTCOME_ICON[key];
+    strong.classList.add("ro-badge", cls);
+    strong.innerHTML = `${icon(glyph, 17)}<span>${esc(txt.slice(key.length).trim())}</span>`;
+    break;
+  }
+  for (const pre of Array.from(body.querySelectorAll("pre"))) { // graphs (our mermaid) → styled SVG; charts → bars
+    const txt = pre.textContent ?? "";
+    if (/%%\s*lucid:changegraph/.test(txt)) { pre.replaceWith(renderGraphBlock(txt, changeGraphSvg(parseChangeGraphMermaid(txt)))); continue; }
+    if (/%%\s*lucid:schema/.test(txt)) { pre.replaceWith(renderGraphBlock(txt, schemaSvg(parseSchemaMermaid(txt)))); continue; }
+    const rows = parseChartRows(txt);
+    if (rows) pre.replaceWith(buildScoreChart(rows));
+  }
+  // P-REPORT.8: each Annex starts on a new printed page (page-break honored by the print CSS).
+  for (const h of Array.from(body.querySelectorAll("h2"))) if (/^\s*annex\b/i.test(h.textContent ?? "")) h.classList.add("annex-break");
+}
+
+// P-REPORT.5: print / save-as-PDF. The on-screen viewer is dark; paper wants the opposite. We drop the
+// already-enhanced report HTML (light-friendly classes: headings, tables, .rchart bars, .ro-badge) into a
+// hidden same-origin iframe with a SELF-CONTAINED light stylesheet (white bg, dark text, print-safe colours,
+// no glows), then invoke the OS print dialog - which offers "Save as PDF" as well as any printer.
+const PRINT_CSS = `
+  @page{margin:16mm}
+  :root{--txt:#14181d;--txt-1:#1b1f26;--txt-2:#3b424b;--txt-3:#5b626d;--txt-4:#8b929c;
+    --bg-1:#fff;--bg-2:#f4f6f9;--bg-3:#e9ecf1;--bg-4:#dfe3e9;--line:#d6dae1;--line-soft:#e5e8ed;--line-strong:#c6ccd4;
+    --accent:#6f3ccb;--accent-2:#9350d6;--green:#1f9b57;--red:#cf4139;--blue:#2f6cd0;--cyan:#1789a2;--amber:#bd8619;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  *{box-sizing:border-box;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  html,body{background:#fff;color:var(--txt-1);margin:0;padding:0}
+  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;font-size:11.5pt;line-height:1.62}
+  .print-title{font-size:19pt;font-weight:700;margin:0 0 3pt;color:#0f1216;letter-spacing:-.01em}
+  .print-sub{font-size:9pt;color:var(--txt-4);font-family:var(--mono);margin:0 0 14pt;padding-bottom:10pt;border-bottom:1px solid var(--line)}
+  .report h1{font-size:14pt;margin:2pt 0 8pt;padding-bottom:5pt;border-bottom:1px solid var(--line);font-weight:700}
+  .report h2{font-size:10pt;text-transform:uppercase;letter-spacing:.05em;color:var(--txt-2);font-weight:700;margin:18pt 0 7pt;padding-left:9pt;border-left:3px solid var(--accent);break-after:avoid}
+  .report h3{font-size:11.5pt;margin:12pt 0 5pt;font-weight:650}
+  .report p{margin:0 0 8pt}
+  .report ul,.report ol{margin:0 0 9pt;padding-left:18pt}
+  .report li{margin:3pt 0}
+  .report li::marker{color:var(--accent)}
+  .report strong,.report b{font-weight:660;color:#0f1216}
+  .report a{color:var(--accent);text-decoration:underline}
+  .report code{font-family:var(--mono);font-size:.86em;background:var(--bg-3);border:1px solid var(--line);border-radius:4px;padding:.5pt 4pt}
+  .report pre{background:var(--bg-2);border:1px solid var(--line);border-radius:8px;padding:9pt 11pt;margin:0 0 10pt;overflow:hidden;white-space:pre-wrap;word-break:break-word;break-inside:avoid}
+  .report pre code{background:none;border:0;padding:0;font-size:9.5pt}
+  .report hr{border:0;border-top:1px solid var(--line);margin:12pt 0}
+  .report blockquote{margin:0 0 9pt;padding:2pt 0 2pt 11pt;border-left:3px solid var(--line-strong);color:var(--txt-2)}
+  .report table{border-collapse:collapse;width:100%;margin:0 0 10pt;font-size:10.5pt;break-inside:avoid}
+  .report th,.report td{border:1px solid var(--line);padding:5pt 8pt;text-align:left;vertical-align:top}
+  .report th{background:var(--bg-3);font-weight:640}
+  .ro-badge{display:inline-flex;align-items:center;gap:5pt;padding:2pt 9pt 2pt 6pt;border-radius:7px;font-weight:640;
+    background:color-mix(in srgb,var(--tc,var(--green)) 15%,#fff);border:1px solid color-mix(in srgb,var(--tc,var(--green)) 40%,var(--line));color:var(--tc,var(--green))}
+  .ro-badge svg{width:14px;height:14px}
+  .ro-badge.ro-met{--tc:var(--green)}.ro-badge.ro-stopped{--tc:var(--amber)}.ro-badge.ro-cancelled{--tc:var(--red)}.ro-badge.ro-error{--tc:var(--red)}
+  .rchart{display:flex;flex-direction:column;gap:8pt;margin:0 0 11pt;padding:11pt 13pt;border:1px solid var(--line);border-radius:10px;background:var(--bg-2);break-inside:avoid}
+  .rchart-row{display:grid;grid-template-columns:96pt 1fr auto;align-items:center;gap:10pt;break-inside:avoid}
+  .rchart-lbl{font-size:10pt;color:var(--txt-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .rchart-track{position:relative;height:11pt;border-radius:6px;overflow:hidden;background:color-mix(in srgb,var(--c) 12%,var(--bg-4))}
+  .rchart-fill{display:block;height:100%;border-radius:6px;min-width:4pt;background:linear-gradient(90deg,color-mix(in srgb,var(--c) 70%,#000),var(--c))}
+  .rchart-val{font-family:var(--mono);font-size:10.5pt;font-weight:700;color:color-mix(in srgb,var(--c) 78%,#000);min-width:30pt;text-align:right}
+  .tldr-model,.tldr-body{color:var(--txt-2)}
+  .print-foot{position:fixed;bottom:6mm;left:0;right:0;font-size:8pt;color:#777;font-family:-apple-system,"Segoe UI",Roboto,sans-serif}
+  /* P-REPORT.8: each Annex starts a new page; the styled graph SVG prints as an image (its Mermaid source is hidden in print). */
+  .annex-break{break-before:page;page-break-before:always}
+  .cg-block{border:1px solid var(--line);border-radius:10px;background:var(--bg-2);margin:0 0 12pt;padding:8pt;break-inside:avoid}
+  .cg-image{overflow:visible}
+  .cg-svg{width:100%;height:auto}
+  .cg-tools,.cg-code{display:none}
+`;
+function printReport(title: string, bodyHtml: string): void {
+  // "Prepared for" identity: corporate email if set, else the attribution identity (workstation-name fallback).
+  const who = (state.email || state.attribution?.identity || state.attribution?.workstation || "").trim();
+  const foot = who ? `<div class="print-foot">Prepared for: ${esc(who)}</div>` : "";
+  const doc = `<!doctype html><html><head><meta charset="utf-8"><title>${esc(title)}</title><style>${PRINT_CSS}</style></head>`
+    + `<body><h1 class="print-title">${esc(title)}</h1><div class="report">${bodyHtml}</div>${foot}</body></html>`;
+  const iframe = document.createElement("iframe");
+  iframe.setAttribute("aria-hidden", "true");
+  iframe.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden";
+  document.body.appendChild(iframe);
+  const cw = iframe.contentWindow;
+  if (!cw) { iframe.remove(); return; }
+  cw.document.open(); cw.document.write(doc); cw.document.close();
+  const fire = () => { try { cw.focus(); cw.print(); } catch { /* print unavailable */ } setTimeout(() => iframe.remove(), 1500); };
+  // give layout + web fonts a beat so the first page isn't blank
+  if (cw.document.readyState === "complete") setTimeout(fire, 150);
+  else iframe.addEventListener("load", () => setTimeout(fire, 150));
+}
+
+async function openReportEntry(kind: string, rel: string, title: string, archived = false): Promise<void> {
+  const r = await bridge.report(kind, rel, archived).catch(() => null);
+  if (!r) { showToast({ tone: "warn", title: "Could not open", desc: "The report file wasn't found.", timeout: 2400 }); return; }
+  const ov = el(`<div class="goal-scrim"><div class="goal-modal aar-viewer">
+    <div class="goal-modal-h"><span class="goal-h-title">${esc(title)}</span>
+      <span class="re-acts">
+        <button type="button" class="btn-mini" id="reListen" data-tip="Read this report aloud · ${modCombo("Space")}|Synthesizes the FULL report on demand (Settings → Voice). On ElevenLabs this runs ~$0.50-1.50; a podcast summary is shorter and cheaper. Press ${modCombo("Space")} to toggle.">${icon("headphones", 16)} Listen</button>
+        <button type="button" class="btn-mini" id="reCopy" data-tip="Copy the report markdown">${icon("copy", 16)} Copy</button>
+        <button type="button" class="btn-mini" id="reDownload" data-tip="Download as .md">${icon("download", 16)} .md</button>
+        <button type="button" class="btn-mini" id="rePrint" data-tip="Print, or save as PDF - opens the system dialog with a clean white layout">${icon("print", 16)} Print</button>
+        <button type="button" class="btn-mini" id="reKg" data-tip="Push to the knowledge graph">${icon("graph", 16)} KG</button>
+        <button type="button" class="btn-mini re-close" id="reClose" data-tip="Close">${icon("close", 16)}</button></span></div>
+    <div class="goal-modal-sub"><code>${esc(rel)}</code></div>
+    <div class="re-note">${icon("info", 12)}<span><b>Listen</b> narrates the whole report (ElevenLabs runs about <b>$0.50-1.50</b>); a <b>podcast summary</b> is shorter and cheaper. For a free, natural-sounding two-host podcast, <a href="#" id="reNotebook">open it in NotebookLM ↗</a> - the report is copied so you can paste it in.</span></div>
+    <div class="goal-aar-body">${renderMarkdown(r.markdown)}</div>
+  </div></div>`);
+  document.body.appendChild(ov);
+  const bodyEl = $(".goal-aar-body", ov) as HTMLElement;
+  enhanceReportBody(bodyEl, title); // dedupe title H1, custom badges + score chart
+  $("#reNotebook", ov)?.addEventListener("click", async (e) => {
+    e.preventDefault();
+    await copyMarkdown(r.markdown).catch(() => {});
+    window.open("https://notebooklm.google.com", "_blank", "noopener");
+    showToast({ title: "Report copied · NotebookLM opened", desc: "In NotebookLM, add a source (paste the report or upload the .md), then click Audio Overview to generate a podcast.", actions: [{ label: "OK" }], timeout: 6000 });
+  });
+  // Ctrl/⌘+Space toggles read-aloud while the report is open (mirrors the reListen button + its tooltip).
+  const onKey = (ev: KeyboardEvent) => {
+    if ((ev.ctrlKey || ev.metaKey) && (ev.code === "Space" || ev.key === " ")) {
+      ev.preventDefault();
+      ($("#reListen", ov) as HTMLElement | null)?.click();
+    }
+  };
+  document.addEventListener("keydown", onKey);
+  const close = () => { document.removeEventListener("keydown", onKey); if (ttsAudio && !ttsAudio.paused) { ttsAudio.pause(); ttsAudio = null; } ov.remove(); };
+  $("#reClose", ov)?.addEventListener("click", close);
+  $("#rePrint", ov)?.addEventListener("click", () => printReport(title, bodyEl.innerHTML));
+  $("#reListen", ov)?.addEventListener("click", (e) => {
+    const plain = ($(".goal-aar-body", ov) as HTMLElement | null)?.innerText?.trim() ?? "";
+    void speakText(plain, e.currentTarget as HTMLElement);
+  });
+  $("#reCopy", ov)?.addEventListener("click", () => void copyMarkdown(r.markdown));
+  $("#reDownload", ov)?.addEventListener("click", () => downloadMarkdown(r.markdown, reportFilename(title)));
+  $("#reKg", ov)?.addEventListener("click", (e) => void pushReportToKg(kind, rel, archived, e.currentTarget as HTMLElement));
+  ov.addEventListener("mousedown", (e) => { if (e.target === ov) close(); });
+}
+
+function openReportsPanel(): void {
+  // Single instance: a second click on the rail glyph TOGGLES (closes) it instead of stacking another panel
+  // (stacked panels also collided on the rpRole/rpProvider/rpVoice ids - the duplicate-id warning).
+  const open = document.querySelector(".reports-modal")?.closest(".goal-scrim");
+  if (open) { if (ttsAudio && !ttsAudio.paused) { ttsAudio.pause(); ttsAudio = null; } open.remove(); return; }
+  const curRole = state.userRole ?? "developer";
+  const rOpt = (r: string, label: string) => `<option value="${r}"${r === curRole ? " selected" : ""}>${label}</option>`;
+  const ov = el(`<div class="goal-scrim"><div class="goal-modal reports-modal">
+    <div class="goal-modal-h"><span class="goal-h-title">${icon("report", 15)} Engineering Reports</span><button type="button" class="btn-mini" id="rpClose">Close</button></div>
+    <div class="goal-modal-sub">Generate a role-tailored engineering brief from the app's DECISIONS + PROGRESS logs, with optional podcast audio. Every past loop After-Action Report and saved brief is listed on the right.</div>
+    <div class="reports-grid">
+      <div class="rp-gen">
+        <div class="goal-row"><label class="goal-lbl" for="rpRole">Report for</label>
+          <select id="rpRole" class="prov-key">${rOpt("developer", "Developer")}${rOpt("security", "Security")}${rOpt("manager", "Manager")}${rOpt("executive", "Executive")}</select></div>
+        <div class="goal-row"><label class="goal-lbl" for="rpProvider">Audio</label>
+          <select id="rpProvider" class="prov-key">
+            <option value="script-only">Script only (no audio)</option>
+            <option value="elevenlabs">ElevenLabs · custom voices</option>
+            <option value="openai-tts">ChatGPT · OpenAI TTS</option>
+            <option value="local-tts">Local TTS · Kokoro (air-gap)</option>
+          </select></div>
+        <div class="goal-row" id="rpVoiceRow" hidden><label class="goal-lbl" for="rpVoice">Voice</label><select id="rpVoice" class="prov-key"><option value="">default voice</option></select></div>
+        <div class="goal-eu-cost" id="rpCost" hidden></div>
+        <div class="rp-nb-tip">${icon("info", 11)}<span>Want a free, natural-sounding two-host podcast? Generate the report, then <a href="https://notebooklm.google.com" target="_blank" rel="noopener" id="rpNotebook">open NotebookLM ↗</a> and paste it in for an Audio Overview.</span></div>
+        <button type="button" class="btn-mini ok" id="rpGenerate">${icon("bolt", 12)} Generate report</button>
+        <div class="rp-sec-exports" id="rpSecExports" hidden>
+          <button type="button" class="btn-mini" id="rpPoam" data-tip="Export a Plan of Actions & Milestones (eMASS-aligned CSV) from the security control crosswalk. Draft - validate mappings against your baseline.">${icon("download", 12)} POA&M (CSV)</button>
+          <button type="button" class="btn-mini" id="rpCkl" data-tip="Export a STIG Viewer checklist (.ckl) of the control crosswalk. Draft - synthetic Vuln IDs keyed by CCI, for analyst validation.">${icon("download", 12)} STIG (.ckl)</button>
+        </div>
+        <div class="goal-eu-result" id="rpResult" hidden></div>
+      </div>
+      <div class="rp-past">
+        <div class="rp-past-h">
+          <span class="rp-tabs" id="rpTabs"><button type="button" class="rp-tab on" data-tab="active">Active</button><button type="button" class="rp-tab" data-tab="archived">Archived</button></span>
+          <span class="gs-sum" id="rpCount"></span></div>
+        <div class="rp-list" id="rpList"><div class="goal-opt">loading…</div></div>
+      </div>
     </div>
-    ${mix ? `<div class="gs-mix">${mix}</div>` : ""}
-    ${blocker ? `<div class="gs-blocker">${icon("info", 11)} most-common stop: <span>${esc(blocker.reason.slice(0, 90))}</span>${blocker.count > 1 ? ` ·&nbsp;${blocker.count}×` : ""}</div>` : ""}
-  </div>`;
+  </div></div>`);
+  document.body.appendChild(ov);
+  const close = () => { if (ttsAudio && !ttsAudio.paused) { ttsAudio.pause(); ttsAudio = null; } ov.remove(); };
+  $("#rpClose", ov)?.addEventListener("click", close);
+  ov.addEventListener("mousedown", (e) => { if (e.target === ov) close(); });
+
+  // provider → voice picker + cost note (ElevenLabs only), lazy-loading voices so a voice is chosen pre-Generate.
+  const prov = $("#rpProvider", ov) as HTMLSelectElement;
+  const voiceRow = $("#rpVoiceRow", ov) as HTMLElement;
+  const voiceSel = $("#rpVoice", ov) as HTMLSelectElement;
+  const cost = $("#rpCost", ov) as HTMLElement;
+  let voicesLoaded = false;
+  const sync = async (): Promise<void> => {
+    const p = prov.value;
+    voiceRow.hidden = p !== "elevenlabs";
+    const c = REPORT_TTS_COST[p]; cost.hidden = !c; cost.innerHTML = c ?? "";
+    if (p === "elevenlabs" && !voicesLoaded) {
+      voicesLoaded = true;
+      const data = await bridge.voices().catch(() => null);
+      if (data?.voices?.length) {
+        const favs = new Set(data.favorites);
+        const opt = (v: import("./bridge.ts").ElevenVoiceView) => `<option value="${esc(v.voiceId)}"${v.voiceId === data.selected ? " selected" : ""}>${esc(v.name)}${v.category ? ` · ${esc(v.category)}` : ""}</option>`;
+        const fav = data.voices.filter((v) => favs.has(v.voiceId)), rest = data.voices.filter((v) => !favs.has(v.voiceId));
+        voiceSel.innerHTML = `<option value="">default voice</option>` + (fav.length ? `<optgroup label="★ Favorites">${fav.map(opt).join("")}</optgroup>` : "") + `<optgroup label="All voices">${rest.map(opt).join("")}</optgroup>`;
+      } else { voiceSel.innerHTML = `<option value="">${esc(data?.note || "add an ElevenLabs key in Settings → Voice")}</option>`; voicesLoaded = false; }
+    }
+  };
+  prov.addEventListener("change", () => void sync());
+  void sync();
+
+  // P-REPORT.6/.8: the POA&M (eMASS CSV) + STIG (.ckl) exports are Security-report artifacts - show only for that role.
+  const roleSel = $("#rpRole", ov) as HTMLSelectElement;
+  const secExports = $("#rpSecExports", ov) as HTMLElement;
+  const syncPoam = () => { secExports.hidden = roleSel.value !== "security"; };
+  roleSel.addEventListener("change", syncPoam);
+  syncPoam();
+  const downloadExport = (blob: Blob, filename: string) => {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a"); a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
+  $("#rpPoam", ov)?.addEventListener("click", async (e) => {
+    const btn = e.currentTarget as HTMLButtonElement; const prev = btn.innerHTML; btn.disabled = true; btn.textContent = "Building POA&M…";
+    try {
+      const r = await bridge.engineeringBriefPoam().catch(() => null);
+      if (!r?.csv) { showToast({ tone: "warn", title: "Could not export", desc: "The POA&M generator returned nothing.", timeout: 2800 }); return; }
+      downloadExport(new Blob([r.csv], { type: "text/csv" }), r.filename || "poam.csv");
+      showToast({ title: "POA&M exported", desc: `${r.rows} control-mapped item${r.rows === 1 ? "" : "s"}. Draft - validate the control/CCI mappings against your baseline before eMASS import.`, timeout: 5200 });
+    } finally { btn.disabled = false; btn.innerHTML = prev; }
+  });
+  $("#rpCkl", ov)?.addEventListener("click", async (e) => {
+    const btn = e.currentTarget as HTMLButtonElement; const prev = btn.innerHTML; btn.disabled = true; btn.textContent = "Building .ckl…";
+    try {
+      const r = await bridge.engineeringBriefCkl().catch(() => null);
+      if (!r?.ckl) { showToast({ tone: "warn", title: "Could not export", desc: "The checklist generator returned nothing.", timeout: 2800 }); return; }
+      downloadExport(new Blob([r.ckl], { type: "application/xml" }), r.filename || "crosswalk.ckl");
+      showToast({ title: "STIG checklist exported", desc: `${r.rows} item${r.rows === 1 ? "" : "s"} as .ckl. Open in STIG Viewer. Draft - Vuln IDs are synthetic, keyed by CCI; validate before use.`, timeout: 5600 });
+    } finally { btn.disabled = false; btn.innerHTML = prev; }
+  });
+
+  // P-REPORT.2 (ADR-0117): the Active/Archived tabs + per-row Copy / Download / Archive (soft) / Restore /
+  // Delete (permanent, archive only). Delete twice = gone: active row → Archive, archived row → Delete.
+  let archived = false;
+  const loadList = async (): Promise<void> => {
+    const list = $("#rpList", ov) as HTMLElement;
+    const reports = await bridge.reports(archived).catch(() => null);
+    ($("#rpCount", ov) as HTMLElement).textContent = reports ? `${reports.length} ${archived ? "archived" : "saved"}` : "";
+    if (!reports || !reports.length) {
+      list.innerHTML = `<div class="goal-opt">${archived ? "The archive is empty." : "No reports yet - generate one, or run a /goal loop to produce an After-Action Report."}</div>`;
+      return;
+    }
+    list.innerHTML = reports.slice(0, 80).map((r) => {
+      const when = r.updatedAt ? new Date(r.updatedAt).toLocaleString() : "";
+      const badge = r.kind === "aar" ? `<span class="rp-badge aar">AAR</span>` : `<span class="rp-badge brief">Brief${r.role ? ` · ${esc(r.role)}` : ""}</span>`;
+      const acts = archived
+        ? `<button type="button" class="rp-act" data-rp-restore data-tip="Restore to active">${icon("restore", 13)}</button>
+           <button type="button" class="rp-act danger" data-rp-delete data-tip="Delete permanently">${icon("trash", 13)}</button>`
+        : `<button type="button" class="rp-act" data-rp-archive data-tip="Archive (soft-delete)">${icon("archive", 13)}</button>`;
+      return `<div class="rp-row" data-kind="${r.kind}" data-rel="${esc(r.rel)}" data-title="${esc(r.title)}">
+        <button type="button" class="rp-open" data-rp-open>${badge}<span class="rp-title">${esc(r.title)}</span><span class="rp-when">${esc(when)}</span></button>
+        <span class="rp-acts">
+          <button type="button" class="rp-act" data-rp-copy data-tip="Copy markdown">${icon("copy", 13)}</button>
+          <button type="button" class="rp-act" data-rp-dl data-tip="Download .md">${icon("download", 13)}</button>
+          <button type="button" class="rp-act" data-rp-kg data-tip="Push to the knowledge graph">${icon("graph", 13)}</button>
+          ${acts}</span></div>`;
+    }).join("");
+  };
+  // Delegated row actions (open / copy / download / archive / restore / delete).
+  ($("#rpList", ov) as HTMLElement).addEventListener("click", async (e) => {
+    const t = e.target as HTMLElement;
+    const row = t.closest(".rp-row") as HTMLElement | null; if (!row) return;
+    const kind = row.dataset.kind!, rel = row.dataset.rel!, title = row.dataset.title || "Report";
+    if (t.closest("[data-rp-open]")) { void openReportEntry(kind, rel, title, archived); return; }
+    if (t.closest("[data-rp-copy]") || t.closest("[data-rp-dl]")) {
+      const r = await bridge.report(kind, rel, archived).catch(() => null);
+      if (!r) { showToast({ tone: "warn", title: "Could not read", desc: "The report file wasn't found.", timeout: 2200 }); return; }
+      if (t.closest("[data-rp-copy]")) void copyMarkdown(r.markdown); else downloadMarkdown(r.markdown, reportFilename(title));
+      return;
+    }
+    if (t.closest("[data-rp-kg]")) { void pushReportToKg(kind, rel, archived, t.closest("[data-rp-kg]") as HTMLElement); return; }
+    if (t.closest("[data-rp-archive]")) { await bridge.reportArchive(kind, rel); showToast({ title: "Archived", desc: "Moved to the archive. Delete again there to remove it for good.", timeout: 2400 }); void loadList(); return; }
+    if (t.closest("[data-rp-restore]")) { await bridge.reportRestore(kind, rel); showToast({ title: "Restored", desc: "Back in the active list.", timeout: 1800 }); void loadList(); return; }
+    if (t.closest("[data-rp-delete]")) {
+      const r = await bridge.reportDelete(kind, rel).catch(() => null);
+      showToast(r?.deleted ? { title: "Deleted", desc: "Permanently removed.", timeout: 1800 } : { tone: "warn", title: "Not deleted", desc: "Only archived reports can be permanently deleted.", timeout: 2600 });
+      void loadList(); return;
+    }
+  });
+  // Active / Archived tab switch.
+  ($("#rpTabs", ov) as HTMLElement).addEventListener("click", (e) => {
+    const tab = (e.target as HTMLElement).closest("[data-tab]") as HTMLElement | null; if (!tab) return;
+    archived = tab.dataset.tab === "archived";
+    ov.querySelectorAll(".rp-tab").forEach((b) => b.classList.toggle("on", (b as HTMLElement).dataset.tab === tab.dataset.tab));
+    void loadList();
+  });
+  void loadList();
+
+  $("#rpGenerate", ov)?.addEventListener("click", async () => {
+    const btn = $("#rpGenerate", ov) as HTMLButtonElement;
+    const out = $("#rpResult", ov) as HTMLElement;
+    const role = ($("#rpRole", ov) as HTMLSelectElement).value;
+    const provider = prov.value;
+    const prev = btn.innerHTML; btn.disabled = true; btn.textContent = "Generating…";
+    try {
+      const data = await bridge.engineeringBrief(role, true).catch(() => null); // save=1 → lands in the list
+      if (!data) { showToast({ tone: "warn", title: "Could not generate", desc: "The local engine didn't return a brief.", timeout: 2600 }); return; }
+      out.hidden = false;
+      const counts = `<div class="goal-eu-counts">${Object.entries(data.counts).map(([k, v]) => `<b>${v}</b> ${k}`).join(" · ")}</div>`;
+      out.innerHTML = counts + `<div id="rpAudio"></div>` + renderMarkdown(data.brief);
+      enhanceReportBody(out, ""); // P-REPORT.8: render the annex graphs + charts in the preview too
+      if (provider === "elevenlabs" || provider === "openai-tts" || provider === "local-tts") {
+        const slot = $("#rpAudio", ov) as HTMLElement;
+        slot.innerHTML = `<div class="goal-opt">${icon("spark", 11)} Synthesizing audio…</div>`;
+        const a = await bridge.engineeringBriefAudio(provider as never, voiceSel.value || undefined).catch(() => null);
+        if (a?.audioB64) {
+          const url = audioBlobUrl(a.audioB64, a.mime); const ext = a.mime.includes("wav") ? "wav" : "mp3";
+          slot.innerHTML = `<audio controls src="${url}" style="width:100%;margin:6px 0"></audio><a class="btn-mini" download="engineering-report.${ext}" href="${url}">${icon("download", 12)} Download ${ext.toUpperCase()}</a>`;
+        } else { slot.innerHTML = `<div class="goal-opt">Audio not generated - ${esc(a?.note ?? "the TTS endpoint was unreachable")}.</div>`; }
+      }
+      void loadList(); // the just-saved brief now appears in the list
+    } finally { btn.disabled = false; btn.innerHTML = prev; }
+  });
 }
 
 /** Compact duration for the eval banner (mirrors loop_report.formatDuration, kept local to the renderer). */
@@ -3584,8 +5961,15 @@ function slashSource(): SlashItem[] {
   let uses: Record<string, number> = {};
   try { uses = JSON.parse(localStorage.getItem("lucid.skill-usage") || "{}"); } catch { /* none */ }
   const out: SlashItem[] = [];
+  // P-AGENT.8: the flagship /agent command — start the Agent Builder interview. Promoted (high `uses`) so it
+  // surfaces near the top; `complete` lets the user optionally add a one-line description before sending.
+  out.push({ label: "/agent", hint: "Build an AI agent — LUCID interviews you, then opens the Agent Builder", kind: "command", complete: "/agent ", uses: 9000 + (uses["agent"] ?? 0) });
+  // P-CMD.1: create your OWN reusable "/" command by describing it — LUCID interviews you, then saves it.
+  out.push({ label: "/command", hint: "Create your own /command — describe it, LUCID interviews you and saves it", kind: "command", complete: "/command ", uses: 8500 + (uses["command"] ?? 0) });
   for (const s of bundledSkillsByUsage()) out.push({ label: s.name, hint: s.description, kind: "bundled", activate: s.command, uses: uses[s.command] ?? 0 });
   for (const s of state.skills) out.push({ label: `/skill:${s.name}`, hint: s.description || s.source, kind: "project", complete: `/skill:${s.name} `, uses: 0 });
+  // P-CMD.1: the user's own saved commands. Ranked above omp commands (uses:100) so they surface first.
+  for (const c of state.userCommands) out.push({ label: `/${c.name}`, hint: c.description || (c.mode === "skill" ? "your skill" : "your command"), kind: "command", complete: `/${c.name} `, uses: 100 });
   for (const c of state.commands) out.push({ label: `/${c.name}`, hint: c.description ?? "", kind: "command", complete: `/${c.name} `, uses: 0 });
   return out;
 }
@@ -3606,9 +5990,12 @@ function filterSlash(prefix: string): SlashItem[] {
 function closeSlashAC(): void { slashEl?.remove(); slashEl = null; slashItems = []; slashSel = 0; }
 function updateSlashAC(): void {
   const ta = $("#input") as HTMLTextAreaElement | null; if (!ta) return;
-  const m = /^\/(\S*)$/.exec(ta.value); // the whole input is a single "/…" token (no space yet)
-  if (!m || state.streaming) { closeSlashAC(); return; }
-  slashItems = filterSlash(m[1]);
+  // P-CMD.2: complete the "/" token AT THE CARET — commands work anywhere in the body, so the menu opens
+  // mid-sentence too ("fix this /lic…"), not only when the whole input is one token.
+  const caret = ta.selectionStart ?? ta.value.length;
+  const tok = slashTokenBeforeCaret(ta.value.slice(0, caret));
+  if (!tok || state.streaming) { closeSlashAC(); return; }
+  slashItems = filterSlash(tok.slice(1));
   if (!slashItems.length) { closeSlashAC(); return; }
   if (slashSel >= slashItems.length) slashSel = slashItems.length - 1;
   const rows = slashItems.map((it, i) =>
@@ -3623,9 +6010,23 @@ function applySlash(it: SlashItem | undefined): void {
   if (!it) return;
   const ta = $("#input") as HTMLTextAreaElement;
   closeSlashAC();
-  if (it.activate === "goal") { ta.value = ""; autosize(ta); setSendEnabled(); openGoalForm(); return; } // /goal is the REAL loop primitive (P-GOAL.1)
-  if (it.activate) { void activateBundledSkill(it.activate); ta.value = ""; } // built-in skill rides the next turn
-  else if (it.complete) { ta.value = it.complete; }                          // command / project skill: finish typing args
+  // P-CMD.2: operate on the "/" token AT THE CARET so completing/activating mid-body preserves the
+  // surrounding prose instead of clobbering the whole input.
+  const caret = ta.selectionStart ?? ta.value.length;
+  const tok = slashTokenBeforeCaret(ta.value.slice(0, caret));
+  const start = tok ? caret - tok.length : 0;
+  const replaceToken = (replacement: string): void => {
+    if (tok) {
+      ta.value = ta.value.slice(0, start) + replacement + ta.value.slice(caret);
+      const pos = start + replacement.length;
+      ta.setSelectionRange(pos, pos);
+    } else {
+      ta.value = replacement;
+    }
+  };
+  if (it.activate === "goal") { replaceToken(""); autosize(ta); setSendEnabled(); openGoalForm(); return; } // /goal is the REAL loop primitive (P-GOAL.1)
+  if (it.activate) { void activateBundledSkill(it.activate); replaceToken(""); } // built-in skill rides the next turn
+  else if (it.complete) { replaceToken(it.complete); }                           // command / project skill: finish typing args
   autosize(ta); setSendEnabled(); ta.focus();
 }
 /** Intercept a composer keydown while the "/" autocomplete is open. Returns true if it consumed the key. */
@@ -3761,22 +6162,62 @@ function wire(): void {
     const r = (b as HTMLElement).dataset.rail!;
     if (r !== "knowledge") closeKnowledge();
     if (r !== "preview") closePreview(); // P-PREVIEW.1: right-edge surfaces are mutually exclusive
+    if (r !== "agentBuilder") closeAgentBuilder(); // P-AGENT.2b
     if (r === "security" || r === "memory") focusInspector(r);
     else if (r === "dev") { focusInspector("dev"); void loadDev(); } // ADR-0009 Phase D
     else if (r === "chat") { closeSettings(); $("#input")?.focus(); $$(".rail-btn").forEach((x) => x.classList.toggle("active", x === b)); }
     else if (r === "settings") openSettings();
     else if (r === "knowledge") openKnowledge();
     else if (r === "preview") openPreview();
+    else if (r === "agentBuilder") openAgentBuilder(); // P-AGENT.2b
     else palette.show();
   }));
+  // P-AGENT.2b: Agent Builder toolbar (add-node kinds · connect mode · validate · save).
+  $$("[data-ab-add]").forEach((b) => b.addEventListener("click", () => addAbNode((b as HTMLElement).dataset.abAdd as NodeKind)));
+  $("#abConnect")?.addEventListener("click", () => toggleAbConnect());
+  $("#abValidate")?.addEventListener("click", () => renderAbErrors());
+  $("#abSave")?.addEventListener("click", () => void saveAgentBuilder());
+  $("#abExport")?.addEventListener("click", () => void exportAgentBuilder());
+  $("#abRun")?.addEventListener("click", () => openAbRunPanel());
+  $("#abSecrets")?.addEventListener("click", () => void openAbSecretsPanel());
+  $("#abToolsBtn")?.addEventListener("click", () => openAbToolsPanel()); // P-AGENT.9: allow-list chips
+  $("#abRunsBtn")?.addEventListener("click", () => void openAbRunsPanel()); // P-AGENT.13: run traces
+  $("#abScheduleBtn")?.addEventListener("click", () => openAbSchedulePanel()); // P-AGENT.14: cadence runs
+  $("#abHistoryBtn")?.addEventListener("click", () => void openAbHistoryPanel()); // P-AGENT.17: revisions
+  $("#abTemplatesBtn")?.addEventListener("click", () => void openAbTemplatesPanel()); // P-AGENT.17: gallery
+  $("#abShare")?.addEventListener("click", () => void shareAgentBuilder()); // P-AGENT.9: portable share
+  $("#abN8n")?.addEventListener("click", () => void n8nExportAgentBuilder()); // P-AGENT.10: n8n export
+  $("#abN8nPush")?.addEventListener("click", () => void n8nPushAgentBuilder()); // P-AGENT.10: add-on push
+  $("#abImportBtn")?.addEventListener("click", () => ($("#abImportFile") as HTMLInputElement | null)?.click()); // P-AGENT.9
+  $("#abImportFile")?.addEventListener("change", (e) => {
+    const input = e.target as HTMLInputElement;
+    const f = input.files?.[0];
+    input.value = ""; // allow re-importing the same file
+    if (f) void importAgentFile(f);
+  });
   // P-PREVIEW.1 (ADR-0096): preview panel - open a local file, reload, screenshot to chat, close.
   $("#prevClose")?.addEventListener("click", () => closePreview());
   $("#prevOpen")?.addEventListener("click", () => loadPreview(($("#prevPath") as HTMLInputElement | null)?.value ?? ""));
   $("#prevPath")?.addEventListener("keydown", (e) => { if ((e as KeyboardEvent).key === "Enter") loadPreview(($("#prevPath") as HTMLInputElement).value); });
   $("#prevReload")?.addEventListener("click", () => { const f = $("#prevFrame") as HTMLIFrameElement | null; if (f && !f.hidden && f.src) f.src = f.src; });
+  $("#prevBrowse")?.addEventListener("click", () => void browsePreviewFile()); // P-PREVIEW.5: open cwd file
+  $("#prevMarkup")?.addEventListener("click", (e) => openMarkupMenu(e.currentTarget as HTMLElement)); // P-PREVIEW.5: markup tools
   $("#prevShot")?.addEventListener("click", () => void screenshotPreviewToChat());
   // Knowledge graph: close, lens toggle, forget-fact, export (P9.4)
   $("#kgClose")!.addEventListener("click", () => closeKnowledge());
+  // P-KG-CODE.1: workspace code graph - toggle personal ↔ code; Update re-ingests.
+  $("#kgCode")?.addEventListener("click", () => void toggleCodeGraph());
+  $("#kgCodeUpdate")?.addEventListener("click", () => void renderCodeGraph(true));
+  // P-KG-CODE.1b: re-center button + keep the flyout state (resizer + center offset) in sync however the
+  // side panel is toggled (a MutationObserver on its `hidden` attribute catches every path).
+  $("#kgCenter")?.addEventListener("click", () => kgHandle?.fit());
+  const kgSideEl = $("#kgSide");
+  if (kgSideEl) new MutationObserver(() => syncKgSideOpen()).observe(kgSideEl, { attributes: true, attributeFilter: ["hidden"] });
+  // P-KG-CODE.1d: a code-node path (or an Imports/Imported-by entry) opens that file in the IDE.
+  $("#kgSide")?.addEventListener("click", (e) => {
+    const b = (e.target as HTMLElement).closest("[data-cg-open]") as HTMLElement | null;
+    if (b) void openCodeFile(b.dataset.cgOpen!);
+  });
   // P-KG-SEARCH.1: live node search - highlight + center matches as you type (Esc clears).
   $("#kgSearch")?.addEventListener("input", (e) => {
     const q = (e.target as HTMLInputElement).value;
@@ -3785,6 +6226,25 @@ function wire(): void {
   $("#kgSearch")?.addEventListener("keydown", (e) => {
     if ((e as KeyboardEvent).key === "Escape") { (e.target as HTMLInputElement).value = ""; kgHandle?.setSearch(null); }
   });
+  // P-PERF.2: the performance-mode chip - cycle auto -> full -> reduced -> minimal; auto follows battery/CPU.
+  $("#kgPerf")?.addEventListener("click", () => {
+    const m = perfWatch.cycleMode();
+    paintPerfChip();
+    kgForceRender = false; // a mode change re-evaluates the minimal-tier pause
+    showToast({
+      title: `Performance mode: ${m}`,
+      desc: m === "auto" ? `Following battery + CPU (now: ${perfWatch.tier()}).`
+        : m === "minimal" ? "Graph visualization pauses; the agent keeps full knowledge access."
+        : m === "reduced" ? "Calm graph: no particle flow, shorter settle, capped nodes."
+        : "Full fidelity.",
+      timeout: 2600,
+    });
+    if (kgOpen) void (kgCodeMode ? renderCodeGraph(false) : renderKnowledge());
+  });
+  // Auto-tier flips (plug/unplug, battery level) repaint the chip and calm/wake a LIVE graph in place -
+  // no remount, so the layout the user is looking at never jumps.
+  perfWatch.onChange(() => { paintPerfChip(); kgHandle?.setCalm(perfWatch.tier() !== "full"); });
+  paintPerfChip();
   $("#kgImport")!.addEventListener("click", async () => {
     const folder = await openFolderBrowser({ title: "Choose your ChatGPT / Claude / Gemini export", confirm: "Import from here" });
     if (!folder) return;
@@ -3886,13 +6346,22 @@ function wire(): void {
     }
   });
   $("#railCmd")!.addEventListener("click", () => palette.show());
-  $("#cmdkBtn")!.addEventListener("click", () => palette.show());
+  // (the titlebar "Commands" button was removed - the palette opens from the rail glyph #railCmd + Ctrl/⌘+K)
+  $("#cmdkBtn")?.addEventListener("click", () => palette.show());
   $("#railAbout")?.addEventListener("click", () => openAbout());
+  $("#railReports")?.addEventListener("click", () => openReportsPanel()); // P-REPORT.1 (ADR-0116)
   // Per-message copy (markdown) + save-as-.md
   $("#thread")!.addEventListener("click", async (e) => {
     const t = e.target as HTMLElement;
     const copyBtn = t.closest("[data-msg-copy]") as HTMLElement | null;
     const saveBtn = t.closest("[data-msg-save]") as HTMLElement | null;
+    const speakBtn = t.closest("[data-msg-speak]") as HTMLElement | null;
+    if (speakBtn) { // P-VOICE.1: read-aloud — the RENDERED text (no markdown symbols)
+      const plain = (t.closest(".msg")?.querySelector(".text") as HTMLElement | null)?.innerText?.trim()
+        || ((t.closest(".msg") as MsgNode | null)?._md ?? "").trim();
+      if (!plain) { showToast({ tone: "warn", title: "Nothing to read yet", desc: "Wait for the reply to finish.", timeout: 2000 }); return; }
+      void speakText(plain, speakBtn); return;
+    }
     if (!copyBtn && !saveBtn) return;
     const md = ((t.closest(".msg") as MsgNode | null)?._md ?? "").trim();
     if (!md) { showToast({ tone: "warn", title: "Nothing to copy yet", desc: "Wait for the reply to finish.", actions: [{ label: "OK" }], timeout: 2000 }); return; }
@@ -3929,6 +6398,8 @@ function wire(): void {
     if (e.key === "=" || e.key === "+") { e.preventDefault(); nudgeZoom(0.1); }
     else if (e.key === "-" || e.key === "_") { e.preventDefault(); nudgeZoom(-0.1); }
     else if (e.key === "0") { e.preventDefault(); resetZoom(); }
+    // P-REPORT.5b: Ctrl/⌘+D toggles the mic (voice input), matching the mic button's tooltip.
+    else if ((e.key === "d" || e.key === "D") && !e.shiftKey && !e.altKey) { e.preventDefault(); void toggleMicRecording(); }
   });
 
   // inspector collapse ↔ metrics rail
@@ -3936,11 +6407,10 @@ function wire(): void {
   $("#railExpand")!.addEventListener("click", () => setInspectorRail(false));
 
   // composer agent controls → focused per-control dropdowns
-  $("#ctModel")!.addEventListener("click", () => openOptionDropdown($("#ctModel")!, "model"));
-  $("#ctMode")!.addEventListener("click", () => openOptionDropdown($("#ctMode")!, "mode"));
-  $("#ctThink")!.addEventListener("click", () => openOptionDropdown($("#ctThink")!, "thinking"));
+  // (model / mode / thinking dropdowns are reached from the top #modelBadge picker - not duplicated here)
   $("#ctPersona")!.addEventListener("click", () => openPersonaDropdown($("#ctPersona")!));
   $("#ctSkill")!.addEventListener("click", () => openSkillDropdown($("#ctSkill")!));
+  $("#ctMic")?.addEventListener("click", () => void toggleMicRecording()); // P-VOICE.1 (ADR-0115)
 
   // settings page actions (delegated)
   $("#setClose")!.addEventListener("click", () => closeSettings());
@@ -3950,15 +6420,56 @@ function wire(): void {
     if (t.id === "chinaAckInput") { const b = $("#chinaAckBtn", $("#setBody")!) as HTMLButtonElement | null; if (b) b.disabled = (t as HTMLInputElement).value.trim() !== "ACKNOWLEDGE"; }
     if (t.id === "thirdPartyAckInput") { const b = $("#thirdPartyAckBtn", $("#setBody")!) as HTMLButtonElement | null; if (b) b.disabled = (t as HTMLInputElement).value.trim() !== "ACKNOWLEDGE"; }
   });
+  // P-VOICE.1 (ADR-0115): persist a voice setting when a Voice-card control changes.
+  $("#setBody")!.addEventListener("change", async (e) => {
+    const t0 = e.target as HTMLElement;
+    // P-APPEAR.1: chat-background mode + image upload
+    if (t0.id === "bgMode") { void updateChatBg({ mode: (t0 as HTMLSelectElement).value as "off" | "ambient" | "flashlight" }); return; }
+    if (t0.id === "bgFile") {
+      const f = (t0 as HTMLInputElement).files?.[0]; if (!f) return;
+      if (f.size > 9 * 1024 * 1024) { showToast({ tone: "warn", title: "Image too large", desc: "Pick an image under ~9 MB (or compress it first).", timeout: 3400 }); return; }
+      const reader = new FileReader();
+      reader.onload = () => void updateChatBg({ image: String(reader.result), mode: state.chatBg.mode === "off" ? "ambient" : state.chatBg.mode });
+      reader.readAsDataURL(f);
+      return;
+    }
+    // P-LOCAL.3 (ADR-0135): enable/disable a Local Provider
+    if (t0.matches("[data-lp-toggle]")) {
+      const row = t0.closest("[data-lp-id]") as HTMLElement | null;
+      if (row?.dataset.lpId) { await bridge.localProviderEnable(row.dataset.lpId, (t0 as HTMLInputElement).checked).catch(() => {}); }
+      return;
+    }
+    const vs = t0.closest("[data-voice-set]") as HTMLInputElement | HTMLSelectElement | null;
+    if (!vs) return;
+    const key = vs.dataset.voiceSet!;
+    await bridge.setVoiceSettings({ [key]: vs.value } as never).catch(() => {});
+    if (key === "sttProvider") { const row = $("#voiceSttUrlRow"); if (row) (row as HTMLElement).hidden = vs.value !== "whisper"; }
+    if (key === "ttsProvider") void loadVoices(); // only ElevenLabs lists custom voices
+  });
   $("#setBody")!.addEventListener("click", async (e) => {
     const t = e.target as HTMLElement;
     const head = t.closest("[data-acc-toggle]") as HTMLElement | null;
     if (head) { const k = head.dataset.accToggle!; (head.closest(".acc")!.classList.toggle("open")) ? OPEN.add(k) : OPEN.delete(k); return; }
+    // P-APPEAR.1: chat-background upload / remove
+    if (t.closest("#bgUpload")) { ($("#bgFile") as HTMLInputElement | null)?.click(); return; }
+    if (t.closest("#bgClear")) { void updateChatBg({ image: "", mode: "off" }); return; }
+    // P-LOCAL.3 (ADR-0135): Local Providers card
+    if (t.closest("[data-lp-addtoggle]")) { (t.closest(".lp-add") as HTMLElement | null)?.classList.toggle("open"); return; }
+    if (t.closest("[data-lp-add]")) { await addLocalProviderFromForm(); return; }
+    if (t.closest("[data-lp-test-form]")) { await testLocalProviderConn(($("#lpBaseUrl", $("#setBody")!) as HTMLInputElement | null)?.value ?? ""); return; }
+    const lpTest = t.closest("[data-lp-test]") as HTMLElement | null;
+    if (lpTest) { await testLocalProviderConn(lpTest.dataset.url ?? ""); return; }
+    if (t.closest("[data-lp-rekey-save]")) { const w = t.closest("[data-lp-id]") as HTMLElement | null; if (w) await saveLocalProviderKey(w); return; }
+    if (t.closest("[data-lp-rekey]")) { const rk = (t.closest("[data-lp-id]") as HTMLElement | null)?.querySelector(".lp-rekey") as HTMLElement | null; if (rk) rk.hidden = !rk.hidden; return; }
+    if (t.closest("[data-lp-apply]")) { showToast({ title: "Restarting LUCID…", desc: "Applying your local providers.", timeout: 2000 }); await bridge.relaunch().catch(() => {}); return; }
+    const lpDel = t.closest("[data-lp-del]") as HTMLElement | null;
+    if (lpDel) { const id = (lpDel.closest("[data-lp-id]") as HTMLElement | null)?.dataset.lpId; if (id) await deleteLocalProvider(id); return; }
     // workspace
     if (t.closest("#wsBrowse")) {
-      // In-app folder browser - works in both the packaged app and the browser build, and
-      // flags which folders are git repos (to open or initialize one).
-      const path = await openFolderBrowser();
+      // Prefer the NATIVE OS folder-open dialog (Electron): it browses the whole machine and can create new
+      // folders, with no home-folder confinement. Fall back to the in-app browser only in a plain browser
+      // build where no native dialog exists.
+      const path = bridge.isElectron && bridge.pickFolder ? await bridge.pickFolder() : await openFolderBrowser();
       if (path) await applyWorkspace(path);
       return;
     }
@@ -4002,6 +6513,17 @@ function wire(): void {
       state.thirdPartyAck = !!(await bridge.setThirdPartyAck(false))?.acknowledged;
       fillSec("others", secOthers(state.auth));
       showToast({ title: "Re-locked", desc: "Third-party providers are hidden again behind the acknowledgement.", actions: [{ label: "OK" }], timeout: 2600 });
+      return;
+    }
+    if (t.closest("#voiceFav")) { // P-VOICE.1: star/unstar the selected voice (favorites list first)
+      const vid = ($("#voiceSelect", $("#setBody")!) as HTMLSelectElement | null)?.value;
+      if (!vid) { showToast({ tone: "warn", title: "Pick a voice", desc: "Select a voice to favorite.", timeout: 2000 }); return; }
+      const data = await bridge.voices().catch(() => null);
+      const favs = new Set(data?.favorites ?? []);
+      const nowFav = !favs.has(vid); if (nowFav) favs.add(vid); else favs.delete(vid);
+      await bridge.setVoiceSettings({ ttsVoiceFavorites: [...favs] });
+      await loadVoices();
+      showToast({ title: nowFav ? "Added to favorites" : "Removed from favorites", desc: nowFav ? "This voice now appears first in the picker." : "Removed from your favorites.", timeout: 1800 });
       return;
     }
     const save = t.closest("[data-savekey]") as HTMLElement | null;
@@ -4088,6 +6610,94 @@ function wire(): void {
     if (mcpToggle) { await bridge.mcpToggle(mcpToggle.dataset.mcpToggle!, mcpToggle.dataset.mcpOn === "1"); hydrateMcp(); return; }
     const mcpRemove = t.closest("[data-mcp-remove]") as HTMLElement | null;
     if (mcpRemove) { await bridge.mcpRemove(mcpRemove.dataset.mcpRemove!); hydrateMcp(); showToast({ title: "Connector removed", desc: "The MCP server was removed; the agent drops it on the next turn.", actions: [{ label: "OK" }], timeout: 3000 }); return; }
+    if (t.closest("#agentAdd")) {
+      const body = $("#setBody")!;
+      const name = (($("#agentName", body) as HTMLInputElement)?.value ?? "").trim();
+      const kind = ($("#agentKind", body) as HTMLSelectElement)?.value ?? "acp";
+      const command = (($("#agentCommand", body) as HTMLInputElement)?.value ?? "").trim();
+      const args = (($("#agentArgs", body) as HTMLInputElement)?.value ?? "").trim();
+      const permissionPolicy = ($("#agentPerm", body) as HTMLSelectElement)?.value ?? "deny";
+      if (!command) { showToast({ title: "Command required", desc: "Enter the command that starts the remote agent's ACP server (e.g. hermes acp).", actions: [{ label: "OK" }], timeout: 4000 }); return; }
+      await bridge.remoteAgentUpsert({ name: name || "Remote agent", kind, command, args, permissionPolicy });
+      hydrateAgents();
+      showToast({ title: "Remote agent added", desc: `${name || "Agent"} is proxied through the Lucid firewall — the agent picks it up on your next turn.`, meta: "scanned both ways · permissions default deny", actions: [{ label: "OK" }], timeout: 5000 });
+      return;
+    }
+    const agentToggle = t.closest("[data-agent-toggle]") as HTMLElement | null;
+    if (agentToggle) { await bridge.remoteAgentToggle(agentToggle.dataset.agentToggle!, agentToggle.dataset.agentOn === "1"); hydrateAgents(); return; }
+    const agentRemove = t.closest("[data-agent-remove]") as HTMLElement | null;
+    if (agentRemove) { await bridge.remoteAgentRemove(agentRemove.dataset.agentRemove!); hydrateAgents(); showToast({ title: "Connection removed", desc: "The remote agent was removed; the agent drops it next turn.", actions: [{ label: "OK" }], timeout: 3000 }); return; }
+    // ── Network Whitelist (P-NETWL.2, ADR-0106) ──
+    if (t.closest("#wlAuthFile")) {
+      const body = $("#setBody")!;
+      const kind = ($("#wlAuthKind", body) as HTMLSelectElement)?.value || "apikey";
+      const label = ($("#wlAuthLabel", body) as HTMLInputElement)?.value.trim() || undefined;
+      const rotRaw = (($("#wlAuthRotate", body) as HTMLInputElement)?.value ?? "").trim();
+      const rotationIntervalDays = rotRaw ? Math.max(0, Math.floor(Number(rotRaw))) : undefined;
+      const r = await bridge.credStoreFile({ kind, label, rotationIntervalDays });
+      if (!r) return; // user cancelled the native dialog
+      if ("error" in r) { showToast({ title: "Couldn't store file", desc: r.error === "os-encryption-unavailable" ? "OS encryption isn't available on this machine, so the secret can't be stored securely (fail-closed)." : r.error, actions: [{ label: "OK" }], timeout: 5000 }); return; }
+      wlPendingCred = { ref: r.ref, kind: r.kind, label: r.label };
+      const btn = t.closest("#wlAuthFile") as HTMLElement; btn.innerHTML = `${icon("check", 12)} ${esc(r.label ?? "file")}`;
+      showToast({ title: "Credential stored (encrypted)", desc: `Saved to the vault as "${esc(r.label ?? r.ref)}". Click Add to attach it to the entry.`, timeout: 3200 });
+      return;
+    }
+    if (t.closest("#wlAdd")) {
+      const body = $("#setBody")!;
+      const pattern = (($("#wlPattern", body) as HTMLInputElement)?.value ?? "").trim();
+      if (!pattern) { showToast({ title: "Pattern required", desc: "Enter a domain (*.example.com) or an IP / CIDR (10.0.0.0/8).", actions: [{ label: "OK" }], timeout: 3000 }); return; }
+      const kind = ($("#wlKind", body) as HTMLSelectElement)?.value === "ip" ? "ip" : "domain";
+      const zone = ($("#wlZone", body) as HTMLSelectElement)?.value === "internal" ? "internal" : "external";
+      const scope = (($("#wlScope", body) as HTMLSelectElement)?.value ?? "always") as "always" | "project" | "loop";
+      const budgetRaw = (($("#wlBudget", body) as HTMLInputElement)?.value ?? "").trim();
+      const callBudget = budgetRaw ? Math.max(0, Math.floor(Number(budgetRaw))) : undefined;
+      const authKind = ($("#wlAuthKind", body) as HTMLSelectElement)?.value ?? "";
+      const authUser = (($("#wlAuthUser", body) as HTMLInputElement)?.value ?? "").trim() || undefined;
+      const authSecret = ($("#wlAuthSecret", body) as HTMLInputElement)?.value ?? "";
+      const rotRaw = (($("#wlAuthRotate", body) as HTMLInputElement)?.value ?? "").trim();
+      const rotationIntervalDays = rotRaw ? Math.max(0, Math.floor(Number(rotRaw))) : undefined;
+      let auth: { kind: string; vaultRef: string; username?: string } | undefined;
+      if (authKind) {
+        let ref: string | undefined;
+        if (authSecret) {
+          const r = await bridge.credStore({ kind: authKind, secret: authSecret, label: (($("#wlAuthLabel", body) as HTMLInputElement)?.value ?? "").trim() || undefined, rotationIntervalDays });
+          if ("error" in r) { showToast({ title: "Couldn't store secret", desc: r.error === "os-encryption-unavailable" ? "OS encryption isn't available; the secret can't be stored securely (fail-closed)." : r.error, actions: [{ label: "OK" }], timeout: 5000 }); return; }
+          ref = r.ref;
+        } else if (wlPendingCred && wlPendingCred.kind === authKind) {
+          ref = wlPendingCred.ref;
+        }
+        if (!ref) { showToast({ title: "Secret needed", desc: "Paste a token / password / API key, or upload a file, for the selected auth type.", actions: [{ label: "OK" }], timeout: 4000 }); return; }
+        auth = { kind: authKind, vaultRef: ref, username: authUser };
+      }
+      const saved = await bridge.whitelistUpsert({ kind, pattern, zone, scope, callBudget, auth });
+      if (!saved) { showToast({ title: "Not added", desc: "That entry was rejected - check the pattern.", actions: [{ label: "OK" }], timeout: 4000 }); return; }
+      wlPendingCred = null;
+      hydrateWhitelist();
+      showToast({ title: "Added to whitelist", desc: `${pattern} will auto-allow${scope === "always" ? "" : ` (${WL_SCOPE_LABEL[scope]!.toLowerCase()} scope)`}${auth ? " · credential attached" : ""}.`, meta: "under the managed ceiling · fail-closed", timeout: 4200 });
+      return;
+    }
+    // P-KEYS.2 (ADR-0107): rotate the credential attached to a whitelist entry (paste or file), in place.
+    const wlRotate = t.closest("[data-wl-rotate]") as HTMLElement | null;
+    if (wlRotate) { openCredRotate(wlRotate, wlRotate.dataset.wlRotate!); return; }
+    // P-NETWL.5 (ADR-0108): the two egress-posture toggles.
+    if (t.closest("#wlAllowSearch")) {
+      const on = ($("#wlAllowSearch", $("#setBody")!) as HTMLInputElement)?.checked ?? true;
+      const r = await bridge.setWhitelistPosture({ allowWebSearch: on });
+      if (r) state.posture = r;
+      fillSec("whitelist", secWhitelist(state.whitelist, state.creds, state.posture));
+      showToast({ title: on ? "Web search on" : "Web search off", desc: on ? "The agent can search the web with the built-in providers, no prompt." : "The agent will ask before each web search.", timeout: 2600 });
+      return;
+    }
+    if (t.closest("#wlAllowAll")) {
+      const on = ($("#wlAllowAll", $("#setBody")!) as HTMLInputElement)?.checked ?? true;
+      const r = await bridge.setWhitelistPosture({ allowAll: on });
+      if (r) state.posture = r;
+      fillSec("whitelist", secWhitelist(state.whitelist, state.creds, state.posture));
+      showToast({ title: on ? "Allow all on" : "Whitelist enforced", desc: on ? "The agent can reach any site + your LAN (it still asks for public IPs and foreign-country sites)." : "Only whitelisted sites auto-allow now - everything else asks first.", meta: "applies immediately, no restart", timeout: 3400 });
+      return;
+    }
+    const wlRemove = t.closest("[data-wl-remove]") as HTMLElement | null;
+    if (wlRemove) { await bridge.whitelistRemove(wlRemove.dataset.wlRemove!); hydrateWhitelist(); showToast({ title: "Removed", desc: "The whitelist entry was removed.", timeout: 2600 }); return; }
     // ── Personalization (ADR-0010/0012) ──
     if (t.closest("#personalToggle")) {
       const enabled = ($("#personalToggle", $("#setBody")!) as HTMLInputElement)?.checked ?? false;
@@ -4238,7 +6848,7 @@ function wire(): void {
           ($(`#deviceCode_${oauthId}`, card) as HTMLInputElement)?.focus();
         }
       } else {
-        showToast({ title: "OAuth started", desc: r?.url ? "Complete the sign-in in your browser, then return — the model list updates automatically." : (r?.output?.slice(0, 160) || "Follow omp's prompt in the GUI server window."), actions: [{ label: "OK" }], timeout: 6000 });
+        showToast({ title: "OAuth started", desc: r?.url ? "Complete the sign-in in your browser, then return - the model list updates automatically." : (r?.output?.slice(0, 160) || "Follow omp's prompt in the GUI server window."), actions: [{ label: "OK" }], timeout: 6000 });
       }
       setTimeout(() => void renderSettings(), 4000);
       void pollOauthThenRefresh(oauthId); // watch for completion, then refresh models
@@ -4275,6 +6885,8 @@ function wire(): void {
       })();
       return;
     }
+    const dnsAdd = (e.target as HTMLElement).closest("[data-dns-add]") as HTMLElement | null;
+    if (dnsAdd) { openWhitelistQuickAdd(dnsAdd, dnsAdd.dataset.dnsAdd!); return; } // P-NETWL.4
     const head = (e.target as HTMLElement).closest("[data-acc-toggle]") as HTMLElement | null;
     if (head) { const k = head.dataset.accToggle!; const acc = head.closest(".acc")!; const open = acc.classList.toggle("open"); open ? OPEN.add(k) : OPEN.delete(k); return; }
     // Approve & retry: the audited fail-closed override for one live gate block (ADR-0019 C).
@@ -4331,6 +6943,32 @@ function wire(): void {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
   });
   ta.addEventListener("blur", () => window.setTimeout(closeSlashAC, 120)); // dismiss when focus leaves (after a click lands)
+  // P-VISION.1 (ADR-0136): paste a snipping-tool / desktop screenshot straight into the prompt bar. Image
+  // clipboard items are staged as thumbnails (NOT auto-sent); text paste passes through untouched.
+  ta.addEventListener("paste", (e) => {
+    const items = (e as ClipboardEvent).clipboardData?.items;
+    const files: File[] = [];
+    for (const it of Array.from(items ?? [])) if (it.kind === "file" && it.type.startsWith("image/")) { const f = it.getAsFile(); if (f) files.push(f); }
+    if (files.length && stageImageFiles(files)) e.preventDefault(); // consumed as images; don't also paste junk text
+  });
+  // Drag-and-drop image files onto the composer.
+  const cw = $(".composer-wrap") as HTMLElement | null;
+  cw?.addEventListener("dragover", (e) => { if ((e as DragEvent).dataTransfer?.types?.includes("Files")) { e.preventDefault(); cw.classList.add("drag"); } });
+  cw?.addEventListener("dragleave", (e) => { if (e.target === cw) cw.classList.remove("drag"); });
+  cw?.addEventListener("drop", (e) => {
+    cw.classList.remove("drag");
+    const files = (e as DragEvent).dataTransfer?.files;
+    if (files?.length && stageImageFiles(files)) e.preventDefault();
+  });
+  // Remove a staged thumbnail.
+  $("#composerThumbs")?.addEventListener("click", (e) => {
+    const btn = (e.target as HTMLElement).closest("[data-att-remove]") as HTMLElement | null;
+    if (!btn) return;
+    const id = btn.dataset.attRemove;
+    state.attachments = state.attachments.filter((a) => a.id !== id);
+    renderComposerThumbs();
+    ($("#input") as HTMLTextAreaElement)?.focus();
+  });
   // P-ACP.4: while a turn runs the Send button is a Stop control (interrupt the turn); else it sends.
   $("#send")!.addEventListener("click", () => { if (state.streaming) void stopTurn(); else void send(); });
 
@@ -4341,7 +6979,7 @@ function wire(): void {
 
   // P-IDE.4: "View in IDE" on chat code blocks → open the read-only Monaco panel (delegated, one
   // listener for all current + future blocks). Exclusivity: opening the IDE closes Settings + KG.
-  setIdeExclusivity(() => { closeSettings(); closeKnowledge(); });
+  setIdeExclusivity(() => { closeSettings(); closeKnowledge(); closeAgentBuilder(); });
   // P-IDE.5: the IDE drops edited code into the chat composer ("Send to chat"), and resolves a
   // Save-As destination (folder pick → filename prompt) for snippets with no bound path.
   setIdeHooks({
@@ -4411,10 +7049,10 @@ const palette = createPalette(() => {
   const acts: Action[] = [
     { id: "cfg", title: "Choose model · mode · thinking…", icon: "spark", hint: "config", run: () => openConfigPopover($("#modelBadge")!) },
     { id: "sec", title: "Open Security panel", icon: "shield", hint: "panel", run: () => focusInspector("security") },
-    { id: "mem", title: "Open Memory & context panel", icon: "brain", hint: "panel", run: () => focusInspector("memory") },
+    { id: "mem", title: "Open Memory & context panel", icon: "savings", hint: "panel", run: () => focusInspector("memory") },
     // P-LOC.3 (ADR-0095): a discoverable entry point for the AI-authored code ledger — opens Memory with
     // the section expanded, so it no longer has to be hunted for inside the panel.
-    { id: "ailoc", title: "Open AI-authored code ledger", icon: "brain", hint: "panel", run: () => { OPEN.add("mem.ailoc"); focusInspector("memory"); } },
+    { id: "ailoc", title: "Open AI-authored code ledger", icon: "savings", hint: "panel", run: () => { OPEN.add("mem.ailoc"); focusInspector("memory"); } },
     { id: "zin", title: "Zoom in", icon: "plus", hint: modSymbol("+"), run: () => nudgeZoom(0.1) },
     { id: "zout", title: "Zoom out", icon: "minus", hint: modSymbol("−"), run: () => nudgeZoom(-0.1) },
     { id: "zreset", title: "Reset text zoom to 100%", icon: "refresh", hint: modSymbol("0"), run: () => resetZoom() },
@@ -4461,6 +7099,7 @@ async function loadConfig(): Promise<void> {
   try {
     const live = await bridge.config();
     state.commands = await bridge.commands();
+    state.userCommands = (await bridge.userCommands()) ?? []; // P-CMD.1: workspace-local user "/" commands
     state.chinaAck = !!(await bridge.chinaAck())?.acknowledged; // P-IDE.1c: gate China-origin models
     state.thirdPartyAck = !!(await bridge.thirdPartyAck())?.acknowledged; // gate the "More providers" list
     state.managed = await bridge.managed(); // ADR-0068 (P-ENT.1): enterprise lock view for the UI
@@ -4531,7 +7170,7 @@ async function pollOauthThenRefresh(oauthId: string): Promise<void> {
       resolved = true;
       await loadConfig();
       if (state.settingsOpen) renderSettings();
-      showToast({ title: "Connected — models updated", desc: `${prov.name} is ready in the model picker.`, actions: [{ label: "OK" }], timeout: 6000 });
+      showToast({ title: "Connected - models updated", desc: `${prov.name} is ready in the model picker.`, actions: [{ label: "OK" }], timeout: 6000 });
       return true;
     }
     return false;
@@ -4561,24 +7200,52 @@ async function applyConfig(configId: string, value: string): Promise<void> {
   }
   const opt = state.config.find((c) => c.id === configId);
   const label = opt?.options.find((o) => o.value === value)?.name ?? value;
-  try { state.config = await bridge.setConfig(configId, value); } catch { /* keep optimistic */ }
-  const o = state.config.find((c) => c.id === configId); if (o) o.currentValue = value;
+  // P-PERF.5 (ADR-0132): OPTIMISTIC - paint the switch NOW; the omp round-trip reconciles in the
+  // background. A busy backend used to hold the badge + status hostage for the whole request (the
+  // "model switching feels stuck" complaint). Failure keeps the optimistic value (as before) but is
+  // no longer silent - a warn toast says the backend didn't confirm.
+  if (opt) opt.currentValue = value;
   if (configId === "model") { state.model = value; const mn = $("#modelName"); if (mn) mn.textContent = modelLabel(value); renderStatus(); }
   updateComposerTools();
+  void bridge.setConfig(configId, value)
+    .then((cfg) => {
+      state.config = cfg;
+      const o = state.config.find((c) => c.id === configId); if (o) o.currentValue = value;
+      updateComposerTools();
+    })
+    .catch(() => showToast({ title: `Couldn't confirm ${opt?.name ?? configId}`, desc: "The backend didn't acknowledge the change - it may not have applied. Try again if new turns don't use it.", tone: "warn", actions: [{ label: "OK" }], timeout: 4200 }));
+  // P-IDE.1e (ADR-0109): selecting Fable 5 raises a persistent privacy notice (no absolute privacy from the
+  // U.S. government) instead of the routine "applied" toast.
+  if (configId === "model" && shortModelId(value) === FABLE_ID) {
+    showToast({ title: "Fable 5 selected - privacy notice", desc: `${FABLE_PRIVACY_WARN} New turns use Fable 5; you can switch models anytime.`, tone: "danger", actions: [{ label: "I understand" }], timeout: 0 });
+    return;
+  }
   showToast({ title: `${opt?.name ?? configId} → ${label}`, desc: configId === "model" ? "New turns use this model." : "Applied to the active session.", actions: [{ label: "OK" }], timeout: 2400 });
 }
 
 const isAsksage = (v: string) => /asksage/i.test(v);
 // Models present in the catalog but NOT currently selectable. Keyed by short id; the value is the
-// reason shown (greyed row + hover banner). Fable 5 + Mythos 5 are ITAR-restricted until the U.S.
-// government clears them - keep them visible-but-disabled so users know they're coming, not missing.
-// (ADR-0029 P-IDE.1b/1d)
+// reason shown (greyed row + hover banner). (ADR-0029 P-IDE.1b/1d)
 const ITAR_REASON = "Currently unavailable - restricted under U.S. ITAR export controls until the government clears it for use (expected soon).";
 const UNAVAILABLE: Record<string, string> = {
-  "claude-fable-5": ITAR_REASON,
-  "claude-mythos-5": ITAR_REASON,
+  "claude-mythos-5": ITAR_REASON, // Mythos 5 stays ITAR-gated until cleared.
 };
-const unavailableReason = (value: string): string | undefined => UNAVAILABLE[shortModelId(value)];
+// P-IDE.1e (ADR-0109): Fable 5 is enabled, but ONLY when a Claude account is connected (it routes through
+// Anthropic), and it carries a U.S.-government privacy notice.
+const FABLE_ID = "claude-fable-5";
+const FABLE_NEEDS_AUTH = "Connect a Claude account to enable Fable 5 - sign in with Claude OAuth or add an ANTHROPIC_API_KEY in Providers.";
+const FABLE_PRIVACY_WARN = "Chat history for this model has NO expectation of absolute privacy from the U.S. government.";
+/** Is a Claude (Anthropic) OAuth session or API key connected? Gates Fable 5. */
+function claudeAuthed(): boolean {
+  const m = (state.auth?.majors ?? []).find((x) => x.id === "anthropic");
+  return !!m && (!!m.oauthActive || !!m.keySet);
+}
+/** Why a model is non-selectable, or undefined if it's available. Fable 5 needs a connected Claude account. */
+function unavailableReason(value: string): string | undefined {
+  const short = shortModelId(value);
+  if (short === FABLE_ID) return claudeAuthed() ? undefined : FABLE_NEEDS_AUTH;
+  return UNAVAILABLE[short];
+}
 // Advisory shown on gov-gateway (AskSage) models until they're cleared for production use.
 const GOV_ADVISORY = "Government (AskSage) model - restricted to internal prototype use only until cleared for production by the U.S. government.";
 // 5-star rating renderer (filled + dimmed). `cls` colors the filled stars.
@@ -4617,7 +7284,9 @@ const modelRow = (o: { value: string; name: string }, sel: string) => {
   const iq = `<span class="row-iq" aria-label="Intelligence ${info.iq} of 5">${"★".repeat(info.iq)}<span class="row-iq-dim">${"☆".repeat(5 - info.iq)}</span></span>`;
   const ctxLbl = info.ctx ?? "";
   const ctx = ctxLbl ? `<span class="row-ctx" data-tip="Context window">${esc(ctxLbl)}</span>` : "";
-  return `<div class="cfg-opt ${o.value === sel ? "on" : ""}" data-val="${esc(o.value)}" data-model="${esc(o.value)}"><span class="tick">${icon("check", 13)}</span><span class="nm">${esc(cleanModelName(o.name))}</span>${prov}${isAsksage(o.value) ? `<span class="gov-pill">Gov</span>` : ""}${ctx}${iq}</div>`;
+  // P-IDE.1e (ADR-0109): a small privacy marker on the Fable 5 row (the hover card + selection toast carry the full notice).
+  const warnPill = shortModelId(o.value) === FABLE_ID ? `<span class="row-warn" data-tip="U.S.-gov privacy notice|${esc(FABLE_PRIVACY_WARN)}">${icon("shield", 10)}</span>` : "";
+  return `<div class="cfg-opt ${o.value === sel ? "on" : ""}" data-val="${esc(o.value)}" data-model="${esc(o.value)}"><span class="tick">${icon("check", 13)}</span><span class="nm">${esc(cleanModelName(o.name))}</span>${prov}${warnPill}${isAsksage(o.value) ? `<span class="gov-pill">Gov</span>` : ""}${ctx}${iq}</div>`;
 };
 
 // ── P-IDE.1 (ADR-0029): model family grouping ────────────────────────────────
@@ -4741,6 +7410,8 @@ function modelTipHTML(value: string): string {
   const gov = isAsksage(value);
   // ITAR-unavailable reason + gov-prototype-only advisory sit above the (always-present) ratings.
   const banner = reason ? `<div class="mt-banner warn">${esc(reason)}</div>` : "";
+  // P-IDE.1e (ADR-0109): Fable 5, once selectable (Claude connected), carries the U.S.-gov privacy notice.
+  const privacyBanner = shortModelId(value) === FABLE_ID && !reason ? `<div class="mt-banner warn">${icon("shield", 12)} ${esc(FABLE_PRIVACY_WARN)}</div>` : "";
   const govNote = gov ? `<div class="mt-banner gov">${esc(GOV_ADVISORY)}</div>` : "";
   const ratings = `<div class="mt-rate">${stars5(info.exp, "exp")}<span class="mt-rlabel">Token Expense</span></div>
     <div class="mt-rate">${stars5(info.iq, "iq")}<span class="mt-rlabel">Intelligence Level</span></div>
@@ -4748,7 +7419,7 @@ function modelTipHTML(value: string): string {
     <div class="mt-row"><span class="mt-k">Best for</span><span class="mt-v">${esc(info.best)}</span></div>
     ${info.ctx ? `<div class="mt-row"><span class="mt-k">Context</span><span class="mt-v">${esc(info.ctx)} tokens</span></div>` : ""}`;
   return `<div class="mt-h"><span class="mt-name">${esc(modelLabel(value))}</span>${gov ? `<span class="gov-pill">Gov</span>` : ""}</div>
-    ${banner}${govNote}${ratings}
+    ${banner}${privacyBanner}${govNote}${ratings}
     <div class="mt-row"><span class="mt-k">Model&nbsp;id</span><span class="mt-v mt-id">${esc(shortModelId(value))}</span></div>
     <div class="mt-foot">Practical guidance · not a benchmark</div>`;
 }
@@ -4835,6 +7506,10 @@ const MODE_DESC: Record<string, string> = {
 };
 const prettyLevel = (name: string) => { const v = String(name).toLowerCase(); return v === "xhigh" ? "X-High" : v.charAt(0).toUpperCase() + v.slice(1); };
 let cfgClose: (() => void) | null = null;
+// P-PERF.5 (ADR-0132): the picker rows are memoized - reopening the popover (the common flip-between-
+// models flow) reuses the last build instead of re-sorting + re-rendering 100-200 rows. The key covers
+// everything the HTML derives from: the curated list, selection, query, collapse state, gov ordering.
+let pickerMemo: { key: string; html: string } | null = null;
 
 function openConfigPopover(anchor: HTMLElement): void {
   cfgClose?.(); // close any popover already open
@@ -4870,7 +7545,10 @@ function openConfigPopover(anchor: HTMLElement): void {
     const draw = (q = "") => {
       const m = state.config.find((c) => c.id === "model");
       const list2 = m ? curatedModels(m) : [];
-      list.innerHTML = familyListHTML(list2, m?.currentValue ?? model.currentValue, q);
+      const cur = m?.currentValue ?? model.currentValue;
+      const key = `${list2.map((o) => o.value).join(",")}|${cur}|${q}|${[...collapsedFamilies()].sort().join(",")}|${state.asksage?.configured ? 1 : 0}`;
+      if (pickerMemo?.key !== key) pickerMemo = { key, html: familyListHTML(list2, cur, q) }; // P-PERF.5 memo
+      list.innerHTML = pickerMemo.html;
       search.placeholder = `Search ${list2.length} models…`;
       const ld = $("#cfgLoading", node) as HTMLElement | null; if (ld) ld.hidden = !state.configCached;
     };
@@ -4955,16 +7633,25 @@ function openOptionDropdown(anchor: HTMLElement, configId: string): void {
 }
 
 // ───────────────────────── text zoom ─────────────────────────
+// The default UI was a touch small, so the baseline now renders 1.2× larger — what used to require 120%
+// zoom IS the new 100%. `state.zoom` stays the LOGICAL level shown in the % chip (default 1 = 100%); the
+// factor actually applied is `state.zoom * ZOOM_BASE`, so the chip still reads 100% at the bigger default.
+const ZOOM_BASE = 1.2;
 function applyZoom(): void {
   state.zoom = Math.max(0.7, Math.min(1.8, Math.round(state.zoom * 100) / 100));
-  bridge.setZoom(state.zoom);
+  bridge.setZoom(state.zoom * ZOOM_BASE);
   const lvl = $("#zoomLvl"); if (lvl) lvl.textContent = `${Math.round(state.zoom * 100)}%`;
   try { localStorage.setItem("lucid.zoom", String(state.zoom)); } catch { /* ignore */ }
 }
 function nudgeZoom(delta: number): void { state.zoom += delta; applyZoom(); }
 function resetZoom(): void { state.zoom = 1; applyZoom(); }
 function initZoom(): void {
-  try { const z = Number(localStorage.getItem("lucid.zoom")); if (z) state.zoom = z; } catch { /* ignore */ }
+  try {
+    // One-time rebaseline to the bigger default: drop any prior stored zoom so everyone lands on the new
+    // 100% (= old 120%) once; adjustments after that persist normally.
+    if (!localStorage.getItem("lucid.zoombase12")) { localStorage.removeItem("lucid.zoom"); localStorage.setItem("lucid.zoombase12", "1"); }
+    const z = Number(localStorage.getItem("lucid.zoom")); if (z) state.zoom = z;
+  } catch { /* ignore */ }
   applyZoom();
 }
 
@@ -4977,10 +7664,11 @@ function initResize(): void {
     const iw = Number(localStorage.getItem("lucid.inspector-w")); if (iw) setW("inspector", iw);
     const kw = Number(localStorage.getItem("lucid.kg-w")); if (kw) setW("kg", kw);
     const pw = Number(localStorage.getItem("lucid.preview-w")); if (pw) setW("preview", pw); // P-PREVIEW.1
+    const ksw = Number(localStorage.getItem("lucid.kgside-w")); if (ksw) setW("kgside", ksw); // P-KG-CODE.1b
   } catch { /* ignore */ }
-  // data-resize value → the panel element id ("kg" → #knowledge); all right-side panels resize from
-  // their left edge, the sidebar (left panel) from its right edge.
-  const elFor = (which: string) => $(`#${which === "kg" ? "knowledge" : which}`)!;
+  // data-resize value → the panel element id ("kg" → #knowledge, "kgside" → the KG side flyout); all
+  // right-side panels resize from their left edge, the sidebar (left panel) from its right edge.
+  const elFor = (which: string) => $(`#${which === "kg" ? "knowledge" : which === "kgside" ? "kgSide" : which}`)!;
   let active: { which: string; el: HTMLElement } | null = null;
   for (const r of $$(".resizer")) {
     r.addEventListener("mousedown", (e) => {
@@ -4996,6 +7684,7 @@ function initResize(): void {
     // KG can collapse toward the chat to a low minimum, or widen up to 80% of the window.
     const [min, max] = active.which === "sidebar" ? [180, 520]
       : active.which === "kg" || active.which === "preview" ? [360, Math.round(window.innerWidth * 0.8)]
+      : active.which === "kgside" ? [200, Math.round(window.innerWidth * 0.6)] // P-KG-CODE.1b: the KG side flyout
       : [300, 720];
     const raw = active.which === "sidebar" ? e.clientX - rect.left : rect.right - e.clientX;
     setW(active.which, Math.max(min, Math.min(max, raw)));
@@ -5039,9 +7728,21 @@ void bridge.getSettings().then((s) => { // your saved name → the "You" label o
   runOnboarding(); // ADR-0088/0089: role pick (if needed) → email → first-run tour, in sequence
 });
 refresh();
+void bridge.chatBackground().then((c) => { if (c) { state.chatBg = c; applyChatBg(c); } }); // P-APPEAR.1: paint the saved chat background
+void bridge.codeGraphAgent().then((a) => { if (a) state.codeGraphAgent = a.enabled; }); // P-KG-SYM.1: reflect the agent-tool opt-in
 void maybeOnboardPersonal(); // P-IMP.2: first-run nudge + expand Personalization until it's configured
 void bridge.auth().then((a) => { if (a) { state.auth = a; renderStatus(); } }); // gate the budget pill (OAuth vs API key) from first paint
 scheduleBudgetPoll(); // provider budget: re-check every 5 min for the current model
-setInterval(refresh, 4000);
-setInterval(renderStatus, 1000);
-setInterval(() => void renderSessions(), 15000);
+// P-PERF.2 (ADR-0129): battery/visibility-aware polling. Work is SKIPPED while the window is hidden and
+// the period stretches on battery tiers (pollDelay); a visibilitychange back to visible catches up at once.
+const adaptivePoll = (baseMs: number, fn: () => void): void => {
+  const loop = (): void => {
+    if (!document.hidden) fn();
+    window.setTimeout(loop, pollDelay(baseMs, perfWatch.tier(), document.hidden));
+  };
+  window.setTimeout(loop, pollDelay(baseMs, perfWatch.tier(), document.hidden));
+};
+adaptivePoll(4000, refresh);
+adaptivePoll(1000, renderStatus);
+adaptivePoll(15000, () => void renderSessions());
+document.addEventListener("visibilitychange", () => { if (!document.hidden) { refresh(); renderStatus(); void renderSessions(); } });

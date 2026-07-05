@@ -189,8 +189,17 @@ describe("AskSage diagnostics + tolerant extraction", () => {
     mockResp({ json: { content: [{ type: "text", text: "hi" }], usage: {} } });
     const lines: string[] = [];
     const orig = process.stderr.write.bind(process.stderr);
+    // CONSTRUCT the precondition instead of assuming it: the host machine may run in developer mode
+    // (LUCID_ASKSAGE_DEBUG=1 in the outer env), which is exactly the leak this test used to trip on.
+    const envBefore = process.env.LUCID_ASKSAGE_DEBUG;
+    delete process.env.LUCID_ASKSAGE_DEBUG;
     (process.stderr as any).write = (s: any) => { lines.push(String(s)); return true; };
-    try { await collect(anthropic(model, { messages: [{ role: "user", content: "x" }] })); } finally { (process.stderr as any).write = orig; }
+    try {
+      await collect(anthropic(model, { messages: [{ role: "user", content: "x" }] }));
+    } finally {
+      (process.stderr as any).write = orig;
+      if (envBefore !== undefined) process.env.LUCID_ASKSAGE_DEBUG = envBefore;
+    }
     expect(lines.some((l) => l.includes("[ASKSAGE_DIAG]"))).toBe(false);
   });
 

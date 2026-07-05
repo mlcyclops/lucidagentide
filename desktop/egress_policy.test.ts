@@ -4,7 +4,44 @@
 // desktop/egress_policy.test.ts — pure egress decision + choice-folding (P-EGRESS.1, ADR-0062).
 
 import { describe, expect, test } from "bun:test";
-import { applyEgressChoice, clampEgress, egressVerdict, extractHost, isLocalFileTarget, type EgressStore } from "./egress_policy.ts";
+import { applyEgressChoice, clampEgress, clampPosture, egressAllowAllVerdict, egressVerdict, extractHost, isForeignTld, isLocalFileTarget, isPrivateOrLanHost, type EgressStore } from "./egress_policy.ts";
+import type { EgressPosture } from "./network_whitelist.ts";
+
+describe("P-NETWL.5 (ADR-0108): allow-all classifier + posture clamp", () => {
+  test("LAN / private / loopback / intranet hosts auto-allow", () => {
+    for (const h of ["http://10.1.2.3", "http://192.168.0.5:8080", "http://172.16.9.9", "http://127.0.0.1", "http://localhost:3000", "http://printer.local", "http://build01"]) {
+      expect(egressAllowAllVerdict(h)).toBe("allow");
+    }
+    expect(isPrivateOrLanHost("10.0.0.1")).toBe(true);
+    expect(isPrivateOrLanHost("8.8.8.8")).toBe(false);
+  });
+  test("a PUBLIC IP literal still prompts (country unknown)", () => {
+    expect(egressAllowAllVerdict("http://8.8.8.8")).toBe("prompt");
+    expect(egressAllowAllVerdict("https://1.1.1.1/x")).toBe("prompt");
+  });
+  test("a FOREIGN country-code TLD still prompts; US/generic domains auto-allow", () => {
+    for (const u of ["https://baidu.cn", "https://example.ru", "https://site.de", "https://shop.co.uk", "https://x.jp"]) {
+      expect(egressAllowAllVerdict(u)).toBe("prompt");
+    }
+    for (const u of ["https://github.com", "https://openai.com", "https://claude.ai", "https://vercel.app", "https://a.dev", "https://x.io", "https://y.co", "https://z.us"]) {
+      expect(egressAllowAllVerdict(u)).toBe("allow");
+    }
+    expect(isForeignTld("news.bbc.co.uk")).toBe(true);
+    expect(isForeignTld("github.com")).toBe(false);
+    expect(isForeignTld("claude.ai")).toBe(false); // generic-use ccTLD kept quiet
+  });
+  test("an unparseable target prompts (fail-closed)", () => {
+    expect(egressAllowAllVerdict("")).toBe("prompt");
+    expect(egressAllowAllVerdict("   ")).toBe("prompt");
+  });
+  test("clampPosture: a managed restrictive policy forces allowAll OFF (web-search left to user)", () => {
+    const p: EgressPosture = { allowAll: true, allowWebSearch: true };
+    expect(clampPosture(p, undefined)).toEqual(p);
+    expect(clampPosture(p, { disableDangerMode: true })).toEqual({ allowAll: false, allowWebSearch: true });
+    expect(clampPosture(p, { allowedHosts: ["corp.example.com"] })).toEqual({ allowAll: false, allowWebSearch: true });
+    expect(clampPosture(p, { deniedHosts: ["evil.com"] })).toEqual(p); // a deny-list alone doesn't force restrictive
+  });
+});
 
 describe("isLocalFileTarget (P-EGRESS.2, ADR-0094)", () => {
   test("file:// URLs are local", () => {

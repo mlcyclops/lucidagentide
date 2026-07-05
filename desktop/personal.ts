@@ -424,6 +424,24 @@ export async function learnFromTurn(
   catch { /* best-effort; the turn already happened */ }
 }
 
+/** P-REPORT.3 (ADR-0117): push a report (loop AAR or brief) into the KG as ONE trusted node - the whole
+ *  report markdown as a single fact under an "Engineering Report: <title>" entity, in the chosen compartment.
+ *  Reports are FIRST-PARTY (LUCID-generated from the repo's own logs), so they enter as trustLabel "trusted";
+ *  the store enforces compartment isolation (a cui push requires the cui store unlocked). No AI extraction
+ *  (the user's choice). Fail-closed: personalization off or a locked target returns an actionable error. */
+export function addReportToKg(scope: PersonalScope, title: string, markdown: string): { ok: boolean; error?: string } {
+  if (!load().personalizationEnabled) return { ok: false, error: "Personalization is off - enable it in Settings first." };
+  const target = scope === "cui" ? cuiStore : store;
+  if (!target) return { ok: false, error: scope === "cui" ? "The CUI knowledge graph is locked - unlock it in Settings." : "The knowledge graph is locked - unlock it in Settings." };
+  const clean = (markdown || "").trim();
+  if (!clean) return { ok: false, error: "empty report" };
+  try {
+    const entityId = target.upsertEntity(`Engineering Report: ${(title || "report").trim()}`.slice(0, 120), "user:decision", "trusted");
+    target.addFact({ entityId, statement: clean.slice(0, 20_000), trustLabel: "trusted", scope });
+    return { ok: true };
+  } catch (e) { return { ok: false, error: String((e as Error)?.message ?? e) }; }
+}
+
 // ── P9.7: import a third-party chat export (ChatGPT / Claude / Gemini) into the active store ──
 export interface ImportResult {
   ok: boolean; error?: string;

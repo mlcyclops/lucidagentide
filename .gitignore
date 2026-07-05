@@ -41,6 +41,8 @@ desktop/dist/
 # --- secrets / credentials (NEVER commit keys or tokens) ---
 lucid-gui.json
 **/lucid-gui.json
+lucid-agents.json
+**/lucid-agents.json
 .env
 .env.*
 *.env
@@ -53,6 +55,9 @@ lucid-gui.json
 *secret*
 *credentials*
 **/auth.json
+# ...but these are first-party SOURCE files (the Agent Builder secret guardrail), not secrets:
+!**/secret_guard.ts
+!**/secret_guard.test.ts
 
 # desktop electron-builder output
 desktop/release/
@@ -74,3 +79,20 @@ tools/seed_personal_facts.ts
 # P-EXT.4: compiled lucid launcher (built during desktop dist)
 /bin/
 netwatch.log
+
+# P-KG-CODE.1: generated per-workspace code-graph cache (the tracked .omp/commands stays)
+.omp/codegraph.json
+.omp/codegraph-symbol.json
+# P-AGENT.2b: per-workspace authored Agent Builder specs (runtime data, not source)
+.omp/agents/
+# P-AGENT.6: exported agent bundles (generated artifacts)
+.omp/agent-exports/
+# P-AGENT.4-live: materialized agent run dirs (generated artifacts)
+.omp/agent-runs/
+
+# P-AGENT.10: portable share files are user artifacts, not repo content
+.omp/agent-shares/
+# goal-loop runtime memory
+.omp/loops/
+# P-CMD.1: user-authored slash commands are personal workspace data (the tracked lucid-* dirs stay)
+.omp/commands/*.json

@@ -10,13 +10,18 @@
 // browser build and the desktop app share one real backend. The preload only
 // adds native window controls + crisp zoom.
 
-import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, safeStorage, shell } from "electron";
 import { spawn, type ChildProcess } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { initAutoUpdate } from "./updater.ts";
 import { ensureRuntimes, findBun, needsBootstrap } from "./runtime.ts";
 import { createSplash, setSplashStatus } from "./splash.ts";
+import { deleteCredential, listCredentials, readCredential, rotateCredential, storeCredential, type SafeStorageLike, type VaultIo } from "./cred_vault.ts";
+import { materializeLocalProviders, registerLocalProviderEgress } from "./local_providers_runtime.ts";
+import { listLocalProviders } from "./settings_store.ts";
+import type { AuthKind } from "./network_whitelist.ts";
 
 const PORT = Number(process.env.LUCID_PORT ?? 5319);
 let REPO = "";
@@ -31,9 +36,14 @@ function startDevServer(): void {
   // findBun() prefers the bundled runtime in packaged builds, falling back to the
   // user's bun. runtimeEnv carries LUCID_OMP_BIN / SCANNER_PYTHON / PATH down to
   // the dev server and its omp + scanner children.
+  // P-LOCAL.2 (ADR-0135): the omp acp runs in this dev child, but the OS-encrypted vault (safeStorage) is
+  // main-only. So MAIN materializes the Local Providers here — writes omp's ~/.omp/agent/models.yml and
+  // resolves each provider's secret from the vault — and injects the keys into the dev child's env (models.yml
+  // holds only the env-var NAME; omp resolves it from this env). Best-effort: never blocks the server start.
+  const lpEnv = prepareLocalProviders();
   dev = spawn(findBun(), ["run", "desktop/dev.ts"], {
     cwd: REPO,
-    env: { ...process.env, ...runtimeEnv, PORT: String(PORT) },
+    env: { ...process.env, ...runtimeEnv, ...lpEnv, PORT: String(PORT) },
     // NOT "inherit": in a packaged GUI app the Electron main has no console, so inheriting
     // makes the console-subsystem Bun allocate its OWN console window (the black pop-up).
     // Pipe instead + windowsHide so no window ever appears; forward output for dev runs.
@@ -66,6 +76,21 @@ function createWindow(): void {
     webPreferences: { preload: preloadPath(), contextIsolation: true, nodeIntegration: false },
   });
   win.once("ready-to-show", () => win!.show());
+  // Spell-check suggestions: Electron's spellchecker underlines misspellings but the app must build the
+  // correction menu itself. Only intercept when there's a misspelled word (so we don't fight Monaco's own
+  // context menu elsewhere); offer the dictionary suggestions + "Add to dictionary".
+  win.webContents.on("context-menu", (_e, params) => {
+    if (!params.misspelledWord) return;
+    const suggestions = params.dictionarySuggestions.slice(0, 6);
+    const template: Electron.MenuItemConstructorOptions[] = suggestions.length
+      ? suggestions.map((s) => ({ label: s, click: () => win?.webContents.replaceMisspelling(s) }))
+      : [{ label: "No suggestions", enabled: false }];
+    template.push(
+      { type: "separator" },
+      { label: "Add to dictionary", click: () => win?.webContents.session.addWordToSpellCheckerDictionary(params.misspelledWord) },
+    );
+    Menu.buildFromTemplate(template).popup({ window: win ?? undefined });
+  });
   // external links (e.g. duckdb.org) open in the OS browser, not a new Electron window
   win.webContents.setWindowOpenHandler(({ url }) => { if (/^https?:/.test(url)) shell.openExternal(url); return { action: "deny" }; });
   // If the dev server isn't answering yet (slow first launch), the load fails — retry a bounded number
@@ -80,8 +105,109 @@ function createWindow(): void {
 
 ipcMain.handle("lucid:pickFolder", async (e) => {
   const w = BrowserWindow.fromWebContents(e.sender) ?? undefined;
-  const r = await dialog.showOpenDialog(w!, { properties: ["openDirectory"], title: "Choose a workspace folder" });
+  // Native OS folder dialog: browse anywhere on the machine and CREATE a new folder from within the dialog.
+  // `createDirectory` enables the New Folder button on macOS (Windows always offers it); the whole tree is
+  // reachable (no home confinement).
+  const r = await dialog.showOpenDialog(w!, { properties: ["openDirectory", "createDirectory"], title: "Choose or create a workspace folder" });
   return r.canceled || !r.filePaths[0] ? null : r.filePaths[0];
+});
+
+// P-NETWL.1 (ADR-0106): native FILE picker for uploading an auth config / token / PEM / API-key file. Like
+// pickFolder, it uses the real OS dialog (reach anywhere), and returns the chosen path or null on cancel.
+// Optional filters/title come from the renderer; unknown shapes fall back to "all files".
+ipcMain.handle("lucid:pickFile", async (e, opts: unknown) => {
+  const w = BrowserWindow.fromWebContents(e.sender) ?? undefined;
+  const o = (opts ?? {}) as { title?: unknown; filters?: unknown };
+  const filters = Array.isArray(o.filters) ? (o.filters as { name: string; extensions: string[] }[]) : undefined;
+  const r = await dialog.showOpenDialog(w!, {
+    properties: ["openFile"],
+    title: typeof o.title === "string" ? o.title : "Choose a file",
+    ...(filters ? { filters } : {}),
+  });
+  return r.canceled || !r.filePaths[0] ? null : r.filePaths[0];
+});
+
+// P-NETWL.1 (ADR-0106): the OS-encrypted credential vault (cred_vault.ts) lives in the main process because
+// Electron's safeStorage is main-only. The renderer can STORE, LIST, and DELETE secrets; it can never READ a
+// plaintext back (decrypt stays here, for future request injection). storeCredential FAIL-CLOSES if OS
+// encryption is unavailable - the handler surfaces { error } rather than ever writing plaintext.
+const CRED_DIR = () => join(homedir(), ".omp", "lucid-cred-vault");
+const ELECTRON_SAFE_STORAGE: SafeStorageLike = {
+  isEncryptionAvailable: () => safeStorage.isEncryptionAvailable(),
+  encryptString: (s) => safeStorage.encryptString(s),
+  decryptString: (b) => safeStorage.decryptString(b),
+};
+const VAULT_IO: VaultIo = {
+  ensureDir: (dir) => mkdirSync(dir, { recursive: true }),
+  writeFile: (p, data) => writeFileSync(p, data, { mode: 0o600 }),
+  readFile: (p) => readFileSync(p),
+  exists: (p) => existsSync(p),
+  remove: (p) => rmSync(p, { force: true }),
+  list: (dir) => (existsSync(dir) ? readdirSync(dir) : []),
+};
+// P-LOCAL.2 (ADR-0135): materialize the Local Providers for the omp child. Reads each declared provider's
+// secret from the OS-encrypted vault (main-only), writes omp's models.yml (env-var references, never the
+// secret), registers each endpoint in the network whitelist, and returns { ENV_VAR: secret } to inject into
+// the dev-server child env so the omp grandchild can resolve them. Fail-soft: any error yields {} and the
+// server still starts (authed local providers simply won't be available until fixed).
+function prepareLocalProviders(): Record<string, string> {
+  try {
+    const defs = listLocalProviders();
+    if (defs.length === 0) return {};
+    const r = materializeLocalProviders({
+      defs,
+      readSecret: (ref) => { try { return readCredential(ELECTRON_SAFE_STORAGE, VAULT_IO, CRED_DIR(), ref); } catch { return null; } },
+    });
+    try { registerLocalProviderEgress(defs, Date.now()); } catch { /* egress registration is best-effort */ }
+    if (r.wrote) console.error(`[LOCAL_PROVIDERS] ${r.included.length} provider(s) → ~/.omp/agent/models.yml${r.skipped.length ? `; skipped ${r.skipped.map((s) => s.id).join(", ")}` : ""}`);
+    else if (r.writeReason) console.error(`[LOCAL_PROVIDERS] models.yml not written: ${r.writeReason}`);
+    return r.childEnv;
+  } catch (err) { console.error("[LOCAL_PROVIDERS] prepare failed:", err); return {}; }
+}
+ipcMain.handle("lucid:credStore", (_e, input: { ref?: string; kind: AuthKind; secret: string; label?: string; expiresAt?: number; rotationIntervalDays?: number }) => {
+  try { return storeCredential(ELECTRON_SAFE_STORAGE, VAULT_IO, CRED_DIR(), { ...input, createdAt: Date.now() }); }
+  catch (err) { return { error: (err as Error)?.message ?? String(err) }; }
+});
+// P-KEYS.2 (ADR-0107): rotate a stored secret IN PLACE (same ref), by paste or by file. Fail-closed: throws
+// (surfaced as {error}) if OS encryption is unavailable, leaving the old secret intact; the secret bytes for
+// the file path are read + re-encrypted in main, never crossing to the renderer.
+ipcMain.handle("lucid:credRotate", (_e, input: { ref: string; secret: string; expiresAt?: number }) => {
+  try { return rotateCredential(ELECTRON_SAFE_STORAGE, VAULT_IO, CRED_DIR(), { ...input, rotatedAt: Date.now() }) ?? { error: "not-found" }; }
+  catch (err) { return { error: (err as Error)?.message ?? String(err) }; }
+});
+ipcMain.handle("lucid:credRotateFile", async (e, input: { ref: string }) => {
+  try {
+    const w = BrowserWindow.fromWebContents(e.sender) ?? undefined;
+    const r = await dialog.showOpenDialog(w!, {
+      properties: ["openFile"],
+      title: "Choose the new secret file (rotation)",
+      filters: [{ name: "Keys & tokens", extensions: ["pem", "key", "crt", "cer", "jwt", "json", "txt", "token"] }, { name: "All files", extensions: ["*"] }],
+    });
+    if (r.canceled || !r.filePaths[0]) return null;
+    const secret = readFileSync(r.filePaths[0], "utf8");
+    return rotateCredential(ELECTRON_SAFE_STORAGE, VAULT_IO, CRED_DIR(), { ref: input.ref, secret, rotatedAt: Date.now() }) ?? { error: "not-found" };
+  } catch (err) { return { error: (err as Error)?.message ?? String(err) }; }
+});
+ipcMain.handle("lucid:credList", () => { try { return listCredentials(VAULT_IO, CRED_DIR()); } catch { return []; } });
+ipcMain.handle("lucid:credDelete", (_e, ref: unknown) => { try { return deleteCredential(VAULT_IO, CRED_DIR(), typeof ref === "string" ? ref : ""); } catch { return false; } });
+ipcMain.handle("lucid:credEncryptionAvailable", () => { try { return safeStorage.isEncryptionAvailable(); } catch { return false; } });
+// P-NETWL.2 (ADR-0106): upload an auth file (token / PEM / API-key / config) straight into the vault. The
+// file is picked + read + encrypted ENTIRELY in main - the secret bytes never cross to the renderer (unlike a
+// paste flow). Returns the credential metadata (+ the source filename as a default label) or { error }.
+ipcMain.handle("lucid:credStoreFile", async (e, input: { kind: AuthKind; label?: string; expiresAt?: number; rotationIntervalDays?: number }) => {
+  try {
+    const w = BrowserWindow.fromWebContents(e.sender) ?? undefined;
+    const r = await dialog.showOpenDialog(w!, {
+      properties: ["openFile"],
+      title: "Choose an auth file (token / PEM / API key / config)",
+      filters: [{ name: "Keys & tokens", extensions: ["pem", "key", "crt", "cer", "jwt", "json", "txt", "token"] }, { name: "All files", extensions: ["*"] }],
+    });
+    if (r.canceled || !r.filePaths[0]) return null; // user cancelled
+    const p = r.filePaths[0];
+    const secret = readFileSync(p, "utf8");
+    const label = input.label && input.label.trim() ? input.label : p.replace(/^.*[\\/]/, ""); // default label = filename
+    return storeCredential(ELECTRON_SAFE_STORAGE, VAULT_IO, CRED_DIR(), { kind: input.kind, secret, label, createdAt: Date.now(), expiresAt: input.expiresAt, rotationIntervalDays: input.rotationIntervalDays });
+  } catch (err) { return { error: (err as Error)?.message ?? String(err) }; }
 });
 
 // P-PREVIEW.1 (ADR-0096): capture the preview region of the window into a PNG data URL. Crops the live
@@ -105,6 +231,14 @@ ipcMain.handle("lucid:revealPath", async (_e, p: unknown) => {
   const target = typeof p === "string" ? p : "";
   if (!target || !existsSync(target)) return false;
   return (await shell.openPath(target)) === "";
+});
+
+// P-LOCAL.3 polish: restart the app so the freshly-spawned dev server + omp pick up the current Local
+// Providers (their secrets are injected into the dev child env at spawn — a restart is the clean apply).
+ipcMain.handle("lucid:relaunch", () => {
+  try { dev?.kill(); } catch { /* best-effort */ }
+  app.relaunch();
+  app.quit();
 });
 
 ipcMain.on("lucid:win", (e, action: string) => {

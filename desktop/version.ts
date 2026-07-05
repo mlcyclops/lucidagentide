@@ -15,4 +15,92 @@
 // v1.8.14 = agent-trust UX (honest tool-failure chip, local-file egress, AI-LOC discoverability) +
 //           role user guides + in-app browser Preview (panel, auto-surface-on-write, hardened sandbox).
 //           (v1.8.13 skipped.)
-export const APP_VERSION = "1.8.14";
+// v1.8.15 = full-tree workspace folder browser (open a folder anywhere, ADR-0103) + bun trustedDependencies
+//           so a from-source `bun install` actually installs Electron's binary.
+// v1.8.16 = preview remote egress-gating (P-PREVIEW.3b) + every gate denial auditable & attributed
+//           (P-ENT.4). Also carries the defensive, functionally-unverified agent preview_open (P-PREVIEW.3a).
+// v1.8.17 = preview actually RENDERS the agent's apps: per-frame served CSP (P-PREVIEW.4b) fixes games that
+//           showed only their HUD (a srcdoc frame inherited script-src 'self' and blocked inline scripts) +
+//           agent-driven preview_open finalized against the real omp API + PREVIEW_POLICY steers the agent
+//           to the panel instead of browser/eval/bash (P-PREVIEW.3a, PREFIX_VERSION 6).
+// v1.8.18 = the agent can SEE its own rendered UI: preview_screenshot returns a PNG of the live preview as
+//           ImageContent (P-PREVIEW.3a-shot) — renderer caches the shot, the read-tier tool fetches it.
+// v1.8.19 = MULTI-FILE apps preview: fold an app's own relative css/js/img/fonts inline before serving
+//           (P-PREVIEW.4c) so index.html + style.css + game.js renders under the same egress-blocked CSP.
+// v1.8.20 = inline expandable code preview for tool steps (P-CHAT.1) — writes syntax-highlighted (Monaco),
+//           edits as red/green diffs, "Open in editor →" into the full Monaco panel; FIX file-edit failures
+//           via edit.mode=replace + native folder Browse (P-EDIT.1); preview auto-shows (no toast) + renders
+//           nested-iframe wrappers (P-PREVIEW.4c follow-up); bigger default zoom + memory→$ icon.
+// v1.8.21 = network whitelist FOUNDATION (P-NETWL.1, ADR-0106): a curated allow-list — internal/external
+//           domain patterns (TLD `*.com` + exact sub-level) and IP/CIDR ranges, per-entry trust scope
+//           (always|project|loop) + call budget — auto-allows egress on top of the per-site gate, always
+//           under the enterprise-managed ceiling (fail-closed). Adds an OS-encrypted credential vault
+//           (Electron safeStorage/DPAPI) for JWT/OAuth/SAML/PEM/API-key/basic secrets — stored encrypted or
+//           REFUSED (never plaintext); native file picker + vault IPC/bridge plumbing. UI lands in .2–.4.
+// v1.8.22 = network whitelist Settings UI (P-NETWL.2, ADR-0106): a "Network Whitelist" section to add/list/
+//           remove domain patterns (`*.com` + exact) and IP/CIDR ranges by internal/external zone + trust
+//           scope + call budget, with an optional auth credential (paste or native file upload) stored in the
+//           OS-encrypted vault (fail-closed: refused, never plaintext). CRUD via /api/whitelist; a match is
+//           read by the live egress gate to auto-allow under the managed ceiling.
+// v1.8.23 = finish the whitelist set: ENFORCE project/loop trust scopes + per-loop call budget (P-NETWL.3 -
+//           egressDecisionDetailed threads project+loop context; the loop runner caps auto-allows per host);
+//           credential last-4 masking (P-KEYS.1, ADR-0107 - the vault stores <=4 chars, the UI shows ••••XXXX);
+//           and click-to-whitelist on the Network-diagnostics DNS pills (P-NETWL.4 - a quick-add popover with
+//           zone/scope/budget). All still under the managed ceiling, fail-closed.
+// v1.8.24 = credential rotation (P-KEYS.2, ADR-0107): rotation VISIBILITY on each whitelisted key
+//           (rotated Nd ago / rotation due / expires in Nd / expired - all from non-secret metadata) + manual
+//           ROTATE-in-place (paste or file, same vaultRef preserved, rotatedAt bumped, last-4 refreshed;
+//           fail-closed - the old secret is left intact if the OS keystore is unavailable). Optional
+//           "rotate every N days" reminder on the add form.
+// v1.8.25 = egress posture (P-NETWL.5, ADR-0108): two PRE-CHECKED personal-mode toggles - "Allow web search"
+//           and "Allow all websites + local LAN" - so agents reach the internet out of the box. The curated
+//           whitelist ENFORCES only when "Allow all" is off; with it on, egress auto-allows EXCEPT it still
+//           prompts for a public IP literal or a foreign-country-TLD site. An enterprise managed policy clamps
+//           allow-all off (the Support-Desk path). Scanner gate unchanged (still fail-closed).
+//           ALSO Fable 5 in the model picker (P-IDE.1e, ADR-0109): enabled when a Claude account is connected
+//           (OAuth or ANTHROPIC_API_KEY), it routes through Anthropic; carries a U.S.-government privacy notice
+//           (row marker + hover banner + a persistent notice when selected).
+// v1.8.26 = FIX live-chat tool calls (P-EXEC.2, ADR-0110): omp 16.1 moved per-tool approval to a FORM
+//           elicitation the client must advertise; without it EVERY bash/eval/edit/delete call silently
+//           failed with "Tool call denied by user" and no prompt. LUCID now advertises `elicitation.form`
+//           + answers the approval (accept the affirmative option), so the approve/deny prompt surfaces and
+//           gated commands run once approved (our session/request_permission gate stays authoritative).
+//           ALSO fixes 12 CodeQL findings (stack-trace exposure, insecure temp files, postMessage origin).
+// v1.8.27 = loop AAR + brief podcast + persistence fixes: chat history now SURVIVES app upgrades (stable
+//           default workspace, not the versioned install dir - ADR-0111/P-WS.1); BROWSE past After-Action
+//           Reports from the goal modal (ADR-0112/P-GOAL.14); the Engineering Update podcast now SYNTHESIZES
+//           real audio (WAV) with inline play + Download, via Kokoro (air-gap) or ChatGPT/OpenAI TTS
+//           (ADR-0113/P-BRIEF.4); the brief accordion relabeled so it's not mistaken for the loop AAR.
+// v1.8.28 = engagement policy (P-CHAT.2, ADR-0114, PREFIX v7): a bare "hi" / new session no longer makes
+//           the agent scan or edit the cwd unprompted - it greets, waits, and offers opt-in numbered next
+//           steps drawn from context + KG recall (with "review the working directory" as an explicit choice).
+// v1.9.0  = a big feature batch (ADR-0115..0128):
+//   • VOICE (ADR-0115): ElevenLabs read-aloud + speech-to-text mic in the composer, offline Whisper/Kokoro
+//     for air-gap, per-report cost hints, and TTS-friendly narration (codes/symbols/markdown stripped).
+//   • ENGINEERING REPORTS rail (ADR-0116/0117): role-tailored briefs (developer/security/manager/executive)
+//     + every loop After-Action Report, with copy / download .md / PRINT-to-PDF (white paper + "Prepared for")
+//     / two-stage archive-delete / push-to-KG, plus a Ctrl/⌘+Space read-aloud hotkey and a NotebookLM link.
+//   • SECURITY COMPLIANCE (ADR-0122): the Security brief ends with a NIST 800-171/800-53 + DISA STIG CCI
+//     crosswalk, and exports an eMASS-aligned POA&M CSV + a native STIG-Viewer .ckl (DRAFT, analyst-validate).
+//   • REPORT ANNEXES (ADR-0124): a change-annotated dependency graph + data-schema map (styled SVG image AND
+//     copyable Mermaid for draw.io), page-broken as print annexes; green/red by lines added/removed.
+//   • UI REVAMP (ADR-0118/0120): live "game-HUD" scoreboard (neutral-until-changed + clockwise racing pulse),
+//     beautiful colour report charts with plasma-on-hover, custom premium SVG icons, print/PDF.
+//   • EXEC TLDR (ADR-0119): a "TLDR" button explains an intimidating command in plain terms via a cheap model;
+//     plus composer spell-check with correction suggestions.
+//   • CHAT BACKGROUND (ADR-0125): a personal background image at 25% - ambient wash, or a flashlight that
+//     reveals it only under the cursor like a dark room.
+//   • PREVIEW MARKUP (ADR-0126): pen / rectangle / text markup over the preview (captured with the screenshot
+//     to chat) + Browse-the-cwd; the token/s readout removed and the done-line contrast raised.
+//   • CODE KNOWLEDGE GRAPH (ADR-0127/0128): ingest the workspace into a file-import OR TypeScript-AST symbol
+//     graph in the KG canvas (click a node → open the file in the IDE), with a level-picker and an opt-in
+//     read-only `codegraph_query` tool the AGENT can call to get blast-radius instead of reading many files.
+// v1.9.1  = tag-only hotfix release (the #192 typescript-bundle fix so the packaged app starts); the in-repo
+//           version strings were not bumped for it - reconciled here.
+// v1.9.2  = battery-aware PERFORMANCE epic (ADR-0129..0132, #193): power/spec-aware render tiers (on battery
+//           the KG goes calm/capped; LOW battery pauses the visualization - the agent's knowledge access is
+//           never gated) + a #kgPerf mode chip; KG layout continuity (re-open = static paint, 0 sim frames)
+//           + kinetic-energy early settle (~87% of the O(n²) budget skipped); incremental session index
+//           (warm sidebar polls parse NOTHING) + tail-first transcript pages ("last N of M") + AC-only
+//           idle prefetch; optimistic model switch + write-behind lastModel + memoized settings load/picker.
+export const APP_VERSION = "1.9.2";

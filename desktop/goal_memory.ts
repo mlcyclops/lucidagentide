@@ -11,7 +11,7 @@
 //
 // The loop owns this file (server-side writes), confined under the loops root via pathWithin.
 
-import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { pathWithin } from "./path_guard.ts";
 import { type LoopRunRecord, parseRunLog, runRecordLine } from "./loop_runlog.ts";
@@ -84,6 +84,71 @@ export function savePreflightReport(workspace: string, id: string, goal: string,
     writeFileSync(target, markdown, "utf8");
     return join(".omp", "loops", file);
   } catch { return null; }
+}
+
+// ── P-GOAL.14 (ADR-0112): browse PAST After-Action Reports ─────────────────────────────────────────
+
+export interface PastReport { rel: string; id: string; goal: string; outcome: string; updatedAt: number }
+
+/** Extract the goal title + outcome badge from a report's markdown (pure) for the past-AAR list. */
+export function summarizeReport(markdown: string): { goal: string; outcome: string } {
+  const goal = /^#\s+After-Action Report:\s*(.+)$/m.exec(markdown ?? "")?.[1]?.trim() ?? "loop";
+  // The outcome line is the first "**<badge>**" after the title, e.g. "**✅ Goal met** - …".
+  const outcome = /\*\*(✅[^*]+|⏹️[^*]+|🛑[^*]+|❗[^*]+)\*\*/.exec(markdown ?? "")?.[1]?.trim() ?? "";
+  return { goal: goal.slice(0, 120), outcome };
+}
+
+/** List the workspace's saved After-Action Reports (`.omp/loops/<id>-<slug>.report.md`), most-recent
+ *  first. Best-effort + confined to the loops root; empty when none. The `id` is the loop id (the same
+ *  stem the memory + run-log share). */
+export function listGoalReports(workspace: string, limit = 50, archived = false): PastReport[] {
+  const root = join(workspace, ".omp", "loops");
+  const dir = archived ? join(root, "archived") : root;
+  if (!existsSync(dir)) return [];
+  let files: string[];
+  try { files = readdirSync(dir); } catch { return []; }
+  const out: PastReport[] = [];
+  for (const f of files) {
+    if (!f.endsWith(".report.md")) continue; // the `archived/` subdir is a dir → naturally skipped in active
+    const target = pathWithin(root, join(dir, f));
+    if (!target) continue;
+    try {
+      const { goal, outcome } = summarizeReport(readFileSync(target, "utf8"));
+      out.push({ rel: archived ? join(".omp", "loops", "archived", f) : join(".omp", "loops", f), id: f.replace(/-.*$/, ""), goal, outcome, updatedAt: statSync(target).mtimeMs });
+    } catch { /* skip unreadable */ }
+  }
+  out.sort((a, b) => b.updatedAt - a.updatedAt);
+  return out.slice(0, Math.max(0, limit));
+}
+
+/** Read one saved report's markdown, confined to `.omp/loops/` (active OR archived; rejects traversal). */
+export function readGoalReport(workspace: string, rel: string): string | null {
+  const root = join(workspace, ".omp", "loops");
+  const target = pathWithin(root, join(workspace, rel)); // archived rels live under .omp/loops/archived → still within root
+  if (!target) return null;
+  try { return readFileSync(target, "utf8"); } catch { return null; }
+}
+
+// P-REPORT.2 (ADR-0117): two-stage lifecycle for AARs - archive (soft), then permanent delete from archive.
+function moveGoalReport(workspace: string, rel: string, toArchive: boolean): boolean {
+  const root = join(workspace, ".omp", "loops");
+  const src = pathWithin(root, join(workspace, rel));
+  if (!src) return false;
+  const name = rel.replace(/[\\/]+$/, "").split(/[\\/]/).pop() ?? "";
+  const dstDir = toArchive ? join(root, "archived") : root;
+  const dst = pathWithin(root, join(dstDir, name));
+  if (!dst) return false;
+  try { mkdirSync(dstDir, { recursive: true }); renameSync(src, dst); return true; } catch { return false; }
+}
+export function archiveGoalReport(workspace: string, rel: string): boolean { return moveGoalReport(workspace, rel, true); }
+export function restoreGoalReport(workspace: string, rel: string): boolean { return moveGoalReport(workspace, rel, false); }
+/** Permanent delete - ONLY an archived AAR (rel must be under `.omp/loops/archived/`). */
+export function deleteGoalReport(workspace: string, rel: string): boolean {
+  if (!/[\\/]archived[\\/]/.test(rel)) return false; // guard: never permanently delete an ACTIVE report
+  const root = join(workspace, ".omp", "loops");
+  const target = pathWithin(root, join(workspace, rel));
+  if (!target) return false;
+  try { rmSync(target); return true; } catch { return false; } // NO force: a missing file → false (honest)
 }
 
 // ── P-GOAL.10 (ADR-0055): the cross-run evaluation ledger (`.omp/loops/run-log.jsonl`) ─────────────

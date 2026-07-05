@@ -21,6 +21,16 @@ task:
   isolation:
     mode: none
 
+# P-EDIT.1 (ADR-0105): use the `replace` (search/replace) edit tool instead of omp's default `hashline`.
+# hashline anchors each hunk to line-hash markers the model must have "displayed", one hunk per range — a
+# format Claude/GPT frequently violate, producing a stream of "this edit anchors to lines … that […#hash]
+# never displayed" / "anchor line X already targeted by another hunk" failures on real edits. `replace` is
+# the classic, model-friendly find-old→put-new format (what Claude Code / aider use), far more robust here.
+# The security gate still scans every edit in-process, fail-closed — only the edit FORMAT changes. This also
+# gives the inline edit preview (P-CHAT.1) a clean old→new diff instead of a hashline patch.
+edit:
+  mode: replace
+
 # P-EGRESS.1 (ADR-0062): force the network-reaching tools to PROMPT, honored in EVERY approval mode
 # (including omp's default `yolo`, which otherwise auto-runs them). Without this an agent silently browses
 # arbitrary internet sites — a real risk in a security/provenance product. The desktop intercepts these

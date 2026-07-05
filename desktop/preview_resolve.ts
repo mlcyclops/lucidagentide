@@ -22,6 +22,30 @@ import { isLocalFileTarget } from "./egress_policy.ts";
 export const PREVIEW_SANDBOX = "allow-scripts allow-forms";
 // Permissions-Policy for the frame: deny every powerful feature (camera, mic, geolocation, etc.). Empty = none.
 export const PREVIEW_ALLOW = "";
+
+// P-PREVIEW.4b (ADR-0096): the CSP for a SERVED preview document (loaded via `iframe.src` from
+// `/api/preview/serve`, NOT srcdoc). A `srcdoc` frame INHERITS the renderer's strict `script-src 'self'`
+// CSP, which blocks a previewed app's inline <script> — so the app's JS never ran and only its static HTML
+// painted (the bug behind "only the HUD shows"). A document loaded via `src` carries its OWN CSP instead,
+// so this per-frame policy lets a self-contained app actually RUN — inline JS/CSS, inline event handlers,
+// data/blob images + audio, synthesized Web Audio, blob workers — while still:
+//   • `connect-src 'none'` — NO network egress: a previewed, agent-authored app cannot fetch/XHR/WebSocket
+//     out, so it can never bypass LUCID's egress gate (this used to ride on the inherited CSP; now explicit).
+//   • paired with the opaque-origin sandbox (PREVIEW_SANDBOX, no allow-same-origin) so it can't read
+//     LUCID's origin/storage, navigate the top frame, or open popups.
+// `base-uri 'none'` + `form-action 'none'` close the remaining redirect/exfil seams.
+export const PREVIEW_FRAME_CSP = [
+  "default-src 'none'",
+  "script-src 'unsafe-inline' 'unsafe-eval' blob:",
+  "style-src 'unsafe-inline'",
+  "img-src data: blob:",
+  "media-src data: blob:",
+  "font-src data:",
+  "worker-src blob:",
+  "connect-src 'none'",
+  "form-action 'none'",
+  "base-uri 'none'",
+].join("; ");
 /** Sandbox tokens that must NEVER appear (they'd defeat the opaque-origin isolation). Used by the test. */
 export const PREVIEW_SANDBOX_FORBIDDEN = ["allow-same-origin", "allow-top-navigation", "allow-popups", "allow-modals", "allow-pointer-lock", "allow-downloads"] as const;
 
@@ -53,6 +77,22 @@ export function toFileUrl(target: string): string {
 // produces a browser-previewable file, LUCID lights up the Preview panel on it — no custom agent tool, just
 // the desktop reacting to the tool stream it already sees. This pure helper decides whether a tool call is
 // such a write, and returns the path to preview (else null). Tested + demoed.
+
+/** P-PREVIEW.3b (ADR-0096): may a REMOTE URL load in the preview iframe? Two conditions, both required:
+ *  the egress allow-list already approves the site (`egressAllowed`, decided desktop-side by the egress gate
+ *  ADR-0062/0094), AND it's https (no plaintext http into the sandbox). Pure — the gating is testable. */
+export function canPreviewRemote(url: string | null | undefined, egressAllowed: boolean): boolean {
+  return egressAllowed && /^https:\/\//i.test((url ?? "").trim());
+}
+
+/** P-PREVIEW.3a (ADR-0096): if this tool_call is the agent's `preview_open`, return the path it asked to
+ *  preview (else null). Lets acp_backend drive the panel from the agent's own tool call — "the agent drives
+ *  the preview". Pure; the path is still re-gated by resolvePreview before anything renders. */
+export function previewOpenPath(toolName: string | null | undefined, rawInput: any): string | null {
+  if (!/\bpreview_open\b/i.test(toolName ?? "")) return null;
+  const p = typeof (rawInput ?? {}).path === "string" ? rawInput.path.trim() : "";
+  return p || null;
+}
 
 /** File extensions we can render directly in the sandboxed preview iframe (a self-contained page). */
 const PREVIEWABLE_EXT = /\.(html?|svg)$/i;

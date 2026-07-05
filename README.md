@@ -71,7 +71,67 @@ personalization internals are proprietary and intentionally undocumented here - 
 <a href="#-roadmap"><b>Roadmap</b></a> ·
 <a href="DECISIONS.md"><b>Decisions (ADRs)</b></a>
 
+<br/>
+
+<!-- ✦✦✦  HEADLINE BANNER — Claude Fable 5  ✦✦✦ -->
+<table align="center" width="100%">
+<tr>
+<td align="center">
+
+# ✦ Claude&nbsp;5.0&nbsp;**Fable** is here — available through LUCID ✦
+
+### The newest Claude model, <b>Claude&nbsp;Fable&nbsp;5</b> (<code>claude-fable-5</code>), is live in the model picker.
+
+<p align="center"><b>Connect a Claude account</b> (OAuth or <code>ANTHROPIC_API_KEY</code>) and pick <b>Claude&nbsp;Fable&nbsp;5</b> from the model list — that's it. It routes through Anthropic and carries a clear <b>U.S.-government data-privacy notice</b> so you always know where your chat history stands.</p>
+
+</td>
+</tr>
+</table>
+
+<br/>
+
+<h3 align="center">🌐 Also new — your agent is online out of the box, and every tool call works</h3>
+
+<p align="center"><b>“Allow all websites + local LAN” is pre-checked</b>, so a fresh agent can browse and search the web immediately — while the curated, trust-scoped whitelist is one toggle away whenever you want to lock it down (it still asks before a public IP or a foreign-country site). And <b>v1.8.26 fixes a regression</b> where <code>bash</code> / <code>eval</code> / edit tool calls could silently fail with “denied by user” — approvals now surface correctly and gated commands run once approved.</p>
+
 </div>
+
+---
+
+## ✨ What's new in v1.9.0
+
+> A big feature batch. Screenshots below are **placeholders** — drop the real captures into
+> `.github/assets/screenshots/v1.9.0/` (filenames referenced here) and they render automatically.
+
+- **🎙️ Voice** — ElevenLabs read-aloud + a speech-to-text mic in the composer; offline Whisper / Kokoro for
+  air-gap; TTS-friendly narration that skips codes and symbols.
+- **📊 Engineering Reports rail** — role-tailored briefs (developer · security · manager · executive) plus every
+  loop After-Action Report, with copy · download `.md` · **print / save-as-PDF** (clean white paper + a
+  "Prepared for" line) · two-stage archive-delete · push-to-knowledge-graph. `Ctrl/⌘+Space` reads a report aloud.
+- **🛡️ Security compliance** — the Security brief ends with a **NIST 800-171 / 800-53 + DISA STIG CCI**
+  crosswalk and exports an **eMASS-aligned POA&M CSV** and a native **STIG-Viewer `.ckl`** (draft — analyst-validate).
+- **🕸️ Code knowledge graph** — ingest the workspace into a **file-import** or a **TypeScript-AST symbol** graph
+  in the KG canvas (click a node → open the file in the IDE); an opt-in read-only `codegraph_query` tool lets the
+  **agent** get blast-radius answers instead of reading many whole files.
+- **🎨 UI revamp** — a live "game-HUD" scoreboard, colour report charts with plasma-on-hover, premium custom SVG
+  icons; a personalizable **chat background** (ambient 25% wash, or a flashlight that reveals it under the cursor).
+- **🖊️ Preview markup** — pen / rectangle / text markup over the in-app preview, captured with the screenshot to
+  chat; plus a **TLDR** button that explains an intimidating command in plain terms via a cheap model.
+
+<p align="center">
+  <img src=".github/assets/screenshots/v1.9.0/engineering-reports.png" alt="Engineering Reports rail — role-tailored briefs, POA&M/STIG export, print-to-PDF (screenshot placeholder)" width="90%" />
+  <br/><sub><i>Engineering Reports — role-tailored briefs, POA&amp;M / STIG export, print-to-PDF. (screenshot placeholder)</i></sub>
+</p>
+
+<p align="center">
+  <img src=".github/assets/screenshots/v1.9.0/code-graph.png" alt="Code knowledge graph — file-import and AST symbol graph in the KG canvas (screenshot placeholder)" width="90%" />
+  <br/><sub><i>Code knowledge graph — file-import &amp; AST symbol graph, click a node to open the file. (screenshot placeholder)</i></sub>
+</p>
+
+<p align="center">
+  <img src=".github/assets/screenshots/v1.9.0/report-charts.png" alt="Report charts and the live scoreboard (screenshot placeholder)" width="90%" />
+  <br/><sub><i>Colour report charts + the live scoreboard. (screenshot placeholder)</i></sub>
+</p>
 
 ---
 
@@ -320,6 +380,29 @@ run it, and the gate blocks the `bash` call:
 The gate that blocks here is the exact one the test suite proves - see [`CLAUDE.md`](CLAUDE.md) for the
 load-bearing invariants (fail-closed, extend-don't-fork, frozen contracts, byte-stable prefix).
 
+**Network whitelist + credential vault (ADR-0106).** Beyond the ad-hoc "always allow this site" the per-site
+egress gate remembers, Settings → **Network Whitelist** lets you curate an allow-list up front: domain patterns
+(`*.com` TLD or exact `api.example.com`) and IP/CIDR ranges, split by **internal (intranet)** vs **external
+(internet)** zone, each with an **enforced** trust scope - `always` (every session), `project` (only in that
+workspace), or this-`loop` (only during a `/goal` run) - and an optional **per-loop call budget** that caps how
+many times a host auto-allows before falling back to the gate. A match **auto-allows** the agent's network calls
+to that host - but always *under* your organization's managed policy ceiling, so a managed-denied host is never
+granted (tighten-only, fail-closed). You can also **click a DNS pill** in the Network-diagnostics panel to
+whitelist a host the agent just resolved. For sites that need auth, attach a credential
+(JWT/OAuth/SAML/PEM/API-key/username+password) by pasting it or uploading a file; the secret is stored
+**OS-encrypted** (Windows DPAPI / macOS Keychain / Linux libsecret) and the whitelist keeps only a reference,
+shown masked as `••••XXXX` (last-4 only) so you can tell keys apart without revealing them - if the OS keystore
+is unavailable the store is *refused*, never written in plaintext. Each key shows its **rotation status**
+(rotated Nd ago / rotation due / expired) with an optional "rotate every N days" reminder, and a one-click
+**Rotate** replaces the secret in place (same reference, fail-closed). Enterprise key management (cloud-KMS custody
+across AWS/Azure/GCP/Oracle/IBM, automated rotation, attestation) is a private add-on
+([ADR-0107](DECISIONS.md) draws the public/private line).
+
+<div align="center">
+<img src=".github/assets/network-whitelist.png" alt="LucidAgentIDE Settings - the Network Whitelist: a curated domain and IP/CIDR allow-list split by internal/external zone, with enforced trust scopes (always / project / this-loop) and per-loop call budgets, plus per-site OS-encrypted credentials shown masked (last-4) with rotation status and a one-click Rotate" width="720" />
+<br><sub>Network Whitelist - scoped, budgeted, credential-aware egress allow-list (last-4 masking + rotation). <em>Screenshot placeholder.</em></sub>
+</div>
+
 ## <img src=".github/assets/icons/memory-animated.svg" width="28" align="top" alt=""> Memory and the personalization graph
 
 **Two memories, both shipped.**
@@ -567,6 +650,9 @@ table below is the recent slice; [`PROGRESS.md`](PROGRESS.md) has the full per-s
 
 | Phase | Feature | ADR |
 |:--|:--|:--|
+| **P-EXEC.2** | **Tool calls fixed in live chat** - omp 16.1 moved per-tool approval to a FORM elicitation the client must advertise; without it every `bash`/`eval`/edit/delete call silently failed with "Tool call denied by user" and no prompt. LUCID now advertises `elicitation.form` and answers the approval, so the approve/deny prompt surfaces and gated commands run once approved (our `session/request_permission` gate stays authoritative) | [ADR-0110](DECISIONS.md) |
+| **P-NETWL.5 · P-IDE.1e** | **Easy egress + Fable 5** - two pre-checked toggles ("Allow web search", "Allow all websites + local LAN") so agents reach the internet out of the box; the curated whitelist enforces only when "Allow all" is off, and even on it still asks before a public IP or a foreign-country site (enterprise policy can force whitelist-only). Plus **Fable 5** in the model picker when a Claude account is connected, with a U.S.-government privacy notice | [ADR-0108/0109](DECISIONS.md) |
+| **P-NETWL.1-4 · P-KEYS.1-2** | **Network whitelist + credential vault** - a curated allow-list of domains (`*.com` TLD + exact) and IP/CIDR ranges by internal/external zone, managed in Settings, with **enforced** trust scopes (`always` / `project` / this-`loop`) + a per-loop **call budget**; a match auto-allows the agent's network calls *under* the enterprise-managed ceiling (fail-closed). Click a **DNS pill** in Network diagnostics to whitelist a host the agent just resolved. Optional per-site auth (JWT/OAuth/SAML/PEM/API-key/basic) is stored **OS-encrypted** (DPAPI/Keychain/libsecret) via paste or native file upload - refused, never plaintext, if encryption is unavailable - shown masked as `••••XXXX` (last-4 only), with **rotation visibility** (rotated Nd ago / rotation due / expired) and one-click **rotate-in-place** | [ADR-0106/0107](DECISIONS.md) |
 | **P-DOC.1** | **Role-based user guides** - per-role (Dev/Sec/Mgr/Exec) end-to-end walkthroughs under [`docs/guides/`](docs/guides/README.md): step-by-step capability tours, tips/warnings, screenshot placeholders, and cited *Notes and References* | [ADR-0092](DECISIONS.md) |
 | **P-TOOLFAIL.1 · P-EGRESS.2 · P-LOC.3** | **Agent-trust UX** - an honest failed/rejected tool-call chip (distinguishes a tool that *failed* from one that *didn't run*, never implies a denial), a local-file browser open labeled + audited as a local file (not a website), and the AI-authorship ledger made discoverable (palette entry) + never silently vanishing | [ADR-0093/0094/0095](DECISIONS.md) |
 | **P-EXEC.1 · P-GOAL.13** | **Exec-tool safety** - per-action approval for `bash`/`eval` (read-only auto-runs, risky prompts, a catastrophic set *always* prompts/blocks) + a per-command **Speed↔Risk dial** governing the unattended `/goal` loop, with tools & blocks in the After-Action Report | [ADR-0066/0067](DECISIONS.md) |

@@ -12,13 +12,17 @@
 // (OAuth is handled separately via omp's own credential vault / auth-broker -
 //  that's the more secure path and omp owns the storage there.)
 
-import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { closeSync, fchmodSync, fstatSync, openSync, readFileSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { homedir, hostname } from "node:os";
 import { join } from "node:path";
 import { emailDomainAllowed, managedConfig, skipAllowed } from "./managed_config.ts";
+import { remoteAgentMcpServers } from "../harness/mcp/registry.ts";
+import { validateLocalProvider, type LocalProviderDef } from "./local_providers.ts";
 
-const FILE = join(homedir(), ".omp", "lucid-gui.json");
+// LUCID_GUI_SETTINGS_FILE: test seam - point the store at a temp file (never set in production).
+// Read per call (not at module init) so the seam is immune to module-cache order in the test runner.
+const settingsFile = (): string => process.env.LUCID_GUI_SETTINGS_FILE || join(homedir(), ".omp", "lucid-gui.json");
 
 // P-MCP.1 (ADR-0020): one configured MCP server. The token is a bearer credential sent as an
 // Authorization header to a remote (HTTP/SSE) MCP server.
@@ -73,6 +77,8 @@ export interface GuiSettings {
   // ADR-0009 Phase D: developer-mode logging view (telemetry + lineage + audit trails, read-only).
   // OFF by default; flips on the "Logs" rail tab. Gated server-side too.
   developerMode?: boolean;
+  // P-KG-SYM.1: expose the workspace code graph to the agent as a read-only `codegraph_query` tool.
+  codeGraphAgent?: boolean;
   // P-MCP.1 (ADR-0020): configured MCP servers, fed into omp's session/new mcpServers. Tokens live
   // in THIS git-ignored file (mode 0600) like provider keys; safeStorage custody is a later phase.
   mcpServers?: McpServerEntry[];
@@ -102,6 +108,20 @@ export interface GuiSettings {
   // ADR-0089 (P-ROLE.1b): the first-run guided walkthrough has been shown (finished OR skipped).
   // Replay-guard so the tour never re-appears uninvited; the About "Take the tour" button ignores it.
   tourSeen?: boolean;
+  // P-VOICE.1 (ADR-0115): voice (TTS/STT) config.
+  // sttProvider: mic engine — "elevenlabs" (cloud Scribe) or "whisper" (offline, air-gap/DoD). Default whisper.
+  sttProvider?: "elevenlabs" | "whisper";
+  // sttUrl: the offline OpenAI-compatible Whisper server (whisper.cpp / faster-whisper). Default :9000.
+  sttUrl?: string;
+  // ttsProvider: default engine for the brief podcast + read-aloud — "elevenlabs" | "openai-tts" | "local-tts".
+  ttsProvider?: "elevenlabs" | "openai-tts" | "local-tts";
+  // ttsVoice: selected ElevenLabs voice id; ttsVoiceFavorites: starred voice ids (favorites shown first).
+  ttsVoice?: string;
+  ttsVoiceFavorites?: string[];
+  // P-LOCAL.1 (ADR-0135): self-hosted / custom OpenAI-compatible LLM endpoints (Ollama, llama.cpp,
+  // vLLM, a DGX box over a VPN tunnel, …). DECLARATIONS only — each carries an opaque `vaultRef`; the
+  // API key/token lives ONLY in the OS-encrypted vault (cred_vault.ts), never in this file.
+  localProviders?: LocalProviderDef[];
 }
 
 export const ASKSAGE_DEFAULT_LIMIT = 200_000;
@@ -142,6 +162,38 @@ export function setRateLimitProbe(enabled: boolean): GuiSettings {
 export function setDeveloperMode(enabled: boolean): GuiSettings {
   const s = load(); s.developerMode = enabled; save(s); return s;
 }
+export function setCodeGraphAgent(enabled: boolean): GuiSettings {
+  const s = load(); s.codeGraphAgent = enabled; save(s); return s;
+}
+
+// P-VOICE.1 (ADR-0115): voice (TTS/STT) config. Effective values with defaults, for the server + UI.
+export interface VoiceSettings {
+  sttProvider: "elevenlabs" | "whisper";
+  sttUrl: string;
+  ttsProvider: "elevenlabs" | "openai-tts" | "local-tts";
+  ttsVoice: string;
+  ttsVoiceFavorites: string[];
+}
+export function voiceSettings(): VoiceSettings {
+  const s = load();
+  return {
+    sttProvider: s.sttProvider === "elevenlabs" ? "elevenlabs" : "whisper", // offline is the safe default
+    sttUrl: s.sttUrl || process.env.LUCID_STT_URL || "http://localhost:9000",
+    ttsProvider: s.ttsProvider ?? "elevenlabs",
+    ttsVoice: s.ttsVoice ?? "",
+    ttsVoiceFavorites: Array.isArray(s.ttsVoiceFavorites) ? s.ttsVoiceFavorites : [],
+  };
+}
+/** Merge a partial voice-settings patch. Favorites are replaced wholesale (the UI sends the full list). */
+export function setVoiceSettings(patch: Partial<VoiceSettings>): VoiceSettings {
+  const s = load();
+  if (patch.sttProvider) s.sttProvider = patch.sttProvider === "elevenlabs" ? "elevenlabs" : "whisper";
+  if (patch.sttUrl !== undefined) s.sttUrl = patch.sttUrl.trim() || undefined;
+  if (patch.ttsProvider) s.ttsProvider = patch.ttsProvider;
+  if (patch.ttsVoice !== undefined) s.ttsVoice = patch.ttsVoice.trim() || undefined;
+  if (patch.ttsVoiceFavorites) s.ttsVoiceFavorites = patch.ttsVoiceFavorites.slice(0, 100);
+  save(s); return voiceSettings();
+}
 
 // ── ADR-0088 / ADR-0089 (P-ROLE.1 / .1b): onboarding role + first-run tour state ──────────────
 /** Fold any stored/incoming value to a valid role — unknown/empty → the safe "developer" default.
@@ -181,20 +233,84 @@ export function setMcpServerEnabled(id: string, enabled: boolean): void { const 
 /** The ACP `session/new.mcpServers` array for ENABLED servers (ADR-0020 Decision 6: omp owns the
  *  MCP transport; we only assemble the authenticated config). Bearer token → Authorization header. */
 export function mcpServersForAcp(): Record<string, unknown>[] {
-  return (load().mcpServers ?? [])
+  const http = (load().mcpServers ?? [])
     .filter((e) => e.enabled && e.url)
     .map((e) => ({ type: e.transport, name: e.name, url: e.url, headers: e.token ? [{ name: "Authorization", value: `Bearer ${e.token}` }] : [] }));
+  // P-AGENTFW.1 (ADR-0147): enabled remote ACP agents (hermes/openclaw) attach as stdio "agent-firewall"
+  // MCP servers — omp spawns `lucid agent-firewall --conn <id>`, which scans both directions fail-closed.
+  return [...http, ...remoteAgentMcpServers()];
 }
 export function setPersonalScope(scope: GuiSettings["personalScope"]): GuiSettings {
   const s = load(); s.personalScope = scope; save(s); return s;
 }
 
+// ── P-LOCAL.1 (ADR-0135): Local Providers registry ────────────────────────────────────────────
+// Persist ONLY the declaration. `vaultRef` is an opaque handle into the OS-encrypted vault; the
+// secret itself never reaches this file (fail-closed: a def failing validateLocalProvider throws,
+// and any stray secret-ish field is stripped before write).
+export function listLocalProviders(): LocalProviderDef[] { return load().localProviders ?? []; }
+/** Add or update (by id) a Local Provider. Validates first (invalid → throws, never persisted) and
+ *  writes a CLEAN copy carrying only known fields (no inline secret can ride along). */
+export function upsertLocalProvider(def: LocalProviderDef): LocalProviderDef {
+  const clean: LocalProviderDef = {
+    id: def.id, name: def.name?.trim() ?? "", ompProvider: def.ompProvider, baseUrl: def.baseUrl?.trim() ?? "",
+    api: def.api, authKind: def.authKind, vaultRef: def.vaultRef || undefined, headerName: def.headerName?.trim() || undefined,
+    zone: def.zone, enabled: def.enabled !== false,
+    models: (def.models ?? []).map((m) => ({
+      id: m.id, name: m.name?.trim() || undefined, contextWindow: m.contextWindow, maxTokens: m.maxTokens,
+      reasoning: m.reasoning || undefined, vision: m.vision || undefined, supportsTools: m.supportsTools,
+    })),
+    createdAt: def.createdAt, updatedAt: def.updatedAt,
+  };
+  const errs = validateLocalProvider(clean);
+  if (errs.length) throw new Error("invalid local provider: " + errs.join("; "));
+  const s = load(); s.localProviders = s.localProviders ?? [];
+  const i = s.localProviders.findIndex((x) => x.id === clean.id);
+  if (i >= 0) s.localProviders[i] = clean; else s.localProviders.push(clean);
+  save(s); return clean;
+}
+export function removeLocalProvider(id: string): void {
+  const s = load(); s.localProviders = (s.localProviders ?? []).filter((x) => x.id !== id); save(s);
+}
+export function setLocalProviderEnabled(id: string, enabled: boolean): void {
+  const s = load(); const e = (s.localProviders ?? []).find((x) => x.id === id); if (e) { e.enabled = enabled; save(s); }
+}
+
+// P-PERF.5 (ADR-0132): load() used to read + JSON.parse the file on EVERY call - and nearly every
+// request handler calls it (often several times). Memoize the parse on the file's mtime; callers get a
+// structuredClone so today's read-modify-save pattern keeps its exact semantics (every load() is an
+// independent object - a caller mutating without save() can never corrupt the memo). A missing or
+// corrupt file is just {}.
+// Memo key = mtime AND size: two writes can land in the same mtime tick, but a content change almost
+// always changes the byte length too. (Residual blind spot - same-ms, same-size external rewrite -
+// is accepted: this process is the file's only writer in practice.)
+// stat and read/write go through ONE file descriptor (fstat on the open fd), so the metadata the memo
+// is keyed on always describes the exact bytes read/written - no check-then-use race (js/file-system-race).
+let loadMemo: { file: string; mtimeMs: number; size: number; s: GuiSettings } | null = null;
 export function load(): GuiSettings {
-  try { return existsSync(FILE) ? JSON.parse(readFileSync(FILE, "utf8")) : {}; } catch { return {}; }
+  const file = settingsFile();
+  try {
+    const fd = openSync(file, "r"); // throws when missing -> {}
+    try {
+      const st = fstatSync(fd);
+      if (!loadMemo || loadMemo.file !== file || loadMemo.mtimeMs !== st.mtimeMs || loadMemo.size !== st.size) {
+        loadMemo = { file, mtimeMs: st.mtimeMs, size: st.size, s: JSON.parse(readFileSync(fd, "utf8")) as GuiSettings };
+      }
+    } finally { closeSync(fd); }
+    return structuredClone(loadMemo.s);
+  } catch { return {}; }
 }
 export function save(s: GuiSettings): void {
-  writeFileSync(FILE, JSON.stringify(s, null, 2), "utf8");
-  try { chmodSync(FILE, 0o600); } catch { /* best-effort on Windows */ }
+  const file = settingsFile();
+  const fd = openSync(file, "w");
+  try {
+    writeFileSync(fd, JSON.stringify(s, null, 2), "utf8");
+    try { fchmodSync(fd, 0o600); } catch { /* best-effort on Windows */ }
+    try {
+      const st = fstatSync(fd);
+      loadMemo = { file, mtimeMs: st.mtimeMs, size: st.size, s: structuredClone(s) };
+    } catch { loadMemo = null; }
+  } finally { closeSync(fd); }
 }
 
 /** Push stored keys + AskSage base URL into process.env so child `omp acp`
@@ -259,10 +375,25 @@ export function setThirdPartyProvidersAcknowledged(on: boolean): GuiSettings {
 }
 /** P-LOC.1 (ADR-0031): the last omp-reported active model, used to tag AI-LOC ledger rows from the
  *  first edit of a session. Empty until omp reports one (then the gate records model 'unknown'). */
-export function lastModel(): string { return load().lastModel ?? ""; }
+export function lastModel(): string { return lastModelPending ?? load().lastModel ?? ""; }
+// P-PERF.5 (ADR-0132): omp reports its active model repeatedly and picker flips can burst, so the
+// lastModel write is DEBOUNCED write-behind (250ms, generation-token - no stored timer handle).
+// ONLY this low-stakes, high-frequency setter is deferred; keys/MCP/scopes stay synchronous.
+// lastModel() reads its own pending write; a pending value is flushed on process exit.
+let lastModelPending: string | null = null;
+let lastModelGen = 0;
+export function flushPendingSettings(): void {
+  if (lastModelPending === null) return;
+  const m = lastModelPending;
+  lastModelPending = null; lastModelGen++;
+  const s = load(); if (s.lastModel !== m) { s.lastModel = m; save(s); }
+}
+process.on("exit", flushPendingSettings);
 export function setLastModel(model: string): void {
   const m = (model ?? "").trim(); if (!m) return;
-  const s = load(); if (s.lastModel === m) return; s.lastModel = m; save(s);
+  lastModelPending = m;
+  const gen = ++lastModelGen;
+  setTimeout(() => { if (gen === lastModelGen) flushPendingSettings(); }, 250);
 }
 /** Whether the user has set the "AskSage only" model lock (the org-managed lock is OR'd in by callers). */
 export function asksageOnly(): boolean { return !!load().asksageOnly; }
