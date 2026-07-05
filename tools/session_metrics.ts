@@ -7,7 +7,7 @@
 // rate-limit budget). Extracted from memory_data.ts (which imports + RE-EXPORTS everything here, so it
 // stays the single source of truth) so the fail-closed `lucid` launcher can compute `lucid stats`
 // WITHOUT loading the DuckDB native addon that memory_data pulls in for its harness / AI-LOC views.
-// (P-NVIM.3, ADR-0154)
+// (P-NVIM.3, ADR-0155)
 
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -167,7 +167,7 @@ export function rateLimits(): Budget[] | null {
   }
 }
 
-// ── lean session stats (P-NVIM.3, ADR-0154) ──────────────────────────────────
+// ── lean session stats (P-NVIM.3, ADR-0155) ──────────────────────────────────
 // The GUI Memory-inspector numbers (spend + KV-cache % + context-fill) for the current / most-recent omp
 // session, computed from the session .jsonl ONLY (no DuckDB, no omp subprocess) so `lucid stats` can be
 // polled cheaply from an editor statusline.

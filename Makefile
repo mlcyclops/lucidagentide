@@ -439,6 +439,18 @@ demo-P-PREVIEW.6b: ## P-PREVIEW.6b (ADR-0153): the agent READS the live preview 
 demo-P-PREVIEW.6c: ## P-PREVIEW.6c (ADR-0153): the agent CLICKS/TYPES in the live preview by CSS selector — structured actions through the same relay + bridge (fixed allowlist click/type/focus/scroll; still no eval/innerHTML)
 	$(BUN) run desktop/scripts/demo_p_preview_6c.ts
 
+.PHONY: demo-P-DESIGN.1
+demo-P-DESIGN.1: ## P-DESIGN.1 (ADR-0154): the agent honors a workspace DESIGN.md — read + wrapped as a <design-invariants> block and re-delivered in the user-turn preamble EVERY turn (never the frozen prefix); no DESIGN.md → no block
+	$(BUN) run desktop/scripts/demo_p_design_1.ts
+
+.PHONY: demo-P-FIGMA.1
+demo-P-FIGMA.1: ## P-FIGMA.1 (ADR-0154): /figma — parse a Figma file URL → key, walk the doc → top frames (capped), build a design-board HTML with frames inlined as PNG data URLs (names escaped, only data:image src) for the sandboxed preview
+	$(BUN) run desktop/scripts/demo_p_figma_1.ts
+
+.PHONY: demo-P-FIGMA.2
+demo-P-FIGMA.2: ## P-FIGMA.2 (ADR-0154): after /figma import, a guided step — review the design / open-or-build DESIGN.md; an agent write to DESIGN.md is detected (no false positives) → `design-available` pops it out in the IDE, then it's honored as standing guidance
+	$(BUN) run desktop/scripts/demo_p_figma_2.ts
+
 .PHONY: dashboards
 dashboards: ## Materialize dashboard CSVs from a DuckDB into observable/docs/data (DB=path)
 	$(BUN) run harness/scripts/materialize_dashboards.ts $(DB) observable/docs/data

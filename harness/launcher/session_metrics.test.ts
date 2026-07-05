@@ -3,7 +3,7 @@
 
 // harness/launcher/session_metrics.test.ts
 //
-// P-NVIM.3 (ADR-0154) — the DuckDB-free session metrics behind `lucid stats` (spend + KV-cache % +
+// P-NVIM.3 (ADR-0155) — the DuckDB-free session metrics behind `lucid stats` (spend + KV-cache % +
 // context-fill). Drives sessionStats/formatStats over a fixture omp session .jsonl so the numbers the
 // Neovim statusline / :LucidStats float show match how the GUI Memory inspector reads the same file.
 

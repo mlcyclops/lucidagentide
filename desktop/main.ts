@@ -41,9 +41,14 @@ function startDevServer(): void {
   // resolves each provider's secret from the vault — and injects the keys into the dev child's env (models.yml
   // holds only the env-var NAME; omp resolves it from this env). Best-effort: never blocks the server start.
   const lpEnv = prepareLocalProviders();
+  // P-FIGMA.1 (ADR-0154): the Figma PAT lives in the OS-encrypted vault (main-only). Inject it into the dev
+  // child as LUCID_FIGMA_TOKEN so /api/figma/import can call api.figma.com server-side — the key never reaches
+  // the renderer or the agent. (A freshly-entered token is passed in the first import request; this covers
+  // subsequent sessions.) Best-effort — never blocks the server start.
+  const figmaEnv = prepareFigmaToken();
   dev = spawn(findBun(), ["run", "desktop/dev.ts"], {
     cwd: REPO,
-    env: { ...process.env, ...runtimeEnv, ...lpEnv, PORT: String(PORT) },
+    env: { ...process.env, ...runtimeEnv, ...lpEnv, ...figmaEnv, PORT: String(PORT) },
     // NOT "inherit": in a packaged GUI app the Electron main has no console, so inheriting
     // makes the console-subsystem Bun allocate its OWN console window (the black pop-up).
     // Pipe instead + windowsHide so no window ever appears; forward output for dev runs.
@@ -163,6 +168,15 @@ function prepareLocalProviders(): Record<string, string> {
     else if (r.writeReason) console.error(`[LOCAL_PROVIDERS] models.yml not written: ${r.writeReason}`);
     return r.childEnv;
   } catch (err) { console.error("[LOCAL_PROVIDERS] prepare failed:", err); return {}; }
+}
+// P-FIGMA.1 (ADR-0154): read the Figma PAT from the vault (ref "figma_pat") and expose it to the dev child as
+// LUCID_FIGMA_TOKEN, so the Figma REST calls happen server-side without the secret ever reaching the renderer.
+const FIGMA_PAT_REF = "figma_pat";
+function prepareFigmaToken(): Record<string, string> {
+  try {
+    const tok = readCredential(ELECTRON_SAFE_STORAGE, VAULT_IO, CRED_DIR(), FIGMA_PAT_REF);
+    return tok ? { LUCID_FIGMA_TOKEN: tok } : {};
+  } catch { return {}; }
 }
 ipcMain.handle("lucid:credStore", (_e, input: { ref?: string; kind: AuthKind; secret: string; label?: string; expiresAt?: number; rotationIntervalDays?: number }) => {
   try { return storeCredential(ELECTRON_SAFE_STORAGE, VAULT_IO, CRED_DIR(), { ...input, createdAt: Date.now() }); }

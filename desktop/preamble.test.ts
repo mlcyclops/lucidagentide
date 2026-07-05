@@ -63,3 +63,12 @@ test("the live profile reflects the latest value each turn (re-read, not cached)
   const t2 = buildUserTurnPreamble(base({ profile: "<user-profile note=\"learned\">\nA\nB\n</user-profile>" }));
   expect(t2.preamble).toContain("B"); // newly-learned fact shows up on the next turn
 });
+
+test("P-DESIGN.1: DESIGN.md invariants are STANDING guidance, re-delivered every turn", () => {
+  const design = "<design-invariants>\nHonor them: 8px grid, brand blue.\n</design-invariants>";
+  const state = base({ designInvariants: design });
+  expect(buildUserTurnPreamble(state).preamble).toContain("design-invariants");
+  expect(buildUserTurnPreamble(state).preamble).toContain("8px grid"); // present on a second turn too
+  // absent when there is no DESIGN.md
+  expect(buildUserTurnPreamble(base()).preamble).not.toContain("design-invariants");
+});

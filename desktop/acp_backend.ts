@@ -10,7 +10,8 @@
 // on the chat path here too. The wire format was captured from a live omp turn
 // (DECISIONS ADR-0006).
 
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { designDocPath, designInvariantsBlock, isDesignDocPath } from "./design_doc.ts"; // P-DESIGN.1/.2 (ADR-0154): honor DESIGN.md + detect writes
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { ACPClient } from "./acp.ts";
@@ -123,6 +124,17 @@ const CODEGRAPH_EXT = join(REPO, "harness", "omp", "codegraph_extension.ts");
 // P-TASK.3/4 (ADR-0028): config overlay that turns ON task isolation (mode: auto) so subagents
 // can run isolated and return a reviewable patch — containing the blast radius of a bad tool call.
 const ACP_CONFIG = join(REPO, "harness", "omp", "acp_config.yml");
+
+// P-DESIGN.1 (ADR-0154): read the workspace DESIGN.md (if any) and wrap it as standing design-invariant
+// guidance for the user-turn preamble. Re-read every turn (cheap, small file) so edits take effect live.
+// Resilient: any read failure just yields "" (the agent proceeds without design invariants, never blocks).
+function readDesignInvariants(workspace: string): string {
+  try {
+    const p = designDocPath(workspace);
+    return existsSync(p) ? designInvariantsBlock(readFileSync(p, "utf8")) : "";
+  } catch { return ""; }
+}
+
 function ompBin(): string {
   // Prefer the path the Electron main process resolved (bundled or app-managed
   // install); fall back to the user's bun bin, then PATH.
@@ -145,6 +157,7 @@ export type ChatEvent =
   | { type: "permission"; id: string; tool: string; detail: string; options: { optionId: string; name: string; kind?: string }[]; url?: string; egress?: boolean; localFile?: boolean; exec?: boolean; program?: string; reason?: string; danger?: boolean }
   | { type: "preview-available"; path: string } // P-PREVIEW.2 (ADR-0096): the agent wrote a previewable file
   | { type: "preview-activity"; label: string } // P-PREVIEW.6a (ADR-0153): the agent is reviewing/testing the live preview
+  | { type: "design-available"; path: string } // P-FIGMA.2 (ADR-0154): the agent wrote/updated DESIGN.md → offer to pop it out in the IDE
   | { type: "agent-builder-open"; spec: AgentSpec } // P-AGENT.8.2 (ADR-0134): open the Agent Builder pre-populated
   | { type: "slash-command-created"; command: UserCommand } // P-CMD.1 (ADR-0146): the agent created a user "/" command
   | { type: "usage"; used: number; size: number; cost: number }
@@ -373,6 +386,9 @@ class Backend {
                 // inspect, open, structured action) — tell the UI to glow the panel + show a "reviewing" pill.
                 const paLabel = previewActivityLabel(String(u.title ?? u.kind ?? ""));
                 if (paLabel) this.emit({ type: "preview-activity", label: paLabel });
+                // P-FIGMA.2 (ADR-0154): the agent wrote/updated DESIGN.md → tell the UI so it can offer to pop
+                // it out in the IDE for the user to review/edit. `code` set = a write/edit tool call.
+                if (code && isDesignDocPath(codePath)) this.emit({ type: "design-available", path: codePath });
                 // P-AGENT.8.2 (ADR-0134): the agent's `agent_builder_open` tool call opens the Agent Builder
                 // pre-populated. Re-parsed + validated + secret-scanned here (authoritative) before it opens.
                 // NOTE: omp renders a custom tool's call TITLE as a human summary (e.g. "Opening agent builder
@@ -785,6 +801,7 @@ class Backend {
         persona: this.persona,
         skill: this.skill,
         profile: recallPreamble(), // P9.2: re-read each turn so newly-learned facts show up
+        designInvariants: readDesignInvariants(currentWorkspace()), // P-DESIGN.1: honor DESIGN.md every turn
         memoryRecall: this.memoryRecall,
         memoryRecallDelivered: this.memoryRecallDelivered,
       });
