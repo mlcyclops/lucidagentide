@@ -14,6 +14,8 @@ import {
   NoopBackend,
   resolveBackend,
   sandboxDisclosure,
+  SeatbeltBackend,
+  seatbeltProfile,
   wrapForProfile,
   type BackendResolution,
 } from "./sandbox_exec.ts";
@@ -22,8 +24,11 @@ import { managedRequireIsolation, parseRegistryPolicy } from "../../desktop/mana
 
 const hasBwrap = () => true;
 const noBwrap = () => false;
+const has = (bin: string) => (b: string) => b === bin; // only `bin` is on PATH
+const none = () => false;
 const ARGV = ["/opt/omp", "acp", "-e", "/repo/gate.ts"];
 const CTX = { workspace: "/work/ws", home: "/home/u" };
+const PROXY = { host: "127.0.0.1", httpPort: 8888, httpProxyUrl: "http://127.0.0.1:8888" };
 
 // ── backend resolution ────────────────────────────────────────────────────────
 
@@ -46,24 +51,39 @@ test("linux WITHOUT bwrap falls back to the disclosed passthrough (personal defa
   }
 });
 
-test("win32/darwin resolve the disclosed passthrough in v1 (backends land in P-SANDBOX.4)", () => {
-  for (const platform of ["win32", "darwin"] as const) {
-    const r = resolveBackend({ platform, which: hasBwrap }); // even with bwrap "present": linux-only
-    expect(r.ok).toBe(true);
-    if (r.ok) {
-      expect(r.backend.name).toBe("noop");
-      expect(r.disclosed).toBe(true);
-    }
+test("darwin with sandbox-exec resolves the Seatbelt ISOLATING backend (P-SANDBOX.4)", () => {
+  const r = resolveBackend({ platform: "darwin", which: has("sandbox-exec") });
+  expect(r.ok).toBe(true);
+  if (r.ok) {
+    expect(r.backend.name).toBe("seatbelt");
+    expect(r.backend.isolates).toBe(true);
+    expect(r.disclosed).toBe(false);
   }
+});
+
+test("win32 still resolves the disclosed passthrough (AppContainer is a native follow-up); darwin without sandbox-exec too", () => {
+  const win = resolveBackend({ platform: "win32", which: hasBwrap }); // even with bwrap "present": not linux
+  expect(win.ok && win.backend.name === "noop" && win.disclosed).toBe(true);
+  const macNoSb = resolveBackend({ platform: "darwin", which: none });
+  expect(macNoSb.ok && macNoSb.backend.name === "noop" && macNoSb.disclosed).toBe(true);
 });
 
 test("managed require-isolation with NO isolating backend REFUSES (fail-closed, never a passthrough)", () => {
   const linux = resolveBackend({ platform: "linux", requireIsolation: true, which: noBwrap });
   expect(linux.ok).toBe(false);
   if (!linux.ok) expect(linux.reason).toMatch(/bubblewrap/);
+  const mac = resolveBackend({ platform: "darwin", requireIsolation: true, which: none });
+  expect(mac.ok).toBe(false);
+  if (!mac.ok) expect(mac.reason).toMatch(/Seatbelt/);
   const win = resolveBackend({ platform: "win32", requireIsolation: true, which: hasBwrap });
   expect(win.ok).toBe(false);
-  if (!win.ok) expect(win.reason).toMatch(/P-SANDBOX\.4/);
+  if (!win.ok) expect(win.reason).toMatch(/AppContainer/);
+});
+
+test("managed require-isolation is SATISFIED by an available sandbox-exec on macOS", () => {
+  const r = resolveBackend({ platform: "darwin", requireIsolation: true, which: has("sandbox-exec") });
+  expect(r.ok).toBe(true);
+  if (r.ok) expect(r.backend.name).toBe("seatbelt");
 });
 
 test("managed require-isolation is SATISFIED by an available bwrap", () => {
@@ -101,6 +121,51 @@ test("canNetwork:true WITH a proxy but no privileged :53 mediates HTTP only — 
   expect(plan.args).not.toContain("--unshare-net");
   expect(plan.args.join(" ")).not.toContain("/etc/resolv.conf");
   expect(plan.env.HTTPS_PROXY).toBe("http://127.0.0.1:8888");
+});
+
+// ── macOS Seatbelt (P-SANDBOX.4) ──────────────────────────────────────────────
+
+test("seatbelt canNetwork:false denies ALL network + cuts DNS (mDNSResponder mach-lookup)", () => {
+  const plan = new SeatbeltBackend(has("sandbox-exec")).wrap(ARGV, caps("container-local"), CTX);
+  expect(plan.cmd).toBe("sandbox-exec");
+  const profile = plan.args[1]!; // -p <profile> <cmd...>
+  expect(profile).toContain("(deny network*)");
+  expect(profile).toContain("mDNSResponder");
+  expect(plan.env.HTTPS_PROXY).toBeUndefined(); // no network ⇒ no proxy env
+});
+
+test("seatbelt canNetwork:true WITHOUT a proxy fails closed to total network+DNS deny (no mediator ⇒ no net)", () => {
+  const profile = seatbeltProfile(caps("trusted-local"), CTX); // no proxy in CTX
+  expect(profile).toContain("(deny network*)");
+  expect(profile).toContain("mDNSResponder");
+  expect(profile).not.toContain("localhost:*");
+});
+
+test("seatbelt canNetwork:true WITH a proxy confines egress to LOOPBACK only + sets HTTP(S)_PROXY (raw-IP sockets denied)", () => {
+  const plan = new SeatbeltBackend(has("sandbox-exec")).wrap(ARGV, caps("trusted-local"), { ...CTX, proxy: PROXY });
+  const profile = plan.args[1]!;
+  expect(profile).toContain("(deny network-outbound)");
+  expect(profile).toContain('(allow network-outbound (remote ip "localhost:*"))');
+  expect(profile).not.toContain("(deny network*)"); // DNS/loopback stay reachable for the mediated case
+  expect(plan.env.HTTPS_PROXY).toBe("http://127.0.0.1:8888");
+  expect(plan.env.NO_PROXY).toContain("127.0.0.1");
+});
+
+test("seatbelt preserves the wrapped argv verbatim as the tail (sandbox-exec -p <profile> <argv...>)", () => {
+  const plan = new SeatbeltBackend(has("sandbox-exec")).wrap(ARGV, caps("trusted-local"), { ...CTX, proxy: PROXY });
+  expect(plan.args[0]).toBe("-p");
+  expect(plan.args.slice(2)).toEqual(ARGV);
+});
+
+test("seatbelt through wrapForProfile: a network-off downgrade profile yields a network-denied, isolated plan", () => {
+  const downgrade = chooseProfile({ requested: "trusted-local", trustLabel: "suspicious" }); // → container-local
+  const res: BackendResolution = { ok: true, backend: new SeatbeltBackend(has("sandbox-exec")), disclosed: false };
+  const d = wrapForProfile({ argv: ARGV, caps: caps(downgrade.profile), ctx: CTX, resolution: res });
+  expect(d.action).toBe("spawn");
+  if (d.action === "spawn") {
+    expect(d.isolated).toBe(true);
+    expect(d.plan.args[1]!).toContain("(deny network*)");
+  }
 });
 
 test("bwrap binds the workspace rw, home rw (omp state; fs containment stays omp --isolate's), system ro", () => {

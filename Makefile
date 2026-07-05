@@ -471,6 +471,10 @@ demo-P-SANDBOX.2: ## P-SANDBOX.2 (ADR-0166): mediated subprocess egress — a lo
 demo-P-SANDBOX.3: ## P-SANDBOX.3 (ADR-0167): the mediated-egress audit trail — a BLOCKED subprocess reach-out becomes one canonical `egress` SecurityEvent (block/high) on the audit/OCSF pipeline (P-REPORT.10 precedent; no new EventName, no approvable live-block); deduped by host so a looping exfil can't flood the SIEM; allowed reach-outs emit nothing; auditing never weakens the fail-closed guarantee (throwing sink swallowed, dead proxy still denies)
 	$(BUN) run harness/scripts/demo_p_sandbox_3.ts
 
+.PHONY: demo-P-SANDBOX.4
+demo-P-SANDBOX.4: ## P-SANDBOX.4 (ADR-0168): the macOS Seatbelt backend — real runtime containment on macOS via `sandbox-exec`. Declared caps enforced (network-off denies ALL network + cuts DNS via mDNSResponder); mediated egress CONFINED TO LOOPBACK so a raw-IP socket ignoring HTTP_PROXY is kernel-denied (bwrap only drops it); require-isolation fail-closed on macOS-without-sandbox-exec + Windows. Windows AppContainer (native) + Linux slirp raw-socket forwarding are named follow-ups
+	$(BUN) run harness/scripts/demo_p_sandbox_4.ts
+
 .PHONY: demo-P-REPORT.9
 demo-P-REPORT.9: ## P-REPORT.9 (ADR-0162): multi-repo remote fetch + PR aggregation for the Engineering Report — remote-URL parse (GitHub vs not), commits aggregated across branches (deduped) + line totals, the Cross-repo activity annex, fail-soft on a failed fetch (local refs still shown), PRs skipped with a reason on non-GitHub/unauthed remotes, and untrusted commit/PR text neutralized (no HTML/fence breakout)
 	$(BUN) run desktop/scripts/demo_p_report_9.ts
