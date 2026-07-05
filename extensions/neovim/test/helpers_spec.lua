@@ -16,12 +16,12 @@ local function eq(got, want, msg)
   io.stderr:write(("FAIL %s\n  want: %s\n  got:  %s\n"):format(msg, vim.inspect(want), vim.inspect(got)))
 end
 
--- _build_tui_args: always starts with the `tui` subcommand; config args then per-call extras.
-eq(lucid._build_tui_args({ tui_args = {} }, {}), { "tui" }, "build_tui_args: bare")
-eq(lucid._build_tui_args({}, nil), { "tui" }, "build_tui_args: nil-safe")
+-- _build_tui_args: bare `lucid` IS the gated TUI (ADR-0161) — no subcommand; config args then per-call extras.
+eq(lucid._build_tui_args({ tui_args = {} }, {}), {}, "build_tui_args: bare")
+eq(lucid._build_tui_args({}, nil), {}, "build_tui_args: nil-safe")
 eq(
   lucid._build_tui_args({ tui_args = { "--model", "haiku" } }, { "-p", "hi" }),
-  { "tui", "--model", "haiku", "-p", "hi" },
+  { "--model", "haiku", "-p", "hi" },
   "build_tui_args: config args + extras, in order"
 )
 

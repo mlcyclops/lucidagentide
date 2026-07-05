@@ -288,9 +288,13 @@ export async function runTui(o: RunTuiOpts = {}): Promise<number> {
   return await execGated({ omp, args, cwd, env, spawnFn, sandbox: o.sandbox ?? liveSandboxResolution(), err, label: "lucid tui" });
 }
 
-/** CLI entry. `lucid acp [--isolate]` starts the gated session; `lucid check` runs the fail-closed
- *  preflight and exits (a diagnostic the IDE / installer can use); anything else prints usage. */
-export async function main(argv: string[], env: Env = process.env): Promise<number> {
+/** CLI entry. Bare `lucid` (no subcommand — optionally with omp passthru args like an initial prompt,
+ *  `--model`, `-p`) starts the gated TUI, exactly like `lucid tui`; `lucid acp [--isolate]` starts the
+ *  gated ACP session; `lucid check` runs the fail-closed preflight and exits (a diagnostic the IDE /
+ *  installer can use); `-h`/`--help`/`help` prints usage. `deps` is an injection seam for tests. */
+export async function main(argv: string[], env: Env = process.env, deps?: { tui?: typeof runTui; acp?: typeof runAcp }): Promise<number> {
+  const tui = deps?.tui ?? runTui;
+  const acp = deps?.acp ?? runAcp;
   const [sub, ...rest] = argv;
   if (sub === "check") {
     const a = assets();
@@ -319,21 +323,26 @@ export async function main(argv: string[], env: Env = process.env): Promise<numb
     else process.stdout.write(formatStats(stats, budgets));
     return 0;
   }
-  if (sub === "tui") return runTui({ passthru: rest, env });
+  if (sub === "tui") return tui({ passthru: rest, env });
+  if (sub === "acp") return acp({ isolate: rest.includes("--isolate"), env });
 
-  if (sub !== "acp") {
+  if (sub === "-h" || sub === "--help" || sub === "help") {
     process.stderr.write(
-      "usage: lucid acp [--isolate] | lucid tui [omp args…] | lucid stats [--json] [--budgets] | lucid check | lucid agent-firewall --conn <id>\n" +
+      "usage: lucid [omp args…] | lucid acp [--isolate] | lucid tui [omp args…] | lucid stats [--json] [--budgets] | lucid check | lucid agent-firewall --conn <id>\n" +
+        "  (default)       Bare `lucid` starts the gated TUI — same as `lucid tui`. Non-subcommand args pass through to omp (initial prompt, --model, -p, …).\n" +
         "  acp             Start the gated Lucid ACP agent (omp + the in-process security gate) for an IDE client.\n" +
-        "  tui             Start the gated Lucid agent in omp's native TERMINAL UI (interactive; extra args pass through to omp).\n" +
+        "  tui             Start the gated Lucid agent in omp's native terminal UI (explicit alias of the default).\n" +
         "  stats           Print session spend + KV-cache + context metrics (--json for editors; --budgets adds rate limits).\n" +
         "  check           Run the fail-closed preflight (gate + scanner) and exit 0 (ready) / 1 (unavailable).\n" +
         "  agent-firewall  Serve the stdio MCP firewall proxy to a remote ACP agent (hermes/openclaw) — ADR-0147.\n" +
-        "  Fail-closed: `acp`/`tui` refuse to start if the gate or scanner sidecar is unavailable.\n",
+        "  Fail-closed: the TUI and `acp` refuse to start if the gate or scanner sidecar is unavailable.\n",
     );
-    return sub === undefined || sub === "-h" || sub === "--help" ? 0 : 2;
+    return 0;
   }
-  return runAcp({ isolate: rest.includes("--isolate"), env });
+
+  // Default subcommand (ADR-0161): everything else IS the gated TUI — `lucid` == `lucid tui`,
+  // and any args are omp passthru (`lucid "explain src/auth.ts"`, `lucid --model haiku -p hi`).
+  return tui({ passthru: argv, env });
 }
 
 if (import.meta.main) {

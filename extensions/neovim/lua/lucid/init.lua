@@ -4,9 +4,9 @@
 --
 -- Like the VS Code + JetBrains extensions, this plugin is a THIN, untrusted client: it only ever
 -- spawns the `lucid` launcher (never a bare agent), so the in-process security gate can't be bypassed
--- from the editor (invariant #4). The reliable path is `lucid tui` — omp's native terminal UI, run
--- through the SAME fail-closed preflight + gated command as `lucid acp`, hosted inside a Neovim
--- terminal buffer. `lucid tui` refuses to start if the scanner sidecar is down or the gate is missing
+-- from the editor (invariant #4). The reliable path is the gated TUI — bare `lucid` (ADR-0161) — omp's
+-- native terminal UI, run through the SAME fail-closed preflight + gated command as `lucid acp`, hosted
+-- inside a Neovim terminal buffer. The TUI refuses to start if the scanner sidecar is down or the gate is missing
 -- (invariant #3), so a broken/absent gate surfaces as an error, never an ungated agent.
 --
 -- Pure helpers (`_build_tui_args`, `_selection_text`, `_resolve_cmd`) carry the testable logic and are
@@ -18,7 +18,7 @@ local defaults = {
   -- The fail-closed launcher. Installed with LucidAgentIDE / on PATH; override to an absolute path.
   -- SECURITY: only ever a `lucid` binary — this plugin can never fall back to a bare `omp`.
   cmd = "lucid",
-  -- Extra args ALWAYS appended to `lucid tui` (e.g. { "--model", "haiku" }).
+  -- Extra args ALWAYS appended to the gated TUI launch (e.g. { "--model", "haiku" }).
   tui_args = {},
   -- Workspace dir = the path-containment boundary. nil = Neovim's cwd.
   cwd = nil,
@@ -45,12 +45,13 @@ local state = { bufnr = nil, winid = nil, chan = nil }
 
 -- ── pure helpers (unit-tested headlessly) ───────────────────────────────────
 
---- Build the `lucid tui` argv: the `tui` subcommand, then configured `tui_args`, then any extra args.
+--- Build the gated-TUI argv: bare `lucid` IS the TUI (ADR-0161) — configured `tui_args`, then any
+--- extra args; no subcommand needed.
 --- @param cfg table plugin config (uses cfg.tui_args)
 --- @param extra string[]|nil per-invocation args (initial prompt, --model, …)
 --- @return string[]
 function M._build_tui_args(cfg, extra)
-  local args = { "tui" }
+  local args = {}
   for _, a in ipairs(cfg.tui_args or {}) do
     args[#args + 1] = a
   end
@@ -173,7 +174,7 @@ local function start_term(argv, opts)
   return vim.fn.termopen(argv, opts)
 end
 
---- Spawn a fresh gated `lucid tui` in a terminal buffer. Returns true on spawn, false if fail-closed.
+--- Spawn a fresh gated TUI (`lucid`) in a terminal buffer. Returns true on spawn, false if fail-closed.
 local function spawn(cfg, extra)
   local cmd = M._resolve_cmd(cfg)
   if not cmd then
@@ -356,7 +357,7 @@ end
 function M._fmt_stats_lines(data)
   local s = data and data.session or nil
   if not s then
-    return { "Lucid — no omp session yet", "", "Start one with :Lucid (or `lucid tui`)." }
+    return { "Lucid — no omp session yet", "", "Start one with :Lucid (or `lucid`)." }
   end
   local c = s.cache or {}
   local lines = {

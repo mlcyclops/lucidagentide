@@ -11413,3 +11413,35 @@ all four fail-closed rules, GPO knob, launcher wiring); `make demo-P-MARKET.1` s
 ADR-0157 (the epic + threat model), ADR-0066/0068 (the argv gate this sits beneath; the managed-knob
 pattern reused), ADR-0028 (omp --isolate owns the fs dimension), ADR-0038 (launcher trust anchor),
 AGENTS.md invariants #1/#2/#3/#4.
+
+## ADR-0161 - P-NVIM.5: bare `lucid` starts the gated TUI (default subcommand)
+
+**Status:** Accepted / Built.
+
+**Context.** The gated TUI (ADR-0150) is the daily-driver surface, but it costs an extra word every
+time: `lucid tui`. Every doc, keymap, and terminal invocation carries the subcommand, and a bare
+`lucid` printed usage and exited 0 - a dead end for the most common intent.
+
+**Decision.** `tui` becomes the DEFAULT subcommand. `main()` routes bare `lucid` - and any argv that
+isn't a known subcommand (`acp`/`tui`/`stats`/`check`/`agent-firewall`) or a help flag
+(`-h`/`--help`/`help`) - to `runTui` with the ENTIRE argv as omp passthru, so
+`lucid "explain src/auth.ts"` and `lucid --model haiku -p hi` behave exactly like their `lucid tui`
+spellings. `lucid tui` remains an explicit alias (nothing breaks); help flags now return 0 with usage
+(a requested help is not an error). A `deps` injection seam on `main()` (mirroring the existing
+`spawnFn`/`scannerProbe` seams) lets tests assert routing without ever spawning omp.
+
+**Consequences.**
+- Unknown-subcommand typos no longer exit 2 - they start the TUI with the typo as an initial prompt.
+  That is the designed semantic (an initial prompt IS a first-class positional), accepted trade-off.
+- The Neovim plugin (`_build_tui_args`) and all docs/messages drop the `tui` word; the plugin now
+  requires a launcher with this change (the stale compiled `bin/lucid` predates `tui` entirely -
+  unchanged status, ADR-0150).
+- Fail-closed is untouched: the default path IS `runTui`, same preflight, same gate-first argv.
+
+**Verification.** `main()` routing tests (bare/flags/prompt -> tui passthru; `tui` alias strips the
+subcommand; `acp` never routes to tui; help flags exit 0 spawning nothing) via the deps seam;
+`extensions/neovim/test/helpers_spec.lua` pins the subcommand-free argv; `make test` + sidecar green;
+`tsc --noEmit` clean.
+
+**Related.** ADR-0150 (`lucid tui`), ADR-0155/0156 (Neovim surface), ADR-0038 (launcher trust anchor),
+invariants #3/#4 (fail-closed, gate can't be omitted - both untouched).

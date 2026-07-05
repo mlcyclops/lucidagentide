@@ -4,6 +4,11 @@ Three lines per session: **shipped / stubbed / next** (CLAUDE.md session ritual)
 
 -----
 
+## P-NVIM.5: bare `lucid` starts the gated TUI (ADR-0161)
+- **shipped:** `tui` is now the **default subcommand** — `lucid`, `lucid "prompt"`, `lucid --model haiku -p hi` all start the gated TUI exactly like their `lucid tui` spellings (which remain an explicit alias). `main()` routes any non-subcommand argv to `runTui` as omp passthru; `-h`/`--help`/`help` print usage and exit 0. New `deps` injection seam on `main()` for spawn-free routing tests. Every `lucid tui` invocation updated accordingly: the Neovim plugin's `_build_tui_args` (no subcommand), helpers_spec expectations, docs/NEOVIM.md examples (`:terminal lucid`), extensions/neovim/README.md, `lucid stats` hint, usage text.
+- **stubbed:** nothing new — unknown-word "typos" intentionally become initial prompts (designed semantic, ADR-0161). `bin/lucid` compiled launcher remains stale (pre-`tui`, ADR-0150 note).
+- **next:** ship a fresh signed launcher build so the bare-`lucid` ergonomics reach installed users.
+
 ## P-SANDBOX: runtime execution boundary — plan + ADR (ADR-0157)
 - **shipped:** ADR-0157 (SCOPE/PLAN) for the post-approval runtime blind spot a reviewer named (a package's `__init__.py` doing `socket.gethostbyname()` on a TXT record → decode → in-process `exec()`, invisible to the argv classifier). Plan: an OS sandbox seam (`sandbox_exec.ts`, bwrap `--unshare-net`+seccomp on Linux, disclosed passthrough elsewhere) wrapping the omp process we already spawn (no fork, inv #1), a loopback DNS+CONNECT egress proxy (`egress_proxy.ts`) that REUSES `egressDecisionDetailed` so subprocess DNS/egress obeys the existing P-NETWL whitelist/posture/managed ceiling, and enforcing the `canNetwork`/`canExec` caps `profiles.ts` only declares today. "Still functions" = the P-NETWL.5 allow-all default stays on (pip/npm work, now mediated+logged); whitelist/enterprise mode is where hard blocks live.
 - **stubbed:** implementation is deferred to the phased increments — no code yet. Interpreter audit-hooks (`sys.addaudithook`) explicitly REJECTED (would need a `.py` outside `scanner-sidecar/`, inv #2). macOS/Windows backends + raw-socket (non-proxied) forwarding are P-SANDBOX.4. New EVENT names are quarantined to P-SANDBOX.3 (inv #8 = its own contracts increment).

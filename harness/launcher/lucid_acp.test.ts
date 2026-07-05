@@ -199,10 +199,35 @@ test("an isolating backend WRAPS the spawn: cmd becomes bwrap, the omp argv pres
 });
 
 // ── CLI surface ───────────────────────────────────────────────────────────────
-test("main rejects unknown subcommands (exit 2) and accepts --help (exit 0) without spawning", async () => {
-  expect(await main(["frobnicate"])).toBe(2);
-  expect(await main(["--help"])).toBe(0);
-  expect(await main([])).toBe(0);
+test("main: help flags print usage and exit 0 without starting anything", async () => {
+  const boom = (async () => {
+    throw new Error("must not run");
+  }) as never;
+  for (const flag of ["-h", "--help", "help"]) {
+    expect(await main([flag], {}, { tui: boom, acp: boom })).toBe(0);
+  }
+});
+
+test("main: bare `lucid` and non-subcommand args default to the gated TUI (ADR-0161)", async () => {
+  const seen: (string[] | undefined)[] = [];
+  const fakeTui = (async (o?: { passthru?: string[] }) => {
+    seen.push(o?.passthru);
+    return 0;
+  }) as never;
+  expect(await main([], {}, { tui: fakeTui })).toBe(0);
+  expect(await main(["--model", "haiku", "-p", "hi"], {}, { tui: fakeTui })).toBe(0);
+  expect(await main(["explain src/auth.ts"], {}, { tui: fakeTui })).toBe(0); // an initial prompt, not an unknown subcommand
+  expect(await main(["tui", "--continue"], {}, { tui: fakeTui })).toBe(0); // explicit alias strips the subcommand
+  expect(seen).toEqual([[], ["--model", "haiku", "-p", "hi"], ["explain src/auth.ts"], ["--continue"]]);
+});
+
+test("main: `acp` still routes to the ACP runner, never the TUI", async () => {
+  const boom = (async () => {
+    throw new Error("tui must not run");
+  }) as never;
+  const fakeAcp = (async (o?: { isolate?: boolean }) => (o?.isolate ? 3 : 4)) as never;
+  expect(await main(["acp"], {}, { tui: boom, acp: fakeAcp })).toBe(4);
+  expect(await main(["acp", "--isolate"], {}, { tui: boom, acp: fakeAcp })).toBe(3);
 });
 
 // ── lucid tui: the gated native terminal UI ──────────────────────────────────

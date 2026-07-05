@@ -6,11 +6,11 @@ extensions (ADR-0038) and terminal-native counterpart to the desktop shell. Incr
 
 Like every LUCID editor integration, this plugin is an **untrusted thin client**: it only ever spawns the
 `lucid` launcher (never a bare `omp`), so the in-process security gate cannot be bypassed from the editor.
-It hosts omp's real, already-gated terminal UI (`lucid tui`) inside a Neovim terminal buffer rather than
+It hosts omp's real, already-gated terminal UI (bare `lucid`) inside a Neovim terminal buffer rather than
 reimplementing a chat UI — robust, and the gate stays anchored in `lucid`, which **fail-closes** if the
 scanner sidecar is down or the gate is missing.
 
-For the full walkthrough (including the zero-plugin `:terminal lucid tui` path and the ACP-client path for
+For the full walkthrough (including the zero-plugin `:terminal lucid` path and the ACP-client path for
 inline buffer chat), see [`docs/NEOVIM.md`](../../docs/NEOVIM.md).
 
 ## Requirements
@@ -113,7 +113,7 @@ Also built in:
 ```lua
 require("lucid").setup({
   cmd = "lucid",          -- launcher; absolute path if not on PATH. Must be a `lucid` binary.
-  tui_args = {},          -- args always passed to `lucid tui`, e.g. { "--model", "claude-haiku-4-5" }
+  tui_args = {},          -- args always passed to the gated TUI, e.g. { "--model", "claude-haiku-4-5" }
   cwd = nil,              -- workspace dir (path-containment boundary); nil = Neovim cwd
   window = "float",       -- "float" | "vsplit" | "split" | "tab"
   float = { width = 0.85, height = 0.85, border = "rounded" },

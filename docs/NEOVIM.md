@@ -12,7 +12,7 @@ you an *ungated* agent.[1][2]
 
 | # | Path | What you get | Needs |
 |---|------|--------------|-------|
-| 1 | **`lucid tui` in `:terminal`** | omp's full native terminal UI (streaming, thinking, tool render, Plan/Ask/Agent, approvals) inside a Neovim buffer | nothing but the `lucid` binary |
+| 1 | **bare `lucid` in `:terminal`** | omp's full native terminal UI (streaming, thinking, tool render, Plan/Ask/Agent, approvals) inside a Neovim buffer | nothing but the `lucid` binary |
 | 2 | **`lucid.nvim` plugin** | Path 1 + `:Lucid`, `:LucidSend` (send selection/file), `:checkhealth lucid`, keymaps | the bundled plugin in `extensions/neovim/` |
 | 3 | **An ACP client → `lucid acp`** | inline, buffer-native chat driven by an existing Neovim ACP plugin (e.g. CodeCompanion.nvim) | a third-party ACP plugin |
 
@@ -24,7 +24,7 @@ reproduces the exact gated command the desktop shell uses and self-verifies at s
 plugin, or third-party ACP client **cannot** express "run the agent without the gate."[3]
 
 ```
-Neovim ──spawn──► lucid tui / lucid acp ──► omp -e security_extension.ts … ──► gate pre-hook (in-process)
+Neovim ──spawn──► lucid [tui] / lucid acp ──► omp -e security_extension.ts … ──► gate pre-hook (in-process)
  (untrusted)       (Lucid-owned, fail-closed)   (same OS process tree)          fail-closed scanner sidecar
 ```
 
@@ -47,9 +47,9 @@ Neovim ──spawn──► lucid tui / lucid acp ──► omp -e security_exte
 
 ---
 
-## Path 1 — `lucid tui`: zero-dependency, works in any Neovim
+## Path 1 — bare `lucid`: zero-dependency, works in any Neovim
 
-`lucid tui` starts the gated agent in **omp's native terminal UI** — the same gated command as `lucid acp`,
+Bare `lucid` starts the gated agent (ADR-0161 — `lucid tui` remains an explicit alias) in **omp's native terminal UI** — the same gated command as `lucid acp`,
 minus the ACP stdio passthrough, so omp owns the tty. Everything omp's TUI does (token streaming, thinking
 blocks, tool-call rendering, Plan/Ask/Agent modes, tool-approval prompts) works, all behind the gate. It
 takes the same fail-closed preflight as every other LUCID surface.
@@ -58,14 +58,14 @@ Just open it in a terminal buffer:
 
 ```vim
 " scratch split
-:terminal lucid tui
+:terminal lucid
 
 " seed an initial prompt (extra args pass straight through to omp)
-:terminal lucid tui "explain src/server/auth.ts"
-:terminal lucid tui --model claude-haiku-4-5 --continue
+:terminal lucid "explain src/server/auth.ts"
+:terminal lucid --model claude-haiku-4-5 --continue
 ```
 
-Any omp flag works after `tui` — `--model`, `--continue`, `--resume`, `-p` (non-interactive), etc.
+Any omp flag works after `lucid` — `--model`, `--continue`, `--resume`, `-p` (non-interactive), etc.
 Because the cwd is your Neovim working directory, LUCID operates on your project (its `read`/`edit`/`grep`/
 `lsp` tools + your files) with the workspace as the path-containment boundary.
 
@@ -74,7 +74,7 @@ A tidy toggle without any plugin:
 ```lua
 -- init.lua — a floating, toggle-able Lucid terminal on <leader>lc
 vim.keymap.set("n", "<leader>lc", function()
-  vim.cmd("botright vsplit | terminal lucid tui")
+  vim.cmd("botright vsplit | terminal lucid")
   vim.cmd("startinsert")
 end, { desc = "Lucid terminal" })
 ```
@@ -84,12 +84,12 @@ Or drive it with your existing terminal manager (`toggleterm.nvim`, `snacks.nvim
 ```lua
 -- toggleterm.nvim
 require("toggleterm.terminal").Terminal
-  :new({ cmd = "lucid tui", direction = "float", hidden = true })
+  :new({ cmd = "lucid", direction = "float", hidden = true })
   :toggle()
 ```
 
 > [!NOTE]
-> `lucid tui` and `lucid acp` run the **byte-identical** gated command (gate extension first, same appended
+> Bare `lucid` (the TUI) and `lucid acp` run the **byte-identical** gated command (gate extension first, same appended
 > policy). The only difference is the front end: `tui` is omp's terminal UI; `acp` is the machine protocol
 > an editor drives. Neither can start without the gate.[1]
 
@@ -200,7 +200,7 @@ commands yourself.
 ```lua
 require("lucid").setup({
   cmd = "lucid",                                   -- launcher; absolute path if not on PATH
-  tui_args = {},                                   -- args always passed to `lucid tui`
+  tui_args = {},                                   -- args always passed to the gated TUI
   cwd = nil,                                       -- workspace dir (path boundary); nil = Neovim cwd
   window = "float",                                -- "float" | "vsplit" | "split" | "tab"
   float = { width = 0.85, height = 0.85, border = "rounded" },
@@ -306,7 +306,7 @@ third-party plugin's ACP implementation.
 | Concern | How it holds in Neovim |
 |---|---|
 | Gate can't be omitted (inv. #4) | Neovim only spawns `lucid`; the gate decision lives in `lucid`, not your config/plugin |
-| Fail-closed (inv. #3) | `lucid tui`/`acp`/`check` refuse to start on a dead scanner or missing gate — surfaced as an error, never a silent ungated run |
+| Fail-closed (inv. #3) | the TUI/`acp`/`check` refuse to start on a dead scanner or missing gate — surfaced as an error, never a silent ungated run |
 | Path containment | cwd = your Neovim working directory = the boundary omp operates within |
 | No escape hatch | No "custom agent command" setting; `cmd` must be a `lucid` binary or the plugin no-ops |
 | Secrets | None in Neovim; credentials stay in omp's vault under `~/.omp`, inherited by the launcher |
@@ -317,7 +317,7 @@ third-party plugin's ACP implementation.
 Everything above was exercised on a real host (Neovim 0.12, omp 16.3.6):
 
 - **Gate preflight:** `lucid check` → `[lucid check] OK — gate + scanner ready` (exit 0).
-- **Gated real turn through `lucid tui`:** `lucid tui --model claude-haiku-4-5 -p "…"` returned the model's
+- **Gated real turn through the TUI:** `lucid --model claude-haiku-4-5 -p "…"` returned the model's
   reply (`LUCID-TUI-OK`) with the gate loaded (exit 0).
 - **ACP handshake through `lucid acp`:** `initialize` returned `oh-my-pi 16.3.6`, `protocolVersion 1`,
   `loadSession true`, auth method `agent` — a conformant ACP agent for Path 3 clients.
