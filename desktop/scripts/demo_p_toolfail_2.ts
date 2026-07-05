@@ -55,7 +55,7 @@ ok("all 3 actions listed with reason + command attempted + detailed error");
 
 console.log("\n4) hostile output renders inert");
 const hostile = toolfailGroupHtml([{ tool: "<script>x</script>", reason: "<img src=x onerror=y>", command: "</code><script>z</script>", detail: "<iframe>" }], true);
-if (/<script>|<img |<iframe>/.test(hostile)) fail("unescaped hostile bytes reached the HTML");
+if (/<script|<img|<iframe/i.test(hostile)) fail("unescaped hostile bytes reached the HTML"); // case-insensitive prefix match (CodeQL js/bad-tag-filter)
 ok("tool/reason/command/detail all escaped");
 
 console.log("\n✓ P-TOOLFAIL.2 demo passed — benign probe failures are one quiet toolbox click away, never an alarm wall.");
