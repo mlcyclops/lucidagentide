@@ -471,6 +471,10 @@ demo-P-REPORT.9: ## P-REPORT.9 (ADR-0162): multi-repo remote fetch + PR aggregat
 demo-P-TOOLFAIL.2: ## P-TOOLFAIL.2 (ADR-0163): failed tool calls collapse into a red toolbox badge, click expands the Tool Call Actions list (command attempted + full error); never a security surface
 	$(BUN) run desktop/scripts/demo_p_toolfail_2.ts
 
+.PHONY: demo-P-REPORT.10
+demo-P-REPORT.10: ## P-REPORT.10 (ADR-0164): a formal SecurityEvent per fetch/PR reach-out — the report collector's first-party git fetch / gh PR list (which bypass the agent gate) each emit a canonical egress/allow SecurityEvent (OCSF/SIEM), metadata-only (host, no credential), skipped PR lists emit nothing, proven live+offline via a local bare-origin fetch through the real dispatcher
+	$(BUN) run desktop/scripts/demo_p_report_10.ts
+
 .PHONY: dashboards
 dashboards: ## Materialize dashboard CSVs from a DuckDB into observable/docs/data (DB=path)
 	$(BUN) run harness/scripts/materialize_dashboards.ts $(DB) observable/docs/data
