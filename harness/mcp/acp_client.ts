@@ -31,6 +31,31 @@ export interface AcpPromptResult {
   stopReason: string;
   /** Brief, human-readable lines describing the remote's tool activity (scanned as untrusted, like text). */
   toolActivity: string[];
+  /** Brief lines describing the remote's permission asks + our decision (deny/allow) — scanned like text. */
+  permissionRequests?: string[];
+}
+
+/** A short description of what the remote asked permission to do (from the ACP toolCall). Pure. */
+export function permissionRequestSummary(params: unknown): string {
+  if (typeof params !== "object" || params === null) return "a privileged action";
+  const p = params as Record<string, unknown>; // ACP session/request_permission params
+  const tc = typeof p.toolCall === "object" && p.toolCall !== null ? (p.toolCall as Record<string, unknown>) : {};
+  if (typeof tc.title === "string" && tc.title) return tc.title;
+  if (typeof tc.kind === "string" && tc.kind) return tc.kind;
+  return "a privileged action";
+}
+
+/** The optionId of an "allow" choice in a permission request, or undefined (→ deny). Pure. */
+export function pickApproveOption(params: unknown): string | undefined {
+  if (typeof params !== "object" || params === null) return undefined;
+  const p = params as Record<string, unknown>;
+  const options = Array.isArray(p.options) ? p.options : [];
+  for (const o of options) {
+    if (typeof o !== "object" || o === null) continue;
+    const opt = o as Record<string, unknown>;
+    if (typeof opt.kind === "string" && opt.kind.startsWith("allow") && typeof opt.optionId === "string") return opt.optionId;
+  }
+  return undefined;
 }
 
 /** The narrow capability the firewall depends on — lets tests inject a fake remote. */
@@ -45,6 +70,8 @@ export interface AcpAgentClientOptions {
   promptTimeoutMs?: number;
   /** Best-effort log sink for the remote's stderr / lifecycle (never stdout). */
   onLog?: (line: string) => void;
+  /** How to answer the remote's session/request_permission: "deny" (default, fail-closed) or "allow". */
+  permissionPolicy?: "deny" | "allow";
 }
 
 interface PendingRpc {
@@ -65,16 +92,20 @@ export class AcpAgentClient implements RemoteAgent {
   // Per-turn collectors, reset at the start of each prompt.
   #textChunks: string[] = [];
   #toolActivity: string[] = [];
+  #permissionRequests: string[] = [];
+  #permissionPolicy: "deny" | "allow";
 
   constructor(private readonly conn: RemoteAgentConn, opts: AcpAgentClientOptions = {}) {
     this.#promptTimeoutMs = opts.promptTimeoutMs ?? 120_000;
     this.#onLog = opts.onLog ?? (() => {});
+    this.#permissionPolicy = opts.permissionPolicy ?? "deny";
   }
 
   async prompt(text: string): Promise<AcpPromptResult> {
     await this.#ensureSession();
     this.#textChunks = [];
     this.#toolActivity = [];
+    this.#permissionRequests = [];
     const result = await this.#requestWithTimeout("session/prompt", {
       sessionId: this.#sessionId,
       prompt: [{ type: "text", text }],
@@ -84,7 +115,7 @@ export class AcpAgentClient implements RemoteAgent {
       const r = result as Record<string, unknown>; // ACP session/prompt result object
       if (typeof r.stopReason === "string") stopReason = r.stopReason;
     }
-    return { text: this.#textChunks.join(""), stopReason, toolActivity: this.#toolActivity.slice() };
+    return { text: this.#textChunks.join(""), stopReason, toolActivity: this.#toolActivity.slice(), permissionRequests: this.#permissionRequests.slice() };
   }
 
   /** Establish the ACP session (initialize + session/new) WITHOUT prompting, and return the remote's
@@ -184,16 +215,28 @@ export class AcpAgentClient implements RemoteAgent {
     }
     // Request FROM the remote agent (needs a response).
     if (id !== undefined && method !== undefined) {
-      this.#answer(id, method);
+      this.#answer(id, method, msg.params);
       return;
     }
     // Notification.
     if (method === "session/update") this.#onUpdate(msg.params);
   }
 
-  /** Answer an agent→client request. All are DENIED/declined (fail-closed) — we grant the remote nothing. */
-  #answer(id: number, method: string): void {
+  /** Answer an agent→client request. `session/request_permission` follows the connection's policy
+   *  ("deny" default → cancelled; "allow" → select an approve option); every ask is RECORDED so the
+   *  firewall can surface it (scanned + delimited). Other agent requests are declined. */
+  #answer(id: number, method: string, params: unknown): void {
     if (method === "session/request_permission") {
+      const desc = permissionRequestSummary(params);
+      if (this.#permissionPolicy === "allow") {
+        const optionId = pickApproveOption(params);
+        if (optionId) {
+          this.#permissionRequests.push(`[remote-permission] ${desc} → ALLOWED (policy=allow)`);
+          this.#write({ jsonrpc: "2.0", id, result: { outcome: { outcome: "selected", optionId } } });
+          return;
+        }
+      }
+      this.#permissionRequests.push(`[remote-permission] ${desc} → DENIED`);
       this.#write({ jsonrpc: "2.0", id, result: { outcome: { outcome: "cancelled" } } });
       return;
     }
@@ -216,6 +259,7 @@ export class AcpAgentClient implements RemoteAgent {
       const status = typeof update.status === "string" ? ` (${update.status})` : "";
       this.#toolActivity.push(`[remote-tool] ${title}${status}`);
     }
+    if (kind === "plan") this.#toolActivity.push("[remote-plan] the remote agent updated its plan");
   }
 
   #request(method: string, params: unknown): Promise<unknown> {

@@ -41,8 +41,11 @@ Additional guarantees:
 
 - **Delimiter-injection breakout is closed.** A hostile remote embedding a literal `UNTRUSTED_CONTENT_END`
   to escape the envelope is neutralized (`neutralizeDelimiters`) before wrapping.
-- **The remote's permission asks are denied.** If the remote sends `session/request_permission` (to run one
-  of *its* privileged tools), the firewall denies it — LUCID is not a confused deputy for the remote's exec.
+- **The remote's permission asks follow a per-connection policy (default deny).** When the remote sends
+  `session/request_permission` (to run one of *its* privileged tools), the firewall answers per the
+  connection's `permissionPolicy`: **`deny`** (default — LUCID is not a confused deputy) or **`allow`** (an
+  explicit opt-in for a trusted remote). Every ask is **surfaced** in the returned, scanned, delimited output
+  (a `[permission-requests]` section) so you can see what was requested and the decision.
 - **omp's in-process `tool_call` gate is unchanged** and remains the load-bearing backstop for any action the
   model attempts (invariant #4).
 
@@ -66,6 +69,7 @@ Each entry describes how to spawn the remote's ACP server:
       "kind": "hermes",               // "hermes" | "openclaw" | "acp" (label only)
       "command": "uvx",               // executable that speaks ACP over stdio
       "args": ["--from", "hermes-agent[acp]", "hermes-acp"],
+      "permissionPolicy": "deny",     // "deny" (default) | "allow" — how to answer the remote's tool-permission asks
       "enabled": true
     }
   ]

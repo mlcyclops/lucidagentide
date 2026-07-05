@@ -10153,3 +10153,64 @@ first time; netdiag's behavior tests unchanged.
 like "run /pr-review before merging" now does what it reads like; mentioning paths or unknown "/words"
 remains inert. 13 new tests (builtin validity + shadowing, the expansion matrix incl. path/URL immunity and
 non-recursion, caret tokenization).
+## ADR-0149 - P-AGENTFW.2 + .3: Remote-agents Settings UI + per-connection permission policy & surfaced ACP updates
+
+**Date:** 2026-07-04
+**Status:** Accepted. **BUILT + tested.** The two agent-firewall follow-ups flagged in ADR-0147, delivered
+together (same subsystem). Based on `feat/agent-firewall-mcp` (#201). (ADR-0148 is the sibling P-MCP-GATE.1
+PR; the number gap on this branch closes when both merge.)
+**Increment:** P-AGENTFW.2 (desktop UI) + P-AGENTFW.3 (permission policy + richer surfaced updates).
+
+### P-AGENTFW.2 - "Remote agents" Settings card
+
+A Settings card mirroring the P-MCP.1 "MCP connectors" card, so connecting a hermes/openclaw instance needs
+no hand-edited `~/.omp/lucid-agents.json`. `GET/POST /api/agents` + `/api/agents/remove` + `/api/agents/toggle`
+in `dev.ts` call the harness registry (`listRemoteAgents`/`upsertRemoteAgent`/`removeRemoteAgent`/
+`setRemoteAgentEnabled`); a change `backend.restart()`s omp so enabled connections attach as `agentfw-*` MCP
+servers next session. `bridge.remoteAgent*` (renamed off `agent*` to avoid colliding with the Agent-Builder
+`agentList`), `RemoteAgentStatus`, and a `secAgents()` card (name/kind, command+args, permission badge,
+enable/remove + an add form: name, kind, command, args, permission policy). No secret crosses the wire - the
+registry stores command/args only (the note steers users to `--token-file`).
+
+### P-AGENTFW.3 - per-connection permission policy + surfaced permission asks
+
+The firewall used to hard-deny every remote `session/request_permission` (fail-closed). Now:
+- **`RemoteAgentEntry.permissionPolicy: "deny" | "allow"`** (default **deny**). The `AcpAgentClient` honors
+  it: `deny` → the ask is answered `cancelled`; `allow` → an approve option is selected (`pickApproveOption`).
+  "allow" is an explicit per-connection opt-in for a trusted remote (e.g. a local dev gateway).
+- **Every permission ask is RECORDED and SURFACED** (`AcpPromptResult.permissionRequests`): the firewall
+  includes a `[permission-requests]` section in the delimited output so the user/model sees what the remote
+  wanted and the decision. **This content is remote-controlled** (the toolCall title), so it is added to the
+  inbound `scanAndDecide` text and neutralized - a hidden vector in a permission-ask title is quarantined
+  exactly like the reply body (regression-tested).
+- **Richer updates:** the client now also notes `plan` updates alongside `tool_call`/`tool_call_update`, all
+  carried in `toolActivity` (scanned + delimited).
+
+**Deliberately deferred:** a TRUE interactive per-request approval prompt. The firewall runs as an
+omp-spawned MCP subprocess with no channel to the desktop UI, so live "ask the user now" isn't possible
+without a new IPC surface; the per-connection policy + the surfaced-in-output record are the bounded MVP.
+That interactive path is the next follow-up if wanted.
+
+### Invariants preserved
+
+#3 fail-closed (permission default deny; permissionRequests are scanned; a poisoned title quarantines); #5
+remote content (incl. permission titles) is scanned + delimited + labeled untrusted; #7 trust stays the
+closed set. **No frozen-contract change** (no `contracts.ts`; `permissionRequests` is an optional field on the
+internal `AcpPromptResult`). The desktop UI is cosmetic chrome over the existing 0600 registry.
+
+### File-by-file
+
+- `harness/mcp/registry.ts` - `permissionPolicy` on the entry + upsert.
+- `harness/mcp/acp_client.ts` - `permissionPolicy` option, `permissionRequestSummary`/`pickApproveOption`
+  (pure), policy-driven `#answer`, `permissionRequests` capture, `plan` update note.
+- `harness/mcp/agent_firewall.ts` - pass the connection's policy to the client; include permissionRequests in
+  the SCANNED combined text AND the wrapped output.
+- `desktop/dev.ts` - `/api/agents` CRUD. `desktop/renderer/bridge.ts` - `remoteAgent*` + `RemoteAgentStatus`.
+  `desktop/renderer/app.ts` - `secAgents` card + hydrate + handlers.
+- Tests: `acp_client.test.ts` (helpers), `registry.test.ts` (+policy), `agent_firewall.test.ts` (+surfacing,
+  +poisoned-title quarantine). Docs: `docs/AGENT-FIREWALL.md` updated.
+
+### Relates to
+
+ADR-0147 (the agent-firewall these extend), ADR-0148 (the sibling MCP-result gate), ADR-0020 (the P-MCP.1
+connectors card this UI mirrors).
