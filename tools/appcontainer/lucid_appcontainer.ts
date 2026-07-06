@@ -90,14 +90,18 @@ function wide(s: string): Uint8Array {
 }
 
 /**
- * Run `plan.cmd plan.cmdArgs` inside an AppContainer, returning the child's exit code. Only `net:"deny"`
- * is implemented here (empty capabilities ⇒ no network); `net:"loopback"` throws (its WFP/loopback-
- * exemption is the P-SANDBOX.7b follow-up). Windows-only; throws on any Win32 failure (⇒ the caller
- * fail-closes). NOT pure — this is the FFI edge; the parser above is what the unit tests cover.
+ * Run `plan.cmd plan.cmdArgs` inside an AppContainer, returning the child's exit code. BOTH network
+ * postures use the SAME container: an EMPTY capability set ⇒ no `internetClient` ⇒ NO direct outbound
+ * internet (P-SANDBOX.7). The postures differ only in the AMBIENT system state, not in this spawn:
+ *   - `deny`     — nothing else; the child has no network at all.
+ *   - `loopback` — the child ADDITIONALLY inherits HTTP(S)_PROXY (set by the seam) and relies on a
+ *     one-time, admin-registered LOOPBACK EXEMPTION for our AppContainer SID (`--register-loopback`,
+ *     P-SANDBOX.7b) so it can reach ONLY the loopback proxy. Without the exemption it simply has no
+ *     network (fail-closed) — never direct internet. The no-internet guarantee holds either way.
+ * Windows-only; throws on any Win32 failure (⇒ the caller fail-closes). NOT pure — the FFI edge.
  */
 export function runInAppContainer(plan: HelperPlan): number {
   if (process.platform !== "win32") throw new Error("lucid-appcontainer runs on Windows only");
-  if (plan.net !== "deny") throw new Error("--loopback-only (mediated egress) is not implemented yet (P-SANDBOX.7b)");
 
   const userenv = dlopen("userenv.dll", {
     CreateAppContainerProfile: { args: [FFIType.ptr, FFIType.ptr, FFIType.ptr, FFIType.ptr, FFIType.u32, FFIType.ptr], returns: FFIType.i32 },
@@ -172,8 +176,33 @@ export function runInAppContainer(plan: HelperPlan): number {
   return codeOut[0]! >>> 0;
 }
 
+// ── loopback exemption (P-SANDBOX.7b): a one-time ADMIN op so the AppContainer can reach ONLY the ─────
+// loopback proxy. AppContainers block loopback by default; `CheckNetIsolation LoopbackExempt` (which ships
+// with Windows) toggles it per AppContainer name. This needs elevation, so it is an INSTALL-time step, not
+// something the per-spawn run path does. `--loopback-only` at runtime relies on this having been registered.
+export function checkNetIsolationArgs(op: "add" | "delete"): string[] {
+  return ["LoopbackExempt", op === "add" ? "-a" : "-d", `-n=${APPCONTAINER_NAME}`];
+}
+
+function loopbackExemption(op: "add" | "delete"): number {
+  if (process.platform !== "win32") {
+    process.stderr.write("[lucid-appcontainer] loopback exemption is Windows-only\n");
+    return 3;
+  }
+  const args = checkNetIsolationArgs(op);
+  const r = Bun.spawnSync(["CheckNetIsolation.exe", ...args], { stdout: "inherit", stderr: "inherit" });
+  if (r.exitCode !== 0) {
+    process.stderr.write(`[lucid-appcontainer] loopback exemption ${op} failed (exit ${r.exitCode}) - run elevated (admin).\n`);
+  }
+  return r.exitCode ?? 3;
+}
+
 // ── entrypoint (only when run/compiled as the binary, not when imported by tests) ──────────────────────
 export function main(argv: string[]): number {
+  // Admin subcommands (install-time): register/unregister the loopback exemption for our AppContainer SID.
+  if (argv[0] === "--register-loopback") return loopbackExemption("add");
+  if (argv[0] === "--unregister-loopback") return loopbackExemption("delete");
+
   const plan = parseHelperArgs(argv);
   if ("error" in plan) {
     process.stderr.write(`[lucid-appcontainer] FAIL-CLOSED: ${plan.error}\n`);

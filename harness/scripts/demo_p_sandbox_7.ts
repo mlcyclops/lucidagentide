@@ -35,7 +35,7 @@ ok(quoteArg("a b") === '"a b"' && buildCommandLine("cmd", ["/c", "echo hi"]) ===
 // ── [2] fail-closed: cannot-contain NEVER means run-anyway ────────────────────
 console.log("\n[2] main() refuses (non-zero) when it cannot contain - never a passthrough");
 ok(main(["--deny-network", "--"]) === 2, "bad args → exit 2 (refused before any spawn)");
-ok(main(["--workspace", "C:\\ws", "--loopback-only", "--", "curl.exe", "--version"]) === 3, "--loopback-only (mediated; P-SANDBOX.7b) not yet enforceable → exit 3 (refuse)");
+if (process.platform !== "win32") ok(main(["--workspace", "/ws", "--deny-network", "--", "true"]) === 3, "off-Windows every mode refuses → exit 3 (no AppContainer, never a passthrough)");
 
 // ── [3] LIVE containment (Windows only) ───────────────────────────────────────
 console.log("\n[3] live containment against the real OS");

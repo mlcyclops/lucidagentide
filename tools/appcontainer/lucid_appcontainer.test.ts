@@ -9,7 +9,7 @@
 // deny-network container cannot reach the net); the parser is where the boundary correctness lives.
 
 import { expect, test } from "bun:test";
-import { buildCommandLine, main, parseHelperArgs, quoteArg } from "./lucid_appcontainer.ts";
+import { buildCommandLine, checkNetIsolationArgs, main, parseHelperArgs, quoteArg } from "./lucid_appcontainer.ts";
 
 // ── the flag-contract parser ──────────────────────────────────────────────────
 test("parses a valid --deny-network plan", () => {
@@ -63,10 +63,16 @@ test("main() returns 2 on a bad-args (parser) failure", () => {
   expect(main(["--deny-network", "--"])).toBe(2); // no command
 });
 
-test("main() fail-closes to a non-zero code when it cannot contain (loopback unimpl, or non-Windows)", () => {
-  // --loopback-only is not implemented yet ⇒ 3 (refuse) on any platform; on non-Windows every mode refuses.
-  expect(main(["--workspace", "C:\\ws", "--loopback-only", "--", "curl.exe", "--version"])).toBe(3);
+test("main() fail-closes to a non-zero code when it cannot contain (non-Windows ⇒ every mode refuses)", () => {
   if (process.platform !== "win32") {
     expect(main(["--workspace", "/ws", "--deny-network", "--", "true"])).toBe(3); // no AppContainer off-Windows ⇒ refuse
+    expect(main(["--workspace", "/ws", "--loopback-only", "--", "true"])).toBe(3);
+    expect(main(["--register-loopback"])).toBe(3); // loopback exemption is Windows-only
   }
+});
+
+// ── P-SANDBOX.7b: the loopback exemption command (pure arg construction) ───────
+test("checkNetIsolationArgs builds the CheckNetIsolation LoopbackExempt add/delete for our AppContainer", () => {
+  expect(checkNetIsolationArgs("add")).toEqual(["LoopbackExempt", "-a", "-n=LucidAgentIDE.Sandbox.v1"]);
+  expect(checkNetIsolationArgs("delete")).toEqual(["LoopbackExempt", "-d", "-n=LucidAgentIDE.Sandbox.v1"]);
 });

@@ -487,6 +487,10 @@ demo-P-SANDBOX.6: ## P-SANDBOX.6 (ADR-0172): the Windows AppContainer backend SE
 demo-P-SANDBOX.7: ## P-SANDBOX.7 (ADR-0173): the native Windows AppContainer helper (bun-compiled TS+FFI). Parser fail-closes on malformed flags; main() refuses (non-zero) wherever it cannot contain (never a passthrough); LIVE on Windows a benign child runs but a networked child is BLOCKED (a no-capability AppContainer has no network); off-Windows it correctly refuses
 	$(BUN) run harness/scripts/demo_p_sandbox_7.ts
 
+.PHONY: demo-P-SANDBOX.7b
+demo-P-SANDBOX.7b: ## P-SANDBOX.7b (ADR-0174): mediated --loopback-only for the AppContainer helper - the empty-caps container has NO direct internet (verified live: curl → http_code=000) and a one-time ADMIN loopback exemption (--register-loopback via CheckNetIsolation) lets it reach ONLY the loopback proxy; the no-internet guarantee holds with or without the exemption; off-Windows every mode fail-closes
+	$(BUN) run harness/scripts/demo_p_sandbox_7b.ts
+
 .PHONY: build-appcontainer
 build-appcontainer: ## P-SANDBOX.7: cross-compile the native lucid-appcontainer.exe helper (bun build --compile, Windows x64) into dist/
 	$(BUN) build tools/appcontainer/lucid_appcontainer.ts --compile --target=bun-windows-x64 --outfile dist/lucid-appcontainer.exe

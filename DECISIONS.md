@@ -12374,3 +12374,69 @@ fs_browse/theme-asset failures. Built in an isolated git worktree.
 ADR-0172 (P-SANDBOX.6 - the seam + flag contract this helper implements), ADR-0157 (the P-SANDBOX epic +
 threat model), ADR-0166/0168 (the mediated proxy + Seatbelt's loopback-confinement that `.7b` mirrors on
 Windows), invariant #2 (the TS/Bun language boundary this deliberately keeps).
+
+-----
+
+## ADR-0174 - P-SANDBOX.7b: the mediated --loopback-only posture for the AppContainer helper, BUILT
+
+**Date:** 2026-07-05
+**Status:** Accepted / Built (security guarantee verified; the proxy-reachability completion is install-time
+admin). Increment 7b of the ADR-0157 epic. Activation/packaging (bundle + install-time register) is next.
+
+### Context
+
+P-SANDBOX.7 (ADR-0173) shipped the verified `--deny-network` AppContainer helper but the COMMON omp session
+is `trusted-local` (`canNetwork:true`), which the P-SANDBOX.6 seam maps to `--loopback-only` (mediated egress
+through the loopback proxy) - and `.7` left that mode refusing (exit 3). This implements it.
+
+### The Windows loopback wrinkle
+
+An AppContainer with an EMPTY capability set has **no `internetClient` ⇒ no direct outbound internet** (that
+is `.7`'s deny-network guarantee, and it holds for `--loopback-only` too). But AppContainers ALSO block
+**loopback** by default (a deliberate Windows security measure), so an empty-caps container can't reach the
+`127.0.0.1` proxy either. Reaching loopback requires a **loopback EXEMPTION** for the AppContainer SID -
+and `CheckNetIsolation LoopbackExempt -a` **requires administrator** (verified: "Access Denied, run as
+administrator"). It is a system-wide, per-SID setting, so it cannot be a per-spawn operation.
+
+### Decision
+
+- **`--loopback-only` runs the SAME empty-caps AppContainer as `--deny-network`** (no `internetClient`). The
+  child additionally inherits `HTTP(S)_PROXY` (set by the seam's `AppContainerBackend.wrap`) and relies on a
+  one-time, admin-registered loopback exemption to reach ONLY the proxy. Two postures, one container; the
+  difference is ambient system state + env, not the spawn. **The no-direct-internet guarantee is identical
+  and unconditional** - with or without the exemption, the child cannot reach the internet directly.
+- **`--register-loopback` / `--unregister-loopback`** (admin subcommands) shell to `CheckNetIsolation
+  LoopbackExempt -a/-d -n=<our AppContainer name>`. Run ELEVATED once at install; the pure
+  `checkNetIsolationArgs()` builds the command and is unit-tested.
+- **Fail-safe:** if the exemption is NOT registered, `--loopback-only` degrades to "no network at all"
+  (empty caps + blocked loopback) - safe (no exfil), just not usable until install registers it. It NEVER
+  becomes direct internet.
+
+### Verified (and the honest boundary)
+
+Live on Windows 10: `--loopback-only -- curl https://example.com` is **BLOCKED** (`http_code=000`, exit 28 -
+same empty-caps guarantee as `.7`), while a benign child runs (exit 0); `--register-loopback` reaches
+`CheckNetIsolation` and returns its "needs admin" (exit 5) without elevation - proving the mechanism is wired.
+NOT verifiable in this (non-admin) environment: the "contained child reaches the loopback proxy WITH the
+exemption registered" completion - that is exercised at **install time** (admin) and in packaging QA. The
+SECURITY guarantee (no direct internet) is fully verified; the USABILITY completion (proxy reachable) is the
+documented admin step. This is why `.7b` still does not bundle/activate the helper (that is the next
+increment: build + sign + bundle the `.exe`, run `--register-loopback` elevated at install, then let
+`resolveBackend` select it).
+
+### Invariants preserved
+
+Inv #1 (no omp fork). **Inv #2 (TypeScript/Bun only - the added registration shells to a stock Windows tool;
+no new native/Python source).** Inv #3 (fail-closed: no exemption ⇒ no network, never direct internet;
+non-Windows/errors ⇒ refuse). Inv #4/#6/#7/#8 (untouched).
+
+### Verification
+
+`lucid_appcontainer.test.ts` (+ `checkNetIsolationArgs` + the platform-guarded main() refuse-codes) green;
+`demo-P-SANDBOX.7b` green (live internet-denial on Windows; register reaches the OS; off-Windows fail-closed);
+`demo-P-SANDBOX.7` updated to the post-.7b truth and still green. Typecheck + license clean. Isolated worktree.
+
+### Relates to
+
+ADR-0173 (P-SANDBOX.7 - the deny-network helper this extends), ADR-0172 (the seam that emits `--loopback-only`),
+ADR-0166 (the mediated proxy the exempted loopback reaches), ADR-0157 (the epic).
