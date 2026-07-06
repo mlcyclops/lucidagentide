@@ -5770,7 +5770,10 @@ function openReportsPanel(): void {
         <div class="goal-row" id="rpVoiceRow" hidden><label class="goal-lbl" for="rpVoice">Voice</label><select id="rpVoice" class="prov-key"><option value="">default voice</option></select></div>
         <div class="goal-eu-cost" id="rpCost" hidden></div>
         <div class="rp-repos" id="rpRepos">
-          <div class="rp-repos-h"><label class="goal-lbl">${icon("git", 12)} Repositories</label><span class="goal-opt">tick repos to fold their remote commits &amp; PRs into the report</span>
+          <div class="rp-repos-h" id="rpReposH" role="button" tabindex="0" aria-expanded="true" data-tip="Repositories|Click to collapse or expand. Collapses automatically after you generate a report so the snapshot below is in view.">
+            <span class="rp-chev" aria-hidden="true"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></span>
+            <label class="goal-lbl">${icon("git", 12)} Repositories</label><span class="goal-opt rp-repos-hint">tick repos to fold their remote commits &amp; PRs into the report</span>
+            <span class="rp-repos-count" id="rpReposCount"></span>
             <select id="rpRepoSort" class="rp-repo-sort" data-tip="Sort order|Order the repo list by most recent activity, or alphabetically by name"><option value="recent">Recent</option><option value="name">Name</option></select></div>
           <div class="rp-repo-list" id="rpRepoList"><div class="goal-opt">loading repos…</div></div>
           <div class="rp-repo-add">
@@ -5883,6 +5886,23 @@ function openReportsPanel(): void {
       (t as HTMLInputElement).checked ? repoPrs.add(path) : repoPrs.delete(path);
     }
   });
+  // Repositories accordion: collapse/expand, and auto-collapse after Generate so the report snapshot below
+  // comes into view (the count summarizes the selection while collapsed). The sort control never toggles it.
+  const reposEl = $("#rpRepos", ov) as HTMLElement;
+  const reposH = $("#rpReposH", ov) as HTMLElement;
+  const setReposCollapsed = (collapsed: boolean): void => {
+    reposEl.classList.toggle("collapsed", collapsed);
+    reposH.setAttribute("aria-expanded", String(!collapsed));
+    const n = repoChecked.size;
+    ($("#rpReposCount", ov) as HTMLElement).textContent = collapsed ? `${n} repo${n === 1 ? "" : "s"} selected` : "";
+  };
+  reposH.addEventListener("click", (e) => {
+    if ((e.target as HTMLElement).closest("select,input,button,a")) return;
+    setReposCollapsed(!reposEl.classList.contains("collapsed"));
+  });
+  reposH.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setReposCollapsed(!reposEl.classList.contains("collapsed")); }
+  });
   const addInput = $("#rpRepoAdd", ov) as HTMLInputElement;
   const addRepo = async (): Promise<void> => {
     const v = addInput.value.trim(); if (!v) return;
@@ -5993,6 +6013,7 @@ function openReportsPanel(): void {
   $("#rpGenerate", ov)?.addEventListener("click", async () => {
     const btn = $("#rpGenerate", ov) as HTMLButtonElement;
     const out = $("#rpResult", ov) as HTMLElement;
+    setReposCollapsed(true); // fold the repo picker so the report snapshot below is in view
     const role = ($("#rpRole", ov) as HTMLSelectElement).value;
     const provider = prov.value;
     // P-REPORT.9: gather the ticked repos + per-repo PR choice; a fetch checkbox gates the read-only sync.
