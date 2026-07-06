@@ -2874,7 +2874,7 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .triv::after{right:0;background:linear-gradient(270deg,#0c0d13,transparent)}
 .triv .tkin{position:absolute;top:0;height:100%;display:flex;align-items:center;white-space:nowrap;will-change:transform}
 .triv .tqn{font-family:var(--mono);font-size:10.5px;color:var(--txt-4);margin-right:7px;letter-spacing:.4px}
-.triv .tl{font-size:12px;font-weight:500;white-space:pre;line-height:1;color:var(--accent-2)}
+.triv .tl{font-size:12px;font-weight:500;white-space:pre;line-height:1;color:var(--txt-2)}
 .triv .tpad{display:inline-block;width:14px;flex:none}
 .triv .tch{display:inline-flex;align-items:center;gap:5px;margin-left:9px;padding:1px 8px;flex:none;
   border:1px solid var(--line-strong);border-radius:9px;font-size:11.5px;color:var(--txt-2);

@@ -4676,10 +4676,7 @@ function renderStatus(): void {
       ${budget && currentProviderHasApiKey() ? `<div class="seg seg-btn${budget.used >= 0.9 ? " warn" : ""}" data-budget-refresh data-tip="${esc(budget.label)} usage|${budget.used >= 0.9 ? "Almost spent - turns may start stalling. " : ""}Click to re-check now · auto every 5 min. From the provider's API-key rate-limit headers.">${esc(budget.label)} <b style="color:${loadColor(budget.used)}">${Math.round(budget.used * 100)}%</b> ${icon("refresh", 11)}</div>` : ""}
       ${asksageChip()}
     </div>
-    <div class="triv-slot" id="trivSlot"></div>
-    <div class="right">
-      <div class="seg" data-tip="Security gate|In-process, fail-closed">${icon("shield", 13)} gate active</div>
-    </div>`;
+    <div class="triv-slot" id="trivSlot"></div>`;
   mountTrivia(); // P-TRIV.1: re-adopt the persistent ticker after the innerHTML swap
 }
 
