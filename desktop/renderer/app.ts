@@ -23,6 +23,9 @@ import { restoredTurnHtml } from "./steps_restore.ts"; // P-RESUME.1 (ADR-0171):
 import { ageStr, esc, fmtUSD, goodColor, loadColor } from "./format.ts";
 import { icon, piMark } from "./icons.ts";
 import { aboutHtml, readmeMark } from "./about.ts";
+import { createTriviaGame, triviaExplainHtml, triviaQuestionHtml, triviaVisible, type TriviaGame, type TriviaQuestion } from "./trivia.ts"; // P-TRIV.1 (ADR-0174)
+import { bankForRole } from "./trivia_roles.ts"; // P-TRIV.2 (ADR-0175): role-aware banks
+import { isIntelNewsItem, newsLineHtml } from "./trivia_news.ts"; // P-TRIV.3 (ADR-0176): the executive INTEL WIRE
 import { MARKET_PLUGINS, marketplaceHtml, marketRowsHtml } from "./marketplace.ts"; // P-MARKET.1 (ADR-0158)
 import { toolfailGroupHtml, type ToolFailEntry } from "./toolfail_group.ts"; // P-TOOLFAIL.2 (ADR-0163)
 import { APP_VERSION } from "../version.ts";
@@ -92,6 +95,7 @@ const state = {
   settingsOpen: false,
   lastOk: 0,
   streaming: false,
+  streamStartedAt: null as number | null, // P-TRIV.1 (ADR-0174): when the current turn began streaming - gates the Trivia Wire
   queued: null as string | null, // P-ACP.4: a prompt the user pre-staged while a turn was running
   lastPrompt: "" as string, // last user message - re-sent by an Approve & retry (ADR-0019 C)
   probedLimits: [] as import("./bridge.ts").ProbedLimit[], // P10.3 live API-key rate limits
@@ -1121,7 +1125,7 @@ async function send(): Promise<void> {
   ta.value = ""; autosize(ta);
   state.attachments = []; renderComposerThumbs(); // clear the thumb strip on send (also refreshes send-enabled)
   addMessage("user", text, atts);
-  state.streaming = true; setSendEnabled();
+  state.streaming = true; state.streamStartedAt = Date.now(); setSendEnabled();
 
   const node = addMessage("assistant", "");
   const textEl = $(".text", node) as HTMLElement;
@@ -1422,6 +1426,14 @@ function renderMetricsRail(): void {
     ...(ca && ca.totals.files > 0 ? [{ n: `+${fmtNum(ca.totals.added)}`, label: "lines", cls: "g", tip: `Workspace activity this month (${ca.month}): ${fmtNum(ca.totals.added)} lines added, ${fmtNum(ca.totals.deleted)} deleted across ${fmtNum(ca.totals.files)} files. This is REPO activity (all commits), not AI-authored lines.` } as T] : []),
     { n: String(findings), label: "findings", cls: "m", tip: "Scanner findings so far", attn: findings > 0 },
     { n: String(quar), label: "quarantd", cls: "r", tip: "Artifacts currently quarantined", attn: quar > 0 },
+    // P-TRIV.1 (ADR-0174): lifetime Trivia Wire score - the LAST tile, so it sits just above the
+    // gate-active corner. Only appears once the user has actually played (no dead zero tile).
+    ...((): T[] => {
+      const tv = triviaEnabled() && triviaGame ? triviaGame.state() : null;
+      return tv && tv.answered > 0
+        ? [{ n: fmtNum(tv.score), label: "trivia", cls: "c", tip: `Trivia Wire lifetime score: ${fmtNum(tv.correct)}/${fmtNum(tv.answered)} correct. Streaks multiply points up to x3. The ticker appears in the status bar while the agent works.` }]
+        : [];
+    })(),
   ];
 
   // Signature: value + attention state per tile. Unchanged → leave the DOM alone (keep the pulse smooth).
@@ -1655,6 +1667,7 @@ function promptForRole(): Promise<void> {
 // Apply a role's CALM default surfacing (ADR-0088): the landing inspector tab. Cosmetic; ADR-0021's
 // active-block override still wins. The full per-role chrome presets are P-ROLE.2.
 function applyRoleDefault(role: UserRole): void {
+  refreshTriviaGame(); // P-TRIV.2 (ADR-0175): the Trivia Wire bank follows the role (idempotent) - BEFORE the surfacing guard
   if (hasActiveBlocks()) return; // never override a live security surface
   const tab = roleDefaultTab(role);
   if (state.inspectorRail) { state.inspectorTab = tab; return; }
@@ -4434,9 +4447,236 @@ function renderStatus(): void {
       ${budget && currentProviderHasApiKey() ? `<div class="seg seg-btn${budget.used >= 0.9 ? " warn" : ""}" data-budget-refresh data-tip="${esc(budget.label)} usage|${budget.used >= 0.9 ? "Almost spent - turns may start stalling. " : ""}Click to re-check now · auto every 5 min. From the provider's API-key rate-limit headers.">${esc(budget.label)} <b style="color:${loadColor(budget.used)}">${Math.round(budget.used * 100)}%</b> ${icon("refresh", 11)}</div>` : ""}
       ${asksageChip()}
     </div>
+    <div class="triv-slot" id="trivSlot"></div>
     <div class="right">
       <div class="seg" data-tip="Security gate|In-process, fail-closed">${icon("shield", 13)} gate active</div>
     </div>`;
+  mountTrivia(); // P-TRIV.1: re-adopt the persistent ticker after the innerHTML swap
+}
+
+// ───────────────────────── the Trivia Wire — P-TRIV.1 (ADR-0174) ─────────────────────────
+// A word-game ticker that lives in the status bar's flexible gap (between the Gov chip and the
+// gate-active pill) ONLY while an agent turn has been streaming for a while - the boredom window.
+// Game rules, scoring, persistence shape, visibility rule, and the ESCAPED markup are all pure in
+// trivia.ts; this block owns just the animation loop and the input wiring. The ticker element is
+// created once and re-adopted after every renderStatus innerHTML swap so its scroll position and
+// in-flight question survive the 2s data poll.
+const TRIVIA_SCORE_KEY = "lucid.trivia";        // lifetime {score,answered,correct}
+const TRIVIA_ENABLED_KEY = "lucid.trivia-enabled"; // "0" = off (default on; Settings toggle is P-TRIV.3)
+const TRIVIA_SPEED = 78;                        // px/s - an easy reading clip
+const TRIVIA_EXPLAIN_SPEED = 95;
+const TRIVIA_ANSWER_LINGER_MS = 1100;           // how long the pill verdict shows before the explanation line
+
+function triviaEnabled(): boolean {
+  try { return localStorage.getItem(TRIVIA_ENABLED_KEY) !== "0"; } catch { return true; }
+}
+let triviaGame: TriviaGame | null = null;
+let trivEl: HTMLElement | null = null;          // persistent .triv wrapper (survives renderStatus)
+let trivIn: HTMLElement | null = null;          // the scrolling line inside it
+let trivX = 0, trivStop = 0, trivLast = 0;
+let trivPaused = false, trivAnswered = false, trivShown = false;
+let trivMeasured = false; // widths read while ATTACHED - a detached measure (clientWidth 0) parks the line wrong
+// P-TRIV.2 (ADR-0175): role-aware banks + idle engagement
+let trivBank: readonly TriviaQuestion[] | null = null; // the bank the current game was built on (ref-compared on role change)
+let trivIdleSince = Date.now();                 // last activity edge: boot, turn end, or a composer keystroke
+let trivPrevStreaming = false;                  // detects the turn-end edge inside the frame loop
+let trivKgUnlocked = false;                     // cached bridge.personal() unlock state (60s poll - never fetched per frame)
+// P-TRIV.3 (ADR-0176): the executive INTEL WIRE - scanned headlines interleaved between questions.
+let trivNews: import("./bridge.ts").IntelNewsItemView[] = [];
+let trivNewsIdx = 0;
+let trivShowingNews = false;                    // the current line is a news interstitial, not the game
+let trivParkedAt: number | null = null;         // when an unanswered question reached its stop
+const TRIVIA_PARK_TIMEOUT_MS = 45_000;          // parked + unanswered this long → the wire moves on (skip, no penalty)
+
+/** Pull the wire (executive only). Fail-quiet: offline/blocked → empty list → questions-only. */
+async function refreshTriviaNews(): Promise<void> {
+  if (state.userRole !== "executive" || !triviaEnabled()) { trivNews = []; return; }
+  try {
+    const v = await bridge.intelNews();
+    trivNews = (v?.items ?? []).filter(isIntelNewsItem);
+  } catch { trivNews = []; }
+}
+
+/** Swap the ticker line to the next news item. Returns false when there is nothing to show
+ *  (non-executive role, empty wire, or reduced motion - news is a scroll-only experience). */
+function loadNewsLine(): boolean {
+  if (!trivIn || !trivEl || trivReducedMotion || state.userRole !== "executive" || trivNews.length === 0) return false;
+  const item = trivNews[trivNewsIdx % trivNews.length]!;
+  trivNewsIdx++;
+  const html = newsLineHtml(item);
+  if (!html) return false;
+  trivIn.innerHTML = html;
+  trivShowingNews = true;
+  trivParkedAt = null;
+  trivX = trivEl.clientWidth + 6;
+  trivIn.style.transform = `translateX(${trivX}px)`;
+  return true;
+}
+
+const trivStore = () => ({
+  get: () => localStorage.getItem(TRIVIA_SCORE_KEY),
+  set: (v: string) => localStorage.setItem(TRIVIA_SCORE_KEY, v),
+});
+
+async function refreshTriviaKg(): Promise<void> {
+  try { const p = await bridge.personal(); trivKgUnlocked = !!(p?.enabled && p?.unlocked); }
+  catch { trivKgUnlocked = false; } // unknown = locked: the idle branch stays fail-quiet
+}
+
+/** Rebuild the game when the role's bank actually changed (lifetime score survives - it lives in
+ *  the store, not the game). No-op before the ticker exists or when the bank is unchanged. */
+function refreshTriviaGame(): void {
+  if (!triviaGame) return;
+  const bank = bankForRole(state.userRole);
+  if (bank === trivBank) return;
+  trivBank = bank;
+  triviaGame = createTriviaGame(bank, trivStore());
+  loadTriviaLine();
+  void refreshTriviaNews(); // role changed: fill (or clear) the INTEL WIRE for the new persona
+}
+const trivReducedMotion = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+function ensureTrivia(): void {
+  if (trivEl || !triviaEnabled()) return;
+  trivBank = bankForRole(state.userRole);
+  triviaGame = createTriviaGame(trivBank, trivStore());
+  // Idle-engagement inputs (P-TRIV.2): a composer keystroke restarts the idle grace, and the KG
+  // unlock state is polled gently (never per frame - bridge.personal() is a fetch).
+  $("#input")?.addEventListener("input", () => { trivIdleSince = Date.now(); });
+  void refreshTriviaKg();
+  setInterval(() => { if (triviaEnabled()) void refreshTriviaKg(); }, 60_000);
+  // P-TRIV.3: the INTEL WIRE refresh rides the backend's 20-minute cache - polling faster only re-reads it.
+  void refreshTriviaNews();
+  setInterval(() => { void refreshTriviaNews(); }, 5 * 60_000);
+  trivEl = el(`<div class="triv" data-tip="Trivia Wire|Answer with a click or the A-D keys. Hover pauses, scroll re-reads. Right-click to hide."><div class="tkin"></div></div>`);
+  trivIn = $(".tkin", trivEl) as HTMLElement;
+  trivEl.addEventListener("mouseenter", () => { trivPaused = true; });
+  trivEl.addEventListener("mouseleave", () => { trivPaused = false; });
+  // Wheel = scrub back to re-read a long question (the ticker is the only scrollable thing here).
+  trivEl.addEventListener("wheel", (e) => {
+    e.preventDefault();
+    const w = trivEl!.clientWidth, iw = trivIn!.scrollWidth;
+    trivX = Math.max(Math.min(6, w - iw - 6), Math.min(w, trivX - (e.deltaY || e.deltaX) * 0.7));
+    trivIn!.style.transform = `translateX(${trivX}px)`;
+  }, { passive: false });
+  trivEl.addEventListener("click", (e) => {
+    const pill = (e.target as HTMLElement).closest("[data-tch]");
+    if (pill) answerTrivia(Number((pill as HTMLElement).dataset.tch));
+  });
+  // Right-click = hide (an easy permanent dismiss; the undo toast keeps it reversible).
+  trivEl.addEventListener("contextmenu", (e) => {
+    e.preventDefault(); e.stopPropagation();
+    try { localStorage.setItem(TRIVIA_ENABLED_KEY, "0"); } catch { /* ignore */ }
+    trivShown = false; trivEl?.classList.remove("on");
+    showToast({
+      title: "Trivia Wire hidden", desc: "It won't come back on its own.",
+      actions: [{ label: "Undo", run: () => { try { localStorage.setItem(TRIVIA_ENABLED_KEY, "1"); } catch { /* ignore */ } } }, { label: "OK" }],
+      timeout: 6000,
+    });
+  });
+  document.addEventListener("keydown", (e) => {
+    if (!trivShown || e.ctrlKey || e.metaKey || e.altKey) return;
+    const t = e.target as HTMLElement | null;
+    if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+    const k = "abcd".indexOf(e.key.toLowerCase());
+    if (k >= 0) answerTrivia(k);
+  });
+  loadTriviaLine();
+  requestAnimationFrame(triviaFrame);
+}
+
+function mountTrivia(): void {
+  if (!triviaEnabled()) return;
+  ensureTrivia();
+  const slot = $("#trivSlot");
+  if (slot && trivEl && trivEl.parentElement !== slot) slot.appendChild(trivEl); // appendChild MOVES - state intact
+  if (!trivMeasured && trivEl?.isConnected) loadTriviaLine(); // first real mount: re-park with live widths
+}
+
+/** (Re)fill the line from the game's current phase and park it off the right edge. */
+function loadTriviaLine(): void {
+  if (!triviaGame || !trivIn || !trivEl) return;
+  const s = triviaGame.state();
+  trivIn.innerHTML = s.phase === "question" ? triviaQuestionHtml(s) : triviaExplainHtml(s);
+  trivAnswered = false;
+  trivShowingNews = false; // any direct (re)load ends a news interstitial - e.g. a role switch mid-headline
+  trivParkedAt = null;
+  const w = trivEl.clientWidth || 300, iw = trivIn.scrollWidth;
+  trivStop = Math.min(6, w - iw - 6); // long line → stop when the TAIL (the answer pills) is in view
+  trivX = trivReducedMotion ? trivStop : w + 6; // reduced motion: no scroll-in, rest immediately
+  trivIn.style.transform = `translateX(${trivX}px)`;
+  trivMeasured = trivEl.isConnected;
+  if (trivReducedMotion) {
+    // The explanation line cannot scroll off under reduced motion - hold it readable, then move on.
+    if (s.phase === "explain") setTimeout(() => { if (triviaGame?.state().phase === "explain" && !trivAnswered) { triviaGame.advance(); loadTriviaLine(); } }, 4500);
+  }
+}
+
+function answerTrivia(k: number): void {
+  if (!triviaGame || trivAnswered) return;
+  const res = triviaGame.answer(k);
+  if (!res) return;
+  trivAnswered = true;
+  const pills = trivIn ? Array.from(trivIn.querySelectorAll<HTMLElement>("[data-tch]")) : [];
+  pills[k]?.classList.add(res.correct ? "ok" : "bad");
+  if (!res.correct) pills[res.correctIndex]?.classList.add("ok");
+  renderMetricsRail(); // the score tile updates immediately
+  setTimeout(() => { if (triviaGame?.state().phase === "explain") loadTriviaLine(); }, TRIVIA_ANSWER_LINGER_MS);
+}
+
+function triviaFrame(ts: number): void {
+  requestAnimationFrame(triviaFrame);
+  if (!triviaGame || !trivEl || !trivIn) return;
+  const dt = Math.min(0.05, (ts - trivLast) / 1000 || 0);
+  trivLast = ts;
+  // Turn-end edge: the idle grace restarts when a turn finishes, so the ticker doesn't hang on
+  // uninvited - it fades with the turn and only returns after a quiet stretch.
+  if (trivPrevStreaming && !state.streaming) trivIdleSince = Date.now();
+  trivPrevStreaming = state.streaming;
+  const composer = $("#input") as HTMLTextAreaElement | null;
+  const sessions = cachedSessions<SessionList>();
+  const vis = triviaVisible({
+    enabled: triviaEnabled(), streaming: state.streaming, streamStartedAt: state.streamStartedAt, now: Date.now(),
+    composerEmpty: !composer?.value.trim(),
+    hasHistory: (sessions?.sessions?.length ?? 0) > 0,
+    kgUnlocked: trivKgUnlocked,
+    idleSince: trivIdleSince,
+  });
+  if (vis !== trivShown) { trivShown = vis; trivEl.classList.toggle("on", vis); }
+  if (!vis) return;
+  const s = triviaGame.state();
+  // NOTE the linger window: right after an answer the game phase is already "explain" but the
+  // QUESTION line (with the pill verdict) is still on screen until the TRIVIA_ANSWER_LINGER_MS
+  // timer swaps it - trivAnswered=true marks that window, so nothing scrolls during it.
+  if (!trivPaused && !trivReducedMotion && !trivAnswered) {
+    if (s.phase === "question") {
+      // Recompute the stop from LIVE widths (cheap: transform/color writes never dirty layout) so a
+      // window resize mid-scroll still parks the answer pills inside the visible gap.
+      trivStop = Math.min(6, trivEl.clientWidth - trivIn.scrollWidth - 6);
+      if (trivX > trivStop) { trivX = Math.max(trivStop, trivX - TRIVIA_SPEED * dt); trivIn.style.transform = `translateX(${trivX}px)`; }
+      else if (trivParkedAt === null) trivParkedAt = Date.now();
+      else if (Date.now() - trivParkedAt >= TRIVIA_PARK_TIMEOUT_MS) {
+        // P-TRIV.3: the wire keeps streaming - an unanswered question yields to a news line
+        // (executive) or the next question, with zero score impact.
+        if (!loadNewsLine()) { triviaGame.skip(); loadTriviaLine(); }
+      }
+    } else {
+      trivX -= TRIVIA_EXPLAIN_SPEED * dt; trivIn.style.transform = `translateX(${trivX}px)`;
+      if (trivX < -trivIn.scrollWidth - 20) {
+        // P-TRIV.3: explain line done → an INTEL WIRE headline (executive, when available) →
+        // then the next question. A news line that just finished falls through: the phase says
+        // whether it followed an answer (explain → advance) or a park timeout (question → skip).
+        if (!trivShowingNews && loadNewsLine()) { /* news line parked off-right; keeps scrolling */ }
+        else {
+          trivShowingNews = false;
+          if (triviaGame.state().phase === "explain") triviaGame.advance(); else triviaGame.skip();
+          loadTriviaLine();
+        }
+      }
+    }
+  }
+  // Letter color is now a single brand accent set in CSS (.triv .tl) - the animated hue sweep
+  // read as too loud in the bar; one LUCID color keeps the wire part of the chrome.
 }
 
 // ───────────────────────── data polling ─────────────────────────
@@ -6201,7 +6441,7 @@ async function runGoalLoop(
   if (!autoCollapsedSessions) { autoCollapsedSessions = true; if (!state.sidebarCollapsed) toggleSidebar(true); }
   state.lastPrompt = opts.goal;
   addMessage("user", `${verb}${opts.resume ? " (resume)" : ""}: ${opts.goal}${opts.command ? `\nverify: \`${opts.command}\`` : ""}  ·  up to ${opts.maxIters} iterations`);
-  state.streaming = true; goalLoopRunning = true; setSendEnabled();
+  state.streaming = true; state.streamStartedAt = Date.now(); goalLoopRunning = true; setSendEnabled();
   const node = addMessage("assistant", "");
   const textEl = $(".text", node) as HTMLElement; textEl.innerHTML = "";
   const wrap = el(`<div class="goal-loop"></div>`); textEl.appendChild(wrap);

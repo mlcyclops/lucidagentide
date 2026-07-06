@@ -74,6 +74,7 @@ function settingsData() {
 import { emailDomainAllowed, managedAsksageOnly, managedConfig, managedLocks, skipAllowed } from "./managed_config.ts";
 import { asksageConfig, listDatasets, listPersonas, monthlyTokens, scanPersona, wrapPersona } from "./asksage.ts";
 import { listSkills } from "./skills_data.ts";
+import { intelNews } from "./intel_news.ts"; // P-TRIV.3 (ADR-0176): the executive Trivia Wire's news feed
 import { importSkill } from "./skills_import.ts";
 import { createUserCommand, deleteUserCommand, listUserCommands } from "./user_commands.ts"; // P-CMD.1
 import { archiveGoalReport, deleteGoalReport, listResumableLoops, listGoalReports, readGoalReport, restoreGoalReport } from "./goal_memory.ts";
@@ -1372,6 +1373,9 @@ const server = Bun.serve({
       // fresh model list. Used after connecting a provider (OAuth or key) without relaunching.
       if (p === "/api/config/refresh" && req.method === "POST") { backend.restart(); return json({ ok: true, data: await backend.getConfig() }); }
       if (p === "/api/commands") return json({ ok: true, data: await backend.getCommands() });
+      // P-TRIV.3 (ADR-0176): executive Trivia Wire intel news - first-party curated feeds, fetched
+      // server-side, scan-gated fail-closed, fail-quiet to [] offline. Audited per fetch (egress events).
+      if (p === "/api/intel-news") return json({ ok: true, data: await intelNews() });
       if (p === "/api/skills") return json({ ok: true, data: await listSkills() });
       // P-SKILL.1 (ADR-0045): gated drop-import. Each dropped .md is scanned fail-closed; clean ones
       // are written under .omp/skills/<slug>/SKILL.md, flagged ones are held for Security-panel review.

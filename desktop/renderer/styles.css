@@ -2795,3 +2795,38 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .restored-steps{margin:2px 0 10px;display:flex;flex-direction:column;gap:6px}
 .restored-steps .reasoning,.restored-steps .thoughts{opacity:.92}
 .restored-steps .tf-body.restored{margin-top:6px;border-top:1px solid var(--line-soft);padding-top:6px}
+
+/* ───────── P-TRIV.1 (ADR-0174): the Trivia Wire ticker ───────── */
+/* The slot fills the status bar's flexible gap between the Gov chip and the gate-active pill.
+   It collapses to nothing when the ticker is hidden - the bar looks exactly as before. */
+.statusbar .triv-slot{flex:1 1 auto;min-width:0;height:100%;display:flex;align-items:center;overflow:hidden}
+.triv{position:relative;width:100%;height:100%;overflow:hidden;opacity:0;pointer-events:none;
+  transition:opacity .5s var(--ease)}
+.triv.on{opacity:1;pointer-events:auto}
+/* Soft fade masks at both edges so letters materialize/dissolve instead of clipping hard. */
+.triv::before,.triv::after{content:"";position:absolute;top:0;bottom:0;width:18px;z-index:2;pointer-events:none}
+.triv::before{left:0;background:linear-gradient(90deg,#0c0d13,transparent)}
+.triv::after{right:0;background:linear-gradient(270deg,#0c0d13,transparent)}
+.triv .tkin{position:absolute;top:0;height:100%;display:flex;align-items:center;white-space:nowrap;will-change:transform}
+.triv .tqn{font-family:var(--mono);font-size:10.5px;color:var(--txt-4);margin-right:7px;letter-spacing:.4px}
+.triv .tl{font-size:12px;font-weight:500;white-space:pre;line-height:1;color:var(--accent-2)}
+.triv .tpad{display:inline-block;width:14px;flex:none}
+.triv .tch{display:inline-flex;align-items:center;gap:5px;margin-left:9px;padding:1px 8px;flex:none;
+  border:1px solid var(--line-strong);border-radius:9px;font-size:11.5px;color:var(--txt-2);
+  cursor:pointer;background:var(--bg-2);transition:border-color var(--t-fast) var(--ease),color var(--t-fast) var(--ease)}
+.triv .tch b{font-family:var(--mono);font-size:10.5px;font-weight:700;color:var(--accent-2)}
+.triv .tch:hover{border-color:var(--accent-2);color:var(--txt)}
+.triv .tch.ok{border-color:var(--green);color:var(--green);background:var(--green-dim)}
+.triv .tch.ok b{color:var(--green)}
+.triv .tch.bad{border-color:var(--red);color:var(--red);background:var(--red-dim)}
+.triv .tch.bad b{color:var(--red)}
+.triv .tvx{font-family:var(--mono);font-size:11.5px;font-weight:700;margin-right:7px}
+.triv .tvx.ok{color:var(--green)}
+.triv .tvx.bad{color:var(--red)}
+
+/* P-TRIV.3 (ADR-0176): the INTEL WIRE interstitial line */
+.triv .tnw{font-family:var(--mono);font-size:9.5px;font-weight:700;letter-spacing:1.1px;flex:none;
+  color:#7ee7ff;border:1px solid rgba(126,231,255,.4);border-radius:8px;padding:1px 7px;margin-right:8px;
+  background:rgba(126,231,255,.08)}
+.triv .tns{font-size:11px;color:var(--txt-3);flex:none;margin-right:8px;white-space:nowrap}
+.triv .tna{font-family:var(--mono);font-size:10.5px;color:var(--txt-4);flex:none;margin-left:8px}

@@ -544,3 +544,15 @@ clean: ## Remove build/test artifacts (keeps committed source + DBs)
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
 		| awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
+
+.PHONY: demo-P-TRIV.1
+demo-P-TRIV.1: ## P-TRIV.1 (ADR-0174): the Trivia Wire - a word-game ticker in the status bar's idle gap; seed bank valid + varied, no repeats until the bank empties, streak scoring capped at x3, corrupt/throwing storage degrades safely, streaming-only visibility, hostile question text renders as text (never markup)
+	$(BUN) run harness/scripts/demo_ptriv1.ts
+
+.PHONY: demo-P-TRIV.2
+demo-P-TRIV.2: ## P-TRIV.2 (ADR-0175): role-aware Trivia Wire - executive→GovCon (M&A/opportunities/federal priorities), manager→CMMI-DEV L3 + PM, security→CMMC + RMF, developer/none→general; banks valid + domain-confined + duplicate-free; idle engagement wakes the ticker on an empty composer only when past sessions or an unlocked KG exist
+	$(BUN) run harness/scripts/demo_ptriv2.ts
+
+.PHONY: demo-P-TRIV.3
+demo-P-TRIV.3: ## P-TRIV.3 (ADR-0176): 100-question dev/security/manager banks + 50 executive - and the executive INTEL WIRE: curated defense/intel RSS fetched first-party (host-only egress audit), scan-gated FAIL-CLOSED (findings or a dead scanner drop the batch), fail-quiet offline, rendered as escaped text between questions
+	$(BUN) run harness/scripts/demo_ptriv3.ts
