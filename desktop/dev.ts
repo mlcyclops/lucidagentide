@@ -76,6 +76,7 @@ import { asksageConfig, listDatasets, listPersonas, monthlyTokens, scanPersona, 
 import { inspectSkill, listSkills, removeSkill, rescanSkill } from "./skills_data.ts"
 import { intelNews } from "./intel_news.ts"; // P-TRIV.3 (ADR-0176): the executive Trivia Wire's news feed
 import { detectElectronApp, electronLaunchPlan } from "./preview_electron.ts"; // P-PREVIEW.7 (ADR-0179)
+import { listSubagentRuns } from "./subagent_activity.ts"; // P-TASK.5 (ADR-0180): live delegation-card activity
 import { emitSecurityEvent } from "./audit_export.ts"; // P-PREVIEW.7: audit the user-initiated external launch
 import { spawn as spawnChild } from "node:child_process";
 import { installRegistrySkill, type RegistrySkillArtifact } from "./skills_registry.ts"
@@ -1268,6 +1269,13 @@ const server = Bun.serve({
         );
       }
 
+      // P-TASK.5 (ADR-0180): live subagent activity for the delegation card. Reads the CURRENT
+      // session's subtask transcripts (omp persists each subtask beside the parent session file) -
+      // read-only, path-confined to the resolved session file, fail-quiet [] when nothing delegated.
+      if (p === "/api/subagents") {
+        try { return json({ ok: true, data: { runs: listSubagentRuns(sessionPathById(backend.currentSessionId())) } }); }
+        catch { return json({ ok: true, data: { runs: [] } }); }
+      }
       // real omp ACP backend (genuine model replies + live session config)
       if (p === "/api/sessions") return json({ ok: true, data: listSessions() });
       if (p === "/api/sessions/ingest/clear" && req.method === "POST") return json({ ok: true, data: clearIngestSessions() }); // P-KG-INGEST.2
