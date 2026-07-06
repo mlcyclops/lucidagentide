@@ -151,7 +151,11 @@ export function parseCandidates(raw: string, cap = CANDIDATE_CAP): SkillCandidat
  */
 export function buildSkillMd(candidate: SkillCandidate): string {
   const body = candidate.body.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, "").trim();
-  const desc = candidate.description.replace(/\s+/g, " ").trim().replace(/"/g, '\\"');
+  const desc = candidate.description
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/\\/g, "\\\\")
+    .replace(/"/g, '\\"');
   return `---\nname: ${candidate.name}\ndescription: "${desc}"\n---\n\n${body}\n`;
 }
 
