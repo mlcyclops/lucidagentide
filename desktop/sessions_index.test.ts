@@ -102,7 +102,7 @@ test("sessionMessages: limit=0 returns everything; a limit returns the TAIL plus
 test("sessionMessages: unknown id is an empty page, not an error", () => {
   const root = freshRoot({ "a.jsonl": chat("a", ["one"]) });
   try {
-    expect(sessionMessages("nope", 10, root)).toEqual({ messages: [], total: 0 });
+    expect(sessionMessages("nope", 10, root)).toEqual({ messages: [], total: 0, userTotal: 0 });
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

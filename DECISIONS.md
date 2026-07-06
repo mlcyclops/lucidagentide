@@ -12067,3 +12067,148 @@ omp spawn block a headless capture; the rendering is instead pinned by the pure-
 ADR-0157 (the P-SANDBOX epic), ADR-0159/0166/0167/0168 (P-SANDBOX.1-.4 - the posture + refused reach-outs
 this surfaces), ADR-0019 C (`security_log.ts` liveBlocks - the sibling panel channel this sits beside),
 ADR-0164/0069 (the SecurityEvent audit trail the egress sink also feeds).
+
+## ADR-0170 - P-SECACK.1: reviewed security rows leave the active view + prompt-bar clipboard menu
+
+**Date:** 2026-07-05
+**Status:** Accepted. **P-SECACK.1 BUILT + tested.**
+
+### Context
+
+User report (owner, dogfooding): the Security panel's "4 quarantined / 4 awaiting review / 24
+findings" chips never go away. Root causes found in review: (a) those numbers come from
+agent_obs.duckdb, which the GUI only ever opens READ_ONLY (single-writer - the live gate owns
+it), so no review action could ever drain them; (b) the Approval-queue Approve/Deny buttons
+were FAKE - the `data-act` handler only showed a toast (never wrote anything, could not);
+(c) findings is an all-history aggregate with no "seen" notion. Second ask, same session:
+right-click Cut/Copy/Paste on the prompt bar - Electron ships no native context menu, so
+mouse-only clipboard flows were impossible.
+
+### Decision
+
+1. **GUI-owned review-ack ledger** (`desktop/security_ack.ts`, mirrors security_log.ts /
+   ADR-0019 C): append-only JSONL at `~/.omp/lucid-sec-acks.jsonl` + in-memory fold. Pure
+   corrupt-tolerant `foldAcks(lines)`; `ackArtifact(id)` (idempotent, injectable audit emit -
+   P-SANDBOX.3 precedent; emits `approval/artifact_reviewed` decision=block, parity with
+   block_dismissed); `ackFindings(total)` - a MONOTONE findings-seen watermark (view
+   preference; no SecurityEvent); `ackView()`. **An ack releases NOTHING** - trust labels,
+   fail-closed blocks, and every DB audit record stand; rows only leave the active view.
+   Path override `LUCID_SEC_ACK_PATH` for tests/demos.
+2. **Split logic is pure + shared** (`desktop/renderer/sec_review.ts`): `splitReviewed(rows,
+   acks)` (rows with a missing key stay ACTIVE - malformed rows never silently vanish) +
+   `freshFindings(total, seen)` (null->all new; clamped, never negative). securityHtml, the
+   rail badge, and the bulk-ack handler all use this ONE definition.
+3. **Server**: `/api/security` now carries `acks: ackView()`; new `POST /api/security/ack`
+   `{ ids?: string[]; findings?: boolean }` - the findings watermark total is computed
+   SERVER-side from the live snapshot (a stale client can't fake it).
+4. **UI**: per-row "Reviewed" buttons (esc()'d artifact_id only - no new injection surface via
+   the new `table(cols, rows, act?)` action cell in dom.ts), "Mark all N reviewed" bulk button,
+   and a muted collapsed "N reviewed · still isolated · audit kept" shelf inside each section.
+   The fake Approve/Deny buttons are REMOVED. The findings chip counts only NEW findings since
+   the watermark ("Mark seen" button in the Findings section; accordion badge shows
+   `total · fresh new`).
+5. **Clipboard context menu** (`desktop/renderer/ctxmenu.ts`): one document-level contextmenu
+   hook for textarea/text inputs -> styled in-DOM menu (works in Electron AND the browser dev
+   server) with Cut/Copy/Paste/Select-all. Pure tested core: `menuItemsFor` (password fields
+   NEVER offer Cut/Copy - shoulder-surf leak; paste stays) + `spliceText` (clamp-safe on
+   reversed/out-of-range selections). Paste of image clipboards goes through the SAME
+   P-VISION.1 staged-thumbnail path as Ctrl+V; a refusing browser degrades to a toast.
+
+### Consequences
+
+- Files: desktop/security_ack.ts (+.test.ts, new), desktop/renderer/sec_review.ts (+.test.ts,
+  new), desktop/renderer/ctxmenu.ts (+.test.ts, new), dom.ts (table action cell), bridge.ts
+  (`acks` on SecuritySnapshot, `securityAck`), dev.ts (endpoint + snapshot merge), app.ts
+  (securityHtml ackSection, ack click handlers, badge split, installTextContextMenu at the
+  composer), styles.css (.ctx-menu/.ctx-it/.sec-reviewed/td.row-act), scripts/demo_p_secack_1.ts,
+  `demo-P-SECACK.1` Makefile target.
+- The provenance DB stays READ_ONLY from the GUI forever; "review" is honestly labeled - the
+  only RELEASE path remains the audited live-block Approve & retry (ADR-0019 C).
+
+### Verification
+
+`bun test desktop/security_ack.test.ts desktop/renderer/sec_review.test.ts
+desktop/renderer/ctxmenu.test.ts` 24 pass. `demo-P-SECACK.1` green. `typecheck:desktop` +
+`typecheck:desktop-server` clean; license check green. Baseline note: full `bun test` on this
+Windows box fails ONLY in pre-existing spots (vendor/oh-my-pi EBUSY/path-separator/version-drift
+suites + the known fs_browse/lucid_acp POSIX-path tests - ADR-0165 precedent), all untouched by
+this increment.
+
+### Relates to
+
+ADR-0019 C (live-block approve/dismiss - the pattern mirrored), ADR-0069 (P-ENT.2 SecurityEvent
+parity), ADR-0167 (injectable-emit test seam), ADR-0136 (P-VISION.1 image-paste path reused).
+
+
+## ADR-0171 - P-RESUME.1: a resumed session keeps its thinking + tool-call history
+
+**Date:** 2026-07-05
+**Status:** Accepted. **P-RESUME.1 BUILT + tested.**
+
+### Context
+
+User report (owner, dogfooding): "when I leave a chat session to look at another one, I lose the
+thinking modules and tool call history." Scouted root cause: thinking streams, tool steps, and
+tool failures are rendered LIVE from ChatEvents but persisted NOWHERE - omp's session .jsonl
+(what sessionMessages resumes from) stores only user/assistant messages, sessionMessages filters
+to exactly those, and renderThread rebuilds only { role, text }. The P-TOOLFAIL toolbox state was
+equally transient, so "this session kept failing tool calls" evidence also vanished on switch.
+
+### Decision
+
+1. **Never write foreign records into omp's transcript** (invariant #1). Instead: a GUI-owned
+   per-session activity sidecar - `desktop/session_steps.ts`, append-only JSONL at
+   `~/.omp/lucid-steps/<sid>.jsonl` (sid sanitized against traversal; `LUCID_STEPS_DIR` override
+   for tests). Third use of the security_log.ts pattern (ADR-0019 C, ADR-0170).
+2. **One tee at the funnel**: every ChatEvent already passes through `Backend.emit` -
+   `noteStepEvent(sessionId, e)` records `thinking` (BUFFERED per turn - one record per turn, not
+   one write per streamed chunk), `tool` (name+detail; `code` payloads deliberately NOT persisted -
+   bounded sidecar), and ordinary failures (`block` with quarantined===false, the P-TOOLFAIL
+   shape incl. command + capped detail). Real quarantines are EXCLUDED - they live in the
+   security ledger; duplicating them here would create a second, unaudited copy. Hot token
+   chunks return on the first branch. Recording is best-effort and never throws into a turn.
+3. **Turn anchoring**: records carry the 1-based USER-turn ordinal. `beginStepTurn` (in
+   `prompt()`, after ensureSession) advances it; `endStepTurn` (finally) flushes the thinking
+   buffer; the ordinal reseeds from the sidecar's own max on GUI restart. `sessionMessages` now
+   tags user messages with their ordinal (`turn`) and returns `userTotal`; the `/api/session`
+   route calls `syncStepTurns(id, userTotal)` on every resume read, so turns run OUTSIDE this GUI
+   (TUI/another machine) only push the NEXT anchor forward - never re-attach old activity.
+4. **Restore**: `/api/session` merges `steps: readTurnSteps(id)` (pure corrupt-tolerant
+   `foldSteps`; caps: THINK_CAP 20k chars/turn + truncation flag, STEP_CAP 400 records/turn,
+   detail 4k). `renderThread(msgs, steps)` inserts a restored group under its anchoring user
+   message; groups whose anchor fell off the tail-limited page are skipped (matches the
+   truncation note); groups newer than every rendered user message trail at the end.
+   `resumeSession` folds the steps count into the SWR signature so the cached (steps-less) paint
+   re-renders exactly once when steps exist.
+5. **Markup** (`desktop/renderer/steps_restore.ts`, pure-builder convention): collapsed
+   `.reasoning`/`.thoughts` blocks labeled "restored", failures reuse `toolfailRowHtml`
+   (P-TOOLFAIL.2). Everything step-derived is esc()'d - sidecar text is model output + tool
+   errors, both untrusted for HTML. `deleteSession` route also deletes the sidecar.
+
+### Consequences
+
+- Files: desktop/session_steps.ts (+.test.ts, new), desktop/renderer/steps_restore.ts (+.test.ts,
+  new), acp_backend.ts (emit tee + begin/endStepTurn), sessions.ts (TranscriptPage turn/userTotal),
+  dev.ts (route merge + sync + delete), bridge.ts (types), app.ts (renderThread steps +
+  attachRestoredSteps + resume sig), styles.css (.restored-steps), sessions_index.test.ts
+  (userTotal shape), scripts/demo_p_resume_1.ts, `demo-P-RESUME.1` Makefile target.
+- Known wrinkles (documented, accepted): a user message that strips to empty (ingest preambles)
+  is not counted in `userTotal`, so a session mixing those could drift an anchor - bounded by the
+  resume-time re-sync; within-turn ordering between thinking and tools is not preserved (matches
+  the live UX: reasoning above, tools below); sessions from before this increment simply have no
+  sidecar and restore nothing.
+
+### Verification
+
+`bun test desktop/session_steps.test.ts desktop/renderer/steps_restore.test.ts
+desktop/sessions_index.test.ts` 24 pass (fold corruption/caps/anchors, restart reseed,
+forward-only sync, quarantine exclusion, XSS escapes). `demo-P-RESUME.1` + `demo-P-PERF.4`
+(sessionMessages consumer) green. Full `bun test desktop`: 1142 pass / 5 fail - EXACTLY the
+pre-existing Windows fs_browse set (ADR-0165 precedent). typecheck:desktop(+server) clean;
+license check green.
+
+### Relates to
+
+ADR-0019 C / ADR-0170 (the GUI-owned sidecar pattern), ADR-0093/0163 (P-TOOLFAIL shapes reused),
+ADR-0131 (P-PERF.4 tail paging this anchors into), ADR-0027 (the reasoning/thoughts surfaces
+restored), invariant #1 (omp's transcript never forked).

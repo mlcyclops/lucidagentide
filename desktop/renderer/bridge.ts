@@ -39,6 +39,8 @@ export interface AgentTemplateInfo {
   tools: string[];
 }
 import type { LocalProviderDef } from "../local_providers.ts"; // P-LOCAL.3: self-hosted/custom LLM providers
+import type { RestoredTurn } from "../session_steps.ts"; // P-RESUME.1 (ADR-0171): restored agent activity
+export type { RestoredTurn };
 
 export interface BlockRecord { id: string; tool: string; severity: string; findings: string; reason: string; at: string; status: "quarantined" | "approved" | "dismissed"; reviewer?: string }
 
@@ -55,6 +57,9 @@ export interface AgentRunReply {
 export interface SecuritySnapshot {
   findings: any[]; unicode: any[]; approvals: any[]; quarantine: any[];
   promotion: any[]; exports: any[]; runs: any[];
+  // P-SECACK.1 (ADR-0170): GUI-owned review-acks - which DB-backed rows a human already reviewed
+  // (releases NOTHING; view-state only) + the findings-seen watermark.
+  acks?: { artifacts: Record<string, { at: string; reviewer?: string }>; findingsSeen?: number | null };
   // GUI-owned LIVE gate blocks (ADR-0019 C) - present even when the DuckDB views are empty.
   live?: { quarantined: BlockRecord[]; approved: BlockRecord[]; dismissed: BlockRecord[]; total: number };
   // P-SANDBOX.5 (ADR-0169): the live runtime-sandbox posture + refused subprocess reach-outs. Mirrors
@@ -330,6 +335,8 @@ export interface LucidBridge {
   /** Release one quarantined call - the audited fail-closed override (ADR-0019 C). */
   securityApprove(id: string): Promise<BlockRecord | null>;
   securityDismiss(id: string): Promise<BlockRecord | null>;
+  /** P-SECACK.1 (ADR-0170): mark DB-backed security rows reviewed (GUI ack ledger; releases nothing). */
+  securityAck(input: { ids?: string[]; findings?: boolean }): Promise<{ acked: number; findingsSeen: number | null } | null>;
   /** P-BRIEF.3 (ADR-0072) / P-REPORT.1 (ADR-0116): the Engineering Update from the repo's own logs,
    *  optionally tailored to a role and persisted (save) so the Reports panel lists it.
    *  P-REPORT.9 (ADR-0162): pass `repos` to also aggregate recent commits + PRs across the selected repos
@@ -484,7 +491,9 @@ export interface LucidBridge {
   skillActivated(command: string, name: string, source: "bundled" | "project" | "task"): Promise<unknown>;
   sessions(): Promise<SessionList | null>;
   // P-PERF.4: tail-first transcript page - `limit` returns only the last N messages (+ the true total).
-  sessionMessages(id: string, limit?: number): Promise<{ messages: { role: string; text: string }[]; total: number } | null>;
+  // P-RESUME.1 (ADR-0171): user messages carry their `turn` ordinal; `steps` is the restored agent
+  // activity (thinking/tool/failure groups) recorded in the lucid-steps sidecar, keyed by that ordinal.
+  sessionMessages(id: string, limit?: number): Promise<{ messages: { role: string; text: string; turn?: number }[]; total: number; userTotal?: number; steps?: RestoredTurn[] } | null>;
   resumeSession(id: string): Promise<void>;
   deleteSession(id: string): Promise<{ ok: boolean; error?: string }>;
   clearIngestSessions(): Promise<{ ok: boolean; cleared: number } | null>; // P-KG-INGEST.2: bulk-delete ingest throwaways
@@ -722,6 +731,7 @@ export const bridge: LucidBridge = {
   security: () => getData("/api/security"),
   securityApprove: (id) => post("/api/security/approve", { id }),
   securityDismiss: (id) => post("/api/security/dismiss", { id }),
+  securityAck: (input) => post("/api/security/ack", input),
   engineeringBrief: (role, save, repos, window) => (repos && repos.length
     ? post("/api/brief", { role, save, repos, window }) // P-REPORT.9: multi-repo path POSTs the selection
     : getData(`/api/brief${role || save ? "?" : ""}${role ? `role=${encodeURIComponent(role)}` : ""}${save ? `${role ? "&" : ""}save=1` : ""}`)),

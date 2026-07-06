@@ -495,6 +495,14 @@ demo-P-REPORT.10: ## P-REPORT.10 (ADR-0164): a formal SecurityEvent per fetch/PR
 demo-P-FAV.1: ## P-FAV.1 (ADR-0165): model-picker favorite stars - star a model to pin it into a Favorites section at the top of the picker; catalog order preserved, corrupted storage degrades safely, stale stars survive provider reconnects
 	$(BUN) run desktop/scripts/demo_p_fav_1.ts
 
+.PHONY: demo-P-SECACK.1
+demo-P-SECACK.1: ## P-SECACK.1 (ADR-0170): reviewed security rows leave the active view - GUI-owned ack ledger (releases NOTHING, audit kept), findings-seen watermark counts only new findings, and the right-click Cut/Copy/Paste menu for the prompt bar (no Cut/Copy on password fields)
+	$(BUN) run desktop/scripts/demo_p_secack_1.ts
+
+.PHONY: demo-P-RESUME.1
+demo-P-RESUME.1: ## P-RESUME.1 (ADR-0171): a resumed session keeps its thinking + tool-call + tool-failure history - per-session lucid-steps sidecar (omp's transcript untouched), turn anchors only move forward, quarantines not duplicated, hostile text escaped, corrupt sidecar degrades safely
+	$(BUN) run desktop/scripts/demo_p_resume_1.ts
+
 .PHONY: dashboards
 dashboards: ## Materialize dashboard CSVs from a DuckDB into observable/docs/data (DB=path)
 	$(BUN) run harness/scripts/materialize_dashboards.ts $(DB) observable/docs/data

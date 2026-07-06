@@ -32,9 +32,11 @@ export function pill(v: unknown): string {
 }
 
 export interface Col { key: string; label: string; mono?: boolean; pill?: boolean }
-export function table(cols: Col[], rows: Record<string, unknown>[]): string {
+/** P-SECACK.1 (ADR-0170): `act` appends one trailing action cell per row. The caller builds that
+ *  HTML and MUST esc() anything row-derived — table() cannot re-escape prebuilt markup. */
+export function table(cols: Col[], rows: Record<string, unknown>[], act?: (r: Record<string, unknown>) => string): string {
   if (!rows?.length) return `<div class="empty">no rows</div>`;
-  const head = cols.map((c) => `<th>${esc(c.label)}</th>`).join("");
+  const head = cols.map((c) => `<th>${esc(c.label)}</th>`).join("") + (act ? "<th></th>" : "");
   const body = rows
     .map((r) => {
       const cls = typeof r._cls === "string" ? ` class="${r._cls}"` : "";
@@ -42,7 +44,7 @@ export function table(cols: Col[], rows: Record<string, unknown>[]): string {
         const v = r[c.key];
         if (c.pill) return `<td>${v != null ? pill(v) : ""}</td>`;
         return `<td class="${c.mono ? "mono" : ""}">${esc(v)}</td>`;
-      }).join("") + "</tr>";
+      }).join("") + (act ? `<td class="row-act">${act(r)}</td>` : "") + "</tr>";
     })
     .join("");
   return `<table class="tbl"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;

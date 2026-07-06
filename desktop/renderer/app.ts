@@ -8,7 +8,7 @@
 // agent turn. Same renderer in Electron (real omp ACP via window.lucid) and in
 // the browser dev server (simulated). Pure DOM, no framework.
 
-import { bridge, type AgentRunReply, type McpCatalogTool, type ChatEvent, type ConfigOption, type GoalDial, type MemorySnapshot, type OmpCommand, type ProviderAuth, type SecuritySnapshot, type SessionInfo, type SessionList, type UserRole, type WorkspaceInfo } from "./bridge.ts";
+import { bridge, type AgentRunReply, type McpCatalogTool, type ChatEvent, type ConfigOption, type GoalDial, type MemorySnapshot, type OmpCommand, type ProviderAuth, type RestoredTurn, type SecuritySnapshot, type SessionInfo, type SessionList, type UserRole, type WorkspaceInfo } from "./bridge.ts";
 import { ROLE_META, USER_ROLE_LIST, coachHtml, roleDefaultTab, stepsForRole, type TourStep } from "./tour.ts";
 import { modCombo, modSymbol } from "./platform.ts";
 import { aiLocHasData } from "../ailoc_view.ts";
@@ -17,6 +17,9 @@ import { roleIcon } from "./role_icons.ts";
 import { providerHasApiKey, providerKeywords } from "./budget_gate.ts";
 import { cachedSessions, cachedTranscript, setCachedSessions, setCachedTranscript, transcriptSig } from "./swr_cache.ts";
 import { $, $$, accordion, el, fmtNum, gauge, spark, table, type Col } from "./dom.ts";
+import { freshFindings, splitReviewed } from "./sec_review.ts"; // P-SECACK.1 (ADR-0170): reviewed rows leave the active view
+import { installTextContextMenu } from "./ctxmenu.ts"; // P-SECACK.1 (ADR-0170): right-click clipboard menu
+import { restoredTurnHtml } from "./steps_restore.ts"; // P-RESUME.1 (ADR-0171): resumed thinking/tool history
 import { ageStr, esc, fmtUSD, goodColor, loadColor } from "./format.ts";
 import { icon, piMark } from "./icons.ts";
 import { aboutHtml, readmeMark } from "./about.ts";
@@ -3872,10 +3875,40 @@ async function loadWorkspace(): Promise<void> {
   state.workspace = await bridge.workspace().catch(() => null);
   renderWorkspaceBar();
 }
-function renderThread(msgs: { role: string; text: string }[] | null | undefined): void {
+// P-RESUME.1 (ADR-0171): insert one restored-activity group and wire its collapse toggles (the
+// live windows attach listeners at creation; restored markup is a static string, so wire here).
+function attachRestoredSteps(g: RestoredTurn): void {
+  const node = el(restoredTurnHtml(g));
+  for (const btn of $$("[data-rs-toggle]", node)) {
+    btn.addEventListener("click", () => {
+      const win = btn.closest(".reasoning, .thoughts");
+      if (!win) return;
+      const open = win.classList.toggle("open");
+      btn.setAttribute("aria-expanded", String(open));
+    });
+  }
+  $("#thread")!.appendChild(node);
+}
+function renderThread(msgs: { role: string; text: string; turn?: number }[] | null | undefined, steps?: RestoredTurn[] | null): void {
   $("#thread")!.innerHTML = "";
-  if (msgs && msgs.length) for (const m of msgs) addMessage(m.role === "user" ? "user" : "assistant", m.text);
-  else seedThread();
+  if (msgs && msgs.length) {
+    // P-RESUME.1 (ADR-0171): restored agent activity anchors under the user message that started its
+    // turn. Groups whose anchor fell off a tail-limited page are skipped (matches the truncation note);
+    // groups NEWER than every rendered user message (a turn that hasn't flushed to omp's transcript
+    // yet) trail at the end rather than misattaching.
+    const byTurn = new Map<number, RestoredTurn>();
+    for (const g of steps ?? []) byTurn.set(g.turn, g);
+    let maxUserTurn = 0;
+    for (const m of msgs) {
+      addMessage(m.role === "user" ? "user" : "assistant", m.text);
+      if (m.role === "user" && m.turn) {
+        maxUserTurn = Math.max(maxUserTurn, m.turn);
+        const g = byTurn.get(m.turn);
+        if (g) attachRestoredSteps(g);
+      }
+    }
+    for (const g of steps ?? []) if (g.turn > maxUserTurn && maxUserTurn > 0) attachRestoredSteps(g);
+  } else seedThread();
 }
 // P-PERF.4 (ADR-0131): resume loads only the transcript TAIL - matches the SWR cache cap, so the IPC
 // payload and the DOM stay bounded no matter how long the chat grew. The full history stays on disk.
@@ -3889,7 +3922,9 @@ async function resumeSession(id: string): Promise<void> {
   if (cached && cached.length) { renderThread(cached); shownSig = transcriptSig(cached); }
   const page = await bridge.sessionMessages(id, RESUME_TAIL);
   if (page) {
-    if (transcriptSig(page.messages) !== shownSig) renderThread(page.messages); // re-render only if it actually changed (no flicker)
+    // P-RESUME.1: the cached paint never carries restored steps, so any steps force one re-render.
+    const freshSig = transcriptSig(page.messages) + (page.steps?.length ? `+s${page.steps.length}` : "");
+    if (freshSig !== shownSig) renderThread(page.messages, page.steps); // re-render only if it actually changed (no flicker)
     setCachedTranscript(id, page.messages, Date.now());
     if (page.total > page.messages.length) { // honest truncation hint - never silent
       const note = document.createElement("div");
@@ -3965,15 +4000,21 @@ function securityHtml(d: SecuritySnapshot | null): string {
   const totFind = findings.reduce((a, r) => a + Number(r.n || 0), 0);
   const promoted = Number((promotion.find((r) => r.outcome === "promoted") || {}).n || 0);
   const blocked = Number((promotion.find((r) => r.outcome === "blocked") || {}).n || 0);
+  // P-SECACK.1 (ADR-0170): rows a human already reviewed leave the ACTIVE view and the counters.
+  // GUI-owned ack ledger only - the provenance DB is untouched and nothing is ever released.
+  const acks = d?.acks?.artifacts ?? {};
+  const q = splitReviewed(quarantine, acks);
+  const ap = splitReviewed(approvals, acks);
+  const fresh = freshFindings(totFind, d?.acks?.findingsSeen);
   let h = secIntro();
   // ADR-0021: pulse the metric chip that requires triage - quarantined gets red shimmer,
   // awaiting-review gets amber shimmer, only when there are active items in that category.
-  const qCount = quarantine.length + live.quarantined.length;
-  const aCount = approvals.length;
+  const qCount = q.active.length + live.quarantined.length;
+  const aCount = ap.active.length;
   h += chips([
     { cls: "q" + (qCount > 0 ? " alert" : ""), n: qCount, l: "quarantined" },
     { cls: "a" + (aCount > 0 ? " alert alert-amber" : ""), n: aCount, l: "awaiting review" },
-    { cls: "f", n: totFind, l: "findings" },
+    { cls: "f", n: fresh, l: fresh === totFind ? "findings" : "new findings" },
     { cls: "g", n: promoted, l: "promoted facts" },
   ]);
   // P-SANDBOX.5 (ADR-0169): the live runtime-execution boundary for THIS session (bwrap / Seatbelt /
@@ -4005,16 +4046,29 @@ function securityHtml(d: SecuritySnapshot | null): string {
     h += accordion("sec.live", "Live blocks", "this session · gate-enforced", rows + approvedNote + dismissedNote, true, String(live.quarantined.length));
   }
   if (!d && !live.total) { h += `<div class="empty">Nothing has tripped the scanner yet. The moment a tool call carries hidden-Unicode or another injection, the finding, the quarantine queue, and the audit trail appear right here.</div>`; return h; }
-  h += accordion("sec.quarantine", "Quarantine review", "isolated · fail-closed",
-    table([{ key: "artifact_id", label: "artifact", mono: true }, { key: "source", label: "source" }, { key: "trust_label", label: "trust", pill: true }, { key: "risk_score", label: "risk", mono: true }], quarantine),
-    OPEN.has("sec.quarantine"), String(quarantine.length));
-  h += accordion("sec.approvals", "Approval queue", "blocked · awaiting a human",
-    table([{ key: "artifact_id", label: "artifact", mono: true }, { key: "source", label: "source" }, { key: "trust_label", label: "trust", pill: true }, { key: "verdict", label: "verdict", pill: true }], approvals)
-    + (approvals.length ? `<div class="row-actions"><button class="btn-mini ok" data-act="approve">${icon("check", 14)} Approve</button><button class="btn-mini danger" data-act="deny">${icon("close", 14)} Deny</button></div>` : ""),
-    OPEN.has("sec.approvals"), String(approvals.length));
-  h += accordion("sec.findings", "Findings overview", "by type · severity · source",
-    table([{ key: "finding_type", label: "type" }, { key: "severity", label: "sev", pill: true }, { key: "source", label: "source" }, { key: "n", label: "n", mono: true }], findings),
-    OPEN.has("sec.findings"));
+  // P-SECACK.1: shared by the Quarantine-review + Approval-queue sections so their ack affordances
+  // stay lockstep - per-row "Reviewed", a bulk "Mark all reviewed", and a muted shelf holding the
+  // already-reviewed rows (audit visible on demand, out of the counters). The only row-derived value
+  // interpolated is artifact_id, esc()'d - the action cell adds no injection surface.
+  const ackSection = (cols: Col[], split: { active: Record<string, unknown>[]; reviewed: Record<string, unknown>[] }, kind: string): string => {
+    const ackBtn = (r: Record<string, unknown>) => `<button class="btn-mini dismiss" data-ack="${esc(String(r.artifact_id ?? ""))}" data-tip="Mark reviewed|Removes this row from the active queue and the counters. Nothing is released - the artifact stays isolated in the provenance DB and every audit record is kept.">${icon("check", 12)} Reviewed</button>`;
+    let out = table(cols, split.active, ackBtn);
+    if (split.active.length > 1) out += `<div class="row-actions"><button class="btn-mini" data-ack-all="${kind}">${icon("check", 13)} Mark all ${split.active.length} reviewed</button></div>`;
+    if (split.reviewed.length) out += `<details class="sec-reviewed"><summary>${split.reviewed.length} reviewed \u00b7 still isolated \u00b7 audit kept</summary>${table(cols, split.reviewed)}</details>`;
+    return out;
+  };
+  const qCols: Col[] = [{ key: "artifact_id", label: "artifact", mono: true }, { key: "source", label: "source" }, { key: "trust_label", label: "trust", pill: true }, { key: "risk_score", label: "risk", mono: true }];
+  h += accordion("sec.quarantine", "Quarantine review", "isolated \u00b7 fail-closed",
+    ackSection(qCols, q, "quarantine"),
+    OPEN.has("sec.quarantine"), String(q.active.length));
+  const apCols: Col[] = [{ key: "artifact_id", label: "artifact", mono: true }, { key: "source", label: "source" }, { key: "trust_label", label: "trust", pill: true }, { key: "verdict", label: "verdict", pill: true }];
+  h += accordion("sec.approvals", "Approval queue", "blocked \u00b7 awaiting a human",
+    ackSection(apCols, ap, "approvals"),
+    OPEN.has("sec.approvals"), String(ap.active.length));
+  h += accordion("sec.findings", "Findings overview", "by type \u00b7 severity \u00b7 source",
+    (fresh > 0 ? `<div class="row-actions"><button class="btn-mini" data-ack-findings data-tip="Mark findings seen|Resets the chip to count only NEW findings from here on. The full history stays in this table and in the provenance DB.">${icon("eye", 13)} Mark ${fresh === totFind ? "all" : String(fresh)} seen</button></div>` : "")
+    + table([{ key: "finding_type", label: "type" }, { key: "severity", label: "sev", pill: true }, { key: "source", label: "source" }, { key: "n", label: "n", mono: true }], findings),
+    OPEN.has("sec.findings"), fresh > 0 && fresh !== totFind ? `${totFind} \u00b7 ${fresh} new` : String(totFind));
   h += accordion("sec.gate", "Memory-promotion gate", "untrusted content can't auto-save",
     gauge("blocked", blocked + promoted ? blocked / (blocked + promoted) : 0, `<b>${blocked}</b>&nbsp;blocked / ${promoted} ok`),
     OPEN.has("sec.gate"));
@@ -4400,7 +4454,8 @@ async function refresh(): Promise<void> {
     // Security rail badge: number of items AWAITING YOUR REVIEW (quarantined/suspicious
     // content the gate flagged). Hidden when there's nothing to act on; coloured by the
     // worst trust label in the queue (quarantined = red, suspicious-only = amber).
-    const approvals = sec?.approvals ?? [];
+    // P-SECACK.1: reviewed rows no longer count as "awaiting" (same split securityHtml uses).
+    const approvals = splitReviewed(sec?.approvals ?? [], sec?.acks?.artifacts ?? {}).active;
     const liveQ = sec?.live?.quarantined ?? []; // GUI-owned live gate blocks (ADR-0019 C)
     const awaiting = approvals.length + liveQ.length;
     const badge = $("#railBadge")!;
@@ -7180,10 +7235,43 @@ function wire(): void {
       })();
       return;
     }
-    const act = (e.target as HTMLElement).closest("[data-act]") as HTMLElement | null;
-    if (act) {
-      const ok = act.dataset.act === "approve";
-      showToast({ title: ok ? "Approved" : "Denied", desc: ok ? "Artifact released from quarantine and recorded in the audit log." : "Artifact kept in quarantine. Decision recorded.", actions: [{ label: "OK" }], timeout: 3200 });
+    // P-SECACK.1 (ADR-0170): "Reviewed" on a DB-backed row - records the ack in the GUI ledger and
+    // drops the row from the active view/counters. Nothing is released; every audit record is kept.
+    // (Replaces the old Approve/Deny buttons here, which only ever showed a toast - the GUI cannot
+    // write the READ_ONLY provenance DB, so that queue never drained.)
+    const ack = (e.target as HTMLElement).closest("[data-ack]") as HTMLElement | null;
+    if (ack) {
+      (ack as HTMLButtonElement).disabled = true;
+      void (async () => {
+        await bridge.securityAck({ ids: [ack.dataset.ack!] });
+        await refresh();
+        showToast({ title: "Marked reviewed", desc: "Removed from the active queue. The artifact stays isolated; audit records are kept.", timeout: 2600 });
+      })();
+      return;
+    }
+    const ackAll = (e.target as HTMLElement).closest("[data-ack-all]") as HTMLElement | null;
+    if (ackAll) {
+      const sec = state.security;
+      const rows = ackAll.dataset.ackAll === "approvals" ? sec?.approvals ?? [] : sec?.quarantine ?? [];
+      const ids = splitReviewed(rows, sec?.acks?.artifacts ?? {}).active.map((r) => String(r.artifact_id ?? "")).filter(Boolean);
+      if (!ids.length) return;
+      (ackAll as HTMLButtonElement).disabled = true;
+      void (async () => {
+        await bridge.securityAck({ ids });
+        await refresh();
+        showToast({ title: `${ids.length} marked reviewed`, desc: "Cleared from the active queue. Everything stays isolated and audited.", timeout: 2600 });
+      })();
+      return;
+    }
+    const ackF = (e.target as HTMLElement).closest("[data-ack-findings]") as HTMLElement | null;
+    if (ackF) {
+      (ackF as HTMLButtonElement).disabled = true;
+      void (async () => {
+        await bridge.securityAck({ findings: true });
+        await refresh();
+        showToast({ title: "Findings marked seen", desc: "The chip now counts only new findings. History stays in the table.", timeout: 2600 });
+      })();
+      return;
     }
   });
 
@@ -7202,6 +7290,13 @@ function wire(): void {
     const files: File[] = [];
     for (const it of Array.from(items ?? [])) if (it.kind === "file" && it.type.startsWith("image/")) { const f = it.getAsFile(); if (f) files.push(f); }
     if (files.length && stageImageFiles(files)) e.preventDefault(); // consumed as images; don't also paste junk text
+  });
+  // P-SECACK.1 (ADR-0170): right-click Cut/Copy/Paste/Select-all on the prompt bar and every other
+  // text field - Electron ships no native context menu, so mouse-only clipboard flows were impossible.
+  // Image paste goes through the SAME staged-thumbnail path as Ctrl+V (P-VISION.1).
+  installTextContextMenu({
+    onImages: (imgs) => stageImageFiles(imgs),
+    toast: (t) => showToast({ title: t.title, desc: t.desc, tone: t.tone, actions: [{ label: "OK" }], timeout: 3200 }),
   });
   // Drag-and-drop image files onto the composer.
   const cw = $(".composer-wrap") as HTMLElement | null;

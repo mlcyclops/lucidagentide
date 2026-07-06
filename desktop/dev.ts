@@ -42,6 +42,8 @@ import { sandboxStatus } from "./sandbox_status.ts"; // P-SANDBOX.5 (ADR-0169)
 import { ensureNetdiagWatch, startNetdiagWatch, stopNetdiagWatch, netdiagView } from "./netdiag.ts";
 import { clearDisabledCredential } from "./auth_vault.ts";
 import { approveBlock, dismissBlock, liveBlocks } from "./security_log.ts";
+import { ackArtifact, ackFindings, ackView } from "./security_ack.ts"; // P-SECACK.1 (ADR-0170)
+import { deleteSteps, readTurnSteps, syncStepTurns } from "./session_steps.ts"; // P-RESUME.1 (ADR-0171)
 import { probeRateLimits } from "./ratelimit_probe.ts";
 import { OBS_DB_PATH, codeActivity, memorySnapshot, rateLimits, sessionPathById, usageLedger } from "../tools/memory_data.ts";
 import { backend } from "./acp_backend.ts";
@@ -427,11 +429,25 @@ const server = Bun.serve({
       // in even when the DuckDB snapshot is null, so a fresh machine still shows quarantines.
       if (p === "/api/security") {
         const snap = await securitySnapshot();
-        return json({ ok: true, data: { ...(snap ?? {}), live: liveBlocks(), sandbox: sandboxStatus() } });
+        return json({ ok: true, data: { ...(snap ?? {}), live: liveBlocks(), sandbox: sandboxStatus(), acks: ackView() } });
       }
       // Audited fail-closed override: release one quarantined call (ADR-0019 C).
       if (p === "/api/security/approve" && req.method === "POST") { const b = await readBody<{ id?: unknown }>(req); return json({ ok: true, data: approveBlock(String(b.id ?? "")) }); }
       if (p === "/api/security/dismiss" && req.method === "POST") { const b = await readBody<{ id?: unknown }>(req); return json({ ok: true, data: dismissBlock(String(b.id ?? "")) }); }
+      // P-SECACK.1 (ADR-0170): mark DB-backed security rows reviewed. GUI-owned ack ledger ONLY -
+      // the provenance DB is never written and nothing is released; rows just leave the active view.
+      if (p === "/api/security/ack" && req.method === "POST") {
+        const b = await readBody<{ ids?: unknown; findings?: unknown }>(req);
+        const ids = Array.isArray(b.ids) ? b.ids.map((x) => String(x)).filter((x) => x.trim()) : [];
+        for (const id of ids) ackArtifact(id);
+        let findingsSeen: number | null = null;
+        if (b.findings === true) {
+          // Server-side total - the watermark comes from what the DB says NOW, never a stale client count.
+          const snap = await securitySnapshot();
+          findingsSeen = ackFindings((snap?.findings ?? []).reduce((a, r) => a + Number(r.n ?? 0), 0));
+        }
+        return json({ ok: true, data: { acked: ids.length, findingsSeen } });
+      }
       // Anchor the snapshot to the ACTIVE chat session (its on-disk transcript) so the Context window
       // + Prompt-cache gauges reflect the live conversation; fall back to findSession's cwd match only
       // when there's no active session yet (fresh launch).
@@ -1221,7 +1237,12 @@ const server = Bun.serve({
       if (p === "/api/sessions/ingest/clear" && req.method === "POST") return json({ ok: true, data: clearIngestSessions() }); // P-KG-INGEST.2
       if (p === "/api/session" && url.searchParams.get("id")) { // P-PERF.4: tail-first page (limit=0 = all)
         const lim = Math.max(0, Math.trunc(Number(url.searchParams.get("limit")) || 0));
-        return json({ ok: true, data: sessionMessages(url.searchParams.get("id")!, lim) });
+        const sid = url.searchParams.get("id")!;
+        const page = sessionMessages(sid, lim);
+        // P-RESUME.1 (ADR-0171): re-anchor the step recorder to the transcript's REAL user count
+        // (turns run outside this GUI can't shift later anchors), then merge the restored activity.
+        syncStepTurns(sid, page.userTotal);
+        return json({ ok: true, data: { ...page, steps: readTurnSteps(sid) } });
       }
       if (p === "/api/session/load" && req.method === "POST") { const { id } = await readBody<{ id?: unknown }>(req); await backend.loadSession(String(id)); return json({ ok: true }); }
       if (p === "/api/session/delete" && req.method === "POST") {
@@ -1231,6 +1252,7 @@ const server = Bun.serve({
         // locks open files), then start fresh. newSession() does session/close + ensureSession.
         if (backend.currentSessionId() === sid) await backend.newSession().catch(() => {});
         const res = deleteSession(sid);
+        if (res.ok) deleteSteps(sid); // P-RESUME.1: the activity sidecar goes with its session
         return json({ ok: true, data: res });
       }
 

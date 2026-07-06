@@ -23,6 +23,7 @@ import { buildUserTurnPreamble } from "./preamble.ts";
 import { ChatGate } from "./chat_gate.ts";
 import { completionPath } from "./util_conn.ts";
 import { recordTurns } from "./turns_log.ts";
+import { beginStepTurn, endStepTurn, noteStepEvent } from "./session_steps.ts"; // P-RESUME.1 (ADR-0171)
 import { isLearnableAssistantText } from "./thinking_governance.ts";
 import { recordBlock } from "./security_log.ts";
 import { asksageOnly, attribution, checkerModel, lastModel, load as loadSettings, mcpServersForAcp, setCheckerModel, setLastModel } from "./settings_store.ts";
@@ -249,7 +250,10 @@ class Backend {
   setSkill(wrapped: string | null, name = ""): void { this.skill = wrapped; this.skillName = wrapped ? name : ""; }
   activeSkillName(): string { return this.skillName; }
 
-  private emit(e: ChatEvent): void { this.listener?.(e); }
+  // P-RESUME.1 (ADR-0171): every event funnels through here, so this is the ONE tee that records
+  // thinking/tool/failure steps into the per-session sidecar (survives session switches). Cheap for
+  // hot token chunks (noteStepEvent returns immediately on any other type) and never throws.
+  private emit(e: ChatEvent): void { noteStepEvent(this.sessionId, e); this.listener?.(e); }
 
   // P-ASKSAGE.1 (ADR-0059): a bounded ring of AskSage tool-loop diagnostics, parsed from the omp child's
   // `[ASKSAGE_DIAG]` stderr lines. Surfaced (developer-mode only) in the Logs panel so the non-streamed
@@ -861,6 +865,7 @@ class Backend {
     this.turnDiag(`prompt.start session=${this.sessionId}`);
     try {
       await this.ensureSession();
+      beginStepTurn(this.sessionId); // P-RESUME.1: anchor this turn's recorded steps to the new user message
       // Assemble the user-turn preamble (never the frozen prefix; invariant #5/#6). Issue #54:
       // persona + skill + the live <user-profile> profile are STANDING guidance re-delivered every
       // turn; the cross-session <recalled-memory> is a one-time session-start recall. See preamble.ts.
@@ -898,6 +903,7 @@ class Backend {
       // Fail-closed: any permission still parked at turn's end (stall/disconnect) is denied.
       for (const [id, fn] of this.permPending) { this.permPending.delete(id); fn(null); }
       this.pendingPerms = 0;
+      endStepTurn(this.sessionId); // P-RESUME.1: persist the buffered thinking for this turn
     }
     this.listener = null;
     // Carry the FULL accumulated reply on `done` so the UI can reconcile a lossy live stream (if some
