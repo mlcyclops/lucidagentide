@@ -12548,3 +12548,44 @@ questions, unanswerable, in the LUCID hue band.
 
 P-TRIV.4: generated question packs (checker-model, per-role fingerprints) with these banks as the
 fail-closed floor; Settings toggle UI + feed visibility controls; difficulty adaptation.
+
+## ADR-0177 - P-PKG.1: the v1.10.2 packaged-engine brick - fix + three robustness layers, BUILT
+
+**Date:** 2026-07-06
+**Status:** Accepted / Built + verified against the live brick. Hotfix release v1.10.3.
+
+### Context - what bricked v1.10.2
+
+Upgrading to v1.10.2 produced "could not start its local engine ... did not respond on port 5319".
+Reproduced on the shipped artifact; the engine log said it plainly:
+`Cannot find module '../prompts/steering/user-interjection.md' from ...\resources\repo\node_modules\@oh-my-pi\pi-coding-agent\src\session\messages.ts`.
+Root cause chain: the extraResources filter stripped ALL `node_modules/**/*.md` as docs bloat;
+P-SKILL.4 (#242) made dev.ts import `@oh-my-pi/pi-coding-agent` IN-PROCESS for the first time
+(discoverSkills); that package imports its prompt `.md` files at module load (`with { type: "text" }`).
+Packaged tree → missing module → dev.ts dies at import → port never binds. Same class as the v1.9.0
+`typescript`-exclusion brick: a blanket node_modules exclusion assumed nothing in it is a runtime import.
+The pre-release check missed it because it looked for excluded PACKAGES, not excluded FILE TYPES, and
+the packaged-layout simulation junctioned a real node_modules (the .md files were still present).
+
+### Decision - fix once, then make the CLASS impossible
+
+1. **Packaging fix**: drop `!node_modules/**/*.md` from extraResources (a few MB of READMEs is not
+   worth a bricked engine). `.map`/`.d.ts`/`.bin` and the heavyweight package exclusions stay.
+2. **Engine survives optional deps** (`skills_data.ts`): the `@oh-my-pi/pi-coding-agent` import is now
+   type-only + LAZY (dynamic import inside the already-fail-soft `discoverRaw`). A feature dependency
+   that cannot load degrades ITS FEATURE (directory shows bundled-only); it can never again kill the
+   engine at boot. Verified: with the bad filter deliberately restored, the engine still boots.
+3. **Boot failures diagnose themselves** (`main.ts`): the engine's stdout/stderr are teed to
+   `<userData>/engine.log` (timestamped per start), and the engine-failure dialog now points at that
+   file instead of asking the user to relaunch from a terminal.
+4. **The regression guard** (`desktop/packaged_boot.test.ts`): reads the LIVE extraResources filter,
+   emulates every node_modules exclusion with a Bun resolver plugin (an excluded file fails to resolve
+   exactly as if packaging stripped it), boots the REAL dev.ts and requires /api/health. Proven both
+   ways: fails in <1s on the v1.10.2 state, passes on the fixed state. Any future filter/import
+   collision fails CI instead of shipping a brick.
+
+### Verified
+
+Guard test red on the broken state / green on the fix; lazy-import layer green with the filter
+deliberately regressed; engine.log tee + dialog path verified in code review; the true end-to-end
+proof is the v1.10.3 installer run on the machine that reproduced the brick.

@@ -12,7 +12,7 @@
 
 import { app, BrowserWindow, dialog, ipcMain, Menu, safeStorage, shell } from "electron";
 import { spawn, type ChildProcess } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createWriteStream, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { initAutoUpdate } from "./updater.ts";
@@ -31,6 +31,19 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 let win: BrowserWindow | null = null;
 let dev: ChildProcess | null = null;
 let runtimeEnv: Record<string, string> = {};
+
+// ADR-0177: the engine's startup output is TEED to a log file, so a boot failure diagnoses itself.
+// The v1.10.2 brick (a packaging filter stripped a runtime-imported file) was only debuggable by
+// relaunching from a terminal - now the crash text is sitting in engine.log for the error dialog to
+// point at. Best-effort: a failed tee never blocks the engine.
+const engineLogPath = (): string => join(app.getPath("userData"), "engine.log");
+function openEngineLog(): ((d: unknown) => void) {
+  try {
+    const s = createWriteStream(engineLogPath(), { flags: "a" });
+    s.write(`\n--- engine start ${new Date().toISOString()} · v${app.getVersion()}${app.isPackaged ? " (packaged)" : " (dev)"} ---\n`);
+    return (d) => { try { s.write(d as Buffer); } catch { /* never block the engine */ } };
+  } catch { return () => { }; }
+}
 
 function startDevServer(): void {
   // findBun() prefers the bundled runtime in packaged builds, falling back to the
@@ -55,8 +68,9 @@ function startDevServer(): void {
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,
   });
-  dev.stdout?.on("data", (d) => process.stdout.write(d));
-  dev.stderr?.on("data", (d) => process.stderr.write(d));
+  const tee = openEngineLog();
+  dev.stdout?.on("data", (d) => { process.stdout.write(d); tee(d); });
+  dev.stderr?.on("data", (d) => { process.stderr.write(d); tee(d); });
 }
 // Returns true once the dev server answers /api/health, false if it never does within the window.
 // 30s headroom: the server's own init (DuckDB open + omp acp spawn) can outlast a slow first launch;
@@ -289,9 +303,9 @@ app.whenReady().then(async () => {
     dialog.showErrorBox(
       "LucidAgentIDE could not start its local engine",
       `The bundled background service did not respond on port ${PORT} within 30 seconds, so the window ` +
-        `may stay blank.\n\nThis usually means the bundled runtime is missing or was blocked. The app ` +
-        `will keep retrying — if it stays blank, reinstall the latest release, or relaunch from a ` +
-        `terminal to see the startup log.`,
+        `may stay blank.\n\nThe engine's own startup output (including any crash message) is in:\n` +
+        `${engineLogPath()}\n\nThe app will keep retrying — if it stays blank, send that log file to ` +
+        `support or reinstall the latest release.`,
     );
   }
   initAutoUpdate(() => win); // packaged-only; checks GitHub Releases, prompts on download
