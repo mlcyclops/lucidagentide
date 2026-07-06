@@ -310,6 +310,8 @@ function buildShell(): void {
         <div class="preview-body" id="prevBody">
           <!-- P-PREVIEW.6a (ADR-0153): a live "reviewing / testing" pill shown while the agent looks at the preview. -->
           <div class="preview-pill" id="prevPill" hidden aria-live="polite"><span class="preview-pill-dot"></span><span id="prevPillLabel">Reviewing the preview</span></div>
+          <!-- P-PREVIEW.7 (ADR-0179): the explain-overlay for pages the sandbox can't run (e.g. Electron renderers). -->
+          <div class="preview-notice" id="prevNotice" hidden aria-live="polite"></div>
           <iframe id="prevFrame" class="preview-frame" sandbox="${PREVIEW_SANDBOX}" allow="${PREVIEW_ALLOW}" referrerpolicy="no-referrer" title="App preview" hidden></iframe>
           <canvas id="prevCanvas" class="preview-canvas" aria-hidden="true"></canvas>
           <div class="empty preview-empty" id="prevEmpty"><span class="preview-empty-msg" id="prevEmptyMsg">Open a local HTML file to preview it here - paste its path above and press <b>Open</b>. (The agent driving this itself is coming next; remote URLs are egress-gated.)</span></div>
@@ -2931,6 +2933,9 @@ function loadPreview(target: string): void {
   const empty = $("#prevEmpty") as HTMLElement | null;
   const kind = $("#prevKind");
   if (!frame || !empty) return;
+  // P-PREVIEW.7: a fresh load clears any stale health overlay (the new page reports its own).
+  const notice = $("#prevNotice") as HTMLElement | null;
+  if (notice) { notice.hidden = true; notice.innerHTML = ""; }
   const r = resolvePreview(target);
   if (kind) kind.textContent = r.kind === "local" ? r.label : "";
   // The iframe src is never raw DOM input: a LOCAL target loads our fixed same-origin /api/preview/serve
@@ -3019,6 +3024,48 @@ function stopPreviewInspectRelay(): void {
   window.clearInterval(previewInspectTimer);
   previewInspectTimer = null;
 }
+// ── P-PREVIEW.7 (ADR-0179): explain the silent-white preview + offer a REAL external run ─────────
+// The injected bridge posts a one-shot health report after load. A page that painted NOTHING (or
+// whose script died on Node-only APIs) is almost always an Electron renderer - the sandboxed frame
+// runs browser code only, by design. Instead of staying mute, explain it in-pane; when the app dir
+// detects as an Electron app, offer a USER-clicked launch as a real OS process OUTSIDE LUCID
+// (audited server-side; the sandbox stays sealed).
+const NODE_ONLY_ERR = /require is not defined|process is not defined|module is not defined|__dirname is not defined/i;
+window.addEventListener("message", (ev) => {
+  const frame = $("#prevFrame") as HTMLIFrameElement | null;
+  const d = ev.data as { __lucid?: string; emptyBody?: boolean; errors?: unknown[] } | null;
+  if (!d || d.__lucid !== "preview-health" || !frame || ev.source !== frame.contentWindow) return;
+  void handlePreviewHealth(!!d.emptyBody, Array.isArray(d.errors) ? d.errors.map(String) : []);
+});
+async function handlePreviewHealth(emptyBody: boolean, errors: string[]): Promise<void> {
+  const notice = $("#prevNotice") as HTMLElement | null;
+  if (!notice) return;
+  const nodeDead = errors.find((e) => NODE_ONLY_ERR.test(e));
+  if (!emptyBody && !nodeDead) return; // page painted and no Node-shaped crash - nothing to explain
+  const path = ($("#prevPath") as HTMLInputElement | null)?.value.trim() ?? "";
+  const det = path ? await bridge.previewElectronDetect(path).catch(() => null) : null;
+  const close = `<button class="pn-x" id="prevNoticeClose" data-tip="Dismiss">${icon("close", 13)}</button>`;
+  if (det?.electron) {
+    const action = det.launchable
+      ? `<button class="btn-mini" id="prevRunElectron">${icon("spark", 13)} Run with Electron - opens outside LUCID</button>`
+      : `<span class="pn-cmd">No Electron runtime found here - run <code>npx electron .</code> in <code>${esc(det.appDir)}</code></span>`;
+    notice.innerHTML = `${close}<div class="pn-hd">${icon("spark", 14)} This looks like an Electron app</div>
+      <div class="pn-tx">Its interface is built by a script that needs Node/Electron APIs (<code>${esc(nodeDead ?? "require is not defined")}</code>), which this sandboxed preview deliberately doesn't provide - so the page stays blank. Run it as a real desktop app instead:</div>
+      <div class="pn-actions">${action}</div>`;
+    notice.hidden = false;
+    $("#prevRunElectron")?.addEventListener("click", async () => {
+      const r = await bridge.previewElectronLaunch(path).catch(() => null);
+      if (r?.launched) showToast({ title: "Electron app launched", desc: `Opened outside LUCID (${r.via === "app-local" ? "the app's own Electron install" : "Electron from your PATH"}). Look for its window.`, timeout: 5200 });
+      else showToast({ tone: "warn", title: "Couldn't launch", desc: r?.reason ?? "Unknown launch failure.", actions: [{ label: "OK" }], timeout: 7000 });
+    });
+  } else if (nodeDead || (emptyBody && errors.length > 0)) {
+    notice.innerHTML = `${close}<div class="pn-hd">${icon("info", 14)} The page rendered nothing</div>
+      <div class="pn-tx">Its script hit an error: <code>${esc(errors[0] ?? "unknown")}</code>. The sandboxed preview runs plain browser code (no Node, no network) - check the file for APIs that need a runtime.</div>`;
+    notice.hidden = false;
+  }
+  $("#prevNoticeClose")?.addEventListener("click", () => { notice.hidden = true; });
+}
+
 async function pollPreviewInspect(): Promise<void> {
   const frame = $("#prevFrame") as HTMLIFrameElement | null;
   if (!frame || frame.hidden) return; // no preview rendered yet → let it time out server-side

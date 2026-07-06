@@ -584,3 +584,7 @@ demo-P-TRIV.2: ## P-TRIV.2 (ADR-0175): role-aware Trivia Wire - executive→GovC
 .PHONY: demo-P-TRIV.3
 demo-P-TRIV.3: ## P-TRIV.3 (ADR-0176): 100-question dev/security/manager banks + 50 executive - and the executive INTEL WIRE: curated defense/intel RSS fetched first-party (host-only egress audit), scan-gated FAIL-CLOSED (findings or a dead scanner drop the batch), fail-quiet offline, rendered as escaped text between questions
 	$(BUN) run harness/scripts/demo_ptriv3.ts
+
+.PHONY: demo-P-PREVIEW.7
+demo-P-PREVIEW.7: ## P-PREVIEW.7 (ADR-0179): the silent-white preview explained + runnable - the injected bridge posts a one-shot health report (empty body + bounded errors); Electron apps detect evidence-based (fail-false for plain pages); launch plan prefers the app's own electron, falls back to PATH, null otherwise; non-Electron paths never plan a launch
+	$(BUN) run harness/scripts/demo_ppreview7.ts

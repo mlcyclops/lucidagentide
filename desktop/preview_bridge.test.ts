@@ -33,4 +33,10 @@ describe("injectPreviewBridge", () => {
     expect(PREVIEW_BRIDGE_JS).toContain("el.value=v");
     expect(PREVIEW_BRIDGE_JS).toContain("el.textContent=v");
   });
+  test("P-PREVIEW.7: the one-shot health report is present, read-only, and parent-only", () => {
+    expect(PREVIEW_BRIDGE_JS).toContain("preview-health");
+    expect(PREVIEW_BRIDGE_JS).toContain("emptyBody: bodyEmpty()");
+    expect(PREVIEW_BRIDGE_JS).toContain("healthSent");           // fire-once guard
+    expect(PREVIEW_BRIDGE_JS).toContain("errs.slice(-6)");       // bounded error tail, no full dumps
+  });
 });

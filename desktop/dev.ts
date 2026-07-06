@@ -75,6 +75,9 @@ import { emailDomainAllowed, managedAsksageOnly, managedConfig, managedLocks, sk
 import { asksageConfig, listDatasets, listPersonas, monthlyTokens, scanPersona, wrapPersona } from "./asksage.ts";
 import { inspectSkill, listSkills, removeSkill, rescanSkill } from "./skills_data.ts"
 import { intelNews } from "./intel_news.ts"; // P-TRIV.3 (ADR-0176): the executive Trivia Wire's news feed
+import { detectElectronApp, electronLaunchPlan } from "./preview_electron.ts"; // P-PREVIEW.7 (ADR-0179)
+import { emitSecurityEvent } from "./audit_export.ts"; // P-PREVIEW.7: audit the user-initiated external launch
+import { spawn as spawnChild } from "node:child_process";
 import { installRegistrySkill, type RegistrySkillArtifact } from "./skills_registry.ts"
 import { analyzeWork, codifyCandidate, gatherWorkDigest, type SkillCandidate, type StudioWindow } from "./skill_studio.ts"
 import { buildSkillArtifact, PublishDispatcher, publishersFor } from "./skill_publish.ts";
@@ -1204,6 +1207,31 @@ const server = Bun.serve({
       }
       if (p === "/api/preview/shot") {
         return json({ ok: true, data: { png: latestPreviewShot } });
+      }
+      // P-PREVIEW.7 (ADR-0179): is the previewed file part of an ELECTRON app (which the sandboxed
+      // frame cannot run - no Node/require)? Read-only detection for the renderer's explain-overlay.
+      if (p === "/api/preview/electron-detect") {
+        const det = detectElectronApp((url.searchParams.get("path") ?? "").trim());
+        const plan = electronLaunchPlan(det, Bun.which("electron"));
+        return json({ ok: true, data: { electron: det.electron, reasons: det.reasons, appDir: det.appDir, launchable: !!plan, via: plan?.via ?? null } });
+      }
+      // P-PREVIEW.7: USER-initiated external launch - runs the app as a real OS process OUTSIDE
+      // LUCID (the sandbox stays sealed), audited as a first-party exec SecurityEvent. Refuses any
+      // path that doesn't detect as an Electron app; a missing runtime returns the manual command.
+      if (p === "/api/preview/electron-launch" && req.method === "POST") {
+        const b = await readBody<{ path?: unknown }>(req);
+        const det = detectElectronApp(String(b.path ?? "").trim());
+        if (!det.electron) return json({ ok: true, data: { launched: false, reason: "not an Electron app (no electron dependency or start script found)" } });
+        const plan = electronLaunchPlan(det, Bun.which("electron"));
+        if (!plan) return json({ ok: true, data: { launched: false, reason: "no Electron runtime found - run `npx electron .` in the app folder", appDir: det.appDir } });
+        try {
+          const child = spawnChild(plan.cmd, plan.args, { cwd: plan.cwd, detached: true, stdio: "ignore", windowsHide: false });
+          child.unref();
+          emitSecurityEvent({ category: "exec", type: "preview_electron_launch", decision: "allow", severity: "info", tool: "preview", reason: `preview: user launched Electron app at ${det.appDir} (${plan.via} runtime)` });
+          return json({ ok: true, data: { launched: true, via: plan.via, appDir: det.appDir } });
+        } catch (e) {
+          return json({ ok: true, data: { launched: false, reason: `launch failed: ${(e as Error).message}` } });
+        }
       }
       if (p === "/api/preview/serve") {
         const target = (url.searchParams.get("path") ?? "").trim();
