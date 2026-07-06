@@ -1,7 +1,7 @@
 {
   "name": "lucidagentide-desktop",
   "private": true,
-  "version": "1.10.3",
+  "version": "1.10.4",
   "trustedDependencies": ["electron", "@resvg/resvg-js"],
   "description": "Electron desktop shell for LucidAgentIDE + omp — gated agent chat + live security/memory dashboards.",
   "homepage": "https://github.com/mlcyclops/lucidagentide",
@@ -63,7 +63,6 @@
           "!node_modules/.bin/**",
           "!node_modules/onnxruntime-node/**",
           "!node_modules/onnxruntime-web/**",
-          "!node_modules/@opentelemetry/**",
           "!node_modules/date-fns/**",
           "!node_modules/lucide-react/**"
         ]

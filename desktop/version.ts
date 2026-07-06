@@ -135,4 +135,9 @@
 //           degrades its feature, never the engine); engine output teed to <userData>/engine.log and the
 //           failure dialog points at it; a packaged-boot CI guard emulates the filter so this class of brick
 //           can never ship again.
-export const APP_VERSION = "1.10.3";
+// v1.10.4 = HOTFIX (ADR-0178): v1.10.3's skill discovery was broken-but-quiet in packaged installs - the
+//           filter also stripped @opentelemetry, which omp's agent chain imports at load; discovered/codified
+//           skills never appeared. Exclusion dropped; the packaging guard now materializes a REAL filtered
+//           install (excluded packages absent, stripped file types deleted) and requires boot + every lazy
+//           feature dep to load, so broken-but-quiet features fail CI too.
+export const APP_VERSION = "1.10.4";

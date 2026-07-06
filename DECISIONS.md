@@ -12589,3 +12589,38 @@ the packaged-layout simulation junctioned a real node_modules (the .md files wer
 Guard test red on the broken state / green on the fix; lazy-import layer green with the filter
 deliberately regressed; engine.log tee + dialog path verified in code review; the true end-to-end
 proof is the v1.10.3 installer run on the machine that reproduced the brick.
+
+## ADR-0178 - P-PKG.2: the v1.10.3 broken-but-quiet skill discovery + the honest packaging guard, BUILT
+
+**Date:** 2026-07-06
+**Status:** Accepted / Built + verified against the shipped artifact. Hotfix release v1.10.4.
+
+### Context
+
+v1.10.3 fixed the boot brick but shipped skill discovery broken-but-QUIET: in packaged installs,
+`import("@oh-my-pi/pi-coding-agent")` fails with `Cannot find module '@opentelemetry/api'` (from
+pi-agent-core/src/telemetry.ts) because the extraResources filter also strips
+`!node_modules/@opentelemetry/**`. The ADR-0177 fail-soft layer caught it - engine boots, the Skills
+directory just shows no discovered rows (and anything Skill Studio codified would never appear).
+Found while answering "why is my Skills panel empty?". The ADR-0177 guard missed it TWICE over:
+boot no longer imports the package (the lazy import moved it off the boot path), and the guard's
+Bun-plugin emulation turned out not to intercept bare package specifiers at all - the
+package-subtree half of the filter was silently unenforced.
+
+### Decision
+
+1. Drop `!node_modules/@opentelemetry/**` from extraResources (omp's telemetry needs it at load).
+2. Rebuild the guard HONESTLY (`desktop/packaged_boot.test.ts`): materialize a real filtered install
+   in a temp dir - kept packages linked in, EXCLUDED packages actually absent, the in-process
+   @oh-my-pi packages hardlink-copied with the file-type exclusions actually deleted - then (a) boot
+   the real dev.ts from it and require /api/health, and (b) require every LAZILY-imported feature dep
+   (a maintained list; today: pi-coding-agent) to load. No resolver-plugin trickery. Reproduced the
+   shipped failure verbatim before the fix; green after. Boundary documented in the test: file-type
+   exclusions are materialized inside @oh-my-pi (the in-process import surface); package exclusions
+   are enforced everywhere.
+
+### Verified
+
+Guard red (exact shipped error) on the v1.10.3 filter, green with the exclusion dropped; remaining
+exclusions (onnxruntime, date-fns, lucide-react, *.map/*.d.ts/.bin) proven harmless by the same
+materialized boot+import run; final proof is the import probe inside the shipped v1.10.4 tree.
