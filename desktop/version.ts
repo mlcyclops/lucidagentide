@@ -120,4 +120,13 @@
 //           (ADR-0162/0164), security review-ACKs + resumed-session history (ADR-0170/0171), a toolbox badge
 //           for failed tool calls (ADR-0163), the LUCID TUI theme + bare `lucid` (ADR-0160/0161), and the
 //           Plugin Marketplace popup (ADR-0158).
-export const APP_VERSION = "1.10.1";
+// v1.10.2 = the TRIVIA WIRE (P-TRIV.1-.3, ADR-0174/5/6): a role-aware word-game ticker in the status bar's
+//           idle gap - 100-question developer/security/manager banks + 50 executive, streak scoring, idle
+//           engagement, and the executive INTEL WIRE (curated defense/intel RSS, fetched first-party,
+//           scan-gated FAIL-CLOSED, host-only egress audit) interleaving live headlines between questions;
+//           status bar decluttered (model seg + gate-active pill removed, ticker text at chip white).
+//           Plus the SKILLS GOVERNANCE suite + compiled KNOWLEDGE BASE (P-SKILL.4/.5, P-SKILLREG.1/.2,
+//           P-KB.1/.2/.2b): the governed Skills directory + management menu, Skill Studio (draft skills
+//           from recent work, gated), the enterprise registry reader/publish seams (Ed25519 + scan-gate),
+//           and the compiled KB spine with graph migrations.
+export const APP_VERSION = "1.10.2";
