@@ -8,7 +8,7 @@
 // agent turn. Same renderer in Electron (real omp ACP via window.lucid) and in
 // the browser dev server (simulated). Pure DOM, no framework.
 
-import { bridge, type AgentRunReply, type McpCatalogTool, type ChatEvent, type ConfigOption, type GoalDial, type MemorySnapshot, type OmpCommand, type ProviderAuth, type RestoredTurn, type SecuritySnapshot, type SessionInfo, type SessionList, type UserRole, type WorkspaceInfo } from "./bridge.ts";
+import { bridge, type AgentRunReply, type McpCatalogTool, type ChatEvent, type ConfigOption, type GoalDial, type MemorySnapshot, type OmpCommand, type ProviderAuth, type RestoredTurn, type SecuritySnapshot, type SessionInfo, type SessionList, type SkillInspectView, type SkillView, type UserRole, type WorkspaceInfo } from "./bridge.ts";
 import { ROLE_META, USER_ROLE_LIST, coachHtml, roleDefaultTab, stepsForRole, type TourStep } from "./tour.ts";
 import { modCombo, modSymbol } from "./platform.ts";
 import { aiLocHasData } from "../ailoc_view.ts";
@@ -33,7 +33,7 @@ import { renderMarkdown } from "./markdown.ts";
 import { type GraphHandle, kindLabel, mountGraph } from "./graph.ts";
 import { addEdgeOptimistic, applyForget, chainPairs, matchNodes, removeEdgeOptimistic, resolveRelationLabel } from "./kg_ops.ts";
 import { capGraph, graphOpts, pollDelay, watchPerfTier } from "./perf_tier.ts";
-import type { PersonalGraphData } from "./bridge.ts";
+import type { KbGraphView, PersonalGraphData } from "./bridge.ts";
 import { agentBuilderPanelHtml, specToGraphData, nodeEditorHtml, saveErrors, newCanvasSpec, runPanelHtml, secretsPanelHtml, agentInterviewPrompt, toolChipsHtml, trustBannerHtml, runApprovalHtml, runsPanelHtml, traceDetailHtml, schedulePanelHtml, historyPanelHtml, templatesPanelHtml } from "./agent_builder.ts"; // P-AGENT.2b/.4-live/.8/.9/.11a/.13/.14/.17
 import type { TrustLabel } from "../../harness/contracts.ts"; // P-AGENT.9: imported-agent trust banner
 import { localProvidersCardBody, draftFromForm } from "./local_providers_ui.ts"; // P-LOCAL.3 (ADR-0135): Settings → Local Providers
@@ -46,7 +46,9 @@ import { formatImportLine } from "./import_progress.ts";
 import { ASKSAGE_FAMILY_ORDER, familyOf, filterModels, groupByFamily, isAuxiliaryModel, isChinaModel, isDeprecatedModel, isGovModel, sortGovFirstNewest } from "./model_families.ts";
 import { FAVS_KEY, parseFavs, starredOf, toggleFav } from "./model_favorites.ts"; // P-FAV.1 (ADR-0165)
 import { renderSandboxSection } from "./sandbox_panel.ts"; // P-SANDBOX.5 (ADR-0169)
-import { INSTALLED_SKILLS, bumpSkillUsage, bundledSkillsByUsage, taskProforma } from "./skills.ts";
+import { INSTALLED_SKILLS, bumpSkillUsage, bundledSkillsByUsage, isSkillEnabled, setSkillEnabled, taskProforma } from "./skills.ts";
+import { renderSkillInspect, renderSkillsDirectory, renderStudioCandidate, type SkillDirRow } from "./skills_dir.ts"; // P-SKILL.4 (ADR-0097) / P-SKILL.5 (ADR-0101)
+import { skillKey, type SkillRoot, trustEnableable } from "../skills_gov.ts"; // P-SKILL.4 (ADR-0097)
 import { CHECKER_TOKENS_PER_ITER, MAKER_TOKENS_PER_ITER, estimateGoalCost, estimateGoalTokens, formatTokens, formatUSD } from "../loop_estimate.ts";
 import { speakable } from "../../harness/brief/engineering_update.ts"; // P-REPORT.7: make read-aloud text TTS-friendly
 import { changeGraphSvg, schemaSvg, type ChangeGraph, type ModuleChange, type GraphEdge, type StoreChange } from "../../harness/brief/change_graph.ts"; // P-REPORT.8: report annex graphs
@@ -73,7 +75,7 @@ const state = {
   configCached: false, // P-IDE.1d: current config came from the local cache; live refresh pending
   uiMode: "agent" as "agent" | "ask" | "plan", // P-ACP.2/3: composer Plan/Ask/Agent (derived from backend)
   commands: [] as OmpCommand[],
-  skills: [] as { name: string; description: string; source: string }[],
+  skills: [] as SkillView[], // P-SKILL.4 (ADR-0097): discovered skills, widened with root/trust/removable/scan verdict
   userCommands: [] as UserCommand[], // P-CMD.1: user-authored "/" slash commands (workspace .omp/commands/)
   activeSkill: null as { command: string; name: string } | null, // P-IDE.2: active bundled skill
   liveUsage: null as { used: number; size: number; cost: number } | null,
@@ -180,6 +182,7 @@ function buildShell(): void {
         <button class="rail-btn" data-rail="knowledge" data-tip="Knowledge graph|Your private, encrypted personalization graph - nodes, edges, drill-down" data-tip-icon="graph">${icon("graph", 20)}</button>
         <button class="rail-btn" data-rail="preview" data-tip="Preview|Open a local app/page the agent built in a sandboxed in-app browser, and send a screenshot to chat" data-tip-icon="eye">${icon("eye", 20)}</button>
         <button class="rail-btn" data-rail="agentBuilder" data-tip="Agent Builder|Design an AI agent on a visual workflow canvas - LUCID builds the gated code for you" data-tip-icon="spark">${icon("spark", 20)}</button>
+        <button class="rail-btn" data-rail="skills" data-tip="Skills|Every agent skill - built-in, project, curated - in one directory: source, trust label, enable/disable, inspect & re-scan through the gate" data-tip-icon="bulb">${icon("bulb", 20)}</button>
         <button class="rail-btn" id="railMarket" data-tip="Plugin Marketplace|Curated integrations ordered by community popularity - Excalidraw, Git, Remotely Save & more" data-tip-icon="market">${icon("market", 20)}</button>
         <button class="rail-btn" id="railReports" data-tip="Engineering Reports|Generate a role-tailored engineering brief (with podcast audio), and browse every past loop After-Action Report + brief" data-tip-icon="report">${icon("report", 20)}</button>
         <button class="rail-btn" id="railLogs" data-rail="dev" hidden data-tip="Logs|Read-only developer logs: telemetry, run lineage, transcripts, gate-block audit, AskSage tool-call diagnostics" data-tip-icon="logs">${icon("logs", 20)}</button>
@@ -244,6 +247,14 @@ function buildShell(): void {
         <div class="set-body" id="setBody"></div>
       </aside>
 
+      <aside class="settings skills-dir" id="skillsDir" hidden>
+        <div class="set-head">
+          <div class="set-title">${icon("bulb", 17)} Skills <span class="set-sub">directory &amp; governance</span></div>
+          <button class="set-close" id="skillsClose" data-tip="Close">${icon("close", 16)}</button>
+        </div>
+        <div class="set-body" id="skillsBody"></div>
+      </aside>
+
       <aside class="kg" id="knowledge" hidden>
         <div class="resizer resizer-l" data-resize="kg" data-tip="Drag to resize|Collapse toward the chat or widen the graph" data-tip-side="left"></div>
         <div class="set-head">
@@ -257,6 +268,7 @@ function buildShell(): void {
             <div class="kg-relate-stack">
               <button class="btn-mini" id="kgRelate" data-tip="Relate nodes|Turn on relate mode, then drag one node onto another - or click two or more nodes and press Relate - to add your OWN relationships. They're saved to your private graph (first-party, never sent to be scanned as instructions).">${icon("git", 13)} Relate</button>
               <button class="btn-mini" id="kgCode" data-tip="Code graph|Ingest THIS workspace into a code knowledge graph - source files as nodes, imports as edges (colbymchenry/codegraph-style, in your own canvas). Click to build + view; click again to return to your personal graph. Needs no personalization unlock.">${icon("graph", 13)} Code graph</button>
+              <button class="btn-mini" id="kgKb" data-tip="Compiled KB|View the COMPILED knowledge base as a page graph - summary/concept/entity pages as nodes, cross-reference links as edges, in your own canvas. Click a node to read its page (shown as data). Click again to return to your personal graph.">${icon("report", 13)} Compiled KB</button>
             </div>
             <button class="btn-mini btn-icon" id="kgCodeUpdate" data-tip="Re-sync the code graph|Re-ingest the workspace to pick up new files + import changes since the last build." hidden>${icon("refresh", 14)}</button>
             <label class="kg-ai" data-tip="AI extraction|Use the model to pull richer facts + real relationships from each message, instead of the fast offline heuristic. Slower and uses model quota; capped at 500 messages per import. Leave off for a free, instant pass."><input type="checkbox" id="kgImportAI"/> AI</label>
@@ -552,7 +564,7 @@ async function runPersonalImport(folder: string, useModel: boolean): Promise<voi
       desc: `${r.learned} facts learned from ${r.messages} messages across ${r.conversations} conversations.`,
       meta: notes, actions: [{ label: "OK" }], timeout: 9000,
     });
-    if (kgOpen && !kgCodeMode) void renderKnowledge(); // redraw with the new nodes + edges (personal graph only)
+    if (kgOpen && !kgCodeMode && !kbGraphMode) void renderKnowledge(); // redraw with the new nodes + edges (personal graph only)
   };
   void poll();
 }
@@ -2433,6 +2445,7 @@ function secCui(p: import("./bridge.ts").PersonalStatus): string {
 function openSettings(): void {
   closeKnowledge();
   closeIde(); // P-IDE.4: right-edge surfaces are mutually exclusive
+  closeSkills(); // P-SKILL.4
   state.settingsOpen = true;
   if (!state.sidebarCollapsed) toggleSidebar(true); // give the chat room; reopen sessions via the hamburger
   $("#settings")!.hidden = false;
@@ -2447,6 +2460,158 @@ function closeSettings(): void {
   $("#inspector")!.hidden = false;
   $$(".rail-btn").forEach((b) => b.classList.remove("active"));
   $('.rail-btn[data-rail="chat"]')?.classList.add("active");
+}
+
+// ── P-SKILL.4 (ADR-0097): the Skills directory + management fly-out ───────────────────────────────
+// A right-edge aside (mutually exclusive with the other surfaces, like Settings). renderSkills composes
+// the bundled corpus + the discovered /api/skills list into ONE governed directory; the per-row menu
+// (event-delegated below) inspects / re-scans / removes / enables each skill. The enable toggle is the
+// SAME decision the delivery path uses (skills.ts isSkillEnabled), so disabling here truly stops a skill
+// being offered/loaded; a flagged skill's toggle is locked (invariant #3, keystone #2).
+let skillsOpen = false;
+function openSkills(): void {
+  skillsOpen = true;
+  closeSettings(); closeKnowledge(); closePreview(); closeAgentBuilder(); closeIde();
+  if (!state.sidebarCollapsed) toggleSidebar(true);
+  $("#skillsDir")!.hidden = false;
+  $("#inspector")!.hidden = true;
+  $$(".rail-btn").forEach((b) => b.classList.toggle("active", (b as HTMLElement).dataset.rail === "skills"));
+  void renderSkills();
+}
+function closeSkills(): void {
+  if (!skillsOpen) return;
+  skillsOpen = false;
+  $("#skillsDir")!.hidden = true;
+  $("#inspector")!.hidden = false;
+  $$(".rail-btn").forEach((b) => b.classList.remove("active"));
+  $('.rail-btn[data-rail="chat"]')?.classList.add("active");
+}
+/** Compose the directory rows (bundled inline + discovered from the server), resolve each row's
+ *  enabled/trust/enableable, and paint. Bundled skills are identified by their kebab `command`. */
+async function renderSkills(): Promise<void> {
+  const body = $("#skillsBody"); if (!body) return;
+  await loadSkills(); // refresh state.skills (discovered on-disk skills); bundled are inline
+  const rows: SkillDirRow[] = [];
+  for (const s of INSTALLED_SKILLS) {
+    const key = skillKey("bundled", s.command);
+    rows.push({ key, name: s.command, description: s.description, root: "bundled", trust: "trusted", invocation: s.command, removable: false, enabled: isSkillEnabled(key, "trusted"), enableable: true, fileBacked: false });
+  }
+  for (const s of state.skills) {
+    const key = skillKey(s.root, s.name);
+    rows.push({ key, name: s.name, description: s.description, root: s.root, trust: s.trust, invocation: s.invocation, removable: s.removable, enabled: isSkillEnabled(key, s.trust), enableable: trustEnableable(s.trust), fileBacked: true, scanned: s.scanned ? { findings: s.scanned.findings, at: s.scanned.at } : null });
+  }
+  body.innerHTML = `<button class="btn-mini skdir-studio-cta" id="skillStudioBtn" data-tip="Skill Studio - analyze your recent work and draft new skills (each scanned before it saves)">${icon("spark", 13)} Draft skills from recent work</button>` + renderSkillsDirectory(rows);
+}
+/** Event-delegated per-row menu: toggle enable, inspect, re-scan, remove. */
+async function onSkillAction(e: Event): Promise<void> {
+  if ((e.target as HTMLElement).closest("#skillStudioBtn")) { await openSkillStudio(); return; } // P-SKILL.5
+  const t = (e.target as HTMLElement).closest("[data-skill-act]") as HTMLElement | null;
+  if (!t) return;
+  const act = t.dataset.skillAct;
+  if (act === "toggle") {
+    const key = t.dataset.skillKey!; const trust = (t.dataset.skillTrust ?? "untrusted") as TrustLabel;
+    const next = setSkillEnabled(key, trust, !isSkillEnabled(key, trust));
+    // Disabling the ACTIVE bundled skill must also clear it so it stops steering the agent.
+    if (!next && state.activeSkill && skillKey("bundled", state.activeSkill.command) === key) await clearBundledSkill();
+    await renderSkills();
+    return;
+  }
+  const name = t.dataset.skillName!;
+  if (act === "inspect") { await openSkillInspect(name, (t.dataset.skillRoot ?? "project") as SkillRoot); return; }
+  if (act === "rescan") {
+    const r = await bridge.skillRescan(name);
+    if (r) showToast({ title: `Re-scanned: ${name}`, desc: `trust = ${r.trust}${r.blocked ? " \u00b7 flagged" : ""}${r.findings ? ` \u00b7 ${r.findings} finding(s)` : ""}`, tone: r.blocked ? "warn" : undefined, timeout: 3200 });
+    await renderSkills();
+    return;
+  }
+  if (act === "remove") {
+    showToast({
+      title: `Remove skill \u201c${name}\u201d?`,
+      desc: "Deletes its folder from disk. This can't be undone.",
+      actions: [{ label: "Remove", kind: "danger", run: () => void doRemoveSkill(name) }, { label: "Cancel" }],
+      timeout: 8000,
+    });
+  }
+}
+async function doRemoveSkill(name: string): Promise<void> {
+  const r = await bridge.skillRemove(name);
+  if (r?.ok) showToast({ title: `Removed: ${name}`, desc: "The skill folder was deleted.", timeout: 2600 });
+  else showToast({ tone: "warn", title: `Could not remove ${name}`, desc: r?.reason ?? "unavailable", timeout: 3200 });
+  await renderSkills();
+}
+/** Inspect one skill in a scrim modal. Bundled bodies are the inline systemPrompt (no server round-trip);
+ *  discovered skills read their SKILL.md server-side. The body renders escaped, as DATA (invariant #5). */
+async function openSkillInspect(name: string, root: SkillRoot): Promise<void> {
+  if ($("#skInspectModal")) return;
+  let view: SkillInspectView;
+  if (root === "bundled") {
+    const s = INSTALLED_SKILLS.find((x) => x.command === name);
+    view = s ? { ok: true, name, root: "bundled", trust: "trusted", body: s.systemPrompt, resources: [] } : { ok: false, name, reason: "unknown built-in skill" };
+  } else {
+    view = (await bridge.skillInspect(name)) ?? { ok: false, name, reason: "unavailable" };
+  }
+  const ov = el(`<div id="skInspectModal" class="mkt-scrim"><div class="sk-inspect-card">${renderSkillInspect(view)}<button class="set-close sk-inspect-x" data-sk-close>${icon("close", 16)}</button></div></div>`);
+  const close = () => { ov.remove(); document.removeEventListener("keydown", onKey); };
+  const onKey = (ev: KeyboardEvent) => { if (ev.key === "Escape") { ev.preventDefault(); close(); } };
+  ov.addEventListener("click", (ev) => { const el2 = ev.target as HTMLElement; if (el2 === ov || el2.closest("[data-sk-close]")) close(); });
+  document.addEventListener("keydown", onKey);
+  document.body.append(ov);
+}
+
+// ── P-SKILL.5 (ADR-0101): Skill Studio — draft skills from recent work ─────────────────────────────────
+// A scrim modal launched from the Skills directory. Pick a window → Analyze (the server gathers recent
+// work + asks the model for candidates) → review/edit each candidate → Codify (runs it through the same
+// fail-closed import gate; clean saves into the directory, flagged blocks). Nothing is written until codify.
+async function openSkillStudio(): Promise<void> {
+  if ($("#skStudioModal")) return;
+  const ov = el(`<div id="skStudioModal" class="mkt-scrim"><div class="sk-studio-card">
+    <div class="sk-studio-hd">${icon("spark", 15)} <b>Skill Studio</b> <span class="set-sub">draft skills from your recent work</span>
+      <button class="set-close" data-sk-close data-tip="Close">${icon("close", 16)}</button></div>
+    <div class="sk-studio-controls">
+      <div class="seg sk-studio-win" data-sk-window><button class="on" data-win="today">Today</button><button data-win="week">Past 7 days</button></div>
+      <button class="btn-mini" id="skStudioAnalyze">${icon("spark", 13)} Analyze</button>
+    </div>
+    <div class="sk-studio-body" id="skStudioBody"><div class="skdir-muted">Pick a window and Analyze - LUCID reads your recent sessions, AI-authored code, and loop outcomes, then drafts candidate skills with your most-used model. Each is scanned before it can be saved; you review + edit before codifying.</div></div>
+  </div></div>`);
+  let win: "today" | "week" = "today";
+  const close = () => { ov.remove(); document.removeEventListener("keydown", onKey); };
+  const onKey = (ev: KeyboardEvent) => { if (ev.key === "Escape") { ev.preventDefault(); close(); } };
+  ov.addEventListener("click", (ev) => {
+    const t = ev.target as HTMLElement;
+    if (t === ov || t.closest("[data-sk-close]")) return close();
+    const winBtn = t.closest("[data-win]") as HTMLElement | null;
+    if (winBtn) { win = winBtn.dataset.win === "week" ? "week" : "today"; ov.querySelectorAll("[data-win]").forEach((b) => b.classList.toggle("on", b === winBtn)); return; }
+    if (t.closest("#skStudioAnalyze")) { void runStudioAnalyze(win, ov); return; }
+    const codify = t.closest("[data-sk-codify]") as HTMLElement | null;
+    if (codify) { void runStudioCodify(codify); return; }
+  });
+  document.addEventListener("keydown", onKey);
+  document.body.append(ov);
+}
+async function runStudioAnalyze(win: "today" | "week", ov: HTMLElement): Promise<void> {
+  const bodyEl = ov.querySelector("#skStudioBody"); if (!bodyEl) return;
+  bodyEl.innerHTML = `<div class="skdir-muted">${icon("refresh", 13)} Analyzing your ${win === "today" ? "day" : "week"}\u2026</div>`;
+  const res = await bridge.skillStudioAnalyze(win).catch(() => null);
+  if (!res || !res.candidates.length) {
+    bodyEl.innerHTML = `<div class="skdir-muted">No skill candidates${res ? ` (model: ${esc(res.model)})` : ""}. Try the wider window, or do more work first.</div>`;
+    return;
+  }
+  bodyEl.innerHTML = `<div class="sk-studio-note">${res.candidates.length} candidate(s) from <b>${esc(res.model)}</b> - review + edit, then Codify. Each is scanned before it saves; a flagged draft is blocked.</div>` + res.candidates.map(renderStudioCandidate).join("");
+}
+async function runStudioCodify(btn: HTMLElement): Promise<void> {
+  const card = btn.closest(".sk-cand") as HTMLElement | null; if (!card) return;
+  const name = card.dataset.candName ?? "";
+  const description = card.dataset.candDesc ?? "";
+  const body = (card.querySelector(".sk-cand-body") as HTMLTextAreaElement | null)?.value ?? "";
+  const r = await bridge.skillStudioDraft({ name, description, body }).catch(() => null);
+  if (r?.ok) {
+    card.classList.add("codified");
+    btn.textContent = "Codified"; (btn as HTMLButtonElement).disabled = true;
+    showToast({ title: `Codified: ${name}`, desc: "Scanned clean + saved. It's in your Skills directory (untrusted until you re-scan).", timeout: 3400 });
+    if (skillsOpen) void renderSkills();
+  } else {
+    showToast({ tone: "warn", title: `Blocked: ${name}`, desc: r?.reason ?? "flagged by the scanner - not saved.", timeout: 3800 });
+  }
 }
 
 // P-IMP.2 (ADR-0035): open Settings with the Personalization section expanded + scrolled into view -
@@ -2497,6 +2662,8 @@ let kgOpen = false;
 let kgSelId: string | null = null;
 let kgSig = ""; // signature of the last-rendered graph, to skip no-op live refreshes
 let kgCodeMode = false; // P-KG-CODE.1: the canvas is showing the workspace CODE graph, not the personal graph
+let kbGraphMode = false; // P-KB.2b: the canvas is showing the COMPILED knowledge base page graph
+let kbGraphData: KbGraphView | null = null; // cached pages+links for the KB side panel (node -> page body)
 let codeGraphRoot = ""; // P-KG-CODE.1d: workspace root, so a code node's relative path opens the real file in the IDE
 let codeGraphLevel: "file" | "symbol" = "file"; // P-KG-SYM.1: which graph the canvas is showing
 const forgettingIds = new Set<string>(); // in-flight "forget" fact ids - de-dups mashed clicks (#113)
@@ -2565,7 +2732,7 @@ function kgSignature(d: PersonalGraphData | null): string {
 /** Live-refresh the open KG without a full remount: merge new facts/edges into the running
  *  simulation (positions preserved). No-op if the panel is closed or nothing changed. */
 async function refreshKnowledgeLive(): Promise<void> {
-  if (!kgOpen || !kgHandle || kgCodeMode) return; // code-graph mode isn't the live personal graph
+  if (!kgOpen || !kgHandle || kgCodeMode || kbGraphMode) return; // code-graph / compiled-KB mode isn't the live personal graph
   const data = await bridge.personalGraph().catch(() => null);
   if (!data || data.nodes.length === 0) return;
   const sig = kgSignature(data);
@@ -2586,6 +2753,7 @@ function openKnowledge(): void {
   closeSettings();
   closeIde(); // P-IDE.4: right-edge surfaces are mutually exclusive
   closePreview(); // P-PREVIEW.1
+  closeSkills(); // P-SKILL.4
   if (!state.sidebarCollapsed) toggleSidebar(true); // give the chat room; reopen sessions via the hamburger
   $("#knowledge")!.hidden = false;
   $("#inspector")!.hidden = true;
@@ -2615,6 +2783,7 @@ function openPreview(): void {
   closeIde();
   closeKnowledge();
   closeAgentBuilder(); // P-AGENT.2b
+  closeSkills(); // P-SKILL.4
   if (!state.sidebarCollapsed) toggleSidebar(true);
   $("#preview")!.hidden = false;
   $("#inspector")!.hidden = true;
@@ -2904,6 +3073,7 @@ function openAgentBuilder(): void {
   closeKnowledge();
   closeIde();
   closePreview();
+  closeSkills(); // P-SKILL.4
   if (!state.sidebarCollapsed) toggleSidebar(true);
   $("#agentBuilder")!.hidden = false;
   $("#inspector")!.hidden = true;
@@ -3574,6 +3744,7 @@ function paintPerfChip(): void {
 async function renderKnowledge(): Promise<void> {
   const canvas = $("#kgCanvas"), side = $("#kgSide"), scopeLbl = $("#kgScopeLbl");
   if (!canvas || !side) return;
+  kbGraphMode = false; updateKbButton(false); // P-KB.2b: personal graph is neither code nor compiled-KB
   kgHandle?.destroy(); kgHandle = null;
   // #11 perceived-latency: the graph store is encrypted, so personal()/personalGraph()
   // can take a beat to decrypt. Paint a calm "Decrypting…" state INSTANTLY; the gate()
@@ -3624,6 +3795,62 @@ function syncKgSideOpen(): void {
   main?.classList.toggle("side-open", open);
   if (rsz) rsz.hidden = !open;
 }
+
+// ── P-KB.2b (ADR-0099/0100): the COMPILED knowledge base as a 3rd source in the shared kg canvas ──
+// Mirrors the code-graph path (renderCodeGraph): fetch pages+links (bridge.kbGraph), map into
+// PersonalGraphData, and mount into #kgCanvas via the shared mountGraph. A node click shows that page's
+// body as DATA (escaped, never executed - invariant #5). Reuses the handle + layout cache + center button;
+// mutually exclusive with the personal + code graphs (the guards mirror kgCodeMode).
+function kbToGraphData(g: KbGraphView): PersonalGraphData {
+  const degree = new Map<string, number>();
+  for (const l of g.links) { degree.set(l.from_page_id, (degree.get(l.from_page_id) ?? 0) + 1); degree.set(l.to_page_id, (degree.get(l.to_page_id) ?? 0) + 1); }
+  return {
+    nodes: g.pages.map((p) => ({ id: p.page_id, name: p.title || p.slug, kind: p.kind, trust: p.trust_label, count: degree.get(p.page_id) ?? 0 })),
+    edges: g.links.map((l) => ({ from: l.from_page_id, to: l.to_page_id, relation: l.relation })),
+    facts: [],
+  };
+}
+function updateKbButton(active: boolean): void {
+  const b = $("#kgKb");
+  b?.classList.toggle("on", active);
+  if (b) b.innerHTML = `${icon("report", 13)} Compiled KB${active ? " \u2713" : ""}`;
+}
+/** Render a selected compiled page in the kg side panel - its body is UNTRUSTED DATA (escaped + framed). */
+function renderKbSide(id: string | null): void {
+  const side = $("#kgSide") as HTMLElement | null; if (!side) return;
+  const page = id ? kbGraphData?.pages.find((p) => p.page_id === id) : null;
+  if (!page) { side.hidden = true; side.innerHTML = ""; syncKgSideOpen(); return; }
+  side.innerHTML = `<div class="kb-side">
+    <div class="kb-side-hd"><b>${esc(page.title)}</b> <span class="skdir-trust ${esc(page.trust_label)}">${esc(page.trust_label)}</span></div>
+    <div class="kb-side-kind">${esc(page.kind)} \u00b7 <code>${esc(page.slug)}</code></div>
+    <div class="skdir-databanner">${icon("shield", 12)} Page body - shown as <b>data</b>, never run as instructions.</div>
+    <pre class="skdir-body">${esc(page.body_md)}</pre></div>`;
+  side.hidden = false; syncKgSideOpen();
+}
+/** Fetch + draw the compiled KB page graph in the shared canvas (mirrors renderCodeGraph). */
+async function renderKbGraph(): Promise<void> {
+  const canvas = $("#kgCanvas"), side = $("#kgSide") as HTMLElement | null, scopeLbl = $("#kgScopeLbl");
+  if (!canvas) return;
+  kgHandle?.destroy(); kgHandle = null;
+  kbGraphMode = true; updateKbButton(true); updateCodeGraphButtons(false); // mutually exclusive with code + personal
+  canvas.innerHTML = `<div class="skel-kg">${icon("refresh", 26, "spin")}<div>Loading the compiled KB\u2026</div></div>`;
+  if (side) { side.hidden = true; side.innerHTML = ""; }
+  const g = await bridge.kbGraph().catch(() => null);
+  kbGraphData = g;
+  if (scopeLbl) scopeLbl.textContent = g ? `\u00b7 compiled KB \u00b7 ${g.pages.length} pages \u00b7 ${g.links.length} links` : "";
+  if (!g || !g.pages.length) { canvas.innerHTML = `<div class="kg-empty">${icon("report", 30)}<div>The compiled KB is empty. Ingest a document to build summary, concept &amp; entity pages.</div></div>`; showKgCenter(false); syncKgSideOpen(); return; }
+  kgHandle = mountGraph(canvas as HTMLElement, kbToGraphData(g), (id) => renderKbSide(id), {}, {
+    positions: kgLayoutCache.get("kb"),
+    onPositions: (pos) => kgLayoutCache.set("kb", pos),
+  });
+  kgHandle.setLens(kgLens);
+  showKgCenter(true); syncKgSideOpen();
+}
+/** Toggle the compiled KB view (off returns to the personal graph). */
+async function toggleKbGraph(): Promise<void> {
+  if (kbGraphMode) { updateKbButton(false); await renderKnowledge(); }
+  else await renderKbGraph();
+}
 // ── P-KG-CODE.1 / P-KG-SYM.1: the workspace CODE graph (file imports OR symbol AST), in the same canvas ──
 function updateCodeGraphButtons(active: boolean, meta?: import("./bridge.ts").CodeGraphView | null): void {
   kgCodeMode = active;
@@ -3641,6 +3868,7 @@ async function renderCodeGraph(ingest: boolean, level: "file" | "symbol" = codeG
   codeGraphLevel = level;
   const canvas = $("#kgCanvas"), side = $("#kgSide") as HTMLElement | null;
   if (!canvas) return;
+  kbGraphMode = false; updateKbButton(false); // P-KB.2b: leaving compiled-KB mode for the code graph
   kgHandle?.destroy(); kgHandle = null;
   const busy = ingest ? (level === "symbol" ? "Parsing symbols (AST)…" : "Ingesting the workspace…") : "Loading the code graph…";
   canvas.innerHTML = `<div class="skel-kg">${icon("refresh", 26, "spin")}<div>${busy}</div></div>`;
@@ -4434,10 +4662,11 @@ function renderStatus(): void {
   const ctx = winTok ? curTok / winTok : 0;
   const budget = m?.budgets?.[0];
   const ctxPct = Math.round(ctx * 100);
-  // Minimal status bar: model · a context-fill RING · (Claude API status / Gov usage when present) · gate.
-  // The cache, session-cost, and "updated Ns ago" pills were removed - they're available in the Memory panel.
+  // Minimal status bar: a context-fill RING · (Claude API status / Gov usage when present) · the
+  // Trivia Wire's flexible gap. The model seg was removed (redundant - the titlebar model badge
+  // already shows it) and the gate-active pill retired (the gate's WORK surfaces in the Security
+  // panel + rail badge); the cache/session-cost pills live on in the Memory panel.
   $("#statusbar")!.innerHTML = `
-    <div class="seg" data-tip="Active model|Click the badge to change">${icon("spark", 14)} <b>${esc(modelLabel(state.model))}</b></div>
     <div class="seg ctx" data-tip="Context window|${fmtNum(curTok)} / ${fmtNum(winTok)} tokens used (${ctxPct}%)${lu ? " · live this session" : ""}">
       <svg class="ctx-ring" viewBox="0 0 22 22" width="17" height="17" aria-hidden="true">
         <circle class="ctx-track" cx="11" cy="11" r="8"/>
@@ -4909,6 +5138,7 @@ function useSkill(name: string): void {
 /** Bundled skill: activate it - its trusted guidance rides the next user turn until cleared. */
 async function activateBundledSkill(command: string): Promise<void> {
   const s = INSTALLED_SKILLS.find((x) => x.command === command); if (!s) return;
+  if (!isSkillEnabled(skillKey("bundled", command), "trusted")) { showToast({ tone: "warn", title: `${s.name} is disabled`, desc: "Enable it in the Skills directory (rail \u203a Skills) to use it.", timeout: 2800 }); return; } // P-SKILL.4
   state.activeSkill = { command: s.command, name: s.name };
   bumpSkillUsage(command); updateSkillButton();
   await bridge.setActiveSkill(s.name, s.systemPrompt);
@@ -6501,7 +6731,9 @@ function slashSource(): SlashItem[] {
   out.push({ label: "/command", hint: "Create your own /command — describe it, LUCID interviews you and saves it", kind: "command", complete: "/command ", uses: 8500 + (uses["command"] ?? 0) });
   out.push({ label: "/figma", hint: "Import a Figma design into the Preview and have the agent review it", kind: "command", activate: "figma", uses: 8900 + (uses["figma"] ?? 0) }); // P-FIGMA.1 (ADR-0154)
   for (const s of bundledSkillsByUsage()) out.push({ label: s.name, hint: s.description, kind: "bundled", activate: s.command, uses: uses[s.command] ?? 0 });
-  for (const s of state.skills) out.push({ label: `/skill:${s.name}`, hint: s.description || s.source, kind: "project", complete: `/skill:${s.name} `, uses: 0 });
+  // P-SKILL.4: a disabled or flagged project skill is never offered in the picker (same decision the
+  // delivery path uses). A user can still type /skill:<name> raw (omp resolves it), but LUCID won't suggest it.
+  for (const s of state.skills) { if (!isSkillEnabled(skillKey(s.root, s.name), s.trust)) continue; out.push({ label: `/skill:${s.name}`, hint: s.description || s.source, kind: "project", complete: `/skill:${s.name} `, uses: 0 }); }
   // P-CMD.1: the user's own saved commands. Ranked above omp commands (uses:100) so they surface first.
   for (const c of state.userCommands) out.push({ label: `/${c.name}`, hint: c.description || (c.mode === "skill" ? "your skill" : "your command"), kind: "command", complete: `/${c.name} `, uses: 100 });
   for (const c of state.commands) out.push({ label: `/${c.name}`, hint: c.description ?? "", kind: "command", complete: `/${c.name} `, uses: 0 });
@@ -6727,9 +6959,11 @@ function wire(): void {
     if (r === "preview" && previewOpen) return closePreview();
     if (r === "agentBuilder" && abOpen) return closeAgentBuilder();
     if (r === "settings" && state.settingsOpen) return closeSettings();
+    if (r === "skills" && skillsOpen) return closeSkills(); // P-SKILL.4
     if (r !== "knowledge") closeKnowledge();
     if (r !== "preview") closePreview(); // P-PREVIEW.1: right-edge surfaces are mutually exclusive
     if (r !== "agentBuilder") closeAgentBuilder(); // P-AGENT.2b
+    if (r !== "skills") closeSkills(); // P-SKILL.4
     if (r === "security" || r === "memory") focusInspector(r);
     else if (r === "dev") { focusInspector("dev"); void loadDev(); } // ADR-0009 Phase D
     else if (r === "chat") { closeSettings(); $("#input")?.focus(); $$(".rail-btn").forEach((x) => x.classList.toggle("active", x === b)); }
@@ -6737,6 +6971,7 @@ function wire(): void {
     else if (r === "knowledge") openKnowledge();
     else if (r === "preview") openPreview();
     else if (r === "agentBuilder") openAgentBuilder(); // P-AGENT.2b
+    else if (r === "skills") openSkills(); // P-SKILL.4
     else palette.show();
   }));
   // P-AGENT.2b: Agent Builder toolbar (add-node kinds · connect mode · validate · save).
@@ -6762,6 +6997,9 @@ function wire(): void {
     input.value = ""; // allow re-importing the same file
     if (f) void importAgentFile(f);
   });
+  // P-SKILL.4 (ADR-0097): Skills directory - close + event-delegated per-row menu.
+  $("#skillsClose")?.addEventListener("click", () => closeSkills());
+  $("#skillsBody")?.addEventListener("click", (e) => void onSkillAction(e));
   // P-PREVIEW.1 (ADR-0096): preview panel - open a local file, reload, screenshot to chat, close.
   $("#prevClose")?.addEventListener("click", () => closePreview());
   $("#prevOpen")?.addEventListener("click", () => loadPreview(($("#prevPath") as HTMLInputElement | null)?.value ?? ""));
@@ -6774,6 +7012,7 @@ function wire(): void {
   $("#kgClose")!.addEventListener("click", () => closeKnowledge());
   // P-KG-CODE.1: workspace code graph - toggle personal ↔ code; Update re-ingests.
   $("#kgCode")?.addEventListener("click", () => void toggleCodeGraph());
+  $("#kgKb")?.addEventListener("click", () => void toggleKbGraph()); // P-KB.2b
   $("#kgCodeUpdate")?.addEventListener("click", () => void renderCodeGraph(true));
   // P-KG-CODE.1b: re-center button + keep the flyout state (resizer + center offset) in sync however the
   // side panel is toggled (a MutationObserver on its `hidden` attribute catches every path).
@@ -6806,7 +7045,7 @@ function wire(): void {
         : "Full fidelity.",
       timeout: 2600,
     });
-    if (kgOpen) void (kgCodeMode ? renderCodeGraph(false) : renderKnowledge());
+    if (kgOpen) void (kbGraphMode ? renderKbGraph() : kgCodeMode ? renderCodeGraph(false) : renderKnowledge());
   });
   // Auto-tier flips (plug/unplug, battery level) repaint the chip and calm/wake a LIVE graph in place -
   // no remount, so the layout the user is looking at never jumps.

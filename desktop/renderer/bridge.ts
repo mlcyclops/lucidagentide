@@ -41,6 +41,8 @@ export interface AgentTemplateInfo {
 import type { LocalProviderDef } from "../local_providers.ts"; // P-LOCAL.3: self-hosted/custom LLM providers
 import type { RestoredTurn } from "../session_steps.ts"; // P-RESUME.1 (ADR-0171): restored agent activity
 export type { RestoredTurn };
+import type { SkillRoot } from "../skills_gov.ts"; // P-SKILL.4 (ADR-0097): skill source roots
+import type { TrustLabel } from "../../harness/contracts.ts"; // invariant #7: closed-set trust labels
 
 export interface BlockRecord { id: string; tool: string; severity: string; findings: string; reason: string; at: string; status: "quarantined" | "approved" | "dismissed"; reviewer?: string }
 
@@ -186,6 +188,28 @@ export interface SessionInfo { id: string; title: string; model: string; updated
 export interface SessionList { sessions: SessionInfo[]; ingest: SessionInfo[] }
 // P-SKILL.1 (ADR-0045): per-file result of a gated skill import (mirrors desktop/skills_import.ts).
 export interface SkillImportResult { ok: boolean; name: string; written?: boolean; path?: string; blocked?: boolean; reason?: string; trustLabel?: string; findings?: number }
+
+// P-SKILL.4 (ADR-0097): the directory row for a DISCOVERED skill + the per-action results (mirror
+// desktop/skills_data.ts; the renderer composes the bundled corpus into the same SkillView shape).
+export interface SkillScanView { trust: TrustLabel; findings: number; at: string }
+export interface SkillView { name: string; description: string; source: string; root: SkillRoot; trust: TrustLabel; invocation: string; removable: boolean; scanned?: SkillScanView | null }
+export interface SkillResourceView { dir: string; files: string[] }
+export interface SkillInspectView { ok: boolean; name: string; root?: SkillRoot; trust?: TrustLabel; body?: string; resources?: SkillResourceView[]; provenance?: string; reason?: string }
+export interface SkillRescanView { ok: boolean; name: string; found: boolean; trust?: TrustLabel; findings?: number; blocked?: boolean; reason?: string }
+export interface SkillRemoveView { ok: boolean; name: string; removed?: boolean; root?: SkillRoot; reason?: string }
+
+// P-SKILL.5 (ADR-0101): Skill Studio — a model-drafted skill candidate + the analyze result.
+export interface SkillCandidateView { name: string; description: string; body: string; rationale?: string }
+export interface SkillStudioAnalyzeView { window: "today" | "week"; model: string; candidates: SkillCandidateView[] }
+
+// P-KB.2b (ADR-0099/0100): the compiled knowledge base + the page-graph view.
+export interface KbBlockedView { stage: "source" | "page"; slug?: string; reason: string; trustLabel: string; findings: number }
+export interface KbIngestResultView { documentId: string; status: "compiled" | "quarantined"; pagesCompiled: number; pagesQuarantined: number; links: number; pageIds: string[]; blocked: KbBlockedView[] }
+export interface KbRetrievedItemView { store: "vector" | "compiled"; citation: string; title: string; text: string; score: number; trustLabel: string }
+export interface KbRetrieveResultView { mode: "vector" | "compiled" | "hybrid"; items: KbRetrievedItemView[]; wrapped: string }
+export interface KbPageView { page_id: string; kind: string; slug: string; title: string; body_md: string; trust_label: string }
+export interface KbLinkView { link_id: string; from_page_id: string; to_page_id: string; relation: string }
+export interface KbGraphView { pages: KbPageView[]; links: KbLinkView[] }
 export interface ProviderAuth {
   id: string; name: string; env: string; oauthId: string; canOauth: boolean;
   oauthActive: boolean; oauthIdentity?: string; keySet: boolean; keyLast4?: string;
@@ -481,7 +505,18 @@ export interface LucidBridge {
   cancelChat(): Promise<unknown>;
   cancelGoal(): Promise<unknown>; // P-GOAL.2: stop a running /goal loop
   commands(): Promise<OmpCommand[]>;
-  skills(): Promise<{ name: string; description: string; source: string }[] | null>;
+  skills(): Promise<SkillView[] | null>;
+  // P-SKILL.4 (ADR-0097): the directory's per-skill management menu (all confined, all additive).
+  skillInspect(name: string): Promise<SkillInspectView | null>;
+  skillRescan(name: string): Promise<SkillRescanView | null>;
+  skillRemove(name: string): Promise<SkillRemoveView | null>;
+  // P-SKILL.5 (ADR-0101): analyze recent work → candidate skills; draft = codify one through the gate.
+  skillStudioAnalyze(window: "today" | "week"): Promise<SkillStudioAnalyzeView | null>;
+  skillStudioDraft(candidate: SkillCandidateView): Promise<SkillImportResult | null>;
+  // P-KB.2b (ADR-0099/0100): compiled-KB ingest / retrieve / page-graph.
+  kbIngest(doc: { sourcePath: string; title: string; text: string }): Promise<KbIngestResultView | null>;
+  kbRetrieve(query: string, mode: "vector" | "compiled" | "hybrid"): Promise<KbRetrieveResultView | null>;
+  kbGraph(): Promise<KbGraphView | null>;
   // P-CMD.1 (ADR-0146): user-authored "/" slash commands (workspace .omp/commands/). Create validates +
   // scans fail-closed server-side. `list` = stored commands; `create` returns the persisted command or errors.
   userCommands(): Promise<UserCommand[]>;
@@ -839,6 +874,14 @@ export const bridge: LucidBridge = {
   userCommandCreate: (command) => post("/api/usercommand", { command }), // P-CMD.1 (server validates + scans fail-closed)
   userCommandDelete: (name) => post("/api/usercommand/delete", { name }), // P-CMD.1
   skillImport: (files) => post("/api/skills/import", { files }),
+  skillInspect: (name) => post("/api/skills/inspect", { name }),
+  skillRescan: (name) => post("/api/skills/rescan", { name }),
+  skillRemove: (name) => post("/api/skills/remove", { name }),
+  skillStudioAnalyze: (window) => post("/api/skill-studio/analyze", { window }),
+  skillStudioDraft: (candidate) => post("/api/skill-studio/draft", { candidate }),
+  kbIngest: (doc) => post("/api/kb/ingest", doc),
+  kbRetrieve: (query, mode) => post("/api/kb/retrieve", { query, mode }),
+  kbGraph: () => getData("/api/kb/graph"),
   setActiveSkill: (name, prompt) => post("/api/skill", { name, prompt }),
   clearActiveSkill: () => post("/api/skill", { clear: true }),
   skillActivated: (command, name, source) => post("/api/skill/activated", { command, name, source }),

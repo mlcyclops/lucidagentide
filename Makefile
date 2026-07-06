@@ -163,6 +163,34 @@ demo-P-TPS.1: ## P-TPS.1 (ADR-0044): streaming output-token readout — output-o
 demo-P-SKILL.1: ## P-SKILL.1 (ADR-0045): gated skill import — clean .md writes to .omp/skills/, poisoned blocks at the gate
 	$(BUN) run harness/scripts/demo_pskill1.ts
 
+.PHONY: demo-P-SKILL.4
+demo-P-SKILL.4: ## P-SKILL.4 (ADR-0097): the Agent Skill directory - classify roots/trust, fail-closed re-scan locks a flagged skill, remove confined to project/user (immutable .agents refused)
+	$(BUN) run harness/scripts/demo_pskill4.ts
+
+.PHONY: demo-P-SKILLREG.1
+demo-P-SKILLREG.1: ## P-SKILLREG.1 (ADR-0098): the enterprise skills registry READER - Ed25519 verify + fail-closed scan-gate on install; unsigned/untrusted-key/poisoned blocked, clean installs as an untrusted registry row
+	$(BUN) run harness/scripts/demo_pskillreg1.ts
+
+.PHONY: demo-P-SKILL.5
+demo-P-SKILL.5: ## P-SKILL.5 (ADR-0101): Skill Studio - analyze recent work into candidate skills, codify each through the fail-closed gate (clean writes, poisoned blocks); analyze writes nothing
+	$(BUN) run harness/scripts/demo_pskill5.ts
+
+.PHONY: demo-P-SKILLREG.2
+demo-P-SKILLREG.2: ## P-SKILLREG.2 (ADR-0102): the skill publish seam - sign + publish a codified skill to the Local Skills Registry (remote target no-ops fail-safe), then round-trip it back through the reader into a registry row
+	$(BUN) run harness/scripts/demo_pskillreg2.ts
+
+.PHONY: demo-P-KB.1
+demo-P-KB.1: ## P-KB.1 (ADR-0099): the compiled KB - a clean doc compiles into a page graph, a poisoned source is quarantined (never compiled), a poisoned derived page is re-scanned + quarantined (never stored)
+	$(BUN) run harness/scripts/demo_pkb1.ts
+
+.PHONY: demo-P-KB.2
+demo-P-KB.2: ## P-KB.2 (ADR-0100): the hybrid retrieval router (vector | compiled | both, delimited + cited) + the kept-in-sync generator (idempotent re-ingest, contradiction-flagged, prior page retained)
+	$(BUN) run harness/scripts/demo_pkb2.ts
+
+.PHONY: demo-P-KB.2b
+demo-P-KB.2b: ## P-KB.2b (ADR-0099/0100 desktop): the desktop compiled-KB surface - ingest compiles into the process store, retrieve returns cited delimited hits, graph exposes pages+links, poisoned source quarantined
+	$(BUN) run desktop/scripts/demo_p_kb_1.ts
+
 .PHONY: demo-P-GOAL.9
 demo-P-GOAL.9: ## P-GOAL.9 (ADR-0054): /goal After-Action Report — tool calls/LOC/errors/websites graphs + stall guard
 	$(BUN) run harness/scripts/demo_pgoal9.ts

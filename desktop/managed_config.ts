@@ -110,6 +110,19 @@ export interface ManagedModels {
   lock?: boolean;
 }
 
+/** ADR-0102 (P-SKILLREG.2): the skill-registry publish targets. Public ships only the LOCAL publisher +
+ *  the seam; remote publishers (cloud OCI / custom git) are private add-on IP that register against the
+ *  same interface and read their own endpoints from here. Schema only — no remote impls in this repo. */
+export interface ManagedSkillRegistry {
+  /** Master switch; false disables publishing entirely. Default on. */
+  enabled?: boolean;
+  /** Absolute path to the Local Skills Registry store. Default ~/.omp/skill-registry. */
+  localRoot?: string;
+  /** Declared remote publish targets. A target with no registered publisher (public repo) is a clean
+   *  no-op at publish time; the private add-on's connectors implement these against RegistryPublisher. */
+  remotes?: { name: string; kind: string; endpoint?: string }[];
+}
+
 export interface ManagedConfig {
   /** Shown as "Managed by <orgName>" in the UI. */
   orgName?: string;
@@ -128,6 +141,8 @@ export interface ManagedConfig {
   logging?: ManagedLogging;
   /** ADR-0068: central model-routing governance (generalizes `asksageOnly`). */
   models?: ManagedModels;
+  /** ADR-0102 (P-SKILLREG.2): skill-registry publish targets (local publisher public; remotes private). */
+  skillRegistry?: ManagedSkillRegistry;
   /** ADR-0103 (P-FS.1): restrict the in-app folder browser + workspace selection to these roots.
    *  Unset/empty = the full filesystem (the individual-user default). When set, the browser is confined
    *  to these subtrees and never offers a parent above them. Only TIGHTENS (mirrors ADR-0068). */
