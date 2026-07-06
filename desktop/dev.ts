@@ -73,8 +73,15 @@ function settingsData() {
 }
 import { emailDomainAllowed, managedAsksageOnly, managedConfig, managedLocks, skipAllowed } from "./managed_config.ts";
 import { asksageConfig, listDatasets, listPersonas, monthlyTokens, scanPersona, wrapPersona } from "./asksage.ts";
-import { listSkills } from "./skills_data.ts";
+import { inspectSkill, listSkills, removeSkill, rescanSkill } from "./skills_data.ts"
 import { intelNews } from "./intel_news.ts"; // P-TRIV.3 (ADR-0176): the executive Trivia Wire's news feed
+import { installRegistrySkill, type RegistrySkillArtifact } from "./skills_registry.ts"
+import { analyzeWork, codifyCandidate, gatherWorkDigest, type SkillCandidate, type StudioWindow } from "./skill_studio.ts"
+import { buildSkillArtifact, PublishDispatcher, publishersFor } from "./skill_publish.ts";
+import { kbScanner, kbStore } from "./kb_store.ts"
+import { ingestDocument } from "../harness/kb/ingest.ts"
+import { retrieveKnowledge, type RetrieveMode } from "../harness/kb/retrieve.ts"
+import { recordBlock } from "./security_log.ts"
 import { importSkill } from "./skills_import.ts";
 import { createUserCommand, deleteUserCommand, listUserCommands } from "./user_commands.ts"; // P-CMD.1
 import { archiveGoalReport, deleteGoalReport, listResumableLoops, listGoalReports, readGoalReport, restoreGoalReport } from "./goal_memory.ts";
@@ -1389,6 +1396,97 @@ const server = Bun.serve({
           results.push(await importSkill(String(f?.name ?? "skill.md"), content));
         }
         return json({ ok: true, data: { results } });
+      }
+      // P-SKILL.4 (ADR-0097): the directory's per-skill management menu. All three resolve the skill by
+      // NAME through omp's own discovery (never a client-supplied path) and are pathWithin-confined:
+      //   inspect — read the SKILL.md body + resource tree as DATA (the renderer delimits it);
+      //   rescan  — run the fail-closed gate + record the verdict (dead scanner ⇒ quarantined);
+      //   remove  — delete a project/user skill dir; bundled/agents/plugin are refused (immutable).
+      if (p === "/api/skills/inspect" && req.method === "POST") {
+        const b = await readBody<{ name?: unknown }>(req);
+        return json({ ok: true, data: await inspectSkill(String(b.name ?? "")) });
+      }
+      if (p === "/api/skills/rescan" && req.method === "POST") {
+        const b = await readBody<{ name?: unknown }>(req);
+        return json({ ok: true, data: await rescanSkill(String(b.name ?? "")) });
+      }
+      if (p === "/api/skills/remove" && req.method === "POST") {
+        const b = await readBody<{ name?: unknown }>(req);
+        return json({ ok: true, data: await removeSkill(String(b.name ?? "")) });
+      }
+      // P-SKILLREG.1 (ADR-0098): the enterprise-registry READER seam. A connector (private add-on) POSTs a
+      // fetched, signed skill artifact; the reader verifies its signature, runs it through the fail-closed
+      // scan gate, and installs it locally ONLY if both pass \u2014 then it appears as a `registry` directory row.
+      // Fail-closed: unsigned / bad-signature / scan-flagged / dead-scanner \u2192 blocked, nothing written.
+      if (p === "/api/skills/registry/install" && req.method === "POST") {
+        const b = await readBody<{ artifact?: RegistrySkillArtifact }>(req);
+        if (!b.artifact) return json({ ok: true, data: { ok: false, name: "", installed: false, stage: "validate", reason: "missing artifact" } });
+        return json({ ok: true, data: await installRegistrySkill(b.artifact) });
+      }
+      // P-SKILL.5 (ADR-0101): Skill Studio. `analyze` gathers the user's recent work into a delimited DATA
+      // digest and asks the most-used model for candidate skills; `draft` codifies ONE reviewed candidate
+      // through the SAME fail-closed import gate (clean writes to .omp/skills, flagged blocks). Analysis
+      // uses backend.complete (the model call) with the digest's model; nothing is written at analyze time.
+      if (p === "/api/skill-studio/analyze" && req.method === "POST") {
+        const b = await readBody<{ window?: unknown }>(req);
+        const window: StudioWindow = b.window === "today" ? "today" : "week";
+        const data = await analyzeWork(window, {
+          gather: gatherWorkDigest,
+          complete: (system, user, model) => backend.complete(system, user, model ? { model } : {}),
+        });
+        return json({ ok: true, data });
+      }
+      if (p === "/api/skill-studio/draft" && req.method === "POST") {
+        const b = await readBody<{ candidate?: SkillCandidate }>(req);
+        const c = b.candidate;
+        if (!c || typeof c.name !== "string" || typeof c.description !== "string" || typeof c.body !== "string") {
+          return json({ ok: true, data: { ok: false, name: "", reason: "invalid candidate" } });
+        }
+        return json({ ok: true, data: await codifyCandidate({ name: c.name, description: c.description, body: c.body }) });
+      }
+      // P-KB.2b (ADR-0099/0100 desktop plumbing): the compiled knowledge base surface. ingest = scan the
+      // source + compile (backend.complete, most-used model) + re-scan each derived page, all fail-closed;
+      // retrieve = the router (the vector store is not desktop-wired yet, so vector/hybrid return the
+      // compiled hits) delimited + cited; graph = pages + links for the force-graph view.
+      if (p === "/api/kb/ingest" && req.method === "POST") {
+        const b = await readBody<{ sourcePath?: unknown; title?: unknown; text?: unknown }>(req);
+        const text = String(b.text ?? "");
+        if (!text.trim()) return json({ ok: true, data: { documentId: "", status: "quarantined", pagesCompiled: 0, pagesQuarantined: 0, links: 0, pageIds: [], blocked: [{ stage: "source", reason: "empty document", trustLabel: "quarantined", findings: 0 }] } });
+        const model = usageLedger().models[0]?.model;
+        const result = await ingestDocument({
+          store: await kbStore(),
+          scanner: kbScanner(),
+          complete: (system, user) => backend.complete(system, user, model ? { model } : {}),
+          sourcePath: String(b.sourcePath ?? "document"),
+          title: String(b.title ?? "Untitled"),
+          text,
+          onBlock: (blk) => recordBlock({ tool: "kb_ingest", severity: "high", findings: String(blk.findings), reason: `KB ${blk.stage} blocked${blk.slug ? ` (${blk.slug})` : ""}: ${blk.reason}` }),
+        });
+        return json({ ok: true, data: result });
+      }
+      if (p === "/api/kb/retrieve" && req.method === "POST") {
+        const b = await readBody<{ query?: unknown; mode?: unknown }>(req);
+        const mode: RetrieveMode = b.mode === "vector" || b.mode === "hybrid" ? b.mode : "compiled";
+        return json({ ok: true, data: await retrieveKnowledge({ query: String(b.query ?? ""), mode, compiled: { store: await kbStore() } }) });
+      }
+      if (p === "/api/kb/graph") {
+        const s = await kbStore();
+        return json({ ok: true, data: { pages: await s.listPages(), links: await s.listLinks() } });
+      }
+      // P-SKILLREG.2 (ADR-0102): the PUBLISH seam. Reads a codified skill's SKILL.md and publishes it as a
+      // versioned artifact to the configured targets (fail-safe fan-out). Public ships the LOCAL publisher;
+      // a declared remote with no registered publisher is a clean no-op. Publishing establishes NO trust:
+      // the signature + scan gate still run on the READ side (P-SKILLREG.1) before anything installs.
+      if (p === "/api/skills/publish" && req.method === "POST") {
+        const b = await readBody<{ name?: unknown; version?: unknown; targets?: unknown }>(req);
+        const insp = await inspectSkill(String(b.name ?? ""));
+        if (!insp.ok || !insp.body) return json({ ok: true, data: { ok: false, receipts: [], reason: insp.reason ?? "skill not found or empty" } });
+        const version = typeof b.version === "string" && b.version ? b.version : "1.0.0";
+        const targets = Array.isArray(b.targets) ? b.targets.filter((t): t is string => typeof t === "string") : undefined;
+        const dispatcher = new PublishDispatcher();
+        dispatcher.setPublishers(publishersFor());
+        const receipts = await dispatcher.publish(buildSkillArtifact({ name: insp.name, version, content: insp.body }), targets);
+        return json({ ok: true, data: { ok: receipts.some((r) => r.ok), receipts } });
       }
       // P-CMD.1 (ADR-0146): user-authored "/" slash commands. GET = list stored commands; POST = create one
       // (validate → secret-scan → Unicode-scan, all fail-closed → persist). The delete route removes one.

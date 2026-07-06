@@ -15,6 +15,9 @@
 // a deliberate, re-reviewed edit. They never instruct the agent to ignore the gate, exfiltrate, run
 // untrusted code, or treat delimited content as instructions.
 
+import type { TrustLabel } from "../../harness/contracts.ts";
+import { effectiveEnabled, skillKey, trustEnableable } from "../skills_gov.ts";
+
 export interface BundledSkill {
   /** Stable slash-command id (kebab-case). */
   command: string;
@@ -138,10 +141,42 @@ function usageCounts(): Record<string, number> {
 export function bumpSkillUsage(command: string): void {
   try { const c = usageCounts(); c[command] = (c[command] ?? 0) + 1; localStorage.setItem(USAGE_KEY, JSON.stringify(c)); } catch { /* ignore */ }
 }
-/** Bundled skills, most-used first (ties keep the curated order). */
+
+// ── P-SKILL.4 (ADR-0097): the enable/disable toggle, persisted locally (extends the usage-count
+// localStorage tier). This is the RENDERER half of governance: bundled delivery + the `/skill:` picker
+// are both renderer-side, so this is where "a disabled skill is never offered" is enforced. It stores
+// only EXPLICIT overrides ({key:false} to disable, {key:true} to re-enable); an absent key means "use
+// the default". The single active-or-not decision (effectiveEnabled) lives in skills_gov.ts so it is
+// byte-identical to the server's view — a flagged (suspicious/quarantined) skill can never be turned on.
+const ENABLED_KEY = "lucid.skill-enabled";
+function enabledOverrides(): Record<string, boolean> {
+  try { return JSON.parse(localStorage.getItem(ENABLED_KEY) || "{}") as Record<string, boolean>; } catch { return {}; }
+}
+/** Set (or clear) a per-skill enable override. Passing the default state clears the override so the
+ *  stored map stays minimal. Returns the resulting effective state for the caller to reflect in the UI. */
+export function setSkillEnabled(key: string, trust: TrustLabel, enabled: boolean): boolean {
+  try {
+    const o = enabledOverrides();
+    // A flagged skill can never be enabled: ignore an attempt to turn it on (fail-closed, keystone #2).
+    if (enabled && !trustEnableable(trust)) return false;
+    if (enabled) delete o[key]; else o[key] = false; // default is ON for enableable trust → store only the OFF override
+    localStorage.setItem(ENABLED_KEY, JSON.stringify(o));
+  } catch { /* ignore — a storage failure just means no persisted override */ }
+  return effectiveEnabled(enabledOverrides()[key], trust);
+}
+/** Whether a skill (identified by its governance key + trust) is active — the ONE decision the delivery
+ *  path and the picker share. Reads the local override and defers to skills_gov.effectiveEnabled. */
+export function isSkillEnabled(key: string, trust: TrustLabel): boolean {
+  return effectiveEnabled(enabledOverrides()[key], trust);
+}
+
+/** Bundled skills, most-used first (ties keep the curated order), EXCLUDING any the user disabled — so a
+ *  disabled built-in never surfaces in the picker (bundled skills are all frozen `trusted`). */
 export function bundledSkillsByUsage(): BundledSkill[] {
   const c = usageCounts();
-  return INSTALLED_SKILLS.map((s, i) => ({ s, i })).sort((a, b) => (c[b.s.command] ?? 0) - (c[a.s.command] ?? 0) || a.i - b.i).map((x) => x.s);
+  return INSTALLED_SKILLS
+    .filter((s) => isSkillEnabled(skillKey("bundled", s.command), "trusted"))
+    .map((s, i) => ({ s, i })).sort((a, b) => (c[b.s.command] ?? 0) - (c[a.s.command] ?? 0) || a.i - b.i).map((x) => x.s);
 }
 
 // ── /task proforma (ADR-0029): appended to the composer, does NOT set an active skill ─────────────

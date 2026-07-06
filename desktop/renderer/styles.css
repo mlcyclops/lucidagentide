@@ -690,6 +690,71 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .fg-status.err{color:var(--danger,#e0574a)}
 .fg-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:10px}
 
+/* P-SKILL.4 (ADR-0097): the Skills directory + per-skill management menu + inspect scrim. */
+.skills-dir .set-sub{font-size:11px;color:var(--txt-3);font-weight:400;margin-left:6px}
+.skdir-note{font-size:12px;color:var(--txt-2);padding:2px 2px 12px;line-height:1.5}
+.skdir-note b{color:var(--txt)}
+.skdir-group{margin-bottom:16px}
+.skdir-group-hd{font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--txt-3);margin:0 0 8px;display:flex;align-items:center;gap:8px}
+.skdir-count{background:var(--bg-3);color:var(--txt-2);border-radius:999px;padding:1px 8px;font-size:10px}
+.skdir-row{display:flex;align-items:flex-start;gap:10px;padding:9px 10px;border:1px solid var(--line-soft);border-radius:var(--r-md);margin-bottom:6px;background:var(--bg-1)}
+.skdir-row.disabled{opacity:.5}
+.skdir-main{flex:1;min-width:0}
+.skdir-hd{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.skdir-name{color:var(--txt);font-size:13px}
+.skdir-inv{font-size:11px;color:var(--txt-3);background:var(--bg-3);border-radius:var(--r-sm);padding:1px 6px}
+.skdir-desc{font-size:12px;color:var(--txt-2);margin-top:3px;line-height:1.45}
+.skdir-ready{font-size:10px;color:var(--txt-3);border:1px solid var(--line);border-radius:999px;padding:0 6px;cursor:help}
+.skdir-findings{color:var(--amber);font-size:11px}
+.skdir-trust{font-size:10px;font-weight:600;border-radius:999px;padding:1px 7px;text-transform:lowercase}
+.skdir-trust.trusted{background:var(--green-dim);color:var(--green)}
+.skdir-trust.untrusted{background:var(--bg-3);color:var(--txt-3)}
+.skdir-trust.suspicious{background:var(--amber-dim);color:var(--amber)}
+.skdir-trust.quarantined{background:var(--red-dim);color:var(--red)}
+.skdir-acts{display:flex;align-items:center;gap:4px;flex-shrink:0}
+.skdir-btn{display:grid;place-items:center;width:26px;height:26px;border:1px solid var(--line);border-radius:var(--r-sm);background:var(--bg-2);color:var(--txt-2);cursor:pointer;transition:all var(--t) var(--ease)}
+.skdir-btn:hover{background:var(--bg-3);color:var(--txt);border-color:var(--line-strong)}
+.skdir-btn.danger:hover{color:var(--red);border-color:var(--red)}
+.skdir-toggle{width:auto;padding:0 10px;font-size:11px;font-weight:600}
+.skdir-toggle.on{background:var(--accent-dim);color:var(--accent-2);border-color:var(--accent)}
+.skdir-toggle.off{color:var(--txt-3)}
+.skdir-locked{display:inline-flex;align-items:center;gap:3px;font-size:10px;color:var(--red);background:var(--red-dim);border-radius:var(--r-sm);padding:2px 7px}
+.skdir-empty,.skdir-muted{color:var(--txt-3);font-size:12px;padding:8px 2px}
+.sk-inspect-card{position:relative;width:min(720px,92vw);max-height:84vh;overflow:auto;background:var(--bg-1);border:1px solid var(--line-strong);border-radius:var(--r-lg);padding:18px 20px;box-shadow:0 20px 60px rgba(0,0,0,.5);animation:rise var(--t-slow,.24s) var(--ease-out)}
+.sk-inspect-x{position:absolute;top:12px;right:12px}
+.skdir-inspect-hd{display:flex;align-items:center;gap:10px;font-size:15px;margin-bottom:8px}
+.skdir-inspect-root{font-size:11px;color:var(--txt-3)}
+.skdir-prov{font-size:11px;color:var(--txt-2);margin-bottom:6px}
+.skdir-locknote{font-size:12px;color:var(--red);background:var(--red-dim);border-radius:var(--r-sm);padding:6px 9px;margin-bottom:8px;display:flex;gap:6px;align-items:center}
+.skdir-ready-list{list-style:none;padding:0;margin:0 0 12px;font-size:12px}
+.skdir-ready-list li{display:flex;align-items:center;gap:6px;padding:2px 0}
+.skdir-ready-list li.ok{color:var(--txt-2)}
+.skdir-ready-list li.no{color:var(--amber)}
+.skdir-databanner{font-size:11px;color:var(--txt-3);display:flex;gap:6px;align-items:center;margin-bottom:6px}
+.skdir-body{background:var(--bg-0);border:1px solid var(--line);border-radius:var(--r-md);padding:10px 12px;font-size:12px;line-height:1.5;white-space:pre-wrap;word-break:break-word;max-height:40vh;overflow:auto;color:var(--txt-2);font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.skdir-res-hd{font-size:11px;font-weight:600;text-transform:uppercase;color:var(--txt-3);margin:12px 0 6px}
+.skdir-res{font-size:12px;color:var(--txt-2);margin-bottom:4px}
+/* P-SKILL.5 (ADR-0101): Skill Studio - launch CTA + scrim modal + candidate cards. */
+.skdir-studio-cta{display:inline-flex;align-items:center;gap:6px;margin:0 0 12px}
+.sk-studio-card{position:relative;width:min(780px,94vw);max-height:86vh;display:flex;flex-direction:column;background:var(--bg-1);border:1px solid var(--line-strong);border-radius:var(--r-lg);padding:16px 18px;box-shadow:0 20px 60px rgba(0,0,0,.5);animation:rise var(--t-slow,.24s) var(--ease-out)}
+.sk-studio-hd{display:flex;align-items:center;gap:8px;font-size:15px;margin-bottom:12px}
+.sk-studio-hd .set-close{margin-left:auto}
+.sk-studio-controls{display:flex;align-items:center;gap:10px;margin-bottom:12px}
+.sk-studio-body{overflow:auto;min-height:80px}
+.sk-studio-note{font-size:12px;color:var(--txt-2);margin-bottom:10px}
+.sk-cand{border:1px solid var(--line-soft);border-radius:var(--r-md);padding:10px 12px;margin-bottom:10px;background:var(--bg-2)}
+.sk-cand.codified{opacity:.6}
+.sk-cand-hd{display:flex;align-items:center;gap:8px}
+.sk-cand-name{font-size:13px;color:var(--txt)}
+.sk-cand-codify{margin-left:auto;width:auto;padding:0 10px;font-size:11px;display:inline-flex;align-items:center;gap:4px}
+.sk-cand-desc{font-size:12px;color:var(--txt-2);margin:4px 0}
+.sk-cand-rat{font-size:11px;color:var(--txt-3);display:flex;align-items:center;gap:4px;margin-bottom:6px}
+.sk-cand-body{width:100%;min-height:120px;resize:vertical;background:var(--bg-0);border:1px solid var(--line);border-radius:var(--r-sm);color:var(--txt-2);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;line-height:1.5;padding:8px 10px}
+/* P-KB.2b (ADR-0099/0100): the compiled-KB page shown in the kg side panel (reuses .skdir-* for the body). */
+.kb-side{padding:2px}
+.kb-side-hd{display:flex;align-items:center;gap:8px;font-size:14px;margin-bottom:6px}
+.kb-side-kind{font-size:11px;color:var(--txt-3);margin-bottom:8px}
+
 /* P-MARKET.1 (ADR-0158): the Plugin Marketplace popup — scrim + centered modal, same family as figma/goal. */
 .mkt-scrim{position:fixed;inset:0;z-index:200;background:rgba(0,0,0,.55);display:grid;place-items:center;animation:fade var(--t) var(--ease)}
 .mkt-modal{width:min(600px,93vw);background:var(--bg-1);border:1px solid var(--line-strong);border-radius:16px;padding:20px;
