@@ -195,6 +195,12 @@ export interface HeadroomStatus {
   installed: boolean; version: string | null; running: boolean; enabled: boolean;
   port: number; url: string; installHint: string;
 }
+// P-TRIV.3 (ADR-0176): the executive Trivia Wire's intel news line (mirrors desktop/intel_news.ts).
+// Titles are scan-gated server-side and rendered as escaped TEXT only - never markdown, never prompts.
+// The item type lives in trivia_news.ts so non-DOM scripts can use it without importing this file.
+import type { IntelNewsItemView } from "./trivia_news.ts";
+export type { IntelNewsItemView };
+export interface IntelNewsView { items: IntelNewsItemView[]; fetchedAt: number; stale: boolean }
 export type PersonalScopeView = "work" | "personal" | "cui" | "combined";
 export interface PersonalStatus {
   enabled: boolean; aiExtract: boolean; configured: boolean; unlocked: boolean;
@@ -533,6 +539,8 @@ export interface LucidBridge {
   // headroom token-compression proxy (opt-in, on-device)
   headroom(): Promise<HeadroomStatus | null>;
   setHeadroom(enabled: boolean): Promise<HeadroomStatus | null>;
+  // P-TRIV.3 (ADR-0176): executive Trivia Wire intel news
+  intelNews(): Promise<IntelNewsView | null>;
   // personalization knowledge graph (opt-in, encrypted - ADR-0010/0012)
   personal(): Promise<PersonalStatus | null>;
   personalEnable(enabled: boolean): Promise<PersonalStatus | null>;
@@ -879,6 +887,7 @@ export const bridge: LucidBridge = {
   applyPersona: (id) => post("/api/asksage/persona", id ? { id } : { clear: true }),
   headroom: () => getData("/api/headroom"),
   setHeadroom: (enabled) => post("/api/headroom", { enabled }),
+  intelNews: () => getData("/api/intel-news"),
   personal: () => getData("/api/personal"),
   personalEnable: (enabled) => post("/api/personal/enable", { enabled }),
   personalAiExtract: (enabled) => post("/api/personal/ai-extract", { enabled }),

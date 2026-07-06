@@ -12374,3 +12374,177 @@ fs_browse/theme-asset failures. Built in an isolated git worktree.
 ADR-0172 (P-SANDBOX.6 - the seam + flag contract this helper implements), ADR-0157 (the P-SANDBOX epic +
 threat model), ADR-0166/0168 (the mediated proxy + Seatbelt's loopback-confinement that `.7b` mirrors on
 Windows), invariant #2 (the TS/Bun language boundary this deliberately keeps).
+
+## ADR-0174 - P-TRIV.1: the Trivia Wire - a word-game ticker in the status bar's idle gap, BUILT
+
+**Date:** 2026-07-05
+**Status:** Accepted / Built + verified live. Increment 1 of 3 (P-TRIV.1 core game; P-TRIV.2
+task-aware generated question packs; P-TRIV.3 polish - Settings toggle, difficulty adaptation).
+
+### Context
+
+Long agent turns leave the user staring at a stream. The status bar has a permanently idle flex gap
+between the Gov chip and the gate-active pill. The idea: a "Who Wants to Be a Millionaire"-style
+multiple-choice ticker that scrolls a question (colorful, hue-cycling letters, right to left at a
+reading clip, ~78px/s) into that gap ONLY while a turn has been streaming for 8+ seconds - the
+boredom window - and fades away when the turn ends. Answering (click or A-D keys) flashes a verdict,
+scrolls a one-line explanation (where the learning happens), and advances. A lifetime score tile
+joins the metrics rail, just above the gate-active corner. Hover pauses; the wheel scrubs back to
+re-read; right-click hides it permanently (undo toast).
+
+### Decision - a pure game core, a thin animation shell, and the escaping keystone up front
+
+- `desktop/renderer/trivia.ts` (PURE): question shape + `isTriviaQuestion` gate, the cycle (Fisher-
+  Yates bags - no repeats until the bank empties, no back-to-back repeat across a reshuffle), scoring
+  (base 100 × streak multiplier capped ×3; a miss resets; `answer()` is idempotent so a double click
+  can never double-score), lifetime persistence through an INJECTED store (corrupt payloads degrade
+  to zero, a throwing store never breaks play), the visibility rule, and the ESCAPED ticker markup.
+- `desktop/renderer/trivia_bank.ts`: a 56-question first-party SEED pack (8 topics, answers spread
+  across all four positions). It is the fail-closed floor: when P-TRIV.2's generated packs are
+  malformed or unavailable, the game falls back here rather than breaking.
+- app.ts owns only the rAF loop + input wiring. The ticker element is created ONCE and re-adopted
+  after every renderStatus innerHTML swap (appendChild moves, state intact); stop positions are
+  recomputed from LIVE widths each frame (a detached-element measure parked long questions with
+  their answer pills unreachable - caught in live verification, fixed). `prefers-reduced-motion`
+  swaps the scroll for a parked line with static hues and timed advance.
+
+### Security posture (why this needs no trust plumbing)
+
+Questions render via esc() into text-only spans - never markdown, never innerHTML from data, never
+executed. Nothing the game touches flows into any prompt: it is strictly OFF the prompt path, so the
+frozen prefix (inv #6), the gate (inv #4), and the contracts (inv #7/#8) are untouched. The escaping
+is tested with hostile markup in every field NOW because P-TRIV.2 will pour model-GENERATED text
+through these exact shapes. Score/tally live in renderer localStorage (the ADR-0097 UI-preference
+tier), NOT DuckDB - a game does not justify a schema migration (inv #10).
+
+### Verified
+
+20 unit tests + demo-P-TRIV.1 (bank integrity, cycle, scoring, persistence, visibility, escaping)
+green; tsc + license checks clean; `bun test desktop harness` unchanged vs. baseline (the 6 known
+Windows path-sep fails only). Verified LIVE in the dev renderer: hidden while idle, fades in 8s into
+a turn, hue-cycling letters scroll and park with all four pills in view, a wrong answer flashes red +
+reveals the correct pill, the explanation scrolls through, the score tile appears in the rail, the
+tally persists across reloads, and the ticker vanishes when the turn ends. A phantom TRUSTED click
+from the preview harness mid-test answered one question - the idempotence + single-line contracts
+absorbed it cleanly, which is exactly the robustness the pure core exists for.
+
+### Next
+
+P-TRIV.2: topic fingerprint (codeActivity languages + recent prompt flavor) → one ~20-question batch
+per fingerprint from the ADR-0048 checker-tier model (`recommendCheckerModel` verbatim - haiku/flash/
+mini class from the user's OWN providers), validated by `isTriviaQuestion`, cached per workspace,
+seed-pack fallback. P-TRIV.3: Settings toggle UI, difficulty adaptation, streak/daily polish.
+
+## ADR-0175 - P-TRIV.2: role-aware Trivia Wire banks + idle engagement, BUILT
+
+**Date:** 2026-07-06
+**Status:** Accepted / Built + verified live. Increment 2 of the ADR-0174 feature (generated packs
+move to P-TRIV.3, polish to P-TRIV.4). Deliberate second increment in one working session - built
+back-to-back with P-TRIV.1 at the user's direction, isolated with its own ADR per the CLAUDE.md
+escape hatch.
+
+### Context
+
+The game should exercise the muscles each persona needs to keep warm - "engaging check on attention
+and awareness to derisk atrophy of skills and interest." The ADR-0088 onboarding role is the signal
+we already have: executive, manager, security, developer. And the boredom window is wider than
+streaming turns: a user staring at an empty composer with history behind them is also idle.
+
+### Decision
+
+1. **Role-aware banks** (`desktop/renderer/trivia_roles.ts`): executive → GovCon market mechanics
+   (M&A/novation/OCI/backlog diligence, opportunity vehicles IDIQ/GWAC/set-asides/protests, federal
+   budget-priority dynamics CR/O&M/CPARS/CMMC-as-market-gate); manager → CMMI-DEV maturity level 3
+   (defined processes, tailoring, V&V, DAR, RSKM, PAL) + core PM (EVM, critical path, risk exposure);
+   security → CMMC 2.0 (levels, 800-171, SPRS, POA&M limits, C3PAO, DFARS 7012) + NIST RMF (the 7
+   steps, FIPS 199, SSP/SAR/POA&M, ATO, ISCM). 20 questions each, EVERGREEN on purpose - a static
+   bank cannot be "news"; live GovCon news and repo/prompt-tailored questions are exactly what the
+   generated-pack increment (checker-model pipeline, ADR-0048 picker) adds on top of this selection
+   seam. `bankForRole(role)` swaps banks wholesale; developer/no-role keeps the general bank;
+   unknown strings land on the general bank. The bank refresh hooks `applyRoleDefault` (BEFORE its
+   surfacing guard), so onboarding, the Settings switcher, and boot restore all retarget the game -
+   ref-compared, so it is idempotent; the lifetime score survives switches (it lives in the store).
+   NOTE: ADR-0088 called the role picker "cosmetic"; as of this ADR it also selects trivia content.
+2. **Idle engagement** (rule extended in `trivia.ts`, still pure): the ticker also wakes when NO
+   turn is running, the composer sits EMPTY for 15s, and there is something to come back to - past
+   sessions (cachedSessions) OR an unlocked Knowledge Graph (bridge.personal, cached on a 60s poll,
+   never fetched per frame; fetch failure = locked = fail-quiet). A brand-new empty install never
+   sees the game uninvited; ONE composer keystroke hides it; the turn-end edge restarts the grace so
+   it never lingers after a reply lands. The P-TRIV.1 streaming branch is unchanged and takes
+   precedence; existing callers (no new fields) behave byte-identically.
+3. **Layering guard**: trivia_roles.ts takes the role as a plain string instead of importing
+   bridge.ts's UserRole - importing it would drag the DOM-typed bridge into the non-DOM tsconfig
+   via the harness demo script (same mirror rationale bridge.ts itself uses vs settings_store).
+
+### Verified
+
+12 new tests (44 total trivia) + demo-P-TRIV.2 green alongside demo-P-TRIV.1; tsc + license clean.
+LIVE in the dev renderer: idle mode woke the ticker at ~15s with an empty composer and no turn;
+one keystroke hid it and clearing restarted the grace; switching the role to Executive through the
+real Settings switcher re-targeted the very next lines to GovCon content (OTA, OCI) - all through
+the untouched P-TRIV.1 core (scoring, streaks, persistence, escaping keystone).
+
+### Next
+
+P-TRIV.3 (generated packs): topic fingerprint (codeActivity + recent prompt flavor) x ROLE lens →
+checker-model batches (GovCon news summaries for executives will need a fresh-context source and a
+network-gate decision - flagged, not hand-waved), isTriviaQuestion-gated, per-workspace cache, these
+static banks as the fail-closed floor. P-TRIV.4: Settings toggle UI, difficulty adaptation.
+
+## ADR-0176 - P-TRIV.3: 100-question banks + the executive INTEL WIRE, BUILT
+
+**Date:** 2026-07-06
+**Status:** Accepted / Built + verified live (including a real fetch through the real scanner).
+Increment 3 of the ADR-0174 feature. Built in the same working session as P-TRIV.2 at the user's
+direction - deliberate, isolated, own ADR (CLAUDE.md escape hatch).
+
+### Context
+
+Two directives: (1) the working banks should be deep enough to not repeat quickly - developer,
+security and manager at ONE HUNDRED questions each, executive at fifty seeded; (2) executives get a
+LIVE Intelligence/Defense-sector news line between every question that streams by - opportunities
+and happenings, not just evergreen fundamentals.
+
+### Decision 1 - bank depth via parallel authoring, gated by the same tests
+
+Four parallel authoring agents produced 234 new entries (dev +44, security +80, manager +80,
+exec +30), reviewed and spliced into the existing banks: developer 100 (8 topics), security 100
+(CMMC 2.0 deep: DFARS 7019/7020/7021, SPRS scoring weights, scoping asset classes, 800-171A; RMF
+deep: roles, 800-53r5/53A/53B, 800-30/37/39/61/137/161, authorization variants), manager 100
+(CMMI-DEV L2+L3 process areas, generic goals, appraisal mechanics; EVM, WBS, reserves, estimation),
+executive 50 (M&A diligence: novation, FOCI, DCAA exposure, CAS 413; capture: Sections L/M,
+limitations on subcontracting, ostensible-sub risk; policy: NDAA vs appropriations, TINA, CAS,
+FCL/ITAR). Tests + demo pin the floors (100/100/100/50), shape-validity, zero duplicate prompts
+across ALL banks, and answer-position spread (>=8 per position per bank).
+
+### Decision 2 - the INTEL WIRE (`desktop/intel_news.ts` + `trivia_news.ts`)
+
+A FIRST-PARTY, curated defense/intel RSS allowlist (Breaking Defense, Defense One, DefenseScoop,
+GovCon Wire, ExecutiveGov, Federal News Network Defense - no user-configurable URL surface this
+increment) fetched SERVER-side on a 20-minute cache. The security posture is the point:
+- **Untrusted content, really treated that way (inv #3/#5):** every refresh batch runs through the
+  SAME fail-closed scan gate as skill imports (`scanAndDecide` → the Python sidecar; inv #2 intact).
+  Findings OR a dead/throwing scanner drop the ENTIRE batch and record the block - the wire shows
+  questions-only rather than unscanned pixels. The renderer re-validates shapes defensively and
+  renders headlines ONLY through esc()'d letter spans - never markdown, never near a prompt.
+- **Audited egress (P-REPORT.10 precedent):** every actual reach-out emits a first-party
+  SecurityEvent - category "egress", HOST only, ok/failed - into the OCSF/SIEM stream. No new
+  EventName values (inv #8).
+- **Fail-quiet product:** air-gapped / offline / feeds down ⇒ empty wire, game plays on.
+- **Flow:** question → answer → explanation → INTEL headline → next question. A question parked
+  UNANSWERED for 45s yields via a new neutral `skip()` on the game core (no score/streak/tally
+  impact) so the idle wire truly streams; the phase disambiguates advance-vs-skip after a headline.
+  Reduced motion skips news interstitials (scroll-only experience).
+
+### Verified
+
+49 trivia/news tests + demo-P-TRIV.3 green (demos .1/.2 still green); tsc + license clean. The demo
+also performs a LIVE run: real feeds + the REAL scanner returned 40 scanned headlines on this
+machine. Verified in the dev renderer: executive idle wire showed a GovCon question, then "INTEL ·
+Defense One · Iran War supplemental deepens FY27 budget uncertainty · 3h" scrolled between
+questions, unanswerable, in the LUCID hue band.
+
+### Next
+
+P-TRIV.4: generated question packs (checker-model, per-role fingerprints) with these banks as the
+fail-closed floor; Settings toggle UI + feed visibility controls; difficulty adaptation.
