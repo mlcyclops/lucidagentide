@@ -985,8 +985,17 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .rp-sec-exports .btn-mini{flex:1 1 auto;justify-content:center}
 /* P-REPORT.9 (ADR-0162): the multi-repo picker in the Reports panel */
 .rp-repos{display:flex;flex-direction:column;gap:7px;padding:9px;border:1px solid var(--line);border-radius:10px;background:var(--bg-2)}
-.rp-repos-h{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.rp-repos-h{display:flex;align-items:center;gap:8px;flex-wrap:wrap;cursor:pointer;user-select:none;border-radius:7px;margin:-2px;padding:2px}
+.rp-repos-h:hover{background:color-mix(in srgb,var(--txt) 5%,transparent)}
+.rp-repos-h:focus-visible{outline:2px solid var(--accent-2);outline-offset:1px}
 .rp-repos-h .goal-lbl{display:flex;align-items:center;gap:5px;margin:0}
+.rp-chev{display:inline-flex;align-items:center;color:var(--txt-3);flex:none;transition:transform var(--t,.18s) ease}
+.rp-repos:not(.collapsed) .rp-chev{transform:rotate(180deg)} /* expanded → chevron up; collapsed → down */
+.rp-repos-count{font-size:11px;color:var(--txt-3)}
+.rp-repos:not(.collapsed) .rp-repos-count{display:none} /* the count is a collapsed-state summary */
+.rp-repos.collapsed{gap:0}
+.rp-repos.collapsed .rp-repo-list,.rp-repos.collapsed .rp-repo-add,.rp-repos.collapsed .rp-repo-fetch{display:none}
+.rp-repos.collapsed .rp-repos-hint{display:none} /* keep the collapsed header to one tidy line */
 .rp-repo-list{display:flex;flex-direction:column;gap:4px;max-height:168px;overflow:auto}
 .rp-repo{display:flex;align-items:center;gap:8px;padding:5px 8px;border:1px solid var(--line);border-radius:8px;background:var(--bg);transition:border-color .12s,background .12s}
 .rp-repo.on{border-color:var(--accent-2);background:color-mix(in srgb,var(--accent-2) 8%,var(--bg))}
