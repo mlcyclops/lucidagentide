@@ -483,6 +483,14 @@ demo-P-SANDBOX.5: ## P-SANDBOX.5 (ADR-0169): the runtime-execution boundary made
 demo-P-SANDBOX.6: ## P-SANDBOX.6 (ADR-0172): the Windows AppContainer backend SEAM — a first-party `lucid-appcontainer <flags> -- <argv>` helper that fits the wrap→{cmd,args,env} contract (no OS argv-wrapper exists for AppContainer). Flag contract mirrors bwrap/Seatbelt's 3 network states (network-off → --deny-network; mediated → --loopback-only + HTTP(S)_PROXY, raw-IP sockets WFP-denied; no-proxy → fail-closed --deny-network); resolveBackend selects it when the helper is on PATH, else discloses; require-isolation fail-closed without it. The native helper itself ships in P-SANDBOX.7
 	$(BUN) run harness/scripts/demo_p_sandbox_6.ts
 
+.PHONY: demo-P-SANDBOX.7
+demo-P-SANDBOX.7: ## P-SANDBOX.7 (ADR-0173): the native Windows AppContainer helper (bun-compiled TS+FFI). Parser fail-closes on malformed flags; main() refuses (non-zero) wherever it cannot contain (never a passthrough); LIVE on Windows a benign child runs but a networked child is BLOCKED (a no-capability AppContainer has no network); off-Windows it correctly refuses
+	$(BUN) run harness/scripts/demo_p_sandbox_7.ts
+
+.PHONY: build-appcontainer
+build-appcontainer: ## P-SANDBOX.7: cross-compile the native lucid-appcontainer.exe helper (bun build --compile, Windows x64) into dist/
+	$(BUN) build tools/appcontainer/lucid_appcontainer.ts --compile --target=bun-windows-x64 --outfile dist/lucid-appcontainer.exe
+
 .PHONY: demo-P-REPORT.9
 demo-P-REPORT.9: ## P-REPORT.9 (ADR-0162): multi-repo remote fetch + PR aggregation for the Engineering Report — remote-URL parse (GitHub vs not), commits aggregated across branches (deduped) + line totals, the Cross-repo activity annex, fail-soft on a failed fetch (local refs still shown), PRs skipped with a reason on non-GitHub/unauthed remotes, and untrusted commit/PR text neutralized (no HTML/fence breakout)
 	$(BUN) run desktop/scripts/demo_p_report_9.ts
