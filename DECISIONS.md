@@ -12624,3 +12624,42 @@ package-subtree half of the filter was silently unenforced.
 Guard red (exact shipped error) on the v1.10.3 filter, green with the exclusion dropped; remaining
 exclusions (onnxruntime, date-fns, lucide-react, *.map/*.d.ts/.bin) proven harmless by the same
 materialized boot+import run; final proof is the import probe inside the shipped v1.10.4 tree.
+
+## ADR-0179 - P-PREVIEW.7: the silent-white preview, explained + runnable (external Electron launch), BUILT
+
+**Date:** 2026-07-06
+**Status:** Accepted / Built + verified live (overlay shown, real electron.exe launched from the button).
+
+### Context
+
+Previewing an agent-built ELECTRON app shows a blank white pane: the renderer script needs
+Node/Electron APIs (`require`...) that the opaque-origin, egress-blocked preview frame deliberately
+doesn't provide, and Electron UIs are typically built entirely by that script - so nothing paints
+and nothing explains itself. The sandbox is correct; the muteness is the bug. The user's direction:
+it's fine to demo the app OUTSIDE LUCID as a real process - no sandbox hole needed.
+
+### Decision - explain in-pane, run out-of-process
+
+1. **Health report** (`preview_bridge.ts`): the injected bridge posts ONE `preview-health` message
+   to its parent after load - `emptyBody` + a bounded error tail. Read-only, fire-once, same
+   postMessage channel, still zero egress. (The error list can be empty: an inline script that
+   crashes BEFORE the bridge installs isn't captured - `emptyBody` alone is the load-bearing signal.)
+2. **Detection** (`preview_electron.ts`, pure/injected-fs): evidence-based - package.json
+   electron dep / `electron .` start script / main-imports-electron, with a one-level-up package.json
+   fallback. FAIL-FALSE by construction: a plain web page can never grow a launch button.
+3. **The overlay** (renderer): on emptyBody/Node-shaped errors, explain WHY the pane is blank; when
+   the dir detects as an Electron app, offer **"Run with Electron - opens outside LUCID"**; without a
+   runtime, show the manual `npx electron .` command. Generic script-crash note otherwise.
+4. **The launch** (dev.ts): USER-initiated only (a button click - equivalent to the user running it
+   in their own shell; the agent has no path to this endpoint's effect without the human click).
+   Refuses non-Electron detections outright. Runtime preference: the app's OWN electron install
+   (what the agent's `npm install` produced) → PATH electron → none (manual command). Spawned
+   detached OUTSIDE LUCID; every actual launch emits an `exec` SecurityEvent (metadata only) into
+   the OCSF/SIEM stream. The ADR-0157 agent runtime boundary is untouched.
+
+### Verified
+
+12 detection/plan tests + bridge health assertions + demo-P-PREVIEW.7 green; tsc + license clean.
+LIVE: the Electron demo app (agent-shaped: empty body + require() renderer, its own electron
+install) showed the overlay with the exact explanation, and the button launched a real electron.exe
+process tree outside LUCID; a plain web page rendered normally with no overlay.

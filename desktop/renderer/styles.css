@@ -2895,3 +2895,18 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
   background:rgba(126,231,255,.08)}
 .triv .tns{font-size:11px;color:var(--txt-3);flex:none;margin-right:8px;white-space:nowrap}
 .triv .tna{font-family:var(--mono);font-size:10.5px;color:var(--txt-4);flex:none;margin-left:8px}
+
+/* ───────── P-PREVIEW.7 (ADR-0179): the preview explain-overlay (Electron/Node pages) ───────── */
+.preview-notice{position:absolute;top:14px;left:50%;transform:translateX(-50%);z-index:5;
+  max-width:min(540px,92%);background:#12151f;border:1px solid var(--line-strong);border-radius:10px;
+  padding:12px 36px 12px 14px;box-shadow:0 12px 32px -8px rgba(0,0,0,.55);font-size:12.5px;color:var(--txt-2)}
+.preview-notice .pn-hd{display:flex;align-items:center;gap:7px;font-weight:600;font-size:13px;color:var(--txt);margin-bottom:5px}
+.preview-notice .pn-hd svg{color:var(--accent-2)}
+.preview-notice .pn-tx{line-height:1.55;margin-bottom:9px}
+.preview-notice code{font-family:var(--mono);font-size:11px;background:var(--bg-3);border:1px solid var(--line);
+  border-radius:5px;padding:1px 5px;color:var(--txt-2);word-break:break-all}
+.preview-notice .pn-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.preview-notice .pn-cmd{line-height:1.6}
+.preview-notice .pn-x{position:absolute;top:7px;right:7px;width:22px;height:22px;border:0;border-radius:6px;
+  background:transparent;color:var(--txt-4);cursor:pointer;display:flex;align-items:center;justify-content:center}
+.preview-notice .pn-x:hover{background:var(--bg-3);color:var(--txt-2)}

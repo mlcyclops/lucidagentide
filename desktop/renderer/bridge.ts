@@ -655,6 +655,9 @@ export interface LucidBridge {
   // command, runs it on the sandboxed iframe (via the postMessage bridge), and posts the result back.
   previewInspectNext(): Promise<{ id?: string; command?: { selector?: string; what?: string }; none?: boolean } | null>;
   previewInspectResult(id: string, result: unknown): Promise<void>;
+  // P-PREVIEW.7 (ADR-0179): Electron-app detection + USER-initiated external launch
+  previewElectronDetect(path: string): Promise<{ electron: boolean; reasons: string[]; appDir: string; launchable: boolean; via: string | null } | null>;
+  previewElectronLaunch(path: string): Promise<{ launched: boolean; via?: string; appDir?: string; reason?: string } | null>;
   listDir(path?: string): Promise<FsList | null>; // in-app folder browser (works everywhere)
   revealPath(path: string): Promise<boolean>; // open a folder in the OS file manager (Electron only; false in browser)
   canRevealPath(): boolean; // whether the native shell can reveal a folder (Electron only)
@@ -980,6 +983,8 @@ export const bridge: LucidBridge = {
   cachePreviewShot: async (png) => { await post("/api/preview/shot-cache", { png }); }, // P-PREVIEW.3a-shot
   previewInspectNext: () => getData("/api/preview/inspect/next"), // P-PREVIEW.6b
   previewInspectResult: async (id, result) => { await post("/api/preview/inspect/result", { id, result }); }, // P-PREVIEW.6b
+  previewElectronDetect: (path) => getData(`/api/preview/electron-detect?path=${encodeURIComponent(path)}`), // P-PREVIEW.7
+  previewElectronLaunch: (path) => post("/api/preview/electron-launch", { path }), // P-PREVIEW.7
 
 
   listDir: (path) => getData(`/api/fs/list${path ? `?path=${encodeURIComponent(path)}` : ""}`),

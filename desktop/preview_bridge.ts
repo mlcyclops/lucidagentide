@@ -68,6 +68,25 @@ export const PREVIEW_BRIDGE_JS = `(function(){
     var res = cmd.action ? act(cmd) : inspect(cmd); // STRUCTURED action (click/type/focus/scroll) vs read
     try{ window.parent.postMessage({ __lucid:'inspect-result', id:d.id, result:res }, '*'); }catch(_){}
   });
+  // P-PREVIEW.7 (ADR-0179): proactive HEALTH report - a page whose script died (e.g. an Electron
+  // renderer hitting "require is not defined") typically paints NOTHING, leaving a silent white
+  // pane. Shortly after load, tell the parent what happened so it can explain instead of staying
+  // mute. Read-only, fire-once, same postMessage channel; still zero egress under the frame CSP.
+  function bodyEmpty(){
+    try{
+      var b=document.body; if(!b) return true;
+      if(b.querySelector('canvas,img,svg,video,iframe,embed,object')) return false;
+      return (b.innerText||'').replace(/\\s+/g,'')==='';
+    }catch(_){ return false; }
+  }
+  var healthSent=false;
+  function health(){
+    if(healthSent) return; healthSent=true;
+    try{ window.parent.postMessage({ __lucid:'preview-health', emptyBody: bodyEmpty(), errors: errs.slice(-6) }, '*'); }catch(_){}
+  }
+  if(document.readyState==='complete') setTimeout(health,600);
+  else window.addEventListener('load', function(){ setTimeout(health,600); });
+  setTimeout(health,2500); // belt-and-braces: report even if the load event never fires
 })();`;
 
 /** Inject the bridge before `</body>` (or append if there's no body tag). Idempotent-safe (the script guards
