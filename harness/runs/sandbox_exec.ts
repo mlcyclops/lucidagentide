@@ -30,9 +30,10 @@
 // why $HOME is bound rw (omp session state, config, credentials live there). The mediated egress
 // proxy for `canNetwork:true` profiles is wired in P-SANDBOX.2 (ADR-0166) via `ctx.proxy` — when a
 // running proxy endpoint is supplied, `wrap` steers the child's DNS + HTTP(S) through it instead of
-// unsharing the net. macOS Seatbelt is P-SANDBOX.4 (SeatbeltBackend, ADR-0168); Windows AppContainer
-// (native) and Linux slirp raw-socket forwarding are their own follow-ups. Pure + hermetic: `which`
-// is injectable and `ctx.proxy` is a plain path/URL record — nothing here touches the real system.
+// unsharing the net. macOS Seatbelt is P-SANDBOX.4 (SeatbeltBackend, ADR-0168); Windows AppContainer is
+// P-SANDBOX.6 (AppContainerBackend, ADR-0172) — the SEAM + flag contract for the first-party
+// `lucid-appcontainer` helper land here; the native helper itself + Linux slirp raw-socket forwarding are
+// follow-ups. Pure + hermetic: `which` is injectable and `ctx.proxy` is a plain path/URL record.
 
 import { homedir } from "node:os";
 import type { ProfileCaps } from "./profiles.ts";
@@ -78,7 +79,7 @@ export interface SandboxPlan {
 }
 
 export interface SandboxBackend {
-  readonly name: "bwrap" | "seatbelt" | "noop";
+  readonly name: "bwrap" | "seatbelt" | "appcontainer" | "noop";
   /** true ⇒ this backend provides REAL OS-level containment (namespaces), not a passthrough. */
   readonly isolates: boolean;
   available(): boolean;
@@ -187,6 +188,51 @@ export class SeatbeltBackend implements SandboxBackend {
   }
 }
 
+/** PURE: the flag list for the first-party `lucid-appcontainer` helper (P-SANDBOX.6, ADR-0172). Windows
+ *  has NO argv-wrapper for AppContainer (unlike bwrap / sandbox-exec) - it requires a native
+ *  `CreateProcess` with `PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES`, which does not fit the seam's
+ *  `wrap → {cmd,args,env}` contract. So we introduce a THIN first-party native helper that DOES fit the
+ *  contract (`lucid-appcontainer <flags> -- <argv>`): it spawns the child inside a low-capability
+ *  AppContainer + a per-child WFP egress rule. This function is the flags half - the SAME three network
+ *  states as bwrap / Seatbelt - and is unit-tested here; the native helper that consumes them is the
+ *  P-SANDBOX.7 follow-up (ADR-0172 phasing). Until it ships, `available()` is false ⇒ disclosed passthrough. */
+export function appContainerArgs(caps: ProfileCaps, ctx: SandboxCtx): string[] {
+  const args = ["--workspace", ctx.workspace]; // bound read-write inside the container (fs stays omp --isolate's job)
+  if (ctx.home) args.push("--home", ctx.home);
+  if (!caps.canNetwork) {
+    args.push("--deny-network"); // total deny (WFP blocks all outbound for the container SID)
+  } else if (ctx.proxy) {
+    // Mediated: only loopback (the proxy) is permitted out; everything else is WFP-denied, so a raw-IP
+    // socket ignoring HTTP_PROXY is blocked (the same loopback-confinement Seatbelt achieves on macOS).
+    args.push("--loopback-only");
+  } else {
+    args.push("--deny-network"); // fail-closed: no mediator ⇒ no network (invariant #3)
+  }
+  return args;
+}
+
+/** Windows AppContainer backend (P-SANDBOX.6, ADR-0172) via the first-party `lucid-appcontainer` helper.
+ *  Real OS-level containment (AppContainer SID + WFP egress). `isolates` is true; `available()` = the
+ *  helper is on PATH (bundled by P-SANDBOX.7). Until the helper ships this is never selected, so Windows
+ *  stays the disclosed passthrough exactly as in .1-.5. Pure: `which` injectable, flags a pure function. */
+export class AppContainerBackend implements SandboxBackend {
+  readonly name = "appcontainer" as const;
+  readonly isolates = true;
+  constructor(private readonly which: WhichFn = defaultWhich, private readonly helper = "lucid-appcontainer") {}
+  available(): boolean {
+    return this.which(this.helper);
+  }
+  wrap(argv: string[], caps: ProfileCaps, ctx: SandboxCtx): SandboxPlan {
+    const env: Record<string, string> = {};
+    if (caps.canNetwork && ctx.proxy) {
+      env.HTTP_PROXY = env.HTTPS_PROXY = env.http_proxy = env.https_proxy = ctx.proxy.httpProxyUrl;
+      env.NO_PROXY = env.no_proxy = "localhost,127.0.0.1,::1";
+    }
+    // `lucid-appcontainer <flags> -- <cmd> <args...>` — the wrapped argv is preserved verbatim after `--`.
+    return { cmd: this.helper, args: [...appContainerArgs(caps, ctx), "--", ...argv], env };
+  }
+}
+
 /** The disclosed passthrough: identical spawn, zero containment. Callers MUST surface
  *  `sandboxDisclosure()` when this backend runs (the "loud signal" of ADR-0157). */
 export class NoopBackend implements SandboxBackend {
@@ -205,7 +251,7 @@ export class NoopBackend implements SandboxBackend {
 export function sandboxDisclosure(platform: NodeJS.Platform = process.platform): string {
   return (
     `[sandbox] exec is NOT runtime-isolated on this platform (${platform}) — no sandbox backend available. ` +
-    `The argv gate + in-process scanner gate still apply (ADR-0157 P-SANDBOX.1; Linux bwrap + macOS Seatbelt lead, Windows AppContainer is a follow-up).`
+    `The argv gate + in-process scanner gate still apply (ADR-0157 P-SANDBOX.1; Linux bwrap + macOS Seatbelt lead; Windows AppContainer needs the lucid-appcontainer helper, P-SANDBOX.7).`
   );
 }
 
@@ -239,6 +285,12 @@ export function resolveBackend(opts: ResolveBackendOpts = {}): BackendResolution
     const seatbelt = new SeatbeltBackend(which);
     if (seatbelt.available()) return { ok: true, backend: seatbelt, disclosed: false };
   }
+  if (platform === "win32") {
+    // P-SANDBOX.6 (ADR-0172): Windows gets containment via the first-party `lucid-appcontainer` helper.
+    // Until the helper is bundled (P-SANDBOX.7) this is unavailable ⇒ disclosed passthrough, as in .1-.5.
+    const ac = new AppContainerBackend(which);
+    if (ac.available()) return { ok: true, backend: ac, disclosed: false };
+  }
   if (opts.requireIsolation) {
     return {
       ok: false,
@@ -247,7 +299,9 @@ export function resolveBackend(opts: ResolveBackendOpts = {}): BackendResolution
           ? "managed policy requires runtime isolation, but bwrap is not installed (install bubblewrap)"
           : platform === "darwin"
             ? "managed policy requires runtime isolation, but sandbox-exec is not available (macOS Seatbelt)"
-            : `managed policy requires runtime isolation, but no sandbox backend exists for ${platform} yet (Windows AppContainer needs native support — tracked as a follow-up increment)`,
+            : platform === "win32"
+              ? "managed policy requires runtime isolation, but the lucid-appcontainer helper is not installed (Windows AppContainer; ships in P-SANDBOX.7)"
+              : `managed policy requires runtime isolation, but no sandbox backend exists for ${platform} yet`,
     };
   }
   return { ok: true, backend: new NoopBackend(), disclosed: true };

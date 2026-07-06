@@ -10,6 +10,8 @@
 
 import { expect, test } from "bun:test";
 import {
+  appContainerArgs,
+  AppContainerBackend,
   BwrapBackend,
   NoopBackend,
   resolveBackend,
@@ -61,8 +63,18 @@ test("darwin with sandbox-exec resolves the Seatbelt ISOLATING backend (P-SANDBO
   }
 });
 
-test("win32 still resolves the disclosed passthrough (AppContainer is a native follow-up); darwin without sandbox-exec too", () => {
-  const win = resolveBackend({ platform: "win32", which: hasBwrap }); // even with bwrap "present": not linux
+test("win32 WITH the lucid-appcontainer helper resolves the ISOLATING AppContainer backend (P-SANDBOX.6)", () => {
+  const r = resolveBackend({ platform: "win32", which: has("lucid-appcontainer") });
+  expect(r.ok).toBe(true);
+  if (r.ok) {
+    expect(r.backend.name).toBe("appcontainer");
+    expect(r.backend.isolates).toBe(true);
+    expect(r.disclosed).toBe(false);
+  }
+});
+
+test("win32 WITHOUT the helper still discloses (helper ships in P-SANDBOX.7); darwin without sandbox-exec too", () => {
+  const win = resolveBackend({ platform: "win32", which: has("bwrap") }); // bwrap "present" but not the win helper
   expect(win.ok && win.backend.name === "noop" && win.disclosed).toBe(true);
   const macNoSb = resolveBackend({ platform: "darwin", which: none });
   expect(macNoSb.ok && macNoSb.backend.name === "noop" && macNoSb.disclosed).toBe(true);
@@ -75,15 +87,18 @@ test("managed require-isolation with NO isolating backend REFUSES (fail-closed, 
   const mac = resolveBackend({ platform: "darwin", requireIsolation: true, which: none });
   expect(mac.ok).toBe(false);
   if (!mac.ok) expect(mac.reason).toMatch(/Seatbelt/);
-  const win = resolveBackend({ platform: "win32", requireIsolation: true, which: hasBwrap });
+  const win = resolveBackend({ platform: "win32", requireIsolation: true, which: none }); // helper absent
   expect(win.ok).toBe(false);
-  if (!win.ok) expect(win.reason).toMatch(/AppContainer/);
+  if (!win.ok) expect(win.reason).toMatch(/lucid-appcontainer/);
 });
 
-test("managed require-isolation is SATISFIED by an available sandbox-exec on macOS", () => {
-  const r = resolveBackend({ platform: "darwin", requireIsolation: true, which: has("sandbox-exec") });
-  expect(r.ok).toBe(true);
-  if (r.ok) expect(r.backend.name).toBe("seatbelt");
+test("managed require-isolation is SATISFIED by an available sandbox-exec on macOS + lucid-appcontainer on Windows", () => {
+  const mac = resolveBackend({ platform: "darwin", requireIsolation: true, which: has("sandbox-exec") });
+  expect(mac.ok).toBe(true);
+  if (mac.ok) expect(mac.backend.name).toBe("seatbelt");
+  const win = resolveBackend({ platform: "win32", requireIsolation: true, which: has("lucid-appcontainer") });
+  expect(win.ok).toBe(true);
+  if (win.ok) expect(win.backend.name).toBe("appcontainer");
 });
 
 test("managed require-isolation is SATISFIED by an available bwrap", () => {
@@ -165,6 +180,57 @@ test("seatbelt through wrapForProfile: a network-off downgrade profile yields a 
   if (d.action === "spawn") {
     expect(d.isolated).toBe(true);
     expect(d.plan.args[1]!).toContain("(deny network*)");
+  }
+});
+
+// ── Windows AppContainer (P-SANDBOX.6) ────────────────────────────────────────
+
+const AC = new AppContainerBackend(has("lucid-appcontainer"));
+
+test("appContainerArgs canNetwork:false → --deny-network (total deny), binds the workspace", () => {
+  const a = appContainerArgs(caps("container-local"), CTX);
+  expect(a).toContain("--deny-network");
+  expect(a).not.toContain("--loopback-only");
+  expect(a.join(" ")).toContain("--workspace /work/ws");
+});
+
+test("appContainerArgs canNetwork:true WITHOUT a proxy fails closed to --deny-network (no mediator ⇒ no net)", () => {
+  const a = appContainerArgs(caps("trusted-local"), CTX); // no proxy
+  expect(a).toContain("--deny-network");
+  expect(a).not.toContain("--loopback-only");
+});
+
+test("appContainer canNetwork:true WITH a proxy → --loopback-only + HTTP(S)_PROXY (raw-IP sockets WFP-denied)", () => {
+  const plan = AC.wrap(ARGV, caps("trusted-local"), { ...CTX, proxy: PROXY });
+  expect(plan.cmd).toBe("lucid-appcontainer");
+  expect(plan.args).toContain("--loopback-only");
+  expect(plan.args).not.toContain("--deny-network");
+  expect(plan.env.HTTPS_PROXY).toBe("http://127.0.0.1:8888");
+  expect(plan.env.NO_PROXY).toContain("127.0.0.1");
+});
+
+test("appContainer preserves the wrapped argv verbatim after the -- separator", () => {
+  const plan = AC.wrap(ARGV, caps("trusted-local"), { ...CTX, proxy: PROXY });
+  const sep = plan.args.indexOf("--");
+  expect(sep).toBeGreaterThan(0);
+  expect(plan.args.slice(sep + 1)).toEqual(ARGV);
+});
+
+test("appContainer available() only when the helper is on PATH (absent ⇒ false ⇒ disclosed passthrough)", () => {
+  expect(new AppContainerBackend(has("lucid-appcontainer")).available()).toBe(true);
+  expect(new AppContainerBackend(none).available()).toBe(false);
+  expect(new AppContainerBackend(has("bwrap")).available()).toBe(false); // a different tool doesn't count
+});
+
+test("appContainer through wrapForProfile: a network-off downgrade yields a --deny-network isolated plan", () => {
+  const downgrade = chooseProfile({ requested: "trusted-local", trustLabel: "suspicious" });
+  const res: BackendResolution = { ok: true, backend: AC, disclosed: false };
+  const d = wrapForProfile({ argv: ARGV, caps: caps(downgrade.profile), ctx: CTX, resolution: res });
+  expect(d.action).toBe("spawn");
+  if (d.action === "spawn") {
+    expect(d.isolated).toBe(true);
+    expect(d.plan.cmd).toBe("lucid-appcontainer");
+    expect(d.plan.args).toContain("--deny-network");
   }
 });
 

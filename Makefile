@@ -479,6 +479,10 @@ demo-P-SANDBOX.4: ## P-SANDBOX.4 (ADR-0168): the macOS Seatbelt backend — real
 demo-P-SANDBOX.5: ## P-SANDBOX.5 (ADR-0169): the runtime-execution boundary made VISIBLE in the Security panel — a GUI-owned store of the live posture (bwrap/Seatbelt/disclosed/fail-closed-blocked) + a bounded newest-first ring of refused subprocess reach-outs; a PURE panel builder rendering green/amber/red posture (auto-opens when NOT isolated), escaping hostile host/reason text; the egress audit sink feeds one deduped panel row per refused host
 	$(BUN) run desktop/scripts/demo_p_sandbox_5.ts
 
+.PHONY: demo-P-SANDBOX.6
+demo-P-SANDBOX.6: ## P-SANDBOX.6 (ADR-0172): the Windows AppContainer backend SEAM — a first-party `lucid-appcontainer <flags> -- <argv>` helper that fits the wrap→{cmd,args,env} contract (no OS argv-wrapper exists for AppContainer). Flag contract mirrors bwrap/Seatbelt's 3 network states (network-off → --deny-network; mediated → --loopback-only + HTTP(S)_PROXY, raw-IP sockets WFP-denied; no-proxy → fail-closed --deny-network); resolveBackend selects it when the helper is on PATH, else discloses; require-isolation fail-closed without it. The native helper itself ships in P-SANDBOX.7
+	$(BUN) run harness/scripts/demo_p_sandbox_6.ts
+
 .PHONY: demo-P-REPORT.9
 demo-P-REPORT.9: ## P-REPORT.9 (ADR-0162): multi-repo remote fetch + PR aggregation for the Engineering Report — remote-URL parse (GitHub vs not), commits aggregated across branches (deduped) + line totals, the Cross-repo activity annex, fail-soft on a failed fetch (local refs still shown), PRs skipped with a reason on non-GitHub/unauthed remotes, and untrusted commit/PR text neutralized (no HTML/fence breakout)
 	$(BUN) run desktop/scripts/demo_p_report_9.ts

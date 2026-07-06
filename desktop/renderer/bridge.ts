@@ -68,7 +68,7 @@ export interface SecuritySnapshot {
   sandbox?: SandboxStatusView;
 }
 export interface SandboxStateView {
-  backend: "bwrap" | "seatbelt" | "noop" | null;
+  backend: "bwrap" | "seatbelt" | "appcontainer" | "noop" | null;
   isolated: boolean; disclosed: boolean; platform: string;
   execBlocked: string | null; proxied: boolean; at: string;
 }
