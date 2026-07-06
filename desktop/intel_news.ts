@@ -47,17 +47,26 @@ const PER_FEED_CAP = 8;
 const FETCH_TIMEOUT_MS = 6000;
 export const INTEL_TTL_MS = 20 * 60 * 1000;
 
-/** PURE: entity-decode, tag-strip, whitespace-collapse and clamp one raw RSS title.
+const NAMED_ENTITIES: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: "\"", apos: "'", "#39": "'", nbsp: " " };
+/** ONE-pass entity decode: a single alternation over the ORIGINAL text, so produced characters are
+ *  never re-scanned - "&#38;lt;" decodes to the literal text "&lt;", never onward to "<" (that
+ *  second decode is the js/double-escaping trap CodeQL rightly flags). */
+function decodeEntitiesOnce(s: string): string {
+  return s.replace(/&(?:#(\d+)|#x([0-9a-f]+)|amp|lt|gt|quot|apos|#39|nbsp);/gi, (m, dec, hex) => {
+    if (dec) return String.fromCodePoint(Math.min(0x10ffff, Number(dec) || 32));
+    if (hex) return String.fromCodePoint(Math.min(0x10ffff, parseInt(hex, 16) || 32));
+    return NAMED_ENTITIES[m.slice(1, -1).toLowerCase()] ?? m;
+  });
+}
+
+/** PURE: tag-strip, entity-decode (single pass), whitespace-collapse and clamp one raw RSS title.
  *  Returns null for anything too short to be a headline. This is COSMETIC normalization only -
- *  the security judgment (bidi smuggling, zero-width tricks) belongs to the real scanner. */
+ *  the security judgment (bidi smuggling, zero-width tricks) belongs to the real scanner, and the
+ *  renderer esc()'s every character regardless, so even a decoded "<" is inert in the ticker. */
 export function sanitizeHeadline(raw: string): string | null {
-  let t = raw
+  let t = decodeEntitiesOnce(raw
     .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1")
-    .replace(/<[^>]*>/g, " ")
-    .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Math.min(0x10ffff, Number(n) || 32)))
-    .replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCodePoint(Math.min(0x10ffff, parseInt(h, 16) || 32)))
-    .replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
-    .replace(/&quot;/g, "\"").replace(/&#?39;|&apos;/g, "'").replace(/&nbsp;/g, " ")
+    .replace(/<[^>]*>/g, " "))
     .replace(/[\u0000-\u001f\u007f]/g, " ")
     .replace(/\s+/g, " ")
     .trim();

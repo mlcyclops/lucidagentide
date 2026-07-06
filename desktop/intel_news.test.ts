@@ -34,6 +34,12 @@ describe("sanitizeHeadline", () => {
     expect(sanitizeHeadline("A &amp; B &lt;wins&gt;   deal")).toBe('A & B <wins> deal');
     expect(sanitizeHeadline("<em>Big</em>\n\tnews &#8211; today")).toBe("Big news – today");
   });
+  test("single-pass decode: '&#38;lt;' yields the TEXT '&lt;', never a second decode to '<'", () => {
+    // The js/double-escaping trap: sequential decode passes would turn &#38;lt;script&#38;gt;
+    // into literal <script> AFTER the tag-strip already ran. One pass keeps it inert text.
+    expect(sanitizeHeadline("Deal news &#38;lt;script&#38;gt; today")).toBe("Deal news &lt;script&gt; today");
+    expect(sanitizeHeadline("A &amp;amp; B headline")).toBe("A &amp; B headline");
+  });
   test("clamps long titles and rejects stubs", () => {
     const long = sanitizeHeadline(`headline ${"x".repeat(400)}`)!;
     expect(long.length).toBeLessThanOrEqual(180);
