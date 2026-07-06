@@ -20,7 +20,7 @@
 import { readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { homedir } from "node:os";
-import { discoverSkills, type Skill as OmpSkill } from "@oh-my-pi/pi-coding-agent";
+import type { Skill as OmpSkill } from "@oh-my-pi/pi-coding-agent"; // type-only: the VALUE import is lazy (see discoverRaw)
 import { DEFAULT_POLICY, type GateDecision, scanAndDecide } from "../harness/security/gate.ts";
 import { ScannerClient } from "../harness/security/scanner_client.ts";
 import type { TrustLabel } from "../harness/contracts.ts";
@@ -75,9 +75,14 @@ function removableRootDir(root: SkillRoot, workspace: string, home: string): str
 }
 
 /** Raw omp discovery (fail-soft): the visible, named skills omp would load for this workspace. Returns
- *  [] on any discovery error so the directory degrades to bundled-only rather than throwing. */
+ *  [] on any discovery error so the directory degrades to bundled-only rather than throwing.
+ *  The @oh-my-pi/pi-coding-agent import is LAZY + fail-soft ON PURPOSE (ADR-0177): a static import
+ *  bricked v1.10.2 - the packaging filter stripped the .md prompt files that package imports at
+ *  module load, so dev.ts died at BOOT and the engine never bound its port. An optional feature
+ *  dependency must degrade the feature, never kill the engine. */
 async function discoverRaw(workspace: string): Promise<OmpSkill[]> {
   try {
+    const { discoverSkills } = await import("@oh-my-pi/pi-coding-agent");
     const r = await discoverSkills(workspace);
     return (r?.skills ?? []).filter((s) => s && !s.hide && s.name);
   } catch {

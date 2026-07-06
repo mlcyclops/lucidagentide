@@ -129,4 +129,10 @@
 //           P-KB.1/.2/.2b): the governed Skills directory + management menu, Skill Studio (draft skills
 //           from recent work, gated), the enterprise registry reader/publish seams (Ed25519 + scan-gate),
 //           and the compiled KB spine with graph migrations.
-export const APP_VERSION = "1.10.2";
+// v1.10.3 = HOTFIX (ADR-0177): v1.10.2's engine bricked at boot - packaging stripped node_modules *.md while
+//           the engine newly imported @oh-my-pi/pi-coding-agent, which loads its prompt .md files at import.
+//           Fix + robustness: .md no longer stripped; the omp import is lazy/fail-soft (a broken optional dep
+//           degrades its feature, never the engine); engine output teed to <userData>/engine.log and the
+//           failure dialog points at it; a packaged-boot CI guard emulates the filter so this class of brick
+//           can never ship again.
+export const APP_VERSION = "1.10.3";
