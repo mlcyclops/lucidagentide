@@ -12212,3 +12212,85 @@ license check green.
 ADR-0019 C / ADR-0170 (the GUI-owned sidecar pattern), ADR-0093/0163 (P-TOOLFAIL shapes reused),
 ADR-0131 (P-PERF.4 tail paging this anchors into), ADR-0027 (the reasoning/thoughts surfaces
 restored), invariant #1 (omp's transcript never forked).
+
+-----
+
+## ADR-0172 - P-SANDBOX.6: the Windows AppContainer backend (seam + helper contract), BUILT
+
+**Date:** 2026-07-05
+**Status:** Accepted / Built (the SEAM). Increment 6 of the ADR-0157 epic. The native helper is P-SANDBOX.7.
+
+### Context - the last platform on the disclosed passthrough
+
+P-SANDBOX.1-.5 gave Linux (bwrap) and macOS (Seatbelt) real runtime containment, mediated egress, an
+audit trail, and Security-panel visibility. **Windows was still the disclosed passthrough**: `resolveBackend`
+returned `NoopBackend` for win32, so a Windows user (the majority desktop surface here) got the argv gate +
+scanner but NO runtime containment, and managed require-isolation could only fail-closed (blocking exec).
+
+### The problem: Windows has no argv-wrapper for a sandbox
+
+bwrap and `sandbox-exec` are argv-wrappers - `bwrap <flags> -- cmd` / `sandbox-exec -p <profile> cmd` - which
+drop cleanly into the seam's `wrap(argv) → {cmd,args,env}` contract (the caller spawns `cmd`). **Windows has
+no equivalent.** A real AppContainer requires a native `CreateProcess` with a `PROC_THREAD_ATTRIBUTE_SECURITY_
+CAPABILITIES` attribute-list + an AppContainer SID + (for egress) per-app Windows Filtering Platform rules.
+None of that is a shippable command line.
+
+### Approaches considered
+
+1. **Bun FFI directly calling Win32** (`CreateProcessW` + `InitializeProcThreadAttributeList` + WFP). Keeps
+   it in-process TS, but it **breaks the seam**: the backend would have to DO the spawn itself, not return a
+   `{cmd,args}` plan - a different `SandboxBackend` shape, and a large, fiddly, hard-to-test native-interop
+   surface inside the harness. Rejected as the primary path (a targeted FFI use may return later).
+2. **A thin first-party native helper `lucid-appcontainer <flags> -- <argv>`** (CHOSEN). The helper IS a
+   command line, so it fits the seam exactly like bwrap/Seatbelt. It owns the messy Win32 (AppContainer SID,
+   attribute list, WFP egress rules); the harness stays pure TS and just builds the flag list. Language-
+   agnostic containment (contains any child, not just a TS payload), and testable as a flag contract now.
+3. **Windows Sandbox (`.wsb`)** - a full lightweight VM; no argv passthrough for our omp child, heavyweight,
+   no per-session workspace bind. Rejected.
+4. **Job Objects / restricted tokens** - reduce privilege but do NOT provide network isolation. Insufficient
+   for the ADR-0157 egress threat. Rejected.
+
+### Decision - the seam now, the helper next
+
+- **`AppContainerBackend` + PURE `appContainerArgs(caps, ctx)`** (`harness/runs/sandbox_exec.ts`): builds the
+  flag list for `lucid-appcontainer` - the SAME three network states as bwrap/Seatbelt: `canNetwork:false` →
+  `--deny-network`; `canNetwork:true` + proxy → `--loopback-only` (only the loopback proxy is permitted out,
+  so a raw-IP socket ignoring `HTTP_PROXY` is WFP-denied - the loopback-confinement Seatbelt also achieves) +
+  `HTTP(S)_PROXY`; `canNetwork:true` + no proxy → fail-closed `--deny-network`. `--workspace` (+ `--home`) bind
+  rw (fs stays omp `--isolate`'s job). `isolates:true`; `available()` = the helper on PATH (injected `which`).
+- **`resolveBackend`**: win32 + helper → the AppContainer backend; else disclosed passthrough / managed
+  fail-closed with a helper-specific reason.
+- **Fail-safe by construction:** the helper is NOT yet bundled, so on every current Windows machine
+  `available()` is false ⇒ `NoopBackend` disclosed - **behavior is unchanged from .1-.5 until the helper
+  ships**. No risk of trying to spawn a non-existent helper.
+
+### Phasing
+
+- **P-SANDBOX.6 (this ADR):** the seam + the `lucid-appcontainer` flag contract + resolution + tests + demo.
+  Pure, fully unit-tested via the injected-`which` pattern on any host (built + verified on Windows here).
+- **P-SANDBOX.7 (next):** BUILD + bundle the native `lucid-appcontainer` helper (AppContainer SID + attribute
+  list + WFP egress rules honoring `--deny-network` / `--loopback-only`), its packaging + signing, and a
+  Windows integration smoke. That increment introduces the first native-code surface, so it gets its own
+  build/packaging plan - which is exactly why the seam is split out first (CLAUDE.md inv #2 discipline).
+
+### Invariants preserved
+
+Inv #1 (wrap the omp process; no fork). **Inv #2 (this increment adds NO native/Python surface - it is pure
+TS/Bun; the native helper is deliberately deferred to its own increment rather than smuggled in).** Inv #3
+(fail-closed: no helper under managed-require ⇒ refuse; no proxy ⇒ `--deny-network`). Inv #4 (the in-process
+gate is untouched, still runs beneath). Inv #6 (runtime only). Inv #7 (no new trust labels). Inv #8 (no new
+EventName).
+
+### Verification
+
+`sandbox_exec.test.ts` (+ AppContainer cases: resolution win32 with/without helper, require-isolation
+satisfied/refused, the three flag states, loopback-confinement, workspace bind, argv preserved, `available()`
+gating, the downgrade path through `wrapForProfile`). `demo-P-SANDBOX.6` green; P-SANDBOX.1-.5 demos still
+green; typecheck + license clean. Built in an isolated git worktree.
+
+### Relates to
+
+ADR-0157 (the P-SANDBOX epic + threat model), ADR-0159/0166/0167/0168/0169 (P-SANDBOX.1-.5 - the seam,
+proxy, audit, Seatbelt, and panel this extends to Windows), ADR-0028 (omp `--isolate` - the filesystem
+containment the helper leaves in place), ADR-0068 (P-ENT.1 - require-isolation now satisfiable on Windows
+once the helper ships).

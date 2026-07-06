@@ -16,6 +16,7 @@ import type { SandboxStateView, SandboxStatusView } from "./bridge.ts";
 const BACKEND_LABEL: Record<string, string> = {
   bwrap: "Linux bubblewrap",
   seatbelt: "macOS Seatbelt",
+  appcontainer: "Windows AppContainer",
   noop: "disclosed passthrough",
 };
 

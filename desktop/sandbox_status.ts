@@ -17,7 +17,7 @@
 //
 // Metadata only (invariant: never raw scanned content) — a backend name, a boolean, a host, a reason.
 
-export type SandboxBackendName = "bwrap" | "seatbelt" | "noop";
+export type SandboxBackendName = "bwrap" | "seatbelt" | "appcontainer" | "noop";
 
 /** The resolved runtime-sandbox posture for the current omp session. `backend` is null only when the
  *  resolution REFUSED (managed require-isolation with no backend) — then `execBlocked` carries why. */
