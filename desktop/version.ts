@@ -111,4 +111,13 @@
 //           epic (allow-list chips, live canvas, portable share/import, n8n interop, /command authoring);
 //           the Agent FIREWALL (fail-closed proxy to remote hermes/openclaw ACP agents) + in-process MCP
 //           tool-result gate; and NEOVIM / terminal integration.
-export const APP_VERSION = "1.10.0";
+// v1.10.1 = the RUNTIME EXECUTION BOUNDARY epic (P-SANDBOX, ADR-0157): an approved subprocess is now
+//           OS-isolated (Linux bwrap, macOS Seatbelt) and its egress is MEDIATED through a loopback proxy
+//           decided by your curated egress policy - an import-time DNS exfil is refused + audited, and the
+//           whole posture is visible in the Security panel (ADR-0159/0166/0167/0168/0169; Windows AppContainer
+//           verified for deny-network, mediated egress disclosed as a managed/enterprise capability, ADR-0172/3).
+//           Plus: model-picker FAVORITES (ADR-0165), multi-repo Engineering Reports + reach-out audit
+//           (ADR-0162/0164), security review-ACKs + resumed-session history (ADR-0170/0171), a toolbox badge
+//           for failed tool calls (ADR-0163), the LUCID TUI theme + bare `lucid` (ADR-0160/0161), and the
+//           Plugin Marketplace popup (ADR-0158).
+export const APP_VERSION = "1.10.1";
