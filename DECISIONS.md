@@ -12913,3 +12913,46 @@ menu showed "Code graph ✓"; toggling back returned the label to Personal.
 
 ADR-0158/0135 (popover + pure-builder conventions), ADR-0075 (relate mode, rewired not changed),
 ADR-0099/0100 (compiled-KB view), P-KG-CODE.1/P-KG-SYM.1 (code graph view).
+
+## ADR-0185 - P-KGUI.2: the Data dropdown (Import / Export / CUI fold into the menu pattern), BUILT
+
+**Date:** 2026-07-06
+**Status:** Accepted / Built + tested + verified live (menu opens, AI toggle persists across opens,
+all three actions route to the original handlers, CUI confirm intact).
+
+### Context
+
+The P-KGUI.1 follow-up, requested: Import history / Export vault / CUI archive (plus the
+AI-extraction checkbox tied to imports) still sat as three buttons + a label in the KG header. Fold
+them into a "Data" dropdown on the same pattern as the views menu.
+
+### Decision
+
+1. **`kg_header.kgDataMenuHtml(aiOn)`** (pure, tested): the three actions as self-describing menu
+   rows with stable `data-kgdata` handles - import explains the scan gate inline, export its
+   CUI-excluded boundary, the archive its 32 CFR 2002 / NARA framing; the CUI row keeps the danger
+   look. The shared `item` builder gained attr/class params (views menu unchanged).
+2. **The AI-extraction choice is module STATE**, not a live checkbox: the menu is transient DOM, so
+   `kgImportAiOn` renders the toggle each open and a `change` listener updates it - toggling never
+   closes the menu (the row carries no action handle), and the import flow reads the variable
+   (first-import-defaults-to-AI logic unchanged).
+3. **app.ts**: the three wire()-time listeners became named handlers (`kgImportHistory` /
+   `kgExportVault` / `kgCuiArchive`, bodies unchanged - same estimates, toasts, and the CUI confirm
+   with its danger action) invoked from `openKgDataMenu` (shared popover: outside-click/Esc close,
+   second click toggles). Header markup: one `#kgData` button whose hover tip says it's a dropdown
+   and lists the contents. The orphaned `.kg-ai` CSS removed; `.kgv-check`/`.kgv-danger` added.
+
+### Verified
+
+3 new kg_header tests (handles + inline copy, toggle-is-state-not-action + checked-follows-state,
+single danger row) - 8 total in the file. demo-P-KGUI.2 green. Root tsc clean. Full bun test 1914
+pass / 6 fail = the known Windows path-sep baseline. LIVE (worktree server): the old buttons and
+the AI label are gone (header stays one 51px row), "Data ▾" opened all four rows, flipping the AI
+toggle kept the menu open and the state survived close/reopen, Export ran the real flow (honest
+"Personalization is off or locked" on this fresh instance), and CUI raised its confirm toast
+(canceled).
+
+### Relates to
+
+ADR-0184 (P-KGUI.1 - the pattern + the follow-up note this fulfills), ADR-0034/0035 (the import
+flow, rewired not changed), ADR-0014 (CUI isolation the archive serves).

@@ -33,7 +33,7 @@ import { renderMarkdown } from "./markdown.ts";
 import { type GraphHandle, kindLabel, mountGraph } from "./graph.ts";
 import { addEdgeOptimistic, applyForget, chainPairs, matchNodes, removeEdgeOptimistic, resolveRelationLabel } from "./kg_ops.ts";
 import { capGraph, graphOpts, pollDelay, watchPerfTier } from "./perf_tier.ts";
-import { kgViewActive, kgViewLabel, kgViewsMenuHtml } from "./kg_header.ts"; // P-KGUI.1 (ADR-0184)
+import { kgDataMenuHtml, kgViewActive, kgViewLabel, kgViewsMenuHtml } from "./kg_header.ts"; // P-KGUI.1/.2 (ADR-0184/0185)
 import { guardBlockedHtml, resourcePanelBodyHtml, resourcePanelHtml, type SystemStatusView } from "./system_guard.ts"; // P-SYSRES.1 (ADR-0182)
 import type { KbGraphView, PersonalGraphData } from "./bridge.ts";
 import { agentBuilderPanelHtml, specToGraphData, nodeEditorHtml, saveErrors, newCanvasSpec, runPanelHtml, secretsPanelHtml, agentInterviewPrompt, toolChipsHtml, trustBannerHtml, runApprovalHtml, runsPanelHtml, traceDetailHtml, schedulePanelHtml, historyPanelHtml, templatesPanelHtml } from "./agent_builder.ts"; // P-AGENT.2b/.4-live/.8/.9/.11a/.13/.14/.17
@@ -269,10 +269,7 @@ function buildShell(): void {
             <button class="btn-mini" id="kgPerf" data-tip="Performance mode|Auto adapts rendering to battery + CPU: on battery the graph goes calm (no particle flow, shorter settle, capped nodes); LOW battery pauses the visualization entirely - the agent still uses your knowledge. Click to cycle auto → full → reduced → minimal.">${icon("gauge", 13)} Auto</button>
             <button class="btn-mini" id="kgViews" data-tip="Graph views & tools · dropdown|Opens a menu with three options: Relate nodes (author your own relationships), Code graph (this workspace as a file/symbol graph), and Compiled KB (the knowledge base as a page graph). The label shows the graph you're viewing.">${icon("graph", 13)} <span id="kgViewsLbl">Personal</span> <span class="kgv-caret">▾</span></button>
             <button class="btn-mini btn-icon" id="kgCodeUpdate" data-tip="Re-sync the code graph|Re-ingest the workspace to pick up new files + import changes since the last build." hidden>${icon("refresh", 14)}</button>
-            <label class="kg-ai" data-tip="AI extraction|Use the model to pull richer facts + real relationships from each message, instead of the fast offline heuristic. Slower and uses model quota; capped at 500 messages per import. Leave off for a free, instant pass."><input type="checkbox" id="kgImportAI"/> AI</label>
-            <button class="btn-mini" id="kgImport" data-tip="Import chat history|Bring in a ChatGPT, Claude, or Gemini data export to seed your graph. Easiest: just pick the unzipped export FOLDER (a modern ChatGPT export has no single conversations.json - it ships conversations-000.json, -001.json … and we merge them for you) - or point at the .zip / conversations.json / MyActivity.json directly. Every message is scanned by the security gate before anything is learned; only your own messages teach the profile.">${icon("download", 13)} Import history</button>
-            <button class="btn-mini" id="kgExport" data-tip="Export Obsidian vault|Decrypt and write your Personal + Work knowledge to a portable Obsidian vault (notes, [[wikilinks]], escaped). CUI is excluded by design. The export is audited.">${icon("folder", 13)} Export vault</button>
-            <button class="btn-mini danger" id="kgCui" data-tip="CUI archive · National Archives|Export ONLY the CUI compartment into a CUI-marked, records-managed package with a SHA-256 manifest (32 CFR 2002 · NARA). For archive/records requirements. Audited.">${icon("shield", 13)} CUI archive</button>
+            <button class="btn-mini" id="kgData" data-tip="Data · dropdown|Opens a menu with: Import chat history (a ChatGPT / Claude / Gemini export - every message scanned before anything is learned), the AI-extraction toggle for imports, Export Obsidian vault (CUI excluded by design), and the CUI archive (records-managed, 32 CFR 2002 · NARA). Everything is audited.">${icon("folder", 13)} Data <span class="kgv-caret">▾</span></button>
             <button class="set-close" id="kgClose" data-tip="Close">${icon("close", 16)}</button>
           </div>
         </div>
@@ -2793,6 +2790,77 @@ function openKgViewsMenu(anchor: HTMLElement): void {
     if (v === "relate") setRelateMode(!kgRelateMode);
     else if (v === "code") void toggleCodeGraph();
     else if (v === "kb") void toggleKbGraph();
+  });
+}
+
+// P-KGUI.2 (ADR-0185): the Data dropdown - Import history / AI toggle / Export vault / CUI archive,
+// folded from three header buttons + a checkbox into the same menu pattern as the views dropdown.
+// The AI-extraction choice lives in module state (the menu is transient DOM, so a live checkbox
+// would be lost the moment it closes); toggling it never closes the menu.
+let kgDataPop: { close: () => void } | null = null;
+let kgImportAiOn = false;
+function openKgDataMenu(anchor: HTMLElement): void {
+  if (kgDataPop) { kgDataPop.close(); return; } // second click on the button = toggle closed
+  const p = popover(anchor, kgDataMenuHtml(kgImportAiOn), () => { kgDataPop = null; });
+  kgDataPop = p;
+  p.node.addEventListener("change", (ev) => {
+    const t = ev.target as HTMLInputElement | null;
+    if (t?.id === "kgImportAI") kgImportAiOn = t.checked;
+  });
+  p.node.addEventListener("click", (ev) => {
+    const it = (ev.target as HTMLElement).closest("[data-kgdata]") as HTMLElement | null;
+    if (!it) return; // the AI toggle row (a label) lands here - it must not close the menu
+    const v = it.dataset.kgdata;
+    p.close();
+    if (v === "import") void kgImportHistory();
+    else if (v === "export") void kgExportVault();
+    else if (v === "cui") kgCuiArchive();
+  });
+}
+async function kgImportHistory(): Promise<void> {
+  const folder = await openFolderBrowser({ title: "Choose your ChatGPT / Claude / Gemini export", confirm: "Import from here" });
+  if (!folder) return;
+  // Read-only pre-import estimate → warn about AI-mode token cost + runtime before the paid run.
+  const est = await bridge.personalImportEstimate(folder);
+  if (!est?.ok) { showToast({ tone: "danger", title: "Couldn't read that export", desc: est?.error ?? "No conversations found in that export.", actions: [{ label: "OK" }], timeout: 6000 }); return; }
+  // First import (empty graph) defaults to AI extraction (best quality); after that, honor the menu toggle.
+  const status = await bridge.personal();
+  const totalFacts = status?.counts ? status.counts.work + status.counts.personal + status.counts.cui : 0;
+  const aiDefault = totalFacts === 0 ? true : kgImportAiOn;
+  const { tokens, secs, overCap } = estimateAiImport(est);
+  const vendorName = est.vendor === "openai" ? "ChatGPT" : est.vendor === "anthropic" ? "Claude" : "Gemini";
+  const aiLine = `AI: ~${fmtNum(tokens)} tokens · ${fmtDur(secs)}${overCap ? ` (first ${AI_IMPORT_CAP} of ${fmtNum(est.userMessages ?? 0)} msgs)` : ""} · Quick: free + instant, lower quality. Estimate is approximate.`;
+  const aiBtn = { label: `AI extraction (${fmtDur(secs)})`, run: () => void runPersonalImport(folder, true) };
+  const quickBtn = { label: "Quick (free)", run: () => void runPersonalImport(folder, false) };
+  showToast({
+    title: `Import ${fmtNum(est.conversations ?? 0)} ${vendorName} conversations?`,
+    desc: `${fmtNum(est.userMessages ?? 0)} of your messages will seed your private, encrypted graph.`,
+    meta: aiLine,
+    tone: "warn",
+    actions: [...(aiDefault ? [aiBtn, quickBtn] : [quickBtn, aiBtn]), { label: "Cancel" }],
+    timeout: 0, // require an explicit choice (AI mode is paid + slow)
+  });
+}
+async function kgExportVault(): Promise<void> {
+  showToast({ title: "Exporting vault…", desc: "Decrypting and writing your Obsidian notes.", timeout: 1400 });
+  const r = await bridge.personalExportVault({});
+  if (!r?.ok) showToast({ tone: "danger", title: "Vault not exported", desc: r?.error ?? "Personalization is off or locked.", actions: [{ label: "OK" }], timeout: 5000 });
+  else showExportToast("Vault exported", `${r.files} files · ${r.entities} notes · ${r.facts} facts · Personal + Work · CUI excluded by design · audited`, r.dest);
+}
+function kgCuiArchive(): void {
+  showToast({
+    title: "CUI archive · National Archives",
+    desc: "Exports ONLY the CUI compartment into a CUI-marked, records-managed package (SHA-256 manifest). Designation and records-schedule fields are scaffolded for an authorized CUI/records officer to complete. Continue?",
+    meta: "32 CFR 2002 · NARA records management · audited",
+    actions: [
+      { label: "Cancel" },
+      { label: "Export CUI archive", kind: "danger", run: async () => {
+        const r = await bridge.personalCuiArchive({});
+        if (!r?.ok) showToast({ tone: "danger", title: "CUI archive not written", desc: r?.error ?? "Personalization is off or locked.", actions: [{ label: "OK" }], timeout: 6000 });
+        else showExportToast("CUI archive written", `${r.files} files · ${r.facts} facts · sha256 ${(r.manifestSha256 ?? "").slice(0, 12)}… · complete the designation before transfer`, r.dest);
+      } },
+    ],
+    timeout: 0,
   });
 }
 
@@ -7212,52 +7280,7 @@ function wire(): void {
   // no remount, so the layout the user is looking at never jumps.
   perfWatch.onChange(() => { paintPerfChip(); kgHandle?.setCalm(perfWatch.tier() !== "full"); });
   paintPerfChip();
-  $("#kgImport")!.addEventListener("click", async () => {
-    const folder = await openFolderBrowser({ title: "Choose your ChatGPT / Claude / Gemini export", confirm: "Import from here" });
-    if (!folder) return;
-    // Read-only pre-import estimate → warn about AI-mode token cost + runtime before the paid run.
-    const est = await bridge.personalImportEstimate(folder);
-    if (!est?.ok) { showToast({ tone: "danger", title: "Couldn't read that export", desc: est?.error ?? "No conversations found in that export.", actions: [{ label: "OK" }], timeout: 6000 }); return; }
-    // First import (empty graph) defaults to AI extraction (best quality); after that, honor the box.
-    const status = await bridge.personal();
-    const totalFacts = status?.counts ? status.counts.work + status.counts.personal + status.counts.cui : 0;
-    const aiDefault = totalFacts === 0 ? true : (($("#kgImportAI") as HTMLInputElement | null)?.checked ?? false);
-    const { tokens, secs, overCap } = estimateAiImport(est);
-    const vendorName = est.vendor === "openai" ? "ChatGPT" : est.vendor === "anthropic" ? "Claude" : "Gemini";
-    const aiLine = `AI: ~${fmtNum(tokens)} tokens · ${fmtDur(secs)}${overCap ? ` (first ${AI_IMPORT_CAP} of ${fmtNum(est.userMessages ?? 0)} msgs)` : ""} · Quick: free + instant, lower quality. Estimate is approximate.`;
-    const aiBtn = { label: `AI extraction (${fmtDur(secs)})`, run: () => void runPersonalImport(folder, true) };
-    const quickBtn = { label: "Quick (free)", run: () => void runPersonalImport(folder, false) };
-    showToast({
-      title: `Import ${fmtNum(est.conversations ?? 0)} ${vendorName} conversations?`,
-      desc: `${fmtNum(est.userMessages ?? 0)} of your messages will seed your private, encrypted graph.`,
-      meta: aiLine,
-      tone: "warn",
-      actions: [...(aiDefault ? [aiBtn, quickBtn] : [quickBtn, aiBtn]), { label: "Cancel" }],
-      timeout: 0, // require an explicit choice (AI mode is paid + slow)
-    });
-  });
-  $("#kgExport")!.addEventListener("click", async () => {
-    showToast({ title: "Exporting vault…", desc: "Decrypting and writing your Obsidian notes.", timeout: 1400 });
-    const r = await bridge.personalExportVault({});
-    if (!r?.ok) showToast({ tone: "danger", title: "Vault not exported", desc: r?.error ?? "Personalization is off or locked.", actions: [{ label: "OK" }], timeout: 5000 });
-    else showExportToast("Vault exported", `${r.files} files · ${r.entities} notes · ${r.facts} facts · Personal + Work · CUI excluded by design · audited`, r.dest);
-  });
-  $("#kgCui")!.addEventListener("click", () => {
-    showToast({
-      title: "CUI archive · National Archives",
-      desc: "Exports ONLY the CUI compartment into a CUI-marked, records-managed package (SHA-256 manifest). Designation and records-schedule fields are scaffolded for an authorized CUI/records officer to complete. Continue?",
-      meta: "32 CFR 2002 · NARA records management · audited",
-      actions: [
-        { label: "Cancel" },
-        { label: "Export CUI archive", kind: "danger", run: async () => {
-          const r = await bridge.personalCuiArchive({});
-          if (!r?.ok) showToast({ tone: "danger", title: "CUI archive not written", desc: r?.error ?? "Personalization is off or locked.", actions: [{ label: "OK" }], timeout: 6000 });
-          else showExportToast("CUI archive written", `${r.files} files · ${r.facts} facts · sha256 ${(r.manifestSha256 ?? "").slice(0, 12)}… · complete the designation before transfer`, r.dest);
-        } },
-      ],
-      timeout: 0,
-    });
-  });
+  $("#kgData")?.addEventListener("click", (e) => openKgDataMenu(e.currentTarget as HTMLElement)); // P-KGUI.2 dropdown
   $("#knowledge")!.addEventListener("click", async (e) => {
     const t = e.target as HTMLElement;
     const lens = t.closest("[data-lens]") as HTMLElement | null;

@@ -45,3 +45,31 @@ describe("kgViewsMenuHtml", () => {
     expect(h).not.toContain("Relate nodes ✓");
   });
 });
+
+// ───────────── P-KGUI.2 (ADR-0185): the Data dropdown ─────────────
+
+import { kgDataMenuHtml } from "./kg_header.ts";
+
+describe("kgDataMenuHtml", () => {
+  test("all three former buttons live in the menu with stable handles and self-describing copy", () => {
+    const h = kgDataMenuHtml(false);
+    for (const v of ["import", "export", "cui"]) expect(h).toContain(`data-kgdata="${v}"`);
+    expect(h).toContain("Import chat history");
+    expect(h).toContain("Export Obsidian vault");
+    expect(h).toContain("CUI archive");
+    expect(h).toContain("scanned by the security gate"); // import explains the gate inline
+    expect(h).toContain("CUI excluded by design");       // export explains its boundary inline
+  });
+  test("the AI-extraction toggle is a row, not an action: no data-kgdata handle, checked follows state", () => {
+    const off = kgDataMenuHtml(false);
+    expect(off).toContain('id="kgImportAI"');
+    expect(off).not.toContain('id="kgImportAI" checked');
+    expect(off.match(/data-kgdata=/g)?.length).toBe(3); // the toggle never closes/act as a menu action
+    expect(kgDataMenuHtml(true)).toContain('id="kgImportAI" checked');
+  });
+  test("the CUI row keeps its danger look", () => {
+    const h = kgDataMenuHtml(false);
+    expect(h).toContain("kgv-danger");
+    expect(h.match(/kgv-danger/g)?.length).toBe(1); // only CUI
+  });
+});

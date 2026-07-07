@@ -2002,7 +2002,11 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .kgv-item.on .kgv-t{color:var(--accent-2)}
 .kgv-t{font-size:12.5px;font-weight:600;color:var(--txt)}
 .kgv-d{font-size:11px;color:var(--txt-3);line-height:1.4}
-/* icon-only button (the code-graph re-sync sits between the views dropdown and the AI checkbox) */
+/* P-KGUI.2 (ADR-0185): the Data menu's AI toggle row + the CUI danger row */
+.kgv-check{cursor:pointer}
+.kgv-check input{accent-color:var(--accent);cursor:pointer;margin:0 5px 0 0;vertical-align:-2px}
+.kgv-item.kgv-danger .kgv-t{color:var(--danger,#d96a6a)}
+/* icon-only button (the code-graph re-sync sits between the views and Data dropdowns) */
 .btn-mini.btn-icon{padding:0;width:30px;justify-content:center;flex:none}
 .btn-mini.btn-icon .ic{width:14px;height:14px}
 /* code-node side panel */
@@ -2094,8 +2098,6 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .kg-lens button{-webkit-app-region:no-drag;border:0;background:transparent;color:var(--txt-3);font-size:11px;font-weight:600;padding:4px 11px;border-radius:6px;cursor:pointer;transition:background var(--t),color var(--t),box-shadow var(--t)}
 .kg-lens button:hover{color:var(--txt-2)}
 .kg-lens button.on{background:var(--bg-4);color:var(--txt);box-shadow:inset 0 0 0 1px var(--line-strong),0 1px 2px rgba(0,0,0,.35)}
-.kg-ai{-webkit-app-region:no-drag;display:flex;align-items:center;gap:5px;font-size:11px;font-weight:600;color:var(--txt-3);cursor:pointer;user-select:none}
-.kg-ai input{accent-color:var(--accent);cursor:pointer;margin:0}
 .kg-main{flex:1;min-height:0;display:flex;position:relative}
 .kg-canvas{flex:1;min-width:0;position:relative;background:radial-gradient(120% 90% at 50% 34%,#12141d 0%,var(--bg-1) 42%,var(--bg-0) 100%);overflow:hidden;cursor:grab}
 /* faint vignette so nodes feel lit from within the canvas rather than floating on flat fill */
