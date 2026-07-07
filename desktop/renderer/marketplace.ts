@@ -9,9 +9,12 @@
 // project's GitHub repo in the system browser. Install mechanics (BRAT-style "add from URL", gated through
 // the scanner like agent-template import) are deliberately a later increment (P-MARKET.2, see ADR-0158).
 //
-// Ordering is the product requirement: Excalidraw is PINNED first (featured), then Obsidian's
-// "3rd Party Integrations" category by community downloads (obsidianstats.com, 2026-07) — Git, Remotely
-// Save, Copilot, Importer, BRAT, Advanced URI, Zotero, Paste URL, LanguageTool, Readwise.
+// Ordering: Excalidraw is PINNED first (featured, the ADR-0158 product requirement), then the Obsidian
+// "3rd Party Integrations" survivors by community downloads (obsidianstats.com, 2026-07), then curated
+// LUCID-fit additions (security, diagrams, documents). ADR-0181 curated the ADR-0158 catalog for FIT:
+// entries that compete with LUCID's core (Copilot = the gated chat + Local Providers; BRAT = the
+// P-MARKET.2 install path itself) or that are Obsidian-editor niceties off this product's audience
+// (Paste URL into selection, Readwise) were REMOVED; their ids are retired, never reused (invariant 9).
 
 import { esc } from "./format.ts";
 import { icon } from "./icons.ts";
@@ -28,7 +31,8 @@ export interface MarketPlugin {
   category: string;
   /** Obsidian community downloads where verified (popularity signal shown as a badge); null = unverified. */
   downloads: number | null;
-  /** Canonical sort order: 1 = Excalidraw (pinned), then Obsidian integrations-category rank. */
+  /** Canonical sort order: 1 = Excalidraw (pinned), then Obsidian integrations-category rank,
+   *  then the curated LUCID-fit additions (ADR-0181). */
   rank: number;
   status: MarketStatus;
   /** How this maps into LUCID — the roadmap one-liner rendered under the description. */
@@ -49,7 +53,7 @@ export const MARKET_PLUGINS: MarketPlugin[] = [
     desc: "Back up and version your workspace with git (Obsidian's #1 integration).",
     repo: "https://github.com/Vinzent03/obsidian-git",
     category: "Version control", downloads: 2_765_510,
-    lucidPlan: "Dedicated git panel — staged diff, commit, branch — on top of the agent's existing gated git tooling.",
+    lucidPlan: "Dedicated git panel - staged diff, commit, branch - on top of the agent's existing gated git tooling.",
   },
   {
     id: "remotely-save", name: "Remotely Save", rank: 3, status: "planned",
@@ -59,60 +63,67 @@ export const MARKET_PLUGINS: MarketPlugin[] = [
     lucidPlan: "Encrypted sync of sessions + semantic memory to user-owned storage (S3/WebDAV), vault-held keys.",
   },
   {
-    id: "copilot", name: "Copilot", rank: 4, status: "built-in",
-    desc: "AI assistant chat over your notes with bring-your-own model.",
-    repo: "https://github.com/logancyang/obsidian-copilot",
-    category: "AI", downloads: 1_496_747,
-    lucidPlan: "Core LUCID: gated agent chat + Settings → Local Providers already cover BYOM (ADR-0135).",
-  },
-  {
-    id: "importer", name: "Importer", rank: 5, status: "planned",
+    id: "importer", name: "Importer", rank: 4, status: "planned",
     desc: "Import notes from Notion, Evernote, Roam, Apple Notes and more.",
     repo: "https://github.com/obsidianmd/obsidian-importer",
     category: "Import", downloads: null,
-    lucidPlan: "Import external notes/docs into the knowledge graph — through the scanner gate, labeled untrusted.",
+    lucidPlan: "Import external notes/docs into the knowledge graph - through the scanner gate, labeled untrusted.",
   },
   {
-    id: "brat", name: "BRAT", rank: 6, status: "planned",
-    desc: "Beta reviewers' auto-update tool — install plugins straight from a repo.",
-    repo: "https://github.com/TfTHacker/obsidian42-brat",
-    category: "Plugin manager", downloads: null,
-    lucidPlan: "P-MARKET.2: install a marketplace entry from a GitHub URL, gated like agent-template import.",
-  },
-  {
-    id: "advanced-uri", name: "Advanced URI", rank: 7, status: "planned",
+    id: "advanced-uri", name: "Advanced URI", rank: 5, status: "planned",
     desc: "Deep links to control the app from outside (open, search, write).",
     repo: "https://github.com/Vinzent03/obsidian-advanced-uri",
     category: "Automation", downloads: null,
     lucidPlan: "lucid:// deep links to open a session, run a slash command, or launch a saved agent.",
   },
   {
-    id: "zotero", name: "Zotero Integration", rank: 8, status: "planned",
+    id: "zotero", name: "Zotero Integration", rank: 6, status: "planned",
     desc: "Insert citations, notes and annotations from Zotero.",
     repo: "https://github.com/mgmeyers/obsidian-zotero-integration",
     category: "Research", downloads: null,
     lucidPlan: "Pull citations/annotations into chat + knowledge graph for research-heavy workflows.",
   },
   {
-    id: "url-into-selection", name: "Paste URL into selection", rank: 9, status: "planned",
-    desc: "Paste a URL onto selected text to make a markdown link.",
-    repo: "https://github.com/denolehov/obsidian-url-into-selection",
-    category: "Editing", downloads: null,
-    lucidPlan: "Editor nicety in the chat input + notes: selection + clipboard URL → markdown link.",
-  },
-  {
-    id: "languagetool", name: "LanguageTool", rank: 10, status: "planned",
+    id: "languagetool", name: "LanguageTool", rank: 7, status: "planned",
     desc: "Grammar and style checking for your prose.",
     repo: "https://github.com/Clemens-E/obsidian-languagetool-plugin",
     category: "Writing", downloads: null,
     lucidPlan: "Grammar pass over drafted docs/briefs via a self-hosted LanguageTool endpoint (no cloud by default).",
   },
   {
-    id: "readwise", name: "Readwise Official", rank: 11, status: "planned",
-    desc: "Sync highlights from books, articles and tweets.",
-    repo: "https://github.com/readwiseio/obsidian-readwise",
-    category: "Highlights", downloads: null,
-    lucidPlan: "Highlights land in the knowledge graph as untrusted, scanner-gated source material.",
+    id: "mermaid", name: "Mermaid", rank: 8, status: "planned",
+    desc: "Diagrams as code: flowcharts, sequence and architecture diagrams from plain text.",
+    repo: "https://github.com/mermaid-js/mermaid",
+    category: "Diagrams", downloads: null,
+    lucidPlan: "Render agent-emitted mermaid blocks inline in chat and the sandboxed Preview panel - offline, no execution.",
+  },
+  {
+    id: "gitleaks", name: "Gitleaks", rank: 9, status: "planned",
+    desc: "Scan repos and commits for hardcoded secrets and credentials.",
+    repo: "https://github.com/gitleaks/gitleaks",
+    category: "Security", downloads: null,
+    lucidPlan: "Pre-commit secret sweep wired into the exec gate; findings land as security events beside the vault.",
+  },
+  {
+    id: "semgrep", name: "Semgrep", rank: 10, status: "planned",
+    desc: "Fast static analysis with community security rules.",
+    repo: "https://github.com/semgrep/semgrep",
+    category: "Security", downloads: null,
+    lucidPlan: "Static-analysis pass over agent-written code; findings surface in the security feed before anything ships.",
+  },
+  {
+    id: "trivy", name: "Trivy", rank: 11, status: "planned",
+    desc: "Vulnerability and misconfiguration scanner for dependencies, containers and IaC.",
+    repo: "https://github.com/aquasecurity/trivy",
+    category: "Security", downloads: null,
+    lucidPlan: "On-demand dependency/SBOM scan; evidence exports beside the OCSF audit trail for CMMC/RMF packages.",
+  },
+  {
+    id: "pandoc", name: "Pandoc", rank: 12, status: "planned",
+    desc: "Universal document converter: markdown to DOCX, PDF, HTML and more.",
+    repo: "https://github.com/jgm/pandoc",
+    category: "Documents", downloads: null,
+    lucidPlan: "Export briefs, ADRs and reports to DOCX/PDF fully offline - air-gap friendly deliverables.",
   },
 ];
 
@@ -171,7 +182,7 @@ export function marketplaceHtml(list: MarketPlugin[], query: string): string {
   return `<div class="mkt-modal" role="dialog" aria-label="Plugin Marketplace">
     <div class="mkt-h">${icon("market", 18)}<span>Plugin Marketplace</span>
       <button class="mkt-close" data-mkt-close title="Close">${icon("close", 14)}</button></div>
-    <div class="mkt-sub">Curated integrations, ordered by community popularity (Obsidian's most-installed connectors). "View repo" opens the project on GitHub; installs land in a later increment — gated, like everything else.</div>
+    <div class="mkt-sub">Curated integrations: community favorites plus security, diagram and document tooling picked to fit LUCID. "View repo" opens the project on GitHub; installs land in a later increment - gated, like everything else.</div>
     <input id="mktSearch" class="mkt-search" type="text" placeholder="Search plugins…" autocomplete="off" spellcheck="false">
     <div id="mktList" class="mkt-list">${marketRowsHtml(list, query)}</div>
   </div>`;
