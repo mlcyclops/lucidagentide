@@ -23,10 +23,14 @@ const sorted = sortMarket(MARKET_PLUGINS);
 assert(sorted[0]!.id === "excalidraw", "Excalidraw sorts first (featured pin)");
 assert(sorted[0]!.repo === "https://github.com/excalidraw/excalidraw", "…and points at github.com/excalidraw/excalidraw");
 
-console.log("\n[2] the integrations follow Obsidian's category ranking (downloads desc)");
+console.log("\n[2] the catalog is curated for FIT (ADR-0181) on top of community popularity");
 const ids = sorted.map((p) => p.id);
-assert(ids.indexOf("git") < ids.indexOf("remotely-save") && ids.indexOf("remotely-save") < ids.indexOf("copilot"),
-  "Git (2.8M) → Remotely Save (2M) → Copilot (1.5M) hold their community order");
+assert(ids.indexOf("git") < ids.indexOf("remotely-save") && ids.indexOf("remotely-save") < ids.indexOf("importer"),
+  "Git (2.8M) → Remotely Save (2M) → Importer hold their community order");
+assert(["copilot", "brat", "url-into-selection", "readwise"].every((r) => !ids.includes(r)),
+  "competitors/off-fit entries (Copilot, BRAT, Paste-URL, Readwise) are retired");
+assert(["mermaid", "gitleaks", "semgrep", "trivy", "pandoc"].every((a) => ids.includes(a)),
+  "LUCID-fit additions present: Mermaid, Gitleaks, Semgrep, Trivy, Pandoc");
 assert(MARKET_PLUGINS.every((p) => /^https:\/\/github\.com\//.test(p.repo)), "every row's action is an https GitHub URL");
 assert(fmtDownloads(6_487_654) === "6.5M" && fmtDownloads(2_765_510) === "2.8M" && fmtDownloads(null) === "",
   "download badges format as 6.5M / 2.8M; unverified counts show no badge");
@@ -44,4 +48,4 @@ assert(marketRowsHtml(MARKET_PLUGINS, "<script>x</script>").includes("mkt-empty"
   && !marketRowsHtml(MARKET_PLUGINS, "<script>x</script>").includes("<script>"),
   "a hostile query renders escaped (no raw HTML)");
 
-console.log("\n✓ P-MARKET.1 demo passed — the marketplace popup lists Excalidraw first, then Obsidian's top integrations.");
+console.log("\n✓ P-MARKET.1 demo passed — Excalidraw first, community favorites next, then the curated LUCID-fit tooling (ADR-0181).");

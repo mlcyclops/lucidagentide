@@ -12698,3 +12698,59 @@ tool counts and last thinking). LIVE in the renderer: a real two-subtask delegat
 rows mid-turn with live now-lines ("read · Reading CLAUDE.md for first heading"), expanding showed
 assignment + thinking/tool/text steps, both rows flipped to done dots at finish, and the collapsed
 card reopens with the final trails intact.
+
+## ADR-0181 - P-MARKET.1b: curate the marketplace catalog for fit (drop competitors, add security/diagram/document tooling), BUILT
+
+**Date:** 2026-07-06
+**Status:** Accepted / Built + tested.
+
+### Context
+
+ADR-0158 seeded the Plugin Marketplace catalog straight from Obsidian's "3rd Party Integrations"
+popularity ranking. That imported entries that make no sense inside LUCID: Copilot IS LUCID's core
+(gated agent chat + Local Providers BYOM, ADR-0135) - a row advertising a competitor, with no
+action; BRAT's entire function (install plugins from a repo URL) is the marketplace's own planned
+install path (P-MARKET.2) - listing it competes with the feature itself; Paste URL into selection
+is an Obsidian markdown-editing nicety, not an IDE integration; Readwise (book/tweet highlights)
+is off this product's audience. Meanwhile the catalog offered nothing for the product's actual
+center of gravity: security tooling, diagrams, offline document deliverables. Product ask: remove
+what competes or doesn't fit; add compatible plugins that improve the experience.
+
+### Decision
+
+Pure registry curation - one array, the same pure builders, no new mechanics. ADR-0158 makes
+registry updates ordinary PRs; this one still gets an ADR because it retires the
+"Obsidian popularity IS the ordering" principle and rewrites a pinned ordering test.
+
+- **REMOVED** (stable ids retired forever, invariant 9 - a future re-add mints the same id back,
+  never a variant): `copilot`, `brat`, `url-into-selection`, `readwise`.
+- **KEPT** (the Obsidian survivors, community order preserved): Excalidraw (featured pin
+  unchanged - still the ADR-0158 product requirement), Git, Remotely Save, Importer, Advanced URI,
+  Zotero, LanguageTool.
+- **ADDED** (all `planned`, `downloads: null` - the no-fabricated-badges rule kept):
+  - **Mermaid** (mermaid-js/mermaid): render agent-emitted diagram blocks inline in chat and the
+    sandboxed Preview - offline, no execution.
+  - **Gitleaks** (gitleaks/gitleaks): pre-commit secret sweep wired into the exec gate; findings
+    as security events beside the vault.
+  - **Semgrep** (semgrep/semgrep): static-analysis pass over agent-written code; findings in the
+    security feed before anything ships.
+  - **Trivy** (aquasecurity/trivy): on-demand dependency/SBOM scan; evidence exports beside the
+    OCSF audit trail (ADR-0069) for CMMC/RMF packages.
+  - **Pandoc** (jgm/pandoc): export briefs/ADRs/reports to DOCX/PDF fully offline - air-gap
+    friendly deliverables.
+- Ordering principle now: featured pin, then verified Obsidian popularity, then curated LUCID-fit
+  additions. The modal subtitle says so; em dashes in catalog copy became hyphens (house style).
+
+### Verified
+
+`bun test desktop/renderer/marketplace.test.ts` 16 pass (new pins: retired ids stay out, additions
+present after the Obsidian block with null downloads; the Excalidraw-first, unique-id/rank,
+https-GitHub-only and escaping invariants all kept). `demo-P-MARKET.1` green. Root `tsc --noEmit`
+clean. Full `bun test`: no new failures vs the master baseline (the known Windows
+fs_browse/lucid_acp path-separator set only).
+
+### Relates to
+
+ADR-0158 (the catalog + the "registry updates are ordinary PRs" rule), ADR-0135 (why Copilot was
+redundant), ADR-0069 (the OCSF audit trail Trivy evidence would sit beside), invariant 9 (stable,
+never-reused ids).

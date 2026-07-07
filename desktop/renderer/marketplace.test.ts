@@ -31,10 +31,25 @@ describe("registry", () => {
   test("every repo is an https GitHub URL (the row's only live action must be safe to open)", () => {
     for (const p of MARKET_PLUGINS) expect(p.repo).toMatch(/^https:\/\/github\.com\/[\w.-]+\/[\w.-]+$/);
   });
-  test("the integrations follow Obsidian's category ranking: Git, then Remotely Save, then Copilot", () => {
+  test("the Obsidian survivors keep their category ranking: Git, then Remotely Save, then Importer", () => {
     const ids = sortMarket(MARKET_PLUGINS).map((p) => p.id);
     expect(ids.indexOf("git")).toBeLessThan(ids.indexOf("remotely-save"));
-    expect(ids.indexOf("remotely-save")).toBeLessThan(ids.indexOf("copilot"));
+    expect(ids.indexOf("remotely-save")).toBeLessThan(ids.indexOf("importer"));
+  });
+  test("ADR-0181 curation: competitors and off-fit entries stay out; retired ids are never reused", () => {
+    const ids = new Set(MARKET_PLUGINS.map((p) => p.id));
+    for (const retired of ["copilot", "brat", "url-into-selection", "readwise"]) expect(ids.has(retired)).toBe(false);
+  });
+  test("ADR-0181 curation: the LUCID-fit additions are present, after the Obsidian-ranked entries", () => {
+    const ids = sortMarket(MARKET_PLUGINS).map((p) => p.id);
+    for (const added of ["mermaid", "gitleaks", "semgrep", "trivy", "pandoc"]) {
+      expect(ids).toContain(added);
+      expect(ids.indexOf(added)).toBeGreaterThan(ids.indexOf("languagetool"));
+    }
+    // unverified popularity renders no badge - counts are never fabricated (ADR-0158 rule kept)
+    for (const p of MARKET_PLUGINS.filter((x) => ["mermaid", "gitleaks", "semgrep", "trivy", "pandoc"].includes(x.id))) {
+      expect(p.downloads).toBeNull();
+    }
   });
 });
 
