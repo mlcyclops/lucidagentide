@@ -26,6 +26,7 @@ import { aboutHtml, readmeMark } from "./about.ts";
 import { createTriviaGame, triviaExplainHtml, triviaQuestionHtml, triviaVisible, type TriviaGame, type TriviaQuestion } from "./trivia.ts"; // P-TRIV.1 (ADR-0174)
 import { bankForRole } from "./trivia_roles.ts"; // P-TRIV.2 (ADR-0175): role-aware banks
 import { isIntelNewsItem, newsLineHtml } from "./trivia_news.ts"; // P-TRIV.3 (ADR-0176): the executive INTEL WIRE
+import { sectionizeAnswer, shouldSectionize, type AnswerSection } from "./answer_sections.ts"; // P-CHAT.A (ADR-0188): settled-turn collapsible sections
 import { MARKET_PLUGINS, marketplaceHtml, marketRowsHtml } from "./marketplace.ts"; // P-MARKET.1 (ADR-0158)
 import { toolfailGroupHtml, type ToolFailEntry } from "./toolfail_group.ts"; // P-TOOLFAIL.2 (ADR-0163)
 import { APP_VERSION } from "../version.ts";
@@ -434,8 +435,9 @@ function addMessage(role: "user" | "assistant", text: string, attachments?: Atta
     <div class="text"></div>${actions}</div>`);
   (node as MsgNode)._md = text; // raw markdown, for copy / save-as-.md
   const textEl = $(".text", node) as HTMLElement;
-  textEl.innerHTML = renderMarkdown(text);
-  enhanceCodeBlocks(textEl);
+  // P-CHAT.A (ADR-0188): a settled assistant answer sectionizes on its own headings; user prompts stay inline.
+  if (role === "assistant") renderAnswerBody(textEl, text);
+  else { textEl.innerHTML = renderMarkdown(text); enhanceCodeBlocks(textEl); }
   // P-VISION.1 (ADR-0136): render attached images inline. Each img.src is set as a DOM PROPERTY (never
   // interpolated into the HTML) so a data URL can't break out of the markup.
   if (attachments?.length) {
@@ -1069,6 +1071,39 @@ const LOOKER_SVG = `<svg class="looker" viewBox="0 0 26 24" width="15" height="1
     <circle cx="16.4" cy="6.8" r="2.8"/>
   </g>
 </svg>`;
+// P-CHAT.A (ADR-0188): the pre-heading intro / a title-less block, rendered inline as markdown.
+function appendIntro(container: HTMLElement, md: string): void {
+  const intro = el(`<div class="answer-intro"></div>`);
+  intro.innerHTML = renderMarkdown(md); enhanceCodeBlocks(intro);
+  container.appendChild(intro);
+}
+
+// P-CHAT.A (ADR-0188): one collapsible titled section (default OPEN, so nothing is hidden by surprise).
+function appendSection(container: HTMLElement, s: AnswerSection): void {
+  const sec = el(`<div class="answer-sec open">
+    <button class="answer-sec-head" type="button" aria-expanded="true">${icon("chevron", 13)}<span class="answer-sec-title"></span></button>
+    <div class="answer-sec-body"></div>
+  </div>`);
+  ($(".answer-sec-title", sec) as HTMLElement).textContent = s.title;
+  const bodyEl = $(".answer-sec-body", sec) as HTMLElement;
+  bodyEl.innerHTML = renderMarkdown(s.body); enhanceCodeBlocks(bodyEl);
+  const head = $(".answer-sec-head", sec) as HTMLButtonElement;
+  head.addEventListener("click", () => { const open = !sec.classList.contains("open"); sec.classList.toggle("open", open); head.setAttribute("aria-expanded", String(open)); });
+  container.appendChild(sec);
+}
+
+// P-CHAT.A (ADR-0188): on SETTLE, split a finished answer into collapsible sections on the model's own
+// headings / rules. A trivial (heading-less) answer renders exactly as before (byte-identical inline).
+// Streaming stays a single live flow (unchanged); `_md` still holds the full markdown, so copy /
+// save-as-.md are untouched. (P-CHAT.B will thread tool chips through the same settle point.)
+function renderAnswerBody(container: HTMLElement, md: string): void {
+  const secs = sectionizeAnswer(md);
+  if (!shouldSectionize(secs)) { container.innerHTML = renderMarkdown(md); enhanceCodeBlocks(container); return; }
+  container.textContent = "";
+  container.classList.add("answer-sectioned");
+  for (const s of secs) { if (s.title === null) appendIntro(container, s.body); else appendSection(container, s); }
+}
+
 function createSubagentCard(e: Extract<ChatEvent, { type: "subagent" }>): { el: HTMLElement; finish: () => void } {
   const n = e.assignments.length;
   const body = (e.assignments.length ? e.assignments : [e.title]).map((a) =>
@@ -1296,12 +1331,12 @@ async function send(): Promise<void> {
     else if (e.type === "agent-builder-open") openAgentBuilderWithSpec(e.spec); // P-AGENT.8.2
     else if (e.type === "slash-command-created") void onSlashCommandCreated(e.command); // P-CMD.1
     else if (e.type === "usage") { tok = e.used; cost = e.cost; state.liveUsage = { used: e.used, size: e.size, cost: e.cost }; paintHud(); renderStatus(); renderMetricsRail(); }
-    else if (e.type === "done") { if (e.text && e.text.length > buf.length) buf = e.text; /* reconcile a lossy stream with the server's full reply */ streamEl.innerHTML = renderMarkdown(buf); enhanceCodeBlocks(streamEl); (node as MsgNode)._md = buf; finishHud(); state.streaming = false; setSendEnabled(); clearPreviewTesting(); }
+    else if (e.type === "done") { if (e.text && e.text.length > buf.length) buf = e.text; /* reconcile a lossy stream with the server's full reply */ renderAnswerBody(streamEl, buf); /* P-CHAT.A (ADR-0188): settle into collapsible sections */ (node as MsgNode)._md = buf; finishHud(); state.streaming = false; setSendEnabled(); clearPreviewTesting(); }
   };
   try { await bridge.sendPrompt(sendText, onEvent, images); }
   finally {
     (node as MsgNode)._md = buf;
-    if (state.streaming) { streamEl.innerHTML = renderMarkdown(buf); enhanceCodeBlocks(streamEl); finishHud(); state.streaming = false; setSendEnabled(); } else { finishHud(); }
+    if (state.streaming) { renderAnswerBody(streamEl, buf); /* P-CHAT.A (ADR-0188): settle into collapsible sections */ finishHud(); state.streaming = false; setSendEnabled(); } else { finishHud(); }
     void renderSessions(); void refreshBudget(false); void syncMode();
     scheduleKnowledgeRefresh(); // #54 follow-up: new facts appear in the open KG without close/reopen
     // P-ACP.4: the turn ended - fire off any pre-staged prompt now (the composer is idle again).

@@ -666,6 +666,21 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
   padding:6px 11px;border-top:1px solid var(--line-soft);white-space:pre-wrap;word-break:break-word}
 .subagent-task .ic{flex:none;color:var(--txt-4);margin-top:2px}
 
+/* P-CHAT.A (ADR-0188): sectioned answer - collapsible blocks on the model's own headings, applied on
+   SETTLE (streaming stays one flow). A trivial answer is never sectioned. Mirrors .thoughts/.subagent. */
+.answer-sectioned{display:flex;flex-direction:column;gap:1px}
+.answer-intro{margin:0}
+.answer-sec{border-top:1px solid var(--line-soft)}
+.answer-sectioned>.answer-sec:first-child,.answer-sectioned>.answer-intro:first-child+.answer-sec{border-top:0}
+.answer-sec-head{display:flex;align-items:center;gap:8px;width:100%;text-align:left;cursor:pointer;
+  background:transparent;border:0;color:var(--txt-1);font-size:15px;font-weight:680;padding:9px 2px;transition:color var(--t)}
+.answer-sec-head:hover{color:var(--txt)}
+.answer-sec-head .ic{flex:none;color:var(--txt-3);transition:transform var(--t) var(--ease)}
+.answer-sec.open .answer-sec-head .ic{transform:rotate(90deg)}
+.answer-sec-title{flex:1;min-width:0}
+.answer-sec-body{max-height:0;overflow:hidden;transition:max-height var(--t-slow) var(--ease)}
+.answer-sec.open .answer-sec-body{max-height:6000px}
+
 .composer-wrap{padding:10px 26px 18px}
 /* P-SLASH.1: "/" command + skill autocomplete, floating just above the composer. */
 .composer-row{position:relative}
