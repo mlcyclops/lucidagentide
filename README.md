@@ -30,7 +30,7 @@
 <a href="https://github.com/mlcyclops/lucidagentide/actions/workflows/build-desktop.yml"><img src="https://img.shields.io/github/actions/workflow/status/mlcyclops/lucidagentide/build-desktop.yml?label=Windows%20Build&logo=windows&logoColor=white&style=flat-square" alt="Windows Build" /></a>
 <a href="https://github.com/mlcyclops/lucidagentide/actions/workflows/build-desktop.yml"><img src="https://img.shields.io/github/actions/workflow/status/mlcyclops/lucidagentide/build-desktop.yml?label=macOS%20Build&logo=apple&logoColor=white&style=flat-square" alt="macOS Build" /></a>
 <a href="https://github.com/mlcyclops/lucidagentide/actions/workflows/build-desktop.yml"><img src="https://img.shields.io/github/actions/workflow/status/mlcyclops/lucidagentide/build-desktop.yml?label=Linux%20Build&logo=linux&logoColor=white&style=flat-square" alt="Linux Build" /></a>
-<img src="https://img.shields.io/badge/tests-700%20harness%20%2B%20979%20desktop%20%2B%2057%20sidecar-46d27e?style=flat-square" alt="tests" />
+<img src="https://img.shields.io/badge/tests-730%20harness%20%2B%201180%20desktop%20%2B%2057%20sidecar-46d27e?style=flat-square" alt="tests" />
 <img src="https://img.shields.io/badge/gate-fail--closed-e07bf0?style=flat-square" alt="fail-closed gate" />
 
 <br/>
@@ -66,7 +66,7 @@ personalization internals are proprietary and intentionally undocumented here - 
 <a href="#-quick-start"><b>Quick start</b></a> ·
 <a href="#-security-model"><b>Security</b></a> ·
 <a href="#-token-cost-savings--showback"><b>Cost Savings</b></a> ·
-<a href="#-knowledge--rag-coming-soon"><b>Knowledge / RAG</b></a> ·
+<a href="#-knowledge--rag"><b>Knowledge / RAG</b></a> ·
 <a href="#-contributing"><b>Contributing</b></a> ·
 <a href="#-roadmap"><b>Roadmap</b></a> ·
 <a href="DECISIONS.md"><b>Decisions (ADRs)</b></a>
@@ -92,7 +92,7 @@ personalization internals are proprietary and intentionally undocumented here - 
 
 <h3 align="center">🌐 Also new - your agent is online out of the box, and every tool call works</h3>
 
-<p align="center"><b>“Allow all websites + local LAN” is pre-checked</b>, so a fresh agent can browse and search the web immediately - while the curated, trust-scoped whitelist is one toggle away whenever you want to lock it down (it still asks before a public IP or a foreign-country site). And <b>v1.8.26 fixes a regression</b> where <code>bash</code> / <code>eval</code> / edit tool calls could silently fail with “denied by user” - approvals now surface correctly and gated commands run once approved.</p>
+<p align="center"><b>“Allow all websites + local LAN” is pre-checked</b>, so a fresh agent can browse and search the web immediately - while the curated, trust-scoped whitelist is one toggle away whenever you want to lock it down (it still asks before a public IP or a foreign-country site).</p>
 
 </div>
 
@@ -114,23 +114,20 @@ personalization internals are proprietary and intentionally undocumented here - 
 
 | Metric | Value |
 |:--|--:|
-| **Total Spend (all models)** | **$35.73** |
-| **Est. Cache Savings** | **$73.66** *(67% off full price)* |
-| **Cache Hit-Rate** | **82%** |
-| **Tokens Processed** | **21.34M** across 1,998 turns |
-| **Models Used** | **29** across 1,041 sessions |
+| **Total Spend (all models)** | **$493.21** |
+| **Est. Cache Savings** | **$3,190.65** *(87% off full price)* |
+| **Cache Hit-Rate** | **97%** |
+| **Tokens Processed** | **419.22M** across 4,049 turns |
+| **Models Used** | **13** across 1,319 sessions |
+| **Workspace Activity (July 2026)** | **+26.6k / -520** lines across 187 files |
 
 <br/>
 
-**Per-model breakdown** *(top models · 24 more in the ledger):*
+**Per-model breakdown** *(top model · 12 more in the ledger):*
 
 | Model | Turns | Tokens | Cost | Saved | Cache % |
 |:--|--:|--:|--:|--:|--:|
-| claude-opus-4-8 | 242 | 18.26M | $32.51 | $67.89 | **84%** |
-| claude-opus-4-6 | 14 | 791.7k | $1.32 | $3.17 | **92%** |
-| gpt-5.5 | 21 | 659.8k | $1.15 | $2.24 | 76% |
-| claude-sonnet-4-5 | 4 | 114.6k | $0.31 | $0.18 | 64% |
-| claude-sonnet-4-6 | 4 | 141.9k | $0.30 | $0.18 | 48% |
+| claude-fable-5 | 662 | 314.63M | $398.85 | $2,789.31 | **99%** |
 
 </td></tr></table>
 
@@ -180,6 +177,38 @@ personalization internals are proprietary and intentionally undocumented here - 
 
 ---
 
+## ✨ What's new in v1.10.5
+
+> Quality of life everywhere you look: watch your subagents think, graphs that open settled and
+> centered, a machine-aware guard for the heavy builds, and a trivia wire for the wait.
+
+- **🔬 Live subagent activity** - the delegation card now opens up: one row per subagent with a live
+  "now" line and tool count, each expandable into its actual trail - thinking, tool calls (with the
+  model's own intent notes), and output - refreshing while it works. *(ADR-0180)*
+- **🧭 Graphs form in place** - a knowledge or code graph with hundreds of nodes opens already settled,
+  centered, and still: the layout computes off-screen before the first paint, live updates nestle in
+  silently, and resizing the panel never shakes the canvas. Drag is the only thing that still moves.
+  *(ADR-0183)*
+- **🩺 System resource guard** - on a weak processor under heavy CPU/RAM load, the CPU-spike features
+  (the KG render and the Code Graph ingest) pause behind a notice that lists the top resource-hungry
+  processes to close, with a one-click re-check. Fail-open by design: a missing profile never blocks
+  a feature. *(ADR-0182)*
+- **🖥️ Electron preview, explained and runnable** - previewing an Electron app used to show a silent
+  white pane; now LUCID explains why and offers a user-clicked "Run with Electron" that launches the
+  real app outside LUCID (detached, audited as an exec event). *(ADR-0179)*
+- **🗞️ Trivia Wire** - a role-aware trivia ticker in the status bar's idle gap: developer, security
+  (CMMC/RMF), manager (CMMI-DEV), and executive banks - and the executive wire interleaves live
+  Intelligence/Defense-sector headlines, scanned and sanitized like everything else. *(ADR-0174-0176)*
+- **🧹 A calmer KG header** - the stacked Relate / Code graph / Compiled KB buttons are now one labeled
+  dropdown, and the title is a compact "KG". *(ADR-0184)*
+- **🛒 Marketplace curated for fit** - off-fit entries retired; **Mermaid**, **Gitleaks**, **Semgrep**,
+  **Trivy**, and **Pandoc** join as planned integrations. *(ADR-0181)*
+- **📦 Boot robustness** - the v1.10.2/v1.10.3 packaging regressions are fixed and guarded by a test
+  that boots a real filtered install, and the desktop shell now writes an `engine.log` for
+  supportability. *(ADR-0177/0178)*
+
+---
+
 ## ✨ What's new in v1.10.0
 
 > The biggest batch since 1.9 - run **local models**, a multimodal agent that **reviews its own UI**, native
@@ -187,9 +216,10 @@ personalization internals are proprietary and intentionally undocumented here - 
 > battery-aware performance epic - calmer knowledge-graph rendering and faster switches on battery.)
 
 - **🖥️ Local & hybrid providers** - point LUCID at a **self-hosted or custom LLM** (Ollama · llama.cpp · vLLM ·
-  any OpenAI-compatible endpoint), including a private box reached **over a VPN** (e.g. a DGX behind SonicWall).
-  Keys live in the **OS-encrypted vault** and never reach the renderer or the agent; add, key, and test each one
-  from a Settings card. *(ADR-0135)*
+  any OpenAI-compatible endpoint), including a private box reached **over a VPN**. Run U.S. open-weight model
+  families like **Gemma**, **Llama**, **gpt-oss**, and **Phi** entirely on your own hardware. Keys live in the
+  **OS-encrypted vault** and never reach the renderer or the agent; add, key, and test each one from a
+  Settings card. *(ADR-0135)*
 - **🖼️ Multimodal prompts** - **paste or drop a screenshot** straight into the prompt bar; it shows as a thumbnail
   above the composer and travels to the model as an image **only when you hit send** - no auto-push. *(ADR-0136)*
 - **👁️ The agent reviews & tests its work live** - as it screenshots, reads the DOM, and **clicks / types** in the
@@ -200,10 +230,10 @@ personalization internals are proprietary and intentionally undocumented here - 
   **builds a DESIGN.md** from it for you to edit in the IDE. *(ADR-0154)*
 - **🤖 Agent Builder** - **describe an agent and LUCID builds it**: an allow-list chip editor, live per-turn canvas
   collaboration, portable **share / import** with credential provisioning, **n8n** interop, and your own saved
-  **`/command`s**. *(ADR-0137–0146)*
+  **`/command`s**. *(ADR-0137-0146)*
 - **🧯 Agent Firewall** - reach remote **hermes / openclaw** agent runtimes through a **fail-closed security proxy**
   that scans both directions (blocks injected instructions outbound, quarantines + delimits replies inbound), with
-  per-connection permission policy - plus an in-process gate for **every MCP tool result**. *(ADR-0147–0152)*
+  per-connection permission policy - plus an in-process gate for **every MCP tool result**. *(ADR-0147-0152)*
 - **⌨️ Neovim & terminal** - drive LUCID from **Neovim** and the terminal, not just the desktop app. *(ADR-0150/0151)*
 
 ---
@@ -219,7 +249,7 @@ personalization internals are proprietary and intentionally undocumented here - 
 - [<img src=".github/assets/icons/security.svg" width="16" alt=""> Security model](#-security-model)
 - [<img src=".github/assets/icons/memory.svg" width="16" alt=""> Memory and the personalization graph](#-memory-and-the-personalization-graph)
 - [<img src=".github/assets/icons/gateway.svg" width="16" alt=""> Models and the AskSage gateway](#-models-and-the-asksage-gateway)
-- [📚 Knowledge & RAG (Coming Soon)](#-knowledge--rag-coming-soon)
+- [📚 Knowledge & RAG](#-knowledge--rag)
 - [<img src=".github/assets/icons/builton.svg" width="16" alt=""> Built on](#-built-on)
 - [<img src=".github/assets/icons/quickstart.svg" width="16" alt=""> Quick start](#-quick-start)
 - [<img src=".github/assets/icons/desktop.svg" width="16" alt=""> Desktop app](#-desktop-app)
@@ -308,6 +338,7 @@ way, whichever model you choose.
 | --- | --- | --- |
 | **U.S. frontier** | **Anthropic** (Claude), **OpenAI** (ChatGPT), **Google** (Gemini), **xAI** (Grok), **Perplexity** (Sonar) | OAuth subscription **or** API key |
 | **Government gateway** | **AskSage** - accredited proxy to Claude, GPT, and Gemini inside GovCloud, with scanned personas + dataset-grounded RAG | API key |
+| **Local / self-hosted** | **Ollama**, **llama.cpp**, **vLLM**, or any OpenAI-compatible endpoint (incl. one reached over a VPN) - run U.S. open-weight model families like **Gemma**, **Llama**, **gpt-oss**, and **Phi** on your own hardware, fully offline | None, or your endpoint's key (OS-encrypted vault) |
 | **More providers** _(third-party / non-U.S. / custom, behind an acknowledgement)_ | **OpenRouter**, **DeepSeek**, **Moonshot / Kimi**, **Groq** | API key |
 
 <sub>The catalog is **driven by omp** - as the runtime adds providers and models in future builds, they appear
@@ -467,10 +498,13 @@ be enabled to stretch a gov token quota ([ADR-0008](DECISIONS.md)).
 <sub><b>↑ AskSage gov-gateway "lockdown"</b> - one toggle routes <i>every</i> turn through the accredited gateway and hides direct providers in the model picker; the monthly token-quota meter and personalization (private · encrypted · opt-in) sit alongside.</sub>
 </div>
 
-## 📚 Knowledge & RAG (Coming Soon)
+## 📚 Knowledge & RAG
 
-> **Designed in [ADR-0053](DECISIONS.md); building next as `P-RAG.1-4`.** Bring your own documents into the
-> agent's context - **two paths, one trust boundary**, both scanned by the same fail-closed gate.
+> **The local spine is shipped** ([ADR-0053/0058/0063/0064](DECISIONS.md)): scan-gated PDF ingest into an
+> air-gapped DuckDB vector store with real bge-small **semantic retrieval**, injected delimited and
+> post-cache. The guided import popup and AskSage dataset training land next as `P-RAG.2-4`. Bring your
+> own documents into the agent's context - **two paths, one trust boundary**, both scanned by the same
+> fail-closed gate.
 
 - 🔒 **Local-first and air-gapped.** Drag in PDFs and images; they're parsed, embedded, and indexed **entirely on your machine** - no document ever leaves the host.
 - 🖼️ **PDF + image ingest.** Local PDF text extraction, plus a caption for each image so it works in multimodal prompts (optional on-device OCR).
@@ -481,27 +515,27 @@ be enabled to stretch a gov token quota ([ADR-0008](DECISIONS.md)).
 Every ingested chunk runs the **same lifecycle as everything else** - scanned, trust-labeled, and quarantined
 if poisoned, *before* it can ever be embedded or recalled. (Keystone #2 holds for RAG too.)
 
-> **🧠 Compiled KB - a knowledge base that accumulates (coming soon).** Designed in
+> **🧠 Compiled KB - a knowledge base that accumulates (shipped).** Built in
 > [ADR-0099](DECISIONS.md)/[ADR-0100](DECISIONS.md) (`P-KB.1-2`), a **sibling** to the vector spine you can
 > use in parallel or on its own. Instead of opaque chunks, an LLM **compiles** your documents into a
 > persistent wiki of **summary, concept, and entity pages** joined by **cross-reference links** and **kept in
 > sync** - structural, citation-backed retrieval inspired by [OpenKB](https://github.com/VectifyAI/OpenKB),
 > rebuilt in **TypeScript + DuckDB (no Python)**. Same fail-closed gate on the source **and** on every
 > model-compiled page (derived content never auto-trusts - keystone #2). One retrieval router answers from
-> **vector, compiled, or both**, and the page graph renders in the existing graph view.
+> **vector, compiled, or both**, and the page graph renders in the KG canvas (the "Compiled KB" view).
 
-## 🧩 Agent Skills directory & enterprise registry (Coming Soon)
+## 🧩 Agent Skills directory & enterprise registry
 
-> **Designed in [ADR-0097](DECISIONS.md) (the directory + management menu) and [ADR-0098](DECISIONS.md)
-> (the enterprise registry spike).** An [Agent Skill](https://agentskills.io) is a `SKILL.md` folder the
-> agent loads on demand - procedural memory that costs only a few metadata tokens until it triggers.
-> LucidAgentIDE already ships a curated bundled corpus and scan-gated skill import; next is one place to
-> **see and govern every skill** - and a path to host your own private registry.
+> **Shipped** ([ADR-0097](DECISIONS.md) directory + management, [ADR-0101](DECISIONS.md) Skill Studio,
+> [ADR-0098/0102](DECISIONS.md) registry reader + publish seams). An [Agent Skill](https://agentskills.io)
+> is a `SKILL.md` folder the agent loads on demand - procedural memory that costs only a few metadata
+> tokens until it triggers. LucidAgentIDE ships a curated bundled corpus, scan-gated skill import, and one
+> place to **see and govern every skill** - with a path to host your own private registry.
 
 - 🗂️ **One directory, every source.** Bundled, project (`.omp/skills`), user, and curated `.agents/skills/` skills in a single view - each with its **source root**, **trust label**, invocation id, and real progressive-disclosure token cost.
 - 🎛️ **Manage, don't just list.** Inspect a skill's body + bundled scripts/references read-only, **enable/disable** it, **re-scan** it through the fail-closed gate, and remove imported ones - bundled assets stay immutable.
 - 🛡️ **Fail-closed by construction.** A `suspicious`/`quarantined` skill is shown but **cannot be enabled or loaded**; a dead scanner on re-scan means quarantine, never "safe." Skill bodies are delimited *data*, never instructions (keystone #2 holds for skills too).
-- 🛠️ **Skill Studio - turn your week into skills (coming soon).** Designed in [ADR-0101](DECISIONS.md) (`P-SKILL.5`), a one-click button that analyzes your **day's or week's** work (sessions, AI-authored edits, loop outcomes) and **drafts Agent Skills** with your most-used model - each one **scanned before it's saved** and **reviewed before it's codified** (a reviewed draft is excellent; an un-reviewed one is worse than none). Codified skills land in your **Local Skills Registry**.
+- 🛠️ **Skill Studio - turn your week into skills (shipped).** Built in [ADR-0101](DECISIONS.md) (`P-SKILL.5`), a one-click button that analyzes your **day's or week's** work (sessions, AI-authored edits, loop outcomes) and **drafts Agent Skills** with your most-used model - each one **scanned before it's saved** and **reviewed before it's codified** (a reviewed draft is excellent; an un-reviewed one is worse than none). Codified skills land in your **Local Skills Registry**.
 - 🏛️ **Enterprise skills registry - reader seam ships now (`P-SKILLREG.1`).** The source-available app carries the read-only **registry reader**: an install is **fetch → verify (Ed25519 signature vs. your trusted keys) → scan-gate (the same fail-closed gate) → install**, and an **unsigned, signature-mismatched, unconfigured-key, or scan-flagged** skill is **blocked, never written** (keystone #2: an installed registry skill is shown `untrusted`, never auto-promoted to trusted). Installed skills appear in the directory above under a **Registry** source. The hosting side - publish/version/**sign (Cosign + SLSA)**/distribute as portable **OCI artifacts on an S3-compatible backend** that stands up identically on **AWS, Azure, Google Cloud, OCI, IBM Cloud, VMware, Nutanix, NetApp ONTAP, and KVM** via Terraform, incl. **air-gapped and IL5** partitions - is the separately-licensed add-on (server + runbooks are private IP).
 - 🚀 **Push to where your org already lives - publish seam ships now (`P-SKILLREG.2`).** A single **`RegistryPublisher`** seam ships in the core with a default **`LocalRegistryPublisher`** (serves your skills as the Local Skills Registry) + a fail-safe `PublishDispatcher` (a dead/missing publisher never throws into a turn; a declared remote with no publisher is a clean no-op). The remote publishers - enterprise cloud OCI registries (AWS/Azure/GCP/Oracle/IBM) and **custom git** (Enterprise GitLab, GitHub, Azure DevOps) - implement the same interface and are a separately-licensed add-on. Publishing establishes **no trust**: the read side still verifies the signature + scan-gates before install; every remote push is **egress-gated** and centrally policy-clamped.
 
@@ -529,7 +563,7 @@ cd scanner-sidecar && uv sync     # pinned Python sidecar venv
 
 # prove it end-to-end
 bun run demo-00                   # omp echo round-trip + scanner + fail-closed proof
-make test                         # full suite: harness + desktop + scanner sidecar (1,700+ tests)
+make test                         # full suite: harness + desktop + scanner sidecar (1,900+ tests)
 bun run demo-P4.3                 # poisoned memory can't auto-promote (keystone #2)
 bun run demo-P2.1                 # unicode scanner: every finding fires, clean corpus is FP-free
 ```
@@ -653,12 +687,13 @@ section. Read your own, link a teammate to theirs, or hand the security guide to
 the desktop app, and the AskSage gov gateway (with tool use on Claude *and* Gemini). Plus cross-model cost
 tracking, CUI isolation, the encrypted personalization graph with cross-session recall (and one-click
 Obsidian-vault export), AI-authorship attribution, one-command import, a read-write IDE with gated saves,
-and the **`/goal` loop** with full loop-engineering (after-action reports, a budget kill switch, and stall
-guards). **Newest:** a local **RAG knowledge spine** (scan-gated PDF → air-gapped vector store), per-action
-**exec approval** for `bash`/`eval` + a per-command **Speed↔Risk dial** for the unattended loop,
-centrally-managed (GPO/MDM) policy, and a SIEM-ready **OCSF audit-export** seam. **Newest:** **role-based
-user guides** (Dev/Sec/Mgr/Exec) and a sweep of agent-trust UX fixes - an honest failed/rejected tool-call
-chip, accurate + audited handling of a local-file browser open, and a discoverable AI-authorship ledger.
+the **`/goal` loop** with full loop-engineering (after-action reports, a budget kill switch, and stall
+guards), a local **RAG knowledge spine** + the **compiled KB** with hybrid retrieval, the governed **skills
+directory** + **Skill Studio**, **local & hybrid providers**, the **Agent Builder**, the **agent firewall**,
+and the **runtime execution boundary** (OS-isolated exec + mediated egress). **Newest (v1.10.5):** live
+**subagent activity** in the delegation card, graphs that **form in place** (no on-screen settle), a
+**system resource guard** for the heavy builds, the explained + runnable **Electron preview**, the
+**Trivia Wire** status-bar ticker, and a curated **plugin marketplace**.
 
 Every test suite passes and `tsc --noEmit` is clean across all three projects (TypeScript + Python). The
 table below is the recent slice; [`PROGRESS.md`](PROGRESS.md) has the full per-session log.
@@ -667,6 +702,8 @@ table below is the recent slice; [`PROGRESS.md`](PROGRESS.md) has the full per-s
 
 | Phase | Feature | ADR |
 |:--|:--|:--|
+| **v1.10.5 batch** | **Live subagent activity** (the delegation card opens each subagent's thinking/tools/output), **graphs form in place** (off-screen settle, snap-centered open), a **system resource guard** (weak CPU under load pauses heavy builds behind a what-to-close panel), the **Electron preview** explained + runnable outside LUCID, the role-aware **Trivia Wire** ticker, a **curated plugin marketplace** (Mermaid/Gitleaks/Semgrep/Trivy/Pandoc), and a decluttered KG header | [ADR-0174-0184](DECISIONS.md) |
+| **P-SKILL.4-5 · P-KB.1-2b · P-SKILLREG.1-2** | **Skills governed + Skill Studio + compiled KB** - the skills directory (source root, trust label, enable/disable, re-scan, remove), Skill Studio drafts skills from your recent work (scanned before saved, reviewed before codified), the registry reader + publish seams, and the OpenKB-style compiled KB with the vector/compiled/both retrieval router + its page-graph view | [ADR-0097-0102](DECISIONS.md) |
 | **P-EXEC.2** | **Tool calls fixed in live chat** - omp 16.1 moved per-tool approval to a FORM elicitation the client must advertise; without it every `bash`/`eval`/edit/delete call silently failed with "Tool call denied by user" and no prompt. LUCID now advertises `elicitation.form` and answers the approval, so the approve/deny prompt surfaces and gated commands run once approved (our `session/request_permission` gate stays authoritative) | [ADR-0110](DECISIONS.md) |
 | **P-NETWL.5 · P-IDE.1e** | **Easy egress + Fable 5** - two pre-checked toggles ("Allow web search", "Allow all websites + local LAN") so agents reach the internet out of the box; the curated whitelist enforces only when "Allow all" is off, and even on it still asks before a public IP or a foreign-country site (enterprise policy can force whitelist-only). Plus **Fable 5** in the model picker when a Claude account is connected, with a U.S.-government privacy notice | [ADR-0108/0109](DECISIONS.md) |
 | **P-NETWL.1-4 · P-KEYS.1-2** | **Network whitelist + credential vault** - a curated allow-list of domains (`*.com` TLD + exact) and IP/CIDR ranges by internal/external zone, managed in Settings, with **enforced** trust scopes (`always` / `project` / this-`loop`) + a per-loop **call budget**; a match auto-allows the agent's network calls *under* the enterprise-managed ceiling (fail-closed). Click a **DNS pill** in Network diagnostics to whitelist a host the agent just resolved. Optional per-site auth (JWT/OAuth/SAML/PEM/API-key/basic) is stored **OS-encrypted** (DPAPI/Keychain/libsecret) via paste or native file upload - refused, never plaintext, if encryption is unavailable - shown masked as `••••XXXX` (last-4 only), with **rotation visibility** (rotated Nd ago / rotation due / expired) and one-click **rotate-in-place** | [ADR-0106/0107](DECISIONS.md) |
@@ -690,14 +727,12 @@ table below is the recent slice; [`PROGRESS.md`](PROGRESS.md) has the full per-s
 
 | Theme | ADR |
 |:--|:--|
-| **Agent Skill directory + management menu P-SKILL.4** - one governed view of every skill (bundled · project · user · `.agents`) with source, trust label, enable/disable, inspect, re-scan, and remove | [ADR-0097](DECISIONS.md) |
-| **Enterprise Skills Registry P-SKILLREG.1** - sign/scan/version/distribute skills as portable OCI artifacts (S3 backend) across AWS/Azure/GCP/OCI/IBM + VMware/Nutanix/ONTAP/KVM, incl. IL5; public ships the registry-reader seam, runbooks are private add-on IP | [ADR-0098](DECISIONS.md) |
-| **Compiled KB P-KB.1-2** - an OpenKB-style document KB (summary/concept/entity pages + cross-links, kept in sync) as a TS+DuckDB **sibling** to the vector spine, with a router that answers from vector / compiled / both | [ADR-0099/0100](DECISIONS.md) |
-| **Skill Studio P-SKILL.5** - analyze your day/week of work → draft scanned, reviewable Agent Skills into the Local Skills Registry | [ADR-0101](DECISIONS.md) |
-| **Skill publish seam P-SKILLREG.2** - a `RegistryPublisher` interface + default local publisher in core; remote cloud + git (GitLab/GitHub/Azure DevOps) publishers are private add-on IP, egress-gated | [ADR-0102](DECISIONS.md) |
-| **Exec-tool safety P-EXEC.2** - extend the per-action gate to `ssh` (key = host) and `task` sub-agents | [ADR-0066](DECISIONS.md) |
+| **Guided Knowledge & RAG import P-RAG.2-4** - the one-popup ingest walkthrough with a parse-and-scan preview, image captioning/OCR, and AskSage dataset training on the local spine | [ADR-0053](DECISIONS.md) |
+| **Marketplace installs P-MARKET.2** - install a curated integration from a GitHub URL, gated exactly like agent-template import (digest + scan + trust label + approval) | [ADR-0158/0181](DECISIONS.md) |
+| **Generated trivia packs P-TRIV.4** - the Trivia Wire drafts fresh role-relevant question packs with a cheap checker-tier model, gated before they enter the rotation | [ADR-0176](DECISIONS.md) |
+| **Exec-tool safety** - extend the per-action gate to `ssh` (key = host) and `task` sub-agents | [ADR-0066](DECISIONS.md) |
 | **SIEM connectors** - Splunk HEC / syslog-CEF / Elastic / cloud sinks behind the now-shipped OCSF audit-export `Sink` interface | [ADR-0069](DECISIONS.md) |
-| **AskSage dataset training** - ground the gov gateway on the local knowledge spine | [ADR-0053](DECISIONS.md) |
+| **Windows runtime containment (enterprise)** - the verified AppContainer backend + the admin loopback exemption that unlocks mediated egress on Windows | [ADR-0173](DECISIONS.md) |
 | Prompt/response traceability · dev-mode logging deepening | [ADR-0009](DECISIONS.md) |
 
 See [`PROGRESS.md`](PROGRESS.md) for the per-session log (shipped / stubbed / next).
@@ -708,7 +743,7 @@ Built in the open, **one disciplined increment at a time.** If you want to run i
 or propose a change, start here:
 
 - **Read [`CLAUDE.md`](CLAUDE.md) first.** It's the load-bearing contract - fail-closed, extend omp (don't fork), frozen contracts, a byte-stable prompt. A change that silently breaks an invariant won't land.
-- **ADR-first.** Non-trivial work begins as an ADR in [`DECISIONS.md`](DECISIONS.md) (102 and counting) - pick one up, or propose your own.
+- **ADR-first.** Non-trivial work begins as an ADR in [`DECISIONS.md`](DECISIONS.md) (184 and counting) - pick one up, or propose your own.
 - **One increment per change.** Small, verifiable, with a demo and tests. See [`CHEATSHEET.md`](CHEATSHEET.md) for day-to-day commands.
 - **Tests are the gate.** `bun test harness && bun test desktop` stay green and `tsc --noEmit` is clean; CI runs the build + CodeQL on every push.
 - **The only Python is the scanner sidecar.** Everything else is TypeScript on Bun - please don't add a second Python surface.
@@ -730,7 +765,7 @@ robustness (Windows + macOS installers).
 | Doc | What's in it |
 |:--|:--|
 | [`CLAUDE.md`](CLAUDE.md) | **Read first.** The load-bearing invariants (fail-closed, extend-don't-fork, frozen contracts, byte-stable prefix) |
-| [`DECISIONS.md`](DECISIONS.md) | Architecture decision records (ADR-0001 … ADR-0096) |
+| [`DECISIONS.md`](DECISIONS.md) | Architecture decision records (ADR-0001 … ADR-0184) |
 | [`PROGRESS.md`](PROGRESS.md) | Per-session build log: shipped / stubbed / next |
 | [`desktop/README.md`](desktop/README.md) | The desktop GUI + dev server |
 | [`CHEATSHEET.md`](CHEATSHEET.md) | Day-to-day commands |
