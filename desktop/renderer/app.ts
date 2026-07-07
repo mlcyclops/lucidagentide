@@ -33,6 +33,7 @@ import { renderMarkdown } from "./markdown.ts";
 import { type GraphHandle, kindLabel, mountGraph } from "./graph.ts";
 import { addEdgeOptimistic, applyForget, chainPairs, matchNodes, removeEdgeOptimistic, resolveRelationLabel } from "./kg_ops.ts";
 import { capGraph, graphOpts, pollDelay, watchPerfTier } from "./perf_tier.ts";
+import { guardBlockedHtml, resourcePanelBodyHtml, resourcePanelHtml, type SystemStatusView } from "./system_guard.ts"; // P-SYSRES.1 (ADR-0182)
 import type { KbGraphView, PersonalGraphData } from "./bridge.ts";
 import { agentBuilderPanelHtml, specToGraphData, nodeEditorHtml, saveErrors, newCanvasSpec, runPanelHtml, secretsPanelHtml, agentInterviewPrompt, toolChipsHtml, trustBannerHtml, runApprovalHtml, runsPanelHtml, traceDetailHtml, schedulePanelHtml, historyPanelHtml, templatesPanelHtml } from "./agent_builder.ts"; // P-AGENT.2b/.4-live/.8/.9/.11a/.13/.14/.17
 import type { TrustLabel } from "../../harness/contracts.ts"; // P-AGENT.9: imported-agent trust banner
@@ -3839,6 +3840,43 @@ function paintPerfChip(): void {
   const m = perfWatch.mode();
   b.innerHTML = `${icon("gauge", 13)} ${m === "auto" ? `Auto · ${perfWatch.tier()}` : m}`;
 }
+// P-SYSRES.1 (ADR-0182): the resource-guard blocked card. Unlike the P-PERF.2 pause there is NO
+// "render anyway" - a machine at the blocked line would freeze; the way out is closing applications
+// (the panel shows which) and re-checking. Re-check busts the 5s memo so the verdict is live.
+function renderSysBlocked(canvas: HTMLElement, sys: SystemStatusView, feature: string, retry: () => void): void {
+  const side = $("#kgSide") as HTMLElement | null;
+  if (side) { side.hidden = true; side.innerHTML = ""; }
+  canvas.innerHTML = guardBlockedHtml(sys, feature);
+  showKgCenter(false); syncKgSideOpen();
+  canvas.querySelector("[data-sys-panel]")?.addEventListener("click", () => openResourcePanel(sys));
+  canvas.querySelector("[data-sys-recheck]")?.addEventListener("click", () => { void bridge.systemStatus(true).then(() => retry()); });
+}
+/** The System resources modal (About/Marketplace scrim conventions). Refresh re-samples fresh. */
+function openResourcePanel(status: SystemStatusView): void {
+  if ($("#sysresModal")) return; // already open - don't stack
+  const ov = el(`<div id="sysresModal" class="mkt-scrim">${resourcePanelHtml(status)}</div>`);
+  const close = () => { ov.remove(); document.removeEventListener("keydown", onKey); };
+  const onKey = (ev: KeyboardEvent) => { if (ev.key === "Escape") { ev.preventDefault(); close(); } };
+  ov.addEventListener("click", (ev) => {
+    const t = ev.target as HTMLElement;
+    if (t.closest("[data-sys-refresh]")) {
+      void bridge.systemStatus(true).then((fresh) => {
+        const body = ov.querySelector("#sysresBody");
+        if (body && fresh) body.innerHTML = resourcePanelBodyHtml(fresh);
+      });
+      return;
+    }
+    if (t === ov || t.closest("[data-sys-close]")) close(); // backdrop or the X
+  });
+  document.addEventListener("keydown", onKey);
+  document.body.append(ov);
+}
+/** Palette entry point: sample first (fresh), then open. */
+async function openResourcePanelLive(): Promise<void> {
+  const status = await bridge.systemStatus(true).catch(() => null);
+  if (!status) { showToast({ title: "System resources", desc: "Couldn't read a system profile on this platform.", actions: [{ label: "OK" }], timeout: 3200 }); return; }
+  openResourcePanel(status);
+}
 async function renderKnowledge(): Promise<void> {
   const canvas = $("#kgCanvas"), side = $("#kgSide"), scopeLbl = $("#kgScopeLbl");
   if (!canvas || !side) return;
@@ -3860,6 +3898,10 @@ async function renderKnowledge(): Promise<void> {
     if (status.configured) return renderKgLocked(canvas as HTMLElement);
     return gate("Personalization isn't set up yet. Create a passphrase in Settings to start your private graph.");
   }
+  // P-SYSRES.1 (ADR-0182): hard-pause the CPU-heavy graph build while the machine is starved. Checked
+  // BEFORE the decrypt so pausing skips that cost too. Fail-open: no profile evidence never blocks.
+  const sysKg = await bridge.systemStatus().catch(() => null);
+  if (sysKg?.verdict.level === "blocked") return renderSysBlocked(canvas as HTMLElement, sysKg, "knowledge graph", () => void renderKnowledge());
   // P-PERF.2: pause BEFORE the decrypt - skipping the render should skip its cost too.
   if (perfWatch.tier() === "minimal" && !kgForceRender) return renderKgPaused(canvas as HTMLElement);
   try { kgData = await bridge.personalGraph(); }
@@ -3971,6 +4013,14 @@ async function renderCodeGraph(ingest: boolean, level: "file" | "symbol" = codeG
   const busy = ingest ? (level === "symbol" ? "Parsing symbols (AST)…" : "Ingesting the workspace…") : "Loading the code graph…";
   canvas.innerHTML = `<div class="skel-kg">${icon("refresh", 26, "spin")}<div>${busy}</div></div>`;
   if (side) { side.hidden = true; side.innerHTML = ""; }
+  // P-SYSRES.1 (ADR-0182): the AST ingest is the app's biggest CPU spike - hard-pause it while the
+  // machine is starved (notice + what-to-close panel + re-check). Fail-open on missing evidence.
+  const sysCg = await bridge.systemStatus().catch(() => null);
+  if (sysCg?.verdict.level === "blocked") {
+    renderSysBlocked(canvas as HTMLElement, sysCg, "code graph", () => void renderCodeGraph(ingest, level));
+    updateCodeGraphButtons(true, null);
+    return;
+  }
   let data = ingest ? await bridge.codeGraphIngest(level).catch(() => null) : await bridge.codeGraph(level).catch(() => null);
   if (data && !data.ingested && !ingest) data = await bridge.codeGraphIngest(level).catch(() => null); // never built → build now
   if (!data || !data.nodes.length) {
@@ -7993,6 +8043,7 @@ const palette = createPalette(() => {
     { id: "sec", title: "Open Security panel", icon: "shield", hint: "panel", run: () => focusInspector("security") },
     { id: "mem", title: "Open Memory & context panel", icon: "savings", hint: "panel", run: () => focusInspector("memory") },
     { id: "mkt", title: "Open Plugin Marketplace", icon: "market", hint: "popup", run: () => openMarketplace() }, // P-MARKET.1
+    { id: "sysres", title: "Open System resources", icon: "gauge", hint: "popup", run: () => void openResourcePanelLive() }, // P-SYSRES.1
     // P-LOC.3 (ADR-0095): a discoverable entry point for the AI-authored code ledger — opens Memory with
     // the section expanded, so it no longer has to be hunted for inside the panel.
     { id: "ailoc", title: "Open AI-authored code ledger", icon: "savings", hint: "panel", run: () => { OPEN.add("mem.ailoc"); focusInspector("memory"); } },

@@ -789,6 +789,31 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .mkt-repo:hover{background:var(--accent-dim);color:var(--txt);border-color:color-mix(in srgb,var(--accent) 40%,var(--line))}
 .mkt-empty{padding:22px 0;text-align:center;font-size:12.5px;color:var(--txt-3)}
 
+/* P-SYSRES.1 (ADR-0182): the resource-guard blocked card + the System resources panel. */
+.sysres-blocked .sysres-why{margin:2px 0 0;padding-left:18px;text-align:left;font-size:12px;color:var(--txt-3);line-height:1.5}
+.sysres-machine{font-size:11px;font-family:var(--mono);color:var(--txt-3);display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.sysres-actions{display:flex;gap:8px;margin-top:4px}
+.sysres-modal{width:min(560px,93vw);background:var(--bg-1);border:1px solid var(--line-strong);border-radius:16px;padding:20px;
+  box-shadow:0 20px 60px rgba(0,0,0,.55);display:flex;flex-direction:column;gap:10px;animation:rise var(--t-slow) var(--ease-out);
+  max-height:88vh;overflow-y:auto;scrollbar-gutter:stable}
+.sysres-h{display:flex;align-items:center;gap:8px;font-size:15px;font-weight:650;color:var(--txt)}
+.sysres-h .ic{color:var(--accent-2)}
+.sysres-h .btn-mini{margin-left:auto}
+.sysres-chip{font-size:10px;font-weight:650;letter-spacing:.03em;text-transform:uppercase;border-radius:999px;padding:1.5px 8px;white-space:nowrap}
+.sysres-ok{color:var(--ok,#4cbf7a);background:color-mix(in srgb,var(--ok,#4cbf7a) 12%,transparent);border:1px solid color-mix(in srgb,var(--ok,#4cbf7a) 35%,var(--line))}
+.sysres-warn{color:var(--warn,#d9a13c);background:color-mix(in srgb,var(--warn,#d9a13c) 12%,transparent);border:1px solid color-mix(in srgb,var(--warn,#d9a13c) 35%,var(--line))}
+.sysres-bad{color:var(--danger,#d96a6a);background:color-mix(in srgb,var(--danger,#d96a6a) 12%,transparent);border:1px solid color-mix(in srgb,var(--danger,#d96a6a) 35%,var(--line))}
+.sysres-why{margin:0;padding-left:18px;font-size:12px;color:var(--txt-3);line-height:1.5}
+.sysres-head,.sysres-row{display:grid;grid-template-columns:1fr 84px 84px;gap:8px;align-items:center}
+.sysres-head{font-size:10.5px;font-weight:650;letter-spacing:.04em;text-transform:uppercase;color:var(--txt-4);padding:2px 10px 0}
+.sysres-list{display:flex;flex-direction:column;gap:4px}
+.sysres-row{padding:7px 10px;border:1px solid var(--line);border-radius:9px;background:var(--bg-2);font-size:12.5px;color:var(--txt-2)}
+.sysres-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--txt)}
+.sysres-count{margin-left:6px;font-size:10.5px;color:var(--txt-4);font-family:var(--mono)}
+.sysres-mem,.sysres-cpu{font-family:var(--mono);font-size:11.5px;color:var(--txt-3);text-align:right;white-space:nowrap}
+.sysres-empty{padding:16px 0;text-align:center;font-size:12.5px;color:var(--txt-3)}
+.sysres-foot{font-size:11.5px;color:var(--txt-4);line-height:1.45}
+
 /* P-GOAL.1: /goal loop launcher modal + the in-chat loop rendering. */
 .goal-scrim{position:fixed;inset:0;z-index:200;background:rgba(0,0,0,.55);display:grid;place-items:center;animation:fade var(--t) var(--ease)}
 /* P-GOAL.7: larger, higher-contrast text across the whole module for easier reading */

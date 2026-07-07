@@ -592,3 +592,7 @@ demo-P-PREVIEW.7: ## P-PREVIEW.7 (ADR-0179): the silent-white preview explained 
 .PHONY: demo-P-TASK.5
 demo-P-TASK.5: ## P-TASK.5 (ADR-0180): live subagent activity - the delegation card opens each subtask (generated name, live now-line, thinking/tool/text steps tailed from omp's per-subtask transcripts); read-only + path-confined + corrupt-tolerant + bounded; never-delegated sessions fail-quiet
 	$(BUN) run harness/scripts/demo_ptask5.ts
+
+.PHONY: demo-P-SYSRES.1
+demo-P-SYSRES.1: ## P-SYSRES.1 (ADR-0182): the system resource guard - a weak CPU under heavy load / RAM pressure pauses the KG + Code Graph builds behind a notice (why + machine line + top-processes panel + re-check, no escape hatch); FAIL-OPEN (no evidence never blocks); read-only fixed-argv process listing
+	$(BUN) run desktop/scripts/demo_p_sysres_1.ts

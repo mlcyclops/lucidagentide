@@ -14,6 +14,7 @@ import type { AgentSpec } from "../../harness/agent/spec.ts"; // P-AGENT.2b: Age
 import type { SpecFileSummary } from "../../harness/agent/file_store.ts"; // P-AGENT.2b: spec list summary
 import type { UserCommand } from "../../harness/commands/spec.ts"; // P-CMD.1: user-authored slash commands
 import type { AgentRunTrace, TraceSummary } from "../../harness/agent/trace.ts"; // P-AGENT.13: run traces
+import { isSystemStatus, type SystemStatusView } from "./system_guard.ts"; // P-SYSRES.1: resource guard view (types owned there - layering rule)
 
 /** P-AGENT.12: an MCP-discovered catalog entry (name is the omp runtime name: mcp__<server>_<tool>). */
 export interface McpCatalogTool {
@@ -660,6 +661,8 @@ export interface LucidBridge {
   previewElectronLaunch(path: string): Promise<{ launched: boolean; via?: string; appDir?: string; reason?: string } | null>;
   // P-TASK.5 (ADR-0180): live subagent activity behind the current session's delegation
   subagents(): Promise<{ runs: { name: string; done: boolean; lastAt: number; assignment: string; model: string | null; tools: number; steps: { kind: string; tool?: string; label: string }[] }[] } | null>;
+  // P-SYSRES.1 (ADR-0182): system resource profile + guard verdict (types live in system_guard.ts)
+  systemStatus(fresh?: boolean): Promise<SystemStatusView | null>;
   listDir(path?: string): Promise<FsList | null>; // in-app folder browser (works everywhere)
   revealPath(path: string): Promise<boolean>; // open a folder in the OS file manager (Electron only; false in browser)
   canRevealPath(): boolean; // whether the native shell can reveal a folder (Electron only)
@@ -988,6 +991,10 @@ export const bridge: LucidBridge = {
   previewElectronDetect: (path) => getData(`/api/preview/electron-detect?path=${encodeURIComponent(path)}`), // P-PREVIEW.7
   previewElectronLaunch: (path) => post("/api/preview/electron-launch", { path }), // P-PREVIEW.7
   subagents: () => getData("/api/subagents"), // P-TASK.5
+  systemStatus: async (fresh) => { // P-SYSRES.1: fail-open - malformed/missing reads as null (never blocks)
+    const v: unknown = await getData(`/api/system${fresh ? "?fresh=1" : ""}`).catch(() => null);
+    return isSystemStatus(v) ? v : null;
+  },
 
 
   listDir: (path) => getData(`/api/fs/list${path ? `?path=${encodeURIComponent(path)}` : ""}`),
