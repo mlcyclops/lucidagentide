@@ -140,4 +140,13 @@
 //           skills never appeared. Exclusion dropped; the packaging guard now materializes a REAL filtered
 //           install (excluded packages absent, stripped file types deleted) and requires boot + every lazy
 //           feature dep to load, so broken-but-quiet features fail CI too.
-export const APP_VERSION = "1.10.4";
+// v1.10.5 = the QUALITY batch (ADR-0179-0185): LIVE SUBAGENT ACTIVITY (the delegation card opens each
+//           subagent's thinking/tool calls/output, tailed from omp's per-subtask transcripts, P-TASK.5);
+//           graphs FORM IN PLACE (the KG/code-graph settle runs off-screen, opens snapped at the final
+//           center, parked - no on-screen shake, P-KGVIZ.1); the SYSTEM RESOURCE GUARD (a weak CPU under
+//           heavy load pauses the heavy graph builds behind a notice + top-processes panel + re-check,
+//           FAIL-OPEN, P-SYSRES.1); the ELECTRON PREVIEW explained + runnable outside LUCID (user-clicked,
+//           audited, P-PREVIEW.7); the KG header decluttered to "KG" + two labeled dropdowns (views + Data,
+//           P-KGUI.1/.2); and the marketplace curated for fit (Mermaid/Gitleaks/Semgrep/Trivy/Pandoc in,
+//           competitors out, P-MARKET.1b).
+export const APP_VERSION = "1.10.5";
