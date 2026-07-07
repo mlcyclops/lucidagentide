@@ -12814,3 +12814,57 @@ close, and Re-check with the stub removed lifted the pause and the feature proce
 ADR-0129 (P-PERF.2 render tiers - power-aware fidelity; this ADR is load-aware availability),
 ADR-0181/0158 (the Market ADR chain this continues), invariant 3 (why this one is fail-OPEN, stated
 rather than silent).
+
+## ADR-0183 - P-KGVIZ.1: form in place - the graph settle moves off-screen, BUILT
+
+**Date:** 2026-07-06
+**Status:** Accepted / Built + tested + verified live (real renderer mount: formed, parked, camera
+pre-snapped; drag still works and re-rests).
+
+### Context
+
+Opening the knowledge graph (or code graph) with hundreds of nodes meant seconds of on-screen
+chaos: nodes seeded in a circle, then the force sim ran up to 480 VISIBLE frames while the camera
+eased toward checkpoint fits at frames 90/240/478 - everything moving at once, "disorienting, and
+I can't really do anything with it" (user). Toggling the side panel reheated the sim for another
+160 visible frames, and every live data merge did the same. The engine already had the right
+primitives (energy-based settleDone, fitTransform, the P-PERF.3 layout cache) - the settle just
+happened in front of the user.
+
+### Decision
+
+1. **The physics step is extracted pure** (`kg_ops.stepForces`: charge + collision, springs as
+   index pairs, centering, eased damping - byte-for-byte the old tick math). The live tick and the
+   new off-screen settle share it, so "form in place" lands on the same layouts as before.
+2. **`kg_ops.presettle`** runs the sim to rest BEFORE the first paint: stops at energy rest
+   (settleDone, with the grace measured in iterations RUN so late-start restarts still unfold
+   newborn nodes), the frame budget, or a wall-clock deadline (calm 220ms / full 420ms; a HUGE
+   graph gets a decent layout, never a hang) - whichever first. The mount then PARKS the sim
+   (frames = SETTLE) regardless: a stable, slightly-imperfect layout beats a wobbling perfect one.
+3. **The camera opens at the settled center**: the one-time fit SNAPS (computeFit(…, snap)) instead
+   of easing - "just be where the center of it is gonna be". A 0.3s opacity fade (`.kg-form`)
+   reveals the formed graph; motion-free, skipped under calm/reduced-motion.
+4. **Live merges settle silently too**: update() replaces its reheat with a short presettle
+   (deadline 200ms, late-start frames) - newcomers nestle among inertia-pinned neighbors with no
+   visible shake (measured: settled neighbors drift <60px worst-case, typically ~12px, instantly).
+   Mid-drag merges keep the live reheat (the held node must stay under the cursor).
+5. **Resizes re-fit, never reheat** - toggling the facts panel adjusts the camera only.
+6. The only VISIBLE simulation left is node-drag (deliberate: neighbors adjusting to your drag is
+   feedback, not noise), and it parks again at rest.
+
+### Verified
+
+8 new kg_ops tests (repulsion/spring/hold contracts, finite positions, Σv² semantics; presettle:
+rest-before-budget on a 150-node cloud + parked-means-parked residual, determinism, the fake-clock
+deadline, the late-start grace). demo-P-KGVIZ.1 green: 300 nodes + 299 springs pre-settle in
+~260ms wall; parked residual ~zero; deadline caps a fake-slow clock at 3 frames; merge path moves
+newcomers while veterans stay. Root tsc clean; full bun test = baseline. LIVE (worktree server,
+real renderer): a fresh Agent Builder mount (same mountGraph) came up with `kg-form` set, ZERO
+node motion over 1.4s (was ~8s of visible settling), the viewport transform already at the fitted
+center and unchanged; dragging a node moved it and the graph returned to rest.
+
+### Relates to
+
+ADR-0129/0130 (P-PERF.2/.3 - the tier knobs, layout cache, and settleDone this builds on),
+ADR-0182 (P-SYSRES.1 - blocks the build when the MACHINE can't afford it; this ADR fixes the build
+when it runs), ADR-0010 (zero-dep graph engine, unchanged).

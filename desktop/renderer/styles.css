@@ -2232,6 +2232,10 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 }
 .kg-side-empty{display:flex;flex-direction:column;align-items:center;gap:9px;color:var(--txt-4);font-size:12px;margin-top:34px;text-align:center}
 .kg-svg{display:block;position:relative;z-index:1}
+/* P-KGVIZ.1 (ADR-0183): the formed graph fades in already settled - a motion-free reveal. */
+.kg-svg.kg-form{animation:kgForm .3s var(--ease-out)}
+@keyframes kgForm{from{opacity:0}to{opacity:1}}
+@media (prefers-reduced-motion: reduce){.kg-svg.kg-form{animation:none}}
 .kg-edge{fill:none;stroke:var(--line-strong);stroke-width:1.1;opacity:.32;stroke-linecap:round;transition:opacity var(--t)}
 .kg-part{opacity:.8;filter:drop-shadow(0 0 2.5px currentColor)}
 /* shared soft glow over the whole node layer - one cheap filter, not one per node */
