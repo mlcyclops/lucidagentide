@@ -227,3 +227,68 @@ describe("#109 manual relate helpers (P-KG-REL.1)", () => {
     expect(dup).toBe(data);
   });
 });
+
+// ───────────── P-KGVIZ.1 (ADR-0183): form in place ─────────────
+
+import { presettle, stepForces, type SimBody } from "./kg_ops.ts";
+
+const body = (x: number, y: number, r = 8): SimBody => ({ x, y, vx: 0, vy: 0, r });
+/** Deterministic scattered cloud (no Math.random - tests must be reproducible). */
+const cloud = (n: number): SimBody[] =>
+  Array.from({ length: n }, (_, i) => body(300 + Math.cos(i * 2.4) * (40 + (i % 9) * 6), 300 + Math.sin(i * 2.4) * (40 + (i % 7) * 6)));
+
+describe("ADR-0183 stepForces (the extracted physics frame)", () => {
+  test("overlapping nodes repel; velocities and positions stay finite", () => {
+    const bodies = [body(300, 300), body(302, 300)];
+    stepForces(bodies, [], 300, 300, 0);
+    expect(bodies[0]!.x).toBeLessThan(bodies[1]!.x);
+    expect(bodies[1]!.x - bodies[0]!.x).toBeGreaterThan(2);
+    for (const b of bodies) { expect(Number.isFinite(b.x)).toBe(true); expect(Number.isFinite(b.vx)).toBe(true); }
+  });
+  test("a spring pulls distant linked nodes together", () => {
+    const bodies = [body(0, 300), body(600, 300)];
+    const gap0 = bodies[1]!.x - bodies[0]!.x;
+    stepForces(bodies, [[0, 1]], 300, 300, 200);
+    expect(bodies[1]!.x - bodies[0]!.x).toBeLessThan(gap0);
+  });
+  test("a held node does not move and carries no velocity (the drag contract)", () => {
+    const bodies = [body(300, 300), body(304, 300)];
+    stepForces(bodies, [], 300, 300, 0, 0);
+    expect(bodies[0]!.x).toBe(300);
+    expect(bodies[0]!.vx).toBe(0);
+    expect(bodies[1]!.x).not.toBe(304); // its neighbor still reacts
+  });
+  test("returns Σv² - zero only when nothing moved", () => {
+    expect(stepForces([], [], 300, 300, 0)).toBe(0);
+    expect(stepForces(cloud(12), [], 300, 300, 0)).toBeGreaterThan(0);
+  });
+});
+
+describe("ADR-0183 presettle (the off-screen settle)", () => {
+  test("a cold 150-node cloud reaches energy rest before the frame budget (no on-screen shake left)", () => {
+    const bodies = cloud(150);
+    const frames = presettle(bodies, [], 300, 300, { settle: 480, frames: 0, deadlineMs: 60_000 });
+    expect(frames).toBeLessThan(480); // settleDone fired, not the budget
+    const residual = stepForces(bodies, [], 300, 300, 480);
+    expect(residual).toBeLessThan(150 * KE_REST * 2); // parked = parked: one more frame barely moves
+    for (const b of bodies) expect(Number.isFinite(b.x) && Number.isFinite(b.y)).toBe(true);
+  });
+  test("deterministic: the same input settles to the same layout", () => {
+    const a = cloud(40), b = cloud(40);
+    presettle(a, [[0, 1], [1, 2]], 300, 300, { settle: 480, frames: 0, deadlineMs: 60_000 });
+    presettle(b, [[0, 1], [1, 2]], 300, 300, { settle: 480, frames: 0, deadlineMs: 60_000 });
+    expect(a.map((n) => [n.x, n.y])).toEqual(b.map((n) => [n.x, n.y]));
+  });
+  test("the wall-clock deadline wins over the frame budget (a huge graph can never hang the mount)", () => {
+    let t = 0;
+    const frames = presettle(cloud(30), [], 300, 300, { settle: 480, frames: 0, deadlineMs: 250, now: () => (t += 100) });
+    expect(frames).toBeLessThanOrEqual(4); // ~3 iterations at 100ms per tick
+  });
+  test("a late-start restart (live merge) still moves newborn nodes - grace is measured in iterations run", () => {
+    const bodies = [...cloud(10), body(300, 300), body(301, 300)]; // two newcomers stacked at center
+    const before = bodies.slice(-2).map((n) => n.x);
+    presettle(bodies, [], 300, 300, { settle: 480, frames: 320, deadlineMs: 60_000 }); // starts at SETTLE-160
+    const after = bodies.slice(-2).map((n) => n.x);
+    expect(after).not.toEqual(before); // settleDone's grace didn't instantly bail at frames > 30
+  });
+});

@@ -11,9 +11,14 @@
 //   - animated directional particle-flow along each edge (conveys link direction)
 //   - tuned d3-style forces (charge / spring / light collision) for cleaner spacing
 //   - smooth zoom-to-fit on first layout + double-click to re-fit
+//
+// P-KGVIZ.1 (ADR-0183): FORM IN PLACE. The settle no longer happens on screen - mounts pre-settle
+// off-screen (kg_ops.presettle, time-boxed), open snapped to the final center, and stay PARKED.
+// Live merges settle silently too, and resizes re-fit without reheating. The sim only runs visibly
+// while the user is actually dragging a node.
 
 import type { GraphNode, PersonalGraphData } from "./bridge.ts";
-import { fitTransform, frameWork, nodeAtPoint, settleDone, settleStart, togglePick } from "./kg_ops.ts";
+import { fitTransform, frameWork, nodeAtPoint, presettle, settleDone, settleStart, stepForces, togglePick } from "./kg_ops.ts";
 
 const KIND_COLOR: Record<string, string> = {
   preference: "#46c8dc", interest: "#7ef0a8", decision: "#5e8df2", behavior: "#e8b23c",
@@ -79,6 +84,13 @@ export function mountGraph(host: HTMLElement, data: PersonalGraphData, onSelect:
   });
   const byId = new Map(nodes.map((n) => [n.id, n]));
   const edges = data.edges.filter((e) => byId.has(e.from) && byId.has(e.to));
+  // P-KGVIZ.1: springs as index pairs so the pure physics step (kg_ops.stepForces) needs no id lookups.
+  // Rebuilt whenever nodes/edges mutate (update()) - indices shift on splice.
+  const buildSprings = (): Array<readonly [number, number]> => {
+    const ix = new Map(nodes.map((n, i) => [n.id, i]));
+    return edges.map((e) => [ix.get(e.from)!, ix.get(e.to)!] as const);
+  };
+  let springs = buildSprings();
 
   const colorOf = (n: SimNode): string => (lens === "trust" ? TRUST_COLOR[n.trust] : KIND_COLOR[kindLabel(n.kind)]) ?? "#888";
 
@@ -179,13 +191,16 @@ export function mountGraph(host: HTMLElement, data: PersonalGraphData, onSelect:
 
   // ── smooth zoom-to-fit (eased toward a target transform over a few frames) ──
   let fitT: { sc: number; tx: number; ty: number } | null = null;
-  const computeFit = (subset?: SimNode[]) => {
+  const computeFit = (subset?: SimNode[], snap = false) => {
     const fitNodes = subset && subset.length ? subset : nodes; // P-KG-SEARCH.1: fit to matches when given
     if (!fitNodes.length) return;
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     for (const n of fitNodes) { minX = Math.min(minX, n.x - n.r); minY = Math.min(minY, n.y - n.r); maxX = Math.max(maxX, n.x + n.r); maxY = Math.max(maxY, n.y + n.r); }
     const t = fitTransform({ minX, minY, maxX, maxY }, W, H); // low min-scale floor → big graphs actually fit (#112)
-    if (t) { fitT = t; kick(); } // a fit needs the loop running to ease toward it
+    if (!t) return;
+    // P-KGVIZ.1: a snapped fit opens the view AT the final center - no camera glide on a formed mount.
+    if (snap) { scale = t.sc; tx = t.tx; ty = t.ty; fitT = null; return; }
+    fitT = t; kick(); // a fit needs the loop running to ease toward it
   };
 
   let drag: SimNode | null = null;
@@ -194,29 +209,26 @@ export function mountGraph(host: HTMLElement, data: PersonalGraphData, onSelect:
   // P-PERF.3: a seeded mount skips some or ALL of the settle (static paint / short nestle).
   const startPlan = settleStart(seededCount, nodes.length, SETTLE);
   let frames = startPlan.frames, raf = 0, idleParity = 0;
+  // P-KGVIZ.1 (ADR-0183): FORM IN PLACE. With hundreds of nodes the old on-screen settle meant seconds
+  // of shaking while the camera chased checkpoints - disorienting and un-grabbable. Any settle a mount
+  // still needs now runs here, OFF-SCREEN and time-boxed, before the first paint; the sim is then
+  // PARKED (a stable, slightly-imperfect layout beats a wobbling perfect one). The user opens onto the
+  // final layout at its final center and can pan/drag immediately.
+  let formed = false;
+  if (frames < SETTLE && nodes.length > 0) {
+    frames = presettle(nodes, springs, cx, cy, { settle: SETTLE, frames, deadlineMs: calm ? 220 : 420 });
+    frames = SETTLE;
+    formed = true;
+  }
   // Restart the rAF loop if it parked itself while idle (reduced-motion). No-op if already running.
   const kick = () => { if (!stopped && raf === 0) raf = requestAnimationFrame(tick); };
   const tick = () => {
     if (stopped) return;
     const simActive = frames < SETTLE || !!drag;
     if (simActive) {
-      // charge (repulsion) + light collision
-      for (let i = 0; i < nodes.length; i++) for (let j = i + 1; j < nodes.length; j++) {
-        const a = nodes[i]!, b = nodes[j]!; let dx = a.x - b.x, dy = a.y - b.y; const d2 = dx * dx + dy * dy || 0.01;
-        const d = Math.sqrt(d2); let f = 3000 / d2; dx /= d; dy /= d;
-        const overlap = a.r + b.r + 6 - d; if (overlap > 0) f += overlap * 0.35; // collision push
-        a.vx += dx * f; a.vy += dy * f; b.vx -= dx * f; b.vy -= dy * f;
-      }
-      // springs (link distance scales with node sizes)
-      for (const e of edges) {
-        const a = byId.get(e.from)!, b = byId.get(e.to)!; let dx = b.x - a.x, dy = b.y - a.y;
-        const d = Math.hypot(dx, dy) || 0.01, target = 72 + a.r + b.r, f = (d - target) * 0.03; dx /= d; dy /= d;
-        a.vx += dx * f; a.vy += dy * f; b.vx -= dx * f; b.vy -= dy * f;
-      }
-      // settling damping eases from looser → tighter so motion glides to rest instead of buzzing
-      const damp = frames < 120 ? 0.86 : 0.8;
-      let kinetic = 0; // P-PERF.3: Σv² this frame, for the energy-based early exit below
-      for (const n of nodes) { if (n === drag) { n.vx = n.vy = 0; continue; } n.vx += (cx - n.x) * 0.0025; n.vy += (cy - n.y) * 0.0025; n.vx *= damp; n.vy *= damp; n.x += n.vx; n.y += n.vy; kinetic += n.vx * n.vx + n.vy * n.vy; }
+      // P-KGVIZ.1: the physics lives in kg_ops.stepForces - ONE source for this live tick and the
+      // off-screen pre-settle, so "form in place" lands on the same layout the old visible settle did.
+      const kinetic = stepForces(nodes, springs, cx, cy, frames, drag ? nodes.indexOf(drag) : -1);
       frames++;
       // P-PERF.3 (ADR-0130): stop the O(n^2) sim as soon as motion visibly dies instead of burning the
       // whole budget - most graphs converge in 100-150 frames. Ends with the final fit the frame-
@@ -292,15 +304,18 @@ export function mountGraph(host: HTMLElement, data: PersonalGraphData, onSelect:
     const nw = host.clientWidth, nh = host.clientHeight;
     if (!nw || !nh || (nw === W && nh === H)) return;
     W = nw; H = nh; cx = W / 2; cy = H / 2;
+    // P-KGVIZ.1: a resize re-FITS but no longer reheats the sim - toggling the side panel used to
+    // shake the whole layout for 160 frames. The layout is fine; only the camera needs to adjust.
     if (!userMoved) computeFit();
-    reheat();
   });
   ro.observe(host);
 
+  // P-KGVIZ.1: every mount is static now (pre-settled or fully seeded) - snap the one-time fit so the
+  // view OPENS at the settled center (no camera glide), then paint once. A short opacity fade reveals
+  // the formed graph; motion-free, and skipped entirely under calm/reduced-motion.
+  if ((formed || startPlan.needsFit) && !userMoved) computeFit(undefined, true);
   paint();
-  // P-PERF.3: a fully seeded (static) mount runs no sim frames, so the frame-checkpoint fits never
-  // fire - do the one-time zoom-to-fit here (calm mode snaps instantly, otherwise it eases).
-  if (startPlan.needsFit && !userMoved) computeFit();
+  if (formed && !calm) svg.classList.add("kg-form");
 
   // Position-preserving merge of fresh data into the LIVE simulation (issue #54 follow-up): keep
   // existing nodes AND their x/y (so the layout doesn't jump), add new nodes near the centre so they
@@ -343,7 +358,12 @@ export function mountGraph(host: HTMLElement, data: PersonalGraphData, onSelect:
       for (let i = 0; i < PPE; i++) { const c = make("circle"); c.setAttribute("class", "kg-part"); c.setAttribute("r", "1.7"); partG.append(c); parts.push(c); }
       edgeEls.push({ e, path, parts });
     }
-    reheat(); paint();
+    springs = buildSprings(); // indices shifted (splice/push) - rebuild for the pure physics step
+    // P-KGVIZ.1: live merges settle OFF-SCREEN too (the old reheat meant every incoming fact shook the
+    // whole graph for 160 visible frames). Newcomers nestle among inertia-pinned neighbors silently.
+    if (!drag) { presettle(nodes, springs, cx, cy, { settle: SETTLE, frames: Math.max(0, SETTLE - 160), deadlineMs: 200 }); frames = SETTLE; }
+    else reheat(); // mid-drag: keep the live sim (the hold must stay under the cursor)
+    paint();
   };
 
   return {

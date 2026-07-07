@@ -167,3 +167,66 @@ export const KE_REST = 0.02;
 export function settleDone(kinetic: number, count: number, frames: number, grace = 30): boolean {
   return count > 0 && frames > grace && kinetic < count * KE_REST;
 }
+
+// ───────────── P-KGVIZ.1 form in place (ADR-0183) ─────────────
+
+/** The minimal body the force step needs - graph.ts SimNodes satisfy it structurally. */
+export interface SimBody { x: number; y: number; vx: number; vy: number; r: number }
+
+/** ONE physics frame, extracted from graph.ts's live tick so the OFF-SCREEN pre-settle below and the
+ *  on-screen sim share the exact same math (charge + light collision, springs, gentle centering,
+ *  eased damping). `springs` are index pairs into `bodies`. `hold` = a user-held node (velocity
+ *  zeroed, position untouched - the drag sets it directly). Returns Σv² for settleDone. Pure over
+ *  its inputs (mutates bodies in place - that IS the simulation). */
+export function stepForces(bodies: SimBody[], springs: ReadonlyArray<readonly [number, number]>, cx: number, cy: number, frames: number, hold = -1): number {
+  // charge (repulsion) + light collision
+  for (let i = 0; i < bodies.length; i++) for (let j = i + 1; j < bodies.length; j++) {
+    const a = bodies[i]!, b = bodies[j]!; let dx = a.x - b.x, dy = a.y - b.y; const d2 = dx * dx + dy * dy || 0.01;
+    const d = Math.sqrt(d2); let f = 3000 / d2; dx /= d; dy /= d;
+    const overlap = a.r + b.r + 6 - d; if (overlap > 0) f += overlap * 0.35;
+    a.vx += dx * f; a.vy += dy * f; b.vx -= dx * f; b.vy -= dy * f;
+  }
+  // springs (link distance scales with node sizes)
+  for (const [ai, bi] of springs) {
+    const a = bodies[ai]!, b = bodies[bi]!; let dx = b.x - a.x, dy = b.y - a.y;
+    const d = Math.hypot(dx, dy) || 0.01, target = 72 + a.r + b.r, f = (d - target) * 0.03; dx /= d; dy /= d;
+    a.vx += dx * f; a.vy += dy * f; b.vx -= dx * f; b.vy -= dy * f;
+  }
+  // settling damping eases from looser → tighter so motion glides to rest instead of buzzing
+  const damp = frames < 120 ? 0.86 : 0.8;
+  let kinetic = 0;
+  for (let i = 0; i < bodies.length; i++) {
+    const n = bodies[i]!;
+    if (i === hold) { n.vx = n.vy = 0; continue; }
+    n.vx += (cx - n.x) * 0.0025; n.vy += (cy - n.y) * 0.0025;
+    n.vx *= damp; n.vy *= damp; n.x += n.vx; n.y += n.vy;
+    kinetic += n.vx * n.vx + n.vy * n.vy;
+  }
+  return kinetic;
+}
+
+export interface PresettleOpts {
+  settle: number;     // the mount's frame budget (SETTLE)
+  frames: number;     // where the frame counter starts (a partially seeded mount starts late)
+  deadlineMs: number; // hard wall-clock cap - HUGE graphs get a decent layout, never a hang
+  now?: () => number; // injectable clock for tests
+}
+
+/** Run the simulation to rest OFF-SCREEN, before anything is painted (the fix for the disorienting
+ *  on-screen shake with hundreds of nodes). Stops at energy rest (settleDone, with the grace measured
+ *  in iterations RUN - a restart at a late frame counter must not skip newborn nodes), the frame
+ *  budget, or the wall-clock deadline - whichever comes first. Returns the frame counter reached;
+ *  callers park the sim (frames = settle) regardless: a stable, slightly-imperfect layout beats a
+ *  wobbling perfect one. */
+export function presettle(bodies: SimBody[], springs: ReadonlyArray<readonly [number, number]>, cx: number, cy: number, opts: PresettleOpts): number {
+  const now = opts.now ?? (() => performance.now());
+  const t0 = now();
+  let f = opts.frames, ran = 0;
+  while (f < opts.settle) {
+    const kinetic = stepForces(bodies, springs, cx, cy, f);
+    f++; ran++;
+    if (settleDone(kinetic, bodies.length, ran)) break;
+    if (now() - t0 >= opts.deadlineMs) break;
+  }
+  return f;
+}
