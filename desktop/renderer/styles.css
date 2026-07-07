@@ -1992,13 +1992,19 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 #preview{width:var(--preview-w,min(820px,68vw))}
 /* P-KG-CODE.1: trim the Knowledge-graph header's vertical padding too (ID beats the shared .set-head rule). */
 #knowledge .set-head{padding-top:6px;padding-bottom:6px}
-/* Relate + Code-graph + Update stack vertically (2px gap) in the toolbar; buttons stay compact. */
-.kg-relate-stack{display:flex;flex-direction:column;gap:2px;flex:none}
-.kg-relate-stack .btn-mini{padding:4px 9px;font-size:11px;justify-content:flex-start}
-/* icon-only button (the code-graph re-sync sits between Code graph and the AI checkbox) */
+/* P-KGUI.1 (ADR-0184): the consolidated views dropdown replaces the three-button vertical stack. */
+#kgViews.on{border-color:var(--accent-2);color:var(--accent-2);background:color-mix(in srgb,var(--accent-2) 12%,transparent)}
+.kgv-caret{font-size:9px;opacity:.7}
+.kgv-menu{display:flex;flex-direction:column;gap:2px;min-width:250px;max-width:300px}
+.kgv-item{display:flex;flex-direction:column;align-items:flex-start;gap:2px;padding:8px 10px;border:1px solid transparent;border-radius:9px;
+  background:none;color:var(--txt-2);cursor:pointer;text-align:left;transition:background var(--t),border-color var(--t)}
+.kgv-item:hover{background:var(--bg-3);border-color:var(--line)}
+.kgv-item.on .kgv-t{color:var(--accent-2)}
+.kgv-t{font-size:12.5px;font-weight:600;color:var(--txt)}
+.kgv-d{font-size:11px;color:var(--txt-3);line-height:1.4}
+/* icon-only button (the code-graph re-sync sits between the views dropdown and the AI checkbox) */
 .btn-mini.btn-icon{padding:0;width:30px;justify-content:center;flex:none}
 .btn-mini.btn-icon .ic{width:14px;height:14px}
-#kgCode.on{border-color:var(--accent-2);color:var(--accent-2);background:color-mix(in srgb,var(--accent-2) 12%,transparent)}
 /* code-node side panel */
 .cg-side{padding:12px 14px;font-size:12px;color:var(--txt-2);overflow:auto;height:100%}
 .cg-side-h{display:flex;align-items:center;gap:7px;font-size:13px;color:var(--txt-1);margin-bottom:3px}
@@ -2267,7 +2273,6 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .kg-relate-label::placeholder{color:var(--txt-3)}
 .kg-relate-bar .btn-mini{margin-left:auto}
 .kg-relate-bar .btn-mini+.btn-mini{margin-left:6px}
-#kgRelate.on{background:var(--accent);color:var(--bg-0);border-color:var(--accent)}
 .kg-label{fill:var(--txt-2);font-size:9.5px;font-family:inherit;text-anchor:middle;paint-order:stroke;stroke:var(--bg-0);stroke-width:3px;stroke-linejoin:round;transition:fill var(--t)}
 .kg-node:hover .kg-label,.kg-node.sel .kg-label{fill:var(--txt)}
 .kg-side-head{display:flex;align-items:center;gap:8px;margin-bottom:12px;font-size:13.5px}
