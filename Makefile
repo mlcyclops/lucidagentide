@@ -608,3 +608,7 @@ demo-P-KGUI.1: ## P-KGUI.1 (ADR-0184): the KG header decluttered - title "KG" (h
 .PHONY: demo-P-KGUI.2
 demo-P-KGUI.2: ## P-KGUI.2 (ADR-0185): the Data dropdown - Import history / AI-extraction toggle / Export vault / CUI archive folded from three buttons + a checkbox into one self-describing menu; the AI toggle is remembered state (never closes the menu); CUI keeps its danger look + confirm toast
 	$(BUN) run desktop/scripts/demo_p_kgui_2.ts
+
+.PHONY: demo-P-STALL.1
+demo-P-STALL.1: ## P-STALL.1 (ADR-0186): patience for overloaded providers - the chat turn waits 10 min (was 5, message falsely said 2); a slow event at each silent 2-min mark keeps the wait visible (HUD phase + one toast naming the cap); the stall error derives its duration from the constant
+	$(BUN) run desktop/scripts/demo_p_stall_1.ts

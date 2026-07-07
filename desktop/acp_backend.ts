@@ -167,6 +167,9 @@ export type ChatEvent =
   | { type: "agent-builder-open"; spec: AgentSpec } // P-AGENT.8.2 (ADR-0134): open the Agent Builder pre-populated
   | { type: "slash-command-created"; command: UserCommand } // P-CMD.1 (ADR-0146): the agent created a user "/" command
   | { type: "usage"; used: number; size: number; cost: number }
+  // P-STALL.1 (ADR-0186): the provider has emitted NOTHING for waitedMs — the UI shows "still waiting"
+  // instead of a frozen pane. Repeats each silent 2-min mark; any real activity clears the silence.
+  | { type: "slow"; waitedMs: number }
   // P-GOAL.1 (ADR-0046): /goal loop events — an iteration begins, the separate checker's verdict,
   // the loop met its condition, or it stopped (cap / no-progress).
   | { type: "goal-memory"; path: string }
@@ -837,11 +840,16 @@ class Backend {
   // ACP request has no timeout, so without this a rate-limited / hung turn leaves the UI
   // on "Thinking…" forever. Resets on every event, so a legitimately long turn is fine —
   // only TOTAL silence for this long trips it.
-  // 5 min. Native providers stream tokens every few seconds so they almost never trip this; the headroom
-  // is for the NON-STREAMED AskSage gov gateway, where a single big call emits nothing for minutes and a
-  // 2-min cap false-stalled live turns ("gave up on the provider"). The auto-continue checker (ADR-0060)
-  // will eventually turn a stall into a wellness-check + resume rather than a dead end.
-  private static readonly IDLE_MS = 300_000;
+  // P-STALL.1 (ADR-0186): 10 min. Native providers stream tokens every few seconds so they almost never
+  // trip this; the headroom is for the NON-STREAMED AskSage gateway AND for provider OVERLOAD - at peak
+  // times Claude/Gemini/GPT can sit for several minutes before the first token, and killing the turn
+  // throws away the queue position (the user saw multiple models "time out" during one overload window).
+  // The SLOW notice below keeps the wait visible so patience never looks like a hang.
+  private static readonly IDLE_MS = 600_000;
+  // Emit a { type:"slow" } event at every silent multiple of this, so the UI can say "still waiting on
+  // the provider" instead of sitting frozen. Cleared by any real activity; paused with the idle clock
+  // while a permission is awaiting the user.
+  private static readonly SLOW_NOTICE_MS = 120_000;
 
   /** Run one turn, streaming events to onEvent; resolves after `done`. Captures the
    *  assistant reply so the personalization distiller can learn from the turn (P9.2).
@@ -850,10 +858,26 @@ class Backend {
     let assistant = "";
     let stalled = false;
     let idle: ReturnType<typeof setTimeout> | undefined;
+    let slow: ReturnType<typeof setTimeout> | undefined;
+    let silentSince = Date.now();
     let onStall: (e: Error) => void = () => {};
     // While a permission is awaiting the user (Ask mode), pause the idle/stall clock — a human
     // deciding is not a stalled turn (askUser has its own fail-closed timeout).
-    const arm = () => { if (idle) clearTimeout(idle); if (this.pendingPerms > 0) return; idle = setTimeout(() => { stalled = true; onStall(new Error("the model did not respond for 2 minutes — the provider may be rate-limited (check your hourly budget) or the turn stalled. Try again.")); }, Backend.IDLE_MS); };
+    // P-STALL.1 (ADR-0186): two clocks per silence stretch — a repeating SLOW notice (the UI shows
+    // "still waiting on the provider") and the honest hard stall at IDLE_MS. The notice goes through
+    // onEvent DIRECTLY (not the sink) so telling the user we're waiting never counts as activity.
+    const arm = () => {
+      if (idle) clearTimeout(idle);
+      if (slow) clearTimeout(slow);
+      silentSince = Date.now();
+      if (this.pendingPerms > 0) return;
+      idle = setTimeout(() => { stalled = true; onStall(new Error(`the model sent nothing for ${Math.round(Backend.IDLE_MS / 60_000)} minutes — the provider is likely overloaded or rate-limited right now. Try again in a bit, or switch models.`)); }, Backend.IDLE_MS);
+      const notify = () => {
+        try { onEvent({ type: "slow", waitedMs: Date.now() - silentSince }); } catch { /* stream gone — the turn continues server-side */ }
+        slow = setTimeout(notify, Backend.SLOW_NOTICE_MS);
+      };
+      slow = setTimeout(notify, Backend.SLOW_NOTICE_MS);
+    };
     let enqueueErr = 0; // counts browser-stream write failures (orphaned/closed client stream)
     // Only learnable assistant text accrues to `assistant` (→ recordTurns + learnFromTurn). Thinking
     // and other display-only events are excluded by construction (R-04 / ADR-0054).
@@ -898,6 +922,7 @@ class Backend {
       onEvent({ type: "token", text: `\n[${stalled ? "stalled" : "agent unavailable"}: ${String((e as any)?.message ?? e)}]` });
     } finally {
       if (idle) clearTimeout(idle);
+      if (slow) clearTimeout(slow);
       this.askActive = false;
       this.chatGate.end(); // P-KG-INGEST.3: chat turn done → release any extraction waiting to resume
       // Fail-closed: any permission still parked at turn's end (stall/disconnect) is denied.
