@@ -33,6 +33,7 @@ import { renderMarkdown } from "./markdown.ts";
 import { type GraphHandle, kindLabel, mountGraph } from "./graph.ts";
 import { addEdgeOptimistic, applyForget, chainPairs, matchNodes, removeEdgeOptimistic, resolveRelationLabel } from "./kg_ops.ts";
 import { capGraph, graphOpts, pollDelay, watchPerfTier } from "./perf_tier.ts";
+import { kgViewActive, kgViewLabel, kgViewsMenuHtml } from "./kg_header.ts"; // P-KGUI.1 (ADR-0184)
 import { guardBlockedHtml, resourcePanelBodyHtml, resourcePanelHtml, type SystemStatusView } from "./system_guard.ts"; // P-SYSRES.1 (ADR-0182)
 import type { KbGraphView, PersonalGraphData } from "./bridge.ts";
 import { agentBuilderPanelHtml, specToGraphData, nodeEditorHtml, saveErrors, newCanvasSpec, runPanelHtml, secretsPanelHtml, agentInterviewPrompt, toolChipsHtml, trustBannerHtml, runApprovalHtml, runsPanelHtml, traceDetailHtml, schedulePanelHtml, historyPanelHtml, templatesPanelHtml } from "./agent_builder.ts"; // P-AGENT.2b/.4-live/.8/.9/.11a/.13/.14/.17
@@ -259,18 +260,14 @@ function buildShell(): void {
       <aside class="kg" id="knowledge" hidden>
         <div class="resizer resizer-l" data-resize="kg" data-tip="Drag to resize|Collapse toward the chat or widen the graph" data-tip-side="left"></div>
         <div class="set-head">
-          <div class="set-title">${icon("graph", 17)} Knowledge graph <span class="set-sub" id="kgScopeLbl"></span></div>
+          <div class="set-title" data-tip="Knowledge Graph|Your private, encrypted personalization graph - nodes, edges, drill-down.">KG <span class="set-sub" id="kgScopeLbl"></span></div>
           <div class="kg-tools">
             <input id="kgSearch" class="kg-search" type="search" placeholder="Find a node…" spellcheck="false" autocomplete="off" data-tip="Find a node|Type to highlight + center matching nodes. Esc clears." />
             <div class="seg kg-lens" data-kg-lens>
               <button class="on" data-lens="kind">Kind</button><button data-lens="trust">Trust</button>
             </div>
             <button class="btn-mini" id="kgPerf" data-tip="Performance mode|Auto adapts rendering to battery + CPU: on battery the graph goes calm (no particle flow, shorter settle, capped nodes); LOW battery pauses the visualization entirely - the agent still uses your knowledge. Click to cycle auto → full → reduced → minimal.">${icon("gauge", 13)} Auto</button>
-            <div class="kg-relate-stack">
-              <button class="btn-mini" id="kgRelate" data-tip="Relate nodes|Turn on relate mode, then drag one node onto another - or click two or more nodes and press Relate - to add your OWN relationships. They're saved to your private graph (first-party, never sent to be scanned as instructions).">${icon("git", 13)} Relate</button>
-              <button class="btn-mini" id="kgCode" data-tip="Code graph|Ingest THIS workspace into a code knowledge graph - source files as nodes, imports as edges (colbymchenry/codegraph-style, in your own canvas). Click to build + view; click again to return to your personal graph. Needs no personalization unlock.">${icon("graph", 13)} Code graph</button>
-              <button class="btn-mini" id="kgKb" data-tip="Compiled KB|View the COMPILED knowledge base as a page graph - summary/concept/entity pages as nodes, cross-reference links as edges, in your own canvas. Click a node to read its page (shown as data). Click again to return to your personal graph.">${icon("report", 13)} Compiled KB</button>
-            </div>
+            <button class="btn-mini" id="kgViews" data-tip="Graph views & tools · dropdown|Opens a menu with three options: Relate nodes (author your own relationships), Code graph (this workspace as a file/symbol graph), and Compiled KB (the knowledge base as a page graph). The label shows the graph you're viewing.">${icon("graph", 13)} <span id="kgViewsLbl">Personal</span> <span class="kgv-caret">▾</span></button>
             <button class="btn-mini btn-icon" id="kgCodeUpdate" data-tip="Re-sync the code graph|Re-ingest the workspace to pick up new files + import changes since the last build." hidden>${icon("refresh", 14)}</button>
             <label class="kg-ai" data-tip="AI extraction|Use the model to pull richer facts + real relationships from each message, instead of the fast offline heuristic. Slower and uses model quota; capped at 500 messages per import. Leave off for a free, instant pass."><input type="checkbox" id="kgImportAI"/> AI</label>
             <button class="btn-mini" id="kgImport" data-tip="Import chat history|Bring in a ChatGPT, Claude, or Gemini data export to seed your graph. Easiest: just pick the unzipped export FOLDER (a modern ChatGPT export has no single conversations.json - it ships conversations-000.json, -001.json … and we merge them for you) - or point at the .zip / conversations.json / MyActivity.json directly. Every message is scanned by the security gate before anything is learned; only your own messages teach the profile.">${icon("download", 13)} Import history</button>
@@ -2772,9 +2769,31 @@ async function relatePicked(): Promise<void> {
 function setRelateMode(on: boolean): void {
   kgRelateMode = on;
   kgHandle?.setRelateMode(on);
-  $("#kgRelate")?.classList.toggle("on", on);
+  updateKgViewsLabel(); // P-KGUI.1: relate lights the consolidated views button
   const bar = $("#kgRelateBar"); if (bar) (bar as HTMLElement).hidden = !on;
   if (!on) onRelatePick([]);
+}
+
+// P-KGUI.1 (ADR-0184): the consolidated views dropdown - one button instead of the stacked three.
+function updateKgViewsLabel(): void {
+  const s = { relateOn: kgRelateMode, codeMode: kgCodeMode, kbMode: kbGraphMode };
+  const l = $("#kgViewsLbl"); if (l) l.textContent = kgViewLabel(s);
+  $("#kgViews")?.classList.toggle("on", kgViewActive(s));
+}
+let kgViewsPop: { close: () => void } | null = null;
+function openKgViewsMenu(anchor: HTMLElement): void {
+  if (kgViewsPop) { kgViewsPop.close(); return; } // second click on the button = toggle closed
+  const p = popover(anchor, kgViewsMenuHtml({ relateOn: kgRelateMode, codeMode: kgCodeMode, kbMode: kbGraphMode }), () => { kgViewsPop = null; });
+  kgViewsPop = p;
+  p.node.addEventListener("click", (ev) => {
+    const it = (ev.target as HTMLElement).closest("[data-kgview]") as HTMLElement | null;
+    if (!it) return;
+    const v = it.dataset.kgview;
+    p.close();
+    if (v === "relate") setRelateMode(!kgRelateMode);
+    else if (v === "code") void toggleCodeGraph();
+    else if (v === "kb") void toggleKbGraph();
+  });
 }
 
 /** Cheap change-signature for the graph (node/edge ids + counts + fact total). */
@@ -3951,9 +3970,8 @@ function kbToGraphData(g: KbGraphView): PersonalGraphData {
   };
 }
 function updateKbButton(active: boolean): void {
-  const b = $("#kgKb");
-  b?.classList.toggle("on", active);
-  if (b) b.innerHTML = `${icon("report", 13)} Compiled KB${active ? " \u2713" : ""}`;
+  kbGraphMode = active;
+  updateKgViewsLabel(); // P-KGUI.1: the consolidated views button shows the active graph
 }
 /** Render a selected compiled page in the kg side panel - its body is UNTRUSTED DATA (escaped + framed). */
 function renderKbSide(id: string | null): void {
@@ -3994,9 +4012,8 @@ async function toggleKbGraph(): Promise<void> {
 // ── P-KG-CODE.1 / P-KG-SYM.1: the workspace CODE graph (file imports OR symbol AST), in the same canvas ──
 function updateCodeGraphButtons(active: boolean, meta?: import("./bridge.ts").CodeGraphView | null): void {
   kgCodeMode = active;
-  const btn = $("#kgCode"), upd = $("#kgCodeUpdate"), scopeLbl = $("#kgScopeLbl") as HTMLElement | null;
-  btn?.classList.toggle("on", active);
-  if (btn) btn.innerHTML = `${icon("graph", 13)} Code graph${active ? " ✓" : ""}`;
+  updateKgViewsLabel(); // P-KGUI.1: the consolidated views button shows the active graph
+  const upd = $("#kgCodeUpdate"), scopeLbl = $("#kgScopeLbl") as HTMLElement | null;
   if (upd) (upd as HTMLElement).hidden = !active;
   if (scopeLbl) scopeLbl.textContent = active && meta
     ? (meta.level === "symbol" ? `· symbols · ${meta.symbolCount} symbols · ${meta.edgeCount} refs` : `· code · ${meta.fileCount} files · ${meta.edgeCount} imports`)
@@ -7156,8 +7173,7 @@ function wire(): void {
   // Knowledge graph: close, lens toggle, forget-fact, export (P9.4)
   $("#kgClose")!.addEventListener("click", () => closeKnowledge());
   // P-KG-CODE.1: workspace code graph - toggle personal ↔ code; Update re-ingests.
-  $("#kgCode")?.addEventListener("click", () => void toggleCodeGraph());
-  $("#kgKb")?.addEventListener("click", () => void toggleKbGraph()); // P-KB.2b
+  $("#kgViews")?.addEventListener("click", (e) => openKgViewsMenu(e.currentTarget as HTMLElement)); // P-KGUI.1 dropdown
   $("#kgCodeUpdate")?.addEventListener("click", () => void renderCodeGraph(true));
   // P-KG-CODE.1b: re-center button + keep the flyout state (resizer + center offset) in sync however the
   // side panel is toggled (a MutationObserver on its `hidden` attribute catches every path).
@@ -7246,7 +7262,6 @@ function wire(): void {
     const t = e.target as HTMLElement;
     const lens = t.closest("[data-lens]") as HTMLElement | null;
     if (lens) { kgLens = lens.dataset.lens as "kind" | "trust"; kgHandle?.setLens(kgLens); $$("[data-kg-lens] button").forEach((x) => x.classList.toggle("on", x === lens)); return; }
-    if (t.closest("#kgRelate")) { setRelateMode(!kgRelateMode); return; } // P-KG-REL.1 toggle relate mode
     if (t.closest("#kgRelateDo")) { void relatePicked(); return; }
     if (t.closest("#kgRelateClear")) { kgHandle?.clearRelatePicks(); return; }
     const unrel = t.closest("[data-unrelate]") as HTMLElement | null; // P-KG-REL.3 remove a relationship

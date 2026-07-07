@@ -12868,3 +12868,48 @@ center and unchanged; dragging a node moved it and the graph returned to rest.
 ADR-0129/0130 (P-PERF.2/.3 - the tier knobs, layout cache, and settleDone this builds on),
 ADR-0182 (P-SYSRES.1 - blocks the build when the MACHINE can't afford it; this ADR fixes the build
 when it runs), ADR-0010 (zero-dep graph engine, unchanged).
+
+## ADR-0184 - P-KGUI.1: the KG flyout header, decluttered (one dropdown instead of the triple stack), BUILT
+
+**Date:** 2026-07-06
+**Status:** Accepted / Built + tested + verified live (header one thin row; dropdown drives all three
+former buttons; label + check follow the active view).
+
+### Context
+
+The KG flyout header was thick: a VERTICAL three-button stack (Relate / Code graph / Compiled KB)
+forced the whole header row to triple height, and the title spent width on a tiny redundant icon +
+the full "Knowledge graph" wording (the rail tooltip already says what the panel is). User ask:
+consolidate the stack into a dropdown whose hover says it IS a dropdown and what's inside; drop the
+title icon; rename the title to "KG" with a Knowledge Graph hover.
+
+### Decision
+
+1. **`desktop/renderer/kg_header.ts`** (pure, tested): `kgViewLabel` (the button names the graph on
+   the canvas - Personal / Code graph / Compiled KB; relate is a TOOL, not a view), `kgViewActive`
+   (any non-default mode lights the button), `kgViewsMenuHtml` (the three former buttons as
+   self-describing menu rows, active one checked, stable `data-kgview` handles). All copy is static
+   first-party text - nothing external, nothing to escape.
+2. **app.ts**: the stack is one `#kgViews` button (`icon · <label> · ▾`) whose data-tip says
+   "dropdown" and lists the options; click opens the shared `popover` (outside-click/Esc close,
+   second click toggles). Menu clicks route to the SAME handlers as before (setRelateMode /
+   toggleCodeGraph / toggleKbGraph). `updateKgViewsLabel()` is called from every mode updater so
+   label + .on always track state; the code-graph re-sync icon button still appears only in code
+   mode. Title: `KG` + hover "Knowledge Graph", icon removed.
+3. CSS: `.kgv-*` menu styles; the `.kg-relate-stack` rules and the dead `#kgCode.on`/`#kgRelate.on`
+   selectors removed.
+
+### Verified
+
+5 kg_header tests (label mapping incl. relate-is-not-a-view, active predicate, menu handles +
+self-describing copy + single check). demo-P-KGUI.1 green. Root tsc clean. Full bun test 1911 pass
+/ 6 fail = the known Windows path-sep baseline. LIVE (worktree server): header renders as ONE thin
+row (51px) - title "KG" with the Knowledge Graph hover and no icon, stack gone; the dropdown opened
+with all three options + inline descriptions; choosing Code graph opened the existing level picker,
+flipped the label to "Code graph", lit the button, and revealed the re-sync icon; reopening the
+menu showed "Code graph ✓"; toggling back returned the label to Personal.
+
+### Relates to
+
+ADR-0158/0135 (popover + pure-builder conventions), ADR-0075 (relate mode, rewired not changed),
+ADR-0099/0100 (compiled-KB view), P-KG-CODE.1/P-KG-SYM.1 (code graph view).
