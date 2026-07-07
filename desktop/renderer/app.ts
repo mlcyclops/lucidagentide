@@ -27,6 +27,7 @@ import { createTriviaGame, triviaExplainHtml, triviaQuestionHtml, triviaVisible,
 import { bankForRole } from "./trivia_roles.ts"; // P-TRIV.2 (ADR-0175): role-aware banks
 import { isIntelNewsItem, newsLineHtml } from "./trivia_news.ts"; // P-TRIV.3 (ADR-0176): the executive INTEL WIRE
 import { sectionizeAnswer, shouldSectionize, type AnswerSection } from "./answer_sections.ts"; // P-CHAT.A (ADR-0188): settled-turn collapsible sections
+import { interleaveChips, shouldInterleave, toolChip, type ToolMark, type ToolChip } from "./answer_chips.ts"; // P-CHAT.B (ADR-0189): inline tool-event chips
 import { MARKET_PLUGINS, marketplaceHtml, marketRowsHtml } from "./marketplace.ts"; // P-MARKET.1 (ADR-0158)
 import { toolfailGroupHtml, type ToolFailEntry } from "./toolfail_group.ts"; // P-TOOLFAIL.2 (ADR-0163)
 import { APP_VERSION } from "../version.ts";
@@ -732,6 +733,8 @@ const fmtClock = (ms: number): string => { const s = Math.max(0, Math.floor(ms /
 
 // P-CHAT.1 (ADR-0104): the authored code a tool step can expand to preview inline.
 type ToolCode = { path: string; content?: string; oldText?: string; newText?: string; patch?: string };
+// P-CHAT.B (ADR-0189): the opaque payload a tool mark round-trips to fill its chip drilldown (code or detail).
+interface ChipData { code?: ToolCode; detail: string; }
 
 /** Fill an expandable step's panel with the tool's code — a write's content (syntax-highlighted via the
  *  vendored Monaco), an edit's hashline `patch` (colored +/− lines), or an old→new pair as a line diff.
@@ -1092,16 +1095,64 @@ function appendSection(container: HTMLElement, s: AnswerSection): void {
   container.appendChild(sec);
 }
 
-// P-CHAT.A (ADR-0188): on SETTLE, split a finished answer into collapsible sections on the model's own
-// headings / rules. A trivial (heading-less) answer renders exactly as before (byte-identical inline).
-// Streaming stays a single live flow (unchanged); `_md` still holds the full markdown, so copy /
-// save-as-.md are untouched. (P-CHAT.B will thread tool chips through the same settle point.)
-function renderAnswerBody(container: HTMLElement, md: string): void {
+// P-CHAT.A section logic reused for ONE interleaved prose run: sectionize it, else render it inline. So a
+// tool-using turn (P-CHAT.B) still gets collapsible sections inside each prose run between the chips.
+function renderProse(container: HTMLElement, md: string): void {
   const secs = sectionizeAnswer(md);
-  if (!shouldSectionize(secs)) { container.innerHTML = renderMarkdown(md); enhanceCodeBlocks(container); return; }
+  if (!shouldSectionize(secs)) { appendIntro(container, md); return; }
+  for (const s of secs) { if (s.title === null) appendIntro(container, s.body); else appendSection(container, s); }
+}
+
+// P-CHAT.B (ADR-0189): one interleaved tool chip + its expandable drilldown. The chip reads at a glance
+// (icon + tool word + compact detail + a +/- diffstat); clicking it reveals the written code / the edit diff
+// (reusing the P-CHAT.1 `renderToolCode`) or, for a code-less tool, the step detail. Lazy (the panel fills on
+// first open) + COLLAPSED by default. Chip text is set via textContent - never interpolated into HTML - so a
+// hostile path / detail can't break out of the markup.
+function createChipRow(chip: ToolChip, data: ChipData): HTMLElement {
+  const stat = chip.diffstat ? ` <span class="add">+${chip.diffstat.add}</span> <span class="del">−${chip.diffstat.del}</span>` : "";
+  const wrap = el(`<div class="answer-chip">
+    <button class="tchip ${chip.kind}${chip.failed ? " fail" : ""}" type="button" aria-expanded="false">${icon(phaseIcon(chip.k), 12)}<span class="k"></span><span class="d"></span>${stat}<span class="tchip-chev">${icon("chevron", 12)}</span></button>
+    <div class="tinline"></div>
+  </div>`);
+  const btn = $(".tchip", wrap) as HTMLButtonElement;
+  const panel = $(".tinline", wrap) as HTMLElement;
+  ($(".k", btn) as HTMLElement).textContent = chip.k;
+  ($(".d", btn) as HTMLElement).textContent = chip.detail;
+  const hasCode = !!data.code && (data.code.content !== undefined || data.code.patch !== undefined || data.code.oldText !== undefined || data.code.newText !== undefined);
+  btn.addEventListener("click", () => {
+    const opening = !panel.classList.contains("open");
+    if (opening && !panel.dataset.filled) {
+      if (hasCode && data.code) void renderToolCode(panel, data.code);
+      else { panel.dataset.filled = "1"; const pre = el(`<pre class="tinline-detail"></pre>`); pre.textContent = data.detail || "(no details)"; panel.appendChild(pre); }
+    }
+    panel.classList.toggle("open", opening);
+    btn.setAttribute("aria-expanded", String(opening));
+  });
+  return wrap;
+}
+
+// P-CHAT.A + P-CHAT.B: on SETTLE, transform the finished answer. If the turn made tool calls (`marks`), thread
+// each one back into the prose as an expandable CHIP anchored where it fired (P-CHAT.B); otherwise split the
+// answer into collapsible sections on the model's own headings / rules (P-CHAT.A). A trivial no-tool answer
+// renders exactly as before (byte-identical inline). Streaming stays a single live flow (unchanged); `_md`
+// still holds the full markdown, so copy / save-as-.md are untouched. Returns true when chips were interleaved
+// (the caller then drops the now-redundant live thoughts window). `marks` is absent on restored/static replies.
+function renderAnswerBody(container: HTMLElement, md: string, marks?: readonly ToolMark<ChipData>[]): boolean {
+  if (marks && marks.length) {
+    const parts = interleaveChips(md, marks);
+    if (shouldInterleave(parts)) {
+      container.textContent = "";
+      container.classList.add("answer-chipped");
+      for (const p of parts) { if (p.kind === "prose") renderProse(container, p.md); else container.appendChild(createChipRow(p.chip, p.data)); }
+      return true;
+    }
+  }
+  const secs = sectionizeAnswer(md);
+  if (!shouldSectionize(secs)) { container.innerHTML = renderMarkdown(md); enhanceCodeBlocks(container); return false; }
   container.textContent = "";
   container.classList.add("answer-sectioned");
   for (const s of secs) { if (s.title === null) appendIntro(container, s.body); else appendSection(container, s); }
+  return false;
 }
 
 function createSubagentCard(e: Extract<ChatEvent, { type: "subagent" }>): { el: HTMLElement; finish: () => void } {
@@ -1236,6 +1287,8 @@ async function send(): Promise<void> {
   let reasoning: ReasoningWin | null = null; // the live "thinking" block (above the answer)
   const permCards: { el: HTMLElement; finalize: () => void }[] = []; // Ask-mode approval prompts
   const subCards: { el: HTMLElement; finish: () => void }[] = []; // P-TASK.1 subagent delegation cards
+  const marks: ToolMark<ChipData>[] = []; // P-CHAT.B (ADR-0189): tool calls anchored by answer-buffer length, interleaved into the answer on settle
+  const dropThoughtsWindow = () => thoughts?.el.remove(); // once chips carry the activity, the live thoughts window is redundant
   let buf = "";
   const t0 = Date.now();
   // Cold start: the timer is already ticking but nothing has arrived - show an intent-aware
@@ -1306,6 +1359,9 @@ async function send(): Promise<void> {
       sawTool = true; setPhase(phaseForTool(e.name, e.detail)); paintHud();
       if (!thoughts) { thoughts = createThoughts(); streamEl.after(thoughts.el); } // window sits below the answer
       thoughts.step(e.name, e.detail, e.code);
+      // P-CHAT.B (ADR-0189): also record the call as a mark anchored at the current answer-buffer length, so it
+      // can be threaded back into the settled answer as a chip where it fired (zero visual change to the live window).
+      marks.push({ offset: buf.length, chip: toolChip(e.name, e.detail, e.code), data: { code: e.code, detail: e.detail } });
       scrollChat();
     }
     else if (e.type === "subagent") {
@@ -1331,12 +1387,12 @@ async function send(): Promise<void> {
     else if (e.type === "agent-builder-open") openAgentBuilderWithSpec(e.spec); // P-AGENT.8.2
     else if (e.type === "slash-command-created") void onSlashCommandCreated(e.command); // P-CMD.1
     else if (e.type === "usage") { tok = e.used; cost = e.cost; state.liveUsage = { used: e.used, size: e.size, cost: e.cost }; paintHud(); renderStatus(); renderMetricsRail(); }
-    else if (e.type === "done") { if (e.text && e.text.length > buf.length) buf = e.text; /* reconcile a lossy stream with the server's full reply */ renderAnswerBody(streamEl, buf); /* P-CHAT.A (ADR-0188): settle into collapsible sections */ (node as MsgNode)._md = buf; finishHud(); state.streaming = false; setSendEnabled(); clearPreviewTesting(); }
+    else if (e.type === "done") { if (e.text && e.text.length > buf.length) buf = e.text; /* reconcile a lossy stream with the server's full reply */ const chipped = renderAnswerBody(streamEl, buf, marks); /* P-CHAT.A sections / P-CHAT.B chips */ (node as MsgNode)._md = buf; finishHud(); if (chipped) dropThoughtsWindow(); /* chips now carry the activity */ state.streaming = false; setSendEnabled(); clearPreviewTesting(); }
   };
   try { await bridge.sendPrompt(sendText, onEvent, images); }
   finally {
     (node as MsgNode)._md = buf;
-    if (state.streaming) { renderAnswerBody(streamEl, buf); /* P-CHAT.A (ADR-0188): settle into collapsible sections */ finishHud(); state.streaming = false; setSendEnabled(); } else { finishHud(); }
+    if (state.streaming) { const chipped = renderAnswerBody(streamEl, buf, marks); /* P-CHAT.A sections / P-CHAT.B chips */ finishHud(); if (chipped) dropThoughtsWindow(); state.streaming = false; setSendEnabled(); } else { finishHud(); }
     void renderSessions(); void refreshBudget(false); void syncMode();
     scheduleKnowledgeRefresh(); // #54 follow-up: new facts appear in the open KG without close/reopen
     // P-ACP.4: the turn ended - fire off any pre-staged prompt now (the composer is idle again).
