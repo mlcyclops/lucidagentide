@@ -12754,3 +12754,63 @@ fs_browse/lucid_acp path-separator set only).
 ADR-0158 (the catalog + the "registry updates are ordinary PRs" rule), ADR-0135 (why Copilot was
 redundant), ADR-0069 (the OCSF audit trail Trivy evidence would sit beside), invariant 9 (stable,
 never-reused ids).
+
+## ADR-0182 - P-SYSRES.1: the system resource guard (weak CPU under load pauses the heavy builds), BUILT
+
+**Date:** 2026-07-06
+**Status:** Accepted / Built + tested + verified live (real /api/system on this machine; blocked
+card + panel + re-check exercised through the real wiring).
+
+### Context
+
+The KG force simulation and the Code Graph AST ingest are the app's two big CPU spikes. ADR-0129
+(P-PERF.2) already adapts RENDER fidelity to battery/specs, but it never looks at what the machine
+is doing RIGHT NOW: on a weak processor that is already pegged (or nearly out of RAM), even the
+reduced-fidelity build can freeze the box. Product ask: profile the system; when a user is on a
+heavy CPU/RAM load with a weak processor, the spike-prone features are NOT options until resources
+free up - with a notice and a panel listing the high-resource processes to close.
+
+### Decision
+
+1. **`desktop/system_profile.ts`** (pure math + injected io): CPU busy% from two aggregate
+   `os.cpus()` readings over a 250ms window; RAM headroom; a CLOSED verdict set
+   `ok | strained | blocked` with tested threshold lines (weak CPU = ≤4 cores or <2 GHz reported
+   clock; HIGH CPU 85% blocks only weak machines, CRIT 95% / <768 MB free blocks everywhere; low
+   RAM = under max(1.5 GB, 10%)). Top processes via ONE fixed-argv, read-only command per platform
+   (powershell Get-Process / ps), parsed + aggregated by name, fail-quiet [].
+2. **FAIL-OPEN, deliberately.** This is a UX load guard, not the security gate: a failed sample, a
+   malformed payload, or an unknown busy% reads as "no evidence → ok". Invariant 3 (fail-closed)
+   governs SCANS; blocking user features because a profiler hiccuped would be hostile. The same
+   evidence-only stance as ADR-0129 ("degrade only on evidence").
+3. **`/api/system`** (dev.ts): snap + verdict + procs, 5s memo, `?fresh=1` busts it (Refresh /
+   Re-check). Nothing user-controlled reaches the command line; the route takes no arguments
+   beyond the freshness flag.
+4. **The gate** (app.ts): `renderKnowledge()` (checked BEFORE the decrypt, after the
+   personalization/unlock gates) and `renderCodeGraph()` (before ingest) both stop at
+   `verdict.level === "blocked"` and render the guard card - why (verdict reasons), the machine
+   line, "Show what's using resources", "Re-check" (busts the memo, then retries). Unlike the
+   P-PERF.2 battery pause there is NO "render anyway": a machine at the blocked line would freeze.
+5. **`desktop/renderer/system_guard.ts`** (pure builders, owns the view types - bridge.ts imports
+   FROM it per the layering rule): the blocked card + the System resources panel (machine line,
+   verdict chip, top processes by memory with instance counts and CPU time, Refresh). Also opened
+   from the command palette ("Open System resources"). Every machine/process string is esc()'d -
+   process names and CPU models are external text.
+
+### Verified
+
+23 new tests (`desktop/system_profile.test.ts` 14, `desktop/renderer/system_guard.test.ts` 9):
+busy% math + regressed-window null, every threshold line, the fail-open contract end to end,
+both process parsers (incl. powershell's single-object shape + torn input), fixed-argv pin,
+escaping, and the no-render-anyway pin. `demo-P-SYSRES.1` green (LIVE section profiles THIS
+machine). Root `tsc --noEmit` clean. Full `bun test` 1898 pass / 6 fail = the known Windows
+path-sep baseline. LIVE in the renderer (worktree server on :5399): /api/system returned the real
+profile (i7-6700K · 8 cores · 35% · 14 GB free → ok) with real aggregated processes; the palette
+opened the panel; a stubbed blocked verdict drove the REAL wiring - code graph paused with reasons
++ machine line + both actions, the card's panel button showed "Heavy features paused" + what to
+close, and Re-check with the stub removed lifted the pause and the feature proceeded.
+
+### Relates to
+
+ADR-0129 (P-PERF.2 render tiers - power-aware fidelity; this ADR is load-aware availability),
+ADR-0181/0158 (the Market ADR chain this continues), invariant 3 (why this one is fail-OPEN, stated
+rather than silent).

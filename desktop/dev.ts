@@ -21,6 +21,7 @@ import { addReportRepo, collectRepoActivity, ghAvailable, listReportRepos, type 
 import { loadChatBg, saveChatBg, type ChatBg } from "./chat_bg.ts"; // P-APPEAR.1: personalized chat background
 import { ingestCodeGraph, loadCodeGraph } from "./code_graph.ts"; // P-KG-CODE.1: workspace code graph
 import { ingestSymbolGraph, loadSymbolGraph } from "./symbol_graph.ts"; // P-KG-SYM.1: AST symbol graph
+import { assessSystem, sampleSystem, topProcesses, type ProcGroup, type SystemSnapshot, type SystemVerdict } from "./system_profile.ts"; // P-SYSRES.1: resource guard
 import { saveSpecFile, loadSpecFile, listSpecFiles, deleteSpecFile, saveSpecTrust, loadSpecTrust, listSpecHistory, loadSpecRevision } from "../harness/agent/file_store.ts"; // P-AGENT.2b/.9/.17: spec persistence + trust sidecar + revisions
 import { validateSpec } from "../harness/agent/spec.ts"; // P-AGENT.1: fail-closed Agent Spec validation
 import { buildAgent } from "../harness/agent/compiler.ts"; // P-AGENT.3: spec -> AgentBundle
@@ -130,6 +131,9 @@ if (loadSettings().headroomEnabled) startHeadroom(); // resume the opt-in compre
 
 // 30s memo for /api/code-activity — each rebuild spawns `git log` per workspace (ADR-0030 P-CODE.1).
 let codeActivityCache: { at: number; data: ReturnType<typeof codeActivity> } | null = null;
+
+// 5s memo for /api/system — the process listing spawns one fixed-argv command (ADR-0182 P-SYSRES.1).
+let sysResCache: { at: number; data: { snap: SystemSnapshot; verdict: SystemVerdict; procs: ProcGroup[] } } | null = null;
 
 function ompBin(): string {
   for (const c of [join(homedir(), ".bun", "bin", "omp.exe"), join(homedir(), ".bun", "bin", "omp")]) if (existsSync(c)) return c;
@@ -1275,6 +1279,18 @@ const server = Bun.serve({
       if (p === "/api/subagents") {
         try { return json({ ok: true, data: { runs: listSubagentRuns(sessionPathById(backend.currentSessionId())) } }); }
         catch { return json({ ok: true, data: { runs: [] } }); }
+      }
+      // P-SYSRES.1 (ADR-0182): system resource profile + guard verdict + top processes. Read-only
+      // (fixed-argv process listing, nothing user-controlled reaches a command line), memoized 5s
+      // (?fresh=1 busts it - the panel's Refresh button). FAIL-OPEN: a failed sample reads as "ok"
+      // with no evidence - this is a UX load guard, never the security gate (ADR-0182).
+      if (p === "/api/system") {
+        const now = Date.now();
+        if (url.searchParams.get("fresh") === "1" || !sysResCache || now - sysResCache.at > 5000) {
+          const snap = await sampleSystem();
+          sysResCache = { at: now, data: { snap, verdict: assessSystem(snap), procs: topProcesses() } };
+        }
+        return json({ ok: true, data: sysResCache.data });
       }
       // real omp ACP backend (genuine model replies + live session config)
       if (p === "/api/sessions") return json({ ok: true, data: listSessions() });
