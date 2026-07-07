@@ -177,6 +177,17 @@ export interface VoiceSettingsView {
 export interface ElevenVoiceView { voiceId: string; name: string; category?: string; description?: string; labels?: Record<string, string> }
 // P-REPORT.1 (ADR-0116): a unified Reports-list row - a loop AAR or a saved Engineering Update brief.
 export interface ReportEntry { kind: "aar" | "brief"; id: string; title: string; outcome: string; role: string; updatedAt: number; rel: string }
+// P-CHAT.C (ADR-0181): a just-settled chat turn's OBSERVED telemetry, POSTed to generate a Model-Evaluation
+// engineering report (server maps it to evals.ts's RunRecord). A tool is a file change iff it has a path AND
+// a diffstat (add/del); reads/searches/bash carry neither.
+export interface EvalReportTurn {
+  runId: string; model: string;
+  ctxTokens: number; outputTokens: number; totalTokens: number; costUsd: number;
+  tools: { name: string; path?: string; add?: number; del?: number }[];
+  failures?: { tool: string; reason: string; cmd?: string }[];
+  subagents?: number; when?: string;
+}
+export interface EvalReportResult { kind: string; id: string; rel: string | null; title: string }
 // P-REPORT.9 (ADR-0162): a candidate repo for cross-repo aggregation, and the per-repo selection sent back.
 export interface ReportRepo { path: string; name: string; isGit: boolean; remoteUrl: string; host: string; isGitHub: boolean; lastActive: number }
 export interface ReportRepoSelection { path: string; fetch?: boolean; prs?: boolean }
@@ -225,6 +236,12 @@ export interface HeadroomStatus {
 import type { IntelNewsItemView } from "./trivia_news.ts";
 export type { IntelNewsItemView };
 export interface IntelNewsView { items: IntelNewsItemView[]; fetchedAt: number; stale: boolean }
+// P-TRIV.4 (ADR-0177): AI re-seed result (mirrors desktop/trivia_seed.ts TriviaSeedResult). Every
+// question is re-validated with isTriviaQuestion in app.ts before use; a malformed pack falls back to
+// the role seed bank. Declared here (shape only) so the backend types never cross the layer boundary.
+import type { TriviaQuestion } from "./trivia.ts";
+export interface TriviaSeedSources { sessions: boolean; kg: boolean; codegraph: boolean }
+export interface TriviaSeedView { ok: boolean; questions: TriviaQuestion[]; count: number; usedSources: string[]; model: string; blocked?: boolean; reason?: string }
 export type PersonalScopeView = "work" | "personal" | "cui" | "combined";
 export interface PersonalStatus {
   enabled: boolean; aiExtract: boolean; configured: boolean; unlocked: boolean;
@@ -379,6 +396,9 @@ export interface LucidBridge {
   /** P-REPORT.1: the unified Reports list (loop AARs + saved briefs) and reading one. `archived` = the archive view. */
   reports(archived?: boolean): Promise<ReportEntry[] | null>;
   report(kind: string, rel: string, archived?: boolean): Promise<{ kind: string; rel: string; markdown: string } | null>;
+  /** P-CHAT.C (ADR-0181): generate + save a Model-Evaluation engineering report for a just-settled turn
+   *  (reuses evals.ts server-side); returns the saved brief's `rel` so the turn can link "Open in Reports". */
+  evalReport(turn: EvalReportTurn): Promise<EvalReportResult | null>;
   /** P-REPORT.2 (ADR-0117): two-stage lifecycle - archive (soft), restore, and permanent delete (archive only). */
   reportArchive(kind: string, rel: string): Promise<{ archived: boolean } | null>;
   reportRestore(kind: string, rel: string): Promise<{ restored: boolean } | null>;
@@ -576,6 +596,8 @@ export interface LucidBridge {
   setHeadroom(enabled: boolean): Promise<HeadroomStatus | null>;
   // P-TRIV.3 (ADR-0176): executive Trivia Wire intel news
   intelNews(): Promise<IntelNewsView | null>;
+  // P-TRIV.4 (ADR-0177): AI re-seed the Trivia Wire (scanned, tool-free, on the user's selected model)
+  triviaReseed(opts: { model: string; role: string; sources: TriviaSeedSources }): Promise<TriviaSeedView | null>;
   // personalization knowledge graph (opt-in, encrypted - ADR-0010/0012)
   personal(): Promise<PersonalStatus | null>;
   personalEnable(enabled: boolean): Promise<PersonalStatus | null>;
@@ -782,6 +804,7 @@ export const bridge: LucidBridge = {
   addReportRepo: (input) => post("/api/report/repos/add", input),
   reports: (archived) => getData(`/api/reports${archived ? "?archived=1" : ""}`),
   report: (kind, rel, archived) => getData(`/api/report?kind=${encodeURIComponent(kind)}&rel=${encodeURIComponent(rel)}${archived ? "&archived=1" : ""}`),
+  evalReport: (turn) => post("/api/eval/report", turn),
   reportArchive: (kind, rel) => post("/api/report/archive", { kind, rel }),
   reportRestore: (kind, rel) => post("/api/report/restore", { kind, rel }),
   reportDelete: (kind, rel) => post("/api/report/delete", { kind, rel }),
@@ -931,6 +954,7 @@ export const bridge: LucidBridge = {
   headroom: () => getData("/api/headroom"),
   setHeadroom: (enabled) => post("/api/headroom", { enabled }),
   intelNews: () => getData("/api/intel-news"),
+  triviaReseed: (opts) => post("/api/trivia/reseed", opts),
   personal: () => getData("/api/personal"),
   personalEnable: (enabled) => post("/api/personal/enable", { enabled }),
   personalAiExtract: (enabled) => post("/api/personal/ai-extract", { enabled }),

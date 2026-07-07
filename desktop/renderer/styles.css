@@ -666,6 +666,70 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
   padding:6px 11px;border-top:1px solid var(--line-soft);white-space:pre-wrap;word-break:break-word}
 .subagent-task .ic{flex:none;color:var(--txt-4);margin-top:2px}
 
+/* P-CHAT.A (ADR-0179): sectioned answer - collapsible blocks on the model's own headings, applied on
+   SETTLE (streaming stays one flow). A trivial answer is never sectioned. Mirrors .thoughts/.subagent. */
+.answer-sectioned{display:flex;flex-direction:column;gap:1px}
+.answer-intro{margin:0}
+.answer-sec{border-top:1px solid var(--line-soft)}
+.answer-sectioned>.answer-sec:first-child,.answer-sectioned>.answer-intro:first-child+.answer-sec{border-top:0}
+.answer-sec-head{display:flex;align-items:center;gap:8px;width:100%;text-align:left;cursor:pointer;
+  background:transparent;border:0;color:var(--txt-1);font-size:15px;font-weight:680;padding:9px 2px;transition:color var(--t)}
+.answer-sec-head:hover{color:var(--txt)}
+.answer-sec-head .ic{flex:none;color:var(--txt-3);transition:transform var(--t) var(--ease)}
+.answer-sec.open .answer-sec-head .ic{transform:rotate(90deg)}
+.answer-sec-title{flex:1;min-width:0}
+.answer-sec-body{max-height:0;overflow:hidden;transition:max-height var(--t-slow) var(--ease)}
+.answer-sec.open .answer-sec-body{max-height:6000px}
+
+/* P-CHAT.B (ADR-0180): inline tool-event chips - each tool call the agent made becomes a compact, expandable
+   chip threaded into the settled answer where it fired. Clicking a chip reveals its drilldown (.tinline:
+   written code / the edit diff via P-CHAT.1, or the step detail). Mirrors the .answer-sec / .thoughts collapse. */
+.answer-chipped{display:flex;flex-direction:column;gap:2px}
+.answer-chip{margin:2px 0}
+.tchip{display:inline-flex;align-items:center;gap:6px;max-width:100%;padding:2px 9px 2px 8px;
+  border:1px solid var(--line-strong);border-radius:9px;background:var(--bg-2);cursor:pointer;
+  font-family:var(--mono);font-size:11.5px;color:var(--txt-2);transition:border-color var(--t),color var(--t)}
+.tchip:hover{border-color:var(--accent-2);color:var(--txt)}
+.tchip .ic{flex:none;color:var(--txt-3)}
+.tchip .k{color:var(--txt-2);font-weight:600;flex:none}
+.tchip .d{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--txt-3)}
+.tchip .add{color:var(--green);flex:none} .tchip .del{color:var(--red);flex:none}
+.tchip-chev{flex:none;display:inline-flex;color:var(--txt-4);margin-left:2px;transition:transform var(--t) var(--ease)}
+.tchip[aria-expanded="true"] .tchip-chev{transform:rotate(90deg)}
+/* per-kind icon accent, matching the rest of the activity surface */
+.tchip.search .ic,.tchip.read .ic,.tchip.fetch .ic{color:var(--cyan)}
+.tchip.run .ic{color:var(--amber)}
+.tchip.task .ic{color:var(--accent-2)}
+.tchip.write .ic,.tchip.edit .ic{color:var(--txt-2)}
+.tchip.fail{border-color:var(--amber-dim)}
+.tchip.fail .ic{color:var(--amber)} .tchip.fail .k{color:var(--amber)}
+/* the drilldown panel - collapsed by default, revealed when the chip opens */
+.tinline{margin:3px 0 6px;border:1px solid var(--line);border-radius:9px;background:var(--bg-0);overflow:hidden;
+  max-height:0;transition:max-height var(--t-slow) var(--ease)}
+.tinline.open{max-height:460px;overflow:auto}
+.tinline-detail{margin:0;padding:9px 12px;white-space:pre-wrap;word-break:break-word;
+  font-family:var(--mono);font-size:12px;line-height:1.5;color:var(--txt-2)}
+
+/* P-CHAT.C (ADR-0181): the settled-turn run footer - a run-meta line + the "Generate engineering report"
+   CTA, which swaps to an "Open in Reports" link once the Model-Evaluation brief is saved. Appears only on a
+   settled tool-using turn (appended in app.ts). Mirrors the mock's embossed CTA. */
+.runfoot{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:14px;padding-top:11px;border-top:1px solid var(--line-soft)}
+.runfoot .runmeta{font-size:11.5px;color:var(--txt-3);font-family:var(--mono)}
+.runfoot .spacer{flex:1 1 auto}
+.report-cta{display:inline-flex;align-items:center;gap:8px;border:1px solid color-mix(in srgb,var(--accent-2) 45%,var(--line-strong));
+  border-radius:10px;background:linear-gradient(180deg,color-mix(in srgb,var(--accent) 22%,var(--bg-3)),var(--bg-3));
+  color:var(--txt);font:inherit;font-size:12.5px;padding:8px 13px;cursor:pointer;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.10),0 1px 2px rgba(0,0,0,.5);transition:transform .12s var(--ease),box-shadow .18s var(--ease),border-color .18s var(--ease)}
+.report-cta .ic{color:var(--accent-2)}
+.report-cta:hover{transform:translateY(-1px);border-color:var(--accent-2)}
+.report-cta:active{transform:translateY(1px) scale(.99)}
+.report-cta.busy{cursor:default;color:var(--txt-3)}
+.reportlink{display:inline-flex;align-items:center;gap:8px;border:1px solid color-mix(in srgb,var(--accent-2) 30%,var(--line));
+  border-radius:10px;background:color-mix(in srgb,var(--accent-2) 8%,var(--bg-2));padding:8px 12px;font-size:12.5px;color:var(--txt-2)}
+.reportlink .ic{color:var(--accent-2)}
+.reportlink a{color:var(--accent-2);font-weight:600;text-decoration:none;cursor:pointer}
+.reportlink a:hover{text-decoration:underline}
+
 .composer-wrap{padding:10px 26px 18px}
 /* P-SLASH.1: "/" command + skill autocomplete, floating just above the composer. */
 .composer-row{position:relative}
@@ -2895,3 +2959,11 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
   background:rgba(126,231,255,.08)}
 .triv .tns{font-size:11px;color:var(--txt-3);flex:none;margin-right:8px;white-space:nowrap}
 .triv .tna{font-family:var(--mono);font-size:10.5px;color:var(--txt-4);flex:none;margin-left:8px}
+
+/* P-TRIV.4 (ADR-0177): Settings -> Trivia Wire card (toggle + re-seed sources + Recycle) */
+.set-sec[data-sec="trivia"] .triv-lbl{display:flex;align-items:center;gap:6px;margin:12px 0 2px;
+  font-size:11px;font-weight:600;letter-spacing:.3px;text-transform:uppercase;color:var(--txt-4)}
+.set-sec[data-sec="trivia"] .triv-src{margin-top:4px}
+.set-sec[data-sec="trivia"] .triv-src span{cursor:help}
+.set-sec[data-sec="trivia"] .triv-reseed{margin-top:11px}
+.set-sec[data-sec="trivia"] .set-note .triv-reset{margin-left:8px;padding:2px 8px;font-size:11px}

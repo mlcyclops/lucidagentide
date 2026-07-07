@@ -1,0 +1,190 @@
+<!doctype html>
+<!-- LUCID design prototype — Engineering Report: "Model Evaluation (Evals)" section. Static mock. -->
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>LUCID · Engineering Report — Evals section</title>
+<style>
+  :root{
+    --bg-0:#0a0b0f;--bg-1:#0f1117;--bg-2:#151823;--bg-3:#1b1f2b;--bg-4:#222736;
+    --line:#252a3a;--line-soft:#1a1e2a;--line-strong:#323a4f;
+    --txt:#edeff6;--txt-2:#aeb4c6;--txt-3:#727a90;--txt-4:#525a70;
+    --accent:#c64bd6;--accent-2:#e07bf0;--cyan:#46c8dc;--green:#46d27e;--amber:#e8b23c;--red:#ef5f5f;--blue:#5e8df2;
+    --green-dim:rgba(70,210,126,.13);--amber-dim:rgba(232,178,60,.14);--blue-dim:rgba(94,141,242,.14);
+    --font:"Inter",ui-sans-serif,-apple-system,"Segoe UI",Roboto,system-ui,sans-serif;
+    --mono:ui-monospace,"Cascadia Code","SF Mono",Menlo,Consolas,monospace;color-scheme:dark;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:radial-gradient(1100px 560px at 85% -12%,rgba(198,75,214,.07),transparent 60%),var(--bg-1);
+    color:var(--txt);font-family:var(--font);font-size:14px;line-height:1.62}
+  .wrap{max-width:900px;margin:0 auto;padding:30px 22px 90px}
+  .doc-h{font-size:12px;color:var(--txt-3);border:1px dashed var(--line-strong);border-radius:9px;padding:9px 12px;margin-bottom:20px;background:var(--bg-2)}
+  .doc-h b{color:var(--accent-2)}
+
+  h2.sec{font-size:20px;font-weight:700;letter-spacing:.01em;margin:26px 0 3px;display:flex;align-items:center;gap:10px}
+  h2.sec .badge{font-family:var(--mono);font-size:10px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;
+    color:var(--accent-2);background:color-mix(in srgb,var(--accent-2) 12%,var(--bg-2));border:1px solid color-mix(in srgb,var(--accent-2) 30%,var(--line));border-radius:999px;padding:2px 9px}
+  .sub{color:var(--txt-2);font-size:13px;margin:0 0 14px}
+
+  .legend{display:flex;gap:8px;flex-wrap:wrap;margin:6px 0 18px}
+  .tag{font-family:var(--mono);font-size:10px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;border-radius:6px;padding:2px 7px;border:1px solid}
+  .t-direct{color:var(--green);background:var(--green-dim);border-color:color-mix(in srgb,var(--green) 34%,var(--line))}
+  .t-proxy{color:var(--amber);background:var(--amber-dim);border-color:color-mix(in srgb,var(--amber) 34%,var(--line))}
+  .t-signal{color:var(--blue);background:var(--blue-dim);border-color:color-mix(in srgb,var(--blue) 34%,var(--line))}
+  .legend .lgl{font-family:var(--font);font-size:11.5px;color:var(--txt-3);text-transform:none;letter-spacing:0;font-weight:400;border:0;background:none;padding:2px 0}
+
+  /* headline scoreboard */
+  .board{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin:8px 0 20px}
+  .tile{border:1px solid var(--line);border-radius:12px;padding:12px 13px;background:radial-gradient(120% 120% at 0% 0%,color-mix(in srgb,var(--accent) 6%,transparent),transparent 55%),linear-gradient(160deg,var(--bg-2),var(--bg-1));box-shadow:inset 0 1px 0 rgba(255,255,255,.03)}
+  .tile .v{font-size:23px;font-weight:720;font-variant-numeric:tabular-nums;letter-spacing:-.01em}
+  .tile .v small{font-size:12px;font-weight:600;color:var(--txt-3)}
+  .tile .l{font-size:11px;color:var(--txt-2);margin-top:3px;line-height:1.35}
+  .tile .tag{margin-top:7px;display:inline-block}
+  .tile.good .v{color:var(--green)} .tile.warn .v{color:var(--amber)} .tile.acc .v{color:var(--accent-2)}
+
+  .block{border:1px solid var(--line-soft);border-radius:13px;background:linear-gradient(180deg,var(--bg-2),var(--bg-1));padding:14px 16px;margin:14px 0}
+  .block h3{font-size:14px;font-weight:680;margin:0 0 3px;display:flex;align-items:center;gap:8px}
+  .block .note{font-size:11.5px;color:var(--txt-3);margin:0 0 10px}
+  .rows{display:flex;flex-direction:column;gap:0}
+  .row{display:flex;align-items:baseline;gap:10px;padding:7px 0;border-top:1px solid var(--line-soft);font-size:13px}
+  .row:first-child{border-top:0}
+  .row .rk{color:var(--txt-2);flex:none;min-width:230px}
+  .row .rv{font-family:var(--mono);color:var(--txt);font-variant-numeric:tabular-nums}
+  .row .rf{color:var(--txt-4);font-size:11px;margin-left:auto;font-family:var(--mono);text-align:right;max-width:260px}
+  .row .tag{flex:none}
+
+  table.prov{width:100%;border-collapse:collapse;margin:4px 0 2px;font-size:12.5px}
+  table.prov th{text-align:left;color:var(--txt-4);font-size:10.5px;text-transform:uppercase;letter-spacing:.4px;font-weight:600;padding:4px 8px;border-bottom:1px solid var(--line)}
+  table.prov td{padding:5px 8px;border-bottom:1px solid var(--line-soft);font-family:var(--mono);color:var(--txt-2)}
+  table.prov td.file{color:var(--txt);font-family:var(--mono)}
+  table.prov td .add{color:var(--green)} table.prov td .del{color:var(--red)}
+  table.prov td a{color:var(--cyan);text-decoration:none} table.prov td a:hover{text-decoration:underline}
+  table.prov tr.tot td{border-top:1px solid var(--line);border-bottom:0;color:var(--txt);font-weight:600}
+  .ck{color:var(--green)}
+
+  /* composite acceptance meter */
+  .pal{display:flex;align-items:center;gap:16px;margin:6px 0 4px;flex-wrap:wrap}
+  .ring{--p:98;width:72px;height:72px;border-radius:50%;flex:none;
+    background:conic-gradient(var(--green) calc(var(--p)*1%),var(--bg-3) 0);display:grid;place-items:center}
+  .ring::after{content:"";width:56px;height:56px;border-radius:50%;background:var(--bg-1);grid-area:1/1}
+  .ring b{grid-area:1/1;z-index:1;font-size:18px;font-weight:720;color:var(--green)}
+  .pal .mix{font-size:12px;color:var(--txt-2);line-height:1.7}
+  .pal .mix code{font-family:var(--mono);color:var(--txt);background:var(--bg-3);border:1px solid var(--line-soft);border-radius:5px;padding:1px 5px}
+  .bars{display:flex;flex-direction:column;gap:5px;min-width:240px;flex:1}
+  .bar{display:grid;grid-template-columns:130px 1fr 44px;align-items:center;gap:8px;font-size:11.5px;color:var(--txt-2)}
+  .bar .track{height:7px;border-radius:4px;background:var(--bg-3);overflow:hidden}
+  .bar .fill{height:100%;background:linear-gradient(90deg,color-mix(in srgb,var(--accent) 60%,var(--accent-2)),var(--accent-2))}
+  .bar .pct{font-family:var(--mono);color:var(--txt-3);text-align:right}
+
+  .cites{font-size:11px;color:var(--txt-4);line-height:1.7;margin-top:10px}
+  .cites b{color:var(--txt-3)}
+  .foot{margin-top:16px;border-top:1px solid var(--line-soft);padding-top:10px;font-size:11.5px;color:var(--txt-3)}
+  .foot code{font-family:var(--mono);color:var(--txt-2)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="doc-h"><b>Engineering Report</b> — proposed <b>Model Evaluation (Evals)</b> section. Example values are from the trivia re-seed run. Badges mark what's computable today: <b>DIRECT</b> (from telemetry now), <b>PROXY</b> (approximate), <b>NEEDS SIGNAL</b> (one extra input to wire).</div>
+
+  <h2 class="sec">Model Evaluation (Evals) <span class="badge">per-run</span></h2>
+  <p class="sub">How efficiently this run turned tokens into accepted, spec-conforming code — with file-level provenance. Composites keep their sub-metrics visible (Goodhart: any single score shown as a target gets gamed — DORA).</p>
+
+  <div class="legend">
+    <span class="tag t-direct">direct</span><span class="lgl">computable from run telemetry today</span>
+    <span class="tag t-proxy">proxy</span><span class="lgl">approximate / lower-bound</span>
+    <span class="tag t-signal">needs signal</span><span class="lgl">one extra input (lint · AC list · PR events)</span>
+  </div>
+
+  <!-- headline scoreboard -->
+  <div class="board">
+    <div class="tile good"><div class="v">6.6<small> tok/line</small></div><div class="l">Gen-tokens per clean line of code</div><span class="tag t-proxy">proxy</span></div>
+    <div class="tile acc"><div class="v">3.1k<small> tok</small></div><div class="l">Tokens per quality feature delivered</div><span class="tag t-signal">needs AC</span></div>
+    <div class="tile good"><div class="v">100<small>%</small></div><div class="l">Spec conformance (6/6 criteria met)</div><span class="tag t-signal">needs AC</span></div>
+    <div class="tile acc"><div class="v">98<small>/100</small></div><div class="l">Predicted acceptance likelihood</div><span class="tag t-proxy">proxy</span></div>
+    <div class="tile warn"><div class="v">17<small>%</small></div><div class="l">Tool-call failure rate (2 / 12)</div><span class="tag t-direct">direct</span></div>
+    <div class="tile warn"><div class="v">~3.1k<small> tok</small></div><div class="l">Estimated wasted tokens</div><span class="tag t-proxy">proxy</span></div>
+  </div>
+
+  <!-- efficiency -->
+  <div class="block">
+    <h3>Efficiency &amp; token economy</h3>
+    <p class="note">Maps to SWE-bench cost/step dimensions, AgentBoard progress rate, and the Cost-of-Pass framing.</p>
+    <div class="rows">
+      <div class="row"><span class="rk">Tokens (context / output / total)</span><span class="rv">16.3k / 2.4k / 18.7k</span><span class="tag t-direct">direct</span><span class="rf">session_metrics</span></div>
+      <div class="row"><span class="rk">Cost · cost per resolved task</span><span class="rv">$0.42 · $0.42</span><span class="tag t-direct">direct</span><span class="rf">tests green → resolved</span></div>
+      <div class="row"><span class="rk">Context efficiency (ctx / output)</span><span class="rv">6.8×</span><span class="tag t-direct">direct</span><span class="rf">prompt-cache skews this</span></div>
+      <div class="row"><span class="rk">Tokens per net line of code</span><span class="rv">6.6 gen · 51 total</span><span class="tag t-proxy">proxy</span><span class="rf">net LOC 365; unstable near 0</span></div>
+      <div class="row"><span class="rk">Steps to completion · delegation</span><span class="rv">12 tool calls · 3 subagents</span><span class="tag t-direct">direct</span><span class="rf">trajectory length</span></div>
+      <div class="row"><span class="rk">Throughput (net LOC / min)</span><span class="rv">~44</span><span class="tag t-proxy">proxy</span><span class="rf">8.3s? demo · LOC ≠ value</span></div>
+    </div>
+  </div>
+
+  <!-- tool reliability -->
+  <div class="block">
+    <h3>Tool-call reliability &amp; waste</h3>
+    <p class="note">Failure counts &amp; reasons are exact; the token split assumes uniform tokens/call until per-call attribution is wired.</p>
+    <div class="rows">
+      <div class="row"><span class="rk">Failure rate</span><span class="rv">2 / 12 = 17%</span><span class="tag t-direct">direct</span><span class="rf">grounding quality</span></div>
+      <div class="row"><span class="rk">bash — command not found</span><span class="rv">$ make build</span><span class="tag t-direct">direct</span><span class="rf">tool did not run</span></div>
+      <div class="row"><span class="rk">search — no matches</span><span class="rv">grep "legacyBank"</span><span class="tag t-direct">direct</span><span class="rf">tool did not run</span></div>
+      <div class="row"><span class="rk">Self-rework rate (re-edits / edits)</span><span class="rv">1 / 4 = 25%</span><span class="tag t-proxy">proxy</span><span class="rf">action-level churn</span></div>
+      <div class="row"><span class="rk">Estimated wasted tokens</span><span class="rv">~3.1k (≈17% of total)</span><span class="tag t-proxy">proxy</span><span class="rf">(F/N)·total + churn·output</span></div>
+    </div>
+  </div>
+
+  <!-- code quality + provenance -->
+  <div class="block">
+    <h3>Code quality &amp; provenance</h3>
+    <p class="note">Per-file AI-authored lines come from the <code>ai_loc_ledger</code> (ADR-0031). "Clean" = survived to final diff <b>and</b> covered by passing tests; lint/format is the one signal to add for the full definition.</p>
+    <table class="prov">
+      <thead><tr><th>File</th><th>AI +/−</th><th>Net kept</th><th>Gen-tok/line</th><th>Clean?</th></tr></thead>
+      <tbody>
+        <tr><td class="file"><a href="#">desktop/trivia_seed.ts</a></td><td><span class="add">+140</span> / <span class="del">−0</span></td><td>140</td><td>6.1</td><td class="ck">✓ tested</td></tr>
+        <tr><td class="file"><a href="#">desktop/trivia_seed.test.ts</a></td><td><span class="add">+130</span> / <span class="del">−0</span></td><td>130</td><td>5.9</td><td class="ck">✓ tested</td></tr>
+        <tr><td class="file"><a href="#">desktop/renderer/app.ts</a></td><td><span class="add">+63</span> / <span class="del">−4</span></td><td>59</td><td>7.2</td><td class="ck">✓ tested</td></tr>
+        <tr><td class="file"><a href="#">desktop/dev.ts</a></td><td><span class="add">+22</span> / <span class="del">−1</span></td><td>21</td><td>8.4</td><td class="ck">✓ tested</td></tr>
+        <tr><td class="file"><a href="#">desktop/renderer/bridge.ts</a></td><td><span class="add">+8</span> / <span class="del">−0</span></td><td>8</td><td>9.0</td><td class="ck">✓ tested</td></tr>
+        <tr class="tot"><td>6 files (net)</td><td><span class="add">+370</span> / <span class="del">−5</span></td><td>365</td><td>6.6 avg</td><td>churn 1.4%</td></tr>
+      </tbody>
+    </table>
+    <div class="rows">
+      <div class="row"><span class="rk">Gross / net LOC · churn %</span><span class="rv">375 / 365 · 1.4%</span><span class="tag t-direct">direct</span><span class="rf">numstat + ledger · GitClear framing</span></div>
+      <div class="row"><span class="rk">Tokens per CLEAN line</span><span class="rv">6.6 gen / line</span><span class="tag t-signal">needs lint</span><span class="rf">"surviving" until lint wired</span></div>
+      <div class="row"><span class="rk">Defect proxy (test-fail + build fails / KLOC)</span><span class="rv">0 / 365 = 0</span><span class="tag t-proxy">proxy</span><span class="rf">not true defect density</span></div>
+      <div class="row"><span class="rk">Diff mix (moved vs copy-paste)</span><span class="rv">—</span><span class="tag t-signal">needs AST</span><span class="rf">clone detector (GitClear/jscpd)</span></div>
+    </div>
+  </div>
+
+  <!-- product / spec conformance -->
+  <div class="block">
+    <h3>Specification conformance &amp; acceptance</h3>
+    <p class="note">Everything acceptance-related is a <b>prediction</b> for one build run — a real accept needs a human/user signal. Spec metrics need the plan's acceptance-criteria (AC) list.</p>
+    <div class="rows">
+      <div class="row"><span class="rk">Acceptance-criteria coverage</span><span class="rv">6 / 6 = 100%</span><span class="tag t-signal">needs AC</span><span class="rf">traceability: AC→test/diff</span></div>
+      <div class="row"><span class="rk">Spec-conformance (evidence-tiered)</span><span class="rv">100% (6 strong)</span><span class="tag t-signal">needs AC</span><span class="rf">test &gt; impl &gt; note</span></div>
+      <div class="row"><span class="rk">MoSCoW Must-have delivery</span><span class="rv">100%</span><span class="tag t-signal">needs AC</span><span class="rf">DSDM · must = 1.0 target</span></div>
+      <div class="row"><span class="rk">Test / UAT pass rate</span><span class="rv">42 / 42 = 100%</span><span class="tag t-direct">direct</span><span class="rf">runner output</span></div>
+      <div class="row"><span class="rk">Definition-of-Done adherence</span><span class="rv">5 / 5</span><span class="tag t-proxy">proxy</span><span class="rf">tests+build+headers+demo+changelog</span></div>
+      <div class="row"><span class="rk">LLM-as-judge spec score (optional)</span><span class="rv">0.96</span><span class="tag t-signal">judge call</span><span class="rf">G-Eval · flag self-pref bias</span></div>
+    </div>
+    <div class="pal">
+      <div class="ring"><b>98</b></div>
+      <div class="bars">
+        <div class="bar"><span>Spec conformance ·.35</span><span class="track"><span class="fill" style="width:100%"></span></span><span class="pct">1.00</span></div>
+        <div class="bar"><span>Test pass ·.25</span><span class="track"><span class="fill" style="width:100%"></span></span><span class="pct">1.00</span></div>
+        <div class="bar"><span>Low churn ·.15</span><span class="track"><span class="fill" style="width:99%"></span></span><span class="pct">0.99</span></div>
+        <div class="bar"><span>Tool success ·.10</span><span class="track"><span class="fill" style="width:83%"></span></span><span class="pct">0.83</span></div>
+        <div class="bar"><span>Definition-of-Done ·.15</span><span class="track"><span class="fill" style="width:100%"></span></span><span class="pct">1.00</span></div>
+      </div>
+      <div class="mix"><b style="color:var(--txt)">Predicted acceptance likelihood 98/100</b> <span class="tag t-proxy">proxy</span><br/>weighted blend; precedent: <code>SonarQube Quality Gate</code>, SPACE, DevEx. Not a substitute for a user sign-off.</div>
+    </div>
+  </div>
+
+  <div class="foot">
+    <b style="color:var(--txt-2)">Data sources (already in LUCID):</b> <code>tools/session_metrics.ts</code> (tokens · cost · model · duration) · <code>harness/runs/loc_ledger.ts</code> + <code>0007_ai_loc_ledger.sql</code> (per-file AI provenance, ADR-0031) · <code>harness/brief/change_graph.ts</code> (numstat) · test-runner output · tool-call failures. <b>To wire next:</b> a lint/format pass on the diff (→ true "clean"), the plan's AC list (→ spec conformance), and PR/CI events (→ real acceptance/revert).
+    <div class="cites"><b>References:</b> SWE-bench Verified (%Resolved, cost/step) · Cost-of-Pass (arXiv:2504.13359) · AgentBoard (arXiv:2401.13178) · BAGEN wasted-tokens 28–64% · AgentDiet / TRAJECT-Bench (trajectory) · GitClear AI Copilot Code Quality 2024/25 (churn 3.3%→7.1%) · Nagappan &amp; Ball ICSE 2005 (churn→defects) · ISO/IEC 25010:2023 · SonarQube Clean Code / Quality Gate · ISO/IEC/IEEE 29148 (requirements traceability) · ATDD (Agile Alliance) · DSDM MoSCoW · ISTQB UAT · DORA metrics · G-Eval / LLM-as-a-Judge (arXiv:2411.15594) · SPACE (ACM Queue 2021).</div>
+  </div>
+</div>
+</body>
+</html>
