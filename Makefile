@@ -604,3 +604,7 @@ demo-P-KGVIZ.1: ## P-KGVIZ.1 (ADR-0183): form in place - the KG/code-graph settl
 .PHONY: demo-P-KGUI.1
 demo-P-KGUI.1: ## P-KGUI.1 (ADR-0184): the KG header decluttered - title "KG" (hover: Knowledge Graph, icon dropped) and the Relate/Code-graph/Compiled-KB stack consolidated into ONE labeled dropdown (hover tip lists the options; the menu explains each inline; active view checked)
 	$(BUN) run desktop/scripts/demo_p_kgui_1.ts
+
+.PHONY: demo-P-KGUI.2
+demo-P-KGUI.2: ## P-KGUI.2 (ADR-0185): the Data dropdown - Import history / AI-extraction toggle / Export vault / CUI archive folded from three buttons + a checkbox into one self-describing menu; the AI toggle is remembered state (never closes the menu); CUI keeps its danger look + confirm toast
+	$(BUN) run desktop/scripts/demo_p_kgui_2.ts

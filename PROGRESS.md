@@ -3237,3 +3237,8 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **shipped:** the Relate / Code graph / Compiled KB triple stack is ONE labeled dropdown (`#kgViews`: label = the graph you're viewing, hover tip says it's a dropdown + lists the options, menu rows self-describe with the active view checked); title icon removed and "Knowledge graph" → "KG" with a Knowledge Graph hover; same handlers rewired (relate bar, level picker, re-sync icon all unchanged); pure `kg_header.ts` builders + 5 tests + demo-P-KGUI.1; verified live (one 51px header row, full dropdown flow, label/check tracking).
 - **stubbed:** the remaining header controls (search, lens seg, perf chip, AI toggle, Import/Export/CUI) stay as-is - they're single-height and were not the complaint.
 - **next:** if the header needs more room later, Import/Export/CUI could fold into the same dropdown pattern ("Data…" menu).
+
+**P-KGUI.2 - the Data dropdown in the KG header (ADR-0185)**
+- **shipped:** Import history / AI-extraction toggle / Export vault / CUI archive folded from three buttons + a checkbox into one "Data" dropdown (same pattern as the views menu): self-describing rows with stable data-kgdata handles, the AI choice as remembered module state (toggling never closes the menu), CUI keeps the danger look + confirm toast, handlers extracted unchanged; orphaned .kg-ai CSS removed. 3 new tests + demo-P-KGUI.2 green; verified live (one-row header, toggle persistence, real export/CUI flows).
+- **stubbed:** the header now has exactly two dropdowns (views + Data) - search, lens, perf chip stay as single controls by design.
+- **next:** none queued for the KG header; P-MARKET.2 / P-TRIV.4 / P-RAG.2 remain the open threads.
