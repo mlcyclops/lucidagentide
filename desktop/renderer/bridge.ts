@@ -658,6 +658,8 @@ export interface LucidBridge {
   // P-PREVIEW.7 (ADR-0179): Electron-app detection + USER-initiated external launch
   previewElectronDetect(path: string): Promise<{ electron: boolean; reasons: string[]; appDir: string; launchable: boolean; via: string | null } | null>;
   previewElectronLaunch(path: string): Promise<{ launched: boolean; via?: string; appDir?: string; reason?: string } | null>;
+  // P-TASK.5 (ADR-0180): live subagent activity behind the current session's delegation
+  subagents(): Promise<{ runs: { name: string; done: boolean; lastAt: number; assignment: string; model: string | null; tools: number; steps: { kind: string; tool?: string; label: string }[] }[] } | null>;
   listDir(path?: string): Promise<FsList | null>; // in-app folder browser (works everywhere)
   revealPath(path: string): Promise<boolean>; // open a folder in the OS file manager (Electron only; false in browser)
   canRevealPath(): boolean; // whether the native shell can reveal a folder (Electron only)
@@ -985,6 +987,7 @@ export const bridge: LucidBridge = {
   previewInspectResult: async (id, result) => { await post("/api/preview/inspect/result", { id, result }); }, // P-PREVIEW.6b
   previewElectronDetect: (path) => getData(`/api/preview/electron-detect?path=${encodeURIComponent(path)}`), // P-PREVIEW.7
   previewElectronLaunch: (path) => post("/api/preview/electron-launch", { path }), // P-PREVIEW.7
+  subagents: () => getData("/api/subagents"), // P-TASK.5
 
 
   listDir: (path) => getData(`/api/fs/list${path ? `?path=${encodeURIComponent(path)}` : ""}`),

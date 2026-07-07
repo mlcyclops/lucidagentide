@@ -12663,3 +12663,38 @@ it's fine to demo the app OUTSIDE LUCID as a real process - no sandbox hole need
 LIVE: the Electron demo app (agent-shaped: empty body + require() renderer, its own electron
 install) showed the overlay with the exact explanation, and the button launched a real electron.exe
 process tree outside LUCID; a plain web page rendered normally with no overlay.
+
+## ADR-0180 - P-TASK.5: live subagent activity in the delegation card, BUILT
+
+**Date:** 2026-07-06
+**Status:** Accepted / Built + verified live (real delegation turn; real historical runs tailed).
+
+### Context
+
+Delegating to subagents showed only a static card ("Delegated to task · 4 subtasks") - the
+subagents' thinking, tool calls and progress were invisible, so a multi-minute parallel build felt
+like a black box. The data was already on disk: omp's task tool persists EACH subtask as its own
+session transcript in a sibling directory of the parent session file (`artifactsDir =
+sessionFile.slice(0, -6)`), with `<Name>.md` written on completion - LUCID just never read them.
+
+### Decision
+
+`desktop/subagent_activity.ts` (pure, injected fs): mirror omp's artifacts-dir rule; parse each
+subtask transcript into a BOUNDED view - the assignment (executor preamble stripped), the model,
+exact tool counts, and the last 12 notable steps (thinking / toolCall / text), preferring the
+model's own `_i` intent label for tool steps. Corrupt lines contribute nothing; multi-MB
+transcripts are tail-read. `/api/subagents` serves the CURRENT session's runs only (path-confined
+via sessionPathById - the route accepts no paths); never-delegated sessions are fail-quiet `[]`.
+The delegation card polls while streaming (2.5s), swaps its static assignment rows for live run
+rows - status dot, generated name, a "now" line, tool count - each expandable into the step trail
+(+ one final refresh at finish). Every label is esc()'d: transcript text is model/tool output,
+rendered strictly as data.
+
+### Verified
+
+9 unit tests + demo-P-TASK.5 green (the demo also tails the REAL four-game delegation that
+motivated the feature: AbyssalBreakout/BlocklingsBreakout/HormuzMinesweeper/NeonRampage with their
+tool counts and last thinking). LIVE in the renderer: a real two-subtask delegation grew two run
+rows mid-turn with live now-lines ("read · Reading CLAUDE.md for first heading"), expanding showed
+assignment + thinking/tool/text steps, both rows flipped to done dots at finish, and the collapsed
+card reopens with the final trails intact.

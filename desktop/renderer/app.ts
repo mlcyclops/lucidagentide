@@ -1084,13 +1084,64 @@ function createSubagentCard(e: Extract<ChatEvent, { type: "subagent" }>): { el: 
       <span class="subagent-cur">Delegated to <b>${esc(e.agent)}</b>${n > 1 ? ` · ${n} subtasks` : ""}</span>
       <span class="subagent-chev">${icon("chevron", 14)}</span>
     </button>
-    <div class="subagent-body">${body}</div>
+    <div class="subagent-body">${body}<div class="subagent-runs"></div></div>
   </div>`);
   const headBtn = $(".subagent-head", win) as HTMLButtonElement;
   const toggle = (open: boolean) => { win.classList.toggle("open", open); headBtn.setAttribute("aria-expanded", String(open)); };
   headBtn.addEventListener("click", () => toggle(!win.classList.contains("open")));
+
+  // P-TASK.5 (ADR-0180): LIVE per-subagent activity. omp persists each subtask as its own session
+  // transcript beside the parent session file; /api/subagents tails them into bounded step views.
+  // While the delegation streams, poll and render one expandable row per run - the generated name,
+  // a live "now" line, and the recent thinking/tool/text steps underneath. Every label is esc()'d
+  // (transcript text is model/tool output - shown as DATA). Static assignment rows collapse away
+  // once the real runs appear (the run's own assignment supersedes them).
+  const runsBox = $(".subagent-runs", win) as HTMLElement;
+  const openRuns = new Set<string>(); // user-expanded rows survive re-render
+  const stepIcon = (k: string): string => (k === "thinking" ? icon("spark", 11) : k === "tool" ? icon("bolt", 11) : icon("info", 11));
+  const renderRuns = (runs: { name: string; done: boolean; assignment: string; tools: number; steps: { kind: string; tool?: string; label: string }[] }[]): void => {
+    if (!runs.length) return;
+    win.querySelectorAll(".subagent-task").forEach((t) => t.remove()); // real runs supersede the static rows
+    runsBox.innerHTML = runs.map((r) => {
+      const last = r.steps[r.steps.length - 1];
+      const now = last ? `${last.kind === "tool" ? `${esc(last.tool ?? "tool")} · ` : ""}${esc(last.label)}` : "starting…";
+      const steps = r.steps.map((s) =>
+        `<div class="sa-step sa-${esc(s.kind)}">${stepIcon(s.kind)}<span class="sa-step-tool">${s.kind === "tool" ? esc(s.tool ?? "") : ""}</span><span class="sa-step-label">${esc(s.label)}</span></div>`).join("");
+      return `<div class="sa-run${openRuns.has(r.name) ? " open" : ""}${r.done ? " done" : ""}" data-run="${esc(r.name)}">
+        <button class="sa-run-head" type="button">
+          <span class="sa-dot${r.done ? " done" : ""}"></span>
+          <span class="sa-name">${esc(r.name)}</span>
+          <span class="sa-now">${now}</span>
+          <span class="sa-meta">${r.tools} tool${r.tools === 1 ? "" : "s"}</span>
+          <span class="subagent-chev">${icon("chevron", 12)}</span>
+        </button>
+        <div class="sa-steps">${r.assignment ? `<div class="sa-assign">${esc(r.assignment)}</div>` : ""}${steps || `<div class="sa-step sa-text">${icon("info", 11)}<span class="sa-step-label">no activity yet</span></div>`}</div>
+      </div>`;
+    }).join("");
+    runsBox.querySelectorAll<HTMLElement>(".sa-run-head").forEach((h) => h.addEventListener("click", () => {
+      const row = h.parentElement!;
+      const name = row.dataset.run ?? "";
+      row.classList.toggle("open");
+      if (row.classList.contains("open")) openRuns.add(name); else openRuns.delete(name);
+    }));
+  };
+  const refreshRuns = async (): Promise<void> => {
+    const v = await bridge.subagents().catch(() => null);
+    if (v?.runs) renderRuns(v.runs as Parameters<typeof renderRuns>[0]);
+  };
+  void refreshRuns();
+  const runsTimer = window.setInterval(() => { if (win.isConnected) void refreshRuns(); }, 2500);
+
   let done = false;
-  return { el: win, finish() { if (done) return; done = true; win.removeAttribute("data-streaming"); win.classList.add("done"); toggle(false); } };
+  return {
+    el: win,
+    finish() {
+      if (done) return; done = true;
+      window.clearInterval(runsTimer);
+      void refreshRuns(); // one final tail so the card shows each run's ending state
+      win.removeAttribute("data-streaming"); win.classList.add("done"); toggle(false);
+    },
+  };
 }
 
 async function send(): Promise<void> {
