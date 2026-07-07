@@ -1,0 +1,559 @@
+<!doctype html>
+<!-- LUCID design prototype v2 — redesigned agent-turn transcript (P-CHAT.x proposal).
+     Custom animated SVGs + live-streaming preserved (sectionizes on settle). Static mock, not wired. -->
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>LUCID · redesigned agent turn</title>
+<style>
+  :root{
+    --bg-0:#0a0b0f; --bg-1:#0f1117; --bg-2:#151823; --bg-3:#1b1f2b; --bg-4:#222736;
+    --line:#252a3a; --line-soft:#1a1e2a; --line-strong:#323a4f;
+    --txt:#edeff6; --txt-2:#aeb4c6; --txt-3:#727a90; --txt-4:#525a70;
+    --accent:#c64bd6; --accent-2:#e07bf0; --accent-dim:rgba(198,75,214,.14);
+    --cyan:#46c8dc; --cyan-dim:rgba(70,200,220,.13);
+    --green:#46d27e; --amber:#e8b23c; --red:#ef5f5f; --blue:#5e8df2;
+    --green-dim:rgba(70,210,126,.13); --amber-dim:rgba(232,178,60,.14);
+    --red-dim:rgba(239,95,95,.14); --blue-dim:rgba(94,141,242,.14);
+    --font:"Inter",ui-sans-serif,-apple-system,"Segoe UI",Roboto,system-ui,sans-serif;
+    --mono:ui-monospace,"Cascadia Code","SF Mono",Menlo,Consolas,monospace;
+    color-scheme:dark;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:
+    radial-gradient(1200px 600px at 82% -12%, rgba(198,75,214,.09), transparent 60%),
+    var(--bg-1);color:var(--txt);font-family:var(--font);font-size:14px;line-height:1.6}
+  .wrap{max-width:840px;margin:0 auto;padding:30px 22px 130px}
+
+  .banner{display:flex;align-items:center;gap:12px;flex-wrap:wrap;font-size:12px;color:var(--txt-3);
+    border:1px dashed var(--line-strong);border-radius:10px;padding:10px 13px;margin-bottom:22px;background:var(--bg-2)}
+  .banner b{color:var(--accent-2)}
+  .banner .spacer{flex:1}
+  .legend{display:flex;gap:14px;flex-wrap:wrap;font-size:11px;color:var(--txt-3)}
+  .legend .new{color:var(--accent-2)} .legend .keep{color:var(--green)}
+
+  /* icons */
+  .ic{display:inline-block;vertical-align:-2px;flex:none}
+  .ic.spin{animation:spin 1s linear infinite}
+  .ic.bob{animation:bob 1.5s ease-in-out infinite;transform-origin:50% 50%}
+  .ic.glow{filter:drop-shadow(0 0 4px color-mix(in srgb,var(--amber) 75%,transparent))}
+  .ic.glow .fil{animation:filGlow 1.15s ease-in-out infinite}
+  .ic .core{transform-box:fill-box;transform-origin:center}
+  .ic.scan .core{animation:corePulse 1.25s ease-in-out infinite}
+  .ic.scan .pin{animation:pinPulse 1.25s ease-in-out infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  @keyframes bob{0%,100%{transform:translateY(0)}50%{transform:translateY(-2.3px)}}
+  @keyframes filGlow{0%,100%{opacity:.35}50%{opacity:1}}
+  @keyframes corePulse{0%,100%{transform:scale(.62);opacity:.45}50%{transform:scale(1);opacity:1}}
+  @keyframes pinPulse{0%,100%{opacity:.45}50%{opacity:1}}
+  @keyframes blink{0%,49%{opacity:1}50%,100%{opacity:0}}
+  @keyframes dotPulse{0%,100%{box-shadow:0 0 0 0 color-mix(in srgb,var(--accent-2) 60%,transparent)}70%{box-shadow:0 0 0 6px transparent}}
+  /* clipboard (subagent): a manager checking items, then flipping to the next page */
+  .ic .nx{opacity:.3}
+  .ic .pg{transform-box:fill-box;transform-origin:top center;animation:pageTurn 2.8s ease-in-out infinite}
+  .ic .chk{stroke-dasharray:6.5;stroke-dashoffset:6.5;animation:tick 2.8s ease-in-out infinite}
+  .ic .chk2{stroke-dasharray:6.5;stroke-dashoffset:6.5;animation:tick 2.8s ease-in-out infinite .3s}
+  @keyframes pageTurn{0%,40%{transform:perspective(52px) rotateX(0);opacity:1}62%{transform:perspective(52px) rotateX(-152deg);opacity:1}64%{transform:perspective(52px) rotateX(-152deg);opacity:0}66%{transform:perspective(52px) rotateX(0);opacity:0}76%{opacity:1}100%{transform:perspective(52px) rotateX(0);opacity:1}}
+  @keyframes tick{0%{stroke-dashoffset:6.5}16%{stroke-dashoffset:0}52%{stroke-dashoffset:0}60%{stroke-dashoffset:6.5}100%{stroke-dashoffset:6.5}}
+
+  /* user bubble */
+  .umsg{display:flex;justify-content:flex-end;margin:0 0 18px}
+  .umsg .b{background:var(--bg-3);border:1px solid var(--line);border-radius:13px 13px 4px 13px;
+    padding:10px 14px;max-width:76%;font-size:14px}
+
+  /* assistant turn */
+  .turn{border:1px solid var(--line-soft);border-radius:14px;background:linear-gradient(180deg,var(--bg-2),var(--bg-1));
+    padding:13px 16px 12px;box-shadow:0 1px 0 rgba(255,255,255,.02) inset}
+  .turn-head{display:flex;align-items:center;gap:9px;margin:0 0 6px;font-size:12px;color:var(--txt-3)}
+  .turn-head .dot{width:8px;height:8px;border-radius:50%;background:var(--accent-2)}
+  .turn.live .turn-head .dot{animation:dotPulse 1.4s ease-out infinite}
+  .turn-head .model{color:var(--txt-2);font-weight:600}
+  .turn-head .state{font-family:var(--mono);font-size:10.5px;letter-spacing:.5px;text-transform:uppercase;
+    border:1px solid var(--line);border-radius:999px;padding:1px 8px;color:var(--txt-4)}
+  .turn.live .turn-head .state{color:var(--cyan);border-color:color-mix(in srgb,var(--cyan) 40%,var(--line))}
+  .turn.settled .turn-head .state{color:var(--green);border-color:color-mix(in srgb,var(--green) 35%,var(--line))}
+  .turn-head .spacer{flex:1}
+  .pill{display:inline-flex;align-items:center;gap:6px;font-size:11px;color:var(--txt-3);
+    border:1px solid var(--line);border-radius:999px;padding:2px 9px;background:var(--bg-2)}
+
+  /* collapsible primitive */
+  .col>.col-head{display:flex;align-items:center;gap:8px;width:100%;cursor:pointer;user-select:none;
+    background:none;border:0;color:inherit;font:inherit;text-align:left;padding:7px 4px}
+  .col>.col-head:hover{color:var(--txt)}
+  .chev{transition:transform .18s ease;color:var(--txt-4)}
+  .col.open>.col-head .chev{transform:rotate(90deg)}
+  .col>.col-body{overflow:hidden;max-height:0;transition:max-height .24s ease;padding-left:6px}
+  .col.open>.col-body{max-height:1600px}
+
+  /* reasoning */
+  .reasoning{margin:2px 0 6px;border:1px solid var(--line-soft);border-radius:10px;background:var(--bg-2)}
+  .reasoning .col-head{color:var(--txt-2);font-size:12.5px;padding:8px 10px}
+  .reasoning .bulb{color:var(--amber)}
+  .reasoning .col-body{color:var(--txt-3);font-size:12.5px;line-height:1.62;white-space:pre-wrap;font-family:var(--mono);padding:0 12px}
+  .reasoning.open .col-body{padding:2px 12px 10px}
+
+  /* sectioned answer (settled) */
+  .answer{margin-top:4px}
+  .sec{border-top:1px solid var(--line-soft)}
+  .sec:first-child{border-top:0}
+  .sec>.col-head{font-size:15px;font-weight:680;color:var(--txt);padding:10px 4px}
+  .sec>.col-head .chev{color:var(--txt-3)}
+  .sec .col-body{font-size:14px;color:var(--txt);line-height:1.68}
+  .sec .col-body p{margin:2px 0 12px}
+  .sec code,.livestream code{font-family:var(--mono);font-size:12.5px;background:var(--bg-3);
+    border:1px solid var(--line-soft);border-radius:5px;padding:1px 5px;color:var(--txt-2)}
+
+  /* live stream (unsectioned, exactly like today) */
+  .livewrap{display:none} .turn.live .livewrap{display:block}
+  .turn.live .answer{display:none}
+  .livestream{font-size:14px;color:var(--txt);line-height:1.68;padding:2px 4px 0;min-height:20px}
+  .livestream p{margin:2px 0 12px}
+  .cursor{display:inline-block;width:7px;height:15px;background:var(--accent-2);margin-left:1px;
+    vertical-align:-3px;border-radius:1px;animation:blink 1s step-end infinite}
+
+  /* inline tool chip */
+  .tchip{display:inline-flex;align-items:center;gap:6px;vertical-align:baseline;margin:0 2px;padding:1px 8px 1px 7px;
+    border:1px solid var(--line-strong);border-radius:9px;background:var(--bg-2);cursor:pointer;
+    font-family:var(--mono);font-size:11.5px;color:var(--txt-2);transition:border-color .15s,color .15s}
+  .tchip:hover{border-color:var(--accent-2);color:var(--txt)}
+  .tchip .k{color:var(--txt-2);font-weight:600}
+  .tchip .add{color:var(--green)} .tchip .del{color:var(--red)}
+  .tchip.search .ic{color:var(--cyan)} .tchip.edit .ic{color:var(--txt-2)} .tchip.run .ic{color:var(--amber)}
+  .tinline{margin:2px 0 12px;border:1px solid var(--line);border-radius:9px;background:var(--bg-0);
+    font-family:var(--mono);font-size:12px;color:var(--txt-2);overflow:hidden;max-height:0;transition:max-height .2s ease}
+  .tinline.open{max-height:420px}
+  .tinline .h{display:flex;gap:8px;padding:7px 10px;border-bottom:1px solid var(--line-soft);color:var(--txt-3)}
+  .tinline pre{margin:0;padding:9px 12px;white-space:pre-wrap;line-height:1.5;max-height:320px;overflow:auto}
+  .tinline .add{color:var(--green)} .tinline .del{color:var(--red)}
+
+  /* tool-activity drawer */
+  .drawer{margin:12px 0 4px;border:1px solid var(--line-soft);border-radius:11px;background:var(--bg-2)}
+  .drawer .col-head{color:var(--txt-2);font-size:12.5px;padding:9px 11px}
+  .drawer .spark{color:var(--txt-2)}
+  .drawer .cur{color:var(--txt-3)}
+  .drawer .sum{color:var(--txt-3);font-family:var(--mono);font-size:11.5px}
+  .drawer .col-body{padding:0 8px 6px}
+  .step{display:flex;align-items:center;gap:9px;padding:6px 8px;border-radius:8px;font-size:12.5px;color:var(--txt-2)}
+  .step:hover{background:var(--bg-3)}
+  .step .ic{color:var(--txt-4)} .step.search .ic{color:var(--cyan)} .step.edit .ic{color:var(--txt-2)} .step.run .ic{color:var(--amber)} .step.read .ic{color:var(--blue)}
+  .step .k{font-family:var(--mono);font-size:11.5px;color:var(--txt-2);flex:none}
+  .step .d{color:var(--txt-3);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .step .diffstat{margin-left:auto;font-family:var(--mono);font-size:11px;flex:none}
+  .step .diffstat .add{color:var(--green)} .step .diffstat .del{color:var(--red)}
+  .cap{font-size:11px;color:var(--txt-4);margin:3px 0 2px 6px}
+
+  /* subagent card */
+  .subagent{margin:10px 0 4px;border:1px solid color-mix(in srgb,var(--green) 22%,var(--line-soft));border-radius:11px;
+    background:color-mix(in srgb,var(--green) 5%,var(--bg-2))}
+  .subagent .col-head{color:var(--txt-2);font-size:12.5px;padding:9px 11px}
+  .subagent .look{color:var(--green)}
+  .subagent .who b{color:var(--green)}
+  .subagent .col-body{padding:0 12px 8px}
+  .subtask{display:flex;align-items:center;gap:8px;padding:6px 0;font-size:12.5px;color:var(--txt-2);border-top:1px solid var(--line-soft)}
+  .subtask .ic{color:var(--green)}
+  .subtask .done{color:var(--green);font-family:var(--mono);font-size:11px;margin-left:auto}
+
+  /* run footer + report CTA */
+  .runfoot{display:none;align-items:center;gap:12px;flex-wrap:wrap;margin-top:14px;padding-top:11px;border-top:1px solid var(--line-soft)}
+  .turn.settled .runfoot{display:flex}
+  .runfoot .meta{font-size:11.5px;color:var(--txt-3);font-family:var(--mono)}
+  .runfoot .spacer{flex:1}
+  .btn{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--line-strong);border-radius:9px;
+    background:var(--bg-3);color:var(--txt);font:inherit;font-size:12.5px;padding:6px 12px;cursor:pointer;transition:.15s}
+  .btn:hover{border-color:var(--accent-2)}
+  .btn.cta{border-color:color-mix(in srgb,var(--accent-2) 45%,var(--line-strong));
+    background:linear-gradient(160deg,color-mix(in srgb,var(--accent) 18%,var(--bg-3)),var(--bg-3))}
+  .btn .ic{color:var(--accent-2)}
+  .reportlink{display:none;align-items:center;gap:9px;border:1px solid color-mix(in srgb,var(--accent-2) 30%,var(--line));
+    border-radius:10px;background:color-mix(in srgb,var(--accent-2) 8%,var(--bg-2));padding:8px 12px;font-size:12.5px}
+  .reportlink.show{display:inline-flex}
+  .reportlink .ic{color:var(--accent-2)}
+  .reportlink a{color:var(--accent-2);font-weight:600;text-decoration:none}
+  .reportlink a:hover{text-decoration:underline}
+
+  .replay{display:inline-flex;align-items:center;gap:8px;border:1px solid var(--line-strong);border-radius:9px;
+    background:var(--bg-3);color:var(--txt);font:inherit;font-size:12.5px;padding:7px 13px;cursor:pointer}
+  .replay:hover{border-color:var(--cyan)} .replay .ic{color:var(--cyan)}
+</style>
+</head>
+<body>
+<style>
+  /* Belt-and-suspenders for the in-app Preview, which reuses one webview and freezes the FIRST
+     document's <head> CSS across opens. These body-level rules are new on every open and later in the
+     DOM, so they always win. The real LUCID renderer loads its stylesheet normally and ignores this. */
+  .sec code,.livestream code{color:var(--txt-2) !important}
+  .sec>.col-head .chev{color:var(--txt-3) !important}
+  .tchip .k{color:var(--txt-2) !important;font-weight:600 !important}
+  .tchip.edit .ic{color:var(--txt-2) !important}
+  .step .k{color:var(--txt-2) !important}
+  .step.edit .ic{color:var(--txt-2) !important}
+  .drawer .spark{color:var(--txt-2) !important}
+  .ic .nx{opacity:.3}
+  .ic .pg{transform-box:fill-box;transform-origin:top center;animation:pageTurn 2.8s ease-in-out infinite}
+  .ic .chk{stroke-dasharray:6.5;stroke-dashoffset:6.5;animation:tick 2.8s ease-in-out infinite}
+  .ic .chk2{stroke-dasharray:6.5;stroke-dashoffset:6.5;animation:tick 2.8s ease-in-out infinite .3s}
+  @keyframes pageTurn{0%,40%{transform:perspective(52px) rotateX(0);opacity:1}62%{transform:perspective(52px) rotateX(-152deg);opacity:1}64%{transform:perspective(52px) rotateX(-152deg);opacity:0}66%{transform:perspective(52px) rotateX(0);opacity:0}76%{opacity:1}100%{transform:perspective(52px) rotateX(0);opacity:1}}
+  @keyframes tick{0%{stroke-dashoffset:6.5}16%{stroke-dashoffset:0}52%{stroke-dashoffset:0}60%{stroke-dashoffset:6.5}100%{stroke-dashoffset:6.5}}
+  /* expandable code step (parity with today's expand-to-diff) + Open in editor */
+  .step.has-code{flex-direction:column;align-items:stretch;gap:0;padding:0}
+  .step.has-code:hover{background:none}
+  .step-row{display:flex;align-items:center;gap:9px;width:100%;background:none;border:0;color:inherit;font:inherit;text-align:left;cursor:pointer;padding:6px 8px;border-radius:8px}
+  .step-row:hover{background:var(--bg-3)}
+  .step-row .schev{margin-left:6px;color:var(--txt-4) !important;transition:transform .18s ease}
+  .step.open .step-row .schev{transform:rotate(90deg)}
+  .step-code{overflow:hidden;max-height:0;transition:max-height .22s ease}
+  .step.open .step-code{max-height:340px}
+  .code-head{display:flex;align-items:center;gap:8px;padding:6px 10px 4px;font-family:var(--mono);font-size:11px;color:var(--txt-3)}
+  .code-head .spacer,.tinline .h .spacer{flex:1}
+  .tinline .h{align-items:center}
+  .open-ed{display:inline-flex;align-items:center;gap:5px;color:var(--cyan);cursor:pointer;font-size:11px}
+  .open-ed:hover{text-decoration:underline}
+  .open-ed .ic{color:var(--cyan) !important}
+  .step-code pre{margin:0;padding:6px 12px 10px;white-space:pre-wrap;font-family:var(--mono);font-size:12px;line-height:1.5;color:var(--txt-2);max-height:260px;overflow:auto}
+  .step-code .add{color:var(--green)} .step-code .del{color:var(--red)}
+  /* subagent subtask drilldown — watch each subagent's thoughts + actions */
+  .subtask{display:flex;flex-direction:column;align-items:stretch;gap:0;padding:0;border-top:1px solid var(--line-soft)}
+  .subtask-row{display:flex;align-items:center;gap:8px;width:100%;background:none;border:0;color:inherit;font:inherit;text-align:left;cursor:pointer;padding:7px 2px}
+  .subtask-row:hover{color:var(--txt)}
+  .subtask-row .schev{color:var(--txt-4) !important;transition:transform .18s ease}
+  .subtask.open .subtask-row .schev{transform:rotate(90deg)}
+  .subtask-row .done{margin-left:auto;color:var(--green);font-family:var(--mono);font-size:11px}
+  .subtask-drill{overflow:hidden;max-height:0;transition:max-height .26s ease;padding-left:20px}
+  .subtask.open .subtask-drill{max-height:480px}
+  .drill-reasoning{font-family:var(--mono);font-size:11.5px;color:var(--txt-3);line-height:1.55;margin:3px 0 7px;padding:3px 0 3px 9px;border-left:2px solid color-mix(in srgb,var(--amber) 40%,var(--line))}
+  .drill-step{display:flex;align-items:center;gap:8px;padding:3px 0;font-size:12px}
+  .drill-step .k{font-family:var(--mono);font-size:11px;color:var(--txt-2);flex:none}
+  .drill-step .d{color:var(--txt-3);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .drill-step.search .ic{color:var(--cyan) !important} .drill-step.read .ic{color:var(--blue) !important} .drill-step.edit .ic{color:var(--txt-2) !important}
+  .drill-out{display:flex;align-items:center;gap:7px;font-size:12px;color:var(--green);padding:5px 0 2px;font-family:var(--mono)}
+  .drill-out .ic{color:var(--green) !important}
+  /* ── review pass 2 ── */
+  /* subagent card: neutral (was a distracting green box) */
+  .subagent{border-color:var(--line-soft) !important;background:var(--bg-2) !important}
+  .subagent .look{color:var(--txt-2) !important}
+  .subagent .who b{color:var(--txt) !important}
+  .subtask-row .done{color:var(--txt-3) !important}
+  .subtask-row .ic{color:var(--txt-3) !important}
+  .drill-out{color:var(--txt-2) !important}
+  .drill-out .ic{color:var(--txt-2) !important}
+  /* embossed, polished pills so the labels pop off the page */
+  .tchip,.pill{background:linear-gradient(180deg,var(--bg-3),var(--bg-2)) !important;box-shadow:inset 0 1px 0 rgba(255,255,255,.06),0 1px 2px rgba(0,0,0,.42)}
+  .tchip .k,.tchip .d,.pill,.step .k,.diffstat{text-shadow:0 -1px 0 rgba(255,255,255,.06),0 1px 1px rgba(0,0,0,.6)}
+  /* Open in editor: an embossed neutral pill, not a raw link */
+  .open-ed{padding:2px 10px;border-radius:999px;border:1px solid var(--line-strong);background:linear-gradient(180deg,var(--bg-3),var(--bg-2));color:var(--txt-2) !important;box-shadow:inset 0 1px 0 rgba(255,255,255,.07),0 1px 2px rgba(0,0,0,.45);text-shadow:0 1px 1px rgba(0,0,0,.5)}
+  .open-ed:hover{border-color:var(--line-strong);color:var(--txt) !important;text-decoration:none}
+  .open-ed .ic{color:var(--txt-2) !important}
+  /* status LED — mirrors the model-picker .live-dot: green + glow + pulse while working, off when done */
+  .turn-head .led{width:8px;height:8px;border-radius:50%;background:var(--txt-4);transition:background .3s}
+  .turn.live .turn-head .led{background:var(--green);box-shadow:0 0 0 2px rgba(70,210,126,.14),0 0 8px var(--green);animation:ledPulse 2.4s ease-in-out infinite}
+  .turn.settled .turn-head .led{background:var(--txt-4);box-shadow:none;animation:none}
+  @keyframes ledPulse{0%{box-shadow:0 0 0 0 rgba(70,210,126,.5),0 0 8px var(--green)}70%{box-shadow:0 0 0 6px rgba(70,210,126,0),0 0 8px var(--green)}100%{box-shadow:0 0 0 0 rgba(70,210,126,0),0 0 8px var(--green)}}
+  .turn-head .agent{color:var(--txt-2);font-weight:500}
+  .turn-head .agent b{color:var(--txt);font-weight:680}
+  .turn-head .used{color:var(--txt-3);display:none}
+  .turn.settled .turn-head .used{display:inline}
+  /* -- review pass 3: bottom streaming HUD + failed-tool (toolbox) -- */
+  .hud{display:flex;align-items:center;gap:6px;font-family:var(--mono);font-size:11px;color:var(--txt-2);line-height:1}
+  .hud .hud-ic{flex:none;display:inline-flex}
+  .hud.streaming .hud-ic,.hud.done .hud-ic{color:var(--green)}
+  .hud.streaming .hud-ic .ic{animation:hudpulse 1.5s ease infinite}
+  .hud-t,.hud-phase,.hud-meta{color:var(--txt-2);font-variant-numeric:tabular-nums}
+  .hud.streaming .hud-meta{color:var(--txt)}
+  .hud-sep{opacity:.5}
+  @keyframes hudpulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.35;transform:scale(.88)}}
+  .runfoot{display:flex !important;align-items:center;gap:10px;flex-wrap:wrap}
+  .runmeta{font-size:11.5px;color:var(--txt-3);font-family:var(--mono)}
+  .turn.live .runmeta,.turn.live #genReport{display:none}
+  /* failed tool calls: subdued amber (not red) so they don't alarm; compact. */
+  .toolfail{margin:8px 0 2px;width:fit-content;max-width:100%}
+  .tf-head{display:inline-flex;align-items:center;gap:6px;padding:3px 8px;border-radius:8px;border:1px solid rgba(232,178,60,.32);background:var(--bg-2);color:var(--amber);cursor:pointer;font:inherit;font-size:11.5px}
+  .tf-head:hover{border-color:rgba(232,178,60,.6);box-shadow:0 0 0 3px var(--amber-dim)}
+  .tf-head .ic{color:var(--amber) !important}
+  .tf-count{font-family:var(--mono);font-size:10px;font-weight:700;color:var(--amber);background:var(--amber-dim);border-radius:7px;padding:1px 6px}
+  .tf-lbl{color:var(--txt-3);font-family:var(--mono);font-size:11px}
+  .tf-body{overflow:hidden;max-height:0;transition:max-height .24s ease}
+  .toolfail.open .tf-body{max-height:300px;margin-top:5px;border:1px solid var(--line);border-left:2px solid rgba(232,178,60,.55);border-radius:8px;background:var(--bg-2);padding:6px 10px}
+  .tf-title{font-size:10px;font-weight:600;letter-spacing:.5px;text-transform:uppercase;color:var(--txt-4);margin-bottom:1px}
+  .tf-row{padding:5px 0;font-size:12px;color:var(--txt-2)}
+  .tf-row+.tf-row{border-top:1px solid var(--line-soft)}
+  .tf-row-head{display:flex;align-items:center;gap:6px}
+  .tf-row-head .ic{color:var(--amber) !important;flex:none}
+  .tf-row-head b{color:var(--txt-2);flex:none;font-weight:600}
+  .tf-reason{color:var(--txt-3)}
+  .tf-cmd{display:block;font-family:var(--mono);font-size:11px;color:var(--txt-3);margin:3px 0 0;white-space:pre-wrap}
+  .tf-detail{margin:3px 0 0;font-family:var(--mono);font-size:10.5px;line-height:1.45;color:var(--txt-4);white-space:pre-wrap}
+  .tchip.fail{border-color:rgba(232,178,60,.4)}
+  .tchip.fail .ic{color:var(--amber) !important} .tchip.fail .k{color:var(--txt-2) !important}
+  /* embossed report CTA with animated hover + click */
+  .btn.cta{position:relative;isolation:isolate;overflow:hidden;border:1px solid color-mix(in srgb,var(--accent-2) 45%,var(--line-strong));background:linear-gradient(180deg,color-mix(in srgb,var(--accent) 22%,var(--bg-3)),var(--bg-3));box-shadow:inset 0 1px 0 rgba(255,255,255,.10),0 1px 2px rgba(0,0,0,.5),0 6px 16px -8px color-mix(in srgb,var(--accent) 40%,transparent);text-shadow:0 1px 1px rgba(0,0,0,.5);transition:transform .12s ease,box-shadow .18s ease,border-color .18s ease}
+  .btn.cta:hover{transform:translateY(-1px);border-color:var(--accent-2);box-shadow:inset 0 1px 0 rgba(255,255,255,.14),0 2px 4px rgba(0,0,0,.5),0 12px 26px -8px color-mix(in srgb,var(--accent) 55%,transparent)}
+  .btn.cta:active{transform:translateY(1px) scale(.99);box-shadow:inset 0 2px 5px rgba(0,0,0,.55),0 1px 2px rgba(0,0,0,.4)}
+  .btn.cta::after{content:"";position:absolute;inset:0;border-radius:inherit;pointer-events:none;background:linear-gradient(110deg,transparent 22%,rgba(255,255,255,.12) 46%,transparent 62%);transform:translateX(-130%);opacity:0}
+  .btn.cta:hover::after{animation:sheen 1s ease forwards;opacity:1}
+  @keyframes sheen{to{transform:translateX(130%)}}
+</style>
+<div class="wrap">
+  <div class="banner">
+    <span><b>Design prototype v2</b> — animated SVGs + live streaming preserved.</span>
+    <button class="replay" id="replay"><span data-ic="refresh"></span> Replay the run (live → settle)</button>
+    <span class="spacer"></span>
+    <span class="legend"><span><span class="new">■</span> new</span><span><span class="keep">■</span> exists</span></span>
+  </div>
+
+  <div class="umsg"><div class="b">Refactor the trivia scroller and make the whole thing re-seedable per role.</div></div>
+
+  <div class="turn settled" id="turn">
+    <div class="turn-head">
+      <span class="led"></span><span class="agent">LUCID Agent: <b>claude-opus-4-8</b><span class="used"> used</span></span>
+    </div>
+
+    <!-- reasoning -->
+    <div class="col reasoning" id="reasoning">
+      <button class="col-head" data-toggle><span class="chev" data-ic="chevron" data-sz="13"></span><span class="bulb" data-ic="bulb" data-sz="14"></span><span id="reasoningLabel">&nbsp;Thought for 6s</span></button>
+      <div class="col-body" id="reasoningBody">Weighed sectioning on the model's own headings vs. re-summarizing with a model — headings are deterministic and free, going with that. Tool steps interleave chronologically but stay one line so the prose still reads top-to-bottom. Streaming stays live; sectioning happens on settle.</div>
+    </div>
+
+    <!-- LIVE stream (unsectioned, exactly like today) -->
+    <div class="livewrap">
+      <div class="livestream" id="livestream"></div>
+    </div>
+
+    <!-- SETTLED sectioned answer -->
+    <div class="answer">
+      <div class="col sec open" data-col>
+        <button class="col-head" data-toggle><span class="chev" data-ic="chevron" data-sz="14"></span>Problem</button>
+        <div class="col-body">
+          <p>The scroller mounts once at boot and never re-reads its source, so a role switch left stale questions on screen. I traced the mount path
+            <span class="tchip search" data-chip="c1"><span class="ic" data-ic="search" data-sz="12"></span><span class="k">search</span> trivia · 3 files</span>
+            and confirmed the bank is only read in <code>ensureTrivia()</code>.</p>
+          <div class="tinline" id="c1"><div class="h"><span data-ic="search" data-sz="12"></span> search · "trivia" in desktop/renderer</div><pre>app.ts:4770  trivBank = bankForRole(state.userRole)
+trivia_roles.ts:293  export function bankForRole(role)</pre></div>
+        </div>
+      </div>
+
+      <div class="col sec open" data-col>
+        <button class="col-head" data-toggle><span class="chev" data-ic="chevron" data-sz="14"></span>What I changed</button>
+        <div class="col-body">
+          <p>Introduced <code>effectiveTriviaBank(role)</code> — generated pack wins, seed bank is the floor
+            <span class="tchip edit" data-chip="c2"><span class="ic" data-ic="pen" data-sz="12"></span><span class="k">edit</span> app.ts <span class="add">+63</span> <span class="del">−4</span></span>.
+            Added the fail-closed generator
+            <span class="tchip edit" data-chip="c3"><span class="ic" data-ic="pen" data-sz="12"></span><span class="k">write</span> trivia_seed.ts <span class="add">+140</span></span>
+            and ran the suite
+            <span class="tchip run" data-chip="c4"><span class="ic" data-ic="term" data-sz="12"></span><span class="k">bash</span> 42 pass</span>; an earlier build probe didn't run <span class="tchip fail"><span class="ic" data-ic="close" data-sz="11"></span><span class="k">bash</span> make · exit 127</span>.</p>
+          <div class="tinline" id="c2"><div class="h"><span data-ic="pen" data-sz="12"></span> edit · desktop/renderer/app.ts <span class="spacer"></span><span class="open-ed"><span data-ic="arrow" data-sz="12"></span> Open in editor</span></div><pre><span class="del">- trivBank = bankForRole(state.userRole);</span>
+<span class="add">+ trivBank = effectiveTriviaBank(state.userRole);</span>
+<span class="add">+ function effectiveTriviaBank(role) {</span>
+<span class="add">+   return storedTriviaPack(role) ?? bankForRole(role);</span>
+<span class="add">+ }</span></pre></div>
+          <div class="tinline" id="c3"><div class="h"><span data-ic="pen" data-sz="12"></span> write · desktop/trivia_seed.ts <span class="spacer"></span><span class="open-ed"><span data-ic="arrow" data-sz="12"></span> Open in editor</span></div><pre>gather → scan (fail-closed) → generate on the
+selected model → isTriviaQuestion-gate the pack</pre></div>
+          <div class="tinline" id="c4"><div class="h"><span data-ic="term" data-sz="12"></span> bash · bun test</div><pre>42 pass  0 fail  [386ms]</pre></div>
+        </div>
+      </div>
+
+      <div class="col sec" data-col>
+        <button class="col-head" data-toggle><span class="chev" data-ic="chevron" data-sz="14"></span>Verification</button>
+        <div class="col-body"><p>Typecheck clean across all three tsconfigs; the new demo and 42 unit tests are green; prior trivia demos still pass.</p></div>
+      </div>
+    </div>
+
+    <!-- tool-activity drawer -->
+    <div class="col drawer" id="drawer">
+      <button class="col-head" data-toggle><span class="chev" data-ic="chevron" data-sz="13"></span><span class="spark" data-ic="spark" data-sz="14"></span><span id="drawerLabel">&nbsp;Tool activity <span class="sum">· 12 steps · 4 files · 8.3s</span></span></button>
+      <div class="col-body" id="drawerBody"></div>
+    </div>
+
+    <!-- failed tool calls (P-TOOLFAIL.2 toolbox): a run of failures collapses to ONE red badge -->
+    <div class="toolfail" id="toolfail">
+      <button class="tf-head"><span data-ic="toolbox" data-sz="13"></span><span class="tf-count">2</span><span class="tf-lbl">did not run</span></button>
+      <div class="tf-body">
+        <div class="tf-title">Tool Call Actions</div>
+        <div class="tf-row"><div class="tf-row-head"><span data-ic="close" data-sz="11"></span><b>bash</b><span class="tf-reason">tool did not run: command not found</span></div><code class="tf-cmd">$ make build</code><pre class="tf-detail">make: command not found</pre></div>
+        <div class="tf-row"><div class="tf-row-head"><span data-ic="close" data-sz="11"></span><b>search</b><span class="tf-reason">tool did not run: no matches</span></div><code class="tf-cmd">$ grep -r "legacyBank" src</code></div>
+      </div>
+    </div>
+
+    <!-- subagent card -->
+    <div class="col subagent" id="subagent">
+      <button class="col-head" data-toggle><span class="chev" data-ic="chevron" data-sz="13"></span><span class="look" data-ic="look" data-sz="15"></span><span class="who">&nbsp;Delegated to <b>explore</b> · 3 subtasks · done</span></button>
+      <div class="col-body">
+        <div class="subtask">
+          <button class="subtask-row"><span class="schev" data-ic="chevron" data-sz="12"></span><span class="ic" data-ic="check" data-sz="13"></span><span>Map the model-picker + one-shot completion seam</span><span class="done">done</span></button>
+          <div class="subtask-drill">
+            <div class="drill-reasoning">Looked for how the renderer reads the selected model and runs a one-shot completion off the main transcript; the /goal checker-model path was the closest precedent.</div>
+            <div class="drill-step search"><span class="ic" data-ic="search" data-sz="12"></span><span class="k">search</span><span class="d">"createAgentSession" · harness</span></div>
+            <div class="drill-step read"><span class="ic" data-ic="eye" data-sz="12"></span><span class="k">read</span><span class="d">desktop/acp_backend.ts:1305-1420</span></div>
+            <div class="drill-out"><span data-ic="arrow" data-sz="12"></span> backend.complete(system, user, {model}) is the off-transcript util seam</div>
+          </div>
+        </div>
+        <div class="subtask">
+          <button class="subtask-row"><span class="schev" data-ic="chevron" data-sz="12"></span><span class="ic" data-ic="check" data-sz="13"></span><span>Map session / KG / code-graph sources</span><span class="done">done</span></button>
+          <div class="subtask-drill">
+            <div class="drill-reasoning">Traced the bridge methods the renderer can call for each opt-in source, plus their trust / lock semantics.</div>
+            <div class="drill-step search"><span class="ic" data-ic="search" data-sz="12"></span><span class="k">search</span><span class="d">bridge.sessions / personalGraph / codeGraph</span></div>
+            <div class="drill-step read"><span class="ic" data-ic="eye" data-sz="12"></span><span class="k">read</span><span class="d">desktop/sessions.ts · personal.ts</span></div>
+            <div class="drill-out"><span data-ic="arrow" data-sz="12"></span> KG returns null when locked, so that source contributes nothing</div>
+          </div>
+        </div>
+        <div class="subtask">
+          <button class="subtask-row"><span class="schev" data-ic="chevron" data-sz="12"></span><span class="ic" data-ic="check" data-sz="13"></span><span>Map the settings-panel UI conventions</span><span class="done">done</span></button>
+          <div class="subtask-drill">
+            <div class="drill-reasoning">Found the existing toggle + delegation pattern so the new controls match, not invent a second style.</div>
+            <div class="drill-step search"><span class="ic" data-ic="search" data-sz="12"></span><span class="k">search</span><span class="d">setCard · #setBody change delegation</span></div>
+            <div class="drill-out"><span data-ic="arrow" data-sz="12"></span> mirror #personalToggle: a checkbox in .set-toggle + click delegation</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- footer: the streaming HUD (bottom, running cost) + the settled-only report CTA -->
+    <div class="runfoot">
+      <div class="hud done" id="hud"><span class="hud-ic" id="hudIc"></span><span class="hud-t" id="hudT">8.3s</span><span class="hud-sep">·</span><span class="hud-phase" id="hudPhase">Done</span><span class="hud-sep">·</span><span class="hud-meta" id="hudMeta">18.7k tokens · ~$0.42</span></div>
+      <span class="runmeta">· long run · 12 steps · 3 files</span>
+      <span class="spacer"></span>
+      <button class="btn cta" id="genReport"><span class="ic" data-ic="doc" data-sz="14"></span> Generate engineering report</button>
+      <span class="reportlink" id="reportLink"><span class="ic" data-ic="doc" data-sz="14"></span> Run report ready — <a href="#">Open in Reports ↗</a></span>
+    </div>
+  </div>
+</div>
+
+<script>
+  // ── custom icon set (LUCID hand-drawn family: 24×24, 1.6 stroke, round caps) ──
+  const ICONS = {
+    chevron: '<path d="M9.5 6 15 12l-5.5 6"/>',
+    arrow: '<path d="M5 12h13"/><path d="M13 6l6 6-6 6"/>',
+    bulb: '<path d="M12 4.4a4.8 4.8 0 0 0-2.9 8.6c.7.5 1.1 1.3 1.2 2.1h3.4c.1-.8.5-1.6 1.2-2.1A4.8 4.8 0 0 0 12 4.4z"/><path d="M10.4 18.3h3.2"/><path d="M10.9 20.2h2.2"/><path class="fil" d="M12 9.3v2.3"/><path class="fil" d="M10.8 10.4h2.4"/>',
+    spark: '<path d="M7.5 7.5h9v9h-9z"/><path class="pin" d="M10 4.2v3"/><path class="pin" d="M14 4.2v3"/><path class="pin" d="M10 16.8v3"/><path class="pin" d="M14 16.8v3"/><path class="pin" d="M4.2 10h3"/><path class="pin" d="M4.2 14h3"/><path class="pin" d="M16.8 10h3"/><path class="pin" d="M16.8 14h3"/><circle class="core" cx="12" cy="12" r="2.1"/>',
+    look: '<path d="M6.4 5.6h11.2a1.2 1.2 0 0 1 1.2 1.2v12.6a1.2 1.2 0 0 1-1.2 1.2H6.4a1.2 1.2 0 0 1-1.2-1.2V6.8a1.2 1.2 0 0 1 1.2-1.2z"/><path d="M9.9 4.4a2.1 2.1 0 0 1 4.2 0h1.1a.8.8 0 0 1 .8.8v1a.8.8 0 0 1-.8.8H8.8a.8.8 0 0 1-.8-.8v-1a.8.8 0 0 1 .8-.8h1.1z"/><path class="nx" d="M8.7 11.6h6.6"/><path class="nx" d="M8.7 14.4h6.6"/><g class="pg"><path d="M11 11h4.4"/><path d="M11 14h4.4"/><path class="chk" d="M7.6 10.4l1 1 1.9-2.1"/><path class="chk2" d="M7.6 13.4l1 1 1.9-2.1"/></g>',
+    search: '<path d="M11 4.5a6 6 0 1 0 0 12 6 6 0 0 0 0-12z"/><path d="M20 20l-4.4-4.4"/>',
+    pen: '<path d="M5.4 18.6l-1.4 1.4.9-3.6L15.2 5.6a1.6 1.6 0 0 1 2.3 0l.9.9a1.6 1.6 0 0 1 0 2.3L7.6 19.5z"/><path d="M13.6 7.2l3.2 3.2"/>',
+    term: '<path d="M4 5.5h16v13H4z"/><path d="M7.5 9.7 10 12l-2.5 2.3"/><path d="M11.8 14.3h4.7"/>',
+    doc: '<path d="M6.5 4.5h7l4 4v10.5a1 1 0 0 1-1 1h-10a1 1 0 0 1-1-1v-13.5a1 1 0 0 1 1-1z"/><path d="M13.5 4.5v4h4"/><path d="M8.8 12.5h6.4"/><path d="M8.8 15.3h6.4"/>',
+    refresh: '<path d="M5 12a7 7 0 0 1 12-5l2 2"/><path d="M19 5v4h-4"/><path d="M19 12a7 7 0 0 1-12 5l-2-2"/><path d="M5 19v-4h4"/>',
+    check: '<path d="M5 12.5 10 17 19 7"/>',
+    eye: '<path d="M3.5 12S6.5 6.5 12 6.5 20.5 12 20.5 12 17.5 17.5 12 17.5 3.5 12 3.5 12z"/><path d="M12 14.2a2.2 2.2 0 1 0 0-4.4 2.2 2.2 0 0 0 0 4.4z"/>',
+    bolt: '<path d="M12 3 6 13h5l-1 8 6-11h-5z"/>',
+    close: '<path d="M6 6l12 12"/><path d="M18 6 6 18"/>',
+    toolbox: '<path d="M4 10.5h16v7a1.6 1.6 0 0 1-1.6 1.6H5.6A1.6 1.6 0 0 1 4 17.5z"/><path d="M4 10.5 5 8.1A1.7 1.7 0 0 1 6.6 7h10.8a1.7 1.7 0 0 1 1.6 1.1l1 2.4"/><path d="M9.5 7V5.9a1.4 1.4 0 0 1 1.4-1.4h2.2a1.4 1.4 0 0 1 1.4 1.4V7"/><path d="M10 13.8h4"/>',
+  };
+  const svg = (name, sz, cls) => `<svg class="ic ${cls||''}" viewBox="0 0 24 24" width="${sz||14}" height="${sz||14}" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name]||ICONS.check}</svg>`;
+  const hydrate = (root) => { for (const s of (root||document).querySelectorAll("[data-ic]")) { s.outerHTML = svg(s.getAttribute("data-ic"), +s.getAttribute("data-sz")||14, s.className); } };
+  hydrate();
+
+  const $ = (id) => document.getElementById(id);
+  const turn = $("turn");
+
+  // expandable code steps + subagent drilldowns + Open in editor (delegated -> survives drawer rebuilds)
+  const plainStep = (cls, ic, k, d) => `<div class="step ${cls}">${svg(ic,13)}<span class="k">${k}</span><span class="d">${d}</span></div>`;
+  const codeStep = (cls, ic, k, d, diff, code) => `<div class="step ${cls} has-code" data-step><button class="step-row">${svg(ic,13)}<span class="k">${k}</span><span class="d">${d}</span><span class="diffstat">${diff}</span>${svg("chevron",13,"schev")}</button><div class="step-code"><div class="code-head">${svg(ic,11)} ${d.split("/").pop()} <span class="spacer"></span><span class="open-ed">${svg("arrow",12)} Open in editor</span></div><pre>${code}</pre></div></div>`;
+  function drawerStepsHtml(){
+    return plainStep("search","search","search",'"trivia" in desktop/renderer')
+      + plainStep("read","eye","read","desktop/renderer/app.ts:4686-4920")
+      + codeStep("edit","pen","edit","desktop/renderer/app.ts",'<span class="add">+63</span> <span class="del">\u22124</span>','<span class="del">- trivBank = bankForRole(state.userRole);</span>\n<span class="add">+ trivBank = effectiveTriviaBank(state.userRole);</span>\n<span class="add">+ function effectiveTriviaBank(role) {</span>\n<span class="add">+   return storedTriviaPack(role) ?? bankForRole(role);</span>\n<span class="add">+ }</span>')
+      + codeStep("edit","pen","write","desktop/trivia_seed.ts",'<span class="add">+140</span>','<span class="add">+ export async function seedTrivia(req, deps) {</span>\n<span class="add">+   // gather -> scan (fail-closed) -> generate -> isTriviaQuestion gate</span>\n<span class="add">+ }</span>')
+      + plainStep("run","term","bash","bun test desktop/trivia_seed.test.ts")
+      + '<div class="cap">\u2026 7 more \u00b7 code steps expand to the diff \u00b7 read/search/bash stay one-line (parity with today)</div>';
+  }
+  $("drawerBody").innerHTML = drawerStepsHtml();
+  const fmtTok = (n) => n >= 1000 ? (n / 1000).toFixed(1) + "k" : String(n);
+  function setHud(mode, timer, phase, tokens, cost) {
+    $("hud").className = "hud " + mode;
+    $("hudIc").innerHTML = svg(mode === "streaming" ? "bolt" : "check", 12);
+    $("hudT").textContent = timer; $("hudPhase").textContent = phase;
+    $("hudMeta").textContent = tokens + " tokens \u00b7 ~$" + cost;
+  }
+  setHud("done", "8.3s", "Done", "18.7k", "0.42");
+  turn.addEventListener("click", (e) => {
+    const tf = e.target.closest(".tf-head"); if (tf) { tf.closest(".toolfail").classList.toggle("open"); return; }
+    const oe = e.target.closest(".open-ed"); if (oe) { e.stopPropagation(); alert("Opens the file in the IDE editor, at the change (mock)."); return; }
+    const sr = e.target.closest(".step-row"); if (sr) { sr.closest(".step").classList.toggle("open"); return; }
+    const su = e.target.closest(".subtask-row"); if (su) { su.closest(".subtask").classList.toggle("open"); return; }
+  });
+
+  // collapsible headers
+  for (const b of document.querySelectorAll("[data-toggle]")) b.addEventListener("click", () => b.closest(".col").classList.toggle("open"));
+  // inline chip expand
+  for (const c of document.querySelectorAll(".tchip[data-chip]")) c.addEventListener("click", () => $(c.getAttribute("data-chip"))?.classList.toggle("open"));
+
+  // report CTA
+  const gen = $("genReport"), link = $("reportLink");
+  gen.addEventListener("click", () => {
+    gen.innerHTML = svg("refresh", 14, "spin") + " Generating…"; gen.disabled = true;
+    setTimeout(() => { gen.style.display = "none"; link.classList.add("show"); }, 1100);
+  });
+
+  // ── replay: LIVE (streams below, animated icons) → SETTLE (sectionize + collapse) ──
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const STREAM = "The scroller mounts once at boot and never re-reads its source, so a role switch left stale questions on screen. I introduced effectiveTriviaBank(role) — the generated pack wins and the seed bank is the floor — routed both game builders through it, added the fail-closed generator that scans the mined context before the model sees it, then ran the suite. Typecheck is clean and 42 tests pass.";
+  const STEPS = [
+    { at: 6,  cls: "search", ic: "search", k: "search", d: '"trivia" in desktop/renderer', cur: "Searching the codebase…" },
+    { at: 14, cls: "read",   ic: "eye",    k: "read",   d: "app.ts:4686-4920", cur: "Reading the mount path…" },
+    { at: 26, cls: "edit",   ic: "pen",    k: "edit",   d: "desktop/renderer/app.ts", diff: '<span class="add">+63</span> <span class="del">−4</span>', cur: "Editing app.ts…" },
+    { at: 34, cls: "edit",   ic: "pen",    k: "write",  d: "desktop/trivia_seed.ts", diff: '<span class="add">+140</span>', cur: "Writing trivia_seed.ts…" },
+    { at: 44, cls: "run",    ic: "term",   k: "bash",   d: "bun test", cur: "Running the tests…" },
+  ];
+
+  async function replay() {
+    // reset to LIVE
+    turn.className = "turn live";
+    setHud("streaming", "0.0s", "Thinking\u2026", "0", "0.00");
+    $("reasoning").classList.add("open");
+    $("reasoningLabel").innerHTML = "&nbsp;Thinking…";
+    $("reasoning").querySelector(".bulb").classList.add("glow");
+    $("drawer").classList.add("open");
+    $("drawer").querySelector(".spark").classList.add("scan");
+    $("drawerLabel").innerHTML = '&nbsp;<span class="cur">Working…</span>';
+    $("drawerBody").innerHTML = "";
+    $("subagent").classList.add("open");
+    const ls = $("livestream"); ls.innerHTML = "";
+
+    await sleep(500);
+    // stream the answer word-by-word (this is the "tokens below, like now" phase)
+    const words = STREAM.split(" ");
+    let text = "", si = 0, phase = "Writing\u2026";
+    for (let i = 0; i < words.length; i++) {
+      text += (i ? " " : "") + words[i];
+      ls.innerHTML = "<p>" + text + '<span class="cursor"></span></p>';
+      // fire tool steps live as we pass their word index
+      while (si < STEPS.length && i >= STEPS[si].at) {
+        const s = STEPS[si++];
+        phase = s.cur;
+        $("drawerLabel").innerHTML = '&nbsp;<span class="cur">' + s.cur + "</span>";
+        const row = document.createElement("div");
+        row.className = "step " + s.cls;
+        row.innerHTML = svg(s.ic, 13) + '<span class="k">' + s.k + '</span><span class="d">' + s.d + "</span>" + (s.diff ? '<span class="diffstat">' + s.diff + "</span>" : "");
+        $("drawerBody").appendChild(row);
+      }
+      const prog = (i + 1) / words.length;
+      setHud("streaming", (prog * 8.3).toFixed(1) + "s", phase, fmtTok(Math.round(prog * 18700)), (prog * 0.42).toFixed(2));
+      await sleep(55);
+    }
+    ls.querySelector(".cursor")?.remove();
+    await sleep(400);
+    settle();
+  }
+
+  function settle() {
+    turn.className = "turn settled";
+    // reasoning → summary, stop the glow
+    $("reasoning").classList.remove("open");
+    $("reasoningLabel").innerHTML = "&nbsp;Thought for 6s";
+    $("reasoning").querySelector(".bulb")?.classList.remove("glow");
+    // drawer → collapsed summary, stop the spark
+    $("drawer").classList.remove("open");
+    $("drawerLabel").innerHTML = '&nbsp;Tool activity <span class="sum">· 12 steps · 4 files · 8.3s</span>';
+    $("drawer").querySelector(".spark")?.classList.remove("scan");
+    $("drawerBody").innerHTML = drawerStepsHtml();
+    // subagent → collapsed summary, stop the bob
+    $("subagent").classList.remove("open");
+    // report CTA back to its offer state
+    gen.style.display = ""; gen.disabled = false; gen.innerHTML = svg("doc", 14) + " Generate engineering report";
+    link.classList.remove("show");
+    setHud("done", "8.3s", "Done", "18.7k", "0.42");
+  }
+
+  $("replay").addEventListener("click", () => { $("replay").innerHTML = svg("refresh",14,"spin") + " Replaying…"; replay().then(() => { $("replay").innerHTML = svg("refresh",14) + " Replay the run (live → settle)"; }); });
+</script>
+</body>
+</html>

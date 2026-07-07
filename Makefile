@@ -608,3 +608,19 @@ demo-P-KGUI.1: ## P-KGUI.1 (ADR-0184): the KG header decluttered - title "KG" (h
 .PHONY: demo-P-KGUI.2
 demo-P-KGUI.2: ## P-KGUI.2 (ADR-0185): the Data dropdown - Import history / AI-extraction toggle / Export vault / CUI archive folded from three buttons + a checkbox into one self-describing menu; the AI toggle is remembered state (never closes the menu); CUI keeps its danger look + confirm toast
 	$(BUN) run desktop/scripts/demo_p_kgui_2.ts
+
+.PHONY: demo-P-TRIV.4
+demo-P-TRIV.4: ## P-TRIV.4 (ADR-0186): the Settings toggle + an AI re-seed ("recycle") for the Trivia Wire - regenerate a per-role pack on the user's SELECTED model from opt-in context (sessions/KG/code graph); context is scanned FAIL-CLOSED (a finding or a dead scanner drops the whole re-seed, model never called), delimited + late, generated questions clear the SAME isTriviaQuestion gate as the seed floor, fail-quiet to the seed bank
+	$(BUN) run harness/scripts/demo_ptriv4.ts
+.PHONY: demo-P-EVAL.1
+demo-P-EVAL.1: ## P-EVAL.1 (ADR-0187): the PURE Model-Evaluation metrics + per-model API-latency rollup core - metric formulas with direct/proxy/needs_signal honesty tiers (a missing signal is null, never zero), DST-correct business-hours (08:00-17:00 ET) bucketing + nearest-rank p50/p95, per-model-by-hour weekly/monthly rollup with WoW/MoM deltas, and ASCII-only mermaid xychart markdown the existing report viewer bar-ifies
+	$(BUN) run harness/scripts/demo_peval1.ts
+.PHONY: demo-P-CHAT.A
+demo-P-CHAT.A: ## P-CHAT.A (ADR-0188): sectioned agent turn - PURE fence-aware heading/rule splitter (sectionizeAnswer) that turns a settled answer into collapsible sections (streaming unchanged; a trivial answer is never accordioned) + subagent card collapsed by default. Pure keystone verified here; the app.ts settle-transform + collapse are typechecked and QA-gated in-app
+	$(BUN) run harness/scripts/demo_pchata.ts
+.PHONY: demo-P-CHAT.B
+demo-P-CHAT.B: ## P-CHAT.B (ADR-0189): inline tool-event chips - PURE fence-aware / block-boundary interleave (interleaveChips) that threads each tool call back into the settled answer as an expandable chip anchored where it fired (prose parts still sectionize via P-CHAT.A; a no-tool answer is unchanged) + a +/- diffstat per edit/write + a lazy drilldown. Pure keystone verified here; the app.ts settle interleave + chip drilldowns + thoughts-window drop are typechecked and QA-gated in-app
+	$(BUN) run harness/scripts/demo_pchatb.ts
+.PHONY: demo-P-CHAT.C
+demo-P-CHAT.C: ## P-CHAT.C (ADR-0190): settled-turn "Generate engineering report" - PURE observed-turn->RunRecord adapter (buildRunRecord/renderTurnEvalReport) that maps a turn's tool calls + diffstats + tokens into evals.ts's RunRecord (reads/searches/bash are not files, repeated edits merge, the surplus is a re-edit, no AC/test signal stays needs_signal not faked) and renders the reused Model-Evaluation markdown. Pure keystone verified here; the run-footer CTA + /api/eval/report route are typechecked and QA-gated in-app
+	$(BUN) run harness/scripts/demo_pchatc.ts

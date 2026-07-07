@@ -1,0 +1,359 @@
+<!doctype html>
+<!-- LUCID design prototype — Engineering Reports module: the Evals run-report stored + browsed.
+     Clean, printable (@media print → light), podcast/TTS, right-side collapsible accordion. Static mock. -->
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>LUCID · Engineering Reports</title>
+<style>
+  :root{
+    --bg-0:#0a0b0f;--bg-1:#0f1117;--bg-2:#151823;--bg-3:#1b1f2b;--bg-4:#222736;
+    --line:#252a3a;--line-soft:#1a1e2a;--line-strong:#323a4f;
+    --txt:#edeff6;--txt-1:#edeff6;--txt-2:#aeb4c6;--txt-3:#727a90;--txt-4:#525a70;
+    --accent:#c64bd6;--accent-2:#e07bf0;--cyan:#46c8dc;--green:#46d27e;--amber:#e8b23c;--red:#ef5f5f;--blue:#5e8df2;
+    --green-dim:rgba(70,210,126,.13);--amber-dim:rgba(232,178,60,.14);--blue-dim:rgba(94,141,242,.14);--accent-dim:rgba(198,75,214,.14);
+    --font:"Inter",ui-sans-serif,-apple-system,"Segoe UI",Roboto,system-ui,sans-serif;
+    --mono:ui-monospace,"Cascadia Code","SF Mono",Menlo,Consolas,monospace;color-scheme:dark;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:radial-gradient(1100px 560px at 85% -12%,rgba(198,75,214,.07),transparent 60%),var(--bg-1);
+    color:var(--txt);font-family:var(--font);font-size:14px;line-height:1.6}
+  svg.ic{display:inline-block;vertical-align:-2px}
+
+  .modal{max-width:1000px;margin:18px auto;background:linear-gradient(180deg,var(--bg-2),var(--bg-1));
+    border:1px solid var(--line);border-radius:16px;overflow:hidden;box-shadow:0 24px 60px -20px rgba(0,0,0,.6)}
+  .modal-h{display:flex;align-items:center;gap:10px;padding:13px 16px;border-bottom:1px solid var(--line-soft)}
+  .modal-h .t{font-size:15px;font-weight:700}
+  .modal-h .t small{font-weight:500;color:var(--txt-3);font-size:12px;margin-left:6px}
+  .modal-h .sp{flex:1}
+  .modal-h .x{width:28px;height:28px;border-radius:7px;border:1px solid var(--line);background:var(--bg-2);color:var(--txt-3);cursor:pointer}
+
+  .grid{display:grid;grid-template-columns:minmax(0,1fr) 288px;gap:0}
+  .viewer{min-width:0;border-right:1px solid var(--line-soft);display:flex;flex-direction:column;max-height:82vh}
+  .browse{background:var(--bg-2);padding:12px;overflow:auto;max-height:82vh}
+
+  /* report toolbar */
+  .re-acts{display:flex;align-items:center;gap:6px;padding:10px 16px;border-bottom:1px solid var(--line-soft);flex-wrap:wrap}
+  .btn-mini{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line-strong);border-radius:8px;
+    background:linear-gradient(180deg,var(--bg-3),var(--bg-2));color:var(--txt-2);font:inherit;font-size:12px;padding:5px 10px;cursor:pointer;
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.05);text-shadow:0 1px 1px rgba(0,0,0,.5);transition:.15s}
+  .btn-mini:hover{border-color:var(--accent-2);color:var(--txt)}
+  .btn-mini .ic{color:var(--txt-3)} .btn-mini:hover .ic{color:var(--accent-2)}
+  .btn-mini.listen{border-color:color-mix(in srgb,var(--accent-2) 45%,var(--line-strong))}
+  .btn-mini.listen .ic{color:var(--accent-2)}
+  .re-acts .sp{flex:1}
+
+  /* podcast player */
+  .cast{display:none;align-items:center;gap:11px;margin:0 16px;padding:9px 12px;border:1px solid color-mix(in srgb,var(--accent-2) 26%,var(--line));
+    border-radius:10px;background:color-mix(in srgb,var(--accent-2) 6%,var(--bg-2))}
+  .cast.on{display:flex}
+  .cast .who{font-size:11.5px;color:var(--txt-2)} .cast .who b{color:var(--accent-2)}
+  .cast .who small{display:block;color:var(--txt-4);font-size:10.5px;margin-top:1px}
+  .cast .bar{flex:1;height:6px;border-radius:4px;background:var(--bg-3);overflow:hidden;min-width:80px}
+  .cast .bar i{display:block;height:100%;width:34%;background:linear-gradient(90deg,var(--accent),var(--accent-2));animation:play 6s linear infinite}
+  @keyframes play{from{width:4%}to{width:100%}}
+  .cast .time{font-family:var(--mono);font-size:11px;color:var(--txt-3)}
+
+  /* report body — mirrors .aar-viewer (P-REPORT.4) */
+  .report{padding:16px 22px 26px;overflow:auto;font-size:15px;line-height:1.7;color:var(--txt-1)}
+  .report h1{font-size:19px;font-weight:720;margin:2px 0 4px;padding-bottom:10px;border-bottom:1px solid var(--line)}
+  .report .meta{font-family:var(--mono);font-size:12px;color:var(--txt-3);margin:0 0 6px}
+  .report .ro-badge{display:inline-flex;align-items:center;gap:7px;padding:3px 11px 3px 8px;border-radius:999px;font-size:11.5px;font-weight:600;margin:6px 0 4px}
+  .report .ro-met{color:var(--green);background:var(--green-dim);border:1px solid color-mix(in srgb,var(--green) 34%,var(--line))}
+  .report h2{font-size:13px;text-transform:uppercase;letter-spacing:.05em;color:var(--txt-2);margin:22px 0 9px;padding-left:12px;position:relative}
+  .report h2::before{content:"";position:absolute;left:0;top:2px;bottom:2px;width:3px;border-radius:3px;background:linear-gradient(180deg,var(--accent),var(--accent-2))}
+  .report p{margin:6px 0 10px} .report p.lead{color:var(--txt-2);font-size:13.5px}
+  .report code{font-family:var(--mono);font-size:12.5px;background:var(--bg-3);border:1px solid var(--line-soft);border-radius:5px;padding:1px 5px;color:var(--txt-2)}
+  .report table{width:100%;border-collapse:collapse;margin:6px 0 10px;font-size:13px}
+  .report th{text-align:left;color:var(--txt-4);font-size:10.5px;text-transform:uppercase;letter-spacing:.4px;font-weight:600;padding:5px 9px;border-bottom:1px solid var(--line)}
+  .report td{padding:6px 9px;border-bottom:1px solid var(--line-soft);color:var(--txt-2)}
+  .report td.n{font-family:var(--mono);color:var(--txt);font-variant-numeric:tabular-nums}
+  .report td .add{color:var(--green)} .report td .del{color:var(--red)}
+  .report td a{color:var(--cyan);text-decoration:none} .report td a:hover{text-decoration:underline}
+  .report tr.tot td{border-top:1px solid var(--line);border-bottom:0;color:var(--txt);font-weight:600}
+  .tag{font-family:var(--mono);font-size:9.5px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;border-radius:5px;padding:1px 6px;border:1px solid;white-space:nowrap}
+  .t-direct{color:var(--green);background:var(--green-dim);border-color:color-mix(in srgb,var(--green) 34%,var(--line))}
+  .t-proxy{color:var(--amber);background:var(--amber-dim);border-color:color-mix(in srgb,var(--amber) 34%,var(--line))}
+  .t-signal{color:var(--blue);background:var(--blue-dim);border-color:color-mix(in srgb,var(--blue) 34%,var(--line))}
+  .score{display:grid;grid-template-columns:repeat(auto-fit,minmax(128px,1fr));gap:8px;margin:10px 0 6px}
+  .sc{border:1px solid var(--line);border-radius:10px;padding:9px 11px;background:linear-gradient(160deg,var(--bg-2),var(--bg-1))}
+  .sc .v{font-size:19px;font-weight:720;font-variant-numeric:tabular-nums} .sc .v small{font-size:11px;color:var(--txt-3);font-weight:600}
+  .sc .l{font-size:10.5px;color:var(--txt-2);margin-top:2px}
+  .sc.good .v{color:var(--green)} .sc.warn .v{color:var(--amber)} .sc.acc .v{color:var(--accent-2)}
+  .cites{font-size:11px;color:var(--txt-4);line-height:1.65}
+  /* horizontal bar chart - mirrors the Loop AAR .rchart (P-REPORT.4); prints great */
+  .chart-h{font-size:12px;font-weight:600;color:var(--txt-2);margin:14px 0 6px}
+  .rchart{display:flex;flex-direction:column;gap:10px;margin:4px 0 14px;padding:14px 16px;border:1px solid var(--line);border-radius:12px;background:radial-gradient(120% 120% at 0% 0%,color-mix(in srgb,var(--accent) 7%,transparent),transparent 55%),linear-gradient(160deg,var(--bg-2),var(--bg-1));box-shadow:inset 0 1px 0 rgba(255,255,255,.04)}
+  .rchart-row{display:grid;grid-template-columns:156px 1fr auto;align-items:center;gap:13px}
+  .rchart-lbl{font-size:12.5px;color:var(--txt-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .rchart-track{position:relative;height:14px;border-radius:8px;overflow:hidden;background:color-mix(in srgb,var(--c) 9%,var(--bg-3));box-shadow:inset 0 1px 3px rgba(0,0,0,.45)}
+  .rchart-fill{display:block;height:100%;border-radius:8px;min-width:5px;background:linear-gradient(90deg,color-mix(in srgb,var(--c) 55%,#000) 0%,var(--c) 100%);box-shadow:0 0 12px -2px color-mix(in srgb,var(--c) 75%,transparent),inset 0 1px 0 rgba(255,255,255,.25)}
+  .rchart-val{font-family:var(--mono);font-size:13px;font-weight:700;color:var(--c);min-width:46px;text-align:right}
+
+  /* right-side collapsible accordion of reports (mirrors .rp-repos + .goal-reports) */
+  .browse-h{display:flex;align-items:center;gap:8px;margin:2px 2px 10px}
+  .browse-h .bt{font-size:12px;font-weight:700;color:var(--txt-2);text-transform:uppercase;letter-spacing:.05em}
+  .browse-h .sp{flex:1}
+  .browse-h .all{font-size:11px;color:var(--txt-3);cursor:pointer}
+  .acc{border:1px solid var(--line);border-radius:10px;background:var(--bg-1);margin-bottom:8px;overflow:hidden}
+  .acc-h{display:flex;align-items:center;gap:9px;padding:9px 11px;cursor:pointer;user-select:none}
+  .acc-h:hover{background:var(--bg-3)}
+  .acc-h .chev{color:var(--txt-4);transition:transform .18s ease}
+  .acc.open .acc-h .chev{transform:rotate(90deg)}
+  .acc-h .lbl{font-size:12.5px;color:var(--txt);font-weight:600}
+  .acc-h .kbadge{font-family:var(--mono);font-size:9px;font-weight:700;letter-spacing:.4px;padding:2px 6px;border-radius:5px}
+  .kb-eval{color:var(--accent-2);background:var(--accent-dim)} .kb-brief{color:var(--cyan);background:rgba(70,200,220,.12)}
+  .kb-aar{color:var(--green);background:var(--green-dim)} .kb-sec{color:var(--blue);background:var(--blue-dim)}
+  .acc-h .sp{flex:1;order:9}
+  .acc-h .count{font-family:var(--mono);font-size:11px;color:var(--txt-3);background:var(--bg-3);border-radius:999px;padding:1px 8px;font-variant-numeric:tabular-nums;margin-left:8px;order:5}
+  .acc-b{overflow:hidden;max-height:0;transition:max-height .24s ease}
+  .acc.open .acc-b{max-height:520px;overflow:auto}
+  .acc-b-inner{padding:2px 8px 8px}
+  .rp-row{display:flex;align-items:center;gap:7px;border:1px solid var(--line-soft);border-radius:8px;background:var(--bg-2);padding:5px 7px;margin-top:5px}
+  .rp-row:hover{border-color:var(--line-strong)}
+  .rp-open{display:grid;grid-template-columns:1fr auto;gap:2px;flex:1;min-width:0;background:none;border:0;color:inherit;font:inherit;text-align:left;cursor:pointer}
+  .rp-title{font-size:12.5px;color:var(--txt);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .rp-when{font-size:10.5px;color:var(--txt-3);font-family:var(--mono);text-align:right}
+  .rp-row.cur{border-color:color-mix(in srgb,var(--accent-2) 45%,var(--line));background:color-mix(in srgb,var(--accent-2) 8%,var(--bg-2))}
+  .rp-acts{display:flex;gap:3px}
+  .rp-act{width:24px;height:24px;border:1px solid transparent;border-radius:6px;background:none;color:var(--txt-4);cursor:pointer;display:grid;place-items:center}
+  .rp-act:hover{border-color:var(--line-strong);color:var(--txt-2)}
+
+  .print-foot{display:none}
+
+  /* ── PRINT: light, clean, chrome-free (mirrors printReport P-REPORT.5) ── */
+  @media print{
+    @page{margin:16mm}
+    body{background:#fff !important;color:#14181d}
+    .modal{max-width:none;margin:0;border:0;border-radius:0;box-shadow:none;background:#fff}
+    .modal-h,.re-acts,.browse,.cast,.viewer{border:0 !important;max-height:none !important}
+    .no-print{display:none !important}
+    .grid{grid-template-columns:1fr}
+    .report{color:#14181d;padding:0}
+    .report h1{color:#0b0d10;border-bottom:1px solid #c9ced6}
+    .report .meta{color:#5a6472}
+    .report h2{color:#3a4048} .report h2::before{background:#8a5cf0}
+    .report p,.report td{color:#22272e} .report th{color:#5a6472;border-bottom:1px solid #c9ced6}
+    .report code{background:#f0f1f4;border-color:#d7dbe2;color:#22272e}
+    .report td,.report table th{border-color:#e3e6ec}
+    .sc,.report table,.acc,.rchart{break-inside:avoid}
+    .rchart{background:#f6f7f9 !important;border-color:#d7dbe2;box-shadow:none;padding:11pt 13pt}
+    .rchart-track{background:#e6e8ee !important;box-shadow:none}
+    .rchart-fill{box-shadow:none}
+    .rchart-lbl{color:#3a4048} .chart-h{color:#3a4048}
+    .sc{background:#f6f7f9;border-color:#d7dbe2} .sc .l{color:#3a4048}
+    .tag{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+    .print-foot{display:block;position:fixed;bottom:6mm;left:0;right:0;text-align:center;font-size:8pt;color:#6a7280}
+    *{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  }
+</style>
+</head>
+<body>
+<div class="modal">
+  <div class="modal-h no-print">
+    <span data-ic="doc" data-sz="16" style="color:var(--accent-2)"></span>
+    <span class="t">Engineering Reports <small>browse · print · listen</small></span>
+    <span class="sp"></span>
+    <button class="x">✕</button>
+  </div>
+
+  <div class="grid">
+    <!-- LEFT: the open report (Evals) in clean, printable format -->
+    <div class="viewer">
+      <div class="re-acts no-print">
+        <button class="btn-mini listen" id="listen"><span class="ic" data-ic="cast" data-sz="14"></span> Listen</button>
+        <button class="btn-mini"><span class="ic" data-ic="copy" data-sz="14"></span> Copy</button>
+        <button class="btn-mini"><span class="ic" data-ic="dl" data-sz="14"></span> Save .md</button>
+        <button class="btn-mini" id="print"><span class="ic" data-ic="print" data-sz="14"></span> Print / PDF</button>
+        <button class="btn-mini"><span class="ic" data-ic="graph" data-sz="14"></span> Push to KG</button>
+        <span class="sp"></span>
+        <span class="tag t-proxy" style="opacity:.85">run report</span>
+      </div>
+
+      <div class="cast no-print" id="cast">
+        <span data-ic="cast" data-sz="16" style="color:var(--accent-2)"></span>
+        <div class="who"><b>Host + Engineer</b> two-host briefing<small>NotebookLM-style · local TTS (Kokoro) · ElevenLabs / OpenAI optional</small></div>
+        <span class="bar"><i></i></span>
+        <span class="time">0:14 / 3:42</span>
+      </div>
+
+      <div class="report" id="report">
+        <h1>Model Evaluation — Trivia re-seed run</h1>
+        <div class="meta">LUCID Agent: claude-opus-4-8 · 2026-07-07 · 8.3s · $0.42 · run 01J9Z…A7</div>
+        <span class="ro-badge ro-met"><span data-ic="check" data-sz="13"></span> Resolved · 42/42 tests green</span>
+        <p class="lead">How efficiently this run turned tokens into accepted, spec-conforming code, with file-level provenance. Composites keep their sub-metrics visible — per DORA's Goodhart caveat, a single score shown as a target gets gamed.</p>
+
+        <div class="score">
+          <div class="sc good"><div class="v">6.6<small> tok/ln</small></div><div class="l">Gen-tokens / clean line</div></div>
+          <div class="sc acc"><div class="v">3.1k<small> tok</small></div><div class="l">Tokens / quality feature</div></div>
+          <div class="sc good"><div class="v">100<small>%</small></div><div class="l">Spec conformance (6/6)</div></div>
+          <div class="sc acc"><div class="v">98<small>/100</small></div><div class="l">Pred. acceptance</div></div>
+          <div class="sc warn"><div class="v">17<small>%</small></div><div class="l">Tool-call failures (2/12)</div></div>
+          <div class="sc warn"><div class="v">~3.1k<small></small></div><div class="l">Est. wasted tokens</div></div>
+        </div>
+
+        <div class="chart-h">Token economy - where the 18.7k went</div>
+        <div class="rchart">
+          <div class="rchart-row" style="--c:var(--blue)"><span class="rchart-lbl">Context (input)</span><span class="rchart-track"><i class="rchart-fill" style="width:100%"></i></span><b class="rchart-val">16.3k</b></div>
+          <div class="rchart-row" style="--c:var(--green)"><span class="rchart-lbl">Output (generated)</span><span class="rchart-track"><i class="rchart-fill" style="width:15%"></i></span><b class="rchart-val">2.4k</b></div>
+          <div class="rchart-row" style="--c:var(--amber)"><span class="rchart-lbl">Estimated wasted</span><span class="rchart-track"><i class="rchart-fill" style="width:19%"></i></span><b class="rchart-val">~3.1k</b></div>
+        </div>
+
+        <h2>Efficiency &amp; token economy</h2>
+        <table>
+          <thead><tr><th>Metric</th><th>Value</th><th>Basis</th></tr></thead>
+          <tbody>
+            <tr><td>Tokens (context / output / total)</td><td class="n">16.3k / 2.4k / 18.7k</td><td><span class="tag t-direct">direct</span></td></tr>
+            <tr><td>Cost · cost per resolved task</td><td class="n">$0.42 · $0.42</td><td><span class="tag t-direct">direct</span></td></tr>
+            <tr><td>Context efficiency (ctx ÷ output)</td><td class="n">6.8×</td><td><span class="tag t-direct">direct</span></td></tr>
+            <tr><td>Tokens per net line of code</td><td class="n">6.6 gen · 51 total</td><td><span class="tag t-proxy">proxy</span></td></tr>
+            <tr><td>Steps · delegation</td><td class="n">12 calls · 3 subagents</td><td><span class="tag t-direct">direct</span></td></tr>
+          </tbody>
+        </table>
+
+        <h2>API response latency</h2>
+        <p>Time-to-first-token (TTFT) is the API responsiveness signal (provider / region / load); total also includes generation. This run started 09:14 ET - inside business hours (08:00-17:00), so it feeds the weekly / monthly rollup.</p>
+        <table>
+          <thead><tr><th>Model</th><th>Calls</th><th>TTFT p50</th><th>TTFT p95</th><th>Total p50</th></tr></thead>
+          <tbody>
+            <tr><td class="n">claude-opus-4-8</td><td class="n">12</td><td class="n">640 ms</td><td class="n">1.8 s</td><td class="n">3.2 s</td></tr>
+            <tr><td class="n">haiku-4-5 (checker)</td><td class="n">2</td><td class="n">210 ms</td><td class="n">340 ms</td><td class="n">0.9 s</td></tr>
+          </tbody>
+        </table>
+        <div class="chart-h">This run - claude-opus-4-8 (max = total p50)</div>
+        <div class="rchart">
+          <div class="rchart-row" style="--c:var(--green)"><span class="rchart-lbl">TTFT p50</span><span class="rchart-track"><i class="rchart-fill" style="width:20%"></i></span><b class="rchart-val">640 ms</b></div>
+          <div class="rchart-row" style="--c:var(--cyan)"><span class="rchart-lbl">TTFT p95</span><span class="rchart-track"><i class="rchart-fill" style="width:56%"></i></span><b class="rchart-val">1.8 s</b></div>
+          <div class="rchart-row" style="--c:var(--amber)"><span class="rchart-lbl">Total p50</span><span class="rchart-track"><i class="rchart-fill" style="width:100%"></i></span><b class="rchart-val">3.2 s</b></div>
+        </div>
+
+        <h2>Tool-call reliability &amp; waste</h2>
+        <table>
+          <thead><tr><th>Failure</th><th>Command</th><th>Reason</th></tr></thead>
+          <tbody>
+            <tr><td class="n">bash</td><td class="n">make build</td><td>did not run: command not found</td></tr>
+            <tr><td class="n">search</td><td class="n">grep "legacyBank"</td><td>did not run: no matches</td></tr>
+            <tr class="tot"><td>Failure rate 17% · est. wasted</td><td class="n" colspan="2">2 / 12 calls · ~3.1k tokens <span class="tag t-proxy">proxy</span></td></tr>
+          </tbody>
+        </table>
+
+        <h2>Code quality &amp; provenance</h2>
+        <p>Per-file AI-authored lines from the <code>ai_loc_ledger</code>. "Clean" = survived to the final diff and covered by passing tests (add a lint/format pass for the full definition).</p>
+        <table>
+          <thead><tr><th>File</th><th>AI +/−</th><th>Net kept</th><th>tok/ln</th><th>Clean?</th></tr></thead>
+          <tbody>
+            <tr><td><a href="#">desktop/trivia_seed.ts</a></td><td class="n"><span class="add">+140</span> / <span class="del">−0</span></td><td class="n">140</td><td class="n">6.1</td><td>✓ tested</td></tr>
+            <tr><td><a href="#">desktop/trivia_seed.test.ts</a></td><td class="n"><span class="add">+130</span> / <span class="del">−0</span></td><td class="n">130</td><td class="n">5.9</td><td>✓ tested</td></tr>
+            <tr><td><a href="#">desktop/renderer/app.ts</a></td><td class="n"><span class="add">+63</span> / <span class="del">−4</span></td><td class="n">59</td><td class="n">7.2</td><td>✓ tested</td></tr>
+            <tr><td><a href="#">desktop/dev.ts</a></td><td class="n"><span class="add">+22</span> / <span class="del">−1</span></td><td class="n">21</td><td class="n">8.4</td><td>✓ tested</td></tr>
+            <tr class="tot"><td>6 files (net) · churn 1.4%</td><td class="n"><span class="add">+370</span> / <span class="del">−5</span></td><td class="n">365</td><td class="n">6.6</td><td>—</td></tr>
+          </tbody>
+        </table>
+
+        <div class="chart-h">Net lines kept, by file (AI provenance)</div>
+        <div class="rchart">
+          <div class="rchart-row" style="--c:var(--green)"><span class="rchart-lbl">trivia_seed.ts</span><span class="rchart-track"><i class="rchart-fill" style="width:100%"></i></span><b class="rchart-val">140</b></div>
+          <div class="rchart-row" style="--c:var(--green)"><span class="rchart-lbl">trivia_seed.test.ts</span><span class="rchart-track"><i class="rchart-fill" style="width:93%"></i></span><b class="rchart-val">130</b></div>
+          <div class="rchart-row" style="--c:var(--green)"><span class="rchart-lbl">app.ts</span><span class="rchart-track"><i class="rchart-fill" style="width:42%"></i></span><b class="rchart-val">59</b></div>
+          <div class="rchart-row" style="--c:var(--green)"><span class="rchart-lbl">dev.ts</span><span class="rchart-track"><i class="rchart-fill" style="width:15%"></i></span><b class="rchart-val">21</b></div>
+          <div class="rchart-row" style="--c:var(--green)"><span class="rchart-lbl">bridge.ts</span><span class="rchart-track"><i class="rchart-fill" style="width:6%"></i></span><b class="rchart-val">8</b></div>
+        </div>
+
+        <h2>Specification conformance &amp; acceptance</h2>
+        <table>
+          <thead><tr><th>Metric</th><th>Value</th><th>Basis</th></tr></thead>
+          <tbody>
+            <tr><td>Acceptance-criteria coverage</td><td class="n">6 / 6 = 100%</td><td><span class="tag t-signal">needs AC</span></td></tr>
+            <tr><td>MoSCoW must-have delivery</td><td class="n">100%</td><td><span class="tag t-signal">needs AC</span></td></tr>
+            <tr><td>Test / UAT pass rate</td><td class="n">42 / 42 = 100%</td><td><span class="tag t-direct">direct</span></td></tr>
+            <tr><td>Definition-of-Done adherence</td><td class="n">5 / 5</td><td><span class="tag t-proxy">proxy</span></td></tr>
+            <tr><td><b>Predicted acceptance likelihood</b></td><td class="n"><b>98 / 100</b></td><td><span class="tag t-proxy">proxy</span></td></tr>
+          </tbody>
+        </table>
+        <p class="lead">Blend: spec-conformance ·.35 + test-pass ·.25 + low-churn ·.15 + tool-success ·.10 + DoD ·.15. Precedent: SonarQube Quality Gate, SPACE. A prediction — not a substitute for a user sign-off.</p>
+
+        <div class="chart-h">Predicted-acceptance signal breakdown (98/100)</div>
+        <div class="rchart">
+          <div class="rchart-row" style="--c:var(--green)"><span class="rchart-lbl">Spec conformance (.35)</span><span class="rchart-track"><i class="rchart-fill" style="width:100%"></i></span><b class="rchart-val">1.00</b></div>
+          <div class="rchart-row" style="--c:var(--green)"><span class="rchart-lbl">Test pass (.25)</span><span class="rchart-track"><i class="rchart-fill" style="width:100%"></i></span><b class="rchart-val">1.00</b></div>
+          <div class="rchart-row" style="--c:var(--cyan)"><span class="rchart-lbl">Low churn (.15)</span><span class="rchart-track"><i class="rchart-fill" style="width:99%"></i></span><b class="rchart-val">0.99</b></div>
+          <div class="rchart-row" style="--c:var(--amber)"><span class="rchart-lbl">Tool success (.10)</span><span class="rchart-track"><i class="rchart-fill" style="width:83%"></i></span><b class="rchart-val">0.83</b></div>
+          <div class="rchart-row" style="--c:var(--green)"><span class="rchart-lbl">Definition-of-Done (.15)</span><span class="rchart-track"><i class="rchart-fill" style="width:100%"></i></span><b class="rchart-val">1.00</b></div>
+        </div>
+
+        <h2>Methodology &amp; sources</h2>
+        <p><span class="tag t-direct">direct</span> computable now · <span class="tag t-proxy">proxy</span> approximate · <span class="tag t-signal">needs signal</span> one input to wire (lint · AC list · PR events).</p>
+        <p class="cites"><b style="color:var(--txt-3)">References:</b> SWE-bench Verified · Cost-of-Pass (arXiv:2504.13359) · AgentBoard · BAGEN wasted-tokens 28–64% · GitClear AI code quality 2024/25 (churn 3.3%→7.1%) · Nagappan &amp; Ball ICSE 2005 · ISO/IEC 25010 · SonarQube Clean Code / Quality Gate · ISO/IEC/IEEE 29148 · DSDM MoSCoW · ISTQB UAT · DORA · G-Eval / LLM-as-a-Judge · SPACE.</p>
+        <p class="cites"><b style="color:var(--txt-3)">Sources in LUCID:</b> <code>tools/session_metrics.ts</code> · <code>harness/runs/loc_ledger.ts</code> (ADR-0031) · <code>harness/brief/change_graph.ts</code> · test output · tool-call failures.</p>
+      </div>
+    </div>
+
+    <!-- RIGHT: collapsible accordion of stored reports (chevron + label + count) -->
+    <div class="browse no-print">
+      <div class="browse-h"><span class="bt">Saved reports</span><span class="sp"></span><span class="all" id="collapseAll">Collapse all</span></div>
+
+      <div class="acc open" data-acc>
+        <div class="acc-h"><span class="chev" data-ic="chevron" data-sz="13"></span><span class="kbadge kb-eval">EVAL</span><span class="lbl">Run Evals</span><span class="sp"></span><span class="count">12</span></div>
+        <div class="acc-b"><div class="acc-b-inner">
+          <div class="rp-row cur"><button class="rp-open"><span class="rp-title">Trivia re-seed run</span><span class="rp-when">2m ago</span></button><span class="rp-acts"><button class="rp-act" data-ic="dl" data-sz="13"></button><button class="rp-act" data-ic="archive" data-sz="13"></button></span></div>
+          <div class="rp-row"><button class="rp-open"><span class="rp-title">Egress proxy hardening</span><span class="rp-when">1h ago</span></button><span class="rp-acts"><button class="rp-act" data-ic="dl" data-sz="13"></button><button class="rp-act" data-ic="archive" data-sz="13"></button></span></div>
+          <div class="rp-row"><button class="rp-open"><span class="rp-title">KB ingest pipeline</span><span class="rp-when">yesterday</span></button><span class="rp-acts"><button class="rp-act" data-ic="dl" data-sz="13"></button><button class="rp-act" data-ic="archive" data-sz="13"></button></span></div>
+          <div class="rp-row"><button class="rp-open"><span class="rp-title">Sandbox exec profiles</span><span class="rp-when">2d ago</span></button><span class="rp-acts"><button class="rp-act" data-ic="dl" data-sz="13"></button><button class="rp-act" data-ic="archive" data-sz="13"></button></span></div>
+        </div></div>
+      </div>
+
+      <div class="acc" data-acc>
+        <div class="acc-h"><span class="chev" data-ic="chevron" data-sz="13"></span><span class="kbadge kb-brief">BRIEF</span><span class="lbl">Engineering Updates</span><span class="sp"></span><span class="count">5</span></div>
+        <div class="acc-b"><div class="acc-b-inner">
+          <div class="rp-row"><button class="rp-open"><span class="rp-title">Weekly update — Executive</span><span class="rp-when">1d ago</span></button><span class="rp-acts"><button class="rp-act" data-ic="dl" data-sz="13"></button></span></div>
+          <div class="rp-row"><button class="rp-open"><span class="rp-title">Weekly update — Developer</span><span class="rp-when">1w ago</span></button><span class="rp-acts"><button class="rp-act" data-ic="dl" data-sz="13"></button></span></div>
+        </div></div>
+      </div>
+
+      <div class="acc" data-acc>
+        <div class="acc-h"><span class="chev" data-ic="chevron" data-sz="13"></span><span class="kbadge kb-aar">AAR</span><span class="lbl">Loop After-Action</span><span class="sp"></span><span class="count">8</span></div>
+        <div class="acc-b"><div class="acc-b-inner">
+          <div class="rp-row"><button class="rp-open"><span class="rp-title">/goal: harden egress allow-list</span><span class="rp-when">3d ago</span></button><span class="rp-acts"><button class="rp-act" data-ic="dl" data-sz="13"></button></span></div>
+        </div></div>
+      </div>
+
+      <div class="acc" data-acc>
+        <div class="acc-h"><span class="chev" data-ic="chevron" data-sz="13"></span><span class="kbadge kb-sec">SEC</span><span class="lbl">Security Briefs</span><span class="sp"></span><span class="count">3</span></div>
+        <div class="acc-b"><div class="acc-b-inner">
+          <div class="rp-row"><button class="rp-open"><span class="rp-title">CMMC control crosswalk</span><span class="rp-when">5d ago</span></button><span class="rp-acts"><button class="rp-act" data-ic="dl" data-sz="13"></button></span></div>
+        </div></div>
+      </div>
+    </div>
+  </div>
+</div>
+<div class="print-foot">Prepared for: neorc@workstation · LUCID Engineering Report · Model Evaluation — Trivia re-seed run</div>
+
+<script>
+  const ICONS = {
+    chevron:'<path d="M9.5 6 15 12l-5.5 6"/>',
+    check:'<path d="M5 12.5 10 17 19 7"/>',
+    doc:'<path d="M6.5 4.5h7l4 4v10.5a1 1 0 0 1-1 1h-10a1 1 0 0 1-1-1v-13.5a1 1 0 0 1 1-1z"/><path d="M13.5 4.5v4h4"/><path d="M8.8 12.5h6.4"/><path d="M8.8 15.3h6.4"/>',
+    copy:'<path d="M9 9h9v11H9z"/><path d="M6 15H5V4h11v1"/>',
+    dl:'<path d="M12 4v10"/><path d="M8 11l4 4 4-4"/><path d="M5 19h14"/>',
+    print:'<path d="M7 9V4h10v5"/><path d="M6 18H4v-7h16v7h-2"/><path d="M7 14h10v6H7z"/>',
+    graph:'<circle cx="6" cy="7" r="2.2"/><circle cx="17" cy="6" r="2.2"/><circle cx="15" cy="17" r="2.2"/><path d="M8 8.2l7-1.4"/><path d="M8 8.6l6.2 7"/>',
+    cast:'<path d="M4 12a12 12 0 0 1 8 8"/><path d="M4 8a16 16 0 0 1 12 12"/><circle cx="5" cy="19" r="1.5"/>',
+    archive:'<path d="M4 7h16v3H4z"/><path d="M5 10h14v9H5z"/><path d="M10 13h4"/>',
+  };
+  const svg=(n,s)=>`<svg class="ic" viewBox="0 0 24 24" width="${s||14}" height="${s||14}" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[n]||ICONS.check}</svg>`;
+  for(const el of document.querySelectorAll("[data-ic]")){el.outerHTML=svg(el.getAttribute("data-ic"),+el.getAttribute("data-sz")||14);}
+  const $=(id)=>document.getElementById(id);
+  // accordion toggle
+  for(const h of document.querySelectorAll(".acc-h")) h.addEventListener("click",()=>h.closest(".acc").classList.toggle("open"));
+  $("collapseAll").addEventListener("click",()=>{for(const a of document.querySelectorAll(".acc"))a.classList.remove("open");});
+  // report row select
+  for(const r of document.querySelectorAll(".rp-open")) r.addEventListener("click",()=>{document.querySelectorAll(".rp-row").forEach(x=>x.classList.remove("cur"));r.closest(".rp-row").classList.add("cur");});
+  // podcast toggle
+  const listen=$("listen"),cast=$("cast");
+  listen.addEventListener("click",()=>{const on=cast.classList.toggle("on");listen.innerHTML=(on?svg("cast",14)+" Stop":svg("cast",14)+" Listen");});
+  // print
+  $("print").addEventListener("click",()=>window.print());
+</script>
+</body>
+</html>
