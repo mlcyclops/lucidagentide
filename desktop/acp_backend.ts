@@ -23,6 +23,7 @@ import { buildUserTurnPreamble } from "./preamble.ts";
 import { ChatGate } from "./chat_gate.ts";
 import { completionPath } from "./util_conn.ts";
 import { recordTurns } from "./turns_log.ts";
+import { recordLatency } from "./latency_log.ts"; // P-EVAL.2 (ADR-0187): per-turn API-latency capture
 import { beginStepTurn, endStepTurn, noteStepEvent } from "./session_steps.ts"; // P-RESUME.1 (ADR-0171)
 import { isLearnableAssistantText } from "./thinking_governance.ts";
 import { recordBlock } from "./security_log.ts";
@@ -879,9 +880,21 @@ class Backend {
       slow = setTimeout(notify, Backend.SLOW_NOTICE_MS);
     };
     let enqueueErr = 0; // counts browser-stream write failures (orphaned/closed client stream)
+    // P-EVAL.2 (ADR-0187): per-turn latency taps. t_sent set at the send; t_first_token on the first
+    // token/thinking chunk; the latest usage carries context tokens + cost; errored gates `ok`.
+    let tSent = 0;
+    let tFirstToken: number | null = null;
+    const usage: { tokensIn?: number; costUsd?: number } = {}; // holder (mutated in the sink closure)
+    let errored = false;
     // Only learnable assistant text accrues to `assistant` (→ recordTurns + learnFromTurn). Thinking
     // and other display-only events are excluded by construction (R-04 / ADR-0054).
-    const sink = (e: ChatEvent) => { arm(); if (isLearnableAssistantText(e)) assistant += e.text; try { onEvent(e); } catch { enqueueErr++; } };
+    const sink = (e: ChatEvent) => {
+      arm();
+      if (tFirstToken === null && (e.type === "token" || e.type === "thinking")) tFirstToken = Date.now();
+      else if (e.type === "usage") { usage.tokensIn = e.used; usage.costUsd = e.cost; }
+      if (isLearnableAssistantText(e)) assistant += e.text;
+      try { onEvent(e); } catch { enqueueErr++; }
+    };
     this.listener = sink;
     this.askActive = true; // permission requests in THIS turn may be forwarded to the UI (Ask mode)
     this.execTurnPrograms.clear(); this.execTurnAll = false; // P-EXEC.1: allow-turn scope is per-turn
@@ -909,6 +922,7 @@ class Backend {
       const imageBlocks = (images ?? []).filter((im) => im?.data && im?.mimeType).map((im) => ({ type: "image" as const, data: im.data, mimeType: im.mimeType }));
       const promptContent = [{ type: "text" as const, text: body }, ...imageBlocks];
       arm(); // start the idle clock now (covers a stall BEFORE the first token)
+      tSent = Date.now(); // P-EVAL.2: t_sent — the prompt is handed to the model
       const stall = new Promise<never>((_, reject) => { onStall = reject; });
       const promptRes = await Promise.race<any>([
         this.acp!.request("session/prompt", { sessionId: this.sessionId, prompt: promptContent }),
@@ -918,6 +932,7 @@ class Backend {
       // empty/early end on a thinking-heavy Claude turn) — invaluable for the model-specific loop bug.
       this.turnDiag(`prompt.resolved session=${this.sessionId} chars=${assistant.length} stopReason=${promptRes?.stopReason ?? "?"} enqueueErr=${enqueueErr} listenerIntact=${this.listener === sink}`);
     } catch (e) {
+      errored = true; // P-EVAL.2: a stall/disconnect makes this turn's latency sample ok=false
       this.turnDiag(`prompt.${stalled ? "stalled" : "error"} session=${this.sessionId} chars=${assistant.length} enqueueErr=${enqueueErr} listenerIntact=${this.listener === sink} msg=${String((e as any)?.message ?? e).slice(0, 80)}`);
       onEvent({ type: "token", text: `\n[${stalled ? "stalled" : "agent unavailable"}: ${String((e as any)?.message ?? e)}]` });
     } finally {
@@ -938,6 +953,15 @@ class Backend {
     // ADR-0009 Phase B (issue #12): capture the turn for traceability. Sanitized + sha only,
     // GUI-side (can't co-write DuckDB); fully guarded so it never affects the chat.
     recordTurns({ sessionId: this.sessionId ?? "", userText: text, assistantText: assistant });
+    // P-EVAL.2 (ADR-0187): capture this turn's API latency (t_sent -> first token -> end) to the append-only
+    // latency log; the single writer ingests it into api_latency for the per-model p50/p95 rollup. A turn
+    // that never reached the send (tSent==0) records nothing. Guarded + fail-open inside recordLatency.
+    if (tSent > 0) recordLatency({
+      model: this.activeModel(), sessionId: this.sessionId ?? undefined,
+      tSent, tFirstToken, tEnd: Date.now(), ok: !errored,
+      tokensIn: usage.tokensIn, costUsd: usage.costUsd, // tokens_out has no reliable server-side per-turn count
+
+    });
   }
 
   // P-GOAL.1 (ADR-0046): the /goal loop. Run MAKER iterations on the persistent session toward `goal`,
