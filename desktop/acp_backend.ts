@@ -808,6 +808,9 @@ class Backend {
    *  Used by the delete route to close the session before removing its file (#53). */
   currentSessionId(): string | null { return this.sessionId; }
 
+  /** P-COLLAB.3: the model id omp currently reports active (for the shared-session welcome header). */
+  activeModelName(): string { return this.activeModel(); }
+
   /** Resume a past session so the next prompt continues it. */
   async loadSession(id: string): Promise<void> {
     await this.start();
