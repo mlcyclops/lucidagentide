@@ -18,6 +18,7 @@ import { homedir, hostname } from "node:os";
 import { join } from "node:path";
 import { emailDomainAllowed, managedConfig, skipAllowed } from "./managed_config.ts";
 import { remoteAgentMcpServers } from "../harness/mcp/registry.ts";
+import { DEFAULT_RELAY_URL } from "@oh-my-pi/pi-wire"; // P-COLLAB.3: the public-relay fallback origin
 import { validateLocalProvider, type LocalProviderDef } from "./local_providers.ts";
 
 // LUCID_GUI_SETTINGS_FILE: test seam - point the store at a temp file (never set in production).
@@ -126,6 +127,12 @@ export interface GuiSettings {
   // vLLM, a DGX box over a VPN tunnel, …). DECLARATIONS only — each carries an opaque `vaultRef`; the
   // API key/token lives ONLY in the OS-encrypted vault (cred_vault.ts), never in this file.
   localProviders?: LocalProviderDef[];
+  // P-COLLAB.3 (ADR-0192): live-session collaboration relay. Self-hosted is the DEFAULT posture — a bare
+  // public relay is used only when the user opts in. The relay only ever sees ciphertext (E2E), but it is
+  // still network egress, so the URL is explicit and, absent both a self-hosted URL and the opt-in,
+  // sharing fails closed (no relay authorized → cannot start a share).
+  collabRelayUrl?: string;          // wss:// self-hosted relay origin (no /r/… path); empty = none configured
+  collabPublicRelayOptIn?: boolean; // allow the public DEFAULT_RELAY_URL fallback when no self-hosted URL is set
 }
 
 export const ASKSAGE_DEFAULT_LIMIT = 200_000;
@@ -169,6 +176,29 @@ export function setDeveloperMode(enabled: boolean): GuiSettings {
 export function setCodeGraphAgent(enabled: boolean): GuiSettings {
   const s = load(); s.codeGraphAgent = enabled; save(s); return s;
 }
+
+// P-COLLAB.3 (ADR-0192): the authorized live-collab relay, or null when none is (fail-closed). Self-hosted
+// wins; the public relay is used only on explicit opt-in. `wsBase` is the origin (no path); `httpBase` is
+// its http(s) form for the browser deep link.
+export interface CollabRelayConfig { wsBase: string; httpBase: string; label: string; source: "self-hosted" | "public" }
+export function collabRelayConfig(): CollabRelayConfig | null {
+  const s = load();
+  const self = (s.collabRelayUrl ?? "").trim().replace(/\/+$/, "");
+  if (self) return { wsBase: self, httpBase: wsToHttp(self), label: originLabel(self), source: "self-hosted" };
+  if (s.collabPublicRelayOptIn) {
+    const pub = DEFAULT_RELAY_URL.replace(/\/+$/, "");
+    return { wsBase: pub, httpBase: wsToHttp(pub), label: `${originLabel(pub)} (public)`, source: "public" };
+  }
+  return null; // no relay authorized → sharing cannot start
+}
+export function setCollabRelay(patch: { url?: string; publicOptIn?: boolean }): GuiSettings {
+  const s = load();
+  if (patch.url !== undefined) s.collabRelayUrl = patch.url.trim();
+  if (patch.publicOptIn !== undefined) s.collabPublicRelayOptIn = !!patch.publicOptIn;
+  save(s); return s;
+}
+function wsToHttp(u: string): string { return u.replace(/^wss:/i, "https:").replace(/^ws:/i, "http:"); }
+function originLabel(u: string): string { try { return new URL(u).host; } catch { return u; } }
 
 // P-VOICE.1 (ADR-0115): voice (TTS/STT) config. Effective values with defaults, for the server + UI.
 export interface VoiceSettings {

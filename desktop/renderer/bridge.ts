@@ -357,6 +357,24 @@ export interface ManagedPolicy {
   /** ADR-0068 (P-ENT.1): which controls the managed policy locks (UI disables them + "Managed by <org>"). */
   locks?: { exec: boolean; egress: boolean; loop: boolean; models: boolean };
 }
+// P-COLLAB.3 (ADR-0192): the live-share surface. `CollabParticipantView` mirrors the host's roster entry;
+// `CollabShareStatus` is what the Share panel polls; `CollabRelay` is the authorized relay (null = none).
+export interface CollabParticipantView { peerId: number; name: string; role: "host" | "guest"; access: "view" | "edit" }
+export interface CollabRelay { wsBase: string; httpBase: string; label: string; source: "self-hosted" | "public" }
+export interface CollabShareStatus {
+  active: boolean;
+  roomId?: string;
+  fullLink?: string;
+  viewLink?: string;
+  browserLink?: string;
+  relayLabel?: string;
+  relaySource?: string;
+  startedAt?: number;
+  participantCount: number;
+  participants: CollabParticipantView[];
+  relay?: CollabRelay | null;
+}
+
 export interface LucidBridge {
   isElectron: boolean;
   security(): Promise<SecuritySnapshot | null>;
@@ -479,6 +497,13 @@ export interface LucidBridge {
   remoteAgentToggle(id: string, enabled: boolean): Promise<unknown>;
   usage(): Promise<UsageLedger | null>;
   codeActivity(): Promise<CodeActivity | null>;
+  // P-COLLAB.3 (ADR-0192): live session sharing (view-only host). `status` is the poll; `start` mints the
+  // room + view/full links + stands up the host (fails closed if no relay); `stop` ends it; `setRelay`
+  // configures the authorized relay (self-hosted default, public opt-in).
+  collabStatus(): Promise<CollabShareStatus | null>;
+  collabStart(): Promise<{ ok: boolean; status?: CollabShareStatus; error?: string }>;
+  collabStop(): Promise<CollabShareStatus | null>;
+  collabSetRelay(patch: { url?: string; publicOptIn?: boolean }): Promise<{ relay: CollabRelay | null } | null>;
   sendPrompt(text: string, onEvent: (e: ChatEvent) => void, images?: { data: string; mimeType: string }[]): Promise<void>;
   // P-GOAL.1 (ADR-0046): run a /goal loop - streams the same events plus goal-iter/check/done/stop.
   runGoal(opts: GoalOpts, onEvent: (e: ChatEvent) => void): Promise<void>;
@@ -920,6 +945,17 @@ export const bridge: LucidBridge = {
   deleteSession: async (id) => (await post("/api/session/delete", { id })) ?? { ok: false, error: "no response" },
   clearIngestSessions: () => post("/api/sessions/ingest/clear", {}),
   newSession: async () => { await post("/api/newSession", {}); },
+  // P-COLLAB.3 (ADR-0192): live session sharing.
+  collabStatus: () => getData("/api/collab/status"),
+  collabStart: async () => {
+    try {
+      const r = await fetch("/api/collab/start", { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: "{}" });
+      const j = await r.json();
+      return j?.ok ? { ok: true, status: j.data as CollabShareStatus } : { ok: false, error: String(j?.error ?? `backend error ${r.status}`) };
+    } catch (e) { return { ok: false, error: String((e as Error)?.message ?? "backend unreachable") }; }
+  },
+  collabStop: () => post("/api/collab/stop", {}),
+  collabSetRelay: (patch) => post("/api/collab/relay", patch),
   getSettings: () => getData("/api/settings"),
   saveUsername: (username) => post("/api/settings", { username }),
   saveProfile: (p) => post("/api/settings", p),

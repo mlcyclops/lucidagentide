@@ -146,6 +146,12 @@ const RAW: Record<string, string> = {
   alertBadge: "<rect x='4' y='4' width='16' height='16' rx='5.2' fill='currentColor' fill-opacity='.17'/>"
     + "<rect x='4' y='4' width='16' height='16' rx='5.2' fill='none' stroke='currentColor' stroke-opacity='.5'/>"
     + P("M12 8.3v4.4") + P("M12 15.9h.01"),
+  // P-COLLAB (ADR-0192): live session share — three nodes linked (broadcast to guests)
+  share: "<circle cx='6' cy='12' r='2.4'/><circle cx='18' cy='6' r='2.4'/><circle cx='18' cy='18' r='2.4'/>"
+    + P("M8.1 10.9 15.9 7.1") + P("M8.1 13.1 15.9 16.9"),
+  // a chain link (copy invite link)
+  link: P("M9.5 14.5a3.5 3.5 0 0 1 0-5l2-2a3.5 3.5 0 0 1 5 5l-1 1")
+    + P("M14.5 9.5a3.5 3.5 0 0 1 0 5l-2 2a3.5 3.5 0 0 1-5-5l1-1"),
 };
 
 // Action glyphs that read as "do something now" - they get the .ic-action hook
