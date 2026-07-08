@@ -14,7 +14,7 @@
 // PURE by construction: no I/O, no Date.now() (the caller passes `when`). Mirrors the P-CHAT.A/B keystone
 // pattern - the DOM/route wiring is thin and QA-gated; the load-bearing mapping is tested here.
 
-import { computeEvalMetrics, renderEvalMarkdown, type FileChange, type RunRecord } from "./evals.ts";
+import { computeEvalMetrics, renderEvalMarkdown, type EvalMetrics, type FileChange, type RunRecord } from "./evals.ts";
 
 /** One tool call the chat turn made, as the renderer observed it. A write/edit carries a file `path` and a
  *  +/- diffstat (the P-CHAT.1 code the chip already sized); a read/search/bash carries neither. */
@@ -78,4 +78,11 @@ export function renderTurnEvalReport(t: ObservedTurn): { title: string; markdown
   const metrics = computeEvalMetrics(run);
   const markdown = renderEvalMarkdown(metrics, { costUsd: run.costUsd, totalTokens: run.tokens.total, when: t.when });
   return { title: `Model Evaluation - ${t.model}`, markdown };
+}
+
+/** P-EVAL.3 (ADR-0187): the same observed-turn -> RunRecord -> EvalMetrics computation renderTurnEvalReport
+ *  does, exposed so the route can PERSIST the per-run metrics (eval_metrics table) alongside rendering the
+ *  report. PURE. */
+export function evalMetricsForTurn(t: ObservedTurn): EvalMetrics {
+  return computeEvalMetrics(buildRunRecord(t));
 }

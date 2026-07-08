@@ -15,7 +15,8 @@ import { join, dirname } from "node:path";
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { buildEngineeringUpdate, renderEngineeringBrief, buildPodcastScript, renderScript, type PodcastBackend, type BriefRole } from "../harness/brief/engineering_update.ts";
 import { buildComplianceRows, renderPoamCsv, renderCkl } from "../harness/brief/compliance.ts"; // P-REPORT.6/.8: POA&M + CKL
-import { renderTurnEvalReport, type ObservedTool, type ObservedTurn } from "../harness/brief/eval_report.ts"; // P-CHAT.C (ADR-0190): settled-turn Model-Evaluation report
+import { renderTurnEvalReport, evalMetricsForTurn, type ObservedTool, type ObservedTurn } from "../harness/brief/eval_report.ts"; // P-CHAT.C (ADR-0190): settled-turn Model-Evaluation report
+import { recordEvalMetrics } from "./eval_metrics_log.ts"; // P-EVAL.3 (ADR-0187): persist per-run eval metrics
 import { buildChangeGraph, buildSchemaChanges, renderAnnexes } from "../harness/brief/change_graph.ts"; // P-REPORT.8: report annexes
 import { renderRepoActivityAnnex } from "../harness/brief/repo_activity.ts"; // P-REPORT.9: cross-repo activity annex
 import { addReportRepo, collectRepoActivity, ghAvailable, listReportRepos, type RepoSelection } from "./repo_collect.ts"; // P-REPORT.9 (ADR-0162)
@@ -670,6 +671,9 @@ const server = Bun.serve({
           when: typeof b.when === "string" ? b.when : undefined,
         };
         const { title, markdown } = renderTurnEvalReport(turn);
+        // P-EVAL.3 (ADR-0187): persist this run's metrics to the append-only sink; the single writer ingests
+        // them into eval_metrics for the cross-run rollup. Guarded + fail-open inside recordEvalMetrics.
+        recordEvalMetrics(evalMetricsForTurn(turn), Date.now());
         const id = String(Date.now());
         const rel = saveBrief(id, "evals", markdown);
         return json({ ok: !!rel, data: { kind: "brief", id, rel, title }, error: rel ? undefined : "could not save report" });
