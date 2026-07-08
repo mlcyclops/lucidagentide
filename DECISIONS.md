@@ -13530,3 +13530,50 @@ peerId. demo-P-COLLAB.1 proves the full seal -> envelope -> unwrap -> open path 
 `@oh-my-pi/pi-wire` (collab constants + `WireFrame`/`Participant`/`ParsedCollabLink`), the `ChatEvent` surface
 (acp_backend.ts) this shares, the fail-closed scan gate (invariant #3) guest prompts will pass, the egress
 gate (P-NETWL) the relay WebSocket is subject to, and enterprise policy (P-ENT.1/ADR-0068).
+
+---
+
+## ADR-0193 — P-COLLAB.4/.5: the read-only guest + the optional embedded relay
+
+**Status:** Accepted (2026-07-08). Extends ADR-0192.
+
+**Context.** ADR-0192 shipped the host half (P-COLLAB.1-.3): a LUCID session can broadcast, view-only, over a
+relay it does not host. Two pieces remained for a real two-party session: the GUEST (join + render) and, per a
+sovereignty ask, a way to make ANY LUCID act as the relay so no third party is involved at all.
+
+**Decision.**
+
+- **P-COLLAB.4 — the guest (`desktop/collab/guest.ts`, `CollabGuest`).** The mirror of `CollabHost`,
+  transport-injectable so it is unit-tested headless. On connect it sends one `hello` (name + optional
+  base64url write token), then applies host frames: `welcome` (header + replayed transcript + roster +
+  read-only), `event` (a live `ChatEvent`, folding done/usage into a `view()`), `state` (roster/model/context),
+  `bye`/`error`/fatal-close (terminal). **Phase 1 is view-only (invariant #3): the guest ONLY ever sends a
+  `hello`** - never a prompt/abort. Guest-write (tools on the host, behind the host's scan gate) is a later
+  slice.
+
+- **P-COLLAB.5 — the OPTIONAL embedded relay (`desktop/collab/relay_server.ts`, `startRelayServer`).** Any
+  LUCID can be the relay for its own sessions. It is a dumb forwarder over Bun's WebSocket server, wire-
+  compatible with the relay client: rooms keyed by roomId, opaque `[4B peerId][sealed]` envelopes rewritten to
+  the sender's peer id on delivery (host = 0, guests 1..n), JSON control frames (peer-joined/left,
+  room-closed), fatal codes 4004/4009/4029.
+
+**Security rationale (the embedded relay is the one genuinely new attack surface, so it is guard-railed):**
+1. it only ever forwards CIPHERTEXT - it never holds the room key, so it cannot read or forge session content
+   (the AES-GCM tag + wrong-key rejection guarantee this); an embedded relay does not widen what an attacker
+   can learn;
+2. it is OPT-IN and OFF by default (zero cost/surface unless enabled);
+3. it is a SEPARATE listener from LUCID's authenticated `/api` server - that port serves ONLY the relay
+   protocol; `/api` stays localhost-only and is never exposed;
+4. it binds `127.0.0.1` by default (reach a remote guest over a tunnel/VPN - the sovereign path); a LAN bind is
+   an explicit caller choice;
+5. HARD LIMITS bound DoS: max rooms, max peers/room, max frame bytes (Bun drops oversized), idle timeout.
+   NAT caveat: an embedded relay only works when the host is reachable by the guest (LAN/VPN/tunnel); arbitrary
+   internet peers still need a hosted rendezvous relay - acceptable for the air-gapped/sovereign use case.
+
+**Tested.** `guest.test.ts` (10, mock transport) + `relay_server.test.ts` (4, REAL localhost sockets: full
+host<->guest session, roster on join/leave, 4004 missing-room + 4009 host-conflict refusals) + demo-P-COLLAB.4
+(end-to-end over real sockets through LUCID's own embedded relay). 48 collab tests total; root + desktop tsc
+green.
+
+**Deferred (next slice):** the Join panel UI + the "be the relay" toggle + the backend routes wiring the guest
+stream + the relay lifecycle; then guest-write through the host's fail-closed gate and enterprise relay policy.
