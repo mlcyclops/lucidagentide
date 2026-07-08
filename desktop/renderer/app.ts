@@ -8,7 +8,7 @@
 // agent turn. Same renderer in Electron (real omp ACP via window.lucid) and in
 // the browser dev server (simulated). Pure DOM, no framework.
 
-import { bridge, type AgentRunReply, type McpCatalogTool, type ChatEvent, type ConfigOption, type GoalDial, type MemorySnapshot, type OmpCommand, type ProviderAuth, type RestoredTurn, type SecuritySnapshot, type SessionInfo, type SessionList, type SkillInspectView, type SkillView, type UserRole, type WorkspaceInfo } from "./bridge.ts";
+import { bridge, type AgentRunReply, type McpCatalogTool, type ChatEvent, type ConfigOption, type EvalReportTurn, type GoalDial, type MemorySnapshot, type OmpCommand, type ProviderAuth, type RestoredTurn, type SecuritySnapshot, type SessionInfo, type SessionList, type SkillInspectView, type SkillView, type UserRole, type WorkspaceInfo } from "./bridge.ts";
 import { ROLE_META, USER_ROLE_LIST, coachHtml, roleDefaultTab, stepsForRole, type TourStep } from "./tour.ts";
 import { modCombo, modSymbol } from "./platform.ts";
 import { aiLocHasData } from "../ailoc_view.ts";
@@ -23,9 +23,11 @@ import { restoredTurnHtml } from "./steps_restore.ts"; // P-RESUME.1 (ADR-0171):
 import { ageStr, esc, fmtUSD, goodColor, loadColor } from "./format.ts";
 import { icon, piMark } from "./icons.ts";
 import { aboutHtml, readmeMark } from "./about.ts";
-import { createTriviaGame, triviaExplainHtml, triviaQuestionHtml, triviaVisible, type TriviaGame, type TriviaQuestion } from "./trivia.ts"; // P-TRIV.1 (ADR-0174)
+import { createTriviaGame, isTriviaQuestion, triviaExplainHtml, triviaQuestionHtml, triviaVisible, type TriviaGame, type TriviaQuestion } from "./trivia.ts"; // P-TRIV.1 (ADR-0174)
 import { bankForRole } from "./trivia_roles.ts"; // P-TRIV.2 (ADR-0175): role-aware banks
 import { isIntelNewsItem, newsLineHtml } from "./trivia_news.ts"; // P-TRIV.3 (ADR-0176): the executive INTEL WIRE
+import { sectionizeAnswer, shouldSectionize, type AnswerSection } from "./answer_sections.ts"; // P-CHAT.A (ADR-0188): settled-turn collapsible sections
+import { interleaveChips, shouldInterleave, toolChip, type ToolMark, type ToolChip } from "./answer_chips.ts"; // P-CHAT.B (ADR-0189): inline tool-event chips
 import { MARKET_PLUGINS, marketplaceHtml, marketRowsHtml } from "./marketplace.ts"; // P-MARKET.1 (ADR-0158)
 import { toolfailGroupHtml, type ToolFailEntry } from "./toolfail_group.ts"; // P-TOOLFAIL.2 (ADR-0163)
 import { APP_VERSION } from "../version.ts";
@@ -435,8 +437,9 @@ function addMessage(role: "user" | "assistant", text: string, attachments?: Atta
     <div class="text"></div>${actions}</div>`);
   (node as MsgNode)._md = text; // raw markdown, for copy / save-as-.md
   const textEl = $(".text", node) as HTMLElement;
-  textEl.innerHTML = renderMarkdown(text);
-  enhanceCodeBlocks(textEl);
+  // P-CHAT.A (ADR-0188): a settled assistant answer sectionizes on its own headings; user prompts stay inline.
+  if (role === "assistant") renderAnswerBody(textEl, text);
+  else { textEl.innerHTML = renderMarkdown(text); enhanceCodeBlocks(textEl); }
   // P-VISION.1 (ADR-0136): render attached images inline. Each img.src is set as a DOM PROPERTY (never
   // interpolated into the HTML) so a data URL can't break out of the markup.
   if (attachments?.length) {
@@ -731,6 +734,8 @@ const fmtClock = (ms: number): string => { const s = Math.max(0, Math.floor(ms /
 
 // P-CHAT.1 (ADR-0104): the authored code a tool step can expand to preview inline.
 type ToolCode = { path: string; content?: string; oldText?: string; newText?: string; patch?: string };
+// P-CHAT.B (ADR-0189): the opaque payload a tool mark round-trips to fill its chip drilldown (code or detail).
+interface ChipData { code?: ToolCode; detail: string; }
 
 /** Fill an expandable step's panel with the tool's code — a write's content (syntax-highlighted via the
  *  vendored Monaco), an edit's hashline `patch` (colored +/− lines), or an old→new pair as a line diff.
@@ -1070,6 +1075,120 @@ const LOOKER_SVG = `<svg class="looker" viewBox="0 0 26 24" width="15" height="1
     <circle cx="16.4" cy="6.8" r="2.8"/>
   </g>
 </svg>`;
+// P-CHAT.A (ADR-0188): the pre-heading intro / a title-less block, rendered inline as markdown.
+function appendIntro(container: HTMLElement, md: string): void {
+  const intro = el(`<div class="answer-intro"></div>`);
+  intro.innerHTML = renderMarkdown(md); enhanceCodeBlocks(intro);
+  container.appendChild(intro);
+}
+
+// P-CHAT.A (ADR-0188): one collapsible titled section (default OPEN, so nothing is hidden by surprise).
+function appendSection(container: HTMLElement, s: AnswerSection): void {
+  const sec = el(`<div class="answer-sec open">
+    <button class="answer-sec-head" type="button" aria-expanded="true">${icon("chevron", 13)}<span class="answer-sec-title"></span></button>
+    <div class="answer-sec-body"></div>
+  </div>`);
+  ($(".answer-sec-title", sec) as HTMLElement).textContent = s.title;
+  const bodyEl = $(".answer-sec-body", sec) as HTMLElement;
+  bodyEl.innerHTML = renderMarkdown(s.body); enhanceCodeBlocks(bodyEl);
+  const head = $(".answer-sec-head", sec) as HTMLButtonElement;
+  head.addEventListener("click", () => { const open = !sec.classList.contains("open"); sec.classList.toggle("open", open); head.setAttribute("aria-expanded", String(open)); });
+  container.appendChild(sec);
+}
+
+// P-CHAT.A section logic reused for ONE interleaved prose run: sectionize it, else render it inline. So a
+// tool-using turn (P-CHAT.B) still gets collapsible sections inside each prose run between the chips.
+function renderProse(container: HTMLElement, md: string): void {
+  const secs = sectionizeAnswer(md);
+  if (!shouldSectionize(secs)) { appendIntro(container, md); return; }
+  for (const s of secs) { if (s.title === null) appendIntro(container, s.body); else appendSection(container, s); }
+}
+
+// P-CHAT.B (ADR-0189): one interleaved tool chip + its expandable drilldown. The chip reads at a glance
+// (icon + tool word + compact detail + a +/- diffstat); clicking it reveals the written code / the edit diff
+// (reusing the P-CHAT.1 `renderToolCode`) or, for a code-less tool, the step detail. Lazy (the panel fills on
+// first open) + COLLAPSED by default. Chip text is set via textContent - never interpolated into HTML - so a
+// hostile path / detail can't break out of the markup.
+function createChipRow(chip: ToolChip, data: ChipData): HTMLElement {
+  const stat = chip.diffstat ? ` <span class="add">+${chip.diffstat.add}</span> <span class="del">−${chip.diffstat.del}</span>` : "";
+  const wrap = el(`<div class="answer-chip">
+    <button class="tchip ${chip.kind}${chip.failed ? " fail" : ""}" type="button" aria-expanded="false">${icon(phaseIcon(chip.k), 12)}<span class="k"></span><span class="d"></span>${stat}<span class="tchip-chev">${icon("chevron", 12)}</span></button>
+    <div class="tinline"></div>
+  </div>`);
+  const btn = $(".tchip", wrap) as HTMLButtonElement;
+  const panel = $(".tinline", wrap) as HTMLElement;
+  ($(".k", btn) as HTMLElement).textContent = chip.k;
+  ($(".d", btn) as HTMLElement).textContent = chip.detail;
+  const hasCode = !!data.code && (data.code.content !== undefined || data.code.patch !== undefined || data.code.oldText !== undefined || data.code.newText !== undefined);
+  btn.addEventListener("click", () => {
+    const opening = !panel.classList.contains("open");
+    if (opening && !panel.dataset.filled) {
+      if (hasCode && data.code) void renderToolCode(panel, data.code);
+      else { panel.dataset.filled = "1"; const pre = el(`<pre class="tinline-detail"></pre>`); pre.textContent = data.detail || "(no details)"; panel.appendChild(pre); }
+    }
+    panel.classList.toggle("open", opening);
+    btn.setAttribute("aria-expanded", String(opening));
+  });
+  return wrap;
+}
+
+// P-CHAT.C (ADR-0190): a SETTLED tool-using turn offers a "Generate engineering report" CTA in its run
+// footer. Click POSTs the turn's OBSERVED telemetry to /api/eval/report (server reuses evals.ts to compute +
+// save a Model-Evaluation brief), then swaps to an "Open in Reports" link that opens the saved report. Shown
+// only when the turn made tool calls - a pure-text answer has nothing to evaluate. The run-meta + link text
+// are set via textContent (never interpolated), so a hostile model id / path can't break out of the markup.
+function appendRunReport(host: HTMLElement, turn: EvalReportTurn): void {
+  const foot = el(`<div class="runfoot">
+    <span class="runmeta"></span>
+    <span class="spacer"></span>
+    <button class="btn cta report-cta" type="button">${icon("report", 14)}<span class="rc-t">Generate engineering report</span></button>
+    <span class="reportlink" hidden>${icon("report", 14)}<span class="rc-lbl"></span><a href="#" class="rc-open">Open in Reports</a></span>
+  </div>`);
+  const files = new Set(turn.tools.filter((t) => t.path && (t.add != null || t.del != null)).map((t) => t.path)).size;
+  ($(".runmeta", foot) as HTMLElement).textContent = `· ${turn.tools.length} step${turn.tools.length === 1 ? "" : "s"} · ${files} file${files === 1 ? "" : "s"}`;
+  ($(".rc-lbl", foot) as HTMLElement).textContent = "Run report ready — ";
+  const btn = $(".report-cta", foot) as HTMLButtonElement;
+  const link = $(".reportlink", foot) as HTMLElement;
+  btn.addEventListener("click", async () => {
+    btn.disabled = true; btn.classList.add("busy");
+    btn.innerHTML = `${icon("refresh", 14, "spin")}<span class="rc-t">Generating…</span>`;
+    const res = await bridge.evalReport(turn).catch(() => null);
+    if (res && res.rel) {
+      btn.hidden = true; link.hidden = false;
+      ($(".rc-open", link) as HTMLElement).addEventListener("click", (ev) => { ev.preventDefault(); void openReportEntry("brief", res.rel!, res.title); });
+    } else {
+      btn.disabled = false; btn.classList.remove("busy");
+      btn.innerHTML = `${icon("report", 14)}<span class="rc-t">Generate engineering report</span>`;
+      showToast({ tone: "warn", title: "Could not generate report", desc: "The Model-Evaluation report couldn't be saved.", timeout: 2800 });
+    }
+  });
+  host.append(foot);
+}
+
+// P-CHAT.A + P-CHAT.B: on SETTLE, transform the finished answer. If the turn made tool calls (`marks`), thread
+// each one back into the prose as an expandable CHIP anchored where it fired (P-CHAT.B); otherwise split the
+// answer into collapsible sections on the model's own headings / rules (P-CHAT.A). A trivial no-tool answer
+// renders exactly as before (byte-identical inline). Streaming stays a single live flow (unchanged); `_md`
+// still holds the full markdown, so copy / save-as-.md are untouched. Returns true when chips were interleaved
+// (the caller then drops the now-redundant live thoughts window). `marks` is absent on restored/static replies.
+function renderAnswerBody(container: HTMLElement, md: string, marks?: readonly ToolMark<ChipData>[]): boolean {
+  if (marks && marks.length) {
+    const parts = interleaveChips(md, marks);
+    if (shouldInterleave(parts)) {
+      container.textContent = "";
+      container.classList.add("answer-chipped");
+      for (const p of parts) { if (p.kind === "prose") renderProse(container, p.md); else container.appendChild(createChipRow(p.chip, p.data)); }
+      return true;
+    }
+  }
+  const secs = sectionizeAnswer(md);
+  if (!shouldSectionize(secs)) { container.innerHTML = renderMarkdown(md); enhanceCodeBlocks(container); return false; }
+  container.textContent = "";
+  container.classList.add("answer-sectioned");
+  for (const s of secs) { if (s.title === null) appendIntro(container, s.body); else appendSection(container, s); }
+  return false;
+}
+
 function createSubagentCard(e: Extract<ChatEvent, { type: "subagent" }>): { el: HTMLElement; finish: () => void } {
   const n = e.assignments.length;
   const body = (e.assignments.length ? e.assignments : [e.title]).map((a) =>
@@ -1202,6 +1321,9 @@ async function send(): Promise<void> {
   let reasoning: ReasoningWin | null = null; // the live "thinking" block (above the answer)
   const permCards: { el: HTMLElement; finalize: () => void }[] = []; // Ask-mode approval prompts
   const subCards: { el: HTMLElement; finish: () => void }[] = []; // P-TASK.1 subagent delegation cards
+  const marks: ToolMark<ChipData>[] = []; // P-CHAT.B (ADR-0189): tool calls anchored by answer-buffer length, interleaved into the answer on settle
+  const dropThoughtsWindow = () => thoughts?.el.remove(); // once chips carry the activity, the live thoughts window is redundant
+  const failures: { tool: string; reason: string; cmd?: string }[] = []; // P-CHAT.C (ADR-0190): this turn's failed (non-quarantined) tool calls, feed the eval report's fail-rate / wasted-token metrics
   let buf = "";
   const t0 = Date.now();
   // Cold start: the timer is already ticking but nothing has arrived - show an intent-aware
@@ -1259,6 +1381,22 @@ async function send(): Promise<void> {
     subCards.forEach((c) => c.finish());
     permCards.forEach((c) => c.finalize()); // any unanswered prompt = denied (matches server fail-close)
   };
+  // P-CHAT.C (ADR-0190): assemble this turn's OBSERVED telemetry (tokens/cost, tool calls + diffstats,
+  // failures) into the shape /api/eval/report consumes; the run-footer CTA POSTs it to build the report.
+  const buildEvalTurn = (): EvalReportTurn => ({
+    runId: `run-${t0}`,
+    model: state.model || "model",
+    ctxTokens: tok,
+    outputTokens: tps.tokenCount,
+    totalTokens: tok + tps.tokenCount,
+    costUsd: cost,
+    tools: marks.map((m) => ({ name: m.chip.k, path: m.data.code?.path, add: m.chip.diffstat?.add, del: m.chip.diffstat?.del })),
+    failures: failures.slice(),
+    subagents: subCards.length,
+    when: new Date(t0).toISOString().slice(0, 10),
+  });
+  // Only a tool-USING turn gets the CTA (a pure-text answer has nothing to evaluate). Appended once, at settle.
+  const maybeAppendReport = () => { if (marks.length > 0) appendRunReport(textEl, buildEvalTurn()); };
   let slowNoticed = false; // P-STALL.1: the explanatory toast fires once per turn; the phase line keeps updating
   const onEvent = (e: ChatEvent) => {
     if (e.type === "token") { reasoning?.finish(Date.now() - t0); buf += e.text; countDelta(e.text); if (!sawTool) setPhase(writeLine); streamEl.innerHTML = renderMarkdown(buf) + `<span class="cursor"></span>`; paintHud(); scrollChat(); }
@@ -1273,6 +1411,9 @@ async function send(): Promise<void> {
       sawTool = true; setPhase(phaseForTool(e.name, e.detail)); paintHud();
       if (!thoughts) { thoughts = createThoughts(); streamEl.after(thoughts.el); } // window sits below the answer
       thoughts.step(e.name, e.detail, e.code);
+      // P-CHAT.B (ADR-0189): also record the call as a mark anchored at the current answer-buffer length, so it
+      // can be threaded back into the settled answer as a chip where it fired (zero visual change to the live window).
+      marks.push({ offset: buf.length, chip: toolChip(e.name, e.detail, e.code), data: { code: e.code, detail: e.detail } });
       scrollChat();
     }
     else if (e.type === "subagent") {
@@ -1291,7 +1432,7 @@ async function send(): Promise<void> {
       if (e.egress || e.exec) egressDock().appendChild(card.el);
       else { hud.before(card.el); scrollChat(); }
     }
-    else if (e.type === "block") onBlock(e);
+    else if (e.type === "block") { if (e.quarantined === false) failures.push({ tool: e.tool, reason: e.reason, cmd: e.command }); onBlock(e); } // P-CHAT.C (ADR-0190): a failed (not quarantined) tool call feeds the run's eval metrics
     else if (e.type === "preview-available") onPreviewAvailable(e.path);
     else if (e.type === "preview-activity") flashPreviewTesting(e.label); // P-PREVIEW.6a (ADR-0153)
     else if (e.type === "design-available") showToast({ tone: "ok", title: "DESIGN.md is ready", desc: "The agent wrote your design invariants — review + edit them in the IDE.", actions: [{ label: "Review in the IDE", kind: "ok", run: () => void openDesignInIde() }], timeout: 10000 }); // P-FIGMA.2 (ADR-0154)
@@ -1304,12 +1445,12 @@ async function send(): Promise<void> {
       setPhase(slowPhaseLabel(e.waitedMs)); paintHud();
       if (!slowNoticed) { slowNoticed = true; const c = slowToastCopy(e.waitedMs, TURN_PATIENCE_MS); showToast({ tone: "warn", title: c.title, desc: c.desc, timeout: 9000 }); }
     }
-    else if (e.type === "done") { if (e.text && e.text.length > buf.length) buf = e.text; /* reconcile a lossy stream with the server's full reply */ streamEl.innerHTML = renderMarkdown(buf); enhanceCodeBlocks(streamEl); (node as MsgNode)._md = buf; finishHud(); state.streaming = false; setSendEnabled(); clearPreviewTesting(); }
+    else if (e.type === "done") { if (e.text && e.text.length > buf.length) buf = e.text; /* reconcile a lossy stream with the server's full reply */ const chipped = renderAnswerBody(streamEl, buf, marks); /* P-CHAT.A sections / P-CHAT.B chips */ (node as MsgNode)._md = buf; finishHud(); if (chipped) dropThoughtsWindow(); /* chips now carry the activity */ maybeAppendReport(); /* P-CHAT.C: settled-turn report CTA */ state.streaming = false; setSendEnabled(); clearPreviewTesting(); }
   };
   try { await bridge.sendPrompt(sendText, onEvent, images); }
   finally {
     (node as MsgNode)._md = buf;
-    if (state.streaming) { streamEl.innerHTML = renderMarkdown(buf); enhanceCodeBlocks(streamEl); finishHud(); state.streaming = false; setSendEnabled(); } else { finishHud(); }
+    if (state.streaming) { const chipped = renderAnswerBody(streamEl, buf, marks); /* P-CHAT.A sections / P-CHAT.B chips */ finishHud(); if (chipped) dropThoughtsWindow(); maybeAppendReport(); /* P-CHAT.C: settled-turn report CTA */ state.streaming = false; setSendEnabled(); } else { finishHud(); }
     void renderSessions(); void refreshBudget(false); void syncMode();
     scheduleKnowledgeRefresh(); // #54 follow-up: new facts appear in the open KG without close/reopen
     // P-ACP.4: the turn ended - fire off any pre-staged prompt now (the composer is idle again).
@@ -2267,6 +2408,68 @@ function secAppearance(): string {
   return setCard("appearance", "Chat background", "personalize · 25% opacity", inner, true);
 }
 
+// ── P-TRIV.4 (ADR-0191): Settings -> Trivia Wire ─────────────────────────────────────────────────
+// The real on/off toggle (no more hand-editing localStorage), the opt-in re-seed sources, and the
+// "Recycle" button that regenerates the per-role pack on the user's SELECTED model. Rendered from
+// localStorage + state (no fetch); the Recycle button is the only control that reaches the backend.
+function secTrivia(): string {
+  const on = triviaEnabled();
+  const toggle = `<label class="set-toggle"><input type="checkbox" id="trivToggle" ${on ? "checked" : ""}/>
+      <span><b>Show the Trivia Wire</b> - a word-game ticker that scrolls in the status bar while the agent works, or when you're idle with work to return to. Answer with a click or the A-D keys.</span></label>`;
+  if (!on) return setCard("trivia", "Trivia Wire", "status-bar game", toggle + `<div class="set-note">${icon("info", 12)} Off - the ticker stays hidden everywhere until you switch it back on here.</div>`, true);
+
+  const role = state.userRole || "developer";
+  const src = triviaSources();
+  const cb = (id: string, checked: boolean, label: string, tip: string): string =>
+    `<label class="set-toggle triv-src"><input type="checkbox" id="${id}" ${checked ? "checked" : ""}/><span data-tip="${tip}">${label}</span></label>`;
+  const sources = `<div class="triv-lbl">Personalize from your context <span class="info-dot" data-tip="Personalize the questions|Pick which of your own on-device context the model may read to choose topics. Each source is scanned before the model sees it; the run is tool-free.">${icon("info", 11)}</span></div>
+    ${cb("trivSrcSessions", src.sessions, "Past sessions &amp; chats", "Recent work|Reads the titles of your recent chats in this workspace to pick topics. On-device, scanned before use.")}
+    ${cb("trivSrcKg", src.kg, "Knowledge Graph", "Your knowledge graph|Reads your saved interests &amp; skills. Only used when your Knowledge Graph is unlocked - otherwise it contributes nothing.")}
+    ${cb("trivSrcCode", src.codegraph, "Code graph", "Workspace code|Reads file/symbol names from the code graph to infer your stack. Only used once the code graph has been built.")}`;
+
+  const model = state.model ? esc(modelLabel(state.model)) : "your model";
+  const reseedTip = `Recycle the trivia|Generates a fresh ${esc(role)} pack with ${model} from the sources you've checked. Runs on your model, scanned and tool-free. Falls back to the built-in pack if it can't.`;
+  const reseed = `<div class="triv-reseed"><button class="btn-mini" id="trivReseed" ${state.model ? "" : "disabled"} data-tip="${reseedTip}">${icon("refresh", 12)} Recycle trivia</button></div>`;
+
+  const pack = storedTriviaPack(role);
+  const status = pack
+    ? `<div class="set-note ok">${icon("check", 12)} Using a generated ${esc(role)} pack (${pack.length} questions). <button class="btn-mini triv-reset" id="trivPackReset">${icon("restore", 11)} Use built-in</button></div>`
+    : `<div class="set-note">${icon("info", 12)} Using the built-in ${esc(role)} pack. Check a source and Recycle to tailor it to your work.</div>`;
+
+  return setCard("trivia", "Trivia Wire", "status-bar game · on-device", toggle + sources + reseed + status, true);
+}
+
+/** Run an AI re-seed: the backend gathers the checked sources, scans them fail-closed, and generates a
+ *  pack on the SELECTED model. Adopt a valid pack; otherwise keep the current one (fail-quiet). Drives
+ *  the button's busy state and re-renders the card. */
+async function reseedTrivia(btn: HTMLButtonElement | null): Promise<void> {
+  if (!state.model) { showToast({ tone: "warn", title: "Pick a model first", desc: "Choose your AI model in the picker, then recycle the trivia.", timeout: 3000 }); return; }
+  const role = state.userRole || "developer";
+  const orig = btn?.innerHTML;
+  if (btn) { btn.disabled = true; btn.innerHTML = `${icon("refresh", 12)} Generating…`; }
+  try {
+    const res = await bridge.triviaReseed({ model: state.model, role, sources: triviaSources() }).catch(() => null);
+    const qs = res?.ok && Array.isArray(res.questions) ? res.questions.filter(isTriviaQuestion) : [];
+    if (qs.length >= TRIVIA_MIN_PACK) {
+      applyTriviaPack(role, qs, res!.model || state.model);
+      showToast({ tone: "ok", title: "Fresh trivia ready", desc: `${qs.length} questions generated for your ${role} role${res!.usedSources?.length ? ` from ${res!.usedSources.join(", ")}` : ""}.`, timeout: 3600 });
+      return;
+    }
+    const blocked = !!res?.blocked;
+    showToast({
+      tone: blocked ? "warn" : "info",
+      title: blocked ? "Re-seed blocked" : "Kept the current pack",
+      desc: blocked
+        ? "The source content didn't pass the security scan, so nothing was generated - your current pack is unchanged."
+        : `${res?.reason || "The model didn't return enough usable questions"} - keeping your current pack.`,
+      timeout: 4200,
+    });
+  } finally {
+    if (btn && orig !== undefined) { btn.disabled = false; btn.innerHTML = orig; }
+    fillSec("trivia", secTrivia());
+  }
+}
+
 function settingsShell(): string {
   return [
     `<div data-sec="workspace"></div>`,
@@ -2288,6 +2491,7 @@ function settingsShell(): string {
     setSkel("others", "More providers", "", true),
     setSkel("voice", "Voice", "TTS · STT · ElevenLabs", true), // P-VOICE.1 (ADR-0115)
     secAppearance(), // P-APPEAR.1: chat background (rendered from state - loaded at boot, no fetch wait)
+    secTrivia(), // P-TRIV.4 (ADR-0191): the Trivia Wire toggle + AI re-seed (rendered from state/localStorage)
     setSkel("developer", "Developer", "logs · diagnostics", true),
     `<div class="set-note">${icon("shield", 12)} Keys are stored on this machine and passed to omp as env vars - never sent anywhere else. OAuth uses omp's own secure credential vault.</div>`,
   ].join("");
@@ -4929,13 +5133,13 @@ function renderStatus(): void {
 // created once and re-adopted after every renderStatus innerHTML swap so its scroll position and
 // in-flight question survive the 2s data poll.
 const TRIVIA_SCORE_KEY = "lucid.trivia";        // lifetime {score,answered,correct}
-const TRIVIA_ENABLED_KEY = "lucid.trivia-enabled"; // "0" = off (default on; Settings toggle is P-TRIV.3)
+const TRIVIA_ENABLED_KEY = "lucid.trivia-enabled"; // "1" = on (default OFF - an easter egg people find; toggle in Settings -> Trivia Wire)
 const TRIVIA_SPEED = 78;                        // px/s - an easy reading clip
 const TRIVIA_EXPLAIN_SPEED = 95;
 const TRIVIA_ANSWER_LINGER_MS = 1100;           // how long the pill verdict shows before the explanation line
 
 function triviaEnabled(): boolean {
-  try { return localStorage.getItem(TRIVIA_ENABLED_KEY) !== "0"; } catch { return true; }
+  try { return localStorage.getItem(TRIVIA_ENABLED_KEY) === "1"; } catch { return false; } // default OFF until switched on
 }
 let triviaGame: TriviaGame | null = null;
 let trivEl: HTMLElement | null = null;          // persistent .triv wrapper (survives renderStatus)
@@ -4990,11 +5194,74 @@ async function refreshTriviaKg(): Promise<void> {
   catch { trivKgUnlocked = false; } // unknown = locked: the idle branch stays fail-quiet
 }
 
+// P-TRIV.4 (ADR-0191): generated packs persist per role and take precedence over the seed bank (the
+// permanent fail-closed floor). A stable-ref cache keeps refreshTriviaGame's bank compare O(1).
+const TRIVIA_PACK_PREFIX = "lucid.trivia-pack.";   // + role -> { questions, at, model }
+const TRIVIA_SOURCES_KEY = "lucid.trivia-sources";  // { sessions, kg, codegraph } re-seed source choices
+const TRIVIA_MIN_PACK = 8;                          // mirrors trivia_seed.ts MIN_PACK: below this we keep the seed
+const trivPackCache = new Map<string, readonly TriviaQuestion[]>(); // role -> parsed pack (stable ref)
+
+/** The user's chosen re-seed context sources (persisted). All off by default - re-seed is opt-in. */
+function triviaSources(): { sessions: boolean; kg: boolean; codegraph: boolean } {
+  try {
+    const o = JSON.parse(localStorage.getItem(TRIVIA_SOURCES_KEY) || "{}") as Record<string, unknown>;
+    return { sessions: !!o.sessions, kg: !!o.kg, codegraph: !!o.codegraph };
+  } catch { return { sessions: false, kg: false, codegraph: false }; }
+}
+
+/** The generated pack for a role (stable ref, cached), or null when none is stored / it is too small /
+ *  corrupt. Every entry re-passes isTriviaQuestion - a tampered store can never inject a bad question. */
+function storedTriviaPack(role: string | null | undefined): readonly TriviaQuestion[] | null {
+  const key = role || "developer";
+  const cached = trivPackCache.get(key);
+  if (cached) return cached;
+  try {
+    const raw = localStorage.getItem(TRIVIA_PACK_PREFIX + key);
+    if (!raw) return null;
+    const o = JSON.parse(raw) as { questions?: unknown };
+    const qs = Array.isArray(o.questions) ? o.questions.filter(isTriviaQuestion) : [];
+    if (qs.length < TRIVIA_MIN_PACK) return null;
+    trivPackCache.set(key, qs);
+    return qs;
+  } catch { return null; }
+}
+
+/** The durable contract of P-TRIV.4: a generated pack takes precedence; the role seed bank is the
+ *  permanent fail-closed floor. Both trivia game builders go through here so the two stay in lockstep. */
+function effectiveTriviaBank(role: string | null | undefined): readonly TriviaQuestion[] {
+  return storedTriviaPack(role) ?? bankForRole(role);
+}
+
+/** Persist + cache a freshly generated pack for the role (stable ref for the ref-compare). */
+function saveTriviaPack(role: string | null | undefined, questions: readonly TriviaQuestion[], model: string): void {
+  const key = role || "developer";
+  trivPackCache.set(key, questions);
+  try { localStorage.setItem(TRIVIA_PACK_PREFIX + key, JSON.stringify({ questions, at: Date.now(), model })); }
+  catch { /* full/blocked store: the pack still lives in-memory this session */ }
+}
+
+/** Drop the generated pack for a role -> the wire falls back to the built-in seed bank. */
+function clearTriviaPack(role: string | null | undefined): void {
+  const key = role || "developer";
+  trivPackCache.delete(key);
+  try { localStorage.removeItem(TRIVIA_PACK_PREFIX + key); } catch { /* ignore */ }
+}
+
+/** Adopt a pack: persist it, then rebuild the live game on it (lifetime score survives - it lives in
+ *  trivStore, not the game). No-op before the ticker exists; ensureTrivia picks up the stored pack. */
+function applyTriviaPack(role: string | null | undefined, questions: readonly TriviaQuestion[], model: string): void {
+  saveTriviaPack(role, questions, model);
+  if (!triviaGame) return;
+  trivBank = effectiveTriviaBank(role);
+  triviaGame = createTriviaGame(trivBank, trivStore());
+  loadTriviaLine();
+}
+
 /** Rebuild the game when the role's bank actually changed (lifetime score survives - it lives in
  *  the store, not the game). No-op before the ticker exists or when the bank is unchanged. */
 function refreshTriviaGame(): void {
   if (!triviaGame) return;
-  const bank = bankForRole(state.userRole);
+  const bank = effectiveTriviaBank(state.userRole); // P-TRIV.4 (ADR-0191): generated pack ?? seed bank
   if (bank === trivBank) return;
   trivBank = bank;
   triviaGame = createTriviaGame(bank, trivStore());
@@ -5005,7 +5272,7 @@ const trivReducedMotion = typeof matchMedia === "function" && matchMedia("(prefe
 
 function ensureTrivia(): void {
   if (trivEl || !triviaEnabled()) return;
-  trivBank = bankForRole(state.userRole);
+  trivBank = effectiveTriviaBank(state.userRole); // P-TRIV.4 (ADR-0191): adopt a generated pack when present
   triviaGame = createTriviaGame(trivBank, trivStore());
   // Idle-engagement inputs (P-TRIV.2): a composer keystroke restarts the idle grace, and the KG
   // unlock state is polled gently (never per frame - bridge.personal() is a fetch).
@@ -7451,6 +7718,34 @@ function wire(): void {
     // P-APPEAR.1: chat-background upload / remove
     if (t.closest("#bgUpload")) { ($("#bgFile") as HTMLInputElement | null)?.click(); return; }
     if (t.closest("#bgClear")) { void updateChatBg({ image: "", mode: "off" }); return; }
+    // P-TRIV.4 (ADR-0191): Trivia Wire toggle + opt-in re-seed sources + the Recycle action
+    if (t.closest("#trivToggle")) {
+      const on = ($("#trivToggle", $("#setBody")!) as HTMLInputElement)?.checked ?? true;
+      try { localStorage.setItem(TRIVIA_ENABLED_KEY, on ? "1" : "0"); } catch { /* ignore */ }
+      if (on) mountTrivia(); else { trivShown = false; trivEl?.classList.remove("on"); }
+      fillSec("trivia", secTrivia());
+      showToast({ title: on ? "Trivia Wire on" : "Trivia Wire off", desc: on ? "It'll scroll in the status bar while the agent works or you're idle." : "Hidden everywhere - switch it back on here anytime.", timeout: 2600 });
+      return;
+    }
+    if (t.closest("#trivSrcSessions") || t.closest("#trivSrcKg") || t.closest("#trivSrcCode")) {
+      const body = $("#setBody")!;
+      try {
+        localStorage.setItem(TRIVIA_SOURCES_KEY, JSON.stringify({
+          sessions: ($("#trivSrcSessions", body) as HTMLInputElement | null)?.checked ?? false,
+          kg: ($("#trivSrcKg", body) as HTMLInputElement | null)?.checked ?? false,
+          codegraph: ($("#trivSrcCode", body) as HTMLInputElement | null)?.checked ?? false,
+        }));
+      } catch { /* ignore */ }
+      return;
+    }
+    if (t.closest("#trivPackReset")) {
+      clearTriviaPack(state.userRole);
+      refreshTriviaGame(); // rebuild on the seed bank now that the generated pack is gone
+      fillSec("trivia", secTrivia());
+      showToast({ title: "Back to the built-in pack", desc: "The generated questions were cleared for this role.", timeout: 2600 });
+      return;
+    }
+    if (t.closest("#trivReseed")) { await reseedTrivia(t.closest("#trivReseed") as HTMLButtonElement); return; }
     // P-LOCAL.3 (ADR-0135): Local Providers card
     if (t.closest("[data-lp-addtoggle]")) { (t.closest(".lp-add") as HTMLElement | null)?.classList.toggle("open"); return; }
     if (t.closest("[data-lp-add]")) { await addLocalProviderFromForm(); return; }

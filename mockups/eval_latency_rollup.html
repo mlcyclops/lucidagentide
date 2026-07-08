@@ -1,0 +1,168 @@
+<!doctype html>
+<!-- LUCID design prototype — Eval Latency Rollup report (weekly / monthly), per-model by business hour. -->
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>LUCID · Model Latency Rollup</title>
+<style>
+  :root{
+    --bg-0:#0a0b0f;--bg-1:#0f1117;--bg-2:#151823;--bg-3:#1b1f2b;--bg-4:#222736;
+    --line:#252a3a;--line-soft:#1a1e2a;--line-strong:#323a4f;
+    --txt:#edeff6;--txt-1:#edeff6;--txt-2:#aeb4c6;--txt-3:#727a90;--txt-4:#525a70;
+    --accent:#c64bd6;--accent-2:#e07bf0;--cyan:#46c8dc;--green:#46d27e;--amber:#e8b23c;--red:#ef5f5f;--blue:#5e8df2;
+    --font:"Inter",ui-sans-serif,-apple-system,"Segoe UI",Roboto,system-ui,sans-serif;
+    --mono:ui-monospace,"Cascadia Code","SF Mono",Menlo,Consolas,monospace;color-scheme:dark;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:radial-gradient(1100px 560px at 85% -12%,rgba(198,75,214,.07),transparent 60%),var(--bg-1);color:var(--txt);font-family:var(--font);font-size:14px;line-height:1.6}
+  svg.ic{display:inline-block;vertical-align:-2px}
+  .modal{max-width:1000px;margin:18px auto;background:linear-gradient(180deg,var(--bg-2),var(--bg-1));border:1px solid var(--line);border-radius:16px;overflow:hidden;box-shadow:0 24px 60px -20px rgba(0,0,0,.6)}
+  .re-acts{display:flex;align-items:center;gap:6px;padding:11px 16px;border-bottom:1px solid var(--line-soft);flex-wrap:wrap}
+  .btn-mini{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line-strong);border-radius:8px;background:linear-gradient(180deg,var(--bg-3),var(--bg-2));color:var(--txt-2);font:inherit;font-size:12px;padding:5px 10px;cursor:pointer;box-shadow:inset 0 1px 0 rgba(255,255,255,.05);text-shadow:0 1px 1px rgba(0,0,0,.5)}
+  .btn-mini:hover{border-color:var(--accent-2);color:var(--txt)} .btn-mini .ic{color:var(--txt-3)} .btn-mini:hover .ic{color:var(--accent-2)}
+  .btn-mini.listen .ic{color:var(--accent-2)} .re-acts .sp{flex:1}
+  .seg{display:inline-flex;border:1px solid var(--line-strong);border-radius:8px;overflow:hidden}
+  .seg button{background:var(--bg-2);border:0;color:var(--txt-3);font:inherit;font-size:12px;padding:5px 12px;cursor:pointer}
+  .seg button.on{background:color-mix(in srgb,var(--accent) 22%,var(--bg-3));color:var(--txt)}
+
+  .report{padding:16px 22px 26px;overflow:auto;max-height:82vh;font-size:15px;line-height:1.7;color:var(--txt-1)}
+  .report h1{font-size:19px;font-weight:720;margin:2px 0 4px;padding-bottom:10px;border-bottom:1px solid var(--line)}
+  .report .meta{font-family:var(--mono);font-size:12px;color:var(--txt-3);margin:0 0 10px}
+  .report h2{font-size:13px;text-transform:uppercase;letter-spacing:.05em;color:var(--txt-2);margin:22px 0 9px;padding-left:12px;position:relative}
+  .report h2::before{content:"";position:absolute;left:0;top:2px;bottom:2px;width:3px;border-radius:3px;background:linear-gradient(180deg,var(--accent),var(--accent-2))}
+  .report p{margin:6px 0 10px} .report p.lead{color:var(--txt-2);font-size:13.5px}
+  .report code{font-family:var(--mono);font-size:12.5px;background:var(--bg-3);border:1px solid var(--line-soft);border-radius:5px;padding:1px 5px;color:var(--txt-2)}
+  .report table{width:100%;border-collapse:collapse;margin:6px 0 10px;font-size:13px}
+  .report th{text-align:left;color:var(--txt-4);font-size:10.5px;text-transform:uppercase;letter-spacing:.4px;font-weight:600;padding:5px 9px;border-bottom:1px solid var(--line)}
+  .report td{padding:6px 9px;border-bottom:1px solid var(--line-soft);color:var(--txt-2)}
+  .report td.n{font-family:var(--mono);color:var(--txt);font-variant-numeric:tabular-nums}
+  .up{color:var(--red)} .down{color:var(--green)}
+  .cites{font-size:11px;color:var(--txt-4);line-height:1.65}
+
+  .score{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin:8px 0 6px}
+  .sc{border:1px solid var(--line);border-radius:10px;padding:9px 11px;background:linear-gradient(160deg,var(--bg-2),var(--bg-1))}
+  .sc .v{font-size:19px;font-weight:720;font-variant-numeric:tabular-nums} .sc .v small{font-size:11px;color:var(--txt-3);font-weight:600}
+  .sc .l{font-size:10.5px;color:var(--txt-2);margin-top:2px}
+  .sc.acc .v{color:var(--accent-2)} .sc.cy .v{color:var(--cyan)} .sc.am .v{color:var(--amber)}
+
+  .modelcard{border:1px solid var(--line-soft);border-radius:12px;background:linear-gradient(180deg,var(--bg-2),var(--bg-1));padding:12px 15px;margin:10px 0}
+  .modelcard .mh{display:flex;align-items:baseline;gap:10px;margin-bottom:4px}
+  .modelcard .mn{font-family:var(--mono);font-size:13.5px;font-weight:700;color:var(--txt)}
+  .modelcard .ms{font-size:11.5px;color:var(--txt-3);font-family:var(--mono)}
+  .modelcard .mh .sp{flex:1}
+  .rchart{display:flex;flex-direction:column;gap:7px;margin:6px 0 2px}
+  .rchart-row{display:grid;grid-template-columns:56px 1fr auto;align-items:center;gap:11px}
+  .rchart-lbl{font-size:12px;color:var(--txt-3);font-family:var(--mono)}
+  .rchart-track{position:relative;height:13px;border-radius:7px;overflow:hidden;background:color-mix(in srgb,var(--c) 9%,var(--bg-3));box-shadow:inset 0 1px 3px rgba(0,0,0,.4)}
+  .rchart-fill{display:block;height:100%;border-radius:7px;min-width:5px;background:linear-gradient(90deg,color-mix(in srgb,var(--c) 55%,#000),var(--c));box-shadow:0 0 10px -2px color-mix(in srgb,var(--c) 70%,transparent),inset 0 1px 0 rgba(255,255,255,.25)}
+  .rchart-val{font-family:var(--mono);font-size:12px;font-weight:700;color:var(--c);min-width:52px;text-align:right}
+  .peak{outline:1px dashed color-mix(in srgb,var(--amber) 55%,transparent);outline-offset:1px}
+
+  .print-foot{display:none}
+  @media print{
+    @page{margin:16mm}
+    body{background:#fff !important;color:#14181d}
+    .modal{max-width:none;margin:0;border:0;border-radius:0;box-shadow:none;background:#fff}
+    .re-acts,.no-print{display:none !important}
+    .report{color:#14181d;padding:0;max-height:none;overflow:visible}
+    .report h1{color:#0b0d10;border-bottom:1px solid #c9ced6} .report .meta{color:#5a6472}
+    .report h2{color:#3a4048} .report h2::before{background:#8a5cf0}
+    .report p,.report td{color:#22272e} .report th{color:#5a6472;border-bottom:1px solid #c9ced6}
+    .report td{border-color:#e3e6ec} .report code{background:#f0f1f4;border-color:#d7dbe2;color:#22272e}
+    .modelcard,.sc,.report table{break-inside:avoid;background:#f6f7f9 !important;border-color:#d7dbe2;box-shadow:none}
+    .rchart-track{background:#e6e8ee !important;box-shadow:none} .rchart-fill{box-shadow:none} .rchart-lbl{color:#3a4048}
+    .print-foot{display:block;position:fixed;bottom:6mm;left:0;right:0;text-align:center;font-size:8pt;color:#6a7280}
+    *{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  }
+</style>
+</head>
+<body>
+<div class="modal">
+  <div class="re-acts no-print">
+    <button class="btn-mini listen"><span class="ic" data-ic="cast" data-sz="14"></span> Listen</button>
+    <button class="btn-mini"><span class="ic" data-ic="copy" data-sz="14"></span> Copy</button>
+    <button class="btn-mini"><span class="ic" data-ic="dl" data-sz="14"></span> Save .md</button>
+    <button class="btn-mini" id="print"><span class="ic" data-ic="print" data-sz="14"></span> Print / PDF</button>
+    <span class="sp"></span>
+    <span class="seg"><button class="on" id="wk">Weekly</button><button id="mo">Monthly</button></span>
+  </div>
+
+  <div class="report">
+    <h1 id="title">Model Latency Rollup - Week of Jul 1-7, 2026</h1>
+    <div class="meta" id="sub">business hours 08:00-17:00 America/New_York (EST/EDT) · TTFT p50 by hour · 1,284 calls · 5 workdays</div>
+
+    <div class="score">
+      <div class="sc cy"><div class="v">690<small> ms</small></div><div class="l">TTFT p50 (all models)</div></div>
+      <div class="sc am"><div class="v">2.1<small> s</small></div><div class="l">TTFT p95</div></div>
+      <div class="sc acc"><div class="v">15:00<small> ET</small></div><div class="l">Slowest hour (peak load)</div></div>
+      <div class="sc"><div class="v">1,284</div><div class="l">Calls in business hours</div></div>
+    </div>
+
+    <h2>claude-opus-4-8 — TTFT p50 by hour (ET)</h2>
+    <div class="modelcard">
+      <div class="mh"><span class="mn">claude-opus-4-8</span><span class="sp"></span><span class="ms">812 calls · p50 710ms · p95 2.3s</span></div>
+      <div class="rchart" data-model="opus" style="--c:var(--accent-2)"></div>
+    </div>
+
+    <h2>haiku-4-5 (checker) — TTFT p50 by hour (ET)</h2>
+    <div class="modelcard">
+      <div class="mh"><span class="mn">haiku-4-5</span><span class="sp"></span><span class="ms">472 calls · p50 230ms · p95 480ms</span></div>
+      <div class="rchart" data-model="haiku" style="--c:var(--cyan)"></div>
+    </div>
+
+    <h2 id="cmph">Week-over-week comparison</h2>
+    <table>
+      <thead><tr><th>Model</th><th>This week p50</th><th>Prev week p50</th><th>chg</th><th>p95 chg</th></tr></thead>
+      <tbody id="cmp"></tbody>
+    </table>
+    <p class="lead" id="cmpnote">Rising mid-afternoon (14:00-15:00 ET) latency tracks provider peak load; haiku holds steady. Off-hours calls are excluded from this rollup by design (business-hours window).</p>
+
+    <h2>Method &amp; sources</h2>
+    <p class="cites">Latency = time-to-first-token (TTFT), captured per model call at the request seam (<code>acp_backend</code>) and stored in <code>api_latency</code>; rolled up per model x hour over the period. Buckets use <code>America/New_York</code> so EST/EDT DST is handled. p50/p95 are percentiles over calls in each hour. Total-latency and error-rate rollups available on the same table. Trend framing: DORA (throughput/latency), OpenTelemetry GenAI latency semantics, provider status/latency dashboards.</p>
+  </div>
+</div>
+<div class="print-foot">Prepared for: neorc@workstation · LUCID Model Latency Rollup · business hours 08:00-17:00 ET</div>
+
+<script>
+  const ICONS={
+    cast:'<path d="M4 12a12 12 0 0 1 8 8"/><path d="M4 8a16 16 0 0 1 12 12"/><circle cx="5" cy="19" r="1.5"/>',
+    copy:'<path d="M9 9h9v11H9z"/><path d="M6 15H5V4h11v1"/>',
+    dl:'<path d="M12 4v10"/><path d="M8 11l4 4 4-4"/><path d="M5 19h14"/>',
+    print:'<path d="M7 9V4h10v5"/><path d="M6 18H4v-7h16v7h-2"/><path d="M7 14h10v6H7z"/>',
+  };
+  const svg=(n,s)=>`<svg class="ic" viewBox="0 0 24 24" width="${s||14}" height="${s||14}" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">${ICONS[n]||""}</svg>`;
+  for(const el of document.querySelectorAll("[data-ic]")) el.outerHTML=svg(el.getAttribute("data-ic"),+el.getAttribute("data-sz")||14);
+  const $=(id)=>document.getElementById(id);
+  const HOURS=["08:00","09:00","10:00","11:00","12:00","13:00","14:00","15:00","16:00"];
+  // weekly p50 ms per hour
+  const DATA={
+    weekly:{opus:[520,640,710,880,760,690,820,950,700], haiku:[180,210,230,260,240,220,250,290,210],
+      cmp:[["claude-opus-4-8",710,680,"+4%","+6%"],["haiku-4-5",230,240,"-4%","-2%"]], calls:1284, title:"Week of Jul 1-7, 2026", win:"5 workdays"},
+    monthly:{opus:[540,660,700,840,780,710,860,910,720], haiku:[190,215,225,255,245,225,255,285,215],
+      cmp:[["claude-opus-4-8",745,690,"+8%","+11%"],["haiku-4-5",235,238,"-1%","0%"]], calls:5610, title:"June 2026", win:"21 workdays"},
+  };
+  function fmt(ms){return ms>=1000?(ms/1000).toFixed(1)+" s":ms+" ms";}
+  function draw(period){
+    const d=DATA[period];
+    for(const model of ["opus","haiku"]){
+      const arr=d[model], max=Math.max(...arr), peak=arr.indexOf(max);
+      $(document.querySelector(`[data-model="${model}"]`)&&0); // no-op guard
+      const box=document.querySelector(`.rchart[data-model="${model}"]`);
+      box.innerHTML=arr.map((v,i)=>{
+        const w=Math.max(4,Math.round(v/max*100));
+        return `<div class="rchart-row"><span class="rchart-lbl">${HOURS[i]}</span><span class="rchart-track${i===peak?" peak":""}"><i class="rchart-fill" style="width:${w}%"></i></span><b class="rchart-val">${fmt(v)}</b></div>`;
+      }).join("");
+    }
+    $("cmp").innerHTML=d.cmp.map(r=>`<tr><td class="n">${r[0]}</td><td class="n">${fmt(r[1])}</td><td class="n">${fmt(r[2])}</td><td class="n ${r[3].startsWith("+")?"up":"down"}">${r[3]}</td><td class="n ${r[4].startsWith("+")?"up":"down"}">${r[4]}</td></tr>`).join("");
+    $("title").textContent="Model Latency Rollup - "+d.title;
+    $("sub").textContent=`business hours 08:00-17:00 America/New_York (EST/EDT) · TTFT p50 by hour · ${d.calls.toLocaleString()} calls · ${d.win}`;
+    $("cmph").textContent=period==="weekly"?"Week-over-week comparison":"Month-over-month comparison";
+  }
+  draw("weekly");
+  $("wk").addEventListener("click",()=>{$("wk").classList.add("on");$("mo").classList.remove("on");draw("weekly");});
+  $("mo").addEventListener("click",()=>{$("mo").classList.add("on");$("wk").classList.remove("on");draw("monthly");});
+  $("print").addEventListener("click",()=>window.print());
+</script>
+</body>
+</html>

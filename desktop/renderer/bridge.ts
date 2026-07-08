@@ -181,6 +181,16 @@ export interface ReportEntry { kind: "aar" | "brief"; id: string; title: string;
 // P-REPORT.9 (ADR-0162): a candidate repo for cross-repo aggregation, and the per-repo selection sent back.
 export interface ReportRepo { path: string; name: string; isGit: boolean; remoteUrl: string; host: string; isGitHub: boolean; lastActive: number }
 export interface ReportRepoSelection { path: string; fetch?: boolean; prs?: boolean }
+// P-CHAT.C (ADR-0190): a settled chat turn's OBSERVED telemetry, POSTed to /api/eval/report to build a
+// Model-Evaluation brief (server maps it to evals.ts's RunRecord). All fields are what the renderer saw.
+export interface EvalReportTurn {
+  runId: string; model: string;
+  ctxTokens: number; outputTokens: number; totalTokens: number; costUsd: number;
+  tools: { name: string; path?: string; add?: number; del?: number }[];
+  failures?: { tool: string; reason: string; cmd?: string }[];
+  subagents?: number; when?: string;
+}
+export interface EvalReportResult { kind: string; id: string; rel: string | null; title: string }
 export interface ModeOption { id: string; name: string; description?: string }
 export interface ModeState { available: ModeOption[]; current: string; ui?: "agent" | "ask" | "plan"; permissionMode?: "auto" | "ask" }
 export interface OmpCommand { name: string; description?: string; hint?: string }
@@ -226,6 +236,10 @@ export interface HeadroomStatus {
 import type { IntelNewsItemView } from "./trivia_news.ts";
 export type { IntelNewsItemView };
 export interface IntelNewsView { items: IntelNewsItemView[]; fetchedAt: number; stale: boolean }
+// P-TRIV.4 (ADR-0191): opt-in re-seed context sources + the generated-pack result the Recycle action gets back.
+import type { TriviaQuestion } from "./trivia.ts";
+export interface TriviaSeedSources { sessions: boolean; kg: boolean; codegraph: boolean }
+export interface TriviaSeedView { ok: boolean; questions: TriviaQuestion[]; count: number; usedSources: string[]; model: string; blocked?: boolean; reason?: string }
 export type PersonalScopeView = "work" | "personal" | "cui" | "combined";
 export interface PersonalStatus {
   enabled: boolean; aiExtract: boolean; configured: boolean; unlocked: boolean;
@@ -387,6 +401,8 @@ export interface LucidBridge {
   reportDelete(kind: string, rel: string): Promise<{ deleted: boolean } | null>;
   /** P-REPORT.3 (ADR-0117): push a report into the KG as one trusted node, in the chosen compartment. */
   reportToKg(kind: string, rel: string, scope: string, archived?: boolean): Promise<{ ok: boolean; error?: string } | null>;
+  /** P-CHAT.C (ADR-0190): build + save a Model-Evaluation brief from a settled turn's observed telemetry. */
+  evalReport(turn: EvalReportTurn): Promise<EvalReportResult | null>;
   /** P-EXEC.3: "TLDR" - plain-language explanation of a command via a cheap keyed model. */
   explainCommand(command: string): Promise<{ ok: boolean; text?: string; model?: string; error?: string } | null>;
   /** P-REPORT.6: the Security control crosswalk as an eMASS-aligned POA&M CSV. */
@@ -444,6 +460,8 @@ export interface LucidBridge {
   /** P-APPEAR.1: the personalized chat background (image data URL + display mode + opacity). */
   chatBackground(): Promise<{ image: string; mode: "off" | "ambient" | "flashlight"; opacity: number } | null>;
   setChatBackground(patch: { image?: string; mode?: "off" | "ambient" | "flashlight"; opacity?: number }): Promise<{ image: string; mode: "off" | "ambient" | "flashlight"; opacity: number } | null>;
+  /** P-TRIV.4 (ADR-0191): AI re-seed the Trivia Wire - generate a per-role pack on the selected model from the opt-in sources. */
+  triviaReseed(opts: { model: string; role: string; sources: TriviaSeedSources }): Promise<TriviaSeedView | null>;
   /** P-BRIEF.4 (ADR-0113): synthesize the podcast to WAV audio (base64) via a TTS provider. */
   engineeringBriefAudio(provider: "openai-tts" | "local-tts" | "elevenlabs", voiceId?: string): Promise<{ note: string; audioB64: string | null; mime: string } | null>;
   // P-VOICE.1 (ADR-0115): voice config (STT engine + TTS voice/favorites), the ElevenLabs voice list,
@@ -791,6 +809,8 @@ export const bridge: LucidBridge = {
   addReportRepo: (input) => post("/api/report/repos/add", input),
   reports: (archived) => getData(`/api/reports${archived ? "?archived=1" : ""}`),
   report: (kind, rel, archived) => getData(`/api/report?kind=${encodeURIComponent(kind)}&rel=${encodeURIComponent(rel)}${archived ? "&archived=1" : ""}`),
+  evalReport: (turn) => post("/api/eval/report", turn), // P-CHAT.C (ADR-0190)
+  triviaReseed: (opts) => post("/api/trivia/reseed", opts), // P-TRIV.4 (ADR-0191)
   reportArchive: (kind, rel) => post("/api/report/archive", { kind, rel }),
   reportRestore: (kind, rel) => post("/api/report/restore", { kind, rel }),
   reportDelete: (kind, rel) => post("/api/report/delete", { kind, rel }),

@@ -15,6 +15,7 @@ import { join, dirname } from "node:path";
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { buildEngineeringUpdate, renderEngineeringBrief, buildPodcastScript, renderScript, type PodcastBackend, type BriefRole } from "../harness/brief/engineering_update.ts";
 import { buildComplianceRows, renderPoamCsv, renderCkl } from "../harness/brief/compliance.ts"; // P-REPORT.6/.8: POA&M + CKL
+import { renderTurnEvalReport, type ObservedTool, type ObservedTurn } from "../harness/brief/eval_report.ts"; // P-CHAT.C (ADR-0190): settled-turn Model-Evaluation report
 import { buildChangeGraph, buildSchemaChanges, renderAnnexes } from "../harness/brief/change_graph.ts"; // P-REPORT.8: report annexes
 import { renderRepoActivityAnnex } from "../harness/brief/repo_activity.ts"; // P-REPORT.9: cross-repo activity annex
 import { addReportRepo, collectRepoActivity, ghAvailable, listReportRepos, type RepoSelection } from "./repo_collect.ts"; // P-REPORT.9 (ADR-0162)
@@ -76,6 +77,7 @@ import { emailDomainAllowed, managedAsksageOnly, managedConfig, managedLocks, sk
 import { asksageConfig, listDatasets, listPersonas, monthlyTokens, scanPersona, wrapPersona } from "./asksage.ts";
 import { inspectSkill, listSkills, removeSkill, rescanSkill } from "./skills_data.ts"
 import { intelNews } from "./intel_news.ts"; // P-TRIV.3 (ADR-0176): the executive Trivia Wire's news feed
+import { seedTrivia } from "./trivia_seed.ts"; // P-TRIV.4 (ADR-0191): AI re-seed the Trivia Wire (scanned, tool-free)
 import { detectElectronApp, electronLaunchPlan } from "./preview_electron.ts"; // P-PREVIEW.7 (ADR-0179)
 import { listSubagentRuns } from "./subagent_activity.ts"; // P-TASK.5 (ADR-0180): live delegation-card activity
 import { emitSecurityEvent } from "./audit_export.ts"; // P-PREVIEW.7: audit the user-initiated external launch
@@ -636,6 +638,41 @@ const server = Bun.serve({
         const csv = renderPoamCsv(u, "LucidAgentIDE");
         const rows = buildComplianceRows(u).length;
         return json({ ok: true, data: { csv, rows, filename: "lucidagentide-poam.csv" } });
+      }
+      // P-CHAT.C (ADR-0190): generate a Model-Evaluation engineering report for a just-settled chat turn.
+      // The renderer POSTs what it OBSERVED that turn (tool calls + per-file diffstats + tokens/cost/
+      // failures); we map it to evals.ts's RunRecord + render the reused Model-Evaluation markdown
+      // (harness/brief/eval_report.ts), then SAVE it to the brief store so it lists in the Reports panel
+      // (kind=brief, role=evals) and the settled turn's "Open in Reports" link opens it. Fields are coerced
+      // defensively - a lossy/hostile payload can never yield a negative LOC or a NaN metric (pure guard).
+      if (p === "/api/eval/report" && req.method === "POST") {
+        const b = await readBody<Partial<ObservedTurn>>(req);
+        const tools: ObservedTool[] = Array.isArray(b.tools)
+          ? b.tools.filter((x): x is ObservedTool => !!x && typeof (x as ObservedTool).name === "string").map((x) => ({
+              name: String(x.name),
+              path: x.path != null ? String(x.path) : undefined,
+              add: x.add != null ? Number(x.add) : undefined,
+              del: x.del != null ? Number(x.del) : undefined,
+            }))
+          : [];
+        const failures = Array.isArray(b.failures)
+          ? b.failures.filter((f): f is NonNullable<ObservedTurn["failures"]>[number] => !!f && typeof f.tool === "string").map((f) => ({ tool: String(f.tool), reason: String(f.reason ?? ""), cmd: f.cmd != null ? String(f.cmd) : undefined }))
+          : [];
+        const turn: ObservedTurn = {
+          runId: typeof b.runId === "string" && b.runId ? b.runId : String(Date.now()),
+          model: typeof b.model === "string" && b.model ? b.model : "model",
+          ctxTokens: Number(b.ctxTokens) || 0,
+          outputTokens: Number(b.outputTokens) || 0,
+          totalTokens: Number(b.totalTokens) || 0,
+          costUsd: Number(b.costUsd) || 0,
+          tools, failures,
+          subagents: b.subagents != null ? Number(b.subagents) : undefined,
+          when: typeof b.when === "string" ? b.when : undefined,
+        };
+        const { title, markdown } = renderTurnEvalReport(turn);
+        const id = String(Date.now());
+        const rel = saveBrief(id, "evals", markdown);
+        return json({ ok: !!rel, data: { kind: "brief", id, rel, title }, error: rel ? undefined : "could not save report" });
       }
       // P-REPORT.1 (ADR-0116): the unified Reports list - per-workspace loop AARs + repo-wide saved briefs,
       // most-recent first. GET `/api/report?kind=aar|brief&rel=` reads one (confined to its store).
@@ -1435,6 +1472,26 @@ const server = Bun.serve({
       // P-TRIV.3 (ADR-0176): executive Trivia Wire intel news - first-party curated feeds, fetched
       // server-side, scan-gated fail-closed, fail-quiet to [] offline. Audited per fetch (egress events).
       if (p === "/api/intel-news") return json({ ok: true, data: await intelNews() });
+      // P-TRIV.4 (ADR-0191): AI re-seed the Trivia Wire. The renderer POSTs the role + opt-in sources; we
+      // gather that on-device context, hand it to seedTrivia which SCANS it fail-closed (a finding or a dead
+      // scanner drops the whole re-seed - the model is never called), delimits it late, and generates a pack
+      // on the user's SELECTED model (throwaway util session, tool-free). Fail-quiet: the caller keeps the seed.
+      if (p === "/api/trivia/reseed" && req.method === "POST") {
+        const b = await readBody<{ model?: unknown; role?: unknown; sources?: { sessions?: unknown; kg?: unknown; codegraph?: unknown } }>(req);
+        const sources = { sessions: !!b.sources?.sessions, kg: !!b.sources?.kg, codegraph: !!b.sources?.codegraph };
+        const data = await seedTrivia(
+          { role: typeof b.role === "string" ? b.role : "developer", sources, model: typeof b.model === "string" ? b.model : "" },
+          {
+            providers: {
+              sessions: () => listSessions().sessions.map((s) => s.title),
+              kg: () => { const g = personalGraph(); return g ? [...g.facts.map((f) => f.statement), ...g.nodes.map((n) => n.name)] : []; },
+              code: () => (loadCodeGraph(currentWorkspace())?.nodes ?? []).map((n) => n.name),
+            },
+            complete: (system, user, m) => backend.complete(system, user, m ? { model: m } : {}),
+          },
+        );
+        return json({ ok: true, data });
+      }
       if (p === "/api/skills") return json({ ok: true, data: await listSkills() });
       // P-SKILL.1 (ADR-0045): gated drop-import. Each dropped .md is scanned fail-closed; clean ones
       // are written under .omp/skills/<slug>/SKILL.md, flagged ones are held for Security-panel review.

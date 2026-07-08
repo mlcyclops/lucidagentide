@@ -96,3 +96,7 @@ netwatch.log
 .omp/loops/
 # P-CMD.1: user-authored slash commands are personal workspace data (the tracked lucid-* dirs stay)
 .omp/commands/*.json
+# dev-server scratch + omp tmp working dir (runtime artifacts, never source)
+.devserver.log
+.devserver.err
+.omp/tmp/
