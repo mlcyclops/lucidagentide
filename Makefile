@@ -627,3 +627,6 @@ demo-P-CHAT.C: ## P-CHAT.C (ADR-0190): settled-turn "Generate engineering report
 .PHONY: demo-P-STALL.1
 demo-P-STALL.1: ## P-STALL.1 (ADR-0186): patience for overloaded providers - the chat turn waits 10 min (was 5, message falsely said 2); a slow event at each silent 2-min mark keeps the wait visible (HUD phase + one toast naming the cap); the stall error derives its duration from the constant
 	$(BUN) run desktop/scripts/demo_p_stall_1.ts
+.PHONY: demo-P-EVAL.2
+demo-P-EVAL.2: ## P-EVAL.2 (ADR-0187): the API-latency CAPTURE + PERSISTENCE pipeline - the GUI-side sink turns t_sent/t_first_token/t_end into a LatencySample appended to an append-only JSONL (the GUI opens the observer DB read-only), the frozen migration 0011 creates api_latency + eval_metrics + the latency_rollup view, the single-writer ingest loads the JSONL idempotently, and readLatencyCalls round-trips the rows back into evals.ts's ApiLatencyCall (ok-only) so rollupLatency + render stay the P-EVAL.1 source of truth
+	$(BUN) run harness/scripts/demo_peval2.ts
