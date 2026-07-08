@@ -30,7 +30,7 @@
 <a href="https://github.com/mlcyclops/lucidagentide/actions/workflows/build-desktop.yml"><img src="https://img.shields.io/github/actions/workflow/status/mlcyclops/lucidagentide/build-desktop.yml?label=Windows%20Build&logo=windows&logoColor=white&style=flat-square" alt="Windows Build" /></a>
 <a href="https://github.com/mlcyclops/lucidagentide/actions/workflows/build-desktop.yml"><img src="https://img.shields.io/github/actions/workflow/status/mlcyclops/lucidagentide/build-desktop.yml?label=macOS%20Build&logo=apple&logoColor=white&style=flat-square" alt="macOS Build" /></a>
 <a href="https://github.com/mlcyclops/lucidagentide/actions/workflows/build-desktop.yml"><img src="https://img.shields.io/github/actions/workflow/status/mlcyclops/lucidagentide/build-desktop.yml?label=Linux%20Build&logo=linux&logoColor=white&style=flat-square" alt="Linux Build" /></a>
-<img src="https://img.shields.io/badge/tests-730%20harness%20%2B%201180%20desktop%20%2B%2057%20sidecar-46d27e?style=flat-square" alt="tests" />
+<img src="https://img.shields.io/badge/tests-938%20harness%20%2B%201221%20desktop%20%2B%2057%20sidecar-46d27e?style=flat-square" alt="tests" />
 <img src="https://img.shields.io/badge/gate-fail--closed-e07bf0?style=flat-square" alt="fail-closed gate" />
 
 <br/>
@@ -177,6 +177,33 @@ personalization internals are proprietary and intentionally undocumented here - 
 
 ---
 
+## ✨ What's new in v1.10.6
+
+> The agent turn, redesigned - and a Model-Evaluation suite that scores the work honestly.
+
+- **💬 A settled turn you can actually read** - when the agent finishes, a long answer folds into
+  **collapsible sections** on the model's own headings, and each tool call threads back inline as a
+  compact **chip** (with a **+/- diffstat** and a code drilldown) *where it fired* - but only when a
+  chip genuinely lands between paragraphs. On a short, flat answer the rich **activity window** stays
+  put instead: every tool step, its diffstat, its written code, and the **expanded subagent detail**
+  (each delegate's thinking/tools/output). *(ADR-0188/0189)*
+- **📊 Model-Evaluation reports** - a settled turn that **wrote code** offers a thin, subdued
+  **"Generate engineering report"**: per-run efficiency/quality metrics with **honesty tiers**
+  (`direct` / `proxy` / `needs_signal` - a missing signal is `null`, never a fake 0), plus a
+  **cross-run rollup** in the Reports panel (per-model means + per-model **API-latency p50/p95**).
+  It only appears when there's written work to evaluate. *(ADR-0190)*
+- **⏳ Patience for overloaded providers** - when a model goes quiet under load, the turn now waits up
+  to **10 minutes** with an honest **"still waiting on the provider"** notice at each silent 2-minute
+  mark - no more a 5-minute cutoff that falsely blamed "2 minutes". *(ADR-0186)*
+- **🎲 Trivia Wire, opt-in + fresh** - the ticker now **defaults off** (an easter egg you switch on in
+  Settings), and can **AI-regenerate** a role-relevant question pack on your selected model from opt-in
+  on-device context - scanned fail-closed, tool-free, falling back to the built-in pack. *(ADR-0191)*
+
+Under the hood: the eval suite persists per-run metrics + per-model latency to frozen DuckDB tables
+via the same read-only-safe JSONL-sink pattern as the rest of the observer store.
+
+---
+
 ## ✨ What's new in v1.10.5
 
 > Quality of life everywhere you look: watch your subagents think, graphs that open settled and
@@ -244,6 +271,7 @@ personalization internals are proprietary and intentionally undocumented here - 
 - [<img src=".github/assets/icons/novelty.svg" width="16" alt=""> What makes it novel](#-what-makes-it-novel)
 - [<img src=".github/assets/icons/models.svg" width="16" alt=""> Any model, any provider](#-any-model-any-provider)
 - [🎯 Who it's for](#-who-its-for)
+- [🏢 Where LUCID fits + the enterprise add-on tier](#-where-lucid-fits--the-enterprise-add-on-tier)
 - [💰 Token Cost Savings & Showback](#-token-cost-savings--showback)
 - [<img src=".github/assets/icons/architecture.svg" width="16" alt=""> Architecture](#-architecture)
 - [<img src=".github/assets/icons/security.svg" width="16" alt=""> Security model](#-security-model)
@@ -358,6 +386,36 @@ acknowledgement, and an enterprise policy can pin the org to the gov gateway onl
 | **Agent-platform builders** | A worked, test-backed example of adding security, provenance, and memory **around** a fast runtime via hooks/tools/SDK - **extend, never fork**. |
 
 It's a **desktop app you can just download and run** (Windows installer/portable + macOS), and a **source-available codebase** you can study, run from source, and build on. Each role gets a tailored first view plus a written, end-to-end **[role guide](docs/guides/README.md)** (Developer / Security / Manager / Executive).
+
+---
+
+## 🏢 Where LUCID fits + the enterprise add-on tier
+
+LUCID sits in the emerging **secure / sovereign agentic IDE** segment - between the general, cloud-first
+AI coding assistants and the assurance that regulated, government, and defense buyers actually require.
+The wedge is the part those tools treat as an afterthought: a **fail-closed security gate on every tool
+call**, **provenance + AI-authorship attribution**, **air-gappable local models + RAG**, **CUI
+isolation**, an **OCSF audit-export** seam, **GPO/MDM enterprise governance**, and the **AskSage
+accredited gateway**. A short public write-up of that positioning lives in
+**[docs/MARKET-POSITIONING.md](docs/MARKET-POSITIONING.md)**.
+
+**The add-on tier** (a separate, enterprise repository) extends the open core with the reporting and
+integration surface larger organizations ask for - hinted here at a high level, not detailed:
+
+- **Executive reporting metrics, per platform** - efficiency / reliability / quality / cost rolled up
+  per model **and per deployment**, with weekly/monthly latency dashboards. *(The public core already
+  ships the honesty-tiered metric engine + the per-model rollup - v1.10.6, P-EVAL; the add-on adds the
+  multi-platform executive view. ADR-A016.)*
+- **Showback → chargeback** - the public **Cost & Savings Ledger** deepened into department / project
+  chargeback rollups.
+- **Agent-development-kit bridges** - export a LUCID agent to **Google ADK · AWS Strands · Azure AI
+  Foundry** runtimes. *(ADR-A013.)*
+- **Market & competitive analysis** - full segment sizing, a competitive matrix, and a maintained
+  **positioning graphic** (the quantitative half of the public write-up above), kept for enterprise
+  engagements.
+
+> The open core is fully functional on its own. The add-on tier is optional and enterprise-facing -
+> nothing in this repository depends on it.
 
 ---
 
@@ -690,10 +748,12 @@ Obsidian-vault export), AI-authorship attribution, one-command import, a read-wr
 the **`/goal` loop** with full loop-engineering (after-action reports, a budget kill switch, and stall
 guards), a local **RAG knowledge spine** + the **compiled KB** with hybrid retrieval, the governed **skills
 directory** + **Skill Studio**, **local & hybrid providers**, the **Agent Builder**, the **agent firewall**,
-and the **runtime execution boundary** (OS-isolated exec + mediated egress). **Newest (v1.10.5):** live
-**subagent activity** in the delegation card, graphs that **form in place** (no on-screen settle), a
-**system resource guard** for the heavy builds, the explained + runnable **Electron preview**, the
-**Trivia Wire** status-bar ticker, and a curated **plugin marketplace**.
+and the **runtime execution boundary** (OS-isolated exec + mediated egress). **Newest (v1.10.6):** the
+**redesigned agent turn** (collapsible sections + inline tool chips, or the rich activity window with
+expanded subagent detail), a **Model-Evaluation** report suite (honesty-tiered per-run metrics + a
+cross-run rollup with per-model API-latency), **10-minute provider patience**, and an **opt-in,
+AI-refreshable Trivia Wire**. *(v1.10.5 brought live subagent activity, graphs that form in place, a
+system resource guard, the runnable Electron preview, and a curated plugin marketplace.)*
 
 Every test suite passes and `tsc --noEmit` is clean across all three projects (TypeScript + Python). The
 table below is the recent slice; [`PROGRESS.md`](PROGRESS.md) has the full per-session log.
@@ -702,6 +762,7 @@ table below is the recent slice; [`PROGRESS.md`](PROGRESS.md) has the full per-s
 
 | Phase | Feature | ADR |
 |:--|:--|:--|
+| **v1.10.6 batch** | **Redesigned agent turn + Model-Evaluation suite** - a settled answer folds into collapsible sections + threads tool calls back as inline **chips** (with +/- diffstats + code drilldowns) when they interleave, else keeps the rich **activity window** + **expanded subagent detail**; a settled **file-writing** turn offers a thin, subdued **"Generate engineering report"** (honesty-tiered per-run metrics) plus a **cross-run rollup** with per-model **API-latency p50/p95**; **10-min provider patience** with a "still waiting" notice; and an **opt-in, AI-refreshable Trivia Wire** | [ADR-0186-0191](DECISIONS.md) |
 | **v1.10.5 batch** | **Live subagent activity** (the delegation card opens each subagent's thinking/tools/output), **graphs form in place** (off-screen settle, snap-centered open), a **system resource guard** (weak CPU under load pauses heavy builds behind a what-to-close panel), the **Electron preview** explained + runnable outside LUCID, the role-aware **Trivia Wire** ticker, a **curated plugin marketplace** (Mermaid/Gitleaks/Semgrep/Trivy/Pandoc), and a decluttered KG header | [ADR-0174-0184](DECISIONS.md) |
 | **P-SKILL.4-5 · P-KB.1-2b · P-SKILLREG.1-2** | **Skills governed + Skill Studio + compiled KB** - the skills directory (source root, trust label, enable/disable, re-scan, remove), Skill Studio drafts skills from your recent work (scanned before saved, reviewed before codified), the registry reader + publish seams, and the OpenKB-style compiled KB with the vector/compiled/both retrieval router + its page-graph view | [ADR-0097-0102](DECISIONS.md) |
 | **P-EXEC.2** | **Tool calls fixed in live chat** - omp 16.1 moved per-tool approval to a FORM elicitation the client must advertise; without it every `bash`/`eval`/edit/delete call silently failed with "Tool call denied by user" and no prompt. LUCID now advertises `elicitation.form` and answers the approval, so the approve/deny prompt surfaces and gated commands run once approved (our `session/request_permission` gate stays authoritative) | [ADR-0110](DECISIONS.md) |
@@ -729,7 +790,8 @@ table below is the recent slice; [`PROGRESS.md`](PROGRESS.md) has the full per-s
 |:--|:--|
 | **Guided Knowledge & RAG import P-RAG.2-4** - the one-popup ingest walkthrough with a parse-and-scan preview, image captioning/OCR, and AskSage dataset training on the local spine | [ADR-0053](DECISIONS.md) |
 | **Marketplace installs P-MARKET.2** - install a curated integration from a GitHub URL, gated exactly like agent-template import (digest + scan + trust label + approval) | [ADR-0158/0181](DECISIONS.md) |
-| **Generated trivia packs P-TRIV.4** - the Trivia Wire drafts fresh role-relevant question packs with a cheap checker-tier model, gated before they enter the rotation | [ADR-0176](DECISIONS.md) |
+| **Model-Evaluation, deepened P-EVAL.4** - wire the single-writer ingest of the metrics + latency JSONL ledgers into the observer DuckDB (so the `latency_rollup` view + cross-tool SQL see live data), a weekly/monthly **period selector** on the rollup, and a history/trend view of per-model quality over time | [ADR-0187](DECISIONS.md) |
+| **Chat-turn polish P-CHAT.2** - a failed-tool inline `.fail` chip in the settled answer, and a step-sidecar interleave so **restored** turns show their chips too | [ADR-0189](DECISIONS.md) |
 | **Exec-tool safety** - extend the per-action gate to `ssh` (key = host) and `task` sub-agents | [ADR-0066](DECISIONS.md) |
 | **SIEM connectors** - Splunk HEC / syslog-CEF / Elastic / cloud sinks behind the now-shipped OCSF audit-export `Sink` interface | [ADR-0069](DECISIONS.md) |
 | **Windows runtime containment (enterprise)** - the verified AppContainer backend + the admin loopback exemption that unlocks mediated egress on Windows | [ADR-0173](DECISIONS.md) |
@@ -765,11 +827,12 @@ robustness (Windows + macOS installers).
 | Doc | What's in it |
 |:--|:--|
 | [`CLAUDE.md`](CLAUDE.md) | **Read first.** The load-bearing invariants (fail-closed, extend-don't-fork, frozen contracts, byte-stable prefix) |
-| [`DECISIONS.md`](DECISIONS.md) | Architecture decision records (ADR-0001 … ADR-0184) |
+| [`DECISIONS.md`](DECISIONS.md) | Architecture decision records (ADR-0001 … ADR-0191) |
 | [`PROGRESS.md`](PROGRESS.md) | Per-session build log: shipped / stubbed / next |
 | [`desktop/README.md`](desktop/README.md) | The desktop GUI + dev server |
 | [`CHEATSHEET.md`](CHEATSHEET.md) | Day-to-day commands |
 | [`docs/guides/`](docs/guides/README.md) | **Role-based user guides** - Developer / Security / Manager / Executive walkthroughs |
+| [`docs/MARKET-POSITIONING.md`](docs/MARKET-POSITIONING.md) | **Where LUCID fits** - the public, qualitative positioning slice (the secure / sovereign agentic IDE segment) |
 
 <div align="center">
 <br/>
