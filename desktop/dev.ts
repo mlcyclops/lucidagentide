@@ -91,6 +91,10 @@ import { listSubagentRuns } from "./subagent_activity.ts"; // P-TASK.5 (ADR-0180
 import { emitSecurityEvent } from "./audit_export.ts"; // P-PREVIEW.7: audit the user-initiated external launch
 import { spawn as spawnChild } from "node:child_process";
 import { installRegistrySkill, type RegistrySkillArtifact } from "./skills_registry.ts"
+import { CollabManager } from "./collab/manager.ts"; // P-COLLAB.3 (ADR-0192): the live-share host lifecycle
+import { CollabSocket } from "./collab/relay_client.ts";
+import { collabRelayConfig, setCollabRelay } from "./settings_store.ts";
+import { hostname as osHostname } from "node:os";
 import { analyzeWork, codifyCandidate, gatherWorkDigest, type SkillCandidate, type StudioWindow } from "./skill_studio.ts"
 import { buildSkillArtifact, PublishDispatcher, publishersFor } from "./skill_publish.ts";
 import { kbScanner, kbStore } from "./kb_store.ts"
@@ -138,6 +142,27 @@ import type { CuiDesignation } from "../harness/export/vault_export.ts";
 
 applyEnv(); // make stored API keys available to a spawned omp acp
 if (loadSettings().headroomEnabled) startHeadroom(); // resume the opt-in compression proxy
+
+// P-COLLAB.3 (ADR-0192): the one live-share host for this backend. Real deps: a CollabSocket over the
+// authorized relay (self-hosted default; public opt-in), the current session's metadata for the welcome
+// header, and the wall clock. resolveRelay() returns null when no relay is authorized → start() fails closed.
+const collabManager = new CollabManager({
+  resolveRelay: () => {
+    const r = collabRelayConfig();
+    return r ? { wsBase: r.wsBase, httpBase: r.httpBase, label: r.label, source: r.source } : null;
+  },
+  sessionInfo: () => {
+    const s = loadSettings();
+    return {
+      sessionId: backend.currentSessionId() ?? "local",
+      title: "LUCID session",
+      model: backend.activeModelName() || (s.lastModel ?? "model"),
+      hostName: (s.username ?? "").trim() || osHostname(),
+    };
+  },
+  makeTransport: ({ wsUrl, key }) => new CollabSocket({ wsUrl, role: "host", key }),
+  now: () => Date.now(),
+});
 
 // 30s memo for /api/code-activity — each rebuild spawns `git log` per workspace (ADR-0030 P-CODE.1).
 let codeActivityCache: { at: number; data: ReturnType<typeof codeActivity> } | null = null;
@@ -1767,7 +1792,34 @@ const server = Bun.serve({
         const imgs = Array.isArray(images)
           ? images.filter((im): im is { data: string; mimeType: string } => !!im && typeof (im as { data?: unknown }).data === "string" && typeof (im as { mimeType?: unknown }).mimeType === "string").slice(0, 6)
           : undefined;
-        return ndjsonStream("chat", (emit) => backend.prompt(String(text ?? ""), emit, imgs));
+        const prompt = String(text ?? "");
+        // P-COLLAB.3 (ADR-0192): when a share is live, mirror this turn to view-only guests. The tap is a
+        // best-effort passthrough — a collab failure must never break the local chat stream.
+        if (collabManager.active) { try { collabManager.tapUserTurn(prompt); } catch { /* non-fatal */ } }
+        return ndjsonStream("chat", (emit) => backend.prompt(prompt, (e) => {
+          // acp_backend's ChatEvent and bridge's are structurally identical (kept in parity); bridge over the
+          // separate declarations at this one boundary.
+          if (collabManager.active) { try { collabManager.tapEvent(e as unknown as Parameters<typeof collabManager.tapEvent>[0]); } catch { /* non-fatal */ } }
+          emit(e);
+        }, imgs));
+      }
+      // P-COLLAB.3 (ADR-0192): live session sharing. `status` is the Share panel's poll; `start` mints a
+      // room + view/full links + stands up the host (fail-closed if no relay is authorized); `stop` ends it.
+      // `relay` GET/POST reads + configures the authorized relay (self-hosted default, public opt-in).
+      if (p === "/api/collab/status") return json({ ok: true, data: { ...collabManager.status(), relay: collabRelayConfig() } });
+      if (p === "/api/collab/start" && req.method === "POST") {
+        try { return json({ ok: true, data: await collabManager.start() }); }
+        catch (e) { return json({ ok: false, error: String((e as Error)?.message ?? e) }); }
+      }
+      if (p === "/api/collab/stop" && req.method === "POST") return json({ ok: true, data: collabManager.stop("host ended the session") });
+      if (p === "/api/collab/relay" && req.method === "GET") return json({ ok: true, data: { relay: collabRelayConfig() } });
+      if (p === "/api/collab/relay" && req.method === "POST") {
+        const b = await readBody<{ url?: unknown; publicOptIn?: unknown }>(req);
+        setCollabRelay({
+          ...(typeof b.url === "string" ? { url: b.url } : {}),
+          ...(typeof b.publicOptIn === "boolean" ? { publicOptIn: b.publicOptIn } : {}),
+        });
+        return json({ ok: true, data: { relay: collabRelayConfig() } });
       }
       // P-GOAL.1 (ADR-0046): run a /goal loop — maker iterations + a separate verifiable checker, capped
       // and gated. Streams the same NDJSON chat events plus goal-iter / goal-check / goal-done / goal-stop.
