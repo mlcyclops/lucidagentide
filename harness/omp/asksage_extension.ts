@@ -60,10 +60,19 @@ const OPENAI_MODELS: ModelSpec[] = [
 // non-streamed). reasoning:false — the adapter delivers a complete reply and does
 // not implement provider thinking, so we don't surface a thinking control for them.
 // Model ids verified to reply on a live CIV account (broken ones like gpt-5.4-gov
-// (502) / gpt-5.4-sec (400) are intentionally omitted).
+// (502) / gpt-5.4-sec (400) are intentionally omitted). The Claude 4.6/4.7/4.8, Sonnet 5,
+// 4.5 Haiku, and Fable 5 gov ids were confirmed live against /get-models + a real /query
+// (each returned 200 with a reply). Newest first (the picker sorts, but this keeps it readable).
 const ANTHROPIC_MODELS: ModelSpec[] = [
+  { id: "google-claude-sonnet-5", name: "Claude Sonnet 5 · AskSage Gov", reasoning: false, contextWindow: 200_000, maxTokens: 64_000 },
+  { id: "google-claude-fable-5", name: "Claude Fable 5 · AskSage Gov", reasoning: false, contextWindow: 200_000, maxTokens: 64_000 },
+  { id: "google-claude-48-opus", name: "Claude 4.8 Opus · AskSage Gov", reasoning: false, contextWindow: 200_000, maxTokens: 32_000 },
+  { id: "google-claude-47-opus", name: "Claude 4.7 Opus · AskSage Gov", reasoning: false, contextWindow: 200_000, maxTokens: 32_000 },
+  { id: "google-claude-46-opus", name: "Claude 4.6 Opus · AskSage Gov", reasoning: false, contextWindow: 200_000, maxTokens: 32_000 },
+  { id: "google-claude-46-sonnet", name: "Claude 4.6 Sonnet · AskSage Gov", reasoning: false, contextWindow: 200_000, maxTokens: 64_000 },
   { id: "google-claude-45-opus", name: "Claude 4.5 Opus · AskSage Gov", reasoning: false, contextWindow: 200_000, maxTokens: 32_000 },
   { id: "google-claude-45-sonnet", name: "Claude 4.5 Sonnet · AskSage Gov", reasoning: false, contextWindow: 200_000, maxTokens: 64_000 },
+  { id: "google-claude-45-haiku", name: "Claude 4.5 Haiku · AskSage Gov", reasoning: false, contextWindow: 200_000, maxTokens: 32_000 },
   { id: "aws-bedrock-claude-45-sonnet-gov", name: "Claude 4.5 Sonnet (Gov) · AskSage", reasoning: false, contextWindow: 200_000, maxTokens: 64_000 },
   { id: "claude-opus-4", name: "Claude Opus 4 · AskSage Gov", reasoning: false, contextWindow: 200_000, maxTokens: 32_000 },
   { id: "claude-sonnet-4", name: "Claude Sonnet 4 · AskSage Gov", reasoning: false, contextWindow: 200_000, maxTokens: 64_000 },
