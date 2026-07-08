@@ -23,7 +23,7 @@ import { restoredTurnHtml } from "./steps_restore.ts"; // P-RESUME.1 (ADR-0171):
 import { ageStr, esc, fmtUSD, goodColor, loadColor } from "./format.ts";
 import { icon, piMark } from "./icons.ts";
 import { aboutHtml, readmeMark } from "./about.ts";
-import { createTriviaGame, triviaExplainHtml, triviaQuestionHtml, triviaVisible, type TriviaGame, type TriviaQuestion } from "./trivia.ts"; // P-TRIV.1 (ADR-0174)
+import { createTriviaGame, isTriviaQuestion, triviaExplainHtml, triviaQuestionHtml, triviaVisible, type TriviaGame, type TriviaQuestion } from "./trivia.ts"; // P-TRIV.1 (ADR-0174)
 import { bankForRole } from "./trivia_roles.ts"; // P-TRIV.2 (ADR-0175): role-aware banks
 import { isIntelNewsItem, newsLineHtml } from "./trivia_news.ts"; // P-TRIV.3 (ADR-0176): the executive INTEL WIRE
 import { sectionizeAnswer, shouldSectionize, type AnswerSection } from "./answer_sections.ts"; // P-CHAT.A (ADR-0188): settled-turn collapsible sections
@@ -2400,6 +2400,68 @@ function secAppearance(): string {
   return setCard("appearance", "Chat background", "personalize · 25% opacity", inner, true);
 }
 
+// ── P-TRIV.4 (ADR-0186): Settings -> Trivia Wire ─────────────────────────────────────────────────
+// The real on/off toggle (no more hand-editing localStorage), the opt-in re-seed sources, and the
+// "Recycle" button that regenerates the per-role pack on the user's SELECTED model. Rendered from
+// localStorage + state (no fetch); the Recycle button is the only control that reaches the backend.
+function secTrivia(): string {
+  const on = triviaEnabled();
+  const toggle = `<label class="set-toggle"><input type="checkbox" id="trivToggle" ${on ? "checked" : ""}/>
+      <span><b>Show the Trivia Wire</b> - a word-game ticker that scrolls in the status bar while the agent works, or when you're idle with work to return to. Answer with a click or the A-D keys.</span></label>`;
+  if (!on) return setCard("trivia", "Trivia Wire", "status-bar game", toggle + `<div class="set-note">${icon("info", 12)} Off - the ticker stays hidden everywhere until you switch it back on here.</div>`, true);
+
+  const role = state.userRole || "developer";
+  const src = triviaSources();
+  const cb = (id: string, checked: boolean, label: string, tip: string): string =>
+    `<label class="set-toggle triv-src"><input type="checkbox" id="${id}" ${checked ? "checked" : ""}/><span data-tip="${tip}">${label}</span></label>`;
+  const sources = `<div class="triv-lbl">Personalize from your context <span class="info-dot" data-tip="Personalize the questions|Pick which of your own on-device context the model may read to choose topics. Each source is scanned before the model sees it; the run is tool-free.">${icon("info", 11)}</span></div>
+    ${cb("trivSrcSessions", src.sessions, "Past sessions &amp; chats", "Recent work|Reads the titles of your recent chats in this workspace to pick topics. On-device, scanned before use.")}
+    ${cb("trivSrcKg", src.kg, "Knowledge Graph", "Your knowledge graph|Reads your saved interests &amp; skills. Only used when your Knowledge Graph is unlocked - otherwise it contributes nothing.")}
+    ${cb("trivSrcCode", src.codegraph, "Code graph", "Workspace code|Reads file/symbol names from the code graph to infer your stack. Only used once the code graph has been built.")}`;
+
+  const model = state.model ? esc(modelLabel(state.model)) : "your model";
+  const reseedTip = `Recycle the trivia|Generates a fresh ${esc(role)} pack with ${model} from the sources you've checked. Runs on your model, scanned and tool-free. Falls back to the built-in pack if it can't.`;
+  const reseed = `<div class="triv-reseed"><button class="btn-mini" id="trivReseed" ${state.model ? "" : "disabled"} data-tip="${reseedTip}">${icon("refresh", 12)} Recycle trivia</button></div>`;
+
+  const pack = storedTriviaPack(role);
+  const status = pack
+    ? `<div class="set-note ok">${icon("check", 12)} Using a generated ${esc(role)} pack (${pack.length} questions). <button class="btn-mini triv-reset" id="trivPackReset">${icon("restore", 11)} Use built-in</button></div>`
+    : `<div class="set-note">${icon("info", 12)} Using the built-in ${esc(role)} pack. Check a source and Recycle to tailor it to your work.</div>`;
+
+  return setCard("trivia", "Trivia Wire", "status-bar game · on-device", toggle + sources + reseed + status, true);
+}
+
+/** Run an AI re-seed: the backend gathers the checked sources, scans them fail-closed, and generates a
+ *  pack on the SELECTED model. Adopt a valid pack; otherwise keep the current one (fail-quiet). Drives
+ *  the button's busy state and re-renders the card. */
+async function reseedTrivia(btn: HTMLButtonElement | null): Promise<void> {
+  if (!state.model) { showToast({ tone: "warn", title: "Pick a model first", desc: "Choose your AI model in the picker, then recycle the trivia.", timeout: 3000 }); return; }
+  const role = state.userRole || "developer";
+  const orig = btn?.innerHTML;
+  if (btn) { btn.disabled = true; btn.innerHTML = `${icon("refresh", 12)} Generating…`; }
+  try {
+    const res = await bridge.triviaReseed({ model: state.model, role, sources: triviaSources() }).catch(() => null);
+    const qs = res?.ok && Array.isArray(res.questions) ? res.questions.filter(isTriviaQuestion) : [];
+    if (qs.length >= TRIVIA_MIN_PACK) {
+      applyTriviaPack(role, qs, res!.model || state.model);
+      showToast({ tone: "ok", title: "Fresh trivia ready", desc: `${qs.length} questions generated for your ${role} role${res!.usedSources?.length ? ` from ${res!.usedSources.join(", ")}` : ""}.`, timeout: 3600 });
+      return;
+    }
+    const blocked = !!res?.blocked;
+    showToast({
+      tone: blocked ? "warn" : "info",
+      title: blocked ? "Re-seed blocked" : "Kept the current pack",
+      desc: blocked
+        ? "The source content didn't pass the security scan, so nothing was generated - your current pack is unchanged."
+        : `${res?.reason || "The model didn't return enough usable questions"} - keeping your current pack.`,
+      timeout: 4200,
+    });
+  } finally {
+    if (btn && orig !== undefined) { btn.disabled = false; btn.innerHTML = orig; }
+    fillSec("trivia", secTrivia());
+  }
+}
+
 function settingsShell(): string {
   return [
     `<div data-sec="workspace"></div>`,
@@ -2421,6 +2483,7 @@ function settingsShell(): string {
     setSkel("others", "More providers", "", true),
     setSkel("voice", "Voice", "TTS · STT · ElevenLabs", true), // P-VOICE.1 (ADR-0115)
     secAppearance(), // P-APPEAR.1: chat background (rendered from state - loaded at boot, no fetch wait)
+    secTrivia(), // P-TRIV.4 (ADR-0186): the Trivia Wire toggle + AI re-seed (rendered from state/localStorage)
     setSkel("developer", "Developer", "logs · diagnostics", true),
     `<div class="set-note">${icon("shield", 12)} Keys are stored on this machine and passed to omp as env vars - never sent anywhere else. OAuth uses omp's own secure credential vault.</div>`,
   ].join("");
@@ -5123,11 +5186,74 @@ async function refreshTriviaKg(): Promise<void> {
   catch { trivKgUnlocked = false; } // unknown = locked: the idle branch stays fail-quiet
 }
 
+// P-TRIV.4 (ADR-0186): generated packs persist per role and take precedence over the seed bank (the
+// permanent fail-closed floor). A stable-ref cache keeps refreshTriviaGame's bank compare O(1).
+const TRIVIA_PACK_PREFIX = "lucid.trivia-pack.";   // + role -> { questions, at, model }
+const TRIVIA_SOURCES_KEY = "lucid.trivia-sources";  // { sessions, kg, codegraph } re-seed source choices
+const TRIVIA_MIN_PACK = 8;                          // mirrors trivia_seed.ts MIN_PACK: below this we keep the seed
+const trivPackCache = new Map<string, readonly TriviaQuestion[]>(); // role -> parsed pack (stable ref)
+
+/** The user's chosen re-seed context sources (persisted). All off by default - re-seed is opt-in. */
+function triviaSources(): { sessions: boolean; kg: boolean; codegraph: boolean } {
+  try {
+    const o = JSON.parse(localStorage.getItem(TRIVIA_SOURCES_KEY) || "{}") as Record<string, unknown>;
+    return { sessions: !!o.sessions, kg: !!o.kg, codegraph: !!o.codegraph };
+  } catch { return { sessions: false, kg: false, codegraph: false }; }
+}
+
+/** The generated pack for a role (stable ref, cached), or null when none is stored / it is too small /
+ *  corrupt. Every entry re-passes isTriviaQuestion - a tampered store can never inject a bad question. */
+function storedTriviaPack(role: string | null | undefined): readonly TriviaQuestion[] | null {
+  const key = role || "developer";
+  const cached = trivPackCache.get(key);
+  if (cached) return cached;
+  try {
+    const raw = localStorage.getItem(TRIVIA_PACK_PREFIX + key);
+    if (!raw) return null;
+    const o = JSON.parse(raw) as { questions?: unknown };
+    const qs = Array.isArray(o.questions) ? o.questions.filter(isTriviaQuestion) : [];
+    if (qs.length < TRIVIA_MIN_PACK) return null;
+    trivPackCache.set(key, qs);
+    return qs;
+  } catch { return null; }
+}
+
+/** The durable contract of P-TRIV.4: a generated pack takes precedence; the role seed bank is the
+ *  permanent fail-closed floor. Both trivia game builders go through here so the two stay in lockstep. */
+function effectiveTriviaBank(role: string | null | undefined): readonly TriviaQuestion[] {
+  return storedTriviaPack(role) ?? bankForRole(role);
+}
+
+/** Persist + cache a freshly generated pack for the role (stable ref for the ref-compare). */
+function saveTriviaPack(role: string | null | undefined, questions: readonly TriviaQuestion[], model: string): void {
+  const key = role || "developer";
+  trivPackCache.set(key, questions);
+  try { localStorage.setItem(TRIVIA_PACK_PREFIX + key, JSON.stringify({ questions, at: Date.now(), model })); }
+  catch { /* full/blocked store: the pack still lives in-memory this session */ }
+}
+
+/** Drop the generated pack for a role -> the wire falls back to the built-in seed bank. */
+function clearTriviaPack(role: string | null | undefined): void {
+  const key = role || "developer";
+  trivPackCache.delete(key);
+  try { localStorage.removeItem(TRIVIA_PACK_PREFIX + key); } catch { /* ignore */ }
+}
+
+/** Adopt a pack: persist it, then rebuild the live game on it (lifetime score survives - it lives in
+ *  trivStore, not the game). No-op before the ticker exists; ensureTrivia picks up the stored pack. */
+function applyTriviaPack(role: string | null | undefined, questions: readonly TriviaQuestion[], model: string): void {
+  saveTriviaPack(role, questions, model);
+  if (!triviaGame) return;
+  trivBank = effectiveTriviaBank(role);
+  triviaGame = createTriviaGame(trivBank, trivStore());
+  loadTriviaLine();
+}
+
 /** Rebuild the game when the role's bank actually changed (lifetime score survives - it lives in
  *  the store, not the game). No-op before the ticker exists or when the bank is unchanged. */
 function refreshTriviaGame(): void {
   if (!triviaGame) return;
-  const bank = bankForRole(state.userRole);
+  const bank = effectiveTriviaBank(state.userRole); // P-TRIV.4 (ADR-0186): generated pack ?? seed bank
   if (bank === trivBank) return;
   trivBank = bank;
   triviaGame = createTriviaGame(bank, trivStore());
@@ -5138,7 +5264,7 @@ const trivReducedMotion = typeof matchMedia === "function" && matchMedia("(prefe
 
 function ensureTrivia(): void {
   if (trivEl || !triviaEnabled()) return;
-  trivBank = bankForRole(state.userRole);
+  trivBank = effectiveTriviaBank(state.userRole); // P-TRIV.4 (ADR-0186): adopt a generated pack when present
   triviaGame = createTriviaGame(trivBank, trivStore());
   // Idle-engagement inputs (P-TRIV.2): a composer keystroke restarts the idle grace, and the KG
   // unlock state is polled gently (never per frame - bridge.personal() is a fetch).
@@ -7584,6 +7710,34 @@ function wire(): void {
     // P-APPEAR.1: chat-background upload / remove
     if (t.closest("#bgUpload")) { ($("#bgFile") as HTMLInputElement | null)?.click(); return; }
     if (t.closest("#bgClear")) { void updateChatBg({ image: "", mode: "off" }); return; }
+    // P-TRIV.4 (ADR-0186): Trivia Wire toggle + opt-in re-seed sources + the Recycle action
+    if (t.closest("#trivToggle")) {
+      const on = ($("#trivToggle", $("#setBody")!) as HTMLInputElement)?.checked ?? true;
+      try { localStorage.setItem(TRIVIA_ENABLED_KEY, on ? "1" : "0"); } catch { /* ignore */ }
+      if (on) mountTrivia(); else { trivShown = false; trivEl?.classList.remove("on"); }
+      fillSec("trivia", secTrivia());
+      showToast({ title: on ? "Trivia Wire on" : "Trivia Wire off", desc: on ? "It'll scroll in the status bar while the agent works or you're idle." : "Hidden everywhere - switch it back on here anytime.", timeout: 2600 });
+      return;
+    }
+    if (t.closest("#trivSrcSessions") || t.closest("#trivSrcKg") || t.closest("#trivSrcCode")) {
+      const body = $("#setBody")!;
+      try {
+        localStorage.setItem(TRIVIA_SOURCES_KEY, JSON.stringify({
+          sessions: ($("#trivSrcSessions", body) as HTMLInputElement | null)?.checked ?? false,
+          kg: ($("#trivSrcKg", body) as HTMLInputElement | null)?.checked ?? false,
+          codegraph: ($("#trivSrcCode", body) as HTMLInputElement | null)?.checked ?? false,
+        }));
+      } catch { /* ignore */ }
+      return;
+    }
+    if (t.closest("#trivPackReset")) {
+      clearTriviaPack(state.userRole);
+      refreshTriviaGame(); // rebuild on the seed bank now that the generated pack is gone
+      fillSec("trivia", secTrivia());
+      showToast({ title: "Back to the built-in pack", desc: "The generated questions were cleared for this role.", timeout: 2600 });
+      return;
+    }
+    if (t.closest("#trivReseed")) { await reseedTrivia(t.closest("#trivReseed") as HTMLButtonElement); return; }
     // P-LOCAL.3 (ADR-0135): Local Providers card
     if (t.closest("[data-lp-addtoggle]")) { (t.closest(".lp-add") as HTMLElement | null)?.classList.toggle("open"); return; }
     if (t.closest("[data-lp-add]")) { await addLocalProviderFromForm(); return; }

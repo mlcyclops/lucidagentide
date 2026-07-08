@@ -77,6 +77,7 @@ import { emailDomainAllowed, managedAsksageOnly, managedConfig, managedLocks, sk
 import { asksageConfig, listDatasets, listPersonas, monthlyTokens, scanPersona, wrapPersona } from "./asksage.ts";
 import { inspectSkill, listSkills, removeSkill, rescanSkill } from "./skills_data.ts"
 import { intelNews } from "./intel_news.ts"; // P-TRIV.3 (ADR-0176): the executive Trivia Wire's news feed
+import { seedTrivia } from "./trivia_seed.ts"; // P-TRIV.4 (ADR-0186): AI re-seed the Trivia Wire (scanned, tool-free)
 import { detectElectronApp, electronLaunchPlan } from "./preview_electron.ts"; // P-PREVIEW.7 (ADR-0179)
 import { listSubagentRuns } from "./subagent_activity.ts"; // P-TASK.5 (ADR-0180): live delegation-card activity
 import { emitSecurityEvent } from "./audit_export.ts"; // P-PREVIEW.7: audit the user-initiated external launch
@@ -1471,6 +1472,26 @@ const server = Bun.serve({
       // P-TRIV.3 (ADR-0176): executive Trivia Wire intel news - first-party curated feeds, fetched
       // server-side, scan-gated fail-closed, fail-quiet to [] offline. Audited per fetch (egress events).
       if (p === "/api/intel-news") return json({ ok: true, data: await intelNews() });
+      // P-TRIV.4 (ADR-0186): AI re-seed the Trivia Wire. The renderer POSTs the role + opt-in sources; we
+      // gather that on-device context, hand it to seedTrivia which SCANS it fail-closed (a finding or a dead
+      // scanner drops the whole re-seed - the model is never called), delimits it late, and generates a pack
+      // on the user's SELECTED model (throwaway util session, tool-free). Fail-quiet: the caller keeps the seed.
+      if (p === "/api/trivia/reseed" && req.method === "POST") {
+        const b = await readBody<{ model?: unknown; role?: unknown; sources?: { sessions?: unknown; kg?: unknown; codegraph?: unknown } }>(req);
+        const sources = { sessions: !!b.sources?.sessions, kg: !!b.sources?.kg, codegraph: !!b.sources?.codegraph };
+        const data = await seedTrivia(
+          { role: typeof b.role === "string" ? b.role : "developer", sources, model: typeof b.model === "string" ? b.model : "" },
+          {
+            providers: {
+              sessions: () => listSessions().sessions.map((s) => s.title),
+              kg: () => { const g = personalGraph(); return g ? [...g.facts.map((f) => f.statement), ...g.nodes.map((n) => n.name)] : []; },
+              code: () => (loadCodeGraph(currentWorkspace())?.nodes ?? []).map((n) => n.name),
+            },
+            complete: (system, user, m) => backend.complete(system, user, m ? { model: m } : {}),
+          },
+        );
+        return json({ ok: true, data });
+      }
       if (p === "/api/skills") return json({ ok: true, data: await listSkills() });
       // P-SKILL.1 (ADR-0045): gated drop-import. Each dropped .md is scanned fail-closed; clean ones
       // are written under .omp/skills/<slug>/SKILL.md, flagged ones are held for Security-panel review.
