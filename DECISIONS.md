@@ -13463,3 +13463,70 @@ demand; the timer/event/renderer contract is what the tests pin.
 
 ADR-0060 (auto-continue wellness checks - the eventual stall-to-resume path), ADR-0074 (turn
 diagnostics this reuses), ADR-0104 (ChatEvent surface extended).
+
+## ADR-0192 - P-COLLAB.1: live session collaboration - the pure transport keystone (crypto + link + envelope), BUILT
+
+**Date:** 2026-07-08
+**Status:** Accepted. Phase 1 foundation BUILT (the pure, tested keystone). The relay client, the
+host/guest logic, and the share-window UI are P-COLLAB.2-.4.
+
+### Context
+
+omp ships a live-collaboration feature (`/collab` host, `/join` guest) - NOT the SSH feature the request
+half-remembered (that is omp's separate remote-command tool). Collab is host/guest over an END-TO-END
+ENCRYPTED WebSocket relay (default `wss://my.omp.sh`; a self-hostable Go relay exists in pi-www). The room
+key lives only in the invite-link fragment; the relay sees opaque bytes. A *full* link grants prompt/abort
+rights; a *view* link is watch-only. The wire contracts + constants live in `@oh-my-pi/pi-wire` (a package
+LUCID already imports), but the host/guest CODE is bound to omp's interactive TUI (`InteractiveModeContext`)
+and is NOT reachable over ACP - and LUCID drives omp headless in `acp` mode (acp_backend.ts).
+
+### Decision
+
+Enable collaboration between two LUCID sessions by EXTENDING, not forking (invariant #1): LUCID reuses omp's
+transport layer (the `@oh-my-pi/pi-wire` collab constants + envelope + the WebCrypto AES-256-GCM seal/open
+approach + the relay) and builds a LUCID-native host/guest that shares LUCID's OWN session (its `ChatEvent`
+stream + transcript) rather than omp's internal session entries. Two LUCID sessions collaborate via the
+relay; the security-critical E2E layer mirrors omp's proven design. (Full interop with an `omp join` TUI
+guest is a later mapping layer - Phase 1 is LUCID<->LUCID.)
+
+**Security-first, LUCID-shaped (the differentiator over omp's version):**
+- **Self-hosted relay is the default** (the request's choice) - fits the sovereign/air-gap posture; the
+  public `wss://my.omp.sh` is an opt-in. Enterprise policy (GPO/MDM) can force self-hosted-only + view-only.
+- **A guest's prompt runs tools on the HOST's machine**, so a guest prompt is UNTRUSTED input and MUST pass
+  the host's fail-closed scan gate exactly like any prompt (P-COLLAB.3, when guest-write lands).
+- **View-only is enforced HOST-side** (mutating frames from a token-less peer are rejected), never merely
+  hidden in the guest UI.
+- **The link IS the access** - E2E-encrypted, no revocation; rotating = stop + reshare. The panel says so.
+
+### Phase 1 (this increment) - the pure transport keystone
+
+`desktop/collab/` (pure, DOM-free, tested):
+- `crypto.ts` - `seal`/`open` (WebCrypto AES-256-GCM, sealed layout `[12B IV][ciphertext+tag]`, matching
+  omp's crypto.ts), `generateRoomKey` (32B) / `generateWriteToken` (16B) / `importRoomKey`, and the
+  `[4B BE peerId]` envelope pack/unpack - all keyed off the `@oh-my-pi/pi-wire` byte-size constants.
+- `link.ts` - `formatShareLink` / `parseShareLink`: the `<roomId>.<base64url(key[||writeToken])>` invite,
+  parsing the bare form, the `host/r/<roomId>.<secret>` form, and the `https://relay/#<link>` browser form;
+  a view link (key only) yields `writeToken: null` -> read-only.
+- `frames.ts` - the LUCID collab frame union carried in the sealed payload: host->guest `welcome` / `event`
+  (a `ChatEvent`) / `state` / `bye` / `error`, guest->host `hello` (name + protocol version + optional write
+  token). Phase 2/3 add `prompt`/`abort`.
+
+Tested: crypto seal/open round-trips a frame + rejects a tampered/short buffer; link format<->parse is a
+stable round-trip across all three input forms; a view link parses to read-only; the envelope preserves the
+peerId. demo-P-COLLAB.1 proves the full seal -> envelope -> unwrap -> open path with a real frame.
+
+### Phased plan
+
+- **P-COLLAB.1 (this):** the pure transport keystone (crypto + link + envelope + frames), tested.
+- **P-COLLAB.2:** the RELAY CLIENT (WebSocket, egress-gated) + the HOST - broadcast LUCID's ChatEvents +
+  transcript to view-only guests + the Share panel (generate link, participants, stop).
+- **P-COLLAB.3:** the GUEST - join a link, apply + render the host's stream + the Join UI; then guest-write
+  (prompt/abort) through the host's scan gate + view/edit access enforcement.
+- **P-COLLAB.4:** self-hosted relay config + the enterprise policy knobs (disable / force self-hosted /
+  force view-only) + audit events for share start/stop/join.
+
+### Relates to
+
+`@oh-my-pi/pi-wire` (collab constants + `WireFrame`/`Participant`/`ParsedCollabLink`), the `ChatEvent` surface
+(acp_backend.ts) this shares, the fail-closed scan gate (invariant #3) guest prompts will pass, the egress
+gate (P-NETWL) the relay WebSocket is subject to, and enterprise policy (P-ENT.1/ADR-0068).
