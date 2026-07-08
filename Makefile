@@ -610,7 +610,7 @@ demo-P-KGUI.2: ## P-KGUI.2 (ADR-0185): the Data dropdown - Import history / AI-e
 	$(BUN) run desktop/scripts/demo_p_kgui_2.ts
 
 .PHONY: demo-P-TRIV.4
-demo-P-TRIV.4: ## P-TRIV.4 (ADR-0186): the Settings toggle + an AI re-seed ("recycle") for the Trivia Wire - regenerate a per-role pack on the user's SELECTED model from opt-in context (sessions/KG/code graph); context is scanned FAIL-CLOSED (a finding or a dead scanner drops the whole re-seed, model never called), delimited + late, generated questions clear the SAME isTriviaQuestion gate as the seed floor, fail-quiet to the seed bank
+demo-P-TRIV.4: ## P-TRIV.4 (ADR-0191): the Settings toggle + an AI re-seed ("recycle") for the Trivia Wire - regenerate a per-role pack on the user's SELECTED model from opt-in context (sessions/KG/code graph); context is scanned FAIL-CLOSED (a finding or a dead scanner drops the whole re-seed, model never called), delimited + late, generated questions clear the SAME isTriviaQuestion gate as the seed floor, fail-quiet to the seed bank
 	$(BUN) run harness/scripts/demo_ptriv4.ts
 .PHONY: demo-P-EVAL.1
 demo-P-EVAL.1: ## P-EVAL.1 (ADR-0187): the PURE Model-Evaluation metrics + per-model API-latency rollup core - metric formulas with direct/proxy/needs_signal honesty tiers (a missing signal is null, never zero), DST-correct business-hours (08:00-17:00 ET) bucketing + nearest-rank p50/p95, per-model-by-hour weekly/monthly rollup with WoW/MoM deltas, and ASCII-only mermaid xychart markdown the existing report viewer bar-ifies
@@ -624,3 +624,6 @@ demo-P-CHAT.B: ## P-CHAT.B (ADR-0189): inline tool-event chips - PURE fence-awar
 .PHONY: demo-P-CHAT.C
 demo-P-CHAT.C: ## P-CHAT.C (ADR-0190): settled-turn "Generate engineering report" - PURE observed-turn->RunRecord adapter (buildRunRecord/renderTurnEvalReport) that maps a turn's tool calls + diffstats + tokens into evals.ts's RunRecord (reads/searches/bash are not files, repeated edits merge, the surplus is a re-edit, no AC/test signal stays needs_signal not faked) and renders the reused Model-Evaluation markdown. Pure keystone verified here; the run-footer CTA + /api/eval/report route are typechecked and QA-gated in-app
 	$(BUN) run harness/scripts/demo_pchatc.ts
+.PHONY: demo-P-STALL.1
+demo-P-STALL.1: ## P-STALL.1 (ADR-0186): patience for overloaded providers - the chat turn waits 10 min (was 5, message falsely said 2); a slow event at each silent 2-min mark keeps the wait visible (HUD phase + one toast naming the cap); the stall error derives its duration from the constant
+	$(BUN) run desktop/scripts/demo_p_stall_1.ts

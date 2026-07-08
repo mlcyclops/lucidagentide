@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/trivia_seed.ts — P-TRIV.4 (ADR-0186): AI re-seed ("recycle") for the Trivia Wire.
+// desktop/trivia_seed.ts — P-TRIV.4 (ADR-0191): AI re-seed ("recycle") for the Trivia Wire.
 //
 // Generates a fresh, role-aware question pack on the user's SELECTED model, mined from their own
 // OPT-IN context (recent session titles / Knowledge Graph facts / workspace code graph). Mirrors

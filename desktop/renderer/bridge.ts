@@ -236,7 +236,7 @@ export interface HeadroomStatus {
 import type { IntelNewsItemView } from "./trivia_news.ts";
 export type { IntelNewsItemView };
 export interface IntelNewsView { items: IntelNewsItemView[]; fetchedAt: number; stale: boolean }
-// P-TRIV.4 (ADR-0186): opt-in re-seed context sources + the generated-pack result the Recycle action gets back.
+// P-TRIV.4 (ADR-0191): opt-in re-seed context sources + the generated-pack result the Recycle action gets back.
 import type { TriviaQuestion } from "./trivia.ts";
 export interface TriviaSeedSources { sessions: boolean; kg: boolean; codegraph: boolean }
 export interface TriviaSeedView { ok: boolean; questions: TriviaQuestion[]; count: number; usedSources: string[]; model: string; blocked?: boolean; reason?: string }
@@ -299,6 +299,7 @@ export type ChatEvent =
   | { type: "agent-builder-open"; spec: AgentSpec } // P-AGENT.8.2 (ADR-0134): open the Agent Builder pre-populated
   | { type: "slash-command-created"; command: UserCommand } // P-CMD.1 (ADR-0146): the agent created a user "/" command
   | { type: "usage"; used: number; size: number; cost: number }
+  | { type: "slow"; waitedMs: number } // P-STALL.1 (ADR-0186): the provider is silent - the UI shows "still waiting"
   // P-GOAL.1/3 (ADR-0046): /goal loop events (kept in parity with desktop/acp_backend.ts).
   | { type: "goal-memory"; path: string }
   | { type: "goal-iter"; n: number; max: number }
@@ -459,7 +460,7 @@ export interface LucidBridge {
   /** P-APPEAR.1: the personalized chat background (image data URL + display mode + opacity). */
   chatBackground(): Promise<{ image: string; mode: "off" | "ambient" | "flashlight"; opacity: number } | null>;
   setChatBackground(patch: { image?: string; mode?: "off" | "ambient" | "flashlight"; opacity?: number }): Promise<{ image: string; mode: "off" | "ambient" | "flashlight"; opacity: number } | null>;
-  /** P-TRIV.4 (ADR-0186): AI re-seed the Trivia Wire - generate a per-role pack on the selected model from the opt-in sources. */
+  /** P-TRIV.4 (ADR-0191): AI re-seed the Trivia Wire - generate a per-role pack on the selected model from the opt-in sources. */
   triviaReseed(opts: { model: string; role: string; sources: TriviaSeedSources }): Promise<TriviaSeedView | null>;
   /** P-BRIEF.4 (ADR-0113): synthesize the podcast to WAV audio (base64) via a TTS provider. */
   engineeringBriefAudio(provider: "openai-tts" | "local-tts" | "elevenlabs", voiceId?: string): Promise<{ note: string; audioB64: string | null; mime: string } | null>;
@@ -809,7 +810,7 @@ export const bridge: LucidBridge = {
   reports: (archived) => getData(`/api/reports${archived ? "?archived=1" : ""}`),
   report: (kind, rel, archived) => getData(`/api/report?kind=${encodeURIComponent(kind)}&rel=${encodeURIComponent(rel)}${archived ? "&archived=1" : ""}`),
   evalReport: (turn) => post("/api/eval/report", turn), // P-CHAT.C (ADR-0190)
-  triviaReseed: (opts) => post("/api/trivia/reseed", opts), // P-TRIV.4 (ADR-0186)
+  triviaReseed: (opts) => post("/api/trivia/reseed", opts), // P-TRIV.4 (ADR-0191)
   reportArchive: (kind, rel) => post("/api/report/archive", { kind, rel }),
   reportRestore: (kind, rel) => post("/api/report/restore", { kind, rel }),
   reportDelete: (kind, rel) => post("/api/report/delete", { kind, rel }),

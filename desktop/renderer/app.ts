@@ -36,6 +36,7 @@ import { type GraphHandle, kindLabel, mountGraph } from "./graph.ts";
 import { addEdgeOptimistic, applyForget, chainPairs, matchNodes, removeEdgeOptimistic, resolveRelationLabel } from "./kg_ops.ts";
 import { capGraph, graphOpts, pollDelay, watchPerfTier } from "./perf_tier.ts";
 import { kgDataMenuHtml, kgViewActive, kgViewLabel, kgViewsMenuHtml } from "./kg_header.ts"; // P-KGUI.1/.2 (ADR-0184/0185)
+import { TURN_PATIENCE_MS, slowPhaseLabel, slowToastCopy } from "./stall_notice.ts"; // P-STALL.1 (ADR-0186)
 import { guardBlockedHtml, resourcePanelBodyHtml, resourcePanelHtml, type SystemStatusView } from "./system_guard.ts"; // P-SYSRES.1 (ADR-0182)
 import type { KbGraphView, PersonalGraphData } from "./bridge.ts";
 import { agentBuilderPanelHtml, specToGraphData, nodeEditorHtml, saveErrors, newCanvasSpec, runPanelHtml, secretsPanelHtml, agentInterviewPrompt, toolChipsHtml, trustBannerHtml, runApprovalHtml, runsPanelHtml, traceDetailHtml, schedulePanelHtml, historyPanelHtml, templatesPanelHtml } from "./agent_builder.ts"; // P-AGENT.2b/.4-live/.8/.9/.11a/.13/.14/.17
@@ -1396,6 +1397,7 @@ async function send(): Promise<void> {
   });
   // Only a tool-USING turn gets the CTA (a pure-text answer has nothing to evaluate). Appended once, at settle.
   const maybeAppendReport = () => { if (marks.length > 0) appendRunReport(textEl, buildEvalTurn()); };
+  let slowNoticed = false; // P-STALL.1: the explanatory toast fires once per turn; the phase line keeps updating
   const onEvent = (e: ChatEvent) => {
     if (e.type === "token") { reasoning?.finish(Date.now() - t0); buf += e.text; countDelta(e.text); if (!sawTool) setPhase(writeLine); streamEl.innerHTML = renderMarkdown(buf) + `<span class="cursor"></span>`; paintHud(); scrollChat(); }
     else if (e.type === "thinking") {
@@ -1437,6 +1439,12 @@ async function send(): Promise<void> {
     else if (e.type === "agent-builder-open") openAgentBuilderWithSpec(e.spec); // P-AGENT.8.2
     else if (e.type === "slash-command-created") void onSlashCommandCreated(e.command); // P-CMD.1
     else if (e.type === "usage") { tok = e.used; cost = e.cost; state.liveUsage = { used: e.used, size: e.size, cost: e.cost }; paintHud(); renderStatus(); renderMetricsRail(); }
+    // P-STALL.1 (ADR-0186): the provider is SILENT (overload/rate-limit) - keep the wait visible. The
+    // phase line updates each notice; the next real token/tool event replaces it naturally.
+    else if (e.type === "slow") {
+      setPhase(slowPhaseLabel(e.waitedMs)); paintHud();
+      if (!slowNoticed) { slowNoticed = true; const c = slowToastCopy(e.waitedMs, TURN_PATIENCE_MS); showToast({ tone: "warn", title: c.title, desc: c.desc, timeout: 9000 }); }
+    }
     else if (e.type === "done") { if (e.text && e.text.length > buf.length) buf = e.text; /* reconcile a lossy stream with the server's full reply */ const chipped = renderAnswerBody(streamEl, buf, marks); /* P-CHAT.A sections / P-CHAT.B chips */ (node as MsgNode)._md = buf; finishHud(); if (chipped) dropThoughtsWindow(); /* chips now carry the activity */ maybeAppendReport(); /* P-CHAT.C: settled-turn report CTA */ state.streaming = false; setSendEnabled(); clearPreviewTesting(); }
   };
   try { await bridge.sendPrompt(sendText, onEvent, images); }
@@ -2400,7 +2408,7 @@ function secAppearance(): string {
   return setCard("appearance", "Chat background", "personalize · 25% opacity", inner, true);
 }
 
-// ── P-TRIV.4 (ADR-0186): Settings -> Trivia Wire ─────────────────────────────────────────────────
+// ── P-TRIV.4 (ADR-0191): Settings -> Trivia Wire ─────────────────────────────────────────────────
 // The real on/off toggle (no more hand-editing localStorage), the opt-in re-seed sources, and the
 // "Recycle" button that regenerates the per-role pack on the user's SELECTED model. Rendered from
 // localStorage + state (no fetch); the Recycle button is the only control that reaches the backend.
@@ -2483,7 +2491,7 @@ function settingsShell(): string {
     setSkel("others", "More providers", "", true),
     setSkel("voice", "Voice", "TTS · STT · ElevenLabs", true), // P-VOICE.1 (ADR-0115)
     secAppearance(), // P-APPEAR.1: chat background (rendered from state - loaded at boot, no fetch wait)
-    secTrivia(), // P-TRIV.4 (ADR-0186): the Trivia Wire toggle + AI re-seed (rendered from state/localStorage)
+    secTrivia(), // P-TRIV.4 (ADR-0191): the Trivia Wire toggle + AI re-seed (rendered from state/localStorage)
     setSkel("developer", "Developer", "logs · diagnostics", true),
     `<div class="set-note">${icon("shield", 12)} Keys are stored on this machine and passed to omp as env vars - never sent anywhere else. OAuth uses omp's own secure credential vault.</div>`,
   ].join("");
@@ -5186,7 +5194,7 @@ async function refreshTriviaKg(): Promise<void> {
   catch { trivKgUnlocked = false; } // unknown = locked: the idle branch stays fail-quiet
 }
 
-// P-TRIV.4 (ADR-0186): generated packs persist per role and take precedence over the seed bank (the
+// P-TRIV.4 (ADR-0191): generated packs persist per role and take precedence over the seed bank (the
 // permanent fail-closed floor). A stable-ref cache keeps refreshTriviaGame's bank compare O(1).
 const TRIVIA_PACK_PREFIX = "lucid.trivia-pack.";   // + role -> { questions, at, model }
 const TRIVIA_SOURCES_KEY = "lucid.trivia-sources";  // { sessions, kg, codegraph } re-seed source choices
@@ -5253,7 +5261,7 @@ function applyTriviaPack(role: string | null | undefined, questions: readonly Tr
  *  the store, not the game). No-op before the ticker exists or when the bank is unchanged. */
 function refreshTriviaGame(): void {
   if (!triviaGame) return;
-  const bank = effectiveTriviaBank(state.userRole); // P-TRIV.4 (ADR-0186): generated pack ?? seed bank
+  const bank = effectiveTriviaBank(state.userRole); // P-TRIV.4 (ADR-0191): generated pack ?? seed bank
   if (bank === trivBank) return;
   trivBank = bank;
   triviaGame = createTriviaGame(bank, trivStore());
@@ -5264,7 +5272,7 @@ const trivReducedMotion = typeof matchMedia === "function" && matchMedia("(prefe
 
 function ensureTrivia(): void {
   if (trivEl || !triviaEnabled()) return;
-  trivBank = effectiveTriviaBank(state.userRole); // P-TRIV.4 (ADR-0186): adopt a generated pack when present
+  trivBank = effectiveTriviaBank(state.userRole); // P-TRIV.4 (ADR-0191): adopt a generated pack when present
   triviaGame = createTriviaGame(trivBank, trivStore());
   // Idle-engagement inputs (P-TRIV.2): a composer keystroke restarts the idle grace, and the KG
   // unlock state is polled gently (never per frame - bridge.personal() is a fetch).
@@ -7710,7 +7718,7 @@ function wire(): void {
     // P-APPEAR.1: chat-background upload / remove
     if (t.closest("#bgUpload")) { ($("#bgFile") as HTMLInputElement | null)?.click(); return; }
     if (t.closest("#bgClear")) { void updateChatBg({ image: "", mode: "off" }); return; }
-    // P-TRIV.4 (ADR-0186): Trivia Wire toggle + opt-in re-seed sources + the Recycle action
+    // P-TRIV.4 (ADR-0191): Trivia Wire toggle + opt-in re-seed sources + the Recycle action
     if (t.closest("#trivToggle")) {
       const on = ($("#trivToggle", $("#setBody")!) as HTMLInputElement)?.checked ?? true;
       try { localStorage.setItem(TRIVIA_ENABLED_KEY, on ? "1" : "0"); } catch { /* ignore */ }

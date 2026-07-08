@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// P-TRIV.4 (ADR-0186): the AI re-seed pipeline. Over-tests the two things that matter — the parse
+// P-TRIV.4 (ADR-0191): the AI re-seed pipeline. Over-tests the two things that matter — the parse
 // keystone (every generated entry must pass the SAME isTriviaQuestion gate as hand-authored banks)
 // and the FAIL-CLOSED source scan (a scanner finding or a dead scanner drops the whole re-seed and
 // the model is never called on flagged content). Everything runs on injected seams — no sidecar,

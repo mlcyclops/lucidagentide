@@ -3,7 +3,7 @@
 
 // harness/scripts/demo_ptriv4.ts
 //
-// P-TRIV.4 (ADR-0186): the AI re-seed ("recycle") for the Trivia Wire. Proves the keystones the
+// P-TRIV.4 (ADR-0191): the AI re-seed ("recycle") for the Trivia Wire. Proves the keystones the
 // feature leans on, on injected seams (no model, no sidecar, no network):
 //   [1] the PARSE keystone: a noisy model reply yields only isTriviaQuestion-valid entries; a bad
 //       shape / injected object is dropped; duplicate prompts collapse; the cap holds; garbage → [].

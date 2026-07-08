@@ -77,7 +77,7 @@ import { emailDomainAllowed, managedAsksageOnly, managedConfig, managedLocks, sk
 import { asksageConfig, listDatasets, listPersonas, monthlyTokens, scanPersona, wrapPersona } from "./asksage.ts";
 import { inspectSkill, listSkills, removeSkill, rescanSkill } from "./skills_data.ts"
 import { intelNews } from "./intel_news.ts"; // P-TRIV.3 (ADR-0176): the executive Trivia Wire's news feed
-import { seedTrivia } from "./trivia_seed.ts"; // P-TRIV.4 (ADR-0186): AI re-seed the Trivia Wire (scanned, tool-free)
+import { seedTrivia } from "./trivia_seed.ts"; // P-TRIV.4 (ADR-0191): AI re-seed the Trivia Wire (scanned, tool-free)
 import { detectElectronApp, electronLaunchPlan } from "./preview_electron.ts"; // P-PREVIEW.7 (ADR-0179)
 import { listSubagentRuns } from "./subagent_activity.ts"; // P-TASK.5 (ADR-0180): live delegation-card activity
 import { emitSecurityEvent } from "./audit_export.ts"; // P-PREVIEW.7: audit the user-initiated external launch
@@ -1472,7 +1472,7 @@ const server = Bun.serve({
       // P-TRIV.3 (ADR-0176): executive Trivia Wire intel news - first-party curated feeds, fetched
       // server-side, scan-gated fail-closed, fail-quiet to [] offline. Audited per fetch (egress events).
       if (p === "/api/intel-news") return json({ ok: true, data: await intelNews() });
-      // P-TRIV.4 (ADR-0186): AI re-seed the Trivia Wire. The renderer POSTs the role + opt-in sources; we
+      // P-TRIV.4 (ADR-0191): AI re-seed the Trivia Wire. The renderer POSTs the role + opt-in sources; we
       // gather that on-device context, hand it to seedTrivia which SCANS it fail-closed (a finding or a dead
       // scanner drops the whole re-seed - the model is never called), delimits it late, and generates a pack
       // on the user's SELECTED model (throwaway util session, tool-free). Fail-quiet: the caller keeps the seed.
