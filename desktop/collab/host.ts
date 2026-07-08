@@ -18,9 +18,7 @@
 // mismatch is refused with an `error` frame, never guessed. We never broadcast credentials or file paths -
 // only the session model's own `ChatEvent`s and a metadata header.
 
-import type {
-  ChatEvent,
-} from "../renderer/bridge.ts";
+import type { ChatEvent } from "../renderer/chat_events.ts";
 import type {
   CollabParticipant,
   CollabSessionHeader,

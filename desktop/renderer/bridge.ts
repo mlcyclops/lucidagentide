@@ -286,29 +286,11 @@ export interface WorkspaceInfo {
   cloned?: boolean; error?: string;
 }
 
-export type ChatEvent =
-  | { type: "token"; text: string }
-  | { type: "thinking"; text: string }
-  | { type: "tool"; name: string; detail: string; code?: { path: string; content?: string; oldText?: string; newText?: string; patch?: string } } // P-CHAT.1: inline code/diff preview
-  | { type: "subagent"; id: string; agent: string; title: string; assignments: string[] }
-  | { type: "block"; tool: string; reason: string; severity: string; findings: string; id?: string; quarantined?: boolean; command?: string; detail?: string }
-  | { type: "permission"; id: string; tool: string; detail: string; options: { optionId: string; name: string; kind?: string }[]; url?: string; egress?: boolean; localFile?: boolean; exec?: boolean; program?: string; reason?: string; danger?: boolean }
-  | { type: "preview-available"; path: string } // P-PREVIEW.2 (ADR-0096): the agent wrote a previewable file
-  | { type: "preview-activity"; label: string } // P-PREVIEW.6a (ADR-0153): the agent is reviewing/testing the live preview
-  | { type: "design-available"; path: string } // P-FIGMA.2 (ADR-0154): the agent wrote/updated DESIGN.md
-  | { type: "agent-builder-open"; spec: AgentSpec } // P-AGENT.8.2 (ADR-0134): open the Agent Builder pre-populated
-  | { type: "slash-command-created"; command: UserCommand } // P-CMD.1 (ADR-0146): the agent created a user "/" command
-  | { type: "usage"; used: number; size: number; cost: number }
-  | { type: "slow"; waitedMs: number } // P-STALL.1 (ADR-0186): the provider is silent - the UI shows "still waiting"
-  // P-GOAL.1/3 (ADR-0046): /goal loop events (kept in parity with desktop/acp_backend.ts).
-  | { type: "goal-memory"; path: string }
-  | { type: "goal-iter"; n: number; max: number }
-  | { type: "goal-check"; n: number; done: boolean; reason: string }
-  | { type: "goal-done"; iters: number; reason: string }
-  | { type: "goal-stop"; reason: string }
-  // P-GOAL.9 (ADR-0054): the loop's last task - an After-Action Report (metrics + portable graphs).
-  | { type: "goal-report"; path: string; summary: string; markdown: string }
-  | { type: "done"; text?: string }; // text = the authoritative full assistant reply (reconciles lossy streaming)
+// The LUCID session event union now lives in a DOM-free module (chat_events.ts) so node-side code that only
+// needs the shape doesn't drag bridge.ts (a DOM file) into the non-DOM root typecheck. Re-exported here so
+// every existing `import { type ChatEvent } from "./bridge.ts"` keeps working unchanged.
+import type { ChatEvent } from "./chat_events.ts";
+export type { ChatEvent };
 /** P-GOAL.13 (ADR-0067): the per-command-type Speed↔Risk dial - each type's max auto-run tier (T0-T3). */
 export type GoalDial = Partial<Record<"shell" | "edit" | "delete" | "web-fetch" | "web-search" | "subagent", "T0" | "T1" | "T2" | "T3">>;
 export interface GoalOpts { goal: string; condition: string; command?: string; maxIters: number; resume?: string; budgetUsd?: number; criteria?: string; dial?: GoalDial }
