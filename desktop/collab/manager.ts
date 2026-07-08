@@ -17,7 +17,7 @@
 import { CollabHost, type HostTransport } from "./host.ts";
 import { generateRoomId, formatShareLink, formatBrowserLink } from "./link.ts";
 import { generateRoomKey, generateWriteToken, importRoomKey } from "./crypto.ts";
-import type { ChatEvent } from "../renderer/bridge.ts";
+import type { ChatEvent } from "../renderer/chat_events.ts";
 import type { CollabParticipant } from "./frames.ts";
 
 /** An authorized relay endpoint: `wsBase` is the origin (no path); `httpBase` its http(s) form for links. */

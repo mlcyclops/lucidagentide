@@ -24,6 +24,13 @@ import type { LucidCollabFrame } from "../../desktop/collab/frames.ts";
 function fail(m: string): never { console.error(`FAIL: ${m}`); process.exit(1); }
 function ok(m: string): void { console.log(`  PASS  ${m}`); }
 const tick = () => new Promise((r) => setTimeout(r, 0));
+// The real CollabSockets seal/open asynchronously (WebCrypto) across the mock relay, so a single macrotask
+// is not enough to settle a cross-socket hop. Poll until the expected state holds (bounded) - deterministic
+// without hard-coding a delay. The library itself is proven deterministically by the unit tests.
+async function waitFor(cond: () => boolean, label: string, tries = 300): Promise<void> {
+  for (let i = 0; i < tries; i++) { if (cond()) return; await new Promise((r) => setTimeout(r, 2)); }
+  fail(`timed out waiting for ${label}`);
+}
 
 // ── an in-memory relay: routes opaque envelopes, rewriting the header to the SENDER's peer id ────────────
 class MockSocket implements WebSocketLike {
@@ -109,7 +116,7 @@ const inbox: LucidCollabFrame[] = [];
 guestSock.onFrame = (f) => inbox.push(f);
 guestSock.onOpen = () => guestSock.send({ t: "hello", protocol: 1, name: "bob" }, 0);
 guestSock.connect();
-await tick(); await tick();
+await waitFor(() => inbox.some((f) => f.t === "welcome"), "the guest's welcome");
 
 const welcome = inbox.find((f) => f.t === "welcome") as Extract<LucidCollabFrame, { t: "welcome" }> | undefined;
 if (!welcome) fail("guest never received a welcome");
@@ -122,7 +129,7 @@ ok(`guest joined + got an E2E welcome (readOnly=${welcome.readOnly}, ${welcome.t
 host.pushEvent({ type: "token", text: "Refactoring…" });
 host.pushEvent({ type: "usage", used: 60, size: 200, cost: 0.01 });
 host.pushEvent({ type: "done", text: "Done." });
-await tick();
+await waitFor(() => inbox.filter((f) => f.t === "event").length >= 3, "3 broadcast events");
 const events = inbox.filter((f) => f.t === "event");
 if (events.length !== 3) fail(`guest expected 3 live events, got ${events.length}`);
 ok(`host broadcast 3 live ChatEvents; the guest opened all 3 end-to-end`);
@@ -133,7 +140,7 @@ const inbox2: LucidCollabFrame[] = [];
 g2.onFrame = (f) => inbox2.push(f);
 g2.onOpen = () => g2.send({ t: "hello", protocol: 1, name: "carol" }, 0);
 g2.connect();
-await tick(); await tick();
+await waitFor(() => host.participantCount === 2 && [...inbox2].some((f) => f.t === "state" && f.contextPct === 30), "the 2nd guest's state with the folded context fill");
 const state2 = [...inbox2].reverse().find((f) => f.t === "state") as Extract<LucidCollabFrame, { t: "state" }> | undefined;
 if (host.participantCount !== 2) fail(`host should see 2 guests, saw ${host.participantCount}`);
 if (!state2 || state2.contextPct !== 30) fail(`late joiner should see contextPct 30, saw ${state2?.contextPct}`);
@@ -148,14 +155,14 @@ g3.onFrame = (f) => inbox3.push(f);
 let tokenB64 = ""; { let bin = ""; for (const b of gFull.writeToken) bin += String.fromCharCode(b); tokenB64 = btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""); }
 g3.onOpen = () => g3.send({ t: "hello", protocol: 1, name: "mallory", writeToken: tokenB64 }, 0);
 g3.connect();
-await tick(); await tick();
+await waitFor(() => inbox3.some((f) => f.t === "welcome"), "the full-token guest's welcome");
 const w3 = inbox3.find((f) => f.t === "welcome") as Extract<LucidCollabFrame, { t: "welcome" }> | undefined;
 if (!w3 || !w3.readOnly) fail("Phase 1: a full-token guest must STILL be read-only (guest-write is off)");
 ok("fail-closed: a guest presenting a valid write token is STILL read-only in Phase 1 (guest-write is P-COLLAB.3)");
 
 // stop → bye
 host.stop("host ended the session");
-await tick();
+await waitFor(() => inbox.some((f) => f.t === "bye"), "the bye on stop");
 if (!inbox.some((f) => f.t === "bye")) fail("guests should receive bye on stop");
 ok("host stopped the share; every guest received a bye");
 

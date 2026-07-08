@@ -20,6 +20,13 @@ import type { LucidCollabFrame } from "../../desktop/collab/frames.ts";
 function fail(m: string): never { console.error(`FAIL: ${m}`); process.exit(1); }
 function ok(m: string): void { console.log(`  PASS  ${m}`); }
 const tick = () => new Promise((r) => setTimeout(r, 0));
+// The real CollabSocket seals/opens asynchronously (WebCrypto) over the mock relay, so poll until the
+// expected state holds (bounded) instead of guessing a fixed delay. The library is proven deterministically
+// by the unit tests; this only stabilizes the end-to-end demo's cross-socket timing.
+async function waitFor(cond: () => boolean, label: string, tries = 300): Promise<void> {
+  for (let i = 0; i < tries; i++) { if (cond()) return; await new Promise((r) => setTimeout(r, 2)); }
+  fail(`timed out waiting for ${label}`);
+}
 
 // ── in-memory relay (same shape as demo_pcollab2) ─────────────────────────────
 class MockSocket implements WebSocketLike {
@@ -86,7 +93,7 @@ const inbox: LucidCollabFrame[] = [];
 guest.onFrame = (f) => inbox.push(f);
 guest.onOpen = () => guest.send({ t: "hello", protocol: 1, name: "bob" }, 0);
 guest.connect();
-await tick(); await tick();
+await waitFor(() => inbox.some((f) => f.t === "welcome") && mgr.status().participantCount === 1, "the guest welcome + roster");
 const welcome = inbox.find((f) => f.t === "welcome") as Extract<LucidCollabFrame, { t: "welcome" }> | undefined;
 if (!welcome || welcome.header.title !== "Harden the token check" || !welcome.readOnly) fail("guest welcome wrong / not read-only");
 if (mgr.status().participantCount !== 1) fail("manager status should show 1 participant");
@@ -97,14 +104,14 @@ mgr.tapUserTurn("please tighten it");
 mgr.tapEvent({ type: "token", text: "Working…" });
 mgr.tapEvent({ type: "usage", used: 40, size: 200, cost: 0.01 });
 mgr.tapEvent({ type: "done", text: "Hardened + tested." });
-await tick();
+await waitFor(() => inbox.filter((f) => f.t === "event").length >= 3, "3 tapped events");
 const events = inbox.filter((f) => f.t === "event");
 if (events.length !== 3) fail(`guest expected 3 tapped events, got ${events.length}`);
 ok(`manager tapped 3 live ChatEvents through to the guest end-to-end (the /api/chat passthrough)`);
 
 // [4] stop tears it down
 mgr.stop("host ended the session");
-await tick();
+await waitFor(() => !mgr.active && inbox.some((f) => f.t === "bye"), "the bye on stop");
 if (mgr.active || !inbox.some((f) => f.t === "bye")) fail("stop should end the share + send bye");
 ok("manager stopped the share; the guest received bye and status went idle");
 
@@ -116,3 +123,4 @@ if (!refused || noRelay.active) fail("start must fail closed when no relay is au
 ok("fail-closed: with no relay configured (no self-hosted URL, public opt-in off), start() REFUSES");
 
 console.log("\nP-COLLAB.3 demo complete - the backend host lifecycle is proven; the Share panel UI + guest join/render + guest-write are the next slice.");
+process.exit(0); // the mock guest socket is intentionally left open; exit cleanly now every assertion passed
