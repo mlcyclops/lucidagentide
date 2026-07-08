@@ -57,7 +57,7 @@ ok("guest unpacked the envelope + opened the frame end-to-end (relay saw only ci
 const stranger = await importRoomKey(generateRoomKey());
 let rejectedWrongKey = false, rejectedTamper = false;
 try { await open(stranger, sealed); } catch { rejectedWrongKey = true; }
-const bad = sealed.slice(); bad[bad.byteLength - 1] ^= 0xff;
+const bad = sealed.slice(); bad[bad.byteLength - 1] = (bad[bad.byteLength - 1] ?? 0) ^ 0xff;
 try { await open(guestKey, bad); } catch { rejectedTamper = true; }
 if (!rejectedWrongKey || !rejectedTamper) fail("E2E broken: a wrong key or a tampered frame must be rejected");
 ok("fail-closed: a wrong room key AND a tampered byte are both rejected (the relay cannot read or forge)");

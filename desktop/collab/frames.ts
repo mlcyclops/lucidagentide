@@ -10,7 +10,7 @@
 //
 // PURE: type declarations + a version constant only. No I/O.
 
-import type { ChatEvent } from "../renderer/bridge.ts";
+import type { ChatEvent } from "../renderer/chat_events.ts";
 
 /** Bumped when the frame shapes change incompatibly; a `hello`/`welcome` mismatch is refused, not guessed. */
 export const COLLAB_PROTOCOL_VERSION = 1;
