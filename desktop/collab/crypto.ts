@@ -75,9 +75,13 @@ export function unpackEnvelope(buf: Uint8Array): { peerId: number; sealed: Uint8
   return { peerId, sealed: buf.subarray(ENVELOPE_HEADER_LENGTH) };
 }
 
-// WebCrypto wants an ArrayBuffer-backed, zero-offset, full-length view; copy when a subarray view isn't.
-function strict(bytes: Uint8Array): Uint8Array {
-  if (bytes.buffer instanceof ArrayBuffer && bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength) return bytes;
+// WebCrypto wants a `BufferSource` = an ArrayBuffer-backed, zero-offset, full-length view; copy when a
+// subarray view isn't. The `Uint8Array<ArrayBuffer>` return also satisfies TS 6's stricter BufferSource
+// (a bare `Uint8Array` is `Uint8Array<ArrayBufferLike>`, which no longer matches).
+function strict(bytes: Uint8Array): Uint8Array<ArrayBuffer> {
+  if (bytes.buffer instanceof ArrayBuffer && bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength) {
+    return bytes as Uint8Array<ArrayBuffer>;
+  }
   const copy = new Uint8Array(bytes.byteLength);
   copy.set(bytes);
   return copy;
