@@ -5125,13 +5125,13 @@ function renderStatus(): void {
 // created once and re-adopted after every renderStatus innerHTML swap so its scroll position and
 // in-flight question survive the 2s data poll.
 const TRIVIA_SCORE_KEY = "lucid.trivia";        // lifetime {score,answered,correct}
-const TRIVIA_ENABLED_KEY = "lucid.trivia-enabled"; // "0" = off (default on; Settings toggle is P-TRIV.3)
+const TRIVIA_ENABLED_KEY = "lucid.trivia-enabled"; // "1" = on (default OFF - an easter egg people find; toggle in Settings -> Trivia Wire)
 const TRIVIA_SPEED = 78;                        // px/s - an easy reading clip
 const TRIVIA_EXPLAIN_SPEED = 95;
 const TRIVIA_ANSWER_LINGER_MS = 1100;           // how long the pill verdict shows before the explanation line
 
 function triviaEnabled(): boolean {
-  try { return localStorage.getItem(TRIVIA_ENABLED_KEY) !== "0"; } catch { return true; }
+  try { return localStorage.getItem(TRIVIA_ENABLED_KEY) === "1"; } catch { return false; } // default OFF until switched on
 }
 let triviaGame: TriviaGame | null = null;
 let trivEl: HTMLElement | null = null;          // persistent .triv wrapper (survives renderStatus)
