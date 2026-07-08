@@ -149,4 +149,15 @@
 //           audited, P-PREVIEW.7); the KG header decluttered to "KG" + two labeled dropdowns (views + Data,
 //           P-KGUI.1/.2); and the marketplace curated for fit (Mermaid/Gitleaks/Semgrep/Trivy/Pandoc in,
 //           competitors out, P-MARKET.1b).
-export const APP_VERSION = "1.10.5";
+// v1.10.6 = the AGENT-TURN + MODEL-EVALUATION batch (ADR-0186-0191): the CHAT TURN REDESIGN - a settled
+//           answer splits into collapsible sections on its own headings (P-CHAT.A), each tool call threads
+//           back inline as an expandable chip with a +/- diffstat + code drilldown when it genuinely
+//           interleaves - otherwise the rich activity window (tool steps + diffstats) and the expanded
+//           subagent detail stay (P-CHAT.B/.B.1), and a settled file-writing turn offers a thin, subdued
+//           "Generate engineering report" (P-CHAT.C/.C.1). The MODEL-EVALUATION suite: a pure metrics +
+//           per-model API-latency core with direct/proxy/needs_signal honesty tiers (P-EVAL.1), the latency
+//           capture hook + frozen api_latency/eval_metrics DuckDB tables (P-EVAL.2), per-run metrics
+//           persistence + a cross-run rollup report kind in the Reports panel (P-EVAL.3). PATIENCE for
+//           overloaded providers - a 10-min turn with an honest "still waiting" notice (P-STALL.1); and an
+//           AI RE-SEED for the Trivia Wire (now default-OFF, an opt-in easter egg, P-TRIV.4).
+export const APP_VERSION = "1.10.6";
