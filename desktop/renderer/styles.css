@@ -3048,3 +3048,43 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .sa-thinking .sa-step-label{font-style:italic;color:var(--txt-4)}
 .sa-step-label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .sa-run.open .sa-step-label{white-space:normal}
+
+/* ── P-COLLAB.3 (ADR-0192): the live-session Share window + the rail live-dot ─────────────── */
+.rail-btn{position:relative}
+.rail-live-dot{position:absolute;top:6px;right:6px;width:8px;height:8px;border-radius:50%;
+  background:var(--green);box-shadow:0 0 0 2px var(--bg-1),0 0 8px var(--green);animation:sharePulse 1.8s ease-in-out infinite}
+@keyframes sharePulse{0%,100%{opacity:1}50%{opacity:.45}}
+.share-modal{max-width:460px;position:relative;text-align:left}
+.share-modal .modal-title,.share-modal .modal-desc{text-align:left}
+.share-x{position:absolute;top:12px;right:12px}
+.share-body{margin-top:6px}
+.share-loading,.share-err{display:flex;align-items:center;gap:8px;color:var(--txt-3);font-size:13px;padding:10px 0}
+.share-err{color:var(--amber)}
+.share-lbl{display:block;font-size:12px;font-weight:600;color:var(--txt-2);margin:12px 0 5px;letter-spacing:.01em}
+.share-linkrow{display:flex;gap:7px;align-items:center}
+.share-link-input{flex:1;min-width:0;background:var(--bg-0);border:1px solid var(--line-strong);border-radius:8px;
+  padding:8px 10px;color:var(--txt);font:12px/1.4 var(--mono,ui-monospace,monospace);outline:none}
+.share-link-input:focus{border-color:var(--accent-2);box-shadow:var(--ring)}
+.share-field{margin-bottom:4px}
+.share-hint{font-size:12px;line-height:1.55;color:var(--txt-3);margin:8px 0 0}
+.share-setup-note,.share-ready-note{display:flex;align-items:flex-start;gap:7px;font-size:12.5px;line-height:1.5;
+  color:var(--txt-2);background:var(--bg-2);border:1px solid var(--line);border-radius:9px;padding:9px 11px;margin-bottom:6px}
+.share-setup-note .ic,.share-ready-note .ic{flex:none;margin-top:1px;color:var(--accent-2)}
+.share-check{display:flex;gap:8px;align-items:flex-start;font-size:12.5px;line-height:1.5;color:var(--txt-2);margin:10px 0 2px;cursor:pointer}
+.share-check input{margin-top:2px;accent-color:var(--accent)}
+.share-check code,.share-setup-note code{background:var(--bg-0);border:1px solid var(--line);border-radius:5px;padding:1px 5px;font-size:11.5px}
+.share-live-head{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600;color:var(--txt);margin:2px 0 4px}
+.share-live-dot{width:9px;height:9px;border-radius:50%;background:var(--green);box-shadow:0 0 8px var(--green);animation:sharePulse 1.8s ease-in-out infinite}
+.share-roster{margin-top:14px;border-top:1px solid var(--line-soft);padding-top:10px}
+.share-roster-head{display:flex;align-items:center;gap:7px;font-size:12px;font-weight:600;color:var(--txt-2);margin-bottom:7px}
+.share-roster-head .ic{color:var(--accent-2)}
+.share-count{margin-left:auto;background:var(--accent-dim);color:var(--accent-2);border-radius:20px;padding:1px 9px;font-size:11.5px;font-weight:700;min-width:20px;text-align:center}
+.share-peers{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:5px;max-height:140px;overflow:auto}
+.share-peer{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--txt);background:var(--bg-2);border-radius:7px;padding:6px 9px}
+.share-peer-dot{width:7px;height:7px;border-radius:50%;background:var(--cyan);flex:none}
+.share-peer-tag{margin-left:auto;font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--txt-3);
+  background:var(--bg-0);border:1px solid var(--line);border-radius:5px;padding:1px 6px}
+.share-peer-empty{display:flex;align-items:center;gap:7px;font-size:12px;color:var(--txt-3);padding:6px 2px}
+.share-peer-empty .ic{color:var(--txt-4)}
+.btn-mini.danger{color:var(--red);border-color:color-mix(in srgb,var(--red) 40%,transparent)}
+.btn-mini.danger:hover{background:var(--red-dim)}

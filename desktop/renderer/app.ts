@@ -8,7 +8,7 @@
 // agent turn. Same renderer in Electron (real omp ACP via window.lucid) and in
 // the browser dev server (simulated). Pure DOM, no framework.
 
-import { bridge, type AgentRunReply, type McpCatalogTool, type ChatEvent, type ConfigOption, type EvalReportTurn, type GoalDial, type MemorySnapshot, type OmpCommand, type ProviderAuth, type RestoredTurn, type SecuritySnapshot, type SessionInfo, type SessionList, type SkillInspectView, type SkillView, type UserRole, type WorkspaceInfo } from "./bridge.ts";
+import { bridge, type AgentRunReply, type McpCatalogTool, type ChatEvent, type CollabShareStatus, type ConfigOption, type EvalReportTurn, type GoalDial, type MemorySnapshot, type OmpCommand, type ProviderAuth, type RestoredTurn, type SecuritySnapshot, type SessionInfo, type SessionList, type SkillInspectView, type SkillView, type UserRole, type WorkspaceInfo } from "./bridge.ts";
 import { ROLE_META, USER_ROLE_LIST, coachHtml, roleDefaultTab, stepsForRole, type TourStep } from "./tour.ts";
 import { modCombo, modSymbol } from "./platform.ts";
 import { aiLocHasData } from "../ailoc_view.ts";
@@ -192,6 +192,7 @@ function buildShell(): void {
         <button class="rail-btn" data-rail="skills" data-tip="Skills|Every agent skill - built-in, project, curated - in one directory: source, trust label, enable/disable, inspect & re-scan through the gate" data-tip-icon="bulb">${icon("bulb", 20)}</button>
         <button class="rail-btn" id="railMarket" data-tip="Plugin Marketplace|Curated integrations ordered by community popularity - Excalidraw, Git, Remotely Save & more" data-tip-icon="market">${icon("market", 20)}</button>
         <button class="rail-btn" id="railReports" data-tip="Engineering Reports|Generate a role-tailored engineering brief (with podcast audio), and browse every past loop After-Action Report + brief" data-tip-icon="report">${icon("report", 20)}</button>
+        <button class="rail-btn" id="railShare" data-tip="Share session (live)|Invite someone to watch this session live, end-to-end encrypted through your relay - view-only" data-tip-icon="share">${icon("share", 20)}<span class="rail-live-dot" id="railShareDot" hidden></span></button>
         <button class="rail-btn" id="railLogs" data-rail="dev" hidden data-tip="Logs|Read-only developer logs: telemetry, run lineage, transcripts, gate-block audit, AskSage tool-call diagnostics" data-tip-icon="logs">${icon("logs", 20)}</button>
         <div class="spacer"></div>
         <button class="rail-btn rail-about" id="railAbout" data-tip="About LUCID Agent IDE|Version, license & credits" data-tip-icon="info">${readmeMark()}</button>
@@ -7448,6 +7449,117 @@ function openAbout(): void {
   document.body.append(ov);
 }
 
+// ── P-COLLAB.3 (ADR-0192): the live-session Share window ───────────────────────────────────────
+// The HOST half of live collaboration: configure the (self-hosted-default) relay, start the E2E broadcast,
+// copy the view-only invite link, and watch the live roster. Same modal conventions as About: single
+// instance; closes on the X, a backdrop click, or Escape. Guests are view-only (Phase 1); the guest
+// join/render surface is the next slice, so an active share shows "waiting for someone to join".
+function shareBodyHtml(st: CollabShareStatus | null): string {
+  if (!st) return `<div class="share-err">${icon("info", 14)} Couldn't reach the backend. Is the GUI server running?</div>`;
+  if (st.active) {
+    const src = st.relaySource === "public" ? "public relay" : "self-hosted relay";
+    const roster = st.participants.length
+      ? st.participants.map((p) => `<li class="share-peer"><span class="share-peer-dot"></span>${esc(p.name)} <span class="share-peer-tag">${esc(p.access)}</span></li>`).join("")
+      : `<li class="share-peer-empty">${icon("clock", 13)} Waiting for someone to join…</li>`;
+    return `
+      <div class="share-live-head"><span class="share-live-dot"></span> Live · ${esc(st.relayLabel ?? src)}</div>
+      <label class="share-lbl">View-only invite link</label>
+      <div class="share-linkrow">
+        <input class="share-link-input" id="shareViewLink" type="text" readonly value="${esc(st.viewLink ?? "")}" spellcheck="false" />
+        <button class="btn-mini" data-copy="${esc(st.viewLink ?? "")}" data-copy-what="Invite link">${icon("link", 12)} Copy</button>
+      </div>
+      <p class="share-hint">Send this to someone running LUCID. It carries the room key end-to-end - the relay can never read the session. Anyone with the link can watch; there is no per-person revoke, so stop + reshare to rotate.</p>
+      <div class="share-roster">
+        <div class="share-roster-head">${icon("share", 13)} Participants <span class="share-count" id="sharePeerCount">${st.participantCount}</span></div>
+        <ul class="share-peers" id="shareParticipants">${roster}</ul>
+      </div>
+      <div class="modal-actions">
+        <button class="btn-mini danger" data-share-stop>${icon("close", 12)} Stop sharing</button>
+      </div>`;
+  }
+  if (!st.relay) {
+    return `
+      <div class="share-setup-note">${icon("shield", 13)} No relay is configured yet. LUCID defaults to a <b>self-hosted</b> relay for a sovereign, air-gapped posture - point it at your own relay, or opt into the public one.</div>
+      <label class="share-lbl">Self-hosted relay URL</label>
+      <div class="share-field"><input class="share-link-input" id="shareRelayUrl" type="text" placeholder="wss://relay.your-org.internal" spellcheck="false" /></div>
+      <label class="share-check"><input type="checkbox" id="shareRelayPublic" /> <span>Use the public relay (<code>my.omp.sh</code>) instead - fine for a quick demo, not for sensitive work.</span></label>
+      <div id="shareRelayErr" class="modal-err" hidden></div>
+      <div class="modal-actions"><button class="btn-mini ok" data-share-relay-save>${icon("check", 12)} Save relay</button></div>`;
+  }
+  const src = st.relay.source === "public" ? "public relay" : "self-hosted relay";
+  return `
+    <div class="share-ready-note">${icon("check", 13)} Relay ready: <b>${esc(st.relay.label)}</b> <span class="share-peer-tag">${esc(src)}</span></div>
+    <p class="share-hint">Starting a share opens an end-to-end-encrypted room and broadcasts this session live. Guests are view-only. You can stop any time.</p>
+    <div class="modal-actions">
+      <button class="btn-mini" data-share-relay-change>${icon("sliders", 12)} Change relay</button>
+      <button class="btn-mini ok" data-share-start>${icon("share", 12)} Start sharing</button>
+    </div>`;
+}
+
+/** Reflect a live share in the rail glyph (a small pulsing dot). Fetches status when not supplied. */
+async function refreshShareDot(st?: CollabShareStatus | null): Promise<void> {
+  const s = st !== undefined ? st : await bridge.collabStatus();
+  const dot = $("#railShareDot");
+  if (dot) (dot as HTMLElement).hidden = !s?.active;
+}
+
+function openSharePanel(): void {
+  if ($("#shareModal")) return; // single instance
+  const ov = el(`<div id="shareModal" class="modal-ov"><div class="modal share-modal" role="dialog" aria-modal="true" aria-labelledby="shareTitle">
+    <button class="set-close share-x" data-share-close aria-label="Close">${icon("close", 16)}</button>
+    <div class="modal-icon">${icon("share", 24)}</div>
+    <h2 class="modal-title" id="shareTitle">Share this session · live</h2>
+    <p class="modal-desc">Invite someone to watch this session in real time. The invite is end-to-end encrypted - your relay only ever sees ciphertext - and guests are <b>view-only</b>.</p>
+    <div id="shareBody" class="share-body"><div class="share-loading">${icon("refresh", 14)} Loading…</div></div>
+  </div></div>`);
+  let poll: number | undefined;
+  const close = () => { if (poll) clearInterval(poll); ov.remove(); document.removeEventListener("keydown", onKey); };
+  const onKey = (ev: KeyboardEvent) => { if (ev.key === "Escape") { ev.preventDefault(); close(); } };
+  document.addEventListener("keydown", onKey);
+  const body = $("#shareBody", ov) as HTMLElement;
+
+  const draw = async () => { const st = await bridge.collabStatus(); body.innerHTML = shareBodyHtml(st); void refreshShareDot(st); return st; };
+  // While a share is live, refresh only the roster in place (never clobbers copy buttons the user is using).
+  const pollRoster = async () => {
+    const st = await bridge.collabStatus();
+    if (!st?.active) { await draw(); return; } // it ended elsewhere - fall back to a full redraw
+    const list = $("#shareParticipants", ov); const count = $("#sharePeerCount", ov);
+    if (count) count.textContent = String(st.participantCount);
+    if (list) list.innerHTML = st.participants.length
+      ? st.participants.map((p) => `<li class="share-peer"><span class="share-peer-dot"></span>${esc(p.name)} <span class="share-peer-tag">${esc(p.access)}</span></li>`).join("")
+      : `<li class="share-peer-empty">${icon("clock", 13)} Waiting for someone to join…</li>`;
+  };
+
+  ov.addEventListener("click", async (ev) => {
+    const t = ev.target as HTMLElement;
+    if (t === ov || t.closest("[data-share-close]")) { close(); return; }
+    const copy = t.closest("[data-copy]") as HTMLElement | null;
+    if (copy) { const v = copy.dataset.copy ?? ""; try { await navigator.clipboard.writeText(v); showToast({ title: `${copy.dataset.copyWhat ?? "Copied"} copied`, desc: "Paste it to your guest.", timeout: 1800 }); } catch { showToast({ tone: "warn", title: "Couldn't copy", desc: "Copy it from the field instead." }); } return; }
+    if (t.closest("[data-share-start]")) {
+      const r = await bridge.collabStart();
+      if (!r.ok) { showToast({ tone: "danger", title: "Couldn't start sharing", desc: r.error ?? "", timeout: 5000 }); return; }
+      await draw();
+      showToast({ title: "Sharing started", desc: "Copy the invite link and send it to your guest.", timeout: 3000 });
+      if (!poll) poll = window.setInterval(() => { if ($("#shareModal")) void pollRoster(); }, 2500);
+      return;
+    }
+    if (t.closest("[data-share-stop]")) { await bridge.collabStop(); if (poll) { clearInterval(poll); poll = undefined; } await draw(); showToast({ title: "Sharing stopped", desc: "The room is closed - guests were disconnected.", timeout: 2000 }); return; }
+    if (t.closest("[data-share-relay-change]")) { body.innerHTML = shareBodyHtml({ active: false, participantCount: 0, participants: [], relay: null }); return; }
+    if (t.closest("[data-share-relay-save]")) {
+      const url = ($("#shareRelayUrl", ov) as HTMLInputElement | null)?.value.trim() ?? "";
+      const pub = ($("#shareRelayPublic", ov) as HTMLInputElement | null)?.checked ?? false;
+      const err = $("#shareRelayErr", ov) as HTMLElement | null;
+      if (!url && !pub) { if (err) { err.textContent = "Enter a self-hosted wss:// URL, or tick the public relay."; err.hidden = false; } return; }
+      if (url && !/^wss?:\/\//i.test(url)) { if (err) { err.textContent = "The relay URL must start with wss:// (or ws:// for a local test)."; err.hidden = false; } return; }
+      await bridge.collabSetRelay({ url, publicOptIn: pub });
+      await draw();
+      return;
+    }
+  });
+  document.body.append(ov);
+  void draw();
+}
+
 // P-MARKET.1 (ADR-0158): the Plugin Marketplace popup - a curated, searchable catalog (Excalidraw pinned
 // first, then Obsidian's top-ranked integrations by community downloads). Same conventions as About:
 // single instance; closes on the X, a backdrop click, or Escape. The catalog is static - the only live
@@ -7635,6 +7747,8 @@ function wire(): void {
   $("#railAbout")?.addEventListener("click", () => openAbout());
   $("#railMarket")?.addEventListener("click", () => openMarketplace()); // P-MARKET.1 (ADR-0158)
   $("#railReports")?.addEventListener("click", () => openReportsPanel()); // P-REPORT.1 (ADR-0116)
+  $("#railShare")?.addEventListener("click", () => openSharePanel()); // P-COLLAB.3 (ADR-0192)
+  void refreshShareDot(); // reflect any already-live share in the rail glyph
   // Per-message copy (markdown) + save-as-.md
   $("#thread")!.addEventListener("click", async (e) => {
     const t = e.target as HTMLElement;
