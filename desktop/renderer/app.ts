@@ -1141,8 +1141,8 @@ function appendRunReport(host: HTMLElement, turn: EvalReportTurn): void {
   const foot = el(`<div class="runfoot">
     <span class="runmeta"></span>
     <span class="spacer"></span>
-    <button class="btn cta report-cta" type="button">${icon("report", 14)}<span class="rc-t">Generate engineering report</span></button>
-    <span class="reportlink" hidden>${icon("report", 14)}<span class="rc-lbl"></span><a href="#" class="rc-open">Open in Reports</a></span>
+    <button class="btn cta report-cta" type="button">${icon("report", 13)}<span class="rc-t">Generate engineering report</span></button>
+    <span class="reportlink" hidden>${icon("report", 13)}<span class="rc-lbl"></span><a href="#" class="rc-open">Open in Reports</a></span>
   </div>`);
   const files = new Set(turn.tools.filter((t) => t.path && (t.add != null || t.del != null)).map((t) => t.path)).size;
   ($(".runmeta", foot) as HTMLElement).textContent = `· ${turn.tools.length} step${turn.tools.length === 1 ? "" : "s"} · ${files} file${files === 1 ? "" : "s"}`;
@@ -1151,14 +1151,14 @@ function appendRunReport(host: HTMLElement, turn: EvalReportTurn): void {
   const link = $(".reportlink", foot) as HTMLElement;
   btn.addEventListener("click", async () => {
     btn.disabled = true; btn.classList.add("busy");
-    btn.innerHTML = `${icon("refresh", 14, "spin")}<span class="rc-t">Generating…</span>`;
+    btn.innerHTML = `${icon("refresh", 13, "spin")}<span class="rc-t">Generating…</span>`;
     const res = await bridge.evalReport(turn).catch(() => null);
     if (res && res.rel) {
       btn.hidden = true; link.hidden = false;
       ($(".rc-open", link) as HTMLElement).addEventListener("click", (ev) => { ev.preventDefault(); void openReportEntry("brief", res.rel!, res.title); });
     } else {
       btn.disabled = false; btn.classList.remove("busy");
-      btn.innerHTML = `${icon("report", 14)}<span class="rc-t">Generate engineering report</span>`;
+      btn.innerHTML = `${icon("report", 13)}<span class="rc-t">Generate engineering report</span>`;
       showToast({ tone: "warn", title: "Could not generate report", desc: "The Model-Evaluation report couldn't be saved.", timeout: 2800 });
     }
   });
@@ -1397,8 +1397,12 @@ async function send(): Promise<void> {
     subagents: subCards.length,
     when: new Date(t0).toISOString().slice(0, 10),
   });
-  // Only a tool-USING turn gets the CTA (a pure-text answer has nothing to evaluate). Appended once, at settle.
-  const maybeAppendReport = () => { if (marks.length > 0) appendRunReport(textEl, buildEvalTurn()); };
+  // P-CHAT.C.1: the report evaluates WRITTEN work, so only offer it when the turn actually wrote a file /
+  // code (an edit/write with a diffstat). A read/search/bash-only or pure-text turn has nothing to evaluate.
+  const maybeAppendReport = () => {
+    const turn = buildEvalTurn();
+    if (turn.tools.some((t) => t.path && (t.add != null || t.del != null))) appendRunReport(textEl, turn);
+  };
   let slowNoticed = false; // P-STALL.1: the explanatory toast fires once per turn; the phase line keeps updating
   const onEvent = (e: ChatEvent) => {
     if (e.type === "token") { reasoning?.finish(Date.now() - t0); buf += e.text; countDelta(e.text); if (!sawTool) setPhase(writeLine); streamEl.innerHTML = renderMarkdown(buf) + `<span class="cursor"></span>`; paintHud(); scrollChat(); }

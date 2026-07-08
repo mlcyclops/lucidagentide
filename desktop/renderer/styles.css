@@ -713,21 +713,24 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 /* P-CHAT.C (ADR-0190): the settled-turn run footer - a run-meta line + the "Generate engineering report"
    CTA, which swaps to an "Open in Reports" link once the Model-Evaluation brief is saved. Appears only on a
    settled tool-using turn (appended in app.ts). Mirrors the mock's embossed CTA. */
-.runfoot{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:14px;padding-top:11px;border-top:1px solid var(--line-soft)}
-.runfoot .runmeta{font-size:11.5px;color:var(--txt-3);font-family:var(--mono)}
+.runfoot{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:12px;padding-top:9px;border-top:1px solid var(--line-soft)}
+.runfoot .runmeta{font-size:10.5px;color:var(--txt-4);font-family:var(--mono);letter-spacing:.2px}
 .runfoot .spacer{flex:1 1 auto}
-.report-cta{display:inline-flex;align-items:center;gap:8px;border:1px solid color-mix(in srgb,var(--accent-2) 45%,var(--line-strong));
-  border-radius:10px;background:linear-gradient(180deg,color-mix(in srgb,var(--accent) 22%,var(--bg-3)),var(--bg-3));
-  color:var(--txt);font:inherit;font-size:12.5px;padding:8px 13px;cursor:pointer;
-  box-shadow:inset 0 1px 0 rgba(255,255,255,.10),0 1px 2px rgba(0,0,0,.5);transition:transform .12s var(--ease),box-shadow .18s var(--ease),border-color .18s var(--ease)}
-.report-cta .ic{color:var(--accent-2)}
-.report-cta:hover{transform:translateY(-1px);border-color:var(--accent-2)}
-.report-cta:active{transform:translateY(1px) scale(.99)}
-.report-cta.busy{cursor:default;color:var(--txt-3)}
-.reportlink{display:inline-flex;align-items:center;gap:8px;border:1px solid color-mix(in srgb,var(--accent-2) 30%,var(--line));
-  border-radius:10px;background:color-mix(in srgb,var(--accent-2) 8%,var(--bg-2));padding:8px 12px;font-size:12.5px;color:var(--txt-2)}
-.reportlink .ic{color:var(--accent-2)}
-.reportlink a{color:var(--accent-2);font-weight:600;text-decoration:none;cursor:pointer}
+/* P-CHAT.C.1: a thin, subdued, professional CTA - a quiet bordered pill (no emboss/gradient/bounce). Muted
+   by default; a light lift + a hint of accent on the icon on hover keep it polished without shouting. */
+.report-cta{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);border-radius:7px;
+  background:transparent;color:var(--txt-3);font:inherit;font-size:11.5px;font-weight:500;padding:3px 9px;
+  cursor:pointer;transition:color var(--t) var(--ease),border-color var(--t) var(--ease),background var(--t) var(--ease)}
+.report-cta .ic{color:var(--txt-4);transition:color var(--t) var(--ease)}
+.report-cta:hover{color:var(--txt);border-color:var(--line-strong);background:var(--bg-2)}
+.report-cta:hover .ic{color:var(--accent-2)}
+.report-cta:active{background:var(--bg-1)}
+.report-cta.busy{cursor:default;color:var(--txt-4);border-color:var(--line)}
+.report-cta.busy .ic{color:var(--txt-4)}
+.reportlink{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;color:var(--txt-3)}
+.reportlink .ic{color:var(--txt-4)}
+.reportlink a{color:var(--accent-2);font-weight:500;text-decoration:none;cursor:pointer}
+.reportlink a:hover{text-decoration:underline}
 
 .composer-wrap{padding:10px 26px 18px}
 /* P-SLASH.1: "/" command + skill autocomplete, floating just above the composer. */

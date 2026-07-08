@@ -13404,6 +13404,21 @@ migrations) so the report draws persisted metrics + surfaces the weekly/monthly 
 (`renderLatencyRollupMarkdown`, unsurfaced by this button today); P-EVAL.3 (report kinds + render + accordion).
 `totalTokens` is a context+output proxy - no exact cumulative token count exists at the chat seam.
 
+### P-CHAT.C.1 delta - the run-footer CTA, gated + restyled (BUILT, branch `feat/p-chat-report-cta-polish`)
+
+In-app QA feedback: the CTA was too loud, and it appeared on any tool-using turn (including read/search/bash
+that wrote nothing).
+
+- **Gate:** `maybeAppendReport` now only appends the CTA when the turn actually wrote a file / code - a mark
+  with a `path` AND a diffstat (add/del). A read/search/bash-only or pure-text turn shows no footer (the
+  Model-Evaluation report scores WRITTEN work, so there is nothing to evaluate otherwise).
+- **Style:** `.report-cta` went from an embossed accent-2 gradient button to a thin, subdued, professional
+  bordered pill - transparent background, `--line` border, `--txt-3` text, 11.5px/500, `3px 9px` padding,
+  7px radius, icon at `--txt-4`; hover gives a light lift (border -> `--line-strong`, bg -> `--bg-2`) with a
+  hint of accent on the icon only. The run-meta line dropped to 10.5px `--txt-4`. Icons 14 -> 13.
+- Verified in the preview (thin muted pill; measured padding/colors); typecheck + demo-P-CHAT.C green. The
+  gate's live behavior (no footer on a read-only turn) is in-app QA.
+
 ## ADR-0186 - P-STALL.1: patience for overloaded providers (10-min turn, visible waiting), BUILT
 
 **Date:** 2026-07-06
