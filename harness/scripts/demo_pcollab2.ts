@@ -160,3 +160,4 @@ if (!inbox.some((f) => f.t === "bye")) fail("guests should receive bye on stop")
 ok("host stopped the share; every guest received a bye");
 
 console.log("\nP-COLLAB.2 demo complete - the relay client + view-only host are proven end-to-end; the Share panel UI + guest join/render + guest-write are P-COLLAB.3.");
+process.exit(0); // the mock guest sockets are intentionally left open; exit cleanly now every assertion passed
