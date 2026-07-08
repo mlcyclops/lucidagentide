@@ -102,12 +102,12 @@ describe("managedAsksageOnly + managedLocks", () => {
     expect(managedAsksageOnly(null)).toBe(false);
   });
   test("each lock flag surfaces; forcing AskSage-only implies a models lock", () => {
-    expect(managedLocks({ security: { exec: { lock: true } } })).toEqual({ exec: true, egress: false, loop: false, models: false });
+    expect(managedLocks({ security: { exec: { lock: true } } })).toEqual({ exec: true, egress: false, loop: false, models: false, collab: false });
     expect(managedLocks({ security: { egress: { lock: true } } }).egress).toBe(true);
     expect(managedLocks({ security: { loop: { lock: true } } }).loop).toBe(true);
     expect(managedLocks({ models: { lock: true } }).models).toBe(true);
     expect(managedLocks({ asksageOnly: true }).models).toBe(true); // implied
-    expect(managedLocks(null)).toEqual({ exec: false, egress: false, loop: false, models: false });
+    expect(managedLocks(null)).toEqual({ exec: false, egress: false, loop: false, models: false, collab: false });
   });
 });
 
@@ -183,5 +183,92 @@ describe("mergeManaged (registry UNDER the file — the file wins per leaf)", ()
     expect(mergeManaged(null, { orgName: "F" })).toEqual({ orgName: "F" });
     expect(mergeManaged({ orgName: "R" }, null)).toEqual({ orgName: "R" });
     expect(mergeManaged(null, null)).toBeNull();
+  });
+});
+
+// ── ADR-0193 (P-COLLAB.6): embedded-relay governance ──────────────────────────────────────────────
+import { authorizeRelayBind, authorizeRelayConnect, collabServeAllowed } from "./managed_config.ts";
+
+describe("collab relay governance (ADR-0193 P-COLLAB.6)", () => {
+  test("serve is allowed by default (unmanaged) + when not explicitly disabled", () => {
+    expect(collabServeAllowed(null)).toBe(true);
+    expect(collabServeAllowed({ orgName: "Acme" })).toBe(true);
+    expect(collabServeAllowed({ collab: { allowServe: true } })).toBe(true);
+  });
+
+  test("a managed allowServe:false forbids hosting entirely (tighten-only)", () => {
+    expect(collabServeAllowed({ collab: { allowServe: false } })).toBe(false);
+    const d = authorizeRelayBind("127.0.0.1", 8790, { orgName: "Acme", collab: { allowServe: false } });
+    expect(d.ok).toBe(false);
+    expect(d.reason).toContain("disabled by Acme");
+  });
+
+  test("localhost binds are always allowed (unmanaged and managed)", () => {
+    for (const h of ["127.0.0.1", "::1", "localhost", "LocalHost"]) {
+      expect(authorizeRelayBind(h, 8790, null).ok).toBe(true);
+      expect(authorizeRelayBind(h, 8790, { orgName: "Acme", collab: {} }).ok).toBe(true);
+    }
+  });
+
+  test("unmanaged: a LAN bind is the user's call (allowed)", () => {
+    expect(authorizeRelayBind("10.0.0.5", 8790, null).ok).toBe(true);
+    expect(authorizeRelayBind("0.0.0.0", 8790, null).ok).toBe(true); // all-interfaces, personal machine
+  });
+
+  test("managed with NO allowlist: a non-localhost bind is refused (LAN needs an admin allowlist)", () => {
+    const mc: ManagedConfig = { orgName: "Acme", collab: {} };
+    expect(authorizeRelayBind("10.0.0.5", 8790, mc).ok).toBe(false);
+    expect(authorizeRelayBind("0.0.0.0", 8790, mc).ok).toBe(false); // all-interfaces is NOT loopback
+  });
+
+  test("allowedBinds is an ABSOLUTE whitelist: only listed host[:port] pass", () => {
+    const mc: ManagedConfig = { orgName: "Acme", collab: { allowedBinds: ["10.0.0.5:8790", "relay.corp.internal"] } };
+    expect(authorizeRelayBind("10.0.0.5", 8790, mc).ok).toBe(true);       // exact host+port
+    expect(authorizeRelayBind("10.0.0.5", 9999, mc).ok).toBe(false);      // wrong port
+    expect(authorizeRelayBind("relay.corp.internal", 443, mc).ok).toBe(true);  // host-only entry → any port
+    expect(authorizeRelayBind("relay.corp.internal", 8443, mc).ok).toBe(true);
+    expect(authorizeRelayBind("10.0.0.6", 8790, mc).ok).toBe(false);      // host not listed
+    expect(authorizeRelayBind("127.0.0.1", 1, mc).ok).toBe(true);         // localhost still always ok
+  });
+
+  test("authorizeRelayConnect: unrestricted unless allowedRelays is set, then whitelisted", () => {
+    expect(authorizeRelayConnect("wss://anything.example", null).ok).toBe(true);
+    const mc: ManagedConfig = { orgName: "Acme", collab: { allowedRelays: ["relay.corp.internal:443", "my.omp.sh"] } };
+    expect(authorizeRelayConnect("wss://relay.corp.internal/r/abc", mc).ok).toBe(true); // wss → 443 matches
+    expect(authorizeRelayConnect("wss://my.omp.sh/r/x", mc).ok).toBe(true);              // host-only → any port
+    expect(authorizeRelayConnect("wss://evil.example/r/x", mc).ok).toBe(false);
+    expect(authorizeRelayConnect("ws://relay.corp.internal:8790/r/x", mc).ok).toBe(false); // wrong port for that entry
+    expect(authorizeRelayConnect("not a url", mc).ok).toBe(false); // fail-closed on a malformed endpoint
+  });
+
+  test("managedLocks.collab reflects lock OR a forced allowServe:false", () => {
+    expect(managedLocks({ collab: { lock: true } }).collab).toBe(true);
+    expect(managedLocks({ collab: { allowServe: false } }).collab).toBe(true);
+    expect(managedLocks({ collab: { allowServe: true } }).collab).toBe(false);
+    expect(managedLocks(null).collab).toBe(false);
+  });
+
+  test("GPO registry channel parses the collab knobs (DWORD + list)", () => {
+    const out = [
+      "HKEY_LOCAL_MACHINE\Software\Policies\LucidAgentIDE",
+      "    OrgName    REG_SZ    Acme",
+      "    CollabAllowServe    REG_DWORD    0x1",
+      "    CollabAllowedBinds    REG_SZ    10.0.0.5:8790,relay.corp.internal",
+      "    CollabAllowedRelays    REG_SZ    my.omp.sh,relay.corp.internal:443",
+      "    CollabLock    REG_DWORD    0x1",
+    ].join("\r\n");
+    const cfg = parseRegistryPolicy(out)!;
+    expect(cfg.collab?.allowServe).toBe(true);
+    expect(cfg.collab?.allowedBinds).toEqual(["10.0.0.5:8790", "relay.corp.internal"]);
+    expect(cfg.collab?.allowedRelays).toEqual(["my.omp.sh", "relay.corp.internal:443"]);
+    expect(cfg.collab?.lock).toBe(true);
+  });
+
+  test("mergeManaged deep-merges the collab block (file wins per leaf)", () => {
+    const reg: ManagedConfig = { collab: { allowServe: true, allowedBinds: ["10.0.0.5:8790"] } };
+    const file: ManagedConfig = { collab: { allowServe: false } };
+    const merged = mergeManaged(reg, file)!;
+    expect(merged.collab?.allowServe).toBe(false);                 // file overrides
+    expect(merged.collab?.allowedBinds).toEqual(["10.0.0.5:8790"]); // registry preserved
   });
 });

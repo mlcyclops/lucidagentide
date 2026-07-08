@@ -110,6 +110,30 @@ export interface ManagedModels {
   lock?: boolean;
 }
 
+/** ADR-0193 (P-COLLAB.6): governance for live-session collaboration - specifically the OPTIONAL embedded
+ *  relay ("be the relay" toggle) and which relay endpoints a user may use. Rock-solid + tighten-only, the
+ *  same model as the other knobs: a managed value only ever CONSTRAINS, never relaxes; absent ⇒ personal
+ *  default. The embedded relay is the one inbound-listener attack surface, so its bind is allowlisted
+ *  ABSOLUTELY (fail-closed) under management. */
+export interface ManagedCollabPolicy {
+  /** Master switch for hosting the embedded relay. false ⇒ the user may NOT be a relay (the toggle is
+   *  disabled AND the server refuses to start). Absent/true ⇒ allowed (but the toggle is still off by
+   *  default). Tighten-only. */
+  allowServe?: boolean;
+  /** ABSOLUTE allowlist of bind targets the embedded relay may listen on: `host` or `host:port`, where host
+   *  is an IP or DNS name (e.g. "10.0.0.5:8790", "relay.corp.internal"). Localhost (127.0.0.1/::1/localhost)
+   *  is ALWAYS permitted. Under management, a NON-localhost (LAN) bind is REFUSED unless it matches an entry
+   *  here - LAN exposure is admin-allowlist-only (fail-closed). Absent + unmanaged ⇒ the user's own machine,
+   *  their call. */
+  allowedBinds?: string[];
+  /** Restrict which relay ENDPOINTS a user may CONNECT to (host or guest): `host`/`host:port`/IP/DNS. When
+   *  present, hosting-through or joining a relay outside the list is refused. Absent ⇒ no connect restriction
+   *  (connecting is lower-risk than serving; restrict only if the admin opts in). */
+  allowedRelays?: string[];
+  /** Lock the collaboration controls in the UI ("Managed by <org>"). */
+  lock?: boolean;
+}
+
 /** ADR-0102 (P-SKILLREG.2): the skill-registry publish targets. Public ships only the LOCAL publisher +
  *  the seam; remote publishers (cloud OCI / custom git) are private add-on IP that register against the
  *  same interface and read their own endpoints from here. Schema only — no remote impls in this repo. */
@@ -143,6 +167,8 @@ export interface ManagedConfig {
   models?: ManagedModels;
   /** ADR-0102 (P-SKILLREG.2): skill-registry publish targets (local publisher public; remotes private). */
   skillRegistry?: ManagedSkillRegistry;
+  /** ADR-0193 (P-COLLAB.6): governance for the optional embedded collab relay + allowed relay endpoints. */
+  collab?: ManagedCollabPolicy;
   /** ADR-0103 (P-FS.1): restrict the in-app folder browser + workspace selection to these roots.
    *  Unset/empty = the full filesystem (the individual-user default). When set, the browser is confined
    *  to these subtrees and never offers a parent above them. Only TIGHTENS (mirrors ADR-0068). */
@@ -313,6 +339,14 @@ export function parseRegistryPolicy(regOutput: string): ManagedConfig | null {
 
   const wsRoots = list("WorkspaceRoots"); if (wsRoots) cfg.workspaceRoots = wsRoots; // ADR-0103 (P-FS.1)
 
+  // ADR-0193 (P-COLLAB.6): embedded-relay governance.
+  const collab: ManagedCollabPolicy = { ...(cfg.collab ?? {}) };
+  const cServe = bool("CollabAllowServe"); if (cServe !== undefined) collab.allowServe = cServe;
+  const cBinds = list("CollabAllowedBinds"); if (cBinds) collab.allowedBinds = cBinds;
+  const cRelays = list("CollabAllowedRelays"); if (cRelays) collab.allowedRelays = cRelays;
+  const cLock = bool("CollabLock"); if (cLock !== undefined) collab.lock = cLock;
+  if (Object.keys(collab).length) cfg.collab = collab;
+
   const logging: ManagedLogging = { ...(cfg.logging ?? {}) };
   const lEnabled = bool("LoggingEnabled"); if (lEnabled !== undefined) logging.enabled = lEnabled;
   const lSink = str("LoggingSink");
@@ -350,6 +384,7 @@ export function mergeManaged(base: ManagedConfig | null, over: ManagedConfig | n
   }
   if (base.models || over.models) merged.models = { ...(base.models ?? {}), ...(over.models ?? {}) };
   if (base.logging || over.logging) merged.logging = { ...(base.logging ?? {}), ...(over.logging ?? {}) };
+  if (base.collab || over.collab) merged.collab = { ...(base.collab ?? {}), ...(over.collab ?? {}) };
   return merged;
 }
 
@@ -404,7 +439,93 @@ export function managedWorkspaceRoots(mc: ManagedConfig | null = managedConfig()
   return Array.isArray(r) && r.length ? r.map(String).filter(Boolean) : null;
 }
 
-export interface ManagedLocks { exec: boolean; egress: boolean; loop: boolean; models: boolean; }
+// ── ADR-0193 (P-COLLAB.6): embedded-relay governance (pure, tighten-only) ─────────────────────────
+
+/** The result of a relay authorization check. `ok:false` carries a user-facing `reason`. */
+export interface RelayAuthz { ok: boolean; reason?: string }
+
+/** Loopback aliases - always permitted to bind (the safe default; reach a remote guest via a tunnel/VPN that
+ *  terminates on loopback). NOTE: `0.0.0.0` / `::` are all-interfaces (the BROADEST LAN exposure), so they
+ *  are deliberately NOT loopback and must pass the allowlist. Pure + total. */
+function isLocalhostHost(host: string): boolean {
+  const h = (host ?? "").trim().toLowerCase().replace(/^\[|\]$/g, ""); // strip [] from an IPv6 literal
+  return h === "127.0.0.1" || h === "::1" || h === "localhost";
+}
+
+/** Split "host", "host:port", or an IPv6 "[::1]:port" into `{ host, port? }`. Pure + total. */
+function splitHostPort(entry: string): { host: string; port?: number } {
+  const s = (entry ?? "").trim();
+  if (!s) return { host: "" };
+  // bracketed IPv6 with optional port
+  const v6 = /^\[([^\]]+)\](?::(\d+))?$/.exec(s);
+  if (v6) return { host: v6[1]!.toLowerCase(), port: v6[2] ? Number(v6[2]) : undefined };
+  // host:port only when there is exactly one colon (a bare IPv6 has several → treat whole as host)
+  if ((s.match(/:/g) || []).length === 1) {
+    const [h, p] = s.split(":");
+    return { host: (h ?? "").toLowerCase(), port: p ? Number(p) : undefined };
+  }
+  return { host: s.toLowerCase() };
+}
+
+/** Does an allowlist `entry` match this bind? Host must equal (case-insensitive); a port in the entry must
+ *  equal too (an entry with no port matches any port for that host). Pure. */
+function bindMatches(entry: string, host: string, port: number): boolean {
+  const e = splitHostPort(entry);
+  if (!e.host) return false;
+  if (e.host !== (host ?? "").trim().toLowerCase().replace(/^\[|\]$/g, "")) return false;
+  return e.port === undefined || e.port === port;
+}
+
+/** Whether the user may host the embedded relay at all. Default true (personal); a managed `allowServe:false`
+ *  forbids it (tighten-only). Pure when given `mc`. */
+export function collabServeAllowed(mc: ManagedConfig | null = managedConfig().config): boolean {
+  return mc?.collab?.allowServe !== false;
+}
+
+/**
+ * Authorize the embedded relay to bind `host:port` — the rock-solid, fail-closed gate for the inbound
+ * listener. Rules (tighten-only):
+ *   - if hosting is disabled by policy ⇒ DENY;
+ *   - localhost binds are ALWAYS allowed;
+ *   - a managed `allowedBinds` list is ABSOLUTE: a non-matching bind ⇒ DENY;
+ *   - with NO allowedBinds: under management a non-localhost (LAN) bind ⇒ DENY (LAN exposure is admin-
+ *     allowlist-only); unmanaged ⇒ allowed (the user's own machine).
+ * Pure when given `mc`.
+ */
+export function authorizeRelayBind(host: string, port: number, mc: ManagedConfig | null = managedConfig().config): RelayAuthz {
+  const org = mc?.orgName ?? "your organization";
+  if (!collabServeAllowed(mc)) return { ok: false, reason: `hosting a collaboration relay is disabled by ${org}` };
+  if (isLocalhostHost(host)) return { ok: true };
+  const binds = mc?.collab?.allowedBinds;
+  if (Array.isArray(binds) && binds.length) {
+    return binds.some((e) => bindMatches(e, host, port))
+      ? { ok: true }
+      : { ok: false, reason: `bind ${host}:${port} is not in the managed relay allowlist (${org})` };
+  }
+  if (mc) return { ok: false, reason: `binding the relay to a non-localhost address requires an admin allowlist (${org})` };
+  return { ok: true }; // unmanaged personal machine
+}
+
+/** Authorize CONNECTING (as host or guest) to a relay endpoint. Only restricts when the admin sets
+ *  `allowedRelays` (connecting is lower-risk than serving). `endpoint` may be a ws(s):// URL or host[:port].
+ *  Pure when given `mc`. */
+export function authorizeRelayConnect(endpoint: string, mc: ManagedConfig | null = managedConfig().config): RelayAuthz {
+  const allow = mc?.collab?.allowedRelays;
+  if (!Array.isArray(allow) || !allow.length) return { ok: true };
+  let host = "";
+  let port = NaN;
+  try {
+    const u = new URL(/^wss?:\/\//i.test(endpoint) ? endpoint : `ws://${endpoint}`);
+    host = u.hostname.toLowerCase();
+    port = u.port ? Number(u.port) : (u.protocol === "wss:" ? 443 : 80);
+  } catch { return { ok: false, reason: "malformed relay endpoint" }; } // fail closed on a bad URL
+  const org = mc?.orgName ?? "your organization";
+  return allow.some((e) => bindMatches(e, host, port))
+    ? { ok: true }
+    : { ok: false, reason: `relay ${host} is not in the approved relay list (${org})` };
+}
+
+export interface ManagedLocks { exec: boolean; egress: boolean; loop: boolean; models: boolean; collab: boolean; }
 /** Which UI controls a managed policy locks (the renderer disables them + shows "Managed by <org>").
  *  Forcing AskSage-only implies a models lock (the picker is constrained). */
 export function managedLocks(mc: ManagedConfig | null = managedConfig().config): ManagedLocks {
@@ -414,5 +535,7 @@ export function managedLocks(mc: ManagedConfig | null = managedConfig().config):
     egress: !!s?.egress?.lock,
     loop: !!s?.loop?.lock,
     models: !!mc?.models?.lock || managedAsksageOnly(mc),
+    // A forced allowServe:false also disables the toggle (there is nothing left to toggle).
+    collab: !!mc?.collab?.lock || mc?.collab?.allowServe === false,
   };
 }

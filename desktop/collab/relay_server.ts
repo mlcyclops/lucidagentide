@@ -34,6 +34,10 @@ export interface RelayServerOptions {
   maxFrameBytes?: number;
   /** Seconds of silence before Bun drops an idle socket (also our keepalive ceiling). */
   idleTimeoutSec?: number;
+  /** ADR-0193 (P-COLLAB.6): defense-in-depth policy gate on the bind target. Injected (not a managed_config
+   *  import) so relay_server stays pure + testable; the real caller passes the managed authorizeRelayBind.
+   *  If it returns `{ok:false}`, startRelayServer THROWS before opening the listener (fail-closed). */
+  authorizeBind?: (host: string, port: number) => { ok: boolean; reason?: string };
   onLog?: (msg: string, detail?: unknown) => void;
 }
 
@@ -66,6 +70,9 @@ interface WS {
 /** Start the embedded relay. Returns a handle to inspect + stop it. Throws if the port cannot be bound. */
 export function startRelayServer(opts: RelayServerOptions): RelayHandle {
   const cfg = { ...DEFAULTS, ...opts };
+  // Fail-closed BEFORE opening the listener: an org policy (or the caller) may forbid this bind entirely.
+  const authz = opts.authorizeBind?.(cfg.hostname, cfg.port);
+  if (authz && !authz.ok) throw new Error(`relay bind refused: ${authz.reason ?? "not permitted by policy"}`);
   const rooms = new Map<string, Room>();
   const log = (m: string, d?: unknown) => opts.onLog?.(m, d);
 

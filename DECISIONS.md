@@ -13577,3 +13577,31 @@ green.
 
 **Deferred (next slice):** the Join panel UI + the "be the relay" toggle + the backend routes wiring the guest
 stream + the relay lifecycle; then guest-write through the host's fail-closed gate and enterprise relay policy.
+
+### P-COLLAB.6 — enterprise/MDM governance for the embedded relay (rock-solid, fail-closed)
+
+The embedded relay is the one inbound-listener attack surface, so who may run it — and on which IP/DNS + port —
+is centrally governable, extending the ADR-0068 managed-policy system (file + Windows GPO channels, tighten-only).
+Added `ManagedCollabPolicy` (`desktop/managed_config.ts`): `allowServe` (master on/off for the "be the relay"
+toggle), `allowedBinds` (an ABSOLUTE host / `host:port` allowlist for the listener), `allowedRelays` (which relay
+endpoints a user may CONNECT to), `lock`. Pure enforcement helpers:
+
+- `collabServeAllowed(mc)` — default true; a managed `allowServe:false` forbids hosting.
+- `authorizeRelayBind(host, port, mc)` — the fail-closed bind gate: hosting-disabled ⇒ DENY; localhost
+  (127.0.0.1/::1/localhost) ALWAYS allowed; a managed `allowedBinds` is ABSOLUTE (non-match ⇒ DENY); with no
+  allowlist, under management a non-localhost / `0.0.0.0` (all-interfaces) bind ⇒ DENY (LAN exposure is
+  admin-allowlist-only), unmanaged ⇒ the user's own machine. Defense-in-depth: `startRelayServer` takes an
+  injected `authorizeBind` and THROWS before opening the listener when it denies.
+- `authorizeRelayConnect(endpoint, mc)` — restricts host/guest connections to `allowedRelays` when set (opt-in;
+  a malformed endpoint fails closed).
+- `managedLocks.collab` — the UI disables the toggle + shows "Managed by <org>" (also true when
+  `allowServe:false`). GPO values: `CollabAllowServe` (DWORD), `CollabAllowedBinds`/`CollabAllowedRelays`
+  (list), `CollabLock` (DWORD); merged file-over-registry like every knob.
+
+Tested: 11 governance cases in managed_config.test.ts (serve default/deny, localhost-always, unmanaged-LAN,
+managed-LAN-refused, absolute allowlist host+port, connect allowlist, lock surfacing, GPO parse, deep merge) +
+demo-P-COLLAB.6 (incl. a REAL startRelayServer that throws under `allowServe:false` and binds under an
+allowlist). The org's actual policy template is private add-on IP; this repo ships the capability + schema.
+
+**Deferred:** the toggle/Join UI reads `managedLocks.collab` + calls these authorizers; audit events for
+share/relay start/stop/join.
