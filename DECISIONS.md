@@ -13183,6 +13183,29 @@ api_latency: the GUI can't co-write, so it appends a flat sample and the single 
   next: Part B - the cross-run rollup aggregator + the eval report kind surfaced through the P-REPORT.4
   viewer (the viewer already bar-ifies the xychart markdown, and role=`evals` briefs already list + open).
 
+### P-EVAL.3 Part B delta - the cross-run rollup report kind (BUILT, branch `feat/p-eval-3b-report-kind`)
+
+Surfaces the persisted metrics + latency as a Model-Evaluation ROLLUP report.
+
+- `harness/brief/eval_metrics_report.ts` (PURE): `aggregateEvalMetrics(rows)` rolls the per-run rows up
+  per model - each metric is a mean over ONLY the runs that carried that signal (nulls excluded, never 0),
+  with a coverage count `n/runs` and the evidence tier; `renderEvalMetricsRollupMarkdown` renders a net-LOC
+  xychart + per-model metric tables (a zero-coverage metric reads "no signal"). ASCII-only (gate-safe).
+- `POST /api/eval/rollup` (dev.ts): the eval-metrics + latency JSONL ledgers are GUI-owned append-only
+  (the GUI can't co-write agent_obs.duckdb), so on demand the route ingests BOTH into a **throwaway
+  DuckDB the GUI owns** (no write-lock contention; reuses `ingestEvalMetrics`/`ingestLatency` + the
+  readers), aggregates + rolls latency (`rollupLatency`), renders the combined markdown, and saves it as an
+  `evals` brief (so it lists + opens in Reports; the viewer already bar-ifies the xychart). Empty ledger ->
+  a friendly report, never an error.
+- **Design note - the ingest trigger:** P-EVAL.2/.3a built the capture (JSONL) + the ingest fns, but nothing
+  auto-ingested into agent_obs.duckdb (the single-writer omp gate would, for cross-tool dashboards). This
+  report doesn't wait on that: it ingests its own scratch copy from the JSONL ledger on demand. So the
+  report works today, and the agent_obs.duckdb ingest remains an independent future wiring.
+- UI: a "Model-Evaluation rollup" button in the Reports panel (`bridge.evalRollup()` -> `openReportEntry`).
+- Tests: `eval_metrics_report.test.ts` (6) + `demo-P-EVAL.3b` (full JSONL -> throwaway ingest -> aggregate +
+  latency rollup -> combined ASCII report). The route + button are typechecked + preview-verified (button
+  renders; the route pipeline is proven by the demo); the live click->route->open is in-app QA.
+
 ## ADR-0188 - P-CHAT.A: sectioned agent turn (pure core BUILT; WIRED onto master; live-streaming QA pending)
 
 **Date:** 2026-07-07 (re-integrated onto master v1.10.5, 2026-07-08)
