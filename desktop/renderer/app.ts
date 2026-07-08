@@ -7479,7 +7479,7 @@ function shareBodyHtml(st: CollabShareStatus | null): string {
   }
   if (!st.relay) {
     return `
-      <div class="share-setup-note">${icon("shield", 13)} No relay is configured yet. LUCID defaults to a <b>self-hosted</b> relay for a sovereign, air-gapped posture - point it at your own relay, or opt into the public one.</div>
+      <div class="share-setup-note">${icon("shield", 13)}<span>No relay is configured yet. LUCID defaults to a <b>self-hosted</b> relay for a sovereign, air-gapped posture - point it at your own relay, or opt into the public one.</span></div>
       <label class="share-lbl">Self-hosted relay URL</label>
       <div class="share-field"><input class="share-link-input" id="shareRelayUrl" type="text" placeholder="wss://relay.your-org.internal" spellcheck="false" /></div>
       <label class="share-check"><input type="checkbox" id="shareRelayPublic" /> <span>Use the public relay (<code>my.omp.sh</code>) instead - fine for a quick demo, not for sensitive work.</span></label>
@@ -7488,7 +7488,7 @@ function shareBodyHtml(st: CollabShareStatus | null): string {
   }
   const src = st.relay.source === "public" ? "public relay" : "self-hosted relay";
   return `
-    <div class="share-ready-note">${icon("check", 13)} Relay ready: <b>${esc(st.relay.label)}</b> <span class="share-peer-tag">${esc(src)}</span></div>
+    <div class="share-ready-note">${icon("check", 13)}<span>Relay ready: <b>${esc(st.relay.label)}</b> <span class="share-peer-tag">${esc(src)}</span></span></div>
     <p class="share-hint">Starting a share opens an end-to-end-encrypted room and broadcasts this session live. Guests are view-only. You can stop any time.</p>
     <div class="modal-actions">
       <button class="btn-mini" data-share-relay-change>${icon("sliders", 12)} Change relay</button>
