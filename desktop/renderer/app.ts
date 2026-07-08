@@ -6759,6 +6759,7 @@ function openReportsPanel(): void {
         </div>
         <div class="rp-nb-tip">${icon("info", 11)}<span>Want a free, natural-sounding two-host podcast? Generate the report, then <a href="https://notebooklm.google.com" target="_blank" rel="noopener" id="rpNotebook">open NotebookLM ↗</a> and paste it in for an Audio Overview.</span></div>
         <button type="button" class="btn-mini ok rp-generate" id="rpGenerate">${icon("bolt", 15)} Generate report</button>
+        <button type="button" class="btn-mini rp-evalrollup" id="rpEvalRollup" data-tip="Model-Evaluation rollup|Build a cross-run report from the metrics captured by each 'Generate engineering report' (per-model efficiency/quality means, honest null-not-zero) plus the per-model API-latency p50/p95. Reads the on-device ledger only.">${icon("report", 14)} Model-Evaluation rollup</button>
         <div class="rp-sec-exports" id="rpSecExports" hidden>
           <button type="button" class="btn-mini" id="rpPoam" data-tip="Export a Plan of Actions & Milestones (eMASS-aligned CSV) from the security control crosswalk. Draft - validate mappings against your baseline.">${icon("download", 12)} POA&M (CSV)</button>
           <button type="button" class="btn-mini" id="rpCkl" data-tip="Export a STIG Viewer checklist (.ckl) of the control crosswalk. Draft - synthetic Vuln IDs keyed by CCI, for analyst validation.">${icon("download", 12)} STIG (.ckl)</button>
@@ -6985,6 +6986,17 @@ function openReportsPanel(): void {
   });
   void loadList();
 
+  // P-EVAL.3 Part B (ADR-0187): build the cross-run Model-Evaluation rollup from the on-device metrics +
+  // latency ledger, list it, and open it. An empty ledger still yields a friendly report (never an error).
+  $("#rpEvalRollup", ov)?.addEventListener("click", async () => {
+    const btn = $("#rpEvalRollup", ov) as HTMLButtonElement;
+    const orig = btn.innerHTML;
+    btn.disabled = true; btn.innerHTML = `${icon("refresh", 14, "spin")} Building rollup…`;
+    const res = await bridge.evalRollup().catch(() => null);
+    btn.disabled = false; btn.innerHTML = orig;
+    if (res && res.rel) { await loadList(); void openReportEntry("brief", res.rel, res.title); }
+    else showToast({ tone: "warn", title: "Couldn't build the rollup", desc: "The Model-Evaluation ledger couldn't be read. Try again in a moment.", timeout: 3600 });
+  });
   $("#rpGenerate", ov)?.addEventListener("click", async () => {
     const btn = $("#rpGenerate", ov) as HTMLButtonElement;
     const out = $("#rpResult", ov) as HTMLElement;

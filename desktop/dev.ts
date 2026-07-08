@@ -16,7 +16,14 @@ import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { buildEngineeringUpdate, renderEngineeringBrief, buildPodcastScript, renderScript, type PodcastBackend, type BriefRole } from "../harness/brief/engineering_update.ts";
 import { buildComplianceRows, renderPoamCsv, renderCkl } from "../harness/brief/compliance.ts"; // P-REPORT.6/.8: POA&M + CKL
 import { renderTurnEvalReport, evalMetricsForTurn, type ObservedTool, type ObservedTurn } from "../harness/brief/eval_report.ts"; // P-CHAT.C (ADR-0190): settled-turn Model-Evaluation report
-import { recordEvalMetrics } from "./eval_metrics_log.ts"; // P-EVAL.3 (ADR-0187): persist per-run eval metrics
+import { recordEvalMetrics, EVAL_METRICS_LOG_PATH } from "./eval_metrics_log.ts"; // P-EVAL.3 (ADR-0187): persist per-run eval metrics
+import { LATENCY_LOG_PATH } from "./latency_log.ts"; // P-EVAL.2: the latency JSONL ledger
+import { ingestEvalMetrics, readEvalMetricsRows } from "../harness/memory/eval_metrics_ingest.ts"; // P-EVAL.3 Part B: cross-run rollup
+import { ingestLatency, readLatencyCalls } from "../harness/memory/latency_ingest.ts"; // P-EVAL.2: persisted latency
+import { renderEvalMetricsRollupMarkdown } from "../harness/brief/eval_metrics_report.ts"; // P-EVAL.3 Part B
+import { rollupLatency, renderLatencyRollupMarkdown } from "../harness/brief/evals.ts"; // P-EVAL.1 latency rollup
+import { mkdtempSync, rmSync } from "node:fs"; // P-EVAL.3 Part B: throwaway rollup DB
+import { tmpdir } from "node:os";
 import { buildChangeGraph, buildSchemaChanges, renderAnnexes } from "../harness/brief/change_graph.ts"; // P-REPORT.8: report annexes
 import { renderRepoActivityAnnex } from "../harness/brief/repo_activity.ts"; // P-REPORT.9: cross-repo activity annex
 import { addReportRepo, collectRepoActivity, ghAvailable, listReportRepos, type RepoSelection } from "./repo_collect.ts"; // P-REPORT.9 (ADR-0162)
@@ -677,6 +684,30 @@ const server = Bun.serve({
         const id = String(Date.now());
         const rel = saveBrief(id, "evals", markdown);
         return json({ ok: !!rel, data: { kind: "brief", id, rel, title }, error: rel ? undefined : "could not save report" });
+      }
+      // P-EVAL.3 Part B (ADR-0187): the CROSS-RUN Model-Evaluation rollup. The per-run metrics + API-latency
+      // ledgers are GUI-owned append-only JSONL (the GUI can't co-write agent_obs.duckdb), so on demand we
+      // ingest them into a THROWAWAY DuckDB the GUI owns (no write-lock contention), query via the same
+      // readers, aggregate per model (means over runs-with-signal, honest null-not-zero) + roll latency into
+      // per-model p50/p95, render the combined ASCII markdown the P-REPORT.4 viewer bar-ifies, and save it as
+      // an `evals` brief (so it lists + opens in Reports). An empty ledger -> a friendly report, never an error.
+      if (p === "/api/eval/rollup" && req.method === "POST") {
+        const scratch = mkdtempSync(join(tmpdir(), "lucid-evalrollup-"));
+        const db = await Db.open(join(scratch, "rollup.duckdb"));
+        try {
+          if (existsSync(EVAL_METRICS_LOG_PATH)) await ingestEvalMetrics(db, EVAL_METRICS_LOG_PATH);
+          if (existsSync(LATENCY_LOG_PATH)) await ingestLatency(db, LATENCY_LOG_PATH);
+          const rows = await readEvalMetricsRows(db);
+          let markdown = renderEvalMetricsRollupMarkdown(rows);
+          const calls = await readLatencyCalls(db); // ok-only by default
+          if (calls.length) {
+            const roll = rollupLatency(calls, { period: "weekly", periodStart: Date.now(), metric: "ttft" });
+            if (roll.models.length) markdown += "\n\n" + renderLatencyRollupMarkdown(roll);
+          }
+          const id = String(Date.now());
+          const rel = saveBrief(id, "evals", markdown);
+          return json({ ok: !!rel, data: { kind: "brief", id, rel, title: "Model Evaluation Rollup" }, error: rel ? undefined : "could not save report" });
+        } finally { db.close(); rmSync(scratch, { recursive: true, force: true }); }
       }
       // P-REPORT.1 (ADR-0116): the unified Reports list - per-workspace loop AARs + repo-wide saved briefs,
       // most-recent first. GET `/api/report?kind=aar|brief&rel=` reads one (confined to its store).
