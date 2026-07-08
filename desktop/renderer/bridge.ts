@@ -181,6 +181,16 @@ export interface ReportEntry { kind: "aar" | "brief"; id: string; title: string;
 // P-REPORT.9 (ADR-0162): a candidate repo for cross-repo aggregation, and the per-repo selection sent back.
 export interface ReportRepo { path: string; name: string; isGit: boolean; remoteUrl: string; host: string; isGitHub: boolean; lastActive: number }
 export interface ReportRepoSelection { path: string; fetch?: boolean; prs?: boolean }
+// P-CHAT.C (ADR-0190): a settled chat turn's OBSERVED telemetry, POSTed to /api/eval/report to build a
+// Model-Evaluation brief (server maps it to evals.ts's RunRecord). All fields are what the renderer saw.
+export interface EvalReportTurn {
+  runId: string; model: string;
+  ctxTokens: number; outputTokens: number; totalTokens: number; costUsd: number;
+  tools: { name: string; path?: string; add?: number; del?: number }[];
+  failures?: { tool: string; reason: string; cmd?: string }[];
+  subagents?: number; when?: string;
+}
+export interface EvalReportResult { kind: string; id: string; rel: string | null; title: string }
 export interface ModeOption { id: string; name: string; description?: string }
 export interface ModeState { available: ModeOption[]; current: string; ui?: "agent" | "ask" | "plan"; permissionMode?: "auto" | "ask" }
 export interface OmpCommand { name: string; description?: string; hint?: string }
@@ -386,6 +396,8 @@ export interface LucidBridge {
   reportDelete(kind: string, rel: string): Promise<{ deleted: boolean } | null>;
   /** P-REPORT.3 (ADR-0117): push a report into the KG as one trusted node, in the chosen compartment. */
   reportToKg(kind: string, rel: string, scope: string, archived?: boolean): Promise<{ ok: boolean; error?: string } | null>;
+  /** P-CHAT.C (ADR-0190): build + save a Model-Evaluation brief from a settled turn's observed telemetry. */
+  evalReport(turn: EvalReportTurn): Promise<EvalReportResult | null>;
   /** P-EXEC.3: "TLDR" - plain-language explanation of a command via a cheap keyed model. */
   explainCommand(command: string): Promise<{ ok: boolean; text?: string; model?: string; error?: string } | null>;
   /** P-REPORT.6: the Security control crosswalk as an eMASS-aligned POA&M CSV. */
@@ -790,6 +802,7 @@ export const bridge: LucidBridge = {
   addReportRepo: (input) => post("/api/report/repos/add", input),
   reports: (archived) => getData(`/api/reports${archived ? "?archived=1" : ""}`),
   report: (kind, rel, archived) => getData(`/api/report?kind=${encodeURIComponent(kind)}&rel=${encodeURIComponent(rel)}${archived ? "&archived=1" : ""}`),
+  evalReport: (turn) => post("/api/eval/report", turn), // P-CHAT.C (ADR-0190)
   reportArchive: (kind, rel) => post("/api/report/archive", { kind, rel }),
   reportRestore: (kind, rel) => post("/api/report/restore", { kind, rel }),
   reportDelete: (kind, rel) => post("/api/report/delete", { kind, rel }),

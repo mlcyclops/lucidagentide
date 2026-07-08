@@ -8,7 +8,7 @@
 // agent turn. Same renderer in Electron (real omp ACP via window.lucid) and in
 // the browser dev server (simulated). Pure DOM, no framework.
 
-import { bridge, type AgentRunReply, type McpCatalogTool, type ChatEvent, type ConfigOption, type GoalDial, type MemorySnapshot, type OmpCommand, type ProviderAuth, type RestoredTurn, type SecuritySnapshot, type SessionInfo, type SessionList, type SkillInspectView, type SkillView, type UserRole, type WorkspaceInfo } from "./bridge.ts";
+import { bridge, type AgentRunReply, type McpCatalogTool, type ChatEvent, type ConfigOption, type EvalReportTurn, type GoalDial, type MemorySnapshot, type OmpCommand, type ProviderAuth, type RestoredTurn, type SecuritySnapshot, type SessionInfo, type SessionList, type SkillInspectView, type SkillView, type UserRole, type WorkspaceInfo } from "./bridge.ts";
 import { ROLE_META, USER_ROLE_LIST, coachHtml, roleDefaultTab, stepsForRole, type TourStep } from "./tour.ts";
 import { modCombo, modSymbol } from "./platform.ts";
 import { aiLocHasData } from "../ailoc_view.ts";
@@ -1131,6 +1131,39 @@ function createChipRow(chip: ToolChip, data: ChipData): HTMLElement {
   return wrap;
 }
 
+// P-CHAT.C (ADR-0190): a SETTLED tool-using turn offers a "Generate engineering report" CTA in its run
+// footer. Click POSTs the turn's OBSERVED telemetry to /api/eval/report (server reuses evals.ts to compute +
+// save a Model-Evaluation brief), then swaps to an "Open in Reports" link that opens the saved report. Shown
+// only when the turn made tool calls - a pure-text answer has nothing to evaluate. The run-meta + link text
+// are set via textContent (never interpolated), so a hostile model id / path can't break out of the markup.
+function appendRunReport(host: HTMLElement, turn: EvalReportTurn): void {
+  const foot = el(`<div class="runfoot">
+    <span class="runmeta"></span>
+    <span class="spacer"></span>
+    <button class="btn cta report-cta" type="button">${icon("report", 14)}<span class="rc-t">Generate engineering report</span></button>
+    <span class="reportlink" hidden>${icon("report", 14)}<span class="rc-lbl"></span><a href="#" class="rc-open">Open in Reports</a></span>
+  </div>`);
+  const files = new Set(turn.tools.filter((t) => t.path && (t.add != null || t.del != null)).map((t) => t.path)).size;
+  ($(".runmeta", foot) as HTMLElement).textContent = `· ${turn.tools.length} step${turn.tools.length === 1 ? "" : "s"} · ${files} file${files === 1 ? "" : "s"}`;
+  ($(".rc-lbl", foot) as HTMLElement).textContent = "Run report ready — ";
+  const btn = $(".report-cta", foot) as HTMLButtonElement;
+  const link = $(".reportlink", foot) as HTMLElement;
+  btn.addEventListener("click", async () => {
+    btn.disabled = true; btn.classList.add("busy");
+    btn.innerHTML = `${icon("refresh", 14, "spin")}<span class="rc-t">Generating…</span>`;
+    const res = await bridge.evalReport(turn).catch(() => null);
+    if (res && res.rel) {
+      btn.hidden = true; link.hidden = false;
+      ($(".rc-open", link) as HTMLElement).addEventListener("click", (ev) => { ev.preventDefault(); void openReportEntry("brief", res.rel!, res.title); });
+    } else {
+      btn.disabled = false; btn.classList.remove("busy");
+      btn.innerHTML = `${icon("report", 14)}<span class="rc-t">Generate engineering report</span>`;
+      showToast({ tone: "warn", title: "Could not generate report", desc: "The Model-Evaluation report couldn't be saved.", timeout: 2800 });
+    }
+  });
+  host.append(foot);
+}
+
 // P-CHAT.A + P-CHAT.B: on SETTLE, transform the finished answer. If the turn made tool calls (`marks`), thread
 // each one back into the prose as an expandable CHIP anchored where it fired (P-CHAT.B); otherwise split the
 // answer into collapsible sections on the model's own headings / rules (P-CHAT.A). A trivial no-tool answer
@@ -1289,6 +1322,7 @@ async function send(): Promise<void> {
   const subCards: { el: HTMLElement; finish: () => void }[] = []; // P-TASK.1 subagent delegation cards
   const marks: ToolMark<ChipData>[] = []; // P-CHAT.B (ADR-0189): tool calls anchored by answer-buffer length, interleaved into the answer on settle
   const dropThoughtsWindow = () => thoughts?.el.remove(); // once chips carry the activity, the live thoughts window is redundant
+  const failures: { tool: string; reason: string; cmd?: string }[] = []; // P-CHAT.C (ADR-0190): this turn's failed (non-quarantined) tool calls, feed the eval report's fail-rate / wasted-token metrics
   let buf = "";
   const t0 = Date.now();
   // Cold start: the timer is already ticking but nothing has arrived - show an intent-aware
@@ -1346,6 +1380,22 @@ async function send(): Promise<void> {
     subCards.forEach((c) => c.finish());
     permCards.forEach((c) => c.finalize()); // any unanswered prompt = denied (matches server fail-close)
   };
+  // P-CHAT.C (ADR-0190): assemble this turn's OBSERVED telemetry (tokens/cost, tool calls + diffstats,
+  // failures) into the shape /api/eval/report consumes; the run-footer CTA POSTs it to build the report.
+  const buildEvalTurn = (): EvalReportTurn => ({
+    runId: `run-${t0}`,
+    model: state.model || "model",
+    ctxTokens: tok,
+    outputTokens: tps.tokenCount,
+    totalTokens: tok + tps.tokenCount,
+    costUsd: cost,
+    tools: marks.map((m) => ({ name: m.chip.k, path: m.data.code?.path, add: m.chip.diffstat?.add, del: m.chip.diffstat?.del })),
+    failures: failures.slice(),
+    subagents: subCards.length,
+    when: new Date(t0).toISOString().slice(0, 10),
+  });
+  // Only a tool-USING turn gets the CTA (a pure-text answer has nothing to evaluate). Appended once, at settle.
+  const maybeAppendReport = () => { if (marks.length > 0) appendRunReport(textEl, buildEvalTurn()); };
   const onEvent = (e: ChatEvent) => {
     if (e.type === "token") { reasoning?.finish(Date.now() - t0); buf += e.text; countDelta(e.text); if (!sawTool) setPhase(writeLine); streamEl.innerHTML = renderMarkdown(buf) + `<span class="cursor"></span>`; paintHud(); scrollChat(); }
     else if (e.type === "thinking") {
@@ -1380,19 +1430,19 @@ async function send(): Promise<void> {
       if (e.egress || e.exec) egressDock().appendChild(card.el);
       else { hud.before(card.el); scrollChat(); }
     }
-    else if (e.type === "block") onBlock(e);
+    else if (e.type === "block") { if (e.quarantined === false) failures.push({ tool: e.tool, reason: e.reason, cmd: e.command }); onBlock(e); } // P-CHAT.C (ADR-0190): a failed (not quarantined) tool call feeds the run's eval metrics
     else if (e.type === "preview-available") onPreviewAvailable(e.path);
     else if (e.type === "preview-activity") flashPreviewTesting(e.label); // P-PREVIEW.6a (ADR-0153)
     else if (e.type === "design-available") showToast({ tone: "ok", title: "DESIGN.md is ready", desc: "The agent wrote your design invariants — review + edit them in the IDE.", actions: [{ label: "Review in the IDE", kind: "ok", run: () => void openDesignInIde() }], timeout: 10000 }); // P-FIGMA.2 (ADR-0154)
     else if (e.type === "agent-builder-open") openAgentBuilderWithSpec(e.spec); // P-AGENT.8.2
     else if (e.type === "slash-command-created") void onSlashCommandCreated(e.command); // P-CMD.1
     else if (e.type === "usage") { tok = e.used; cost = e.cost; state.liveUsage = { used: e.used, size: e.size, cost: e.cost }; paintHud(); renderStatus(); renderMetricsRail(); }
-    else if (e.type === "done") { if (e.text && e.text.length > buf.length) buf = e.text; /* reconcile a lossy stream with the server's full reply */ const chipped = renderAnswerBody(streamEl, buf, marks); /* P-CHAT.A sections / P-CHAT.B chips */ (node as MsgNode)._md = buf; finishHud(); if (chipped) dropThoughtsWindow(); /* chips now carry the activity */ state.streaming = false; setSendEnabled(); clearPreviewTesting(); }
+    else if (e.type === "done") { if (e.text && e.text.length > buf.length) buf = e.text; /* reconcile a lossy stream with the server's full reply */ const chipped = renderAnswerBody(streamEl, buf, marks); /* P-CHAT.A sections / P-CHAT.B chips */ (node as MsgNode)._md = buf; finishHud(); if (chipped) dropThoughtsWindow(); /* chips now carry the activity */ maybeAppendReport(); /* P-CHAT.C: settled-turn report CTA */ state.streaming = false; setSendEnabled(); clearPreviewTesting(); }
   };
   try { await bridge.sendPrompt(sendText, onEvent, images); }
   finally {
     (node as MsgNode)._md = buf;
-    if (state.streaming) { const chipped = renderAnswerBody(streamEl, buf, marks); /* P-CHAT.A sections / P-CHAT.B chips */ finishHud(); if (chipped) dropThoughtsWindow(); state.streaming = false; setSendEnabled(); } else { finishHud(); }
+    if (state.streaming) { const chipped = renderAnswerBody(streamEl, buf, marks); /* P-CHAT.A sections / P-CHAT.B chips */ finishHud(); if (chipped) dropThoughtsWindow(); maybeAppendReport(); /* P-CHAT.C: settled-turn report CTA */ state.streaming = false; setSendEnabled(); } else { finishHud(); }
     void renderSessions(); void refreshBudget(false); void syncMode();
     scheduleKnowledgeRefresh(); // #54 follow-up: new facts appear in the open KG without close/reopen
     // P-ACP.4: the turn ended - fire off any pre-staged prompt now (the composer is idle again).
