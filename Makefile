@@ -633,3 +633,6 @@ demo-P-EVAL.2: ## P-EVAL.2 (ADR-0187): the API-latency CAPTURE + PERSISTENCE pip
 .PHONY: demo-P-EVAL.3
 demo-P-EVAL.3: ## P-EVAL.3 Part A (ADR-0187): the per-run eval-metrics PERSISTENCE pipeline - evalMetricsForTurn maps an observed turn to EvalMetrics (reuses P-CHAT.C + P-EVAL.1), the GUI-side sink flattens it to a sample + appends to an append-only JSONL keeping the honesty rule (a no-signal metric is null not 0, tier preserved), the single-writer ingest loads eval_metrics idempotently on run_id, and readEvalMetricsRows round-trips the rows back (NULLs + tiers intact) for the cross-run rollup
 	$(BUN) run harness/scripts/demo_peval3.ts
+.PHONY: demo-P-EVAL.3b
+demo-P-EVAL.3b: ## P-EVAL.3 Part B (ADR-0187): the cross-run Model-Evaluation ROLLUP report (the /api/eval/rollup path) - the eval-metrics + latency JSONL ledgers ingest into a throwaway GUI-owned DuckDB, aggregateEvalMetrics rolls per model (means over runs-with-signal; a no-signal metric stays "no signal", never a fake 0), rollupLatency adds the per-model p50/p95, and the combined ASCII markdown (xychart-beta the viewer bar-ifies) saves as an `evals` brief; an empty ledger yields a friendly report, never an error
+	$(BUN) run harness/scripts/demo_peval3b.ts

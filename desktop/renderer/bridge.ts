@@ -403,6 +403,8 @@ export interface LucidBridge {
   reportToKg(kind: string, rel: string, scope: string, archived?: boolean): Promise<{ ok: boolean; error?: string } | null>;
   /** P-CHAT.C (ADR-0190): build + save a Model-Evaluation brief from a settled turn's observed telemetry. */
   evalReport(turn: EvalReportTurn): Promise<EvalReportResult | null>;
+  /** P-EVAL.3 Part B (ADR-0187): build + save the cross-run Model-Evaluation rollup from persisted metrics + latency. */
+  evalRollup(): Promise<EvalReportResult | null>;
   /** P-EXEC.3: "TLDR" - plain-language explanation of a command via a cheap keyed model. */
   explainCommand(command: string): Promise<{ ok: boolean; text?: string; model?: string; error?: string } | null>;
   /** P-REPORT.6: the Security control crosswalk as an eMASS-aligned POA&M CSV. */
@@ -810,6 +812,7 @@ export const bridge: LucidBridge = {
   reports: (archived) => getData(`/api/reports${archived ? "?archived=1" : ""}`),
   report: (kind, rel, archived) => getData(`/api/report?kind=${encodeURIComponent(kind)}&rel=${encodeURIComponent(rel)}${archived ? "&archived=1" : ""}`),
   evalReport: (turn) => post("/api/eval/report", turn), // P-CHAT.C (ADR-0190)
+  evalRollup: () => post("/api/eval/rollup", {}), // P-EVAL.3 Part B (ADR-0187)
   triviaReseed: (opts) => post("/api/trivia/reseed", opts), // P-TRIV.4 (ADR-0191)
   reportArchive: (kind, rel) => post("/api/report/archive", { kind, rel }),
   reportRestore: (kind, rel) => post("/api/report/restore", { kind, rel }),
