@@ -13162,6 +13162,27 @@ Realizes this ADR's "next": the per-turn latency capture + the frozen DuckDB sch
   -> readback -> rollup -> view). SCOPED OUT / next: `eval_metrics` population + the report surfacing
   (query -> rollup -> accordion) = P-EVAL.3.
 
+### P-EVAL.3 Part A delta - per-run eval-metrics persistence (BUILT, branch `feat/p-eval-3-report`)
+
+Populates the `eval_metrics` table (frozen empty by 0011) using the SAME read-only-DB pattern as P-EVAL.2's
+api_latency: the GUI can't co-write, so it appends a flat sample and the single writer ingests it.
+
+- `eval_report.ts` gains `evalMetricsForTurn(observedTurn) -> EvalMetrics` (the same buildRunRecord +
+  computeEvalMetrics `renderTurnEvalReport` already runs, exposed so the route can persist without a double
+  render). Non-breaking addition.
+- `desktop/eval_metrics_log.ts` `recordEvalMetrics(metrics, ts)` flattens EvalMetrics (the Metric objects)
+  to a `EvalMetricsSample` - each metric's `.value` becomes a nullable column, its `.tier` is kept in
+  `tiers` - and appends to `~/.omp/lucid-eval-metrics.jsonl`. Guarded + fail-open. The `/api/eval/report`
+  route (P-CHAT.C) now records alongside saving the brief, so every generated report also persists its run.
+- `harness/memory/eval_metrics_ingest.ts` (single writer): `ingestEvalMetrics` (idempotent on `run_id`) +
+  `readEvalMetricsRows` (ts as UNIX ms, model/window scoped) for Part B's cross-run rollup.
+- **The honesty rule survives the round-trip:** a metric with no signal (no tests/AC/lint) is stored NULL,
+  never 0, and its `needs_signal` tier restores from the `tiers` JSON. Over-tested (`eval_metrics_ingest`
+  asserts null-not-zero + tier both directions).
+- Tests: `eval_metrics_log.test.ts` (3) + `eval_metrics_ingest.test.ts` (6) + `demo-P-EVAL.3`. SCOPED OUT /
+  next: Part B - the cross-run rollup aggregator + the eval report kind surfaced through the P-REPORT.4
+  viewer (the viewer already bar-ifies the xychart markdown, and role=`evals` briefs already list + open).
+
 ## ADR-0188 - P-CHAT.A: sectioned agent turn (pure core BUILT; WIRED onto master; live-streaming QA pending)
 
 **Date:** 2026-07-07 (re-integrated onto master v1.10.5, 2026-07-08)

@@ -630,3 +630,6 @@ demo-P-STALL.1: ## P-STALL.1 (ADR-0186): patience for overloaded providers - the
 .PHONY: demo-P-EVAL.2
 demo-P-EVAL.2: ## P-EVAL.2 (ADR-0187): the API-latency CAPTURE + PERSISTENCE pipeline - the GUI-side sink turns t_sent/t_first_token/t_end into a LatencySample appended to an append-only JSONL (the GUI opens the observer DB read-only), the frozen migration 0011 creates api_latency + eval_metrics + the latency_rollup view, the single-writer ingest loads the JSONL idempotently, and readLatencyCalls round-trips the rows back into evals.ts's ApiLatencyCall (ok-only) so rollupLatency + render stay the P-EVAL.1 source of truth
 	$(BUN) run harness/scripts/demo_peval2.ts
+.PHONY: demo-P-EVAL.3
+demo-P-EVAL.3: ## P-EVAL.3 Part A (ADR-0187): the per-run eval-metrics PERSISTENCE pipeline - evalMetricsForTurn maps an observed turn to EvalMetrics (reuses P-CHAT.C + P-EVAL.1), the GUI-side sink flattens it to a sample + appends to an append-only JSONL keeping the honesty rule (a no-signal metric is null not 0, tier preserved), the single-writer ingest loads eval_metrics idempotently on run_id, and readEvalMetricsRows round-trips the rows back (NULLs + tiers intact) for the cross-run rollup
+	$(BUN) run harness/scripts/demo_peval3.ts
