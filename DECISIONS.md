@@ -13134,6 +13134,33 @@ ADR-A016 (private per-platform export + dashboard rollups), P-LOC.1/ADR-0031 (`a
 `parseChartRows`/`buildScoreChart` (P-REPORT.4), `speakable`/podcast (P-REPORT.7). Future: P-EVAL.2
 (capture hook + frozen migrations), P-EVAL.3 (report kinds + render + accordion).
 
+### P-EVAL.2 delta - API-latency capture + persistence (BUILT, branch `feat/p-eval-2-latency-capture`)
+
+Realizes this ADR's "next": the per-turn latency capture + the frozen DuckDB schema.
+
+- **The read-only-DB constraint drove the shape.** The GUI opens `agent_obs.duckdb` READ-ONLY (the omp
+  child is the single writer), so the capture at the chat seam cannot write DuckDB. Mirroring
+  `turns_log.ts` / `security_log.ts`, `desktop/latency_log.ts` appends each turn's sample to an
+  append-only JSONL (`~/.omp/lucid-latency.jsonl`); the single writer ingests it into `api_latency`
+  (`harness/memory/latency_ingest.ts`, idempotent on `id` - exactly like telemetry `events.jsonl` ->
+  `telemetry_events`). Fully guarded + fail-open: a capture failure never touches the chat turn.
+- **The capture hook** taps three timestamps inside `acp_backend.prompt()`: `t_sent` at the
+  `session/prompt` send, `t_first_token` on the first token/thinking chunk (via the existing event
+  `sink`), `t_end` at settle; `ok=false` on a stall/error; model from `activeModel()`, context tokens +
+  cost from the last `usage` event (no reliable server-side per-turn output count, so `tokens_out` stays
+  null - honest).
+- **Frozen migration `0011_eval_latency.sql`** (invariant #10): `api_latency` (yields evals.ts's
+  `ApiLatencyCall {model,ts,ttftMs,totalMs,ok}` + nullable token/cost provenance), `eval_metrics` (one
+  row per run of `computeEvalMetrics`, NULL-not-zero, honesty `tiers` as JSON - created now, POPULATED in
+  P-EVAL.3), and a timezone-naive `latency_rollup` view (a quick per-model×UTC-hour aggregate over `ok`
+  calls; the DST-correct ET business-hours p50/p95 stays evals.ts `rollupLatency` on the raw rows).
+- **`readLatencyCalls` defaults to ok-only** - a stall is a failure, not a latency measurement, and
+  `rollupLatency` doesn't filter on `ok`; `includeFailed` reads errored turns for an error-rate view.
+  So the persisted rows feed the P-EVAL.1 rollup UNCHANGED (P-EVAL.1 stays the source of truth).
+- Tests: `latency_log.test.ts` (6) + `latency_ingest.test.ts` (8) + `demo-P-EVAL.2` (full sink -> ingest
+  -> readback -> rollup -> view). SCOPED OUT / next: `eval_metrics` population + the report surfacing
+  (query -> rollup -> accordion) = P-EVAL.3.
+
 ## ADR-0188 - P-CHAT.A: sectioned agent turn (pure core BUILT; WIRED onto master; live-streaming QA pending)
 
 **Date:** 2026-07-07 (re-integrated onto master v1.10.5, 2026-07-08)
