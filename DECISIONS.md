@@ -12956,3 +12956,48 @@ toggle kept the menu open and the state survived close/reopen, Export ran the re
 
 ADR-0184 (P-KGUI.1 - the pattern + the follow-up note this fulfills), ADR-0034/0035 (the import
 flow, rewired not changed), ADR-0014 (CUI isolation the archive serves).
+
+## ADR-0186 - P-STALL.1: patience for overloaded providers (10-min turn, visible waiting), BUILT
+
+**Date:** 2026-07-06
+**Status:** Accepted / Built + tested (timers pinned by source tests; a real overload window can't be
+reproduced on demand - the contract is pinned instead).
+
+### Context
+
+During a provider overload window the user watched multiple models (Gemini, Claude Opus 4.8, Fable)
+sit for minutes with no reply. Two defects compounded: the chat stall watchdog killed the turn at
+5 minutes with an error that FALSELY said "the model did not respond for 2 minutes" (stale text from
+before ADR-0060 raised the cap), and the wait itself was invisible - a silent provider looked
+exactly like a hung app, so giving up early was rational. Killing an overloaded turn also throws
+away the request's queue position and re-pays the prompt.
+
+### Decision
+
+1. **IDLE_MS 300_000 → 600_000** (10 min). Native providers stream within seconds; the headroom is
+   for non-streamed AskSage AND overload windows where the first token takes minutes.
+2. **The wait is visible** (`SLOW_NOTICE_MS = 120_000`): at each silent 2-minute mark the backend
+   emits a new ChatEvent `{ type: "slow", waitedMs }` (through onEvent DIRECTLY, never the sink -
+   telling the user we're waiting must not count as activity; both clocks pause with pendingPerms
+   and clear on any real event). The renderer sets the HUD phase to "Still waiting on the provider ·
+   silent for N min" (the next real token replaces it naturally) and shows a once-per-turn toast
+   naming the 10-minute cap and the way out (Stop).
+3. **The stall error can never lie again**: its duration is DERIVED from IDLE_MS
+   (`Math.round(Backend.IDLE_MS / 60_000)`), and the wording names overload/rate-limit and suggests
+   retrying or switching models. A source-pin test asserts the derivation and that the stale "2
+   minutes" text is gone; another pins the renderer's `TURN_PATIENCE_MS` to the backend constant so
+   the toast's stated cap can't drift.
+4. Wording lives in a pure module (`desktop/renderer/stall_notice.ts`) - minute math floors and
+   never says "0 min".
+
+### Verified
+
+4 tests (label/toast copy + the two lockstep source pins) + demo-P-STALL.1 green. Root tsc clean.
+Full bun test at the known Windows baseline. Renderer boots clean with the new event in the bundle
+(scratch server, zero console errors). A live 2-minute provider silence cannot be produced on
+demand; the timer/event/renderer contract is what the tests pin.
+
+### Relates to
+
+ADR-0060 (auto-continue wellness checks - the eventual stall-to-resume path), ADR-0074 (turn
+diagnostics this reuses), ADR-0104 (ChatEvent surface extended).
