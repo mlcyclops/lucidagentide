@@ -636,3 +636,6 @@ demo-P-EVAL.3: ## P-EVAL.3 Part A (ADR-0187): the per-run eval-metrics PERSISTEN
 .PHONY: demo-P-EVAL.3b
 demo-P-EVAL.3b: ## P-EVAL.3 Part B (ADR-0187): the cross-run Model-Evaluation ROLLUP report (the /api/eval/rollup path) - the eval-metrics + latency JSONL ledgers ingest into a throwaway GUI-owned DuckDB, aggregateEvalMetrics rolls per model (means over runs-with-signal; a no-signal metric stays "no signal", never a fake 0), rollupLatency adds the per-model p50/p95, and the combined ASCII markdown (xychart-beta the viewer bar-ifies) saves as an `evals` brief; an empty ledger yields a friendly report, never an error
 	$(BUN) run harness/scripts/demo_peval3b.ts
+.PHONY: demo-P-COLLAB.1
+demo-P-COLLAB.1: ## P-COLLAB.1 (ADR-0192): the live-collaboration transport KEYSTONE - a host mints a room (id + 32B key + 16B write token) + a full/view invite link (roomId.base64url(secret), reusing omp's @oh-my-pi/pi-wire constants), SEALS a LUCID ChatEvent frame (AES-256-GCM, [12B IV][ct+tag]) + envelopes it with its peer id, and a guest holding the link unpacks + opens it end-to-end; the relay only ever sees opaque bytes (a wrong key can't open, a tampered byte fails the tag), and a view link is read-only. The relay client, host/guest, and Share UI are P-COLLAB.2-.4
+	$(BUN) run harness/scripts/demo_pcollab1.ts
