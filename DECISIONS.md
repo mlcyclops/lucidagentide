@@ -13320,6 +13320,25 @@ replies have no live anchors so they sectionize without chips (a P-RESUME.1 step
 chips anchor at BLOCK boundaries, not mid-paragraph inline as hand-drawn in the mock. Next: P-CHAT.C (run
 engineering-report button + `/api/eval/report` route reusing `evals.ts` from ADR-0187).
 
+### P-CHAT.B.1 delta - the settled-turn activity regression (BUILT, branch `feat/p-chat-b1-activity`)
+
+In-app QA surfaced a regression: on a SHORT / flat answer the original P-CHAT.B always dropped the live
+activity window and interleaved chips - but with no mid-answer block boundaries every chip's anchor snapped
+to the answer END, so the turn read as a pile of coarse "other" chips with the rich activity (tool detail,
++/- diffstats, code drilldowns, subagent detail) gone. Root cause: `shouldInterleave` returned true for ANY
+chip, so the window was dropped even when nothing actually interleaved.
+
+- `answer_chips.ts` gains `chipsInterleave(parts)` - true ONLY when a chip is SANDWICHED between prose blocks
+  (prose before AND after), i.e. threading it inline genuinely breaks up the answer. A chip that only
+  leads/trails the prose (the short/flat case), or an all-chips answer, returns false. app.ts
+  `renderAnswerBody` now gates the chipped path on `chipsInterleave` instead of `shouldInterleave`, so when
+  chips would only pile at the edge the window is KEPT (its `.thoughts` steps already carry the diffstat
+  badges + `renderToolCode` drilldowns).
+- The subagent delegation card no longer collapses on settle (`createSubagentCard.finish` dropped its
+  `toggle(false)`), so each subagent's thinking/tools/runs (P-TASK.5) stay visible after the turn.
+- Verified: `chipsInterleave` unit cases; the settled `subagent done open` card shows its run detail
+  (preview); typecheck + demo-P-CHAT.B green; app boots clean. Live streaming settle path = in-app QA.
+
 ## ADR-0190 - P-CHAT.C: settled-turn "Generate engineering report" CTA + /api/eval/report reusing evals.ts (pure core BUILT; WIRED onto master; server route verified end-to-end)
 
 **Date:** 2026-07-07

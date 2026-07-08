@@ -27,7 +27,7 @@ import { createTriviaGame, isTriviaQuestion, triviaExplainHtml, triviaQuestionHt
 import { bankForRole } from "./trivia_roles.ts"; // P-TRIV.2 (ADR-0175): role-aware banks
 import { isIntelNewsItem, newsLineHtml } from "./trivia_news.ts"; // P-TRIV.3 (ADR-0176): the executive INTEL WIRE
 import { sectionizeAnswer, shouldSectionize, type AnswerSection } from "./answer_sections.ts"; // P-CHAT.A (ADR-0188): settled-turn collapsible sections
-import { interleaveChips, shouldInterleave, toolChip, type ToolMark, type ToolChip } from "./answer_chips.ts"; // P-CHAT.B (ADR-0189): inline tool-event chips
+import { interleaveChips, chipsInterleave, toolChip, type ToolMark, type ToolChip } from "./answer_chips.ts"; // P-CHAT.B (ADR-0189) + .B.1: inline tool-event chips (only when they interleave)
 import { MARKET_PLUGINS, marketplaceHtml, marketRowsHtml } from "./marketplace.ts"; // P-MARKET.1 (ADR-0158)
 import { toolfailGroupHtml, type ToolFailEntry } from "./toolfail_group.ts"; // P-TOOLFAIL.2 (ADR-0163)
 import { APP_VERSION } from "../version.ts";
@@ -1165,16 +1165,16 @@ function appendRunReport(host: HTMLElement, turn: EvalReportTurn): void {
   host.append(foot);
 }
 
-// P-CHAT.A + P-CHAT.B: on SETTLE, transform the finished answer. If the turn made tool calls (`marks`), thread
-// each one back into the prose as an expandable CHIP anchored where it fired (P-CHAT.B); otherwise split the
-// answer into collapsible sections on the model's own headings / rules (P-CHAT.A). A trivial no-tool answer
-// renders exactly as before (byte-identical inline). Streaming stays a single live flow (unchanged); `_md`
-// still holds the full markdown, so copy / save-as-.md are untouched. Returns true when chips were interleaved
-// (the caller then drops the now-redundant live thoughts window). `marks` is absent on restored/static replies.
+// P-CHAT.A + P-CHAT.B: on SETTLE, transform the finished answer. If the turn made tool calls (`marks`) AND the
+// chips GENUINELY interleave between prose blocks (P-CHAT.B.1), thread each one back into the prose as an
+// expandable CHIP anchored where it fired (P-CHAT.B) and return true so the caller drops the now-redundant live
+// activity window. Otherwise - a trivial answer, or a short/flat answer where every chip would just pile at the
+// end - split on the model's own headings (P-CHAT.A) and KEEP the live activity window (its tool steps carry the
+// diffstats + code drilldowns). Streaming stays one flow; `_md` holds the full markdown (copy/save untouched).
 function renderAnswerBody(container: HTMLElement, md: string, marks?: readonly ToolMark<ChipData>[]): boolean {
   if (marks && marks.length) {
     const parts = interleaveChips(md, marks);
-    if (shouldInterleave(parts)) {
+    if (chipsInterleave(parts)) {
       container.textContent = "";
       container.classList.add("answer-chipped");
       for (const p of parts) { if (p.kind === "prose") renderProse(container, p.md); else container.appendChild(createChipRow(p.chip, p.data)); }
@@ -1254,7 +1254,9 @@ function createSubagentCard(e: Extract<ChatEvent, { type: "subagent" }>): { el: 
       if (done) return; done = true;
       window.clearInterval(runsTimer);
       void refreshRuns(); // one final tail so the card shows each run's ending state
-      win.removeAttribute("data-streaming"); win.classList.add("done"); toggle(false);
+      // P-CHAT.B.1: keep the delegation card EXPANDED on settle so each subagent's thinking/tools stay
+      // visible after the turn (P-TASK.5 collapsed it, which hid the detail); the user can still fold it.
+      win.removeAttribute("data-streaming"); win.classList.add("done");
     },
   };
 }

@@ -6,7 +6,7 @@
 // interleave (a chip never splits a paragraph or a code fence; anchors before/after the answer lead/trail).
 
 import { expect, test } from "bun:test";
-import { classifyTool, interleaveChips, shouldInterleave, toolChip, type ToolMark } from "./answer_chips.ts";
+import { classifyTool, interleaveChips, shouldInterleave, chipsInterleave, toolChip, type ToolMark } from "./answer_chips.ts";
 
 test("classifyTool maps tool names to chip kinds (edit/write win before read/search)", () => {
   expect(classifyTool("edit")).toBe("edit");
@@ -113,4 +113,19 @@ test("shouldInterleave is true only when a chip is present", () => {
   const chip = toolChip("read", "x");
   expect(shouldInterleave(interleaveChips("just prose", []))).toBe(false);
   expect(shouldInterleave(interleaveChips("prose", [{ offset: 0, chip, data: 0 }]))).toBe(true);
+});
+
+test("chipsInterleave: true only when a chip is SANDWICHED between prose (not a lead/trailing edge pile)", () => {
+  const chip = toolChip("read", "x");
+  // short/flat answer, chip snaps to the end -> trailing edge, NOT a genuine interleave (keep the window)
+  expect(chipsInterleave(interleaveChips("one short line", [{ offset: 9999, chip, data: 0 }]))).toBe(false);
+  // two blocks with a chip anchored at the SECOND block's boundary -> prose|chip|prose -> genuine interleave
+  const md = "para one\n\npara two";
+  expect(chipsInterleave(interleaveChips(md, [{ offset: md.indexOf("para two"), chip, data: 0 }]))).toBe(true);
+  // a LEAD chip before the only prose block is not an interleave
+  expect(chipsInterleave(interleaveChips("solo", [{ offset: 0, chip, data: 0 }]))).toBe(false);
+  // no chips at all
+  expect(chipsInterleave(interleaveChips("just prose", []))).toBe(false);
+  // an answer that is ALL chips / no prose keeps the window too
+  expect(chipsInterleave([{ kind: "chip", chip, data: 0 }] as any)).toBe(false);
 });

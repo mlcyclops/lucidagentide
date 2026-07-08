@@ -143,3 +143,15 @@ export function interleaveChips<T>(md: string, marks: readonly ToolMark<T>[]): T
 export function shouldInterleave(parts: readonly TurnPart<unknown>[]): boolean {
   return parts.some((p) => p.kind === "chip");
 }
+
+/** P-CHAT.B.1: true only when chips GENUINELY interleave - at least one chip is SANDWICHED between prose
+ *  blocks (prose both before and after it), so threading it inline breaks up the answer where the tool fired.
+ *  A chip that only LEADS or TRAILS the prose (a short/flat answer where every anchor snaps to the answer
+ *  edge) is not an interleave: the caller then KEEPS the live activity window (tool steps + diffstats + code
+ *  drilldowns) instead of dumping a pile of edge chips. An all-chips / no-prose answer stays with the window. */
+export function chipsInterleave(parts: readonly TurnPart<unknown>[]): boolean {
+  let firstProse = -1, lastProse = -1;
+  for (let i = 0; i < parts.length; i++) if (parts[i]!.kind === "prose") { if (firstProse < 0) firstProse = i; lastProse = i; }
+  if (firstProse < 0) return false;
+  return parts.some((p, i) => p.kind === "chip" && i > firstProse && i < lastProse);
+}
