@@ -13686,3 +13686,35 @@ the deployable itself, not just the library. relay_server.test.ts (real sockets)
 
 **Deferred:** the FastAPI add-on-repo variant (spec'd, not built here); autocert (Let's Encrypt) baked into the
 image; a metrics/Prometheus endpoint.
+
+---
+
+## ADR-0196 — P-COLLAB.10: the guest end-to-end (Join panel)
+
+**Status:** Accepted (2026-07-09). Extends ADR-0192-0195.
+
+**Context.** All the pieces existed (host, relay, embedded-relay toggle, deployable broker, guest logic) but no
+one could actually WATCH: the invite link didn't say WHERE to connect, and there was no guest UI.
+
+**Decision.**
+- **`link.ts`** now carries the relay endpoint: `formatRelayLink(wsBase, roomId, key[, token])` →
+  `<wss://relay>/r/<roomId>.<secret>`, and `parseShareLink` returns `relay` (the ws(s):// endpoint, normalized
+  from the browser `https://…/#` form too; null for a bare link → the guest falls back to its configured
+  relay). The manager mints endpoint-carrying view/full links.
+- **dev.ts** guest session: `POST /api/collab/join` parses the pasted link, resolves + **authorizes** the relay
+  endpoint (fail-closed via managed `allowedRelays`), connects a `CollabGuest` over a `CollabSocket`, and
+  streams its view (`welcome`/`event`/`state`/`error`/`end`) to the renderer as NDJSON until it ends;
+  `POST /api/collab/leave` stops. One watched session at a time (Phase 1).
+- **renderer**: `bridge.collabJoin(link, onFrame)` (peeks content-type to surface a JSON error vs the stream)
+  + `collabLeave`; a `openJoinPanel()` modal (reached from the Share panel) — paste link → Connect → a simple
+  read-only live transcript (replayed turns + streaming tokens) + participant count + Leave. Still view-only.
+
+**Verification.** link.test.ts +3 (endpoint round-trip, browser-form normalization, bare→null) + the existing
+manager/link tests still green (54 collab tests). Verified LIVE in the preview: enable the embedded relay →
+start a share (invite link now carries `ws://127.0.0.1:8790/r/…`) → **Join** it from the same instance → the
+guest received the E2E welcome and rendered "Watching LUCID session · <host> · <model> · read-only", 1 watching.
+Live token streaming over the identical host→relay→guest path is proven by demo-P-COLLAB.4/.9.
+
+**Deferred:** the WebRTC transport as a P2P option for the guest (the transport is built, ADR-0194; needs
+signaling routed over the broker); multi-session watching; richer guest rendering (tools/thinking, the full
+answer renderer); guest-WRITE (prompt/abort) through the host's fail-closed scan gate.

@@ -7538,6 +7538,7 @@ function openSharePanel(): void {
     <h2 class="modal-title" id="shareTitle">Share this session · live</h2>
     <p class="modal-desc">Invite someone to watch this session in real time. The invite is end-to-end encrypted - your relay only ever sees ciphertext - and guests are <b>view-only</b>.</p>
     <div id="shareBody" class="share-body"><div class="share-loading">${icon("refresh", 14)} Loading…</div></div>
+    <div class="share-join-cta"><button class="btn-mini" data-open-join>${icon("eye", 12)} Join someone else's session instead</button></div>
   </div></div>`);
   let poll: number | undefined;
   const close = () => { if (poll) clearInterval(poll); ov.remove(); document.removeEventListener("keydown", onKey); };
@@ -7587,6 +7588,7 @@ function openSharePanel(): void {
   ov.addEventListener("click", async (ev) => {
     const t = ev.target as HTMLElement;
     if (t === ov || t.closest("[data-share-close]")) { close(); return; }
+    if (t.closest("[data-open-join]")) { close(); openJoinPanel(); return; }
     const copy = t.closest("[data-copy]") as HTMLElement | null;
     if (copy) { const v = copy.dataset.copy ?? ""; try { await navigator.clipboard.writeText(v); showToast({ title: `${copy.dataset.copyWhat ?? "Copied"} copied`, desc: "Paste it to your guest.", timeout: 1800 }); } catch { showToast({ tone: "warn", title: "Couldn't copy", desc: "Copy it from the field instead." }); } return; }
     if (t.closest("[data-share-start]")) {
@@ -7612,6 +7614,86 @@ function openSharePanel(): void {
   });
   document.body.append(ov);
   void draw();
+}
+
+// P-COLLAB.10 (ADR-0196): the GUEST Join panel - paste an invite link, watch the shared session read-only.
+// A simple live transcript (replayed turns + streaming tokens) is enough for Phase 1; the host still runs
+// everything. Single instance; closes on X / backdrop / Escape (which also leaves the session).
+type JoinState = { header: import("./bridge.ts").CollabSessionHeaderView | null; turns: { role: string; text: string }[]; pending: string; participants: number; note: string | null; readOnly: boolean };
+function openJoinPanel(): void {
+  if ($("#joinModal")) return;
+  const ov = el(`<div id="joinModal" class="modal-ov"><div class="modal join-modal" role="dialog" aria-modal="true" aria-labelledby="joinTitle">
+    <button class="set-close" data-join-close aria-label="Close">${icon("close", 16)}</button>
+    <div class="modal-icon">${icon("eye", 24)}</div>
+    <h2 class="modal-title" id="joinTitle">Join a shared session</h2>
+    <p class="modal-desc">Paste an invite link to watch someone's LUCID session live, <b>read-only</b>. It's end-to-end encrypted - the relay only ever sees ciphertext.</p>
+    <div id="joinBody" class="join-body"></div>
+  </div></div>`);
+  const st: JoinState = { header: null, turns: [], pending: "", participants: 0, note: null, readOnly: true };
+  let joined = false;
+  const close = () => { if (joined) void bridge.collabLeave().catch(() => {}); joined = false; ov.remove(); document.removeEventListener("keydown", onKey); };
+  const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") { e.preventDefault(); close(); } };
+  document.addEventListener("keydown", onKey);
+  const body = $("#joinBody", ov) as HTMLElement;
+
+  const connectHtml = () => `
+    <label class="share-lbl">Invite link</label>
+    <div class="share-field"><input id="joinLink" class="share-link-input" type="text" placeholder="wss://relay…/r/room.secret  (or paste the link you were sent)" spellcheck="false" /></div>
+    <div id="joinErr" class="modal-err" hidden></div>
+    <div class="modal-actions"><button class="btn-mini ok" data-join-connect>${icon("eye", 12)} Connect</button></div>`;
+  const liveHtml = () => {
+    const h = st.header;
+    const turns = st.turns.map((tn) => `<div class="join-turn ${tn.role}"><span class="join-role">${tn.role === "user" ? "host" : "assistant"}</span><div class="join-text">${esc(tn.text)}</div></div>`).join("");
+    const pending = st.pending ? `<div class="join-turn assistant"><span class="join-role">assistant</span><div class="join-text">${esc(st.pending)}<span class="join-cursor">▋</span></div></div>` : "";
+    const ended = st.note ? `<div class="join-ended">${icon("info", 13)} ${esc(st.note)}</div>` : "";
+    return `
+      <div class="join-head">${st.note ? icon("info", 13) : `<span class="share-live-dot"></span>`}<span>${st.note ? "Ended" : "Watching"} <b>${esc(h?.title ?? "session")}</b>${h ? ` · ${esc(h.hostName)} · ${esc(h.model)}` : ""} <span class="share-peer-tag">read-only</span></span></div>
+      <div class="join-transcript" id="joinTranscript">${turns}${pending}${turns || pending ? "" : `<div class="join-turn-empty">${icon("clock", 13)} Waiting for the host…</div>`}</div>
+      ${ended}
+      <div class="join-foot"><span class="join-watchers">${st.participants} watching</span>${st.note ? `<button class="btn-mini" data-join-close>${icon("check", 12)} Close</button>` : `<button class="btn-mini danger" data-join-leave>${icon("close", 12)} Leave</button>`}</div>`;
+  };
+  const renderConnect = () => { body.innerHTML = connectHtml(); setTimeout(() => ($("#joinLink", ov) as HTMLInputElement | null)?.focus(), 30); };
+  const renderLive = () => {
+    body.innerHTML = liveHtml();
+    const tr = $("#joinTranscript", ov); if (tr) tr.scrollTop = tr.scrollHeight; // keep the latest in view
+  };
+
+  const onFrame = (f: import("./bridge.ts").CollabGuestFrame) => {
+    switch (f.kind) {
+      case "welcome":
+        st.header = f.header; st.readOnly = f.readOnly; st.participants = f.participants.length;
+        st.turns = f.transcript.map((x) => ({ role: x.role, text: x.text })); st.pending = "";
+        break;
+      case "event": {
+        const e = f.event;
+        if (e.type === "token") st.pending += e.text;
+        else if (e.type === "done") { const txt = (typeof e.text === "string" && e.text.trim()) ? e.text : st.pending; if (txt.trim()) st.turns.push({ role: "assistant", text: txt }); st.pending = ""; }
+        // thinking / tools / others are the host's business; keep the guest view a clean transcript
+        break;
+      }
+      case "state": st.participants = f.participants.length; break;
+      case "error": st.note = f.message; break;
+      case "end": st.note = f.reason || "the session ended"; joined = false; break;
+    }
+    renderLive();
+  };
+
+  ov.addEventListener("click", async (ev) => {
+    const t = ev.target as HTMLElement;
+    if (t === ov || t.closest("[data-join-close]")) { close(); return; }
+    if (t.closest("[data-join-leave]")) { await bridge.collabLeave().catch(() => {}); joined = false; st.note = "you left the session"; renderLive(); return; }
+    if (t.closest("[data-join-connect]")) {
+      const link = ($("#joinLink", ov) as HTMLInputElement | null)?.value.trim() ?? "";
+      const err = $("#joinErr", ov) as HTMLElement | null;
+      if (!link) { if (err) { err.textContent = "Paste the invite link you were sent."; err.hidden = false; } return; }
+      joined = true; st.note = null; renderLive();
+      // stream frames until the session ends; a parse/policy failure arrives as an error frame
+      void bridge.collabJoin(link, onFrame);
+      return;
+    }
+  });
+  renderConnect();
+  document.body.append(ov);
 }
 
 // P-MARKET.1 (ADR-0158): the Plugin Marketplace popup - a curated, searchable catalog (Excalidraw pinned

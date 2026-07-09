@@ -3107,3 +3107,26 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .share-serve-hint code,.share-serve-card code{background:var(--bg-0);border:1px solid var(--line);border-radius:5px;padding:0 5px;font-size:11px}
 .share-managed{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--txt-3);margin-top:9px;padding-top:8px;border-top:1px solid var(--line-soft)}
 .share-managed .ic{color:var(--txt-4)}
+
+/* P-COLLAB.10: the guest Join panel */
+.share-join-cta{margin-top:12px;padding-top:11px;border-top:1px solid var(--line-soft);text-align:center}
+.share-join-cta .btn-mini{color:var(--txt-2)}
+.join-modal{max-width:520px;position:relative;text-align:left}
+.join-modal .modal-title,.join-modal .modal-desc{text-align:left}
+.join-body{margin-top:6px}
+.join-head{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--txt);margin:2px 0 9px}
+.join-head .ic{color:var(--accent-2)}
+.join-transcript{max-height:340px;overflow:auto;display:flex;flex-direction:column;gap:11px;padding:11px;
+  background:var(--bg-0);border:1px solid var(--line);border-radius:10px}
+.join-turn{display:flex;flex-direction:column;gap:3px}
+.join-role{font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--txt-3)}
+.join-turn.user .join-role,.join-turn.host .join-role{color:var(--accent-2)}
+.join-text{font-size:13px;line-height:1.55;color:var(--txt);white-space:pre-wrap;word-break:break-word}
+.join-cursor{color:var(--accent-2);animation:sharePulse 1s steps(2) infinite;margin-left:1px}
+.join-turn-empty{display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--txt-3);padding:8px 2px}
+.join-turn-empty .ic{color:var(--txt-4)}
+.join-ended{display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--txt-2);margin-top:10px;
+  background:var(--bg-2);border:1px solid var(--line);border-radius:8px;padding:8px 11px}
+.join-ended .ic{color:var(--accent-2)}
+.join-foot{display:flex;align-items:center;justify-content:space-between;margin-top:12px}
+.join-watchers{font-size:12px;color:var(--txt-3)}

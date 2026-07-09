@@ -94,6 +94,10 @@ import { spawn as spawnChild } from "node:child_process";
 import { installRegistrySkill, type RegistrySkillArtifact } from "./skills_registry.ts"
 import { CollabManager } from "./collab/manager.ts"; // P-COLLAB.3 (ADR-0192): the live-share host lifecycle
 import { CollabSocket } from "./collab/relay_client.ts";
+import { CollabGuest } from "./collab/guest.ts"; // P-COLLAB.10 (ADR-0196): watch a shared session read-only
+import { parseShareLink } from "./collab/link.ts";
+import { importRoomKey } from "./collab/crypto.ts";
+import { authorizeRelayConnect } from "./managed_config.ts";
 import { collabRelayConfig, setCollabRelay } from "./settings_store.ts";
 import { hostname as osHostname } from "node:os";
 import { analyzeWork, codifyCandidate, gatherWorkDigest, type SkillCandidate, type StudioWindow } from "./skill_studio.ts"
@@ -194,6 +198,11 @@ function effectiveRelay(): { wsBase: string; httpBase: string; label: string; so
   const r = collabRelayConfig();
   return r ? { wsBase: r.wsBase, httpBase: r.httpBase, label: r.label, source: r.source } : null;
 }
+
+// P-COLLAB.10 (ADR-0196): the one shared session this backend is WATCHING as a guest (Phase 1: one at a time).
+let collabGuest: { guest: CollabGuest; sock: CollabSocket } | null = null;
+function collabDisplayName(): string { const s = loadSettings(); return (s.username ?? "").trim() || osHostname(); }
+function leaveCollabGuest(): void { try { collabGuest?.guest.leave("you left the session"); } catch { /* already gone */ } collabGuest = null; }
 
 const collabManager = new CollabManager({
   resolveRelay: () => effectiveRelay(),
@@ -1877,6 +1886,37 @@ const server = Bun.serve({
         const port = Number.isFinite(Number(b.port)) && Number(b.port) > 0 ? Number(b.port) : DEFAULT_RELAY_PORT;
         const r = serveRelay(host, port);
         return r.ok ? json({ ok: true, data: relayServeStatus() }) : json({ ok: false, error: r.error });
+      }
+      // P-COLLAB.10 (ADR-0196): JOIN a shared session as a read-only guest. Parse the pasted invite, resolve +
+      // authorize the relay endpoint (fail-closed via managed allowedRelays), connect a CollabGuest, and stream
+      // its view (welcome / event / state / error / end) to the renderer as NDJSON until it ends. `leave` stops.
+      if (p === "/api/collab/leave" && req.method === "POST") { leaveCollabGuest(); return json({ ok: true, data: { left: true } }); }
+      if (p === "/api/collab/join" && req.method === "POST") {
+        const b = await readBody<{ link?: unknown }>(req);
+        let parsed;
+        try { parsed = parseShareLink(String(b.link ?? "")); } catch { return json({ ok: false, error: "that invite link is malformed" }); }
+        const relayBase = parsed.relay || effectiveRelay()?.wsBase || null;
+        if (!relayBase) return json({ ok: false, error: "this link carries no relay, and no relay is configured to fall back to" });
+        const authz = authorizeRelayConnect(relayBase, managedConfig().config);
+        if (!authz.ok) return json({ ok: false, error: authz.reason });
+        leaveCollabGuest(); // Phase 1: one watched session at a time
+        return ndjsonStream("collab-join", (emit) => new Promise<void>((resolve) => {
+          void (async () => {
+            let key: CryptoKey;
+            try { key = await importRoomKey(parsed.key); } catch { emit({ kind: "error", message: "the invite link's key is invalid" }); resolve(); return; }
+            const wsUrl = `${relayBase.replace(/\/+$/, "")}/r/${parsed.roomId}`;
+            const sock = new CollabSocket({ wsUrl, role: "guest", key });
+            const guest = new CollabGuest(sock, { name: collabDisplayName(), writeToken: parsed.writeToken }, {
+              onWelcome: (w) => emit({ kind: "welcome", header: w.header, transcript: w.transcript, participants: w.participants, readOnly: w.readOnly }),
+              onEvent: (e) => emit({ kind: "event", event: e }),
+              onState: (participants, model, contextPct) => emit({ kind: "state", participants, model, contextPct }),
+              onError: (m) => emit({ kind: "error", message: m }),
+              onEnd: (reason) => { emit({ kind: "end", reason }); if (collabGuest?.guest === guest) collabGuest = null; resolve(); },
+            });
+            collabGuest = { guest, sock };
+            guest.start();
+          })();
+        }));
       }
       // P-GOAL.1 (ADR-0046): run a /goal loop — maker iterations + a separate verifiable checker, capped
       // and gated. Streams the same NDJSON chat events plus goal-iter / goal-check / goal-done / goal-stop.
