@@ -21,7 +21,23 @@
 //     idle timeout,
 //   - it only forwards ciphertext - a hostile connection learns nothing and cannot inject a valid frame.
 
-import { packEnvelope, unpackEnvelope } from "./crypto.ts";
+// The relay is a DUMB forwarder: it only ever reads + rewrites the 4-byte plaintext peer header and passes the
+// opaque sealed payload through. So it needs neither WebCrypto nor `@oh-my-pi/pi-wire` - the header ops are
+// inlined here, which keeps the STANDALONE broker (tools/relay) dependency-free (just Bun + this file).
+const ENVELOPE_HEADER_LENGTH = 4;
+/** Prepend a 4-byte big-endian peer id to an opaque sealed payload. */
+function packEnvelope(peerId: number, sealed: Uint8Array): Uint8Array {
+  const out = new Uint8Array(ENVELOPE_HEADER_LENGTH + sealed.byteLength);
+  new DataView(out.buffer).setUint32(0, peerId >>> 0, false);
+  out.set(sealed, ENVELOPE_HEADER_LENGTH);
+  return out;
+}
+/** Split a wire envelope into `{ peerId, sealed }`. Throws if it is shorter than the header. */
+function unpackEnvelope(buf: Uint8Array): { peerId: number; sealed: Uint8Array } {
+  if (buf.byteLength < ENVELOPE_HEADER_LENGTH) throw new Error("envelope too short");
+  const peerId = new DataView(buf.buffer, buf.byteOffset, ENVELOPE_HEADER_LENGTH).getUint32(0, false);
+  return { peerId, sealed: buf.subarray(ENVELOPE_HEADER_LENGTH) };
+}
 
 export interface RelayServerOptions {
   /** 0 lets the OS choose a free port (read it back from the handle). */
@@ -38,6 +54,9 @@ export interface RelayServerOptions {
    *  import) so relay_server stays pure + testable; the real caller passes the managed authorizeRelayBind.
    *  If it returns `{ok:false}`, startRelayServer THROWS before opening the listener (fail-closed). */
   authorizeBind?: (host: string, port: number) => { ok: boolean; reason?: string };
+  /** ADR-0195 (P-COLLAB.9): PEM cert + key to serve `wss://` directly (the standalone broker on a jumpbox).
+   *  Omit to serve plain `ws://` (loopback / behind a TLS-terminating reverse proxy). */
+  tls?: { cert: string; key: string };
   onLog?: (msg: string, detail?: unknown) => void;
 }
 
@@ -81,8 +100,15 @@ export function startRelayServer(opts: RelayServerOptions): RelayHandle {
   const server = Bun.serve<SockData>({
     port: cfg.port,
     hostname: cfg.hostname,
+    ...(cfg.tls ? { tls: { cert: cfg.tls.cert, key: cfg.tls.key } } : {}),
     fetch(req, srv) {
       const url = new URL(req.url);
+      // ADR-0195 (P-COLLAB.9): an ops health probe for the standalone broker (load balancers / k8s). It
+      // exposes only aggregate counts - never a roomId, key, or any session bytes.
+      if (url.pathname === "/healthz") {
+        let peers = 0; for (const r of rooms.values()) peers += r.guests.size + (r.host ? 1 : 0);
+        return new Response(JSON.stringify({ ok: true, service: "lucid-collab-relay", rooms: rooms.size, peers }), { headers: { "content-type": "application/json" } });
+      }
       const m = url.pathname.match(/^\/r\/([^/]+)$/);
       if (!m) return new Response("not a relay room", { status: 404 });
       const role = url.searchParams.get("role");

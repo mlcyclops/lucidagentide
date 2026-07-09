@@ -1,0 +1,49 @@
+# Copyright (c) 2026 TechLead 187 LLC
+# SPDX-License-Identifier: BUSL-1.1
+#
+# tools/relay/lucid-relay.service — P-COLLAB.9 (ADR-0195): systemd unit for the standalone LUCID collab relay
+# on an Ubuntu 24 jumpbox / office server / DGX Spark. Install:
+#   sudo useradd --system --no-create-home --shell /usr/sbin/nologin lucid-relay
+#   sudo git clone <repo> /opt/lucidagentide     # or copy desktop/collab/relay_server.ts + tools/relay/serve.ts
+#   sudo cp tools/relay/lucid-relay.service /etc/systemd/system/
+#   sudo systemctl enable --now lucid-relay
+# Edit HOST/PORT + uncomment TLS_* below (or terminate TLS at nginx/caddy and keep it on loopback).
+
+[Unit]
+Description=LUCID collab relay broker (P-COLLAB.9)
+Documentation=file:/opt/lucidagentide/tools/relay/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=lucid-relay
+Group=lucid-relay
+WorkingDirectory=/opt/lucidagentide
+# `bun` is expected on PATH (e.g. /usr/local/bin/bun). Adjust ExecStart if installed elsewhere.
+ExecStart=/usr/local/bin/bun run tools/relay/serve.ts
+Environment=HOST=0.0.0.0
+Environment=PORT=8790
+Environment=MAX_ROOMS=256
+Environment=MAX_PEERS_PER_ROOM=16
+Environment=IDLE_TIMEOUT_SEC=120
+# Serve wss:// directly by pointing these at a cert + key readable by the lucid-relay user:
+#Environment=TLS_CERT=/etc/lucid/relay.crt
+#Environment=TLS_KEY=/etc/lucid/relay.key
+Restart=on-failure
+RestartSec=3
+
+# Hardening — the relay needs no local files (self-contained) and no elevated privileges.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6
+LockPersonality=true
+MemoryDenyWriteExecute=false
+
+[Install]
+WantedBy=multi-user.target

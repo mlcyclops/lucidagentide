@@ -13643,3 +13643,46 @@ WebRTC; drive `CollabHost`/`CollabGuest` with the WebRTC transport renderer-side
 ChatEvent stream); STUN/TURN config (self-hosted coturn for sovereign/air-gap); a per-guest peer connection
 for multi-watcher (WebRTC is 1:1, the relay stays the multi-party path); the UI. NAT still needs a coordination
 point - the relay brokers the handshake + is the E2E fallback.
+
+---
+
+## ADR-0195 — P-COLLAB.9: the standalone relay broker
+
+**Status:** Accepted (2026-07-09). Extends ADR-0192/0193/0194.
+
+**Context.** A relay bound to `127.0.0.1` reaches only the same machine; to let a different person watch, both
+peers need a rendezvous they can reach. On a LAN/VPN you bind a reachable IP; across networks you want a shared
+broker you control. This broker is ALSO the coordination point the WebRTC path (ADR-0194) needs — it relays
+only the SDP/ICE handshake, then the peers go direct. Question raised: package it as a service (the user
+suggested a FastAPI app for a DGX Spark / Ubuntu 24 jumpbox).
+
+**Decision.** Ship the broker as **`tools/relay/`** — the same relay the desktop embeds, packaged headless:
+- `tools/relay/serve.ts` — a CLI entrypoint (env / `--flag` config: HOST/PORT, TLS_CERT/TLS_KEY for `wss://`,
+  MAX_ROOMS / MAX_PEERS_PER_ROOM / MAX_FRAME_BYTES / IDLE_TIMEOUT_SEC), graceful SIGINT/SIGTERM shutdown, a
+  periodic status line. Standalone defaults to `0.0.0.0:8790` (it exists to be reached); the desktop embed
+  still defaults to loopback.
+- `relay_server.ts` gained optional `tls` (Bun serves `wss://` directly) + a `/healthz` probe (aggregate
+  counts only — never a roomId/key/session bytes), and was made **self-contained**: the 4-byte envelope header
+  ops are inlined, so it imports NOTHING (no WebCrypto, no `@oh-my-pi/pi-wire`). The standalone deploy is
+  therefore two files + Bun, zero npm deps.
+- `tools/relay/Dockerfile` (a tiny 2-file image), `tools/relay/lucid-relay.service` (a hardened systemd unit
+  for Ubuntu 24), and `tools/relay/README.md` (local addon / office server / DGX Spark / jumpbox; TLS direct or
+  reverse-proxy; firewall; wiring LUCID clients + the `collab.allowedRelays` governance).
+
+**Language — TypeScript, not FastAPI (invariant #2).** This repo's only Python is the scanner sidecar. The
+relay logic is already written + tested here, and a relay is a dumb byte forwarder (not a REST/validation API),
+so packaging it in TS is one language + zero new attack surface. A FastAPI/`uvicorn` relay for a Python-first
+ops shop is a straightforward reimplementation of the IDENTICAL wire protocol (`…/r/<roomId>?role=`, `[4B BE
+peerId]` + opaque payload, JSON control, fatal `4004`/`4009`/`4029`) and belongs in the **private add-on repo**
+as enterprise deployment IP — LUCID clients connect to either without change.
+
+**Security.** Unchanged from ADR-0193: forwards only opaque E2E-sealed frames (never holds a room key → can't
+read/forge); hard limits bound DoS; `/healthz` leaks only counts. Governance: managed `collab.allowedRelays`
+restricts which broker clients may use; `collab.allowedBinds` restricts who may host.
+
+**Verification.** demo-P-COLLAB.9 spawns `bun run tools/relay/serve.ts` as a SEPARATE process and drives a real
+host + guest through it (welcome → live event → bye), asserting `/healthz` reflects the live room — validating
+the deployable itself, not just the library. relay_server.test.ts (real sockets) + tsc + license green.
+
+**Deferred:** the FastAPI add-on-repo variant (spec'd, not built here); autocert (Let's Encrypt) baked into the
+image; a metrics/Prometheus endpoint.
