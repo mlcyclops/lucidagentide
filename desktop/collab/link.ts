@@ -18,6 +18,10 @@ export interface ParsedShareLink {
   roomId: string;
   key: Uint8Array; // 32 bytes
   writeToken: Uint8Array | null; // 16 bytes on a full link; null on a view link (read-only)
+  // P-COLLAB.10: the ws(s):// relay endpoint the guest should connect to, parsed from an endpoint-carrying
+  // link (`<wss://relay>/r/roomId.secret` or the browser `https://relay/#…` form). null for a bare link
+  // (the guest then falls back to its configured relay).
+  relay: string | null;
 }
 
 function b64urlEncode(bytes: Uint8Array): string {
@@ -54,16 +58,34 @@ export function formatBrowserLink(relayHttpBase: string, bareLink: string): stri
   return `${relayHttpBase.replace(/\/+$/, "")}/#${bareLink}`;
 }
 
+/** P-COLLAB.10: the shareable invite that CARRIES the relay endpoint a guest connects to:
+ *  `<wss://relay:port>/r/<roomId>.<secret>`. This is what LUCID hands to a guest (the bare form doesn't say
+ *  WHERE to connect). Omit `writeToken` for a VIEW (read-only) link. */
+export function formatRelayLink(relayWsBase: string, roomId: string, key: Uint8Array, writeToken?: Uint8Array | null): string {
+  return `${relayWsBase.replace(/\/+$/, "")}/r/${formatShareLink(roomId, key, writeToken)}`;
+}
+
+function httpToWs(u: string): string { return u.replace(/^https:/i, "wss:").replace(/^http:/i, "ws:"); }
+
 /** Parse any of the three forms into `{ roomId, key, writeToken }`. Throws on a malformed / wrong-size link
  *  (fail-closed: a bad link never yields a usable-looking half-parsed result). */
 export function parseShareLink(input: string): ParsedShareLink {
   let s = (input ?? "").trim();
   if (!s) throw new Error("empty link");
-  // browser form: take everything after the fragment
+  let relay: string | null = null;
+  // browser form: the relay http(s) base is before the fragment; the secret rides the fragment.
   const hash = s.indexOf("#");
-  if (hash >= 0) s = s.slice(hash + 1);
-  // relay-path form: `host/r/<roomId>.<secret>` -> keep the last path segment
-  else if (s.includes("/r/")) s = s.slice(s.lastIndexOf("/r/") + 3);
+  if (hash >= 0) {
+    const before = s.slice(0, hash).trim().replace(/\/+$/, "");
+    if (before) relay = httpToWs(before); // https://relay/#… -> wss://relay
+    s = s.slice(hash + 1);
+  } else if (s.includes("/r/")) {
+    // relay-path form: `<wss://relay:port>/r/<roomId>.<secret>` -> the relay endpoint is before `/r/`.
+    const idx = s.lastIndexOf("/r/");
+    const before = s.slice(0, idx).trim().replace(/\/+$/, "");
+    if (before) relay = before;
+    s = s.slice(idx + 3);
+  }
   s = s.trim();
 
   const dot = s.indexOf(".");
@@ -71,9 +93,9 @@ export function parseShareLink(input: string): ParsedShareLink {
   const roomId = s.slice(0, dot);
   const secret = b64urlDecode(s.slice(dot + 1));
 
-  if (secret.byteLength === ROOM_KEY_BYTES) return { roomId, key: secret, writeToken: null };
+  if (secret.byteLength === ROOM_KEY_BYTES) return { roomId, key: secret, writeToken: null, relay };
   if (secret.byteLength === ROOM_KEY_BYTES + WRITE_TOKEN_BYTES) {
-    return { roomId, key: secret.subarray(0, ROOM_KEY_BYTES), writeToken: secret.subarray(ROOM_KEY_BYTES) };
+    return { roomId, key: secret.subarray(0, ROOM_KEY_BYTES), writeToken: secret.subarray(ROOM_KEY_BYTES), relay };
   }
   throw new Error(`secret must be ${ROOM_KEY_BYTES} (view) or ${ROOM_KEY_BYTES + WRITE_TOKEN_BYTES} (full) bytes, got ${secret.byteLength}`);
 }

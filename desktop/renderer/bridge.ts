@@ -371,6 +371,16 @@ export interface CollabRelayServeStatus {
   rooms?: number;
   managed: { locked: boolean; allowServe: boolean; org: string | null };
 }
+/** P-COLLAB.10: the shared session's identity, as a joining guest receives it. */
+export interface CollabSessionHeaderView { sessionId: string; title: string; model: string; hostName: string; startedAt: number }
+/** P-COLLAB.10: the frames the guest stream (`/api/collab/join`) pushes to the Join panel. */
+export type CollabGuestFrame =
+  | { kind: "welcome"; header: CollabSessionHeaderView; transcript: { role: string; text: string }[]; participants: CollabParticipantView[]; readOnly: boolean }
+  | { kind: "event"; event: ChatEvent }
+  | { kind: "state"; participants: CollabParticipantView[]; model: string; contextPct: number | null }
+  | { kind: "error"; message: string }
+  | { kind: "end"; reason: string };
+
 export interface CollabShareStatus {
   active: boolean;
   roomId?: string;
@@ -517,6 +527,10 @@ export interface LucidBridge {
   // P-COLLAB.7: host the embedded relay on this device ("be the relay"), governance-gated + fail-closed.
   collabRelayServeStatus(): Promise<CollabRelayServeStatus | null>;
   collabRelayServe(patch: { enabled: boolean; host?: string; port?: number }): Promise<{ ok: boolean; status?: CollabRelayServeStatus; error?: string }>;
+  // P-COLLAB.10: JOIN a shared session read-only. `collabJoin` streams guest frames until the share ends or
+  // `collabLeave` is called; a synchronous parse/policy failure surfaces as an `{kind:"error"}` frame.
+  collabJoin(link: string, onFrame: (f: CollabGuestFrame) => void): Promise<void>;
+  collabLeave(): Promise<unknown>;
   sendPrompt(text: string, onEvent: (e: ChatEvent) => void, images?: { data: string; mimeType: string }[]): Promise<void>;
   // P-GOAL.1 (ADR-0046): run a /goal loop - streams the same events plus goal-iter/check/done/stop.
   runGoal(opts: GoalOpts, onEvent: (e: ChatEvent) => void): Promise<void>;
@@ -818,6 +832,44 @@ const streamChat = (text: string, onEvent: (e: ChatEvent) => void, images?: { da
   return streamNdjson("/api/chat", { text, ...(images?.length ? { images } : {}) }, onEvent, chatAbort.signal).finally(() => { chatAbort = null; });
 };
 
+// P-COLLAB.10: JOIN a shared session. /api/collab/join returns EITHER a JSON error envelope (malformed link /
+// policy refusal) OR an NDJSON stream of guest frames — so we peek the content-type and surface an error as a
+// frame. `collabLeave`/close aborts the client read so the Join panel settles even if the host is wedged.
+let collabJoinAbort: AbortController | null = null;
+const streamCollabJoin = async (link: string, onFrame: (f: CollabGuestFrame) => void): Promise<void> => {
+  collabJoinAbort?.abort();
+  collabJoinAbort = new AbortController();
+  let res: Response;
+  try {
+    res = await fetch("/api/collab/join", { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify({ link }), signal: collabJoinAbort.signal });
+  } catch (e) {
+    if (!collabJoinAbort?.signal.aborted) onFrame({ kind: "error", message: String((e as Error)?.message ?? "backend unreachable") });
+    return;
+  }
+  const ctype = res.headers.get("content-type") ?? "";
+  if (!res.ok || !res.body || ctype.includes("application/json")) {
+    let msg = `couldn't join (backend ${res.status})`;
+    try { const j = await res.json(); if (j?.error) msg = String(j.error); } catch { /* keep default */ }
+    onFrame({ kind: "error", message: msg });
+    return;
+  }
+  const reader = res.body.getReader();
+  const dec = new TextDecoder();
+  let buf = "";
+  const flush = (line: string) => { const s = line.trim(); if (!s) return; try { const f = JSON.parse(s); if (f && f.type === "ping") return; if (f && f.kind) onFrame(f as CollabGuestFrame); } catch { /* skip */ } };
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let nl: number;
+      while ((nl = buf.indexOf("\n")) >= 0) { flush(buf.slice(0, nl)); buf = buf.slice(nl + 1); }
+    }
+    flush(buf);
+  } catch { /* leave aborted the read - the panel's own state settles */ }
+  finally { collabJoinAbort = null; }
+};
+
 export const bridge: LucidBridge = {
   isElectron: !!shell?.isElectron,
   security: () => getData("/api/security"),
@@ -977,6 +1029,8 @@ export const bridge: LucidBridge = {
       return j?.ok ? { ok: true, status: j.data as CollabRelayServeStatus } : { ok: false, error: String(j?.error ?? `backend error ${r.status}`) };
     } catch (e) { return { ok: false, error: String((e as Error)?.message ?? "backend unreachable") }; }
   },
+  collabJoin: (link, onFrame) => streamCollabJoin(link, onFrame),
+  collabLeave: () => { collabJoinAbort?.abort(); return post("/api/collab/leave", {}); },
   getSettings: () => getData("/api/settings"),
   saveUsername: (username) => post("/api/settings", { username }),
   saveProfile: (p) => post("/api/settings", p),

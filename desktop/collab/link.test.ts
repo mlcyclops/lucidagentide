@@ -4,8 +4,42 @@
 // desktop/collab/link.test.ts — P-COLLAB.1 (ADR-0192): the invite link.
 
 import { test, expect } from "bun:test";
-import { generateRoomId, formatShareLink, formatBrowserLink, parseShareLink } from "./link.ts";
+import { generateRoomId, formatShareLink, formatBrowserLink, formatRelayLink, parseShareLink } from "./link.ts";
 import { generateRoomKey, generateWriteToken } from "./crypto.ts";
+
+// P-COLLAB.10: the invite carries the relay endpoint the guest connects to.
+test("formatRelayLink carries the relay endpoint; parse returns it (view + full)", () => {
+  const roomId = generateRoomId();
+  const key = generateRoomKey();
+  const token = generateWriteToken();
+  const view = formatRelayLink("wss://relay.corp.internal:8790", roomId, key);
+  const full = formatRelayLink("wss://relay.corp.internal:8790", roomId, key, token);
+  expect(view).toBe(`wss://relay.corp.internal:8790/r/${formatShareLink(roomId, key)}`);
+
+  const pv = parseShareLink(view);
+  expect(pv.relay).toBe("wss://relay.corp.internal:8790");
+  expect(pv.roomId).toBe(roomId);
+  expect(pv.writeToken).toBeNull(); // view = read-only
+  expect([...pv.key]).toEqual([...key]);
+
+  const pf = parseShareLink(full);
+  expect(pf.relay).toBe("wss://relay.corp.internal:8790");
+  expect(pf.writeToken).not.toBeNull();
+});
+
+test("the browser form's relay base is normalized to ws(s):// on parse", () => {
+  const roomId = generateRoomId();
+  const key = generateRoomKey();
+  const browser = formatBrowserLink("https://relay.example.com", formatShareLink(roomId, key));
+  expect(parseShareLink(browser).relay).toBe("wss://relay.example.com"); // https -> wss
+  expect(parseShareLink(formatBrowserLink("http://127.0.0.1:8790", formatShareLink(roomId, key))).relay).toBe("ws://127.0.0.1:8790");
+});
+
+test("a BARE link has no relay endpoint (guest falls back to its configured relay)", () => {
+  const roomId = generateRoomId();
+  const key = generateRoomKey();
+  expect(parseShareLink(formatShareLink(roomId, key)).relay).toBeNull();
+});
 
 test("a FULL link round-trips to the same key + write token (edit access)", () => {
   const roomId = generateRoomId();

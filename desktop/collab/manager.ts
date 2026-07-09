@@ -15,7 +15,7 @@
 // with guest-write OFF, so every guest - even one holding the full link - is read-only.
 
 import { CollabHost, type HostTransport } from "./host.ts";
-import { generateRoomId, formatShareLink, formatBrowserLink } from "./link.ts";
+import { generateRoomId, formatShareLink, formatBrowserLink, formatRelayLink } from "./link.ts";
 import { generateRoomKey, generateWriteToken, importRoomKey } from "./crypto.ts";
 import type { ChatEvent } from "../renderer/chat_events.ts";
 import type { CollabParticipant } from "./frames.ts";
@@ -90,9 +90,11 @@ export class CollabManager {
     });
     this.#host.start();
 
-    const fullLink = formatShareLink(roomId, rawKey, token);
-    const viewLink = formatShareLink(roomId, rawKey);
-    const browserLink = formatBrowserLink(relay.httpBase, viewLink);
+    // P-COLLAB.10: the shared links CARRY the relay endpoint (`<wss://relay>/r/roomId.secret`), so a guest who
+    // pastes one knows WHERE to connect without any extra config.
+    const fullLink = formatRelayLink(relay.wsBase, roomId, rawKey, token);
+    const viewLink = formatRelayLink(relay.wsBase, roomId, rawKey);
+    const browserLink = formatBrowserLink(relay.httpBase, formatShareLink(roomId, rawKey));
     this.#room = { roomId, fullLink, viewLink, browserLink, label: relay.label, source: relay.source, startedAt };
     return this.status();
   }
