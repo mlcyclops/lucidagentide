@@ -648,3 +648,6 @@ demo-P-COLLAB.3: ## P-COLLAB.3 (ADR-0192): the backend host LIFECYCLE (CollabMan
 .PHONY: demo-P-COLLAB.4
 demo-P-COLLAB.4: ## P-COLLAB.4/.5 (ADR-0192): the read-only GUEST + the OPTIONAL embedded relay, end-to-end over REAL localhost WebSockets - LUCID starts its OWN relay (127.0.0.1, no third party), a real host (CollabSocket+CollabHost) + real guest (CollabSocket+CollabGuest) connect through it: the guest pastes the view link + gets an E2E welcome, the host's live ChatEvents stream host->relay->guest read-only, the roster tracks a 2nd guest join/leave, a guest to a nonexistent room is refused (fail-closed, relay saw only ciphertext), and stop tells the guest. The Join panel UI + the 'be the relay' toggle are the UI slice
 	$(BUN) run harness/scripts/demo_pcollab4.ts
+.PHONY: demo-P-COLLAB.6
+demo-P-COLLAB.6: ## P-COLLAB.6 (ADR-0193): enterprise/MDM governance for the embedded relay - fail-closed + absolute allowlisting. Unmanaged = the user's call; a managed allowServe:false FORBIDS hosting (startRelayServer THROWS, no listener); under management a LAN/0.0.0.0 bind is REFUSED unless it's on the absolute host:port allowlist (localhost always ok); allowedRelays whitelists which relay endpoints a user may connect to (malformed fails closed). The 'be the relay' toggle UI reads this + managedLocks.collab
+	$(BUN) run harness/scripts/demo_pcollab6.ts
