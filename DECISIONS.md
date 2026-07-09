@@ -13605,3 +13605,41 @@ allowlist). The org's actual policy template is private add-on IP; this repo shi
 
 **Deferred:** the toggle/Join UI reads `managedLocks.collab` + calls these authorizers; audit events for
 share/relay start/stop/join.
+
+---
+
+## ADR-0194 — P-COLLAB.8: WebRTC P2P DataChannel transport (spike)
+
+**Status:** Accepted (2026-07-09). Extends ADR-0192/0193.
+
+**Context.** The relay path (P-COLLAB.2-.7) works, but a bare embedded relay bound to `127.0.0.1` reaches only
+the same machine, and any relay is a rendezvous the two peers both connect to. The user asked whether we can
+use an encrypted P2P tunnel "already in the build." Finding: **WebRTC is already in the build** - LUCID is
+Electron, so Chromium's WebRTC ships with us. It gives a DTLS-encrypted, NAT-traversing (ICE/STUN) P2P
+DataChannel; the only server it needs is a tiny SIGNALING broker for the SDP+ICE handshake, after which the
+session flows peer-to-peer and the relay sees nothing more. The unavoidable physics: crossing arbitrary NAT
+always needs SOME coordination point (STUN sees only IP:port; a fallback relay sees only ciphertext); it can
+be minimized, never zeroed.
+
+**Decision.** Add a WebRTC transport that is a drop-in for `CollabSocket` - same interface `CollabHost` /
+`CollabGuest` already drive - so the collab logic is unchanged; only the pipe differs.
+- `desktop/collab/signaling.ts` (PURE, DOM-free, unit-tested): the `SignalMessage` protocol (`sdp` / `ice` /
+  `bye`), the `SignalingChannel` interface, and a `LoopbackSignaling` hub for tests. SDP/ICE are plain-data
+  shapes so the module stays out of the no-DOM root program.
+- `desktop/collab/webrtc_transport.ts` (RENDERER-only - RTCPeerConnection is a Chromium API, not in Bun):
+  `WebRtcTransport` wraps an RTCPeerConnection + ordered DataChannel; fixed roles (host = offerer, guest =
+  answerer) so there is no glare; trickled ICE is buffered until the remote description is set. Frames are
+  STILL E2E-**sealed** with the room key over the DataChannel, so a relay that MITM'd the signaling would
+  broker a channel it cannot read (defense-in-depth on top of DTLS). Fail-closed: a bad-key/tampered frame or
+  a failed/closed connection terminates (no reconnect).
+
+**Verification.** signaling.test.ts (3, pure) + a LIVE preview proof that Chromium WebRTC in the Electron build
+establishes a `connected` DTLS DataChannel via offer/answer + trickled ICE and carries an AES-256-GCM-sealed
+collab frame end-to-end (the exact flow the transport implements). The `WebRtcTransport` class is renderer-only
+so it is not `bun test`-able; it is integration-verified when wired to the UI (next slice).
+
+**Deferred (next slice):** route signaling over the collab relay (host<->guest), so a real guest joins over
+WebRTC; drive `CollabHost`/`CollabGuest` with the WebRTC transport renderer-side (the renderer already has the
+ChatEvent stream); STUN/TURN config (self-hosted coturn for sovereign/air-gap); a per-guest peer connection
+for multi-watcher (WebRTC is 1:1, the relay stays the multi-party path); the UI. NAT still needs a coordination
+point - the relay brokers the handshake + is the E2E fallback.
