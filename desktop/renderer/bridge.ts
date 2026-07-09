@@ -360,7 +360,17 @@ export interface ManagedPolicy {
 // P-COLLAB.3 (ADR-0192): the live-share surface. `CollabParticipantView` mirrors the host's roster entry;
 // `CollabShareStatus` is what the Share panel polls; `CollabRelay` is the authorized relay (null = none).
 export interface CollabParticipantView { peerId: number; name: string; role: "host" | "guest"; access: "view" | "edit" }
-export interface CollabRelay { wsBase: string; httpBase: string; label: string; source: "self-hosted" | "public" }
+export interface CollabRelay { wsBase: string; httpBase: string; label: string; source: "self-hosted" | "public" | "embedded" }
+/** P-COLLAB.7: the embedded-relay ("be the relay") status the toggle polls. `managed.locked` disables the
+ *  control (+ "Managed by <org>"); `managed.allowServe:false` means the org forbids hosting a relay. */
+export interface CollabRelayServeStatus {
+  running: boolean;
+  hostname?: string;
+  port?: number;
+  wsBase?: string;
+  rooms?: number;
+  managed: { locked: boolean; allowServe: boolean; org: string | null };
+}
 export interface CollabShareStatus {
   active: boolean;
   roomId?: string;
@@ -504,6 +514,9 @@ export interface LucidBridge {
   collabStart(): Promise<{ ok: boolean; status?: CollabShareStatus; error?: string }>;
   collabStop(): Promise<CollabShareStatus | null>;
   collabSetRelay(patch: { url?: string; publicOptIn?: boolean }): Promise<{ relay: CollabRelay | null } | null>;
+  // P-COLLAB.7: host the embedded relay on this device ("be the relay"), governance-gated + fail-closed.
+  collabRelayServeStatus(): Promise<CollabRelayServeStatus | null>;
+  collabRelayServe(patch: { enabled: boolean; host?: string; port?: number }): Promise<{ ok: boolean; status?: CollabRelayServeStatus; error?: string }>;
   sendPrompt(text: string, onEvent: (e: ChatEvent) => void, images?: { data: string; mimeType: string }[]): Promise<void>;
   // P-GOAL.1 (ADR-0046): run a /goal loop - streams the same events plus goal-iter/check/done/stop.
   runGoal(opts: GoalOpts, onEvent: (e: ChatEvent) => void): Promise<void>;
@@ -956,6 +969,14 @@ export const bridge: LucidBridge = {
   },
   collabStop: () => post("/api/collab/stop", {}),
   collabSetRelay: (patch) => post("/api/collab/relay", patch),
+  collabRelayServeStatus: () => getData("/api/collab/relay/status"),
+  collabRelayServe: async (patch) => {
+    try {
+      const r = await fetch("/api/collab/relay/serve", { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify(patch) });
+      const j = await r.json();
+      return j?.ok ? { ok: true, status: j.data as CollabRelayServeStatus } : { ok: false, error: String(j?.error ?? `backend error ${r.status}`) };
+    } catch (e) { return { ok: false, error: String((e as Error)?.message ?? "backend unreachable") }; }
+  },
   getSettings: () => getData("/api/settings"),
   saveUsername: (username) => post("/api/settings", { username }),
   saveProfile: (p) => post("/api/settings", p),
