@@ -11,6 +11,7 @@
 // PURE: type declarations + a version constant only. No I/O.
 
 import type { ChatEvent } from "../renderer/chat_events.ts";
+import type { SignalMessage } from "./signaling.ts"; // P-COLLAB.11: WebRTC signaling carried over the relay
 
 /** Bumped when the frame shapes change incompatibly; a `hello`/`welcome` mismatch is refused, not guessed. */
 export const COLLAB_PROTOCOL_VERSION = 1;
@@ -63,10 +64,17 @@ export interface ErrorFrame { t: "error"; message: string }
 /** A joining guest introduces itself; `writeToken` (base64url) is present only from a FULL link. */
 export interface HelloFrame { t: "hello"; protocol: number; name: string; writeToken?: string }
 
+// ── either direction (P-COLLAB.11) ────────────────────────────────────────────
+/** WebRTC signaling carried over the collab transport: the relay brokers the SDP/ICE handshake, then the
+ *  peers go DIRECT P2P (ADR-0194). Flows both ways (host<->guest), so it belongs to neither sub-union. */
+export interface SignalFrame { t: "signal"; signal: SignalMessage }
+
 export type HostFrame = WelcomeFrame | EventFrame | StateFrame | ByeFrame | ErrorFrame;
 export type GuestFrame = HelloFrame;
-export type LucidCollabFrame = HostFrame | GuestFrame;
+export type LucidCollabFrame = HostFrame | GuestFrame | SignalFrame;
 
-/** Narrowing helpers (kept tiny + pure so the host/guest logic in P-COLLAB.2/.3 reads cleanly). */
-export const isHostFrame = (f: LucidCollabFrame): f is HostFrame => f.t !== "hello";
+/** Narrowing helpers (kept tiny + pure so the host/guest logic in P-COLLAB.2/.3 reads cleanly). A `signal`
+ *  frame is neither a host nor a guest session frame - the demux routes it to WebRTC signaling instead. */
+export const isSignalFrame = (f: LucidCollabFrame): f is SignalFrame => f.t === "signal";
+export const isHostFrame = (f: LucidCollabFrame): f is HostFrame => f.t !== "hello" && f.t !== "signal";
 export const isGuestFrame = (f: LucidCollabFrame): f is GuestFrame => f.t === "hello";

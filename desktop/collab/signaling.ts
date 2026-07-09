@@ -61,3 +61,32 @@ export class LoopbackSignaling {
     };
   }
 }
+
+/**
+ * P-COLLAB.11: a `SignalingChannel` that rides the collab RELAY. The SDP/ICE handshake is carried as
+ * `signal` frames over the existing collab transport (which seals + envelopes them), routed to one specific
+ * peer. This is what lets `WebRtcTransport`'s signaling reach the other side over the relay we already have -
+ * with no extra connection - before the peers go direct P2P. Frame-agnostic (the caller wraps/unwraps the
+ * `signal` frame), so this stays DOM-free + unit-testable.
+ */
+export class RelaySignaling implements SignalingChannel {
+  readonly #targetPeer: number;
+  readonly #sendSignal: (msg: SignalMessage, targetPeer: number) => void;
+  #cb: ((m: SignalMessage) => void) | null = null;
+  #closed = false;
+
+  /** `sendSignal` puts a signal on the wire to `targetPeer` (host = 0; a guest is its relay-assigned peer id). */
+  constructor(sendSignal: (msg: SignalMessage, targetPeer: number) => void, targetPeer: number) {
+    this.#sendSignal = sendSignal;
+    this.#targetPeer = targetPeer;
+  }
+
+  get peer(): number { return this.#targetPeer; }
+
+  send(msg: SignalMessage): void { if (!this.#closed) this.#sendSignal(msg, this.#targetPeer); }
+  onMessage(cb: (m: SignalMessage) => void): void { this.#cb = cb; }
+  close(): void { this.#closed = true; this.#cb = null; }
+
+  /** The demux calls this when a `signal` frame from THIS peer arrives over the collab transport. */
+  deliver(msg: SignalMessage): void { if (!this.#closed) this.#cb?.(msg); }
+}
