@@ -81,7 +81,8 @@ function settingsData() {
   const s = loadSettings();
   return { username: s.username ?? "", email: s.email ?? "", attribution: attribution(), role: roleChosen() ? userRole() : null, tourSeen: tourSeen() };
 }
-import { emailDomainAllowed, managedAsksageOnly, managedConfig, managedLocks, skipAllowed } from "./managed_config.ts";
+import { authorizeRelayBind, collabServeAllowed, emailDomainAllowed, managedAsksageOnly, managedConfig, managedLocks, skipAllowed } from "./managed_config.ts";
+import { startRelayServer, type RelayHandle } from "./collab/relay_server.ts"; // P-COLLAB.7 (ADR-0193): the optional embedded relay
 import { asksageConfig, listDatasets, listPersonas, monthlyTokens, scanPersona, wrapPersona } from "./asksage.ts";
 import { inspectSkill, listSkills, removeSkill, rescanSkill } from "./skills_data.ts"
 import { intelNews } from "./intel_news.ts"; // P-TRIV.3 (ADR-0176): the executive Trivia Wire's news feed
@@ -146,11 +147,56 @@ if (loadSettings().headroomEnabled) startHeadroom(); // resume the opt-in compre
 // P-COLLAB.3 (ADR-0192): the one live-share host for this backend. Real deps: a CollabSocket over the
 // authorized relay (self-hosted default; public opt-in), the current session's metadata for the welcome
 // header, and the wall clock. resolveRelay() returns null when no relay is authorized → start() fails closed.
+// P-COLLAB.7 (ADR-0193): the OPTIONAL embedded relay this device hosts ("be the relay" toggle). One per
+// backend; off until the user turns it on. Every start is governance-gated (fail-closed): a managed
+// allowServe:false or a bind outside the absolute allowlist is refused BEFORE any listener opens.
+let collabRelay: RelayHandle | null = null;
+const DEFAULT_RELAY_PORT = 8790;
+
+function relayServeStatus() {
+  const mc = managedConfig().config;
+  return {
+    running: !!collabRelay,
+    hostname: collabRelay?.hostname,
+    port: collabRelay?.port,
+    // The address a guest points at (only reachable per the bind: loopback = same machine / a tunnel).
+    wsBase: collabRelay ? `ws://${collabRelay.hostname}:${collabRelay.port}` : undefined,
+    rooms: collabRelay?.roomCount() ?? 0,
+    // Governance the toggle must honor: locked ⇒ disable the control; allowServe:false ⇒ can't turn on.
+    managed: { locked: managedLocks(mc).collab, allowServe: collabServeAllowed(mc), org: mc?.orgName ?? null },
+  };
+}
+
+/** Start (or restart) the embedded relay on host:port, fail-closed against managed policy. */
+function serveRelay(host: string, port: number): { ok: boolean; error?: string } {
+  const mc = managedConfig().config;
+  if (!collabServeAllowed(mc)) return { ok: false, error: `hosting a relay is disabled by ${mc?.orgName ?? "your organization"}` };
+  const authz = authorizeRelayBind(host, port, mc);
+  if (!authz.ok) return { ok: false, error: authz.reason };
+  try { collabRelay?.stop(); } catch { /* already gone */ }
+  try {
+    collabRelay = startRelayServer({ port, hostname: host, authorizeBind: (h, p) => authorizeRelayBind(h, p, mc) });
+    return { ok: true };
+  } catch (e) { collabRelay = null; return { ok: false, error: String((e as Error)?.message ?? e) }; }
+}
+
+function stopRelay(): void { try { collabRelay?.stop(); } catch { /* already gone */ } collabRelay = null; }
+// Best-effort: never leave the inbound listener open past the process (the OS reclaims the port anyway).
+process.on("exit", () => { try { collabRelay?.stop(); } catch { /* already gone */ } });
+
+/** The relay a new share will use: THIS device's embedded relay when running (no third party), else the
+ *  configured external relay (self-hosted default / public opt-in), else null (start fails closed). */
+function effectiveRelay(): { wsBase: string; httpBase: string; label: string; source: string } | null {
+  if (collabRelay) {
+    const origin = `${collabRelay.hostname}:${collabRelay.port}`;
+    return { wsBase: `ws://${origin}`, httpBase: `http://${origin}`, label: "this device (embedded relay)", source: "embedded" };
+  }
+  const r = collabRelayConfig();
+  return r ? { wsBase: r.wsBase, httpBase: r.httpBase, label: r.label, source: r.source } : null;
+}
+
 const collabManager = new CollabManager({
-  resolveRelay: () => {
-    const r = collabRelayConfig();
-    return r ? { wsBase: r.wsBase, httpBase: r.httpBase, label: r.label, source: r.source } : null;
-  },
+  resolveRelay: () => effectiveRelay(),
   sessionInfo: () => {
     const s = loadSettings();
     return {
@@ -1806,7 +1852,7 @@ const server = Bun.serve({
       // P-COLLAB.3 (ADR-0192): live session sharing. `status` is the Share panel's poll; `start` mints a
       // room + view/full links + stands up the host (fail-closed if no relay is authorized); `stop` ends it.
       // `relay` GET/POST reads + configures the authorized relay (self-hosted default, public opt-in).
-      if (p === "/api/collab/status") return json({ ok: true, data: { ...collabManager.status(), relay: collabRelayConfig() } });
+      if (p === "/api/collab/status") return json({ ok: true, data: { ...collabManager.status(), relay: effectiveRelay() } });
       if (p === "/api/collab/start" && req.method === "POST") {
         try { return json({ ok: true, data: await collabManager.start() }); }
         catch (e) { return json({ ok: false, error: String((e as Error)?.message ?? e) }); }
@@ -1820,6 +1866,17 @@ const server = Bun.serve({
           ...(typeof b.publicOptIn === "boolean" ? { publicOptIn: b.publicOptIn } : {}),
         });
         return json({ ok: true, data: { relay: collabRelayConfig() } });
+      }
+      // P-COLLAB.7 (ADR-0193): the "be the relay" toggle - host the embedded relay on this device.
+      // `serve` is governance-gated + fail-closed; `status` drives the toggle (running + bind + managed lock).
+      if (p === "/api/collab/relay/status") return json({ ok: true, data: relayServeStatus() });
+      if (p === "/api/collab/relay/serve" && req.method === "POST") {
+        const b = await readBody<{ enabled?: unknown; host?: unknown; port?: unknown }>(req);
+        if (b.enabled === false) { stopRelay(); return json({ ok: true, data: relayServeStatus() }); }
+        const host = typeof b.host === "string" && b.host.trim() ? b.host.trim() : "127.0.0.1";
+        const port = Number.isFinite(Number(b.port)) && Number(b.port) > 0 ? Number(b.port) : DEFAULT_RELAY_PORT;
+        const r = serveRelay(host, port);
+        return r.ok ? json({ ok: true, data: relayServeStatus() }) : json({ ok: false, error: r.error });
       }
       // P-GOAL.1 (ADR-0046): run a /goal loop — maker iterations + a separate verifiable checker, capped
       // and gated. Streams the same NDJSON chat events plus goal-iter / goal-check / goal-done / goal-stop.

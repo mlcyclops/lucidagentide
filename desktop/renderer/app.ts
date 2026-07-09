@@ -7486,13 +7486,40 @@ function shareBodyHtml(st: CollabShareStatus | null): string {
       <div id="shareRelayErr" class="modal-err" hidden></div>
       <div class="modal-actions"><button class="btn-mini ok" data-share-relay-save>${icon("check", 12)} Save relay</button></div>`;
   }
-  const src = st.relay.source === "public" ? "public relay" : "self-hosted relay";
+  const src = st.relay.source === "public" ? "public relay" : st.relay.source === "embedded" ? "no third party" : "self-hosted relay";
   return `
     <div class="share-ready-note">${icon("check", 13)}<span>Relay ready: <b>${esc(st.relay.label)}</b> <span class="share-peer-tag">${esc(src)}</span></span></div>
     <p class="share-hint">Starting a share opens an end-to-end-encrypted room and broadcasts this session live. Guests are view-only. You can stop any time.</p>
     <div class="modal-actions">
       <button class="btn-mini" data-share-relay-change>${icon("sliders", 12)} Change relay</button>
       <button class="btn-mini ok" data-share-start>${icon("share", 12)} Start sharing</button>
+    </div>`;
+}
+
+/** P-COLLAB.7: the "be the relay" toggle - host the embedded relay on this device (governance-gated). */
+function shareRelayServeHtml(serve: import("./bridge.ts").CollabRelayServeStatus | null): string {
+  if (!serve) return "";
+  const org = serve.managed.org ? esc(serve.managed.org) : "your organization";
+  if (!serve.managed.allowServe) {
+    return `<div class="share-serve-card locked">${icon("shield", 13)}<span>Hosting a relay on this device is disabled by <b>${org}</b>.</span></div>`;
+  }
+  const locked = serve.managed.locked;
+  const on = serve.running;
+  const bind = on ? `${esc(serve.hostname ?? "")}:${serve.port}` : "";
+  return `
+    <div class="share-serve-card">
+      <label class="share-serve-toggle">
+        <input type="checkbox" id="shareServeToggle" ${on ? "checked" : ""} ${locked ? "disabled" : ""} />
+        <span><b>Host the relay on this device</b> - no third party ever touches your session, even encrypted.</span>
+      </label>
+      ${on
+        ? `<div class="share-serve-on">${icon("check", 12)} Relay live on <code>${bind}</code> · new shares use this device.</div>`
+        : `<div class="share-serve-fields">
+             <input class="share-link-input" id="shareServeHost" type="text" value="127.0.0.1" spellcheck="false" aria-label="bind address" ${locked ? "disabled" : ""} />
+             <input class="share-link-input share-port" id="shareServePort" type="text" value="8790" spellcheck="false" aria-label="port" ${locked ? "disabled" : ""} />
+           </div>
+           <p class="share-serve-hint">Loopback (<code>127.0.0.1</code>) reaches a guest on this machine or over a tunnel/VPN; a LAN address may require an admin allowlist.</p>`}
+      ${locked ? `<div class="share-managed">${icon("shield", 11)} Managed by ${org}</div>` : ""}
     </div>`;
 }
 
@@ -7518,7 +7545,27 @@ function openSharePanel(): void {
   document.addEventListener("keydown", onKey);
   const body = $("#shareBody", ov) as HTMLElement;
 
-  const draw = async () => { const st = await bridge.collabStatus(); body.innerHTML = shareBodyHtml(st); void refreshShareDot(st); return st; };
+  // P-COLLAB.7: the "be the relay" toggle (a checkbox → change event, not a click).
+  ov.addEventListener("change", async (ev) => {
+    const t = ev.target as HTMLElement;
+    if (t.id !== "shareServeToggle") return;
+    const on = (t as HTMLInputElement).checked;
+    const host = ($("#shareServeHost", ov) as HTMLInputElement | null)?.value.trim() || "127.0.0.1";
+    const port = Number(($("#shareServePort", ov) as HTMLInputElement | null)?.value.trim() || "8790");
+    const r = await bridge.collabRelayServe({ enabled: on, host, port });
+    if (!r.ok) { showToast({ tone: "danger", title: on ? "Couldn't host the relay" : "Couldn't stop the relay", desc: r.error ?? "", timeout: 5000 }); }
+    else if (on) { showToast({ title: "Relay hosting on this device", desc: `Live on ${r.status?.hostname}:${r.status?.port} - new shares use it.`, timeout: 3000 }); }
+    await draw();
+  });
+
+  const draw = async () => {
+    const [st, serve] = await Promise.all([bridge.collabStatus(), bridge.collabRelayServeStatus()]);
+    // The "be the relay" toggle sits above the share flow in the non-live states; when a share is live the
+    // body is the roster + Stop, so the toggle is hidden (you can't change relay mid-share).
+    body.innerHTML = (st?.active ? "" : shareRelayServeHtml(serve)) + shareBodyHtml(st);
+    void refreshShareDot(st);
+    return st;
+  };
   // While a share is live, refresh only the roster in place (never clobbers copy buttons the user is using).
   const pollRoster = async () => {
     const st = await bridge.collabStatus();
