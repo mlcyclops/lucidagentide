@@ -7560,9 +7560,16 @@ function openSharePanel(): void {
 
   const draw = async () => {
     const [st, serve] = await Promise.all([bridge.collabStatus(), bridge.collabRelayServeStatus()]);
+    // When THIS device is hosting the relay, that IS the relay - so show the "ready" state (Start), never the
+    // external-relay setup form. Synthesize the relay locally so the UI is right even if the status poll
+    // hasn't folded the embedded relay in yet.
+    let show = st;
+    if (st && !st.active && !st.relay && serve?.running && serve.wsBase) {
+      show = { ...st, relay: { wsBase: serve.wsBase, httpBase: serve.wsBase.replace(/^ws/, "http"), label: "this device (embedded relay)", source: "embedded" } };
+    }
     // The "be the relay" toggle sits above the share flow in the non-live states; when a share is live the
     // body is the roster + Stop, so the toggle is hidden (you can't change relay mid-share).
-    body.innerHTML = (st?.active ? "" : shareRelayServeHtml(serve)) + shareBodyHtml(st);
+    body.innerHTML = (st?.active ? "" : shareRelayServeHtml(serve)) + shareBodyHtml(show);
     void refreshShareDot(st);
     return st;
   };

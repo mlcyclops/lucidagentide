@@ -3062,10 +3062,12 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .share-err{color:var(--amber)}
 .share-lbl{display:block;font-size:12px;font-weight:600;color:var(--txt-2);margin:12px 0 5px;letter-spacing:.01em}
 .share-linkrow{display:flex;gap:7px;align-items:center}
-.share-link-input{flex:1;min-width:0;background:var(--bg-0);border:1px solid var(--line-strong);border-radius:8px;
+.share-link-input{flex:1;min-width:0;box-sizing:border-box;background:var(--bg-0);border:1px solid var(--line-strong);border-radius:8px;
   padding:8px 10px;color:var(--txt);font:12px/1.4 var(--mono,ui-monospace,monospace);outline:none}
 .share-link-input:focus{border-color:var(--accent-2);box-shadow:var(--ring)}
 .share-field{margin-bottom:4px}
+/* the setup relay-URL input sits in a block field (not a flex row), so give it the full width */
+.share-field .share-link-input{width:100%}
 .share-hint{font-size:12px;line-height:1.55;color:var(--txt-3);margin:8px 0 0}
 .share-setup-note,.share-ready-note{display:flex;align-items:flex-start;gap:7px;font-size:12.5px;line-height:1.5;
   color:var(--txt-2);background:var(--bg-2);border:1px solid var(--line);border-radius:9px;padding:9px 11px;margin-bottom:6px}
