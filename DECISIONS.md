@@ -13718,3 +13718,33 @@ Live token streaming over the identical host→relay→guest path is proven by d
 **Deferred:** the WebRTC transport as a P2P option for the guest (the transport is built, ADR-0194; needs
 signaling routed over the broker); multi-session watching; richer guest rendering (tools/thinking, the full
 answer renderer); guest-WRITE (prompt/abort) through the host's fail-closed scan gate.
+
+---
+
+## ADR-0197 — P-COLLAB.11: WebRTC signaling over the relay
+
+**Status:** Accepted (2026-07-09). Extends ADR-0194.
+
+**Context.** `WebRtcTransport` (ADR-0194) opens a direct DTLS DataChannel but needs a `SignalingChannel` to
+carry the SDP offer/answer + trickled ICE to the other peer. We already have a relay that routes opaque
+envelopes by peer id (P-COLLAB.2/.9) - so signaling should ride it (no extra connection), then the peers go
+direct P2P and the relay sees nothing more.
+
+**Decision.**
+- **`frames.ts`**: a new bidirectional `SignalFrame { t: "signal"; signal: SignalMessage }` added to
+  `LucidCollabFrame`, plus `isSignalFrame`. `isHostFrame` now excludes it, so the host/guest SESSION handlers
+  ignore signaling (the demux routes it to WebRTC instead). frames.ts imports the plain-data `SignalMessage`
+  from signaling.ts and stays DOM-free (so the root typecheck is unaffected).
+- **`signaling.ts`**: `RelaySignaling implements SignalingChannel` - a frame-agnostic adapter that `send`s a
+  signal to ONE peer (host = 0; a guest is its relay-assigned peer id) and whose `deliver()` the demux calls
+  on an inbound signal frame. 1:1 per peer (WebRTC is 1:1: the host holds one WebRtcTransport + RelaySignaling
+  PER guest; the relay stays the multi-party fan-out).
+
+**Verification.** signaling.test.ts +3 (signal-frame narrowing, a full offer/answer/ICE handshake routed
+host<->guest by peer id, terminal close) + demo-P-COLLAB.11. The RTCPeerConnection DataChannel is renderer-only
+(preview-verified in ADR-0194); this proves the signaling that carries it.
+
+**Deferred (the larger next slice):** the renderer-side integration - because RTCPeerConnection lives in the
+renderer, driving `CollabHost`/`CollabGuest` over `WebRtcTransport` means a renderer-side host (it already has
+the ChatEvent stream) + guest, with the demux splitting `signal` frames (-> RelaySignaling) from session frames
+(-> host/guest) over the collab transport, plus STUN/TURN config and a P2P/relay fallback + the UI toggle.

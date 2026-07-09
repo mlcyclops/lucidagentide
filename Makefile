@@ -648,6 +648,9 @@ demo-P-COLLAB.3: ## P-COLLAB.3 (ADR-0192): the backend host LIFECYCLE (CollabMan
 .PHONY: demo-P-COLLAB.4
 demo-P-COLLAB.4: ## P-COLLAB.4/.5 (ADR-0192): the read-only GUEST + the OPTIONAL embedded relay, end-to-end over REAL localhost WebSockets - LUCID starts its OWN relay (127.0.0.1, no third party), a real host (CollabSocket+CollabHost) + real guest (CollabSocket+CollabGuest) connect through it: the guest pastes the view link + gets an E2E welcome, the host's live ChatEvents stream host->relay->guest read-only, the roster tracks a 2nd guest join/leave, a guest to a nonexistent room is refused (fail-closed, relay saw only ciphertext), and stop tells the guest. The Join panel UI + the 'be the relay' toggle are the UI slice
 	$(BUN) run harness/scripts/demo_pcollab4.ts
+.PHONY: demo-P-COLLAB.11
+demo-P-COLLAB.11: ## P-COLLAB.11 (ADR-0197): WebRTC signaling over the relay - the SDP offer/answer + trickled ICE route host<->guest as `signal` frames through the relay's peer routing (signal to peer 0 -> host; to the guest's peer id -> guest), a `signal` frame is recognized by the demux (session handlers ignore it), and close is terminal. This SignalingChannel is what WebRtcTransport consumes before the peers go DIRECT P2P (RTCPeerConnection is renderer-only, so the DataChannel itself is preview-verified)
+	$(BUN) run harness/scripts/demo_pcollab11.ts
 .PHONY: demo-P-COLLAB.9
 demo-P-COLLAB.9: ## P-COLLAB.9 (ADR-0195): the STANDALONE relay broker (tools/relay) - spawns `bun run tools/relay/serve.ts` as a separate process exactly like a jumpbox/systemd would, waits for /healthz, then connects a REAL host + REAL guest THROUGH the deployed process (hello->welcome->live event->bye), and confirms /healthz reflects the live room + peer counts (never content). Validates the deployable, not just the in-process library. Self-contained (no npm deps); deploy on an office server / Ubuntu 24 jumpbox / DGX Spark
 	$(BUN) run harness/scripts/demo_pcollab9.ts
