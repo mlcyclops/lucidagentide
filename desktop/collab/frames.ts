@@ -63,6 +63,12 @@ export interface ErrorFrame { t: "error"; message: string }
 // ── guest -> host ────────────────────────────────────────────────────────────
 /** A joining guest introduces itself; `writeToken` (base64url) is present only from a FULL link. */
 export interface HelloFrame { t: "hello"; protocol: number; name: string; writeToken?: string }
+/** P-COLLAB.12: a guest with EDIT access drives the host's session. The prompt RUNS ON THE HOST, so it passes
+ *  the host's fail-closed scan gate + exec/egress approvals exactly like a local prompt - the guest cannot
+ *  bypass any host approval. A view-only guest's prompt is refused with an `error` frame. */
+export interface PromptFrame { t: "prompt"; text: string }
+/** P-COLLAB.12: an edit guest stops the in-flight turn (same effect as the host pressing Stop). */
+export interface AbortFrame { t: "abort" }
 
 // ── either direction (P-COLLAB.11) ────────────────────────────────────────────
 /** WebRTC signaling carried over the collab transport: the relay brokers the SDP/ICE handshake, then the
@@ -70,11 +76,12 @@ export interface HelloFrame { t: "hello"; protocol: number; name: string; writeT
 export interface SignalFrame { t: "signal"; signal: SignalMessage }
 
 export type HostFrame = WelcomeFrame | EventFrame | StateFrame | ByeFrame | ErrorFrame;
-export type GuestFrame = HelloFrame;
+export type GuestFrame = HelloFrame | PromptFrame | AbortFrame;
 export type LucidCollabFrame = HostFrame | GuestFrame | SignalFrame;
 
+const GUEST_FRAME_TYPES = new Set(["hello", "prompt", "abort"]);
 /** Narrowing helpers (kept tiny + pure so the host/guest logic in P-COLLAB.2/.3 reads cleanly). A `signal`
  *  frame is neither a host nor a guest session frame - the demux routes it to WebRTC signaling instead. */
 export const isSignalFrame = (f: LucidCollabFrame): f is SignalFrame => f.t === "signal";
-export const isHostFrame = (f: LucidCollabFrame): f is HostFrame => f.t !== "hello" && f.t !== "signal";
-export const isGuestFrame = (f: LucidCollabFrame): f is GuestFrame => f.t === "hello";
+export const isGuestFrame = (f: LucidCollabFrame): f is GuestFrame => GUEST_FRAME_TYPES.has(f.t);
+export const isHostFrame = (f: LucidCollabFrame): f is HostFrame => !isSignalFrame(f) && !isGuestFrame(f);

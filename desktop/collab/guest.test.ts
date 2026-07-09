@@ -158,4 +158,32 @@ describe("CollabGuest (P-COLLAB.4)", () => {
     g.leave(); // no throw, no double-close effect
     expect(g.view().phase).toBe("ended");
   });
+
+  // P-COLLAB.12: guest-write (only meaningful with EDIT access).
+  it("sendPrompt/abort are refused (no frame) when read-only", () => {
+    const t = new MockTransport();
+    const g = new CollabGuest(t, { name: "bob" });
+    g.start();
+    t.host(welcome(true)); // readOnly
+    expect(g.readOnly).toBe(true);
+    expect(g.sendPrompt("do a thing")).toBe(false);
+    expect(g.abort()).toBe(false);
+    expect(t.sent.filter((s) => s.frame.t === "prompt" || s.frame.t === "abort").length).toBe(0);
+  });
+
+  it("sendPrompt/abort send a guest frame to the host (peer 0) when EDIT access", () => {
+    const t = new MockTransport();
+    const g = new CollabGuest(t, { name: "bob" });
+    g.start();
+    t.host(welcome(false)); // readOnly:false -> edit
+    expect(g.readOnly).toBe(false);
+    expect(g.sendPrompt("refactor it")).toBe(true);
+    expect(g.abort()).toBe(true);
+    const prompt = t.sent.find((s) => s.frame.t === "prompt")!;
+    expect(prompt.targetPeer).toBe(0);
+    expect((prompt.frame as any).text).toBe("refactor it");
+    expect(t.sent.some((s) => s.frame.t === "abort" && s.targetPeer === 0)).toBe(true);
+    // an empty prompt is not sent
+    expect(g.sendPrompt("   ")).toBe(false);
+  });
 });
