@@ -14005,3 +14005,198 @@ green.
 **Deferred:** a guest-authoritative "I joined a remote share" event (this instance watching someone else's
 session — a secondary audit subject needing join-roomId state); relay serve start/stop events; DuckDB ingestion of
 the collab events for the dashboard.
+
+## ADR-0205 - P-KGPACK: named, swappable Knowledge Graphs + sellable KG Packs (SCOPE/PLAN)
+
+**Date:** 2026-07-10
+**Status:** Accepted - SCOPE/PLAN. Designed here; each sub-increment (P-KGPACK.1 .. .5) is its own build
+session. TypeScript + DuckDB only (no Python, invariant #2). Extends the compiled KB (ADR-0099) and the
+Marketplace (ADR-0158); does NOT fork omp and does NOT edit the frozen `0011` schema.
+**Increment umbrella:** P-KGPACK. Reuses `KbGraphStore` (ADR-0099), the scan gate (ADR-0058/gate.ts), the
+chat-history importer (ADR-0075/0186), the Obsidian vault seam (ADR-0138 import path), the graph renderer
+(ADR-0075), and the public-seam / private-IP split (ADR-0068/0069/0086).
+
+### Context
+
+Today the "Compiled KB" is a SINGLE combined graph: `desktop/kb_store.ts` opens exactly one
+`kb_graph.duckdb` (default `~/.omp/kb_graph.duckdb`, one process-wide writer) and everything ingested -
+ChatGPT/Claude/Gemini history, documents, notes - lands in that one file. `kg_header.ts` shows it as one
+static "Compiled KB" view row. There is no notion of separate, named, or portable knowledge bases.
+
+The user wants the combined KG turned into a **dropdown of unlimited, separately-named KGs that filter as
+you type** (the exact pattern already in `marketplace.filterMarket`/`marketRowsHtml`), each **renamable at
+ingest**, seeded either from the AI-vendor exports (ChatGPT/Claude/Gemini) or from Obsidian-style markdown.
+The strategic payoff is distribution, not UI: a **KG Pack** becomes a portable, self-contained artifact
+that TechLead 187 LLC authors once - from years of curated transcripts or a curated Obsidian vault - keyed
+to a **Position Description**. An enterprise then gets *instant seeding* (drop the pack in), can *retain a
+departed employee's curated knowledge* (export their KG as a pack for a successor), and - later - a **LUCID
+KG Marketplace** where companies/individuals sell their own packs. The *capability* ships in the PUBLIC
+repo (picker + gated import + a "Role KG Packs" hint in the Marketplace); the *actual packs* are built and
+hosted in the PRIVATE add-on repo (`TechLead187/lucidagentIDEaddon`), a new high-value SKU.
+
+### Decision - one DuckDB file per KG + a JSON registry (NOT a schema change)
+
+**Storage model: file-per-KG.** Each named KG is its own `kb_graph.duckdb`, reusing the FROZEN `0011`
+migration set unchanged. This deliberately avoids editing a frozen table (invariant #10) - no
+`collection_id` column, no migration `0012` for this feature - and it makes a KG **portable and signable by
+construction**: a pack is just that file plus a manifest. Mixing every role's / every customer's data in one
+DB (the collection-column alternative) was rejected: it complicates shipping, revoking, and air-gapping a
+single pack, and forces row-slicing on export.
+
+**The registry (`harness/kb/registry.ts`).** A small JSON index at `~/.omp/kg_registry.json` (atomic write,
+single desktop writer) is the ONLY new persisted structure. Each entry:
+`{ kg_id, name, db_path, source_kind ('chat'|'obsidian'|'pack'|'manual'), read_only, provenance, created_at,
+updated_at }`. `kg_id` is minted once via Snowflake and NEVER regenerated (invariant #9); `name` is the
+user-facing, renamable label; `db_path` points at that KG's `kb_graph.duckdb`. The registry is data, not a
+DuckDB table, so invariant #10 does not apply to it.
+
+**The resolver (`desktop/kb_store.ts`).** `kbStore(kgId?)` resolves a KG's `db_path` from the registry and
+returns a per-`kg_id` cached `KbGraphStore` (still one writer per file). A **default KG** ("My Knowledge")
+is auto-registered on first run pointing at the EXISTING `~/.omp/kb_graph.duckdb`, so today's combined graph
+is preserved with zero data loss and simply becomes the first entry in the list.
+
+**Security (unchanged, fail-closed).** A vendor-authored or imported pack is STILL re-scanned on import
+(keystone #2 / invariant #3): a pack signature proves *origin*, never *safety*. Pages import `untrusted`,
+never auto-`trusted`; a flagged page quarantines; a dead scanner blocks the whole import. Untrusted content
+stays delimited DATA (#5). Trust labels stay the closed set (#7).
+
+### Sub-increments (one build session each)
+
+- **P-KGPACK.1 (keystone, public):** `harness/kb/registry.ts` (typed JSON registry: list/create/rename/
+  resolve/set-active) + the multi-store resolver in `desktop/kb_store.ts`; the default "My Knowledge" KG
+  auto-registered onto the existing `kb_graph.duckdb`. No UI yet. `make demo-P-KGPACK.1`: create two KGs,
+  write a page into each, prove isolation (a page in KG-A is invisible from KG-B), rename one, and prove the
+  default KG adopts the pre-existing file. Tests + BUSL headers.
+- **P-KGPACK.2 (public):** the dropdown - replace the single "Compiled KB" row in `kg_header.ts` with a
+  filter-as-you-type KG list (reusing the marketplace filter pattern), active-KG check, inline rename, and a
+  "New KG" action; `app.ts` popover wiring + a bridge route to list/rename/activate. Pure builders + tests.
+- **P-KGPACK.3 (public):** ingest-into-a-named-KG - chat-history import (ChatGPT/Claude/Gemini) and Obsidian
+  markdown import target a chosen or newly-created KG (with rename-at-ingest), not the combined graph. Gated,
+  fail-closed, `untrusted`.
+- **P-KGPACK.4 (public capability, private packs):** the pack format `.lkgpack` - a bundle of a KG's
+  `kb_graph.duckdb` + `manifest.json` (`name`, `role`/PD, `author`, `version`, `created_at`, `sha256` of the
+  db, optional detached signature). Export/author tool (what the private repo runs to build PD packs) +
+  gated import (verify sha256 + signature for ORIGIN, then re-scan pages fail-closed, store `read_only`,
+  trust stays `untrusted`).
+- **P-KGPACK.5 (public hint, private IP):** a Marketplace "Role KG Packs" section - public SKU surface whose
+  rows point at the private add-on repo; install is the P-KGPACK.4 gated path. Actual PD-based packs are
+  authored and hosted in `TechLead187/lucidagentIDEaddon`, never in the public tree.
+
+### Invariants preserved
+
+No fork (#1): the registry + resolver are a sidecar; omp and the compiled-KB pipeline are untouched. No
+Python (#2). Fail-closed (#3): pack import re-scans every page, dead scanner = block, signature != trust.
+Untrusted content delimited (#5). Closed trust labels (#7). New EventName values (`kg_created`, `kg_renamed`,
+`kg_activated`, `kg_pack_exported`, `kg_pack_imported`) are NAMED here and a DEFERRED `contracts.ts`
+increment (#8) - not added this round. Stable IDs (#9): `kg_id` minted once, never regenerated. Schema
+frozen (#10): file-per-KG reuses `0011` verbatim; the registry is JSON, not a table. Public ships the
+capability + seams; the packs are private IP (ADR-0068/0069/0086 model). BUSL-1.1 header on every new file.
+
+### Relates to
+
+ADR-0099/0100 (the compiled KB + `KbGraphStore` this multiplies), ADR-0075/0186 (personal KG + chat-history
+importer reused for seeding), ADR-0138 (the Obsidian import seam), ADR-0158/0181 (the Marketplace this adds a
+KG-Packs section to), ADR-0068/0069/0086 (public-seam / private-IP + BUSL licensing), ADR-0184/0185 (the KG
+header dropdown pattern the picker follows), and CLAUDE.md invariants #1/#2/#3/#5/#7/#8/#9/#10 + keystone #2.
+
+## ADR-0206 - P-KGMARKET: commerce + entitlement gating for KG Packs (Stripe + Firebase) (SCOPE/PLAN)
+
+**Date:** 2026-07-10
+**Status:** Accepted - SCOPE/PLAN. Designed here; each sub-increment is its own build session. Extends the KG
+Pack arc (ADR-0205) with a PAYMENT gate. The public repo ships only the client-side entitlement CHECK + the
+existing gated import; the Stripe secret keys, the Firebase Cloud Functions, and the pack files are PRIVATE
+add-on IP (same public-seam / private-IP split as the skills registry P-SKILLREG.1 / ADR-0098 and the
+managed-config seam ADR-0068). No `.py` (invariant #2 - the functions are TypeScript on the Firebase side).
+**Increment umbrella:** P-KGMARKET. Sits on top of P-KGPACK.4 (the gated `.lkgpack` import) and P-KGPACK.5
+(the storefront). LUCID already runs on Firebase (`lucid-agent.web.app` is Firebase Hosting), so the commerce
+backend extends the EXISTING Firebase project rather than introducing new infrastructure.
+
+### Context
+
+KG Packs (ADR-0205) are a sellable SKU, but nothing yet GATES the pull. The product needs commercial and
+GovCon purchase with a durable record: a Stripe payment popup, a purchase ledger, and access tied to a
+signed-in identity (email or Google OAuth), fronted + recorded by Google Cloud Firebase. Buyers span
+self-service commercial, GovCon (PO/invoice), and Government Purchase Card (GPC). Decisions taken with the
+user (2026-07-10): licensing = **BOTH** one-time per-pack AND subscription/seat; payment paths at launch =
+card + GPC self-serve **AND** PO/invoice (net-30) for GovCon; sequence = lift the ingest cap + author a real
+pack FIRST (done, P-KGPACK.6), then this ADR.
+
+### Decision - three independent gates; Firebase fronts + records; the pack pull is fail-closed
+
+A pack pull passes THREE independent gates, each answering a different question, none substituting for another:
+- **PAYMENT (new, this ADR)** - *are you entitled to pull it?* Firebase Auth identity + Stripe payment + a
+  Firestore entitlement ledger.
+- **SIGNATURE (P-KGPACK.4)** - *did TechLead 187 author it?* Ed25519 verify on import.
+- **SCANNER (P-KGPACK.4)** - *is it safe?* Every page re-scanned fail-closed on import.
+A signature proves ORIGIN, payment proves ACCESS, the scanner proves SAFETY. The purchased pack is signed
+AND entitlement-gated AND re-scanned; defeating one gate defeats neither of the others.
+
+**Identity (Firebase Auth).** Google OAuth + email/password → a stable `uid` + email. The client never holds
+a Stripe secret; it holds only a Firebase ID token.
+
+**Storefront (extends P-KGPACK.5).** `KG_PACKS` rows gain a real product id + price + a `licensing`
+(`one-time` | `subscription`) field. "Get pack" becomes entitlement-aware: entitled → pull; not entitled →
+open Checkout.
+
+**The proxy/recorder (PRIVATE Firebase Cloud Functions).** Three callable/HTTPS functions hold all secrets:
+- `createCheckout(packId, mode)` → a Stripe Checkout Session (card + GPC for one-time; a subscription price
+  for seat/site). Returns the hosted Checkout URL the client opens.
+- `stripeWebhook` (HTTPS, Stripe-signature-verified) → on `checkout.session.completed` /
+  `invoice.paid` / `customer.subscription.*`, WRITE the entitlement to Firestore
+  `entitlements/{uid}/packs/{packId}` = `{ packId, method (card|gpc|po|subscription), stripeId, amount,
+  status (active|expired), purchasedAt, expiresAt? }` - this IS "the record of it".
+- `getPackDownload(packId)` → verify the caller's Firebase token, CHECK the Firestore entitlement (active +
+  unexpired), and only then return a SHORT-LIVED signed URL to the `.lkgpack` in private Firebase Storage.
+  No entitlement ⇒ 403 (fail-closed: the pack BYTES never leave the server without entitlement).
+
+**LUCID client gate (PUBLIC seam).** `getPackDownload(packId)` → signed URL → download the `.lkgpack` →
+hand it to the EXISTING P-KGPACK.4 gated import (integrity + signature + re-scan, installed read-only,
+untrusted). No entitlement → the client opens `createCheckout` instead. The public repo ships this check +
+the import; the functions/keys/files are private.
+
+**GovCon + GPC.** A GPC is a Visa/Mastercard purchase card → a normal Stripe card in Checkout, no extra
+integration; the entitlement records `method: "gpc"`. GovCon PO/invoice = Stripe Invoicing (`invoice.paid`
+webhook grants entitlement on net-30 settlement) PLUS a manual `grantEntitlement(uid, packId, method:"po",
+ref)` admin path for contract vehicles (GSA/SEWP/OTA) where payment is out-of-band. Every grant records its
+method + reference for audit.
+
+**Licensing (BOTH).** One-time = a boolean-ish entitlement with no `expiresAt`. Subscription/seat = an
+entitlement with `expiresAt` + a seat count on an org doc; the subscription webhooks flip `status` to
+`expired` on lapse (the client re-checks on each pull, so access revokes on non-renewal - fail-closed).
+
+### Sub-increments (one build session each)
+
+- **P-KGMARKET.1 (public seam):** the client entitlement gate - Firebase Auth sign-in surface + an
+  entitlement-aware "Get pack" that calls `getPackDownload`, downloads the `.lkgpack`, and routes it into the
+  P-KGPACK.4 import. Fail-closed: no token / no entitlement → Checkout, never a pull. Ships against a stub/
+  emulator; real project id is config.
+- **P-KGMARKET.2 (PRIVATE add-on):** the Cloud Functions (`createCheckout`, `stripeWebhook`,
+  `getPackDownload`, `grantEntitlement`) + the Firestore `entitlements` schema + rules + private Storage
+  bucket for pack files. Holds the Stripe secret + Firebase Admin. Never in the public repo.
+- **P-KGMARKET.3 (GovCon/GPC/PO):** the PO/invoice path (Stripe Invoicing + the manual grant admin flow) and
+  the GPC card path surfaced in Checkout; per-purchase `method` recording + an audit export.
+- **P-KGMARKET.4 (subscription/seat):** org/seat entitlements, renewal + lapse revocation, an in-app
+  "Purchases & licenses" view reading the Firestore ledger.
+
+### Invariants preserved
+
+Public-seam / private-IP (#1-adjacent, ADR-0068/0086): keys, functions, and pack files are private; the
+public repo ships only the check + the existing import. No Python (#2) - the functions are TypeScript.
+Fail-closed (#3): no valid entitlement ⇒ no signed URL ⇒ no pull; the import still re-scans every page.
+Untrusted content stays delimited DATA on import (#5). Trust labels stay the closed set (#7) - a purchased
+pack installs `untrusted` + read-only, never auto-trusted (keystone #2). Stable IDs (#9): `uid`, `packId`,
+Stripe ids are the durable keys. Secrets NEVER committed (licensing/commit hygiene) - Stripe/Firebase keys
+live in the Firebase project + managed config, referenced by env, mirroring ADR-0135 secret-via-vault.
+
+### Open items (not decided here)
+
+Exact pricing + product catalog (business, not code); whether org SSO (Workspace) is needed beyond Google
+OAuth for enterprise; a refund/entitlement-revocation admin flow; whether the `.lkgpack` ships as a single
+zip (ADR-0205 follow-up) for cleaner Storage objects.
+
+### Relates to
+
+ADR-0205 (the KG Pack arc this monetizes - P-KGPACK.4 import gate + .5 storefront it entitlement-gates),
+ADR-0098/P-SKILLREG.1 (the public-seam signed-install pattern mirrored), ADR-0068/0069/0086 (managed-config /
+private-IP / BUSL), ADR-0135 (secret-via-vault/env, extended to Stripe/Firebase keys), the existing Firebase
+Hosting (`lucid-agent.web.app`), and CLAUDE.md invariants #1/#2/#3/#5/#7/#9 + keystone #2.
