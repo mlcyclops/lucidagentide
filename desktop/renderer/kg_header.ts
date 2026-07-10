@@ -99,7 +99,7 @@ export function kgPickerHtml(items: KgListItem[], query: string): string {
     <div class="kgp-foot">
       <button class="kgp-new" data-kgnew title="Create a new, empty knowledge graph">${icon("plus", 12)} New KG</button>
       <button class="kgp-new" data-kgimport title="Seed a new KG from a ChatGPT/Claude/Gemini export or an Obsidian markdown folder">${icon("market", 12)} Import files</button>
-      <button class="kgp-new" data-kgpackimport title="Import a .lkgpack KG Pack - verified for origin, re-scanned fail-closed, installed read-only">${icon("package", 12)} Import pack</button>
+      <button class="kgp-new" data-kgpackcatalog title="Browse curated Role KG Packs, or import a .lkgpack you own (verified + re-scanned, installed read-only)">${icon("package", 12)} KG Packs</button>
     </div>
   </div>`;
 }

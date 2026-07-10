@@ -29,6 +29,7 @@ import { isIntelNewsItem, newsLineHtml } from "./trivia_news.ts"; // P-TRIV.3 (A
 import { sectionizeAnswer, shouldSectionize, type AnswerSection } from "./answer_sections.ts"; // P-CHAT.A (ADR-0188): settled-turn collapsible sections
 import { interleaveChips, chipsInterleave, toolChip, type ToolMark, type ToolChip } from "./answer_chips.ts"; // P-CHAT.B (ADR-0189) + .B.1: inline tool-event chips (only when they interleave)
 import { MARKET_PLUGINS, marketplaceHtml, marketRowsHtml } from "./marketplace.ts"; // P-MARKET.1 (ADR-0158)
+import { KG_PACKS, kgPacksHtml, kgPackRowsHtml } from "./kg_packs.ts"; // P-KGPACK.5 (ADR-0205)
 import { toolfailGroupHtml, type ToolFailEntry } from "./toolfail_group.ts"; // P-TOOLFAIL.2 (ADR-0163)
 import { APP_VERSION } from "../version.ts";
 import { renderMarkdown } from "./markdown.ts";
@@ -3075,8 +3076,8 @@ async function openKgPicker(anchor: HTMLElement): Promise<void> {
     if (im) { p.close(); void importKgFlow(); return; } // P-KGPACK.3: seed a KG from a folder
     const ex = t.closest("[data-kgexport]") as HTMLElement | null;
     if (ex) { ev.stopPropagation(); p.close(); void exportPackFlow(ex.dataset.kgexport!, view!); return; } // P-KGPACK.4
-    const pi = t.closest("[data-kgpackimport]") as HTMLElement | null;
-    if (pi) { p.close(); void importPackFlow(); return; } // P-KGPACK.4: import a .lkgpack
+    const pc = t.closest("[data-kgpackcatalog]") as HTMLElement | null;
+    if (pc) { p.close(); openKgPacks(); return; } // P-KGPACK.5: the Role KG Packs storefront
     const pk = t.closest("[data-kgpick]") as HTMLElement | null;
     if (pk) { p.close(); void pickKg(pk.dataset.kgpick!); return; }
   });
@@ -8019,6 +8020,32 @@ function openMarketplace(): void {
   (ov.querySelector("#mktSearch") as HTMLInputElement | null)?.focus();
 }
 
+// P-KGPACK.5 (ADR-0205): the Role KG Packs storefront (public SKU surface). Mirrors openMarketplace: a scrim
+// modal with live search; "Get pack" opens the product page; "Import a pack you own" routes a .lkgpack
+// through the P-KGPACK.4 gate (importPackFlow). The packs themselves live in the private add-on repo.
+function openKgPacks(): void {
+  if ($("#kgpackModal")) return; // already open - don't stack
+  const ov = el(`<div id="kgpackModal" class="mkt-scrim">${kgPacksHtml(KG_PACKS, "")}</div>`);
+  const close = () => { ov.remove(); document.removeEventListener("keydown", onKey); };
+  const onKey = (ev: KeyboardEvent) => { if (ev.key === "Escape") { ev.preventDefault(); close(); } };
+  ov.addEventListener("click", (ev) => {
+    const t = ev.target as HTMLElement;
+    const repo = t.closest("[data-kgpack-repo]") as HTMLElement | null;
+    if (repo) { window.open(repo.dataset.kgpackRepo!, "_blank", "noopener"); return; }
+    if (t.closest("[data-kgpack-import]")) { close(); void importPackFlow(); return; } // reuse the P-KGPACK.4 gated import
+    if (t === ov || t.closest("[data-kgpack-close]")) close(); // backdrop or the X
+  });
+  ov.addEventListener("input", (ev) => { // live search: re-render just the rows
+    const t = ev.target as HTMLElement;
+    if (t.id !== "kgpackSearch") return;
+    const list = ov.querySelector("#kgpackList");
+    if (list) list.innerHTML = kgPackRowsHtml(KG_PACKS, (t as HTMLInputElement).value);
+  });
+  document.addEventListener("keydown", onKey);
+  document.body.append(ov);
+  (ov.querySelector("#kgpackSearch") as HTMLInputElement | null)?.focus();
+}
+
 function wire(): void {
   // rail
   $$(".rail-btn[data-rail]").forEach((b) => b.addEventListener("click", () => {
@@ -8956,6 +8983,7 @@ const palette = createPalette(() => {
     { id: "sec", title: "Open Security panel", icon: "shield", hint: "panel", run: () => focusInspector("security") },
     { id: "mem", title: "Open Memory & context panel", icon: "savings", hint: "panel", run: () => focusInspector("memory") },
     { id: "mkt", title: "Open Plugin Marketplace", icon: "market", hint: "popup", run: () => openMarketplace() }, // P-MARKET.1
+    { id: "kgpacks", title: "Browse Role KG Packs", icon: "package", hint: "popup", run: () => openKgPacks() }, // P-KGPACK.5 (ADR-0205)
     { id: "sysres", title: "Open System resources", icon: "gauge", hint: "popup", run: () => void openResourcePanelLive() }, // P-SYSRES.1
     // P-LOC.3 (ADR-0095): a discoverable entry point for the AI-authored code ledger — opens Memory with
     // the section expanded, so it no longer has to be hunted for inside the panel.

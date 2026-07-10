@@ -2097,6 +2097,7 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .kgp-new{flex:1;display:flex;align-items:center;gap:6px;justify-content:center;padding:8px 10px;border:1px dashed var(--line-strong);
   border-radius:9px;background:none;color:var(--txt-2);cursor:pointer;font-size:12px;font-weight:600;transition:border-color var(--t),color var(--t)}
 .kgp-new:hover{border-color:color-mix(in srgb,var(--accent) 45%,var(--line-strong));color:var(--txt)}
+.kgpack-import{margin-top:6px;width:100%;box-sizing:border-box} /* P-KGPACK.5: import action in the KG Packs modal */
 /* icon-only button (the code-graph re-sync sits between the views and Data dropdowns) */
 .btn-mini.btn-icon{padding:0;width:30px;justify-content:center;flex:none}
 .btn-mini.btn-icon .ic{width:14px;height:14px}
