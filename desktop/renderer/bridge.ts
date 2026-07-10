@@ -363,12 +363,16 @@ export interface CollabParticipantView { peerId: number; name: string; role: "ho
 export interface CollabRelay { wsBase: string; httpBase: string; label: string; source: "self-hosted" | "public" | "embedded" }
 /** P-COLLAB.7: the embedded-relay ("be the relay") status the toggle polls. `managed.locked` disables the
  *  control (+ "Managed by <org>"); `managed.allowServe:false` means the org forbids hosting a relay. */
+/** P-COLLAB.14: a bindable address the "be the relay" toggle can offer (loopback / LAN / VPN). */
+export interface CollabBindAddress { address: string; family: "IPv4" | "IPv6"; kind: "loopback" | "lan" | "vpn" | "other"; label: string }
 export interface CollabRelayServeStatus {
   running: boolean;
   hostname?: string;
   port?: number;
   wsBase?: string;
   rooms?: number;
+  /** This machine's bindable addresses (loopback first). Each is still bind-authorized fail-closed on serve. */
+  addresses?: CollabBindAddress[];
   managed: { locked: boolean; allowServe: boolean; org: string | null };
 }
 /** P-COLLAB.10: the shared session's identity, as a joining guest receives it. */

@@ -13782,3 +13782,29 @@ green.
 prompt box in the Join panel (POST -> the backend guest's `sendPrompt`), and the host surfacing a guest prompt
 in its OWN chat flow (so approvals fire + the turn taps back to collab) - e.g. the host renderer auto-submits a
 pending guest prompt via the normal composer path, attributed to the guest.
+
+---
+
+## ADR-0199 — P-COLLAB.14: LAN/VPN bind-address picker
+
+**Status:** Accepted (2026-07-09). Extends ADR-0193.
+
+**Context.** The "be the relay" toggle defaulted to `127.0.0.1` with a free-text host field - but a loopback
+relay reaches only the same machine, and a user shouldn't have to know + type their LAN IP. Surface the
+machine's own addresses so a peer on the LAN/VPN can reach the relay directly (no third party).
+
+**Decision.** `desktop/collab/net_addrs.ts` enumerates + classifies this host's interface addresses
+(`classifyBindAddresses` is pure over the `os.networkInterfaces()` shape; `localBindAddresses` reads the OS):
+loopback / LAN (RFC 1918) / VPN (Tailscale CGNAT 100.64/10 or a tunnel interface name: wg/tailscale/zerotier/
+tun/utun/…) / other, ordered loopback→LAN→VPN→other, IPv4 first, de-duped, each with a reachability label.
+`relayServeStatus` returns them; the toggle renders a `<select>` ("Reachable at") + a "Custom address…" text
+fallback (DNS / `0.0.0.0`) instead of a bare input. Every bind is STILL authorized fail-closed by the managed
+policy on serve (authorizeRelayBind, P-COLLAB.6) - surfacing an address never bypasses governance (a managed
+org restricts LAN binds via `allowedBinds`).
+
+**Verification.** net_addrs.test.ts (4: loopback/LAN/CGNAT/other classification + order, WireGuard-range→VPN,
+de-dup + numeric-family tolerance, internal→loopback + IPv6 link-local). Verified LIVE: the picker offered this
+machine's real LAN address (`192.168.254.123 — your LAN`), and selecting it started the relay bound to
+`192.168.254.123:8790` (a peer on the network can now reach it directly). 67 collab tests; tsc + license green.
+
+**Deferred:** a "test reachability" probe; remembering the last-picked address across sessions.
