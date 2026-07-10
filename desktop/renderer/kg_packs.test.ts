@@ -19,6 +19,7 @@ describe("KG_PACKS registry", () => {
       expect(p.url).toBe(KG_PACKS_URL);
       expect(p.author).toBeTruthy();
       expect(["first-party", "community"]).toContain(p.tier);
+      expect(["one-time", "subscription"]).toContain(p.licensing); // P-KGMARKET.1
     }
   });
 });
@@ -34,16 +35,18 @@ describe("filterKgPacks", () => {
 });
 
 describe("kgPackRowsHtml", () => {
-  test("each row carries a Get-pack repo handle + the role, and unmatched search shows a message", () => {
+  test("each row carries a Get-pack handle (the pack id) + role + a licensing chip; empty search shows a message", () => {
     const h = kgPackRowsHtml(KG_PACKS, "");
-    for (const p of KG_PACKS) expect(h).toContain(`data-kgpack-repo="${KG_PACKS_URL}"`);
+    for (const p of KG_PACKS) expect(h).toContain(`data-kgpack-get="${p.id}"`);
     expect(h).toContain("Get pack");
     expect(h).toContain("Contracting Officer / Specialist"); // the role chip
+    expect(h).toContain(">One-time<");     // licensing chips (P-KGMARKET.1)
+    expect(h).toContain(">Subscription<");
     expect(kgPackRowsHtml(KG_PACKS, "zzzznope")).toContain("No KG pack matches");
   });
 
   test("a hostile pack name is escaped (defensive — catalog copy is first-party, but rows are built the same way)", () => {
-    const evil: KgPack = { id: "x", name: "<img src=x onerror=alert(1)>", role: "R", desc: "d", author: "a", tier: "community", url: KG_PACKS_URL, highlights: "h" };
+    const evil: KgPack = { id: "x", name: "<img src=x onerror=alert(1)>", role: "R", desc: "d", author: "a", tier: "community", licensing: "one-time", url: KG_PACKS_URL, highlights: "h" };
     const h = kgPackRowsHtml([evil], "");
     expect(h).toContain("&lt;img");
     expect(h).not.toContain("<img src=x");

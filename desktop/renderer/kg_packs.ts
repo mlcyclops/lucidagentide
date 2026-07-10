@@ -15,18 +15,20 @@
 
 import { esc } from "./format.ts";
 import { icon } from "./icons.ts";
+import type { PackLicensing } from "../../harness/market/entitlement.ts";
 
 /** Where a pack comes from. `first-party` = authored by TechLead 187 LLC; `community` = a future
  *  marketplace seller (the LUCID KG Marketplace is on the roadmap). */
 export type KgPackTier = "first-party" | "community";
 
 export interface KgPack {
-  id: string;          // stable id — never regenerated (invariant 9)
+  id: string;          // stable id — never regenerated (invariant 9); also the product/pack id (P-KGMARKET)
   name: string;
   role: string;        // the Position Description this pack embodies
   desc: string;        // one-liner: what knowledge it carries
   author: string;
   tier: KgPackTier;
+  licensing: PackLicensing; // one-time purchase vs subscription/seat (P-KGMARKET.1, ADR-0206)
   url: string;         // the product page where the pack is obtained (the SKU pointer)
   highlights: string;  // what it was seeded from (the value story)
 }
@@ -40,31 +42,31 @@ export const KG_PACKS: KgPack[] = [
   {
     id: "govcon-contracts-officer", name: "GovCon Contracts Officer", role: "Contracting Officer / Specialist",
     desc: "FAR/DFARS-grounded contracting: source selection, negotiation, and administration.",
-    author: "TechLead 187 LLC", tier: "first-party", url: KG_PACKS_URL,
+    author: "TechLead 187 LLC", tier: "first-party", licensing: "one-time", url: KG_PACKS_URL,
     highlights: "Seeded from curated FAR/DFARS guidance and years of contracting Q&A.",
   },
   {
     id: "cmmc-rmf-security-lead", name: "CMMC & RMF Security Lead", role: "ISSO / Security Control Assessor",
     desc: "CMMC 2.0 and NIST SP 800-171/800-53 RMF: controls, POA&Ms, and assessment objectives.",
-    author: "TechLead 187 LLC", tier: "first-party", url: KG_PACKS_URL,
+    author: "TechLead 187 LLC", tier: "first-party", licensing: "subscription", url: KG_PACKS_URL,
     highlights: "Curated control catalogs, assessment objectives, and remediation patterns.",
   },
   {
     id: "capture-proposal-manager", name: "Capture & Proposal Manager", role: "Capture / Proposal Manager",
     desc: "Shipley-style capture and proposals: color teams, win themes, and compliance matrices.",
-    author: "TechLead 187 LLC", tier: "first-party", url: KG_PACKS_URL,
+    author: "TechLead 187 LLC", tier: "first-party", licensing: "one-time", url: KG_PACKS_URL,
     highlights: "Curated capture playbooks and proposal-review heuristics.",
   },
   {
     id: "program-manager-evm", name: "Program Manager (EVM)", role: "Program / Project Manager",
     desc: "CMMI and Earned Value Management: IMS, EAC, variance analysis, and program controls.",
-    author: "TechLead 187 LLC", tier: "first-party", url: KG_PACKS_URL,
+    author: "TechLead 187 LLC", tier: "first-party", licensing: "one-time", url: KG_PACKS_URL,
     highlights: "Curated EVM formulas, IMS practices, and PM governance.",
   },
   {
     id: "cleared-software-engineer", name: "Cleared Software Engineer", role: "Software Engineer (cleared)",
     desc: "Secure SDLC for classified/air-gapped work: STIGs, secure coding, and ATO evidence.",
-    author: "TechLead 187 LLC", tier: "first-party", url: KG_PACKS_URL,
+    author: "TechLead 187 LLC", tier: "first-party", licensing: "one-time", url: KG_PACKS_URL,
     highlights: "Curated STIG guidance and secure-SDLC patterns for RMF packages.",
   },
 ];
@@ -84,14 +86,18 @@ function tierChip(t: KgPackTier): string {
     : `<span class="mkt-chip mkt-planned">Community</span>`;
 }
 
+function licensingChip(l: PackLicensing): string {
+  return `<span class="mkt-chip mkt-builtin">${l === "subscription" ? "Subscription" : "One-time"}</span>`;
+}
+
 function packRow(p: KgPack): string {
   return `<div class="mkt-row" data-kgpack-id="${esc(p.id)}">
     <div class="mkt-main">
-      <div class="mkt-name">${esc(p.name)}${tierChip(p.tier)}<span class="mkt-cat">${esc(p.role)}</span></div>
+      <div class="mkt-name">${esc(p.name)}${tierChip(p.tier)}${licensingChip(p.licensing)}<span class="mkt-cat">${esc(p.role)}</span></div>
       <div class="mkt-desc">${esc(p.desc)}</div>
       <div class="mkt-plan">${icon("bulb", 12)}${esc(p.highlights)} · ${esc(p.author)}</div>
     </div>
-    <button class="mkt-repo" data-kgpack-repo="${esc(p.url)}" title="Get this pack (opens the product page)">Get pack</button>
+    <button class="mkt-repo" data-kgpack-get="${esc(p.id)}" title="Get this pack">Get pack</button>
   </div>`;
 }
 

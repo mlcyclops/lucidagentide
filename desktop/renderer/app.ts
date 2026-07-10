@@ -29,7 +29,9 @@ import { isIntelNewsItem, newsLineHtml } from "./trivia_news.ts"; // P-TRIV.3 (A
 import { sectionizeAnswer, shouldSectionize, type AnswerSection } from "./answer_sections.ts"; // P-CHAT.A (ADR-0188): settled-turn collapsible sections
 import { interleaveChips, chipsInterleave, toolChip, type ToolMark, type ToolChip } from "./answer_chips.ts"; // P-CHAT.B (ADR-0189) + .B.1: inline tool-event chips (only when they interleave)
 import { MARKET_PLUGINS, marketplaceHtml, marketRowsHtml } from "./marketplace.ts"; // P-MARKET.1 (ADR-0158)
-import { KG_PACKS, kgPacksHtml, kgPackRowsHtml } from "./kg_packs.ts"; // P-KGPACK.5 (ADR-0205)
+import { KG_PACKS, kgPacksHtml, kgPackRowsHtml, type KgPack } from "./kg_packs.ts"; // P-KGPACK.5 (ADR-0205)
+import { getMarketProvider } from "./market_gate.ts"; // P-KGMARKET.1 (ADR-0206)
+import { decidePackAction } from "../../harness/market/entitlement.ts"; // P-KGMARKET.1 (ADR-0206)
 import { toolfailGroupHtml, type ToolFailEntry } from "./toolfail_group.ts"; // P-TOOLFAIL.2 (ADR-0163)
 import { APP_VERSION } from "../version.ts";
 import { renderMarkdown } from "./markdown.ts";
@@ -8054,8 +8056,8 @@ function openKgPacks(): void {
   const onKey = (ev: KeyboardEvent) => { if (ev.key === "Escape") { ev.preventDefault(); close(); } };
   ov.addEventListener("click", (ev) => {
     const t = ev.target as HTMLElement;
-    const repo = t.closest("[data-kgpack-repo]") as HTMLElement | null;
-    if (repo) { window.open(repo.dataset.kgpackRepo!, "_blank", "noopener"); return; }
+    const get = t.closest("[data-kgpack-get]") as HTMLElement | null;
+    if (get) { const pack = KG_PACKS.find((p) => p.id === get.dataset.kgpackGet); if (pack) void getPackFlow(pack); return; } // P-KGMARKET.1 gated
     if (t.closest("[data-kgpack-import]")) { close(); void importPackFlow(); return; } // reuse the P-KGPACK.4 gated import
     if (t === ov || t.closest("[data-kgpack-close]")) close(); // backdrop or the X
   });
@@ -8068,6 +8070,29 @@ function openKgPacks(): void {
   document.addEventListener("keydown", onKey);
   document.body.append(ov);
   (ov.querySelector("#kgpackSearch") as HTMLInputElement | null)?.focus();
+}
+// P-KGMARKET.1 (ADR-0206): the entitlement-gated "Get pack". An UNCONFIGURED public build has no provider,
+// so the storefront is a hint — open the product page. Once the private Firebase provider is registered, the
+// decision is fail-closed: not signed in → sign-in prompt; owned → pull (which STILL clears the P-KGPACK.4
+// import gate); otherwise → Stripe Checkout. The actual signed-download + install lands in P-KGMARKET.2.
+async function getPackFlow(pack: KgPack): Promise<void> {
+  const prov = getMarketProvider();
+  if (!prov.configured()) { window.open(pack.url, "_blank", "noopener"); return; } // public build: storefront is a hint
+  const auth = await prov.auth().catch(() => ({ signedIn: false }));
+  const ent = auth.signedIn ? await prov.entitlement(pack.id).catch(() => null) : null;
+  const action = decidePackAction(auth, ent, new Date().toISOString());
+  if (action === "signin") {
+    showToast({ tone: "warn", title: "Sign in to buy", desc: "Sign in to purchase and install role packs.", actions: [{ label: "Open product page", run: () => window.open(pack.url, "_blank", "noopener") }, { label: "Close" }], timeout: 0 });
+    return;
+  }
+  if (action === "checkout") {
+    const url = await prov.checkoutUrl(pack.id, pack.licensing).catch(() => null);
+    window.open(url ?? pack.url, "_blank", "noopener");
+    return;
+  }
+  // action === "pull": entitled. The signed-download + gated install (P-KGPACK.4) is wired by the provider
+  // in P-KGMARKET.2; until then, surface that ownership is recognised.
+  showToast({ title: `You own "${pack.name}"`, desc: "The signed download + gated install lands with the Firebase provider (P-KGMARKET.2). You can also import a .lkgpack you already have.", timeout: 6000 });
 }
 
 function wire(): void {

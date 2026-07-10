@@ -605,6 +605,10 @@ demo-P-KGVIZ.1: ## P-KGVIZ.1 (ADR-0183): form in place - the KG/code-graph settl
 demo-P-KGPACK.1: ## P-KGPACK.1 (ADR-0205): named, swappable KGs (file-per-KG + JSON registry) - the pre-existing combined kb_graph.duckdb is ADOPTED as the default "My Knowledge" KG (zero data loss), new role KGs are ISOLATED files (a page in one is invisible from another), rename touches only the label, and switching the active KG re-points a no-arg store lookup
 	$(BUN) run desktop/scripts/demo_p_kgpack_1.ts
 
+.PHONY: demo-P-KGMARKET.1
+demo-P-KGMARKET.1: ## P-KGMARKET.1 (ADR-0206): the fail-closed entitlement gate - the pure decision core (not signed in → signin; only an active, unexpired entitlement → pull; a lapsed/missing one → checkout) + the provider seam that defaults to a fail-closed null provider so an unconfigured public build can never pull a pack without entitlement
+	$(BUN) run desktop/scripts/demo_p_kgmarket_1.ts
+
 .PHONY: demo-P-KGPACK.6
 demo-P-KGPACK.6: ## P-KGPACK.6 (ADR-0205): the background KG-seed job - lift the 50-doc cap so a full dataset (here 120 conversations, past the old cap) compiles as a tracked background job with live counts + cancel; all 120 compile, 0 skipped
 	$(BUN) run desktop/scripts/demo_p_kgpack_6.ts
