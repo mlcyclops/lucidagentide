@@ -133,6 +133,13 @@ export interface GuiSettings {
   // sharing fails closed (no relay authorized → cannot start a share).
   collabRelayUrl?: string;          // wss:// self-hosted relay origin (no /r/… path); empty = none configured
   collabPublicRelayOptIn?: boolean; // allow the public DEFAULT_RELAY_URL fallback when no self-hosted URL is set
+  // P-COLLAB.17 (ADR-0202): prefer a DIRECT WebRTC peer-to-peer connection - the relay is used only for the
+  // signaling handshake + as an automatic fallback, so session frames never transit the broker when a
+  // DataChannel forms. STUN/TURN servers help traverse NAT (empty = LAN/VPN host candidates suffice).
+  collabPreferDirectP2P?: boolean;
+  collabIceUrls?: string[];         // stun:/turn: server URLs for NAT traversal
+  collabTurnUsername?: string;      // TURN long-term credential (user-local file; not a high-value secret)
+  collabTurnCredential?: string;
 }
 
 export const ASKSAGE_DEFAULT_LIMIT = 200_000;
@@ -195,6 +202,27 @@ export function setCollabRelay(patch: { url?: string; publicOptIn?: boolean }): 
   const s = load();
   if (patch.url !== undefined) s.collabRelayUrl = patch.url.trim();
   if (patch.publicOptIn !== undefined) s.collabPublicRelayOptIn = !!patch.publicOptIn;
+  save(s); return s;
+}
+
+// P-COLLAB.17 (ADR-0202): the direct-P2P preference + STUN/TURN config. `iceUrls` are stun:/turn: URLs; the
+// creds apply to TURN only. Kept in the same user-local file as the relay URL (never committed).
+export interface CollabP2PConfig { preferDirect: boolean; iceUrls: string[]; turnUsername?: string; turnCredential?: string }
+export function collabP2PConfig(): CollabP2PConfig {
+  const s = load();
+  return {
+    preferDirect: !!s.collabPreferDirectP2P,
+    iceUrls: Array.isArray(s.collabIceUrls) ? s.collabIceUrls.filter((u) => typeof u === "string" && u.trim()).map((u) => u.trim()) : [],
+    turnUsername: (s.collabTurnUsername ?? "").trim() || undefined,
+    turnCredential: (s.collabTurnCredential ?? "").trim() || undefined,
+  };
+}
+export function setCollabP2P(patch: { preferDirect?: boolean; iceUrls?: string[]; turnUsername?: string; turnCredential?: string }): GuiSettings {
+  const s = load();
+  if (patch.preferDirect !== undefined) s.collabPreferDirectP2P = !!patch.preferDirect;
+  if (patch.iceUrls !== undefined) s.collabIceUrls = patch.iceUrls.filter((u) => typeof u === "string" && u.trim()).map((u) => u.trim());
+  if (patch.turnUsername !== undefined) s.collabTurnUsername = patch.turnUsername.trim();
+  if (patch.turnCredential !== undefined) s.collabTurnCredential = patch.turnCredential.trim();
   save(s); return s;
 }
 function wsToHttp(u: string): string { return u.replace(/^wss:/i, "https:").replace(/^ws:/i, "http:"); }

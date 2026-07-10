@@ -47,13 +47,17 @@ import type { AgentSpec, NodeKind } from "../../harness/agent/spec.ts"; // P-AGE
 import { expandCommandBody, expandInlineCommands, slashTokenBeforeCaret, type UserCommand } from "../../harness/commands/spec.ts"; // P-CMD.1/.2: user "/" commands, body-wide
 import { type Action, type ToastAction, attachRichTip, createPalette, initTooltips, popover, showToast } from "./ui.ts";
 import { exportActionPlan } from "./kg_export.ts";
-import { webrtcLoopbackSelfTest, webrtcRelaySelfTest } from "../collab/webrtc_session.ts"; // P-COLLAB.15/.16: WebRTC diagnostics
+import { webrtcLoopbackSelfTest, webrtcRelaySelfTest, webrtcP2PModuleSelfTest } from "../collab/webrtc_session.ts"; // P-COLLAB.15/.16/.17: WebRTC diagnostics
 // Diagnostic hooks (no side effects unless invoked): __lucidWebrtcSelfTest proves the renderer-side WebRTC
 // session stack (CollabHost/CollabGuest over a real DTLS DataChannel, P-COLLAB.15); __lucidWebrtcRelaySelfTest
 // proves the FULL production coordinator - CollabSocket + signaling/control/fallback demux + per-guest fan-out
 // + WebRTC - over an in-memory relay (P-COLLAB.16). Run `await window.__lucidWebrtcRelaySelfTest()`.
 (window as unknown as { __lucidWebrtcSelfTest?: typeof webrtcLoopbackSelfTest }).__lucidWebrtcSelfTest = webrtcLoopbackSelfTest;
 (window as unknown as { __lucidWebrtcRelaySelfTest?: typeof webrtcRelaySelfTest }).__lucidWebrtcRelaySelfTest = webrtcRelaySelfTest;
+(window as unknown as { __lucidP2PModuleSelfTest?: typeof webrtcP2PModuleSelfTest }).__lucidP2PModuleSelfTest = webrtcP2PModuleSelfTest;
+// P-COLLAB.17 (ADR-0202): renderer-side direct-P2P share/join (RTCPeerConnection is renderer-only) - the "prefer
+// direct connection" toggle runs the share peer-to-peer over WebRTC, with the relay used only to signal + fall back.
+import { startP2PHost, stopP2PHost, p2pHostActive, p2pHostStatus, teeEvent as p2pTeeEvent, teeUserTurn as p2pTeeUserTurn, startP2PGuest, stopP2PGuest, p2pGuestActive, p2pGuestSendPrompt, p2pLinkEndpoint } from "./collab_p2p.ts";
 import { formatImportLine } from "./import_progress.ts";
 import { ASKSAGE_FAMILY_ORDER, familyOf, filterModels, groupByFamily, isAuxiliaryModel, isChinaModel, isDeprecatedModel, isGovModel, sortGovFirstNewest } from "./model_families.ts";
 import { FAVS_KEY, parseFavs, starredOf, toggleFav } from "./model_favorites.ts"; // P-FAV.1 (ADR-0165)
@@ -1429,6 +1433,7 @@ async function send(): Promise<void> {
   };
   let slowNoticed = false; // P-STALL.1: the explanatory toast fires once per turn; the phase line keeps updating
   const onEvent = (e: ChatEvent) => {
+    p2pTeeEvent(e); // P-COLLAB.17: mirror the live event into a direct-P2P share, if one is hosting
     if (e.type === "token") { reasoning?.finish(Date.now() - t0); buf += e.text; countDelta(e.text); if (!sawTool) setPhase(writeLine); streamEl.innerHTML = renderMarkdown(buf) + `<span class="cursor"></span>`; paintHud(); scrollChat(); }
     else if (e.type === "thinking") {
       // First reasoning chunk: spin up the live thinking block above the answer.
@@ -1477,6 +1482,7 @@ async function send(): Promise<void> {
     }
     else if (e.type === "done") { if (e.text && e.text.length > buf.length) buf = e.text; /* reconcile a lossy stream with the server's full reply */ const chipped = renderAnswerBody(streamEl, buf, marks); /* P-CHAT.A sections / P-CHAT.B chips */ (node as MsgNode)._md = buf; finishHud(); if (chipped) dropThoughtsWindow(); /* chips now carry the activity */ maybeAppendReport(); /* P-CHAT.C: settled-turn report CTA */ state.streaming = false; setSendEnabled(); clearPreviewTesting(); }
   };
+  p2pTeeUserTurn(sendText); // P-COLLAB.17: record the user turn in a direct-P2P share's replay transcript
   try { await bridge.sendPrompt(sendText, onEvent, images); }
   finally {
     (node as MsgNode)._md = buf;
@@ -7475,7 +7481,7 @@ function openAbout(): void {
 // copy the view-only invite link, and watch the live roster. Same modal conventions as About: single
 // instance; closes on the X, a backdrop click, or Escape. Guests are view-only (Phase 1); the guest
 // join/render surface is the next slice, so an active share shows "waiting for someone to join".
-function shareBodyHtml(st: CollabShareStatus | null): string {
+function shareBodyHtml(st: CollabShareStatus | null, p2p?: import("./bridge.ts").CollabP2PConfig | null): string {
   if (!st) return `<div class="share-err">${icon("info", 14)} Couldn't reach the backend. Is the GUI server running?</div>`;
   if (st.active) {
     const src = st.relaySource === "public" ? "public relay" : "self-hosted relay";
@@ -7485,7 +7491,7 @@ function shareBodyHtml(st: CollabShareStatus | null): string {
     // When editing is allowed, share the EDIT (full) link so a guest gets drive access; otherwise the view link.
     const link = st.allowEdit ? (st.fullLink ?? "") : (st.viewLink ?? "");
     return `
-      <div class="share-live-head"><span class="share-live-dot"></span> Live · ${esc(st.relayLabel ?? src)}${st.allowEdit ? ` <span class="share-peer-tag edit">can edit</span>` : ""}</div>
+      <div class="share-live-head"><span class="share-live-dot"></span> Live · ${esc(st.relayLabel ?? src)}${st.direct ? ` <span class="share-peer-tag direct">direct P2P</span>` : ""}${st.allowEdit ? ` <span class="share-peer-tag edit">can edit</span>` : ""}</div>
       <label class="share-lbl">${st.allowEdit ? "Edit invite link (guest can drive)" : "View-only invite link"}</label>
       <div class="share-linkrow">
         <input class="share-link-input" id="shareViewLink" type="text" readonly value="${esc(link)}" spellcheck="false" />
@@ -7516,6 +7522,16 @@ function shareBodyHtml(st: CollabShareStatus | null): string {
     <div class="share-ready-note">${icon("check", 13)}<span>Relay ready: <b>${esc(st.relay.label)}</b> <span class="share-peer-tag">${esc(src)}</span></span></div>
     <p class="share-hint">Starting a share opens an end-to-end-encrypted room and broadcasts this session live. You can stop any time.</p>
     <label class="share-check"><input type="checkbox" id="shareAllowEdit" /> <span><b>Let a guest drive this session</b> (edit) - their prompts run here, through <b>your</b> approvals + security gate. Otherwise guests are view-only.</span></label>
+    <label class="share-check"><input type="checkbox" id="sharePreferP2P" ${p2p?.preferDirect ? "checked" : ""} /> <span><b>Prefer a direct connection (WebRTC)</b> - the relay only helps you connect, then session data flows <b>peer-to-peer</b>. Falls back to the relay automatically if a direct link can't be formed.</span></label>
+    <details class="share-ice" ${p2p?.preferDirect ? "open" : ""}>
+      <summary>STUN/TURN servers (help connect across networks / NAT)</summary>
+      <textarea id="shareIceUrls" class="share-link-input share-ice-ta" rows="2" placeholder="stun:stun.l.google.com:19302&#10;turn:turn.your-org.internal:3478" spellcheck="false">${esc((p2p?.iceUrls ?? []).join("\n"))}</textarea>
+      <div class="share-serve-fields">
+        <input id="shareTurnUser" class="share-link-input" type="text" placeholder="TURN username (optional)" value="${esc(p2p?.turnUsername ?? "")}" spellcheck="false" autocomplete="off" />
+        <input id="shareTurnCred" class="share-link-input" type="password" placeholder="TURN credential (optional)" value="${esc(p2p?.turnCredential ?? "")}" spellcheck="false" autocomplete="off" />
+      </div>
+      <p class="share-serve-hint">Leave empty on a LAN or VPN (host candidates suffice). Add a STUN server to cross NATs, or a TURN server (with credentials) as a last-resort relay for the media path.</p>
+    </details>
     <div class="modal-actions">
       <button class="btn-mini" data-share-relay-change>${icon("sliders", 12)} Change relay</button>
       <button class="btn-mini ok" data-share-start>${icon("share", 12)} Start sharing</button>
@@ -7568,25 +7584,38 @@ function startCollabHostPoll(): void {
     const inbox = await bridge.collabGuestInbox();
     if (!inbox) return;
     if (inbox.abort && state.streaming) { void bridge.cancelChat(); showToast({ title: "Guest asked to stop", desc: "Stopping the current turn.", timeout: 2500 }); }
-    if (inbox.prompt) {
-      const { text, from } = inbox.prompt;
-      showToast({ title: `Running ${from}'s prompt`, desc: text.slice(0, 90), timeout: 4000 });
-      const ta = $("#input") as HTMLTextAreaElement | null;
-      // Route it through the normal send() path (gate + approvals + collab tap). If a turn is already
-      // running, send() queues it - the guest's turn runs after the current one.
-      if (ta) { ta.value = text; autosize(ta); void send(); }
-    }
+    if (inbox.prompt) runGuestPromptLocally(inbox.prompt.text, inbox.prompt.from);
   }, 2000);
 }
 function stopCollabHostPoll(): void { if (collabHostPoll) { clearInterval(collabHostPoll); collabHostPoll = undefined; } }
 
+// Run an EDIT guest's prompt through the host's OWN composer, so omp's scan gate + exec/egress approvals fire
+// exactly as for a local prompt and the turn taps back to the guests. Attributed (a toast), never disguised as
+// the host's own. Shared by the relay inbox poller (P-COLLAB.13) AND the direct-P2P host callback (P-COLLAB.17).
+function runGuestPromptLocally(text: string, from: string): void {
+  showToast({ title: `Running ${from}'s prompt`, desc: text.slice(0, 90), timeout: 4000 });
+  const ta = $("#input") as HTMLTextAreaElement | null;
+  // If a turn is already running, send() queues it - the guest's turn runs after the current one.
+  if (ta) { ta.value = text; autosize(ta); void send(); }
+}
+
+// P-COLLAB.17: the current share may be hosted DIRECTLY in the renderer (WebRTC) or by the backend over the
+// relay. This is the single source of truth - a direct share reports live from the renderer coordinator (the
+// backend has no share), a relay share from the backend. `direct` lets the UI badge the connection.
+async function currentShareStatus(): Promise<CollabShareStatus | null> {
+  const p = p2pHostStatus();
+  if (p) return { ...p, direct: true } as unknown as CollabShareStatus;
+  return bridge.collabStatus();
+}
+
 /** Reflect a live share in the rail glyph (a small pulsing dot). Fetches status when not supplied. */
 async function refreshShareDot(st?: CollabShareStatus | null): Promise<void> {
-  const s = st !== undefined ? st : await bridge.collabStatus();
+  const s = st !== undefined ? st : await currentShareStatus();
   const dot = $("#railShareDot");
   if (dot) (dot as HTMLElement).hidden = !s?.active;
-  // Resume/stop the guest-prompt poller to match reality (e.g. after a reload while an edit share is live).
-  if (s?.active && s.allowEdit) startCollabHostPoll(); else if (!s?.active) stopCollabHostPoll();
+  // Resume/stop the guest-prompt poller to match reality (e.g. after a reload while a relay edit share is live).
+  // A DIRECT-P2P edit share delivers guest prompts via a callback, not the inbox - so it never polls.
+  if (s?.active && s.allowEdit && !s.direct) startCollabHostPoll(); else if (!s?.active) stopCollabHostPoll();
 }
 
 function openSharePanel(): void {
@@ -7627,7 +7656,7 @@ function openSharePanel(): void {
   });
 
   const draw = async () => {
-    const [st, serve] = await Promise.all([bridge.collabStatus(), bridge.collabRelayServeStatus()]);
+    const [st, serve, p2p] = await Promise.all([currentShareStatus(), bridge.collabRelayServeStatus(), bridge.collabP2PConfig()]);
     // When THIS device is hosting the relay, that IS the relay - so show the "ready" state (Start), never the
     // external-relay setup form. Synthesize the relay locally so the UI is right even if the status poll
     // hasn't folded the embedded relay in yet.
@@ -7636,14 +7665,16 @@ function openSharePanel(): void {
       show = { ...st, relay: { wsBase: serve.wsBase, httpBase: serve.wsBase.replace(/^ws/, "http"), label: "this device (embedded relay)", source: "embedded" } };
     }
     // The "be the relay" toggle sits above the share flow in the non-live states; when a share is live the
-    // body is the roster + Stop, so the toggle is hidden (you can't change relay mid-share).
-    body.innerHTML = (st?.active ? "" : shareRelayServeHtml(serve)) + shareBodyHtml(show);
+    // body is the roster + Stop, so the toggle is hidden (you can't change relay mid-share). P-COLLAB.17: the
+    // P2P toggle + STUN/TURN config ride the ready-state form (locked out under managed policy).
+    const p2pCfg = p2p?.managed.locked ? null : (p2p?.config ?? null);
+    body.innerHTML = (st?.active ? "" : shareRelayServeHtml(serve)) + shareBodyHtml(show, p2pCfg);
     void refreshShareDot(st);
     return st;
   };
   // While a share is live, refresh only the roster in place (never clobbers copy buttons the user is using).
   const pollRoster = async () => {
-    const st = await bridge.collabStatus();
+    const st = await currentShareStatus();
     if (!st?.active) { await draw(); return; } // it ended elsewhere - fall back to a full redraw
     const list = $("#shareParticipants", ov); const count = $("#sharePeerCount", ov);
     if (count) count.textContent = String(st.participantCount);
@@ -7660,15 +7691,40 @@ function openSharePanel(): void {
     if (copy) { const v = copy.dataset.copy ?? ""; try { await navigator.clipboard.writeText(v); showToast({ title: `${copy.dataset.copyWhat ?? "Copied"} copied`, desc: "Paste it to your guest.", timeout: 1800 }); } catch { showToast({ tone: "warn", title: "Couldn't copy", desc: "Copy it from the field instead." }); } return; }
     if (t.closest("[data-share-start]")) {
       const allowEdit = ($("#shareAllowEdit", ov) as HTMLInputElement | null)?.checked ?? false;
-      const r = await bridge.collabStart({ allowEdit });
-      if (!r.ok) { showToast({ tone: "danger", title: "Couldn't start sharing", desc: r.error ?? "", timeout: 5000 }); return; }
+      const preferP2P = ($("#sharePreferP2P", ov) as HTMLInputElement | null)?.checked ?? false;
+      // P-COLLAB.17: persist the P2P preference + STUN/TURN config from the form (also used to start now).
+      const iceUrls = (($("#shareIceUrls", ov) as HTMLTextAreaElement | null)?.value ?? "").split(/[\n,]/).map((u) => u.trim()).filter(Boolean);
+      const turnUsername = ($("#shareTurnUser", ov) as HTMLInputElement | null)?.value.trim() ?? "";
+      const turnCredential = ($("#shareTurnCred", ov) as HTMLInputElement | null)?.value.trim() ?? "";
+      await bridge.collabSetP2P({ preferDirect: preferP2P, iceUrls, turnUsername, turnCredential });
+      if (preferP2P) {
+        // Direct P2P: mint + host in the RENDERER (RTCPeerConnection is renderer-only). Resolve the authorized
+        // relay endpoint (external, or the embedded one) - it is used only to signal + as the fallback.
+        const [back, serve] = await Promise.all([bridge.collabStatus(), bridge.collabRelayServeStatus()]);
+        let relay = back?.relay ?? null;
+        if (!relay && serve?.running && serve.wsBase) relay = { wsBase: serve.wsBase, httpBase: serve.wsBase.replace(/^ws/, "http"), label: "this device (embedded relay)", source: "embedded" };
+        if (!relay) { showToast({ tone: "danger", title: "Couldn't start sharing", desc: "No relay is configured to help peers connect. Set one, or host the relay on this device.", timeout: 6000 }); return; }
+        try {
+          await startP2PHost({
+            relayWsBase: relay.wsBase, relayHttpBase: relay.httpBase, relayLabel: relay.label, relaySource: relay.source,
+            header: { sessionId: "local", title: "LUCID session", model: state.model || "model", hostName: "host" },
+            allowEdit, ice: { iceUrls, turnUsername: turnUsername || undefined, turnCredential: turnCredential || undefined },
+            onGuestPrompt: (text, guest) => runGuestPromptLocally(text, guest.name),
+            onGuestAbort: () => { if (state.streaming) { void bridge.cancelChat(); showToast({ title: "Guest asked to stop", desc: "Stopping the current turn.", timeout: 2500 }); } },
+          });
+        } catch (e) { showToast({ tone: "danger", title: "Couldn't start sharing", desc: String((e as Error)?.message ?? e), timeout: 5000 }); return; }
+      } else {
+        const r = await bridge.collabStart({ allowEdit });
+        if (!r.ok) { showToast({ tone: "danger", title: "Couldn't start sharing", desc: r.error ?? "", timeout: 5000 }); return; }
+      }
       await draw();
-      showToast({ title: allowEdit ? "Sharing started (edit)" : "Sharing started", desc: allowEdit ? "Guests with this link can drive the session, through your approvals." : "Copy the invite link and send it to your guest.", timeout: 3200 });
+      showToast({ title: allowEdit ? "Sharing started (edit)" : "Sharing started", desc: preferP2P ? "Peers connect directly (WebRTC); the relay only helps them find each other." : (allowEdit ? "Guests with this link can drive the session, through your approvals." : "Copy the invite link and send it to your guest."), timeout: 3200 });
       if (!poll) poll = window.setInterval(() => { if ($("#shareModal")) void pollRoster(); }, 2500);
-      if (allowEdit) startCollabHostPoll(); // run guest prompts through the host's own composer
+      // A relay edit share polls the inbox; a direct share gets guest prompts via its callback (no polling).
+      if (allowEdit && !preferP2P) startCollabHostPoll();
       return;
     }
-    if (t.closest("[data-share-stop]")) { await bridge.collabStop(); stopCollabHostPoll(); if (poll) { clearInterval(poll); poll = undefined; } await draw(); showToast({ title: "Sharing stopped", desc: "The room is closed - guests were disconnected.", timeout: 2000 }); return; }
+    if (t.closest("[data-share-stop]")) { if (p2pHostActive()) stopP2PHost(); else await bridge.collabStop(); stopCollabHostPoll(); if (poll) { clearInterval(poll); poll = undefined; } await draw(); showToast({ title: "Sharing stopped", desc: "The room is closed - guests were disconnected.", timeout: 2000 }); return; }
     if (t.closest("[data-share-relay-change]")) { body.innerHTML = shareBodyHtml({ active: false, participantCount: 0, participants: [], relay: null }); return; }
     if (t.closest("[data-share-relay-save]")) {
       const url = ($("#shareRelayUrl", ov) as HTMLInputElement | null)?.value.trim() ?? "";
@@ -7700,7 +7756,9 @@ function openJoinPanel(): void {
   </div></div>`);
   const st: JoinState = { header: null, turns: [], pending: "", participants: 0, note: null, readOnly: true };
   let joined = false;
-  const close = () => { if (joined) void bridge.collabLeave().catch(() => {}); joined = false; ov.remove(); document.removeEventListener("keydown", onKey); };
+  let direct = false; // P-COLLAB.17: this join is running peer-to-peer (renderer coordinator), not via the backend
+  const leaveSession = () => { if (direct) stopP2PGuest(); else void bridge.collabLeave().catch(() => {}); };
+  const close = () => { if (joined) leaveSession(); joined = false; ov.remove(); document.removeEventListener("keydown", onKey); };
   const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") { e.preventDefault(); close(); } };
   document.addEventListener("keydown", onKey);
   const body = $("#joinBody", ov) as HTMLElement;
@@ -7740,8 +7798,13 @@ function openJoinPanel(): void {
     const inp = $("#joinPrompt", ov) as HTMLInputElement | null;
     const text = inp?.value.trim() ?? "";
     if (!text) return;
-    const r = await bridge.collabGuestSendPrompt(text);
-    if (!r.ok) { showToast({ tone: "warn", title: "Couldn't send", desc: r.error ?? "", timeout: 4000 }); return; }
+    // Direct joins drive the host straight over the P2P link; relay joins go through the backend guest.
+    if (direct) {
+      if (!p2pGuestSendPrompt(text)) { showToast({ tone: "warn", title: "Couldn't send", desc: "You're watching read-only.", timeout: 4000 }); return; }
+    } else {
+      const r = await bridge.collabGuestSendPrompt(text);
+      if (!r.ok) { showToast({ tone: "warn", title: "Couldn't send", desc: r.error ?? "", timeout: 4000 }); return; }
+    }
     if (inp) inp.value = "";
     showToast({ title: "Sent to the host", desc: "It runs there, through the host's approvals + security gate.", timeout: 2600 });
   };
@@ -7773,14 +7836,35 @@ function openJoinPanel(): void {
     const t = ev.target as HTMLElement;
     if (t === ov || t.closest("[data-join-close]")) { close(); return; }
     if (t.closest("[data-join-send]")) { await sendGuestPrompt(); return; }
-    if (t.closest("[data-join-leave]")) { await bridge.collabLeave().catch(() => {}); joined = false; st.note = "you left the session"; renderLive(); return; }
+    if (t.closest("[data-join-leave]")) { leaveSession(); joined = false; st.note = "you left the session"; renderLive(); return; }
     if (t.closest("[data-join-connect]")) {
       const link = ($("#joinLink", ov) as HTMLInputElement | null)?.value.trim() ?? "";
       const err = $("#joinErr", ov) as HTMLElement | null;
       if (!link) { if (err) { err.textContent = "Paste the invite link you were sent."; err.hidden = false; } return; }
       joined = true; st.note = null; renderLive();
-      // stream frames until the session ends; a parse/policy failure arrives as an error frame
-      void bridge.collabJoin(link, onFrame);
+      // P-COLLAB.17: if the user prefers a direct connection, run the renderer P2P guest (relay only signals +
+      // falls back); else stream frames from the backend guest over the relay. Either way a parse/policy
+      // failure surfaces as an error frame the transcript renders.
+      const cfg = await bridge.collabP2PConfig();
+      direct = !!cfg?.config.preferDirect && !cfg?.managed.locked;
+      if (direct) {
+        const endpoint = p2pLinkEndpoint(link);
+        if (endpoint) { const az = await bridge.collabAuthorizeConnect(endpoint); if (!az.ok) { direct = false; joined = false; onFrame({ kind: "error", message: az.error ?? "this relay isn't permitted by your organization's policy" }); return; } }
+        const res = startP2PGuest({
+          link, guestName: cfg?.guestName ?? "guest",
+          ice: { iceUrls: cfg?.config.iceUrls ?? [], turnUsername: cfg?.config.turnUsername, turnCredential: cfg?.config.turnCredential },
+          callbacks: {
+            onWelcome: (w) => onFrame({ kind: "welcome", header: w.header, transcript: w.transcript, participants: w.participants, readOnly: w.readOnly }),
+            onEvent: (e) => onFrame({ kind: "event", event: e }),
+            onState: (participants, model, contextPct) => onFrame({ kind: "state", participants, model, contextPct }),
+            onError: (message) => onFrame({ kind: "error", message }),
+            onEnd: (reason) => onFrame({ kind: "end", reason }),
+          },
+        });
+        if (!res.ok) { direct = false; joined = false; onFrame({ kind: "error", message: res.error ?? "couldn't connect" }); }
+      } else {
+        void bridge.collabJoin(link, onFrame);
+      }
       return;
     }
   });

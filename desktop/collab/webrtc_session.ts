@@ -20,6 +20,7 @@ import { LoopbackSignaling, type SignalingChannel } from "./signaling.ts";
 import { generateRoomKey, importRoomKey, packEnvelope } from "./crypto.ts";
 import type { WebSocketFactory, WebSocketLike } from "./relay_client.ts";
 import { webrtcHostCoordinator, webrtcGuestCoordinator } from "./webrtc_coordinator.ts";
+import { startP2PHost, startP2PGuest, stopP2PHost, stopP2PGuest, teeEvent, teeUserTurn, p2pHostStatus } from "../renderer/collab_p2p.ts"; // P-COLLAB.17
 
 export interface WebRtcHostOpts { key: CryptoKey; signaling: SignalingChannel; host: HostStartOpts; iceServers?: RTCIceServer[] }
 export interface WebRtcGuestOpts { key: CryptoKey; signaling: SignalingChannel; guest: GuestStartOpts; callbacks?: GuestCallbacks; iceServers?: RTCIceServer[] }
@@ -187,5 +188,48 @@ export async function webrtcRelaySelfTest(): Promise<{ ok: boolean; detail: stri
   } finally {
     try { guest?.close(); } catch { /* */ }
     try { host?.close(); } catch { /* */ }
+  }
+}
+
+/**
+ * P-COLLAB.17 proof: the RENDERER P2P MODULE (`collab_p2p.ts`) end-to-end - `startP2PHost` mints the room +
+ * links, `startP2PGuest` parses the minted view link + joins, the host's teed ChatEvents reach the guest, and
+ * the DataChannel upgrades. Runs over the in-memory loopback relay (no server) so it is deterministic + not
+ * subject to backend polling / reachability. Proves the toggle's actual code path, not just the engine.
+ */
+export async function webrtcP2PModuleSelfTest(): Promise<{ ok: boolean; detail: string }> {
+  if (typeof RTCPeerConnection === "undefined") return { ok: false, detail: "no RTCPeerConnection in this build" };
+  try {
+    const hub = new LoopbackRelayHub();
+    const wsFactory = hub.factory();
+    const events: string[] = [];
+    let welcomed = false;
+    let title = "";
+
+    const status = await startP2PHost({
+      relayWsBase: "wss://loopback", relayHttpBase: "https://loopback", relayLabel: "loopback", relaySource: "embedded",
+      header: { sessionId: "s", title: "P2P module self-test", model: "m", hostName: "host" },
+      allowEdit: false, ice: null, wsFactory,
+    });
+    const res = startP2PGuest({
+      link: status.viewLink, guestName: "bob", ice: null, wsFactory,
+      callbacks: { onWelcome: (w) => { welcomed = true; title = w.header.title; }, onEvent: (e) => events.push(e.type) },
+    });
+    if (!res.ok) return { ok: false, detail: `guest start failed: ${res.error}` };
+
+    await waitFor(() => welcomed, "the guest welcome via the P2P module over the loopback relay");
+    teeUserTurn("hi over the module");
+    teeEvent({ type: "token", text: "yo" });
+    teeEvent({ type: "done", text: "done" });
+    await waitFor(() => events.includes("token") && events.includes("done"), "the teed events reaching the guest");
+    await new Promise((r) => setTimeout(r, 350)); // let ICE settle so we can report the path
+
+    const ok = welcomed && title === "P2P module self-test" && p2pHostStatus()?.participantCount === 1;
+    return { ok, detail: `welcome title="${title}", guests=${p2pHostStatus()?.participantCount}, events=${JSON.stringify(events)}, viewLink="${status.viewLink.slice(0, 30)}…"` };
+  } catch (e) {
+    return { ok: false, detail: String((e as Error)?.message ?? e) };
+  } finally {
+    try { stopP2PGuest(); } catch { /* */ }
+    try { stopP2PHost(); } catch { /* */ }
   }
 }

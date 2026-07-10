@@ -3141,6 +3141,12 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 
 /* P-COLLAB.13: guest-write UI - the "can edit" tag + the guest prompt composer */
 .share-peer-tag.edit{color:var(--green);border-color:color-mix(in srgb,var(--green) 40%,transparent);background:var(--green-dim)}
+/* P-COLLAB.17: the "direct P2P" badge on a live direct share + the STUN/TURN config disclosure */
+.share-peer-tag.direct{color:var(--accent);border-color:color-mix(in srgb,var(--accent) 40%,transparent);background:color-mix(in srgb,var(--accent) 14%,transparent)}
+.share-ice{margin:2px 0 4px;font-size:12.5px}
+.share-ice>summary{cursor:pointer;color:var(--txt-2);padding:5px 0;user-select:none;list-style-position:inside}
+.share-ice>summary:hover{color:var(--txt)}
+.share-ice-ta{display:block;width:100%;box-sizing:border-box;margin:6px 0;resize:vertical;min-height:44px;font-family:var(--mono,monospace);font-size:11.5px;line-height:1.5}
 .join-compose{display:flex;gap:7px;margin-top:11px}
 .join-prompt-input{flex:1;min-width:0;box-sizing:border-box;background:var(--bg-0);border:1px solid var(--line-strong);
   border-radius:8px;padding:9px 11px;color:var(--txt);font-size:13px;outline:none}
