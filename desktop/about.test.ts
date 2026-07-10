@@ -51,6 +51,13 @@ describe("aboutHtml", () => {
     expect(html).toContain("Take the tour");
   });
 
+  test("links the product website, opening safely in the OS browser", () => {
+    expect(html).toContain('href="https://lucid-agent.web.app/"');
+    expect(html).toContain("lucid-agent.web.app");
+    expect(html).toContain('target="_blank"');
+    expect(html).toContain('rel="noopener noreferrer"'); // no window.opener / referrer leak
+  });
+
   test("escapes the interpolated version (no raw injection)", () => {
     const evil = aboutHtml('1<script>"&');
     expect(evil).not.toContain("<script>");
@@ -75,7 +82,9 @@ describe("logos + rail glyph match the icon family", () => {
 
   test("techLeadLogo renders the brand avatar image in an animated ring", () => {
     const t = techLeadLogo();
-    expect(t).toContain("assets/techlead187-avatar.png");
+    // The emblem is INLINED as a data URI (no out-of-band fetch), so it paints with the rest of the panel.
+    expect(t).toContain("src=\"data:image/png;base64,");
+    expect(t).not.toContain("assets/techlead187-avatar.png"); // no separate request left
     expect(t).toContain("about-tl-ring"); // the premium animated gradient ring
     expect(t).toContain('alt=""'); // decorative (the brand name is adjacent text)
   });

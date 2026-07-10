@@ -12,6 +12,8 @@
 //  - techLeadLogo()    the TechLead 187 emblem (gradient rounded square + "187" monogram).
 //  - aboutHtml(ver)    the full panel inner HTML; `ver` comes from APP_VERSION (single source).
 
+import { TECHLEAD_AVATAR_URI } from "./techlead_avatar.ts"; // the brand emblem, inlined so it paints with the panel
+
 // Small HTML escape for any interpolated value (version string is ours, but stay disciplined).
 const e = (s: string) =>
   s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -36,12 +38,13 @@ export function lucidLogo(): string {
 
 /** The TechLead 187 brand avatar - the real logo image inside a premium animated gradient ring. */
 export function techLeadLogo(): string {
-  // Load EAGERLY: this sits above the fold in a modal the user just opened, so `loading="lazy"` +
-  // `decoding="async"` made the ring paint first and the logo pop in a beat later (worst right after an
-  // upgrade, when the freshly-written asset isn't cached yet). Eager + sync decode paints it with the ring.
+  // INLINED as a data URI (techlead_avatar.ts): the rest of the panel is inline SVG that paints in one frame,
+  // but a raster `<img src>` loads + decodes out-of-band, so it used to pop in a beat after the modal (worst on
+  // a cold cache right after an upgrade). Folding the bytes into the markup makes it paint with the ring - no
+  // separate request, no cache dependency. `decoding="sync"` keeps it in the same paint as the surrounding DOM.
   return `<span class="about-tl-avatar" aria-hidden="true">
     <span class="about-tl-ring"></span>
-    <img class="about-tl-img" src="assets/techlead187-avatar.png" alt="" width="46" height="46" loading="eager" decoding="sync" fetchpriority="high" />
+    <img class="about-tl-img" src="${TECHLEAD_AVATAR_URI}" alt="" width="46" height="46" decoding="sync" />
   </span>`;
 }
 
@@ -58,6 +61,7 @@ export function aboutHtml(version: string): string {
       <div class="about-logo" id="aboutTitle">${lucidLogo()}</div>
       <div class="about-tag">Secure agentic IDE · provenance · memory</div>
       <div class="about-ver" data-tip="App version">v${v}</div>
+      <a class="about-site" href="https://lucid-agent.web.app/" target="_blank" rel="noopener noreferrer" data-tip="Open the LUCID Agent website">lucid-agent.web.app ↗</a>
     </div>
 
     <p class="about-blurb">

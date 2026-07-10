@@ -2266,6 +2266,9 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .about-ver{position:relative;display:inline-block;margin-top:12px;padding:3px 12px;border-radius:999px;
   font:600 12px var(--mono);color:var(--accent-2);background:var(--accent-dim);
   border:1px solid color-mix(in srgb,var(--accent) 34%,transparent)}
+.about-site{position:relative;display:block;width:max-content;margin:10px auto 0;font-size:12px;
+  color:var(--accent-2);text-decoration:none;letter-spacing:.2px;transition:color var(--t) var(--ease)}
+.about-site:hover{color:var(--accent);text-decoration:underline}
 
 .about-blurb{font-size:13px;line-height:1.65;color:var(--txt-2);margin:0 2px 16px}
 .about-blurb b{color:var(--txt)}
