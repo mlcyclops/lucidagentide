@@ -7461,14 +7461,18 @@ function shareBodyHtml(st: CollabShareStatus | null): string {
     const roster = st.participants.length
       ? st.participants.map((p) => `<li class="share-peer"><span class="share-peer-dot"></span>${esc(p.name)} <span class="share-peer-tag">${esc(p.access)}</span></li>`).join("")
       : `<li class="share-peer-empty">${icon("clock", 13)} Waiting for someone to join…</li>`;
+    // When editing is allowed, share the EDIT (full) link so a guest gets drive access; otherwise the view link.
+    const link = st.allowEdit ? (st.fullLink ?? "") : (st.viewLink ?? "");
     return `
-      <div class="share-live-head"><span class="share-live-dot"></span> Live · ${esc(st.relayLabel ?? src)}</div>
-      <label class="share-lbl">View-only invite link</label>
+      <div class="share-live-head"><span class="share-live-dot"></span> Live · ${esc(st.relayLabel ?? src)}${st.allowEdit ? ` <span class="share-peer-tag edit">can edit</span>` : ""}</div>
+      <label class="share-lbl">${st.allowEdit ? "Edit invite link (guest can drive)" : "View-only invite link"}</label>
       <div class="share-linkrow">
-        <input class="share-link-input" id="shareViewLink" type="text" readonly value="${esc(st.viewLink ?? "")}" spellcheck="false" />
-        <button class="btn-mini" data-copy="${esc(st.viewLink ?? "")}" data-copy-what="Invite link">${icon("link", 12)} Copy</button>
+        <input class="share-link-input" id="shareViewLink" type="text" readonly value="${esc(link)}" spellcheck="false" />
+        <button class="btn-mini" data-copy="${esc(link)}" data-copy-what="Invite link">${icon("link", 12)} Copy</button>
       </div>
-      <p class="share-hint">Send this to someone running LUCID. It carries the room key end-to-end - the relay can never read the session. Anyone with the link can watch; there is no per-person revoke, so stop + reshare to rotate.</p>
+      <p class="share-hint">${st.allowEdit
+        ? "Send this to someone running LUCID. They can DRIVE this session - but every prompt runs here, through <b>your</b> approvals + security gate. The room key rides the link end-to-end; the relay never reads it."
+        : "Send this to someone running LUCID. It carries the room key end-to-end - the relay can never read the session. Anyone with the link can watch; stop + reshare to rotate."}</p>
       <div class="share-roster">
         <div class="share-roster-head">${icon("share", 13)} Participants <span class="share-count" id="sharePeerCount">${st.participantCount}</span></div>
         <ul class="share-peers" id="shareParticipants">${roster}</ul>
@@ -7489,7 +7493,8 @@ function shareBodyHtml(st: CollabShareStatus | null): string {
   const src = st.relay.source === "public" ? "public relay" : st.relay.source === "embedded" ? "no third party" : "self-hosted relay";
   return `
     <div class="share-ready-note">${icon("check", 13)}<span>Relay ready: <b>${esc(st.relay.label)}</b> <span class="share-peer-tag">${esc(src)}</span></span></div>
-    <p class="share-hint">Starting a share opens an end-to-end-encrypted room and broadcasts this session live. Guests are view-only. You can stop any time.</p>
+    <p class="share-hint">Starting a share opens an end-to-end-encrypted room and broadcasts this session live. You can stop any time.</p>
+    <label class="share-check"><input type="checkbox" id="shareAllowEdit" /> <span><b>Let a guest drive this session</b> (edit) - their prompts run here, through <b>your</b> approvals + security gate. Otherwise guests are view-only.</span></label>
     <div class="modal-actions">
       <button class="btn-mini" data-share-relay-change>${icon("sliders", 12)} Change relay</button>
       <button class="btn-mini ok" data-share-start>${icon("share", 12)} Start sharing</button>
@@ -7523,11 +7528,38 @@ function shareRelayServeHtml(serve: import("./bridge.ts").CollabRelayServeStatus
     </div>`;
 }
 
+// P-COLLAB.13 (ADR-0198): while sharing with EDIT allowed, poll the guest-prompt inbox and run any pending
+// prompt through the host's OWN composer - so omp's scan gate + exec/egress approvals fire exactly as for a
+// local prompt, and the turn taps back to the guests. The guest's prompt is attributed (a toast), never
+// disguised as the host's own. Runs even when the Share panel is closed.
+let collabHostPoll: number | undefined;
+function startCollabHostPoll(): void {
+  if (collabHostPoll) return;
+  collabHostPoll = window.setInterval(async () => {
+    const s = await bridge.collabStatus();
+    if (!s?.active || !s.allowEdit) { stopCollabHostPoll(); return; }
+    const inbox = await bridge.collabGuestInbox();
+    if (!inbox) return;
+    if (inbox.abort && state.streaming) { void bridge.cancelChat(); showToast({ title: "Guest asked to stop", desc: "Stopping the current turn.", timeout: 2500 }); }
+    if (inbox.prompt) {
+      const { text, from } = inbox.prompt;
+      showToast({ title: `Running ${from}'s prompt`, desc: text.slice(0, 90), timeout: 4000 });
+      const ta = $("#input") as HTMLTextAreaElement | null;
+      // Route it through the normal send() path (gate + approvals + collab tap). If a turn is already
+      // running, send() queues it - the guest's turn runs after the current one.
+      if (ta) { ta.value = text; autosize(ta); void send(); }
+    }
+  }, 2000);
+}
+function stopCollabHostPoll(): void { if (collabHostPoll) { clearInterval(collabHostPoll); collabHostPoll = undefined; } }
+
 /** Reflect a live share in the rail glyph (a small pulsing dot). Fetches status when not supplied. */
 async function refreshShareDot(st?: CollabShareStatus | null): Promise<void> {
   const s = st !== undefined ? st : await bridge.collabStatus();
   const dot = $("#railShareDot");
   if (dot) (dot as HTMLElement).hidden = !s?.active;
+  // Resume/stop the guest-prompt poller to match reality (e.g. after a reload while an edit share is live).
+  if (s?.active && s.allowEdit) startCollabHostPoll(); else if (!s?.active) stopCollabHostPoll();
 }
 
 function openSharePanel(): void {
@@ -7592,14 +7624,16 @@ function openSharePanel(): void {
     const copy = t.closest("[data-copy]") as HTMLElement | null;
     if (copy) { const v = copy.dataset.copy ?? ""; try { await navigator.clipboard.writeText(v); showToast({ title: `${copy.dataset.copyWhat ?? "Copied"} copied`, desc: "Paste it to your guest.", timeout: 1800 }); } catch { showToast({ tone: "warn", title: "Couldn't copy", desc: "Copy it from the field instead." }); } return; }
     if (t.closest("[data-share-start]")) {
-      const r = await bridge.collabStart();
+      const allowEdit = ($("#shareAllowEdit", ov) as HTMLInputElement | null)?.checked ?? false;
+      const r = await bridge.collabStart({ allowEdit });
       if (!r.ok) { showToast({ tone: "danger", title: "Couldn't start sharing", desc: r.error ?? "", timeout: 5000 }); return; }
       await draw();
-      showToast({ title: "Sharing started", desc: "Copy the invite link and send it to your guest.", timeout: 3000 });
+      showToast({ title: allowEdit ? "Sharing started (edit)" : "Sharing started", desc: allowEdit ? "Guests with this link can drive the session, through your approvals." : "Copy the invite link and send it to your guest.", timeout: 3200 });
       if (!poll) poll = window.setInterval(() => { if ($("#shareModal")) void pollRoster(); }, 2500);
+      if (allowEdit) startCollabHostPoll(); // run guest prompts through the host's own composer
       return;
     }
-    if (t.closest("[data-share-stop]")) { await bridge.collabStop(); if (poll) { clearInterval(poll); poll = undefined; } await draw(); showToast({ title: "Sharing stopped", desc: "The room is closed - guests were disconnected.", timeout: 2000 }); return; }
+    if (t.closest("[data-share-stop]")) { await bridge.collabStop(); stopCollabHostPoll(); if (poll) { clearInterval(poll); poll = undefined; } await draw(); showToast({ title: "Sharing stopped", desc: "The room is closed - guests were disconnected.", timeout: 2000 }); return; }
     if (t.closest("[data-share-relay-change]")) { body.innerHTML = shareBodyHtml({ active: false, participantCount: 0, participants: [], relay: null }); return; }
     if (t.closest("[data-share-relay-save]")) {
       const url = ($("#shareRelayUrl", ov) as HTMLInputElement | null)?.value.trim() ?? "";
@@ -7646,16 +7680,35 @@ function openJoinPanel(): void {
     const turns = st.turns.map((tn) => `<div class="join-turn ${tn.role}"><span class="join-role">${tn.role === "user" ? "host" : "assistant"}</span><div class="join-text">${esc(tn.text)}</div></div>`).join("");
     const pending = st.pending ? `<div class="join-turn assistant"><span class="join-role">assistant</span><div class="join-text">${esc(st.pending)}<span class="join-cursor">▋</span></div></div>` : "";
     const ended = st.note ? `<div class="join-ended">${icon("info", 13)} ${esc(st.note)}</div>` : "";
+    const canEdit = !st.readOnly && !st.note;
     return `
-      <div class="join-head">${st.note ? icon("info", 13) : `<span class="share-live-dot"></span>`}<span>${st.note ? "Ended" : "Watching"} <b>${esc(h?.title ?? "session")}</b>${h ? ` · ${esc(h.hostName)} · ${esc(h.model)}` : ""} <span class="share-peer-tag">read-only</span></span></div>
+      <div class="join-head">${st.note ? icon("info", 13) : `<span class="share-live-dot"></span>`}<span>${st.note ? "Ended" : "Watching"} <b>${esc(h?.title ?? "session")}</b>${h ? ` · ${esc(h.hostName)} · ${esc(h.model)}` : ""} <span class="share-peer-tag${st.readOnly ? "" : " edit"}">${st.readOnly ? "read-only" : "can edit"}</span></span></div>
       <div class="join-transcript" id="joinTranscript">${turns}${pending}${turns || pending ? "" : `<div class="join-turn-empty">${icon("clock", 13)} Waiting for the host…</div>`}</div>
       ${ended}
+      ${canEdit ? `<div class="join-compose">
+        <input id="joinPrompt" class="join-prompt-input" type="text" placeholder="Drive the session… (runs on the host, through their approvals)" />
+        <button class="btn-mini ok" data-join-send>${icon("send", 12)} Send</button>
+      </div>` : ""}
       <div class="join-foot"><span class="join-watchers">${st.participants} watching</span>${st.note ? `<button class="btn-mini" data-join-close>${icon("check", 12)} Close</button>` : `<button class="btn-mini danger" data-join-leave>${icon("close", 12)} Leave</button>`}</div>`;
   };
   const renderConnect = () => { body.innerHTML = connectHtml(); setTimeout(() => ($("#joinLink", ov) as HTMLInputElement | null)?.focus(), 30); };
   const renderLive = () => {
+    // Preserve what the guest is typing across the transcript re-render (events stream constantly).
+    const prev = $("#joinPrompt", ov) as HTMLInputElement | null;
+    const draft = prev?.value ?? ""; const wasFocused = !!prev && document.activeElement === prev;
     body.innerHTML = liveHtml();
     const tr = $("#joinTranscript", ov); if (tr) tr.scrollTop = tr.scrollHeight; // keep the latest in view
+    const now = $("#joinPrompt", ov) as HTMLInputElement | null;
+    if (now && draft) { now.value = draft; if (wasFocused) now.focus(); }
+  };
+  const sendGuestPrompt = async () => {
+    const inp = $("#joinPrompt", ov) as HTMLInputElement | null;
+    const text = inp?.value.trim() ?? "";
+    if (!text) return;
+    const r = await bridge.collabGuestSendPrompt(text);
+    if (!r.ok) { showToast({ tone: "warn", title: "Couldn't send", desc: r.error ?? "", timeout: 4000 }); return; }
+    if (inp) inp.value = "";
+    showToast({ title: "Sent to the host", desc: "It runs there, through the host's approvals + security gate.", timeout: 2600 });
   };
 
   const onFrame = (f: import("./bridge.ts").CollabGuestFrame) => {
@@ -7678,9 +7731,13 @@ function openJoinPanel(): void {
     renderLive();
   };
 
+  ov.addEventListener("keydown", (ev) => {
+    if ((ev.target as HTMLElement).id === "joinPrompt" && ev.key === "Enter") { ev.preventDefault(); void sendGuestPrompt(); }
+  });
   ov.addEventListener("click", async (ev) => {
     const t = ev.target as HTMLElement;
     if (t === ov || t.closest("[data-join-close]")) { close(); return; }
+    if (t.closest("[data-join-send]")) { await sendGuestPrompt(); return; }
     if (t.closest("[data-join-leave]")) { await bridge.collabLeave().catch(() => {}); joined = false; st.note = "you left the session"; renderLive(); return; }
     if (t.closest("[data-join-connect]")) {
       const link = ($("#joinLink", ov) as HTMLInputElement | null)?.value.trim() ?? "";

@@ -3130,3 +3130,11 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .join-ended .ic{color:var(--accent-2)}
 .join-foot{display:flex;align-items:center;justify-content:space-between;margin-top:12px}
 .join-watchers{font-size:12px;color:var(--txt-3)}
+
+/* P-COLLAB.13: guest-write UI - the "can edit" tag + the guest prompt composer */
+.share-peer-tag.edit{color:var(--green);border-color:color-mix(in srgb,var(--green) 40%,transparent);background:var(--green-dim)}
+.join-compose{display:flex;gap:7px;margin-top:11px}
+.join-prompt-input{flex:1;min-width:0;box-sizing:border-box;background:var(--bg-0);border:1px solid var(--line-strong);
+  border-radius:8px;padding:9px 11px;color:var(--txt);font-size:13px;outline:none}
+.join-prompt-input:focus{border-color:var(--accent-2);box-shadow:var(--ring)}
+.join-compose .btn-mini{flex:none}

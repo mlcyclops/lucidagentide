@@ -390,6 +390,8 @@ export interface CollabShareStatus {
   relayLabel?: string;
   relaySource?: string;
   startedAt?: number;
+  /** P-COLLAB.13: true when the share allows a full-link guest to drive the host. */
+  allowEdit?: boolean;
   participantCount: number;
   participants: CollabParticipantView[];
   relay?: CollabRelay | null;
@@ -521,9 +523,15 @@ export interface LucidBridge {
   // room + view/full links + stands up the host (fails closed if no relay); `stop` ends it; `setRelay`
   // configures the authorized relay (self-hosted default, public opt-in).
   collabStatus(): Promise<CollabShareStatus | null>;
-  collabStart(): Promise<{ ok: boolean; status?: CollabShareStatus; error?: string }>;
+  /** `allowEdit` shares an EDIT link so a full-link guest can drive the host (P-COLLAB.13). */
+  collabStart(opts?: { allowEdit?: boolean }): Promise<{ ok: boolean; status?: CollabShareStatus; error?: string }>;
   collabStop(): Promise<CollabShareStatus | null>;
   collabSetRelay(patch: { url?: string; publicOptIn?: boolean }): Promise<{ relay: CollabRelay | null } | null>;
+  // P-COLLAB.13: guest-write. The HOST polls collabGuestInbox and runs a pending guest prompt through its own
+  // composer; the connected GUEST drives the host via collabGuestSendPrompt / collabGuestAbort.
+  collabGuestInbox(): Promise<{ prompt: { text: string; from: string } | null; abort: boolean } | null>;
+  collabGuestSendPrompt(text: string): Promise<{ ok: boolean; error?: string }>;
+  collabGuestAbort(): Promise<unknown>;
   // P-COLLAB.7: host the embedded relay on this device ("be the relay"), governance-gated + fail-closed.
   collabRelayServeStatus(): Promise<CollabRelayServeStatus | null>;
   collabRelayServe(patch: { enabled: boolean; host?: string; port?: number }): Promise<{ ok: boolean; status?: CollabRelayServeStatus; error?: string }>;
@@ -1012,14 +1020,23 @@ export const bridge: LucidBridge = {
   newSession: async () => { await post("/api/newSession", {}); },
   // P-COLLAB.3 (ADR-0192): live session sharing.
   collabStatus: () => getData("/api/collab/status"),
-  collabStart: async () => {
+  collabStart: async (opts) => {
     try {
-      const r = await fetch("/api/collab/start", { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: "{}" });
+      const r = await fetch("/api/collab/start", { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify({ allowEdit: !!opts?.allowEdit }) });
       const j = await r.json();
       return j?.ok ? { ok: true, status: j.data as CollabShareStatus } : { ok: false, error: String(j?.error ?? `backend error ${r.status}`) };
     } catch (e) { return { ok: false, error: String((e as Error)?.message ?? "backend unreachable") }; }
   },
   collabStop: () => post("/api/collab/stop", {}),
+  collabGuestInbox: () => getData("/api/collab/guest-inbox"),
+  collabGuestSendPrompt: async (text) => {
+    try {
+      const r = await fetch("/api/collab/guest-prompt", { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify({ text }) });
+      const j = await r.json();
+      return j?.ok ? { ok: true } : { ok: false, error: String(j?.error ?? `backend error ${r.status}`) };
+    } catch (e) { return { ok: false, error: String((e as Error)?.message ?? "backend unreachable") }; }
+  },
+  collabGuestAbort: () => post("/api/collab/guest-abort", {}),
   collabSetRelay: (patch) => post("/api/collab/relay", patch),
   collabRelayServeStatus: () => getData("/api/collab/relay/status"),
   collabRelayServe: async (patch) => {

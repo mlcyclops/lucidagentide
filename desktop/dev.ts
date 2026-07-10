@@ -204,6 +204,12 @@ let collabGuest: { guest: CollabGuest; sock: CollabSocket } | null = null;
 function collabDisplayName(): string { const s = loadSettings(); return (s.username ?? "").trim() || osHostname(); }
 function leaveCollabGuest(): void { try { collabGuest?.guest.leave("you left the session"); } catch { /* already gone */ } collabGuest = null; }
 
+// P-COLLAB.13 (ADR-0198): an EDIT guest's prompt/abort lands here; the HOST renderer polls this inbox and
+// runs it through its OWN composer (so omp's scan gate + exec/egress approvals fire, and the turn taps back to
+// collab). Consume-on-read. The prompt text is a remote guest's input - clamp its length defensively.
+let pendingGuestPrompt: { text: string; from: string } | null = null;
+let guestAbortRequested = false;
+
 const collabManager = new CollabManager({
   resolveRelay: () => effectiveRelay(),
   sessionInfo: () => {
@@ -217,6 +223,8 @@ const collabManager = new CollabManager({
   },
   makeTransport: ({ wsUrl, key }) => new CollabSocket({ wsUrl, role: "host", key }),
   now: () => Date.now(),
+  onGuestPrompt: (text, guest) => { pendingGuestPrompt = { text: String(text).slice(0, 20_000), from: guest.name }; },
+  onGuestAbort: () => { guestAbortRequested = true; },
 });
 
 // 30s memo for /api/code-activity — each rebuild spawns `git log` per workspace (ADR-0030 P-CODE.1).
@@ -1863,10 +1871,28 @@ const server = Bun.serve({
       // `relay` GET/POST reads + configures the authorized relay (self-hosted default, public opt-in).
       if (p === "/api/collab/status") return json({ ok: true, data: { ...collabManager.status(), relay: effectiveRelay() } });
       if (p === "/api/collab/start" && req.method === "POST") {
-        try { return json({ ok: true, data: await collabManager.start() }); }
+        const b = await readBody<{ allowEdit?: unknown }>(req);
+        pendingGuestPrompt = null; guestAbortRequested = false; // fresh inbox per share
+        try { return json({ ok: true, data: await collabManager.start({ allowEdit: b.allowEdit === true }) }); }
         catch (e) { return json({ ok: false, error: String((e as Error)?.message ?? e) }); }
       }
-      if (p === "/api/collab/stop" && req.method === "POST") return json({ ok: true, data: collabManager.stop("host ended the session") });
+      if (p === "/api/collab/stop" && req.method === "POST") { pendingGuestPrompt = null; guestAbortRequested = false; return json({ ok: true, data: collabManager.stop("host ended the session") }); }
+      // P-COLLAB.13 (ADR-0198): the HOST renderer polls this while sharing with edit; it runs any pending
+      // guest prompt through its own composer (gate + approvals) + aborts on request. Consume-on-read.
+      if (p === "/api/collab/guest-inbox") {
+        const out = { prompt: pendingGuestPrompt, abort: guestAbortRequested };
+        pendingGuestPrompt = null; guestAbortRequested = false;
+        return json({ ok: true, data: out });
+      }
+      // The connected GUEST drives the host (EDIT access only - CollabGuest.sendPrompt no-ops when read-only).
+      if (p === "/api/collab/guest-prompt" && req.method === "POST") {
+        const b = await readBody<{ text?: unknown }>(req);
+        const g = collabGuest?.guest;
+        if (!g) return json({ ok: false, error: "you are not connected to a shared session" });
+        const sent = g.sendPrompt(String(b.text ?? ""));
+        return sent ? json({ ok: true, data: { sent: true } }) : json({ ok: false, error: "you are watching read-only - ask the host for an edit link" });
+      }
+      if (p === "/api/collab/guest-abort" && req.method === "POST") { collabGuest?.guest.abort(); return json({ ok: true, data: { aborted: true } }); }
       if (p === "/api/collab/relay" && req.method === "GET") return json({ ok: true, data: { relay: collabRelayConfig() } });
       if (p === "/api/collab/relay" && req.method === "POST") {
         const b = await readBody<{ url?: unknown; publicOptIn?: unknown }>(req);
