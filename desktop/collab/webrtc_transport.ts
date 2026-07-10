@@ -68,7 +68,10 @@ export class WebRtcTransport {
     const pc = new RTCPeerConnection({ iceServers: this.#opts.iceServers ?? DEFAULT_ICE_SERVERS });
     this.#pc = pc;
 
-    pc.onicecandidate = (e) => { if (e.candidate) this.#opts.signaling.send({ t: "ice", candidate: e.candidate.toJSON() }); };
+    pc.onicecandidate = (e) => {
+      const c = e.candidate;
+      if (c) this.#opts.signaling.send({ t: "ice", candidate: { candidate: c.candidate, sdpMid: c.sdpMid, sdpMLineIndex: c.sdpMLineIndex, usernameFragment: c.usernameFragment } });
+    };
     pc.onconnectionstatechange = () => {
       const s = pc.connectionState;
       if (s === "failed" || s === "disconnected") this.#fail(`peer connection ${s}`);
@@ -93,7 +96,7 @@ export class WebRtcTransport {
         if (this.#closed) return;
         const sealed = await seal(this.#opts.key, frame);
         const dc = this.#dc;
-        if (dc && dc.readyState === "open") dc.send(sealed);
+        if (dc && dc.readyState === "open") dc.send(toArrayBuffer(sealed));
         else this.#pendingSends.push(sealed);
       })
       .catch((err) => this.#opts.onLog?.("webrtc: send failed", String(err)));
@@ -147,7 +150,7 @@ export class WebRtcTransport {
     this.#dc = dc;
     dc.binaryType = "arraybuffer";
     dc.onopen = () => {
-      for (const s of this.#pendingSends.splice(0)) { try { dc.send(s); } catch { /* closing */ } }
+      for (const s of this.#pendingSends.splice(0)) { try { dc.send(toArrayBuffer(s)); } catch { /* closing */ } }
       this.onOpen?.();
     };
     dc.onmessage = (ev) => this.#onData(ev.data);
@@ -186,4 +189,11 @@ export class WebRtcTransport {
     this.#dc = null;
     this.#pc = null;
   }
+}
+
+// A DataChannel `send` accepts a plain ArrayBuffer cleanly; TS 6's stricter typed-array generics make a bare
+// `Uint8Array` (ArrayBufferLike-backed) not match the send overloads. Copy out the exact bytes (frames are
+// tiny). Also handles a subarray view (nonzero byteOffset) correctly.
+function toArrayBuffer(u: Uint8Array): ArrayBuffer {
+  return u.buffer.slice(u.byteOffset, u.byteOffset + u.byteLength) as ArrayBuffer;
 }
