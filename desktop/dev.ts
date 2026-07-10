@@ -107,7 +107,7 @@ import { buildSkillArtifact, PublishDispatcher, publishersFor } from "./skill_pu
 import { kbScanner, kbStore, listKgs, activeKgId, createKg, renameKg, setActiveKg } from "./kb_store.ts"
 import { readKbSources } from "./kb_sources.ts"
 import { ingestSourcesIntoKg } from "../harness/kb/batch_ingest.ts"
-import { exportKgPack, importKgPack } from "./kb_pack.ts"
+import { exportKgPack, importKgPack, installPackFromUrl } from "./kb_pack.ts"
 import { startKbIngest, kbIngestJobStatus, cancelKbIngest } from "./kb_ingest_job.ts"
 import { ingestDocument } from "../harness/kb/ingest.ts"
 import { retrieveKnowledge, type RetrieveMode } from "../harness/kb/retrieve.ts"
@@ -1817,6 +1817,14 @@ const server = Bun.serve({
         const path = String(b.path ?? "");
         if (!path) return json({ ok: true, data: { ok: false, error: "path is required" } });
         return json({ ok: true, data: await importKgPack(path) });
+      }
+      // P-KGMARKET.4 (ADR-0206): download a signed `.lkgpack.zip` (the entitlement backend's getPackDownload
+      // URL) and install it through the SAME gate as a local import (verify + re-scan fail-closed, read-only).
+      if (p === "/api/kb/pack/install-from-url" && req.method === "POST") {
+        const b = await readBody<{ url?: unknown }>(req);
+        const url = String(b.url ?? "");
+        if (!url) return json({ ok: true, data: { ok: false, error: "url is required" } });
+        return json({ ok: true, data: await installPackFromUrl(url) });
       }
       // P-SKILLREG.2 (ADR-0102): the PUBLISH seam. Reads a codified skill's SKILL.md and publishes it as a
       // versioned artifact to the configured targets (fail-safe fan-out). Public ships the LOCAL publisher;

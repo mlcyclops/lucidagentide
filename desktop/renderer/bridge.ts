@@ -640,6 +640,8 @@ export interface LucidBridge {
   // fail-closed, installed read-only + untrusted).
   kbPackExport(input: { kgId: string; dest: string; author?: string; version?: string; role?: string; description?: string }): Promise<KbPackExportView | null>;
   kbPackImport(input: { path: string }): Promise<KbPackImportView | null>;
+  // P-KGMARKET.4 (ADR-0206): download a signed .lkgpack.zip URL and install it through the gate (read-only).
+  kbPackInstallFromUrl(url: string): Promise<KbPackImportView | null>;
   // P-CMD.1 (ADR-0146): user-authored "/" slash commands (workspace .omp/commands/). Create validates +
   // scans fail-closed server-side. `list` = stored commands; `create` returns the persisted command or errors.
   userCommands(): Promise<UserCommand[]>;
@@ -1062,6 +1064,7 @@ export const bridge: LucidBridge = {
   kbIngestCancel: (jobId) => post("/api/kb/ingest-batch/cancel", { jobId }),
   kbPackExport: (input) => post("/api/kb/pack/export", input),
   kbPackImport: (input) => post("/api/kb/pack/import", input),
+  kbPackInstallFromUrl: (url) => post("/api/kb/pack/install-from-url", { url }),
   setActiveSkill: (name, prompt) => post("/api/skill", { name, prompt }),
   clearActiveSkill: () => post("/api/skill", { clear: true }),
   skillActivated: (command, name, source) => post("/api/skill/activated", { command, name, source }),

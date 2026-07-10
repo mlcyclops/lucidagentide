@@ -609,6 +609,10 @@ demo-P-KGPACK.1: ## P-KGPACK.1 (ADR-0205): named, swappable KGs (file-per-KG + J
 demo-P-KGMARKET.1: ## P-KGMARKET.1 (ADR-0206): the fail-closed entitlement gate - the pure decision core (not signed in → signin; only an active, unexpired entitlement → pull; a lapsed/missing one → checkout) + the provider seam that defaults to a fail-closed null provider so an unconfigured public build can never pull a pack without entitlement
 	$(BUN) run desktop/scripts/demo_p_kgmarket_1.ts
 
+.PHONY: demo-P-KGMARKET.4
+demo-P-KGMARKET.4: ## P-KGMARKET.4 (ADR-0206): the download → unzip → gated-install path - a KG exports to a single .lkgpack.zip (first-party zip writer); installPackFromUrl fetches a signed URL, unzips, and runs the SAME P-KGPACK.4 gate (verify + re-scan fail-closed, read-only). A clean pack installs; a Trojan-Source pack is blocked at re-scan (a purchase grants access, not trust)
+	$(BUN) run desktop/scripts/demo_p_kgmarket_4.ts
+
 .PHONY: demo-P-KGPACK.6
 demo-P-KGPACK.6: ## P-KGPACK.6 (ADR-0205): the background KG-seed job - lift the 50-doc cap so a full dataset (here 120 conversations, past the old cap) compiles as a tracked background job with live counts + cancel; all 120 compile, 0 skipped
 	$(BUN) run desktop/scripts/demo_p_kgpack_6.ts

@@ -18,9 +18,9 @@
 // P-SKILLREG.1 / ADR-0068/0069). Keys/signers come from env (managed config), fail-soft to unsigned.
 
 import { createPrivateKey, createPublicKey, sign as edSign, type KeyObject } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync, copyFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, copyFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { DEFAULT_POLICY, type GateDecision, scanAndDecide } from "../harness/security/gate.ts";
 import { ScannerClient } from "../harness/security/scanner_client.ts";
 import { KbGraphStore } from "../harness/kb/store.ts";
@@ -28,6 +28,8 @@ import {
   buildManifest, sha256Bytes, verifyPackManifest, LKGPACK_DB_FILE, LKGPACK_MANIFEST,
   type PackManifest, type TrustedPackKey,
 } from "../harness/kb/pack.ts";
+import { zipEntries } from "../harness/kb/zip.ts";
+import { readZipEntriesMatching } from "../harness/personal/unzip.ts";
 import { kbScanner, kbStore, kgEntry, closeKg, createKg } from "./kb_store.ts";
 import { recordBlock } from "./security_log.ts";
 
@@ -69,7 +71,7 @@ function slugify(name: string): string {
   return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60) || "kg";
 }
 
-export interface PackExportResult { ok: boolean; error?: string; path?: string; signed?: boolean; pages?: number }
+export interface PackExportResult { ok: boolean; error?: string; path?: string; zipPath?: string; signed?: boolean; pages?: number }
 
 /** Export a KG as a `<slug>.lkgpack/` directory under `destDir`. Signs the manifest if a signing key is
  *  configured; otherwise the pack is unsigned. `createdAt` is injected so the result is deterministic in tests. */
@@ -92,13 +94,22 @@ export async function exportKgPack(kgId: string, destDir: string, meta: {
     pageCount: pages,
     sign: meta.sign ?? packSigner(),
   });
-  const packDir = join(destDir, `${slugify(entry.name)}.lkgpack`);
+  const slug = slugify(entry.name);
+  const packDir = join(destDir, `${slug}.lkgpack`);
+  const manifestJson = JSON.stringify(manifest, null, 2);
+  const zipPath = join(destDir, `${slug}.lkgpack.zip`);
   try {
+    // The directory (for local inspection) AND a single-file .lkgpack.zip (the uploadable/downloadable object
+    // the entitlement backend signs). Both hold the same manifest + db; the zip's entries are flat (no prefix).
     mkdirSync(packDir, { recursive: true });
     writeFileSync(join(packDir, LKGPACK_DB_FILE), db);
-    writeFileSync(join(packDir, LKGPACK_MANIFEST), JSON.stringify(manifest, null, 2));
+    writeFileSync(join(packDir, LKGPACK_MANIFEST), manifestJson);
+    writeFileSync(zipPath, zipEntries([
+      { name: LKGPACK_MANIFEST, data: Buffer.from(manifestJson, "utf8") },
+      { name: LKGPACK_DB_FILE, data: db },
+    ]));
   } catch (e) { return { ok: false, error: `write failed: ${(e as Error).message}` }; }
-  return { ok: true, path: packDir, signed: !!manifest.signature, pages };
+  return { ok: true, path: packDir, zipPath, signed: !!manifest.signature, pages };
 }
 
 export interface PackImportResult {
@@ -163,4 +174,45 @@ export async function importKgPack(packDir: string, opts: {
   try { copyFileSync(dbPath, entry.db_path); }
   catch (e) { return { ok: false, stage: "write", error: `install failed: ${(e as Error).message}` }; }
   return { ok: true, stage: "ok", kgId: entry.kg_id, kgName: entry.name, signed: v.signed, keyId: v.keyId, pages: pageCount, findings };
+}
+
+/** P-KGMARKET.4 (ADR-0206): download a `.lkgpack.zip` from a URL, unzip its manifest + db to a temp
+ *  `.lkgpack` dir, and run the SAME `importKgPack` gate (verify + re-scan fail-closed → read-only install).
+ *  The URL is the short-lived signed Storage URL the entitlement backend mints (getPackDownload) - a purchase
+ *  grants ACCESS; the import still proves ORIGIN + SAFETY. `fetchImpl` is injected for tests. */
+export async function installPackFromUrl(url: string, opts: {
+  fetchImpl?: typeof fetch;
+  scanner?: ScannerClient; trusted?: TrustedPackKey[];
+  decide?: (text: string) => Promise<GateDecision>;
+  record?: (b: { tool: string; severity?: string; findings?: string; reason: string }) => void;
+} = {}): Promise<PackImportResult> {
+  if (!url) return { ok: false, stage: "manifest", error: "no download url" };
+  const f = opts.fetchImpl ?? fetch;
+  let bytes: Buffer;
+  try {
+    const res = await f(url);
+    if (!res.ok) return { ok: false, stage: "manifest", error: `download failed (${res.status})` };
+    bytes = Buffer.from(await res.arrayBuffer());
+  } catch (e) { return { ok: false, stage: "manifest", error: `download failed: ${(e as Error).message}` }; }
+
+  // Unzip manifest + db (basename-matched, robust to any folder prefix) into a temp .lkgpack dir.
+  let extracted: { name: string; data: Buffer }[];
+  try { extracted = readZipEntriesMatching(bytes, (base) => base === LKGPACK_MANIFEST || base === LKGPACK_DB_FILE); }
+  catch (e) { return { ok: false, stage: "manifest", error: `not a valid .lkgpack.zip: ${(e as Error).message}` }; }
+  const man = extracted.find((e) => e.name === LKGPACK_MANIFEST);
+  const dbf = extracted.find((e) => e.name === LKGPACK_DB_FILE);
+  if (!man || !dbf) return { ok: false, stage: "manifest", error: "the download is missing manifest.json or kb_graph.duckdb" };
+
+  const tmp = mkdtempSync(join(tmpdir(), "lkgpack-"));
+  const packDir = join(tmp, "pack.lkgpack");
+  try {
+    mkdirSync(packDir, { recursive: true });
+    writeFileSync(join(packDir, LKGPACK_MANIFEST), man.data);
+    writeFileSync(join(packDir, LKGPACK_DB_FILE), dbf.data);
+    return await importKgPack(packDir, opts); // the P-KGPACK.4 gate copies the clean db out before we return
+  } catch (e) {
+    return { ok: false, stage: "write", error: `install failed: ${(e as Error).message}` };
+  } finally {
+    try { rmSync(tmp, { recursive: true, force: true }); } catch { /* ignore */ }
+  }
 }

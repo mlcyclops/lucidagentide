@@ -8090,9 +8090,15 @@ async function getPackFlow(pack: KgPack): Promise<void> {
     window.open(url ?? pack.url, "_blank", "noopener");
     return;
   }
-  // action === "pull": entitled. The signed-download + gated install (P-KGPACK.4) is wired by the provider
-  // in P-KGMARKET.2; until then, surface that ownership is recognised.
-  showToast({ title: `You own "${pack.name}"`, desc: "The signed download + gated install lands with the Firebase provider (P-KGMARKET.2). You can also import a .lkgpack you already have.", timeout: 6000 });
+  // action === "pull": entitled → fetch the signed download URL, then download + gated-install (P-KGMARKET.4).
+  const dl = await prov.downloadUrl(pack.id).catch(() => null);
+  if (!dl) { showToast({ tone: "danger", title: "Couldn't start the download", desc: "The pack is owned, but no download link came back. Try again.", actions: [{ label: "OK" }], timeout: 6000 }); return; }
+  showToast({ title: `Installing "${pack.name}"…`, desc: "Downloading the signed pack - it's verified for origin and re-scanned before anything installs.", timeout: 2200 });
+  const r = await bridge.kbPackInstallFromUrl(dl).catch(() => null);
+  if (!r || !r.ok) { showToast({ tone: "danger", title: "Install failed", desc: `${r?.error ?? "Couldn't install that pack."}${r?.stage ? ` (${r.stage})` : ""}`, actions: [{ label: "OK" }], timeout: 7000 }); return; }
+  if (r.kgId) { await bridge.kbActivate(r.kgId).catch(() => null); activeKbId = r.kgId; activeKbName = r.kgName ?? pack.name; }
+  await renderKbGraph();
+  showToast({ title: `"${r.kgName ?? pack.name}" installed`, desc: `${r.pages ?? 0} pages · ${r.signed ? `signed (${r.keyId || "trusted"})` : "unsigned"} · read-only`, timeout: 6000 });
 }
 
 function wire(): void {
