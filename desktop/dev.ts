@@ -83,6 +83,7 @@ function settingsData() {
 }
 import { authorizeRelayBind, collabServeAllowed, emailDomainAllowed, managedAsksageOnly, managedConfig, managedLocks, skipAllowed } from "./managed_config.ts";
 import { startRelayServer, type RelayHandle } from "./collab/relay_server.ts"; // P-COLLAB.7 (ADR-0193): the optional embedded relay
+import { localBindAddresses } from "./collab/net_addrs.ts"; // P-COLLAB.14 (ADR-0199): LAN/VPN bind options
 import { asksageConfig, listDatasets, listPersonas, monthlyTokens, scanPersona, wrapPersona } from "./asksage.ts";
 import { inspectSkill, listSkills, removeSkill, rescanSkill } from "./skills_data.ts"
 import { intelNews } from "./intel_news.ts"; // P-TRIV.3 (ADR-0176): the executive Trivia Wire's news feed
@@ -166,6 +167,9 @@ function relayServeStatus() {
     // The address a guest points at (only reachable per the bind: loopback = same machine / a tunnel).
     wsBase: collabRelay ? `ws://${collabRelay.hostname}:${collabRelay.port}` : undefined,
     rooms: collabRelay?.roomCount() ?? 0,
+    // P-COLLAB.14: this machine's bindable addresses (loopback / LAN / VPN) for the toggle to offer, so a peer
+    // on your network can reach the relay directly. Each is still bind-authorized fail-closed on serve.
+    addresses: localBindAddresses(),
     // Governance the toggle must honor: locked ⇒ disable the control; allowServe:false ⇒ can't turn on.
     managed: { locked: managedLocks(mc).collab, allowServe: collabServeAllowed(mc), org: mc?.orgName ?? null },
   };

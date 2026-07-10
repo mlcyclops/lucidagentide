@@ -7511,6 +7511,10 @@ function shareRelayServeHtml(serve: import("./bridge.ts").CollabRelayServeStatus
   const locked = serve.managed.locked;
   const on = serve.running;
   const bind = on ? `${esc(serve.hostname ?? "")}:${serve.port}` : "";
+  // P-COLLAB.14: offer this machine's addresses (loopback / LAN / VPN) so a peer on your network can reach you
+  // directly. A "custom…" option keeps a text field for a DNS name / 0.0.0.0. Loopback is the default.
+  const addrs = serve.addresses ?? [{ address: "127.0.0.1", family: "IPv4" as const, kind: "loopback" as const, label: "127.0.0.1 — this machine only" }];
+  const opts = addrs.map((a) => `<option value="${esc(a.address)}">${esc(a.label)}</option>`).join("") + `<option value="__custom__">Custom address…</option>`;
   return `
     <div class="share-serve-card">
       <label class="share-serve-toggle">
@@ -7519,11 +7523,13 @@ function shareRelayServeHtml(serve: import("./bridge.ts").CollabRelayServeStatus
       </label>
       ${on
         ? `<div class="share-serve-on">${icon("check", 12)} Relay live on <code>${bind}</code> · new shares use this device.</div>`
-        : `<div class="share-serve-fields">
-             <input class="share-link-input" id="shareServeHost" type="text" value="127.0.0.1" spellcheck="false" aria-label="bind address" ${locked ? "disabled" : ""} />
+        : `<label class="share-serve-lbl">Reachable at</label>
+           <div class="share-serve-fields">
+             <select class="share-link-input share-serve-select" id="shareServeHostSel" aria-label="bind address" ${locked ? "disabled" : ""}>${opts}</select>
              <input class="share-link-input share-port" id="shareServePort" type="text" value="8790" spellcheck="false" aria-label="port" ${locked ? "disabled" : ""} />
            </div>
-           <p class="share-serve-hint">Loopback (<code>127.0.0.1</code>) reaches a guest on this machine or over a tunnel/VPN; a LAN address may require an admin allowlist.</p>`}
+           <input class="share-link-input" id="shareServeHost" type="text" value="" placeholder="wss host / IP (e.g. 0.0.0.0 for all interfaces)" spellcheck="false" aria-label="custom bind address" hidden ${locked ? "disabled" : ""} />
+           <p class="share-serve-hint">Loopback reaches only this machine (or a guest over a tunnel/VPN); pick a <b>LAN</b> or <b>VPN</b> address so a peer on your network reaches you directly. A LAN bind may require an admin allowlist.</p>`}
       ${locked ? `<div class="share-managed">${icon("shield", 11)} Managed by ${org}</div>` : ""}
     </div>`;
 }
@@ -7578,12 +7584,20 @@ function openSharePanel(): void {
   document.addEventListener("keydown", onKey);
   const body = $("#shareBody", ov) as HTMLElement;
 
-  // P-COLLAB.7: the "be the relay" toggle (a checkbox → change event, not a click).
+  // P-COLLAB.7/.14: the "be the relay" toggle + the bind-address picker (checkbox / select → change events).
   ov.addEventListener("change", async (ev) => {
     const t = ev.target as HTMLElement;
+    if (t.id === "shareServeHostSel") {
+      // reveal the custom text field only when "Custom address…" is chosen
+      const sel = t as HTMLSelectElement; const custom = $("#shareServeHost", ov) as HTMLInputElement | null;
+      if (custom) { custom.hidden = sel.value !== "__custom__"; if (sel.value === "__custom__") setTimeout(() => custom.focus(), 20); }
+      return;
+    }
     if (t.id !== "shareServeToggle") return;
     const on = (t as HTMLInputElement).checked;
-    const host = ($("#shareServeHost", ov) as HTMLInputElement | null)?.value.trim() || "127.0.0.1";
+    const sel = $("#shareServeHostSel", ov) as HTMLSelectElement | null;
+    const selVal = sel?.value ?? "127.0.0.1";
+    const host = (selVal === "__custom__" ? ($("#shareServeHost", ov) as HTMLInputElement | null)?.value.trim() : selVal) || "127.0.0.1";
     const port = Number(($("#shareServePort", ov) as HTMLInputElement | null)?.value.trim() || "8790");
     const r = await bridge.collabRelayServe({ enabled: on, host, port });
     if (!r.ok) { showToast({ tone: "danger", title: on ? "Couldn't host the relay" : "Couldn't stop the relay", desc: r.error ?? "", timeout: 5000 }); }

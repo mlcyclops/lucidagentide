@@ -3138,3 +3138,11 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
   border-radius:8px;padding:9px 11px;color:var(--txt);font-size:13px;outline:none}
 .join-prompt-input:focus{border-color:var(--accent-2);box-shadow:var(--ring)}
 .join-compose .btn-mini{flex:none}
+
+/* P-COLLAB.14: the bind-address picker in the "be the relay" card */
+.share-serve-lbl{display:block;font-size:11.5px;font-weight:600;color:var(--txt-2);margin:9px 0 5px;letter-spacing:.01em}
+.share-serve-select{flex:1;min-width:0;cursor:pointer;appearance:none;-webkit-appearance:none;
+  background-image:linear-gradient(45deg,transparent 50%,var(--txt-3) 50%),linear-gradient(135deg,var(--txt-3) 50%,transparent 50%);
+  background-position:calc(100% - 15px) 50%,calc(100% - 10px) 50%;background-size:5px 5px,5px 5px;background-repeat:no-repeat;padding-right:26px}
+.share-serve-select:disabled{opacity:.5;cursor:not-allowed}
+#shareServeHost:not([hidden]){margin-top:7px;width:100%;box-sizing:border-box}
