@@ -14,7 +14,7 @@ import { app, BrowserWindow, dialog, ipcMain, Menu, safeStorage, shell } from "e
 import { spawn, type ChildProcess } from "node:child_process";
 import { createWriteStream, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { initAutoUpdate } from "./updater.ts";
 import { ensureRuntimes, findBun, needsBootstrap } from "./runtime.ts";
 import { createSplash, setSplashStatus } from "./splash.ts";
@@ -31,6 +31,20 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 let win: BrowserWindow | null = null;
 let dev: ChildProcess | null = null;
 let runtimeEnv: Record<string, string> = {};
+
+// ── P-KGMARKET.4 (ADR-0206): lucid://auth deep link for hosted marketplace sign-in ──────────────────
+// After the user signs in on the hosted page, the browser redirects to lucid://auth?token=...; the OS hands
+// that URL to this app, which forwards it to the renderer (market_boot.handleAuthCallback). On Windows/Linux a
+// cold or second launch delivers it as an argv entry (caught by the single-instance handler); on macOS it
+// arrives via "open-url". A URL that lands before the window is ready is queued and flushed on did-finish-load.
+const AUTH_PROTOCOL = "lucid";
+let pendingAuthUrl: string | null = null;
+const firstAuthUrl = (argv: string[]): string | null => argv.find((a) => a.startsWith(`${AUTH_PROTOCOL}://`)) ?? null;
+function forwardAuthUrl(url: string | null): void {
+  if (!url) return;
+  if (win && !win.webContents.isLoading()) win.webContents.send("lucid:authCallback", url);
+  else pendingAuthUrl = url; // deliver once the renderer has loaded
+}
 
 // ADR-0177: the engine's startup output is TEED to a log file, so a boot failure diagnoses itself.
 // The v1.10.2 brick (a packaging filter stripped a runtime-imported file) was only debuggable by
@@ -117,6 +131,10 @@ function createWindow(): void {
   let reloadTries = 0;
   win.webContents.on("did-fail-load", () => {
     if (reloadTries++ < 30) setTimeout(() => win?.loadURL(`http://localhost:${PORT}`), 1000);
+  });
+  // P-KGMARKET.4: once the renderer is up, flush any lucid://auth URL that arrived during a cold launch.
+  win.webContents.on("did-finish-load", () => {
+    if (pendingAuthUrl) { win?.webContents.send("lucid:authCallback", pendingAuthUrl); pendingAuthUrl = null; }
   });
   win.loadURL(`http://localhost:${PORT}`);
   win.on("closed", () => (win = null));
@@ -277,6 +295,24 @@ ipcMain.on("lucid:win", (e, action: string) => {
   else if (action === "close") w.close();
 });
 
+// P-KGMARKET.4 (ADR-0206): claim the lucid:// scheme and enforce a single instance so a deep-link launch
+// re-focuses the running app and hands it the URL (rather than spawning a second engine).
+if (process.defaultApp && process.argv.length >= 2) {
+  app.setAsDefaultProtocolClient(AUTH_PROTOCOL, process.execPath, [resolve(process.argv[1]!)]); // dev
+} else {
+  app.setAsDefaultProtocolClient(AUTH_PROTOCOL); // packaged
+}
+pendingAuthUrl = firstAuthUrl(process.argv); // a cold launch may already carry the URL
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+if (!gotSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on("second-instance", (_e, argv) => {
+    if (win) { if (win.isMinimized()) win.restore(); win.focus(); }
+    forwardAuthUrl(firstAuthUrl(argv));
+  });
+  app.on("open-url", (_e, url) => forwardAuthUrl(url)); // macOS delivers the deep link here
+
 app.whenReady().then(async () => {
   // Dev: repo is the parent of desktop/. Packaged: the repo is bundled into
   // Resources/repo (electron-builder extraResources) so bun/omp can run it.
@@ -311,5 +347,6 @@ app.whenReady().then(async () => {
   initAutoUpdate(() => win); // packaged-only; checks GitHub Releases, prompts on download
   app.on("activate", () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 });
+} // end single-instance guard (P-KGMARKET.4)
 app.on("window-all-closed", () => { if (process.platform !== "darwin") app.quit(); });
 app.on("quit", () => { dev?.kill(); });
