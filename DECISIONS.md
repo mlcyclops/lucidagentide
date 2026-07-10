@@ -14098,3 +14098,105 @@ ADR-0099/0100 (the compiled KB + `KbGraphStore` this multiplies), ADR-0075/0186 
 importer reused for seeding), ADR-0138 (the Obsidian import seam), ADR-0158/0181 (the Marketplace this adds a
 KG-Packs section to), ADR-0068/0069/0086 (public-seam / private-IP + BUSL licensing), ADR-0184/0185 (the KG
 header dropdown pattern the picker follows), and CLAUDE.md invariants #1/#2/#3/#5/#7/#8/#9/#10 + keystone #2.
+
+## ADR-0206 - P-KGMARKET: commerce + entitlement gating for KG Packs (Stripe + Firebase) (SCOPE/PLAN)
+
+**Date:** 2026-07-10
+**Status:** Accepted - SCOPE/PLAN. Designed here; each sub-increment is its own build session. Extends the KG
+Pack arc (ADR-0205) with a PAYMENT gate. The public repo ships only the client-side entitlement CHECK + the
+existing gated import; the Stripe secret keys, the Firebase Cloud Functions, and the pack files are PRIVATE
+add-on IP (same public-seam / private-IP split as the skills registry P-SKILLREG.1 / ADR-0098 and the
+managed-config seam ADR-0068). No `.py` (invariant #2 - the functions are TypeScript on the Firebase side).
+**Increment umbrella:** P-KGMARKET. Sits on top of P-KGPACK.4 (the gated `.lkgpack` import) and P-KGPACK.5
+(the storefront). LUCID already runs on Firebase (`lucid-agent.web.app` is Firebase Hosting), so the commerce
+backend extends the EXISTING Firebase project rather than introducing new infrastructure.
+
+### Context
+
+KG Packs (ADR-0205) are a sellable SKU, but nothing yet GATES the pull. The product needs commercial and
+GovCon purchase with a durable record: a Stripe payment popup, a purchase ledger, and access tied to a
+signed-in identity (email or Google OAuth), fronted + recorded by Google Cloud Firebase. Buyers span
+self-service commercial, GovCon (PO/invoice), and Government Purchase Card (GPC). Decisions taken with the
+user (2026-07-10): licensing = **BOTH** one-time per-pack AND subscription/seat; payment paths at launch =
+card + GPC self-serve **AND** PO/invoice (net-30) for GovCon; sequence = lift the ingest cap + author a real
+pack FIRST (done, P-KGPACK.6), then this ADR.
+
+### Decision - three independent gates; Firebase fronts + records; the pack pull is fail-closed
+
+A pack pull passes THREE independent gates, each answering a different question, none substituting for another:
+- **PAYMENT (new, this ADR)** - *are you entitled to pull it?* Firebase Auth identity + Stripe payment + a
+  Firestore entitlement ledger.
+- **SIGNATURE (P-KGPACK.4)** - *did TechLead 187 author it?* Ed25519 verify on import.
+- **SCANNER (P-KGPACK.4)** - *is it safe?* Every page re-scanned fail-closed on import.
+A signature proves ORIGIN, payment proves ACCESS, the scanner proves SAFETY. The purchased pack is signed
+AND entitlement-gated AND re-scanned; defeating one gate defeats neither of the others.
+
+**Identity (Firebase Auth).** Google OAuth + email/password → a stable `uid` + email. The client never holds
+a Stripe secret; it holds only a Firebase ID token.
+
+**Storefront (extends P-KGPACK.5).** `KG_PACKS` rows gain a real product id + price + a `licensing`
+(`one-time` | `subscription`) field. "Get pack" becomes entitlement-aware: entitled → pull; not entitled →
+open Checkout.
+
+**The proxy/recorder (PRIVATE Firebase Cloud Functions).** Three callable/HTTPS functions hold all secrets:
+- `createCheckout(packId, mode)` → a Stripe Checkout Session (card + GPC for one-time; a subscription price
+  for seat/site). Returns the hosted Checkout URL the client opens.
+- `stripeWebhook` (HTTPS, Stripe-signature-verified) → on `checkout.session.completed` /
+  `invoice.paid` / `customer.subscription.*`, WRITE the entitlement to Firestore
+  `entitlements/{uid}/packs/{packId}` = `{ packId, method (card|gpc|po|subscription), stripeId, amount,
+  status (active|expired), purchasedAt, expiresAt? }` - this IS "the record of it".
+- `getPackDownload(packId)` → verify the caller's Firebase token, CHECK the Firestore entitlement (active +
+  unexpired), and only then return a SHORT-LIVED signed URL to the `.lkgpack` in private Firebase Storage.
+  No entitlement ⇒ 403 (fail-closed: the pack BYTES never leave the server without entitlement).
+
+**LUCID client gate (PUBLIC seam).** `getPackDownload(packId)` → signed URL → download the `.lkgpack` →
+hand it to the EXISTING P-KGPACK.4 gated import (integrity + signature + re-scan, installed read-only,
+untrusted). No entitlement → the client opens `createCheckout` instead. The public repo ships this check +
+the import; the functions/keys/files are private.
+
+**GovCon + GPC.** A GPC is a Visa/Mastercard purchase card → a normal Stripe card in Checkout, no extra
+integration; the entitlement records `method: "gpc"`. GovCon PO/invoice = Stripe Invoicing (`invoice.paid`
+webhook grants entitlement on net-30 settlement) PLUS a manual `grantEntitlement(uid, packId, method:"po",
+ref)` admin path for contract vehicles (GSA/SEWP/OTA) where payment is out-of-band. Every grant records its
+method + reference for audit.
+
+**Licensing (BOTH).** One-time = a boolean-ish entitlement with no `expiresAt`. Subscription/seat = an
+entitlement with `expiresAt` + a seat count on an org doc; the subscription webhooks flip `status` to
+`expired` on lapse (the client re-checks on each pull, so access revokes on non-renewal - fail-closed).
+
+### Sub-increments (one build session each)
+
+- **P-KGMARKET.1 (public seam):** the client entitlement gate - Firebase Auth sign-in surface + an
+  entitlement-aware "Get pack" that calls `getPackDownload`, downloads the `.lkgpack`, and routes it into the
+  P-KGPACK.4 import. Fail-closed: no token / no entitlement → Checkout, never a pull. Ships against a stub/
+  emulator; real project id is config.
+- **P-KGMARKET.2 (PRIVATE add-on):** the Cloud Functions (`createCheckout`, `stripeWebhook`,
+  `getPackDownload`, `grantEntitlement`) + the Firestore `entitlements` schema + rules + private Storage
+  bucket for pack files. Holds the Stripe secret + Firebase Admin. Never in the public repo.
+- **P-KGMARKET.3 (GovCon/GPC/PO):** the PO/invoice path (Stripe Invoicing + the manual grant admin flow) and
+  the GPC card path surfaced in Checkout; per-purchase `method` recording + an audit export.
+- **P-KGMARKET.4 (subscription/seat):** org/seat entitlements, renewal + lapse revocation, an in-app
+  "Purchases & licenses" view reading the Firestore ledger.
+
+### Invariants preserved
+
+Public-seam / private-IP (#1-adjacent, ADR-0068/0086): keys, functions, and pack files are private; the
+public repo ships only the check + the existing import. No Python (#2) - the functions are TypeScript.
+Fail-closed (#3): no valid entitlement ⇒ no signed URL ⇒ no pull; the import still re-scans every page.
+Untrusted content stays delimited DATA on import (#5). Trust labels stay the closed set (#7) - a purchased
+pack installs `untrusted` + read-only, never auto-trusted (keystone #2). Stable IDs (#9): `uid`, `packId`,
+Stripe ids are the durable keys. Secrets NEVER committed (licensing/commit hygiene) - Stripe/Firebase keys
+live in the Firebase project + managed config, referenced by env, mirroring ADR-0135 secret-via-vault.
+
+### Open items (not decided here)
+
+Exact pricing + product catalog (business, not code); whether org SSO (Workspace) is needed beyond Google
+OAuth for enterprise; a refund/entitlement-revocation admin flow; whether the `.lkgpack` ships as a single
+zip (ADR-0205 follow-up) for cleaner Storage objects.
+
+### Relates to
+
+ADR-0205 (the KG Pack arc this monetizes - P-KGPACK.4 import gate + .5 storefront it entitlement-gates),
+ADR-0098/P-SKILLREG.1 (the public-seam signed-install pattern mirrored), ADR-0068/0069/0086 (managed-config /
+private-IP / BUSL), ADR-0135 (secret-via-vault/env, extended to Stripe/Firebase keys), the existing Firebase
+Hosting (`lucid-agent.web.app`), and CLAUDE.md invariants #1/#2/#3/#5/#7/#9 + keystone #2.
