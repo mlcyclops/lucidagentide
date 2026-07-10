@@ -66,7 +66,7 @@ export const KG_PACKS: KgPack[] = [
   {
     id: "cleared-software-engineer", name: "Cleared Software Engineer", role: "Software Engineer (cleared)",
     desc: "Secure SDLC for classified/air-gapped work: STIGs, secure coding, and ATO evidence.",
-    author: "TechLead 187 LLC", tier: "first-party", licensing: "one-time", url: KG_PACKS_URL,
+    author: "TechLead 187 LLC", tier: "first-party", licensing: "subscription", url: KG_PACKS_URL,
     highlights: "Curated STIG guidance and secure-SDLC patterns for RMF packages.",
   },
 ];
