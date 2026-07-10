@@ -601,6 +601,10 @@ demo-P-SYSRES.1: ## P-SYSRES.1 (ADR-0182): the system resource guard - a weak CP
 demo-P-KGVIZ.1: ## P-KGVIZ.1 (ADR-0183): form in place - the KG/code-graph settle runs OFF-SCREEN (time-boxed presettle) so hundreds of nodes open already formed at the final center, parked; live merges settle silently; resizes re-fit without reheating; drag is the only visible sim
 	$(BUN) run desktop/scripts/demo_p_kgviz_1.ts
 
+.PHONY: demo-P-KGPACK.1
+demo-P-KGPACK.1: ## P-KGPACK.1 (ADR-0205): named, swappable KGs (file-per-KG + JSON registry) - the pre-existing combined kb_graph.duckdb is ADOPTED as the default "My Knowledge" KG (zero data loss), new role KGs are ISOLATED files (a page in one is invisible from another), rename touches only the label, and switching the active KG re-points a no-arg store lookup
+	$(BUN) run desktop/scripts/demo_p_kgpack_1.ts
+
 .PHONY: demo-P-KGUI.1
 demo-P-KGUI.1: ## P-KGUI.1 (ADR-0184): the KG header decluttered - title "KG" (hover: Knowledge Graph, icon dropped) and the Relate/Code-graph/Compiled-KB stack consolidated into ONE labeled dropdown (hover tip lists the options; the menu explains each inline; active view checked)
 	$(BUN) run desktop/scripts/demo_p_kgui_1.ts

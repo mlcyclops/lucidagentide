@@ -14005,3 +14005,96 @@ green.
 **Deferred:** a guest-authoritative "I joined a remote share" event (this instance watching someone else's
 session — a secondary audit subject needing join-roomId state); relay serve start/stop events; DuckDB ingestion of
 the collab events for the dashboard.
+
+## ADR-0205 - P-KGPACK: named, swappable Knowledge Graphs + sellable KG Packs (SCOPE/PLAN)
+
+**Date:** 2026-07-10
+**Status:** Accepted - SCOPE/PLAN. Designed here; each sub-increment (P-KGPACK.1 .. .5) is its own build
+session. TypeScript + DuckDB only (no Python, invariant #2). Extends the compiled KB (ADR-0099) and the
+Marketplace (ADR-0158); does NOT fork omp and does NOT edit the frozen `0011` schema.
+**Increment umbrella:** P-KGPACK. Reuses `KbGraphStore` (ADR-0099), the scan gate (ADR-0058/gate.ts), the
+chat-history importer (ADR-0075/0186), the Obsidian vault seam (ADR-0138 import path), the graph renderer
+(ADR-0075), and the public-seam / private-IP split (ADR-0068/0069/0086).
+
+### Context
+
+Today the "Compiled KB" is a SINGLE combined graph: `desktop/kb_store.ts` opens exactly one
+`kb_graph.duckdb` (default `~/.omp/kb_graph.duckdb`, one process-wide writer) and everything ingested -
+ChatGPT/Claude/Gemini history, documents, notes - lands in that one file. `kg_header.ts` shows it as one
+static "Compiled KB" view row. There is no notion of separate, named, or portable knowledge bases.
+
+The user wants the combined KG turned into a **dropdown of unlimited, separately-named KGs that filter as
+you type** (the exact pattern already in `marketplace.filterMarket`/`marketRowsHtml`), each **renamable at
+ingest**, seeded either from the AI-vendor exports (ChatGPT/Claude/Gemini) or from Obsidian-style markdown.
+The strategic payoff is distribution, not UI: a **KG Pack** becomes a portable, self-contained artifact
+that TechLead 187 LLC authors once - from years of curated transcripts or a curated Obsidian vault - keyed
+to a **Position Description**. An enterprise then gets *instant seeding* (drop the pack in), can *retain a
+departed employee's curated knowledge* (export their KG as a pack for a successor), and - later - a **LUCID
+KG Marketplace** where companies/individuals sell their own packs. The *capability* ships in the PUBLIC
+repo (picker + gated import + a "Role KG Packs" hint in the Marketplace); the *actual packs* are built and
+hosted in the PRIVATE add-on repo (`TechLead187/lucidagentIDEaddon`), a new high-value SKU.
+
+### Decision - one DuckDB file per KG + a JSON registry (NOT a schema change)
+
+**Storage model: file-per-KG.** Each named KG is its own `kb_graph.duckdb`, reusing the FROZEN `0011`
+migration set unchanged. This deliberately avoids editing a frozen table (invariant #10) - no
+`collection_id` column, no migration `0012` for this feature - and it makes a KG **portable and signable by
+construction**: a pack is just that file plus a manifest. Mixing every role's / every customer's data in one
+DB (the collection-column alternative) was rejected: it complicates shipping, revoking, and air-gapping a
+single pack, and forces row-slicing on export.
+
+**The registry (`harness/kb/registry.ts`).** A small JSON index at `~/.omp/kg_registry.json` (atomic write,
+single desktop writer) is the ONLY new persisted structure. Each entry:
+`{ kg_id, name, db_path, source_kind ('chat'|'obsidian'|'pack'|'manual'), read_only, provenance, created_at,
+updated_at }`. `kg_id` is minted once via Snowflake and NEVER regenerated (invariant #9); `name` is the
+user-facing, renamable label; `db_path` points at that KG's `kb_graph.duckdb`. The registry is data, not a
+DuckDB table, so invariant #10 does not apply to it.
+
+**The resolver (`desktop/kb_store.ts`).** `kbStore(kgId?)` resolves a KG's `db_path` from the registry and
+returns a per-`kg_id` cached `KbGraphStore` (still one writer per file). A **default KG** ("My Knowledge")
+is auto-registered on first run pointing at the EXISTING `~/.omp/kb_graph.duckdb`, so today's combined graph
+is preserved with zero data loss and simply becomes the first entry in the list.
+
+**Security (unchanged, fail-closed).** A vendor-authored or imported pack is STILL re-scanned on import
+(keystone #2 / invariant #3): a pack signature proves *origin*, never *safety*. Pages import `untrusted`,
+never auto-`trusted`; a flagged page quarantines; a dead scanner blocks the whole import. Untrusted content
+stays delimited DATA (#5). Trust labels stay the closed set (#7).
+
+### Sub-increments (one build session each)
+
+- **P-KGPACK.1 (keystone, public):** `harness/kb/registry.ts` (typed JSON registry: list/create/rename/
+  resolve/set-active) + the multi-store resolver in `desktop/kb_store.ts`; the default "My Knowledge" KG
+  auto-registered onto the existing `kb_graph.duckdb`. No UI yet. `make demo-P-KGPACK.1`: create two KGs,
+  write a page into each, prove isolation (a page in KG-A is invisible from KG-B), rename one, and prove the
+  default KG adopts the pre-existing file. Tests + BUSL headers.
+- **P-KGPACK.2 (public):** the dropdown - replace the single "Compiled KB" row in `kg_header.ts` with a
+  filter-as-you-type KG list (reusing the marketplace filter pattern), active-KG check, inline rename, and a
+  "New KG" action; `app.ts` popover wiring + a bridge route to list/rename/activate. Pure builders + tests.
+- **P-KGPACK.3 (public):** ingest-into-a-named-KG - chat-history import (ChatGPT/Claude/Gemini) and Obsidian
+  markdown import target a chosen or newly-created KG (with rename-at-ingest), not the combined graph. Gated,
+  fail-closed, `untrusted`.
+- **P-KGPACK.4 (public capability, private packs):** the pack format `.lkgpack` - a bundle of a KG's
+  `kb_graph.duckdb` + `manifest.json` (`name`, `role`/PD, `author`, `version`, `created_at`, `sha256` of the
+  db, optional detached signature). Export/author tool (what the private repo runs to build PD packs) +
+  gated import (verify sha256 + signature for ORIGIN, then re-scan pages fail-closed, store `read_only`,
+  trust stays `untrusted`).
+- **P-KGPACK.5 (public hint, private IP):** a Marketplace "Role KG Packs" section - public SKU surface whose
+  rows point at the private add-on repo; install is the P-KGPACK.4 gated path. Actual PD-based packs are
+  authored and hosted in `TechLead187/lucidagentIDEaddon`, never in the public tree.
+
+### Invariants preserved
+
+No fork (#1): the registry + resolver are a sidecar; omp and the compiled-KB pipeline are untouched. No
+Python (#2). Fail-closed (#3): pack import re-scans every page, dead scanner = block, signature != trust.
+Untrusted content delimited (#5). Closed trust labels (#7). New EventName values (`kg_created`, `kg_renamed`,
+`kg_activated`, `kg_pack_exported`, `kg_pack_imported`) are NAMED here and a DEFERRED `contracts.ts`
+increment (#8) - not added this round. Stable IDs (#9): `kg_id` minted once, never regenerated. Schema
+frozen (#10): file-per-KG reuses `0011` verbatim; the registry is JSON, not a table. Public ships the
+capability + seams; the packs are private IP (ADR-0068/0069/0086 model). BUSL-1.1 header on every new file.
+
+### Relates to
+
+ADR-0099/0100 (the compiled KB + `KbGraphStore` this multiplies), ADR-0075/0186 (personal KG + chat-history
+importer reused for seeding), ADR-0138 (the Obsidian import seam), ADR-0158/0181 (the Marketplace this adds a
+KG-Packs section to), ADR-0068/0069/0086 (public-seam / private-IP + BUSL licensing), ADR-0184/0185 (the KG
+header dropdown pattern the picker follows), and CLAUDE.md invariants #1/#2/#3/#5/#7/#8/#9/#10 + keystone #2.
