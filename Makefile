@@ -605,6 +605,10 @@ demo-P-KGVIZ.1: ## P-KGVIZ.1 (ADR-0183): form in place - the KG/code-graph settl
 demo-P-KGPACK.1: ## P-KGPACK.1 (ADR-0205): named, swappable KGs (file-per-KG + JSON registry) - the pre-existing combined kb_graph.duckdb is ADOPTED as the default "My Knowledge" KG (zero data loss), new role KGs are ISOLATED files (a page in one is invisible from another), rename touches only the label, and switching the active KG re-points a no-arg store lookup
 	$(BUN) run desktop/scripts/demo_p_kgpack_1.ts
 
+.PHONY: demo-P-KGPACK.6
+demo-P-KGPACK.6: ## P-KGPACK.6 (ADR-0205): the background KG-seed job - lift the 50-doc cap so a full dataset (here 120 conversations, past the old cap) compiles as a tracked background job with live counts + cancel; all 120 compile, 0 skipped
+	$(BUN) run desktop/scripts/demo_p_kgpack_6.ts
+
 .PHONY: demo-P-KGPACK.5
 demo-P-KGPACK.5: ## P-KGPACK.5 (ADR-0205): the Role KG Packs storefront - a curated, filter-as-you-type catalog of role-specific KG Packs (public SKU surface; rows link to the product page, packs live in the private add-on repo) with a gated "Import a pack you own" action routing through the P-KGPACK.4 verify + re-scan
 	$(BUN) run desktop/scripts/demo_p_kgpack_5.ts

@@ -532,7 +532,7 @@ function ensureImportPill(): HTMLElement {
   let pill = document.getElementById("importPill");
   if (!pill) {
     pill = el(`<div class="import-pill" id="importPill" hidden>
-      <div class="import-pill-head">${icon("download", 13)} <b>Importing chat history</b> <span class="import-pill-vendor" id="importPillVendor"></span></div>
+      <div class="import-pill-head">${icon("download", 13)} <b id="importPillTitle">Importing chat history</b> <span class="import-pill-vendor" id="importPillVendor"></span></div>
       <div class="import-pill-bar"><div class="import-pill-fill" id="importPillFill"></div></div>
       <div class="import-pill-row"><span class="import-pill-text" id="importPillText">Starting…</span><button class="btn-mini" id="importPillCancel">Cancel</button></div>
     </div>`);
@@ -553,6 +553,7 @@ async function runPersonalImport(folder: string, useModel: boolean): Promise<voi
   const jobId = started.jobId;
   const pill = ensureImportPill();
   pill.hidden = false;
+  const ttl0 = $("#importPillTitle", pill); if (ttl0) ttl0.textContent = "Importing chat history"; // reset (the KG-authoring flow reuses this pill)
   const fill = $("#importPillFill", pill) as HTMLElement, text = $("#importPillText", pill) as HTMLElement, ven = $("#importPillVendor", pill) as HTMLElement;
   const cancelBtn = $("#importPillCancel", pill) as HTMLButtonElement;
   cancelBtn.disabled = false; cancelBtn.textContent = "Cancel";
@@ -3116,17 +3117,40 @@ async function importKgFlow(): Promise<void> {
   const suggested = (folder.split(/[\\/]/).pop() || "Imported KG").trim();
   const name = await promptText({ title: "Name this knowledge graph", label: "KG name", value: suggested, placeholder: "e.g. Backend Engineer" });
   if (!name) return;
-  showToast({ title: `Seeding "${name}"…`, desc: "Compiling your sources into the KG - every document is scanned by the security gate first.", timeout: 2200 });
-  const r = await bridge.kbIngestBatch({ path: folder, name }).catch(() => null);
-  if (!r || !r.ok) { showToast({ tone: "danger", title: "Import failed", desc: r?.error ?? "Couldn't read that folder.", actions: [{ label: "OK" }], timeout: 6000 }); return; }
-  if (r.kgId) { await bridge.kbActivate(r.kgId).catch(() => null); activeKbId = r.kgId; activeKbName = r.kgName ?? name; }
-  await renderKbGraph(); // reads the now-active seeded KG
-  const parts = [`${r.pagesCompiled ?? 0} pages from ${r.documents ?? 0} ${r.kind === "chat" ? "conversations" : "notes"}`];
-  if (r.documentsQuarantined) parts.push(`${r.documentsQuarantined} docs quarantined`);
-  if (r.pagesQuarantined) parts.push(`${r.pagesQuarantined} pages blocked`);
-  if (r.errored) parts.push(`${r.errored} failed to compile`);
-  if (r.skipped) parts.push(`${r.skipped} skipped (50-doc cap)`);
-  showToast({ title: `"${r.kgName ?? name}" seeded`, desc: parts.join(" · "), timeout: 6000 });
+  // P-KGPACK.6: seeding a full dataset is a BACKGROUND job (no doc cap). Start it, then poll the shared pill.
+  const started = await bridge.kbIngestBatch({ path: folder, name }).catch(() => null);
+  if (!started || !started.ok || !started.jobId) {
+    showToast({ tone: started?.error?.includes("already running") ? "warn" : "danger", title: "Import didn't start", desc: started?.error ?? "Couldn't read that folder.", actions: [{ label: "OK" }], timeout: 6000 });
+    return;
+  }
+  const jobId = started.jobId;
+  const pill = ensureImportPill();
+  pill.hidden = false;
+  const ttl = $("#importPillTitle", pill); if (ttl) ttl.textContent = "Compiling knowledge graph";
+  const fill = $("#importPillFill", pill) as HTMLElement, text = $("#importPillText", pill) as HTMLElement, ven = $("#importPillVendor", pill) as HTMLElement;
+  ven.textContent = name;
+  const cancelBtn = $("#importPillCancel", pill) as HTMLButtonElement;
+  cancelBtn.disabled = false; cancelBtn.textContent = "Cancel";
+  cancelBtn.onclick = () => { cancelBtn.disabled = true; cancelBtn.textContent = "Stopping…"; void bridge.kbIngestCancel(jobId); };
+  const poll = async (): Promise<void> => {
+    const st = await bridge.kbIngestStatus(jobId).catch(() => null);
+    if (!st) { hideImportPill(); return; }
+    const total = st.totalDocuments || 0, done = st.documents || 0;
+    fill.style.width = `${total ? Math.round((done / total) * 100) : 0}%`;
+    text.textContent = `${done}/${total || "?"} sources · ${st.pagesCompiled} pages${st.documentsQuarantined ? ` · ${st.documentsQuarantined} quarantined` : ""}`;
+    if (st.state === "running") { importPollTimer = window.setTimeout(() => void poll(), 1200); return; }
+    hideImportPill();
+    if (st.state === "failed") { showToast({ tone: "danger", title: "Import failed", desc: st.error ?? "Something went wrong.", actions: [{ label: "OK" }], timeout: 6000 }); return; }
+    if (st.kgId) { await bridge.kbActivate(st.kgId).catch(() => null); activeKbId = st.kgId; activeKbName = st.kgName || name; }
+    await renderKbGraph(); // reads the now-active seeded KG
+    const r = st.result;
+    const parts = [`${r?.pagesCompiled ?? 0} pages from ${r?.documents ?? 0} sources`];
+    if (r?.documentsQuarantined) parts.push(`${r.documentsQuarantined} docs quarantined`);
+    if (r?.pagesQuarantined) parts.push(`${r.pagesQuarantined} pages blocked`);
+    if (r?.errored) parts.push(`${r.errored} failed to compile`);
+    showToast({ title: st.state === "cancelled" ? `"${st.kgName || name}" partly seeded (stopped)` : `"${st.kgName || name}" seeded`, desc: parts.join(" · "), timeout: 7000 });
+  };
+  void poll();
 }
 /** P-KGPACK.4: export a KG as a portable .lkgpack (db + manifest). Choose a destination folder; the pack is
  *  signed only if a signing key is configured (the private authoring path), otherwise unsigned. */

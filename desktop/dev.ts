@@ -108,6 +108,7 @@ import { kbScanner, kbStore, listKgs, activeKgId, createKg, renameKg, setActiveK
 import { readKbSources } from "./kb_sources.ts"
 import { ingestSourcesIntoKg } from "../harness/kb/batch_ingest.ts"
 import { exportKgPack, importKgPack } from "./kb_pack.ts"
+import { startKbIngest, kbIngestJobStatus, cancelKbIngest } from "./kb_ingest_job.ts"
 import { ingestDocument } from "../harness/kb/ingest.ts"
 import { retrieveKnowledge, type RetrieveMode } from "../harness/kb/retrieve.ts"
 import { recordBlock } from "./security_log.ts"
@@ -317,11 +318,6 @@ const json = (data: unknown) =>
 async function readBody<T>(req: Request): Promise<T> {
   return (await req.json()) as T;
 }
-
-// P-KGPACK.3 (ADR-0205): cap the synchronous batch-seed so one import can't hold the request open across
-// hundreds of model compilations; the remainder is reported as `skipped` (never silent), background-job
-// chunking is a follow-up.
-const KB_BATCH_CAP = 50;
 
 // P-KGPACK.2 (ADR-0205): the named-KG picker's wire shape - every KG (id/name/read-only/source) + the
 // active id, plus an optional `error` a mutation attaches instead of nulling the list.
@@ -1763,6 +1759,9 @@ const server = Bun.serve({
       // active KG. Each source is compiled through the SAME fail-closed pipeline (scan source + re-scan every
       // page); blocks are audited via recordBlock. Capped (KB_BATCH_CAP) with the remainder reported skipped.
       if (p === "/api/kb/ingest-batch" && req.method === "POST") {
+        // P-KGPACK.6 (ADR-0205): start the seed as a BACKGROUND job and return a jobId immediately (the old
+        // synchronous path capped at 50 to avoid hanging the request on hundreds of model calls). No cap now
+        // — authoring compiles the WHOLE dataset; the UI polls /status + can /cancel.
         const b = await readBody<{ path?: unknown; name?: unknown; kgId?: unknown }>(req);
         const src = readKbSources(String(b.path ?? ""));
         if (!src.ok) return json({ ok: true, data: { ok: false, error: src.error } });
@@ -1774,15 +1773,28 @@ const server = Bun.serve({
         } catch (e) { return json({ ok: true, data: { ok: false, error: String((e as Error).message) } }); }
         if (!targetId) return json({ ok: true, data: { ok: false, error: "No target knowledge graph." } });
         const model = usageLedger().models[0]?.model;
-        const result = await ingestSourcesIntoKg({
-          store: await kbStore(targetId),
-          scanner: kbScanner(),
-          complete: (system: string, user: string) => backend.complete(system, user, model ? { model } : {}),
-          docs: src.scan.docs,
-          maxDocuments: KB_BATCH_CAP,
-          onBlock: (blk) => recordBlock({ tool: "kb_ingest", severity: "high", findings: String(blk.findings), reason: `KB ${blk.stage} blocked${blk.slug ? ` (${blk.slug})` : ""}: ${blk.reason}` }),
+        const started = startKbIngest({
+          kgId: targetId, kgName,
+          run: async (onTick, signal) => {
+            const result = await ingestSourcesIntoKg({
+              store: await kbStore(targetId),
+              scanner: kbScanner(),
+              complete: (system: string, user: string) => backend.complete(system, user, model ? { model } : {}),
+              docs: src.scan.docs,
+              onProgress: onTick,
+              signal,
+              onBlock: (blk) => recordBlock({ tool: "kb_ingest", severity: "high", findings: String(blk.findings), reason: `KB ${blk.stage} blocked${blk.slug ? ` (${blk.slug})` : ""}: ${blk.reason}` }),
+            });
+            return { ...result, kgId: targetId, kgName, kind: src.scan.kind, vendor: src.scan.vendor ?? null };
+          },
         });
-        return json({ ok: true, data: { ok: true, kgId: targetId, kgName, kind: src.scan.kind, vendor: src.scan.vendor ?? null, ...result } });
+        return json({ ok: true, data: { ok: started.ok, jobId: started.ok ? started.jobId : undefined, kgId: targetId, kgName, error: started.ok ? undefined : started.error } });
+      }
+      if (p === "/api/kb/ingest-batch/status" && req.method === "GET")
+        return json({ ok: true, data: kbIngestJobStatus(url.searchParams.get("jobId") ?? undefined) });
+      if (p === "/api/kb/ingest-batch/cancel" && req.method === "POST") {
+        const b = await readBody<{ jobId?: unknown }>(req);
+        return json({ ok: true, data: cancelKbIngest(b.jobId == null ? undefined : String(b.jobId)) });
       }
       // P-KGPACK.4 (ADR-0205): author (export) + gated import of .lkgpack KG Packs. Export writes a
       // <slug>.lkgpack dir (db + signed-or-unsigned manifest); import verifies integrity + origin, re-scans

@@ -233,6 +233,14 @@ export interface KbBatchResultView {
   documents?: number; totalDocuments?: number; available?: number; skipped?: number;
   pagesCompiled?: number; pagesQuarantined?: number; documentsQuarantined?: number; errored?: number; links?: number; cancelled?: boolean;
 }
+// P-KGPACK.6 (ADR-0205): the batch seed is a BACKGROUND job. `kbIngestBatch` now returns a start (jobId or
+// error); the renderer polls `kbIngestStatus` and can `kbIngestCancel`.
+export interface KbIngestStartView { ok: boolean; jobId?: string; kgId?: string; kgName?: string; error?: string }
+export interface KbIngestJobView {
+  jobId: string; state: "running" | "done" | "failed" | "cancelled"; kgId: string; kgName: string;
+  documents: number; totalDocuments: number; pagesCompiled: number; pagesQuarantined: number; documentsQuarantined: number; errored: number;
+  startedAt: number; updatedAt: number; result?: KbBatchResultView; error?: string;
+}
 // P-KGPACK.4 (ADR-0205): .lkgpack pack author (export) + gated import.
 export interface KbPackExportView { ok: boolean; error?: string; path?: string; signed?: boolean; pages?: number }
 export interface KbPackImportView {
@@ -625,7 +633,9 @@ export interface LucidBridge {
   kbActivate(kgId: string): Promise<KgListView | null>;
   // P-KGPACK.3 (ADR-0205): seed a KG from a folder. `name` creates + names a new KG at ingest; otherwise
   // `kgId` (or the active KG) receives the documents. Gated fail-closed server-side.
-  kbIngestBatch(input: { path: string; name?: string; kgId?: string }): Promise<KbBatchResultView | null>;
+  kbIngestBatch(input: { path: string; name?: string; kgId?: string }): Promise<KbIngestStartView | null>;
+  kbIngestStatus(jobId?: string): Promise<KbIngestJobView | null>;
+  kbIngestCancel(jobId?: string): Promise<{ ok: boolean } | null>;
   // P-KGPACK.4 (ADR-0205): export a KG as a .lkgpack; import one (integrity + origin verified, re-scanned
   // fail-closed, installed read-only + untrusted).
   kbPackExport(input: { kgId: string; dest: string; author?: string; version?: string; role?: string; description?: string }): Promise<KbPackExportView | null>;
@@ -1048,6 +1058,8 @@ export const bridge: LucidBridge = {
   kbRename: (kgId, name) => post("/api/kb/rename", { kgId, name }),
   kbActivate: (kgId) => post("/api/kb/activate", { kgId }),
   kbIngestBatch: (input) => post("/api/kb/ingest-batch", input),
+  kbIngestStatus: (jobId) => getData(`/api/kb/ingest-batch/status${jobId ? `?jobId=${encodeURIComponent(jobId)}` : ""}`),
+  kbIngestCancel: (jobId) => post("/api/kb/ingest-batch/cancel", { jobId }),
   kbPackExport: (input) => post("/api/kb/pack/export", input),
   kbPackImport: (input) => post("/api/kb/pack/import", input),
   setActiveSkill: (name, prompt) => post("/api/skill", { name, prompt }),
