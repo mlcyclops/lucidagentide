@@ -64,6 +64,14 @@ jobs:
           bun install
           bun x tsc --noEmit
 
+      # ADR-0177/0178: the RELEASE must BOOT under the packaging filter. This guard materializes a filtered
+      # install (the extraResources exclusions applied for real) and boots the real dev.ts, then requires
+      # lazily-imported feature deps to load. A filter/import mismatch - e.g. v1.11.0's `desktop/collab`
+      # excluded because the filter's `desktop/*.ts` glob was depth-1 only - now FAILS CI, not users.
+      # (Runs at repo root; needs the root install above so it can link node_modules into the sim.)
+      - name: Packaged-boot guard (release boots under the packaging filter)
+        run: bun test desktop/packaged_boot.test.ts
+
   scanner:
     name: Unicode scanner tests (Python)
     runs-on: ubuntu-latest

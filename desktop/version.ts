@@ -174,4 +174,13 @@
 //           Plus: a Copy button + right-click Copy for chat text & code blocks (P-COPY.1); the product website
 //           in the About panel with its brand emblem inlined so it paints instantly; and the default zoom
 //           pulled back a notch (what used to read 90% is the new 100%).
-export const APP_VERSION = "1.11.0";
+// v1.11.1 = HOTFIX: v1.11.0's packaged engine bricked at boot ("Cannot find module './collab/relay_server.ts'
+//           ... could not start its local engine / blank window") - the extraResources `to:"repo"` filter
+//           shipped `desktop/*.ts` (DEPTH-1 only) + `desktop/renderer/**`, so the brand-new `desktop/collab/`
+//           dir (P-COLLAB, which dev.ts imports at boot) was excluded from the package. Fix: the filter now
+//           ships `desktop/**/*.ts` (any depth), so a new desktop subdir can't be left out. Root cause of the
+//           MISS: the packaged-boot guard (ADR-0177/0178) that exists to catch this NEVER RAN in CI (the job
+//           ran `bun test harness` only) AND its own sim mirrored the depth-1 copy - both fixed: the guard
+//           now copies desktop sources recursively, and CI runs it as a required step. This class (v1.9.0 /
+//           1.10.3 / 1.10.4 / 1.11.0) is now gated, not shipped.
+export const APP_VERSION = "1.11.1";
