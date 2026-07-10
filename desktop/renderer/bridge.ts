@@ -553,6 +553,9 @@ export interface LucidBridge {
   collabP2PConfig(): Promise<{ config: CollabP2PConfig; guestName: string; managed: { locked: boolean } } | null>;
   collabSetP2P(patch: Partial<CollabP2PConfig>): Promise<{ config: CollabP2PConfig } | null>;
   collabAuthorizeConnect(endpoint: string): Promise<{ ok: boolean; error?: string }>;
+  // P-COLLAB.18: report a direct-P2P share/join lifecycle event to the backend audit trail (fire-and-forget;
+  // the backend maps the closed action set to a validated EventName + whitelists the metadata).
+  collabAudit(action: "share_started" | "share_stopped" | "guest_joined" | "guest_left", meta: { transport?: string; access?: string; roomId?: string; guest?: string }): void;
   sendPrompt(text: string, onEvent: (e: ChatEvent) => void, images?: { data: string; mimeType: string }[]): Promise<void>;
   // P-GOAL.1 (ADR-0046): run a /goal loop - streams the same events plus goal-iter/check/done/stop.
   runGoal(opts: GoalOpts, onEvent: (e: ChatEvent) => void): Promise<void>;
@@ -1070,6 +1073,10 @@ export const bridge: LucidBridge = {
       const j = await r.json();
       return j?.ok ? { ok: true } : { ok: false, error: String(j?.error ?? `backend error ${r.status}`) };
     } catch (e) { return { ok: false, error: String((e as Error)?.message ?? "backend unreachable") }; }
+  },
+  collabAudit: (action, meta) => {
+    // fire-and-forget; a failed audit write must never affect the share
+    void fetch("/api/collab/audit", { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify({ action, meta }) }).catch(() => {});
   },
   getSettings: () => getData("/api/settings"),
   saveUsername: (username) => post("/api/settings", { username }),

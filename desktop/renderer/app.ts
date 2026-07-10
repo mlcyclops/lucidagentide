@@ -7705,13 +7705,16 @@ function openSharePanel(): void {
         if (!relay && serve?.running && serve.wsBase) relay = { wsBase: serve.wsBase, httpBase: serve.wsBase.replace(/^ws/, "http"), label: "this device (embedded relay)", source: "embedded" };
         if (!relay) { showToast({ tone: "danger", title: "Couldn't start sharing", desc: "No relay is configured to help peers connect. Set one, or host the relay on this device.", timeout: 6000 }); return; }
         try {
-          await startP2PHost({
+          const p2pStatus = await startP2PHost({
             relayWsBase: relay.wsBase, relayHttpBase: relay.httpBase, relayLabel: relay.label, relaySource: relay.source,
             header: { sessionId: "local", title: "LUCID session", model: state.model || "model", hostName: "host" },
             allowEdit, ice: { iceUrls, turnUsername: turnUsername || undefined, turnCredential: turnCredential || undefined },
             onGuestPrompt: (text, guest) => runGuestPromptLocally(text, guest.name),
             onGuestAbort: () => { if (state.streaming) { void bridge.cancelChat(); showToast({ title: "Guest asked to stop", desc: "Stopping the current turn.", timeout: 2500 }); } },
+            // P-COLLAB.18: host-authoritative audit — a guest joined/left this direct-P2P share.
+            onParticipant: (kind, guest) => bridge.collabAudit(kind === "join" ? "guest_joined" : "guest_left", { transport: "direct-p2p", access: guest.access, roomId: p2pHostStatus()?.roomId, guest: guest.name }),
           });
+          bridge.collabAudit("share_started", { transport: "direct-p2p", access: allowEdit ? "edit" : "view", roomId: p2pStatus.roomId });
         } catch (e) { showToast({ tone: "danger", title: "Couldn't start sharing", desc: String((e as Error)?.message ?? e), timeout: 5000 }); return; }
       } else {
         const r = await bridge.collabStart({ allowEdit });
@@ -7724,7 +7727,14 @@ function openSharePanel(): void {
       if (allowEdit && !preferP2P) startCollabHostPoll();
       return;
     }
-    if (t.closest("[data-share-stop]")) { if (p2pHostActive()) stopP2PHost(); else await bridge.collabStop(); stopCollabHostPoll(); if (poll) { clearInterval(poll); poll = undefined; } await draw(); showToast({ title: "Sharing stopped", desc: "The room is closed - guests were disconnected.", timeout: 2000 }); return; }
+    if (t.closest("[data-share-stop]")) {
+      if (p2pHostActive()) {
+        const s = p2pHostStatus(); // capture roomId/access before teardown for the audit
+        stopP2PHost();
+        if (s) bridge.collabAudit("share_stopped", { transport: "direct-p2p", access: s.allowEdit ? "edit" : "view", roomId: s.roomId });
+      } else await bridge.collabStop();
+      stopCollabHostPoll(); if (poll) { clearInterval(poll); poll = undefined; } await draw(); showToast({ title: "Sharing stopped", desc: "The room is closed - guests were disconnected.", timeout: 2000 }); return;
+    }
     if (t.closest("[data-share-relay-change]")) { body.innerHTML = shareBodyHtml({ active: false, participantCount: 0, participants: [], relay: null }); return; }
     if (t.closest("[data-share-relay-save]")) {
       const url = ($("#shareRelayUrl", ov) as HTMLInputElement | null)?.value.trim() ?? "";

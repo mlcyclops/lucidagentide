@@ -116,6 +116,15 @@ export const EVENT_NAMES = [
   // persisted; `command_rejected` when validation/secret-guard/scan blocks it fail-closed.
   "command_created",
   "command_rejected",
+  // P-COLLAB.18 (ADR-0204) — live-session collaboration audit trail (share + join lifecycle), for BOTH the
+  // relay path and the direct-P2P (WebRTC) path. Metadata ONLY — transport (relay|direct-p2p), access
+  // (view|edit), relay source, the OPAQUE random roomId, and a guest's chosen display name — NEVER the room
+  // key, invite links, or any session content. `collab_share_started`/`_stopped` bracket a hosted share;
+  // `collab_guest_joined`/`_left` record a guest entering/leaving a share (host-authoritative).
+  "collab_share_started",
+  "collab_share_stopped",
+  "collab_guest_joined",
+  "collab_guest_left",
 ] as const;
 export type EventName = (typeof EVENT_NAMES)[number];
 
