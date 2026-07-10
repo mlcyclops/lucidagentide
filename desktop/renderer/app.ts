@@ -582,6 +582,7 @@ async function runPersonalImport(folder: string, useModel: boolean): Promise<voi
 // P-IDE.4 (ADR-0029): add a "View in IDE" affordance to each code block (DOMPurify forbids <button>
 // inside the sanitized markdown, so the button is injected post-render via the DOM). The click handler
 // (wired once, delegated) reads the code + language from the block and opens the read-only Monaco panel.
+// P-COPY.1 (ADR-0203): also inject a Copy button (top-right) so a snippet can be copied in one click.
 function enhanceCodeBlocks(container: HTMLElement): void {
   container.querySelectorAll("pre > code").forEach((code) => {
     const pre = code.parentElement as HTMLElement | null;
@@ -589,8 +590,21 @@ function enhanceCodeBlocks(container: HTMLElement): void {
     pre.style.position = "relative";
     const langCls = [...code.classList].find((c) => c.startsWith("language-"));
     const lang = langCls ? langCls.slice("language-".length) : "";
+    pre.appendChild(el(`<button class="code-copy-btn" type="button" data-code-copy title="Copy code" aria-label="Copy code">${icon("copy", 12)}</button>`));
     pre.appendChild(el(`<button class="code-ide-btn" type="button" data-ide-open data-lang="${esc(lang)}">${icon("layout", 12)} View in IDE</button>`));
   });
+}
+// P-COPY.1: the code-block Copy button. Delegated on DOCUMENT (not just #thread) so it works in every place
+// markdown renders code - the chat, the intro card, skill bodies, reports. Copies the block's exact text and
+// flashes a check. navigator.clipboard is granted in Electron; a refusing browser falls back to a toast.
+async function copyCodeBlock(btn: HTMLElement): Promise<void> {
+  const text = btn.closest("pre")?.querySelector("code")?.textContent ?? "";
+  if (!text) return;
+  try {
+    await navigator.clipboard.writeText(text);
+    btn.classList.add("ok"); btn.innerHTML = icon("check", 12);
+    setTimeout(() => { btn.classList.remove("ok"); btn.innerHTML = icon("copy", 12); }, 1200);
+  } catch { showToast({ tone: "danger", title: "Copy failed", desc: "Clipboard unavailable in this view — use right-click → Copy code block.", timeout: 3000 }); }
 }
 function addEvent(html: string): HTMLElement {
   const node = el(html);
@@ -8631,6 +8645,11 @@ function wire(): void {
   installTextContextMenu({
     onImages: (imgs) => stageImageFiles(imgs),
     toast: (t) => showToast({ title: t.title, desc: t.desc, tone: t.tone, actions: [{ label: "OK" }], timeout: 3200 }),
+  });
+  // P-COPY.1 (ADR-0203): the code-block Copy button, delegated on document so it fires wherever code renders.
+  document.addEventListener("click", (e) => {
+    const btn = (e.target as HTMLElement).closest?.("[data-code-copy]") as HTMLElement | null;
+    if (btn) void copyCodeBlock(btn);
   });
   // Drag-and-drop image files onto the composer.
   const cw = $(".composer-wrap") as HTMLElement | null;
