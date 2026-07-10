@@ -109,6 +109,23 @@ export class CollabGuest {
     this.#transport.close();
   }
 
+  /** P-COLLAB.12: drive the host's session (EDIT access only - the host still gates every tool call). Returns
+   *  false without sending when read-only or ended. The prompt runs on the HOST through its fail-closed gate. */
+  sendPrompt(text: string): boolean {
+    if (this.#ended || this.#readOnly || !text.trim()) return false;
+    this.#transport.send({ t: "prompt", text }, 0); // 0 = the host
+    return true;
+  }
+
+  /** P-COLLAB.12: stop the host's in-flight turn (EDIT access only). */
+  abort(): boolean {
+    if (this.#ended || this.#readOnly) return false;
+    this.#transport.send({ t: "abort" }, 0);
+    return true;
+  }
+
+  get readOnly(): boolean { return this.#readOnly; }
+
   view(): GuestView {
     return {
       phase: this.#phase,

@@ -47,10 +47,16 @@ export interface HostStartOpts {
    *  view-only room. Held so P-COLLAB.3 can authorize guest writes; in Phase 1 it only sets a guest's
    *  potential access, never grants an actual write. */
   writeToken?: Uint8Array | null;
-  /** Phase 1 default false: no guest may drive the host, regardless of link. Flipped on in P-COLLAB.3. */
+  /** Default false: no guest may drive the host, regardless of link. Set true (with a full-link write token)
+   *  to grant EDIT. Even then, a guest prompt runs on the host through the fail-closed scan gate + approvals. */
   allowGuestWrite?: boolean;
   /** Cap on replayed transcript turns in `welcome` (keeps a big session's welcome bounded). */
   transcriptLimit?: number;
+  /** P-COLLAB.12: an EDIT guest sent a prompt to run in the host's session. The host wires this to its own
+   *  prompt path, so the turn passes the SAME scan gate + exec/egress approvals as a local prompt. */
+  onGuestPrompt?: (text: string, guest: CollabParticipant) => void;
+  /** P-COLLAB.12: an EDIT guest asked to stop the in-flight turn. */
+  onGuestAbort?: (guest: CollabParticipant) => void;
 }
 
 const DEFAULT_TRANSCRIPT_LIMIT = 40;
@@ -63,6 +69,8 @@ export class CollabHost {
   #writeTokenB64: string | null;
   #allowGuestWrite: boolean;
   #transcriptLimit: number;
+  #onGuestPrompt?: (text: string, guest: CollabParticipant) => void;
+  #onGuestAbort?: (guest: CollabParticipant) => void;
 
   #participants = new Map<number, CollabParticipant>();
   #transcript: CollabTranscriptTurn[] = [];
@@ -77,6 +85,8 @@ export class CollabHost {
     this.#writeTokenB64 = opts.writeToken ? b64url(opts.writeToken) : null;
     this.#allowGuestWrite = opts.allowGuestWrite ?? false;
     this.#transcriptLimit = opts.transcriptLimit ?? DEFAULT_TRANSCRIPT_LIMIT;
+    this.#onGuestPrompt = opts.onGuestPrompt;
+    this.#onGuestAbort = opts.onGuestAbort;
   }
 
   /** Wire the transport callbacks and open the relay connection. */
@@ -130,7 +140,24 @@ export class CollabHost {
     if (this.#stopped) return;
     if (!isGuestFrame(frame)) return; // a host must never receive a host frame; ignore
     const guest = frame as GuestFrame;
-    if (guest.t === "hello") this.#onHello(guest, fromPeer);
+    if (guest.t === "hello") { this.#onHello(guest, fromPeer); return; }
+    if (guest.t === "prompt" || guest.t === "abort") this.#onGuestWrite(guest, fromPeer);
+  }
+
+  /** P-COLLAB.12: a guest prompt/abort. Fail-closed: only a registered EDIT guest may drive the host; anyone
+   *  else (view-only, or an unknown peer) is refused with an `error` frame and never reaches the host session. */
+  #onGuestWrite(frame: { t: "prompt"; text: string } | { t: "abort" }, fromPeer: number): void {
+    const guest = this.#participants.get(fromPeer);
+    if (!guest || guest.access !== "edit") {
+      this.#transport.send({ t: "error", message: "you are watching read-only - the host shared a view link" }, fromPeer);
+      return;
+    }
+    if (frame.t === "prompt") {
+      const text = (frame.text ?? "").toString();
+      if (text.trim()) this.#onGuestPrompt?.(text, guest);
+    } else {
+      this.#onGuestAbort?.(guest);
+    }
   }
 
   #onHello(hello: HelloFrame, fromPeer: number): void {

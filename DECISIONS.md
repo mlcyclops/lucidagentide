@@ -13748,3 +13748,37 @@ host<->guest by peer id, terminal close) + demo-P-COLLAB.11. The RTCPeerConnecti
 renderer, driving `CollabHost`/`CollabGuest` over `WebRtcTransport` means a renderer-side host (it already has
 the ChatEvent stream) + guest, with the demux splitting `signal` frames (-> RelaySignaling) from session frames
 (-> host/guest) over the collab transport, plus STUN/TURN config and a P2P/relay fallback + the UI toggle.
+
+---
+
+## ADR-0198 — P-COLLAB.12: guest-write (the mechanism)
+
+**Status:** Accepted (2026-07-09). Extends ADR-0192/0196.
+
+**Context.** View-only watching is safe but limited; the differentiator is letting a guest DRIVE the host while
+the host keeps control. A guest prompt runs tools on the HOST's machine, so it MUST pass the host's fail-closed
+scan gate + exec/egress approvals - the guest bypasses nothing.
+
+**Decision (the security-critical mechanism, tested).**
+- **`frames.ts`**: guest->host `PromptFrame { t:"prompt"; text }` + `AbortFrame { t:"abort" }`; `GuestFrame`
+  now = hello | prompt | abort (`isGuestFrame` widened; `isHostFrame` still excludes them + signal).
+- **`CollabHost`**: on a prompt/abort, look up the sender in the roster and require `access === "edit"`
+  (which is granted only when `allowGuestWrite` AND the guest proved the full-link write token). An EDIT
+  guest's prompt/abort invokes `onGuestPrompt(text, guest)` / `onGuestAbort(guest)` - the host wires these to
+  its OWN prompt path, so omp's in-process scan gate (invariant #4) + approvals apply to every tool call. A
+  view-only guest, an unknown peer, or an empty prompt is refused with an `error` frame and NEVER reaches the
+  host session (fail-closed).
+- **`CollabGuest`**: `sendPrompt(text)` / `abort()` - no-ops (return false, nothing hits the wire) when
+  read-only or ended; `readOnly` getter.
+- **`CollabManager.start({ allowEdit })`**: mints the full link + sets `allowGuestWrite` + forwards the
+  `onGuestPrompt`/`onGuestAbort` deps; `status.allowEdit` surfaces it.
+
+**Verification.** host.test.ts +4 + guest.test.ts +2 (edit-guest prompt/abort -> callbacks; view-only/unknown/
+empty -> refused, no callback; client-side send guards) + demo-P-COLLAB.12 over a REAL relay (edit guest drives
+the host; a hand-crafted raw prompt from a view guest is refused host-side). 63 collab tests; tsc + license
+green.
+
+**Deferred (the UI slice, P-COLLAB.13):** the host "Allow edit" toggle (start with `allowEdit`), the guest
+prompt box in the Join panel (POST -> the backend guest's `sendPrompt`), and the host surfacing a guest prompt
+in its OWN chat flow (so approvals fire + the turn taps back to collab) - e.g. the host renderer auto-submits a
+pending guest prompt via the normal composer path, attributed to the guest.

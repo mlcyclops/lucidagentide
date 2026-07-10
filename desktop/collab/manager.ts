@@ -32,6 +32,10 @@ export interface CollabManagerDeps {
   makeTransport(opts: { wsUrl: string; key: CryptoKey }): HostTransport;
   /** Injected clock (the workflow/test host forbids Date.now()); UNIX ms. */
   now(): number;
+  /** P-COLLAB.12: run an EDIT guest's prompt in the host's session (through the host's fail-closed gate). */
+  onGuestPrompt?: (text: string, guest: CollabParticipant) => void;
+  /** P-COLLAB.12: an EDIT guest asked to stop the in-flight turn. */
+  onGuestAbort?: (guest: CollabParticipant) => void;
 }
 
 export interface ShareStatus {
@@ -46,6 +50,8 @@ export interface ShareStatus {
   relayLabel?: string;
   relaySource?: string;
   startedAt?: number;
+  /** P-COLLAB.12: true when this share was started with EDIT allowed (a full-link guest can drive the host). */
+  allowEdit?: boolean;
   participantCount: number;
   participants: CollabParticipant[];
 }
@@ -55,6 +61,7 @@ const IDLE: ShareStatus = { active: false, participantCount: 0, participants: []
 export class CollabManager {
   readonly #deps: CollabManagerDeps;
   #host: CollabHost | null = null;
+  #allowEdit = false;
   #room: { roomId: string; fullLink: string; viewLink: string; browserLink: string; label: string; source: string; startedAt: number } | null = null;
 
   constructor(deps: CollabManagerDeps) {
@@ -65,13 +72,15 @@ export class CollabManager {
     return this.#host !== null;
   }
 
-  /** Begin sharing. Throws (fail-closed) if no relay is authorized. Restarts cleanly if already active. */
-  async start(): Promise<ShareStatus> {
+  /** Begin sharing. Throws (fail-closed) if no relay is authorized. Restarts cleanly if already active.
+   *  `allowEdit` grants a FULL-link guest the ability to drive the host (P-COLLAB.12); default view-only. */
+  async start(opts: { allowEdit?: boolean } = {}): Promise<ShareStatus> {
     const relay = this.#deps.resolveRelay();
     if (!relay) {
       throw new Error("no collaboration relay is configured — set a self-hosted relay URL in Settings, or opt into the public relay");
     }
     if (this.#host) this.stop("restarting the share");
+    const allowEdit = !!opts.allowEdit;
 
     const roomId = generateRoomId();
     const rawKey = generateRoomKey();
@@ -85,10 +94,15 @@ export class CollabManager {
     const startedAt = this.#deps.now();
     this.#host = new CollabHost(transport, {
       header: { sessionId: info.sessionId, title: info.title, model: info.model, hostName: info.hostName, startedAt },
-      writeToken: token,     // minted for P-COLLAB.3 guest-write; not honored while allowGuestWrite is off
-      allowGuestWrite: false, // Phase 1: view-only
+      writeToken: token,        // proven by a full-link guest to unlock EDIT
+      allowGuestWrite: allowEdit, // P-COLLAB.12: only when the host shares an EDIT link
+      // A guest prompt/abort reaches the host's session ONLY through these - and there, the host's fail-closed
+      // scan gate + exec/egress approvals still apply to every tool call (the guest bypasses nothing).
+      onGuestPrompt: this.#deps.onGuestPrompt,
+      onGuestAbort: this.#deps.onGuestAbort,
     });
     this.#host.start();
+    this.#allowEdit = allowEdit;
 
     // P-COLLAB.10: the shared links CARRY the relay endpoint (`<wss://relay>/r/roomId.secret`), so a guest who
     // pastes one knows WHERE to connect without any extra config.
@@ -104,6 +118,7 @@ export class CollabManager {
     this.#host?.stop(reason);
     this.#host = null;
     this.#room = null;
+    this.#allowEdit = false;
     return IDLE;
   }
 
@@ -128,6 +143,7 @@ export class CollabManager {
       relayLabel: this.#room.label,
       relaySource: this.#room.source,
       startedAt: this.#room.startedAt,
+      allowEdit: this.#allowEdit,
       participantCount: this.#host.participantCount,
       participants: this.#host.participants(),
     };
