@@ -36,6 +36,8 @@ export interface CollabManagerDeps {
   onGuestPrompt?: (text: string, guest: CollabParticipant) => void;
   /** P-COLLAB.12: an EDIT guest asked to stop the in-flight turn. */
   onGuestAbort?: (guest: CollabParticipant) => void;
+  /** P-COLLAB.18 (ADR-0204): a guest joined/left the hosted share (host-authoritative audit hook). */
+  onParticipant?: (kind: "join" | "leave", guest: CollabParticipant) => void;
 }
 
 export interface ShareStatus {
@@ -100,6 +102,7 @@ export class CollabManager {
       // scan gate + exec/egress approvals still apply to every tool call (the guest bypasses nothing).
       onGuestPrompt: this.#deps.onGuestPrompt,
       onGuestAbort: this.#deps.onGuestAbort,
+      onParticipant: this.#deps.onParticipant,
     });
     this.#host.start();
     this.#allowEdit = allowEdit;

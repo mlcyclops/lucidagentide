@@ -61,6 +61,8 @@ export interface StartP2PHostOpts {
   /** An EDIT guest's prompt/abort - app.ts runs these through the host's OWN composer (gate + approvals fire). */
   onGuestPrompt?: (text: string, guest: CollabParticipant) => void;
   onGuestAbort?: (guest: CollabParticipant) => void;
+  /** P-COLLAB.18: a guest joined/left this direct-P2P share (host-authoritative audit hook). */
+  onParticipant?: (kind: "join" | "leave", guest: CollabParticipant) => void;
   /** Test-only: inject the relay socket (an in-memory loopback for the self-test). Defaults to the real WebSocket. */
   wsFactory?: WebSocketFactory;
 }
@@ -96,6 +98,7 @@ export async function startP2PHost(opts: StartP2PHostOpts): Promise<P2PHostStatu
       allowGuestWrite: opts.allowEdit,
       onGuestPrompt: opts.onGuestPrompt,
       onGuestAbort: opts.onGuestAbort,
+      onParticipant: opts.onParticipant,
     },
   });
 

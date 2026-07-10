@@ -98,6 +98,7 @@ import { CollabSocket } from "./collab/relay_client.ts";
 import { CollabGuest } from "./collab/guest.ts"; // P-COLLAB.10 (ADR-0196): watch a shared session read-only
 import { parseShareLink } from "./collab/link.ts";
 import { importRoomKey } from "./collab/crypto.ts";
+import { recordCollabShareStarted, recordCollabShareStopped, recordCollabGuestJoined, recordCollabGuestLeft, recordCollabAudit } from "./collab/collab_audit.ts"; // P-COLLAB.18 (ADR-0204)
 import { authorizeRelayConnect } from "./managed_config.ts";
 import { collabRelayConfig, setCollabRelay, collabP2PConfig, setCollabP2P } from "./settings_store.ts";
 import { hostname as osHostname } from "node:os";
@@ -229,6 +230,11 @@ const collabManager = new CollabManager({
   now: () => Date.now(),
   onGuestPrompt: (text, guest) => { pendingGuestPrompt = { text: String(text).slice(0, 20_000), from: guest.name }; },
   onGuestAbort: () => { guestAbortRequested = true; },
+  // P-COLLAB.18 (ADR-0204): host-authoritative audit — a guest joined/left the RELAY share. Metadata only.
+  onParticipant: (kind, guest) => {
+    const meta = { transport: "relay" as const, access: guest.access, roomId: collabManager.status().roomId, guest: guest.name };
+    if (kind === "join") recordCollabGuestJoined(meta); else recordCollabGuestLeft(meta);
+  },
 });
 
 // 30s memo for /api/code-activity — each rebuild spawns `git log` per workspace (ADR-0030 P-CODE.1).
@@ -1877,10 +1883,21 @@ const server = Bun.serve({
       if (p === "/api/collab/start" && req.method === "POST") {
         const b = await readBody<{ allowEdit?: unknown }>(req);
         pendingGuestPrompt = null; guestAbortRequested = false; // fresh inbox per share
-        try { return json({ ok: true, data: await collabManager.start({ allowEdit: b.allowEdit === true }) }); }
+        try {
+          const status = await collabManager.start({ allowEdit: b.allowEdit === true });
+          // P-COLLAB.18: audit the RELAY share start (metadata only).
+          recordCollabShareStarted({ transport: "relay", access: status.allowEdit ? "edit" : "view", roomId: status.roomId, relaySource: status.relaySource });
+          return json({ ok: true, data: status });
+        }
         catch (e) { return json({ ok: false, error: String((e as Error)?.message ?? e) }); }
       }
-      if (p === "/api/collab/stop" && req.method === "POST") { pendingGuestPrompt = null; guestAbortRequested = false; return json({ ok: true, data: collabManager.stop("host ended the session") }); }
+      if (p === "/api/collab/stop" && req.method === "POST") {
+        const prev = collabManager.status(); // capture the roomId/access before the share is torn down
+        pendingGuestPrompt = null; guestAbortRequested = false;
+        const data = collabManager.stop("host ended the session");
+        if (prev.active) recordCollabShareStopped({ transport: "relay", access: prev.allowEdit ? "edit" : "view", roomId: prev.roomId, relaySource: prev.relaySource });
+        return json({ ok: true, data });
+      }
       // P-COLLAB.13 (ADR-0198): the HOST renderer polls this while sharing with edit; it runs any pending
       // guest prompt through its own composer (gate + approvals) + aborts on request. Consume-on-read.
       if (p === "/api/collab/guest-inbox") {
@@ -1931,6 +1948,15 @@ const server = Bun.serve({
         if (!endpoint) return json({ ok: false, error: "no relay endpoint" });
         const authz = authorizeRelayConnect(endpoint, managedConfig().config);
         return json({ ok: authz.ok, ...(authz.ok ? {} : { error: authz.reason }) });
+      }
+      // P-COLLAB.18 (ADR-0204): the RENDERER hosts a direct-P2P share itself (RTCPeerConnection is renderer-only)
+      // and can't write the audit log, so it reports its share/join lifecycle here. Fail-closed: the action is a
+      // CLOSED set (recordCollabAudit refuses anything else) and the metadata is whitelisted - the renderer can
+      // never name an off-enum event or smuggle a key/link/content field into the trail.
+      if (p === "/api/collab/audit" && req.method === "POST") {
+        const b = await readBody<{ action?: unknown; meta?: unknown }>(req);
+        const ok = recordCollabAudit(b.action, b.meta);
+        return json({ ok });
       }
       // P-COLLAB.7 (ADR-0193): the "be the relay" toggle - host the embedded relay on this device.
       // `serve` is governance-gated + fail-closed; `status` drives the toggle (running + bind + managed lock).

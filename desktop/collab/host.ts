@@ -57,6 +57,9 @@ export interface HostStartOpts {
   onGuestPrompt?: (text: string, guest: CollabParticipant) => void;
   /** P-COLLAB.12: an EDIT guest asked to stop the in-flight turn. */
   onGuestAbort?: (guest: CollabParticipant) => void;
+  /** P-COLLAB.18 (ADR-0204): a guest joined ("join", on its `hello`) or left ("leave", on relay peer-left).
+   *  Host-authoritative audit hook — the caller records a metadata-only telemetry event. */
+  onParticipant?: (kind: "join" | "leave", guest: CollabParticipant) => void;
 }
 
 const DEFAULT_TRANSCRIPT_LIMIT = 40;
@@ -71,6 +74,7 @@ export class CollabHost {
   #transcriptLimit: number;
   #onGuestPrompt?: (text: string, guest: CollabParticipant) => void;
   #onGuestAbort?: (guest: CollabParticipant) => void;
+  #onParticipant?: (kind: "join" | "leave", guest: CollabParticipant) => void;
 
   #participants = new Map<number, CollabParticipant>();
   #transcript: CollabTranscriptTurn[] = [];
@@ -87,6 +91,7 @@ export class CollabHost {
     this.#transcriptLimit = opts.transcriptLimit ?? DEFAULT_TRANSCRIPT_LIMIT;
     this.#onGuestPrompt = opts.onGuestPrompt;
     this.#onGuestAbort = opts.onGuestAbort;
+    this.#onParticipant = opts.onParticipant;
   }
 
   /** Wire the transport callbacks and open the relay connection. */
@@ -178,6 +183,7 @@ export class CollabHost {
       access: canWrite ? "edit" : "view",
     };
     this.#participants.set(fromPeer, participant);
+    this.#onParticipant?.("join", participant); // P-COLLAB.18: host-authoritative join audit
 
     // Unicast the welcome to the joiner, then refresh everyone's roster.
     this.#transport.send(
@@ -197,7 +203,11 @@ export class CollabHost {
   #onControl(msg: RelayControlMessage): void {
     if (this.#stopped) return;
     if (msg.t === "peer-left") {
-      if (this.#participants.delete(msg.peer)) this.#broadcastState();
+      const gone = this.#participants.get(msg.peer);
+      if (this.#participants.delete(msg.peer)) {
+        if (gone) this.#onParticipant?.("leave", gone); // P-COLLAB.18: host-authoritative leave audit
+        this.#broadcastState();
+      }
     }
     // `peer-joined` is informational; the guest's own `hello` is what registers it (with its name + token).
   }

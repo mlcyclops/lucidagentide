@@ -13962,3 +13962,46 @@ the menu with "Copy code block"; a right-click on selected text opens the menu w
 is blocked in the sandboxed headless preview — no user-gesture permission — so the copy RESULT isn't assertable
 there; the same `navigator.clipboard` path is the one the existing message-copy button uses in the real build.)
 root/desktop tsc + license green.
+
+## ADR-0204 — P-COLLAB.18: the live-collaboration audit trail (share + join, relay + P2P)
+
+**Status:** Accepted (2026-07-09). Follows the ADR-0202 "next" (audit events for P2P share/join).
+
+**Context.** The live-session feature (relay path + direct-P2P path) had no audit trail: nothing recorded that a
+session was shared, over which transport, or who joined. For a security-first product an "who accessed my
+session" trail is table stakes. Invariant #8 requires every logged event to use a name from the `EventName`
+enum (an off-enum name must raise), which is the frozen `contracts.ts` — so adding these events is a deliberate,
+ADR'd extension of that contract.
+
+**Decision.** Four new `EventName`s — `collab_share_started`, `collab_share_stopped`, `collab_guest_joined`,
+`collab_guest_left` — emitted through the canonical `Telemetry` class (name validated against the enum; lands in
+the same `~/.omp/lucid-events.ndjson` as the other GUI audit events). **Metadata only**: transport
+(`relay`|`direct-p2p`), access (`view`|`edit`), relay source, the OPAQUE random `roomId`, and a guest's chosen
+display name — **never** the room key, the invite links, or any session content. Best-effort: a telemetry write
+failure never breaks a share.
+
+- **`desktop/collab/collab_audit.ts`** holds the record functions + a fail-closed dispatcher `recordCollabAudit`
+  for the renderer P2P path (see below), with a strict metadata whitelist.
+- **Host-authoritative join/leave.** `CollabHost` gains an `onParticipant("join"|"leave", guest)` hook, fired
+  on a guest `hello` and on relay `peer-left`. The RELAY host wires it through `CollabManager` → `dev.ts` (direct
+  emit); the direct-P2P host (renderer) wires it through `startP2PHost` → `app.ts` → the bridge.
+- **Share start/stop.** The relay path emits at the `/api/collab/start` + `/stop` routes; the P2P path emits from
+  `app.ts` when the renderer coordinator starts/stops.
+- **The renderer P2P bridge.** A direct-P2P share is hosted in the renderer (RTCPeerConnection is renderer-only),
+  which cannot write the log. It reports its lifecycle to a new `POST /api/collab/audit` route that calls
+  `recordCollabAudit(action, meta)` with a **CLOSED action set** — an unknown action is refused (returns false,
+  emits nothing), and the metadata is whitelisted to five known non-secret fields. So the renderer can never
+  name an off-enum event nor smuggle a key/link/content field into the trail (fail-closed, invariant #8).
+
+**Verification.** `collab_audit.test.ts` (7) proves the right event fires, the metadata is whitelisted (a
+renderer-supplied `key`/`link`/`prompt`/`__proto__` is NEVER logged), an unknown action is refused fail-closed,
+and a throwing sink never propagates. `host.test.ts` (+1) proves `onParticipant` fires on hello (`join`, with the
+right access) and on `peer-left` (`leave`), and not for an unknown peer. Verified LIVE: `POST /api/collab/audit`
+wrote `collab_share_started` (transport `direct-p2p`) with an injected `key`/`link` **stripped**; `/api/collab/start`
++ `/stop` wrote `collab_share_started` + `collab_share_stopped` (transport `relay`) with a paired `roomId` +
+`relaySource`; a bogus action wrote nothing. 85 collab + 20 telemetry/contracts tests + root/desktop tsc + license
+green.
+
+**Deferred:** a guest-authoritative "I joined a remote share" event (this instance watching someone else's
+session — a secondary audit subject needing join-roomId state); relay serve start/stop events; DuckDB ingestion of
+the collab events for the dashboard.
