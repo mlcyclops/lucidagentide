@@ -13808,3 +13808,37 @@ machine's real LAN address (`192.168.254.123 — your LAN`), and selecting it st
 `192.168.254.123:8790` (a peer on the network can now reach it directly). 67 collab tests; tsc + license green.
 
 **Deferred:** a "test reachability" probe; remembering the last-picked address across sessions.
+
+---
+
+## ADR-0200 — P-COLLAB.15: the renderer-side WebRTC session (keystone)
+
+**Status:** Accepted (2026-07-09). Extends ADR-0194/0197.
+
+**Context.** RTCPeerConnection is a Chromium API (renderer-only), but the collab host/guest run in the BACKEND
+over the relay WebSocket. For a real P2P DataChannel, the session must run in the RENDERER. The transport
+(`WebRtcTransport`, ADR-0194) + the relay signaling (`RelaySignaling`, ADR-0197) exist; this proves they drive
+the SAME `CollabHost`/`CollabGuest` end-to-end in the build - the load-bearing step before swapping the
+production pipe.
+
+**Decision.** `desktop/collab/webrtc_session.ts` (renderer-only): `webrtcHost` / `webrtcGuest` wire a
+`WebRtcTransport` into the unchanged `CollabHost` / `CollabGuest` (host = offerer, guest = answerer); signaling
+rides a `SignalingChannel` (production: `RelaySignaling` over the relay; test: a loopback). Frames stay
+E2E-sealed over the DataChannel. `webrtcLoopbackSelfTest` is a self-contained diagnostic that stands up a host
++ guest over a real DTLS DataChannel (in-process looped signaling), asserts the E2E welcome + a broadcast
+ChatEvent arrive P2P, and returns a plain result. Exposed as `window.__lucidWebrtcSelfTest` (no side effects
+unless invoked) so it is runnable in the built renderer.
+
+Also fixed here: `webrtc_transport.ts` had latent TS-6 typed-array errors (a dependency bump tightened
+`DataChannel.send` / ICE candidate types) - the DataChannel send now copies to a plain ArrayBuffer, and ICE
+candidates are constructed explicitly. This was silently failing the desktop typecheck.
+
+**Verification.** signaling/net tests unchanged (67 collab). Verified LIVE in the preview: the diagnostic
+returned `ok:true` (welcome title round-tripped, participants=1, events=[token,done]) deterministically (4/4) -
+the whole renderer-side WebRTC session stack works with the real classes. RTCPeerConnection is renderer-only,
+so this is preview-verified, not `bun test`.
+
+**Deferred (the production swap-in):** a renderer-side coordinator that connects a relay `CollabSocket` for
+SIGNALING (demuxing `signal` frames -> `RelaySignaling`, control -> peer join/leave), creates a `WebRtcTransport`
+per guest on the host + one to the host on the guest, and falls back to relaying session frames over the
+WebSocket when a DataChannel can't be established (NAT without TURN); then STUN/TURN config + the UI toggle.
