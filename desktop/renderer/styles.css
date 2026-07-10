@@ -2783,6 +2783,14 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
   box-shadow:0 2px 8px rgba(0,0,0,.35)}
 pre:hover .code-ide-btn,pre:focus-within .code-ide-btn{opacity:1}
 .code-ide-btn:hover{color:var(--txt);border-color:var(--line-strong)}
+/* P-COPY.1 (ADR-0203): the code-block Copy button — top-right corner, mirrors the View-in-IDE affordance. */
+.code-copy-btn{position:absolute;top:8px;right:8px;z-index:3;display:inline-flex;align-items:center;justify-content:center;
+  width:26px;height:26px;background:var(--bg-3);border:1px solid var(--line);border-radius:7px;padding:0;
+  color:var(--txt-3);cursor:pointer;opacity:0;transition:opacity var(--t-fast) var(--ease),color var(--t-fast) var(--ease),border-color var(--t-fast) var(--ease);
+  box-shadow:0 2px 8px rgba(0,0,0,.35)}
+pre:hover .code-copy-btn,pre:focus-within .code-copy-btn{opacity:1}
+.code-copy-btn:hover{color:var(--txt);border-color:var(--line-strong)}
+.code-copy-btn.ok{color:var(--green);border-color:color-mix(in srgb,var(--green) 45%,transparent);opacity:1}
 
 /* P-BRIEF.3 (ADR-0072): the Engineering Update accordion inside the goal modal. */
 .goal-eu { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 10px; }

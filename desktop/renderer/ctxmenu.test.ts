@@ -5,7 +5,7 @@
 // text-splice math the paste/cut actions run on the prompt bar.
 
 import { describe, expect, test } from "bun:test";
-import { menuItemsFor, spliceText } from "./ctxmenu.ts";
+import { menuItemsFor, readonlyMenuItemsFor, spliceText } from "./ctxmenu.ts";
 
 describe("menuItemsFor — which entries are actionable", () => {
   test("selection in an editable field → everything enabled", () => {
@@ -26,6 +26,21 @@ describe("menuItemsFor — which entries are actionable", () => {
     expect(items.find((i) => i.act === "cut")?.enabled).toBe(false);
     expect(items.find((i) => i.act === "copy")?.enabled).toBe(false);
     expect(items.find((i) => i.act === "paste")?.enabled).toBe(true);
+  });
+});
+
+describe("readonlyMenuItemsFor — the chat / code-block Copy menu (P-COPY.1)", () => {
+  test("selected chat text (not code) → a single Copy entry", () => {
+    expect(readonlyMenuItemsFor({ inCode: false, hasSelection: true })).toEqual([{ act: "copy", label: "Copy", kbd: "Ctrl+C", enabled: true }]);
+  });
+  test("inside a code block, no selection → Copy code block only", () => {
+    expect(readonlyMenuItemsFor({ inCode: true, hasSelection: false })).toEqual([{ act: "copycode", label: "Copy code block", kbd: "", enabled: true }]);
+  });
+  test("a selection INSIDE a code block → both Copy and Copy code block", () => {
+    expect(readonlyMenuItemsFor({ inCode: true, hasSelection: true }).map((i) => i.act)).toEqual(["copy", "copycode"]);
+  });
+  test("no selection, not a code block → EMPTY (a plain right-click keeps its default behavior)", () => {
+    expect(readonlyMenuItemsFor({ inCode: false, hasSelection: false })).toEqual([]);
   });
 });
 

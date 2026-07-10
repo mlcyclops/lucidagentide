@@ -13929,3 +13929,36 @@ persists through `/api/collab/p2p` (with `guestName` + the managed lock). The ra
 port is blocked in the sandboxed preview (only the dev-server port is proxied), so the cross-socket relay hop is
 not exercisable here - which is exactly why the self-test uses an in-memory relay. 77 collab tests + root/desktop
 tsc + license green.
+
+## ADR-0203 — P-COPY.1: copy affordances for chat text + code blocks
+
+**Status:** Accepted (2026-07-09).
+
+**Context.** Electron ships NO default context menu, so a right-click on the chat transcript or a code block did
+nothing, and code blocks only offered "View in IDE" — there was no one-click way to COPY a snippet (the user had
+to select by hand, and even that had no menu). The message-level Copy/Save buttons cover a whole reply, not an
+individual fenced block.
+
+**Decision.** Two small, additive affordances, reusing the existing infrastructure:
+- **A Copy button on every code block.** `enhanceCodeBlocks` (which already injects "View in IDE" post-render,
+  because DOMPurify forbids `<button>` inside the sanitized markdown) now also appends a `.code-copy-btn`
+  (`data-code-copy`) in the top-right corner. A single DOCUMENT-level delegated click copies the block's exact
+  `code.textContent` and flashes a check — delegated on `document` (not just `#thread`) so it works everywhere
+  markdown renders code: the chat, the intro card, skill bodies, reports.
+- **A right-click Copy menu for read-only content.** `ctxmenu.ts` (P-SECACK.1's field clipboard menu) is extended:
+  the shared menu renderer is factored out (`spawnMenu`), and the one document `contextmenu` listener now, after
+  the editable-field branch, offers a Copy menu for non-editable content — "Copy" when there's a text selection,
+  and "Copy code block" when the click is inside a `<pre>`. It returns [] (keeps the default) when there's nothing
+  to copy, so ordinary right-clicks are unaffected. The item logic is a pure function, `readonlyMenuItemsFor`.
+
+Clipboard uses `navigator.clipboard.writeText` (granted in Electron; a refusing browser degrades to a toast),
+matching the existing message-copy + field-copy paths. No new permissions, no security surface: this is display-
+side only and never touches the scan gate.
+
+**Verification.** `readonlyMenuItemsFor` unit-tested (4 cases: selection→Copy, in-code→Copy code block, both,
+neither→empty); 12 ctxmenu tests total. Verified LIVE in the preview: a user message with a fenced block renders
+with the injected `.code-copy-btn` (top-right, 26px) alongside View-in-IDE; a right-click on the code block opens
+the menu with "Copy code block"; a right-click on selected text opens the menu with "Copy". (Clipboard read/write
+is blocked in the sandboxed headless preview — no user-gesture permission — so the copy RESULT isn't assertable
+there; the same `navigator.clipboard` path is the one the existing message-copy button uses in the real build.)
+root/desktop tsc + license green.
