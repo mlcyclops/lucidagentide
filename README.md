@@ -177,6 +177,28 @@ personalization internals are proprietary and intentionally undocumented here - 
 
 ---
 
+## ✨ What's new in v1.11.0
+
+> Live collaboration: share a running LUCID session with another LUCID - end-to-end encrypted. Watch, or drive.
+
+- **🤝 Share a live session** - a host broadcasts its running session to a guest over an **end-to-end-encrypted**
+  relay (AES-256-GCM; the relay only ever sees ciphertext). Send an invite link; the guest **watches
+  read-only**, or - with an edit link - **drives** the session. Every guest prompt still runs **on the host**,
+  through *your* fail-closed scan gate + exec/egress approvals, so a guest bypasses nothing. *(P-COLLAB, ADR-0192/0198)*
+- **🏠 Self-hosted by default** - **be the relay** on your own device (loopback / LAN / VPN bind picker) or run
+  the standalone broker on a jumpbox; the public relay is opt-in. Enterprise/MDM policy clamps who may host and
+  which binds/relays are allowed, fail-closed. *(ADR-0193/0195/0199)*
+- **⚡ Direct P2P (WebRTC)** - flip on "prefer a direct connection" and a share upgrades to a direct **DTLS
+  DataChannel** - the relay only brokers the signaling handshake, then peers go peer-to-peer, with automatic
+  relay fallback. A **metadata-only audit trail** records share/join start/stop over both transports (never
+  keys, links, or content). *(ADR-0194/0201/0202/0204)*
+- **📋 Copy, everywhere** - a **Copy** button on every code block + **right-click → Copy** for chat text and
+  code blocks (Electron ships no default menu). *(ADR-0203)*
+- **✨ Polish** - the product **website** in the About panel (with its brand emblem inlined so it paints
+  instantly), and the default **zoom** pulled back a notch (what used to read 90% is the new 100%).
+
+---
+
 ## ✨ What's new in v1.10.6
 
 > The agent turn, redesigned - and a Model-Evaluation suite that scores the work honestly.
@@ -748,12 +770,13 @@ Obsidian-vault export), AI-authorship attribution, one-command import, a read-wr
 the **`/goal` loop** with full loop-engineering (after-action reports, a budget kill switch, and stall
 guards), a local **RAG knowledge spine** + the **compiled KB** with hybrid retrieval, the governed **skills
 directory** + **Skill Studio**, **local & hybrid providers**, the **Agent Builder**, the **agent firewall**,
-and the **runtime execution boundary** (OS-isolated exec + mediated egress). **Newest (v1.10.6):** the
-**redesigned agent turn** (collapsible sections + inline tool chips, or the rich activity window with
-expanded subagent detail), a **Model-Evaluation** report suite (honesty-tiered per-run metrics + a
-cross-run rollup with per-model API-latency), **10-minute provider patience**, and an **opt-in,
-AI-refreshable Trivia Wire**. *(v1.10.5 brought live subagent activity, graphs that form in place, a
-system resource guard, the runnable Electron preview, and a curated plugin marketplace.)*
+and the **runtime execution boundary** (OS-isolated exec + mediated egress). **Newest (v1.11.0):** **live
+collaboration** - share a running session with another LUCID over an **end-to-end-encrypted** relay; a guest
+**watches read-only** or **drives** (guest prompts still run on the host, through your gate + approvals);
+**self-hosted by default** (be your own relay / standalone broker, enterprise-clamped), with an optional
+**direct P2P (WebRTC)** upgrade + relay fallback and a metadata-only share/join **audit trail**. Plus a
+**Copy** button + right-click Copy for chat & code. *(v1.10.6 brought the redesigned agent turn + the
+Model-Evaluation report suite.)*
 
 Every test suite passes and `tsc --noEmit` is clean across all three projects (TypeScript + Python). The
 table below is the recent slice; [`PROGRESS.md`](PROGRESS.md) has the full per-session log.
@@ -762,6 +785,7 @@ table below is the recent slice; [`PROGRESS.md`](PROGRESS.md) has the full per-s
 
 | Phase | Feature | ADR |
 |:--|:--|:--|
+| **v1.11.0 batch** | **Live collaboration** - share a running session with another LUCID over an **E2E-encrypted** relay; a guest **watches read-only** or (edit link) **drives** the host (guest prompts run **on the host**, through its fail-closed gate + approvals); **self-hosted by default** ("be the relay" loopback/LAN/VPN, or a standalone jumpbox broker; public relay opt-in) with **enterprise/MDM** clamps; an optional **direct P2P (WebRTC)** upgrade (DTLS DataChannel, relay only signals, auto-fallback); a **metadata-only** share/join **audit trail**; plus a **Copy** button + **right-click Copy** for chat & code, the product **website** in About, and a pulled-back default **zoom** | [ADR-0192-0204](DECISIONS.md) |
 | **v1.10.6 batch** | **Redesigned agent turn + Model-Evaluation suite** - a settled answer folds into collapsible sections + threads tool calls back as inline **chips** (with +/- diffstats + code drilldowns) when they interleave, else keeps the rich **activity window** + **expanded subagent detail**; a settled **file-writing** turn offers a thin, subdued **"Generate engineering report"** (honesty-tiered per-run metrics) plus a **cross-run rollup** with per-model **API-latency p50/p95**; **10-min provider patience** with a "still waiting" notice; and an **opt-in, AI-refreshable Trivia Wire** | [ADR-0186-0191](DECISIONS.md) |
 | **v1.10.5 batch** | **Live subagent activity** (the delegation card opens each subagent's thinking/tools/output), **graphs form in place** (off-screen settle, snap-centered open), a **system resource guard** (weak CPU under load pauses heavy builds behind a what-to-close panel), the **Electron preview** explained + runnable outside LUCID, the role-aware **Trivia Wire** ticker, a **curated plugin marketplace** (Mermaid/Gitleaks/Semgrep/Trivy/Pandoc), and a decluttered KG header | [ADR-0174-0184](DECISIONS.md) |
 | **P-SKILL.4-5 · P-KB.1-2b · P-SKILLREG.1-2** | **Skills governed + Skill Studio + compiled KB** - the skills directory (source root, trust label, enable/disable, re-scan, remove), Skill Studio drafts skills from your recent work (scanned before saved, reviewed before codified), the registry reader + publish seams, and the OpenKB-style compiled KB with the vector/compiled/both retrieval router + its page-graph view | [ADR-0097-0102](DECISIONS.md) |
