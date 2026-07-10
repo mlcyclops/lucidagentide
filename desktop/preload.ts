@@ -31,6 +31,9 @@ contextBridge.exposeInMainWorld("lucid", {
   revealPath: (path: string): Promise<boolean> => ipcRenderer.invoke("lucid:revealPath", path),
   // P-LOCAL.3 polish: restart the app so a freshly-spawned omp picks up new/changed local providers.
   relaunch: (): Promise<void> => ipcRenderer.invoke("lucid:relaunch"),
+  // P-KGMARKET.4 (ADR-0206): the OS forwards the lucid://auth?token=... deep link (after hosted marketplace
+  // sign-in) to the main process, which relays it here for market_boot.handleAuthCallback.
+  onAuthCallback: (cb: (url: string) => void): void => { ipcRenderer.on("lucid:authCallback", (_e, url: string) => cb(url)); },
   win: {
     minimize: () => ipcRenderer.send("lucid:win", "minimize"),
     toggleMaximize: () => ipcRenderer.send("lucid:win", "toggleMaximize"),

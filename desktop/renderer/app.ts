@@ -32,6 +32,7 @@ import { MARKET_PLUGINS, marketplaceHtml, marketRowsHtml } from "./marketplace.t
 import { KG_PACKS, kgPacksHtml, kgPackRowsHtml, type KgPack } from "./kg_packs.ts"; // P-KGPACK.5 (ADR-0205)
 import { getMarketProvider } from "./market_gate.ts"; // P-KGMARKET.1 (ADR-0206)
 import { decidePackAction } from "../../harness/market/entitlement.ts"; // P-KGMARKET.1 (ADR-0206)
+import { initMarket, beginSignIn, handleAuthCallback, readMarketBootConfig } from "./market_boot.ts"; // P-KGMARKET.4 (ADR-0206)
 import { toolfailGroupHtml, type ToolFailEntry } from "./toolfail_group.ts"; // P-TOOLFAIL.2 (ADR-0163)
 import { APP_VERSION } from "../version.ts";
 import { renderMarkdown } from "./markdown.ts";
@@ -8082,7 +8083,13 @@ async function getPackFlow(pack: KgPack): Promise<void> {
   const ent = auth.signedIn ? await prov.entitlement(pack.id).catch(() => null) : null;
   const action = decidePackAction(auth, ent, new Date().toISOString());
   if (action === "signin") {
-    showToast({ tone: "warn", title: "Sign in to buy", desc: "Sign in to purchase and install role packs.", actions: [{ label: "Open product page", run: () => window.open(pack.url, "_blank", "noopener") }, { label: "Close" }], timeout: 0 });
+    // P-KGMARKET.4: kick off the hosted sign-in (or the local dev stub). Stub mode signs in synchronously, so
+    // re-run the flow straight into checkout/pull; firebase opens the browser and the lucid://auth deep link
+    // (wired at boot) finishes it, after which the user clicks the row again.
+    const r = beginSignIn();
+    if (r.signedIn) { void getPackFlow(pack); return; }
+    if (r.opened) { showToast({ title: "Finish signing in", desc: "Complete sign-in in your browser, then click the pack again to install it.", timeout: 6000 }); return; }
+    showToast({ tone: "warn", title: "Sign in to buy", desc: r.reason ?? "Sign in to purchase and install role packs.", actions: [{ label: "Open product page", run: () => window.open(pack.url, "_blank", "noopener") }, { label: "Close" }], timeout: 0 });
     return;
   }
   if (action === "checkout") {
@@ -9738,6 +9745,15 @@ setInspectorRail(true); // start with the right inspector slid into the metrics 
 renderStatus();
 loadCachedConfig(); renderStatus(); // P-IDE.1d: paint the cached model immediately, then refresh live
 void loadConfig().then(renderStatus);
+// P-KGMARKET.4 (ADR-0206): register the entitlement provider for this build (firebase / dev stub / off) and
+// listen for the lucid://auth deep link the OS forwards after hosted sign-in. A plain public build has no
+// config → "off" → the fail-closed nullProvider, so nothing here changes the storefront's behavior.
+initMarket(readMarketBootConfig());
+try {
+  (window as unknown as { lucid?: { onAuthCallback?: (cb: (url: string) => void) => void } }).lucid?.onAuthCallback?.((url) => {
+    if (handleAuthCallback(url)) showToast({ title: "Signed in", desc: "You're signed in - click a pack to install it.", timeout: 5000 });
+  });
+} catch { /* not in Electron */ }
 void loadWorkspace();
 void loadAsksage();
 void loadSkills();
