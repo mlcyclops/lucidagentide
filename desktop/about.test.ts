@@ -51,6 +51,13 @@ describe("aboutHtml", () => {
     expect(html).toContain("Take the tour");
   });
 
+  test("links the product website, opening safely in the OS browser", () => {
+    expect(html).toContain('href="https://lucid-agent.web.app/"');
+    expect(html).toContain("lucid-agent.web.app");
+    expect(html).toContain('target="_blank"');
+    expect(html).toContain('rel="noopener noreferrer"'); // no window.opener / referrer leak
+  });
+
   test("escapes the interpolated version (no raw injection)", () => {
     const evil = aboutHtml('1<script>"&');
     expect(evil).not.toContain("<script>");

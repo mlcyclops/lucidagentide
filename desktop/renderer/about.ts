@@ -58,6 +58,7 @@ export function aboutHtml(version: string): string {
       <div class="about-logo" id="aboutTitle">${lucidLogo()}</div>
       <div class="about-tag">Secure agentic IDE · provenance · memory</div>
       <div class="about-ver" data-tip="App version">v${v}</div>
+      <a class="about-site" href="https://lucid-agent.web.app/" target="_blank" rel="noopener noreferrer" data-tip="Open the LUCID Agent website">lucid-agent.web.app ↗</a>
     </div>
 
     <p class="about-blurb">
