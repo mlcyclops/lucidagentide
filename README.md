@@ -300,6 +300,7 @@ via the same read-only-safe JSONL-sink pattern as the rest of the observer store
 - [<img src=".github/assets/icons/memory.svg" width="16" alt=""> Memory and the personalization graph](#-memory-and-the-personalization-graph)
 - [<img src=".github/assets/icons/gateway.svg" width="16" alt=""> Models and the AskSage gateway](#-models-and-the-asksage-gateway)
 - [📚 Knowledge & RAG](#-knowledge--rag)
+- [🤝 Live collaboration](#-live-collaboration)
 - [<img src=".github/assets/icons/builton.svg" width="16" alt=""> Built on](#-built-on)
 - [<img src=".github/assets/icons/quickstart.svg" width="16" alt=""> Quick start](#-quick-start)
 - [<img src=".github/assets/icons/desktop.svg" width="16" alt=""> Desktop app](#-desktop-app)
@@ -618,6 +619,35 @@ if poisoned, *before* it can ever be embedded or recalled. (Keystone #2 holds fo
 - 🛠️ **Skill Studio - turn your week into skills (shipped).** Built in [ADR-0101](DECISIONS.md) (`P-SKILL.5`), a one-click button that analyzes your **day's or week's** work (sessions, AI-authored edits, loop outcomes) and **drafts Agent Skills** with your most-used model - each one **scanned before it's saved** and **reviewed before it's codified** (a reviewed draft is excellent; an un-reviewed one is worse than none). Codified skills land in your **Local Skills Registry**.
 - 🏛️ **Enterprise skills registry - reader seam ships now (`P-SKILLREG.1`).** The source-available app carries the read-only **registry reader**: an install is **fetch → verify (Ed25519 signature vs. your trusted keys) → scan-gate (the same fail-closed gate) → install**, and an **unsigned, signature-mismatched, unconfigured-key, or scan-flagged** skill is **blocked, never written** (keystone #2: an installed registry skill is shown `untrusted`, never auto-promoted to trusted). Installed skills appear in the directory above under a **Registry** source. The hosting side - publish/version/**sign (Cosign + SLSA)**/distribute as portable **OCI artifacts on an S3-compatible backend** that stands up identically on **AWS, Azure, Google Cloud, OCI, IBM Cloud, VMware, Nutanix, NetApp ONTAP, and KVM** via Terraform, incl. **air-gapped and IL5** partitions - is the separately-licensed add-on (server + runbooks are private IP).
 - 🚀 **Push to where your org already lives - publish seam ships now (`P-SKILLREG.2`).** A single **`RegistryPublisher`** seam ships in the core with a default **`LocalRegistryPublisher`** (serves your skills as the Local Skills Registry) + a fail-safe `PublishDispatcher` (a dead/missing publisher never throws into a turn; a declared remote with no publisher is a clean no-op). The remote publishers - enterprise cloud OCI registries (AWS/Azure/GCP/Oracle/IBM) and **custom git** (Enterprise GitLab, GitHub, Azure DevOps) - implement the same interface and are a separately-licensed add-on. Publishing establishes **no trust**: the read side still verifies the signature + scan-gates before install; every remote push is **egress-gated** and centrally policy-clamped.
+
+## 🤝 Live collaboration
+
+> **Shipped** ([ADR-0192-0204](DECISIONS.md), `P-COLLAB`). Share a **running** LUCID session with another
+> LUCID, live and **end-to-end encrypted** - a teammate watches your agent work in real time, or drives it -
+> without handing over your machine, your keys, or your approvals.
+
+<div align="center">
+<img src=".github/assets/live-collaboration.png" alt="LucidAgentIDE live collaboration - the Share panel: an end-to-end-encrypted invite link, a self-hosted relay toggle, and the live participant roster. A guest watches read-only or drives, with every guest prompt still gated on the host." width="640" />
+<br />
+<sub><i>The Share panel - an end-to-end-encrypted invite, the self-hosted relay toggle, and the live roster. <b>Drop your screenshot at <code>.github/assets/live-collaboration.png</code>.</b></i></sub>
+</div>
+
+- 🔐 **End-to-end encrypted, host-authoritative.** The host broadcasts its own `ChatEvent` stream over an
+  E2E-sealed relay (**AES-256-GCM**; the relay only ever sees ciphertext, never the room key). The key rides
+  the **invite link**, never the wire.
+- 👀 **Watch, or drive.** A **view** link is read-only; a **full/edit** link lets a guest **drive** the host's
+  session - but every guest prompt still runs **on the host**, through *your* fail-closed scan gate +
+  exec/egress approvals, so a guest bypasses nothing.
+- 🏠 **Self-hosted by default.** **Be the relay** on your own device (loopback / LAN / VPN bind picker) so no
+  third party ever touches the session - even encrypted - or run the **standalone broker** on an office server
+  / DGX / Ubuntu jumpbox. The public relay is strictly opt-in.
+- 🏢 **Enterprise-governed, fail-closed.** Group policy / MDM can clamp **who may host a relay** and **which
+  bind addresses + relay endpoints** are allowed - tighten-only, refused unless explicitly permitted.
+- ⚡ **Optional direct P2P (WebRTC).** Flip on *"prefer a direct connection"* and a share upgrades to a direct
+  **DTLS DataChannel** - the relay only brokers the SDP/ICE signaling handshake, then peers go peer-to-peer,
+  with **automatic relay fallback** when a NAT blocks the direct path.
+- 🧾 **Audited.** A **metadata-only** audit trail records share/join start/stop over both transports (transport,
+  access, opaque room id, guest name) - **never** the room key, invite links, or any session content.
 
 ## <img src=".github/assets/icons/builton.svg" width="28" align="top" alt=""> Built on
 

@@ -55,6 +55,23 @@ function linkTreeFiltered(src: string, dst: string, dropSuffixes: string[]): voi
 
 const linkDir = (target: string, path: string): void => symlinkSync(target, path, process.platform === "win32" ? "junction" : "dir");
 
+/** Copy the desktop repo sources the way the `to:"repo"` extraResources filter ships them: EVERY
+ *  `desktop/**\/*.ts` (any depth), the whole `desktop/renderer/**`, and desktop/package.json - so a new
+ *  desktop subdir the engine imports (v1.11.0 shipped `desktop/collab` and the filter's `desktop/*.ts` was
+ *  depth-1 only, bricking boot) is present in the sim exactly as in the real package. Skips build-output. */
+function copyDesktopSources(srcRoot: string, dstRoot: string, rel = ""): void {
+  for (const e of readdirSync(join(srcRoot, rel), { withFileTypes: true })) {
+    const r = rel ? `${rel}/${e.name}` : e.name;
+    if (e.isDirectory()) {
+      if (!rel && (e.name === "node_modules" || e.name === "release" || e.name === "dist")) continue;
+      copyDesktopSources(srcRoot, dstRoot, r);
+    } else if (e.isFile() && (e.name.endsWith(".ts") || r === "package.json" || r.startsWith("renderer/"))) {
+      mkdirSync(join(dstRoot, rel), { recursive: true });
+      cpSync(join(srcRoot, r), join(dstRoot, r));
+    }
+  }
+}
+
 /** Materialize the filtered install: repo sources + node_modules with the LIVE exclusions applied. */
 function buildFilteredInstall(): string {
   const exclusions = nodeModulesExclusions();
@@ -64,12 +81,7 @@ function buildFilteredInstall(): string {
 
   // Repo sources, the way extraResources ships them (the subset the engine needs to boot).
   cpSync(join(REPO, "package.json"), join(sim, "package.json"));
-  mkdirSync(join(sim, "desktop"), { recursive: true });
-  for (const e of readdirSync(join(REPO, "desktop"), { withFileTypes: true })) {
-    if (e.isFile() && e.name.endsWith(".ts")) cpSync(join(REPO, "desktop", e.name), join(sim, "desktop", e.name));
-  }
-  cpSync(join(REPO, "desktop", "package.json"), join(sim, "desktop", "package.json"));
-  cpSync(join(REPO, "desktop", "renderer"), join(sim, "desktop", "renderer"), { recursive: true });
+  copyDesktopSources(join(REPO, "desktop"), join(sim, "desktop")); // desktop/**/*.ts + renderer/** + package.json
   for (const top of ["harness", "tools"]) cpSync(join(REPO, top), join(sim, top), { recursive: true });
   if (existsSync(join(REPO, "bin"))) cpSync(join(REPO, "bin"), join(sim, "bin"), { recursive: true });
 
