@@ -13842,3 +13842,49 @@ so this is preview-verified, not `bun test`.
 SIGNALING (demuxing `signal` frames -> `RelaySignaling`, control -> peer join/leave), creates a `WebRtcTransport`
 per guest on the host + one to the host on the guest, and falls back to relaying session frames over the
 WebSocket when a DataChannel can't be established (NAT without TURN); then STUN/TURN config + the UI toggle.
+
+## ADR-0201 — P-COLLAB.16: the production WebRTC swap-in (relay-signaled, fan-out, relay-fallback)
+
+**Status:** Accepted (2026-07-09). Implements the ADR-0200 deferred section.
+
+**Context.** ADR-0200 proved a single renderer-side session runs over a real DataChannel with looped signaling.
+Production is harder in two ways ADR-0200 sidestepped: (1) a share has ONE `CollabHost` broadcasting to MANY
+guests, but a DataChannel is strictly 1:1; and (2) a DataChannel cannot always be established (symmetric NAT
+without a TURN server), so P2P must be best-effort, never a hard requirement - the session must still work.
+
+**Decision.** Two composable, independently-testable building blocks + a coordinator that assembles them with
+the existing relay `CollabSocket`:
+
+- **`prefer_p2p.ts` — `PreferP2PTransport`.** A drop-in transport (the interface CollabHost/CollabGuest drive)
+  that STARTS on the relay (available at once, so the session never blocks on WebRTC) and TRANSPARENTLY UPGRADES
+  to the DataChannel the moment it opens - DOWNGRADING back to the relay if it later drops. Each frame is sent
+  exactly once over the then-current path (no duplicates). This is the "WebSocket fallback": the relay is the
+  reliable baseline and P2P is a transparent optimization, not a precondition. Transport-agnostic (the P2P side
+  + the relay send are injected), so it is unit-tested headless without an RTCPeerConnection.
+- **`fanout_host.ts` — `FanoutHostTransport`.** Squares the one-host/many-guests vs 1:1-DataChannel mismatch: it
+  implements `HostTransport` (so `CollabHost` is UNCHANGED) and underneath keeps one `PreferP2PTransport` PER
+  guest. A broadcast (targetPeer 0) fans out to every guest's pipe; a unicast reaches one. Pipes are created
+  lazily (on a relay `peer-joined` / signal / fallback frame) and torn down on `peer-left` (still forwarded to
+  CollabHost so it updates the roster). The per-guest pipe is built by an injected factory, so this is DOM-free
+  and unit-tested headless too.
+- **`webrtc_coordinator.ts` — `webrtcHostCoordinator` / `webrtcGuestCoordinator`.** Connect a relay `CollabSocket`
+  and DEMUX it three ways: `signal` frames -> the per-peer `RelaySignaling` (SDP/ICE), relay control -> the
+  fan-out (peer join/leave), everything else -> the relay-fallback inbound. The host builds a per-guest
+  `WebRtcTransport` (offerer) + `RelaySignaling` + `PreferP2PTransport` under the fan-out; the guest builds one
+  `PreferP2PTransport` (answerer) to the host (peer 0). Frames stay E2E-sealed end-to-end.
+
+Fixed roles (host = offerer) avoid negotiation glare. STUN/TURN is passed through `iceServers` (empty default =
+LAN/VPN host candidates suffice). Fail-closed is preserved: a wrong key / tampered frame on EITHER path is
+terminal (crypto.ts), and a terminal relay close stops the host / ends the guest.
+
+**Verification.** `PreferP2PTransport` (5 tests) + `FanoutHostTransport` (5 tests) proven headless (starts on
+relay, upgrades to P2P, sends once per path, delivers from both, downgrades on drop; broadcast/unicast fan-out,
+peer-id tagging, lazy create, peer-left teardown). The whole production path - real `CollabSocket` + demux +
+fan-out + a real WebRTC DataChannel + fallback - is proven LIVE in the preview by `webrtcRelaySelfTest` (exposed
+as `window.__lucidWebrtcRelaySelfTest`), which runs both coordinators over an in-memory relay faithful to
+relay_server's routing: `ok:true`, welcome round-tripped, guests=1, events=[token,done], and it UPGRADED to a
+direct DataChannel (`path=p2p`) deterministically (4/4). 77 collab tests + root/desktop tsc + license green.
+
+**Deferred (the final slice):** wire the coordinator into the live share flow behind a "prefer direct P2P" UI
+toggle (replacing the backend host/guest path when enabled), plus STUN/TURN configuration in Settings. The
+engine is complete + proven; this is the UI + live-flow integration.
