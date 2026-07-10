@@ -82,7 +82,9 @@ describe("logos + rail glyph match the icon family", () => {
 
   test("techLeadLogo renders the brand avatar image in an animated ring", () => {
     const t = techLeadLogo();
-    expect(t).toContain("assets/techlead187-avatar.png");
+    // The emblem is INLINED as a data URI (no out-of-band fetch), so it paints with the rest of the panel.
+    expect(t).toContain("src=\"data:image/png;base64,");
+    expect(t).not.toContain("assets/techlead187-avatar.png"); // no separate request left
     expect(t).toContain("about-tl-ring"); // the premium animated gradient ring
     expect(t).toContain('alt=""'); // decorative (the brand name is adjacent text)
   });
