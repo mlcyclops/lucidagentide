@@ -47,10 +47,13 @@ import type { AgentSpec, NodeKind } from "../../harness/agent/spec.ts"; // P-AGE
 import { expandCommandBody, expandInlineCommands, slashTokenBeforeCaret, type UserCommand } from "../../harness/commands/spec.ts"; // P-CMD.1/.2: user "/" commands, body-wide
 import { type Action, type ToastAction, attachRichTip, createPalette, initTooltips, popover, showToast } from "./ui.ts";
 import { exportActionPlan } from "./kg_export.ts";
-import { webrtcLoopbackSelfTest } from "../collab/webrtc_session.ts"; // P-COLLAB.15 (ADR-0200): WebRTC P2P diagnostic
-// Diagnostic hook: proves the renderer-side WebRTC session stack (CollabHost/CollabGuest over a real DTLS
-// DataChannel) works in this build. No side effects unless invoked; run `await window.__lucidWebrtcSelfTest()`.
+import { webrtcLoopbackSelfTest, webrtcRelaySelfTest } from "../collab/webrtc_session.ts"; // P-COLLAB.15/.16: WebRTC diagnostics
+// Diagnostic hooks (no side effects unless invoked): __lucidWebrtcSelfTest proves the renderer-side WebRTC
+// session stack (CollabHost/CollabGuest over a real DTLS DataChannel, P-COLLAB.15); __lucidWebrtcRelaySelfTest
+// proves the FULL production coordinator - CollabSocket + signaling/control/fallback demux + per-guest fan-out
+// + WebRTC - over an in-memory relay (P-COLLAB.16). Run `await window.__lucidWebrtcRelaySelfTest()`.
 (window as unknown as { __lucidWebrtcSelfTest?: typeof webrtcLoopbackSelfTest }).__lucidWebrtcSelfTest = webrtcLoopbackSelfTest;
+(window as unknown as { __lucidWebrtcRelaySelfTest?: typeof webrtcRelaySelfTest }).__lucidWebrtcRelaySelfTest = webrtcRelaySelfTest;
 import { formatImportLine } from "./import_progress.ts";
 import { ASKSAGE_FAMILY_ORDER, familyOf, filterModels, groupByFamily, isAuxiliaryModel, isChinaModel, isDeprecatedModel, isGovModel, sortGovFirstNewest } from "./model_families.ts";
 import { FAVS_KEY, parseFavs, starredOf, toggleFav } from "./model_favorites.ts"; // P-FAV.1 (ADR-0165)

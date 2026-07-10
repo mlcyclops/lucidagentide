@@ -17,7 +17,9 @@ import { WebRtcTransport } from "./webrtc_transport.ts";
 import { CollabHost, type HostStartOpts } from "./host.ts";
 import { CollabGuest, type GuestCallbacks, type GuestStartOpts } from "./guest.ts";
 import { LoopbackSignaling, type SignalingChannel } from "./signaling.ts";
-import { generateRoomKey, importRoomKey } from "./crypto.ts";
+import { generateRoomKey, importRoomKey, packEnvelope } from "./crypto.ts";
+import type { WebSocketFactory, WebSocketLike } from "./relay_client.ts";
+import { webrtcHostCoordinator, webrtcGuestCoordinator } from "./webrtc_coordinator.ts";
 
 export interface WebRtcHostOpts { key: CryptoKey; signaling: SignalingChannel; host: HostStartOpts; iceServers?: RTCIceServer[] }
 export interface WebRtcGuestOpts { key: CryptoKey; signaling: SignalingChannel; guest: GuestStartOpts; callbacks?: GuestCallbacks; iceServers?: RTCIceServer[] }
@@ -82,5 +84,108 @@ export async function webrtcLoopbackSelfTest(): Promise<{ ok: boolean; detail: s
   } finally {
     try { g?.guest.leave("self-test done"); } catch { /* */ }
     try { h?.host.stop("self-test done"); } catch { /* */ }
+  }
+}
+
+// ── the PRODUCTION-path self-test (P-COLLAB.16) ────────────────────────────────
+
+/** An in-memory stand-in for a relay socket, so the self-test drives the REAL CollabSocket without a server. */
+class LoopbackWs implements WebSocketLike {
+  binaryType = "blob";
+  readyState = 0; // CONNECTING
+  onopen: ((ev?: unknown) => void) | null = null;
+  onmessage: ((ev: { data: unknown }) => void) | null = null;
+  onerror: ((ev?: unknown) => void) | null = null;
+  onclose: ((ev: { code: number; reason: string }) => void) | null = null;
+  peerId = 0;
+  toHub: (data: Uint8Array) => void = () => {};
+  closedByHub: () => void = () => {};
+  #closed = false;
+  send(data: Uint8Array): void { if (!this.#closed) this.toHub(data); }
+  close(): void { if (this.#closed) return; this.#closed = true; this.readyState = 3; this.closedByHub(); this.onclose?.({ code: 1000, reason: "closed" }); }
+  open(): void { this.readyState = 1; this.onopen?.(); }
+  deliverBin(u: Uint8Array): void { if (!this.#closed) this.onmessage?.({ data: u.buffer.slice(u.byteOffset, u.byteOffset + u.byteLength) }); }
+  deliverStr(s: string): void { if (!this.#closed) this.onmessage?.({ data: s }); }
+}
+
+/** A faithful in-memory copy of relay_server's routing (host = peer 0; guests 1,2,…; broadcast/unicast; the
+ *  peer-joined control), so the coordinator's REAL CollabSocket + demux run with no network. Test-only. */
+class LoopbackRelayHub {
+  #host: LoopbackWs | null = null;
+  #guests = new Map<number, LoopbackWs>();
+  #seq = 1;
+  factory(): WebSocketFactory {
+    return (url: string) => {
+      const role = /role=host/.test(url) ? "host" : "guest";
+      const ws = new LoopbackWs();
+      if (role === "host") {
+        this.#host = ws;
+        ws.toHub = (data) => this.#fromHost(data);
+        ws.closedByHub = () => { this.#host = null; };
+        queueMicrotask(() => ws.open());
+      } else {
+        const peerId = this.#seq++;
+        ws.peerId = peerId;
+        this.#guests.set(peerId, ws);
+        ws.toHub = (data) => this.#fromGuest(peerId, data);
+        ws.closedByHub = () => { if (this.#guests.delete(peerId)) this.#host?.deliverStr(JSON.stringify({ t: "peer-left", peer: peerId })); };
+        queueMicrotask(() => { ws.open(); this.#host?.deliverStr(JSON.stringify({ t: "peer-joined", peer: peerId })); });
+      }
+      return ws as unknown as WebSocketLike;
+    };
+  }
+  #fromHost(bytes: Uint8Array): void {
+    const target = new DataView(bytes.buffer, bytes.byteOffset, 4).getUint32(0, false);
+    const sealed = bytes.subarray(4);
+    const out = packEnvelope(0, sealed); // relay rewrites the header to the sender (host = 0)
+    if (target === 0) for (const g of this.#guests.values()) g.deliverBin(out);
+    else this.#guests.get(target)?.deliverBin(out);
+  }
+  #fromGuest(peerId: number, bytes: Uint8Array): void {
+    const sealed = bytes.subarray(4); // guest→host is always tagged with the guest's own peer id
+    this.#host?.deliverBin(packEnvelope(peerId, sealed));
+  }
+}
+
+/**
+ * The PRODUCTION-path proof (ADR-0201): the REAL `webrtcHostCoordinator` + `webrtcGuestCoordinator` - CollabSocket,
+ * the signaling/control/fallback demux, the per-guest fan-out, and a real WebRTC DataChannel - run over an
+ * in-memory relay (no server). Asserts the guest gets its E2E `welcome` and a host broadcast, and reports which
+ * path carried it (`p2p` once the DataChannel upgrades, else the relay `fallback`). Never throws.
+ */
+export async function webrtcRelaySelfTest(): Promise<{ ok: boolean; detail: string }> {
+  if (typeof RTCPeerConnection === "undefined") return { ok: false, detail: "no RTCPeerConnection in this build" };
+  let host: ReturnType<typeof webrtcHostCoordinator> | null = null;
+  let guest: ReturnType<typeof webrtcGuestCoordinator> | null = null;
+  try {
+    const raw = generateRoomKey();
+    const hostKey = await importRoomKey(raw);
+    const guestKey = await importRoomKey(raw);
+    const hub = new LoopbackRelayHub();
+    const wsFactory = hub.factory();
+    const wsUrl = "wss://loopback/r/selftest";
+
+    const events: string[] = [];
+    let welcomed = false;
+    host = webrtcHostCoordinator({ wsUrl, key: hostKey, wsFactory, host: { header: { sessionId: "s", title: "WebRTC relay self-test", model: "m", hostName: "host", startedAt: 1 } } });
+    guest = webrtcGuestCoordinator({ wsUrl, key: guestKey, wsFactory, guest: { name: "bob" }, callbacks: { onWelcome: () => { welcomed = true; }, onEvent: (e) => events.push(e.type) } });
+
+    await waitFor(() => welcomed && guest!.guest.view().phase === "live", "the guest welcome over the relay coordinator");
+    const title = guest.guest.view().header?.title;
+
+    host.host.pushEvent({ type: "token", text: "hi" });
+    host.host.pushEvent({ type: "done", text: "done" });
+    await waitFor(() => events.includes("token") && events.includes("done"), "the broadcast over the relay coordinator");
+    // Give ICE a beat to complete so we can report whether it upgraded to a direct DataChannel.
+    await new Promise((r) => setTimeout(r, 400));
+    const path = guest.transport.mode === "p2p" ? "p2p (direct DataChannel)" : "relay (fallback)";
+
+    const ok = title === "WebRTC relay self-test" && host.fanout.guestCount === 1 && welcomed;
+    return { ok, detail: `welcome title="${title}", guests=${host.fanout.guestCount}, events=${JSON.stringify(events)}, path=${path}` };
+  } catch (e) {
+    return { ok: false, detail: String((e as Error)?.message ?? e) };
+  } finally {
+    try { guest?.close(); } catch { /* */ }
+    try { host?.close(); } catch { /* */ }
   }
 }
