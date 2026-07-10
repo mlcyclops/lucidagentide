@@ -9463,10 +9463,10 @@ function openOptionDropdown(anchor: HTMLElement, configId: string): void {
 }
 
 // ───────────────────────── text zoom ─────────────────────────
-// The default UI was a touch small, so the baseline now renders 1.2× larger — what used to require 120%
-// zoom IS the new 100%. `state.zoom` stays the LOGICAL level shown in the % chip (default 1 = 100%); the
-// factor actually applied is `state.zoom * ZOOM_BASE`, so the chip still reads 100% at the bigger default.
-const ZOOM_BASE = 1.2;
+// The default was pulled BACK a notch (1.2× → 1.08×): what the chip used to read at 90% is the new 100%.
+// `state.zoom` stays the LOGICAL level shown in the % chip (default 1 = 100%); the factor actually applied is
+// `state.zoom * ZOOM_BASE`, so the chip still reads 100% at this slightly-smaller default.
+const ZOOM_BASE = 1.08;
 function applyZoom(): void {
   state.zoom = Math.max(0.7, Math.min(1.8, Math.round(state.zoom * 100) / 100));
   bridge.setZoom(state.zoom * ZOOM_BASE);
@@ -9477,9 +9477,9 @@ function nudgeZoom(delta: number): void { state.zoom += delta; applyZoom(); }
 function resetZoom(): void { state.zoom = 1; applyZoom(); }
 function initZoom(): void {
   try {
-    // One-time rebaseline to the bigger default: drop any prior stored zoom so everyone lands on the new
-    // 100% (= old 120%) once; adjustments after that persist normally.
-    if (!localStorage.getItem("lucid.zoombase12")) { localStorage.removeItem("lucid.zoom"); localStorage.setItem("lucid.zoombase12", "1"); }
+    // One-time rebaseline to the pulled-back default: drop any prior stored zoom so everyone lands on the new
+    // 100% (= old 90%) once; adjustments after that persist normally.
+    if (!localStorage.getItem("lucid.zoombase108")) { localStorage.removeItem("lucid.zoom"); localStorage.setItem("lucid.zoombase108", "1"); }
     const z = Number(localStorage.getItem("lucid.zoom")); if (z) state.zoom = z;
   } catch { /* ignore */ }
   applyZoom();
