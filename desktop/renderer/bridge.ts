@@ -221,6 +221,32 @@ export interface KbRetrieveResultView { mode: "vector" | "compiled" | "hybrid"; 
 export interface KbPageView { page_id: string; kind: string; slug: string; title: string; body_md: string; trust_label: string }
 export interface KbLinkView { link_id: string; from_page_id: string; to_page_id: string; relation: string }
 export interface KbGraphView { pages: KbPageView[]; links: KbLinkView[] }
+// P-KGPACK.2 (ADR-0205): the named-KG picker. `activeId` is the KG a no-arg store lookup resolves to; a
+// mutation returns the refreshed list plus an optional `error` (validation failures don't null the list).
+export interface KgListItemView { kg_id: string; name: string; read_only: boolean; source_kind: string }
+export interface KgListView { kgs: KgListItemView[]; activeId: string | null; error?: string }
+// P-KGPACK.3 (ADR-0205): seed a named KG from a folder (chat export or Obsidian markdown). All fields past
+// `ok` are present only on success; `error` carries the friendly failure message.
+export interface KbBatchResultView {
+  ok: boolean; error?: string;
+  kgId?: string; kgName?: string; kind?: "chat" | "obsidian"; vendor?: string | null;
+  documents?: number; totalDocuments?: number; available?: number; skipped?: number;
+  pagesCompiled?: number; pagesQuarantined?: number; documentsQuarantined?: number; errored?: number; links?: number; cancelled?: boolean;
+}
+// P-KGPACK.6 (ADR-0205): the batch seed is a BACKGROUND job. `kbIngestBatch` now returns a start (jobId or
+// error); the renderer polls `kbIngestStatus` and can `kbIngestCancel`.
+export interface KbIngestStartView { ok: boolean; jobId?: string; kgId?: string; kgName?: string; error?: string }
+export interface KbIngestJobView {
+  jobId: string; state: "running" | "done" | "failed" | "cancelled"; kgId: string; kgName: string;
+  documents: number; totalDocuments: number; pagesCompiled: number; pagesQuarantined: number; documentsQuarantined: number; errored: number;
+  startedAt: number; updatedAt: number; result?: KbBatchResultView; error?: string;
+}
+// P-KGPACK.4 (ADR-0205): .lkgpack pack author (export) + gated import.
+export interface KbPackExportView { ok: boolean; error?: string; path?: string; signed?: boolean; pages?: number }
+export interface KbPackImportView {
+  ok: boolean; error?: string; stage?: string;
+  kgId?: string; kgName?: string; signed?: boolean; keyId?: string; pages?: number; findings?: number;
+}
 export interface ProviderAuth {
   id: string; name: string; env: string; oauthId: string; canOauth: boolean;
   oauthActive: boolean; oauthIdentity?: string; keySet: boolean; keyLast4?: string;
@@ -598,6 +624,22 @@ export interface LucidBridge {
   kbIngest(doc: { sourcePath: string; title: string; text: string }): Promise<KbIngestResultView | null>;
   kbRetrieve(query: string, mode: "vector" | "compiled" | "hybrid"): Promise<KbRetrieveResultView | null>;
   kbGraph(): Promise<KbGraphView | null>;
+  // P-KGPACK.2 (ADR-0205): the named-KG picker. list = all KGs + active; create/rename/activate return the
+  // refreshed list (with an optional `error` on validation failure). The graph view (kbGraph) reads the
+  // ACTIVE KG, so activate + re-fetch shows a different graph.
+  kbList(): Promise<KgListView | null>;
+  kbCreate(name: string): Promise<KgListView | null>;
+  kbRename(kgId: string, name: string): Promise<KgListView | null>;
+  kbActivate(kgId: string): Promise<KgListView | null>;
+  // P-KGPACK.3 (ADR-0205): seed a KG from a folder. `name` creates + names a new KG at ingest; otherwise
+  // `kgId` (or the active KG) receives the documents. Gated fail-closed server-side.
+  kbIngestBatch(input: { path: string; name?: string; kgId?: string }): Promise<KbIngestStartView | null>;
+  kbIngestStatus(jobId?: string): Promise<KbIngestJobView | null>;
+  kbIngestCancel(jobId?: string): Promise<{ ok: boolean } | null>;
+  // P-KGPACK.4 (ADR-0205): export a KG as a .lkgpack; import one (integrity + origin verified, re-scanned
+  // fail-closed, installed read-only + untrusted).
+  kbPackExport(input: { kgId: string; dest: string; author?: string; version?: string; role?: string; description?: string }): Promise<KbPackExportView | null>;
+  kbPackImport(input: { path: string }): Promise<KbPackImportView | null>;
   // P-CMD.1 (ADR-0146): user-authored "/" slash commands (workspace .omp/commands/). Create validates +
   // scans fail-closed server-side. `list` = stored commands; `create` returns the persisted command or errors.
   userCommands(): Promise<UserCommand[]>;
@@ -1011,6 +1053,15 @@ export const bridge: LucidBridge = {
   kbIngest: (doc) => post("/api/kb/ingest", doc),
   kbRetrieve: (query, mode) => post("/api/kb/retrieve", { query, mode }),
   kbGraph: () => getData("/api/kb/graph"),
+  kbList: () => getData("/api/kb/list"),
+  kbCreate: (name) => post("/api/kb/create", { name }),
+  kbRename: (kgId, name) => post("/api/kb/rename", { kgId, name }),
+  kbActivate: (kgId) => post("/api/kb/activate", { kgId }),
+  kbIngestBatch: (input) => post("/api/kb/ingest-batch", input),
+  kbIngestStatus: (jobId) => getData(`/api/kb/ingest-batch/status${jobId ? `?jobId=${encodeURIComponent(jobId)}` : ""}`),
+  kbIngestCancel: (jobId) => post("/api/kb/ingest-batch/cancel", { jobId }),
+  kbPackExport: (input) => post("/api/kb/pack/export", input),
+  kbPackImport: (input) => post("/api/kb/pack/import", input),
   setActiveSkill: (name, prompt) => post("/api/skill", { name, prompt }),
   clearActiveSkill: () => post("/api/skill", { clear: true }),
   skillActivated: (command, name, source) => post("/api/skill/activated", { command, name, source }),

@@ -601,6 +601,34 @@ demo-P-SYSRES.1: ## P-SYSRES.1 (ADR-0182): the system resource guard - a weak CP
 demo-P-KGVIZ.1: ## P-KGVIZ.1 (ADR-0183): form in place - the KG/code-graph settle runs OFF-SCREEN (time-boxed presettle) so hundreds of nodes open already formed at the final center, parked; live merges settle silently; resizes re-fit without reheating; drag is the only visible sim
 	$(BUN) run desktop/scripts/demo_p_kgviz_1.ts
 
+.PHONY: demo-P-KGPACK.1
+demo-P-KGPACK.1: ## P-KGPACK.1 (ADR-0205): named, swappable KGs (file-per-KG + JSON registry) - the pre-existing combined kb_graph.duckdb is ADOPTED as the default "My Knowledge" KG (zero data loss), new role KGs are ISOLATED files (a page in one is invisible from another), rename touches only the label, and switching the active KG re-points a no-arg store lookup
+	$(BUN) run desktop/scripts/demo_p_kgpack_1.ts
+
+.PHONY: demo-P-KGMARKET.1
+demo-P-KGMARKET.1: ## P-KGMARKET.1 (ADR-0206): the fail-closed entitlement gate - the pure decision core (not signed in → signin; only an active, unexpired entitlement → pull; a lapsed/missing one → checkout) + the provider seam that defaults to a fail-closed null provider so an unconfigured public build can never pull a pack without entitlement
+	$(BUN) run desktop/scripts/demo_p_kgmarket_1.ts
+
+.PHONY: demo-P-KGPACK.6
+demo-P-KGPACK.6: ## P-KGPACK.6 (ADR-0205): the background KG-seed job - lift the 50-doc cap so a full dataset (here 120 conversations, past the old cap) compiles as a tracked background job with live counts + cancel; all 120 compile, 0 skipped
+	$(BUN) run desktop/scripts/demo_p_kgpack_6.ts
+
+.PHONY: demo-P-KGPACK.5
+demo-P-KGPACK.5: ## P-KGPACK.5 (ADR-0205): the Role KG Packs storefront - a curated, filter-as-you-type catalog of role-specific KG Packs (public SKU surface; rows link to the product page, packs live in the private add-on repo) with a gated "Import a pack you own" action routing through the P-KGPACK.4 verify + re-scan
+	$(BUN) run desktop/scripts/demo_p_kgpack_5.ts
+
+.PHONY: demo-P-KGPACK.4
+demo-P-KGPACK.4: ## P-KGPACK.4 (ADR-0205): the .lkgpack KG Pack - author (export a KG as db + signed/unsigned manifest) + gated import (integrity + Ed25519 origin verified, EVERY page re-scanned fail-closed, installed READ-ONLY + untrusted); a tampered db is refused at integrity, a Trojan-Source page blocks the whole import, an untrusted-key signature is refused
+	$(BUN) run desktop/scripts/demo_p_kgpack_4.ts
+
+.PHONY: demo-P-KGPACK.3
+demo-P-KGPACK.3: ## P-KGPACK.3 (ADR-0205): seed a named KG from a folder - an Obsidian markdown vault or a ChatGPT/Claude/Gemini export becomes one document per note/conversation, batch-compiled into a NAMED KG through the SAME fail-closed gate (a Trojan-Source note is quarantined, never compiled); KGs stay isolated files and the default is untouched
+	$(BUN) run desktop/scripts/demo_p_kgpack_3.ts
+
+.PHONY: demo-P-KGPACK.2
+demo-P-KGPACK.2: ## P-KGPACK.2 (ADR-0205): the named-KG picker - the combined "Compiled KB" becomes a filter-as-you-type dropdown of named KGs (active one checked, rename inline, "New KG"); the views button reads the active KG's name; user KG names are escaped
+	$(BUN) run desktop/scripts/demo_p_kgpack_2.ts
+
 .PHONY: demo-P-KGUI.1
 demo-P-KGUI.1: ## P-KGUI.1 (ADR-0184): the KG header decluttered - title "KG" (hover: Knowledge Graph, icon dropped) and the Relate/Code-graph/Compiled-KB stack consolidated into ONE labeled dropdown (hover tip lists the options; the menu explains each inline; active view checked)
 	$(BUN) run desktop/scripts/demo_p_kgui_1.ts

@@ -104,7 +104,11 @@ import { collabRelayConfig, setCollabRelay, collabP2PConfig, setCollabP2P } from
 import { hostname as osHostname } from "node:os";
 import { analyzeWork, codifyCandidate, gatherWorkDigest, type SkillCandidate, type StudioWindow } from "./skill_studio.ts"
 import { buildSkillArtifact, PublishDispatcher, publishersFor } from "./skill_publish.ts";
-import { kbScanner, kbStore } from "./kb_store.ts"
+import { kbScanner, kbStore, listKgs, activeKgId, createKg, renameKg, setActiveKg } from "./kb_store.ts"
+import { readKbSources } from "./kb_sources.ts"
+import { ingestSourcesIntoKg } from "../harness/kb/batch_ingest.ts"
+import { exportKgPack, importKgPack } from "./kb_pack.ts"
+import { startKbIngest, kbIngestJobStatus, cancelKbIngest } from "./kb_ingest_job.ts"
 import { ingestDocument } from "../harness/kb/ingest.ts"
 import { retrieveKnowledge, type RetrieveMode } from "../harness/kb/retrieve.ts"
 import { recordBlock } from "./security_log.ts"
@@ -313,6 +317,16 @@ const json = (data: unknown) =>
 // Fields the handler funnels through String()/typeof guards are left `unknown` (the guard narrows them).
 async function readBody<T>(req: Request): Promise<T> {
   return (await req.json()) as T;
+}
+
+// P-KGPACK.2 (ADR-0205): the named-KG picker's wire shape - every KG (id/name/read-only/source) + the
+// active id, plus an optional `error` a mutation attaches instead of nulling the list.
+function kgListView(error?: string) {
+  return {
+    kgs: listKgs().map((k) => ({ kg_id: k.kg_id, name: k.name, read_only: k.read_only, source_kind: k.source_kind })),
+    activeId: activeKgId(),
+    ...(error ? { error } : {}),
+  };
 }
 
 // P-AGENT.9: lazy scanner sidecar for imported agent files. Shared across imports; FAIL-CLOSED by design —
@@ -1714,6 +1728,95 @@ const server = Bun.serve({
       if (p === "/api/kb/graph") {
         const s = await kbStore();
         return json({ ok: true, data: { pages: await s.listPages(), links: await s.listLinks() } });
+      }
+      // P-KGPACK.2 (ADR-0205): the named-KG picker. list/create/rename/activate over the KG registry
+      // (file-per-KG, ADR-0205). Mutations return the refreshed list; a validation error rides on `error`
+      // rather than nulling the list, so the picker can toast and still redraw. No trust path here - the
+      // registry only maps ids↔files; ingest gating (fail-closed) is unchanged and lives in the pipeline.
+      if (p === "/api/kb/list") {
+        return json({ ok: true, data: kgListView() });
+      }
+      if (p === "/api/kb/create" && req.method === "POST") {
+        const b = await readBody<{ name?: unknown }>(req);
+        try { createKg({ name: String(b.name ?? "") }); }
+        catch (e) { return json({ ok: true, data: kgListView(String((e as Error).message)) }); }
+        return json({ ok: true, data: kgListView() });
+      }
+      if (p === "/api/kb/rename" && req.method === "POST") {
+        const b = await readBody<{ kgId?: unknown; name?: unknown }>(req);
+        try { renameKg(String(b.kgId ?? ""), String(b.name ?? "")); }
+        catch (e) { return json({ ok: true, data: kgListView(String((e as Error).message)) }); }
+        return json({ ok: true, data: kgListView() });
+      }
+      if (p === "/api/kb/activate" && req.method === "POST") {
+        const b = await readBody<{ kgId?: unknown }>(req);
+        try { setActiveKg(String(b.kgId ?? "")); }
+        catch (e) { return json({ ok: true, data: kgListView(String((e as Error).message)) }); }
+        return json({ ok: true, data: kgListView() });
+      }
+      // P-KGPACK.3 (ADR-0205): seed a named KG from a folder of AI-vendor conversations or Obsidian markdown.
+      // `name` creates + names the KG at ingest ("rename at ingest"); otherwise an explicit `kgId`, else the
+      // active KG. Each source is compiled through the SAME fail-closed pipeline (scan source + re-scan every
+      // page); blocks are audited via recordBlock. Capped (KB_BATCH_CAP) with the remainder reported skipped.
+      if (p === "/api/kb/ingest-batch" && req.method === "POST") {
+        // P-KGPACK.6 (ADR-0205): start the seed as a BACKGROUND job and return a jobId immediately (the old
+        // synchronous path capped at 50 to avoid hanging the request on hundreds of model calls). No cap now
+        // — authoring compiles the WHOLE dataset; the UI polls /status + can /cancel.
+        const b = await readBody<{ path?: unknown; name?: unknown; kgId?: unknown }>(req);
+        const src = readKbSources(String(b.path ?? ""));
+        if (!src.ok) return json({ ok: true, data: { ok: false, error: src.error } });
+        let targetId: string, kgName: string;
+        try {
+          const name = typeof b.name === "string" ? b.name.trim() : "";
+          if (name) { const e = createKg({ name, sourceKind: src.scan.kind, provenance: src.scan.vendor ? `import:${src.scan.vendor}` : "import:obsidian" }); targetId = e.kg_id; kgName = e.name; }
+          else { targetId = (typeof b.kgId === "string" && b.kgId) ? b.kgId : (activeKgId() ?? ""); kgName = listKgs().find((k) => k.kg_id === targetId)?.name ?? ""; }
+        } catch (e) { return json({ ok: true, data: { ok: false, error: String((e as Error).message) } }); }
+        if (!targetId) return json({ ok: true, data: { ok: false, error: "No target knowledge graph." } });
+        const model = usageLedger().models[0]?.model;
+        const started = startKbIngest({
+          kgId: targetId, kgName,
+          run: async (onTick, signal) => {
+            const result = await ingestSourcesIntoKg({
+              store: await kbStore(targetId),
+              scanner: kbScanner(),
+              complete: (system: string, user: string) => backend.complete(system, user, model ? { model } : {}),
+              docs: src.scan.docs,
+              onProgress: onTick,
+              signal,
+              onBlock: (blk) => recordBlock({ tool: "kb_ingest", severity: "high", findings: String(blk.findings), reason: `KB ${blk.stage} blocked${blk.slug ? ` (${blk.slug})` : ""}: ${blk.reason}` }),
+            });
+            return { ...result, kgId: targetId, kgName, kind: src.scan.kind, vendor: src.scan.vendor ?? null };
+          },
+        });
+        return json({ ok: true, data: { ok: started.ok, jobId: started.ok ? started.jobId : undefined, kgId: targetId, kgName, error: started.ok ? undefined : started.error } });
+      }
+      if (p === "/api/kb/ingest-batch/status" && req.method === "GET")
+        return json({ ok: true, data: kbIngestJobStatus(url.searchParams.get("jobId") ?? undefined) });
+      if (p === "/api/kb/ingest-batch/cancel" && req.method === "POST") {
+        const b = await readBody<{ jobId?: unknown }>(req);
+        return json({ ok: true, data: cancelKbIngest(b.jobId == null ? undefined : String(b.jobId)) });
+      }
+      // P-KGPACK.4 (ADR-0205): author (export) + gated import of .lkgpack KG Packs. Export writes a
+      // <slug>.lkgpack dir (db + signed-or-unsigned manifest); import verifies integrity + origin, re-scans
+      // every page fail-closed, and installs a read-only, untrusted KG (keystone #2). See desktop/kb_pack.ts.
+      if (p === "/api/kb/pack/export" && req.method === "POST") {
+        const b = await readBody<{ kgId?: unknown; dest?: unknown; author?: unknown; version?: unknown; role?: unknown; description?: unknown }>(req);
+        const kgId = String(b.kgId ?? ""), dest = String(b.dest ?? "");
+        if (!kgId || !dest) return json({ ok: true, data: { ok: false, error: "kgId and dest are required" } });
+        const r = await exportKgPack(kgId, dest, {
+          author: typeof b.author === "string" ? b.author : undefined,
+          version: typeof b.version === "string" ? b.version : undefined,
+          role: typeof b.role === "string" ? b.role : undefined,
+          description: typeof b.description === "string" ? b.description : undefined,
+          createdAt: new Date().toISOString(),
+        });
+        return json({ ok: true, data: r });
+      }
+      if (p === "/api/kb/pack/import" && req.method === "POST") {
+        const b = await readBody<{ path?: unknown }>(req);
+        const path = String(b.path ?? "");
+        if (!path) return json({ ok: true, data: { ok: false, error: "path is required" } });
+        return json({ ok: true, data: await importKgPack(path) });
       }
       // P-SKILLREG.2 (ADR-0102): the PUBLISH seam. Reads a codified skill's SKILL.md and publishes it as a
       // versioned artifact to the configured targets (fail-safe fan-out). Public ships the LOCAL publisher;

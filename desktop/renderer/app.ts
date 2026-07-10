@@ -29,13 +29,16 @@ import { isIntelNewsItem, newsLineHtml } from "./trivia_news.ts"; // P-TRIV.3 (A
 import { sectionizeAnswer, shouldSectionize, type AnswerSection } from "./answer_sections.ts"; // P-CHAT.A (ADR-0188): settled-turn collapsible sections
 import { interleaveChips, chipsInterleave, toolChip, type ToolMark, type ToolChip } from "./answer_chips.ts"; // P-CHAT.B (ADR-0189) + .B.1: inline tool-event chips (only when they interleave)
 import { MARKET_PLUGINS, marketplaceHtml, marketRowsHtml } from "./marketplace.ts"; // P-MARKET.1 (ADR-0158)
+import { KG_PACKS, kgPacksHtml, kgPackRowsHtml, type KgPack } from "./kg_packs.ts"; // P-KGPACK.5 (ADR-0205)
+import { getMarketProvider } from "./market_gate.ts"; // P-KGMARKET.1 (ADR-0206)
+import { decidePackAction } from "../../harness/market/entitlement.ts"; // P-KGMARKET.1 (ADR-0206)
 import { toolfailGroupHtml, type ToolFailEntry } from "./toolfail_group.ts"; // P-TOOLFAIL.2 (ADR-0163)
 import { APP_VERSION } from "../version.ts";
 import { renderMarkdown } from "./markdown.ts";
 import { type GraphHandle, kindLabel, mountGraph } from "./graph.ts";
 import { addEdgeOptimistic, applyForget, chainPairs, matchNodes, removeEdgeOptimistic, resolveRelationLabel } from "./kg_ops.ts";
 import { capGraph, graphOpts, pollDelay, watchPerfTier } from "./perf_tier.ts";
-import { kgDataMenuHtml, kgViewActive, kgViewLabel, kgViewsMenuHtml } from "./kg_header.ts"; // P-KGUI.1/.2 (ADR-0184/0185)
+import { kgDataMenuHtml, kgPickerHtml, kgPickerRowsHtml, kgViewActive, kgViewLabel, kgViewsMenuHtml, type KgListItem } from "./kg_header.ts"; // P-KGUI.1/.2 (ADR-0184/0185) + P-KGPACK.2 (ADR-0205)
 import { TURN_PATIENCE_MS, slowPhaseLabel, slowToastCopy } from "./stall_notice.ts"; // P-STALL.1 (ADR-0186)
 import { guardBlockedHtml, resourcePanelBodyHtml, resourcePanelHtml, type SystemStatusView } from "./system_guard.ts"; // P-SYSRES.1 (ADR-0182)
 import type { KbGraphView, PersonalGraphData } from "./bridge.ts";
@@ -531,7 +534,7 @@ function ensureImportPill(): HTMLElement {
   let pill = document.getElementById("importPill");
   if (!pill) {
     pill = el(`<div class="import-pill" id="importPill" hidden>
-      <div class="import-pill-head">${icon("download", 13)} <b>Importing chat history</b> <span class="import-pill-vendor" id="importPillVendor"></span></div>
+      <div class="import-pill-head">${icon("download", 13)} <b id="importPillTitle">Importing chat history</b> <span class="import-pill-vendor" id="importPillVendor"></span></div>
       <div class="import-pill-bar"><div class="import-pill-fill" id="importPillFill"></div></div>
       <div class="import-pill-row"><span class="import-pill-text" id="importPillText">Starting…</span><button class="btn-mini" id="importPillCancel">Cancel</button></div>
     </div>`);
@@ -552,6 +555,7 @@ async function runPersonalImport(folder: string, useModel: boolean): Promise<voi
   const jobId = started.jobId;
   const pill = ensureImportPill();
   pill.hidden = false;
+  const ttl0 = $("#importPillTitle", pill); if (ttl0) ttl0.textContent = "Importing chat history"; // reset (the KG-authoring flow reuses this pill)
   const fill = $("#importPillFill", pill) as HTMLElement, text = $("#importPillText", pill) as HTMLElement, ven = $("#importPillVendor", pill) as HTMLElement;
   const cancelBtn = $("#importPillCancel", pill) as HTMLButtonElement;
   cancelBtn.disabled = false; cancelBtn.textContent = "Cancel";
@@ -2959,6 +2963,8 @@ let kgSelId: string | null = null;
 let kgSig = ""; // signature of the last-rendered graph, to skip no-op live refreshes
 let kgCodeMode = false; // P-KG-CODE.1: the canvas is showing the workspace CODE graph, not the personal graph
 let kbGraphMode = false; // P-KB.2b: the canvas is showing the COMPILED knowledge base page graph
+let activeKbId: string | null = null; // P-KGPACK.2: which named KG is active (drives the picker check + label)
+let activeKbName = "";                 // P-KGPACK.2: the active KG's name, shown on the views button in kb mode
 let kbGraphData: KbGraphView | null = null; // cached pages+links for the KB side panel (node -> page body)
 let codeGraphRoot = ""; // P-KG-CODE.1d: workspace root, so a code node's relative path opens the real file in the IDE
 let codeGraphLevel: "file" | "symbol" = "file"; // P-KG-SYM.1: which graph the canvas is showing
@@ -3021,7 +3027,7 @@ function setRelateMode(on: boolean): void {
 
 // P-KGUI.1 (ADR-0184): the consolidated views dropdown - one button instead of the stacked three.
 function updateKgViewsLabel(): void {
-  const s = { relateOn: kgRelateMode, codeMode: kgCodeMode, kbMode: kbGraphMode };
+  const s = { relateOn: kgRelateMode, codeMode: kgCodeMode, kbMode: kbGraphMode, kbName: activeKbName };
   const l = $("#kgViewsLbl"); if (l) l.textContent = kgViewLabel(s);
   $("#kgViews")?.classList.toggle("on", kgViewActive(s));
 }
@@ -3037,8 +3043,142 @@ function openKgViewsMenu(anchor: HTMLElement): void {
     p.close();
     if (v === "relate") setRelateMode(!kgRelateMode);
     else if (v === "code") void toggleCodeGraph();
-    else if (v === "kb") void toggleKbGraph();
+    else if (v === "kb") void openKgPicker(anchor); // P-KGPACK.2: the "Compiled KB" row opens the KG picker
   });
+}
+
+// P-KGPACK.2 (ADR-0205): the named-KG picker. The combined "Compiled KB" is now a SET of named KGs; this
+// filter-as-you-type dropdown lists them (active one checked), lets you rename inline or create a new one,
+// and on select activates that KG server-side then draws its page graph. Picking the KG already on the
+// canvas returns to the Personal graph (the way clicking "Compiled KB" used to toggle off).
+let kgPickerPop: { node: HTMLElement; close: () => void } | null = null;
+async function openKgPicker(anchor: HTMLElement): Promise<void> {
+  if (kgPickerPop) { kgPickerPop.close(); return; } // second click on the button = toggle closed
+  let view = await bridge.kbList().catch(() => null);
+  if (!view) { showToast({ tone: "danger", title: "Knowledge graphs unavailable", desc: "Couldn't read the KG list.", timeout: 4000 }); return; }
+  activeKbId = view.activeId;
+  const items = (): KgListItem[] => view!.kgs.map((k) => ({ kg_id: k.kg_id, name: k.name, active: k.kg_id === activeKbId, read_only: k.read_only, source_kind: k.source_kind }));
+  const p = popover(anchor, kgPickerHtml(items(), ""), () => { kgPickerPop = null; });
+  kgPickerPop = p;
+  const searchVal = (): string => (p.node.querySelector("#kgPickSearch") as HTMLInputElement | null)?.value ?? "";
+  const redrawRows = (): void => { const list = p.node.querySelector("#kgPickList"); if (list) list.innerHTML = kgPickerRowsHtml(items(), searchVal()); };
+  const applyView = (v: import("./bridge.ts").KgListView | null): void => {
+    if (!v) { showToast({ tone: "danger", title: "That didn't work", desc: "The KG registry couldn't be updated.", timeout: 4000 }); return; }
+    if (v.error) showToast({ tone: "danger", title: "That didn't work", desc: v.error, timeout: 4000 });
+    view = v; activeKbId = v.activeId; redrawRows();
+  };
+  (p.node.querySelector("#kgPickSearch") as HTMLInputElement | null)?.focus();
+  p.node.addEventListener("input", (ev) => { if ((ev.target as HTMLElement).id === "kgPickSearch") redrawRows(); });
+  p.node.addEventListener("click", (ev) => {
+    const t = ev.target as HTMLElement;
+    const rn = t.closest("[data-kgrename]") as HTMLElement | null;
+    if (rn) { ev.stopPropagation(); void renameKgFlow(rn.dataset.kgrename!, view!, applyView); return; }
+    const nw = t.closest("[data-kgnew]") as HTMLElement | null;
+    if (nw) { ev.stopPropagation(); void newKgFlow(applyView); return; }
+    const im = t.closest("[data-kgimport]") as HTMLElement | null;
+    if (im) { p.close(); void importKgFlow(); return; } // P-KGPACK.3: seed a KG from a folder
+    const ex = t.closest("[data-kgexport]") as HTMLElement | null;
+    if (ex) { ev.stopPropagation(); p.close(); void exportPackFlow(ex.dataset.kgexport!, view!); return; } // P-KGPACK.4
+    const pc = t.closest("[data-kgpackcatalog]") as HTMLElement | null;
+    if (pc) { p.close(); openKgPacks(); return; } // P-KGPACK.5: the Role KG Packs storefront
+    const pk = t.closest("[data-kgpick]") as HTMLElement | null;
+    if (pk) { p.close(); void pickKg(pk.dataset.kgpick!); return; }
+  });
+}
+/** Activate a KG + draw its page graph. Re-picking the KG already on the canvas returns to the Personal graph. */
+async function pickKg(kgId: string): Promise<void> {
+  if (kbGraphMode && kgId === activeKbId) { updateKbButton(false); await renderKnowledge(); return; }
+  const v = await bridge.kbActivate(kgId).catch(() => null);
+  if (v) {
+    activeKbId = v.activeId;
+    activeKbName = v.kgs.find((k) => k.kg_id === v.activeId)?.name ?? "";
+  }
+  await renderKbGraph(); // reads the ACTIVE KG's pages+links (invariant: /api/kb/graph uses the active store)
+}
+/** Rename a KG via the shared text-prompt modal, then push the refreshed list back into the open picker. */
+async function renameKgFlow(kgId: string, view: import("./bridge.ts").KgListView, apply: (v: import("./bridge.ts").KgListView | null) => void): Promise<void> {
+  const current = view.kgs.find((k) => k.kg_id === kgId)?.name ?? "";
+  const name = await promptText({ title: "Rename knowledge graph", label: "Name", value: current, placeholder: "e.g. Backend Engineer" });
+  if (!name || name === current) return;
+  const v = await bridge.kbRename(kgId, name).catch(() => null);
+  if (v && !v.error && kgId === activeKbId) activeKbName = name; // keep the button label in sync
+  apply(v);
+}
+/** Create a new, empty KG via the shared text-prompt modal, then refresh the open picker. */
+async function newKgFlow(apply: (v: import("./bridge.ts").KgListView | null) => void): Promise<void> {
+  const name = await promptText({ title: "New knowledge graph", label: "Name", placeholder: "e.g. Data Scientist" });
+  if (!name) return;
+  apply(await bridge.kbCreate(name).catch(() => null));
+}
+/** P-KGPACK.3: seed a NEW named KG from a folder - a ChatGPT/Claude/Gemini export or an Obsidian markdown
+ *  vault. Choose the folder, NAME the KG (rename-at-ingest), then a single gated batch compile (every source
+ *  scanned fail-closed); on success the freshly-seeded KG is activated + drawn. */
+async function importKgFlow(): Promise<void> {
+  const folder = await openFolderBrowser({ title: "Choose a chat export or Obsidian markdown folder", confirm: "Use this folder" });
+  if (!folder) return;
+  const suggested = (folder.split(/[\\/]/).pop() || "Imported KG").trim();
+  const name = await promptText({ title: "Name this knowledge graph", label: "KG name", value: suggested, placeholder: "e.g. Backend Engineer" });
+  if (!name) return;
+  // P-KGPACK.6: seeding a full dataset is a BACKGROUND job (no doc cap). Start it, then poll the shared pill.
+  const started = await bridge.kbIngestBatch({ path: folder, name }).catch(() => null);
+  if (!started || !started.ok || !started.jobId) {
+    showToast({ tone: started?.error?.includes("already running") ? "warn" : "danger", title: "Import didn't start", desc: started?.error ?? "Couldn't read that folder.", actions: [{ label: "OK" }], timeout: 6000 });
+    return;
+  }
+  const jobId = started.jobId;
+  const pill = ensureImportPill();
+  pill.hidden = false;
+  const ttl = $("#importPillTitle", pill); if (ttl) ttl.textContent = "Compiling knowledge graph";
+  const fill = $("#importPillFill", pill) as HTMLElement, text = $("#importPillText", pill) as HTMLElement, ven = $("#importPillVendor", pill) as HTMLElement;
+  ven.textContent = name;
+  const cancelBtn = $("#importPillCancel", pill) as HTMLButtonElement;
+  cancelBtn.disabled = false; cancelBtn.textContent = "Cancel";
+  cancelBtn.onclick = () => { cancelBtn.disabled = true; cancelBtn.textContent = "Stopping…"; void bridge.kbIngestCancel(jobId); };
+  const poll = async (): Promise<void> => {
+    const st = await bridge.kbIngestStatus(jobId).catch(() => null);
+    if (!st) { hideImportPill(); return; }
+    const total = st.totalDocuments || 0, done = st.documents || 0;
+    fill.style.width = `${total ? Math.round((done / total) * 100) : 0}%`;
+    text.textContent = `${done}/${total || "?"} sources · ${st.pagesCompiled} pages${st.documentsQuarantined ? ` · ${st.documentsQuarantined} quarantined` : ""}`;
+    if (st.state === "running") { importPollTimer = window.setTimeout(() => void poll(), 1200); return; }
+    hideImportPill();
+    if (st.state === "failed") { showToast({ tone: "danger", title: "Import failed", desc: st.error ?? "Something went wrong.", actions: [{ label: "OK" }], timeout: 6000 }); return; }
+    if (st.kgId) { await bridge.kbActivate(st.kgId).catch(() => null); activeKbId = st.kgId; activeKbName = st.kgName || name; }
+    await renderKbGraph(); // reads the now-active seeded KG
+    const r = st.result;
+    const parts = [`${r?.pagesCompiled ?? 0} pages from ${r?.documents ?? 0} sources`];
+    if (r?.documentsQuarantined) parts.push(`${r.documentsQuarantined} docs quarantined`);
+    if (r?.pagesQuarantined) parts.push(`${r.pagesQuarantined} pages blocked`);
+    if (r?.errored) parts.push(`${r.errored} failed to compile`);
+    showToast({ title: st.state === "cancelled" ? `"${st.kgName || name}" partly seeded (stopped)` : `"${st.kgName || name}" seeded`, desc: parts.join(" · "), timeout: 7000 });
+  };
+  void poll();
+}
+/** P-KGPACK.4: export a KG as a portable .lkgpack (db + manifest). Choose a destination folder; the pack is
+ *  signed only if a signing key is configured (the private authoring path), otherwise unsigned. */
+async function exportPackFlow(kgId: string, view: import("./bridge.ts").KgListView): Promise<void> {
+  const kgName = view.kgs.find((k) => k.kg_id === kgId)?.name ?? "KG";
+  const dest = await openFolderBrowser({ title: `Export "${kgName}" as a KG Pack - choose a destination`, confirm: "Export here" });
+  if (!dest) return;
+  showToast({ title: `Exporting "${kgName}"…`, desc: "Writing the .lkgpack (db + manifest).", timeout: 1600 });
+  const r = await bridge.kbPackExport({ kgId, dest }).catch(() => null);
+  if (!r || !r.ok) { showToast({ tone: "danger", title: "Export failed", desc: r?.error ?? "Couldn't write the pack.", actions: [{ label: "OK" }], timeout: 6000 }); return; }
+  showExportToast(`"${kgName}" exported`, `${r.pages ?? 0} pages · ${r.signed ? "signed" : "unsigned"} · a .lkgpack you can share or sell`, r.path);
+}
+/** P-KGPACK.4: import a .lkgpack. Integrity + origin are verified and every page is re-scanned fail-closed
+ *  before anything registers; a clean pack installs as a read-only, untrusted KG and is shown. */
+async function importPackFlow(): Promise<void> {
+  const folder = await openFolderBrowser({ title: "Choose a .lkgpack KG Pack folder", confirm: "Import this pack" });
+  if (!folder) return;
+  showToast({ title: "Verifying + scanning the pack…", desc: "Integrity + origin are checked and every page is re-scanned before anything installs.", timeout: 2200 });
+  const r = await bridge.kbPackImport({ path: folder }).catch(() => null);
+  if (!r || !r.ok) {
+    showToast({ tone: "danger", title: "Pack rejected", desc: `${r?.error ?? "Couldn't import that pack."}${r?.stage ? ` (${r.stage})` : ""}`, actions: [{ label: "OK" }], timeout: 7000 });
+    return;
+  }
+  if (r.kgId) { await bridge.kbActivate(r.kgId).catch(() => null); activeKbId = r.kgId; activeKbName = r.kgName ?? "Imported pack"; }
+  await renderKbGraph();
+  showToast({ title: `"${r.kgName ?? "Pack"}" installed`, desc: `${r.pages ?? 0} pages · ${r.signed ? `signed (${r.keyId || "trusted"})` : "unsigned"} · read-only · shown as untrusted data`, timeout: 6000 });
 }
 
 // P-KGUI.2 (ADR-0185): the Data dropdown - Import history / AI toggle / Export vault / CUI archive,
@@ -4320,11 +4460,9 @@ async function renderKbGraph(): Promise<void> {
   kgHandle.setLens(kgLens);
   showKgCenter(true); syncKgSideOpen();
 }
-/** Toggle the compiled KB view (off returns to the personal graph). */
-async function toggleKbGraph(): Promise<void> {
-  if (kbGraphMode) { updateKbButton(false); await renderKnowledge(); }
-  else await renderKbGraph();
-}
+// P-KGPACK.2 (ADR-0205): the compiled-KB view is entered through the KG picker (openKgPicker → pickKg),
+// which activates a named KG then draws it; re-picking the on-canvas KG returns to the Personal graph. The
+// old single-graph toggleKbGraph() is retired (its toggle-off role now lives in pickKg).
 // ── P-KG-CODE.1 / P-KG-SYM.1: the workspace CODE graph (file imports OR symbol AST), in the same canvas ──
 function updateCodeGraphButtons(active: boolean, meta?: import("./bridge.ts").CodeGraphView | null): void {
   kgCodeMode = active;
@@ -7908,6 +8046,55 @@ function openMarketplace(): void {
   (ov.querySelector("#mktSearch") as HTMLInputElement | null)?.focus();
 }
 
+// P-KGPACK.5 (ADR-0205): the Role KG Packs storefront (public SKU surface). Mirrors openMarketplace: a scrim
+// modal with live search; "Get pack" opens the product page; "Import a pack you own" routes a .lkgpack
+// through the P-KGPACK.4 gate (importPackFlow). The packs themselves live in the private add-on repo.
+function openKgPacks(): void {
+  if ($("#kgpackModal")) return; // already open - don't stack
+  const ov = el(`<div id="kgpackModal" class="mkt-scrim">${kgPacksHtml(KG_PACKS, "")}</div>`);
+  const close = () => { ov.remove(); document.removeEventListener("keydown", onKey); };
+  const onKey = (ev: KeyboardEvent) => { if (ev.key === "Escape") { ev.preventDefault(); close(); } };
+  ov.addEventListener("click", (ev) => {
+    const t = ev.target as HTMLElement;
+    const get = t.closest("[data-kgpack-get]") as HTMLElement | null;
+    if (get) { const pack = KG_PACKS.find((p) => p.id === get.dataset.kgpackGet); if (pack) void getPackFlow(pack); return; } // P-KGMARKET.1 gated
+    if (t.closest("[data-kgpack-import]")) { close(); void importPackFlow(); return; } // reuse the P-KGPACK.4 gated import
+    if (t === ov || t.closest("[data-kgpack-close]")) close(); // backdrop or the X
+  });
+  ov.addEventListener("input", (ev) => { // live search: re-render just the rows
+    const t = ev.target as HTMLElement;
+    if (t.id !== "kgpackSearch") return;
+    const list = ov.querySelector("#kgpackList");
+    if (list) list.innerHTML = kgPackRowsHtml(KG_PACKS, (t as HTMLInputElement).value);
+  });
+  document.addEventListener("keydown", onKey);
+  document.body.append(ov);
+  (ov.querySelector("#kgpackSearch") as HTMLInputElement | null)?.focus();
+}
+// P-KGMARKET.1 (ADR-0206): the entitlement-gated "Get pack". An UNCONFIGURED public build has no provider,
+// so the storefront is a hint — open the product page. Once the private Firebase provider is registered, the
+// decision is fail-closed: not signed in → sign-in prompt; owned → pull (which STILL clears the P-KGPACK.4
+// import gate); otherwise → Stripe Checkout. The actual signed-download + install lands in P-KGMARKET.2.
+async function getPackFlow(pack: KgPack): Promise<void> {
+  const prov = getMarketProvider();
+  if (!prov.configured()) { window.open(pack.url, "_blank", "noopener"); return; } // public build: storefront is a hint
+  const auth = await prov.auth().catch(() => ({ signedIn: false }));
+  const ent = auth.signedIn ? await prov.entitlement(pack.id).catch(() => null) : null;
+  const action = decidePackAction(auth, ent, new Date().toISOString());
+  if (action === "signin") {
+    showToast({ tone: "warn", title: "Sign in to buy", desc: "Sign in to purchase and install role packs.", actions: [{ label: "Open product page", run: () => window.open(pack.url, "_blank", "noopener") }, { label: "Close" }], timeout: 0 });
+    return;
+  }
+  if (action === "checkout") {
+    const url = await prov.checkoutUrl(pack.id, pack.licensing).catch(() => null);
+    window.open(url ?? pack.url, "_blank", "noopener");
+    return;
+  }
+  // action === "pull": entitled. The signed-download + gated install (P-KGPACK.4) is wired by the provider
+  // in P-KGMARKET.2; until then, surface that ownership is recognised.
+  showToast({ title: `You own "${pack.name}"`, desc: "The signed download + gated install lands with the Firebase provider (P-KGMARKET.2). You can also import a .lkgpack you already have.", timeout: 6000 });
+}
+
 function wire(): void {
   // rail
   $$(".rail-btn[data-rail]").forEach((b) => b.addEventListener("click", () => {
@@ -8845,6 +9032,7 @@ const palette = createPalette(() => {
     { id: "sec", title: "Open Security panel", icon: "shield", hint: "panel", run: () => focusInspector("security") },
     { id: "mem", title: "Open Memory & context panel", icon: "savings", hint: "panel", run: () => focusInspector("memory") },
     { id: "mkt", title: "Open Plugin Marketplace", icon: "market", hint: "popup", run: () => openMarketplace() }, // P-MARKET.1
+    { id: "kgpacks", title: "Browse Role KG Packs", icon: "package", hint: "popup", run: () => openKgPacks() }, // P-KGPACK.5 (ADR-0205)
     { id: "sysres", title: "Open System resources", icon: "gauge", hint: "popup", run: () => void openResourcePanelLive() }, // P-SYSRES.1
     // P-LOC.3 (ADR-0095): a discoverable entry point for the AI-authored code ledger — opens Memory with
     // the section expanded, so it no longer has to be hunted for inside the panel.
