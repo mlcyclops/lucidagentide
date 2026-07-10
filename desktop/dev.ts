@@ -104,7 +104,7 @@ import { collabRelayConfig, setCollabRelay, collabP2PConfig, setCollabP2P } from
 import { hostname as osHostname } from "node:os";
 import { analyzeWork, codifyCandidate, gatherWorkDigest, type SkillCandidate, type StudioWindow } from "./skill_studio.ts"
 import { buildSkillArtifact, PublishDispatcher, publishersFor } from "./skill_publish.ts";
-import { kbScanner, kbStore } from "./kb_store.ts"
+import { kbScanner, kbStore, listKgs, activeKgId, createKg, renameKg, setActiveKg } from "./kb_store.ts"
 import { ingestDocument } from "../harness/kb/ingest.ts"
 import { retrieveKnowledge, type RetrieveMode } from "../harness/kb/retrieve.ts"
 import { recordBlock } from "./security_log.ts"
@@ -313,6 +313,16 @@ const json = (data: unknown) =>
 // Fields the handler funnels through String()/typeof guards are left `unknown` (the guard narrows them).
 async function readBody<T>(req: Request): Promise<T> {
   return (await req.json()) as T;
+}
+
+// P-KGPACK.2 (ADR-0205): the named-KG picker's wire shape - every KG (id/name/read-only/source) + the
+// active id, plus an optional `error` a mutation attaches instead of nulling the list.
+function kgListView(error?: string) {
+  return {
+    kgs: listKgs().map((k) => ({ kg_id: k.kg_id, name: k.name, read_only: k.read_only, source_kind: k.source_kind })),
+    activeId: activeKgId(),
+    ...(error ? { error } : {}),
+  };
 }
 
 // P-AGENT.9: lazy scanner sidecar for imported agent files. Shared across imports; FAIL-CLOSED by design —
@@ -1714,6 +1724,31 @@ const server = Bun.serve({
       if (p === "/api/kb/graph") {
         const s = await kbStore();
         return json({ ok: true, data: { pages: await s.listPages(), links: await s.listLinks() } });
+      }
+      // P-KGPACK.2 (ADR-0205): the named-KG picker. list/create/rename/activate over the KG registry
+      // (file-per-KG, ADR-0205). Mutations return the refreshed list; a validation error rides on `error`
+      // rather than nulling the list, so the picker can toast and still redraw. No trust path here - the
+      // registry only maps ids↔files; ingest gating (fail-closed) is unchanged and lives in the pipeline.
+      if (p === "/api/kb/list") {
+        return json({ ok: true, data: kgListView() });
+      }
+      if (p === "/api/kb/create" && req.method === "POST") {
+        const b = await readBody<{ name?: unknown }>(req);
+        try { createKg({ name: String(b.name ?? "") }); }
+        catch (e) { return json({ ok: true, data: kgListView(String((e as Error).message)) }); }
+        return json({ ok: true, data: kgListView() });
+      }
+      if (p === "/api/kb/rename" && req.method === "POST") {
+        const b = await readBody<{ kgId?: unknown; name?: unknown }>(req);
+        try { renameKg(String(b.kgId ?? ""), String(b.name ?? "")); }
+        catch (e) { return json({ ok: true, data: kgListView(String((e as Error).message)) }); }
+        return json({ ok: true, data: kgListView() });
+      }
+      if (p === "/api/kb/activate" && req.method === "POST") {
+        const b = await readBody<{ kgId?: unknown }>(req);
+        try { setActiveKg(String(b.kgId ?? "")); }
+        catch (e) { return json({ ok: true, data: kgListView(String((e as Error).message)) }); }
+        return json({ ok: true, data: kgListView() });
       }
       // P-SKILLREG.2 (ADR-0102): the PUBLISH seam. Reads a codified skill's SKILL.md and publishes it as a
       // versioned artifact to the configured targets (fail-safe fan-out). Public ships the LOCAL publisher;

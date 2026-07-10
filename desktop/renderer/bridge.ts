@@ -221,6 +221,10 @@ export interface KbRetrieveResultView { mode: "vector" | "compiled" | "hybrid"; 
 export interface KbPageView { page_id: string; kind: string; slug: string; title: string; body_md: string; trust_label: string }
 export interface KbLinkView { link_id: string; from_page_id: string; to_page_id: string; relation: string }
 export interface KbGraphView { pages: KbPageView[]; links: KbLinkView[] }
+// P-KGPACK.2 (ADR-0205): the named-KG picker. `activeId` is the KG a no-arg store lookup resolves to; a
+// mutation returns the refreshed list plus an optional `error` (validation failures don't null the list).
+export interface KgListItemView { kg_id: string; name: string; read_only: boolean; source_kind: string }
+export interface KgListView { kgs: KgListItemView[]; activeId: string | null; error?: string }
 export interface ProviderAuth {
   id: string; name: string; env: string; oauthId: string; canOauth: boolean;
   oauthActive: boolean; oauthIdentity?: string; keySet: boolean; keyLast4?: string;
@@ -598,6 +602,13 @@ export interface LucidBridge {
   kbIngest(doc: { sourcePath: string; title: string; text: string }): Promise<KbIngestResultView | null>;
   kbRetrieve(query: string, mode: "vector" | "compiled" | "hybrid"): Promise<KbRetrieveResultView | null>;
   kbGraph(): Promise<KbGraphView | null>;
+  // P-KGPACK.2 (ADR-0205): the named-KG picker. list = all KGs + active; create/rename/activate return the
+  // refreshed list (with an optional `error` on validation failure). The graph view (kbGraph) reads the
+  // ACTIVE KG, so activate + re-fetch shows a different graph.
+  kbList(): Promise<KgListView | null>;
+  kbCreate(name: string): Promise<KgListView | null>;
+  kbRename(kgId: string, name: string): Promise<KgListView | null>;
+  kbActivate(kgId: string): Promise<KgListView | null>;
   // P-CMD.1 (ADR-0146): user-authored "/" slash commands (workspace .omp/commands/). Create validates +
   // scans fail-closed server-side. `list` = stored commands; `create` returns the persisted command or errors.
   userCommands(): Promise<UserCommand[]>;
@@ -1011,6 +1022,10 @@ export const bridge: LucidBridge = {
   kbIngest: (doc) => post("/api/kb/ingest", doc),
   kbRetrieve: (query, mode) => post("/api/kb/retrieve", { query, mode }),
   kbGraph: () => getData("/api/kb/graph"),
+  kbList: () => getData("/api/kb/list"),
+  kbCreate: (name) => post("/api/kb/create", { name }),
+  kbRename: (kgId, name) => post("/api/kb/rename", { kgId, name }),
+  kbActivate: (kgId) => post("/api/kb/activate", { kgId }),
   setActiveSkill: (name, prompt) => post("/api/skill", { name, prompt }),
   clearActiveSkill: () => post("/api/skill", { clear: true }),
   skillActivated: (command, name, source) => post("/api/skill/activated", { command, name, source }),

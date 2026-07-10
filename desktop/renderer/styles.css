@@ -2072,6 +2072,30 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .kgv-check{cursor:pointer}
 .kgv-check input{accent-color:var(--accent);cursor:pointer;margin:0 5px 0 0;vertical-align:-2px}
 .kgv-item.kgv-danger .kgv-t{color:var(--danger,#d96a6a)}
+/* P-KGPACK.2 (ADR-0205): the named-KG picker (filter-as-you-type list of KGs) */
+.kgp-menu{display:flex;flex-direction:column;gap:7px;min-width:260px;max-width:320px}
+.kgp-h{display:flex;align-items:center;gap:6px;font-size:12.5px;font-weight:600;color:var(--txt)}
+.kgp-count{font-size:10.5px;font-weight:600;color:var(--txt-3);background:var(--bg-3);border:1px solid var(--line);border-radius:8px;padding:0 6px}
+.kgp-search{width:100%;box-sizing:border-box;padding:7px 10px;border:1px solid var(--line-strong);border-radius:9px;
+  background:var(--bg-2);color:var(--txt);font-size:12.5px;outline:none;transition:border-color var(--t)}
+.kgp-search:focus{border-color:color-mix(in srgb,var(--accent) 45%,var(--line-strong))}
+.kgp-list{display:flex;flex-direction:column;gap:3px;overflow-y:auto;scrollbar-gutter:stable;max-height:280px}
+.kgp-row{display:flex;align-items:stretch;gap:3px;border:1px solid transparent;border-radius:9px;transition:background var(--t),border-color var(--t)}
+.kgp-row:hover{background:var(--bg-3);border-color:var(--line)}
+.kgp-row.on{border-color:color-mix(in srgb,var(--accent) 35%,var(--line))}
+.kgp-pick{flex:1;display:flex;align-items:center;gap:7px;padding:8px 10px;background:none;border:0;color:var(--txt-2);
+  cursor:pointer;text-align:left;min-width:0}
+.kgp-name{font-size:12.5px;font-weight:600;color:var(--txt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.kgp-row.on .kgp-name{color:var(--accent-2)}
+.kgp-src{font-size:10px;font-weight:600;color:var(--txt-3);background:var(--bg-3);border:1px solid var(--line);border-radius:7px;padding:0 5px;flex:none}
+.kgp-ro{display:inline-flex;color:var(--txt-3);flex:none}
+.kgp-rename{display:inline-flex;align-items:center;justify-content:center;width:30px;flex:none;background:none;border:0;
+  color:var(--txt-3);cursor:pointer;border-radius:8px;transition:color var(--t),background var(--t)}
+.kgp-rename:hover{color:var(--txt);background:var(--bg-2)}
+.kgp-empty{font-size:11.5px;color:var(--txt-3);padding:14px 8px;text-align:center}
+.kgp-new{display:flex;align-items:center;gap:6px;justify-content:center;padding:8px 10px;border:1px dashed var(--line-strong);
+  border-radius:9px;background:none;color:var(--txt-2);cursor:pointer;font-size:12px;font-weight:600;transition:border-color var(--t),color var(--t)}
+.kgp-new:hover{border-color:color-mix(in srgb,var(--accent) 45%,var(--line-strong));color:var(--txt)}
 /* icon-only button (the code-graph re-sync sits between the views and Data dropdowns) */
 .btn-mini.btn-icon{padding:0;width:30px;justify-content:center;flex:none}
 .btn-mini.btn-icon .ic{width:14px;height:14px}

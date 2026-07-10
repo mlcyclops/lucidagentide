@@ -19,6 +19,11 @@ describe("kgViewLabel", () => {
   test("relate mode is a tool, not a view - the label stays Personal", () => {
     expect(kgViewLabel(st({ relateOn: true }))).toBe("Personal");
   });
+  test("P-KGPACK.2: in kb mode the active KG NAME becomes the label (blank falls back)", () => {
+    expect(kgViewLabel(st({ kbMode: true, kbName: "Backend Engineer" }))).toBe("Backend Engineer");
+    expect(kgViewLabel(st({ kbMode: true, kbName: "   " }))).toBe("Compiled KB");
+    expect(kgViewLabel(st({ codeMode: true, kbName: "Ignored" }))).toBe("Code graph"); // code wins
+  });
 });
 
 describe("kgViewActive", () => {
@@ -71,5 +76,66 @@ describe("kgDataMenuHtml", () => {
     const h = kgDataMenuHtml(false);
     expect(h).toContain("kgv-danger");
     expect(h.match(/kgv-danger/g)?.length).toBe(1); // only CUI
+  });
+});
+
+// ───────────── P-KGPACK.2 (ADR-0205): the named-KG picker ─────────────
+
+import { filterKgList, kgPickerHtml, kgPickerRowsHtml, type KgListItem } from "./kg_header.ts";
+
+const kg = (over: Partial<KgListItem> = {}): KgListItem => ({ kg_id: "1", name: "My Knowledge", active: false, read_only: false, source_kind: "manual", ...over });
+const sample: KgListItem[] = [
+  kg({ kg_id: "1", name: "My Knowledge", active: true }),
+  kg({ kg_id: "2", name: "Backend Engineer", source_kind: "chat" }),
+  kg({ kg_id: "3", name: "GovCon Contracts Officer", source_kind: "pack", read_only: true }),
+];
+
+describe("filterKgList", () => {
+  test("case-insensitive substring over name; empty query returns everything", () => {
+    expect(filterKgList(sample, "")).toHaveLength(3);
+    expect(filterKgList(sample, "  ")).toHaveLength(3);
+    expect(filterKgList(sample, "eng").map((k) => k.kg_id)).toEqual(["2"]);
+    expect(filterKgList(sample, "OFFICER").map((k) => k.kg_id)).toEqual(["3"]);
+    expect(filterKgList(sample, "zzz")).toHaveLength(0);
+  });
+});
+
+describe("kgPickerRowsHtml", () => {
+  test("one selectable + one rename control per KG, the active one checked", () => {
+    const h = kgPickerRowsHtml(sample, "");
+    for (const id of ["1", "2", "3"]) {
+      expect(h).toContain(`data-kgpick="${id}"`);
+      expect(h).toContain(`data-kgrename="${id}"`);
+    }
+    expect(h.match(/✓/g)?.length).toBe(1);            // exactly the active KG is checked
+    expect(h).toContain("My Knowledge ✓");
+  });
+  test("origin badges + read-only marker; pack is read-only", () => {
+    const h = kgPickerRowsHtml(sample, "");
+    expect(h).toContain(">Chat<");
+    expect(h).toContain(">Pack<");
+    expect(h).toContain('class="kgp-ro"');             // the read-only pack shows the lock marker
+    expect(h.match(/class="kgp-ro"/g)?.length).toBe(1); // only the pack row (not matching the kgp-row class)
+  });
+  test("filters as you type; empty result shows a message, not blank", () => {
+    expect(kgPickerRowsHtml(sample, "backend")).toContain("Backend Engineer");
+    expect(kgPickerRowsHtml(sample, "backend")).not.toContain("GovCon");
+    expect(kgPickerRowsHtml(sample, "zzz")).toContain("No knowledge graph matches");
+  });
+  test("a KG name is escaped - it is user data, never markup", () => {
+    const h = kgPickerRowsHtml([kg({ kg_id: "9", name: "<img src=x onerror=alert(1)>" })], "");
+    expect(h).toContain("&lt;img");
+    expect(h).not.toContain("<img src=x");
+  });
+});
+
+describe("kgPickerHtml", () => {
+  test("search box, list, count and the New KG action are all present", () => {
+    const h = kgPickerHtml(sample, "");
+    expect(h).toContain('id="kgPickSearch"');
+    expect(h).toContain('id="kgPickList"');
+    expect(h).toContain("data-kgnew");
+    expect(h).toContain("New KG");
+    expect(h).toContain(">3<"); // the count chip
   });
 });

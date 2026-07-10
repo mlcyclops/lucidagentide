@@ -35,7 +35,7 @@ import { renderMarkdown } from "./markdown.ts";
 import { type GraphHandle, kindLabel, mountGraph } from "./graph.ts";
 import { addEdgeOptimistic, applyForget, chainPairs, matchNodes, removeEdgeOptimistic, resolveRelationLabel } from "./kg_ops.ts";
 import { capGraph, graphOpts, pollDelay, watchPerfTier } from "./perf_tier.ts";
-import { kgDataMenuHtml, kgViewActive, kgViewLabel, kgViewsMenuHtml } from "./kg_header.ts"; // P-KGUI.1/.2 (ADR-0184/0185)
+import { kgDataMenuHtml, kgPickerHtml, kgPickerRowsHtml, kgViewActive, kgViewLabel, kgViewsMenuHtml, type KgListItem } from "./kg_header.ts"; // P-KGUI.1/.2 (ADR-0184/0185) + P-KGPACK.2 (ADR-0205)
 import { TURN_PATIENCE_MS, slowPhaseLabel, slowToastCopy } from "./stall_notice.ts"; // P-STALL.1 (ADR-0186)
 import { guardBlockedHtml, resourcePanelBodyHtml, resourcePanelHtml, type SystemStatusView } from "./system_guard.ts"; // P-SYSRES.1 (ADR-0182)
 import type { KbGraphView, PersonalGraphData } from "./bridge.ts";
@@ -2959,6 +2959,8 @@ let kgSelId: string | null = null;
 let kgSig = ""; // signature of the last-rendered graph, to skip no-op live refreshes
 let kgCodeMode = false; // P-KG-CODE.1: the canvas is showing the workspace CODE graph, not the personal graph
 let kbGraphMode = false; // P-KB.2b: the canvas is showing the COMPILED knowledge base page graph
+let activeKbId: string | null = null; // P-KGPACK.2: which named KG is active (drives the picker check + label)
+let activeKbName = "";                 // P-KGPACK.2: the active KG's name, shown on the views button in kb mode
 let kbGraphData: KbGraphView | null = null; // cached pages+links for the KB side panel (node -> page body)
 let codeGraphRoot = ""; // P-KG-CODE.1d: workspace root, so a code node's relative path opens the real file in the IDE
 let codeGraphLevel: "file" | "symbol" = "file"; // P-KG-SYM.1: which graph the canvas is showing
@@ -3021,7 +3023,7 @@ function setRelateMode(on: boolean): void {
 
 // P-KGUI.1 (ADR-0184): the consolidated views dropdown - one button instead of the stacked three.
 function updateKgViewsLabel(): void {
-  const s = { relateOn: kgRelateMode, codeMode: kgCodeMode, kbMode: kbGraphMode };
+  const s = { relateOn: kgRelateMode, codeMode: kgCodeMode, kbMode: kbGraphMode, kbName: activeKbName };
   const l = $("#kgViewsLbl"); if (l) l.textContent = kgViewLabel(s);
   $("#kgViews")?.classList.toggle("on", kgViewActive(s));
 }
@@ -3037,8 +3039,66 @@ function openKgViewsMenu(anchor: HTMLElement): void {
     p.close();
     if (v === "relate") setRelateMode(!kgRelateMode);
     else if (v === "code") void toggleCodeGraph();
-    else if (v === "kb") void toggleKbGraph();
+    else if (v === "kb") void openKgPicker(anchor); // P-KGPACK.2: the "Compiled KB" row opens the KG picker
   });
+}
+
+// P-KGPACK.2 (ADR-0205): the named-KG picker. The combined "Compiled KB" is now a SET of named KGs; this
+// filter-as-you-type dropdown lists them (active one checked), lets you rename inline or create a new one,
+// and on select activates that KG server-side then draws its page graph. Picking the KG already on the
+// canvas returns to the Personal graph (the way clicking "Compiled KB" used to toggle off).
+let kgPickerPop: { node: HTMLElement; close: () => void } | null = null;
+async function openKgPicker(anchor: HTMLElement): Promise<void> {
+  if (kgPickerPop) { kgPickerPop.close(); return; } // second click on the button = toggle closed
+  let view = await bridge.kbList().catch(() => null);
+  if (!view) { showToast({ tone: "danger", title: "Knowledge graphs unavailable", desc: "Couldn't read the KG list.", timeout: 4000 }); return; }
+  activeKbId = view.activeId;
+  const items = (): KgListItem[] => view!.kgs.map((k) => ({ kg_id: k.kg_id, name: k.name, active: k.kg_id === activeKbId, read_only: k.read_only, source_kind: k.source_kind }));
+  const p = popover(anchor, kgPickerHtml(items(), ""), () => { kgPickerPop = null; });
+  kgPickerPop = p;
+  const searchVal = (): string => (p.node.querySelector("#kgPickSearch") as HTMLInputElement | null)?.value ?? "";
+  const redrawRows = (): void => { const list = p.node.querySelector("#kgPickList"); if (list) list.innerHTML = kgPickerRowsHtml(items(), searchVal()); };
+  const applyView = (v: import("./bridge.ts").KgListView | null): void => {
+    if (!v) { showToast({ tone: "danger", title: "That didn't work", desc: "The KG registry couldn't be updated.", timeout: 4000 }); return; }
+    if (v.error) showToast({ tone: "danger", title: "That didn't work", desc: v.error, timeout: 4000 });
+    view = v; activeKbId = v.activeId; redrawRows();
+  };
+  (p.node.querySelector("#kgPickSearch") as HTMLInputElement | null)?.focus();
+  p.node.addEventListener("input", (ev) => { if ((ev.target as HTMLElement).id === "kgPickSearch") redrawRows(); });
+  p.node.addEventListener("click", (ev) => {
+    const t = ev.target as HTMLElement;
+    const rn = t.closest("[data-kgrename]") as HTMLElement | null;
+    if (rn) { ev.stopPropagation(); void renameKgFlow(rn.dataset.kgrename!, view!, applyView); return; }
+    const nw = t.closest("[data-kgnew]") as HTMLElement | null;
+    if (nw) { ev.stopPropagation(); void newKgFlow(applyView); return; }
+    const pk = t.closest("[data-kgpick]") as HTMLElement | null;
+    if (pk) { p.close(); void pickKg(pk.dataset.kgpick!); return; }
+  });
+}
+/** Activate a KG + draw its page graph. Re-picking the KG already on the canvas returns to the Personal graph. */
+async function pickKg(kgId: string): Promise<void> {
+  if (kbGraphMode && kgId === activeKbId) { updateKbButton(false); await renderKnowledge(); return; }
+  const v = await bridge.kbActivate(kgId).catch(() => null);
+  if (v) {
+    activeKbId = v.activeId;
+    activeKbName = v.kgs.find((k) => k.kg_id === v.activeId)?.name ?? "";
+  }
+  await renderKbGraph(); // reads the ACTIVE KG's pages+links (invariant: /api/kb/graph uses the active store)
+}
+/** Rename a KG via the shared text-prompt modal, then push the refreshed list back into the open picker. */
+async function renameKgFlow(kgId: string, view: import("./bridge.ts").KgListView, apply: (v: import("./bridge.ts").KgListView | null) => void): Promise<void> {
+  const current = view.kgs.find((k) => k.kg_id === kgId)?.name ?? "";
+  const name = await promptText({ title: "Rename knowledge graph", label: "Name", value: current, placeholder: "e.g. Backend Engineer" });
+  if (!name || name === current) return;
+  const v = await bridge.kbRename(kgId, name).catch(() => null);
+  if (v && !v.error && kgId === activeKbId) activeKbName = name; // keep the button label in sync
+  apply(v);
+}
+/** Create a new, empty KG via the shared text-prompt modal, then refresh the open picker. */
+async function newKgFlow(apply: (v: import("./bridge.ts").KgListView | null) => void): Promise<void> {
+  const name = await promptText({ title: "New knowledge graph", label: "Name", placeholder: "e.g. Data Scientist" });
+  if (!name) return;
+  apply(await bridge.kbCreate(name).catch(() => null));
 }
 
 // P-KGUI.2 (ADR-0185): the Data dropdown - Import history / AI toggle / Export vault / CUI archive,
@@ -4320,11 +4380,9 @@ async function renderKbGraph(): Promise<void> {
   kgHandle.setLens(kgLens);
   showKgCenter(true); syncKgSideOpen();
 }
-/** Toggle the compiled KB view (off returns to the personal graph). */
-async function toggleKbGraph(): Promise<void> {
-  if (kbGraphMode) { updateKbButton(false); await renderKnowledge(); }
-  else await renderKbGraph();
-}
+// P-KGPACK.2 (ADR-0205): the compiled-KB view is entered through the KG picker (openKgPicker → pickKg),
+// which activates a named KG then draws it; re-picking the on-canvas KG returns to the Personal graph. The
+// old single-graph toggleKbGraph() is retired (its toggle-off role now lives in pickKg).
 // ── P-KG-CODE.1 / P-KG-SYM.1: the workspace CODE graph (file imports OR symbol AST), in the same canvas ──
 function updateCodeGraphButtons(active: boolean, meta?: import("./bridge.ts").CodeGraphView | null): void {
   kgCodeMode = active;
