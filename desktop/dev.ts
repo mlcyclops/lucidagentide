@@ -105,6 +105,8 @@ import { hostname as osHostname } from "node:os";
 import { analyzeWork, codifyCandidate, gatherWorkDigest, type SkillCandidate, type StudioWindow } from "./skill_studio.ts"
 import { buildSkillArtifact, PublishDispatcher, publishersFor } from "./skill_publish.ts";
 import { kbScanner, kbStore, listKgs, activeKgId, createKg, renameKg, setActiveKg } from "./kb_store.ts"
+import { readKbSources } from "./kb_sources.ts"
+import { ingestSourcesIntoKg } from "../harness/kb/batch_ingest.ts"
 import { ingestDocument } from "../harness/kb/ingest.ts"
 import { retrieveKnowledge, type RetrieveMode } from "../harness/kb/retrieve.ts"
 import { recordBlock } from "./security_log.ts"
@@ -314,6 +316,11 @@ const json = (data: unknown) =>
 async function readBody<T>(req: Request): Promise<T> {
   return (await req.json()) as T;
 }
+
+// P-KGPACK.3 (ADR-0205): cap the synchronous batch-seed so one import can't hold the request open across
+// hundreds of model compilations; the remainder is reported as `skipped` (never silent), background-job
+// chunking is a follow-up.
+const KB_BATCH_CAP = 50;
 
 // P-KGPACK.2 (ADR-0205): the named-KG picker's wire shape - every KG (id/name/read-only/source) + the
 // active id, plus an optional `error` a mutation attaches instead of nulling the list.
@@ -1749,6 +1756,32 @@ const server = Bun.serve({
         try { setActiveKg(String(b.kgId ?? "")); }
         catch (e) { return json({ ok: true, data: kgListView(String((e as Error).message)) }); }
         return json({ ok: true, data: kgListView() });
+      }
+      // P-KGPACK.3 (ADR-0205): seed a named KG from a folder of AI-vendor conversations or Obsidian markdown.
+      // `name` creates + names the KG at ingest ("rename at ingest"); otherwise an explicit `kgId`, else the
+      // active KG. Each source is compiled through the SAME fail-closed pipeline (scan source + re-scan every
+      // page); blocks are audited via recordBlock. Capped (KB_BATCH_CAP) with the remainder reported skipped.
+      if (p === "/api/kb/ingest-batch" && req.method === "POST") {
+        const b = await readBody<{ path?: unknown; name?: unknown; kgId?: unknown }>(req);
+        const src = readKbSources(String(b.path ?? ""));
+        if (!src.ok) return json({ ok: true, data: { ok: false, error: src.error } });
+        let targetId: string, kgName: string;
+        try {
+          const name = typeof b.name === "string" ? b.name.trim() : "";
+          if (name) { const e = createKg({ name, sourceKind: src.scan.kind, provenance: src.scan.vendor ? `import:${src.scan.vendor}` : "import:obsidian" }); targetId = e.kg_id; kgName = e.name; }
+          else { targetId = (typeof b.kgId === "string" && b.kgId) ? b.kgId : (activeKgId() ?? ""); kgName = listKgs().find((k) => k.kg_id === targetId)?.name ?? ""; }
+        } catch (e) { return json({ ok: true, data: { ok: false, error: String((e as Error).message) } }); }
+        if (!targetId) return json({ ok: true, data: { ok: false, error: "No target knowledge graph." } });
+        const model = usageLedger().models[0]?.model;
+        const result = await ingestSourcesIntoKg({
+          store: await kbStore(targetId),
+          scanner: kbScanner(),
+          complete: (system: string, user: string) => backend.complete(system, user, model ? { model } : {}),
+          docs: src.scan.docs,
+          maxDocuments: KB_BATCH_CAP,
+          onBlock: (blk) => recordBlock({ tool: "kb_ingest", severity: "high", findings: String(blk.findings), reason: `KB ${blk.stage} blocked${blk.slug ? ` (${blk.slug})` : ""}: ${blk.reason}` }),
+        });
+        return json({ ok: true, data: { ok: true, kgId: targetId, kgName, kind: src.scan.kind, vendor: src.scan.vendor ?? null, ...result } });
       }
       // P-SKILLREG.2 (ADR-0102): the PUBLISH seam. Reads a codified skill's SKILL.md and publishes it as a
       // versioned artifact to the configured targets (fail-safe fan-out). Public ships the LOCAL publisher;

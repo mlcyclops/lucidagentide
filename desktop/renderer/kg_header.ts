@@ -95,7 +95,10 @@ export function kgPickerHtml(items: KgListItem[], query: string): string {
     <div class="kgp-h">Knowledge graphs<span class="kgp-count">${items.length}</span></div>
     <input id="kgPickSearch" class="kgp-search" type="text" placeholder="Filter graphs…" autocomplete="off" spellcheck="false">
     <div id="kgPickList" class="kgp-list">${kgPickerRowsHtml(items, query)}</div>
-    <button class="kgp-new" data-kgnew title="Create a new, empty knowledge graph">${icon("plus", 12)} New KG</button>
+    <div class="kgp-foot">
+      <button class="kgp-new" data-kgnew title="Create a new, empty knowledge graph">${icon("plus", 12)} New KG</button>
+      <button class="kgp-new" data-kgimport title="Seed a new KG from a ChatGPT/Claude/Gemini export or an Obsidian markdown folder">${icon("market", 12)} Import files</button>
+    </div>
   </div>`;
 }
 

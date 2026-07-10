@@ -605,6 +605,10 @@ demo-P-KGVIZ.1: ## P-KGVIZ.1 (ADR-0183): form in place - the KG/code-graph settl
 demo-P-KGPACK.1: ## P-KGPACK.1 (ADR-0205): named, swappable KGs (file-per-KG + JSON registry) - the pre-existing combined kb_graph.duckdb is ADOPTED as the default "My Knowledge" KG (zero data loss), new role KGs are ISOLATED files (a page in one is invisible from another), rename touches only the label, and switching the active KG re-points a no-arg store lookup
 	$(BUN) run desktop/scripts/demo_p_kgpack_1.ts
 
+.PHONY: demo-P-KGPACK.3
+demo-P-KGPACK.3: ## P-KGPACK.3 (ADR-0205): seed a named KG from a folder - an Obsidian markdown vault or a ChatGPT/Claude/Gemini export becomes one document per note/conversation, batch-compiled into a NAMED KG through the SAME fail-closed gate (a Trojan-Source note is quarantined, never compiled); KGs stay isolated files and the default is untouched
+	$(BUN) run desktop/scripts/demo_p_kgpack_3.ts
+
 .PHONY: demo-P-KGPACK.2
 demo-P-KGPACK.2: ## P-KGPACK.2 (ADR-0205): the named-KG picker - the combined "Compiled KB" becomes a filter-as-you-type dropdown of named KGs (active one checked, rename inline, "New KG"); the views button reads the active KG's name; user KG names are escaped
 	$(BUN) run desktop/scripts/demo_p_kgpack_2.ts

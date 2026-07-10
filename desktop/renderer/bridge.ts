@@ -225,6 +225,14 @@ export interface KbGraphView { pages: KbPageView[]; links: KbLinkView[] }
 // mutation returns the refreshed list plus an optional `error` (validation failures don't null the list).
 export interface KgListItemView { kg_id: string; name: string; read_only: boolean; source_kind: string }
 export interface KgListView { kgs: KgListItemView[]; activeId: string | null; error?: string }
+// P-KGPACK.3 (ADR-0205): seed a named KG from a folder (chat export or Obsidian markdown). All fields past
+// `ok` are present only on success; `error` carries the friendly failure message.
+export interface KbBatchResultView {
+  ok: boolean; error?: string;
+  kgId?: string; kgName?: string; kind?: "chat" | "obsidian"; vendor?: string | null;
+  documents?: number; totalDocuments?: number; available?: number; skipped?: number;
+  pagesCompiled?: number; pagesQuarantined?: number; documentsQuarantined?: number; errored?: number; links?: number; cancelled?: boolean;
+}
 export interface ProviderAuth {
   id: string; name: string; env: string; oauthId: string; canOauth: boolean;
   oauthActive: boolean; oauthIdentity?: string; keySet: boolean; keyLast4?: string;
@@ -609,6 +617,9 @@ export interface LucidBridge {
   kbCreate(name: string): Promise<KgListView | null>;
   kbRename(kgId: string, name: string): Promise<KgListView | null>;
   kbActivate(kgId: string): Promise<KgListView | null>;
+  // P-KGPACK.3 (ADR-0205): seed a KG from a folder. `name` creates + names a new KG at ingest; otherwise
+  // `kgId` (or the active KG) receives the documents. Gated fail-closed server-side.
+  kbIngestBatch(input: { path: string; name?: string; kgId?: string }): Promise<KbBatchResultView | null>;
   // P-CMD.1 (ADR-0146): user-authored "/" slash commands (workspace .omp/commands/). Create validates +
   // scans fail-closed server-side. `list` = stored commands; `create` returns the persisted command or errors.
   userCommands(): Promise<UserCommand[]>;
@@ -1026,6 +1037,7 @@ export const bridge: LucidBridge = {
   kbCreate: (name) => post("/api/kb/create", { name }),
   kbRename: (kgId, name) => post("/api/kb/rename", { kgId, name }),
   kbActivate: (kgId) => post("/api/kb/activate", { kgId }),
+  kbIngestBatch: (input) => post("/api/kb/ingest-batch", input),
   setActiveSkill: (name, prompt) => post("/api/skill", { name, prompt }),
   clearActiveSkill: () => post("/api/skill", { clear: true }),
   skillActivated: (command, name, source) => post("/api/skill/activated", { command, name, source }),

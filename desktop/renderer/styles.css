@@ -2093,7 +2093,8 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
   color:var(--txt-3);cursor:pointer;border-radius:8px;transition:color var(--t),background var(--t)}
 .kgp-rename:hover{color:var(--txt);background:var(--bg-2)}
 .kgp-empty{font-size:11.5px;color:var(--txt-3);padding:14px 8px;text-align:center}
-.kgp-new{display:flex;align-items:center;gap:6px;justify-content:center;padding:8px 10px;border:1px dashed var(--line-strong);
+.kgp-foot{display:flex;gap:6px}
+.kgp-new{flex:1;display:flex;align-items:center;gap:6px;justify-content:center;padding:8px 10px;border:1px dashed var(--line-strong);
   border-radius:9px;background:none;color:var(--txt-2);cursor:pointer;font-size:12px;font-weight:600;transition:border-color var(--t),color var(--t)}
 .kgp-new:hover{border-color:color-mix(in srgb,var(--accent) 45%,var(--line-strong));color:var(--txt)}
 /* icon-only button (the code-graph re-sync sits between the views and Data dropdowns) */

@@ -3071,6 +3071,8 @@ async function openKgPicker(anchor: HTMLElement): Promise<void> {
     if (rn) { ev.stopPropagation(); void renameKgFlow(rn.dataset.kgrename!, view!, applyView); return; }
     const nw = t.closest("[data-kgnew]") as HTMLElement | null;
     if (nw) { ev.stopPropagation(); void newKgFlow(applyView); return; }
+    const im = t.closest("[data-kgimport]") as HTMLElement | null;
+    if (im) { p.close(); void importKgFlow(); return; } // P-KGPACK.3: seed a KG from a folder
     const pk = t.closest("[data-kgpick]") as HTMLElement | null;
     if (pk) { p.close(); void pickKg(pk.dataset.kgpick!); return; }
   });
@@ -3099,6 +3101,27 @@ async function newKgFlow(apply: (v: import("./bridge.ts").KgListView | null) => 
   const name = await promptText({ title: "New knowledge graph", label: "Name", placeholder: "e.g. Data Scientist" });
   if (!name) return;
   apply(await bridge.kbCreate(name).catch(() => null));
+}
+/** P-KGPACK.3: seed a NEW named KG from a folder - a ChatGPT/Claude/Gemini export or an Obsidian markdown
+ *  vault. Choose the folder, NAME the KG (rename-at-ingest), then a single gated batch compile (every source
+ *  scanned fail-closed); on success the freshly-seeded KG is activated + drawn. */
+async function importKgFlow(): Promise<void> {
+  const folder = await openFolderBrowser({ title: "Choose a chat export or Obsidian markdown folder", confirm: "Use this folder" });
+  if (!folder) return;
+  const suggested = (folder.split(/[\\/]/).pop() || "Imported KG").trim();
+  const name = await promptText({ title: "Name this knowledge graph", label: "KG name", value: suggested, placeholder: "e.g. Backend Engineer" });
+  if (!name) return;
+  showToast({ title: `Seeding "${name}"…`, desc: "Compiling your sources into the KG - every document is scanned by the security gate first.", timeout: 2200 });
+  const r = await bridge.kbIngestBatch({ path: folder, name }).catch(() => null);
+  if (!r || !r.ok) { showToast({ tone: "danger", title: "Import failed", desc: r?.error ?? "Couldn't read that folder.", actions: [{ label: "OK" }], timeout: 6000 }); return; }
+  if (r.kgId) { await bridge.kbActivate(r.kgId).catch(() => null); activeKbId = r.kgId; activeKbName = r.kgName ?? name; }
+  await renderKbGraph(); // reads the now-active seeded KG
+  const parts = [`${r.pagesCompiled ?? 0} pages from ${r.documents ?? 0} ${r.kind === "chat" ? "conversations" : "notes"}`];
+  if (r.documentsQuarantined) parts.push(`${r.documentsQuarantined} docs quarantined`);
+  if (r.pagesQuarantined) parts.push(`${r.pagesQuarantined} pages blocked`);
+  if (r.errored) parts.push(`${r.errored} failed to compile`);
+  if (r.skipped) parts.push(`${r.skipped} skipped (50-doc cap)`);
+  showToast({ title: `"${r.kgName ?? name}" seeded`, desc: parts.join(" · "), timeout: 6000 });
 }
 
 // P-KGUI.2 (ADR-0185): the Data dropdown - Import history / AI toggle / Export vault / CUI archive,
