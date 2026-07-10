@@ -233,6 +233,12 @@ export interface KbBatchResultView {
   documents?: number; totalDocuments?: number; available?: number; skipped?: number;
   pagesCompiled?: number; pagesQuarantined?: number; documentsQuarantined?: number; errored?: number; links?: number; cancelled?: boolean;
 }
+// P-KGPACK.4 (ADR-0205): .lkgpack pack author (export) + gated import.
+export interface KbPackExportView { ok: boolean; error?: string; path?: string; signed?: boolean; pages?: number }
+export interface KbPackImportView {
+  ok: boolean; error?: string; stage?: string;
+  kgId?: string; kgName?: string; signed?: boolean; keyId?: string; pages?: number; findings?: number;
+}
 export interface ProviderAuth {
   id: string; name: string; env: string; oauthId: string; canOauth: boolean;
   oauthActive: boolean; oauthIdentity?: string; keySet: boolean; keyLast4?: string;
@@ -620,6 +626,10 @@ export interface LucidBridge {
   // P-KGPACK.3 (ADR-0205): seed a KG from a folder. `name` creates + names a new KG at ingest; otherwise
   // `kgId` (or the active KG) receives the documents. Gated fail-closed server-side.
   kbIngestBatch(input: { path: string; name?: string; kgId?: string }): Promise<KbBatchResultView | null>;
+  // P-KGPACK.4 (ADR-0205): export a KG as a .lkgpack; import one (integrity + origin verified, re-scanned
+  // fail-closed, installed read-only + untrusted).
+  kbPackExport(input: { kgId: string; dest: string; author?: string; version?: string; role?: string; description?: string }): Promise<KbPackExportView | null>;
+  kbPackImport(input: { path: string }): Promise<KbPackImportView | null>;
   // P-CMD.1 (ADR-0146): user-authored "/" slash commands (workspace .omp/commands/). Create validates +
   // scans fail-closed server-side. `list` = stored commands; `create` returns the persisted command or errors.
   userCommands(): Promise<UserCommand[]>;
@@ -1038,6 +1048,8 @@ export const bridge: LucidBridge = {
   kbRename: (kgId, name) => post("/api/kb/rename", { kgId, name }),
   kbActivate: (kgId) => post("/api/kb/activate", { kgId }),
   kbIngestBatch: (input) => post("/api/kb/ingest-batch", input),
+  kbPackExport: (input) => post("/api/kb/pack/export", input),
+  kbPackImport: (input) => post("/api/kb/pack/import", input),
   setActiveSkill: (name, prompt) => post("/api/skill", { name, prompt }),
   clearActiveSkill: () => post("/api/skill", { clear: true }),
   skillActivated: (command, name, source) => post("/api/skill/activated", { command, name, source }),

@@ -3073,6 +3073,10 @@ async function openKgPicker(anchor: HTMLElement): Promise<void> {
     if (nw) { ev.stopPropagation(); void newKgFlow(applyView); return; }
     const im = t.closest("[data-kgimport]") as HTMLElement | null;
     if (im) { p.close(); void importKgFlow(); return; } // P-KGPACK.3: seed a KG from a folder
+    const ex = t.closest("[data-kgexport]") as HTMLElement | null;
+    if (ex) { ev.stopPropagation(); p.close(); void exportPackFlow(ex.dataset.kgexport!, view!); return; } // P-KGPACK.4
+    const pi = t.closest("[data-kgpackimport]") as HTMLElement | null;
+    if (pi) { p.close(); void importPackFlow(); return; } // P-KGPACK.4: import a .lkgpack
     const pk = t.closest("[data-kgpick]") as HTMLElement | null;
     if (pk) { p.close(); void pickKg(pk.dataset.kgpick!); return; }
   });
@@ -3122,6 +3126,32 @@ async function importKgFlow(): Promise<void> {
   if (r.errored) parts.push(`${r.errored} failed to compile`);
   if (r.skipped) parts.push(`${r.skipped} skipped (50-doc cap)`);
   showToast({ title: `"${r.kgName ?? name}" seeded`, desc: parts.join(" · "), timeout: 6000 });
+}
+/** P-KGPACK.4: export a KG as a portable .lkgpack (db + manifest). Choose a destination folder; the pack is
+ *  signed only if a signing key is configured (the private authoring path), otherwise unsigned. */
+async function exportPackFlow(kgId: string, view: import("./bridge.ts").KgListView): Promise<void> {
+  const kgName = view.kgs.find((k) => k.kg_id === kgId)?.name ?? "KG";
+  const dest = await openFolderBrowser({ title: `Export "${kgName}" as a KG Pack - choose a destination`, confirm: "Export here" });
+  if (!dest) return;
+  showToast({ title: `Exporting "${kgName}"…`, desc: "Writing the .lkgpack (db + manifest).", timeout: 1600 });
+  const r = await bridge.kbPackExport({ kgId, dest }).catch(() => null);
+  if (!r || !r.ok) { showToast({ tone: "danger", title: "Export failed", desc: r?.error ?? "Couldn't write the pack.", actions: [{ label: "OK" }], timeout: 6000 }); return; }
+  showExportToast(`"${kgName}" exported`, `${r.pages ?? 0} pages · ${r.signed ? "signed" : "unsigned"} · a .lkgpack you can share or sell`, r.path);
+}
+/** P-KGPACK.4: import a .lkgpack. Integrity + origin are verified and every page is re-scanned fail-closed
+ *  before anything registers; a clean pack installs as a read-only, untrusted KG and is shown. */
+async function importPackFlow(): Promise<void> {
+  const folder = await openFolderBrowser({ title: "Choose a .lkgpack KG Pack folder", confirm: "Import this pack" });
+  if (!folder) return;
+  showToast({ title: "Verifying + scanning the pack…", desc: "Integrity + origin are checked and every page is re-scanned before anything installs.", timeout: 2200 });
+  const r = await bridge.kbPackImport({ path: folder }).catch(() => null);
+  if (!r || !r.ok) {
+    showToast({ tone: "danger", title: "Pack rejected", desc: `${r?.error ?? "Couldn't import that pack."}${r?.stage ? ` (${r.stage})` : ""}`, actions: [{ label: "OK" }], timeout: 7000 });
+    return;
+  }
+  if (r.kgId) { await bridge.kbActivate(r.kgId).catch(() => null); activeKbId = r.kgId; activeKbName = r.kgName ?? "Imported pack"; }
+  await renderKbGraph();
+  showToast({ title: `"${r.kgName ?? "Pack"}" installed`, desc: `${r.pages ?? 0} pages · ${r.signed ? `signed (${r.keyId || "trusted"})` : "unsigned"} · read-only · shown as untrusted data`, timeout: 6000 });
 }
 
 // P-KGUI.2 (ADR-0185): the Data dropdown - Import history / AI toggle / Export vault / CUI archive,

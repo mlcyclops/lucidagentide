@@ -56,15 +56,27 @@ export function listKgs(): KgEntry[] { return kgRegistry().list(); }
 /** The active KG's id (what a no-arg `kbStore()` resolves to). */
 export function activeKgId(): string | null { return kgRegistry().activeId(); }
 
-/** Create a new, empty KG whose file lives beside the default KG, keyed by its minted kg_id. */
-export function createKg(input: { name: string; sourceKind?: KgSourceKind; provenance?: string }): KgEntry {
+/** Create a new, empty KG whose file lives beside the default KG, keyed by its minted kg_id. `readOnly`
+ *  marks an imported pack (P-KGPACK.4) so the UI shows the lock and edits are refused. */
+export function createKg(input: { name: string; sourceKind?: KgSourceKind; provenance?: string; readOnly?: boolean }): KgEntry {
   const dir = dirname(defaultKbPath());
   return kgRegistry().create({
     name: input.name,
     dbPathFor: (id) => join(dir, `kg_${id}.duckdb`),
     sourceKind: input.sourceKind ?? "manual",
     provenance: input.provenance ?? "",
+    readOnly: input.readOnly ?? false,
   });
+}
+
+/** The full registry entry for a KG (incl. its server-only db_path). Used by pack export. */
+export function kgEntry(kgId: string): KgEntry | undefined { return kgRegistry().get(kgId); }
+
+/** Close + drop a single KG's cached store, flushing its DuckDB file to disk (so pack export reads a
+ *  complete file). A later kbStore(kgId) reopens it. */
+export async function closeKg(kgId: string): Promise<void> {
+  const p = stores.get(kgId);
+  if (p) { try { (await p).close(); } catch { /* ignore */ } stores.delete(kgId); }
 }
 
 /** Rename a KG (kg_id + file untouched). */

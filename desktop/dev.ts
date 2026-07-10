@@ -107,6 +107,7 @@ import { buildSkillArtifact, PublishDispatcher, publishersFor } from "./skill_pu
 import { kbScanner, kbStore, listKgs, activeKgId, createKg, renameKg, setActiveKg } from "./kb_store.ts"
 import { readKbSources } from "./kb_sources.ts"
 import { ingestSourcesIntoKg } from "../harness/kb/batch_ingest.ts"
+import { exportKgPack, importKgPack } from "./kb_pack.ts"
 import { ingestDocument } from "../harness/kb/ingest.ts"
 import { retrieveKnowledge, type RetrieveMode } from "../harness/kb/retrieve.ts"
 import { recordBlock } from "./security_log.ts"
@@ -1782,6 +1783,28 @@ const server = Bun.serve({
           onBlock: (blk) => recordBlock({ tool: "kb_ingest", severity: "high", findings: String(blk.findings), reason: `KB ${blk.stage} blocked${blk.slug ? ` (${blk.slug})` : ""}: ${blk.reason}` }),
         });
         return json({ ok: true, data: { ok: true, kgId: targetId, kgName, kind: src.scan.kind, vendor: src.scan.vendor ?? null, ...result } });
+      }
+      // P-KGPACK.4 (ADR-0205): author (export) + gated import of .lkgpack KG Packs. Export writes a
+      // <slug>.lkgpack dir (db + signed-or-unsigned manifest); import verifies integrity + origin, re-scans
+      // every page fail-closed, and installs a read-only, untrusted KG (keystone #2). See desktop/kb_pack.ts.
+      if (p === "/api/kb/pack/export" && req.method === "POST") {
+        const b = await readBody<{ kgId?: unknown; dest?: unknown; author?: unknown; version?: unknown; role?: unknown; description?: unknown }>(req);
+        const kgId = String(b.kgId ?? ""), dest = String(b.dest ?? "");
+        if (!kgId || !dest) return json({ ok: true, data: { ok: false, error: "kgId and dest are required" } });
+        const r = await exportKgPack(kgId, dest, {
+          author: typeof b.author === "string" ? b.author : undefined,
+          version: typeof b.version === "string" ? b.version : undefined,
+          role: typeof b.role === "string" ? b.role : undefined,
+          description: typeof b.description === "string" ? b.description : undefined,
+          createdAt: new Date().toISOString(),
+        });
+        return json({ ok: true, data: r });
+      }
+      if (p === "/api/kb/pack/import" && req.method === "POST") {
+        const b = await readBody<{ path?: unknown }>(req);
+        const path = String(b.path ?? "");
+        if (!path) return json({ ok: true, data: { ok: false, error: "path is required" } });
+        return json({ ok: true, data: await importKgPack(path) });
       }
       // P-SKILLREG.2 (ADR-0102): the PUBLISH seam. Reads a codified skill's SKILL.md and publishes it as a
       // versioned artifact to the configured targets (fail-safe fan-out). Public ships the LOCAL publisher;

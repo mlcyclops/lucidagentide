@@ -2089,11 +2089,11 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .kgp-row.on .kgp-name{color:var(--accent-2)}
 .kgp-src{font-size:10px;font-weight:600;color:var(--txt-3);background:var(--bg-3);border:1px solid var(--line);border-radius:7px;padding:0 5px;flex:none}
 .kgp-ro{display:inline-flex;color:var(--txt-3);flex:none}
-.kgp-rename{display:inline-flex;align-items:center;justify-content:center;width:30px;flex:none;background:none;border:0;
+.kgp-rowbtn{display:inline-flex;align-items:center;justify-content:center;width:28px;flex:none;background:none;border:0;
   color:var(--txt-3);cursor:pointer;border-radius:8px;transition:color var(--t),background var(--t)}
-.kgp-rename:hover{color:var(--txt);background:var(--bg-2)}
+.kgp-rowbtn:hover{color:var(--txt);background:var(--bg-2)}
 .kgp-empty{font-size:11.5px;color:var(--txt-3);padding:14px 8px;text-align:center}
-.kgp-foot{display:flex;gap:6px}
+.kgp-foot{display:flex;gap:6px;flex-wrap:wrap}
 .kgp-new{flex:1;display:flex;align-items:center;gap:6px;justify-content:center;padding:8px 10px;border:1px dashed var(--line-strong);
   border-radius:9px;background:none;color:var(--txt-2);cursor:pointer;font-size:12px;font-weight:600;transition:border-color var(--t),color var(--t)}
 .kgp-new:hover{border-color:color-mix(in srgb,var(--accent) 45%,var(--line-strong));color:var(--txt)}
