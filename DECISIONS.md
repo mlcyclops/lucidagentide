@@ -13888,3 +13888,44 @@ direct DataChannel (`path=p2p`) deterministically (4/4). 77 collab tests + root/
 **Deferred (the final slice):** wire the coordinator into the live share flow behind a "prefer direct P2P" UI
 toggle (replacing the backend host/guest path when enabled), plus STUN/TURN configuration in Settings. The
 engine is complete + proven; this is the UI + live-flow integration.
+
+## ADR-0202 — P-COLLAB.17: the "prefer direct P2P" toggle + the live-flow swap-in
+
+**Status:** Accepted (2026-07-09). Implements the ADR-0201 deferred section.
+
+**Context.** ADR-0201 proved the WebRTC coordinator (fan-out + relay fallback) works. This turns it into a
+user-facing feature: a toggle that runs a real share peer-to-peer. The load-bearing constraint is that
+RTCPeerConnection is renderer-only - so, unlike the relay share (hosted in the backend `CollabManager` over a
+`CollabSocket`), a P2P share's host AND guest must live in the RENDERER. Enabling P2P therefore MOVES hosting
+into the renderer for that session; the relay is used only to signal + as the automatic fallback.
+
+**Decision.**
+- **`desktop/renderer/collab_p2p.ts`** owns the renderer P2P lifecycle: it mints the room client-side (link.ts /
+  crypto.ts are pure + importable in the renderer), stands up `webrtcHostCoordinator` / `webrtcGuestCoordinator`
+  (ADR-0201), and exposes `teeEvent` / `teeUserTurn` (feed the live ChatEvent stream + user turns into the P2P
+  host), `p2pHostStatus`, `startP2PGuest` (+ guest-drive `sendPrompt`/`abort`), and teardown. One host + one
+  guest at a time, mirroring the backend single-share model.
+- **The live ChatEvent tee.** app.ts's `onEvent` (the single point every token/thinking/tool/done/usage passes)
+  calls `teeEvent(e)`, and `send()` calls `teeUserTurn(text)` - so a renderer-hosted P2P share mirrors the live
+  session with zero new plumbing. A direct EDIT share's guest prompts arrive via the coordinator's callback and
+  run through the host's OWN composer (`runGuestPromptLocally`, shared with the relay inbox path), so omp's
+  fail-closed scan gate + exec/egress approvals fire exactly as for a local prompt.
+- **UI.** The Share panel's ready state gains a "Prefer a direct connection (WebRTC)" checkbox + a STUN/TURN
+  disclosure; a live direct share shows a "direct P2P" badge. The Join panel uses the renderer guest coordinator
+  when the preference is on. `currentShareStatus()` is the single source of truth (renderer P2P status when a
+  direct share hosts, else the backend), so the roster/dot/poller all read the right place.
+- **Settings + governance.** `settings_store.collabP2PConfig` / `setCollabP2P` persist the preference + ICE
+  servers (same user-local file as the relay URL). `/api/collab/p2p` (GET/POST, POST refused when the org locks
+  collab) + `/api/collab/authorize-connect` (re-applies the managed `allowedRelays` gate before a renderer P2P
+  join, so P2P can't bypass policy). Fail-closed: no authorized relay endpoint -> no direct share (same as relay).
+
+**Verification.** A new renderer diagnostic `webrtcP2PModuleSelfTest` (exposed as `window.__lucidP2PModuleSelfTest`)
+drives the ACTUAL toggle code path - `startP2PHost` mints + hosts, `startP2PGuest` parses the minted view link +
+joins, the teed ChatEvents reach the guest - over an in-memory relay (a `wsFactory` is threaded through for the
+test): `ok:true`, welcome round-tripped, guests=1, events=[token,done], deterministically (3/3). Verified LIVE in
+the preview: the Share panel renders the toggle (reflecting persisted config) + STUN/TURN fields; starting with it
+on brings up a live share badged "direct P2P" with an embedded-relay endpoint link; the settings round-trip
+persists through `/api/collab/p2p` (with `guestName` + the managed lock). The raw WebSocket to the embedded relay
+port is blocked in the sandboxed preview (only the dev-server port is proxied), so the cross-socket relay hop is
+not exercisable here - which is exactly why the self-test uses an in-memory relay. 77 collab tests + root/desktop
+tsc + license green.

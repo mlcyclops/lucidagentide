@@ -99,7 +99,7 @@ import { CollabGuest } from "./collab/guest.ts"; // P-COLLAB.10 (ADR-0196): watc
 import { parseShareLink } from "./collab/link.ts";
 import { importRoomKey } from "./collab/crypto.ts";
 import { authorizeRelayConnect } from "./managed_config.ts";
-import { collabRelayConfig, setCollabRelay } from "./settings_store.ts";
+import { collabRelayConfig, setCollabRelay, collabP2PConfig, setCollabP2P } from "./settings_store.ts";
 import { hostname as osHostname } from "node:os";
 import { analyzeWork, codifyCandidate, gatherWorkDigest, type SkillCandidate, type StudioWindow } from "./skill_studio.ts"
 import { buildSkillArtifact, PublishDispatcher, publishersFor } from "./skill_publish.ts";
@@ -1905,6 +1905,32 @@ const server = Bun.serve({
           ...(typeof b.publicOptIn === "boolean" ? { publicOptIn: b.publicOptIn } : {}),
         });
         return json({ ok: true, data: { relay: collabRelayConfig() } });
+      }
+      // P-COLLAB.17 (ADR-0202): the "prefer direct P2P (WebRTC)" preference + STUN/TURN config. The renderer
+      // owns the P2P host/guest (RTCPeerConnection is renderer-only); this just persists the choice + servers,
+      // and reports the org lock so the toggle disables under managed policy. `guestName` labels a P2P watcher.
+      if (p === "/api/collab/p2p" && req.method === "GET") {
+        return json({ ok: true, data: { config: collabP2PConfig(), guestName: collabDisplayName(), managed: { locked: managedLocks(managedConfig().config).collab } } });
+      }
+      if (p === "/api/collab/p2p" && req.method === "POST") {
+        if (managedLocks(managedConfig().config).collab) return json({ ok: false, error: "collaboration settings are locked by your organization" });
+        const b = await readBody<{ preferDirect?: unknown; iceUrls?: unknown; turnUsername?: unknown; turnCredential?: unknown }>(req);
+        setCollabP2P({
+          ...(typeof b.preferDirect === "boolean" ? { preferDirect: b.preferDirect } : {}),
+          ...(Array.isArray(b.iceUrls) ? { iceUrls: b.iceUrls.map((u) => String(u)) } : {}),
+          ...(typeof b.turnUsername === "string" ? { turnUsername: b.turnUsername } : {}),
+          ...(typeof b.turnCredential === "string" ? { turnCredential: b.turnCredential } : {}),
+        });
+        return json({ ok: true, data: { config: collabP2PConfig() } });
+      }
+      // P-COLLAB.17: authorize a relay endpoint for a DIRECT P2P join BEFORE the renderer connects to it - the
+      // same fail-closed managed `allowedRelays` gate the backend join path applies (so P2P can't bypass policy).
+      if (p === "/api/collab/authorize-connect" && req.method === "POST") {
+        const b = await readBody<{ endpoint?: unknown }>(req);
+        const endpoint = String(b.endpoint ?? "").trim();
+        if (!endpoint) return json({ ok: false, error: "no relay endpoint" });
+        const authz = authorizeRelayConnect(endpoint, managedConfig().config);
+        return json({ ok: authz.ok, ...(authz.ok ? {} : { error: authz.reason }) });
       }
       // P-COLLAB.7 (ADR-0193): the "be the relay" toggle - host the embedded relay on this device.
       // `serve` is governance-gated + fail-closed; `status` drives the toggle (running + bind + managed lock).

@@ -399,7 +399,12 @@ export interface CollabShareStatus {
   participantCount: number;
   participants: CollabParticipantView[];
   relay?: CollabRelay | null;
+  /** P-COLLAB.17: true when THIS share is running over a direct WebRTC connection (relay used only to signal). */
+  direct?: boolean;
 }
+
+/** P-COLLAB.17 (ADR-0202): the "prefer direct P2P" preference + STUN/TURN servers (stun:/turn: URLs). */
+export interface CollabP2PConfig { preferDirect: boolean; iceUrls: string[]; turnUsername?: string; turnCredential?: string }
 
 export interface LucidBridge {
   isElectron: boolean;
@@ -543,6 +548,11 @@ export interface LucidBridge {
   // `collabLeave` is called; a synchronous parse/policy failure surfaces as an `{kind:"error"}` frame.
   collabJoin(link: string, onFrame: (f: CollabGuestFrame) => void): Promise<void>;
   collabLeave(): Promise<unknown>;
+  // P-COLLAB.17: the "prefer direct P2P (WebRTC)" preference + STUN/TURN config (the renderer owns the P2P
+  // host/guest). `collabAuthorizeConnect` re-checks the managed relay policy before a renderer-side P2P join.
+  collabP2PConfig(): Promise<{ config: CollabP2PConfig; guestName: string; managed: { locked: boolean } } | null>;
+  collabSetP2P(patch: Partial<CollabP2PConfig>): Promise<{ config: CollabP2PConfig } | null>;
+  collabAuthorizeConnect(endpoint: string): Promise<{ ok: boolean; error?: string }>;
   sendPrompt(text: string, onEvent: (e: ChatEvent) => void, images?: { data: string; mimeType: string }[]): Promise<void>;
   // P-GOAL.1 (ADR-0046): run a /goal loop - streams the same events plus goal-iter/check/done/stop.
   runGoal(opts: GoalOpts, onEvent: (e: ChatEvent) => void): Promise<void>;
@@ -1052,6 +1062,15 @@ export const bridge: LucidBridge = {
   },
   collabJoin: (link, onFrame) => streamCollabJoin(link, onFrame),
   collabLeave: () => { collabJoinAbort?.abort(); return post("/api/collab/leave", {}); },
+  collabP2PConfig: () => getData("/api/collab/p2p"),
+  collabSetP2P: (patch) => post("/api/collab/p2p", patch),
+  collabAuthorizeConnect: async (endpoint) => {
+    try {
+      const r = await fetch("/api/collab/authorize-connect", { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify({ endpoint }) });
+      const j = await r.json();
+      return j?.ok ? { ok: true } : { ok: false, error: String(j?.error ?? `backend error ${r.status}`) };
+    } catch (e) { return { ok: false, error: String((e as Error)?.message ?? "backend unreachable") }; }
+  },
   getSettings: () => getData("/api/settings"),
   saveUsername: (username) => post("/api/settings", { username }),
   saveProfile: (p) => post("/api/settings", p),
