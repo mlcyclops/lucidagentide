@@ -160,4 +160,18 @@
 //           persistence + a cross-run rollup report kind in the Reports panel (P-EVAL.3). PATIENCE for
 //           overloaded providers - a 10-min turn with an honest "still waiting" notice (P-STALL.1); and an
 //           AI RE-SEED for the Trivia Wire (now default-OFF, an opt-in easter egg, P-TRIV.4).
-export const APP_VERSION = "1.10.6";
+// v1.11.0 = LIVE COLLABORATION (P-COLLAB, ADR-0192-0204): share a running LUCID session with another LUCID,
+//           live + end-to-end encrypted. A host broadcasts its own ChatEvent stream over an E2E-sealed relay
+//           (AES-256-GCM - the relay only ever sees ciphertext); a guest pastes an invite link and WATCHES
+//           read-only, or - with a full/edit link - DRIVES the host's session (every guest prompt still runs
+//           ON THE HOST through its own fail-closed scan gate + exec/egress approvals, so a guest bypasses
+//           nothing). Self-hosted by default: "be the relay" on this device (loopback / LAN / VPN bind picker)
+//           or run the standalone broker on a jumpbox; the public relay is opt-in. Enterprise/MDM governance
+//           clamps who may host + which binds/relays are allowed (fail-closed). "Prefer direct connection
+//           (WebRTC)" upgrades a share to a direct DTLS DataChannel - the relay only brokers the signaling
+//           handshake, then peers go P2P, with automatic relay fallback - and a metadata-only audit trail
+//           records share/join start/stop over both transports (never keys, links, or content).
+//           Plus: a Copy button + right-click Copy for chat text & code blocks (P-COPY.1); the product website
+//           in the About panel with its brand emblem inlined so it paints instantly; and the default zoom
+//           pulled back a notch (what used to read 90% is the new 100%).
+export const APP_VERSION = "1.11.0";
