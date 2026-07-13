@@ -3480,3 +3480,8 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **shipped:** the extra provider config fields (e.g. the Gemini "GCP project ID", Azure resource, Vertex project/location) stacked the label ON TOP of a full-width input instead of squishing a tiny input between the label and the Save/Clear buttons. CSS-only: `.prov-field` wraps with a 100%-basis label and a `flex:1 1 200px` input.
 - **verified:** renderer tsc green; full `make test` green.
 - **next:** none.
+
+**P-RELEASE.1 - a mistyped release tag no longer bricks the desktop build (ADR-0213)**
+- **shipped:** the v1.11.3 tag was pushed as `v.1.11.3` (dot after the `v`); `build-desktop.yml` stripped `refs/tags/v` and passed `.1.11.3` to electron-builder, which rejected it (`Invalid version`) and failed all three platform builds. Hardened the "Set build version" step: strip `refs/tags/` + an optional leading `v` + an optional leading `.` (so `v1.2.3`/`v.1.2.3`/`1.2.3` all → `1.2.3`), and fall back to the committed `desktop/package.json` version if the tag isn't a clean semver, instead of bricking the build.
+- **verified:** version-derivation table-tested for `v1.11.3`/`v.1.11.3`/`1.11.3`/garbage; workflow YAML parses. Real cross-platform build re-runs when the corrected tag is pushed.
+- **next:** re-push the release tag (the hardened workflow tolerates the `v.`-with-dot form too).
