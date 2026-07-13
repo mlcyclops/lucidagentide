@@ -548,6 +548,18 @@ dashboards: ## Materialize dashboard CSVs from a DuckDB into observable/docs/dat
 	$(BUN) run harness/scripts/materialize_dashboards.ts $(DB) observable/docs/data
 
 # ---------------------------------------------------------------------------
+# KG Packs (ADR-0207): headless pack builder
+# ---------------------------------------------------------------------------
+
+.PHONY: kg-pack
+kg-pack: ## Build one KG pack headlessly, e.g. `make kg-pack ROLE=bd` (see `bun tools/build_kg_pack.ts --help` for keys/flags). Extra flags via FLAGS=, e.g. FLAGS="--limit 5"
+	$(BUN) run tools/build_kg_pack.ts $(ROLE) $(FLAGS)
+
+.PHONY: kg-pack-all
+kg-pack-all: ## Build every KG pack in the catalog, sequentially (long — one model call per conversation)
+	$(BUN) run tools/build_kg_pack.ts --all $(FLAGS)
+
+# ---------------------------------------------------------------------------
 # Hygiene
 # ---------------------------------------------------------------------------
 
