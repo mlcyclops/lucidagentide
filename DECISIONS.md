@@ -14387,3 +14387,73 @@ reachability probe, TTS voices/synth, KG list/create, and collab relay/share sta
 
 ADR-0022 (H1 loopback-only control plane — the mitigating context), CWE-209/497, and the codebase convention of
 logging server-side + returning a generic client message.
+
+-----
+
+## ADR-0211 — P-LOC.4: AI-authored lines reach the UI again (lock-free GUI-owned ledger)
+
+**Status:** Accepted (2026-07-13).
+
+**Context.** A user reported AI-generated lines of code weren't appearing in the metrics UI even though "it's
+in the database somewhere." Traced + reproduced: AI-LOC is recorded ONLY into `agent_obs.duckdb` by the
+security gate (P-LOC.1, `recordAiEdit` → `ai_loc_ledger`). The gate runs inside the omp child and opens that
+DuckDB **read-write, holding the handle for the whole session** (`security_extension.ts` caches `dbHandle`).
+DuckDB is a single-writer store: a second process opening the same file — even `access_mode: READ_ONLY` —
+is refused (`IO Error: Could not set lock on file … Conflicting lock is held`, confirmed with a two-process
+repro). The desktop's `tools/memory_data.ts::aiLocSummary()` did exactly that READ_ONLY open, the lock error
+was swallowed to `null`, and the "AI-authored code" panel faithfully rendered its `aiLocHasData(null) === false`
+empty state ("none yet") — the reported "recorded but not shown" symptom. The codebase already dodges this
+exact hazard for other live metrics: turns / security / **latency** / eval are **GUI-owned append-only JSONL**
+the desktop writes from what it observes on the ACP stream (it can't co-write `agent_obs.duckdb`), and the
+eval rollup even ingests JSONL into a throwaway GUI-owned DuckDB. AI-LOC was the one metric that only lived in
+the locked DuckDB.
+
+**Decision.** Mirror the latency-log pattern. `desktop/ailoc_log.ts` (write) + `desktop/ailoc_read.ts` (read)
+are a **GUI-owned append-only ledger** at `~/.omp/lucid-ailoc.jsonl`. `acp_backend` already parses every
+write/edit tool step's authored `code` (for the inline chip); at the same seam it now counts added/removed
+lines with the SAME `linediff` convention the chip uses and appends a sample (model from the active/last
+model, identity/source from `attribution()`, repo from `currentWorkspace()`) — best-effort, fail-open, never
+blocking the chat, metadata only (paths + counts, never the code text). `aiLocSummary()` now reads and
+aggregates that lock-free JSONL instead of opening the locked DuckDB, so the panel populates live. The gate's
+`ai_loc_ledger` DuckDB write is unchanged — it stays the BI/audit system-of-record (invariant #10 untouched);
+the JSONL is the live-readable mirror. The write/read split keeps the renderer `linediff` import out of the
+DuckDB-free root program that `memory_data.ts` is checked under. A zero-line step (read/search/bash) records
+nothing, so only real authorship is attributed.
+
+**Verification.** `desktop/ailoc_log.test.ts` (9 tests: count write/edit/patch = the chip convention, record
++ no-op-on-zero-lines, fallback-to-unknown, read/aggregate roll-up, empty→null) + `demo-P-LOC.4` green; a
+two-process DuckDB repro confirmed the lock conflict the fix routes around. Root + server + renderer tsc green,
+full `make test` green (2234 pass). `harness/runs/loc_ledger.test.ts` (the DuckDB writer) is unaffected.
+
+### Relates to
+
+ADR-0031/P-LOC.1 (the gate's AI-LOC recording this fixes the read of), ADR-0095/P-LOC.3 (the always-render
+empty-state panel that was showing "none yet"), ADR-0187/P-EVAL.2 (`latency_log.ts` — the GUI-owned-JSONL
+pattern mirrored), and CLAUDE.md invariant #10 (the DuckDB ledger stays the frozen system-of-record).
+
+-----
+
+## ADR-0212 — P-FSREVEAL.1: reveal a written/edited file in the OS file manager from the chat feed
+
+**Status:** Accepted (2026-07-13).
+
+**Context.** When the agent writes or edits a file, finding it meant digging through the folder tree. There was
+already a `lucid:revealPath` IPC (`shell.openPath`, used for the "Open folder" export action) but nothing that
+reveals a specific FILE highlighted in its parent folder, and no affordance in the chat feed.
+
+**Decision.** Add a `lucid:showInFolder` IPC → `shell.showItemInFolder(path)` (opens the containing folder with
+the item selected), guarded to existing paths only (a forged request can't probe the filesystem). Expose it
+through preload + `bridge.showInFolder` / `bridge.canShowInFolder` (false in the browser build — no native
+shell). In the chat feed, each write/edit tool step's code preview bar gains a **Reveal** button beside "Open
+in editor" (shown only in the desktop app and only when the step carries a real absolute path — `acp_backend`
+already resolves the tool path to absolute). It fails soft to a toast if the file was moved/deleted or the
+build has no shell.
+
+**Verification.** Renderer + server tsc green; full `make test` green. The native reveal is Electron-only
+(`shell.showItemInFolder`), so the click→Finder/Explorer/Files behavior is QA-gated in the packaged app, like
+the other `shell`-backed affordances (capturePreview, revealPath).
+
+### Relates to
+
+The existing `lucid:revealPath` IPC (#115, extended here to file-level reveal), ADR-0104/P-CHAT.1 (the tool-step
+code preview bar this adds the button to), and ADR-0022 H1 (path-existence guard on the IPC).

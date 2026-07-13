@@ -199,4 +199,16 @@
 //           gated marketplace) and a headless `make kg-pack` builder. SECURITY: every dev-server error now
 //           returns a generic client message (the full error stays server-side) - CWE-209 - and the CodeQL
 //           SAST config excludes non-shipped mockups.
-export const APP_VERSION = "1.11.2";
+// v1.11.3 = BUG-FIX RELEASE (2026-07-13). Two defects autonomously diagnosed + fixed, and one usability
+//           enhancement, by Claude Code. BUG (ADR-0211): AI-authored lines of code were recorded but never
+//           appeared in the metrics UI ("AI-authored code" read "none yet"). Root cause: AI-LOC was written
+//           only into agent_obs.duckdb, which the security gate holds open read-write for the whole session;
+//           DuckDB is single-writer, so the desktop's read-only roll-up query lock-failed, the error was
+//           swallowed to null, and the panel showed the empty state despite rows being in the DB. Fix: the
+//           desktop now mirrors each edit into a lock-free GUI-owned ledger (~/.omp/lucid-ailoc.jsonl) it can
+//           read live, exactly like the turns / security / latency logs; the DuckDB stays the audit record.
+//           BUG (ADR-0210 follow-up): provider config fields (e.g. the Gemini "GCP project ID") rendered as a
+//           tiny sliver squeezed between the label and the Save/Clear buttons; the label now sits on its own
+//           line with a full-width input beneath it. ENHANCEMENT (ADR-0212): a written/edited file is one
+//           click from the chat feed to your OS file manager, HIGHLIGHTED in its folder (a "Reveal" button).
+export const APP_VERSION = "1.11.3";
