@@ -69,15 +69,16 @@ export const MAJORS: Provider[] = [
       { env: "AZURE_OPENAI_API_VERSION", label: "API version", placeholder: "v1 (default)" },
       { env: "AZURE_OPENAI_DEPLOYMENT_NAME_MAP", label: "Deployment map (optional)", placeholder: "gpt-4o=my-deploy,o3=my-o3" },
     ] },
-  // Google Cloud Vertex AI = Gemini Enterprise (ADR-0207): key-only card. omp's google-vertex provider
-  // authenticates with EITHER a GOOGLE_CLOUD_API_KEY, OR Application Default Credentials (a service-account
-  // JSON via GOOGLE_APPLICATION_CREDENTIALS, or `gcloud auth application-default login`) together with a
-  // project + location. Paste the API key in the key box, or leave it blank and fill the fields for ADC.
-  { id: "google-vertex", name: "Google Cloud · Vertex AI (Gemini Enterprise)", env: "GOOGLE_CLOUD_API_KEY", oauthId: "", canOauth: false,
+  // Gemini Enterprise (ADR-0207) — Google's CURRENT name for the enterprise Gemini backend formerly called
+  // "Vertex AI" (omp's provider id is still `google-vertex`; that stays). The enterprise-governed OAuth path
+  // is Application Default Credentials: `gcloud auth application-default login` mints a browser-consented
+  // refresh token (or use a service-account JSON via GOOGLE_APPLICATION_CREDENTIALS), which omp reads together
+  // with the project + location. A GOOGLE_CLOUD_API_KEY is the non-OAuth alternative for the key box.
+  { id: "google-vertex", name: "Google Cloud · Gemini Enterprise", env: "GOOGLE_CLOUD_API_KEY", oauthId: "", canOauth: false,
     fields: [
       { env: "GOOGLE_CLOUD_PROJECT", label: "GCP project ID", placeholder: "my-project-123" },
       { env: "GOOGLE_CLOUD_LOCATION", label: "Location", placeholder: "us-central1 (or global)" },
-      { env: "GOOGLE_APPLICATION_CREDENTIALS", label: "Service-account JSON path (ADC)", placeholder: "/path/to/sa.json — blank to use gcloud ADC" },
+      { env: "GOOGLE_APPLICATION_CREDENTIALS", label: "Service-account JSON (blank = gcloud OAuth / ADC)", placeholder: "/path/to/sa.json — or run: gcloud auth application-default login" },
     ] },
   // Perplexity (Sonar) is U.S.-based. omp supports OAuth too, but its login is interactive email-OTP /
   // the macOS app token — neither works through our non-interactive broker spawn — so we expose the

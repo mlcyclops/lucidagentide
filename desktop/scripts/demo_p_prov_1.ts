@@ -33,9 +33,9 @@ assert(envs(az).includes("AZURE_OPENAI_RESOURCE_NAME"), "resource-name config fi
 assert(envs(az).includes("AZURE_OPENAI_BASE_URL"), "full base-URL config field present");
 assert(envs(az).includes("AZURE_OPENAI_API_VERSION"), "api-version config field present");
 
-console.log("\n[3] Google Vertex AI = Gemini Enterprise — key OR ADC (project + location + credentials)");
+console.log("\n[3] Gemini Enterprise (formerly Vertex AI) — OAuth via gcloud ADC, or key/service-account");
 const vx = find("google-vertex");
-assert(vx && vx.env === "GOOGLE_CLOUD_API_KEY", "vertex uses omp's GOOGLE_CLOUD_API_KEY (not the wrong VERTEX_API_KEY)");
+assert(vx && vx.env === "GOOGLE_CLOUD_API_KEY", "Gemini Enterprise uses omp's GOOGLE_CLOUD_API_KEY / ADC (not the wrong VERTEX_API_KEY)");
 assert(envs(vx).includes("GOOGLE_CLOUD_PROJECT") && envs(vx).includes("GOOGLE_CLOUD_LOCATION"), "project + location fields for ADC");
 assert(envs(vx).includes("GOOGLE_APPLICATION_CREDENTIALS"), "service-account JSON (ADC) field present");
 
