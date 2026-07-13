@@ -18,6 +18,7 @@ import { ACPClient } from "./acp.ts";
 import { AGENT_BUILDER_POLICY, BUILD_POLICY, DELEGATION_POLICY, ENGAGEMENT_POLICY, PREVIEW_POLICY, SLASH_COMMAND_POLICY } from "../harness/prompt/assembler.ts";
 import { currentWorkspace } from "./workspace.ts";
 import { previewActivityLabel } from "./preview_activity.ts"; // P-PREVIEW.6a (ADR-0153): reviewing/testing pill
+import { extractToolImages } from "./renderer/chat_images.ts"; // P-IMG.1 (ADR-0208): images out of tool results
 import { learnFromTurn, recallPreamble } from "./personal.ts";
 import { buildUserTurnPreamble } from "./preamble.ts";
 import { ChatGate } from "./chat_gate.ts";
@@ -159,6 +160,10 @@ export type ChatEvent =
   // expandable code/diff preview — a write's `content`, or an edit's `oldText`/`newText` (rendered as a
   // diff). Bounded server-side. Absent for tools with no authored code (read/search/bash command shown as detail).
   | { type: "tool"; name: string; detail: string; code?: { path: string; content?: string; oldText?: string; newText?: string; patch?: string } }
+  // P-IMG.1 (ADR-0208): a tool result carried image content (generated image, chart, rendered figure). The
+  // images are validated + capped in extractToolImages before this event is emitted; the UI renders them
+  // inline in the reply with a download + "send to preview" (for markup) affordance.
+  | { type: "tool-image"; images: { dataUrl: string; mimeType: string }[]; tool?: string; title?: string }
   | { type: "subagent"; id: string; agent: string; title: string; assignments: string[] }
   | { type: "block"; tool: string; reason: string; severity: string; findings: string; id?: string; quarantined?: boolean; command?: string; detail?: string }
   | { type: "permission"; id: string; tool: string; detail: string; options: { optionId: string; name: string; kind?: string }[]; url?: string; egress?: boolean; localFile?: boolean; exec?: boolean; program?: string; reason?: string; danger?: boolean }
@@ -482,7 +487,15 @@ class Backend {
             // and is never mistaken for a security denial. (toolFailureReason is pure; see tool_failure.ts.)
             // P-TOOLFAIL.2 (ADR-0163): also carry the COMMAND the call attempted + the full error
             // text, so the renderer's collapsed toolbox badge can expand into an honest per-action view.
-            case "tool_call_update": if (u.status === "failed" || u.status === "rejected") this.emit({ type: "block", tool: String(u.kind ?? "tool"), reason: toolFailureReason(u).reason, command: toolFailureCommand(u) || undefined, detail: toolFailureDetail(u) || undefined, severity: "low", findings: "", quarantined: false }); break;
+            case "tool_call_update": {
+              if (u.status === "failed" || u.status === "rejected") { this.emit({ type: "block", tool: String(u.kind ?? "tool"), reason: toolFailureReason(u).reason, command: toolFailureCommand(u) || undefined, detail: toolFailureDetail(u) || undefined, severity: "low", findings: "", quarantined: false }); break; }
+              // P-IMG.1 (ADR-0208): surface image output from a tool result (a generated image, a rendered
+              // chart, etc.). extractToolImages validates every block through the strict image-data-URL gate
+              // and caps count/bytes, so a malformed or oversized/script-bearing block is dropped fail-closed.
+              const imgs = extractToolImages((u as { content?: unknown }).content);
+              if (imgs.length) this.emit({ type: "tool-image", images: imgs.map((i) => ({ dataUrl: i.dataUrl, mimeType: i.mimeType })), tool: String(u.kind ?? "tool"), title: typeof u.title === "string" ? u.title : undefined });
+              break;
+            }
             case "usage_update": this.emit({ type: "usage", used: Number(u.used ?? 0), size: Number(u.size ?? 0), cost: Number(u.cost?.amount ?? 0) }); break;
             case "available_commands_update": this.commands = u.availableCommands ?? []; break;
             case "config_option_update": if (u.configOptions) { this.configOptions = u.configOptions; this.syncModelEnv(); } break;

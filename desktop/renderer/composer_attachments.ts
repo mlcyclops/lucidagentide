@@ -9,42 +9,24 @@
 // accepts `(text|image)[]` content (the preview_screenshot tool proves the round-trip).
 
 import { esc } from "./format.ts";
+// P-IMG.1 (ADR-0208): the strict image-data-URL primitives moved to a shared, server-importable module so
+// dev.ts/acp_backend.ts can reuse them without pulling this DOM-touching file into the server typecheck.
+// Re-exported here so every existing `import { parseImageDataUrl, ... } from "./composer_attachments.ts"`
+// (demos, tests) keeps working unchanged.
+import { ALLOWED_IMAGE_MIME, base64Bytes, isAllowedImageMime, parseImageDataUrl } from "./image_data_url.ts";
+export { ALLOWED_IMAGE_MIME, base64Bytes, isAllowedImageMime, parseImageDataUrl };
 
 export interface Attachment { id: string; dataUrl: string; mimeType: string; name?: string; bytes: number }
 /** The omp/ACP image content block. `data` is base64 WITHOUT the `data:...;base64,` prefix. */
 export interface ImageBlock { type: "image"; data: string; mimeType: string }
 
-export const ALLOWED_IMAGE_MIME = ["image/png", "image/jpeg", "image/webp", "image/gif"] as const;
 export const MAX_ATTACHMENTS = 6;
 export const MAX_ATTACHMENT_BYTES = 12 * 1024 * 1024; // 12 MB decoded, per image
-
-// A strict image data-URL shape: only image/(png|jpeg|jpg|webp|gif), base64, and the base64 alphabet — so an
-// attacker-controlled string can never smuggle quotes/markup even if a data URL is ever interpolated.
-const DATA_URL_RE = /^data:(image\/(?:png|jpe?g|webp|gif));base64,([A-Za-z0-9+/=]+)$/i;
-
-export function isAllowedImageMime(mime: string): boolean {
-  return (ALLOWED_IMAGE_MIME as readonly string[]).includes((mime || "").toLowerCase());
-}
-
-/** Parse + VALIDATE an image data URL. Returns { mimeType, base64 } or null (rejects non-image / malformed). */
-export function parseImageDataUrl(dataUrl: string): { mimeType: string; base64: string } | null {
-  const m = DATA_URL_RE.exec((dataUrl || "").trim());
-  if (!m) return null;
-  const mime = m[1].toLowerCase() === "image/jpg" ? "image/jpeg" : m[1].toLowerCase();
-  return { mimeType: mime, base64: m[2] };
-}
 
 /** The omp image content block for a data URL; null for a bad/non-image URL. */
 export function dataUrlToImageBlock(dataUrl: string): ImageBlock | null {
   const p = parseImageDataUrl(dataUrl);
   return p ? { type: "image", data: p.base64, mimeType: p.mimeType } : null;
-}
-
-/** Approx decoded byte size of a base64 payload (4 chars → 3 bytes, minus padding). */
-export function base64Bytes(b64: string): number {
-  const len = (b64 || "").length;
-  const pad = b64.endsWith("==") ? 2 : b64.endsWith("=") ? 1 : 0;
-  return Math.max(0, Math.floor((len * 3) / 4) - pad);
 }
 
 /** Validate a candidate against the type/size/count limits and build an Attachment (fail-closed). */

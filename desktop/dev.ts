@@ -64,6 +64,8 @@ import { egressAllowAllManaged, egressDecision, egressPosture } from "./egress_p
 import { loadWhitelist, removeEntry, saveWhitelist, setPosture, upsertEntry, type WhitelistEntry } from "./network_whitelist.ts"; // P-NETWL.2/.5: whitelist CRUD + posture
 import { readPreviewFile, toFsPath } from "./preview_file.ts"; // P-PREVIEW.4: read a local file's content for the preview
 import { PREVIEW_FRAME_CSP } from "./preview_resolve.ts"; // P-PREVIEW.4b: per-frame CSP for the served preview doc
+import { parseImageDataUrl } from "./renderer/image_data_url.ts"; // P-IMG.1 (ADR-0208): strict image gate
+import { previewImageHtml } from "./renderer/chat_images.ts"; // P-IMG.1 (ADR-0208): image → preview wrapper
 import { inlinePreviewAssets } from "./preview_inline.ts"; // P-PREVIEW.4c: fold a multi-file app's relative assets inline
 import { injectPreviewBridge } from "./preview_bridge.ts"; // P-PREVIEW.6b (ADR-0153): read-only DOM-inspect bridge
 import { InspectRelay } from "./preview_inspect_relay.ts"; // P-PREVIEW.6b: agent preview_inspect ↔ renderer relay
@@ -418,7 +420,11 @@ function gitChangeInputs(repo: string): { numstat: string; nameStatus: string; r
 // Map keyed by oauthId — lets us look up a running broker to send a device code to its stdin
 // (xAI, GitHub, etc. use device-authorization flows where the user copies a code from the browser).
 const oauthBrokers = new Map<string, ReturnType<typeof Bun.spawn>>();
-function startOauthBroker(oauthId: string): Promise<{ started: boolean; url: string; output: string }> {
+// GitHub Copilot's broker (ADR-0207) begins with an `onPrompt` for the GitHub Enterprise domain (blank =
+// github.com) and BLOCKS on stdin before it ever prints the device URL. So for github-copilot we must feed
+// that first line up front, or the login hangs at the prompt and no URL surfaces. `promptAnswer` is that
+// line (the GHE domain, or "" for github.com); it's written to stdin immediately after spawn.
+function startOauthBroker(oauthId: string, promptAnswer?: string): Promise<{ started: boolean; url: string; output: string }> {
   let proc: ReturnType<typeof Bun.spawn>;
   try { proc = Bun.spawn([ompBin(), "auth-broker", "login", oauthId], { stdout: "pipe", stderr: "pipe", stdin: "pipe" }); }
   // stdin: "pipe" (NOT "ignore") — the broker reads stdin as a fallback for pasting the auth code.
@@ -429,6 +435,11 @@ function startOauthBroker(oauthId: string): Promise<{ started: boolean; url: str
   // so an internal exception/stack never reaches the renderer (this object is returned via json()).
   catch (e) { console.error(`[oauth] broker spawn failed for ${oauthId}:`, e); return Promise.resolve({ started: false, url: "", output: "could not start login" }); }
   oauthBrokers.set(oauthId, proc);
+  // Answer the broker's leading prompt (Copilot's enterprise-domain question) so the device URL can appear.
+  if (promptAnswer !== undefined) {
+    const sink = proc.stdin;
+    if (sink && typeof sink !== "number") { try { sink.write(new TextEncoder().encode(promptAnswer.trim() + "\n")); } catch { /* broker may have exited */ } }
+  }
   proc.exited.finally(() => { if (oauthBrokers.get(oauthId) === proc) oauthBrokers.delete(oauthId); });
   // On a SUCCESSFUL login the credential lands in omp's vault, but the already-running omp child
   // built its model list at spawn and won't see it. Respawn so the new provider's models surface
@@ -1561,9 +1572,15 @@ const server = Bun.serve({
         return json({ ok: true, data: providerAuth() });
       }
       if (p === "/api/auth/oauth" && req.method === "POST") {
-        const { oauthId } = await readBody<{ oauthId?: unknown }>(req);
+        const { oauthId, promptAnswer } = await readBody<{ oauthId?: unknown; promptAnswer?: unknown }>(req);
+        // GitHub Copilot's broker opens with an enterprise-domain prompt on stdin (blank = github.com); feed
+        // it so the device URL surfaces. Other providers don't read a leading prompt, so leave it undefined.
+        const id = String(oauthId);
+        const answer = id === "github-copilot"
+          ? (typeof promptAnswer === "string" ? promptAnswer : "")
+          : (typeof promptAnswer === "string" ? promptAnswer : undefined);
         // omp owns the secure OAuth flow; the broker stays alive + drained until the callback lands.
-        return json({ ok: true, data: await startOauthBroker(String(oauthId)) });
+        return json({ ok: true, data: await startOauthBroker(id, answer) });
       }
       // Device-authorization flow: xAI "Grok Build", GitHub device flow, etc. The user copies a code
       // from the provider's browser page and pastes it here; we forward it to the broker's stdin.
@@ -1576,6 +1593,22 @@ const server = Bun.serve({
         const { oauthId } = await readBody<{ oauthId?: unknown }>(req);
         Bun.spawnSync([ompBin(), "auth-broker", "logout", String(oauthId)], { timeout: 4000 });
         return json({ ok: true, data: providerAuth() });
+      }
+      // P-IMG.1 (ADR-0208): "Send to preview" for a chat image. Validate the image through the strict gate,
+      // write a self-contained wrapper HTML (image embedded as a data: URI — allowed by the preview frame CSP)
+      // into the workspace, and hand back its path. The existing local-file preview pipeline then renders it
+      // in the iframe with the markup canvas overlaid, so the user can annotate + screenshot → chat to iterate.
+      if (p === "/api/preview/image" && req.method === "POST") {
+        const { dataUrl } = await readBody<{ dataUrl?: unknown }>(req);
+        const parsed = parseImageDataUrl(typeof dataUrl === "string" ? dataUrl : "");
+        if (!parsed) return json({ ok: false, error: "not a valid PNG, JPEG, WebP or GIF image" });
+        const html = previewImageHtml(`data:${parsed.mimeType};base64,${parsed.base64}`);
+        if (!html) return json({ ok: false, error: "could not render the image for preview" });
+        const dir = join(currentWorkspace(), ".omp", "images");
+        mkdirSync(dir, { recursive: true });
+        const outPath = join(dir, `img_${randomBytes(6).toString("hex")}.html`);
+        writeFileSync(outPath, html, "utf8");
+        return json({ ok: true, data: { path: outPath } });
       }
       // AskSage gov gateway (ADR-0007)
       if (p === "/api/asksage") {

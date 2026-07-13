@@ -14200,3 +14200,109 @@ ADR-0205 (the KG Pack arc this monetizes - P-KGPACK.4 import gate + .5 storefron
 ADR-0098/P-SKILLREG.1 (the public-seam signed-install pattern mirrored), ADR-0068/0069/0086 (managed-config /
 private-IP / BUSL), ADR-0135 (secret-via-vault/env, extended to Stripe/Firebase keys), the existing Firebase
 Hosting (`lucid-agent.web.app`), and CLAUDE.md invariants #1/#2/#3/#5/#7/#9 + keystone #2.
+
+## ADR-0207 — P-PROV.1: first-party enterprise providers (Azure OpenAI, GitHub Copilot OAuth, Gemini Enterprise / Vertex)
+
+**Status:** Accepted (2026-07-13).
+
+**Context.** The Settings → Providers UI exposed a fixed set of providers (OpenAI, Google/Gemini, Anthropic, xAI,
+Perplexity + third-party aggregators), but the underlying runtime (omp / `@oh-my-pi/pi-ai` 16.1.x) natively
+supports several enterprise providers the UI never surfaced, and its provider descriptor carried exactly ONE env
+var (`env`) — insufficient for providers that need multiple config values. Three concrete gaps bit real users:
+- **Azure OpenAI** (omp provider `azure`, stream `azure-openai-responses`): many enterprises consume GPT models
+  through their own Azure tenant. omp reads `AZURE_OPENAI_API_KEY` **plus** `AZURE_OPENAI_RESOURCE_NAME`
+  (→ `https://<name>.openai.azure.com/openai/v1`) or a full `AZURE_OPENAI_BASE_URL`, `AZURE_OPENAI_API_VERSION`
+  (default `v1`), and an optional `AZURE_OPENAI_DEPLOYMENT_NAME_MAP` — more than one env, so the one-env descriptor
+  couldn't express it.
+- **GitHub Copilot** (omp broker `github-copilot`): the Business/Enterprise Copilot add-on is the "easy button"
+  many orgs already own. omp ships a real device-code OAuth for it — but its broker's `login` flow FIRST issues an
+  `onPrompt` for the GitHub Enterprise domain (blank = github.com) and BLOCKS on stdin before it prints the device
+  URL, so a naive `auth-broker login github-copilot` spawn hangs at the prompt and no URL ever surfaces.
+- **Gemini Enterprise:** the existing "Google · Gemini" OAuth (`google-gemini-cli`) ALREADY onboards Workspace /
+  standard-tier accounts — but only when `GOOGLE_CLOUD_PROJECT` (or `GOOGLE_CLOUD_PROJECT_ID`) is set; without it
+  omp aborts non-personal accounts with *"This account requires setting GOOGLE_CLOUD_PROJECT"*. LUCID never exposed
+  that env, which is exactly why users' "Enterprise OAuth" failed. Separately, omp's `google-vertex` provider is
+  true Gemini Enterprise on Vertex (auth via `GOOGLE_CLOUD_API_KEY`, OR ADC — a service-account JSON via
+  `GOOGLE_APPLICATION_CREDENTIALS` or `gcloud auth application-default login` — plus project + location).
+
+A user-supplied guide proposed adding a `vertex` card keyed on `VERTEX_API_KEY` with `canOauth:false`. That env
+name is wrong (omp reads `GOOGLE_CLOUD_API_KEY` / ADC, never `VERTEX_API_KEY`), so we followed omp's real
+resolution instead of the guide verbatim.
+
+**Decision.** Extend the provider descriptor (`desktop/auth_status.ts`) with an optional `fields: ProviderField[]`
+of EXTRA config env vars, and allow an empty primary `env` for OAuth-only providers. Crucially, an extra field is
+just another omp-read env var, so it rides the SAME `setKey` → `process.env` → spawned-omp seam as the primary key
+(`applyEnv` reapplies all on startup; `/api/auth/key` restarts omp so new provider models surface) — **no new
+storage, no new save path.** `providerAuth()` reports each field's status: a `secret` field masks to `last4` like
+the primary key; a non-secret config value (project id, resource name, region, ADC path) is echoed back so the
+Settings input pre-fills. New/updated majors: `azure` (key + resource/base/version/deployment-map fields),
+`github-copilot` (OAuth-only, `env:""`), `google-vertex` (key or ADC: project/location/credentials fields), and
+`google` gains a `GOOGLE_CLOUD_PROJECT` field. For Copilot's leading enterprise-domain prompt, `startOauthBroker`
+gained an optional `promptAnswer` written to the broker's stdin immediately after spawn (default `""` = github.com
+for `github-copilot`), so the device URL surfaces; the renderer drives Copilot in a dedicated two-step branch
+(collect the optional GHE domain → start sign-in → show the one-time code the user enters on GitHub's device page)
+rather than the paste-code-back UI the other device-flow providers use. The frozen prompt prefix, the scan gate,
+and every trust label are untouched — this is provider plumbing, not a security-surface change (invariant #1:
+extend omp, never fork it — all three providers are omp-native).
+
+**Verification.** `desktop/auth_status.test.ts` (6 tests: the descriptor set + secret-masked/non-secret-echoed
+field reporting) and `demo-P-PROV.1` green (proves the envs match omp's real resolution, incl. the corrected
+`GOOGLE_CLOUD_API_KEY`, and that a saved key reports set+last4 while a config value pre-fills). Server + renderer
+tsc green (the renderer program's pre-existing missing-`electron`-types gap in the CI-less sandbox aside), license
+clean. The live OAuth device dance + real Azure/Vertex model surfacing require a provider account + the packaged
+app and are QA-gated in-app.
+
+### Relates to
+
+ADR-0007 (AskSage gateway card pattern), ADR-0135 (Local Providers secret-via-vault/env, the closest precedent),
+ADR-0136/P-VISION.1 (the safe-input idioms reused), the omp broker closed-registry finding (P-MCP.2 spike), and
+CLAUDE.md invariants #1 (extend omp), #6 (frozen prefix untouched), #7 (trust labels unchanged).
+
+## ADR-0208 — P-IMG.1: generated / tool-produced images inside the chat reply (inline · download · push-to-preview)
+
+**Status:** Accepted (2026-07-13).
+
+**Context.** Images only ever flowed user→agent (composer attachments, P-VISION.1) and preview→chat (screenshots).
+When a tool result carried image content (`{type:"image",data,mimeType}`), the result adapter preserved it in
+`payload.nonTextParts` but nothing rendered it — it dead-ended. So an agent/tool that produced an image (a
+generated image, a rendered chart/figure) had no way to show it in the reply, let it be saved, or hand it to the
+Preview panel for markup + iteration. The user specifically wants generated images to render in-console,
+be downloadable, and be pushable to the preview for markup — especially to iterate on image generation.
+
+**Decision.** Surface tool-result images end-to-end, reusing the proven safe idioms:
+- **A DOM-free, server-importable pure core** (`desktop/renderer/chat_images.ts` + the shared
+  `desktop/renderer/image_data_url.ts`). The strict image-data-URL primitives (`parseImageDataUrl` etc.) were
+  extracted from `composer_attachments.ts` into `image_data_url.ts` so BOTH the DOM renderer AND the Bun server
+  (`dev.ts`, `acp_backend.ts`) can import them without dragging a DOM-touching module into the server typecheck.
+  `extractToolImages` lifts images out of a tool result — accepting BOTH the ACP-wrapped
+  `{type:"content",content:{type:"image"}}` and the bare omp `{type:"image"}` shape — and validates every block
+  through that single gate (only `image/(png|jpeg|webp|gif)` + the base64 alphabet; **SVG is refused as a script
+  risk**), capping count + bytes. A tool result is UNTRUSTED, so every malformed/oversized/script-bearing block is
+  dropped fail-closed.
+- **A new `tool-image` ChatEvent.** `acp_backend.ts`'s `tool_call_update` case runs `extractToolImages(u.content)`
+  and emits the validated images. The renderer draws each inline using the EXISTING safe idiom (create an `<img>`,
+  set `img.src` as a DOM PROPERTY — never interpolated into an HTML string), with a Download (blob/anchor idiom,
+  filename from the mime, path-traversal-neutralized) and a "Send to preview".
+- **Push-to-preview via the existing local-file pipeline.** "Send to preview" POSTs the image to
+  `/api/preview/image`, which validates it, writes a SELF-CONTAINED wrapper HTML (the image embedded as a `data:`
+  URI — allowed by the preview frame's `img-src data: blob:` CSP, so zero side-assets and zero network) into the
+  workspace, and returns its path. The unchanged `onPreviewAvailable` → served-iframe path then renders it with the
+  markup canvas overlaid, so the user annotates and Screenshot→chat to iterate — no change to the fragile
+  canvas/screenshot machinery, and the opaque-origin, egress-blocked preview sandbox is preserved.
+
+The result adapter (a frozen contract) is untouched — it already preserved image parts; the new event is a
+parallel, additive path. Nothing enters the frozen prompt prefix; the scan gate is unaffected (images are
+display-side, not model instructions).
+
+**Verification.** `desktop/renderer/chat_images.test.ts` (18 tests: ACP + bare extraction, fail-closed drops for
+SVG/non-base64/oversized, count cap, safe filenames incl. traversal, CSP-safe wrapper with no `<script>`) and
+`demo-P-IMG.1` green. Server + renderer tsc green (modulo the sandbox's missing-`electron`-types gap), the existing
+composer_attachments test + `demo-P-VISION.1` still green after the primitive extraction, license clean. The live
+inline render + preview-markup loop needs the packaged app and is QA-gated in-app.
+
+### Relates to
+
+ADR-0136/P-VISION.1 (the safe `img.src`-property + strict-data-URL idioms reused; its primitives now shared),
+ADR-0096/P-PREVIEW.* (the local-file preview pipeline + markup canvas + screenshot-to-chat reused), ADR-0104/
+P-CHAT.1 (the tool-event stream this extends), and CLAUDE.md invariants #5 (untrusted content stays delimited /
+fail-closed) and the frozen-contract rule (result_adapter left untouched).
