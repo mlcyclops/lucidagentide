@@ -14457,3 +14457,31 @@ the other `shell`-backed affordances (capturePreview, revealPath).
 
 The existing `lucid:revealPath` IPC (#115, extended here to file-level reveal), ADR-0104/P-CHAT.1 (the tool-step
 code preview bar this adds the button to), and ADR-0022 H1 (path-existence guard on the IPC).
+
+-----
+
+## ADR-0213 — P-RELEASE.1: a mistyped release tag must not brick the desktop build
+
+**Status:** Accepted (2026-07-13).
+
+**Context.** The `v1.11.3` release build failed on all three platforms: electron-builder rejected `Invalid
+version: ".1.11.3"`. Root cause was the TAG NAME — it was pushed as `v.1.11.3` (a dot after the `v`), and
+`build-desktop.yml` derived the version with `V="${GITHUB_REF#refs/tags/v}"`, which strips `refs/tags/v` and
+leaves the leading dot (`.1.11.3`). The code was fine; a single mistyped tag character bricked the entire
+cross-platform release build (the failure surfaces only in the tag-triggered `build-desktop.yml`, never in
+the PR CI, so it wasn't caught pre-merge).
+
+**Decision.** Make the version derivation tolerant + fail-safe. Strip `refs/tags/`, then an OPTIONAL leading
+`v`, then an OPTIONAL leading `.` — so `v1.2.3`, `v.1.2.3`, and `1.2.3` all yield `1.2.3`. If the result is
+still not a real semver (`^\d+\.\d+\.\d+`), fall back to the version already committed in `desktop/package.json`
+(the source of truth) with a workflow warning, rather than passing garbage to electron-builder. Non-tag runs
+keep the monotonic `0.1.<run#>`.
+
+**Verification.** The derivation was table-tested against `v1.11.3` / `v.1.11.3` / `1.11.3` (all → `1.11.3`)
+and a garbage tag (→ package.json fallback); the workflow YAML parses. The real cross-platform build is
+re-exercised when the corrected tag is pushed.
+
+### Relates to
+
+`build-desktop.yml` (the tag-triggered installer build), electron-builder's `fixVersionField` semver
+validation, and the auto-update monotonic-version requirement the version stamp exists for.
