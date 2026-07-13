@@ -14201,6 +14201,60 @@ ADR-0098/P-SKILLREG.1 (the public-seam signed-install pattern mirrored), ADR-006
 private-IP / BUSL), ADR-0135 (secret-via-vault/env, extended to Stripe/Firebase keys), the existing Firebase
 Hosting (`lucid-agent.web.app`), and CLAUDE.md invariants #1/#2/#3/#5/#7/#9 + keystone #2.
 
+-----
+
+## ADR-0207 - Headless KG-pack builder (`tools/build_kg_pack.ts`)
+
+**Date:** 2026-07-10
+**Status:** Accepted - BUILT. A build TOOL, not a runtime/security change: it composes the already-shipped,
+already-tested KG-pack pipeline behind a CLI so the whole product line can be authored repeatably.
+**Increment:** a `tools/` utility (BUSL-headered first-party). No new trust path, no new schema, no ADR to the
+frozen contracts.
+
+### Context
+
+Authoring a role KG Pack is an in-app operation today: Knowledge -> "seed from export" compiles every
+conversation into KG pages with a model call each (P-KGPACK.3/.6), then "export pack" writes the signed
+`.lkgpack` (P-KGPACK.4). The product line is a whole folder of role datasets
+(`LucidAgentDesigns/KG Packs/<Role>/`, ~11 of them, each a synthetic ChatGPT export). Building them one at a
+time by clicking through the app is slow and non-repeatable. We want `make kg-pack ROLE=bd` (and `--all`).
+
+### Decision - compose the shipped pieces behind a CLI; change nothing about the gates
+
+`tools/build_kg_pack.ts` runs the EXACT same pipeline the `/api/kb/ingest-batch` + `/api/kb/pack/export`
+routes run, with zero new trust path:
+`readKbSources` (the app's export loader) -> `createKg` -> `ingestSourcesIntoKg` (fail-closed scan + compile,
+the model injected as `backend.complete` - the SAME omp-spawning backend the LUCID session uses, resolved to
+the app's most-used model exactly like the route) -> `exportKgPack` (Ed25519 sign if a key is configured) ->
+`importKgPack` (verify + re-scan round-trip, proving the pack installs). Key choices:
+- **Isolated build workspace.** It points `LUCID_KB_DB_PATH`/`LUCID_KG_REGISTRY_PATH` at a temp dir so a build
+  NEVER touches the user's `~/.omp` working graphs; the product is the emitted `.lkgpack(.zip)`, written next
+  to its source dataset by default.
+- **A build catalog** (one entry per role folder) carries the pack name/role/description/licensing and the
+  stable product `id`. The five ids that already have a storefront row (`desktop/renderer/kg_packs.ts`) match,
+  so the marketplace object path `packs/<id>.lkgpack.zip` lines up with what the builder writes. Every field
+  is `--`-overridable per run. The BD Capture Manager (`AI TECH BD` / `senior_dow_dod_bd`) is a NEW pack not
+  yet in the storefront (a follow-up if it ships).
+- **Cost controls.** `--limit N` caps the model calls (smoke); `--dry-run` loads + counts the conversations
+  with NO model calls; `--all` walks the catalog sequentially. Pure helpers (arg parsing, catalog resolution,
+  slug prediction) are unit-tested; the heavy KB/model modules load dynamically so the tests + `--dry-run`
+  never spawn omp.
+
+### Invariants preserved
+
+Extend-not-fork (#1): the tool only calls existing exports; no pipeline code changed. No Python (#2). Fail-
+closed (#3): compilation re-scans every page; a poisoned doc quarantines without stopping the batch; the
+export is verified by a re-scan import round-trip before it is trusted. Untrusted content stays delimited DATA
+through compile (#5). Trust labels stay the closed set (#7). Stable ids (#9): the catalog `id` is the durable
+product key. BUSL header on the new source (licensing/commit hygiene).
+
+### Relates to
+
+ADR-0205 (P-KGPACK.3 seed / .4 export+import gate / .6 background seed - the pipeline this drives), ADR-0206
+(P-KGMARKET - the storefront/entitlement ids this aligns to), and CLAUDE.md invariants #1/#2/#3/#5/#7/#9.
+
+-----
+
 ## ADR-0210 — P-PROV.1: first-party enterprise providers (Azure OpenAI, GitHub Copilot OAuth, Gemini Enterprise / Vertex)
 
 **Status:** Accepted (2026-07-13).
@@ -14306,3 +14360,30 @@ ADR-0136/P-VISION.1 (the safe `img.src`-property + strict-data-URL idioms reused
 ADR-0096/P-PREVIEW.* (the local-file preview pipeline + markup canvas + screenshot-to-chat reused), ADR-0104/
 P-CHAT.1 (the tool-event stream this extends), and CLAUDE.md invariants #5 (untrusted content stays delimited /
 fail-closed) and the frozen-contract rule (result_adapter left untouched).
+-----
+
+## ADR-0209 — P-SEC.1: caught exceptions never surface to the client (CWE-209/497)
+
+**Status:** Accepted (2026-07-13).
+
+**Context.** CodeQL's `js/stack-trace-exposure` flagged the desktop control-plane server (`desktop/dev.ts`):
+~two dozen `catch` blocks returned `e.message` (or `String(e)`) to the browser, all converging on the shared
+`json()` responder. The plane is loopback-only (ADR-0022 H1) and these were messages, not stacks, so the
+real-world exposure is low — but a caught exception's text can still carry internal paths/detail, and the
+codebase's own convention is "log the real error server-side; hand the client a generic message."
+
+**Decision.** Add one choke point — `clientError(e, generic)` — that `console.error`s the FULL error
+server-side and returns ONLY `generic`, a curated, exception-INDEPENDENT string. Every `catch` that surfaces an
+error to the browser routes through it, so no response string derives from a caught exception and the taint
+flow into `json()` is cut on every path. Remaining `error:` values come from validation results or static
+strings (application-level, not exceptions), which the query does not flag. Clients get a stable, useful
+message; the full error still reaches the dev-server console.
+
+**Verification.** Server `tsc` + full `make test` green (2219 pass, 0 fail); no test asserts these strings. The
+17 converted sites span agent import/save/export/share, n8n export/push, local-provider save, Figma import, the
+reachability probe, TTS voices/synth, KG list/create, and collab relay/share start.
+
+### Relates to
+
+ADR-0022 (H1 loopback-only control plane — the mitigating context), CWE-209/497, and the codebase convention of
+logging server-side + returning a generic client message.
