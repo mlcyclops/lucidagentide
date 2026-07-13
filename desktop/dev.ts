@@ -192,7 +192,7 @@ function serveRelay(host: string, port: number): { ok: boolean; error?: string }
   try {
     collabRelay = startRelayServer({ port, hostname: host, authorizeBind: (h, p) => authorizeRelayBind(h, p, mc) });
     return { ok: true };
-  } catch (e) { collabRelay = null; return { ok: false, error: String((e as Error)?.message ?? e) }; }
+  } catch (e) { collabRelay = null; return { ok: false, error: clientError(e, "could not start the relay server") }; }
 }
 
 function stopRelay(): void { try { collabRelay?.stop(); } catch { /* already gone */ } collabRelay = null; }
@@ -314,6 +314,16 @@ const json = (data: unknown) =>
     headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
   });
 
+// P-SEC.1 (ADR-0209): a caught exception's message/stack must never flow into a client response
+// (CWE-209/497 — CodeQL js/stack-trace-exposure). This control plane is loopback-only (ADR-0022 H1), so the
+// real-world exposure is low, but we keep the boundary clean: log the FULL error server-side (dev console)
+// and return a curated message that derives ONLY from `generic`, never from `e`. Every `catch` that surfaces
+// an error to the browser routes through here, so no exception text reaches the shared json() sink.
+function clientError(e: unknown, generic: string): string {
+  console.error(`[dev] ${generic}:`, e);
+  return generic;
+}
+
 // Typed read of a POST JSON body. Bun types `req.json()` as `unknown`; this helper is the single
 // place that cast lives, so each handler below names the exact shape it expects and stays strict.
 // Fields the handler funnels through String()/typeof guards are left `unknown` (the guard narrows them).
@@ -361,7 +371,7 @@ async function gatedAgentImport(specJson: string, notes: string[]): Promise<Gate
     saveSpecTrust(currentWorkspace(), r.spec.spec_id, { trustLabel: r.trustLabel, reason: r.reason });
     return { ok: true, data: { spec: r.spec, trustLabel: r.trustLabel, canRun: r.canRun, reason: r.reason, findings: r.findings.length, setup: setupInstructions(r.spec), notes } };
   } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
+    const msg = clientError(e, "could not import the agent");
     return { ok: false, error: msg, data: { error: msg } };
   }
 }
@@ -910,7 +920,7 @@ const server = Bun.serve({
             saveSpecFile(root, v.spec!);
             return json({ ok: true, data: { saved: true, spec_id: v.spec!.spec_id } });
           } catch (e) {
-            return json({ ok: false, error: String((e as { message?: unknown })?.message ?? e) });
+            return json({ ok: false, error: clientError(e, "could not save the agent spec") });
           }
         }
         const id = url.searchParams.get("id");
@@ -932,7 +942,7 @@ const server = Bun.serve({
             const saved = upsertLocalProvider(b.provider as LocalProviderDef);
             return json({ ok: true, data: { saved: true, id: saved.id } });
           } catch (e) {
-            const msg = String((e as { message?: unknown })?.message ?? e);
+            const msg = clientError(e, "could not save the provider");
             return json({ ok: false, error: msg, data: { errors: [msg] } });
           }
         }
@@ -1007,7 +1017,7 @@ const server = Bun.serve({
           const hasDesign = existsSync(designDocPath(currentWorkspace()));
           return json({ ok: true, data: { path: outPath, fileName, frames: board.length, hasDesign } });
         } catch (e) {
-          return fail(`Couldn't import the Figma file: ${String((e as { message?: unknown })?.message ?? e).slice(0, 160)}`);
+          return fail(clientError(e, "Couldn't import the Figma file — check the file URL/key and that your token can read it."));
         }
       }
       // P-FIGMA.2 / P-DESIGN.1 (ADR-0154): read the workspace DESIGN.md so the renderer can pop it out in the
@@ -1027,7 +1037,7 @@ const server = Bun.serve({
           const r = await fetch(target, { method: "GET", redirect: "manual", signal: AbortSignal.timeout(4500) });
           return json({ ok: true, data: { reachable: true, status: r.status, authed: r.status === 401 || r.status === 403 } });
         } catch (e) {
-          return json({ ok: true, data: { reachable: false, error: String((e as { message?: unknown })?.message ?? e).slice(0, 160) } });
+          return json({ ok: true, data: { reachable: false, error: clientError(e, "not reachable — check the URL and that the endpoint is up") } });
         }
       }
       // P-AGENT.6: enterprise export — compile the spec + write a portable, tamper-evident bundle (with a
@@ -1044,7 +1054,7 @@ const server = Bun.serve({
           const written = writeExportPackage(pkg, dir);
           return json({ ok: true, data: { dir, target, digest: pkg.manifest.digest, files: written.length } });
         } catch (e) {
-          return json({ ok: false, error: String((e as { message?: unknown })?.message ?? e) });
+          return json({ ok: false, error: clientError(e, "could not export the agent bundle") });
         }
       }
       // P-AGENT.9: SHARE — write a portable .lucid-agent.json (spec + setup guidance + spec digest; NEVER
@@ -1064,7 +1074,7 @@ const server = Bun.serve({
           writeFileSync(join(dir, `${base}.SETUP.md`), file.setup_md);
           return json({ ok: true, data: { path: join(dir, fileName), fileName, json: text, setup: file.setup_md, digest: file.spec_digest } });
         } catch (e) {
-          const msg = e instanceof Error ? e.message : String(e);
+          const msg = clientError(e, "could not write the agent share");
           return json({ ok: false, error: msg, data: { error: msg } });
         }
       }
@@ -1150,7 +1160,7 @@ const server = Bun.serve({
           const push = connectorStatus("n8n");
           return json({ ok: true, data: { path: join(dir, fileName), fileName, json: text, pushAvailable: push.installed, pushNote: push.note } });
         } catch (e) {
-          const msg = e instanceof Error ? e.message : String(e);
+          const msg = clientError(e, "could not write the n8n workflow");
           return json({ ok: false, error: msg, data: { error: msg } });
         }
       }
@@ -1172,7 +1182,7 @@ const server = Bun.serve({
           const r = runConnector("n8n", "push", file);
           return json({ ok: r.ok, data: { ok: r.ok, detail: r.detail, url: r.url ?? "" }, error: r.ok ? undefined : r.detail });
         } catch (e) {
-          const msg = e instanceof Error ? e.message : String(e);
+          const msg = clientError(e, "could not push to n8n");
           return json({ ok: false, error: msg, data: { error: msg } });
         }
       }
@@ -1293,7 +1303,7 @@ const server = Bun.serve({
         const v = voiceSettings();
         if (!key) return json({ ok: true, data: { voices: [], favorites: v.ttsVoiceFavorites, selected: v.ttsVoice, note: "Add your ElevenLabs API key (Settings → Voice) to list voices." } });
         try { return json({ ok: true, data: { voices: await listElevenVoices({ apiKey: key }), favorites: v.ttsVoiceFavorites, selected: v.ttsVoice } }); }
-        catch (e) { return json({ ok: true, data: { voices: [], favorites: v.ttsVoiceFavorites, selected: v.ttsVoice, note: `Could not list voices: ${String((e as Error)?.message ?? e)}` } }); }
+        catch (e) { return json({ ok: true, data: { voices: [], favorites: v.ttsVoiceFavorites, selected: v.ttsVoice, note: clientError(e, "Could not list voices — check the provider key/URL.") } }); }
       }
       // P-VOICE.1: transcribe recorded mic audio → text. Provider from settings: elevenlabs (cloud Scribe)
       // or whisper (offline OpenAI-compatible server). The transcript is ordinary user input (scanned on send).
@@ -1336,7 +1346,7 @@ const server = Bun.serve({
           const audioB64 = r.audio ? Buffer.from(r.audio).toString("base64") : null;
           return json({ ok: true, data: { audioB64, mime: "audio/wav", note: audioB64 ? "" : r.note } });
         } catch (e) {
-          return json({ ok: true, data: { audioB64: null, mime: "audio/mpeg", note: `TTS failed: ${String((e as Error)?.message ?? e)}` } });
+          return json({ ok: true, data: { audioB64: null, mime: "audio/mpeg", note: clientError(e, "TTS failed — check the provider key/URL.") } });
         }
       }
       // In-app folder browser (works in the browser build AND Electron). Full-tree traversal
@@ -1772,19 +1782,19 @@ const server = Bun.serve({
       if (p === "/api/kb/create" && req.method === "POST") {
         const b = await readBody<{ name?: unknown }>(req);
         try { createKg({ name: String(b.name ?? "") }); }
-        catch (e) { return json({ ok: true, data: kgListView(String((e as Error).message)) }); }
+        catch (e) { return json({ ok: true, data: kgListView(clientError(e, "could not load knowledge graphs")) }); }
         return json({ ok: true, data: kgListView() });
       }
       if (p === "/api/kb/rename" && req.method === "POST") {
         const b = await readBody<{ kgId?: unknown; name?: unknown }>(req);
         try { renameKg(String(b.kgId ?? ""), String(b.name ?? "")); }
-        catch (e) { return json({ ok: true, data: kgListView(String((e as Error).message)) }); }
+        catch (e) { return json({ ok: true, data: kgListView(clientError(e, "could not load knowledge graphs")) }); }
         return json({ ok: true, data: kgListView() });
       }
       if (p === "/api/kb/activate" && req.method === "POST") {
         const b = await readBody<{ kgId?: unknown }>(req);
         try { setActiveKg(String(b.kgId ?? "")); }
-        catch (e) { return json({ ok: true, data: kgListView(String((e as Error).message)) }); }
+        catch (e) { return json({ ok: true, data: kgListView(clientError(e, "could not load knowledge graphs")) }); }
         return json({ ok: true, data: kgListView() });
       }
       // P-KGPACK.3 (ADR-0205): seed a named KG from a folder of AI-vendor conversations or Obsidian markdown.
@@ -1803,7 +1813,7 @@ const server = Bun.serve({
           const name = typeof b.name === "string" ? b.name.trim() : "";
           if (name) { const e = createKg({ name, sourceKind: src.scan.kind, provenance: src.scan.vendor ? `import:${src.scan.vendor}` : "import:obsidian" }); targetId = e.kg_id; kgName = e.name; }
           else { targetId = (typeof b.kgId === "string" && b.kgId) ? b.kgId : (activeKgId() ?? ""); kgName = listKgs().find((k) => k.kg_id === targetId)?.name ?? ""; }
-        } catch (e) { return json({ ok: true, data: { ok: false, error: String((e as Error).message) } }); }
+        } catch (e) { return json({ ok: true, data: { ok: false, error: clientError(e, "could not create or resolve the knowledge graph") } }); }
         if (!targetId) return json({ ok: true, data: { ok: false, error: "No target knowledge graph." } });
         const model = usageLedger().models[0]?.model;
         const started = startKbIngest({
@@ -2033,7 +2043,7 @@ const server = Bun.serve({
           recordCollabShareStarted({ transport: "relay", access: status.allowEdit ? "edit" : "view", roomId: status.roomId, relaySource: status.relaySource });
           return json({ ok: true, data: status });
         }
-        catch (e) { return json({ ok: false, error: String((e as Error)?.message ?? e) }); }
+        catch (e) { return json({ ok: false, error: clientError(e, "could not start the share") }); }
       }
       if (p === "/api/collab/stop" && req.method === "POST") {
         const prev = collabManager.status(); // capture the roomId/access before the share is torn down
