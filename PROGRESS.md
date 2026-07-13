@@ -3463,3 +3463,20 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **verified:** `desktop/renderer/chat_images.test.ts` (18 tests: ACP+bare extraction, fail-closed drops for SVG/non-base64/oversized, count cap, safe filenames incl. traversal, CSP-safe wrapper w/ no `<script>`) + `demo-P-IMG.1` green; `composer_attachments.test.ts` + `demo-P-VISION.1` still green after the primitive extraction; server + renderer tsc + license clean.
 - **stubbed:** the live inline-render + preview-markup loop needs the packaged app (Electron capture) - QA-gated in-app; there is no image-GENERATION provider yet (this is the render/plumbing that ANY image-producing tool now lights up).
 - **next:** wire an image-generation tool/provider (e.g. gpt-image / Imagen) whose output rides this exact path.
+
+**P-LOC.4 - AI-authored lines reach the UI again: lock-free GUI-owned ledger (ADR-0211)**
+- **shipped:** fixed the reported "AI-generated LOC is in the DB but not in the metrics UI." Root cause (traced + two-process-reproduced): AI-LOC was recorded ONLY into `agent_obs.duckdb` by the gate, which holds that DuckDB read-write for the whole omp session; DuckDB is single-writer, so the desktop's READ_ONLY `aiLocSummary()` open lock-failed (`Could not set lock on file … Conflicting lock is held`), the error was swallowed to null, and the "AI-authored code" panel rendered its "none yet" empty state. Fix mirrors turns/security/latency logs: new `desktop/ailoc_log.ts` (write) + `desktop/ailoc_read.ts` (read) = a GUI-owned append-only ledger at `~/.omp/lucid-ailoc.jsonl`. `acp_backend` counts each write/edit's authored `code` with the SAME `linediff` convention the chat chip uses and appends a sample (model/identity/repo from the desktop's own attribution); `aiLocSummary()` now aggregates that lock-free JSONL. The gate's `ai_loc_ledger` DuckDB stays the BI/audit system-of-record (invariant #10 untouched). Best-effort/fail-open, metadata only.
+- **verified:** `desktop/ailoc_log.test.ts` (9) + `demo-P-LOC.4` green; root + server + renderer tsc green; full `make test` green (2234 pass, 0 fail); no test referenced the old DuckDB `aiLocSummary`.
+- **stubbed:** the DuckDB `ai_loc_ledger` is now write-only from the app's perspective (kept for the future BI push); a long-running ledger grows unbounded (read-all per snapshot) - a size cap / rotation is a future follow-up.
+- **next:** P-FSREVEAL.1 - reveal a written/edited file in the OS file manager from the chat.
+
+**P-FSREVEAL.1 - reveal a written/edited file in the OS file manager from the chat feed (ADR-0212)**
+- **shipped:** a written/edited file is one click from the chat to Finder/Explorer/Files, HIGHLIGHTED in its parent folder. New `lucid:showInFolder` IPC → `shell.showItemInFolder` (path-existence guarded), through preload + `bridge.showInFolder`/`canShowInFolder` (false in the browser build). The tool-step code-preview bar (`renderToolCode`) gains a **Reveal** button beside "Open in editor", shown only in the desktop app and only when the step carries a real absolute path; fails soft to a toast otherwise.
+- **verified:** renderer + server tsc green; full `make test` green. The native reveal is Electron-only (`shell.showItemInFolder`) so click→file-manager is QA-gated in the packaged app, like the other shell-backed affordances.
+- **stubbed:** the button lives on the tool-step code preview; surfacing it on the collapsed chip / preview-available events too is a possible follow-up.
+- **next:** none - part of the v1.11.3 bug-fix cut (with the AI-LOC fix + the provider config-field layout fix).
+
+**P-PROV.1 follow-up - provider config-field layout (ADR-0210)**
+- **shipped:** the extra provider config fields (e.g. the Gemini "GCP project ID", Azure resource, Vertex project/location) stacked the label ON TOP of a full-width input instead of squishing a tiny input between the label and the Save/Clear buttons. CSS-only: `.prov-field` wraps with a 100%-basis label and a `flex:1 1 200px` input.
+- **verified:** renderer tsc green; full `make test` green.
+- **next:** none.

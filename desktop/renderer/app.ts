@@ -788,13 +788,30 @@ async function openStepInEditor(code: ToolCode): Promise<void> {
   await openIde({ title: `${name} - patch`, code: code.patch ?? "", language: "diff" });
 }
 
+// P-FSREVEAL.1 (ADR-0212): reveal a written/edited file in the OS file manager, highlighted in its parent
+// folder. Desktop-only (the browser build has no native shell); a missing/deleted file or a browser build
+// fails-soft to a toast. `path` is the absolute path acp_backend resolved for the tool step.
+async function revealInFileManager(path: string): Promise<void> {
+  const ok = await bridge.showInFolder(path).catch(() => false);
+  if (!ok) showToast({ tone: "warn", title: "Couldn't reveal the file", desc: "This opens your file manager in the desktop app, and the file must still exist on disk.", actions: [{ label: "OK" }], timeout: 3200 });
+}
+
 async function renderToolCode(panel: HTMLElement, code: ToolCode): Promise<void> {
   if (panel.dataset.filled) return;
   panel.dataset.filled = "1";
-  // A small bar: the filename + "Open in editor" (expand into the full Monaco panel for context).
+  // A small bar: the filename + "Reveal" (open its folder in the OS file manager) + "Open in editor" (expand
+  // into the full Monaco panel for context).
   const barName = (code.path || "").split(/[\\/]/).pop() || code.path || "code";
-  const bar = el(`<div class="tc-bar"><span class="tc-name">${esc(barName)}</span><button class="tc-open" type="button" data-tip="Open in the editor for full context">Open in editor ${icon("arrowRight", 12)}</button></div>`);
+  // P-FSREVEAL.1 (ADR-0212): a file the agent just wrote/edited is one click from here to Finder/Explorer/
+  // Files, highlighted in its folder — no digging through the tree. Only shown in the desktop app (the browser
+  // build has no native shell), and only when the step carries a real file path.
+  const canReveal = !!code.path && bridge.canShowInFolder();
+  const revealBtn = canReveal
+    ? `<button class="tc-reveal" type="button" data-tip="Reveal in your file manager|Open this file's folder (Finder / Explorer / Files) with the file highlighted.">${icon("folder", 12)} Reveal</button>`
+    : "";
+  const bar = el(`<div class="tc-bar"><span class="tc-name">${esc(barName)}</span>${revealBtn}<button class="tc-open" type="button" data-tip="Open in the editor for full context">Open in editor ${icon("arrowRight", 12)}</button></div>`);
   ($(".tc-open", bar) as HTMLButtonElement).addEventListener("click", (e) => { e.stopPropagation(); void openStepInEditor(code); });
+  if (canReveal) ($(".tc-reveal", bar) as HTMLButtonElement).addEventListener("click", (e) => { e.stopPropagation(); void revealInFileManager(code.path!); });
   panel.appendChild(bar);
   if (code.content !== undefined) {
     const pre = el(`<pre class="tc-code"></pre>`);

@@ -331,6 +331,10 @@ demo-P-EGRESS.2: ## P-EGRESS.2 (ADR-0094): a local-file browser open is labeled 
 demo-P-LOC.3: ## P-LOC.3 (ADR-0095): the AI-authored code ledger is discoverable (command-palette entry) and never silently vanishes (always rendered when a session is active, with an explicit empty state)
 	$(BUN) run desktop/scripts/demo_p_loc_3.ts
 
+.PHONY: demo-P-LOC.4
+demo-P-LOC.4: ## P-LOC.4 (ADR-0211): AI-authored lines reach the UI again - the gate holds agent_obs.duckdb read-write for the whole session, so the desktop's READ_ONLY aiLocSummary() lock-failed -> null -> "none yet" despite rows in the DB. Fix (mirrors turns/security/latency logs): the desktop appends every edit to a GUI-owned JSONL it can read live (same linediff count as the chat chip); the dashboard aggregates that lock-free. Proves count (write/edit/patch) + record (no-op on 0 lines) + read/aggregate roll-up + empty-null
+	$(BUN) run desktop/scripts/demo_p_loc_4.ts
+
 demo-P-PREVIEW.1: ## P-PREVIEW.1 (ADR-0096): in-app browser preview - resolver renders local files the agent builds, gates remote (egress, P-PREVIEW.3), blocks the ambiguous; panel + screenshot-to-chat seam
 	$(BUN) run desktop/scripts/demo_p_preview_1.ts
 

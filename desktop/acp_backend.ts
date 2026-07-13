@@ -19,6 +19,7 @@ import { AGENT_BUILDER_POLICY, BUILD_POLICY, DELEGATION_POLICY, ENGAGEMENT_POLIC
 import { currentWorkspace } from "./workspace.ts";
 import { previewActivityLabel } from "./preview_activity.ts"; // P-PREVIEW.6a (ADR-0153): reviewing/testing pill
 import { extractToolImages } from "./renderer/chat_images.ts"; // P-IMG.1 (ADR-0208): images out of tool results
+import { recordAiLoc } from "./ailoc_log.ts"; // P-LOC.4 (ADR-0211): GUI-owned AI-LOC ledger the dashboard reads
 import { learnFromTurn, recallPreamble } from "./personal.ts";
 import { buildUserTurnPreamble } from "./preamble.ts";
 import { ChatGate } from "./chat_gate.ts";
@@ -442,6 +443,20 @@ class Backend {
                 // omp's default `hashline` edit sends a patch in a single `input` string (kept for completeness).
                 else if (typeof ri.input === "string" && (u.kind === "edit" || /\bedit\b/i.test(String(u.title ?? "")))) code = { path: codePath, patch: clip(ri.input) };
                 this.emit({ type: "tool", name: String(u.kind ?? u.title ?? "tool"), detail: String(u.title ?? ri.command ?? ""), ...(code ? { code } : {}) });
+                // P-LOC.4 (ADR-0211): mirror this authored write/edit into the GUI-owned AI-LOC ledger the
+                // dashboard reads. The gate ALSO records it into agent_obs.duckdb (the BI system-of-record),
+                // but the omp child holds that DuckDB read-write for the whole session, so the desktop can't
+                // read it live — this JSONL is the live-readable copy (same linediff count as the chat chip).
+                if (code) {
+                  const a = attribution();
+                  recordAiLoc({
+                    model: this.activeModel() || lastModel(),
+                    identity: a.identity, identitySource: a.source, repo: currentWorkspace(),
+                    filePath: code.path || undefined, tool: String(u.kind ?? "edit"),
+                    code: { content: code.content, oldText: code.oldText, newText: code.newText, patch: code.patch },
+                    sessionId: this.sessionId ?? undefined,
+                  });
+                }
                 // P-PREVIEW.2 (ADR-0096): if this write/edit produced a browser-previewable file, tell the UI
                 // so it can auto-surface it in the Preview panel. Pure detection (previewablePath); the path
                 // is still gated by the resolver before anything renders.
