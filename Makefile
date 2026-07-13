@@ -445,6 +445,14 @@ demo-P-LOCAL.1: ## P-LOCAL.1 (ADR-0135): Local Providers — declare a self-host
 demo-P-VISION.1: ## P-VISION.1 (ADR-0136): paste/drop a screenshot into the prompt bar — validate fail-closed (image-only, size/count caps), emit an omp image content block (base64, prefix stripped), and render a thumbnail strip that never interpolates the data URL (XSS-safe)
 	$(BUN) run desktop/scripts/demo_p_vision_1.ts
 
+.PHONY: demo-P-PROV.1
+demo-P-PROV.1: ## P-PROV.1 (ADR-0210): first-party enterprise providers - exposes omp-native Azure OpenAI (key + AZURE_OPENAI_* config), GitHub Copilot OAuth (device-flow broker; the Business/Enterprise "easy button" + a GHE-domain prompt), and Google Vertex AI = Gemini Enterprise (GOOGLE_CLOUD_API_KEY or ADC: project+location+credentials), and adds GOOGLE_CLOUD_PROJECT to the Gemini card - the missing env without which omp aborts Workspace/Enterprise Gemini OAuth. Extra fields ride the same setKey->env->omp seam as the primary key (no new storage); proves the descriptors + secret-masked/non-secret-echoed field reporting
+	$(BUN) run desktop/scripts/demo_p_prov_1.ts
+
+.PHONY: demo-P-IMG.1
+demo-P-IMG.1: ## P-IMG.1 (ADR-0208): generated/tool images inside the chat reply - lifts image content blocks OUT of an (UNTRUSTED) tool result through the strict image-data-URL gate (ACP-wrapped AND bare omp blocks; SVG/non-base64/oversized dropped fail-closed, count capped), renders them inline via the safe img.src-property idiom with a Download (safe filename, no traversal) and a "Send to preview" that builds a self-contained, CSP-safe wrapper (data: URI, no <script>) so the markup canvas + Screenshot->chat let the user iterate. Pure core verified here; the app.ts render + preview route are typechecked
+	$(BUN) run desktop/scripts/demo_p_img_1.ts
+
 .PHONY: demo-P-NVIM.1
 demo-P-NVIM.1: ## P-NVIM.1 (ADR-0150): Neovim + terminal integration — `lucid tui` is the gated command minus `acp` (gate first, policy, passthru last), fail-closes (dead scanner ⇒ no spawn), and the Neovim plugin's pure helpers pass headless nvim
 	$(BUN) run harness/scripts/demo_pnvim1.ts

@@ -64,6 +64,8 @@ import { egressAllowAllManaged, egressDecision, egressPosture } from "./egress_p
 import { loadWhitelist, removeEntry, saveWhitelist, setPosture, upsertEntry, type WhitelistEntry } from "./network_whitelist.ts"; // P-NETWL.2/.5: whitelist CRUD + posture
 import { readPreviewFile, toFsPath } from "./preview_file.ts"; // P-PREVIEW.4: read a local file's content for the preview
 import { PREVIEW_FRAME_CSP } from "./preview_resolve.ts"; // P-PREVIEW.4b: per-frame CSP for the served preview doc
+import { parseImageDataUrl } from "./renderer/image_data_url.ts"; // P-IMG.1 (ADR-0208): strict image gate
+import { previewImageHtml } from "./renderer/chat_images.ts"; // P-IMG.1 (ADR-0208): image → preview wrapper
 import { inlinePreviewAssets } from "./preview_inline.ts"; // P-PREVIEW.4c: fold a multi-file app's relative assets inline
 import { injectPreviewBridge } from "./preview_bridge.ts"; // P-PREVIEW.6b (ADR-0153): read-only DOM-inspect bridge
 import { InspectRelay } from "./preview_inspect_relay.ts"; // P-PREVIEW.6b: agent preview_inspect ↔ renderer relay
@@ -190,7 +192,7 @@ function serveRelay(host: string, port: number): { ok: boolean; error?: string }
   try {
     collabRelay = startRelayServer({ port, hostname: host, authorizeBind: (h, p) => authorizeRelayBind(h, p, mc) });
     return { ok: true };
-  } catch (e) { collabRelay = null; return { ok: false, error: String((e as Error)?.message ?? e) }; }
+  } catch (e) { collabRelay = null; return { ok: false, error: clientError(e, "could not start the relay server") }; }
 }
 
 function stopRelay(): void { try { collabRelay?.stop(); } catch { /* already gone */ } collabRelay = null; }
@@ -312,6 +314,16 @@ const json = (data: unknown) =>
     headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
   });
 
+// P-SEC.1 (ADR-0209): a caught exception's message/stack must never flow into a client response
+// (CWE-209/497 — CodeQL js/stack-trace-exposure). This control plane is loopback-only (ADR-0022 H1), so the
+// real-world exposure is low, but we keep the boundary clean: log the FULL error server-side (dev console)
+// and return a curated message that derives ONLY from `generic`, never from `e`. Every `catch` that surfaces
+// an error to the browser routes through here, so no exception text reaches the shared json() sink.
+function clientError(e: unknown, generic: string): string {
+  console.error(`[dev] ${generic}:`, e);
+  return generic;
+}
+
 // Typed read of a POST JSON body. Bun types `req.json()` as `unknown`; this helper is the single
 // place that cast lives, so each handler below names the exact shape it expects and stays strict.
 // Fields the handler funnels through String()/typeof guards are left `unknown` (the guard narrows them).
@@ -359,7 +371,7 @@ async function gatedAgentImport(specJson: string, notes: string[]): Promise<Gate
     saveSpecTrust(currentWorkspace(), r.spec.spec_id, { trustLabel: r.trustLabel, reason: r.reason });
     return { ok: true, data: { spec: r.spec, trustLabel: r.trustLabel, canRun: r.canRun, reason: r.reason, findings: r.findings.length, setup: setupInstructions(r.spec), notes } };
   } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
+    const msg = clientError(e, "could not import the agent");
     return { ok: false, error: msg, data: { error: msg } };
   }
 }
@@ -418,7 +430,11 @@ function gitChangeInputs(repo: string): { numstat: string; nameStatus: string; r
 // Map keyed by oauthId — lets us look up a running broker to send a device code to its stdin
 // (xAI, GitHub, etc. use device-authorization flows where the user copies a code from the browser).
 const oauthBrokers = new Map<string, ReturnType<typeof Bun.spawn>>();
-function startOauthBroker(oauthId: string): Promise<{ started: boolean; url: string; output: string }> {
+// GitHub Copilot's broker (ADR-0210) begins with an `onPrompt` for the GitHub Enterprise domain (blank =
+// github.com) and BLOCKS on stdin before it ever prints the device URL. So for github-copilot we must feed
+// that first line up front, or the login hangs at the prompt and no URL surfaces. `promptAnswer` is that
+// line (the GHE domain, or "" for github.com); it's written to stdin immediately after spawn.
+function startOauthBroker(oauthId: string, promptAnswer?: string): Promise<{ started: boolean; url: string; output: string }> {
   let proc: ReturnType<typeof Bun.spawn>;
   try { proc = Bun.spawn([ompBin(), "auth-broker", "login", oauthId], { stdout: "pipe", stderr: "pipe", stdin: "pipe" }); }
   // stdin: "pipe" (NOT "ignore") — the broker reads stdin as a fallback for pasting the auth code.
@@ -429,6 +445,11 @@ function startOauthBroker(oauthId: string): Promise<{ started: boolean; url: str
   // so an internal exception/stack never reaches the renderer (this object is returned via json()).
   catch (e) { console.error(`[oauth] broker spawn failed for ${oauthId}:`, e); return Promise.resolve({ started: false, url: "", output: "could not start login" }); }
   oauthBrokers.set(oauthId, proc);
+  // Answer the broker's leading prompt (Copilot's enterprise-domain question) so the device URL can appear.
+  if (promptAnswer !== undefined) {
+    const sink = proc.stdin;
+    if (sink && typeof sink !== "number") { try { sink.write(new TextEncoder().encode(promptAnswer.trim() + "\n")); } catch { /* broker may have exited */ } }
+  }
   proc.exited.finally(() => { if (oauthBrokers.get(oauthId) === proc) oauthBrokers.delete(oauthId); });
   // On a SUCCESSFUL login the credential lands in omp's vault, but the already-running omp child
   // built its model list at spawn and won't see it. Respawn so the new provider's models surface
@@ -899,7 +920,7 @@ const server = Bun.serve({
             saveSpecFile(root, v.spec!);
             return json({ ok: true, data: { saved: true, spec_id: v.spec!.spec_id } });
           } catch (e) {
-            return json({ ok: false, error: String((e as { message?: unknown })?.message ?? e) });
+            return json({ ok: false, error: clientError(e, "could not save the agent spec") });
           }
         }
         const id = url.searchParams.get("id");
@@ -921,7 +942,7 @@ const server = Bun.serve({
             const saved = upsertLocalProvider(b.provider as LocalProviderDef);
             return json({ ok: true, data: { saved: true, id: saved.id } });
           } catch (e) {
-            const msg = String((e as { message?: unknown })?.message ?? e);
+            const msg = clientError(e, "could not save the provider");
             return json({ ok: false, error: msg, data: { errors: [msg] } });
           }
         }
@@ -996,7 +1017,7 @@ const server = Bun.serve({
           const hasDesign = existsSync(designDocPath(currentWorkspace()));
           return json({ ok: true, data: { path: outPath, fileName, frames: board.length, hasDesign } });
         } catch (e) {
-          return fail(`Couldn't import the Figma file: ${String((e as { message?: unknown })?.message ?? e).slice(0, 160)}`);
+          return fail(clientError(e, "Couldn't import the Figma file — check the file URL/key and that your token can read it."));
         }
       }
       // P-FIGMA.2 / P-DESIGN.1 (ADR-0154): read the workspace DESIGN.md so the renderer can pop it out in the
@@ -1016,7 +1037,7 @@ const server = Bun.serve({
           const r = await fetch(target, { method: "GET", redirect: "manual", signal: AbortSignal.timeout(4500) });
           return json({ ok: true, data: { reachable: true, status: r.status, authed: r.status === 401 || r.status === 403 } });
         } catch (e) {
-          return json({ ok: true, data: { reachable: false, error: String((e as { message?: unknown })?.message ?? e).slice(0, 160) } });
+          return json({ ok: true, data: { reachable: false, error: clientError(e, "not reachable — check the URL and that the endpoint is up") } });
         }
       }
       // P-AGENT.6: enterprise export — compile the spec + write a portable, tamper-evident bundle (with a
@@ -1033,7 +1054,7 @@ const server = Bun.serve({
           const written = writeExportPackage(pkg, dir);
           return json({ ok: true, data: { dir, target, digest: pkg.manifest.digest, files: written.length } });
         } catch (e) {
-          return json({ ok: false, error: String((e as { message?: unknown })?.message ?? e) });
+          return json({ ok: false, error: clientError(e, "could not export the agent bundle") });
         }
       }
       // P-AGENT.9: SHARE — write a portable .lucid-agent.json (spec + setup guidance + spec digest; NEVER
@@ -1053,7 +1074,7 @@ const server = Bun.serve({
           writeFileSync(join(dir, `${base}.SETUP.md`), file.setup_md);
           return json({ ok: true, data: { path: join(dir, fileName), fileName, json: text, setup: file.setup_md, digest: file.spec_digest } });
         } catch (e) {
-          const msg = e instanceof Error ? e.message : String(e);
+          const msg = clientError(e, "could not write the agent share");
           return json({ ok: false, error: msg, data: { error: msg } });
         }
       }
@@ -1139,7 +1160,7 @@ const server = Bun.serve({
           const push = connectorStatus("n8n");
           return json({ ok: true, data: { path: join(dir, fileName), fileName, json: text, pushAvailable: push.installed, pushNote: push.note } });
         } catch (e) {
-          const msg = e instanceof Error ? e.message : String(e);
+          const msg = clientError(e, "could not write the n8n workflow");
           return json({ ok: false, error: msg, data: { error: msg } });
         }
       }
@@ -1161,7 +1182,7 @@ const server = Bun.serve({
           const r = runConnector("n8n", "push", file);
           return json({ ok: r.ok, data: { ok: r.ok, detail: r.detail, url: r.url ?? "" }, error: r.ok ? undefined : r.detail });
         } catch (e) {
-          const msg = e instanceof Error ? e.message : String(e);
+          const msg = clientError(e, "could not push to n8n");
           return json({ ok: false, error: msg, data: { error: msg } });
         }
       }
@@ -1282,7 +1303,7 @@ const server = Bun.serve({
         const v = voiceSettings();
         if (!key) return json({ ok: true, data: { voices: [], favorites: v.ttsVoiceFavorites, selected: v.ttsVoice, note: "Add your ElevenLabs API key (Settings → Voice) to list voices." } });
         try { return json({ ok: true, data: { voices: await listElevenVoices({ apiKey: key }), favorites: v.ttsVoiceFavorites, selected: v.ttsVoice } }); }
-        catch (e) { return json({ ok: true, data: { voices: [], favorites: v.ttsVoiceFavorites, selected: v.ttsVoice, note: `Could not list voices: ${String((e as Error)?.message ?? e)}` } }); }
+        catch (e) { return json({ ok: true, data: { voices: [], favorites: v.ttsVoiceFavorites, selected: v.ttsVoice, note: clientError(e, "Could not list voices — check the provider key/URL.") } }); }
       }
       // P-VOICE.1: transcribe recorded mic audio → text. Provider from settings: elevenlabs (cloud Scribe)
       // or whisper (offline OpenAI-compatible server). The transcript is ordinary user input (scanned on send).
@@ -1325,7 +1346,7 @@ const server = Bun.serve({
           const audioB64 = r.audio ? Buffer.from(r.audio).toString("base64") : null;
           return json({ ok: true, data: { audioB64, mime: "audio/wav", note: audioB64 ? "" : r.note } });
         } catch (e) {
-          return json({ ok: true, data: { audioB64: null, mime: "audio/mpeg", note: `TTS failed: ${String((e as Error)?.message ?? e)}` } });
+          return json({ ok: true, data: { audioB64: null, mime: "audio/mpeg", note: clientError(e, "TTS failed — check the provider key/URL.") } });
         }
       }
       // In-app folder browser (works in the browser build AND Electron). Full-tree traversal
@@ -1561,9 +1582,15 @@ const server = Bun.serve({
         return json({ ok: true, data: providerAuth() });
       }
       if (p === "/api/auth/oauth" && req.method === "POST") {
-        const { oauthId } = await readBody<{ oauthId?: unknown }>(req);
+        const { oauthId, promptAnswer } = await readBody<{ oauthId?: unknown; promptAnswer?: unknown }>(req);
+        // GitHub Copilot's broker opens with an enterprise-domain prompt on stdin (blank = github.com); feed
+        // it so the device URL surfaces. Other providers don't read a leading prompt, so leave it undefined.
+        const id = String(oauthId);
+        const answer = id === "github-copilot"
+          ? (typeof promptAnswer === "string" ? promptAnswer : "")
+          : (typeof promptAnswer === "string" ? promptAnswer : undefined);
         // omp owns the secure OAuth flow; the broker stays alive + drained until the callback lands.
-        return json({ ok: true, data: await startOauthBroker(String(oauthId)) });
+        return json({ ok: true, data: await startOauthBroker(id, answer) });
       }
       // Device-authorization flow: xAI "Grok Build", GitHub device flow, etc. The user copies a code
       // from the provider's browser page and pastes it here; we forward it to the broker's stdin.
@@ -1576,6 +1603,22 @@ const server = Bun.serve({
         const { oauthId } = await readBody<{ oauthId?: unknown }>(req);
         Bun.spawnSync([ompBin(), "auth-broker", "logout", String(oauthId)], { timeout: 4000 });
         return json({ ok: true, data: providerAuth() });
+      }
+      // P-IMG.1 (ADR-0208): "Send to preview" for a chat image. Validate the image through the strict gate,
+      // write a self-contained wrapper HTML (image embedded as a data: URI — allowed by the preview frame CSP)
+      // into the workspace, and hand back its path. The existing local-file preview pipeline then renders it
+      // in the iframe with the markup canvas overlaid, so the user can annotate + screenshot → chat to iterate.
+      if (p === "/api/preview/image" && req.method === "POST") {
+        const { dataUrl } = await readBody<{ dataUrl?: unknown }>(req);
+        const parsed = parseImageDataUrl(typeof dataUrl === "string" ? dataUrl : "");
+        if (!parsed) return json({ ok: false, error: "not a valid PNG, JPEG, WebP or GIF image" });
+        const html = previewImageHtml(`data:${parsed.mimeType};base64,${parsed.base64}`);
+        if (!html) return json({ ok: false, error: "could not render the image for preview" });
+        const dir = join(currentWorkspace(), ".omp", "images");
+        mkdirSync(dir, { recursive: true });
+        const outPath = join(dir, `img_${randomBytes(6).toString("hex")}.html`);
+        writeFileSync(outPath, html, "utf8");
+        return json({ ok: true, data: { path: outPath } });
       }
       // AskSage gov gateway (ADR-0007)
       if (p === "/api/asksage") {
@@ -1739,19 +1782,19 @@ const server = Bun.serve({
       if (p === "/api/kb/create" && req.method === "POST") {
         const b = await readBody<{ name?: unknown }>(req);
         try { createKg({ name: String(b.name ?? "") }); }
-        catch (e) { return json({ ok: true, data: kgListView(String((e as Error).message)) }); }
+        catch (e) { return json({ ok: true, data: kgListView(clientError(e, "could not load knowledge graphs")) }); }
         return json({ ok: true, data: kgListView() });
       }
       if (p === "/api/kb/rename" && req.method === "POST") {
         const b = await readBody<{ kgId?: unknown; name?: unknown }>(req);
         try { renameKg(String(b.kgId ?? ""), String(b.name ?? "")); }
-        catch (e) { return json({ ok: true, data: kgListView(String((e as Error).message)) }); }
+        catch (e) { return json({ ok: true, data: kgListView(clientError(e, "could not load knowledge graphs")) }); }
         return json({ ok: true, data: kgListView() });
       }
       if (p === "/api/kb/activate" && req.method === "POST") {
         const b = await readBody<{ kgId?: unknown }>(req);
         try { setActiveKg(String(b.kgId ?? "")); }
-        catch (e) { return json({ ok: true, data: kgListView(String((e as Error).message)) }); }
+        catch (e) { return json({ ok: true, data: kgListView(clientError(e, "could not load knowledge graphs")) }); }
         return json({ ok: true, data: kgListView() });
       }
       // P-KGPACK.3 (ADR-0205): seed a named KG from a folder of AI-vendor conversations or Obsidian markdown.
@@ -1770,7 +1813,7 @@ const server = Bun.serve({
           const name = typeof b.name === "string" ? b.name.trim() : "";
           if (name) { const e = createKg({ name, sourceKind: src.scan.kind, provenance: src.scan.vendor ? `import:${src.scan.vendor}` : "import:obsidian" }); targetId = e.kg_id; kgName = e.name; }
           else { targetId = (typeof b.kgId === "string" && b.kgId) ? b.kgId : (activeKgId() ?? ""); kgName = listKgs().find((k) => k.kg_id === targetId)?.name ?? ""; }
-        } catch (e) { return json({ ok: true, data: { ok: false, error: String((e as Error).message) } }); }
+        } catch (e) { return json({ ok: true, data: { ok: false, error: clientError(e, "could not create or resolve the knowledge graph") } }); }
         if (!targetId) return json({ ok: true, data: { ok: false, error: "No target knowledge graph." } });
         const model = usageLedger().models[0]?.model;
         const started = startKbIngest({
@@ -2000,7 +2043,7 @@ const server = Bun.serve({
           recordCollabShareStarted({ transport: "relay", access: status.allowEdit ? "edit" : "view", roomId: status.roomId, relaySource: status.relaySource });
           return json({ ok: true, data: status });
         }
-        catch (e) { return json({ ok: false, error: String((e as Error)?.message ?? e) }); }
+        catch (e) { return json({ ok: false, error: clientError(e, "could not start the share") }); }
       }
       if (p === "/api/collab/stop" && req.method === "POST") {
         const prev = collabManager.status(); // capture the roomId/access before the share is torn down
