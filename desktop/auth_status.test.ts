@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// P-PROV.1 (ADR-0207): first-party enterprise providers. Asserts the descriptor set (Azure OpenAI, GitHub
+// P-PROV.1 (ADR-0210): first-party enterprise providers. Asserts the descriptor set (Azure OpenAI, GitHub
 // Copilot OAuth, Google Vertex / Gemini Enterprise, + the Gemini-CLI enterprise project field) and that
 // providerAuth() reports each extra config field's status: secret fields masked to last4, non-secret config
 // (project id, resource name, location) echoed back so the Settings inputs pre-fill.
@@ -12,7 +12,7 @@ import { MAJORS, providerAuth, type Provider } from "./auth_status.ts";
 const find = (id: string): Provider | undefined => MAJORS.find((m) => m.id === id);
 const fieldEnvs = (p: Provider | undefined): string[] => (p?.fields ?? []).map((f) => f.env);
 
-describe("provider descriptors (ADR-0207)", () => {
+describe("provider descriptors (ADR-0210)", () => {
   test("GitHub Copilot is an OAuth-only major (no key env, device-flow broker id)", () => {
     const cp = find("github-copilot");
     expect(cp).toBeDefined();

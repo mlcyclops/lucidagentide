@@ -14201,7 +14201,7 @@ ADR-0098/P-SKILLREG.1 (the public-seam signed-install pattern mirrored), ADR-006
 private-IP / BUSL), ADR-0135 (secret-via-vault/env, extended to Stripe/Firebase keys), the existing Firebase
 Hosting (`lucid-agent.web.app`), and CLAUDE.md invariants #1/#2/#3/#5/#7/#9 + keystone #2.
 
-## ADR-0207 — P-PROV.1: first-party enterprise providers (Azure OpenAI, GitHub Copilot OAuth, Gemini Enterprise / Vertex)
+## ADR-0210 — P-PROV.1: first-party enterprise providers (Azure OpenAI, GitHub Copilot OAuth, Gemini Enterprise / Vertex)
 
 **Status:** Accepted (2026-07-13).
 

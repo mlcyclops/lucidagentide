@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// Increment P-PROV.1 — first-party enterprise providers (ADR-0207). Exposes three omp-native providers the
+// Increment P-PROV.1 — first-party enterprise providers (ADR-0210). Exposes three omp-native providers the
 // Settings UI didn't surface, plus the missing env that made Gemini Enterprise OAuth fail:
 //   • GitHub Copilot   — OAuth device-flow (`github-copilot` broker); the Business/Enterprise "easy button".
 //   • Azure OpenAI     — key + AZURE_OPENAI_* config (resource/base/version) omp already reads.
@@ -19,7 +19,7 @@ function assert(cond: unknown, msg: string): void {
 const find = (id: string): Provider | undefined => MAJORS.find((m) => m.id === id);
 const envs = (p: Provider | undefined): string[] => (p?.fields ?? []).map((f) => f.env);
 
-console.log("== #ADR-0207 P-PROV.1: Azure OpenAI + GitHub Copilot OAuth + Gemini Enterprise (Vertex) ==\n");
+console.log("== #ADR-0210 P-PROV.1: Azure OpenAI + GitHub Copilot OAuth + Gemini Enterprise (Vertex) ==\n");
 
 console.log("[1] GitHub Copilot — OAuth-only major, device-flow broker id");
 const cp = find("github-copilot");

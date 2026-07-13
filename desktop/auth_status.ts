@@ -13,7 +13,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { load } from "./settings_store.ts";
 
-// P-PROV.1 (ADR-0207): extra per-provider config env beyond the single primary key. Azure OpenAI and
+// P-PROV.1 (ADR-0210): extra per-provider config env beyond the single primary key. Azure OpenAI and
 // Vertex/Gemini-Enterprise need MORE than one value (resource/base/version; project/location/ADC path),
 // and the Gemini-CLI OAuth needs a GCP project for Workspace/Enterprise accounts. Each field is just an
 // omp-read env var; it rides the SAME setKey→process.env→omp seam as the primary key (applyEnv reapplies
@@ -53,12 +53,12 @@ export const MAJORS: Provider[] = [
     ] },
   { id: "anthropic", name: "Anthropic · Claude", env: "ANTHROPIC_API_KEY", oauthId: "anthropic", canOauth: true },
   { id: "xai", name: "xAI · Grok", env: "XAI_API_KEY", oauthId: "xai-oauth", canOauth: true },
-  // GitHub Copilot (ADR-0207): omp's `github-copilot` broker runs a device-code OAuth that signs in a
+  // GitHub Copilot (ADR-0210): omp's `github-copilot` broker runs a device-code OAuth that signs in a
   // Copilot Business/Enterprise (or individual) subscription and enables its model catalog. OAuth-only
   // (env ""), device-flow (the paste-code UI + DEVICE_FLOW_IDS already handle it), and the broker prompts
   // for a GitHub Enterprise domain (blank = github.com) so GHE/self-hosted orgs work too.
   { id: "github-copilot", name: "GitHub · Copilot", env: "", oauthId: "github-copilot", canOauth: true },
-  // Azure OpenAI (ADR-0207): key-only (no OAuth broker). omp reads AZURE_OPENAI_API_KEY plus a base:
+  // Azure OpenAI (ADR-0210): key-only (no OAuth broker). omp reads AZURE_OPENAI_API_KEY plus a base:
   // either AZURE_OPENAI_RESOURCE_NAME (→ https://<name>.openai.azure.com/openai/v1) or a full
   // AZURE_OPENAI_BASE_URL; API version defaults to "v1"; an optional deployment-name map aliases model
   // ids to Azure deployment names. All ride the same setKey→env→omp seam as any key.
@@ -69,7 +69,7 @@ export const MAJORS: Provider[] = [
       { env: "AZURE_OPENAI_API_VERSION", label: "API version", placeholder: "v1 (default)" },
       { env: "AZURE_OPENAI_DEPLOYMENT_NAME_MAP", label: "Deployment map (optional)", placeholder: "gpt-4o=my-deploy,o3=my-o3" },
     ] },
-  // Gemini Enterprise (ADR-0207) — Google's CURRENT name for the enterprise Gemini backend formerly called
+  // Gemini Enterprise (ADR-0210) — Google's CURRENT name for the enterprise Gemini backend formerly called
   // "Vertex AI" (omp's provider id is still `google-vertex`; that stays). The enterprise-governed OAuth path
   // is Application Default Credentials: `gcloud auth application-default login` mints a browser-consented
   // refresh token (or use a service-account JSON via GOOGLE_APPLICATION_CREDENTIALS), which omp reads together

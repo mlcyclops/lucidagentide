@@ -430,7 +430,7 @@ function gitChangeInputs(repo: string): { numstat: string; nameStatus: string; r
 // Map keyed by oauthId — lets us look up a running broker to send a device code to its stdin
 // (xAI, GitHub, etc. use device-authorization flows where the user copies a code from the browser).
 const oauthBrokers = new Map<string, ReturnType<typeof Bun.spawn>>();
-// GitHub Copilot's broker (ADR-0207) begins with an `onPrompt` for the GitHub Enterprise domain (blank =
+// GitHub Copilot's broker (ADR-0210) begins with an `onPrompt` for the GitHub Enterprise domain (blank =
 // github.com) and BLOCKS on stdin before it ever prints the device URL. So for github-copilot we must feed
 // that first line up front, or the login hangs at the prompt and no URL surfaces. `promptAnswer` is that
 // line (the GHE domain, or "" for github.com); it's written to stdin immediately after spawn.

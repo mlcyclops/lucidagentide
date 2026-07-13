@@ -247,7 +247,7 @@ export interface KbPackImportView {
   ok: boolean; error?: string; stage?: string;
   kgId?: string; kgName?: string; signed?: boolean; keyId?: string; pages?: number; findings?: number;
 }
-// P-PROV.1 (ADR-0207): extra per-provider config env (Azure resource/version, Vertex project/location/ADC,
+// P-PROV.1 (ADR-0210): extra per-provider config env (Azure resource/version, Vertex project/location/ADC,
 // Gemini-Enterprise project). Non-secret fields echo `value` to pre-fill; secret fields report `last4`.
 export interface ProviderFieldAuth { env: string; label: string; placeholder?: string; secret?: boolean; set: boolean; value?: string; last4?: string }
 export interface ProviderAuth {

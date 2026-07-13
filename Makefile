@@ -446,7 +446,7 @@ demo-P-VISION.1: ## P-VISION.1 (ADR-0136): paste/drop a screenshot into the prom
 	$(BUN) run desktop/scripts/demo_p_vision_1.ts
 
 .PHONY: demo-P-PROV.1
-demo-P-PROV.1: ## P-PROV.1 (ADR-0207): first-party enterprise providers - exposes omp-native Azure OpenAI (key + AZURE_OPENAI_* config), GitHub Copilot OAuth (device-flow broker; the Business/Enterprise "easy button" + a GHE-domain prompt), and Google Vertex AI = Gemini Enterprise (GOOGLE_CLOUD_API_KEY or ADC: project+location+credentials), and adds GOOGLE_CLOUD_PROJECT to the Gemini card - the missing env without which omp aborts Workspace/Enterprise Gemini OAuth. Extra fields ride the same setKey->env->omp seam as the primary key (no new storage); proves the descriptors + secret-masked/non-secret-echoed field reporting
+demo-P-PROV.1: ## P-PROV.1 (ADR-0210): first-party enterprise providers - exposes omp-native Azure OpenAI (key + AZURE_OPENAI_* config), GitHub Copilot OAuth (device-flow broker; the Business/Enterprise "easy button" + a GHE-domain prompt), and Google Vertex AI = Gemini Enterprise (GOOGLE_CLOUD_API_KEY or ADC: project+location+credentials), and adds GOOGLE_CLOUD_PROJECT to the Gemini card - the missing env without which omp aborts Workspace/Enterprise Gemini OAuth. Extra fields ride the same setKey->env->omp seam as the primary key (no new storage); proves the descriptors + secret-masked/non-secret-echoed field reporting
 	$(BUN) run desktop/scripts/demo_p_prov_1.ts
 
 .PHONY: demo-P-IMG.1

@@ -1754,7 +1754,7 @@ function provCard(p: ProviderAuth): string {
         ${p.keySet ? `<button class="btn-mini" data-clearkey="${esc(p.env)}">Clear</button>` : ""}
       </div>`
     : "";
-  // P-PROV.1 (ADR-0207): extra config fields (Azure resource/version, Vertex project/location/ADC, Gemini
+  // P-PROV.1 (ADR-0210): extra config fields (Azure resource/version, Vertex project/location/ADC, Gemini
   // Enterprise project). Each rides the SAME data-savekey/data-clearkey → /api/auth/key path as the primary
   // key, so no new save handler is needed. Non-secret values pre-fill via `value` (server echoes them);
   // secret fields render as password inputs. `esc()` neutralizes quotes/markup in every interpolated value.
@@ -8840,7 +8840,7 @@ function wire(): void {
     const oauth = t.closest("[data-oauth]") as HTMLElement | null;
     if (oauth) {
       const oauthId = oauth.dataset.oauth!;
-      // GitHub Copilot (ADR-0207) is a device-code flow whose broker first asks for a GitHub Enterprise
+      // GitHub Copilot (ADR-0210) is a device-code flow whose broker first asks for a GitHub Enterprise
       // domain (blank = github.com), then shows a one-time code the user enters ON GitHub's device page
       // (nothing is pasted back here). So drive it in two inline steps: collect the optional domain, then
       // start the sign-in and surface the code from the broker's output.
