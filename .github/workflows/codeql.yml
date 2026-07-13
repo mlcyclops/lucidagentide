@@ -42,6 +42,12 @@ jobs:
         with:
           languages: ${{ matrix.language }}
           queries: security-extended
+          # `mockups/` holds non-shipped, static design prototypes (unwired HTML/JS). They aren't product
+          # code and their prototype patterns (e.g. a local `$ = id => getElementById(id)` helper) trip
+          # DOM-XSS heuristics as false positives, so exclude them from analysis.
+          config: |
+            paths-ignore:
+              - mockups
 
       - name: Analyze
         uses: github/codeql-action/analyze@v4
