@@ -183,4 +183,20 @@
 //           ran `bun test harness` only) AND its own sim mirrored the depth-1 copy - both fixed: the guard
 //           now copies desktop sources recursively, and CI runs it as a required step. This class (v1.9.0 /
 //           1.10.3 / 1.10.4 / 1.11.0) is now gated, not shipped.
-export const APP_VERSION = "1.11.1";
+// v1.11.2 = ENTERPRISE PROVIDERS + IMAGES IN CHAT (ADR-0208/0210) on top of the KG-Packs / marketplace arc
+//           (ADR-0205/0206/0207) landed since 1.11.1. Settings -> Providers now surfaces three omp-native
+//           first-party providers it hid before: AZURE OPENAI (your Microsoft tenant's own deployments -
+//           key + resource/base/version/deployment-map), GITHUB COPILOT via OAuth (the Business/Enterprise
+//           "easy button" - a device-code sign-in that also handles a GitHub Enterprise domain), and GOOGLE
+//           CLOUD - GEMINI ENTERPRISE (formerly Vertex AI: an API key, or gcloud ADC with project+location).
+//           The existing Gemini OAuth card also gained a GCP project field, which is what makes Workspace /
+//           Enterprise Google accounts sign in at all (without it omp aborts non-personal accounts). Under
+//           the hood the provider descriptor grew multi-field config that rides the same key->env->omp seam,
+//           so nothing new is stored. GENERATED / TOOL IMAGES now render INLINE in the chat reply (validated
+//           fail-closed - SVG refused), each with a Download and a "Send to preview" that drops the image
+//           under the markup canvas so you can annotate + Screenshot->chat to iterate (great for image gen).
+//           Plus KG PACKS (named, swappable Knowledge Graphs + signed, sellable .lkgpack packs plus the
+//           gated marketplace) and a headless `make kg-pack` builder. SECURITY: every dev-server error now
+//           returns a generic client message (the full error stays server-side) - CWE-209 - and the CodeQL
+//           SAST config excludes non-shipped mockups.
+export const APP_VERSION = "1.11.2";
