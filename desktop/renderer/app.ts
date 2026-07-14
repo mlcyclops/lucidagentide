@@ -108,6 +108,9 @@ const state = {
   workspace: null as WorkspaceInfo | null,
   asksage: null as { configured: boolean; base: string; only: boolean; limit: number; datasets: string[]; queryModel: string; persona: string } | null,
   asksageTokens: null as { used: number; remaining: number | null; limit: number } | null,
+  asksageDatasetList: [] as string[], // ADR-0213: the account's full dataset list for the titlebar Datasets picker
+  sessionMode: "cui" as "cui" | "search", // ADR-0213: this chat session's CUI (no web search) vs Search mode
+  dodAck: false as boolean, // ADR-0213: the DoD/STIG Notice & Consent banner has been acknowledged this launch
   chinaAck: false as boolean, // P-IDE.1c: user acknowledged the China-origin data-sovereignty warning (Settings unlock)
   thirdPartyAck: false as boolean, // user acknowledged the third-party / non-U.S. "More providers" warning
   auth: null as import("./bridge.ts").AuthStatus | null, // full provider-auth status (gateway/majors/others)
@@ -186,6 +189,13 @@ function buildShell(): void {
       <!-- Persona + Skills live in the titlebar (full-width, so they don't squish when a right surface opens). -->
       <button class="ctool tb-chip" id="ctPersona" data-tip="AskSage persona|Server-supplied role guidance - scanned before use" hidden>${icon("user", 14)}<span id="ctPersonaName">Persona</span>${icon("chevron", 11)}</button>
       <button class="ctool tb-chip" id="ctSkill" data-tip="Skills|Built-in skills, /task delegation, and project skills" hidden>${icon("bolt", 14)}<span>Skills</span>${icon("chevron", 11)}</button>
+      <!-- ADR-0213: AskSage RAG Datasets picker (next to Skills). Short name shown; full name on hover. -->
+      <button class="ctool tb-chip" id="ctDataset" data-tip="Datasets|AskSage RAG datasets that ground answers. Short name shown; full name on hover." hidden>${icon("folder", 14)}<span id="ctDatasetName">Datasets</span>${icon("chevron", 11)}</button>
+      <!-- ADR-0213: per-session CUI vs Search mode (only shown under AskSage lockdown). -->
+      <div class="mode-toggle" id="modeToggle" role="group" aria-label="Session mode" hidden data-tip="CUI vs Search mode|In CUI mode there is NO web search (spillage risk). To search the web, open another chat session and switch it to Search - never run search in a CUI thread." data-tip-side="bottom">
+        <button class="mode-seg" data-mode="cui" type="button">${icon("shield", 12)} CUI</button>
+        <button class="mode-seg" data-mode="search" type="button">${icon("search", 12)} Search</button>
+      </div>
       <div class="tb-spacer"></div>
       <div class="zoom" role="group" aria-label="Text zoom">
         <button id="zoomOut" data-tip="Zoom out|${modSymbol("−")}">${icon("minus", 13)}</button>
@@ -232,6 +242,10 @@ function buildShell(): void {
 
       <main class="center">
         <div class="chat-bg" id="chatBg" aria-hidden="true"></div>
+        <!-- ADR-0213: violet CUI banner - shown only when this session is in CUI mode under lockdown. -->
+        <div class="cui-banner" id="cuiBanner" hidden data-tip="CUI session|Controlled Unclassified Information handling. Web search is disabled to prevent spillage. To search the web, open another chat session and switch it to Search mode." data-tip-side="bottom">
+          ${icon("shield", 13)}<span><b>CUI MODE</b> - Controlled Unclassified Information - web search disabled (spillage risk)</span>
+        </div>
         <div class="chat" id="chat"><div class="thread" id="thread"></div></div>
         <button class="jump-down" id="jumpDown" type="button" aria-label="Jump down a page" data-tip="Jump down a page">${icon("chevronsDown", 18)}</button>
         <div class="composer-wrap">
@@ -4833,6 +4847,7 @@ async function resumeSession(id: string): Promise<void> {
     renderThread(null); // no cache AND the fetch failed -> a fresh empty thread
   }
   await bridge.resumeSession(id);
+  void loadSessionMode(); // ADR-0213: reflect THIS session's CUI/Search mode + banner
   $("#input")?.focus();
 }
 
@@ -5712,7 +5727,10 @@ async function loadAsksage(): Promise<void> {
   if (state.asksage?.configured) {
     state.asksageTokens = await bridge.asksageTokens();
     state.personas = (await bridge.asksagePersonas()) ?? [];
+    state.asksageDatasetList = (await bridge.asksageDatasets()) ?? []; // ADR-0213: full list for the titlebar picker
+    showDodBanner(); // ADR-0213: gov gateway configured → the DoD/STIG consent banner (once per launch)
   }
+  await loadSessionMode(); // ADR-0213: this session's CUI/Search mode + the violet banner
   renderStatus();
   updateComposerTools();
 }
@@ -5724,6 +5742,121 @@ async function refreshAsksage(): Promise<void> {
     title: state.asksageTokens ? "Gov usage refreshed" : "AskSage not reachable",
     desc: state.asksageTokens ? `${fmtNum(state.asksageTokens.used)} / ${fmtNum(state.asksageTokens.limit)} tokens this month.` : "Add a key (and check the base URL) in Settings.",
     actions: [{ label: "OK" }], timeout: 2400,
+  });
+}
+
+// ── ADR-0213: DoD/STIG Notice & Consent banner ──────────────────────────────
+// The standard USG/DoD Notice and Consent Banner (DTM-08-060). Shown ONCE PER LAUNCH when the AskSage gov
+// gateway is configured (commercial users never see it). Edit THIS ONE constant if your org mandates a variant.
+const DOD_CONSENT_BANNER = {
+  title: "Standard Mandatory DoD Notice and Consent",
+  intro: "You are accessing a U.S. Government (USG) Information System (IS) that is provided for USG-authorized use only. By using this IS (which includes any device attached to this IS), you consent to the following conditions:",
+  items: [
+    "The USG routinely intercepts and monitors communications on this IS for purposes including, but not limited to, penetration testing, COMSEC monitoring, network operations and defense, personnel misconduct (PM), law enforcement (LE), and counterintelligence (CI) investigations.",
+    "At any time, the USG may inspect and seize data stored on this IS.",
+    "Communications using, or data stored on, this IS are not private, are subject to routine monitoring, interception, and search, and may be disclosed or used for any USG-authorized purpose.",
+    "This IS includes security measures (e.g., authentication and access controls) to protect USG interests - not for your personal benefit or privacy.",
+    "Notwithstanding the above, using this IS does not constitute consent to PM, LE or CI investigative searching or monitoring of the content of privileged communications, or work product, related to personal representation or services by attorneys, psychotherapists, or clergy, and their assistants. Such communications and work product are private and confidential. See User Agreement for details.",
+  ],
+};
+function showDodBanner(): void {
+  if (state.dodAck || $(".dod-scrim")) return; // once per launch; never stack
+  const scrim = el(`<div class="fb-scrim dod-scrim"></div>`);
+  const box = el(`<div class="fb dod" role="dialog" aria-modal="true" aria-label="${esc(DOD_CONSENT_BANNER.title)}">
+    <div class="fb-head"><span class="fb-title">${icon("shield", 15)} ${esc(DOD_CONSENT_BANNER.title)}</span></div>
+    <div class="dod-body"><p>${esc(DOD_CONSENT_BANNER.intro)}</p><ul>${DOD_CONSENT_BANNER.items.map((x) => `<li>${esc(x)}</li>`).join("")}</ul></div>
+    <div class="fb-foot"><div class="fb-hint">You must acknowledge to continue.</div><div class="fb-actions"><button class="btn-mini ok" data-ok>${icon("check", 12)} OK - I Agree</button></div></div>
+  </div>`);
+  document.body.append(scrim, box);
+  box.addEventListener("click", (e) => { if ((e.target as HTMLElement).closest("[data-ok]")) { state.dodAck = true; scrim.remove(); box.remove(); } });
+  // No scrim-click / Esc / X: a consent banner must be explicitly acknowledged (STIG).
+}
+
+// ── ADR-0213: per-session CUI vs Search mode + violet CUI banner ─────────────
+async function loadSessionMode(): Promise<void> {
+  const r = await bridge.sessionMode().catch(() => null);
+  state.sessionMode = r?.mode === "search" ? "search" : "cui";
+  renderSessionMode();
+}
+/** Sync the titlebar CUI/Search toggle + the violet CUI banner. Both appear ONLY under AskSage lockdown. */
+function renderSessionMode(): void {
+  const locked = !!state.asksage?.only;
+  const toggle = $("#modeToggle") as HTMLElement | null;
+  if (toggle) {
+    toggle.hidden = !locked;
+    toggle.querySelectorAll(".mode-seg").forEach((s) => (s as HTMLElement).classList.toggle("on", (s as HTMLElement).dataset.mode === state.sessionMode));
+  }
+  const banner = $("#cuiBanner") as HTMLElement | null;
+  if (banner) banner.hidden = !(locked && state.sessionMode === "cui");
+}
+/** Apply a mode for the current session. Switching TO Search routes through the CUI-datasets warning. */
+async function applySessionMode(mode: "cui" | "search"): Promise<void> {
+  if (mode === state.sessionMode) return;
+  if (mode === "search") { confirmSwitchToSearch(); return; }
+  state.sessionMode = "cui";
+  renderSessionMode();
+  await bridge.setSessionMode("cui").catch(() => null);
+}
+/** The spillage warning before enabling Search on a session that may hold CUI. */
+function confirmSwitchToSearch(): void {
+  const scrim = el(`<div class="fb-scrim"></div>`);
+  const box = el(`<div class="fb prompt" role="dialog" aria-label="Switch to Search mode">
+    <div class="fb-head"><span class="fb-title">${icon("search", 15)} Enable web search for this session?</span></div>
+    <div class="prompt-body"><p>Web search will be <b>enabled</b> for this chat. Are you currently in a session grounded on <b>CUI datasets</b>?</p></div>
+    <div class="fb-foot"><div class="fb-hint"></div><div class="fb-actions"><button class="btn-mini danger" data-yes>Yes - CUI is here</button><button class="btn-mini ok" data-no>${icon("check", 12)} No - enable Search</button></div></div>
+  </div>`);
+  document.body.append(scrim, box);
+  const close = () => { scrim.remove(); box.remove(); };
+  box.addEventListener("click", async (e) => {
+    const t = e.target as HTMLElement;
+    if (t.closest("[data-yes]")) {
+      close();
+      showToast({ tone: "warn", title: "Keep this session in CUI", desc: "Do not run web search in a CUI thread (spillage risk). Open a NEW chat session, switch IT to Search for non-CUI lookups, then come back to this one.", actions: [{ label: "OK" }], timeout: 8000 });
+      return;
+    }
+    if (t.closest("[data-no]")) {
+      close();
+      state.sessionMode = "search";
+      renderSessionMode();
+      await bridge.setSessionMode("search").catch(() => null);
+      showToast({ tone: "ok", title: "Search enabled for this session", desc: "Web search is on for this chat. Do NOT select CUI datasets here.", timeout: 4200 });
+    }
+  });
+  scrim.addEventListener("click", close);
+}
+
+// ── ADR-0213: titlebar AskSage Datasets picker (next to Skills) ──────────────
+const tidyDataset = (d: string) => d.replace(/^user_custom_\d+_/, "").replace(/_content$/, "").replace(/[_-]+/g, " ").trim();
+function updateDatasetButton(): void {
+  const btn = $("#ctDataset") as HTMLElement | null; if (!btn) return;
+  btn.hidden = !state.asksage?.configured;
+  const n = state.asksage?.datasets?.length ?? 0;
+  const span = $("#ctDatasetName", btn); if (span) span.textContent = n ? `${n} dataset${n === 1 ? "" : "s"}` : "Datasets";
+  btn.classList.toggle("on", n > 0);
+}
+async function openDatasetDropdown(anchor: HTMLElement): Promise<void> {
+  cfgClose?.();
+  const list = state.asksageDatasetList;
+  const sel = new Set(state.asksage?.datasets ?? []);
+  // Short name shown; the FULL raw dataset name is the hover description (premium tooltip, left side - matches Skills rows).
+  const rows = list.length
+    ? list.map((d) => `<div class="cfg-opt ${sel.has(d) ? "on" : ""}" data-ds="${esc(d)}" data-tip="${esc(tidyDataset(d))}|${esc(d)}" data-tip-side="left"><span class="tick">${icon("check", 13)}</span><span class="nm">${esc(tidyDataset(d))}</span></div>`).join("")
+    : `<div class="empty">No datasets on this account.</div>`;
+  const clearRow = sel.size ? `<div class="cfg-sec"><div class="cfg-list"><div class="cfg-opt" data-ds-clear><span class="tick">${icon("close", 13)}</span><span class="nm">Clear all (${sel.size})</span></div></div></div>` : "";
+  const html = `<div class="cfg-sec"><div class="cfg-lbl">RAG datasets <span class="cur">ground the AskSage RAG model</span></div><div class="cfg-list" id="dsList">${rows}</div></div>${clearRow}`;
+  const { node, close } = popover(anchor, html, () => { cfgClose = null; });
+  cfgClose = close;
+  node.addEventListener("click", async (e) => {
+    const t = e.target as HTMLElement;
+    if (t.closest("[data-ds-clear]")) { close(); state.asksage = (await bridge.saveAsksage({ datasets: [] })) ?? state.asksage; updateDatasetButton(); return; }
+    const it = t.closest("[data-ds]") as HTMLElement | null;
+    if (!it) return;
+    const name = it.dataset.ds!;
+    const cur = new Set(state.asksage?.datasets ?? []);
+    cur.has(name) ? cur.delete(name) : cur.add(name);
+    state.asksage = (await bridge.saveAsksage({ datasets: [...cur] })) ?? state.asksage;
+    it.classList.toggle("on");
+    updateDatasetButton();
   });
 }
 
@@ -5754,6 +5887,8 @@ function updateComposerTools(): void {
       pBtn.setAttribute("data-tip", "AskSage persona|Server-supplied role guidance - scanned before use");
     }
   }
+  updateDatasetButton(); // ADR-0213: datasets chip visibility + count
+  renderSessionMode();   // ADR-0213: CUI/Search toggle + violet banner (lockdown-gated)
 }
 
 // AskSage persona picker (composer). Selecting one scans it server-side; a clean
@@ -8367,6 +8502,11 @@ function wire(): void {
   // (model / mode / thinking dropdowns are reached from the top #modelBadge picker - not duplicated here)
   $("#ctPersona")!.addEventListener("click", () => openPersonaDropdown($("#ctPersona")!));
   $("#ctSkill")!.addEventListener("click", () => openSkillDropdown($("#ctSkill")!));
+  $("#ctDataset")!.addEventListener("click", () => void openDatasetDropdown($("#ctDataset")!)); // ADR-0213
+  $("#modeToggle")!.addEventListener("click", (e) => { // ADR-0213: CUI/Search segmented toggle
+    const seg = (e.target as HTMLElement).closest(".mode-seg") as HTMLElement | null;
+    if (seg?.dataset.mode) void applySessionMode(seg.dataset.mode as "cui" | "search");
+  });
   $("#ctMic")?.addEventListener("click", () => void toggleMicRecording()); // P-VOICE.1 (ADR-0115)
 
   // settings page actions (delegated)
@@ -9080,7 +9220,8 @@ function wire(): void {
 // ───────────────────────── palette actions ─────────────────────────
 function newSession(): void {
   seedThread(); state.liveUsage = null;
-  void bridge.newSession(); renderStatus(); $("#input")?.focus();
+  void bridge.newSession().then(() => loadSessionMode()); // ADR-0213: fresh session defaults to CUI under lockdown
+  renderStatus(); $("#input")?.focus();
 }
 /** Drop an omp slash command into the composer (omp runs it on send via ACP). */
 function runCommand(c: OmpCommand): void {

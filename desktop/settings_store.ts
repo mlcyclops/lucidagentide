@@ -62,6 +62,10 @@ export interface GuiSettings {
   // itself lives in `keys.ASKSAGE_API_KEY` like any other provider key.
   asksageBaseUrl?: string;
   asksageOnly?: boolean;
+  // ADR-0213: per chat-session CUI vs Search mode. Under lockdown, a "cui" session blocks ALL public egress
+  // (spillage protection); a "search" session allows web search (the user affirmed no CUI datasets). Absent/
+  // unknown ⇒ "cui" (fail-closed). Keyed by omp session id; pruned to a bounded size.
+  sessionModes?: Record<string, "cui" | "search">;
   // Monthly inference-token allowance. AskSage's API reports tokens USED but not
   // the ceiling (admins grant more in the AskSage console - no API to read it), so
   // the limit is a local, user-adjustable value. Everyone starts at 200k.
@@ -459,6 +463,25 @@ export function setLastModel(model: string): void {
 }
 /** Whether the user has set the "AskSage only" model lock (the org-managed lock is OR'd in by callers). */
 export function asksageOnly(): boolean { return !!load().asksageOnly; }
+/** ADR-0213: the CUI vs Search mode for a chat session. Fail-closed default "cui" (blocks egress under
+ *  lockdown) for an unknown/absent session id. */
+export function sessionMode(id: string): "cui" | "search" {
+  const m = load().sessionModes?.[id];
+  return m === "search" ? "search" : "cui";
+}
+/** ADR-0213: persist a session's CUI/Search mode. Prunes to the most recent ~200 entries so the map can't
+ *  grow unbounded across many sessions (order-preserving: newest write kept). */
+export function setSessionMode(id: string, mode: "cui" | "search"): GuiSettings {
+  const s = load();
+  const map = { ...(s.sessionModes ?? {}) };
+  delete map[id]; // re-insert at the end so it survives pruning
+  map[id] = mode === "search" ? "search" : "cui";
+  const keys = Object.keys(map);
+  if (keys.length > 200) for (const k of keys.slice(0, keys.length - 200)) delete map[k];
+  s.sessionModes = map;
+  save(s);
+  return s;
+}
 /** P-GOAL.6: the user's chosen checker model ("" = auto/recommended). */
 export function checkerModel(): string { return load().checkerModel ?? ""; }
 /** Persist the checker-model choice. Empty string clears it (back to auto). */

@@ -683,6 +683,9 @@ export interface LucidBridge {
   // Third-party / non-U.S. / custom "More providers" acknowledgement gate (mirrors chinaAck).
   thirdPartyAck(): Promise<{ acknowledged: boolean } | null>;
   setThirdPartyAck(acknowledge: boolean): Promise<{ acknowledged: boolean } | null>;
+  // ADR-0213: per chat-session CUI vs Search mode (defaults to the ACTIVE session when no id is given).
+  sessionMode(id?: string): Promise<{ id: string; mode: "cui" | "search" } | null>;
+  setSessionMode(mode: "cui" | "search", id?: string): Promise<{ id: string; mode: "cui" | "search" } | null>;
   auth(): Promise<AuthStatus | null>;
   saveKey(env: string, key: string): Promise<AuthStatus | null>;
   oauthLogin(oauthId: string): Promise<{ started: boolean; url: string; output: string } | null>;
@@ -1143,6 +1146,8 @@ export const bridge: LucidBridge = {
   setChinaAck: (acknowledge) => post("/api/china-ack", { acknowledge }),
   thirdPartyAck: () => getData("/api/thirdparty-ack"),
   setThirdPartyAck: (acknowledge) => post("/api/thirdparty-ack", { acknowledge }),
+  sessionMode: (id) => getData(id ? `/api/session-mode?id=${encodeURIComponent(id)}` : "/api/session-mode"), // ADR-0213
+  setSessionMode: (mode, id) => post("/api/session-mode", { mode, ...(id ? { id } : {}) }),
   auth: () => getData("/api/auth"),
   saveKey: (env, key) => post("/api/auth/key", { env, key }),
   oauthLogin: (oauthId) => post("/api/auth/oauth", { oauthId }),

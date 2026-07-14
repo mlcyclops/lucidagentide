@@ -27,7 +27,7 @@ import { recordLatency } from "./latency_log.ts"; // P-EVAL.2 (ADR-0187): per-tu
 import { beginStepTurn, endStepTurn, noteStepEvent } from "./session_steps.ts"; // P-RESUME.1 (ADR-0171)
 import { isLearnableAssistantText } from "./thinking_governance.ts";
 import { recordBlock } from "./security_log.ts";
-import { asksageOnly, attribution, checkerModel, lastModel, load as loadSettings, mcpServersForAcp, setCheckerModel, setLastModel } from "./settings_store.ts";
+import { asksageOnly, attribution, checkerModel, lastModel, load as loadSettings, mcpServersForAcp, sessionMode, setCheckerModel, setLastModel } from "./settings_store.ts";
 import { managedAsksageOnly, managedConfig, managedRequireIsolation } from "./managed_config.ts";
 import { resolveBackend, sandboxDisclosure, wrapForProfile, type SandboxDecision, type SandboxProxy } from "../harness/runs/sandbox_exec.ts"; // P-SANDBOX.1 (ADR-0157)
 import { ensureEgressProxy } from "../harness/runs/egress_proxy.ts"; // P-SANDBOX.2 (ADR-0166)
@@ -551,16 +551,17 @@ class Backend {
               // website visit — a host-based standing allow can't apply, so we still PROMPT, but with an
               // accurate local-file dialog (and never persist a host decision for it).
               const localFile = !!target && isLocalFileTarget(target);
-              // ADR-0212: under AskSage lockdown, FAIL-CLOSED block ALL public egress (web_search / browser /
-              // fetch / navigate / any external http(s) target) — a public search or fetch would backflow CUI to
-              // a non-accredited service. This overrides the allowWebSearch auto-approve below and covers browse/
-              // fetch too (a browser open leaks as much as a search). Local-file previews (file://) are NOT public
-              // egress and stay allowed. The sanctioned "search" under lockdown is the AskSage RAG (/query) model
-              // grounded on approved datasets — omp owns the web_search tool and takes no LUCID-supplied endpoint,
-              // so there is nothing to reroute it to; the correct control is to deny public egress.
-              if (this.asksageLocked() && !localFile) {
-                this.recordGateDiag({ kind: "egress", tool: toolName.slice(0, 40), target: (target ?? "").slice(0, 80), localFile: false, askActive: this.askActive, listener: !!this.listener, goalActive: this.goalActive, autoRunning: this.autoRunning, decision: "block(asksage-lockdown)" });
-                emitSecurityEvent({ category: "egress", type: "egress_decision", decision: "block", severity: "high", tool: "egress-lockdown", reason: `public web egress blocked under AskSage lockdown · ${target ?? toolName}`.slice(0, 200), sessionId: this.sessionId ?? undefined });
+              // ADR-0212/0213: under AskSage lockdown, FAIL-CLOSED block ALL public egress (web_search / browser
+              // / fetch / navigate / any external http(s) target) for a session in CUI mode — a public search or
+              // fetch would backflow CUI to a non-accredited service. This overrides the allowWebSearch
+              // auto-approve below and covers browse/fetch too (a browser open leaks as much as a search).
+              // Local-file previews (file://) are NOT public egress and stay allowed. A session explicitly in
+              // SEARCH mode (user affirmed no CUI datasets) is exempt and falls through to the normal posture.
+              // The mode is per-session (ADR-0213), read fail-closed (default CUI) by the ACTIVE session id; the
+              // sanctioned "search" for a CUI thread is a SEPARATE Search-mode session, or the AskSage RAG model.
+              if (this.asksageLocked() && sessionMode(this.sessionId ?? "") === "cui" && !localFile) {
+                this.recordGateDiag({ kind: "egress", tool: toolName.slice(0, 40), target: (target ?? "").slice(0, 80), localFile: false, askActive: this.askActive, listener: !!this.listener, goalActive: this.goalActive, autoRunning: this.autoRunning, decision: "block(asksage-lockdown-cui)" });
+                emitSecurityEvent({ category: "egress", type: "egress_decision", decision: "block", severity: "high", tool: "egress-lockdown-cui", reason: `public web egress blocked: CUI session under AskSage lockdown · ${target ?? toolName}`.slice(0, 200), sessionId: this.sessionId ?? undefined });
                 return { outcome: { outcome: "cancelled" } };
               }
               // P-NETWL.5 (ADR-0108): a web_search call (omp's default search providers, no arbitrary browse)

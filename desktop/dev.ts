@@ -101,6 +101,7 @@ import { importRoomKey } from "./collab/crypto.ts";
 import { recordCollabShareStarted, recordCollabShareStopped, recordCollabGuestJoined, recordCollabGuestLeft, recordCollabAudit } from "./collab/collab_audit.ts"; // P-COLLAB.18 (ADR-0204)
 import { authorizeRelayConnect } from "./managed_config.ts";
 import { collabRelayConfig, setCollabRelay, collabP2PConfig, setCollabP2P } from "./settings_store.ts";
+import { sessionMode, setSessionMode } from "./settings_store.ts"; // ADR-0213: per-session CUI/Search mode
 import { hostname as osHostname } from "node:os";
 import { analyzeWork, codifyCandidate, gatherWorkDigest, type SkillCandidate, type StudioWindow } from "./skill_studio.ts"
 import { buildSkillArtifact, PublishDispatcher, publishersFor } from "./skill_publish.ts";
@@ -1559,6 +1560,21 @@ const server = Bun.serve({
       if (p === "/api/thirdparty-ack") {
         if (req.method === "POST") { const b = await readBody<{ acknowledge?: unknown }>(req); return json({ ok: true, data: { acknowledged: !!setThirdPartyProvidersAcknowledged(!!b.acknowledge).thirdPartyProvidersAcknowledged } }); }
         return json({ ok: true, data: { acknowledged: thirdPartyProvidersAcknowledged() } });
+      }
+      // ADR-0213: per chat-session CUI vs Search mode. Defaults to the ACTIVE omp session so the renderer can
+      // just ask "the current session's mode" without tracking ids. GET (?id= optional) → mode (default
+      // "cui"); POST {mode, id?} → persist. Under lockdown the backend egress gate reads this to decide
+      // whether to block public egress for the active session (CUI blocks; Search allows).
+      if (p === "/api/session-mode") {
+        if (req.method === "POST") {
+          const b = await readBody<{ id?: unknown; mode?: unknown }>(req);
+          const id = (typeof b.id === "string" && b.id) ? b.id : (backend.currentSessionId() ?? "");
+          const mode = b.mode === "search" ? "search" : "cui";
+          if (id) setSessionMode(id, mode);
+          return json({ ok: true, data: { id, mode: id ? sessionMode(id) : "cui" } });
+        }
+        const id = url.searchParams.get("id") || (backend.currentSessionId() ?? "");
+        return json({ ok: true, data: { id, mode: id ? sessionMode(id) : "cui" } });
       }
       if (p === "/api/auth") return json({ ok: true, data: providerAuth() });
       if (p === "/api/auth/key" && req.method === "POST") {

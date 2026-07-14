@@ -14511,3 +14511,54 @@ tested; the RAG/model-id changes were verified against the live AskSage gateway,
 ADR-0211 (the lockdown work this completes), ADR-0108 (egress posture / `allowWebSearch`, now overridden under
 lockdown), ADR-0142 (P-AGENT built-agent runs - the clamped path), ADR-0209 (live model fetch - the durable fix
 for the hand-maintained list), ADR-0007 (AskSage `/query` RAG), and CLAUDE.md invariants #1/#2/#3/#4.
+
+## ADR-0213 - Per-session CUI/Search mode, violet CUI banner, DoD/STIG consent banner, titlebar Datasets picker
+
+**Date:** 2026-07-14
+**Status:** Accepted - BUILT. Refines the ADR-0212 lockdown egress block from global to per-session, and adds
+the compliance UI (CUI banner, DoD consent banner) + restores the Datasets picker to the titlebar.
+**Increment:** a new per-session settings field + route/bridge, a one-line change to the egress gate, and
+renderer UI. New pure `sessionMode` store is unit-tested. No frozen-contract file touched.
+
+### Context
+
+ADR-0212's lockdown blocked ALL public egress globally. That's too blunt: a user handling CUI must have web
+search disabled (spillage), but a clean non-CUI session should still search **while in lockdown** (models still
+gov-routed). Operators also need the standard visual controls a gov deployment expects: a clear CUI indicator,
+the mandatory DoD Notice & Consent banner (a STIG login-banner requirement), and quick access to the AskSage RAG
+**Datasets** - which had regressed into a Settings-only chip list with no titlebar picker.
+
+### Decision
+
+- **Per-session CUI vs Search mode.** New `sessionModes: Record<sessionId, "cui"|"search">` in settings_store
+  (`sessionMode`/`setSessionMode`, **fail-closed default "cui"**, bounded to ~200 entries), a `/api/session-mode`
+  route that defaults to the ACTIVE omp session (so the renderer just asks for "the current session's mode"),
+  and a bridge pair. The lockdown egress block (`acp_backend.ts`) now fires only when
+  `asksageLocked() && sessionMode(activeSession) === "cui"` - a **CUI** session blocks all public egress; a
+  **Search** session (user affirmed no CUI datasets) falls through to the normal posture. Model routing
+  (maker/checker/agent-run gov clamp) stays global; only egress became per-session.
+- **Titlebar CUI/Search toggle + violet CUI banner** (renderer), both shown only under lockdown and reflecting
+  the CURRENT session (reloaded on session switch / new session; new sessions default to CUI). Switching TO
+  Search routes through a spillage warning ("Are you in a session with CUI datasets?" - Yes keeps CUI and advises
+  a separate Search session; No enables Search and persists it). The violet banner shows only in CUI mode.
+- **DoD/STIG Notice & Consent banner.** The standard USG/DoD mandatory banner (DTM-08-060) in one editable
+  constant (`DOD_CONSENT_BANNER`), shown as a must-acknowledge modal **once per launch, only when the AskSage
+  gov gateway is configured** (commercial users never see it). In-memory per-launch (no persistence - STIG is
+  per-logon).
+- **Titlebar Datasets picker** next to Skills (`#ctDataset`), mirroring the Skills/Persona chip + `popover`
+  pattern: multi-select the account's RAG datasets, **short name shown** (`tidyDataset`), **full raw name on
+  hover** in the premium `data-tip="short|full"` tooltip, "Clear all", count on the chip. Persists via the
+  existing `saveAsksage({datasets})`; the Settings chips share the same state.
+
+### Invariants preserved
+
+Fail-closed is law (#3): an unknown session mode defaults to CUI (egress blocked); the renderer warning is UX,
+the backend block keyed on the persisted mode is the control. Gate stays in-process (#4). Extend-not-fork (#1):
+omp's own gate; no fork. No Python (#2). The `sessionMode` store is pure + unit-tested (incl. the fail-closed
+default). Untrusted RAG dataset content stays server-side under AskSage (#5 spirit).
+
+### Relates to
+
+ADR-0212 (the global egress block this makes per-session), ADR-0211 (lockdown model clamp, unchanged), ADR-0014
+(the separate CUI memory compartment - distinct from this per-session CUI *chat* mode), ADR-0106/0108 (egress
+posture), ADR-0007 (AskSage RAG datasets), and CLAUDE.md invariants #1/#2/#3/#4.
