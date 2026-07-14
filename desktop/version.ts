@@ -211,4 +211,20 @@
 //           tiny sliver squeezed between the label and the Save/Clear buttons; the label now sits on its own
 //           line with a full-width input beneath it. ENHANCEMENT (ADR-0212): a written/edited file is one
 //           click from the chat feed to your OS file manager, HIGHLIGHTED in its folder (a "Reveal" button).
-export const APP_VERSION = "1.11.3";
+// v1.11.4 = GOV HARDENING + RAG FOR EVERYONE + BETTER SESSION SHARING (2026-07-14, ADR-0214-0222).
+//           ASKSAGE LOCKDOWN is now enforced SERVER-SIDE, fail-closed: every maker + checker + built-agent
+//           turn is clamped to the accredited gov gateway (it was renderer-only, so it silently fell back to a
+//           DIRECT model on a fresh launch or an omp respawn). CUI CONTROLS: a per-chat-session CUI vs Search
+//           mode - a CUI session fail-closed BLOCKS all public web egress (no spillage), a Search session may
+//           search while still gov-routed; a violet CUI banner, a DoD/STIG Notice & Consent banner (gov-gated,
+//           per launch), and the AskSage Datasets picker restored to the titlebar. New GPT-5.6 gov models
+//           (luna / sol / terra; the RAG route defaults to gpt-5.6-luna) verified live against the gateway.
+//           CLONE: Settings -> "Clone a git repo" now clones PRIVATE repos headlessly (a host token, incl. a
+//           vault-stored PAT) exactly like the agent does, instead of failing with a generic toast.
+//           RAG FOR NON-ASKSAGE USERS: a `knowledge_search` tool lets ANY model (Claude / GPT / local) ground
+//           on your OWN notes/docs - an Obsidian vault, folders, or imported chat history - LEXICAL today, and
+//           SEMANTIC via bring-your-own embeddings (a local Ollama for air-gap, or your OpenAI/Azure key; no
+//           bundled weights), with a "Semantic search" Settings card + a Test-endpoint probe + Re-index.
+//           SHARED SESSIONS: a viewer now sees the host's THINKING + TOOL CALLS (not just the final answer),
+//           and the watch window fills the app instead of a small centered modal.
+export const APP_VERSION = "1.11.4";
