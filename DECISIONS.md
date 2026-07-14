@@ -14624,3 +14624,46 @@ ADR-0099/0100 (compiled KB + retrieval router this exposes), ADR-0205 (KG regist
 model), ADR-0053/0058/0063 (the vector spine reserved for increment 2), ADR-0153 (preview tools - the token'd
 env-URL callback pattern), ADR-0135 (Local Providers - the increment-2 embeddings endpoint), and CLAUDE.md
 invariants #1/#2/#5/#6 + keystone #2.
+
+## ADR-0215 - Bring-your-own-embeddings `ApiEmbedder` (non-AskSage semantic RAG, increment 2 part 1)
+
+**Date:** 2026-07-14
+**Status:** Accepted - PART 1 BUILT (the `ApiEmbedder` primitive, unit-tested). The wiring (ingest → embed,
+retrieve → hybrid, a Settings card) is PENDING one config decision + an embeddings-capable endpoint to verify.
+**Increment:** a new `harness/knowledge/api_embedder.ts` behind the existing `Embedder` seam. Nothing else
+changed yet - it's dormant until wired.
+
+### Context
+
+ADR-0214 gave non-AskSage users LEXICAL grounding (`knowledge_search` over the compiled KB). Increment 2 adds
+true SEMANTIC search. The vector spine (store + cosine + scan-gated ingest, ADR-0058) is built but unshipped;
+the only blocker was bundling a WASM embedder (P-RAG.1c) into the Electron app. This sidesteps that entirely:
+embed via an OpenAI-COMPATIBLE `/embeddings` endpoint the user ALREADY runs - their OpenAI/Azure key, or a local
+Ollama / vLLM / llama.cpp box (Local Providers, ADR-0135). No native binaries, no bundled weights.
+
+### Decision (part 1) - the embedder primitive
+
+`ApiEmbedder implements Embedder` (`harness/knowledge/api_embedder.ts`): POSTs `{model, input}` to
+`<baseUrl>/embeddings`, parses OpenAI-shape `data[].embedding` (index-sorted defensively). It drops in behind the
+SAME `Embedder` seam as `HashEmbedder`/`TransformersEmbedder`, so ingest/store/retrieve are untouched. PURE +
+`fetchImpl`-injected for tests; holds NO secret at rest (the desktop resolves the token from the OS vault per
+construction). FAIL-LOUD: any non-2xx, count/dim mismatch, or non-finite component throws - a broken endpoint
+can never silently store garbage vectors that would poison cosine retrieval.
+
+### Open decision (blocks part 2 wiring)
+
+Where the embeddings endpoint is configured (a dedicated Settings card vs reusing a Local Provider vs
+auto-from-a-provider-key) - and which provider to default to. Note the current profile has only `XAI_API_KEY` /
+`ELEVENLABS_API_KEY`, NEITHER of which exposes `/embeddings`, so the semantic path can't be live-verified until
+an OpenAI / Azure / local-Ollama endpoint is configured. Deliberately NOT guessing the config UX blind.
+
+### Invariants preserved
+
+The vector ingest path stays scan-gated fail-closed (keystone #2 - RAG context never auto-promotes; ingest.ts
+never embeds a blocked chunk). Extend-not-fork (#1): behind the existing seam. No Python (#2). Air-gap posture is
+the USER's choice now (a local Ollama keeps it offline; OpenAI does not) - documented, not silently networked.
+
+### Relates to
+
+ADR-0214 (the lexical grounding this upgrades), ADR-0058/0053 (the vector store + Embedder seam), ADR-0135
+(Local Providers - the endpoint + vault-secret source for part 2), and CLAUDE.md invariants #1/#2 + keystone #2.
