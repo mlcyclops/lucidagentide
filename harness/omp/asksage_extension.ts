@@ -44,6 +44,7 @@ interface ModelSpec {
 // the o-series are `gpt-o3` / `gpt-o4-mini`, not `o3`). Cost is cosmetic here
 // (AskSage bills via a monthly token quota, surfaced separately in the desktop).
 const OPENAI_MODELS: ModelSpec[] = [
+  { id: "gpt-5.6", name: "GPT-5.6 · AskSage Gov", reasoning: true, contextWindow: 256_000, maxTokens: 32_000 },
   { id: "gpt-5.2", name: "GPT-5.2 · AskSage Gov", reasoning: true, contextWindow: 256_000, maxTokens: 32_000 },
   { id: "gpt-5.5", name: "GPT-5.5 · AskSage Gov", reasoning: true, contextWindow: 256_000, maxTokens: 32_000 },
   { id: "gpt-5.4", name: "GPT-5.4 · AskSage Gov", reasoning: true, contextWindow: 256_000, maxTokens: 32_000 },

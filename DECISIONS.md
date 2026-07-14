@@ -14252,3 +14252,100 @@ product key. BUSL header on the new source (licensing/commit hygiene).
 
 ADR-0205 (P-KGPACK.3 seed / .4 export+import gate / .6 background seed - the pipeline this drives), ADR-0206
 (P-KGMARKET - the storefront/entitlement ids this aligns to), and CLAUDE.md invariants #1/#2/#3/#5/#7/#9.
+
+## ADR-0208 - Settings "Clone a git repo" reaches parity with the agent's clone (headless token auth + robustness)
+
+**Date:** 2026-07-14
+**Status:** Accepted - BUILT. A bug fix to an existing feature (`desktop/workspace.ts` `cloneRepo`), not a new
+trust path or schema change.
+**Increment:** localized to `cloneRepo` + three new PURE, exported helpers (unit-tested in
+`desktop/workspace.test.ts`). No frozen-contract file touched.
+
+### Context
+
+Two separate clone paths had diverged. When the user asks the LUCID **agent** to clone a repo, it runs
+`git clone` inside omp's shell/exec tool - a child of the long-lived omp process, in a context where Git
+Credential Manager can resolve cached credentials, so **private** repos clone. The **Settings -> Workspace ->
+"Clone a git repo"** button calls `cloneRepo`, which ran `Bun.spawn(["git","clone",url,dest])` with **piped
+stdio, no tty, no token, and no cwd** - so a private repo (e.g. `github.com/mlcyclops/l.e.a.p.s..git`) fails
+whenever GCM has no cached credential, and the renderer shows a generic "Clone failed" toast on ANY non-zero
+exit. Two latent bugs made it worse: (a) `repoNameFromUrl` left a **trailing dot** on `l.e.a.p.s.`, and Windows
+silently drops trailing dots from folder names, desyncing the `existsSync(dest/.git)` reuse check; (b) a clone
+that failed after creating `dest` left a non-empty, `.git`-less folder, so every retry then failed with
+"destination path already exists and is not empty".
+
+### Decision - give the Settings clone an explicit, headless credential path + fix the dir bugs
+
+`cloneRepo` now:
+- **Injects a host token when available.** `hostTokenForUrl(url)` picks `GITHUB_TOKEN`/`GH_TOKEN`/
+  `LUCID_GITHUB_TOKEN` for github hosts and `GITLAB_TOKEN`/`LUCID_GITLAB_TOKEN` for gitlab (https only; ssh/
+  git@ authenticate with keys). `cloneArgv` injects it via a per-COMMAND `-c http.extraHeader=Authorization:
+  Basic <base64(x-access-token:TOKEN)>` placed BEFORE the subcommand - so it authenticates the fetch but is
+  **never written into the cloned repo's remote/config** (embedding the token in the URL would persist it into
+  `.git/config`, a credential leak). The token is redacted from any surfaced error.
+- **Runs headlessly without hanging.** `GIT_TERMINAL_PROMPT=0` means git never blocks waiting on a username we
+  can't answer over piped stdio; GCM still resolves cached credentials, so the agent's previously-working path
+  is preserved, not regressed.
+- **Fixes the dir bugs.** `repoNameFromUrl` trims leading/trailing dots+spaces so the computed name matches the
+  folder the OS actually creates; a leftover `.git`-less `dest` is cleared before cloning and after a failure.
+- **Surfaces an actionable error.** `cloneErrorHint` turns an auth failure into "this looks like a private repo
+  - set a GITHUB_TOKEN... or clone via the agent" instead of a generic toast.
+
+Env-var tokens are the first, zero-UI increment; a vault-backed git credential (reusing `cred_vault.ts`, so a
+PAT entered once in Settings is decrypted main-process-only at clone time) is the natural follow-up.
+
+### Invariants preserved
+
+Extend-not-fork (#1): no omp change; the Settings path just runs git better. No Python (#2). Fail-closed spirit:
+a token is never persisted or logged (redacted), and decrypt-side vault work stays main-process-only when it
+lands. BUSL header on the new test file (licensing/commit hygiene). The pure helpers are exported + unit-tested
+so the private-repo path can't silently regress.
+
+### Relates to
+
+ADR-0111 (P-WS.1 - the workspace/clone feature this fixes), ADR-0106/0107 (`cred_vault.ts` - the follow-up
+home for a vault-backed git PAT), and CLAUDE.md invariants #1/#2.
+
+## ADR-0209 - AskSage model list: fetch it LIVE from `/get-models` (follow-up; scoped, not yet built)
+
+**Date:** 2026-07-14
+**Status:** Proposed - SCOPED. Captures the design so a new CIV/MIL model appears WITHOUT a code change; the
+immediate unblock (adding `gpt-5.6` to the hardcoded arrays) shipped alongside this and is NOT this ADR.
+**Increment:** a future `desktop/asksage.ts` `listModels()` + wiring into `asksage_extension.ts`.
+
+### Context
+
+The AskSage picker is populated from HARDCODED arrays in `harness/omp/asksage_extension.ts`
+(`OPENAI_MODELS` / `ANTHROPIC_MODELS` / `GOOGLE_MODELS` / `QUERY_MODELS`), registered as omp providers at
+spawn time. When AskSage added new CIV GPT-5.6 models on the gateway, they did NOT appear in LUCID: nothing
+fetches the catalog at runtime, so a new gov model requires a manual array edit + a shipped build. The file
+header comment ("no hardcoded list") is misleading - there's no SECOND list in the desktop, but the models
+themselves are hardcoded. A live models endpoint already exists (`/get-models`, `/openai/v1/models`) and is
+used only for MANUAL id verification during development (`desktop/asksage.ts` has `listDatasets()`/
+`listPersonas()` but no `listModels()`). This is a known gap (PROGRESS.md).
+
+### Decision (proposed) - a live, curated, fail-safe model fetch
+
+1. Add `listModels()` to `desktop/asksage.ts` calling AskSage `/get-models` (the same `x-access-tokens` auth as
+   the other helpers), returning `{ id, name }[]`.
+2. At omp spawn, `asksage_extension.ts` fetches the live list and MERGES it over the hardcoded specs (the
+   static specs remain the source of truth for `contextWindow`/`maxTokens`/`reasoning` metadata, which
+   `/get-models` doesn't reliably carry; live-only ids get sane defaults + a display name).
+3. **Fail-SAFE, not fail-closed** (this is a UX catalog, not a security gate): if the fetch fails or times out,
+   fall back to the hardcoded arrays so the picker is never empty. Cache the result briefly and re-fetch on the
+   next spawn / an explicit "refresh models" action so a mid-day gateway addition can surface without a restart.
+4. The existing curation still applies downstream unchanged (`model_families.ts`: `isDeprecatedModel` hides
+   GPT < 5.4, `isGovModel` gates on a configured key), so a live fetch can't smuggle a deprecated or
+   ungated model into the picker.
+
+### Invariants preserved
+
+Extend-not-fork (#1): still `pi.registerProvider`, just with a merged model array. No Python (#2). The security
+model is untouched - AskSage is a UX catalog, so this edge is deliberately fail-SAFE (documented), distinct
+from the fail-CLOSED scanner/gate (#3), which this does not touch. `MODEL_CTX` in `app.ts` stays the
+context-window source of truth.
+
+### Relates to
+
+ADR-0007 (AskSage provider registration), ADR-0029 (P-IDE.1c picker curation/gating), the `gpt-5.6` array
+add that shipped today, and CLAUDE.md invariants #1/#2/#3.
