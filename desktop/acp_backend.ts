@@ -29,14 +29,14 @@ import { recordLatency } from "./latency_log.ts"; // P-EVAL.2 (ADR-0187): per-tu
 import { beginStepTurn, endStepTurn, noteStepEvent } from "./session_steps.ts"; // P-RESUME.1 (ADR-0171)
 import { isLearnableAssistantText } from "./thinking_governance.ts";
 import { recordBlock } from "./security_log.ts";
-import { asksageOnly, attribution, checkerModel, lastModel, load as loadSettings, mcpServersForAcp, setCheckerModel, setLastModel } from "./settings_store.ts";
+import { asksageOnly, attribution, checkerModel, lastModel, load as loadSettings, mcpServersForAcp, sessionMode, setCheckerModel, setLastModel } from "./settings_store.ts";
 import { managedAsksageOnly, managedConfig, managedRequireIsolation } from "./managed_config.ts";
 import { resolveBackend, sandboxDisclosure, wrapForProfile, type SandboxDecision, type SandboxProxy } from "../harness/runs/sandbox_exec.ts"; // P-SANDBOX.1 (ADR-0157)
 import { ensureEgressProxy } from "../harness/runs/egress_proxy.ts"; // P-SANDBOX.2 (ADR-0166)
 import { egressAuditSink } from "./egress_audit.ts"; // P-SANDBOX.3 (ADR-0167)
 import { setSandboxState } from "./sandbox_status.ts"; // P-SANDBOX.5 (ADR-0169)
 import { caps } from "../harness/runs/profiles.ts";
-import { recommendCheckerModel, resolveCheckerModel, type ModelOption } from "./checker_model.ts";
+import { isAsksageRouted, recommendCheckerModel, resolveCheckerModel, resolveLockdownModel, type ModelOption } from "./checker_model.ts";
 import { parseGoalVerdict } from "./goal_verdict.ts";
 import { appendGoalIteration, appendRunLog, finishGoalMemory, type GoalMemory, readRunLog, resumeGoalMemory, saveGoalReport, savePreflightReport, startGoalMemory } from "./goal_memory.ts";
 import { extractUrls, type IterStat, type LocStat, type LoopBlock, type LoopMetrics, type LoopOutcome, normalizeToolName, parseNumstat, renderLoopReport, stallSignature, summarizeLoop } from "./loop_report.ts";
@@ -130,6 +130,10 @@ const SLASH_CMD_EXT = join(REPO, "harness", "omp", "slash_command_extension.ts")
 // P-KG-SYM.1: registers the read-only `codegraph_query` tool. Added ONLY when the user opted in
 // (settings.codeGraphAgent) AND the file exists — so a bad/absent extension never blocks omp launch.
 const CODEGRAPH_EXT = join(REPO, "harness", "omp", "codegraph_extension.ts");
+// ADR-0220: registers the read-only `knowledge_search` tool so ANY model can ground on the user's ingested
+// knowledge base (Obsidian/folders/chat history → compiled KB). Always added when present (self-describing when
+// empty); the non-AskSage RAG path, independent of the gov gateway.
+const KNOWLEDGE_EXT = join(REPO, "harness", "omp", "knowledge_extension.ts");
 // P-TASK.3/4 (ADR-0028): config overlay that turns ON task isolation (mode: auto) so subagents
 // can run isolated and return a reviewable patch — containing the blast radius of a bad tool call.
 const ACP_CONFIG = join(REPO, "harness", "omp", "acp_config.yml");
@@ -378,13 +382,14 @@ class Backend {
         const agentBuilderArgs = existsSync(AGENT_BUILDER_EXT) ? ["-e", AGENT_BUILDER_EXT] : []; // P-AGENT.8.2: agent_builder_open
         const slashCmdArgs = existsSync(SLASH_CMD_EXT) ? ["-e", SLASH_CMD_EXT] : []; // P-CMD.1: slash_command_create
         const mcpGateArgs = existsSync(MCP_RESULT_GATE) ? ["-e", MCP_RESULT_GATE] : []; // P-MCP-GATE.1
+        const knowledgeArgs = existsSync(KNOWLEDGE_EXT) ? ["-e", KNOWLEDGE_EXT] : []; // ADR-0220: knowledge_search (non-AskSage RAG)
         // P-SANDBOX.1 (ADR-0157): the runtime execution boundary, decided at THE spawn. On Linux with
         // bwrap the whole omp process tree (bash/eval/python/pip children included) is namespaced; on
         // platforms without a backend this is the DISCLOSED passthrough - unless managed policy
         // requires isolation, in which case exec fail-closes (this.sandboxExecBlock) rather than runs
         // unisolated: the spawn still happens (chat/read tools stay useful) but every exec permission
         // is denied at the session/request_permission seam below.
-        const ompArgv = [ompBin(), "acp", "-e", GATE, ...mcpGateArgs, "-e", ASKSAGE, ...previewArgs, ...codegraphArgs, ...agentBuilderArgs, ...slashCmdArgs, ...isoCfg, "--append-system-prompt", appendedPolicy];
+        const ompArgv = [ompBin(), "acp", "-e", GATE, ...mcpGateArgs, "-e", ASKSAGE, ...previewArgs, ...codegraphArgs, ...knowledgeArgs, ...agentBuilderArgs, ...slashCmdArgs, ...isoCfg, "--append-system-prompt", appendedPolicy];
         const spawnPlan = await this.resolveSandboxPlan(ompArgv);
         const acp = new ACPClient(spawnPlan.cmd, spawnPlan.args, currentWorkspace(), spawnPlan.env);
         acp.onNotify = (method, params) => {
@@ -575,6 +580,23 @@ class Backend {
             // EVEN in Agent mode (egress is never silently auto-approved). Fail-closed: no live UI ⇒ deny.
             const isEgress = [...EGRESS_TOOLS].some((t) => toolName.includes(t)) || (!!target && /^https?:\/\//i.test(target));
             if (isEgress) {
+              // P-EGRESS.2 (ADR-0094): a browser-open of a LOCAL file (file:// or an absolute path) is not a
+              // website visit — a host-based standing allow can't apply, so we still PROMPT, but with an
+              // accurate local-file dialog (and never persist a host decision for it).
+              const localFile = !!target && isLocalFileTarget(target);
+              // ADR-0218/0219: under AskSage lockdown, FAIL-CLOSED block ALL public egress (web_search / browser
+              // / fetch / navigate / any external http(s) target) for a session in CUI mode — a public search or
+              // fetch would backflow CUI to a non-accredited service. This overrides the allowWebSearch
+              // auto-approve below and covers browse/fetch too (a browser open leaks as much as a search).
+              // Local-file previews (file://) are NOT public egress and stay allowed. A session explicitly in
+              // SEARCH mode (user affirmed no CUI datasets) is exempt and falls through to the normal posture.
+              // The mode is per-session (ADR-0219), read fail-closed (default CUI) by the ACTIVE session id; the
+              // sanctioned "search" for a CUI thread is a SEPARATE Search-mode session, or the AskSage RAG model.
+              if (this.asksageLocked() && sessionMode(this.sessionId ?? "") === "cui" && !localFile) {
+                this.recordGateDiag({ kind: "egress", tool: toolName.slice(0, 40), target: (target ?? "").slice(0, 80), localFile: false, askActive: this.askActive, listener: !!this.listener, goalActive: this.goalActive, autoRunning: this.autoRunning, decision: "block(asksage-lockdown-cui)" });
+                emitSecurityEvent({ category: "egress", type: "egress_decision", decision: "block", severity: "high", tool: "egress-lockdown-cui", reason: `public web egress blocked: CUI session under AskSage lockdown · ${target ?? toolName}`.slice(0, 200), sessionId: this.sessionId ?? undefined });
+                return { outcome: { outcome: "cancelled" } };
+              }
               // P-NETWL.5 (ADR-0108): a web_search call (omp's default search providers, no arbitrary browse)
               // auto-approves when the user's posture allows web search - the pre-checked personal default.
               if ((toolName.includes("web_search") || toolName.includes("web-search")) && egressPosture().allowWebSearch) {
@@ -582,10 +604,6 @@ class Backend {
                 const a = opts.find((o) => /allow/i.test(o.kind ?? o.optionId ?? "")) ?? opts[0];
                 return a ? { outcome: { outcome: "selected", optionId: a.optionId } } : { outcome: { outcome: "cancelled" } };
               }
-              // P-EGRESS.2 (ADR-0094): a browser-open of a LOCAL file (file:// or an absolute path) is not a
-              // website visit — a host-based standing allow can't apply, so we still PROMPT, but with an
-              // accurate local-file dialog (and never persist a host decision for it).
-              const localFile = !!target && isLocalFileTarget(target);
               // P-NETWL.3 (ADR-0106): decide WITH context so `project`/`loop`-scoped whitelist entries apply,
               // and enforce a matched entry's per-loop `callBudget`. In a loop, once a budgeted host's calls
               // are used up the whitelist stops auto-allowing it (falls through to prompt/fail-closed block).
@@ -670,6 +688,10 @@ class Backend {
     if (s?.modes) { this.availableModes = s.modes.availableModes ?? []; this.currentModeId = String(s.modes.currentModeId ?? "default"); }
     await sleep(350); // let available_commands_update arrive
     this.syncModelEnv();
+    // ADR-0217: on a FRESH session (launch / respawn), apply the AskSage lockdown now so the picker + status
+    // reflect the gov model immediately, not only after the first turn. Best-effort — the prompt() clamp is the
+    // fail-closed guarantee; a failure here (e.g. no gov model yet) is surfaced there when a turn is sent.
+    if (this.asksageLocked()) await this.enforceAsksageLock().catch(() => ({ ok: false }));
   }
 
   /** P-LOC.1: the omp-reported active model id (from the `model` config option), or "" if unknown. */
@@ -889,6 +911,7 @@ class Backend {
   async prompt(text: string, onEvent: (e: ChatEvent) => void, images?: { data: string; mimeType: string }[]): Promise<void> {
     let assistant = "";
     let stalled = false;
+    let lockBlocked = false; // ADR-0217: the turn was refused because AskSage lockdown couldn't be satisfied
     let idle: ReturnType<typeof setTimeout> | undefined;
     let slow: ReturnType<typeof setTimeout> | undefined;
     let silentSince = Date.now();
@@ -933,6 +956,11 @@ class Backend {
     this.turnDiag(`prompt.start session=${this.sessionId}`);
     try {
       await this.ensureSession();
+      // ADR-0217: FAIL-CLOSED AskSage lockdown. Force the model to the gov gateway before sending; if the lock
+      // is on but no gov model exists, REFUSE the turn rather than route to a direct provider. This is the
+      // authoritative enforcement (the renderer's toggle-time switch does not survive an omp respawn / relaunch).
+      const lock = await this.enforceAsksageLock();
+      if (!lock.ok) { lockBlocked = true; throw new Error(lock.error ?? "AskSage lockdown could not be satisfied."); }
       beginStepTurn(this.sessionId); // P-RESUME.1: anchor this turn's recorded steps to the new user message
       // Assemble the user-turn preamble (never the frozen prefix; invariant #5/#6). Issue #54:
       // persona + skill + the live <user-profile> profile are STANDING guidance re-delivered every
@@ -964,8 +992,9 @@ class Backend {
       this.turnDiag(`prompt.resolved session=${this.sessionId} chars=${assistant.length} stopReason=${promptRes?.stopReason ?? "?"} enqueueErr=${enqueueErr} listenerIntact=${this.listener === sink}`);
     } catch (e) {
       errored = true; // P-EVAL.2: a stall/disconnect makes this turn's latency sample ok=false
-      this.turnDiag(`prompt.${stalled ? "stalled" : "error"} session=${this.sessionId} chars=${assistant.length} enqueueErr=${enqueueErr} listenerIntact=${this.listener === sink} msg=${String((e as any)?.message ?? e).slice(0, 80)}`);
-      onEvent({ type: "token", text: `\n[${stalled ? "stalled" : "agent unavailable"}: ${String((e as any)?.message ?? e)}]` });
+      this.turnDiag(`prompt.${lockBlocked ? "lockdown-blocked" : stalled ? "stalled" : "error"} session=${this.sessionId} chars=${assistant.length} enqueueErr=${enqueueErr} listenerIntact=${this.listener === sink} msg=${String((e as any)?.message ?? e).slice(0, 80)}`);
+      // ADR-0217: a lockdown block is a deliberate refusal, not a failure — surface the reason plainly.
+      onEvent({ type: "token", text: lockBlocked ? `\n[blocked: ${String((e as any)?.message ?? e)}]` : `\n[${stalled ? "stalled" : "agent unavailable"}: ${String((e as any)?.message ?? e)}]` });
     } finally {
       if (idle) clearTimeout(idle);
       if (slow) clearTimeout(slow);
@@ -1272,8 +1301,16 @@ class Backend {
           result = gate.result ?? "refused";
           if (gate.disable) updateAutomation(ws, id, { enabled: false });
         } else {
-          const r = await startAgentRun({ spec: spec!, prompt: a.agentPrompt ?? "", model: a.agentModel || "haiku", workspace: ws, trustLabel: trust.trustLabel });
-          result = r.blocked ? `blocked: ${r.reason ?? "refused"}` : r.error ? `error: ${r.error}` : r.paused ? "refused: halted at an approval checkpoint" : `ok: ${(r.output ?? "").slice(0, 160) || "(no output)"}${r.runId ? ` [${r.runId}]` : ""}`;
+          // ADR-0218: a scheduled BUILT-AGENT run must honor AskSage lockdown too - force a gov model, and
+          // REFUSE the run (never route to a direct provider like the default "haiku") when the lock is on but
+          // no gov model is available. This is the last un-clamped model-routing path noted in ADR-0217.
+          const lockRes = this.resolveAgentRunModel(a.agentModel || "haiku");
+          if (!lockRes.ok) {
+            result = `refused: ${lockRes.error}`;
+          } else {
+            const r = await startAgentRun({ spec: spec!, prompt: a.agentPrompt ?? "", model: lockRes.model || a.agentModel || "haiku", workspace: ws, trustLabel: trust.trustLabel });
+            result = r.blocked ? `blocked: ${r.reason ?? "refused"}` : r.error ? `error: ${r.error}` : r.paused ? "refused: halted at an approval checkpoint" : `ok: ${(r.output ?? "").slice(0, 160) || "(no output)"}${r.runId ? ` [${r.runId}]` : ""}`;
+          }
         }
       } catch (e) {
         result = `error: ${e instanceof Error ? e.message : String(e)}`;
@@ -1306,17 +1343,49 @@ class Backend {
    *  `models.asksageOnly` block plus the legacy top-level flag, via managedAsksageOnly). */
   private asksageLocked(): boolean { return asksageOnly() || managedAsksageOnly(); }
 
+  /** The model ids omp currently reports in the `model` config option. */
+  private modelOptionValues(): string[] {
+    const opt = this.configOptions.find((c) => c?.id === "model");
+    return (Array.isArray(opt?.options) ? opt!.options : []).map((o: any) => String(o?.value ?? "")).filter(Boolean);
+  }
+
+  /** ADR-0217: FAIL-CLOSED server-side enforcement of AskSage lockdown. When the lock is on, force omp's active
+   *  model to an AskSage-routed (gov-gateway) one BEFORE a turn is sent. Returns { ok:false, error } when the
+   *  lock is on but no gov model exists (lockdown enabled without a configured gateway) so the caller can BLOCK
+   *  the turn - a turn must NEVER route to a direct provider under lockdown. No-op when the lock is off. This is
+   *  the authoritative guarantee: the renderer's toggle-time switch + picker hiding are cosmetic and do not
+   *  survive an omp respawn or a fresh launch with lockdown already persisted ON. */
+  private async enforceAsksageLock(): Promise<{ ok: boolean; error?: string }> {
+    const r = resolveLockdownModel(this.asksageLocked(), this.activeModel(), this.modelOptionValues());
+    if (!r.ok) return { ok: false, error: r.error };
+    if (r.model && r.model !== this.activeModel()) {
+      await this.setConfig("model", r.model).catch(() => {});
+      if (!isAsksageRouted(this.activeModel())) return { ok: false, error: "Could not switch to an AskSage gov model for lockdown." };
+    }
+    return { ok: true };
+  }
+
+  /** ADR-0218: resolve the model a BUILT-AGENT run must use, honoring AskSage lockdown. PUBLIC so the dev.ts
+   *  Builder "Run" route can clamp before spawning a run (the scheduled-automation path calls it too). Under
+   *  lockdown a direct model is swapped for a gov one; `{ ok:false }` ⇒ the caller must REFUSE, never route
+   *  direct. Lock off ⇒ the desired model passes through unchanged. */
+  resolveAgentRunModel(desired: string): { ok: boolean; model?: string; error?: string } {
+    return resolveLockdownModel(this.asksageLocked(), desired || "haiku", this.modelOptionValues());
+  }
+
   // P-GOAL.6 (ADR-0048): the user's accessible models, as the model config reports them (provider-
   // prefixed value + display name). Empty until omp has reported a config.
   private accessibleModels(): ModelOption[] {
     const opt = this.configOptions.find((c) => c?.id === "model");
     const list = Array.isArray(opt?.options) ? opt!.options : [];
     const models = list.filter((o: any) => o?.value).map((o: any) => ({ value: String(o.value), name: o.name, description: o.description }));
-    // P-GOAL.6.1: when the AskSage lock is on, the checker must use a GOV model routed through AskSage —
-    // restrict to asksage providers whose id is a GOV model. Fail-safe: only narrow if such models exist
-    // (never empty the list, which would drop the picker / the recommendation to the maker model).
+    // P-GOAL.6.1: when the AskSage lock is on, the checker must use a model routed through the AskSage gateway.
+    // Fail-safe: only narrow if such models exist (never empty the list, which would drop the picker / the
+    // recommendation to the maker model). ADR-0217: match on the `asksage` provider prefix - real gov ids like
+    // `asksage-openai/gpt-5.6-luna` carry no "gov" SUBSTRING (the earlier `/gov/i` test matched none of them, so the
+    // checker silently fell through to ALL models, including direct providers).
     if (this.asksageLocked()) {
-      const gov = models.filter((m: ModelOption) => /^asksage/i.test(m.value) && /gov/i.test(m.value));
+      const gov = models.filter((m: ModelOption) => isAsksageRouted(m.value));
       if (gov.length) return gov;
     }
     return models;

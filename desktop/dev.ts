@@ -103,16 +103,47 @@ import { importRoomKey } from "./collab/crypto.ts";
 import { recordCollabShareStarted, recordCollabShareStopped, recordCollabGuestJoined, recordCollabGuestLeft, recordCollabAudit } from "./collab/collab_audit.ts"; // P-COLLAB.18 (ADR-0204)
 import { authorizeRelayConnect } from "./managed_config.ts";
 import { collabRelayConfig, setCollabRelay, collabP2PConfig, setCollabP2P } from "./settings_store.ts";
+import { sessionMode, setSessionMode } from "./settings_store.ts"; // ADR-0219: per-session CUI/Search mode
+import { embeddingsConfig, setEmbeddingsConfig } from "./settings_store.ts"; // ADR-0221: BYO-embeddings config
+
+// ADR-0221: the desktop's Embedder — an ApiEmbedder built from the stored config + the vault secret injected as
+// LUCID_EMBEDDINGS_KEY by main, or null when semantic search is off/incomplete (retrieval stays lexical).
+function desktopEmbedder() { return resolveApiEmbedder(embeddingsConfig() ?? undefined, process.env.LUCID_EMBEDDINGS_KEY); }
+
+// ADR-0221: (re)build a KG's SEMANTIC vector index from its COMPILED PAGES — the canonical, always-available
+// corpus (so incremental ingest AND the explicit "re-index" action stay consistent). Idempotent: clears the
+// dataset then re-embeds every page via the scan-gated ingestText (a page that fails the re-scan is dropped,
+// never embedded). Returns page/chunk counts. Callers pass a resolved embedder.
+async function syncVectorIndex(kgId: string, kgName: string, embedder: Embedder): Promise<{ pages: number; stored: number }> {
+  const vstore = await knowledgeVectorStore(kgId);
+  const datasetId = await vectorDatasetFor(vstore, kgName || "Knowledge", embedder);
+  await vstore.clearChunks(datasetId);
+  const pages = await (await kbStore(kgId)).listPages();
+  let stored = 0;
+  for (const pg of pages) {
+    const res = await ingestText({
+      store: vstore, scanner: kbScanner(), embedder, datasetId,
+      sourcePath: `page:${pg.slug}`, text: `${pg.title}\n\n${pg.body_md}`,
+      onBlock: (blk) => recordBlock({ tool: "kb_embed", severity: "high", findings: String(blk.findings), reason: `KB embed blocked: ${blk.reason}` }),
+    });
+    stored += res.stored;
+  }
+  return { pages: pages.length, stored };
+}
 import { hostname as osHostname } from "node:os";
 import { analyzeWork, codifyCandidate, gatherWorkDigest, type SkillCandidate, type StudioWindow } from "./skill_studio.ts"
 import { buildSkillArtifact, PublishDispatcher, publishersFor } from "./skill_publish.ts";
-import { kbScanner, kbStore, listKgs, activeKgId, createKg, renameKg, setActiveKg } from "./kb_store.ts"
+import { kbScanner, kbStore, listKgs, activeKgId, createKg, renameKg, setActiveKg, knowledgeVectorStore, vectorDatasetFor } from "./kb_store.ts"
 import { readKbSources } from "./kb_sources.ts"
 import { ingestSourcesIntoKg } from "../harness/kb/batch_ingest.ts"
 import { exportKgPack, importKgPack, installPackFromUrl } from "./kb_pack.ts"
 import { startKbIngest, kbIngestJobStatus, cancelKbIngest } from "./kb_ingest_job.ts"
 import { ingestDocument } from "../harness/kb/ingest.ts"
-import { retrieveKnowledge, type RetrieveMode } from "../harness/kb/retrieve.ts"
+import { retrieveKnowledge, type RetrieveMode, type RetrieveArgs } from "../harness/kb/retrieve.ts"
+import { ingestText } from "../harness/knowledge/ingest.ts" // ADR-0221: vector (semantic) ingest, scan-gated
+import { resolveApiEmbedder } from "../harness/knowledge/embed_config.ts" // ADR-0221
+import { probeEmbeddings } from "../harness/knowledge/api_embedder.ts" // ADR-0221: "Test endpoint" probe
+import type { Embedder } from "../harness/knowledge/embedder.ts"
 import { recordBlock } from "./security_log.ts"
 import { importSkill } from "./skills_import.ts";
 import { createUserCommand, deleteUserCommand, listUserCommands } from "./user_commands.ts"; // P-CMD.1
@@ -534,7 +565,9 @@ const server = Bun.serve({
       // `/api/preview/serve` (iframe src) and `/api/preview/shot` (fetched by the omp subprocess, which
       // inherits a ready URL incl. the token via LUCID_PREVIEW_SHOT_URL) can't set a header, so they also
       // accept the per-launch token as a `?t=` query param — same token, still behind the H1/H2 gate above.
-      const queryTokenOk = p === "/api/preview/serve" || p === "/api/preview/shot" || p === "/api/preview/inspect" || p === "/api/preview/act";
+      // ADR-0220: /api/kb/retrieve is also called by the omp subprocess's `knowledge_search` tool (via the
+      // token'd LUCID_KB_RETRIEVE_URL it inherits), which can't set a header — accept the `?t=` token for it too.
+      const queryTokenOk = p === "/api/preview/serve" || p === "/api/preview/shot" || p === "/api/preview/inspect" || p === "/api/preview/act" || p === "/api/kb/retrieve";
       const tok = queryTokenOk ? (req.headers.get("x-lucid-token") ?? url.searchParams.get("t")) : req.headers.get("x-lucid-token");
       if (!tokenValid(tok, TOKEN)) return new Response("forbidden", { status: 403 });
     }
@@ -1214,7 +1247,11 @@ const server = Bun.serve({
         // `paused`; the human resumes via /api/agent/run/approve. The halt is enforced by the SegmentedRun
         // machine (the post-approval prompt does not exist until approve), not by model compliance.
         const trust = loadSpecTrust(currentWorkspace(), v.spec!.spec_id);
-        const r = await startAgentRun({ spec: v.spec!, prompt, model, workspace: currentWorkspace(), trustLabel: trust.trustLabel });
+        // ADR-0218: honor AskSage lockdown on the Builder "Run" too - clamp to a gov model, or REFUSE (never
+        // route a built-agent run to a direct provider) when lockdown is on but no gov model is available.
+        const lockRes = backend.resolveAgentRunModel(model);
+        if (!lockRes.ok) return json({ ok: false, data: { output: "", error: "", blocked: true, reason: lockRes.error ?? "AskSage lockdown", paused: null, runId: "" } });
+        const r = await startAgentRun({ spec: v.spec!, prompt, model: lockRes.model || model, workspace: currentWorkspace(), trustLabel: trust.trustLabel });
         return json({ ok: r.ok, data: { output: r.output ?? "", error: r.error ?? "", blocked: !!r.blocked, reason: r.reason ?? "", paused: r.paused ?? null, runId: r.runId ?? "" } });
       }
       // P-AGENT.13: run traces — file-backed provenance under .omp/agent-runs/traces/ (the desktop holds
@@ -1527,8 +1564,11 @@ const server = Bun.serve({
         return json({ ok: true, data: workspaceInfo() });
       }
       if (p === "/api/workspace/clone" && req.method === "POST") {
-        const { url } = await readBody<{ url?: unknown }>(req);
-        const r = await cloneRepo(String(url ?? ""));
+        // `pat` (ADR-0216): an OPTIONAL, freshly-entered git token passed inline so a private clone works THIS
+        // session before the vault-injected env var lands on the next launch. It is used only to spawn git
+        // (redacted from any error) and is never logged, persisted here, or forwarded to the agent.
+        const { url, pat } = await readBody<{ url?: unknown; pat?: unknown }>(req);
+        const r = await cloneRepo(String(url ?? ""), typeof pat === "string" ? pat : undefined);
         if (r.ok && r.path) { setWorkspace(r.path); backend.restart(); }
         return json({ ok: r.ok, data: { ...workspaceInfo(), cloned: r.ok, error: r.error } });
       }
@@ -1573,6 +1613,68 @@ const server = Bun.serve({
       if (p === "/api/thirdparty-ack") {
         if (req.method === "POST") { const b = await readBody<{ acknowledge?: unknown }>(req); return json({ ok: true, data: { acknowledged: !!setThirdPartyProvidersAcknowledged(!!b.acknowledge).thirdPartyProvidersAcknowledged } }); }
         return json({ ok: true, data: { acknowledged: thirdPartyProvidersAcknowledged() } });
+      }
+      // ADR-0219: per chat-session CUI vs Search mode. Defaults to the ACTIVE omp session so the renderer can
+      // just ask "the current session's mode" without tracking ids. GET (?id= optional) → mode (default
+      // "cui"); POST {mode, id?} → persist. Under lockdown the backend egress gate reads this to decide
+      // whether to block public egress for the active session (CUI blocks; Search allows).
+      if (p === "/api/session-mode") {
+        if (req.method === "POST") {
+          const b = await readBody<{ id?: unknown; mode?: unknown }>(req);
+          const id = (typeof b.id === "string" && b.id) ? b.id : (backend.currentSessionId() ?? "");
+          const mode = b.mode === "search" ? "search" : "cui";
+          if (id) setSessionMode(id, mode);
+          return json({ ok: true, data: { id, mode: id ? sessionMode(id) : "cui" } });
+        }
+        const id = url.searchParams.get("id") || (backend.currentSessionId() ?? "");
+        return json({ ok: true, data: { id, mode: id ? sessionMode(id) : "cui" } });
+      }
+      // ADR-0221: the "Semantic search" (BYO-embeddings) config. Non-secret (baseUrl/model/dim/auth); the token
+      // is stored separately in the OS vault (credStore) and referenced by vaultRef. `active` reflects whether a
+      // usable embedder resolves right now (config complete + any needed secret present in the child env).
+      if (p === "/api/embeddings-config") {
+        if (req.method === "POST") {
+          const b = await readBody<{ config?: unknown }>(req);
+          const c = b.config as Record<string, unknown> | null;
+          if (c === null) { setEmbeddingsConfig(null); return json({ ok: true, data: { config: null, active: false } }); }
+          if (!c || typeof c.baseUrl !== "string" || typeof c.model !== "string" || !c.baseUrl.trim() || !c.model.trim())
+            return json({ ok: true, data: { config: embeddingsConfig(), active: !!desktopEmbedder(), error: "Base URL and model are required." } });
+          const authKind = c.authKind === "bearer" || c.authKind === "apikey" ? c.authKind : "none";
+          setEmbeddingsConfig({
+            enabled: c.enabled !== false,
+            baseUrl: c.baseUrl.trim(), model: c.model.trim(),
+            dim: Math.max(1, Math.floor(Number(c.dim) || 0)),
+            authKind, headerName: typeof c.headerName === "string" ? c.headerName : undefined,
+            vaultRef: typeof c.vaultRef === "string" ? c.vaultRef : undefined,
+          });
+          return json({ ok: true, data: { config: embeddingsConfig(), active: !!desktopEmbedder() } });
+        }
+        return json({ ok: true, data: { config: embeddingsConfig(), active: !!desktopEmbedder() } });
+      }
+      // ADR-0221: "Test endpoint" - a one-vector connectivity probe against the ENTERED values (incl. an inline
+      // key, so it works before saving/relaunch), reporting the dimension the model returns so the UI auto-fills it.
+      if (p === "/api/embeddings/test" && req.method === "POST") {
+        const b = await readBody<{ baseUrl?: unknown; model?: unknown; authKind?: unknown; headerName?: unknown; secret?: unknown }>(req);
+        const baseUrl = String(b.baseUrl ?? "").trim(), model = String(b.model ?? "").trim();
+        if (!baseUrl || !model) return json({ ok: true, data: { ok: false, error: "Base URL and model are required." } });
+        const authKind = b.authKind === "bearer" || b.authKind === "apikey" ? b.authKind : "none";
+        const secret = typeof b.secret === "string" && b.secret ? b.secret : (authKind !== "none" ? process.env.LUCID_EMBEDDINGS_KEY : undefined);
+        try {
+          const { dim } = await probeEmbeddings({ baseUrl, model, authKind, secret, headerName: typeof b.headerName === "string" ? b.headerName : undefined });
+          return json({ ok: true, data: { ok: true, dim } });
+        } catch (e) { return json({ ok: true, data: { ok: false, error: String((e as Error)?.message ?? e).slice(0, 200) } }); }
+      }
+      // ADR-0221: "Re-index" - rebuild every KG's semantic index from its compiled pages (idempotent). Only
+      // meaningful once semantic search is active. Synchronous (KGs are few; embeddings are cheap next to compile).
+      if (p === "/api/embeddings/reindex" && req.method === "POST") {
+        const embedder = desktopEmbedder();
+        if (!embedder) return json({ ok: true, data: { ok: false, error: "Semantic search isn't active. Enable it (and relaunch if it uses a cloud key) first." } });
+        let kgs = 0, pages = 0, stored = 0;
+        for (const kg of listKgs()) {
+          try { const r = await syncVectorIndex(kg.kg_id, kg.name, embedder); kgs++; pages += r.pages; stored += r.stored; }
+          catch (e) { console.error(`[REINDEX] ${kg.name} skipped:`, (e as Error)?.message); }
+        }
+        return json({ ok: true, data: { ok: true, kgs, pages, stored } });
       }
       if (p === "/api/auth") return json({ ok: true, data: providerAuth() });
       if (p === "/api/auth/key" && req.method === "POST") {
@@ -1765,8 +1867,22 @@ const server = Bun.serve({
       }
       if (p === "/api/kb/retrieve" && req.method === "POST") {
         const b = await readBody<{ query?: unknown; mode?: unknown }>(req);
-        const mode: RetrieveMode = b.mode === "vector" || b.mode === "hybrid" ? b.mode : "compiled";
-        return json({ ok: true, data: await retrieveKnowledge({ query: String(b.query ?? ""), mode, compiled: { store: await kbStore() } }) });
+        const requested: RetrieveMode = b.mode === "vector" || b.mode === "hybrid" ? b.mode : "compiled";
+        const store = await kbStore();
+        // ADR-0221: auto-upgrade to HYBRID (semantic vectors + lexical compiled) when an embeddings endpoint is
+        // configured AND the active KG has embedded chunks; else stay lexical. The knowledge_search tool always
+        // asks for "compiled" — this transparently upgrades it when vectors exist, and degrades safely if not.
+        const embedder = desktopEmbedder();
+        let vector: RetrieveArgs["vector"];
+        if (embedder) {
+          try {
+            const vstore = await knowledgeVectorStore();
+            const ds = (await vstore.listDatasets()).find((d) => d.embedding_model === embedder.id && d.dim === embedder.dim);
+            if (ds && (await vstore.chunkCount(ds.dataset_id)) > 0) vector = { store: vstore, datasetId: ds.dataset_id, embedder };
+          } catch { /* no vector store yet → lexical */ }
+        }
+        const mode: RetrieveMode = vector ? "hybrid" : (requested === "vector" ? "compiled" : requested);
+        return json({ ok: true, data: await retrieveKnowledge({ query: String(b.query ?? ""), mode, compiled: { store }, vector }) });
       }
       if (p === "/api/kb/graph") {
         const s = await kbStore();
@@ -1828,6 +1944,13 @@ const server = Bun.serve({
               signal,
               onBlock: (blk) => recordBlock({ tool: "kb_ingest", severity: "high", findings: String(blk.findings), reason: `KB ${blk.stage} blocked${blk.slug ? ` (${blk.slug})` : ""}: ${blk.reason}` }),
             });
+            // ADR-0221: rebuild the KG's SEMANTIC index from its compiled pages, when an embeddings endpoint is
+            // configured. Best-effort: a failure here (or no embedder) leaves the KG lexical-only; never fails
+            // the compile job. Same routine as the explicit "re-index" action, so both stay consistent.
+            try {
+              const embedder = desktopEmbedder();
+              if (embedder && !signal?.aborted) await syncVectorIndex(targetId, kgName, embedder);
+            } catch (e) { console.error("[EMBED] semantic index skipped:", (e as Error)?.message); }
             return { ...result, kgId: targetId, kgName, kind: src.scan.kind, vendor: src.scan.vendor ?? null };
           },
         });
@@ -2263,6 +2386,9 @@ process.env.LUCID_PREVIEW_SHOT_URL = `http://127.0.0.1:${server.port}/api/previe
 process.env.LUCID_PREVIEW_INSPECT_URL = `http://127.0.0.1:${server.port}/api/preview/inspect?t=${TOKEN}`;
 // P-PREVIEW.6c (ADR-0153): preview_click / preview_type GET this (with ?action=&selector=&value=) to act.
 process.env.LUCID_PREVIEW_ACT_URL = `http://127.0.0.1:${server.port}/api/preview/act?t=${TOKEN}`;
+// ADR-0220: the `knowledge_search` tool (omp subprocess) POSTs the user's query here to ground on the local
+// compiled knowledge base. Token'd URL, same pattern as the preview tools; retrieval returns delimited untrusted DATA.
+process.env.LUCID_KB_RETRIEVE_URL = `http://127.0.0.1:${server.port}/api/kb/retrieve?t=${TOKEN}`;
 
 // Build recall once at startup — the FIRST session is created lazily on the first /api/chat (never
 // via /api/newSession), so this is what carries prior-session facts into it. Best-effort; the omp

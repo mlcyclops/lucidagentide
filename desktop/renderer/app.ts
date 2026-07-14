@@ -109,6 +109,9 @@ const state = {
   workspace: null as WorkspaceInfo | null,
   asksage: null as { configured: boolean; base: string; only: boolean; limit: number; datasets: string[]; queryModel: string; persona: string } | null,
   asksageTokens: null as { used: number; remaining: number | null; limit: number } | null,
+  asksageDatasetList: [] as string[], // ADR-0219: the account's full dataset list for the titlebar Datasets picker
+  sessionMode: "cui" as "cui" | "search", // ADR-0219: this chat session's CUI (no web search) vs Search mode
+  dodAck: false as boolean, // ADR-0219: the DoD/STIG Notice & Consent banner has been acknowledged this launch
   chinaAck: false as boolean, // P-IDE.1c: user acknowledged the China-origin data-sovereignty warning (Settings unlock)
   thirdPartyAck: false as boolean, // user acknowledged the third-party / non-U.S. "More providers" warning
   auth: null as import("./bridge.ts").AuthStatus | null, // full provider-auth status (gateway/majors/others)
@@ -150,6 +153,7 @@ const MODEL_CTX: Record<string, number> = {
   "claude-fable-5": 1_000_000, "claude-mythos-5": 1_000_000, "claude-opus-4-8": 1_000_000, "claude-opus-4-7": 1_000_000,
   "claude-opus-4-6": 1_000_000, "claude-sonnet-4-6": 1_000_000, "claude-sonnet-4-5": 1_000_000,
   "claude-haiku-4-5": 200_000,
+  "gpt-5.6-luna": 256_000, "gpt-5.6-sol": 256_000, "gpt-5.6-terra": 256_000,
   "gpt-5.2": 256_000, "gpt-5.5": 256_000, "gpt-5.4": 256_000, "gpt-5.1": 256_000, "gpt-5": 256_000,
   "gpt-5-mini": 256_000, "gpt-4.1": 1_000_000, "gpt-o3": 200_000, "gpt-o3-mini": 200_000, "gpt-o4-mini": 200_000,
   "google-claude-45-opus": 200_000, "google-claude-45-sonnet": 200_000, "google-claude-45-haiku": 200_000,
@@ -170,6 +174,9 @@ function modelLabel(value: string): string {
 const OPEN = new Set<string>(["sec.quarantine", "sec.approvals", "mem.context", "mem.cache"]);
 let lastInspHash = "";
 let autoCollapsedSessions = false; // collapse the sessions panel once, on the first chat message
+// ADR-0216: a freshly-entered git PAT kept in renderer session memory ONLY (never persisted here) so a private
+// clone works THIS session without waiting for the next-launch vault→env injection. Cleared on app restart.
+let sessionGitPat = "";
 
 // ───────────────────────── shell ─────────────────────────
 function buildShell(): void {
@@ -183,6 +190,13 @@ function buildShell(): void {
       <!-- Persona + Skills live in the titlebar (full-width, so they don't squish when a right surface opens). -->
       <button class="ctool tb-chip" id="ctPersona" data-tip="AskSage persona|Server-supplied role guidance - scanned before use" hidden>${icon("user", 14)}<span id="ctPersonaName">Persona</span>${icon("chevron", 11)}</button>
       <button class="ctool tb-chip" id="ctSkill" data-tip="Skills|Built-in skills, /task delegation, and project skills" hidden>${icon("bolt", 14)}<span>Skills</span>${icon("chevron", 11)}</button>
+      <!-- ADR-0219: AskSage RAG Datasets picker (next to Skills). Short name shown; full name on hover. -->
+      <button class="ctool tb-chip" id="ctDataset" data-tip="Datasets|AskSage RAG datasets that ground answers. Short name shown; full name on hover." hidden>${icon("folder", 14)}<span id="ctDatasetName">Datasets</span>${icon("chevron", 11)}</button>
+      <!-- ADR-0219: per-session CUI vs Search mode (only shown under AskSage lockdown). -->
+      <div class="mode-toggle" id="modeToggle" role="group" aria-label="Session mode" hidden data-tip="CUI vs Search mode|In CUI mode there is NO web search (spillage risk). To search the web, open another chat session and switch it to Search - never run search in a CUI thread." data-tip-side="bottom">
+        <button class="mode-seg" data-mode="cui" type="button">${icon("shield", 12)} CUI</button>
+        <button class="mode-seg" data-mode="search" type="button">${icon("search", 12)} Search</button>
+      </div>
       <div class="tb-spacer"></div>
       <div class="zoom" role="group" aria-label="Text zoom">
         <button id="zoomOut" data-tip="Zoom out|${modSymbol("−")}">${icon("minus", 13)}</button>
@@ -229,6 +243,10 @@ function buildShell(): void {
 
       <main class="center">
         <div class="chat-bg" id="chatBg" aria-hidden="true"></div>
+        <!-- ADR-0219: violet CUI banner - shown only when this session is in CUI mode under lockdown. -->
+        <div class="cui-banner" id="cuiBanner" hidden data-tip="CUI session|Controlled Unclassified Information handling. Web search is disabled to prevent spillage. To search the web, open another chat session and switch it to Search mode." data-tip-side="bottom">
+          ${icon("shield", 13)}<span><b>CUI MODE</b> - Controlled Unclassified Information - web search disabled (spillage risk)</span>
+        </div>
         <div class="chat" id="chat"><div class="thread" id="thread"></div></div>
         <button class="jump-down" id="jumpDown" type="button" aria-label="Jump down a page" data-tip="Jump down a page">${icon("chevronsDown", 18)}</button>
         <div class="composer-wrap">
@@ -2556,6 +2574,82 @@ async function reseedTrivia(btn: HTMLButtonElement | null): Promise<void> {
   }
 }
 
+// ADR-0221: the "Semantic search" card - point KB RAG at an OpenAI-compatible /embeddings endpoint (a LOCAL
+// Ollama for air-gap, or OpenAI/Azure). Non-secret config here; the key is stored in the OS vault on save.
+function secEmbeddings(cfg: import("./bridge.ts").EmbeddingsConfigView | null, active: boolean): string {
+  const c = cfg ?? { enabled: false, baseUrl: "", model: "", dim: 768, authKind: "none" as const, vaultRef: undefined as string | undefined };
+  const opt = (v: string, label: string) => `<option value="${v}" ${c.authKind === v ? "selected" : ""}>${label}</option>`;
+  const pill = active ? `<span class="abadge ok">active</span>` : (c.enabled ? `<span class="abadge warn">needs a key / relaunch</span>` : `<span class="abadge">off</span>`);
+  return `<div class="set-sec">
+    <div class="set-note">${icon("search", 12)} Ground the agent on your own notes with SEMANTIC search. Point at a LOCAL Ollama (offline / air-gap: <code>http://localhost:11434/v1</code> · <code>nomic-embed-text</code> · dim 768) or a cloud endpoint (OpenAI <code>text-embedding-3-small</code> · dim 1536). Off = lexical search only. ${pill}</div>
+    <label class="set-toggle"><input type="checkbox" id="embEnabled" ${c.enabled ? "checked" : ""}/><span><b>Enable semantic search</b> - embed ingested knowledge for meaning-based retrieval.</span></label>
+    <div class="prov-row"><input class="prov-key" id="embBaseUrl" placeholder="Base URL - e.g. http://localhost:11434/v1" value="${esc(c.baseUrl)}" autocomplete="off" spellcheck="false"/></div>
+    <div class="prov-row"><input class="prov-key" id="embModel" placeholder="Embedding model - e.g. nomic-embed-text" value="${esc(c.model)}"/><input class="prov-key" id="embDim" type="number" min="1" placeholder="dim" value="${c.dim || ""}" style="max-width:90px"/></div>
+    <div class="prov-row">
+      <select class="prov-key" id="embAuth" style="max-width:160px">${opt("none", "No auth (local)")}${opt("bearer", "Bearer key")}${opt("apikey", "API-key header")}</select>
+      <input class="prov-key" id="embKey" type="password" placeholder="${c.vaultRef ? "Key saved - blank keeps it" : "API key (stored in the OS vault)"}" autocomplete="off"/>
+      <button class="btn-mini" id="embTest">${icon("bolt", 13)} Test</button>
+      <button class="btn-mini ok" id="embSave">${icon("check", 13)} Save</button>
+    </div>
+    ${active ? `<div class="prov-row"><button class="btn-mini" id="embReindex">${icon("refresh", 13)} Re-index knowledge graphs</button><span class="set-sub" style="align-self:center">Rebuild every KG's semantic index from its compiled pages.</span></div>` : ""}
+    <div class="set-sub">A local no-auth endpoint applies immediately; a cloud key is vaulted and takes effect on the next launch. Test checks connectivity + fills in the model's dimension. Re-ingest (or re-index) a knowledge graph to build its semantic index.</div>
+  </div>`;
+}
+async function saveEmbeddings(): Promise<void> {
+  const body = $("#setBody")!;
+  const val = (id: string) => ($(`#${id}`, body) as HTMLInputElement | null)?.value ?? "";
+  const enabled = ($("#embEnabled", body) as HTMLInputElement | null)?.checked ?? false;
+  const baseUrl = val("embBaseUrl").trim(), model = val("embModel").trim();
+  const dim = Math.max(0, Math.floor(Number(val("embDim")) || 0));
+  const authKind = ((($("#embAuth", body) as HTMLSelectElement | null)?.value) as "none" | "bearer" | "apikey") || "none";
+  const key = val("embKey");
+  if (enabled && (!baseUrl || !model || !dim)) { showToast({ tone: "warn", title: "Missing fields", desc: "Base URL, model, and dimension are required to enable semantic search.", timeout: 4200 }); return; }
+  let vaultRef = (await bridge.embeddingsConfig().catch(() => null))?.config?.vaultRef;
+  if ((authKind === "bearer" || authKind === "apikey") && key) {
+    if (!bridge.isElectron || !bridge.credStore) { showToast({ tone: "danger", title: "Vault is desktop-only", desc: "Open the LUCID desktop app to store the key securely." }); return; }
+    const r = await bridge.credStore({ ref: "embeddings_key", kind: "apikey", secret: key, label: "Embeddings endpoint key" });
+    if (r && "error" in r) { showToast({ tone: "danger", title: "Couldn't save key", desc: String(r.error), timeout: 5000 }); return; }
+    vaultRef = "embeddings_key";
+  }
+  const res = await bridge.setEmbeddingsConfig({ enabled, baseUrl, model, dim, authKind, ...(vaultRef ? { vaultRef } : {}) });
+  if (res && "error" in res && res.error) { showToast({ tone: "danger", title: "Not saved", desc: String(res.error), timeout: 5000 }); return; }
+  hydrateSettings();
+  const needsRelaunch = enabled && (authKind === "bearer" || authKind === "apikey") && !!key;
+  showToast({
+    tone: "ok", title: enabled ? "Semantic search saved" : "Semantic search off",
+    desc: needsRelaunch ? "Cloud key vaulted - relaunch to apply, then re-ingest a KG to build the index." : (enabled ? "Applies now. Re-ingest a knowledge graph to build its semantic index." : "Retrieval is lexical again."),
+    timeout: 6500,
+    actions: needsRelaunch ? [{ label: "Relaunch", kind: "ok", run: () => void bridge.relaunch() }, { label: "Later" }] : [{ label: "OK" }],
+  });
+}
+// ADR-0221: a one-vector connectivity probe against the ENTERED values (incl. an inline key) - reports the
+// dimension the model returns and fills the Dim field so a mismatch can't silently break retrieval.
+async function testEmbeddings(): Promise<void> {
+  const body = $("#setBody")!;
+  const val = (id: string) => ($(`#${id}`, body) as HTMLInputElement | null)?.value ?? "";
+  const baseUrl = val("embBaseUrl").trim(), model = val("embModel").trim();
+  const authKind = (($("#embAuth", body) as HTMLSelectElement | null)?.value) || "none";
+  const secret = val("embKey");
+  if (!baseUrl || !model) { showToast({ tone: "warn", title: "Missing fields", desc: "Base URL and model are required to test.", timeout: 3500 }); return; }
+  const btn = $("#embTest", body) as HTMLButtonElement | null; const orig = btn?.innerHTML;
+  if (btn) { btn.disabled = true; btn.textContent = "Testing…"; }
+  const r = await bridge.embeddingsTest({ baseUrl, model, authKind, ...(secret ? { secret } : {}) }).catch(() => null);
+  if (btn && orig !== undefined) { btn.disabled = false; btn.innerHTML = orig; }
+  if (r?.ok && r.dim) {
+    const dimEl = $("#embDim", body) as HTMLInputElement | null; if (dimEl) dimEl.value = String(r.dim); // authoritative discovered dim
+    showToast({ tone: "ok", title: "Endpoint reachable", desc: `The model returned ${r.dim}-dim vectors (set as Dim). Save to use it.`, timeout: 5000 });
+  } else {
+    showToast({ tone: "danger", title: "Couldn't reach the endpoint", desc: r?.error ?? "No response - check the base URL, model, and any key.", timeout: 6500 });
+  }
+}
+async function reindexEmbeddings(): Promise<void> {
+  const btn = $("#embReindex", $("#setBody")!) as HTMLButtonElement | null; const orig = btn?.innerHTML;
+  if (btn) { btn.disabled = true; btn.textContent = "Re-indexing…"; }
+  const r = await bridge.embeddingsReindex().catch(() => null);
+  if (btn && orig !== undefined) { btn.disabled = false; btn.innerHTML = orig; }
+  if (r?.ok) showToast({ tone: "ok", title: "Semantic index rebuilt", desc: `${r.stored ?? 0} passage${r.stored === 1 ? "" : "s"} across ${r.kgs ?? 0} knowledge graph${r.kgs === 1 ? "" : "s"}.`, timeout: 5200 });
+  else showToast({ tone: "danger", title: "Re-index didn't run", desc: r?.error ?? "Enable semantic search first.", timeout: 5200 });
+}
 function settingsShell(): string {
   return [
     `<div data-sec="workspace"></div>`,
@@ -2569,6 +2663,7 @@ function settingsShell(): string {
     `<div data-sec="asksageQuota"></div>`, // AskSage Monthly-tokens bar - ONLY when the gov gateway is configured (filled in hydrateSettings)
     setSkel("providers", "Providers", "U.S. frontier · key or OAuth", true),
     setSkel("localProviders", "Local Providers", "self-hosted · Ollama · vLLM · VPN", true), // P-LOCAL.3 (ADR-0135); auto-collapsed
+    setSkel("embeddings", "Semantic search", "knowledge RAG · your own embeddings", true), // ADR-0221; auto-collapsed
     `<div data-sec="sovereignty"></div>`, // P-IDE.1c: China-origin unlock (renders only when such models exist)
     setSkel("compression", "Token compression", "headroom · on-device · opt-in", true),
     setSkel("mcp", "MCP connectors", "model context protocol", true),
@@ -2589,6 +2684,7 @@ function hydrateSettings(): void {
     const el = document.querySelector(`#setBody [data-sec="workspace"]`);
     if (el) el.outerHTML = `<div data-sec="workspace">${ws ? workspaceSection(ws) : ""}</div>`;
   });
+  void bridge.embeddingsConfig().then((r) => fillSec("embeddings", secEmbeddings(r?.config ?? null, !!r?.active))); // ADR-0221
   // Profile already painted from cache; refresh from disk only if it changed AND the user isn't typing.
   void bridge.getSettings().then((s) => {
     if (!s) return;
@@ -4798,6 +4894,7 @@ async function copyExportPath(dest: string): Promise<void> {
 
 // ───────────────────────── workspace ─────────────────────────
 function workspaceSection(ws: WorkspaceInfo): string {
+  const gitPatSaved = state.creds.some((c) => c.ref === "git_pat"); // ADR-0216: a git PAT already in the vault?
   return `<div class="set-sec"><div class="set-lbl">Workspace <span class="set-sub">the folder the agent works in</span></div>
     <div class="ws-current">
       <div class="ws-name">${icon(ws.isGit ? "git" : "folder", 15)} ${esc(ws.name)} ${ws.isGit ? `<span class="abadge ok">git</span>` : ""}</div>
@@ -4812,8 +4909,39 @@ function workspaceSection(ws: WorkspaceInfo): string {
       <input class="prov-key" id="wsCloneUrl" placeholder="Clone a git repo - https://github.com/… or gitlab.com/…" />
       <button class="btn-mini ok" id="wsClone">${icon("git", 13)} Clone</button>
     </div>
+    <div class="prov-row">
+      <input class="prov-key" id="wsGitPat" type="password" placeholder="Git access token - for private repo clones" autocomplete="off" spellcheck="false" />
+      <button class="btn-mini ok" id="wsGitPatSave">${icon("shield", 13)} Save</button>
+      ${gitPatSaved ? `<button class="btn-mini danger" id="wsGitPatClear">Remove</button>` : ""}
+    </div>
+    <div class="set-sub ws-gitpat-note">${gitPatSaved
+      ? `${icon("check", 11)} A token is saved in the OS-encrypted vault - used only to clone private repos, never sent to the agent.`
+      : `Optional. A GitHub/GitLab personal access token for private-repo clones. Stored in the OS-encrypted vault; never sent to the agent.`}</div>
     ${ws.recent.length ? `<div class="ws-recent">${ws.recent.map((r) => `<button class="ws-recent-item" data-ws="${esc(r.path)}" title="${esc(r.path)}">${icon(r.isGit ? "git" : "folder", 12)} ${esc(r.name)}</button>`).join("")}</div>` : ""}
   </div>`;
+}
+// ADR-0216: persist a git PAT into the OS-encrypted vault (ref "git_pat"). Kept in `sessionGitPat` too so it
+// authenticates a clone THIS session (passed inline) before the next-launch env injection; the field is cleared
+// so the plaintext doesn't linger in the DOM. The secret never reaches the agent.
+async function saveGitPat(): Promise<void> {
+  const inp = $("#wsGitPat", $("#setBody")!) as HTMLInputElement | null;
+  const pat = (inp?.value ?? "").trim();
+  if (!pat) { showToast({ tone: "warn", title: "Enter a token", desc: "Paste a GitHub/GitLab personal access token first.", timeout: 3000 }); return; }
+  if (!bridge.isElectron || !bridge.credStore) { showToast({ tone: "danger", title: "Vault is desktop-only", desc: "Open the LUCID desktop app to store the token securely." }); return; }
+  const r = await bridge.credStore({ ref: "git_pat", kind: "apikey", secret: pat, label: "Git personal access token" });
+  if (r && "error" in r) { showToast({ tone: "danger", title: "Couldn't save token", desc: String(r.error), timeout: 5000 }); return; }
+  sessionGitPat = pat;               // usable inline this session (no relaunch needed)
+  if (inp) inp.value = "";           // don't leave the plaintext in the DOM
+  state.creds = await bridge.credList().catch(() => state.creds);
+  hydrateSettings();                 // refresh the "saved" indicator
+  showToast({ tone: "ok", title: "Git token saved", desc: "Stored encrypted. Private-repo clones will use it now and in future sessions.", timeout: 4000 });
+}
+async function clearGitPat(): Promise<void> {
+  if (bridge.isElectron && bridge.credDelete) await bridge.credDelete("git_pat").catch(() => false);
+  sessionGitPat = "";
+  state.creds = await bridge.credList().catch(() => state.creds.filter((c) => c.ref !== "git_pat"));
+  hydrateSettings();
+  showToast({ title: "Git token removed", desc: "Private-repo clones will need a token again.", timeout: 3000 });
 }
 function renderWorkspaceBar(): void {
   const bar = $("#wsBar") as HTMLButtonElement | null;
@@ -4896,6 +5024,7 @@ async function resumeSession(id: string): Promise<void> {
     renderThread(null); // no cache AND the fetch failed -> a fresh empty thread
   }
   await bridge.resumeSession(id);
+  void loadSessionMode(); // ADR-0219: reflect THIS session's CUI/Search mode + banner
   $("#input")?.focus();
 }
 
@@ -5775,7 +5904,10 @@ async function loadAsksage(): Promise<void> {
   if (state.asksage?.configured) {
     state.asksageTokens = await bridge.asksageTokens();
     state.personas = (await bridge.asksagePersonas()) ?? [];
+    state.asksageDatasetList = (await bridge.asksageDatasets()) ?? []; // ADR-0219: full list for the titlebar picker
+    showDodBanner(); // ADR-0219: gov gateway configured → the DoD/STIG consent banner (once per launch)
   }
+  await loadSessionMode(); // ADR-0219: this session's CUI/Search mode + the violet banner
   renderStatus();
   updateComposerTools();
 }
@@ -5787,6 +5919,149 @@ async function refreshAsksage(): Promise<void> {
     title: state.asksageTokens ? "Gov usage refreshed" : "AskSage not reachable",
     desc: state.asksageTokens ? `${fmtNum(state.asksageTokens.used)} / ${fmtNum(state.asksageTokens.limit)} tokens this month.` : "Add a key (and check the base URL) in Settings.",
     actions: [{ label: "OK" }], timeout: 2400,
+  });
+}
+
+// ── ADR-0219: DoD/STIG Notice & Consent banner ──────────────────────────────
+// The standard USG/DoD Notice and Consent Banner (DTM-08-060). Shown ONCE PER LAUNCH when the AskSage gov
+// gateway is configured (commercial users never see it). Edit THIS ONE constant if your org mandates a variant.
+const DOD_CONSENT_BANNER = {
+  title: "Standard Mandatory DoD Notice and Consent",
+  intro: "You are accessing a U.S. Government (USG) Information System (IS) that is provided for USG-authorized use only. By using this IS (which includes any device attached to this IS), you consent to the following conditions:",
+  items: [
+    "The USG routinely intercepts and monitors communications on this IS for purposes including, but not limited to, penetration testing, COMSEC monitoring, network operations and defense, personnel misconduct (PM), law enforcement (LE), and counterintelligence (CI) investigations.",
+    "At any time, the USG may inspect and seize data stored on this IS.",
+    "Communications using, or data stored on, this IS are not private, are subject to routine monitoring, interception, and search, and may be disclosed or used for any USG-authorized purpose.",
+    "This IS includes security measures (e.g., authentication and access controls) to protect USG interests - not for your personal benefit or privacy.",
+    "Notwithstanding the above, using this IS does not constitute consent to PM, LE or CI investigative searching or monitoring of the content of privileged communications, or work product, related to personal representation or services by attorneys, psychotherapists, or clergy, and their assistants. Such communications and work product are private and confidential. See User Agreement for details.",
+  ],
+};
+function showDodBanner(): void {
+  if (state.dodAck || $(".dod-scrim")) return; // once per launch; never stack
+  const scrim = el(`<div class="fb-scrim dod-scrim"></div>`);
+  const box = el(`<div class="fb dod" role="dialog" aria-modal="true" aria-label="${esc(DOD_CONSENT_BANNER.title)}">
+    <div class="fb-head"><span class="fb-title">${icon("shield", 15)} ${esc(DOD_CONSENT_BANNER.title)}</span></div>
+    <div class="dod-body"><p>${esc(DOD_CONSENT_BANNER.intro)}</p><ul>${DOD_CONSENT_BANNER.items.map((x) => `<li>${esc(x)}</li>`).join("")}</ul></div>
+    <div class="fb-foot"><div class="fb-hint">You must acknowledge to continue.</div><div class="fb-actions"><button class="btn-mini ok" data-ok>${icon("check", 12)} OK - I Agree</button></div></div>
+  </div>`);
+  document.body.append(scrim, box);
+  box.addEventListener("click", (e) => { if ((e.target as HTMLElement).closest("[data-ok]")) { state.dodAck = true; scrim.remove(); box.remove(); } });
+  // No scrim-click / Esc / X: a consent banner must be explicitly acknowledged (STIG).
+}
+
+// ── ADR-0219: per-session CUI vs Search mode + violet CUI banner ─────────────
+async function loadSessionMode(): Promise<void> {
+  const r = await bridge.sessionMode().catch(() => null);
+  state.sessionMode = r?.mode === "search" ? "search" : "cui";
+  renderSessionMode();
+}
+/** Sync the titlebar CUI/Search toggle + the violet CUI banner. Both appear ONLY under AskSage lockdown. */
+function renderSessionMode(): void {
+  const locked = !!state.asksage?.only;
+  const toggle = $("#modeToggle") as HTMLElement | null;
+  if (toggle) {
+    toggle.hidden = !locked;
+    toggle.querySelectorAll(".mode-seg").forEach((s) => (s as HTMLElement).classList.toggle("on", (s as HTMLElement).dataset.mode === state.sessionMode));
+  }
+  const banner = $("#cuiBanner") as HTMLElement | null;
+  if (banner) banner.hidden = !(locked && state.sessionMode === "cui");
+}
+/** Apply a mode for the current session. Switching TO Search routes through the CUI-datasets warning. */
+async function applySessionMode(mode: "cui" | "search"): Promise<void> {
+  if (mode === state.sessionMode) return;
+  if (mode === "search") { confirmSwitchToSearch(); return; }
+  state.sessionMode = "cui";
+  renderSessionMode();
+  await bridge.setSessionMode("cui").catch(() => null);
+}
+/** The spillage warning before enabling Search on a session that may hold CUI. */
+function confirmSwitchToSearch(): void {
+  const scrim = el(`<div class="fb-scrim"></div>`);
+  const box = el(`<div class="fb prompt" role="dialog" aria-label="Switch to Search mode">
+    <div class="fb-head"><span class="fb-title">${icon("search", 15)} Enable web search for this session?</span></div>
+    <div class="prompt-body"><p>Web search will be <b>enabled</b> for this chat. Are you currently in a session grounded on <b>CUI datasets</b>?</p></div>
+    <div class="fb-foot"><div class="fb-hint"></div><div class="fb-actions"><button class="btn-mini danger" data-yes>Yes - CUI is here</button><button class="btn-mini ok" data-no>${icon("check", 12)} No - enable Search</button></div></div>
+  </div>`);
+  document.body.append(scrim, box);
+  const close = () => { scrim.remove(); box.remove(); };
+  box.addEventListener("click", async (e) => {
+    const t = e.target as HTMLElement;
+    if (t.closest("[data-yes]")) {
+      close();
+      showToast({ tone: "warn", title: "Keep this session in CUI", desc: "Do not run web search in a CUI thread (spillage risk). Open a NEW chat session, switch IT to Search for non-CUI lookups, then come back to this one.", actions: [{ label: "OK" }], timeout: 8000 });
+      return;
+    }
+    if (t.closest("[data-no]")) {
+      close();
+      state.sessionMode = "search";
+      renderSessionMode();
+      await bridge.setSessionMode("search").catch(() => null);
+      showToast({ tone: "ok", title: "Search enabled for this session", desc: "Web search is on for this chat. Do NOT select CUI datasets here.", timeout: 4200 });
+    }
+  });
+  scrim.addEventListener("click", close);
+}
+
+// ── ADR-0219: titlebar AskSage Datasets picker (next to Skills) ──────────────
+const tidyDataset = (d: string) => d.replace(/^user_custom_\d+_/, "").replace(/_content$/, "").replace(/[_-]+/g, " ").trim();
+function updateDatasetButton(): void {
+  const btn = $("#ctDataset") as HTMLElement | null; if (!btn) return;
+  const span = $("#ctDatasetName", btn);
+  btn.hidden = false; // ADR-0220: gov → AskSage datasets; non-gov → local Knowledge (the non-AskSage RAG entry)
+  if (state.asksage?.configured) {
+    const n = state.asksage?.datasets?.length ?? 0;
+    if (span) span.textContent = n ? `${n} dataset${n === 1 ? "" : "s"}` : "Datasets";
+    btn.classList.toggle("on", n > 0);
+    btn.setAttribute("data-tip", "Datasets|AskSage RAG datasets that ground answers. Short name shown; full name on hover.");
+  } else {
+    if (span) span.textContent = "Knowledge";
+    btn.classList.remove("on");
+    btn.setAttribute("data-tip", "Knowledge|Ground the agent on your OWN notes/docs. Add an Obsidian vault or folder; the agent searches it via knowledge_search.");
+  }
+}
+// ADR-0220: for a non-AskSage user the chip becomes "Knowledge" - the entry to local RAG (their own notes/docs
+// compiled into a KG, searched by the agent's knowledge_search tool). Routes to the existing self-contained
+// importKgFlow (add an Obsidian vault / folder) + the Knowledge panel; no new ingest/retrieval code.
+function openKnowledgeMenu(anchor: HTMLElement): void {
+  cfgClose?.();
+  const html = `<div class="cfg-sec"><div class="cfg-lbl">Knowledge <span class="cur">ground on your own notes</span></div>
+    <div class="cfg-list">
+      <div class="cfg-opt" data-kb-add><span class="tick">${icon("folder", 13)}</span><span class="nm">Add an Obsidian vault or folder…</span></div>
+      <div class="cfg-opt" data-kb-open><span class="tick">${icon("graph", 13)}</span><span class="nm">Open the Knowledge panel</span></div>
+    </div></div>
+    <div class="cfg-sec"><div class="cfg-lbl"><span class="cur">The agent searches this automatically via knowledge_search when a question needs your notes.</span></div></div>`;
+  const { node, close } = popover(anchor, html, () => { cfgClose = null; });
+  cfgClose = close;
+  node.addEventListener("click", (e) => {
+    const t = e.target as HTMLElement;
+    if (t.closest("[data-kb-add]")) { close(); void importKgFlow(); return; }
+    if (t.closest("[data-kb-open]")) { close(); openKnowledge(); return; }
+  });
+}
+async function openDatasetDropdown(anchor: HTMLElement): Promise<void> {
+  if (!state.asksage?.configured) { openKnowledgeMenu(anchor); return; } // ADR-0220: non-AskSage → local Knowledge
+  cfgClose?.();
+  const list = state.asksageDatasetList;
+  const sel = new Set(state.asksage?.datasets ?? []);
+  // Short name shown; the FULL raw dataset name is the hover description (premium tooltip, left side - matches Skills rows).
+  const rows = list.length
+    ? list.map((d) => `<div class="cfg-opt ${sel.has(d) ? "on" : ""}" data-ds="${esc(d)}" data-tip="${esc(tidyDataset(d))}|${esc(d)}" data-tip-side="left"><span class="tick">${icon("check", 13)}</span><span class="nm">${esc(tidyDataset(d))}</span></div>`).join("")
+    : `<div class="empty">No datasets on this account.</div>`;
+  const clearRow = sel.size ? `<div class="cfg-sec"><div class="cfg-list"><div class="cfg-opt" data-ds-clear><span class="tick">${icon("close", 13)}</span><span class="nm">Clear all (${sel.size})</span></div></div></div>` : "";
+  const html = `<div class="cfg-sec"><div class="cfg-lbl">RAG datasets <span class="cur">ground the AskSage RAG model</span></div><div class="cfg-list" id="dsList">${rows}</div></div>${clearRow}`;
+  const { node, close } = popover(anchor, html, () => { cfgClose = null; });
+  cfgClose = close;
+  node.addEventListener("click", async (e) => {
+    const t = e.target as HTMLElement;
+    if (t.closest("[data-ds-clear]")) { close(); state.asksage = (await bridge.saveAsksage({ datasets: [] })) ?? state.asksage; updateDatasetButton(); return; }
+    const it = t.closest("[data-ds]") as HTMLElement | null;
+    if (!it) return;
+    const name = it.dataset.ds!;
+    const cur = new Set(state.asksage?.datasets ?? []);
+    cur.has(name) ? cur.delete(name) : cur.add(name);
+    state.asksage = (await bridge.saveAsksage({ datasets: [...cur] })) ?? state.asksage;
+    it.classList.toggle("on");
+    updateDatasetButton();
   });
 }
 
@@ -5817,6 +6092,8 @@ function updateComposerTools(): void {
       pBtn.setAttribute("data-tip", "AskSage persona|Server-supplied role guidance - scanned before use");
     }
   }
+  updateDatasetButton(); // ADR-0219: datasets chip visibility + count
+  renderSessionMode();   // ADR-0219: CUI/Search toggle + violet banner (lockdown-gated)
 }
 
 // AskSage persona picker (composer). Selecting one scans it server-side; a clean
@@ -7992,7 +8269,10 @@ function openSharePanel(): void {
 // P-COLLAB.10 (ADR-0196): the GUEST Join panel - paste an invite link, watch the shared session read-only.
 // A simple live transcript (replayed turns + streaming tokens) is enough for Phase 1; the host still runs
 // everything. Single instance; closes on X / backdrop / Escape (which also leaves the session).
-type JoinState = { header: import("./bridge.ts").CollabSessionHeaderView | null; turns: { role: string; text: string }[]; pending: string; participants: number; note: string | null; readOnly: boolean };
+// ADR-0222: the guest now sees the host's THINKING + TOOL activity, not just the answer.
+type JoinTool = { name: string; detail: string; path?: string };
+type JoinTurn = { role: string; text: string; thinking?: string; tools?: JoinTool[] };
+type JoinState = { header: import("./bridge.ts").CollabSessionHeaderView | null; turns: JoinTurn[]; pending: string; pendingThinking: string; pendingTools: JoinTool[]; participants: number; note: string | null; readOnly: boolean };
 function openJoinPanel(): void {
   if ($("#joinModal")) return;
   const ov = el(`<div id="joinModal" class="modal-ov"><div class="modal join-modal" role="dialog" aria-modal="true" aria-labelledby="joinTitle">
@@ -8002,7 +8282,7 @@ function openJoinPanel(): void {
     <p class="modal-desc">Paste an invite link to watch someone's LUCID session live, <b>read-only</b>. It's end-to-end encrypted - the relay only ever sees ciphertext.</p>
     <div id="joinBody" class="join-body"></div>
   </div></div>`);
-  const st: JoinState = { header: null, turns: [], pending: "", participants: 0, note: null, readOnly: true };
+  const st: JoinState = { header: null, turns: [], pending: "", pendingThinking: "", pendingTools: [], participants: 0, note: null, readOnly: true };
   let joined = false;
   let direct = false; // P-COLLAB.17: this join is running peer-to-peer (renderer coordinator), not via the backend
   const leaveSession = () => { if (direct) stopP2PGuest(); else void bridge.collabLeave().catch(() => {}); };
@@ -8016,10 +8296,18 @@ function openJoinPanel(): void {
     <div class="share-field"><input id="joinLink" class="share-link-input" type="text" placeholder="wss://relay…/r/room.secret  (or paste the link you were sent)" spellcheck="false" /></div>
     <div id="joinErr" class="modal-err" hidden></div>
     <div class="modal-actions"><button class="btn-mini ok" data-join-connect>${icon("eye", 12)} Connect</button></div>`;
+  // ADR-0222: render the host's activity - a collapsible thinking block + compact tool-call chips, then the answer.
+  const toolLine = (t: JoinTool) => `<div class="join-tool">${icon("command", 11)} <b>${esc(t.name)}</b>${t.path ? ` <span class="join-tool-path">${esc(t.path)}</span>` : (t.detail ? ` <span class="join-tool-detail">${esc(t.detail.slice(0, 90))}</span>` : "")}</div>`;
+  const thinkBlock = (think: string, live: boolean) => think.trim() ? `<details class="join-think"${live ? " open" : ""}><summary>${icon("brain", 11)} thinking</summary><div class="join-think-body">${esc(think)}</div></details>` : "";
+  const assistantBody = (text: string, thinking: string | undefined, tools: JoinTool[] | undefined, live: boolean) =>
+    `${thinkBlock(thinking ?? "", live)}${(tools ?? []).map(toolLine).join("")}<div class="join-text">${esc(text)}${live ? `<span class="join-cursor">▋</span>` : ""}</div>`;
   const liveHtml = () => {
     const h = st.header;
-    const turns = st.turns.map((tn) => `<div class="join-turn ${tn.role}"><span class="join-role">${tn.role === "user" ? "host" : "assistant"}</span><div class="join-text">${esc(tn.text)}</div></div>`).join("");
-    const pending = st.pending ? `<div class="join-turn assistant"><span class="join-role">assistant</span><div class="join-text">${esc(st.pending)}<span class="join-cursor">▋</span></div></div>` : "";
+    const turns = st.turns.map((tn) => (tn.role === "user" || tn.role === "host")
+      ? `<div class="join-turn host"><span class="join-role">host</span><div class="join-text">${esc(tn.text)}</div></div>`
+      : `<div class="join-turn assistant"><span class="join-role">assistant</span>${assistantBody(tn.text, tn.thinking, tn.tools, false)}</div>`).join("");
+    const hasPending = st.pending || st.pendingThinking || st.pendingTools.length;
+    const pending = hasPending ? `<div class="join-turn assistant"><span class="join-role">assistant</span>${assistantBody(st.pending, st.pendingThinking, st.pendingTools, true)}</div>` : "";
     const ended = st.note ? `<div class="join-ended">${icon("info", 13)} ${esc(st.note)}</div>` : "";
     const canEdit = !st.readOnly && !st.note;
     return `
@@ -8032,8 +8320,9 @@ function openJoinPanel(): void {
       </div>` : ""}
       <div class="join-foot"><span class="join-watchers">${st.participants} watching</span>${st.note ? `<button class="btn-mini" data-join-close>${icon("check", 12)} Close</button>` : `<button class="btn-mini danger" data-join-leave>${icon("close", 12)} Leave</button>`}</div>`;
   };
-  const renderConnect = () => { body.innerHTML = connectHtml(); setTimeout(() => ($("#joinLink", ov) as HTMLInputElement | null)?.focus(), 30); };
+  const renderConnect = () => { ov.querySelector(".join-modal")?.classList.remove("watching"); body.innerHTML = connectHtml(); setTimeout(() => ($("#joinLink", ov) as HTMLInputElement | null)?.focus(), 30); };
   const renderLive = () => {
+    ov.querySelector(".join-modal")?.classList.add("watching"); // ADR-0222: fill the app (thin border), reclaim padding
     // Preserve what the guest is typing across the transcript re-render (events stream constantly).
     const prev = $("#joinPrompt", ov) as HTMLInputElement | null;
     const draft = prev?.value ?? ""; const wasFocused = !!prev && document.activeElement === prev;
@@ -8061,13 +8350,24 @@ function openJoinPanel(): void {
     switch (f.kind) {
       case "welcome":
         st.header = f.header; st.readOnly = f.readOnly; st.participants = f.participants.length;
-        st.turns = f.transcript.map((x) => ({ role: x.role, text: x.text })); st.pending = "";
+        st.turns = f.transcript.map((x) => ({ role: x.role, text: x.text })); st.pending = ""; st.pendingThinking = ""; st.pendingTools = [];
         break;
       case "event": {
         const e = f.event;
+        // ADR-0222: surface the host's live activity - thinking, tool calls, delegations, and blocks - not just
+        // the final answer. Accumulated on the pending turn, then folded into the completed turn on `done`.
         if (e.type === "token") st.pending += e.text;
-        else if (e.type === "done") { const txt = (typeof e.text === "string" && e.text.trim()) ? e.text : st.pending; if (txt.trim()) st.turns.push({ role: "assistant", text: txt }); st.pending = ""; }
-        // thinking / tools / others are the host's business; keep the guest view a clean transcript
+        else if (e.type === "thinking") st.pendingThinking += e.text;
+        else if (e.type === "tool") st.pendingTools.push({ name: e.name, detail: e.detail, path: e.code?.path });
+        else if (e.type === "subagent") st.pendingTools.push({ name: `delegate · ${e.agent}`, detail: e.title });
+        else if (e.type === "block") st.pendingTools.push({ name: `blocked · ${e.tool}`, detail: e.reason });
+        else if (e.type === "done") {
+          const txt = (typeof e.text === "string" && e.text.trim()) ? e.text : st.pending;
+          if (txt.trim() || st.pendingThinking.trim() || st.pendingTools.length) {
+            st.turns.push({ role: "assistant", text: txt, thinking: st.pendingThinking.trim() || undefined, tools: st.pendingTools.length ? st.pendingTools.slice() : undefined });
+          }
+          st.pending = ""; st.pendingThinking = ""; st.pendingTools = [];
+        }
         break;
       }
       case "state": st.participants = f.participants.length; break;
@@ -8430,6 +8730,11 @@ function wire(): void {
   // (model / mode / thinking dropdowns are reached from the top #modelBadge picker - not duplicated here)
   $("#ctPersona")!.addEventListener("click", () => openPersonaDropdown($("#ctPersona")!));
   $("#ctSkill")!.addEventListener("click", () => openSkillDropdown($("#ctSkill")!));
+  $("#ctDataset")!.addEventListener("click", () => void openDatasetDropdown($("#ctDataset")!)); // ADR-0219
+  $("#modeToggle")!.addEventListener("click", (e) => { // ADR-0219: CUI/Search segmented toggle
+    const seg = (e.target as HTMLElement).closest(".mode-seg") as HTMLElement | null;
+    if (seg?.dataset.mode) void applySessionMode(seg.dataset.mode as "cui" | "search");
+  });
   $("#ctMic")?.addEventListener("click", () => void toggleMicRecording()); // P-VOICE.1 (ADR-0115)
 
   // settings page actions (delegated)
@@ -8522,11 +8827,19 @@ function wire(): void {
       return;
     }
     if (t.closest("#wsSet")) { const v = ($("#wsPath", $("#setBody")!) as HTMLInputElement)?.value.trim(); if (v) await applyWorkspace(v); return; }
+    if (t.closest("#embSave")) { await saveEmbeddings(); return; } // ADR-0221
+    if (t.closest("#embTest")) { await testEmbeddings(); return; } // ADR-0221
+    if (t.closest("#embReindex")) { await reindexEmbeddings(); return; } // ADR-0221
+    if (t.closest("#wsGitPatSave")) { await saveGitPat(); return; }
+    if (t.closest("#wsGitPatClear")) { await clearGitPat(); return; }
     if (t.closest("#wsClone")) {
       const url = ($("#wsCloneUrl", $("#setBody")!) as HTMLInputElement)?.value.trim();
       if (!url) return;
+      // ADR-0216: authenticate a private clone with a freshly-entered PAT (field or this-session memory) so it
+      // works before the next-launch env injection; the vault/env token is used when no inline token is given.
+      const pat = (($("#wsGitPat", $("#setBody")!) as HTMLInputElement | null)?.value.trim() || sessionGitPat) || undefined;
       showToast({ title: "Cloning…", desc: "Fetching the repo - this can take a moment.", timeout: 2500 });
-      const info = await bridge.cloneWorkspace(url);
+      const info = await bridge.cloneWorkspace(url, pat);
       if (info?.cloned) { state.workspace = info; renderWorkspaceBar(); seedThread(); void renderSessions(); void renderSettings(); showToast({ title: "Cloned & opened", desc: `Agent now works in ${info.name}.`, actions: [{ label: "OK" }], timeout: 3000 }); }
       else showToast({ tone: "danger", title: "Clone failed", desc: (info?.error ?? "Check the URL and your git access.").slice(0, 180), actions: [{ label: "OK" }], timeout: 6000 });
       return;
@@ -8595,9 +8908,18 @@ function wire(): void {
     }
     if (t.closest("#asksageOnly")) {
       if (state.managed?.locks?.models) return; // ADR-0068: org-locked routing - not user-toggleable
-      const only = ($("#asksageOnly", $("#setBody")!) as HTMLInputElement)?.checked ?? false;
+      const box = $("#asksageOnly", $("#setBody")!) as HTMLInputElement | null;
+      const only = box?.checked ?? false;
+      // ADR-0217/GAP-5: lockdown routes every turn through the gov gateway, so it needs a configured AskSage
+      // key. Enabling it without one would leave no gov model to route to (a broken state the backend would
+      // then fail-closed on, blocking every turn). Refuse up front and revert the checkbox.
+      if (only && !state.asksage?.configured) {
+        if (box) box.checked = false;
+        showToast({ tone: "warn", title: "Add your AskSage key first", desc: "Lockdown routes every turn through the AskSage gov gateway - configure the AskSage API key above before turning it on.", actions: [{ label: "OK" }], timeout: 5000 });
+        return;
+      }
       await bridge.saveAsksage({ only });
-      state.asksage = { ...(state.asksage ?? { configured: false, base: "", only: false, limit: 200_000, datasets: [], queryModel: "gpt-5.2", persona: "" }), only };
+      state.asksage = { ...(state.asksage ?? { configured: false, base: "", only: false, limit: 200_000, datasets: [], queryModel: "gpt-5.6-luna", persona: "" }), only };
       // Lockdown must guarantee gateway routing: if we're on a direct model, switch
       // to a gov one so no turn can bypass AskSage.
       if (only) {
@@ -9159,7 +9481,8 @@ function wire(): void {
 // ───────────────────────── palette actions ─────────────────────────
 function newSession(): void {
   seedThread(); state.liveUsage = null;
-  void bridge.newSession(); renderStatus(); $("#input")?.focus();
+  void bridge.newSession().then(() => loadSessionMode()); // ADR-0219: fresh session defaults to CUI under lockdown
+  renderStatus(); $("#input")?.focus();
 }
 /** Drop an omp slash command into the composer (omp runs it on send via ACP). */
 function runCommand(c: OmpCommand): void {
@@ -9487,8 +9810,11 @@ const MODEL_INFO: Record<string, ModelInfo> = {
   "claude-sonnet-4-6": { exp: 2, iq: 4, eff: "The best all-round speed-to-cost-to-quality balance.", best: "Everyday coding, refactors, code review.", ctx: "1M" },
   "claude-sonnet-4-5": { exp: 2, iq: 4, eff: "Strong balanced workhorse (prior Sonnet).", best: "Everyday coding; a version pin.", ctx: "1M" },
   "claude-haiku-4-5": { exp: 1, iq: 3, eff: "Fastest and cheapest Claude - excellent tokens-per-dollar.", best: "Quick edits, lookups, high-volume tasks.", ctx: "200K" },
-  // AskSage · OpenAI
-  "gpt-5.2": { exp: 3, iq: 4, eff: "Solid general reasoning; the default RAG model.", best: "General gov coding and analysis.", ctx: "256K" },
+  // AskSage · OpenAI. GPT-5.6 ships three tier codenames (luna=mid / sol / terra); luna is the default RAG model.
+  "gpt-5.6-luna": { exp: 3, iq: 5, eff: "Newest mid-tier GPT-5.6; the default RAG model.", best: "General gov coding, analysis, and RAG grounding.", ctx: "256K" },
+  "gpt-5.6-sol": { exp: 4, iq: 5, eff: "GPT-5.6 tier variant.", best: "Demanding gov reasoning.", ctx: "256K" },
+  "gpt-5.6-terra": { exp: 4, iq: 5, eff: "GPT-5.6 tier variant.", best: "Demanding gov reasoning.", ctx: "256K" },
+  "gpt-5.2": { exp: 3, iq: 4, eff: "Solid general reasoning.", best: "General gov coding and analysis.", ctx: "256K" },
   "gpt-5.5": { exp: 4, iq: 5, eff: "The most capable GPT-5 on the gateway.", best: "The hardest gov reasoning tasks.", ctx: "256K" },
   "gpt-5.4": { exp: 4, iq: 5, eff: "High-capability GPT-5 variant.", best: "Demanding gov reasoning.", ctx: "256K" },
   "gpt-5.1": { exp: 3, iq: 4, eff: "Capable GPT-5 variant.", best: "General-purpose gov work.", ctx: "256K" },

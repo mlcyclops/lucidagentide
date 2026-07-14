@@ -14253,6 +14253,7 @@ product key. BUSL header on the new source (licensing/commit hygiene).
 ADR-0205 (P-KGPACK.3 seed / .4 export+import gate / .6 background seed - the pipeline this drives), ADR-0206
 (P-KGMARKET - the storefront/entitlement ids this aligns to), and CLAUDE.md invariants #1/#2/#3/#5/#7/#9.
 
+
 -----
 
 ## ADR-0210 — P-PROV.1: first-party enterprise providers (Azure OpenAI, GitHub Copilot OAuth, Gemini Enterprise / Vertex)
@@ -14485,3 +14486,475 @@ re-exercised when the corrected tag is pushed.
 
 `build-desktop.yml` (the tag-triggered installer build), electron-builder's `fixVersionField` semver
 validation, and the auto-update monotonic-version requirement the version stamp exists for.
+
+## ADR-0214 - Settings "Clone a git repo" reaches parity with the agent's clone (headless token auth + robustness)
+
+**Date:** 2026-07-14
+**Status:** Accepted - BUILT. A bug fix to an existing feature (`desktop/workspace.ts` `cloneRepo`), not a new
+trust path or schema change.
+**Increment:** localized to `cloneRepo` + three new PURE, exported helpers (unit-tested in
+`desktop/workspace.test.ts`). No frozen-contract file touched.
+
+### Context
+
+Two separate clone paths had diverged. When the user asks the LUCID **agent** to clone a repo, it runs
+`git clone` inside omp's shell/exec tool - a child of the long-lived omp process, in a context where Git
+Credential Manager can resolve cached credentials, so **private** repos clone. The **Settings -> Workspace ->
+"Clone a git repo"** button calls `cloneRepo`, which ran `Bun.spawn(["git","clone",url,dest])` with **piped
+stdio, no tty, no token, and no cwd** - so a private repo (e.g. `github.com/mlcyclops/l.e.a.p.s..git`) fails
+whenever GCM has no cached credential, and the renderer shows a generic "Clone failed" toast on ANY non-zero
+exit. Two latent bugs made it worse: (a) `repoNameFromUrl` left a **trailing dot** on `l.e.a.p.s.`, and Windows
+silently drops trailing dots from folder names, desyncing the `existsSync(dest/.git)` reuse check; (b) a clone
+that failed after creating `dest` left a non-empty, `.git`-less folder, so every retry then failed with
+"destination path already exists and is not empty".
+
+### Decision - give the Settings clone an explicit, headless credential path + fix the dir bugs
+
+`cloneRepo` now:
+- **Injects a host token when available.** `hostTokenForUrl(url)` picks `GITHUB_TOKEN`/`GH_TOKEN`/
+  `LUCID_GITHUB_TOKEN` for github hosts and `GITLAB_TOKEN`/`LUCID_GITLAB_TOKEN` for gitlab (https only; ssh/
+  git@ authenticate with keys). `cloneArgv` injects it via a per-COMMAND `-c http.extraHeader=Authorization:
+  Basic <base64(x-access-token:TOKEN)>` placed BEFORE the subcommand - so it authenticates the fetch but is
+  **never written into the cloned repo's remote/config** (embedding the token in the URL would persist it into
+  `.git/config`, a credential leak). The token is redacted from any surfaced error.
+- **Runs headlessly without hanging.** `GIT_TERMINAL_PROMPT=0` means git never blocks waiting on a username we
+  can't answer over piped stdio; GCM still resolves cached credentials, so the agent's previously-working path
+  is preserved, not regressed.
+- **Fixes the dir bugs.** `repoNameFromUrl` trims leading/trailing dots+spaces so the computed name matches the
+  folder the OS actually creates; a leftover `.git`-less `dest` is cleared before cloning and after a failure.
+- **Surfaces an actionable error.** `cloneErrorHint` turns an auth failure into "this looks like a private repo
+  - set a GITHUB_TOKEN... or clone via the agent" instead of a generic toast.
+
+Env-var tokens are the first, zero-UI increment; a vault-backed git credential (reusing `cred_vault.ts`, so a
+PAT entered once in Settings is decrypted main-process-only at clone time) is the natural follow-up.
+
+### Invariants preserved
+
+Extend-not-fork (#1): no omp change; the Settings path just runs git better. No Python (#2). Fail-closed spirit:
+a token is never persisted or logged (redacted), and decrypt-side vault work stays main-process-only when it
+lands. BUSL header on the new test file (licensing/commit hygiene). The pure helpers are exported + unit-tested
+so the private-repo path can't silently regress.
+
+### Relates to
+
+ADR-0111 (P-WS.1 - the workspace/clone feature this fixes), ADR-0106/0107 (`cred_vault.ts` - the follow-up
+home for a vault-backed git PAT), and CLAUDE.md invariants #1/#2.
+
+## ADR-0215 - AskSage model list: fetch it LIVE from `/get-models` (follow-up; scoped, not yet built)
+
+**Date:** 2026-07-14
+**Status:** Proposed - SCOPED. Captures the design so a new CIV/MIL model appears WITHOUT a code change; the
+immediate unblock (adding `gpt-5.6` to the hardcoded arrays) shipped alongside this and is NOT this ADR.
+**Increment:** a future `desktop/asksage.ts` `listModels()` + wiring into `asksage_extension.ts`.
+
+### Context
+
+The AskSage picker is populated from HARDCODED arrays in `harness/omp/asksage_extension.ts`
+(`OPENAI_MODELS` / `ANTHROPIC_MODELS` / `GOOGLE_MODELS` / `QUERY_MODELS`), registered as omp providers at
+spawn time. When AskSage added new CIV GPT-5.6 models on the gateway, they did NOT appear in LUCID: nothing
+fetches the catalog at runtime, so a new gov model requires a manual array edit + a shipped build. The file
+header comment ("no hardcoded list") is misleading - there's no SECOND list in the desktop, but the models
+themselves are hardcoded. A live models endpoint already exists (`/get-models`, `/openai/v1/models`) and is
+used only for MANUAL id verification during development (`desktop/asksage.ts` has `listDatasets()`/
+`listPersonas()` but no `listModels()`). This is a known gap (PROGRESS.md).
+
+### Decision (proposed) - a live, curated, fail-safe model fetch
+
+1. Add `listModels()` to `desktop/asksage.ts` calling AskSage `/get-models` (the same `x-access-tokens` auth as
+   the other helpers), returning `{ id, name }[]`.
+2. At omp spawn, `asksage_extension.ts` fetches the live list and MERGES it over the hardcoded specs (the
+   static specs remain the source of truth for `contextWindow`/`maxTokens`/`reasoning` metadata, which
+   `/get-models` doesn't reliably carry; live-only ids get sane defaults + a display name).
+3. **Fail-SAFE, not fail-closed** (this is a UX catalog, not a security gate): if the fetch fails or times out,
+   fall back to the hardcoded arrays so the picker is never empty. Cache the result briefly and re-fetch on the
+   next spawn / an explicit "refresh models" action so a mid-day gateway addition can surface without a restart.
+4. The existing curation still applies downstream unchanged (`model_families.ts`: `isDeprecatedModel` hides
+   GPT < 5.4, `isGovModel` gates on a configured key), so a live fetch can't smuggle a deprecated or
+   ungated model into the picker.
+
+### Invariants preserved
+
+Extend-not-fork (#1): still `pi.registerProvider`, just with a merged model array. No Python (#2). The security
+model is untouched - AskSage is a UX catalog, so this edge is deliberately fail-SAFE (documented), distinct
+from the fail-CLOSED scanner/gate (#3), which this does not touch. `MODEL_CTX` in `app.ts` stays the
+context-window source of truth.
+
+### Relates to
+
+ADR-0007 (AskSage provider registration), ADR-0029 (P-IDE.1c picker curation/gating), the `gpt-5.6` array
+add that shipped today, and CLAUDE.md invariants #1/#2/#3.
+
+## ADR-0216 - Vault-backed git PAT for private-repo clones (the ADR-0214 follow-up)
+
+**Date:** 2026-07-14
+**Status:** Accepted - BUILT. Extends the ADR-0214 clone fix with a persistent, OS-encrypted credential; no
+new trust path (reuses the existing `cred_vault.ts` + the Figma/Local-Providers vault→env pattern).
+**Increment:** the git PAT field + save/remove, `main.ts` `prepareGitToken`, the inline-`pat` clone request,
+and `resolveCloneToken` (pure, unit-tested). No frozen-contract file touched.
+
+### Context
+
+ADR-0214 made the Settings clone authenticate private repos from an environment token (`GITHUB_TOKEN` etc.),
+and named a vault-backed PAT as the follow-up so the user enters a token ONCE instead of exporting an env var.
+The constraint: the OS-encrypted vault (`cred_vault.ts`, Electron `safeStorage`) can only be DECRYPTED in the
+**main** process, but `cloneRepo` runs in the **dev-server (Bun) child**. Figma and Local Providers already
+solved this exact shape - main reads the secret and injects it into the dev child's env at spawn.
+
+### Decision - store in the vault, inject at launch, pass inline for the current session
+
+- **Storage.** A "Git access token" field in Settings → Workspace stores the PAT in the vault under the
+  well-known ref `git_pat` (`kind: apikey`) via the existing `credStore` IPC - exactly like Figma's `figma_pat`.
+  The renderer only ever sends the secret to main (to encrypt) and to the clone route (to use); it is never
+  written to config, never returned in plaintext, and never sent to the agent.
+- **Next-launch path.** `main.ts` `prepareGitToken()` reads `git_pat` from the vault and injects it into the
+  dev child as `LUCID_GIT_PAT`; `hostTokenForUrl` uses it as the host-agnostic FALLBACK (after a workflow's own
+  `GITHUB_TOKEN`/`GITLAB_TOKEN`, which still win). So a PAT saved in a prior session authenticates clones with
+  zero re-entry.
+- **Same-session path (no relaunch).** Since `LUCID_GIT_PAT` is only injected at spawn, a token saved THIS
+  session wouldn't be in the child's env yet. So the clone request carries an OPTIONAL inline `pat` (the freshly
+  entered token, kept in renderer session memory as `sessionGitPat`), and `resolveCloneToken(url, override)`
+  prefers it over the env token. Mirrors how Figma passes the PAT inline on the first import. No app restart is
+  needed for either path.
+- **Injection stays leak-safe.** The token still rides the ADR-0214 `-c http.extraHeader` path (never written
+  into `.git/config`, redacted from errors). Https-only (ssh/git@ use keys).
+
+### Alternatives rejected
+
+Restarting the dev child on save (to refresh the env) - drops the live omp/session state for a credential
+change; the inline-`pat` path gives immediate effect without it. Writing the token to a file the dev child
+reads (like `models.yml`) - would put the plaintext PAT on disk, defeating the vault.
+
+### Invariants preserved
+
+Extend-not-fork (#1): no omp change; same `pi`/vault seams. No Python (#2). Fail-closed spirit: the vault
+fail-closes if OS encryption is unavailable (never plaintext), decrypt stays main-only, and the token is
+redacted from errors and never reaches the renderer-as-plaintext-return or the agent. BUSL headers intact;
+`resolveCloneToken` + the `LUCID_GIT_PAT` fallback are unit-tested.
+
+### Relates to
+
+ADR-0214 (the clone auth fix this completes), ADR-0154 (Figma PAT - the vault→env template), ADR-0135
+(Local Providers - the other vault→dev-child injection), ADR-0106/0107 (`cred_vault.ts`), and CLAUDE.md
+invariants #1/#2.
+
+## ADR-0217 - AskSage lockdown enforced server-side, fail-closed (was renderer-only)
+
+**Date:** 2026-07-14
+**Status:** Accepted - BUILT. A correctness/security fix to an existing data-sovereignty feature (AskSage-only
+"lockdown"). No new schema or trust label; adds a fail-closed clamp on the model-routing path.
+**Increment:** `enforceAsksageLock` in `acp_backend.ts` + the pure `resolveLockdownModel`/`isAsksageRouted` in
+`checker_model.ts` (unit-tested), the checker-predicate fix, and a renderer guard. No frozen-contract touched.
+
+### Context - "lockdown was on but turns still ran on a direct model"
+
+AskSage-only mode ("lockdown") is a data-sovereignty control: with it ON, EVERY turn must route through the
+accredited AskSage gov gateway (an `asksage`-prefixed model). It was enforced ONLY in the renderer - a one-shot
+model switch on the toggle click (`app.ts` ~8544) plus hiding direct models in the picker (~9541) - and, on the
+server, only for the /goal CHECKER. The MAKER turn (`session/prompt`) had NO guard: `activeModel()` just reads
+whatever model omp currently reports. So lockdown silently failed whenever the client switch didn't hold:
+- **Fresh launch with lockdown persisted ON** - omp starts on its DEFAULT (a direct model); the renderer only
+  re-asserts gov on a toggle *click*, never on load. The first turn routed direct.
+- **Any omp respawn** - `backend.restart()` fires on workspace change, clone, "Refresh models", provider-key
+  change, MCP/agent/codegraph edits, etc. omp comes back on its default and nothing re-clamped to gov.
+
+A second, latent bug: the checker's lockdown filter matched `/^asksage/i && /gov/i`, but real gov ids
+(`asksage-openai/gpt-5.6`) carry no "gov" SUBSTRING (the "Gov" is only in the display NAME), so the filter
+matched nothing and the checker fell through to ALL models - including direct providers.
+
+### Decision - a fail-closed server-side clamp on the routing path (invariant #3)
+
+- **Authoritative clamp in `prompt()`.** Before every maker send, `enforceAsksageLock()` forces omp's active
+  model to an `asksage`-routed one (`resolveLockdownModel`: keep the current model if already gov, else select
+  the first gov option, else FAIL). If the lock is on but NO gov model exists, the turn is REFUSED with a clear
+  `[blocked: …]` message - a turn NEVER routes to a direct provider under lockdown. This survives respawns and
+  fresh launches because it runs at turn time, not on a UI event.
+- **Best-effort clamp on session init** (`ensureSession`, fresh-session branch) so the picker/status show the
+  gov model immediately on launch/respawn, not only after the first turn. `prompt()` remains the guarantee.
+- **Predicate fix.** The sovereignty boundary is one shared test, `isAsksageRouted = /asksage/i` (matches the
+  renderer's `isGovModel`/`isAsksage`); the checker's broken `/gov/i` requirement is removed, so the checker is
+  now correctly restricted to gov models under lockdown too.
+- **Renderer guard.** The toggle refuses to enable lockdown when AskSage isn't configured (no gov model to
+  route to) - the previously-reachable broken state - and reverts the checkbox with an explanatory toast.
+
+### Known remaining gap (follow-up)
+
+Scheduled BUILT-AGENT runs (`startAgentRun`, `model: a.agentModel || "haiku"`) are not yet clamped under
+lockdown - a narrower path than interactive/goal chat. Tracked for a follow-up increment; the interactive and
+/goal maker + checker turns (the sovereignty-critical surface) are now fail-closed.
+
+### Invariants preserved
+
+Fail-closed is law (#3): the model-routing path now blocks rather than silently downgrades to a direct provider
+- the analogue of the scanner's fail-closed gate, now covered by a unit test (lock ON + no gov ⇒ ok:false).
+Extend-not-fork (#1): omp's own `session/set_config_option` is used; no fork. No Python (#2). Events/ids
+unchanged. `resolveLockdownModel`/`isAsksageRouted` are pure + tested.
+
+### Relates to
+
+ADR-0007 (AskSage provider), ADR-0048 (P-GOAL.6 checker model - the predicate fixed here), ADR-0068 (managed
+`asksageOnly` lock, still OR'd in), the `gpt-5.6` add (ADR-0215 context), and CLAUDE.md invariant #3.
+
+## ADR-0218 - AskSage lockdown covers egress + agent runs; RAG on GPT-5.6 Luna; real 5.6 ids
+
+**Date:** 2026-07-14
+**Status:** Accepted - BUILT. Completes the ADR-0217 lockdown work (closes its named gap), extends the
+data-sovereignty boundary to network egress, and corrects the AskSage GPT-5.6 model ids + RAG default against
+the LIVE gateway.
+**Increment:** an egress-gate guard + an agent-run model clamp in `acp_backend.ts`/`dev.ts`, and data changes to
+the AskSage model list + RAG default. No frozen-contract file touched.
+
+### Context
+
+ADR-0217 made the MAKER + CHECKER turns fail-closed under lockdown but explicitly left two things open: (1)
+scheduled/Builder BUILT-AGENT runs still defaulted to a direct model (`"haiku"`), and (2) lockdown said nothing
+about web egress - the agent could still `web_search`/`browser`/`fetch` to a PUBLIC provider, backflowing CUI
+(Controlled Unclassified Information) to a non-accredited service. Separately, the `gpt-5.6` id added in
+ADR-0215 was a GUESS: querying the live gateway (`/openai/v1/models` + a real `/query`, both 200) showed the
+5.6 family is actually three tier codenames - `gpt-5.6-luna` (mid), `gpt-5.6-sol`, `gpt-5.6-terra` - with NO
+bare `gpt-5.6`. And the RAG `/query` route still defaulted to the old `gpt-5.2`.
+
+### Decision
+
+- **Egress under lockdown = fail-closed block (invariant #3).** In the in-process permission gate, at the top of
+  the `isEgress` branch, `asksageLocked()` now blocks ALL public egress (`web_search`, `browser`, `web`,
+  `fetch`, `navigate`, any external http(s) target) with an audited `egress_decision/block` (severity high).
+  Local-file previews (`file://`) are exempt (not public egress). This overrides the `allowWebSearch`
+  auto-approve and covers browse/fetch too (a browser open leaks as much as a search). There is NO way to
+  reroute omp's built-in `web_search` to AskSage - omp owns that tool and takes no LUCID-supplied endpoint, and
+  the AskSage gateway exposes no web-search API (only the `/query` RAG route). So the correct control is to DENY
+  public egress; the sanctioned "search" under lockdown is the AskSage RAG model grounded on approved datasets.
+- **Built-agent runs honor lockdown.** A shared `Backend.resolveAgentRunModel(desired)` clamps the run model to
+  a gov one (or `{ok:false}` ⇒ REFUSE the run) under lockdown; wired into BOTH the scheduled-automation path
+  (`runAutomation`) and the interactive Builder "Run" route (`dev.ts`). This closes the last un-clamped
+  model-routing path ADR-0217 named.
+- **Real GPT-5.6 ids + RAG default.** `OPENAI_MODELS` now lists `gpt-5.6-luna`/`-sol`/`-terra` (the invalid bare
+  `gpt-5.6` is removed), with matching `MODEL_CTX`/`MODEL_META`. The RAG `/query` default (`ASKSAGE_QUERY_MODEL`
+  fallback, `asksageConfig`, settings, renderer state) moves from `gpt-5.2` to **`gpt-5.6-luna`** (newest
+  mid-tier), validated live. Marked "recheck each release" - ADR-0215's live `/get-models` fetch is the durable
+  fix so this list stops needing hand-maintenance.
+
+### Invariants preserved
+
+Fail-closed is law (#3): egress denies rather than leaks under lockdown, and agent runs refuse rather than route
+direct - both audited. The gate stays in-process (#4). Extend-not-fork (#1): omp's own gate/config seams; no
+fork. No Python (#2). `resolveLockdownModel`/`isAsksageRouted` (the shared enforcement core) remain pure + unit-
+tested; the RAG/model-id changes were verified against the live AskSage gateway, not guessed.
+
+### Relates to
+
+ADR-0217 (the lockdown work this completes), ADR-0108 (egress posture / `allowWebSearch`, now overridden under
+lockdown), ADR-0142 (P-AGENT built-agent runs - the clamped path), ADR-0215 (live model fetch - the durable fix
+for the hand-maintained list), ADR-0007 (AskSage `/query` RAG), and CLAUDE.md invariants #1/#2/#3/#4.
+
+## ADR-0219 - Per-session CUI/Search mode, violet CUI banner, DoD/STIG consent banner, titlebar Datasets picker
+
+**Date:** 2026-07-14
+**Status:** Accepted - BUILT. Refines the ADR-0218 lockdown egress block from global to per-session, and adds
+the compliance UI (CUI banner, DoD consent banner) + restores the Datasets picker to the titlebar.
+**Increment:** a new per-session settings field + route/bridge, a one-line change to the egress gate, and
+renderer UI. New pure `sessionMode` store is unit-tested. No frozen-contract file touched.
+
+### Context
+
+ADR-0218's lockdown blocked ALL public egress globally. That's too blunt: a user handling CUI must have web
+search disabled (spillage), but a clean non-CUI session should still search **while in lockdown** (models still
+gov-routed). Operators also need the standard visual controls a gov deployment expects: a clear CUI indicator,
+the mandatory DoD Notice & Consent banner (a STIG login-banner requirement), and quick access to the AskSage RAG
+**Datasets** - which had regressed into a Settings-only chip list with no titlebar picker.
+
+### Decision
+
+- **Per-session CUI vs Search mode.** New `sessionModes: Record<sessionId, "cui"|"search">` in settings_store
+  (`sessionMode`/`setSessionMode`, **fail-closed default "cui"**, bounded to ~200 entries), a `/api/session-mode`
+  route that defaults to the ACTIVE omp session (so the renderer just asks for "the current session's mode"),
+  and a bridge pair. The lockdown egress block (`acp_backend.ts`) now fires only when
+  `asksageLocked() && sessionMode(activeSession) === "cui"` - a **CUI** session blocks all public egress; a
+  **Search** session (user affirmed no CUI datasets) falls through to the normal posture. Model routing
+  (maker/checker/agent-run gov clamp) stays global; only egress became per-session.
+- **Titlebar CUI/Search toggle + violet CUI banner** (renderer), both shown only under lockdown and reflecting
+  the CURRENT session (reloaded on session switch / new session; new sessions default to CUI). Switching TO
+  Search routes through a spillage warning ("Are you in a session with CUI datasets?" - Yes keeps CUI and advises
+  a separate Search session; No enables Search and persists it). The violet banner shows only in CUI mode.
+- **DoD/STIG Notice & Consent banner.** The standard USG/DoD mandatory banner (DTM-08-060) in one editable
+  constant (`DOD_CONSENT_BANNER`), shown as a must-acknowledge modal **once per launch, only when the AskSage
+  gov gateway is configured** (commercial users never see it). In-memory per-launch (no persistence - STIG is
+  per-logon).
+- **Titlebar Datasets picker** next to Skills (`#ctDataset`), mirroring the Skills/Persona chip + `popover`
+  pattern: multi-select the account's RAG datasets, **short name shown** (`tidyDataset`), **full raw name on
+  hover** in the premium `data-tip="short|full"` tooltip, "Clear all", count on the chip. Persists via the
+  existing `saveAsksage({datasets})`; the Settings chips share the same state.
+
+### Invariants preserved
+
+Fail-closed is law (#3): an unknown session mode defaults to CUI (egress blocked); the renderer warning is UX,
+the backend block keyed on the persisted mode is the control. Gate stays in-process (#4). Extend-not-fork (#1):
+omp's own gate; no fork. No Python (#2). The `sessionMode` store is pure + unit-tested (incl. the fail-closed
+default). Untrusted RAG dataset content stays server-side under AskSage (#5 spirit).
+
+### Relates to
+
+ADR-0218 (the global egress block this makes per-session), ADR-0217 (lockdown model clamp, unchanged), ADR-0014
+(the separate CUI memory compartment - distinct from this per-session CUI *chat* mode), ADR-0106/0108 (egress
+posture), ADR-0007 (AskSage RAG datasets), and CLAUDE.md invariants #1/#2/#3/#4.
+
+## ADR-0220 - `knowledge_search`: RAG grounding for non-AskSage users (increment 1)
+
+**Date:** 2026-07-14
+**Status:** Accepted - BUILT (increment 1 of the non-AskSage RAG arc). Wires the ALREADY-BUILT local knowledge
+stack to the agent; no new store, embedder, or Python.
+**Increment:** a new `pi.registerTool` extension + a token'd URL env + one `ompArgv` line + a dual-purpose
+titlebar chip. The pure result-shaping is unit-tested.
+
+### Context
+
+AskSage users ground answers via AskSage's server-side `/query` route + Datasets. A commercial / non-AskSage
+user got NOTHING - the agent could not ground on the user's own notes/docs. Yet the whole local knowledge stack
+already exists and is desktop-wired: Obsidian-vault / folder / chat-history ingest (`/api/kb/ingest-batch`,
+`harness/kb/batch_ingest.ts`), model-compilation into a concept/entity page graph (`harness/kb/compiler.ts`), a
+named-KG registry (ADR-0205), and lexical + graph retrieval (`/api/kb/retrieve`, `harness/kb/retrieve.ts`). The
+one missing wire: retrieval was exposed ONLY as a UI query box - not as an agent tool, not injected into any
+turn - so no model ever saw it. (ADR-0053's vector/embedding spine is built but unshipped; the "too
+compute-intensive" memory was actually a WASM-packaging problem, not CPU - a separate increment 2.)
+
+### Decision - a `knowledge_search` agent tool over the existing compiled KB
+
+- **The tool** (`harness/omp/knowledge_extension.ts`): a `pi.registerTool` extension (mirrors
+  `codegraph_extension.ts`), `approval: "read"` so it never trips the exec gate. It runs in omp's subprocess, so
+  it calls back to the desktop's EXISTING `/api/kb/retrieve` via a token'd URL the desktop injects as
+  `LUCID_KB_RETRIEVE_URL` - the same env-URL pattern as the preview tools. Returns the endpoint's `wrapped`
+  field (delimited, cited UNTRUSTED data). Empty/absent → guidance ("add an Obsidian vault or folder"), never a
+  loop. Fully wrapped: any failure = graceful text; older omp = tool simply absent.
+- **The wire:** `desktop/dev.ts` sets the token'd `LUCID_KB_RETRIEVE_URL` and adds `/api/kb/retrieve` to the
+  `queryTokenOk` set so the subprocess (which can't set a header) can use `?t=` - purely additive, the
+  renderer's header-authenticated call is unchanged. `desktop/acp_backend.ts` registers the extension in
+  `ompArgv` (always when present; self-describing when the KB is empty) - NOT gated behind AskSage, so it's the
+  non-AskSage grounding path, working for any model (Claude/GPT/local).
+- **Discovery UI:** the titlebar Datasets chip (ADR-0219) is dual-purposed - when AskSage is NOT configured it
+  becomes "Knowledge", opening a small menu: "Add an Obsidian vault or folder" (routes to the existing
+  self-contained `importKgFlow`) + "Open the Knowledge panel" (`openKnowledge`), with a note that the agent
+  searches it via `knowledge_search`. No new ingest/retrieval code.
+
+### Invariants preserved
+
+Retrieved text is delimited UNTRUSTED (`wrapKnowledge`) entering only the tool-result tail, never the frozen
+prefix (#5/#6); compiled pages were scanned fail-closed at ingest and written `untrusted`, never auto-`trusted`
+(keystone #2) - the tool mints no trust, it's PURE READ. `approval: "read"` keeps it out of the exec gate;
+token-gating closes the one new surface. Extend-not-fork (#1): a `registerTool` extension, no omp fork. No
+Python (#2).
+
+### Scope / follow-ups
+
+- **Increment 2 (semantic):** wire the built-but-unshipped vector store (`harness/knowledge/store.ts`) + an
+  `ApiEmbedder` behind the `Embedder` seam (`harness/knowledge/embedder.ts`) calling the user's OWN OpenAI key
+  or a local Ollama/vLLM via Local Providers (ADR-0135) `/embeddings` - true semantic search, still no WASM
+  bundling; then `mode:"hybrid"`.
+- **Addon (private repo):** live API connectors (Notion API, Confluence, SharePoint/OneDrive, Google Drive) and
+  a shared/managed vector DB (pgvector/Qdrant) - embed once server-side (the real "move compute off the
+  workstation" answer). Public repo keeps export-based connectors (Obsidian, folders, Notion export).
+
+### Relates to
+
+ADR-0099/0100 (compiled KB + retrieval router this exposes), ADR-0205 (KG registry / packs - the ingest+source
+model), ADR-0053/0058/0063 (the vector spine reserved for increment 2), ADR-0153 (preview tools - the token'd
+env-URL callback pattern), ADR-0135 (Local Providers - the increment-2 embeddings endpoint), and CLAUDE.md
+invariants #1/#2/#5/#6 + keystone #2.
+
+## ADR-0221 - Bring-your-own-embeddings `ApiEmbedder` (non-AskSage semantic RAG, increment 2 part 1)
+
+**Date:** 2026-07-14
+**Status:** Accepted - BUILT (both parts). Part 1: the `ApiEmbedder` primitive. Part 2: the wiring - config
+store, vault→env key, per-KG vector store, embed-during-ingest, hybrid retrieve, and a "Semantic search" Settings
+card. Unit + DuckDB-integration tested; the full LIVE path (a real `/embeddings` endpoint through the running
+app) is unverified here (this profile has no embeddings-capable endpoint - see below).
+**Increment:** `harness/knowledge/{api_embedder,embed_config}.ts` behind the existing `Embedder` seam, plus
+desktop wiring (settings_store, kb_store, dev.ts, main.ts, renderer). Confirmed decisions: a **dedicated
+"Semantic search" Settings card** (local Ollama or cloud, no silent networking) and **auto-embed during KG
+ingest**.
+
+### Context
+
+ADR-0220 gave non-AskSage users LEXICAL grounding (`knowledge_search` over the compiled KB). Increment 2 adds
+true SEMANTIC search. The vector spine (store + cosine + scan-gated ingest, ADR-0058) is built but unshipped;
+the only blocker was bundling a WASM embedder (P-RAG.1c) into the Electron app. This sidesteps that entirely:
+embed via an OpenAI-COMPATIBLE `/embeddings` endpoint the user ALREADY runs - their OpenAI/Azure key, or a local
+Ollama / vLLM / llama.cpp box (Local Providers, ADR-0135). No native binaries, no bundled weights.
+
+### Decision (part 1) - the embedder primitive
+
+`ApiEmbedder implements Embedder` (`harness/knowledge/api_embedder.ts`): POSTs `{model, input}` to
+`<baseUrl>/embeddings`, parses OpenAI-shape `data[].embedding` (index-sorted defensively). It drops in behind the
+SAME `Embedder` seam as `HashEmbedder`/`TransformersEmbedder`, so ingest/store/retrieve are untouched. PURE +
+`fetchImpl`-injected for tests; holds NO secret at rest (the desktop resolves the token from the OS vault per
+construction). FAIL-LOUD: any non-2xx, count/dim mismatch, or non-finite component throws - a broken endpoint
+can never silently store garbage vectors that would poison cosine retrieval.
+
+### Part 2 - the wiring
+
+- **Config** (`settings_store.embeddings`, non-secret) + a **dedicated "Semantic search" Settings card**
+  (baseUrl / model / dim / auth). The key is stored in the OS vault (`credStore`, ref `embeddings_key`) and
+  `main.ts` injects it into the dev child as `LUCID_EMBEDDINGS_KEY` (the Figma/git-PAT vault→env pattern). A
+  local no-auth Ollama needs no key and applies immediately; a cloud key takes effect on relaunch.
+- **Per-KG vector store** (`kb_store.ts` `knowledgeVectorStore` - a sibling `_vec.duckdb`) + `vectorDatasetFor`
+  (find-or-create a dataset matching the current embedder's model+dim, so vector spaces never mix).
+- **Auto-embed during KG ingest** (`/api/kb/ingest-batch`): each source is ALSO embedded into the KG's vector
+  store via the scan-gated `ingestText` (best-effort; never fails the compile job; no embedder ⇒ lexical-only).
+- **Hybrid retrieve** (`/api/kb/retrieve`): auto-upgrades to `mode:"hybrid"` when an embedder + embedded chunks
+  exist, else stays lexical - so `knowledge_search` (ADR-0220) transparently gains semantic recall.
+- **Test endpoint** (`/api/embeddings/test` + card button): a one-vector probe (`probeEmbeddings`) against the
+  ENTERED values incl. an inline key (works before save/relaunch) that DISCOVERS + auto-fills the model's dim.
+- **Re-index** (`/api/embeddings/reindex` + card button): rebuilds every KG's semantic index from its compiled
+  PAGES via the shared, idempotent `syncVectorIndex` (clear-then-embed) - the SAME routine ingest now uses, so a
+  KG compiled before semantic search was enabled can be indexed without re-ingesting. Vectors embed the compiled
+  pages (the canonical, always-available corpus), keeping ingest + re-index consistent.
+
+**Live-verification gap:** the current profile has only `XAI_API_KEY`/`ELEVENLABS_API_KEY`, NEITHER of which
+exposes `/embeddings`, so the end-to-end semantic path couldn't be exercised here. Each piece is tested in
+isolation (ApiEmbedder with injected fetch; the vector-store glue against real DuckDB incl. a store→retrieve
+round-trip); the full path needs an OpenAI/Azure/local-Ollama endpoint configured in the running app.
+
+### Invariants preserved
+
+The vector ingest path stays scan-gated fail-closed (keystone #2 - RAG context never auto-promotes; ingest.ts
+never embeds a blocked chunk). Extend-not-fork (#1): behind the existing seam. No Python (#2). Air-gap posture is
+the USER's choice now (a local Ollama keeps it offline; OpenAI does not) - documented, not silently networked.
+
+### Relates to
+
+ADR-0220 (the lexical grounding this upgrades), ADR-0058/0053 (the vector store + Embedder seam), ADR-0135
+(Local Providers - the endpoint + vault-secret source for part 2), and CLAUDE.md invariants #1/#2 + keystone #2.
+
+## ADR-0222 - Shared-session viewer: show thinking + tools, and use the whole window
+
+**Date:** 2026-07-14
+**Status:** Accepted - BUILT. A UX fix to the P-COLLAB guest "Watching" panel; renderer-only, no protocol change.
+**Increment:** `desktop/renderer/app.ts` (`openJoinPanel`) + `desktop/renderer/styles.css`.
+
+### Context
+
+Two complaints about the guest view of a shared session: (1) the viewer saw ONLY the host's final answer - the
+guest event handler explicitly dropped `thinking`/`tool` frames ("keep the guest view a clean transcript"), so a
+watcher couldn't follow WHAT the agent was doing; (2) the viewer was a small centered modal (`max-width:520px`,
+a `340px` transcript) floating in a large app - a lot of wasted real estate for something you're meant to watch
+and (in edit mode) drive. The frame protocol ALREADY relays the full `ChatEvent` stream (the host tees every
+event, `app.ts:1459`) - the loss was purely in the guest's render.
+
+### Decision
+
+- **Surface the host's activity.** The guest `event` handler now accumulates `thinking` (a collapsible dim
+  block), `tool` calls (compact chips: name + path/detail), `subagent` delegations, and `block`s onto the
+  pending turn, then folds them into the completed turn on `done`. So the watcher sees the reasoning + tool
+  calls, not just the answer. It stays a read-model of frames the host already sends (no new frames, no
+  protocol bump); the trust boundary is unchanged (the guest only renders what the host relays).
+- **Use the window.** When watching, the modal gets a `.watching` class → `calc(100vw/vh - 56px)` (a thin ~28px
+  border, tunable in one place), `max-width` dropped, the redundant icon/title/description hidden (the
+  `join-head` already labels the session), inner padding cut (`22px → ~12px`, transcript `340px → flex:1`). The
+  connect (paste-link) step stays the small centered modal. The close (X), Leave, and Escape all still work.
+
+### Invariants preserved
+
+No protocol/frame change (extend-not-fork, #1). No Python (#2). The guest remains a pure read-render of relayed
+frames - it mints nothing and drives nothing except through the existing host-approved prompt path (#5 spirit).
+
+### Relates to
+
+ADR-0192/0196 (P-COLLAB share-session + the guest Join panel this improves), and CLAUDE.md invariant #1.
