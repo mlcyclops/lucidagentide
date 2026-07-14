@@ -66,6 +66,10 @@ export interface GuiSettings {
   // (spillage protection); a "search" session allows web search (the user affirmed no CUI datasets). Absent/
   // unknown ⇒ "cui" (fail-closed). Keyed by omp session id; pruned to a bounded size.
   sessionModes?: Record<string, "cui" | "search">;
+  // ADR-0215: bring-your-own-embeddings config for SEMANTIC knowledge search (non-AskSage RAG increment 2).
+  // Non-secret (baseUrl/model/dim/auth); the token lives in the OS vault behind `vaultRef` and is injected into
+  // the dev child env by main as LUCID_EMBEDDINGS_KEY (the Figma/git-PAT vault→env pattern). Off ⇒ lexical only.
+  embeddings?: { enabled: boolean; baseUrl: string; model: string; dim: number; authKind: "none" | "bearer" | "apikey"; headerName?: string; vaultRef?: string };
   // Monthly inference-token allowance. AskSage's API reports tokens USED but not
   // the ceiling (admins grant more in the AskSage console - no API to read it), so
   // the limit is a local, user-adjustable value. Everyone starts at 200k.
@@ -463,6 +467,16 @@ export function setLastModel(model: string): void {
 }
 /** Whether the user has set the "AskSage only" model lock (the org-managed lock is OR'd in by callers). */
 export function asksageOnly(): boolean { return !!load().asksageOnly; }
+/** ADR-0215: the stored embeddings config (non-secret), or null when semantic search was never set up. */
+export type StoredEmbeddingsConfig = NonNullable<GuiSettings["embeddings"]>;
+export function embeddingsConfig(): StoredEmbeddingsConfig | null { return load().embeddings ?? null; }
+/** Persist (or clear, with null) the embeddings config. The secret is NOT here - it's vaulted behind vaultRef. */
+export function setEmbeddingsConfig(cfg: StoredEmbeddingsConfig | null): GuiSettings {
+  const s = load();
+  if (cfg) s.embeddings = cfg; else delete s.embeddings;
+  save(s);
+  return s;
+}
 /** ADR-0213: the CUI vs Search mode for a chat session. Fail-closed default "cui" (blocks egress under
  *  lockdown) for an unknown/absent session id. */
 export function sessionMode(id: string): "cui" | "search" {

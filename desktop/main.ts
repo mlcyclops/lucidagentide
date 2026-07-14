@@ -20,7 +20,7 @@ import { ensureRuntimes, findBun, needsBootstrap } from "./runtime.ts";
 import { createSplash, setSplashStatus } from "./splash.ts";
 import { deleteCredential, listCredentials, readCredential, rotateCredential, storeCredential, type SafeStorageLike, type VaultIo } from "./cred_vault.ts";
 import { materializeLocalProviders, registerLocalProviderEgress } from "./local_providers_runtime.ts";
-import { listLocalProviders } from "./settings_store.ts";
+import { listLocalProviders, embeddingsConfig } from "./settings_store.ts";
 import type { AuthKind } from "./network_whitelist.ts";
 
 const PORT = Number(process.env.LUCID_PORT ?? 5319);
@@ -76,9 +76,10 @@ function startDevServer(): void {
   // ADR-0210: the vault-backed git PAT (ref "git_pat"), injected as LUCID_GIT_PAT so cloneRepo can authenticate
   // a PRIVATE clone from the Settings button - the same vault→env-into-dev-child path as Figma/Local Providers.
   const gitEnv = prepareGitToken();
+  const embeddingsEnv = prepareEmbeddingsToken(); // ADR-0215: vault→env for the embeddings endpoint key
   dev = spawn(findBun(), ["run", "desktop/dev.ts"], {
     cwd: REPO,
-    env: { ...process.env, ...runtimeEnv, ...lpEnv, ...figmaEnv, ...gitEnv, PORT: String(PORT) },
+    env: { ...process.env, ...runtimeEnv, ...lpEnv, ...figmaEnv, ...gitEnv, ...embeddingsEnv, PORT: String(PORT) },
     // NOT "inherit": in a packaged GUI app the Electron main has no console, so inheriting
     // makes the console-subsystem Bun allocate its OWN console window (the black pop-up).
     // Pipe instead + windowsHide so no window ever appears; forward output for dev runs.
@@ -222,6 +223,17 @@ function prepareGitToken(): Record<string, string> {
   try {
     const tok = readCredential(ELECTRON_SAFE_STORAGE, VAULT_IO, CRED_DIR(), GIT_PAT_REF);
     return tok ? { LUCID_GIT_PAT: tok } : {};
+  } catch { return {}; }
+}
+// ADR-0215: read the embeddings endpoint's API key from the vault (ref = settings.embeddings.vaultRef) and expose
+// it to the dev child as LUCID_EMBEDDINGS_KEY, so the ApiEmbedder can authenticate a cloud endpoint (OpenAI/Azure)
+// without the secret reaching the renderer. A local no-auth Ollama needs no key. Best-effort — never blocks start.
+function prepareEmbeddingsToken(): Record<string, string> {
+  try {
+    const cfg = embeddingsConfig();
+    if (!cfg?.enabled || !cfg.vaultRef || (cfg.authKind !== "bearer" && cfg.authKind !== "apikey")) return {};
+    const tok = readCredential(ELECTRON_SAFE_STORAGE, VAULT_IO, CRED_DIR(), cfg.vaultRef);
+    return tok ? { LUCID_EMBEDDINGS_KEY: tok } : {};
   } catch { return {}; }
 }
 ipcMain.handle("lucid:credStore", (_e, input: { ref?: string; kind: AuthKind; secret: string; label?: string; expiresAt?: number; rotationIntervalDays?: number }) => {

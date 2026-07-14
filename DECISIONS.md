@@ -14628,10 +14628,14 @@ invariants #1/#2/#5/#6 + keystone #2.
 ## ADR-0215 - Bring-your-own-embeddings `ApiEmbedder` (non-AskSage semantic RAG, increment 2 part 1)
 
 **Date:** 2026-07-14
-**Status:** Accepted - PART 1 BUILT (the `ApiEmbedder` primitive, unit-tested). The wiring (ingest → embed,
-retrieve → hybrid, a Settings card) is PENDING one config decision + an embeddings-capable endpoint to verify.
-**Increment:** a new `harness/knowledge/api_embedder.ts` behind the existing `Embedder` seam. Nothing else
-changed yet - it's dormant until wired.
+**Status:** Accepted - BUILT (both parts). Part 1: the `ApiEmbedder` primitive. Part 2: the wiring - config
+store, vault→env key, per-KG vector store, embed-during-ingest, hybrid retrieve, and a "Semantic search" Settings
+card. Unit + DuckDB-integration tested; the full LIVE path (a real `/embeddings` endpoint through the running
+app) is unverified here (this profile has no embeddings-capable endpoint - see below).
+**Increment:** `harness/knowledge/{api_embedder,embed_config}.ts` behind the existing `Embedder` seam, plus
+desktop wiring (settings_store, kb_store, dev.ts, main.ts, renderer). Confirmed decisions: a **dedicated
+"Semantic search" Settings card** (local Ollama or cloud, no silent networking) and **auto-embed during KG
+ingest**.
 
 ### Context
 
@@ -14650,12 +14654,23 @@ SAME `Embedder` seam as `HashEmbedder`/`TransformersEmbedder`, so ingest/store/r
 construction). FAIL-LOUD: any non-2xx, count/dim mismatch, or non-finite component throws - a broken endpoint
 can never silently store garbage vectors that would poison cosine retrieval.
 
-### Open decision (blocks part 2 wiring)
+### Part 2 - the wiring
 
-Where the embeddings endpoint is configured (a dedicated Settings card vs reusing a Local Provider vs
-auto-from-a-provider-key) - and which provider to default to. Note the current profile has only `XAI_API_KEY` /
-`ELEVENLABS_API_KEY`, NEITHER of which exposes `/embeddings`, so the semantic path can't be live-verified until
-an OpenAI / Azure / local-Ollama endpoint is configured. Deliberately NOT guessing the config UX blind.
+- **Config** (`settings_store.embeddings`, non-secret) + a **dedicated "Semantic search" Settings card**
+  (baseUrl / model / dim / auth). The key is stored in the OS vault (`credStore`, ref `embeddings_key`) and
+  `main.ts` injects it into the dev child as `LUCID_EMBEDDINGS_KEY` (the Figma/git-PAT vault→env pattern). A
+  local no-auth Ollama needs no key and applies immediately; a cloud key takes effect on relaunch.
+- **Per-KG vector store** (`kb_store.ts` `knowledgeVectorStore` - a sibling `_vec.duckdb`) + `vectorDatasetFor`
+  (find-or-create a dataset matching the current embedder's model+dim, so vector spaces never mix).
+- **Auto-embed during KG ingest** (`/api/kb/ingest-batch`): each source is ALSO embedded into the KG's vector
+  store via the scan-gated `ingestText` (best-effort; never fails the compile job; no embedder ⇒ lexical-only).
+- **Hybrid retrieve** (`/api/kb/retrieve`): auto-upgrades to `mode:"hybrid"` when an embedder + embedded chunks
+  exist, else stays lexical - so `knowledge_search` (ADR-0214) transparently gains semantic recall.
+
+**Live-verification gap:** the current profile has only `XAI_API_KEY`/`ELEVENLABS_API_KEY`, NEITHER of which
+exposes `/embeddings`, so the end-to-end semantic path couldn't be exercised here. Each piece is tested in
+isolation (ApiEmbedder with injected fetch; the vector-store glue against real DuckDB incl. a store→retrieve
+round-trip); the full path needs an OpenAI/Azure/local-Ollama endpoint configured in the running app.
 
 ### Invariants preserved
 

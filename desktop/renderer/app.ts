@@ -2529,6 +2529,52 @@ async function reseedTrivia(btn: HTMLButtonElement | null): Promise<void> {
   }
 }
 
+// ADR-0215: the "Semantic search" card - point KB RAG at an OpenAI-compatible /embeddings endpoint (a LOCAL
+// Ollama for air-gap, or OpenAI/Azure). Non-secret config here; the key is stored in the OS vault on save.
+function secEmbeddings(cfg: import("./bridge.ts").EmbeddingsConfigView | null, active: boolean): string {
+  const c = cfg ?? { enabled: false, baseUrl: "", model: "", dim: 768, authKind: "none" as const, vaultRef: undefined as string | undefined };
+  const opt = (v: string, label: string) => `<option value="${v}" ${c.authKind === v ? "selected" : ""}>${label}</option>`;
+  const pill = active ? `<span class="abadge ok">active</span>` : (c.enabled ? `<span class="abadge warn">needs a key / relaunch</span>` : `<span class="abadge">off</span>`);
+  return `<div class="set-sec">
+    <div class="set-note">${icon("search", 12)} Ground the agent on your own notes with SEMANTIC search. Point at a LOCAL Ollama (offline / air-gap: <code>http://localhost:11434/v1</code> · <code>nomic-embed-text</code> · dim 768) or a cloud endpoint (OpenAI <code>text-embedding-3-small</code> · dim 1536). Off = lexical search only. ${pill}</div>
+    <label class="set-toggle"><input type="checkbox" id="embEnabled" ${c.enabled ? "checked" : ""}/><span><b>Enable semantic search</b> - embed ingested knowledge for meaning-based retrieval.</span></label>
+    <div class="prov-row"><input class="prov-key" id="embBaseUrl" placeholder="Base URL - e.g. http://localhost:11434/v1" value="${esc(c.baseUrl)}" autocomplete="off" spellcheck="false"/></div>
+    <div class="prov-row"><input class="prov-key" id="embModel" placeholder="Embedding model - e.g. nomic-embed-text" value="${esc(c.model)}"/><input class="prov-key" id="embDim" type="number" min="1" placeholder="dim" value="${c.dim || ""}" style="max-width:90px"/></div>
+    <div class="prov-row">
+      <select class="prov-key" id="embAuth" style="max-width:160px">${opt("none", "No auth (local)")}${opt("bearer", "Bearer key")}${opt("apikey", "API-key header")}</select>
+      <input class="prov-key" id="embKey" type="password" placeholder="${c.vaultRef ? "Key saved - blank keeps it" : "API key (stored in the OS vault)"}" autocomplete="off"/>
+      <button class="btn-mini ok" id="embSave">${icon("check", 13)} Save</button>
+    </div>
+    <div class="set-sub">A local no-auth endpoint applies immediately; a cloud key is vaulted and takes effect on the next launch. Re-ingest a knowledge graph to build its semantic index.</div>
+  </div>`;
+}
+async function saveEmbeddings(): Promise<void> {
+  const body = $("#setBody")!;
+  const val = (id: string) => ($(`#${id}`, body) as HTMLInputElement | null)?.value ?? "";
+  const enabled = ($("#embEnabled", body) as HTMLInputElement | null)?.checked ?? false;
+  const baseUrl = val("embBaseUrl").trim(), model = val("embModel").trim();
+  const dim = Math.max(0, Math.floor(Number(val("embDim")) || 0));
+  const authKind = ((($("#embAuth", body) as HTMLSelectElement | null)?.value) as "none" | "bearer" | "apikey") || "none";
+  const key = val("embKey");
+  if (enabled && (!baseUrl || !model || !dim)) { showToast({ tone: "warn", title: "Missing fields", desc: "Base URL, model, and dimension are required to enable semantic search.", timeout: 4200 }); return; }
+  let vaultRef = (await bridge.embeddingsConfig().catch(() => null))?.config?.vaultRef;
+  if ((authKind === "bearer" || authKind === "apikey") && key) {
+    if (!bridge.isElectron || !bridge.credStore) { showToast({ tone: "danger", title: "Vault is desktop-only", desc: "Open the LUCID desktop app to store the key securely." }); return; }
+    const r = await bridge.credStore({ ref: "embeddings_key", kind: "apikey", secret: key, label: "Embeddings endpoint key" });
+    if (r && "error" in r) { showToast({ tone: "danger", title: "Couldn't save key", desc: String(r.error), timeout: 5000 }); return; }
+    vaultRef = "embeddings_key";
+  }
+  const res = await bridge.setEmbeddingsConfig({ enabled, baseUrl, model, dim, authKind, ...(vaultRef ? { vaultRef } : {}) });
+  if (res && "error" in res && res.error) { showToast({ tone: "danger", title: "Not saved", desc: String(res.error), timeout: 5000 }); return; }
+  hydrateSettings();
+  const needsRelaunch = enabled && (authKind === "bearer" || authKind === "apikey") && !!key;
+  showToast({
+    tone: "ok", title: enabled ? "Semantic search saved" : "Semantic search off",
+    desc: needsRelaunch ? "Cloud key vaulted - relaunch to apply, then re-ingest a KG to build the index." : (enabled ? "Applies now. Re-ingest a knowledge graph to build its semantic index." : "Retrieval is lexical again."),
+    timeout: 6500,
+    actions: needsRelaunch ? [{ label: "Relaunch", kind: "ok", run: () => void bridge.relaunch() }, { label: "Later" }] : [{ label: "OK" }],
+  });
+}
 function settingsShell(): string {
   return [
     `<div data-sec="workspace"></div>`,
@@ -2542,6 +2588,7 @@ function settingsShell(): string {
     `<div data-sec="asksageQuota"></div>`, // AskSage Monthly-tokens bar - ONLY when the gov gateway is configured (filled in hydrateSettings)
     setSkel("providers", "Providers", "U.S. frontier · key or OAuth", true),
     setSkel("localProviders", "Local Providers", "self-hosted · Ollama · vLLM · VPN", true), // P-LOCAL.3 (ADR-0135); auto-collapsed
+    setSkel("embeddings", "Semantic search", "knowledge RAG · your own embeddings", true), // ADR-0215; auto-collapsed
     `<div data-sec="sovereignty"></div>`, // P-IDE.1c: China-origin unlock (renders only when such models exist)
     setSkel("compression", "Token compression", "headroom · on-device · opt-in", true),
     setSkel("mcp", "MCP connectors", "model context protocol", true),
@@ -2562,6 +2609,7 @@ function hydrateSettings(): void {
     const el = document.querySelector(`#setBody [data-sec="workspace"]`);
     if (el) el.outerHTML = `<div data-sec="workspace">${ws ? workspaceSection(ws) : ""}</div>`;
   });
+  void bridge.embeddingsConfig().then((r) => fillSec("embeddings", secEmbeddings(r?.config ?? null, !!r?.active))); // ADR-0215
   // Profile already painted from cache; refresh from disk only if it changed AND the user isn't typing.
   void bridge.getSettings().then((s) => {
     if (!s) return;
@@ -8627,6 +8675,7 @@ function wire(): void {
       return;
     }
     if (t.closest("#wsSet")) { const v = ($("#wsPath", $("#setBody")!) as HTMLInputElement)?.value.trim(); if (v) await applyWorkspace(v); return; }
+    if (t.closest("#embSave")) { await saveEmbeddings(); return; } // ADR-0215
     if (t.closest("#wsGitPatSave")) { await saveGitPat(); return; }
     if (t.closest("#wsGitPatClear")) { await clearGitPat(); return; }
     if (t.closest("#wsClone")) {

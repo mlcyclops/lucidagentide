@@ -102,16 +102,23 @@ import { recordCollabShareStarted, recordCollabShareStopped, recordCollabGuestJo
 import { authorizeRelayConnect } from "./managed_config.ts";
 import { collabRelayConfig, setCollabRelay, collabP2PConfig, setCollabP2P } from "./settings_store.ts";
 import { sessionMode, setSessionMode } from "./settings_store.ts"; // ADR-0213: per-session CUI/Search mode
+import { embeddingsConfig, setEmbeddingsConfig } from "./settings_store.ts"; // ADR-0215: BYO-embeddings config
+
+// ADR-0215: the desktop's Embedder — an ApiEmbedder built from the stored config + the vault secret injected as
+// LUCID_EMBEDDINGS_KEY by main, or null when semantic search is off/incomplete (retrieval stays lexical).
+function desktopEmbedder() { return resolveApiEmbedder(embeddingsConfig() ?? undefined, process.env.LUCID_EMBEDDINGS_KEY); }
 import { hostname as osHostname } from "node:os";
 import { analyzeWork, codifyCandidate, gatherWorkDigest, type SkillCandidate, type StudioWindow } from "./skill_studio.ts"
 import { buildSkillArtifact, PublishDispatcher, publishersFor } from "./skill_publish.ts";
-import { kbScanner, kbStore, listKgs, activeKgId, createKg, renameKg, setActiveKg } from "./kb_store.ts"
+import { kbScanner, kbStore, listKgs, activeKgId, createKg, renameKg, setActiveKg, knowledgeVectorStore, vectorDatasetFor } from "./kb_store.ts"
 import { readKbSources } from "./kb_sources.ts"
 import { ingestSourcesIntoKg } from "../harness/kb/batch_ingest.ts"
 import { exportKgPack, importKgPack, installPackFromUrl } from "./kb_pack.ts"
 import { startKbIngest, kbIngestJobStatus, cancelKbIngest } from "./kb_ingest_job.ts"
 import { ingestDocument } from "../harness/kb/ingest.ts"
-import { retrieveKnowledge, type RetrieveMode } from "../harness/kb/retrieve.ts"
+import { retrieveKnowledge, type RetrieveMode, type RetrieveArgs } from "../harness/kb/retrieve.ts"
+import { ingestText } from "../harness/knowledge/ingest.ts" // ADR-0215: vector (semantic) ingest, scan-gated
+import { resolveApiEmbedder } from "../harness/knowledge/embed_config.ts" // ADR-0215
 import { recordBlock } from "./security_log.ts"
 import { importSkill } from "./skills_import.ts";
 import { createUserCommand, deleteUserCommand, listUserCommands } from "./user_commands.ts"; // P-CMD.1
@@ -1578,6 +1585,28 @@ const server = Bun.serve({
         const id = url.searchParams.get("id") || (backend.currentSessionId() ?? "");
         return json({ ok: true, data: { id, mode: id ? sessionMode(id) : "cui" } });
       }
+      // ADR-0215: the "Semantic search" (BYO-embeddings) config. Non-secret (baseUrl/model/dim/auth); the token
+      // is stored separately in the OS vault (credStore) and referenced by vaultRef. `active` reflects whether a
+      // usable embedder resolves right now (config complete + any needed secret present in the child env).
+      if (p === "/api/embeddings-config") {
+        if (req.method === "POST") {
+          const b = await readBody<{ config?: unknown }>(req);
+          const c = b.config as Record<string, unknown> | null;
+          if (c === null) { setEmbeddingsConfig(null); return json({ ok: true, data: { config: null, active: false } }); }
+          if (!c || typeof c.baseUrl !== "string" || typeof c.model !== "string" || !c.baseUrl.trim() || !c.model.trim())
+            return json({ ok: true, data: { config: embeddingsConfig(), active: !!desktopEmbedder(), error: "Base URL and model are required." } });
+          const authKind = c.authKind === "bearer" || c.authKind === "apikey" ? c.authKind : "none";
+          setEmbeddingsConfig({
+            enabled: c.enabled !== false,
+            baseUrl: c.baseUrl.trim(), model: c.model.trim(),
+            dim: Math.max(1, Math.floor(Number(c.dim) || 0)),
+            authKind, headerName: typeof c.headerName === "string" ? c.headerName : undefined,
+            vaultRef: typeof c.vaultRef === "string" ? c.vaultRef : undefined,
+          });
+          return json({ ok: true, data: { config: embeddingsConfig(), active: !!desktopEmbedder() } });
+        }
+        return json({ ok: true, data: { config: embeddingsConfig(), active: !!desktopEmbedder() } });
+      }
       if (p === "/api/auth") return json({ ok: true, data: providerAuth() });
       if (p === "/api/auth/key" && req.method === "POST") {
         const { env, key } = await readBody<{ env?: unknown; key?: unknown }>(req);
@@ -1747,8 +1776,22 @@ const server = Bun.serve({
       }
       if (p === "/api/kb/retrieve" && req.method === "POST") {
         const b = await readBody<{ query?: unknown; mode?: unknown }>(req);
-        const mode: RetrieveMode = b.mode === "vector" || b.mode === "hybrid" ? b.mode : "compiled";
-        return json({ ok: true, data: await retrieveKnowledge({ query: String(b.query ?? ""), mode, compiled: { store: await kbStore() } }) });
+        const requested: RetrieveMode = b.mode === "vector" || b.mode === "hybrid" ? b.mode : "compiled";
+        const store = await kbStore();
+        // ADR-0215: auto-upgrade to HYBRID (semantic vectors + lexical compiled) when an embeddings endpoint is
+        // configured AND the active KG has embedded chunks; else stay lexical. The knowledge_search tool always
+        // asks for "compiled" — this transparently upgrades it when vectors exist, and degrades safely if not.
+        const embedder = desktopEmbedder();
+        let vector: RetrieveArgs["vector"];
+        if (embedder) {
+          try {
+            const vstore = await knowledgeVectorStore();
+            const ds = (await vstore.listDatasets()).find((d) => d.embedding_model === embedder.id && d.dim === embedder.dim);
+            if (ds && (await vstore.chunkCount(ds.dataset_id)) > 0) vector = { store: vstore, datasetId: ds.dataset_id, embedder };
+          } catch { /* no vector store yet → lexical */ }
+        }
+        const mode: RetrieveMode = vector ? "hybrid" : (requested === "vector" ? "compiled" : requested);
+        return json({ ok: true, data: await retrieveKnowledge({ query: String(b.query ?? ""), mode, compiled: { store }, vector }) });
       }
       if (p === "/api/kb/graph") {
         const s = await kbStore();
@@ -1810,6 +1853,21 @@ const server = Bun.serve({
               signal,
               onBlock: (blk) => recordBlock({ tool: "kb_ingest", severity: "high", findings: String(blk.findings), reason: `KB ${blk.stage} blocked${blk.slug ? ` (${blk.slug})` : ""}: ${blk.reason}` }),
             });
+            // ADR-0215: also embed each source into the KG's VECTOR store for SEMANTIC search, when an
+            // embeddings endpoint is configured. Scan-gated (ingestText never embeds a blocked chunk) + best-
+            // effort: a failure here (or no embedder) leaves the KG lexical-only; it never fails the compile job.
+            try {
+              const embedder = desktopEmbedder();
+              if (embedder && !signal?.aborted) {
+                const vstore = await knowledgeVectorStore(targetId);
+                const datasetId = await vectorDatasetFor(vstore, kgName || "Knowledge", embedder);
+                for (const d of src.scan.docs) {
+                  if (signal?.aborted) break;
+                  await ingestText({ store: vstore, scanner: kbScanner(), embedder, datasetId, sourcePath: d.sourcePath, text: d.text,
+                    onBlock: (blk) => recordBlock({ tool: "kb_embed", severity: "high", findings: String(blk.findings), reason: `KB embed blocked: ${blk.reason}` }) });
+                }
+              }
+            } catch (e) { console.error("[EMBED] semantic index skipped:", (e as Error)?.message); }
             return { ...result, kgId: targetId, kgName, kind: src.scan.kind, vendor: src.scan.vendor ?? null };
           },
         });

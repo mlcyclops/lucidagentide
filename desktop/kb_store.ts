@@ -15,6 +15,8 @@
 import { join, dirname } from "node:path";
 import { homedir } from "node:os";
 import { KbGraphStore } from "../harness/kb/store.ts";
+import { KnowledgeStore } from "../harness/knowledge/store.ts"; // ADR-0215: the per-KG VECTOR store (semantic)
+import type { Embedder } from "../harness/knowledge/embedder.ts";
 import { KgRegistry, type KgEntry, type KgSourceKind } from "../harness/kb/registry.ts";
 import { ScannerClient } from "../harness/security/scanner_client.ts";
 
@@ -50,6 +52,27 @@ export function kbStore(kgId?: string): Promise<KbGraphStore> {
   return p;
 }
 
+const vecStores = new Map<string, Promise<KnowledgeStore>>();
+/** ADR-0215: the per-KG VECTOR store for SEMANTIC search — a sibling `_vec.duckdb` beside the KG's compiled
+ *  graph. Opened lazily + cached (one writer per file); empty until semantic ingest writes to it. */
+export function knowledgeVectorStore(kgId?: string): Promise<KnowledgeStore> {
+  const reg = kgRegistry();
+  const id = kgId || reg.activeId();
+  if (!id) throw new Error("no active KG (registry seed failed)");
+  const entry = reg.get(id);
+  if (!entry) throw new Error(`unknown KG: ${id}`);
+  let p = vecStores.get(id);
+  if (!p) { p = KnowledgeStore.open(entry.db_path.replace(/\.duckdb$/i, "_vec.duckdb")); vecStores.set(id, p); }
+  return p;
+}
+/** ADR-0215: find-or-create the KG's vector dataset matching the CURRENT embedder's model + dim. A model change
+ *  creates a NEW dataset (old vectors stay but aren't queried) so vector spaces never mix at retrieval. */
+export async function vectorDatasetFor(store: KnowledgeStore, name: string, embedder: Embedder): Promise<string> {
+  const existing = (await store.listDatasets()).find((d) => d.embedding_model === embedder.id && d.dim === embedder.dim);
+  if (existing) return existing.dataset_id;
+  return (await store.createDataset({ name, classification: "U", source: "local", embeddingModel: embedder.id, dim: embedder.dim })).dataset_id;
+}
+
 /** All KGs for the picker (registry order). */
 export function listKgs(): KgEntry[] { return kgRegistry().list(); }
 
@@ -77,6 +100,8 @@ export function kgEntry(kgId: string): KgEntry | undefined { return kgRegistry()
 export async function closeKg(kgId: string): Promise<void> {
   const p = stores.get(kgId);
   if (p) { try { (await p).close(); } catch { /* ignore */ } stores.delete(kgId); }
+  const v = vecStores.get(kgId); // ADR-0215: also flush the sibling vector store
+  if (v) { try { (await v).close(); } catch { /* ignore */ } vecStores.delete(kgId); }
 }
 
 /** Rename a KG (kg_id + file untouched). */
@@ -97,9 +122,11 @@ export async function stopKb(): Promise<void> {
   try { scanner?.stop(); } catch { /* ignore */ }
   scanner = null;
   for (const p of stores.values()) { try { (await p).close(); } catch { /* ignore */ } }
+  for (const v of vecStores.values()) { try { (await v).close(); } catch { /* ignore */ } } // ADR-0215
   stores.clear();
+  vecStores.clear();
   registry = null;
 }
 
 /** Test-only: drop the cached stores + registry so the next call re-resolves from the configured paths. */
-export function _resetKbStoreForTest(): void { stores.clear(); registry = null; }
+export function _resetKbStoreForTest(): void { stores.clear(); vecStores.clear(); registry = null; }
