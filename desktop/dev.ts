@@ -107,6 +107,27 @@ import { embeddingsConfig, setEmbeddingsConfig } from "./settings_store.ts"; // 
 // ADR-0215: the desktop's Embedder — an ApiEmbedder built from the stored config + the vault secret injected as
 // LUCID_EMBEDDINGS_KEY by main, or null when semantic search is off/incomplete (retrieval stays lexical).
 function desktopEmbedder() { return resolveApiEmbedder(embeddingsConfig() ?? undefined, process.env.LUCID_EMBEDDINGS_KEY); }
+
+// ADR-0215: (re)build a KG's SEMANTIC vector index from its COMPILED PAGES — the canonical, always-available
+// corpus (so incremental ingest AND the explicit "re-index" action stay consistent). Idempotent: clears the
+// dataset then re-embeds every page via the scan-gated ingestText (a page that fails the re-scan is dropped,
+// never embedded). Returns page/chunk counts. Callers pass a resolved embedder.
+async function syncVectorIndex(kgId: string, kgName: string, embedder: Embedder): Promise<{ pages: number; stored: number }> {
+  const vstore = await knowledgeVectorStore(kgId);
+  const datasetId = await vectorDatasetFor(vstore, kgName || "Knowledge", embedder);
+  await vstore.clearChunks(datasetId);
+  const pages = await (await kbStore(kgId)).listPages();
+  let stored = 0;
+  for (const pg of pages) {
+    const res = await ingestText({
+      store: vstore, scanner: kbScanner(), embedder, datasetId,
+      sourcePath: `page:${pg.slug}`, text: `${pg.title}\n\n${pg.body_md}`,
+      onBlock: (blk) => recordBlock({ tool: "kb_embed", severity: "high", findings: String(blk.findings), reason: `KB embed blocked: ${blk.reason}` }),
+    });
+    stored += res.stored;
+  }
+  return { pages: pages.length, stored };
+}
 import { hostname as osHostname } from "node:os";
 import { analyzeWork, codifyCandidate, gatherWorkDigest, type SkillCandidate, type StudioWindow } from "./skill_studio.ts"
 import { buildSkillArtifact, PublishDispatcher, publishersFor } from "./skill_publish.ts";
@@ -119,6 +140,8 @@ import { ingestDocument } from "../harness/kb/ingest.ts"
 import { retrieveKnowledge, type RetrieveMode, type RetrieveArgs } from "../harness/kb/retrieve.ts"
 import { ingestText } from "../harness/knowledge/ingest.ts" // ADR-0215: vector (semantic) ingest, scan-gated
 import { resolveApiEmbedder } from "../harness/knowledge/embed_config.ts" // ADR-0215
+import { probeEmbeddings } from "../harness/knowledge/api_embedder.ts" // ADR-0215: "Test endpoint" probe
+import type { Embedder } from "../harness/knowledge/embedder.ts"
 import { recordBlock } from "./security_log.ts"
 import { importSkill } from "./skills_import.ts";
 import { createUserCommand, deleteUserCommand, listUserCommands } from "./user_commands.ts"; // P-CMD.1
@@ -1607,6 +1630,31 @@ const server = Bun.serve({
         }
         return json({ ok: true, data: { config: embeddingsConfig(), active: !!desktopEmbedder() } });
       }
+      // ADR-0215: "Test endpoint" - a one-vector connectivity probe against the ENTERED values (incl. an inline
+      // key, so it works before saving/relaunch), reporting the dimension the model returns so the UI auto-fills it.
+      if (p === "/api/embeddings/test" && req.method === "POST") {
+        const b = await readBody<{ baseUrl?: unknown; model?: unknown; authKind?: unknown; headerName?: unknown; secret?: unknown }>(req);
+        const baseUrl = String(b.baseUrl ?? "").trim(), model = String(b.model ?? "").trim();
+        if (!baseUrl || !model) return json({ ok: true, data: { ok: false, error: "Base URL and model are required." } });
+        const authKind = b.authKind === "bearer" || b.authKind === "apikey" ? b.authKind : "none";
+        const secret = typeof b.secret === "string" && b.secret ? b.secret : (authKind !== "none" ? process.env.LUCID_EMBEDDINGS_KEY : undefined);
+        try {
+          const { dim } = await probeEmbeddings({ baseUrl, model, authKind, secret, headerName: typeof b.headerName === "string" ? b.headerName : undefined });
+          return json({ ok: true, data: { ok: true, dim } });
+        } catch (e) { return json({ ok: true, data: { ok: false, error: String((e as Error)?.message ?? e).slice(0, 200) } }); }
+      }
+      // ADR-0215: "Re-index" - rebuild every KG's semantic index from its compiled pages (idempotent). Only
+      // meaningful once semantic search is active. Synchronous (KGs are few; embeddings are cheap next to compile).
+      if (p === "/api/embeddings/reindex" && req.method === "POST") {
+        const embedder = desktopEmbedder();
+        if (!embedder) return json({ ok: true, data: { ok: false, error: "Semantic search isn't active. Enable it (and relaunch if it uses a cloud key) first." } });
+        let kgs = 0, pages = 0, stored = 0;
+        for (const kg of listKgs()) {
+          try { const r = await syncVectorIndex(kg.kg_id, kg.name, embedder); kgs++; pages += r.pages; stored += r.stored; }
+          catch (e) { console.error(`[REINDEX] ${kg.name} skipped:`, (e as Error)?.message); }
+        }
+        return json({ ok: true, data: { ok: true, kgs, pages, stored } });
+      }
       if (p === "/api/auth") return json({ ok: true, data: providerAuth() });
       if (p === "/api/auth/key" && req.method === "POST") {
         const { env, key } = await readBody<{ env?: unknown; key?: unknown }>(req);
@@ -1853,20 +1901,12 @@ const server = Bun.serve({
               signal,
               onBlock: (blk) => recordBlock({ tool: "kb_ingest", severity: "high", findings: String(blk.findings), reason: `KB ${blk.stage} blocked${blk.slug ? ` (${blk.slug})` : ""}: ${blk.reason}` }),
             });
-            // ADR-0215: also embed each source into the KG's VECTOR store for SEMANTIC search, when an
-            // embeddings endpoint is configured. Scan-gated (ingestText never embeds a blocked chunk) + best-
-            // effort: a failure here (or no embedder) leaves the KG lexical-only; it never fails the compile job.
+            // ADR-0215: rebuild the KG's SEMANTIC index from its compiled pages, when an embeddings endpoint is
+            // configured. Best-effort: a failure here (or no embedder) leaves the KG lexical-only; never fails
+            // the compile job. Same routine as the explicit "re-index" action, so both stay consistent.
             try {
               const embedder = desktopEmbedder();
-              if (embedder && !signal?.aborted) {
-                const vstore = await knowledgeVectorStore(targetId);
-                const datasetId = await vectorDatasetFor(vstore, kgName || "Knowledge", embedder);
-                for (const d of src.scan.docs) {
-                  if (signal?.aborted) break;
-                  await ingestText({ store: vstore, scanner: kbScanner(), embedder, datasetId, sourcePath: d.sourcePath, text: d.text,
-                    onBlock: (blk) => recordBlock({ tool: "kb_embed", severity: "high", findings: String(blk.findings), reason: `KB embed blocked: ${blk.reason}` }) });
-                }
-              }
+              if (embedder && !signal?.aborted) await syncVectorIndex(targetId, kgName, embedder);
             } catch (e) { console.error("[EMBED] semantic index skipped:", (e as Error)?.message); }
             return { ...result, kgId: targetId, kgName, kind: src.scan.kind, vendor: src.scan.vendor ?? null };
           },

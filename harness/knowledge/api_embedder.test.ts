@@ -8,7 +8,7 @@
 // that stop a broken endpoint from storing garbage vectors that would poison cosine retrieval).
 
 import { describe, expect, test } from "bun:test";
-import { ApiEmbedder, embedAuthHeader, embeddingsUrl, parseEmbeddingsResponse } from "./api_embedder.ts";
+import { ApiEmbedder, embedAuthHeader, embeddingsUrl, parseEmbeddingsResponse, probeEmbeddings } from "./api_embedder.ts";
 import type { Embedder } from "./embedder.ts";
 
 describe("embeddingsUrl / embedAuthHeader", () => {
@@ -62,6 +62,16 @@ describe("ApiEmbedder", () => {
     const bad = (async () => ({ ok: false, status: 429 })) as any;
     const e = new ApiEmbedder({ baseUrl: "http://x/v1", model: "m", dim: 2, fetchImpl: bad });
     await expect(e.embed(["a"])).rejects.toThrow(/HTTP 429/);
+  });
+  test("probeEmbeddings DISCOVERS the endpoint's dim (does not enforce a configured one)", async () => {
+    const f = (async () => ({ ok: true, json: async () => ({ data: [{ index: 0, embedding: [1, 2, 3, 4] }] }) })) as any;
+    expect(await probeEmbeddings({ baseUrl: "http://x/v1", model: "m", fetchImpl: f })).toEqual({ dim: 4 });
+  });
+  test("probeEmbeddings throws a short message on a non-2xx / empty vector", async () => {
+    const bad = (async () => ({ ok: false, status: 401 })) as any;
+    await expect(probeEmbeddings({ baseUrl: "http://x/v1", model: "m", fetchImpl: bad })).rejects.toThrow(/HTTP 401/);
+    const empty = (async () => ({ ok: true, json: async () => ({ data: [{ index: 0, embedding: [] }] }) })) as any;
+    await expect(probeEmbeddings({ baseUrl: "http://x/v1", model: "m", fetchImpl: empty })).rejects.toThrow(/no embedding vector/);
   });
   test("embed() sends the bearer token when configured", async () => {
     let seen: Record<string, string> = {};

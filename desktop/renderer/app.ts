@@ -2543,9 +2543,11 @@ function secEmbeddings(cfg: import("./bridge.ts").EmbeddingsConfigView | null, a
     <div class="prov-row">
       <select class="prov-key" id="embAuth" style="max-width:160px">${opt("none", "No auth (local)")}${opt("bearer", "Bearer key")}${opt("apikey", "API-key header")}</select>
       <input class="prov-key" id="embKey" type="password" placeholder="${c.vaultRef ? "Key saved - blank keeps it" : "API key (stored in the OS vault)"}" autocomplete="off"/>
+      <button class="btn-mini" id="embTest">${icon("bolt", 13)} Test</button>
       <button class="btn-mini ok" id="embSave">${icon("check", 13)} Save</button>
     </div>
-    <div class="set-sub">A local no-auth endpoint applies immediately; a cloud key is vaulted and takes effect on the next launch. Re-ingest a knowledge graph to build its semantic index.</div>
+    ${active ? `<div class="prov-row"><button class="btn-mini" id="embReindex">${icon("refresh", 13)} Re-index knowledge graphs</button><span class="set-sub" style="align-self:center">Rebuild every KG's semantic index from its compiled pages.</span></div>` : ""}
+    <div class="set-sub">A local no-auth endpoint applies immediately; a cloud key is vaulted and takes effect on the next launch. Test checks connectivity + fills in the model's dimension. Re-ingest (or re-index) a knowledge graph to build its semantic index.</div>
   </div>`;
 }
 async function saveEmbeddings(): Promise<void> {
@@ -2574,6 +2576,34 @@ async function saveEmbeddings(): Promise<void> {
     timeout: 6500,
     actions: needsRelaunch ? [{ label: "Relaunch", kind: "ok", run: () => void bridge.relaunch() }, { label: "Later" }] : [{ label: "OK" }],
   });
+}
+// ADR-0215: a one-vector connectivity probe against the ENTERED values (incl. an inline key) - reports the
+// dimension the model returns and fills the Dim field so a mismatch can't silently break retrieval.
+async function testEmbeddings(): Promise<void> {
+  const body = $("#setBody")!;
+  const val = (id: string) => ($(`#${id}`, body) as HTMLInputElement | null)?.value ?? "";
+  const baseUrl = val("embBaseUrl").trim(), model = val("embModel").trim();
+  const authKind = (($("#embAuth", body) as HTMLSelectElement | null)?.value) || "none";
+  const secret = val("embKey");
+  if (!baseUrl || !model) { showToast({ tone: "warn", title: "Missing fields", desc: "Base URL and model are required to test.", timeout: 3500 }); return; }
+  const btn = $("#embTest", body) as HTMLButtonElement | null; const orig = btn?.innerHTML;
+  if (btn) { btn.disabled = true; btn.textContent = "Testing…"; }
+  const r = await bridge.embeddingsTest({ baseUrl, model, authKind, ...(secret ? { secret } : {}) }).catch(() => null);
+  if (btn && orig !== undefined) { btn.disabled = false; btn.innerHTML = orig; }
+  if (r?.ok && r.dim) {
+    const dimEl = $("#embDim", body) as HTMLInputElement | null; if (dimEl) dimEl.value = String(r.dim); // authoritative discovered dim
+    showToast({ tone: "ok", title: "Endpoint reachable", desc: `The model returned ${r.dim}-dim vectors (set as Dim). Save to use it.`, timeout: 5000 });
+  } else {
+    showToast({ tone: "danger", title: "Couldn't reach the endpoint", desc: r?.error ?? "No response - check the base URL, model, and any key.", timeout: 6500 });
+  }
+}
+async function reindexEmbeddings(): Promise<void> {
+  const btn = $("#embReindex", $("#setBody")!) as HTMLButtonElement | null; const orig = btn?.innerHTML;
+  if (btn) { btn.disabled = true; btn.textContent = "Re-indexing…"; }
+  const r = await bridge.embeddingsReindex().catch(() => null);
+  if (btn && orig !== undefined) { btn.disabled = false; btn.innerHTML = orig; }
+  if (r?.ok) showToast({ tone: "ok", title: "Semantic index rebuilt", desc: `${r.stored ?? 0} passage${r.stored === 1 ? "" : "s"} across ${r.kgs ?? 0} knowledge graph${r.kgs === 1 ? "" : "s"}.`, timeout: 5200 });
+  else showToast({ tone: "danger", title: "Re-index didn't run", desc: r?.error ?? "Enable semantic search first.", timeout: 5200 });
 }
 function settingsShell(): string {
   return [
@@ -8676,6 +8706,8 @@ function wire(): void {
     }
     if (t.closest("#wsSet")) { const v = ($("#wsPath", $("#setBody")!) as HTMLInputElement)?.value.trim(); if (v) await applyWorkspace(v); return; }
     if (t.closest("#embSave")) { await saveEmbeddings(); return; } // ADR-0215
+    if (t.closest("#embTest")) { await testEmbeddings(); return; } // ADR-0215
+    if (t.closest("#embReindex")) { await reindexEmbeddings(); return; } // ADR-0215
     if (t.closest("#wsGitPatSave")) { await saveGitPat(); return; }
     if (t.closest("#wsGitPatClear")) { await clearGitPat(); return; }
     if (t.closest("#wsClone")) {

@@ -14666,6 +14666,12 @@ can never silently store garbage vectors that would poison cosine retrieval.
   store via the scan-gated `ingestText` (best-effort; never fails the compile job; no embedder ⇒ lexical-only).
 - **Hybrid retrieve** (`/api/kb/retrieve`): auto-upgrades to `mode:"hybrid"` when an embedder + embedded chunks
   exist, else stays lexical - so `knowledge_search` (ADR-0214) transparently gains semantic recall.
+- **Test endpoint** (`/api/embeddings/test` + card button): a one-vector probe (`probeEmbeddings`) against the
+  ENTERED values incl. an inline key (works before save/relaunch) that DISCOVERS + auto-fills the model's dim.
+- **Re-index** (`/api/embeddings/reindex` + card button): rebuilds every KG's semantic index from its compiled
+  PAGES via the shared, idempotent `syncVectorIndex` (clear-then-embed) - the SAME routine ingest now uses, so a
+  KG compiled before semantic search was enabled can be indexed without re-ingesting. Vectors embed the compiled
+  pages (the canonical, always-available corpus), keeping ingest + re-index consistent.
 
 **Live-verification gap:** the current profile has only `XAI_API_KEY`/`ELEVENLABS_API_KEY`, NEITHER of which
 exposes `/embeddings`, so the end-to-end semantic path couldn't be exercised here. Each piece is tested in

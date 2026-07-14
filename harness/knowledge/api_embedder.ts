@@ -58,6 +58,23 @@ export function parseEmbeddingsResponse(body: unknown, expectedCount: number, di
   });
 }
 
+/** One-shot connectivity probe for the Settings "Test" button: embed a tiny input and report the vector
+ *  dimension the endpoint actually returns (does NOT enforce a configured dim — it DISCOVERS the model's dim so
+ *  the UI can auto-fill it). Throws a short message on any failure. PURE (fetch injected). */
+export async function probeEmbeddings(cfg: Omit<ApiEmbedderConfig, "dim">): Promise<{ dim: number }> {
+  const f = cfg.fetchImpl ?? fetch;
+  const r = await f(embeddingsUrl(cfg.baseUrl), {
+    method: "POST",
+    headers: { "content-type": "application/json", ...embedAuthHeader(cfg) },
+    body: JSON.stringify({ model: cfg.model, input: ["knowledge base connectivity test"] }),
+  });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  const body = await r.json().catch(() => { throw new Error("response was not JSON"); });
+  const v = (body as { data?: { embedding?: unknown }[] })?.data?.[0]?.embedding;
+  if (!Array.isArray(v) || v.length === 0) throw new Error("no embedding vector in the response");
+  return { dim: v.length };
+}
+
 export class ApiEmbedder implements Embedder {
   readonly id: string;
   readonly dim: number;

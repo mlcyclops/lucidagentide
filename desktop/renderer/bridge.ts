@@ -689,6 +689,8 @@ export interface LucidBridge {
   // ADR-0215: BYO-embeddings config for semantic knowledge search.
   embeddingsConfig(): Promise<{ config: EmbeddingsConfigView | null; active: boolean } | null>;
   setEmbeddingsConfig(config: EmbeddingsConfigView | null): Promise<{ config: EmbeddingsConfigView | null; active: boolean; error?: string } | null>;
+  embeddingsTest(input: { baseUrl: string; model: string; authKind: string; headerName?: string; secret?: string }): Promise<{ ok: boolean; dim?: number; error?: string } | null>;
+  embeddingsReindex(): Promise<{ ok: boolean; kgs?: number; pages?: number; stored?: number; error?: string } | null>;
   auth(): Promise<AuthStatus | null>;
   saveKey(env: string, key: string): Promise<AuthStatus | null>;
   oauthLogin(oauthId: string): Promise<{ started: boolean; url: string; output: string } | null>;
@@ -1155,6 +1157,8 @@ export const bridge: LucidBridge = {
   setSessionMode: (mode, id) => post("/api/session-mode", { mode, ...(id ? { id } : {}) }),
   embeddingsConfig: () => getData("/api/embeddings-config"), // ADR-0215
   setEmbeddingsConfig: (config) => post("/api/embeddings-config", { config }),
+  embeddingsTest: (input) => post("/api/embeddings/test", input),
+  embeddingsReindex: () => post("/api/embeddings/reindex", {}),
   auth: () => getData("/api/auth"),
   saveKey: (env, key) => post("/api/auth/key", { env, key }),
   oauthLogin: (oauthId) => post("/api/auth/oauth", { oauthId }),
