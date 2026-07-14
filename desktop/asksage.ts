@@ -24,7 +24,7 @@ export function asksageConfig(): AsksageCfg {
   const base = (s.asksageBaseUrl ?? process.env.ASKSAGE_BASE_URL ?? DEFAULT_BASE).replace(/\/+$/, "");
   return {
     key, base, only: !!s.asksageOnly, configured: !!key, limit: s.asksageLimit ?? ASKSAGE_DEFAULT_LIMIT,
-    datasets: s.asksageDatasets ?? [], queryModel: s.asksageQueryModel ?? "gpt-5.2", persona: s.asksagePersona ?? "",
+    datasets: s.asksageDatasets ?? [], queryModel: s.asksageQueryModel ?? "gpt-5.6-luna", persona: s.asksagePersona ?? "",
   };
 }
 

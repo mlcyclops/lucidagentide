@@ -20,8 +20,8 @@
 export interface ModelOption { value: string; name?: string; description?: string }
 
 /** ADR-0211: a model id is "AskSage-routed" (goes through the accredited gov gateway) when omp reports it with
- *  an `asksage` provider prefix, e.g. `asksage-openai/gpt-5.6`. The sovereignty test is this substring — NOT a
- *  `/gov/i` NAME match, which real ids like `asksage-openai/gpt-5.6` do not contain (the "Gov" is only in the
+ *  an `asksage` provider prefix, e.g. `asksage-openai/gpt-5.6-luna`. The sovereignty test is this substring — NOT a
+ *  `/gov/i` NAME match, which real ids like `asksage-openai/gpt-5.6-luna` do not contain (the "Gov" is only in the
  *  DISPLAY name). Matches the renderer's `isGovModel`/`isAsksage` so both sides agree on the boundary. */
 export function isAsksageRouted(value: string): boolean { return /asksage/i.test(value); }
 

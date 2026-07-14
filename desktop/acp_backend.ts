@@ -547,6 +547,22 @@ class Backend {
             // EVEN in Agent mode (egress is never silently auto-approved). Fail-closed: no live UI ⇒ deny.
             const isEgress = [...EGRESS_TOOLS].some((t) => toolName.includes(t)) || (!!target && /^https?:\/\//i.test(target));
             if (isEgress) {
+              // P-EGRESS.2 (ADR-0094): a browser-open of a LOCAL file (file:// or an absolute path) is not a
+              // website visit — a host-based standing allow can't apply, so we still PROMPT, but with an
+              // accurate local-file dialog (and never persist a host decision for it).
+              const localFile = !!target && isLocalFileTarget(target);
+              // ADR-0212: under AskSage lockdown, FAIL-CLOSED block ALL public egress (web_search / browser /
+              // fetch / navigate / any external http(s) target) — a public search or fetch would backflow CUI to
+              // a non-accredited service. This overrides the allowWebSearch auto-approve below and covers browse/
+              // fetch too (a browser open leaks as much as a search). Local-file previews (file://) are NOT public
+              // egress and stay allowed. The sanctioned "search" under lockdown is the AskSage RAG (/query) model
+              // grounded on approved datasets — omp owns the web_search tool and takes no LUCID-supplied endpoint,
+              // so there is nothing to reroute it to; the correct control is to deny public egress.
+              if (this.asksageLocked() && !localFile) {
+                this.recordGateDiag({ kind: "egress", tool: toolName.slice(0, 40), target: (target ?? "").slice(0, 80), localFile: false, askActive: this.askActive, listener: !!this.listener, goalActive: this.goalActive, autoRunning: this.autoRunning, decision: "block(asksage-lockdown)" });
+                emitSecurityEvent({ category: "egress", type: "egress_decision", decision: "block", severity: "high", tool: "egress-lockdown", reason: `public web egress blocked under AskSage lockdown · ${target ?? toolName}`.slice(0, 200), sessionId: this.sessionId ?? undefined });
+                return { outcome: { outcome: "cancelled" } };
+              }
               // P-NETWL.5 (ADR-0108): a web_search call (omp's default search providers, no arbitrary browse)
               // auto-approves when the user's posture allows web search - the pre-checked personal default.
               if ((toolName.includes("web_search") || toolName.includes("web-search")) && egressPosture().allowWebSearch) {
@@ -554,10 +570,6 @@ class Backend {
                 const a = opts.find((o) => /allow/i.test(o.kind ?? o.optionId ?? "")) ?? opts[0];
                 return a ? { outcome: { outcome: "selected", optionId: a.optionId } } : { outcome: { outcome: "cancelled" } };
               }
-              // P-EGRESS.2 (ADR-0094): a browser-open of a LOCAL file (file:// or an absolute path) is not a
-              // website visit — a host-based standing allow can't apply, so we still PROMPT, but with an
-              // accurate local-file dialog (and never persist a host decision for it).
-              const localFile = !!target && isLocalFileTarget(target);
               // P-NETWL.3 (ADR-0106): decide WITH context so `project`/`loop`-scoped whitelist entries apply,
               // and enforce a matched entry's per-loop `callBudget`. In a loop, once a budgeted host's calls
               // are used up the whitelist stops auto-allowing it (falls through to prompt/fail-closed block).
@@ -1255,8 +1267,16 @@ class Backend {
           result = gate.result ?? "refused";
           if (gate.disable) updateAutomation(ws, id, { enabled: false });
         } else {
-          const r = await startAgentRun({ spec: spec!, prompt: a.agentPrompt ?? "", model: a.agentModel || "haiku", workspace: ws, trustLabel: trust.trustLabel });
-          result = r.blocked ? `blocked: ${r.reason ?? "refused"}` : r.error ? `error: ${r.error}` : r.paused ? "refused: halted at an approval checkpoint" : `ok: ${(r.output ?? "").slice(0, 160) || "(no output)"}${r.runId ? ` [${r.runId}]` : ""}`;
+          // ADR-0212: a scheduled BUILT-AGENT run must honor AskSage lockdown too - force a gov model, and
+          // REFUSE the run (never route to a direct provider like the default "haiku") when the lock is on but
+          // no gov model is available. This is the last un-clamped model-routing path noted in ADR-0211.
+          const lockRes = this.resolveAgentRunModel(a.agentModel || "haiku");
+          if (!lockRes.ok) {
+            result = `refused: ${lockRes.error}`;
+          } else {
+            const r = await startAgentRun({ spec: spec!, prompt: a.agentPrompt ?? "", model: lockRes.model || a.agentModel || "haiku", workspace: ws, trustLabel: trust.trustLabel });
+            result = r.blocked ? `blocked: ${r.reason ?? "refused"}` : r.error ? `error: ${r.error}` : r.paused ? "refused: halted at an approval checkpoint" : `ok: ${(r.output ?? "").slice(0, 160) || "(no output)"}${r.runId ? ` [${r.runId}]` : ""}`;
+          }
         }
       } catch (e) {
         result = `error: ${e instanceof Error ? e.message : String(e)}`;
@@ -1311,6 +1331,14 @@ class Backend {
     return { ok: true };
   }
 
+  /** ADR-0212: resolve the model a BUILT-AGENT run must use, honoring AskSage lockdown. PUBLIC so the dev.ts
+   *  Builder "Run" route can clamp before spawning a run (the scheduled-automation path calls it too). Under
+   *  lockdown a direct model is swapped for a gov one; `{ ok:false }` ⇒ the caller must REFUSE, never route
+   *  direct. Lock off ⇒ the desired model passes through unchanged. */
+  resolveAgentRunModel(desired: string): { ok: boolean; model?: string; error?: string } {
+    return resolveLockdownModel(this.asksageLocked(), desired || "haiku", this.modelOptionValues());
+  }
+
   // P-GOAL.6 (ADR-0048): the user's accessible models, as the model config reports them (provider-
   // prefixed value + display name). Empty until omp has reported a config.
   private accessibleModels(): ModelOption[] {
@@ -1320,7 +1348,7 @@ class Backend {
     // P-GOAL.6.1: when the AskSage lock is on, the checker must use a model routed through the AskSage gateway.
     // Fail-safe: only narrow if such models exist (never empty the list, which would drop the picker / the
     // recommendation to the maker model). ADR-0211: match on the `asksage` provider prefix - real gov ids like
-    // `asksage-openai/gpt-5.6` carry no "gov" SUBSTRING (the earlier `/gov/i` test matched none of them, so the
+    // `asksage-openai/gpt-5.6-luna` carry no "gov" SUBSTRING (the earlier `/gov/i` test matched none of them, so the
     // checker silently fell through to ALL models, including direct providers).
     if (this.asksageLocked()) {
       const gov = models.filter((m: ModelOption) => isAsksageRouted(m.value));

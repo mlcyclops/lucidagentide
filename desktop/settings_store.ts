@@ -68,7 +68,7 @@ export interface GuiSettings {
   asksageLimit?: number;
   // Datasets selected for RAG grounding via AskSage's /query route (ADR-0007).
   asksageDatasets?: string[];
-  // Underlying model the "AskSage RAG" (/query) route uses. Default gpt-5.2.
+  // Underlying model the "AskSage RAG" (/query) route uses. Default gpt-5.6-luna (newest mid-tier GPT).
   asksageQueryModel?: string;
   // Native AskSage persona id applied server-side on the /query (RAG) route. Unlike
   // the composer persona (scanned + delimited into the prompt), this is just an id

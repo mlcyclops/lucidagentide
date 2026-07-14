@@ -14459,3 +14459,55 @@ unchanged. `resolveLockdownModel`/`isAsksageRouted` are pure + tested.
 
 ADR-0007 (AskSage provider), ADR-0048 (P-GOAL.6 checker model - the predicate fixed here), ADR-0068 (managed
 `asksageOnly` lock, still OR'd in), the `gpt-5.6` add (ADR-0209 context), and CLAUDE.md invariant #3.
+
+## ADR-0212 - AskSage lockdown covers egress + agent runs; RAG on GPT-5.6 Luna; real 5.6 ids
+
+**Date:** 2026-07-14
+**Status:** Accepted - BUILT. Completes the ADR-0211 lockdown work (closes its named gap), extends the
+data-sovereignty boundary to network egress, and corrects the AskSage GPT-5.6 model ids + RAG default against
+the LIVE gateway.
+**Increment:** an egress-gate guard + an agent-run model clamp in `acp_backend.ts`/`dev.ts`, and data changes to
+the AskSage model list + RAG default. No frozen-contract file touched.
+
+### Context
+
+ADR-0211 made the MAKER + CHECKER turns fail-closed under lockdown but explicitly left two things open: (1)
+scheduled/Builder BUILT-AGENT runs still defaulted to a direct model (`"haiku"`), and (2) lockdown said nothing
+about web egress - the agent could still `web_search`/`browser`/`fetch` to a PUBLIC provider, backflowing CUI
+(Controlled Unclassified Information) to a non-accredited service. Separately, the `gpt-5.6` id added in
+ADR-0209 was a GUESS: querying the live gateway (`/openai/v1/models` + a real `/query`, both 200) showed the
+5.6 family is actually three tier codenames - `gpt-5.6-luna` (mid), `gpt-5.6-sol`, `gpt-5.6-terra` - with NO
+bare `gpt-5.6`. And the RAG `/query` route still defaulted to the old `gpt-5.2`.
+
+### Decision
+
+- **Egress under lockdown = fail-closed block (invariant #3).** In the in-process permission gate, at the top of
+  the `isEgress` branch, `asksageLocked()` now blocks ALL public egress (`web_search`, `browser`, `web`,
+  `fetch`, `navigate`, any external http(s) target) with an audited `egress_decision/block` (severity high).
+  Local-file previews (`file://`) are exempt (not public egress). This overrides the `allowWebSearch`
+  auto-approve and covers browse/fetch too (a browser open leaks as much as a search). There is NO way to
+  reroute omp's built-in `web_search` to AskSage - omp owns that tool and takes no LUCID-supplied endpoint, and
+  the AskSage gateway exposes no web-search API (only the `/query` RAG route). So the correct control is to DENY
+  public egress; the sanctioned "search" under lockdown is the AskSage RAG model grounded on approved datasets.
+- **Built-agent runs honor lockdown.** A shared `Backend.resolveAgentRunModel(desired)` clamps the run model to
+  a gov one (or `{ok:false}` ⇒ REFUSE the run) under lockdown; wired into BOTH the scheduled-automation path
+  (`runAutomation`) and the interactive Builder "Run" route (`dev.ts`). This closes the last un-clamped
+  model-routing path ADR-0211 named.
+- **Real GPT-5.6 ids + RAG default.** `OPENAI_MODELS` now lists `gpt-5.6-luna`/`-sol`/`-terra` (the invalid bare
+  `gpt-5.6` is removed), with matching `MODEL_CTX`/`MODEL_META`. The RAG `/query` default (`ASKSAGE_QUERY_MODEL`
+  fallback, `asksageConfig`, settings, renderer state) moves from `gpt-5.2` to **`gpt-5.6-luna`** (newest
+  mid-tier), validated live. Marked "recheck each release" - ADR-0209's live `/get-models` fetch is the durable
+  fix so this list stops needing hand-maintenance.
+
+### Invariants preserved
+
+Fail-closed is law (#3): egress denies rather than leaks under lockdown, and agent runs refuse rather than route
+direct - both audited. The gate stays in-process (#4). Extend-not-fork (#1): omp's own gate/config seams; no
+fork. No Python (#2). `resolveLockdownModel`/`isAsksageRouted` (the shared enforcement core) remain pure + unit-
+tested; the RAG/model-id changes were verified against the live AskSage gateway, not guessed.
+
+### Relates to
+
+ADR-0211 (the lockdown work this completes), ADR-0108 (egress posture / `allowWebSearch`, now overridden under
+lockdown), ADR-0142 (P-AGENT built-agent runs - the clamped path), ADR-0209 (live model fetch - the durable fix
+for the hand-maintained list), ADR-0007 (AskSage `/query` RAG), and CLAUDE.md invariants #1/#2/#3/#4.

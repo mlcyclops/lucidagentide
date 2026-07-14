@@ -1193,7 +1193,11 @@ const server = Bun.serve({
         // `paused`; the human resumes via /api/agent/run/approve. The halt is enforced by the SegmentedRun
         // machine (the post-approval prompt does not exist until approve), not by model compliance.
         const trust = loadSpecTrust(currentWorkspace(), v.spec!.spec_id);
-        const r = await startAgentRun({ spec: v.spec!, prompt, model, workspace: currentWorkspace(), trustLabel: trust.trustLabel });
+        // ADR-0212: honor AskSage lockdown on the Builder "Run" too - clamp to a gov model, or REFUSE (never
+        // route a built-agent run to a direct provider) when lockdown is on but no gov model is available.
+        const lockRes = backend.resolveAgentRunModel(model);
+        if (!lockRes.ok) return json({ ok: false, data: { output: "", error: "", blocked: true, reason: lockRes.error ?? "AskSage lockdown", paused: null, runId: "" } });
+        const r = await startAgentRun({ spec: v.spec!, prompt, model: lockRes.model || model, workspace: currentWorkspace(), trustLabel: trust.trustLabel });
         return json({ ok: r.ok, data: { output: r.output ?? "", error: r.error ?? "", blocked: !!r.blocked, reason: r.reason ?? "", paused: r.paused ?? null, runId: r.runId ?? "" } });
       }
       // P-AGENT.13: run traces — file-backed provenance under .omp/agent-runs/traces/ (the desktop holds

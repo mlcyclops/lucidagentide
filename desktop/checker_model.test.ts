@@ -71,7 +71,7 @@ describe("resolveCheckerModel", () => {
 // ADR-0211: AskSage lockdown enforcement (the fail-closed model clamp).
 describe("isAsksageRouted", () => {
   test("matches real gov ids that carry NO 'gov' substring (the bug the old /gov/i test missed)", () => {
-    expect(isAsksageRouted("asksage-openai/gpt-5.6")).toBe(true);
+    expect(isAsksageRouted("asksage-openai/gpt-5.6-luna")).toBe(true);
     expect(isAsksageRouted("asksage-anthropic/google-claude-sonnet-5")).toBe(true);
     expect(isAsksageRouted("asksage-query/rag")).toBe(true);
   });
@@ -82,15 +82,15 @@ describe("isAsksageRouted", () => {
 });
 
 describe("resolveLockdownModel", () => {
-  const values = ["anthropic/claude-opus-4-8", "asksage-openai/gpt-5.6", "asksage-anthropic/google-claude-sonnet-5"];
+  const values = ["anthropic/claude-opus-4-8", "asksage-openai/gpt-5.6-luna", "asksage-anthropic/google-claude-sonnet-5"];
   test("lock OFF ⇒ the current model stands, whatever it is", () => {
     expect(resolveLockdownModel(false, "anthropic/claude-opus-4-8", values)).toEqual({ ok: true, model: "anthropic/claude-opus-4-8" });
   });
   test("lock ON + already gov ⇒ keep it", () => {
-    expect(resolveLockdownModel(true, "asksage-openai/gpt-5.6", values)).toEqual({ ok: true, model: "asksage-openai/gpt-5.6" });
+    expect(resolveLockdownModel(true, "asksage-openai/gpt-5.6-luna", values)).toEqual({ ok: true, model: "asksage-openai/gpt-5.6-luna" });
   });
   test("lock ON + on a DIRECT model ⇒ switch to the first gov option (the startup/respawn bug)", () => {
-    expect(resolveLockdownModel(true, "anthropic/claude-opus-4-8", values)).toEqual({ ok: true, model: "asksage-openai/gpt-5.6" });
+    expect(resolveLockdownModel(true, "anthropic/claude-opus-4-8", values)).toEqual({ ok: true, model: "asksage-openai/gpt-5.6-luna" });
   });
   test("lock ON + NO gov model available ⇒ FAIL-CLOSED (block, never route direct)", () => {
     const r = resolveLockdownModel(true, "anthropic/claude-opus-4-8", ["anthropic/claude-opus-4-8", "openai-codex/gpt-5.5"]);

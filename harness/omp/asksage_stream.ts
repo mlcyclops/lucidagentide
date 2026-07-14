@@ -263,7 +263,9 @@ function splitReferences(message: string): { body: string; refs: string[] } {
 // on `dataset` and a native `persona` id. One-shot (non-streamed). Underlying model
 // + datasets + persona come from env (set by the desktop from the user's selection).
 async function callQuery(cfg: AsksageStreamCfg, system: string, msgs: { role: string; text: string }[], signal?: AbortSignal): Promise<RouteResult & { references?: string }> {
-  const model = process.env.ASKSAGE_QUERY_MODEL || "gpt-5.2";
+  // Default RAG model: the newest mid-tier GPT on the gateway (validated live on /query). Recheck each
+  // release — the 5.6 family is codenamed luna(mid)/sol/terra; ADR-0209 scopes a live fetch to end this.
+  const model = process.env.ASKSAGE_QUERY_MODEL || "gpt-5.6-luna";
   const datasets = (process.env.ASKSAGE_DATASETS || "").split(",").map((d) => d.trim()).filter(Boolean);
   const persona = Number(process.env.ASKSAGE_PERSONA || "") || undefined;
   // /query takes one message — flatten system + turns into a single transcript.
