@@ -1506,8 +1506,11 @@ const server = Bun.serve({
         return json({ ok: true, data: workspaceInfo() });
       }
       if (p === "/api/workspace/clone" && req.method === "POST") {
-        const { url } = await readBody<{ url?: unknown }>(req);
-        const r = await cloneRepo(String(url ?? ""));
+        // `pat` (ADR-0210): an OPTIONAL, freshly-entered git token passed inline so a private clone works THIS
+        // session before the vault-injected env var lands on the next launch. It is used only to spawn git
+        // (redacted from any error) and is never logged, persisted here, or forwarded to the agent.
+        const { url, pat } = await readBody<{ url?: unknown; pat?: unknown }>(req);
+        const r = await cloneRepo(String(url ?? ""), typeof pat === "string" ? pat : undefined);
         if (r.ok && r.path) { setWorkspace(r.path); backend.restart(); }
         return json({ ok: r.ok, data: { ...workspaceInfo(), cloned: r.ok, error: r.error } });
       }

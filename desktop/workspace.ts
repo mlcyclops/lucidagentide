@@ -80,9 +80,21 @@ export function hostTokenForUrl(url: string, env: Record<string, string | undefi
     for (const n of names) { const v = env[n]; if (typeof v === "string" && v.trim()) return v.trim(); }
     return null;
   };
-  if (host === "github.com" || host.endsWith(".github.com")) return pick("GITHUB_TOKEN", "GH_TOKEN", "LUCID_GITHUB_TOKEN");
-  if (host === "gitlab.com" || host.endsWith(".gitlab.com")) return pick("GITLAB_TOKEN", "LUCID_GITLAB_TOKEN");
+  // LUCID_GIT_PAT is the vault-backed personal access token (ADR-0210) main injects at spawn - the host-agnostic
+  // fallback after any explicit CI-style env var. Ordered last so a workflow's own GITHUB_TOKEN still wins.
+  if (host === "github.com" || host.endsWith(".github.com")) return pick("GITHUB_TOKEN", "GH_TOKEN", "LUCID_GITHUB_TOKEN", "LUCID_GIT_PAT");
+  if (host === "gitlab.com" || host.endsWith(".gitlab.com")) return pick("GITLAB_TOKEN", "LUCID_GITLAB_TOKEN", "LUCID_GIT_PAT");
   return null;
+}
+
+/** The token to authenticate a clone with. An explicit override - a freshly-entered PAT passed inline from the
+ *  UI so it works THIS session without waiting for the next-launch env injection - is the freshest signal and
+ *  wins; otherwise fall back to the environment/vault-injected host token. Only https URLs get a token (ssh/
+ *  git@ authenticate with keys), so an override on a non-https URL is ignored. Exported for tests. */
+export function resolveCloneToken(url: string, override?: string | null, env: Record<string, string | undefined> = process.env): string | null {
+  const ov = typeof override === "string" ? override.trim() : "";
+  if (ov && /^https:\/\//i.test(url)) return ov;
+  return hostTokenForUrl(url, env);
 }
 
 /** The `git clone` argv. When a token applies, inject it via a per-COMMAND `http.extraHeader` (HTTP Basic,
@@ -120,7 +132,7 @@ export function cloneErrorHint(stderr: string, hadToken: boolean): string {
  *  (piped stdio, no prompts), injecting a host token when available so PRIVATE repos work without an
  *  interactive credential prompt — closing the gap where the agent could clone a private repo but the
  *  Settings button couldn't. Partial/failed clones are cleaned up so a retry isn't blocked by leftovers. */
-export async function cloneRepo(url: string): Promise<{ ok: boolean; path?: string; error?: string }> {
+export async function cloneRepo(url: string, tokenOverride?: string): Promise<{ ok: boolean; path?: string; error?: string }> {
   url = String(url || "").trim();
   if (!/^(https?:\/\/|git@|ssh:\/\/)/.test(url)) return { ok: false, error: "Enter an https:// or git@ repo URL." };
   const dest = join(homedir(), ".omp", "lucid-workspaces", repoNameFromUrl(url));
@@ -130,7 +142,7 @@ export async function cloneRepo(url: string): Promise<{ ok: boolean; path?: stri
   if (existsSync(dest)) { try { rmSync(dest, { recursive: true, force: true }); } catch { /* best-effort */ } }
   try { mkdirSync(dirname(dest), { recursive: true }); } catch { /* ignore */ }
 
-  const token = hostTokenForUrl(url);
+  const token = resolveCloneToken(url, tokenOverride);
   // GIT_TERMINAL_PROMPT=0: never hang waiting on a username/password we can't answer (piped, no tty). GCM
   // still resolves cached credentials, so this preserves the agent's working path while adding token auth.
   const proc = Bun.spawn(["git", ...cloneArgv(url, dest, token)], {

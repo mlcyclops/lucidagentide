@@ -14349,3 +14349,56 @@ context-window source of truth.
 
 ADR-0007 (AskSage provider registration), ADR-0029 (P-IDE.1c picker curation/gating), the `gpt-5.6` array
 add that shipped today, and CLAUDE.md invariants #1/#2/#3.
+
+## ADR-0210 - Vault-backed git PAT for private-repo clones (the ADR-0208 follow-up)
+
+**Date:** 2026-07-14
+**Status:** Accepted - BUILT. Extends the ADR-0208 clone fix with a persistent, OS-encrypted credential; no
+new trust path (reuses the existing `cred_vault.ts` + the Figma/Local-Providers vault→env pattern).
+**Increment:** the git PAT field + save/remove, `main.ts` `prepareGitToken`, the inline-`pat` clone request,
+and `resolveCloneToken` (pure, unit-tested). No frozen-contract file touched.
+
+### Context
+
+ADR-0208 made the Settings clone authenticate private repos from an environment token (`GITHUB_TOKEN` etc.),
+and named a vault-backed PAT as the follow-up so the user enters a token ONCE instead of exporting an env var.
+The constraint: the OS-encrypted vault (`cred_vault.ts`, Electron `safeStorage`) can only be DECRYPTED in the
+**main** process, but `cloneRepo` runs in the **dev-server (Bun) child**. Figma and Local Providers already
+solved this exact shape - main reads the secret and injects it into the dev child's env at spawn.
+
+### Decision - store in the vault, inject at launch, pass inline for the current session
+
+- **Storage.** A "Git access token" field in Settings → Workspace stores the PAT in the vault under the
+  well-known ref `git_pat` (`kind: apikey`) via the existing `credStore` IPC - exactly like Figma's `figma_pat`.
+  The renderer only ever sends the secret to main (to encrypt) and to the clone route (to use); it is never
+  written to config, never returned in plaintext, and never sent to the agent.
+- **Next-launch path.** `main.ts` `prepareGitToken()` reads `git_pat` from the vault and injects it into the
+  dev child as `LUCID_GIT_PAT`; `hostTokenForUrl` uses it as the host-agnostic FALLBACK (after a workflow's own
+  `GITHUB_TOKEN`/`GITLAB_TOKEN`, which still win). So a PAT saved in a prior session authenticates clones with
+  zero re-entry.
+- **Same-session path (no relaunch).** Since `LUCID_GIT_PAT` is only injected at spawn, a token saved THIS
+  session wouldn't be in the child's env yet. So the clone request carries an OPTIONAL inline `pat` (the freshly
+  entered token, kept in renderer session memory as `sessionGitPat`), and `resolveCloneToken(url, override)`
+  prefers it over the env token. Mirrors how Figma passes the PAT inline on the first import. No app restart is
+  needed for either path.
+- **Injection stays leak-safe.** The token still rides the ADR-0208 `-c http.extraHeader` path (never written
+  into `.git/config`, redacted from errors). Https-only (ssh/git@ use keys).
+
+### Alternatives rejected
+
+Restarting the dev child on save (to refresh the env) - drops the live omp/session state for a credential
+change; the inline-`pat` path gives immediate effect without it. Writing the token to a file the dev child
+reads (like `models.yml`) - would put the plaintext PAT on disk, defeating the vault.
+
+### Invariants preserved
+
+Extend-not-fork (#1): no omp change; same `pi`/vault seams. No Python (#2). Fail-closed spirit: the vault
+fail-closes if OS encryption is unavailable (never plaintext), decrypt stays main-only, and the token is
+redacted from errors and never reaches the renderer-as-plaintext-return or the agent. BUSL headers intact;
+`resolveCloneToken` + the `LUCID_GIT_PAT` fallback are unit-tested.
+
+### Relates to
+
+ADR-0208 (the clone auth fix this completes), ADR-0154 (Figma PAT - the vault→env template), ADR-0135
+(Local Providers - the other vault→dev-child injection), ADR-0106/0107 (`cred_vault.ts`), and CLAUDE.md
+invariants #1/#2.

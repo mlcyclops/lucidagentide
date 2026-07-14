@@ -73,9 +73,12 @@ function startDevServer(): void {
   // the renderer or the agent. (A freshly-entered token is passed in the first import request; this covers
   // subsequent sessions.) Best-effort — never blocks the server start.
   const figmaEnv = prepareFigmaToken();
+  // ADR-0210: the vault-backed git PAT (ref "git_pat"), injected as LUCID_GIT_PAT so cloneRepo can authenticate
+  // a PRIVATE clone from the Settings button - the same vault→env-into-dev-child path as Figma/Local Providers.
+  const gitEnv = prepareGitToken();
   dev = spawn(findBun(), ["run", "desktop/dev.ts"], {
     cwd: REPO,
-    env: { ...process.env, ...runtimeEnv, ...lpEnv, ...figmaEnv, PORT: String(PORT) },
+    env: { ...process.env, ...runtimeEnv, ...lpEnv, ...figmaEnv, ...gitEnv, PORT: String(PORT) },
     // NOT "inherit": in a packaged GUI app the Electron main has no console, so inheriting
     // makes the console-subsystem Bun allocate its OWN console window (the black pop-up).
     // Pipe instead + windowsHide so no window ever appears; forward output for dev runs.
@@ -208,6 +211,17 @@ function prepareFigmaToken(): Record<string, string> {
   try {
     const tok = readCredential(ELECTRON_SAFE_STORAGE, VAULT_IO, CRED_DIR(), FIGMA_PAT_REF);
     return tok ? { LUCID_FIGMA_TOKEN: tok } : {};
+  } catch { return {}; }
+}
+// ADR-0210: read the git personal access token from the vault (ref "git_pat") and expose it to the dev child as
+// LUCID_GIT_PAT, so cloneRepo can clone a PRIVATE repo from the Settings "Clone" button without an interactive
+// credential prompt. The secret never reaches the renderer or the agent. (A freshly-entered PAT is also passed
+// inline on the first clone request; this covers subsequent sessions.) Best-effort — never blocks server start.
+const GIT_PAT_REF = "git_pat";
+function prepareGitToken(): Record<string, string> {
+  try {
+    const tok = readCredential(ELECTRON_SAFE_STORAGE, VAULT_IO, CRED_DIR(), GIT_PAT_REF);
+    return tok ? { LUCID_GIT_PAT: tok } : {};
   } catch { return {}; }
 }
 ipcMain.handle("lucid:credStore", (_e, input: { ref?: string; kind: AuthKind; secret: string; label?: string; expiresAt?: number; rotationIntervalDays?: number }) => {

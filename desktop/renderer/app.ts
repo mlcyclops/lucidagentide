@@ -169,6 +169,9 @@ function modelLabel(value: string): string {
 const OPEN = new Set<string>(["sec.quarantine", "sec.approvals", "mem.context", "mem.cache"]);
 let lastInspHash = "";
 let autoCollapsedSessions = false; // collapse the sessions panel once, on the first chat message
+// ADR-0210: a freshly-entered git PAT kept in renderer session memory ONLY (never persisted here) so a private
+// clone works THIS session without waiting for the next-launch vault→env injection. Cleared on app restart.
+let sessionGitPat = "";
 
 // ───────────────────────── shell ─────────────────────────
 function buildShell(): void {
@@ -4699,6 +4702,7 @@ async function copyExportPath(dest: string): Promise<void> {
 
 // ───────────────────────── workspace ─────────────────────────
 function workspaceSection(ws: WorkspaceInfo): string {
+  const gitPatSaved = state.creds.some((c) => c.ref === "git_pat"); // ADR-0210: a git PAT already in the vault?
   return `<div class="set-sec"><div class="set-lbl">Workspace <span class="set-sub">the folder the agent works in</span></div>
     <div class="ws-current">
       <div class="ws-name">${icon(ws.isGit ? "git" : "folder", 15)} ${esc(ws.name)} ${ws.isGit ? `<span class="abadge ok">git</span>` : ""}</div>
@@ -4713,8 +4717,39 @@ function workspaceSection(ws: WorkspaceInfo): string {
       <input class="prov-key" id="wsCloneUrl" placeholder="Clone a git repo - https://github.com/… or gitlab.com/…" />
       <button class="btn-mini ok" id="wsClone">${icon("git", 13)} Clone</button>
     </div>
+    <div class="prov-row">
+      <input class="prov-key" id="wsGitPat" type="password" placeholder="Git access token - for private repo clones" autocomplete="off" spellcheck="false" />
+      <button class="btn-mini ok" id="wsGitPatSave">${icon("shield", 13)} Save</button>
+      ${gitPatSaved ? `<button class="btn-mini danger" id="wsGitPatClear">Remove</button>` : ""}
+    </div>
+    <div class="set-sub ws-gitpat-note">${gitPatSaved
+      ? `${icon("check", 11)} A token is saved in the OS-encrypted vault - used only to clone private repos, never sent to the agent.`
+      : `Optional. A GitHub/GitLab personal access token for private-repo clones. Stored in the OS-encrypted vault; never sent to the agent.`}</div>
     ${ws.recent.length ? `<div class="ws-recent">${ws.recent.map((r) => `<button class="ws-recent-item" data-ws="${esc(r.path)}" title="${esc(r.path)}">${icon(r.isGit ? "git" : "folder", 12)} ${esc(r.name)}</button>`).join("")}</div>` : ""}
   </div>`;
+}
+// ADR-0210: persist a git PAT into the OS-encrypted vault (ref "git_pat"). Kept in `sessionGitPat` too so it
+// authenticates a clone THIS session (passed inline) before the next-launch env injection; the field is cleared
+// so the plaintext doesn't linger in the DOM. The secret never reaches the agent.
+async function saveGitPat(): Promise<void> {
+  const inp = $("#wsGitPat", $("#setBody")!) as HTMLInputElement | null;
+  const pat = (inp?.value ?? "").trim();
+  if (!pat) { showToast({ tone: "warn", title: "Enter a token", desc: "Paste a GitHub/GitLab personal access token first.", timeout: 3000 }); return; }
+  if (!bridge.isElectron || !bridge.credStore) { showToast({ tone: "danger", title: "Vault is desktop-only", desc: "Open the LUCID desktop app to store the token securely." }); return; }
+  const r = await bridge.credStore({ ref: "git_pat", kind: "apikey", secret: pat, label: "Git personal access token" });
+  if (r && "error" in r) { showToast({ tone: "danger", title: "Couldn't save token", desc: String(r.error), timeout: 5000 }); return; }
+  sessionGitPat = pat;               // usable inline this session (no relaunch needed)
+  if (inp) inp.value = "";           // don't leave the plaintext in the DOM
+  state.creds = await bridge.credList().catch(() => state.creds);
+  hydrateSettings();                 // refresh the "saved" indicator
+  showToast({ tone: "ok", title: "Git token saved", desc: "Stored encrypted. Private-repo clones will use it now and in future sessions.", timeout: 4000 });
+}
+async function clearGitPat(): Promise<void> {
+  if (bridge.isElectron && bridge.credDelete) await bridge.credDelete("git_pat").catch(() => false);
+  sessionGitPat = "";
+  state.creds = await bridge.credList().catch(() => state.creds.filter((c) => c.ref !== "git_pat"));
+  hydrateSettings();
+  showToast({ title: "Git token removed", desc: "Private-repo clones will need a token again.", timeout: 3000 });
 }
 function renderWorkspaceBar(): void {
   const bar = $("#wsBar") as HTMLButtonElement | null;
@@ -8423,11 +8458,16 @@ function wire(): void {
       return;
     }
     if (t.closest("#wsSet")) { const v = ($("#wsPath", $("#setBody")!) as HTMLInputElement)?.value.trim(); if (v) await applyWorkspace(v); return; }
+    if (t.closest("#wsGitPatSave")) { await saveGitPat(); return; }
+    if (t.closest("#wsGitPatClear")) { await clearGitPat(); return; }
     if (t.closest("#wsClone")) {
       const url = ($("#wsCloneUrl", $("#setBody")!) as HTMLInputElement)?.value.trim();
       if (!url) return;
+      // ADR-0210: authenticate a private clone with a freshly-entered PAT (field or this-session memory) so it
+      // works before the next-launch env injection; the vault/env token is used when no inline token is given.
+      const pat = (($("#wsGitPat", $("#setBody")!) as HTMLInputElement | null)?.value.trim() || sessionGitPat) || undefined;
       showToast({ title: "Cloning…", desc: "Fetching the repo - this can take a moment.", timeout: 2500 });
-      const info = await bridge.cloneWorkspace(url);
+      const info = await bridge.cloneWorkspace(url, pat);
       if (info?.cloned) { state.workspace = info; renderWorkspaceBar(); seedThread(); void renderSessions(); void renderSettings(); showToast({ title: "Cloned & opened", desc: `Agent now works in ${info.name}.`, actions: [{ label: "OK" }], timeout: 3000 }); }
       else showToast({ tone: "danger", title: "Clone failed", desc: (info?.error ?? "Check the URL and your git access.").slice(0, 180), actions: [{ label: "OK" }], timeout: 6000 });
       return;
