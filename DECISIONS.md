@@ -14253,6 +14253,240 @@ product key. BUSL header on the new source (licensing/commit hygiene).
 ADR-0205 (P-KGPACK.3 seed / .4 export+import gate / .6 background seed - the pipeline this drives), ADR-0206
 (P-KGMARKET - the storefront/entitlement ids this aligns to), and CLAUDE.md invariants #1/#2/#3/#5/#7/#9.
 
+
+-----
+
+## ADR-0210 — P-PROV.1: first-party enterprise providers (Azure OpenAI, GitHub Copilot OAuth, Gemini Enterprise / Vertex)
+
+**Status:** Accepted (2026-07-13).
+
+**Context.** The Settings → Providers UI exposed a fixed set of providers (OpenAI, Google/Gemini, Anthropic, xAI,
+Perplexity + third-party aggregators), but the underlying runtime (omp / `@oh-my-pi/pi-ai` 16.1.x) natively
+supports several enterprise providers the UI never surfaced, and its provider descriptor carried exactly ONE env
+var (`env`) — insufficient for providers that need multiple config values. Three concrete gaps bit real users:
+- **Azure OpenAI** (omp provider `azure`, stream `azure-openai-responses`): many enterprises consume GPT models
+  through their own Azure tenant. omp reads `AZURE_OPENAI_API_KEY` **plus** `AZURE_OPENAI_RESOURCE_NAME`
+  (→ `https://<name>.openai.azure.com/openai/v1`) or a full `AZURE_OPENAI_BASE_URL`, `AZURE_OPENAI_API_VERSION`
+  (default `v1`), and an optional `AZURE_OPENAI_DEPLOYMENT_NAME_MAP` — more than one env, so the one-env descriptor
+  couldn't express it.
+- **GitHub Copilot** (omp broker `github-copilot`): the Business/Enterprise Copilot add-on is the "easy button"
+  many orgs already own. omp ships a real device-code OAuth for it — but its broker's `login` flow FIRST issues an
+  `onPrompt` for the GitHub Enterprise domain (blank = github.com) and BLOCKS on stdin before it prints the device
+  URL, so a naive `auth-broker login github-copilot` spawn hangs at the prompt and no URL ever surfaces.
+- **Gemini Enterprise:** the existing "Google · Gemini" OAuth (`google-gemini-cli`) ALREADY onboards Workspace /
+  standard-tier accounts — but only when `GOOGLE_CLOUD_PROJECT` (or `GOOGLE_CLOUD_PROJECT_ID`) is set; without it
+  omp aborts non-personal accounts with *"This account requires setting GOOGLE_CLOUD_PROJECT"*. LUCID never exposed
+  that env, which is exactly why users' "Enterprise OAuth" failed. Separately, omp's `google-vertex` provider is
+  true Gemini Enterprise on Vertex (auth via `GOOGLE_CLOUD_API_KEY`, OR ADC — a service-account JSON via
+  `GOOGLE_APPLICATION_CREDENTIALS` or `gcloud auth application-default login` — plus project + location).
+
+A user-supplied guide proposed adding a `vertex` card keyed on `VERTEX_API_KEY` with `canOauth:false`. That env
+name is wrong (omp reads `GOOGLE_CLOUD_API_KEY` / ADC, never `VERTEX_API_KEY`), so we followed omp's real
+resolution instead of the guide verbatim.
+
+**Decision.** Extend the provider descriptor (`desktop/auth_status.ts`) with an optional `fields: ProviderField[]`
+of EXTRA config env vars, and allow an empty primary `env` for OAuth-only providers. Crucially, an extra field is
+just another omp-read env var, so it rides the SAME `setKey` → `process.env` → spawned-omp seam as the primary key
+(`applyEnv` reapplies all on startup; `/api/auth/key` restarts omp so new provider models surface) — **no new
+storage, no new save path.** `providerAuth()` reports each field's status: a `secret` field masks to `last4` like
+the primary key; a non-secret config value (project id, resource name, region, ADC path) is echoed back so the
+Settings input pre-fills. New/updated majors: `azure` (key + resource/base/version/deployment-map fields),
+`github-copilot` (OAuth-only, `env:""`), `google-vertex` (key or ADC: project/location/credentials fields), and
+`google` gains a `GOOGLE_CLOUD_PROJECT` field. For Copilot's leading enterprise-domain prompt, `startOauthBroker`
+gained an optional `promptAnswer` written to the broker's stdin immediately after spawn (default `""` = github.com
+for `github-copilot`), so the device URL surfaces; the renderer drives Copilot in a dedicated two-step branch
+(collect the optional GHE domain → start sign-in → show the one-time code the user enters on GitHub's device page)
+rather than the paste-code-back UI the other device-flow providers use. The frozen prompt prefix, the scan gate,
+and every trust label are untouched — this is provider plumbing, not a security-surface change (invariant #1:
+extend omp, never fork it — all three providers are omp-native).
+
+**Verification.** `desktop/auth_status.test.ts` (6 tests: the descriptor set + secret-masked/non-secret-echoed
+field reporting) and `demo-P-PROV.1` green (proves the envs match omp's real resolution, incl. the corrected
+`GOOGLE_CLOUD_API_KEY`, and that a saved key reports set+last4 while a config value pre-fills). Server + renderer
+tsc green (the renderer program's pre-existing missing-`electron`-types gap in the CI-less sandbox aside), license
+clean. The live OAuth device dance + real Azure/Vertex model surfacing require a provider account + the packaged
+app and are QA-gated in-app.
+
+### Relates to
+
+ADR-0007 (AskSage gateway card pattern), ADR-0135 (Local Providers secret-via-vault/env, the closest precedent),
+ADR-0136/P-VISION.1 (the safe-input idioms reused), the omp broker closed-registry finding (P-MCP.2 spike), and
+CLAUDE.md invariants #1 (extend omp), #6 (frozen prefix untouched), #7 (trust labels unchanged).
+
+## ADR-0208 — P-IMG.1: generated / tool-produced images inside the chat reply (inline · download · push-to-preview)
+
+**Status:** Accepted (2026-07-13).
+
+**Context.** Images only ever flowed user→agent (composer attachments, P-VISION.1) and preview→chat (screenshots).
+When a tool result carried image content (`{type:"image",data,mimeType}`), the result adapter preserved it in
+`payload.nonTextParts` but nothing rendered it — it dead-ended. So an agent/tool that produced an image (a
+generated image, a rendered chart/figure) had no way to show it in the reply, let it be saved, or hand it to the
+Preview panel for markup + iteration. The user specifically wants generated images to render in-console,
+be downloadable, and be pushable to the preview for markup — especially to iterate on image generation.
+
+**Decision.** Surface tool-result images end-to-end, reusing the proven safe idioms:
+- **A DOM-free, server-importable pure core** (`desktop/renderer/chat_images.ts` + the shared
+  `desktop/renderer/image_data_url.ts`). The strict image-data-URL primitives (`parseImageDataUrl` etc.) were
+  extracted from `composer_attachments.ts` into `image_data_url.ts` so BOTH the DOM renderer AND the Bun server
+  (`dev.ts`, `acp_backend.ts`) can import them without dragging a DOM-touching module into the server typecheck.
+  `extractToolImages` lifts images out of a tool result — accepting BOTH the ACP-wrapped
+  `{type:"content",content:{type:"image"}}` and the bare omp `{type:"image"}` shape — and validates every block
+  through that single gate (only `image/(png|jpeg|webp|gif)` + the base64 alphabet; **SVG is refused as a script
+  risk**), capping count + bytes. A tool result is UNTRUSTED, so every malformed/oversized/script-bearing block is
+  dropped fail-closed.
+- **A new `tool-image` ChatEvent.** `acp_backend.ts`'s `tool_call_update` case runs `extractToolImages(u.content)`
+  and emits the validated images. The renderer draws each inline using the EXISTING safe idiom (create an `<img>`,
+  set `img.src` as a DOM PROPERTY — never interpolated into an HTML string), with a Download (blob/anchor idiom,
+  filename from the mime, path-traversal-neutralized) and a "Send to preview".
+- **Push-to-preview via the existing local-file pipeline.** "Send to preview" POSTs the image to
+  `/api/preview/image`, which validates it, writes a SELF-CONTAINED wrapper HTML (the image embedded as a `data:`
+  URI — allowed by the preview frame's `img-src data: blob:` CSP, so zero side-assets and zero network) into the
+  workspace, and returns its path. The unchanged `onPreviewAvailable` → served-iframe path then renders it with the
+  markup canvas overlaid, so the user annotates and Screenshot→chat to iterate — no change to the fragile
+  canvas/screenshot machinery, and the opaque-origin, egress-blocked preview sandbox is preserved.
+
+The result adapter (a frozen contract) is untouched — it already preserved image parts; the new event is a
+parallel, additive path. Nothing enters the frozen prompt prefix; the scan gate is unaffected (images are
+display-side, not model instructions).
+
+**Verification.** `desktop/renderer/chat_images.test.ts` (18 tests: ACP + bare extraction, fail-closed drops for
+SVG/non-base64/oversized, count cap, safe filenames incl. traversal, CSP-safe wrapper with no `<script>`) and
+`demo-P-IMG.1` green. Server + renderer tsc green (modulo the sandbox's missing-`electron`-types gap), the existing
+composer_attachments test + `demo-P-VISION.1` still green after the primitive extraction, license clean. The live
+inline render + preview-markup loop needs the packaged app and is QA-gated in-app.
+
+### Relates to
+
+ADR-0136/P-VISION.1 (the safe `img.src`-property + strict-data-URL idioms reused; its primitives now shared),
+ADR-0096/P-PREVIEW.* (the local-file preview pipeline + markup canvas + screenshot-to-chat reused), ADR-0104/
+P-CHAT.1 (the tool-event stream this extends), and CLAUDE.md invariants #5 (untrusted content stays delimited /
+fail-closed) and the frozen-contract rule (result_adapter left untouched).
+-----
+
+## ADR-0209 — P-SEC.1: caught exceptions never surface to the client (CWE-209/497)
+
+**Status:** Accepted (2026-07-13).
+
+**Context.** CodeQL's `js/stack-trace-exposure` flagged the desktop control-plane server (`desktop/dev.ts`):
+~two dozen `catch` blocks returned `e.message` (or `String(e)`) to the browser, all converging on the shared
+`json()` responder. The plane is loopback-only (ADR-0022 H1) and these were messages, not stacks, so the
+real-world exposure is low — but a caught exception's text can still carry internal paths/detail, and the
+codebase's own convention is "log the real error server-side; hand the client a generic message."
+
+**Decision.** Add one choke point — `clientError(e, generic)` — that `console.error`s the FULL error
+server-side and returns ONLY `generic`, a curated, exception-INDEPENDENT string. Every `catch` that surfaces an
+error to the browser routes through it, so no response string derives from a caught exception and the taint
+flow into `json()` is cut on every path. Remaining `error:` values come from validation results or static
+strings (application-level, not exceptions), which the query does not flag. Clients get a stable, useful
+message; the full error still reaches the dev-server console.
+
+**Verification.** Server `tsc` + full `make test` green (2219 pass, 0 fail); no test asserts these strings. The
+17 converted sites span agent import/save/export/share, n8n export/push, local-provider save, Figma import, the
+reachability probe, TTS voices/synth, KG list/create, and collab relay/share start.
+
+### Relates to
+
+ADR-0022 (H1 loopback-only control plane — the mitigating context), CWE-209/497, and the codebase convention of
+logging server-side + returning a generic client message.
+
+-----
+
+## ADR-0211 — P-LOC.4: AI-authored lines reach the UI again (lock-free GUI-owned ledger)
+
+**Status:** Accepted (2026-07-13).
+
+**Context.** A user reported AI-generated lines of code weren't appearing in the metrics UI even though "it's
+in the database somewhere." Traced + reproduced: AI-LOC is recorded ONLY into `agent_obs.duckdb` by the
+security gate (P-LOC.1, `recordAiEdit` → `ai_loc_ledger`). The gate runs inside the omp child and opens that
+DuckDB **read-write, holding the handle for the whole session** (`security_extension.ts` caches `dbHandle`).
+DuckDB is a single-writer store: a second process opening the same file — even `access_mode: READ_ONLY` —
+is refused (`IO Error: Could not set lock on file … Conflicting lock is held`, confirmed with a two-process
+repro). The desktop's `tools/memory_data.ts::aiLocSummary()` did exactly that READ_ONLY open, the lock error
+was swallowed to `null`, and the "AI-authored code" panel faithfully rendered its `aiLocHasData(null) === false`
+empty state ("none yet") — the reported "recorded but not shown" symptom. The codebase already dodges this
+exact hazard for other live metrics: turns / security / **latency** / eval are **GUI-owned append-only JSONL**
+the desktop writes from what it observes on the ACP stream (it can't co-write `agent_obs.duckdb`), and the
+eval rollup even ingests JSONL into a throwaway GUI-owned DuckDB. AI-LOC was the one metric that only lived in
+the locked DuckDB.
+
+**Decision.** Mirror the latency-log pattern. `desktop/ailoc_log.ts` (write) + `desktop/ailoc_read.ts` (read)
+are a **GUI-owned append-only ledger** at `~/.omp/lucid-ailoc.jsonl`. `acp_backend` already parses every
+write/edit tool step's authored `code` (for the inline chip); at the same seam it now counts added/removed
+lines with the SAME `linediff` convention the chip uses and appends a sample (model from the active/last
+model, identity/source from `attribution()`, repo from `currentWorkspace()`) — best-effort, fail-open, never
+blocking the chat, metadata only (paths + counts, never the code text). `aiLocSummary()` now reads and
+aggregates that lock-free JSONL instead of opening the locked DuckDB, so the panel populates live. The gate's
+`ai_loc_ledger` DuckDB write is unchanged — it stays the BI/audit system-of-record (invariant #10 untouched);
+the JSONL is the live-readable mirror. The write/read split keeps the renderer `linediff` import out of the
+DuckDB-free root program that `memory_data.ts` is checked under. A zero-line step (read/search/bash) records
+nothing, so only real authorship is attributed.
+
+**Verification.** `desktop/ailoc_log.test.ts` (9 tests: count write/edit/patch = the chip convention, record
++ no-op-on-zero-lines, fallback-to-unknown, read/aggregate roll-up, empty→null) + `demo-P-LOC.4` green; a
+two-process DuckDB repro confirmed the lock conflict the fix routes around. Root + server + renderer tsc green,
+full `make test` green (2234 pass). `harness/runs/loc_ledger.test.ts` (the DuckDB writer) is unaffected.
+
+### Relates to
+
+ADR-0031/P-LOC.1 (the gate's AI-LOC recording this fixes the read of), ADR-0095/P-LOC.3 (the always-render
+empty-state panel that was showing "none yet"), ADR-0187/P-EVAL.2 (`latency_log.ts` — the GUI-owned-JSONL
+pattern mirrored), and CLAUDE.md invariant #10 (the DuckDB ledger stays the frozen system-of-record).
+
+-----
+
+## ADR-0212 — P-FSREVEAL.1: reveal a written/edited file in the OS file manager from the chat feed
+
+**Status:** Accepted (2026-07-13).
+
+**Context.** When the agent writes or edits a file, finding it meant digging through the folder tree. There was
+already a `lucid:revealPath` IPC (`shell.openPath`, used for the "Open folder" export action) but nothing that
+reveals a specific FILE highlighted in its parent folder, and no affordance in the chat feed.
+
+**Decision.** Add a `lucid:showInFolder` IPC → `shell.showItemInFolder(path)` (opens the containing folder with
+the item selected), guarded to existing paths only (a forged request can't probe the filesystem). Expose it
+through preload + `bridge.showInFolder` / `bridge.canShowInFolder` (false in the browser build — no native
+shell). In the chat feed, each write/edit tool step's code preview bar gains a **Reveal** button beside "Open
+in editor" (shown only in the desktop app and only when the step carries a real absolute path — `acp_backend`
+already resolves the tool path to absolute). It fails soft to a toast if the file was moved/deleted or the
+build has no shell.
+
+**Verification.** Renderer + server tsc green; full `make test` green. The native reveal is Electron-only
+(`shell.showItemInFolder`), so the click→Finder/Explorer/Files behavior is QA-gated in the packaged app, like
+the other `shell`-backed affordances (capturePreview, revealPath).
+
+### Relates to
+
+The existing `lucid:revealPath` IPC (#115, extended here to file-level reveal), ADR-0104/P-CHAT.1 (the tool-step
+code preview bar this adds the button to), and ADR-0022 H1 (path-existence guard on the IPC).
+
+-----
+
+## ADR-0213 — P-RELEASE.1: a mistyped release tag must not brick the desktop build
+
+**Status:** Accepted (2026-07-13).
+
+**Context.** The `v1.11.3` release build failed on all three platforms: electron-builder rejected `Invalid
+version: ".1.11.3"`. Root cause was the TAG NAME — it was pushed as `v.1.11.3` (a dot after the `v`), and
+`build-desktop.yml` derived the version with `V="${GITHUB_REF#refs/tags/v}"`, which strips `refs/tags/v` and
+leaves the leading dot (`.1.11.3`). The code was fine; a single mistyped tag character bricked the entire
+cross-platform release build (the failure surfaces only in the tag-triggered `build-desktop.yml`, never in
+the PR CI, so it wasn't caught pre-merge).
+
+**Decision.** Make the version derivation tolerant + fail-safe. Strip `refs/tags/`, then an OPTIONAL leading
+`v`, then an OPTIONAL leading `.` — so `v1.2.3`, `v.1.2.3`, and `1.2.3` all yield `1.2.3`. If the result is
+still not a real semver (`^\d+\.\d+\.\d+`), fall back to the version already committed in `desktop/package.json`
+(the source of truth) with a workflow warning, rather than passing garbage to electron-builder. Non-tag runs
+keep the monotonic `0.1.<run#>`.
+
+**Verification.** The derivation was table-tested against `v1.11.3` / `v.1.11.3` / `1.11.3` (all → `1.11.3`)
+and a garbage tag (→ package.json fallback); the workflow YAML parses. The real cross-platform build is
+re-exercised when the corrected tag is pushed.
+
+### Relates to
+
+`build-desktop.yml` (the tag-triggered installer build), electron-builder's `fixVersionField` semver
+validation, and the auto-update monotonic-version requirement the version stamp exists for.
+
 ## ADR-0214 - Settings "Clone a git repo" reaches parity with the agent's clone (headless token auth + robustness)
 
 **Date:** 2026-07-14

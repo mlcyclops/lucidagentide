@@ -29,6 +29,8 @@ contextBridge.exposeInMainWorld("lucid", {
   // P-PREVIEW.1 (ADR-0096): capture the preview region of the window → PNG data URL (main uses capturePage).
   capturePreview: (rect: { x: number; y: number; width: number; height: number }): Promise<string | null> => ipcRenderer.invoke("lucid:capturePreview", rect),
   revealPath: (path: string): Promise<boolean> => ipcRenderer.invoke("lucid:revealPath", path),
+  // P-FSREVEAL.1 (ADR-0212): reveal a file highlighted in its parent folder (native file manager).
+  showInFolder: (path: string): Promise<boolean> => ipcRenderer.invoke("lucid:showInFolder", path),
   // P-LOCAL.3 polish: restart the app so a freshly-spawned omp picks up new/changed local providers.
   relaunch: (): Promise<void> => ipcRenderer.invoke("lucid:relaunch"),
   // P-KGMARKET.4 (ADR-0206): the OS forwards the lucid://auth?token=... deep link (after hosted marketplace

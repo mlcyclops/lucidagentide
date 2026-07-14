@@ -183,4 +183,32 @@
 //           ran `bun test harness` only) AND its own sim mirrored the depth-1 copy - both fixed: the guard
 //           now copies desktop sources recursively, and CI runs it as a required step. This class (v1.9.0 /
 //           1.10.3 / 1.10.4 / 1.11.0) is now gated, not shipped.
-export const APP_VERSION = "1.11.1";
+// v1.11.2 = ENTERPRISE PROVIDERS + IMAGES IN CHAT (ADR-0208/0210) on top of the KG-Packs / marketplace arc
+//           (ADR-0205/0206/0207) landed since 1.11.1. Settings -> Providers now surfaces three omp-native
+//           first-party providers it hid before: AZURE OPENAI (your Microsoft tenant's own deployments -
+//           key + resource/base/version/deployment-map), GITHUB COPILOT via OAuth (the Business/Enterprise
+//           "easy button" - a device-code sign-in that also handles a GitHub Enterprise domain), and GOOGLE
+//           CLOUD - GEMINI ENTERPRISE (formerly Vertex AI: an API key, or gcloud ADC with project+location).
+//           The existing Gemini OAuth card also gained a GCP project field, which is what makes Workspace /
+//           Enterprise Google accounts sign in at all (without it omp aborts non-personal accounts). Under
+//           the hood the provider descriptor grew multi-field config that rides the same key->env->omp seam,
+//           so nothing new is stored. GENERATED / TOOL IMAGES now render INLINE in the chat reply (validated
+//           fail-closed - SVG refused), each with a Download and a "Send to preview" that drops the image
+//           under the markup canvas so you can annotate + Screenshot->chat to iterate (great for image gen).
+//           Plus KG PACKS (named, swappable Knowledge Graphs + signed, sellable .lkgpack packs plus the
+//           gated marketplace) and a headless `make kg-pack` builder. SECURITY: every dev-server error now
+//           returns a generic client message (the full error stays server-side) - CWE-209 - and the CodeQL
+//           SAST config excludes non-shipped mockups.
+// v1.11.3 = BUG-FIX RELEASE (2026-07-13). Two defects autonomously diagnosed + fixed, and one usability
+//           enhancement, by Claude Code. BUG (ADR-0211): AI-authored lines of code were recorded but never
+//           appeared in the metrics UI ("AI-authored code" read "none yet"). Root cause: AI-LOC was written
+//           only into agent_obs.duckdb, which the security gate holds open read-write for the whole session;
+//           DuckDB is single-writer, so the desktop's read-only roll-up query lock-failed, the error was
+//           swallowed to null, and the panel showed the empty state despite rows being in the DB. Fix: the
+//           desktop now mirrors each edit into a lock-free GUI-owned ledger (~/.omp/lucid-ailoc.jsonl) it can
+//           read live, exactly like the turns / security / latency logs; the DuckDB stays the audit record.
+//           BUG (ADR-0210 follow-up): provider config fields (e.g. the Gemini "GCP project ID") rendered as a
+//           tiny sliver squeezed between the label and the Save/Clear buttons; the label now sits on its own
+//           line with a full-width input beneath it. ENHANCEMENT (ADR-0212): a written/edited file is one
+//           click from the chat feed to your OS file manager, HIGHLIGHTED in its folder (a "Reveal" button).
+export const APP_VERSION = "1.11.3";

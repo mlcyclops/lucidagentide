@@ -247,9 +247,13 @@ export interface KbPackImportView {
   ok: boolean; error?: string; stage?: string;
   kgId?: string; kgName?: string; signed?: boolean; keyId?: string; pages?: number; findings?: number;
 }
+// P-PROV.1 (ADR-0210): extra per-provider config env (Azure resource/version, Vertex project/location/ADC,
+// Gemini-Enterprise project). Non-secret fields echo `value` to pre-fill; secret fields report `last4`.
+export interface ProviderFieldAuth { env: string; label: string; placeholder?: string; secret?: boolean; set: boolean; value?: string; last4?: string }
 export interface ProviderAuth {
   id: string; name: string; env: string; oauthId: string; canOauth: boolean;
   oauthActive: boolean; oauthIdentity?: string; keySet: boolean; keyLast4?: string;
+  fields?: ProviderFieldAuth[];
 }
 export interface AuthStatus { gateway: ProviderAuth[]; majors: ProviderAuth[]; others: ProviderAuth[] }
 export interface HeadroomStatus {
@@ -693,7 +697,7 @@ export interface LucidBridge {
   embeddingsReindex(): Promise<{ ok: boolean; kgs?: number; pages?: number; stored?: number; error?: string } | null>;
   auth(): Promise<AuthStatus | null>;
   saveKey(env: string, key: string): Promise<AuthStatus | null>;
-  oauthLogin(oauthId: string): Promise<{ started: boolean; url: string; output: string } | null>;
+  oauthLogin(oauthId: string, promptAnswer?: string): Promise<{ started: boolean; url: string; output: string } | null>;
   oauthLogout(oauthId: string): Promise<AuthStatus | null>;
   /** Device-authorization flow: forward a code the user copied from the provider's page to the broker's stdin. */
   oauthCode(oauthId: string, code: string): Promise<{ sent: boolean; reason?: string } | null>;
@@ -773,6 +777,9 @@ export interface LucidBridge {
   // P-PREVIEW.3b (ADR-0096): may this remote URL load in the preview iframe? True only if the egress
   // allow-list (honoring the managed ceiling) already approves the site; else it stays gated.
   previewEgressAllows(url: string): Promise<boolean>;
+  // P-IMG.1 (ADR-0208): stage a chat image into the preview panel — writes a self-contained wrapper HTML and
+  // returns its path (for onPreviewAvailable), or null if the image failed the strict gate.
+  previewImage(dataUrl: string): Promise<{ path: string } | null>;
   // P-PREVIEW.4 (ADR-0096): a local file's content for the iframe's srcdoc (file:// can't load from an http
   // origin). Returns the HTML, or null if the path isn't a readable local previewable file.
   previewFile(path: string): Promise<string | null>;
@@ -798,6 +805,8 @@ export interface LucidBridge {
   listDir(path?: string): Promise<FsList | null>; // in-app folder browser (works everywhere)
   revealPath(path: string): Promise<boolean>; // open a folder in the OS file manager (Electron only; false in browser)
   canRevealPath(): boolean; // whether the native shell can reveal a folder (Electron only)
+  showInFolder(path: string): Promise<boolean>; // P-FSREVEAL.1: reveal a FILE highlighted in its parent folder (Electron only; false in browser)
+  canShowInFolder(): boolean; // whether the native shell can reveal a file in its folder (Electron only)
 }
 
 /** Non-secret metadata about a vault credential (P-NETWL.1, ADR-0106). No plaintext ever crosses this line;
@@ -830,6 +839,7 @@ interface NativeShell {
   pickFolder?(): Promise<string | null>;
   capturePreview?(rect: { x: number; y: number; width: number; height: number }): Promise<string | null>;
   revealPath?(path: string): Promise<boolean>;
+  showInFolder?(path: string): Promise<boolean>; // P-FSREVEAL.1: reveal a file highlighted in its parent folder
   relaunch?(): Promise<void>; // P-LOCAL.3 polish: restart the app to apply local-provider changes
   win?: { minimize(): void; toggleMaximize(): void; close(): void };
   // P-NETWL.1 (ADR-0106): native file picker + OS-encrypted credential vault (Electron-only).
@@ -1161,7 +1171,7 @@ export const bridge: LucidBridge = {
   embeddingsReindex: () => post("/api/embeddings/reindex", {}),
   auth: () => getData("/api/auth"),
   saveKey: (env, key) => post("/api/auth/key", { env, key }),
-  oauthLogin: (oauthId) => post("/api/auth/oauth", { oauthId }),
+  oauthLogin: (oauthId, promptAnswer?: string) => post("/api/auth/oauth", { oauthId, promptAnswer }),
   oauthLogout: (oauthId) => post("/api/auth/logout", { oauthId }),
   oauthCode: (oauthId, code) => post("/api/auth/oauth-code", { oauthId, code }),
   asksage: () => getData("/api/asksage"),
@@ -1219,6 +1229,7 @@ export const bridge: LucidBridge = {
   previewEgressAllows: async (url) => { const d = await getData(`/api/preview/egress-check?url=${encodeURIComponent(url)}`); return !!(d as { allow?: boolean } | null)?.allow; }, // P-PREVIEW.3b
   previewFile: async (path) => { const d = await getData(`/api/preview/file?path=${encodeURIComponent(path)}`); const h = (d as { html?: unknown } | null)?.html; return typeof h === "string" ? h : null; }, // P-PREVIEW.4
   previewServeUrl: (path) => `/api/preview/serve?path=${encodeURIComponent(path)}${TOKEN ? `&t=${encodeURIComponent(TOKEN)}` : ""}`, // P-PREVIEW.4b
+  previewImage: (dataUrl) => post("/api/preview/image", { dataUrl }) as Promise<{ path: string } | null>, // P-IMG.1 (ADR-0208)
   cachePreviewShot: async (png) => { await post("/api/preview/shot-cache", { png }); }, // P-PREVIEW.3a-shot
   previewInspectNext: () => getData("/api/preview/inspect/next"), // P-PREVIEW.6b
   previewInspectResult: async (id, result) => { await post("/api/preview/inspect/result", { id, result }); }, // P-PREVIEW.6b
@@ -1234,6 +1245,8 @@ export const bridge: LucidBridge = {
   listDir: (path) => getData(`/api/fs/list${path ? `?path=${encodeURIComponent(path)}` : ""}`),
   revealPath: (path) => (shell?.revealPath ? shell.revealPath(path) : Promise.resolve(false)),
   canRevealPath: () => !!shell?.revealPath,
+  showInFolder: (path) => (shell?.showInFolder ? shell.showInFolder(path) : Promise.resolve(false)), // P-FSREVEAL.1 (ADR-0212)
+  canShowInFolder: () => !!shell?.showInFolder,
   setZoom: (f) => {
     if (shell?.setZoom) { shell.setZoom(f); return; } // Electron: crisp native zoom
     // Browser: zoom #app and counter-scale its height so it still fills the viewport

@@ -305,6 +305,17 @@ ipcMain.handle("lucid:revealPath", async (_e, p: unknown) => {
   return (await shell.openPath(target)) === "";
 });
 
+// P-FSREVEAL.1 (ADR-0212): reveal a FILE (or folder) in the OS file manager, HIGHLIGHTED in its parent
+// folder — so a file the agent just wrote/edited is one click from the chat feed to Finder/Explorer/Files,
+// no digging through the tree. `showItemInFolder` opens the containing folder with the item selected. Only
+// an existing path is honored (a stray/forged request can't probe the filesystem).
+ipcMain.handle("lucid:showInFolder", async (_e, p: unknown) => {
+  const target = typeof p === "string" ? p : "";
+  if (!target || !existsSync(target)) return false;
+  shell.showItemInFolder(target);
+  return true;
+});
+
 // P-LOCAL.3 polish: restart the app so the freshly-spawned dev server + omp pick up the current Local
 // Providers (their secrets are injected into the dev child env at spawn — a restart is the clean apply).
 ipcMain.handle("lucid:relaunch", () => {

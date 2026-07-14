@@ -527,10 +527,10 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
   position:sticky;top:0;background:var(--bg-0, #0b0e14);z-index:1}
 .tc-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
   color:var(--txt-3);font-family:var(--mono);font-size:11px}
-.tc-open{flex:none;display:inline-flex;align-items:center;gap:4px;font-size:11px;color:var(--txt-2);
+.tc-open,.tc-reveal{flex:none;display:inline-flex;align-items:center;gap:4px;font-size:11px;color:var(--txt-2);
   background:none;border:1px solid var(--line);border-radius:6px;padding:2px 8px;cursor:pointer}
-.tc-open:hover{background:var(--line-soft);color:var(--txt-1)}
-.tc-open .ic{flex:none}
+.tc-open:hover,.tc-reveal:hover{background:var(--line-soft);color:var(--txt-1)}
+.tc-open .ic,.tc-reveal .ic{flex:none}
 .tc-code{margin:0;padding:10px 12px;font-family:var(--mono);font-size:12px;line-height:1.55;
   white-space:pre;color:var(--txt-2)}
 .tc-diff{font-family:var(--mono);font-size:12px;line-height:1.55;padding:6px 0}
@@ -2569,6 +2569,13 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .abadge.danger{background:color-mix(in srgb,var(--red,#e06b6b) 16%,transparent);color:#f0a6a6;box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--red,#e06b6b) 32%,transparent)}
 .prov-body{display:flex;flex-direction:column;gap:8px}
 .prov-row{display:flex;align-items:center;gap:8px}
+/* P-PROV.1 (ADR-0210): extra config-field rows (Azure resource, Vertex/Gemini-Enterprise project/location,
+   Gemini GCP project). The label sits on its OWN full-width line and the input goes full-width underneath it
+   (wrap + a 100%-basis label), so a field like "GCP project ID" gets a real, typeable input instead of a
+   sliver squeezed between the label and the Save/Clear buttons. */
+.prov-field{flex-wrap:wrap;row-gap:4px}
+.prov-field-label{flex:0 0 100%;font-size:12px;color:var(--txt-3);line-height:1.3}
+.prov-field .prov-key{flex:1 1 200px}
 .prov-hint{margin-top:2px;font-size:11px;color:var(--txt-3);line-height:1.45;display:flex;gap:5px;align-items:flex-start}
 .prov-hint svg{flex:none;margin-top:1px;opacity:.7}
 .prov-hint>span{flex:1;min-width:0;overflow-wrap:anywhere}

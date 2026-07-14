@@ -18,6 +18,7 @@ import { basename, join } from "node:path";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { DuckDBInstance } from "@duckdb/node-api";
 import { pathWithin } from "../desktop/path_guard.ts";
+import { aggregateAiLoc, readAiLocSamples } from "../desktop/ailoc_read.ts"; // P-LOC.4 (ADR-0211): AI-LOC from the GUI-owned ledger
 
 // Session / context / KV-cache / spend metrics live in the DuckDB-FREE session_metrics.ts (so the
 // `lucid` launcher can read them without loading the DuckDB addon). Re-exported here so this module
@@ -383,43 +384,16 @@ export interface AiLocSummary {
   generatedAt: string;
 }
 
-/** The AI-LOC roll-up, or null when nothing has been recorded yet (no DB / no table / no rows). */
+/** The AI-LOC roll-up, or null when nothing has been recorded yet.
+ *
+ *  P-LOC.4 (ADR-0211): reads the GUI-owned append-only ledger (`~/.omp/lucid-ailoc.jsonl`, written by the
+ *  desktop from the ACP edit stream), NOT `agent_obs.duckdb`. The gate holds that DuckDB open read-write for
+ *  the whole session, and DuckDB refuses a concurrent cross-process open (even READ_ONLY) — so the old
+ *  direct read here always lock-failed → null → the "AI-authored code" panel showed "none yet" despite rows
+ *  in the DB (the reported bug). The DuckDB `ai_loc_ledger` remains the BI/audit system-of-record; the live
+ *  dashboard reads the lock-free JSONL mirror. Aggregation is pure (ailoc_read.ts). */
 export async function aiLocSummary(): Promise<AiLocSummary | null> {
-  if (!existsSync(OBS_DB_PATH)) return null;
-  try {
-    const instance = await DuckDBInstance.create(OBS_DB_PATH, { access_mode: "READ_ONLY" });
-    const conn = await instance.connect();
-    const rows = async (sql: string): Promise<any[]> => {
-      try { return (await conn.runAndReadAll(sql)).getRowObjects() as any[]; } catch { return []; }
-    };
-    const totalRow = (await rows(
-      `SELECT sum(added_lines)::INT added, sum(removed_lines)::INT removed, count(*)::INT edits,
-              count(DISTINCT model)::INT models, count(DISTINCT repo)::INT repos FROM ai_loc_ledger`,
-    ))[0];
-    const edits = Number(totalRow?.edits ?? 0);
-    if (edits === 0) { instance.closeSync(); return null; }
-    const byModel = (await rows(
-      `SELECT model, sum(added_lines)::INT added, sum(removed_lines)::INT removed, count(*)::INT edits
-       FROM ai_loc_ledger GROUP BY model ORDER BY added DESC`,
-    )).map((r) => ({ model: String(r.model), added: Number(r.added ?? 0), removed: Number(r.removed ?? 0), edits: Number(r.edits ?? 0) }));
-    const detail = (await rows(
-      `SELECT model, repo, identity, any_value(identity_source) identity_source,
-              count(*)::INT edits, sum(added_lines)::INT added, sum(removed_lines)::INT removed
-       FROM ai_loc_ledger GROUP BY model, repo, identity ORDER BY added DESC LIMIT 50`,
-    )).map((r) => ({
-      model: String(r.model), repo: String(r.repo), identity: String(r.identity),
-      identitySource: String(r.identity_source), edits: Number(r.edits ?? 0),
-      added: Number(r.added ?? 0), removed: Number(r.removed ?? 0),
-    }));
-    const identities = (await rows(`SELECT DISTINCT identity FROM ai_loc_ledger ORDER BY identity`)).map((r) => String(r.identity));
-    instance.closeSync();
-    return {
-      totals: { added: Number(totalRow?.added ?? 0), removed: Number(totalRow?.removed ?? 0), edits, models: Number(totalRow?.models ?? 0), repos: Number(totalRow?.repos ?? 0) },
-      byModel, rows: detail, identities, generatedAt: new Date().toISOString(),
-    };
-  } catch {
-    return null; // missing schema, or held read-write by the live gate
-  }
+  return aggregateAiLoc(readAiLocSamples(), new Date().toISOString());
 }
 
 export function ageStr(epochMs: number | null): string {

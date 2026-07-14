@@ -47,6 +47,7 @@ import { agentBuilderPanelHtml, specToGraphData, nodeEditorHtml, saveErrors, new
 import type { TrustLabel } from "../../harness/contracts.ts"; // P-AGENT.9: imported-agent trust banner
 import { localProvidersCardBody, draftFromForm } from "./local_providers_ui.ts"; // P-LOCAL.3 (ADR-0135): Settings → Local Providers
 import { acceptAttachment, promptImageBlocks, thumbStripHtml, MAX_ATTACHMENT_BYTES, type Attachment } from "./composer_attachments.ts"; // P-VISION.1 (ADR-0136): pasted images
+import { imageFileName } from "./chat_images.ts"; // P-IMG.1 (ADR-0208): inline render + download of tool images
 import type { AgentSpec, NodeKind } from "../../harness/agent/spec.ts"; // P-AGENT.2b
 import { expandCommandBody, expandInlineCommands, slashTokenBeforeCaret, type UserCommand } from "../../harness/commands/spec.ts"; // P-CMD.1/.2: user "/" commands, body-wide
 import { type Action, type ToastAction, attachRichTip, createPalette, initTooltips, popover, showToast } from "./ui.ts";
@@ -805,13 +806,30 @@ async function openStepInEditor(code: ToolCode): Promise<void> {
   await openIde({ title: `${name} - patch`, code: code.patch ?? "", language: "diff" });
 }
 
+// P-FSREVEAL.1 (ADR-0212): reveal a written/edited file in the OS file manager, highlighted in its parent
+// folder. Desktop-only (the browser build has no native shell); a missing/deleted file or a browser build
+// fails-soft to a toast. `path` is the absolute path acp_backend resolved for the tool step.
+async function revealInFileManager(path: string): Promise<void> {
+  const ok = await bridge.showInFolder(path).catch(() => false);
+  if (!ok) showToast({ tone: "warn", title: "Couldn't reveal the file", desc: "This opens your file manager in the desktop app, and the file must still exist on disk.", actions: [{ label: "OK" }], timeout: 3200 });
+}
+
 async function renderToolCode(panel: HTMLElement, code: ToolCode): Promise<void> {
   if (panel.dataset.filled) return;
   panel.dataset.filled = "1";
-  // A small bar: the filename + "Open in editor" (expand into the full Monaco panel for context).
+  // A small bar: the filename + "Reveal" (open its folder in the OS file manager) + "Open in editor" (expand
+  // into the full Monaco panel for context).
   const barName = (code.path || "").split(/[\\/]/).pop() || code.path || "code";
-  const bar = el(`<div class="tc-bar"><span class="tc-name">${esc(barName)}</span><button class="tc-open" type="button" data-tip="Open in the editor for full context">Open in editor ${icon("arrowRight", 12)}</button></div>`);
+  // P-FSREVEAL.1 (ADR-0212): a file the agent just wrote/edited is one click from here to Finder/Explorer/
+  // Files, highlighted in its folder — no digging through the tree. Only shown in the desktop app (the browser
+  // build has no native shell), and only when the step carries a real file path.
+  const canReveal = !!code.path && bridge.canShowInFolder();
+  const revealBtn = canReveal
+    ? `<button class="tc-reveal" type="button" data-tip="Reveal in your file manager|Open this file's folder (Finder / Explorer / Files) with the file highlighted.">${icon("folder", 12)} Reveal</button>`
+    : "";
+  const bar = el(`<div class="tc-bar"><span class="tc-name">${esc(barName)}</span>${revealBtn}<button class="tc-open" type="button" data-tip="Open in the editor for full context">Open in editor ${icon("arrowRight", 12)}</button></div>`);
   ($(".tc-open", bar) as HTMLButtonElement).addEventListener("click", (e) => { e.stopPropagation(); void openStepInEditor(code); });
+  if (canReveal) ($(".tc-reveal", bar) as HTMLButtonElement).addEventListener("click", (e) => { e.stopPropagation(); void revealInFileManager(code.path!); });
   panel.appendChild(bar);
   if (code.content !== undefined) {
     const pre = el(`<pre class="tc-code"></pre>`);
@@ -1491,6 +1509,7 @@ async function send(): Promise<void> {
       else { hud.before(card.el); scrollChat(); }
     }
     else if (e.type === "block") { if (e.quarantined === false) failures.push({ tool: e.tool, reason: e.reason, cmd: e.command }); onBlock(e); } // P-CHAT.C (ADR-0190): a failed (not quarantined) tool call feeds the run's eval metrics
+    else if (e.type === "tool-image") renderToolImages(e.images, e.title); // P-IMG.1 (ADR-0208): a tool produced image(s) → inline + download + push-to-preview
     else if (e.type === "preview-available") onPreviewAvailable(e.path);
     else if (e.type === "preview-activity") flashPreviewTesting(e.label); // P-PREVIEW.6a (ADR-0153)
     else if (e.type === "design-available") showToast({ tone: "ok", title: "DESIGN.md is ready", desc: "The agent wrote your design invariants — review + edit them in the IDE.", actions: [{ label: "Review in the IDE", kind: "ok", run: () => void openDesignInIde() }], timeout: 10000 }); // P-FIGMA.2 (ADR-0154)
@@ -1736,17 +1755,24 @@ function setInspectorRail(rail: boolean): void {
 const PROV_HINTS: Record<string, string> = {
   elevenlabs: `Cloud voice (paid) for read-aloud, the podcast, and speech-to-text. Get a key at <a href="https://elevenlabs.io/app/settings/api-keys" target="_blank" rel="noopener">elevenlabs.io → API keys ↗</a>. Billed per character: a brief/AAR narration (~2-3k chars) runs <b>~$0.10-$0.30</b>; one reply is a few cents. Audio leaves the device, so for air-gap/DoD use offline Whisper / Kokoro below.`,
   openai: "OAuth signs in your ChatGPT / Codex subscription (those models). For the full commercial catalog - gpt-4o, o-series - add an OPENAI_API_KEY below.",
-  google: "OAuth uses the Gemini CLI / Code Assist tier. For the full commercial Gemini catalog, add a GEMINI_API_KEY below.",
+  google: "OAuth uses the Gemini CLI / Code Assist tier. <b>Workspace / Enterprise Google accounts</b> also need a <b>GCP project ID</b> below (personal accounts leave it blank) - without it the sign-in aborts. For the full commercial Gemini catalog, add a GEMINI_API_KEY. For the enterprise-governed backend (Gemini for Google Cloud), use the <b>Gemini Enterprise</b> card below.",
   anthropic: "OAuth signs in your Claude subscription. For pay-as-you-go API access, add an ANTHROPIC_API_KEY below.",
   xai: "OAuth signs in via your X / xAI account. Which Grok models are available depends on your plan (Premium+, SuperGrok, or API). If models appear but return empty replies, check your subscription at <b>console.x.ai</b>.",
+  "github-copilot": "OAuth signs in your <b>GitHub Copilot</b> subscription (Individual, or the Business / Enterprise add-on many orgs enable on their plan) and enables its model catalog - GPT, Claude and Gemini families via Copilot. Device-code flow: click Connect, then paste the code shown in the browser. On a self-hosted <b>GitHub Enterprise</b>, enter your GHE domain when prompted (blank = github.com).",
+  azure: "<b>Azure OpenAI</b> (your Microsoft tenant's own deployments). Paste the <b>AZURE_OPENAI_API_KEY</b>, then set <b>Resource name</b> (or a full base URL). API version defaults to <b>v1</b>; use the deployment map only if your Azure deployment names differ from the model ids.",
+  "google-vertex": "<b>Gemini Enterprise</b> — Google's current name for the enterprise Gemini backend formerly called <b>Vertex AI</b>. For the OAuth path, leave the key box blank and sign in with Google Cloud: run <code>gcloud auth application-default login</code> in your terminal (or point to a service-account JSON), then set the <b>project</b> + <b>location</b> below — omp picks up those credentials automatically. A <b>GOOGLE_CLOUD_API_KEY</b> in the key box is the non-OAuth alternative. This is the enterprise-governed path, distinct from the consumer AI Studio key on the Gemini card.",
   perplexity: "Paste a Perplexity API key for Sonar models. (Pro/Max OAuth is interactive email-OTP - it can't run through this app, so use a key here.)",
 };
 function provCard(p: ProviderAuth): string {
   const last4 = esc(p.keyLast4 ?? "");
+  // A provider can also be configured purely through its extra fields (e.g. Vertex via ADC project+location,
+  // no primary API key) — reflect that so such cards don't misreport as "not set".
+  const fieldsSet = (p.fields ?? []).some((f) => f.set);
   const status =
     (p.oauthActive ? `<span class="abadge ok">${icon("check", 11)} OAuth active</span>` : "") +
     (p.keySet ? `<span class="abadge set">key ••${last4}</span>` : "") +
-    (!p.oauthActive && !p.keySet ? `<span class="abadge none">not set</span>` : "");
+    (!p.keySet && fieldsSet ? `<span class="abadge set">configured</span>` : "") +
+    (!p.oauthActive && !p.keySet && !fieldsSet ? `<span class="abadge none">not set</span>` : "");
   // The hint text goes in ONE <span> so rich markup (<b>/<a>) stays inline instead of becoming separate
   // flex items in the flex `.prov-hint` (that squished multi-tag hints into clipped narrow columns).
   const hint = PROV_HINTS[p.id] ? `<div class="prov-hint">${icon("info", 11)}<span>${PROV_HINTS[p.id]}</span></div>` : "";
@@ -1755,14 +1781,33 @@ function provCard(p: ProviderAuth): string {
         ? `<span class="prov-id">${esc(p.oauthIdentity ?? "connected")}</span><button class="btn-mini danger" data-oauth-logout="${esc(p.oauthId)}">Disconnect</button>`
         : `<button class="btn-mini ok" data-oauth="${esc(p.oauthId)}">${icon("expand", 12)} Connect via OAuth</button>`}</div>`
     : "";
-  return `<div class="prov">
-    <div class="prov-h"><span class="prov-name">${esc(p.name)}</span><span class="prov-status">${status}</span></div>
-    <div class="prov-body">${oauthRow}
-      <div class="prov-row">
+  // OAuth-only providers (e.g. GitHub Copilot) carry no primary key env — omit the key row entirely.
+  const keyRow = p.env
+    ? `<div class="prov-row">
         <input type="password" class="prov-key" data-env="${esc(p.env)}" placeholder="${p.keySet ? `saved ••${last4} - type to replace` : `Paste ${esc(p.env)}…`}" />
         <button class="btn-mini ok" data-savekey="${esc(p.env)}">${icon("check", 12)} Save</button>
         ${p.keySet ? `<button class="btn-mini" data-clearkey="${esc(p.env)}">Clear</button>` : ""}
-      </div>${hint}</div></div>`;
+      </div>`
+    : "";
+  // P-PROV.1 (ADR-0210): extra config fields (Azure resource/version, Vertex project/location/ADC, Gemini
+  // Enterprise project). Each rides the SAME data-savekey/data-clearkey → /api/auth/key path as the primary
+  // key, so no new save handler is needed. Non-secret values pre-fill via `value` (server echoes them);
+  // secret fields render as password inputs. `esc()` neutralizes quotes/markup in every interpolated value.
+  const fieldsRows = (p.fields ?? []).map((f) => {
+    const fill = f.secret
+      ? (f.set ? `saved ••${esc(f.last4 ?? "")} - type to replace` : `Paste ${esc(f.env)}…`)
+      : esc(f.placeholder ?? f.env);
+    const val = !f.secret && f.value ? ` value="${esc(f.value)}"` : "";
+    return `<div class="prov-row prov-field">
+        <label class="prov-field-label" title="${esc(f.env)}">${esc(f.label)}</label>
+        <input type="${f.secret ? "password" : "text"}" class="prov-key" data-env="${esc(f.env)}" placeholder="${fill}"${val} />
+        <button class="btn-mini ok" data-savekey="${esc(f.env)}">${icon("check", 12)} Save</button>
+        ${f.set ? `<button class="btn-mini" data-clearkey="${esc(f.env)}">Clear</button>` : ""}
+      </div>`;
+  }).join("");
+  return `<div class="prov">
+    <div class="prov-h"><span class="prov-name">${esc(p.name)}</span><span class="prov-status">${status}</span></div>
+    <div class="prov-body">${oauthRow}${keyRow}${fieldsRows}${hint}</div></div>`;
 }
 // AskSage monthly tokens - fully dynamic from the Civ API (no manual limit). `used` is this
 // account's usage; `remaining` is what's left accounting for BOTH your and your org's caps; the
@@ -4391,6 +4436,60 @@ async function screenshotPreviewToChat(): Promise<void> {
   img.src = png; img.alt = "preview screenshot"; img.className = "preview-shot-img";
   shot.appendChild(img);
   showToast({ title: "Screenshot added to chat", desc: "Captured the preview into the conversation.", actions: [{ label: "OK" }], timeout: 2600 });
+}
+// P-IMG.1 (ADR-0208): a download for an image data URL — the standard blob/anchor idiom, but a data: URL is
+// already a valid href, so set it as a PROPERTY (never interpolated into HTML) and click a transient anchor.
+function downloadDataUrl(dataUrl: string, filename: string): void {
+  const a = document.createElement("a");
+  a.href = dataUrl; a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+}
+// P-IMG.1 (ADR-0208): stage an image into the Preview panel for markup. The server writes a self-contained
+// wrapper HTML (image embedded as a data: URI) and returns its path; the existing local-file preview pipeline
+// then renders it in the iframe with the markup canvas overlaid — so the user annotates, then Screenshot →
+// chat to iterate (great for image generation: generate → mark up → describe changes → regenerate).
+async function sendImageToPreview(dataUrl: string): Promise<void> {
+  const res = await bridge.previewImage(dataUrl).catch(() => null);
+  if (res?.path) {
+    openPreview();
+    onPreviewAvailable(res.path);
+    showToast({ title: "Sent to preview", desc: "Use the Markup tools to annotate, then Screenshot → chat to iterate.", actions: [{ label: "OK" }], timeout: 3600 });
+  } else {
+    showToast({ tone: "warn", title: "Couldn't open in preview", desc: "The image may be too large or an unsupported format.", actions: [{ label: "OK" }], timeout: 3200 });
+  }
+}
+// P-IMG.1 (ADR-0208): render image(s) a tool produced inline in the transcript. Each image's data URL is set
+// as an img.src PROPERTY (never interpolated into an HTML string), so nothing is reparsed as markup. Each gets
+// a Download and a "Send to preview" (markup) affordance; clicking the image itself also opens it in preview.
+function renderToolImages(images: { dataUrl: string; mimeType: string }[], title?: string): void {
+  if (!images?.length) return;
+  const card = addEvent(`<div class="evt tool-image-evt">${icon("eye", 14)}<span>${esc(title || (images.length > 1 ? `${images.length} generated images` : "Generated image"))}</span></div>`);
+  const grid = document.createElement("div");
+  grid.className = "tool-imgs";
+  grid.style.cssText = "display:flex;flex-wrap:wrap;gap:12px;margin-top:8px";
+  card.appendChild(grid);
+  images.forEach((im, i) => {
+    const fig = document.createElement("div");
+    fig.className = "tool-img-fig";
+    fig.style.cssText = "display:flex;flex-direction:column;gap:6px;max-width:360px";
+    const img = document.createElement("img");
+    img.src = im.dataUrl; // DOM PROPERTY — never string-interpolated
+    img.alt = "generated image"; img.loading = "lazy"; img.className = "tool-img";
+    img.style.cssText = "max-width:360px;max-height:360px;border-radius:8px;cursor:zoom-in;object-fit:contain;background:#111";
+    img.title = "Open in the preview panel for markup";
+    img.addEventListener("click", () => void sendImageToPreview(im.dataUrl));
+    fig.appendChild(img);
+    const bar = document.createElement("div");
+    bar.className = "tool-img-bar"; bar.style.cssText = "display:flex;gap:6px;flex-wrap:wrap";
+    const dl = el(`<button class="btn-mini" data-tip="Download this image to your machine">${icon("download", 12)} Download</button>`);
+    dl.addEventListener("click", () => downloadDataUrl(im.dataUrl, imageFileName(im.mimeType, i)));
+    const pv = el(`<button class="btn-mini ok" data-tip="Open in the Preview panel to mark up + iterate">${icon("markup", 12)} Send to preview</button>`);
+    pv.addEventListener("click", () => void sendImageToPreview(im.dataUrl));
+    bar.append(dl, pv);
+    fig.appendChild(bar);
+    grid.appendChild(fig);
+  });
+  scrollChat();
 }
 // P-PERF.2 (ADR-0129): the minimal-tier pause card. The agent keeps FULL knowledge access - only the
 // CPU-hungry visualization is skipped (the O(n^2) settle + particle loop is what spikes a battery-throttled
@@ -9080,12 +9179,42 @@ function wire(): void {
     const oauth = t.closest("[data-oauth]") as HTMLElement | null;
     if (oauth) {
       const oauthId = oauth.dataset.oauth!;
+      // GitHub Copilot (ADR-0210) is a device-code flow whose broker first asks for a GitHub Enterprise
+      // domain (blank = github.com), then shows a one-time code the user enters ON GitHub's device page
+      // (nothing is pasted back here). So drive it in two inline steps: collect the optional domain, then
+      // start the sign-in and surface the code from the broker's output.
+      if (oauthId === "github-copilot") {
+        const card = oauth.closest(".set-card") as HTMLElement | null;
+        if (card && !card.querySelector(".copilot-oauth-box")) {
+          const box = el(`<div class="copilot-oauth-box prov-row" style="margin-top:8px;flex-wrap:wrap;gap:6px">
+            <input class="prov-key" id="ghDomain" type="text" placeholder="GitHub Enterprise domain (blank for github.com)" autocomplete="off" style="font-family:var(--mono)" />
+            <button class="btn-mini ok" id="ghCopilotStart">${icon("expand", 12)} Start Copilot sign-in</button>
+            <div class="copilot-oauth-out" id="ghCopilotOut" style="flex:1 1 100%;font-family:var(--mono);font-size:12px;white-space:pre-wrap;opacity:.9"></div></div>`);
+          card.appendChild(box);
+          const start = $("#ghCopilotStart", card)!;
+          start.addEventListener("click", async () => {
+            const domain = ($("#ghDomain", card) as HTMLInputElement | null)?.value.trim() ?? "";
+            const out = $("#ghCopilotOut", card) as HTMLElement | null;
+            if (out) out.textContent = "Starting sign-in…";
+            const rr = await bridge.oauthLogin("github-copilot", domain);
+            if (rr?.url) window.open(rr.url, "_blank");
+            // The broker prints the verification URL + the one-time code; show that text so the user can
+            // read the code and type it into the opened GitHub device page. Nothing is pasted back here.
+            if (out) out.textContent = (rr?.output?.trim() || "Follow the sign-in in your browser.") + "\n\nEnter the code above on the opened GitHub page. This card updates automatically once Copilot is connected.";
+            showToast({ title: "Finish in your browser", desc: "Enter the one-time code on the GitHub device page, then authorize Copilot.", actions: [{ label: "OK" }], timeout: 0 });
+            setTimeout(() => void renderSettings(), 4000);
+            void pollOauthThenRefresh("github-copilot");
+          });
+          ($("#ghDomain", card) as HTMLInputElement | null)?.focus();
+        }
+        return;
+      }
       const r = await bridge.oauthLogin(oauthId);
       if (r?.url) window.open(r.url, "_blank");
-      // Device-flow providers (xAI, GitHub, etc.) show a code on the provider's page
-      // that the user must paste back. Redirect-flow providers (OpenAI, Anthropic, Google)
-      // complete silently via the localhost callback.
-      const DEVICE_FLOW_IDS = new Set(["xai-oauth", "github-copilot", "openai-codex-device"]);
+      // Device-flow providers show a code on the provider's page that the user must paste back. Redirect-flow
+      // providers (OpenAI, Anthropic, Google) complete silently via the localhost callback. (GitHub Copilot
+      // is also device-flow but has its own two-step branch above — it isn't listed here.)
+      const DEVICE_FLOW_IDS = new Set(["xai-oauth", "openai-codex-device"]);
       if (DEVICE_FLOW_IDS.has(oauthId)) {
         showToast({
           title: "Paste the code from the sign-in page",

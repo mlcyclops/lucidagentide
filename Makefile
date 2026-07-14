@@ -331,6 +331,10 @@ demo-P-EGRESS.2: ## P-EGRESS.2 (ADR-0094): a local-file browser open is labeled 
 demo-P-LOC.3: ## P-LOC.3 (ADR-0095): the AI-authored code ledger is discoverable (command-palette entry) and never silently vanishes (always rendered when a session is active, with an explicit empty state)
 	$(BUN) run desktop/scripts/demo_p_loc_3.ts
 
+.PHONY: demo-P-LOC.4
+demo-P-LOC.4: ## P-LOC.4 (ADR-0211): AI-authored lines reach the UI again - the gate holds agent_obs.duckdb read-write for the whole session, so the desktop's READ_ONLY aiLocSummary() lock-failed -> null -> "none yet" despite rows in the DB. Fix (mirrors turns/security/latency logs): the desktop appends every edit to a GUI-owned JSONL it can read live (same linediff count as the chat chip); the dashboard aggregates that lock-free. Proves count (write/edit/patch) + record (no-op on 0 lines) + read/aggregate roll-up + empty-null
+	$(BUN) run desktop/scripts/demo_p_loc_4.ts
+
 demo-P-PREVIEW.1: ## P-PREVIEW.1 (ADR-0096): in-app browser preview - resolver renders local files the agent builds, gates remote (egress, P-PREVIEW.3), blocks the ambiguous; panel + screenshot-to-chat seam
 	$(BUN) run desktop/scripts/demo_p_preview_1.ts
 
@@ -444,6 +448,14 @@ demo-P-LOCAL.1: ## P-LOCAL.1 (ADR-0135): Local Providers — declare a self-host
 .PHONY: demo-P-VISION.1
 demo-P-VISION.1: ## P-VISION.1 (ADR-0136): paste/drop a screenshot into the prompt bar — validate fail-closed (image-only, size/count caps), emit an omp image content block (base64, prefix stripped), and render a thumbnail strip that never interpolates the data URL (XSS-safe)
 	$(BUN) run desktop/scripts/demo_p_vision_1.ts
+
+.PHONY: demo-P-PROV.1
+demo-P-PROV.1: ## P-PROV.1 (ADR-0210): first-party enterprise providers - exposes omp-native Azure OpenAI (key + AZURE_OPENAI_* config), GitHub Copilot OAuth (device-flow broker; the Business/Enterprise "easy button" + a GHE-domain prompt), and Google Vertex AI = Gemini Enterprise (GOOGLE_CLOUD_API_KEY or ADC: project+location+credentials), and adds GOOGLE_CLOUD_PROJECT to the Gemini card - the missing env without which omp aborts Workspace/Enterprise Gemini OAuth. Extra fields ride the same setKey->env->omp seam as the primary key (no new storage); proves the descriptors + secret-masked/non-secret-echoed field reporting
+	$(BUN) run desktop/scripts/demo_p_prov_1.ts
+
+.PHONY: demo-P-IMG.1
+demo-P-IMG.1: ## P-IMG.1 (ADR-0208): generated/tool images inside the chat reply - lifts image content blocks OUT of an (UNTRUSTED) tool result through the strict image-data-URL gate (ACP-wrapped AND bare omp blocks; SVG/non-base64/oversized dropped fail-closed, count capped), renders them inline via the safe img.src-property idiom with a Download (safe filename, no traversal) and a "Send to preview" that builds a self-contained, CSP-safe wrapper (data: URI, no <script>) so the markup canvas + Screenshot->chat let the user iterate. Pure core verified here; the app.ts render + preview route are typechecked
+	$(BUN) run desktop/scripts/demo_p_img_1.ts
 
 .PHONY: demo-P-NVIM.1
 demo-P-NVIM.1: ## P-NVIM.1 (ADR-0150): Neovim + terminal integration — `lucid tui` is the gated command minus `acp` (gate first, policy, passthru last), fail-closes (dead scanner ⇒ no spawn), and the Neovim plugin's pure helpers pass headless nvim
