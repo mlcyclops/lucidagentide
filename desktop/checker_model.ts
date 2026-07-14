@@ -19,6 +19,25 @@
 /** A model option as omp reports it in the `model` config (provider-prefixed value + display name). */
 export interface ModelOption { value: string; name?: string; description?: string }
 
+/** ADR-0211: a model id is "AskSage-routed" (goes through the accredited gov gateway) when omp reports it with
+ *  an `asksage` provider prefix, e.g. `asksage-openai/gpt-5.6`. The sovereignty test is this substring — NOT a
+ *  `/gov/i` NAME match, which real ids like `asksage-openai/gpt-5.6` do not contain (the "Gov" is only in the
+ *  DISPLAY name). Matches the renderer's `isGovModel`/`isAsksage` so both sides agree on the boundary. */
+export function isAsksageRouted(value: string): boolean { return /asksage/i.test(value); }
+
+/** ADR-0211: FAIL-CLOSED resolution of the model a turn MUST use under AskSage lockdown. Lock off → the current
+ *  model stands. Lock on → keep the current model if it's already AskSage-routed, else pick the first
+ *  AskSage-routed option from the accessible list. Lock on but NO AskSage model available (lockdown enabled
+ *  without a configured gateway) → { ok:false } so the caller BLOCKS the turn rather than silently routing to a
+ *  direct provider. Pure + unit-tested. */
+export function resolveLockdownModel(locked: boolean, current: string, optionValues: string[]): { ok: boolean; model?: string; error?: string } {
+  if (!locked) return { ok: true, model: current };
+  if (isAsksageRouted(current)) return { ok: true, model: current };
+  const gov = optionValues.filter(isAsksageRouted);
+  if (!gov.length) return { ok: false, error: "AskSage lockdown is ON but no AskSage gov model is available. Add your AskSage API key in Settings, or turn lockdown off." };
+  return { ok: true, model: gov[0]! };
+}
+
 /** Checker fitness tier of a model name. Higher = better fit for a frequent, cheap judgement call. */
 function tier(name: string): 0 | 1 | 2 {
   const n = name.toLowerCase();

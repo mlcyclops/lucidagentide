@@ -34,7 +34,7 @@ import { ensureEgressProxy } from "../harness/runs/egress_proxy.ts"; // P-SANDBO
 import { egressAuditSink } from "./egress_audit.ts"; // P-SANDBOX.3 (ADR-0167)
 import { setSandboxState } from "./sandbox_status.ts"; // P-SANDBOX.5 (ADR-0169)
 import { caps } from "../harness/runs/profiles.ts";
-import { recommendCheckerModel, resolveCheckerModel, type ModelOption } from "./checker_model.ts";
+import { isAsksageRouted, recommendCheckerModel, resolveCheckerModel, resolveLockdownModel, type ModelOption } from "./checker_model.ts";
 import { parseGoalVerdict } from "./goal_verdict.ts";
 import { appendGoalIteration, appendRunLog, finishGoalMemory, type GoalMemory, readRunLog, resumeGoalMemory, saveGoalReport, savePreflightReport, startGoalMemory } from "./goal_memory.ts";
 import { extractUrls, type IterStat, type LocStat, type LoopBlock, type LoopMetrics, type LoopOutcome, normalizeToolName, parseNumstat, renderLoopReport, stallSignature, summarizeLoop } from "./loop_report.ts";
@@ -642,6 +642,10 @@ class Backend {
     if (s?.modes) { this.availableModes = s.modes.availableModes ?? []; this.currentModeId = String(s.modes.currentModeId ?? "default"); }
     await sleep(350); // let available_commands_update arrive
     this.syncModelEnv();
+    // ADR-0211: on a FRESH session (launch / respawn), apply the AskSage lockdown now so the picker + status
+    // reflect the gov model immediately, not only after the first turn. Best-effort — the prompt() clamp is the
+    // fail-closed guarantee; a failure here (e.g. no gov model yet) is surfaced there when a turn is sent.
+    if (this.asksageLocked()) await this.enforceAsksageLock().catch(() => ({ ok: false }));
   }
 
   /** P-LOC.1: the omp-reported active model id (from the `model` config option), or "" if unknown. */
@@ -861,6 +865,7 @@ class Backend {
   async prompt(text: string, onEvent: (e: ChatEvent) => void, images?: { data: string; mimeType: string }[]): Promise<void> {
     let assistant = "";
     let stalled = false;
+    let lockBlocked = false; // ADR-0211: the turn was refused because AskSage lockdown couldn't be satisfied
     let idle: ReturnType<typeof setTimeout> | undefined;
     let slow: ReturnType<typeof setTimeout> | undefined;
     let silentSince = Date.now();
@@ -905,6 +910,11 @@ class Backend {
     this.turnDiag(`prompt.start session=${this.sessionId}`);
     try {
       await this.ensureSession();
+      // ADR-0211: FAIL-CLOSED AskSage lockdown. Force the model to the gov gateway before sending; if the lock
+      // is on but no gov model exists, REFUSE the turn rather than route to a direct provider. This is the
+      // authoritative enforcement (the renderer's toggle-time switch does not survive an omp respawn / relaunch).
+      const lock = await this.enforceAsksageLock();
+      if (!lock.ok) { lockBlocked = true; throw new Error(lock.error ?? "AskSage lockdown could not be satisfied."); }
       beginStepTurn(this.sessionId); // P-RESUME.1: anchor this turn's recorded steps to the new user message
       // Assemble the user-turn preamble (never the frozen prefix; invariant #5/#6). Issue #54:
       // persona + skill + the live <user-profile> profile are STANDING guidance re-delivered every
@@ -936,8 +946,9 @@ class Backend {
       this.turnDiag(`prompt.resolved session=${this.sessionId} chars=${assistant.length} stopReason=${promptRes?.stopReason ?? "?"} enqueueErr=${enqueueErr} listenerIntact=${this.listener === sink}`);
     } catch (e) {
       errored = true; // P-EVAL.2: a stall/disconnect makes this turn's latency sample ok=false
-      this.turnDiag(`prompt.${stalled ? "stalled" : "error"} session=${this.sessionId} chars=${assistant.length} enqueueErr=${enqueueErr} listenerIntact=${this.listener === sink} msg=${String((e as any)?.message ?? e).slice(0, 80)}`);
-      onEvent({ type: "token", text: `\n[${stalled ? "stalled" : "agent unavailable"}: ${String((e as any)?.message ?? e)}]` });
+      this.turnDiag(`prompt.${lockBlocked ? "lockdown-blocked" : stalled ? "stalled" : "error"} session=${this.sessionId} chars=${assistant.length} enqueueErr=${enqueueErr} listenerIntact=${this.listener === sink} msg=${String((e as any)?.message ?? e).slice(0, 80)}`);
+      // ADR-0211: a lockdown block is a deliberate refusal, not a failure — surface the reason plainly.
+      onEvent({ type: "token", text: lockBlocked ? `\n[blocked: ${String((e as any)?.message ?? e)}]` : `\n[${stalled ? "stalled" : "agent unavailable"}: ${String((e as any)?.message ?? e)}]` });
     } finally {
       if (idle) clearTimeout(idle);
       if (slow) clearTimeout(slow);
@@ -1278,17 +1289,41 @@ class Backend {
    *  `models.asksageOnly` block plus the legacy top-level flag, via managedAsksageOnly). */
   private asksageLocked(): boolean { return asksageOnly() || managedAsksageOnly(); }
 
+  /** The model ids omp currently reports in the `model` config option. */
+  private modelOptionValues(): string[] {
+    const opt = this.configOptions.find((c) => c?.id === "model");
+    return (Array.isArray(opt?.options) ? opt!.options : []).map((o: any) => String(o?.value ?? "")).filter(Boolean);
+  }
+
+  /** ADR-0211: FAIL-CLOSED server-side enforcement of AskSage lockdown. When the lock is on, force omp's active
+   *  model to an AskSage-routed (gov-gateway) one BEFORE a turn is sent. Returns { ok:false, error } when the
+   *  lock is on but no gov model exists (lockdown enabled without a configured gateway) so the caller can BLOCK
+   *  the turn - a turn must NEVER route to a direct provider under lockdown. No-op when the lock is off. This is
+   *  the authoritative guarantee: the renderer's toggle-time switch + picker hiding are cosmetic and do not
+   *  survive an omp respawn or a fresh launch with lockdown already persisted ON. */
+  private async enforceAsksageLock(): Promise<{ ok: boolean; error?: string }> {
+    const r = resolveLockdownModel(this.asksageLocked(), this.activeModel(), this.modelOptionValues());
+    if (!r.ok) return { ok: false, error: r.error };
+    if (r.model && r.model !== this.activeModel()) {
+      await this.setConfig("model", r.model).catch(() => {});
+      if (!isAsksageRouted(this.activeModel())) return { ok: false, error: "Could not switch to an AskSage gov model for lockdown." };
+    }
+    return { ok: true };
+  }
+
   // P-GOAL.6 (ADR-0048): the user's accessible models, as the model config reports them (provider-
   // prefixed value + display name). Empty until omp has reported a config.
   private accessibleModels(): ModelOption[] {
     const opt = this.configOptions.find((c) => c?.id === "model");
     const list = Array.isArray(opt?.options) ? opt!.options : [];
     const models = list.filter((o: any) => o?.value).map((o: any) => ({ value: String(o.value), name: o.name, description: o.description }));
-    // P-GOAL.6.1: when the AskSage lock is on, the checker must use a GOV model routed through AskSage —
-    // restrict to asksage providers whose id is a GOV model. Fail-safe: only narrow if such models exist
-    // (never empty the list, which would drop the picker / the recommendation to the maker model).
+    // P-GOAL.6.1: when the AskSage lock is on, the checker must use a model routed through the AskSage gateway.
+    // Fail-safe: only narrow if such models exist (never empty the list, which would drop the picker / the
+    // recommendation to the maker model). ADR-0211: match on the `asksage` provider prefix - real gov ids like
+    // `asksage-openai/gpt-5.6` carry no "gov" SUBSTRING (the earlier `/gov/i` test matched none of them, so the
+    // checker silently fell through to ALL models, including direct providers).
     if (this.asksageLocked()) {
-      const gov = models.filter((m: ModelOption) => /^asksage/i.test(m.value) && /gov/i.test(m.value));
+      const gov = models.filter((m: ModelOption) => isAsksageRouted(m.value));
       if (gov.length) return gov;
     }
     return models;

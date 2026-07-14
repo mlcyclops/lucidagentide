@@ -14402,3 +14402,60 @@ redacted from errors and never reaches the renderer-as-plaintext-return or the a
 ADR-0208 (the clone auth fix this completes), ADR-0154 (Figma PAT - the vault→env template), ADR-0135
 (Local Providers - the other vault→dev-child injection), ADR-0106/0107 (`cred_vault.ts`), and CLAUDE.md
 invariants #1/#2.
+
+## ADR-0211 - AskSage lockdown enforced server-side, fail-closed (was renderer-only)
+
+**Date:** 2026-07-14
+**Status:** Accepted - BUILT. A correctness/security fix to an existing data-sovereignty feature (AskSage-only
+"lockdown"). No new schema or trust label; adds a fail-closed clamp on the model-routing path.
+**Increment:** `enforceAsksageLock` in `acp_backend.ts` + the pure `resolveLockdownModel`/`isAsksageRouted` in
+`checker_model.ts` (unit-tested), the checker-predicate fix, and a renderer guard. No frozen-contract touched.
+
+### Context - "lockdown was on but turns still ran on a direct model"
+
+AskSage-only mode ("lockdown") is a data-sovereignty control: with it ON, EVERY turn must route through the
+accredited AskSage gov gateway (an `asksage`-prefixed model). It was enforced ONLY in the renderer - a one-shot
+model switch on the toggle click (`app.ts` ~8544) plus hiding direct models in the picker (~9541) - and, on the
+server, only for the /goal CHECKER. The MAKER turn (`session/prompt`) had NO guard: `activeModel()` just reads
+whatever model omp currently reports. So lockdown silently failed whenever the client switch didn't hold:
+- **Fresh launch with lockdown persisted ON** - omp starts on its DEFAULT (a direct model); the renderer only
+  re-asserts gov on a toggle *click*, never on load. The first turn routed direct.
+- **Any omp respawn** - `backend.restart()` fires on workspace change, clone, "Refresh models", provider-key
+  change, MCP/agent/codegraph edits, etc. omp comes back on its default and nothing re-clamped to gov.
+
+A second, latent bug: the checker's lockdown filter matched `/^asksage/i && /gov/i`, but real gov ids
+(`asksage-openai/gpt-5.6`) carry no "gov" SUBSTRING (the "Gov" is only in the display NAME), so the filter
+matched nothing and the checker fell through to ALL models - including direct providers.
+
+### Decision - a fail-closed server-side clamp on the routing path (invariant #3)
+
+- **Authoritative clamp in `prompt()`.** Before every maker send, `enforceAsksageLock()` forces omp's active
+  model to an `asksage`-routed one (`resolveLockdownModel`: keep the current model if already gov, else select
+  the first gov option, else FAIL). If the lock is on but NO gov model exists, the turn is REFUSED with a clear
+  `[blocked: …]` message - a turn NEVER routes to a direct provider under lockdown. This survives respawns and
+  fresh launches because it runs at turn time, not on a UI event.
+- **Best-effort clamp on session init** (`ensureSession`, fresh-session branch) so the picker/status show the
+  gov model immediately on launch/respawn, not only after the first turn. `prompt()` remains the guarantee.
+- **Predicate fix.** The sovereignty boundary is one shared test, `isAsksageRouted = /asksage/i` (matches the
+  renderer's `isGovModel`/`isAsksage`); the checker's broken `/gov/i` requirement is removed, so the checker is
+  now correctly restricted to gov models under lockdown too.
+- **Renderer guard.** The toggle refuses to enable lockdown when AskSage isn't configured (no gov model to
+  route to) - the previously-reachable broken state - and reverts the checkbox with an explanatory toast.
+
+### Known remaining gap (follow-up)
+
+Scheduled BUILT-AGENT runs (`startAgentRun`, `model: a.agentModel || "haiku"`) are not yet clamped under
+lockdown - a narrower path than interactive/goal chat. Tracked for a follow-up increment; the interactive and
+/goal maker + checker turns (the sovereignty-critical surface) are now fail-closed.
+
+### Invariants preserved
+
+Fail-closed is law (#3): the model-routing path now blocks rather than silently downgrades to a direct provider
+- the analogue of the scanner's fail-closed gate, now covered by a unit test (lock ON + no gov ⇒ ok:false).
+Extend-not-fork (#1): omp's own `session/set_config_option` is used; no fork. No Python (#2). Events/ids
+unchanged. `resolveLockdownModel`/`isAsksageRouted` are pure + tested.
+
+### Relates to
+
+ADR-0007 (AskSage provider), ADR-0048 (P-GOAL.6 checker model - the predicate fixed here), ADR-0068 (managed
+`asksageOnly` lock, still OR'd in), the `gpt-5.6` add (ADR-0209 context), and CLAUDE.md invariant #3.

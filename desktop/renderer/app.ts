@@ -8536,7 +8536,16 @@ function wire(): void {
     }
     if (t.closest("#asksageOnly")) {
       if (state.managed?.locks?.models) return; // ADR-0068: org-locked routing - not user-toggleable
-      const only = ($("#asksageOnly", $("#setBody")!) as HTMLInputElement)?.checked ?? false;
+      const box = $("#asksageOnly", $("#setBody")!) as HTMLInputElement | null;
+      const only = box?.checked ?? false;
+      // ADR-0211/GAP-5: lockdown routes every turn through the gov gateway, so it needs a configured AskSage
+      // key. Enabling it without one would leave no gov model to route to (a broken state the backend would
+      // then fail-closed on, blocking every turn). Refuse up front and revert the checkbox.
+      if (only && !state.asksage?.configured) {
+        if (box) box.checked = false;
+        showToast({ tone: "warn", title: "Add your AskSage key first", desc: "Lockdown routes every turn through the AskSage gov gateway - configure the AskSage API key above before turning it on.", actions: [{ label: "OK" }], timeout: 5000 });
+        return;
+      }
       await bridge.saveAsksage({ only });
       state.asksage = { ...(state.asksage ?? { configured: false, base: "", only: false, limit: 200_000, datasets: [], queryModel: "gpt-5.2", persona: "" }), only };
       // Lockdown must guarantee gateway routing: if we're on a direct model, switch

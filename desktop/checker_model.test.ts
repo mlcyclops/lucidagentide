@@ -9,7 +9,7 @@
 // excluded; and that resolveCheckerModel honors a valid override but fails safe past a stale one.
 
 import { describe, expect, test } from "bun:test";
-import { recommendCheckerModel, resolveCheckerModel, type ModelOption } from "./checker_model.ts";
+import { isAsksageRouted, recommendCheckerModel, resolveCheckerModel, resolveLockdownModel, type ModelOption } from "./checker_model.ts";
 
 const opt = (value: string): ModelOption => ({ value });
 // A realistic slice of the live picker (multiple providers, snapshots + aliases).
@@ -65,5 +65,36 @@ describe("resolveCheckerModel", () => {
   test("no choice + no models ⇒ falls back to the maker model (ADR-0046 default)", () => {
     expect(resolveCheckerModel({ chosen: "", models: [], current: "anthropic/claude-opus-4-8" }))
       .toEqual({ value: "anthropic/claude-opus-4-8", source: "maker" });
+  });
+});
+
+// ADR-0211: AskSage lockdown enforcement (the fail-closed model clamp).
+describe("isAsksageRouted", () => {
+  test("matches real gov ids that carry NO 'gov' substring (the bug the old /gov/i test missed)", () => {
+    expect(isAsksageRouted("asksage-openai/gpt-5.6")).toBe(true);
+    expect(isAsksageRouted("asksage-anthropic/google-claude-sonnet-5")).toBe(true);
+    expect(isAsksageRouted("asksage-query/rag")).toBe(true);
+  });
+  test("direct providers are NOT AskSage-routed", () => {
+    expect(isAsksageRouted("anthropic/claude-opus-4-8")).toBe(false);
+    expect(isAsksageRouted("openai-codex/gpt-5.5")).toBe(false);
+  });
+});
+
+describe("resolveLockdownModel", () => {
+  const values = ["anthropic/claude-opus-4-8", "asksage-openai/gpt-5.6", "asksage-anthropic/google-claude-sonnet-5"];
+  test("lock OFF ⇒ the current model stands, whatever it is", () => {
+    expect(resolveLockdownModel(false, "anthropic/claude-opus-4-8", values)).toEqual({ ok: true, model: "anthropic/claude-opus-4-8" });
+  });
+  test("lock ON + already gov ⇒ keep it", () => {
+    expect(resolveLockdownModel(true, "asksage-openai/gpt-5.6", values)).toEqual({ ok: true, model: "asksage-openai/gpt-5.6" });
+  });
+  test("lock ON + on a DIRECT model ⇒ switch to the first gov option (the startup/respawn bug)", () => {
+    expect(resolveLockdownModel(true, "anthropic/claude-opus-4-8", values)).toEqual({ ok: true, model: "asksage-openai/gpt-5.6" });
+  });
+  test("lock ON + NO gov model available ⇒ FAIL-CLOSED (block, never route direct)", () => {
+    const r = resolveLockdownModel(true, "anthropic/claude-opus-4-8", ["anthropic/claude-opus-4-8", "openai-codex/gpt-5.5"]);
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatch(/AskSage API key|lockdown/i);
   });
 });
