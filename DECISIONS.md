@@ -14688,3 +14688,39 @@ the USER's choice now (a local Ollama keeps it offline; OpenAI does not) - docum
 
 ADR-0214 (the lexical grounding this upgrades), ADR-0058/0053 (the vector store + Embedder seam), ADR-0135
 (Local Providers - the endpoint + vault-secret source for part 2), and CLAUDE.md invariants #1/#2 + keystone #2.
+
+## ADR-0216 - Shared-session viewer: show thinking + tools, and use the whole window
+
+**Date:** 2026-07-14
+**Status:** Accepted - BUILT. A UX fix to the P-COLLAB guest "Watching" panel; renderer-only, no protocol change.
+**Increment:** `desktop/renderer/app.ts` (`openJoinPanel`) + `desktop/renderer/styles.css`.
+
+### Context
+
+Two complaints about the guest view of a shared session: (1) the viewer saw ONLY the host's final answer - the
+guest event handler explicitly dropped `thinking`/`tool` frames ("keep the guest view a clean transcript"), so a
+watcher couldn't follow WHAT the agent was doing; (2) the viewer was a small centered modal (`max-width:520px`,
+a `340px` transcript) floating in a large app - a lot of wasted real estate for something you're meant to watch
+and (in edit mode) drive. The frame protocol ALREADY relays the full `ChatEvent` stream (the host tees every
+event, `app.ts:1459`) - the loss was purely in the guest's render.
+
+### Decision
+
+- **Surface the host's activity.** The guest `event` handler now accumulates `thinking` (a collapsible dim
+  block), `tool` calls (compact chips: name + path/detail), `subagent` delegations, and `block`s onto the
+  pending turn, then folds them into the completed turn on `done`. So the watcher sees the reasoning + tool
+  calls, not just the answer. It stays a read-model of frames the host already sends (no new frames, no
+  protocol bump); the trust boundary is unchanged (the guest only renders what the host relays).
+- **Use the window.** When watching, the modal gets a `.watching` class → `calc(100vw/vh - 56px)` (a thin ~28px
+  border, tunable in one place), `max-width` dropped, the redundant icon/title/description hidden (the
+  `join-head` already labels the session), inner padding cut (`22px → ~12px`, transcript `340px → flex:1`). The
+  connect (paste-link) step stays the small centered modal. The close (X), Leave, and Escape all still work.
+
+### Invariants preserved
+
+No protocol/frame change (extend-not-fork, #1). No Python (#2). The guest remains a pure read-render of relayed
+frames - it mints nothing and drives nothing except through the existing host-approved prompt path (#5 spirit).
+
+### Relates to
+
+ADR-0192/0196 (P-COLLAB share-session + the guest Join panel this improves), and CLAUDE.md invariant #1.

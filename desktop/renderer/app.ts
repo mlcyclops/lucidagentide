@@ -8170,7 +8170,10 @@ function openSharePanel(): void {
 // P-COLLAB.10 (ADR-0196): the GUEST Join panel - paste an invite link, watch the shared session read-only.
 // A simple live transcript (replayed turns + streaming tokens) is enough for Phase 1; the host still runs
 // everything. Single instance; closes on X / backdrop / Escape (which also leaves the session).
-type JoinState = { header: import("./bridge.ts").CollabSessionHeaderView | null; turns: { role: string; text: string }[]; pending: string; participants: number; note: string | null; readOnly: boolean };
+// ADR-0216: the guest now sees the host's THINKING + TOOL activity, not just the answer.
+type JoinTool = { name: string; detail: string; path?: string };
+type JoinTurn = { role: string; text: string; thinking?: string; tools?: JoinTool[] };
+type JoinState = { header: import("./bridge.ts").CollabSessionHeaderView | null; turns: JoinTurn[]; pending: string; pendingThinking: string; pendingTools: JoinTool[]; participants: number; note: string | null; readOnly: boolean };
 function openJoinPanel(): void {
   if ($("#joinModal")) return;
   const ov = el(`<div id="joinModal" class="modal-ov"><div class="modal join-modal" role="dialog" aria-modal="true" aria-labelledby="joinTitle">
@@ -8180,7 +8183,7 @@ function openJoinPanel(): void {
     <p class="modal-desc">Paste an invite link to watch someone's LUCID session live, <b>read-only</b>. It's end-to-end encrypted - the relay only ever sees ciphertext.</p>
     <div id="joinBody" class="join-body"></div>
   </div></div>`);
-  const st: JoinState = { header: null, turns: [], pending: "", participants: 0, note: null, readOnly: true };
+  const st: JoinState = { header: null, turns: [], pending: "", pendingThinking: "", pendingTools: [], participants: 0, note: null, readOnly: true };
   let joined = false;
   let direct = false; // P-COLLAB.17: this join is running peer-to-peer (renderer coordinator), not via the backend
   const leaveSession = () => { if (direct) stopP2PGuest(); else void bridge.collabLeave().catch(() => {}); };
@@ -8194,10 +8197,18 @@ function openJoinPanel(): void {
     <div class="share-field"><input id="joinLink" class="share-link-input" type="text" placeholder="wss://relay…/r/room.secret  (or paste the link you were sent)" spellcheck="false" /></div>
     <div id="joinErr" class="modal-err" hidden></div>
     <div class="modal-actions"><button class="btn-mini ok" data-join-connect>${icon("eye", 12)} Connect</button></div>`;
+  // ADR-0216: render the host's activity - a collapsible thinking block + compact tool-call chips, then the answer.
+  const toolLine = (t: JoinTool) => `<div class="join-tool">${icon("command", 11)} <b>${esc(t.name)}</b>${t.path ? ` <span class="join-tool-path">${esc(t.path)}</span>` : (t.detail ? ` <span class="join-tool-detail">${esc(t.detail.slice(0, 90))}</span>` : "")}</div>`;
+  const thinkBlock = (think: string, live: boolean) => think.trim() ? `<details class="join-think"${live ? " open" : ""}><summary>${icon("brain", 11)} thinking</summary><div class="join-think-body">${esc(think)}</div></details>` : "";
+  const assistantBody = (text: string, thinking: string | undefined, tools: JoinTool[] | undefined, live: boolean) =>
+    `${thinkBlock(thinking ?? "", live)}${(tools ?? []).map(toolLine).join("")}<div class="join-text">${esc(text)}${live ? `<span class="join-cursor">▋</span>` : ""}</div>`;
   const liveHtml = () => {
     const h = st.header;
-    const turns = st.turns.map((tn) => `<div class="join-turn ${tn.role}"><span class="join-role">${tn.role === "user" ? "host" : "assistant"}</span><div class="join-text">${esc(tn.text)}</div></div>`).join("");
-    const pending = st.pending ? `<div class="join-turn assistant"><span class="join-role">assistant</span><div class="join-text">${esc(st.pending)}<span class="join-cursor">▋</span></div></div>` : "";
+    const turns = st.turns.map((tn) => (tn.role === "user" || tn.role === "host")
+      ? `<div class="join-turn host"><span class="join-role">host</span><div class="join-text">${esc(tn.text)}</div></div>`
+      : `<div class="join-turn assistant"><span class="join-role">assistant</span>${assistantBody(tn.text, tn.thinking, tn.tools, false)}</div>`).join("");
+    const hasPending = st.pending || st.pendingThinking || st.pendingTools.length;
+    const pending = hasPending ? `<div class="join-turn assistant"><span class="join-role">assistant</span>${assistantBody(st.pending, st.pendingThinking, st.pendingTools, true)}</div>` : "";
     const ended = st.note ? `<div class="join-ended">${icon("info", 13)} ${esc(st.note)}</div>` : "";
     const canEdit = !st.readOnly && !st.note;
     return `
@@ -8210,8 +8221,9 @@ function openJoinPanel(): void {
       </div>` : ""}
       <div class="join-foot"><span class="join-watchers">${st.participants} watching</span>${st.note ? `<button class="btn-mini" data-join-close>${icon("check", 12)} Close</button>` : `<button class="btn-mini danger" data-join-leave>${icon("close", 12)} Leave</button>`}</div>`;
   };
-  const renderConnect = () => { body.innerHTML = connectHtml(); setTimeout(() => ($("#joinLink", ov) as HTMLInputElement | null)?.focus(), 30); };
+  const renderConnect = () => { ov.querySelector(".join-modal")?.classList.remove("watching"); body.innerHTML = connectHtml(); setTimeout(() => ($("#joinLink", ov) as HTMLInputElement | null)?.focus(), 30); };
   const renderLive = () => {
+    ov.querySelector(".join-modal")?.classList.add("watching"); // ADR-0216: fill the app (thin border), reclaim padding
     // Preserve what the guest is typing across the transcript re-render (events stream constantly).
     const prev = $("#joinPrompt", ov) as HTMLInputElement | null;
     const draft = prev?.value ?? ""; const wasFocused = !!prev && document.activeElement === prev;
@@ -8239,13 +8251,24 @@ function openJoinPanel(): void {
     switch (f.kind) {
       case "welcome":
         st.header = f.header; st.readOnly = f.readOnly; st.participants = f.participants.length;
-        st.turns = f.transcript.map((x) => ({ role: x.role, text: x.text })); st.pending = "";
+        st.turns = f.transcript.map((x) => ({ role: x.role, text: x.text })); st.pending = ""; st.pendingThinking = ""; st.pendingTools = [];
         break;
       case "event": {
         const e = f.event;
+        // ADR-0216: surface the host's live activity - thinking, tool calls, delegations, and blocks - not just
+        // the final answer. Accumulated on the pending turn, then folded into the completed turn on `done`.
         if (e.type === "token") st.pending += e.text;
-        else if (e.type === "done") { const txt = (typeof e.text === "string" && e.text.trim()) ? e.text : st.pending; if (txt.trim()) st.turns.push({ role: "assistant", text: txt }); st.pending = ""; }
-        // thinking / tools / others are the host's business; keep the guest view a clean transcript
+        else if (e.type === "thinking") st.pendingThinking += e.text;
+        else if (e.type === "tool") st.pendingTools.push({ name: e.name, detail: e.detail, path: e.code?.path });
+        else if (e.type === "subagent") st.pendingTools.push({ name: `delegate · ${e.agent}`, detail: e.title });
+        else if (e.type === "block") st.pendingTools.push({ name: `blocked · ${e.tool}`, detail: e.reason });
+        else if (e.type === "done") {
+          const txt = (typeof e.text === "string" && e.text.trim()) ? e.text : st.pending;
+          if (txt.trim() || st.pendingThinking.trim() || st.pendingTools.length) {
+            st.turns.push({ role: "assistant", text: txt, thinking: st.pendingThinking.trim() || undefined, tools: st.pendingTools.length ? st.pendingTools.slice() : undefined });
+          }
+          st.pending = ""; st.pendingThinking = ""; st.pendingTools = [];
+        }
         break;
       }
       case "state": st.participants = f.participants.length; break;

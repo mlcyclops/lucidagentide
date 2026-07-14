@@ -3182,6 +3182,25 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .join-prompt-input:focus{border-color:var(--accent-2);box-shadow:var(--ring)}
 .join-compose .btn-mini{flex:none}
 
+/* ADR-0216: the guest "Watching" view fills the app (thin ~28px border) + reclaims padding, and shows the
+   host's thinking + tool activity - so the viewer gets the real estate to actually follow + drive the session. */
+.join-modal.watching{width:calc(100vw - 56px);height:calc(100vh - 56px);max-width:none;padding:11px 13px 9px;display:flex;flex-direction:column;text-align:left}
+.join-modal.watching>.modal-icon,.join-modal.watching>.modal-title,.join-modal.watching>.modal-desc{display:none} /* the join-head already labels the session - reclaim the vertical space (keep the X) */
+.join-modal.watching .join-body{flex:1;min-height:0;display:flex;flex-direction:column;margin-top:0}
+.join-modal.watching .join-head{margin:0 0 7px}
+.join-modal.watching .join-transcript{flex:1;min-height:0;max-height:none;padding:9px}
+.join-think{margin:1px 0 4px;font-size:11.5px}
+.join-think>summary{cursor:pointer;color:var(--txt-3);list-style:none;display:inline-flex;align-items:center;gap:5px}
+.join-think>summary::-webkit-details-marker{display:none}
+.join-think>summary:hover{color:var(--txt-2)}
+.join-think .ic{color:var(--accent-2)}
+.join-think-body{white-space:pre-wrap;margin:5px 0 0;padding:7px 9px;border-left:2px solid var(--line-strong);background:var(--bg-1);border-radius:6px;color:var(--txt-3);font-size:11.5px;line-height:1.5}
+.join-tool{display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--txt-2);padding:3px 8px;margin:2px 0;background:var(--bg-1);border:1px solid var(--line-soft);border-radius:7px;overflow:hidden}
+.join-tool .ic{color:var(--accent-2);flex:none}
+.join-tool b{color:var(--txt);font-weight:600;flex:none}
+.join-tool-path{font-family:var(--mono);font-size:10.5px;color:var(--txt-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.join-tool-detail{color:var(--txt-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
 /* P-COLLAB.14: the bind-address picker in the "be the relay" card */
 .share-serve-lbl{display:block;font-size:11.5px;font-weight:600;color:var(--txt-2);margin:9px 0 5px;letter-spacing:.01em}
 .share-serve-select{flex:1;min-width:0;cursor:pointer;appearance:none;-webkit-appearance:none;
