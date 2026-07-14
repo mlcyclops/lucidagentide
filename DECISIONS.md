@@ -14253,7 +14253,7 @@ product key. BUSL header on the new source (licensing/commit hygiene).
 ADR-0205 (P-KGPACK.3 seed / .4 export+import gate / .6 background seed - the pipeline this drives), ADR-0206
 (P-KGMARKET - the storefront/entitlement ids this aligns to), and CLAUDE.md invariants #1/#2/#3/#5/#7/#9.
 
-## ADR-0208 - Settings "Clone a git repo" reaches parity with the agent's clone (headless token auth + robustness)
+## ADR-0214 - Settings "Clone a git repo" reaches parity with the agent's clone (headless token auth + robustness)
 
 **Date:** 2026-07-14
 **Status:** Accepted - BUILT. A bug fix to an existing feature (`desktop/workspace.ts` `cloneRepo`), not a new
@@ -14306,7 +14306,7 @@ so the private-repo path can't silently regress.
 ADR-0111 (P-WS.1 - the workspace/clone feature this fixes), ADR-0106/0107 (`cred_vault.ts` - the follow-up
 home for a vault-backed git PAT), and CLAUDE.md invariants #1/#2.
 
-## ADR-0209 - AskSage model list: fetch it LIVE from `/get-models` (follow-up; scoped, not yet built)
+## ADR-0215 - AskSage model list: fetch it LIVE from `/get-models` (follow-up; scoped, not yet built)
 
 **Date:** 2026-07-14
 **Status:** Proposed - SCOPED. Captures the design so a new CIV/MIL model appears WITHOUT a code change; the
@@ -14350,17 +14350,17 @@ context-window source of truth.
 ADR-0007 (AskSage provider registration), ADR-0029 (P-IDE.1c picker curation/gating), the `gpt-5.6` array
 add that shipped today, and CLAUDE.md invariants #1/#2/#3.
 
-## ADR-0210 - Vault-backed git PAT for private-repo clones (the ADR-0208 follow-up)
+## ADR-0216 - Vault-backed git PAT for private-repo clones (the ADR-0214 follow-up)
 
 **Date:** 2026-07-14
-**Status:** Accepted - BUILT. Extends the ADR-0208 clone fix with a persistent, OS-encrypted credential; no
+**Status:** Accepted - BUILT. Extends the ADR-0214 clone fix with a persistent, OS-encrypted credential; no
 new trust path (reuses the existing `cred_vault.ts` + the Figma/Local-Providers vault→env pattern).
 **Increment:** the git PAT field + save/remove, `main.ts` `prepareGitToken`, the inline-`pat` clone request,
 and `resolveCloneToken` (pure, unit-tested). No frozen-contract file touched.
 
 ### Context
 
-ADR-0208 made the Settings clone authenticate private repos from an environment token (`GITHUB_TOKEN` etc.),
+ADR-0214 made the Settings clone authenticate private repos from an environment token (`GITHUB_TOKEN` etc.),
 and named a vault-backed PAT as the follow-up so the user enters a token ONCE instead of exporting an env var.
 The constraint: the OS-encrypted vault (`cred_vault.ts`, Electron `safeStorage`) can only be DECRYPTED in the
 **main** process, but `cloneRepo` runs in the **dev-server (Bun) child**. Figma and Local Providers already
@@ -14381,7 +14381,7 @@ solved this exact shape - main reads the secret and injects it into the dev chil
   entered token, kept in renderer session memory as `sessionGitPat`), and `resolveCloneToken(url, override)`
   prefers it over the env token. Mirrors how Figma passes the PAT inline on the first import. No app restart is
   needed for either path.
-- **Injection stays leak-safe.** The token still rides the ADR-0208 `-c http.extraHeader` path (never written
+- **Injection stays leak-safe.** The token still rides the ADR-0214 `-c http.extraHeader` path (never written
   into `.git/config`, redacted from errors). Https-only (ssh/git@ use keys).
 
 ### Alternatives rejected
@@ -14399,11 +14399,11 @@ redacted from errors and never reaches the renderer-as-plaintext-return or the a
 
 ### Relates to
 
-ADR-0208 (the clone auth fix this completes), ADR-0154 (Figma PAT - the vault→env template), ADR-0135
+ADR-0214 (the clone auth fix this completes), ADR-0154 (Figma PAT - the vault→env template), ADR-0135
 (Local Providers - the other vault→dev-child injection), ADR-0106/0107 (`cred_vault.ts`), and CLAUDE.md
 invariants #1/#2.
 
-## ADR-0211 - AskSage lockdown enforced server-side, fail-closed (was renderer-only)
+## ADR-0217 - AskSage lockdown enforced server-side, fail-closed (was renderer-only)
 
 **Date:** 2026-07-14
 **Status:** Accepted - BUILT. A correctness/security fix to an existing data-sovereignty feature (AskSage-only
@@ -14458,12 +14458,12 @@ unchanged. `resolveLockdownModel`/`isAsksageRouted` are pure + tested.
 ### Relates to
 
 ADR-0007 (AskSage provider), ADR-0048 (P-GOAL.6 checker model - the predicate fixed here), ADR-0068 (managed
-`asksageOnly` lock, still OR'd in), the `gpt-5.6` add (ADR-0209 context), and CLAUDE.md invariant #3.
+`asksageOnly` lock, still OR'd in), the `gpt-5.6` add (ADR-0215 context), and CLAUDE.md invariant #3.
 
-## ADR-0212 - AskSage lockdown covers egress + agent runs; RAG on GPT-5.6 Luna; real 5.6 ids
+## ADR-0218 - AskSage lockdown covers egress + agent runs; RAG on GPT-5.6 Luna; real 5.6 ids
 
 **Date:** 2026-07-14
-**Status:** Accepted - BUILT. Completes the ADR-0211 lockdown work (closes its named gap), extends the
+**Status:** Accepted - BUILT. Completes the ADR-0217 lockdown work (closes its named gap), extends the
 data-sovereignty boundary to network egress, and corrects the AskSage GPT-5.6 model ids + RAG default against
 the LIVE gateway.
 **Increment:** an egress-gate guard + an agent-run model clamp in `acp_backend.ts`/`dev.ts`, and data changes to
@@ -14471,11 +14471,11 @@ the AskSage model list + RAG default. No frozen-contract file touched.
 
 ### Context
 
-ADR-0211 made the MAKER + CHECKER turns fail-closed under lockdown but explicitly left two things open: (1)
+ADR-0217 made the MAKER + CHECKER turns fail-closed under lockdown but explicitly left two things open: (1)
 scheduled/Builder BUILT-AGENT runs still defaulted to a direct model (`"haiku"`), and (2) lockdown said nothing
 about web egress - the agent could still `web_search`/`browser`/`fetch` to a PUBLIC provider, backflowing CUI
 (Controlled Unclassified Information) to a non-accredited service. Separately, the `gpt-5.6` id added in
-ADR-0209 was a GUESS: querying the live gateway (`/openai/v1/models` + a real `/query`, both 200) showed the
+ADR-0215 was a GUESS: querying the live gateway (`/openai/v1/models` + a real `/query`, both 200) showed the
 5.6 family is actually three tier codenames - `gpt-5.6-luna` (mid), `gpt-5.6-sol`, `gpt-5.6-terra` - with NO
 bare `gpt-5.6`. And the RAG `/query` route still defaulted to the old `gpt-5.2`.
 
@@ -14492,11 +14492,11 @@ bare `gpt-5.6`. And the RAG `/query` route still defaulted to the old `gpt-5.2`.
 - **Built-agent runs honor lockdown.** A shared `Backend.resolveAgentRunModel(desired)` clamps the run model to
   a gov one (or `{ok:false}` ⇒ REFUSE the run) under lockdown; wired into BOTH the scheduled-automation path
   (`runAutomation`) and the interactive Builder "Run" route (`dev.ts`). This closes the last un-clamped
-  model-routing path ADR-0211 named.
+  model-routing path ADR-0217 named.
 - **Real GPT-5.6 ids + RAG default.** `OPENAI_MODELS` now lists `gpt-5.6-luna`/`-sol`/`-terra` (the invalid bare
   `gpt-5.6` is removed), with matching `MODEL_CTX`/`MODEL_META`. The RAG `/query` default (`ASKSAGE_QUERY_MODEL`
   fallback, `asksageConfig`, settings, renderer state) moves from `gpt-5.2` to **`gpt-5.6-luna`** (newest
-  mid-tier), validated live. Marked "recheck each release" - ADR-0209's live `/get-models` fetch is the durable
+  mid-tier), validated live. Marked "recheck each release" - ADR-0215's live `/get-models` fetch is the durable
   fix so this list stops needing hand-maintenance.
 
 ### Invariants preserved
@@ -14508,21 +14508,21 @@ tested; the RAG/model-id changes were verified against the live AskSage gateway,
 
 ### Relates to
 
-ADR-0211 (the lockdown work this completes), ADR-0108 (egress posture / `allowWebSearch`, now overridden under
-lockdown), ADR-0142 (P-AGENT built-agent runs - the clamped path), ADR-0209 (live model fetch - the durable fix
+ADR-0217 (the lockdown work this completes), ADR-0108 (egress posture / `allowWebSearch`, now overridden under
+lockdown), ADR-0142 (P-AGENT built-agent runs - the clamped path), ADR-0215 (live model fetch - the durable fix
 for the hand-maintained list), ADR-0007 (AskSage `/query` RAG), and CLAUDE.md invariants #1/#2/#3/#4.
 
-## ADR-0213 - Per-session CUI/Search mode, violet CUI banner, DoD/STIG consent banner, titlebar Datasets picker
+## ADR-0219 - Per-session CUI/Search mode, violet CUI banner, DoD/STIG consent banner, titlebar Datasets picker
 
 **Date:** 2026-07-14
-**Status:** Accepted - BUILT. Refines the ADR-0212 lockdown egress block from global to per-session, and adds
+**Status:** Accepted - BUILT. Refines the ADR-0218 lockdown egress block from global to per-session, and adds
 the compliance UI (CUI banner, DoD consent banner) + restores the Datasets picker to the titlebar.
 **Increment:** a new per-session settings field + route/bridge, a one-line change to the egress gate, and
 renderer UI. New pure `sessionMode` store is unit-tested. No frozen-contract file touched.
 
 ### Context
 
-ADR-0212's lockdown blocked ALL public egress globally. That's too blunt: a user handling CUI must have web
+ADR-0218's lockdown blocked ALL public egress globally. That's too blunt: a user handling CUI must have web
 search disabled (spillage), but a clean non-CUI session should still search **while in lockdown** (models still
 gov-routed). Operators also need the standard visual controls a gov deployment expects: a clear CUI indicator,
 the mandatory DoD Notice & Consent banner (a STIG login-banner requirement), and quick access to the AskSage RAG
@@ -14559,11 +14559,11 @@ default). Untrusted RAG dataset content stays server-side under AskSage (#5 spir
 
 ### Relates to
 
-ADR-0212 (the global egress block this makes per-session), ADR-0211 (lockdown model clamp, unchanged), ADR-0014
+ADR-0218 (the global egress block this makes per-session), ADR-0217 (lockdown model clamp, unchanged), ADR-0014
 (the separate CUI memory compartment - distinct from this per-session CUI *chat* mode), ADR-0106/0108 (egress
 posture), ADR-0007 (AskSage RAG datasets), and CLAUDE.md invariants #1/#2/#3/#4.
 
-## ADR-0214 - `knowledge_search`: RAG grounding for non-AskSage users (increment 1)
+## ADR-0220 - `knowledge_search`: RAG grounding for non-AskSage users (increment 1)
 
 **Date:** 2026-07-14
 **Status:** Accepted - BUILT (increment 1 of the non-AskSage RAG arc). Wires the ALREADY-BUILT local knowledge
@@ -14595,7 +14595,7 @@ compute-intensive" memory was actually a WASM-packaging problem, not CPU - a sep
   renderer's header-authenticated call is unchanged. `desktop/acp_backend.ts` registers the extension in
   `ompArgv` (always when present; self-describing when the KB is empty) - NOT gated behind AskSage, so it's the
   non-AskSage grounding path, working for any model (Claude/GPT/local).
-- **Discovery UI:** the titlebar Datasets chip (ADR-0213) is dual-purposed - when AskSage is NOT configured it
+- **Discovery UI:** the titlebar Datasets chip (ADR-0219) is dual-purposed - when AskSage is NOT configured it
   becomes "Knowledge", opening a small menu: "Add an Obsidian vault or folder" (routes to the existing
   self-contained `importKgFlow`) + "Open the Knowledge panel" (`openKnowledge`), with a note that the agent
   searches it via `knowledge_search`. No new ingest/retrieval code.
@@ -14625,7 +14625,7 @@ model), ADR-0053/0058/0063 (the vector spine reserved for increment 2), ADR-0153
 env-URL callback pattern), ADR-0135 (Local Providers - the increment-2 embeddings endpoint), and CLAUDE.md
 invariants #1/#2/#5/#6 + keystone #2.
 
-## ADR-0215 - Bring-your-own-embeddings `ApiEmbedder` (non-AskSage semantic RAG, increment 2 part 1)
+## ADR-0221 - Bring-your-own-embeddings `ApiEmbedder` (non-AskSage semantic RAG, increment 2 part 1)
 
 **Date:** 2026-07-14
 **Status:** Accepted - BUILT (both parts). Part 1: the `ApiEmbedder` primitive. Part 2: the wiring - config
@@ -14639,7 +14639,7 @@ ingest**.
 
 ### Context
 
-ADR-0214 gave non-AskSage users LEXICAL grounding (`knowledge_search` over the compiled KB). Increment 2 adds
+ADR-0220 gave non-AskSage users LEXICAL grounding (`knowledge_search` over the compiled KB). Increment 2 adds
 true SEMANTIC search. The vector spine (store + cosine + scan-gated ingest, ADR-0058) is built but unshipped;
 the only blocker was bundling a WASM embedder (P-RAG.1c) into the Electron app. This sidesteps that entirely:
 embed via an OpenAI-COMPATIBLE `/embeddings` endpoint the user ALREADY runs - their OpenAI/Azure key, or a local
@@ -14665,7 +14665,7 @@ can never silently store garbage vectors that would poison cosine retrieval.
 - **Auto-embed during KG ingest** (`/api/kb/ingest-batch`): each source is ALSO embedded into the KG's vector
   store via the scan-gated `ingestText` (best-effort; never fails the compile job; no embedder ⇒ lexical-only).
 - **Hybrid retrieve** (`/api/kb/retrieve`): auto-upgrades to `mode:"hybrid"` when an embedder + embedded chunks
-  exist, else stays lexical - so `knowledge_search` (ADR-0214) transparently gains semantic recall.
+  exist, else stays lexical - so `knowledge_search` (ADR-0220) transparently gains semantic recall.
 - **Test endpoint** (`/api/embeddings/test` + card button): a one-vector probe (`probeEmbeddings`) against the
   ENTERED values incl. an inline key (works before save/relaunch) that DISCOVERS + auto-fills the model's dim.
 - **Re-index** (`/api/embeddings/reindex` + card button): rebuilds every KG's semantic index from its compiled
@@ -14686,10 +14686,10 @@ the USER's choice now (a local Ollama keeps it offline; OpenAI does not) - docum
 
 ### Relates to
 
-ADR-0214 (the lexical grounding this upgrades), ADR-0058/0053 (the vector store + Embedder seam), ADR-0135
+ADR-0220 (the lexical grounding this upgrades), ADR-0058/0053 (the vector store + Embedder seam), ADR-0135
 (Local Providers - the endpoint + vault-secret source for part 2), and CLAUDE.md invariants #1/#2 + keystone #2.
 
-## ADR-0216 - Shared-session viewer: show thinking + tools, and use the whole window
+## ADR-0222 - Shared-session viewer: show thinking + tools, and use the whole window
 
 **Date:** 2026-07-14
 **Status:** Accepted - BUILT. A UX fix to the P-COLLAB guest "Watching" panel; renderer-only, no protocol change.

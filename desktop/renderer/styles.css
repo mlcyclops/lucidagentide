@@ -3182,7 +3182,7 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .join-prompt-input:focus{border-color:var(--accent-2);box-shadow:var(--ring)}
 .join-compose .btn-mini{flex:none}
 
-/* ADR-0216: the guest "Watching" view fills the app (thin ~28px border) + reclaims padding, and shows the
+/* ADR-0222: the guest "Watching" view fills the app (thin ~28px border) + reclaims padding, and shows the
    host's thinking + tool activity - so the viewer gets the real estate to actually follow + drive the session. */
 .join-modal.watching{width:calc(100vw - 56px);height:calc(100vh - 56px);max-width:none;padding:11px 13px 9px;display:flex;flex-direction:column;text-align:left}
 .join-modal.watching>.modal-icon,.join-modal.watching>.modal-title,.join-modal.watching>.modal-desc{display:none} /* the join-head already labels the session - reclaim the vertical space (keep the X) */
@@ -3209,7 +3209,7 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .share-serve-select:disabled{opacity:.5;cursor:not-allowed}
 #shareServeHost:not([hidden]){margin-top:7px;width:100%;box-sizing:border-box}
 
-/* ── ADR-0213: CUI/Search mode toggle · violet CUI banner · DoD consent modal ── */
+/* ── ADR-0219: CUI/Search mode toggle · violet CUI banner · DoD consent modal ── */
 .mode-toggle{-webkit-app-region:no-drag;display:inline-flex;align-items:center;gap:1px;flex:none;margin-left:2px;
   background:linear-gradient(180deg,var(--bg-1),var(--bg-2));border:1px solid var(--line);border-radius:999px;padding:1px}
 .mode-seg{-webkit-app-region:no-drag;display:inline-flex;align-items:center;gap:4px;border:0;background:transparent;color:var(--txt-3);

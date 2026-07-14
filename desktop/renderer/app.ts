@@ -108,9 +108,9 @@ const state = {
   workspace: null as WorkspaceInfo | null,
   asksage: null as { configured: boolean; base: string; only: boolean; limit: number; datasets: string[]; queryModel: string; persona: string } | null,
   asksageTokens: null as { used: number; remaining: number | null; limit: number } | null,
-  asksageDatasetList: [] as string[], // ADR-0213: the account's full dataset list for the titlebar Datasets picker
-  sessionMode: "cui" as "cui" | "search", // ADR-0213: this chat session's CUI (no web search) vs Search mode
-  dodAck: false as boolean, // ADR-0213: the DoD/STIG Notice & Consent banner has been acknowledged this launch
+  asksageDatasetList: [] as string[], // ADR-0219: the account's full dataset list for the titlebar Datasets picker
+  sessionMode: "cui" as "cui" | "search", // ADR-0219: this chat session's CUI (no web search) vs Search mode
+  dodAck: false as boolean, // ADR-0219: the DoD/STIG Notice & Consent banner has been acknowledged this launch
   chinaAck: false as boolean, // P-IDE.1c: user acknowledged the China-origin data-sovereignty warning (Settings unlock)
   thirdPartyAck: false as boolean, // user acknowledged the third-party / non-U.S. "More providers" warning
   auth: null as import("./bridge.ts").AuthStatus | null, // full provider-auth status (gateway/majors/others)
@@ -173,7 +173,7 @@ function modelLabel(value: string): string {
 const OPEN = new Set<string>(["sec.quarantine", "sec.approvals", "mem.context", "mem.cache"]);
 let lastInspHash = "";
 let autoCollapsedSessions = false; // collapse the sessions panel once, on the first chat message
-// ADR-0210: a freshly-entered git PAT kept in renderer session memory ONLY (never persisted here) so a private
+// ADR-0216: a freshly-entered git PAT kept in renderer session memory ONLY (never persisted here) so a private
 // clone works THIS session without waiting for the next-launch vault→env injection. Cleared on app restart.
 let sessionGitPat = "";
 
@@ -189,9 +189,9 @@ function buildShell(): void {
       <!-- Persona + Skills live in the titlebar (full-width, so they don't squish when a right surface opens). -->
       <button class="ctool tb-chip" id="ctPersona" data-tip="AskSage persona|Server-supplied role guidance - scanned before use" hidden>${icon("user", 14)}<span id="ctPersonaName">Persona</span>${icon("chevron", 11)}</button>
       <button class="ctool tb-chip" id="ctSkill" data-tip="Skills|Built-in skills, /task delegation, and project skills" hidden>${icon("bolt", 14)}<span>Skills</span>${icon("chevron", 11)}</button>
-      <!-- ADR-0213: AskSage RAG Datasets picker (next to Skills). Short name shown; full name on hover. -->
+      <!-- ADR-0219: AskSage RAG Datasets picker (next to Skills). Short name shown; full name on hover. -->
       <button class="ctool tb-chip" id="ctDataset" data-tip="Datasets|AskSage RAG datasets that ground answers. Short name shown; full name on hover." hidden>${icon("folder", 14)}<span id="ctDatasetName">Datasets</span>${icon("chevron", 11)}</button>
-      <!-- ADR-0213: per-session CUI vs Search mode (only shown under AskSage lockdown). -->
+      <!-- ADR-0219: per-session CUI vs Search mode (only shown under AskSage lockdown). -->
       <div class="mode-toggle" id="modeToggle" role="group" aria-label="Session mode" hidden data-tip="CUI vs Search mode|In CUI mode there is NO web search (spillage risk). To search the web, open another chat session and switch it to Search - never run search in a CUI thread." data-tip-side="bottom">
         <button class="mode-seg" data-mode="cui" type="button">${icon("shield", 12)} CUI</button>
         <button class="mode-seg" data-mode="search" type="button">${icon("search", 12)} Search</button>
@@ -242,7 +242,7 @@ function buildShell(): void {
 
       <main class="center">
         <div class="chat-bg" id="chatBg" aria-hidden="true"></div>
-        <!-- ADR-0213: violet CUI banner - shown only when this session is in CUI mode under lockdown. -->
+        <!-- ADR-0219: violet CUI banner - shown only when this session is in CUI mode under lockdown. -->
         <div class="cui-banner" id="cuiBanner" hidden data-tip="CUI session|Controlled Unclassified Information handling. Web search is disabled to prevent spillage. To search the web, open another chat session and switch it to Search mode." data-tip-side="bottom">
           ${icon("shield", 13)}<span><b>CUI MODE</b> - Controlled Unclassified Information - web search disabled (spillage risk)</span>
         </div>
@@ -2529,7 +2529,7 @@ async function reseedTrivia(btn: HTMLButtonElement | null): Promise<void> {
   }
 }
 
-// ADR-0215: the "Semantic search" card - point KB RAG at an OpenAI-compatible /embeddings endpoint (a LOCAL
+// ADR-0221: the "Semantic search" card - point KB RAG at an OpenAI-compatible /embeddings endpoint (a LOCAL
 // Ollama for air-gap, or OpenAI/Azure). Non-secret config here; the key is stored in the OS vault on save.
 function secEmbeddings(cfg: import("./bridge.ts").EmbeddingsConfigView | null, active: boolean): string {
   const c = cfg ?? { enabled: false, baseUrl: "", model: "", dim: 768, authKind: "none" as const, vaultRef: undefined as string | undefined };
@@ -2577,7 +2577,7 @@ async function saveEmbeddings(): Promise<void> {
     actions: needsRelaunch ? [{ label: "Relaunch", kind: "ok", run: () => void bridge.relaunch() }, { label: "Later" }] : [{ label: "OK" }],
   });
 }
-// ADR-0215: a one-vector connectivity probe against the ENTERED values (incl. an inline key) - reports the
+// ADR-0221: a one-vector connectivity probe against the ENTERED values (incl. an inline key) - reports the
 // dimension the model returns and fills the Dim field so a mismatch can't silently break retrieval.
 async function testEmbeddings(): Promise<void> {
   const body = $("#setBody")!;
@@ -2618,7 +2618,7 @@ function settingsShell(): string {
     `<div data-sec="asksageQuota"></div>`, // AskSage Monthly-tokens bar - ONLY when the gov gateway is configured (filled in hydrateSettings)
     setSkel("providers", "Providers", "U.S. frontier · key or OAuth", true),
     setSkel("localProviders", "Local Providers", "self-hosted · Ollama · vLLM · VPN", true), // P-LOCAL.3 (ADR-0135); auto-collapsed
-    setSkel("embeddings", "Semantic search", "knowledge RAG · your own embeddings", true), // ADR-0215; auto-collapsed
+    setSkel("embeddings", "Semantic search", "knowledge RAG · your own embeddings", true), // ADR-0221; auto-collapsed
     `<div data-sec="sovereignty"></div>`, // P-IDE.1c: China-origin unlock (renders only when such models exist)
     setSkel("compression", "Token compression", "headroom · on-device · opt-in", true),
     setSkel("mcp", "MCP connectors", "model context protocol", true),
@@ -2639,7 +2639,7 @@ function hydrateSettings(): void {
     const el = document.querySelector(`#setBody [data-sec="workspace"]`);
     if (el) el.outerHTML = `<div data-sec="workspace">${ws ? workspaceSection(ws) : ""}</div>`;
   });
-  void bridge.embeddingsConfig().then((r) => fillSec("embeddings", secEmbeddings(r?.config ?? null, !!r?.active))); // ADR-0215
+  void bridge.embeddingsConfig().then((r) => fillSec("embeddings", secEmbeddings(r?.config ?? null, !!r?.active))); // ADR-0221
   // Profile already painted from cache; refresh from disk only if it changed AND the user isn't typing.
   void bridge.getSettings().then((s) => {
     if (!s) return;
@@ -4795,7 +4795,7 @@ async function copyExportPath(dest: string): Promise<void> {
 
 // ───────────────────────── workspace ─────────────────────────
 function workspaceSection(ws: WorkspaceInfo): string {
-  const gitPatSaved = state.creds.some((c) => c.ref === "git_pat"); // ADR-0210: a git PAT already in the vault?
+  const gitPatSaved = state.creds.some((c) => c.ref === "git_pat"); // ADR-0216: a git PAT already in the vault?
   return `<div class="set-sec"><div class="set-lbl">Workspace <span class="set-sub">the folder the agent works in</span></div>
     <div class="ws-current">
       <div class="ws-name">${icon(ws.isGit ? "git" : "folder", 15)} ${esc(ws.name)} ${ws.isGit ? `<span class="abadge ok">git</span>` : ""}</div>
@@ -4821,7 +4821,7 @@ function workspaceSection(ws: WorkspaceInfo): string {
     ${ws.recent.length ? `<div class="ws-recent">${ws.recent.map((r) => `<button class="ws-recent-item" data-ws="${esc(r.path)}" title="${esc(r.path)}">${icon(r.isGit ? "git" : "folder", 12)} ${esc(r.name)}</button>`).join("")}</div>` : ""}
   </div>`;
 }
-// ADR-0210: persist a git PAT into the OS-encrypted vault (ref "git_pat"). Kept in `sessionGitPat` too so it
+// ADR-0216: persist a git PAT into the OS-encrypted vault (ref "git_pat"). Kept in `sessionGitPat` too so it
 // authenticates a clone THIS session (passed inline) before the next-launch env injection; the field is cleared
 // so the plaintext doesn't linger in the DOM. The secret never reaches the agent.
 async function saveGitPat(): Promise<void> {
@@ -4925,7 +4925,7 @@ async function resumeSession(id: string): Promise<void> {
     renderThread(null); // no cache AND the fetch failed -> a fresh empty thread
   }
   await bridge.resumeSession(id);
-  void loadSessionMode(); // ADR-0213: reflect THIS session's CUI/Search mode + banner
+  void loadSessionMode(); // ADR-0219: reflect THIS session's CUI/Search mode + banner
   $("#input")?.focus();
 }
 
@@ -5805,10 +5805,10 @@ async function loadAsksage(): Promise<void> {
   if (state.asksage?.configured) {
     state.asksageTokens = await bridge.asksageTokens();
     state.personas = (await bridge.asksagePersonas()) ?? [];
-    state.asksageDatasetList = (await bridge.asksageDatasets()) ?? []; // ADR-0213: full list for the titlebar picker
-    showDodBanner(); // ADR-0213: gov gateway configured → the DoD/STIG consent banner (once per launch)
+    state.asksageDatasetList = (await bridge.asksageDatasets()) ?? []; // ADR-0219: full list for the titlebar picker
+    showDodBanner(); // ADR-0219: gov gateway configured → the DoD/STIG consent banner (once per launch)
   }
-  await loadSessionMode(); // ADR-0213: this session's CUI/Search mode + the violet banner
+  await loadSessionMode(); // ADR-0219: this session's CUI/Search mode + the violet banner
   renderStatus();
   updateComposerTools();
 }
@@ -5823,7 +5823,7 @@ async function refreshAsksage(): Promise<void> {
   });
 }
 
-// ── ADR-0213: DoD/STIG Notice & Consent banner ──────────────────────────────
+// ── ADR-0219: DoD/STIG Notice & Consent banner ──────────────────────────────
 // The standard USG/DoD Notice and Consent Banner (DTM-08-060). Shown ONCE PER LAUNCH when the AskSage gov
 // gateway is configured (commercial users never see it). Edit THIS ONE constant if your org mandates a variant.
 const DOD_CONSENT_BANNER = {
@@ -5850,7 +5850,7 @@ function showDodBanner(): void {
   // No scrim-click / Esc / X: a consent banner must be explicitly acknowledged (STIG).
 }
 
-// ── ADR-0213: per-session CUI vs Search mode + violet CUI banner ─────────────
+// ── ADR-0219: per-session CUI vs Search mode + violet CUI banner ─────────────
 async function loadSessionMode(): Promise<void> {
   const r = await bridge.sessionMode().catch(() => null);
   state.sessionMode = r?.mode === "search" ? "search" : "cui";
@@ -5903,12 +5903,12 @@ function confirmSwitchToSearch(): void {
   scrim.addEventListener("click", close);
 }
 
-// ── ADR-0213: titlebar AskSage Datasets picker (next to Skills) ──────────────
+// ── ADR-0219: titlebar AskSage Datasets picker (next to Skills) ──────────────
 const tidyDataset = (d: string) => d.replace(/^user_custom_\d+_/, "").replace(/_content$/, "").replace(/[_-]+/g, " ").trim();
 function updateDatasetButton(): void {
   const btn = $("#ctDataset") as HTMLElement | null; if (!btn) return;
   const span = $("#ctDatasetName", btn);
-  btn.hidden = false; // ADR-0214: gov → AskSage datasets; non-gov → local Knowledge (the non-AskSage RAG entry)
+  btn.hidden = false; // ADR-0220: gov → AskSage datasets; non-gov → local Knowledge (the non-AskSage RAG entry)
   if (state.asksage?.configured) {
     const n = state.asksage?.datasets?.length ?? 0;
     if (span) span.textContent = n ? `${n} dataset${n === 1 ? "" : "s"}` : "Datasets";
@@ -5920,7 +5920,7 @@ function updateDatasetButton(): void {
     btn.setAttribute("data-tip", "Knowledge|Ground the agent on your OWN notes/docs. Add an Obsidian vault or folder; the agent searches it via knowledge_search.");
   }
 }
-// ADR-0214: for a non-AskSage user the chip becomes "Knowledge" - the entry to local RAG (their own notes/docs
+// ADR-0220: for a non-AskSage user the chip becomes "Knowledge" - the entry to local RAG (their own notes/docs
 // compiled into a KG, searched by the agent's knowledge_search tool). Routes to the existing self-contained
 // importKgFlow (add an Obsidian vault / folder) + the Knowledge panel; no new ingest/retrieval code.
 function openKnowledgeMenu(anchor: HTMLElement): void {
@@ -5940,7 +5940,7 @@ function openKnowledgeMenu(anchor: HTMLElement): void {
   });
 }
 async function openDatasetDropdown(anchor: HTMLElement): Promise<void> {
-  if (!state.asksage?.configured) { openKnowledgeMenu(anchor); return; } // ADR-0214: non-AskSage → local Knowledge
+  if (!state.asksage?.configured) { openKnowledgeMenu(anchor); return; } // ADR-0220: non-AskSage → local Knowledge
   cfgClose?.();
   const list = state.asksageDatasetList;
   const sel = new Set(state.asksage?.datasets ?? []);
@@ -5993,8 +5993,8 @@ function updateComposerTools(): void {
       pBtn.setAttribute("data-tip", "AskSage persona|Server-supplied role guidance - scanned before use");
     }
   }
-  updateDatasetButton(); // ADR-0213: datasets chip visibility + count
-  renderSessionMode();   // ADR-0213: CUI/Search toggle + violet banner (lockdown-gated)
+  updateDatasetButton(); // ADR-0219: datasets chip visibility + count
+  renderSessionMode();   // ADR-0219: CUI/Search toggle + violet banner (lockdown-gated)
 }
 
 // AskSage persona picker (composer). Selecting one scans it server-side; a clean
@@ -8170,7 +8170,7 @@ function openSharePanel(): void {
 // P-COLLAB.10 (ADR-0196): the GUEST Join panel - paste an invite link, watch the shared session read-only.
 // A simple live transcript (replayed turns + streaming tokens) is enough for Phase 1; the host still runs
 // everything. Single instance; closes on X / backdrop / Escape (which also leaves the session).
-// ADR-0216: the guest now sees the host's THINKING + TOOL activity, not just the answer.
+// ADR-0222: the guest now sees the host's THINKING + TOOL activity, not just the answer.
 type JoinTool = { name: string; detail: string; path?: string };
 type JoinTurn = { role: string; text: string; thinking?: string; tools?: JoinTool[] };
 type JoinState = { header: import("./bridge.ts").CollabSessionHeaderView | null; turns: JoinTurn[]; pending: string; pendingThinking: string; pendingTools: JoinTool[]; participants: number; note: string | null; readOnly: boolean };
@@ -8197,7 +8197,7 @@ function openJoinPanel(): void {
     <div class="share-field"><input id="joinLink" class="share-link-input" type="text" placeholder="wss://relay…/r/room.secret  (or paste the link you were sent)" spellcheck="false" /></div>
     <div id="joinErr" class="modal-err" hidden></div>
     <div class="modal-actions"><button class="btn-mini ok" data-join-connect>${icon("eye", 12)} Connect</button></div>`;
-  // ADR-0216: render the host's activity - a collapsible thinking block + compact tool-call chips, then the answer.
+  // ADR-0222: render the host's activity - a collapsible thinking block + compact tool-call chips, then the answer.
   const toolLine = (t: JoinTool) => `<div class="join-tool">${icon("command", 11)} <b>${esc(t.name)}</b>${t.path ? ` <span class="join-tool-path">${esc(t.path)}</span>` : (t.detail ? ` <span class="join-tool-detail">${esc(t.detail.slice(0, 90))}</span>` : "")}</div>`;
   const thinkBlock = (think: string, live: boolean) => think.trim() ? `<details class="join-think"${live ? " open" : ""}><summary>${icon("brain", 11)} thinking</summary><div class="join-think-body">${esc(think)}</div></details>` : "";
   const assistantBody = (text: string, thinking: string | undefined, tools: JoinTool[] | undefined, live: boolean) =>
@@ -8223,7 +8223,7 @@ function openJoinPanel(): void {
   };
   const renderConnect = () => { ov.querySelector(".join-modal")?.classList.remove("watching"); body.innerHTML = connectHtml(); setTimeout(() => ($("#joinLink", ov) as HTMLInputElement | null)?.focus(), 30); };
   const renderLive = () => {
-    ov.querySelector(".join-modal")?.classList.add("watching"); // ADR-0216: fill the app (thin border), reclaim padding
+    ov.querySelector(".join-modal")?.classList.add("watching"); // ADR-0222: fill the app (thin border), reclaim padding
     // Preserve what the guest is typing across the transcript re-render (events stream constantly).
     const prev = $("#joinPrompt", ov) as HTMLInputElement | null;
     const draft = prev?.value ?? ""; const wasFocused = !!prev && document.activeElement === prev;
@@ -8255,7 +8255,7 @@ function openJoinPanel(): void {
         break;
       case "event": {
         const e = f.event;
-        // ADR-0216: surface the host's live activity - thinking, tool calls, delegations, and blocks - not just
+        // ADR-0222: surface the host's live activity - thinking, tool calls, delegations, and blocks - not just
         // the final answer. Accumulated on the pending turn, then folded into the completed turn on `done`.
         if (e.type === "token") st.pending += e.text;
         else if (e.type === "thinking") st.pendingThinking += e.text;
@@ -8631,8 +8631,8 @@ function wire(): void {
   // (model / mode / thinking dropdowns are reached from the top #modelBadge picker - not duplicated here)
   $("#ctPersona")!.addEventListener("click", () => openPersonaDropdown($("#ctPersona")!));
   $("#ctSkill")!.addEventListener("click", () => openSkillDropdown($("#ctSkill")!));
-  $("#ctDataset")!.addEventListener("click", () => void openDatasetDropdown($("#ctDataset")!)); // ADR-0213
-  $("#modeToggle")!.addEventListener("click", (e) => { // ADR-0213: CUI/Search segmented toggle
+  $("#ctDataset")!.addEventListener("click", () => void openDatasetDropdown($("#ctDataset")!)); // ADR-0219
+  $("#modeToggle")!.addEventListener("click", (e) => { // ADR-0219: CUI/Search segmented toggle
     const seg = (e.target as HTMLElement).closest(".mode-seg") as HTMLElement | null;
     if (seg?.dataset.mode) void applySessionMode(seg.dataset.mode as "cui" | "search");
   });
@@ -8728,15 +8728,15 @@ function wire(): void {
       return;
     }
     if (t.closest("#wsSet")) { const v = ($("#wsPath", $("#setBody")!) as HTMLInputElement)?.value.trim(); if (v) await applyWorkspace(v); return; }
-    if (t.closest("#embSave")) { await saveEmbeddings(); return; } // ADR-0215
-    if (t.closest("#embTest")) { await testEmbeddings(); return; } // ADR-0215
-    if (t.closest("#embReindex")) { await reindexEmbeddings(); return; } // ADR-0215
+    if (t.closest("#embSave")) { await saveEmbeddings(); return; } // ADR-0221
+    if (t.closest("#embTest")) { await testEmbeddings(); return; } // ADR-0221
+    if (t.closest("#embReindex")) { await reindexEmbeddings(); return; } // ADR-0221
     if (t.closest("#wsGitPatSave")) { await saveGitPat(); return; }
     if (t.closest("#wsGitPatClear")) { await clearGitPat(); return; }
     if (t.closest("#wsClone")) {
       const url = ($("#wsCloneUrl", $("#setBody")!) as HTMLInputElement)?.value.trim();
       if (!url) return;
-      // ADR-0210: authenticate a private clone with a freshly-entered PAT (field or this-session memory) so it
+      // ADR-0216: authenticate a private clone with a freshly-entered PAT (field or this-session memory) so it
       // works before the next-launch env injection; the vault/env token is used when no inline token is given.
       const pat = (($("#wsGitPat", $("#setBody")!) as HTMLInputElement | null)?.value.trim() || sessionGitPat) || undefined;
       showToast({ title: "Cloning…", desc: "Fetching the repo - this can take a moment.", timeout: 2500 });
@@ -8811,7 +8811,7 @@ function wire(): void {
       if (state.managed?.locks?.models) return; // ADR-0068: org-locked routing - not user-toggleable
       const box = $("#asksageOnly", $("#setBody")!) as HTMLInputElement | null;
       const only = box?.checked ?? false;
-      // ADR-0211/GAP-5: lockdown routes every turn through the gov gateway, so it needs a configured AskSage
+      // ADR-0217/GAP-5: lockdown routes every turn through the gov gateway, so it needs a configured AskSage
       // key. Enabling it without one would leave no gov model to route to (a broken state the backend would
       // then fail-closed on, blocking every turn). Refuse up front and revert the checkbox.
       if (only && !state.asksage?.configured) {
@@ -9352,7 +9352,7 @@ function wire(): void {
 // ───────────────────────── palette actions ─────────────────────────
 function newSession(): void {
   seedThread(); state.liveUsage = null;
-  void bridge.newSession().then(() => loadSessionMode()); // ADR-0213: fresh session defaults to CUI under lockdown
+  void bridge.newSession().then(() => loadSessionMode()); // ADR-0219: fresh session defaults to CUI under lockdown
   renderStatus(); $("#input")?.focus();
 }
 /** Drop an omp slash command into the composer (omp runs it on send via ACP). */

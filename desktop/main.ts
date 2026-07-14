@@ -73,10 +73,10 @@ function startDevServer(): void {
   // the renderer or the agent. (A freshly-entered token is passed in the first import request; this covers
   // subsequent sessions.) Best-effort — never blocks the server start.
   const figmaEnv = prepareFigmaToken();
-  // ADR-0210: the vault-backed git PAT (ref "git_pat"), injected as LUCID_GIT_PAT so cloneRepo can authenticate
+  // ADR-0216: the vault-backed git PAT (ref "git_pat"), injected as LUCID_GIT_PAT so cloneRepo can authenticate
   // a PRIVATE clone from the Settings button - the same vault→env-into-dev-child path as Figma/Local Providers.
   const gitEnv = prepareGitToken();
-  const embeddingsEnv = prepareEmbeddingsToken(); // ADR-0215: vault→env for the embeddings endpoint key
+  const embeddingsEnv = prepareEmbeddingsToken(); // ADR-0221: vault→env for the embeddings endpoint key
   dev = spawn(findBun(), ["run", "desktop/dev.ts"], {
     cwd: REPO,
     env: { ...process.env, ...runtimeEnv, ...lpEnv, ...figmaEnv, ...gitEnv, ...embeddingsEnv, PORT: String(PORT) },
@@ -214,7 +214,7 @@ function prepareFigmaToken(): Record<string, string> {
     return tok ? { LUCID_FIGMA_TOKEN: tok } : {};
   } catch { return {}; }
 }
-// ADR-0210: read the git personal access token from the vault (ref "git_pat") and expose it to the dev child as
+// ADR-0216: read the git personal access token from the vault (ref "git_pat") and expose it to the dev child as
 // LUCID_GIT_PAT, so cloneRepo can clone a PRIVATE repo from the Settings "Clone" button without an interactive
 // credential prompt. The secret never reaches the renderer or the agent. (A freshly-entered PAT is also passed
 // inline on the first clone request; this covers subsequent sessions.) Best-effort — never blocks server start.
@@ -225,7 +225,7 @@ function prepareGitToken(): Record<string, string> {
     return tok ? { LUCID_GIT_PAT: tok } : {};
   } catch { return {}; }
 }
-// ADR-0215: read the embeddings endpoint's API key from the vault (ref = settings.embeddings.vaultRef) and expose
+// ADR-0221: read the embeddings endpoint's API key from the vault (ref = settings.embeddings.vaultRef) and expose
 // it to the dev child as LUCID_EMBEDDINGS_KEY, so the ApiEmbedder can authenticate a cloud endpoint (OpenAI/Azure)
 // without the secret reaching the renderer. A local no-auth Ollama needs no key. Best-effort — never blocks start.
 function prepareEmbeddingsToken(): Record<string, string> {

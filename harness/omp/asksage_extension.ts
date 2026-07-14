@@ -46,7 +46,7 @@ interface ModelSpec {
 const OPENAI_MODELS: ModelSpec[] = [
   // GPT-5.6 family (added 2026-07). The gateway exposes THREE tier codenames, confirmed live against
   // `/openai/v1/models` + a real `/query` (each replied 200): `gpt-5.6-luna` (mid tier — the RAG default),
-  // `gpt-5.6-sol`, `gpt-5.6-terra`. There is no bare `gpt-5.6` id. Recheck the set each release (ADR-0209
+  // `gpt-5.6-sol`, `gpt-5.6-terra`. There is no bare `gpt-5.6` id. Recheck the set each release (ADR-0215
   // scopes a live fetch so this list stops needing hand-maintenance).
   { id: "gpt-5.6-luna", name: "GPT-5.6 Luna · AskSage Gov", reasoning: true, contextWindow: 256_000, maxTokens: 32_000 },
   { id: "gpt-5.6-sol", name: "GPT-5.6 Sol · AskSage Gov", reasoning: true, contextWindow: 256_000, maxTokens: 32_000 },

@@ -683,10 +683,10 @@ export interface LucidBridge {
   // Third-party / non-U.S. / custom "More providers" acknowledgement gate (mirrors chinaAck).
   thirdPartyAck(): Promise<{ acknowledged: boolean } | null>;
   setThirdPartyAck(acknowledge: boolean): Promise<{ acknowledged: boolean } | null>;
-  // ADR-0213: per chat-session CUI vs Search mode (defaults to the ACTIVE session when no id is given).
+  // ADR-0219: per chat-session CUI vs Search mode (defaults to the ACTIVE session when no id is given).
   sessionMode(id?: string): Promise<{ id: string; mode: "cui" | "search" } | null>;
   setSessionMode(mode: "cui" | "search", id?: string): Promise<{ id: string; mode: "cui" | "search" } | null>;
-  // ADR-0215: BYO-embeddings config for semantic knowledge search.
+  // ADR-0221: BYO-embeddings config for semantic knowledge search.
   embeddingsConfig(): Promise<{ config: EmbeddingsConfigView | null; active: boolean } | null>;
   setEmbeddingsConfig(config: EmbeddingsConfigView | null): Promise<{ config: EmbeddingsConfigView | null; active: boolean; error?: string } | null>;
   embeddingsTest(input: { baseUrl: string; model: string; authKind: string; headerName?: string; secret?: string }): Promise<{ ok: boolean; dim?: number; error?: string } | null>;
@@ -747,7 +747,7 @@ export interface LucidBridge {
   // workspace (folder the agent works in; local or cloned remote)
   workspace(): Promise<WorkspaceInfo | null>;
   setWorkspace(path: string): Promise<WorkspaceInfo | null>;
-  cloneWorkspace(url: string, pat?: string): Promise<WorkspaceInfo | null>; // pat: optional inline git token (ADR-0210)
+  cloneWorkspace(url: string, pat?: string): Promise<WorkspaceInfo | null>; // pat: optional inline git token (ADR-0216)
   pickFolder(): Promise<string | null>; // native dialog in Electron; null in browser
   // P-NETWL.1 (ADR-0106): native FILE picker + OS-encrypted credential vault. All Electron-only; in a plain
   // browser pickFile/credList resolve null/[] and credStore reports the vault as unavailable (fail-closed).
@@ -803,7 +803,7 @@ export interface LucidBridge {
 /** Non-secret metadata about a vault credential (P-NETWL.1, ADR-0106). No plaintext ever crosses this line;
  *  `last4` (P-KEYS.1, ADR-0107) is at most the last 4 chars, to identify a key without revealing it. */
 export interface CredMetaView { ref: string; kind: string; label?: string; last4?: string; createdAt?: number; rotatedAt?: number; expiresAt?: number; rotationIntervalDays?: number }
-// ADR-0215: BYO-embeddings config (non-secret; the key lives in the vault behind vaultRef).
+// ADR-0221: BYO-embeddings config (non-secret; the key lives in the vault behind vaultRef).
 export interface EmbeddingsConfigView { enabled: boolean; baseUrl: string; model: string; dim: number; authKind: "none" | "bearer" | "apikey"; headerName?: string; vaultRef?: string }
 
 /** The egress posture (P-NETWL.5, ADR-0108): the two pre-checked toggles + whether an enterprise policy locks them. */
@@ -1153,9 +1153,9 @@ export const bridge: LucidBridge = {
   setChinaAck: (acknowledge) => post("/api/china-ack", { acknowledge }),
   thirdPartyAck: () => getData("/api/thirdparty-ack"),
   setThirdPartyAck: (acknowledge) => post("/api/thirdparty-ack", { acknowledge }),
-  sessionMode: (id) => getData(id ? `/api/session-mode?id=${encodeURIComponent(id)}` : "/api/session-mode"), // ADR-0213
+  sessionMode: (id) => getData(id ? `/api/session-mode?id=${encodeURIComponent(id)}` : "/api/session-mode"), // ADR-0219
   setSessionMode: (mode, id) => post("/api/session-mode", { mode, ...(id ? { id } : {}) }),
-  embeddingsConfig: () => getData("/api/embeddings-config"), // ADR-0215
+  embeddingsConfig: () => getData("/api/embeddings-config"), // ADR-0221
   setEmbeddingsConfig: (config) => post("/api/embeddings-config", { config }),
   embeddingsTest: (input) => post("/api/embeddings/test", input),
   embeddingsReindex: () => post("/api/embeddings/reindex", {}),

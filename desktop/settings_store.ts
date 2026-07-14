@@ -62,11 +62,11 @@ export interface GuiSettings {
   // itself lives in `keys.ASKSAGE_API_KEY` like any other provider key.
   asksageBaseUrl?: string;
   asksageOnly?: boolean;
-  // ADR-0213: per chat-session CUI vs Search mode. Under lockdown, a "cui" session blocks ALL public egress
+  // ADR-0219: per chat-session CUI vs Search mode. Under lockdown, a "cui" session blocks ALL public egress
   // (spillage protection); a "search" session allows web search (the user affirmed no CUI datasets). Absent/
   // unknown ⇒ "cui" (fail-closed). Keyed by omp session id; pruned to a bounded size.
   sessionModes?: Record<string, "cui" | "search">;
-  // ADR-0215: bring-your-own-embeddings config for SEMANTIC knowledge search (non-AskSage RAG increment 2).
+  // ADR-0221: bring-your-own-embeddings config for SEMANTIC knowledge search (non-AskSage RAG increment 2).
   // Non-secret (baseUrl/model/dim/auth); the token lives in the OS vault behind `vaultRef` and is injected into
   // the dev child env by main as LUCID_EMBEDDINGS_KEY (the Figma/git-PAT vault→env pattern). Off ⇒ lexical only.
   embeddings?: { enabled: boolean; baseUrl: string; model: string; dim: number; authKind: "none" | "bearer" | "apikey"; headerName?: string; vaultRef?: string };
@@ -467,7 +467,7 @@ export function setLastModel(model: string): void {
 }
 /** Whether the user has set the "AskSage only" model lock (the org-managed lock is OR'd in by callers). */
 export function asksageOnly(): boolean { return !!load().asksageOnly; }
-/** ADR-0215: the stored embeddings config (non-secret), or null when semantic search was never set up. */
+/** ADR-0221: the stored embeddings config (non-secret), or null when semantic search was never set up. */
 export type StoredEmbeddingsConfig = NonNullable<GuiSettings["embeddings"]>;
 export function embeddingsConfig(): StoredEmbeddingsConfig | null { return load().embeddings ?? null; }
 /** Persist (or clear, with null) the embeddings config. The secret is NOT here - it's vaulted behind vaultRef. */
@@ -477,13 +477,13 @@ export function setEmbeddingsConfig(cfg: StoredEmbeddingsConfig | null): GuiSett
   save(s);
   return s;
 }
-/** ADR-0213: the CUI vs Search mode for a chat session. Fail-closed default "cui" (blocks egress under
+/** ADR-0219: the CUI vs Search mode for a chat session. Fail-closed default "cui" (blocks egress under
  *  lockdown) for an unknown/absent session id. */
 export function sessionMode(id: string): "cui" | "search" {
   const m = load().sessionModes?.[id];
   return m === "search" ? "search" : "cui";
 }
-/** ADR-0213: persist a session's CUI/Search mode. Prunes to the most recent ~200 entries so the map can't
+/** ADR-0219: persist a session's CUI/Search mode. Prunes to the most recent ~200 entries so the map can't
  *  grow unbounded across many sessions (order-preserving: newest write kept). */
 export function setSessionMode(id: string, mode: "cui" | "search"): GuiSettings {
   const s = load();

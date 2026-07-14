@@ -3,7 +3,7 @@
 
 // desktop/session_mode.test.ts
 //
-// ADR-0213: the per chat-session CUI vs Search mode store. The sovereignty-critical property is the
+// ADR-0219: the per chat-session CUI vs Search mode store. The sovereignty-critical property is the
 // FAIL-CLOSED default: an unknown/absent session id reads as "cui" (which makes the backend egress gate
 // block public egress). Also covers the persist roundtrip and the bounded-map pruning.
 
@@ -19,7 +19,7 @@ const { sessionMode, setSessionMode } = await import("./settings_store.ts");
 beforeEach(() => { try { rmSync(process.env.LUCID_GUI_SETTINGS_FILE!, { force: true }); } catch { /* fresh */ } });
 afterAll(() => { try { rmSync(dir, { recursive: true, force: true }); } catch { /* best-effort */ } });
 
-describe("sessionMode (ADR-0213)", () => {
+describe("sessionMode (ADR-0219)", () => {
   test("FAIL-CLOSED: an unknown session id defaults to 'cui'", () => {
     expect(sessionMode("never-seen")).toBe("cui");
     expect(sessionMode("")).toBe("cui");

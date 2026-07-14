@@ -3,7 +3,7 @@
 
 // harness/omp/knowledge_extension.test.ts
 //
-// ADR-0214: the pure response-shaping for the `knowledge_search` tool (the fetch itself is a thin wrapper).
+// ADR-0220: the pure response-shaping for the `knowledge_search` tool (the fetch itself is a thin wrapper).
 // Covers: hits pass the delimited `wrapped` block through verbatim with a cite reminder; an empty result and a
 // missing desktop URL each degrade to clear guidance so the agent never loops. Tolerates the dev server's
 // { ok, data } envelope AND a bare payload.

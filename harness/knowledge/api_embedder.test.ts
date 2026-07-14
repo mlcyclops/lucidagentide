@@ -3,7 +3,7 @@
 
 // harness/knowledge/api_embedder.test.ts
 //
-// ADR-0215: the bring-your-own-embeddings Embedder. Covers the pure helpers (URL, auth header, response parse)
+// ADR-0221: the bring-your-own-embeddings Embedder. Covers the pure helpers (URL, auth header, response parse)
 // and the embed() path with an INJECTED fetch (OpenAI shape, an out-of-order proxy, and the fail-LOUD guards
 // that stop a broken endpoint from storing garbage vectors that would poison cosine retrieval).
 

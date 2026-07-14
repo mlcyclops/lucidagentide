@@ -15,7 +15,7 @@
 import { join, dirname } from "node:path";
 import { homedir } from "node:os";
 import { KbGraphStore } from "../harness/kb/store.ts";
-import { KnowledgeStore } from "../harness/knowledge/store.ts"; // ADR-0215: the per-KG VECTOR store (semantic)
+import { KnowledgeStore } from "../harness/knowledge/store.ts"; // ADR-0221: the per-KG VECTOR store (semantic)
 import type { Embedder } from "../harness/knowledge/embedder.ts";
 import { KgRegistry, type KgEntry, type KgSourceKind } from "../harness/kb/registry.ts";
 import { ScannerClient } from "../harness/security/scanner_client.ts";
@@ -53,7 +53,7 @@ export function kbStore(kgId?: string): Promise<KbGraphStore> {
 }
 
 const vecStores = new Map<string, Promise<KnowledgeStore>>();
-/** ADR-0215: the per-KG VECTOR store for SEMANTIC search — a sibling `_vec.duckdb` beside the KG's compiled
+/** ADR-0221: the per-KG VECTOR store for SEMANTIC search — a sibling `_vec.duckdb` beside the KG's compiled
  *  graph. Opened lazily + cached (one writer per file); empty until semantic ingest writes to it. */
 export function knowledgeVectorStore(kgId?: string): Promise<KnowledgeStore> {
   const reg = kgRegistry();
@@ -65,7 +65,7 @@ export function knowledgeVectorStore(kgId?: string): Promise<KnowledgeStore> {
   if (!p) { p = KnowledgeStore.open(entry.db_path.replace(/\.duckdb$/i, "_vec.duckdb")); vecStores.set(id, p); }
   return p;
 }
-/** ADR-0215: find-or-create the KG's vector dataset matching the CURRENT embedder's model + dim. A model change
+/** ADR-0221: find-or-create the KG's vector dataset matching the CURRENT embedder's model + dim. A model change
  *  creates a NEW dataset (old vectors stay but aren't queried) so vector spaces never mix at retrieval. */
 export async function vectorDatasetFor(store: KnowledgeStore, name: string, embedder: Embedder): Promise<string> {
   const existing = (await store.listDatasets()).find((d) => d.embedding_model === embedder.id && d.dim === embedder.dim);
@@ -100,7 +100,7 @@ export function kgEntry(kgId: string): KgEntry | undefined { return kgRegistry()
 export async function closeKg(kgId: string): Promise<void> {
   const p = stores.get(kgId);
   if (p) { try { (await p).close(); } catch { /* ignore */ } stores.delete(kgId); }
-  const v = vecStores.get(kgId); // ADR-0215: also flush the sibling vector store
+  const v = vecStores.get(kgId); // ADR-0221: also flush the sibling vector store
   if (v) { try { (await v).close(); } catch { /* ignore */ } vecStores.delete(kgId); }
 }
 
@@ -122,7 +122,7 @@ export async function stopKb(): Promise<void> {
   try { scanner?.stop(); } catch { /* ignore */ }
   scanner = null;
   for (const p of stores.values()) { try { (await p).close(); } catch { /* ignore */ } }
-  for (const v of vecStores.values()) { try { (await v).close(); } catch { /* ignore */ } } // ADR-0215
+  for (const v of vecStores.values()) { try { (await v).close(); } catch { /* ignore */ } } // ADR-0221
   stores.clear();
   vecStores.clear();
   registry = null;

@@ -80,7 +80,7 @@ export function hostTokenForUrl(url: string, env: Record<string, string | undefi
     for (const n of names) { const v = env[n]; if (typeof v === "string" && v.trim()) return v.trim(); }
     return null;
   };
-  // LUCID_GIT_PAT is the vault-backed personal access token (ADR-0210) main injects at spawn - the host-agnostic
+  // LUCID_GIT_PAT is the vault-backed personal access token (ADR-0216) main injects at spawn - the host-agnostic
   // fallback after any explicit CI-style env var. Ordered last so a workflow's own GITHUB_TOKEN still wins.
   if (host === "github.com" || host.endsWith(".github.com")) return pick("GITHUB_TOKEN", "GH_TOKEN", "LUCID_GITHUB_TOKEN", "LUCID_GIT_PAT");
   if (host === "gitlab.com" || host.endsWith(".gitlab.com")) return pick("GITLAB_TOKEN", "LUCID_GITLAB_TOKEN", "LUCID_GIT_PAT");

@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// harness/knowledge/api_embedder.ts — ADR-0215 (increment 2): a "bring-your-own-embeddings" Embedder that calls
+// harness/knowledge/api_embedder.ts — ADR-0221 (increment 2): a "bring-your-own-embeddings" Embedder that calls
 // an OpenAI-COMPATIBLE `/embeddings` endpoint — the user's own OpenAI/Azure key, or a local Ollama / vLLM /
 // llama.cpp / LM Studio box (via Local Providers, ADR-0135). It drops in behind the SAME `Embedder` seam as
 // HashEmbedder/TransformersEmbedder (embedder.ts), so ingest/store/retrieve are untouched. This sidesteps the

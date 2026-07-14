@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// harness/omp/knowledge_extension.ts — ADR-0214: register an agent-callable `knowledge_search` tool so the
+// harness/omp/knowledge_extension.ts — ADR-0220: register an agent-callable `knowledge_search` tool so the
 // agent can ground answers on the user's OWN ingested knowledge base (an Obsidian vault / folders / imported
 // chat history, compiled into a concept/entity page graph — ADR-0099/0100/0205) instead of guessing. This is
 // the NON-AskSage RAG path: it works for ANY model (Claude / GPT / local), with no embeddings and no gov gateway.

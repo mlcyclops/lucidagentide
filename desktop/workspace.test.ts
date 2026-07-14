@@ -3,7 +3,7 @@
 
 // desktop/workspace.test.ts
 //
-// ADR-0208: the Settings "Clone a git repo" parity/auth fix. These cover the PURE, spawn-free helpers behind
+// ADR-0214: the Settings "Clone a git repo" parity/auth fix. These cover the PURE, spawn-free helpers behind
 // cloneRepo — the dest-name Windows quirk, host-token selection, safe header injection, and error hinting —
 // so the private-repo path can't silently regress. The actual `git clone` spawn is network/git-dependent and
 // is exercised by hand, matching how cred_vault.ts keeps its side-effecting edges out of the unit tests.
@@ -48,7 +48,7 @@ describe("hostTokenForUrl", () => {
     expect(hostTokenForUrl("https://github.com/a/b", {})).toBeNull();
     expect(hostTokenForUrl("https://github.com/a/b", { GITHUB_TOKEN: "  " })).toBeNull();
   });
-  test("ADR-0210: LUCID_GIT_PAT (vault-injected) is the host-agnostic fallback, after CI-style env vars", () => {
+  test("ADR-0216: LUCID_GIT_PAT (vault-injected) is the host-agnostic fallback, after CI-style env vars", () => {
     expect(hostTokenForUrl("https://github.com/a/b", { LUCID_GIT_PAT: "vault" })).toBe("vault");
     expect(hostTokenForUrl("https://gitlab.com/a/b", { LUCID_GIT_PAT: "vault" })).toBe("vault");
     // a workflow's own GITHUB_TOKEN still wins over the vault PAT
@@ -56,7 +56,7 @@ describe("hostTokenForUrl", () => {
   });
 });
 
-describe("resolveCloneToken (ADR-0210)", () => {
+describe("resolveCloneToken (ADR-0216)", () => {
   test("an inline override wins over env/vault, for https", () => {
     expect(resolveCloneToken("https://github.com/a/b.git", "inline", { GITHUB_TOKEN: "ci", LUCID_GIT_PAT: "vault" })).toBe("inline");
   });

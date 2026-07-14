@@ -137,7 +137,7 @@ export class KnowledgeStore {
     return Number(r?.n ?? 0);
   }
 
-  /** ADR-0215: drop all chunks in a dataset so a re-index rebuilds it cleanly (idempotent, no duplicates). */
+  /** ADR-0221: drop all chunks in a dataset so a re-index rebuilds it cleanly (idempotent, no duplicates). */
   async clearChunks(datasetId: string): Promise<void> {
     await this.db.run("DELETE FROM kb_chunks WHERE dataset_id = $1", [datasetId]);
   }

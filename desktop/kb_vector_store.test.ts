@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/kb_vector_store.test.ts — ADR-0215: the desktop's per-KG VECTOR store glue (knowledgeVectorStore +
+// desktop/kb_vector_store.test.ts — ADR-0221: the desktop's per-KG VECTOR store glue (knowledgeVectorStore +
 // vectorDatasetFor). Verified against REAL DuckDB with the offline HashEmbedder (no network): a KG's vector
 // store is a sibling file, a dataset is find-or-created to match the current embedder, and a DIFFERENT embedding
 // model gets its OWN dataset so vector spaces never mix at retrieval.
@@ -26,7 +26,7 @@ afterEach(async () => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-describe("knowledgeVectorStore + vectorDatasetFor (ADR-0215)", () => {
+describe("knowledgeVectorStore + vectorDatasetFor (ADR-0221)", () => {
   test("per-KG vector store; find-or-create a dataset matching the embedder (reuse on the second call)", async () => {
     const kg = createKg({ name: "Notes" });
     const store = await knowledgeVectorStore(kg.kg_id);

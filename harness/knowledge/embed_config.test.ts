@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// harness/knowledge/embed_config.test.ts — ADR-0215: the config→embedder resolver is fail-safe (null keeps
+// harness/knowledge/embed_config.test.ts — ADR-0221: the config→embedder resolver is fail-safe (null keeps
 // retrieval lexical) and won't build a bearer/apikey embedder without a secret.
 
 import { describe, expect, test } from "bun:test";

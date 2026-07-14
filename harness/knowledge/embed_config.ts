@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// harness/knowledge/embed_config.ts — ADR-0215 (increment 2): the PURE config → Embedder resolver. The desktop
+// harness/knowledge/embed_config.ts — ADR-0221 (increment 2): the PURE config → Embedder resolver. The desktop
 // stores an EmbeddingsConfig (baseUrl/model/dim/auth) and resolves the secret from the OS vault; this maps that
 // pair to a ready ApiEmbedder, or null when semantic search is OFF / incomplete / needs a secret it doesn't have.
 // Fail-safe (returns null, never throws) so a half-configured endpoint just leaves retrieval LEXICAL, never broken.

@@ -68,7 +68,7 @@ describe("resolveCheckerModel", () => {
   });
 });
 
-// ADR-0211: AskSage lockdown enforcement (the fail-closed model clamp).
+// ADR-0217: AskSage lockdown enforcement (the fail-closed model clamp).
 describe("isAsksageRouted", () => {
   test("matches real gov ids that carry NO 'gov' substring (the bug the old /gov/i test missed)", () => {
     expect(isAsksageRouted("asksage-openai/gpt-5.6-luna")).toBe(true);

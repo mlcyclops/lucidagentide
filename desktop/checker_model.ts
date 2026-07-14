@@ -19,13 +19,13 @@
 /** A model option as omp reports it in the `model` config (provider-prefixed value + display name). */
 export interface ModelOption { value: string; name?: string; description?: string }
 
-/** ADR-0211: a model id is "AskSage-routed" (goes through the accredited gov gateway) when omp reports it with
+/** ADR-0217: a model id is "AskSage-routed" (goes through the accredited gov gateway) when omp reports it with
  *  an `asksage` provider prefix, e.g. `asksage-openai/gpt-5.6-luna`. The sovereignty test is this substring — NOT a
  *  `/gov/i` NAME match, which real ids like `asksage-openai/gpt-5.6-luna` do not contain (the "Gov" is only in the
  *  DISPLAY name). Matches the renderer's `isGovModel`/`isAsksage` so both sides agree on the boundary. */
 export function isAsksageRouted(value: string): boolean { return /asksage/i.test(value); }
 
-/** ADR-0211: FAIL-CLOSED resolution of the model a turn MUST use under AskSage lockdown. Lock off → the current
+/** ADR-0217: FAIL-CLOSED resolution of the model a turn MUST use under AskSage lockdown. Lock off → the current
  *  model stands. Lock on → keep the current model if it's already AskSage-routed, else pick the first
  *  AskSage-routed option from the accessible list. Lock on but NO AskSage model available (lockdown enabled
  *  without a configured gateway) → { ok:false } so the caller BLOCKS the turn rather than silently routing to a
