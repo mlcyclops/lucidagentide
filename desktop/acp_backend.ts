@@ -128,6 +128,10 @@ const SLASH_CMD_EXT = join(REPO, "harness", "omp", "slash_command_extension.ts")
 // P-KG-SYM.1: registers the read-only `codegraph_query` tool. Added ONLY when the user opted in
 // (settings.codeGraphAgent) AND the file exists — so a bad/absent extension never blocks omp launch.
 const CODEGRAPH_EXT = join(REPO, "harness", "omp", "codegraph_extension.ts");
+// ADR-0214: registers the read-only `knowledge_search` tool so ANY model can ground on the user's ingested
+// knowledge base (Obsidian/folders/chat history → compiled KB). Always added when present (self-describing when
+// empty); the non-AskSage RAG path, independent of the gov gateway.
+const KNOWLEDGE_EXT = join(REPO, "harness", "omp", "knowledge_extension.ts");
 // P-TASK.3/4 (ADR-0028): config overlay that turns ON task isolation (mode: auto) so subagents
 // can run isolated and return a reviewable patch — containing the blast radius of a bad tool call.
 const ACP_CONFIG = join(REPO, "harness", "omp", "acp_config.yml");
@@ -372,13 +376,14 @@ class Backend {
         const agentBuilderArgs = existsSync(AGENT_BUILDER_EXT) ? ["-e", AGENT_BUILDER_EXT] : []; // P-AGENT.8.2: agent_builder_open
         const slashCmdArgs = existsSync(SLASH_CMD_EXT) ? ["-e", SLASH_CMD_EXT] : []; // P-CMD.1: slash_command_create
         const mcpGateArgs = existsSync(MCP_RESULT_GATE) ? ["-e", MCP_RESULT_GATE] : []; // P-MCP-GATE.1
+        const knowledgeArgs = existsSync(KNOWLEDGE_EXT) ? ["-e", KNOWLEDGE_EXT] : []; // ADR-0214: knowledge_search (non-AskSage RAG)
         // P-SANDBOX.1 (ADR-0157): the runtime execution boundary, decided at THE spawn. On Linux with
         // bwrap the whole omp process tree (bash/eval/python/pip children included) is namespaced; on
         // platforms without a backend this is the DISCLOSED passthrough - unless managed policy
         // requires isolation, in which case exec fail-closes (this.sandboxExecBlock) rather than runs
         // unisolated: the spawn still happens (chat/read tools stay useful) but every exec permission
         // is denied at the session/request_permission seam below.
-        const ompArgv = [ompBin(), "acp", "-e", GATE, ...mcpGateArgs, "-e", ASKSAGE, ...previewArgs, ...codegraphArgs, ...agentBuilderArgs, ...slashCmdArgs, ...isoCfg, "--append-system-prompt", appendedPolicy];
+        const ompArgv = [ompBin(), "acp", "-e", GATE, ...mcpGateArgs, "-e", ASKSAGE, ...previewArgs, ...codegraphArgs, ...knowledgeArgs, ...agentBuilderArgs, ...slashCmdArgs, ...isoCfg, "--append-system-prompt", appendedPolicy];
         const spawnPlan = await this.resolveSandboxPlan(ompArgv);
         const acp = new ACPClient(spawnPlan.cmd, spawnPlan.args, currentWorkspace(), spawnPlan.env);
         acp.onNotify = (method, params) => {

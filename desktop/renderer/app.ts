@@ -5829,12 +5829,40 @@ function confirmSwitchToSearch(): void {
 const tidyDataset = (d: string) => d.replace(/^user_custom_\d+_/, "").replace(/_content$/, "").replace(/[_-]+/g, " ").trim();
 function updateDatasetButton(): void {
   const btn = $("#ctDataset") as HTMLElement | null; if (!btn) return;
-  btn.hidden = !state.asksage?.configured;
-  const n = state.asksage?.datasets?.length ?? 0;
-  const span = $("#ctDatasetName", btn); if (span) span.textContent = n ? `${n} dataset${n === 1 ? "" : "s"}` : "Datasets";
-  btn.classList.toggle("on", n > 0);
+  const span = $("#ctDatasetName", btn);
+  btn.hidden = false; // ADR-0214: gov → AskSage datasets; non-gov → local Knowledge (the non-AskSage RAG entry)
+  if (state.asksage?.configured) {
+    const n = state.asksage?.datasets?.length ?? 0;
+    if (span) span.textContent = n ? `${n} dataset${n === 1 ? "" : "s"}` : "Datasets";
+    btn.classList.toggle("on", n > 0);
+    btn.setAttribute("data-tip", "Datasets|AskSage RAG datasets that ground answers. Short name shown; full name on hover.");
+  } else {
+    if (span) span.textContent = "Knowledge";
+    btn.classList.remove("on");
+    btn.setAttribute("data-tip", "Knowledge|Ground the agent on your OWN notes/docs. Add an Obsidian vault or folder; the agent searches it via knowledge_search.");
+  }
+}
+// ADR-0214: for a non-AskSage user the chip becomes "Knowledge" - the entry to local RAG (their own notes/docs
+// compiled into a KG, searched by the agent's knowledge_search tool). Routes to the existing self-contained
+// importKgFlow (add an Obsidian vault / folder) + the Knowledge panel; no new ingest/retrieval code.
+function openKnowledgeMenu(anchor: HTMLElement): void {
+  cfgClose?.();
+  const html = `<div class="cfg-sec"><div class="cfg-lbl">Knowledge <span class="cur">ground on your own notes</span></div>
+    <div class="cfg-list">
+      <div class="cfg-opt" data-kb-add><span class="tick">${icon("folder", 13)}</span><span class="nm">Add an Obsidian vault or folder…</span></div>
+      <div class="cfg-opt" data-kb-open><span class="tick">${icon("graph", 13)}</span><span class="nm">Open the Knowledge panel</span></div>
+    </div></div>
+    <div class="cfg-sec"><div class="cfg-lbl"><span class="cur">The agent searches this automatically via knowledge_search when a question needs your notes.</span></div></div>`;
+  const { node, close } = popover(anchor, html, () => { cfgClose = null; });
+  cfgClose = close;
+  node.addEventListener("click", (e) => {
+    const t = e.target as HTMLElement;
+    if (t.closest("[data-kb-add]")) { close(); void importKgFlow(); return; }
+    if (t.closest("[data-kb-open]")) { close(); openKnowledge(); return; }
+  });
 }
 async function openDatasetDropdown(anchor: HTMLElement): Promise<void> {
+  if (!state.asksage?.configured) { openKnowledgeMenu(anchor); return; } // ADR-0214: non-AskSage → local Knowledge
   cfgClose?.();
   const list = state.asksageDatasetList;
   const sel = new Set(state.asksage?.datasets ?? []);

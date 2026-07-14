@@ -514,7 +514,9 @@ const server = Bun.serve({
       // `/api/preview/serve` (iframe src) and `/api/preview/shot` (fetched by the omp subprocess, which
       // inherits a ready URL incl. the token via LUCID_PREVIEW_SHOT_URL) can't set a header, so they also
       // accept the per-launch token as a `?t=` query param — same token, still behind the H1/H2 gate above.
-      const queryTokenOk = p === "/api/preview/serve" || p === "/api/preview/shot" || p === "/api/preview/inspect" || p === "/api/preview/act";
+      // ADR-0214: /api/kb/retrieve is also called by the omp subprocess's `knowledge_search` tool (via the
+      // token'd LUCID_KB_RETRIEVE_URL it inherits), which can't set a header — accept the `?t=` token for it too.
+      const queryTokenOk = p === "/api/preview/serve" || p === "/api/preview/shot" || p === "/api/preview/inspect" || p === "/api/preview/act" || p === "/api/kb/retrieve";
       const tok = queryTokenOk ? (req.headers.get("x-lucid-token") ?? url.searchParams.get("t")) : req.headers.get("x-lucid-token");
       if (!tokenValid(tok, TOKEN)) return new Response("forbidden", { status: 403 });
     }
@@ -2243,6 +2245,9 @@ process.env.LUCID_PREVIEW_SHOT_URL = `http://127.0.0.1:${server.port}/api/previe
 process.env.LUCID_PREVIEW_INSPECT_URL = `http://127.0.0.1:${server.port}/api/preview/inspect?t=${TOKEN}`;
 // P-PREVIEW.6c (ADR-0153): preview_click / preview_type GET this (with ?action=&selector=&value=) to act.
 process.env.LUCID_PREVIEW_ACT_URL = `http://127.0.0.1:${server.port}/api/preview/act?t=${TOKEN}`;
+// ADR-0214: the `knowledge_search` tool (omp subprocess) POSTs the user's query here to ground on the local
+// compiled knowledge base. Token'd URL, same pattern as the preview tools; retrieval returns delimited untrusted DATA.
+process.env.LUCID_KB_RETRIEVE_URL = `http://127.0.0.1:${server.port}/api/kb/retrieve?t=${TOKEN}`;
 
 // Build recall once at startup — the FIRST session is created lazily on the first /api/chat (never
 // via /api/newSession), so this is what carries prior-session facts into it. Best-effort; the omp

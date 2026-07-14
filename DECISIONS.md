@@ -14562,3 +14562,65 @@ default). Untrusted RAG dataset content stays server-side under AskSage (#5 spir
 ADR-0212 (the global egress block this makes per-session), ADR-0211 (lockdown model clamp, unchanged), ADR-0014
 (the separate CUI memory compartment - distinct from this per-session CUI *chat* mode), ADR-0106/0108 (egress
 posture), ADR-0007 (AskSage RAG datasets), and CLAUDE.md invariants #1/#2/#3/#4.
+
+## ADR-0214 - `knowledge_search`: RAG grounding for non-AskSage users (increment 1)
+
+**Date:** 2026-07-14
+**Status:** Accepted - BUILT (increment 1 of the non-AskSage RAG arc). Wires the ALREADY-BUILT local knowledge
+stack to the agent; no new store, embedder, or Python.
+**Increment:** a new `pi.registerTool` extension + a token'd URL env + one `ompArgv` line + a dual-purpose
+titlebar chip. The pure result-shaping is unit-tested.
+
+### Context
+
+AskSage users ground answers via AskSage's server-side `/query` route + Datasets. A commercial / non-AskSage
+user got NOTHING - the agent could not ground on the user's own notes/docs. Yet the whole local knowledge stack
+already exists and is desktop-wired: Obsidian-vault / folder / chat-history ingest (`/api/kb/ingest-batch`,
+`harness/kb/batch_ingest.ts`), model-compilation into a concept/entity page graph (`harness/kb/compiler.ts`), a
+named-KG registry (ADR-0205), and lexical + graph retrieval (`/api/kb/retrieve`, `harness/kb/retrieve.ts`). The
+one missing wire: retrieval was exposed ONLY as a UI query box - not as an agent tool, not injected into any
+turn - so no model ever saw it. (ADR-0053's vector/embedding spine is built but unshipped; the "too
+compute-intensive" memory was actually a WASM-packaging problem, not CPU - a separate increment 2.)
+
+### Decision - a `knowledge_search` agent tool over the existing compiled KB
+
+- **The tool** (`harness/omp/knowledge_extension.ts`): a `pi.registerTool` extension (mirrors
+  `codegraph_extension.ts`), `approval: "read"` so it never trips the exec gate. It runs in omp's subprocess, so
+  it calls back to the desktop's EXISTING `/api/kb/retrieve` via a token'd URL the desktop injects as
+  `LUCID_KB_RETRIEVE_URL` - the same env-URL pattern as the preview tools. Returns the endpoint's `wrapped`
+  field (delimited, cited UNTRUSTED data). Empty/absent → guidance ("add an Obsidian vault or folder"), never a
+  loop. Fully wrapped: any failure = graceful text; older omp = tool simply absent.
+- **The wire:** `desktop/dev.ts` sets the token'd `LUCID_KB_RETRIEVE_URL` and adds `/api/kb/retrieve` to the
+  `queryTokenOk` set so the subprocess (which can't set a header) can use `?t=` - purely additive, the
+  renderer's header-authenticated call is unchanged. `desktop/acp_backend.ts` registers the extension in
+  `ompArgv` (always when present; self-describing when the KB is empty) - NOT gated behind AskSage, so it's the
+  non-AskSage grounding path, working for any model (Claude/GPT/local).
+- **Discovery UI:** the titlebar Datasets chip (ADR-0213) is dual-purposed - when AskSage is NOT configured it
+  becomes "Knowledge", opening a small menu: "Add an Obsidian vault or folder" (routes to the existing
+  self-contained `importKgFlow`) + "Open the Knowledge panel" (`openKnowledge`), with a note that the agent
+  searches it via `knowledge_search`. No new ingest/retrieval code.
+
+### Invariants preserved
+
+Retrieved text is delimited UNTRUSTED (`wrapKnowledge`) entering only the tool-result tail, never the frozen
+prefix (#5/#6); compiled pages were scanned fail-closed at ingest and written `untrusted`, never auto-`trusted`
+(keystone #2) - the tool mints no trust, it's PURE READ. `approval: "read"` keeps it out of the exec gate;
+token-gating closes the one new surface. Extend-not-fork (#1): a `registerTool` extension, no omp fork. No
+Python (#2).
+
+### Scope / follow-ups
+
+- **Increment 2 (semantic):** wire the built-but-unshipped vector store (`harness/knowledge/store.ts`) + an
+  `ApiEmbedder` behind the `Embedder` seam (`harness/knowledge/embedder.ts`) calling the user's OWN OpenAI key
+  or a local Ollama/vLLM via Local Providers (ADR-0135) `/embeddings` - true semantic search, still no WASM
+  bundling; then `mode:"hybrid"`.
+- **Addon (private repo):** live API connectors (Notion API, Confluence, SharePoint/OneDrive, Google Drive) and
+  a shared/managed vector DB (pgvector/Qdrant) - embed once server-side (the real "move compute off the
+  workstation" answer). Public repo keeps export-based connectors (Obsidian, folders, Notion export).
+
+### Relates to
+
+ADR-0099/0100 (compiled KB + retrieval router this exposes), ADR-0205 (KG registry / packs - the ingest+source
+model), ADR-0053/0058/0063 (the vector spine reserved for increment 2), ADR-0153 (preview tools - the token'd
+env-URL callback pattern), ADR-0135 (Local Providers - the increment-2 embeddings endpoint), and CLAUDE.md
+invariants #1/#2/#5/#6 + keystone #2.
