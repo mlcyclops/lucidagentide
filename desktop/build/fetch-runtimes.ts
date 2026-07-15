@@ -264,6 +264,20 @@ for (const spec of specs) {
 	console.log(`runtimes: ${spec.name} ok (sha256 verified)`);
 }
 
+// omp's `.bin/omp` shim is a bun launcher whose `.bunx` shells out to a PLAIN `bun` on PATH — but the
+// bundled binary is name-suffixed (`bun-<plat>-<arch>`). On a machine with no global bun (the whole point
+// of an air-gap bundle) the shim can't find it → "bun is not installed in %PATH%" → omp never starts, so
+// there's no model list AND no OAuth. Emit a plain `bun[.exe]` alongside the suffixed one (same dir →
+// runtime.ts puts it on PATH). Runs even when the suffixed bun was cached, so a rebuild self-heals.
+if (!REFRESH) {
+	const suffixedBun = SPECS.find((s) => s.platform === TARGET && s.name.startsWith("bun-"));
+	if (suffixedBun) {
+		const src = join(OUT, suffixedBun.name);
+		const plain = join(OUT, `bun${TARGET === "win32" ? ".exe" : ""}`);
+		if (existsSync(src) && !existsSync(plain)) { cpSync(src, plain); chmodSync(plain, 0o755); console.log(`runtimes: bun (plain alias for the omp shim)`); }
+	}
+}
+
 console.log(
 	REFRESH
 		? "runtimes: refresh done — paste the printed hashes into SPECS + cross-check vs vendor checksums."

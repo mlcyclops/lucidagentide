@@ -101,15 +101,21 @@ if (!existsSync(ompShim)) fail(`bundled omp shim missing: ${ompShim} (is node_mo
 
 const bunBin = join(res, "runtimes", `bun-${PLAT}-${ARCH}${EXE}`);
 if (!existsSync(bunBin)) fail(`bundled bun missing: ${bunBin}`);
-// Prepend ONLY the bundled bun dir — mirrors how ensureRuntimes wires PATH — so a green run proves the
-// shim reaches omp through the vendored package + bundled bun, not a system install.
-const env = { ...process.env, PATH: `${dirname(bunBin)}${PATH_SEP}${process.env.PATH ?? ""}` };
+// The omp shim (.bunx) shells out to a PLAIN `bun[.exe]` on PATH, NOT the name-suffixed bundled binary. If
+// the plain alias is missing, a box with no global bun gets "bun is not installed in %PATH%" → omp never
+// starts → no models + no OAuth. Assert the alias exists (fetch-runtimes emits it).
+const bunPlain = join(res, "runtimes", `bun${EXE}`);
+if (!existsSync(bunPlain)) fail(`plain bun alias missing: ${bunPlain} — omp's shim needs a bare "bun" on PATH (fetch-runtimes must emit it)`);
+// Run the shim with ONLY the bundled runtimes dir up front, and SCRUB any other bun from PATH, so a green
+// run proves the shim reaches omp through the BUNDLED bun — not a global one the CI/dev box happens to have.
+const scrubbed = (process.env.PATH ?? "").split(PATH_SEP).filter((d) => !existsSync(join(d, `bun${EXE}`)) || d === dirname(bunBin)).join(PATH_SEP);
+const env = { ...process.env, PATH: `${dirname(bunBin)}${PATH_SEP}${scrubbed}` };
 try {
   const out = execFileSync(ompShim, ["--version"], { env, encoding: "utf8" }).trim();
   if (!/omp\//.test(out)) fail(`omp shim ran but reported no version: "${out}"`);
-  console.log(`  omp OK offline - ${out}`);
+  console.log(`  omp OK offline (bundled bun only) - ${out}`);
 } catch (e) {
-  fail(`bundled omp shim did not launch: ${(e as Error).message}`);
+  fail(`bundled omp shim did not launch with only the bundled bun: ${(e as Error).message}`);
 }
 
 console.log("\n✓ air-gap smoke passed: omp + scanner Python resolve and run from bundled resources (no network).\n");
