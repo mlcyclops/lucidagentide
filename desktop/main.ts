@@ -108,7 +108,7 @@ function createWindow(): void {
   const iconPath = join(app.getAppPath(), "build", "icon.png");
   win = new BrowserWindow({
     width: 1320, height: 860, minWidth: 940, minHeight: 600,
-    frame: false, backgroundColor: "#0a0b0f", show: false, title: "LucidAgentIDE",
+    frame: false, backgroundColor: "#0a0b0f", show: false, title: "Lucid Agent",
     ...(existsSync(iconPath) ? { icon: iconPath } : {}),
     webPreferences: { preload: preloadPath(), contextIsolation: true, nodeIntegration: false },
   });
@@ -374,7 +374,7 @@ app.whenReady().then(async () => {
   // late start still recovers; this only fires when it genuinely failed to answer in time.
   if (!serverUp) {
     dialog.showErrorBox(
-      "LucidAgentIDE could not start its local engine",
+      "Lucid Agent could not start its local engine",
       `The bundled background service did not respond on port ${PORT} within 30 seconds, so the window ` +
         `may stay blank.\n\nThe engine's own startup output (including any crash message) is in:\n` +
         `${engineLogPath()}\n\nThe app will keep retrying — if it stays blank, send that log file to ` +

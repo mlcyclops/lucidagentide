@@ -227,4 +227,12 @@
 //           bundled weights), with a "Semantic search" Settings card + a Test-endpoint probe + Re-index.
 //           SHARED SESSIONS: a viewer now sees the host's THINKING + TOOL CALLS (not just the final answer),
 //           and the watch window fills the app instead of a small centered modal.
-export const APP_VERSION = "1.11.4";
+// v1.11.5 = "LUCID AGENT" RENAME + AIR-GAP-CAPABLE INSTALLER (2026-07-14, ADR-0225). The app now shows as
+//           "Lucid Agent" (shorter icon/shortcut label); the appId is UNCHANGED so auto-update + your chat
+//           history carry over. INSTALLER FIX: first launch no longer phones home. The two runtimes that used
+//           to be FETCHED on first run - the omp agent (`bun add -g`) and the scanner's Python (`uv venv`) -
+//           are now BUNDLED and resolved offline (a relocatable CPython 3.12.13, SHA-pinned/fail-closed; omp
+//           via the vendored package + bundled bun). An air-gapped host works cold, and a CI air-gap gate runs
+//           the packaged omp + scanner from bundled resources on every build so a non-self-contained installer
+//           can't ship.
+export const APP_VERSION = "1.11.5";

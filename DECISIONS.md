@@ -15040,3 +15040,74 @@ routing. No Python (#2); no fork (#1).
 
 ADR-0217 (the awaited clamp this de-blocks), ADR-0219 (CUI/DoD banners), ADR-0223 (the pack licensing), and
 CLAUDE.md invariant #3.
+
+-----
+
+## ADR-0225 - "Lucid Agent" rename + an air-gap-capable installer (bundle omp + a relocatable Python)
+
+**Date:** 2026-07-14
+**Status:** Accepted. Code landed + verified live on Windows; the packaged offline smoke test (below) is the
+remaining gate before we advertise "air-gap capable" and cut an installer.
+**Context:** Two asks. (1) The app's display name was `LucidAgentIDE` - too long for an icon label; shorten to
+**Lucid Agent**. (2) Target customers run **air-gapped** (gov / regulated, own models), so the installer must
+carry **every runtime dependency** - zero network at first run. Add-on ADR-A009 already diagnosed the two
+network holes in the OSS core (both in `desktop/runtime.ts ensureRuntimes`): omp is `bun add -g
+@oh-my-pi/pi-coding-agent`'d and the scanner interpreter is `uv venv --python 3.12`'d, **both fetched at
+runtime**. bun + uv were already bundled; omp and Python were not. On an air-gapped host, first run breaks -
+and because the scanner gate is fail-closed (invariant #3), a missing scanner means **every tool call blocks**,
+i.e. the app is unusable offline.
+
+### Decision
+
+**Rename (cosmetic, no appId change).** `desktop/package.json` `productName` + `nsis.shortcutName` →
+`Lucid Agent`; artifact names → `LucidAgent-*` (no space, keeps filenames tidy); window `title` (main.ts) and
+`<title>` (index.html) → `Lucid Agent`. **`appId` stays `com.lucidagentide.desktop`** - changing it would
+orphan installed users' auto-update channel + userData (chat history keys off it, see the chat-history-upgrade
+persistence work). Display name only.
+
+**Vendor omp (remove network hole #1).** The packaged app already ships the pinned `@oh-my-pi/pi-coding-agent`
+inside `resources/repo/node_modules`; only the executable *shim* was missing. So: (a) `desktop/package.json`
+re-includes `node_modules/.bin/omp*` (the `!node_modules/.bin/**` exclusion still drops every other dep's shim
+to stay lean); (b) `runtime.ts findOmp()` resolves that bundled shim **first** (before the legacy `bun add -g`
+`managedOmp()` location). The shim is a bun launcher with a **relative** path to the vendored package, so it
+runs with only bundled `bun` on PATH - no network. `bun add -g` remains a last-resort fallback.
+
+**Pre-provision the scanner Python (remove network hole #2).** `build/fetch-runtimes.ts` now also fetches a
+**relocatable CPython** (astral-sh/python-build-standalone, `install_only`, CPython 3.12.13 / tag 20260623) per
+platform into `runtimes/python-<plat>-<arch>/`, SHA-256-pinned + **fail-closed** exactly like bun/uv (hashes
+cross-checked against the release's published `SHA256SUMS`). `runtime.ts bundledPython()` resolves it and
+`findScannerPython()` returns it **first**, so `ensureRuntimes` **never reaches** the `uv venv` path offline.
+The sidecar has **zero pip deps** (`scanner-sidecar/pyproject.toml dependencies = []`, stdlib-only imports), so
+a bare interpreter is sufficient - no pip install, no venv, no network. `runtimes/**` already ships via
+extraResources, so the tree is bundled automatically. `tools/license_headers.ts` excludes the `runtimes/`
+segment (vendored tree, keeps its own license - never relicensed, per CLAUDE.md).
+
+### Why (alternatives rejected)
+
+- **A generated `bun cli.js` launcher for omp** - avoids the shim but reintroduces a cross-platform spawn
+  surface (Windows `.cmd` vs POSIX `sh`); the existing shim is the *same* mechanism dev already runs, so it's
+  the lower-risk vendoring.
+- **Keep `uv venv` but pre-seed a uv-managed Python** - still couples first run to uv's Python discovery;
+  bundling the interpreter and resolving it directly is simpler and provably offline.
+- **A pre-built `.venv`** - not relocatable across install paths; the standalone build is designed to relocate.
+
+### Verification (what actually ran)
+
+Live on Windows (this box): `fetch-runtimes.ts` downloaded + **SHA-verified** the Windows CPython, extracted it
+(fixing a GNU-tar `C:\`-as-`host:path` quirk by extracting from cwd with a relative archive name), and
+`python.exe --version` → `Python 3.12.13`. The **scanner runs under it fully offline**: `inspect_text` returns
+`[]` on clean text (no false positives, keystone #2) and flags both a U+200B zero-width space and a U+0430
+Cyrillic homoglyph on a dirty sample. The bundled `.bin/omp.exe` shim `findOmp()` now returns launches
+`omp/16.1.20`. `desktop` typecheck clean; license-header check green.
+
+**Remaining gate (not runnable from a dev box):** a **packaged** `electron-builder` build on each OS, installed
+on a network-denied host, launched cold - asserting no outbound calls and the scanner gate goes green. The one
+cross-platform unknown is electron-builder's handling of the POSIX `.bin/omp` **symlink** shim (Windows uses a
+real `omp.exe` + `omp.bunx`, no symlink) - verify on Linux/mac in that smoke test. Pairs with add-on ADR-A009's
+Channel B/C (internal-feed + native-package updates) for the full offline-updates story.
+
+### Relates to
+
+Add-on ADR-A009 (the offline-updates design this implements the OSS-core prerequisite of), the chat-history
+persistence work (why `appId` must not change), and CLAUDE.md invariants #1 (extend not fork), #2 (no new
+Python surface - this bundles an interpreter, adds no `.py`), #3 (fail-closed scanner is why offline matters).

@@ -134,6 +134,14 @@ jobs:
           # softprops attaches the release; don't let electron-builder also upload.
           GH_TOKEN: ""
 
+      # Air-gap gate (ADR-0225): prove the PACKAGED app is self-contained — omp + the scanner's Python
+      # resolve and RUN from bundled resources, so an air-gapped host works cold with no `bun add -g` /
+      # `uv venv` / network. Runs on the same native runner against electron-builder's *-unpacked output;
+      # fails the build (before any artifact is uploaded) if a runtime is missing or lost its exec bit.
+      - name: Air-gap smoke test (bundled runtimes resolve offline)
+        run: bun run build/airgap-smoke.ts
+        working-directory: desktop
+
       - name: Upload installers as artifacts
         uses: actions/upload-artifact@v7
         with:

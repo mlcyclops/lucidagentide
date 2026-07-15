@@ -43,6 +43,21 @@ function bundled(tool: "bun" | "uv"): string | null {
   return existsSync(p) ? p : null;
 }
 
+// --- bundled relocatable CPython for the scanner (air-gap, ADR-0225) ----------
+// When present (fetch-runtimes.ts bundled a `python-<plat>-<arch>/` tree) the scanner
+// interpreter is resolved OFFLINE — no `uv venv --python` network call on first run.
+function bundledPython(): string | null {
+  if (!app.isPackaged) return null;
+  const dir = join(process.resourcesPath, "runtimes", `python-${process.platform}-${process.arch}`);
+  const p = process.platform === "win32" ? join(dir, "python.exe") : join(dir, "bin", "python3");
+  return existsSync(p) ? p : null;
+}
+
+/** The omp CLI shim bundled inside the packaged repo's node_modules (`.bin/omp[.exe]`, a bun
+ *  shim with a RELATIVE path to the vendored `@oh-my-pi/pi-coding-agent`). Resolving this lets a
+ *  packaged install run omp with ZERO network — no `bun add -g` on first launch (air-gap, ADR-0225). */
+function bundledOmp(): string { return join(repoRoot(), "node_modules", ".bin", `omp${EXE}`); }
+
 // --- app-managed install locations (userData; writable on every OS) ----------
 function ompGlobalDir(): string { return join(app.getPath("userData"), "runtimes", "bun-global"); }
 function managedOmp(): string { return join(ompGlobalDir(), "bin", `omp${EXE}`); }
@@ -79,10 +94,12 @@ export function findUv(): string | null {
   );
 }
 export function findOmp(): string | null {
-  return firstExisting([managedOmp(), join(homedir(), ".bun", "bin", `omp${EXE}`), ...systemBins("omp")]);
+  // bundledOmp() first: a packaged install ships omp under resources/repo/node_modules, so it
+  // resolves with no network (managedOmp is the legacy `bun add -g` location, kept as a fallback).
+  return firstExisting([bundledOmp(), managedOmp(), join(homedir(), ".bun", "bin", `omp${EXE}`), ...systemBins("omp")]);
 }
 function findScannerPython(): string | null {
-  return firstExisting([venvPython(), projectVenvPython()]);
+  return bundledPython() ?? firstExisting([venvPython(), projectVenvPython()]);
 }
 
 /** True when first-run setup has real work to do (so the caller can show a
@@ -126,8 +143,10 @@ export async function ensureRuntimes(onStatus: (s: string) => void = () => {}): 
   }
   if (omp) env.LUCID_OMP_BIN = omp;
 
-  // 2) scanner Python - the sidecar has zero pip deps, so any 3.11+ interpreter
-  //    works. uv provisions one (downloading a managed Python if needed).
+  // 2) scanner Python - the sidecar has zero pip deps, so any 3.11+ interpreter works.
+  //    A packaged (esp. air-gap) build bundles a relocatable CPython (bundledPython, ADR-0225),
+  //    so findScannerPython resolves OFFLINE and the uv path below never runs. Only a dev/non-air-gap
+  //    box with no bundled Python falls through to uv, which downloads a managed Python if needed.
   let py = findScannerPython();
   if (!py) {
     const uv = findUv();
