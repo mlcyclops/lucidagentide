@@ -281,6 +281,12 @@ let codeActivityCache: { at: number; data: ReturnType<typeof codeActivity> } | n
 let sysResCache: { at: number; data: { snap: SystemSnapshot; verdict: SystemVerdict; procs: ProcGroup[] } } | null = null;
 
 function ompBin(): string {
+  // Honor the omp the Electron main process resolved (bundled shim / app-managed install) FIRST — exactly
+  // like acp_backend.ts. Without this, the OAuth broker + logout here resolved a DIFFERENT omp (a stale
+  // ~/.bun global, or none), so "Connect via OAuth" produced no sign-in URL even though the model list —
+  // which runs through acp_backend's LUCID_OMP_BIN-aware resolver — worked fine. They must use the SAME omp.
+  const fromMain = process.env.LUCID_OMP_BIN;
+  if (fromMain && existsSync(fromMain)) return fromMain;
   for (const c of [join(homedir(), ".bun", "bin", "omp.exe"), join(homedir(), ".bun", "bin", "omp")]) if (existsSync(c)) return c;
   return "omp";
 }
@@ -496,15 +502,28 @@ function startOauthBroker(oauthId: string, promptAnswer?: string): Promise<{ sta
   }).catch(() => { /* ignore */ });
   return new Promise((resolve) => {
     const dec = new TextDecoder();
-    let out = "", done = false;
-    const finish = (url: string) => { if (done) return; done = true; resolve({ started: true, url, output: out.slice(0, 600) }); };
-    // Drain stdout fully (never stop) so the broker can't block; grab the URL when it appears.
+    let out = "", err = "", done = false, ended = 0;
+    const finish = (url: string) => {
+      if (done) return; done = true;
+      if (!url && loadSettings().developerMode) {
+        // No sign-in URL surfaced — the exact failure that leaves "Connect via OAuth" with a toast but no
+        // browser. Log what we DID see so it's diagnosable (which omp, and its output on each stream).
+        console.error(`[oauth] no URL from broker for ${oauthId} via ${ompBin()} — stdout=${JSON.stringify(out.slice(0, 200))} stderr=${JSON.stringify(err.slice(0, 200))}`);
+      }
+      resolve({ started: true, url, output: (out || err).slice(0, 600) });
+    };
+    // Match a COMPLETE url (followed by whitespace) so a chunk boundary mid-URL can't resolve a truncated
+    // link; scan BOTH streams — omp prints the URL to stdout today, but tolerate a future move to stderr.
+    const scan = () => { const m = (out + "\n" + err).match(/(https?:\/\/\S+?)(?=\s)/); if (m) finish(m[1]); };
+    // Drain stdout + stderr fully (never stop) so the broker can't block on a full pipe; grab the URL when it appears.
     (async () => {
-      try { for await (const c of proc.stdout as ReadableStream<Uint8Array>) { out += dec.decode(c); const m = out.match(/https?:\/\/\S+/); if (m) finish(m[0]); } } catch { /* stream ended */ }
-      finish(""); // EOF without a URL
+      try { for await (const c of proc.stdout as ReadableStream<Uint8Array>) { out += dec.decode(c); scan(); } } catch { /* stream ended */ }
+      if (++ended === 2) finish(""); // both streams hit EOF without a URL
     })();
-    // Drain stderr too (also a finite pipe that would otherwise block the broker).
-    (async () => { try { for await (const _ of proc.stderr as ReadableStream<Uint8Array>) { /* discard */ } } catch { /* ended */ } })();
+    (async () => {
+      try { for await (const c of proc.stderr as ReadableStream<Uint8Array>) { err += dec.decode(c); scan(); } } catch { /* ended */ }
+      if (++ended === 2) finish("");
+    })();
     setTimeout(() => finish(""), 60_000); // 60s — OTP/MFA flows need time (phone unlock, SMS delay)
   });
 }
