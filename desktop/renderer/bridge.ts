@@ -809,6 +809,7 @@ export interface LucidBridge {
   canRevealPath(): boolean; // whether the native shell can reveal a folder (Electron only)
   showInFolder(path: string): Promise<boolean>; // P-FSREVEAL.1: reveal a FILE highlighted in its parent folder (Electron only; false in browser)
   canShowInFolder(): boolean; // whether the native shell can reveal a file in its folder (Electron only)
+  openExternal(url: string): Promise<boolean>; // open an http(s) URL in the OS browser (OAuth); false in browser → caller falls back to window.open
 }
 
 /** Non-secret metadata about a vault credential (P-NETWL.1, ADR-0106). No plaintext ever crosses this line;
@@ -840,6 +841,7 @@ interface NativeShell {
   setZoom?(factor: number): void;
   pickFolder?(): Promise<string | null>;
   capturePreview?(rect: { x: number; y: number; width: number; height: number }): Promise<string | null>;
+  openExternal?(url: string): Promise<boolean>;
   revealPath?(path: string): Promise<boolean>;
   showInFolder?(path: string): Promise<boolean>; // P-FSREVEAL.1: reveal a file highlighted in its parent folder
   relaunch?(): Promise<void>; // P-LOCAL.3 polish: restart the app to apply local-provider changes
@@ -1248,6 +1250,7 @@ export const bridge: LucidBridge = {
   listDir: (path) => getData(`/api/fs/list${path ? `?path=${encodeURIComponent(path)}` : ""}`),
   revealPath: (path) => (shell?.revealPath ? shell.revealPath(path) : Promise.resolve(false)),
   canRevealPath: () => !!shell?.revealPath,
+  openExternal: (url) => (shell?.openExternal ? shell.openExternal(url) : Promise.resolve(false)),
   showInFolder: (path) => (shell?.showInFolder ? shell.showInFolder(path) : Promise.resolve(false)), // P-FSREVEAL.1 (ADR-0212)
   canShowInFolder: () => !!shell?.showInFolder,
   setZoom: (f) => {

@@ -35,6 +35,9 @@ contextBridge.exposeInMainWorld("lucid", {
   credEncryptionAvailable: (): Promise<boolean> => ipcRenderer.invoke("lucid:credEncryptionAvailable"),
   // P-PREVIEW.1 (ADR-0096): capture the preview region of the window → PNG data URL (main uses capturePage).
   capturePreview: (rect: { x: number; y: number; width: number; height: number }): Promise<string | null> => ipcRenderer.invoke("lucid:capturePreview", rect),
+  // Open an external http(s) URL in the OS default browser (OAuth sign-in) — reliable path that doesn't
+  // depend on the renderer's window.open reaching setWindowOpenHandler.
+  openExternal: (url: string): Promise<boolean> => ipcRenderer.invoke("lucid:openExternal", url),
   revealPath: (path: string): Promise<boolean> => ipcRenderer.invoke("lucid:revealPath", path),
   // P-FSREVEAL.1 (ADR-0212): reveal a file highlighted in its parent folder (native file manager).
   showInFolder: (path: string): Promise<boolean> => ipcRenderer.invoke("lucid:showInFolder", path),

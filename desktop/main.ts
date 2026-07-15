@@ -297,6 +297,16 @@ ipcMain.handle("lucid:capturePreview", async (e, rect: unknown) => {
   } catch { return null; }
 });
 
+// Open an EXTERNAL http(s) URL in the user's default browser via the OS — a reliable path for the OAuth
+// sign-in page that doesn't depend on the renderer's window.open reaching setWindowOpenHandler (which can
+// silently no-op in some contexts, leaving "Connect via OAuth" with a toast but no browser). Strictly
+// http/https only, so a forged request can't launch file:// or a custom-scheme handler. Returns success.
+ipcMain.handle("lucid:openExternal", async (_e, u: unknown) => {
+  const url = typeof u === "string" ? u : "";
+  if (!/^https?:\/\//i.test(url)) return false;
+  try { await shell.openExternal(url); return true; } catch { return false; }
+});
+
 // Reveal an export location in the OS file manager (#115). Only opens a path that actually exists, so a
 // stray/forged request can't probe the filesystem. shell.openPath returns "" on success, else an error.
 ipcMain.handle("lucid:revealPath", async (_e, p: unknown) => {

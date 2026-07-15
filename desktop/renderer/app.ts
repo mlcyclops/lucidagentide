@@ -9204,7 +9204,7 @@ function wire(): void {
             const out = $("#ghCopilotOut", card) as HTMLElement | null;
             if (out) out.textContent = "Starting sign-in…";
             const rr = await bridge.oauthLogin("github-copilot", domain);
-            if (rr?.url) window.open(rr.url, "_blank");
+            if (rr?.url) void openAuthUrl(rr.url);
             // The broker prints the verification URL + the one-time code; show that text so the user can
             // read the code and type it into the opened GitHub device page. Nothing is pasted back here.
             if (out) out.textContent = (rr?.output?.trim() || "Follow the sign-in in your browser.") + "\n\nEnter the code above on the opened GitHub page. This card updates automatically once Copilot is connected.";
@@ -9217,7 +9217,7 @@ function wire(): void {
         return;
       }
       const r = await bridge.oauthLogin(oauthId);
-      if (r?.url) window.open(r.url, "_blank");
+      if (r?.url) void openAuthUrl(r.url);
       // Device-flow providers show a code on the provider's page that the user must paste back. Redirect-flow
       // providers (OpenAI, Anthropic, Google) complete silently via the localhost callback. (GitHub Copilot
       // is also device-flow but has its own two-step branch above — it isn't listed here.)
@@ -9225,8 +9225,8 @@ function wire(): void {
       if (DEVICE_FLOW_IDS.has(oauthId)) {
         showToast({
           title: "Paste the code from the sign-in page",
-          desc: "Copy the code shown in your browser, paste it below, and click Submit.",
-          actions: [{ label: "OK" }],
+          desc: "Copy the code shown in your browser, paste it below, and click Submit. If no page opened, use “Open sign-in page” below.",
+          actions: r?.url ? authUrlActions(r.url) : [{ label: "OK" }],
           timeout: 0, // persistent until dismissed
         });
         // Inject a device-code input into the provider card itself
@@ -9255,7 +9255,14 @@ function wire(): void {
           ($(`#deviceCode_${oauthId}`, card) as HTMLInputElement)?.focus();
         }
       } else {
-        showToast({ title: "OAuth started", desc: r?.url ? "Complete the sign-in in your browser, then return - the model list updates automatically." : (r?.output?.slice(0, 160) || "Follow omp's prompt in the GUI server window."), actions: [{ label: "OK" }], timeout: 6000 });
+        showToast({
+          title: "Finish signing in in your browser",
+          desc: r?.url
+            ? "A sign-in page should have opened. If it didn't, click “Open sign-in page” (or Copy URL and paste it into your browser). The model list updates automatically once you finish."
+            : (r?.output?.slice(0, 160) || "Follow omp's prompt in the GUI server window."),
+          actions: r?.url ? authUrlActions(r.url) : [{ label: "OK" }],
+          timeout: r?.url ? 0 : 6000, // persist while the user completes the browser step
+        });
       }
       setTimeout(() => void renderSettings(), 4000);
       void pollOauthThenRefresh(oauthId); // watch for completion, then refresh models
@@ -9629,6 +9636,25 @@ async function refreshModels(): Promise<void> {
   } finally {
     badge?.classList.remove("busy"); // never leave the badge stuck in a busy state
   }
+}
+
+/** Open an OAuth sign-in URL in the system browser. Prefer the Electron IPC (shell.openExternal) — reliable
+ *  and independent of the renderer's window.open reaching setWindowOpenHandler, which could silently no-op
+ *  and leave "Connect via OAuth" with a toast but no browser. Fall back to window.open (dev/browser build).
+ *  Returns whether an open was attempted. Callers ALSO surface the URL so the user can open it by hand. */
+async function openAuthUrl(url: string): Promise<boolean> {
+  if (!url) return false;
+  try { if (await bridge.openExternal(url)) return true; } catch { /* not Electron — fall through */ }
+  try { window.open(url, "_blank", "noopener"); return true; } catch { return false; }
+}
+
+/** Toast actions that let the user open the sign-in page by HAND (a real click → never popup-blocked) or
+ *  copy the URL — the safety net when the automatic open didn't surface a browser. */
+function authUrlActions(url: string): { label: string; kind?: "ok" | "danger"; run: () => void }[] {
+  return [
+    { label: "Open sign-in page", kind: "ok", run: () => void openAuthUrl(url) },
+    { label: "Copy URL", run: () => { void navigator.clipboard.writeText(url).catch(() => {}); } },
+  ];
 }
 
 /** After an OAuth login is kicked off, watch the provider's status until it flips to connected
