@@ -38,13 +38,24 @@ function findMember(root: string, member: string): string | null {
 // Pinned upstream versions — bump deliberately, then REFRESH the hashes below.
 const BUN_VERSION = "1.3.14"; // github.com/oven-sh/bun -> release tag bun-v<ver>
 const UV_VERSION = "0.11.23"; // github.com/astral-sh/uv -> release tag <ver>
+// python-build-standalone (astral-sh): a RELOCATABLE CPython we bundle so the scanner
+// interpreter is provisioned OFFLINE (air-gap, ADR-0225 / add-on ADR-A009). Without it,
+// `desktop/runtime.ts` falls back to `uv venv --python 3.12`, which DOWNLOADS a managed
+// Python on first run — impossible on an air-gapped host. The scanner has zero pip deps
+// (scanner-sidecar/pyproject.toml `dependencies = []`), so a bare interpreter suffices.
+// `install_only` archives extract to a single top-level `python/` directory.
+const PY_TAG = "20260623"; // github.com/astral-sh/python-build-standalone -> release tag
+const PY_VERSION = "3.12.13"; // CPython inside that tag (scanner requires >=3.11)
 
 interface RuntimeSpec {
 	readonly platform: "darwin" | "win32" | "linux"; // the process.platform this runtime targets
-	readonly name: string; // output name under runtimes/ — must match runtime.ts bundled()
+	readonly name: string; // output name under runtimes/ — must match runtime.ts bundled()/bundledPython()
 	readonly url: string; // exact, versioned release archive URL (never `latest`)
 	readonly kind: "zip" | "tgz";
-	readonly member: string; // executable basename inside the archive
+	// Exactly one of `member` (copy a single executable) or `tree` (copy an extracted directory,
+	// e.g. the whole relocatable Python) is set.
+	readonly member?: string; // executable basename inside the archive
+	readonly tree?: string; // directory inside the archive to copy wholesale to runtimes/<name>
 	readonly sha256: string; // expected SHA-256 of the archive (committed + vendor-cross-checked)
 }
 
@@ -52,6 +63,9 @@ const bunUrl = (slug: string): string =>
 	`https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/bun-${slug}.zip`;
 const uvUrl = (triple: string, ext: "tar.gz" | "zip" = "tar.gz"): string =>
 	`https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-${triple}.${ext}`;
+// %2B keeps the literal `+` in the asset filename (cpython-<ver>+<tag>-…) intact through the URL.
+const pyUrl = (triple: string): string =>
+	`https://github.com/astral-sh/python-build-standalone/releases/download/${PY_TAG}/cpython-${PY_VERSION}%2B${PY_TAG}-${triple}-install_only.tar.gz`;
 
 const SPECS: readonly RuntimeSpec[] = [
 	// macOS (both arches; runtime.ts picks by process.arch)
@@ -121,6 +135,41 @@ const SPECS: readonly RuntimeSpec[] = [
 		url: uvUrl("x86_64-unknown-linux-gnu"),
 		sha256: "e12c4cda2fe8c305510a78380a88f2c32a27e90cdcd123cefd2873388f0ebb5f",
 	},
+	// Relocatable CPython for the scanner (air-gap) — copy the whole extracted `python/` tree.
+	// Hashes below were cross-checked against python-build-standalone's published SHA256SUMS
+	// for release 20260623 (…/releases/download/20260623/SHA256SUMS).
+	{
+		platform: "win32",
+		name: "python-win32-x64",
+		kind: "tgz",
+		tree: "python",
+		url: pyUrl("x86_64-pc-windows-msvc"),
+		sha256: "c6af85bb83d5158c9ff71f50dfad467853d1cd236f932b144e87e26e2ea2a83e",
+	},
+	{
+		platform: "linux",
+		name: "python-linux-x64",
+		kind: "tgz",
+		tree: "python",
+		url: pyUrl("x86_64-unknown-linux-gnu"),
+		sha256: "9fa869d69be54f6b8eeae64272fbd9bb0646e0e1a8da9d80e51ba5a3bee48930",
+	},
+	{
+		platform: "darwin",
+		name: "python-darwin-arm64",
+		kind: "tgz",
+		tree: "python",
+		url: pyUrl("aarch64-apple-darwin"),
+		sha256: "3724aa4dafb5f7b6c2cf98e89914e4248dc6bd2fe40407df4a2d73de99615f16",
+	},
+	{
+		platform: "darwin",
+		name: "python-darwin-x64",
+		kind: "tgz",
+		tree: "python",
+		url: pyUrl("x86_64-apple-darwin"),
+		sha256: "7c57fdd1fa675190093700eb0d8e7117e1f9eae7c30a46dea5f8d5266bcfc791",
+	},
 ];
 
 const REFRESH = process.env.REFRESH === "1";
@@ -179,15 +228,38 @@ for (const spec of specs) {
 	if (spec.kind === "zip") {
 		await $`unzip -oq ${archive} -d ${tmp}`;
 	} else {
-		await $`tar xzf ${archive} -C ${tmp}`;
+		// Run from inside tmp with a RELATIVE archive name: a `C:\…` absolute path makes GNU tar
+		// (Git Bash) read the drive letter as a remote `host:path` ("Cannot connect to C:"). A bare
+		// `a.tgz` extracts locally under both GNU tar and Windows' bundled bsdtar.
+		await $`tar xzf a.tgz`.cwd(tmp);
 	}
-	const found = findMember(tmp, spec.member);
-	if (!found) {
-		rmSync(tmp, { recursive: true, force: true });
-		throw new Error(`fetch-runtimes: "${spec.member}" not found in ${spec.url}`);
+	if (spec.tree) {
+		// Copy a whole extracted directory (e.g. the relocatable Python) to runtimes/<name>.
+		const srcDir = join(tmp, spec.tree);
+		if (!existsSync(srcDir)) {
+			rmSync(tmp, { recursive: true, force: true });
+			throw new Error(`fetch-runtimes: directory "${spec.tree}/" not found in ${spec.url}`);
+		}
+		rmSync(dest, { recursive: true, force: true });
+		cpSync(srcDir, dest, { recursive: true });
+		// cpSync doesn't reliably carry the exec bit; restore it on the POSIX interpreters so the packaged
+		// app can spawn them (Windows executability is by extension, so this loop is a no-op there).
+		if (process.platform !== "win32") {
+			const minor = PY_VERSION.split(".").slice(0, 2).join(".");
+			for (const rel of ["bin/python3", `bin/python${minor}`]) {
+				const exe = join(dest, rel);
+				if (existsSync(exe)) chmodSync(exe, 0o755);
+			}
+		}
+	} else {
+		const found = findMember(tmp, spec.member!);
+		if (!found) {
+			rmSync(tmp, { recursive: true, force: true });
+			throw new Error(`fetch-runtimes: "${spec.member}" not found in ${spec.url}`);
+		}
+		cpSync(found, dest);
+		chmodSync(dest, 0o755);
 	}
-	cpSync(found, dest);
-	chmodSync(dest, 0o755);
 	rmSync(tmp, { recursive: true, force: true });
 	console.log(`runtimes: ${spec.name} ok (sha256 verified)`);
 }

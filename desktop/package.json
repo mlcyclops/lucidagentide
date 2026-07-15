@@ -25,7 +25,7 @@
   },
   "build": {
     "appId": "com.lucidagentide.desktop",
-    "productName": "LucidAgentIDE",
+    "productName": "Lucid Agent",
     "directories": {
       "output": "release",
       "buildResources": "build"
@@ -61,6 +61,7 @@
           "!node_modules/**/*.map",
           "!node_modules/**/*.d.ts",
           "!node_modules/.bin/**",
+          "node_modules/.bin/omp*",
           "!node_modules/onnxruntime-node/**",
           "!node_modules/onnxruntime-web/**",
           "!node_modules/date-fns/**",
@@ -72,7 +73,7 @@
       "category": "public.app-category.developer-tools",
       "icon": "build/icon.png",
       "identity": null,
-      "artifactName": "${productName}-mac-${arch}.${ext}",
+      "artifactName": "LucidAgent-mac-${arch}.${ext}",
       "target": [
         {
           "target": "zip",
@@ -113,14 +114,14 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "LucidAgentIDE",
+      "shortcutName": "Lucid Agent",
       "installerIcon": "build/icon.ico",
       "uninstallerIcon": "build/icon.ico",
       "installerHeaderIcon": "build/icon.ico",
-      "artifactName": "${productName}-Setup.${ext}"
+      "artifactName": "LucidAgent-Setup.${ext}"
     },
     "portable": {
-      "artifactName": "${productName}-portable.${ext}"
+      "artifactName": "LucidAgent-portable.${ext}"
     },
     "linux": {
       "icon": "build/icon.png",
@@ -129,7 +130,7 @@
       "vendor": "TechLead 187 LLC",
       "synopsis": "Sovereignty-aware, fail-closed AI coding IDE",
       "target": ["AppImage", "deb", "rpm"],
-      "artifactName": "${productName}-x86_64.${ext}"
+      "artifactName": "LucidAgent-x86_64.${ext}"
     },
     "deb": {
       "artifactName": "${name}_${version}_${arch}.${ext}",
