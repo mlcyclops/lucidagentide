@@ -699,6 +699,8 @@ export interface LucidBridge {
   saveKey(env: string, key: string): Promise<AuthStatus | null>;
   oauthLogin(oauthId: string, promptAnswer?: string): Promise<{ started: boolean; url: string; output: string } | null>;
   oauthLogout(oauthId: string): Promise<AuthStatus | null>;
+  /** Sign out of ALL OAuth providers at once (clears orphaned/unreachable logins too). Returns refreshed status. */
+  oauthLogoutAll(): Promise<AuthStatus | null>;
   /** Device-authorization flow: forward a code the user copied from the provider's page to the broker's stdin. */
   oauthCode(oauthId: string, code: string): Promise<{ sent: boolean; reason?: string } | null>;
   // AskSage gov gateway (ADR-0007)
@@ -1173,6 +1175,7 @@ export const bridge: LucidBridge = {
   saveKey: (env, key) => post("/api/auth/key", { env, key }),
   oauthLogin: (oauthId, promptAnswer?: string) => post("/api/auth/oauth", { oauthId, promptAnswer }),
   oauthLogout: (oauthId) => post("/api/auth/logout", { oauthId }),
+  oauthLogoutAll: () => post("/api/auth/logout-all", {}),
   oauthCode: (oauthId, code) => post("/api/auth/oauth-code", { oauthId, code }),
   asksage: () => getData("/api/asksage"),
   saveAsksage: (opts) => post("/api/asksage", opts),

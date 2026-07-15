@@ -2088,8 +2088,12 @@ function secProfile(s: { username: string; email?: string; attribution?: import(
 function secProviders(auth: import("./bridge.ts").AuthStatus | null): string {
   // Collapsible + default-collapsed (not in SET_OPEN): the AskSage gov gateway sits above this and is the
   // foregrounded path; the direct U.S. providers tuck away until needed.
-  return setCard("providers", "Providers", "U.S. frontier · key or OAuth",
-    (auth?.majors ?? []).map(provCard).join("") || `<div class="empty">couldn't read auth - is the server up to date?</div>`, true);
+  const cards = (auth?.majors ?? []).map(provCard).join("") || `<div class="empty">couldn't read auth - is the server up to date?</div>`;
+  // "Sign out of all providers" — ALWAYS available (not gated on a visible active login) so it can also clear
+  // ORPHANED OAuth logins that have no card here: a broker id with no descriptor (e.g. google-antigravity) or
+  // a key-only provider that still holds an oauth row. The reliable full reset, e.g. after a reinstall.
+  const signoutAll = `<div class="prov-signout"><button class="btn-mini danger" data-oauth-logout-all title="Delete EVERY saved OAuth login — all providers, including stale or orphaned ones. Your API keys are kept. Use this to fully reset provider logins (e.g. after reinstalling).">${icon("trash", 12)} Sign out of all providers</button></div>`;
+  return setCard("providers", "Providers", "U.S. frontier · key or OAuth", cards + signoutAll, true);
 }
 // P-IDE.1c (ADR-0029): data-sovereignty unlock for China-origin models. Renders ONLY when omp actually
 // exposes such a model (else an empty, preserved anchor). Hidden-by-default; the user must type
@@ -9259,6 +9263,25 @@ function wire(): void {
     }
     const logout = t.closest("[data-oauth-logout]") as HTMLElement | null;
     if (logout) { await bridge.oauthLogout(logout.dataset.oauthLogout!); void renderSettings(); return; }
+    const logoutAll = t.closest("[data-oauth-logout-all]") as HTMLElement | null;
+    if (logoutAll) {
+      // Destructive + reaches invisible orphaned logins, so confirm first. API keys are untouched.
+      showToast({
+        tone: "warn",
+        title: "Sign out of all providers?",
+        desc: "Deletes every saved OAuth login, including any stale or orphaned ones. Your API keys are kept — you'll just reconnect providers next time you need them.",
+        actions: [
+          { label: "Sign out of all", kind: "danger", run: () => void (async () => {
+            await bridge.oauthLogoutAll();
+            void renderSettings();
+            showToast({ tone: "ok", title: "Signed out of all providers", desc: "All OAuth logins cleared.", actions: [{ label: "OK" }], timeout: 3000 });
+          })() },
+          { label: "Cancel" },
+        ],
+        timeout: 12000,
+      });
+      return;
+    }
     if (t.closest("#saveUsername")) {
       const u = (($("#setUsername") as HTMLInputElement)?.value ?? "").trim();
       const em = (($("#setEmail") as HTMLInputElement)?.value ?? "").trim();

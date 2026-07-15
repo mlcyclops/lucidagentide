@@ -50,3 +50,47 @@ export function clearDisabledCredential(provider: string, dbPath?: string): Reen
     return { cleared: 0, reason: String((e as Error)?.message ?? e) };
   }
 }
+
+export interface DisconnectResult { removed: number; reason?: string }
+
+/** Authoritatively DISCONNECT an OAuth login: DELETE the credential row(s) for `provider`. omp's own
+ *  `auth-broker logout` only sets `disabled_cause` (a soft-disable that leaves the token blob in `data`),
+ *  and on a cold/reinstalled machine that spawn can even time out — so the Settings list keeps showing the
+ *  provider "connected". Deleting the row is the real clear: the token (in the `data` column) is gone and
+ *  `providerAuth()` — which reads this same table — reflects it immediately, regardless of omp's state. A
+ *  later "Connect via OAuth" re-creates a fresh row (and never inherits a stale `disabled_cause`). Scoped to
+ *  `credential_type='oauth'` so API-key rows are never touched. Best-effort: failures return { removed: 0 }. */
+export function disconnectCredential(provider: string, dbPath?: string): DisconnectResult {
+  const p = vaultPath(dbPath);
+  if (!provider) return { removed: 0, reason: "no provider" };
+  if (!existsSync(p)) return { removed: 0, reason: "vault not found" };
+  try {
+    const db = new Database(p); // read-write
+    try {
+      db.exec("PRAGMA busy_timeout = 2000"); // tolerate the running app holding a brief lock
+      const res = db.query("delete from auth_credentials where provider = ? and credential_type = 'oauth'").run(provider);
+      return { removed: Number(res.changes ?? 0) };
+    } finally { db.close(); }
+  } catch (e) {
+    return { removed: 0, reason: String((e as Error)?.message ?? e) };
+  }
+}
+
+/** Clear EVERY OAuth login at once — the "sign out of all providers" reset. Deletes all
+ *  `credential_type='oauth'` rows, INCLUDING orphans the per-provider Disconnect can't reach: a login whose
+ *  omp broker id has no matching Settings descriptor (e.g. `google-antigravity`), or a provider surfaced as
+ *  key-only (`canOauth:false`, e.g. a `perplexity` oauth). Never touches API-key credentials. Best-effort. */
+export function clearAllOauthCredentials(dbPath?: string): DisconnectResult {
+  const p = vaultPath(dbPath);
+  if (!existsSync(p)) return { removed: 0, reason: "vault not found" };
+  try {
+    const db = new Database(p); // read-write
+    try {
+      db.exec("PRAGMA busy_timeout = 2000");
+      const res = db.query("delete from auth_credentials where credential_type = 'oauth'").run();
+      return { removed: Number(res.changes ?? 0) };
+    } finally { db.close(); }
+  } catch (e) {
+    return { removed: 0, reason: String((e as Error)?.message ?? e) };
+  }
+}

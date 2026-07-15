@@ -50,7 +50,7 @@ import { OpenAiCompatibleSttBackend, type TranscriptionBackend } from "../harnes
 import { devSnapshot, securitySnapshot } from "../tools/web/data.ts";
 import { sandboxStatus } from "./sandbox_status.ts"; // P-SANDBOX.5 (ADR-0169)
 import { ensureNetdiagWatch, startNetdiagWatch, stopNetdiagWatch, netdiagView } from "./netdiag.ts";
-import { clearDisabledCredential } from "./auth_vault.ts";
+import { clearAllOauthCredentials, clearDisabledCredential, disconnectCredential } from "./auth_vault.ts";
 import { approveBlock, dismissBlock, liveBlocks } from "./security_log.ts";
 import { ackArtifact, ackFindings, ackView } from "./security_ack.ts"; // P-SECACK.1 (ADR-0170)
 import { deleteSteps, readTurnSteps, syncStepTurns } from "./session_steps.ts"; // P-RESUME.1 (ADR-0171)
@@ -1703,8 +1703,21 @@ const server = Bun.serve({
       }
       if (p === "/api/auth/logout" && req.method === "POST") {
         const { oauthId } = await readBody<{ oauthId?: unknown }>(req);
-        Bun.spawnSync([ompBin(), "auth-broker", "logout", String(oauthId)], { timeout: 4000 });
+        const id = String(oauthId);
+        // Best-effort omp bookkeeping (keychain/in-memory), THEN the authoritative clear: omp's logout only
+        // soft-disables and can time out on a cold/reinstalled box, leaving the row "connected". Deleting the
+        // credential row is what actually clears the login (the token lives in that row's `data`), so the
+        // Settings status reflects it regardless of whether the omp spawn succeeded.
+        Bun.spawnSync([ompBin(), "auth-broker", "logout", id], { timeout: 4000 });
+        disconnectCredential(id);
         return json({ ok: true, data: providerAuth() });
+      }
+      // "Sign out of all providers" — clears EVERY OAuth login, including orphans the per-provider Disconnect
+      // can't reach (a broker id with no Settings descriptor, or a key-only provider that still has an oauth
+      // row). The reliable post-reinstall reset. API keys are untouched.
+      if (p === "/api/auth/logout-all" && req.method === "POST") {
+        const r = clearAllOauthCredentials();
+        return json({ ok: true, data: providerAuth(), removed: r.removed });
       }
       // P-IMG.1 (ADR-0208): "Send to preview" for a chat image. Validate the image through the strict gate,
       // write a self-contained wrapper HTML (image embedded as a data: URI — allowed by the preview frame CSP)
