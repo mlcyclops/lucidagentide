@@ -15106,8 +15106,29 @@ cross-platform unknown is electron-builder's handling of the POSIX `.bin/omp` **
 real `omp.exe` + `omp.bunx`, no symlink) - verify on Linux/mac in that smoke test. Pairs with add-on ADR-A009's
 Channel B/C (internal-feed + native-package updates) for the full offline-updates story.
 
+### Correction (v1.11.6) - the rename must not move userData; keep productName, layer the label per-OS
+
+v1.11.5 shipped the rename as `productName: "Lucid Agent"` and was **PULLED before release** (marked prerelease
+so electron-updater's "latest" stayed on v1.11.4). Two regressions, both from that one change:
+
+1. **rpm build failed.** A spaced productName gave the Linux rpm an `/opt/Lucid Agent` install path; `rpmbuild`
+   rejects the space (its spec `%files` section is whitespace-delimited). deb/AppImage/NSIS/pkg tolerate spaces;
+   rpm does not.
+2. **userData would be orphaned (the serious one).** Electron keys `app.getPath("userData")` off
+   `app.getName()`, which on a packaged build is the **productName**, NOT the appId. So renaming
+   `LucidAgentIDE → Lucid Agent` moves userData to a new directory - every existing user's settings, vault, and
+   AskSage config silently left behind on upgrade. My original note here ("appId unchanged so userData carries
+   over") was WRONG: appId does not govern the userData path.
+
+**Fix (v1.11.6):** `productName` stays **`LucidAgentIDE`** - so `app.getName()`/userData and the rpm `/opt`
+path are byte-for-byte unchanged - and the "Lucid Agent" label is applied at the **display layer only**, per OS:
+Windows `nsis.shortcutName`, macOS `extendInfo.CFBundleDisplayName` (NOT CFBundleName, which would feed back
+into `app.getName()`), Linux `linux.desktop.Name`, plus the in-app window/document title. The icon label reads
+"Lucid Agent" everywhere; nothing that identifies the app to the OS (userData dir, appId, bundle name) moves.
+
 ### Relates to
 
 Add-on ADR-A009 (the offline-updates design this implements the OSS-core prerequisite of), the chat-history
-persistence work (why `appId` must not change), and CLAUDE.md invariants #1 (extend not fork), #2 (no new
-Python surface - this bundles an interpreter, adds no `.py`), #3 (fail-closed scanner is why offline matters).
+persistence work (a second data-continuity constraint alongside the userData path above), and CLAUDE.md
+invariants #1 (extend not fork), #2 (no new Python surface - this bundles an interpreter, adds no `.py`), #3
+(fail-closed scanner is why offline matters).
