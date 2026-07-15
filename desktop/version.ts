@@ -234,5 +234,12 @@
 //           are now BUNDLED and resolved offline (a relocatable CPython 3.12.13, SHA-pinned/fail-closed; omp
 //           via the vendored package + bundled bun). An air-gapped host works cold, and a CI air-gap gate runs
 //           the packaged omp + scanner from bundled resources on every build so a non-self-contained installer
-//           can't ship.
-export const APP_VERSION = "1.11.5";
+//           can't ship. (v1.11.5 was PULLED before release - see v1.11.6.)
+// v1.11.6 = fixes two regressions the v1.11.5 rename introduced (ADR-0225): (1) a spaced productName
+//           ("Lucid Agent") gave the Linux rpm an `/opt/Lucid Agent` path that rpmbuild rejects (spaces break
+//           the spec %files), and (2) more seriously, changing productName moved Electron's userData dir
+//           (app.getName()-keyed), which would ORPHAN every existing user's settings/vault on upgrade. Fix:
+//           productName stays "LucidAgentIDE" (so userData + the rpm path are unchanged) and the "Lucid Agent"
+//           label is applied per-OS at the DISPLAY layer only - Windows shortcut name, macOS
+//           CFBundleDisplayName, Linux .desktop Name - never touching app.getName()/userData.
+export const APP_VERSION = "1.11.6";

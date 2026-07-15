@@ -1,7 +1,7 @@
 {
   "name": "lucidagentide-desktop",
   "private": true,
-  "version": "1.11.5",
+  "version": "1.11.6",
   "trustedDependencies": ["electron", "@resvg/resvg-js"],
   "description": "Electron desktop shell for LucidAgentIDE + omp — gated agent chat + live security/memory dashboards.",
   "homepage": "https://github.com/mlcyclops/lucidagentide",
@@ -25,7 +25,7 @@
   },
   "build": {
     "appId": "com.lucidagentide.desktop",
-    "productName": "Lucid Agent",
+    "productName": "LucidAgentIDE",
     "directories": {
       "output": "release",
       "buildResources": "build"
@@ -74,6 +74,9 @@
       "icon": "build/icon.png",
       "identity": null,
       "artifactName": "LucidAgent-mac-${arch}.${ext}",
+      "extendInfo": {
+        "CFBundleDisplayName": "Lucid Agent"
+      },
       "target": [
         {
           "target": "zip",
@@ -125,6 +128,9 @@
     },
     "linux": {
       "icon": "build/icon.png",
+      "desktop": {
+        "Name": "Lucid Agent"
+      },
       "category": "Development",
       "maintainer": "TechLead 187 LLC <support@lucidagentide.com>",
       "vendor": "TechLead 187 LLC",
