@@ -7,7 +7,7 @@
 // GPT) and the gateway-prefix robustness are the easy things to break, so they're pinned here.
 
 import { describe, expect, it } from "bun:test";
-import { ASKSAGE_FAMILY_ORDER, cmpModelsNewestFirst, familyOf, filterModels, groupByFamily, gptVersion, isAuxiliaryModel, isChinaModel, isDeprecatedModel, isGovModel, MODEL_FAMILIES, sortGovFirstNewest, type ModelOption } from "./model_families.ts";
+import { ASKSAGE_FAMILY_ORDER, cmpModelsNewestFirst, familyOf, filterModels, groupByFamily, gptVersion, isAuxiliaryModel, isChinaModel, isDeprecatedModel, isGovModel, MODEL_FAMILIES, providerLabelOf, recommendFallbacks, sortGovFirstNewest, type ModelOption } from "./model_families.ts";
 
 describe("familyOf", () => {
   it("classifies direct Anthropic models (incl. fable) as Claude", () => {
@@ -174,5 +174,59 @@ describe("MODEL_FAMILIES integrity", () => {
   it("family ids are unique", () => {
     const ids = MODEL_FAMILIES.map((f) => f.id);
     expect(new Set(ids).size).toBe(ids.length);
+  });
+});
+
+describe("providerLabelOf", () => {
+  it("names AskSage for any gov-routed model", () => {
+    expect(providerLabelOf("asksage-openai/gpt-5.6-luna")).toBe("AskSage (gov gateway)");
+    expect(providerLabelOf("asksage-anthropic/google-claude-48-opus")).toBe("AskSage (gov gateway)");
+  });
+  it("names the direct provider for non-gov models", () => {
+    expect(providerLabelOf("claude-opus-4-8")).toBe("Anthropic");
+    expect(providerLabelOf("gpt-5.5")).toBe("OpenAI");
+    expect(providerLabelOf("gemini-2.5-pro")).toBe("Google");
+  });
+});
+
+describe("recommendFallbacks (P-NORESP.1)", () => {
+  // A realistic gov picker + one commercial model that must NEVER be recommended for a gov failure.
+  const models: ModelOption[] = [
+    { value: "asksage-openai/gpt-5.6-luna", name: "GPT-5.6 Luna · Gov" },
+    { value: "asksage-openai/gpt-5.6-sol", name: "GPT-5.6 Sol · Gov" },
+    { value: "asksage-openai/gpt-5.5", name: "GPT-5.5 · Gov" },
+    { value: "asksage-openai/gpt-5.4", name: "GPT-5.4 · Gov" },
+    { value: "asksage-anthropic/google-claude-48-opus", name: "Claude 4.8 Opus · Gov" },
+    { value: "asksage-google/google-gemini-3.1-pro-com", name: "Gemini 3.1 Pro · Gov" },
+    { value: "claude-opus-4-8", name: "Claude 4.8 Opus (commercial)" },
+  ];
+
+  it("recommends a LOWER version in the same family + a cross-provider equivalent (Claude)", () => {
+    const r = recommendFallbacks("asksage-openai/gpt-5.6-luna", models);
+    expect(r.sameFamily?.value).toBe("asksage-openai/gpt-5.5");            // lower GPT version, not a 5.6 sibling
+    expect(r.otherProvider?.value).toBe("asksage-anthropic/google-claude-48-opus"); // Claude = different pool
+  });
+
+  it("stays gov-routed — never crosses to a commercial model for a gov failure (lockdown-safe)", () => {
+    const r = recommendFallbacks("asksage-openai/gpt-5.6-luna", models);
+    expect(isGovModel(r.sameFamily!.value)).toBe(true);
+    expect(isGovModel(r.otherProvider!.value)).toBe(true);
+    expect(r.otherProvider?.value).not.toBe("claude-opus-4-8");
+  });
+
+  it("falls back to a same-family sibling when no lower version exists", () => {
+    // Only 5.6 tiers present → no lower version → the other 5.6 tier is offered.
+    const r = recommendFallbacks("asksage-openai/gpt-5.6-luna", [
+      { value: "asksage-openai/gpt-5.6-luna", name: "luna" },
+      { value: "asksage-openai/gpt-5.6-sol", name: "sol" },
+    ]);
+    expect(r.sameFamily?.value).toBe("asksage-openai/gpt-5.6-sol");
+    expect(r.otherProvider).toBeNull(); // no other family available
+  });
+
+  it("returns nulls when nothing suitable is accessible", () => {
+    const r = recommendFallbacks("gpt-5.6", [{ value: "gpt-5.6", name: "only me" }]);
+    expect(r.sameFamily).toBeNull();
+    expect(r.otherProvider).toBeNull();
   });
 });

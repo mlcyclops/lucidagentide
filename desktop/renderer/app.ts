@@ -64,7 +64,7 @@ import { webrtcLoopbackSelfTest, webrtcRelaySelfTest, webrtcP2PModuleSelfTest } 
 // direct connection" toggle runs the share peer-to-peer over WebRTC, with the relay used only to signal + fall back.
 import { startP2PHost, stopP2PHost, p2pHostActive, p2pHostStatus, teeEvent as p2pTeeEvent, teeUserTurn as p2pTeeUserTurn, startP2PGuest, stopP2PGuest, p2pGuestActive, p2pGuestSendPrompt, p2pLinkEndpoint } from "./collab_p2p.ts";
 import { formatImportLine } from "./import_progress.ts";
-import { ASKSAGE_FAMILY_ORDER, familyOf, filterModels, groupByFamily, isAuxiliaryModel, isChinaModel, isDeprecatedModel, isGovModel, sortGovFirstNewest } from "./model_families.ts";
+import { ASKSAGE_FAMILY_ORDER, familyOf, filterModels, groupByFamily, isAuxiliaryModel, isChinaModel, isDeprecatedModel, isGovModel, providerLabelOf, recommendFallbacks, sortGovFirstNewest } from "./model_families.ts";
 import { FAVS_KEY, parseFavs, starredOf, toggleFav } from "./model_favorites.ts"; // P-FAV.1 (ADR-0165)
 import { renderSandboxSection } from "./sandbox_panel.ts"; // P-SANDBOX.5 (ADR-0169)
 import { INSTALLED_SKILLS, bumpSkillUsage, bundledSkillsByUsage, isSkillEnabled, setSkillEnabled, taskProforma } from "./skills.ts";
@@ -1330,6 +1330,39 @@ function createSubagentCard(e: Extract<ChatEvent, { type: "subagent" }>): { el: 
   };
 }
 
+/** P-NORESP.1: a model returned nothing (overloaded/oversubscribed). Render a notice into the (empty)
+ *  assistant bubble that names the provider and offers concrete fallbacks — a lower model in the same
+ *  family and/or an equivalent from another provider — each one-click to switch + re-send the same prompt. */
+function renderNoResponseNotice(container: HTMLElement, model: string, stopReason?: string): void {
+  const opts = ((state.config.find((c) => c.id === "model")?.options ?? []) as { value: string; name?: string }[])
+    .map((o) => ({ value: String(o.value), name: String(o.name ?? o.value) }));
+  const provider = providerLabelOf(model);
+  const { sameFamily, otherProvider } = recommendFallbacks(model, opts);
+  const showOther = otherProvider && (!sameFamily || otherProvider.value !== sameFamily.value);
+  const switchBtn = (m: { value: string; name: string }, note: string) =>
+    `<button class="btn-mini ok" data-noresp-switch="${esc(m.value)}" title="Switch the model and re-send your last message">${icon("refresh", 12)} ${esc(m.name)} &amp; retry<span class="noresp-note">${esc(note)}</span></button>`;
+  const recs = [
+    sameFamily ? switchBtn(sameFamily, "lower model, same family") : "",
+    showOther ? switchBtn(otherProvider!, "another provider") : "",
+  ].filter(Boolean).join("");
+  container.innerHTML = `<div class="noresp-card">
+    <div class="noresp-h">${icon("info", 14)}<span>No response from ${esc(provider)}</span></div>
+    <div class="noresp-b"><b>${esc(modelLabel(model))}</b> returned nothing — the provider may be overloaded or oversubscribed right now${stopReason ? ` <span class="noresp-sr">(${esc(stopReason)})</span>` : ""}. Switch to another model and try again:</div>
+    ${recs ? `<div class="noresp-actions">${recs}</div>` : ""}
+    <div class="noresp-actions"><button class="btn-mini" data-noresp-pick>${icon("sliders", 12)} Pick another model…</button></div>
+  </div>`;
+  container.querySelectorAll("[data-noresp-switch]").forEach((b) => b.addEventListener("click", async () => {
+    const v = (b as HTMLElement).dataset.norespSwitch!;
+    await applyConfig("model", v); // switch the active model
+    const last = state.lastPrompt;
+    const ta = $("#input") as HTMLTextAreaElement | null;
+    if (last && ta) { ta.value = last; autosize(ta); setSendEnabled(); void send(); } // re-send the same prompt
+  }));
+  (container.querySelector("[data-noresp-pick]") as HTMLElement | null)?.addEventListener("click", () => {
+    ($("#modelBadge") as HTMLElement | null)?.click(); // open the full model picker
+  });
+}
+
 async function send(): Promise<void> {
   const ta = $("#input") as HTMLTextAreaElement;
   const text = ta.value.trim();
@@ -1473,6 +1506,7 @@ async function send(): Promise<void> {
     if (turn.tools.some((t) => t.path && (t.add != null || t.del != null))) appendRunReport(textEl, turn);
   };
   let slowNoticed = false; // P-STALL.1: the explanatory toast fires once per turn; the phase line keeps updating
+  let noResponse = false; // P-NORESP.1: the model returned nothing → the notice replaces the empty bubble
   const onEvent = (e: ChatEvent) => {
     p2pTeeEvent(e); // P-COLLAB.17: mirror the live event into a direct-P2P share, if one is hosting
     if (e.type === "token") { reasoning?.finish(Date.now() - t0); buf += e.text; countDelta(e.text); if (!sawTool) setPhase(writeLine); streamEl.innerHTML = renderMarkdown(buf) + `<span class="cursor"></span>`; paintHud(); scrollChat(); }
@@ -1522,13 +1556,21 @@ async function send(): Promise<void> {
       setPhase(slowPhaseLabel(e.waitedMs)); paintHud();
       if (!slowNoticed) { slowNoticed = true; const c = slowToastCopy(e.waitedMs, TURN_PATIENCE_MS); showToast({ tone: "warn", title: c.title, desc: c.desc, timeout: 9000 }); }
     }
-    else if (e.type === "done") { if (e.text && e.text.length > buf.length) buf = e.text; /* reconcile a lossy stream with the server's full reply */ const chipped = renderAnswerBody(streamEl, buf, marks); /* P-CHAT.A sections / P-CHAT.B chips */ (node as MsgNode)._md = buf; finishHud(); if (chipped) dropThoughtsWindow(); /* chips now carry the activity */ maybeAppendReport(); /* P-CHAT.C: settled-turn report CTA */ state.streaming = false; setSendEnabled(); clearPreviewTesting(); }
+    // P-NORESP.1: the model produced nothing (overloaded/oversubscribed). Replace the empty bubble with a
+    // clear notice + a recommended fallback the user can switch to and retry.
+    else if (e.type === "no-response") { noResponse = true; setPhase(""); renderNoResponseNotice(streamEl, e.model, e.stopReason); scrollChat(); }
+    else if (e.type === "done") {
+      if (e.text && e.text.length > buf.length) buf = e.text; /* reconcile a lossy stream with the server's full reply */
+      // Don't clobber the no-response notice with an empty answer body.
+      if (!(noResponse && !buf.trim())) { const chipped = renderAnswerBody(streamEl, buf, marks); /* P-CHAT.A sections / P-CHAT.B chips */ if (chipped) dropThoughtsWindow(); }
+      (node as MsgNode)._md = buf; finishHud(); maybeAppendReport(); /* P-CHAT.C: settled-turn report CTA */ state.streaming = false; setSendEnabled(); clearPreviewTesting();
+    }
   };
   p2pTeeUserTurn(sendText); // P-COLLAB.17: record the user turn in a direct-P2P share's replay transcript
   try { await bridge.sendPrompt(sendText, onEvent, images); }
   finally {
     (node as MsgNode)._md = buf;
-    if (state.streaming) { const chipped = renderAnswerBody(streamEl, buf, marks); /* P-CHAT.A sections / P-CHAT.B chips */ finishHud(); if (chipped) dropThoughtsWindow(); maybeAppendReport(); /* P-CHAT.C: settled-turn report CTA */ state.streaming = false; setSendEnabled(); } else { finishHud(); }
+    if (state.streaming) { if (!(noResponse && !buf.trim())) { const chipped = renderAnswerBody(streamEl, buf, marks); /* P-CHAT.A sections / P-CHAT.B chips */ if (chipped) dropThoughtsWindow(); maybeAppendReport(); /* P-CHAT.C: settled-turn report CTA */ } finishHud(); state.streaming = false; setSendEnabled(); } else { finishHud(); }
     void renderSessions(); void refreshBudget(false); void syncMode();
     scheduleKnowledgeRefresh(); // #54 follow-up: new facts appear in the open KG without close/reopen
     // P-ACP.4: the turn ended - fire off any pre-staged prompt now (the composer is idle again).

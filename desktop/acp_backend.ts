@@ -190,6 +190,9 @@ export type ChatEvent =
   | { type: "goal-stop"; reason: string }
   // P-GOAL.9 (ADR-0054): the loop's last task — an After-Action Report (metrics + portable graphs).
   | { type: "goal-report"; path: string; summary: string; markdown: string }
+  // P-NORESP.1: the model produced NOTHING (no token/thinking/tool) without erroring — a silent failure,
+  // typically an overloaded/oversubscribed gov model. The UI surfaces it + recommends a fallback model.
+  | { type: "no-response"; model: string; stopReason?: string }
   | { type: "done"; text?: string }; // text = the authoritative full assistant reply (reconciles lossy streaming)
 
 class Backend {
@@ -941,10 +944,13 @@ class Backend {
     let tFirstToken: number | null = null;
     const usage: { tokensIn?: number; costUsd?: number } = {}; // holder (mutated in the sink closure)
     let errored = false;
+    let sawOutput = false; // P-NORESP.1: did the turn emit ANY content (token / thinking / tool)?
+    let lastStopReason: string | undefined; // omp's stopReason — extra signal for a silent empty turn
     // Only learnable assistant text accrues to `assistant` (→ recordTurns + learnFromTurn). Thinking
     // and other display-only events are excluded by construction (R-04 / ADR-0054).
     const sink = (e: ChatEvent) => {
       arm();
+      if (e.type === "token" || e.type === "thinking" || e.type === "tool" || e.type === "tool-image" || e.type === "subagent") sawOutput = true;
       if (tFirstToken === null && (e.type === "token" || e.type === "thinking")) tFirstToken = Date.now();
       else if (e.type === "usage") { usage.tokensIn = e.used; usage.costUsd = e.cost; }
       if (isLearnableAssistantText(e)) assistant += e.text;
@@ -990,6 +996,7 @@ class Backend {
       ]);
       // P-GOAL-DIAG.1 (ADR-0074): the omp turn's stopReason tells us WHY a maker turn ended (e.g. an
       // empty/early end on a thinking-heavy Claude turn) — invaluable for the model-specific loop bug.
+      lastStopReason = promptRes?.stopReason ? String(promptRes.stopReason) : undefined;
       this.turnDiag(`prompt.resolved session=${this.sessionId} chars=${assistant.length} stopReason=${promptRes?.stopReason ?? "?"} enqueueErr=${enqueueErr} listenerIntact=${this.listener === sink}`);
     } catch (e) {
       errored = true; // P-EVAL.2: a stall/disconnect makes this turn's latency sample ok=false
@@ -1007,6 +1014,14 @@ class Backend {
       endStepTurn(this.sessionId); // P-RESUME.1: persist the buffered thinking for this turn
     }
     this.listener = null;
+    // P-NORESP.1: the turn ended WITHOUT erroring but produced NO content at all (no token/thinking/tool) —
+    // the model returned nothing. This is the silent failure users hit on an overloaded/oversubscribed gov
+    // model (e.g. GPT-5.6 on the shared AskSage pool). Surface it so the UI can tell the user + recommend a
+    // fallback model, instead of an empty bubble. (A deliberate lockdown block already printed its reason.)
+    if (!errored && !sawOutput && !lockBlocked) {
+      this.turnDiag(`prompt.no-response session=${this.sessionId} model=${this.activeModel()} stopReason=${lastStopReason ?? "?"}`);
+      onEvent({ type: "no-response", model: this.activeModel(), stopReason: lastStopReason });
+    }
     // Carry the FULL accumulated reply on `done` so the UI can reconcile a lossy live stream (if some
     // token chunks didn't reach the browser, the turn still renders the complete final answer on settle).
     onEvent({ type: "done", text: assistant });

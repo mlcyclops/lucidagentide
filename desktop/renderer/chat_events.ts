@@ -35,4 +35,7 @@ export type ChatEvent =
   | { type: "goal-stop"; reason: string }
   // P-GOAL.9 (ADR-0054): the loop's last task - an After-Action Report (metrics + portable graphs).
   | { type: "goal-report"; path: string; summary: string; markdown: string }
+  // P-NORESP.1: the model returned NOTHING (no token, thinking, or tool) without erroring — a silent
+  // failure, typically an overloaded/oversubscribed gov model. `model` is the id that produced nothing.
+  | { type: "no-response"; model: string; stopReason?: string }
   | { type: "done"; text?: string }; // text = the authoritative full assistant reply (reconciles lossy streaming)

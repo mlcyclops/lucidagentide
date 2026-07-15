@@ -122,3 +122,49 @@ export function groupByFamily(models: ModelOption[], order?: string[]): { fam: M
 /** Family order when the AskSage gov gateway is configured: GPT + o-series + Gemini ABOVE Claude
  *  (the gov gateway's OpenAI/Google models are the user's primary surface in that mode). */
 export const ASKSAGE_FAMILY_ORDER = ["gpt-o", "gpt", "gemini", "claude", "rag", "other"];
+
+// ── P-NORESP.1: fallback recommendation when a model returns nothing (overloaded) ────────────
+/** A human label for the PROVIDER behind a model id — for a "no response from X" message. */
+export function providerLabelOf(value: string): string {
+  if (isGovModel(value)) return "AskSage (gov gateway)";
+  const v = value.toLowerCase();
+  if (/claude|fable/.test(v)) return "Anthropic";
+  if (/gemini/.test(v)) return "Google";
+  if (/gpt|(^|[-/])o\d|openai/.test(v)) return "OpenAI";
+  return "the provider";
+}
+
+export interface FallbackRecs { sameFamily: ModelOption | null; otherProvider: ModelOption | null }
+
+/** When `failed` returned nothing (likely overloaded), recommend fallbacks from the user's ACCESSIBLE
+ *  list, matching the failed model's gov-ness (so a lockdown session stays gov-routed):
+ *   • sameFamily   — a LOWER version in the same family (GPT-5.6 → 5.5), else any sibling; non-deprecated first.
+ *   • otherProvider— an equivalent from a DIFFERENT provider (Claude preferred: a separate GPU pool).
+ *  Either may be null if nothing suitable is accessible. Pure + unit-tested. */
+export function recommendFallbacks(failed: string, models: ModelOption[]): FallbackRecs {
+  const fam = familyOf(failed).id;
+  const gov = isGovModel(failed);
+  const fv = gptVersion(failed);
+  const pool = models.filter((m) => m.value !== failed && isGovModel(m.value) === gov && !isAuxiliaryModel(m.value));
+  const pickPreferFresh = (list: ModelOption[]): ModelOption | null =>
+    list.find((m) => !isDeprecatedModel(m.value)) ?? list[0] ?? null;
+
+  const sameFamAll = pool.filter((m) => familyOf(m.value).id === fam);
+  let sameFamily: ModelOption | null = null;
+  if (fv !== null) {
+    const lower = sameFamAll
+      .filter((m) => { const v = gptVersion(m.value); return v !== null && v < fv; })
+      .sort((a, b) => cmpModelsNewestFirst(a.value, b.value)); // highest lower version first
+    sameFamily = pickPreferFresh(lower);
+  }
+  if (!sameFamily) sameFamily = pickPreferFresh(sameFamAll.slice().sort((a, b) => cmpModelsNewestFirst(a.value, b.value)));
+
+  const cross = pool
+    .filter((m) => familyOf(m.value).id !== fam)
+    .sort((a, b) => {
+      const ca = familyOf(a.value).id === "claude" ? 0 : 1, cb = familyOf(b.value).id === "claude" ? 0 : 1;
+      return ca - cb || cmpModelsNewestFirst(a.value, b.value); // Claude first (different pool), then newest
+    });
+  const otherProvider = pickPreferFresh(cross);
+  return { sameFamily, otherProvider };
+}
