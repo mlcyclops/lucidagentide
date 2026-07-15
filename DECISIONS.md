@@ -14958,3 +14958,51 @@ frames - it mints nothing and drives nothing except through the existing host-ap
 ### Relates to
 
 ADR-0192/0196 (P-COLLAB share-session + the guest Join panel this improves), and CLAUDE.md invariant #1.
+
+## ADR-0223 - Turn ON the KG-pack marketplace in the client (completes P-KGMARKET, ADR-0206)
+
+**Date:** 2026-07-14
+**Status:** Accepted - BUILT (client switch). Enables the already-built Stripe/Firebase entitlement flow; the
+backend deploy (functions + Stripe prices + pack upload + hosted sign-in) is an OPS step, not code.
+**Increment:** `desktop/market_config.ts` (pure, tested) + a one-line `preload.ts` expose. No frozen contract.
+
+### Context
+
+The whole marketplace was built but DARK. The client (fail-closed entitlement gate `decidePackAction`, the
+Firebase provider calling `createCheckout`/`getEntitlement`/`getPackDownload`, the `lucid://auth` sign-in, and
+the download→unzip→re-scan→gated-install) is done and tested. The backend is ALSO done in the private addon repo
+(`entitlements/functions`: `createCheckout`, `stripeWebhook`, `getEntitlement`, `getPackDownload`,
+`grantEntitlement`; project `lucid-agent`, us-central1; a Stripe price `lookupKey` + private-bucket `object` per
+pack; idempotent webhook). The callable names + the 5 storefront pack ids match the functions catalog exactly.
+The ONE missing wire: `market_boot.ts` reads `globalThis.__LUCID_MARKET__`, and NOTHING set it - so
+`chooseMarketMode({})` → "off" → the nullProvider → `getPackFlow` hits `if (!prov.configured()) open(pack.url)`
+and the pack opened the product web page (`lucid-agent.web.app`, or `aiworkshopapps.com` in the addon build)
+instead of Stripe.
+
+### Decision
+
+`desktop/market_config.ts` builds the boot config; `preload.ts` exposes it to the renderer's main world as
+`__LUCID_MARKET__` (contextBridge; a plain browser build has no preload, so it stays "off", unchanged).
+Default = **firebase** at the official (PUBLIC) endpoints - the Stripe keys + pack files stay server-side, so
+nothing secret ships (the same posture as the already-hardcoded `KG_PACKS_URL`). Env knobs:
+`LUCID_MARKET_MODE=off` reverts to the storefront hint; `=stub` runs the offline dev stub;
+`LUCID_MARKET_FUNCTIONS_URL` / `LUCID_MARKET_SIGNIN_URL` override the URLs. Graceful before deploy: an
+unreachable `createCheckout` → no URL → `getPackFlow` falls back to the storefront page.
+
+### To go fully live (ops, in the private addon repo - NOT this change)
+
+`firebase deploy` the `entitlements/functions` + hosting (the `/signin` page); set the Stripe secrets
+(`STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`) in Secret Manager; create a Stripe Product+Price per pack whose
+**price lookup_key** = the catalog's (`KGP-GOVCON-OTF`, `KGP-CMMC-SUB`, …) and whose product metadata
+`pack_id` = the storefront id; register the webhook endpoint; upload each signed `.lkgpack.zip`
+(`tools/build_kg_pack.ts`) to `gs://lucid-agent-packs/packs/<id>.lkgpack.zip`.
+
+### Invariants preserved
+
+Fail-closed (#3): unconfigured/unreachable stays "off"/storefront-hint; `getPackDownload` server-side gates on
+an active entitlement; the installed pack is re-scanned fail-closed before it registers (ADR-0206). No secrets
+in the app (#licensing/AGENTS): only public URLs. Pure config + preload wiring; unit-tested.
+
+### Relates to
+
+ADR-0205 (KG Packs), ADR-0206 (P-KGMARKET - the entitlement flow this turns on), and CLAUDE.md invariant #3.
