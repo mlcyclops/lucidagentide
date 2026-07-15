@@ -207,6 +207,12 @@ describe("recommendFallbacks (P-NORESP.1)", () => {
     expect(r.otherProvider?.value).toBe("asksage-anthropic/google-claude-48-opus"); // Claude = different pool
   });
 
+  it("recommends Claude 4.8 Opus (gov) when Fable 5 (gov) fails — the '48' id outranks the '5' siblings", () => {
+    const r = recommendFallbacks("asksage-anthropic/google-claude-fable-5", models);
+    expect(r.sameFamily?.value).toBe("asksage-anthropic/google-claude-48-opus"); // drop to 4.8 Opus, same family
+    expect(r.otherProvider?.value).toBe("asksage-openai/gpt-5.6-luna");           // GPT = another provider
+  });
+
   it("stays gov-routed — never crosses to a commercial model for a gov failure (lockdown-safe)", () => {
     const r = recommendFallbacks("asksage-openai/gpt-5.6-luna", models);
     expect(isGovModel(r.sameFamily!.value)).toBe(true);

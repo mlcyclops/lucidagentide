@@ -1333,7 +1333,7 @@ function createSubagentCard(e: Extract<ChatEvent, { type: "subagent" }>): { el: 
 /** P-NORESP.1: a model returned nothing (overloaded/oversubscribed). Render a notice into the (empty)
  *  assistant bubble that names the provider and offers concrete fallbacks — a lower model in the same
  *  family and/or an equivalent from another provider — each one-click to switch + re-send the same prompt. */
-function renderNoResponseNotice(container: HTMLElement, model: string, stopReason?: string): void {
+function renderNoResponseNotice(container: HTMLElement, model: string, stopReason?: string, reason?: string): void {
   const opts = ((state.config.find((c) => c.id === "model")?.options ?? []) as { value: string; name?: string }[])
     .map((o) => ({ value: String(o.value), name: String(o.name ?? o.value) }));
   const provider = providerLabelOf(model);
@@ -1345,9 +1345,13 @@ function renderNoResponseNotice(container: HTMLElement, model: string, stopReaso
     sameFamily ? switchBtn(sameFamily, "lower model, same family") : "",
     showOther ? switchBtn(otherProvider!, "another provider") : "",
   ].filter(Boolean).join("");
+  // Two flavors: an errored failure shows the actual reason; a silent empty response reads as an overload.
+  const body = reason
+    ? `<b>${esc(modelLabel(model))}</b> didn't respond <span class="noresp-sr">(${esc(reason)})</span> — the provider may be overloaded, or this model may be unavailable right now. Switch to another model and try again:`
+    : `<b>${esc(modelLabel(model))}</b> returned nothing — the provider may be overloaded or oversubscribed right now${stopReason ? ` <span class="noresp-sr">(${esc(stopReason)})</span>` : ""}. Switch to another model and try again:`;
   container.innerHTML = `<div class="noresp-card">
     <div class="noresp-h">${icon("info", 14)}<span>No response from ${esc(provider)}</span></div>
-    <div class="noresp-b"><b>${esc(modelLabel(model))}</b> returned nothing — the provider may be overloaded or oversubscribed right now${stopReason ? ` <span class="noresp-sr">(${esc(stopReason)})</span>` : ""}. Switch to another model and try again:</div>
+    <div class="noresp-b">${body}</div>
     ${recs ? `<div class="noresp-actions">${recs}</div>` : ""}
     <div class="noresp-actions"><button class="btn-mini" data-noresp-pick>${icon("sliders", 12)} Pick another model…</button></div>
   </div>`;
@@ -1558,7 +1562,7 @@ async function send(): Promise<void> {
     }
     // P-NORESP.1: the model produced nothing (overloaded/oversubscribed). Replace the empty bubble with a
     // clear notice + a recommended fallback the user can switch to and retry.
-    else if (e.type === "no-response") { noResponse = true; setPhase(""); renderNoResponseNotice(streamEl, e.model, e.stopReason); scrollChat(); }
+    else if (e.type === "no-response") { noResponse = true; setPhase(""); renderNoResponseNotice(streamEl, e.model, e.stopReason, e.reason); scrollChat(); }
     else if (e.type === "done") {
       if (e.text && e.text.length > buf.length) buf = e.text; /* reconcile a lossy stream with the server's full reply */
       // Don't clobber the no-response notice with an empty answer body.

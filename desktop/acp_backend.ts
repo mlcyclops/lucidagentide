@@ -192,7 +192,7 @@ export type ChatEvent =
   | { type: "goal-report"; path: string; summary: string; markdown: string }
   // P-NORESP.1: the model produced NOTHING (no token/thinking/tool) without erroring — a silent failure,
   // typically an overloaded/oversubscribed gov model. The UI surfaces it + recommends a fallback model.
-  | { type: "no-response"; model: string; stopReason?: string }
+  | { type: "no-response"; model: string; stopReason?: string; reason?: string }
   | { type: "done"; text?: string }; // text = the authoritative full assistant reply (reconciles lossy streaming)
 
 class Backend {
@@ -946,6 +946,7 @@ class Backend {
     let errored = false;
     let sawOutput = false; // P-NORESP.1: did the turn emit ANY content (token / thinking / tool)?
     let lastStopReason: string | undefined; // omp's stopReason — extra signal for a silent empty turn
+    let failMsg: string | undefined; // P-NORESP.1: the error message when a turn threw with no output
     // Only learnable assistant text accrues to `assistant` (→ recordTurns + learnFromTurn). Thinking
     // and other display-only events are excluded by construction (R-04 / ADR-0054).
     const sink = (e: ChatEvent) => {
@@ -1000,9 +1001,15 @@ class Backend {
       this.turnDiag(`prompt.resolved session=${this.sessionId} chars=${assistant.length} stopReason=${promptRes?.stopReason ?? "?"} enqueueErr=${enqueueErr} listenerIntact=${this.listener === sink}`);
     } catch (e) {
       errored = true; // P-EVAL.2: a stall/disconnect makes this turn's latency sample ok=false
-      this.turnDiag(`prompt.${lockBlocked ? "lockdown-blocked" : stalled ? "stalled" : "error"} session=${this.sessionId} chars=${assistant.length} enqueueErr=${enqueueErr} listenerIntact=${this.listener === sink} msg=${String((e as any)?.message ?? e).slice(0, 80)}`);
-      // ADR-0217: a lockdown block is a deliberate refusal, not a failure — surface the reason plainly.
-      onEvent({ type: "token", text: lockBlocked ? `\n[blocked: ${String((e as any)?.message ?? e)}]` : `\n[${stalled ? "stalled" : "agent unavailable"}: ${String((e as any)?.message ?? e)}]` });
+      failMsg = String((e as any)?.message ?? e);
+      this.turnDiag(`prompt.${lockBlocked ? "lockdown-blocked" : stalled ? "stalled" : "error"} session=${this.sessionId} chars=${assistant.length} enqueueErr=${enqueueErr} listenerIntact=${this.listener === sink} msg=${failMsg.slice(0, 80)}`);
+      // ADR-0217: a lockdown block is a deliberate refusal — surface it plainly (no fallback). A failure
+      // AFTER some output streamed also prints inline. But a failure with NO output at all (e.g. an
+      // overloaded gov model returning HTTP 429/5xx) is handled below by the no-response notice, which
+      // names the provider + offers a fallback model — so don't ALSO print a bare "[agent unavailable]"
+      // that would clobber that card (P-NORESP.1).
+      if (lockBlocked) onEvent({ type: "token", text: `\n[blocked: ${failMsg}]` });
+      else if (sawOutput) onEvent({ type: "token", text: `\n[${stalled ? "stalled" : "agent unavailable"}: ${failMsg}]` });
     } finally {
       if (idle) clearTimeout(idle);
       if (slow) clearTimeout(slow);
@@ -1014,13 +1021,14 @@ class Backend {
       endStepTurn(this.sessionId); // P-RESUME.1: persist the buffered thinking for this turn
     }
     this.listener = null;
-    // P-NORESP.1: the turn ended WITHOUT erroring but produced NO content at all (no token/thinking/tool) —
-    // the model returned nothing. This is the silent failure users hit on an overloaded/oversubscribed gov
-    // model (e.g. GPT-5.6 on the shared AskSage pool). Surface it so the UI can tell the user + recommend a
-    // fallback model, instead of an empty bubble. (A deliberate lockdown block already printed its reason.)
-    if (!errored && !sawOutput && !lockBlocked) {
-      this.turnDiag(`prompt.no-response session=${this.sessionId} model=${this.activeModel()} stopReason=${lastStopReason ?? "?"}`);
-      onEvent({ type: "no-response", model: this.activeModel(), stopReason: lastStopReason });
+    // P-NORESP.1: the turn produced NO content at all (no token/thinking/tool) — either a silent empty
+    // response (200 with nothing) OR a failure that threw before any output (e.g. an overloaded gov model
+    // returning HTTP 429/5xx, or Claude Fable 5 erroring). Both leave the user with nothing, so surface a
+    // notice that names the provider + recommends a fallback model. `reason` carries the error when it threw.
+    // (A deliberate lockdown block already printed its reason above and is excluded.)
+    if (!sawOutput && !lockBlocked) {
+      this.turnDiag(`prompt.no-response session=${this.sessionId} model=${this.activeModel()} stopReason=${lastStopReason ?? "?"} errored=${errored}`);
+      onEvent({ type: "no-response", model: this.activeModel(), stopReason: lastStopReason, reason: errored ? failMsg?.slice(0, 200) : undefined });
     }
     // Carry the FULL accumulated reply on `done` so the UI can reconcile a lossy live stream (if some
     // token chunks didn't reach the browser, the turn still renders the complete final answer on settle).
