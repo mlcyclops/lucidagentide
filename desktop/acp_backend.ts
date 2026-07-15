@@ -688,10 +688,11 @@ class Backend {
     if (s?.modes) { this.availableModes = s.modes.availableModes ?? []; this.currentModeId = String(s.modes.currentModeId ?? "default"); }
     await sleep(350); // let available_commands_update arrive
     this.syncModelEnv();
-    // ADR-0217: on a FRESH session (launch / respawn), apply the AskSage lockdown now so the picker + status
-    // reflect the gov model immediately, not only after the first turn. Best-effort — the prompt() clamp is the
-    // fail-closed guarantee; a failure here (e.g. no gov model yet) is surfaced there when a turn is sent.
-    if (this.asksageLocked()) await this.enforceAsksageLock().catch(() => ({ ok: false }));
+    // ADR-0217: on a FRESH session (launch / respawn), apply the AskSage lockdown so the picker + status reflect
+    // the gov model. FIRE-AND-FORGET (never awaited): a slow/hung model switch here must NOT block session init
+    // — which getConfig()/loadConfig() await, so awaiting it would freeze the model picker on "updating…". The
+    // prompt() clamp (before every turn) is the authoritative fail-closed guarantee; this is best-effort UI sync.
+    if (this.asksageLocked()) void this.enforceAsksageLock().catch(() => ({ ok: false }));
   }
 
   /** P-LOC.1: the omp-reported active model id (from the `model` config option), or "" if unknown. */

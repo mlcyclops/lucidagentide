@@ -15006,3 +15006,37 @@ in the app (#licensing/AGENTS): only public URLs. Pure config + preload wiring; 
 ### Relates to
 
 ADR-0205 (KG Packs), ADR-0206 (P-KGMARKET - the entitlement flow this turns on), and CLAUDE.md invariant #3.
+
+## ADR-0224 - Fix the AskSage model-picker hang; CUI banner centered; DoD banner + lockdown are opt-in
+
+**Date:** 2026-07-15
+**Status:** Accepted - BUILT. Bug fixes to the ADR-0217/0219 AskSage lockdown + CUI work.
+**Increment:** `desktop/acp_backend.ts` (one-line non-blocking change) + `desktop/renderer/{app.ts,styles.css,kg_packs.ts}`.
+
+### Context / fixes
+
+1. **Model picker hung on "updating…".** ADR-0217 added a lockdown model-clamp at the END of `ensureSession`,
+   AWAITED. When lockdown was on (e.g. left on after testing CUI), a slow/hung `session/set_config_option` there
+   blocked session init - which `getConfig()`/`loadConfig()` await - so the picker froze on "updating…" showing
+   the stale cached (commercial) list, never surfacing the AskSage models. Fix: make it FIRE-AND-FORGET (`void`,
+   not `await`). The `prompt()` clamp (before every turn) is the authoritative fail-closed guarantee; the
+   session-init clamp is best-effort UI sync and must never block the config load.
+2. **CUI banner not centered.** Added `justify-content:center`/`text-align:center`; it lives in the chat column
+   (`main.center`) so it already re-centers when the side panels open/close.
+3. **DoD/STIG banner + "feels like default lockdown".** The banner showed whenever a gov key was CONFIGURED, so
+   an AskSage user who never turned lockdown on saw it and assumed lockdown was default-on. Lockdown is (and
+   stays) opt-in (`asksageOnly()` defaults false). The DoD banner now shows ONLY in lockdown mode - at launch if
+   lockdown is persisted on, and the moment the user toggles lockdown on.
+4. **Pack licensing sync.** `kg_packs.ts` (client) reflects the catalog decision that Program Manager (EVM) +
+   Capture & Proposal Manager are subscriptions (matches the deployed Stripe products; ADR-0223).
+
+### Invariants preserved
+
+Fail-closed lockdown is unchanged - the authoritative clamp is `prompt()` (still awaited, still blocks a turn
+that can't be gov-routed). Making the session-init clamp non-blocking only affects UI immediacy, never a turn's
+routing. No Python (#2); no fork (#1).
+
+### Relates to
+
+ADR-0217 (the awaited clamp this de-blocks), ADR-0219 (CUI/DoD banners), ADR-0223 (the pack licensing), and
+CLAUDE.md invariant #3.

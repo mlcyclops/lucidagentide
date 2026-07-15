@@ -5905,8 +5905,10 @@ async function loadAsksage(): Promise<void> {
     state.asksageTokens = await bridge.asksageTokens();
     state.personas = (await bridge.asksagePersonas()) ?? [];
     state.asksageDatasetList = (await bridge.asksageDatasets()) ?? []; // ADR-0219: full list for the titlebar picker
-    showDodBanner(); // ADR-0219: gov gateway configured → the DoD/STIG consent banner (once per launch)
   }
+  // ADR-0224: the DoD/STIG consent banner shows ONLY in LOCKDOWN mode (not merely when a gov key is configured) —
+  // lockdown is opt-in, so an AskSage user who hasn't turned it on is a normal commercial user, no banner.
+  if (state.asksage?.only) showDodBanner();
   await loadSessionMode(); // ADR-0219: this session's CUI/Search mode + the violet banner
   renderStatus();
   updateComposerTools();
@@ -8929,6 +8931,7 @@ function wire(): void {
           if (gov) await applyConfig("model", gov.value);
         }
       }
+      if (only) showDodBanner(); // ADR-0224: entering lockdown surfaces the DoD/STIG consent banner
       showToast({ title: only ? "Lockdown ON" : "Lockdown off", desc: only ? "Every turn now routes through the AskSage gov gateway." : "Direct providers are selectable again.", actions: [{ label: "OK" }], timeout: 2800 });
       updateComposerTools(); renderStatus();
       return;
