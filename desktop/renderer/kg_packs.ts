@@ -54,13 +54,13 @@ export const KG_PACKS: KgPack[] = [
   {
     id: "capture-proposal-manager", name: "Capture & Proposal Manager", role: "Capture / Proposal Manager",
     desc: "Shipley-style capture and proposals: color teams, win themes, and compliance matrices.",
-    author: "TechLead 187 LLC", tier: "first-party", licensing: "one-time", url: KG_PACKS_URL,
+    author: "TechLead 187 LLC", tier: "first-party", licensing: "subscription", url: KG_PACKS_URL,
     highlights: "Curated capture playbooks and proposal-review heuristics.",
   },
   {
     id: "program-manager-evm", name: "Program Manager (EVM)", role: "Program / Project Manager",
     desc: "CMMI and Earned Value Management: IMS, EAC, variance analysis, and program controls.",
-    author: "TechLead 187 LLC", tier: "first-party", licensing: "one-time", url: KG_PACKS_URL,
+    author: "TechLead 187 LLC", tier: "first-party", licensing: "subscription", url: KG_PACKS_URL,
     highlights: "Curated EVM formulas, IMS practices, and PM governance.",
   },
   {
