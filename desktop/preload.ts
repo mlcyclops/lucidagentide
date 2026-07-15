@@ -10,6 +10,13 @@
 // absent and the renderer falls back to CSS zoom.
 
 import { contextBridge, ipcRenderer, webFrame } from "electron";
+import { marketBootConfig } from "./market_config.ts";
+
+// ADR-0223 (completes P-KGMARKET, ADR-0206): expose the marketplace boot config to the renderer's main world so
+// market_boot.ts (readMarketBootConfig → globalThis.__LUCID_MARKET__) can register the real Stripe/Firebase
+// entitlement provider. Without this the storefront's "Get pack" only opens the product page. A plain browser
+// build has no preload → __LUCID_MARKET__ stays unset → fail-closed "off" (storefront hint), unchanged.
+contextBridge.exposeInMainWorld("__LUCID_MARKET__", marketBootConfig());
 
 contextBridge.exposeInMainWorld("lucid", {
   isElectron: true,
