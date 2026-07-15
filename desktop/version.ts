@@ -242,4 +242,11 @@
 //           productName stays "LucidAgentIDE" (so userData + the rpm path are unchanged) and the "Lucid Agent"
 //           label is applied per-OS at the DISPLAY layer only - Windows shortcut name, macOS
 //           CFBundleDisplayName, Linux .desktop Name - never touching app.getName()/userData.
-export const APP_VERSION = "1.11.6";
+//           (v1.11.6 built Win+mac but the Linux air-gap gate caught a bundling bug - see v1.11.7.)
+// v1.11.7 = the air-gap installer, complete on all three OSes (ADR-0225). The bundled relocatable CPython
+//           ships `bin/python3` as a SYMLINK to the real `bin/python3.12`; electron-builder dropped that
+//           symlink when copying into the Linux package, so the packaged app had no interpreter (the CI
+//           air-gap gate caught it on Linux; Windows/mac were unaffected). Fix: copy the Python tree with
+//           symlinks DEREFERENCED (all real files, nothing for packaging to drop) and resolve `python3.12`
+//           as a fallback. v1.11.5/.6 were pulled; this is the first fully-built, gate-green air-gap release.
+export const APP_VERSION = "1.11.7";

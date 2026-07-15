@@ -49,8 +49,12 @@ function bundled(tool: "bun" | "uv"): string | null {
 function bundledPython(): string | null {
   if (!app.isPackaged) return null;
   const dir = join(process.resourcesPath, "runtimes", `python-${process.platform}-${process.arch}`);
-  const p = process.platform === "win32" ? join(dir, "python.exe") : join(dir, "bin", "python3");
-  return existsSync(p) ? p : null;
+  // POSIX: prefer bin/python3, but fall back to the versioned bin/python3.12 — the real binary the others
+  // symlink to (belt-and-suspenders in case packaging ever drops the alias; see fetch-runtimes dereference).
+  const cands = process.platform === "win32"
+    ? [join(dir, "python.exe")]
+    : [join(dir, "bin", "python3"), join(dir, "bin", "python3.12"), join(dir, "bin", "python")];
+  return firstExisting(cands);
 }
 
 /** The omp CLI shim bundled inside the packaged repo's node_modules (`.bin/omp[.exe]`, a bun
