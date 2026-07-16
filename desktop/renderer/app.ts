@@ -9623,6 +9623,13 @@ function loadCachedConfig(): void {
     }
   } catch { /* ignore */ }
 }
+// P-IDE.1d: the live config can lag omp's session warm-up. getConfig() on the backend never blocks now
+// (it returns the current config and warms in the background), so the renderer RE-POLLS until the live
+// list lands. If it never does (a wedged session), we stop after CONFIG_WARM_MAX_TRIES and clear the
+// "updating…" spinner rather than leaving it frozen forever — the cached list stays usable.
+const CONFIG_WARM_MAX_TRIES = 6;
+const CONFIG_WARM_POLL_MS = 1500;
+let configWarmTries = 0;
 async function loadConfig(): Promise<void> {
   try {
     const live = await bridge.config();
@@ -9639,6 +9646,15 @@ async function loadConfig(): Promise<void> {
       state.config = live;
       state.configCached = false;
       cacheConfig();
+      configWarmTries = 0;
+    } else if (configWarmTries < CONFIG_WARM_MAX_TRIES) {
+      // Session still warming — re-poll so the picker self-heals when the live list lands (non-blocking).
+      configWarmTries++;
+      setTimeout(() => void loadConfig(), CONFIG_WARM_POLL_MS);
+    } else if (state.configCached) {
+      // Gave up warming (session likely wedged). Stop the spinner so it isn't stuck on "updating…" forever;
+      // the cached list stays usable and "Refresh models" retries. Root cause is tracked separately.
+      state.configCached = false;
     }
     const model = state.config.find((c) => c.id === "model");
     if (model) { state.model = model.currentValue; const mn = $("#modelName"); if (mn) mn.textContent = modelLabel(model.currentValue); }

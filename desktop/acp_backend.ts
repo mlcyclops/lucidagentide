@@ -157,6 +157,9 @@ function ompBin(): string {
   return "omp";
 }
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+// getConfig() caps the session warm-up at this bound so the model picker never blocks on a slow/hung
+// omp session init — it returns the current config and the renderer re-polls for the live list.
+const CONFIG_WARM_MS = 6000;
 
 export type ChatEvent =
   | { type: "token"; text: string }
@@ -199,6 +202,7 @@ class Backend {
   private acp: ACPClient | null = null;
   private sessionId: string | null = null;
   private starting: Promise<void> | null = null;
+  private sessioning: Promise<void> | null = null; // dedupe concurrent session/new (getConfig races it with a timeout)
   private listener: ((e: ChatEvent) => void) | null = null;
   // Approved (scanned + delimited) AskSage persona. STANDING guidance: re-delivered EVERY turn in the
   // user turn (never the frozen prefix; ADR-0007 / invariant #5) so it doesn't fade (issue #54).
@@ -685,17 +689,26 @@ class Backend {
   private async ensureSession(): Promise<void> {
     await this.start();
     if (this.sessionId) return;
-    const s: any = await this.acp!.request("session/new", { cwd: currentWorkspace(), mcpServers: mcpServersForAcp() });
-    this.sessionId = s?.sessionId ?? s?.id ?? null;
-    if (Array.isArray(s?.configOptions)) this.configOptions = s.configOptions;
-    if (s?.modes) { this.availableModes = s.modes.availableModes ?? []; this.currentModeId = String(s.modes.currentModeId ?? "default"); }
-    await sleep(350); // let available_commands_update arrive
-    this.syncModelEnv();
-    // ADR-0217: on a FRESH session (launch / respawn), apply the AskSage lockdown so the picker + status reflect
-    // the gov model. FIRE-AND-FORGET (never awaited): a slow/hung model switch here must NOT block session init
-    // — which getConfig()/loadConfig() await, so awaiting it would freeze the model picker on "updating…". The
-    // prompt() clamp (before every turn) is the authoritative fail-closed guarantee; this is best-effort UI sync.
-    if (this.asksageLocked()) void this.enforceAsksageLock().catch(() => ({ ok: false }));
+    // Dedupe: getConfig() races ensureSession against a timeout, so several callers can pile up while a
+    // slow session/new is in flight. Share ONE init so we never spawn duplicate sessions; if session/new
+    // hangs, `sessioning` stays pending and later callers await the same promise (getConfig still returns
+    // via its own timeout).
+    if (!this.sessioning) {
+      this.sessioning = (async () => {
+        const s: any = await this.acp!.request("session/new", { cwd: currentWorkspace(), mcpServers: mcpServersForAcp() });
+        this.sessionId = s?.sessionId ?? s?.id ?? null;
+        if (Array.isArray(s?.configOptions)) this.configOptions = s.configOptions;
+        if (s?.modes) { this.availableModes = s.modes.availableModes ?? []; this.currentModeId = String(s.modes.currentModeId ?? "default"); }
+        await sleep(350); // let available_commands_update arrive
+        this.syncModelEnv();
+        // ADR-0217: on a FRESH session (launch / respawn), apply the AskSage lockdown so the picker + status
+        // reflect the gov model. FIRE-AND-FORGET (never awaited): a slow/hung model switch must NOT block
+        // session init — which getConfig()/loadConfig() lean on — else the picker freezes on "updating…". The
+        // prompt() clamp (before every turn) is the authoritative fail-closed guarantee; this is best-effort UI sync.
+        if (this.asksageLocked()) void this.enforceAsksageLock().catch(() => ({ ok: false }));
+      })().finally(() => { this.sessioning = null; });
+    }
+    await this.sessioning;
   }
 
   /** P-LOC.1: the omp-reported active model id (from the `model` config option), or "" if unknown. */
@@ -726,7 +739,14 @@ class Backend {
     process.env.LUCID_MODEL = model;
   }
 
-  async getConfig(): Promise<any[]> { await this.ensureSession(); return this.configOptions; }
+  async getConfig(): Promise<any[]> {
+    // Never block the model picker on a slow/hung omp session init. Warm the session, but cap the wait:
+    // if it isn't ready in time, return whatever config we have so far and let ensureSession keep warming
+    // in the background — the renderer re-polls and adopts the live list once session/new lands. This turns
+    // "picker frozen on 'updating…' forever" into "worst case, a briefly-stale list that self-heals".
+    await Promise.race([this.ensureSession().catch(() => {}), sleep(CONFIG_WARM_MS)]);
+    return this.configOptions;
+  }
   /** The composer's 3-way control, derived from the omp mode + the client permission posture. */
   uiMode(): "agent" | "ask" | "plan" {
     if (this.currentModeId === "plan") return "plan";
