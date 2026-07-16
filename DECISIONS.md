@@ -15126,6 +15126,17 @@ Windows `nsis.shortcutName`, macOS `extendInfo.CFBundleDisplayName` (NOT CFBundl
 into `app.getName()`), Linux `linux.desktop.Name`, plus the in-app window/document title. The icon label reads
 "Lucid Agent" everywhere; nothing that identifies the app to the OS (userData dir, appId, bundle name) moves.
 
+**Second fix (v1.11.7) - the bundled Python's `bin/python3` symlink didn't survive Linux packaging.** With
+the rpm path fixed, the v1.11.6 tag build's **CI air-gap gate then failed on Linux** (Windows + macOS passed):
+python-build-standalone ships `bin/python3` (and `bin/python`) as SYMLINKS to the real `bin/python3.12`, and
+electron-builder DROPPED those symlinks when copying `runtimes/` into the Linux package - so the packaged app
+had no `bin/python3` and would have fallen back to `uv venv` (network) on an air-gapped Linux host. This is
+exactly the failure the gate exists to catch, and it caught it before any Linux installer shipped. Fix:
+`fetch-runtimes.ts` copies the Python tree with symlinks **dereferenced** (every file real → nothing for
+packaging to drop), and both resolvers (`runtime.ts bundledPython()` + `airgap-smoke.ts`) fall back to the
+real `bin/python3.12`. v1.11.5 and v1.11.6 were both pulled (prerelease); **v1.11.7** is the first air-gap
+build green on all three OSes.
+
 ### Relates to
 
 Add-on ADR-A009 (the offline-updates design this implements the OSS-core prerequisite of), the chat-history

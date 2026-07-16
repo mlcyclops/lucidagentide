@@ -241,12 +241,16 @@ for (const spec of specs) {
 			throw new Error(`fetch-runtimes: directory "${spec.tree}/" not found in ${spec.url}`);
 		}
 		rmSync(dest, { recursive: true, force: true });
-		cpSync(srcDir, dest, { recursive: true });
-		// cpSync doesn't reliably carry the exec bit; restore it on the POSIX interpreters so the packaged
-		// app can spawn them (Windows executability is by extension, so this loop is a no-op there).
+		// dereference: the POSIX Python tree ships `bin/python3` + `bin/python` as SYMLINKS to the real
+		// `python3.12`; electron-builder DROPS those symlinks when it copies runtimes/ into the app, leaving
+		// the packaged app with no `bin/python3` (the air-gap gate caught this on Linux). Copying with
+		// dereference turns every symlink into a real file, so the bundled tree survives packaging intact.
+		cpSync(srcDir, dest, { recursive: true, dereference: true });
+		// cpSync doesn't reliably carry the exec bit; restore it on the POSIX interpreters (now real files)
+		// so the packaged app can spawn them (Windows executability is by extension — no-op there).
 		if (process.platform !== "win32") {
-			const minor = PY_VERSION.split(".").slice(0, 2).join(".");
-			for (const rel of ["bin/python3", `bin/python${minor}`]) {
+			const minor = PY_VERSION.split(".").slice(0, 2).join("."); // "3.12"
+			for (const rel of ["bin/python3", "bin/python", `bin/python${minor}`]) {
 				const exe = join(dest, rel);
 				if (existsSync(exe)) chmodSync(exe, 0o755);
 			}
