@@ -69,8 +69,12 @@ console.log(`air-gap smoke: packaged resources = ${res}`);
 
 // --- 1) scanner Python: bundled interpreter runs the scanner OFFLINE ---------------------------------
 const pyDir = join(res, "runtimes", `python-${PLAT}-${ARCH}`);
-const py = PLAT === "win32" ? join(pyDir, "python.exe") : join(pyDir, "bin", "python3");
-if (!existsSync(py)) fail(`bundled Python interpreter missing: ${py}`);
+// POSIX ships bin/python3 as a symlink to the real bin/python3.12; accept either (see fetch-runtimes).
+const pyCands = PLAT === "win32"
+  ? [join(pyDir, "python.exe")]
+  : [join(pyDir, "bin", "python3"), join(pyDir, "bin", "python3.12"), join(pyDir, "bin", "python")];
+const py = pyCands.find((p) => existsSync(p));
+if (!py) fail(`bundled Python interpreter missing under ${pyDir}/bin (tried: ${pyCands.map((p) => p.slice(pyDir.length + 1)).join(", ")})`);
 
 const scannerDir = join(res, "repo", "scanner-sidecar");
 if (!existsSync(join(scannerDir, "scanner.py"))) fail(`bundled scanner-sidecar missing at ${scannerDir}`);
