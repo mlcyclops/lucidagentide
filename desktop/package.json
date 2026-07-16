@@ -181,6 +181,6 @@
     "electron": "^33.0.0",
     "electron-builder": "^25.1.8",
     "png-to-ico": "^3.0.1",
-    "typescript": "^6.0.3"
+    "typescript": "^7.0.2"
   }
 }
