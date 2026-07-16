@@ -66,10 +66,10 @@
   "dependencies": {
     "@duckdb/node-api": "1.5.4-r.1",
     "@huggingface/transformers": "^4.2.0",
-    "@oh-my-pi/pi-agent-core": "16.1.20",
-    "@oh-my-pi/pi-ai": "16.1.20",
-    "@oh-my-pi/pi-coding-agent": "16.1.20",
-    "@oh-my-pi/pi-utils": "16.1.20",
+    "@oh-my-pi/pi-agent-core": "17.0.0",
+    "@oh-my-pi/pi-ai": "17.0.0",
+    "@oh-my-pi/pi-coding-agent": "17.0.0",
+    "@oh-my-pi/pi-utils": "17.0.0",
     "arktype": "^2.2.1",
     "dompurify": "^3.4.11",
     "katex": "^0.17.0",
@@ -78,7 +78,7 @@
   },
   "devDependencies": {
     "@types/bun": "latest",
-    "typescript": "^6.0.3"
+    "typescript": "^7.0.2"
   },
   "trustedDependencies": []
 }
