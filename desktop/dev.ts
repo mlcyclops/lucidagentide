@@ -276,6 +276,33 @@ const collabManager = new CollabManager({
 
 // 30s memo for /api/code-activity — each rebuild spawns `git log` per workspace (ADR-0030 P-CODE.1).
 let codeActivityCache: { at: number; data: ReturnType<typeof codeActivity> } | null = null;
+// P-PERF.3: the dashboard poll hammers these obs-DB reads (~every 4s). Each can take SECONDS as the DB grows,
+// and they run on the server's single event loop — so overlapping polls pile up and stall model streaming
+// (the "replies slow coming back" symptom). Memoize with SINGLE-FLIGHT (concurrent polls share one in-flight
+// query, never overlap) + a short TTL so rapid polls are cheap and the loop stays free for the model stream.
+const SNAP_TTL_MS = 8000; // > the ~4s dashboard poll, so the steady poll is served from cache (the DuckDB read runs at most ~every 8s). Live gate blocks are merged FRESH from liveBlocks() at request time, so nothing urgent is delayed by this cache.
+let secSnapMemo: { at: number; p: ReturnType<typeof securitySnapshot> } | null = null;
+function securitySnapshotMemo(): ReturnType<typeof securitySnapshot> {
+  const t = Date.now();
+  if (!secSnapMemo || t - secSnapMemo.at > SNAP_TTL_MS) secSnapMemo = { at: t, p: securitySnapshot() };
+  return secSnapMemo.p; // concurrent callers await the SAME query
+}
+let usageMemo: { at: number; data: ReturnType<typeof usageLedger> } | null = null;
+function usageLedgerMemo(): ReturnType<typeof usageLedger> {
+  const t = Date.now();
+  if (!usageMemo || t - usageMemo.at > SNAP_TTL_MS) usageMemo = { at: t, data: usageLedger() };
+  return usageMemo.data;
+}
+const memMemo = new Map<string, { at: number; p: ReturnType<typeof memorySnapshot> }>();
+function memorySnapshotMemo(path: string | undefined): ReturnType<typeof memorySnapshot> {
+  const key = path ?? "", t = Date.now();
+  const hit = memMemo.get(key);
+  if (hit && t - hit.at <= SNAP_TTL_MS) return hit.p;
+  const p = memorySnapshot(path);
+  memMemo.set(key, { at: t, p });
+  if (memMemo.size > 8) for (const [k, v] of [...memMemo]) if (t - v.at > 10_000) memMemo.delete(k); // keep it tiny
+  return p;
+}
 
 // 5s memo for /api/system — the process listing spawns one fixed-argv command (ADR-0182 P-SYSRES.1).
 let sysResCache: { at: number; data: { snap: SystemSnapshot; verdict: SystemVerdict; procs: ProcGroup[] } } | null = null;
@@ -639,7 +666,7 @@ const server = Bun.serve({
       // Security snapshot + the GUI-owned LIVE gate blocks (ADR-0019 C). Live blocks are merged
       // in even when the DuckDB snapshot is null, so a fresh machine still shows quarantines.
       if (p === "/api/security") {
-        const snap = await securitySnapshot();
+        const snap = await securitySnapshotMemo(); // memoized + single-flight (P-PERF.3); live/sandbox/acks stay fresh (in-memory, cheap)
         return json({ ok: true, data: { ...(snap ?? {}), live: liveBlocks(), sandbox: sandboxStatus(), acks: ackView() } });
       }
       // Audited fail-closed override: release one quarantined call (ADR-0019 C).
@@ -662,7 +689,7 @@ const server = Bun.serve({
       // Anchor the snapshot to the ACTIVE chat session (its on-disk transcript) so the Context window
       // + Prompt-cache gauges reflect the live conversation; fall back to findSession's cwd match only
       // when there's no active session yet (fresh launch).
-      if (p === "/api/memory") return json({ ok: true, data: await memorySnapshot(sessionPathById(backend.currentSessionId())) });
+      if (p === "/api/memory") return json({ ok: true, data: await memorySnapshotMemo(sessionPathById(backend.currentSessionId())) }); // P-PERF.3 memo
       // P-MCP.1 (ADR-0020): MCP server registry. The hub does auth + config assembly only; omp owns
       // the MCP transport (configs ride session/new.mcpServers). Changes respawn omp to apply. The
       // list NEVER returns raw tokens (masked status only — like provider keys).
@@ -753,7 +780,7 @@ const server = Bun.serve({
         return json({ ok: true, data: { enabled: !!loadSettings().rateLimitProbe, limits: await probeRateLimits(url.searchParams.get("force") === "1") } });
       }
       // P10.2: cross-model usage & cost ledger (per-model totals + estimated cache savings).
-      if (p === "/api/usage") return json({ ok: true, data: usageLedger() });
+      if (p === "/api/usage") return json({ ok: true, data: usageLedgerMemo() }); // P-PERF.3 memo
       // ADR-0030 P-CODE.1: per-workspace git diffstat for the current month (repo
       // activity, not AI authorship). Read-only, metadata-only, fail-closed per workspace.
       // Cached 30s — each call spawns `git log` per workspace, so don't re-run it on

@@ -255,4 +255,11 @@
 //           AskSage models, and no OAuth on a cold box), reliable OAuth connect/disconnect (same-omp broker
 //           + visible sign-in URL + authoritative logout), the overloaded-provider no-response fallback
 //           (P-NORESP.1), the model-picker freeze safety-net, and the v1.11.7 Linux air-gap Python fix.
-export const APP_VERSION = "1.11.8";
+// v1.11.9 = PERFORMANCE (P-PERF.3): fixes "LUCID is slow / model replies crawl back". The live-dashboard poll
+//           was hammering four observability endpoints continuously; each re-aggregated the ENTIRE history
+//           (~1300+ sessions) and — worst of all — spawned an omp subprocess synchronously just to read static
+//           compaction config, blocking the server's single event loop (and the model stream) for seconds every
+//           few seconds. Fix: gate the poll (don't run it during a stream or when its panel is closed), memoize
+//           the obs reads, and cache the underlying scans/DuckDB-opens/omp-spawn so repeat polls are ~0ms
+//           (usageLedger 958ms→2ms, memorySnapshot ~4s→0ms warm). Idle server CPU dropped ~29%→~8% of a core.
+export const APP_VERSION = "1.11.9";

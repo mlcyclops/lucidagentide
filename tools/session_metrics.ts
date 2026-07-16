@@ -51,24 +51,32 @@ export interface Session {
 }
 
 /** Newest session whose `session.cwd` matches our cwd; else newest overall. */
+// P-PERF.3: the sessions dir grows without bound (thousands of .jsonl files). Re-walking + re-stat-ing them all
+// on every memory-snapshot poll is a multi-second SYNCHRONOUS block that stalls the server event loop — and the
+// model's reply streaming with it. Cache the walk (short TTL) and the per-transcript parse (by mtime) so repeat
+// polls are cheap; a new session/turn shows within the TTL / on the next mtime change.
+const _SESS_SCAN_TTL = 15_000;
+let _sessScan: { root: string; at: number; files: { p: string; mtime: number }[] } | null = null;
+function scanSessions(root: string): { p: string; mtime: number }[] {
+  if (_sessScan && _sessScan.root === root && Date.now() - _sessScan.at < _SESS_SCAN_TTL) return _sessScan.files;
+  const files: { p: string; mtime: number }[] = [];
+  if (existsSync(root)) for (const d of readdirSync(root)) {
+    const dir = join(root, d);
+    try { if (!statSync(dir).isDirectory()) continue; for (const f of readdirSync(dir)) if (f.endsWith(".jsonl")) files.push({ p: join(dir, f), mtime: statSync(join(dir, f)).mtimeMs }); }
+    catch { /* skip unreadable dir */ }
+  }
+  files.sort((a, b) => b.mtime - a.mtime);
+  _sessScan = { root, at: Date.now(), files };
+  return files;
+}
+const _parseCache = new Map<string, { mtime: number; s: Session }>();
+
 export function findSession(explicit?: string): string | undefined {
   if (explicit) return existsSync(explicit) ? explicit : undefined;
   const root = join(homedir(), ".omp", "agent", "sessions");
   if (!existsSync(root)) return undefined;
   const cwd = process.cwd();
-  const files: { p: string; mtime: number }[] = [];
-  for (const d of readdirSync(root)) {
-    const dir = join(root, d);
-    try {
-      if (!statSync(dir).isDirectory()) continue;
-      for (const f of readdirSync(dir)) {
-        if (f.endsWith(".jsonl")) files.push({ p: join(dir, f), mtime: statSync(join(dir, f)).mtimeMs });
-      }
-    } catch {
-      /* skip unreadable dir */
-    }
-  }
-  files.sort((a, b) => b.mtime - a.mtime);
+  const files = scanSessions(root); // P-PERF.3: TTL-cached walk
   for (const { p } of files) {
     try {
       const first = readFileSync(p, "utf8").split("\n", 1)[0] ?? "";
@@ -91,21 +99,15 @@ export function sessionPathById(id: string | null | undefined): string | undefin
   if (!id) return undefined;
   const root = join(homedir(), ".omp", "agent", "sessions");
   if (!existsSync(root)) return undefined;
-  const matches: { p: string; mtime: number }[] = [];
-  for (const d of readdirSync(root)) {
-    const dir = join(root, d);
-    try {
-      if (!statSync(dir).isDirectory()) continue;
-      for (const f of readdirSync(dir)) if (f.endsWith(".jsonl") && f.includes(id)) matches.push({ p: join(dir, f), mtime: statSync(join(dir, f)).mtimeMs });
-    } catch {
-      /* skip unreadable dir */
-    }
-  }
-  matches.sort((a, b) => b.mtime - a.mtime);
+  const matches = scanSessions(root).filter((x) => x.p.includes(id)); // P-PERF.3: reuse the cached walk (already newest-first)
   return matches[0]?.p;
 }
 
 export function parseSession(path: string): Session {
+  // P-PERF.3: re-parse a (possibly large) transcript only when it actually changed — repeat polls reuse the parse.
+  let mtime = 0; try { mtime = statSync(path).mtimeMs; } catch { /* fall through to a parse attempt */ }
+  const hit = _parseCache.get(path);
+  if (hit && mtime && hit.mtime === mtime) return hit.s;
   const s: Session = { path, cwd: "?", started: "?", model: "?", turns: [] };
   for (const line of readFileSync(path, "utf8").split("\n")) {
     if (!line) continue;
@@ -136,6 +138,7 @@ export function parseSession(path: string): Session {
       });
     }
   }
+  if (mtime) { _parseCache.set(path, { mtime, s }); if (_parseCache.size > 24) _parseCache.delete([..._parseCache.keys()][0]!); }
   return s;
 }
 // ── rate-limit budget (omp agent.db) ──────────────────────────────────────────
@@ -145,25 +148,32 @@ export interface Budget {
   status: string;
   resetsAt: number | null;
 }
+// P-PERF.3: this opens omp's agent.db and runs a correlated subquery over usage_history EVERY call — measured
+// at ~2s as that table grows, and it's on the memory-snapshot poll path, so it blocked model streaming. Budgets
+// only change once per turn, so cache the result for a short TTL. omp still updates within the TTL.
+let _rlCache: { at: number; data: Budget[] | null } | null = null;
+const _RL_TTL_MS = 8_000;
 export function rateLimits(): Budget[] | null {
+  if (_rlCache && Date.now() - _rlCache.at < _RL_TTL_MS) return _rlCache.data;
+  const stamp = (data: Budget[] | null): Budget[] | null => { _rlCache = { at: Date.now(), data }; return data; };
   const p = join(homedir(), ".omp", "agent", "agent.db");
-  if (!existsSync(p)) return null;
+  if (!existsSync(p)) return stamp(null);
   try {
     const db = new Sqlite(p, { readonly: true });
     try {
-      return db
+      return stamp(db
         .query(
           `select label, used_fraction as used, status, resets_at as resetsAt
            from usage_history u
            where recorded_at = (select max(recorded_at) from usage_history u2 where u2.label = u.label)
            order by used_fraction desc`,
         )
-        .all() as Budget[];
+        .all() as Budget[]);
     } finally {
       db.close();
     }
   } catch {
-    return null;
+    return stamp(null);
   }
 }
 

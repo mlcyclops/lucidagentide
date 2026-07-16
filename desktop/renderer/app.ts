@@ -1575,7 +1575,7 @@ async function send(): Promise<void> {
   finally {
     (node as MsgNode)._md = buf;
     if (state.streaming) { if (!(noResponse && !buf.trim())) { const chipped = renderAnswerBody(streamEl, buf, marks); /* P-CHAT.A sections / P-CHAT.B chips */ if (chipped) dropThoughtsWindow(); maybeAppendReport(); /* P-CHAT.C: settled-turn report CTA */ } finishHud(); state.streaming = false; setSendEnabled(); } else { finishHud(); }
-    void renderSessions(); void refreshBudget(false); void syncMode();
+    void renderSessions(); void refreshBudget(false); void syncMode(); void refresh(); // P-PERF.3: one dashboard catch-up now the turn (and its stream) is done, since the poll no longer runs the heavy obs-DB read mid-stream
     scheduleKnowledgeRefresh(); // #54 follow-up: new facts appear in the open KG without close/reopen
     // P-ACP.4: the turn ended - fire off any pre-staged prompt now (the composer is idle again).
     if (state.queued) { const q = state.queued; state.queued = null; renderQueued(); const ta2 = $("#input") as HTMLTextAreaElement; ta2.value = q; setSendEnabled(); void send(); }
@@ -10351,7 +10351,18 @@ const adaptivePoll = (baseMs: number, fn: () => void): void => {
   };
   window.setTimeout(loop, pollDelay(baseMs, perfWatch.tier(), document.hidden));
 };
-adaptivePoll(4000, refresh);
+// P-PERF.3: refresh() hits the observability DB (security/memory/usage) each cycle; that read can take seconds
+// as the DB grows and it runs on the server's single event loop, so polling it non-stop stalls model streaming.
+// Only pay for it when it can change something on screen — a turn is streaming, OR a data panel is open —
+// and otherwise idle on a slow heartbeat (every ~8th cycle) so counts don't drift for long. Actual gate blocks
+// still refresh instantly via the event stream (onEvent), so nothing live is missed when the poll is skipped.
+let refreshBeat = 0;
+// NOT gated on state.streaming: the obs-DB reads take seconds and would block the event loop mid-stream,
+// slowing the model's reply. Live gate blocks still refresh instantly via onEvent; the turn's finally() does
+// one catch-up refresh at the end. Only an OPEN data panel keeps polling live during a turn.
+const refreshNeeded = (): boolean =>
+  !state.inspectorRail && (state.inspectorTab === "security" || state.inspectorTab === "memory" || state.inspectorTab === "dev");
+adaptivePoll(4000, () => { if (refreshNeeded() || refreshBeat++ % 8 === 0) void refresh(); });
 adaptivePoll(1000, renderStatus);
 adaptivePoll(15000, () => void renderSessions());
 document.addEventListener("visibilitychange", () => { if (!document.hidden) { refresh(); renderStatus(); void renderSessions(); } });
