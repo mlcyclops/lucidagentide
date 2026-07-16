@@ -249,4 +249,10 @@
 //           air-gap gate caught it on Linux; Windows/mac were unaffected). Fix: copy the Python tree with
 //           symlinks DEREFERENCED (all real files, nothing for packaging to drop) and resolve `python3.12`
 //           as a fallback. v1.11.5/.6 were pulled; this is the first fully-built, gate-green air-gap release.
-export const APP_VERSION = "1.11.7";
+// v1.11.8 = the consolidated fix release that supersedes the pulled v1.11.4/.5/.6/.7. Rolls up the whole
+//           clean-machine fix batch onto one build: the CRITICAL air-gap fix (bundle a plain `bun[.exe]`
+//           alias so omp's shim starts with no global bun - the real cause of "bun is not installed", no
+//           AskSage models, and no OAuth on a cold box), reliable OAuth connect/disconnect (same-omp broker
+//           + visible sign-in URL + authoritative logout), the overloaded-provider no-response fallback
+//           (P-NORESP.1), the model-picker freeze safety-net, and the v1.11.7 Linux air-gap Python fix.
+export const APP_VERSION = "1.11.8";
