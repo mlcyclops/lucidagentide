@@ -100,6 +100,21 @@ lucid.config.statusline = false
 eq(lucid.statusline(), "", "statusline: false -> empty, no crash")
 lucid.config.statusline = saved
 
+-- _kb_kg_label: KG picker label with active dot, page count, read-only tag.
+eq(lucid._kb_kg_label({name='My KG',pages=2,active=true}), '● My KG (2 pages)', "kb_kg_label: active KG")
+eq(lucid._kb_kg_label({name='Ro',pages=1,active=false,read_only=true}), '  Ro (1 page, read-only)', "kb_kg_label: read-only inactive")
+eq(lucid._kb_kg_label({}), '  ? (0 pages)', "kb_kg_label: empty defaults")
+
+-- _kb_page_label: page picker label.
+eq(lucid._kb_page_label({kind='concept',title='Alpha',slug='alpha'}), '[concept] Alpha  ·  alpha', "kb_page_label: concept")
+
+-- _kb_body_lines: page float body lines.
+eq(
+  lucid._kb_body_lines({title='T',kind='k',slug='s',trust_label='untrusted',body_md='a\nb'}),
+  {'# T','(k · s · untrusted)','','a','b'},
+  "kb_body_lines: title + provenance + body"
+)
+
 -- WIRING proof for the block banner (not just the parser): a term=true/termopen job is a PTY job whose
 -- on_stdout receives the MERGED stream — including stderr, where the gate writes its [BLOCKED …] line.
 -- Run a real PTY job that emits the parity line to STDERR and assert on_stdout delivered a parseable

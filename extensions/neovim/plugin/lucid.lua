@@ -27,3 +27,7 @@ end, { desc = "Run the fail-closed gate preflight (lucid check)" })
 vim.api.nvim_create_user_command("LucidStats", function()
   require("lucid").stats()
 end, { desc = "Show session spend / KV-cache / context metrics" })
+
+vim.api.nvim_create_user_command("LucidKb", function()
+  require("lucid").kb()
+end, { desc = "Browse the knowledge graph (pick a KG, then a page, then read it)" })

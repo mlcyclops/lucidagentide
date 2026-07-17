@@ -27,6 +27,7 @@ import { BUILD_POLICY, DELEGATION_POLICY } from "../prompt/assembler.ts";
 import { ScannerClient, ScanUnavailableError } from "../security/scanner_client.ts";
 import { runAgentFirewall } from "../mcp/agent_firewall.ts";
 import { formatStats, rateLimits, sessionStats } from "../../tools/session_metrics.ts";
+import { runKb } from "../../tools/kb_cli.ts";
 import { resolveBackend, sandboxDisclosure, wrapForProfile, type BackendResolution, type SandboxProxy } from "../runs/sandbox_exec.ts";
 import { ensureEgressProxy } from "../runs/egress_proxy.ts"; // P-SANDBOX.2 (ADR-0166)
 import { egressAuditSink } from "../../desktop/egress_audit.ts"; // P-SANDBOX.3 (ADR-0167)
@@ -367,16 +368,24 @@ export async function main(argv: string[], env: Env = process.env, deps?: { tui?
     else process.stdout.write(formatStats(stats, budgets));
     return 0;
   }
+  if (sub === "kb") {
+    // Read-only KG viewer data source (P-NVIM.6): list | pages | show | search, over the shared ~/.omp
+    // registry the GUI uses. No agent, no tool calls — so no fail-closed preflight (a pure data read).
+    const { code, out } = await runKb(rest);
+    process.stdout.write(out.endsWith("\n") ? out : `${out}\n`);
+    return code;
+  }
   if (sub === "tui") return tui({ passthru: rest, env });
   if (sub === "acp") return acp({ isolate: rest.includes("--isolate"), env });
 
   if (sub === "-h" || sub === "--help" || sub === "help") {
     process.stderr.write(
-      "usage: lucid [omp args…] | lucid acp [--isolate] | lucid tui [omp args…] | lucid stats [--json] [--budgets] | lucid check | lucid agent-firewall --conn <id>\n" +
+      "usage: lucid [omp args…] | lucid acp [--isolate] | lucid tui [omp args…] | lucid kb [list|pages|show|search] | lucid stats [--json] | lucid check | lucid agent-firewall --conn <id>\n" +
         "  (default)       Bare `lucid` starts the gated TUI — same as `lucid tui`. Non-subcommand args pass through to omp (initial prompt, --model, -p, …).\n" +
         "  acp             Start the gated Lucid ACP agent (omp + the in-process security gate) for an IDE client.\n" +
         "  tui             Start the gated Lucid agent in omp's native terminal UI (explicit alias of the default).\n" +
         "  stats           Print session spend + KV-cache + context metrics (--json for editors; --budgets adds rate limits).\n" +
+        "  kb              Browse the knowledge graph(s): list | pages | show <id|slug> | search <query> (--json for editors, --kg <id> to target a KG).\n" +
         "  check           Run the fail-closed preflight (gate + scanner) and exit 0 (ready) / 1 (unavailable).\n" +
         "  agent-firewall  Serve the stdio MCP firewall proxy to a remote ACP agent (hermes/openclaw) — ADR-0147.\n" +
         "  Fail-closed: the TUI and `acp` refuse to start if the gate or scanner sidecar is unavailable.\n",
