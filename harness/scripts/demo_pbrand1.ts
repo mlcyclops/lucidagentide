@@ -23,7 +23,7 @@ import {
   WELCOME_ENV,
   welcomeEnabled,
   type WelcomePaint,
-} from "../omp/lucid_welcome_extension.ts";
+} from "../omp/lucid_welcome.ts";
 
 const fail: (m: string) => never = (m) => {
   console.error(`   FAIL — ${m}`);
@@ -45,11 +45,23 @@ console.log("2) renderWelcomeLines — names LUCID, never omp; carries version +
 {
   const brand = renderWelcomeLines({ paint: IDENTITY, version: "1.2.3" }).join("\n");
   if (!brand.includes("LUCID")) fail("banner must name LUCID");
-  if (/omp/i.test(brand)) fail("banner must NOT mention omp");
+  if (/\bomp\b/i.test(brand)) fail("banner must NOT mention omp");
   if (!brand.includes("LUCID v1.2.3")) fail("banner must carry the LUCID version");
-  const withModel = renderWelcomeLines({ paint: IDENTITY, version: "1.2.3", model: "Claude Opus 4.8" }).join("\n");
-  if (!withModel.includes("Claude Opus 4.8")) fail("banner must carry the model when known");
-  ok("LUCID present, omp absent, version + model carried");
+  const full = renderWelcomeLines({
+    paint: IDENTITY,
+    version: "1.2.3",
+    model: "Claude Opus 4.8",
+    lsp: [{ name: "clangd", fileTypes: [".c", ".cpp", ".cc"] }],
+    recent: [{ name: "Implement extension UI theme setter", timeAgo: "7/5/2026" }],
+  }).join("\n");
+  if (!full.includes("Claude Opus 4.8")) fail("banner must carry the model when known");
+  if (!full.includes("Tips")) fail("banner must carry the Tips section");
+  if (!full.includes("clangd") || !full.includes(".cpp")) fail("banner must carry the LSP servers");
+  if (!full.includes("Implement extension UI theme setter") || !full.includes("7/5/2026")) {
+    fail("banner must carry recent sessions");
+  }
+  if (/\bomp\b/i.test(full)) fail("banner (with data) must NOT mention omp");
+  ok("LUCID present, omp absent; version + model + Tips + LSP + recent sessions carried");
 }
 
 console.log("3) FAIL-OPEN cosmetics — but fail-CLOSED security is untouched");
@@ -116,7 +128,17 @@ console.log("4) lucid tui argv — the welcome -e rides BEHIND the gate + theme 
 }
 
 console.log("\nLUCID welcome preview (identity paint):\n");
-console.log(renderWelcomeLines({ version: lucidVersion(), model: "Claude Opus 4.8" }).join("\n"));
+console.log(
+  renderWelcomeLines({
+    version: lucidVersion(),
+    model: "Claude Opus 4.8",
+    lsp: [{ name: "clangd", fileTypes: [".c", ".cpp", ".cc"] }],
+    recent: [
+      { name: "Activate caveman mode: ultra", timeAgo: "7/8/2026" },
+      { name: "Implement extension UI theme setter", timeAgo: "7/5/2026" },
+    ],
+  }).join("\n"),
+);
 
 console.log(
   "\ndemo_pbrand1 OK — the gated TUI wears the LUCID welcome; omp branding is gone; bare omp + fail-closed untouched.",
