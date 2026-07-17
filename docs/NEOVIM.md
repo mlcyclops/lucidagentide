@@ -106,6 +106,16 @@ theming ever fails, the session runs on omp's default theme (the security gate i
 - Because `lucid` is also a normal omp custom theme, you can select it for bare omp too
   (omp Settings → Appearance), or live-tweak `~/.omp/agent/themes/lucid.json` — omp hot-reloads it.
 
+### The LUCID welcome (P-BRAND.1)
+
+`lucid tui` replaces omp's built-in welcome box (its block-π logo and `omp v…` title) with the LUCID
+brand. omp's welcome is suppressed per-session via a `--config` overlay (`startup.quiet`) — bare `omp`
+keeps its own — and a small welcome extension paints the LUCID wordmark, version, and model above the
+editor at startup, clearing it once you send the first message. Cosmetic and fail-open: if it ever
+fails the session still runs (the security gate is unaffected).
+
+- `LUCID_WELCOME=off lucid tui` — restore omp's own welcome box.
+
 ---
 
 ## Path 2 — the `lucid.nvim` plugin

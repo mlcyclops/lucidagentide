@@ -80,13 +80,18 @@ export interface LaunchAssets {
   asksage: string;
   /** The LUCID skin extension (P-THEME.1) — cosmetic, fail-open; skins the TUI session only. */
   lucidTheme: string;
+  /** The LUCID welcome extension (P-BRAND.1) — cosmetic, fail-open; paints the LUCID banner over omp's
+   *  suppressed welcome. TUI only. */
+  lucidWelcome: string;
+  /** The `startup.quiet` config overlay that suppresses omp's own welcome box for the gated TUI. */
+  lucidTuiConfig: string;
   /** Task-isolation config overlay (ADR-0028) — used only with --isolate. */
   acpConfig: string;
 }
 
 export function assets(repo: string = repoRoot()): LaunchAssets {
   const omp = (f: string) => join(repo, "harness", "omp", f);
-  return { repo, gate: omp("security_extension.ts"), asksage: omp("asksage_extension.ts"), acpConfig: omp("acp_config.yml"), mcpResultGate: omp("mcp_result_gate.ts"), lucidTheme: omp("lucid_theme_extension.ts") };
+  return { repo, gate: omp("security_extension.ts"), asksage: omp("asksage_extension.ts"), acpConfig: omp("acp_config.yml"), mcpResultGate: omp("mcp_result_gate.ts"), lucidTheme: omp("lucid_theme_extension.ts"), lucidWelcome: omp("lucid_welcome_extension.ts"), lucidTuiConfig: omp("lucid_tui.config.yml") };
 }
 
 /** Resolve the omp binary: explicit env → the bundled copy in the repo node_modules → the user's bun
@@ -137,6 +142,12 @@ export interface BuildTuiOpts {
   /** The LUCID skin extension (P-THEME.1, ADR-0160); included when present so the gated terminal wears
    *  the brand theme. Cosmetic + fail-open — never load-bearing, so absence is fine. */
   lucidTheme?: string;
+  /** The LUCID welcome extension (P-BRAND.1, issue #314); included when present so the gated terminal
+   *  paints the LUCID banner over omp's suppressed welcome. Cosmetic + fail-open — absence is fine. */
+  lucidWelcome?: string;
+  /** The `startup.quiet` overlay path passed via `--config` to suppress omp's own welcome box. Included
+   *  only when the file exists (a missing --config file is a hard error in omp) and the welcome is on. */
+  quietConfig?: string;
   /** omp args appended verbatim after the gated flags (initial prompt, --model, --continue, --resume, -p). */
   passthru?: string[];
 }
@@ -149,6 +160,8 @@ export function buildTuiArgs(o: BuildTuiOpts): string[] {
   if (o.mcpResultGate) args.push("-e", o.mcpResultGate);
   if (o.asksage) args.push("-e", o.asksage);
   if (o.lucidTheme) args.push("-e", o.lucidTheme);
+  if (o.lucidWelcome) args.push("-e", o.lucidWelcome);
+  if (o.quietConfig) args.push("--config", o.quietConfig);
   args.push("--append-system-prompt", APPENDED_POLICY);
   if (o.passthru?.length) args.push(...o.passthru);
   return args;
@@ -325,7 +338,13 @@ export async function runTui(o: RunTuiOpts = {}): Promise<number> {
   const asksage = existsSync(a.asksage) ? a.asksage : undefined;
   const mcpResultGate = existsSync(a.mcpResultGate) ? a.mcpResultGate : undefined;
   const lucidTheme = existsSync(a.lucidTheme) ? a.lucidTheme : undefined;
-  const args = buildTuiArgs({ gate: a.gate, asksage, mcpResultGate, lucidTheme, passthru: o.passthru });
+  // P-BRAND.1 (issue #314): the LUCID welcome replaces omp's own welcome box. `LUCID_WELCOME=off` restores
+  // omp's default (so we then skip BOTH the welcome -e AND the startup.quiet overlay). The overlay is only
+  // passed when the file exists — a missing --config file is a hard error in omp, so absence must fail OPEN.
+  const wantWelcome = !/^(off|0|false)$/i.test((env.LUCID_WELCOME ?? "").trim());
+  const lucidWelcome = wantWelcome && existsSync(a.lucidWelcome) ? a.lucidWelcome : undefined;
+  const quietConfig = wantWelcome && existsSync(a.lucidTuiConfig) ? a.lucidTuiConfig : undefined;
+  const args = buildTuiArgs({ gate: a.gate, asksage, mcpResultGate, lucidTheme, lucidWelcome, quietConfig, passthru: o.passthru });
   const cwd = o.cwd ?? env.LUCID_WORKSPACE ?? process.cwd();
   const spawnFn = o.spawnFn ?? ((c, ar, op) => nodeSpawn(c, ar, op as never) as unknown as SpawnedLike);
 

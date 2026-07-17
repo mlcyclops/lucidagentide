@@ -465,6 +465,10 @@ demo-P-NVIM.1: ## P-NVIM.1 (ADR-0150): Neovim + terminal integration — `lucid 
 demo-P-THEME.1: ## P-THEME.1 (ADR-0160): the LUCID skin for gated terminals — themes/lucid.json resolves, session_start provisions (idempotent) + setTheme("lucid"), fail-OPEN cosmetics never weaken fail-CLOSED, and the theme -e rides behind the gate -e
 	$(BUN) run harness/scripts/demo_ptheme1.ts
 
+.PHONY: demo-P-BRAND.1
+demo-P-BRAND.1: ## P-BRAND.1 (issue #314): the LUCID TUI welcome — lucid_tui.config.yml suppresses omp's welcome (startup.quiet), renderWelcomeLines names LUCID never omp, LUCID_WELCOME=off restores omp's box, fail-OPEN cosmetics never weaken fail-CLOSED, and the welcome -e rides behind the gate + theme -e with the --config overlay
+	$(BUN) run harness/scripts/demo_pbrand1.ts
+
 .PHONY: nvim-plugin-split
 nvim-plugin-split: ## Split extensions/neovim -> the standalone `lucid.nvim` branch (add PUSH=1 to force-push to origin)
 	@sha=$$(git subtree split --prefix=extensions/neovim HEAD); \

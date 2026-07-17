@@ -1,0 +1,12 @@
+# harness/omp/lucid_tui.config.yml
+#
+# omp settings overlay for the gated LUCID TUI (P-BRAND.1, issue #314). The launcher
+# (harness/launcher/lucid_acp.ts, TUI only) passes it via `--config` so omp SKIPS its built-in
+# welcome box — the block-Π logo and the "omp v…" title — leaving the LUCID welcome extension
+# (lucid_welcome_extension.ts) to paint the brand instead.
+#
+# Precedence: it is deep-merged AFTER global/project settings, so it skins ONLY this gated session;
+# a bare `omp` keeps its own welcome. Cosmetic + fail-open: the launcher passes `--config` only when
+# this file exists (a missing --config file is a HARD error in omp), and `LUCID_WELCOME=off` skips it.
+startup:
+  quiet: true
