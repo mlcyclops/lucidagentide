@@ -119,12 +119,25 @@ export default function asksageExtension(pi: any): void {
 
     // OpenAI-compatible route: omp appends `/chat/completions` to baseUrl and sends
     // `Authorization: Bearer` from apiKey; we add AskSage's extra `x-access-tokens`.
+    //
+    // compat.omitReasoningEffort: THE "GPT-5.6/5.5 return nothing" fix. omp sends `tools` (its whole
+    // coding toolset) AND `reasoning_effort` on every turn; AskSage's shim REJECTS that combination on
+    // the GPT-5.x reasoning models ("Function tools with reasoning_effort are not supported ... in
+    // /v1/chat/completions. Please use /v1/responses instead.") - and because the call is STREAMED, the
+    // rejection arrives as an HTTP-200 SSE whose only event is an `error` object. omp sees zero deltas
+    // and ends the turn SILENTLY (end_turn) - the empty bubble. Proven by replaying omp's captured
+    // request body verbatim against the live gateway, then bisecting: drop `reasoning_effort` (keep all
+    // 27 tools) -> real reply; drop `tools` -> real reply; both present -> the streamed error. Tools are
+    // non-negotiable for the agent, so omit the effort knob here (the models still reason at their
+    // default effort). Moving this route to /v1/responses (which supports both) is the eventual upgrade.
+    // maxTokensField is pinned defensively - the gateway rejects the legacy `max_tokens` on 5.x too
+    // (omp 16.1.20 already picks max_completion_tokens; the pin survives an omp default change).
     pi.registerProvider("asksage-openai", {
       baseUrl: `${base}/openai/v1`,
       api: "openai-completions",
       apiKey: "ASKSAGE_API_KEY",
       headers: { "x-access-tokens": key },
-      models: toProviderModels(OPENAI_MODELS),
+      models: toProviderModels(OPENAI_MODELS).map((m) => ({ ...m, compat: { omitReasoningEffort: true, maxTokensField: "max_completion_tokens" } })),
     });
 
     // Anthropic (claude) + Google (gemini): AskSage serves these non-streamed, so a
