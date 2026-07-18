@@ -85,7 +85,7 @@ export function dedupConsecutive(text: string, opts?: DedupOptions): DedupResult
   let removed = 0;
   let i = 0;
   while (i < lines.length) {
-    const cur = lines[i];
+    const cur = lines[i] ?? ""; // ?? "": i < lines.length, so the fallback never fires (index-access typing)
     let j = i + 1;
     while (j < lines.length && lines[j] === cur) j++;
     const runLen = j - i;

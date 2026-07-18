@@ -153,7 +153,7 @@ export function filterGitStatus(raw: string, opts?: GitStatusOptions): string {
       continue;
 
     const m = line.match(STATUS_WORD);
-    if (m && (section === "staged" || section === "unstaged")) {
+    if (m?.[1] !== undefined && m[2] !== undefined && (section === "staged" || section === "unstaged")) {
       const entry = { status: shortStatus(m[1]), path: m[2].trim() };
       (section === "staged" ? staged : unstaged).push(entry);
       continue;
@@ -263,11 +263,11 @@ export function filterLogDedup(raw: string, opts?: LogDedupOptions): DedupLike {
   let removed = 0;
   let i = 0;
   while (i < lines.length) {
-    const key = normalizeKey(lines[i], aggressive);
+    const key = normalizeKey(lines[i] ?? "", aggressive); // ?? "": i < lines.length, so the fallback never fires (index-access typing)
     let j = i + 1;
-    while (j < lines.length && normalizeKey(lines[j], aggressive) === key) j++;
+    while (j < lines.length && normalizeKey(lines[j] ?? "", aggressive) === key) j++;
     const run = j - i;
-    const first = lines[i].replace(/\r$/, "");
+    const first = (lines[i] ?? "").replace(/\r$/, "");
     if (run >= min) {
       out.push(`${first} (x${run})`);
       removed += run - 1;

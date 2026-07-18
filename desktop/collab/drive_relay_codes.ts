@@ -75,7 +75,7 @@ export function parseCodes(value: unknown): RelayCode[] {
 function bytesToB64(bytes: Uint8Array): string { let s = ""; for (const b of bytes) s += String.fromCharCode(b); return btoa(s); }
 function b64ToBytes(s: string): Uint8Array { const bin = atob(s); const out = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i); return out; }
 
-async function deriveKey(pin: string, salt: BufferSource): Promise<CryptoKey> {
+async function deriveKey(pin: string, salt: Uint8Array<ArrayBuffer>): Promise<CryptoKey> { // what both callers pass; `BufferSource` isn't a global under the root tsconfig, and the crypto lib rejects ArrayBufferLike-backed views
   const base = await crypto.subtle.importKey("raw", new TextEncoder().encode(pin), "PBKDF2", false, ["deriveKey"]);
   return crypto.subtle.deriveKey({ name: "PBKDF2", salt, iterations: PBKDF2_ITERS, hash: "SHA-256" }, base, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
 }
