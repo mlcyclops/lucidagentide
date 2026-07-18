@@ -107,6 +107,27 @@ function ledgerFromFile(path: string): Map<string, Acc> {
 
 const fileCache = new Map<string, { mtime: number; per: Map<string, Acc> }>();
 
+// P-PERF.3: the sessions dir grows without bound (thousands of .jsonl files). readdir + stat-ing them ALL on
+// every dashboard poll is a multi-second SYNCHRONOUS block that stalls the server event loop — and the model's
+// reply streaming with it. Cache the directory WALK for a short TTL so repeat polls reuse the file list; the
+// per-file `fileCache` already re-parses only genuinely-changed files, and a brand-new session shows within the
+// TTL. Shared by the two walkers (usageLedger + discoverWorkspaces). Live token counts still come from the HUD.
+const SESSION_SCAN_TTL_MS = 15_000;
+const sessionScanCache = new Map<string, { at: number; files: { p: string; mtime: number }[] }>();
+function scanSessionFiles(root: string): { p: string; mtime: number }[] {
+  const hit = sessionScanCache.get(root);
+  if (hit && Date.now() - hit.at < SESSION_SCAN_TTL_MS) return hit.files;
+  const files: { p: string; mtime: number }[] = [];
+  if (existsSync(root)) for (const d of readdirSync(root)) {
+    const dir = join(root, d);
+    try { if (!statSync(dir).isDirectory()) continue; for (const f of readdirSync(dir)) if (f.endsWith(".jsonl")) files.push({ p: join(dir, f), mtime: statSync(join(dir, f)).mtimeMs }); }
+    catch { /* skip unreadable dirs */ }
+  }
+  files.sort((a, b) => b.mtime - a.mtime);
+  sessionScanCache.set(root, { at: Date.now(), files });
+  return files;
+}
+
 /** Aggregate per-model usage + cost across all omp sessions. `root`/`maxFiles` are for tests. */
 export function usageLedger(opts: { root?: string; maxFiles?: number } = {}): UsageLedger {
   const root = opts.root ?? join(homedir(), ".omp", "agent", "sessions");
@@ -115,13 +136,7 @@ export function usageLedger(opts: { root?: string; maxFiles?: number } = {}): Us
   const empty: UsageLedger = { models: [], totals: { sessions: 0, turns: 0, tokens: 0, cost: 0, savings: 0, cacheHitRate: 0 }, bySource: { subscription: { cost: 0, tokens: 0 }, local: { cost: 0, tokens: 0 } }, files: 0, truncated: false, generatedAt };
   if (!existsSync(root)) return empty;
 
-  const files: { p: string; mtime: number }[] = [];
-  for (const d of readdirSync(root)) {
-    const dir = join(root, d);
-    try { if (!statSync(dir).isDirectory()) continue; for (const f of readdirSync(dir)) if (f.endsWith(".jsonl")) files.push({ p: join(dir, f), mtime: statSync(join(dir, f)).mtimeMs }); }
-    catch { /* skip */ }
-  }
-  files.sort((a, b) => b.mtime - a.mtime);
+  const files = scanSessionFiles(root); // P-PERF.3: TTL-cached walk (was a per-poll stat storm over 1000s of files)
   const truncated = files.length > cap;
   const scan = truncated ? files.slice(0, cap) : files;
 
@@ -222,13 +237,7 @@ function readSessionCwd(path: string): string | undefined {
 function discoverWorkspaces(root?: string, cap = 500): string[] {
   const base = root ?? join(homedir(), ".omp", "agent", "sessions");
   if (!existsSync(base)) return [];
-  const files: { p: string; mtime: number }[] = [];
-  for (const d of readdirSync(base)) {
-    const dir = join(base, d);
-    try { if (!statSync(dir).isDirectory()) continue; for (const f of readdirSync(dir)) if (f.endsWith(".jsonl")) files.push({ p: join(dir, f), mtime: statSync(join(dir, f)).mtimeMs }); }
-    catch { /* skip */ }
-  }
-  files.sort((a, b) => b.mtime - a.mtime);
+  const files = scanSessionFiles(base); // P-PERF.3: shared TTL-cached walk
   const seen = new Set<string>();
   const out: string[] = [];
   for (const { p } of files.slice(0, cap)) {
@@ -290,7 +299,19 @@ export function ompBin(): string {
   return "omp";
 }
 
+// P-PERF.3: this SPAWNS an omp subprocess (`config list`) SYNCHRONOUSLY on every call — ~2s of booting omp just
+// to read basically-static compaction settings, and it's on the memory-snapshot poll path, so it blocked the
+// event loop (and the model's reply) every few seconds. This was the single biggest stall. Cache it for a long
+// TTL; the config almost never changes and a manual refresh re-reads within the window.
+let _cpCache: { at: number; data: Record<string, string> | undefined } | null = null;
+const _CP_TTL_MS = 60_000;
 export function compactionPolicy(): Record<string, string> | undefined {
+  if (_cpCache && Date.now() - _cpCache.at < _CP_TTL_MS) return _cpCache.data;
+  const data = _compactionPolicyUncached();
+  _cpCache = { at: Date.now(), data };
+  return data;
+}
+function _compactionPolicyUncached(): Record<string, string> | undefined {
   try {
     const r = Bun.spawnSync([ompBin(), "config", "list", "--json"]);
     if (!r.success) return undefined;
@@ -323,7 +344,19 @@ export interface HarnessMemory {
 /** Path to the live observability DB written by the security gate. */
 export const OBS_DB_PATH = join(import.meta.dir, "..", "agent_obs.duckdb");
 
+// P-PERF.3: harnessMemory + aiLocSummary each open a fresh READ_ONLY DuckDB per call (~1s each as the obs DB
+// grows) — both on the memory-snapshot poll path, so they blocked model streaming. Semantic-memory + AI-LOC
+// counts change slowly, so cache both for a short TTL. (Still read-only-per-open, so the gate's writer never
+// blocks; we just call it far less often.)
+const _OBS_TTL_MS = 20_000;
+let _hmCache: { at: number; data: HarnessMemory | null } | null = null;
 export async function harnessMemory(): Promise<HarnessMemory | null> {
+  if (_hmCache && Date.now() - _hmCache.at < _OBS_TTL_MS) return _hmCache.data;
+  const data = await _harnessMemoryUncached();
+  _hmCache = { at: Date.now(), data };
+  return data;
+}
+async function _harnessMemoryUncached(): Promise<HarnessMemory | null> {
   if (!existsSync(OBS_DB_PATH)) return null;
   try {
     const instance = await DuckDBInstance.create(OBS_DB_PATH, { access_mode: "READ_ONLY" });
@@ -392,8 +425,12 @@ export interface AiLocSummary {
  *  direct read here always lock-failed → null → the "AI-authored code" panel showed "none yet" despite rows
  *  in the DB (the reported bug). The DuckDB `ai_loc_ledger` remains the BI/audit system-of-record; the live
  *  dashboard reads the lock-free JSONL mirror. Aggregation is pure (ailoc_read.ts). */
+let _alCache: { at: number; data: AiLocSummary | null } | null = null;
 export async function aiLocSummary(): Promise<AiLocSummary | null> {
-  return aggregateAiLoc(readAiLocSamples(), new Date().toISOString());
+  if (_alCache && Date.now() - _alCache.at < _OBS_TTL_MS) return _alCache.data;
+  const data = aggregateAiLoc(readAiLocSamples(), new Date().toISOString());
+  _alCache = { at: Date.now(), data };
+  return data;
 }
 
 export function ageStr(epochMs: number | null): string {
