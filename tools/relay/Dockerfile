@@ -11,9 +11,11 @@ FROM oven/bun:1-alpine
 
 WORKDIR /app
 
-# relay_server.ts is self-contained (no npm deps), and serve.ts only uses Bun + node:fs — so we copy just
-# these two files. No `bun install`, no node_modules: a tiny, auditable image.
+# The relay/auth/presence modules use only Bun/WebCrypto/fetch, and serve.ts only adds node:fs. No
+# `bun install`, no node_modules: a tiny, auditable image. Telemetry remains off unless explicitly enabled.
 COPY desktop/collab/relay_server.ts ./desktop/collab/relay_server.ts
+COPY desktop/collab/relay_auth.ts ./desktop/collab/relay_auth.ts
+COPY desktop/collab/relay_presence.ts ./desktop/collab/relay_presence.ts
 COPY tools/relay/serve.ts ./tools/relay/serve.ts
 
 ENV HOST=0.0.0.0 \

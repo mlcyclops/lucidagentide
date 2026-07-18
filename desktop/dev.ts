@@ -97,9 +97,13 @@ import { spawn as spawnChild } from "node:child_process";
 import { installRegistrySkill, type RegistrySkillArtifact } from "./skills_registry.ts"
 import { CollabManager } from "./collab/manager.ts"; // P-COLLAB.3 (ADR-0192): the live-share host lifecycle
 import { CollabSocket } from "./collab/relay_client.ts";
+import { RelayTokenCache } from "./collab/relay_token_cache.ts"; // P-REMOTE.2c: renderer-pushed relay auth token
 import { CollabGuest } from "./collab/guest.ts"; // P-COLLAB.10 (ADR-0196): watch a shared session read-only
 import { parseShareLink } from "./collab/link.ts";
 import { importRoomKey } from "./collab/crypto.ts";
+import type { CollabOptions } from "./collab/frames.ts"; // P-COLLAB.14 (ADR-0228): edit-guest model+folder picks
+import { MAX_FAVS, offeredModels } from "./renderer/model_favorites.ts"; // P-REMOTE.11b (ADR-0238): favorites-filtered guest picker (pure, DOM-free)
+import { accessCounts, buildShareAwareness, type ShareCounts } from "./collab/share_awareness.ts"; // P-PREVIEW-PWA.3 (ADR-0240): agent share-awareness preamble
 import { recordCollabShareStarted, recordCollabShareStopped, recordCollabGuestJoined, recordCollabGuestLeft, recordCollabAudit } from "./collab/collab_audit.ts"; // P-COLLAB.18 (ADR-0204)
 import { authorizeRelayConnect } from "./managed_config.ts";
 import { collabRelayConfig, setCollabRelay, collabP2PConfig, setCollabP2P } from "./settings_store.ts";
@@ -178,7 +182,7 @@ function parseLoopDial(raw: unknown): LoopDial | undefined {
   return Object.keys(out).length ? out : undefined;
 }
 import { pathWithin } from "./path_guard.ts";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { buildRecall } from "../harness/memory/recall.ts";
 import { Db } from "../harness/memory/db.ts";
 import type { ImportVendor } from "../harness/personal/import_adapters.ts";
@@ -232,13 +236,29 @@ process.on("exit", () => { try { collabRelay?.stop(); } catch { /* already gone 
 
 /** The relay a new share will use: THIS device's embedded relay when running (no third party), else the
  *  configured external relay (self-hosted default / public opt-in), else null (start fails closed). */
-function effectiveRelay(): { wsBase: string; httpBase: string; label: string; source: string } | null {
+function effectiveRelay(): { wsBase: string; httpBase: string; label: string; source: string; pwaBase?: string; gated?: boolean } | null {
+  // P-REMOTE.2b (ADR-0226/0227): a PROVISIONED hosted build sets LUCID_REMOTE_PWA_BASE (MAIN -> dev-child env,
+  // the same channel as the other provisioned config) to the phone PWA origin (e.g.
+  // https://lucid-agent.web.app/remote). When set, invite BROWSER links point at the PWA so a phone can open
+  // them. Unset (the OSS default: embedded / self-hosted / public relay) -> legacy relay-host browser links.
+  const envPwaBase = process.env.LUCID_REMOTE_PWA_BASE?.trim() || undefined;
+  const gatedEnv = process.env.LUCID_RELAY_GATED?.trim();
   if (collabRelay) {
     const origin = `${collabRelay.hostname}:${collabRelay.port}`;
-    return { wsBase: `ws://${origin}`, httpBase: `http://${origin}`, label: "this device (embedded relay)", source: "embedded" };
+    return { wsBase: `ws://${origin}`, httpBase: `http://${origin}`, label: "this device (embedded relay)", source: "embedded", pwaBase: envPwaBase, gated: false };
   }
   const r = collabRelayConfig();
-  return r ? { wsBase: r.wsBase, httpBase: r.httpBase, label: r.label, source: r.source } : null;
+  if (!r) return null;
+  // P-REMOTE.2b/.2c: the first-party HOSTED rendezvous (Cloud Run behind the LB) runs RELAY_AUTH=firebase and
+  // pairs with the hosted phone PWA. Recognize it BY HOST so ANY install pointed at it (a) AUTHENTICATES
+  // (gated -> the host presents a token, else the gated relay silently drops it and no room is created) and
+  // (b) mints PHONE-openable PWA invite links that CARRY the write token for EDIT shares (the relay-host
+  // fallback link is view-only, which is why an edit share showed the phone as view). All WITHOUT a
+  // per-machine LUCID_RELAY_GATED / LUCID_REMOTE_PWA_BASE env var (that dance was lost on every restart).
+  const hosted = /^wss?:\/\/relay\.aiworkshopapps\.com(?:[:/]|$)/i.test(r.wsBase);
+  const pwaBase = envPwaBase ?? (hosted ? "https://lucid-agent.web.app/remote" : undefined);
+  const gated = gatedEnv ? (gatedEnv === "1" || gatedEnv.toLowerCase() === "true") : (!!pwaBase || hosted);
+  return { wsBase: r.wsBase, httpBase: r.httpBase, label: r.label, source: r.source, pwaBase, gated };
 }
 
 // P-COLLAB.10 (ADR-0196): the one shared session this backend is WATCHING as a guest (Phase 1: one at a time).
@@ -249,8 +269,51 @@ function leaveCollabGuest(): void { try { collabGuest?.guest.leave("you left the
 // P-COLLAB.13 (ADR-0198): an EDIT guest's prompt/abort lands here; the HOST renderer polls this inbox and
 // runs it through its OWN composer (so omp's scan gate + exec/egress approvals fire, and the turn taps back to
 // collab). Consume-on-read. The prompt text is a remote guest's input - clamp its length defensively.
-let pendingGuestPrompt: { text: string; from: string } | null = null;
+let pendingGuestPrompt: { text: string; from: string; images?: string[] } | null = null;
 let guestAbortRequested = false;
+// P-COLLAB.14 (ADR-0228): a connected EDIT guest's model / already-used-folder pick, consumed-on-read by the
+// host renderer's guest-inbox poll and applied through its OWN picker path (applyConfig / applyWorkspace).
+let pendingGuestModel: { value: string; from: string } | null = null;
+let pendingGuestWorkspace: { path: string; from: string } | null = null;
+// OPAQUE id -> absolute workspace path, host-LOCAL only: a guest picks by id and never sends (or learns) a
+// filesystem path. Rebuilt on every buildCollabOptions() (share start + refreshOptions).
+let collabWsById: Record<string, string> = {};
+
+/** P-COLLAB.14: a stable, path-revealing-nothing id for a workspace (short SHA-256 of the absolute path). */
+function collabWorkspaceId(path: string): string { return createHash("sha256").update(path).digest("base64url").slice(0, 16); }
+
+/** P-COLLAB.14: the model + already-used-folder allowlists offered to EDIT guests. Models come from omp's
+ *  live `model` config option (value+name only); folders from the workspace history (current + recent), each
+ *  keyed by an OPAQUE id the host resolves back to a path. Metadata only - never a credential or a path. */
+// P-REMOTE.11b (ADR-0238): the host renderer's favorite model values, pushed with /api/collab/start (favorites
+// live in renderer localStorage - this backend cannot read them). Guests are offered just these + the current.
+let collabFavModels: string[] = [];
+
+function buildCollabOptions(): CollabOptions {
+  // backend.configOptions is omp's `any[]` config catalog (same access style as acp_backend.accessibleModels).
+  const opt = backend.configOptions.find((c: { id?: string }) => c?.id === "model");
+  const rawModels: { value?: unknown; name?: unknown }[] = Array.isArray(opt?.options) ? opt.options : [];
+  const all = rawModels
+    .map((o) => ({ value: String(o?.value ?? ""), name: String(o?.name ?? o?.value ?? "") }))
+    .filter((m) => m.value);
+  const activeModel = backend.activeModelName() || (loadSettings().lastModel ?? "");
+  const models = offeredModels(all, collabFavModels, activeModel); // P-REMOTE.11b: favorites + current only
+  const ws = workspaceInfo();
+  const folders = [{ path: ws.current, name: ws.name, isGit: ws.isGit }, ...ws.recent];
+  const byId: Record<string, string> = {};
+  const workspaces = folders.map((f) => {
+    const id = collabWorkspaceId(f.path);
+    byId[id] = f.path;
+    return { id, name: f.name, isGit: f.isGit };
+  });
+  collabWsById = byId;
+  return { models, activeModel, workspaces, activeWorkspaceId: collabWorkspaceId(ws.current) };
+}
+
+// P-REMOTE.2c (ADR-0226/0227): the renderer pushes a fresh Firebase ID token here (POST /api/collab/token);
+// the host + watch-guest sockets read it via authToken. Empty until pushed -> anonymous connect (unchanged
+// for non-gated relays; a gated relay refuses, never a silent unauthenticated session).
+const relayTokenCache = new RelayTokenCache();
 
 const collabManager = new CollabManager({
   resolveRelay: () => effectiveRelay(),
@@ -263,10 +326,23 @@ const collabManager = new CollabManager({
       hostName: (s.username ?? "").trim() || osHostname(),
     };
   },
-  makeTransport: ({ wsUrl, key }) => new CollabSocket({ wsUrl, role: "host", key }),
+  // P-REMOTE.2c: present the renderer-pushed Firebase ID token ONLY when the relay is GATED (RELAY_AUTH). For
+  // an anonymous relay (embedded / self-hosted / public - the default), authToken stays UNSET so the socket
+  // connects anonymously exactly as before (a token frame to an un-gated relay would hang on a missing
+  // auth-ok). Gated + empty cache -> null -> the relay refuses, never a silent unauthenticated session.
+  makeTransport: ({ wsUrl, key }) => new CollabSocket({
+    wsUrl, role: "host", key,
+    ...(effectiveRelay()?.gated ? { authToken: () => relayTokenCache.get() } : {}),
+  }),
   now: () => Date.now(),
-  onGuestPrompt: (text, guest) => { pendingGuestPrompt = { text: String(text).slice(0, 20_000), from: guest.name }; },
+  onGuestPrompt: (text, guest, images) => { pendingGuestPrompt = { text: String(text).slice(0, 20_000), from: guest.name, ...(Array.isArray(images) && images.length ? { images: images.slice(0, 6).map(String) } : {}) }; },
   onGuestAbort: () => { guestAbortRequested = true; },
+  // P-COLLAB.14 (ADR-0228): offer EDIT guests the model + already-used-folder allowlists, and honor their
+  // picks. The host has already re-validated the value/id against the allowlist (fail-closed); here we just
+  // stage it for the host renderer to apply through its OWN picker path (its UI + omp reconcile identically).
+  collabOptions: buildCollabOptions,
+  onGuestSetModel: (value, guest) => { pendingGuestModel = { value: String(value).slice(0, 200), from: guest.name }; },
+  onGuestSetWorkspace: (id, guest) => { const path = collabWsById[String(id)]; if (path) pendingGuestWorkspace = { path, from: guest.name }; },
   // P-COLLAB.18 (ADR-0204): host-authoritative audit — a guest joined/left the RELAY share. Metadata only.
   onParticipant: (kind, guest) => {
     const meta = { transport: "relay" as const, access: guest.access, roomId: collabManager.status().roomId, guest: guest.name };
@@ -1579,7 +1655,7 @@ const server = Bun.serve({
 
       // workspace (the folder the agent works in; local or cloned remote)
       if (p === "/api/workspace") {
-        if (req.method === "POST") { const b = await readBody<{ path?: unknown }>(req); setWorkspace(String(b.path ?? "")); backend.restart(); }
+        if (req.method === "POST") { const b = await readBody<{ path?: unknown }>(req); setWorkspace(String(b.path ?? "")); backend.restart(); if (collabManager.active) collabManager.refreshOptions(); /* P-COLLAB.14: mirror the folder switch to edit guests */ }
         return json({ ok: true, data: workspaceInfo() });
       }
       if (p === "/api/workspace/clone" && req.method === "POST") {
@@ -2125,7 +2201,7 @@ const server = Bun.serve({
         return json({ ok: true, data: exportCuiArchive({ dest: typeof b.dest === "string" ? b.dest : undefined, reviewer: typeof b.reviewer === "string" ? b.reviewer : undefined, designation: typeof b.designation === "object" && b.designation ? b.designation : undefined }) });
       }
       if (p === "/api/personal/exports") return json({ ok: true, data: exportHistory() });
-      if (p === "/api/setConfig" && req.method === "POST") { const { configId, value } = await readBody<{ configId: string; value: string }>(req); return json({ ok: true, data: await backend.setConfig(configId, value) }); }
+      if (p === "/api/setConfig" && req.method === "POST") { const { configId, value } = await readBody<{ configId: string; value: string }>(req); const data = await backend.setConfig(configId, value); if (configId === "model" && collabManager.active) collabManager.refreshOptions(); /* P-COLLAB.14: mirror the model switch to edit guests */ return json({ ok: true, data }); }
       // P-ACP.2 (ADR-0027): ACP session modes (Plan / Agent). GET lists them + the active one;
       // POST {modeId} switches via session/set_mode.
       if (p === "/api/modes") {
@@ -2169,7 +2245,7 @@ const server = Bun.serve({
       // ADR-0009 Phase A: re-load the cross-session recall block for the fresh session (read-only).
       if (p === "/api/newSession" && req.method === "POST") { await backend.newSession(); await refreshRecall(); return json({ ok: true }); }
       if (p === "/api/chat" && req.method === "POST") {
-        const { text, images } = await readBody<{ text?: unknown; images?: unknown }>(req);
+        const { text, images, from, share } = await readBody<{ text?: unknown; images?: unknown; from?: unknown; share?: unknown }>(req);
         // P-VISION.1 (ADR-0136): pasted-image content blocks ride alongside the text (defensively filtered).
         const imgs = Array.isArray(images)
           ? images.filter((im): im is { data: string; mimeType: string } => !!im && typeof (im as { data?: unknown }).data === "string" && typeof (im as { mimeType?: unknown }).mimeType === "string").slice(0, 6)
@@ -2177,8 +2253,23 @@ const server = Bun.serve({
         const prompt = String(text ?? "");
         // P-COLLAB.3 (ADR-0192): when a share is live, mirror this turn to view-only guests. The tap is a
         // best-effort passthrough — a collab failure must never break the local chat stream.
-        if (collabManager.active) { try { collabManager.tapUserTurn(prompt); } catch { /* non-fatal */ } }
-        return ndjsonStream("chat", (emit) => backend.prompt(prompt, (e) => {
+        // P-COLLAB.15: `from` (present for a guest-driven turn) attributes the broadcast; else the host authors it.
+        const turnFrom = typeof from === "string" && from.trim() ? String(from).slice(0, 48) : undefined;
+        if (collabManager.active) { try { collabManager.tapUserTurn(prompt, turnFrom); } catch { /* non-fatal */ } }
+        // P-PREVIEW-PWA.3 (ADR-0240): while guests watch, the MODEL sees a trusted awareness preamble (counts
+        // only - guest names are untrusted and withheld); the CLEAN prompt above is what guests get mirrored
+        // (P-COLLAB.15) and what the user typed. Relay roster is read here; a renderer-hosted direct-P2P share
+        // sends its counts in the body (validated). Rebuilt per turn -> appears/vanishes with the roster.
+        let bodyShare: ShareCounts | null = null;
+        if (share && typeof share === "object" && "view" in share && "edit" in share) {
+          const v = Number(share.view);
+          const e = Number(share.edit);
+          if (Number.isFinite(v) && Number.isFinite(e)) bodyShare = { view: v, edit: e };
+        }
+        const counts = collabManager.active ? accessCounts(collabManager.status().participants) : bodyShare;
+        const awareness = buildShareAwareness(counts);
+        const modelPrompt = awareness ? `${awareness}\n\n${prompt}` : prompt;
+        return ndjsonStream("chat", (emit) => backend.prompt(modelPrompt, (e) => {
           // acp_backend's ChatEvent and bridge's are structurally identical (kept in parity); bridge over the
           // separate declarations at this one boundary.
           if (collabManager.active) { try { collabManager.tapEvent(e as unknown as Parameters<typeof collabManager.tapEvent>[0]); } catch { /* non-fatal */ } }
@@ -2189,9 +2280,21 @@ const server = Bun.serve({
       // room + view/full links + stands up the host (fail-closed if no relay is authorized); `stop` ends it.
       // `relay` GET/POST reads + configures the authorized relay (self-hosted default, public opt-in).
       if (p === "/api/collab/status") return json({ ok: true, data: { ...collabManager.status(), relay: effectiveRelay() } });
+      // P-REMOTE.2c: the renderer pushes a fresh Firebase ID token for the GATED hosted relay. Token-gated like
+      // every /api call; the token itself is never logged or echoed back (only whether one is now cached).
+      if (p === "/api/collab/token" && req.method === "POST") {
+        const b = await readBody<{ idToken?: unknown; expiresAt?: unknown }>(req);
+        const idToken = typeof b.idToken === "string" ? b.idToken : "";
+        const expiresAt = Number(b.expiresAt);
+        if (!idToken) { relayTokenCache.clear(); return json({ ok: true, data: { present: false } }); }
+        relayTokenCache.set(idToken, expiresAt);
+        return json({ ok: true, data: { present: relayTokenCache.present } });
+      }
       if (p === "/api/collab/start" && req.method === "POST") {
-        const b = await readBody<{ allowEdit?: unknown }>(req);
-        pendingGuestPrompt = null; guestAbortRequested = false; // fresh inbox per share
+        const b = await readBody<{ allowEdit?: unknown; favModels?: unknown }>(req);
+        // P-REMOTE.11b: snapshot the renderer's favorite models for the guest picker (validated, capped).
+        collabFavModels = Array.isArray(b.favModels) ? b.favModels.filter((x): x is string => typeof x === "string" && x.length > 0).slice(0, MAX_FAVS) : [];
+        pendingGuestPrompt = null; guestAbortRequested = false; pendingGuestModel = null; pendingGuestWorkspace = null; // fresh inbox per share
         try {
           const status = await collabManager.start({ allowEdit: b.allowEdit === true });
           // P-COLLAB.18: audit the RELAY share start (metadata only).
@@ -2202,27 +2305,56 @@ const server = Bun.serve({
       }
       if (p === "/api/collab/stop" && req.method === "POST") {
         const prev = collabManager.status(); // capture the roomId/access before the share is torn down
-        pendingGuestPrompt = null; guestAbortRequested = false;
+        pendingGuestPrompt = null; guestAbortRequested = false; pendingGuestModel = null; pendingGuestWorkspace = null;
         const data = collabManager.stop("host ended the session");
         if (prev.active) recordCollabShareStopped({ transport: "relay", access: prev.allowEdit ? "edit" : "view", roomId: prev.roomId, relaySource: prev.relaySource });
         return json({ ok: true, data });
       }
+      // P-PREVIEW-PWA.1 (ADR-0237): broadcast a Preview-panel snapshot to RELAY guests. The renderer captured +
+      // downscaled it; we just tap it into the live CollabHost (E2E-sealed, relay sees only ciphertext). Fail-
+      // closed: no active relay share OR a non-image payload -> sent:false, nothing broadcast.
+      if (p === "/api/collab/preview" && req.method === "POST") {
+        const b = await readBody<{ image?: unknown; label?: unknown }>(req);
+        const image = typeof b.image === "string" ? b.image : "";
+        const label = typeof b.label === "string" ? b.label.slice(0, 120) : undefined;
+        if (!collabManager.active || !image.startsWith("data:image/")) return json({ ok: true, data: { sent: false } });
+        try { collabManager.tapEvent({ type: "preview-snapshot", image, ...(label ? { label } : {}) }); } catch { /* non-fatal */ }
+        return json({ ok: true, data: { sent: true } });
+      }
       // P-COLLAB.13 (ADR-0198): the HOST renderer polls this while sharing with edit; it runs any pending
       // guest prompt through its own composer (gate + approvals) + aborts on request. Consume-on-read.
       if (p === "/api/collab/guest-inbox") {
-        const out = { prompt: pendingGuestPrompt, abort: guestAbortRequested };
-        pendingGuestPrompt = null; guestAbortRequested = false;
+        // P-COLLAB.14: also carry a guest's model / already-used-folder pick (workspace as a host-LOCAL path -
+        // resolved from the opaque id here, never sent to the guest). Consume-on-read like prompt/abort.
+        const out = { prompt: pendingGuestPrompt, abort: guestAbortRequested, model: pendingGuestModel, workspace: pendingGuestWorkspace };
+        pendingGuestPrompt = null; guestAbortRequested = false; pendingGuestModel = null; pendingGuestWorkspace = null;
         return json({ ok: true, data: out });
       }
       // The connected GUEST drives the host (EDIT access only - CollabGuest.sendPrompt no-ops when read-only).
       if (p === "/api/collab/guest-prompt" && req.method === "POST") {
-        const b = await readBody<{ text?: unknown }>(req);
+        const b = await readBody<{ text?: unknown; images?: unknown }>(req);
         const g = collabGuest?.guest;
         if (!g) return json({ ok: false, error: "you are not connected to a shared session" });
-        const sent = g.sendPrompt(String(b.text ?? ""));
+        // P-REMOTE.8: a desktop watch-guest may attach images too (validated image data URLs).
+        const images = Array.isArray(b.images) ? b.images.filter((s): s is string => typeof s === "string") : undefined;
+        const sent = g.sendPrompt(String(b.text ?? ""), images);
         return sent ? json({ ok: true, data: { sent: true } }) : json({ ok: false, error: "you are watching read-only - ask the host for an edit link" });
       }
       if (p === "/api/collab/guest-abort" && req.method === "POST") { collabGuest?.guest.abort(); return json({ ok: true, data: { aborted: true } }); }
+      // P-COLLAB.14: the connected GUEST switches the host's active model / already-used folder (EDIT access
+      // only - CollabGuest.setModel/setWorkspace no-op when read-only or the pick isn't in the offered list).
+      if (p === "/api/collab/guest-model" && req.method === "POST") {
+        const b = await readBody<{ value?: unknown }>(req);
+        const g = collabGuest?.guest;
+        if (!g) return json({ ok: false, error: "you are not connected to a shared session" });
+        return g.setModel(String(b.value ?? "")) ? json({ ok: true, data: { sent: true } }) : json({ ok: false, error: "you can't switch the model here - ask the host for an edit link" });
+      }
+      if (p === "/api/collab/guest-workspace" && req.method === "POST") {
+        const b = await readBody<{ id?: unknown }>(req);
+        const g = collabGuest?.guest;
+        if (!g) return json({ ok: false, error: "you are not connected to a shared session" });
+        return g.setWorkspace(String(b.id ?? "")) ? json({ ok: true, data: { sent: true } }) : json({ ok: false, error: "you can't switch the folder here - ask the host for an edit link" });
+      }
       if (p === "/api/collab/relay" && req.method === "GET") return json({ ok: true, data: { relay: collabRelayConfig() } });
       if (p === "/api/collab/relay" && req.method === "POST") {
         const b = await readBody<{ url?: unknown; publicOptIn?: unknown }>(req);
@@ -2296,6 +2428,8 @@ const server = Bun.serve({
             let key: CryptoKey;
             try { key = await importRoomKey(parsed.key); } catch { emit({ kind: "error", message: "the invite link's key is invalid" }); resolve(); return; }
             const wsUrl = `${relayBase.replace(/\/+$/, "")}/r/${parsed.roomId}`;
+            // NOTE (P-REMOTE.2c): the desktop watching ANOTHER host stays anonymous here - gated-relay watch
+            // (presenting this device's token as a guest) is out of scope; the phone is the guest that matters.
             const sock = new CollabSocket({ wsUrl, role: "guest", key });
             const guest = new CollabGuest(sock, { name: collabDisplayName(), writeToken: parsed.writeToken }, {
               onWelcome: (w) => emit({ kind: "welcome", header: w.header, transcript: w.transcript, participants: w.participants, readOnly: w.readOnly }),

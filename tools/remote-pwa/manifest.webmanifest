@@ -1,0 +1,14 @@
+{
+  "name": "LUCID Remote",
+  "short_name": "LUCID",
+  "description": "Reach your desktop LUCID agent securely from your phone.",
+  "start_url": "/remote",
+  "scope": "/remote",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0a0b0f",
+  "theme_color": "#0a0b0f",
+  "icons": [
+    { "src": "./icon.svg?v=3", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

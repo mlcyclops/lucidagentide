@@ -43,10 +43,10 @@ function isCgnat(addr: string): boolean {
 
 function labelFor(kind: BindKind, address: string, ifaceName: string): string {
   switch (kind) {
-    case "loopback": return `${address} — this machine only`;
-    case "lan": return `${address} — your LAN (reachable on this network)`;
-    case "vpn": return `${address} — VPN / tunnel${/tail/i.test(ifaceName) ? " (Tailscale)" : ""} (reachable over the tunnel)`;
-    default: return `${address} — ${ifaceName} (public / other)`;
+    case "loopback": return `${address} - this machine only`;
+    case "lan": return `${address} - your LAN (reachable on this network)`;
+    case "vpn": return `${address} - VPN / tunnel${/tail/i.test(ifaceName) ? " (Tailscale)" : ""} (reachable over the tunnel)`;
+    default: return `${address} - ${ifaceName} (public / other)`;
   }
 }
 
@@ -87,7 +87,7 @@ export function classifyBindAddresses(ifaces: Record<string, RawIface[] | undefi
 export function localBindAddresses(): BindAddress[] {
   const list = classifyBindAddresses(networkInterfaces() as Record<string, RawIface[] | undefined>);
   if (!list.some((a) => a.address === "127.0.0.1")) {
-    list.unshift({ address: "127.0.0.1", family: "IPv4", kind: "loopback", label: "127.0.0.1 — this machine only" });
+    list.unshift({ address: "127.0.0.1", family: "IPv4", kind: "loopback", label: "127.0.0.1 - this machine only" });
   }
   return list;
 }

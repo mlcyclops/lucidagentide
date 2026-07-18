@@ -31,6 +31,9 @@ export interface MarketBootConfig {
   functionsBaseUrl?: string;
   /** The hosted sign-in page (e.g. https://lucid-agent.web.app/signin). Required for firebase sign-in. */
   signInUrl?: string;
+  /** P-REMOTE.2c: PUBLIC Firebase web apiKey for silent ID-token refresh (securetoken exchange) so the desktop
+   *  relay reconnect stays authenticated past +1h. Public (identifies the project); absent -> no refresh. */
+  firebaseApiKey?: string;
 }
 
 /** Pure: the effective mode. An explicit `mode` wins (but "firebase" without a base falls back to "off");
@@ -45,12 +48,13 @@ export function chooseMarketMode(cfg: MarketBootConfig | null | undefined): Mark
 
 /** Pure: the hosted sign-in URL — the deep-link redirect target + optional login hint, added as query params
  *  so the sign-in page bounces back to `lucid://auth?token=...` when done. Returns "" if there is no base. */
-export function buildSignInUrl(signInUrl: string | undefined, email?: string, redirect = "lucid://auth"): string {
+export function buildSignInUrl(signInUrl: string | undefined, email?: string, redirect = "lucid://auth", drive = false): string {
   if (!signInUrl) return "";
   try {
     const u = new URL(signInUrl);
     u.searchParams.set("redirect_uri", redirect);
     if (email) u.searchParams.set("login_hint", email);
+    if (drive) u.searchParams.set("drive", "1"); // P-REMOTE.10b: also request the Google drive.file scope
     return u.toString();
   } catch { return ""; }
 }
@@ -80,6 +84,7 @@ export interface MarketBootDeps {
 let auth: MarketAuth | null = null;
 let mode: MarketMode = "off";
 let signInBase = "";
+let firebaseApiKey = ""; // P-REMOTE.2c: public Firebase web key for silent ID-token refresh (may be empty)
 let openExternalFn: (url: string) => void = (url) => { try { window.open(url, "_blank", "noopener"); } catch { /* no window */ } };
 
 /** Register the right provider for `cfg` and prime the sign-in singletons. Idempotent (re-callable). Returns
@@ -87,6 +92,7 @@ let openExternalFn: (url: string) => void = (url) => { try { window.open(url, "_
 export function initMarket(cfg: MarketBootConfig | null | undefined, deps: MarketBootDeps = {}): MarketMode {
   mode = chooseMarketMode(cfg);
   signInBase = cfg?.signInUrl ?? "";
+  firebaseApiKey = cfg?.firebaseApiKey ?? "";
   if (deps.openExternal) openExternalFn = deps.openExternal;
   auth = new MarketAuth(deps.storage ?? localAuthStorage(), deps.now ?? (() => Date.now()));
 
@@ -119,6 +125,20 @@ export function beginSignIn(email?: string): BeginSignInResult {
   return { opened: true, signedIn: false };
 }
 
+/** P-REMOTE.10b: like beginSignIn but also requests the Google `drive.file` scope, so the /signin page returns
+ *  a drive.file access token on the `lucid://auth` deep link. Drives the Share dock's "Authorize Google Drive". */
+export function beginDriveSignIn(email?: string): BeginSignInResult {
+  if (!auth || mode === "off") return { opened: false, signedIn: false, reason: "marketplace sign-in is not configured" };
+  if (mode === "stub") { auth.signInStub(email ?? "dev@lucid.local"); return { opened: false, signedIn: true }; }
+  const url = buildSignInUrl(signInBase, email, "lucid://auth", true);
+  if (!url) return { opened: false, signedIn: false, reason: "no sign-in URL configured" };
+  openExternalFn(url);
+  return { opened: true, signedIn: false };
+}
+
+/** P-REMOTE.10b: the current live Google drive.file access token, or null (\u2192 run beginDriveSignIn to re-consent). */
+export function freshDriveToken(skewMs = 60_000): string | null { return auth?.freshDriveToken(skewMs) ?? null; }
+
 /** Apply a `lucid://auth?token=...` deep link forwarded from the Electron main process. Returns true when it
  *  was a valid callback that signed the user in. */
 export function handleAuthCallback(url: string): boolean { return auth?.applyCallback(url) ?? false; }
@@ -134,6 +154,16 @@ export function readMarketBootConfig(): MarketBootConfig {
 
 /** Sign the user out (clears the stored token). */
 export function marketSignOut(): void { auth?.signOut(); }
+
+/** P-REMOTE.2c: a fresh Firebase credential (token + expiry) for the desktop relay's token push, silently
+ *  renewed via the securetoken exchange when near expiry (needs the public apiKey; without it, only the
+ *  still-valid stored token is returned). Null when signed out or unrenewable (fail-closed). */
+export async function marketFreshCredential(): Promise<{ idToken: string; expiresAt: number } | null> {
+  if (!auth) return null;
+  const idToken = await auth.freshIdToken({ apiKey: firebaseApiKey });
+  if (!idToken) return null;
+  return { idToken, expiresAt: auth.currentExpiresAt() };
+}
 
 /** Test-only: drop the singletons so a fresh init starts clean. */
 export function __resetMarketBootForTest(): void { auth = null; mode = "off"; signInBase = ""; registerMarketProvider(null); }

@@ -6,7 +6,7 @@
 // pure toggle/selection invariants the picker render depends on.
 
 import { describe, expect, test } from "bun:test";
-import { MAX_FAVS, parseFavs, starredOf, toggleFav } from "./model_favorites.ts";
+import { MAX_FAVS, offeredModels, parseFavs, starredOf, toggleFav } from "./model_favorites.ts";
 
 describe("parseFavs — defensive against corrupted storage", () => {
   test("null / empty / bad JSON / non-array → empty list, never a throw", () => {
@@ -57,7 +57,27 @@ describe("starredOf — the Favorites section content", () => {
     expect(starredOf(models, ["gone-model", "claude-a"]).map((m) => m.value)).toEqual(["claude-a"]);
   });
 
-  test("no favorites → empty (no Favorites section)", () => {
+  test("no favorites \u2192 empty (no Favorites section)", () => {
     expect(starredOf(models, [])).toEqual([]);
+  });
+});
+
+describe("offeredModels - the share-guest picker list (P-REMOTE.11b)", () => {
+  const models = [{ value: "gov-x" }, { value: "claude-a" }, { value: "gpt-b" }, { value: "llama-c" }];
+
+  test("favorites only, in catalog order", () => {
+    expect(offeredModels(models, ["gpt-b", "gov-x"], "gov-x").map((m) => m.value)).toEqual(["gov-x", "gpt-b"]);
+  });
+
+  test("the CURRENT model is always offered, even when unstarred", () => {
+    expect(offeredModels(models, ["gpt-b"], "claude-a").map((m) => m.value)).toEqual(["claude-a", "gpt-b"]);
+  });
+
+  test("no favorites -> the FULL list (never an empty or current-only picker)", () => {
+    expect(offeredModels(models, [], "claude-a")).toEqual(models);
+  });
+
+  test("stale favorites are hidden; the current survives", () => {
+    expect(offeredModels(models, ["gone-1", "gone-2"], "llama-c").map((m) => m.value)).toEqual(["llama-c"]);
   });
 });

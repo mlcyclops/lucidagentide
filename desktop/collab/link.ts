@@ -67,6 +67,32 @@ export function formatRelayLink(relayWsBase: string, roomId: string, key: Uint8A
 
 function httpToWs(u: string): string { return u.replace(/^https:/i, "wss:").replace(/^http:/i, "ws:"); }
 
+/** P-REMOTE.3/.2b: the phone-openable invite — the PWA page URL with the secret in the FRAGMENT
+ *  (`https://lucid-agent.web.app/remote/#<roomId>.<secret>`). The phone loads the PWA (Firebase Hosting) and
+ *  connects to ITS OWN configured relay; the secret rides the fragment, so it never appears in an HTTP
+ *  request. Include `writeToken` for an EDIT link (the phone can drive) or omit it for a VIEW link. */
+export function formatPwaLink(pwaBase: string, roomId: string, key: Uint8Array, writeToken?: Uint8Array | null): string {
+  return `${pwaBase.replace(/\/+$/, "")}/#${formatShareLink(roomId, key, writeToken)}`;
+}
+
+/** P-COLLAB.19 (ADR-0241): every link form a live room hands out. ONE room mints TWO capabilities - the full
+ *  link (key + write token) can drive, the view link (key only) can only watch - so a host hands DIFFERENT
+ *  links to different guests. The browser forms carry the same split for phones/QRs: `browserLink` is the
+ *  edit-capable phone link when the share allows editing, `browserViewLink` is always watch-only. The legacy
+ *  (no-pwaBase) browser form never carries the write token (unchanged behavior). */
+export interface RoomLinks { fullLink: string; viewLink: string; browserLink: string; browserViewLink: string }
+export function mintRoomLinks(relay: { wsBase: string; httpBase: string; pwaBase?: string }, roomId: string, key: Uint8Array, writeToken: Uint8Array, allowEdit: boolean): RoomLinks {
+  const browserViewLink = relay.pwaBase
+    ? formatPwaLink(relay.pwaBase, roomId, key, null)
+    : formatBrowserLink(relay.httpBase, formatShareLink(roomId, key));
+  return {
+    fullLink: formatRelayLink(relay.wsBase, roomId, key, writeToken),
+    viewLink: formatRelayLink(relay.wsBase, roomId, key),
+    browserLink: relay.pwaBase && allowEdit ? formatPwaLink(relay.pwaBase, roomId, key, writeToken) : browserViewLink,
+    browserViewLink,
+  };
+}
+
 /** Parse any of the three forms into `{ roomId, key, writeToken }`. Throws on a malformed / wrong-size link
  *  (fail-closed: a bad link never yields a usable-looking half-parsed result). */
 export function parseShareLink(input: string): ParsedShareLink {

@@ -465,6 +465,10 @@ demo-P-NVIM.1: ## P-NVIM.1 (ADR-0150): Neovim + terminal integration — `lucid 
 demo-P-THEME.1: ## P-THEME.1 (ADR-0160): the LUCID skin for gated terminals — themes/lucid.json resolves, session_start provisions (idempotent) + setTheme("lucid"), fail-OPEN cosmetics never weaken fail-CLOSED, and the theme -e rides behind the gate -e
 	$(BUN) run harness/scripts/demo_ptheme1.ts
 
+.PHONY: pwa-build
+pwa-build: ## P-REMOTE.3 (ADR-0226/0227): bundle the phone guest PWA (tools/remote-pwa) into a static site under dist/
+	$(BUN) run tools/remote-pwa/build.ts
+
 .PHONY: nvim-plugin-split
 nvim-plugin-split: ## Split extensions/neovim -> the standalone `lucid.nvim` branch (add PUSH=1 to force-push to origin)
 	@sha=$$(git subtree split --prefix=extensions/neovim HEAD); \
@@ -696,6 +700,51 @@ demo-P-EVAL.3: ## P-EVAL.3 Part A (ADR-0187): the per-run eval-metrics PERSISTEN
 .PHONY: demo-P-EVAL.3b
 demo-P-EVAL.3b: ## P-EVAL.3 Part B (ADR-0187): the cross-run Model-Evaluation ROLLUP report (the /api/eval/rollup path) - the eval-metrics + latency JSONL ledgers ingest into a throwaway GUI-owned DuckDB, aggregateEvalMetrics rolls per model (means over runs-with-signal; a no-signal metric stays "no signal", never a fake 0), rollupLatency adds the per-model p50/p95, and the combined ASCII markdown (xychart-beta the viewer bar-ifies) saves as an `evals` brief; an empty ledger yields a friendly report, never an error
 	$(BUN) run harness/scripts/demo_peval3b.ts
+.PHONY: demo-P-REMOTE.1
+demo-P-REMOTE.1: ## P-REMOTE.1 (ADR-0226/0227): the relay identity gate, offline - first-frame Firebase auth (never a URL param) against a local JWKS: premium/allowlisted admitted + E2E bytes stay opaque, expired/forged -> 4401, verified-but-unentitled -> 4403, silent socket reaped, anonymous self-host mode byte-identical
+	$(BUN) run harness/scripts/demo_premote1.ts
+.PHONY: demo-P-REMOTE.2
+demo-P-REMOTE.2: ## P-REMOTE.2 (ADR-0226/0227): hosted-rendezvous transport - a real CollabSocket host presents a fresh token per connect (first frame) + opens on auth-ok, a host drop is HELD in grace so the guest stays up, the same account re-claims within grace (roster resent, delivery resumes, guest never reconnects), and a null token is terminal (no unauthenticated retry loop)
+	$(BUN) run harness/scripts/demo_premote2.ts
+.PHONY: demo-P-REMOTE.2b
+demo-P-REMOTE.2b: ## P-REMOTE.2b (ADR-0226/0227): desktop wiring for the hosted rendezvous - MarketAuth renews a near-expiry Firebase ID token via the securetoken refresh exchange (fail-closed when signed out), and a CollabManager with a pwaBase relay mints PHONE-openable browser invites (PWA URL, secret in the fragment, write token when editing); no pwaBase keeps the legacy relay-host link
+	$(BUN) run harness/scripts/demo_premote2b.ts
+.PHONY: demo-P-REMOTE.2c
+demo-P-REMOTE.2c: ## P-REMOTE.2c (ADR-0226/0227): backend token delivery - the renderer-pushed Firebase token lands in a RelayTokenCache the host CollabSocket reads via authToken; a live token authenticates + opens the room over a REAL gated relay, an empty cache / refused token FAILS CLOSED (never a silent unauthenticated connect), and a plain socket (un-gated default) still connects anonymously (unchanged)
+	$(BUN) run harness/scripts/demo_premote2c.ts
+.PHONY: demo-P-REMOTE.3
+demo-P-REMOTE.3: ## P-REMOTE.3 (ADR-0226/0227): the phone guest PWA data path - a real CollabSocket+CollabGuest 'phone' (the exact modules the PWA bundles) authenticates to a REAL gated relay, goes live against a real CollabHost, and the pure pwa_view reducer/renderer folds the host's thinking + tool chips + streamed answer (hostile content escaped); host stop -> ended
+	$(BUN) run harness/scripts/demo_premote3.ts
+.PHONY: demo-P-REMOTE.4a
+demo-P-REMOTE.4a: ## P-REMOTE.4a (ADR-0226/0227): the invite-link QR - a dependency-free byte-mode encoder renders a real invite link as a scannable QR (printed to the terminal + a self-contained SVG); asserts finder/timing/dark structure + a safe-to-inline SVG. The room key rides IN the link fragment, so scanning carries the E2E secret exactly like copying it
+	$(BUN) run harness/scripts/demo_premote4a.ts
+.PHONY: demo-P-REMOTE.6
+demo-P-REMOTE.6: ## P-REMOTE.6 (ADR-0227): the paid Remote Access tier - over a REAL gated relay, a premium phone goes live (never shown Subscribe) while a verified-but-unentitled token is refused 4403 and the pure detector routes it to Subscribe; createRemoteCheckout opens a Stripe session fail-closed (null on error / no token); and a post-webhook refreshed token gains the `premium` claim so the phone recognises entitlement + reconnects
+	$(BUN) run harness/scripts/demo_premote6.ts
+.PHONY: demo-P-REMOTE.8
+demo-P-REMOTE.8: ## P-REMOTE.8 (ADR-0229): PWA composer image attachments + reconnect-status recovery - over a REAL relay an EDIT guest attaches validated image data URLs to a prompt; they arrive E2E-sealed at the host's onGuestPrompt (staged into the host composer -> model vision input, host-gated), image-only messages work, and a VIEW guest's image prompt is refused. Then a transient drop shows a reconnect note and the next live host frame CLEARS it - no more stale "connection lost" banner while streaming
+	$(BUN) run harness/scripts/demo_premote8.ts
+.PHONY: demo-P-REMOTE.9
+demo-P-REMOTE.9: ## P-REMOTE.9 (ADR-0230): phone transcript - own-message echo + per-edit +/- diffstats + end-of-run engineering report, over a REAL relay. The host broadcasts a `tool` event carrying the edit's authored code; it arrives E2E and the guest folds it into a tool item with a +/- diffstat (same convention as the desktop chips); on `done` it builds a per-turn report (files + line counts + tool counts + model + context) rendered as mobile cards + copyable Markdown; the guest's own sent message is echoed locally
+	$(BUN) run harness/scripts/demo_premote9.ts
+.PHONY: demo-P-REMOTE.10
+demo-P-REMOTE.10: ## P-REMOTE.10 (ADR-0233): out-of-band reconnect via a Google Drive relay-codes file - REAL WebCrypto over a mock Drive. A host writes the current EDIT reconnect link, PIN-encrypted, to the single `lucid_relay_codes` file (drive.file scope); at rest the file is CIPHERTEXT (the link is absent); a disconnected reader reads + decrypts with the PIN to recover the freshest link; a wrong PIN fails closed; a later reconnect appends a fresh code (newest wins); and the single file is shared with a teammate via a per-file writer permission (never the rest of the Drive). The drive.file OAuth consent is the only live-only step
+	$(BUN) run harness/scripts/demo_premote10.ts
+.PHONY: demo-P-REMOTE.10c
+demo-P-REMOTE.10c: ## P-REMOTE.10c (ADR-0235): the phone PWA "get a reconnect code" READER - REAL WebCrypto over a mock Drive. A disconnected phone (drive.file token) reads the host's shared `lucid_relay_codes` file and resolves it via the `resolveReconnect` state machine: the right PIN recovers the freshest EDIT link, which normalizes LOSSLESSLY to a room fragment the PWA re-parses (room + key + write token) before reloading; locked (no PIN), wrong-PIN, expired, and empty all fail closed (never a link)
+	$(BUN) run harness/scripts/demo_premote10c.ts
+.PHONY: demo-P-PREVIEW-PWA.1
+demo-P-PREVIEW-PWA.1: ## P-PREVIEW-PWA.1 (ADR-0237): send the desktop Preview panel to a phone guest (item C, slice 1). Proves the PURE path headlessly: the bandwidth-light downscale sizing (longest edge capped, aspect kept, never upscaled), and that a host `preview-snapshot` event folds into a tappable phone thumbnail whose image data URL is NEVER inlined into the transcript HTML (hydrated as an <img> property) and whose label is HTML-escaped; distinct snapshots keep stable ids across re-renders. Live capture (Electron capturePage) + broadcast + on-device display are Electron/deploy-gated
+	$(BUN) run harness/scripts/demo_preview_pwa1.ts
+.PHONY: demo-P-PREVIEW-PWA.2
+demo-P-PREVIEW-PWA.2: ## P-PREVIEW-PWA.2 (ADR-0239): phone MARKUP on a preview snapshot + send-back (item C, slice 2). Proves the pure path: strokes are NORMALIZED to image space (clamped at the edges, resize/rotation-proof) and scale losslessly onto the natural-size composite; the on-screen pen and the composite pen share ONE width formula (ink parity); and the sent-back composite rides the SAME fail-closed P-REMOTE.8 attachment validation as a pasted image (PNG accepted, script-capable SVG refused). The finger ink + canvas composite are on-device
+	$(BUN) run harness/scripts/demo_preview_pwa2.ts
+.PHONY: demo-P-PREVIEW-PWA.3
+demo-P-PREVIEW-PWA.3: ## P-PREVIEW-PWA.3 (ADR-0240): agent PWA-awareness / autodetect (item C, slice 3). While guests watch a Session Share the agent's prompt carries a TRUSTED preamble (counts only) so it can suggest broadcasting the Preview; proven: autodetect (no guests -> no block, rebuilt per turn), counts-only construction (a hostile guest NAME can never ride into the prompt - invariant #5), the composition rule (the MODEL sees preamble+prompt while the P-COLLAB.15 mirror + transcript keep the CLEAN prompt), and clamping of garbage counts
+	$(BUN) run harness/scripts/demo_preview_pwa3.ts
+.PHONY: demo-P-SHARE.2
+demo-P-SHARE.2: ## P-SHARE.2 (ADR-0234): Session Share dock UI polish - the "Reachable at" bind list now defaults to a GUEST-ROUTABLE address (LAN IPv4, then IPv6) and sinks loopback (unreachable by a guest) to the bottom; IPv4 precedes IPv6 within each group; ordering is pure + non-mutating. And the cold-boot dock paints a SECRET-FREE cached snapshot INSTANTLY (never a blank Loading) then revalidates - the cache carries only the non-secret relay descriptor + serve status + a redacted P2P config, NEVER an invite link / room id / TURN credential and never a stale Live state
+	$(BUN) run harness/scripts/demo_pshare2.ts
 .PHONY: demo-P-COLLAB.1
 demo-P-COLLAB.1: ## P-COLLAB.1 (ADR-0192): the live-collaboration transport KEYSTONE - a host mints a room (id + 32B key + 16B write token) + a full/view invite link (roomId.base64url(secret), reusing omp's @oh-my-pi/pi-wire constants), SEALS a LUCID ChatEvent frame (AES-256-GCM, [12B IV][ct+tag]) + envelopes it with its peer id, and a guest holding the link unpacks + opens it end-to-end; the relay only ever sees opaque bytes (a wrong key can't open, a tampered byte fails the tag), and a view link is read-only. The relay client, host/guest, and Share UI are P-COLLAB.2-.4
 	$(BUN) run harness/scripts/demo_pcollab1.ts
@@ -711,6 +760,18 @@ demo-P-COLLAB.4: ## P-COLLAB.4/.5 (ADR-0192): the read-only GUEST + the OPTIONAL
 .PHONY: demo-P-COLLAB.12
 demo-P-COLLAB.12: ## P-COLLAB.12 (ADR-0198): guest-WRITE over a real relay - a guest with EDIT access (full link + valid write token) drives the host: its prompt reaches onGuestPrompt (which in the app runs it in the host's omp session, where the fail-closed scan gate + exec/egress approvals still apply - the guest bypasses nothing) + onGuestAbort. A VIEW-only guest is refused BOTH client-side (sendPrompt returns false, never hits the wire) AND host-side (a hand-crafted raw prompt frame is refused with a read-only error, never runs). Token-gated + fail-closed
 	$(BUN) run harness/scripts/demo_pcollab12.ts
+.PHONY: demo-P-COLLAB.14
+demo-P-COLLAB.14: ## P-COLLAB.14 (ADR-0228): edit-guest MODEL + already-used-FOLDER selection over a real relay - the host OFFERS its model + recent-folder allowlists to an EDIT guest only (a view guest is offered nothing); the guest picks either and it reaches onGuestSetModel / onGuestSetWorkspace (the app applies it through the host's OWN picker path - its UI + omp reconcile, and a folder switch restarts the agent in the new cwd). Fail-closed: a value/id NOT in the offered allowlist is guarded client-side AND refused host-side (never applied), and a folder is picked by an OPAQUE id the host resolves to a path locally - no arbitrary model id or filesystem path ever crosses the wire. host.setOptions rebroadcasts the live selection to edit guests
+	$(BUN) run harness/scripts/demo_pcollab14.ts
+.PHONY: demo-P-COLLAB.15
+demo-P-COLLAB.15: ## P-COLLAB.15 (ADR-0231): LIVE user-turn mirroring over a real relay - the host broadcasts every user turn (its own + each guest's, attributed by `from`) so ALL participants see who typed what, in order. Two guests: the host's turn + a guest-attributed turn both reach BOTH guests live (view-only guests included), and a late joiner sees prior turns in the welcome replay
+	$(BUN) run harness/scripts/demo_pcollab15.ts
+.PHONY: demo-P-COLLAB.20
+demo-P-COLLAB.20: ## P-COLLAB.20 (ADR-0242): the Join panel becomes a floating, NON-BLOCKING dock - watch (or drive, with an edit link) another LUCID while fully using your own. Proven headless on the pure chassis: the join dock persists geometry under its OWN key (independent of the Share dock), first-open lands beside the rails (never stacked on the share dock), stored shapes re-clamp to the live viewport, minimize round-trips, and it snaps with the exact P-SHARE.1 rules (one chassis). Multi-join orchestration = P-COLLAB.21
+	$(BUN) run harness/scripts/demo_pcollab20.ts
+.PHONY: demo-P-COLLAB.19
+demo-P-COLLAB.19: ## P-COLLAB.19 (ADR-0241): dual invite links - ONE room, TWO capabilities. An edit share mints the EDIT link (+ phone twin, write token: can drive) AND the VIEW-ONLY link (+ phone twin, key only: watch, never write) so different guests get different access to the same live session; all four forms open the same room + E2E key; a view-only share and the legacy (no-PWA) browser form never mint an edit-capable link. Host-side refusal of a view guest's write: demo-P-COLLAB.12
+	$(BUN) run harness/scripts/demo_pcollab19.ts
 .PHONY: demo-P-COLLAB.11
 demo-P-COLLAB.11: ## P-COLLAB.11 (ADR-0197): WebRTC signaling over the relay - the SDP offer/answer + trickled ICE route host<->guest as `signal` frames through the relay's peer routing (signal to peer 0 -> host; to the guest's peer id -> guest), a `signal` frame is recognized by the demux (session handlers ignore it), and close is terminal. This SignalingChannel is what WebRtcTransport consumes before the peers go DIRECT P2P (RTCPeerConnection is renderer-only, so the DataChannel itself is preview-verified)
 	$(BUN) run harness/scripts/demo_pcollab11.ts

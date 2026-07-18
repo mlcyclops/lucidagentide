@@ -49,9 +49,11 @@ const RAW: Record<string, string> = {
   // minimise / maximise (window controls)
   minus: P("M6 12h12"),
   square: P("M6 6.5h12v11H6z"),
-  // collapse-right / expand-left (inspector ↔ metrics rail)
-  collapse: P("M7 6l5 6-5 6") + P("M13 6l5 6-5 6"),
-  expand: P("M17 6l-5 6 5 6") + P("M11 6l-5 6 5 6"),
+  // collapse-right / expand-left (inspector ↔ metrics rail). Bounding box centered on x=12
+  // (each pair spans x[6.5,17.5], matching chevronsDown) so the glyph sits dead-center in its
+  // square button - the old x[7,18]/x[6,17] spans left the double-chevron off by half a unit.
+  collapse: P("M6.5 6l5 6-5 6") + P("M12.5 6l5 6-5 6"),
+  expand: P("M17.5 6l-5 6 5 6") + P("M11.5 6l-5 6 5 6"),
   // person (user avatar) + sidebar toggle
   user: P("M12 12.5a3.4 3.4 0 1 0 0-6.8 3.4 3.4 0 0 0 0 6.8z") + P("M5.5 19a6.5 6.5 0 0 1 13 0"),
   sidebar: P("M4 5.5h16v13H4z") + P("M9.5 5.5v13"),
@@ -80,6 +82,8 @@ const RAW: Record<string, string> = {
   copy: P("M9.5 9.5h8v8h-8z") + P("M6.5 14.5H6A1.5 1.5 0 0 1 4.5 13V6A1.5 1.5 0 0 1 6 4.5h7A1.5 1.5 0 0 1 14.5 6v.5"),
   // download (save to disk)
   download: P("M12 4v9.5") + P("M8 10.5l4 4 4-4") + P("M5 18.5h14"),
+  // P-REMOTE.4a: phone (scan the invite QR) — rounded handset body + speaker line + home dot
+  phone: P("M8 3.5h8a1.5 1.5 0 0 1 1.5 1.5v14a1.5 1.5 0 0 1-1.5 1.5H8A1.5 1.5 0 0 1 6.5 19V5A1.5 1.5 0 0 1 8 3.5z") + P("M10.5 6h3") + P("M12 17.2h.01"),
   // P-VOICE.1: microphone (speech-to-text) — capsule + stand + base
   mic: P("M12 4.5a2.5 2.5 0 0 0-2.5 2.5v4a2.5 2.5 0 0 0 5 0v-4A2.5 2.5 0 0 0 12 4.5z") + P("M6.5 11a5.5 5.5 0 0 0 11 0") + P("M12 16.5v3") + P("M9 19.5h6"),
   // P-VOICE.1: speaker / read-aloud (text-to-speech) — cone + two sound waves

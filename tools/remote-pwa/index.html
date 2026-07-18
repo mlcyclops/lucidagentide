@@ -1,0 +1,374 @@
+<!doctype html>
+<!-- Copyright (c) 2026 TechLead 187 LLC / SPDX-License-Identifier: BUSL-1.1 -->
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no, interactive-widget=resizes-content" />
+  <meta name="theme-color" content="#0a0b0f" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <title>LUCID Remote</title>
+  <base href="/remote/" />
+  <link rel="manifest" href="./manifest.webmanifest" />
+  <link rel="icon" href="./icon.svg?v=3" type="image/svg+xml" />
+  <link rel="apple-touch-icon" href="./icon.svg?v=3" />
+  <style>
+    :root { 
+      --bg: #0a0b0f; 
+      --bg1: #12141c; 
+      --bg2: #1a1d28; 
+      --line: #272b39; 
+      --txt: #f8fafc; 
+      --txt2: #94a3b8; 
+      --txt3: #64748b;
+      --accent: #0ea5e9; 
+      --accent2: #2dd4bf; 
+      --cyan: #2dd4bf; 
+      --green: #10b981; 
+      --amber: #f59e0b; 
+      --red: #ef4444; 
+    }
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; margin: 0; padding: 0; }
+    [hidden] { display: none !important; }
+    
+    html, body { height: 100%; background: var(--bg); color: var(--txt); font: 15px/1.5 system-ui, -apple-system, sans-serif; }
+    body { display: flex; flex-direction: column; height: 100dvh; padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom); overflow: hidden; }
+    
+    button { font: inherit; cursor: pointer; border: none; border-radius: 12px; transition: all 0.2s ease; display: inline-flex; align-items: center; justify-content: center; gap: 8px; }
+    button:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
+    button:active { transform: scale(0.98); }
+    
+    .btn-primary { background: linear-gradient(135deg, var(--accent), var(--accent2)); color: #0a0b0f; min-height: 48px; padding: 0 24px; font-weight: 600; font-size: 16px; width: 100%; max-width: 340px; box-shadow: 0 4px 12px rgba(45, 212, 191, 0.15); }
+    .btn-primary:hover { opacity: 0.9; }
+    .btn-ghost { background: var(--bg2); color: var(--txt); border: 1px solid var(--line); min-height: 48px; padding: 0 16px; font-size: 15px; font-weight: 500; width: 100%; max-width: 340px; }
+    .btn-ghost:hover { background: var(--line); }
+    
+    .btn-google { background: #fff; color: #1f2937; min-height: 48px; padding: 0 16px; font-weight: 500; font-size: 15px; width: 100%; max-width: 340px; position: relative; box-shadow: 0 2px 8px rgba(0,0,0,0.2); border-radius: 12px; }
+    .btn-google:hover { background: #f8f9fa; }
+    .google-icon-wrapper { position: absolute; left: 16px; display: flex; align-items: center; justify-content: center; }
+    
+    .view-container { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 24px; text-align: center; width: 100%; margin: 0 auto; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+    
+    .mark { width: 72px; height: 72px; margin-bottom: 24px; }
+    h1 { font-size: 28px; font-weight: 700; letter-spacing: -0.02em; margin-bottom: 12px; color: #fff; }
+    .value-prop { color: var(--txt2); font-size: 15px; max-width: 300px; line-height: 1.4; margin-bottom: 40px; }
+    
+    .security-cue { display: flex; align-items: center; justify-content: center; gap: 8px; margin-top: 20px; color: var(--txt3); font-size: 13px; font-weight: 500; }
+    .security-cue svg { width: 16px; height: 16px; fill: currentColor; }
+    
+    /* subscribe */
+    #subscribe-view .price { font-size: 40px; font-weight: 700; color: var(--cyan); line-height: 1; margin: 16px 0; display: flex; align-items: baseline; justify-content: center; gap: 4px; }
+    #subscribe-view .price span { font-size: 16px; color: var(--txt3); font-weight: 500; }
+    #sub-email { font-size: 14px; color: var(--txt2); overflow: hidden; text-overflow: ellipsis; max-width: 100%; margin-bottom: 28px; background: var(--bg1); padding: 8px 16px; border-radius: 99px; border: 1px solid var(--line); font-weight: 500; }
+    #subscribe-view .actions { display: flex; flex-direction: column; gap: 12px; width: 100%; max-width: 340px; align-items: center; }
+    #sub-hint { min-height: 20px; font-size: 13px; color: var(--amber); margin-top: 16px; max-width: 320px; }
+    
+    /* session */
+    #session-view { flex: 1; display: flex; flex-direction: column; min-height: 0; padding: 0; align-items: stretch; text-align: left; background: var(--bg); }
+    .topbar { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--line); background: var(--bg1); min-height: 60px; flex-shrink: 0; }
+    .hdr { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+    .hdr-title { font-weight: 600; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .hdr-sub { font-size: 12px; color: var(--txt3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    
+    #status-badge { font-size: 12px; font-weight: 600; padding: 4px 10px; border-radius: 999px; white-space: nowrap; background: var(--bg2); color: var(--txt2); border: 1px solid var(--line); }
+    #status-badge[data-tone=live] { background: rgba(16, 185, 129, 0.1); color: var(--green); border-color: rgba(16, 185, 129, 0.2); }
+    #status-badge[data-tone=wait] { background: rgba(245, 158, 11, 0.1); color: var(--amber); border-color: rgba(245, 158, 11, 0.2); }
+    #status-badge[data-tone=ended] { background: rgba(239, 68, 68, 0.1); color: var(--red); border-color: rgba(239, 68, 68, 0.2); }
+    
+    #account { display: flex; align-items: center; gap: 12px; padding: 8px 16px; border-bottom: 1px solid var(--line); font-size: 13px; color: var(--txt2); background: var(--bg); flex-shrink: 0; min-height: 52px; }
+    #account-email { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #signout-btn { min-height: 36px; padding: 0 16px; font-size: 13px; max-width: max-content; }
+    
+    #transcript { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 16px; -webkit-overflow-scrolling: touch; }
+    .msg { padding: 12px 16px; border-radius: 16px; white-space: pre-wrap; word-break: break-word; font-size: 15px; line-height: 1.5; }
+    .msg.user { align-self: flex-end; background: var(--bg2); color: var(--txt); max-width: 85%; border-bottom-right-radius: 4px; border: 1px solid var(--line); }
+    .msg-from { display: block; font-size: 11px; font-weight: 600; color: var(--txt3); margin-bottom: 3px; }
+    .msg.answer { align-self: flex-start; background: linear-gradient(135deg, rgba(14, 165, 233, 0.08), rgba(45, 212, 191, 0.08)); border: 1px solid rgba(45, 212, 191, 0.15); color: var(--txt); max-width: 90%; border-bottom-left-radius: 4px; }
+    .msg.answer.streaming::after { content: "\25CF"; color: var(--cyan); margin-left: 4px; animation: blink 1s steps(2) infinite; font-size: 12px; }
+    @keyframes blink { 50% { opacity: 0; } }
+    
+    .msg.note { align-self: center; color: var(--txt3); font-size: 13px; font-style: italic; padding: 4px 0; }
+    .msg.thinking { align-self: flex-start; background: var(--bg); border: 1px dashed var(--line); color: var(--txt2); font-size: 14px; max-width: 90%; padding: 10px 14px; border-radius: 12px; }
+    .msg.thinking summary { cursor: pointer; color: var(--txt3); font-weight: 500; outline: none; display: inline-block; padding: 4px; margin: -4px; border-radius: 4px; }
+    .msg.thinking summary:focus-visible { color: var(--cyan); }
+    
+    .chip { align-self: flex-start; display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; font-size: 13px; background: var(--bg1); border: 1px solid var(--line); border-radius: 8px; padding: 10px 14px; max-width: 90%; }
+    .chip.tool .chip-name { color: var(--accent); font-weight: 600; }
+    .chip.subagent .chip-name { color: var(--cyan); font-weight: 600; }
+    .chip-detail { color: var(--txt2); word-break: break-all; }
+    .chip.block { background: rgba(239, 68, 68, 0.05); border-color: rgba(239, 68, 68, 0.2); color: var(--red); }
+    .chip.block.sev-high { font-weight: 600; background: rgba(239, 68, 68, 0.1); }
+    
+    #controls { display: flex; gap: 10px; padding: 10px 16px; border-top: 1px solid var(--line); background: var(--bg1); flex-shrink: 0; flex-wrap: wrap; }
+    #controls .ctl { display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 130px; }
+    #controls .ctl-l { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--txt3); }
+    #controls .ctl-sel { background: var(--bg); color: var(--txt); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; font: inherit; min-height: 44px; -webkit-appearance: none; }
+    #controls .ctl-sel:focus { outline: none; border-color: var(--cyan); box-shadow: 0 0 0 1px var(--cyan); }
+
+    /* P-REMOTE.8: pasted/attached image thumbnails, just above the composer */
+    #cx-thumbs { display: flex; gap: 8px; padding: 8px 16px 0; flex-wrap: wrap; flex-shrink: 0; background: var(--bg1); }
+    .cx-thumb { position: relative; width: 56px; height: 56px; border-radius: 10px; overflow: hidden; border: 1px solid var(--line); background: var(--bg); flex-shrink: 0; }
+    .cx-thumb-img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .cx-thumb-x { position: absolute; top: 2px; right: 2px; width: 20px; height: 20px; border-radius: 50%; border: none; background: rgba(0,0,0,0.6); color: #fff; font-size: 15px; line-height: 1; display: flex; align-items: center; justify-content: center; cursor: pointer; padding: 0; }
+
+    /* P-REMOTE.11: two-row composer - row 1 is the full-width input; row 2 is the actions row
+       ([+] ... Stop Send), auto-collapsed while idle (the global [hidden] rule hides it) so reading
+       keeps the vertical space. app.ts shows it on focus/text/attachments/streaming. */
+    #composer { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--line); background: var(--bg1); flex-shrink: 0; }
+    #composer-actions { display: flex; align-items: center; gap: 10px; }
+    .composer-spacer { flex: 1; }
+    #prompt-input { display: block; width: 100%; resize: none; background: var(--bg); color: var(--txt); border: 1px solid var(--line); border-radius: 12px; padding: 11px 14px; font: inherit; min-height: 44px; max-height: 160px; overflow-y: auto; transition: border-color 0.2s; -webkit-appearance: none; line-height: 1.4; }
+    #prompt-input:focus { outline: none; border-color: var(--cyan); box-shadow: 0 0 0 1px var(--cyan); }
+    #prompt-input::placeholder { color: var(--txt3); }
+
+    /* P-REMOTE.11: condensed status/account strip under the composer (double-decker: thin bar + expandable panel) */
+    #botstrip { flex-shrink: 0; background: var(--bg1); border-top: 1px solid var(--line); }
+    #botstrip-bar { width: 100%; display: flex; align-items: center; gap: 8px; padding: 8px 14px; min-height: 34px; background: transparent; border: none; color: var(--txt2); font-size: 12px; text-align: left; border-radius: 0; }
+    #botstrip-bar:active { transform: none; }
+    .bs-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--txt3); flex: none; }
+    .bs-dot[data-tone=live] { background: var(--green); box-shadow: 0 0 7px var(--green); }
+    .bs-dot[data-tone=wait] { background: var(--amber); }
+    .bs-dot[data-tone=ended] { background: var(--red); }
+    .bs-summary { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .bs-chev { flex: none; color: var(--txt3); transition: transform 0.15s ease; }
+    #botstrip[data-open] .bs-chev { transform: rotate(180deg); }
+    #botstrip-panel { display: flex; flex-direction: column; gap: 12px; padding: 12px 14px; border-bottom: 1px solid var(--line); }
+    #botstrip-panel .hdr { flex: none; }
+    #botstrip-panel #controls { padding: 0; border-top: none; background: transparent; }
+    .bs-account { display: flex; align-items: center; gap: 12px; font-size: 13px; color: var(--txt2); }
+    .bs-account #account-email { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+    /* P-REMOTE.11: reconnect catch-up - an auto-collapsed summary of what completed while the phone was locked */
+    #catchup { flex-shrink: 0; border-bottom: 1px solid var(--line); background: rgba(45, 212, 191, 0.06); }
+    #catchup-bar { width: 100%; display: flex; align-items: center; gap: 8px; padding: 8px 14px; background: transparent; border: none; color: var(--cyan); font-size: 12.5px; font-weight: 600; text-align: left; border-radius: 0; }
+    #catchup-bar:active { transform: none; }
+    #catchup-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .cu-chev { flex: none; transition: transform 0.15s ease; }
+    #catchup[data-open] .cu-chev { transform: rotate(180deg); }
+    #catchup-body { max-height: 40vh; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 4px 14px 12px; display: flex; flex-direction: column; gap: 8px; }
+    .cu-turn { font-size: 13px; line-height: 1.45; color: var(--txt2); white-space: pre-wrap; word-break: break-word; }
+    .cu-role { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--txt3); margin-right: 6px; }
+
+    /* P-PREVIEW-PWA.1: a preview snapshot the host sent - thumbnail in the transcript + a fullscreen viewer */
+    .msg.shot { align-self: flex-start; max-width: 92%; padding: 0; background: none; border: none; }
+    .cu-shot-btn { display: block; width: 100%; padding: 0; border: 1px solid rgba(45,212,191,.25); border-radius: 14px; overflow: hidden; background: var(--bg1); }
+    .cu-shot-img { display: block; width: 100%; height: auto; max-height: 320px; object-fit: contain; background: var(--bg); }
+    .cu-shot-cap { font-size: 11px; color: var(--txt3); margin-top: 4px; }
+    #shot-viewer { position: fixed; inset: 0; z-index: 60; background: rgba(0,0,0,.94); display: flex; flex-direction: column; padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom); }
+    .sv-bar { display: flex; align-items: center; gap: 12px; padding: 10px 14px; flex-shrink: 0; }
+    .sv-spacer { flex: 1; }
+    .sv-x { width: 40px; height: 40px; font-size: 22px; background: var(--bg2); color: var(--txt); border: 1px solid var(--line); border-radius: 10px; flex-shrink: 0; padding: 0; }
+    .sv-stage { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; padding: 0 12px 12px; overflow: auto; }
+    #sv-img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 8px; }
+    /* P-PREVIEW-PWA.2: finger-markup overlay + premium toolbar */
+    .sv-stage { position: relative; }
+    #sv-canvas { position: absolute; touch-action: none; pointer-events: none; border-radius: 8px; }
+    #sv-canvas.armed { pointer-events: auto; cursor: crosshair; }
+    .sv-tool { width: 44px; height: 44px; background: var(--bg2); color: var(--txt2); border: 1px solid var(--line); border-radius: 12px; flex-shrink: 0; padding: 0; }
+    .sv-tool[aria-pressed="true"] { color: var(--cyan); border-color: var(--cyan); background: rgba(45,212,191,.08); }
+    .sv-tool:disabled { opacity: .35; }
+    .sv-send { height: 44px; min-height: 44px; padding: 0 14px; width: auto; max-width: none; font-size: 14px; }
+    .sv-hint { flex-shrink: 0; text-align: center; font-size: 12px; color: var(--txt3); padding: 0 14px 10px; }
+    #attach-btn svg, .sv-tool svg, .sv-x svg { display: block; }
+    .install-hint { margin-top: 18px; display: flex; flex-direction: column; align-items: center; gap: 8px; font-size: 12.5px; color: var(--txt3); max-width: 300px; }
+    #install-btn { min-height: 40px; font-size: 13px; }
+    /* off-screen but RENDERED (never display:none) so a tap on the <label for> opens the iOS file picker */
+    .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+    #attach-btn { display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; flex-shrink: 0; background: var(--bg); color: var(--txt2); border: 1px solid var(--line); border-radius: 12px; -webkit-appearance: none; cursor: pointer; user-select: none; -webkit-user-select: none; }
+    #attach-btn:active { color: var(--cyan); border-color: var(--cyan); transform: scale(0.98); }
+
+    #abort-btn { background: rgba(239, 68, 68, 0.05); color: var(--red); border: 1px solid rgba(239, 68, 68, 0.2); height: 44px; min-height: 44px; padding: 0 18px; font-weight: 600; }
+    #abort-btn:hover { background: rgba(239, 68, 68, 0.1); }
+    #composer button[type="submit"] { height: 44px; min-height: 44px; padding: 0 22px; width: auto; font-size: 15px; }
+
+    /* P-REMOTE.9: tool-chip +/- diffstat + the end-of-run report */
+    .chip.tool { align-items: center; }
+    .chip-stat { margin-left: auto; font-variant-numeric: tabular-nums; font-size: 12px; white-space: nowrap; padding-left: 8px; }
+    .chip-stat .add { color: var(--green); font-weight: 600; }
+    .chip-stat .del { color: var(--red); font-weight: 600; }
+    #report-btn { min-height: 36px; padding: 0 14px; font-size: 13px; max-width: max-content; }
+    #report-modal { position: fixed; inset: 0; z-index: 50; background: var(--bg); display: flex; flex-direction: column; padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom); }
+    #report-modal .rp-head { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--line); background: var(--bg1); flex-shrink: 0; }
+    .rp-title { font-weight: 700; font-size: 16px; flex: 1; }
+    .rp-btn { min-height: 40px; padding: 0 16px; font-size: 14px; max-width: max-content; }
+    .rp-x { width: 40px; height: 40px; font-size: 22px; background: var(--bg2); color: var(--txt); border: 1px solid var(--line); border-radius: 10px; flex-shrink: 0; padding: 0; }
+    #report-hint { font-size: 12px; color: var(--txt3); padding: 8px 16px 0; flex-shrink: 0; }
+    .rp-scroll { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 12px 16px 24px; display: flex; flex-direction: column; gap: 12px; }
+    .rp-card { background: var(--bg1); border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px; }
+    .rp-summary { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+    .rp-metric .rp-k { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--txt3); }
+    .rp-metric .rp-v { font-size: 18px; font-weight: 700; margin-top: 2px; word-break: break-word; }
+    .rp-h { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--txt3); margin-bottom: 8px; }
+    .rp-body { font-size: 14px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; color: var(--txt); }
+    .rp-row { display: flex; align-items: center; gap: 10px; padding: 7px 0; border-top: 1px solid var(--line); font-size: 14px; }
+    .rp-row:first-child { border-top: 0; padding-top: 0; }
+    .rp-path { flex: 1; word-break: break-all; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
+    .rp-stat, .rp-n { font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--txt2); }
+    .rp-stat .add, .rp-v .add { color: var(--green); font-weight: 600; }
+    .rp-stat .del, .rp-v .del { color: var(--red); font-weight: 600; }
+    .rp-empty { color: var(--txt3); font-size: 13px; }
+    
+    /* checkout return */
+    #checkout-result-view .mark { margin-bottom: 20px; }
+    #checkout-result-view .result-kicker { color: var(--cyan); font-size: 12px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; margin-bottom: 12px; }
+    #checkout-result-view .value-prop { margin-bottom: 28px; }
+    #checkout-note { min-height: 20px; color: var(--txt3); font-size: 13px; margin-top: 14px; max-width: 320px; }
+
+    /* fatal */
+    #fatal-view .mark { opacity: 0.5; filter: grayscale(1); margin-bottom: 20px; }
+    #fatal-view h1 { font-size: 24px; color: var(--txt); margin-bottom: 12px; }
+    #fatal-msg { color: var(--red); background: rgba(239, 68, 68, 0.05); padding: 16px 20px; border-radius: 12px; border: 1px solid rgba(239, 68, 68, 0.2); font-size: 15px; max-width: 320px; text-align: center; line-height: 1.5; }
+
+    /* P-REMOTE.10c: reconnect (out-of-band, from a Drive relay-codes file) */
+    .reconnect-input { width: 100%; max-width: 340px; background: var(--bg1); color: var(--txt); border: 1px solid var(--line); border-radius: 12px; padding: 12px 16px; font: inherit; min-height: 48px; -webkit-appearance: none; text-align: center; }
+    .reconnect-input:focus { outline: none; border-color: var(--cyan); box-shadow: 0 0 0 1px var(--cyan); }
+    #reconnect-status { min-height: 20px; font-size: 13px; color: var(--txt2); max-width: 320px; }
+  </style>
+</head>
+<body>
+  <section id="signin-view" class="view-container">
+    <img class="mark" src="./icon.svg?v=3" alt="LUCID Logo" />
+    <h1>LUCID Remote</h1>
+    <p class="value-prop">Securely command your desktop agent from anywhere.</p>
+    
+    <div style="width: 100%; max-width: 340px; display: flex; flex-direction: column; align-items: center;">
+      <button id="signin-btn" class="btn-google" aria-label="Sign in with Google">
+        <div class="google-icon-wrapper">
+          <svg viewBox="0 0 24 24" width="20" height="20" xmlns="http://www.w3.org/2000/svg">
+            <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
+            <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
+            <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/>
+            <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
+          </svg>
+        </div>
+        Sign in with Google
+      </button>
+      
+      <div class="security-cue">
+        <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+          <path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zM9 6c0-1.66 1.34-3 3-3s3 1.34 3 3v2H9V6zm9 14H6V10h12v10zm-6-3c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2z"/>
+        </svg>
+        <span>End-to-end encrypted connection</span>
+      </div>
+      <div id="install-hint" class="install-hint" hidden>
+        <button id="install-btn" class="btn-ghost" hidden><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>Install the app</button>
+        <span id="install-tip"></span>
+      </div>
+    </div>
+  </section>
+
+  <section id="session-view" hidden>
+    <!-- P-REMOTE.11: the transcript takes the whole screen; the status/account controls move to a condensed,
+         auto-collapsed strip UNDER the composer (double-decker) to free up maximum reading space. -->
+    <div id="catchup" hidden>
+      <button id="catchup-bar" type="button" aria-expanded="false" aria-controls="catchup-body">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 12a9 9 0 1 1-3-6.7M21 4v4h-4"/></svg>
+        <span id="catchup-label"></span>
+        <svg class="cu-chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+      </button>
+      <div id="catchup-body" hidden></div>
+    </div>
+    <div id="transcript"></div>
+    <div id="cx-thumbs" hidden></div>
+    <form id="composer" hidden>
+      <textarea id="prompt-input" rows="1" placeholder="Message your agent…" autocomplete="off" aria-label="Message your agent"></textarea>
+      <!-- Auto-collapsed actions row: shown while composing (focus/text/attachments) or streaming (Stop). -->
+      <div id="composer-actions" hidden>
+        <label id="attach-btn" for="file-input" title="Attach image" role="button" tabindex="0" aria-label="Attach image"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></label>
+        <input type="file" id="file-input" accept="image/png,image/jpeg,image/webp,image/gif" multiple class="sr-only" />
+        <span class="composer-spacer"></span>
+        <button type="button" id="abort-btn" title="Stop the current turn" aria-label="Stop"><svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2.5" fill="currentColor"/></svg>Stop</button>
+        <button type="submit" class="btn-primary" aria-label="Send message"><svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M3.4 20.4a1 1 0 0 0 1.4 1.1l16.4-8a1 1 0 0 0 0-1.8L4.8 3.6a1 1 0 0 0-1.4 1.1L5 12z"/></svg>Send</button>
+      </div>
+    </form>
+    <div id="botstrip">
+      <div id="botstrip-panel" hidden>
+        <div class="hdr" id="hdr"></div>
+        <div id="controls" hidden></div>
+        <div class="bs-account">
+          <span id="account-email"></span>
+          <button id="report-btn" class="btn-ghost" hidden>Report</button>
+          <button id="signout-btn" class="btn-ghost">Sign out</button>
+        </div>
+      </div>
+      <button id="botstrip-bar" type="button" aria-expanded="false" aria-controls="botstrip-panel">
+        <span class="bs-dot" id="bs-dot" data-tone="wait"></span>
+        <span class="bs-summary" id="bs-summary">Connecting…</span>
+        <svg class="bs-chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M6 15l6-6 6 6"/></svg>
+      </button>
+    </div>
+  </section>
+
+  <section id="subscribe-view" class="view-container" hidden>
+    <img class="mark" src="./icon.svg?v=3" alt="LUCID Logo" />
+    <h1>Remote Access</h1>
+    <p class="value-prop" style="margin-bottom:12px;">Drive your desktop LUCID agent from your phone, anywhere. This account isn't subscribed yet.</p>
+    <div class="price">$9.99<span>/mo</span></div>
+    <div id="sub-email"></div>
+    <div class="actions">
+      <button id="subscribe-btn" class="btn-primary">Subscribe</button>
+      <button id="subscribe-continue" class="btn-ghost" hidden>I've subscribed &#8212; continue</button>
+      <button id="subscribe-signout" class="btn-ghost">Sign out</button>
+    </div>
+    <div id="sub-hint"></div>
+  </section>
+
+  <section id="checkout-result-view" class="view-container" hidden>
+    <img class="mark" src="./icon.svg?v=3" alt="LUCID Remote" />
+    <div class="result-kicker" id="checkout-kicker">Remote Access</div>
+    <h1 id="checkout-title">Payment complete</h1>
+    <p class="value-prop" id="checkout-message">Return to your original Remote tab to continue connecting.</p>
+    <button id="checkout-close" class="btn-primary">Close this tab</button>
+    <div id="checkout-note">Your room key never entered checkout.</div>
+  </section>
+
+  <section id="fatal-view" class="view-container" hidden>
+    <img class="mark" src="./icon.svg?v=3" alt="" />
+    <h1>Connection Failed</h1>
+    <div id="fatal-msg"></div>
+  </section>
+
+  <section id="reconnect-view" class="view-container" hidden>
+    <img class="mark" src="./icon.svg?v=3" alt="LUCID Logo" />
+    <h1>Reconnect</h1>
+    <p class="value-prop">No invite link in this page. Pull the latest reconnect code from your Google Drive to rejoin the shared session.</p>
+    <div style="width: 100%; max-width: 340px; display: flex; flex-direction: column; align-items: center; gap: 12px;">
+      <input id="reconnect-pin" class="reconnect-input" type="password" inputmode="numeric" autocomplete="off" placeholder="PIN (only if the codes are encrypted)" hidden />
+      <button id="reconnect-btn" class="btn-primary">Get a reconnect code</button>
+      <div id="reconnect-status" role="status"></div>
+      <div class="security-cue">
+        <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zM9 6c0-1.66 1.34-3 3-3s3 1.34 3 3v2H9V6zm9 14H6V10h12v10zm-6-3c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2z"/></svg>
+        <span>Reads only LUCID's own file (drive.file)</span>
+      </div>
+    </div>
+  </section>
+
+  <div id="shot-viewer" hidden>
+    <div class="sv-bar">
+      <button id="sv-draw" class="sv-tool" aria-pressed="false" aria-label="Draw on the snapshot" title="Draw"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19l7-7 3 3-7 7-3-3z"/><path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"/><path d="M2 2l7.586 7.586"/><circle cx="11" cy="11" r="2"/></svg></button>
+      <button id="sv-undo" class="sv-tool" aria-label="Undo last stroke" title="Undo" disabled><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-15-6.7L3 13"/></svg></button>
+      <button id="sv-save" class="sv-tool" aria-label="Save to device" title="Save"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg></button>
+      <span class="sv-spacer"></span>
+      <button id="sv-send" class="btn-primary sv-send" hidden><svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor" aria-hidden="true"><path d="M3.4 20.4a1 1 0 0 0 1.4 1.1l16.4-8a1 1 0 0 0 0-1.8L4.8 3.6a1 1 0 0 0-1.4 1.1L5 12z"/></svg>Send to agent</button>
+      <button id="sv-close" class="sv-x" aria-label="Close"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+    </div>
+    <div class="sv-stage" id="sv-stage"><img id="sv-img" alt="preview snapshot" /><canvas id="sv-canvas"></canvas></div>
+    <div id="sv-hint" class="sv-hint" hidden>Draw with your finger, then Send to agent.</div>
+  </div>
+
+  <div id="report-modal" hidden>
+    <div class="rp-head">
+      <span class="rp-title">Run report</span>
+      <button id="report-copy" class="btn-ghost rp-btn">Copy</button>
+      <button id="report-close" class="rp-x" aria-label="Close report">&times;</button>
+    </div>
+    <div id="report-hint">Scroll to review &middot; screenshot any card &middot; or tap Copy for Markdown</div>
+    <div id="report-body" class="rp-scroll"></div>
+  </div>
+
+  <script src="./config.js"></script>
+  <script type="module" src="./firebase_auth.js"></script>
+  <script type="module" src="./app.js"></script>
+  <script>if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js", { scope: "/remote" }).catch(() => {});</script>
+</body>
+</html>

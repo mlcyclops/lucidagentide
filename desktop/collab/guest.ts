@@ -17,6 +17,7 @@
 
 import type { ChatEvent } from "../renderer/chat_events.ts";
 import type {
+  CollabOptions,
   CollabParticipant,
   CollabSessionHeader,
   CollabTranscriptTurn,
@@ -46,6 +47,9 @@ export interface GuestView {
   model: string;
   contextPct: number | null;
   readOnly: boolean;
+  /** P-COLLAB.14: the pickable model + already-used-folder allowlists an EDIT guest may switch to, or null
+   *  (view guest, or a host that offered none). The PWA renders model/folder pickers only when this is set. */
+  options: CollabOptions | null;
   /** A terminal note for the UI (bye reason / host error / bad link), or null while healthy. */
   note: string | null;
 }
@@ -61,6 +65,10 @@ export interface GuestCallbacks {
   onEnd?: (reason: string) => void;
   /** A host-side refusal (protocol mismatch, etc.) - terminal for this join. */
   onError?: (message: string) => void;
+  /** P-COLLAB.14: the pickable model + already-used-folder allowlists arrived/changed (EDIT guest only). */
+  onOptions?: (options: CollabOptions) => void;
+  /** P-COLLAB.15: a user turn was submitted on the host (by the host or any guest), for live mirroring. */
+  onUserTurn?: (text: string, from: string) => void;
   /** Any view change - a single sink the UI can re-render from. */
   onView?: (view: GuestView) => void;
 }
@@ -84,7 +92,9 @@ export class CollabGuest {
   #model = "";
   #contextPct: number | null = null;
   #readOnly = true;
+  #options: CollabOptions | null = null;
   #note: string | null = null;
+  #reconnecting = false; // P-REMOTE.8: a transient "connection lost - retrying" note is in #note; cleared on recovery
   #ended = false;
 
   constructor(transport: GuestTransport, opts: GuestStartOpts, cb: GuestCallbacks = {}) {
@@ -110,10 +120,14 @@ export class CollabGuest {
   }
 
   /** P-COLLAB.12: drive the host's session (EDIT access only - the host still gates every tool call). Returns
-   *  false without sending when read-only or ended. The prompt runs on the HOST through its fail-closed gate. */
-  sendPrompt(text: string): boolean {
-    if (this.#ended || this.#readOnly || !text.trim()) return false;
-    this.#transport.send({ t: "prompt", text }, 0); // 0 = the host
+   *  false without sending when read-only or ended. The prompt runs on the HOST through its fail-closed gate.
+   *  P-REMOTE.8: `images` (validated image data URLs) ride along as vision input; an image-only message (empty
+   *  text) is allowed when at least one image is attached. */
+  sendPrompt(text: string, images?: string[]): boolean {
+    if (this.#ended || this.#readOnly) return false;
+    const imgs = Array.isArray(images) ? images.filter((s) => typeof s === "string" && s) : [];
+    if (!text.trim() && imgs.length === 0) return false;
+    this.#transport.send({ t: "prompt", text, ...(imgs.length ? { images: imgs } : {}) }, 0); // 0 = the host
     return true;
   }
 
@@ -121,6 +135,26 @@ export class CollabGuest {
   abort(): boolean {
     if (this.#ended || this.#readOnly) return false;
     this.#transport.send({ t: "abort" }, 0);
+    return true;
+  }
+
+  /** P-COLLAB.14: ask the host to switch the active model (EDIT access only). `value` must be one the host
+   *  offered in `options.models`; the host re-validates too. Returns false without sending when read-only,
+   *  ended, or the value isn't in the offered allowlist. */
+  setModel(value: string): boolean {
+    if (this.#ended || this.#readOnly || !value) return false;
+    if (!this.#options?.models.some((m) => m.value === value)) return false;
+    this.#transport.send({ t: "set-model", value }, 0);
+    return true;
+  }
+
+  /** P-COLLAB.14: ask the host to switch to an already-used folder by its OPAQUE id (EDIT access only). The
+   *  id must be one the host offered in `options.workspaces`; the host resolves id->path locally + restarts
+   *  its agent in the new cwd. Returns false without sending when read-only, ended, or the id is unknown. */
+  setWorkspace(id: string): boolean {
+    if (this.#ended || this.#readOnly || !id) return false;
+    if (!this.#options?.workspaces.some((w) => w.id === id)) return false;
+    this.#transport.send({ t: "set-workspace", id }, 0);
     return true;
   }
 
@@ -135,6 +169,7 @@ export class CollabGuest {
       model: this.#model,
       contextPct: this.#contextPct,
       readOnly: this.#readOnly,
+      options: this.#options,
       note: this.#note,
     };
   }
@@ -162,10 +197,14 @@ export class CollabGuest {
         this.#model = f.header.model;
         this.#readOnly = f.readOnly;
         this.#phase = "live";
+        this.#reconnecting = false; // P-REMOTE.8: a fresh sync means we recovered - drop any stale retry note
+        this.#note = null;
         this.#cb.onWelcome?.(f);
         this.#emit();
         break;
       case "event":
+        // P-REMOTE.8: live traffic proves the socket recovered - clear the stale "reconnecting" banner.
+        if (this.#clearReconnectNote()) this.#emit();
         this.#cb.onEvent?.(f.event);
         // fold done/usage so a late view() reflects the current state, mirroring the host
         if (f.event.type === "done" && typeof f.event.text === "string" && f.event.text.trim()) {
@@ -177,11 +216,22 @@ export class CollabGuest {
         }
         break;
       case "state":
+        this.#clearReconnectNote(); // P-REMOTE.8: recovered - the emit below repaints the status
         this.#participants = f.participants;
         this.#model = f.model;
         this.#contextPct = f.contextPct;
         this.#cb.onState?.(f.participants, f.model, f.contextPct);
         this.#emit();
+        break;
+      case "options":
+        // P-COLLAB.14: the model + already-used-folder allowlists (EDIT guest only). Stored for the pickers.
+        this.#options = f.options;
+        this.#cb.onOptions?.(f.options);
+        this.#emit();
+        break;
+      case "user-turn":
+        // P-COLLAB.15: a live user turn (host or another guest). The app folds it into the transcript.
+        this.#cb.onUserTurn?.(f.text, f.from);
         break;
       case "bye":
         this.#end(f.reason || "the host ended the session");
@@ -198,11 +248,23 @@ export class CollabGuest {
     if (this.#ended) return;
     if (willReconnect) {
       this.#phase = "reconnecting";
+      this.#reconnecting = true; // P-REMOTE.8: mark the transient note so the next live host frame can clear it
       this.#note = `connection lost - retrying (${reason})`;
       this.#emit();
       return;
     }
     this.#end(reason || "disconnected");
+  }
+
+  /** P-REMOTE.8: a live host frame means the socket recovered - drop the transient "reconnecting" note (a
+   *  terminal error/bye note is NOT touched: those set #note WITHOUT #reconnecting). Returns whether it
+   *  cleared, so a caller that doesn't otherwise emit can repaint. */
+  #clearReconnectNote(): boolean {
+    if (!this.#reconnecting) return false;
+    this.#reconnecting = false;
+    if (this.#phase !== "live") this.#phase = "live";
+    this.#note = null;
+    return true;
   }
 
   #end(reason: string): void {

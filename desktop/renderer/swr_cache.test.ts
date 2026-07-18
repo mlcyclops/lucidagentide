@@ -6,7 +6,7 @@
 
 import { beforeEach, expect, test } from "bun:test";
 import {
-  __resetCache, cacheGet, cacheSet, cachedSessions, cachedTranscript, setCachedSessions, setCachedTranscript, transcriptSig,
+  __resetCache, cacheGet, cacheSet, cachedSessions, cachedShareSnapshot, cachedSkills, cachedTranscript, setCachedSessions, setCachedShareSnapshot, setCachedSkills, setCachedTranscript, transcriptSig,
 } from "./swr_cache.ts";
 
 beforeEach(() => __resetCache());
@@ -54,6 +54,20 @@ test("transcriptSig is stable for identical transcripts, changes when content ch
   expect(transcriptSig(a)).toBe(transcriptSig(aCopy));
   expect(transcriptSig(a)).not.toBe(transcriptSig([...a, { role: "user", text: "more" }])); // a new message
   expect(transcriptSig(a)).not.toBe(transcriptSig([{ role: "user", text: "hello!" }, { role: "assistant", text: "world" }])); // a longer message
+});
+
+test("share-dock snapshot cache round-trips; missing \u2192 null (P-SHARE.2)", () => {
+  expect(cachedShareSnapshot()).toBeNull();
+  const snap = { relay: { wsBase: "wss://relay/r", label: "relay", source: "self-hosted" }, serve: { running: false }, p2pCfg: { preferDirect: false, iceUrls: [] } };
+  setCachedShareSnapshot(snap);
+  expect(cachedShareSnapshot()).toEqual(snap);
+});
+
+test("discovered-skills cache round-trips; missing \u2192 null (P-SKILL.6)", () => {
+  expect(cachedSkills()).toBeNull();
+  const skills = [{ name: "deploy", description: "ship it", source: "project", root: "project", trust: "trusted", invocation: "/skill:deploy", removable: true }];
+  setCachedSkills(skills);
+  expect(cachedSkills()).toEqual(skills);
 });
 
 test("bad JSON / quota failures degrade to null, never throw", () => {

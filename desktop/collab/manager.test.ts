@@ -64,6 +64,33 @@ describe("CollabManager (P-COLLAB.3)", () => {
     expect(parseShareLink(st.browserLink!).writeToken).toBeNull();
   });
 
+  it("P-REMOTE.2b: a pwaBase relay points the browser link at the PWA, carrying the write token when editing", async () => {
+    const pwaRelay: RelayTarget = { wsBase: "wss://relay.run.app", httpBase: "https://relay.run.app", label: "hosted", source: "public", pwaBase: "https://lucid-agent.web.app/remote" };
+    // view share (no edit): PWA link, read-only secret
+    const view = await new CollabManager(deps(pwaRelay)).start();
+    expect(view.browserLink).toContain("https://lucid-agent.web.app/remote/#");
+    expect(parseShareLink(view.browserLink!).writeToken).toBeNull();
+    // edit share: the PWA link carries the write token so the phone can drive
+    const edit = await new CollabManager(deps(pwaRelay)).start({ allowEdit: true });
+    expect(edit.browserLink).toContain("https://lucid-agent.web.app/remote/#");
+    expect(parseShareLink(edit.browserLink!).writeToken).not.toBeNull();
+    // without pwaBase, the browser link stays the legacy relay-host form
+    const legacy = await new CollabManager(deps(RELAY)).start({ allowEdit: true });
+    expect(legacy.browserLink).toContain("https://relay.local/#");
+  });
+
+  it("P-COLLAB.19: an edit share carries BOTH capabilities - the edit browser link AND an always-view-only twin", async () => {
+    const pwaRelay: RelayTarget = { wsBase: "wss://relay.run.app", httpBase: "https://relay.run.app", label: "hosted", source: "public", pwaBase: "https://lucid-agent.web.app/remote" };
+    const st = await new CollabManager(deps(pwaRelay)).start({ allowEdit: true });
+    // same room, different capability: the edit twin drives, the view twin can never write
+    expect(parseShareLink(st.browserLink!).writeToken).not.toBeNull();
+    expect(parseShareLink(st.browserViewLink!).writeToken).toBeNull();
+    expect(parseShareLink(st.browserViewLink!).roomId).toBe(parseShareLink(st.browserLink!).roomId);
+    // the relay-path pair discriminates the same way
+    expect(parseShareLink(st.fullLink!).writeToken).not.toBeNull();
+    expect(parseShareLink(st.viewLink!).writeToken).toBeNull();
+  });
+
   it("refuses to start when no relay is authorized (fail-closed)", async () => {
     const mgr = new CollabManager(deps(null));
     await expect(mgr.start()).rejects.toThrow(/no collaboration relay/i);

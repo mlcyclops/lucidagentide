@@ -45,6 +45,17 @@ describe("classifyBindAddresses (P-COLLAB.14)", () => {
     expect(list[0]).toMatchObject({ address: "192.168.0.9", family: "IPv4", kind: "lan" });
   });
 
+  it("labels use a plain hyphen, never an em dash (P-REMOTE.11: no em dashes in the Session Share UI)", () => {
+    const list = classifyBindAddresses({
+      lo: [{ address: "127.0.0.1", family: "IPv4", internal: true }],
+      eth0: [{ address: "192.168.1.42", family: "IPv4", internal: false }],
+      tailscale0: [{ address: "100.101.102.103", family: "IPv4", internal: false }],
+      pub: [{ address: "203.0.113.7", family: "IPv4", internal: false }],
+    });
+    for (const a of list) expect(a.label).not.toContain("\u2014"); // U+2014 em dash
+    expect(list.find((a) => a.address === "127.0.0.1")!.label).toBe("127.0.0.1 - this machine only");
+  });
+
   it("marks anything internal as loopback even off 127.x, and an IPv6 link-local as LAN", () => {
     const list = classifyBindAddresses({
       lo6: [{ address: "::1", family: "IPv6", internal: true }],

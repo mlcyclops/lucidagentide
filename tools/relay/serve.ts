@@ -22,6 +22,8 @@
 //   or: PORT=443 TLS_CERT=/etc/lucid/relay.crt TLS_KEY=/etc/lucid/relay.key bun run tools/relay/serve.ts
 
 import { startRelayServer, type RelayServerOptions } from "../../desktop/collab/relay_server.ts";
+import { authFromEnv } from "../../desktop/collab/relay_auth.ts";
+import { relayPresenceFromEnv, type RelayPresenceEnvResult } from "../../desktop/collab/relay_presence.ts";
 import { readFileSync } from "node:fs";
 
 function envInt(name: string, fallback: number): number {
@@ -56,6 +58,25 @@ if (tlsCert && tlsKey) {
 const ts = () => new Date().toISOString();
 const log = (m: string, d?: unknown) => console.log(`[lucid-relay] ${ts()} ${m}${d !== undefined ? " " + JSON.stringify(d) : ""}`);
 
+// P-REMOTE.1 (ADR-0226/0227): the OPTIONAL Firebase identity gate for a HOSTED rendezvous. Fail-LOUD on a
+// half-configured gate (RELAY_AUTH=firebase without a project id must never start an open relay).
+let authGate;
+try {
+  authGate = authFromEnv(process.env);
+} catch (e) {
+  console.error(`[lucid-relay] auth config error: ${String((e as Error)?.message ?? e)}`);
+  process.exit(2);
+}
+
+// P-REMOTE.7 is separately opt-in. A bad telemetry setting is reported and disabled; it never weakens the
+// Firebase gate and never prevents the relay from serving authenticated sockets.
+let presenceConfig: RelayPresenceEnvResult = { presence: null, summary: "relay telemetry: off" };
+try {
+  presenceConfig = relayPresenceFromEnv(process.env, (m, d) => log(m, d));
+} catch {
+  presenceConfig = { presence: null, summary: "relay telemetry: disabled by invalid configuration" };
+}
+
 let handle;
 try {
   handle = startRelayServer({
@@ -65,7 +86,10 @@ try {
     maxPeersPerRoom: envInt("MAX_PEERS_PER_ROOM", 16),
     maxFrameBytes: envInt("MAX_FRAME_BYTES", 512 * 1024),
     idleTimeoutSec: envInt("IDLE_TIMEOUT_SEC", 120),
+    pwaRedirectBase: process.env.RELAY_PWA_REDIRECT?.trim() || undefined,
     tls,
+    auth: authGate.auth,
+    presence: presenceConfig.presence ?? undefined,
     onLog: (m, d) => log(m, d),
   });
 } catch (e) {
@@ -76,6 +100,9 @@ try {
 const scheme = tls ? "wss" : "ws";
 log(`LUCID collab relay listening on ${scheme}://${host}:${handle.port}  (health: http${tls ? "s" : ""}://${host}:${handle.port}/healthz)`);
 log(`forwarding OPAQUE E2E-sealed frames only - the relay never holds a room key`);
+log(authGate.summary);
+log(presenceConfig.summary);
+if (process.env.RELAY_PWA_REDIRECT?.trim()) log(`invite fallback: GET / forwards a stale relay-host QR to ${process.env.RELAY_PWA_REDIRECT.trim()}`);
 if (!tls) log(`serving plain ws:// - terminate TLS at a reverse proxy for wss:// (see tools/relay/README.md)`);
 
 // Periodic liveness line for ops logs (rooms/peers only - never any session content).
@@ -88,6 +115,10 @@ function shutdown(sig: string): void {
   clearInterval(heartbeat);
   log(`${sig} - shutting down (${handle!.roomCount()} rooms open)`);
   try { handle!.stop(); } catch { /* already stopped */ }
-  process.exit(0);
+  // Best-effort terminal snapshots, bounded to one second. Failure/timeout never changes the exit result.
+  const flush = presenceConfig.presence?.flush?.();
+  if (!flush) { process.exit(0); return; }
+  const timeout = new Promise<void>((resolve) => setTimeout(resolve, 1_000));
+  void Promise.race([flush.catch(() => undefined), timeout]).finally(() => process.exit(0));
 }
 for (const sig of ["SIGINT", "SIGTERM"] as const) process.on(sig, () => shutdown(sig));

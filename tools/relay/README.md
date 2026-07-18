@@ -115,6 +115,25 @@ it. Hosts start a share; guests paste the invite link and connect through this b
 | `MAX_PEERS_PER_ROOM` | — | `16` | guests per room |
 | `MAX_FRAME_BYTES` | — | `524288` | max frame size (Bun drops larger) |
 | `IDLE_TIMEOUT_SEC` | — | `120` | idle socket timeout |
+| `RELAY_AUTH` | — | `off` | `firebase` = require a Google sign-in to rendezvous (P-REMOTE.1, ADR-0226/0227) |
+| `RELAY_FIREBASE_PROJECT` | — | — | Firebase project id (required in `firebase` mode; checked as `aud`/`iss`) |
+| `RELAY_ALLOWED_EMAILS` | — | — | comma list admitted WITHOUT a `premium`/`admin` claim (self-host allowlist) |
+| `RELAY_JWKS_URL` | — | Google securetoken JWKS | override for tests / air-gapped mirrors |
+| `RELAY_AUTH_DEADLINE_MS` | — | `5000` | ms before an unauthenticated socket is reaped (4401) |
+
+## Identity gate (`RELAY_AUTH=firebase`)
+
+Anonymous mode (the default) is unchanged: anyone with the room link can rendezvous — content is still
+E2E-sealed, so the broker forwards only ciphertext. For a **hosted** rendezvous (ADR-0226: Cloud Run in the
+`lucid-agent` project), turn the gate on: the client's **first frame** after the WS upgrade must be
+`{"t":"auth","token":"<Firebase ID token>"}` — never a query param, so no bearer token ever lands in request
+logs. The relay verifies RS256 against Google's securetoken JWKS with builtin WebCrypto (still zero npm
+deps), requires `email_verified` + `sign_in_provider === "google.com"` (Google OAuth only), and admits on a
+`premium`/`admin` custom claim (the paid tier / the host account, ADR-0227) or an `RELAY_ALLOWED_EMAILS`
+entry. Refusals are fatal close codes: `4401` invalid/missing auth, `4403` signed-in-but-not-entitled,
+`4429` per-user quota (rooms per uid, connects/min). Every verification failure — including an unreachable
+JWKS — refuses; there is no fail-open path. Authentication gates the RENDEZVOUS only: the room key still
+gates reading, the write token still gates driving, and the host's own security gate still gates execution.
 
 ## Why TypeScript here (and where FastAPI fits)
 

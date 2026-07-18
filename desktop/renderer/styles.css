@@ -800,8 +800,15 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .skdir-body{background:var(--bg-0);border:1px solid var(--line);border-radius:var(--r-md);padding:10px 12px;font-size:12px;line-height:1.5;white-space:pre-wrap;word-break:break-word;max-height:40vh;overflow:auto;color:var(--txt-2);font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
 .skdir-res-hd{font-size:11px;font-weight:600;text-transform:uppercase;color:var(--txt-3);margin:12px 0 6px}
 .skdir-res{font-size:12px;color:var(--txt-2);margin-bottom:4px}
+/* P-SKILL.6 (ADR-0243): SWR loading affordances - a cold-open spinner (never a blank panel) + a subtle
+   "updating" chip beside the CTA while a cached paint revalidates (mirrors the Session Share dock chip). */
+.skdir-top{display:flex;align-items:center;gap:8px;margin:0 0 12px}
+.skdir-loading{display:flex;align-items:center;gap:8px;color:var(--txt-3);font-size:12.5px;padding:16px 2px}
+.skdir-loading .ic{color:var(--accent-2);animation:cfgspin .7s linear infinite}
+.skdir-updating{display:inline-flex;align-items:center;gap:4px;flex:none;font-size:10px;font-weight:600;color:var(--txt-4);white-space:nowrap}
+.skdir-updating .ic{color:var(--accent-2);animation:cfgspin .7s linear infinite}
 /* P-SKILL.5 (ADR-0101): Skill Studio - launch CTA + scrim modal + candidate cards. */
-.skdir-studio-cta{display:inline-flex;align-items:center;gap:6px;margin:0 0 12px}
+.skdir-studio-cta{display:inline-flex;align-items:center;gap:6px;margin:0}
 .sk-studio-card{position:relative;width:min(780px,94vw);max-height:86vh;display:flex;flex-direction:column;background:var(--bg-1);border:1px solid var(--line-strong);border-radius:var(--r-lg);padding:16px 18px;box-shadow:0 20px 60px rgba(0,0,0,.5);animation:rise var(--t-slow,.24s) var(--ease-out)}
 .sk-studio-hd{display:flex;align-items:center;gap:8px;font-size:15px;margin-bottom:12px}
 .sk-studio-hd .set-close{margin-left:auto}
@@ -2055,7 +2062,11 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 /* knowledge graph view (P9.3) */
 .kg{position:relative;width:var(--kg-w,min(900px,70vw));background:var(--bg-1);border-left:1px solid var(--line-soft);display:flex;flex-direction:column;overflow:hidden;animation:slideInR var(--t-slow) var(--ease-out)}
 /* P-PREVIEW.1 (ADR-0096): in-app browser preview fly-out — reuses the .kg shell but its own width var. */
-#preview{width:var(--preview-w,min(820px,68vw))}
+/* The preview is HARD-capped at 50vw so the chat + the Electron frame controls always keep at least half the
+   window — even if an old saved --preview-w or a drag tried to make it bigger. (P-PREVIEW fly-out cap fix.) */
+#preview{width:var(--preview-w,min(760px,50vw));max-width:50vw}
+/* When the preview is open the chat column is narrower, so shrink its text a notch to keep it readable. */
+body.preview-open .thread{font-size:.9em}
 /* P-KG-CODE.1: trim the Knowledge-graph header's vertical padding too (ID beats the shared .set-head rule). */
 #knowledge .set-head{padding-top:6px;padding-bottom:6px}
 /* P-KGUI.1 (ADR-0184): the consolidated views dropdown replaces the three-button vertical stack. */
@@ -2142,7 +2153,29 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .preview-panel .set-head{padding:5px 12px;gap:8px;flex-wrap:nowrap}
 .preview-panel .set-title{min-width:0;flex:0 1 auto;font-size:13px;overflow:hidden}
 .preview-panel .set-title .set-sub{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.preview-panel .kg-tools{gap:6px;flex:1 1 auto;justify-content:flex-end;min-width:0;flex-wrap:nowrap}
+.preview-panel .kg-tools{gap:6px;row-gap:5px;flex:1 1 auto;justify-content:flex-end;min-width:0;flex-wrap:wrap}
+/* the Close (X) must always be reachable — never let it shrink or get clipped off the toolbar's edge. */
+.preview-panel .set-close{flex:none;order:99}
+/* P-PREVIEW.8: the Yours / Agent tab strip. Only the active lane's iframe is shown; both stay loaded. */
+.preview-tabs{display:flex;gap:2px;padding:0 10px;border-bottom:1px solid var(--line-soft);background:var(--bg-1);flex:none}
+.prev-tab{position:relative;display:flex;align-items:center;gap:6px;padding:7px 14px;border:0;background:none;color:var(--txt-2);font-size:12px;font-weight:600;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px}
+.prev-tab:hover{color:var(--txt)}
+.prev-tab.active{color:var(--txt);border-bottom-color:var(--accent,#6b8afd)}
+.prev-tab-dot{width:7px;height:7px;border-radius:50%;background:var(--accent-2,#c64bd6);animation:prevPulse 1.3s ease-out infinite}
+.prev-tab-dot[hidden]{display:none}
+/* P-PREVIEW.9: device viewports — the stage holds both lane frames; device mode centers + fit-scales them. */
+.preview-stage{flex:1;min-width:0;display:flex;position:relative}
+.preview-body.device{align-items:center;justify-content:center;overflow:auto;padding:14px}
+.preview-body.device .preview-stage{flex:none;display:block}
+.preview-body.device .preview-frame{flex:none;display:block;border-radius:18px;box-shadow:0 12px 38px -12px rgba(0,0,0,.65);border:1px solid var(--line);background:#fff}
+.preview-body.device .preview-frame[hidden]{display:none}
+.prev-devpop{display:flex;flex-direction:column;gap:2px;padding:5px;min-width:210px}
+.pdev-opt{display:flex;align-items:center;gap:9px;padding:7px 10px;border:0;border-radius:7px;background:none;color:var(--txt);font-size:12px;font-weight:500;cursor:pointer;text-align:left;white-space:nowrap}
+.pdev-opt:hover{background:var(--bg-3)}
+.pdev-opt.on{color:var(--accent,#6b8afd)}
+.pdev-opt svg{flex:none}
+.pdev-opt em{margin-left:auto;color:var(--txt-2);font-style:normal;font-size:11px}
+#prevDevice.on{color:var(--accent,#6b8afd);border-color:color-mix(in srgb,var(--accent,#6b8afd) 45%,transparent)}
 .preview-panel .kg-tools .kg-search{flex:1 1 64px;min-width:50px}
 .preview-panel .kg-tools .btn-mini{flex:none;padding:4px 8px;font-size:11px}
 .preview-panel .kg-tools .btn-mini .ic{width:13px;height:13px}
@@ -2724,7 +2757,7 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 @keyframes lucid-spin{to{transform:rotate(360deg)}}
 @keyframes lucid-pulse{0%,100%{opacity:.35}50%{opacity:1}}
 @media (prefers-reduced-motion: reduce){
-  .skel,.spin,.cfg-refresh.busy .ic,.model-badge.busy .dot{animation:none!important}
+  .skel,.spin,.cfg-refresh.busy .ic,.model-badge.busy .dot,.skdir-loading .ic,.skdir-updating .ic{animation:none!important}
   /* without shimmer motion, fall back to a calm static tint so it still reads as "loading" */
   .skel{background:var(--bg-2)}
 }
@@ -3123,6 +3156,11 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 /* the setup relay-URL input sits in a block field (not a flex row), so give it the full width */
 .share-field .share-link-input{width:100%}
 .share-hint{font-size:12px;line-height:1.55;color:var(--txt-3);margin:8px 0 0}
+/* P-REMOTE.4a: scannable QR of the invite link — white quiet-zone card so a phone camera locks on reliably */
+.share-qr{display:flex;justify-content:center;margin:12px auto 0;background:#fff;border-radius:10px;padding:12px;width:max-content;max-width:100%;box-shadow:var(--ring)}
+.share-qr svg{display:block;width:200px;height:200px;image-rendering:pixelated}
+.share-qr-cap{display:flex;align-items:center;justify-content:center;gap:6px;font-size:11.5px;color:var(--txt-3);margin:6px 0 0}
+.share-qr-cap .ic{color:var(--accent-2)}
 .share-setup-note,.share-ready-note{display:flex;align-items:flex-start;gap:7px;font-size:12.5px;line-height:1.5;
   color:var(--txt-2);background:var(--bg-2);border:1px solid var(--line);border-radius:9px;padding:9px 11px;margin-bottom:6px}
 .share-setup-note .ic,.share-ready-note .ic{flex:none;margin-top:1px;color:var(--accent-2)}
@@ -3145,6 +3183,76 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .btn-mini.danger{color:var(--red);border-color:color-mix(in srgb,var(--red) 40%,transparent)}
 .btn-mini.danger:hover{background:var(--red-dim)}
 
+/* ───────── P-SHARE.1 (ADR-0232): the floating Session Share DOCK (drag / resize / snap / minimize) ───────── */
+.share-dock{position:fixed;z-index:55;display:flex;flex-direction:column;min-width:296px;min-height:200px;
+  background:var(--bg-1);border:1px solid var(--line);border-radius:12px;overflow:hidden;
+  box-shadow:0 18px 48px rgba(0,0,0,.5),0 2px 0 rgba(255,255,255,.02) inset;animation:fade .12s ease}
+.share-dock.snap-right{border-right-width:2px;border-right-color:var(--accent)}
+.share-dock.snap-left{border-left-width:2px;border-left-color:var(--accent)}
+.share-dock.dragging{opacity:.94;box-shadow:0 26px 60px rgba(0,0,0,.6);cursor:grabbing;user-select:none}
+.share-dock-head{display:flex;align-items:center;gap:8px;padding:8px 8px 8px 11px;border-bottom:1px solid var(--line-soft);
+  background:var(--bg-2);cursor:grab;flex:none;touch-action:none;user-select:none}
+.share-dock.dragging .share-dock-head{cursor:grabbing}
+.share-dock-grip{display:inline-flex;color:var(--accent-2)}
+.share-dock-title{flex:1;font-size:12.5px;font-weight:700;color:var(--txt);letter-spacing:.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* P-SHARE.2 (ADR-0234): the cold-boot "updating\2026" chip (mirrors the Settings model-list indicator) shown
+   while the cached first-paint revalidates in the background. */
+.share-dock-updating{display:inline-flex;align-items:center;gap:4px;flex:none;font-size:10px;font-weight:600;color:var(--txt-4);white-space:nowrap}
+.share-dock-updating[hidden]{display:none}
+.share-dock-updating .ic{color:var(--accent-2);animation:cfgspin .7s linear infinite}
+.share-dock-count{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;font-weight:700;color:var(--txt-2);
+  background:var(--bg-0);border:1px solid var(--line);border-radius:20px;padding:2px 9px;cursor:pointer}
+.share-dock-count:hover{border-color:var(--accent);color:var(--txt)}
+.sd-live-dot{width:8px;height:8px;border-radius:50%;background:var(--txt-4);flex:none;transition:background .2s}
+.sd-live-dot.on{background:var(--green);box-shadow:0 0 7px var(--green);animation:sharePulse 1.8s ease-in-out infinite}
+.share-dock-btn{display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;flex:none;
+  border-radius:7px;color:var(--txt-3);background:transparent;cursor:pointer}
+.share-dock-btn:hover{background:var(--bg-0);color:var(--txt)}
+.share-dock-btn .sd-up{transform:rotate(0)}
+/* participant dropdown (by email) under the count badge */
+.share-dock-people{position:absolute;top:42px;right:8px;left:8px;z-index:2;max-height:200px;overflow:auto;
+  background:var(--bg-0);border:1px solid var(--line);border-radius:9px;padding:6px;display:flex;flex-direction:column;gap:4px;
+  box-shadow:0 12px 28px rgba(0,0,0,.5)}
+.sd-person{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--txt);padding:5px 7px;border-radius:6px}
+.sd-person:hover{background:var(--bg-2)}
+.sd-person.empty{color:var(--txt-3);cursor:default}
+.sd-person-dot{width:7px;height:7px;border-radius:50%;background:var(--cyan);flex:none}
+.sd-person-dot.edit{background:var(--green)}
+.sd-person-email{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.share-dock-body{flex:1;min-height:0;overflow:auto;padding:10px 12px}
+/* chevron-collapsible sections */
+.dock-sec{border:1px solid var(--line);border-radius:9px;margin-bottom:8px;background:var(--bg-2);overflow:hidden}
+.dock-sec>summary.dock-sec-h{display:flex;align-items:center;gap:7px;padding:9px 11px;cursor:pointer;list-style:none;
+  font-size:12px;font-weight:600;color:var(--txt-2);user-select:none}
+.dock-sec>summary.dock-sec-h::-webkit-details-marker{display:none}
+.dock-sec>summary.dock-sec-h:hover{color:var(--txt)}
+.dock-sec-h .ic{color:var(--txt-3);transition:transform .15s ease;flex:none}
+.dock-sec[open]>summary.dock-sec-h .ic{transform:rotate(90deg)}
+.dock-sec-t{flex:1}
+.dock-sec-b{padding:2px 11px 11px}
+.dock-foot{display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap;padding-top:6px;margin-bottom:8px}
+/* P-SHARE.2 (ADR-0234): a top-level action row (Change relay / Start sharing) is followed by another section,
+   so it needs the SAME 8px inter-panel gap the sections carry - otherwise the buttons touch the next panel. */
+.dock-foot .btn-mini{padding:6px 14px}
+.share-dock-cta{flex:none;padding:8px 12px;border-top:1px solid var(--line-soft);text-align:center;background:var(--bg-1)}
+.share-dock-cta .btn-mini{color:var(--txt-2)}
+/* resize handles */
+.share-dock-rz{position:absolute;z-index:3}
+.share-dock-rz.e{top:8px;bottom:8px;right:0;width:7px;cursor:ew-resize}
+.share-dock-rz.s{left:8px;right:8px;bottom:0;height:7px;cursor:ns-resize}
+.share-dock-rz.se{right:0;bottom:0;width:15px;height:15px;cursor:nwse-resize}
+.share-dock-rz.se::after{content:"";position:absolute;right:3px;bottom:3px;width:7px;height:7px;
+  border-right:2px solid var(--txt-4);border-bottom:2px solid var(--txt-4);border-bottom-right-radius:2px}
+/* minimized pill (P-REMOTE.11: lives INSIDE the status bar, to the right of the trivia ticker - not floating
+   above it). Re-adopted after every renderStatus innerHTML swap, like the ticker, so no fade-flicker. */
+.share-dock-pill{flex:none;margin-left:8px;display:inline-flex;align-items:center;gap:6px;
+  height:22px;padding:0 10px;border-radius:20px;background:var(--bg-2);border:1px solid var(--line);color:var(--txt);
+  font-size:11.5px;font-weight:700;cursor:pointer;transition:border-color var(--t-fast) var(--ease),background var(--t-fast) var(--ease)}
+.share-dock-pill:hover{border-color:var(--accent);background:var(--bg-1)}
+.share-dock-pill.live{border-color:color-mix(in srgb,var(--green) 45%,var(--line))}
+.share-dock-pill .sd-up{color:var(--accent-2)}
+.share-dock-pill .sd-pill-n{min-width:12px;text-align:center}
+
 /* P-COLLAB.7: the "be the relay" toggle card in the Share panel */
 .share-serve-card{background:var(--bg-2);border:1px solid var(--line);border-radius:10px;padding:11px 12px;margin-bottom:12px}
 .share-serve-card.locked{display:flex;align-items:flex-start;gap:7px;font-size:12.5px;line-height:1.5;color:var(--txt-2)}
@@ -3165,8 +3273,11 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 /* P-COLLAB.10: the guest Join panel */
 .share-join-cta{margin-top:12px;padding-top:11px;border-top:1px solid var(--line-soft);text-align:center}
 .share-join-cta .btn-mini{color:var(--txt-2)}
-.join-modal{max-width:520px;position:relative;text-align:left}
-.join-modal .modal-title,.join-modal .modal-desc{text-align:left}
+/* P-COLLAB.20 (ADR-0242): the Join panel is a floating DOCK on the share-dock chassis - non-blocking, so the
+   local LUCID stays fully usable while watching/driving a remote one. Geometry persists under its own key. */
+.join-dock .join-body{flex:1;min-height:0;display:flex;flex-direction:column}
+.join-dock .join-transcript{flex:1;min-height:0;max-height:none}
+#joinDockDot{flex:none;margin-right:2px}
 .join-body{margin-top:6px}
 .join-head{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--txt);margin:2px 0 9px}
 .join-head .ic{color:var(--accent-2)}
@@ -3199,13 +3310,8 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .join-prompt-input:focus{border-color:var(--accent-2);box-shadow:var(--ring)}
 .join-compose .btn-mini{flex:none}
 
-/* ADR-0222: the guest "Watching" view fills the app (thin ~28px border) + reclaims padding, and shows the
-   host's thinking + tool activity - so the viewer gets the real estate to actually follow + drive the session. */
-.join-modal.watching{width:calc(100vw - 56px);height:calc(100vh - 56px);max-width:none;padding:11px 13px 9px;display:flex;flex-direction:column;text-align:left}
-.join-modal.watching>.modal-icon,.join-modal.watching>.modal-title,.join-modal.watching>.modal-desc{display:none} /* the join-head already labels the session - reclaim the vertical space (keep the X) */
-.join-modal.watching .join-body{flex:1;min-height:0;display:flex;flex-direction:column;margin-top:0}
-.join-modal.watching .join-head{margin:0 0 7px}
-.join-modal.watching .join-transcript{flex:1;min-height:0;max-height:none;padding:9px}
+/* (ADR-0222's fill-the-app "watching" modal is retired by P-COLLAB.20 - the dock is freely resizable, and
+   its transcript already flexes to the dock's height via .join-dock above.) */
 .join-think{margin:1px 0 4px;font-size:11.5px}
 .join-think>summary{cursor:pointer;color:var(--txt-3);list-style:none;display:inline-flex;align-items:center;gap:5px}
 .join-think>summary::-webkit-details-marker{display:none}

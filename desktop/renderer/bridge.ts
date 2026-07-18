@@ -390,7 +390,7 @@ export interface ManagedPolicy {
 // P-COLLAB.3 (ADR-0192): the live-share surface. `CollabParticipantView` mirrors the host's roster entry;
 // `CollabShareStatus` is what the Share panel polls; `CollabRelay` is the authorized relay (null = none).
 export interface CollabParticipantView { peerId: number; name: string; role: "host" | "guest"; access: "view" | "edit" }
-export interface CollabRelay { wsBase: string; httpBase: string; label: string; source: "self-hosted" | "public" | "embedded" }
+export interface CollabRelay { wsBase: string; httpBase: string; label: string; source: "self-hosted" | "public" | "embedded"; pwaBase?: string; gated?: boolean }
 /** P-COLLAB.7: the embedded-relay ("be the relay") status the toggle polls. `managed.locked` disables the
  *  control (+ "Managed by <org>"); `managed.allowServe:false` means the org forbids hosting a relay. */
 /** P-COLLAB.14: a bindable address the "be the relay" toggle can offer (loopback / LAN / VPN). */
@@ -421,6 +421,9 @@ export interface CollabShareStatus {
   fullLink?: string;
   viewLink?: string;
   browserLink?: string;
+  /** P-COLLAB.19 (ADR-0241): the always-VIEW-ONLY browser/phone link - on an edit share, hand this to guests
+   *  who should only watch (browserLink is the edit-capable twin). */
+  browserViewLink?: string;
   relayLabel?: string;
   relaySource?: string;
   startedAt?: number;
@@ -562,15 +565,20 @@ export interface LucidBridge {
   // room + view/full links + stands up the host (fails closed if no relay); `stop` ends it; `setRelay`
   // configures the authorized relay (self-hosted default, public opt-in).
   collabStatus(): Promise<CollabShareStatus | null>;
-  /** `allowEdit` shares an EDIT link so a full-link guest can drive the host (P-COLLAB.13). */
-  collabStart(opts?: { allowEdit?: boolean }): Promise<{ ok: boolean; status?: CollabShareStatus; error?: string }>;
+  /** `allowEdit` shares an EDIT link so a full-link guest can drive the host (P-COLLAB.13). `favModels`
+   *  (P-REMOTE.11b, ADR-0238): the host's favorite model values - the backend offers edit guests just these
+   *  plus the current model (favorites live in renderer localStorage; the backend cannot read them). */
+  collabStart(opts?: { allowEdit?: boolean; favModels?: string[] }): Promise<{ ok: boolean; status?: CollabShareStatus; error?: string }>;
   collabStop(): Promise<CollabShareStatus | null>;
   collabSetRelay(patch: { url?: string; publicOptIn?: boolean }): Promise<{ relay: CollabRelay | null } | null>;
   // P-COLLAB.13: guest-write. The HOST polls collabGuestInbox and runs a pending guest prompt through its own
   // composer; the connected GUEST drives the host via collabGuestSendPrompt / collabGuestAbort.
-  collabGuestInbox(): Promise<{ prompt: { text: string; from: string } | null; abort: boolean } | null>;
-  collabGuestSendPrompt(text: string): Promise<{ ok: boolean; error?: string }>;
+  collabGuestInbox(): Promise<{ prompt: { text: string; from: string; images?: string[] } | null; abort: boolean; model: { value: string; from: string } | null; workspace: { path: string; from: string } | null } | null>;
+  collabGuestSendPrompt(text: string, images?: string[]): Promise<{ ok: boolean; error?: string }>;
   collabGuestAbort(): Promise<unknown>;
+  // P-COLLAB.14 (ADR-0228): the connected GUEST switches the host's model / already-used folder (EDIT only).
+  collabGuestSetModel(value: string): Promise<{ ok: boolean; error?: string }>;
+  collabGuestSetWorkspace(id: string): Promise<{ ok: boolean; error?: string }>;
   // P-COLLAB.7: host the embedded relay on this device ("be the relay"), governance-gated + fail-closed.
   collabRelayServeStatus(): Promise<CollabRelayServeStatus | null>;
   collabRelayServe(patch: { enabled: boolean; host?: string; port?: number }): Promise<{ ok: boolean; status?: CollabRelayServeStatus; error?: string }>;
@@ -582,11 +590,19 @@ export interface LucidBridge {
   // host/guest). `collabAuthorizeConnect` re-checks the managed relay policy before a renderer-side P2P join.
   collabP2PConfig(): Promise<{ config: CollabP2PConfig; guestName: string; managed: { locked: boolean } } | null>;
   collabSetP2P(patch: Partial<CollabP2PConfig>): Promise<{ config: CollabP2PConfig } | null>;
+  /** P-REMOTE.2c: push a fresh Firebase ID token to the backend so the host socket can authenticate to a
+   *  GATED hosted relay. Empty idToken clears the backend cache (→ anonymous connect). */
+  collabPushToken(idToken: string, expiresAt: number): Promise<{ present: boolean } | null>;
+  /** P-PREVIEW-PWA.1 (ADR-0237): broadcast a scaled-down Preview-panel snapshot to RELAY guests (the backend
+   *  CollabHost re-broadcasts it as a preview event). No-op when not relay-sharing; direct-P2P uses teeEvent. */
+  collabBroadcastPreview(image: string, label?: string): Promise<{ sent: boolean } | null>;
   collabAuthorizeConnect(endpoint: string): Promise<{ ok: boolean; error?: string }>;
   // P-COLLAB.18: report a direct-P2P share/join lifecycle event to the backend audit trail (fire-and-forget;
   // the backend maps the closed action set to a validated EventName + whitelists the metadata).
   collabAudit(action: "share_started" | "share_stopped" | "guest_joined" | "guest_left", meta: { transport?: string; access?: string; roomId?: string; guest?: string }): void;
-  sendPrompt(text: string, onEvent: (e: ChatEvent) => void, images?: { data: string; mimeType: string }[]): Promise<void>;
+  /** `share` (P-PREVIEW-PWA.3, ADR-0240): roster COUNTS for a renderer-hosted direct-P2P share, so the
+   *  backend can build the trusted agent-awareness preamble (a relay share is computed backend-side). */
+  sendPrompt(text: string, onEvent: (e: ChatEvent) => void, images?: { data: string; mimeType: string }[], from?: string, share?: { view: number; edit: number }): Promise<void>;
   // P-GOAL.1 (ADR-0046): run a /goal loop - streams the same events plus goal-iter/check/done/stop.
   runGoal(opts: GoalOpts, onEvent: (e: ChatEvent) => void): Promise<void>;
   resumableLoops(): Promise<ResumableLoop[] | null>; // P-GOAL.4: loops that stopped without meeting their condition
@@ -919,10 +935,12 @@ async function streamNdjson(path: string, body: unknown, onEvent: (e: ChatEvent)
 // Stop must always recover the UI: aborting this controller ends the client read immediately, so the
 // turn's finally runs even when omp is wedged. cancelChat() aborts it AND posts the server cancel.
 let chatAbort: AbortController | null = null;
-const streamChat = (text: string, onEvent: (e: ChatEvent) => void, images?: { data: string; mimeType: string }[]) => {
+const streamChat = (text: string, onEvent: (e: ChatEvent) => void, images?: { data: string; mimeType: string }[], from?: string, share?: { view: number; edit: number }) => {
   chatAbort?.abort();
   chatAbort = new AbortController();
-  return streamNdjson("/api/chat", { text, ...(images?.length ? { images } : {}) }, onEvent, chatAbort.signal).finally(() => { chatAbort = null; });
+  // P-COLLAB.15: `from` attributes a guest-driven turn in the live collab broadcast (omitted for host turns).
+  // P-PREVIEW-PWA.3: `share` carries direct-P2P roster COUNTS for the agent-awareness preamble.
+  return streamNdjson("/api/chat", { text, ...(images?.length ? { images } : {}), ...(from ? { from } : {}), ...(share ? { share } : {}) }, onEvent, chatAbort.signal).finally(() => { chatAbort = null; });
 };
 
 // P-COLLAB.10: JOIN a shared session. /api/collab/join returns EITHER a JSON error envelope (malformed link /
@@ -1117,21 +1135,35 @@ export const bridge: LucidBridge = {
   collabStatus: () => getData("/api/collab/status"),
   collabStart: async (opts) => {
     try {
-      const r = await fetch("/api/collab/start", { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify({ allowEdit: !!opts?.allowEdit }) });
+      const r = await fetch("/api/collab/start", { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify({ allowEdit: !!opts?.allowEdit, favModels: opts?.favModels ?? [] }) });
       const j = await r.json();
       return j?.ok ? { ok: true, status: j.data as CollabShareStatus } : { ok: false, error: String(j?.error ?? `backend error ${r.status}`) };
     } catch (e) { return { ok: false, error: String((e as Error)?.message ?? "backend unreachable") }; }
   },
   collabStop: () => post("/api/collab/stop", {}),
   collabGuestInbox: () => getData("/api/collab/guest-inbox"),
-  collabGuestSendPrompt: async (text) => {
+  collabGuestSendPrompt: async (text, images) => {
     try {
-      const r = await fetch("/api/collab/guest-prompt", { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify({ text }) });
+      const r = await fetch("/api/collab/guest-prompt", { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify({ text, ...(images?.length ? { images } : {}) }) });
       const j = await r.json();
       return j?.ok ? { ok: true } : { ok: false, error: String(j?.error ?? `backend error ${r.status}`) };
     } catch (e) { return { ok: false, error: String((e as Error)?.message ?? "backend unreachable") }; }
   },
   collabGuestAbort: () => post("/api/collab/guest-abort", {}),
+  collabGuestSetModel: async (value) => {
+    try {
+      const r = await fetch("/api/collab/guest-model", { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify({ value }) });
+      const j = await r.json();
+      return j?.ok ? { ok: true } : { ok: false, error: String(j?.error ?? `backend error ${r.status}`) };
+    } catch (e) { return { ok: false, error: String((e as Error)?.message ?? "backend unreachable") }; }
+  },
+  collabGuestSetWorkspace: async (id) => {
+    try {
+      const r = await fetch("/api/collab/guest-workspace", { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify({ id }) });
+      const j = await r.json();
+      return j?.ok ? { ok: true } : { ok: false, error: String(j?.error ?? `backend error ${r.status}`) };
+    } catch (e) { return { ok: false, error: String((e as Error)?.message ?? "backend unreachable") }; }
+  },
   collabSetRelay: (patch) => post("/api/collab/relay", patch),
   collabRelayServeStatus: () => getData("/api/collab/relay/status"),
   collabRelayServe: async (patch) => {
@@ -1145,6 +1177,8 @@ export const bridge: LucidBridge = {
   collabLeave: () => { collabJoinAbort?.abort(); return post("/api/collab/leave", {}); },
   collabP2PConfig: () => getData("/api/collab/p2p"),
   collabSetP2P: (patch) => post("/api/collab/p2p", patch),
+  collabPushToken: (idToken, expiresAt) => post("/api/collab/token", { idToken, expiresAt }),
+  collabBroadcastPreview: (image, label) => post("/api/collab/preview", { image, ...(label ? { label } : {}) }),
   collabAuthorizeConnect: async (endpoint) => {
     try {
       const r = await fetch("/api/collab/authorize-connect", { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify({ endpoint }) });

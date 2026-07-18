@@ -100,3 +100,12 @@ netwatch.log
 .devserver.log
 .devserver.err
 .omp/tmp/
+
+# P-REMOTE.3: PWA build output + real (public) deploy config
+tools/remote-pwa/dist/
+tools/remote-pwa/config.js
+
+# the private add-on repo's local clone (its own git checkout, never part of this repo)
+lucidaddon_audit/
+# pasted-image scratch from chat sessions (runtime artifacts)
+.omp/images/

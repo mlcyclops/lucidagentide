@@ -1,0 +1,18 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "strict": true,
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "skipLibCheck": true,
+    "noUncheckedIndexedAccess": true,
+    "types": [],
+    "verbatimModuleSyntax": false
+  },
+  "comment": "P-REMOTE.3 (ADR-0226/0227): the phone guest PWA is BROWSER code (DOM + WebCrypto + WebSocket), so it type-checks under DOM lib here, not the root Bun-scope config (which excludes app.ts). It reuses the browser-safe desktop/collab modules; Firebase is CDN-loaded (firebase_auth.js), never imported here.",
+  "include": ["app.ts"],
+  "exclude": ["dist", "node_modules"]
+}

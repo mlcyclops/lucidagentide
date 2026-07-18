@@ -15132,3 +15132,1083 @@ Add-on ADR-A009 (the offline-updates design this implements the OSS-core prerequ
 persistence work (a second data-continuity constraint alongside the userData path above), and CLAUDE.md
 invariants #1 (extend not fork), #2 (no new Python surface - this bundles an interpreter, adds no `.py`), #3
 (fail-closed scanner is why offline matters).
+
+-----
+
+## ADR-0226 — P-REMOTE: drive the running desktop LUCID from a phone browser — E2E collab room over a GCP-hosted rendezvous (Cloud Run relay + Firebase-Auth gate + hosted guest PWA)
+
+**Date:** 2026-07-15
+**Status:** Accepted — SCOPE/PLAN. Increments P-REMOTE.1–.5 below are each their own session; no code this
+increment.
+**Context:** The user wants Kilo-style remote access: from an iPhone (16 Pro Max, Chrome) anywhere in the
+world, SEE the running desktop LUCID session and SEND it prompts, secured by their Google login
+(`nicholas.chadwick.ctr@gmail.com`), hosted in the same GCP/Firebase project that already serves the KG-pack
+marketplace (**`lucid-agent`**, us-central1: Hosting `lucid-agent.web.app`, Firebase Auth with Google OAuth,
+Cloud Functions, Storage). iPhone Chrome is WebKit under the hood — WebSocket, WebCrypto (AES-GCM), and
+RTCPeerConnection are all available, so a plain web page suffices; no native app.
+
+### Decision (the architecture in one paragraph)
+
+**The phone is a P-COLLAB guest.** The entire content plane already exists (ADR-0192…0204, 0222): the desktop
+is the collab HOST; frames are sealed E2E with AES-256-GCM; the room key travels ONLY in the invite-link
+fragment (`#<roomId>.<base64url(key||writeToken)>` — never sent to any server); a guest prompt with the write
+token runs through the host's OWN prompt path, so the fail-closed scan gate, exec approvals, and egress policy
+apply unchanged — the phone can bypass NOTHING the keyboard can't. Transport is the existing relay WebSocket
+with the built prefer-P2P WebRTC upgrade (ADR-0200–0202; relay carries SDP/ICE as `signal` frames, transparent
+up/downgrade). What's genuinely NEW is only the rendezvous and the guest surface: (1) the zero-dep
+`tools/relay/` broker gains an OPTIONAL Firebase ID-token identity gate and (2) is deployed to Cloud Run in
+`lucid-agent`; (3) a standalone guest PWA (built from the SAME `desktop/collab/` modules) is served from
+Firebase Hosting; (4) the desktop gains a persisted "Remote access" pairing (durable room + key in the OS
+vault, QR to pair, opt-in auto-share on launch). No session state, key, or plaintext ever lives in GCP.
+
+### Threat model — four independent gates, in order
+
+| Layer | Gate | Compromise yields |
+|---|---|---|
+| Rendezvous admission | Google OAuth: relay verifies a Firebase ID token (aud/iss = `lucid-agent`) + email allowlist | nothing further — next layers hold |
+| Content | AES-256-GCM room key, fragment/vault only; relay sees ciphertext + envelope metadata | — |
+| Drive permission | 16B write token (EDIT link only); view link is read-only, refused host-side (ADR-0198) | — |
+| Execution | the host's own fail-closed gate: scanner, exec approvals, egress whitelist, managed clamps | — |
+
+A compromised relay/GCP account sees ciphertext and room metadata, and can deny service — never read or
+inject. A stolen phone is cut off by rotating the pairing (new room+key) and Google sign-out; the pairing
+secret at rest lives in the OS-encrypted vault on the desktop and in the phone link/QR the user minted.
+
+### The increments
+
+**P-REMOTE.1 — relay identity gate (`RELAY_AUTH=firebase`).** Opt-in mode on `tools/relay/`: the WS upgrade
+must carry a Firebase ID token (query param; large tokens won't fit a subprotocol); the relay verifies RS256
+against Google's `securetoken` JWKS (fetched + cached with builtin `crypto` — the ZERO-npm-deps property of
+ADR-0195 is preserved), checks `aud`/`iss` for the project and `email_verified`, and matches `email` against
+`RELAY_ALLOWED_EMAILS`. New fatal close codes (e.g. 4401 unauthenticated / 4403 not-allowlisted) alongside the
+existing 4004/4009/4029. Default (anonymous) mode byte-identical for self-hosted relays. Tests offline with a
+fake JWKS: expired, wrong-aud, unlisted-email, tampered-signature all refused; valid token admits.
+
+**P-REMOTE.2 — hosted rendezvous + desktop host hardening.** Deploy the relay to Cloud Run in `lucid-agent`
+(container from the existing Dockerfile; **max-instances=1** — rooms are in-memory and host+guest must land on
+the same instance; scale-to-zero accepted, the host's reconnect loop revives it). Cloud Run caps a request at
+60 min → heartbeat + auto-reconnect on BOTH ends + host room RE-CLAIM (today a rejoining host trips 4009
+host-conflict; add a grace/re-claim so a dropped host resumes its own room). Desktop connects with the
+Firebase ID token it already has from the marketplace sign-in (`market_auth.getIdToken`); resolving ID-token
+REFRESH (tokens live 1h; the deep link carries `exp`) is the named open question of this increment — likely
+the hosted /signin page hands over the refresh token, or re-auth prompts. The hosted relay URL enters managed
+`collab.allowedRelays` governance (ADR-0193); existing `collab_*` audit events cover start/stop/join/leave.
+Deploy manifests (service yaml, env, allowlist) live in the PRIVATE add-on repo, mirrored under
+`lucidaddon_audit/iac/` — same public-seam/private-IP split as the marketplace (ADR-0206/0223).
+
+**P-REMOTE.3 — the phone guest PWA.** A standalone static page on Firebase Hosting
+(`lucid-agent.web.app/remote/`) built by bundling the SAME `desktop/collab/` guest core (crypto, frames,
+`parseShareLink`, guest state machine are DOM-free) — the E2E protocol is single-sourced, never reimplemented.
+Page flow: Google sign-in (Firebase Auth JS, already configured for this project) → paste/QR-open the invite
+link (fragment parsed client-side; the key never hits the server, fragments aren't sent in HTTP requests) →
+viewer (final answers + thinking + tool chips + subagents, per ADR-0222) + prompt box + abort. iOS tab
+suspension is survived by the existing welcome-replay (host re-sends the transcript on rejoin). PWA manifest
+for add-to-home-screen; mobile-first layout. Acceptance is LIVE: iPhone Chrome sees a running desktop session
+and drives a gated turn from another network.
+
+**P-REMOTE.4 — persistent pairing + auto-share.** Today a share mints a random room per start. Add a Settings
+"Remote access" card: enable → mint a DURABLE pairing (room id + key + write token) persisted in the
+OS-encrypted credential vault (never plaintext on disk, never in settings JSON); show it as a QR + copyable
+link; opt-in "start sharing on launch" (default OFF, clampable via managed `collab.allowServe`/
+`allowedRelays`); rotate + revoke. Any NEW EventName (e.g. `remote_pairing_created`/`revoked`) makes this the
+deliberate `contracts.ts` increment per invariant #8 — quarantined here, not sprinkled across .1–.3.
+
+**P-REMOTE.5 — remote approvals (deferred, opt-in).** Surfacing exec/egress approval prompts on the phone
+(approve/deny a risky command from anywhere) is the highest-risk piece — it turns the phone into an approval
+authority. Explicitly OUT OF SCOPE until .1–.4 are proven; ships behind its own opt-in, default off, host
+authoritative, own ADR addendum.
+
+### Alternatives rejected
+
+- **Expose the loopback control plane** (ADR-0022/0024 `/api/chat` via VPN/Tailscale/port-forward): that
+  surface is plaintext and its capability token is designed for same-user, same-machine custody (ADR-0039);
+  remote exposure breaks both, and needs a VPN app on the phone. Rejected.
+- **Cloud-terminated session proxy** (how hosted "remote agent" gateways typically work): the server would see
+  plaintext and could inject prompts — violates the relay-sees-only-ciphertext posture that makes the collab
+  design trustworthy. Rejected outright.
+- **Firestore/RTDB signaling + pure WebRTC (no relay):** adds the Firebase SDK to the client, pays per-message
+  billing, and has no fallback when carrier NAT blocks P2P (no TURN deployed). The relay IS the guaranteed
+  path; P2P stays the opportunistic upgrade. Rejected as sole transport. (A TURN server is a possible later
+  addon if P2P upgrade rates matter; the relay makes it optional.)
+- **Native iOS app:** App Store overhead for what WebKit already provides (WS/WebCrypto/WebRTC). Revisit only
+  if push notifications become a requirement (iOS Web Push needs home-screen install — noted, acceptable).
+- **OAuth verified only host-side:** the host can't pre-filter who reaches the socket; the relay-side gate
+  stops unauthorized rendezvous (and DoS-by-join) before any bytes reach the desktop. Both is defense-in-depth;
+  relay-side is the load-bearing one.
+
+### Invariants preserved
+
+#1 extend-not-fork (everything rides existing collab seams + a new relay mode; omp untouched). #2 no new
+Python. #3 fail-closed: a guest prompt enters the host's own gated prompt path; relay/auth unavailable ⇒ no
+remote access, never a bypass. #5 guest prompt text is user input to the host's normal scan path. #6 frozen
+prefix untouched (remote adds no prompt bytes). #7 no new trust labels. #8 new event names only via the
+quarantined contracts increment in P-REMOTE.4. Licensing: relay + PWA client code are first-party BUSL-1.1 in
+this repo; deploy manifests + allowlist config are add-on IP. NO secret values in either repo — the Firebase
+web config is public by design; the allowlist email is Cloud Run env; the room secret exists only in vault +
+fragment.
+
+### Open questions (resolve in the named increments)
+
+- Firebase ID-token refresh custody on the desktop (P-REMOTE.2).
+- Host re-claim semantics vs 4009 (grace window? host-token proof?) (P-REMOTE.2).
+- QR pairing UX: render in-app vs printable one-shot (P-REMOTE.4).
+
+### Relates to
+
+ADR-0192…0204 + 0222 (the P-COLLAB stack this rides), ADR-0195 (the zero-dep relay), ADR-0198 (guest-write
+gating), ADR-0200–0202 (prefer-P2P WebRTC), ADR-0206/0223 (the `lucid-agent` Firebase project + the
+public-seam/private-IP split), ADR-0039 (why the loopback control plane is NOT the remote surface), and
+CLAUDE.md invariants #1/#3/#5/#8.
+
+-----
+
+## ADR-0227 — P-REMOTE goes multi-tenant: the $9.99/mo Remote Access tier, claims-gated relay admission, and the admin dashboard (amends ADR-0226)
+
+**Date:** 2026-07-15
+**Status:** Accepted — SCOPE/PLAN amendment to ADR-0226. Adds increments P-REMOTE.6/.7 and modifies .1's
+auth transport. No code this increment.
+**Context:** Three user decisions on top of ADR-0226. (1) The hosted relay is a PAID product — a Stripe
+subscription (~$9.99/mo, "Remote Access"), not a free service. (2) The admin (host) account rides free, and
+the admin can COMP any Google-OAuth user onto the PREMIUM tier from a dashboard (dropdown over known users, or
+type an email). (3) An **admin dashboard** only the admin account can see: active sessions with each user's
+Google OAuth email, their approximate access location, and usage counts. Only Google OAuth credentials are
+accepted for now (no email/password, no other IdPs). Future premium benefits may hang off this tier.
+
+### Decision
+
+**Reuse the marketplace entitlement rails wholesale (ADR-0206/0223).** "Remote Access" is a new Stripe
+recurring Price + a new entitlement id on the ALREADY-DEPLOYED backend in `lucid-agent`: `createCheckout`
+opens Stripe hosted checkout, `stripeWebhook` records the subscription entitlement, `getEntitlement` reports
+it, and `grantEntitlement` IS the admin comp path. No second billing stack.
+
+**Entitlement admission via Firebase custom claims, not per-connect DB reads.** On webhook grant / admin comp
+/ revoke, the backend sets or clears a `premium: true` custom claim on the Firebase user (and `admin: true`
+for the admin UID, seeded once out-of-band — never an email string compare in client code). Claims ride
+inside the signed ID token, so the relay's admission check is pure token verification: zero DB lookups, zero
+new relay dependencies. `admin` implies `premium` (the host rides free).
+
+**Revocation rides the 60-minute cap.** Cloud Run terminates a WS request at 60 min (ADR-0226), forcing an
+hourly reconnect → an hourly fresh-token re-verify → a lapsed subscription or revoked comp loses access
+within the hour. No revocation push channel needed; the platform limit does the work.
+
+**Auth transport CORRECTION to ADR-0226 P-REMOTE.1:** the ID token does NOT travel in the WS query param —
+URLs land in Cloud Run request logs, and a logged bearer token is a credential leak. Instead the client sends
+one `auth` control frame as the FIRST frame after upgrade (the relay already speaks JSON control frames);
+unauthenticated sockets get a short deadline (~5s) then fatal 4401. Admission requires, from the verified
+token: valid RS256 signature vs Google's JWKS, `aud`/`iss` = `lucid-agent`, `email_verified === true`,
+`firebase.sign_in_provider === "google.com"` (the "Google OAuth only" rule enforced cryptographically, not in
+UI), and `premium || admin` claim — OR membership in `RELAY_ALLOWED_EMAILS` (the env allowlist stays as the
+self-host/bootstrap mode so a personal relay never needs the paid backend).
+
+**The admin plane is METADATA-ONLY, by construction.** The relay never holds keys or plaintext (ADR-0192),
+so the dashboard CANNOT show content — it shows identity + presence: email, coarse location, connect time,
+room count, live guest count, historical usage. Plumbing: the relay writes `session_started` /
+`session_ended` metadata docs (email, uid, coarse geo, roomId hash, timestamps — no key, no link, no
+payload bytes) to a `remote_sessions` Firestore collection via the Firestore REST API with the Cloud Run
+service account's metadata-server token — zero npm deps preserved (plain `fetch`). Active = docs with a
+heartbeat-refreshed `lastSeen` under ~2 min; history feeds the usage counts. The dashboard is a static page
+on the existing Hosting site (`lucid-agent.web.app/admin/`): Firebase Auth sign-in, and EVERY read/write is
+gated SERVER-SIDE on the `admin` claim (Firestore security rules + callable checks) — client-side hiding is
+cosmetic only. Admin actions: list users, grant/revoke premium (calls `grantEntitlement` + claim set),
+see active sessions + counts.
+
+**Location.** Client IP comes from `X-Forwarded-For` (first value; on Cloud Run it is set by the Google
+front end). Geo resolution via a **GeoLite2 city/country DB baked into the relay container at image build**
+(refreshed per deploy): offline, no per-connect egress, no runtime dependency. The dashboard shows
+city/country — the raw IP is kept only in the session doc for abuse forensics and expires with it.
+
+**PII discipline.** Emails + IP + location are PII: session docs get a retention window (default 30 days,
+Firestore TTL policy), live in the private backend only, and never enter the OSS repo, client bundles, or
+relay logs (the relay logs counts, not identities — identities go only to the gated Firestore collection).
+
+**Payment ≠ trust (the ADR-0206 rule, restated for remote).** A premium claim buys RENDEZVOUS ADMISSION,
+nothing else. Every content/action gate is unchanged: the room key still gates reading, the write token
+still gates driving, the desktop's fail-closed scan/exec/egress gates still gate execution. Comping a user
+onto PREMIUM does not let them see or drive ANY session — they still need a pairing link the host minted.
+
+### Increment changes
+
+- **P-REMOTE.1 (modified):** first-frame `auth` control frame (never query param); provider + verified-email
+  checks; admission = allowlist mode OR claims mode (`premium`/`admin`); per-user quotas now that identity
+  exists (rooms per uid, connects/min) on top of the ADR-0195 global DoS bounds. Tests stay offline (fake
+  JWKS): expired / wrong-aud / unverified-email / non-Google provider / no-claim / lapsed-claim refused;
+  premium, admin, and allowlisted admitted; unauthenticated socket reaped at the deadline.
+- **P-REMOTE.6 (new) — the paid tier:** Stripe recurring Price (lookup_key e.g. `LUCID-REMOTE-MONTHLY`,
+  $9.99/mo) + `remote-access` entitlement id on the add-on backend; webhook/grant/revoke set + clear the
+  `premium` claim; admin UID seeded with `admin`; the guest PWA (P-REMOTE.3) gains the unentitled path —
+  signed-in-but-no-claim shows "Subscribe" → `createCheckout` → Stripe hosted checkout → post-webhook
+  token refresh admits. Client seams OSS; prices/functions private add-on (ADR-0206 split).
+- **P-REMOTE.7 (new) — the admin plane:** relay session-metadata writer (Firestore REST via ADC, zero-dep,
+  fail-SOFT: a dead Firestore never blocks or admits a connection — telemetry is not a gate), GeoLite2
+  lookup, heartbeat/`lastSeen`, TTL retention; `lucid-agent.web.app/admin/` dashboard (admin-claim-gated
+  server-side): active sessions w/ email + location, usage counts, user list, comp/revoke dropdown + type-in.
+  Dashboard page + rules live in the PRIVATE add-on repo (ops surface of the paid service).
+
+### Alternatives rejected
+
+- **Token in the WS URL** (ADR-0226's sketch): bearer credentials in request logs. Superseded by the
+  first-frame auth above.
+- **Per-connect entitlement lookup** (relay calls `getEntitlement`): adds a runtime dependency + latency on
+  the hot path and a fail-open temptation when the backend is down. Claims are verified offline; the relay
+  stays zero-dep and fail-closed.
+- **Google IAP in front of Cloud Run:** gates on IAM identity, not Stripe entitlements; can't express
+  "premium claim or comp"; adds an LB. Rejected.
+- **External LB geo headers** (`client_region`/`client_city`): works, but ~$18+/mo standing cost for a
+  boutique product; the baked GeoLite2 DB is free and offline. Revisit if the relay ever needs an LB anyway.
+- **A second billing/entitlement stack for remote:** the marketplace one is deployed, webhook-tested, and
+  already models subscriptions (the PM/Capture packs). Reuse is the whole point.
+- **Email/password or other IdPs:** explicitly out per the user decision — provider check pins `google.com`.
+
+### Invariants preserved
+
+#3 fail-closed where it matters, fail-SOFT where it must not gate: admission (auth/entitlement) fails
+CLOSED (no valid claim → 4401/4403); telemetry fails SOFT (dead Firestore/geo never blocks a paying user —
+and never ADMITS anyone either, it's not a gate). #1/#2 unchanged (relay stays first-party TS, zero deps; no
+Python). #8: relay-side session telemetry is backend-plane (Firestore docs), NOT harness `EventName`s — the
+desktop's own events are untouched; any desktop-side event need still lands in the quarantined P-REMOTE.4
+contracts increment. Licensing: relay auth/telemetry code BUSL-1.1 OSS; dashboard, rules, prices, geo DB
+provisioning = private add-on. NO secret values in either repo (Stripe keys stay in the add-on's function
+config; the GeoLite2 license key is a deploy-time secret).
+
+### Open questions (resolve in the named increments)
+
+- GeoLite2 EULA/attribution note for a commercial service (P-REMOTE.7; alternative: DB-IP lite, CC-BY).
+- Retention window default (proposed 30 days) + whether the admin can purge a user's session history on
+  request (P-REMOTE.7).
+- Claim refresh UX after checkout (force token refresh vs re-sign-in) (P-REMOTE.6).
+- Whether the PWA surfaces a "Premium" badge / manage-subscription link (Stripe customer portal) (P-REMOTE.6).
+
+### Relates to
+
+ADR-0226 (the plan this amends — auth transport corrected here), ADR-0206/0223 (the Stripe + Firebase
+entitlement rails + the public-seam/private-IP split this reuses), ADR-0195 (the zero-dep relay + DoS
+bounds), ADR-0192 (E2E — why the admin plane is metadata-only by construction), and CLAUDE.md invariant #3.
+
+-----
+
+## ADR-0228 — P-COLLAB.14: edit-guest model + already-used-folder selection (2026-07-18)
+
+**Status:** ACCEPTED / BUILT.
+
+### Context
+
+Remote editing = the collab share protocol (`desktop/collab/*`) driving a running desktop LUCID from a
+guest — the phone PWA (P-REMOTE.3, `tools/remote-pwa/`) or a desktop watch-guest, both built from the SAME
+`CollabHost`/`CollabGuest` core. Guest-WRITE (ADR-0198, P-COLLAB.12/.13) let an EDIT guest send
+`prompt`/`abort`, which the host runs through its OWN fail-closed scan gate + approvals. But a remote editor
+could not choose **which model** the agent runs or **which folder** it works in — the two levers that decide
+what a session can actually do. This closes that gap: an EDIT guest picks the model and an already-used
+folder — "more capability over remote editing" without handing the guest any new bypass.
+
+### Decision
+
+- **Additive frames (`frames.ts`), no version bump.** host→guest `options{CollabOptions}`; guest→host
+  `set-model{value}` + `set-workspace{id}`. `CollabOptions = { models: {value,name}[], activeModel,
+  workspaces: {id,name,isGit}[], activeWorkspaceId }`. `COLLAB_PROTOCOL_VERSION` stays **1**: the additions
+  are backward-compatible (an older peer ignores an unknown frame — a host drops it in `#onFrame`, a guest
+  has no case — a SAFE no-op, since the capability then simply doesn't fire; NOT a silent unauthorized
+  action). A version bump would hard-refuse already-deployed PWAs; additive degrades to "no pickers".
+- **Allowlist-only, opaque folder ids, NO paths on the wire (frames.ts/host.ts invariant).** The host
+  offers exactly its accessible models + workspace history (current + recent). A folder is identified by an
+  OPAQUE id (a hash of the path) the host resolves back to a path LOCALLY; only the folder's display NAME
+  (a basename) ever crosses the wire. The guest never sends — and never learns — a filesystem path or an
+  arbitrary model id.
+- **Edit-gated + re-validated host-side (fail-closed).** `options` is unicast ONLY to EDIT guests (a view
+  guest is offered nothing, so it never learns the host's other project names). `set-model`/`set-workspace`
+  go through the SAME edit-access gate as `prompt`; then the host re-validates the value/id is IN the offered
+  allowlist before anything happens — an unknown model id or folder id is refused with an `error` frame and
+  never reaches the callback. The guest also guards client-side (mirrors the host), so a bad pick never hits
+  the wire.
+- **Applied through the host's OWN picker path.** A guest pick is delivered to the host RENDERER (relay: via
+  the `guest-inbox` poll, resolving the opaque id→path host-side; direct-P2P: via the renderer host
+  callback) and applied with the exact `applyConfig("model")` / `applyWorkspace(path)` the local user's
+  click uses — the host UI + omp reconcile identically, every host approval still applies, and there is ONE
+  switch code path. `CollabManager.refreshOptions()` / `CollabHost.setOptions()` rebroadcast the fresh
+  selection to edit guests after ANY switch (local or guest-driven).
+- **Both transports.** The shared core carries the frames; the relay host (backend, `dev.ts`) and the
+  direct-P2P host (renderer, `collab_p2p.ts`) each build + resolve their OWN id→path map.
+- **Forced consequence (inherent to ONE shared session, not a knob):** a remote FOLDER switch restarts the
+  host's agent (new omp session in the new cwd) AND changes what the local host sees; both sides observe it
+  via the rebroadcast state/options + an attributed toast. A MODEL switch is live (no restart).
+
+### Alternatives rejected
+
+- **Bump `COLLAB_PROTOCOL_VERSION` 1→2:** hard-refuses any version-skewed peer (a deployed PWA couldn't even
+  VIEW until redeployed). The additions are additive/optional, and fail-closed is enforced by the edit gate
+  + allowlist, NOT by the version — so a bump buys nothing but breakage.
+- **Send the model id / file path free-form and trust it:** violates the "no file paths on the wire"
+  invariant and fail-closed posture. Allowlist + opaque id is the only shape that lets the guest pick
+  without ever naming a path or an unlisted model.
+- **Apply the guest's pick directly in the backend (skip the renderer):** would duplicate the switch logic,
+  bypass the host UI reconciliation, and desync the local user's view. Reusing `applyConfig`/`applyWorkspace`
+  keeps one path.
+- **Per-guest model/workspace:** impossible — it is ONE shared omp session; the switch is global by
+  construction. Documented as a consequence, not hidden.
+
+### Invariants preserved
+
+#3 fail-closed: `options` to edit guests only; every `set-*` is edit-gated AND allowlist-re-validated
+host-side; an unknown value/id or a view guest is refused, never applied (regression-locked by the unit
+tests + `make demo-P-COLLAB.14`, which hand-craft raw off-allowlist + view-guest frames and assert refusal).
+No credentials or file paths on the wire (opaque folder ids; names only). #5 unchanged (guest text still
+enters the host through its own gate as a normal prompt). #6 the frozen prompt prefix is untouched. #7/#8
+unchanged (no new trust labels or event names — collab frames are the E2E content plane, not harness
+`EventName`s). Host/guest/PWA stay single-sourced (`desktop/collab/*`), so the protocol is never
+reimplemented.
+
+### Relates to
+
+ADR-0192 (collab E2E transport + frame protocol this extends), ADR-0198 (P-COLLAB.12 guest-write — the
+edit-access gate + host-own-composer pattern this mirrors), ADR-0226/0227 (P-REMOTE — the phone PWA that is
+the primary remote editor), ADR-0201/0202 (direct-P2P host wired here too), and CLAUDE.md invariant #3.
+
+-----
+
+## ADR-0229 — P-REMOTE.8: PWA guest composer (image attachments + autosize) + live reconnect status (2026-07-18)
+
+**Status:** ACCEPTED / BUILT.
+
+### Context
+
+Three PWA guest-composer issues reported from a live phone session (`lucid-agent.web.app/remote`): (1) the
+top status bar keeps showing "connection lost - retrying (code 1006)" even after the socket reconnected and
+is visibly streaming; (2) the composer is a fixed one-line box that doesn't grow, so a multi-line message
+is hard to review before sending; (3) there's no way to attach a screenshot/image - only text.
+
+### Decision
+
+- **Reconnect status (bug).** `CollabGuest` conflated the transient "reconnecting" note with terminal
+  error/bye notes in `#note`, and never cleared it on recovery; `pwa_view.statusLabel` then showed ANY note
+  with the red "ended" tone regardless of phase. Fix: a `#reconnecting` flag (set on a `willReconnect` drop)
+  that a `#clearReconnectNote()` clears on the NEXT live host frame (welcome/event/state) - so a recovered
+  socket drops the banner the instant traffic resumes, even a resumed stream with no fresh welcome. A genuine
+  error/bye note (set WITHOUT `#reconnecting`) is untouched. `statusLabel` now renders a `reconnecting` phase
+  as WAIT (amber), and Live once the note clears.
+- **Composer sizing.** The PWA `#prompt-input` autosizes with content up to ~6 lines (`scrollHeight`, capped
+  at 160px) then scrolls - a roomier review area, no fixed one-liner.
+- **Image attachments (additive protocol extension).** `PromptFrame` gains optional `images?: string[]`
+  (validated image data URLs). `CollabGuest.sendPrompt(text, images?)` sends them (an image-only message is
+  allowed); the host's `onGuestPrompt(text, guest, images?)` forwards them, and the host renderer stages them
+  into its OWN composer `state.attachments` and sends them to the model through the EXISTING gated `send()` -
+  reusing `acceptAttachment`/`promptImageBlocks` (single-sourced with the desktop paste path, P-VISION.1),
+  which re-validate type/size/count fail-closed. Wired on both transports (relay inbox + direct-P2P) and the
+  desktop watch-guest (`collabGuestSendPrompt(text, images?)`). The PWA gets an attach button + paste + drag
+  drop + a thumbnail strip; each `<img>` src is set as a DOM PROPERTY, never interpolated (only
+  image/(png|jpeg|webp|gif) base64 - SVG excluded for script-safety). No `COLLAB_PROTOCOL_VERSION` bump
+  (additive/optional, backward-compatible - an older host ignores the field).
+
+### Security
+
+An edit-guest's image BYTES reach the host model as vision input UNSCANNED (the scanner gates text, not image
+pixels) - the same posture as P-VISION.1 (a pasted screenshot is trusted input like typing) and the edit
+guest is already trusted to drive the host. The prompt TEXT still passes the host's fail-closed scan gate,
+and every tool call the resulting turn makes is still gated + approval-guarded. A view guest cannot attach
+(its prompt is refused edit-side). Data URLs are strictly validated (type/size/count) on BOTH the guest and
+the host; a malformed/oversized/non-image URL is dropped fail-closed.
+
+### Alternatives rejected
+
+- **Clear the note only on welcome:** misses a resumed stream that delivers events without a fresh welcome.
+  Clearing on any live frame (guarded by `#reconnecting`) is robust and still leaves terminal notes intact.
+- **Send image ContentBlocks over the wire instead of data URLs:** the host already turns data URLs into
+  blocks via the shared `promptImageBlocks`; sending data URLs lets the host re-validate with the exact same
+  `acceptAttachment` limits (single source of truth) and reuse `state.attachments` unchanged.
+- **Scan image bytes at the boundary:** out of scope + no text-injection scanner for pixels exists; matches
+  P-VISION.1's decision that a user's own image is trusted input. Revisit if untrusted-source images are ever
+  auto-ingested (they are not here - an edit guest is explicitly trusted).
+
+### Invariants preserved
+
+#3 fail-closed: image validation on both ends (type/size/count), a view guest refused, prompt text still
+gated. #5 unchanged (guest text enters the host as a normal gated prompt; images are vision input like a
+local paste). #6 the frozen prompt prefix is untouched. #7/#8 unchanged. Host/guest/PWA stay single-sourced
+(`desktop/collab/*` + the reused `composer_attachments`/`image_data_url` primitives).
+
+### Relates to
+
+ADR-0136 (P-VISION.1 - the desktop composer image attachments + the pure `image_data_url`/`composer_attachments`
+primitives reused here), ADR-0198 (P-COLLAB.12 guest-write - the prompt frame + host-own-composer pattern
+extended), ADR-0192 (collab E2E frame protocol), ADR-0226/0227 (P-REMOTE - the phone PWA surface), and
+CLAUDE.md invariant #3.
+
+-----
+
+## ADR-0230 — PWA transcript: own-message echo, per-edit diffstats, end-of-run mobile report (P-REMOTE.9) (2026-07-18)
+
+**Status:** ACCEPTED / BUILT.
+
+### Context
+
+On-device phone feedback: the guest can't see the messages it SENT (only the host's replies), tool steps
+don't show WHAT changed in a file, and there's no way to capture a run's outcome from the phone. All three
+are guest-side view improvements - no protocol change needed, because the data is already in the stream.
+
+### Decision (all in `desktop/collab/pwa_view.ts` + the PWA; NO new frames)
+
+- **Own-message echo.** The host does NOT broadcast user turns live (`pushUserTurn` only fills the replay
+  buffer). So the PWA optimistically appends a `user` ViewItem to the local transcript when `sendPrompt`
+  succeeds. No duplication: a reconnect resets `items` and the host's `welcome` replay re-supplies past user
+  turns (the host records them via `tapUserTurn` when it runs a guest prompt).
+- **Per-edit +/- diffstat.** The `tool` ChatEvent already carries `code {path, oldText, newText, content,
+  patch}` and the host already broadcasts the full event to guests - so the guest sizes the diffstat itself
+  by REUSING the desktop's pure `answer_chips.toolChip` + `linediff` (one diffstat convention, no new data on
+  the wire). The `tool` ViewItem gains optional `path`/`add`/`del`; `renderItem` shows the file path + a
+  `+N -M` badge for edit/write/patch, the compact detail otherwise.
+- **End-of-run mobile report.** Pure `buildTurnReport(items, view)` folds ONE turn's items (segmented by
+  `done`) into `{ model, contextPct, task, answer, files[], tools[], totalAdd/Del }` - merging edit/write
+  diffstats per file + counting tool uses. `renderReportHtml` emits screenshot-friendly CARDS (summary /
+  task / files / tools / summary); `reportMarkdown` emits copyable Markdown. The PWA shows a "Report" button
+  after a run, opening a full-screen modal (Copy -> clipboard, Close), with a hint to screenshot any card.
+- **Also fixed the on-device composer** (same increment, prior feedback): the `+` image button is now a
+  native `<label for=file-input>` with the input rendered off-screen (never display:none, which iOS blocks);
+  a two-row composer (full-width autosizing input over a compact +/Stop/Send row); and a VisualViewport
+  handler + `interactive-widget=resizes-content` so the keyboard no longer clips the composer.
+
+### Security
+
+Every host-authored string in a `user`/`tool`/report card + every file path is HTML-escaped (the PWA's one
+text->markup boundary) - a hostile path/answer/task cannot break out of the markup (regression-tested). The
+diffstat + report are DERIVED from data the guest already receives; nothing new crosses the wire, and no
+file CONTENT is exposed beyond what the tool event already delivered. `reportMarkdown` is plain text the user
+copies. No credentials or new paths are introduced.
+
+### Alternatives rejected
+
+- **Broadcast user turns as a new frame so all guests see them live:** a nicer multi-guest mirror, but a
+  protocol addition; the phone is a single driving guest, so optimistic local echo + welcome-replay covers
+  the ask with zero wire change. (Left as a possible follow-up for true multi-guest turn mirroring.)
+- **POST the turn to the desktop's `/api/eval/report` (the P-CHAT.C path):** couples the phone to the host
+  HTTP surface + needs the host online; the guest already has everything to build the report locally.
+- **A new `diff`/`report` frame carrying line counts:** unnecessary - the `tool` event's `code` is already
+  delivered, so the guest computes the diffstat with the shared `linediff` helper.
+
+### Invariants preserved
+
+#5 unchanged (guest text still enters the host as a normal gated prompt). #6 the frozen prompt prefix is
+untouched. #7/#8 unchanged (no new trust labels or event names). Host/guest/PWA stay single-sourced
+(`desktop/collab/*` + the reused pure `answer_chips`/`linediff`/`image_data_url` renderer primitives).
+
+### Relates to
+
+ADR-0189 (P-CHAT.B - the desktop inline tool chips + the `answer_chips`/`linediff` +/- diffstat convention
+reused here), ADR-0190 (P-CHAT.C - the desktop turn engineering report this mirrors on mobile), ADR-0229
+(P-REMOTE.8 - the composer this extends), ADR-0192/0226/0227 (collab + the phone PWA), and CLAUDE.md #3.
+
+-----
+
+## ADR-0231 — live user-turn mirroring across all participants (P-COLLAB.15) (2026-07-18)
+
+**Status:** ACCEPTED / BUILT.
+
+### Context
+
+After P-REMOTE.9 the phone echoed the guest's OWN sent messages, but user turns were never broadcast live -
+so in a multi-guest share (several phones watching one host) nobody saw anyone ELSE's prompts, and no guest
+saw the host's typed prompts, until a reconnect replayed them. This adds live mirroring of every user turn to
+all participants, attributed by author.
+
+### Decision (additive `user-turn` frame; no COLLAB_PROTOCOL_VERSION bump)
+
+- **One broadcast point.** `CollabHost.pushUserTurn(text, from?)` (already called for every turn via the
+  relay's `tapUserTurn` in dev.ts /api/chat AND the direct-P2P `teeUserTurn` in the renderer) now ALSO
+  broadcasts a host->guest `user-turn {text, from}` frame - so there is exactly ONE place that mirrors turns,
+  for both transports. `from` defaults to the host's own name; a guest-driven turn passes the guest's name.
+- **Author threading.** A guest prompt runs on the host through the host's composer (P-COLLAB.13); the
+  renderer's `runGuestPromptLocally` stashes `nextTurnFrom = guest.name`, and `send()` consumes it once into
+  both `p2pTeeUserTurn(text, from)` and `bridge.sendPrompt(text, …, from)` -> dev.ts `/api/chat` reads `from`
+  -> `tapUserTurn(text, from)`. A host-typed turn leaves it null -> attributed to the host.
+- **Guest side.** `CollabGuest` gains an `onUserTurn(text, from)` callback (a `user-turn` frame is not view
+  state; the app folds it). View guests receive it too (watching includes seeing prompts).
+- **PWA rendering + dedup.** The `user` ViewItem gains an optional `from` (an author label; the sender's own
+  optimistic echo has none). The sender still echoes its own turn INSTANTLY (P-REMOTE.9) - it would otherwise
+  wait out the ~2s guest-inbox poll - so the PWA dedups the host's returning broadcast of that same turn by
+  matching a pending self-echo text; every OTHER turn (host's, or another guest's) renders labelled with its
+  author.
+- **Late joiners** still get prior turns from the `welcome` transcript replay (unchanged).
+
+### Alternatives rejected
+
+- **Broadcast at `onGuestPrompt` (before the turn runs) to avoid the sender's ~2s poll latency:** would need
+  a second broadcast point + suppress the `tapUserTurn` one for guest turns (two code paths, easy to double-
+  emit). The single `pushUserTurn` broadcast + the sender's optimistic echo covers perceived latency with one
+  path; other guests seeing a turn ~when it actually starts on the host is inherent to the inbox-poll design.
+- **Exclude the sender from the broadcast (all-except-peer):** the relay broadcast primitive is to-all
+  (peer 0); there's no all-except. Text dedup on the sender is simpler and robust.
+- **Add `from` to the replay `CollabTranscriptTurn`:** a bigger frozen-contract change; live turns carry the
+  author, replayed turns stay text-only (acceptable - the author matters most live).
+
+### Invariants preserved
+
+#3/#5 unchanged: a guest turn still enters the host through its fail-closed gate as a normal prompt; the
+`user-turn` frame is metadata-only (the same sanitized text the replay already holds) and every author name +
+text is HTML-escaped by the PWA. A view guest may SEE turns (watching) but still cannot drive. #6 the frozen
+prefix is untouched. #7/#8 unchanged (no new trust labels/event names). Host/guest/PWA single-sourced.
+
+### Relates to
+
+ADR-0192 (collab E2E frame protocol extended), ADR-0198 (P-COLLAB.12/.13 guest-write - the host-own-composer
+path the author threads through), ADR-0229/0230 (P-REMOTE.8/.9 - the composer + own-message echo this builds
+on), ADR-0226/0227 (the phone PWA), and CLAUDE.md invariant #3.
+
+-----
+
+## ADR-0232 — the Session Share panel becomes a floating, minimizable dock (P-SHARE.1) (2026-07-18)
+
+**Status:** ACCEPTED / BUILT.
+
+### Context
+
+The desktop Session Share panel had grown into a busy CENTERED MODAL (relay setup + host-the-relay + auth +
+edit toggle + P2P + STUN/TURN + start + roster) that BLOCKS the app while open. The user wants a
+non-distracting, expert-grade surface: collapsed-by-default sections, a movable/resizable popover that snaps
+beside the rails, minimizes to a bottom-right pill (near the trivia wire), and always shows the connected
+count + a by-email participant dropdown. DESKTOP renderer only (the LUCID app); the PWA guest is untouched.
+
+### Decision
+
+- **Floating DOCK, not a modal.** `openSharePanel` builds `#shareModal.share-dock` (kept the id so every
+  existing `$("#shareModal")` guard + the delegated change/click handlers work unchanged) as a `position:fixed`
+  popover with NO backdrop. Draggable by its header, resizable via e/s/se handles, and on drop it SNAPS to a
+  frame (flush right, or beside the left rails — `railWidth()` offset so it never sits under them) or stays
+  floating.
+- **Pure geometry/state in `share_dock.ts`** (DOM-free, unit-tested + injected storage): `DockShape`,
+  `DockState{shape,minimized,side,collapsed}`, `defaultShape`/`clampToViewport`/`snapDecision`,
+  `loadDockState`/`saveDockState` (localStorage, fail-soft), `participantSummary`, `isCollapsed`. The renderer
+  owns only the pointer wiring + DOM.
+- **Chevron sections.** The body content regrouped into native `<details class="dock-sec">` sections (Invite +
+  QR, Participants; Relay, Sharing options, Host-the-relay) — collapsed by default except the primary one;
+  each section's open/closed state persists (a capture-phase `toggle` listener, since `toggle` doesn't bubble).
+  All inner ids/hooks (`shareAllowEdit`, `data-share-start`, etc.) are preserved so the handlers are unchanged.
+- **Minimize to a pill.** A `position:fixed` `#shareDockPill` at the bottom-right (own element, NOT part of
+  `renderStatus` which rebuilds `#statusbar` every 2s, so it's never clobbered) with the live count + the
+  custom up-arrow SVG; click restores the dock. The dock remembers `minimized` and reopens straight to the pill.
+- **Always-on connection count + dropdown.** The header carries a count badge (live-dot green when active)
+  that opens a by-email participant dropdown; `pollRoster` updates the badge + dropdown + pill + the
+  Participants section together. (The guest's `name` IS its email for a PWA guest, so "by email" is free.)
+- Shape/side/minimized/collapsed persist across sessions; a viewport resize re-clamps the dock on-screen.
+
+### Alternatives rejected
+
+- **Keep the modal, just add collapse:** doesn't solve "blocks the app while I work" — the user explicitly
+  wants a non-distracting, movable surface. A floating dock is the ask.
+- **Custom chevron JS:** native `<details>`/`<summary>` gives expand-on-click for free + is accessible; a CSS
+  chevron + a toggle listener for persistence is less code and more robust.
+- **Pill inside `#statusbar`:** `renderStatus` rebuilds that bar's innerHTML every 2s, so any child is
+  clobbered; a sibling `position:fixed` pill at the bar's right end is robust (no re-adopt dance).
+
+### Invariants preserved
+
+No protocol/security change — the same relay/E2E/auth flow, the same delegated handlers, just a new container +
+section chrome. Every host/guest-authored string (participant email, relay label) is still `esc()`-escaped.
+`share_dock.ts` is pure + unit-tested; the DOM wiring is QA-gated via a static mockup screenshot (the Electron
+renderer can't be browser-loaded). No firebase deploy (this is the desktop app; reaches a dev instance on
+reload, packaged builds on rebuild).
+
+### Relates to
+
+ADR-0192 (P-COLLAB.3 — the Share panel this rebuilds), ADR-0228 (P-COLLAB.14 — the edit-guest pickers that
+live in it), ADR-0231 (P-COLLAB.15 — live turn mirroring), and the two follow-ups this unblocks: the Drive
+relay-codes reconnect toggle (B) and the preview-snapshot share (C) both dock into these sections. CLAUDE.md #3.
+
+-----
+
+## ADR-0233 — out-of-band reconnect via a Google Drive relay-codes file (P-REMOTE.10) (2026-07-18)
+
+**Status:** ACCEPTED / core BUILT (OAuth consent + UI = P-REMOTE.10b, deploy-gated).
+
+### Context
+
+A dropped Session Share leaves no way back once the app is closed or the relay room is torn down past the 30s
+re-claim grace — the live invite link lives nowhere out-of-band. User ask: let LUCID append the CURRENT
+reconnect link to a single file in the user's OWN Google Drive, which a disconnected user (or a teammate the
+file is shared with) reads to rejoin. Confirmed decisions: `drive.file` scope; OPTIONAL user-selected PIN
+encryption at rest; view link by default, edit link when the share is/was an edit share.
+
+### Decision
+
+- **`drive.file` scope only.** Google enforces that `drive.file` lets LUCID touch ONLY files it created/opened
+  — NEVER the rest of the user's Drive. It's also a lighter Google-verification tier than full `drive`. This is
+  the whole reason the feature is safe. OAuth is INCREMENTAL (requested only when the user enables reconnect).
+- **The file is a credential store, treated as one.** A reconnect code carries the room's E2E secret (in the
+  link). Hardening: (1) the `drive.file` blast-radius above; (2) OPTIONAL PIN encryption at rest "
+  `drive_relay_codes.ts` AES-256-GCM with a PBKDF2-SHA256(210k)-derived key, envelope = [version][16B salt]
+  [12B iv][ciphertext]; a wrong PIN / tamper / missing PIN decrypts to null (fail-closed, never throws); (3)
+  codes expire (12h cap) and a code also dies with its room; (4) the newest non-expired code wins.
+- **View-vs-edit link selection** (`chooseReconnectLink`): view by default; the edit (drive-capable) link when
+  `allowEdit` OR the last session link was edit — so an edit session reconnects with drive rights.
+- **Per-file, revocable collaborator sharing** (`drive_file.ts shareRelayFile`): a Drive-native `permissions`
+  grant on JUST that one file (writer, so a teammate can append their own codes) — Google audits + the user
+  revokes it; the teammate sees only that file.
+- **Clean seams so it's testable + the OAuth stays swappable.** `drive_relay_codes.ts` is PURE (WebCrypto,
+  DOM-free) — file format, PIN crypto, selection. `drive_file.ts` is a tiny Drive REST client taking an
+  INJECTED `fetch` + a `drive.file` access TOKEN — find/create/read/update/share/ensure. Both unit-tested
+  headless; a real-crypto/mock-Drive demo proves the whole loop. The injected token IS the OAuth seam.
+
+### Security
+
+The room key still never touches the relay; the Drive file is the only at-rest copy of a link besides the link
+itself, and it lives in the user's own private Drive under a per-file scope. With a PIN the link is ciphertext
+at rest (proven by the demo: the file body does not contain the link). All untrusted JSON (the codes file,
+Drive responses) is parsed with `unknown` + `in`/`typeof` narrowing (no `any`). The relay-file `q` uses a fixed
+constant name, not user input.
+
+### Deferred to P-REMOTE.10b (deploy-gated, not headlessly verifiable)
+
+The drive.file OAuth CONSENT + the UI: the PWA gets a Google access token via an incremental Firebase
+`GoogleAuthProvider.addScope('drive.file')` re-consent; the desktop host gets one via the hosted `/signin`
+flow returning a drive.file token (add-on change). The Share-dock "Reconnect (Google Drive)" section (enable
+toggle + optional PIN + share-with-teammate) writes on share start/reconnect; the PWA "get a reconnect code"
+reads + decrypts + rejoins. These need a provisioned Google OAuth client with drive.file + a LIVE consent
+screen, which can't be verified headlessly, so they ship once provisioned rather than as an unverified path.
+
+### Alternatives rejected
+
+- **Full `drive` scope:** unnecessary blast radius + heavy Google restricted-scope review. `drive.file` is the
+  least-privilege fit that's still shareable.
+- **`appDataFolder` (hidden per-app storage):** more private but NOT shareable with a teammate — kills the
+  collaborator flow the user asked for. `drive.file` in the visible Drive is required.
+- **Plaintext-only codes:** the PIN option is the hardening the user asked for; plaintext stays the default
+  (lower friction) but a PIN makes the file useless if over-shared.
+
+### Relates to
+
+ADR-0226/0227 (P-REMOTE — the relay + phone PWA + Firebase auth this extends), ADR-0232 (P-SHARE.1 — the dock
+the reconnect toggle lives in), and CLAUDE.md invariant #3 (fail-closed).
+
+### P-REMOTE.10b amendment — the drive.file CONSENT + desktop WRITER (BUILT 2026-07-18)
+
+The consent path + desktop write UI (previously deferred) are now built; only the live Google consent + the
+Google Cloud console scope registration remain (the user's on-device assist).
+
+- **No new OAuth client id.** The drive.file token rides Firebase's EXISTING web client via the hosted
+  `/signin` page: `?drive=1` → `provider.addScope('.../auth/drive.file')` → after sign-in
+  `GoogleAuthProvider.credentialFromResult(res).accessToken` is a Drive-capable OAuth access token (~1h),
+  appended to the `lucid://auth` deep link as `&drive_token=&drive_exp=` (over the SAME lucid:-only channel as
+  the idToken; `authlink.safeRedirectBase` still guarantees a `lucid://` target — never a web origin).
+- **`market_auth.ts`:** `TokenRecord` gains `driveToken`/`driveExpiresAt`; `parseAuthCallback` reads them;
+  the token is PRESERVED across an idToken refresh (they expire independently); `freshDriveToken(skew)` serves
+  the stored token while live, else null → re-consent (access tokens aren't refreshed here, fail-closed).
+  `market_boot.beginDriveSignIn()` opens `/signin?...&drive=1`; `freshDriveToken()` exposes it.
+- **Desktop WRITER (renderer):** a Share-dock `sec-reconnect` "Reconnect (Google Drive)" section (enable
+  toggle persisted in localStorage; "Authorize Google Drive"; optional PIN; "Save a reconnect code now";
+  "Share with a teammate"). WRITE-ON-SHARE: after a share starts AND reconnect is enabled AND a drive token
+  exists, `chooseReconnectLink` + `buildCode` → find-or-create/append `lucid_relay_codes` via the tested
+  drive_file/drive_relay_codes core, PIN-encrypted when a PIN is set. The PIN is entered per action, NEVER
+  stored. Renderer CSP `connect-src` extended with `https://www.googleapis.com` + `securetoken.googleapis.com`.
+- **Verified:** market_auth drive-token unit tests (parse, freshDriveToken live/expired/absent, preserved
+  across refresh) + authlink.test.ts drive round-trip; renderer + server tsc clean; `/signin` deployed +
+  live-probed (drive.file scope + credentialFromResult + drive_token present). LIVE consent + a real Drive
+  write are the user's on-device assist (enable the Drive API + add the `drive.file` scope to the OAuth
+  consent screen in the lucid-agent project). The PWA READER ("get a reconnect code" to rejoin) is P-REMOTE.10c.
+
+## ADR-0234 -- Session Share dock UI polish: routable-first bind list, checkbox persistence, cold-boot cache (P-SHARE.2) (2026-07-18)
+
+**Status:** ACCEPTED / BUILT.
+
+Three reported UI bugs on the shipped Session Share dock (ADR-0232) + the Reconnect section (ADR-0233), fixed
+as one increment. All changes are renderer-side; the load-bearing logic is pure + unit-tested in `share_dock.ts`.
+
+### 1. "Reachable at" defaulted to loopback
+
+The "Host the relay on this device" bind picker rendered `serve.addresses` in backend order (loopback first),
+and the browser auto-selects the first `<option>` -- so the DEFAULT was `127.0.0.1`, which a guest can never
+reach. New pure `orderBindAddresses` (`share_dock.ts`) sorts guest-routable (lan/vpn/other) before loopback and
+IPv4 before IPv6 within each group (stable, non-mutating), and `shareRelayServeHtml` marks the first option
+`selected`. Loopback is DEMOTED, not removed -- it still serves a same-machine / tunnel-VPN guest, just never as
+the default. Decision: keep loopback at the bottom rather than drop it (the conservative reading of the ask,
+preserving the tunnel/VPN + local-dev cases).
+
+### 2. "Let a guest drive this session" silently unchecked itself
+
+The checkbox had no persisted `checked` state, so every `draw()` re-render (window focus via `onFocus`, the
+be-the-relay toggle, the Drive-auth poll) rebuilt `body.innerHTML` and reset it to unchecked. Fix: the two
+EPHEMERAL sharing toggles (`shareAllowEdit`, `sharePreferP2P`) are now held in `openSharePanel` closure vars
+(`allowEditPref`, `preferP2PPref`), recorded on `change`, and fed back through a new `ui` param of
+`shareBodyHtml` on every render. `preferDirect` still falls back to the saved P2P config until toggled.
+**Padding:** a top-level `.dock-foot` action row (Change relay / Start sharing) had no bottom margin and touched
+the next section; it now carries the same `margin-bottom:8px` the sections use (consistent inter-panel gap).
+
+### 3. The dock was a blank "Loading..." on cold boot
+
+The body was a `Loading...` placeholder until an async `Promise.all` of three bridge calls resolved -- on a cold
+boot that reads as broken. Fix (mirrors the Settings model-list SWR pattern, ADR-0084): `draw()` caches a
+SECRET-FREE snapshot via new `swr_cache` helpers; on open the dock paints it INSTANTLY through the single
+`composeBody` path and shows an `updating...` chip in the header, then `draw()` revalidates and clears the chip.
+
+**The cache is fail-safe by construction.** New pure `redactShareSnapshot` WHITELISTS only the non-secret relay
+descriptor + be-the-relay status + a redacted P2P config. It NEVER holds an invite link, browser link, or room
+id (all carry the E2E room key in the link fragment) nor a TURN credential (a secret); first paint always
+renders `active:false` (idle shell), so a restart can never show a stale "Live" pointing at a dead room. A
+whitelist (not a blacklist) means a new upstream secret field cannot silently leak into localStorage.
+
+### Verified
+
+`orderBindAddresses` + `redactShareSnapshot` unit tests (`share_dock.test.ts`) + a share-snapshot round-trip
+(`swr_cache.test.ts`); `make demo-P-SHARE.2` (`demo_pshare2.ts`, 5 checks: routable default, IPv4-before-IPv6,
+non-mutation, TURN-credential drop, no-link/room-id/Live in the cache); renderer tsc clean, no `any`; visual
+confirmation via `mockups/share_dock_preview.html` (updating chip, LAN-default dropdown, button-row->panel gap).
+
+### Relates to
+
+ADR-0232 (P-SHARE.1 -- the dock), ADR-0233 (P-REMOTE.10/.10b -- the Reconnect section these fixes sit beside),
+ADR-0084 (P-PERF.1 -- the stale-while-revalidate cache pattern reused here).
+
+## ADR-0235 -- the phone PWA reconnect-code READER (P-REMOTE.10c) (2026-07-18)
+
+**Status:** ACCEPTED / BUILT (live Drive read = the same on-device consent P-REMOTE.10b awaits).
+
+The sibling of the P-REMOTE.10b desktop WRITER: a disconnected phone recovers a live invite link out of band.
+When a Session Share drops and the phone no longer has a room in its URL, the PWA reads the host's shared
+`lucid_relay_codes` Google Drive file, decrypts it (optional PIN), and rejoins.
+
+### The reader state machine (pure, tested)
+
+New `resolveReconnect(text, pin, now)` in `drive_relay_codes.ts` composes the existing `fileIsEncrypted` +
+`readFileContent` + `latestValidCode` into the exact set of states a reader UI branches on:
+`ok{link,edit}` | `locked` (encrypted, no PIN yet) | `bad-pin` (wrong PIN / tamper) | `expired` (all codes
+stale) | `empty` (no codes / unreadable). Fail-closed: `locked` and `bad-pin` NEVER return a link. This is the
+load-bearing, unit-tested core; the UIs are thin switches over it.
+
+### The stored link is PWA-usable as-is
+
+The host stores the relay-path link (`wss://relay/r/<roomId>.<secret>`). `parseShareLink` already accepts that
+form, and the PWA always connects to its OWN configured relay (`cfg.relayWsBase/r/<roomId>`), so no host-side
+change was needed. The PWA recovers `{roomId, key, writeToken}` from the stored link and NORMALIZES it to a
+bare room fragment via `formatShareLink`, sets `location.hash`, and reloads -- the entire existing boot/
+sign-in/connect path then runs unchanged (no duplicated connect logic). A demo asserts this normalization is
+lossless (room id + 32B key + 16B write token survive the round-trip).
+
+### The phone's drive.file token
+
+`firebase_auth.js` gains `signInForDrive()` (a SEPARATE incremental consent -- a viewer is never asked for
+Drive) and `getDriveToken()`. The drive-scoped Google access token is captured from
+`GoogleAuthProvider.credentialFromResult(getRedirectResult())` ONLY when a reconnect flag is set (so a plain
+sign-in's scope-less access token is never mistaken for a Drive token), stashed in localStorage with a ~55m
+expiry, and cleared on sign-out. This reuses Firebase's existing web client -- NO new OAuth client id, mirroring
+P-REMOTE.10b.
+
+### The PWA UI
+
+`app.ts`: the no-fragment case (previously a dead-end `fatal("...needs a room in the URL")`) now shows a new
+`#reconnect-view` -- a "Get a reconnect code" button, a PIN input (revealed only when the file is `locked`), and
+a status line. `reconnectFlow`: no token -> `signInForDrive` (redirect); with a token -> `findRelayFile` +
+`readRelayFile` (the browser-safe `drive_file.ts` client) -> `resolveReconnect` -> switch. On return from the
+consent redirect the token is stashed, so the flow auto-resumes. On `ok` it normalizes + reloads into the
+normal path. drive.file scope: the phone can touch ONLY that one file.
+
+### Verified
+
+`resolveReconnect` unit tests (`drive_relay_codes.test.ts`: ok plaintext + ok-with-PIN + locked + bad-pin +
+expired + empty); `make demo-P-REMOTE.10c` (`demo_premote10c.ts`, 7 checks over a mock Drive incl. the lossless
+link normalization + all fail-closed branches); the PWA bundles (`bun run tools/remote-pwa/build.ts`) and its
+tsc + the renderer tsc are clean; license headers pass.
+
+**On-device assist (unchanged from P-REMOTE.10b):** the LIVE Drive read needs the Google Cloud console steps
+(enable the Drive API + add the `drive.file` scope to the OAuth consent screen) and a `firebase deploy --only
+hosting` of the rebuilt `/remote` PWA. Until deployed + consented, the reader UI shows a friendly status; it
+never crashes.
+
+### Relates to
+
+ADR-0233 (P-REMOTE.10/.10b -- the reconnect-codes core + desktop writer this reads back), ADR-0226/0227
+(P-REMOTE -- the phone PWA + Firebase auth this extends), and CLAUDE.md invariant #3 (fail-closed).
+
+## ADR-0236 -- phone PWA mobile-UX redesign + reconnect catch-up + Session Share polish (P-REMOTE.11) (2026-07-18)
+
+**Status:** ACCEPTED / BUILT + DEPLOYED (PWA live at lucid-agent.web.app/remote).
+
+A batch of reported mobile/share UX fixes (screenshot-backed), shipped together.
+
+### PWA screen real estate (the main ask)
+
+The phone PWA burned the top of the screen on a session header (title/model/host + Live badge) and an account
+row (email + Sign out), leaving little room for the transcript. Redesign (`tools/remote-pwa/index.html` +
+`app.ts`):
+- The transcript now fills the whole screen (top -> composer).
+- The status + account + model/folder controls collapse into ONE condensed, auto-collapsed **double-decker**
+  strip UNDER the composer: a thin always-visible bar (status dot + label, e.g. "Live - you can drive") that
+  taps open to a panel (full header, model/folder pickers, email, Sign out, Report). Auto-collapsed by default
+  for maximum reading space.
+- The composer went from two rows (a full-width input over a `+ ... Stop Send` row with a wasted middle spacer)
+  to a single row `[+] [input grows] [Stop] [Send]` - the spacer and the whole second row are reclaimed.
+
+### Reconnect catch-up (the pain point)
+
+When the phone screen auto-locks the socket drops; on unlock the CollabGuest reconnects and the host replays the
+transcript, but the user could not tell WHAT changed while away. New auto-collapsed **catch-up card** at the top
+of the transcript: on `visibilitychange->hidden` the PWA snapshots the seen host-turn count; on the reconnect
+render it summarizes `transcript.slice(awayAt)` as "N updates while you were away" (tap to expand the missed
+turns). **Bandwidth-minimal by construction:** it summarizes the welcome-replay the guest already receives on
+reconnect - NO extra data crosses the wire. Text is rendered via `textContent` (host content is untrusted).
+Dismisses when the user sends (back in flow). A richer diffstat report needs host-side per-guest delta support -
+deferred (the replay carries only role+text).
+
+### Session Share polish (desktop)
+
+- **No em dashes:** the bind-address labels (`desktop/collab/net_addrs.ts`) used " -- " (U+2014) - swept to a
+  plain hyphen across all four kinds + the loopback fallback + the app.ts fallback label. A regression guard
+  test asserts the labels never contain U+2014.
+- **The minimize pill** floated above the status bar; it now lives INSIDE the bar (right of the trivia ticker),
+  re-adopted after each `renderStatus` innerHTML swap exactly like the ticker (a module-level `sharePillEl` +
+  `mountSharePill()`), so it never flickers and sits in the same band as the ticker.
+
+### Verified
+
+net_addrs em-dash guard + collab suite 333/0; PWA bundles (`tools/remote-pwa/build.ts`, app.js ~32 KiB) + PWA
+tsc + renderer tsc clean; visual confirmation of the new mobile layout via `mockups/pwa_session_preview.html`
+(transcript maximized, single-row composer, auto-collapsed catch-up + double-decker strip); PWA DEPLOYED to
+/remote and live-probed (botstrip / catchup / reconnect-view in index.html; signInForDrive in app.js;
+getDriveToken in firebase_auth.js). Desktop changes (em-dash, pill) reach a dev instance on reload.
+
+### Relates to
+
+ADR-0232 (P-SHARE.1 dock + the pill), ADR-0235 (P-REMOTE.10c reconnect reader that the no-fragment PWA path
+now leads into), ADR-0174 (P-TRIV.1 -- the status-bar ticker the pill now shares a band with).
+
+## ADR-0237 -- preview snapshot to the phone PWA, slice 1 (item C, P-PREVIEW-PWA.1) (2026-07-18)
+
+**Status:** ACCEPTED / BUILT + DEPLOYED (PWA display live; live capture is on-device).
+
+First slice of "item C": broadcast the desktop's in-app Preview panel to connected phone guests, who view it
+(thumbnail + tap-fullscreen) and save it to their device. Markup send-back (slice 2) and agent awareness
+(slice 3) follow.
+
+### Design: a new ChatEvent, not a new frame
+
+Reuse the existing host-to-guest broadcast pipeline. A new ChatEvent `{type:"preview-snapshot", image, label?}`
+(chat_events.ts) rides the SAME tap that already carries the live stream, for BOTH transports with the least
+new plumbing:
+- direct-P2P: `p2pTeeEvent(event)` broadcasts it straight from the renderer host.
+- relay: a new `bridge.collabBroadcastPreview(image,label)` calls `POST /api/collab/preview`, which calls
+  `collabManager.tapEvent(event)` (the same method the /api/chat tap uses). Fail-closed: no active relay share
+  OR a non-image payload broadcasts nothing.
+The event is only ever broadcast to guests, never fed to the local desktop transcript, so the desktop never
+renders it and no suppression is needed. A new HostFrame was rejected: it would need threading through
+host.ts/guest.ts/CollabGuestFrame/PWA onFrame AND the same relay push, for no gain.
+
+### Capture + downscale (reuse)
+
+The "To phone" button in the Preview toolbar reuses `screenshotPreviewToChat`'s capture: `laneFrame()` rect +
+`bridge.capturePreview(rect)` (Electron `webContents.capturePage`, which composites the app + the markup
+canvas). A raw capture is device-pixel-ratio-scaled and multi-MB, too heavy to seal + relay, so it is
+downscaled to a longest-edge cap (MAX_SNAPSHOT_EDGE = 1280) via a canvas before broadcast. The pure sizing
+(`fitWithin`, preview_snapshot.ts) is unit-tested; the capture + canvas resize is Electron-only (a plain
+browser no-ops with a toast).
+
+### PWA display (hydration-safe)
+
+pwa_view.ts gains a `preview` ViewItem; `foldEvent` folds the event into it with a stable id (its index among
+previews, which only append), and `renderItem` emits a tappable thumbnail button WITHOUT the data URL in the
+HTML. The PWA hydrates each `<img>` src as a PROPERTY after render (never inlined, keeping the
+per-event-re-rendered transcript small and text-safe), a tap opens a fullscreen viewer, and Save writes the
+PNG to the device (anchor download). A hostile label is HTML-escaped like all host-authored text.
+
+### Verified
+
+fitWithin + fold/render unit tests -> collab suite 340/0; `make demo-P-PREVIEW-PWA.1` (6 checks: downscale,
+fold, hydration-safe render, label escape, stable ids); renderer + PWA tsc clean (bumped desktop/tsconfig lib
+ES2023 -> ES2024 for Promise.withResolvers, which Electron's Chromium supports), server tsc at baseline (only
+the pre-existing dev.ts:586), license clean. PWA DEPLOYED to /remote and live-probed. Live
+capture-to-broadcast-to-phone is the on-device step (Electron capturePage + a live share).
+
+### Relates to
+
+ADR-0208 (P-IMG.1, the tool-image event + capturePreview seam this reuses), ADR-0192 (P-COLLAB.1, the frame
+protocol + ChatEvent tap), ADR-0235/0236 (P-REMOTE.10c/11, the same deploy-gated PWA pattern). Slice 2 (PWA
+markup + send-back via PromptFrame images) and slice 3 (agent PWA-awareness) follow.
+
+## ADR-0238 -- PWA composer double-decker + favorites-filtered guest model picker (P-REMOTE.11b) (2026-07-18)
+
+**Status:** ACCEPTED / BUILT + DEPLOYED.
+
+Refinement of the P-REMOTE.11 mobile layout, from on-device feedback: the whole PWA stack is now auto-collapsed
+at BOTH edges, the prompt bar owns its row, and the guest model picker is small-screen-usable.
+
+### The composer is its own double-decker
+
+The single-row composer put [+]/Stop/Send beside the prompt bar; reverted to two rows: the full-width prompt
+input on its own line, and the action row ([+] ... [Stop] [Send]) UNDER it, AUTO-COLLAPSED. The row shows while
+composing (input focused, non-whitespace text, or staged attachments) or while a turn streams (Stop must stay
+reachable), and hides otherwise; the blur-path hide is delayed 200ms so a tap on Send lands before the row
+collapses (iOS fires blur before click). Top chrome (the reconnect catch-up card) and bottom chrome (the
+status/account strip) were already auto-collapsed; the composer row completes the picture: reading a live
+session shows ONLY the transcript, the prompt bar, and two thin bars.
+
+### The guest model picker offers favorites + current
+
+The model allowlist offered to edit guests was the FULL omp catalog (hundreds of entries via AskSage) - unusable
+in a phone `<select>`. New pure `offeredModels(models, favs, currentValue)` (model_favorites.ts): just the
+host's FAVORITE models plus the CURRENT one (always selectable even when unstarred); NO favorites -> the full
+list (never a current-only picker). Applied at BOTH hosts, so the phone never even receives the full catalog:
+- direct-P2P: `buildRendererCollabOptions` (app.ts) reads favorites from renderer localStorage (FAVS_KEY).
+- relay: favorites ride `/api/collab/start` (`favModels`, validated + capped at MAX_FAVS) because the backend
+  cannot read renderer localStorage; `buildCollabOptions` (dev.ts) applies the same pure filter.
+Folder options are unchanged (the already-used-folders allowlist). Favorites are a snapshot at share start on
+the relay path (a mid-share star lands on the next share); the P2P path re-reads on every options refresh.
+
+### Verified
+
+offeredModels unit tests (favorites-only, current-always, no-favs full list, stale favs hidden) -> renderer
+favorites tests 20/0, collab suite 360/0; PWA + renderer tsc clean, server tsc at baseline (pre-existing
+dev.ts:586 only); PWA bundled + DEPLOYED to /remote and live-probed (composer-actions in index.html + app.js);
+`mockups/pwa_session_preview.html` mirrors the final layout (two-row composer + MODEL/FOLDER pickers in the
+expanded strip).
+
+### Relates to
+
+ADR-0236 (P-REMOTE.11, the layout this refines), ADR-0165 (P-FAV.1, the favorites this reuses), ADR-0228
+(P-COLLAB.14, the model/folder allowlists this filters).
+
+## ADR-0239 -- phone markup on preview snapshots + send-back, SVG buttons, install path (P-PREVIEW-PWA.2) (2026-07-18)
+
+**Status:** ACCEPTED / BUILT + DEPLOYED.
+
+Item C slice 2, plus the button polish and the mobile full-screen path.
+
+### Markup + send-back
+
+The fullscreen snapshot viewer gains finger MARKUP: a `<canvas>` overlaid on the rendered image (armed by a
+Draw toggle so pinch/scroll still work disarmed), red ink, per-stroke Undo. Strokes are stored in NORMALIZED
+image space (`toNormPoint`, pure: clamped into the image, never NaN) so they survive a rotation/resize and
+scale losslessly onto the natural-size composite; the on-screen pen and the composite pen share ONE width
+formula (`penWidthFor`) so the sent ink reads as drawn. "Send to agent" composites image + ink at natural
+size and STAGES the PNG through the SAME fail-closed attachment path as a pasted image (P-REMOTE.8
+`acceptAttachment`: type/size/count re-validated; SVG refused) - the user adds words in the composer, taps
+Send, and it arrives at the host as a guest image prompt the agent sees (through the host's gate + approvals,
+as ever). Hidden for view-only guests (they cannot prompt). Save-to-device also composites, so the saved PNG
+matches what was drawn.
+
+### Buttons + full screen
+
+Every composer/viewer control is now an inline SVG (plus, stop square, send plane, pen, undo, download, X),
+flex-centered - the old text "+" glyph sat off-baseline. Full screen without the browser header = the
+INSTALLED PWA (the manifest is already `standalone`, apple-mobile-web-app-capable already set): a hint on the
+sign-in view surfaces the path - Android Chrome gets a REAL one-tap Install (`beforeinstallprompt`, an event
+absent from lib.dom, typed locally), iOS gets the Add-to-Home-Screen tip; running standalone shows nothing.
+
+### Verified
+
+toNormPoint/penWidthFor unit tests -> collab suite 364/0; `make demo-P-PREVIEW-PWA.2` (5 checks: normalize +
+clamp, lossless dual-scale mapping, pen parity, PNG accepted / script-capable SVG refused by the P-REMOTE.8
+gate); PWA tsc clean, bundle 36.1 KiB; DEPLOYED to /remote + live-probed (sv-canvas/sv-draw/install-hint/
+beforeinstallprompt/preview-markup.png). The finger ink + composite render are the on-device step.
+
+### Relates to
+
+ADR-0237 (slice 1, the snapshot this marks up), ADR-0229 (P-REMOTE.8, the attachment gate the send-back
+reuses), ADR-0227 (the PWA shell). Slice 3 (agent PWA-awareness / autodetect) remains.
+
+## ADR-0240 -- agent PWA-awareness via a trusted per-turn preamble (P-PREVIEW-PWA.3) (2026-07-18)
+
+**Status:** ACCEPTED / BUILT. Item C slice 3 - item C is now COMPLETE.
+
+While guests watch a Session Share, the agent now KNOWS: its prompt carries a compact `<session-share>` block
+naming the audience size and access mix, plus the actionable suggestion (broadcast the Preview via "To phone";
+expect marked-up snapshots back as image prompts).
+
+### Design
+
+- **The preamble channel, not the prefix.** The block rides inside the user turn (the same channel as the
+  active-skill/recall blocks), never the frozen prefix - invariant #6 holds, the KV cache stays hot.
+- **Per-turn autodetect.** Rebuilt from the LIVE roster on every /api/chat: it appears when the first guest
+  joins and vanishes when the last leaves. No state, no staleness.
+- **Counts only - never names (invariant #5).** Guest display names are guest-chosen, untrusted input; a name
+  like "ignore previous instructions" must never ride into the prompt. `buildShareAwareness` (pure,
+  share_awareness.ts) is constructed from clamped integers + fixed strings ONLY; `accessCounts` reduces the
+  roster to {view, edit} and drops everything else.
+- **The mirror stays clean.** /api/chat taps the CLEAN prompt to guests (P-COLLAB.15) BEFORE augmenting, so
+  the model sees preamble + text while guests and the transcript see exactly what was typed.
+- **Both transports.** Relay: the backend reads its own CollabManager roster. Direct-P2P (renderer-hosted):
+  the renderer sends roster COUNTS with the turn (`share` on sendPrompt, validated backend-side).
+
+### Verified
+
+share_awareness unit tests (autodetect null, singular/plural mix, hostile-name-never-survives, clamping) ->
+collab suite 350/0; `make demo-P-PREVIEW-PWA.3` (5 checks incl. the composition rule and the hostile-name
+property); renderer tsc clean, server tsc at baseline; license clean. Desktop-side only - reaches a dev
+instance on reload; the LIVE effect (the agent suggesting a broadcast mid-share) is the on-device step.
+
+### Relates to
+
+ADR-0237/0239 (slices 1-2, the broadcast + markup this makes the agent aware of), ADR-0029 (P-IDE.2, the
+user-turn preamble channel), ADR-0192 (P-COLLAB.3/15, the tap ordering that keeps the mirror clean),
+CLAUDE.md invariants #5 and #6.
+
+## ADR-0241 -- dual invite links: EDIT and VIEW-ONLY guests in one share (P-COLLAB.19) (2026-07-18)
+
+**Status:** ACCEPTED / BUILT.
+
+An edit share could always discriminate per guest at the PROTOCOL level (the write token in the full link is
+a per-guest capability; a view link holds only the room key), but the UI surfaced ONE link, and the phone/
+browser form of the view link did not exist in status at all - so a host could not hand an edit link to one
+guest and a view-only link to another. Now it can.
+
+### One pure minting helper, both hosts
+
+New `mintRoomLinks(relay, roomId, key, writeToken, allowEdit)` (link.ts, pure) mints EVERY form for the one
+room: `fullLink` (drives) + `viewLink` (watches) + their phone twins `browserLink` (edit-capable when the
+share allows editing) + `browserViewLink` (ALWAYS watch-only, new). The relay host (manager.ts) and the
+direct-P2P host (collab_p2p.ts) both call it - the previously duplicated minting blocks are gone. Preserved
+exactly: the legacy (no-pwaBase) browser form never carries the write token, and `allowEdit` still gates
+writes HOST-side (fail-closed) - a leaked full link on a view-only share still cannot drive.
+
+### The dock hands out both
+
+On an edit share the Share dock now shows TWO invite sections, each with its own copy row + phone QR:
+"Edit invite link (guest can drive)" and "View-only invite link (watch only)". A view-only share keeps the
+single section. Both capabilities open the same room and decrypt the same E2E stream; only the write
+capability differs.
+
+### Verified
+
+mintRoomLinks tests (capability split, same-room/same-key, view-share and legacy forms token-free) + a
+manager status test (browserLink drives, browserViewLink cannot, same room) -> collab suite 354/0;
+`make demo-P-COLLAB.19` (5 checks, real crypto); renderer tsc clean, server tsc at baseline; license clean.
+Host-side refusal of a view guest's write is already pinned by demo-P-COLLAB.12. Desktop-side only - a dev
+instance picks it up on reload.
+
+### Relates to
+
+ADR-0192 (P-COLLAB.1, the link shapes), ADR-0198 (P-COLLAB.12/13, the write token + host-side gate),
+ADR-0226/0227 (P-REMOTE.2b, the phone link twins), ADR-0232 (the dock sections these render in).
+
+## ADR-0242 -- the Join panel becomes a floating, non-blocking dock (P-COLLAB.20) (2026-07-18)
+
+**Status:** ACCEPTED / BUILT.
+
+Watching another LUCID used to be a CENTERED, BLOCKING modal (backdrop, Escape-to-close, fill-the-app
+"watching" mode) - you could not touch your own session while watching someone else's. It is now a floating
+DOCK on the P-SHARE.1 chassis: movable (drag the header), resizable (e/s/se handles), snappable (flush-right
+or beside the rails), minimizable to a status-bar pill, geometry persisted - and NON-BLOCKING, so the local
+LUCID stays fully usable while you watch or (with an edit link) drive the remote one.
+
+### Design
+
+- **One chassis, keyed persistence.** `loadDockState`/`saveDockState` gain a storage `key` (default = the
+  share dock's, unchanged) + an optional first-open `fallbackShape`. The join dock persists under
+  `lucid.joinDock.v1` and first-opens bottom-LEFT beside the rails, so the two docks never stack and each
+  remembers its own geometry + snap side.
+- **Escape minimizes, X leaves.** Closing tears down a live watch (leave), so Escape is NON-destructive: it
+  minimizes to the pill (the watch continues), and only when focus is inside the dock - a stray Escape while
+  working the local session can never kill a watch. The pill (eye + live dot) sits in the status bar beside
+  the share pill, re-adopted per poll like the ticker.
+- **The fill-the-app "watching" mode (ADR-0222) is retired**: the dock is freely resizable; the transcript
+  flexes to the dock. Dead `.join-modal` CSS removed (clean cutover). All join logic (connect, live
+  transcript, drive composer, P2P vs relay path) is untouched - only the shell changed.
+- **Single instance still.** True MULTI-join ("orchestrator": N watched sessions in N docks) is gated
+  backend-side: dev.ts holds ONE `collabGuest` slot, bridge.ts ONE stream-abort controller, collab_p2p.ts ONE
+  guest slot, and the guest-prompt/abort/model/workspace endpoints have no join id. That refactor (Map-keyed
+  guest slots + per-join stream handles + joinId routing + cascaded dock placement) is P-COLLAB.21.
+
+### Verified
+
+Keyed-persistence tests (independent share/join state, fallback placement, stored-beats-fallback, re-clamp)
+-> renderer suite 734/0, renderer tsc clean, license clean; `make demo-P-COLLAB.20` (5 checks: independent
+defaults/persistence, viewport re-clamp, minimize round-trip, one-chassis snapping). Live drag/resize/pill
+are the same pointer wiring the Share dock has shipped since P-SHARE.1; a dev instance picks this up on
+reload.
+
+### Relates to
+
+ADR-0232 (P-SHARE.1, the dock chassis + pill), ADR-0222 (the watching mode this retires), ADR-0196/0202
+(P-COLLAB.10/17, the join paths that now render inside the dock).

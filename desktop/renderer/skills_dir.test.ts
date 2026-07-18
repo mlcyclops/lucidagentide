@@ -7,12 +7,30 @@
 // body) is HTML-escaped (a skill is untrusted data, never markup — invariant #5).
 
 import { describe, expect, test } from "bun:test";
-import { renderSkillInspect, renderSkillsDirectory, renderStudioCandidate, type SkillDirRow } from "./skills_dir.ts";
+import { renderSkillInspect, renderSkillsDirectory, renderStudioCandidate, skillsDirSig, type SkillDirRow } from "./skills_dir.ts";
 import type { SkillInspectView } from "./bridge.ts";
 
 const row = (over: Partial<SkillDirRow> = {}): SkillDirRow => ({
   key: "project:x", name: "x", description: "d", root: "project", trust: "untrusted",
   invocation: "/skill:x", removable: true, enabled: true, enableable: true, fileBacked: true, scanned: null, ...over,
+});
+
+describe("skillsDirSig — repaint only on a real change (P-SKILL.6)", () => {
+  test("identical row sets share a signature (order-preserving); a copy matches", () => {
+    const rows = [row({ key: "bundled:a", name: "a" }), row({ key: "project:b", name: "b" })];
+    const copy = [row({ key: "bundled:a", name: "a" }), row({ key: "project:b", name: "b" })];
+    expect(skillsDirSig(rows)).toBe(skillsDirSig(copy));
+  });
+  test("an enable toggle changes the signature", () => {
+    expect(skillsDirSig([row({ enabled: true })])).not.toBe(skillsDirSig([row({ enabled: false })]));
+  });
+  test("a new trust verdict / finding count changes the signature", () => {
+    expect(skillsDirSig([row({ trust: "untrusted" })])).not.toBe(skillsDirSig([row({ trust: "suspicious" })]));
+    expect(skillsDirSig([row({ scanned: null })])).not.toBe(skillsDirSig([row({ scanned: { findings: 2, at: "t" } })]));
+  });
+  test("an added / removed skill changes the signature", () => {
+    expect(skillsDirSig([row()])).not.toBe(skillsDirSig([row(), row({ key: "project:y", name: "y" })]));
+  });
 });
 
 describe("renderSkillsDirectory — grouping + counts", () => {

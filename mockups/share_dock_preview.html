@@ -1,0 +1,167 @@
+<!doctype html>
+<!-- Copyright (c) 2026 TechLead 187 LLC / SPDX-License-Identifier: BUSL-1.1 -->
+<!-- P-SHARE.1 (ADR-0232): a STATIC visual harness for the floating Session Share dock. The Electron renderer
+     can't be browser-loaded, so this reproduces the dock markup + the real design tokens + the dock CSS to
+     screenshot the layout (dock, chevron sections, count badge, participant dropdown, resize handles, pill). -->
+<html lang="en"><head><meta charset="utf-8" /><title>Share dock preview</title>
+<style>
+  :root {
+    --bg-0:#0a0b0f; --bg-1:#0f1117; --bg-2:#151823; --bg-3:#1b1f2b; --bg-4:#222736;
+    --line:#252a3a; --line-soft:#1a1e2a; --line-strong:#323a4f;
+    --txt:#edeff6; --txt-2:#aeb4c6; --txt-3:#727a90; --txt-4:#525a70;
+    --accent:#c64bd6; --accent-2:#e07bf0; --accent-dim:rgba(198,75,214,.14);
+    --cyan:#46c8dc; --green:#46d27e; --amber:#e8b23c; --red:#ef5f5f; --red-dim:rgba(239,95,95,.13);
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body { background: #07080b; color: var(--txt); font: 14px/1.5 system-ui, -apple-system, sans-serif; height: 100vh; overflow: hidden; }
+  .fauxrail { position: fixed; left: 0; top: 0; bottom: 0; width: 54px; background: var(--bg-1); border-right: 1px solid var(--line); }
+  .fauxbar { position: fixed; left: 0; right: 0; bottom: 0; height: 30px; background: var(--bg-1); border-top: 1px solid var(--line); }
+  .ic { display: inline-flex; }
+  .btn-mini { font: inherit; font-size: 12px; border: 1px solid var(--line); background: var(--bg-2); color: var(--txt); border-radius: 8px; padding: 6px 14px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
+  .btn-mini.danger { color: var(--red); border-color: color-mix(in srgb,var(--red) 40%,transparent); }
+  .btn-mini.ok { color: var(--accent-2); }
+  @keyframes sharePulse { 0%,100%{opacity:1} 50%{opacity:.45} }
+  @keyframes fade { from{opacity:0} to{opacity:1} }
+  .share-lbl { display:block; font-size:12px; font-weight:600; color:var(--txt-2); margin:2px 0 5px }
+  .share-linkrow { display:flex; gap:7px }
+  .share-link-input { flex:1; background:var(--bg-0); border:1px solid var(--line); border-radius:8px; color:var(--txt); padding:7px 10px; font-size:12px; font-family:ui-monospace,monospace }
+  .share-hint { font-size:11.5px; line-height:1.5; color:var(--txt-3); margin:8px 0 0 }
+  .share-qr { margin-top:10px; width:96px; height:96px; background:#fff; border-radius:8px; display:flex; align-items:center; justify-content:center; color:#111; font-size:10px }
+  .share-live-head { display:flex; align-items:center; gap:8px; font-size:13px; font-weight:600; margin:0 0 8px }
+  .share-live-dot { width:9px; height:9px; border-radius:50%; background:var(--green); box-shadow:0 0 8px var(--green); animation:sharePulse 1.8s ease-in-out infinite }
+  .share-peer-tag { margin-left:auto; font-size:10.5px; text-transform:uppercase; letter-spacing:.04em; color:var(--txt-3); background:var(--bg-0); border:1px solid var(--line); border-radius:5px; padding:1px 6px }
+  .share-peers { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:5px }
+  .share-peer { display:flex; align-items:center; gap:8px; font-size:12.5px; background:var(--bg-2); border-radius:7px; padding:6px 9px }
+  .share-peer-dot { width:7px; height:7px; border-radius:50%; background:var(--cyan); flex:none }
+
+  /* ── the dock (copied from styles.css P-SHARE.1) ── */
+  .share-dock{position:fixed;z-index:55;display:flex;flex-direction:column;min-width:296px;min-height:200px;
+    background:var(--bg-1);border:1px solid var(--line);border-radius:12px;overflow:hidden;
+    box-shadow:0 18px 48px rgba(0,0,0,.5),0 2px 0 rgba(255,255,255,.02) inset;animation:fade .12s ease}
+  .share-dock.snap-right{border-right-width:2px;border-right-color:var(--accent)}
+  .share-dock-head{display:flex;align-items:center;gap:8px;padding:8px 8px 8px 11px;border-bottom:1px solid var(--line-soft);
+    background:var(--bg-2);cursor:grab;flex:none;user-select:none}
+  .share-dock-grip{display:inline-flex;color:var(--accent-2)}
+  .share-dock-title{flex:1;font-size:12.5px;font-weight:700;color:var(--txt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .share-dock-updating{display:inline-flex;align-items:center;gap:4px;flex:none;font-size:10px;font-weight:600;color:var(--txt-4);white-space:nowrap}
+  .share-dock-updating[hidden]{display:none}
+  .share-dock-updating .ic{color:var(--accent-2);animation:cfgspin .7s linear infinite}
+  @keyframes cfgspin{to{transform:rotate(360deg)}}
+  .share-dock-count{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;font-weight:700;color:var(--txt-2);
+    background:var(--bg-0);border:1px solid var(--line);border-radius:20px;padding:2px 9px;cursor:pointer}
+  .sd-live-dot{width:8px;height:8px;border-radius:50%;background:var(--txt-4);flex:none}
+  .sd-live-dot.on{background:var(--green);box-shadow:0 0 7px var(--green);animation:sharePulse 1.8s ease-in-out infinite}
+  .share-dock-btn{display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;flex:none;
+    border-radius:7px;color:var(--txt-3);background:transparent;cursor:pointer;border:0}
+  .share-dock-btn:hover{background:var(--bg-0);color:var(--txt)}
+  .share-dock-people{position:absolute;top:42px;right:8px;left:8px;z-index:2;max-height:200px;overflow:auto;
+    background:var(--bg-0);border:1px solid var(--line);border-radius:9px;padding:6px;display:flex;flex-direction:column;gap:4px;
+    box-shadow:0 12px 28px rgba(0,0,0,.5)}
+  .sd-person{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--txt);padding:5px 7px;border-radius:6px}
+  .sd-person-dot{width:7px;height:7px;border-radius:50%;background:var(--cyan);flex:none}
+  .sd-person-dot.edit{background:var(--green)}
+  .sd-person-email{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .share-dock-body{flex:1;min-height:0;overflow:auto;padding:10px 12px}
+  .dock-sec{border:1px solid var(--line);border-radius:9px;margin-bottom:8px;background:var(--bg-2);overflow:hidden}
+  .dock-sec>summary.dock-sec-h{display:flex;align-items:center;gap:7px;padding:9px 11px;cursor:pointer;list-style:none;
+    font-size:12px;font-weight:600;color:var(--txt-2);user-select:none}
+  .dock-sec>summary.dock-sec-h::-webkit-details-marker{display:none}
+  .dock-sec-h .ic{color:var(--txt-3);transition:transform .15s ease;flex:none}
+  .dock-sec[open]>summary.dock-sec-h .ic{transform:rotate(90deg)}
+  .dock-sec-t{flex:1}
+  .dock-sec-b{padding:2px 11px 11px}
+  .dock-foot{display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap;padding-top:6px;margin-bottom:8px}
+  .share-serve-select{width:100%}
+  .share-serve-hint{font-size:11.5px;line-height:1.5;color:var(--txt-3);margin:7px 0 0}
+  .share-reconn-status{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--txt-2);margin:8px 0 2px}
+  .share-dock-cta{flex:none;padding:8px 12px;border-top:1px solid var(--line-soft);text-align:center;background:var(--bg-1)}
+  .share-dock-cta .btn-mini{color:var(--txt-2)}
+  .share-dock-rz{position:absolute;z-index:3}
+  .share-dock-rz.se{right:0;bottom:0;width:15px;height:15px;cursor:nwse-resize}
+  .share-dock-rz.se::after{content:"";position:absolute;right:3px;bottom:3px;width:7px;height:7px;
+    border-right:2px solid var(--txt-4);border-bottom:2px solid var(--txt-4);border-bottom-right-radius:2px}
+  .share-dock-pill{position:fixed;right:14px;bottom:38px;z-index:55;display:inline-flex;align-items:center;gap:7px;
+    padding:7px 12px;border-radius:22px;background:var(--bg-2);border:1px solid var(--line);color:var(--txt);
+    font-size:12px;font-weight:700;cursor:pointer;box-shadow:0 10px 26px rgba(0,0,0,.45)}
+  .share-dock-pill .sd-up{color:var(--accent-2)}
+  /* mockup only: place the two example docks */
+  #liveDock{left:calc(100vw - 392px);top:60px;width:372px;height:560px}
+  #readyDock{left:70px;top:70px;width:372px;height:520px}
+</style></head>
+<body>
+  <div class="fauxrail"></div><div class="fauxbar"></div>
+
+  <!-- LIVE state, right-snapped, people dropdown open -->
+  <div id="liveDock" class="share-dock snap-right" role="dialog" aria-label="Session Share">
+    <div class="share-dock-head">
+      <span class="share-dock-grip"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="M8.6 13.5l6.8 4M15.4 6.5l-6.8 4"/></svg></span>
+      <span class="share-dock-title">Session Share</span>
+      <button class="share-dock-count"><span class="sd-live-dot on"></span><span>3</span></button>
+      <button class="share-dock-btn"><svg class="sd-up" viewBox="0 0 24 24" width="13" height="13"><path d="M12 8l-6 7h12z" fill="currentColor"/></svg></button>
+      <button class="share-dock-btn"><svg width="15" height="15" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+    </div>
+    <div class="share-dock-people">
+      <div class="sd-person"><span class="sd-person-dot edit"></span><span class="sd-person-email">nicholas.chadwick.ctr@gmail.com</span><span class="share-peer-tag">edit</span></div>
+      <div class="sd-person"><span class="sd-person-dot"></span><span class="sd-person-email">dana@team.io</span><span class="share-peer-tag">view</span></div>
+      <div class="sd-person"><span class="sd-person-dot"></span><span class="sd-person-email">phone</span><span class="share-peer-tag">view</span></div>
+    </div>
+    <div class="share-dock-body">
+      <div class="share-live-head"><span class="share-live-dot"></span> Live · relay.aiworkshopapps.com <span class="share-peer-tag" style="margin-left:6px">can edit</span></div>
+      <details class="dock-sec" open><summary class="dock-sec-h"><svg class="ic" width="12" height="12" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" fill="none"><path d="M9 6l6 6-6 6"/></svg><span class="dock-sec-t">Edit invite link + QR</span></summary>
+        <div class="dock-sec-b">
+          <label class="share-lbl">Edit invite link (guest can drive)</label>
+          <div class="share-linkrow"><input class="share-link-input" readonly value="https://lucid-agent.web.app/remote/#a1b2.k3y…" /><button class="btn-mini">Copy</button></div>
+          <div class="share-qr">QR</div>
+          <p class="share-hint">Send this to someone running LUCID. They can DRIVE this session — every prompt runs here, through your approvals + gate.</p>
+        </div></details>
+      <details class="dock-sec" open><summary class="dock-sec-h"><svg class="ic" width="12" height="12" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" fill="none"><path d="M9 6l6 6-6 6"/></svg><span class="dock-sec-t">Participants</span></summary>
+        <div class="dock-sec-b"><ul class="share-peers">
+          <li class="share-peer"><span class="share-peer-dot"></span>nicholas.chadwick.ctr@gmail.com<span class="share-peer-tag">edit</span></li>
+          <li class="share-peer"><span class="share-peer-dot"></span>dana@team.io<span class="share-peer-tag">view</span></li>
+          <li class="share-peer"><span class="share-peer-dot"></span>phone<span class="share-peer-tag">view</span></li>
+        </ul></div></details>
+      <div class="dock-foot"><button class="btn-mini danger">Stop sharing</button></div>
+    </div>
+    <div class="share-dock-cta"><button class="btn-mini">Join someone else's session</button></div>
+    <div class="share-dock-rz se"></div>
+  </div>
+
+  <!-- READY state, floating, sections collapsed (chevron). P-SHARE.2: routable-first address list, the
+       "updating" chip (cold-boot cache paint), and consistent spacing below the button row. -->
+  <div id="readyDock" class="share-dock" role="dialog" aria-label="Session Share">
+    <div class="share-dock-head">
+      <span class="share-dock-grip"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="M8.6 13.5l6.8 4M15.4 6.5l-6.8 4"/></svg></span>
+      <span class="share-dock-title">Session Share</span>
+      <span class="share-dock-updating"><svg class="ic" width="11" height="11" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" fill="none"><path d="M21 12a9 9 0 1 1-3-6.7M21 4v4h-4"/></svg> updating&hellip;</span>
+      <button class="share-dock-count"><span class="sd-live-dot"></span><span>0</span></button>
+      <button class="share-dock-btn"><svg class="sd-up" viewBox="0 0 24 24" width="13" height="13"><path d="M12 8l-6 7h12z" fill="currentColor"/></svg></button>
+      <button class="share-dock-btn"><svg width="15" height="15" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+    </div>
+    <div class="share-dock-body">
+      <details class="dock-sec"><summary class="dock-sec-h"><svg class="ic" width="12" height="12" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" fill="none"><path d="M9 6l6 6-6 6"/></svg><span class="dock-sec-t">Host the relay here</span></summary>
+        <div class="dock-sec-b">
+          <label class="share-lbl">Reachable at</label>
+          <select class="share-link-input share-serve-select">
+            <option>192.168.254.123 &mdash; your LAN (reachable on this network)</option>
+            <option>fe80::4cee:e2c8:bf69:cb0f &mdash; your LAN (reachable on this network)</option>
+            <option>127.0.0.1 &mdash; this machine only</option>
+            <option>::1 &mdash; this machine only</option>
+            <option>Custom address&hellip;</option>
+          </select>
+          <p class="share-serve-hint">Defaults to a <b>LAN</b>/<b>VPN</b> address so a peer on your network reaches you directly; loopback (bottom) reaches only this machine.</p>
+        </div></details>
+      <details class="dock-sec"><summary class="dock-sec-h"><svg class="ic" width="12" height="12" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" fill="none"><path d="M9 6l6 6-6 6"/></svg><span class="dock-sec-t">Relay</span></summary><div class="dock-sec-b"></div></details>
+      <details class="dock-sec" open><summary class="dock-sec-h"><svg class="ic" width="12" height="12" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" fill="none"><path d="M9 6l6 6-6 6"/></svg><span class="dock-sec-t">Sharing options</span></summary>
+        <div class="dock-sec-b">
+          <label style="display:flex;gap:9px;font-size:12px;color:var(--txt-2);line-height:1.5"><input type="checkbox" /><span><b>Let a guest drive this session</b> — their prompts run through your approvals.</span></label>
+        </div></details>
+      <div class="dock-foot"><button class="btn-mini">Change relay</button><button class="btn-mini ok">Start sharing</button></div>
+      <details class="dock-sec"><summary class="dock-sec-h"><svg class="ic" width="12" height="12" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" fill="none"><path d="M9 6l6 6-6 6"/></svg><span class="dock-sec-t">Reconnect (Google Drive)</span></summary><div class="dock-sec-b"></div></details>
+    </div>
+    <div class="share-dock-cta"><button class="btn-mini">Join someone else's session</button></div>
+    <div class="share-dock-rz se"></div>
+  </div>
+
+  <!-- minimized pill (bottom-right, near the trivia wire) -->
+  <button class="share-dock-pill"><span class="sd-live-dot on"></span><span class="sd-pill-n">3</span><svg class="sd-up" viewBox="0 0 24 24" width="13" height="13"><path d="M12 8l-6 7h12z" fill="currentColor"/></svg></button>
+</body></html>

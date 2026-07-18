@@ -10,7 +10,7 @@
 // Manager + a private Storage bucket), so shipping these in the app leaks nothing (the same way KG_PACKS_URL is
 // already hardcoded in the renderer). This module is pure + testable; the preload exposes its result.
 
-export interface MarketBootConfig { mode?: "firebase" | "stub" | "off"; functionsBaseUrl?: string; signInUrl?: string }
+export interface MarketBootConfig { mode?: "firebase" | "stub" | "off"; functionsBaseUrl?: string; signInUrl?: string; firebaseApiKey?: string }
 
 // First-party defaults: the deployed `lucid-agent` Cloud Functions base + the hosted sign-in page that bounces
 // back to `lucid://auth?token=...` (captured by the Electron main deep-link handler).
@@ -32,5 +32,9 @@ export function marketBootConfig(env: Record<string, string | undefined> = proce
     mode: "firebase",
     functionsBaseUrl: (env.LUCID_MARKET_FUNCTIONS_URL || DEFAULT_FUNCTIONS_URL).replace(/\/+$/, ""),
     signInUrl: env.LUCID_MARKET_SIGNIN_URL || DEFAULT_SIGNIN_URL,
+    // P-REMOTE.2c: the PUBLIC Firebase web apiKey lets the renderer silently renew the ID token (securetoken
+    // refresh) for the gated relay past +1h. Public by design (identifies the project, not a credential);
+    // absent -> fail-closed to no-refresh (re-sign-in needed). Set via LUCID_FIREBASE_API_KEY for a provisioned build.
+    firebaseApiKey: env.LUCID_FIREBASE_API_KEY || undefined,
   };
 }

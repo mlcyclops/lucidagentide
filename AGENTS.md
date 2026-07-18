@@ -38,6 +38,14 @@ through hooks, custom tools, and its SDK. See DECISIONS.md ADR-0001.
 
 -----
 
+## Writing style
+
+- **Never use em dashes** (the long dash, Unicode U+2014). Use commas, periods,
+  colons, or hyphens instead. This applies everywhere: code, comments, UI strings,
+  commit messages, ADRs, and PROGRESS.md.
+
+-----
+
 ## Invariants (do not violate)
 
 ### 1. Extend omp; never fork it.

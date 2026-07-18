@@ -15,13 +15,15 @@
 // with guest-write OFF, so every guest - even one holding the full link - is read-only.
 
 import { CollabHost, type HostTransport } from "./host.ts";
-import { generateRoomId, formatShareLink, formatBrowserLink, formatRelayLink } from "./link.ts";
+import { generateRoomId, mintRoomLinks } from "./link.ts"; // P-COLLAB.19 (ADR-0241): one room, two capabilities
 import { generateRoomKey, generateWriteToken, importRoomKey } from "./crypto.ts";
 import type { ChatEvent } from "../renderer/chat_events.ts";
-import type { CollabParticipant } from "./frames.ts";
+import type { CollabOptions, CollabParticipant } from "./frames.ts";
 
-/** An authorized relay endpoint: `wsBase` is the origin (no path); `httpBase` its http(s) form for links. */
-export interface RelayTarget { wsBase: string; httpBase: string; label: string; source: string }
+/** An authorized relay endpoint: `wsBase` is the origin (no path); `httpBase` its http(s) form for links.
+ *  `pwaBase` (P-REMOTE.2b): when set (the hosted rendezvous), the browser invite points at the phone PWA
+ *  (`<pwaBase>/#<roomId>.<secret>`) instead of the relay host, so scanning it on a phone opens the PWA. */
+export interface RelayTarget { wsBase: string; httpBase: string; label: string; source: string; pwaBase?: string }
 
 export interface CollabManagerDeps {
   /** Resolve + authorize the relay, or null to REFUSE the share (fail-closed). */
@@ -32,12 +34,20 @@ export interface CollabManagerDeps {
   makeTransport(opts: { wsUrl: string; key: CryptoKey }): HostTransport;
   /** Injected clock (the workflow/test host forbids Date.now()); UNIX ms. */
   now(): number;
-  /** P-COLLAB.12: run an EDIT guest's prompt in the host's session (through the host's fail-closed gate). */
-  onGuestPrompt?: (text: string, guest: CollabParticipant) => void;
+  /** P-COLLAB.12: run an EDIT guest's prompt in the host's session (through the host's fail-closed gate).
+   *  P-REMOTE.8: `images` (validated data URLs) ride along as vision input, staged into the host composer. */
+  onGuestPrompt?: (text: string, guest: CollabParticipant, images?: string[]) => void;
   /** P-COLLAB.12: an EDIT guest asked to stop the in-flight turn. */
   onGuestAbort?: (guest: CollabParticipant) => void;
   /** P-COLLAB.18 (ADR-0204): a guest joined/left the hosted share (host-authoritative audit hook). */
   onParticipant?: (kind: "join" | "leave", guest: CollabParticipant) => void;
+  /** P-COLLAB.14: the pickable model + already-used-folder allowlists to offer EDIT guests, or null for none.
+   *  Re-read on every share start + `refreshOptions()` (so a local or guest switch re-broadcasts the update). */
+  collabOptions?: () => CollabOptions | null;
+  /** P-COLLAB.14: an EDIT guest picked a model (already re-validated host-side against `collabOptions`). */
+  onGuestSetModel?: (value: string, guest: CollabParticipant) => void;
+  /** P-COLLAB.14: an EDIT guest picked an already-used folder by its OPAQUE id (validated host-side). */
+  onGuestSetWorkspace?: (id: string, guest: CollabParticipant) => void;
 }
 
 export interface ShareStatus {
@@ -47,8 +57,10 @@ export interface ShareStatus {
   fullLink?: string;
   /** The view (read-only) link — the default thing to share in Phase 1. */
   viewLink?: string;
-  /** The browser deep link wrapping the VIEW link (secret rides the fragment). */
+  /** The browser deep link a phone opens: EDIT-capable when the share allows editing, else view-only. */
   browserLink?: string;
+  /** P-COLLAB.19: the always-VIEW-ONLY browser/phone link - hand it to watch-only guests on an edit share. */
+  browserViewLink?: string;
   relayLabel?: string;
   relaySource?: string;
   startedAt?: number;
@@ -64,7 +76,7 @@ export class CollabManager {
   readonly #deps: CollabManagerDeps;
   #host: CollabHost | null = null;
   #allowEdit = false;
-  #room: { roomId: string; fullLink: string; viewLink: string; browserLink: string; label: string; source: string; startedAt: number } | null = null;
+  #room: { roomId: string; fullLink: string; viewLink: string; browserLink: string; browserViewLink: string; label: string; source: string; startedAt: number } | null = null;
 
   constructor(deps: CollabManagerDeps) {
     this.#deps = deps;
@@ -103,16 +115,21 @@ export class CollabManager {
       onGuestPrompt: this.#deps.onGuestPrompt,
       onGuestAbort: this.#deps.onGuestAbort,
       onParticipant: this.#deps.onParticipant,
+      // P-COLLAB.14: offer EDIT guests the model + already-used-folder allowlists, and honor their picks.
+      options: this.#deps.collabOptions?.() ?? null,
+      onGuestSetModel: this.#deps.onGuestSetModel,
+      onGuestSetWorkspace: this.#deps.onGuestSetWorkspace,
     });
     this.#host.start();
     this.#allowEdit = allowEdit;
 
     // P-COLLAB.10: the shared links CARRY the relay endpoint (`<wss://relay>/r/roomId.secret`), so a guest who
     // pastes one knows WHERE to connect without any extra config.
-    const fullLink = formatRelayLink(relay.wsBase, roomId, rawKey, token);
-    const viewLink = formatRelayLink(relay.wsBase, roomId, rawKey);
-    const browserLink = formatBrowserLink(relay.httpBase, formatShareLink(roomId, rawKey));
-    this.#room = { roomId, fullLink, viewLink, browserLink, label: relay.label, source: relay.source, startedAt };
+    // P-REMOTE.2b + P-COLLAB.19 (ADR-0241): mint EVERY link form for the one room - the full link drives, the
+    // view link watches, and each has a phone/browser twin - so a host hands DIFFERENT links to different
+    // guests. The write token discriminates per guest; allowEdit still gates writes host-side (fail-closed).
+    const links = mintRoomLinks({ wsBase: relay.wsBase, httpBase: relay.httpBase, ...(relay.pwaBase ? { pwaBase: relay.pwaBase } : {}) }, roomId, rawKey, token, allowEdit);
+    this.#room = { roomId, ...links, label: relay.label, source: relay.source, startedAt };
     return this.status();
   }
 
@@ -130,9 +147,17 @@ export class CollabManager {
     this.#host?.pushEvent(event);
   }
 
-  /** Record a local user prompt into the replay transcript, if active. */
-  tapUserTurn(text: string): void {
-    this.#host?.pushUserTurn(text);
+  /** Record a user prompt into the replay transcript + broadcast it LIVE to guests (P-COLLAB.15), if active.
+   *  `from` = the author's display name (a guest's name for a guest-driven turn; omitted -> the host). */
+  tapUserTurn(text: string, from?: string): void {
+    this.#host?.pushUserTurn(text, from);
+  }
+
+  /** P-COLLAB.14: re-read the model + already-used-folder allowlists and push them to the host, which
+   *  rebroadcasts `state` + fresh `options` to edit guests. Call after ANY model/workspace switch (local or
+   *  guest-driven) so every edit guest's pickers reflect the live selection. No-op when not sharing. */
+  refreshOptions(): void {
+    this.#host?.setOptions(this.#deps.collabOptions?.() ?? null);
   }
 
   status(): ShareStatus {
@@ -143,6 +168,7 @@ export class CollabManager {
       fullLink: this.#room.fullLink,
       viewLink: this.#room.viewLink,
       browserLink: this.#room.browserLink,
+      browserViewLink: this.#room.browserViewLink,
       relayLabel: this.#room.label,
       relaySource: this.#room.source,
       startedAt: this.#room.startedAt,

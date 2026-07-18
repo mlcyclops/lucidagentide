@@ -20,6 +20,7 @@
 
 import type { ChatEvent } from "../renderer/chat_events.ts";
 import type {
+  CollabOptions,
   CollabParticipant,
   CollabSessionHeader,
   CollabTranscriptTurn,
@@ -53,10 +54,21 @@ export interface HostStartOpts {
   /** Cap on replayed transcript turns in `welcome` (keeps a big session's welcome bounded). */
   transcriptLimit?: number;
   /** P-COLLAB.12: an EDIT guest sent a prompt to run in the host's session. The host wires this to its own
-   *  prompt path, so the turn passes the SAME scan gate + exec/egress approvals as a local prompt. */
-  onGuestPrompt?: (text: string, guest: CollabParticipant) => void;
+   *  prompt path, so the turn passes the SAME scan gate + exec/egress approvals as a local prompt.
+   *  P-REMOTE.8: `images` (validated data URLs) ride along as vision input, staged into the host composer. */
+  onGuestPrompt?: (text: string, guest: CollabParticipant, images?: string[]) => void;
   /** P-COLLAB.12: an EDIT guest asked to stop the in-flight turn. */
   onGuestAbort?: (guest: CollabParticipant) => void;
+  /** P-COLLAB.14: the pickable model + already-used-folder allowlists offered to EDIT guests (unicast on
+   *  join, rebroadcast on `setOptions`). null = none offered (no pickers appear). */
+  options?: CollabOptions | null;
+  /** P-COLLAB.14: an EDIT guest picked a model from `options.models`. The host has already re-validated the
+   *  value is in the allowlist; wire this to the host's own model-switch path (its UI + omp reconcile). */
+  onGuestSetModel?: (value: string, guest: CollabParticipant) => void;
+  /** P-COLLAB.14: an EDIT guest picked an already-used folder by its OPAQUE id (validated against
+   *  `options.workspaces`). Wire this to the host's own workspace-switch path (resolves id->path locally +
+   *  restarts the agent in the new cwd). */
+  onGuestSetWorkspace?: (id: string, guest: CollabParticipant) => void;
   /** P-COLLAB.18 (ADR-0204): a guest joined ("join", on its `hello`) or left ("leave", on relay peer-left).
    *  Host-authoritative audit hook — the caller records a metadata-only telemetry event. */
   onParticipant?: (kind: "join" | "leave", guest: CollabParticipant) => void;
@@ -72,9 +84,12 @@ export class CollabHost {
   #writeTokenB64: string | null;
   #allowGuestWrite: boolean;
   #transcriptLimit: number;
-  #onGuestPrompt?: (text: string, guest: CollabParticipant) => void;
+  #onGuestPrompt?: (text: string, guest: CollabParticipant, images?: string[]) => void;
   #onGuestAbort?: (guest: CollabParticipant) => void;
   #onParticipant?: (kind: "join" | "leave", guest: CollabParticipant) => void;
+  #onGuestSetModel?: (value: string, guest: CollabParticipant) => void;
+  #onGuestSetWorkspace?: (id: string, guest: CollabParticipant) => void;
+  #options: CollabOptions | null;
 
   #participants = new Map<number, CollabParticipant>();
   #transcript: CollabTranscriptTurn[] = [];
@@ -92,6 +107,9 @@ export class CollabHost {
     this.#onGuestPrompt = opts.onGuestPrompt;
     this.#onGuestAbort = opts.onGuestAbort;
     this.#onParticipant = opts.onParticipant;
+    this.#onGuestSetModel = opts.onGuestSetModel;
+    this.#onGuestSetWorkspace = opts.onGuestSetWorkspace;
+    this.#options = opts.options ?? null;
   }
 
   /** Wire the transport callbacks and open the relay connection. */
@@ -110,9 +128,31 @@ export class CollabHost {
     return this.#participants.size;
   }
 
-  /** Record a user prompt into the replay transcript (call when the local user sends a turn). */
-  pushUserTurn(text: string): void {
-    this.#appendTranscript({ role: "user", text: clip(text) });
+  /** Record a user prompt into the replay transcript AND broadcast it LIVE (P-COLLAB.15) so every joined guest
+   *  sees who typed what, in order. `from` is the author's display name (default: the host's own name). */
+  pushUserTurn(text: string, from?: string): void {
+    const clipped = clip(text);
+    this.#appendTranscript({ role: "user", text: clipped });
+    if (this.#stopped) return;
+    this.#broadcast({ t: "user-turn", text: clipped, from: (from || this.#header.hostName || "host") });
+  }
+
+  /** P-COLLAB.14: refresh the pickable model + already-used-folder allowlists (call when the host switches
+   *  either, by a guest or locally). Updates the reported model + header, then rebroadcasts `state` to everyone
+   *  and unicasts the fresh `options` to each EDIT guest (a view guest never receives folder/model lists).
+   *  No-op once stopped. */
+  setOptions(options: CollabOptions | null): void {
+    if (this.#stopped) return;
+    this.#options = options;
+    if (options?.activeModel) {
+      this.#model = options.activeModel;
+      this.#header = { ...this.#header, model: options.activeModel };
+    }
+    this.#broadcastState();
+    if (!options) return;
+    for (const g of this.#participants.values()) {
+      if (g.access === "edit") this.#transport.send({ t: "options", options }, g.peerId);
+    }
   }
 
   /**
@@ -146,22 +186,42 @@ export class CollabHost {
     if (!isGuestFrame(frame)) return; // a host must never receive a host frame; ignore
     const guest = frame as GuestFrame;
     if (guest.t === "hello") { this.#onHello(guest, fromPeer); return; }
-    if (guest.t === "prompt" || guest.t === "abort") this.#onGuestWrite(guest, fromPeer);
+    this.#onGuestWrite(guest, fromPeer); // prompt / abort / set-model / set-workspace (edit-gated + validated)
   }
 
   /** P-COLLAB.12: a guest prompt/abort. Fail-closed: only a registered EDIT guest may drive the host; anyone
    *  else (view-only, or an unknown peer) is refused with an `error` frame and never reaches the host session. */
-  #onGuestWrite(frame: { t: "prompt"; text: string } | { t: "abort" }, fromPeer: number): void {
+  #onGuestWrite(frame: Exclude<GuestFrame, HelloFrame>, fromPeer: number): void {
     const guest = this.#participants.get(fromPeer);
     if (!guest || guest.access !== "edit") {
       this.#transport.send({ t: "error", message: "you are watching read-only - the host shared a view link" }, fromPeer);
       return;
     }
-    if (frame.t === "prompt") {
-      const text = (frame.text ?? "").toString();
-      if (text.trim()) this.#onGuestPrompt?.(text, guest);
-    } else {
-      this.#onGuestAbort?.(guest);
+    switch (frame.t) {
+      case "prompt": {
+        const text = (frame.text ?? "").toString();
+        // P-REMOTE.8: pass through any attached image data URLs; the host re-validates them fail-closed.
+        const images = Array.isArray(frame.images) ? frame.images.filter((s): s is string => typeof s === "string") : undefined;
+        if (text.trim() || (images && images.length)) this.#onGuestPrompt?.(text, guest, images);
+        return;
+      }
+      case "abort":
+        this.#onGuestAbort?.(guest);
+        return;
+      case "set-model": {
+        // P-COLLAB.14 fail-closed: only a model the host actually offered may be applied - never an arbitrary id.
+        const value = (frame.value ?? "").toString();
+        if (this.#options?.models.some((m) => m.value === value)) this.#onGuestSetModel?.(value, guest);
+        else this.#transport.send({ t: "error", message: "that model isn't available in this session" }, fromPeer);
+        return;
+      }
+      case "set-workspace": {
+        // P-COLLAB.14 fail-closed: only a folder id the host offered may be applied; it resolves id->path locally.
+        const id = (frame.id ?? "").toString();
+        if (this.#options?.workspaces.some((w) => w.id === id)) this.#onGuestSetWorkspace?.(id, guest);
+        else this.#transport.send({ t: "error", message: "that folder isn't available in this session" }, fromPeer);
+        return;
+      }
     }
   }
 
@@ -198,6 +258,9 @@ export class CollabHost {
       fromPeer,
     );
     this.#broadcastState();
+    // P-COLLAB.14: an EDIT guest also gets the pickable model + already-used-folder allowlists (unicast). A
+    // view guest never does, so it never learns the host's other project names.
+    if (canWrite && this.#options) this.#transport.send({ t: "options", options: this.#options }, fromPeer);
   }
 
   #onControl(msg: RelayControlMessage): void {

@@ -112,7 +112,10 @@ export default function previewExtension(pi: any): void {
         "Read the LIVE DOM of the current in-app preview to review your work: the page's text, headings, and " +
         "controls (buttons/links/inputs), OR specific elements by CSS `selector`, OR captured console `errors`. " +
         "Read-only — you cannot click/type/run JS here (yet). Open a preview first (write an .html/.svg or call " +
-        "preview_open). This is the way to check your rendered UI instead of a browser or bash/eval (gated).",
+        "preview_open). This is the way to check your rendered UI instead of a browser or bash/eval (gated). " +
+        "The result includes the current `viewport`: the user can review the preview at device sizes (phone " +
+        "portrait/landscape, tablet landscape) via the phone icon in the preview toolbar — if you're building a " +
+        "PWA or a mobile/responsive layout, note that and design/verify for those viewports.",
       approval: "read",
       parameters: T.Object({
         selector: T.Optional(T.String({ description: "Optional CSS selector — return details of matching elements (tag/text/id/role/rect)" })),

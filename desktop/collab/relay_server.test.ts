@@ -113,3 +113,34 @@ describe("embedded relay server (P-COLLAB.5) over real localhost sockets", () =>
     expect(closes[0]).toBe("a host is already connected for this room");
   });
 });
+
+describe("P-REMOTE.4a: the stale-invite fallback redirect at /", () => {
+  it("serves a fragment-forwarding page when pwaRedirectBase is set", async () => {
+    relay = startRelayServer({ port: 0, pwaRedirectBase: "https://lucid-agent.web.app/remote/" });
+    const res = await fetch(`http://127.0.0.1:${relay.port}/`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("text/html");
+    const html = await res.text();
+    // the trailing slash is trimmed and the base is embedded for the client-side location.hash forward
+    expect(html).toContain('"https://lucid-agent.web.app/remote"');
+    expect(html).toContain("location.hash");
+    expect(html).toContain("location.replace");
+  });
+
+  it("does NOT hijack /healthz or /r/<room> when pwaRedirectBase is set", async () => {
+    relay = startRelayServer({ port: 0, pwaRedirectBase: "https://lucid-agent.web.app/remote" });
+    const health = await fetch(`http://127.0.0.1:${relay.port}/healthz`);
+    expect(health.status).toBe(200);
+    expect(await health.json()).toMatchObject({ ok: true, service: "lucid-collab-relay" });
+    // a room path without a websocket upgrade still asks for the upgrade (426), never the redirect page
+    const roomRes = await fetch(`http://127.0.0.1:${relay.port}/r/abc?role=host`);
+    expect(roomRes.status).toBe(426);
+  });
+
+  it("leaves / as a 404 when pwaRedirectBase is unset (OSS / self-hosted default)", async () => {
+    relay = startRelayServer({ port: 0 });
+    const res = await fetch(`http://127.0.0.1:${relay.port}/`);
+    expect(res.status).toBe(404);
+    expect(await res.text()).toBe("not a relay room");
+  });
+});

@@ -64,5 +64,21 @@ export function transcriptSig(msgs: CachedMsg[]): string {
   return `${msgs.length}:${msgs.map((m) => `${m.role[0] ?? "?"}${m.text.length}`).join(",")}`;
 }
 
+// -- discovered skills list (P-SKILL.6, ADR-0243) --
+// The /api/skills directory scan (names/descriptions/roots/trust labels) is metadata ALREADY plaintext on disk
+// (the .md skill files + the governance state), so caching it for an instant Skills-panel paint is safe at rest
+// exactly like the session list + transcripts above. SWR: painted immediately on open, revalidated right after.
+const SKILLS_KEY = "lucid.skills";
+export function cachedSkills<T>(): T | null { return cacheGet<T>(SKILLS_KEY); }
+export function setCachedSkills(data: unknown): void { cacheSet(SKILLS_KEY, data); }
+
+// -- Session Share dock snapshot (P-SHARE.2, ADR-0234) --
+const SHARE_SNAPSHOT_KEY = "lucid.shareDock.snapshot";
+/** The secret-free Share-dock snapshot (see share_dock.ts `redactShareSnapshot`) painted INSTANTLY on open so
+ *  a cold-boot dock is never a blank "Loading". revalidates right after. Never holds an invite link / room id /
+ *  TURN credential, so it is safe at rest exactly like the session list + transcripts above. */
+export function cachedShareSnapshot<T>(): T | null { return cacheGet<T>(SHARE_SNAPSHOT_KEY); }
+export function setCachedShareSnapshot(data: unknown): void { cacheSet(SHARE_SNAPSHOT_KEY, data); }
+
 // Test-only: reset the in-memory fallback store between cases.
 export function __resetCache(): void { mem = null; }

@@ -15,7 +15,7 @@ import { aiLocHasData } from "../ailoc_view.ts";
 import { PREVIEW_ALLOW, PREVIEW_SANDBOX, canPreviewRemote, resolvePreview } from "../preview_resolve.ts";
 import { roleIcon } from "./role_icons.ts";
 import { providerHasApiKey, providerKeywords } from "./budget_gate.ts";
-import { cachedSessions, cachedTranscript, setCachedSessions, setCachedTranscript, transcriptSig } from "./swr_cache.ts";
+import { cachedSessions, cachedShareSnapshot, cachedSkills, cachedTranscript, setCachedSessions, setCachedShareSnapshot, setCachedSkills, setCachedTranscript, transcriptSig } from "./swr_cache.ts";
 import { $, $$, accordion, el, fmtNum, gauge, spark, table, type Col } from "./dom.ts";
 import { freshFindings, splitReviewed } from "./sec_review.ts"; // P-SECACK.1 (ADR-0170): reviewed rows leave the active view
 import { installTextContextMenu } from "./ctxmenu.ts"; // P-SECACK.1 (ADR-0170): right-click clipboard menu
@@ -32,17 +32,20 @@ import { MARKET_PLUGINS, marketplaceHtml, marketRowsHtml } from "./marketplace.t
 import { KG_PACKS, kgPacksHtml, kgPackRowsHtml, type KgPack } from "./kg_packs.ts"; // P-KGPACK.5 (ADR-0205)
 import { getMarketProvider } from "./market_gate.ts"; // P-KGMARKET.1 (ADR-0206)
 import { decidePackAction } from "../../harness/market/entitlement.ts"; // P-KGMARKET.1 (ADR-0206)
-import { initMarket, beginSignIn, handleAuthCallback, readMarketBootConfig } from "./market_boot.ts"; // P-KGMARKET.4 (ADR-0206)
+import { initMarket, beginSignIn, beginDriveSignIn, freshDriveToken, handleAuthCallback, readMarketBootConfig, marketFreshCredential, marketUser, marketSignOut } from "./market_boot.ts"; // P-KGMARKET.4 (ADR-0206) + P-REMOTE.2c relay-token push + P-REMOTE.10b drive reconnect
+import { chooseReconnectLink, buildCode, appendCode, buildFileContent, readFileContent, RELAY_FILE_NAME } from "../collab/drive_relay_codes.ts"; // P-REMOTE.10b (ADR-0233): Drive reconnect codes
+import { findRelayFile, createRelayFile, readRelayFile, updateRelayFile, shareRelayFile } from "../collab/drive_file.ts";
 import { toolfailGroupHtml, type ToolFailEntry } from "./toolfail_group.ts"; // P-TOOLFAIL.2 (ADR-0163)
 import { APP_VERSION } from "../version.ts";
 import { renderMarkdown } from "./markdown.ts";
 import { type GraphHandle, kindLabel, mountGraph } from "./graph.ts";
+import { qrSvg } from "../collab/qr.ts"; // P-REMOTE.4a (ADR-0226/0227): scannable QR of the invite link
 import { addEdgeOptimistic, applyForget, chainPairs, matchNodes, removeEdgeOptimistic, resolveRelationLabel } from "./kg_ops.ts";
 import { capGraph, graphOpts, pollDelay, watchPerfTier } from "./perf_tier.ts";
 import { kgDataMenuHtml, kgPickerHtml, kgPickerRowsHtml, kgViewActive, kgViewLabel, kgViewsMenuHtml, type KgListItem } from "./kg_header.ts"; // P-KGUI.1/.2 (ADR-0184/0185) + P-KGPACK.2 (ADR-0205)
 import { TURN_PATIENCE_MS, slowPhaseLabel, slowToastCopy } from "./stall_notice.ts"; // P-STALL.1 (ADR-0186)
 import { guardBlockedHtml, resourcePanelBodyHtml, resourcePanelHtml, type SystemStatusView } from "./system_guard.ts"; // P-SYSRES.1 (ADR-0182)
-import type { KbGraphView, PersonalGraphData } from "./bridge.ts";
+import type { CollabP2PConfig, CollabRelay, CollabRelayServeStatus, KbGraphView, PersonalGraphData } from "./bridge.ts";
 import { agentBuilderPanelHtml, specToGraphData, nodeEditorHtml, saveErrors, newCanvasSpec, runPanelHtml, secretsPanelHtml, agentInterviewPrompt, toolChipsHtml, trustBannerHtml, runApprovalHtml, runsPanelHtml, traceDetailHtml, schedulePanelHtml, historyPanelHtml, templatesPanelHtml } from "./agent_builder.ts"; // P-AGENT.2b/.4-live/.8/.9/.11a/.13/.14/.17
 import type { TrustLabel } from "../../harness/contracts.ts"; // P-AGENT.9: imported-agent trust banner
 import { localProvidersCardBody, draftFromForm } from "./local_providers_ui.ts"; // P-LOCAL.3 (ADR-0135): Settings → Local Providers
@@ -62,13 +65,17 @@ import { webrtcLoopbackSelfTest, webrtcRelaySelfTest, webrtcP2PModuleSelfTest } 
 (window as unknown as { __lucidP2PModuleSelfTest?: typeof webrtcP2PModuleSelfTest }).__lucidP2PModuleSelfTest = webrtcP2PModuleSelfTest;
 // P-COLLAB.17 (ADR-0202): renderer-side direct-P2P share/join (RTCPeerConnection is renderer-only) - the "prefer
 // direct connection" toggle runs the share peer-to-peer over WebRTC, with the relay used only to signal + fall back.
-import { startP2PHost, stopP2PHost, p2pHostActive, p2pHostStatus, teeEvent as p2pTeeEvent, teeUserTurn as p2pTeeUserTurn, startP2PGuest, stopP2PGuest, p2pGuestActive, p2pGuestSendPrompt, p2pLinkEndpoint } from "./collab_p2p.ts";
+import { startP2PHost, stopP2PHost, p2pHostActive, p2pHostStatus, setP2PHostOptions, teeEvent as p2pTeeEvent, teeUserTurn as p2pTeeUserTurn, startP2PGuest, stopP2PGuest, p2pGuestActive, p2pGuestSendPrompt, p2pLinkEndpoint } from "./collab_p2p.ts";
+import type { CollabOptions } from "../collab/frames.ts"; // P-COLLAB.14 (ADR-0228): edit-guest model+folder pickers
+import { loadDockState, saveDockState, clampToViewport, snapDecision, participantSummary, isCollapsed, orderBindAddresses, redactShareSnapshot, defaultShape, JOIN_DOCK_KEY, type DockState, type DockStorage, type ShareSnapshot } from "./share_dock.ts"; // P-SHARE.1/2 + P-COLLAB.20 (ADR-0242): the floating Share + Join docks
 import { formatImportLine } from "./import_progress.ts";
+import { fitWithin, MAX_SNAPSHOT_EDGE } from "../collab/preview_snapshot.ts"; // P-PREVIEW-PWA.1 (ADR-0237): scaled-down preview snapshot to phone guests
+import { accessCounts } from "../collab/share_awareness.ts"; // P-PREVIEW-PWA.3 (ADR-0240): agent share-awareness counts
 import { ASKSAGE_FAMILY_ORDER, familyOf, filterModels, groupByFamily, isAuxiliaryModel, isChinaModel, isDeprecatedModel, isGovModel, providerLabelOf, recommendFallbacks, sortGovFirstNewest } from "./model_families.ts";
-import { FAVS_KEY, parseFavs, starredOf, toggleFav } from "./model_favorites.ts"; // P-FAV.1 (ADR-0165)
+import { FAVS_KEY, offeredModels, parseFavs, starredOf, toggleFav } from "./model_favorites.ts"; // P-FAV.1 (ADR-0165) + P-REMOTE.11b (ADR-0238)
 import { renderSandboxSection } from "./sandbox_panel.ts"; // P-SANDBOX.5 (ADR-0169)
 import { INSTALLED_SKILLS, bumpSkillUsage, bundledSkillsByUsage, isSkillEnabled, setSkillEnabled, taskProforma } from "./skills.ts";
-import { renderSkillInspect, renderSkillsDirectory, renderStudioCandidate, type SkillDirRow } from "./skills_dir.ts"; // P-SKILL.4 (ADR-0097) / P-SKILL.5 (ADR-0101)
+import { renderSkillInspect, renderSkillsDirectory, renderStudioCandidate, skillsDirSig, type SkillDirRow } from "./skills_dir.ts"; // P-SKILL.4 (ADR-0097) / P-SKILL.5 (ADR-0101)
 import { skillKey, type SkillRoot, trustEnableable } from "../skills_gov.ts"; // P-SKILL.4 (ADR-0097)
 import { CHECKER_TOKENS_PER_ITER, MAKER_TOKENS_PER_ITER, estimateGoalCost, estimateGoalTokens, formatTokens, formatUSD } from "../loop_estimate.ts";
 import { speakable } from "../../harness/brief/engineering_update.ts"; // P-REPORT.7: make read-aloud text TTS-friendly
@@ -337,17 +344,26 @@ function buildShell(): void {
             <button class="btn-mini" id="prevOpen">${icon("download", 13)} Open</button>
             <button class="btn-mini" id="prevBrowse" data-tip="Browse your workspace|Open a file from the current working directory to preview it yourself (native file picker).">${icon("folder", 13)} Browse…</button>
             <button class="btn-mini" id="prevReload" data-tip="Reload the preview">${icon("refresh", 13)} Reload</button>
+            <button class="btn-mini" id="prevDevice" data-tip="Device viewport|Preview at phone or tablet size (portrait / landscape) - for reviewing a PWA or a mobile / responsive layout.">${devSvg("phone-portrait", 14)}${icon("chevron", 10)}</button>
             <button class="btn-mini" id="prevMarkup" data-tip="Markup tools|Draw on the preview - pen, rectangle, text - then send the marked-up screenshot to chat.">${icon("markup", 14)} Markup ${icon("chevron", 10)}</button>
-            <button class="btn-mini" id="prevShot" data-tip="Send a screenshot to chat|Capture the preview (with your markup) and attach it to the composer for the agent to react to. Desktop app only.">${icon("eye", 13)} Screenshot → chat</button>
+            <button class="btn-mini" id="prevShot" data-tip="Send a screenshot to chat|Capture the preview (with your markup) and attach it to the composer for the agent to react to. Desktop app only.">${icon("eye", 13)} Screenshot \u2192 chat</button>
+            <button class="btn-mini" id="prevToPhone" data-tip="Send to phone|Broadcast this preview to your connected phone guests (Session Share) - they can view + save it. Needs a live share; desktop app only.">${icon("phone", 13)} To phone</button>
             <button class="set-close" id="prevClose" data-tip="Close">${icon("close", 16)}</button>
           </div>
+        </div>
+        <div class="preview-tabs" id="prevTabs">
+          <button type="button" class="prev-tab active" data-lane="yours" data-tip="Your preview|Files you open stay here - the agent can't clobber this tab.">Yours</button>
+          <button type="button" class="prev-tab" data-lane="agent" data-tip="The agent's preview|What the agent is building or reviewing. It updates here without stealing your tab.">Agent <span class="prev-tab-dot" id="prevAgentDot" hidden aria-label="new update"></span></button>
         </div>
         <div class="preview-body" id="prevBody">
           <!-- P-PREVIEW.6a (ADR-0153): a live "reviewing / testing" pill shown while the agent looks at the preview. -->
           <div class="preview-pill" id="prevPill" hidden aria-live="polite"><span class="preview-pill-dot"></span><span id="prevPillLabel">Reviewing the preview</span></div>
           <!-- P-PREVIEW.7 (ADR-0179): the explain-overlay for pages the sandbox can't run (e.g. Electron renderers). -->
           <div class="preview-notice" id="prevNotice" hidden aria-live="polite"></div>
-          <iframe id="prevFrame" class="preview-frame" sandbox="${PREVIEW_SANDBOX}" allow="${PREVIEW_ALLOW}" referrerpolicy="no-referrer" title="App preview" hidden></iframe>
+          <div class="preview-stage" id="prevStage">
+            <iframe id="prevFrame" class="preview-frame" sandbox="${PREVIEW_SANDBOX}" allow="${PREVIEW_ALLOW}" referrerpolicy="no-referrer" title="Your app preview" hidden></iframe>
+            <iframe id="prevFrameA" class="preview-frame" sandbox="${PREVIEW_SANDBOX}" allow="${PREVIEW_ALLOW}" referrerpolicy="no-referrer" title="The agent's app preview" hidden></iframe>
+          </div>
           <canvas id="prevCanvas" class="preview-canvas" aria-hidden="true"></canvas>
           <div class="empty preview-empty" id="prevEmpty"><span class="preview-empty-msg" id="prevEmptyMsg">Open a local HTML file to preview it here - paste its path above and press <b>Open</b>. (The agent driving this itself is coming next; remote URLs are egress-gated.)</span></div>
         </div>
@@ -1570,8 +1586,14 @@ async function send(): Promise<void> {
       (node as MsgNode)._md = buf; finishHud(); maybeAppendReport(); /* P-CHAT.C: settled-turn report CTA */ state.streaming = false; setSendEnabled(); clearPreviewTesting();
     }
   };
-  p2pTeeUserTurn(sendText); // P-COLLAB.17: record the user turn in a direct-P2P share's replay transcript
-  try { await bridge.sendPrompt(sendText, onEvent, images); }
+  // P-COLLAB.15: attribute a guest-driven turn (runGuestPromptLocally set nextTurnFrom) in the live broadcast;
+  // a host-typed turn leaves it null -> the host authors it. Consume-once so it can't leak into the next turn.
+  const turnFrom = nextTurnFrom; nextTurnFrom = null;
+  p2pTeeUserTurn(sendText, turnFrom ?? undefined); // P-COLLAB.17/.15: record + broadcast the user turn (direct-P2P)
+  // P-PREVIEW-PWA.3 (ADR-0240): a renderer-hosted direct-P2P share sends roster COUNTS so the backend can
+  // build the agent-awareness preamble (a relay share is computed backend-side; counts only, never names).
+  const p2pShare = p2pHostActive() ? accessCounts(p2pHostStatus()?.participants ?? []) : undefined;
+  try { await bridge.sendPrompt(sendText, onEvent, images, turnFrom ?? undefined, p2pShare); }
   finally {
     (node as MsgNode)._md = buf;
     if (state.streaming) { if (!(noResponse && !buf.trim())) { const chipped = renderAnswerBody(streamEl, buf, marks); /* P-CHAT.A sections / P-CHAT.B chips */ if (chipped) dropThoughtsWindow(); maybeAppendReport(); /* P-CHAT.C: settled-turn report CTA */ } finishHud(); state.streaming = false; setSendEnabled(); } else { finishHud(); }
@@ -2961,6 +2983,9 @@ function closeSettings(): void {
 // SAME decision the delivery path uses (skills.ts isSkillEnabled), so disabling here truly stops a skill
 // being offered/loaded; a flagged skill's toggle is locked (invariant #3, keystone #2).
 let skillsOpen = false;
+// P-SKILL.6 (ADR-0243): signature of the last-painted Skills directory, so the SWR revalidation repaints only
+// on a real change (a toggle, a re-scan verdict, an added/removed skill) - never a needless flicker.
+let lastSkillsSig = "";
 function openSkills(): void {
   skillsOpen = true;
   closeSettings(); closeKnowledge(); closePreview(); closeAgentBuilder(); closeIde();
@@ -2978,21 +3003,39 @@ function closeSkills(): void {
   $$(".rail-btn").forEach((b) => b.classList.remove("active"));
   $('.rail-btn[data-rail="chat"]')?.classList.add("active");
 }
-/** Compose the directory rows (bundled inline + discovered from the server), resolve each row's
- *  enabled/trust/enableable, and paint. Bundled skills are identified by their kebab `command`. */
-async function renderSkills(): Promise<void> {
-  const body = $("#skillsBody"); if (!body) return;
-  await loadSkills(); // refresh state.skills (discovered on-disk skills); bundled are inline
+/** Compose the directory rows (bundled inline + discovered), resolving each row's enabled/trust/enableable.
+ *  Bundled skills are identified by their kebab `command`; discovered ones come from the cached or fresh list. */
+function skillRowsFrom(discovered: SkillView[]): SkillDirRow[] {
   const rows: SkillDirRow[] = [];
   for (const s of INSTALLED_SKILLS) {
     const key = skillKey("bundled", s.command);
     rows.push({ key, name: s.command, description: s.description, root: "bundled", trust: "trusted", invocation: s.command, removable: false, enabled: isSkillEnabled(key, "trusted"), enableable: true, fileBacked: false });
   }
-  for (const s of state.skills) {
+  for (const s of discovered) {
     const key = skillKey(s.root, s.name);
     rows.push({ key, name: s.name, description: s.description, root: s.root, trust: s.trust, invocation: s.invocation, removable: s.removable, enabled: isSkillEnabled(key, s.trust), enableable: trustEnableable(s.trust), fileBacked: true, scanned: s.scanned ? { findings: s.scanned.findings, at: s.scanned.at } : null });
   }
-  body.innerHTML = `<button class="btn-mini skdir-studio-cta" id="skillStudioBtn" data-tip="Skill Studio - analyze your recent work and draft new skills (each scanned before it saves)">${icon("spark", 13)} Draft skills from recent work</button>` + renderSkillsDirectory(rows);
+  return rows;
+}
+/** Paint the directory (studio CTA + optional "updating" chip + rows) and record the rendered signature. */
+function paintSkills(body: HTMLElement, rows: SkillDirRow[], updating: boolean): void {
+  lastSkillsSig = skillsDirSig(rows);
+  const chip = updating ? `<span class="skdir-updating" id="skillsUpdating">${icon("refresh", 11)} updating\u2026</span>` : "";
+  body.innerHTML = `<div class="skdir-top"><button class="btn-mini skdir-studio-cta" id="skillStudioBtn" data-tip="Skill Studio - analyze your recent work and draft new skills (each scanned before it saves)">${icon("spark", 13)} Draft skills from recent work</button>${chip}</div>` + renderSkillsDirectory(rows);
+}
+/** P-SKILL.6 (ADR-0243): stale-while-revalidate. Paint the CACHED discovered-skills list instantly (bundled
+ *  skills are inline, always instant), or a loading spinner on a cold first open - never a blank panel - then
+ *  revalidate /api/skills in the background and repaint only if the directory actually changed. */
+async function renderSkills(): Promise<void> {
+  const body = $("#skillsBody"); if (!body) return;
+  const cached = cachedSkills<SkillView[]>();
+  if (cached) paintSkills(body, skillRowsFrom(cached), true);
+  else if (!body.querySelector(".skdir-row")) body.innerHTML = `<div class="skdir-loading">${icon("refresh", 14)} Loading skills\u2026</div>`;
+  await loadSkills(); // refresh state.skills (discovered on-disk skills); bundled are inline
+  setCachedSkills(state.skills); // seed the next open's instant paint
+  const rows = skillRowsFrom(state.skills);
+  if (skillsDirSig(rows) !== lastSkillsSig || body.querySelector(".skdir-loading")) paintSkills(body, rows, false);
+  else $("#skillsUpdating")?.remove(); // unchanged: just drop the "updating" chip
 }
 /** Event-delegated per-row menu: toggle enable, inspect, re-scan, remove. */
 async function onSkillAction(e: Event): Promise<void> {
@@ -3498,7 +3541,7 @@ function closeKnowledge(): void {
 // agent built; a screenshot can be sent to chat. Mirrors the Knowledge-graph fly-out (resizable right aside,
 // mutually exclusive with the other right surfaces). The agent driving it (custom tools) is P-PREVIEW.2.
 let previewOpen = false;
-function openPreview(): void {
+function openPreview(opts?: { reveal?: PrevLane }): void {
   previewOpen = true;
   closeSettings();
   closeIde();
@@ -3507,17 +3550,28 @@ function openPreview(): void {
   closeSkills(); // P-SKILL.4
   if (!state.sidebarCollapsed) toggleSidebar(true);
   $("#preview")!.hidden = false;
+  document.body.classList.add("preview-open"); // shrinks the chat text while the (≤50vw) preview is open
   $("#inspector")!.hidden = true;
   $$(".rail-btn").forEach((b) => b.classList.toggle("active", (b as HTMLElement).dataset.rail === "preview"));
-  // P-PREVIEW.2: default to the agent's most recent previewable write, and render it straight away.
-  const path = $("#prevPath") as HTMLInputElement | null;
-  if (path && !path.value && state.lastPreviewablePath) path.value = state.lastPreviewablePath;
-  if (path?.value) loadPreview(path.value); else path?.focus();
+  // P-PREVIEW.8: the agent's most recent previewable write belongs to the AGENT lane — keep it pointed there.
+  if (state.lastPreviewablePath && prevPathByLane.agent !== state.lastPreviewablePath) loadPreview(state.lastPreviewablePath, "agent");
+  // Show the requested tab, else your lane if it has content, else the agent's, else your (empty) lane.
+  const reveal = opts?.reveal ?? (prevPathByLane.yours ? "yours" : (prevPathByLane.agent ? "agent" : "yours"));
+  switchPrevLane(reveal);
+  if (reveal === "yours" && !prevPathByLane.yours) ($("#prevPath") as HTMLInputElement | null)?.focus();
   startPreviewShotLoop(); // keep the agent's preview_screenshot shot fresh while the panel is open
   startPreviewInspectRelay(); // P-PREVIEW.6b: serve the agent's preview_inspect queries while the panel is open
   // Screenshot capture is an Electron-only seam; disable the button in a plain browser.
   const shot = $("#prevShot") as HTMLButtonElement | null;
   if (shot && !bridge.isElectron) { shot.disabled = true; shot.title = "Screenshots are available in the desktop app"; }
+}
+/** A file YOU chose to preview (Open, Browse, /figma, image-markup) — always lands on the Yours lane. */
+function openPreviewFile(path: string): void {
+  if (!path) return;
+  if (!previewOpen) openPreview({ reveal: "yours" });
+  else switchPrevLane("yours");
+  const p = $("#prevPath") as HTMLInputElement | null; if (p) p.value = path;
+  loadPreview(path, "yours");
 }
 function closePreview(): void {
   if (!previewOpen) return;
@@ -3525,6 +3579,7 @@ function closePreview(): void {
   stopPreviewShotLoop();
   stopPreviewInspectRelay(); // P-PREVIEW.6b
   $("#preview")!.hidden = true;
+  document.body.classList.remove("preview-open");
   $("#inspector")!.hidden = false;
   $$(".rail-btn").forEach((b) => b.classList.remove("active"));
   $('.rail-btn[data-rail="chat"]')?.classList.add("active");
@@ -3535,10 +3590,8 @@ function closePreview(): void {
 function onPreviewAvailable(path: string): void {
   if (!path) return;
   state.lastPreviewablePath = path;
-  const p = $("#prevPath") as HTMLInputElement | null;
-  if (p) p.value = path;                 // point at the new file explicitly (never a stale prior value)
-  if (previewOpen) loadPreview(path);
-  else openPreview();                    // opens the panel and renders p.value straight away
+  if (!previewOpen) { openPreview({ reveal: "agent" }); return; } // first reveal shows the agent's work (nothing on Yours yet)
+  loadPreview(path, "agent"); // already open → update the AGENT lane live; badges the tab if you're on Yours
 }
 
 // ── P-PREVIEW.6a (ADR-0153): live "reviewing / testing" indicator ────────────────────────────────
@@ -3647,48 +3700,147 @@ async function openDesignInIde(): Promise<void> {
 }
 /** Load the resolved target into the preview iframe. Fail-safe: only a `local` target is rendered; a
  *  `remote` or `blocked` target shows the empty-state message (remote is egress-gated in P-PREVIEW.3). */
-function loadPreview(target: string): void {
-  const frame = $("#prevFrame") as HTMLIFrameElement | null;
+// ── P-PREVIEW.8: two preview lanes ───────────────────────────────────────────────────────────────
+// "yours" (files YOU open) and "agent" (what the agent builds/reviews) are separate persistent iframes, so
+// the agent can never clobber the file you're reviewing. Only the active lane's iframe is shown; both stay
+// loaded (live page state preserved). Your Open/Browse target the yours lane; the agent's preview_screenshot
+// and preview_inspect target the agent lane; an agent update badges the Agent tab instead of stealing your view.
+type PrevLane = "yours" | "agent";
+let prevLane: PrevLane = "yours";
+const laneFrame = (l: PrevLane = prevLane): HTMLIFrameElement | null =>
+  $(l === "agent" ? "#prevFrameA" : "#prevFrame") as HTMLIFrameElement | null;
+const prevPathByLane: Record<PrevLane, string> = { yours: "", agent: "" };
+const prevKindByLane: Record<PrevLane, string> = { yours: "", agent: "" };
+/** Switch which lane's iframe is visible; the other stays loaded but hidden. Updates the shared header chrome. */
+function switchPrevLane(l: PrevLane): void {
+  prevLane = l;
+  const yf = laneFrame("yours"), af = laneFrame("agent");
+  if (yf) yf.hidden = l !== "yours" || !prevPathByLane.yours;
+  if (af) af.hidden = l !== "agent" || !prevPathByLane.agent;
+  $$(".prev-tab").forEach((b) => b.classList.toggle("active", (b as HTMLElement).dataset.lane === l));
+  if (l === "agent") { const d = $("#prevAgentDot"); if (d) d.hidden = true; } // viewing the agent lane clears the "new" badge
+  const path = $("#prevPath") as HTMLInputElement | null; if (path) path.value = prevPathByLane[l];
+  const kind = $("#prevKind"); if (kind) kind.textContent = prevKindByLane[l];
+  const empty = $("#prevEmpty") as HTMLElement | null; if (empty) empty.hidden = !!prevPathByLane[l];
+  const notice = $("#prevNotice") as HTMLElement | null; if (notice) { notice.hidden = true; notice.innerHTML = ""; } // health is per-page, re-derived on load
+  syncPreviewCanvas();
+}
+// ── P-PREVIEW.9: device viewports ────────────────────────────────────────────────────────────────
+// Review a PWA / mobile / responsive layout at real device sizes. Applies to BOTH lanes; the visible frame is
+// sized to the device and fit-scaled (CSS zoom) so the whole screen shows without scrolling. The agent is told
+// the current viewport (and that these modes exist) via the preview_inspect result + tool description.
+type PrevDevice = "desktop" | "phone-portrait" | "phone-landscape" | "tablet-landscape";
+const PREV_DEVICES: Record<PrevDevice, { label: string; w: number; h: number }> = {
+  "desktop": { label: "Desktop (fit to panel)", w: 0, h: 0 },
+  "phone-portrait": { label: "Phone (Portrait)", w: 390, h: 844 },
+  "phone-landscape": { label: "Phone (Landscape)", w: 844, h: 390 },
+  "tablet-landscape": { label: "Tablet (Landscape)", w: 1024, h: 768 },
+};
+const DEVICE_NOTE = "This preview can be viewed at device viewports (phone portrait/landscape, tablet landscape) via the phone icon in the preview toolbar — use it when building or reviewing a PWA or a mobile/responsive layout.";
+let prevDevice: PrevDevice = "desktop";
+/** Custom device glyphs, inline so they don't depend on the shared icon set. */
+function devSvg(kind: PrevDevice, size = 14): string {
+  const o = `xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"`;
+  if (kind === "phone-portrait") return `<svg ${o}><rect x="7" y="2" width="10" height="20" rx="2.2"/><line x1="11" y1="18.5" x2="13" y2="18.5"/></svg>`;
+  if (kind === "phone-landscape") return `<svg ${o}><rect x="2" y="7" width="20" height="10" rx="2.2"/><line x1="18.5" y1="11" x2="18.5" y2="13"/></svg>`;
+  if (kind === "tablet-landscape") return `<svg ${o}><rect x="2" y="5" width="20" height="14" rx="2.2"/><line x1="18.5" y1="11" x2="18.5" y2="13"/></svg>`;
+  return `<svg ${o}><rect x="2" y="4" width="20" height="13" rx="2"/><line x1="9" y1="21" x2="15" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>`; // desktop monitor
+}
+/** The viewport the agent is being reviewed at — surfaced in preview_inspect results. */
+function currentViewportInfo(): Record<string, unknown> {
+  const d = PREV_DEVICES[prevDevice];
+  return prevDevice === "desktop" ? { device: "desktop", note: DEVICE_NOTE } : { device: prevDevice, width: d.w, height: d.h, note: DEVICE_NOTE };
+}
+/** Fit the device-sized stage into the available panel via CSS zoom (recomputed on resize). */
+function applyDeviceScale(): void {
+  const body = $("#prevBody"), stage = $("#prevStage") as HTMLElement | null;
+  if (!body || !stage) return;
+  if (prevDevice === "desktop") { stage.style.zoom = ""; return; }
+  const d = PREV_DEVICES[prevDevice];
+  const scale = Math.max(0.2, Math.min(1, (body.clientWidth - 28) / d.w, (body.clientHeight - 28) / d.h));
+  stage.style.zoom = String(scale);
+}
+function applyDevice(device: PrevDevice): void {
+  prevDevice = device;
+  const body = $("#prevBody"), stage = $("#prevStage");
+  if (!body || !stage) return;
+  body.classList.toggle("device", device !== "desktop");
+  const d = PREV_DEVICES[device];
+  for (const f of [laneFrame("yours"), laneFrame("agent")]) {
+    if (!f) continue;
+    if (device === "desktop") { f.style.width = ""; f.style.height = ""; }
+    else { f.style.width = `${d.w}px`; f.style.height = `${d.h}px`; }
+  }
+  applyDeviceScale();
+  // The button reads as a phone at rest (the "go mobile" affordance) and shows the active device + a highlight.
+  const btn = $("#prevDevice");
+  if (btn) { btn.innerHTML = `${devSvg(device === "desktop" ? "phone-portrait" : device, 14)}${icon("chevron", 10)}`; btn.classList.toggle("on", device !== "desktop"); }
+  syncPreviewCanvas();
+}
+/** The device dropdown: Desktop / Phone Portrait / Phone Landscape / Tablet Landscape. */
+function openDeviceMenu(anchor: HTMLElement): void {
+  document.querySelector(".prev-devpop")?.remove();
+  const opts: PrevDevice[] = ["desktop", "phone-portrait", "phone-landscape", "tablet-landscape"];
+  const row = (k: PrevDevice) => `<button class="pdev-opt${prevDevice === k ? " on" : ""}" data-dev="${k}">${devSvg(k, 15)}<span>${PREV_DEVICES[k].label}</span>${PREV_DEVICES[k].w ? `<em>${PREV_DEVICES[k].w}×${PREV_DEVICES[k].h}</em>` : ""}</button>`;
+  const pop = el(`<div class="markup-pop prev-devpop">${opts.map(row).join("")}</div>`);
+  document.body.appendChild(pop);
+  const r = anchor.getBoundingClientRect();
+  pop.style.left = `${Math.max(8, Math.min(r.left, window.innerWidth - pop.offsetWidth - 12))}px`;
+  pop.style.top = `${r.bottom + 6}px`;
+  const close = () => { pop.remove(); document.removeEventListener("mousedown", onDoc, true); };
+  const onDoc = (e: MouseEvent) => { if (!pop.contains(e.target as Node) && !anchor.contains(e.target as Node)) close(); };
+  setTimeout(() => document.addEventListener("mousedown", onDoc, true), 0);
+  pop.addEventListener("click", (e) => {
+    const b = (e.target as HTMLElement).closest("[data-dev]") as HTMLElement | null;
+    if (b?.dataset.dev) { applyDevice(b.dataset.dev as PrevDevice); close(); }
+  });
+}
+function loadPreview(target: string, lane: PrevLane = prevLane): void {
+  const frame = laneFrame(lane);
   const empty = $("#prevEmpty") as HTMLElement | null;
-  const kind = $("#prevKind");
   if (!frame || !empty) return;
+  const active = lane === prevLane; // only the visible lane drives the shared header / empty / notice chrome
+  const kind = active ? $("#prevKind") : null;
+  prevPathByLane[lane] = target;
   // P-PREVIEW.7: a fresh load clears any stale health overlay (the new page reports its own).
   const notice = $("#prevNotice") as HTMLElement | null;
-  if (notice) { notice.hidden = true; notice.innerHTML = ""; }
+  if (active && notice) { notice.hidden = true; notice.innerHTML = ""; }
   const r = resolvePreview(target);
-  if (kind) kind.textContent = r.kind === "local" ? r.label : "";
+  prevKindByLane[lane] = r.kind === "local" ? r.label : "";
+  if (kind) kind.textContent = prevKindByLane[lane];
   // The iframe src is never raw DOM input: a LOCAL target loads our fixed same-origin /api/preview/serve
   // endpoint (the path is only an encoded query value), and a REMOTE target is an http(s) URL gated by the
   // egress allow-list. resolvePreview classifies the target first; no javascript:/data: scheme can reach src.
   const msg = ($("#prevEmptyMsg") as HTMLElement | null) ?? empty;
-  const showEmpty = (text: string) => { frame.removeAttribute("srcdoc"); frame.removeAttribute("src"); frame.hidden = true; empty.hidden = false; msg.textContent = text; };
+  const showEmpty = (text: string) => {
+    frame.removeAttribute("srcdoc"); frame.removeAttribute("src"); frame.hidden = true; prevPathByLane[lane] = "";
+    if (active && empty) { empty.hidden = false; if (msg) msg.textContent = text; }
+  };
   if (r.kind === "local" && /^file:\/\//i.test(r.src)) {
-    // P-PREVIEW.4b (ADR-0096): render via a SERVED document (iframe.src → /api/preview/serve), NOT srcdoc.
-    // A srcdoc frame inherits the renderer's strict `script-src 'self'` CSP and blocks the previewed app's
-    // inline scripts (it rendered only its static HTML). The served document carries its own per-frame CSP
-    // (PREVIEW_FRAME_CSP) so the app actually runs — while staying in the hardened opaque-origin sandbox
-    // and egress-blocked (`connect-src 'none'`). The src is a FIXED same-origin endpoint with the path only
+    // P-PREVIEW.4b (ADR-0096): render via a SERVED document (iframe.src → /api/preview/serve), NOT srcdoc — the
+    // served document carries its own per-frame CSP (PREVIEW_FRAME_CSP) so the app runs while staying in the
+    // hardened opaque-origin, egress-blocked sandbox. The src is a FIXED same-origin endpoint with the path only
     // ever an encodeURIComponent'd query value (never the scheme/host) — so DOM input can't pick the scheme.
     if (kind) kind.textContent = r.label;
     frame.removeAttribute("srcdoc");
     frame.src = bridge.previewServeUrl(target);
-    frame.hidden = false; empty.hidden = true;
-    clearPreviewCanvas(); // P-PREVIEW.5: a fresh file starts with a clean markup layer
-    // P-PREVIEW.3a-shot: once it paints, cache a PNG desktop-side so the agent's preview_screenshot tool can
-    // see what it built. Small delay lets the app's first frame render (canvas/animation). Electron-only.
-    frame.onload = () => { wirePreviewCanvas(); syncPreviewCanvas(); window.setTimeout(() => void cacheRenderedPreviewShot(), 150); };
+    frame.hidden = !active; // shown only if this is the active lane; the other lane stays loaded but hidden
+    if (active) { empty.hidden = true; clearPreviewCanvas(); } // P-PREVIEW.5: a fresh file starts with a clean markup layer
+    // P-PREVIEW.3a-shot: once it paints, cache a PNG so the agent's preview_screenshot sees what it built
+    // (cacheRenderedPreviewShot targets the AGENT lane and no-ops when that lane isn't the visible one).
+    frame.onload = () => { if (lane === prevLane) { wirePreviewCanvas(); syncPreviewCanvas(); } window.setTimeout(() => void cacheRenderedPreviewShot(), 150); };
   } else if (r.kind === "remote") {
-    // P-PREVIEW.3b (ADR-0096): a remote URL reaches the internet — only load it if the egress allow-list
-    // already approves the site (honoring the managed ceiling). Otherwise it stays gated; the agent must
-    // request the site via the normal egress flow (which prompts the user). The iframe is opaque-origin
-    // (no allow-same-origin), and only an http(s) URL ever reaches src here.
+    // P-PREVIEW.3b (ADR-0096): a remote URL only loads if the egress allow-list already approves the site
+    // (honoring the managed ceiling); else it stays gated. The iframe is opaque-origin (no allow-same-origin),
+    // and only an http(s) URL ever reaches src here.
     const remoteUrl = target.trim(); // for a remote target, the input IS the URL (resolver label === URL)
     if (kind) kind.textContent = "checking…";
-    showEmpty(`Checking whether ${r.label} is approved to load…`);
+    if (active) showEmpty(`Checking whether ${r.label} is approved to load…`);
+    prevPathByLane[lane] = target; // showEmpty cleared it; this lane is still trying to load remoteUrl
     void bridge.previewEgressAllows(remoteUrl).then((allowed) => {
-      if (($("#prevPath") as HTMLInputElement | null)?.value.trim() !== remoteUrl) return; // a newer Open superseded this
+      if (prevPathByLane[lane] !== target) return; // a newer Open in this lane superseded it
       if (canPreviewRemote(remoteUrl, allowed)) {
-        if (kind) kind.textContent = r.label; frame.src = encodeURI(remoteUrl); frame.hidden = false; empty.hidden = true;
+        if (kind) kind.textContent = r.label; frame.src = encodeURI(remoteUrl); frame.hidden = !active; if (active) empty.hidden = true;
       } else {
         if (kind) kind.textContent = "";
         showEmpty(`Remote site not approved for preview: ${r.label}. Ask the agent to visit it - you'll get an egress approval prompt, then it can preview here.`);
@@ -3698,13 +3850,18 @@ function loadPreview(target: string): void {
     if (kind) kind.textContent = "";
     showEmpty(`Can't preview that - ${r.reason ?? "open a local HTML file"}.`);
   }
+  // An agent load into the background lane badges the Agent tab instead of stealing your view.
+  if (lane === "agent" && prevLane !== "agent" && prevPathByLane.agent) { const d = $("#prevAgentDot"); if (d) d.hidden = false; }
 }
 /** P-PREVIEW.3a-shot: after the preview paints, cache a PNG of it desktop-side so the agent's
  *  `preview_screenshot` tool can fetch what it built. Electron-only (capturePage); a silent no-op in a
  *  plain browser or when the frame has no size. Never throws — a failed cache just means no shot this turn. */
 async function cacheRenderedPreviewShot(): Promise<void> {
-  const frame = $("#prevFrame") as HTMLIFrameElement | null;
-  if (!frame || frame.hidden || !bridge.isElectron || !bridge.capturePreview) return;
+  // The agent's preview_screenshot reads THIS cache, so always capture the AGENT lane. Screen capture only sees
+  // on-screen pixels, so it no-ops unless the agent lane is the one currently shown (its DOM stays inspectable
+  // while hidden via preview_inspect, which is the agent's primary review path when you're on your own tab).
+  const frame = laneFrame("agent");
+  if (!frame || prevLane !== "agent" || frame.hidden || !bridge.isElectron || !bridge.capturePreview) return;
   const rect = frame.getBoundingClientRect();
   if (rect.width < 2 || rect.height < 2) return;
   const png = await bridge.capturePreview({ x: Math.round(rect.x), y: Math.round(rect.y), width: Math.round(rect.width), height: Math.round(rect.height) }).catch(() => null);
@@ -3751,7 +3908,7 @@ function stopPreviewInspectRelay(): void {
 // (audited server-side; the sandbox stays sealed).
 const NODE_ONLY_ERR = /require is not defined|process is not defined|module is not defined|__dirname is not defined/i;
 window.addEventListener("message", (ev) => {
-  const frame = $("#prevFrame") as HTMLIFrameElement | null;
+  const frame = laneFrame(); // health drives the shared notice, so only heed the ACTIVE lane's frame
   const d = ev.data as { __lucid?: string; emptyBody?: boolean; errors?: unknown[] } | null;
   if (!d || d.__lucid !== "preview-health" || !frame || ev.source !== frame.contentWindow) return;
   void handlePreviewHealth(!!d.emptyBody, Array.isArray(d.errors) ? d.errors.map(String) : []);
@@ -3786,12 +3943,14 @@ async function handlePreviewHealth(emptyBody: boolean, errors: string[]): Promis
 }
 
 async function pollPreviewInspect(): Promise<void> {
-  const frame = $("#prevFrame") as HTMLIFrameElement | null;
-  if (!frame || frame.hidden) return; // no preview rendered yet → let it time out server-side
+  const frame = laneFrame("agent"); // the agent inspects ITS lane — works even while you're on the Yours tab
+  if (!frame || !prevPathByLane.agent) return; // nothing loaded in the agent lane → let it time out server-side
   const next = await bridge.previewInspectNext().catch(() => null);
   if (!next || next.none || !next.id) return;
   const result = await runInspectOnFrame(frame, next.id, next.command ?? {});
-  await bridge.previewInspectResult(next.id, result).catch(() => { /* the tool will time out */ });
+  // P-PREVIEW.9: tell the agent the viewport it's being reviewed at (and that device modes exist).
+  const tagged = result && typeof result === "object" && !Array.isArray(result) ? { ...(result as Record<string, unknown>), viewport: currentViewportInfo() } : result;
+  await bridge.previewInspectResult(next.id, tagged).catch(() => { /* the tool will time out */ });
 }
 /** Ask the sandboxed preview's bridge to run a read-only query; resolve with its result (or a timeout note). */
 function runInspectOnFrame(frame: HTMLIFrameElement, id: string, command: unknown): Promise<unknown> {
@@ -4365,7 +4524,7 @@ const previewCanvas = (): HTMLCanvasElement | null => $("#prevCanvas") as HTMLCa
 
 /** Match the canvas backing size to the frame, preserving any existing drawing. */
 function syncPreviewCanvas(): void {
-  const frame = $("#prevFrame") as HTMLIFrameElement | null, cv = previewCanvas();
+  const frame = laneFrame(), cv = previewCanvas(); // the markup canvas overlays whichever lane is visible
   if (!frame || !cv || frame.hidden) return;
   const r = frame.getBoundingClientRect();
   const w = Math.max(1, Math.round(r.width)), h = Math.max(1, Math.round(r.height));
@@ -4407,9 +4566,10 @@ function wirePreviewCanvas(): void {
   const end = () => { drawing = false; drawSnapshot = null; };
   cv.addEventListener("mouseup", end);
   cv.addEventListener("mouseleave", end);
-  // keep the canvas backing-size matched to the frame as the panel/window resizes (preserves the drawing)
-  const frame = $("#prevFrame") as HTMLIFrameElement | null;
-  if (frame && typeof ResizeObserver !== "undefined") new ResizeObserver(() => syncPreviewCanvas()).observe(frame);
+  // keep the canvas backing-size matched to the active frame as the panel/window resizes (preserves the drawing),
+  // and refit the device viewport (P-PREVIEW.9) so the scaled device tracks the panel width.
+  const body = $("#prevBody") as HTMLElement | null;
+  if (body && typeof ResizeObserver !== "undefined") new ResizeObserver(() => { syncPreviewCanvas(); applyDeviceScale(); }).observe(body);
 }
 /** A floating input for the text tool - type, Enter commits the text to the canvas, Esc cancels. */
 function addPreviewTextBox(p: { x: number; y: number }): void {
@@ -4461,15 +4621,13 @@ async function browsePreviewFile(): Promise<void> {
   if (!bridge.isElectron) { showToast({ title: "Desktop app only", desc: "File browsing uses the native picker in the packaged LUCID app. In the browser, paste a path above.", actions: [{ label: "OK" }], timeout: 3400, tone: "warn" }); ($("#prevPath") as HTMLElement | null)?.focus(); return; }
   const picked = await bridge.pickFile?.({ title: "Open a file to preview", filters: [{ name: "Previewable", extensions: ["html", "htm", "svg", "md", "png", "jpg", "jpeg", "gif", "pdf"] }, { name: "All files", extensions: ["*"] }] }).catch(() => null);
   if (!picked) return;
-  const p = $("#prevPath") as HTMLInputElement | null;
-  if (p) p.value = picked;
-  loadPreview(picked);
+  openPreviewFile(picked); // your pick lands on the Yours lane (never the agent's)
 }
 
 /** Capture the preview iframe and attach the PNG to the composer for the agent to react to. Electron-only
  *  (uses the window's capturePage via the preload seam); a no-op with a toast in a plain browser. */
 async function screenshotPreviewToChat(): Promise<void> {
-  const frame = $("#prevFrame") as HTMLIFrameElement | null;
+  const frame = laneFrame(); // capture whichever lane you're looking at
   if (!frame || frame.hidden) { showToast({ title: "Nothing to capture", desc: "Open a local file in the preview first.", actions: [{ label: "OK" }], timeout: 2600 }); return; }
   if (!bridge.isElectron || !bridge.capturePreview) {
     showToast({ title: "Desktop app only", desc: "Screenshots of the preview are captured in the packaged LUCID app.", actions: [{ label: "OK" }], timeout: 3200, tone: "warn" });
@@ -4487,6 +4645,45 @@ async function screenshotPreviewToChat(): Promise<void> {
   shot.appendChild(img);
   showToast({ title: "Screenshot added to chat", desc: "Captured the preview into the conversation.", actions: [{ label: "OK" }], timeout: 2600 });
 }
+
+// P-PREVIEW-PWA.1 (ADR-0237): downscale a capture (data URL) so its longest edge <= max, for a bandwidth-light
+// broadcast to phone guests. Canvas resize; returns the original on any failure (fail-soft).
+async function downscaleDataUrl(dataUrl: string, max: number): Promise<string> {
+  const { promise, resolve } = Promise.withResolvers<string>();
+  const img = new Image();
+  img.onload = () => {
+    const { w, h } = fitWithin(img.naturalWidth, img.naturalHeight, max);
+    if (!w || !h) { resolve(dataUrl); return; }
+    const canvas = document.createElement("canvas");
+    canvas.width = w; canvas.height = h;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) { resolve(dataUrl); return; }
+    ctx.drawImage(img, 0, 0, w, h);
+    try { resolve(canvas.toDataURL("image/png")); } catch { resolve(dataUrl); }
+  };
+  img.onerror = () => resolve(dataUrl);
+  img.src = dataUrl;
+  return promise;
+}
+
+// P-PREVIEW-PWA.1 (ADR-0237): capture the visible Preview lane + broadcast it to connected phone guests as a
+// scaled-down snapshot - direct-P2P via teeEvent, relay via the backend tap. Electron-only capture (like the
+// Screenshot button); needs a live share.
+async function sendPreviewToPhone(): Promise<void> {
+  const share = await currentShareStatus();
+  if (!share?.active) { showToast({ tone: "warn", title: "Start a share first", desc: "Open Session Share and start sharing, then send a preview to your phone.", timeout: 3400 }); return; }
+  const frame = laneFrame();
+  if (!frame || frame.hidden) { showToast({ title: "Nothing to send", desc: "Open a local file in the preview first.", timeout: 2600 }); return; }
+  if (!bridge.isElectron || !bridge.capturePreview) { showToast({ tone: "warn", title: "Desktop app only", desc: "Capturing the preview needs the packaged LUCID app.", timeout: 3200 }); return; }
+  const rect = frame.getBoundingClientRect();
+  const png = await bridge.capturePreview({ x: Math.round(rect.x), y: Math.round(rect.y), width: Math.round(rect.width), height: Math.round(rect.height) }).catch(() => null);
+  if (!png) { showToast({ tone: "warn", title: "Capture failed", desc: "Could not capture the preview.", timeout: 2600 }); return; }
+  const image = await downscaleDataUrl(png, MAX_SNAPSHOT_EDGE);
+  const evt: ChatEvent = { type: "preview-snapshot", image, label: "Preview snapshot" };
+  if (p2pHostActive()) { p2pTeeEvent(evt); } // direct-P2P: broadcast straight from the renderer host
+  else { const r = await bridge.collabBroadcastPreview(image, "Preview snapshot"); if (!r?.sent) { showToast({ tone: "warn", title: "Not sent", desc: "The relay share is not live.", timeout: 3000 }); return; } }
+  showToast({ title: "Preview sent to phone", desc: "Connected guests can view + save it.", timeout: 2600 });
+}
 // P-IMG.1 (ADR-0208): a download for an image data URL — the standard blob/anchor idiom, but a data: URL is
 // already a valid href, so set it as a PROPERTY (never interpolated into HTML) and click a transient anchor.
 function downloadDataUrl(dataUrl: string, filename: string): void {
@@ -4501,8 +4698,7 @@ function downloadDataUrl(dataUrl: string, filename: string): void {
 async function sendImageToPreview(dataUrl: string): Promise<void> {
   const res = await bridge.previewImage(dataUrl).catch(() => null);
   if (res?.path) {
-    openPreview();
-    onPreviewAvailable(res.path);
+    openPreviewFile(res.path); // your image for markup lands on the Yours lane
     showToast({ title: "Sent to preview", desc: "Use the Markup tools to annotate, then Screenshot → chat to iterate.", actions: [{ label: "OK" }], timeout: 3600 });
   } else {
     showToast({ tone: "warn", title: "Couldn't open in preview", desc: "The image may be too large or an unsupported format.", actions: [{ label: "OK" }], timeout: 3200 });
@@ -5117,6 +5313,7 @@ async function applyWorkspace(path: string): Promise<void> {
   seedThread(); state.liveUsage = null; renderStatus(); renderMetricsRail();
   void renderSessions(); void renderSettings();
   showToast({ title: "Workspace set", desc: `Agent now works in ${info?.name ?? path}.`, actions: [{ label: "OK" }], timeout: 2600 });
+  if (p2pHostActive()) setP2PHostOptions(buildRendererCollabOptions()); // P-COLLAB.14: mirror the folder switch to direct-P2P edit guests
 }
 
 function chips(items: { cls: string; n: number | string; l: string }[]): string {
@@ -5576,6 +5773,8 @@ function renderStatus(): void {
     </div>
     <div class="triv-slot" id="trivSlot"></div>`;
   mountTrivia(); // P-TRIV.1: re-adopt the persistent ticker after the innerHTML swap
+  mountSharePill(); // P-REMOTE.11: re-adopt the minimized Share pill (it lives in the bar, right of the ticker)
+  mountJoinPill(); // P-COLLAB.20: re-adopt the minimized Join pill (watching continues while minimized)
 }
 
 // ───────────────────────── the Trivia Wire — P-TRIV.1 (ADR-0174) ─────────────────────────
@@ -8048,49 +8247,85 @@ function openAbout(): void {
 // copy the view-only invite link, and watch the live roster. Same modal conventions as About: single
 // instance; closes on the X, a backdrop click, or Escape. Guests are view-only (Phase 1); the guest
 // join/render surface is the next slice, so an active share shows "waiting for someone to join".
-function shareBodyHtml(st: CollabShareStatus | null, p2p?: import("./bridge.ts").CollabP2PConfig | null): string {
+// P-SHARE.1 (ADR-0232): a chevron-collapsible dock section. Native <details> gives expand-on-click for free;
+// the dock persists each section's open/closed state (by data-sec id) via a toggle listener. Collapsed by
+// default unless `defaultOpen` — so the panel opens tidy and the user expands only what they need.
+function dockSec(id: string, title: string, defaultOpen: boolean, inner: string, collapsed: Record<string, boolean>): string {
+  const open = !isCollapsed(collapsed, id, !defaultOpen);
+  return `<details class="dock-sec" data-sec="${id}"${open ? " open" : ""}>`
+    + `<summary class="dock-sec-h">${icon("chevron", 12)}<span class="dock-sec-t">${esc(title)}</span></summary>`
+    + `<div class="dock-sec-b">${inner}</div></details>`;
+}
+
+function shareBodyHtml(st: CollabShareStatus | null, p2p?: CollabP2PConfig | null, auth?: { gated: boolean; signedIn: boolean; email?: string }, collapsed: Record<string, boolean> = {}, ui?: { allowEdit: boolean; preferDirect: boolean }): string {
   if (!st) return `<div class="share-err">${icon("info", 14)} Couldn't reach the backend. Is the GUI server running?</div>`;
   if (st.active) {
     const src = st.relaySource === "public" ? "public relay" : "self-hosted relay";
     const roster = st.participants.length
       ? st.participants.map((p) => `<li class="share-peer"><span class="share-peer-dot"></span>${esc(p.name)} <span class="share-peer-tag">${esc(p.access)}</span></li>`).join("")
       : `<li class="share-peer-empty">${icon("clock", 13)} Waiting for someone to join…</li>`;
-    // When editing is allowed, share the EDIT (full) link so a guest gets drive access; otherwise the view link.
-    const link = st.allowEdit ? (st.fullLink ?? "") : (st.viewLink ?? "");
-    return `
-      <div class="share-live-head"><span class="share-live-dot"></span> Live · ${esc(st.relayLabel ?? src)}${st.direct ? ` <span class="share-peer-tag direct">direct P2P</span>` : ""}${st.allowEdit ? ` <span class="share-peer-tag edit">can edit</span>` : ""}</div>
-      <label class="share-lbl">${st.allowEdit ? "Edit invite link (guest can drive)" : "View-only invite link"}</label>
-      <div class="share-linkrow">
-        <input class="share-link-input" id="shareViewLink" type="text" readonly value="${esc(link)}" spellcheck="false" />
-        <button class="btn-mini" data-copy="${esc(link)}" data-copy-what="Invite link">${icon("link", 12)} Copy</button>
-      </div>
-      <p class="share-hint">${st.allowEdit
-        ? "Send this to someone running LUCID. They can DRIVE this session - but every prompt runs here, through <b>your</b> approvals + security gate. The room key rides the link end-to-end; the relay never reads it."
-        : "Send this to someone running LUCID. It carries the room key end-to-end - the relay can never read the session. Anyone with the link can watch; stop + reshare to rotate."}</p>
-      <div class="share-roster">
-        <div class="share-roster-head">${icon("share", 13)} Participants <span class="share-count" id="sharePeerCount">${st.participantCount}</span></div>
-        <ul class="share-peers" id="shareParticipants">${roster}</ul>
-      </div>
-      <div class="modal-actions">
-        <button class="btn-mini danger" data-share-stop>${icon("close", 12)} Stop sharing</button>
-      </div>`;
+    // P-COLLAB.19 (ADR-0241): ONE room, TWO capabilities. An edit share hands out BOTH links - the EDIT link
+    // (write token: that guest can drive) and the VIEW-ONLY link (key only: watch, never write) - each with
+    // its own phone QR, so different guests get different access to the same live session.
+    // P-REMOTE.4a/.2b (ADR-0226/0227): each QR carries the PHONE form (secret in the fragment) a camera can
+    // open. Scanning carries the E2E secret exactly like copying; the SVG embeds only module geometry;
+    // over-capacity/empty degrades to no-QR.
+    const qrOf = (l: string): string => { try { return l ? `<div class="share-qr">${qrSvg(l, { margin: 2 })}</div><div class="share-qr-cap">${icon("phone", 12)} Scan with your phone camera</div>` : ""; } catch { return ""; } };
+    const inviteSec = (id: string, title: string, lbl: string, l: string, phone: string, hint: string, inputId: string): string => dockSec(id, title, true, `
+        <label class="share-lbl">${lbl}</label>
+        <div class="share-linkrow">
+          <input class="share-link-input" id="${inputId}" type="text" readonly value="${esc(l)}" spellcheck="false" />
+          <button class="btn-mini" data-copy="${esc(l)}" data-copy-what="${esc(title)}">${icon("link", 12)} Copy</button>
+        </div>
+        <p class="share-hint">${hint}</p>
+        ${qrOf(phone)}`, collapsed);
+    const editHint = "Send this to someone who should DRIVE this session - every prompt still runs here, through <b>your</b> approvals + security gate. The room key rides the link end-to-end; the relay never reads it.";
+    const viewHint = st.allowEdit
+      ? "Send this to someone who should only WATCH. Same room, same end-to-end key path - but no write token, so this link can never drive. Stop + reshare to rotate."
+      : "Send this to someone running LUCID. It carries the room key end-to-end - the relay can never read the session. Anyone with the link can watch; stop + reshare to rotate.";
+    const inviteSections = st.allowEdit
+      ? inviteSec("sec-invite", "Edit invite link", "Edit invite link (guest can drive)", st.fullLink ?? "", st.browserLink || (st.fullLink ?? ""), editHint, "shareEditLink")
+        + inviteSec("sec-invite-view", "View-only invite link", "View-only invite link (watch only)", st.viewLink ?? "", st.browserViewLink || (st.viewLink ?? ""), viewHint, "shareViewLink")
+      : inviteSec("sec-invite", "Invite link + QR", "View-only invite link", st.viewLink ?? "", st.browserLink || st.browserViewLink || (st.viewLink ?? ""), viewHint, "shareViewLink");
+    return `<div class="share-live-head"><span class="share-live-dot"></span> Live · ${esc(st.relayLabel ?? src)}${st.direct ? ` <span class="share-peer-tag direct">direct P2P</span>` : ""}${st.allowEdit ? ` <span class="share-peer-tag edit">can edit</span>` : ""}</div>`
+      + inviteSections
+      + dockSec("sec-participants", "Participants", true, `<ul class="share-peers" id="shareParticipants">${roster}</ul>`, collapsed)
+      + `<div class="dock-foot"><button class="btn-mini danger" data-share-stop>${icon("close", 12)} Stop sharing</button></div>`;
   }
   if (!st.relay) {
-    return `
+    return dockSec("sec-relay-setup", "Relay setup", true, `
       <div class="share-setup-note">${icon("shield", 13)}<span>No relay is configured yet. LUCID defaults to a <b>self-hosted</b> relay for a sovereign, air-gapped posture - point it at your own relay, or opt into the public one.</span></div>
       <label class="share-lbl">Self-hosted relay URL</label>
       <div class="share-field"><input class="share-link-input" id="shareRelayUrl" type="text" placeholder="wss://relay.your-org.internal" spellcheck="false" /></div>
       <label class="share-check"><input type="checkbox" id="shareRelayPublic" /> <span>Use the public relay (<code>my.omp.sh</code>) instead - fine for a quick demo, not for sensitive work.</span></label>
-      <div id="shareRelayErr" class="modal-err" hidden></div>
-      <div class="modal-actions"><button class="btn-mini ok" data-share-relay-save>${icon("check", 12)} Save relay</button></div>`;
+      <div id="shareRelayErr" class="modal-err" hidden></div>`, collapsed)
+      + `<div class="dock-foot"><button class="btn-mini ok" data-share-relay-save>${icon("check", 12)} Save relay</button></div>`;
   }
   const src = st.relay.source === "public" ? "public relay" : st.relay.source === "embedded" ? "no third party" : "self-hosted relay";
-  return `
-    <div class="share-ready-note">${icon("check", 13)}<span>Relay ready: <b>${esc(st.relay.label)}</b> <span class="share-peer-tag">${esc(src)}</span></span></div>
+  const relayReady = `<div class="share-ready-note">${icon("check", 13)}<span>Relay ready: <b>${esc(st.relay.label)}</b> <span class="share-peer-tag">${esc(src)}</span></span></div>`;
+  // P-REMOTE.2c: a GATED relay needs THIS desktop signed in (Google) before it can connect, so offer sign-in
+  // right here - no detour through the Compiled KB marketplace. Not signed in, the sign-in step replaces Start
+  // (you cannot host a gated relay without a token); signed in, show the account plus a sign-out.
+  const gated = auth?.gated ?? false;
+  const signedIn = auth?.signedIn ?? false;
+  if (gated && !signedIn) {
+    return dockSec("sec-relay", "Relay", true, `${relayReady}<div class="share-setup-note">${icon("shield", 13)}<span>To share with your phone, sign in so this desktop can authorize with the secure relay. You only need to do this once.</span></div>`, collapsed)
+      + `<div class="dock-foot"><button class="btn-mini ok" data-share-signin>${icon("share", 12)} Sign in with Google</button></div>`;
+  }
+  const authChip = signedIn
+    ? `<div class="share-ready-note">${icon("check", 13)}<span>Signed in as <b>${esc(auth?.email ?? "your account")}</b></span></div>`
+    : "";
+  // P-SHARE.2 (ADR-0234): the two sharing toggles are EPHEMERAL (not persisted server-side), so their checked
+  // state is fed in via `ui` and preserved across every draw() re-render (focus / serve-toggle / auth-poll) -
+  // otherwise "Let a guest drive" silently unchecks itself. `preferDirect` still falls back to the saved config.
+  const allowEditChecked = ui?.allowEdit ?? false;
+  const preferDirect = ui?.preferDirect ?? p2p?.preferDirect ?? false;
+  return dockSec("sec-relay", "Relay", false, `${authChip}${relayReady}`, collapsed)
+    + dockSec("sec-options", "Sharing options", true, `
     <p class="share-hint">Starting a share opens an end-to-end-encrypted room and broadcasts this session live. You can stop any time.</p>
-    <label class="share-check"><input type="checkbox" id="shareAllowEdit" /> <span><b>Let a guest drive this session</b> (edit) - their prompts run here, through <b>your</b> approvals + security gate. Otherwise guests are view-only.</span></label>
-    <label class="share-check"><input type="checkbox" id="sharePreferP2P" ${p2p?.preferDirect ? "checked" : ""} /> <span><b>Prefer a direct connection (WebRTC)</b> - the relay only helps you connect, then session data flows <b>peer-to-peer</b>. Falls back to the relay automatically if a direct link can't be formed.</span></label>
-    <details class="share-ice" ${p2p?.preferDirect ? "open" : ""}>
+    <label class="share-check"><input type="checkbox" id="shareAllowEdit" ${allowEditChecked ? "checked" : ""} /> <span><b>Let a guest drive this session</b> (edit) - their prompts run here, through <b>your</b> approvals + security gate. Otherwise guests are view-only.</span></label>
+    <label class="share-check"><input type="checkbox" id="sharePreferP2P" ${preferDirect ? "checked" : ""} /> <span><b>Prefer a direct connection (WebRTC)</b> - the relay only helps you connect, then session data flows <b>peer-to-peer</b>. Falls back to the relay automatically if a direct link can't be formed.</span></label>
+    <details class="share-ice" ${preferDirect ? "open" : ""}>
       <summary>STUN/TURN servers (help connect across networks / NAT)</summary>
       <textarea id="shareIceUrls" class="share-link-input share-ice-ta" rows="2" placeholder="stun:stun.l.google.com:19302&#10;turn:turn.your-org.internal:3478" spellcheck="false">${esc((p2p?.iceUrls ?? []).join("\n"))}</textarea>
       <div class="share-serve-fields">
@@ -8098,15 +8333,16 @@ function shareBodyHtml(st: CollabShareStatus | null, p2p?: import("./bridge.ts")
         <input id="shareTurnCred" class="share-link-input" type="password" placeholder="TURN credential (optional)" value="${esc(p2p?.turnCredential ?? "")}" spellcheck="false" autocomplete="off" />
       </div>
       <p class="share-serve-hint">Leave empty on a LAN or VPN (host candidates suffice). Add a STUN server to cross NATs, or a TURN server (with credentials) as a last-resort relay for the media path.</p>
-    </details>
-    <div class="modal-actions">
+    </details>`, collapsed)
+    + `<div class="dock-foot">
       <button class="btn-mini" data-share-relay-change>${icon("sliders", 12)} Change relay</button>
+      ${signedIn ? `<button class="btn-mini" data-share-signout>Sign out</button>` : ""}
       <button class="btn-mini ok" data-share-start>${icon("share", 12)} Start sharing</button>
     </div>`;
 }
 
 /** P-COLLAB.7: the "be the relay" toggle - host the embedded relay on this device (governance-gated). */
-function shareRelayServeHtml(serve: import("./bridge.ts").CollabRelayServeStatus | null): string {
+function shareRelayServeHtml(serve: CollabRelayServeStatus | null): string {
   if (!serve) return "";
   const org = serve.managed.org ? esc(serve.managed.org) : "your organization";
   if (!serve.managed.allowServe) {
@@ -8116,9 +8352,11 @@ function shareRelayServeHtml(serve: import("./bridge.ts").CollabRelayServeStatus
   const on = serve.running;
   const bind = on ? `${esc(serve.hostname ?? "")}:${serve.port}` : "";
   // P-COLLAB.14: offer this machine's addresses (loopback / LAN / VPN) so a peer on your network can reach you
-  // directly. A "custom…" option keeps a text field for a DNS name / 0.0.0.0. Loopback is the default.
-  const addrs = serve.addresses ?? [{ address: "127.0.0.1", family: "IPv4" as const, kind: "loopback" as const, label: "127.0.0.1 — this machine only" }];
-  const opts = addrs.map((a) => `<option value="${esc(a.address)}">${esc(a.label)}</option>`).join("") + `<option value="__custom__">Custom address…</option>`;
+  // directly. A "custom…" option keeps a text field for a DNS name / 0.0.0.0. P-SHARE.2 (ADR-0234): a routable
+  // LAN/VPN address is the default (loopback can't reach a guest, so it sinks to the bottom).
+  const addrs = serve.addresses ?? [{ address: "127.0.0.1", family: "IPv4" as const, kind: "loopback" as const, label: "127.0.0.1 - this machine only" }];
+  const ordered = orderBindAddresses(addrs);
+  const opts = ordered.map((a, i) => `<option value="${esc(a.address)}"${i === 0 ? " selected" : ""}>${esc(a.label)}</option>`).join("") + `<option value="__custom__">Custom address…</option>`;
   return `
     <div class="share-serve-card">
       <label class="share-serve-toggle">
@@ -8133,7 +8371,7 @@ function shareRelayServeHtml(serve: import("./bridge.ts").CollabRelayServeStatus
              <input class="share-link-input share-port" id="shareServePort" type="text" value="8790" spellcheck="false" aria-label="port" ${locked ? "disabled" : ""} />
            </div>
            <input class="share-link-input" id="shareServeHost" type="text" value="" placeholder="wss host / IP (e.g. 0.0.0.0 for all interfaces)" spellcheck="false" aria-label="custom bind address" hidden ${locked ? "disabled" : ""} />
-           <p class="share-serve-hint">Loopback reaches only this machine (or a guest over a tunnel/VPN); pick a <b>LAN</b> or <b>VPN</b> address so a peer on your network reaches you directly. A LAN bind may require an admin allowlist.</p>`}
+           <p class="share-serve-hint">Defaults to a <b>LAN</b>/<b>VPN</b> address so a peer on your network reaches you directly; loopback (bottom of the list) reaches only this machine or a guest over a tunnel/VPN. A LAN bind may require an admin allowlist.</p>`}
       ${locked ? `<div class="share-managed">${icon("shield", 11)} Managed by ${org}</div>` : ""}
     </div>`;
 }
@@ -8151,19 +8389,87 @@ function startCollabHostPoll(): void {
     const inbox = await bridge.collabGuestInbox();
     if (!inbox) return;
     if (inbox.abort && state.streaming) { void bridge.cancelChat(); showToast({ title: "Guest asked to stop", desc: "Stopping the current turn.", timeout: 2500 }); }
-    if (inbox.prompt) runGuestPromptLocally(inbox.prompt.text, inbox.prompt.from);
+    if (inbox.prompt) runGuestPromptLocally(inbox.prompt.text, inbox.prompt.from, inbox.prompt.images);
+    if (inbox.model) runGuestModelLocally(inbox.model.value, inbox.model.from);
+    if (inbox.workspace) runGuestWorkspaceLocally(inbox.workspace.path, inbox.workspace.from);
   }, 2000);
 }
 function stopCollabHostPoll(): void { if (collabHostPoll) { clearInterval(collabHostPoll); collabHostPoll = undefined; } }
 
+// P-REMOTE.2c: while a RELAY share is active, keep the backend's relay-auth token cache fresh so the host
+// socket can (re)authenticate to a GATED hosted relay across the hourly reconnect. A fresh Firebase credential
+// (silently renewed via securetoken when near expiry) is pushed to the backend; signed-out/unrenewable pushes
+// an empty token (clears the cache -> the gated relay refuses, never a silent unauthenticated session). No-op
+// for an anonymous relay (the backend only reads the cache when the relay is gated).
+let relayTokenPoll: number | undefined;
+async function pushRelayTokenOnce(): Promise<void> {
+  try {
+    const cred = await marketFreshCredential();
+    if (cred) await bridge.collabPushToken(cred.idToken, cred.expiresAt);
+    else await bridge.collabPushToken("", 0);
+  } catch { /* non-fatal: a gated relay simply refuses until a token lands; anonymous relays ignore it */ }
+}
+async function startRelayTokenPush(): Promise<void> {
+  await pushRelayTokenOnce(); // seed before the host connects
+  if (relayTokenPoll === undefined) relayTokenPoll = window.setInterval(() => void pushRelayTokenOnce(), 10 * 60_000);
+}
+function stopRelayTokenPush(): void {
+  if (relayTokenPoll !== undefined) { clearInterval(relayTokenPoll); relayTokenPoll = undefined; }
+  void bridge.collabPushToken("", 0); // clear the backend cache when sharing ends
+}
+
 // Run an EDIT guest's prompt through the host's OWN composer, so omp's scan gate + exec/egress approvals fire
 // exactly as for a local prompt and the turn taps back to the guests. Attributed (a toast), never disguised as
 // the host's own. Shared by the relay inbox poller (P-COLLAB.13) AND the direct-P2P host callback (P-COLLAB.17).
-function runGuestPromptLocally(text: string, from: string): void {
-  showToast({ title: `Running ${from}'s prompt`, desc: text.slice(0, 90), timeout: 4000 });
+// P-COLLAB.15: set by runGuestPromptLocally so the NEXT send() attributes the broadcast to the guest author.
+let nextTurnFrom: string | null = null;
+function runGuestPromptLocally(text: string, from: string, images?: string[]): void {
+  const imgN = images?.length ?? 0;
+  showToast({ title: `Running ${from}'s prompt`, desc: text.slice(0, 90) || `${imgN} image${imgN === 1 ? "" : "s"}`, timeout: 4000 });
+  if (imgN && images) {
+    // P-REMOTE.8 (ADR-0229): stage the guest's images as composer attachments so send() forwards them to the
+    // model as vision input - re-validated fail-closed (acceptAttachment enforces type/size/count) exactly
+    // like a locally pasted screenshot.
+    state.attachments = [];
+    for (const dataUrl of images) { const r = acceptAttachment(state.attachments, dataUrl, `att_${++attSeq}`); if (r.ok && r.attachment) state.attachments.push(r.attachment); }
+    renderComposerThumbs();
+  }
   const ta = $("#input") as HTMLTextAreaElement | null;
   // If a turn is already running, send() queues it - the guest's turn runs after the current one.
-  if (ta) { ta.value = text; autosize(ta); void send(); }
+  if (ta) { nextTurnFrom = from; ta.value = text; autosize(ta); void send(); }
+}
+
+// P-COLLAB.14 (ADR-0228): apply an EDIT guest's model / already-used-folder pick through the host's OWN picker
+// path (applyConfig / applyWorkspace) - the host UI + omp reconcile exactly as if the local user clicked it,
+// and (for a direct-P2P host) those same functions rebroadcast the fresh options to edit guests. Attributed
+// via a toast, never silent. The pick is already allowlist-validated host-side; a folder arrives as a path the
+// host resolved from the opaque id (a guest never sent, and never learns, the path).
+function runGuestModelLocally(value: string, from: string): void {
+  showToast({ title: `${from} switched the model`, desc: modelLabel(value), timeout: 3500 });
+  void applyConfig("model", value);
+}
+function runGuestWorkspaceLocally(path: string, from: string): void {
+  showToast({ title: `${from} switched the folder`, desc: path, timeout: 3500 });
+  void applyWorkspace(path);
+}
+
+// P-COLLAB.14: build the model + already-used-folder allowlists for a DIRECT-P2P share (host = the renderer),
+// keyed by an OPAQUE id (a one-way hash of the path) the host resolves back locally via `p2pWsById`. The
+// backend relay host builds its OWN copy in dev.ts; each host resolves only its own ids.
+let p2pWsById: Record<string, string> = {};
+function rendererWsId(path: string): string { let h = 5381; for (let i = 0; i < path.length; i++) h = ((h << 5) + h + path.charCodeAt(i)) >>> 0; return h.toString(36); }
+function buildRendererCollabOptions(): CollabOptions {
+  const modelCfg = state.config.find((c) => c.id === "model");
+  const active = modelCfg?.currentValue ?? state.model ?? "";
+  // P-REMOTE.11b (ADR-0238): offer guests just the FAVORITES + the current model - a phone picker over the
+  // full catalog (hundreds of entries) is unusable. No favorites -> the full list.
+  const all = (modelCfg?.options ?? []).map((o) => ({ value: o.value, name: o.name })).filter((m) => m.value);
+  const models = offeredModels(all, parseFavs(localStorage.getItem(FAVS_KEY)), active);
+  const ws = state.workspace;
+  const folders = ws ? [{ path: ws.current, name: ws.name, isGit: ws.isGit }, ...ws.recent] : [];
+  p2pWsById = {};
+  const workspaces = folders.map((f) => { const id = rendererWsId(f.path); p2pWsById[id] = f.path; return { id, name: f.name, isGit: f.isGit }; });
+  return { models, activeModel: active, workspaces, activeWorkspaceId: ws ? rendererWsId(ws.current) : null };
 }
 
 // P-COLLAB.17: the current share may be hosted DIRECTLY in the renderer (WebRTC) or by the backend over the
@@ -8185,25 +8491,231 @@ async function refreshShareDot(st?: CollabShareStatus | null): Promise<void> {
   if (s?.active && s.allowEdit && !s.direct) startCollabHostPoll(); else if (!s?.active) stopCollabHostPoll();
 }
 
+// P-REMOTE.11 (ADR-0236): the minimized Session Share pill lives INSIDE the status bar (right of the trivia
+// ticker), not floating above it. renderStatus rebuilds the bar's innerHTML every poll, so - exactly like the
+// ticker - the pill is a persistent node re-adopted into the fresh bar after each swap.
+let sharePillEl: HTMLElement | null = null;
+// P-SHARE.3: a handle to the live Session Share dock's "reveal me" action, so a rail-glyph click can restore an
+// already-open-but-minimized dock instead of no-op'ing on the single-instance guard. Null when no dock exists.
+let restoreShareDock: (() => void) | null = null;
+function mountSharePill(): void {
+  const sb = document.getElementById("statusbar");
+  if (sb && sharePillEl && !sb.contains(sharePillEl)) sb.append(sharePillEl);
+}
+// P-COLLAB.20 (ADR-0242): the minimized JOIN dock's pill - coexists with the share pill in the same bar.
+let joinPillEl: HTMLElement | null = null;
+function mountJoinPill(): void {
+  const sb = document.getElementById("statusbar");
+  if (sb && joinPillEl && !sb.contains(joinPillEl)) sb.append(joinPillEl);
+}
+
+// ── P-SHARE.1 (ADR-0232): the floating Share DOCK helpers (drag / resize / snap / persist) ─────────────────
+// localStorage-backed persistence; a broken/absent store degrades to in-memory (the dock still works).
+function dockStorage(): DockStorage {
+  try { const ls = window.localStorage; return { get: (k) => ls.getItem(k), set: (k, v) => ls.setItem(k, v) }; }
+  catch { return { get: () => null, set: () => { /* storage unavailable */ } }; }
+}
+// A small custom up-arrow (minimize-to-pill / restore glyph) - inline SVG so it needs no icon-set entry.
+const SHARE_UP_ARROW = `<svg class="sd-up" viewBox="0 0 24 24" width="13" height="13" aria-hidden="true"><path d="M12 8l-6 7h12z" fill="currentColor"/></svg>`;
+function applyDockShape(node: HTMLElement, s: { x: number; y: number; w: number; h: number }): void {
+  node.style.left = `${s.x}px`; node.style.top = `${s.y}px`; node.style.width = `${s.w}px`; node.style.height = `${s.h}px`;
+}
+/** The left rail column width, so a left-snap sits BESIDE the rails (fallback 56 if the rail isn't found). */
+function railWidth(): number { const r = document.querySelector(".rail") as HTMLElement | null; return r ? Math.round(r.getBoundingClientRect().width) : 56; }
+
+/** Drag the dock by its header; on release, snap to a frame (beside the rails / flush right) or stay floating. */
+function wireDockDrag(node: HTMLElement, handleSel: string, state: DockState, onEnd: () => void): void {
+  const head = node.querySelector(handleSel) as HTMLElement | null; if (!head) return;
+  head.addEventListener("pointerdown", (e) => {
+    if ((e.target as HTMLElement).closest("button")) return; // header buttons act, they don't drag
+    e.preventDefault();
+    const sx = e.clientX, sy = e.clientY, ox = state.shape.x, oy = state.shape.y;
+    try { head.setPointerCapture(e.pointerId); } catch { /* non-fatal */ }
+    node.classList.add("dragging");
+    const move = (ev: PointerEvent) => {
+      state.shape = clampToViewport({ ...state.shape, x: ox + (ev.clientX - sx), y: oy + (ev.clientY - sy) }, window.innerWidth, window.innerHeight);
+      applyDockShape(node, state.shape);
+    };
+    const up = () => {
+      head.removeEventListener("pointermove", move); head.removeEventListener("pointerup", up);
+      node.classList.remove("dragging");
+      const snap = snapDecision(state.shape, window.innerWidth, window.innerHeight, railWidth());
+      state.shape = snap.shape; state.side = snap.side; applyDockShape(node, snap.shape);
+      node.classList.toggle("snap-left", snap.side === "left"); node.classList.toggle("snap-right", snap.side === "right");
+      onEnd();
+    };
+    head.addEventListener("pointermove", move); head.addEventListener("pointerup", up);
+  });
+}
+
+/** Resize via the e / s / se handles (horizontal, vertical, corner); clamps to the viewport + persists. */
+function wireDockResize(node: HTMLElement, state: DockState, onEnd: () => void): void {
+  node.querySelectorAll("[data-dock-rz]").forEach((h) => {
+    const dir = (h as HTMLElement).dataset.dockRz ?? "se";
+    h.addEventListener("pointerdown", (e) => {
+      const ev = e as PointerEvent; ev.preventDefault(); ev.stopPropagation();
+      const sx = ev.clientX, sy = ev.clientY, ow = state.shape.w, oh = state.shape.h;
+      try { (h as HTMLElement).setPointerCapture(ev.pointerId); } catch { /* non-fatal */ }
+      const move = (m: Event) => {
+        const pm = m as PointerEvent;
+        const w = dir.includes("e") ? ow + (pm.clientX - sx) : ow;
+        const hh = dir.includes("s") ? oh + (pm.clientY - sy) : oh;
+        state.shape = clampToViewport({ ...state.shape, w, h: hh }, window.innerWidth, window.innerHeight);
+        applyDockShape(node, state.shape);
+      };
+      const up = () => { h.removeEventListener("pointermove", move); h.removeEventListener("pointerup", up); onEnd(); };
+      h.addEventListener("pointermove", move); h.addEventListener("pointerup", up);
+    });
+  });
+}
+
+// \u2500\u2500 P-REMOTE.10b (ADR-0233): the Share dock's "Reconnect (Google Drive)" section + write path \u2500\u2500
+const RECONN_ENABLED_KEY = "lucid.reconnect.enabled";
+function reconnEnabled(): boolean { try { return localStorage.getItem(RECONN_ENABLED_KEY) === "1"; } catch { return false; } }
+function setReconnEnabled(on: boolean): void { try { localStorage.setItem(RECONN_ENABLED_KEY, on ? "1" : "0"); } catch { /* storage off */ } }
+
+/** Write the CURRENT share's reconnect link to the user's Drive relay-codes file (create-or-append), optionally
+ *  PIN-encrypted. Renderer-side over the market drive.file token; fail-closed on any error. */
+async function writeReconnectCode(pin: string | null): Promise<{ ok: boolean; error?: string }> {
+  const token = freshDriveToken();
+  if (!token) return { ok: false, error: "Authorize Google Drive first." };
+  const s = await currentShareStatus();
+  if (!s?.active) return { ok: false, error: "Start a share first." };
+  const chosen = chooseReconnectLink({ allowEdit: !!s.allowEdit, fullLink: s.fullLink, viewLink: s.viewLink });
+  if (!chosen) return { ok: false, error: "No invite link to save yet." };
+  const code = buildCode(chosen.link, chosen.edit, s.roomId ?? "room", Date.now());
+  try {
+    const id = await findRelayFile(token, RELAY_FILE_NAME, fetch);
+    if (!id) {
+      await createRelayFile(token, RELAY_FILE_NAME, await buildFileContent([code], pin), fetch);
+    } else {
+      // append to existing codes; a wrong/absent PIN can't read old codes -> start fresh (they're stale anyway)
+      const existing = (await readFileContent(await readRelayFile(token, id, fetch), pin)) ?? [];
+      await updateRelayFile(token, id, await buildFileContent(appendCode(existing, code), pin), fetch);
+    }
+    return { ok: true };
+  } catch (e) { return { ok: false, error: String((e as Error)?.message ?? e) }; }
+}
+
+/** The dock's Reconnect section (docks into the P-SHARE.1 dock; collapsed by default). */
+function reconnectSectionHtml(st: CollabShareStatus | null, collapsed: Record<string, boolean>): string {
+  const authorized = freshDriveToken() !== null;
+  const active = !!st?.active;
+  const inner = `
+    <label class="share-check"><input type="checkbox" id="reconnEnable" ${reconnEnabled() ? "checked" : ""} /> <span><b>Save a reconnect code to Google Drive</b> - writes the current invite link to a single <code>lucid_relay_codes</code> file in <b>your</b> Drive (scope: only that file) so you can rejoin after a disconnect.</span></label>
+    <div class="share-reconn-status" id="reconnStatus">${authorized ? `${icon("check", 12)} Google Drive authorized` : `${icon("shield", 12)} Not authorized`}</div>
+    ${authorized ? "" : `<div class="dock-foot"><button class="btn-mini ok" data-reconn-auth>${icon("share", 12)} Authorize Google Drive</button></div>`}
+    <label class="share-lbl">PIN (optional - encrypts the codes at rest)</label>
+    <div class="share-field"><input class="share-link-input" id="reconnPin" type="password" placeholder="blank = no encryption" spellcheck="false" autocomplete="off" inputmode="numeric" /></div>
+    ${active ? `<div class="dock-foot"><button class="btn-mini ok" data-reconn-save${authorized ? "" : " disabled"}>${icon("link", 12)} Save a reconnect code now</button></div>` : ""}
+    <label class="share-lbl">Share the codes file with a teammate</label>
+    <div class="share-linkrow"><input class="share-link-input" id="reconnShareEmail" type="email" placeholder="teammate@example.com" spellcheck="false" /><button class="btn-mini" data-reconn-share${authorized ? "" : " disabled"}>${icon("share", 12)} Share</button></div>`;
+  return dockSec("sec-reconnect", "Reconnect (Google Drive)", false, inner, collapsed);
+}
+
 function openSharePanel(): void {
-  if ($("#shareModal")) return; // single instance
-  const ov = el(`<div id="shareModal" class="modal-ov"><div class="modal share-modal" role="dialog" aria-modal="true" aria-labelledby="shareTitle">
-    <button class="set-close share-x" data-share-close aria-label="Close">${icon("close", 16)}</button>
-    <div class="modal-icon">${icon("share", 24)}</div>
-    <h2 class="modal-title" id="shareTitle">Share this session · live</h2>
-    <p class="modal-desc">Invite someone to watch this session in real time. The invite is end-to-end encrypted - your relay only ever sees ciphertext - and guests are <b>view-only</b>.</p>
-    <div id="shareBody" class="share-body"><div class="share-loading">${icon("refresh", 14)} Loading…</div></div>
-    <div class="share-join-cta"><button class="btn-mini" data-open-join>${icon("eye", 12)} Join someone else's session instead</button></div>
-  </div></div>`);
+  // The rail glyph is an explicit "show me the Session Share module". If a dock already exists (possibly
+  // minimized to a status-bar pill, its #shareModal still in the DOM just hidden), REVEAL it rather than
+  // no-op'ing on the single-instance guard - clicking the rail must never do nothing. (P-SHARE.3)
+  if ($("#shareModal")) { restoreShareDock?.(); return; }
+  const dockState: DockState = loadDockState(dockStorage(), window.innerWidth, window.innerHeight);
+  const ov = el(`<div id="shareModal" class="share-dock side-${dockState.side}" role="dialog" aria-label="Session Share">
+    <div class="share-dock-head" data-dock-drag>
+      <span class="share-dock-grip">${icon("share", 14)}</span>
+      <span class="share-dock-title">Session Share</span>
+      <span class="share-dock-updating" id="shareUpdating" hidden>${icon("refresh", 11)} updating\u2026</span>
+      <button class="share-dock-count" data-dock-people aria-haspopup="true" aria-expanded="false" title="Connected participants"><span class="sd-live-dot"></span><span id="shareDockCount">0</span></button>
+      <button class="share-dock-btn" data-dock-min aria-label="Minimize to pill" title="Minimize">${SHARE_UP_ARROW}</button>
+      <button class="share-dock-btn" data-share-close aria-label="Close" title="Close">${icon("close", 15)}</button>
+    </div>
+    <div class="share-dock-people" id="shareDockPeople" hidden></div>
+    <div id="shareBody" class="share-body share-dock-body"><div class="share-loading">${icon("refresh", 14)} Loading\u2026</div></div>
+    <div class="share-dock-cta"><button class="btn-mini" data-open-join>${icon("eye", 12)} Join someone else's session</button></div>
+    <div class="share-dock-rz e" data-dock-rz="e" aria-hidden="true"></div>
+    <div class="share-dock-rz s" data-dock-rz="s" aria-hidden="true"></div>
+    <div class="share-dock-rz se" data-dock-rz="se" aria-hidden="true"></div>
+  </div>`);
+  applyDockShape(ov, dockState.shape);
   let poll: number | undefined;
-  const close = () => { if (poll) clearInterval(poll); ov.remove(); document.removeEventListener("keydown", onKey); };
+  let pill: HTMLElement | null = null;
+  const removePill = () => { pill?.remove(); pill = null; sharePillEl = null; };
+  const close = () => { clearInterval(poll); removePill(); ov.remove(); restoreShareDock = null; document.removeEventListener("keydown", onKey); window.removeEventListener("focus", onFocus); window.removeEventListener("resize", onResize); };
   const onKey = (ev: KeyboardEvent) => { if (ev.key === "Escape") { ev.preventDefault(); close(); } };
   document.addEventListener("keydown", onKey);
+  // P-REMOTE.2c: re-render when the user returns from the browser sign-in (lucid://auth deep link) so the
+  // panel reflects the new auth state without a manual reopen. Idle only (a live share keeps its own roster).
+  const onFocus = async () => { if (!$("#shareModal")) return; const s = await currentShareStatus(); if (!s?.active) void draw(); };
+  window.addEventListener("focus", onFocus);
+  // Keep the dock on-screen if the window is resized (or a rail toggles the layout).
+  const onResize = () => { if (!$("#shareModal")) return; dockState.shape = clampToViewport(dockState.shape, window.innerWidth, window.innerHeight); applyDockShape(ov, dockState.shape); persist(); };
+  window.addEventListener("resize", onResize);
   const body = $("#shareBody", ov) as HTMLElement;
+
+  // ── P-SHARE.2 (ADR-0234): keep the two EPHEMERAL sharing toggles across draw() re-renders (they aren't
+  // persisted server-side, so a re-render would silently uncheck them), and paint a secret-free CACHED snapshot
+  // instantly so a cold-boot dock is never a blank "Loading". composeBody is the single body-render path. ──
+  let allowEditPref = false;
+  let preferP2PPref: boolean | null = null; // null = inherit the saved P2P config until the user toggles it
+  const setUpdating = (on: boolean): void => { const u = $("#shareUpdating", ov) as HTMLElement | null; if (u) u.hidden = !on; };
+  const composeBody = (show: CollabShareStatus | null, serve: CollabRelayServeStatus | null, p2pCfg: CollabP2PConfig | null, authInfo: { gated: boolean; signedIn: boolean; email?: string }): string => {
+    const serveHtml = show?.active ? "" : shareRelayServeHtml(serve);
+    const serveSec = serveHtml ? dockSec("sec-serve", "Host the relay here", false, serveHtml, dockState.collapsed) : "";
+    const ui = { allowEdit: allowEditPref, preferDirect: preferP2PPref ?? p2pCfg?.preferDirect ?? false };
+    return serveSec + shareBodyHtml(show, p2pCfg, authInfo, dockState.collapsed, ui) + reconnectSectionHtml(show, dockState.collapsed);
+  };
+  const cachedSnap = cachedShareSnapshot<ShareSnapshot<CollabRelay, CollabRelayServeStatus | null>>();
+  if (cachedSnap) {
+    const cu = marketUser();
+    const cachedShow: CollabShareStatus = { active: false, participantCount: 0, participants: [], relay: cachedSnap.relay };
+    body.innerHTML = composeBody(cachedShow, cachedSnap.serve, cachedSnap.p2pCfg, { gated: !!cachedSnap.relay?.gated, signedIn: cu.signedIn === true, email: cu.email });
+    setUpdating(true); // fresh state is loading in the background; draw() clears this
+  }
+
+  // ── P-SHARE.1: dock persistence + minimize-to-pill + participant count/dropdown ──
+  const persist = () => saveDockState(dockStorage(), dockState);
+  const setCount = (n: number) => {
+    const c = $("#shareDockCount", ov); if (c) c.textContent = String(n);
+    const pc = pill?.querySelector(".sd-pill-n"); if (pc) pc.textContent = String(n);
+  };
+  const renderPeople = (people: { name: string; access: string }[]) => {
+    const pop = $("#shareDockPeople", ov); if (!pop) return;
+    pop.innerHTML = people.length
+      ? people.map((p) => `<div class="sd-person"><span class="sd-person-dot ${p.access === "edit" ? "edit" : ""}"></span><span class="sd-person-email">${esc(p.name)}</span><span class="share-peer-tag">${esc(p.access)}</span></div>`).join("")
+      : `<div class="sd-person empty">${icon("clock", 12)} No one connected yet</div>`;
+  };
+  const togglePeople = (force?: boolean) => {
+    const pop = $("#shareDockPeople", ov) as HTMLElement | null; const btn = $("[data-dock-people]", ov) as HTMLElement | null;
+    if (!pop || !btn) return;
+    const show = force ?? pop.hidden;
+    pop.hidden = !show; btn.setAttribute("aria-expanded", show ? "true" : "false");
+  };
+  const refreshCounts = async () => {
+    const s = await currentShareStatus();
+    const sum = participantSummary(s?.participants ?? []);
+    setCount(sum.count); renderPeople(sum.people);
+    const dot = $(".sd-live-dot", ov) as HTMLElement | null; if (dot) dot.classList.toggle("on", !!s?.active);
+    if (pill) pill.classList.toggle("live", !!s?.active);
+  };
+  const restore = () => { dockState.minimized = false; persist(); removePill(); ov.hidden = false; };
+  restoreShareDock = restore; // P-SHARE.3: let a rail-glyph re-click reveal this dock (restore from the pill)
+  const minimize = () => {
+    dockState.minimized = true; persist(); ov.hidden = true; togglePeople(false);
+    if (!pill) {
+      pill = el(`<button id="shareDockPill" class="share-dock-pill" title="Session Share" aria-label="Restore Session Share"><span class="sd-live-dot"></span><span class="sd-pill-n">0</span>${SHARE_UP_ARROW}</button>`);
+      pill.addEventListener("click", restore);
+      sharePillEl = pill; mountSharePill(); // P-REMOTE.11: dock into the status bar, not document.body
+    }
+    void refreshCounts();
+  };
+  wireDockDrag(ov, "[data-dock-drag]", dockState, persist);
+  wireDockResize(ov, dockState, persist);
 
   // P-COLLAB.7/.14: the "be the relay" toggle + the bind-address picker (checkbox / select → change events).
   ov.addEventListener("change", async (ev) => {
     const t = ev.target as HTMLElement;
+    if (t.id === "reconnEnable") { setReconnEnabled((t as HTMLInputElement).checked); return; } // P-REMOTE.10b
+    if (t.id === "shareAllowEdit") { allowEditPref = (t as HTMLInputElement).checked; return; } // P-SHARE.2: survive re-render
+    if (t.id === "sharePreferP2P") { preferP2PPref = (t as HTMLInputElement).checked; return; } // P-SHARE.2: survive re-render
     if (t.id === "shareServeHostSel") {
       // reveal the custom text field only when "Custom address…" is chosen
       const sel = t as HTMLSelectElement; const custom = $("#shareServeHost", ov) as HTMLInputElement | null;
@@ -8235,30 +8747,108 @@ function openSharePanel(): void {
     // body is the roster + Stop, so the toggle is hidden (you can't change relay mid-share). P-COLLAB.17: the
     // P2P toggle + STUN/TURN config ride the ready-state form (locked out under managed policy).
     const p2pCfg = p2p?.managed.locked ? null : (p2p?.config ?? null);
-    body.innerHTML = (st?.active ? "" : shareRelayServeHtml(serve)) + shareBodyHtml(show, p2pCfg);
+    const u = marketUser();
+    const authInfo = { gated: !!show?.relay?.gated, signedIn: u.signedIn === true, email: u.email };
+    body.innerHTML = composeBody(show, serve, p2pCfg, authInfo);
+    setUpdating(false); // fresh state is on screen \u2192 clear the cold-boot "updating\u2026" chip
+    if (show) setCachedShareSnapshot(redactShareSnapshot(show.relay ?? null, serve, p2pCfg)); // P-SHARE.2: seed the next open
     void refreshShareDot(st);
+    void refreshCounts();
     return st;
   };
   // While a share is live, refresh only the roster in place (never clobbers copy buttons the user is using).
   const pollRoster = async () => {
     const st = await currentShareStatus();
     if (!st?.active) { await draw(); return; } // it ended elsewhere - fall back to a full redraw
-    const list = $("#shareParticipants", ov); const count = $("#sharePeerCount", ov);
-    if (count) count.textContent = String(st.participantCount);
+    const sum = participantSummary(st.participants);
+    setCount(sum.count); renderPeople(sum.people);
+    const dot = $(".sd-live-dot", ov) as HTMLElement | null; if (dot) dot.classList.add("on");
+    if (pill) pill.classList.add("live");
+    const list = $("#shareParticipants", ov);
     if (list) list.innerHTML = st.participants.length
       ? st.participants.map((p) => `<li class="share-peer"><span class="share-peer-dot"></span>${esc(p.name)} <span class="share-peer-tag">${esc(p.access)}</span></li>`).join("")
-      : `<li class="share-peer-empty">${icon("clock", 13)} Waiting for someone to join…</li>`;
+      : `<li class="share-peer-empty">${icon("clock", 13)} Waiting for someone to join\u2026</li>`;
   };
 
+  // P-SHARE.1: persist each section's collapse (native <details> toggle doesn't bubble -> capture).
+  ov.addEventListener("toggle", (ev) => {
+    const d = ev.target as HTMLElement;
+    if (!(d instanceof HTMLDetailsElement) || !d.classList.contains("dock-sec")) return;
+    const id = d.dataset.sec; if (!id) return;
+    dockState.collapsed = { ...dockState.collapsed, [id]: !d.open };
+    persist();
+  }, true);
   ov.addEventListener("click", async (ev) => {
     const t = ev.target as HTMLElement;
-    if (t === ov || t.closest("[data-share-close]")) { close(); return; }
+    if (t.closest("[data-share-close]")) { close(); return; }
+    if (t.closest("[data-dock-min]")) { minimize(); return; }
+    if (t.closest("[data-dock-people]")) { togglePeople(); return; }
     if (t.closest("[data-open-join]")) { close(); openJoinPanel(); return; }
+    // P-REMOTE.10b: Drive reconnect - authorize, save a code now, share the file with a teammate.
+    if (t.closest("[data-reconn-auth]")) {
+      const r = beginDriveSignIn(marketUser().email);
+      if (r.opened) {
+        showToast({ title: "Authorize Google Drive", desc: "Approve Drive access in your browser, then come back to this window.", timeout: 6000 });
+        let tries = 0;
+        const iv = window.setInterval(() => {
+          if (freshDriveToken()) { clearInterval(iv); if ($("#shareModal")) { void draw(); showToast({ title: "Google Drive authorized", desc: "Reconnect codes can be saved now.", timeout: 3000 }); } }
+          else if (++tries > 60) clearInterval(iv); // give up after ~90s
+        }, 1500);
+      } else if (r.signedIn) { await draw(); }
+      else { showToast({ tone: "warn", title: "Drive sign-in unavailable", desc: r.reason ?? "Remote sign-in is not configured in this build.", timeout: 5000 }); }
+      return;
+    }
+    if (t.closest("[data-reconn-save]")) {
+      const pin = (($("#reconnPin", ov) as HTMLInputElement | null)?.value ?? "").trim() || null;
+      const rc = await writeReconnectCode(pin);
+      showToast(rc.ok
+        ? { title: "Reconnect code saved", desc: pin ? "Encrypted with your PIN in your Google Drive." : "Saved to lucid_relay_codes in your Google Drive.", timeout: 3200 }
+        : { tone: "warn", title: "Couldn't save code", desc: rc.error ?? "", timeout: 5000 });
+      return;
+    }
+    if (t.closest("[data-reconn-share]")) {
+      const email = (($("#reconnShareEmail", ov) as HTMLInputElement | null)?.value ?? "").trim();
+      const token = freshDriveToken();
+      if (!email || !/.@./.test(email)) { showToast({ tone: "warn", title: "Enter a teammate's email", desc: "A Google account email to grant access to the codes file.", timeout: 3000 }); return; }
+      if (!token) { showToast({ tone: "warn", title: "Authorize Google Drive first", desc: "Tap Authorize Google Drive above, then share.", timeout: 3000 }); return; }
+      try {
+        const id = await findRelayFile(token, RELAY_FILE_NAME, fetch);
+        if (!id) { showToast({ tone: "warn", title: "No codes file yet", desc: "Save a reconnect code first, then share it.", timeout: 4000 }); return; }
+        await shareRelayFile(token, id, email, fetch);
+        showToast({ title: "Shared", desc: `${email} can now read + append reconnect codes to that one file.`, timeout: 3500 });
+      } catch (e) { showToast({ tone: "warn", title: "Couldn't share", desc: String((e as Error)?.message ?? e), timeout: 5000 }); }
+      return;
+    }
+    if (t.closest("[data-share-signin]")) {
+      // P-REMOTE.2c: authorize this desktop for the gated relay straight from the Share panel (no marketplace
+      // detour). beginSignIn opens the hosted /signin page; the lucid://auth deep link (wired at boot) stores
+      // the token. Poll marketUser so the panel flips to the ready state the moment the callback lands.
+      const r = beginSignIn();
+      if (r.opened) {
+        showToast({ title: "Finish signing in", desc: "Complete Google sign-in in your browser, then come back to this window.", timeout: 6000 });
+        let tries = 0;
+        const iv = window.setInterval(() => {
+          if (marketUser().signedIn) { clearInterval(iv); if ($("#shareModal")) { void draw(); showToast({ title: "Signed in", desc: "You can start sharing now.", timeout: 3000 }); } }
+          else if (++tries > 40) clearInterval(iv); // give up after ~60s
+        }, 1500);
+      } else if (r.signedIn) { await draw(); }
+      else { showToast({ tone: "warn", title: "Sign-in unavailable", desc: r.reason ?? "Remote sign-in is not configured in this build.", timeout: 5000 }); }
+      return;
+    }
+    if (t.closest("[data-share-signout]")) {
+      marketSignOut();
+      stopRelayTokenPush(); // clear the cached backend token so a later share does not reuse it
+      await draw();
+      showToast({ title: "Signed out", desc: "Sign in again to share with your phone.", timeout: 3000 });
+      return;
+    }
     const copy = t.closest("[data-copy]") as HTMLElement | null;
     if (copy) { const v = copy.dataset.copy ?? ""; try { await navigator.clipboard.writeText(v); showToast({ title: `${copy.dataset.copyWhat ?? "Copied"} copied`, desc: "Paste it to your guest.", timeout: 1800 }); } catch { showToast({ tone: "warn", title: "Couldn't copy", desc: "Copy it from the field instead." }); } return; }
     if (t.closest("[data-share-start]")) {
       const allowEdit = ($("#shareAllowEdit", ov) as HTMLInputElement | null)?.checked ?? false;
       const preferP2P = ($("#sharePreferP2P", ov) as HTMLInputElement | null)?.checked ?? false;
+      // P-REMOTE.10b: capture the reconnect PIN BEFORE draw() re-renders (which clears the field).
+      const reconnPin = (($("#reconnPin", ov) as HTMLInputElement | null)?.value ?? "").trim() || null;
       // P-COLLAB.17: persist the P2P preference + STUN/TURN config from the form (also used to start now).
       const iceUrls = (($("#shareIceUrls", ov) as HTMLTextAreaElement | null)?.value ?? "").split(/[\n,]/).map((u) => u.trim()).filter(Boolean);
       const turnUsername = ($("#shareTurnUser", ov) as HTMLInputElement | null)?.value.trim() ?? "";
@@ -8274,24 +8864,38 @@ function openSharePanel(): void {
         try {
           const p2pStatus = await startP2PHost({
             relayWsBase: relay.wsBase, relayHttpBase: relay.httpBase, relayLabel: relay.label, relaySource: relay.source,
+            pwaBase: relay.pwaBase, // P-REMOTE.2b: PWA-pointing browser link when the hosted rendezvous is provisioned
             header: { sessionId: "local", title: "LUCID session", model: state.model || "model", hostName: "host" },
             allowEdit, ice: { iceUrls, turnUsername: turnUsername || undefined, turnCredential: turnCredential || undefined },
-            onGuestPrompt: (text, guest) => runGuestPromptLocally(text, guest.name),
+            onGuestPrompt: (text, guest, images) => runGuestPromptLocally(text, guest.name, images),
             onGuestAbort: () => { if (state.streaming) { void bridge.cancelChat(); showToast({ title: "Guest asked to stop", desc: "Stopping the current turn.", timeout: 2500 }); } },
+            // P-COLLAB.14: offer edit guests the model + already-used-folder allowlists, and honor their picks
+            // through the host's own switch path (which then rebroadcasts fresh options via setP2PHostOptions).
+            options: buildRendererCollabOptions(),
+            onGuestSetModel: (value, guest) => runGuestModelLocally(value, guest.name),
+            onGuestSetWorkspace: (id, guest) => { const path = p2pWsById[id]; if (path) runGuestWorkspaceLocally(path, guest.name); },
             // P-COLLAB.18: host-authoritative audit — a guest joined/left this direct-P2P share.
             onParticipant: (kind, guest) => bridge.collabAudit(kind === "join" ? "guest_joined" : "guest_left", { transport: "direct-p2p", access: guest.access, roomId: p2pHostStatus()?.roomId, guest: guest.name }),
           });
           bridge.collabAudit("share_started", { transport: "direct-p2p", access: allowEdit ? "edit" : "view", roomId: p2pStatus.roomId });
         } catch (e) { showToast({ tone: "danger", title: "Couldn't start sharing", desc: String((e as Error)?.message ?? e), timeout: 5000 }); return; }
       } else {
-        const r = await bridge.collabStart({ allowEdit });
-        if (!r.ok) { showToast({ tone: "danger", title: "Couldn't start sharing", desc: r.error ?? "", timeout: 5000 }); return; }
+        // P-REMOTE.2c: seed the backend relay-token cache BEFORE the host connects (a gated hosted relay needs
+        // it as the first frame; harmless/no-op for an anonymous relay), then keep it fresh on an interval.
+        await startRelayTokenPush();
+        const r = await bridge.collabStart({ allowEdit, favModels: parseFavs(localStorage.getItem(FAVS_KEY)) }); // P-REMOTE.11b: favorites-filtered guest picker
+        if (!r.ok) { stopRelayTokenPush(); showToast({ tone: "danger", title: "Couldn't start sharing", desc: r.error ?? "", timeout: 5000 }); return; }
       }
       await draw();
       showToast({ title: allowEdit ? "Sharing started (edit)" : "Sharing started", desc: preferP2P ? "Peers connect directly (WebRTC); the relay only helps them find each other." : (allowEdit ? "Guests with this link can drive the session, through your approvals." : "Copy the invite link and send it to your guest."), timeout: 3200 });
       if (!poll) poll = window.setInterval(() => { if ($("#shareModal")) void pollRoster(); }, 2500);
       // A relay edit share polls the inbox; a direct share gets guest prompts via its callback (no polling).
       if (allowEdit && !preferP2P) startCollabHostPoll();
+      // P-REMOTE.10b: if reconnect-to-Drive is enabled + authorized, save this share's link out of band.
+      if (reconnEnabled() && freshDriveToken()) {
+        const rc = await writeReconnectCode(reconnPin);
+        if (rc.ok) showToast({ title: "Reconnect code saved to Drive", desc: "You can rejoin from lucid_relay_codes if you drop.", timeout: 3200 });
+      }
       return;
     }
     if (t.closest("[data-share-stop]")) {
@@ -8300,6 +8904,7 @@ function openSharePanel(): void {
         stopP2PHost();
         if (s) bridge.collabAudit("share_stopped", { transport: "direct-p2p", access: s.allowEdit ? "edit" : "view", roomId: s.roomId });
       } else await bridge.collabStop();
+      stopRelayTokenPush(); // P-REMOTE.2c: stop refreshing + clear the backend token cache
       stopCollabHostPoll(); if (poll) { clearInterval(poll); poll = undefined; } await draw(); showToast({ title: "Sharing stopped", desc: "The room is closed - guests were disconnected.", timeout: 2000 }); return;
     }
     if (t.closest("[data-share-relay-change]")) { body.innerHTML = shareBodyHtml({ active: false, participantCount: 0, participants: [], relay: null }); return; }
@@ -8315,6 +8920,10 @@ function openSharePanel(): void {
     }
   });
   document.body.append(ov);
+  // P-SHARE.3: an explicit open (the rail glyph is the only caller) always REVEALS the dock. If the user left
+  // it minimized in a prior session, clear that stale flag + persist the correction rather than opening
+  // straight to a hidden pill - the whole point of clicking the glyph is to see the module.
+  if (dockState.minimized) { dockState.minimized = false; persist(); }
   void draw();
 }
 
@@ -8326,24 +8935,60 @@ type JoinTool = { name: string; detail: string; path?: string };
 type JoinTurn = { role: string; text: string; thinking?: string; tools?: JoinTool[] };
 type JoinState = { header: import("./bridge.ts").CollabSessionHeaderView | null; turns: JoinTurn[]; pending: string; pendingThinking: string; pendingTools: JoinTool[]; participants: number; note: string | null; readOnly: boolean };
 function openJoinPanel(): void {
-  if ($("#joinModal")) return;
-  const ov = el(`<div id="joinModal" class="modal-ov"><div class="modal join-modal" role="dialog" aria-modal="true" aria-labelledby="joinTitle">
-    <button class="set-close" data-join-close aria-label="Close">${icon("close", 16)}</button>
-    <div class="modal-icon">${icon("eye", 24)}</div>
-    <h2 class="modal-title" id="joinTitle">Join a shared session</h2>
-    <p class="modal-desc">Paste an invite link to watch someone's LUCID session live, <b>read-only</b>. It's end-to-end encrypted - the relay only ever sees ciphertext.</p>
-    <div id="joinBody" class="join-body"></div>
-  </div></div>`);
+  if ($("#joinModal")) return; // single instance for now: multi-join needs multi guest slots backend-side (P-COLLAB.21)
+  // P-COLLAB.20 (ADR-0242): the Join panel is a FLOATING DOCK on the P-SHARE.1 chassis - movable, resizable,
+  // snappable, minimizable to a status-bar pill, geometry persisted under its OWN key - and NON-BLOCKING (no
+  // backdrop), so you watch or drive another LUCID while fully using your own. First open lands bottom-LEFT
+  // (beside the rails) so it never stacks on the Share dock's bottom-right default.
+  const joinFallback = { ...defaultShape(window.innerWidth, window.innerHeight), x: railWidth() + 12 };
+  const dockState: DockState = loadDockState(dockStorage(), window.innerWidth, window.innerHeight, JOIN_DOCK_KEY, joinFallback);
+  const ov = el(`<div id="joinModal" class="share-dock join-dock side-${dockState.side}" role="dialog" aria-label="Watch a shared session">
+    <div class="share-dock-head" data-dock-drag>
+      <span class="share-dock-grip">${icon("eye", 14)}</span>
+      <span class="share-dock-title" id="joinDockTitle">Join a shared session</span>
+      <span class="sd-live-dot" id="joinDockDot"></span>
+      <button class="share-dock-btn" data-dock-min aria-label="Minimize to pill" title="Minimize (keeps watching)">${SHARE_UP_ARROW}</button>
+      <button class="share-dock-btn" data-join-close aria-label="Close and leave" title="Close (leaves the session)">${icon("close", 15)}</button>
+    </div>
+    <div id="joinBody" class="join-body share-dock-body"></div>
+    <div class="share-dock-rz e" data-dock-rz="e" aria-hidden="true"></div>
+    <div class="share-dock-rz s" data-dock-rz="s" aria-hidden="true"></div>
+    <div class="share-dock-rz se" data-dock-rz="se" aria-hidden="true"></div>
+  </div>`);
+  applyDockShape(ov, dockState.shape);
   const st: JoinState = { header: null, turns: [], pending: "", pendingThinking: "", pendingTools: [], participants: 0, note: null, readOnly: true };
   let joined = false;
   let direct = false; // P-COLLAB.17: this join is running peer-to-peer (renderer coordinator), not via the backend
+  let pill: HTMLElement | null = null;
+  const removePill = () => { pill?.remove(); pill = null; joinPillEl = null; };
+  const persist = () => saveDockState(dockStorage(), dockState, JOIN_DOCK_KEY);
+  const setLive = (on: boolean) => {
+    ($("#joinDockDot", ov) as HTMLElement | null)?.classList.toggle("on", on);
+    pill?.querySelector(".sd-live-dot")?.classList.toggle("on", on);
+  };
   const leaveSession = () => { if (direct) stopP2PGuest(); else void bridge.collabLeave().catch(() => {}); };
-  const close = () => { if (joined) leaveSession(); joined = false; ov.remove(); document.removeEventListener("keydown", onKey); };
-  const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") { e.preventDefault(); close(); } };
+  const close = () => { if (joined) leaveSession(); joined = false; removePill(); ov.remove(); document.removeEventListener("keydown", onKey); window.removeEventListener("resize", onResize); };
+  const restore = () => { dockState.minimized = false; persist(); removePill(); ov.hidden = false; };
+  const minimize = () => {
+    dockState.minimized = true; persist(); ov.hidden = true;
+    if (!pill) {
+      pill = el(`<button id="joinDockPill" class="share-dock-pill" title="Watching a shared session" aria-label="Restore the watched session">${icon("eye", 12)}<span class="sd-live-dot${joined ? " on" : ""}"></span>${SHARE_UP_ARROW}</button>`);
+      pill.addEventListener("click", restore);
+      joinPillEl = pill; mountJoinPill(); // lives in the status bar, beside the share pill
+    }
+  };
+  // Escape MINIMIZES (non-destructive - the watch continues), and only when focus is inside this dock: a
+  // stray Escape while working the local LUCID must never tear down a live watch. Close (X) leaves.
+  const onKey = (e: KeyboardEvent) => { if (e.key === "Escape" && !ov.hidden && ov.contains(document.activeElement)) { e.preventDefault(); minimize(); } };
   document.addEventListener("keydown", onKey);
+  const onResize = () => { if (!$("#joinModal")) return; dockState.shape = clampToViewport(dockState.shape, window.innerWidth, window.innerHeight); applyDockShape(ov, dockState.shape); persist(); };
+  window.addEventListener("resize", onResize);
+  wireDockDrag(ov, "[data-dock-drag]", dockState, persist);
+  wireDockResize(ov, dockState, persist);
   const body = $("#joinBody", ov) as HTMLElement;
 
   const connectHtml = () => `
+    <p class="share-hint" style="margin:2px 0 8px">Watch someone's LUCID session live - or drive it with an edit link - while you keep using this one. End-to-end encrypted; the relay only ever sees ciphertext.</p>
     <label class="share-lbl">Invite link</label>
     <div class="share-field"><input id="joinLink" class="share-link-input" type="text" placeholder="wss://relay…/r/room.secret  (or paste the link you were sent)" spellcheck="false" /></div>
     <div id="joinErr" class="modal-err" hidden></div>
@@ -8372,9 +9017,16 @@ function openJoinPanel(): void {
       </div>` : ""}
       <div class="join-foot"><span class="join-watchers">${st.participants} watching</span>${st.note ? `<button class="btn-mini" data-join-close>${icon("check", 12)} Close</button>` : `<button class="btn-mini danger" data-join-leave>${icon("close", 12)} Leave</button>`}</div>`;
   };
-  const renderConnect = () => { ov.querySelector(".join-modal")?.classList.remove("watching"); body.innerHTML = connectHtml(); setTimeout(() => ($("#joinLink", ov) as HTMLInputElement | null)?.focus(), 30); };
+  const renderConnect = () => {
+    const t = $("#joinDockTitle", ov); if (t) t.textContent = "Join a shared session";
+    setLive(false);
+    body.innerHTML = connectHtml();
+    setTimeout(() => ($("#joinLink", ov) as HTMLInputElement | null)?.focus(), 30);
+  };
   const renderLive = () => {
-    ov.querySelector(".join-modal")?.classList.add("watching"); // ADR-0222: fill the app (thin border), reclaim padding
+    // P-COLLAB.20: the dock header names the watched session (textContent - the title is host-authored).
+    const dt = $("#joinDockTitle", ov); if (dt) dt.textContent = st.note ? "Session ended" : st.header ? `Watching \u00b7 ${st.header.title}` : "Watching\u2026";
+    setLive(joined && !st.note);
     // Preserve what the guest is typing across the transcript re-render (events stream constantly).
     const prev = $("#joinPrompt", ov) as HTMLInputElement | null;
     const draft = prev?.value ?? ""; const wasFocused = !!prev && document.activeElement === prev;
@@ -8434,7 +9086,8 @@ function openJoinPanel(): void {
   });
   ov.addEventListener("click", async (ev) => {
     const t = ev.target as HTMLElement;
-    if (t === ov || t.closest("[data-join-close]")) { close(); return; }
+    if (t.closest("[data-join-close]")) { close(); return; } // no backdrop-close: the dock is non-blocking
+    if (t.closest("[data-dock-min]")) { minimize(); return; }
     if (t.closest("[data-join-send]")) { await sendGuestPrompt(); return; }
     if (t.closest("[data-join-leave]")) { leaveSession(); joined = false; st.note = "you left the session"; renderLive(); return; }
     if (t.closest("[data-join-connect]")) {
@@ -8470,6 +9123,7 @@ function openJoinPanel(): void {
   });
   renderConnect();
   document.body.append(ov);
+  if (dockState.minimized) { dockState.minimized = false; persist(); } // a fresh open always SHOWS the dock
 }
 
 // P-MARKET.1 (ADR-0158): the Plugin Marketplace popup - a curated, searchable catalog (Excalidraw pinned
@@ -8612,12 +9266,16 @@ function wire(): void {
   $("#skillsBody")?.addEventListener("click", (e) => void onSkillAction(e));
   // P-PREVIEW.1 (ADR-0096): preview panel - open a local file, reload, screenshot to chat, close.
   $("#prevClose")?.addEventListener("click", () => closePreview());
-  $("#prevOpen")?.addEventListener("click", () => loadPreview(($("#prevPath") as HTMLInputElement | null)?.value ?? ""));
-  $("#prevPath")?.addEventListener("keydown", (e) => { if ((e as KeyboardEvent).key === "Enter") loadPreview(($("#prevPath") as HTMLInputElement).value); });
-  $("#prevReload")?.addEventListener("click", () => { const f = $("#prevFrame") as HTMLIFrameElement | null; if (f && !f.hidden && f.src) f.src = f.src; });
+  $("#prevOpen")?.addEventListener("click", () => openPreviewFile((($("#prevPath") as HTMLInputElement | null)?.value ?? "").trim()));
+  $("#prevPath")?.addEventListener("keydown", (e) => { if ((e as KeyboardEvent).key === "Enter") openPreviewFile(($("#prevPath") as HTMLInputElement).value.trim()); });
+  $("#prevReload")?.addEventListener("click", () => { const f = laneFrame(); if (f && !f.hidden && f.src) f.src = f.src; }); // reload the visible lane
+  // P-PREVIEW.8: the Yours / Agent tab strip.
+  $("#prevTabs")?.addEventListener("click", (e) => { const t = (e.target as HTMLElement).closest(".prev-tab") as HTMLElement | null; if (t?.dataset.lane) switchPrevLane(t.dataset.lane as PrevLane); });
   $("#prevBrowse")?.addEventListener("click", () => void browsePreviewFile()); // P-PREVIEW.5: open cwd file
+  $("#prevDevice")?.addEventListener("click", (e) => openDeviceMenu(e.currentTarget as HTMLElement)); // P-PREVIEW.9: device viewports
   $("#prevMarkup")?.addEventListener("click", (e) => openMarkupMenu(e.currentTarget as HTMLElement)); // P-PREVIEW.5: markup tools
   $("#prevShot")?.addEventListener("click", () => void screenshotPreviewToChat());
+  $("#prevToPhone")?.addEventListener("click", () => void sendPreviewToPhone()); // P-PREVIEW-PWA.1 (ADR-0237)
   // Knowledge graph: close, lens toggle, forget-fact, export (P9.4)
   $("#kgClose")!.addEventListener("click", () => closeKnowledge());
   // P-KG-CODE.1: workspace code graph - toggle personal ↔ code; Update re-ingests.
@@ -9752,7 +10410,7 @@ async function applyConfig(configId: string, value: string): Promise<void> {
   // "model switching feels stuck" complaint). Failure keeps the optimistic value (as before) but is
   // no longer silent - a warn toast says the backend didn't confirm.
   if (opt) opt.currentValue = value;
-  if (configId === "model") { state.model = value; const mn = $("#modelName"); if (mn) mn.textContent = modelLabel(value); renderStatus(); }
+  if (configId === "model") { state.model = value; const mn = $("#modelName"); if (mn) mn.textContent = modelLabel(value); renderStatus(); if (p2pHostActive()) setP2PHostOptions(buildRendererCollabOptions()); /* P-COLLAB.14: mirror to direct-P2P edit guests */ }
   updateComposerTools();
   void bridge.setConfig(configId, value)
     .then((cfg) => {
@@ -10247,7 +10905,7 @@ function initResize(): void {
     const sw = Number(localStorage.getItem("lucid.sidebar-w")); if (sw) setW("sidebar", sw);
     const iw = Number(localStorage.getItem("lucid.inspector-w")); if (iw) setW("inspector", iw);
     const kw = Number(localStorage.getItem("lucid.kg-w")); if (kw) setW("kg", kw);
-    const pw = Number(localStorage.getItem("lucid.preview-w")); if (pw) setW("preview", pw); // P-PREVIEW.1
+    const pw = Number(localStorage.getItem("lucid.preview-w")); if (pw) setW("preview", Math.min(pw, Math.round(window.innerWidth * 0.5))); // P-PREVIEW.1: never restore wider than 50%
     const ksw = Number(localStorage.getItem("lucid.kgside-w")); if (ksw) setW("kgside", ksw); // P-KG-CODE.1b
   } catch { /* ignore */ }
   // data-resize value → the panel element id ("kg" → #knowledge, "kgside" → the KG side flyout); all
@@ -10265,9 +10923,10 @@ function initResize(): void {
   window.addEventListener("mousemove", (e) => {
     if (!active) return;
     const rect = active.el.getBoundingClientRect();
-    // KG can collapse toward the chat to a low minimum, or widen up to 80% of the window.
+    // KG can widen up to 80% of the window; the PREVIEW is capped at 50% so the chat always keeps >=50%.
     const [min, max] = active.which === "sidebar" ? [180, 520]
-      : active.which === "kg" || active.which === "preview" ? [360, Math.round(window.innerWidth * 0.8)]
+      : active.which === "preview" ? [360, Math.round(window.innerWidth * 0.5)]
+      : active.which === "kg" ? [360, Math.round(window.innerWidth * 0.8)]
       : active.which === "kgside" ? [200, Math.round(window.innerWidth * 0.6)] // P-KG-CODE.1b: the KG side flyout
       : [300, 720];
     const raw = active.which === "sidebar" ? e.clientX - rect.left : rect.right - e.clientX;

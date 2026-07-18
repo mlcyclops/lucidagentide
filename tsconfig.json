@@ -16,5 +16,5 @@
     "types": ["bun"]
   },
   "include": ["harness/**/*.ts", "tools/**/*.ts"],
-  "exclude": ["node_modules", "vendor"]
+  "exclude": ["node_modules", "vendor", "tools/remote-pwa/app.ts"]
 }

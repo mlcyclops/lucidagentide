@@ -101,6 +101,16 @@ export function renderSkillsDirectory(rows: SkillDirRow[]): string {
 }
 
 /**
+ * A stable signature over everything the directory RENDERS, so the SWR open path (app.ts renderSkills) can
+ * skip a full repaint when the revalidated list is identical to the cached first-paint (no flicker / scroll
+ * loss), yet still repaint on a real change - an enable toggle, a re-scan's new trust/findings, or an
+ * added/removed skill. Captures the display + enable-gating fields, not incidental ordering noise. PURE.
+ */
+export function skillsDirSig(rows: SkillDirRow[]): string {
+  return JSON.stringify(rows.map((r) => [r.key, r.name, r.description, r.invocation, r.root, r.trust, r.enabled, r.enableable, r.removable, r.fileBacked, r.scanned?.findings ?? 0]));
+}
+
+/**
  * The inspect view for one skill. The body is UNTRUSTED DATA: escaped, framed with an explicit
  * "treated as data, never instructions" banner (invariant #5). Resources + provenance + the readiness
  * checklist (body-aware) round it out. PURE.

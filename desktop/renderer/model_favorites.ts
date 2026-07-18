@@ -54,3 +54,13 @@ export function starredOf<T extends { value: string }>(models: T[], favs: string
   const set = new Set(favs);
   return models.filter((m) => set.has(m.value));
 }
+
+/** P-REMOTE.11b (ADR-0238): the model list OFFERED to phone/edit guests over a Session Share - just the
+ *  FAVORITES (a small-screen picker over a hundreds-deep catalog is unusable) plus the CURRENT model (always
+ *  selectable, even when unstarred). No favorites -> the full list (a favorites-only filter would otherwise
+ *  offer nothing but the current model). Order preserved; pure. */
+export function offeredModels<T extends { value: string }>(models: T[], favs: string[], currentValue: string): T[] {
+  if (favs.length === 0) return models;
+  const keep = new Set(favs);
+  return models.filter((m) => keep.has(m.value) || m.value === currentValue);
+}

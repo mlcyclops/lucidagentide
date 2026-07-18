@@ -177,6 +177,37 @@ personalization internals are proprietary and intentionally undocumented here - 
 
 ---
 
+## ✨ What's new in v1.11.6
+
+> Runs cold on an air-gapped laptop, grounds any model on your own knowledge, and never leaves you staring at a silent provider.
+
+- **📦 Air-gap-capable installer** - the app now **bundles omp, a relocatable Python, and its own Bun runtime**,
+  so a locked-down or fully offline machine works on first launch with **zero prerequisites and zero network** -
+  no `bun add`, no `uv venv`, nothing fetched at first run. A CI air-gap smoke test scrubs the global runtime
+  and boots the packaged app to prove the bundle is self-contained. *(ADR-0225)*
+- **📚 RAG for everyone, not just AskSage** - a `knowledge_search` tool lets **any model** (Claude, GPT, Gemini,
+  local) ground its answers on **your own** ingested Obsidian vault, folders, or imported chat history - lexical
+  + graph retrieval today, and **bring-your-own-embeddings semantic search** (your OpenAI key or a local Ollama /
+  vLLM `/embeddings`) for true vector recall. Retrieved text still enters **delimited, scanned, and post-cache**.
+  *(ADR-0220/0221)*
+- **🏛️ Gov hardening, fail-closed** - AskSage **lockdown is now enforced server-side** across model routing,
+  egress, and agent runs (it was renderer-only), with the real GPT-5.6 model ids, a per-session **CUI / Search
+  mode**, a centered violet **CUI banner**, and an opt-in **DoD / STIG consent banner**. *(ADR-0217/0218/0219/0224)*
+- **🛒 KG-pack marketplace** - name a knowledge graph, seed it, and share it as a portable **`.lkgpack`** -
+  now browsable and installable from an in-client **storefront**. *(ADR-0223)*
+- **🤝 A roomier shared-session view** - the live-collaboration guest view now shows the host's **thinking and
+  tool calls** and uses the **whole window**. *(ADR-0222)*
+- **🔌 Never stuck on a silent provider** - when an overloaded model (GPT-5.6 / 5.5, Claude Fable 5) **fails
+  silently**, LUCID now says so and **recommends a fallback** - a lower model in the same family, or an
+  equivalent from another provider (Fable 5 → 4.8 Opus). One click switches and retries. *(P-NORESP.1)*
+- **🔑 Reliable OAuth + honest support tools** - Connect **reliably opens the sign-in page** and always shows the
+  URL; Disconnect **authoritatively clears** stored logins (plus "Sign out of all"); and a one-click
+  **diagnostics collector** bundles redacted logs for troubleshooting.
+- **✨ "Lucid Agent"** - a friendlier app and window name across Windows, macOS, and Linux, with the data-safe
+  install path left unchanged.
+
+---
+
 ## ✨ What's new in v1.11.0
 
 > Live collaboration: share a running LUCID session with another LUCID - end-to-end encrypted. Watch, or drive.
@@ -800,13 +831,17 @@ Obsidian-vault export), AI-authorship attribution, one-command import, a read-wr
 the **`/goal` loop** with full loop-engineering (after-action reports, a budget kill switch, and stall
 guards), a local **RAG knowledge spine** + the **compiled KB** with hybrid retrieval, the governed **skills
 directory** + **Skill Studio**, **local & hybrid providers**, the **Agent Builder**, the **agent firewall**,
-and the **runtime execution boundary** (OS-isolated exec + mediated egress). **Newest (v1.11.0):** **live
-collaboration** - share a running session with another LUCID over an **end-to-end-encrypted** relay; a guest
-**watches read-only** or **drives** (guest prompts still run on the host, through your gate + approvals);
-**self-hosted by default** (be your own relay / standalone broker, enterprise-clamped), with an optional
-**direct P2P (WebRTC)** upgrade + relay fallback and a metadata-only share/join **audit trail**. Plus a
-**Copy** button + right-click Copy for chat & code. *(v1.10.6 brought the redesigned agent turn + the
-Model-Evaluation report suite.)*
+and the **runtime execution boundary** (OS-isolated exec + mediated egress). **Newest (v1.11.6):** an
+**air-gap-capable installer** that bundles omp, a relocatable Python, and Bun so a locked-down or offline
+machine runs cold on first launch with **zero prerequisites and zero network** (CI air-gap smoke proves it);
+**RAG for every model** - a `knowledge_search` tool that grounds Claude / GPT / Gemini / local models on your
+own ingested vault, folders, or chat history, plus **bring-your-own-embeddings** semantic search; **gov
+lockdown enforced server-side** with per-session CUI/Search mode and CUI + DoD/STIG banners; the **KG-pack
+`.lkgpack` marketplace**; and an **overloaded-provider fallback** that recommends a lower same-family or
+cross-provider model when one goes silent. *(v1.11.0 brought end-to-end-encrypted **live collaboration** -
+share a running session with another LUCID, watch read-only or drive, guest prompts still run on the host
+through your gate + approvals, self-hosted by default with an optional direct P2P (WebRTC) upgrade; v1.10.6
+brought the redesigned agent turn + the Model-Evaluation report suite.)*
 
 Every test suite passes and `tsc --noEmit` is clean across all three projects (TypeScript + Python). The
 table below is the recent slice; [`PROGRESS.md`](PROGRESS.md) has the full per-session log.
@@ -815,6 +850,7 @@ table below is the recent slice; [`PROGRESS.md`](PROGRESS.md) has the full per-s
 
 | Phase | Feature | ADR |
 |:--|:--|:--|
+| **v1.11.6 batch** | **Air-gap installer + RAG for everyone + gov hardening** - the packaged app **bundles omp, a relocatable Python, and Bun**, so an offline or locked-down machine runs cold on first launch with **zero prerequisites and zero network** (a CI air-gap smoke test scrubs the global runtime to prove it); a **`knowledge_search`** tool grounds **any model** (Claude/GPT/Gemini/local) on your ingested **Obsidian vault / folders / imported history** - lexical + graph retrieval plus **bring-your-own-embeddings** semantic search (your OpenAI key or a local Ollama/vLLM `/embeddings`); AskSage **lockdown enforced server-side** across routing + egress + agent runs (was renderer-only) with the real GPT-5.6 ids, a per-session **CUI/Search mode**, and CUI + opt-in **DoD/STIG** banners; the **KG-pack `.lkgpack` marketplace/storefront**; a roomier **shared-session viewer** (host thinking + tools, whole window); an **overloaded-provider fallback** that recommends a lower same-family or cross-provider model when a model fails silently (Fable 5 → 4.8 Opus); reliable **OAuth connect/disconnect** (+ "Sign out of all") and a one-click **diagnostics collector**; and the **"Lucid Agent"** rename | [ADR-0217-0225](DECISIONS.md) |
 | **v1.11.0 batch** | **Live collaboration** - share a running session with another LUCID over an **E2E-encrypted** relay; a guest **watches read-only** or (edit link) **drives** the host (guest prompts run **on the host**, through its fail-closed gate + approvals); **self-hosted by default** ("be the relay" loopback/LAN/VPN, or a standalone jumpbox broker; public relay opt-in) with **enterprise/MDM** clamps; an optional **direct P2P (WebRTC)** upgrade (DTLS DataChannel, relay only signals, auto-fallback); a **metadata-only** share/join **audit trail**; plus a **Copy** button + **right-click Copy** for chat & code, the product **website** in About, and a pulled-back default **zoom** | [ADR-0192-0204](DECISIONS.md) |
 | **v1.10.6 batch** | **Redesigned agent turn + Model-Evaluation suite** - a settled answer folds into collapsible sections + threads tool calls back as inline **chips** (with +/- diffstats + code drilldowns) when they interleave, else keeps the rich **activity window** + **expanded subagent detail**; a settled **file-writing** turn offers a thin, subdued **"Generate engineering report"** (honesty-tiered per-run metrics) plus a **cross-run rollup** with per-model **API-latency p50/p95**; **10-min provider patience** with a "still waiting" notice; and an **opt-in, AI-refreshable Trivia Wire** | [ADR-0186-0191](DECISIONS.md) |
 | **v1.10.5 batch** | **Live subagent activity** (the delegation card opens each subagent's thinking/tools/output), **graphs form in place** (off-screen settle, snap-centered open), a **system resource guard** (weak CPU under load pauses heavy builds behind a what-to-close panel), the **Electron preview** explained + runnable outside LUCID, the role-aware **Trivia Wire** ticker, a **curated plugin marketplace** (Mermaid/Gitleaks/Semgrep/Trivy/Pandoc), and a decluttered KG header | [ADR-0174-0184](DECISIONS.md) |
@@ -859,7 +895,7 @@ Built in the open, **one disciplined increment at a time.** If you want to run i
 or propose a change, start here:
 
 - **Read [`CLAUDE.md`](CLAUDE.md) first.** It's the load-bearing contract - fail-closed, extend omp (don't fork), frozen contracts, a byte-stable prompt. A change that silently breaks an invariant won't land.
-- **ADR-first.** Non-trivial work begins as an ADR in [`DECISIONS.md`](DECISIONS.md) (184 and counting) - pick one up, or propose your own.
+- **ADR-first.** Non-trivial work begins as an ADR in [`DECISIONS.md`](DECISIONS.md) (225 and counting) - pick one up, or propose your own.
 - **One increment per change.** Small, verifiable, with a demo and tests. See [`CHEATSHEET.md`](CHEATSHEET.md) for day-to-day commands.
 - **Tests are the gate.** `bun test harness && bun test desktop` stay green and `tsc --noEmit` is clean; CI runs the build + CodeQL on every push.
 - **The only Python is the scanner sidecar.** Everything else is TypeScript on Bun - please don't add a second Python surface.

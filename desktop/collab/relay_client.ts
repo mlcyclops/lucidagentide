@@ -21,16 +21,30 @@ import { open, seal, packEnvelope, unpackEnvelope } from "./crypto.ts";
 import type { LucidCollabFrame } from "./frames.ts";
 import type { RelayControlMessage } from "@oh-my-pi/pi-wire";
 
+// P-REMOTE.6 (ADR-0227): the 4403 close-reason, exported so the PWA's unentitled→Subscribe detector
+// (remote_entitlement.ts) matches the EXACT wire string the socket surfaces — single-sourced, never drifts.
+export const RELAY_NOT_ENTITLED_REASON = "signed in but not entitled to remote access";
+
 /** Relay close codes that are terminal - reconnecting would loop forever, so we surface + stop. */
 const FATAL_CLOSE_REASONS: Record<number, string> = {
   4001: "room closed",
   4004: "no such room",
   4009: "a host is already connected for this room",
   4029: "room is full",
+  // P-REMOTE.1/.2 (ADR-0226/0227) — identity-gate refusals. All terminal: the token we JUST presented was
+  // refused, so retrying with another token from the same provider would loop; the caller surfaces sign-in.
+  4401: "relay refused authentication (sign in again)",
+  4403: RELAY_NOT_ENTITLED_REASON,
+  4429: "relay per-user quota exceeded",
 };
 
 const BACKOFF_BASE_MS = 1_000;
 const BACKOFF_MAX_MS = 30_000;
+/** Client keepalive cadence — comfortably under the relay's 120s idle ceiling AND Cloud Run's idle
+ *  accounting. The frame is a STRING the relay ignores by design (post-auth strings are not a protocol
+ *  surface), so it works against gated and anonymous relays alike. */
+const KEEPALIVE_MS = 45_000;
+const KEEPALIVE_FRAME = JSON.stringify({ t: "ping" });
 /** Max sealed envelopes buffered while a reconnect is pending; overflow is dropped (bounded memory). */
 const MAX_PENDING_SENDS = 256;
 const WS_OPEN = 1; // WebSocket.OPEN — hard-coded so the mock socket needn't mirror the class constant.
@@ -39,7 +53,7 @@ const WS_OPEN = 1; // WebSocket.OPEN — hard-coded so the mock socket needn't m
 export interface WebSocketLike {
   binaryType: string;
   readyState: number;
-  send(data: Uint8Array): void;
+  send(data: Uint8Array | string): void;
   close(code?: number): void;
   onopen: ((ev?: unknown) => void) | null;
   onmessage: ((ev: { data: unknown }) => void) | null;
@@ -55,6 +69,13 @@ export interface CollabSocketOptions {
   key: CryptoKey;
   /** Injected for tests / non-DOM hosts; defaults to the ambient global `WebSocket`. */
   wsFactory?: WebSocketFactory;
+  /** P-REMOTE.2 (ADR-0226/0227): token provider for an identity-gated relay (RELAY_AUTH=firebase). Called
+   *  on EVERY (re)connect — so the hourly Cloud-Run reconnect always presents a FRESH Firebase ID token —
+   *  and the socket sends `{"t":"auth","token"}` as its FIRST frame, holding all traffic until the relay
+   *  answers `auth-ok`. Returning null is TERMINAL ("sign in"), never an unauthenticated retry loop. */
+  authToken?: () => Promise<string | null> | string | null;
+  /** Keepalive cadence in ms; 0 disables. Default 45s (under the relay's 120s idle ceiling). */
+  keepaliveMs?: number;
   /** Optional debug sink (kept dependency-free — no omp logger import). */
   onLog?: (msg: string, detail?: unknown) => void;
 }
@@ -89,6 +110,13 @@ export class CollabSocket {
   /** Jitter is injectable so tests are deterministic; defaults to a fixed midpoint (crypto RNG is not used
    *  here - the value only spreads reconnect storms, it is not a secret). */
   #jitter: () => number;
+  /** Gated relay: auth frame sent, waiting for `auth-ok` before the socket counts as open. */
+  #awaitingAuth = false;
+  /** True only between becomeOpen() and the next close/reconnect. In gated mode this is NOT set until
+   *  `auth-ok`, so a frame whose async seal() resolves after the socket opens but before auth still buffers
+   *  (never leaks unauthenticated bytes onto the wire). */
+  #ready = false;
+  #keepalive: ReturnType<typeof setInterval> | undefined; // portable across Bun (Timer) and the browser (number)
 
   constructor(opts: CollabSocketOptions & { jitter?: () => number }) {
     this.#opts = opts;
@@ -98,6 +126,22 @@ export class CollabSocket {
 
   get isOpen(): boolean {
     return this.#ws?.readyState === WS_OPEN;
+  }
+
+  /** True once a FATAL close (bad key / terminal relay code) or an explicit close() has stopped the client for
+   *  good — a resume nudge is then a no-op and the caller must build a fresh socket to reconnect. */
+  get isClosed(): boolean {
+    return this.#closed;
+  }
+
+  /** Force an immediate reconnect (e.g. the phone tab resumed from an OS suspend that silently dropped the
+   *  socket). No-op if closed, already open, or already connecting; otherwise it cancels the backoff wait and
+   *  reopens NOW, so resume is snappy instead of waiting out the exponential delay. */
+  reconnectNow(): void {
+    if (this.#closed || this.#ws) return;
+    this.#clearRetry();
+    this.#attempt = 0;
+    this.#openSocket();
   }
 
   connect(): void {
@@ -115,7 +159,7 @@ export class CollabSocket {
         const sealed = await seal(this.#opts.key, frame);
         const envelope = packEnvelope(targetPeer, sealed);
         const ws = this.#ws;
-        if (ws && ws.readyState === WS_OPEN) {
+        if (ws && ws.readyState === WS_OPEN && this.#ready) {
           ws.send(envelope);
           return;
         }
@@ -137,6 +181,7 @@ export class CollabSocket {
     // Tear down AFTER the pending send chain drains, so a frame sent immediately before close() is not lost.
     this.#sendChain = this.#sendChain.then(() => {
       this.#closed = true;
+      this.#stopKeepalive();
       this.#pendingSends.length = 0;
       const ws = this.#ws;
       this.#ws = null;
@@ -153,10 +198,11 @@ export class CollabSocket {
     this.#ws = ws;
     ws.onopen = () => {
       if (this.#ws !== ws) return;
-      this.#attempt = 0;
-      for (const envelope of this.#pendingSends) ws.send(envelope);
-      this.#pendingSends.length = 0;
-      this.onOpen?.();
+      if (this.#opts.authToken) {
+        void this.#authenticate(ws);
+        return;
+      }
+      this.#becomeOpen(ws);
     };
     ws.onmessage = (event) => {
       if (this.#ws !== ws) return;
@@ -165,16 +211,69 @@ export class CollabSocket {
     ws.onerror = () => { /* the paired close carries the actionable state */ };
     ws.onclose = (event) => {
       if (this.#ws !== ws) return;
+      this.#stopKeepalive();
+      this.#awaitingAuth = false;
+      this.#ready = false;
       this.#ws = null;
       this.#handleClose(event.code, event.reason);
     };
+  }
+
+  /** The socket is usable: flush the reconnect buffer, start the keepalive, tell the caller. */
+  #becomeOpen(ws: WebSocketLike): void {
+    this.#attempt = 0;
+    this.#ready = true;
+    for (const envelope of this.#pendingSends) ws.send(envelope);
+    this.#pendingSends.length = 0;
+    this.#startKeepalive(ws);
+    this.onOpen?.();
+  }
+
+  /** Gated relay handshake: fetch a FRESH token, send it as the FIRST frame, await `auth-ok`. */
+  async #authenticate(ws: WebSocketLike): Promise<void> {
+    let token: string | null = null;
+    try {
+      token = await this.#opts.authToken!();
+    } catch (err) {
+      this.#opts.onLog?.("collab: token provider failed", String(err));
+    }
+    if (this.#ws !== ws) return; // superseded while fetching
+    if (!token) {
+      this.#failFatal("the relay requires sign-in but no token is available");
+      return;
+    }
+    this.#awaitingAuth = true;
+    ws.send(JSON.stringify({ t: "auth", token }));
+  }
+
+  #startKeepalive(ws: WebSocketLike): void {
+    this.#stopKeepalive();
+    const ms = this.#opts.keepaliveMs ?? KEEPALIVE_MS;
+    if (ms <= 0) return;
+    this.#keepalive = setInterval(() => {
+      if (this.#ws === ws && ws.readyState === WS_OPEN) {
+        try { ws.send(KEEPALIVE_FRAME); } catch { /* the paired close handles it */ }
+      }
+    }, ms);
+  }
+
+  #stopKeepalive(): void {
+    clearInterval(this.#keepalive);
+    this.#keepalive = undefined;
   }
 
   #handleMessage(ws: WebSocketLike, data: unknown): void {
     // STRING → a JSON relay-control frame (never sealed; the relay authors these).
     if (typeof data === "string") {
       try {
-        this.onControl?.(JSON.parse(data) as RelayControlMessage);
+        const msg = JSON.parse(data) as { t?: string };
+        // Gated handshake completion is consumed HERE - the caller sees a normal open, same as anonymous.
+        if (this.#awaitingAuth && msg.t === "auth-ok") {
+          this.#awaitingAuth = false;
+          this.#becomeOpen(ws);
+          return;
+        }
+        this.onControl?.(msg as RelayControlMessage);
       } catch {
         this.#opts.onLog?.("collab: ignoring malformed control message");
       }
@@ -223,6 +322,7 @@ export class CollabSocket {
     if (this.#closed) return;
     this.#closed = true;
     this.#clearRetry();
+    this.#stopKeepalive();
     this.#pendingSends.length = 0;
     const ws = this.#ws;
     this.#ws = null;

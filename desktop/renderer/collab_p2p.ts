@@ -14,10 +14,10 @@
 // backend's single-share model. Fail-closed: no authorized relay endpoint -> no share (same as the relay path).
 
 import { webrtcHostCoordinator, webrtcGuestCoordinator } from "../collab/webrtc_coordinator.ts";
-import { generateRoomId, formatRelayLink, formatShareLink, formatBrowserLink, parseShareLink } from "../collab/link.ts";
+import { generateRoomId, mintRoomLinks, parseShareLink } from "../collab/link.ts"; // P-COLLAB.19 (ADR-0241): one room, two capabilities
 import { generateRoomKey, generateWriteToken, importRoomKey } from "../collab/crypto.ts";
 import type { ChatEvent } from "./chat_events.ts";
-import type { CollabParticipant, CollabSessionHeader } from "../collab/frames.ts";
+import type { CollabOptions, CollabParticipant, CollabSessionHeader } from "../collab/frames.ts";
 import type { GuestCallbacks } from "../collab/guest.ts";
 import type { WebSocketFactory } from "../collab/relay_client.ts";
 
@@ -42,6 +42,8 @@ export interface P2PHostStatus {
   fullLink: string;
   viewLink: string;
   browserLink: string;
+  /** P-COLLAB.19: the always-view-only browser/phone link (hand to watch-only guests on an edit share). */
+  browserViewLink: string;
   relayLabel: string;
   relaySource: string;
   startedAt: number;
@@ -55,14 +57,22 @@ export interface StartP2PHostOpts {
   relayHttpBase: string;
   relayLabel: string;
   relaySource: string;
+  /** P-REMOTE.2b: when set (the hosted rendezvous), the browser invite points at the phone PWA. */
+  pwaBase?: string;
   header: Omit<CollabSessionHeader, "startedAt">;
   allowEdit: boolean;
   ice: IceConfig | null;
-  /** An EDIT guest's prompt/abort - app.ts runs these through the host's OWN composer (gate + approvals fire). */
-  onGuestPrompt?: (text: string, guest: CollabParticipant) => void;
+  /** An EDIT guest's prompt/abort - app.ts runs these through the host's OWN composer (gate + approvals fire).
+   *  P-REMOTE.8: `images` (validated data URLs) ride along as vision input, staged into the host composer. */
+  onGuestPrompt?: (text: string, guest: CollabParticipant, images?: string[]) => void;
   onGuestAbort?: (guest: CollabParticipant) => void;
   /** P-COLLAB.18: a guest joined/left this direct-P2P share (host-authoritative audit hook). */
   onParticipant?: (kind: "join" | "leave", guest: CollabParticipant) => void;
+  /** P-COLLAB.14: the model + already-used-folder allowlists offered to EDIT guests, and their picks (applied
+   *  through the host's own switch path). */
+  options?: CollabOptions | null;
+  onGuestSetModel?: (value: string, guest: CollabParticipant) => void;
+  onGuestSetWorkspace?: (id: string, guest: CollabParticipant) => void;
   /** Test-only: inject the relay socket (an in-memory loopback for the self-test). Defaults to the real WebSocket. */
   wsFactory?: WebSocketFactory;
 }
@@ -74,8 +84,12 @@ export function p2pHostActive(): boolean { return host !== null; }
 
 /** Tee one live ChatEvent into the P2P share (no-op when not P2P-hosting). */
 export function teeEvent(e: ChatEvent): void { host?.coord.host.pushEvent(e); }
-/** Record a local user turn into the P2P replay transcript (no-op when not P2P-hosting). */
-export function teeUserTurn(text: string): void { host?.coord.host.pushUserTurn(text); }
+/** P-COLLAB.14: refresh the model + already-used-folder allowlists on the live P2P host (no-op when not
+ *  P2P-hosting). Call after a local or guest-driven model/workspace switch so edit guests' pickers update. */
+export function setP2PHostOptions(options: CollabOptions | null): void { host?.coord.host.setOptions(options); }
+/** Record a user turn into the P2P replay transcript + broadcast it LIVE to guests (P-COLLAB.15); no-op when
+ *  not P2P-hosting. `from` = the author's display name (a guest's name for a guest-driven turn; else host). */
+export function teeUserTurn(text: string, from?: string): void { host?.coord.host.pushUserTurn(text, from); }
 
 /** Mint a room + stand up the renderer host coordinator. Returns the share status (links + roster). */
 export async function startP2PHost(opts: StartP2PHostOpts): Promise<P2PHostStatus> {
@@ -99,14 +113,17 @@ export async function startP2PHost(opts: StartP2PHostOpts): Promise<P2PHostStatu
       onGuestPrompt: opts.onGuestPrompt,
       onGuestAbort: opts.onGuestAbort,
       onParticipant: opts.onParticipant,
+      options: opts.options ?? null,
+      onGuestSetModel: opts.onGuestSetModel,
+      onGuestSetWorkspace: opts.onGuestSetWorkspace,
     },
   });
 
+  // P-COLLAB.19 (ADR-0241): mint every link form - full/view + their phone twins - so the host hands an EDIT
+  // link and a VIEW-ONLY link to different guests of the same room.
   const meta = {
     roomId,
-    fullLink: formatRelayLink(opts.relayWsBase, roomId, rawKey, token),
-    viewLink: formatRelayLink(opts.relayWsBase, roomId, rawKey),
-    browserLink: formatBrowserLink(opts.relayHttpBase, formatShareLink(roomId, rawKey)),
+    ...mintRoomLinks({ wsBase: opts.relayWsBase, httpBase: opts.relayHttpBase, ...(opts.pwaBase ? { pwaBase: opts.pwaBase } : {}) }, roomId, rawKey, token, opts.allowEdit),
     relayLabel: opts.relayLabel,
     relaySource: opts.relaySource,
     startedAt,
