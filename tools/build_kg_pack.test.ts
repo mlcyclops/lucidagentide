@@ -31,7 +31,7 @@ describe("PACK_CATALOG", () => {
   test("catalog ids line up with the storefront ids that already exist", () => {
     // these five have a storefront row (desktop/renderer/kg_packs.ts) — the ids must match or the marketplace
     // object path (packs/<id>.lkgpack.zip) won't line up with what the builder writes.
-    for (const id of ["capture-proposal-manager", "govcon-contracts-officer", "cmmc-rmf-security-lead", "program-manager-evm", "cleared-software-engineer"])
+    for (const id of ["senior-proposal-manager", "govcon-contracts-officer", "cmmc-rmf-security-lead", "program-manager-evm", "cleared-software-engineer"])
       expect(PACK_CATALOG.some((e) => e.id === id)).toBe(true);
   });
 });

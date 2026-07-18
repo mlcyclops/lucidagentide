@@ -40,6 +40,12 @@ export const KG_PACKS_URL = "https://lucid-agent.web.app/";
  *  private add-on repo. Ordered as a curated shelf (registry order). */
 export const KG_PACKS: KgPack[] = [
   {
+    id: "senior-proposal-manager", name: "Senior Proposal Manager", role: "Proposal Manager / DoD RFP Compliance Lead",
+    desc: "DoD RFP proposal management: Section L/M/K response patterns, compliance matrices, color-team reviews, and proposal production.",
+    author: "TechLead 187 LLC", tier: "first-party", licensing: "subscription", url: KG_PACKS_URL,
+    highlights: "The flagship pack: seeded from a working proposal shop's RFP responses, color-team reviews, and Salesforce BD workflows.",
+  },
+  {
     id: "govcon-contracts-officer", name: "GovCon Contracts Officer", role: "Contracting Officer / Specialist",
     desc: "FAR/DFARS-grounded contracting: source selection, negotiation, and administration.",
     author: "TechLead 187 LLC", tier: "first-party", licensing: "one-time", url: KG_PACKS_URL,
@@ -52,12 +58,6 @@ export const KG_PACKS: KgPack[] = [
     highlights: "Curated control catalogs, assessment objectives, and remediation patterns.",
   },
   {
-    id: "capture-proposal-manager", name: "Capture & Proposal Manager", role: "Capture / Proposal Manager",
-    desc: "Shipley-style capture and proposals: color teams, win themes, and compliance matrices.",
-    author: "TechLead 187 LLC", tier: "first-party", licensing: "subscription", url: KG_PACKS_URL,
-    highlights: "Curated capture playbooks and proposal-review heuristics.",
-  },
-  {
     id: "program-manager-evm", name: "Program Manager (EVM)", role: "Program / Project Manager",
     desc: "CMMI and Earned Value Management: IMS, EAC, variance analysis, and program controls.",
     author: "TechLead 187 LLC", tier: "first-party", licensing: "subscription", url: KG_PACKS_URL,
@@ -68,6 +68,42 @@ export const KG_PACKS: KgPack[] = [
     desc: "Secure SDLC for classified/air-gapped work: STIGs, secure coding, and ATO evidence.",
     author: "TechLead 187 LLC", tier: "first-party", licensing: "subscription", url: KG_PACKS_URL,
     highlights: "Curated STIG guidance and secure-SDLC patterns for RMF packages.",
+  },
+  {
+    id: "dow-dod-business-development", name: "Business Development Capture Manager", role: "Business Development / Capture Manager (DoW/DoD)",
+    desc: "DoW/DoD business development and capture: pipeline shaping, teaming, gate reviews, and bid decisions.",
+    author: "TechLead 187 LLC", tier: "first-party", licensing: "one-time", url: KG_PACKS_URL,
+    highlights: "Seeded from real capture pipelines: opportunity shaping, teaming strategy, and bid/no-bid gates.",
+  },
+  {
+    id: "sbir-sttr-grants-pi", name: "SBIR/STTR & NSF Grants PI", role: "Principal Investigator / Grants Lead",
+    desc: "SBIR/STTR and NSF grant strategy: solicitations, technical volumes, and Phase I/II execution.",
+    author: "TechLead 187 LLC", tier: "first-party", licensing: "one-time", url: KG_PACKS_URL,
+    highlights: "Curated solicitation analysis, technical-volume patterns, and phase-transition playbooks.",
+  },
+  {
+    id: "senior-backend-engineer", name: "Senior Backend Engineer", role: "Backend / Platform Engineer",
+    desc: "Backend systems and RAG: services, data pipelines, retrieval, and reliability.",
+    author: "TechLead 187 LLC", tier: "first-party", licensing: "one-time", url: KG_PACKS_URL,
+    highlights: "Curated service architecture, data-pipeline, and retrieval-engineering patterns.",
+  },
+  {
+    id: "senior-frontend-uiux-engineer", name: "Senior Frontend Engineer (UI/UX)", role: "Frontend / UI-UX Engineer",
+    desc: "Frontend and UI/UX: design systems, accessibility, and product interaction.",
+    author: "TechLead 187 LLC", tier: "first-party", licensing: "one-time", url: KG_PACKS_URL,
+    highlights: "Curated design-system, accessibility, and interaction-design patterns.",
+  },
+  {
+    id: "ml-engineer", name: "Machine Learning Engineer", role: "Machine Learning Engineer",
+    desc: "ML engineering: training, evaluation, deployment, and MLOps.",
+    author: "TechLead 187 LLC", tier: "first-party", licensing: "one-time", url: KG_PACKS_URL,
+    highlights: "Curated training, evaluation, and deployment patterns for production ML.",
+  },
+  {
+    id: "ste-digital-engineering", name: "STE / Digital Engineering", role: "Systems / Digital Engineer",
+    desc: "Digital engineering and STE: model-based systems engineering and the digital thread.",
+    author: "TechLead 187 LLC", tier: "first-party", licensing: "one-time", url: KG_PACKS_URL,
+    highlights: "Curated MBSE practices and digital-thread engineering patterns.",
   },
 ];
 
