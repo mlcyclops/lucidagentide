@@ -473,6 +473,11 @@ demo-P-THEME.1: ## P-THEME.1 (ADR-0160): the LUCID skin for gated terminals — 
 pwa-build: ## P-REMOTE.3 (ADR-0226/0227): bundle the phone guest PWA (tools/remote-pwa) into a static site under dist/
 	$(BUN) run tools/remote-pwa/build.ts
 
+.PHONY: demo-P-BRAND.1
+demo-P-BRAND.1: ## P-BRAND.1 (issue #314): the LUCID TUI welcome — lucid_tui.config.yml suppresses omp's welcome (startup.quiet), renderWelcomeLines names LUCID never omp, LUCID_WELCOME=off restores omp's box, fail-OPEN cosmetics never weaken fail-CLOSED, and the welcome -e rides behind the gate + theme -e with the --config overlay
+	$(BUN) run harness/scripts/demo_pbrand1.ts
+
+
 .PHONY: nvim-plugin-split
 nvim-plugin-split: ## Split extensions/neovim -> the standalone `lucid.nvim` branch (add PUSH=1 to force-push to origin)
 	@sha=$$(git subtree split --prefix=extensions/neovim HEAD); \

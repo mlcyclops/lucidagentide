@@ -358,3 +358,93 @@ test("main: kb list --json routes to the kb handler, never tui/acp", async () =>
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// ── lucid welcome: the branded splash -e + startup.quiet overlay (P-BRAND.1, issue #314) ──────────
+
+test("buildTuiArgs threads welcome -e AFTER gate+theme and includes --config quietConfig", () => {
+  const a = assets("/repo");
+  const args = buildTuiArgs({
+    gate: a.gate,
+    mcpResultGate: a.mcpResultGate,
+    asksage: a.asksage,
+    lucidTheme: a.lucidTheme,
+    lucidWelcome: a.lucidWelcome,
+    quietConfig: a.lucidTuiConfig,
+    passthru: ["-p", "hi"],
+  });
+  // gate is the first -e
+  expect(args[1]).toBe(a.gate);
+  // welcome index > theme index > gate index (ordering invariant)
+  const welcomeIdx = args.indexOf(a.lucidWelcome);
+  const themeIdx = args.indexOf(a.lucidTheme);
+  const gateIdx = args.indexOf(a.gate);
+  expect(welcomeIdx).toBeGreaterThan(themeIdx);
+  expect(themeIdx).toBeGreaterThan(gateIdx);
+  // --config immediately followed by the quiet overlay
+  const configIdx = args.indexOf("--config");
+  expect(configIdx).toBeGreaterThan(-1);
+  expect(args[configIdx + 1]).toBe(a.lucidTuiConfig);
+  // --append-system-prompt present
+  expect(args).toContain("--append-system-prompt");
+  // passthru comes last
+  expect(args.slice(-2)).toEqual(["-p", "hi"]);
+});
+
+test("buildTuiArgs WITHOUT lucidWelcome/quietConfig has no --config entry", () => {
+  const a = assets("/repo");
+  const args = buildTuiArgs({ gate: a.gate, asksage: a.asksage });
+  expect(args).not.toContain("--config");
+});
+
+test("assets exposes the welcome extension and quiet config", () => {
+  expect(assets("/repo").lucidWelcome).toBe("/repo/harness/omp/lucid_welcome_extension.ts");
+  expect(assets("/repo").lucidTuiConfig).toBe("/repo/harness/omp/lucid_tui.config.yml");
+});
+
+test("runTui welcome ON: spawned argv includes welcome -e after theme and --config for quiet overlay", async () => {
+  expect(existsSync(assets().lucidWelcome)).toBe(true);
+  expect(existsSync(assets().lucidTuiConfig)).toBe(true);
+  const spy = spawnSpy({ exit: 0 });
+  const code = await runTui({
+    scannerProbe: okProbe,
+    spawnFn: spy.fn,
+    env: {},
+    sandbox: NOOP_SANDBOX,
+    proxyStart: async () => null,
+    stderr: () => {},
+  });
+  expect(code).toBe(0);
+  const spawnArgs = spy.calls[0]!.args;
+  // welcome -e present and appears after the theme -e
+  const welcomeIdx = spawnArgs.findIndex((x) => x.endsWith("lucid_welcome_extension.ts"));
+  const themeIdx = spawnArgs.findIndex((x) => x.endsWith("lucid_theme_extension.ts"));
+  expect(welcomeIdx).toBeGreaterThan(-1);
+  expect(welcomeIdx).toBeGreaterThan(themeIdx);
+  // --config immediately followed by lucid_tui.config.yml
+  const configIdx = spawnArgs.indexOf("--config");
+  expect(configIdx).toBeGreaterThan(-1);
+  expect(spawnArgs[configIdx + 1]).toMatch(/lucid_tui\.config\.yml$/);
+});
+
+test("runTui welcome OFF (LUCID_WELCOME=off): no welcome -e, no quiet config, gate still first", async () => {
+  const spy = spawnSpy({ exit: 0 });
+  const code = await runTui({
+    scannerProbe: okProbe,
+    spawnFn: spy.fn,
+    env: { LUCID_WELCOME: "off" },
+    sandbox: NOOP_SANDBOX,
+    proxyStart: async () => null,
+    stderr: () => {},
+  });
+  expect(code).toBe(0);
+  const spawnArgs = spy.calls[0]!.args;
+  // no welcome -e
+  expect(spawnArgs.some((x) => x.endsWith("lucid_welcome_extension.ts"))).toBe(false);
+  // no --config pointing at the quiet overlay
+  const configIdx = spawnArgs.indexOf("--config");
+  if (configIdx >= 0) {
+    expect(spawnArgs[configIdx + 1]).not.toMatch(/lucid_tui\.config\.yml$/);
+  }
+  // gate is still the first -e
+  expect(spawnArgs[1]).toBe(assets().gate);
+});
