@@ -28,6 +28,7 @@ import {
 } from "./lucid_acp.ts";
 import { BUILD_POLICY, DELEGATION_POLICY } from "../prompt/assembler.ts";
 import { BwrapBackend, NoopBackend, type BackendResolution } from "../runs/sandbox_exec.ts";
+import { _resetKbStoreForTest, kbStore, stopKb } from "../../desktop/kb_store.ts";
 
 const okProbe = async () => ({ ok: true });
 const deadProbe = async () => ({ ok: false, reason: "scanner sidecar unavailable: exited code=1" });
@@ -322,4 +323,38 @@ test("runTui loads the skin -e in the spawned argv (repo asset exists), gate sti
   expect(call.args.some((x) => x.endsWith("security_extension.ts"))).toBe(true);
   expect(call.args.some((x) => x.endsWith("lucid_theme_extension.ts"))).toBe(true); // the skin rides along
   expect(call.args.indexOf(call.args.find((x) => x.endsWith("lucid_theme_extension.ts"))!)).toBeGreaterThan(call.args.indexOf(call.args.find((x) => x.endsWith("security_extension.ts"))!));
+});
+
+// ── lucid kb: read-only KG viewer routing (P-NVIM.6) ─────────────────────────
+test("main: kb list --json routes to the kb handler, never tui/acp", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "kb-main-"));
+  process.env.LUCID_KB_DB_PATH = join(dir, "kb_graph.duckdb");
+  process.env.LUCID_KG_REGISTRY_PATH = join(dir, "kg_registry.json");
+  _resetKbStoreForTest();
+  const store = await kbStore();
+  await store.addPage({ kind: "concept", slug: "probe", title: "Probe page", bodyMd: "x", trustLabel: "untrusted", classification: "U" });
+
+  const origWrite = process.stdout.write;
+  const chunks: string[] = [];
+  process.stdout.write = (s: string | Uint8Array) => { chunks.push(String(s)); return true; };
+  try {
+    let tuiCalled = false;
+    let acpCalled = false;
+    const fakeTui = (async () => { tuiCalled = true; return 0; }) as never;
+    const fakeAcp = (async () => { acpCalled = true; return 0; }) as never;
+    const code = await main(["kb", "list", "--json"], {}, { tui: fakeTui, acp: fakeAcp });
+    expect(code).toBe(0);
+    expect(tuiCalled).toBe(false);
+    expect(acpCalled).toBe(false);
+    const output = chunks.join("");
+    let parsed: unknown;
+    expect(() => { parsed = JSON.parse(output); }).not.toThrow();
+    expect(Array.isArray(parsed)).toBe(true);
+  } finally {
+    process.stdout.write = origWrite;
+    await stopKb();
+    delete process.env.LUCID_KB_DB_PATH;
+    delete process.env.LUCID_KG_REGISTRY_PATH;
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

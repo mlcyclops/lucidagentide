@@ -33,6 +33,7 @@ local defaults = {
     send = "<leader>ls", -- send visual selection / current file to Lucid
     check = "<leader>lC", -- run the fail-closed gate preflight (`lucid check`)
     stats = "<leader>lm", -- open the session metrics panel (:LucidStats)
+    kb = "<leader>lk", -- open the knowledge-graph viewer (:LucidKb)
   },
   -- Statusline component (require("lucid").statusline()), polled from `lucid stats --json`.
   statusline = { interval = 5000, prefix = "Lucid" },
@@ -458,6 +459,131 @@ function M.stats()
   end)
 end
 
+-- ── knowledge graph viewer (:LucidKb) — the terminal-native mirror of the GUI KG browser ────────────
+-- Browse the SAME ~/.omp knowledge graphs the desktop app shows: pick a KG -> pick a page -> read it.
+-- The pure label/body helpers are headless-tested; the vim.ui.select + float glue is thin. Data comes
+-- from the read-only `lucid kb … --json` CLI (no agent, no gate spawn — a pure read).
+
+--- KG picker label: an active dot + name + page count (+ read-only tag). Test seam.
+function M._kb_kg_label(kg)
+  kg = kg or {}
+  local dot = kg.active and "● " or "  "
+  local ro = kg.read_only and ", read-only" or ""
+  local n = kg.pages or 0
+  return string.format("%s%s (%d page%s%s)", dot, kg.name or "?", n, (n == 1) and "" or "s", ro)
+end
+
+--- Page picker label: [kind] Title · slug. Test seam.
+function M._kb_page_label(page)
+  page = page or {}
+  return string.format("[%s] %s  ·  %s", page.kind or "?", page.title or "(untitled)", page.slug or "")
+end
+
+--- Body lines for the page float: a title header + provenance line, then the markdown body. Test seam.
+function M._kb_body_lines(page)
+  page = page or {}
+  local lines = {
+    "# " .. (page.title or "(untitled)"),
+    string.format("(%s · %s · %s)", page.kind or "?", page.slug or "", page.trust_label or "untrusted"),
+    "",
+  }
+  for _, l in ipairs(vim.split(page.body_md or "", "\n", { plain = true })) do
+    lines[#lines + 1] = l
+  end
+  return lines
+end
+
+-- Run `lucid kb <args…> --json`, decode, and hand the result (or nil) to cb on the main loop.
+local function kb_run(cmd, args, cb)
+  local argv = { cmd, "kb" }
+  for _, a in ipairs(args) do
+    argv[#argv + 1] = a
+  end
+  argv[#argv + 1] = "--json"
+  vim.system(argv, { text = true }, function(res)
+    local ok, data = pcall(vim.json.decode, (res and res.stdout) or "")
+    vim.schedule(function()
+      cb(ok and data or nil)
+    end)
+  end)
+end
+
+-- Open a page body in a read-only, markdown, floating scratch buffer (q / <Esc> to close).
+local function open_kb_page(cfg, page)
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, M._kb_body_lines(page))
+  vim.bo[buf].modifiable = false
+  vim.bo[buf].filetype = "markdown"
+  local fl = (type(cfg.float) == "table") and cfg.float or {}
+  local width = math.floor(vim.o.columns * (fl.width or 0.85))
+  local height = math.floor(vim.o.lines * (fl.height or 0.85))
+  local win = vim.api.nvim_open_win(buf, true, {
+    relative = "editor",
+    width = width,
+    height = height,
+    row = math.floor((vim.o.lines - height) / 2),
+    col = math.floor((vim.o.columns - width) / 2),
+    style = "minimal",
+    border = fl.border or "rounded",
+    title = " " .. (page.title or "KG page") .. " ",
+    title_pos = "center",
+  })
+  vim.keymap.set("n", "q", "<Cmd>close<CR>", { buffer = buf, silent = true })
+  vim.keymap.set("n", "<Esc>", "<Cmd>close<CR>", { buffer = buf, silent = true })
+  vim.api.nvim_set_current_win(win)
+end
+
+--- `:LucidKb` — browse the knowledge graph: pick a KG -> pick a page -> read it. Uses vim.ui.select, so
+--- your configured picker (telescope/fzf-lua/snacks) drives it with ZERO extra dependency; type to filter.
+function M.kb()
+  local cmd = M._resolve_cmd(M.config)
+  if not cmd then
+    notify_missing(M.config)
+    return
+  end
+  local cfg = M.config
+  local function browse(kg)
+    kb_run(cmd, { "pages", "--kg", kg.kg_id }, function(pages)
+      if type(pages) ~= "table" or #pages == 0 then
+        vim.notify('Lucid: "' .. (kg.name or "KG") .. '" has no pages yet.', vim.log.levels.INFO)
+        return
+      end
+      vim.ui.select(pages, { prompt = "Page in " .. (kg.name or "KG"), format_item = M._kb_page_label }, function(page)
+        if not page then
+          return
+        end
+        kb_run(cmd, { "show", page.page_id, "--kg", kg.kg_id }, function(full)
+          if type(full) ~= "table" or not full.title then
+            vim.notify("Lucid: could not load that page.", vim.log.levels.WARN)
+            return
+          end
+          open_kb_page(cfg, full)
+        end)
+      end)
+    end)
+  end
+  kb_run(cmd, { "list" }, function(kgs)
+    if type(kgs) ~= "table" or #kgs == 0 then
+      vim.notify("Lucid: no knowledge graphs yet (seed one in the app or import a pack).", vim.log.levels.INFO)
+      return
+    end
+    -- active KG first, so the default matches what the app is on.
+    table.sort(kgs, function(a, b)
+      local av, bv = a.active and 1 or 0, b.active and 1 or 0
+      return av > bv
+    end)
+    if #kgs == 1 then
+      browse(kgs[1])
+    else
+      vim.ui.select(kgs, { prompt = "Knowledge graph", format_item = M._kb_kg_label }, function(kg)
+        if kg then
+          browse(kg)
+        end
+      end)
+    end
+  end)
+end
+
 --- Merge user opts over defaults and install the default keymaps.
 function M.setup(opts)
   M.config = vim.tbl_deep_extend("force", vim.deepcopy(defaults), opts or {})
@@ -477,6 +603,9 @@ function M.setup(opts)
   end
   if km.stats then
     vim.keymap.set("n", km.stats, "<Cmd>LucidStats<CR>", { silent = true, desc = "Lucid: session metrics" })
+  end
+  if km.kb then
+    vim.keymap.set("n", km.kb, "<Cmd>LucidKb<CR>", { silent = true, desc = "Lucid: knowledge graph" })
   end
 end
 

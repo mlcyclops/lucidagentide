@@ -132,7 +132,7 @@ return {
     name = "lucid.nvim",
     branch = "lucid.nvim",             -- plugin-at-root branch; source lives in extensions/neovim/
     main = "lucid",                    -- else lazy infers the module from the repo name and setup() no-ops
-    cmd = { "Lucid", "LucidToggle", "LucidSend", "LucidCheck" },
+    cmd = { "Lucid", "LucidToggle", "LucidSend", "LucidCheck", "LucidStats", "LucidKb" },
     keys = {
       { "<leader>al", "<cmd>LucidToggle<cr>", desc = "Lucid: toggle" },
       { "<leader>as", "<cmd>LucidSend<cr>", desc = "Lucid: send file" },
@@ -179,7 +179,7 @@ Working inside the monorepo, point the manager at the on-disk plugin instead of 
 -- lazy.nvim
 { dir = vim.fn.expand("~/projects/personal/lucidagentide/extensions/neovim"),
   name = "lucid.nvim", main = "lucid",
-  cmd = { "Lucid", "LucidToggle", "LucidSend", "LucidCheck" }, opts = {} }
+  cmd = { "Lucid", "LucidToggle", "LucidSend", "LucidCheck", "LucidStats", "LucidKb" }, opts = {} }
 ```
 
 Calling `setup()` is optional outside LazyVim — the commands work with defaults as soon as the plugin is
@@ -194,6 +194,7 @@ on your `runtimepath`. `setup()` only overrides config and installs the default 
 | `:LucidSend` | Visual range → send the selection; `:10,20LucidSend` → send those lines; otherwise send the current file as `@path` |
 | `:LucidCheck` | Run the fail-closed preflight (`lucid check`) and report the verdict |
 | `:LucidStats` | Session spend + KV-cache % + context-fill (float; the GUI Memory inspector) |
+| `:LucidKb` | Browse the knowledge graph: pick a KG → a page → read it (uses `vim.ui.select`; the terminal-native GUI KG browser) |
 | `:checkhealth lucid` | Full health: launcher found + `lucid check` passes |
 
 ### Default keymaps (set by `setup()`)
@@ -204,6 +205,7 @@ on your `runtimepath`. `setup()` only overrides config and installs the default 
 | `<leader>ls` | `:LucidSend` (normal: current file · visual: selection) |
 | `<leader>lC` | `:LucidCheck` |
 | `<leader>lm` | `:LucidStats` |
+| `<leader>lk` | `:LucidKb` |
 
 Disable them with `keymaps = false` (or per-entry, e.g. `keymaps = { send = false }`) and map the
 commands yourself.
@@ -218,7 +220,7 @@ require("lucid").setup({
   window = "float",                                -- "float" | "vsplit" | "split" | "tab"
   float = { width = 0.85, height = 0.85, border = "rounded" },
   start_insert = true,                             -- enter terminal insert-mode on open
-  keymaps = { toggle = "<leader>lc", send = "<leader>ls", check = "<leader>lC", stats = "<leader>lm" },
+  keymaps = { toggle = "<leader>lc", send = "<leader>ls", check = "<leader>lC", stats = "<leader>lm", kb = "<leader>lk" },
   statusline = { interval = 5000, prefix = "Lucid" }, -- for require("lucid").statusline()
 })
 ```
@@ -262,6 +264,28 @@ transcript (session-only fast path — no DuckDB, no omp subprocess):
 
 The raw JSON the plugin consumes is `lucid stats --json` (add `--budgets` for rate limits) — handy for
 building your own components.
+
+### Knowledge graph — browse your compiled KGs in Neovim
+
+- **`:LucidKb`** (or `<leader>lk`) is the terminal-native mirror of the GUI's knowledge-graph browser.
+  It reads the SAME graphs the desktop app shows (the shared `~/.omp` registry), so nothing is
+  editor-specific. It uses `vim.ui.select`, so if you have telescope / fzf-lua / snacks wired as your
+  `vim.ui.select` backend it drives the picker with **zero extra dependency** — type to filter.
+
+  Flow: **pick a knowledge graph** (the active one first; skipped when you only have one) → **pick a
+  page** → the page opens in a read-only markdown float (`q` / `<Esc>` to close).
+
+  The data comes from the read-only `lucid kb` CLI, usable bare in any terminal:
+
+  ```
+  lucid kb list                 # your KGs (the active one marked *)
+  lucid kb pages [--kg <id>]    # a KG's pages
+  lucid kb show <id|slug>       # one page's body
+  lucid kb search <query>       # lexical search over titles + bodies
+  ```
+
+  Add `--json` to any of them for machine output (what the plugin consumes). It is a pure read — no
+  agent, no gate spawn — so it never blocks and never mutates your graphs.
 
 ### Security block banner — the gate's block, as a Neovim notification
 
