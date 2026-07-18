@@ -27,7 +27,11 @@ import { BUILD_POLICY, DELEGATION_POLICY } from "../prompt/assembler.ts";
 import { ScannerClient, ScanUnavailableError } from "../security/scanner_client.ts";
 import { runAgentFirewall } from "../mcp/agent_firewall.ts";
 import { formatStats, rateLimits, sessionStats } from "../../tools/session_metrics.ts";
-import { runKb } from "../../tools/kb_cli.ts";
+// NOTE: tools/kb_cli.ts is imported LAZILY inside the `kb` subcommand (never at module top).
+// Its kb_store import pulls DuckDB's native bindings, whose loader require()s every platform's
+// .node package - `bun build --compile` (compile-lucid) chases those statically and the release
+// build dies resolving other-OS binaries. The dynamic import keeps the compiled launcher lean;
+// `lucid kb` still works wherever node_modules exists (the packaged app + dev checkouts).
 import { resolveBackend, sandboxDisclosure, wrapForProfile, type BackendResolution, type SandboxProxy } from "../runs/sandbox_exec.ts";
 import { ensureEgressProxy } from "../runs/egress_proxy.ts"; // P-SANDBOX.2 (ADR-0166)
 import { egressAuditSink } from "../../desktop/egress_audit.ts"; // P-SANDBOX.3 (ADR-0167)
@@ -390,9 +394,22 @@ export async function main(argv: string[], env: Env = process.env, deps?: { tui?
   if (sub === "kb") {
     // Read-only KG viewer data source (P-NVIM.6): list | pages | show | search, over the shared ~/.omp
     // registry the GUI uses. No agent, no tool calls — so no fail-closed preflight (a pure data read).
-    const { code, out } = await runKb(rest);
-    process.stdout.write(out.endsWith("\n") ? out : `${out}\n`);
-    return code;
+    // Lazy, COMPUTED import: keeps DuckDB's native bindings out of the compiled launcher (see the note at
+    // the top imports). Under bun-run the on-disk module loads in-process; in the COMPILED binary that
+    // import can't resolve the repo's bare specifiers (virtualized module graph), so fall back to spawning
+    // bun on the same file - the packaged app ships a bundled bun beside the repo (ADR-0225), dev has PATH.
+    const kbCli = join(repoRoot(), "tools", "kb_cli.ts");
+    try {
+      const { pathToFileURL } = await import("node:url");
+      const { runKb } = await import(pathToFileURL(kbCli).href);
+      const { code, out } = await runKb(rest);
+      process.stdout.write(out.endsWith("\n") ? out : `${out}\n`);
+      return code;
+    } catch {
+      const bunBin = [join(repoRoot(), "..", "runtimes", `bun${EXE}`), `bun${EXE}`].find((b) => b === `bun${EXE}` || existsSync(b))!;
+      const proc = nodeSpawn(bunBin, [kbCli, ...rest], { stdio: ["ignore", "inherit", "inherit"] });
+      return await new Promise<number>((res) => proc.on("close", (c) => res(c ?? 1)));
+    }
   }
   if (sub === "tui") return tui({ passthru: rest, env });
   if (sub === "acp") return acp({ isolate: rest.includes("--isolate"), env });

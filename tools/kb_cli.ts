@@ -179,3 +179,12 @@ export async function runKb(argv: string[]): Promise<{ code: number; out: string
       return { code: 2, out: json ? JSON.stringify({ error: `unknown action: ${action}` }) : `unknown action: ${action} (use: list | pages | show | search)` };
   }
 }
+
+// Direct-run entry: the COMPILED `lucid` binary can't import this file in-process (its bundled runtime
+// doesn't walk the repo's node_modules for bare specifiers, and DuckDB's native bindings must stay out
+// of the bundle), so the launcher's `kb` subcommand spawns `bun tools/kb_cli.ts …` and relays the output.
+if (import.meta.main) {
+  const { code, out } = await runKb(process.argv.slice(2));
+  process.stdout.write(out.endsWith("\n") ? out : `${out}\n`);
+  process.exit(code);
+}
