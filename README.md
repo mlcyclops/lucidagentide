@@ -30,7 +30,7 @@
 <a href="https://github.com/mlcyclops/lucidagentide/actions/workflows/build-desktop.yml"><img src="https://img.shields.io/github/actions/workflow/status/mlcyclops/lucidagentide/build-desktop.yml?label=Windows%20Build&logo=windows&logoColor=white&style=flat-square" alt="Windows Build" /></a>
 <a href="https://github.com/mlcyclops/lucidagentide/actions/workflows/build-desktop.yml"><img src="https://img.shields.io/github/actions/workflow/status/mlcyclops/lucidagentide/build-desktop.yml?label=macOS%20Build&logo=apple&logoColor=white&style=flat-square" alt="macOS Build" /></a>
 <a href="https://github.com/mlcyclops/lucidagentide/actions/workflows/build-desktop.yml"><img src="https://img.shields.io/github/actions/workflow/status/mlcyclops/lucidagentide/build-desktop.yml?label=Linux%20Build&logo=linux&logoColor=white&style=flat-square" alt="Linux Build" /></a>
-<img src="https://img.shields.io/badge/tests-938%20harness%20%2B%201221%20desktop%20%2B%2057%20sidecar-46d27e?style=flat-square" alt="tests" />
+<img src="https://img.shields.io/badge/tests-1695%20harness%20%2B%204018%20desktop%20%2B%2062%20sidecar-46d27e?style=flat-square" alt="tests" />
 <img src="https://img.shields.io/badge/gate-fail--closed-e07bf0?style=flat-square" alt="fail-closed gate" />
 
 <br/>
@@ -174,6 +174,63 @@ personalization internals are proprietary and intentionally undocumented here - 
 > are in this source-available core (managed-config + an audit-export interface); the policy templates and SIEM
 > connectors are a separately-licensed add-on. Metadata-only by construction - no code, prompts, or CUI
 > leave the host.
+
+---
+
+## ✨ What's new in v1.11.9
+
+> **📱 LUCID Remote - drive your desktop LUCID from your phone.** Plus: model replies no longer stall behind the dashboards, and the Preview panel grows tabs + device viewports.
+
+- **📱 LUCID Remote (the headline)** - your running desktop LUCID becomes reachable from a **phone browser**:
+  scan a **QR invite** from the Share panel, **sign in with Google**, and watch - or **drive** - your agent from
+  anywhere. Everything rides the existing **end-to-end-encrypted** collaboration plane (the relay only ever sees
+  ciphertext; the room key lives in the link fragment and never touches a server), and every remote prompt still
+  runs **on the host** through your fail-closed gate + approvals. Includes a hosted **guest PWA**, dual
+  **edit / view-only** invite links, live **presence**, **preview snapshots** on the phone, a **floating Join
+  dock**, and a self-host-or-hosted rendezvous (Cloud Run) with **claims-gated admission** for the paid Remote
+  Access tier. *(ADR-0226/0227 + ADR-0240-0242, P-REMOTE.1-.10)* - see the full section below.
+- **⚡ Model replies no longer crawl** - the live dashboards used to re-aggregate your **entire session history**
+  (and even spawn an omp subprocess) every few seconds on the server's single event loop, so **every model's
+  reply queued behind them** - the longer you used LUCID, the slower it got. The poll is now gated + memoized
+  and the underlying scans cached: repeat dashboard reads went from **~1-8 s to ~0-2 ms**, idle server CPU
+  dropped **~29% → ~8%** of a core, and streaming stays smooth mid-turn. *(P-PERF.3)*
+- **👀 Preview: two lanes + device viewports** - the preview fly-out gains **Yours / Agent tabs** (the agent
+  updates its own tab and badges it instead of clobbering what you're reviewing), **phone / tablet viewports**
+  (portrait + landscape, fit-scaled, with the viewport surfaced to the agent so it designs for mobile), and a
+  hard **50% width cap** so your chat and its Close button always stay visible.
+- **🩹 The v1.11.8 reliability rollup rides along** - the air-gap `bun` fix (clean machines boot with zero
+  prerequisites), reliable OAuth connect/disconnect, the overloaded-provider fallback, the model-picker freeze
+  safety-net, and the Linux air-gap Python fix.
+
+---
+
+## 📱 LUCID Remote
+
+> **Your desktop agent, in your pocket - without giving up the security model.** LUCID Remote turns the
+> E2E-encrypted live-collaboration plane into a phone-ready remote control for your own machine.
+
+<div align="center">
+<img src=".github/assets/remote-pwa-signin.png" alt="LUCID Remote guest PWA on a phone - the Sign in with Google gate before joining your desktop session" width="300" />
+<img src=".github/assets/remote-pwa-session.png" alt="LUCID Remote on a phone - driving the desktop LUCID agent: live transcript, prompt composer, and preview snapshots" width="300" />
+<br><sub><b>LUCID Remote on a phone</b> - sign in, join your desktop session, and drive it. <em>Screenshot placeholders.</em></sub>
+</div>
+
+- **📷 Pair by QR.** The desktop Share panel renders the invite link as a **scannable QR** (a first-party,
+  dependency-free encoder - nothing extra touches a server). Point your phone camera, tap, you're in.
+- **🔐 Four independent gates.** Google **OAuth** at the rendezvous (Firebase ID-token, verified server-side) →
+  the **room key** (E2E AES-256-GCM, carried only in the link fragment) → the **write token** (edit vs
+  view-only invite links) → and the host's own **fail-closed scan gate + exec/egress approvals** on every
+  remote prompt. A compromised relay yields ciphertext, nothing more.
+- **📱 A real guest PWA.** Installable from the browser, bundling the same collaboration modules as the
+  desktop - live transcript with thinking + tool calls, a prompt composer, presence, and **preview snapshots**
+  of what the agent is building.
+- **🏠 Your relay or ours.** Self-host the rendezvous on your own box/jumpbox (anonymous mode, byte-identical
+  to before), or use the hosted Cloud Run rendezvous where admission is **claims-gated** - the paid **Remote
+  Access** tier (or an admin comp) admits; payment buys rendezvous admission only, never trust.
+- **🔁 Survives real networks.** First-frame token auth (never in a URL), heartbeat + reconnect, and same-account
+  host **re-claim with a grace window**, so an hourly connection cap or a flaky phone signal doesn't kill the room.
+
+<sub>*(ADR-0226/0227 + ADR-0240-0242 · increments P-REMOTE.1-.10 · relay + PWA are first-party BUSL-1.1)*</sub>
 
 ---
 
@@ -332,6 +389,7 @@ via the same read-only-safe JSONL-sink pattern as the rest of the observer store
 - [<img src=".github/assets/icons/gateway.svg" width="16" alt=""> Models and the AskSage gateway](#-models-and-the-asksage-gateway)
 - [📚 Knowledge & RAG](#-knowledge--rag)
 - [🤝 Live collaboration](#-live-collaboration)
+- [📱 LUCID Remote](#-lucid-remote)
 - [<img src=".github/assets/icons/builton.svg" width="16" alt=""> Built on](#-built-on)
 - [<img src=".github/assets/icons/quickstart.svg" width="16" alt=""> Quick start](#-quick-start)
 - [<img src=".github/assets/icons/desktop.svg" width="16" alt=""> Desktop app](#-desktop-app)
@@ -831,25 +889,25 @@ Obsidian-vault export), AI-authorship attribution, one-command import, a read-wr
 the **`/goal` loop** with full loop-engineering (after-action reports, a budget kill switch, and stall
 guards), a local **RAG knowledge spine** + the **compiled KB** with hybrid retrieval, the governed **skills
 directory** + **Skill Studio**, **local & hybrid providers**, the **Agent Builder**, the **agent firewall**,
-and the **runtime execution boundary** (OS-isolated exec + mediated egress). **Newest (v1.11.6):** an
-**air-gap-capable installer** that bundles omp, a relocatable Python, and Bun so a locked-down or offline
-machine runs cold on first launch with **zero prerequisites and zero network** (CI air-gap smoke proves it);
-**RAG for every model** - a `knowledge_search` tool that grounds Claude / GPT / Gemini / local models on your
-own ingested vault, folders, or chat history, plus **bring-your-own-embeddings** semantic search; **gov
-lockdown enforced server-side** with per-session CUI/Search mode and CUI + DoD/STIG banners; the **KG-pack
-`.lkgpack` marketplace**; and an **overloaded-provider fallback** that recommends a lower same-family or
-cross-provider model when one goes silent. *(v1.11.0 brought end-to-end-encrypted **live collaboration** -
-share a running session with another LUCID, watch read-only or drive, guest prompts still run on the host
-through your gate + approvals, self-hosted by default with an optional direct P2P (WebRTC) upgrade; v1.10.6
-brought the redesigned agent turn + the Model-Evaluation report suite.)*
+and the **runtime execution boundary** (OS-isolated exec + mediated egress). **Newest (v1.11.9):**
+**📱 LUCID Remote** - drive your running desktop LUCID from a **phone browser**: QR pairing, Google sign-in,
+an installable **guest PWA**, dual edit/view-only invites, and a self-host-or-hosted Cloud Run rendezvous with
+claims-gated admission - all over the E2E-encrypted collab plane, with every remote prompt still running the
+host's fail-closed gate; a **performance overhaul** (the dashboard poll no longer stalls model replies - repeat
+reads ~1-8 s → ~0-2 ms, idle server CPU ~29% → ~8%); and the **Preview panel** gains Yours/Agent **tabs**,
+**phone/tablet device viewports**, and a 50% width cap. *(v1.11.6 brought the **air-gap installer**, **RAG for
+every model** with bring-your-own-embeddings, server-side **gov lockdown**, the KG-pack marketplace, and the
+overloaded-provider fallback; v1.11.0 brought E2E-encrypted **live collaboration**.)*
 
-Every test suite passes and `tsc --noEmit` is clean across all three projects (TypeScript + Python). The
+**5,700+ tests** across the harness (1,695), desktop (4,018), and Python sidecar (62), green in CI, with
+`tsc --noEmit` clean on the shipping projects. The
 table below is the recent slice; [`PROGRESS.md`](PROGRESS.md) has the full per-session log.
 
 ### Recent updates
 
 | Phase | Feature | ADR |
 |:--|:--|:--|
+| **v1.11.9 batch** | **📱 LUCID Remote + the performance overhaul + preview tabs/viewports** - drive the desktop LUCID from a **phone browser** over the E2E-encrypted collab plane: **QR invite** from the Share panel, **Google sign-in** at the rendezvous (Firebase ID-token verified server-side, first-frame auth - never a URL param), the installable **guest PWA** (live transcript + composer + presence + preview snapshots), dual **edit/view-only** links, host **re-claim** with a grace window for flaky networks, self-host **or** hosted Cloud Run rendezvous with **claims-gated admission** (the paid Remote Access tier admits; payment never buys trust - every remote prompt still runs the host's fail-closed gate); plus **P-PERF.3** (the dashboard poll re-aggregated the entire session history + spawned omp synchronously every few seconds, stalling every model's replies - now gated/memoized/cached: repeat reads ~1-8 s → ~0-2 ms, idle CPU ~29% → ~8%) and the **preview panel**'s Yours/Agent tabs, phone/tablet device viewports, and 50% width cap | [ADR-0226/0227, 0240-0242](DECISIONS.md) |
 | **v1.11.6 batch** | **Air-gap installer + RAG for everyone + gov hardening** - the packaged app **bundles omp, a relocatable Python, and Bun**, so an offline or locked-down machine runs cold on first launch with **zero prerequisites and zero network** (a CI air-gap smoke test scrubs the global runtime to prove it); a **`knowledge_search`** tool grounds **any model** (Claude/GPT/Gemini/local) on your ingested **Obsidian vault / folders / imported history** - lexical + graph retrieval plus **bring-your-own-embeddings** semantic search (your OpenAI key or a local Ollama/vLLM `/embeddings`); AskSage **lockdown enforced server-side** across routing + egress + agent runs (was renderer-only) with the real GPT-5.6 ids, a per-session **CUI/Search mode**, and CUI + opt-in **DoD/STIG** banners; the **KG-pack `.lkgpack` marketplace/storefront**; a roomier **shared-session viewer** (host thinking + tools, whole window); an **overloaded-provider fallback** that recommends a lower same-family or cross-provider model when a model fails silently (Fable 5 → 4.8 Opus); reliable **OAuth connect/disconnect** (+ "Sign out of all") and a one-click **diagnostics collector**; and the **"Lucid Agent"** rename | [ADR-0217-0225](DECISIONS.md) |
 | **v1.11.0 batch** | **Live collaboration** - share a running session with another LUCID over an **E2E-encrypted** relay; a guest **watches read-only** or (edit link) **drives** the host (guest prompts run **on the host**, through its fail-closed gate + approvals); **self-hosted by default** ("be the relay" loopback/LAN/VPN, or a standalone jumpbox broker; public relay opt-in) with **enterprise/MDM** clamps; an optional **direct P2P (WebRTC)** upgrade (DTLS DataChannel, relay only signals, auto-fallback); a **metadata-only** share/join **audit trail**; plus a **Copy** button + **right-click Copy** for chat & code, the product **website** in About, and a pulled-back default **zoom** | [ADR-0192-0204](DECISIONS.md) |
 | **v1.10.6 batch** | **Redesigned agent turn + Model-Evaluation suite** - a settled answer folds into collapsible sections + threads tool calls back as inline **chips** (with +/- diffstats + code drilldowns) when they interleave, else keeps the rich **activity window** + **expanded subagent detail**; a settled **file-writing** turn offers a thin, subdued **"Generate engineering report"** (honesty-tiered per-run metrics) plus a **cross-run rollup** with per-model **API-latency p50/p95**; **10-min provider patience** with a "still waiting" notice; and an **opt-in, AI-refreshable Trivia Wire** | [ADR-0186-0191](DECISIONS.md) |
@@ -895,7 +953,7 @@ Built in the open, **one disciplined increment at a time.** If you want to run i
 or propose a change, start here:
 
 - **Read [`CLAUDE.md`](CLAUDE.md) first.** It's the load-bearing contract - fail-closed, extend omp (don't fork), frozen contracts, a byte-stable prompt. A change that silently breaks an invariant won't land.
-- **ADR-first.** Non-trivial work begins as an ADR in [`DECISIONS.md`](DECISIONS.md) (225 and counting) - pick one up, or propose your own.
+- **ADR-first.** Non-trivial work begins as an ADR in [`DECISIONS.md`](DECISIONS.md) (242 and counting) - pick one up, or propose your own.
 - **One increment per change.** Small, verifiable, with a demo and tests. See [`CHEATSHEET.md`](CHEATSHEET.md) for day-to-day commands.
 - **Tests are the gate.** `bun test harness && bun test desktop` stay green and `tsc --noEmit` is clean; CI runs the build + CodeQL on every push.
 - **The only Python is the scanner sidecar.** Everything else is TypeScript on Bun - please don't add a second Python surface.
