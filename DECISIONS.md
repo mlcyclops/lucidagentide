@@ -16223,3 +16223,104 @@ reload.
 
 ADR-0232 (P-SHARE.1, the dock chassis + pill), ADR-0222 (the watching mode this retires), ADR-0196/0202
 (P-COLLAB.10/17, the join paths that now render inside the dock).
+
+## ADR-0244 -- upgrade omp 16.1.20 -> 17.0.x: assessed compatible, three rework items (P-OMP17.1-.3) (2026-07-18)
+
+**Status:** Accepted -- SCOPE/PLAN. Assessment DONE (live, not notes-only); the upgrade itself is its own
+increment on a branch. ADR-0243 is reserved for the P-SKILL.6 skills-SWR ADR already cited in PROGRESS.
+
+### Context
+
+We pin `@oh-my-pi/*` at 16.1.20; upstream is at 17.0.4 with 60+ releases in between, including the
+BREAKING 17.0.0 (2026-07-15). The gap holds real wins: the Windows binary silent-exit fix + baseline-x64
+CPU support (16.4.4, directly relevant to our installed-app support burden), native GPT-5.6 Luna/Sol/Terra
+ids + the "Responses Lite" transport for that family (16.4.0/.1 -- the same /v1/responses path AskSage's
+shim told us to use when it rejected tools+reasoning_effort), prompt-cache affinity headers, /pause,
+credential-free web search, and the advisor role (ADR-0245).
+
+### Assessment (empirical, 2026-07-18)
+
+Scratch-installed 17.0.4 and ran OUR integration against it, not just the changelog:
+
+- Extensions (`-e` asksage + security) load and register; `registerProvider` + our
+  `compat: { omitReasoningEffort, maxTokensField }` fix are honored on the wire (verified via a local
+  wire-tap: no `reasoning_effort`, `max_completion_tokens=32000`, tools intact).
+- The UNMODIFIED desktop app drove a full ACP turn through 17.0.4 (initialize, session/new, model config,
+  streaming, settle -- "ACP17-OK", HUD/cost correct) and the full exec pipeline (permission path answered,
+  gate policy applied, `bash` ran, activity steps rendered).
+- The `streamSimple` legacy-provider surface (our AskSage Claude/Gemini adapter -- the exact surface
+  17.0.0 broke and 17.0.3 restored) replied on the live gateway ("CLAUDE17-OK").
+- auth-broker CLI unchanged; the `.bin/omp.bunx` + plain-bun shim shape is unchanged, so the ADR-0225
+  air-gap bundling (plain `bun` alias) still applies.
+- Tool inventory shrank 27 -> 10: `read, bash, edit, eval, glob, grep, task, hub, todo, write`. Every
+  name the exec gate keys on survives; `hub` is new (consolidates irc/job/launch); the discovery system,
+  `resolve`, and ssh tools are gone.
+
+### Decision
+
+Upgrade to 17.0.x on a dedicated branch as one increment, AFTER ~a week of upstream settling (4 patch
+releases in 4 days at assessment time). Increments:
+
+- **P-OMP17.1 -- the bump + the three rework items.** (a) classify the new `hub` tool in the exec gate +
+  tool-chip renderer, and render `xd://propose` execute-kind dispatches (plan approval) sanely; (b) adapt
+  the delegation-card / subagent-activity parsing to the 16.4.5 Task wire schema (`assignment`->`task`,
+  `id`->`name`, per-item `agent`); (c) re-check the Speed/Risk dial + agent-name references against the
+  16.4.0 reasoning-ladder redesign and the `explore`->`scout` rename.
+- **P-OMP17.2 -- the gates.** Full `make test`, the prefix-hash test, the fail-closed kill-the-sidecar
+  test, and all three OS air-gap builds through the ADR-0225 smoke (plain-bun scrub included).
+- **P-OMP17.3 -- Responses-route exploration (optional, after .1/.2).** Evaluate omp's Responses Lite
+  transport for the AskSage GPT-5.6 family so gov GPT models regain reasoning_effort WITH tools
+  (supersedes the ADR-style workaround noted in asksage_extension.ts).
+
+### Relates to
+
+ADR-0001 (extend, never fork), ADR-0110 (elicitation.form -- re-verified live on 17), ADR-0225 (air-gap
+bundling -- shim unchanged), the asksage_extension omitReasoningEffort fix (2026-07-18), ADR-0245.
+
+## ADR-0245 -- the advisor role: a second model watching every turn (P-ADVISOR.1-.4) (2026-07-18)
+
+**Status:** Accepted -- SCOPE/PLAN, roadmap only. No code this ADR; requires ADR-0244 (advisor matured in
+16.4-17.x). Increments are each their own session.
+
+### Context
+
+omp can pair a second model in an "advisor" role: it reads every turn the main agent takes, on its OWN
+context and model, and injects inline notes (a quiet aside, a concern, or a hard blocker); the main agent
+course-corrects or explains why not. Behavior rules come from a `WATCHDOG.md` (project root or `.omp/`)
+appended to the advisor's prompt as highest-priority instructions; the advisor is constrained to a few
+read-only tool calls per delta with a silence-first policy, and 17.0.2 added per-advisor `enabled`
+toggles. For LUCID this is the missing SEMANTIC layer of the defense: the Unicode scanner + gate catch
+mechanical injection; an advisor can catch the agent being STEERED (goal drift, ignoring an invariant,
+acting on planted instructions) -- which no character-level scan can see.
+
+### Decision (phased)
+
+- **P-ADVISOR.1 -- the security advisor (keystone).** Ship a first-party WATCHDOG.md encoding the
+  CLAUDE.md invariants (fail-closed, closed trust-label set, delimited untrusted content, no unscanned
+  side-channels) so the advisor flags semantic drift; advisor notes render in chat as a distinct
+  "advisor" chip (never mistaken for the agent). MUST ship with its own eval: planted-injection fixtures
+  (the ADR-0225 zero-width corpus + steering prompts) where the advisor is expected to object -- the
+  feature has no published real-session benchmark, so we build our own before trusting it.
+- **P-ADVISOR.2 -- governance + cost.** The advisor model is chosen under the SAME sovereignty rules as
+  the main model (gov session -> gov advisor; lockdown honored fail-closed), defaults to a cheap tier,
+  and its spend is a separate line in the cost ledger + eval reports.
+- **P-ADVISOR.3 -- role-aware watchdogs.** Per-role WATCHDOG packs (developer / security / manager /
+  exec) built + edited like DESIGN.md and skills; user-authored packs are scanned fail-closed before the
+  advisor may load them (they are prompt-priority text -- a poisoned watchdog is an injection vector, so
+  keystone #2 discipline applies).
+- **P-ADVISOR.4 -- the /goal loop reviewer.** Advisor-on-by-default for unattended loops: the checker
+  model judges OUTCOMES between iterations; the advisor watches PROCESS within a turn. Its objections
+  land in the After-Action Report, and a hard-blocker note can pause the loop under the existing
+  Speed/Risk dial semantics.
+
+### Open questions
+
+Advisor-note trust labeling (they are model output ABOUT possibly-poisoned input -- likely `untrusted`
+with a dedicated render, never promoted); note volume/noise on long turns; whether AskSage-routed
+advisors are viable given per-turn latency; WATCHDOG.md interaction with the frozen prefix (it must ride
+the tail, never the cached layers).
+
+### Relates to
+
+ADR-0244 (prerequisite), ADR-0066/0067 (exec gate + Speed/Risk dial), ADR-0046-0056 (/goal + checker
+model), CLAUDE.md keystones #1/#2.

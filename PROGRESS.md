@@ -3776,3 +3776,13 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **verified:** desktop tsc + `about.test.ts` (v1.11.7) + license-header check green; Windows fetch/extract/scanner-offline already proven locally (unaffected). Root cause confirmed by inspecting the PBS linux archive: `bin/python3`→symlink, `bin/python3.12`→real ELF.
 - **next:** tag v1.11.7 → all 3 OSes green through the air-gap gate (Linux included) → becomes "latest", supersedes the pulled v1.11.5/.6.
 
+
+**AskSage GPT-5.6/5.5 silent-empty replies: root-caused + fixed (asksage_extension compat) - 2026-07-18**
+- **shipped:** the gov GPT models "returned nothing" because AskSage's shim REJECTS omp's `tools` + `reasoning_effort` combination on GPT-5.x, and the streamed rejection is an HTTP-200 SSE whose only event is an error object, so omp ends the turn silently (end_turn). Proven by capturing omp's exact request via a local wire-tap, replaying it verbatim against the live gateway, and bisecting fields. Fix: model-level `compat: { omitReasoningEffort: true, maxTokensField: "max_completion_tokens" }` on the asksage-openai route (tools stay; models reason at default effort).
+- **verified:** wire-tap shows reasoning_effort ABSENT + 27 tools intact; REAL gateway through omp replied "WIRE-OK" (gpt-5.6-luna) and "FIVE-FIVE-OK" (gpt-5.5); desktop tsc 0.
+- **next:** the /v1/responses route upgrade (P-OMP17.3) restores effort+tools together.
+
+**omp 17 upgrade assessment + advisor roadmap: ADR-0244 / ADR-0245 - 2026-07-18**
+- **shipped:** ADR-0244 (SCOPE/PLAN): 16.1.20 -> 17.0.x assessed EMPIRICALLY on a scratch 17.0.4 - extensions load, compat honored on the wire, full ACP turn + exec pipeline green through the unmodified desktop, streamSimple (AskSage Claude) replies live, auth-broker + air-gap shim unchanged; three rework items named (hub tool + xd://propose rendering, Task wire schema for the delegation card, reasoning-ladder/scout rename). ADR-0245 (SCOPE/PLAN): the advisor role (second model reading every turn, WATCHDOG.md) as LUCID's semantic injection-defense layer - P-ADVISOR.1 security advisor with its own planted-injection eval, .2 sovereignty/cost governance, .3 role-aware watchdog packs (scanned fail-closed), .4 /goal process reviewer. ADR-0243 left reserved for the P-SKILL.6 skills-SWR ADR already cited in PROGRESS.
+- **stubbed:** no code for either - the upgrade waits ~a week of upstream settling; advisor requires the upgrade first.
+- **next:** P-OMP17.1 on a branch (bump + three reworks) then P-OMP17.2 gates (full test + 3-OS air-gap smoke).
