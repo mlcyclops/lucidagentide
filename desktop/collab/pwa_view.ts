@@ -96,8 +96,20 @@ export function foldEvent(items: ViewItem[], e: ChatEvent): ViewItem[] {
 
 const SEV_CLASS: Record<string, string> = { high: "sev-high", medium: "sev-med", low: "sev-low" };
 
-/** Render one view item to a mobile HTML fragment (all host text escaped). */
-export function renderItem(item: ViewItem): string {
+/** One-line gist of a thinking block for its collapsed summary: the LAST non-empty line (the freshest
+ *  thought while the stream grows), whitespace-collapsed and clipped. Pure; "" for blank text. */
+export function thinkingGist(text: string, max = 64): string {
+  const lines = text.split(/\n+/).map((l) => l.replace(/\s+/g, " ").trim()).filter(Boolean);
+  const last = lines[lines.length - 1] ?? "";
+  return last.length > max ? `${last.slice(0, max - 1).trimEnd()}…` : last;
+}
+
+/** Render one view item to a mobile HTML fragment (all host text escaped).
+ *  `i` keys a thinking block's `data-think` so the PWA can preserve the user's open/closed choice across
+ *  the per-event innerHTML repaints (which otherwise reset every <details> to collapsed - the "can't open
+ *  Thinking while the agent streams" bug). `activeThinking` renders the block OPEN by default: desktop
+ *  parity, where the live reasoning streams visibly and collapses once the answer starts. */
+export function renderItem(item: ViewItem, i = 0, activeThinking = false): string {
   switch (item.kind) {
     case "user": {
       // P-COLLAB.15: label a turn from ANOTHER participant with its author; the guest's own echo has no `from`.
@@ -106,8 +118,11 @@ export function renderItem(item: ViewItem): string {
     }
     case "answer":
       return `<div class="msg answer${item.streaming ? " streaming" : ""}">${escapeHtml(item.text)}</div>`;
-    case "thinking":
-      return `<details class="msg thinking"><summary>Thinking</summary><div>${escapeHtml(item.text)}</div></details>`;
+    case "thinking": {
+      const gist = thinkingGist(item.text);
+      const g = gist ? ` <span class="gist">${escapeHtml(gist)}</span>` : "";
+      return `<details class="msg thinking"${activeThinking ? " open" : ""} data-think="${i}"><summary>Thinking${g}</summary><div>${escapeHtml(item.text)}</div></details>`;
+    }
     case "tool": {
       // For an edit/write, show the file path + a +/- diffstat; for other tools, the compact detail.
       const label = item.path ? escapeHtml(item.path) : escapeHtml(item.detail);
@@ -137,7 +152,9 @@ export function renderTranscript(prior: CollabTranscriptTurn[], items: ViewItem[
   const priorHtml = prior
     .map((t) => `<div class="msg ${t.role === "user" ? "user" : "answer"}">${escapeHtml(t.text)}</div>`)
     .join("");
-  return priorHtml + items.map(renderItem).join("");
+  // A thinking block that is still the TRAILING item is the live reasoning - render it open (it collapses
+  // naturally when the first answer token / tool chip lands after it). data-think = the item index.
+  return priorHtml + items.map((it, i) => renderItem(it, i, it.kind === "thinking" && i === items.length - 1)).join("");
 }
 
 /** The header line (title + model + host) for the top bar. Metadata only — no credentials, no paths. */

@@ -154,6 +154,9 @@ function main(): void {
   let guest: CollabGuest | null = null;
   let socket: CollabSocket | null = null;
   let items: ViewItem[] = [];
+  // The user's explicit open/closed choice per Thinking block (keyed by its `data-think` item index).
+  // Repaints re-apply it; an untouched block keeps the default (the live trailing one renders open).
+  const thinkIntent = new Map<number, boolean>();
   let currentEmail: string | null = null;
   // P-REMOTE.11: reconnect catch-up. `seenTurns` = host turns the user has seen; `awayAt` snapshots it when the
   // screen locks so, on the reconnect welcome-replay, we can summarize the turns that completed while away.
@@ -276,6 +279,11 @@ function main(): void {
     requestAnimationFrame(fitSvCanvas); // a cached image can skip onload; fit after layout either way
   };
   $("transcript").addEventListener("click", (ev) => {
+    // A Thinking summary tap records the user's INTENT (the click's default action flips `open` after this
+    // handler). The per-event innerHTML repaint resets every <details>, so render() re-applies the intent -
+    // without this, an open Thinking block snaps shut on the next streamed token and is unreadable live.
+    const sum = (ev.target as HTMLElement | null)?.closest("details[data-think] > summary") as HTMLElement | null;
+    if (sum) { const d = sum.parentElement as HTMLDetailsElement; thinkIntent.set(Number(d.dataset.think ?? -1), !d.open); return; }
     const btn = (ev.target as HTMLElement | null)?.closest(".cu-shot-btn") as HTMLElement | null;
     if (!btn) return;
     const item = items.find((i) => i.kind === "preview" && i.id === btn.dataset.shot);
@@ -451,6 +459,11 @@ function main(): void {
     }
     const tr = $("transcript");
     tr.innerHTML = renderTranscript(view.transcript, items);
+    // Re-apply the user's Thinking open/closed choices - the innerHTML repaint above resets every <details>.
+    for (const d of Array.from(tr.querySelectorAll<HTMLDetailsElement>("details[data-think]"))) {
+      const want = thinkIntent.get(Number(d.dataset.think ?? -1));
+      if (want !== undefined) d.open = want;
+    }
     // P-PREVIEW-PWA.1: hydrate preview-snapshot thumbnails - the data URL is set as an <img> PROPERTY here,
     // never inlined into the transcript HTML (keeps the re-rendered markup small + text-safe).
     for (const it of items) if (it.kind === "preview") { const im = tr.querySelector(`.cu-shot-btn[data-shot="${it.id}"] .cu-shot-img`) as HTMLImageElement | null; if (im) im.src = it.image; }
@@ -536,7 +549,7 @@ function main(): void {
         const key = await importRoomKey(parsed.key);
         const wsUrl = `${cfg.relayWsBase.replace(/\/+$/, "")}/r/${parsed.roomId}`;
         socket = new CollabSocket({ wsUrl, role: "guest", key, authToken: () => auth.getIdToken() });
-        items = []; lastReport = null; turnStart = 0; selfEchoes.length = 0;
+        items = []; thinkIntent.clear(); lastReport = null; turnStart = 0; selfEchoes.length = 0;
         guest = new CollabGuest(socket, { name: currentEmail ?? "phone", writeToken: parsed.writeToken }, {
           onEvent: (e) => {
             items = foldEvent(items, e);

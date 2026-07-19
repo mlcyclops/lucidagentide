@@ -89,7 +89,9 @@
     
     .msg.note { align-self: center; color: var(--txt3); font-size: 13px; font-style: italic; padding: 4px 0; }
     .msg.thinking { align-self: flex-start; background: var(--bg); border: 1px dashed var(--line); color: var(--txt2); font-size: 14px; max-width: 90%; padding: 10px 14px; border-radius: 12px; }
-    .msg.thinking summary { cursor: pointer; color: var(--txt3); font-weight: 500; outline: none; display: inline-block; padding: 4px; margin: -4px; border-radius: 4px; }
+    .msg.thinking summary { cursor: pointer; color: var(--txt3); font-weight: 500; outline: none; display: block; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 4px; margin: -4px; border-radius: 4px; }
+    .msg.thinking summary .gist { color: var(--txt3); font-weight: 400; font-style: italic; opacity: .85; margin-left: 6px; }
+    .msg.thinking[open] summary .gist { display: none; } /* the full text is visible below - no duplicate gist */
     .msg.thinking summary:focus-visible { color: var(--cyan); }
     
     .chip { align-self: flex-start; display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; font-size: 13px; background: var(--bg1); border: 1px solid var(--line); border-radius: 8px; padding: 10px 14px; max-width: 90%; }
