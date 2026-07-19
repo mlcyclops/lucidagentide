@@ -8,7 +8,7 @@
 // (the load-bearing safety property — the phone must never turn host/echoed content into markup).
 
 import { describe, expect, it } from "bun:test";
-import { foldEvent, renderItem, renderTranscript, renderHeader, statusLabel, escapeHtml, type ViewItem } from "./pwa_view.ts";
+import { foldEvent, renderItem, renderTranscript, renderHeader, statusLabel, escapeHtml, thinkingGist, type ViewItem } from "./pwa_view.ts";
 import type { ChatEvent } from "../renderer/chat_events.ts";
 import type { GuestView } from "./guest.ts";
 
@@ -70,6 +70,44 @@ describe("pwa_view: foldEvent reducer", () => {
       { type: "usage", used: 1, size: 2, cost: 3 },
     ]);
     expect(items).toEqual([{ kind: "note", text: "The model (gov-x) returned nothing." }]);
+  });
+});
+
+describe("pwa_view: readable Thinking (live-open + gist + stable identity)", () => {
+  it("thinkingGist takes the LAST non-empty line, collapses whitespace, and clips long lines", () => {
+    expect(thinkingGist("first thought\n\nsecond   thought  ")).toBe("second thought");
+    expect(thinkingGist("")).toBe("");
+    expect(thinkingGist("   \n  \n")).toBe("");
+    const long = "x".repeat(100);
+    const g = thinkingGist(long);
+    expect(g.length).toBeLessThanOrEqual(64);
+    expect(g.endsWith("…")).toBe(true);
+  });
+
+  it("a TRAILING thinking item renders OPEN (live reasoning); it renders closed once something follows", () => {
+    const think: ViewItem = { kind: "thinking", text: "weighing options" };
+    expect(renderTranscript([], [think])).toContain("<details class=\"msg thinking\" open");
+    const after = renderTranscript([], [think, { kind: "answer", text: "ok", streaming: true }]);
+    expect(after).not.toContain("<details class=\"msg thinking\" open");
+    expect(after).toContain("data-think=\"0\"");
+  });
+
+  it("each thinking block carries its item index in data-think (open-state keying across repaints)", () => {
+    const html = renderTranscript([], [
+      { kind: "thinking", text: "a" },
+      { kind: "tool", name: "read", detail: "f.ts" },
+      { kind: "thinking", text: "b" },
+    ]);
+    expect(html).toContain("data-think=\"0\"");
+    expect(html).toContain("data-think=\"2\"");
+  });
+
+  it("the summary shows an ESCAPED gist of the freshest line; blank thinking gets no gist span", () => {
+    const html = renderItem({ kind: "thinking", text: "safe start\n<img src=x onerror=alert(1)>" }, 0, false);
+    expect(html).toContain("class=\"gist\"");
+    expect(html).not.toContain("<img");
+    expect(html).toContain("&lt;img");
+    expect(renderItem({ kind: "thinking", text: "  \n " }, 0, false)).not.toContain("class=\"gist\"");
   });
 });
 
