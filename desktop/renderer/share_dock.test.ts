@@ -8,7 +8,7 @@
 import { describe, expect, it } from "bun:test";
 import {
   defaultShape, clampToViewport, snapDecision, loadDockState, saveDockState, participantSummary, isCollapsed,
-  orderBindAddresses, redactShareSnapshot, JOIN_DOCK_KEY,
+  orderBindAddresses, redactShareSnapshot, classifyInviteLink, JOIN_DOCK_KEY,
   DOCK_MIN_W, DOCK_MIN_H, type DockStorage, type DockState,
 } from "./share_dock.ts";
 
@@ -193,5 +193,49 @@ describe("isCollapsed (P-SHARE.1)", () => {
     expect(isCollapsed({}, "sec-invite", false)).toBe(false);
     expect(isCollapsed({ "sec-relay": false }, "sec-relay", true)).toBe(false); // user expanded a default-collapsed one
     expect(isCollapsed({ "sec-invite": true }, "sec-invite", false)).toBe(true); // user collapsed a default-open one
+  });
+});
+
+describe("classifyInviteLink (P-SHARE.3): feature the https phone link, demote the wss desktop link", () => {
+  const pwa = "https://lucid-agent.web.app/remote/#room1.SECRET";
+  const wss = "wss://relay.run.app/r/room1.SECRET";
+
+  it("features the hosted-PWA https link as public, keeps the wss link as the desktop-only link, QRs the phone link", () => {
+    const v = classifyInviteLink(pwa, wss);
+    expect(v.phoneLink).toBe(pwa);
+    expect(v.desktopLink).toBe(wss);
+    expect(v.phoneReach).toBe("public");
+    expect(v.showQr).toBe(true);
+  });
+
+  it("NEVER offers a wss link as the phone link and NEVER QRs it - the core footgun (no browser link minted)", () => {
+    const v = classifyInviteLink("", wss);
+    expect(v.phoneLink).toBe("");     // the wss form is not offered to a phone
+    expect(v.showQr).toBe(false);    // and it is never encoded as a "scan me" QR
+    expect(v.phoneReach).toBe("none");
+    expect(v.desktopLink).toBe(wss); // it stays available as the desktop link
+  });
+
+  it("flags a self-hosted https link on a LAN/loopback host as reachable only on the same network", () => {
+    expect(classifyInviteLink("https://192.168.1.5:8790/#r.S", "wss://192.168.1.5:8790/r/r.S").phoneReach).toBe("lan");
+    expect(classifyInviteLink("https://10.0.0.4/#r.S", null).phoneReach).toBe("lan");
+    expect(classifyInviteLink("https://relay.local/#r.S", null).phoneReach).toBe("lan");
+    expect(classifyInviteLink("https://mylaptop/#r.S", null).phoneReach).toBe("lan"); // bare hostname
+    expect(classifyInviteLink("https://localhost:8790/#r.S", null).phoneReach).toBe("lan");
+    expect(classifyInviteLink("https://[::1]/#r.S", null).phoneReach).toBe("lan");
+    expect(classifyInviteLink("https://100.100.0.1/#r.S", null).phoneReach).toBe("lan"); // Tailscale CGNAT
+  });
+
+  it("treats a real FQDN (public relay host) as opens-anywhere", () => {
+    expect(classifyInviteLink("https://relay.your-org.internal/#r.S", null).phoneReach).toBe("public");
+    expect(classifyInviteLink("https://8.8.8.8/#r.S", null).phoneReach).toBe("public"); // public IPv4 literal
+  });
+
+  it("drops the desktop row when it equals the phone link or is not a ws(s) link, and handles empties", () => {
+    expect(classifyInviteLink(pwa, pwa).desktopLink).toBe("");             // identical -> no dup row
+    expect(classifyInviteLink(pwa, "https://not-a-ws/#x").desktopLink).toBe(""); // non-ws -> discarded
+    const empty = classifyInviteLink("", "");
+    expect(empty).toEqual({ phoneLink: "", desktopLink: "", phoneReach: "none", showQr: false });
+    expect(classifyInviteLink(null, null).phoneReach).toBe("none");
   });
 });

@@ -121,6 +121,11 @@ export interface GuiSettings {
   // ADR-0089 (P-ROLE.1b): the first-run guided walkthrough has been shown (finished OR skipped).
   // Replay-guard so the tour never re-appears uninvited; the About "Take the tour" button ignores it.
   tourSeen?: boolean;
+  // P-GOVCUI.1: the first-run "are you a Government/GovCon user handling CUI?" answer. Cosmetic onboarding
+  // state (like userRole/tourSeen). `undefined` = not asked yet (drives the first-run gov step); `true` = the
+  // user is on the CUI (gov gateway) path; `false` = standard use. It NEVER weakens the gate; the actual
+  // sovereignty control is `asksageOnly` (lockdown) + the fail-closed backend clamp (ADR-0217).
+  govconCui?: boolean;
   // P-VOICE.1 (ADR-0115): voice (TTS/STT) config.
   // sttProvider: mic engine — "elevenlabs" (cloud Scribe) or "whisper" (offline, air-gap/DoD). Default whisper.
   sttProvider?: "elevenlabs" | "whisper";
@@ -285,6 +290,14 @@ export function setUserRole(role: UserRole): GuiSettings {
 export function tourSeen(): boolean { return !!load().tourSeen; }
 export function setTourSeen(seen: boolean): GuiSettings {
   const s = load(); s.tourSeen = !!seen; save(s); return s;
+}
+/** P-GOVCUI.1: whether the first-run Government/CUI question has been answered (either way) yet. Drives the
+ *  first-run gov step so it asks exactly once. */
+export function govconCuiChosen(): boolean { return load().govconCui !== undefined; }
+/** P-GOVCUI.1: the recorded Government/CUI answer (false when unset). */
+export function govconCui(): boolean { return !!load().govconCui; }
+export function setGovconCui(v: boolean): GuiSettings {
+  const s = load(); s.govconCui = !!v; save(s); return s;
 }
 
 // ── P-MCP.1 (ADR-0020): MCP server registry ───────────────────────────────────────

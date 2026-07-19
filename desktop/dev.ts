@@ -74,14 +74,14 @@ import { designDocPath, DESIGN_DOC_NAME } from "./design_doc.ts"; // P-FIGMA.2 /
 import { listLocalProviders, upsertLocalProvider, removeLocalProvider, setLocalProviderEnabled } from "./settings_store.ts";
 import { providerModelsUrl, type LocalProviderDef } from "./local_providers.ts";
 import { listRemoteAgents, upsertRemoteAgent, removeRemoteAgent, setRemoteAgentEnabled } from "../harness/mcp/registry.ts";
-import { applyEnv, attribution, chinaModelsAcknowledged, listMcpServers, load as loadSettings, removeMcpServer, roleChosen, setAsksage, setAttributionSkip, setChinaModelsAcknowledged, setCodeGraphAgent, setDeveloperMode, setKey, setMcpServerEnabled, setPersonalAiExtract, setProfile, setRateLimitProbe, setThirdPartyProvidersAcknowledged, setTourSeen, setUserRole, setVoiceSettings, thirdPartyProvidersAcknowledged, tourSeen, upsertMcpServer, USER_ROLES, userRole, voiceSettings, type UserRole } from "./settings_store.ts";
+import { applyEnv, attribution, chinaModelsAcknowledged, govconCui, govconCuiChosen, listMcpServers, load as loadSettings, removeMcpServer, roleChosen, setAsksage, setAttributionSkip, setChinaModelsAcknowledged, setCodeGraphAgent, setDeveloperMode, setGovconCui, setKey, setMcpServerEnabled, setPersonalAiExtract, setProfile, setRateLimitProbe, setThirdPartyProvidersAcknowledged, setTourSeen, setUserRole, setVoiceSettings, thirdPartyProvidersAcknowledged, tourSeen, upsertMcpServer, USER_ROLES, userRole, voiceSettings, type UserRole } from "./settings_store.ts";
 
 // ADR-0088/0089: the /api/settings payload — profile + attribution + the cosmetic role/tour state.
 // `role` is null until the user has EXPLICITLY chosen one (so the renderer can fire the first-run role
 // picker); once chosen it's the concrete role. tourSeen guards the first-run walkthrough replay.
 function settingsData() {
   const s = loadSettings();
-  return { username: s.username ?? "", email: s.email ?? "", attribution: attribution(), role: roleChosen() ? userRole() : null, tourSeen: tourSeen() };
+  return { username: s.username ?? "", email: s.email ?? "", attribution: attribution(), role: roleChosen() ? userRole() : null, tourSeen: tourSeen(), govconCui: govconCuiChosen() ? govconCui() : null };
 }
 import { authorizeRelayBind, collabServeAllowed, emailDomainAllowed, managedAsksageOnly, managedConfig, managedLocks, skipAllowed } from "./managed_config.ts";
 import { startRelayServer, type RelayHandle } from "./collab/relay_server.ts"; // P-COLLAB.7 (ADR-0193): the optional embedded relay
@@ -1698,11 +1698,12 @@ const server = Bun.serve({
       // settings + provider auth
       if (p === "/api/settings") {
         if (req.method === "POST") {
-          const b = await readBody<{ skip?: unknown; email?: unknown; username?: unknown; role?: unknown; tourSeen?: unknown }>(req);
-          // ADR-0088/0089: role + first-run-tour state are cosmetic and policy-free — set them up front,
-          // independent of the email-attribution policy gate below.
+          const b = await readBody<{ skip?: unknown; email?: unknown; username?: unknown; role?: unknown; tourSeen?: unknown; govconCui?: unknown }>(req);
+          // ADR-0088/0089 + P-GOVCUI.1: role + first-run-tour + gov/CUI answer are cosmetic onboarding state,
+          // policy-free — set them up front, independent of the email-attribution policy gate below.
           if (b.role != null && (USER_ROLES as string[]).includes(String(b.role))) setUserRole(String(b.role) as UserRole);
           if (b.tourSeen != null) setTourSeen(!!b.tourSeen);
+          if (typeof b.govconCui === "boolean") setGovconCui(b.govconCui);
           // Enforce enterprise-managed attribution policy server-side (the UI also reflects it).
           if (b.skip && !skipAllowed()) return json({ ok: false, error: "Your organization requires a corporate email.", data: settingsData() });
           if (b.email != null && String(b.email).trim() && !emailDomainAllowed(String(b.email))) {
