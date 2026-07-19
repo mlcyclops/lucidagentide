@@ -1,0 +1,28 @@
+<!doctype html>
+<!-- Copyright (c) 2026 TechLead 187 LLC / SPDX-License-Identifier: BUSL-1.1 -->
+<!-- ADR-0227 follow-up: the /r/* safety net. A LUCID-to-LUCID relay link (`wss://host/r/<roomId>.<secret>`)
+     opened in a phone browser arrives here as an https path. This page moves the bare link OUT of the path
+     and into the PWA's URL FRAGMENT client-side (fragments never leave the browser), so an old or mis-shared
+     invite still lands in LUCID Remote instead of whatever site answers the host's catch-all route. -->
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta name="robots" content="noindex" />
+  <title>Opening LUCID Remote&hellip;</title>
+  <style>body{background:#0a0b0f;color:#e8edf5;font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;text-align:center;padding:56px 22px}a{color:#2dd4bf;word-break:break-all}</style>
+</head>
+<body>
+  <p>Opening LUCID Remote&hellip;</p>
+  <p><a id="go" href="/remote">Tap here if it doesn't open automatically</a></p>
+  <script>
+    (function () {
+      var m = /^\/r\/([A-Za-z0-9._-]+)$/.exec(location.pathname);
+      var dest = m ? "/remote/#" + m[1] : "/remote";
+      var a = document.getElementById("go");
+      if (a) a.href = dest;
+      location.replace(dest);
+    })();
+  </script>
+</body>
+</html>
