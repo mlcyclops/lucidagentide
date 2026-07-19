@@ -358,3 +358,42 @@ test("main: kb list --json routes to the kb handler, never tui/acp", async () =>
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// ── lucid blocks: read-only security-block viewer routing (P-NVIM.7) ──────────
+test("main: blocks --json routes to the blocks handler, never tui/acp", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "blocks-main-"));
+  const logPath = join(dir, "lucid-blocks.jsonl");
+  writeFileSync(
+    logPath,
+    JSON.stringify({ id: "b-1", tool: "bash", severity: "high", findings: "zero-width×2", reason: "hidden-unicode", at: "2026-07-19T00:00:00Z", status: "quarantined" }) + "\n",
+  );
+  const savedLog = process.env.LUCID_BLOCK_LOG;
+  process.env.LUCID_BLOCK_LOG = logPath;
+
+  const origWrite = process.stdout.write;
+  const chunks: string[] = [];
+  process.stdout.write = (s: string | Uint8Array) => { chunks.push(String(s)); return true; };
+  try {
+    let tuiCalled = false;
+    let acpCalled = false;
+    const fakeTui = (async () => { tuiCalled = true; return 0; }) as never;
+    const fakeAcp = (async () => { acpCalled = true; return 0; }) as never;
+    const code = await main(["blocks", "--json"], {}, { tui: fakeTui, acp: fakeAcp });
+    expect(code).toBe(0);
+    expect(tuiCalled).toBe(false);
+    expect(acpCalled).toBe(false);
+    const output = chunks.join("");
+    let parsed: unknown;
+    expect(() => { parsed = JSON.parse(output); }).not.toThrow();
+    expect(Array.isArray(parsed)).toBe(true);
+    // The gate's live-session log row is surfaced (the repo's db quarantines may also appear; ours must be among them).
+    expect(output).toContain('"id":"b-1"');
+    expect(output).toContain('"tool":"bash"');
+    expect(output).toContain('"source":"log"');
+  } finally {
+    process.stdout.write = origWrite;
+    if (savedLog === undefined) delete process.env.LUCID_BLOCK_LOG;
+    else process.env.LUCID_BLOCK_LOG = savedLog;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

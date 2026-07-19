@@ -31,3 +31,7 @@ end, { desc = "Show session spend / KV-cache / context metrics" })
 vim.api.nvim_create_user_command("LucidKb", function()
   require("lucid").kb()
 end, { desc = "Browse the knowledge graph (pick a KG, then a page, then read it)" })
+
+vim.api.nvim_create_user_command("LucidBlocks", function()
+  require("lucid").blocks()
+end, { desc = "List the tool calls the security gate blocked (quarantined)" })

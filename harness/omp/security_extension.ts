@@ -23,6 +23,7 @@ import { ScannerClient } from "../security/scanner_client.ts";
 import { scanAndDecide, type GatePolicy } from "../security/gate.ts";
 import { buildNotification, summarizeNotification } from "../security/notification.ts";
 import type { Db } from "../memory/db.ts";
+import { mirrorBlock } from "./block_log.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const DB_PATH = join(HERE, "..", "..", "agent_obs.duckdb");
@@ -170,6 +171,7 @@ export default function securityExtension(pi: any): void {
       failClosed: decision.failClosed,
     });
     process.stderr.write(`\n🛡️  [LucidAgentIDE] ${summarizeNotification(notification)}\n`);
+    mirrorBlock(toolName, decision); // P-NVIM.7: lock-free block log for `lucid blocks` (best-effort)
     if (isTask) void recordTaskDispatch(decision); // blocked task → routed to read-only security-review
     void rememberActivity(toolName, text); // fire-and-forget; never blocks the gate
     return { block: true, reason: `Blocked by LucidAgentIDE security gate: ${decision.reason}` };

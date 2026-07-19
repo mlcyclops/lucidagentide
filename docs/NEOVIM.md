@@ -132,7 +132,7 @@ return {
     name = "lucid.nvim",
     branch = "lucid.nvim",             -- plugin-at-root branch; source lives in extensions/neovim/
     main = "lucid",                    -- else lazy infers the module from the repo name and setup() no-ops
-    cmd = { "Lucid", "LucidToggle", "LucidSend", "LucidCheck", "LucidStats", "LucidKb" },
+    cmd = { "Lucid", "LucidToggle", "LucidSend", "LucidCheck", "LucidStats", "LucidKb", "LucidBlocks" },
     keys = {
       { "<leader>al", "<cmd>LucidToggle<cr>", desc = "Lucid: toggle" },
       { "<leader>as", "<cmd>LucidSend<cr>", desc = "Lucid: send file" },
@@ -179,7 +179,7 @@ Working inside the monorepo, point the manager at the on-disk plugin instead of 
 -- lazy.nvim
 { dir = vim.fn.expand("~/projects/personal/lucidagentide/extensions/neovim"),
   name = "lucid.nvim", main = "lucid",
-  cmd = { "Lucid", "LucidToggle", "LucidSend", "LucidCheck", "LucidStats", "LucidKb" }, opts = {} }
+  cmd = { "Lucid", "LucidToggle", "LucidSend", "LucidCheck", "LucidStats", "LucidKb", "LucidBlocks" }, opts = {} }
 ```
 
 Calling `setup()` is optional outside LazyVim — the commands work with defaults as soon as the plugin is
@@ -195,6 +195,7 @@ on your `runtimepath`. `setup()` only overrides config and installs the default 
 | `:LucidCheck` | Run the fail-closed preflight (`lucid check`) and report the verdict |
 | `:LucidStats` | Session spend + KV-cache % + context-fill (float; the GUI Memory inspector) |
 | `:LucidKb` | Browse the knowledge graph: pick a KG → a page → read it (uses `vim.ui.select`; the terminal-native GUI KG browser) |
+| `:LucidBlocks` | List the tool calls the security gate blocked (quarantined) — the GUI Security panel, in the terminal |
 | `:checkhealth lucid` | Full health: launcher found + `lucid check` passes |
 
 ### Default keymaps (set by `setup()`)
@@ -206,6 +207,7 @@ on your `runtimepath`. `setup()` only overrides config and installs the default 
 | `<leader>lC` | `:LucidCheck` |
 | `<leader>lm` | `:LucidStats` |
 | `<leader>lk` | `:LucidKb` |
+| `<leader>lb` | `:LucidBlocks` |
 
 Disable them with `keymaps = false` (or per-entry, e.g. `keymaps = { send = false }`) and map the
 commands yourself.
@@ -220,7 +222,7 @@ require("lucid").setup({
   window = "float",                                -- "float" | "vsplit" | "split" | "tab"
   float = { width = 0.85, height = 0.85, border = "rounded" },
   start_insert = true,                             -- enter terminal insert-mode on open
-  keymaps = { toggle = "<leader>lc", send = "<leader>ls", check = "<leader>lC", stats = "<leader>lm", kb = "<leader>lk" },
+  keymaps = { toggle = "<leader>lc", send = "<leader>ls", check = "<leader>lC", stats = "<leader>lm", kb = "<leader>lk", blocks = "<leader>lb" },
   statusline = { interval = 5000, prefix = "Lucid" }, -- for require("lucid").statusline()
 })
 ```
@@ -286,6 +288,25 @@ building your own components.
 
   Add `--json` to any of them for machine output (what the plugin consumes). It is a pure read — no
   agent, no gate spawn — so it never blocks and never mutates your graphs.
+
+### Security blocks — the list of what the gate quarantined
+
+- **`:LucidBlocks`** (or `<leader>lb`) opens a read-only float listing the tool calls the security gate
+  BLOCKED (quarantined) — the terminal-native mirror of the GUI's Security panel. It shows the same data
+  the GUI does: the lock-free block log plus the DuckDB quarantines.
+
+- **It works during a live session.** The gate holds `agent_obs.duckdb` open while a turn runs, so a
+  cross-process read of that DB would be locked out. So bare-`lucid` sessions ALSO mirror each block to a
+  lock-free JSONL (`~/.omp/lucid-blocks.jsonl`) — the launcher opts the gate in via `LUCID_BLOCK_LOG`,
+  and the desktop GUI (which records blocks its own way) is never double-counted.
+
+  ```
+  lucid blocks            # the quarantined tool calls (the active list)
+  lucid blocks --all      # include reviewed (approved / dismissed) entries
+  ```
+
+  Add `--json` for machine output. It is a pure read — reviewing/approving a block stays a GUI action
+  (the audited fail-closed override); the terminal viewer only shows what the gate already decided.
 
 ### Security block banner — the gate's block, as a Neovim notification
 

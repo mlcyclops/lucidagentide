@@ -465,6 +465,10 @@ demo-P-NVIM.1: ## P-NVIM.1 (ADR-0150): Neovim + terminal integration — `lucid 
 demo-P-NVIM.6: ## P-NVIM.6: the `lucid kb` knowledge-graph viewer behind :LucidKb — seeds a temp KG, then proves kbList/kbPages/kbShow/kbSearch + runKb (list|pages|show|search, --json vs text, exit codes) read the shared ~/.omp registry; the neovim pure helpers ride the headless spec (demo-P-NVIM.1)
 	$(BUN) run harness/scripts/demo_pnvim6.ts
 
+.PHONY: demo-P-NVIM.7
+demo-P-NVIM.7: ## P-NVIM.7: the `lucid blocks` security-block viewer behind :LucidBlocks — the gate mirrors a block to a lock-free JSONL when LUCID_BLOCK_LOG is set (visible mid-session), is a no-op when unset (no GUI double-write), and readBlockLog/blockList/runBlocks list + filter (--all) + --json; never weakens fail-closed
+	$(BUN) run harness/scripts/demo_pnvim7.ts
+
 .PHONY: demo-P-THEME.1
 demo-P-THEME.1: ## P-THEME.1 (ADR-0160): the LUCID skin for gated terminals — themes/lucid.json resolves, session_start provisions (idempotent) + setTheme("lucid"), fail-OPEN cosmetics never weaken fail-CLOSED, and the theme -e rides behind the gate -e
 	$(BUN) run harness/scripts/demo_ptheme1.ts

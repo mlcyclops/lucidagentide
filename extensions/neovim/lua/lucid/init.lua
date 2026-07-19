@@ -34,6 +34,7 @@ local defaults = {
     check = "<leader>lC", -- run the fail-closed gate preflight (`lucid check`)
     stats = "<leader>lm", -- open the session metrics panel (:LucidStats)
     kb = "<leader>lk", -- open the knowledge-graph viewer (:LucidKb)
+    blocks = "<leader>lb", -- open the blocked-tool-call viewer (:LucidBlocks)
   },
   -- Statusline component (require("lucid").statusline()), polled from `lucid stats --json`.
   statusline = { interval = 5000, prefix = "Lucid" },
@@ -584,6 +585,67 @@ function M.kb()
   end)
 end
 
+-- ── blocked-tool-call viewer (:LucidBlocks) — the GUI Security panel, in Neovim ──────────────────────
+-- Lists what the in-process security gate quarantined (the SAME data the GUI panel shows), via the
+-- read-only `lucid blocks` CLI (the lock-free block log + the DuckDB quarantines). The line builder is
+-- headless-tested; the float glue is thin.
+
+--- Format block rows (from `lucid blocks --json`) into display lines. Test seam.
+function M._blocks_lines(blocks)
+  if type(blocks) ~= "table" or #blocks == 0 then
+    return { "No blocked tool calls — the security gate has quarantined nothing." }
+  end
+  local lines = {}
+  for _, b in ipairs(blocks) do
+    b = b or {}
+    local sev = (b.severity and b.severity ~= "") and (" · " .. b.severity) or ""
+    local f = (b.findings and b.findings ~= "") and (" · " .. b.findings) or ""
+    local st = (b.status and b.status ~= "quarantined") and (" [" .. b.status .. "]") or ""
+    local when = (b.at and b.at ~= "") and ("  (" .. b.at .. ")") or ""
+    lines[#lines + 1] = string.format("🛡️  %s%s%s%s  —  %s%s", b.tool or "tool", sev, f, st, b.reason or "", when)
+  end
+  return lines
+end
+
+--- `:LucidBlocks` — a read-only float listing the tool calls the security gate blocked (quarantined),
+--- the terminal-native mirror of the GUI Security panel. Data comes from the read-only `lucid blocks` CLI.
+function M.blocks()
+  local cmd = M._resolve_cmd(M.config)
+  if not cmd then
+    notify_missing(M.config)
+    return
+  end
+  vim.system({ cmd, "blocks", "--json" }, { text = true }, function(res)
+    local ok, data = pcall(vim.json.decode, (res and res.stdout) or "")
+    vim.schedule(function()
+      local lines = M._blocks_lines(ok and data or {})
+      local buf = vim.api.nvim_create_buf(false, true)
+      vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+      vim.bo[buf].modifiable = false
+      local width = 60
+      for _, l in ipairs(lines) do
+        width = math.max(width, vim.fn.strdisplaywidth(l) + 4)
+      end
+      width = math.min(width, vim.o.columns - 4)
+      local height = math.min(#lines + 1, math.max(3, vim.o.lines - 4))
+      local win = vim.api.nvim_open_win(buf, true, {
+        relative = "editor",
+        width = width,
+        height = height,
+        row = math.floor((vim.o.lines - height) / 2),
+        col = math.floor((vim.o.columns - width) / 2),
+        style = "minimal",
+        border = "rounded",
+        title = " Lucid — blocked tool calls ",
+        title_pos = "center",
+      })
+      vim.keymap.set("n", "q", "<Cmd>close<CR>", { buffer = buf, silent = true })
+      vim.keymap.set("n", "<Esc>", "<Cmd>close<CR>", { buffer = buf, silent = true })
+      vim.api.nvim_set_current_win(win)
+    end)
+  end)
+end
+
 --- Merge user opts over defaults and install the default keymaps.
 function M.setup(opts)
   M.config = vim.tbl_deep_extend("force", vim.deepcopy(defaults), opts or {})
@@ -606,6 +668,9 @@ function M.setup(opts)
   end
   if km.kb then
     vim.keymap.set("n", km.kb, "<Cmd>LucidKb<CR>", { silent = true, desc = "Lucid: knowledge graph" })
+  end
+  if km.blocks then
+    vim.keymap.set("n", km.blocks, "<Cmd>LucidBlocks<CR>", { silent = true, desc = "Lucid: blocked tool calls" })
   end
 end
 
