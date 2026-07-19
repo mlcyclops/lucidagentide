@@ -8479,7 +8479,8 @@ function shareBodyHtml(st: CollabShareStatus | null, p2p?: CollabP2PConfig | nul
       <button class="btn-mini" data-share-relay-change>${icon("sliders", 12)} Change relay</button>
       ${signedIn ? `<button class="btn-mini" data-share-signout>Sign out</button>` : ""}
       <button class="btn-mini ok" data-share-start>${icon("share", 12)} Start sharing</button>
-    </div>`;
+    </div>
+    <div id="shareProg" class="share-prog" hidden><span class="share-prog-dot"></span><div class="share-prog-tx"><div id="shareProgL1"></div><div id="shareProgL2"></div></div></div>`;
 }
 
 /** P-COLLAB.7: the "be the relay" toggle - host the embedded relay on this device (governance-gated). */
@@ -8875,6 +8876,27 @@ function openSharePanel(): void {
     await draw();
   });
 
+  // P-SHARE.4: last-known serve/p2p/relay from the most recent draw. Lets Stop render an idle body
+  // optimistically (instant teardown, no round-trip) and lets Start name the relay without a fetch.
+  let lastServe: CollabRelayServeStatus | null = null;
+  let lastP2pCfg: CollabP2PConfig | null = null;
+  let lastRelay: CollabRelay | null = null;
+  // P-SHARE.4: a two-line handshake/progress readout under the Start/Stop buttons, so the user always knows
+  // something IS happening (relay auth + socket open take a beat). Hidden when idle or live.
+  const setShareProg = (l1: string, l2 = "", on = true): void => {
+    const box = $("#shareProg", ov) as HTMLElement | null;
+    if (!box) return;
+    box.hidden = !on || !l1;
+    const a = $("#shareProgL1", ov); if (a) a.textContent = l1;
+    const b = $("#shareProgL2", ov); if (b) b.textContent = l2;
+  };
+  // P-SHARE.4: paint the idle (not-sharing) body straight from the last-known config - no status fetch - so a
+  // Stop feels instant. The real draw() runs right after to reconcile with the backend.
+  const drawIdleOptimistic = (): void => {
+    const cu = marketUser();
+    const idle: CollabShareStatus = { active: false, participantCount: 0, participants: [], relay: lastRelay };
+    body.innerHTML = composeBody(idle, lastServe, lastP2pCfg, { gated: !!lastRelay?.gated, signedIn: cu.signedIn === true, email: cu.email });
+  };
   const draw = async () => {
     const [st, serve, p2p] = await Promise.all([currentShareStatus(), bridge.collabRelayServeStatus(), bridge.collabP2PConfig()]);
     // When THIS device is hosting the relay, that IS the relay - so show the "ready" state (Start), never the
@@ -8890,6 +8912,7 @@ function openSharePanel(): void {
     const p2pCfg = p2p?.managed.locked ? null : (p2p?.config ?? null);
     const u = marketUser();
     const authInfo = { gated: !!show?.relay?.gated, signedIn: u.signedIn === true, email: u.email };
+    lastServe = serve ?? null; lastP2pCfg = p2pCfg; lastRelay = show?.relay ?? null; // P-SHARE.4: seed instant-Stop + Start progress
     body.innerHTML = composeBody(show, serve, p2pCfg, authInfo);
     setUpdating(false); // fresh state is on screen \u2192 clear the cold-boot "updating\u2026" chip
     if (show) setCachedShareSnapshot(redactShareSnapshot(show.relay ?? null, serve, p2pCfg)); // P-SHARE.2: seed the next open
@@ -8986,6 +9009,8 @@ function openSharePanel(): void {
     const copy = t.closest("[data-copy]") as HTMLElement | null;
     if (copy) { const v = copy.dataset.copy ?? ""; try { await navigator.clipboard.writeText(v); showToast({ title: `${copy.dataset.copyWhat ?? "Copied"} copied`, desc: copy.dataset.copyDesc ?? "Paste it to your guest.", timeout: 1800 }); } catch { showToast({ tone: "warn", title: "Couldn't copy", desc: "Copy it from the field instead." }); } return; }
     if (t.closest("[data-share-start]")) {
+      const startBtn = t.closest("[data-share-start]") as HTMLButtonElement;
+      if (startBtn.disabled) return; // guard against a double-click while the handshake is mid-flight
       const allowEdit = ($("#shareAllowEdit", ov) as HTMLInputElement | null)?.checked ?? false;
       const preferP2P = ($("#sharePreferP2P", ov) as HTMLInputElement | null)?.checked ?? false;
       // P-REMOTE.10b: capture the reconnect PIN BEFORE draw() re-renders (which clears the field).
@@ -8994,14 +9019,21 @@ function openSharePanel(): void {
       const iceUrls = (($("#shareIceUrls", ov) as HTMLTextAreaElement | null)?.value ?? "").split(/[\n,]/).map((u) => u.trim()).filter(Boolean);
       const turnUsername = ($("#shareTurnUser", ov) as HTMLInputElement | null)?.value.trim() ?? "";
       const turnCredential = ($("#shareTurnCred", ov) as HTMLInputElement | null)?.value.trim() ?? "";
+      // P-SHARE.4: disable the button + show a live progress readout for the whole handshake. `startFail`
+      // re-enables + surfaces the error (draw() rebuilds the button fresh on success, dropping the disable).
+      startBtn.disabled = true;
+      const startFail = (title: string, desc: string): void => { setShareProg("", "", false); startBtn.disabled = false; showToast({ tone: "danger", title, desc, timeout: 5500 }); };
+      setShareProg("Preparing to share…", "Saving your connection preferences");
       await bridge.collabSetP2P({ preferDirect: preferP2P, iceUrls, turnUsername, turnCredential });
       if (preferP2P) {
         // Direct P2P: mint + host in the RENDERER (RTCPeerConnection is renderer-only). Resolve the authorized
         // relay endpoint (external, or the embedded one) - it is used only to signal + as the fallback.
+        setShareProg("Finding a relay…", "Resolving a server to help your peers connect");
         const [back, serve] = await Promise.all([bridge.collabStatus(), bridge.collabRelayServeStatus()]);
         let relay = back?.relay ?? null;
         if (!relay && serve?.running && serve.wsBase) relay = { wsBase: serve.wsBase, httpBase: serve.wsBase.replace(/^ws/, "http"), label: "this device (embedded relay)", source: "embedded" };
-        if (!relay) { showToast({ tone: "danger", title: "Couldn't start sharing", desc: "No relay is configured to help peers connect. Set one, or host the relay on this device.", timeout: 6000 }); return; }
+        if (!relay) { startFail("Couldn't start sharing", "No relay is configured to help peers connect. Set one, or host the relay on this device."); return; }
+        setShareProg("Connecting…", `Opening a direct peer-to-peer channel via ${relay.label}`);
         try {
           const p2pStatus = await startP2PHost({
             relayWsBase: relay.wsBase, relayHttpBase: relay.httpBase, relayLabel: relay.label, relaySource: relay.source,
@@ -9019,14 +9051,18 @@ function openSharePanel(): void {
             onParticipant: (kind, guest) => bridge.collabAudit(kind === "join" ? "guest_joined" : "guest_left", { transport: "direct-p2p", access: guest.access, roomId: p2pHostStatus()?.roomId, guest: guest.name }),
           });
           bridge.collabAudit("share_started", { transport: "direct-p2p", access: allowEdit ? "edit" : "view", roomId: p2pStatus.roomId });
-        } catch (e) { showToast({ tone: "danger", title: "Couldn't start sharing", desc: String((e as Error)?.message ?? e), timeout: 5000 }); return; }
+        } catch (e) { startFail("Couldn't start sharing", String((e as Error)?.message ?? e)); return; }
       } else {
         // P-REMOTE.2c: seed the backend relay-token cache BEFORE the host connects (a gated hosted relay needs
         // it as the first frame; harmless/no-op for an anonymous relay), then keep it fresh on an interval.
+        const gated = !!lastRelay?.gated;
+        if (gated) setShareProg("Authorizing this device…", "Fetching a fresh access token for the secure relay");
         await startRelayTokenPush();
+        setShareProg("Opening the room…", `Connecting to ${lastRelay?.label ?? "the relay"} and minting your invite`);
         const r = await bridge.collabStart({ allowEdit, favModels: parseFavs(localStorage.getItem(FAVS_KEY)) }); // P-REMOTE.11b: favorites-filtered guest picker
-        if (!r.ok) { stopRelayTokenPush(); showToast({ tone: "danger", title: "Couldn't start sharing", desc: r.error ?? "", timeout: 5000 }); return; }
+        if (!r.ok) { stopRelayTokenPush(); startFail("Couldn't start sharing", r.error ?? "The relay refused the connection."); return; }
       }
+      setShareProg("", "", false);
       await draw();
       showToast({ title: allowEdit ? "Sharing started (edit)" : "Sharing started", desc: preferP2P ? "Peers connect directly (WebRTC); the relay only helps them find each other." : (allowEdit ? "Guests with this link can drive the session, through your approvals." : "Copy the invite link and send it to your guest."), timeout: 3200 });
       if (!poll) poll = window.setInterval(() => { if ($("#shareModal")) void pollRoster(); }, 2500);
@@ -9040,13 +9076,21 @@ function openSharePanel(): void {
       return;
     }
     if (t.closest("[data-share-stop]")) {
-      if (p2pHostActive()) {
-        const s = p2pHostStatus(); // capture roomId/access before teardown for the audit
-        stopP2PHost();
-        if (s) bridge.collabAudit("share_stopped", { transport: "direct-p2p", access: s.allowEdit ? "edit" : "view", roomId: s.roomId });
-      } else await bridge.collabStop();
+      const stopBtn = t.closest("[data-share-stop]") as HTMLButtonElement;
+      if (stopBtn.disabled) return;
+      stopBtn.disabled = true;
+      // P-SHARE.4: tear the room down LOCALLY first (synchronous), then paint the idle body immediately from
+      // cached config - so "stopped" shows instantly instead of hanging on the backend/socket close. The
+      // backend stop + a reconciling draw() run in the background and never block the button.
+      const wasP2P = p2pHostActive();
+      const s = wasP2P ? p2pHostStatus() : null; // capture roomId/access before teardown for the audit
+      if (wasP2P) { stopP2PHost(); if (s) bridge.collabAudit("share_stopped", { transport: "direct-p2p", access: s.allowEdit ? "edit" : "view", roomId: s.roomId }); }
       stopRelayTokenPush(); // P-REMOTE.2c: stop refreshing + clear the backend token cache
-      stopCollabHostPoll(); if (poll) { clearInterval(poll); poll = undefined; } await draw(); showToast({ title: "Sharing stopped", desc: "The room is closed - guests were disconnected.", timeout: 2000 }); return;
+      stopCollabHostPoll(); if (poll) { clearInterval(poll); poll = undefined; }
+      drawIdleOptimistic(); // instant "not sharing" UI, no round-trip
+      showToast({ title: "Sharing stopped", desc: "The room is closed - guests were disconnected.", timeout: 2000 });
+      void (async () => { try { if (!wasP2P) await bridge.collabStop(); } finally { await draw(); } })();
+      return;
     }
     if (t.closest("[data-share-relay-change]")) { body.innerHTML = shareBodyHtml({ active: false, participantCount: 0, participants: [], relay: null }); return; }
     if (t.closest("[data-share-relay-save]")) {
