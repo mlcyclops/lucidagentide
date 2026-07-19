@@ -229,6 +229,9 @@ describe("classifyInviteLink (P-SHARE.3): feature the https phone link, demote t
   it("treats a real FQDN (public relay host) as opens-anywhere", () => {
     expect(classifyInviteLink("https://relay.your-org.internal/#r.S", null).phoneReach).toBe("public");
     expect(classifyInviteLink("https://8.8.8.8/#r.S", null).phoneReach).toBe("public"); // public IPv4 literal
+    // the fc/fd ULA check is colon-gated: a DNS name starting with fc/fd is NOT an IPv6 literal
+    expect(classifyInviteLink("https://fcdn.example.com/#r.S", null).phoneReach).toBe("public");
+    expect(classifyInviteLink("https://[fd12:3456::1]/#r.S", null).phoneReach).toBe("lan"); // real ULA literal
   });
 
   it("drops the desktop row when it equals the phone link or is not a ws(s) link, and handles empties", () => {

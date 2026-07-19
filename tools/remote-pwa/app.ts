@@ -519,7 +519,8 @@ function main(): void {
     autoRechecked = true;
     void (async () => {
       subHint.textContent = "Checking your access…";
-      const active = entitlementActive(await auth.getIdToken(true));
+      let active = false;
+      try { active = entitlementActive(await auth.getIdToken(true)); } catch { /* offline refresh: stay on the paywall */ }
       if ($("subscribe-view").hidden) return; // the user already navigated away
       subHint.textContent = "";
       if (active) connect();

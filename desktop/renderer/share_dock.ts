@@ -175,7 +175,7 @@ function isPrivateHost(h: string): boolean {
   if (!h) return true;
   if (h === "localhost" || h.endsWith(".localhost")) return true;
   if (h === "::1") return true;
-  if (h.startsWith("fe80:") || h.startsWith("fc") || h.startsWith("fd")) return true; // IPv6 link-local / ULA
+  if (h.includes(":") && (h.startsWith("fe80:") || h.startsWith("fc") || h.startsWith("fd"))) return true; // IPv6 link-local / ULA (colon-gated so a DNS name like fcdn.example.com stays public)
   const m = h.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.\d{1,3}$/);
   if (m) {
     const a = Number(m[1]), b = Number(m[2]);

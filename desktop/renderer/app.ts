@@ -2017,7 +2017,9 @@ function runOnboarding(): void {
 // handing them step-by-step token instructions, so a manager/exec/new dev doesn't have to know any of it. The
 // pure `decideGovOnboarding` decides ask/skip/auto-enable; this asks exactly once (persisted like role/tour).
 function promptForGovCuiIfNeeded(onDone?: () => void): void {
-  const managedGovLocked = !!state.managed?.locks?.models; // ADR-0068: org already forces gov-gateway-only
+  // ADR-0068: only a true gov-gateway-only mandate auto-enables. locks.models is broader (a plain
+  // model-picker allow-list lock also sets it), so keying off it would mark a commercial enterprise as CUI.
+  const managedGovLocked = !!state.managed?.asksageOnly;
   const step = decideGovOnboarding({ decided: state.govconCui !== null, managedGovLocked });
   if (step === "skip" || document.getElementById("govGate")) { onDone?.(); return; }
   if (step === "auto-enable") {
