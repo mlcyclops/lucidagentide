@@ -262,4 +262,10 @@
 //           few seconds. Fix: gate the poll (don't run it during a stream or when its panel is closed), memoize
 //           the obs reads, and cache the underlying scans/DuckDB-opens/omp-spawn so repeat polls are ~0ms
 //           (usageLedger 958ms→2ms, memorySnapshot ~4s→0ms warm). Idle server CPU dropped ~29%→~8% of a core.
-export const APP_VERSION = "1.11.9";
+// v1.11.10 = mobile-safe Share invites (P-SHARE.3: the https phone link is featured + QR'd; the wss
+//            LUCID-to-LUCID link is demoted to a labeled "desktop only" row and never offered/QR'd to a
+//            phone, closing the room-secret-in-the-path leak) + first-run Government/CUI onboarding
+//            (P-GOVCUI.1: asks once, prefills the AskSage CIV gov endpoint with token steps; a key turns
+//            lockdown ON, keyless never flips it) + the 11-SKU KG-pack storefront reconcile (SPM flagship
+//            replaces capture) + the Remote PWA /r forwarder and comp-grant entitlement auto-recheck.
+export const APP_VERSION = "1.11.10";
