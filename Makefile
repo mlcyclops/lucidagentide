@@ -319,6 +319,10 @@ demo-P-ROLE.1: ## P-ROLE.1 (ADR-0088): role-based onboarding — closed role set
 demo-P-ROLE.1b: ## P-ROLE.1b (ADR-0089): first-run guided walkthrough — tailored per-role coachmark tour (opens on composer, closes on closer, no dangling targets), Back/Next/Skip card, replay-guard
 	$(BUN) run desktop/scripts/demo_p_role_1b.ts
 
+.PHONY: demo-P-GOVCUI.1
+demo-P-GOVCUI.1: ## P-GOVCUI.1: first-run Government/CUI step - asks once if the user is a Government/GovCon user handling CUI; a "yes" walks a novice into the CUI-safe posture (AskSage gov gateway in LOCKDOWN) with the CIV routing endpoint PREFILLED + step-by-step token instructions. Pure core: decideGovOnboarding (ask/skip/auto-enable, exactly once; org-forced routing auto-enables) + planGovSetup (with a key -> CIV persisted + lockdown ON; no key -> endpoint prefilled but lockdown NEVER flipped, since a keyless lockdown leaves no gov model and the backend fail-closes)
+	$(BUN) run harness/scripts/demo_pgovcui1.ts
+
 demo-P-NETDIAG.1: ## P-NETDIAG.1 (ADR-0090): in-app OAuth localhost-callback watcher - netstat/lsof parse, keeps loopback + all-interface listeners, flags a new callback-port listener as the bind-or-not evidence, read-only diagnostics (no gate verdict)
 	$(BUN) run desktop/scripts/demo_p_netdiag_1.ts
 
@@ -754,6 +758,9 @@ demo-P-PREVIEW-PWA.3: ## P-PREVIEW-PWA.3 (ADR-0240): agent PWA-awareness / autod
 .PHONY: demo-P-SHARE.2
 demo-P-SHARE.2: ## P-SHARE.2 (ADR-0234): Session Share dock UI polish - the "Reachable at" bind list now defaults to a GUEST-ROUTABLE address (LAN IPv4, then IPv6) and sinks loopback (unreachable by a guest) to the bottom; IPv4 precedes IPv6 within each group; ordering is pure + non-mutating. And the cold-boot dock paints a SECRET-FREE cached snapshot INSTANTLY (never a blank Loading) then revalidates - the cache carries only the non-secret relay descriptor + serve status + a redacted P2P config, NEVER an invite link / room id / TURN credential and never a stale Live state
 	$(BUN) run harness/scripts/demo_pshare2.ts
+.PHONY: demo-P-SHARE.3
+demo-P-SHARE.3: ## P-SHARE.3: mobile-safe invite links - the Share dock FEATURES the https phone/browser link (accent "Copy phone link" + QR), keeps the wss LUCID-to-LUCID link in a demoted "desktop only" row (muted field + "Copy desktop link"), and NEVER offers or QR-codes a wss (LAN) link to a phone - texting that both fails to join AND leaks roomId.secret into whatever HTTP server answers the host. classifyInviteLink (pure) is the single source of truth: pick the https link, discard a non-http(s) value, and flag an https link on a private/LAN/loopback host as same-network-only
+	$(BUN) run harness/scripts/demo_pshare3.ts
 .PHONY: demo-P-COLLAB.1
 demo-P-COLLAB.1: ## P-COLLAB.1 (ADR-0192): the live-collaboration transport KEYSTONE - a host mints a room (id + 32B key + 16B write token) + a full/view invite link (roomId.base64url(secret), reusing omp's @oh-my-pi/pi-wire constants), SEALS a LUCID ChatEvent frame (AES-256-GCM, [12B IV][ct+tag]) + envelopes it with its peer id, and a guest holding the link unpacks + opens it end-to-end; the relay only ever sees opaque bytes (a wrong key can't open, a tampered byte fails the tag), and a view link is read-only. The relay client, host/guest, and Share UI are P-COLLAB.2-.4
 	$(BUN) run harness/scripts/demo_pcollab1.ts

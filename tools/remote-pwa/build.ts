@@ -32,7 +32,7 @@ if (!result.success) {
   throw new Error("PWA bundle failed");
 }
 
-const STATIC = ["index.html", "firebase_auth.js", "manifest.webmanifest", "sw.js", "icon.svg"];
+const STATIC = ["index.html", "firebase_auth.js", "manifest.webmanifest", "sw.js", "icon.svg", "r.html"]; // r.html: the /r/* path-to-fragment forwarder (ADR-0227 follow-up)
 for (const f of STATIC) await cp(`${here}${f}`, `${dist}/${f}`);
 
 // config.js: use a real one if present, else seed the placeholder so the build is self-contained + runnable.

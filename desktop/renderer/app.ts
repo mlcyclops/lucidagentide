@@ -67,10 +67,11 @@ import { webrtcLoopbackSelfTest, webrtcRelaySelfTest, webrtcP2PModuleSelfTest } 
 // direct connection" toggle runs the share peer-to-peer over WebRTC, with the relay used only to signal + fall back.
 import { startP2PHost, stopP2PHost, p2pHostActive, p2pHostStatus, setP2PHostOptions, teeEvent as p2pTeeEvent, teeUserTurn as p2pTeeUserTurn, startP2PGuest, stopP2PGuest, p2pGuestActive, p2pGuestSendPrompt, p2pLinkEndpoint } from "./collab_p2p.ts";
 import type { CollabOptions } from "../collab/frames.ts"; // P-COLLAB.14 (ADR-0228): edit-guest model+folder pickers
-import { loadDockState, saveDockState, clampToViewport, snapDecision, participantSummary, isCollapsed, orderBindAddresses, redactShareSnapshot, defaultShape, JOIN_DOCK_KEY, type DockState, type DockStorage, type ShareSnapshot } from "./share_dock.ts"; // P-SHARE.1/2 + P-COLLAB.20 (ADR-0242): the floating Share + Join docks
+import { loadDockState, saveDockState, clampToViewport, snapDecision, participantSummary, isCollapsed, orderBindAddresses, redactShareSnapshot, classifyInviteLink, defaultShape, JOIN_DOCK_KEY, type DockState, type DockStorage, type ShareSnapshot } from "./share_dock.ts"; // P-SHARE.1/2/3 + P-COLLAB.20 (ADR-0242): the floating Share + Join docks
 import { formatImportLine } from "./import_progress.ts";
 import { fitWithin, MAX_SNAPSHOT_EDGE } from "../collab/preview_snapshot.ts"; // P-PREVIEW-PWA.1 (ADR-0237): scaled-down preview snapshot to phone guests
 import { accessCounts } from "../collab/share_awareness.ts"; // P-PREVIEW-PWA.3 (ADR-0240): agent share-awareness counts
+import { decideGovOnboarding, planGovSetup, CIV_ASKSAGE_BASE, ASKSAGE_ACCOUNT_URL, ASKSAGE_DOCS_URL, ASKSAGE_TOKEN_STEPS } from "./gov_onboarding.ts"; // P-GOVCUI.1: Government/CUI first-run step
 import { ASKSAGE_FAMILY_ORDER, familyOf, filterModels, groupByFamily, isAuxiliaryModel, isChinaModel, isDeprecatedModel, isGovModel, providerLabelOf, recommendFallbacks, sortGovFirstNewest } from "./model_families.ts";
 import { FAVS_KEY, offeredModels, parseFavs, starredOf, toggleFav } from "./model_favorites.ts"; // P-FAV.1 (ADR-0165) + P-REMOTE.11b (ADR-0238)
 import { renderSandboxSection } from "./sandbox_panel.ts"; // P-SANDBOX.5 (ADR-0169)
@@ -145,6 +146,7 @@ const state = {
   managed: null as import("./bridge.ts").ManagedPolicy | null, // ADR-0068 (P-ENT.1) enterprise locks
   userRole: null as UserRole | null, // ADR-0088 (P-ROLE.1): chosen role; null until onboarding picks one
   tourSeen: false, // ADR-0089 (P-ROLE.1b): first-run walkthrough already shown (finished or skipped)
+  govconCui: null as boolean | null, // P-GOVCUI.1: Government/CUI answer; null until the first-run step asks
 };
 const prettyModel = (v: string) => v.replace(/^anthropic\//, "");
 // Strip the redundant "· AskSage Gov" / "· Gov" suffix from a model's display name
@@ -2002,9 +2004,125 @@ function promptForEmailIfMissing(onDone?: () => void): void {
 // First-login flow as a chain: pick a role (if unchosen) → email/attribution → the tour. Each step
 // is cosmetic - none gate or weaken the security path (invariant #3).
 function runOnboarding(): void {
-  const afterEmail = () => { if (!state.tourSeen) startTour(state.userRole ?? "developer"); };
+  const afterGov = () => { if (!state.tourSeen) startTour(state.userRole ?? "developer"); };
+  const afterEmail = () => promptForGovCuiIfNeeded(afterGov); // P-GOVCUI.1: gov/CUI setup, then the tour
   if (state.userRole) { promptForEmailIfMissing(afterEmail); return; }
   void promptForRole().then(() => promptForEmailIfMissing(afterEmail));
+}
+
+// ── P-GOVCUI.1: the Government / GovCon + CUI onboarding step ──────────────────────────────────
+// After identity is set, ask a novice-friendly question: are you a Government/GovCon user handling CUI? A
+// "yes" walks them into the CUI-safe posture - the accredited AskSage gov gateway in LOCKDOWN (every turn
+// routed through the gateway, direct commercial providers hidden) - prefilling the CIV routing endpoint and
+// handing them step-by-step token instructions, so a manager/exec/new dev doesn't have to know any of it. The
+// pure `decideGovOnboarding` decides ask/skip/auto-enable; this asks exactly once (persisted like role/tour).
+function promptForGovCuiIfNeeded(onDone?: () => void): void {
+  // ADR-0068: only a true gov-gateway-only mandate auto-enables. locks.models is broader (a plain
+  // model-picker allow-list lock also sets it), so keying off it would mark a commercial enterprise as CUI.
+  const managedGovLocked = !!state.managed?.asksageOnly;
+  const step = decideGovOnboarding({ decided: state.govconCui !== null, managedGovLocked });
+  if (step === "skip" || document.getElementById("govGate")) { onDone?.(); return; }
+  if (step === "auto-enable") {
+    // The org already mandates gov routing (backend-enforced); just RECORD the CUI posture so we never ask.
+    state.govconCui = true;
+    void bridge.setGovconCui(true).catch(() => null);
+    onDone?.();
+    return;
+  }
+  const ov = el(`<div id="govGate" class="modal-ov">
+    <div class="modal role-modal" role="dialog" aria-modal="true" aria-labelledby="govGateTitle">
+      <div class="modal-icon">${icon("shield", 24)}</div>
+      <h2 class="modal-title" id="govGateTitle">Do you handle Government CUI?</h2>
+      <p class="modal-desc">Are you a <b>Government</b> or <b>GovCon</b> user who works with <b>CUI</b> (Controlled Unclassified Information)? If so, LUCID can route <b>every</b> turn through the accredited <b>AskSage</b> gov gateway and hide commercial providers - so nothing you type reaches a commercial model. Not handling CUI? Choose standard use; you can switch on gov lockdown any time in Settings.</p>
+      <div class="gov-choices">
+        <button class="gov-choice ok" type="button" data-gov="yes">${icon("shield", 18)}<span class="gov-choice-tx"><b>Yes - set up CUI (gov) mode</b><span class="gov-choice-sub">Route through AskSage gov gateway (lockdown). We'll help you get a token.</span></span></button>
+        <button class="gov-choice" type="button" data-gov="no">${icon("command", 18)}<span class="gov-choice-tx"><b>No - standard use</b><span class="gov-choice-sub">Use any connected provider. Turn on gov lockdown later if you need it.</span></span></button>
+      </div>
+    </div></div>`);
+  document.body.appendChild(ov);
+  const answer = async (yes: boolean) => {
+    state.govconCui = yes;
+    void bridge.setGovconCui(yes).catch(() => null);
+    ov.remove();
+    if (yes) { void promptGovSetup(onDone); return; }
+    showToast({ title: "Standard mode", desc: "You can enable AskSage gov lockdown any time in Settings \u2192 AskSage gov gateway.", timeout: 3200 });
+    onDone?.();
+  };
+  ov.addEventListener("click", (ev) => {
+    const t = ev.target as HTMLElement;
+    if (t.closest("[data-gov='yes']")) void answer(true);
+    else if (t.closest("[data-gov='no']")) void answer(false);
+  });
+}
+
+// P-GOVCUI.1: the guided CUI setup - prefill the CIV routing endpoint, hand over step-by-step token
+// instructions, take a pasted AskSage key, and turn ON lockdown. Deferrable ("I'll add it later") - which
+// still records the CUI intent + prefilled endpoint but never flips lockdown without a key (that would leave
+// no gov model to route to, and the backend would fail-closed and block every turn). Either way we then open
+// Settings on the AskSage card so the user SEES where the control lives.
+async function promptGovSetup(onDone?: () => void): Promise<void> {
+  if (document.getElementById("govSetup")) { onDone?.(); return; }
+  // Prefill the CIV (government) routing endpoint up front so the field shows it and the gateway points at gov.
+  state.asksage = (await bridge.saveAsksage({ baseUrl: CIV_ASKSAGE_BASE }).catch(() => null)) ?? state.asksage;
+  const stepsHtml = ASKSAGE_TOKEN_STEPS.map((s) => `<li>${esc(s)}</li>`).join("");
+  const ov = el(`<div id="govSetup" class="modal-ov">
+    <div class="modal gov-setup" role="dialog" aria-modal="true" aria-labelledby="govSetupTitle">
+      <div class="modal-icon">${icon("shield", 24)}</div>
+      <h2 class="modal-title" id="govSetupTitle">Set up CUI (gov) mode</h2>
+      <p class="modal-desc">Lockdown routes <b>every</b> turn through the accredited AskSage gov gateway and hides commercial providers. You just need your AskSage <b>API key</b>.</p>
+      <div class="gov-steps"><div class="gov-steps-h">${icon("info", 13)} How to get your AskSage API token</div><ol>${stepsHtml}</ol>
+        <div class="gov-steps-links"><a href="${ASKSAGE_ACCOUNT_URL}" target="_blank" rel="noopener">Open AskSage</a> \u00b7 <a href="${ASKSAGE_DOCS_URL}" target="_blank" rel="noopener">Docs</a></div></div>
+      <label class="gov-lbl">AskSage API key</label>
+      <div class="modal-field"><input id="govKey" class="prov-key" type="password" autocomplete="off" spellcheck="false" placeholder="Paste your AskSage API key" /></div>
+      <label class="gov-lbl">Gov (CIV) routing endpoint <span class="gov-lbl-sub">prefilled for you</span></label>
+      <div class="modal-field"><input id="govBase" class="prov-key" spellcheck="false" value="${esc(state.asksage?.base || CIV_ASKSAGE_BASE)}" /></div>
+      <div class="set-note">${icon("info", 12)} This lives in <b>Settings \u2192 AskSage gov gateway \u2192 "AskSage-only (lockdown)"</b>. We'll take you there so you know where it is.</div>
+      <div id="govSetupErr" class="modal-err" hidden></div>
+      <div class="modal-actions">
+        <button class="btn-mini" id="govSetupLater" type="button">I'll add it later</button>
+        <button class="btn-mini ok" id="govSetupSave" type="button">${icon("shield", 12)} Save & turn on Lockdown</button>
+      </div>
+    </div></div>`);
+  document.body.appendChild(ov);
+  const err = $("#govSetupErr", ov) as HTMLElement;
+  const finish = (msg: { title: string; desc: string }) => { ov.remove(); showToast({ ...msg, timeout: 4200 }); openSettingsToAsksage(); onDone?.(); };
+  const save = async () => {
+    const plan = planGovSetup({ key: ($("#govKey", ov) as HTMLInputElement)?.value ?? "", base: ($("#govBase", ov) as HTMLInputElement)?.value ?? "" });
+    if (!plan.enableLockdown) { err.textContent = "Paste your AskSage API key to turn on lockdown, or choose \u201cI'll add it later\u201d."; err.hidden = false; return; }
+    if (plan.key) await bridge.saveKey("ASKSAGE_API_KEY", plan.key).catch(() => null);
+    state.asksage = (await bridge.saveAsksage({ baseUrl: plan.baseUrl, only: true }).catch(() => null)) ?? state.asksage;
+    await loadConfig(); await loadAsksage(); // surface gov models + reflect lockdown
+    // Lockdown must guarantee gateway routing: if we're on a direct model, switch to a gov one.
+    const model = state.config.find((c) => c.id === "model");
+    if (model && !isAsksage(model.currentValue)) { const gov = model.options.find((o) => isAsksage(o.value)); if (gov) await applyConfig("model", gov.value); }
+    showDodBanner(); // ADR-0224: entering lockdown surfaces the DoD/STIG consent banner
+    updateComposerTools(); renderStatus();
+    finish({ title: "CUI mode on", desc: "Every turn now routes through the AskSage gov gateway. Direct providers are hidden." });
+  };
+  const later = async () => {
+    // Keep the prefilled CIV endpoint; do NOT enable lockdown without a key (the backend would fail-closed).
+    const base = ($("#govBase", ov) as HTMLInputElement)?.value ?? "";
+    state.asksage = (await bridge.saveAsksage({ baseUrl: base.trim() || CIV_ASKSAGE_BASE }).catch(() => null)) ?? state.asksage;
+    finish({ title: "Finish CUI setup in Settings", desc: "Add your AskSage API key under AskSage gov gateway, then turn on \u201cAskSage-only (lockdown)\u201d." });
+  };
+  $("#govSetupSave", ov)!.addEventListener("click", () => void save());
+  $("#govSetupLater", ov)!.addEventListener("click", () => void later());
+  ($("#govKey", ov) as HTMLInputElement)?.addEventListener("input", () => { err.hidden = true; });
+  setTimeout(() => ($("#govKey", ov) as HTMLInputElement)?.focus(), 30);
+}
+
+// P-GOVCUI.1: open Settings on the AskSage gov-gateway card (expanded + scrolled + briefly highlighted) so a
+// new user SEES where lockdown lives. Mirrors openPersonalizationSettings.
+function openSettingsToAsksage(): void {
+  SET_OPEN.add("asksage");
+  openSettings();
+  setTimeout(() => {
+    const sec = $('[data-sec="asksage"]') as HTMLElement | null;
+    sec?.classList.add("open");
+    sec?.scrollIntoView({ behavior: "smooth", block: "start" });
+    sec?.classList.add("set-flash");
+    setTimeout(() => sec?.classList.remove("set-flash"), 1600);
+  }, 140);
 }
 
 // First-run role picker - four cards in the model-card idiom. Resolves once a role is chosen (or
@@ -8270,23 +8388,46 @@ function shareBodyHtml(st: CollabShareStatus | null, p2p?: CollabP2PConfig | nul
     // P-REMOTE.4a/.2b (ADR-0226/0227): each QR carries the PHONE form (secret in the fragment) a camera can
     // open. Scanning carries the E2E secret exactly like copying; the SVG embeds only module geometry;
     // over-capacity/empty degrades to no-QR.
-    const qrOf = (l: string): string => { try { return l ? `<div class="share-qr">${qrSvg(l, { margin: 2 })}</div><div class="share-qr-cap">${icon("phone", 12)} Scan with your phone camera</div>` : ""; } catch { return ""; } };
-    const inviteSec = (id: string, title: string, lbl: string, l: string, phone: string, hint: string, inputId: string): string => dockSec(id, title, true, `
-        <label class="share-lbl">${lbl}</label>
+    const qrOf = (l: string, reach: "public" | "lan"): string => { try { return l ? `<div class="share-qr">${qrSvg(l, { margin: 2 })}</div><div class="share-qr-cap">${icon("phone", 12)} ${reach === "lan" ? "Scan with a phone on the same Wi-Fi / VPN" : "Scan with your phone camera"}</div>` : ""; } catch { return ""; } };
+    // P-SHARE.3: a mobile share is easy to get wrong. A room mints an https PHONE link (secret in the FRAGMENT,
+    // opens in a browser) AND a wss LUCID-to-LUCID link (bare `roomId.secret` in the PATH). Texting the wss form
+    // to a phone both fails to join AND leaks the secret into whatever HTTP server answers the host (observed
+    // live: the apex request logs). classifyInviteLink (pure, share_dock.ts) picks the https link to FEATURE,
+    // keeps the wss link in a demoted "desktop only" row, only ever QRs a real browser link (never a wss one),
+    // and flags an https link that is LAN-only. `l` = the wss desktop link; `browser` = the raw https link (may
+    // be absent when no hosted PWA is provisioned).
+    const inviteSec = (id: string, title: string, lbl: string, l: string, browser: string, hint: string, inputId: string): string => {
+      const v = classifyInviteLink(browser, l);
+      const phoneRow = v.phoneReach !== "none"
+        ? `
+        <label class="share-lbl share-lbl-phone">${icon("phone", 12)} ${lbl} \u00b7 send this to a phone or browser</label>
         <div class="share-linkrow">
-          <input class="share-link-input" id="${inputId}" type="text" readonly value="${esc(l)}" spellcheck="false" />
-          <button class="btn-mini" data-copy="${esc(l)}" data-copy-what="${esc(title)}">${icon("link", 12)} Copy</button>
-        </div>
+          <input class="share-link-input" id="${inputId}" type="text" readonly value="${esc(v.phoneLink)}" spellcheck="false" />
+          <button class="btn-mini ok share-copy-phone" data-copy="${esc(v.phoneLink)}" data-copy-what="${esc(title)} \u00b7 phone link" data-copy-desc="Text or AirDrop it to your phone - it opens in a browser.">${icon("phone", 12)} Copy phone link</button>
+        </div>${v.phoneReach === "lan" ? `
+        <p class="share-caution">${icon("info", 12)} This is a <b>local-network</b> address, so it opens only on a phone on the same Wi-Fi / VPN. To reach a phone anywhere, host through the secure relay (sign in above).</p>` : ""}`
+        : `
+        <div class="share-caution strong">${icon("info", 13)} No phone link yet - this room only has a desktop link. Host through the secure relay (sign in above) to get an <b>https</b> link a phone can open.</div>`;
+      const desktopRow = v.desktopLink
+        ? `
+        <label class="share-lbl share-lbl-desktop">${icon("link", 12)} Desktop only \u00b7 paste into another LUCID, don't open on a phone</label>
+        <div class="share-linkrow">
+          <input class="share-link-input mut" id="${inputId}Lucid" type="text" readonly value="${esc(v.desktopLink)}" spellcheck="false" />
+          <button class="btn-mini share-copy-desktop" data-copy="${esc(v.desktopLink)}" data-copy-what="${esc(title)} \u00b7 desktop link" data-copy-desc="Paste into another LUCID desktop. Don't open it on a phone.">${icon("link", 12)} Copy desktop link</button>
+        </div>`
+        : "";
+      return dockSec(id, title, true, `${phoneRow}${desktopRow}
         <p class="share-hint">${hint}</p>
-        ${qrOf(phone)}`, collapsed);
+        ${v.showQr ? qrOf(v.phoneLink, v.phoneReach === "lan" ? "lan" : "public") : ""}`, collapsed);
+    };
     const editHint = "Send this to someone who should DRIVE this session - every prompt still runs here, through <b>your</b> approvals + security gate. The room key rides the link end-to-end; the relay never reads it.";
     const viewHint = st.allowEdit
       ? "Send this to someone who should only WATCH. Same room, same end-to-end key path - but no write token, so this link can never drive. Stop + reshare to rotate."
       : "Send this to someone running LUCID. It carries the room key end-to-end - the relay can never read the session. Anyone with the link can watch; stop + reshare to rotate.";
     const inviteSections = st.allowEdit
-      ? inviteSec("sec-invite", "Edit invite link", "Edit invite link (guest can drive)", st.fullLink ?? "", st.browserLink || (st.fullLink ?? ""), editHint, "shareEditLink")
-        + inviteSec("sec-invite-view", "View-only invite link", "View-only invite link (watch only)", st.viewLink ?? "", st.browserViewLink || (st.viewLink ?? ""), viewHint, "shareViewLink")
-      : inviteSec("sec-invite", "Invite link + QR", "View-only invite link", st.viewLink ?? "", st.browserLink || st.browserViewLink || (st.viewLink ?? ""), viewHint, "shareViewLink");
+      ? inviteSec("sec-invite", "Edit invite link", "Edit invite link (guest can drive)", st.fullLink ?? "", st.browserLink ?? "", editHint, "shareEditLink")
+        + inviteSec("sec-invite-view", "View-only invite link", "View-only invite link (watch only)", st.viewLink ?? "", st.browserViewLink ?? "", viewHint, "shareViewLink")
+      : inviteSec("sec-invite", "Invite link + QR", "View-only invite link", st.viewLink ?? "", st.browserLink || st.browserViewLink || "", viewHint, "shareViewLink");
     return `<div class="share-live-head"><span class="share-live-dot"></span> Live · ${esc(st.relayLabel ?? src)}${st.direct ? ` <span class="share-peer-tag direct">direct P2P</span>` : ""}${st.allowEdit ? ` <span class="share-peer-tag edit">can edit</span>` : ""}</div>`
       + inviteSections
       + dockSec("sec-participants", "Participants", true, `<ul class="share-peers" id="shareParticipants">${roster}</ul>`, collapsed)
@@ -8843,7 +8984,7 @@ function openSharePanel(): void {
       return;
     }
     const copy = t.closest("[data-copy]") as HTMLElement | null;
-    if (copy) { const v = copy.dataset.copy ?? ""; try { await navigator.clipboard.writeText(v); showToast({ title: `${copy.dataset.copyWhat ?? "Copied"} copied`, desc: "Paste it to your guest.", timeout: 1800 }); } catch { showToast({ tone: "warn", title: "Couldn't copy", desc: "Copy it from the field instead." }); } return; }
+    if (copy) { const v = copy.dataset.copy ?? ""; try { await navigator.clipboard.writeText(v); showToast({ title: `${copy.dataset.copyWhat ?? "Copied"} copied`, desc: copy.dataset.copyDesc ?? "Paste it to your guest.", timeout: 1800 }); } catch { showToast({ tone: "warn", title: "Couldn't copy", desc: "Copy it from the field instead." }); } return; }
     if (t.closest("[data-share-start]")) {
       const allowEdit = ($("#shareAllowEdit", ov) as HTMLInputElement | null)?.checked ?? false;
       const preferP2P = ($("#sharePreferP2P", ov) as HTMLInputElement | null)?.checked ?? false;
@@ -10992,8 +11133,9 @@ void bridge.getSettings().then((s) => { // your saved name → the "You" label o
   state.attribution = s?.attribution ?? null;
   state.userRole = s?.role ?? null;               // ADR-0088: null until the user picks a role
   state.tourSeen = !!s?.tourSeen;                  // ADR-0089: first-run walkthrough replay guard
+  state.govconCui = s?.govconCui ?? null;         // P-GOVCUI.1: null until the first-run gov/CUI step asks
   if (state.userRole) applyRoleDefault(state.userRole); // returning user lands on their role's surface
-  runOnboarding(); // ADR-0088/0089: role pick (if needed) → email → first-run tour, in sequence
+  runOnboarding(); // ADR-0088/0089 + P-GOVCUI.1: role pick → email → gov/CUI setup → first-run tour, in sequence
 });
 refresh();
 void bridge.chatBackground().then((c) => { if (c) { state.chatBg = c; applyChatBg(c); } }); // P-APPEAR.1: paint the saved chat background

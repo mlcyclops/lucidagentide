@@ -132,3 +132,75 @@ export function redactShareSnapshot<R, V>(relay: R | null, serve: V, p2pCfg: Red
   const p2p = p2pCfg ? { preferDirect: p2pCfg.preferDirect, iceUrls: p2pCfg.iceUrls, turnUsername: p2pCfg.turnUsername } : null;
   return { relay, serve, p2pCfg: p2p };
 }
+
+// ── P-SHARE.3: mobile-safe invite-link classification (pure, DOM-free) ─────────────────────────────────────
+// A live room mints TWO forms of each invite: an https PHONE/BROWSER link (secret in the fragment, opens in a
+// browser) and a wss LUCID-to-LUCID link (bare `roomId.secret` in the PATH, meant to be pasted into another
+// LUCID desktop). Texting the wss form to a phone is the classic footgun: a messenger/camera drops the scheme
+// and opens `https://<host>/r/<roomId>.<secret>`, which both fails to join AND leaks the E2E room secret into
+// whatever HTTP server answers that host (observed live in the apex request logs). So the UI must FEATURE the
+// https link, DEMOTE the wss link, and never render a QR of a wss link. This helper is the single source of
+// truth for that decision (unit-tested headless; app.ts only renders what it returns).
+
+/** Reachability of the featured phone link: opens anywhere (`public`), same network only (`lan`, an https link
+ *  pointed at a private/LAN/loopback host), or there is no browser link to send at all (`none`). */
+export type PhoneReach = "public" | "lan" | "none";
+export interface InviteLinkView {
+  /** The https/http link to FEATURE for phones + browsers; "" when the room minted no browser link. */
+  phoneLink: string;
+  /** The wss/ws LUCID-to-LUCID link (paste into another desktop); "" when absent or identical to the phone link. */
+  desktopLink: string;
+  /** Whether a phone can actually reach `phoneLink` (see PhoneReach). */
+  phoneReach: PhoneReach;
+  /** Render a QR only for a real browser link. A wss link must NEVER be encoded as a "scan me" QR. */
+  showQr: boolean;
+}
+
+/** Extract the lowercased host (no port / userinfo / brackets) from a URL-ish string. "" on no host. */
+function hostOf(url: string): string {
+  const noScheme = url.replace(/^[a-z][a-z0-9+.-]*:\/\//i, "");
+  const authority = noScheme.split(/[/?#]/, 1)[0] ?? "";
+  const at = authority.lastIndexOf("@");
+  let h = at >= 0 ? authority.slice(at + 1) : authority;
+  if (h.startsWith("[")) { const end = h.indexOf("]"); return (end >= 0 ? h.slice(1, end) : h.slice(1)).toLowerCase(); }
+  const colon = h.indexOf(":");
+  if (colon >= 0) h = h.slice(0, colon);
+  return h.toLowerCase();
+}
+
+/** True when a host is only reachable on the local network (so a phone off that network can't open it). Covers
+ *  loopback, RFC1918, CGNAT (Tailscale 100.64/10), link-local, IPv6 ULA/link-local, `*.local` mDNS, and bare
+ *  single-label hostnames. Conservative: an unknown shape with a dot is treated as public (a real FQDN). */
+function isPrivateHost(h: string): boolean {
+  if (!h) return true;
+  if (h === "localhost" || h.endsWith(".localhost")) return true;
+  if (h === "::1") return true;
+  if (h.includes(":") && (h.startsWith("fe80:") || h.startsWith("fc") || h.startsWith("fd"))) return true; // IPv6 link-local / ULA (colon-gated so a DNS name like fcdn.example.com stays public)
+  const m = h.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.\d{1,3}$/);
+  if (m) {
+    const a = Number(m[1]), b = Number(m[2]);
+    if (a === 10 || a === 127) return true;
+    if (a === 192 && b === 168) return true;
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    if (a === 169 && b === 254) return true;        // IPv4 link-local
+    if (a === 100 && b >= 64 && b <= 127) return true; // CGNAT (Tailscale et al.)
+    return false; // any other IPv4 literal is public
+  }
+  if (h.endsWith(".local")) return true; // mDNS
+  if (!h.includes(".")) return true;     // bare hostname (NetBIOS/mDNS) - not reachable off-LAN
+  return false;                          // an FQDN with a dot - assume public
+}
+
+/** Decide which invite link the Share dock should feature for a phone. `browserLink` is the https form the room
+ *  minted (may be absent/empty); `desktopLink` is the wss LUCID-to-LUCID form. Only an http(s) link is ever
+ *  offered as the phone link or QR'd; a value that is not http(s) is discarded (never silently shown as the
+ *  phone link). Returns a NEW object; inputs are not mutated. */
+export function classifyInviteLink(browserLink: string | null | undefined, desktopLink: string | null | undefined): InviteLinkView {
+  const browser = (browserLink ?? "").trim();
+  const desktop = (desktopLink ?? "").trim();
+  const phoneLink = /^https?:\/\//i.test(browser) ? browser : "";
+  const isWs = /^wss?:\/\//i.test(desktop);
+  const desk = isWs && desktop !== phoneLink ? desktop : "";
+  const phoneReach: PhoneReach = phoneLink ? (isPrivateHost(hostOf(phoneLink)) ? "lan" : "public") : "none";
+  return { phoneLink, desktopLink: desk, phoneReach, showQr: phoneLink !== "" };
+}

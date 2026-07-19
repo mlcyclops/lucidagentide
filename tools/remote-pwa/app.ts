@@ -503,6 +503,11 @@ function main(): void {
   const subscribeBtn = $("subscribe-btn") as HTMLButtonElement;
   const continueBtn = $("subscribe-continue") as HTMLButtonElement;
   let checkoutStarted = false;
+  // ADR-0227 follow-up: an admin comp grant sets the `premium` claim server-side with NO checkout moment,
+  // so this screen would otherwise sit on a stale (pre-grant) cached token for up to an hour. One-shot per
+  // sign-in: on first mount, force a token refresh; if the claim already landed, connect instead of
+  // paywalling. One-shot so a relay that still refuses a fresh entitled token can never loop connect->4403.
+  let autoRechecked = false;
   const showSubscribe = (): void => {
     $("sub-email").textContent = currentEmail ?? "";
     subHint.textContent = "";
@@ -510,6 +515,16 @@ function main(): void {
     checkoutStarted = false;
     continueBtn.hidden = true;
     show("subscribe");
+    if (autoRechecked) return;
+    autoRechecked = true;
+    void (async () => {
+      subHint.textContent = "Checking your access…";
+      let active = false;
+      try { active = entitlementActive(await auth.getIdToken(true)); } catch { /* offline refresh: stay on the paywall */ }
+      if ($("subscribe-view").hidden) return; // the user already navigated away
+      subHint.textContent = "";
+      if (active) connect();
+    })();
   };
 
   // Connect the guest for the current sign-in. The relay is the authoritative gate: an unentitled token is
@@ -615,7 +630,7 @@ function main(): void {
       subHint.textContent = "Checking your subscription…";
       // Force a token refresh so the webhook-set `premium` claim is pulled now, not up to an hour later.
       if (entitlementActive(await auth.getIdToken(true))) { connect(); return; }
-      subHint.textContent = "Not active yet — it can take a few seconds after payment. Tap Continue again.";
+      subHint.textContent = "Not active yet - it can take a few seconds after payment. Tap Continue again.";
     })();
   });
 
@@ -642,6 +657,7 @@ function main(): void {
       return;
     }
     $("account-email").textContent = email;
+    autoRechecked = false; // each sign-in gets one fresh auto-recheck on the Subscribe screen
     connect();
   });
 }
