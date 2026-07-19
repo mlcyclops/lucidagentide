@@ -153,6 +153,16 @@ if vim.fn.has("unix") == 1 then
   eq(parsed, { tool = "write", severity = "high", findings = "zero-width×2" }, "wiring: PTY on_stdout delivers the gate's stderr block line")
 end
 
+-- _blocks_lines: the :LucidBlocks float body — mirror of `lucid blocks --json` (cases mirror tools/blocks_cli.ts).
+eq(lucid._blocks_lines({}), { "No blocked tool calls — the security gate has quarantined nothing." }, "blocks: empty -> reassuring line")
+eq(lucid._blocks_lines(nil), { "No blocked tool calls — the security gate has quarantined nothing." }, "blocks: non-table -> reassuring line")
+local qb = lucid._blocks_lines({ { tool = "bash", severity = "high", findings = "zero-width×2", status = "quarantined", reason = "hidden-unicode" } })
+eq(#qb, 1, "blocks: one quarantined row -> one line")
+eq(qb[1]:find("bash · high · zero-width×2  —  hidden-unicode", 1, true) ~= nil, true, "blocks: quarantined row renders tool/sev/findings/reason")
+eq(qb[1]:find("[", 1, true) == nil, true, "blocks: quarantined row omits the [status] tag")
+local apb = lucid._blocks_lines({ { tool = "write", status = "approved", reason = "reviewed" } })
+eq(apb[1]:find("write [approved]  —  reviewed", 1, true) ~= nil, true, "blocks: reviewed row shows the [status] tag, omits empty sev/findings")
+
 if failures == 0 then
   io.stdout:write("LUCID_NVIM_OK\n")
   os.exit(0)

@@ -28,6 +28,7 @@ import { ScannerClient, ScanUnavailableError } from "../security/scanner_client.
 import { runAgentFirewall } from "../mcp/agent_firewall.ts";
 import { formatStats, rateLimits, sessionStats } from "../../tools/session_metrics.ts";
 import { runKb } from "../../tools/kb_cli.ts";
+import { runBlocks } from "../../tools/blocks_cli.ts";
 import { resolveBackend, sandboxDisclosure, wrapForProfile, type BackendResolution, type SandboxProxy } from "../runs/sandbox_exec.ts";
 import { ensureEgressProxy } from "../runs/egress_proxy.ts"; // P-SANDBOX.2 (ADR-0166)
 import { egressAuditSink } from "../../desktop/egress_audit.ts"; // P-SANDBOX.3 (ADR-0167)
@@ -249,7 +250,10 @@ async function execGated(o: { omp: string; args: string[]; cwd: string; env: Env
     return Promise.resolve(1);
   }
   if (d.disclosed) o.err(`[${o.label}] ${sandboxDisclosure()}\n`);
-  const child = o.spawnFn(d.plan.cmd, d.plan.args, { cwd: o.cwd, stdio: "inherit", env: { ...o.env, ...d.plan.env } });
+  // P-NVIM.7: point the in-process gate at the lock-free block log so `lucid blocks` / :LucidBlocks can
+  // show quarantines DURING a live session (the gate holds agent_obs.duckdb, blocking a cross-process
+  // read). Bare-lucid only — the desktop GUI spawns omp directly (not execGated), so it never double-writes.
+  const child = o.spawnFn(d.plan.cmd, d.plan.args, { cwd: o.cwd, stdio: "inherit", env: { ...o.env, ...d.plan.env, LUCID_BLOCK_LOG: o.env.LUCID_BLOCK_LOG ?? join(homedir(), ".omp", "lucid-blocks.jsonl") } });
   return new Promise<number>((resolve) => {
     child.on("exit", (code: number | null) => resolve(code ?? 0));
     child.on("error", (e: unknown) => { o.err(`[${o.label}] failed to launch omp: ${String(e)}\n`); resolve(127); });
@@ -375,17 +379,25 @@ export async function main(argv: string[], env: Env = process.env, deps?: { tui?
     process.stdout.write(out.endsWith("\n") ? out : `${out}\n`);
     return code;
   }
+  if (sub === "blocks") {
+    // Read-only security-block viewer (P-NVIM.7): the list the GUI Security panel shows, in the terminal /
+    // Neovim. Merges the lock-free block log + the DuckDB quarantines. No agent, no gate spawn — a pure read.
+    const { code, out } = await runBlocks(rest);
+    process.stdout.write(out.endsWith("\n") ? out : `${out}\n`);
+    return code;
+  }
   if (sub === "tui") return tui({ passthru: rest, env });
   if (sub === "acp") return acp({ isolate: rest.includes("--isolate"), env });
 
   if (sub === "-h" || sub === "--help" || sub === "help") {
     process.stderr.write(
-      "usage: lucid [omp args…] | lucid acp [--isolate] | lucid tui [omp args…] | lucid kb [list|pages|show|search] | lucid stats [--json] | lucid check | lucid agent-firewall --conn <id>\n" +
+      "usage: lucid [omp args…] | lucid acp [--isolate] | lucid tui [omp args…] | lucid kb [list|pages|show|search] | lucid blocks [--all] | lucid stats [--json] | lucid check | lucid agent-firewall --conn <id>\n" +
         "  (default)       Bare `lucid` starts the gated TUI — same as `lucid tui`. Non-subcommand args pass through to omp (initial prompt, --model, -p, …).\n" +
         "  acp             Start the gated Lucid ACP agent (omp + the in-process security gate) for an IDE client.\n" +
         "  tui             Start the gated Lucid agent in omp's native terminal UI (explicit alias of the default).\n" +
         "  stats           Print session spend + KV-cache + context metrics (--json for editors; --budgets adds rate limits).\n" +
         "  kb              Browse the knowledge graph(s): list | pages | show <id|slug> | search <query> (--json for editors, --kg <id> to target a KG).\n" +
+        "  blocks          List the tool calls the security gate blocked (quarantined) — the GUI Security panel, in the terminal (--all includes reviewed; --json for editors).\n" +
         "  check           Run the fail-closed preflight (gate + scanner) and exit 0 (ready) / 1 (unavailable).\n" +
         "  agent-firewall  Serve the stdio MCP firewall proxy to a remote ACP agent (hermes/openclaw) — ADR-0147.\n" +
         "  Fail-closed: the TUI and `acp` refuse to start if the gate or scanner sidecar is unavailable.\n",
