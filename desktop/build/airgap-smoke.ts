@@ -14,7 +14,7 @@
 // no fetch path was needed. The scanner check doubles as keystone #2 coverage: clean text → zero findings,
 // a bidi/homoglyph sample → the expected findings, all under the bundled interpreter.
 
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { delimiter as PATH_SEP, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -122,4 +122,33 @@ try {
   fail(`bundled omp shim did not launch with only the bundled bun: ${(e as Error).message}`);
 }
 
-console.log("\n✓ air-gap smoke passed: omp + scanner Python resolve and run from bundled resources (no network).\n");
+// --- 3) compiled `lucid` launcher: STARTS, i.e. its native addon resolves -----------------------------
+// Checks 1-2 exercise omp through the node_modules/.bin/omp SHIM. The marketplace IDE extensions do not
+// use that path — they spawn the COMPILED bin/lucid (P-EXT.1/ADR-0038, installedAppLauncherPaths()), which
+// is a bunfs image with no node_modules resolution. That difference shipped a brick: the pi_natives addon
+// lives only under node_modules/@oh-my-pi/pi-natives-*, which the compiled loader never searches, so every
+// packaged `lucid acp` died with "Failed to load pi_natives" while the desktop app worked fine. Nothing
+// here caught it, because nothing here ran the compiled binary. Now something does.
+const launcher = join(res, "repo", "bin", `lucid${EXE}`);
+if (!existsSync(launcher)) fail(`compiled launcher missing: ${launcher} (did compile-lucid run?)`);
+
+// The addon must sit NEXT TO the binary — that is the only search path we control (build/copy-natives.ts
+// puts it there). Resolve through it: on POSIX it is a relative symlink into node_modules, so a packaging
+// step that broke the link leaves a dangling path that existsSync() rejects here rather than at a user.
+const addons = readdirSync(dirname(launcher)).filter((f) => f.startsWith(`pi_natives.${PLAT}-${ARCH}`) && f.endsWith(".node"));
+if (!addons.length) fail(`no pi_natives.${PLAT}-${ARCH}*.node next to ${launcher} — the compiled launcher cannot start (run build/copy-natives.ts)`);
+for (const a of addons) {
+  const p = join(dirname(launcher), a);
+  if (!existsSync(p) || statSync(p).size === 0) fail(`${p} does not resolve to a non-empty addon (broken symlink through packaging?)`);
+}
+
+// Prove it by RUNNING it. The launcher fail-closes without the scanner sidecar (invariant #3), so a
+// non-zero exit is expected and fine — we assert only that it got far enough to have loaded its natives.
+const run = spawnSync(launcher, ["--version"], { encoding: "utf8", timeout: 120_000 });
+const said = `${run.stdout ?? ""}${run.stderr ?? ""}`;
+if (/Failed to load pi_natives|Cannot find module .*pi_natives/i.test(said)) {
+  fail(`compiled launcher cannot load its native addon:\n${said.split("\n").slice(0, 6).join("\n")}`);
+}
+console.log(`  lucid launcher OK - ${addons.length} native addon${addons.length === 1 ? "" : "s"} resolve next to the binary, no load failure`);
+
+console.log("\n✓ air-gap smoke passed: omp + scanner Python + the compiled lucid launcher resolve and run from bundled resources (no network).\n");
