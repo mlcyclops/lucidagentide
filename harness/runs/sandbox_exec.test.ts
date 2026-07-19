@@ -26,6 +26,11 @@ import { managedRequireIsolation, parseRegistryPolicy } from "../../desktop/mana
 
 const hasBwrap = () => true;
 const noBwrap = () => false;
+// Functional probes. bwrap being ON PATH and bwrap WORKING are different facts (Ubuntu 24.04+ blocks
+// unprivileged user namespaces), so every linux resolveBackend call injects both — otherwise the
+// default probe shells out to the host's real bwrap and these stop being hermetic.
+const bwrapWorks = () => true;
+const bwrapBlocked = () => false;
 const has = (bin: string) => (b: string) => b === bin; // only `bin` is on PATH
 const none = () => false;
 const ARGV = ["/opt/omp", "acp", "-e", "/repo/gate.ts"];
@@ -35,7 +40,7 @@ const PROXY = { host: "127.0.0.1", httpPort: 8888, httpProxyUrl: "http://127.0.0
 // ── backend resolution ────────────────────────────────────────────────────────
 
 test("linux with bwrap on PATH resolves the ISOLATING backend (no disclosure)", () => {
-  const r = resolveBackend({ platform: "linux", which: hasBwrap });
+  const r = resolveBackend({ platform: "linux", which: hasBwrap, probe: bwrapWorks });
   expect(r.ok).toBe(true);
   if (r.ok) {
     expect(r.backend.name).toBe("bwrap");
@@ -45,11 +50,42 @@ test("linux with bwrap on PATH resolves the ISOLATING backend (no disclosure)", 
 });
 
 test("linux WITHOUT bwrap falls back to the disclosed passthrough (personal default)", () => {
-  const r = resolveBackend({ platform: "linux", which: noBwrap });
+  const r = resolveBackend({ platform: "linux", which: noBwrap, probe: bwrapBlocked });
   expect(r.ok).toBe(true);
   if (r.ok) {
     expect(r.backend.name).toBe("noop");
     expect(r.disclosed).toBe(true);
+  }
+});
+
+// ── regression: bwrap present but NON-FUNCTIONAL (Ubuntu/Debian 24.04+) ──────────────────────────
+// Shipped bug: `available()` probed PATH only. On 24.04 bwrap exists but AppArmor blocks unprivileged
+// user namespaces, so it was chosen as the backend and then died with "setting up uid map: Permission
+// denied" at every spawn — taking `omp acp` with it. No ACP session ⇒ empty configOptions ⇒ the picker
+// showed only its hardcoded Anthropic fallback, so a correctly-OAuth'd OpenAI/xAI vanished silently.
+test("linux with bwrap on PATH but BLOCKED userns does NOT resolve bwrap - it discloses instead", () => {
+  const r = resolveBackend({ platform: "linux", which: hasBwrap, probe: bwrapBlocked });
+  expect(r.ok).toBe(true);
+  if (r.ok) {
+    expect(r.backend.name).toBe("noop"); // never "bwrap" — a backend that cannot spawn is not a backend
+    expect(r.backend.isolates).toBe(false);
+    expect(r.disclosed).toBe(true); // degraded, but DISCLOSED and the agent still runs
+  }
+});
+
+test("BwrapBackend.available() requires presence AND capability", () => {
+  expect(new BwrapBackend(hasBwrap, bwrapWorks).available()).toBe(true);
+  expect(new BwrapBackend(hasBwrap, bwrapBlocked).available()).toBe(false); // the shipped bug
+  expect(new BwrapBackend(noBwrap, bwrapWorks).available()).toBe(false);
+});
+
+test("managed require-isolation on a BLOCKED-userns host refuses with the actionable apparmor reason", () => {
+  const r = resolveBackend({ platform: "linux", requireIsolation: true, which: hasBwrap, probe: bwrapBlocked });
+  expect(r.ok).toBe(false); // gov/managed still fails CLOSED — degrading to passthrough is not an option
+  if (!r.ok) {
+    expect(r.reason).toMatch(/user namespace/);
+    expect(r.reason).toMatch(/apparmor_restrict_unprivileged_userns/); // tells the admin what to actually do
+    expect(r.reason).not.toMatch(/not installed/); // the old, misleading message
   }
 });
 
@@ -81,7 +117,7 @@ test("win32 WITHOUT the helper still discloses (helper ships in P-SANDBOX.7); da
 });
 
 test("managed require-isolation with NO isolating backend REFUSES (fail-closed, never a passthrough)", () => {
-  const linux = resolveBackend({ platform: "linux", requireIsolation: true, which: noBwrap });
+  const linux = resolveBackend({ platform: "linux", requireIsolation: true, which: noBwrap, probe: bwrapBlocked });
   expect(linux.ok).toBe(false);
   if (!linux.ok) expect(linux.reason).toMatch(/bubblewrap/);
   const mac = resolveBackend({ platform: "darwin", requireIsolation: true, which: none });
@@ -102,7 +138,7 @@ test("managed require-isolation is SATISFIED by an available sandbox-exec on mac
 });
 
 test("managed require-isolation is SATISFIED by an available bwrap", () => {
-  const r = resolveBackend({ platform: "linux", requireIsolation: true, which: hasBwrap });
+  const r = resolveBackend({ platform: "linux", requireIsolation: true, which: hasBwrap, probe: bwrapWorks });
   expect(r.ok).toBe(true);
   if (r.ok) expect(r.backend.name).toBe("bwrap");
 });

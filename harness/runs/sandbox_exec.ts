@@ -43,6 +43,36 @@ export type WhichFn = (bin: string) => boolean;
 
 const defaultWhich: WhichFn = (bin) => Bun.which(bin) != null;
 
+/** FUNCTIONAL probe: presence on PATH is not capability. Injectable so tests never depend on the
+ *  host kernel. See `defaultProbe` for why this exists at all. */
+export type ProbeFn = (bin: string) => boolean;
+
+/** Cache the functional probe per binary: resolveBackend runs at every omp spawn and the probe
+ *  costs a process. Host capability does not change within a run. */
+const probeCache = new Map<string, boolean>();
+
+/** Does `bwrap` actually WORK here, not merely exist?
+ *
+ *  Ubuntu/Debian 24.04+ ship bubblewrap on PATH but restrict unprivileged user namespaces via
+ *  AppArmor (`kernel.apparmor_restrict_unprivileged_userns=1`). bwrap then fails at startup with
+ *  "setting up uid map: Permission denied" — AFTER we've committed to it as the backend. A
+ *  presence-only probe therefore selected a backend that killed every wrapped child: `omp acp`
+ *  never came up, the ACP session never opened, `configOptions` stayed empty and the picker fell
+ *  back to its hardcoded Anthropic list — OpenAI/xAI models silently absent on a correctly
+ *  OAuth'd box. Run the smallest real sandbox to find out, once. */
+const defaultProbe: ProbeFn = (bin) => {
+  const cached = probeCache.get(bin);
+  if (cached !== undefined) return cached;
+  let ok = false;
+  try {
+    ok = Bun.spawnSync({ cmd: [bin, "--ro-bind", "/", "/", "true"], stdout: "ignore", stderr: "ignore", stdin: "ignore" }).exitCode === 0;
+  } catch {
+    ok = false; // binary vanished between which() and here, or is not executable
+  }
+  probeCache.set(bin, ok);
+  return ok;
+};
+
 export interface SandboxCtx {
   /** The workspace the agent works in — bound read-write inside the sandbox. */
   workspace: string;
@@ -94,9 +124,10 @@ export interface SandboxBackend {
 export class BwrapBackend implements SandboxBackend {
   readonly name = "bwrap" as const;
   readonly isolates = true;
-  constructor(private readonly which: WhichFn = defaultWhich) {}
+  constructor(private readonly which: WhichFn = defaultWhich, private readonly probe: ProbeFn = defaultProbe) {}
+  /** Presence AND capability — a bwrap that cannot unshare a user namespace is not a backend. */
   available(): boolean {
-    return this.which("bwrap");
+    return this.which("bwrap") && this.probe("bwrap");
   }
   wrap(argv: string[], caps: ProfileCaps, ctx: SandboxCtx): SandboxPlan {
     const home = ctx.home ?? homedir();
@@ -270,14 +301,16 @@ export interface ResolveBackendOpts {
    *  unavailable isolating backend is a REFUSAL, never a disclosed passthrough. */
   requireIsolation?: boolean;
   which?: WhichFn;
+  probe?: ProbeFn;
 }
 
-/** Pick the backend for this platform. PURE given its inputs (platform/which injectable). */
+/** Pick the backend for this platform. PURE given its inputs (platform/which/probe injectable). */
 export function resolveBackend(opts: ResolveBackendOpts = {}): BackendResolution {
   const platform = opts.platform ?? process.platform;
   const which = opts.which ?? defaultWhich;
+  const probe = opts.probe ?? defaultProbe;
   if (platform === "linux") {
-    const bwrap = new BwrapBackend(which);
+    const bwrap = new BwrapBackend(which, probe);
     if (bwrap.available()) return { ok: true, backend: bwrap, disclosed: false };
   }
   if (platform === "darwin") {
@@ -296,7 +329,9 @@ export function resolveBackend(opts: ResolveBackendOpts = {}): BackendResolution
       ok: false,
       reason:
         platform === "linux"
-          ? "managed policy requires runtime isolation, but bwrap is not installed (install bubblewrap)"
+          ? which("bwrap")
+            ? "managed policy requires runtime isolation, but bwrap cannot create a user namespace on this host — Ubuntu/Debian 24.04+ block unprivileged user namespaces via AppArmor (allow with `sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`, or ship an AppArmor profile for bwrap)"
+            : "managed policy requires runtime isolation, but bwrap is not installed (install bubblewrap)"
           : platform === "darwin"
             ? "managed policy requires runtime isolation, but sandbox-exec is not available (macOS Seatbelt)"
             : platform === "win32"
