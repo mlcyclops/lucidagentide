@@ -41,7 +41,7 @@ jobs:
 
       # The fail-closed gate test spawns the zero-dependency scanner sidecar as `python server.py`,
       # so the runner needs `python` on PATH.
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
