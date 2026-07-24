@@ -3708,8 +3708,16 @@ function closePreview(): void {
 function onPreviewAvailable(path: string): void {
   if (!path) return;
   state.lastPreviewablePath = path;
-  if (!previewOpen) { openPreview({ reveal: "agent" }); return; } // first reveal shows the agent's work (nothing on Yours yet)
+  if (!previewOpen) { openPreview({ reveal: "agent" }); kickPreviewShotSoon(); return; } // first reveal shows the agent's work (nothing on Yours yet)
   loadPreview(path, "agent"); // already open → update the AGENT lane live; badges the tab if you're on Yours
+  kickPreviewShotSoon(); // refresh the cached shot once the agent frame paints, so a following preview_screenshot has it
+}
+// P-PREVIEW.3a-shot: capture a couple of times right after the agent lane loads (the frame paints async), so
+// the agent's preview_screenshot finds a FRESH shot the moment it retries after preview_open — instead of
+// waiting up to a full 1.5s freshness tick. cacheRenderedPreviewShot no-ops when the agent lane isn't the
+// visible one, so this is a cheap no-op when the user is on their own tab.
+function kickPreviewShotSoon(): void {
+  for (const ms of [250, 700]) setTimeout(() => void cacheRenderedPreviewShot(), ms);
 }
 
 // ── P-PREVIEW.6a (ADR-0153): live "reviewing / testing" indicator ────────────────────────────────
@@ -3836,7 +3844,7 @@ function switchPrevLane(l: PrevLane): void {
   if (yf) yf.hidden = l !== "yours" || !prevPathByLane.yours;
   if (af) af.hidden = l !== "agent" || !prevPathByLane.agent;
   $$(".prev-tab").forEach((b) => b.classList.toggle("active", (b as HTMLElement).dataset.lane === l));
-  if (l === "agent") { const d = $("#prevAgentDot"); if (d) d.hidden = true; } // viewing the agent lane clears the "new" badge
+  if (l === "agent") { const d = $("#prevAgentDot"); if (d) d.hidden = true; kickPreviewShotSoon(); } // viewing the agent lane clears the "new" badge + refreshes the shot cache for preview_screenshot
   const path = $("#prevPath") as HTMLInputElement | null; if (path) path.value = prevPathByLane[l];
   const kind = $("#prevKind"); if (kind) kind.textContent = prevKindByLane[l];
   const empty = $("#prevEmpty") as HTMLElement | null; if (empty) empty.hidden = !!prevPathByLane[l];
