@@ -268,4 +268,12 @@
 //            (P-GOVCUI.1: asks once, prefills the AskSage CIV gov endpoint with token steps; a key turns
 //            lockdown ON, keyless never flips it) + the 11-SKU KG-pack storefront reconcile (SPM flagship
 //            replaces capture) + the Remote PWA /r forwarder and comp-grant entitlement auto-recheck.
-export const APP_VERSION = "1.11.10";
+// v1.11.11 = Session Share + preview polish. Instant Start/Stop for Session Share (P-SHARE.4: a two-line
+//            handshake progress readout under the button + optimistic teardown, so neither action hangs);
+//            readable Thinking on the phone PWA (P-REMOTE.9b: the live reasoning block streams open with a
+//            gist summary and stays open across repaints); reliable preview screenshots/inspection for
+//            tool-conservative models like Fable 5 (P-PREVIEW.9: trigger-prescriptive tool descriptions +
+//            self-correcting fallbacks to preview_inspect); and the Linux air-gap sandbox fix (functional
+//            bwrap probe so Ubuntu 24.04's blocked user namespaces no longer kill the model picker, plus
+//            shipping omp's native addon next to the compiled launcher).
+export const APP_VERSION = "1.11.11";
