@@ -174,8 +174,8 @@
   "dependencies": {
     "@types/katex": "^0.16.8",
     "electron-updater": "^6.3.9",
-    "katex": "^0.17.0",
-    "monaco-editor": "^0.55.1"
+    "katex": "^0.18.1",
+    "monaco-editor": "^0.56.0"
   },
   "devDependencies": {
     "@resvg/resvg-js": "^2.6.2",
