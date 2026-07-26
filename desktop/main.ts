@@ -79,7 +79,9 @@ function startDevServer(): void {
   const embeddingsEnv = prepareEmbeddingsToken(); // ADR-0221: vault→env for the embeddings endpoint key
   dev = spawn(findBun(), ["run", "desktop/dev.ts"], {
     cwd: REPO,
-    env: { ...process.env, ...runtimeEnv, ...lpEnv, ...figmaEnv, ...gitEnv, ...embeddingsEnv, PORT: String(PORT) },
+    // LUCID_RESOURCES lets the dev child resolve the bundled whisper.cpp binary under <resources>/whisper
+    // (P-STT.2c); process.resourcesPath is an Electron property, not an env var, so it must be threaded here.
+    env: { ...process.env, ...runtimeEnv, ...lpEnv, ...figmaEnv, ...gitEnv, ...embeddingsEnv, LUCID_RESOURCES: app.isPackaged ? process.resourcesPath : "", PORT: String(PORT) },
     // NOT "inherit": in a packaged GUI app the Electron main has no console, so inheriting
     // makes the console-subsystem Bun allocate its OWN console window (the black pop-up).
     // Pipe instead + windowsHide so no window ever appears; forward output for dev runs.

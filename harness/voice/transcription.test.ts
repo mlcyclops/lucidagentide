@@ -6,9 +6,41 @@
 // and the fail-safe (transport error / non-200 → empty text, never throws).
 
 import { test, expect, describe } from "bun:test";
-import { OpenAiCompatibleSttBackend } from "./transcription.ts";
+import { OpenAiCompatibleSttBackend, WhisperCppSttBackend } from "./transcription.ts";
 
 const audio = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]);
+
+// P-STT.2b: whisper.cpp's whisper-server uses the NATIVE /inference route (verified live), not the OpenAI
+// /v1/audio/transcriptions path. This backend posts there and parses { text }.
+describe("WhisperCppSttBackend", () => {
+  test("posts multipart to /inference and returns the transcript", async () => {
+    let seen: { url: string; hasFile: boolean; fmt: unknown } | null = null;
+    const fetchImpl = (async (url: string, init: { body: FormData }) => {
+      seen = { url, hasFile: init.body.get("file") instanceof Blob, fmt: init.body.get("response_format") };
+      return { ok: true, status: 200, statusText: "OK", json: async () => ({ text: " the quick brown fox " }) } as unknown as Response;
+    }) as unknown as typeof fetch;
+    const be = new WhisperCppSttBackend({ baseUrl: "http://127.0.0.1:9111/", fetchImpl });
+    const r = await be.transcribe(audio, { mimeType: "audio/wav" });
+    expect(r.backendId).toBe("whisper-cpp");
+    expect(r.text).toBe("the quick brown fox"); // trimmed
+    expect(seen!.url).toBe("http://127.0.0.1:9111/inference");
+    expect(seen!.hasFile).toBe(true);
+    expect(seen!.fmt).toBe("json");
+  });
+  test("empty audio short-circuits (no request)", async () => {
+    let called = false;
+    const fetchImpl = (async () => { called = true; return {} as Response; }) as unknown as typeof fetch;
+    const r = await new WhisperCppSttBackend({ baseUrl: "http://x/", fetchImpl }).transcribe(new Uint8Array(0));
+    expect(called).toBe(false);
+    expect(r.text).toBe("");
+  });
+  test("fail-safe: a transport error yields empty text, never throws", async () => {
+    const fetchImpl = (async () => { throw new Error("ECONNREFUSED"); }) as unknown as typeof fetch;
+    const r = await new WhisperCppSttBackend({ baseUrl: "http://down:1/", fetchImpl }).transcribe(audio);
+    expect(r.text).toBe("");
+    expect(r.note).toMatch(/unavailable|ECONNREFUSED/i);
+  });
+});
 
 describe("OpenAiCompatibleSttBackend", () => {
   test("posts multipart (model + file + language) and returns the transcript text", async () => {

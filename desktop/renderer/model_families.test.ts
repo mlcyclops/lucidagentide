@@ -105,6 +105,12 @@ describe("P-IDE.1c curation - isDeprecatedModel (moderate policy)", () => {
     expect(isDeprecatedModel("anthropic/claude-opus-4-8")).toBe(false);
     expect(isDeprecatedModel("anthropic/claude-sonnet-4-6")).toBe(false);
     expect(isDeprecatedModel("anthropic/claude-fable-5")).toBe(false);
+    // A brand-new flagship (e.g. Opus 5, released same-day) must NOT be curated out - it surfaces the
+    // moment omp's catalog carries it. It is Claude family, not China-origin, and sorts ahead of 4.8.
+    expect(isDeprecatedModel("anthropic/claude-opus-5")).toBe(false);
+    expect(familyOf("claude-opus-5").id).toBe("claude");
+    expect(isChinaModel("anthropic/claude-opus-5")).toBe(false);
+    expect(cmpModelsNewestFirst("anthropic/claude-opus-5", "anthropic/claude-opus-4-8")).toBeLessThan(0);
   });
   it("drops Gemini 2.0 but keeps 2.5+ / 3.x", () => {
     expect(isDeprecatedModel("google-gemini-cli/gemini-2.0-flash")).toBe(true);

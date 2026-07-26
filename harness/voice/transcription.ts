@@ -77,3 +77,39 @@ export class OpenAiCompatibleSttBackend implements TranscriptionBackend {
     }
   }
 }
+
+export interface WhisperCppSttOptions {
+  /** Base URL of a whisper.cpp `whisper-server` (e.g. http://127.0.0.1:9111). */
+  baseUrl: string;
+  /** Injectable transport for tests; defaults to global fetch. */
+  fetchImpl?: typeof fetch;
+}
+
+// P-STT.2b: whisper.cpp's `whisper-server` serves its NATIVE `/inference` route (multipart `file` +
+// `response_format`, returns `{ text }`), NOT the OpenAI `/v1/audio/transcriptions` path - VERIFIED live
+// (that path 404s). This backend targets `/inference` so a managed local whisper.cpp works; the
+// OpenAI-compatible backend above still covers faster-whisper / any OpenAI-shaped server. Same fail-safe:
+// any error yields an EMPTY transcript with a note, never a throw.
+export class WhisperCppSttBackend implements TranscriptionBackend {
+  readonly id = "whisper-cpp";
+  constructor(private readonly opts: WhisperCppSttOptions) {}
+
+  async transcribe(audio: Uint8Array, opts: TranscribeOptions = {}): Promise<TranscriptionResult> {
+    if (audio.length === 0) return { backendId: this.id, text: "", note: "empty audio - nothing to transcribe" };
+    const f = this.opts.fetchImpl ?? fetch;
+    const url = `${this.opts.baseUrl.replace(/\/$/, "")}/inference`;
+    try {
+      const form = new FormData();
+      form.append("file", new Blob([audio.slice()], { type: opts.mimeType ?? "audio/wav" }), "audio.wav");
+      form.append("response_format", "json");
+      if (opts.language) form.append("language", opts.language);
+      const res = await f(url, { method: "POST", body: form });
+      if (!res.ok) throw new Error(`whisper.cpp ${res.status} ${res.statusText}`);
+      const data = (await res.json()) as { text?: string };
+      const text = typeof data.text === "string" ? data.text.trim() : "";
+      return { backendId: this.id, text, note: `transcribed ${audio.length} bytes via ${url}` };
+    } catch (e) {
+      return { backendId: this.id, text: "", note: `whisper.cpp STT unavailable (${e instanceof Error ? e.message : String(e)})` };
+    }
+  }
+}

@@ -175,6 +175,16 @@ export interface VoiceSettingsView {
   ttsVoice: string;
   ttsVoiceFavorites: string[];
 }
+// P-STT.2b: managed on-device Whisper status for the no-code Voice card.
+export interface WhisperTierView { tier: string; label: string; runnable: boolean; installed: boolean }
+export interface WhisperStatusView {
+  capable: boolean; recommended: string | null; summary: string;
+  binAvailable: boolean; binHint: string;
+  running: boolean; port: number; activeTier: string | null; serveUrl: string | null;
+  tiers: WhisperTierView[];
+  install: { active: boolean; tier: string | null; fraction: number; phase: "idle" | "downloading" | "starting" | "done" | "error"; reason?: string };
+}
+export interface WhisperActionView { ok: boolean; tier?: string; reason?: string }
 export interface ElevenVoiceView { voiceId: string; name: string; category?: string; description?: string; labels?: Record<string, string> }
 // P-REPORT.1 (ADR-0116): a unified Reports-list row - a loop AAR or a saved Engineering Update brief.
 export interface ReportEntry { kind: "aar" | "brief"; id: string; title: string; outcome: string; role: string; updatedAt: number; rel: string }
@@ -539,6 +549,11 @@ export interface LucidBridge {
   setVoiceSettings(patch: Partial<VoiceSettingsView>): Promise<VoiceSettingsView | null>;
   voices(): Promise<{ voices: ElevenVoiceView[]; favorites: string[]; selected: string; note?: string } | null>;
   transcribe(audioB64: string, mime: string, language?: string): Promise<{ text: string; note: string } | null>;
+  // P-STT.2b: managed on-device Whisper - hardware-gated install / start / stop / status (no-code).
+  whisperStatus(): Promise<WhisperStatusView | null>;
+  whisperInstall(tier?: string): Promise<WhisperActionView | null>;
+  whisperStart(tier?: string): Promise<WhisperActionView | null>;
+  whisperStop(): Promise<{ ok: boolean } | null>;
   speak(text: string, voiceId?: string, provider?: string): Promise<{ audioB64: string | null; mime: string; note: string } | null>;
   /** P-GOAL.14 (ADR-0112): list past After-Action Reports, and read one by its workspace-relative path. */
   pastReports(): Promise<{ rel: string; id: string; goal: string; outcome: string; updatedAt: number }[] | null>;
@@ -1047,6 +1062,10 @@ export const bridge: LucidBridge = {
   setVoiceSettings: (patch) => post("/api/voice-settings", patch),
   voices: () => getData("/api/voices"),
   transcribe: (audioB64, mime, language) => post("/api/transcribe", { audioB64, mime, language }),
+  whisperStatus: () => getData("/api/whisper/status"),
+  whisperInstall: (tier) => post("/api/whisper/install", { tier }),
+  whisperStart: (tier) => post("/api/whisper/start", { tier }),
+  whisperStop: () => post("/api/whisper/stop", {}),
   speak: (text, voiceId, provider) => post("/api/tts/speak", { text, voiceId, provider }),
   pastReports: () => getData("/api/goal/reports"),
   pastReport: (rel) => getData(`/api/goal/reports?rel=${encodeURIComponent(rel)}`),

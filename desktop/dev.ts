@@ -12,7 +12,7 @@
 //   bun run desktop:web        # http://localhost:5319
 
 import { join, dirname } from "node:path";
-import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, renameSync } from "node:fs";
 import { buildEngineeringUpdate, renderEngineeringBrief, buildPodcastScript, renderScript, type PodcastBackend, type BriefRole } from "../harness/brief/engineering_update.ts";
 import { buildComplianceRows, renderPoamCsv, renderCkl } from "../harness/brief/compliance.ts"; // P-REPORT.6/.8: POA&M + CKL
 import { renderTurnEvalReport, evalMetricsForTurn, type ObservedTool, type ObservedTurn } from "../harness/brief/eval_report.ts"; // P-CHAT.C (ADR-0190): settled-turn Model-Evaluation report
@@ -23,7 +23,7 @@ import { ingestLatency, readLatencyCalls } from "../harness/memory/latency_inges
 import { renderEvalMetricsRollupMarkdown } from "../harness/brief/eval_metrics_report.ts"; // P-EVAL.3 Part B
 import { rollupLatency, renderLatencyRollupMarkdown } from "../harness/brief/evals.ts"; // P-EVAL.1 latency rollup
 import { mkdtempSync, rmSync } from "node:fs"; // P-EVAL.3 Part B: throwaway rollup DB
-import { tmpdir } from "node:os";
+import { tmpdir, totalmem, cpus } from "node:os";
 import { buildChangeGraph, buildSchemaChanges, renderAnnexes } from "../harness/brief/change_graph.ts"; // P-REPORT.8: report annexes
 import { renderRepoActivityAnnex } from "../harness/brief/repo_activity.ts"; // P-REPORT.9: cross-repo activity annex
 import { addReportRepo, collectRepoActivity, ghAvailable, listReportRepos, type RepoSelection } from "./repo_collect.ts"; // P-REPORT.9 (ADR-0162)
@@ -46,7 +46,10 @@ import { probeEnabledServers } from "./mcp_probe.ts"; // P-AGENT.12: MCP tool di
 import { archiveBrief, deleteBrief, listBriefs, readBrief, restoreBrief, saveBrief } from "./report_store.ts";
 import { OpenAiCompatibleTtsBackend } from "../harness/brief/tts_backend.ts";
 import { ElevenLabsTtsBackend, ElevenLabsSttBackend, listElevenVoices } from "../harness/voice/elevenlabs.ts";
-import { OpenAiCompatibleSttBackend, type TranscriptionBackend } from "../harness/voice/transcription.ts";
+import { OpenAiCompatibleSttBackend, WhisperCppSttBackend } from "../harness/voice/transcription.ts";
+import { installWhisper, startWhisper, stopWhisper, whisperStatus as whisperRuntimeStatus, type WhisperRuntimeDeps } from "./whisper_runtime.ts"; // P-STT.2b: managed offline Whisper
+import { downloadWhisperModel, resolveWhisperBin } from "./whisper_manager.ts";
+import { whisperServeUrl, type WhisperTier } from "./whisper_install.ts";
 import { devSnapshot, securitySnapshot } from "../tools/web/data.ts";
 import { sandboxStatus } from "./sandbox_status.ts"; // P-SANDBOX.5 (ADR-0169)
 import { ensureNetdiagWatch, startNetdiagWatch, stopNetdiagWatch, netdiagView } from "./netdiag.ts";
@@ -82,6 +85,43 @@ import { applyEnv, attribution, chinaModelsAcknowledged, govconCui, govconCuiCho
 function settingsData() {
   const s = loadSettings();
   return { username: s.username ?? "", email: s.email ?? "", attribution: attribution(), role: roleChosen() ? userRole() : null, tourSeen: tourSeen(), govconCui: govconCuiChosen() ? govconCui() : null };
+}
+
+// P-STT.2b: the real WhisperRuntimeDeps for the managed offline-Whisper lifecycle - os specs, the model dir,
+// the streamed downloader + integrity gate, spawn/health, and STT wiring. The single running server handle
+// lives in whisper_runtime.ts. Bundling the whisper-server binary in the installer is the remaining packaging
+// step; until then it resolves LUCID_WHISPER_BIN / a binary on PATH.
+function whisperModelDir(): string { return join(homedir(), ".omp", "whisper"); }
+function whisperDeps(): WhisperRuntimeDeps {
+  const dir = whisperModelDir();
+  try { mkdirSync(dir, { recursive: true }); } catch { /* best-effort */ }
+  return {
+    specs: () => ({ arch: process.arch, platform: process.platform, totalRamGB: totalmem() / 1e9, cpuCores: cpus().length, accel: process.platform === "darwin" ? "metal" : "cpu" }),
+    modelDir: dir,
+    listModels: () => { try { return readdirSync(dir); } catch { return []; } },
+    resolveBin: () => resolveWhisperBin({ env: process.env, exists: existsSync, which: (n) => Bun.which(n), resourcesPath: process.env.LUCID_RESOURCES, platform: process.platform }),
+    download: (model, dest, onProgress) => downloadWhisperModel(model, dest, {
+      fetch: globalThis.fetch,
+      writeStream: async (path, body, onBytes) => { const w = Bun.file(path).writer(); const rd = body.getReader(); let tot = 0; for (;;) { const { done, value } = await rd.read(); if (done) break; if (value) { w.write(value); tot += value.length; onBytes(value.length); } } await w.end(); return tot; },
+      readHead: async (path, n) => new Uint8Array(await Bun.file(path).slice(0, n).arrayBuffer()),
+      rename: async (a, b) => renameSync(a, b),
+      remove: async (path) => { try { rmSync(path); } catch { /* best-effort */ } },
+    }, onProgress),
+    // P-STT.2c: the bundled server loads its whisper/ggml libs from its OWN directory. macOS gets an
+    // @loader_path rpath at staging and Windows searches the exe's dir automatically; Linux ELF only does
+    // that if the build set $ORIGIN, so prepend the binary's dir to LD_LIBRARY_PATH to make it certain.
+    spawn: (bin, args) => {
+      const libDir = dirname(bin);
+      const env = process.platform === "linux"
+        ? { ...process.env, LD_LIBRARY_PATH: process.env.LD_LIBRARY_PATH ? `${libDir}:${process.env.LD_LIBRARY_PATH}` : libDir }
+        : process.env;
+      const proc = Bun.spawn([bin, ...args], { stdout: "ignore", stderr: "ignore", env });
+      return { pid: proc.pid ?? 0, kill: () => { try { proc.kill(); } catch { /* gone */ } } };
+    },
+    health: async (port) => { try { const res = await fetch(`${whisperServeUrl(port)}/`, { signal: AbortSignal.timeout(2000) }); return res.ok || res.status === 404; } catch { return false; } },
+    setSttUrl: (url) => { setVoiceSettings({ sttProvider: "whisper", sttUrl: url }); },
+    sleep: (ms) => { const { promise, resolve } = Promise.withResolvers<void>(); setTimeout(resolve, ms); return promise; },
+  };
 }
 import { authorizeRelayBind, collabServeAllowed, emailDomainAllowed, managedAsksageOnly, managedConfig, managedLocks, skipAllowed } from "./managed_config.ts";
 import { startRelayServer, type RelayHandle } from "./collab/relay_server.ts"; // P-COLLAB.7 (ADR-0193): the optional embedded relay
@@ -158,7 +198,7 @@ import { recordSkillActivated } from "./skills_log.ts";
 import { recentTurns } from "./turns_log.ts";
 import { headroomStatus, setHeadroomEnabled, startHeadroom } from "./headroom.ts";
 import { addReportToKg, destroyCui, enablePersonal, estimateChatExport, exportCuiArchive, exportHistory, exportVault, forgetFact, importChatExport, lockCui, lockPersonal, migrateCuiIntoStore, personalGraph, personalStatus, relateEntities, setScope, setupCui, setupPersonal, unlockCui, unlockPersonal, unrelateEntities } from "./personal.ts";
-import { explainCommand } from "./explain_command.ts";
+import { EXPLAIN_SYSTEM, explainCommand, explainUserPrompt } from "./explain_command.ts";
 import type { PersonalScope } from "../harness/personal/store.ts";
 import { readEditorFile, saveEditorFile } from "./editor.ts";
 import { cancelImport, importJobStatus, startImport } from "./import_job.ts";
@@ -1416,7 +1456,23 @@ const server = Bun.serve({
       // P-EXEC.3: "TLDR" - explain an intimidating command in plain terms via a cheap keyed model.
       if (p === "/api/explain" && req.method === "POST") {
         const b = await readBody<{ command?: unknown }>(req);
-        const r = await explainCommand(String(b.command ?? ""));
+        const cmd = String(b.command ?? "");
+        let r = await explainCommand(cmd); // direct keyed path first (cheapest, no session spawn)
+        // P-EXEC.3 fix: OAuth-only users have NO direct API key - don't dead-end them. Route the SAME
+        // inert-DATA prompt through the omp session (which holds the OAuth/key auth) with a cheap accessible
+        // model. Uses the dedicated util connection, so it never clobbers the live chat turn.
+        if (!r.ok && /Add an Anthropic/.test(r.error ?? "")) {
+          const trimmed = cmd.trim();
+          if (trimmed && trimmed.length <= 8000) {
+            try {
+              const model = backend.checkerModelInfo().recommended || undefined; // cheapest accessible (OAuth-safe)
+              const text = (await backend.complete(EXPLAIN_SYSTEM, explainUserPrompt(trimmed), { model, idleMs: 20_000 })).trim();
+              r = text
+                ? { ok: true, text, model: model ? model.replace(/^[^/]*\//, "") : undefined }
+                : { ok: false, error: "Could not explain right now. Make sure a provider is connected in Settings, then try again." };
+            } catch { r = { ok: false, error: "Could not explain right now. Make sure a provider is connected in Settings, then try again." }; }
+          }
+        }
         return json({ ok: r.ok, data: r, error: r.error });
       }
       // P-BRIEF.4 (ADR-0113) + P-VOICE.1 (ADR-0115): SYNTHESIZE the podcast to WAV via a TTS backend,
@@ -1470,17 +1526,33 @@ const server = Bun.serve({
         const b = await readBody<{ audioB64?: unknown; mime?: unknown; language?: unknown }>(req);
         const audio = typeof b.audioB64 === "string" && b.audioB64 ? new Uint8Array(Buffer.from(b.audioB64, "base64")) : new Uint8Array();
         const v = voiceSettings();
-        let stt: TranscriptionBackend;
+        const topts = { mimeType: typeof b.mime === "string" ? b.mime : undefined, language: typeof b.language === "string" ? b.language : undefined };
         if (v.sttProvider === "elevenlabs") {
           const key = process.env.ELEVENLABS_API_KEY;
-          if (!key) return json({ ok: true, data: { text: "", note: "Add your ElevenLabs API key (Settings → Voice), or switch STT to offline Whisper." } });
-          stt = new ElevenLabsSttBackend({ apiKey: key });
-        } else {
-          stt = new OpenAiCompatibleSttBackend({ baseUrl: v.sttUrl, apiKey: process.env.OPENAI_API_KEY, model: process.env.LUCID_STT_MODEL || "whisper-1" });
+          if (!key) return json({ ok: true, data: { text: "", note: "Add your ElevenLabs API key (Settings \u2192 Voice), or switch STT to offline Whisper." } });
+          const er = await new ElevenLabsSttBackend({ apiKey: key }).transcribe(audio, topts);
+          return json({ ok: true, data: { text: er.text, note: er.note } });
         }
-        const r = await stt.transcribe(audio, { mimeType: typeof b.mime === "string" ? b.mime : undefined, language: typeof b.language === "string" ? b.language : undefined });
+        // Offline whisper: whisper.cpp's whisper-server serves /inference (verified live); faster-whisper /
+        // any OpenAI-compatible server serves /v1/audio/transcriptions. Try the whisper.cpp shape first, then
+        // fall back to the OpenAI shape - so BOTH engines work with no extra setting.
+        let r = await new WhisperCppSttBackend({ baseUrl: v.sttUrl }).transcribe(audio, topts);
+        if (!r.text) r = await new OpenAiCompatibleSttBackend({ baseUrl: v.sttUrl, apiKey: process.env.OPENAI_API_KEY, model: process.env.LUCID_STT_MODEL || "whisper-1" }).transcribe(audio, topts);
         return json({ ok: true, data: { text: r.text, note: r.note } });
       }
+      // P-STT.2b: the no-code managed offline-Whisper lifecycle (hardware-gated install / start / stop / status).
+      if (p === "/api/whisper/status") return json({ ok: true, data: whisperRuntimeStatus(whisperDeps()) });
+      if (p === "/api/whisper/install" && req.method === "POST") {
+        const wb = await readBody<{ tier?: unknown }>(req);
+        const rr = await installWhisper(whisperDeps(), typeof wb.tier === "string" ? (wb.tier as WhisperTier) : undefined, () => {});
+        return json({ ok: rr.ok, data: rr, error: rr.reason });
+      }
+      if (p === "/api/whisper/start" && req.method === "POST") {
+        const wb = await readBody<{ tier?: unknown }>(req);
+        const rr = await startWhisper(whisperDeps(), { tier: typeof wb.tier === "string" ? (wb.tier as WhisperTier) : undefined });
+        return json({ ok: rr.ok, data: rr, error: rr.reason });
+      }
+      if (p === "/api/whisper/stop" && req.method === "POST") { const rr = await stopWhisper(); return json({ ok: rr.ok, data: rr }); }
       // P-VOICE.1: read arbitrary text aloud (assistant replies, an AAR summary) with the selected voice.
       if (p === "/api/tts/speak" && req.method === "POST") {
         const b = await readBody<{ text?: unknown; voiceId?: unknown; provider?: unknown }>(req);

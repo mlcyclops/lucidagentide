@@ -8,7 +8,7 @@
 // agent turn. Same renderer in Electron (real omp ACP via window.lucid) and in
 // the browser dev server (simulated). Pure DOM, no framework.
 
-import { bridge, type AgentRunReply, type McpCatalogTool, type ChatEvent, type CollabShareStatus, type ConfigOption, type EvalReportTurn, type GoalDial, type MemorySnapshot, type OmpCommand, type ProviderAuth, type RestoredTurn, type SecuritySnapshot, type SessionInfo, type SessionList, type SkillInspectView, type SkillView, type UserRole, type WorkspaceInfo } from "./bridge.ts";
+import { bridge, type AgentRunReply, type McpCatalogTool, type ChatEvent, type CollabShareStatus, type ConfigOption, type EvalReportTurn, type GoalDial, type MemorySnapshot, type OmpCommand, type ProviderAuth, type RestoredTurn, type SecuritySnapshot, type SessionInfo, type SessionList, type SkillInspectView, type SkillView, type UserRole, type WorkspaceInfo, type WhisperStatusView } from "./bridge.ts";
 import { ROLE_META, USER_ROLE_LIST, coachHtml, roleDefaultTab, stepsForRole, type TourStep } from "./tour.ts";
 import { modCombo, modSymbol } from "./platform.ts";
 import { aiLocHasData } from "../ailoc_view.ts";
@@ -74,6 +74,10 @@ import { accessCounts } from "../collab/share_awareness.ts"; // P-PREVIEW-PWA.3 
 import { decideGovOnboarding, planGovSetup, CIV_ASKSAGE_BASE, ASKSAGE_ACCOUNT_URL, ASKSAGE_DOCS_URL, ASKSAGE_TOKEN_STEPS } from "./gov_onboarding.ts"; // P-GOVCUI.1: Government/CUI first-run step
 import { ASKSAGE_FAMILY_ORDER, familyOf, filterModels, groupByFamily, isAuxiliaryModel, isChinaModel, isDeprecatedModel, isGovModel, providerLabelOf, recommendFallbacks, sortGovFirstNewest } from "./model_families.ts";
 import { FAVS_KEY, offeredModels, parseFavs, starredOf, toggleFav } from "./model_favorites.ts"; // P-FAV.1 (ADR-0165) + P-REMOTE.11b (ADR-0238)
+import { CONFIG_WARM_POLL_MS, warmStep } from "./config_warm.ts"; // P-IDE.1d: model-picker cold-start warm-poll (per-cycle retry budget)
+import { DICTATION_DEFAULTS, dictationTick, mergeTranscript, newDictation, type DictationState } from "./dictation.ts"; // P-STT.3: fluid live dictation
+import { buildHubSections, configuredProviderCount, type HubSection } from "./provider_hub.ts"; // P-PROV.2: Provider Hub grouping + gate
+import { LOCAL_MODEL_PRESETS } from "./local_presets.ts"; // P-LOCAL.4: one-click local-model presets in the hub
 import { renderSandboxSection } from "./sandbox_panel.ts"; // P-SANDBOX.5 (ADR-0169)
 import { INSTALLED_SKILLS, bumpSkillUsage, bundledSkillsByUsage, isSkillEnabled, setSkillEnabled, taskProforma } from "./skills.ts";
 import { renderSkillInspect, renderSkillsDirectory, renderStudioCandidate, skillsDirSig, type SkillDirRow } from "./skills_dir.ts"; // P-SKILL.4 (ADR-0097) / P-SKILL.5 (ADR-0101)
@@ -102,6 +106,7 @@ const state = {
   codeActivity: null as import("./bridge.ts").CodeActivity | null, // ADR-0030 P-CODE.1 git workspace diffstat
   config: [] as ConfigOption[],
   configCached: false, // P-IDE.1d: current config came from the local cache; live refresh pending
+  configWarming: false, // P-IDE.1d: a warm cycle is in flight (session still starting); picker shows the spinner
   uiMode: "agent" as "agent" | "ask" | "plan", // P-ACP.2/3: composer Plan/Ask/Agent (derived from backend)
   commands: [] as OmpCommand[],
   skills: [] as SkillView[], // P-SKILL.4 (ADR-0097): discovered skills, widened with root/trust/removable/scan verdict
@@ -159,7 +164,7 @@ const shortModelId = (v: string) => v.replace(/^anthropic\//, "").replace(/^asks
 // omp's reported usage `size` is unreliable for the AskSage gateway models (it reports
 // 256k for a 1M Gemini), so we prefer this. Keep in sync with tools/memory_data.ts CTX_WINDOW.
 const MODEL_CTX: Record<string, number> = {
-  "claude-fable-5": 1_000_000, "claude-mythos-5": 1_000_000, "claude-opus-4-8": 1_000_000, "claude-opus-4-7": 1_000_000,
+  "claude-fable-5": 1_000_000, "claude-mythos-5": 1_000_000, "claude-opus-5": 1_000_000, "claude-opus-4-8": 1_000_000, "claude-opus-4-7": 1_000_000,
   "claude-opus-4-6": 1_000_000, "claude-sonnet-4-6": 1_000_000, "claude-sonnet-4-5": 1_000_000,
   "claude-haiku-4-5": 200_000,
   "gpt-5.6-luna": 256_000, "gpt-5.6-sol": 256_000, "gpt-5.6-terra": 256_000,
@@ -271,7 +276,7 @@ function buildShell(): void {
           <div class="composer-tools" id="composerTools">
             <!-- Persona + Skills moved to the titlebar (next to the model picker); the composer keeps only the
                  mic so it never squishes when a right-edge surface (KG / IDE / Agent Builder) narrows the center. -->
-            <button class="ctool ctool-icon" id="ctMic" data-tip="Voice input · ${modCombo("D")}|Click (or press ${modCombo("D")}) to record, again to stop - transcribed into the composer (Settings → Voice sets the engine)">${icon("mic", 15)}</button>
+            <button class="ctool ctool-icon" id="ctMic" data-tip="Dictate \u00b7 ${modCombo("D")}|Click (or ${modCombo("D")}) for hands-free dictation - your words land as you pause, and it stops on a longer silence. Click again to stop early. (Settings \u2192 Voice sets the engine.)">${icon("mic", 15)}</button>
           </div>
         </div>
       </main>
@@ -2004,10 +2009,39 @@ function promptForEmailIfMissing(onDone?: () => void): void {
 // First-login flow as a chain: pick a role (if unchosen) → email/attribution → the tour. Each step
 // is cosmetic - none gate or weaken the security path (invariant #3).
 function runOnboarding(): void {
-  const afterGov = () => { if (!state.tourSeen) startTour(state.userRole ?? "developer"); };
-  const afterEmail = () => promptForGovCuiIfNeeded(afterGov); // P-GOVCUI.1: gov/CUI setup, then the tour
+  const afterProv = () => { if (!state.tourSeen) startTour(state.userRole ?? "developer"); };
+  const afterGov = () => void promptForProviderIfNeeded(afterProv); // P-PROV.2: connect a provider, then the tour
+  const afterEmail = () => promptForGovCuiIfNeeded(afterGov); // P-GOVCUI.1: gov/CUI setup
   if (state.userRole) { promptForEmailIfMissing(afterEmail); return; }
   void promptForRole().then(() => promptForEmailIfMissing(afterEmail));
+}
+
+// P-PROV.2: first-run "connect a provider" step.
+// After identity + the gov/CUI question, a user with NO provider configured is nudged to connect one via the
+// Provider Hub. Gov-lockdown users route through the accredited gateway, so we skip the direct-provider nudge.
+// Cosmetic + skippable - never gates or weakens the security path (invariant #3).
+async function promptForProviderIfNeeded(onDone?: () => void): Promise<void> {
+  if (state.managed?.asksageOnly || state.asksage?.only) { onDone?.(); return; } // gateway lockdown: not applicable
+  if (document.getElementById("provChoice")) { onDone?.(); return; }
+  let auth = state.auth;
+  try { const a = await bridge.auth(); if (a) { auth = a; state.auth = a; } } catch { /* offline: still offer */ }
+  if (configuredProviderCount(auth) > 0) { onDone?.(); return; } // already has a provider connected
+  const ov = el(`<div id="provChoice" class="modal-ov">
+    <div class="modal role-modal" role="dialog" aria-modal="true" aria-labelledby="provChoiceTitle">
+      <div class="modal-icon">${icon("spark", 24)}</div>
+      <h2 class="modal-title" id="provChoiceTitle">Connect an AI provider</h2>
+      <p class="modal-desc">LUCID needs at least one model provider to chat. Sign in with a subscription you already have (Claude, ChatGPT, Gemini, Grok, Copilot) or paste an API key - it takes a few seconds and you can add more any time.</p>
+      <div class="gov-choices">
+        <button class="gov-choice ok" type="button" data-prov="yes">${icon("expand", 18)}<span class="gov-choice-tx"><b>Connect a provider</b><span class="gov-choice-sub">Open the provider list - OAuth or API key.</span></span></button>
+        <button class="gov-choice" type="button" data-prov="later">${icon("clock", 18)}<span class="gov-choice-tx"><b>I'll do it later</b><span class="gov-choice-sub">Add one from the model picker or Settings any time.</span></span></button>
+      </div>
+    </div></div>`);
+  document.body.appendChild(ov);
+  $$("[data-prov]", ov).forEach((b) => b.addEventListener("click", () => {
+    const choice = (b as HTMLElement).dataset.prov;
+    ov.remove();
+    if (choice === "yes") openProviderHub(onDone); else onDone?.();
+  }));
 }
 
 // ── P-GOVCUI.1: the Government / GovCon + CUI onboarding step ──────────────────────────────────
@@ -2118,6 +2152,20 @@ function openSettingsToAsksage(): void {
   openSettings();
   setTimeout(() => {
     const sec = $('[data-sec="asksage"]') as HTMLElement | null;
+    sec?.classList.add("open");
+    sec?.scrollIntoView({ behavior: "smooth", block: "start" });
+    sec?.classList.add("set-flash");
+    setTimeout(() => sec?.classList.remove("set-flash"), 1600);
+  }, 140);
+}
+
+// P-LOCAL.4: jump Settings to the Local Providers card (from the Provider Hub's "Local & self-hosted" tile),
+// scrolled + flashed so the user lands on the add form (with the one-click model presets).
+function openSettingsToLocalProviders(): void {
+  SET_OPEN.add("localProviders");
+  openSettings();
+  setTimeout(() => {
+    const sec = $('[data-sec="localProviders"]') as HTMLElement | null;
     sec?.classList.add("open");
     sec?.scrollIntoView({ behavior: "smooth", block: "start" });
     sec?.classList.add("set-flash");
@@ -2278,8 +2326,11 @@ function secProviders(auth: import("./bridge.ts").AuthStatus | null): string {
   // "Sign out of all providers" — ALWAYS available (not gated on a visible active login) so it can also clear
   // ORPHANED OAuth logins that have no card here: a broker id with no descriptor (e.g. google-antigravity) or
   // a key-only provider that still holds an oauth row. The reliable full reset, e.g. after a reinstall.
-  const signoutAll = `<div class="prov-signout"><button class="btn-mini danger" data-oauth-logout-all title="Delete EVERY saved OAuth login — all providers, including stale or orphaned ones. Your API keys are kept. Use this to fully reset provider logins (e.g. after reinstalling).">${icon("trash", 12)} Sign out of all providers</button></div>`;
-  return setCard("providers", "Providers", "U.S. frontier · key or OAuth", cards + signoutAll, true);
+  const signoutAll = `<div class="prov-signout"><button class="btn-mini danger" data-oauth-logout-all title="Delete EVERY saved OAuth login \u2014 all providers, including stale or orphaned ones. Your API keys are kept. Use this to fully reset provider logins (e.g. after reinstalling).">${icon("trash", 12)} Sign out of all providers</button></div>`;
+  // P-PROV.2: a prominent jump to the dedicated Provider Hub (every provider omp offers, with logos, in one
+  // discoverable popup) so providers aren't buried in this collapsed card.
+  const hubBtn = `<div class="prov-hubopen"><button class="btn-mini ok" id="openProvHub">${icon("expand", 12)} Open the Provider Hub</button><span class="set-note">All providers in one place \u2014 native logos, OAuth or API key, open-weight &amp; regional behind an acknowledgement.</span></div>`;
+  return setCard("providers", "Providers", "U.S. frontier \u00b7 key or OAuth", hubBtn + cards + signoutAll, true);
 }
 // P-IDE.1c (ADR-0029): data-sovereignty unlock for China-origin models. Renders ONLY when omp actually
 // exposes such a model (else an empty, preserved anchor). Hidden-by-default; the user must type
@@ -2377,6 +2428,7 @@ function secVoice(auth: import("./bridge.ts").AuthStatus | null, vset: import(".
     <div class="voice-row" id="voiceSttUrlRow"${stt === "whisper" ? "" : " hidden"}>
       <label class="voice-lbl" for="voiceSttUrl">Whisper URL</label>
       <input id="voiceSttUrl" class="prov-key" data-voice-set="sttUrl" spellcheck="false" placeholder="http://localhost:9000 (self-hosted whisper.cpp / faster-whisper)" value="${esc(vset?.sttUrl ?? "")}" /></div>
+    <div id="whisperCard" class="voice-whisper"></div>
     <div class="voice-row"><label class="voice-lbl" for="voiceTts">TTS engine</label>
       <select id="voiceTts" class="prov-key" data-voice-set="ttsProvider">
         <option value="elevenlabs"${sel(ttsp === "elevenlabs")}>ElevenLabs - cloud, custom voices</option>
@@ -2388,6 +2440,32 @@ function secVoice(auth: import("./bridge.ts").AuthStatus | null, vset: import(".
       <button class="btn-mini" id="voiceFav" data-tip="Favorite|Star the selected voice - favorites are listed first">${icon("spark", 12)}</button></div>
     <div class="set-note" id="voiceNote"></div>`;
   return setCard("voice", "Voice", "TTS · STT · ElevenLabs", body, true);
+}
+// P-STT.2b: the no-code "Local Whisper" block inside the Voice card - hardware readout + a capable-tier
+// picker + one Install & start button (downloads the model if needed, spawns whisper.cpp, points STT at it).
+function whisperCardHtml(s: WhisperStatusView): string {
+  const opts = s.tiers.filter((t) => t.runnable).map((t) => `<option value="${esc(t.tier)}"${t.tier === (s.activeTier ?? s.recommended) ? " selected" : ""}>${esc(t.label)}${t.installed ? " \u00b7 installed" : ""}</option>`).join("");
+  const status = s.running ? `<span class="abadge ok">${icon("check", 11)} running${s.activeTier ? ` \u00b7 ${esc(s.activeTier)}` : ""}</span>` : `<span class="abadge none">stopped</span>`;
+  const binWarn = s.binAvailable ? "" : `<div class="set-note">${icon("info", 12)} <span>${esc(s.binHint)}</span></div>`;
+  const inst = s.install;
+  let controls: string;
+  if (inst && inst.active) {
+    // Live install/start: a real progress bar (download %) instead of a blind spinner.
+    const pct = inst.phase === "starting" ? 100 : Math.round((inst.fraction || 0) * 100);
+    const label = inst.phase === "starting" ? "Starting the server\u2026" : `Downloading model ${pct}%`;
+    controls = `<div class="prov-row whisper-actions"><div class="whisper-bar"><i style="width:${pct}%"></i></div><span class="whisper-status">${label}</span></div>`;
+  } else if (s.capable) {
+    controls = `<div class="voice-row"><label class="voice-lbl" for="whisperTier">Model</label><select id="whisperTier" class="prov-key">${opts}</select></div>
+       <div class="prov-row whisper-actions">${s.running ? `<button class="btn-mini" data-whisper-stop>${icon("close", 12)} Stop</button>` : `<button class="btn-mini ok" data-whisper-start${s.binAvailable ? "" : " disabled"}>${icon("expand", 12)} Install &amp; start</button>`}<span class="whisper-status">${status}</span></div>`;
+  } else controls = "";
+  return `<div class="voice-whisper-inner"><div class="voice-whisper-h"><b>Local Whisper</b><span>offline STT on this machine</span></div>
+    <div class="set-note">${icon("info", 12)} <span>${esc(s.summary)}</span></div>${binWarn}${controls}</div>`;
+}
+/** Fill the Local Whisper block from live status (best-effort; empty when unavailable). */
+async function hydrateWhisper(): Promise<void> {
+  const card = $("#whisperCard"); if (!card) return;
+  const s = await bridge.whisperStatus().catch(() => null);
+  card.innerHTML = s ? whisperCardHtml(s) : "";
 }
 /** Populate the Voice card's voice picker (favorites first) from the ElevenLabs account. Best-effort;
  *  shows a note when no key / no voices. Called after the card renders and after the key changes. */
@@ -2890,7 +2968,7 @@ function hydrateSettings(): void {
     fillSec("providers", secProviders(a)); fillSec("others", secOthers(a));
     fillSec("asksage", secAsksage(state.asksage, null)); // inject the ASKSAGE_API_KEY row now that gateway auth is known
     // P-VOICE.1 (ADR-0115): the Voice card needs auth (ElevenLabs key state) + the voice settings, then loads voices.
-    void bridge.voiceSettings().then((vset) => { fillSec("voice", secVoice(a, vset)); void loadVoices(); });
+    void bridge.voiceSettings().then((vset) => { fillSec("voice", secVoice(a, vset)); void loadVoices(); void hydrateWhisper(); });
     renderStatus(); // a just-added/removed key flips the OAuth-vs-key budget-pill gate
   });
   fillSec("sovereignty", secSovereignty()); // P-IDE.1c: only renders a card when China-origin models exist
@@ -2948,6 +3026,28 @@ async function hydrateLocalProviders(): Promise<void> {
   state.localProviders = providers ?? [];
   const vaultRefs = new Set((creds ?? []).map((c) => c.ref));
   fillSec("localProviders", localProvidersCardBody(state.localProviders, vaultRefs, bridge.isElectron));
+  // P-LOCAL.4: a preset picked in the Provider Hub is applied here, once the add form actually exists.
+  if (pendingLocalPreset) { const id = pendingLocalPreset; pendingLocalPreset = null; applyLocalPreset(id); }
+}
+
+// P-LOCAL.4: pre-fill the Local Providers add form from a model preset - append the id (deduped), nudge auth
+// to bearer (the secure default for a shared unified endpoint), open the add form, focus the base URL. Used
+// by the add-form preset chips AND (via pendingLocalPreset) the Provider Hub's Local & self-hosted tiles.
+let pendingLocalPreset: string | null = null;
+function applyLocalPreset(id: string): void {
+  const sb = $("#setBody"); if (!sb) return;
+  (sb.querySelector(".lp-add") as HTMLElement | null)?.classList.add("open");
+  const models = $("#lpModels", sb) as HTMLInputElement | null;
+  if (models) {
+    const cur = models.value.split(/[,\n]/).map((s) => s.trim()).filter(Boolean);
+    if (!cur.includes(id)) cur.push(id);
+    models.value = cur.join(", ");
+  }
+  const auth = $("#lpAuth", sb) as HTMLSelectElement | null;
+  if (auth && auth.value === "none") auth.value = "bearer";
+  const name = $("#lpName", sb) as HTMLInputElement | null;
+  if (name && !name.value.trim()) name.value = "Unified LLM gateway";
+  ($("#lpBaseUrl", sb) as HTMLInputElement | null)?.focus();
 }
 
 /** Add a provider from the card's form: validate → (if authed) store the key in the vault → save the def. */
@@ -6796,8 +6896,17 @@ async function speakText(text: string, btn?: HTMLElement | null): Promise<void> 
 // Click the mic to record, click again to stop. The blob is sent to /api/transcribe (ElevenLabs Scribe
 // or an offline Whisper server, per Settings → Voice) and the transcript is INSERTED into the composer for
 // review before you send — it's ordinary user input, scanned on send like anything typed.
-let micRecorder: MediaRecorder | null = null;
-let micChunks: Blob[] = [];
+// P-STT.3: fluid dictation - a live session (continuous VAD -> per-utterance transcribe -> the words land in
+// the composer as you pause) that auto-stops on a longer silence. The timing brain is the tested pure state
+// machine (dictation.ts); this drives the mic. The transcript is ordinary user input, scanned on send.
+interface DictationSession {
+  stream: MediaStream; ctx: AudioContext; analyser: AnalyserNode;
+  rec: MediaRecorder | null; chunks: Blob[]; mime: string;
+  timer: number; state: DictationState; active: boolean;
+  data: Float32Array<ArrayBuffer>; // reused VAD frame buffer (explicit ArrayBuffer for getFloatTimeDomainData)
+}
+let dictation: DictationSession | null = null;
+const DICTATION_TICK_MS = 100;
 function blobToBase64(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
     const r = new FileReader();
@@ -6806,41 +6915,73 @@ function blobToBase64(blob: Blob): Promise<string> {
     r.readAsDataURL(blob);
   });
 }
+/** RMS level (0..~1) of the current mic frame - drives voice-activity detection. */
+function micRms(sess: DictationSession): number {
+  sess.analyser.getFloatTimeDomainData(sess.data);
+  let sum = 0;
+  for (let i = 0; i < sess.data.length; i++) { const v = sess.data[i]!; sum += v * v; }
+  return Math.sqrt(sum / sess.data.length);
+}
+/** Record ONE utterance; on stop, transcribe it and append to the composer, then - if the session is still
+ *  live - immediately start the next utterance's recorder so no words are dropped between utterances. */
+function startUtterance(sess: DictationSession): void {
+  sess.chunks = [];
+  sess.rec = new MediaRecorder(sess.stream, sess.mime ? { mimeType: sess.mime } : undefined);
+  sess.rec.ondataavailable = (e) => { if (e.data.size) sess.chunks.push(e.data); };
+  sess.rec.onstop = async () => {
+    const type = sess.rec?.mimeType || "audio/webm";
+    const blob = new Blob(sess.chunks, { type });
+    sess.rec = null;
+    if (sess.active) startUtterance(sess); // keep listening for the next utterance right away
+    if (blob.size < 1400) return; // essentially silence - nothing to transcribe
+    const r = await bridge.transcribe(await blobToBase64(blob), blob.type).catch(() => null);
+    if (r?.text) {
+      const ta = $("#input") as HTMLTextAreaElement;
+      ta.value = mergeTranscript(ta.value, r.text); autosize(ta); setSendEnabled();
+    }
+  };
+  sess.rec.start();
+}
+/** End the fluid dictation session: stop the ticker + the final recorder (its onstop transcribes the last
+ *  utterance), release the mic, and clear the UI. Idempotent. */
+async function endDictation(): Promise<void> {
+  const sess = dictation; if (!sess) return;
+  dictation = null; sess.active = false; // active=false BEFORE stop so onstop won't restart the recorder
+  clearInterval(sess.timer);
+  ($("#ctMic") as HTMLElement | null)?.classList.remove("recording");
+  try { if (sess.rec && sess.rec.state === "recording") sess.rec.stop(); } catch { /* already stopped */ }
+  setTimeout(() => { sess.stream.getTracks().forEach((t) => t.stop()); void sess.ctx.close().catch(() => {}); }, 60);
+}
+/** Toggle fluid dictation: click to start hands-free live dictation (utterances land as you pause; it
+ *  auto-stops after a longer silence), click again to stop early. Built on the tested dictation.ts core. */
 async function toggleMicRecording(): Promise<void> {
-  const btn = $("#ctMic");
-  if (micRecorder && micRecorder.state === "recording") { micRecorder.stop(); return; } // second click = stop
-  if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+  if (dictation) { void endDictation(); return; } // click during a session = stop
+  const btn = $("#ctMic") as HTMLElement | null;
+  if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined" || typeof AudioContext === "undefined") {
     showToast({ tone: "warn", title: "No microphone", desc: "This environment can't capture audio.", timeout: 2600 }); return;
   }
   let stream: MediaStream;
   try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
   catch { showToast({ tone: "warn", title: "Microphone blocked", desc: "Allow microphone access to use voice input.", timeout: 2800 }); return; }
-  micChunks = [];
+  const ctx = new AudioContext();
+  try { await ctx.resume(); } catch { /* best-effort under autoplay policy */ }
+  const source = ctx.createMediaStreamSource(stream);
+  const analyser = ctx.createAnalyser();
+  analyser.fftSize = 1024;
+  source.connect(analyser);
   const mime = MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm" : "";
-  micRecorder = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
-  micRecorder.ondataavailable = (e) => { if (e.data.size) micChunks.push(e.data); };
-  micRecorder.onstop = async () => {
-    stream.getTracks().forEach((t) => t.stop());
-    btn?.classList.remove("recording");
-    const type = micRecorder?.mimeType || "audio/webm";
-    micRecorder = null;
-    const blob = new Blob(micChunks, { type });
-    if (!blob.size) return;
-    btn?.classList.add("busy");
-    try {
-      const r = await bridge.transcribe(await blobToBase64(blob), blob.type).catch(() => null);
-      if (r?.text) {
-        const ta = $("#input") as HTMLTextAreaElement;
-        ta.value = (ta.value ? ta.value.replace(/\s*$/, "") + " " : "") + r.text;
-        ta.focus(); autosize(ta); setSendEnabled();
-      } else {
-        showToast({ tone: "warn", title: "No transcript", desc: r?.note || "The speech-to-text engine returned nothing. Check Settings → Voice.", timeout: 3200 });
-      }
-    } finally { btn?.classList.remove("busy"); }
-  };
-  micRecorder.start();
+  const sess: DictationSession = { stream, ctx, analyser, data: new Float32Array(new ArrayBuffer(analyser.fftSize * Float32Array.BYTES_PER_ELEMENT)), rec: null, chunks: [], mime, timer: 0, state: newDictation(), active: true };
+  dictation = sess;
+  startUtterance(sess);
+  sess.timer = window.setInterval(() => {
+    if (!dictation || !dictation.active) return;
+    const r = dictationTick(dictation.state, micRms(dictation), DICTATION_TICK_MS, DICTATION_DEFAULTS);
+    dictation.state = r.state;
+    if (r.action === "flush") { try { dictation.rec?.stop(); } catch { /* between utterances */ } } // onstop transcribes + restarts
+    else if (r.action === "stop") { void endDictation(); }
+  }, DICTATION_TICK_MS);
   btn?.classList.add("recording");
-  showToast({ title: "Recording…", desc: "Click the mic again to stop and transcribe.", timeout: 1800 });
+  showToast({ title: "Listening…", desc: "Speak naturally - your words land as you pause. It stops on a longer silence, or click the mic to stop.", timeout: 2800 });
 }
 
 function openGoalForm(): void {
@@ -9711,7 +9852,28 @@ function wire(): void {
     if (t.closest("#trivReseed")) { await reseedTrivia(t.closest("#trivReseed") as HTMLButtonElement); return; }
     // P-LOCAL.3 (ADR-0135): Local Providers card
     if (t.closest("[data-lp-addtoggle]")) { (t.closest(".lp-add") as HTMLElement | null)?.classList.toggle("open"); return; }
+    // P-LOCAL.4: a preset chip appends its model id to the add-form (click several to serve them behind ONE
+    // unified endpoint), and nudges auth to bearer (the secure default for a shared gateway). Reuses the
+    // existing add/validate/vault flow - the chip only fills the form.
+    const lpPreset = t.closest("[data-lp-preset]") as HTMLElement | null;
+    if (lpPreset) { applyLocalPreset(lpPreset.dataset.lpPreset!); return; }
     if (t.closest("[data-lp-add]")) { await addLocalProviderFromForm(); return; }
+    // P-STT.2b: managed offline Whisper - one button downloads (if needed) + starts the local server + wires STT.
+    if (t.closest("[data-whisper-start]")) {
+      const startBtn = t.closest("[data-whisper-start]") as HTMLButtonElement | null;
+      const tier = ($("#whisperTier", $("#setBody")!) as HTMLSelectElement | null)?.value || undefined;
+      if (startBtn) { startBtn.disabled = true; startBtn.textContent = "Working\u2026"; }
+      showToast({ title: "Setting up local Whisper\u2026", desc: "Downloading the model if needed and starting the offline server; this can take a bit.", timeout: 4000 });
+      // Poll status while the (long) start request runs so the card shows a live download progress bar.
+      const wpoll = window.setInterval(() => { void hydrateWhisper(); }, 500);
+      const wr = await bridge.whisperStart(tier).catch(() => null);
+      window.clearInterval(wpoll);
+      if (wr?.ok) showToast({ tone: "ok", title: "Local Whisper is running", desc: "Offline speech-to-text is live; click the mic to dictate.", timeout: 4000 });
+      else showToast({ tone: "warn", title: "Couldn't start local Whisper", desc: wr?.reason || "See Settings \u2192 Voice.", timeout: 5000 });
+      await hydrateWhisper();
+      return;
+    }
+    if (t.closest("[data-whisper-stop]")) { await bridge.whisperStop().catch(() => null); await hydrateWhisper(); return; }
     if (t.closest("[data-lp-test-form]")) { await testLocalProviderConn(($("#lpBaseUrl", $("#setBody")!) as HTMLInputElement | null)?.value ?? ""); return; }
     const lpTest = t.closest("[data-lp-test]") as HTMLElement | null;
     if (lpTest) { await testLocalProviderConn(lpTest.dataset.url ?? ""); return; }
@@ -9764,6 +9926,8 @@ function wire(): void {
       showToast({ title: "Re-locked", desc: "China-origin models are hidden again.", actions: [{ label: "OK" }], timeout: 2600 });
       return;
     }
+    // P-PROV.2: jump from the Settings Providers card to the dedicated Provider Hub popup.
+    if (t.closest("#openProvHub")) { openProviderHub(); return; }
     // Third-party / non-U.S. "More providers" reveal / re-lock (mirrors the China-origin gate).
     if (t.closest("#thirdPartyAckBtn")) {
       const v = ($("#thirdPartyAckInput", $("#setBody")!) as HTMLInputElement)?.value.trim() ?? "";
@@ -10081,90 +10245,7 @@ function wire(): void {
     const clear = t.closest("[data-clearkey]") as HTMLElement | null;
     if (clear) { await bridge.saveKey(clear.dataset.clearkey!, ""); void renderSettings(); return; }
     const oauth = t.closest("[data-oauth]") as HTMLElement | null;
-    if (oauth) {
-      const oauthId = oauth.dataset.oauth!;
-      // GitHub Copilot (ADR-0210) is a device-code flow whose broker first asks for a GitHub Enterprise
-      // domain (blank = github.com), then shows a one-time code the user enters ON GitHub's device page
-      // (nothing is pasted back here). So drive it in two inline steps: collect the optional domain, then
-      // start the sign-in and surface the code from the broker's output.
-      if (oauthId === "github-copilot") {
-        const card = oauth.closest(".set-card") as HTMLElement | null;
-        if (card && !card.querySelector(".copilot-oauth-box")) {
-          const box = el(`<div class="copilot-oauth-box prov-row" style="margin-top:8px;flex-wrap:wrap;gap:6px">
-            <input class="prov-key" id="ghDomain" type="text" placeholder="GitHub Enterprise domain (blank for github.com)" autocomplete="off" style="font-family:var(--mono)" />
-            <button class="btn-mini ok" id="ghCopilotStart">${icon("expand", 12)} Start Copilot sign-in</button>
-            <div class="copilot-oauth-out" id="ghCopilotOut" style="flex:1 1 100%;font-family:var(--mono);font-size:12px;white-space:pre-wrap;opacity:.9"></div></div>`);
-          card.appendChild(box);
-          const start = $("#ghCopilotStart", card)!;
-          start.addEventListener("click", async () => {
-            const domain = ($("#ghDomain", card) as HTMLInputElement | null)?.value.trim() ?? "";
-            const out = $("#ghCopilotOut", card) as HTMLElement | null;
-            if (out) out.textContent = "Starting sign-in…";
-            const rr = await bridge.oauthLogin("github-copilot", domain);
-            if (rr?.url) void openAuthUrl(rr.url);
-            // The broker prints the verification URL + the one-time code; show that text so the user can
-            // read the code and type it into the opened GitHub device page. Nothing is pasted back here.
-            if (out) out.textContent = (rr?.output?.trim() || "Follow the sign-in in your browser.") + "\n\nEnter the code above on the opened GitHub page. This card updates automatically once Copilot is connected.";
-            showToast({ title: "Finish in your browser", desc: "Enter the one-time code on the GitHub device page, then authorize Copilot.", actions: [{ label: "OK" }], timeout: 0 });
-            setTimeout(() => void renderSettings(), 4000);
-            void pollOauthThenRefresh("github-copilot");
-          });
-          ($("#ghDomain", card) as HTMLInputElement | null)?.focus();
-        }
-        return;
-      }
-      const r = await bridge.oauthLogin(oauthId);
-      if (r?.url) void openAuthUrl(r.url);
-      // Device-flow providers show a code on the provider's page that the user must paste back. Redirect-flow
-      // providers (OpenAI, Anthropic, Google) complete silently via the localhost callback. (GitHub Copilot
-      // is also device-flow but has its own two-step branch above — it isn't listed here.)
-      const DEVICE_FLOW_IDS = new Set(["xai-oauth", "openai-codex-device"]);
-      if (DEVICE_FLOW_IDS.has(oauthId)) {
-        showToast({
-          title: "Paste the code from the sign-in page",
-          desc: "Copy the code shown in your browser, paste it below, and click Submit. If no page opened, use “Open sign-in page” below.",
-          actions: r?.url ? authUrlActions(r.url) : [{ label: "OK" }],
-          timeout: 0, // persistent until dismissed
-        });
-        // Inject a device-code input into the provider card itself
-        const card = oauth.closest(".set-card") as HTMLElement | null;
-        if (card) {
-          let box = card.querySelector(".oauth-device-box") as HTMLElement | null;
-          if (!box) {
-            box = el(`<div class="oauth-device-box prov-row" style="margin-top:8px">
-              <input class="prov-key" id="deviceCode_${oauthId}" type="text" placeholder="Paste device code here…" autocomplete="off" style="font-family:var(--mono)" />
-              <button class="btn-mini ok" id="deviceSubmit_${oauthId}">${icon("check", 12)} Submit</button></div>`);
-            card.appendChild(box);
-            const submit = $(`#deviceSubmit_${oauthId}`, card)!;
-            submit.addEventListener("click", async () => {
-              const inp = $(`#deviceCode_${oauthId}`, card) as HTMLInputElement;
-              const code = inp?.value.trim();
-              if (!code) return;
-              const sr = await bridge.oauthCode(oauthId, code);
-              if (sr?.sent) {
-                showToast({ title: "Code sent", desc: "Waiting for the provider to verify…", timeout: 4000 });
-                box?.remove();
-              } else {
-                showToast({ tone: "danger", title: "Couldn't send code", desc: sr?.reason ?? "The broker may have exited. Try again.", actions: [{ label: "OK" }], timeout: 6000 });
-              }
-            });
-          }
-          ($(`#deviceCode_${oauthId}`, card) as HTMLInputElement)?.focus();
-        }
-      } else {
-        showToast({
-          title: "Finish signing in in your browser",
-          desc: r?.url
-            ? "A sign-in page should have opened. If it didn't, click “Open sign-in page” (or Copy URL and paste it into your browser). The model list updates automatically once you finish."
-            : (r?.output?.slice(0, 160) || "Follow omp's prompt in the GUI server window."),
-          actions: r?.url ? authUrlActions(r.url) : [{ label: "OK" }],
-          timeout: r?.url ? 0 : 6000, // persist while the user completes the browser step
-        });
-      }
-      setTimeout(() => void renderSettings(), 4000);
-      void pollOauthThenRefresh(oauthId); // watch for completion, then refresh models
-      return;
-    }
+    if (oauth) { await startProviderOauth(oauth.dataset.oauth!, oauth.closest(".set-card"), () => void renderSettings()); return; }
     const logout = t.closest("[data-oauth-logout]") as HTMLElement | null;
     if (logout) { await bridge.oauthLogout(logout.dataset.oauthLogout!); void renderSettings(); return; }
     const logoutAll = t.closest("[data-oauth-logout-all]") as HTMLElement | null;
@@ -10424,6 +10505,7 @@ function runCommand(c: OmpCommand): void {
 const palette = createPalette(() => {
   const acts: Action[] = [
     { id: "cfg", title: "Choose model · mode · thinking…", icon: "spark", hint: "config", run: () => openConfigPopover($("#modelBadge")!) },
+    { id: "prov", title: "Connect a provider…", icon: "expand", hint: "providers", run: () => openProviderHub() }, // P-PROV.2: Provider Hub
     { id: "sec", title: "Open Security panel", icon: "shield", hint: "panel", run: () => focusInspector("security") },
     { id: "mem", title: "Open Memory & context panel", icon: "savings", hint: "panel", run: () => focusInspector("memory") },
     { id: "mkt", title: "Open Plugin Marketplace", icon: "market", hint: "popup", run: () => openMarketplace() }, // P-MARKET.1
@@ -10474,14 +10556,18 @@ function loadCachedConfig(): void {
     }
   } catch { /* ignore */ }
 }
-// P-IDE.1d: the live config can lag omp's session warm-up. getConfig() on the backend never blocks now
-// (it returns the current config and warms in the background), so the renderer RE-POLLS until the live
-// list lands. If it never does (a wedged session), we stop after CONFIG_WARM_MAX_TRIES and clear the
-// "updating…" spinner rather than leaving it frozen forever — the cached list stays usable.
-const CONFIG_WARM_MAX_TRIES = 6;
-const CONFIG_WARM_POLL_MS = 1500;
+// P-IDE.1d: the live config lags omp's session warm-up. getConfig() on the backend never blocks (it
+// returns the current config and warms in the background), so the renderer RE-POLLS until the live list
+// lands, then STOPS after a bounded budget so a wedged session doesn't spin "updating…" forever. The
+// budget is PER WARM CYCLE (config_warm.ts): a DELIBERATE load (boot, OAuth connect, key change, opening
+// a still-warming picker, manual refresh) re-arms it via newCycle=true; the re-poll continuation spends
+// it via newCycle=false. Before this, a monotonic lifetime counter reset only on success meant a slow
+// cold boot that spent the budget left the post-OAuth refresh (cold omp again) unable to retry, so the
+// just-connected provider's models never appeared until a manual refresh.
 let configWarmTries = 0;
-async function loadConfig(): Promise<void> {
+let configWarmTimer: number | null = null; // the single scheduled re-poll (one chain at a time)
+async function loadConfig(newCycle = true): Promise<void> {
+  if (newCycle && configWarmTimer !== null) { window.clearTimeout(configWarmTimer); configWarmTimer = null; }
   try {
     const live = await bridge.config();
     state.commands = await bridge.commands();
@@ -10493,19 +10579,24 @@ async function loadConfig(): Promise<void> {
     // an empty list - keep the cached list visible (spinner stays) rather than blanking the picker. When
     // omp IS ready, the live config replaces the cache (so a revoked key/OAuth's models drop out).
     const liveModel = live?.find((c) => c.id === "model");
-    if (live && live.length && liveModel && liveModel.options.length) {
-      state.config = live;
+    const hasLiveModels = !!(live && live.length && liveModel && liveModel.options.length);
+    const step = warmStep(configWarmTries, hasLiveModels, newCycle);
+    configWarmTries = step.tries;
+    if (step.action === "adopt") {
+      state.config = live!;
       state.configCached = false;
+      state.configWarming = false;
       cacheConfig();
-      configWarmTries = 0;
-    } else if (configWarmTries < CONFIG_WARM_MAX_TRIES) {
-      // Session still warming — re-poll so the picker self-heals when the live list lands (non-blocking).
-      configWarmTries++;
-      setTimeout(() => void loadConfig(), CONFIG_WARM_POLL_MS);
-    } else if (state.configCached) {
+    } else if (step.action === "repoll") {
+      // Session still warming; keep the spinner up and re-poll so the picker self-heals when the live
+      // list lands (non-blocking). newCycle=false: this continuation spends the cycle's budget.
+      state.configWarming = true;
+      configWarmTimer = window.setTimeout(() => { configWarmTimer = null; void loadConfig(false); }, CONFIG_WARM_POLL_MS);
+    } else {
       // Gave up warming (session likely wedged). Stop the spinner so it isn't stuck on "updating…" forever;
-      // the cached list stays usable and "Refresh models" retries. Root cause is tracked separately.
+      // whatever list we have stays usable and "Refresh models" / reopening the picker re-arms a new cycle.
       state.configCached = false;
+      state.configWarming = false;
     }
     const model = state.config.find((c) => c.id === "model");
     if (model) { state.model = model.currentValue; const mn = $("#modelName"); if (mn) mn.textContent = modelLabel(model.currentValue); }
@@ -10769,6 +10860,7 @@ const MODEL_INFO: Record<string, ModelInfo> = {
   // Anthropic (direct)
   "claude-fable-5": { exp: 5, iq: 5, eff: "Frontier capability at a premium price - worth it only when the task needs the ceiling.", best: "The hardest novel reasoning and long-horizon agentic work.", ctx: "1M" },
   "claude-mythos-5": { exp: 5, iq: 5, eff: "Frontier capability at a premium price - worth it only when the task needs the ceiling.", best: "The hardest novel reasoning and long-horizon agentic work.", ctx: "1M" },
+  "claude-opus-5": { exp: 3, iq: 5, eff: "Frontier-class reasoning at about half the prior Opus price; a low/medium/high effort toggle trades cost for depth.", best: "Hard bugs, architecture, and long-horizon agentic coding.", ctx: "1M" },
   "claude-opus-4-8": { exp: 4, iq: 5, eff: "Top-tier reasoning with strong value at the Opus tier.", best: "Hard bugs, architecture, multi-file refactors.", ctx: "1M" },
   "claude-opus-4-7": { exp: 4, iq: 5, eff: "Near-4.8 capability for a little less.", best: "Complex coding when 4.8 is overkill.", ctx: "1M" },
   "claude-opus-4-6": { exp: 4, iq: 4, eff: "Prior Opus - very capable, good to pin to.", best: "Complex work needing a stable version.", ctx: "1M" },
@@ -10956,16 +11048,228 @@ let cfgClose: (() => void) | null = null;
 // everything the HTML derives from: the curated list, selection, query, collapse state, gov ordering.
 let pickerMemo: { key: string; html: string } | null = null;
 
+// ── P-PROV.2: provider OAuth connect (shared by Settings + the Provider Hub) ──────────────────────
+// Device-flow providers show a one-time code on the provider's page; redirect-flow ones (OpenAI, Anthropic,
+// Google) complete silently via the localhost callback. GitHub Copilot is its own two-step (domain → code).
+// `cardEl` is the container the device/copilot input boxes attach to (a Settings .set-card or a hub
+// .provhub-config); `refresh` re-renders the caller's surface after the browser step.
+const DEVICE_FLOW_IDS: Record<string, true> = { "xai-oauth": true, "openai-codex-device": true };
+async function startProviderOauth(oauthId: string, cardEl: HTMLElement | null, refresh: () => void): Promise<void> {
+  if (oauthId === "github-copilot") {
+    // GitHub Copilot (ADR-0210): the broker first asks for a GitHub Enterprise domain (blank = github.com),
+    // then prints a one-time code the user enters ON GitHub's device page (nothing is pasted back here).
+    if (cardEl && !cardEl.querySelector(".copilot-oauth-box")) {
+      const box = el(`<div class="copilot-oauth-box prov-row" style="margin-top:8px;flex-wrap:wrap;gap:6px">
+        <input class="prov-key" id="ghDomain" type="text" placeholder="GitHub Enterprise domain (blank for github.com)" autocomplete="off" style="font-family:var(--mono)" />
+        <button class="btn-mini ok" id="ghCopilotStart">${icon("expand", 12)} Start Copilot sign-in</button>
+        <div class="copilot-oauth-out" id="ghCopilotOut" style="flex:1 1 100%;font-family:var(--mono);font-size:12px;white-space:pre-wrap;opacity:.9"></div></div>`);
+      cardEl.appendChild(box);
+      const start = $("#ghCopilotStart", cardEl)!;
+      start.addEventListener("click", async () => {
+        const domain = ($("#ghDomain", cardEl) as HTMLInputElement | null)?.value.trim() ?? "";
+        const out = $("#ghCopilotOut", cardEl) as HTMLElement | null;
+        if (out) out.textContent = "Starting sign-in\u2026";
+        const rr = await bridge.oauthLogin("github-copilot", domain);
+        if (rr?.url) void openAuthUrl(rr.url);
+        if (out) out.textContent = (rr?.output?.trim() || "Follow the sign-in in your browser.") + "\n\nEnter the code above on the opened GitHub page. This card updates automatically once Copilot is connected.";
+        showToast({ title: "Finish in your browser", desc: "Enter the one-time code on the GitHub device page, then authorize Copilot.", actions: [{ label: "OK" }], timeout: 0 });
+        setTimeout(refresh, 4000);
+        void pollOauthThenRefresh("github-copilot");
+      });
+      ($("#ghDomain", cardEl) as HTMLInputElement | null)?.focus();
+    }
+    return;
+  }
+  const r = await bridge.oauthLogin(oauthId);
+  if (r?.url) void openAuthUrl(r.url);
+  if (DEVICE_FLOW_IDS[oauthId]) {
+    showToast({
+      title: "Paste the code from the sign-in page",
+      desc: "Copy the code shown in your browser, paste it below, and click Submit. If no page opened, use \u201cOpen sign-in page\u201d below.",
+      actions: r?.url ? authUrlActions(r.url) : [{ label: "OK" }],
+      timeout: 0,
+    });
+    if (cardEl) {
+      let box = cardEl.querySelector(".oauth-device-box") as HTMLElement | null;
+      if (!box) {
+        box = el(`<div class="oauth-device-box prov-row" style="margin-top:8px">
+          <input class="prov-key" id="deviceCode_${oauthId}" type="text" placeholder="Paste device code here\u2026" autocomplete="off" style="font-family:var(--mono)" />
+          <button class="btn-mini ok" id="deviceSubmit_${oauthId}">${icon("check", 12)} Submit</button></div>`);
+        cardEl.appendChild(box);
+        const submit = $(`#deviceSubmit_${oauthId}`, cardEl)!;
+        submit.addEventListener("click", async () => {
+          const code = ($(`#deviceCode_${oauthId}`, cardEl) as HTMLInputElement)?.value.trim();
+          if (!code) return;
+          const sr = await bridge.oauthCode(oauthId, code);
+          if (sr?.sent) { showToast({ title: "Code sent", desc: "Waiting for the provider to verify\u2026", timeout: 4000 }); box?.remove(); }
+          else { showToast({ tone: "danger", title: "Couldn't send code", desc: sr?.reason ?? "The broker may have exited. Try again.", actions: [{ label: "OK" }], timeout: 6000 }); }
+        });
+      }
+      ($(`#deviceCode_${oauthId}`, cardEl) as HTMLInputElement)?.focus();
+    }
+  } else {
+    showToast({
+      title: "Finish signing in in your browser",
+      desc: r?.url
+        ? "A sign-in page should have opened. If it didn't, click \u201cOpen sign-in page\u201d (or Copy URL and paste it into your browser). The model list updates automatically once you finish."
+        : (r?.output?.slice(0, 160) || "Follow omp's prompt in the GUI server window."),
+      actions: r?.url ? authUrlActions(r.url) : [{ label: "OK" }],
+      timeout: r?.url ? 0 : 6000,
+    });
+  }
+  setTimeout(refresh, 4000);
+  void pollOauthThenRefresh(oauthId);
+}
+
+// ── P-PROV.2: the Provider Hub - a dedicated, discoverable popup listing every provider omp offers as
+// same-size, logo'd tiles grouped by section; clicking a tile drops its OAuth/key config inline. The
+// open-weight / non-U.S. section stays hidden behind the typed ACKNOWLEDGE (provider_hub.buildHubSections).
+let hubClose: (() => void) | null = null;
+function hubTileHtml(id: string, name: string, configured: boolean, canOauth: boolean): string {
+  const badge = configured
+    ? `<span class="provhub-badge ok">${icon("check", 10)} connected</span>`
+    : `<span class="provhub-badge">${canOauth ? "sign in / key" : "add key"}</span>`;
+  return `<div class="provhub-item" data-hub-item="${esc(id)}">
+    <button class="provhub-tile" type="button" data-hub-tile="${esc(id)}">
+      <span class="provhub-nm">${esc(name)}</span>${badge}${icon("chevron", 14)}
+    </button>
+    <div class="provhub-config"></div></div>`;
+}
+function hubSectionHtml(sec: HubSection): string {
+  const head = `<div class="provhub-sec-h"><b>${esc(sec.title)}</b><span>${esc(sec.subtitle)}</span>${
+    sec.key === "open" && !sec.locked ? `<button class="btn-link" id="hubRelock">Re-lock</button>` : ""}</div>`;
+  if (sec.key === "open" && sec.locked) {
+    return `<div class="provhub-sec">${head}
+      <div class="set-note danger">${icon("shield", 12)} <b>Open-weight &amp; non-U.S. providers</b> - DeepSeek, Kimi/Moonshot, Qwen, GLM (Z.AI), MiniMax, Groq, OpenRouter. These route to third-party or non-U.S. servers (or aggregate many origins) with <b>no U.S. data-sovereignty guarantee</b>; review each provider's terms before use.</div>
+      <div class="china-unlock"><input id="hubAckInput" placeholder="Type ACKNOWLEDGE to reveal" autocomplete="off" spellcheck="false" /><button class="btn-mini" id="hubAckBtn" disabled>Reveal</button></div></div>`;
+  }
+  const tiles = sec.providers.map((p) => hubTileHtml(p.id, p.name, p.configured, p.canOauth)).join("") || `<div class="cfg-empty">none available</div>`;
+  return `<div class="provhub-sec">${head}<div class="provhub-grid">${tiles}</div></div>`;
+}
+// P-LOCAL.4: the hub's "Local & self-hosted" section - the user's configured self-hosted endpoints, plus an
+// "Add local models" tile that opens Settings -> Local Providers (where the one-click presets + add form live).
+function hubLocalSectionHtml(): string {
+  const configured = (state.localProviders ?? []).map((p) => {
+    const n = p.models?.length ?? 0;
+    return `<div class="provhub-item"><button class="provhub-tile" type="button" data-hub-local-open="${esc(p.id)}">
+      <span class="provhub-nm">${esc(p.name)}</span><span class="provhub-badge ok">${n} model${n === 1 ? "" : "s"}</span>${icon("chevron", 14)}</button></div>`;
+  }).join("");
+  // One-click presets: clicking one opens Settings -> Local Providers with the model pre-filled into the
+  // unified-endpoint add form (via pendingLocalPreset), where the user enters the NGINX base URL + token.
+  const presets = LOCAL_MODEL_PRESETS.map((m) =>
+    `<div class="provhub-item"><button class="provhub-tile" type="button" data-hub-local-preset="${esc(m.id)}">
+      <span class="provhub-nm">${esc(m.name)}</span><span class="provhub-badge">${esc(m.params)}</span>${icon("chevron", 14)}</button></div>`).join("");
+  const addTile = `<div class="provhub-item"><button class="provhub-tile" type="button" data-hub-local-add>
+    <span class="provhub-nm">${icon("plus", 13)} Add a custom endpoint</span><span class="provhub-badge">manual</span>${icon("chevron", 14)}</button></div>`;
+  return `<div class="provhub-sec"><div class="provhub-sec-h"><b>Local &amp; self-hosted</b><span>your hardware \u00b7 unified NGINX endpoint</span></div>
+    <div class="provhub-grid">${configured}${presets}${addTile}</div></div>`;
+}
+function openProviderHub(onClose?: () => void): void {
+  hubClose?.();
+  const ov = el(`<div id="provHub" class="modal-ov">
+    <div class="modal provhub" role="dialog" aria-modal="true" aria-labelledby="provHubTitle">
+      <div class="provhub-head">
+        <div class="modal-icon">${icon("spark", 22)}</div>
+        <div class="provhub-head-tx"><h2 class="modal-title" id="provHubTitle">Connect a provider</h2>
+          <p class="modal-desc">Sign in with a subscription (OAuth) or paste an API key. Models appear in the picker automatically.</p></div>
+        <button class="icon-btn provhub-x" id="provHubClose" aria-label="Close">${icon("close", 16)}</button>
+      </div>
+      <div class="provhub-body" id="provHubBody"></div>
+    </div></div>`);
+  document.body.appendChild(ov);
+  const body = $("#provHubBody", ov)!;
+  const redraw = () => { body.innerHTML = buildHubSections(state.auth, { thirdPartyAck: state.thirdPartyAck }).map(hubSectionHtml).join("") + hubLocalSectionHtml(); };
+  const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") close(); };
+  const close = () => { ov.remove(); hubClose = null; document.removeEventListener("keydown", onKey); onClose?.(); };
+  hubClose = close;
+  redraw();
+  // P-LOCAL.4: pull the user's configured self-hosted endpoints so the "Local & self-hosted" section lists them.
+  void bridge.localProvidersList().then((list) => { if (list) { state.localProviders = list; redraw(); } }).catch(() => { /* best-effort */ });
+  document.addEventListener("keydown", onKey);
+  $("#provHubClose", ov)!.addEventListener("click", close);
+  ov.addEventListener("click", (e) => { if (e.target === ov) close(); }); // click-away on the backdrop
+  const refreshAuth = async () => { const a = await bridge.auth().catch(() => null); if (a) { state.auth = a; renderStatus(); } };
+  // Enable the ACKNOWLEDGE reveal only when the exact word is typed (mirrors the Settings gate).
+  body.addEventListener("input", (e) => {
+    if ((e.target as HTMLElement).id === "hubAckInput") {
+      const b = $("#hubAckBtn", body) as HTMLButtonElement | null;
+      if (b) b.disabled = (e.target as HTMLInputElement).value.trim() !== "ACKNOWLEDGE";
+    }
+  });
+  body.addEventListener("click", async (e) => {
+    const t = e.target as HTMLElement;
+    if (t.closest("#hubAckBtn")) {
+      if (($("#hubAckInput", body) as HTMLInputElement)?.value.trim() !== "ACKNOWLEDGE") { showToast({ title: "Type ACKNOWLEDGE", desc: "Confirm you accept the third-party / non-U.S. data risk.", timeout: 3000 }); return; }
+      state.thirdPartyAck = !!(await bridge.setThirdPartyAck(true))?.acknowledged;
+      if (state.settingsOpen) fillSec("others", secOthers(state.auth)); // keep Settings in sync
+      redraw();
+      return;
+    }
+    if (t.closest("#hubRelock")) {
+      state.thirdPartyAck = !!(await bridge.setThirdPartyAck(false))?.acknowledged;
+      if (state.settingsOpen) fillSec("others", secOthers(state.auth));
+      redraw();
+      return;
+    }
+    // Provider config actions (own-scoped: the hub lives outside #setBody, so its own handlers do the work).
+    const clear = t.closest("[data-clearkey]") as HTMLElement | null;
+    if (clear) { await bridge.saveKey(clear.dataset.clearkey!, ""); await refreshAuth(); redraw(); return; }
+    const save = t.closest("[data-savekey]") as HTMLElement | null;
+    if (save) {
+      const env = save.dataset.savekey!;
+      const val = ($(`.prov-key[data-env="${env}"]`, body) as HTMLInputElement | null)?.value.trim() ?? "";
+      if (!val) { showToast({ tone: "warn", title: "Nothing to save", desc: "Paste a key first.", timeout: 2000 }); return; }
+      await bridge.saveKey(env, val);
+      showToast({ title: `${env} saved`, desc: "Stored on this machine and passed to omp. New turns use it.", timeout: 2800 });
+      await refreshAuth(); await loadConfig(); redraw();
+      return;
+    }
+    const oauth = t.closest("[data-oauth]") as HTMLElement | null;
+    if (oauth) { await startProviderOauth(oauth.dataset.oauth!, oauth.closest(".provhub-config"), () => { void refreshAuth().then(redraw); }); return; }
+    const logout = t.closest("[data-oauth-logout]") as HTMLElement | null;
+    if (logout) { await bridge.oauthLogout(logout.dataset.oauthLogout!); await refreshAuth(); redraw(); return; }
+    // P-LOCAL.4: a preset tile pre-fills the add form (via pendingLocalPreset); a configured tile / the
+    // "Add a custom endpoint" tile just opens Settings -> Local Providers. All route to the one add form.
+    const lpPresetTile = t.closest("[data-hub-local-preset]") as HTMLElement | null;
+    if (lpPresetTile) { pendingLocalPreset = lpPresetTile.dataset.hubLocalPreset!; close(); openSettingsToLocalProviders(); return; }
+    if (t.closest("[data-hub-local-add]") || t.closest("[data-hub-local-open]")) { close(); openSettingsToLocalProviders(); return; }
+    // Expand/collapse a tile's inline config (ignore clicks already inside an expanded config).
+    const tile = t.closest("[data-hub-tile]") as HTMLElement | null;
+    if (tile && !t.closest(".provhub-config")) {
+      const wrap = tile.closest(".provhub-item") as HTMLElement;
+      const opening = !wrap.classList.contains("open");
+      for (const other of $$(".provhub-item.open", body)) other.classList.remove("open"); // accordion
+      if (opening) {
+        wrap.classList.add("open");
+        const id = tile.dataset.hubTile!;
+        const p = [...(state.auth?.gateway ?? []), ...(state.auth?.majors ?? []), ...(state.auth?.others ?? [])].find((x) => x.id === id);
+        const cfg = wrap.querySelector(".provhub-config") as HTMLElement | null;
+        if (cfg && p) cfg.innerHTML = provCard(p); // reuse the exact Settings config body (OAuth / key / fields)
+      }
+    }
+  });
+}
+
 function openConfigPopover(anchor: HTMLElement): void {
   cfgClose?.(); // close any popover already open
   const model = state.config.find((c) => c.id === "model");
   const think = state.config.find((c) => c.id === "thinking");
   const models = model ? curatedModels(model) : [];
+  // P-IDE.1d: the live list can lag omp's warm-up (cold boot / just-connected provider). "pending" = no
+  // adopted live list yet. Render the model section anyway (spinner + a "Loading models…" list) so the
+  // picker NEVER opens blank, and kick a RE-ARMED warm cycle so opening it drives the refresh (pickerRedraw
+  // swaps the real list in when it lands). Fully-live path is untouched (no kick, no spinner).
+  const modelsPending = state.configCached || state.configWarming || !(model && model.options.length);
+  const showModel = !!model || modelsPending;
+  if (modelsPending) void loadConfig(); // deliberate open → newCycle=true re-arms the retry budget
 
-  const modelSec = model ? `<div class="cfg-sec">
-      <div class="cfg-lbl">Model <span class="cur">${esc(modelLabel(model.currentValue))}</span><span class="cfg-loading" id="cfgLoading"${state.configCached ? "" : " hidden"}><span class="cfg-spin"></span>updating…</span></div>
-      <div class="cfg-search">${icon("search", 15)}<input id="cfgModelSearch" placeholder="Search ${models.length} models…" /></div>
-      <div class="cfg-list" id="cfgModelList"></div></div>` : "";
+  const modelCur = model ? modelLabel(model.currentValue) : modelLabel(state.model);
+  const modelPh = models.length ? `Search ${models.length} models…` : "Search models…";
+  const modelSec = showModel ? `<div class="cfg-sec">
+      <div class="cfg-lbl">Model <span class="cur">${esc(modelCur)}</span><span class="cfg-loading" id="cfgLoading"${modelsPending ? "" : " hidden"}><span class="cfg-spin"></span>updating…</span></div>
+      <div class="cfg-search">${icon("search", 15)}<input id="cfgModelSearch" placeholder="${esc(modelPh)}" /></div>
+      <div class="cfg-list" id="cfgModelList"></div>
+      <button class="cfg-provhub" id="cfgAddProv" type="button" data-tip="Connect a provider|Open the Provider Hub - sign in (OAuth) or paste a key. New providers' models show up here." data-tip-side="top">${icon("expand", 13)} Add or manage providers</button></div>` : "";
   const modeSec = `<div class="cfg-sec"><div class="cfg-lbl">Mode</div>
       <div class="seg" data-cfg="mode">${MODE_UI_OPTS.map((o) =>
         `<button class="${o.value === state.uiMode ? "on" : ""}" data-val="${esc(o.value)}" data-tip="${esc(o.name)}|${esc(MODE_DESC[o.value] ?? "")}" data-tip-side="top">${esc(o.name)}</button>`).join("")}</div></div>`;
@@ -10981,23 +11285,32 @@ function openConfigPopover(anchor: HTMLElement): void {
   cfgClose = close;
 
   // searchable model list
-  if (model) {
+  if (showModel) {
     const list = $("#cfgModelList", node)!;
     const search = $("#cfgModelSearch", node) as HTMLInputElement;
     // P-IDE.1/1d: collapsible family sections; search filters across all families. draw() recomputes
-    // from the LIVE state.config each call, so the cold-boot refresh (pickerRedraw) swaps the cached
-    // list for the live one in place and clears the "updating…" spinner.
+    // from the LIVE state.config each call, so the cold-boot refresh (pickerRedraw) swaps the warming
+    // placeholder / cached list for the live one in place and clears the "updating…" spinner.
     const draw = (q = "") => {
       const m = state.config.find((c) => c.id === "model");
       const list2 = m ? curatedModels(m) : [];
-      const cur = m?.currentValue ?? model.currentValue;
+      const cur = m?.currentValue ?? model?.currentValue ?? state.model;
+      const warming = state.configCached || state.configWarming;
+      const ld = $("#cfgLoading", node) as HTMLElement | null; if (ld) ld.hidden = !warming;
+      if (!list2.length) {
+        // No live models yet: a loading affordance while a warm cycle runs, else an actionable empty state.
+        list.innerHTML = `<div class="cfg-empty">${warming ? "Loading models…" : "No models yet. Connect a provider, then Refresh."}</div>`;
+        search.placeholder = "Search models…";
+        return;
+      }
       const key = `${list2.map((o) => o.value).join(",")}|${cur}|${q}|${[...collapsedFamilies()].sort().join(",")}|${state.asksage?.configured ? 1 : 0}|${favsOf().join(",")}`; // P-FAV.1: stars invalidate the memo
       if (pickerMemo?.key !== key) pickerMemo = { key, html: familyListHTML(list2, cur, q) }; // P-PERF.5 memo
       list.innerHTML = pickerMemo.html;
       search.placeholder = `Search ${list2.length} models…`;
-      const ld = $("#cfgLoading", node) as HTMLElement | null; if (ld) ld.hidden = !state.configCached;
     };
     draw();
+    // P-PROV.2: the always-visible footer opens the Provider Hub (closing the picker first).
+    $("#cfgAddProv", node)?.addEventListener("click", () => { close(); openProviderHub(); });
     pickerRedraw = () => draw(search.value); // refresh when live config lands (cold-boot cache → live)
     attachModelTips(list); // premium per-model hover cards (delegated → survives re-render)
     search.addEventListener("input", (e) => draw((e.target as HTMLInputElement).value));
