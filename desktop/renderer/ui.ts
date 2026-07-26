@@ -7,6 +7,7 @@
 import { $, el } from "./dom.ts";
 import { icon } from "./icons.ts";
 import { esc } from "./format.ts";
+import { placePopover } from "./popover_place.ts"; // P-VOICE.2 (ADR-0246): flip + height-cap math, testable
 
 // ───────────────────────── tooltip ─────────────────────────
 // Markup: data-tip="Title|Description"  (Title optional)  data-tip-icon="shield"
@@ -157,16 +158,27 @@ export function createPalette(getActions: () => Action[]) {
 
 // ───────────────────────── anchored popover ─────────────────────────
 // A managed floating card anchored to an element; closes on outside-click / Esc.
-export function popover(anchor: HTMLElement, inner: string, onClose?: () => void): { node: HTMLElement; close: () => void } {
+// P-VOICE.2 (ADR-0246): placement is re-runnable. A card whose CONTENT arrives after it opens (the voice
+// picker paints a skeleton, then the fetched voice list) grows after the first measurement, so a card
+// anchored to the bottom-of-window composer would grow straight off the bottom. Callers that repaint MUST
+// call `reposition()` afterwards; placePopover() also caps the height so a tall card scrolls, never clips.
+export function popover(anchor: HTMLElement, inner: string, onClose?: () => void): { node: HTMLElement; close: () => void; reposition: () => void } {
   const node = el(`<div class="popover" role="dialog">${inner}</div>`);
   document.body.appendChild(node);
-  const r = anchor.getBoundingClientRect();
-  const pr = node.getBoundingClientRect();
-  let x = Math.min(r.left, window.innerWidth - pr.width - 10);
-  let y = r.bottom + 8;
-  if (y + pr.height > window.innerHeight - 10) y = Math.max(10, r.top - pr.height - 8);
-  node.style.left = `${Math.max(10, x)}px`;
-  node.style.top = `${y}px`;
+  const reposition = (): void => {
+    node.style.maxHeight = ""; // measure the NATURAL height, not the cap left by the previous pass
+    const a = anchor.getBoundingClientRect();
+    const c = node.getBoundingClientRect();
+    const p = placePopover({
+      anchor: { top: a.top, bottom: a.bottom, left: a.left },
+      card: { width: c.width, height: c.height },
+      viewport: { width: window.innerWidth, height: window.innerHeight },
+    });
+    node.style.left = `${p.left}px`;
+    node.style.top = `${p.top}px`;
+    node.style.maxHeight = `${p.maxHeight}px`;
+  };
+  reposition();
   requestAnimationFrame(() => node.classList.add("show"));
   const close = () => {
     node.classList.remove("show");
@@ -178,7 +190,7 @@ export function popover(anchor: HTMLElement, inner: string, onClose?: () => void
   const outside = (e: MouseEvent) => { if (!node.contains(e.target as Node) && !anchor.contains(e.target as Node)) close(); };
   const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") close(); };
   setTimeout(() => { document.addEventListener("mousedown", outside, true); document.addEventListener("keydown", onKey, true); }, 0);
-  return { node, close };
+  return { node, close, reposition };
 }
 
 // ───────────────────────── toast / popover ─────────────────────────

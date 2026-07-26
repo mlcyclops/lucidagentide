@@ -1646,7 +1646,10 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .pal-empty{padding:18px;text-align:center;color:var(--txt-4);font-size:13px}
 
 /* ───────────────────────── config popover (model / mode / thinking) ───────────────────────── */
-.popover{position:fixed;z-index:95;width:366px;background:var(--bg-1);background-image:var(--emboss,none);
+/* P-VOICE.2 (ADR-0246): placePopover() sets an inline max-height when the card is taller than the room on
+   its side of the anchor; without overflow the card would simply be cut off instead of scrolling. */
+.popover{position:fixed;z-index:95;width:366px;overflow-y:auto;overscroll-behavior:contain;
+  background:var(--bg-1);background-image:var(--emboss,none);
   border:1px solid var(--line-strong);border-radius:14px;
   box-shadow:var(--shadow-lg,var(--shadow)),0 0 0 1px rgba(255,255,255,.02) inset;
   opacity:0;transform:translateY(-6px) scale(.985);transform-origin:50% 0;
@@ -1783,6 +1786,10 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
   transform:translateY(-1px);box-shadow:0 4px 12px -5px rgba(0,0,0,.55),inset 0 1px 0 rgba(255,255,255,.06)}
 /* P-IDE.2: a bundled skill is active - highlight the Skills button (accent border + tint) */
 .ctool.on{border-color:var(--accent);color:var(--txt);background:var(--accent-dim)}
+/* P-VOICE.3: conversation mode is a STRONGER state than auto-speak - the mic opens on its own between
+   turns, so the chip breathes to make "this thing is listening to the room" impossible to miss. */
+.ctool.conv{border-color:var(--accent-2);animation:convPulse 2.4s ease-in-out infinite}
+@keyframes convPulse{0%,100%{box-shadow:0 0 0 0 color-mix(in srgb,var(--accent-2) 40%,transparent)}50%{box-shadow:0 0 0 3px transparent}}
 .ctool.on .ic{color:var(--accent-2)}
 .ctool:active{transform:translateY(.5px) scale(.97);
   box-shadow:inset 0 2px 4px rgba(0,0,0,.3);transition-duration:var(--t-fast)}
@@ -1807,6 +1814,91 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .voice-lbl{flex:none;width:82px;font-size:12px;color:var(--txt-3)}
 .voice-row .prov-key{flex:1}
 .voice-pick .btn-mini{flex:none}
+.voice-check{flex:1;display:flex;align-items:center;gap:8px;font-size:12px;color:var(--txt-2);cursor:pointer}
+.voice-check input{flex:none;accent-color:var(--accent-2);cursor:pointer}
+/* P-VOICE.2 (ADR-0246): the "a reply is being read aloud" chip - a breathing dot, a state label, and a
+   one-click stop. Mirrors the dictation waveform chip so the two live-audio states read as a pair. */
+.ct-speak{display:inline-flex;align-items:center;gap:7px;flex:none;height:26px;padding:0 6px 0 10px;
+  border:1px solid color-mix(in srgb,var(--accent,#6b8afd) 38%,var(--line));border-radius:8px;
+  background:linear-gradient(180deg,var(--bg-3),var(--bg-2))}
+.ct-speak-dot{width:7px;height:7px;flex:none;border-radius:50%;background:var(--accent-2);animation:speakPulse 1.15s ease-in-out infinite}
+.ct-speak-lbl{font-size:10.5px;color:var(--txt-3);white-space:nowrap}
+.ct-speak-stop{-webkit-app-region:no-drag;display:inline-flex;align-items:center;border:0;background:transparent;
+  color:var(--txt-4);cursor:pointer;padding:3px;border-radius:5px;transition:color var(--t),background var(--t)}
+.ct-speak-stop:hover{color:var(--red,#e05a5a);background:var(--bg-3)}
+@keyframes speakPulse{0%,100%{opacity:.35;transform:scale(.82)}50%{opacity:1;transform:scale(1)}}
+/* P-VOICE.4 (ADR-0247): the mini spectrum analyser inside the speaking strip. Sunk into the chip behind an
+   inset shadow so the LEDs read as lamps behind glass rather than shapes painted on the surface. */
+.ct-eq{width:104px;height:18px;display:block;flex:none;border-radius:3px;
+  background:radial-gradient(120% 140% at 50% 120%,rgba(62,214,178,.07),transparent 70%),rgba(0,0,0,.34);
+  box-shadow:inset 0 1px 3px rgba(0,0,0,.6),inset 0 0 0 1px rgba(255,255,255,.03)}
+
+/* ───────────────────────── P-VOICE.4: the "LUCID Agent [Voice]" floating panel ───────────────────────── */
+/* Drag it anywhere; it snaps to a frame edge and remembers where you left it (share_dock.ts geometry). */
+.vdock{position:fixed;z-index:96;display:flex;flex-direction:column;min-width:0;
+  background:linear-gradient(180deg,var(--bg-1),var(--bg-0));background-image:var(--emboss,none);
+  border:1px solid var(--line-strong);border-radius:13px;overflow:hidden;
+  box-shadow:var(--shadow-lg,var(--shadow)),0 0 0 1px rgba(255,255,255,.02) inset}
+.vdock.dragging{user-select:none;cursor:grabbing;box-shadow:var(--shadow-lg,var(--shadow)),0 0 0 1px var(--accent) inset}
+.vdock-head{-webkit-app-region:no-drag;display:flex;align-items:center;gap:8px;cursor:grab;flex:none;
+  padding:8px 8px 8px 12px;border-bottom:1px solid var(--line-soft);
+  background:linear-gradient(180deg,var(--bg-2),transparent)}
+.vdock.dragging .vdock-head{cursor:grabbing}
+.vdock-title{flex:1;min-width:0;font-size:11.5px;font-weight:600;letter-spacing:.04em;color:var(--txt-2);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.vdock-tag{color:var(--accent-2);font-family:var(--mono);font-size:10.5px;letter-spacing:0}
+.vdock-acts{display:flex;gap:2px;flex:none}
+.vdock-btn{-webkit-app-region:no-drag;display:inline-flex;align-items:center;border:0;background:transparent;
+  color:var(--txt-4);cursor:pointer;padding:4px;border-radius:6px;transition:color var(--t),background var(--t)}
+.vdock-btn:hover{color:var(--txt);background:var(--bg-3)}
+#voiceDockClose:hover{color:var(--red,#e05a5a)}
+.vdock-body{flex:1 1 auto;min-height:0;display:flex;flex-direction:column;gap:8px;padding:10px 12px 11px}
+/* The analyser well: black glass, a faint glow from the lamps, and a hairline bezel. */
+.vdock-eq{flex:1 1 auto;min-height:0;width:100%;display:block;border-radius:7px;
+  background:radial-gradient(120% 150% at 50% 120%,rgba(62,214,178,.09),transparent 72%),rgba(0,0,0,.45);
+  box-shadow:inset 0 2px 6px rgba(0,0,0,.66),inset 0 0 0 1px rgba(255,255,255,.035)}
+.vdock-foot{flex:none;display:flex;align-items:center;gap:8px}
+.vdock-meta{flex:1;min-width:0;font-size:10.5px;letter-spacing:.02em;color:var(--txt-4);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-transform:lowercase}
+.vdock.live .vdock-meta{color:var(--accent-2)}
+.vdock-foot .btn-mini{flex:none}
+/* Minimized: header only, a pill you can park in a corner. */
+.vdock.min{height:auto!important}
+.vdock.min .vdock-body,.vdock.min .vdock-grip{display:none}
+.vdock-grip{position:absolute;right:0;bottom:0;width:16px;height:16px;cursor:nwse-resize;
+  background:linear-gradient(135deg,transparent 50%,var(--line-strong) 50%,var(--line-strong) 62%,transparent 62%,
+    transparent 74%,var(--line-strong) 74%,var(--line-strong) 86%,transparent 86%)}
+/* P-VOICE.2: the composer's voice popover - auto-speak switch, engine list, voice list. Reuses the config
+   popover's .cfg-* rows so it matches the persona / model / skill pickers exactly. */
+.voice-pop .cfg-lbl{margin-top:14px}
+.voice-pop .cfg-lbl:first-child{margin-top:0}
+.voice-pop .empty{padding:10px 2px;font-size:12px;color:var(--txt-4)}
+/* P-VOICE.3: ONE scroll region, and it is the voice list. placePopover() caps the card's height to the room
+   above the composer; without this the WHOLE card scrolled, so the engine rows, the "needs setup" reason and
+   the Test/Settings footer all fell off the bottom edge - and a wheel over the voice list fought the outer
+   scroller. The card is a flex column where every block is fixed and only the voice list flexes: it caps at a
+   sane height on a tall window and SHRINKS (never disappears) on a short one, so the footer is always on screen. */
+.popover:has(.voice-pop){display:flex;flex-direction:column}
+.voice-pop{display:flex;flex-direction:column;min-height:0;flex:1 1 auto}
+.voice-pop > *{flex:none}
+/* The list absorbs all the slack: capped on a tall window, shrunk to ~1.5 rows on a short one. Below that
+   the popover's own overflow-y:auto takes over rather than clipping - a scrollbar beats a cut-off card. */
+.voice-pop > .voice-voices{flex:0 1 auto;min-height:64px;max-height:236px}
+.voice-auto{display:flex;align-items:flex-start;gap:9px;padding:9px 10px;border-radius:9px;cursor:pointer;
+  background:var(--bg-2);border:1px solid var(--line-soft)}
+.voice-auto:hover{border-color:var(--line-strong)}
+.voice-auto input{margin-top:2px;flex:none;accent-color:var(--accent-2);cursor:pointer}
+.voice-auto + .voice-auto{margin-top:6px}
+/* Conversation mode is unavailable until auto-speak is on - dimmed, not hidden, so the option is discoverable. */
+.voice-auto.off{opacity:.5}
+.voice-auto.off input{cursor:not-allowed}
+.voice-auto b{display:block;font-size:12.5px;font-weight:600;color:var(--txt)}
+.voice-auto i{display:block;margin-top:3px;font-style:normal;font-size:11px;line-height:1.5;color:var(--txt-4)}
+.voice-grp{margin:8px 0 3px;display:flex;align-items:center;gap:5px;font-size:9.5px;letter-spacing:1.1px;
+  text-transform:uppercase;color:var(--txt-4)}
+.voice-grp:first-child{margin-top:0}
+.voice-pop-foot{display:flex;gap:8px;margin-top:12px}
+.voice-pop-foot .btn-mini{flex:1;justify-content:center}
 .ctool-hint .kh{display:inline-flex;align-items:center;gap:4px}
 .ctool-hint kbd{font-family:var(--mono);background:linear-gradient(180deg,var(--bg-3),var(--bg-2));
   border:1px solid var(--line);border-bottom-width:2px;border-bottom-color:var(--line-strong);

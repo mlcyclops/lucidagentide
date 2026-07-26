@@ -16324,3 +16324,172 @@ the tail, never the cached layers).
 
 ADR-0244 (prerequisite), ADR-0066/0067 (exec gate + Speed/Risk dial), ADR-0046-0056 (/goal + checker
 model), CLAUDE.md keystones #1/#2.
+
+## ADR-0246 -- P-VOICE.2: live read-aloud from the composer (voice picker + auto-speak)
+
+**Date:** 2026-07-26
+**Status:** Accepted -- BUILT. Extends ADR-0115 (P-VOICE.1, the TTS/STT backends + the Settings Voice card).
+No new engine, no new transport: the ElevenLabs / OpenAI / Kokoro backends and `POST /api/tts/speak` are
+unchanged. This makes them REACHABLE and makes them stream.
+
+### Problem
+
+Read-aloud existed but was effectively invisible and slow.
+
+1. **Unreachable.** The engine + voice pickers lived in Settings -> Voice, three scrolls down. Nothing in the
+   composer, where the mic already is, said LUCID could speak at all.
+2. **The picker only worked for one engine.** `GET /api/voices` listed ElevenLabs only (it is the only engine
+   with a `/v1/voices` endpoint). OpenAI and Kokoro voice ids were inline literals in `dev.ts`
+   (`voices: { default: kokoro ? "af_heart" : "alloy" }`), so choosing a voice for those engines did NOTHING --
+   the selection was read from settings and then discarded.
+3. **One voice field for three engines.** `ttsVoice` was a single string. Picking an OpenAI voice and then
+   switching to Kokoro sent an OpenAI id to Kokoro.
+4. **No auto-speak, and no streaming.** Audio only played on a per-message button click, and it synthesized
+   the WHOLE settled reply as one clip -- roughly twenty seconds of silence on a long answer.
+
+### Decision
+
+**A canonical catalog, a composer chip, and a sentence-at-a-time queue.**
+
+- `harness/voice/catalog.ts` -- the fixed voice sets (OpenAI 13, Kokoro 13) plus provider metadata, and
+  `resolveVoice(provider, selected)`, the guard that falls back to an engine default rather than forwarding a
+  foreign voice id. `/api/voices?provider=` now answers for every engine; ElevenLabs is still fetched live.
+- `settings_store.ts` -- `ttsVoices: Record<engine, voiceId>` replaces the single `ttsVoice` scalar (which is
+  kept as a READ fallback for the ElevenLabs slot and retired on first write, so existing installs keep their
+  voice with no migration step). `ttsAutoSpeak` is new and defaults OFF -- it is cloud egress plus
+  per-character cost, so it is opt-in.
+- `harness/voice/speech_stream.ts` -- `takeSpeechChunks(buf, cursor, opts)`: a cursor over the GROWING answer
+  buffer that only yields text which is syntactically complete. Withholds anything after an odd-numbered
+  ``` fence (otherwise mid-stream source gets narrated aloud) and does not treat `3.14` / `v2.1` / `e.g. ` as
+  sentence ends. First span uses a low `minChars` for fast first audio, later spans batch to ~180.
+- `desktop/renderer/speech_queue.ts` -- `SpeechQueue`, the ordering/cancellation half, fully dependency-
+  injected (synth/open/play/close/onError/onChange) so the interleaving is testable without a DOM or an audio
+  device. Serial synthesis (order cannot invert), at most one clip audible, a prefetch ceiling of 2, and a
+  generation counter so a synth in flight from a cancelled turn is discarded rather than spoken.
+- `desktop/renderer/popover_place.ts` -- `placePopover()`, extracted from `ui.ts`. The composer pickers are
+  anchored to the BOTTOM of the window, so "flip above" is their normal case; the old inline math never
+  capped height (a card taller than the room was pinned to the top margin and ran off-screen) and chose
+  "above" even when below had more room. `popover()` now also returns `reposition()`, which callers whose
+  content arrives asynchronously MUST call -- the voice picker paints a skeleton, then the fetched list.
+
+### Alternatives rejected
+
+- **A `/api/tts/stream` endpoint (SSE or chunked ElevenLabs).** Real, and lower latency still, but it needs a
+  streaming audio path in the renderer (MediaSource / Web Audio) to beat what per-sentence clips already give.
+  Sentence chunking gets first-audio down to one sentence with zero transport change. Deferred, not dismissed.
+- **`eleven_flash_v2_5` for auto-speak.** ~75ms inference vs turbo, but it would silently change how the brief
+  podcast sounds too. Chunking is the dominant win; the model stays a single constant.
+- **Migrating the TTS keys into the OS-encrypted vault (`cred_vault.ts`).** Considered and NOT done -- see
+  "Not done" below. It is a provider-key-store change, not a voice change.
+- **A separate `ttsStreaming` toggle.** Rejected as a knob nobody asked for; streaming is simply how
+  auto-speak works.
+
+### Not done (deliberate)
+
+**The TTS provider keys are still plaintext-at-0600 in `~/.omp/lucid-gui.json`.** TTS has no key of its own --
+it reads the same `ELEVENLABS_API_KEY` / `OPENAI_API_KEY` the LLM providers use, via `settings_store.applyEnv()`.
+Moving those two alone would fork the key store; moving all of them is an architecture change, because the
+vault is main-process-only (Electron `safeStorage`) while `dev.ts` is a child process. Today `setKey()` writes
+`process.env` in that child and the key works immediately; under a vault model a newly-entered key could not
+take effect without a child respawn or a main->child push. That is its own ADR, with a user-visible
+regression to design around, and it does not belong inside a voice increment.
+
+### Verification
+
+`bun run harness/scripts/demo_pvoice2.ts` (npm `demo-P-VOICE.2`) -- 18 checks over four areas: per-engine voice
+memory + legacy migration + auto-speak default-off; the chunker over a fenced reply (first span at char 35 of
+75, open fence withheld, every sentence spoken once); SpeechQueue ordering / prefetch ceiling / cancellation /
+handle accounting; and placement (a 520px picker flips above the chip, re-placement after the list loads moves
+it UP 340px instead of overflowing, a 620px window caps it to 548px and scrolls). Plus 13 unit tests in
+`harness/voice/speech_stream.test.ts` + `catalog.test.ts`. `bun test harness` 1745 pass / 3 fail -- the 3 are
+pre-existing `lucid_acp.test.ts` launcher-asset failures, identical on a stashed HEAD. Typecheck at baseline
+(31 pre-existing diagnostics in `symbol_graph.ts` + `dev.ts`, unchanged).
+
+### Next
+
+- On-device pass: auto-speak a long reply on each engine; confirm audio starts mid-stream, that stopping is
+  immediate, and that a code block is never narrated.
+- Optional `/api/tts/stream` for true chunked transport (the deferred alternative above).
+- dots.tts (`studio-dots-ai/dots.tts`, Apache-2.0, 48kHz) needs NO client change: wrap its
+  `DotsTtsRuntime.generate_stream()` in a FastAPI `/v1/audio/speech` shim and point `LUCID_TTS_URL` at it --
+  it arrives as the existing `local-tts` engine.
+
+## ADR-0247 -- P-VOICE.3/.4/.5: the voice arc completed (engine readiness, conversation mode, the equalizer, and answering for the ear)
+
+**Date:** 2026-07-26
+**Status:** Accepted -- BUILT. Three increments on top of ADR-0246 (P-VOICE.2, the composer voice picker +
+streaming auto-speak). Same seams throughout: the TTS backends of ADR-0115, the user-turn preamble of issue
+#54 / ADR-0154, and the floating-dock geometry of ADR-0232/0242. No new transport, no new provider.
+
+### P-VOICE.3 -- an engine you cannot use must not be offered
+
+A user signed in to ChatGPT via OAuth could select ChatGPT/OpenAI, see thirteen voices, pick one, and get a
+failure toast on EVERY reply. The cause is external and unfixable here: `/v1/audio/speech` is an OpenAI
+PLATFORM endpoint that takes a platform key (`sk-...`); a ChatGPT subscription login is a different credential
+for a different backend, the platform API rejects it, and no OAuth flow mints a platform key.
+
+So readiness became a first-class, per-engine fact: pure `ttsEngineStatus()` (`harness/voice/catalog.ts`),
+resolved live in `dev.ts` from key presence, the omp OAuth row (`providerAuth()`), and a cached 700ms probe of
+`LUCID_TTS_URL`. Unavailable engines render greyed + non-selectable with a "needs setup" tag; the selected one
+explains itself inline; `/api/tts/speak` returns the SAME string so a failure can never contradict the menu.
+The OAuth-only message names the subscription, the platform key, AND the ElevenLabs/Kokoro escape hatch -
+"add your API key" alone reads like a bug to someone who is visibly signed in.
+
+### P-VOICE.3 -- conversation mode
+
+Its own checkbox, gated on auto-speak. Reply finishes being SPOKEN -> `SpeechQueue.onIdle` -> the mic opens ->
+the tested dictation VAD ends the turn on a longer silence -> it sends. `ttsConversation` reads false whenever
+auto-speak is off (the preference survives; nothing opens the mic while the agent is silent). Auto-send fires
+ONLY on a silence-ended session, never a click-stop, and only once every in-flight transcription has landed.
+`onIdle` fires on natural drain only, never from `stop()` - otherwise silencing the agent would re-open the mic.
+`getUserMedia` now asks for echo cancellation explicitly rather than trusting the UA default.
+
+### P-VOICE.4 -- the equalizer and the "LUCID Agent [Voice]" panel
+
+A segmented, peak-holding LED spectrum analyser driven by the REAL audio. This forced a queue change:
+`createMediaElementSource()` may be called once per element, so the old fresh-`Audio()`-per-sentence path
+could never be analysed; one persistent element now has its `.src` swapped per clip. Two surfaces (a mini strip
+in the composer, and a floating panel the user drags and anchors anywhere) share one analyser and one rAF loop
+that retires itself once the bars settle. The maths is pure and tested (`harness/voice/eq_bands.ts`):
+log-spaced bands and 40/220ms attack-release with a 380ms peak hold are what separate an instrument from a
+twitching bar chart.
+
+FAIL-SAFE, non-negotiable: the audio graph is built lazily and ONLY after `resume()` actually succeeds.
+Routing an element into a suspended context mutes it irreversibly, so if Web Audio cannot run, playback stays
+native and the display idles. A visual is never traded for the agent's voice.
+
+### P-VOICE.5 -- in conversation mode, answer for the EAR
+
+Observed in live use: the user had to TYPE "keep the response short and neat so I can understand you in
+conversation mode". That instruction is the app's job. Hands-free, a normal reply - headings, numbered lists,
+tables, code fences, file paths - is unusable: speakable() strips the markup, but what remains is a written
+answer read at dictation speed, and a four-item list is forgotten by item three.
+
+`spokenReplyGuidance()` (`harness/voice/spoken_reply.ts`) emits a trusted `<spoken-reply>` block on the
+user-turn preamble - the same channel as the active skill and the DESIGN.md invariants, never the frozen
+prefix (invariant #6) - rebuilt from live settings each turn, so it appears and vanishes with the toggle. It
+constrains SHAPE only (lead with the answer, two or three sentences, prose not markup, no paths/code unless
+asked, at most one follow-up question) and says explicitly that the WORK behind the answer is unchanged -
+a naive "be brief" instruction makes agents investigate less, which trades correctness for brevity.
+
+Deliberately NOT applied to plain auto-speak: there the user is watching the reply stream while hearing it,
+and a rich written answer is still the right answer. Only hands-free changes the medium.
+
+**Bug found while wiring it:** `stripInjectedPreamble()` (sessions.ts) listed only four of the blocks that
+actually ride the user-turn tail, so `<design-invariants>` (ADR-0154) and `<session-share>` (ADR-0240) had
+been leaking into the DISPLAYED transcript as though the user had typed them. All three - plus the new
+`<spoken-reply>` - are now stripped, with a stacking test over every block.
+
+### Verification
+
+`make demo-P-VOICE.2` 25 checks; 60 unit tests across the voice suites (readiness reasons incl. the OAuth-only
+wording, per-engine voice memory, the stream chunker, queue ordering/cancellation/onIdle, EQ band spacing +
+ballistics + peak-hold decay rate, spoken-reply gating); 29 across preamble + sessions (spoken-reply is
+standing, vanishes with the toggle, sits last of the standing blocks; every injected block strips). Typecheck
+at the 31-diagnostic pre-existing baseline. Electron main rebuilt.
+
+### Next
+
+On-device: the autoplay-policy path on a first click (the one thing a synthetic harness cannot prove), and a
+real hands-free loop end to end. dots.tts still drops in as a fourth engine behind an OpenAI-compatible shim
+with no client change.

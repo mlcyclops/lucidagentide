@@ -67,7 +67,7 @@ import { webrtcLoopbackSelfTest, webrtcRelaySelfTest, webrtcP2PModuleSelfTest } 
 // direct connection" toggle runs the share peer-to-peer over WebRTC, with the relay used only to signal + fall back.
 import { startP2PHost, stopP2PHost, p2pHostActive, p2pHostStatus, setP2PHostOptions, teeEvent as p2pTeeEvent, teeUserTurn as p2pTeeUserTurn, startP2PGuest, stopP2PGuest, p2pGuestActive, p2pGuestSendPrompt, p2pLinkEndpoint } from "./collab_p2p.ts";
 import type { CollabOptions } from "../collab/frames.ts"; // P-COLLAB.14 (ADR-0228): edit-guest model+folder pickers
-import { loadDockState, saveDockState, clampToViewport, snapDecision, participantSummary, isCollapsed, orderBindAddresses, redactShareSnapshot, classifyInviteLink, defaultShape, JOIN_DOCK_KEY, type DockState, type DockStorage, type ShareSnapshot } from "./share_dock.ts"; // P-SHARE.1/2/3 + P-COLLAB.20 (ADR-0242): the floating Share + Join docks
+import { loadDockState, saveDockState, clampToViewport, snapDecision, participantSummary, isCollapsed, orderBindAddresses, redactShareSnapshot, classifyInviteLink, defaultShape, JOIN_DOCK_KEY, type DockShape, type DockState, type DockStorage, type ShareSnapshot } from "./share_dock.ts"; // P-SHARE.1/2/3 + P-COLLAB.20 (ADR-0242) + P-VOICE.4 (ADR-0247): the floating Share / Join / Voice docks
 import { formatImportLine } from "./import_progress.ts";
 import { fitWithin, MAX_SNAPSHOT_EDGE } from "../collab/preview_snapshot.ts"; // P-PREVIEW-PWA.1 (ADR-0237): scaled-down preview snapshot to phone guests
 import { accessCounts } from "../collab/share_awareness.ts"; // P-PREVIEW-PWA.3 (ADR-0240): agent share-awareness counts
@@ -84,6 +84,11 @@ import { renderSkillInspect, renderSkillsDirectory, renderStudioCandidate, skill
 import { skillKey, type SkillRoot, trustEnableable } from "../skills_gov.ts"; // P-SKILL.4 (ADR-0097)
 import { CHECKER_TOKENS_PER_ITER, MAKER_TOKENS_PER_ITER, estimateGoalCost, estimateGoalTokens, formatTokens, formatUSD } from "../loop_estimate.ts";
 import { speakable } from "../../harness/brief/engineering_update.ts"; // P-REPORT.7: make read-aloud text TTS-friendly
+import { TTS_PROVIDERS } from "../../harness/voice/catalog.ts"; // P-VOICE.2 (ADR-0246): every engine's selectable voices
+import { takeSpeechChunks } from "../../harness/voice/speech_stream.ts"; // P-VOICE.2: sentence-at-a-time live read-aloud
+import { SpeechQueue } from "./speech_queue.ts"; // P-VOICE.2: ordered, cancellable playback of those sentences
+import { VoiceEqualizer } from "./voice_eq.ts"; // P-VOICE.4 (ADR-0247): the glowing spectrum analyser
+import type { ElevenVoiceView, TtsEngineView, VoiceListView, VoiceSettingsView } from "./bridge.ts";
 import { changeGraphSvg, schemaSvg, type ChangeGraph, type ModuleChange, type GraphEdge, type StoreChange } from "../../harness/brief/change_graph.ts"; // P-REPORT.8: report annex graphs
 import { assumedCacheRate, priceFor } from "../model_pricing.ts";
 import { closeIde, colorizeCode, guessLanguage, openIde, setIdeExclusivity, setIdeHooks } from "./ide_panel.ts";
@@ -152,6 +157,7 @@ const state = {
   userRole: null as UserRole | null, // ADR-0088 (P-ROLE.1): chosen role; null until onboarding picks one
   tourSeen: false, // ADR-0089 (P-ROLE.1b): first-run walkthrough already shown (finished or skipped)
   govconCui: null as boolean | null, // P-GOVCUI.1: Government/CUI answer; null until the first-run step asks
+  voice: null as VoiceSettingsView | null, // P-VOICE.2 (ADR-0246): cached TTS/STT config - drives the composer voice chip + auto-speak
 };
 const prettyModel = (v: string) => v.replace(/^anthropic\//, "");
 // Strip the redundant "· AskSage Gov" / "· Gov" suffix from a model's display name
@@ -280,6 +286,13 @@ function buildShell(): void {
             <!-- P-STT.4: live mic waveform - scrolling level history (newest at the right) + elapsed clock,
                  shown only while dictation runs so the user SEES the mic hearing them. -->
             <div class="ct-wave" id="ctWave" hidden aria-hidden="true"><canvas id="ctWaveCanvas"></canvas><span class="ct-wave-time" id="ctWaveTime">0:00</span></div>
+            <!-- P-VOICE.2 (ADR-0246): the read-aloud control - engine + voice picker and the auto-speak switch.
+                 It sits beside the mic so talking TO the agent and listening TO it are one pair of controls. -->
+            <button class="ctool ctool-icon" id="ctVoice" data-tip="Voice - read aloud|Choose the speech engine and voice, and switch on auto-speak to have replies read to you as they stream.">${icon("volume", 15)}</button>
+            <!-- Visible only while a reply is being spoken: a live indicator with a one-click stop. -->
+            <!-- P-VOICE.4 (ADR-0247): a live spectrum analyser of the agent's actual voice - segmented LEDs
+                 with hanging peak caps. Pops out into a draggable "LUCID Agent [Voice]" panel. -->
+            <div class="ct-speak" id="ctSpeak" hidden><span class="ct-speak-dot"></span><canvas class="ct-eq" id="ctEqCanvas" aria-hidden="true"></canvas><span class="ct-speak-lbl" id="ctSpeakLbl">Speaking</span><button class="ct-speak-stop" id="ctEqPop" aria-label="Pop the voice panel out" data-tip="Pop out|Float the equalizer as a panel you can drag anywhere in LUCID">${icon("expand", 12)}</button><button class="ct-speak-stop" id="ctSpeakStop" aria-label="Stop reading aloud" data-tip="Stop reading">${icon("close", 12)}</button></div>
           </div>
         </div>
       </main>
@@ -1536,10 +1549,13 @@ async function send(): Promise<void> {
     if (turn.tools.some((t) => t.path && (t.add != null || t.del != null))) appendRunReport(textEl, turn);
   };
   let slowNoticed = false; // P-STALL.1: the explanatory toast fires once per turn; the phase line keeps updating
-  let noResponse = false; // P-NORESP.1: the model returned nothing → the notice replaces the empty bubble
+  let noResponse = false; // P-NORESP.1: the model returned nothing \u2192 the notice replaces the empty bubble
+  // P-VOICE.2 (ADR-0246): a new turn - stop anything still being read from the last one and reset the
+  // read-aloud cursor, so auto-speak can never trail one reply behind.
+  speech.stop(); speechCursor = 0; speechFedAt = 0;
   const onEvent = (e: ChatEvent) => {
     p2pTeeEvent(e); // P-COLLAB.17: mirror the live event into a direct-P2P share, if one is hosting
-    if (e.type === "token") { reasoning?.finish(Date.now() - t0); buf += e.text; countDelta(e.text); if (!sawTool) setPhase(writeLine); streamEl.innerHTML = renderMarkdown(buf) + `<span class="cursor"></span>`; paintHud(); scrollChat(); }
+    if (e.type === "token") { reasoning?.finish(Date.now() - t0); buf += e.text; countDelta(e.text); if (!sawTool) setPhase(writeLine); streamEl.innerHTML = renderMarkdown(buf) + `<span class="cursor"></span>`; paintHud(); scrollChat(); speechFeed(buf, false); /* P-VOICE.2: speak each finished sentence while the rest is still being written */ }
     else if (e.type === "thinking") {
       // First reasoning chunk: spin up the live thinking block above the answer.
       if (!reasoning) { reasoning = createReasoning(); streamEl.before(reasoning.el); }
@@ -1593,7 +1609,7 @@ async function send(): Promise<void> {
       if (e.text && e.text.length > buf.length) buf = e.text; /* reconcile a lossy stream with the server's full reply */
       // Don't clobber the no-response notice with an empty answer body.
       if (!(noResponse && !buf.trim())) { const chipped = renderAnswerBody(streamEl, buf, marks); /* P-CHAT.A sections / P-CHAT.B chips */ if (chipped) dropThoughtsWindow(); }
-      (node as MsgNode)._md = buf; finishHud(); maybeAppendReport(); /* P-CHAT.C: settled-turn report CTA */ state.streaming = false; setSendEnabled(); clearPreviewTesting();
+      (node as MsgNode)._md = buf; speechFeed(buf, true); /* P-VOICE.2: speak the tail the sentence gate withheld */ finishHud(); maybeAppendReport(); /* P-CHAT.C: settled-turn report CTA */ state.streaming = false; setSendEnabled(); clearPreviewTesting();
     }
   };
   // P-COLLAB.15: attribute a guest-driven turn (runGuestPromptLocally set nextTurnFrom) in the live broadcast;
@@ -1606,9 +1622,11 @@ async function send(): Promise<void> {
   try { await bridge.sendPrompt(sendText, onEvent, images, turnFrom ?? undefined, p2pShare); }
   finally {
     (node as MsgNode)._md = buf;
+    speechFeed(buf, true); // P-VOICE.2: also covers an aborted / errored stream, which never emits "done"
     if (state.streaming) { if (!(noResponse && !buf.trim())) { const chipped = renderAnswerBody(streamEl, buf, marks); /* P-CHAT.A sections / P-CHAT.B chips */ if (chipped) dropThoughtsWindow(); maybeAppendReport(); /* P-CHAT.C: settled-turn report CTA */ } finishHud(); state.streaming = false; setSendEnabled(); } else { finishHud(); }
     void renderSessions(); void refreshBudget(false); void syncMode(); void refresh(); // P-PERF.3: one dashboard catch-up now the turn (and its stream) is done, since the poll no longer runs the heavy obs-DB read mid-stream
     scheduleKnowledgeRefresh(); // #54 follow-up: new facts appear in the open KG without close/reopen
+    maybeListen(); // P-VOICE.3: the turn has settled - if the audio already drained, open the mic now
     // P-ACP.4: the turn ended - fire off any pre-staged prompt now (the composer is idle again).
     if (state.queued) { const q = state.queued; state.queued = null; renderQueued(); const ta2 = $("#input") as HTMLTextAreaElement; ta2.value = q; setSendEnabled(); void send(); }
   }
@@ -2433,6 +2451,7 @@ function secVoice(auth: import("./bridge.ts").AuthStatus | null, vset: import(".
   const keyCard = elKey ? provCard(elKey) : "";
   const stt = vset?.sttProvider ?? "whisper";
   const ttsp = vset?.ttsProvider ?? "elevenlabs";
+  state.voice = vset ?? state.voice; // keep the composer chip in step with whatever the card is showing
   const sel = (v: boolean) => (v ? " selected" : "");
   const body = `${keyCard}
     <div class="set-note">${icon("mic", 12)} <b>Speech-to-text</b> powers the mic button by the composer. <b>Offline Whisper</b> keeps audio on-device (air-gap / DoD); <b>ElevenLabs Scribe</b> is cloud (higher accuracy, audio leaves the device).</div>
@@ -2454,6 +2473,12 @@ function secVoice(auth: import("./bridge.ts").AuthStatus | null, vset: import(".
     <div class="voice-row voice-pick"><label class="voice-lbl" for="voiceSelect">Voice</label>
       <select id="voiceSelect" class="prov-key" data-voice-set="ttsVoice"><option value="">loading voices…</option></select>
       <button class="btn-mini" id="voiceFav" data-tip="Favorite|Star the selected voice - favorites are listed first">${icon("spark", 12)}</button></div>
+    <div class="voice-row"><label class="voice-lbl" for="voiceAutoSpeak">Auto-speak</label>
+      <label class="voice-check"><input type="checkbox" id="voiceAutoSpeak" data-voice-set="ttsAutoSpeak"${vset?.ttsAutoSpeak ? " checked" : ""} />
+        <span>Read every reply aloud as it streams \u2014 the composer's voice button toggles this too.</span></label></div>
+    <div class="voice-row"><label class="voice-lbl" for="voiceConversation">Conversation</label>
+      <label class="voice-check"><input type="checkbox" id="voiceConversation" data-voice-set="ttsConversation"${vset?.ttsConversation ? " checked" : ""}${vset?.ttsAutoSpeak ? "" : " disabled"} />
+        <span>Hands-free turn-taking: the mic opens when the reply finishes speaking, and a few seconds of silence sends your turn. Needs auto-speak.</span></label></div>
     <div class="set-note" id="voiceNote"></div>`;
   return setCard("voice", "Voice", "TTS · STT · ElevenLabs", body, true);
 }
@@ -2483,21 +2508,22 @@ async function hydrateWhisper(): Promise<void> {
   const s = await bridge.whisperStatus().catch(() => null);
   card.innerHTML = s ? whisperCardHtml(s) : "";
 }
-/** Populate the Voice card's voice picker (favorites first) from the ElevenLabs account. Best-effort;
- *  shows a note when no key / no voices. Called after the card renders and after the key changes. */
+/** Populate the Voice card's picker with the SELECTED engine's voices (P-VOICE.2, ADR-0246): ElevenLabs is
+ *  fetched live from the account, OpenAI and Kokoro come from the static catalog. Best-effort: an engine that
+ *  cannot list shows its own note. Called after the card renders and after the key changes. */
 async function loadVoices(): Promise<void> {
   const selEl = $("#voiceSelect") as HTMLSelectElement | null;
   if (!selEl) return;
   const data = await bridge.voices().catch(() => null);
   const note = $("#voiceNote");
   if (!data || !data.voices.length) {
-    selEl.innerHTML = `<option value="">no voices${data?.note ? "" : ""}</option>`;
-    if (note) note.textContent = data?.note || "Add an ElevenLabs key to list voices.";
+    selEl.innerHTML = `<option value="">no voices to list</option>`;
+    if (note) note.textContent = data?.note || "This engine didn't return a voice list \u2014 check its key or URL.";
     return;
   }
   if (note) note.textContent = "";
   const favs = new Set(data.favorites);
-  const opt = (v: import("./bridge.ts").ElevenVoiceView) => `<option value="${esc(v.voiceId)}"${v.voiceId === data.selected ? " selected" : ""}>${esc(v.name)}${v.category ? ` · ${esc(v.category)}` : ""}</option>`;
+  const opt = (v: ElevenVoiceView) => `<option value="${esc(v.voiceId)}"${v.voiceId === data.selected ? " selected" : ""}>${esc(v.name)}${v.category ? ` \u00b7 ${esc(v.category)}` : ""}</option>`;
   const favList = data.voices.filter((v) => favs.has(v.voiceId));
   const rest = data.voices.filter((v) => !favs.has(v.voiceId));
   selEl.innerHTML =
@@ -6884,6 +6910,7 @@ function restoreSpeakBtn(btn?: HTMLElement | null): void {
 // audio option) - click it any time. It shows a spinner while the model synthesizes, flips to a Stop
 // control while playing, and surfaces the real engine error if TTS isn't configured.
 async function speakText(text: string, btn?: HTMLElement | null): Promise<void> {
+  speech.stop(); // P-VOICE.2: the manual button and the auto-speak queue must never talk over each other
   if (ttsAudio && !ttsAudio.paused) { ttsAudio.pause(); ttsAudio = null; restoreSpeakBtn(btn); return; }
   // P-REPORT.7: sanitize per line so the TTS reads flowing speech, not codes/symbols/markdown artifacts.
   const clean = (text || "").split(/\n+/).map((ln) => speakable(ln)).filter(Boolean).join(" ").trim();
@@ -6908,6 +6935,365 @@ async function speakText(text: string, btn?: HTMLElement | null): Promise<void> 
   ttsAudio.play().catch(() => { restoreSpeakBtn(btn); URL.revokeObjectURL(url); });
 }
 
+// ── P-VOICE.2 (ADR-0246): live read-aloud (auto-speak) ───────────────────────
+// "It talks while it writes." The read-aloud BUTTON waits for the settled reply and synthesizes it as one
+// clip - on a long answer that is ~20 seconds of silence before the first word. Auto-speak instead pumps the
+// GROWING stream buffer through takeSpeechChunks(): each complete sentence (never an unterminated code fence)
+// is synthesized on its own and played in order, so audio starts after sentence one.
+//
+// The ordering / cancellation mechanics live in SpeechQueue (speech_queue.ts) so they are testable without a
+// DOM; this file supplies the renderer half - the real HTTP synth, blob URLs, an <audio> element, and the
+// toast shown when the engine returns nothing.
+// P-VOICE.4 (ADR-0247): ONE persistent element plays every clip, and the equalizer taps it. Web Audio's
+// createMediaElementSource() may be called only once per element, so a fresh Audio() per sentence would make
+// a real spectrum display impossible - and churned an element per sentence besides. Swapping `.src` is all a
+// queued clip needs.
+const speechEl = new Audio();
+let speechAudioUrl = "";
+const voiceEq = new VoiceEqualizer();
+const speech = new SpeechQueue({
+  synth: (text) => bridge.speak(text),
+  open: (b64, mime) => audioBlobUrl(b64, mime),
+  close: (url) => {
+    if (speechAudioUrl === url) { speechEl.pause(); speechAudioUrl = ""; voiceEq.end(); }
+    URL.revokeObjectURL(url);
+  },
+  play: (url) => new Promise<void>((resolve) => {
+    let settled = false;
+    const done = (): void => {
+      if (settled) return;
+      settled = true;
+      speechEl.onended = null;
+      speechEl.onerror = null;
+      if (speechAudioUrl === url) { speechAudioUrl = ""; voiceEq.end(); }
+      resolve();
+    };
+    speechEl.onended = done;
+    speechEl.onerror = done; // a decode failure must advance the queue, not wedge it
+    speechAudioUrl = url;
+    speechEl.src = url;
+    // ensure() builds the analyser graph on first use and resolves false when Web Audio can't run; either way
+    // we play. A visual is never worth muting the agent for.
+    void voiceEq.ensure(speechEl).then(() => {
+      if (speechAudioUrl !== url) { done(); return; } // stopped while the audio graph was starting
+      voiceEq.begin();
+      speechEl.play().catch(done); // autoplay refusal must not wedge the queue
+    });
+  }),
+  onError: (note) => showToast({
+    tone: "warn",
+    title: "Nothing came back from the speech engine",
+    desc: note || "Pick an engine and voice from the composer's voice button, or add that provider's API key.",
+    actions: [{ label: "Voice settings", kind: "ok", run: () => openSettingsToVoice() }, { label: "OK" }],
+    timeout: 7000,
+  }),
+  onChange: () => updateVoiceChip(),
+  onIdle: () => maybeListen(), // P-VOICE.3: the agent stopped talking - in conversation mode, open the mic
+});
+
+/** P-VOICE.3: hands-free turn-taking. Opening the mic is guarded on every side - both toggles on, the reply
+ *  fully SPOKEN (not merely written), the turn settled, and no session already running - so it can never end
+ *  up listening to the agent's own voice, and never grabs the microphone in plain auto-speak mode. */
+function maybeListen(): void {
+  if (!state.voice?.ttsAutoSpeak || !state.voice?.ttsConversation) return;
+  if (state.streaming || speech.busy || dictation) return;
+  if (document.hidden) return; // the window isn't in front; don't take the mic behind the user's back
+  void toggleMicRecording(true);
+}
+/** How much of the current turn's answer buffer has already been handed to the queue, and the buffer length
+ *  at the last pump (the growth gate — rescanning the whole buffer on every token is wasted work). */
+let speechCursor = 0;
+let speechFedAt = 0;
+
+/** Queue one span of reply text. speakable() strips markdown, code and increment/ADR codes first, so the
+ *  audio reads prose instead of narrating backticks and "ADR-0246"; a span that reduces to nothing (a pure
+ *  code block, a table rule) is dropped rather than sent to a paid endpoint. */
+function speechSay(raw: string): void {
+  const clean = raw.split(/\n+/).map((ln) => speakable(ln)).filter(Boolean).join(" ").trim();
+  if (!clean) return;
+  if (ttsAudio && !ttsAudio.paused) { ttsAudio.pause(); ttsAudio = null; } // never over the manual read-aloud
+  speech.say(clean.slice(0, 4000));
+}
+
+/** Feed the turn's growing answer buffer to the queue. The FIRST span goes out as soon as one sentence
+ *  exists (audio starts fast); later spans batch to ~180 characters so a long reply is a handful of synth
+ *  calls rather than one per sentence. `flush` speaks whatever is left when the turn settles. */
+function speechFeed(buf: string, flush: boolean): void {
+  if (!state.voice?.ttsAutoSpeak) return;
+  if (!flush && buf.length - speechFedAt < 48) return; // don't rescan the buffer on every single token
+  speechFedAt = buf.length;
+  const r = takeSpeechChunks(buf, speechCursor, flush ? { flush: true } : { minChars: speechCursor ? 180 : 24 });
+  speechCursor = r.cursor;
+  for (const c of r.chunks) speechSay(c);
+}
+
+// ── P-VOICE.4 (ADR-0247): the floating "LUCID Agent [Voice]" panel ─────────────────────────
+// The mini strip under the prompt bar is fine while you are looking at the composer, but the equalizer is
+// something people want to WATCH - so it pops out into a panel that can be dragged anywhere in the window and
+// stays there. Geometry, clamping, edge-snapping and persistence are the already-tested share/join dock
+// primitives (share_dock.ts, ADR-0232/0242) under this panel's own storage key, so it can sit on screen
+// beside a live Share dock without either one moving the other.
+const VOICE_DOCK_KEY = "lucid.voiceDock.v1";
+const VOICE_DOCK_OPEN_KEY = "lucid.voiceDock.open";
+/** Wide and short: an analyser is a letterbox, not a column. Clamped to the dock minimums on load. */
+const voiceDockFallback = (vw: number, vh: number): DockShape => ({ x: Math.max(12, vw - 372 - 16), y: Math.max(12, vh - 260), w: 360, h: 210 });
+const dockStore = { get: (k: string) => { try { return localStorage.getItem(k); } catch { return null; } }, set: (k: string, v: string) => { try { localStorage.setItem(k, v); } catch { /* storage off */ } } };
+let voiceDock: HTMLElement | null = null;
+let voiceDockState: DockState | null = null;
+
+/** Whether the user has popped the panel out. Persisted, so an anchored panel survives a restart. */
+function voiceDockOpen(): boolean { return dockStore.get(VOICE_DOCK_OPEN_KEY) === "1"; }
+
+function applyVoiceDockShape(): void {
+  if (!voiceDock || !voiceDockState) return;
+  const s = voiceDockState.shape;
+  voiceDock.style.left = `${s.x}px`;
+  voiceDock.style.top = `${s.y}px`;
+  voiceDock.style.width = `${s.w}px`;
+  voiceDock.style.height = voiceDockState.minimized ? "" : `${s.h}px`;
+  voiceDock.classList.toggle("min", voiceDockState.minimized);
+}
+
+/** Drag the header to move, the corner grip to resize. On release the shape snaps to a frame edge if it is
+ *  close enough, is clamped fully on-screen, and is persisted - the same behaviour as the Share dock. */
+function wireVoiceDockDrag(head: HTMLElement, grip: HTMLElement): void {
+  const start = (e: PointerEvent, mode: "move" | "size"): void => {
+    if (!voiceDockState || e.button !== 0) return;
+    const from = { ...voiceDockState.shape };
+    const ox = e.clientX;
+    const oy = e.clientY;
+    const target = e.currentTarget;
+    if (target instanceof HTMLElement) target.setPointerCapture(e.pointerId);
+    voiceDock?.classList.add("dragging");
+    const move = (m: PointerEvent): void => {
+      if (!voiceDockState) return;
+      const dx = m.clientX - ox;
+      const dy = m.clientY - oy;
+      const next = mode === "move"
+        ? { ...from, x: from.x + dx, y: from.y + dy }
+        : { ...from, w: from.w + dx, h: from.h + dy };
+      voiceDockState.shape = clampToViewport(next, window.innerWidth, window.innerHeight);
+      applyVoiceDockShape();
+    };
+    const up = (): void => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      voiceDock?.classList.remove("dragging");
+      if (!voiceDockState) return;
+      const rail = document.querySelector(".rail")?.getBoundingClientRect().width ?? 0;
+      const snapped = snapDecision(voiceDockState.shape, window.innerWidth, window.innerHeight, rail);
+      voiceDockState = { ...voiceDockState, ...snapped };
+      applyVoiceDockShape();
+      saveDockState(dockStore, voiceDockState, VOICE_DOCK_KEY);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    e.preventDefault();
+  };
+  head.addEventListener("pointerdown", (e) => { if (!(e.target as HTMLElement).closest("button")) start(e, "move"); });
+  grip.addEventListener("pointerdown", (e) => start(e, "size"));
+}
+
+/** Open (and build, once) the floating panel, mounting its canvas on the shared analyser. */
+function openVoiceDock(): void {
+  dockStore.set(VOICE_DOCK_OPEN_KEY, "1");
+  if (voiceDock) { voiceDock.hidden = false; updateVoiceChip(); return; }
+  voiceDockState = loadDockState(dockStore, window.innerWidth, window.innerHeight, VOICE_DOCK_KEY, voiceDockFallback(window.innerWidth, window.innerHeight));
+  voiceDock = el(`<div class="vdock" id="voiceDock" role="dialog" aria-label="LUCID Agent Voice">
+    <div class="vdock-head" id="voiceDockHead">
+      <span class="vdock-title">LUCID Agent <span class="vdock-tag">[Voice]</span></span>
+      <div class="vdock-acts">
+        <button class="vdock-btn" id="voiceDockMin" aria-label="Minimize" data-tip="Minimize">${icon("collapse", 13)}</button>
+        <button class="vdock-btn" id="voiceDockClose" aria-label="Close the voice panel" data-tip="Close|Send the equalizer back to the prompt bar">${icon("close", 13)}</button>
+      </div>
+    </div>
+    <div class="vdock-body">
+      <canvas class="vdock-eq" id="voiceDockCanvas" aria-hidden="true"></canvas>
+      <div class="vdock-foot">
+        <span class="vdock-meta" id="voiceDockMeta"></span>
+        <button class="btn-mini" id="voiceDockStop">${icon("close", 12)} Stop</button>
+      </div>
+    </div>
+    <div class="vdock-grip" id="voiceDockGrip" aria-hidden="true"></div>
+  </div>`);
+  document.body.appendChild(voiceDock);
+  applyVoiceDockShape();
+  const cv = $("#voiceDockCanvas", voiceDock);
+  if (cv instanceof HTMLCanvasElement) voiceEq.mount(cv);
+  wireVoiceDockDrag($("#voiceDockHead", voiceDock)!, $("#voiceDockGrip", voiceDock)!);
+  $("#voiceDockStop", voiceDock)?.addEventListener("click", () => speech.stop());
+  $("#voiceDockClose", voiceDock)?.addEventListener("click", () => closeVoiceDock());
+  $("#voiceDockMin", voiceDock)?.addEventListener("click", () => {
+    if (!voiceDockState) return;
+    voiceDockState.minimized = !voiceDockState.minimized;
+    applyVoiceDockShape();
+    saveDockState(dockStore, voiceDockState, VOICE_DOCK_KEY);
+  });
+  updateVoiceChip();
+}
+
+/** Send the equalizer back to the prompt-bar strip. Geometry is kept, so re-opening lands where it was. */
+function closeVoiceDock(): void {
+  dockStore.set(VOICE_DOCK_OPEN_KEY, "0");
+  const cv = voiceDock ? $("#voiceDockCanvas", voiceDock) : null;
+  if (cv instanceof HTMLCanvasElement) voiceEq.unmount(cv);
+  voiceDock?.remove();
+  voiceDock = null;
+  updateVoiceChip();
+}
+/** Paint the composer's voice chip (accent when auto-speak is armed) and the live "Speaking" indicator. */
+function updateVoiceChip(): void {
+  const chip = $("#ctVoice");
+  if (chip) {
+    const on = !!state.voice?.ttsAutoSpeak;
+    chip.classList.toggle("on", on);
+    const engine = TTS_PROVIDERS.find((p) => p.id === state.voice?.ttsProvider)?.label ?? "ElevenLabs";
+    const talking = on && !!state.voice?.ttsConversation;
+    chip.classList.toggle("conv", talking);
+    chip.setAttribute("data-tip", talking
+      ? `Voice - conversation mode|${engine} reads each reply aloud, then the mic opens by itself so you can just answer. A few seconds of silence sends your turn. Click to change the engine, the voice, or switch it off.`
+      : on
+        ? `Voice - auto-speak on|Replies are read aloud as they stream, via ${engine}. Click to change the engine, the voice, or turn on hands-free conversation.`
+        : `Voice - read aloud|Replies are spoken only when you click a reply's speaker button. Click to pick the engine and voice, or switch on auto-speak.`);
+  }
+  // P-VOICE.4: the strip carries the equalizer, so it is hidden whenever the panel is popped out - two live
+  // analysers of the same voice, six inches apart, is noise.
+  const popped = voiceDockOpen();
+  const live = $("#ctSpeak");
+  if (live) live.hidden = !speech.busy || popped;
+  const lbl = $("#ctSpeakLbl");
+  if (lbl) lbl.textContent = speech.speaking ? "Speaking" : "Synthesizing";
+  const meta = $("#voiceDockMeta");
+  if (meta) {
+    const engine = TTS_PROVIDERS.find((p) => p.id === state.voice?.ttsProvider)?.label ?? "";
+    const status = speech.speaking ? "speaking" : speech.busy ? "synthesizing" : state.voice?.ttsAutoSpeak ? "ready" : "manual";
+    meta.textContent = `${engine} \u00b7 ${status}`;
+  }
+  voiceDock?.classList.toggle("live", speech.busy);
+}
+
+/** One voice row (engine or voice) in the composer picker — same tick/name/meta shape as the persona list. */
+function voiceOptHtml(attr: string, id: string, name: string, meta: string, tip: string, on: boolean): string {
+  return `<div class="cfg-opt voice-opt${on ? " on" : ""}" ${attr}="${esc(id)}" data-tip="${esc(name)}|${esc(tip)}" data-tip-side="left"><span class="tick">${icon("check", 13)}</span><span class="nm">${esc(name)}</span>${meta ? `<span class="id">${esc(meta)}</span>` : ""}</div>`;
+}
+
+/** The voice list for the picker — favorites first (ElevenLabs), then everything else. */
+function voiceRowsHtml(data: VoiceListView | null): string {
+  if (!data) return `<div class="empty">Couldn't reach the voice list.</div>`;
+  if (!data.voices.length) return `<div class="empty">${esc(data.note || "This engine has no voices to list.")}</div>`;
+  const favs = new Set(data.favorites);
+  const row = (v: ElevenVoiceView): string => voiceOptHtml("data-vid", v.voiceId, v.name, v.category ?? "", v.description || v.category || v.voiceId, v.voiceId === data.selected);
+  const fav = data.voices.filter((v) => favs.has(v.voiceId));
+  const rest = data.voices.filter((v) => !favs.has(v.voiceId));
+  if (!fav.length) return rest.map(row).join("");
+  return `<div class="voice-grp">${icon("spark", 11)} Favorites</div>${fav.map(row).join("")}<div class="voice-grp">All voices</div>${rest.map(row).join("")}`;
+}
+
+/** One engine row. An engine that CANNOT speak (no key, nothing listening) renders greyed + non-selectable
+ *  with a tag, exactly like an unavailable model - picking it and discovering the failure one toast per reply
+ *  is the behaviour this replaces. The reason is shown when it is the engine currently selected. */
+function voiceEngineHtml(e: TtsEngineView, provider: string): string {
+  const on = e.id === provider;
+  const meta = e.cloud ? "cloud" : "offline";
+  if (e.ready) return voiceOptHtml("data-vprov", e.id, e.label, meta, e.blurb, on);
+  return `<div class="cfg-opt voice-opt unavail${on ? " on" : ""}" data-vunavail="${esc(e.id)}" data-tip="${esc(e.label)} \u2014 unavailable|${esc(e.reason)}" data-tip-side="left">
+    <span class="tick">${icon("check", 13)}</span><span class="nm">${esc(e.label)}</span><span class="unavail-tag">needs setup</span></div>`;
+}
+
+function voicePopHtml(data: VoiceListView | null, provider: string, autoSpeak: boolean, conversation: boolean, loading: boolean): string {
+  // Before the first response lands we only know the static catalog; assume ready so the menu doesn't flash
+  // "needs setup" on every engine while the real readiness is still in flight.
+  const list: TtsEngineView[] = data?.engines?.length
+    ? data.engines
+    : TTS_PROVIDERS.map((p) => ({ ...p, ready: true, reason: "" }));
+  const cur = list.find((e) => e.id === provider);
+  const blocked = cur && !cur.ready ? cur.reason : "";
+  return `<div class="cfg-sec voice-pop">
+    <div class="cfg-lbl">Read aloud <span class="cur">${autoSpeak ? (conversation ? "conversation" : "auto-speak on") : "manual"}</span></div>
+    <label class="voice-auto"><input type="checkbox" id="voiceAuto"${autoSpeak ? " checked" : ""} />
+      <span><b>Speak replies as they stream</b><i>Audio starts after the first sentence. A cloud engine sends the reply text to that provider.</i></span></label>
+    <label class="voice-auto${autoSpeak ? "" : " off"}"><input type="checkbox" id="voiceConv"${conversation ? " checked" : ""}${autoSpeak ? "" : " disabled"} />
+      <span><b>Conversation mode</b><i>${autoSpeak ? "The mic opens when the reply finishes; a few seconds of silence sends your turn." : "Needs \u201cSpeak replies as they stream\u201d above."}</i></span></label>
+    <div class="cfg-lbl">Engine</div>
+    <div class="cfg-list">${list.map((e) => voiceEngineHtml(e, provider)).join("")}</div>
+    ${blocked ? `<div class="set-note danger">${icon("shield", 12)} ${esc(blocked)}</div>` : ""}
+    <div class="cfg-lbl">Voice</div>
+    <div class="cfg-list voice-voices">${loading ? `<div class="empty">loading voices\u2026</div>` : voiceRowsHtml(data)}</div>
+    ${data?.note && data.voices.length ? `<div class="set-note">${icon("info", 12)} ${esc(data.note)}</div>` : ""}
+    <div class="voice-pop-foot"><button class="btn-mini" id="voicePopTest"${blocked ? " disabled" : ""}>${icon("volume", 12)} Test voice</button><button class="btn-mini" id="voicePopMore">${icon("sliders", 12)} Voice settings</button></div>
+  </div>`;
+}
+
+/** Persist a voice-settings change, refresh the cached copy, and repaint everything that reflects it. */
+async function applyVoicePatch(patch: Partial<VoiceSettingsView>): Promise<void> {
+  const next = await bridge.setVoiceSettings(patch).catch(() => null);
+  if (next) state.voice = next;
+  updateVoiceChip();
+  if ($("#voiceTts")) void renderSettings(); // the Settings "Voice" card is open — keep the two views in step
+}
+
+/** The composer's voice menu: auto-speak, engine, and the engine's voices — the whole read-aloud surface in
+ *  one place, next to the mic, instead of buried three scrolls into Settings. */
+async function openVoiceDropdown(anchor: HTMLElement): Promise<void> {
+  cfgClose?.();
+  let provider: VoiceSettingsView["ttsProvider"] = state.voice?.ttsProvider ?? "elevenlabs";
+  let autoSpeak = !!state.voice?.ttsAutoSpeak;
+  let conversation = !!state.voice?.ttsConversation;
+  let data: VoiceListView | null = null;
+  const { node, close, reposition } = popover(anchor, voicePopHtml(null, provider, autoSpeak, conversation, true), () => { cfgClose = null; });
+  cfgClose = close;
+  // The card is anchored to the composer at the BOTTOM of the window, so it opens upward - and it grows when
+  // the fetched voice list replaces the skeleton. Every repaint re-runs placement, or the taller card would
+  // extend past the bottom edge from a `top` computed for the shorter one.
+  const paint = (loading: boolean): void => { node.innerHTML = voicePopHtml(data, provider, autoSpeak, conversation, loading); reposition(); };
+  const reload = async (): Promise<void> => {
+    paint(true);
+    data = await bridge.voices(provider).catch(() => null);
+    paint(false);
+  };
+  node.addEventListener("change", (e) => {
+    const t = e.target as HTMLElement;
+    if (t.id === "voiceAuto") {
+      autoSpeak = (t as HTMLInputElement).checked;
+      if (!autoSpeak) { speech.stop(); conversation = false; } // the loop can't run without the speaking half
+      void applyVoicePatch({ ttsAutoSpeak: autoSpeak });
+      paint(false);
+      return;
+    }
+    if (t.id !== "voiceConv") return;
+    conversation = (t as HTMLInputElement).checked;
+    if (!conversation && dictation) void endDictation(); // turning it off closes an open mic immediately
+    void applyVoicePatch({ ttsConversation: conversation });
+    paint(false);
+  });
+  node.addEventListener("click", (e) => {
+    const t = e.target as HTMLElement;
+    // A greyed engine explains itself rather than silently doing nothing on click.
+    const dead = (t.closest("[data-vunavail]") as HTMLElement | null)?.dataset.vunavail;
+    if (dead) {
+      const row = data?.engines?.find((x) => x.id === dead);
+      showToast({ tone: "warn", title: `${row?.label ?? "That engine"} isn't ready`, desc: row?.reason ?? "It needs setting up first.", actions: [{ label: "Voice settings", kind: "ok", run: () => { close(); openSettingsToVoice(); } }, { label: "OK" }], timeout: 9000 });
+      return;
+    }
+    const eng = (t.closest("[data-vprov]") as HTMLElement | null)?.dataset.vprov;
+    if (eng && eng !== provider) {
+      provider = eng as VoiceSettingsView["ttsProvider"];
+      void applyVoicePatch({ ttsProvider: provider }).then(reload);
+      return;
+    }
+    const vid = (t.closest("[data-vid]") as HTMLElement | null)?.dataset.vid;
+    if (vid) {
+      if (data) data.selected = vid;
+      void applyVoicePatch({ ttsVoice: vid });
+      paint(false);
+      return;
+    }
+    if (t.closest("#voicePopTest")) { void speakText("This is the voice I'll use to read replies aloud."); return; }
+    if (t.closest("#voicePopMore")) { close(); openSettingsToVoice(); }
+  });
+  await reload();
+}
+
 // ── P-VOICE.1 (ADR-0115): mic → speech-to-text into the composer ──────────────
 // Click the mic to record, click again to stop. The blob is sent to /api/transcribe (ElevenLabs Scribe
 // or an offline Whisper server, per Settings → Voice) and the transcript is INSERTED into the composer for
@@ -6919,6 +7305,9 @@ interface DictationSession {
   stream: MediaStream; ctx: AudioContext; analyser: AnalyserNode;
   rec: MediaRecorder | null; chunks: Blob[]; mime: string;
   timer: number; state: DictationState; active: boolean;
+  // P-VOICE.3: conversation mode. `pending` counts in-flight transcriptions; `autoSend` is set when the
+  // session ended by SILENCE (not by a click), so the turn is sent once the last utterance has landed.
+  pending: number; autoSend: boolean;
   data: Float32Array<ArrayBuffer>; // reused VAD frame buffer (explicit ArrayBuffer for getFloatTimeDomainData)
   // P-STT.4: live waveform + visible-failure state.
   wave: number[]; waveCount: number; raf: number; startedAt: number; bucketAt: number; bucketPeak: number;
@@ -7055,19 +7444,34 @@ function startUtterance(sess: DictationSession): void {
     const blob = new Blob(sess.chunks, { type });
     sess.rec = null;
     if (sess.active) startUtterance(sess); // keep listening for the next utterance right away
-    if (blob.size < 1400) return; // essentially silence - nothing to transcribe
+    if (blob.size < 1400) { maybeSendSpokenTurn(sess); return; } // essentially silence - nothing to transcribe
     // whisper.cpp / OpenAI-compatible STT decode WAV, not MediaRecorder's WebM/Opus - transcode first, else
     // the server 400s the raw clip and the mic looks "heard, but nothing transcribed". Fall back to the raw
     // blob only if decoding fails (keeps the ElevenLabs cloud path, which accepts WebM, working).
-    const send = (await blobToWav16kMono(blob)) ?? blob;
-    const r = await bridge.transcribe(await blobToBase64(send), send.type).catch(() => null);
+    const wav = (await blobToWav16kMono(blob)) ?? blob;
+    sess.pending++; // P-VOICE.3: conversation mode must not send the turn until this lands
+    const r = await bridge.transcribe(await blobToBase64(wav), wav.type).catch(() => null);
+    sess.pending--;
     if (r?.text) {
       const ta = $("#input") as HTMLTextAreaElement;
       ta.value = mergeTranscript(ta.value, r.text); autosize(ta); setSendEnabled();
     } else void warnSttFailure(sess, r); // P-STT.4: a dead engine is VISIBLE, not a silent nothing
+    maybeSendSpokenTurn(sess);
   };
   sess.rec.start();
 }
+/** P-VOICE.3: the spoken turn is complete - the session ended on SILENCE and every utterance has been
+ *  transcribed - so send it, closing the conversation loop. A session the user stopped by CLICKING never
+ *  sets `autoSend`: a manual stop means "let me read it first". Consumes the flag so a late second
+ *  transcription can't double-send. */
+function maybeSendSpokenTurn(sess: DictationSession): void {
+  if (!sess.autoSend || sess.pending > 0 || sess.active) return; // still listening, or still transcribing
+  sess.autoSend = false;
+  const ta = $("#input") as HTMLTextAreaElement | null;
+  if (!ta?.value.trim() || state.streaming) return; // heard nothing usable, or a turn is already running
+  void send();
+}
+
 /** End the fluid dictation session: stop the ticker + the final recorder (its onstop transcribes the last
  *  utterance), release the mic, and clear the UI. Idempotent. */
 async function endDictation(): Promise<void> {
@@ -7081,18 +7485,22 @@ async function endDictation(): Promise<void> {
   if (tlab) tlab.textContent = "0:00";
   ($("#ctMic") as HTMLElement | null)?.classList.remove("recording");
   try { if (sess.rec && sess.rec.state === "recording") sess.rec.stop(); } catch { /* already stopped */ }
+  // Ending BETWEEN utterances leaves no recorder to fire onstop, so nothing would ever close the loop.
+  if (!sess.rec) maybeSendSpokenTurn(sess);
   setTimeout(() => { sess.stream.getTracks().forEach((t) => t.stop()); void sess.ctx.close().catch(() => {}); }, 60);
 }
 /** Toggle fluid dictation: click to start hands-free live dictation (utterances land as you pause; it
  *  auto-stops after a longer silence), click again to stop early. Built on the tested dictation.ts core. */
-async function toggleMicRecording(): Promise<void> {
+async function toggleMicRecording(auto = false): Promise<void> {
   if (dictation) { void endDictation(); return; } // click during a session = stop
   const btn = $("#ctMic") as HTMLElement | null;
   if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined" || typeof AudioContext === "undefined") {
     showToast({ tone: "warn", title: "No microphone", desc: "This environment can't capture audio.", timeout: 2600 }); return;
   }
   let stream: MediaStream;
-  try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
+  // P-VOICE.3: echo cancellation is explicit, not left to the UA default - in conversation mode the mic is
+  // open while the speakers may still be settling, and without it the agent's own voice feeds back in.
+  try { stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } }); }
   catch { showToast({ tone: "warn", title: "Microphone blocked", desc: "Allow microphone access to use voice input.", timeout: 2800 }); return; }
   const ctx = new AudioContext();
   try { await ctx.resume(); } catch { /* best-effort under autoplay policy */ }
@@ -7102,7 +7510,7 @@ async function toggleMicRecording(): Promise<void> {
   source.connect(analyser);
   const mime = MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm" : "";
   const t0 = performance.now();
-  const sess: DictationSession = { stream, ctx, analyser, data: new Float32Array(new ArrayBuffer(analyser.fftSize * Float32Array.BYTES_PER_ELEMENT)), rec: null, chunks: [], mime, timer: 0, state: newDictation(), active: true, wave: [], waveCount: 0, raf: 0, startedAt: t0, bucketAt: t0, bucketPeak: 0, failWarned: false };
+  const sess: DictationSession = { stream, ctx, analyser, data: new Float32Array(new ArrayBuffer(analyser.fftSize * Float32Array.BYTES_PER_ELEMENT)), rec: null, chunks: [], mime, timer: 0, state: newDictation(), active: true, wave: [], waveCount: 0, raf: 0, startedAt: t0, bucketAt: t0, bucketPeak: 0, failWarned: false, pending: 0, autoSend: false };
   dictation = sess;
   startUtterance(sess);
   sess.timer = window.setInterval(() => {
@@ -7110,11 +7518,15 @@ async function toggleMicRecording(): Promise<void> {
     const r = dictationTick(dictation.state, micRms(dictation), DICTATION_TICK_MS, DICTATION_DEFAULTS);
     dictation.state = r.state;
     if (r.action === "flush") { try { dictation.rec?.stop(); } catch { /* between utterances */ } } // onstop transcribes + restarts
-    else if (r.action === "stop") { void endDictation(); }
+    // A longer silence = "I'm done talking". In conversation mode that ENDS THE TURN and sends it (a click
+    // stop deliberately does not, so a manual dictation is still reviewed before sending).
+    else if (r.action === "stop") { dictation.autoSend = !!state.voice?.ttsConversation; void endDictation(); }
   }, DICTATION_TICK_MS);
   btn?.classList.add("recording");
   startWaveChip(sess); // P-STT.4: live waveform + elapsed clock while the session runs
-  showToast({ title: "Listening…", desc: "Speak naturally - your words land as you pause. It stops on a longer silence, or click the mic to stop.", timeout: 2800 });
+  // The conversation loop opens the mic every single turn; the waveform chip already says "listening", so a
+  // toast each round would be noise. Only an explicit click explains itself.
+  if (!auto) showToast({ title: "Listening\u2026", desc: "Speak naturally - your words land as you pause. It stops on a longer silence, or click the mic to stop.", timeout: 2800 });
 }
 
 function openGoalForm(): void {
@@ -9913,6 +10325,20 @@ function wire(): void {
     if (seg?.dataset.mode) void applySessionMode(seg.dataset.mode as "cui" | "search");
   });
   $("#ctMic")?.addEventListener("click", () => void toggleMicRecording()); // P-VOICE.1 (ADR-0115)
+  // P-VOICE.2 (ADR-0246): the read-aloud control - the picker, and a one-click stop while a reply is spoken.
+  $("#ctVoice")?.addEventListener("click", () => void openVoiceDropdown($("#ctVoice")!));
+  $("#ctSpeakStop")?.addEventListener("click", () => speech.stop());
+  // P-VOICE.4 (ADR-0247): the equalizer - a mini strip in the composer, or a panel anchored anywhere.
+  const miniEq = $("#ctEqCanvas");
+  if (miniEq instanceof HTMLCanvasElement) voiceEq.mount(miniEq);
+  $("#ctEqPop")?.addEventListener("click", () => openVoiceDock());
+  if (voiceDockOpen()) openVoiceDock(); // an anchored panel survives a restart
+  window.addEventListener("resize", () => {
+    if (!voiceDock || !voiceDockState) return;
+    voiceDockState.shape = clampToViewport(voiceDockState.shape, window.innerWidth, window.innerHeight);
+    applyVoiceDockShape();
+  });
+  void bridge.voiceSettings().then((v) => { if (v) { state.voice = v; updateVoiceChip(); } });
 
   // settings page actions (delegated)
   $("#setClose")!.addEventListener("click", () => closeSettings());
@@ -9944,9 +10370,13 @@ function wire(): void {
     const vs = t0.closest("[data-voice-set]") as HTMLInputElement | HTMLSelectElement | null;
     if (!vs) return;
     const key = vs.dataset.voiceSet!;
-    await bridge.setVoiceSettings({ [key]: vs.value } as never).catch(() => {});
+    // P-VOICE.2: auto-speak is a checkbox, the engines are selects - read the right property for each.
+    const value = vs instanceof HTMLInputElement && vs.type === "checkbox" ? vs.checked : vs.value;
+    const next = await bridge.setVoiceSettings({ [key]: value } as never).catch(() => null);
+    if (next) { state.voice = next; updateVoiceChip(); }
+    if (key === "ttsAutoSpeak" && value !== true) speech.stop();
     if (key === "sttProvider") { const row = $("#voiceSttUrlRow"); if (row) (row as HTMLElement).hidden = vs.value !== "whisper"; }
-    if (key === "ttsProvider") void loadVoices(); // only ElevenLabs lists custom voices
+    if (key === "ttsProvider") void loadVoices(); // each engine has its own voices (and its own remembered pick)
   });
   $("#setBody")!.addEventListener("click", async (e) => {
     const t = e.target as HTMLElement;
