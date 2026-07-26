@@ -2633,6 +2633,58 @@ body.preview-open .thread{font-size:.9em}
 .prov-row{display:flex;align-items:center;gap:8px}
 /* "Sign out of all providers" footer — a quiet, right-aligned reset under the provider cards. */
 .prov-signout{display:flex;justify-content:flex-end;margin-top:12px;padding-top:10px;border-top:1px solid var(--line)}
+/* P-PROV.2: the Provider Hub popup (dedicated provider chooser) + its Settings/picker entry points. Reuses
+   .modal-ov / .modal chrome; tiles are same-size logo rows that expand an inline config (the .prov body). */
+.modal.provhub{width:min(680px,92vw);max-width:680px;padding:0;text-align:left;max-height:86vh;display:flex;flex-direction:column;overflow:hidden}
+.provhub-head{position:relative;display:flex;gap:12px;align-items:flex-start;padding:18px 20px 14px;border-bottom:1px solid var(--line-soft)}
+.provhub-head .modal-icon{margin:0;flex:none}
+.provhub-head-tx{flex:1;min-width:0}
+.provhub-head .modal-title{font-size:18px;margin:0;text-align:left}
+.provhub-head .modal-desc{font-size:12.5px;line-height:1.5;color:var(--txt-2);margin:3px 0 0;text-align:left;max-width:none}
+.provhub-x{position:absolute;top:12px;right:12px}
+.provhub-body{padding:14px 20px 20px;overflow:auto}
+.provhub-sec{margin-bottom:16px}
+.provhub-sec:last-child{margin-bottom:0}
+.provhub-sec-h{display:flex;align-items:baseline;gap:9px;margin:2px 0 10px}
+.provhub-sec-h b{font-size:12.5px;color:var(--txt)}
+.provhub-sec-h span{font-size:11px;color:var(--txt-3)}
+.provhub-sec-h .btn-link{margin-left:auto;font-size:11.5px}
+.provhub-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:8px}
+.provhub-item{border:1px solid var(--line);border-radius:11px;background:var(--bg-2);overflow:hidden;transition:border-color var(--t),box-shadow var(--t)}
+.provhub-item:hover{border-color:var(--line-strong)}
+.provhub-item.open{grid-column:1/-1;border-color:color-mix(in srgb,var(--accent) 55%,var(--line));box-shadow:0 0 0 1px color-mix(in srgb,var(--accent) 25%,transparent)}
+.provhub-tile{-webkit-app-region:no-drag;display:flex;align-items:center;gap:9px;width:100%;padding:10px 11px;background:none;border:0;cursor:pointer;text-align:left;color:var(--txt);font:inherit}
+.provhub-tile:hover{background:var(--bg-3)}
+.provhub-tile>svg:last-child{flex:none;color:var(--txt-4);transition:transform var(--t)}
+.provhub-item.open .provhub-tile>svg:last-child{transform:rotate(90deg)}
+.provhub-nm{flex:1;min-width:0;font-size:12.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.provhub-badge{flex:none;font-size:9.5px;font-weight:700;letter-spacing:.02em;color:var(--txt-4);text-transform:uppercase;white-space:nowrap;display:inline-flex;align-items:center;gap:3px}
+.provhub-badge.ok{color:#84e3a6}
+.provhub-config{display:none;padding:0 11px 12px}
+.provhub-item.open .provhub-config{display:block}
+.provhub-config .prov{margin:0;background:none;border:0;box-shadow:none;padding:0}
+.provhub-config .prov-h{display:none} /* the tile already shows the provider name */
+/* the Settings Providers-card jump button */
+.prov-hubopen{display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin-bottom:11px;padding-bottom:11px;border-bottom:1px solid var(--line)}
+.prov-hubopen .set-note{margin:0;font-size:11px;color:var(--txt-3);flex:1;min-width:150px}
+/* the always-visible model-picker footer button */
+.cfg-provhub{-webkit-app-region:no-drag;display:flex;align-items:center;justify-content:center;gap:6px;width:100%;margin-top:8px;padding:8px 10px;background:none;border:1px dashed var(--line-strong);border-radius:9px;color:var(--txt-2);font:inherit;font-size:12px;cursor:pointer;transition:border-color var(--t),color var(--t),background var(--t)}
+.cfg-provhub:hover{border-color:var(--accent);color:var(--txt);background:var(--accent-dim)}
+/* P-LOCAL.4: one-click model-preset chips in the Local Providers add form (each chip nowraps; the row wraps). */
+.lp-presets{margin-bottom:9px}
+.lp-presets-lbl{font-size:11px;color:var(--txt-3);display:flex;align-items:center;gap:5px;margin-bottom:6px}
+.lp-preset-chips{display:flex;flex-wrap:wrap;gap:6px}
+.lp-preset-chip{-webkit-app-region:no-drag;font:inherit;font-size:11.5px;padding:5px 10px;border-radius:999px;border:1px solid var(--line-strong);background:var(--bg-3);color:var(--txt-2);cursor:pointer;white-space:nowrap;transition:border-color var(--t),color var(--t),background var(--t)}
+.lp-preset-chip:hover{border-color:var(--accent);color:var(--txt);background:var(--accent-dim)}
+/* P-STT.2b: the no-code Local Whisper block inside the Voice card. */
+.voice-whisper-inner{margin-top:8px;padding-top:10px;border-top:1px solid var(--line-soft)}
+.voice-whisper-h{display:flex;align-items:baseline;gap:8px;margin-bottom:8px}
+.voice-whisper-h b{font-size:12.5px}
+.voice-whisper-h span{font-size:11px;color:var(--txt-3)}
+.whisper-actions{align-items:center;gap:9px}
+.whisper-status{margin-left:auto}
+.whisper-bar{flex:1;height:6px;border-radius:3px;background:var(--bg-3);overflow:hidden}
+.whisper-bar i{display:block;height:100%;background:var(--accent);transition:width .3s ease}
 
 /* P-NORESP.1: "no response from provider" notice that replaces an empty assistant bubble. */
 .noresp-card{display:flex;flex-direction:column;gap:8px;border:1px solid var(--line);border-left:3px solid #e0a44a;border-radius:10px;padding:10px 12px;background:rgba(224,164,74,.06)}

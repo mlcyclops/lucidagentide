@@ -151,4 +151,14 @@ if (/Failed to load pi_natives|Cannot find module .*pi_natives/i.test(said)) {
 }
 console.log(`  lucid launcher OK - ${addons.length} native addon${addons.length === 1 ? "" : "s"} resolve next to the binary, no load failure`);
 
+// --- 4) bundled offline Whisper: the whisper.cpp server binary + its co-located libs (P-STT.2c/.2d) -------
+// The no-code "Install & start" button needs a whisper-server on disk. `bun run whisper` stages it into
+// resources/whisper before packaging; if that step failed (or a runner lacked cmake for the mac source
+// build), fail here rather than ship an app whose offline-STT button dead-ends.
+const whisperBin = join(res, "whisper", `whisper-server${EXE}`);
+if (!existsSync(whisperBin)) fail(`bundled whisper-server missing: ${whisperBin} (did \`bun run whisper\` stage it? see build/fetch-whisper.ts)`);
+const whisperLibs = readdirSync(join(res, "whisper")).filter((f) => /\.(so|dylib|dll)/.test(f) && (f.includes("whisper") || f.includes("ggml")));
+if (!whisperLibs.length) fail(`bundled whisper libs missing next to ${whisperBin} - the co-located whisper/ggml shared libs are required to load`);
+console.log(`  whisper OK - whisper-server + ${whisperLibs.length} shared lib(s) bundled for offline STT`);
+
 console.log("\n✓ air-gap smoke passed: omp + scanner Python + the compiled lucid launcher resolve and run from bundled resources (no network).\n");

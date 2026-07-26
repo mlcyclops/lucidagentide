@@ -9,6 +9,7 @@
 
 import { esc } from "./format.ts";
 import { icon } from "./icons.ts";
+import { localPresetChipsHtml } from "./local_presets.ts"; // P-LOCAL.4: one-click model presets (Laguna/Gemma/Qwen…)
 import {
   LOCAL_AUTH_KINDS,
   newLocalProviderId,
@@ -79,6 +80,7 @@ export function localProvidersCardBody(providers: LocalProviderDef[], vaultRefs:
     <div class="lp-add">
       <button class="lp-add-h" data-lp-addtoggle type="button">${icon("plus", 12)} <span>Add a local provider</span><span class="lp-add-chev">${icon("chevron", 14)}</span></button>
       <div class="lp-add-body">
+        ${localPresetChipsHtml()}
         <input class="prov-key" id="lpName" placeholder="Name (e.g. Hybrid/Private Cloud LLM)" />
         <input class="prov-key" id="lpBaseUrl" placeholder="Base URL (e.g. http://localhost:11434/v1)" />
         <input class="prov-key" id="lpModels" placeholder="Model ids, comma-separated (e.g. llama3.1:8b, gemma3:12b)" />

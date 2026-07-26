@@ -22,6 +22,11 @@ name: Build desktop installers
 
 on:
   workflow_dispatch:
+    inputs:
+      publish_latest:
+        description: 'Publish to the rolling "latest" release (pushes to EXISTING users via auto-update). Leave OFF for test builds.'
+        type: boolean
+        default: false
   push:
     tags: ["v*"]
 
@@ -88,7 +93,14 @@ jobs:
               V="$(node -p "require('./package.json').version")"
             fi
           else
-            V="0.1.${GITHUB_RUN_NUMBER}"
+            # TEST BUILD (manual dispatch): not a release. Stamp a PRERELEASE just above the committed
+            # version (e.g. 1.11.10 -> 1.11.11-test.<run#>). Why not the old 0.1.<run#>: that sorts BELOW
+            # the live release, so an installed test build immediately offers to "update" itself back to
+            # the published version, wrecking the thing you're trying to test. This stamp is build-time
+            # only - package.json in git is untouched, and nothing is published to the update feed here,
+            # so no existing user is affected. A later real 1.11.11 still supersedes it (prerelease sorts first).
+            BASE="$(node -p "require('./package.json').version")"
+            V="$(node -p "const p=process.argv[1].split('-')[0].split('.'); p[0]+'.'+p[1]+'.'+(+p[2]+1)+'-test.'+process.argv[2]" "$BASE" "$GITHUB_RUN_NUMBER")"
           fi
           node -e "const fs=require('fs'),p=require('./package.json');p.version=process.argv[1];fs.writeFileSync('package.json',JSON.stringify(p,null,2)+'\n')" "$V"
           echo "build version = $V"
@@ -99,6 +111,14 @@ jobs:
       - name: Install rpm tooling (Linux)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y rpm
+
+      # macOS builds whisper.cpp from source (upstream publishes no prebuilt server binary, only an
+      # xcframework), so the runner needs cmake. GitHub's macOS image ships it; make it explicit + resilient
+      # so an image change can't silently drop the bundled offline-STT binary. Win/Linux fetch a pinned,
+      # SHA-256-verified prebuilt release instead (no toolchain needed) - see desktop/build/fetch-whisper.ts.
+      - name: Ensure cmake (macOS, for the whisper.cpp source build)
+        if: runner.os == 'macOS'
+        run: cmake --version || brew install cmake
 
       # electron-builder's pkg target resolves the signing cert even for an unsigned (identity:null)
       # build. An EMPTY CSC_LINK is NOT the same as unset: '' != null in JS, so electron-builder treats
@@ -185,7 +205,12 @@ jobs:
   publish-latest:
     name: Publish rolling "latest" release
     needs: build
-    if: github.event_name == 'workflow_dispatch'
+    # OPT-IN ONLY. This job updates the rolling `latest` release AND the electron-updater feed
+    # (latest*.yml), i.e. it pushes the build at everyone who already has the app installed. A plain
+    # manual dispatch must therefore publish NOTHING - it just uploads the per-OS artifacts for testing.
+    # Double-gated: the toggle must be ON *and* the run must be from the default branch, so a test build
+    # off a feature branch can never reach existing users even if the toggle is flipped by mistake.
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_latest && github.ref == 'refs/heads/master' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write

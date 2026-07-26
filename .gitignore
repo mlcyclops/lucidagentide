@@ -73,6 +73,10 @@ desktop/runtimes/*
 !desktop/runtimes/.gitkeep
 !desktop/runtimes/README.md
 
+# bundled whisper.cpp server binary + libs (P-STT.2c): staged per-OS by build/fetch-whisper.ts, never committed
+desktop/whisper/*
+!desktop/whisper/.gitkeep
+
 # Local-only: contains real personal data (PII) — never commit
 tools/seed_personal_facts.ts
 

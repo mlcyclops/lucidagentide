@@ -112,6 +112,29 @@ regenerated for the same logical entity.
 Schema changes only ever happen through numbered migration files. Never edit a
 table definition in place. The schema is a frozen contract.
 
+### 11. UI text is never cramped into wrapping columns.
+
+Readability is load-bearing. Any list/grid of rows (providers, models, settings,
+tiles, chips) MUST keep each row's primary label on one line: the label takes the
+space and ellipsizes on overflow (`white-space: nowrap; overflow: hidden;
+text-overflow: ellipsis`); it NEVER mid-word wraps inside a narrow column.
+Secondary chips/badges are `white-space: nowrap`. Grid tracks use a generous
+`minmax()` (about 220px or more) so labels do not fold; when content will not fit,
+use fewer/wider columns or a single column, NEVER a fixed narrow multi-column grid
+that word-wraps its text into unreadable slivers. If a label can be long, widen the
+column or truncate it with a tooltip. This applies to every panel, popup, and
+mockup (a mockup that word-wraps is a design bug, not a rendering artifact).
+
+The #1 cause is a FLEX container holding prose: `display: flex` makes every raw
+text run AND every inline element (`<b>`, `<a>`, `<code>`) its OWN flex item, so a
+sentence with bold phrases shatters into narrow stacked columns. A flex row MUST
+therefore contain a SINGLE text child: give a leading icon `flex: none` and wrap the
+message in ONE element, OR (preferred, as `.set-note` does) absolutely-position the
+icon and let the text flow as a normal BLOCK paragraph. NEVER place raw text plus
+inline tags directly as siblings inside a flex box. And mockups MUST reuse the real
+component CSS (or copy it verbatim) - a hand-rolled divergent style that flexes
+prose is this same bug wearing a costume, which is exactly how it slipped back in.
+
 -----
 
 ## Frozen contract files (changing any one is its own increment + ADR)

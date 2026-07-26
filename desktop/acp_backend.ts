@@ -71,16 +71,16 @@ const EGRESS_TOOLS = new Set(["browser", "web_search", "web", "fetch", "navigate
 // tool name OR (the strong signal) a `command` string in the tool's rawInput.
 const EXEC_TOOLS = /\b(bash|eval|shell|execute|terminal)\b/;
 const EXEC_OPTIONS_FULL = [
-  { optionId: "exec:allow-once", name: "Allow once", kind: "allow" },
-  { optionId: "exec:allow-turn", name: "Allow for this turn", kind: "allow" },
+  { optionId: "exec:allow-once", name: "Allow once (this command)", kind: "allow" },
+  { optionId: "exec:allow-turn", name: "Allow for the rest of this turn", kind: "allow" },
   { optionId: "exec:allow-program", name: "Always allow this program", kind: "allow" },
   { optionId: "exec:danger", name: "Always allow every command", kind: "danger" },
   { optionId: "exec:deny", name: "Block", kind: "reject" },
 ];
 // Catastrophic or compound calls (no single program to pin) expose only once / this-turn / deny.
 const EXEC_OPTIONS_LIMITED = [
-  { optionId: "exec:allow-once", name: "Allow once", kind: "allow" },
-  { optionId: "exec:allow-turn", name: "Allow for this turn", kind: "allow" },
+  { optionId: "exec:allow-once", name: "Allow once (this command)", kind: "allow" },
+  { optionId: "exec:allow-turn", name: "Allow for the rest of this turn", kind: "allow" },
   { optionId: "exec:deny", name: "Block", kind: "reject" },
 ];
 /** Pull the command/code an exec tool call will run, from its rawInput. */

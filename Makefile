@@ -564,6 +564,18 @@ demo-P-REPORT.10: ## P-REPORT.10 (ADR-0164): a formal SecurityEvent per fetch/PR
 demo-P-FAV.1: ## P-FAV.1 (ADR-0165): model-picker favorite stars - star a model to pin it into a Favorites section at the top of the picker; catalog order preserved, corrupted storage degrades safely, stale stars survive provider reconnects
 	$(BUN) run desktop/scripts/demo_p_fav_1.ts
 
+.PHONY: demo-P-PROV.2
+demo-P-PROV.2: ## P-PROV.2: the Provider Hub - a dedicated popup listing every provider omp offers (names only); new open-weight providers (Qwen OAuth+key, GLM/MiniMax key) join Kimi behind the typed ACKNOWLEDGE gate, which emits NO non-U.S. provider until acknowledged
+	$(BUN) run desktop/scripts/demo_p_prov_2.ts
+
+.PHONY: demo-P-LOCAL.4
+demo-P-LOCAL.4: ## P-LOCAL.4: one-click local-model presets (Laguna 2.1 Poolside, Gemma 4, Qwen 3.8, +) that build ONE Local Provider fronting many models behind a single secured NGINX endpoint, through the existing P-LOCAL.3 add/validate/vault path
+	$(BUN) run desktop/scripts/demo_p_local_4.ts
+
+.PHONY: demo-P-STT.2
+demo-P-STT.2: ## P-STT.2: guided on-device Whisper - hardware-capability gate (run only where it fits), model catalog + install/serve plan, whisper.cpp binary resolution, and the download-with-integrity flow (all pure/injected; no network, no binary)
+	$(BUN) run desktop/scripts/demo_p_stt_2.ts
+
 .PHONY: demo-P-SECACK.1
 demo-P-SECACK.1: ## P-SECACK.1 (ADR-0170): reviewed security rows leave the active view - GUI-owned ack ledger (releases NOTHING, audit kept), findings-seen watermark counts only new findings, and the right-click Cut/Copy/Paste menu for the prompt bar (no Cut/Copy on password fields)
 	$(BUN) run desktop/scripts/demo_p_secack_1.ts

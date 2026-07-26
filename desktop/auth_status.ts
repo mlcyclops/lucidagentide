@@ -91,6 +91,13 @@ export const OTHERS: Provider[] = [
   { id: "openrouter", name: "OpenRouter", env: "OPENROUTER_API_KEY", oauthId: "openrouter", canOauth: true },
   { id: "deepseek", name: "DeepSeek", env: "DEEPSEEK_API_KEY", oauthId: "deepseek", canOauth: false },
   { id: "moonshot", name: "Moonshot · Kimi", env: "MOONSHOT_API_KEY", oauthId: "moonshot", canOauth: false },
+  // P-PROV.2: native omp open-weight / regional providers (models pre-bundled in omp's catalog, so a saved
+  // key surfaces that provider's models). Qwen has a real browser OAuth broker (qwen-portal); GLM (z.ai) and
+  // MiniMax authenticate by key only; omp's "login" for them is an api-key paste, so we expose the key path
+  // and DON'T render a dead OAuth button (same call the repo already makes for DeepSeek / Moonshot).
+  { id: "qwen-portal", name: "Alibaba · Qwen", env: "QWEN_PORTAL_API_KEY", oauthId: "qwen-portal", canOauth: true },
+  { id: "zai", name: "Z.AI · GLM", env: "ZAI_API_KEY", oauthId: "", canOauth: false },
+  { id: "minimax", name: "MiniMax", env: "MINIMAX_API_KEY", oauthId: "", canOauth: false },
   { id: "groq", name: "Groq", env: "GROQ_API_KEY", oauthId: "", canOauth: false },
   // P-VOICE.1 (ADR-0115): ElevenLabs is a VOICE provider (TTS/STT), not a chat model. It's listed here so
   // the key gets the same masked keySet/last4 plumbing, but the Settings UI renders it in a dedicated
