@@ -16324,3 +16324,105 @@ the tail, never the cached layers).
 
 ADR-0244 (prerequisite), ADR-0066/0067 (exec gate + Speed/Risk dial), ADR-0046-0056 (/goal + checker
 model), CLAUDE.md keystones #1/#2.
+
+## ADR-0246 -- P-RELEASE.2: macOS in-app auto-update is silently inert (unsigned + one-shot + logless) (SCOPE/PLAN) (2026-07-26)
+
+**Status:** Accepted -- SCOPE/PLAN, roadmap only. No code this ADR. P-RELEASE.2a is unblocked by an Apple
+Developer account (expected the week of 2026-07-27); P-RELEASE.2b/.2c/.2d are independent of it and are each
+their own session.
+
+### Context
+
+Observed symptom: after publishing a release, the macOS app does not pick it up. Quitting and relaunching,
+then waiting five minutes, changes nothing. Read as "the update is slow." It is not slow. It is a stack of
+four independent defects, three of which are silent, and the whole stack is invisible because the updater
+has no user-facing log.
+
+Traced through the shipped code (`electron-updater@6.8.9`, pinned in `desktop/bun.lock`):
+
+1. **One check, at launch, forever.** `desktop/updater.ts:70` calls `autoUpdater.checkForUpdates()` exactly
+   once from `initAutoUpdate`, itself called once at `desktop/main.ts:396`. There is no interval, no manual
+   "Check for updates" action, and no `checkForUpdatesAndNotify` anywhere in `desktop/`. A relaunch buys
+   exactly one attempt; if that attempt misses, the next chance is the next relaunch.
+
+2. **The check reads three CDN-cached github.com endpoints with no cache-busting.**
+   `GitHubProvider.getLatestVersion` fetches `releases.atom` (`GitHubProvider.js:43`), then
+   `releases/latest` with `Accept: application/json` to resolve the tag GitHub marks Latest
+   (`GitHubProvider.js:158-168`), then `releases/download/<tag>/latest-mac.yml`
+   (`GitHubProvider.js:118,183-185`). `Provider.createRequestOptions` (`Provider.js:59-72`) attaches only
+   `Accept`. The single `Cache-Control: no-cache` in the flow is on the LOCAL Squirrel proxy feed
+   (`MacUpdater.js:214`), not on anything pointed at GitHub. A just-published release is therefore
+   invisible at the edge for some minutes. This is the only cause that genuinely presents as "slow," and it
+   is the smallest of the four.
+
+3. **Then a full, silent zip download.** macOS always takes the `.zip`, explicitly excluding pkg and dmg
+   (`MacUpdater.js:81`). The differential path requires a previously cached `update.zip`, so the first
+   update after any fresh install is always a FULL download (`MacUpdater.js:94-96`). Since the bundled
+   `whisper-server` + 18 dylibs landed (PROGRESS.md, `test/bundled-installers`), that zip is large. No
+   `download-progress` handler exists, so the only UI event in the entire flow is the terminal
+   "Restart now / Later" dialog at `desktop/updater.ts:42`.
+
+4. **The hard stop: the mac build is unsigned, and Squirrel.Mac validates AFTER the download.**
+   `desktop/package.json` sets `mac.identity: null`; `build-desktop.yml:18-19` states builds are unsigned
+   and signing is opt-in on `secrets.MAC_CSC_LINK` (`:137-149`, `:158-162`). `desktop/updater.ts:18-19` and
+   `desktop/SIGNING.md` both already record that Squirrel.Mac refuses unsigned updates. The download is
+   paid in full first, then discarded.
+
+5. **None of it is observable.** `autoUpdater.logger` is bare `console` (`desktop/updater.ts:38`) and the
+   error handler is `console.warn` (`:40`). A packaged app launched from Finder has nowhere for that to go
+   and writes no log file. Causes 1 through 4 are therefore indistinguishable from each other and from
+   "nothing published yet": in every case the UI does nothing at all.
+
+**The trap that would waste the signing work.** Adding the five Apple secrets is NOT sufficient. In
+`macPackager.js:182-190`, `sign()` reads `options.identity` and, when it is `null`, logs "skipped macOS code
+signing" and returns false BEFORE any keychain or `CSC_LINK` lookup. Notarization runs inside that same
+`sign()` (`macPackager.js:288-290`), so it is skipped too. With `mac.identity: null` still in
+`desktop/package.json`, a correctly-configured cert produces a build that is still unsigned, still
+un-notarized, and still cannot auto-update, with only an informational log line to say so.
+
+### Decision (phased)
+
+- **P-RELEASE.2a -- sign and notarize the mac build (unblocks mac auto-update entirely).** Add
+  `MAC_CSC_LINK`, `MAC_CSC_KEY_PASSWORD`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID` per
+  `desktop/SIGNING.md`, AND in the same change REMOVE `mac.identity: null` from `desktop/package.json` (or
+  set it to the Developer ID Application name) so `macPackager.sign()` does not short-circuit. Acceptance is
+  a real device test, not a green CI run: `codesign -dv --verbose=4` on the installed app shows a Developer
+  ID authority (not `Signature=adhoc`), `spctl -a -vv` accepts it, and an installed build actually applies a
+  newer published release end to end. Until this ships, mac in-app update CANNOT work, and the UI should say
+  so rather than imply an update is coming.
+
+- **P-RELEASE.2b -- make the updater observable (do this first; everything else is guesswork without it).**
+  Replace the `console` logger at `desktop/updater.ts:38` with a real file log under
+  `app.getPath("logs")`, and surface `error` and `update-not-available` in the UI. `AppUpdater.js:405`
+  already emits the exact line that distinguishes "no newer version" from a signature failure; today it goes
+  nowhere. This is independent of the Apple account and is the cheapest fix in the set.
+
+- **P-RELEASE.2c -- visible progress + a retry path.** Add a `download-progress` handler wired to the status
+  bar so a multi-minute full-zip download reads as work rather than as a hang, plus a manual "Check for
+  updates" action and a periodic re-check (order of 30 to 60 minutes) so a launch check that lands inside the
+  GitHub edge-cache window is no longer terminal.
+
+- **P-RELEASE.2d -- resolve the rolling-`latest` / prerelease interaction.** `publish-latest` stamps non-tag
+  builds `X.Y.(Z+1)-test.<run#>` (version step, `build-desktop.yml:59-113`) and publishes them to tag
+  `latest` with `make_latest: "true"` (`:250-252`). `isUpdateAvailable` is a plain `semver.gt` and does NOT
+  filter prereleases (`AppUpdater.js:339-365`); `allowPrerelease` (default false, derived from the INSTALLED
+  version at `AppUpdater.js:125,218`) only steers provider tag selection. So when that job runs it both
+  repoints GitHub's Latest at tag `latest`, hiding the real tagged release from the updater, and offers
+  `1.11.12-test.N` to everyone on stable `1.11.11`. Decide whether the rolling release should set
+  `make_latest` at all, given the README download buttons are its only actual requirement. Reasoned from the
+  code; not yet observed live.
+
+### Open questions
+
+Whether `pkg` (an installer, not an app bundle) should remain a mac target once the zip path actually works,
+or be download-only. Whether the periodic re-check in .2c is acceptable for the air-gapped and
+`updateChannel: "managed"` fleets (it must stay behind the same `updatePolicy()` gate at
+`desktop/updater.ts:29-33`, which already disables the check entirely for managed). Whether to keep serving
+unsigned mac builds at all once .2a lands, or hard-fail the release when the cert is absent
+(`forceCodeSigning`), so an unsigned mac artifact can never ship again by omission.
+
+### Relates to
+
+ADR-0213 (P-RELEASE.1, the version-stamp derivation this depends on), `desktop/SIGNING.md`,
+`desktop/updater.ts`, `desktop/package.json` `build.mac`, `.github/workflows/build-desktop.yml`, ADR-A009 /
+`managed_config.ts` (the `github` / `feed` / `managed` update channels, which .2b and .2c must not bypass).
