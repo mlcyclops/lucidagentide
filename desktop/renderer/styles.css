@@ -1894,6 +1894,8 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .voice-auto.off input{cursor:not-allowed}
 .voice-auto b{display:block;font-size:12.5px;font-weight:600;color:var(--txt)}
 .voice-auto i{display:block;margin-top:3px;font-style:normal;font-size:11px;line-height:1.5;color:var(--txt-4)}
+.voice-hk{margin-left:6px;font-family:var(--mono);font-size:9.5px;font-weight:500;letter-spacing:0;color:var(--txt-4);
+  background:var(--bg-3);border:1px solid var(--line);border-radius:4px;padding:1px 5px;vertical-align:1px}
 .voice-grp{margin:8px 0 3px;display:flex;align-items:center;gap:5px;font-size:9.5px;letter-spacing:1.1px;
   text-transform:uppercase;color:var(--txt-4)}
 .voice-grp:first-child{margin-top:0}

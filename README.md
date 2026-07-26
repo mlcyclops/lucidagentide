@@ -177,6 +177,32 @@ personalization internals are proprietary and intentionally undocumented here - 
 
 ---
 
+## ✨ What's new in v1.12.0
+
+> **🗣️ Talk to it.** LUCID reads its replies aloud as it writes them, opens the mic when it finishes, and answers you the way a person would - short, spoken, hands-free.
+
+- **🗣️ Conversation mode (the headline)** - one keystroke (`Ctrl/⌘+G`) and LUCID becomes a
+  **hands-free conversation**: it reads each reply aloud **as it streams**, the mic opens by itself when it
+  finishes, and a few seconds of silence sends your turn. Audio starts after the **first sentence**, not after
+  the whole answer - so a long reply begins speaking in about a second instead of twenty. *(P-VOICE.2/.3)*
+- **🧠 It answers for the ear, automatically** - in conversation mode the agent is told, every turn, to
+  write for **listening**: lead with the answer, two or three sentences, plain spoken prose, no headings,
+  lists, tables, code blocks or file paths. You should never have to ask it to be brief. It constrains the
+  answer's **shape**, never the work behind it. *(P-VOICE.5)*
+- **📻 A glowing equalizer** - a real spectrum analyser of the agent's actual voice: segmented LEDs with
+  hanging peak caps, log-spaced bands and hi-fi ballistics. It lives as a **mini strip** in the prompt bar, or
+  **pops out** as a **LUCID Agent [Voice]** panel you drag and anchor anywhere in the window - it snaps to the
+  edges, resizes, minimizes, and remembers where you left it. *(P-VOICE.4)*
+- **⏳ It keeps you company while it thinks** - eyes-off, a long turn used to be dead air. Now you get short,
+  escalating spoken acknowledgements - *"Got it, thinking this through."* → *"Still working on it, give me a
+  few seconds."* - capped per turn, and never over the answer. *(P-VOICE.6)*
+- **🎛️ A voice picker that tells the truth** - engine + voice moved out of Settings and into the composer,
+  with **every** engine's voices listed (ElevenLabs, ChatGPT/OpenAI, offline Kokoro), a remembered voice **per
+  engine**, and any engine you can't actually use **greyed out with the specific reason** - including the one
+  that catches people out: an OpenAI *subscription* sign-in cannot reach the platform speech API. *(P-VOICE.3)*
+
+---
+
 ## ✨ What's new in v1.11.12
 
 > Offline voice that actually works: dictate hands-free into a fully on-device Whisper, installed in one click.
@@ -222,6 +248,44 @@ personalization internals are proprietary and intentionally undocumented here - 
 - **🩹 The v1.11.8 reliability rollup rides along** - the air-gap `bun` fix (clean machines boot with zero
   prerequisites), reliable OAuth connect/disconnect, the overloaded-provider fallback, the model-picker freeze
   safety-net, and the Linux air-gap Python fix.
+
+---
+
+## 🗣️ Voice mode
+
+> **Put it down and talk to it.** LUCID speaks its replies while it writes them, listens when it finishes,
+> and shapes the answer for your ears instead of your eyes - all on the engine you choose, including a fully
+> offline one.
+
+<div align="center">
+<img src=".github/assets/screenshots/v1.12.0/voice-panel-undocked.svg" alt="The LUCID Agent [Voice] equalizer panel popped out and anchored inside the LUCID window, showing segmented LED bars with peak caps while a reply is spoken" width="440" />
+<img src=".github/assets/screenshots/v1.12.0/voice-mini-composer.svg" alt="The mini equalizer strip under the LUCID prompt bar, beside the mic button, while a reply is being read aloud" width="440" />
+<br><sub><b>Left:</b> the <b>LUCID Agent [Voice]</b> panel popped out and anchored where you want it. <b>Right:</b> the mini strip under the prompt bar. <em>Screenshot placeholders - drop the real captures over the two SVGs in <code>.github/assets/screenshots/v1.12.0/</code>.</em></sub>
+</div>
+
+- **🗣️ Hands-free turn-taking.** `Ctrl/⌘+G`. The reply is read aloud, the mic opens the moment it stops
+  speaking, a longer silence ends your turn and sends it. Guarded on every side so it can never listen to the
+  agent's own voice: it waits for the audio to actually **finish**, not just the text, and echo cancellation is
+  requested explicitly. A manual mic stop (`Ctrl/⌘+D`) never auto-sends - that one is still yours to review.
+- **⚡ It starts talking after the first sentence.** The streaming answer is chunked on sentence boundaries and
+  synthesized a span at a time, so audio begins while the model is still writing. An unterminated code fence is
+  withheld, so it never narrates raw source at you.
+- **🎛️ Your engine, your voice.** ElevenLabs (your account's cloned voices), ChatGPT/OpenAI, or **Kokoro
+  running offline on your own machine** - air-gap safe, no key, nothing leaves the box. The picker sits in the
+  composer, remembers a voice **per engine**, and greys out anything that isn't actually configured with the
+  reason why.
+- **📻 A spectrum analyser, not an animation.** The bars are driven by the real audio through a Web Audio
+  analyser - log-spaced bands, fast attack and slow release, hanging peak caps. Mini in the prompt bar, or
+  popped out as a draggable, snapping, self-remembering panel.
+- **🧠 Spoken answers are written for speech.** In conversation mode the agent gets standing, per-turn
+  guidance to lead with the answer in two or three plain sentences - no markdown, no paths, no code read aloud -
+  and to say the short version out loud when the full answer belongs on screen. Switch the mode off and the very
+  next turn is a full written answer again.
+- **🔒 Same gate, same rules.** A transcript is ordinary user input and is scanned on send like anything
+  typed; a cloud TTS engine is ordinary egress you opt into per engine, and the offline path keeps the audio on
+  your machine. Auto-speak is **off by default**.
+
+<sub>*(ADR-0246/0247/0248 · increments P-VOICE.2-.6)*</sub>
 
 ---
 
@@ -410,6 +474,7 @@ via the same read-only-safe JSONL-sink pattern as the rest of the observer store
 - [<img src=".github/assets/icons/gateway.svg" width="16" alt=""> Models and the AskSage gateway](#-models-and-the-asksage-gateway)
 - [📚 Knowledge & RAG](#-knowledge--rag)
 - [🤝 Live collaboration](#-live-collaboration)
+- [🗣️ Voice mode](#️-voice-mode)
 - [📱 LUCID Remote](#-lucid-remote)
 - [<img src=".github/assets/icons/builton.svg" width="16" alt=""> Built on](#-built-on)
 - [<img src=".github/assets/icons/quickstart.svg" width="16" alt=""> Quick start](#-quick-start)

@@ -16493,3 +16493,51 @@ at the 31-diagnostic pre-existing baseline. Electron main rebuilt.
 On-device: the autoplay-policy path on a first click (the one thing a synthetic harness cannot prove), and a
 real hands-free loop end to end. dots.tts still drops in as a fourth engine behind an OpenAI-compatible shim
 with no client change.
+
+## ADR-0248 -- P-VOICE.6: spoken progress cues + the conversation hotkey
+
+**Date:** 2026-07-26
+**Status:** Accepted -- BUILT. Completes the voice arc (ADR-0246/0247) after live use.
+
+### Problem
+
+Two gaps only visible once conversation mode was actually used hands-free:
+
+1. **Dead air.** On screen a long turn is legible - thinking streams, tool chips tick, the HUD counts. Eyes-off,
+   all of that is silence, and thirty seconds of it is indistinguishable from a crash. The user talks again,
+   which starts a second turn on top of the first.
+2. **No way in or out without the mouse.** Conversation mode is the one control you need while NOT looking at
+   the screen, and it was a checkbox two clicks deep.
+
+### Decision
+
+**Spoken cues, governed by restraint.** `nextThinkingCue()` is a pure function of (cues already spoken, ms
+since the agent last said anything, whether the answer has started, whether a tool is running). Escalating
+gaps (2.6s / 11s / 22s), a hard cap of three, silence once the answer speaks, and nothing queued behind audio
+already playing. The clock measures silence since the last SPOKEN thing rather than the turn start, so a long
+tool run in the middle of a reply is covered by the same rule as the opening think. Two phrase banks, because
+"let me check that" is a lie when nothing is running and "still thinking" undersells a tool sweep.
+
+Conversation mode only. With eyes on the screen the thinking block is the acknowledgement, and a spoken cue
+would talk over what the user is reading.
+
+**`Ctrl/Cmd+G` toggles conversation mode.** Key choice was a constraint-satisfaction problem: near the mic's
+`Ctrl/Cmd+D`, free on Windows AND macOS AND Linux, and not a Chromium binding. Ctrl+E/F/R/S/W/A/Q are all
+spoken for (omnibox, find, reload, save, close, select-all, quit); G is adjacent on the home row, and macOS
+"Find Next" needs a Find menu LUCID does not have. Asymmetric by design: ON implies auto-speak (the loop needs
+the speaking half) and starts listening immediately when idle; OFF closes the mic and stops cues but leaves
+auto-speak alone - you stop being listened to, replies are still read.
+
+### Alternatives rejected
+
+- **A spoken tool narration** ("reading app dot ts") - accurate and unbearable. Cues acknowledge, they do not
+  report; the screen still has the detail.
+- **Random phrasing.** Rotation by index is deterministic, testable, and guarantees no line repeats in a turn.
+- **`Ctrl+Shift+D`.** Memorable as a modifier of the mic key, but the ask was a nearby BUTTON, and a
+  three-finger chord is worse for the one control you use without looking.
+
+### Verification
+
+6 unit tests pinning the restraint rules (nothing before the gap, the answer always wins, gaps provably
+escalate, hard cap, distinct + tool-flavoured lines, and every line short/markdown-free/sentence-terminated so
+the engine lands the intonation). 66 voice tests; renderer tsc clean.
