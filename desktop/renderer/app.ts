@@ -75,7 +75,7 @@ import { decideGovOnboarding, planGovSetup, CIV_ASKSAGE_BASE, ASKSAGE_ACCOUNT_UR
 import { ASKSAGE_FAMILY_ORDER, familyOf, filterModels, groupByFamily, isAuxiliaryModel, isChinaModel, isDeprecatedModel, isGovModel, providerLabelOf, recommendFallbacks, sortGovFirstNewest } from "./model_families.ts";
 import { FAVS_KEY, offeredModels, parseFavs, starredOf, toggleFav } from "./model_favorites.ts"; // P-FAV.1 (ADR-0165) + P-REMOTE.11b (ADR-0238)
 import { CONFIG_WARM_POLL_MS, warmStep } from "./config_warm.ts"; // P-IDE.1d: model-picker cold-start warm-poll (per-cycle retry budget)
-import { DICTATION_DEFAULTS, dictationTick, mergeTranscript, newDictation, type DictationState } from "./dictation.ts"; // P-STT.3: fluid live dictation
+import { DICTATION_DEFAULTS, dictationTick, downmixMono, encodeWavPcm16, mergeTranscript, newDictation, pushWave, resampleLinear, sttFailureMessage, waveClock, waveHeight, WHISPER_SAMPLE_RATE, type DictationState } from "./dictation.ts"; // P-STT.3/.4: fluid live dictation + visible mic feedback
 import { buildHubSections, configuredProviderCount, type HubSection } from "./provider_hub.ts"; // P-PROV.2: Provider Hub grouping + gate
 import { LOCAL_MODEL_PRESETS } from "./local_presets.ts"; // P-LOCAL.4: one-click local-model presets in the hub
 import { renderSandboxSection } from "./sandbox_panel.ts"; // P-SANDBOX.5 (ADR-0169)
@@ -277,6 +277,9 @@ function buildShell(): void {
             <!-- Persona + Skills moved to the titlebar (next to the model picker); the composer keeps only the
                  mic so it never squishes when a right-edge surface (KG / IDE / Agent Builder) narrows the center. -->
             <button class="ctool ctool-icon" id="ctMic" data-tip="Dictate \u00b7 ${modCombo("D")}|Click (or ${modCombo("D")}) for hands-free dictation - your words land as you pause, and it stops on a longer silence. Click again to stop early. (Settings \u2192 Voice sets the engine.)">${icon("mic", 15)}</button>
+            <!-- P-STT.4: live mic waveform - scrolling level history (newest at the right) + elapsed clock,
+                 shown only while dictation runs so the user SEES the mic hearing them. -->
+            <div class="ct-wave" id="ctWave" hidden aria-hidden="true"><canvas id="ctWaveCanvas"></canvas><span class="ct-wave-time" id="ctWaveTime">0:00</span></div>
           </div>
         </div>
       </main>
@@ -2166,6 +2169,19 @@ function openSettingsToLocalProviders(): void {
   openSettings();
   setTimeout(() => {
     const sec = $('[data-sec="localProviders"]') as HTMLElement | null;
+    sec?.classList.add("open");
+    sec?.scrollIntoView({ behavior: "smooth", block: "start" });
+    sec?.classList.add("set-flash");
+    setTimeout(() => sec?.classList.remove("set-flash"), 1600);
+  }, 140);
+}
+
+// P-STT.4: jump Settings to the Voice card (from the dictation-failure toast) so the fix is one click away.
+function openSettingsToVoice(): void {
+  SET_OPEN.add("voice");
+  openSettings();
+  setTimeout(() => {
+    const sec = $('[data-sec="voice"]') as HTMLElement | null;
     sec?.classList.add("open");
     sec?.scrollIntoView({ behavior: "smooth", block: "start" });
     sec?.classList.add("set-flash");
@@ -6904,9 +6920,13 @@ interface DictationSession {
   rec: MediaRecorder | null; chunks: Blob[]; mime: string;
   timer: number; state: DictationState; active: boolean;
   data: Float32Array<ArrayBuffer>; // reused VAD frame buffer (explicit ArrayBuffer for getFloatTimeDomainData)
+  // P-STT.4: live waveform + visible-failure state.
+  wave: number[]; waveCount: number; raf: number; startedAt: number; bucketAt: number; bucketPeak: number;
+  failWarned: boolean; // one engine-failure toast per session (reset when the user starts local Whisper)
 }
 let dictation: DictationSession | null = null;
 const DICTATION_TICK_MS = 100;
+const WAVE_BUCKET_MS = 90; // one waveform bar per bucket; ~4s of history across the strip
 function blobToBase64(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
     const r = new FileReader();
@@ -6915,12 +6935,114 @@ function blobToBase64(blob: Blob): Promise<string> {
     r.readAsDataURL(blob);
   });
 }
+/** whisper.cpp's /inference (and OpenAI-compatible STT) decode WAV/PCM, not the WebM/Opus that MediaRecorder
+ *  produces - a raw upload 400s and the mic looks "heard you, but nothing transcribed". Decode the clip with
+ *  the Web Audio API (Chromium decodes its own WebM/Opus), downmix to mono, resample to 16 kHz, and re-encode
+ *  as 16-bit PCM WAV. Returns null when the clip can't be decoded, so the caller falls back to the raw blob. */
+async function blobToWav16kMono(blob: Blob): Promise<Blob | null> {
+  try {
+    const bytes = await blob.arrayBuffer();
+    // A fresh OfflineAudioContext per clip just decodes (no playback) and avoids the live-AudioContext cap.
+    const decoded = await new OfflineAudioContext(1, 1, 48000).decodeAudioData(bytes);
+    const channels: Float32Array[] = [];
+    for (let c = 0; c < decoded.numberOfChannels; c++) channels.push(decoded.getChannelData(c));
+    const pcm = resampleLinear(downmixMono(channels), decoded.sampleRate, WHISPER_SAMPLE_RATE);
+    if (pcm.length === 0) return null;
+    return new Blob([encodeWavPcm16(pcm, WHISPER_SAMPLE_RATE)], { type: "audio/wav" });
+  } catch { return null; }
+}
 /** RMS level (0..~1) of the current mic frame - drives voice-activity detection. */
 function micRms(sess: DictationSession): number {
   sess.analyser.getFloatTimeDomainData(sess.data);
   let sum = 0;
   for (let i = 0; i < sess.data.length; i++) { const v = sess.data[i]!; sum += v * v; }
   return Math.sqrt(sum / sess.data.length);
+}
+// P-STT.4: the live waveform chip next to the mic - a scrolling level history (newest at the right,
+// seconds sliding left) + an elapsed clock, so the user SEES the mic hearing them while they speak.
+const WAVE_CAP = 64; // ring-buffer bound; wider than any strip at 3px pitch
+let waveColors = { voiced: "#e05a5a", quiet: "#8a93a5", grid: "rgba(255,255,255,.1)" };
+/** Show + size the chip (DPR-crisp), cache theme colors, and start the paint loop. */
+function startWaveChip(sess: DictationSession): void {
+  const chip = $("#ctWave") as HTMLElement | null;
+  const cv = $("#ctWaveCanvas") as HTMLCanvasElement | null;
+  if (!chip || !cv) return;
+  chip.hidden = false;
+  const dpr = window.devicePixelRatio || 1;
+  cv.width = Math.max(1, Math.round(cv.clientWidth * dpr));
+  cv.height = Math.max(1, Math.round(cv.clientHeight * dpr));
+  const cs = getComputedStyle(document.documentElement);
+  waveColors = {
+    voiced: cs.getPropertyValue("--red").trim() || "#e05a5a",
+    quiet: cs.getPropertyValue("--txt-3").trim() || "#8a93a5",
+    grid: cs.getPropertyValue("--line-soft").trim() || "rgba(255,255,255,.1)",
+  };
+  sess.raf = requestAnimationFrame(() => waveFrame(sess));
+}
+/** Per-frame: sample the mic, roll completed buckets into the history ring, repaint, tick the clock. */
+function waveFrame(sess: DictationSession): void {
+  if (!sess.active) return;
+  const now = performance.now();
+  const level = micRms(sess);
+  sess.bucketPeak = Math.max(sess.bucketPeak, level);
+  while (now - sess.bucketAt >= WAVE_BUCKET_MS) {
+    pushWave(sess.wave, sess.bucketPeak, WAVE_CAP);
+    sess.waveCount++; sess.bucketAt += WAVE_BUCKET_MS; sess.bucketPeak = level;
+  }
+  drawWave(sess, now);
+  const t = $("#ctWaveTime");
+  if (t) t.textContent = waveClock(now - sess.startedAt);
+  sess.raf = requestAnimationFrame(() => waveFrame(sess));
+}
+/** Paint the strip: history bars slide left as buckets age; the in-progress bucket grows at the right
+ *  edge. Bars at/above the VAD voice threshold use the recording red (so the user sees what counts as
+ *  speech); quieter bars are muted. Faint gridlines mark whole seconds. */
+function drawWave(sess: DictationSession, now: number): void {
+  const cv = $("#ctWaveCanvas") as HTMLCanvasElement | null;
+  const g = cv?.getContext("2d");
+  if (!cv || !g) return;
+  const dpr = window.devicePixelRatio || 1;
+  const w = cv.width / dpr, h = cv.height / dpr;
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.clearRect(0, 0, w, h);
+  const pitch = 3, bw = 2; // 2px bar + 1px gap
+  const frac = Math.min(1, (now - sess.bucketAt) / WAVE_BUCKET_MS);
+  const bar = (x: number, level: number, absIdx: number) => {
+    if ((absIdx * WAVE_BUCKET_MS) % 1000 < WAVE_BUCKET_MS) { g.fillStyle = waveColors.grid; g.fillRect(x, 0, 1, h); } // whole-second tick
+    const bh = Math.max(2, waveHeight(level) * (h - 2));
+    g.fillStyle = level >= DICTATION_DEFAULTS.voiceLevel ? waveColors.voiced : waveColors.quiet;
+    g.fillRect(x, (h - bh) / 2, bw, bh);
+  };
+  bar(w - bw, sess.bucketPeak, sess.waveCount); // the live bucket, pinned to the right edge
+  for (let j = 0; j < sess.wave.length; j++) {
+    const x = w - bw - (j + frac) * pitch;
+    if (x < -bw) break;
+    bar(x, sess.wave[sess.wave.length - 1 - j]!, sess.waveCount - 1 - j);
+  }
+}
+/** P-STT.4: one visible warning per session when an utterance transcribed to NOTHING because the engine
+ *  failed (server down / missing key) - with one-click recovery. Genuine silence stays silent. */
+async function warnSttFailure(sess: DictationSession, r: { text: string; note: string } | null): Promise<void> {
+  const msg = sttFailureMessage(r);
+  if (!msg || sess.failWarned) return;
+  sess.failWarned = true;
+  const [v, ws] = await Promise.all([bridge.voiceSettings().catch(() => null), bridge.whisperStatus().catch(() => null)]);
+  const actions: { label: string; kind?: "ok" | "danger"; run?: () => void }[] = [];
+  if (v?.sttProvider !== "elevenlabs" && ws && !ws.running && ws.capable && ws.binAvailable) {
+    actions.push({ label: "Start local Whisper", kind: "ok", run: () => { void startManagedWhisperFromMic(); } });
+  }
+  actions.push({ label: "Voice settings", run: () => { openSettingsToVoice(); } });
+  showToast({ tone: "warn", title: "Heard you, but nothing transcribed", desc: msg, actions, timeout: 12000 });
+}
+/** Start the managed offline Whisper from the dictation-failure toast (same flow as the Voice card's
+ *  button). Dictation keeps listening; once the server is up the next utterance lands normally. */
+async function startManagedWhisperFromMic(): Promise<void> {
+  showToast({ title: "Starting local Whisper\u2026", desc: "Downloading the model if needed and starting the offline server; dictation keeps listening meanwhile.", timeout: 4000 });
+  const wr = await bridge.whisperStart(undefined).catch(() => null);
+  if (wr?.ok) {
+    if (dictation) dictation.failWarned = false; // re-arm: a later failure should warn again
+    showToast({ tone: "ok", title: "Local Whisper is running", desc: "Speak again - your words will land in the prompt bar.", timeout: 4000 });
+  } else showToast({ tone: "warn", title: "Couldn't start local Whisper", desc: wr?.reason || "See Settings \u2192 Voice.", timeout: 5000 });
 }
 /** Record ONE utterance; on stop, transcribe it and append to the composer, then - if the session is still
  *  live - immediately start the next utterance's recorder so no words are dropped between utterances. */
@@ -6934,11 +7056,15 @@ function startUtterance(sess: DictationSession): void {
     sess.rec = null;
     if (sess.active) startUtterance(sess); // keep listening for the next utterance right away
     if (blob.size < 1400) return; // essentially silence - nothing to transcribe
-    const r = await bridge.transcribe(await blobToBase64(blob), blob.type).catch(() => null);
+    // whisper.cpp / OpenAI-compatible STT decode WAV, not MediaRecorder's WebM/Opus - transcode first, else
+    // the server 400s the raw clip and the mic looks "heard, but nothing transcribed". Fall back to the raw
+    // blob only if decoding fails (keeps the ElevenLabs cloud path, which accepts WebM, working).
+    const send = (await blobToWav16kMono(blob)) ?? blob;
+    const r = await bridge.transcribe(await blobToBase64(send), send.type).catch(() => null);
     if (r?.text) {
       const ta = $("#input") as HTMLTextAreaElement;
       ta.value = mergeTranscript(ta.value, r.text); autosize(ta); setSendEnabled();
-    }
+    } else void warnSttFailure(sess, r); // P-STT.4: a dead engine is VISIBLE, not a silent nothing
   };
   sess.rec.start();
 }
@@ -6948,6 +7074,11 @@ async function endDictation(): Promise<void> {
   const sess = dictation; if (!sess) return;
   dictation = null; sess.active = false; // active=false BEFORE stop so onstop won't restart the recorder
   clearInterval(sess.timer);
+  cancelAnimationFrame(sess.raf); // P-STT.4: stop + hide the waveform chip
+  const chip = $("#ctWave") as HTMLElement | null;
+  if (chip) chip.hidden = true;
+  const tlab = $("#ctWaveTime");
+  if (tlab) tlab.textContent = "0:00";
   ($("#ctMic") as HTMLElement | null)?.classList.remove("recording");
   try { if (sess.rec && sess.rec.state === "recording") sess.rec.stop(); } catch { /* already stopped */ }
   setTimeout(() => { sess.stream.getTracks().forEach((t) => t.stop()); void sess.ctx.close().catch(() => {}); }, 60);
@@ -6970,7 +7101,8 @@ async function toggleMicRecording(): Promise<void> {
   analyser.fftSize = 1024;
   source.connect(analyser);
   const mime = MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm" : "";
-  const sess: DictationSession = { stream, ctx, analyser, data: new Float32Array(new ArrayBuffer(analyser.fftSize * Float32Array.BYTES_PER_ELEMENT)), rec: null, chunks: [], mime, timer: 0, state: newDictation(), active: true };
+  const t0 = performance.now();
+  const sess: DictationSession = { stream, ctx, analyser, data: new Float32Array(new ArrayBuffer(analyser.fftSize * Float32Array.BYTES_PER_ELEMENT)), rec: null, chunks: [], mime, timer: 0, state: newDictation(), active: true, wave: [], waveCount: 0, raf: 0, startedAt: t0, bucketAt: t0, bucketPeak: 0, failWarned: false };
   dictation = sess;
   startUtterance(sess);
   sess.timer = window.setInterval(() => {
@@ -6981,6 +7113,7 @@ async function toggleMicRecording(): Promise<void> {
     else if (r.action === "stop") { void endDictation(); }
   }, DICTATION_TICK_MS);
   btn?.classList.add("recording");
+  startWaveChip(sess); // P-STT.4: live waveform + elapsed clock while the session runs
   showToast({ title: "Listening…", desc: "Speak naturally - your words land as you pause. It stops on a longer silence, or click the mic to stop.", timeout: 2800 });
 }
 

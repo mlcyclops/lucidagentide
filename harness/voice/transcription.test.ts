@@ -6,7 +6,7 @@
 // and the fail-safe (transport error / non-200 → empty text, never throws).
 
 import { test, expect, describe } from "bun:test";
-import { OpenAiCompatibleSttBackend, WhisperCppSttBackend } from "./transcription.ts";
+import { OpenAiCompatibleSttBackend, WhisperCppSttBackend, sttTransportFailed, stripNonSpeech } from "./transcription.ts";
 
 const audio = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]);
 
@@ -94,5 +94,42 @@ describe("OpenAiCompatibleSttBackend", () => {
     const be = new OpenAiCompatibleSttBackend({ baseUrl: "http://x/", fetchImpl });
     const r = await be.transcribe(audio);
     expect(r.text).toBe("");
+  });
+});
+
+// P-STT: the /api/transcribe handler tries whisper.cpp's /inference, then falls back to the OpenAI /v1 shape
+// ONLY when the first attempt did not reach a working server. This guard is what keeps a healthy whisper.cpp
+// that heard SILENCE from being probed on /v1 (which it 404s) and mislabeled "no STT server answered".
+describe("sttTransportFailed", () => {
+  test("true only when text is empty AND the note says the server was unreachable", () => {
+    expect(sttTransportFailed({ backendId: "whisper-cpp", text: "", note: "whisper.cpp STT unavailable (whisper.cpp 400 Bad Request)" })).toBe(true);
+    expect(sttTransportFailed({ backendId: "openai-stt", text: "", note: "STT unavailable (fetch failed); no transcript" })).toBe(true);
+  });
+  test("false for a healthy server that answered with empty text (genuine silence) - no fallback probe", () => {
+    expect(sttTransportFailed({ backendId: "whisper-cpp", text: "", note: "transcribed 32000 bytes via http://127.0.0.1:9111/inference" })).toBe(false);
+  });
+  test("false when a transcript landed, and false for the empty-audio short-circuit", () => {
+    expect(sttTransportFailed({ backendId: "whisper-cpp", text: "hello", note: "transcribed 32000 bytes via http://x/inference" })).toBe(false);
+    expect(sttTransportFailed({ backendId: "whisper-cpp", text: "", note: "empty audio - nothing to transcribe" })).toBe(false);
+  });
+});
+
+// Whisper transcribes a NON-SPEECH segment to a placeholder token ("[BLANK_AUDIO]", "[SILENCE]", music
+// notes) instead of words; a silent dictation tail must not land that literal text in the composer.
+describe("stripNonSpeech", () => {
+  test("a pure non-speech clip -> empty string (genuine silence, merges nothing)", () => {
+    expect(stripNonSpeech("[BLANK_AUDIO]")).toBe("");
+    expect(stripNonSpeech("[ Silence ]")).toBe("");
+    expect(stripNonSpeech("\u266a \u266b")).toBe("");
+    expect(stripNonSpeech("(upbeat music)")).toBe("");
+    expect(stripNonSpeech("[BLANK_AUDIO]\n")).toBe("");
+  });
+  test("strips a trailing token but keeps the spoken words (the reported case)", () => {
+    expect(stripNonSpeech("Testing, testing, can you hear me? [BLANK_AUDIO]")).toBe("Testing, testing, can you hear me?");
+    expect(stripNonSpeech("hello [BLANK_AUDIO] world")).toBe("hello world");
+  });
+  test("leaves real speech untouched, including non-keyword brackets a user might dictate", () => {
+    expect(stripNonSpeech("The quick brown fox jumps over the lazy dog.")).toBe("The quick brown fox jumps over the lazy dog.");
+    expect(stripNonSpeech("set index a[0] to b")).toBe("set index a[0] to b"); // [0] is not a non-speech keyword
   });
 });

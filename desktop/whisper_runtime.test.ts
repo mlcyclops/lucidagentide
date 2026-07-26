@@ -52,6 +52,7 @@ describe("startWhisper", () => {
       listModels: () => [], // nothing on disk -> must download
       download: async () => { events.push("download"); return { ok: true, path: "/models/m.bin", bytes: 1 }; },
       spawn: () => { events.push("spawn"); return { pid: 1, kill: () => events.push("kill") }; },
+      health: async () => events.includes("spawn"), // healthy only once OUR server is up (a free port before)
       setSttUrl: (u) => { sttUrl = u; },
     });
     const r = await startWhisper(d, { tier: "base", port: 9123 });
@@ -64,10 +65,53 @@ describe("startWhisper", () => {
 
   it("skips the download when the model is already present", async () => {
     let downloaded = false;
-    const d = deps({ listModels: () => ["ggml-base.en.bin"], download: async () => { downloaded = true; return { ok: true, path: "x", bytes: 1 }; } });
+    let spawned = false;
+    const d = deps({ listModels: () => ["ggml-base.en.bin"], download: async () => { downloaded = true; return { ok: true, path: "x", bytes: 1 }; }, spawn: () => { spawned = true; return { pid: 1, kill: () => {} }; }, health: async () => spawned });
     const r = await startWhisper(d, { tier: "base" });
     expect(r.ok).toBe(true);
     expect(downloaded).toBe(false);
+    expect(spawned).toBe(true);
+  });
+
+  // P-STT.5: an orphaned server from a previous run may still hold the port (whisper.cpp binds with
+  // SO_REUSEPORT, so a duplicate spawn would co-bind and silently split requests across two model loads).
+  it("reclaims a squatted port before spawning (reap works -> fresh server, accurate tier)", async () => {
+    const events: string[] = [];
+    let squatter = true;
+    let spawned = false;
+    const d = deps({
+      listModels: () => ["ggml-base.en.bin"],
+      reapPort: async (port) => { events.push(`reap:${port}`); squatter = false; },
+      spawn: () => { events.push("spawn"); spawned = true; return { pid: 2, kill: () => {} }; },
+      health: async () => squatter || spawned,
+    });
+    const r = await startWhisper(d, { tier: "base", port: 9123 });
+    expect(r.ok).toBe(true);
+    expect(events).toEqual(["reap:9123", "spawn"]); // reap first, then OUR server
+    expect(whisperStatus(d).activeTier).toBe("base"); // the requested tier actually serves
+  });
+
+  it("adopts an unkillable squatter instead of double-spawning (no reaper available)", async () => {
+    let spawned = false;
+    let sttUrl = "";
+    const d = deps({ listModels: () => ["ggml-base.en.bin"], spawn: () => { spawned = true; return { pid: 3, kill: () => {} }; }, setSttUrl: (u) => { sttUrl = u; } }); // default health: always true = port occupied
+    const r = await startWhisper(d, { tier: "base", port: 9123 });
+    expect(r.ok).toBe(true);
+    expect(r.reason).toMatch(/adopted/);
+    expect(spawned).toBe(false); // NEVER two servers on one port
+    expect(sttUrl).toBe("http://127.0.0.1:9123"); // STT still wired to the live server
+    const s = whisperStatus(d);
+    expect(s.running).toBe(true);
+    expect(s.activeTier).toBeNull(); // its loaded model is unknowable - never claim a tier
+  });
+
+  it("stop reaps an adopted server's port (no pid handle to kill)", async () => {
+    const d = deps({ listModels: () => ["ggml-base.en.bin"] }); // default health true -> adoption
+    await startWhisper(d, { tier: "base", port: 9126 });
+    const reaped: number[] = [];
+    await stopWhisper(deps({ reapPort: async (p) => { reaped.push(p); } }));
+    expect(reaped).toEqual([9126]);
+    expect(whisperStatus(d).running).toBe(false);
   });
 
   it("fails fast with a hint when no binary is available (no spawn)", async () => {
@@ -111,9 +155,12 @@ describe("installWhisper", () => {
 describe("whisperInstallState (download progress)", () => {
   it("tracks downloading -> starting -> done through a successful start", async () => {
     const seen: Array<{ phase: string; fraction: number }> = [];
+    let up = false;
     const d = deps({
       listModels: () => [], // force a download
       download: async (_m, _dest, onP) => { onP(0.25); seen.push({ ...whisperInstallState() }); onP(0.75); seen.push({ ...whisperInstallState() }); return { ok: true, path: "x", bytes: 1 }; },
+      spawn: () => { up = true; return { pid: 1, kill: () => {} }; },
+      health: async () => up, // a free port before OUR spawn
     });
     const r = await startWhisper(d, { tier: "base", port: 9124 });
     expect(r.ok).toBe(true);
@@ -138,7 +185,7 @@ describe("whisperInstallState (download progress)", () => {
 
   it("goes straight to starting (no download) when the model is already present", async () => {
     const phases: string[] = [];
-    const d = deps({ listModels: () => ["ggml-base.en.bin"], spawn: () => { phases.push(whisperInstallState().phase); return { pid: 1, kill: () => {} }; } });
+    const d = deps({ listModels: () => ["ggml-base.en.bin"], spawn: () => { phases.push(whisperInstallState().phase); return { pid: 1, kill: () => {} }; }, health: async () => phases.length > 0 });
     await startWhisper(d, { tier: "base", port: 9125 });
     expect(phases).toEqual(["starting"]); // set before spawn, never downloading
     expect(whisperInstallState().phase).toBe("done");

@@ -46,7 +46,7 @@ import { probeEnabledServers } from "./mcp_probe.ts"; // P-AGENT.12: MCP tool di
 import { archiveBrief, deleteBrief, listBriefs, readBrief, restoreBrief, saveBrief } from "./report_store.ts";
 import { OpenAiCompatibleTtsBackend } from "../harness/brief/tts_backend.ts";
 import { ElevenLabsTtsBackend, ElevenLabsSttBackend, listElevenVoices } from "../harness/voice/elevenlabs.ts";
-import { OpenAiCompatibleSttBackend, WhisperCppSttBackend } from "../harness/voice/transcription.ts";
+import { OpenAiCompatibleSttBackend, WhisperCppSttBackend, sttTransportFailed } from "../harness/voice/transcription.ts";
 import { installWhisper, startWhisper, stopWhisper, whisperStatus as whisperRuntimeStatus, type WhisperRuntimeDeps } from "./whisper_runtime.ts"; // P-STT.2b: managed offline Whisper
 import { downloadWhisperModel, resolveWhisperBin } from "./whisper_manager.ts";
 import { whisperServeUrl, type WhisperTier } from "./whisper_install.ts";
@@ -121,6 +121,26 @@ function whisperDeps(): WhisperRuntimeDeps {
     health: async (port) => { try { const res = await fetch(`${whisperServeUrl(port)}/`, { signal: AbortSignal.timeout(2000) }); return res.ok || res.status === 404; } catch { return false; } },
     setSttUrl: (url) => { setVoiceSettings({ sttProvider: "whisper", sttUrl: url }); },
     sleep: (ms) => { const { promise, resolve } = Promise.withResolvers<void>(); setTimeout(resolve, ms); return promise; },
+    // P-STT.5: kill whatever LISTENs on the managed port (an orphan whisper-server from a previous run).
+    // whisper.cpp binds SO_REUSEPORT, so a duplicate would otherwise co-bind and silently split requests
+    // across two model loads. Best-effort: the caller re-probes health and adopts any survivor.
+    reapPort: async (port) => {
+      try {
+        if (process.platform === "win32") {
+          const out = Bun.spawnSync(["netstat", "-ano", "-p", "TCP"]).stdout.toString();
+          for (const line of out.split("\n")) {
+            const m = /TCP\s+\S+:(\d+)\s+\S+\s+LISTENING\s+(\d+)/i.exec(line);
+            if (m && Number(m[1]) === port) Bun.spawnSync(["taskkill", "/PID", m[2]!, "/F"]);
+          }
+        } else {
+          const out = Bun.spawnSync(["lsof", "-ti", `tcp:${port}`, "-sTCP:LISTEN"]).stdout.toString();
+          for (const line of out.split("\n")) {
+            const pid = Number(line.trim());
+            if (pid > 0 && pid !== process.pid) { try { process.kill(pid, "SIGTERM"); } catch { /* gone */ } }
+          }
+        }
+      } catch { /* best-effort; the caller re-probes health */ }
+    },
   };
 }
 import { authorizeRelayBind, collabServeAllowed, emailDomainAllowed, managedAsksageOnly, managedConfig, managedLocks, skipAllowed } from "./managed_config.ts";
@@ -273,6 +293,14 @@ function serveRelay(host: string, port: number): { ok: boolean; error?: string }
 function stopRelay(): void { try { collabRelay?.stop(); } catch { /* already gone */ } collabRelay = null; }
 // Best-effort: never leave the inbound listener open past the process (the OS reclaims the port anyway).
 process.on("exit", () => { try { collabRelay?.stop(); } catch { /* already gone */ } });
+// P-STT.5: never orphan the managed whisper-server. Electron stops this child with SIGTERM (main.ts
+// dev?.kill()), and a DEFAULT SIGTERM terminates without running "exit" handlers - which is exactly how
+// two whisper-server pids ended up co-bound to port 9111 (SO_REUSEPORT). Handle the signals explicitly:
+// kill the child (stopWhisper's proc.kill() is synchronous), then re-exit, which also fires "exit" above.
+process.on("exit", () => { void stopWhisper(); });
+for (const sig of ["SIGTERM", "SIGINT"] as const) {
+  process.on(sig, () => { void stopWhisper(); process.exit(0); });
+}
 
 /** The relay a new share will use: THIS device's embedded relay when running (no third party), else the
  *  configured external relay (self-hosted default / public opt-in), else null (start fails closed). */
@@ -1535,9 +1563,11 @@ const server = Bun.serve({
         }
         // Offline whisper: whisper.cpp's whisper-server serves /inference (verified live); faster-whisper /
         // any OpenAI-compatible server serves /v1/audio/transcriptions. Try the whisper.cpp shape first, then
-        // fall back to the OpenAI shape - so BOTH engines work with no extra setting.
+        // fall back to the OpenAI shape ONLY when that attempt did not reach a working server (transport error
+        // / non-2xx) - so BOTH engines work with no extra setting, WITHOUT probing /v1 (which whisper.cpp 404s)
+        // on a healthy whisper.cpp that simply heard silence, which would mislabel silence as "no STT server".
         let r = await new WhisperCppSttBackend({ baseUrl: v.sttUrl }).transcribe(audio, topts);
-        if (!r.text) r = await new OpenAiCompatibleSttBackend({ baseUrl: v.sttUrl, apiKey: process.env.OPENAI_API_KEY, model: process.env.LUCID_STT_MODEL || "whisper-1" }).transcribe(audio, topts);
+        if (sttTransportFailed(r)) r = await new OpenAiCompatibleSttBackend({ baseUrl: v.sttUrl, apiKey: process.env.OPENAI_API_KEY, model: process.env.LUCID_STT_MODEL || "whisper-1" }).transcribe(audio, topts);
         return json({ ok: true, data: { text: r.text, note: r.note } });
       }
       // P-STT.2b: the no-code managed offline-Whisper lifecycle (hardware-gated install / start / stop / status).
@@ -1552,7 +1582,7 @@ const server = Bun.serve({
         const rr = await startWhisper(whisperDeps(), { tier: typeof wb.tier === "string" ? (wb.tier as WhisperTier) : undefined });
         return json({ ok: rr.ok, data: rr, error: rr.reason });
       }
-      if (p === "/api/whisper/stop" && req.method === "POST") { const rr = await stopWhisper(); return json({ ok: rr.ok, data: rr }); }
+      if (p === "/api/whisper/stop" && req.method === "POST") { const rr = await stopWhisper(whisperDeps()); return json({ ok: rr.ok, data: rr }); }
       // P-VOICE.1: read arbitrary text aloud (assistant replies, an AAR summary) with the selected voice.
       if (p === "/api/tts/speak" && req.method === "POST") {
         const b = await readBody<{ text?: unknown; voiceId?: unknown; provider?: unknown }>(req);
