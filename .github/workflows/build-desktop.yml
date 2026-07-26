@@ -79,6 +79,8 @@ jobs:
       - name: Set build version (so auto-update sees a newer release)
         shell: bash
         working-directory: desktop
+        env:
+          GH_TOKEN: ${{ github.token }} # read-only: look up the newest PUBLISHED release for the test stamp
         run: |
           # Derive a CLEAN semver from the tag, tolerant of a mistyped `v` prefix. A malformed tag must never
           # brick the release build: electron-builder rejects e.g. ".1.11.3" ("Invalid version"), which is
@@ -93,14 +95,21 @@ jobs:
               V="$(node -p "require('./package.json').version")"
             fi
           else
-            # TEST BUILD (manual dispatch): not a release. Stamp a PRERELEASE just above the committed
-            # version (e.g. 1.11.10 -> 1.11.11-test.<run#>). Why not the old 0.1.<run#>: that sorts BELOW
-            # the live release, so an installed test build immediately offers to "update" itself back to
-            # the published version, wrecking the thing you're trying to test. This stamp is build-time
-            # only - package.json in git is untouched, and nothing is published to the update feed here,
-            # so no existing user is affected. A later real 1.11.11 still supersedes it (prerelease sorts first).
+            # TEST BUILD (manual dispatch): not a release. The stamp must sort ABOVE every PUBLISHED
+            # release, or the installed test build auto-updates itself back to the live version and wipes
+            # out what you are testing. The old 0.1.<run#> failed that outright, and package.json can LAG
+            # the real releases (it said 1.11.10 while v1.11.11 was live), so the committed version alone
+            # is not a safe base. Take the HIGHER of package.json and the newest published release, then
+            # patch+1 with a -test.<run#> prerelease. Build-time only: package.json in git is untouched and
+            # nothing is published here, so no existing user is affected. A later real release of that
+            # patch still supersedes the test build (a prerelease sorts before its release).
             BASE="$(node -p "require('./package.json').version")"
-            V="$(node -p "const p=process.argv[1].split('-')[0].split('.'); p[0]+'.'+p[1]+'.'+(+p[2]+1)+'-test.'+process.argv[2]" "$BASE" "$GITHUB_RUN_NUMBER")"
+            LATEST="$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName -q .tagName 2>/dev/null | sed 's/^v//' || true)"
+            # Values go through the ENV, not argv: `node -e` consumes a positional itself, which silently
+            # shifted the indices and produced a bogus "42.undefined.1-test.undefined" that electron-builder
+            # rejects as an invalid version (it would fail all three builds).
+            V="$(BASE="$BASE" LATEST="$LATEST" RUN="$GITHUB_RUN_NUMBER" node -e 'const c=(a,b)=>{const A=a.split("-")[0].split(".").map(Number),B=b.split("-")[0].split(".").map(Number);for(let i=0;i<3;i++){const d=(A[i]||0)-(B[i]||0);if(d)return d}return 0};const base=process.env.BASE||"0.0.0",latest=process.env.LATEST||"0.0.0",run=process.env.RUN||"0";const hi=c(base,latest)>=0?base:latest;const p=hi.split("-")[0].split(".").map(Number);console.log((p[0]||0)+"."+(p[1]||0)+"."+((p[2]||0)+1)+"-test."+run)')"
+            echo "test stamp: package.json=$BASE published=${LATEST:-none} -> $V"
           fi
           node -e "const fs=require('fs'),p=require('./package.json');p.version=process.argv[1];fs.writeFileSync('package.json',JSON.stringify(p,null,2)+'\n')" "$V"
           echo "build version = $V"
