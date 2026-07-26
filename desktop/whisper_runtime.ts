@@ -25,6 +25,9 @@ export interface WhisperRuntimeDeps {
   /** Point the STT engine at the managed server (set sttUrl + sttProvider=whisper). */
   setSttUrl: (url: string) => void;
   sleep: (ms: number) => Promise<void>;
+  /** P-STT.5: best-effort kill of whatever LISTENs on a port (an orphan from a previous run). Optional:
+   *  when absent or unsuccessful, startWhisper adopts the survivor instead of double-spawning. */
+  reapPort?: (port: number) => Promise<void>;
 }
 
 export interface WhisperTierView { tier: WhisperTier; label: string; runnable: boolean; installed: boolean }
@@ -50,6 +53,9 @@ const DEFAULT_PORT = 9111;
 // The single running server (module-scoped: one managed Whisper at a time).
 let proc: WhisperProc | null = null;
 let running: { port: number; tier: WhisperTier | null } = { port: DEFAULT_PORT, tier: null };
+// P-STT.5: true when we ADOPTED a server we did not spawn (an unkillable squatter on the port). Its pid is
+// unknown, so stop falls back to reapPort; its model tier is unknowable, so status never claims one.
+let adopted = false;
 
 const BIN_HINT = "No whisper.cpp binary found. Set LUCID_WHISPER_BIN to a whisper-server, or the packaged app bundles one.";
 
@@ -76,10 +82,10 @@ export function whisperStatus(deps: WhisperRuntimeDeps): WhisperStatusView {
     summary: caps.summary,
     binAvailable: !!bin,
     binHint: bin ? `whisper-server (${bin.source})` : BIN_HINT,
-    running: !!proc,
+    running: !!proc || adopted,
     port: running.port,
     activeTier: running.tier,
-    serveUrl: proc ? whisperServeUrl(running.port) : null,
+    serveUrl: proc || adopted ? whisperServeUrl(running.port) : null,
     tiers,
     install: installState,
   };
@@ -118,6 +124,23 @@ export async function startWhisper(deps: WhisperRuntimeDeps, opts: { tier?: Whis
   }
   if (proc) await stopWhisper();
   const port = opts.port ?? DEFAULT_PORT;
+  // P-STT.5: a server may ALREADY hold the port - an orphan from a previous app run (nothing killed the
+  // child on quit) or a user's own instance. whisper.cpp binds with SO_REUSEPORT, so a duplicate spawn
+  // "works" and the kernel silently splits requests across TWO model loads (seen live: two whisper-server
+  // pids both LISTENing on 9111). Reclaim the port first so the requested tier actually serves; if the
+  // squatter survives (no reaper / no permission), adopt it rather than double-spawn.
+  if (await deps.health(port)) {
+    await deps.reapPort?.(port);
+    await deps.sleep(300);
+    if (await deps.health(port)) {
+      adopted = true;
+      running = { port, tier: null }; // the squatter's loaded model is unknowable - never claim a tier
+      deps.setSttUrl(whisperServeUrl(port));
+      setInstall({ active: false, fraction: 1, phase: "done", reason: undefined });
+      return { ok: true, reason: `adopted an already-running whisper server on port ${port}` };
+    }
+  }
+  adopted = false;
   proc = deps.spawn(bin.path, whisperServerArgs(modelPath, port));
   running = { port, tier: plan.tier };
   // Wait for the server to answer, then wire STT to it. whisper.cpp loads the model + inits Metal/CUDA on
@@ -132,9 +155,11 @@ export async function startWhisper(deps: WhisperRuntimeDeps, opts: { tier?: Whis
   return { ok: false, reason: "the whisper server did not become healthy in time" };
 }
 
-/** Stop the managed server (no-op if not running). */
-export async function stopWhisper(): Promise<WhisperActionResult> {
+/** Stop the managed server (no-op if not running). An ADOPTED server has no pid handle, so stopping it
+ *  needs the injected port reaper (pass deps from the API route); without one it is left running. */
+export async function stopWhisper(deps?: WhisperRuntimeDeps): Promise<WhisperActionResult> {
   if (proc) { try { proc.kill(); } catch { /* already gone */ } proc = null; }
+  if (adopted) { try { await deps?.reapPort?.(running.port); } catch { /* best-effort */ } adopted = false; }
   running = { port: running.port, tier: null };
   return { ok: true };
 }

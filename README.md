@@ -177,6 +177,27 @@ personalization internals are proprietary and intentionally undocumented here - 
 
 ---
 
+## ✨ What's new in v1.11.12
+
+> Offline voice that actually works: dictate hands-free into a fully on-device Whisper, installed in one click.
+
+- **🎙️ Reliable offline dictation (the headline)** - the mic showed *"heard you, but nothing transcribed"*
+  because it uploaded the browser's **WebM/Opus** recording to a local Whisper whose endpoint decodes **WAV
+  only**. LUCID now **transcodes each utterance to 16 kHz mono WAV on-device** before it leaves the composer,
+  so your words land - fully air-gapped, audio never leaves the machine. It also **drops Whisper's non-speech
+  placeholders** (a silent pause no longer types `[BLANK_AUDIO]`) and never mislabels a healthy local server as
+  *"no STT server answered"* on silence. *(P-STT.3/.4/.5)*
+- **📦 One-click, zero-prereq offline Whisper** - the whisper.cpp server is now **bundled in the installer** on
+  **Windows, macOS, and Linux** (pinned + SHA-256-verified, or built-from-source on macOS), with a
+  hardware-aware model picker and a real **download-progress bar**. Install & start with one button - no Python,
+  no toolchain. *(P-STT.2c/.2d)*
+- **🎚️ Live mic waveform** - a scrolling level meter beside the mic so you can *see* it hearing you as you speak,
+  and it auto-stops on a longer silence. *(P-STT.4)*
+- **🧩 Provider Hub + one-click local models** - providers are grouped into a searchable hub, and top local-model
+  presets (Ollama / vLLM / llama.cpp) are one click to configure. *(P-PROV.2 / P-LOCAL.4)*
+
+---
+
 ## ✨ What's new in v1.11.9
 
 > **📱 LUCID Remote - drive your desktop LUCID from your phone.** Plus: model replies no longer stall behind the dashboards, and the Preview panel grows tabs + device viewports.

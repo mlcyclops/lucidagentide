@@ -1794,6 +1794,13 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .ctool.recording{border-color:var(--red,#e05a5a);color:var(--red,#e05a5a);background:color-mix(in srgb,var(--red,#e05a5a) 16%,var(--bg-2));animation:micpulse 1.2s ease-in-out infinite}
 .ctool.recording .ic{color:var(--red,#e05a5a)}
 .ctool.busy,.msg-act.busy{opacity:.6;pointer-events:none}
+/* P-STT.4: live dictation waveform chip - a scrolling mic-level strip + elapsed clock next to the mic,
+   visible only while a dictation session runs. */
+.ct-wave{display:inline-flex;align-items:center;gap:7px;flex:none;height:26px;padding:0 9px;
+  border:1px solid color-mix(in srgb,var(--red,#e05a5a) 35%,var(--line));border-radius:8px;
+  background:linear-gradient(180deg,var(--bg-3),var(--bg-2))}
+.ct-wave canvas{width:132px;height:18px;display:block}
+.ct-wave-time{font-size:10.5px;font-variant-numeric:tabular-nums;color:var(--txt-3);white-space:nowrap}
 @keyframes micpulse{0%,100%{box-shadow:0 0 0 0 color-mix(in srgb,var(--red,#e05a5a) 45%,transparent)}50%{box-shadow:0 0 0 4px transparent}}
 /* P-VOICE.1: Voice settings-card rows (label + control). */
 .voice-row{display:flex;align-items:center;gap:8px;margin-top:8px}
