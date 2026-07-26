@@ -276,4 +276,13 @@
 //            self-correcting fallbacks to preview_inspect); and the Linux air-gap sandbox fix (functional
 //            bwrap probe so Ubuntu 24.04's blocked user namespaces no longer kill the model picker, plus
 //            shipping omp's native addon next to the compiled launcher).
-export const APP_VERSION = "1.11.11";
+// v1.11.12 = reliable OFFLINE VOICE + bundled Whisper installers. Fixes dictation showing "heard you, but
+//            nothing transcribed": the mic recorded WebM/Opus but whisper.cpp's /inference decodes WAV/PCM
+//            only, so every clip 400d; the composer now transcodes each utterance to 16 kHz mono 16-bit WAV
+//            before upload. Also strips whisper's non-speech tokens ("[BLANK_AUDIO]", music notes) so a silent
+//            tail merges nothing, and only falls back to the OpenAI /v1 shape on a real transport failure, so a
+//            healthy whisper.cpp that heard silence is never mislabeled "no STT server answered". Ships the
+//            zero-prereq BUNDLED offline Whisper installers on all 3 OSes (P-STT.2c/.2d), the mic waveform
+//            (P-STT.4) + orphan whisper-server reaper (P-STT.5), the Provider Hub + one-click local-model
+//            presets (P-PROV.2 / P-LOCAL.4), and the model-picker cold-start warm-poll.
+export const APP_VERSION = "1.11.12";
