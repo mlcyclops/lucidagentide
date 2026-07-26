@@ -46,9 +46,10 @@ export default function previewExtension(pi: any): void {
       name: "preview_open",
       label: "Open in Preview",
       description:
-        "Open a LOCAL HTML/SVG file you have written in LUCID's in-app Preview panel so the user can see it " +
-        "render. Use this (or just write the .html/.svg file) instead of a browser/bash/eval to show your " +
-        "work — those are security-gated. Pass the absolute path; the panel re-validates before rendering.",
+        "Call this right after you write or edit a local .html/.svg file to show the user the rendered result " +
+        "in LUCID's in-app Preview panel (it also brings the preview to the front so a following " +
+        "preview_screenshot can capture it). Pass the absolute path; the panel re-validates before rendering. " +
+        "Prefer this over a browser/bash/eval to show your work — those are security-gated.",
       // Read-only from omp's view: it only acknowledges; the desktop opens the (sandboxed) panel. Setting
       // "read" keeps preview_open out of the exec-approval flow so showing a preview is never blocked.
       approval: "read",
@@ -76,25 +77,33 @@ export default function previewExtension(pi: any): void {
       name: "preview_screenshot",
       label: "Screenshot the preview",
       description:
-        "Capture a screenshot of the CURRENT in-app preview so you can SEE how your app renders and self-correct. " +
-        "Returns an image of what the user sees. Open a preview first (write an .html/.svg, or call preview_open). " +
-        "Use this to verify graphics/layout instead of a browser or bash/eval, which are security-gated.",
+        "See how your UI actually renders and self-correct. Call this whenever you have written or changed an " +
+        ".html/.svg or any visible UI and want to check it looks right BEFORE telling the user it is done — a " +
+        "build/design/layout task is not finished until you have looked at the result. Returns an image of what " +
+        "the user sees. Open the file in the preview first (write it, or call preview_open). If no screenshot " +
+        "comes back (the preview isn't the front panel), call preview_inspect instead — it reads the rendered " +
+        "DOM and works even when the panel is not in front. Use this to verify graphics/layout rather than a " +
+        "browser or bash/eval, which are security-gated.",
       approval: "read",
       parameters: T.Object({}),
       async execute() {
         const text = (t: string) => ({ content: [{ type: "text", text: t }] });
+        // A screenshot only exists for the AGENT preview lane while it is the front panel (screen capture sees
+        // on-screen pixels only). When it's missing, steer to the reliable recovery: preview_open re-surfaces
+        // the file, and preview_inspect reads the rendered DOM even when the panel isn't in front.
+        const unavailable = "No preview screenshot is available yet. Call preview_open on your .html/.svg file to bring it to the front, then retry — or call preview_inspect to read the rendered DOM (that works even when the preview panel is not in front).";
         const url = process.env.LUCID_PREVIEW_SHOT_URL;
         if (!url) return text("Preview screenshots aren't available in this environment (the desktop preview isn't running).");
         try {
           const r = await fetch(url);
-          if (!r.ok) return text("No preview is open to screenshot yet — write an .html/.svg or call preview_open first, then retry.");
+          if (!r.ok) return text(unavailable);
           const body: any = await r.json().catch(() => null);
           // The dev server wraps responses as { ok, data: { png } }; tolerate a top-level { png } too.
           const img = previewShotImage(body?.data?.png ?? body?.png);
-          if (!img) return text("No preview screenshot is available yet — open a preview first, then retry.");
+          if (!img) return text(unavailable);
           return { content: [img, { type: "text", text: "Screenshot of the current preview (what the user sees)." }] };
         } catch {
-          return text("Couldn't capture the preview screenshot.");
+          return text("Couldn't capture the preview screenshot. Call preview_inspect to read the rendered DOM instead.");
         }
       },
     });
@@ -109,10 +118,11 @@ export default function previewExtension(pi: any): void {
       name: "preview_inspect",
       label: "Inspect the preview DOM",
       description:
-        "Read the LIVE DOM of the current in-app preview to review your work: the page's text, headings, and " +
-        "controls (buttons/links/inputs), OR specific elements by CSS `selector`, OR captured console `errors`. " +
-        "Read-only — you cannot click/type/run JS here (yet). Open a preview first (write an .html/.svg or call " +
-        "preview_open). This is the way to check your rendered UI instead of a browser or bash/eval (gated). " +
+        "Read the LIVE rendered DOM of your preview to verify a UI you built or changed: the page's text, " +
+        "headings, and controls (buttons/links/inputs), OR specific elements by CSS `selector`, OR captured " +
+        "console `errors`. Works even when the preview panel is NOT the front tab (unlike preview_screenshot), " +
+        "so it is the reliable way to check your work. Read-only — no click/type/JS. Open the file first (write " +
+        "an .html/.svg or call preview_open). Prefer this over a browser or bash/eval (gated). " +
         "The result includes the current `viewport`: the user can review the preview at device sizes (phone " +
         "portrait/landscape, tablet landscape) via the phone icon in the preview toolbar — if you're building a " +
         "PWA or a mobile/responsive layout, note that and design/verify for those viewports.",
