@@ -50,6 +50,7 @@
     "demo-P-BRIEF.1": "bun run harness/scripts/demo_pbrief1.ts",
     "demo-P-BRIEF.2": "bun run harness/scripts/demo_pbrief2.ts",
     "demo-P-STT.1": "bun run harness/scripts/demo_pstt1.ts",
+    "demo-P-VOICE.2": "bun run harness/scripts/demo_pvoice2.ts",
     "demo-P-ASKSAGE.1": "bun run harness/scripts/demo_paskage1.ts",
     "demo-P-ENT.1": "bun run harness/scripts/demo_pent1.ts",
     "demo-P-AGENTFW.1": "bun run harness/scripts/demo_pagentfw1.ts",

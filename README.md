@@ -73,16 +73,18 @@ personalization internals are proprietary and intentionally undocumented here - 
 
 <br/>
 
-<!-- ✦✦✦  HEADLINE BANNER - Claude Fable 5  ✦✦✦ -->
+<!-- HEADLINE BANNER - the current live model line-up -->
 <table align="center" width="100%">
 <tr>
 <td align="center">
 
-# ✦ Claude&nbsp;5.0&nbsp;**Fable** is here - available through LUCID ✦
+# <img src=".github/assets/icons/announce-animated.svg" width="30" align="top" alt="" /> The newest frontier models are live in LUCID <img src=".github/assets/icons/announce-animated.svg" width="30" align="top" alt="" />
 
-### The newest Claude model, <b>Claude&nbsp;Fable&nbsp;5</b> (<code>claude-fable-5</code>), is live in the model picker.
+### <b>Claude&nbsp;Opus&nbsp;5</b> and <b>Claude&nbsp;Fable&nbsp;5</b>, <b>GPT&nbsp;5.6&nbsp;Sol · Luna · Terra</b>, and the latest <b>Google&nbsp;Gemini</b> models - all in the picker today.
 
-<p align="center"><b>Connect a Claude account</b> (OAuth or <code>ANTHROPIC_API_KEY</code>) and pick <b>Claude&nbsp;Fable&nbsp;5</b> from the model list - that's it. It routes through Anthropic and carries a clear <b>U.S.-government data-privacy notice</b> so you always know where your chat history stands.</p>
+<p align="center"><b>Connect the account you already pay for</b> (OAuth subscription or an API key) and pick the model from the list - that's it. Each one carries a <b>cost + intelligence card</b> and a clear <b>U.S.-government data-privacy notice</b>, so you always know what a turn costs and where your chat history stands.</p>
+
+<p align="center"><sub><code>claude-opus-5</code> · <code>claude-fable-5</code> · <code>gpt-5.6-sol</code> · <code>gpt-5.6-luna</code> · <code>gpt-5.6-terra</code> · <code>google-gemini-3.1-pro</code> — plus every other model the runtime exposes, including the AskSage gov gateway and your own local endpoints.</sub></p>
 
 </td>
 </tr>
@@ -177,7 +179,33 @@ personalization internals are proprietary and intentionally undocumented here - 
 
 ---
 
-## ✨ What's new in v1.11.12
+## <img src=".github/assets/icons/release-animated.svg" width="26" align="top" alt="" /> What's new in v1.12.0
+
+> **🗣️ Talk to it.** LUCID reads its replies aloud as it writes them, opens the mic when it finishes, and answers you the way a person would - short, spoken, hands-free.
+
+- **🗣️ Conversation mode (the headline)** - one keystroke (`Ctrl/⌘+G`) and LUCID becomes a
+  **hands-free conversation**: it reads each reply aloud **as it streams**, the mic opens by itself when it
+  finishes, and a few seconds of silence sends your turn. Audio starts after the **first sentence**, not after
+  the whole answer - so a long reply begins speaking in about a second instead of twenty. *(P-VOICE.2/.3)*
+- **🧠 It answers for the ear, automatically** - in conversation mode the agent is told, every turn, to
+  write for **listening**: lead with the answer, two or three sentences, plain spoken prose, no headings,
+  lists, tables, code blocks or file paths. You should never have to ask it to be brief. It constrains the
+  answer's **shape**, never the work behind it. *(P-VOICE.5)*
+- **📻 A glowing equalizer** - a real spectrum analyser of the agent's actual voice: segmented LEDs with
+  hanging peak caps, log-spaced bands and hi-fi ballistics. It lives as a **mini strip** in the prompt bar, or
+  **pops out** as a **LUCID Agent [Voice]** panel you drag and anchor anywhere in the window - it snaps to the
+  edges, resizes, minimizes, and remembers where you left it. *(P-VOICE.4)*
+- **⏳ It keeps you company while it thinks** - eyes-off, a long turn used to be dead air. Now you get short,
+  escalating spoken acknowledgements - *"Got it, thinking this through."* → *"Still working on it, give me a
+  few seconds."* - capped per turn, and never over the answer. *(P-VOICE.6)*
+- **🎛️ A voice picker that tells the truth** - engine + voice moved out of Settings and into the composer,
+  with **every** engine's voices listed (ElevenLabs, ChatGPT/OpenAI, offline Kokoro), a remembered voice **per
+  engine**, and any engine you can't actually use **greyed out with the specific reason** - including the one
+  that catches people out: an OpenAI *subscription* sign-in cannot reach the platform speech API. *(P-VOICE.3)*
+
+---
+
+## <img src=".github/assets/icons/release-animated.svg" width="26" align="top" alt="" /> What's new in v1.11.12
 
 > Offline voice that actually works: dictate hands-free into a fully on-device Whisper, installed in one click.
 
@@ -198,30 +226,46 @@ personalization internals are proprietary and intentionally undocumented here - 
 
 ---
 
-## ✨ What's new in v1.11.9
 
-> **📱 LUCID Remote - drive your desktop LUCID from your phone.** Plus: model replies no longer stall behind the dashboards, and the Preview panel grows tabs + device viewports.
+> <sub><b>Earlier releases.</b> v1.11.9 and older have moved to the <a href="https://github.com/mlcyclops/lucidagentide/releases">GitHub Releases</a> page, which carries the full notes and the installers for every version.</sub>
 
-- **📱 LUCID Remote (the headline)** - your running desktop LUCID becomes reachable from a **phone browser**:
-  scan a **QR invite** from the Share panel, **sign in with Google**, and watch - or **drive** - your agent from
-  anywhere. Everything rides the existing **end-to-end-encrypted** collaboration plane (the relay only ever sees
-  ciphertext; the room key lives in the link fragment and never touches a server), and every remote prompt still
-  runs **on the host** through your fail-closed gate + approvals. Includes a hosted **guest PWA**, dual
-  **edit / view-only** invite links, live **presence**, **preview snapshots** on the phone, a **floating Join
-  dock**, and a self-host-or-hosted rendezvous (Cloud Run) with **claims-gated admission** for the paid Remote
-  Access tier. *(ADR-0226/0227 + ADR-0240-0242, P-REMOTE.1-.10)* - see the full section below.
-- **⚡ Model replies no longer crawl** - the live dashboards used to re-aggregate your **entire session history**
-  (and even spawn an omp subprocess) every few seconds on the server's single event loop, so **every model's
-  reply queued behind them** - the longer you used LUCID, the slower it got. The poll is now gated + memoized
-  and the underlying scans cached: repeat dashboard reads went from **~1-8 s to ~0-2 ms**, idle server CPU
-  dropped **~29% → ~8%** of a core, and streaming stays smooth mid-turn. *(P-PERF.3)*
-- **👀 Preview: two lanes + device viewports** - the preview fly-out gains **Yours / Agent tabs** (the agent
-  updates its own tab and badges it instead of clobbering what you're reviewing), **phone / tablet viewports**
-  (portrait + landscape, fit-scaled, with the viewport surfaced to the agent so it designs for mobile), and a
-  hard **50% width cap** so your chat and its Close button always stay visible.
-- **🩹 The v1.11.8 reliability rollup rides along** - the air-gap `bun` fix (clean machines boot with zero
-  prerequisites), reliable OAuth connect/disconnect, the overloaded-provider fallback, the model-picker freeze
-  safety-net, and the Linux air-gap Python fix.
+---
+
+## 🗣️ Voice mode
+
+> **Put it down and talk to it.** LUCID speaks its replies while it writes them, listens when it finishes,
+> and shapes the answer for your ears instead of your eyes - all on the engine you choose, including a fully
+> offline one.
+
+<div align="center">
+<img src=".github/assets/voice-panel-undocked.jpg" alt="The LUCID Agent [Voice] equalizer panel popped out and anchored inside the LUCID window, showing segmented LED bars with peak caps while a reply is spoken" width="440" />
+<img src=".github/assets/voice-mini-composer.jpg" alt="The mini equalizer strip under the LUCID prompt bar, beside the mic button, while a reply is being read aloud" width="440" />
+<br><sub><b>Left:</b> the <b>LUCID Agent [Voice]</b> panel popped out and anchored where you want it. <b>Right:</b> the mini strip under the prompt bar.</sub>
+</div>
+
+- **🗣️ Hands-free turn-taking.** `Ctrl/⌘+G`. The reply is read aloud, the mic opens the moment it stops
+  speaking, a longer silence ends your turn and sends it. Guarded on every side so it can never listen to the
+  agent's own voice: it waits for the audio to actually **finish**, not just the text, and echo cancellation is
+  requested explicitly. A manual mic stop (`Ctrl/⌘+D`) never auto-sends - that one is still yours to review.
+- **⚡ It starts talking after the first sentence.** The streaming answer is chunked on sentence boundaries and
+  synthesized a span at a time, so audio begins while the model is still writing. An unterminated code fence is
+  withheld, so it never narrates raw source at you.
+- **🎛️ Your engine, your voice.** ElevenLabs (your account's cloned voices), ChatGPT/OpenAI, or **Kokoro
+  running offline on your own machine** - air-gap safe, no key, nothing leaves the box. The picker sits in the
+  composer, remembers a voice **per engine**, and greys out anything that isn't actually configured with the
+  reason why.
+- **📻 A spectrum analyser, not an animation.** The bars are driven by the real audio through a Web Audio
+  analyser - log-spaced bands, fast attack and slow release, hanging peak caps. Mini in the prompt bar, or
+  popped out as a draggable, snapping, self-remembering panel.
+- **🧠 Spoken answers are written for speech.** In conversation mode the agent gets standing, per-turn
+  guidance to lead with the answer in two or three plain sentences - no markdown, no paths, no code read aloud -
+  and to say the short version out loud when the full answer belongs on screen. Switch the mode off and the very
+  next turn is a full written answer again.
+- **🔒 Same gate, same rules.** A transcript is ordinary user input and is scanned on send like anything
+  typed; a cloud TTS engine is ordinary egress you opt into per engine, and the offline path keeps the audio on
+  your machine. Auto-speak is **off by default**.
+
+<sub>*(ADR-0247/0248/0249 · increments P-VOICE.2-.6)*</sub>
 
 ---
 
@@ -255,146 +299,10 @@ personalization internals are proprietary and intentionally undocumented here - 
 
 ---
 
-## ✨ What's new in v1.11.6
 
-> Runs cold on an air-gapped laptop, grounds any model on your own knowledge, and never leaves you staring at a silent provider.
 
-- **📦 Air-gap-capable installer** - the app now **bundles omp, a relocatable Python, and its own Bun runtime**,
-  so a locked-down or fully offline machine works on first launch with **zero prerequisites and zero network** -
-  no `bun add`, no `uv venv`, nothing fetched at first run. A CI air-gap smoke test scrubs the global runtime
-  and boots the packaged app to prove the bundle is self-contained. *(ADR-0225)*
-- **📚 RAG for everyone, not just AskSage** - a `knowledge_search` tool lets **any model** (Claude, GPT, Gemini,
-  local) ground its answers on **your own** ingested Obsidian vault, folders, or imported chat history - lexical
-  + graph retrieval today, and **bring-your-own-embeddings semantic search** (your OpenAI key or a local Ollama /
-  vLLM `/embeddings`) for true vector recall. Retrieved text still enters **delimited, scanned, and post-cache**.
-  *(ADR-0220/0221)*
-- **🏛️ Gov hardening, fail-closed** - AskSage **lockdown is now enforced server-side** across model routing,
-  egress, and agent runs (it was renderer-only), with the real GPT-5.6 model ids, a per-session **CUI / Search
-  mode**, a centered violet **CUI banner**, and an opt-in **DoD / STIG consent banner**. *(ADR-0217/0218/0219/0224)*
-- **🛒 KG-pack marketplace** - name a knowledge graph, seed it, and share it as a portable **`.lkgpack`** -
-  now browsable and installable from an in-client **storefront**. *(ADR-0223)*
-- **🤝 A roomier shared-session view** - the live-collaboration guest view now shows the host's **thinking and
-  tool calls** and uses the **whole window**. *(ADR-0222)*
-- **🔌 Never stuck on a silent provider** - when an overloaded model (GPT-5.6 / 5.5, Claude Fable 5) **fails
-  silently**, LUCID now says so and **recommends a fallback** - a lower model in the same family, or an
-  equivalent from another provider (Fable 5 → 4.8 Opus). One click switches and retries. *(P-NORESP.1)*
-- **🔑 Reliable OAuth + honest support tools** - Connect **reliably opens the sign-in page** and always shows the
-  URL; Disconnect **authoritatively clears** stored logins (plus "Sign out of all"); and a one-click
-  **diagnostics collector** bundles redacted logs for troubleshooting.
-- **✨ "Lucid Agent"** - a friendlier app and window name across Windows, macOS, and Linux, with the data-safe
-  install path left unchanged.
 
----
 
-## ✨ What's new in v1.11.0
-
-> Live collaboration: share a running LUCID session with another LUCID - end-to-end encrypted. Watch, or drive.
-
-- **🤝 Share a live session** - a host broadcasts its running session to a guest over an **end-to-end-encrypted**
-  relay (AES-256-GCM; the relay only ever sees ciphertext). Send an invite link; the guest **watches
-  read-only**, or - with an edit link - **drives** the session. Every guest prompt still runs **on the host**,
-  through *your* fail-closed scan gate + exec/egress approvals, so a guest bypasses nothing. *(P-COLLAB, ADR-0192/0198)*
-- **🏠 Self-hosted by default** - **be the relay** on your own device (loopback / LAN / VPN bind picker) or run
-  the standalone broker on a jumpbox; the public relay is opt-in. Enterprise/MDM policy clamps who may host and
-  which binds/relays are allowed, fail-closed. *(ADR-0193/0195/0199)*
-- **⚡ Direct P2P (WebRTC)** - flip on "prefer a direct connection" and a share upgrades to a direct **DTLS
-  DataChannel** - the relay only brokers the signaling handshake, then peers go peer-to-peer, with automatic
-  relay fallback. A **metadata-only audit trail** records share/join start/stop over both transports (never
-  keys, links, or content). *(ADR-0194/0201/0202/0204)*
-- **📋 Copy, everywhere** - a **Copy** button on every code block + **right-click → Copy** for chat text and
-  code blocks (Electron ships no default menu). *(ADR-0203)*
-- **✨ Polish** - the product **website** in the About panel (with its brand emblem inlined so it paints
-  instantly), and the default **zoom** pulled back a notch (what used to read 90% is the new 100%).
-
----
-
-## ✨ What's new in v1.10.6
-
-> The agent turn, redesigned - and a Model-Evaluation suite that scores the work honestly.
-
-- **💬 A settled turn you can actually read** - when the agent finishes, a long answer folds into
-  **collapsible sections** on the model's own headings, and each tool call threads back inline as a
-  compact **chip** (with a **+/- diffstat** and a code drilldown) *where it fired* - but only when a
-  chip genuinely lands between paragraphs. On a short, flat answer the rich **activity window** stays
-  put instead: every tool step, its diffstat, its written code, and the **expanded subagent detail**
-  (each delegate's thinking/tools/output). *(ADR-0188/0189)*
-- **📊 Model-Evaluation reports** - a settled turn that **wrote code** offers a thin, subdued
-  **"Generate engineering report"**: per-run efficiency/quality metrics with **honesty tiers**
-  (`direct` / `proxy` / `needs_signal` - a missing signal is `null`, never a fake 0), plus a
-  **cross-run rollup** in the Reports panel (per-model means + per-model **API-latency p50/p95**).
-  It only appears when there's written work to evaluate. *(ADR-0190)*
-- **⏳ Patience for overloaded providers** - when a model goes quiet under load, the turn now waits up
-  to **10 minutes** with an honest **"still waiting on the provider"** notice at each silent 2-minute
-  mark - no more a 5-minute cutoff that falsely blamed "2 minutes". *(ADR-0186)*
-- **🎲 Trivia Wire, opt-in + fresh** - the ticker now **defaults off** (an easter egg you switch on in
-  Settings), and can **AI-regenerate** a role-relevant question pack on your selected model from opt-in
-  on-device context - scanned fail-closed, tool-free, falling back to the built-in pack. *(ADR-0191)*
-
-Under the hood: the eval suite persists per-run metrics + per-model latency to frozen DuckDB tables
-via the same read-only-safe JSONL-sink pattern as the rest of the observer store.
-
----
-
-## ✨ What's new in v1.10.5
-
-> Quality of life everywhere you look: watch your subagents think, graphs that open settled and
-> centered, a machine-aware guard for the heavy builds, and a trivia wire for the wait.
-
-- **🔬 Live subagent activity** - the delegation card now opens up: one row per subagent with a live
-  "now" line and tool count, each expandable into its actual trail - thinking, tool calls (with the
-  model's own intent notes), and output - refreshing while it works. *(ADR-0180)*
-- **🧭 Graphs form in place** - a knowledge or code graph with hundreds of nodes opens already settled,
-  centered, and still: the layout computes off-screen before the first paint, live updates nestle in
-  silently, and resizing the panel never shakes the canvas. Drag is the only thing that still moves.
-  *(ADR-0183)*
-- **🩺 System resource guard** - on a weak processor under heavy CPU/RAM load, the CPU-spike features
-  (the KG render and the Code Graph ingest) pause behind a notice that lists the top resource-hungry
-  processes to close, with a one-click re-check. Fail-open by design: a missing profile never blocks
-  a feature. *(ADR-0182)*
-- **🖥️ Electron preview, explained and runnable** - previewing an Electron app used to show a silent
-  white pane; now LUCID explains why and offers a user-clicked "Run with Electron" that launches the
-  real app outside LUCID (detached, audited as an exec event). *(ADR-0179)*
-- **🗞️ Trivia Wire** - a role-aware trivia ticker in the status bar's idle gap: developer, security
-  (CMMC/RMF), manager (CMMI-DEV), and executive banks - and the executive wire interleaves live
-  Intelligence/Defense-sector headlines, scanned and sanitized like everything else. *(ADR-0174-0176)*
-- **🧹 A calmer KG header** - the stacked Relate / Code graph / Compiled KB buttons are now one labeled
-  dropdown, and the title is a compact "KG". *(ADR-0184)*
-- **🛒 Marketplace curated for fit** - off-fit entries retired; **Mermaid**, **Gitleaks**, **Semgrep**,
-  **Trivy**, and **Pandoc** join as planned integrations. *(ADR-0181)*
-- **📦 Boot robustness** - the v1.10.2/v1.10.3 packaging regressions are fixed and guarded by a test
-  that boots a real filtered install, and the desktop shell now writes an `engine.log` for
-  supportability. *(ADR-0177/0178)*
-
----
-
-## ✨ What's new in v1.10.0
-
-> The biggest batch since 1.9 - run **local models**, a multimodal agent that **reviews its own UI**, native
-> **Figma** import, an **Agent Builder**, and a **security firewall** for remote agents. (v1.9.2 also shipped a
-> battery-aware performance epic - calmer knowledge-graph rendering and faster switches on battery.)
-
-- **🖥️ Local & hybrid providers** - point LUCID at a **self-hosted or custom LLM** (Ollama · llama.cpp · vLLM ·
-  any OpenAI-compatible endpoint), including a private box reached **over a VPN**. Run U.S. open-weight model
-  families like **Gemma**, **Llama**, **gpt-oss**, and **Phi** entirely on your own hardware. Keys live in the
-  **OS-encrypted vault** and never reach the renderer or the agent; add, key, and test each one from a
-  Settings card. *(ADR-0135)*
-- **🖼️ Multimodal prompts** - **paste or drop a screenshot** straight into the prompt bar; it shows as a thumbnail
-  above the composer and travels to the model as an image **only when you hit send** - no auto-push. *(ADR-0136)*
-- **👁️ The agent reviews & tests its work live** - as it screenshots, reads the DOM, and **clicks / types** in the
-  in-app Preview to verify its UI, the panel **glows** and a **"testing" pill** shows you exactly what it's doing -
-  all over a sandboxed postMessage bridge (no eval, egress stays blocked). *(ADR-0153)*
-- **🎨 DESIGN.md + native Figma** - a project **`DESIGN.md`** is honored every turn like `CLAUDE.md`; **`/figma`**
-  imports a design into the Preview (token in the vault, used server-side only), then the agent **reviews it** or
-  **builds a DESIGN.md** from it for you to edit in the IDE. *(ADR-0154)*
-- **🤖 Agent Builder** - **describe an agent and LUCID builds it**: an allow-list chip editor, live per-turn canvas
-  collaboration, portable **share / import** with credential provisioning, **n8n** interop, and your own saved
-  **`/command`s**. *(ADR-0137-0146)*
-- **🧯 Agent Firewall** - reach remote **hermes / openclaw** agent runtimes through a **fail-closed security proxy**
-  that scans both directions (blocks injected instructions outbound, quarantines + delimits replies inbound), with
-  per-connection permission policy - plus an in-process gate for **every MCP tool result**. *(ADR-0147-0152)*
-- **⌨️ Neovim & terminal** - drive LUCID from **Neovim** and the terminal, not just the desktop app. *(ADR-0150/0151)*
-
----
 
 ## Table of contents
 
@@ -410,6 +318,7 @@ via the same read-only-safe JSONL-sink pattern as the rest of the observer store
 - [<img src=".github/assets/icons/gateway.svg" width="16" alt=""> Models and the AskSage gateway](#-models-and-the-asksage-gateway)
 - [📚 Knowledge & RAG](#-knowledge--rag)
 - [🤝 Live collaboration](#-live-collaboration)
+- [🗣️ Voice mode](#️-voice-mode)
 - [📱 LUCID Remote](#-lucid-remote)
 - [<img src=".github/assets/icons/builton.svg" width="16" alt=""> Built on](#-built-on)
 - [<img src=".github/assets/icons/quickstart.svg" width="16" alt=""> Quick start](#-quick-start)
@@ -636,11 +545,6 @@ is unavailable the store is *refused*, never written in plaintext. Each key show
 **Rotate** replaces the secret in place (same reference, fail-closed). Enterprise key management (cloud-KMS custody
 across AWS/Azure/GCP/Oracle/IBM, automated rotation, attestation) is a private add-on
 ([ADR-0107](DECISIONS.md) draws the public/private line).
-
-<div align="center">
-<img src=".github/assets/network-whitelist.png" alt="LucidAgentIDE Settings - the Network Whitelist: a curated domain and IP/CIDR allow-list split by internal/external zone, with enforced trust scopes (always / project / this-loop) and per-loop call budgets, plus per-site OS-encrypted credentials shown masked (last-4) with rotation status and a one-click Rotate" width="720" />
-<br><sub>Network Whitelist - scoped, budgeted, credential-aware egress allow-list (last-4 masking + rotation). <em>Screenshot placeholder.</em></sub>
-</div>
 
 ## <img src=".github/assets/icons/memory-animated.svg" width="28" align="top" alt=""> Memory and the personalization graph
 

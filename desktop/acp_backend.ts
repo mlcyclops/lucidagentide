@@ -22,6 +22,7 @@ import { extractToolImages } from "./renderer/chat_images.ts"; // P-IMG.1 (ADR-0
 import { recordAiLoc } from "./ailoc_log.ts"; // P-LOC.4 (ADR-0211): GUI-owned AI-LOC ledger the dashboard reads
 import { learnFromTurn, recallPreamble } from "./personal.ts";
 import { buildUserTurnPreamble } from "./preamble.ts";
+import { replyMedium, spokenReplyGuidance } from "../harness/voice/spoken_reply.ts"; // P-VOICE.5 (ADR-0248)
 import { ChatGate } from "./chat_gate.ts";
 import { completionPath } from "./util_conn.ts";
 import { recordTurns } from "./turns_log.ts";
@@ -29,7 +30,7 @@ import { recordLatency } from "./latency_log.ts"; // P-EVAL.2 (ADR-0187): per-tu
 import { beginStepTurn, endStepTurn, noteStepEvent } from "./session_steps.ts"; // P-RESUME.1 (ADR-0171)
 import { isLearnableAssistantText } from "./thinking_governance.ts";
 import { recordBlock } from "./security_log.ts";
-import { asksageOnly, attribution, checkerModel, lastModel, load as loadSettings, mcpServersForAcp, sessionMode, setCheckerModel, setLastModel } from "./settings_store.ts";
+import { asksageOnly, attribution, checkerModel, lastModel, load as loadSettings, mcpServersForAcp, sessionMode, setCheckerModel, setLastModel, voiceSettings } from "./settings_store.ts";
 import { managedAsksageOnly, managedConfig, managedRequireIsolation } from "./managed_config.ts";
 import { resolveBackend, sandboxDisclosure, wrapForProfile, type SandboxDecision, type SandboxProxy } from "../harness/runs/sandbox_exec.ts"; // P-SANDBOX.1 (ADR-0157)
 import { ensureEgressProxy } from "../harness/runs/egress_proxy.ts"; // P-SANDBOX.2 (ADR-0166)
@@ -141,6 +142,16 @@ const ACP_CONFIG = join(REPO, "harness", "omp", "acp_config.yml");
 // P-DESIGN.1 (ADR-0154): read the workspace DESIGN.md (if any) and wrap it as standing design-invariant
 // guidance for the user-turn preamble. Re-read every turn (cheap, small file) so edits take effect live.
 // Resilient: any read failure just yields "" (the agent proceeds without design invariants, never blocks).
+// P-VOICE.5 (ADR-0248): the voice medium for THIS turn, read live so the block appears the turn after the
+// user switches conversation mode on and vanishes the turn after they switch it off - no session restart, no
+// renderer round-trip. Fail-soft: an unreadable settings file just means the agent answers normally.
+function spokenReplyForTurn(): string | null {
+  try {
+    const v = voiceSettings();
+    return spokenReplyGuidance(replyMedium(v.ttsAutoSpeak, v.ttsConversation));
+  } catch { return null; }
+}
+
 function readDesignInvariants(workspace: string): string {
   try {
     const p = designDocPath(workspace);
@@ -998,6 +1009,7 @@ class Backend {
         skill: this.skill,
         profile: recallPreamble(), // P9.2: re-read each turn so newly-learned facts show up
         designInvariants: readDesignInvariants(currentWorkspace()), // P-DESIGN.1: honor DESIGN.md every turn
+        spokenReply: spokenReplyForTurn(), // P-VOICE.5: hands-free? then answer for the EAR, not the screen
         memoryRecall: this.memoryRecall,
         memoryRecallDelivered: this.memoryRecallDelivered,
       });

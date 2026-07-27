@@ -23,7 +23,17 @@ import { materializeLocalProviders, registerLocalProviderEgress } from "./local_
 import { listLocalProviders, embeddingsConfig } from "./settings_store.ts";
 import type { AuthKind } from "./network_whitelist.ts";
 
-const PORT = Number(process.env.LUCID_PORT ?? 5319);
+const DEFAULT_PORT = 5319;
+const PORT = Number(process.env.LUCID_PORT ?? DEFAULT_PORT);
+// A LUCID on a NON-DEFAULT port is a deliberately separate instance: LucidAgentIDE.bat rolls a free port
+// when 5319 is taken, precisely so a dev build can run beside an installed one. Electron's single-instance
+// lock (below, ADR-0206) is keyed on the userData directory and knows nothing about the port, so without
+// this the second launch hit the guard, quit, and merely FOCUSED the first window - making the control
+// panel's port-picking dead effort. Two instances can never share a port, so keying identity on the port
+// makes them never share a lock. The default-port instance keeps the canonical identity, so the lucid://
+// OAuth deep-link still re-focuses the primary app rather than spawning an engine.
+// Must run before requestSingleInstanceLock() and before anything resolves a userData path.
+if (PORT !== DEFAULT_PORT) app.setPath("userData", `${app.getPath("userData")}-${PORT}`);
 let REPO = "";
 const preloadPath = () => join(app.getAppPath(), "dist", "preload.js");
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -346,10 +356,14 @@ ipcMain.on("lucid:win", (e, action: string) => {
 
 // P-KGMARKET.4 (ADR-0206): claim the lucid:// scheme and enforce a single instance so a deep-link launch
 // re-focuses the running app and hands it the URL (rather than spawning a second engine).
-if (process.defaultApp && process.argv.length >= 2) {
-  app.setAsDefaultProtocolClient(AUTH_PROTOCOL, process.execPath, [resolve(process.argv[1]!)]); // dev
-} else {
-  app.setAsDefaultProtocolClient(AUTH_PROTOCOL); // packaged
+// Only the DEFAULT-port instance claims the lucid:// scheme. A side-by-side test instance registering it
+// would silently steal the OAuth callback from the app the user actually signed in from.
+if (PORT === DEFAULT_PORT) {
+  if (process.defaultApp && process.argv.length >= 2) {
+    app.setAsDefaultProtocolClient(AUTH_PROTOCOL, process.execPath, [resolve(process.argv[1]!)]); // dev
+  } else {
+    app.setAsDefaultProtocolClient(AUTH_PROTOCOL); // packaged
+  }
 }
 pendingAuthUrl = firstAuthUrl(process.argv); // a cold launch may already carry the URL
 const gotSingleInstanceLock = app.requestSingleInstanceLock();

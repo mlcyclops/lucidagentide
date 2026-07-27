@@ -45,7 +45,8 @@ import { listTraces, loadTrace } from "../harness/agent/trace.ts"; // P-AGENT.13
 import { probeEnabledServers } from "./mcp_probe.ts"; // P-AGENT.12: MCP tool discovery for the Builder catalog
 import { archiveBrief, deleteBrief, listBriefs, readBrief, restoreBrief, saveBrief } from "./report_store.ts";
 import { OpenAiCompatibleTtsBackend } from "../harness/brief/tts_backend.ts";
-import { ElevenLabsTtsBackend, ElevenLabsSttBackend, listElevenVoices } from "../harness/voice/elevenlabs.ts";
+import { ElevenLabsTtsBackend, ElevenLabsSttBackend, elevenLabsSpeak, listElevenVoices } from "../harness/voice/elevenlabs.ts";
+import { TTS_PROVIDERS, normalizeTtsProvider, resolveVoice, ttsEngineStatus, voicesForProvider, type TtsProviderInfo } from "../harness/voice/catalog.ts"; // P-VOICE.2 (ADR-0247)
 import { OpenAiCompatibleSttBackend, WhisperCppSttBackend, sttTransportFailed } from "../harness/voice/transcription.ts";
 import { installWhisper, startWhisper, stopWhisper, whisperStatus as whisperRuntimeStatus, type WhisperRuntimeDeps } from "./whisper_runtime.ts"; // P-STT.2b: managed offline Whisper
 import { downloadWhisperModel, resolveWhisperBin } from "./whisper_manager.ts";
@@ -526,7 +527,44 @@ const json = (data: unknown) =>
 // (CWE-209/497 — CodeQL js/stack-trace-exposure). This control plane is loopback-only (ADR-0022 H1), so the
 // real-world exposure is low, but we keep the boundary clean: log the FULL error server-side (dev console)
 // and return a curated message that derives ONLY from `generic`, never from `e`. Every `catch` that surfaces
-// an error to the browser routes through here, so no exception text reaches the shared json() sink.
+// ── P-VOICE.2 (ADR-0247): which TTS engines can actually speak right now ──────────────────────────────
+// The picker used to list every engine unconditionally, so choosing ChatGPT/OpenAI with only a subscription
+// sign-in offered thirteen voices and then failed on every reply. Readiness is computed here, once, and both
+// the picker and /api/tts/speak render the SAME reason - a failure can never contradict the menu.
+const LOCAL_TTS_URL = (): string => process.env.LUCID_TTS_URL || "http://localhost:8880";
+// Is a self-hosted Kokoro actually listening? ANY HTTP answer counts - even a 404 proves something is bound.
+// Cached for a few seconds because the picker probes on every open, and a refused connection costs a syscall
+// round-trip we do not want in the menu's critical path.
+let localTtsProbe = { at: 0, up: false };
+async function localTtsUp(): Promise<boolean> {
+  const now = Date.now();
+  if (now - localTtsProbe.at < 5000) return localTtsProbe.up;
+  let up = false;
+  try { await fetch(LOCAL_TTS_URL(), { signal: AbortSignal.timeout(700) }); up = true; }
+  catch { up = false; } // connection refused / DNS / timeout - nothing is serving there
+  localTtsProbe = { at: now, up };
+  return up;
+}
+/** Every TTS engine with its LIVE readiness + the specific reason it can't speak. */
+async function ttsEngines(): Promise<(TtsProviderInfo & { ready: boolean; reason: string })[]> {
+  const localUp = await localTtsUp();
+  const auth = providerAuth(); // one SQLite read, not one per engine
+  const rows = [...auth.majors, ...auth.others];
+  const localUrl = LOCAL_TTS_URL();
+  return TTS_PROVIDERS.map((e) => ({
+    ...e,
+    ...ttsEngineStatus(e.id, {
+      keySet: !!(e.keyEnv && process.env[e.keyEnv]),
+      // The OpenAI engine's OAuth row is the CHAT sign-in ("openai"); ttsEngineStatus uses it to explain why
+      // being signed in still isn't enough for the platform speech API.
+      oauthActive: !!rows.find((r) => r.id === (e.id === "openai-tts" ? "openai" : e.id))?.oauthActive,
+      localUp,
+      localUrl,
+    }),
+  }));
+}
+
+// A caught exception must never reach the client verbatim (CWE-209/497). Log it, return a curated message.
 function clientError(e: unknown, generic: string): string {
   console.error(`[dev] ${generic}:`, e);
   return generic;
@@ -1540,13 +1578,21 @@ const server = Bun.serve({
         if (req.method === "POST") { const b = await readBody<Record<string, unknown>>(req); return json({ ok: true, data: setVoiceSettings(b as never) }); }
         return json({ ok: true, data: voiceSettings() });
       }
-      // P-VOICE.1: list the account's ElevenLabs voices for the picker (favorites first), + the selection.
+      // P-VOICE.1 + P-VOICE.2 (ADR-0247): list the selectable voices for ONE engine, so the picker works for
+      // every engine rather than only ElevenLabs. OpenAI and Kokoro publish a FIXED voice set with no list
+      // endpoint, so those come from the static catalog; ElevenLabs is per-account and fetched live.
+      // `?provider=` previews another engine's voices without committing the setting.
       if (p === "/api/voices") {
-        const key = process.env.ELEVENLABS_API_KEY;
         const v = voiceSettings();
-        if (!key) return json({ ok: true, data: { voices: [], favorites: v.ttsVoiceFavorites, selected: v.ttsVoice, note: "Add your ElevenLabs API key (Settings → Voice) to list voices." } });
-        try { return json({ ok: true, data: { voices: await listElevenVoices({ apiKey: key }), favorites: v.ttsVoiceFavorites, selected: v.ttsVoice } }); }
-        catch (e) { return json({ ok: true, data: { voices: [], favorites: v.ttsVoiceFavorites, selected: v.ttsVoice, note: clientError(e, "Could not list voices — check the provider key/URL.") } }); }
+        const provider = normalizeTtsProvider(url.searchParams.get("provider") || v.ttsProvider);
+        const selected = resolveVoice(provider, provider === v.ttsProvider ? v.ttsVoice : "");
+        const engines = await ttsEngines();
+        const base = { provider, engines, favorites: v.ttsVoiceFavorites, selected, autoSpeak: v.ttsAutoSpeak, conversation: v.ttsConversation };
+        if (provider !== "elevenlabs") return json({ ok: true, data: { ...base, voices: voicesForProvider(provider) } });
+        const key = process.env.ELEVENLABS_API_KEY;
+        if (!key) return json({ ok: true, data: { ...base, voices: [], note: "Add your ElevenLabs API key (Settings → Voice) to list voices." } });
+        try { return json({ ok: true, data: { ...base, voices: await listElevenVoices({ apiKey: key }) } }); }
+        catch (e) { return json({ ok: true, data: { ...base, voices: [], note: clientError(e, "Could not list voices — check the provider key/URL.") } }); }
       }
       // P-VOICE.1: transcribe recorded mic audio → text. Provider from settings: elevenlabs (cloud Scribe)
       // or whisper (offline OpenAI-compatible server). The transcript is ordinary user input (scanned on send).
@@ -1583,26 +1629,31 @@ const server = Bun.serve({
         return json({ ok: rr.ok, data: rr, error: rr.reason });
       }
       if (p === "/api/whisper/stop" && req.method === "POST") { const rr = await stopWhisper(whisperDeps()); return json({ ok: rr.ok, data: rr }); }
-      // P-VOICE.1: read arbitrary text aloud (assistant replies, an AAR summary) with the selected voice.
+      // P-VOICE.1 + P-VOICE.2: read arbitrary text aloud (assistant replies, an AAR summary), selected voice.
       if (p === "/api/tts/speak" && req.method === "POST") {
         const b = await readBody<{ text?: unknown; voiceId?: unknown; provider?: unknown }>(req);
         const text = String(b.text ?? "").slice(0, 8000);
         if (!text.trim()) return json({ ok: true, data: { audioB64: null, mime: "audio/mpeg", note: "nothing to speak" } });
         const v = voiceSettings();
-        const provider = b.provider === "openai-tts" || b.provider === "local-tts" ? String(b.provider) : (v.ttsProvider || "elevenlabs");
+        const provider = typeof b.provider === "string" && b.provider ? normalizeTtsProvider(b.provider) : v.ttsProvider;
         try {
+          // P-VOICE.2: the SAME readiness reason the picker shows, so a failure never contradicts the menu
+          // (notably: an OpenAI OAuth sign-in cannot reach the speech API - only a platform key can).
+          const status = (await ttsEngines()).find((e) => e.id === provider);
+          if (status && !status.ready) return json({ ok: true, data: { audioB64: null, mime: "audio/mpeg", note: status.reason } });
           if (provider === "elevenlabs") {
-            const key = process.env.ELEVENLABS_API_KEY;
-            if (!key) return json({ ok: true, data: { audioB64: null, mime: "audio/mpeg", note: "Add your ElevenLabs API key (Settings → Voice)." } });
-            const { elevenLabsSpeak } = await import("../harness/voice/elevenlabs.ts");
+            const key = process.env.ELEVENLABS_API_KEY!;
             const voiceId = (typeof b.voiceId === "string" && b.voiceId) || v.ttsVoice || v.ttsVoiceFavorites[0];
             const out = await elevenLabsSpeak(text, { apiKey: key, voiceId, format: "mp3" });
             return json({ ok: true, data: { audioB64: Buffer.from(out.audio).toString("base64"), mime: out.mime, note: "" } });
           }
           const kokoro = provider === "local-tts";
-          const key = kokoro ? undefined : process.env.OPENAI_API_KEY;
-          if (!kokoro && !key) return json({ ok: true, data: { audioB64: null, mime: "audio/wav", note: "Add your OpenAI API key (Providers → OpenAI), or pick ElevenLabs / Kokoro." } });
-          const backend = new OpenAiCompatibleTtsBackend({ baseUrl: kokoro ? (process.env.LUCID_TTS_URL || "http://localhost:8880") : (process.env.OPENAI_TTS_URL || "https://api.openai.com"), apiKey: key, model: kokoro ? (process.env.LUCID_TTS_MODEL || "kokoro") : (process.env.OPENAI_TTS_MODEL || "gpt-4o-mini-tts"), voices: { default: kokoro ? "af_heart" : "alloy" } });
+          const key = kokoro ? undefined : process.env.OPENAI_API_KEY; // presence guaranteed by the readiness check above
+          // P-VOICE.2: honour the SELECTED voice (this was pinned to alloy/af_heart, which made the picker a
+          // no-op for these engines). resolveVoice falls back to the engine default when the stored id
+          // belongs to a different engine, so a mid-session provider switch can't 400 the request.
+          const voice = resolveVoice(provider, (typeof b.voiceId === "string" && b.voiceId) || v.ttsVoice);
+          const backend = new OpenAiCompatibleTtsBackend({ baseUrl: kokoro ? (process.env.LUCID_TTS_URL || "http://localhost:8880") : (process.env.OPENAI_TTS_URL || "https://api.openai.com"), apiKey: key, model: kokoro ? (process.env.LUCID_TTS_MODEL || "kokoro") : (process.env.OPENAI_TTS_MODEL || "gpt-4o-mini-tts"), voices: { default: voice } });
           const r = await backend.synthesize({ title: "read", turns: [{ speaker: "default", text }] });
           const audioB64 = r.audio ? Buffer.from(r.audio).toString("base64") : null;
           return json({ ok: true, data: { audioB64, mime: "audio/wav", note: audioB64 ? "" : r.note } });

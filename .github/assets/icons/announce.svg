@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32" fill="none">
+  <!-- Static twin of announce-animated.svg. -->
+  <defs>
+    <linearGradient id="ag" x1="3" y1="3" x2="29" y2="29" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#f7ccff"/><stop offset="0.38" stop-color="#e07bf0"/><stop offset="1" stop-color="#e8b23c"/>
+    </linearGradient>
+    <radialGradient id="ac" cx="0.5" cy="0.5" r="0.5">
+      <stop stop-color="#e07bf0" stop-opacity="0.42"/><stop offset="1" stop-color="#e07bf0" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <circle cx="16" cy="16" r="14" fill="url(#ac)"/>
+  <path d="M16 16 C19.4 12.6 22.1 10.9 25.1 9.4 C23.6 12.4 21.9 15.1 18.5 18.5 C21.9 21.9 23.6 24.6 25.1 27.6 C22.1 26.1 19.4 24.4 16 21 C12.6 24.4 9.9 26.1 6.9 27.6 C8.4 24.6 10.1 21.9 13.5 18.5 C10.1 15.1 8.4 12.4 6.9 9.4 C9.9 10.9 12.6 12.6 16 16 Z" fill="url(#ag)" opacity="0.5"/>
+  <path d="M16 0.8 C17 8.9 23.1 15 31.2 16 C23.1 17 17 23.1 16 31.2 C15 23.1 8.9 17 0.8 16 C8.9 15 15 8.9 16 0.8 Z" fill="url(#ag)"/>
+  <circle cx="16" cy="16" r="3.1" fill="#ffffff" opacity="0.85"/>
+</svg>
