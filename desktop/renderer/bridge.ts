@@ -167,13 +167,41 @@ export interface ConfigOption {
   id: string; name: string; category: string; type: string;
   currentValue: string; options: { value: string; name: string }[];
 }
-// P-VOICE.1 (ADR-0115): voice config + ElevenLabs voice for the pickers.
+// P-VOICE.1 (ADR-0115): voice config + the voice lists behind the pickers.
 export interface VoiceSettingsView {
   sttProvider: "elevenlabs" | "whisper";
   sttUrl: string;
   ttsProvider: "elevenlabs" | "openai-tts" | "local-tts";
+  /** The voice chosen for `ttsProvider` — the store remembers one per engine (P-VOICE.2, ADR-0247). */
   ttsVoice: string;
   ttsVoiceFavorites: string[];
+  /** P-VOICE.2 (ADR-0247): read every assistant reply aloud as it streams. Opt-in; off by default. */
+  ttsAutoSpeak: boolean;
+  /** P-VOICE.3: hands-free turn-taking - the reply ends, the mic opens, a silence sends. Needs ttsAutoSpeak. */
+  ttsConversation: boolean;
+}
+// P-VOICE.2 (ADR-0247): what /api/voices returns for ONE engine — the list plus the picker's context.
+export interface VoiceListView {
+  provider: "elevenlabs" | "openai-tts" | "local-tts";
+  /** Every engine with LIVE readiness \u2014 `ready:false` carries the specific reason it cannot speak. */
+  engines: TtsEngineView[];
+  voices: ElevenVoiceView[];
+  favorites: string[];
+  selected: string;
+  autoSpeak: boolean;
+  conversation: boolean;
+  note?: string;
+}
+export interface TtsEngineView {
+  id: "elevenlabs" | "openai-tts" | "local-tts";
+  label: string;
+  blurb: string;
+  cloud: boolean;
+  keyEnv: string | null;
+  liveList: boolean;
+  ready: boolean;
+  /** Empty when ready; otherwise what the user has to do about it. */
+  reason: string;
 }
 // P-STT.2b: managed on-device Whisper status for the no-code Voice card.
 export interface WhisperTierView { tier: string; label: string; runnable: boolean; installed: boolean }
@@ -547,7 +575,8 @@ export interface LucidBridge {
   // mic transcription, and read-aloud TTS.
   voiceSettings(): Promise<VoiceSettingsView | null>;
   setVoiceSettings(patch: Partial<VoiceSettingsView>): Promise<VoiceSettingsView | null>;
-  voices(): Promise<{ voices: ElevenVoiceView[]; favorites: string[]; selected: string; note?: string } | null>;
+  /** Voices for `provider`, or for the engine currently selected in settings when omitted. */
+  voices(provider?: string): Promise<VoiceListView | null>;
   transcribe(audioB64: string, mime: string, language?: string): Promise<{ text: string; note: string } | null>;
   // P-STT.2b: managed on-device Whisper - hardware-gated install / start / stop / status (no-code).
   whisperStatus(): Promise<WhisperStatusView | null>;
@@ -1060,7 +1089,7 @@ export const bridge: LucidBridge = {
   engineeringBriefAudio: (provider, voiceId) => post("/api/brief/audio", { provider, voiceId }),
   voiceSettings: () => getData("/api/voice-settings"),
   setVoiceSettings: (patch) => post("/api/voice-settings", patch),
-  voices: () => getData("/api/voices"),
+  voices: (provider) => getData(provider ? `/api/voices?provider=${encodeURIComponent(provider)}` : "/api/voices"),
   transcribe: (audioB64, mime, language) => post("/api/transcribe", { audioB64, mime, language }),
   whisperStatus: () => getData("/api/whisper/status"),
   whisperInstall: (tier) => post("/api/whisper/install", { tier }),

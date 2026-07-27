@@ -133,9 +133,21 @@ export interface GuiSettings {
   sttUrl?: string;
   // ttsProvider: default engine for the brief podcast + read-aloud — "elevenlabs" | "openai-tts" | "local-tts".
   ttsProvider?: "elevenlabs" | "openai-tts" | "local-tts";
-  // ttsVoice: selected ElevenLabs voice id; ttsVoiceFavorites: starred voice ids (favorites shown first).
+  // ttsVoice: LEGACY single voice id (an ElevenLabs id — the only engine whose picker worked pre-P-VOICE.2).
+  // Superseded by ttsVoices, which remembers a voice PER ENGINE so switching engines never sends a foreign
+  // voice id (an ElevenLabs id would 400 against Kokoro). Read as the ElevenLabs fallback, then retired.
   ttsVoice?: string;
+  ttsVoices?: Record<string, string>;
+  // ttsVoiceFavorites: starred ElevenLabs voice ids (listed first in the picker; also the brief's two hosts).
   ttsVoiceFavorites?: string[];
+  // P-VOICE.2 (ADR-0247): ttsAutoSpeak - read every assistant reply aloud as it streams, without clicking the
+  // per-message button. OFF by default: it is cloud egress (the reply text goes to the TTS provider) plus
+  // per-character cost, so it is strictly opt-in, chosen from the composer's voice chip.
+  ttsAutoSpeak?: boolean;
+  // P-VOICE.3: ttsConversation - hands-free turn-taking. When the spoken reply ENDS, the mic opens by
+  // itself; a longer silence ends your turn and sends it. Requires ttsAutoSpeak (it is the other half of the
+  // loop) and is opt-in on top of it: it holds the microphone open between turns.
+  ttsConversation?: boolean;
   // P-LOCAL.1 (ADR-0135): self-hosted / custom OpenAI-compatible LLM endpoints (Ollama, llama.cpp,
   // vLLM, a DGX box over a VPN tunnel, …). DECLARATIONS only — each carries an opaque `vaultRef`; the
   // API key/token lives ONLY in the OS-encrypted vault (cred_vault.ts), never in this file.
@@ -248,25 +260,48 @@ export interface VoiceSettings {
   ttsProvider: "elevenlabs" | "openai-tts" | "local-tts";
   ttsVoice: string;
   ttsVoiceFavorites: string[];
+  ttsAutoSpeak: boolean;
+  ttsConversation: boolean;
 }
 export function voiceSettings(): VoiceSettings {
   const s = load();
+  const ttsProvider = s.ttsProvider ?? "elevenlabs";
+  // P-VOICE.2: the voice is remembered PER ENGINE. `ttsVoice` (pre-P-VOICE.2, when only ElevenLabs had a
+  // working picker) is read as the legacy ElevenLabs choice, so an existing install keeps its voice.
+  const perProvider = s.ttsVoices?.[ttsProvider];
   return {
     sttProvider: s.sttProvider === "elevenlabs" ? "elevenlabs" : "whisper", // offline is the safe default
     sttUrl: s.sttUrl || process.env.LUCID_STT_URL || "http://localhost:9000",
-    ttsProvider: s.ttsProvider ?? "elevenlabs",
-    ttsVoice: s.ttsVoice ?? "",
+    ttsProvider,
+    ttsVoice: perProvider ?? (ttsProvider === "elevenlabs" ? s.ttsVoice ?? "" : ""),
     ttsVoiceFavorites: Array.isArray(s.ttsVoiceFavorites) ? s.ttsVoiceFavorites : [],
+    ttsAutoSpeak: s.ttsAutoSpeak === true, // opt-in only (cloud egress + per-character cost)
+    // Conversation mode is meaningless without the speaking half, so it reads false whenever auto-speak is
+    // off - the stored preference survives, but nothing opens the mic behind the user's back.
+    ttsConversation: s.ttsConversation === true && s.ttsAutoSpeak === true,
   };
 }
-/** Merge a partial voice-settings patch. Favorites are replaced wholesale (the UI sends the full list). */
+/** Merge a partial voice-settings patch. Favorites are replaced wholesale (the UI sends the full list).
+ *  `ttsVoice` targets whichever engine is selected AFTER this patch applies, so the UI can switch engine and
+ *  voice independently and each engine keeps its own remembered voice. */
 export function setVoiceSettings(patch: Partial<VoiceSettings>): VoiceSettings {
   const s = load();
   if (patch.sttProvider) s.sttProvider = patch.sttProvider === "elevenlabs" ? "elevenlabs" : "whisper";
   if (patch.sttUrl !== undefined) s.sttUrl = patch.sttUrl.trim() || undefined;
   if (patch.ttsProvider) s.ttsProvider = patch.ttsProvider;
-  if (patch.ttsVoice !== undefined) s.ttsVoice = patch.ttsVoice.trim() || undefined;
+  if (patch.ttsVoice !== undefined) {
+    const voices = { ...(s.ttsVoices ?? {}) };
+    const target = s.ttsProvider ?? "elevenlabs";
+    const id = patch.ttsVoice.trim();
+    if (id) voices[target] = id; else delete voices[target];
+    s.ttsVoices = Object.keys(voices).length ? voices : undefined;
+    if (target === "elevenlabs") s.ttsVoice = undefined; // the per-engine map supersedes the legacy scalar
+  }
   if (patch.ttsVoiceFavorites) s.ttsVoiceFavorites = patch.ttsVoiceFavorites.slice(0, 100);
+  // The UI sends checkbox state as a real boolean and select state as a string; accept both so a
+  // `data-voice-set` control can drive this the same way it drives the engine pickers.
+  if (patch.ttsAutoSpeak !== undefined) s.ttsAutoSpeak = patch.ttsAutoSpeak === true;
+  if (patch.ttsConversation !== undefined) s.ttsConversation = patch.ttsConversation === true;
   save(s); return voiceSettings();
 }
 
