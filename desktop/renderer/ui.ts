@@ -7,7 +7,7 @@
 import { $, el } from "./dom.ts";
 import { icon } from "./icons.ts";
 import { esc } from "./format.ts";
-import { placePopover } from "./popover_place.ts"; // P-VOICE.2 (ADR-0246): flip + height-cap math, testable
+import { placePopover } from "./popover_place.ts"; // P-VOICE.2 (ADR-0247): flip + height-cap math, testable
 
 // ───────────────────────── tooltip ─────────────────────────
 // Markup: data-tip="Title|Description"  (Title optional)  data-tip-icon="shield"
@@ -158,7 +158,7 @@ export function createPalette(getActions: () => Action[]) {
 
 // ───────────────────────── anchored popover ─────────────────────────
 // A managed floating card anchored to an element; closes on outside-click / Esc.
-// P-VOICE.2 (ADR-0246): placement is re-runnable. A card whose CONTENT arrives after it opens (the voice
+// P-VOICE.2 (ADR-0247): placement is re-runnable. A card whose CONTENT arrives after it opens (the voice
 // picker paints a skeleton, then the fetched voice list) grows after the first measurement, so a card
 // anchored to the bottom-of-window composer would grow straight off the bottom. Callers that repaint MUST
 // call `reposition()` afterwards; placePopover() also caps the height so a tall card scrolls, never clips.

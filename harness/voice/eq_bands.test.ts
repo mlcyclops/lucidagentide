@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// P-VOICE.4 (ADR-0247): the speech equalizer's maths. These pin the two properties that decide whether the
+// P-VOICE.4 (ADR-0248): the speech equalizer's maths. These pin the two properties that decide whether the
 // display reads as a hi-fi analyser or as noise - log band spacing (so speech isn't crammed into three bars)
 // and asymmetric ballistics with peak hold (snap up, glide down, cap hangs then falls).
 

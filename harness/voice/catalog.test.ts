@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// P-VOICE.2 (ADR-0246): the voice catalog. The load-bearing behaviour is resolveVoice() — it is what stops a
+// P-VOICE.2 (ADR-0247): the voice catalog. The load-bearing behaviour is resolveVoice() — it is what stops a
 // voice id from one engine being sent to another when the user switches providers mid-session.
 
 import { expect, test } from "bun:test";

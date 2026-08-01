@@ -3,7 +3,7 @@
 
 // harness/voice/eq_bands.ts
 //
-// P-VOICE.4 (ADR-0247): the maths behind the speech equalizer - FFT bins folded into log-spaced bands, plus
+// P-VOICE.4 (ADR-0248): the maths behind the speech equalizer - FFT bins folded into log-spaced bands, plus
 // the BALLISTICS that make it read like a hi-fi spectrum analyser instead of a twitching bar chart.
 //
 // Two things separate a real analyser display from a naive one, and both live here:

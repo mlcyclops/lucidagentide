@@ -3,7 +3,7 @@
 
 // harness/voice/speech_stream.ts
 //
-// P-VOICE.2 (ADR-0246): the pure "what can we speak YET?" brain behind live read-aloud.
+// P-VOICE.2 (ADR-0247): the pure "what can we speak YET?" brain behind live read-aloud.
 //
 // Read-aloud used to wait for the whole reply, then synthesize it as one clip - so a 600-word answer meant
 // ~20 seconds of silence before the first word. Live voice needs the opposite: speak sentence one while the

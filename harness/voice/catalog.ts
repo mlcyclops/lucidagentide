@@ -3,7 +3,7 @@
 
 // harness/voice/catalog.ts
 //
-// P-VOICE.2 (ADR-0246): the CANONICAL voice catalog, one place, for every TTS engine LUCID speaks with.
+// P-VOICE.2 (ADR-0247): the CANONICAL voice catalog, one place, for every TTS engine LUCID speaks with.
 //
 // Before this module the picker could only list ElevenLabs (the one engine with a `GET /v1/voices` endpoint);
 // the OpenAI and Kokoro voice ids were scattered as inline string literals in dev.ts (`"alloy"`, `"af_heart"`,

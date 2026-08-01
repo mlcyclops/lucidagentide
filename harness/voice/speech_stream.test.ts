@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// P-VOICE.2 (ADR-0246): the live read-aloud chunker. These prove the two things that make streaming TTS
+// P-VOICE.2 (ADR-0247): the live read-aloud chunker. These prove the two things that make streaming TTS
 // sound wrong when they're missed - reading an unterminated code fence out loud, and splitting a decimal /
 // abbreviation into two utterances - plus the cursor contract that guarantees no text is spoken twice or lost.
 

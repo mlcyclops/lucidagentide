@@ -3,7 +3,7 @@
 
 // desktop/renderer/popover_place.ts
 //
-// P-VOICE.2 (ADR-0246): where an anchored popover actually goes. Extracted from ui.ts's popover() because
+// P-VOICE.2 (ADR-0247): where an anchored popover actually goes. Extracted from ui.ts's popover() because
 // the old inline math had two holes that only show up on a SHORT window or a TALL card, and neither is
 // reproducible by reading the code:
 //   · it never capped the card's height, so a card taller than the room available was pinned to the top

@@ -3,7 +3,7 @@
 
 // desktop/renderer/voice_eq.ts
 //
-// P-VOICE.4 (ADR-0247): the glowing spectrum analyser that dances to the agent's voice - a segmented,
+// P-VOICE.4 (ADR-0248): the glowing spectrum analyser that dances to the agent's voice - a segmented,
 // peak-holding LED display of the kind that sat on the front of a 1980s hi-fi.
 //
 // It taps the REAL audio: one persistent <audio> element is routed through a Web Audio AnalyserNode, so the

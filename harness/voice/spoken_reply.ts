@@ -3,7 +3,7 @@
 
 // harness/voice/spoken_reply.ts
 //
-// P-VOICE.5 (ADR-0247): in conversation mode the reply is HEARD, not read - so the agent has to be told to
+// P-VOICE.5 (ADR-0248): in conversation mode the reply is HEARD, not read - so the agent has to be told to
 // write for the ear, automatically.
 //
 // Without this, hands-free voice is unusable in practice. The model answers the way it always does: headings,

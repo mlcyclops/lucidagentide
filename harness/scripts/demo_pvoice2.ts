@@ -3,7 +3,7 @@
 
 // harness/scripts/demo_pvoice2.ts
 //
-// P-VOICE.2 (ADR-0246): live read-aloud - the composer voice picker + auto-speak. This exercises the three
+// P-VOICE.2 (ADR-0247): live read-aloud - the composer voice picker + auto-speak. This exercises the three
 // pieces that can actually break, with NO network, NO Electron and NO audio device:
 //   [1] the settings store  - a voice is remembered PER ENGINE, and the legacy single-voice field migrates
 //   [2] the streaming chunker - a realistic reply with a code fence is spoken as prose, never as source

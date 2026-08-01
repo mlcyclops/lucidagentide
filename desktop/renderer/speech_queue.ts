@@ -3,7 +3,7 @@
 
 // desktop/renderer/speech_queue.ts
 //
-// P-VOICE.2 (ADR-0246): the ordering + cancellation brain behind live read-aloud.
+// P-VOICE.2 (ADR-0247): the ordering + cancellation brain behind live read-aloud.
 //
 // Auto-speak synthesizes a reply one sentence at a time so audio starts after sentence one instead of after
 // the whole answer. That turns read-aloud into a concurrency problem, and the failure modes are all audible:

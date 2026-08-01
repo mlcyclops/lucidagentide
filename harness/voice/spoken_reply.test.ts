@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// P-VOICE.5 (ADR-0247): the "answer for the ear" guidance. The behaviour that matters is WHEN it applies -
+// P-VOICE.5 (ADR-0248): the "answer for the ear" guidance. The behaviour that matters is WHEN it applies -
 // only hands-free conversation mode, never plain auto-speak (where the user is reading along) and never a
 // silent turn - and that it constrains the reply's SHAPE without telling the agent to do less work.
 

@@ -22,7 +22,7 @@ export interface PreambleState {
   /** P-DESIGN.1 (ADR-0154): the project's DESIGN.md invariants (already `<design-invariants>`-wrapped), or ""
    *  when there's no DESIGN.md. STANDING guidance — re-delivered every turn so design work keeps honoring it. */
   designInvariants?: string;
-  /** P-VOICE.5 (ADR-0247): the `<spoken-reply>` block when the user is hands-free in conversation mode, else
+  /** P-VOICE.5 (ADR-0248): the `<spoken-reply>` block when the user is hands-free in conversation mode, else
    *  null/"". STANDING for as long as the mode is on, and it vanishes the turn after it is switched off \u2014 it
    *  is rebuilt from the live voice settings every turn, exactly like the share-awareness block. */
   spokenReply?: string | null;

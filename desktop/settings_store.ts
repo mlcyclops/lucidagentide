@@ -140,7 +140,7 @@ export interface GuiSettings {
   ttsVoices?: Record<string, string>;
   // ttsVoiceFavorites: starred ElevenLabs voice ids (listed first in the picker; also the brief's two hosts).
   ttsVoiceFavorites?: string[];
-  // P-VOICE.2 (ADR-0246): ttsAutoSpeak - read every assistant reply aloud as it streams, without clicking the
+  // P-VOICE.2 (ADR-0247): ttsAutoSpeak - read every assistant reply aloud as it streams, without clicking the
   // per-message button. OFF by default: it is cloud egress (the reply text goes to the TTS provider) plus
   // per-character cost, so it is strictly opt-in, chosen from the composer's voice chip.
   ttsAutoSpeak?: boolean;

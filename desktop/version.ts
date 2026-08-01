@@ -285,4 +285,4 @@
 //            zero-prereq BUNDLED offline Whisper installers on all 3 OSes (P-STT.2c/.2d), the mic waveform
 //            (P-STT.4) + orphan whisper-server reaper (P-STT.5), the Provider Hub + one-click local-model
 //            presets (P-PROV.2 / P-LOCAL.4), and the model-picker cold-start warm-poll.
-export const APP_VERSION = "1.11.12";
+export const APP_VERSION = "1.12.0";

@@ -36,7 +36,7 @@ const PREAMBLE_BLOCKS: RegExp[] = [
   // the user had typed it. These three were injected without a matching stripper:
   /^\s*<design-invariants\b[^>]*>[\s\S]*?<\/design-invariants>/, // P-DESIGN.1 (ADR-0154)
   /^\s*<session-share\b[^>]*>[\s\S]*?<\/session-share>/,         // P-PREVIEW-PWA.3 (ADR-0240)
-  /^\s*<spoken-reply\b[^>]*>[\s\S]*?<\/spoken-reply>/,           // P-VOICE.5 (ADR-0247)
+  /^\s*<spoken-reply\b[^>]*>[\s\S]*?<\/spoken-reply>/,           // P-VOICE.5 (ADR-0248)
 ];
 
 /** Remove the leading injected-context block(s) from a user message so only what the

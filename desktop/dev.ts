@@ -46,7 +46,7 @@ import { probeEnabledServers } from "./mcp_probe.ts"; // P-AGENT.12: MCP tool di
 import { archiveBrief, deleteBrief, listBriefs, readBrief, restoreBrief, saveBrief } from "./report_store.ts";
 import { OpenAiCompatibleTtsBackend } from "../harness/brief/tts_backend.ts";
 import { ElevenLabsTtsBackend, ElevenLabsSttBackend, elevenLabsSpeak, listElevenVoices } from "../harness/voice/elevenlabs.ts";
-import { TTS_PROVIDERS, normalizeTtsProvider, resolveVoice, ttsEngineStatus, voicesForProvider, type TtsProviderInfo } from "../harness/voice/catalog.ts"; // P-VOICE.2 (ADR-0246)
+import { TTS_PROVIDERS, normalizeTtsProvider, resolveVoice, ttsEngineStatus, voicesForProvider, type TtsProviderInfo } from "../harness/voice/catalog.ts"; // P-VOICE.2 (ADR-0247)
 import { OpenAiCompatibleSttBackend, WhisperCppSttBackend, sttTransportFailed } from "../harness/voice/transcription.ts";
 import { installWhisper, startWhisper, stopWhisper, whisperStatus as whisperRuntimeStatus, type WhisperRuntimeDeps } from "./whisper_runtime.ts"; // P-STT.2b: managed offline Whisper
 import { downloadWhisperModel, resolveWhisperBin } from "./whisper_manager.ts";
@@ -527,7 +527,7 @@ const json = (data: unknown) =>
 // (CWE-209/497 — CodeQL js/stack-trace-exposure). This control plane is loopback-only (ADR-0022 H1), so the
 // real-world exposure is low, but we keep the boundary clean: log the FULL error server-side (dev console)
 // and return a curated message that derives ONLY from `generic`, never from `e`. Every `catch` that surfaces
-// ── P-VOICE.2 (ADR-0246): which TTS engines can actually speak right now ──────────────────────────────
+// ── P-VOICE.2 (ADR-0247): which TTS engines can actually speak right now ──────────────────────────────
 // The picker used to list every engine unconditionally, so choosing ChatGPT/OpenAI with only a subscription
 // sign-in offered thirteen voices and then failed on every reply. Readiness is computed here, once, and both
 // the picker and /api/tts/speak render the SAME reason - a failure can never contradict the menu.
@@ -1578,7 +1578,7 @@ const server = Bun.serve({
         if (req.method === "POST") { const b = await readBody<Record<string, unknown>>(req); return json({ ok: true, data: setVoiceSettings(b as never) }); }
         return json({ ok: true, data: voiceSettings() });
       }
-      // P-VOICE.1 + P-VOICE.2 (ADR-0246): list the selectable voices for ONE engine, so the picker works for
+      // P-VOICE.1 + P-VOICE.2 (ADR-0247): list the selectable voices for ONE engine, so the picker works for
       // every engine rather than only ElevenLabs. OpenAI and Kokoro publish a FIXED voice set with no list
       // endpoint, so those come from the static catalog; ElevenLabs is per-account and fetched live.
       // `?provider=` previews another engine's voices without committing the setting.

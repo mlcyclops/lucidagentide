@@ -67,7 +67,7 @@ import { webrtcLoopbackSelfTest, webrtcRelaySelfTest, webrtcP2PModuleSelfTest } 
 // direct connection" toggle runs the share peer-to-peer over WebRTC, with the relay used only to signal + fall back.
 import { startP2PHost, stopP2PHost, p2pHostActive, p2pHostStatus, setP2PHostOptions, teeEvent as p2pTeeEvent, teeUserTurn as p2pTeeUserTurn, startP2PGuest, stopP2PGuest, p2pGuestActive, p2pGuestSendPrompt, p2pLinkEndpoint } from "./collab_p2p.ts";
 import type { CollabOptions } from "../collab/frames.ts"; // P-COLLAB.14 (ADR-0228): edit-guest model+folder pickers
-import { loadDockState, saveDockState, clampToViewport, snapDecision, participantSummary, isCollapsed, orderBindAddresses, redactShareSnapshot, classifyInviteLink, defaultShape, JOIN_DOCK_KEY, type DockShape, type DockState, type DockStorage, type ShareSnapshot } from "./share_dock.ts"; // P-SHARE.1/2/3 + P-COLLAB.20 (ADR-0242) + P-VOICE.4 (ADR-0247): the floating Share / Join / Voice docks
+import { loadDockState, saveDockState, clampToViewport, snapDecision, participantSummary, isCollapsed, orderBindAddresses, redactShareSnapshot, classifyInviteLink, defaultShape, JOIN_DOCK_KEY, type DockShape, type DockState, type DockStorage, type ShareSnapshot } from "./share_dock.ts"; // P-SHARE.1/2/3 + P-COLLAB.20 (ADR-0242) + P-VOICE.4 (ADR-0248): the floating Share / Join / Voice docks
 import { formatImportLine } from "./import_progress.ts";
 import { fitWithin, MAX_SNAPSHOT_EDGE } from "../collab/preview_snapshot.ts"; // P-PREVIEW-PWA.1 (ADR-0237): scaled-down preview snapshot to phone guests
 import { accessCounts } from "../collab/share_awareness.ts"; // P-PREVIEW-PWA.3 (ADR-0240): agent share-awareness counts
@@ -84,10 +84,11 @@ import { renderSkillInspect, renderSkillsDirectory, renderStudioCandidate, skill
 import { skillKey, type SkillRoot, trustEnableable } from "../skills_gov.ts"; // P-SKILL.4 (ADR-0097)
 import { CHECKER_TOKENS_PER_ITER, MAKER_TOKENS_PER_ITER, estimateGoalCost, estimateGoalTokens, formatTokens, formatUSD } from "../loop_estimate.ts";
 import { speakable } from "../../harness/brief/engineering_update.ts"; // P-REPORT.7: make read-aloud text TTS-friendly
-import { TTS_PROVIDERS } from "../../harness/voice/catalog.ts"; // P-VOICE.2 (ADR-0246): every engine's selectable voices
+import { TTS_PROVIDERS } from "../../harness/voice/catalog.ts"; // P-VOICE.2 (ADR-0247): every engine's selectable voices
 import { takeSpeechChunks } from "../../harness/voice/speech_stream.ts"; // P-VOICE.2: sentence-at-a-time live read-aloud
+import { nextThinkingCue } from "../../harness/voice/thinking_cues.ts"; // P-VOICE.6 (ADR-0249): spoken "still working" cues
 import { SpeechQueue } from "./speech_queue.ts"; // P-VOICE.2: ordered, cancellable playback of those sentences
-import { VoiceEqualizer } from "./voice_eq.ts"; // P-VOICE.4 (ADR-0247): the glowing spectrum analyser
+import { VoiceEqualizer } from "./voice_eq.ts"; // P-VOICE.4 (ADR-0248): the glowing spectrum analyser
 import type { ElevenVoiceView, TtsEngineView, VoiceListView, VoiceSettingsView } from "./bridge.ts";
 import { changeGraphSvg, schemaSvg, type ChangeGraph, type ModuleChange, type GraphEdge, type StoreChange } from "../../harness/brief/change_graph.ts"; // P-REPORT.8: report annex graphs
 import { assumedCacheRate, priceFor } from "../model_pricing.ts";
@@ -157,7 +158,7 @@ const state = {
   userRole: null as UserRole | null, // ADR-0088 (P-ROLE.1): chosen role; null until onboarding picks one
   tourSeen: false, // ADR-0089 (P-ROLE.1b): first-run walkthrough already shown (finished or skipped)
   govconCui: null as boolean | null, // P-GOVCUI.1: Government/CUI answer; null until the first-run step asks
-  voice: null as VoiceSettingsView | null, // P-VOICE.2 (ADR-0246): cached TTS/STT config - drives the composer voice chip + auto-speak
+  voice: null as VoiceSettingsView | null, // P-VOICE.2 (ADR-0247): cached TTS/STT config - drives the composer voice chip + auto-speak
 };
 const prettyModel = (v: string) => v.replace(/^anthropic\//, "");
 // Strip the redundant "· AskSage Gov" / "· Gov" suffix from a model's display name
@@ -286,11 +287,11 @@ function buildShell(): void {
             <!-- P-STT.4: live mic waveform - scrolling level history (newest at the right) + elapsed clock,
                  shown only while dictation runs so the user SEES the mic hearing them. -->
             <div class="ct-wave" id="ctWave" hidden aria-hidden="true"><canvas id="ctWaveCanvas"></canvas><span class="ct-wave-time" id="ctWaveTime">0:00</span></div>
-            <!-- P-VOICE.2 (ADR-0246): the read-aloud control - engine + voice picker and the auto-speak switch.
+            <!-- P-VOICE.2 (ADR-0247): the read-aloud control - engine + voice picker and the auto-speak switch.
                  It sits beside the mic so talking TO the agent and listening TO it are one pair of controls. -->
             <button class="ctool ctool-icon" id="ctVoice" data-tip="Voice - read aloud|Choose the speech engine and voice, and switch on auto-speak to have replies read to you as they stream.">${icon("volume", 15)}</button>
             <!-- Visible only while a reply is being spoken: a live indicator with a one-click stop. -->
-            <!-- P-VOICE.4 (ADR-0247): a live spectrum analyser of the agent's actual voice - segmented LEDs
+            <!-- P-VOICE.4 (ADR-0248): a live spectrum analyser of the agent's actual voice - segmented LEDs
                  with hanging peak caps. Pops out into a draggable "LUCID Agent [Voice]" panel. -->
             <div class="ct-speak" id="ctSpeak" hidden><span class="ct-speak-dot"></span><canvas class="ct-eq" id="ctEqCanvas" aria-hidden="true"></canvas><span class="ct-speak-lbl" id="ctSpeakLbl">Speaking</span><button class="ct-speak-stop" id="ctEqPop" aria-label="Pop the voice panel out" data-tip="Pop out|Float the equalizer as a panel you can drag anywhere in LUCID">${icon("expand", 12)}</button><button class="ct-speak-stop" id="ctSpeakStop" aria-label="Stop reading aloud" data-tip="Stop reading">${icon("close", 12)}</button></div>
           </div>
@@ -1550,9 +1551,12 @@ async function send(): Promise<void> {
   };
   let slowNoticed = false; // P-STALL.1: the explanatory toast fires once per turn; the phase line keeps updating
   let noResponse = false; // P-NORESP.1: the model returned nothing \u2192 the notice replaces the empty bubble
-  // P-VOICE.2 (ADR-0246): a new turn - stop anything still being read from the last one and reset the
+  // P-VOICE.2 (ADR-0247): a new turn - stop anything still being read from the last one and reset the
   // read-aloud cursor, so auto-speak can never trail one reply behind.
   speech.stop(); speechCursor = 0; speechFedAt = 0;
+  // P-VOICE.6: hands-free, a long think is DEAD AIR - indistinguishable from a crash. Speak short, escalating
+  // acknowledgements until the answer itself starts talking.
+  startThinkingCues(() => sawTool);
   const onEvent = (e: ChatEvent) => {
     p2pTeeEvent(e); // P-COLLAB.17: mirror the live event into a direct-P2P share, if one is hosting
     if (e.type === "token") { reasoning?.finish(Date.now() - t0); buf += e.text; countDelta(e.text); if (!sawTool) setPhase(writeLine); streamEl.innerHTML = renderMarkdown(buf) + `<span class="cursor"></span>`; paintHud(); scrollChat(); speechFeed(buf, false); /* P-VOICE.2: speak each finished sentence while the rest is still being written */ }
@@ -1609,7 +1613,7 @@ async function send(): Promise<void> {
       if (e.text && e.text.length > buf.length) buf = e.text; /* reconcile a lossy stream with the server's full reply */
       // Don't clobber the no-response notice with an empty answer body.
       if (!(noResponse && !buf.trim())) { const chipped = renderAnswerBody(streamEl, buf, marks); /* P-CHAT.A sections / P-CHAT.B chips */ if (chipped) dropThoughtsWindow(); }
-      (node as MsgNode)._md = buf; speechFeed(buf, true); /* P-VOICE.2: speak the tail the sentence gate withheld */ finishHud(); maybeAppendReport(); /* P-CHAT.C: settled-turn report CTA */ state.streaming = false; setSendEnabled(); clearPreviewTesting();
+      (node as MsgNode)._md = buf; stopThinkingCues(); speechFeed(buf, true); /* P-VOICE.2: speak the tail the sentence gate withheld */ finishHud(); maybeAppendReport(); /* P-CHAT.C: settled-turn report CTA */ state.streaming = false; setSendEnabled(); clearPreviewTesting();
     }
   };
   // P-COLLAB.15: attribute a guest-driven turn (runGuestPromptLocally set nextTurnFrom) in the live broadcast;
@@ -1622,6 +1626,7 @@ async function send(): Promise<void> {
   try { await bridge.sendPrompt(sendText, onEvent, images, turnFrom ?? undefined, p2pShare); }
   finally {
     (node as MsgNode)._md = buf;
+    stopThinkingCues(); // P-VOICE.6: the turn is over - no cue may outlive it
     speechFeed(buf, true); // P-VOICE.2: also covers an aborted / errored stream, which never emits "done"
     if (state.streaming) { if (!(noResponse && !buf.trim())) { const chipped = renderAnswerBody(streamEl, buf, marks); /* P-CHAT.A sections / P-CHAT.B chips */ if (chipped) dropThoughtsWindow(); maybeAppendReport(); /* P-CHAT.C: settled-turn report CTA */ } finishHud(); state.streaming = false; setSendEnabled(); } else { finishHud(); }
     void renderSessions(); void refreshBudget(false); void syncMode(); void refresh(); // P-PERF.3: one dashboard catch-up now the turn (and its stream) is done, since the poll no longer runs the heavy obs-DB read mid-stream
@@ -2508,7 +2513,7 @@ async function hydrateWhisper(): Promise<void> {
   const s = await bridge.whisperStatus().catch(() => null);
   card.innerHTML = s ? whisperCardHtml(s) : "";
 }
-/** Populate the Voice card's picker with the SELECTED engine's voices (P-VOICE.2, ADR-0246): ElevenLabs is
+/** Populate the Voice card's picker with the SELECTED engine's voices (P-VOICE.2, ADR-0247): ElevenLabs is
  *  fetched live from the account, OpenAI and Kokoro come from the static catalog. Best-effort: an engine that
  *  cannot list shows its own note. Called after the card renders and after the key changes. */
 async function loadVoices(): Promise<void> {
@@ -6935,7 +6940,7 @@ async function speakText(text: string, btn?: HTMLElement | null): Promise<void> 
   ttsAudio.play().catch(() => { restoreSpeakBtn(btn); URL.revokeObjectURL(url); });
 }
 
-// ── P-VOICE.2 (ADR-0246): live read-aloud (auto-speak) ───────────────────────
+// ── P-VOICE.2 (ADR-0247): live read-aloud (auto-speak) ───────────────────────
 // "It talks while it writes." The read-aloud BUTTON waits for the settled reply and synthesizes it as one
 // clip - on a long answer that is ~20 seconds of silence before the first word. Auto-speak instead pumps the
 // GROWING stream buffer through takeSpeechChunks(): each complete sentence (never an unterminated code fence)
@@ -6944,7 +6949,7 @@ async function speakText(text: string, btn?: HTMLElement | null): Promise<void> 
 // The ordering / cancellation mechanics live in SpeechQueue (speech_queue.ts) so they are testable without a
 // DOM; this file supplies the renderer half - the real HTTP synth, blob URLs, an <audio> element, and the
 // toast shown when the engine returns nothing.
-// P-VOICE.4 (ADR-0247): ONE persistent element plays every clip, and the equalizer taps it. Web Audio's
+// P-VOICE.4 (ADR-0248): ONE persistent element plays every clip, and the equalizer taps it. Web Audio's
 // createMediaElementSource() may be called only once per element, so a fresh Audio() per sentence would make
 // a real spectrum display impossible - and churned an element per sentence besides. Swapping `.src` is all a
 // queued clip needs.
@@ -6991,6 +6996,25 @@ const speech = new SpeechQueue({
   onIdle: () => maybeListen(), // P-VOICE.3: the agent stopped talking - in conversation mode, open the mic
 });
 
+/** P-VOICE.6 (ADR-0249): one keystroke into (and out of) hands-free. Turning it ON implies auto-speak - the
+ *  loop is meaningless without the speaking half - so a single press from a silent session goes fully
+ *  hands-free. Turning it OFF leaves auto-speak alone: you stop being listened to, but replies are still read
+ *  aloud, which is the state most people want back. */
+async function toggleConversationMode(): Promise<void> {
+  const on = !state.voice?.ttsConversation;
+  await applyVoicePatch(on ? { ttsAutoSpeak: true, ttsConversation: true } : { ttsConversation: false });
+  if (!on) { if (dictation) void endDictation(); stopThinkingCues(); }
+  showToast({
+    tone: on ? "ok" : "info",
+    title: on ? "Conversation mode on" : "Conversation mode off",
+    desc: on
+      ? `Replies are read aloud, then the mic opens so you can just answer. ${modCombo("G")} again to stop.`
+      : "The mic no longer opens on its own. Replies are still read aloud.",
+    timeout: 3200,
+  });
+  if (on) maybeListen(); // already idle? start listening now rather than after the next reply
+}
+
 /** P-VOICE.3: hands-free turn-taking. Opening the mic is guarded on every side - both toggles on, the reply
  *  fully SPOKEN (not merely written), the turn settled, and no session already running - so it can never end
  *  up listening to the agent's own voice, and never grabs the microphone in plain auto-speak mode. */
@@ -7006,13 +7030,45 @@ let speechCursor = 0;
 let speechFedAt = 0;
 
 /** Queue one span of reply text. speakable() strips markdown, code and increment/ADR codes first, so the
- *  audio reads prose instead of narrating backticks and "ADR-0246"; a span that reduces to nothing (a pure
+ *  audio reads prose instead of narrating backticks and "ADR-0247"; a span that reduces to nothing (a pure
  *  code block, a table rule) is dropped rather than sent to a paid endpoint. */
 function speechSay(raw: string): void {
   const clean = raw.split(/\n+/).map((ln) => speakable(ln)).filter(Boolean).join(" ").trim();
   if (!clean) return;
   if (ttsAudio && !ttsAudio.paused) { ttsAudio.pause(); ttsAudio = null; } // never over the manual read-aloud
+  lastVoiceAt = Date.now(); // P-VOICE.6: the cue clock measures silence since the last thing SAID
   speech.say(clean.slice(0, 4000));
+}
+
+// ── P-VOICE.6 (ADR-0249): spoken progress while the agent works ──────────────────────────
+let lastVoiceAt = 0;
+let cuesSpoken = 0;
+let cueTimer = 0;
+
+/** Start the cue clock for a turn. Conversation mode only: with your eyes on the screen the thinking block
+ *  and tool chips already say "working", and a spoken cue would just talk over what you are reading. */
+function startThinkingCues(toolActive: () => boolean): void {
+  stopThinkingCues();
+  if (!state.voice?.ttsAutoSpeak || !state.voice?.ttsConversation) return;
+  lastVoiceAt = Date.now();
+  cuesSpoken = 0;
+  cueTimer = window.setInterval(() => {
+    // Never queue a cue behind audio that is already playing - by the time it was heard it would be stale,
+    // and it would delay the answer sitting behind it.
+    if (speech.busy) { lastVoiceAt = Date.now(); return; }
+    const cue = nextThinkingCue({
+      cuesSpoken,
+      sinceVoiceMs: Date.now() - lastVoiceAt,
+      answerStarted: speechCursor > 0,
+      toolActive: toolActive(),
+    });
+    if (!cue) return;
+    cuesSpoken++;
+    speechSay(cue);
+  }, 700);
+}
+function stopThinkingCues(): void {
+  if (cueTimer) { clearInterval(cueTimer); cueTimer = 0; }
 }
 
 /** Feed the turn's growing answer buffer to the queue. The FIRST span goes out as soon as one sentence
@@ -7027,7 +7083,7 @@ function speechFeed(buf: string, flush: boolean): void {
   for (const c of r.chunks) speechSay(c);
 }
 
-// ── P-VOICE.4 (ADR-0247): the floating "LUCID Agent [Voice]" panel ─────────────────────────
+// ── P-VOICE.4 (ADR-0248): the floating "LUCID Agent [Voice]" panel ─────────────────────────
 // The mini strip under the prompt bar is fine while you are looking at the composer, but the equalizer is
 // something people want to WATCH - so it pops out into a panel that can be dragged anywhere in the window and
 // stays there. Geometry, clamping, edge-snapping and persistence are the already-tested share/join dock
@@ -7150,11 +7206,12 @@ function updateVoiceChip(): void {
     const engine = TTS_PROVIDERS.find((p) => p.id === state.voice?.ttsProvider)?.label ?? "ElevenLabs";
     const talking = on && !!state.voice?.ttsConversation;
     chip.classList.toggle("conv", talking);
+    const hk = modCombo("G");
     chip.setAttribute("data-tip", talking
-      ? `Voice - conversation mode|${engine} reads each reply aloud, then the mic opens by itself so you can just answer. A few seconds of silence sends your turn. Click to change the engine, the voice, or switch it off.`
+      ? `Voice - conversation mode \u00b7 ${hk}|${engine} reads each reply aloud, then the mic opens by itself so you can just answer. A few seconds of silence sends your turn. Click to change the engine or the voice; ${hk} switches it off.`
       : on
-        ? `Voice - auto-speak on|Replies are read aloud as they stream, via ${engine}. Click to change the engine, the voice, or turn on hands-free conversation.`
-        : `Voice - read aloud|Replies are spoken only when you click a reply's speaker button. Click to pick the engine and voice, or switch on auto-speak.`);
+        ? `Voice - auto-speak on \u00b7 ${hk}|Replies are read aloud as they stream, via ${engine}. ${hk} goes fully hands-free. Click to change the engine or the voice.`
+        : `Voice - read aloud \u00b7 ${hk}|Replies are spoken only when you click a reply's speaker button. ${hk} goes hands-free. Click to pick the engine and voice.`);
   }
   // P-VOICE.4: the strip carries the equalizer, so it is hidden whenever the panel is popped out - two live
   // analysers of the same voice, six inches apart, is noise.
@@ -7213,7 +7270,7 @@ function voicePopHtml(data: VoiceListView | null, provider: string, autoSpeak: b
     <label class="voice-auto"><input type="checkbox" id="voiceAuto"${autoSpeak ? " checked" : ""} />
       <span><b>Speak replies as they stream</b><i>Audio starts after the first sentence. A cloud engine sends the reply text to that provider.</i></span></label>
     <label class="voice-auto${autoSpeak ? "" : " off"}"><input type="checkbox" id="voiceConv"${conversation ? " checked" : ""}${autoSpeak ? "" : " disabled"} />
-      <span><b>Conversation mode</b><i>${autoSpeak ? "The mic opens when the reply finishes; a few seconds of silence sends your turn." : "Needs \u201cSpeak replies as they stream\u201d above."}</i></span></label>
+      <span><b>Conversation mode <span class="voice-hk">${esc(modCombo("G"))}</span></b><i>${autoSpeak ? "The mic opens when the reply finishes; a few seconds of silence sends your turn." : "Needs \u201cSpeak replies as they stream\u201d above."}</i></span></label>
     <div class="cfg-lbl">Engine</div>
     <div class="cfg-list">${list.map((e) => voiceEngineHtml(e, provider)).join("")}</div>
     ${blocked ? `<div class="set-note danger">${icon("shield", 12)} ${esc(blocked)}</div>` : ""}
@@ -10309,6 +10366,10 @@ function wire(): void {
     else if (e.key === "0") { e.preventDefault(); resetZoom(); }
     // P-REPORT.5b: Ctrl/⌘+D toggles the mic (voice input), matching the mic button's tooltip.
     else if ((e.key === "d" || e.key === "D") && !e.shiftKey && !e.altKey) { e.preventDefault(); void toggleMicRecording(); }
+    // P-VOICE.6 (ADR-0249): Ctrl/\u2318+G toggles hands-free conversation mode. G is the nearest key to the mic's
+    // D that is free on all three platforms - Ctrl+E/F/R/S/W/A/Q are browser or OS bindings, and LUCID has no
+    // find bar for \u2318G to collide with on macOS.
+    else if ((e.key === "g" || e.key === "G") && !e.shiftKey && !e.altKey) { e.preventDefault(); void toggleConversationMode(); }
   });
 
   // inspector collapse ↔ metrics rail
@@ -10325,10 +10386,10 @@ function wire(): void {
     if (seg?.dataset.mode) void applySessionMode(seg.dataset.mode as "cui" | "search");
   });
   $("#ctMic")?.addEventListener("click", () => void toggleMicRecording()); // P-VOICE.1 (ADR-0115)
-  // P-VOICE.2 (ADR-0246): the read-aloud control - the picker, and a one-click stop while a reply is spoken.
+  // P-VOICE.2 (ADR-0247): the read-aloud control - the picker, and a one-click stop while a reply is spoken.
   $("#ctVoice")?.addEventListener("click", () => void openVoiceDropdown($("#ctVoice")!));
   $("#ctSpeakStop")?.addEventListener("click", () => speech.stop());
-  // P-VOICE.4 (ADR-0247): the equalizer - a mini strip in the composer, or a panel anchored anywhere.
+  // P-VOICE.4 (ADR-0248): the equalizer - a mini strip in the composer, or a panel anchored anywhere.
   const miniEq = $("#ctEqCanvas");
   if (miniEq instanceof HTMLCanvasElement) voiceEq.mount(miniEq);
   $("#ctEqPop")?.addEventListener("click", () => openVoiceDock());

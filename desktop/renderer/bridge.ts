@@ -172,15 +172,15 @@ export interface VoiceSettingsView {
   sttProvider: "elevenlabs" | "whisper";
   sttUrl: string;
   ttsProvider: "elevenlabs" | "openai-tts" | "local-tts";
-  /** The voice chosen for `ttsProvider` — the store remembers one per engine (P-VOICE.2, ADR-0246). */
+  /** The voice chosen for `ttsProvider` — the store remembers one per engine (P-VOICE.2, ADR-0247). */
   ttsVoice: string;
   ttsVoiceFavorites: string[];
-  /** P-VOICE.2 (ADR-0246): read every assistant reply aloud as it streams. Opt-in; off by default. */
+  /** P-VOICE.2 (ADR-0247): read every assistant reply aloud as it streams. Opt-in; off by default. */
   ttsAutoSpeak: boolean;
   /** P-VOICE.3: hands-free turn-taking - the reply ends, the mic opens, a silence sends. Needs ttsAutoSpeak. */
   ttsConversation: boolean;
 }
-// P-VOICE.2 (ADR-0246): what /api/voices returns for ONE engine — the list plus the picker's context.
+// P-VOICE.2 (ADR-0247): what /api/voices returns for ONE engine — the list plus the picker's context.
 export interface VoiceListView {
   provider: "elevenlabs" | "openai-tts" | "local-tts";
   /** Every engine with LIVE readiness \u2014 `ready:false` carries the specific reason it cannot speak. */

@@ -22,7 +22,7 @@ import { extractToolImages } from "./renderer/chat_images.ts"; // P-IMG.1 (ADR-0
 import { recordAiLoc } from "./ailoc_log.ts"; // P-LOC.4 (ADR-0211): GUI-owned AI-LOC ledger the dashboard reads
 import { learnFromTurn, recallPreamble } from "./personal.ts";
 import { buildUserTurnPreamble } from "./preamble.ts";
-import { replyMedium, spokenReplyGuidance } from "../harness/voice/spoken_reply.ts"; // P-VOICE.5 (ADR-0247)
+import { replyMedium, spokenReplyGuidance } from "../harness/voice/spoken_reply.ts"; // P-VOICE.5 (ADR-0248)
 import { ChatGate } from "./chat_gate.ts";
 import { completionPath } from "./util_conn.ts";
 import { recordTurns } from "./turns_log.ts";
@@ -142,7 +142,7 @@ const ACP_CONFIG = join(REPO, "harness", "omp", "acp_config.yml");
 // P-DESIGN.1 (ADR-0154): read the workspace DESIGN.md (if any) and wrap it as standing design-invariant
 // guidance for the user-turn preamble. Re-read every turn (cheap, small file) so edits take effect live.
 // Resilient: any read failure just yields "" (the agent proceeds without design invariants, never blocks).
-// P-VOICE.5 (ADR-0247): the voice medium for THIS turn, read live so the block appears the turn after the
+// P-VOICE.5 (ADR-0248): the voice medium for THIS turn, read live so the block appears the turn after the
 // user switches conversation mode on and vanishes the turn after they switch it off - no session restart, no
 // renderer round-trip. Fail-soft: an unreadable settings file just means the agent answers normally.
 function spokenReplyForTurn(): string | null {
