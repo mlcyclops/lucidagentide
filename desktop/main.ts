@@ -19,6 +19,8 @@ import { initAutoUpdate } from "./updater.ts";
 import { ensureRuntimes, findBun, needsBootstrap } from "./runtime.ts";
 import { createSplash, setSplashStatus } from "./splash.ts";
 import { deleteCredential, listCredentials, readCredential, rotateCredential, storeCredential, type SafeStorageLike, type VaultIo } from "./cred_vault.ts";
+import { bestEngineLine, classifyEngineFailure, isProtectedInstallRoot, probeDirWritable, type WriteProbe } from "./engine_boot.ts";
+import { resolveEngineSpawn } from "./engine_launch.ts"; // P-WINBOOT.2 (ADR-0251): prefer the compiled engine binary
 import { materializeLocalProviders, registerLocalProviderEgress } from "./local_providers_runtime.ts";
 import { listLocalProviders, embeddingsConfig } from "./settings_store.ts";
 import type { AuthKind } from "./network_whitelist.ts";
@@ -41,6 +43,10 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 let win: BrowserWindow | null = null;
 let dev: ChildProcess | null = null;
 let runtimeEnv: Record<string, string> = {};
+// P-WINBOOT.1 (ADR-0250): the engine child's exit + a bounded tail of its output, so a boot failure is
+// diagnosed the instant it dies (see classifyEngineFailure) rather than after the full 30s health timeout.
+let engineExit: { code: number | null } | null = null;
+let engineTail = "";
 
 // ── P-KGMARKET.4 (ADR-0206): lucid://auth deep link for hosted marketplace sign-in ──────────────────
 // After the user signs in on the hosted page, the browser redirects to lucid://auth?token=...; the OS hands
@@ -87,7 +93,12 @@ function startDevServer(): void {
   // a PRIVATE clone from the Settings button - the same vault→env-into-dev-child path as Figma/Local Providers.
   const gitEnv = prepareGitToken();
   const embeddingsEnv = prepareEmbeddingsToken(); // ADR-0221: vault→env for the embeddings endpoint key
-  dev = spawn(findBun(), ["run", "desktop/dev.ts"], {
+  // P-WINBOOT.2 (ADR-0251): packaged builds spawn the COMPILED engine (bin/lucid-engine) - it embeds
+  // dev.ts so Bun never module-loads a .ts from a protected install dir (the P-WINBOOT.1 EPERM brick).
+  // Dev runs, and any package cut before compile-engine existed, fall back to `bun run desktop/dev.ts`.
+  const engineSpec = resolveEngineSpawn({ packaged: app.isPackaged, repoRoot: REPO, bun: findBun(), exists: existsSync, platform: process.platform });
+  console.log(`[main] engine: ${engineSpec.compiled ? "compiled bin/lucid-engine" : "bun run desktop/dev.ts"}`);
+  dev = spawn(engineSpec.cmd, engineSpec.args, {
     cwd: REPO,
     // LUCID_RESOURCES lets the dev child resolve the bundled whisper.cpp binary under <resources>/whisper
     // (P-STT.2c); process.resourcesPath is an Electron property, not an env var, so it must be threaded here.
@@ -99,8 +110,14 @@ function startDevServer(): void {
     windowsHide: true,
   });
   const tee = openEngineLog();
-  dev.stdout?.on("data", (d) => { process.stdout.write(d); tee(d); });
-  dev.stderr?.on("data", (d) => { process.stderr.write(d); tee(d); });
+  engineExit = null;
+  engineTail = "";
+  // P-WINBOOT.1 (ADR-0250): keep a bounded tail of engine output + watch for an early exit, so a boot
+  // failure (e.g. Bun's EPERM loading dev.ts from a Program Files install) is diagnosed the instant it
+  // dies rather than after the full 30s health timeout.
+  dev.stdout?.on("data", (d) => { process.stdout.write(d); tee(d); engineTail = (engineTail + d.toString()).slice(-4000); });
+  dev.stderr?.on("data", (d) => { process.stderr.write(d); tee(d); engineTail = (engineTail + d.toString()).slice(-4000); });
+  dev.on("exit", (code) => { engineExit = { code: code ?? null }; });
 }
 // Returns true once the dev server answers /api/health, false if it never does within the window.
 // 30s headroom: the server's own init (DuckDB open + omp acp spawn) can outlast a slow first launch;
@@ -109,6 +126,8 @@ async function waitForServer(timeoutMs = 30000): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     try { if ((await fetch(`http://localhost:${PORT}/api/health`)).ok) return true; } catch { /* retry */ }
+    // P-WINBOOT.1 (ADR-0250): a dead engine will never answer - stop waiting the moment it exits.
+    if (engineExit) return false;
     await sleep(180);
   }
   return false;
@@ -399,13 +418,23 @@ app.whenReady().then(async () => {
   // came up (e.g. no usable bun runtime), say so. The window keeps retrying via did-fail-load, so a
   // late start still recovers; this only fires when it genuinely failed to answer in time.
   if (!serverUp) {
-    dialog.showErrorBox(
-      "Lucid Agent could not start its local engine",
-      `The bundled background service did not respond on port ${PORT} within 30 seconds, so the window ` +
-        `may stay blank.\n\nThe engine's own startup output (including any crash message) is in:\n` +
-        `${engineLogPath()}\n\nThe app will keep retrying — if it stays blank, send that log file to ` +
-        `support or reinstall the latest release.`,
-    );
+    // P-WINBOOT.1 (ADR-0250): classify the failure into an ACTIONABLE dialog. The dominant field case is
+    // a Program Files install where Bun's loader EPERMs on dev.ts; waitForServer already returned early on
+    // the child's exit, so this fires immediately (not 30s later) and tells the user how to recover.
+    const probe: WriteProbe = { write: (p, data) => writeFileSync(p, data), remove: (p) => rmSync(p, { force: true }) };
+    const report = classifyEngineFailure({
+      packaged: app.isPackaged,
+      repoRoot: REPO,
+      repoWritable: probeDirWritable(REPO, probe),
+      protectedRoot: isProtectedInstallRoot(REPO),
+      exited: !!engineExit,
+      exitCode: engineExit?.code ?? null,
+      lastLogLine: bestEngineLine(engineTail),
+      port: PORT,
+      logPath: engineLogPath(),
+      platform: process.platform,
+    });
+    dialog.showErrorBox(report.title, report.detail);
   }
   initAutoUpdate(() => win); // packaged-only; checks GitHub Releases, prompts on download
   app.on("activate", () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });

@@ -37,6 +37,7 @@ Thumbs.db
 # desktop electron app
 desktop/node_modules/
 desktop/dist/
+desktop/renderer/app.bundle.js
 
 # --- secrets / credentials (NEVER commit keys or tokens) ---
 lucid-gui.json

@@ -151,6 +151,17 @@ if (/Failed to load pi_natives|Cannot find module .*pi_natives/i.test(said)) {
 }
 console.log(`  lucid launcher OK - ${addons.length} native addon${addons.length === 1 ? "" : "s"} resolve next to the binary, no load failure`);
 
+// --- 3b) compiled desktop ENGINE + prebuilt renderer (P-WINBOOT.2 / ADR-0251) ------------------------
+// The desktop app spawns the COMPILED engine (bin/lucid-engine) instead of `bun run desktop/dev.ts`, so
+// Bun never module-loads a .ts out of a protected install dir (the v1.12.0 Program Files brick). If dist
+// did not run compile-engine / build-renderer, resolveEngineSpawn silently FALLS BACK to `bun run dev.ts`
+// and the brick returns. Assert both artifacts shipped so that regression fails the build, not a user.
+const engineBin = join(res, "repo", "bin", `lucid-engine${EXE}`);
+if (!existsSync(engineBin)) fail(`compiled desktop engine missing: ${engineBin} (did compile-engine run? see package.json dist scripts)`);
+const rendererBundle = join(res, "repo", "desktop", "renderer", "app.bundle.js");
+if (!existsSync(rendererBundle)) fail(`prebuilt renderer bundle missing: ${rendererBundle} (did build-renderer run? without it the packaged engine Bun.build()s .ts from the install dir at runtime)`);
+console.log("  desktop engine OK - compiled bin/lucid-engine + prebuilt renderer bundle shipped (no runtime .ts load from the install dir)");
+
 // --- 4) bundled offline Whisper: the whisper.cpp server binary + its co-located libs (P-STT.2c/.2d) -------
 // The no-code "Install & start" button needs a whisper-server on disk. `bun run whisper` stages it into
 // resources/whisper before packaging; if that step failed (or a runner lacked cmake for the mac source

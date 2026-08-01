@@ -16643,3 +16643,157 @@ auto-speak alone - you stop being listened to, replies are still read.
 6 unit tests pinning the restraint rules (nothing before the gap, the answer always wins, gaps provably
 escalate, hard cap, distinct + tool-flavoured lines, and every line short/markdown-free/sentence-terminated so
 the engine lands the intonation). 66 voice tests; renderer tsc clean.
+
+## ADR-0250 -- P-WINBOOT.1: Windows installed-app startup hardening (protected-directory failure)
+
+**Date:** 2026-08-01
+**Status:** Accepted -- BUILT (mitigation). The permanent rearchitecture (Increment B) + its CI guard
+(Increment C) are named follow-ups below, each its own ADR.
+
+### Problem
+
+v1.12.0 for Windows showed a blank window for 30 seconds, then a generic "could not start its local engine"
+dialog, when installed under `C:\Program Files`. The portable build worked. Root cause, confirmed against the
+code and a field report: `startDevServer()` (main.ts) spawns `bun run desktop/dev.ts` with cwd
+`<resources>/repo`, and the packaged app ships raw TypeScript there (`extraResources` includes
+`desktop/**/*.ts`). Bun 1.3.14's runtime module loader returns `EPERM` loading a `.ts` entrypoint out of the
+ACL-protected `Program Files` tree; `Bun.file().text()` reads the same bytes fine, and disabling the
+transpiler cache does not help. The behavioural tell (plain read succeeds, module-load is refused) points at
+the loader memory-mapping the source, which the directory's security refuses even with `Users:(RX)`. The
+engine dies before binding port 5319; the shell then waits the full `waitForServer(30000)` window before
+saying anything, because `startDevServer()` never watched `dev.on("exit")`.
+
+The installer let users get there: nsis `perMachine:false` but `allowElevation:true` +
+`allowToChangeInstallationDirectory:true`, so the dir chooser + a UAC elevation reach `Program Files`.
+(Per-machine would land there unconditionally, so that path is broken too.)
+
+This is the third packaged-engine startup failure (ADR-0177 v1.10.2 stripped a runtime import; ADR-0178
+v1.10.3 shipped broken-but-quiet). Those added the engine.log tee this increment reuses. The common
+product-level cause remains: production executes raw dev TypeScript from install resources.
+
+### Decision (mitigation: prevent the state, and diagnose it honestly)
+
+1. **Installer can no longer reach `Program Files`.** nsis `allowElevation:false` +
+   `allowToChangeInstallationDirectory:false` (perMachine stays false), so every install lands in the writable
+   per-user default (`%LOCALAPPDATA%\Programs\LucidAgentIDE`) where the `bun run` path works. Portable stays
+   the power-user escape hatch.
+2. **Fail fast, not after 30s.** `startDevServer()` now wires `dev.on("exit")` and keeps a bounded (4KB)
+   rolling tail of engine output; `waitForServer()` returns the instant the child exits instead of polling the
+   whole window.
+3. **An actionable dialog.** New pure module `desktop/engine_boot.ts` classifies the failure into
+   `protected-location | engine-exited | timeout`. A protected location is asserted only on real evidence (a
+   `Program Files`/`Windows` path, a failed write-probe of the engine dir, or an `EPERM`/`EACCES` signal in
+   the log), and the message names the exact folder and the two real fixes (reinstall per-user, or run
+   portable). A plain crash keeps its exit code + crash line; an alive-but-silent engine keeps "may still be
+   starting". `bestEngineLine()` surfaces the error line, not the trailing `Bun v...` noise. A dev run never
+   blames the install location.
+
+Deliberately NOT done here: the batch launcher's misleading diagnostics (Increment D) and the deep fix.
+
+### Alternatives rejected
+
+- **Ship a bundled `.js` engine artifact.** Tempting, but a `.js` module still takes Bun's file-mapping load
+  path, so it can `EPERM` from `Program Files` exactly like the `.ts`. Only `bun build --compile` (code
+  embedded in the exe, nothing mapped off disk) or running from a writable location is guaranteed. A naive
+  `.js` bundle would re-brick; do not assume it fixes this without a protected-location test.
+- **Copy `resources/repo` into writable user data on first run.** Fixes the ACL but weakens provenance
+  (~0.57 GiB of mutable executable source) unless every file is hash-verified before execution. Wrong tradeoff
+  for a security-first harness.
+- **Path-name check alone.** Kept as one signal, but the failed write-probe is the general, cross-platform
+  truth ("the engine's own directory is not user-writable"); the log's permission signal is a third corroborator.
+
+### Verification
+
+`bun run desktop/scripts/demo_p_winboot_1.ts` (make demo-P-WINBOOT.1): 20 checks over all three classifications
+(path / write-probe / log-signal), the dev-run exemption, the surfaced EPERM line, the main.ts wiring
+(`dev.on("exit")`, early-return `waitForServer`, classifier + bounded tail, old message gone, no em dash in
+dialog copy), and the nsis guard. 16 unit tests in `desktop/engine_boot.test.ts`. Desktop `tsc --noEmit`
+clean. Not exercised here (no Windows install harness in this environment): a real `Program Files` install
+boot; that is Increment C.
+
+### Next (each its own ADR / increment)
+
+- **Increment B - the permanent fix:** a `bun build --compile` production engine (not a `.js` bundle),
+  preserving `import.meta.dir`, DuckDB/native-addon resolution, the in-process gate, and the frozen prompt
+  prefix (invariant #6). Removes the raw-TS-from-resources dependency entirely and re-enables per-machine.
+- **Increment C - the regression that would have caught this:** on the Windows runner, install/copy the
+  packaged tree into a `Program Files`-ACL location, run the EXACT Electron spawn command with only bundled
+  runtimes, and require `/api/health`. `packaged_boot.test.ts` only ever booted from a writable temp dir.
+- **Increment D:** make `LucidAgentIDE.bat` bundled-runtime aware (discover `resources/runtimes`) or label it
+  developer-only, and stop prompting for an API key when it could not read the omp vault.
+
+## ADR-0251 -- P-WINBOOT.2: the permanent fix - ship the engine as a compiled binary
+
+**Date:** 2026-08-01
+**Status:** Accepted -- BUILT. The permanent fix behind ADR-0250's mitigation (Increment B of that plan).
+Re-enabling per-machine installs + the exact protected-location CI smoke are the named follow-ups below.
+
+### Problem
+
+ADR-0250 stopped NEW installs from reaching `Program Files` and made the failure legible, but the root cause
+remained: main.ts ran `bun run desktop/dev.ts` from `<resources>/repo`, and Bun's module loader EPERMs
+loading a `.ts` out of an ACL-protected tree. The permanent fix must make the engine independent of Bun
+module-loading source off the (possibly protected) install disk at runtime.
+
+### Spike (evidence before design)
+
+`bun build --compile desktop/dev.ts` embeds the code in the binary (no `.ts` mapped off disk), the precedent
+`harness/launcher/lucid_acp.ts` -> `bin/lucid` already sets. But dev.ts is a DuckDB server, and
+`lucid_acp.ts`'s own comment warns `--compile` "chases every platform's DuckDB `.node` and dies resolving
+other-OS binaries" (why it keeps DuckDB out via lazy import). The spike confirmed it: a bare
+`bun build --compile dev.ts` dies on `Could not resolve: "@duckdb/node-bindings-linux-x64-musl/duckdb.node"`.
+Then `--external "*.node"` cleared it (3641 modules -> exe): the JS shims EMBED, only the native addons stay
+external. A tiny compiled probe proved the two remaining unknowns: `import.meta.dir` is VIRTUALIZED to a
+bunfs path (`B:\~BUN\root`) while `process.execPath` is the real binary, and an externalized DuckDB binding
+RESOLVES AND RUNS from the compiled binary (`select 42` -> `[[42]]`). A native `.node` loads via the OS
+loader (LoadLibrary), which works from `Program Files`, unlike Bun's TS-mmap module-load path.
+
+### Decision
+
+Ship the engine as `bin/lucid-engine`, a `bun build --compile dev.ts --external "*.node"` standalone binary:
+
+1. **Embed all JS/TS, external only native `.node`.** dev.ts + every imported module lives inside the binary,
+   so Bun never module-loads a `.ts` off the install disk. DuckDB/onnx/pi-natives load from
+   `resources/repo/node_modules` via the OS loader (main.ts spawns with cwd = `<resources>/repo`, proven to
+   resolve the externals).
+2. **execPath-derived base dir.** `engine_launch.ts:engineDesktopDir()` returns `import.meta.dir` in a dev
+   run (renderer/ exists there) and `dirname(execPath)/../desktop` in the compiled binary (bunfs
+   import.meta.dir has no renderer/). dev.ts's ROOT / monaco / templates / repo-doc reads all route through
+   it (`DESKTOP_DIR` / `REPO_DIR`).
+3. **Prebuilt renderer.** `/app.js` used to `Bun.build(renderer/app.ts)` per request - the LAST path by which
+   Bun touches `.ts` on the install disk. `build-renderer` prebuilds `renderer/app.bundle.js` at package
+   time; `bundleApp()` serves it when present, and only Bun.build()s live in dev.
+4. **Spawn cutover.** `resolveEngineSpawn()` returns the compiled binary in packaged mode (fallback to
+   `bun run desktop/dev.ts` when it is absent - a dev run, or an older package), wired in main.ts.
+
+### Alternatives rejected
+
+- **A bundled `.js` (not `--compile`).** Still loaded by Bun's module loader from disk -> same mmap EPERM.
+  Rejected in ADR-0250 and confirmed here: only an embedded (`--compile`) binary removes the `.ts`/`.js`
+  disk load.
+- **Externalize DuckDB's `.js` shim too.** Would move the mmap risk to `duckdb.js` in `Program Files`
+  node_modules. Externalizing ONLY `*.node` keeps every JS shim embedded; the sole disk load is the native
+  addon (OS loader, PF-safe).
+- **Verified staging (copy engine to a writable dir).** Works but duplicates ~0.5 GiB and needs a hash
+  manifest to keep provenance. The compiled binary is smaller-surface and needs neither.
+
+### Verification
+
+`bun run desktop/scripts/demo_p_winboot_2.ts` (make demo-P-WINBOOT.2): the pure launch decisions + the
+main.ts/dev.ts/package.json wiring, then it BUILDS and BOOTS the real compiled engine and asserts
+`/api/health` -> `{ok:true}` (DuckDB natives resolved at runtime) and the prebuilt `/app.js` serves 7 MB of
+real JS from the execPath-derived root (not an error page, no runtime Bun.build). Confirmed manually too:
+`/api/brief` (200, built from PROGRESS.md/DECISIONS.md via REPO_DIR). 7 engine_launch unit tests + 16
+engine_boot (ADR-0250) green. Desktop `tsc --noEmit` clean. `airgap-smoke.ts` now fails the build if
+`bin/lucid-engine` or `renderer/app.bundle.js` did not ship (so a broken dist can't silently revert to the
+vulnerable `bun run dev.ts` path). NOT verified here (no Windows install harness): the end-to-end boot from
+an actual `Program Files` ACL location - that is Increment C.
+
+### Next
+
+- **Increment C:** the CI smoke that installs to a `Program Files`-ACL location and boots the compiled
+  engine to `/api/health` - the regression that would have caught ADR-0250's brick.
+- **Re-enable per-machine installs.** With the engine no longer running raw TS from resources, the ADR-0250
+  installer clamp (`allowElevation:false`, `allowToChangeInstallationDirectory:false`) can be relaxed once
+  Increment C proves a protected-root boot; its own increment.
+- **Increment D:** the `LucidAgentIDE.bat` diagnostics fix (unchanged from ADR-0250).

@@ -716,6 +716,12 @@ demo-P-CHAT.C: ## P-CHAT.C (ADR-0190): settled-turn "Generate engineering report
 .PHONY: demo-P-STALL.1
 demo-P-STALL.1: ## P-STALL.1 (ADR-0186): patience for overloaded providers - the chat turn waits 10 min (was 5, message falsely said 2); a slow event at each silent 2-min mark keeps the wait visible (HUD phase + one toast naming the cap); the stall error derives its duration from the constant
 	$(BUN) run desktop/scripts/demo_p_stall_1.ts
+.PHONY: demo-P-WINBOOT.1
+demo-P-WINBOOT.1: ## P-WINBOOT.1 (ADR-0250): Windows installed-app startup hardening - a Program Files install (Bun EPERMs loading dev.ts from the protected tree) is diagnosed FAST + ACTIONABLY (reinstall per-user / run portable) instead of a 30s blank box; waitForServer bails on the engine's early exit; a failed write probe / EPERM signal / protected path all classify, while a dev run never blames the install location; and the nsis installer no longer lets a user reach Program Files (allowElevation + allowToChangeInstallationDirectory = false)
+	$(BUN) run desktop/scripts/demo_p_winboot_1.ts
+.PHONY: demo-P-WINBOOT.2
+demo-P-WINBOOT.2: ## P-WINBOOT.2 (ADR-0251): the permanent fix - the engine ships as a `bun build --compile` binary (bin/lucid-engine) that EMBEDS dev.ts (Bun never module-loads a .ts from a protected install dir) with native addons the only --external (loaded via the OS loader, fine from Program Files) and the renderer PREBUILT (no runtime Bun.build of .ts); dev.ts derives its base dir from execPath when compiled, main.ts spawns the binary in packaged mode (fallback to `bun run dev.ts`), and the demo BUILDS + BOOTS the real binary proving /api/health + prebuilt /app.js serve with nothing .ts loaded off disk
+	$(BUN) run desktop/scripts/demo_p_winboot_2.ts
 .PHONY: demo-P-EVAL.2
 demo-P-EVAL.2: ## P-EVAL.2 (ADR-0187): the API-latency CAPTURE + PERSISTENCE pipeline - the GUI-side sink turns t_sent/t_first_token/t_end into a LatencySample appended to an append-only JSONL (the GUI opens the observer DB read-only), the frozen migration 0011 creates api_latency + eval_metrics + the latency_rollup view, the single-writer ingest loads the JSONL idempotently, and readLatencyCalls round-trips the rows back into evals.ts's ApiLatencyCall (ok-only) so rollupLatency + render stay the P-EVAL.1 source of truth
 	$(BUN) run harness/scripts/demo_peval2.ts

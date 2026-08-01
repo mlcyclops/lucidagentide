@@ -75,6 +75,7 @@ import { injectPreviewBridge } from "./preview_bridge.ts"; // P-PREVIEW.6b (ADR-
 import { InspectRelay } from "./preview_inspect_relay.ts"; // P-PREVIEW.6b: agent preview_inspect ↔ renderer relay
 import { parseFigmaFileKey, collectTopFrames, figmaBoardHtml, FIGMA_API, type BoardFrame } from "./figma_client.ts"; // P-FIGMA.1 (ADR-0154)
 import { designDocPath, DESIGN_DOC_NAME } from "./design_doc.ts"; // P-FIGMA.2 / P-DESIGN.1 (ADR-0154)
+import { engineDesktopDir } from "./engine_launch.ts"; // P-WINBOOT.2 (ADR-0251): compiled-engine base-dir resolution
 import { listLocalProviders, upsertLocalProvider, removeLocalProvider, setLocalProviderEnabled } from "./settings_store.ts";
 import { providerModelsUrl, type LocalProviderDef } from "./local_providers.ts";
 import { listRemoteAgents, upsertRemoteAgent, removeRemoteAgent, setRemoteAgentEnabled } from "../harness/mcp/registry.ts";
@@ -463,7 +464,12 @@ function ompBin(): string {
   return "omp";
 }
 
-const ROOT = join(import.meta.dir, "renderer");
+// P-WINBOOT.2 (ADR-0251): the engine's on-disk base. In the `bun build --compile` engine binary,
+// import.meta.dir is a VIRTUAL bunfs path, so engineDesktopDir derives the real <repo>/desktop from
+// process.execPath (the on-disk binary at <repo>/bin/lucid-engine); a dev run uses import.meta.dir as-is.
+const DESKTOP_DIR = engineDesktopDir(import.meta.dir, process.execPath, existsSync);
+const REPO_DIR = join(DESKTOP_DIR, "..");
+const ROOT = join(DESKTOP_DIR, "renderer");
 const PORT = Number(process.env.PORT ?? 5319);
 // ADR-0024: per-launch capability token. Minted once per server process, injected into the served
 // HTML (only a same-origin document can read it), and required on every sensitive /api call. A new
@@ -503,6 +509,14 @@ function bundleError(msg: string): { js: string; ok: boolean } {
   return { ok: false, js: `document.body.innerHTML='<pre style="color:#ef5f5f;padding:20px;font:13px monospace;white-space:pre-wrap">'+${JSON.stringify(msg)}+'</pre>';` };
 }
 async function bundleApp(): Promise<{ js: string; ok: boolean }> {
+  // P-WINBOOT.2 (ADR-0251): a packaged build ships a prebuilt renderer bundle (build-renderer), so the
+  // engine never Bun.build()s renderer TypeScript from the (possibly protected) install dir at runtime -
+  // the last path by which Bun would touch .ts on the install disk. Dev has no prebuilt bundle -> build live.
+  const prebuilt = join(ROOT, "app.bundle.js");
+  if (existsSync(prebuilt)) {
+    try { return { ok: true, js: await Bun.file(prebuilt).text() }; }
+    catch (e) { console.error("[bundleApp] prebuilt bundle unreadable, rebuilding:", e); }
+  }
   try {
     const out = await Bun.build({ entrypoints: [join(ROOT, "app.ts")], target: "browser", sourcemap: "inline" });
     if (!out.success) return bundleError(out.logs.map((l) => String(l)).join("\n"));
@@ -624,7 +638,7 @@ async function gatedAgentImport(specJson: string, notes: string[]): Promise<Gate
 
 // P-AGENT.17: the in-repo starter-template gallery. Only digest-valid portable files are listed; a
 // corrupted/tampered template simply disappears from the gallery (fail-soft for the UI, fail-closed for use).
-const TEMPLATES_DIR = join(import.meta.dir, "..", "templates", "agents");
+const TEMPLATES_DIR = join(REPO_DIR, "templates", "agents");
 interface AgentTemplateSummary {
   file: string;
   name: string;
@@ -825,7 +839,7 @@ const server = Bun.serve({
           : "editor";
         let asset = "";
         try {
-          const dir = join(import.meta.dir, "node_modules", "monaco-editor", "min", "vs", "assets");
+          const dir = join(DESKTOP_DIR, "node_modules", "monaco-editor", "min", "vs", "assets");
           const re = new RegExp(`^${key}\\.worker-.*\\.js$`);
           for (const f of readdirSync(dir)) if (re.test(f)) { asset = `assets/${f}`; break; }
         } catch { /* no assets dir */ }
@@ -835,7 +849,7 @@ const server = Bun.serve({
         return new Response(body, { headers: { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-store" } });
       }
       if (p.startsWith("/vendor/monaco/")) {
-        const base = join(import.meta.dir, "node_modules", "monaco-editor", "min", "vs");
+        const base = join(DESKTOP_DIR, "node_modules", "monaco-editor", "min", "vs");
         const target = join(base, p.slice("/vendor/monaco/".length));
         if (!pathWithin(base, target)) return new Response("forbidden", { status: 403 }); // no path traversal
         const f = Bun.file(target);
@@ -988,7 +1002,7 @@ const server = Bun.serve({
         const body = req.method === "POST" ? await readBody<{ role?: unknown; save?: unknown; repos?: unknown; window?: unknown }>(req) : {};
         const roleRaw = url.searchParams.get("role") ?? (body.role != null ? String(body.role) : null);
         const role: BriefRole | undefined = roleRaw === "developer" || roleRaw === "security" || roleRaw === "manager" || roleRaw === "executive" ? roleRaw : undefined;
-        const repo = join(import.meta.dir, "..");
+        const repo = REPO_DIR;
         const rd = (f: string) => { try { return existsSync(join(repo, f)) ? readFileSync(join(repo, f), "utf8") : ""; } catch { return ""; } };
         const u = buildEngineeringUpdate({ label: "LucidAgentIDE", progressMd: rd("PROGRESS.md"), decisionsMd: rd("DECISIONS.md") });
         const counts = { shipped: u.recentlyShipped.length, loadBearing: u.loadBearingDependencies.length, techDebt: u.techDebt.length, decisions: u.upcomingDecisions.length, risks: u.risks.length };
@@ -1026,7 +1040,7 @@ const server = Bun.serve({
       }
       // P-REPORT.8: STIG Viewer .ckl export of the security control crosswalk (native XML checklist).
       if (p === "/api/brief/ckl") {
-        const repo = join(import.meta.dir, "..");
+        const repo = REPO_DIR;
         const rd = (f: string) => { try { return existsSync(join(repo, f)) ? readFileSync(join(repo, f), "utf8") : ""; } catch { return ""; } };
         const u = buildEngineeringUpdate({ label: "LucidAgentIDE", progressMd: rd("PROGRESS.md"), decisionsMd: rd("DECISIONS.md") });
         const ckl = renderCkl(u, "LucidAgentIDE");
@@ -1034,7 +1048,7 @@ const server = Bun.serve({
       }
       // P-REPORT.6: POA&M export - the security control crosswalk as an eMASS-aligned POA&M CSV.
       if (p === "/api/brief/poam") {
-        const repo = join(import.meta.dir, "..");
+        const repo = REPO_DIR;
         const rd = (f: string) => { try { return existsSync(join(repo, f)) ? readFileSync(join(repo, f), "utf8") : ""; } catch { return ""; } };
         const u = buildEngineeringUpdate({ label: "LucidAgentIDE", progressMd: rd("PROGRESS.md"), decisionsMd: rd("DECISIONS.md") });
         const csv = renderPoamCsv(u, "LucidAgentIDE");
@@ -1551,7 +1565,7 @@ const server = Bun.serve({
         const b = await readBody<{ provider?: unknown; voiceId?: unknown }>(req);
         const provider = b.provider === "local-tts" ? "local-tts" : b.provider === "elevenlabs" ? "elevenlabs" : "openai-tts";
         const pickedVoice = typeof b.voiceId === "string" && b.voiceId ? b.voiceId : "";
-        const repo = join(import.meta.dir, "..");
+        const repo = REPO_DIR;
         const rd = (f: string) => { try { return existsSync(join(repo, f)) ? readFileSync(join(repo, f), "utf8") : ""; } catch { return ""; } };
         const script = buildPodcastScript(buildEngineeringUpdate({ label: "LucidAgentIDE", progressMd: rd("PROGRESS.md"), decisionsMd: rd("DECISIONS.md") }));
         let backend: PodcastBackend;
