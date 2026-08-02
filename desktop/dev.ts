@@ -48,7 +48,7 @@ import { OpenAiCompatibleTtsBackend } from "../harness/brief/tts_backend.ts";
 import { ElevenLabsTtsBackend, ElevenLabsSttBackend, elevenLabsSpeak, listElevenVoices } from "../harness/voice/elevenlabs.ts";
 import { TTS_PROVIDERS, normalizeTtsProvider, resolveVoice, ttsEngineStatus, voicesForProvider, type TtsProviderInfo } from "../harness/voice/catalog.ts"; // P-VOICE.2 (ADR-0247)
 import { OpenAiCompatibleSttBackend, WhisperCppSttBackend, sttTransportFailed } from "../harness/voice/transcription.ts";
-import { installWhisper, startWhisper, stopWhisper, whisperStatus as whisperRuntimeStatus, type WhisperRuntimeDeps } from "./whisper_runtime.ts"; // P-STT.2b: managed offline Whisper
+import { installWhisper, shouldAutostartWhisper, startWhisper, stopWhisper, whisperStatus as whisperRuntimeStatus, type WhisperRuntimeDeps } from "./whisper_runtime.ts"; // P-STT.2b: managed offline Whisper
 import { downloadWhisperModel, resolveWhisperBin } from "./whisper_manager.ts";
 import { whisperServeUrl, type WhisperTier } from "./whisper_install.ts";
 import { devSnapshot, securitySnapshot } from "../tools/web/data.ts";
@@ -92,6 +92,25 @@ function settingsData() {
 // the streamed downloader + integrity gate, spawn/health, and STT wiring. The single running server handle
 // lives in whisper_runtime.ts. Bundling the whisper-server binary in the installer is the remaining packaging
 // step; until then it resolves LUCID_WHISPER_BIN / a binary on PATH.
+// P-REMOTE.12: ONE transcription path for the local mic (/api/transcribe) AND remote-guest voice clips.
+// Provider from settings: elevenlabs (cloud Scribe) or offline whisper. whisper.cpp serves /inference
+// (verified live); faster-whisper / any OpenAI-compatible server serves /v1/audio/transcriptions - try
+// the whisper.cpp shape first, then the OpenAI shape ONLY on a real transport failure (never on silence,
+// which would mislabel a healthy server - see sttTransportFailed).
+async function transcribeClip(audio: Uint8Array, mimeType?: string, language?: string): Promise<{ text: string; note: string }> {
+  const v = voiceSettings();
+  const topts = { mimeType, language };
+  if (v.sttProvider === "elevenlabs") {
+    const key = process.env.ELEVENLABS_API_KEY;
+    if (!key) return { text: "", note: "Add your ElevenLabs API key (Settings \u2192 Voice), or switch STT to offline Whisper." };
+    const er = await new ElevenLabsSttBackend({ apiKey: key }).transcribe(audio, topts);
+    return { text: er.text, note: er.note ?? "" };
+  }
+  let r = await new WhisperCppSttBackend({ baseUrl: v.sttUrl }).transcribe(audio, topts);
+  if (sttTransportFailed(r)) r = await new OpenAiCompatibleSttBackend({ baseUrl: v.sttUrl, apiKey: process.env.OPENAI_API_KEY, model: process.env.LUCID_STT_MODEL || "whisper-1" }).transcribe(audio, topts);
+  return { text: r.text, note: r.note ?? "" };
+}
+
 function whisperModelDir(): string { return join(homedir(), ".omp", "whisper"); }
 function whisperDeps(): WhisperRuntimeDeps {
   const dir = whisperModelDir();
@@ -302,6 +321,22 @@ process.on("exit", () => { void stopWhisper(); });
 for (const sig of ["SIGTERM", "SIGINT"] as const) {
   process.on(sig, () => { void stopWhisper(); process.exit(0); });
 }
+// P-STT.6: in the INSTALLED app (main.ts threads LUCID_RESOURCES only when app.isPackaged, and that build
+// bundles whisper-server), autostart the managed offline Whisper so dictation works out of the box - no
+// trip to Settings. The gate (shouldAutostartWhisper, unit-tested) skips dev runs, non-whisper STT, a
+// user-pointed REMOTE sttUrl, incapable hardware, and an already-running/adopted server. First launch
+// downloads the default tiny model (~78MB); fire-and-forget so the HTTP server never waits on it.
+if (process.env.LUCID_RESOURCES) {
+  void (async () => {
+    try {
+      const d = whisperDeps();
+      const v = voiceSettings();
+      if (!shouldAutostartWhisper(whisperRuntimeStatus(d), v, true)) return;
+      const r = await startWhisper(d, {});
+      console.log(r.ok ? `[whisper] autostarted${r.tier ? ` (${r.tier})` : " (adopted a running server)"}` : `[whisper] autostart did not run: ${r.reason}`);
+    } catch (e) { console.warn("[whisper] autostart failed:", e); }
+  })();
+}
 
 /** The relay a new share will use: THIS device's embedded relay when running (no third party), else the
  *  configured external relay (self-hosted default / public opt-in), else null (start fails closed). */
@@ -404,7 +439,24 @@ const collabManager = new CollabManager({
     ...(effectiveRelay()?.gated ? { authToken: () => relayTokenCache.get() } : {}),
   }),
   now: () => Date.now(),
-  onGuestPrompt: (text, guest, images) => { pendingGuestPrompt = { text: String(text).slice(0, 20_000), from: guest.name, ...(Array.isArray(images) && images.length ? { images: images.slice(0, 6).map(String) } : {}) }; },
+  onGuestPrompt: (text, guest, images, audio) => {
+    const stage = (finalText: string): void => {
+      if (!finalText.trim() && !(Array.isArray(images) && images.length)) return;
+      pendingGuestPrompt = { text: finalText.slice(0, 20_000), from: guest.name, ...(Array.isArray(images) && images.length ? { images: images.slice(0, 6).map(String) } : {}) };
+    };
+    if (!audio) { stage(String(text)); return; }
+    // P-REMOTE.12: a push-to-talk clip (already host-validated in CollabHost). Transcribe on the SAME
+    // path as the local mic, fold the transcript into the guest text, and stage it like any typed
+    // prompt - the fail-closed scan gate sees it identically. Fire-and-forget: a slow STT must never
+    // block the relay pump; a silent/failed clip stages nothing (the guest keeps their local echo).
+    void (async () => {
+      try {
+        const bytes = new Uint8Array(Buffer.from(audio.b64, "base64"));
+        const r = await transcribeClip(bytes, audio.mime);
+        stage([String(text).trim(), r.text.trim()].filter(Boolean).join(" "));
+      } catch { stage(String(text)); }
+    })();
+  },
   onGuestAbort: () => { guestAbortRequested = true; },
   // P-COLLAB.14 (ADR-0228): offer EDIT guests the model + already-used-folder allowlists, and honor their
   // picks. The host has already re-validated the value/id against the allowlist (fail-closed); here we just
@@ -502,11 +554,26 @@ async function refreshRecall(): Promise<void> {
 function bundleError(msg: string): { js: string; ok: boolean } {
   return { ok: false, js: `document.body.innerHTML='<pre style="color:#ef5f5f;padding:20px;font:13px monospace;white-space:pre-wrap">'+${JSON.stringify(msg)}+'</pre>';` };
 }
+// P-AVATAR.2a, retained through the P-MASCOT pivot (ADR-0251): the renderer bundles with code
+// splitting, so any dynamic import in app.ts lands in a lazy hashed "./chunk-*.js" instead of bloating
+// the entry (three.js used this before its removal; the capability stays for future heavy features).
+// Every chunk is kept in memory and served at its emitted name - the browser resolves the entry's
+// relative chunk imports against /app.js, i.e. /chunk-*.js. With no dynamic imports, output is a
+// single entry and the chunk route simply never fires.
+let appChunks = new Map<string, string>();
 async function bundleApp(): Promise<{ js: string; ok: boolean }> {
   try {
-    const out = await Bun.build({ entrypoints: [join(ROOT, "app.ts")], target: "browser", sourcemap: "inline" });
+    const out = await Bun.build({ entrypoints: [join(ROOT, "app.ts")], target: "browser", sourcemap: "inline", splitting: true });
     if (!out.success) return bundleError(out.logs.map((l) => String(l)).join("\n"));
-    return { ok: true, js: await out.outputs[0]!.text() };
+    let entry = "";
+    const chunks = new Map<string, string>();
+    for (const o of out.outputs) {
+      const text = await o.text();
+      if (o.kind === "entry-point") entry = text;
+      else chunks.set("/" + o.path.replace(/^\.\//, ""), text);
+    }
+    appChunks = chunks;
+    return { ok: true, js: entry };
   } catch (e) {
     // A THROW from Bun.build (e.g. an unresolved import in a packaged build where a renderer dep
     // wasn't bundled) must NOT fall through to the generic JSON error handler — that ships as
@@ -803,6 +870,14 @@ const server = Bun.serve({
       if (p === "/app.js") {
         const { js } = await bundleApp();
         return new Response(js, { headers: { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-store" } });
+      }
+      // P-AVATAR.2a: split chunks (lazy three.js). A miss after a server restart rebuilds once - the
+      // entry the browser holds references the chunk names of ITS build, and bundleApp repopulates them.
+      if (/^\/chunk-[\w-]+\.js$/.test(p)) {
+        if (!appChunks.has(p)) await bundleApp();
+        const chunk = appChunks.get(p);
+        if (chunk) return new Response(chunk, { headers: { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-store" } });
+        return new Response("// stale chunk - reload", { status: 404, headers: { "content-type": "text/javascript" } });
       }
       // P-IDE.4 (ADR-0029): serve the vendored Monaco editor (AMD min build) from node_modules so it's
       // local/airgap-clean without committing ~16MB. The read-only viewer runs Monaco on the main thread
@@ -1594,27 +1669,13 @@ const server = Bun.serve({
         try { return json({ ok: true, data: { ...base, voices: await listElevenVoices({ apiKey: key }) } }); }
         catch (e) { return json({ ok: true, data: { ...base, voices: [], note: clientError(e, "Could not list voices — check the provider key/URL.") } }); }
       }
-      // P-VOICE.1: transcribe recorded mic audio → text. Provider from settings: elevenlabs (cloud Scribe)
+      // P-VOICE.1: transcribe recorded mic audio \u2192 text. Provider from settings: elevenlabs (cloud Scribe)
       // or whisper (offline OpenAI-compatible server). The transcript is ordinary user input (scanned on send).
       if (p === "/api/transcribe" && req.method === "POST") {
         const b = await readBody<{ audioB64?: unknown; mime?: unknown; language?: unknown }>(req);
         const audio = typeof b.audioB64 === "string" && b.audioB64 ? new Uint8Array(Buffer.from(b.audioB64, "base64")) : new Uint8Array();
-        const v = voiceSettings();
-        const topts = { mimeType: typeof b.mime === "string" ? b.mime : undefined, language: typeof b.language === "string" ? b.language : undefined };
-        if (v.sttProvider === "elevenlabs") {
-          const key = process.env.ELEVENLABS_API_KEY;
-          if (!key) return json({ ok: true, data: { text: "", note: "Add your ElevenLabs API key (Settings \u2192 Voice), or switch STT to offline Whisper." } });
-          const er = await new ElevenLabsSttBackend({ apiKey: key }).transcribe(audio, topts);
-          return json({ ok: true, data: { text: er.text, note: er.note } });
-        }
-        // Offline whisper: whisper.cpp's whisper-server serves /inference (verified live); faster-whisper /
-        // any OpenAI-compatible server serves /v1/audio/transcriptions. Try the whisper.cpp shape first, then
-        // fall back to the OpenAI shape ONLY when that attempt did not reach a working server (transport error
-        // / non-2xx) - so BOTH engines work with no extra setting, WITHOUT probing /v1 (which whisper.cpp 404s)
-        // on a healthy whisper.cpp that simply heard silence, which would mislabel silence as "no STT server".
-        let r = await new WhisperCppSttBackend({ baseUrl: v.sttUrl }).transcribe(audio, topts);
-        if (sttTransportFailed(r)) r = await new OpenAiCompatibleSttBackend({ baseUrl: v.sttUrl, apiKey: process.env.OPENAI_API_KEY, model: process.env.LUCID_STT_MODEL || "whisper-1" }).transcribe(audio, topts);
-        return json({ ok: true, data: { text: r.text, note: r.note } });
+        const r = await transcribeClip(audio, typeof b.mime === "string" ? b.mime : undefined, typeof b.language === "string" ? b.language : undefined);
+        return json({ ok: true, data: r });
       }
       // P-STT.2b: the no-code managed offline-Whisper lifecycle (hardware-gated install / start / stop / status).
       if (p === "/api/whisper/status") return json({ ok: true, data: whisperRuntimeStatus(whisperDeps()) });

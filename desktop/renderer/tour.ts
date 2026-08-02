@@ -25,7 +25,7 @@ import type { UserRole } from "./bridge.ts";
 const e = (s: string) =>
   s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
-export const USER_ROLE_LIST: UserRole[] = ["developer", "security", "manager", "executive"];
+export const USER_ROLE_LIST: UserRole[] = ["developer", "security", "manager", "executive", "lucid-agent"];
 
 export interface RoleMeta {
   id: UserRole;
@@ -52,6 +52,11 @@ export const ROLE_META: Record<UserRole, RoleMeta> = {
   executive: {
     id: "executive", label: "Executive", icon: "eye", lands: "Posture + spend",
     blurb: "A few reassurance signals and the engineering brief. Nothing operational.",
+  },
+  // P-AVATAR.1 (ADR-0251): the one BEHAVIORAL role - hides both rails and opens the immersive stage.
+  "lucid-agent": {
+    id: "lucid-agent", label: "LUCID Agent", icon: "spark", lands: "The immersive stage",
+    blurb: "Hands-free conversation with LUCID itself - rails away, voice in, the stage on.",
   },
 };
 
@@ -125,6 +130,13 @@ export const TOUR_STEPS: Record<string, TourStep> = {
     title: "About - and replay",
     body: "Version, license, and a “Take the tour” button so you can replay this walkthrough any time.",
   },
+  // P-AVATAR.1: the immersive stage (lucid-agent role only). Target exists whenever the role is active.
+  stage: {
+    id: "stage", target: "#agentStage", side: "auto", icon: "spark",
+    title: "The dojo",
+    body: "Both rails step aside and LUCID takes the room - he trains while your task runs, guards when the mic is hot, and strikes a victory pose when the work lands.",
+    tip: "Press Esc to step out to the full IDE any time; your role stays.",
+  },
   closer: {
     id: "closer", target: "", icon: "check",
     title: "You're all set",
@@ -138,6 +150,8 @@ const ROLE_STEP_IDS: Record<UserRole, string[]> = {
   security: ["composer", "security", "devlogs", "memory", "commands", "about", "closer"],
   manager: ["composer", "model", "cost", "commands", "about", "closer"],
   executive: ["composer", "cost", "commands", "about", "closer"],
+  // Immersive: rails are hidden, so only surfaces that stay visible on the stage are toured.
+  "lucid-agent": ["composer", "model", "stage", "closer"],
 };
 
 /** The ordered tour steps for a role (full catalog entries). The engine then drops any whose

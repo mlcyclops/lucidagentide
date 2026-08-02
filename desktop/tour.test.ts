@@ -11,9 +11,9 @@ import { ROLE_META, TOUR_STEPS, USER_ROLE_LIST, coachHtml, roleDefaultTab, steps
 import { normalizeRole, USER_ROLES } from "./settings_store.ts";
 import type { UserRole } from "./renderer/bridge.ts";
 
-describe("the four roles are a closed, ordered set", () => {
-  test("exactly developer · security · manager · executive", () => {
-    expect(USER_ROLE_LIST).toEqual(["developer", "security", "manager", "executive"]);
+describe("the roles are a closed, ordered set", () => {
+  test("exactly developer · security · manager · executive · lucid-agent (P-AVATAR.1, ADR-0251)", () => {
+    expect(USER_ROLE_LIST).toEqual(["developer", "security", "manager", "executive", "lucid-agent"]);
     // The renderer mirror and the settings_store source agree.
     expect([...USER_ROLES]).toEqual(USER_ROLE_LIST);
   });

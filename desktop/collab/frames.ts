@@ -94,7 +94,26 @@ export interface HelloFrame { t: "hello"; protocol: number; name: string; writeT
  *  P-REMOTE.8 (ADR-0229): `images` (validated image data URLs, additive/optional) ride along as vision input,
  *  staged into the host's composer + sent to the model exactly like a locally pasted screenshot; the host
  *  re-validates each (type/size/count) fail-closed. Only image/(png|jpeg|webp|gif) base64 - never SVG/script. */
-export interface PromptFrame { t: "prompt"; text: string; images?: string[] }
+/** P-REMOTE.12 (ADR-0251): a push-to-talk clip riding a prompt. The PWA transcodes to 16k mono WAV
+ *  when it can (raw recorder output as fallback); the HOST transcribes it and the transcript becomes
+ *  ordinary guest text - through the same fail-closed scan gate as every typed prompt. */
+export interface PromptAudio { b64: string; mime: string }
+export interface PromptFrame { t: "prompt"; text: string; images?: string[]; audio?: PromptAudio }
+
+/** Hard cap for a voice clip (a 30s 16k mono WAV is ~1MB; 4MB is generous, never abusable). */
+export const MAX_PROMPT_AUDIO_BYTES = 4 * 1024 * 1024;
+const AUDIO_MIME = /^audio\/(wav|x-wav|wave|webm|mp4|m4a|mpeg|ogg|aac)(;|$)/i;
+const B64ISH = /^[A-Za-z0-9+/=]+$/;
+
+/** Fail-closed shape/size/mime check, run on BOTH ends (guest before send, host before use). */
+export function validPromptAudio(a: unknown): a is PromptAudio {
+  if (!a || typeof a !== "object") return false;
+  const { b64, mime } = a as { b64?: unknown; mime?: unknown };
+  if (typeof b64 !== "string" || typeof mime !== "string") return false;
+  if (!b64.length || b64.length > (MAX_PROMPT_AUDIO_BYTES * 4) / 3 + 4) return false;
+  if (!B64ISH.test(b64)) return false;
+  return AUDIO_MIME.test(mime);
+}
 /** P-COLLAB.12: an edit guest stops the in-flight turn (same effect as the host pressing Stop). */
 export interface AbortFrame { t: "abort" }
 /** P-COLLAB.14: an EDIT guest asks the host to switch the active model. `value` MUST be one of the models the

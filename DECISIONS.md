@@ -16643,3 +16643,632 @@ auto-speak alone - you stop being listened to, replies are still read.
 6 unit tests pinning the restraint rules (nothing before the gap, the answer always wins, gaps provably
 escalate, hard cap, distinct + tool-flavoured lines, and every line short/markdown-free/sentence-terminated so
 the engine lands the intonation). 66 voice tests; renderer tsc clean.
+
+## ADR-0250 -- P-MODEL.1: the fresh-session model default follows the user, not omp's hardcoded Opus
+
+**Date:** 2026-08-01
+**Status:** Accepted -- BUILT.
+
+### Problem
+
+Every fresh session (launch, New session, respawn) opened the picker on omp's own hardcoded default, Claude
+4.8 Opus, regardless of which providers the user configured or which model they were using five minutes ago.
+Worse, `syncModelEnv()` persists whatever omp reports as `lastModel` the moment the session initializes, so
+the genuine last-used value was overwritten by the default before anything could read it.
+
+### Decision
+
+A pure, tested resolver (`desktop/startup_model.ts`, `resolveStartupModel`) picks what the session should
+open on: (1) the LAST-USED model when it is still offered and its provider still holds a credential - an
+explicit user choice is never re-litigated against heuristics; (2) else the BEST model among CONFIGURED
+providers: capability tier first (flagship > balanced > small, with `\bmini` so "gemini" never reads as a
+mini), direct route over the gov gateway on ties, then newest via `cmpModelsNewestFirst`; auxiliary/RAG
+routes, deprecated ids, and sovereignty-gated China-origin models are never auto-picked; (3) else null - omp's
+default stands (a fresh install with nothing configured has no better signal).
+
+`acp_backend.ensureSession` captures `lastModel()` BEFORE `session/new` (dodging the syncModelEnv stamp),
+then applies the pick fire-and-forget via `session/set_config_option` - the exact ADR-0217 lockdown pattern,
+and the lockdown still wins: a locked session runs `enforceAsksageLock` INSTEAD. Configured = the
+`providerConfigured` test (OAuth active, key set, or any field set) against `providerAuth()`; AskSage-routed
+ids check the GATEWAY credential (providerForModel deliberately maps them to the family provider, right for
+the budget pill, wrong here); unknown prefixes (user-added local providers) count as configured.
+
+**Seam note:** `renderer/budget_gate.ts` dropped its `bridge.ts` type import for local structural slices
+(`ProviderAuthLike`/`AuthGroupsLike`, generic-preserving) - bridge.ts is DOM-typed and the server program now
+imports budget_gate; `providerConfigured`'s one-line test is inlined at the call site for the same reason.
+
+### Alternatives rejected
+
+- **Spawning omp with a model flag/env** - undocumented seam vs the proven set_config_option path; the
+  fire-and-forget switch self-heals through config_option_update either way.
+- **Awaiting the switch in ensureSession** - re-creates the picker-freeze ADR-0217 explicitly avoided.
+- **Auto-picking acknowledged China models** - a sovereignty-gated default should always be a deliberate
+  manual pick; last-used still honors an explicit standing choice.
+
+### Verification
+
+13 unit tests on the resolver (last-used precedence incl. vanished/de-configured fallbacks, best-configured
+ranking, gov-only, China exclusion, gemini-vs-mini regex, nothing-configured null). All three tsconfigs clean
+(only the pre-existing symbol_graph + dev.ts diagnostics); full desktop suite 4541 pass / 6 fail, the same 6
+pre-existing failures as the baseline.
+
+## ADR-0251 -- P-AVATAR: the "LUCID Agent" immersive role - three.js talking face, hands-free agent mode, voice tool approval, cinematic boot, PWA voice (SCOPE/PLAN)
+
+**Date:** 2026-08-01
+**Status:** Accepted -- BUILT (2026-08-01, same day, through the P-MASCOT pivot). All increments shipped:
+P-AVATAR.1 (role + immersive layout), P-MASCOT.1/.2/.3 (the ninja + prompt-bar parkour + smoothness,
+replacing the killed face direction), P-AVATAR.4 (enter flow), .5/.5b (voice approvals + impact prompts),
+.6/.6b/.6c/.6d (boot cinematic + blade finale + live keyboard), P-REMOTE.12 (PWA push-to-talk),
+P-REMOTE.13 (invisible hourly reconnect). Residual release-cut items live in PROGRESS.md. Originally:
+SCOPE/PLAN, roadmap only; facts verified against the live tree by five parallel scouts as of v1.12.0.
+
+### The ask
+
+A fifth role, "LUCID Agent", that hides both rails and replaces the IDE chrome with a neon-green,
+Matrix-styled 3D digital face (particle digit-rain flowing down it) that talks in sync with the TTS engine;
+selecting it enters full-agent conversation mode on a fast model (GPT-5.6 Terra / Claude Sonnet / Gemini
+Flash class) with background subagents enabled and VOICE approval of gated tool calls; unconfigured users are
+guided (voice + visuals) through provider/voice/Knowledge-Graph setup including vault unlock; boot shows a
+cinematic opening instead of dead air; and the Remote PWA gains voice input without a visible 60-minute drop.
+
+### What exists today (the seams this plugs into)
+
+- **Roles are cosmetic** (ADR-0088/0089): `USER_ROLES` in `settings_store.ts` (+ duplicate list in
+  `renderer/tour.ts`), picker modal in `runOnboarding()` (`app.ts` ~2037), animated glyphs in
+  `role_icons.ts`, per-role tour subsets. This role becomes BEHAVIORAL - a deliberate, contained deviation.
+- **Layout**: 5-column grid `.body` (`styles.css:153`) - 54px `.rail`, collapsible `.sidebar`
+  (`state.sidebarCollapsed`), center chat, 440px `.inspector` (`state.inspectorRail`, `.collapsed` CSS).
+  Sidebar/inspector already collapse; the activity rail has no hide path yet.
+- **Voice arc complete** (ADR-0247/0248/0249): sentence-streamed TTS through ONE persistent `<audio>`
+  element; `VoiceEqualizer` (`voice_eq.ts`) already taps it with a Web Audio `AnalyserNode` (built lazily,
+  fail-safe); conversation mode (`toggleConversationMode`, Ctrl/Cmd+G) with VAD dictation loop, auto-send
+  (`maybeSendSpokenTurn`), thinking cues; engine readiness per provider (`ttsEngineStatus`,
+  `/api/voices`); STT via bundled Whisper (autostarts in the installed app since P-STT.6).
+  **No word-level TTS timing exists** - ElevenLabs with-timestamps is not invoked; Kokoro/OpenAI paths
+  return plain audio.
+- **Tool approvals**: omp -> `session/request_permission` -> `{type:"permission", id, tool, options,
+  danger}` ChatEvent (`acp_backend.ts` ~556-795) -> inline card (`createPermissionCard`, `app.ts` ~1036) ->
+  `respondPermission(id, optionId)`; fail-closed 300s timeout in `askUser()`. `setUiMode("agent")` flips
+  permissionMode; subagent runs already surface via `/api/subagents` cards (P-TASK.5).
+- **Models**: `setConfig("model", id)` over ACP; catalog already carries `gpt-5.6-terra` (256k),
+  `claude-sonnet-4-6` (1M), `google-gemini-3.5-flash-gov`, `google-claude-sonnet-5` (gov); ADR-0250's
+  `resolveStartupModel` established configured-provider ranking utilities to reuse.
+- **Onboarding signals** (all readable today): `configuredProviderCount`, `roleChosen`, `tourSeen`,
+  workspace, voice readiness, `whisperStatus`, `PersonalStore.exists()` / `personalStatus().unlocked`,
+  `/api/personal/unlock`, KG endpoints `/api/kb/*` + background ingest job. Boot to first config is ~6-9s
+  (`CONFIG_WARM_MS` 6000 + renderer warm-poll), with an Electron `splash.ts` before the window and instant
+  shell first-paint after.
+- **Remote PWA** (`tools/remote-pwa/app.ts`): text + images only; frame protocol (`collab/frames.ts`)
+  tolerates new optional fields; host already owns `/api/transcribe`. The "60-minute timeout" is Cloud
+  Run's hard WS request cap - ADR-0227 deliberately leans on it for hourly token re-verification; the
+  guest already re-auths on every reconnect.
+- **Renderer build**: bun-bundled ES module, CSP `script-src 'self'` (no unsafe-eval) - three.js bundles
+  cleanly under this (no eval; WebGL/GLSL is not CSP-gated). Canvas precedent: equalizer, waveform, KG
+  graph engine. No three dependency today (`desktop/package.json` deps: katex, monaco, electron-updater).
+
+### Decisions (the load-bearing ones)
+
+1. **Rights-safe art direction, procedural-first - USER-CONFIRMED (2026-08-01), scaled UP; REVISED same
+   day after the first build: SERENE, never scary.** The v1 face (glowing iris rings, hollow sockets, a
+   hard silhouette rim) was rejected by the user as scary. Settled direction, grounded in skills.sh
+   three.js skills (cloudai-x threejs-shaders/postprocessing, emalorenzo three-best-practices) and the
+   particle-portrait prior art (Codrops interactive-particles; GLTF-to-particles boilerplates): CLOSED
+   eyes as downward lash arcs (no eye contact - the uncanny trigger), a calm mouth with gently lifted
+   corners, features as smooth curved bands, a normal-based view fade dissolving the silhouette instead
+   of a rim, and a mint-white lift on feature glow. Encoded as the first-party `.agents/skills/
+   threejs-stage` skill so later sessions inherit the rules; SOURCES.md records provenance (nothing
+   third-party vendored - the pull rule stands).** "Neo" is a likeness we do not ship; the head is a stylized original.
+   Procedural: a head mesh from bundled typed-array vertex data (no third-party GLB, no asset licensing),
+   but rendered at HERO scale - the face fills the immersive stage's center viewport, lit by its own
+   emission. Layered look, back to front: a full-stage sparse glyph-rain field with depth (parallax on
+   slow idle camera drift), the head as a dense particle/wireframe hybrid with fresnel rim glow, a
+   SECOND denser rain layer depth-masked to stream down the face itself, and a post stack (UnrealBloomPass
+   bloom + subtle film grain + faint chromatic aberration) for the neon read. The whole scene is
+   AUDIO-REACTIVE: rain speed/brightness and rim intensity pulse with the same band energy that drives the
+   mouth, and the state choreography is explicit - particles converge to form the face on entry, drift
+   calm when idle, tighten and brighten while listening, cascade while speaking, slow-orbit shimmer while
+   thinking. Degrade ladder (fewer particles, no post, static glow) keeps integrated GPUs at 60fps.
+2. **Lip sync = amplitude visemes first, timestamps later.** Tier 1 drives jaw/mouth blend from the
+   EXISTING AnalyserNode - `voice_eq.ts` must grow a second-subscriber tap API because
+   `createMediaElementSource` is once-per-element (naive duplication silently breaks the equalizer). Bands
+   from `eq_bands.ts` (low = jaw, mid/high = lip spread), `stepEq`-style ballistics. Works for EVERY engine
+   incl. air-gapped Kokoro. Tier 2 (optional): ElevenLabs with-timestamps -> char/phoneme visemes,
+   `/api/tts/speak` gains an optional `timings` field; elevenlabs-only.
+3. **Voice approval is fail-closed and keyword-strict - USER-CONFIRMED (2026-08-01) incl. repeat-back
+   confirm for the danger class.** A pure `matchApprovalUtterance(transcript,
+   options, danger)` maps speech to an optionId: plain tools accept "approve/yes/deny/no"; danger-class
+   (exec/egress) REQUIRES the literal word "approve" after a spoken repeat-back of the command/host, and
+   anything ambiguous falls through to the visual card. Silence never approves (the 300s fail-closed
+   timeout stands). Voice can DENY anything freely. No voice path may widen permissionMode.
+4. **The 60-minute cap stays; it becomes invisible - USER-CONFIRMED (2026-08-01). PWA voice is
+   push-to-talk (also confirmed).** Hourly re-verify is a security feature (ADR-0227),
+   not a bug. We make the reconnect seamless (buffered composer, silent resume, no toast unless resume
+   fails) instead of re-hosting the relay to dodge the platform cap.
+5. **Fast-model pick reuses ADR-0250.** A `CONVERSATION_MODEL_PREFS` ranked matcher (terra/sonnet/flash
+   class) filtered by configured providers, falling back to `resolveStartupModel`; the user's prior model
+   is remembered and restored on exit from the role/mode.
+6. **Three.js loads lazily.** `three` lands in `desktop/package.json`, dynamically imported only when the
+   immersive stage mounts (bun build --splitting), so the other four roles pay zero parse/GPU cost. DPR
+   capped, rAF paused when hidden (same visibility discipline as `maybeListen`), `prefers-reduced-motion`
+   honored with a static-glow fallback.
+7. **Prompt-side content rides the user-turn preamble channel** (like `spoken_reply.ts`), never the frozen
+   prefix (invariant #6). Immersive UI text obeys invariant #11 (no cramped wrapping columns).
+
+### Increments
+
+- **P-AVATAR.1 - the role + immersive layout.** Add `lucid-agent` to `USER_ROLES` (+ tour.ts list), picker
+  card + `role_icons.ts` glyph, `.body.immersive` hiding rail/sidebar/inspector (Esc exits, state
+  persisted), center stage container. Tour subset for the role. Pure: role normalization + layout state.
+- **P-AVATAR.2a - the face stage scaffold.** three.js dep + lazy chunk; hero-scale procedural head,
+  full-stage rain field + face-masked rain layer, entry particle-convergence; idle/listening/speaking/
+  thinking states driven by the EXISTING speech/dictation state machine. Perf gate: 60fps on integrated
+  GPU, DPR cap, hidden-pause. Demo: state-machine + degrade-ladder transitions pure-tested; visual QA via
+  preview screenshots.
+- **P-AVATAR.2b - the cinematic polish pass.** The post stack (bloom, grain, chromatic aberration), idle
+  camera drift + parallax, audio-reactive rain/rim coupling, choreography tuning until it genuinely wows;
+  ships only after 2a's perf gate holds with the post stack ON (else the ladder drops post first).
+- **P-AVATAR.3 - amplitude lip sync.** The `voice_eq.ts` tap API (keystone risk: one MediaElementSource) +
+  band->viseme mapping module (pure, tested) + jaw/mouth blend in the stage. Tier-2 timestamps increment
+  parked behind it.
+- **P-AVATAR.4 - enter-the-Matrix flow + guided setup.** Role select (or hotkey) -> readiness sweep using
+  the existing signal inventory -> auto: conversation mode ON, `setUiMode("agent")`, fast-model switch
+  (remember/restore prior), whisper autostart already handled by P-STT.6. Not ready -> an in-stage,
+  spoken + visual checklist (one item at a time, never a wall) deep-linking Voice card / Provider Hub,
+  with test-voice playback; KG: offer setup (`/api/kb/create` + ingest) or vault unlock
+  (`/api/personal/unlock`) when `PersonalStore.exists()` and locked - ASK, never nag twice per session.
+- **P-AVATAR.5 - voice tool approval.** `matchApprovalUtterance` (pure + heavily tested), permission
+  ChatEvent -> spoken summary -> scoped listen window -> `respondPermission`; repeat-back confirm for
+  danger class; visual card always rendered as the fallback and the source of truth.
+- **P-AVATAR.6 - cinematic boot.** Renderer-side matrix-rain opening (2D canvas, no three needed at boot)
+  gated to the lucid-agent role: staged REAL progress lines (health, session, config, model, voice) over
+  the ~6-9s warm window, particle-converge handoff into the face stage when config lands; skippable,
+  reduced-motion aware, hard-capped so it never outlives readiness by more than ~2s. Electron `splash.ts`
+  untouched (it ends before the renderer exists).
+- **P-REMOTE.12 - PWA voice.** Push-to-talk mic in the PWA composer (iOS-safe user gesture), client-side
+  16k mono WAV transcode reusing the pure `dictation.ts` helpers already bundled with collab code,
+  `PromptFrame.audio?` optional field (protocol-compatible; 12MB cap is ~30x headroom for a 30s clip),
+  host transcribes via `/api/transcribe` and treats the transcript as an ordinary guest prompt (existing
+  scan gate + approvals apply). Host-side voice reply stays desktop-side (guests read the transcript).
+- **P-REMOTE.13 - invisible hourly reconnect.** Silent resume across the Cloud Run 60-min WS cap: auto
+  re-join with fresh token (already implemented) minus the user-visible drop - buffer an in-flight
+  composer/mic session across the flap, suppress the disconnect toast when resume succeeds within a grace
+  window, surface only real failures. No relay re-host.
+
+### Risks / non-goals
+
+- **GPU floor**: integrated-GPU laptops must hold 60fps or degrade (fewer particles, no bloom) - perf
+  budget is part of P-AVATAR.2's acceptance, not an afterthought.
+- **Likeness/IP**: stylized original face only; matrix-rain glyph aesthetic is fine, a recognizable actor
+  likeness is not.
+- **STT mishears**: approval grammar is allowlist-exact; a mumbled "yeah" never fires exec. Fail-closed
+  everywhere (invariant #3 spirit).
+- **Roles were cosmetic**: this ADR consciously makes ONE role behavioral; the other four stay cosmetic.
+- **Non-goal v1**: phoneme-accurate visemes, PWA-side TTS playback of replies, removing the hourly
+  re-verify, a marketplace of faces.
+
+### Order + estimate
+
+.1 -> .2a -> .2b -> .3 -> .4 -> .5 are sequential (each leans on the prior); .6, P-REMOTE.12, P-REMOTE.13
+are independent and can interleave. Nine increments, each a session; the split .2a/.2b reflects the
+user-requested hero-scale ambition (2026-08-01) - scaffold first, then a dedicated polish session judged on
+looks, not just function.
+
+### DIRECTION PIVOT (2026-08-01, same day): the talking head + particles are OUT; a game-character MASCOT is IN
+
+After two art passes (ring-eyed v1: "scary"; serene closed-eye v2: "still very bad") the user killed the
+talking-head-and-particles direction entirely. New brief: LUCID is a FUN, COOL game character - an original
+never-created fighting-game ninja mascot - that PLAYS while the agent works and stays in line with what is
+actually happening (idle / listening / speaking / working / victory follow the real session state).
+
+Consequences:
+- **P-MASCOT.1 replaces P-AVATAR.2a/2b/3.** 2D pixel-art sprite system (fighting-game heritage IS sprite
+  art): procedural frame grids in code (no binary assets, rights-safe original character), a pure animation
+  state machine + activity scheduler (kata combos, shuriken practice, meditation while working; victory pose
+  when a turn lands), nearest-neighbor canvas scaling for the crisp retro read. No uncanny valley risk by
+  construction - the single biggest lesson from the face attempts.
+- **three.js is REMOVED** (dep, avatar_stage.ts, avatar_math.ts, their tests + demo). The dev.ts splitting
+  bundler + /chunk route STAYS - a generic, documented capability the mascot may use later and P-REMOTE
+  work can lean on. The `.agents/skills/threejs-stage` skill is retired with a tombstone note (its QA-
+  workflow section migrates to the mascot skill notes; the three.js rendering rules go dormant with it).
+- **Lip sync (old .3) is dead**; the mascot's speaking state is a talk-gesture loop instead - the voice_eq
+  analyser tap idea survives only as OPTIONAL audio-reactive bounce, a P-MASCOT.2 nicety.
+- **Unchanged**: P-AVATAR.1 (role + immersive layout - the mascot mounts into the same #agentStage),
+  P-AVATAR.4 (enter flow + guided setup), .5 (voice approvals), .6 (cinematic boot - now themed to the
+  mascot), P-REMOTE.12/.13. The lockdown/security posture was never touched by any of this.
+- P-MASCOT.2 (more activities, audio-reactive bounce, polish) trails as the new .2b-equivalent.
+
+## ADR-0252 -- P-TRAINER: the LUCID Agent as knowledge trainer - process extraction, distillation, and teach-back for business roles (SCOPE/PLAN)
+
+**Date:** 2026-08-02
+**Status:** Accepted -- harness core BUILT (2026-08-02, same day): P-TRAINER.1-.6 shipped as
+`harness/trainer/` (coverage rubric, planner, store, redaction, distiller, teach-back, quiz
+generation), migration 0012, the trainer EventNames, and demo-P-TRAINER.1..5 (the .5 demo runs the
+whole flywheel). Model-agnostic guarantee added same day: `desktop/trainer_model.ts` resolves the
+trainer's model from the user's CONFIGURED catalog (the ADR-0250 ranking; flash/local tiers stay
+eligible, non-chat routes never qualify, current capable model is kept), and the distiller tolerates
+any family's reply style (fence/prose JSON extractor + one corrective retry, then fail-safe).
+Remaining: .7 (the desktop stage act) and .8 (engagement instrumentation).
+Numbering note: ADR-0250 (P-MODEL.1) and ADR-0251 (P-AVATAR/P-MASCOT) were authored on the
+`feat/lucid-agent-immersive-mascot` branch (since merged into this one); this ADR deliberately
+started at 0252 so both series survive the merge without a collision. Companion ADRs: 0253 (data
+contract), 0254 (trust pipeline), 0255 (interview mechanics). Facts below verified against master
+as of v1.12.0 plus a read of the mascot branch and of the external TacticalGenAI repo.
+
+### The ask
+
+Make the LUCID Agent role (ADR-0251's immersive, voice-first role) more than a coding companion: a
+TRAINER and knowledge-distillation engine that interviews a human expert about a business role,
+extracts process, procedure, and edge-case knowledge in an engaging conversation, distills it into
+the knowledge graph with provenance, verifies it by teaching it back, and can then train the next
+person from what was captured. First target role family: financial management and wealth-management
+operations for boutique firms of the Questmont Virtual Family Office class (multi-adviser
+coordination, custody, money movement, billing, tax and estate choreography, compliance).
+
+### Prior art: what TacticalGenAI proves, and the inversion
+
+`mlcyclops/TacticalGenAI` (the author's certification-training app, read end to end) is a working
+trainer in the PUSH direction: a curriculum of stable objectives (`GAIL-1.1`, `PCA-2.3`, each
+`{id, domain, title, description, sourceUrl, referenceLinks}` with per-domain exam weights) is pushed
+into a human via generated briefings, scenario quizzes, and practice exams, all through STRUCTURED
+OUTPUT schemas (quiz `{question, options[4], correctAnswer, explanation, verifiedSource}`;
+free-response evaluation `{score, feedback, isGrounded, missingPoints[]}`). Progress is a
+`masteryMap Record<objectiveId, 0-100>`, exams derive `weakDomains[]` from misses, and a
+`RANK_SYSTEM` of thresholds keeps it engaging.
+
+The innovative move here is running that machinery in REVERSE, then forward again, as one flywheel:
+
+1. **EXTRACT**: the agent interviews the expert, planning questions against a coverage map (the
+   objective map inverted: how completely is each objective CAPTURED, not learned).
+2. **DISTILL**: transcripts become typed knowledge units (procedures, edge cases, exceptions,
+   checklists, escalation rules) via structured output, scanned and stored with provenance.
+3. **VERIFY**: the agent teaches the procedure BACK to the expert, who confirms, corrects, or
+   rejects; `missingPoints` becomes the next round of questions, and confirmation is the promotion
+   event (ADR-0254).
+4. **TRAIN**: quizzes and scenario drills for new staff are generated FROM confirmed units,
+   TacticalGenAI-style; trainee misses reveal under-specified knowledge and feed new extraction
+   targets back to step 1.
+
+Extraction coverage is the inverted masteryMap; teach-back is the inverted practice exam; the gap
+queue is the inverted weakDomains. One engine, both directions.
+
+### What exists today (the seams this plugs into)
+
+- **The role and the stage** (branch ADR-0251): the `lucid-agent` role, immersive layout, hands-free
+  conversation mode, keyword-strict voice approvals, the mascot state machine, and the guided-setup
+  rule "one item at a time, never a wall". The trainer is a second ACT on that stage. On master
+  without the branch, the trainer degrades to plain chat plus panels; nothing below hard-depends on
+  the mascot.
+- **Interview precedent**: `desktop/loop_preflight.ts` (P-GOAL.12, ADR-0057) is literally "scope + a
+  short prompt-engineering interview": pure, DOM-free, with an `assessReadiness` L0-L3 rubric of
+  weighted `ReadinessCheck`s and `nudge` text, and best-effort model maturation (structured answers
+  alone still produce a complete report). `desktop/renderer/gov_onboarding.ts` (P-GOVCUI.1) is the
+  pure-questionnaire pattern; `runOnboarding()` and `tour.ts` (ADR-0089) own sequential guided flows.
+  House pattern throughout: pure tested module in one file, DOM in `app.ts`.
+- **Trainer-adjacent precedent**: Trivia Wire (`desktop/renderer/trivia_roles.ts`, `trivia_bank.ts`,
+  P-TRIV.2, ADR-0175): role-keyed question banks behind an `isTriviaQuestion` validation gate, with
+  generated packs pouring through the same selection seam and falling back to static banks when
+  malformed. The trainee-quiz mode reuses this exact shape.
+- **The knowledge substrate**: compiled KB per KG (`kb_graph.duckdb`: `kb_documents`, `kb_pages`,
+  `kb_links`, `kb_page_sources`, `kb_changelog`, ADR-0099) behind a fail-closed ingest (scan the
+  source, compile, RE-SCAN every derived page, store), a `vector|compiled|hybrid` retrieve router
+  (ADR-0100), the agent-callable `knowledge_search` tool (ADR-0220), multi-KG registry
+  (`desktop/kb_store.ts`), and `.lkgpack` packs (`harness/kb/pack.ts`, `LKGPACK_FORMAT "lkgpack/1"`,
+  signature proves origin never safety) with a storefront (`kg_packs.ts`) and 11 SKUs already
+  cataloged in KG-PACKS-STATUS.md. Role packs are ALREADY the product concept (flagship:
+  `senior-proposal-manager`); this arc adds the pack flavor that can author itself from interviews.
+- **The promotion keystone**: `harness/memory/promotion_gate.ts` (P4.3, correctness keystone #2)
+  blocks `suspicious|quarantined` sources, resolves trust from artifact provenance not caller claim,
+  fails closed on unknown, and is unblocked ONLY by a recorded `approval_events` row (actions
+  `approve | quarantine_release | promotion_approve`). `promotion_approve` already exists: expert
+  confirmation maps onto it with zero new security surface (ADR-0254).
+- **Frozen contracts**: `AGENT_MODES` in `contracts.ts` is a closed set and mode does not drive
+  prompts or tools (only `security-review|replay` force the audit profile). EventName is closed and
+  raising. DuckDB schemas freeze on first write; next free global migration number is 0012.
+
+### Decisions (the load-bearing ones)
+
+1. **The trainer is NOT a new AgentMode and not a fork of anything.** `AGENT_MODES` stays untouched;
+   the trainer is a session behavior ("act") of the lucid-agent role, entered like conversation mode,
+   implemented as pure modules + panels + prompt-tail content, riding existing hooks and tools.
+   The ONLY frozen-contract change in the whole arc is the EventName additions, isolated in its own
+   increment (P-TRAINER.2) per the frozen-file rule.
+2. **Coverage maps and knowledge units are DATA, not code** (ADR-0253). A new business role is a new
+   extraction pack, zero code. The wealth-management-operations pack is the first; the pack carries
+   the coverage map, elicitation seeds, and scenario seeds, and receives the distilled units.
+3. **Extraction rides the existing trust pipeline unchanged** (ADR-0254). Everything the expert says
+   is untrusted content (invariant 5); units are born `untrusted`; teach-back confirmation records
+   the approval that lets `promoteFactGated` project confirmed knowledge into semantic memory.
+   The P4.3 gate is reused verbatim, never bypassed, never widened.
+4. **Engagement is a designed system, not a vibe** (ADR-0255): scenario probes over abstract
+   questions, one question at a time, live visible capture, L0-L3 coverage rubric driving both the
+   planner and the HUD, milestones and session recaps, mascot choreography where present.
+5. **Trainee mode is generation FROM confirmed units only.** Quizzes cite their source unit the way
+   TacticalGenAI questions carry `verifiedSource`; an unconfirmed or superseded unit can never
+   generate training content. Trainee misses append to the gap queue as extraction targets.
+6. **Compliance posture is structural for the first vertical** (detailed in ADR-0254): packs hold
+   PROCEDURES, never client identities or account data; the scanner plus a redaction pass run before
+   storage; unresolved PII quarantines the unit. A wealth-management pack must be exportable as firm
+   IP without ever being a books-and-records liability.
+
+### Increments
+
+- **P-TRAINER.1 - the interview engine core (pure).** Coverage-map types, the L0-L3 objective rubric,
+  the session planner (pick the least-covered objective, branch on the expert's answers, never
+  repeat a confirmed unit, one question at a time), and the extract-act state machine
+  (opening recap -> probe -> capture -> follow-up -> recap). Pure, DOM-free, heavily tested; in-memory
+  store only. Demo: a scripted interview transcript drives the planner through a WMO fixture map.
+- **P-TRAINER.2 - contracts + storage.** The frozen-contract increment: `trainer_*` EventNames added
+  to `contracts.ts` (ADR-0254 lists them), plus migration `0012_trainer_tables.sql` in kb_graph
+  (ADR-0253 schema). Nothing else in the same session.
+- **P-TRAINER.3 - distillation.** Transcript spans -> typed knowledge units via structured output
+  (TacticalGenAI-style response schemas), fail-closed scan of every DERIVED unit mirroring
+  `kb/ingest.ts`, provenance stamping, kb_pages projection so retrieval/viz/knowledge_search see the
+  units with zero changes.
+- **P-TRAINER.4 - teach-back verification.** The agent recites a unit as steps; confirm / correct /
+  reject per step; confirmation writes `approval_events` + `promoteFactGated`; corrections mint a
+  superseding unit; `missingPoints` enqueue follow-ups. The trainer's practice-exam inversion.
+- **P-TRAINER.5 - the extraction pack.** Pack format extension (additive `coverage_map` manifest
+  member, ADR-0253) + the authored wealth-management-operations v1 pack (ADR-0255 content outline);
+  export path proves a round trip: interview -> confirmed units -> installable signed pack.
+- **P-TRAINER.6 - trainee mode.** Quiz/scenario generation from confirmed units through the Trivia
+  Wire selection-seam pattern with static fallbacks; trainee masteryMap and weak-domain derivation;
+  misses append extraction targets. The flywheel closes here.
+- **P-TRAINER.7 - the stage act.** Voice cadence for interviews, live capture cards, the coverage
+  HUD (invariant 11: labels never wrap into slivers), mascot states (scribe while distilling,
+  victory on confirmation milestones), graceful downgrade without the mascot branch.
+- **P-TRAINER.8 - engagement instrumentation.** Milestones/ranks on coverage thresholds, session
+  summaries ("2 procedures, 5 edge cases, 3 confirmations today"), streaks, the extraction
+  dashboard, telemetry review of drop-off points.
+
+### Risks / non-goals
+
+- **Expert fatigue is the product risk.** A 200-question checklist kills the whole idea; the planner
+  MUST cap sessions (20-30 minutes), lead with scenarios, and always close with visible progress.
+- **Garbage-in**: an expert can be wrong. Teach-back plus provenance means a wrong confirmed unit is
+  traceable and supersedable, never silently authoritative; trainee mode always cites its source.
+- **Regulated domain**: the first vertical touches SEC/FINRA-adjacent process. We capture HOW THE
+  FIRM WORKS, never advice, never client data; the ADR-0254 redaction posture is not optional.
+- **Non-goals v1**: multi-expert reconciliation, org charts, auto-ingesting the firm's document
+  store into the pack (existing KB ingest already covers documents separately), any new trust label,
+  any change to AGENT_MODES, phoneme-level interview VAD tuning.
+
+### Order + estimate
+
+.1 -> .2 -> .3 -> .4 are sequential (each leans on the prior); .5 needs .2 only for schema, .6 needs
+.4 (confirmed units exist), .7/.8 can interleave after .3. Eight increments, each one session, per
+the CLAUDE.md ritual.
+
+## ADR-0253 -- P-TRAINER data contract: coverage maps, knowledge units, and the extraction pack (SCOPE/PLAN)
+
+**Date:** 2026-08-02
+**Status:** Accepted -- BUILT (2026-08-02): migration `0012_trainer_tables.sql` +
+`harness/trainer/store.ts` (append-only proven by tests + demo-P-TRAINER.2); the lkgpack
+`coverage_map` member shipped in `harness/kb/pack.ts` (signature-bound, tamper-refused). The
+kb_pages projection of confirmed units is deferred to the desktop wiring increment. 0012 was the
+next free global number; the memory/0011 vs kb/0011 collision is prior art we do not repeat.
+
+### Problem
+
+The compiled KB stores PAGES about documents. An interview produces something more structured: an
+ordered procedure with roles and systems, an edge case with a trigger and a resolution, a checklist,
+an escalation rule. Flattening those to prose pages loses exactly the structure that teach-back and
+trainee-quiz generation need. And the coverage map (what a role contains, how completely each part
+is captured) has no home at all.
+
+### Decision
+
+**New tables live in `kb_graph.duckdb`** (per-KG, so a firm's extraction stays inside its KG and
+rides the existing registry, backup, and pack machinery), added by numbered migration, invariant 10:
+
+- `coverage_objectives`: `objective_id` TEXT PK (stable, pack-authored, e.g. `wmo-2.1`), `pack_id`,
+  `domain`, `title`, `description`, `weight` (the TacticalGenAI exam-weight idea repurposed as
+  extraction priority), `elicitation` JSON (seed questions, scenario seeds, follow-up patterns),
+  `created_at`.
+- `knowledge_units`: `unit_id` TEXT PK (minted once, invariant 9), `objective_id` FK, `kind` CHECK
+  IN (`procedure`, `edge_case`, `exception`, `checklist`, `glossary`, `escalation`), `title`,
+  `body_md`, `structure` JSON (ordered steps with actor/system/timing for procedures; trigger/
+  deviation/resolution for edge cases), `trust_label` (invariant 7 closed set, NO new labels),
+  `completeness` 0-100 (an ordinary column, never a trust signal), `source_session_id`,
+  `source_artifact_id`, `confirmed_at` NULL, `confirmed_by`, `superseded_by` NULL FK.
+- `extraction_sessions`: `session_id`, `pack_id`, `expert_label` (a display handle, deliberately not
+  an identity record), `started_at`, `ended_at`, `stats` JSON.
+- `teachback_results`: `teachback_id`, `unit_id`, `verdict` CHECK IN (`confirmed`, `corrected`,
+  `rejected`), `notes`, `approval_event_id` (the ADR-0254 link into the promotion gate).
+
+**Knowledge is append-only.** A correction never edits a unit; it mints a successor and sets
+`superseded_by` on the old one (the kb_changelog philosophy applied to units). Coverage per
+objective is DERIVED (from unit kinds present, completeness, confirmations), never hand-stored, so
+the rubric can evolve without a migration.
+
+**Confirmed units project into the existing graph.** Each confirmed unit compiles to a `kb_pages`
+row (existing kind `concept`, existing closed set untouched) with wikilinks and a `kb_page_sources`
+citation back to the unit's artifact, THROUGH the existing fail-closed ingest path. Retrieval, the
+KG visualizer, and the `knowledge_search` tool therefore work on trainer knowledge with zero
+changes; the trainer tables stay the structured source of truth.
+
+**The extraction pack is an additive evolution of lkgpack/1.** The manifest gains an OPTIONAL
+`coverage_map` member (objectives + elicitation seeds); `verifyPack` validates it when present and
+ignores its absence, format tag unchanged, old importers unaffected. The pack trust rule stands
+verbatim: signature proves origin, never safety; imported packs stay read-only and `untrusted`; the
+scanner remains the safety gate. An exported pack contains coverage objectives and CONFIRMED units
+only (draft and rejected units never leave the firm's KG).
+
+### Alternatives rejected
+
+- **Units as kb_pages with a new `kind`.** Touches the frozen kb_pages CHECK constraint for a shape
+  it cannot actually hold (ordered steps, verdicts); the projection gives graph visibility without
+  bending the page contract.
+- **A fifth DuckDB file.** Nothing here contends with kb writes the way vectors did (ADR-0053);
+  per-KG locality matters more than isolation, and packs already ship `kb_graph.duckdb`.
+- **Editing units in place on correction.** Destroys the provenance chain that makes an
+  expert-sourced KB auditable; supersession is the whole point in a regulated vertical.
+- **Storing coverage scores.** A stored score goes stale the moment the rubric improves; deriving it
+  keeps the rubric a pure function (and testable, loop_preflight-style).
+
+### Verification (planned)
+
+Migration applies on a fresh and an existing KG; unit round-trip property tests (mint, supersede,
+derive coverage); pack round trip (export -> verify -> import elsewhere -> retrieval finds the
+projected pages); a fixture WMO map drives derivation tests.
+
+## ADR-0254 -- P-TRAINER trust pipeline: extracted knowledge is untrusted until taught back (SCOPE/PLAN)
+
+**Date:** 2026-08-02
+**Status:** Accepted -- BUILT (2026-08-02): `harness/trainer/redact.ts` + `distiller.ts` +
+`teachback.ts` and the trainer EventNames in contracts.ts. Every decision below is pinned by tests
+(dead-scanner, poisoned-span, poisoned-derivation, hard-PII-quarantine, refused-confirm) and
+demo-P-TRAINER.3/.4. Adds NO new security surface; keystone #2 runs verbatim underneath.
+
+### Problem
+
+An interview is a firehose of human-typed and human-spoken content: the exact class of input the
+architecture already refuses to trust (invariant 5). Naively, a trainer is a machine for laundering
+untrusted prose into durable semantic memory, which is precisely the cross-session poisoning that
+the P4.3 promotion gate exists to prevent. The trainer must make extraction FLOW THROUGH the gate,
+not around it. Separately, the first vertical (wealth-management operations) is regulated: a pack
+that absorbs client names, account numbers, or balances becomes a books-and-records liability the
+moment it is exported.
+
+### Decision
+
+1. **Capture is untrusted by construction.** Expert turns enter prompts only inside the untrusted
+   delimiters, after scanning, after the cache breakpoint (invariant 5, unchanged). Distilled units
+   are DERIVED content and are re-scanned before storage, mirroring the `kb/ingest.ts` rule (scan
+   the source, then re-scan everything the model derived from it). Units are born
+   `trust_label = untrusted`.
+2. **Fail-closed stands mid-interview** (invariant 3). Sidecar dead, malformed scan, timeout: no
+   unit is minted, the capture card says so, and the planner parks the objective. The conversation
+   may continue; storage may not. No transcript span reaches a unit without a valid scan result.
+3. **Teach-back confirmation IS the approval.** A `confirmed` verdict in `teachback_results` records
+   an `approval_events` row with the EXISTING action `promotion_approve`, then calls
+   `promoteFactGated` to project the unit's entity/fact statements into `semantic_entities` /
+   `semantic_facts` with `source_artifact_id` provenance. The gate still resolves trust from
+   artifact provenance, still blocks on unknown, still emits `memory_promotion_blocked`. Nothing
+   about `promotion_gate.ts` changes; the trainer is just its first systematic supplier of
+   legitimate approvals.
+4. **Suspicious is never one-click.** Confirmation approvals apply to `untrusted` units only. A unit
+   whose source scan found injection signals is `suspicious|quarantined` and the trainer UI offers
+   NO release; the standard quarantine-release flow (its own approval action, existing) is the only
+   path, deliberately outside the interview's engagement loop. An enthusiastic expert clicking
+   "confirm" must never be the mechanism that frees a poisoned span.
+5. **PII posture: procedures, never people.** The interview prompt instructs role-shaped answers
+   ("what does the firm do", not "what did Mrs. X do"); the distiller normalizes actors to roles
+   (adviser, client, custodian, CPA) and strips names, account numbers, dollar-specifics into
+   placeholders; scanner findings for residual PII quarantine the unit (fail-closed, not a warning).
+   Exported packs contain confirmed units only (ADR-0253), so nothing quarantined can ever ship.
+6. **New EventNames** (the P-TRAINER.2 frozen-contract increment, invariant 8; every event carries
+   `run_id`/`session_id`/`artifact_id`): `trainer_session_started`, `trainer_question_asked`,
+   `trainer_unit_captured`, `trainer_teachback_run`, `trainer_unit_confirmed`,
+   `trainer_unit_rejected`, `trainer_pack_exported`. Blocked promotions keep emitting the existing
+   `memory_promotion_blocked`.
+
+### Alternatives rejected
+
+- **A `trainer` trust label** (e.g. `expert-confirmed`). Invariant 7 is a closed set for a reason;
+  confirmation state lives in `confirmed_at`/`teachback_results`, and PROMOTION state lives where it
+  always has, in the gate's own records.
+- **Auto-promoting on capture because "the expert said it live".** Exactly the laundering scenario
+  keystone #2 exists to stop; also wrong on the merits, experts misspeak, and teach-back catches it.
+- **Trusting the voice channel more than typed text.** STT output is still untrusted input; the
+  voice-approval grammar lesson from ADR-0251 (allowlist-exact, silence never approves) applies to
+  confirmation verdicts spoken aloud.
+- **Redaction as a post-export scrub.** By then the data has lived in the KG, been embedded, and
+  leaked into retrieval; redact before storage or not at all.
+
+### Verification (planned)
+
+The keystone tests stay green untouched. New: a poisoned-transcript fixture must land quarantined
+and unpromotable through the trainer path (gate blocks, event emitted); a sidecar-kill mid-interview
+test asserts zero units minted; a PII fixture (names, account numbers) must quarantine; a
+confirmed-unit promotion asserts the approval row, the gate outcome, and the semantic_facts
+provenance chain end to end.
+
+## ADR-0255 -- P-TRAINER interview mechanics: engagement as a designed system, and the wealth-management-operations pack (SCOPE/PLAN)
+
+**Date:** 2026-08-02
+**Status:** Accepted -- harness core BUILT (2026-08-02): the planner cadence rules (scenario-first,
+one-question-at-a-time, five-whys, session cap, L0-L3 rubric) shipped pure + tested in
+`harness/trainer/planner.ts`/`coverage.ts`; the 13-objective WMO coverage map + due-diligence seed
+shipped in `wmo_pack.ts`; trainee quizzes + the miss-to-extraction-target return edge in
+`quizgen.ts` (demo-P-TRAINER.5). The stage/HUD presentation (decisions 4-5) lands with
+P-TRAINER.7/.8.
+
+### Problem
+
+Experts do not fail interviews for lack of knowledge; they fail them for boredom, vagueness, and
+the wall-of-questions effect. TacticalGenAI keeps learners engaged with scenario stakes, visible
+progress, and ranks; a knowledge EXTRACTOR needs the same psychology pointed the other way, and it
+needs question craft that surfaces tacit knowledge (the Friday-4pm exceptions nobody writes down),
+not the official version of the process.
+
+### Decision
+
+1. **Scenario probes are the primary instrument.** Direct questions get the documented process;
+   concrete scenarios get the real one. The planner leads each objective with a generated situation
+   ("A client calls Friday at 4pm needing a $2M wire before a holiday weekend and the custodian
+   cutoff has passed. Walk me through exactly what happens.") and only then fills structural gaps
+   with direct questions. Every captured procedure ends with the standing probe "what goes wrong
+   here, and what do you do when it does" so edge cases are pursued, not incidental. Scenario seeds
+   ship in the pack's `elicitation` JSON; generation personalizes them, TacticalGenAI-style
+   structured output keeps them typed.
+2. **The L0-L3 coverage rubric** (the `assessReadiness` pattern from loop_preflight, reused as a
+   pure function over ADR-0253 data): L0 unexplored -> L1 outline captured -> L2 procedure stepped ->
+   L3 edge cases captured AND confirmed. Weighted by objective `weight`, it drives the planner's
+   next-question choice, the HUD, and the milestone system. `missingPoints` from teach-back
+   evaluations demote and re-queue, the weakDomains inversion.
+3. **Conversation cadence rules** (all testable as pure planner properties): one question at a time
+   (ADR-0251's checklist rule, promoted to the interview); follow the expert's energy (a story in
+   the answer spawns follow-ups before the planner returns to the map); five-whys on any mentioned
+   deviation; sessions capped at 20-30 minutes with an opening recap ("last time we mapped quarterly
+   billing; two edge cases still open") and a closing summary of what was captured. Voice-first
+   where the role provides it: questions short enough to speak, capture shown on screen.
+4. **Live visible capture builds trust.** While the expert talks, the capture card shows the unit
+   being structured (steps appearing, placeholders where names were redacted). The expert watches
+   the machine understand them, the single strongest engagement lever an extractor has, and
+   pre-verifies informally before teach-back makes it formal. Cards and HUD obey invariant 11: a
+   label owns its line and ellipsizes; no prose in flex rows.
+5. **Milestones, not points.** RANK_SYSTEM inverted: thresholds on confirmed coverage ("first
+   domain at L3", "ten edge cases confirmed", "pack export ready") with mascot victory beats where
+   the stage exists. No leaderboards, no scores on the expert themselves; the FIRM's knowledge
+   levels up, which reads as respect rather than gamification of a professional.
+6. **The wealth-management-operations pack v1** (`wmo`, authored in P-TRAINER.5), coverage domains
+   drawn from the boutique virtual-family-office shape (Questmont-class: coordinated investment,
+   tax, estate, insurance, and business-adviser work over an RIA affiliation):
+   - `wmo-1` client lifecycle: prospect intake, discovery, onboarding paperwork, custodial account
+     opening, ACAT transfers, funding, review cadence, offboarding and death-of-client.
+   - `wmo-2` money movement: wires/ACH/journals, standing instructions, verification callbacks,
+     fraud red flags, cutoffs and holiday handling.
+   - `wmo-3` investment operations: rebalancing, trade errors, corporate actions, cash management.
+   - `wmo-4` billing and fees: fee schedules, quarterly runs, prorations, refunds, disclosures.
+   - `wmo-5` tax coordination: gain/loss reporting, harvesting windows, CPA handoffs, K-1 season,
+     estimated-payment choreography.
+   - `wmo-6` estate, trust, and insurance coordination: attorney handoffs, beneficiary updates,
+     trust funding, policy reviews, business-sale and exit-planning support.
+   - `wmo-7` compliance and regulatory: which entity signs what (brand LLC vs the registered
+     adviser), ADV updates, fiduciary documentation, books and records, marketing review,
+     complaint handling.
+   - `wmo-8` the adviser network: custodian relationships, RIA/TAMP affiliations, outside
+     professional coordination, and due-diligence checklists (the entity/custody/fee/fiduciary
+     question set ships as a seed `checklist` unit, the one unit kind a pack may pre-fill).
+   Unit kinds per ADR-0253; every domain's elicitation seeds include at least one scenario probe
+   and one edge-case probe. The pack captures firm process, never advice and never client data
+   (ADR-0254 posture).
+
+### Alternatives rejected
+
+- **A fixed questionnaire per role.** The gov_onboarding pattern is right for four questions, fatal
+  for four hundred; a planner over a coverage map is what makes long extraction survivable.
+- **Free-form "tell me about your job" chat.** Engaging for one session, unmeasurable forever; no
+  coverage derivation, no teach-back targets, no pack.
+- **Scoring the expert.** The fastest way to lose a professional's goodwill; coverage belongs to
+  the knowledge base, not the person.
+- **Shipping pre-written WMO procedures in the pack.** Then it is a content SKU, not an extractor,
+  and every boutique firm's actual process differs; seeds are questions (plus one due-diligence
+  checklist), units come from the interview.
+
+### Verification (planned)
+
+Planner property tests (one-question invariant, energy-following branch, five-whys trigger, session
+cap, no repeat of confirmed units); rubric derivation fixtures; a full scripted WMO interview
+fixture driving extract -> distill -> teach-back -> quiz-generation round trip in demo form; HUD
+snapshot obeys invariant 11.
