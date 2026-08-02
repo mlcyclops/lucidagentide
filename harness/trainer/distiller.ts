@@ -46,13 +46,45 @@ export interface DistilledUnit {
   completeness: number;
 }
 
+/** Pull the first JSON object out of arbitrary model output. Model families differ wildly in how they
+ *  wrap structured replies - bare JSON, a fenced block, a fenced block inside prose, or a preamble like
+ *  "Here is the unit: {...} Hope this helps." - so the extractor is what makes the distiller work with
+ *  ANY configured model (desktop/trainer_model.ts picks it; this tolerates it). A fenced block wins when
+ *  present; otherwise a balanced-brace scan (string-aware) takes the first complete object. */
+export function extractJsonObject(raw: string): string | null {
+  const fence = /```(?:json)?\s*([\s\S]*?)```/i.exec(raw);
+  const source = fence ? fence[1]! : raw;
+  const start = source.indexOf("{");
+  if (start < 0) return null;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = start; i < source.length; i++) {
+    const c = source[i]!;
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (c === "\\") escaped = true;
+      else if (c === '"') inString = false;
+      continue;
+    }
+    if (c === '"') inString = true;
+    else if (c === "{") depth++;
+    else if (c === "}") {
+      depth--;
+      if (depth === 0) return source.slice(start, i + 1);
+    }
+  }
+  return null;
+}
+
 /** Fail-safe parse (the kb/compiler parseCompiled discipline): malformed model output returns null,
- *  never throws - the caller records a blocked capture. Tolerates a fenced code block. */
+ *  never throws - the caller records a blocked capture (after one corrective retry, see distillSpan). */
 export function parseDistilled(raw: string): DistilledUnit | null {
-  const stripped = raw.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
+  const extracted = extractJsonObject(raw);
+  if (!extracted) return null;
   let v: unknown;
   try {
-    v = JSON.parse(stripped);
+    v = JSON.parse(extracted);
   } catch {
     return null;
   }
@@ -139,11 +171,17 @@ export async function distillSpan(args: DistillArgs): Promise<DistillResult> {
   }
 
   // (3) distill with the injected model; the span rides inside the untrusted markers (invariant #5).
+  // One corrective retry on a malformed reply: weaker configured models (flash/mini/local tiers,
+  // which desktop/trainer_model.ts deliberately keeps eligible) often need the reminder; still
+  // fail-safe after that - the trainer never loops on a model that cannot comply.
   const user = `${UNTRUSTED_START}\n${red.text}\n${UNTRUSTED_END}\nObjective: ${args.objectiveId}`;
-  const raw = await args.complete(DISTILL_SYSTEM, user);
-  const unit = parseDistilled(raw);
+  let unit = parseDistilled(await args.complete(DISTILL_SYSTEM, user));
   if (!unit) {
-    return { stored: false, blocked: true, artifactId: ingest.artifactId, piiRedactions: red.findings.length, reason: "distiller returned malformed unit (dropped)" };
+    const retryUser = `${user}\nYour previous reply could not be parsed. Reply again with ONLY the JSON object described in the instructions: no prose, no code fence, no commentary.`;
+    unit = parseDistilled(await args.complete(DISTILL_SYSTEM, retryUser));
+  }
+  if (!unit) {
+    return { stored: false, blocked: true, artifactId: ingest.artifactId, piiRedactions: red.findings.length, reason: "distiller returned malformed unit (dropped after one corrective retry)" };
   }
 
   // (4) re-scan the DERIVED body fail-closed (keystone #2: derived content is not exempt).

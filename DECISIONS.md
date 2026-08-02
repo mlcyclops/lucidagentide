@@ -16883,7 +16883,11 @@ Consequences:
 **Status:** Accepted -- harness core BUILT (2026-08-02, same day): P-TRAINER.1-.6 shipped as
 `harness/trainer/` (coverage rubric, planner, store, redaction, distiller, teach-back, quiz
 generation), migration 0012, the trainer EventNames, and demo-P-TRAINER.1..5 (the .5 demo runs the
-whole flywheel). Remaining: .7 (the desktop stage act) and .8 (engagement instrumentation).
+whole flywheel). Model-agnostic guarantee added same day: `desktop/trainer_model.ts` resolves the
+trainer's model from the user's CONFIGURED catalog (the ADR-0250 ranking; flash/local tiers stay
+eligible, non-chat routes never qualify, current capable model is kept), and the distiller tolerates
+any family's reply style (fence/prose JSON extractor + one corrective retry, then fail-safe).
+Remaining: .7 (the desktop stage act) and .8 (engagement instrumentation).
 Numbering note: ADR-0250 (P-MODEL.1) and ADR-0251 (P-AVATAR/P-MASCOT) were authored on the
 `feat/lucid-agent-immersive-mascot` branch (since merged into this one); this ADR deliberately
 started at 0252 so both series survive the merge without a collision. Companion ADRs: 0253 (data

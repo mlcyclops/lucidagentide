@@ -67,6 +67,17 @@ describe("parseDistilled", () => {
     const clamped = parseDistilled(JSON.stringify({ kind: "glossary", title: "t", body_md: "b", completeness: 900 }));
     expect(clamped?.completeness).toBe(100);
   });
+
+  test("tolerates the reply styles of ANY configured model family (prose wrap, fence-in-prose, trailing commentary)", () => {
+    // preamble + trailing commentary around bare JSON (small local models)
+    expect(parseDistilled(`Sure! Here is the unit you asked for:\n${GOOD_UNIT_JSON}\nHope this helps!`)?.kind).toBe("procedure");
+    // a fenced block buried in prose (chatty cloud models)
+    expect(parseDistilled("Here you go:\n```json\n" + GOOD_UNIT_JSON + "\n```\nLet me know if you need edits.")?.title).toBe("Routine wire release");
+    // braces inside string values must not break the balanced scan
+    const withBraces = JSON.stringify({ kind: "glossary", title: "curly {braces}", body_md: "a } inside \" text {", completeness: 40 });
+    expect(parseDistilled(`intro { not json misleading? no: ${withBraces}`)).toBeNull(); // first { opens a non-object: fail-safe null
+    expect(parseDistilled(`intro: ${withBraces} outro`)?.title).toBe("curly {braces}");
+  });
 });
 
 describe("distillSpan", () => {
@@ -217,6 +228,36 @@ describe("distillSpan", () => {
       expect(r.stored).toBe(false);
       expect(r.reason).toContain("derived unit blocked");
       expect(await store.listLiveUnits("wmo-2.1")).toEqual([]);
+    } finally {
+      memoryDb.close();
+      store.close();
+    }
+  });
+
+  test("a weaker model that fumbles once gets ONE corrective retry, then succeeds", async () => {
+    const { runId, tel } = harnessBits([]);
+    const { memoryDb, store } = await freshStores("retry");
+    try {
+      let calls = 0;
+      const r = await distillSpan({
+        memoryDb,
+        store,
+        scanner: cleanScanner,
+        complete: async (_s, u) => {
+          calls++;
+          if (calls === 1) return "I'm sorry, here is a summary of the process instead.";
+          expect(u).toContain("could not be parsed"); // the retry carries the corrective instruction
+          return GOOD_UNIT_JSON;
+        },
+        runId,
+        sessionId: "sess-retry",
+        objectiveId: "wmo-2.1",
+        span: "A clean answer.",
+        telemetry: tel,
+      });
+      expect(calls).toBe(2);
+      expect(r.stored).toBe(true);
+      expect(r.trustLabel).toBe("untrusted");
     } finally {
       memoryDb.close();
       store.close();
