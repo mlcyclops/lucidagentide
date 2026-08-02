@@ -33,6 +33,11 @@ const bwrapWorks = () => true;
 const bwrapBlocked = () => false;
 const has = (bin: string) => (b: string) => b === bin; // only `bin` is on PATH
 const none = () => false;
+// Seatbelt functional probes: sandbox-exec being ON PATH and sandbox-exec WORKING are different facts
+// (a sandboxed parent cannot nest a profile), so every darwin resolveBackend call injects both -
+// otherwise the default probe shells out to the host's real sandbox-exec and these stop being hermetic.
+const seatbeltWorks = () => true;
+const seatbeltBlocked = () => false;
 const ARGV = ["/opt/omp", "acp", "-e", "/repo/gate.ts"];
 const CTX = { workspace: "/work/ws", home: "/home/u" };
 const PROXY = { host: "127.0.0.1", httpPort: 8888, httpProxyUrl: "http://127.0.0.1:8888" };
@@ -90,7 +95,7 @@ test("managed require-isolation on a BLOCKED-userns host refuses with the action
 });
 
 test("darwin with sandbox-exec resolves the Seatbelt ISOLATING backend (P-SANDBOX.4)", () => {
-  const r = resolveBackend({ platform: "darwin", which: has("sandbox-exec") });
+  const r = resolveBackend({ platform: "darwin", which: has("sandbox-exec"), probe: seatbeltWorks });
   expect(r.ok).toBe(true);
   if (r.ok) {
     expect(r.backend.name).toBe("seatbelt");
@@ -129,7 +134,7 @@ test("managed require-isolation with NO isolating backend REFUSES (fail-closed, 
 });
 
 test("managed require-isolation is SATISFIED by an available sandbox-exec on macOS + lucid-appcontainer on Windows", () => {
-  const mac = resolveBackend({ platform: "darwin", requireIsolation: true, which: has("sandbox-exec") });
+  const mac = resolveBackend({ platform: "darwin", requireIsolation: true, which: has("sandbox-exec"), probe: seatbeltWorks });
   expect(mac.ok).toBe(true);
   if (mac.ok) expect(mac.backend.name).toBe("seatbelt");
   const win = resolveBackend({ platform: "win32", requireIsolation: true, which: has("lucid-appcontainer") });
@@ -141,6 +146,38 @@ test("managed require-isolation is SATISFIED by an available bwrap", () => {
   const r = resolveBackend({ platform: "linux", requireIsolation: true, which: hasBwrap, probe: bwrapWorks });
   expect(r.ok).toBe(true);
   if (r.ok) expect(r.backend.name).toBe("bwrap");
+});
+
+// ── regression: sandbox-exec present but NON-FUNCTIONAL (sandboxed parent, P-SANDBOX.4) ──────────
+// The bwrap-on-Ubuntu-24.04 silent-kill bug on macOS: sandbox-exec ships on EVERY macOS so presence
+// always passes, but a LUCID itself running under a sandbox (CI runner, MDM wrapper, a dev build
+// launched from another agent's gated shell) cannot NEST a Seatbelt profile - the wrapped child dies
+// at spawn with "sandbox_apply: Operation not permitted", `omp acp` never comes up, and the model
+// picker sits empty on a correctly-authed box.
+test("darwin with sandbox-exec on PATH but BLOCKED sandbox_apply does NOT resolve seatbelt - it discloses instead", () => {
+  const r = resolveBackend({ platform: "darwin", which: has("sandbox-exec"), probe: seatbeltBlocked });
+  expect(r.ok).toBe(true);
+  if (r.ok) {
+    expect(r.backend.name).toBe("noop"); // never "seatbelt" - a backend that cannot spawn is not a backend
+    expect(r.backend.isolates).toBe(false);
+    expect(r.disclosed).toBe(true); // degraded, but DISCLOSED and the agent still runs
+  }
+});
+
+test("SeatbeltBackend.available() requires presence AND capability", () => {
+  expect(new SeatbeltBackend(has("sandbox-exec"), seatbeltWorks).available()).toBe(true);
+  expect(new SeatbeltBackend(has("sandbox-exec"), seatbeltBlocked).available()).toBe(false); // the silent-kill bug
+  expect(new SeatbeltBackend(none, seatbeltWorks).available()).toBe(false);
+});
+
+test("managed require-isolation on a nested-sandbox mac refuses with the actionable nested-sandbox reason", () => {
+  const r = resolveBackend({ platform: "darwin", requireIsolation: true, which: has("sandbox-exec"), probe: seatbeltBlocked });
+  expect(r.ok).toBe(false); // gov/managed still fails CLOSED - degrading to passthrough is not an option
+  if (!r.ok) {
+    expect(r.reason).toMatch(/nested profiles are not permitted/);
+    expect(r.reason).toMatch(/unsandboxed shell/); // tells the operator what to actually do
+    expect(r.reason).not.toMatch(/not available/); // the old, misleading message
+  }
 });
 
 // ── cap → flag mapping ────────────────────────────────────────────────────────
