@@ -73,6 +73,29 @@ const defaultProbe: ProbeFn = (bin) => {
   return ok;
 };
 
+/** Does `sandbox-exec` actually WORK here, not merely exist?
+ *
+ *  sandbox-exec ships on every macOS, so a presence-only check always selects Seatbelt. But a
+ *  LUCID that is itself running under a sandbox (a sandboxed parent process: CI runners, MDM
+ *  wrappers, a LUCID dev build launched from inside another agent's gated shell) cannot NEST a
+ *  Seatbelt profile: the wrapped child dies instantly with "sandbox_apply: Operation not
+ *  permitted" (exit 71). That is the exact bwrap failure mode above wearing macOS clothes:
+ *  `omp acp` never comes up, the ACP session never opens, configOptions stays empty and the
+ *  model picker sits blank on a correctly-authed box. Run the smallest real profile once to
+ *  find out; cached per run (host capability does not change within a run). */
+const seatbeltDefaultProbe: ProbeFn = (bin) => {
+  const cached = probeCache.get(bin);
+  if (cached !== undefined) return cached;
+  let ok = false;
+  try {
+    ok = Bun.spawnSync({ cmd: [bin, "-p", "(version 1)(allow default)", "/usr/bin/true"], stdout: "ignore", stderr: "ignore", stdin: "ignore" }).exitCode === 0;
+  } catch {
+    ok = false; // binary vanished between which() and here, or is not executable
+  }
+  probeCache.set(bin, ok);
+  return ok;
+};
+
 export interface SandboxCtx {
   /** The workspace the agent works in — bound read-write inside the sandbox. */
   workspace: string;
@@ -200,13 +223,15 @@ export function seatbeltProfile(caps: ProfileCaps, ctx: SandboxCtx): string {
 /** macOS Seatbelt backend (P-SANDBOX.4, ADR-0168): wrap the spawn in `sandbox-exec -p <profile>`. Real
  *  OS-level containment (the App Sandbox / TrustedBSD MAC layer), so `isolates` is true and a network-off
  *  profile genuinely cuts the network on macOS. `available()` = `sandbox-exec` on PATH (present on every
- *  supported macOS). Pure: `which` injectable, profile is a pure function of caps/ctx. */
+ *  supported macOS) AND functionally able to apply a profile (a sandboxed parent cannot nest Seatbelt,
+ *  see seatbeltDefaultProbe). Pure: `which`/`probe` injectable, profile is a pure function of caps/ctx. */
 export class SeatbeltBackend implements SandboxBackend {
   readonly name = "seatbelt" as const;
   readonly isolates = true;
-  constructor(private readonly which: WhichFn = defaultWhich) {}
+  constructor(private readonly which: WhichFn = defaultWhich, private readonly probe: ProbeFn = seatbeltDefaultProbe) {}
+  /** Presence AND capability - a sandbox-exec that cannot apply a profile is not a backend. */
   available(): boolean {
-    return this.which("sandbox-exec");
+    return this.which("sandbox-exec") && this.probe("sandbox-exec");
   }
   wrap(argv: string[], caps: ProfileCaps, ctx: SandboxCtx): SandboxPlan {
     const env: Record<string, string> = {};
@@ -315,7 +340,10 @@ export function resolveBackend(opts: ResolveBackendOpts = {}): BackendResolution
   }
   if (platform === "darwin") {
     // P-SANDBOX.4 (ADR-0168): macOS gets real containment via Seatbelt (sandbox-exec ships with macOS).
-    const seatbelt = new SeatbeltBackend(which);
+    // Presence AND capability: a sandboxed parent (CI runner, MDM wrapper, a dev build launched from
+    // another agent's gated shell) cannot nest a profile - sandbox_apply fails and the wrapped child
+    // dies at spawn, which is the bwrap-on-Ubuntu-24.04 silent-kill bug on macOS (see seatbeltDefaultProbe).
+    const seatbelt = new SeatbeltBackend(which, opts.probe ?? seatbeltDefaultProbe);
     if (seatbelt.available()) return { ok: true, backend: seatbelt, disclosed: false };
   }
   if (platform === "win32") {
@@ -333,7 +361,9 @@ export function resolveBackend(opts: ResolveBackendOpts = {}): BackendResolution
             ? "managed policy requires runtime isolation, but bwrap cannot create a user namespace on this host — Ubuntu/Debian 24.04+ block unprivileged user namespaces via AppArmor (allow with `sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`, or ship an AppArmor profile for bwrap)"
             : "managed policy requires runtime isolation, but bwrap is not installed (install bubblewrap)"
           : platform === "darwin"
-            ? "managed policy requires runtime isolation, but sandbox-exec is not available (macOS Seatbelt)"
+            ? which("sandbox-exec")
+              ? "managed policy requires runtime isolation, but sandbox-exec cannot apply a Seatbelt profile in this environment - this process is itself running under a sandbox (nested profiles are not permitted); launch LUCID from Finder or an unsandboxed shell"
+              : "managed policy requires runtime isolation, but sandbox-exec is not available (macOS Seatbelt)"
             : platform === "win32"
               ? "managed policy requires runtime isolation, but the lucid-appcontainer helper is not installed (Windows AppContainer; ships in P-SANDBOX.7)"
               : `managed policy requires runtime isolation, but no sandbox backend exists for ${platform} yet`,
