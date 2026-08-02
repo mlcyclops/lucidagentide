@@ -16880,11 +16880,15 @@ Consequences:
 ## ADR-0252 -- P-TRAINER: the LUCID Agent as knowledge trainer - process extraction, distillation, and teach-back for business roles (SCOPE/PLAN)
 
 **Date:** 2026-08-02
-**Status:** Accepted -- SCOPE/PLAN, roadmap only. Numbering note: ADR-0250 (P-MODEL.1) and ADR-0251
-(P-AVATAR/P-MASCOT) exist only on the unmerged `feat/lucid-agent-immersive-mascot` branch; this ADR
-deliberately starts at 0252 so both series survive the merge without a collision. Companion ADRs:
-0253 (data contract), 0254 (trust pipeline), 0255 (interview mechanics). Facts below verified against
-master as of v1.12.0 plus a read of the mascot branch and of the external TacticalGenAI repo.
+**Status:** Accepted -- harness core BUILT (2026-08-02, same day): P-TRAINER.1-.6 shipped as
+`harness/trainer/` (coverage rubric, planner, store, redaction, distiller, teach-back, quiz
+generation), migration 0012, the trainer EventNames, and demo-P-TRAINER.1..5 (the .5 demo runs the
+whole flywheel). Remaining: .7 (the desktop stage act) and .8 (engagement instrumentation).
+Numbering note: ADR-0250 (P-MODEL.1) and ADR-0251 (P-AVATAR/P-MASCOT) were authored on the
+`feat/lucid-agent-immersive-mascot` branch (since merged into this one); this ADR deliberately
+started at 0252 so both series survive the merge without a collision. Companion ADRs: 0253 (data
+contract), 0254 (trust pipeline), 0255 (interview mechanics). Facts below verified against master
+as of v1.12.0 plus a read of the mascot branch and of the external TacticalGenAI repo.
 
 ### The ask
 
@@ -17033,9 +17037,11 @@ the CLAUDE.md ritual.
 ## ADR-0253 -- P-TRAINER data contract: coverage maps, knowledge units, and the extraction pack (SCOPE/PLAN)
 
 **Date:** 2026-08-02
-**Status:** Accepted -- SCOPE/PLAN, roadmap only. Companion to ADR-0252. Schema lands as migration
-`0012_trainer_tables.sql` (0012 is the next free global number; the memory/0011 vs kb/0011 collision
-is prior art we do not repeat) in increment P-TRAINER.2.
+**Status:** Accepted -- BUILT (2026-08-02): migration `0012_trainer_tables.sql` +
+`harness/trainer/store.ts` (append-only proven by tests + demo-P-TRAINER.2); the lkgpack
+`coverage_map` member shipped in `harness/kb/pack.ts` (signature-bound, tamper-refused). The
+kb_pages projection of confirmed units is deferred to the desktop wiring increment. 0012 was the
+next free global number; the memory/0011 vs kb/0011 collision is prior art we do not repeat.
 
 ### Problem
 
@@ -17104,8 +17110,10 @@ projected pages); a fixture WMO map drives derivation tests.
 ## ADR-0254 -- P-TRAINER trust pipeline: extracted knowledge is untrusted until taught back (SCOPE/PLAN)
 
 **Date:** 2026-08-02
-**Status:** Accepted -- SCOPE/PLAN, roadmap only. Companion to ADR-0252/0253. The security posture
-of the trainer arc; adds NO new security surface, reuses keystone #2 verbatim.
+**Status:** Accepted -- BUILT (2026-08-02): `harness/trainer/redact.ts` + `distiller.ts` +
+`teachback.ts` and the trainer EventNames in contracts.ts. Every decision below is pinned by tests
+(dead-scanner, poisoned-span, poisoned-derivation, hard-PII-quarantine, refused-confirm) and
+demo-P-TRAINER.3/.4. Adds NO new security surface; keystone #2 runs verbatim underneath.
 
 ### Problem
 
@@ -17174,9 +17182,12 @@ provenance chain end to end.
 ## ADR-0255 -- P-TRAINER interview mechanics: engagement as a designed system, and the wealth-management-operations pack (SCOPE/PLAN)
 
 **Date:** 2026-08-02
-**Status:** Accepted -- SCOPE/PLAN, roadmap only. Companion to ADR-0252/0253/0254. The conversation
-design and the v1 pack outline; mechanics distilled from TacticalGenAI, adapted from push
-(training a human) to pull (extracting from one).
+**Status:** Accepted -- harness core BUILT (2026-08-02): the planner cadence rules (scenario-first,
+one-question-at-a-time, five-whys, session cap, L0-L3 rubric) shipped pure + tested in
+`harness/trainer/planner.ts`/`coverage.ts`; the 13-objective WMO coverage map + due-diligence seed
+shipped in `wmo_pack.ts`; trainee quizzes + the miss-to-extraction-target return edge in
+`quizgen.ts` (demo-P-TRAINER.5). The stage/HUD presentation (decisions 4-5) lands with
+P-TRAINER.7/.8.
 
 ### Problem
 
