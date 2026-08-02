@@ -18,7 +18,7 @@ import { CollabHost, type HostTransport } from "./host.ts";
 import { generateRoomId, mintRoomLinks } from "./link.ts"; // P-COLLAB.19 (ADR-0241): one room, two capabilities
 import { generateRoomKey, generateWriteToken, importRoomKey } from "./crypto.ts";
 import type { ChatEvent } from "../renderer/chat_events.ts";
-import type { CollabOptions, CollabParticipant } from "./frames.ts";
+import type { CollabOptions, CollabParticipant, PromptAudio } from "./frames.ts";
 
 /** An authorized relay endpoint: `wsBase` is the origin (no path); `httpBase` its http(s) form for links.
  *  `pwaBase` (P-REMOTE.2b): when set (the hosted rendezvous), the browser invite points at the phone PWA
@@ -36,7 +36,7 @@ export interface CollabManagerDeps {
   now(): number;
   /** P-COLLAB.12: run an EDIT guest's prompt in the host's session (through the host's fail-closed gate).
    *  P-REMOTE.8: `images` (validated data URLs) ride along as vision input, staged into the host composer. */
-  onGuestPrompt?: (text: string, guest: CollabParticipant, images?: string[]) => void;
+  onGuestPrompt?: (text: string, guest: CollabParticipant, images?: string[], audio?: PromptAudio) => void;
   /** P-COLLAB.12: an EDIT guest asked to stop the in-flight turn. */
   onGuestAbort?: (guest: CollabParticipant) => void;
   /** P-COLLAB.18 (ADR-0204): a guest joined/left the hosted share (host-authoritative audit hook). */

@@ -207,6 +207,8 @@ export interface TtsEngineView {
 export interface WhisperTierView { tier: string; label: string; runnable: boolean; installed: boolean }
 export interface WhisperStatusView {
   capable: boolean; recommended: string | null; summary: string;
+  /** The tier used when nothing is picked (tiny); the picker preselects it when no server runs. */
+  defaultTier?: string | null;
   binAvailable: boolean; binHint: string;
   running: boolean; port: number; activeTier: string | null; serveUrl: string | null;
   tiers: WhisperTierView[];
@@ -406,8 +408,9 @@ export interface Attribution {
   // Enterprise-managed policy view (ADR-0030): drives the prompt + "Managed by …" UI.
   managed: boolean; orgName: string; requireEmail: boolean; allowSkip: boolean; allowedDomains: string[];
 }
-// ADR-0088 (P-ROLE.1): the four onboarding roles (renderer-side mirror of settings_store's UserRole).
-export type UserRole = "developer" | "security" | "manager" | "executive";
+// ADR-0088 (P-ROLE.1): the onboarding roles (renderer-side mirror of settings_store's UserRole).
+// P-AVATAR.1 (ADR-0251): + "lucid-agent", the one behavioral role (immersive stage).
+export type UserRole = "developer" | "security" | "manager" | "executive" | "lucid-agent";
 export interface ProfileSettings {
   username: string;
   email: string;

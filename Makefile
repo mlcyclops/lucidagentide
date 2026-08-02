@@ -319,6 +319,38 @@ demo-P-ROLE.1: ## P-ROLE.1 (ADR-0088): role-based onboarding — closed role set
 demo-P-ROLE.1b: ## P-ROLE.1b (ADR-0089): first-run guided walkthrough — tailored per-role coachmark tour (opens on composer, closes on closer, no dangling targets), Back/Next/Skip card, replay-guard
 	$(BUN) run desktop/scripts/demo_p_role_1b.ts
 
+.PHONY: demo-P-AVATAR.1
+demo-P-AVATAR.1: ## P-AVATAR.1 (ADR-0251): the LUCID Agent role + immersive stage - closed role set grows by one behavioral role, bespoke no-rail tour, animated glyph, and the stylesheet hides both rails + inspector under .immersive
+	$(BUN) run desktop/scripts/demo_p_avatar_1.ts
+
+.PHONY: demo-P-MASCOT.1
+demo-P-MASCOT.1: ## P-MASCOT.1 (ADR-0251 pivot): LUCID the ninja mascot - frame-grid integrity (dims + palette), state machine priorities (victory on landed work), working-activity rotation, and beat-timeline frame picks
+	$(BUN) run desktop/scripts/demo_p_mascot_1.ts
+
+.PHONY: demo-P-MASCOT.2
+demo-P-MASCOT.2: ## P-MASCOT.2: the prompt-bar parkour mini ninja - route order (run/climb/sneak/pause/drop/rest), lane geometry, the silent-drop clip contract, gravity easing, direction alternation
+	$(BUN) run desktop/scripts/demo_p_mascot_2.ts
+
+.PHONY: demo-P-AVATAR.4
+demo-P-AVATAR.4: ## P-AVATAR.4 (ADR-0251): the LUCID Agent enter flow - fast-model preference order (Terra > Sonnet 5 > Flash, no pointless switch), one-gap-at-a-time readiness (provider > tts > stt), the one-time KG offer, exit model restoration
+	$(BUN) run desktop/scripts/demo_p_avatar_4.ts
+
+.PHONY: demo-P-AVATAR.5
+demo-P-AVATAR.5: ## P-AVATAR.5 (ADR-0251): voice tool approval - keyword-strict grammar (sentences never match), danger class demands the literal word after a spoken repeat-back, widening grants unreachable by voice, deny always easy
+	$(BUN) run desktop/scripts/demo_p_avatar_5.ts
+
+.PHONY: demo-P-AVATAR.6
+demo-P-AVATAR.6: ## P-AVATAR.6 (ADR-0251): the boot cinematic - real-signal stage lines, min-beat + hard-cap done gate (config-gated; voice/models never hold boot), ninja sprint choreography
+	$(BUN) run desktop/scripts/demo_p_avatar_6.ts
+
+.PHONY: demo-P-REMOTE.12
+demo-P-REMOTE.12: ## P-REMOTE.12 (ADR-0251): PWA push-to-talk - fail-closed PromptAudio validator (shape/mime/size/base64, both ends), audio-only guest prompts, additive frame compatibility
+	$(BUN) run desktop/scripts/demo_p_remote_12.ts
+
+.PHONY: demo-P-REMOTE.13
+demo-P-REMOTE.13: ## P-REMOTE.13 (ADR-0251): the invisible hourly reconnect - grace-window presentation (young flap = Live, real outage surfaces, terminal never masked); the 60-min cap + hourly re-verify stay
+	$(BUN) run desktop/scripts/demo_p_remote_13.ts
+
 .PHONY: demo-P-GOVCUI.1
 demo-P-GOVCUI.1: ## P-GOVCUI.1: first-run Government/CUI step - asks once if the user is a Government/GovCon user handling CUI; a "yes" walks a novice into the CUI-safe posture (AskSage gov gateway in LOCKDOWN) with the CIV routing endpoint PREFILLED + step-by-step token instructions. Pure core: decideGovOnboarding (ask/skip/auto-enable, exactly once; org-forced routing auto-enables) + planGovSetup (with a key -> CIV persisted + lockdown ON; no key -> endpoint prefilled but lockdown NEVER flipped, since a keyless lockdown leaves no gov model and the backend fail-closes)
 	$(BUN) run harness/scripts/demo_pgovcui1.ts

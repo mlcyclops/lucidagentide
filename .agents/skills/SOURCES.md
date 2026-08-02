@@ -14,6 +14,7 @@ skill enters here without a recorded, vendor-trusted source.
 |-------|-------------------|--------|---------|-------|---------|
 | `semantic-compression` | `github.com/can1357/oh-my-pi` → `.omp/skills/semantic-compression/SKILL.md` | `faa96a81` | 2026-06-18 | vendor (omp author `can1357`) | manual review — clean; pending automated P2.1 scan |
 | `system-prompts` | `github.com/can1357/oh-my-pi` → `.omp/skills/system-prompts/SKILL.md` | `faa96a81` | 2026-06-18 | vendor (omp author `can1357`) | manual review — clean; pending automated P2.1 scan |
+| `mascot-stage` | FIRST-PARTY - authored in-repo (P-MASCOT.1 session, ADR-0251 pivot). Replaces the same-day `threejs-stage` skill, RETIRED when the user killed the talking-head + particles direction (three.js removed from the repo); the preview QA workflow section carried over | n/a | 2026-08-01 | first-party | first-party authorship, plain ASCII; no external file entered the repo |
 
 ## Notes
 

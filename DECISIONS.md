@@ -16644,6 +16644,239 @@ auto-speak alone - you stop being listened to, replies are still read.
 escalate, hard cap, distinct + tool-flavoured lines, and every line short/markdown-free/sentence-terminated so
 the engine lands the intonation). 66 voice tests; renderer tsc clean.
 
+## ADR-0250 -- P-MODEL.1: the fresh-session model default follows the user, not omp's hardcoded Opus
+
+**Date:** 2026-08-01
+**Status:** Accepted -- BUILT.
+
+### Problem
+
+Every fresh session (launch, New session, respawn) opened the picker on omp's own hardcoded default, Claude
+4.8 Opus, regardless of which providers the user configured or which model they were using five minutes ago.
+Worse, `syncModelEnv()` persists whatever omp reports as `lastModel` the moment the session initializes, so
+the genuine last-used value was overwritten by the default before anything could read it.
+
+### Decision
+
+A pure, tested resolver (`desktop/startup_model.ts`, `resolveStartupModel`) picks what the session should
+open on: (1) the LAST-USED model when it is still offered and its provider still holds a credential - an
+explicit user choice is never re-litigated against heuristics; (2) else the BEST model among CONFIGURED
+providers: capability tier first (flagship > balanced > small, with `\bmini` so "gemini" never reads as a
+mini), direct route over the gov gateway on ties, then newest via `cmpModelsNewestFirst`; auxiliary/RAG
+routes, deprecated ids, and sovereignty-gated China-origin models are never auto-picked; (3) else null - omp's
+default stands (a fresh install with nothing configured has no better signal).
+
+`acp_backend.ensureSession` captures `lastModel()` BEFORE `session/new` (dodging the syncModelEnv stamp),
+then applies the pick fire-and-forget via `session/set_config_option` - the exact ADR-0217 lockdown pattern,
+and the lockdown still wins: a locked session runs `enforceAsksageLock` INSTEAD. Configured = the
+`providerConfigured` test (OAuth active, key set, or any field set) against `providerAuth()`; AskSage-routed
+ids check the GATEWAY credential (providerForModel deliberately maps them to the family provider, right for
+the budget pill, wrong here); unknown prefixes (user-added local providers) count as configured.
+
+**Seam note:** `renderer/budget_gate.ts` dropped its `bridge.ts` type import for local structural slices
+(`ProviderAuthLike`/`AuthGroupsLike`, generic-preserving) - bridge.ts is DOM-typed and the server program now
+imports budget_gate; `providerConfigured`'s one-line test is inlined at the call site for the same reason.
+
+### Alternatives rejected
+
+- **Spawning omp with a model flag/env** - undocumented seam vs the proven set_config_option path; the
+  fire-and-forget switch self-heals through config_option_update either way.
+- **Awaiting the switch in ensureSession** - re-creates the picker-freeze ADR-0217 explicitly avoided.
+- **Auto-picking acknowledged China models** - a sovereignty-gated default should always be a deliberate
+  manual pick; last-used still honors an explicit standing choice.
+
+### Verification
+
+13 unit tests on the resolver (last-used precedence incl. vanished/de-configured fallbacks, best-configured
+ranking, gov-only, China exclusion, gemini-vs-mini regex, nothing-configured null). All three tsconfigs clean
+(only the pre-existing symbol_graph + dev.ts diagnostics); full desktop suite 4541 pass / 6 fail, the same 6
+pre-existing failures as the baseline.
+
+## ADR-0251 -- P-AVATAR: the "LUCID Agent" immersive role - three.js talking face, hands-free agent mode, voice tool approval, cinematic boot, PWA voice (SCOPE/PLAN)
+
+**Date:** 2026-08-01
+**Status:** Accepted -- BUILT (2026-08-01, same day, through the P-MASCOT pivot). All increments shipped:
+P-AVATAR.1 (role + immersive layout), P-MASCOT.1/.2/.3 (the ninja + prompt-bar parkour + smoothness,
+replacing the killed face direction), P-AVATAR.4 (enter flow), .5/.5b (voice approvals + impact prompts),
+.6/.6b/.6c/.6d (boot cinematic + blade finale + live keyboard), P-REMOTE.12 (PWA push-to-talk),
+P-REMOTE.13 (invisible hourly reconnect). Residual release-cut items live in PROGRESS.md. Originally:
+SCOPE/PLAN, roadmap only; facts verified against the live tree by five parallel scouts as of v1.12.0.
+
+### The ask
+
+A fifth role, "LUCID Agent", that hides both rails and replaces the IDE chrome with a neon-green,
+Matrix-styled 3D digital face (particle digit-rain flowing down it) that talks in sync with the TTS engine;
+selecting it enters full-agent conversation mode on a fast model (GPT-5.6 Terra / Claude Sonnet / Gemini
+Flash class) with background subagents enabled and VOICE approval of gated tool calls; unconfigured users are
+guided (voice + visuals) through provider/voice/Knowledge-Graph setup including vault unlock; boot shows a
+cinematic opening instead of dead air; and the Remote PWA gains voice input without a visible 60-minute drop.
+
+### What exists today (the seams this plugs into)
+
+- **Roles are cosmetic** (ADR-0088/0089): `USER_ROLES` in `settings_store.ts` (+ duplicate list in
+  `renderer/tour.ts`), picker modal in `runOnboarding()` (`app.ts` ~2037), animated glyphs in
+  `role_icons.ts`, per-role tour subsets. This role becomes BEHAVIORAL - a deliberate, contained deviation.
+- **Layout**: 5-column grid `.body` (`styles.css:153`) - 54px `.rail`, collapsible `.sidebar`
+  (`state.sidebarCollapsed`), center chat, 440px `.inspector` (`state.inspectorRail`, `.collapsed` CSS).
+  Sidebar/inspector already collapse; the activity rail has no hide path yet.
+- **Voice arc complete** (ADR-0247/0248/0249): sentence-streamed TTS through ONE persistent `<audio>`
+  element; `VoiceEqualizer` (`voice_eq.ts`) already taps it with a Web Audio `AnalyserNode` (built lazily,
+  fail-safe); conversation mode (`toggleConversationMode`, Ctrl/Cmd+G) with VAD dictation loop, auto-send
+  (`maybeSendSpokenTurn`), thinking cues; engine readiness per provider (`ttsEngineStatus`,
+  `/api/voices`); STT via bundled Whisper (autostarts in the installed app since P-STT.6).
+  **No word-level TTS timing exists** - ElevenLabs with-timestamps is not invoked; Kokoro/OpenAI paths
+  return plain audio.
+- **Tool approvals**: omp -> `session/request_permission` -> `{type:"permission", id, tool, options,
+  danger}` ChatEvent (`acp_backend.ts` ~556-795) -> inline card (`createPermissionCard`, `app.ts` ~1036) ->
+  `respondPermission(id, optionId)`; fail-closed 300s timeout in `askUser()`. `setUiMode("agent")` flips
+  permissionMode; subagent runs already surface via `/api/subagents` cards (P-TASK.5).
+- **Models**: `setConfig("model", id)` over ACP; catalog already carries `gpt-5.6-terra` (256k),
+  `claude-sonnet-4-6` (1M), `google-gemini-3.5-flash-gov`, `google-claude-sonnet-5` (gov); ADR-0250's
+  `resolveStartupModel` established configured-provider ranking utilities to reuse.
+- **Onboarding signals** (all readable today): `configuredProviderCount`, `roleChosen`, `tourSeen`,
+  workspace, voice readiness, `whisperStatus`, `PersonalStore.exists()` / `personalStatus().unlocked`,
+  `/api/personal/unlock`, KG endpoints `/api/kb/*` + background ingest job. Boot to first config is ~6-9s
+  (`CONFIG_WARM_MS` 6000 + renderer warm-poll), with an Electron `splash.ts` before the window and instant
+  shell first-paint after.
+- **Remote PWA** (`tools/remote-pwa/app.ts`): text + images only; frame protocol (`collab/frames.ts`)
+  tolerates new optional fields; host already owns `/api/transcribe`. The "60-minute timeout" is Cloud
+  Run's hard WS request cap - ADR-0227 deliberately leans on it for hourly token re-verification; the
+  guest already re-auths on every reconnect.
+- **Renderer build**: bun-bundled ES module, CSP `script-src 'self'` (no unsafe-eval) - three.js bundles
+  cleanly under this (no eval; WebGL/GLSL is not CSP-gated). Canvas precedent: equalizer, waveform, KG
+  graph engine. No three dependency today (`desktop/package.json` deps: katex, monaco, electron-updater).
+
+### Decisions (the load-bearing ones)
+
+1. **Rights-safe art direction, procedural-first - USER-CONFIRMED (2026-08-01), scaled UP; REVISED same
+   day after the first build: SERENE, never scary.** The v1 face (glowing iris rings, hollow sockets, a
+   hard silhouette rim) was rejected by the user as scary. Settled direction, grounded in skills.sh
+   three.js skills (cloudai-x threejs-shaders/postprocessing, emalorenzo three-best-practices) and the
+   particle-portrait prior art (Codrops interactive-particles; GLTF-to-particles boilerplates): CLOSED
+   eyes as downward lash arcs (no eye contact - the uncanny trigger), a calm mouth with gently lifted
+   corners, features as smooth curved bands, a normal-based view fade dissolving the silhouette instead
+   of a rim, and a mint-white lift on feature glow. Encoded as the first-party `.agents/skills/
+   threejs-stage` skill so later sessions inherit the rules; SOURCES.md records provenance (nothing
+   third-party vendored - the pull rule stands).** "Neo" is a likeness we do not ship; the head is a stylized original.
+   Procedural: a head mesh from bundled typed-array vertex data (no third-party GLB, no asset licensing),
+   but rendered at HERO scale - the face fills the immersive stage's center viewport, lit by its own
+   emission. Layered look, back to front: a full-stage sparse glyph-rain field with depth (parallax on
+   slow idle camera drift), the head as a dense particle/wireframe hybrid with fresnel rim glow, a
+   SECOND denser rain layer depth-masked to stream down the face itself, and a post stack (UnrealBloomPass
+   bloom + subtle film grain + faint chromatic aberration) for the neon read. The whole scene is
+   AUDIO-REACTIVE: rain speed/brightness and rim intensity pulse with the same band energy that drives the
+   mouth, and the state choreography is explicit - particles converge to form the face on entry, drift
+   calm when idle, tighten and brighten while listening, cascade while speaking, slow-orbit shimmer while
+   thinking. Degrade ladder (fewer particles, no post, static glow) keeps integrated GPUs at 60fps.
+2. **Lip sync = amplitude visemes first, timestamps later.** Tier 1 drives jaw/mouth blend from the
+   EXISTING AnalyserNode - `voice_eq.ts` must grow a second-subscriber tap API because
+   `createMediaElementSource` is once-per-element (naive duplication silently breaks the equalizer). Bands
+   from `eq_bands.ts` (low = jaw, mid/high = lip spread), `stepEq`-style ballistics. Works for EVERY engine
+   incl. air-gapped Kokoro. Tier 2 (optional): ElevenLabs with-timestamps -> char/phoneme visemes,
+   `/api/tts/speak` gains an optional `timings` field; elevenlabs-only.
+3. **Voice approval is fail-closed and keyword-strict - USER-CONFIRMED (2026-08-01) incl. repeat-back
+   confirm for the danger class.** A pure `matchApprovalUtterance(transcript,
+   options, danger)` maps speech to an optionId: plain tools accept "approve/yes/deny/no"; danger-class
+   (exec/egress) REQUIRES the literal word "approve" after a spoken repeat-back of the command/host, and
+   anything ambiguous falls through to the visual card. Silence never approves (the 300s fail-closed
+   timeout stands). Voice can DENY anything freely. No voice path may widen permissionMode.
+4. **The 60-minute cap stays; it becomes invisible - USER-CONFIRMED (2026-08-01). PWA voice is
+   push-to-talk (also confirmed).** Hourly re-verify is a security feature (ADR-0227),
+   not a bug. We make the reconnect seamless (buffered composer, silent resume, no toast unless resume
+   fails) instead of re-hosting the relay to dodge the platform cap.
+5. **Fast-model pick reuses ADR-0250.** A `CONVERSATION_MODEL_PREFS` ranked matcher (terra/sonnet/flash
+   class) filtered by configured providers, falling back to `resolveStartupModel`; the user's prior model
+   is remembered and restored on exit from the role/mode.
+6. **Three.js loads lazily.** `three` lands in `desktop/package.json`, dynamically imported only when the
+   immersive stage mounts (bun build --splitting), so the other four roles pay zero parse/GPU cost. DPR
+   capped, rAF paused when hidden (same visibility discipline as `maybeListen`), `prefers-reduced-motion`
+   honored with a static-glow fallback.
+7. **Prompt-side content rides the user-turn preamble channel** (like `spoken_reply.ts`), never the frozen
+   prefix (invariant #6). Immersive UI text obeys invariant #11 (no cramped wrapping columns).
+
+### Increments
+
+- **P-AVATAR.1 - the role + immersive layout.** Add `lucid-agent` to `USER_ROLES` (+ tour.ts list), picker
+  card + `role_icons.ts` glyph, `.body.immersive` hiding rail/sidebar/inspector (Esc exits, state
+  persisted), center stage container. Tour subset for the role. Pure: role normalization + layout state.
+- **P-AVATAR.2a - the face stage scaffold.** three.js dep + lazy chunk; hero-scale procedural head,
+  full-stage rain field + face-masked rain layer, entry particle-convergence; idle/listening/speaking/
+  thinking states driven by the EXISTING speech/dictation state machine. Perf gate: 60fps on integrated
+  GPU, DPR cap, hidden-pause. Demo: state-machine + degrade-ladder transitions pure-tested; visual QA via
+  preview screenshots.
+- **P-AVATAR.2b - the cinematic polish pass.** The post stack (bloom, grain, chromatic aberration), idle
+  camera drift + parallax, audio-reactive rain/rim coupling, choreography tuning until it genuinely wows;
+  ships only after 2a's perf gate holds with the post stack ON (else the ladder drops post first).
+- **P-AVATAR.3 - amplitude lip sync.** The `voice_eq.ts` tap API (keystone risk: one MediaElementSource) +
+  band->viseme mapping module (pure, tested) + jaw/mouth blend in the stage. Tier-2 timestamps increment
+  parked behind it.
+- **P-AVATAR.4 - enter-the-Matrix flow + guided setup.** Role select (or hotkey) -> readiness sweep using
+  the existing signal inventory -> auto: conversation mode ON, `setUiMode("agent")`, fast-model switch
+  (remember/restore prior), whisper autostart already handled by P-STT.6. Not ready -> an in-stage,
+  spoken + visual checklist (one item at a time, never a wall) deep-linking Voice card / Provider Hub,
+  with test-voice playback; KG: offer setup (`/api/kb/create` + ingest) or vault unlock
+  (`/api/personal/unlock`) when `PersonalStore.exists()` and locked - ASK, never nag twice per session.
+- **P-AVATAR.5 - voice tool approval.** `matchApprovalUtterance` (pure + heavily tested), permission
+  ChatEvent -> spoken summary -> scoped listen window -> `respondPermission`; repeat-back confirm for
+  danger class; visual card always rendered as the fallback and the source of truth.
+- **P-AVATAR.6 - cinematic boot.** Renderer-side matrix-rain opening (2D canvas, no three needed at boot)
+  gated to the lucid-agent role: staged REAL progress lines (health, session, config, model, voice) over
+  the ~6-9s warm window, particle-converge handoff into the face stage when config lands; skippable,
+  reduced-motion aware, hard-capped so it never outlives readiness by more than ~2s. Electron `splash.ts`
+  untouched (it ends before the renderer exists).
+- **P-REMOTE.12 - PWA voice.** Push-to-talk mic in the PWA composer (iOS-safe user gesture), client-side
+  16k mono WAV transcode reusing the pure `dictation.ts` helpers already bundled with collab code,
+  `PromptFrame.audio?` optional field (protocol-compatible; 12MB cap is ~30x headroom for a 30s clip),
+  host transcribes via `/api/transcribe` and treats the transcript as an ordinary guest prompt (existing
+  scan gate + approvals apply). Host-side voice reply stays desktop-side (guests read the transcript).
+- **P-REMOTE.13 - invisible hourly reconnect.** Silent resume across the Cloud Run 60-min WS cap: auto
+  re-join with fresh token (already implemented) minus the user-visible drop - buffer an in-flight
+  composer/mic session across the flap, suppress the disconnect toast when resume succeeds within a grace
+  window, surface only real failures. No relay re-host.
+
+### Risks / non-goals
+
+- **GPU floor**: integrated-GPU laptops must hold 60fps or degrade (fewer particles, no bloom) - perf
+  budget is part of P-AVATAR.2's acceptance, not an afterthought.
+- **Likeness/IP**: stylized original face only; matrix-rain glyph aesthetic is fine, a recognizable actor
+  likeness is not.
+- **STT mishears**: approval grammar is allowlist-exact; a mumbled "yeah" never fires exec. Fail-closed
+  everywhere (invariant #3 spirit).
+- **Roles were cosmetic**: this ADR consciously makes ONE role behavioral; the other four stay cosmetic.
+- **Non-goal v1**: phoneme-accurate visemes, PWA-side TTS playback of replies, removing the hourly
+  re-verify, a marketplace of faces.
+
+### Order + estimate
+
+.1 -> .2a -> .2b -> .3 -> .4 -> .5 are sequential (each leans on the prior); .6, P-REMOTE.12, P-REMOTE.13
+are independent and can interleave. Nine increments, each a session; the split .2a/.2b reflects the
+user-requested hero-scale ambition (2026-08-01) - scaffold first, then a dedicated polish session judged on
+looks, not just function.
+
+### DIRECTION PIVOT (2026-08-01, same day): the talking head + particles are OUT; a game-character MASCOT is IN
+
+After two art passes (ring-eyed v1: "scary"; serene closed-eye v2: "still very bad") the user killed the
+talking-head-and-particles direction entirely. New brief: LUCID is a FUN, COOL game character - an original
+never-created fighting-game ninja mascot - that PLAYS while the agent works and stays in line with what is
+actually happening (idle / listening / speaking / working / victory follow the real session state).
+
+Consequences:
+- **P-MASCOT.1 replaces P-AVATAR.2a/2b/3.** 2D pixel-art sprite system (fighting-game heritage IS sprite
+  art): procedural frame grids in code (no binary assets, rights-safe original character), a pure animation
+  state machine + activity scheduler (kata combos, shuriken practice, meditation while working; victory pose
+  when a turn lands), nearest-neighbor canvas scaling for the crisp retro read. No uncanny valley risk by
+  construction - the single biggest lesson from the face attempts.
+- **three.js is REMOVED** (dep, avatar_stage.ts, avatar_math.ts, their tests + demo). The dev.ts splitting
+  bundler + /chunk route STAYS - a generic, documented capability the mascot may use later and P-REMOTE
+  work can lean on. The `.agents/skills/threejs-stage` skill is retired with a tombstone note (its QA-
+  workflow section migrates to the mascot skill notes; the three.js rendering rules go dormant with it).
+- **Lip sync (old .3) is dead**; the mascot's speaking state is a talk-gesture loop instead - the voice_eq
+  analyser tap idea survives only as OPTIONAL audio-reactive bounce, a P-MASCOT.2 nicety.
+- **Unchanged**: P-AVATAR.1 (role + immersive layout - the mascot mounts into the same #agentStage),
+  P-AVATAR.4 (enter flow + guided setup), .5 (voice approvals), .6 (cinematic boot - now themed to the
+  mascot), P-REMOTE.12/.13. The lockdown/security posture was never touched by any of this.
+- P-MASCOT.2 (more activities, audio-reactive bounce, polish) trails as the new .2b-equivalent.
+
 ## ADR-0252 -- P-TRAINER: the LUCID Agent as knowledge trainer - process extraction, distillation, and teach-back for business roles (SCOPE/PLAN)
 
 **Date:** 2026-08-02

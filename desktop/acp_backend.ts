@@ -38,6 +38,9 @@ import { egressAuditSink } from "./egress_audit.ts"; // P-SANDBOX.3 (ADR-0167)
 import { setSandboxState } from "./sandbox_status.ts"; // P-SANDBOX.5 (ADR-0169)
 import { caps } from "../harness/runs/profiles.ts";
 import { isAsksageRouted, recommendCheckerModel, resolveCheckerModel, resolveLockdownModel, type ModelOption } from "./checker_model.ts";
+import { resolveStartupModel } from "./startup_model.ts"; // P-MODEL.1 (ADR-0250): fresh-session picker default
+import { providerAuth, type ProviderAuth } from "./auth_status.ts";
+import { providerForModel } from "./renderer/budget_gate.ts"; // DOM-free (see its header note)
 import { parseGoalVerdict } from "./goal_verdict.ts";
 import { appendGoalIteration, appendRunLog, finishGoalMemory, type GoalMemory, readRunLog, resumeGoalMemory, saveGoalReport, savePreflightReport, startGoalMemory } from "./goal_memory.ts";
 import { extractUrls, type IterStat, type LocStat, type LoopBlock, type LoopMetrics, type LoopOutcome, normalizeToolName, parseNumstat, renderLoopReport, stallSignature, summarizeLoop } from "./loop_report.ts";
@@ -706,6 +709,9 @@ class Backend {
     // via its own timeout).
     if (!this.sessioning) {
       this.sessioning = (async () => {
+        // P-MODEL.1: capture the persisted last-used model BEFORE session/new - syncModelEnv() below stamps
+        // omp's hardcoded default into the store the moment omp reports it, which would erase the real value.
+        const remembered = lastModel();
         const s: any = await this.acp!.request("session/new", { cwd: currentWorkspace(), mcpServers: mcpServersForAcp() });
         this.sessionId = s?.sessionId ?? s?.id ?? null;
         if (Array.isArray(s?.configOptions)) this.configOptions = s.configOptions;
@@ -717,9 +723,38 @@ class Backend {
         // session init — which getConfig()/loadConfig() lean on — else the picker freezes on "updating…". The
         // prompt() clamp (before every turn) is the authoritative fail-closed guarantee; this is best-effort UI sync.
         if (this.asksageLocked()) void this.enforceAsksageLock().catch(() => ({ ok: false }));
+        // P-MODEL.1 (ADR-0250): otherwise never leave the fresh session on omp's hardcoded Opus default -
+        // open on the last-used model, else the best one the user's configured providers expose. Same
+        // fire-and-forget rationale as the lockdown above: a hung switch must not block session init.
+        else void this.applyStartupModel(remembered).catch(() => {});
       })().finally(() => { this.sessioning = null; });
     }
     await this.sessioning;
+  }
+
+  /** P-MODEL.1 (ADR-0250): apply the fresh-session model default. `remembered` is the last-used model
+   *  captured before syncModelEnv() stamped omp's default over it. Best-effort: a null resolution (nothing
+   *  configured, no options yet) leaves omp's default standing. */
+  private async applyStartupModel(remembered: string): Promise<void> {
+    const current = this.activeModel();
+    const auth = providerAuth();
+    // providerConfigured's exact test (renderer/provider_hub.ts), inlined: importing provider_hub would
+    // pull the DOM-typed bridge.ts into the server program.
+    const configured = (p: ProviderAuth) => !!(p.oauthActive || p.keySet || (p.fields ?? []).some((f) => f.set));
+    const pick = resolveStartupModel({
+      lastUsed: remembered,
+      current,
+      options: this.accessibleModels(),
+      // Gov-routed ids belong to the AskSage GATEWAY credential - providerForModel deliberately maps them
+      // to the underlying family provider (right for the budget pill, wrong here). Unknown providers
+      // (user-added local ones) count as configured: they are only listed because the user added them.
+      isConfigured: (value) => {
+        if (isAsksageRouted(value)) return auth.gateway.some(configured);
+        const prov = providerForModel(auth, value);
+        return prov ? configured(prov) : true;
+      },
+    });
+    if (pick && pick.value !== current) await this.setConfig("model", pick.value);
   }
 
   /** P-LOC.1: the omp-reported active model id (from the `model` config option), or "" if unknown. */
