@@ -16643,3 +16643,384 @@ auto-speak alone - you stop being listened to, replies are still read.
 6 unit tests pinning the restraint rules (nothing before the gap, the answer always wins, gaps provably
 escalate, hard cap, distinct + tool-flavoured lines, and every line short/markdown-free/sentence-terminated so
 the engine lands the intonation). 66 voice tests; renderer tsc clean.
+
+## ADR-0252 -- P-TRAINER: the LUCID Agent as knowledge trainer - process extraction, distillation, and teach-back for business roles (SCOPE/PLAN)
+
+**Date:** 2026-08-02
+**Status:** Accepted -- SCOPE/PLAN, roadmap only. Numbering note: ADR-0250 (P-MODEL.1) and ADR-0251
+(P-AVATAR/P-MASCOT) exist only on the unmerged `feat/lucid-agent-immersive-mascot` branch; this ADR
+deliberately starts at 0252 so both series survive the merge without a collision. Companion ADRs:
+0253 (data contract), 0254 (trust pipeline), 0255 (interview mechanics). Facts below verified against
+master as of v1.12.0 plus a read of the mascot branch and of the external TacticalGenAI repo.
+
+### The ask
+
+Make the LUCID Agent role (ADR-0251's immersive, voice-first role) more than a coding companion: a
+TRAINER and knowledge-distillation engine that interviews a human expert about a business role,
+extracts process, procedure, and edge-case knowledge in an engaging conversation, distills it into
+the knowledge graph with provenance, verifies it by teaching it back, and can then train the next
+person from what was captured. First target role family: financial management and wealth-management
+operations for boutique firms of the Questmont Virtual Family Office class (multi-adviser
+coordination, custody, money movement, billing, tax and estate choreography, compliance).
+
+### Prior art: what TacticalGenAI proves, and the inversion
+
+`mlcyclops/TacticalGenAI` (the author's certification-training app, read end to end) is a working
+trainer in the PUSH direction: a curriculum of stable objectives (`GAIL-1.1`, `PCA-2.3`, each
+`{id, domain, title, description, sourceUrl, referenceLinks}` with per-domain exam weights) is pushed
+into a human via generated briefings, scenario quizzes, and practice exams, all through STRUCTURED
+OUTPUT schemas (quiz `{question, options[4], correctAnswer, explanation, verifiedSource}`;
+free-response evaluation `{score, feedback, isGrounded, missingPoints[]}`). Progress is a
+`masteryMap Record<objectiveId, 0-100>`, exams derive `weakDomains[]` from misses, and a
+`RANK_SYSTEM` of thresholds keeps it engaging.
+
+The innovative move here is running that machinery in REVERSE, then forward again, as one flywheel:
+
+1. **EXTRACT**: the agent interviews the expert, planning questions against a coverage map (the
+   objective map inverted: how completely is each objective CAPTURED, not learned).
+2. **DISTILL**: transcripts become typed knowledge units (procedures, edge cases, exceptions,
+   checklists, escalation rules) via structured output, scanned and stored with provenance.
+3. **VERIFY**: the agent teaches the procedure BACK to the expert, who confirms, corrects, or
+   rejects; `missingPoints` becomes the next round of questions, and confirmation is the promotion
+   event (ADR-0254).
+4. **TRAIN**: quizzes and scenario drills for new staff are generated FROM confirmed units,
+   TacticalGenAI-style; trainee misses reveal under-specified knowledge and feed new extraction
+   targets back to step 1.
+
+Extraction coverage is the inverted masteryMap; teach-back is the inverted practice exam; the gap
+queue is the inverted weakDomains. One engine, both directions.
+
+### What exists today (the seams this plugs into)
+
+- **The role and the stage** (branch ADR-0251): the `lucid-agent` role, immersive layout, hands-free
+  conversation mode, keyword-strict voice approvals, the mascot state machine, and the guided-setup
+  rule "one item at a time, never a wall". The trainer is a second ACT on that stage. On master
+  without the branch, the trainer degrades to plain chat plus panels; nothing below hard-depends on
+  the mascot.
+- **Interview precedent**: `desktop/loop_preflight.ts` (P-GOAL.12, ADR-0057) is literally "scope + a
+  short prompt-engineering interview": pure, DOM-free, with an `assessReadiness` L0-L3 rubric of
+  weighted `ReadinessCheck`s and `nudge` text, and best-effort model maturation (structured answers
+  alone still produce a complete report). `desktop/renderer/gov_onboarding.ts` (P-GOVCUI.1) is the
+  pure-questionnaire pattern; `runOnboarding()` and `tour.ts` (ADR-0089) own sequential guided flows.
+  House pattern throughout: pure tested module in one file, DOM in `app.ts`.
+- **Trainer-adjacent precedent**: Trivia Wire (`desktop/renderer/trivia_roles.ts`, `trivia_bank.ts`,
+  P-TRIV.2, ADR-0175): role-keyed question banks behind an `isTriviaQuestion` validation gate, with
+  generated packs pouring through the same selection seam and falling back to static banks when
+  malformed. The trainee-quiz mode reuses this exact shape.
+- **The knowledge substrate**: compiled KB per KG (`kb_graph.duckdb`: `kb_documents`, `kb_pages`,
+  `kb_links`, `kb_page_sources`, `kb_changelog`, ADR-0099) behind a fail-closed ingest (scan the
+  source, compile, RE-SCAN every derived page, store), a `vector|compiled|hybrid` retrieve router
+  (ADR-0100), the agent-callable `knowledge_search` tool (ADR-0220), multi-KG registry
+  (`desktop/kb_store.ts`), and `.lkgpack` packs (`harness/kb/pack.ts`, `LKGPACK_FORMAT "lkgpack/1"`,
+  signature proves origin never safety) with a storefront (`kg_packs.ts`) and 11 SKUs already
+  cataloged in KG-PACKS-STATUS.md. Role packs are ALREADY the product concept (flagship:
+  `senior-proposal-manager`); this arc adds the pack flavor that can author itself from interviews.
+- **The promotion keystone**: `harness/memory/promotion_gate.ts` (P4.3, correctness keystone #2)
+  blocks `suspicious|quarantined` sources, resolves trust from artifact provenance not caller claim,
+  fails closed on unknown, and is unblocked ONLY by a recorded `approval_events` row (actions
+  `approve | quarantine_release | promotion_approve`). `promotion_approve` already exists: expert
+  confirmation maps onto it with zero new security surface (ADR-0254).
+- **Frozen contracts**: `AGENT_MODES` in `contracts.ts` is a closed set and mode does not drive
+  prompts or tools (only `security-review|replay` force the audit profile). EventName is closed and
+  raising. DuckDB schemas freeze on first write; next free global migration number is 0012.
+
+### Decisions (the load-bearing ones)
+
+1. **The trainer is NOT a new AgentMode and not a fork of anything.** `AGENT_MODES` stays untouched;
+   the trainer is a session behavior ("act") of the lucid-agent role, entered like conversation mode,
+   implemented as pure modules + panels + prompt-tail content, riding existing hooks and tools.
+   The ONLY frozen-contract change in the whole arc is the EventName additions, isolated in its own
+   increment (P-TRAINER.2) per the frozen-file rule.
+2. **Coverage maps and knowledge units are DATA, not code** (ADR-0253). A new business role is a new
+   extraction pack, zero code. The wealth-management-operations pack is the first; the pack carries
+   the coverage map, elicitation seeds, and scenario seeds, and receives the distilled units.
+3. **Extraction rides the existing trust pipeline unchanged** (ADR-0254). Everything the expert says
+   is untrusted content (invariant 5); units are born `untrusted`; teach-back confirmation records
+   the approval that lets `promoteFactGated` project confirmed knowledge into semantic memory.
+   The P4.3 gate is reused verbatim, never bypassed, never widened.
+4. **Engagement is a designed system, not a vibe** (ADR-0255): scenario probes over abstract
+   questions, one question at a time, live visible capture, L0-L3 coverage rubric driving both the
+   planner and the HUD, milestones and session recaps, mascot choreography where present.
+5. **Trainee mode is generation FROM confirmed units only.** Quizzes cite their source unit the way
+   TacticalGenAI questions carry `verifiedSource`; an unconfirmed or superseded unit can never
+   generate training content. Trainee misses append to the gap queue as extraction targets.
+6. **Compliance posture is structural for the first vertical** (detailed in ADR-0254): packs hold
+   PROCEDURES, never client identities or account data; the scanner plus a redaction pass run before
+   storage; unresolved PII quarantines the unit. A wealth-management pack must be exportable as firm
+   IP without ever being a books-and-records liability.
+
+### Increments
+
+- **P-TRAINER.1 - the interview engine core (pure).** Coverage-map types, the L0-L3 objective rubric,
+  the session planner (pick the least-covered objective, branch on the expert's answers, never
+  repeat a confirmed unit, one question at a time), and the extract-act state machine
+  (opening recap -> probe -> capture -> follow-up -> recap). Pure, DOM-free, heavily tested; in-memory
+  store only. Demo: a scripted interview transcript drives the planner through a WMO fixture map.
+- **P-TRAINER.2 - contracts + storage.** The frozen-contract increment: `trainer_*` EventNames added
+  to `contracts.ts` (ADR-0254 lists them), plus migration `0012_trainer_tables.sql` in kb_graph
+  (ADR-0253 schema). Nothing else in the same session.
+- **P-TRAINER.3 - distillation.** Transcript spans -> typed knowledge units via structured output
+  (TacticalGenAI-style response schemas), fail-closed scan of every DERIVED unit mirroring
+  `kb/ingest.ts`, provenance stamping, kb_pages projection so retrieval/viz/knowledge_search see the
+  units with zero changes.
+- **P-TRAINER.4 - teach-back verification.** The agent recites a unit as steps; confirm / correct /
+  reject per step; confirmation writes `approval_events` + `promoteFactGated`; corrections mint a
+  superseding unit; `missingPoints` enqueue follow-ups. The trainer's practice-exam inversion.
+- **P-TRAINER.5 - the extraction pack.** Pack format extension (additive `coverage_map` manifest
+  member, ADR-0253) + the authored wealth-management-operations v1 pack (ADR-0255 content outline);
+  export path proves a round trip: interview -> confirmed units -> installable signed pack.
+- **P-TRAINER.6 - trainee mode.** Quiz/scenario generation from confirmed units through the Trivia
+  Wire selection-seam pattern with static fallbacks; trainee masteryMap and weak-domain derivation;
+  misses append extraction targets. The flywheel closes here.
+- **P-TRAINER.7 - the stage act.** Voice cadence for interviews, live capture cards, the coverage
+  HUD (invariant 11: labels never wrap into slivers), mascot states (scribe while distilling,
+  victory on confirmation milestones), graceful downgrade without the mascot branch.
+- **P-TRAINER.8 - engagement instrumentation.** Milestones/ranks on coverage thresholds, session
+  summaries ("2 procedures, 5 edge cases, 3 confirmations today"), streaks, the extraction
+  dashboard, telemetry review of drop-off points.
+
+### Risks / non-goals
+
+- **Expert fatigue is the product risk.** A 200-question checklist kills the whole idea; the planner
+  MUST cap sessions (20-30 minutes), lead with scenarios, and always close with visible progress.
+- **Garbage-in**: an expert can be wrong. Teach-back plus provenance means a wrong confirmed unit is
+  traceable and supersedable, never silently authoritative; trainee mode always cites its source.
+- **Regulated domain**: the first vertical touches SEC/FINRA-adjacent process. We capture HOW THE
+  FIRM WORKS, never advice, never client data; the ADR-0254 redaction posture is not optional.
+- **Non-goals v1**: multi-expert reconciliation, org charts, auto-ingesting the firm's document
+  store into the pack (existing KB ingest already covers documents separately), any new trust label,
+  any change to AGENT_MODES, phoneme-level interview VAD tuning.
+
+### Order + estimate
+
+.1 -> .2 -> .3 -> .4 are sequential (each leans on the prior); .5 needs .2 only for schema, .6 needs
+.4 (confirmed units exist), .7/.8 can interleave after .3. Eight increments, each one session, per
+the CLAUDE.md ritual.
+
+## ADR-0253 -- P-TRAINER data contract: coverage maps, knowledge units, and the extraction pack (SCOPE/PLAN)
+
+**Date:** 2026-08-02
+**Status:** Accepted -- SCOPE/PLAN, roadmap only. Companion to ADR-0252. Schema lands as migration
+`0012_trainer_tables.sql` (0012 is the next free global number; the memory/0011 vs kb/0011 collision
+is prior art we do not repeat) in increment P-TRAINER.2.
+
+### Problem
+
+The compiled KB stores PAGES about documents. An interview produces something more structured: an
+ordered procedure with roles and systems, an edge case with a trigger and a resolution, a checklist,
+an escalation rule. Flattening those to prose pages loses exactly the structure that teach-back and
+trainee-quiz generation need. And the coverage map (what a role contains, how completely each part
+is captured) has no home at all.
+
+### Decision
+
+**New tables live in `kb_graph.duckdb`** (per-KG, so a firm's extraction stays inside its KG and
+rides the existing registry, backup, and pack machinery), added by numbered migration, invariant 10:
+
+- `coverage_objectives`: `objective_id` TEXT PK (stable, pack-authored, e.g. `wmo-2.1`), `pack_id`,
+  `domain`, `title`, `description`, `weight` (the TacticalGenAI exam-weight idea repurposed as
+  extraction priority), `elicitation` JSON (seed questions, scenario seeds, follow-up patterns),
+  `created_at`.
+- `knowledge_units`: `unit_id` TEXT PK (minted once, invariant 9), `objective_id` FK, `kind` CHECK
+  IN (`procedure`, `edge_case`, `exception`, `checklist`, `glossary`, `escalation`), `title`,
+  `body_md`, `structure` JSON (ordered steps with actor/system/timing for procedures; trigger/
+  deviation/resolution for edge cases), `trust_label` (invariant 7 closed set, NO new labels),
+  `completeness` 0-100 (an ordinary column, never a trust signal), `source_session_id`,
+  `source_artifact_id`, `confirmed_at` NULL, `confirmed_by`, `superseded_by` NULL FK.
+- `extraction_sessions`: `session_id`, `pack_id`, `expert_label` (a display handle, deliberately not
+  an identity record), `started_at`, `ended_at`, `stats` JSON.
+- `teachback_results`: `teachback_id`, `unit_id`, `verdict` CHECK IN (`confirmed`, `corrected`,
+  `rejected`), `notes`, `approval_event_id` (the ADR-0254 link into the promotion gate).
+
+**Knowledge is append-only.** A correction never edits a unit; it mints a successor and sets
+`superseded_by` on the old one (the kb_changelog philosophy applied to units). Coverage per
+objective is DERIVED (from unit kinds present, completeness, confirmations), never hand-stored, so
+the rubric can evolve without a migration.
+
+**Confirmed units project into the existing graph.** Each confirmed unit compiles to a `kb_pages`
+row (existing kind `concept`, existing closed set untouched) with wikilinks and a `kb_page_sources`
+citation back to the unit's artifact, THROUGH the existing fail-closed ingest path. Retrieval, the
+KG visualizer, and the `knowledge_search` tool therefore work on trainer knowledge with zero
+changes; the trainer tables stay the structured source of truth.
+
+**The extraction pack is an additive evolution of lkgpack/1.** The manifest gains an OPTIONAL
+`coverage_map` member (objectives + elicitation seeds); `verifyPack` validates it when present and
+ignores its absence, format tag unchanged, old importers unaffected. The pack trust rule stands
+verbatim: signature proves origin, never safety; imported packs stay read-only and `untrusted`; the
+scanner remains the safety gate. An exported pack contains coverage objectives and CONFIRMED units
+only (draft and rejected units never leave the firm's KG).
+
+### Alternatives rejected
+
+- **Units as kb_pages with a new `kind`.** Touches the frozen kb_pages CHECK constraint for a shape
+  it cannot actually hold (ordered steps, verdicts); the projection gives graph visibility without
+  bending the page contract.
+- **A fifth DuckDB file.** Nothing here contends with kb writes the way vectors did (ADR-0053);
+  per-KG locality matters more than isolation, and packs already ship `kb_graph.duckdb`.
+- **Editing units in place on correction.** Destroys the provenance chain that makes an
+  expert-sourced KB auditable; supersession is the whole point in a regulated vertical.
+- **Storing coverage scores.** A stored score goes stale the moment the rubric improves; deriving it
+  keeps the rubric a pure function (and testable, loop_preflight-style).
+
+### Verification (planned)
+
+Migration applies on a fresh and an existing KG; unit round-trip property tests (mint, supersede,
+derive coverage); pack round trip (export -> verify -> import elsewhere -> retrieval finds the
+projected pages); a fixture WMO map drives derivation tests.
+
+## ADR-0254 -- P-TRAINER trust pipeline: extracted knowledge is untrusted until taught back (SCOPE/PLAN)
+
+**Date:** 2026-08-02
+**Status:** Accepted -- SCOPE/PLAN, roadmap only. Companion to ADR-0252/0253. The security posture
+of the trainer arc; adds NO new security surface, reuses keystone #2 verbatim.
+
+### Problem
+
+An interview is a firehose of human-typed and human-spoken content: the exact class of input the
+architecture already refuses to trust (invariant 5). Naively, a trainer is a machine for laundering
+untrusted prose into durable semantic memory, which is precisely the cross-session poisoning that
+the P4.3 promotion gate exists to prevent. The trainer must make extraction FLOW THROUGH the gate,
+not around it. Separately, the first vertical (wealth-management operations) is regulated: a pack
+that absorbs client names, account numbers, or balances becomes a books-and-records liability the
+moment it is exported.
+
+### Decision
+
+1. **Capture is untrusted by construction.** Expert turns enter prompts only inside the untrusted
+   delimiters, after scanning, after the cache breakpoint (invariant 5, unchanged). Distilled units
+   are DERIVED content and are re-scanned before storage, mirroring the `kb/ingest.ts` rule (scan
+   the source, then re-scan everything the model derived from it). Units are born
+   `trust_label = untrusted`.
+2. **Fail-closed stands mid-interview** (invariant 3). Sidecar dead, malformed scan, timeout: no
+   unit is minted, the capture card says so, and the planner parks the objective. The conversation
+   may continue; storage may not. No transcript span reaches a unit without a valid scan result.
+3. **Teach-back confirmation IS the approval.** A `confirmed` verdict in `teachback_results` records
+   an `approval_events` row with the EXISTING action `promotion_approve`, then calls
+   `promoteFactGated` to project the unit's entity/fact statements into `semantic_entities` /
+   `semantic_facts` with `source_artifact_id` provenance. The gate still resolves trust from
+   artifact provenance, still blocks on unknown, still emits `memory_promotion_blocked`. Nothing
+   about `promotion_gate.ts` changes; the trainer is just its first systematic supplier of
+   legitimate approvals.
+4. **Suspicious is never one-click.** Confirmation approvals apply to `untrusted` units only. A unit
+   whose source scan found injection signals is `suspicious|quarantined` and the trainer UI offers
+   NO release; the standard quarantine-release flow (its own approval action, existing) is the only
+   path, deliberately outside the interview's engagement loop. An enthusiastic expert clicking
+   "confirm" must never be the mechanism that frees a poisoned span.
+5. **PII posture: procedures, never people.** The interview prompt instructs role-shaped answers
+   ("what does the firm do", not "what did Mrs. X do"); the distiller normalizes actors to roles
+   (adviser, client, custodian, CPA) and strips names, account numbers, dollar-specifics into
+   placeholders; scanner findings for residual PII quarantine the unit (fail-closed, not a warning).
+   Exported packs contain confirmed units only (ADR-0253), so nothing quarantined can ever ship.
+6. **New EventNames** (the P-TRAINER.2 frozen-contract increment, invariant 8; every event carries
+   `run_id`/`session_id`/`artifact_id`): `trainer_session_started`, `trainer_question_asked`,
+   `trainer_unit_captured`, `trainer_teachback_run`, `trainer_unit_confirmed`,
+   `trainer_unit_rejected`, `trainer_pack_exported`. Blocked promotions keep emitting the existing
+   `memory_promotion_blocked`.
+
+### Alternatives rejected
+
+- **A `trainer` trust label** (e.g. `expert-confirmed`). Invariant 7 is a closed set for a reason;
+  confirmation state lives in `confirmed_at`/`teachback_results`, and PROMOTION state lives where it
+  always has, in the gate's own records.
+- **Auto-promoting on capture because "the expert said it live".** Exactly the laundering scenario
+  keystone #2 exists to stop; also wrong on the merits, experts misspeak, and teach-back catches it.
+- **Trusting the voice channel more than typed text.** STT output is still untrusted input; the
+  voice-approval grammar lesson from ADR-0251 (allowlist-exact, silence never approves) applies to
+  confirmation verdicts spoken aloud.
+- **Redaction as a post-export scrub.** By then the data has lived in the KG, been embedded, and
+  leaked into retrieval; redact before storage or not at all.
+
+### Verification (planned)
+
+The keystone tests stay green untouched. New: a poisoned-transcript fixture must land quarantined
+and unpromotable through the trainer path (gate blocks, event emitted); a sidecar-kill mid-interview
+test asserts zero units minted; a PII fixture (names, account numbers) must quarantine; a
+confirmed-unit promotion asserts the approval row, the gate outcome, and the semantic_facts
+provenance chain end to end.
+
+## ADR-0255 -- P-TRAINER interview mechanics: engagement as a designed system, and the wealth-management-operations pack (SCOPE/PLAN)
+
+**Date:** 2026-08-02
+**Status:** Accepted -- SCOPE/PLAN, roadmap only. Companion to ADR-0252/0253/0254. The conversation
+design and the v1 pack outline; mechanics distilled from TacticalGenAI, adapted from push
+(training a human) to pull (extracting from one).
+
+### Problem
+
+Experts do not fail interviews for lack of knowledge; they fail them for boredom, vagueness, and
+the wall-of-questions effect. TacticalGenAI keeps learners engaged with scenario stakes, visible
+progress, and ranks; a knowledge EXTRACTOR needs the same psychology pointed the other way, and it
+needs question craft that surfaces tacit knowledge (the Friday-4pm exceptions nobody writes down),
+not the official version of the process.
+
+### Decision
+
+1. **Scenario probes are the primary instrument.** Direct questions get the documented process;
+   concrete scenarios get the real one. The planner leads each objective with a generated situation
+   ("A client calls Friday at 4pm needing a $2M wire before a holiday weekend and the custodian
+   cutoff has passed. Walk me through exactly what happens.") and only then fills structural gaps
+   with direct questions. Every captured procedure ends with the standing probe "what goes wrong
+   here, and what do you do when it does" so edge cases are pursued, not incidental. Scenario seeds
+   ship in the pack's `elicitation` JSON; generation personalizes them, TacticalGenAI-style
+   structured output keeps them typed.
+2. **The L0-L3 coverage rubric** (the `assessReadiness` pattern from loop_preflight, reused as a
+   pure function over ADR-0253 data): L0 unexplored -> L1 outline captured -> L2 procedure stepped ->
+   L3 edge cases captured AND confirmed. Weighted by objective `weight`, it drives the planner's
+   next-question choice, the HUD, and the milestone system. `missingPoints` from teach-back
+   evaluations demote and re-queue, the weakDomains inversion.
+3. **Conversation cadence rules** (all testable as pure planner properties): one question at a time
+   (ADR-0251's checklist rule, promoted to the interview); follow the expert's energy (a story in
+   the answer spawns follow-ups before the planner returns to the map); five-whys on any mentioned
+   deviation; sessions capped at 20-30 minutes with an opening recap ("last time we mapped quarterly
+   billing; two edge cases still open") and a closing summary of what was captured. Voice-first
+   where the role provides it: questions short enough to speak, capture shown on screen.
+4. **Live visible capture builds trust.** While the expert talks, the capture card shows the unit
+   being structured (steps appearing, placeholders where names were redacted). The expert watches
+   the machine understand them, the single strongest engagement lever an extractor has, and
+   pre-verifies informally before teach-back makes it formal. Cards and HUD obey invariant 11: a
+   label owns its line and ellipsizes; no prose in flex rows.
+5. **Milestones, not points.** RANK_SYSTEM inverted: thresholds on confirmed coverage ("first
+   domain at L3", "ten edge cases confirmed", "pack export ready") with mascot victory beats where
+   the stage exists. No leaderboards, no scores on the expert themselves; the FIRM's knowledge
+   levels up, which reads as respect rather than gamification of a professional.
+6. **The wealth-management-operations pack v1** (`wmo`, authored in P-TRAINER.5), coverage domains
+   drawn from the boutique virtual-family-office shape (Questmont-class: coordinated investment,
+   tax, estate, insurance, and business-adviser work over an RIA affiliation):
+   - `wmo-1` client lifecycle: prospect intake, discovery, onboarding paperwork, custodial account
+     opening, ACAT transfers, funding, review cadence, offboarding and death-of-client.
+   - `wmo-2` money movement: wires/ACH/journals, standing instructions, verification callbacks,
+     fraud red flags, cutoffs and holiday handling.
+   - `wmo-3` investment operations: rebalancing, trade errors, corporate actions, cash management.
+   - `wmo-4` billing and fees: fee schedules, quarterly runs, prorations, refunds, disclosures.
+   - `wmo-5` tax coordination: gain/loss reporting, harvesting windows, CPA handoffs, K-1 season,
+     estimated-payment choreography.
+   - `wmo-6` estate, trust, and insurance coordination: attorney handoffs, beneficiary updates,
+     trust funding, policy reviews, business-sale and exit-planning support.
+   - `wmo-7` compliance and regulatory: which entity signs what (brand LLC vs the registered
+     adviser), ADV updates, fiduciary documentation, books and records, marketing review,
+     complaint handling.
+   - `wmo-8` the adviser network: custodian relationships, RIA/TAMP affiliations, outside
+     professional coordination, and due-diligence checklists (the entity/custody/fee/fiduciary
+     question set ships as a seed `checklist` unit, the one unit kind a pack may pre-fill).
+   Unit kinds per ADR-0253; every domain's elicitation seeds include at least one scenario probe
+   and one edge-case probe. The pack captures firm process, never advice and never client data
+   (ADR-0254 posture).
+
+### Alternatives rejected
+
+- **A fixed questionnaire per role.** The gov_onboarding pattern is right for four questions, fatal
+  for four hundred; a planner over a coverage map is what makes long extraction survivable.
+- **Free-form "tell me about your job" chat.** Engaging for one session, unmeasurable forever; no
+  coverage derivation, no teach-back targets, no pack.
+- **Scoring the expert.** The fastest way to lose a professional's goodwill; coverage belongs to
+  the knowledge base, not the person.
+- **Shipping pre-written WMO procedures in the pack.** Then it is a content SKU, not an extractor,
+  and every boutique firm's actual process differs; seeds are questions (plus one due-diligence
+  checklist), units come from the interview.
+
+### Verification (planned)
+
+Planner property tests (one-question invariant, energy-following branch, five-whys trigger, session
+cap, no repeat of confirmed units); rubric derivation fixtures; a full scripted WMO interview
+fixture driving extract -> distill -> teach-back -> quiz-generation round trip in demo form; HUD
+snapshot obeys invariant 11.
