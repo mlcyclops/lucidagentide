@@ -183,6 +183,26 @@ body::before{ /* faint grid */
 @keyframes shake{0%,100%{transform:translateX(0)}20%{transform:translateX(-7px)}40%{transform:translateX(6px)}60%{transform:translateX(-4px)}80%{transform:translateX(3px)}}
 @keyframes pop{0%{transform:scale(.6);opacity:0}70%{transform:scale(1.12)}100%{transform:scale(1);opacity:1}}
 canvas#fx{position:fixed;inset:0;pointer-events:none;z-index:60}
+/* role setup + chip (P-TRAINER.8) */
+.role-chip{-webkit-app-region:no-drag;display:inline-flex;align-items:center;gap:7px;background:linear-gradient(180deg,var(--bg-2),var(--bg-1));border:1px solid var(--line);border-radius:999px;padding:6px 12px;color:var(--txt-2);font:600 12.5px var(--font);cursor:pointer;white-space:nowrap;transition:border-color var(--t),color var(--t)}
+.role-chip:hover{border-color:var(--accent);color:var(--txt)}
+.role-chip #roleName{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:180px}
+.role-scrim{position:fixed;inset:0;z-index:80;background:rgba(5,6,10,.62);backdrop-filter:blur(3px);display:flex;align-items:center;justify-content:center;padding:24px;animation:cardIn .2s var(--ease) both}
+.role-scrim[hidden]{display:none}
+.role-modal{width:min(560px,94vw);max-height:90vh;overflow-y:auto;background:linear-gradient(180deg,rgba(21,24,35,.99),rgba(11,12,17,.99));border:1px solid var(--line-strong);border-radius:var(--r-lg);box-shadow:var(--shadow);padding:22px}
+.role-modal-h{display:flex;align-items:center;gap:12px;margin-bottom:6px}
+.role-modal-h .rico{width:36px;height:36px;flex:none;color:var(--accent-2)}
+.role-modal-h b{font-size:17px;display:block}
+.role-modal-h small{font-size:12px;color:var(--txt-3)}
+.role-lbl{display:block;font-size:11px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--txt-3);margin:14px 2px 7px}
+.role-lbl span{font-weight:500;letter-spacing:.02em;text-transform:none;color:var(--txt-4);margin-left:6px}
+.role-in,.role-ta{width:100%;background:var(--bg-0);border:1px solid var(--line);border-radius:var(--r-md);color:var(--txt);font:14px var(--font);padding:11px 13px;transition:border-color var(--t),box-shadow var(--t)}
+.role-in:focus,.role-ta:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-dim)}
+.role-ta{resize:vertical;min-height:76px;line-height:1.5}
+.role-file{display:flex;align-items:center;gap:9px;margin-top:9px;font-size:12px;color:var(--txt-3)}
+.role-err{margin-top:12px;color:var(--red);font-size:12.5px;background:var(--red-dim);border:1px solid rgba(239,95,95,.3);border-radius:8px;padding:9px 12px}
+.role-err[hidden]{display:none}
+.role-actions{display:flex;gap:10px;margin-top:18px}
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition-duration:.01ms!important}}
 </style>
 </head>
@@ -192,8 +212,9 @@ canvas#fx{position:fixed;inset:0;pointer-events:none;z-index:60}
   <div class="topbar">
     <div class="brand">
       <svg class="logo" viewBox="0 0 48 48" fill="none"><defs><linearGradient id="lg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#e07bf0"/><stop offset="1" stop-color="#46c8dc"/></linearGradient></defs><rect x="5" y="5" width="38" height="38" rx="11" fill="url(#lg)" opacity="."/><rect x="5" y="5" width="38" height="38" rx="11" stroke="url(#lg)" stroke-width="2.4"/><path d="M17 15v13a5 5 0 0 0 5 5h9" stroke="url(#lg)" stroke-width="3.4" stroke-linecap="round"/></svg>
-      <h1>Lucid Trainer<span class="sub">Knowledge extraction · WMO pack</span></h1>
+      <h1>Lucid Trainer<span class="sub" id="brandSub">Knowledge extraction</span></h1>
     </div>
+    <button class="role-chip" id="roleChip" data-tip="Switch role"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:15px;height:15px;flex:none"><path d="M16 7a4 4 0 1 1-8 0 4 4 0 0 1 8 0zM4 21v-1a6 6 0 0 1 12 0v1"/></svg><span id="roleName">Wealth-Management Ops</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" style="width:12px;height:12px;flex:none;opacity:.7"><path d="M6 9l6 6 6-6"/></svg></button>
     <div class="spacer"></div>
     <div class="streak" id="streakPod" title="Answer streak"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M13 2 4 14h6l-1 8 9-12h-6z"/></svg><span id="streakN">0</span></div>
     <div class="xp-pod">
@@ -239,6 +260,26 @@ canvas#fx{position:fixed;inset:0;pointer-events:none;z-index:60}
       <div class="domains" id="domains"></div>
       <div class="gap-next"><span class="k">Next gap</span><span class="v" id="gapNext">—</span></div>
     </div>
+  </div>
+</div>
+
+<!-- role setup (any role, from tasks and/or a Position Description) -->
+<div class="role-scrim" id="roleScrim" hidden>
+  <div class="role-modal" role="dialog" aria-modal="true" aria-label="Train a new role">
+    <div class="role-modal-h">
+      <svg class="rico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3l8 4-8 4-8-4 8-4zM4 11l8 4 8-4M4 15l8 4 8-4"/></svg>
+      <div style="flex:1;min-width:0"><b>Train any role</b><small>Generate a coverage map + drills for a role - just describe it.</small></div>
+      <button class="iconbtn" id="roleClose" aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+    </div>
+    <label class="role-lbl">Role name</label>
+    <input id="roleNameIn" class="role-in" placeholder="e.g. ER Charge Nurse, Loan Officer, SRE, Claims Adjuster" spellcheck="false" autocomplete="off" />
+    <label class="role-lbl">Key tasks / duties <span>one per line</span></label>
+    <textarea id="roleTasksIn" class="role-ta" placeholder="Triage incoming patients by acuity&#10;Coordinate bed assignments with the floor&#10;Escalate critical labs to the attending"></textarea>
+    <label class="role-lbl">...or paste a Position Description <span>we'll pull the duties</span></label>
+    <textarea id="rolePdIn" class="role-ta" placeholder="Paste the PD text - bulleted duties work best..."></textarea>
+    <div class="role-file"><input type="file" id="rolePdFile" accept=".txt,.md,.markdown,text/plain" /><span>or upload a .txt / .md</span></div>
+    <div class="role-err" id="roleErr" hidden></div>
+    <div class="role-actions"><button class="btn btn-primary" id="roleBuild"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M5 13l4 4L19 7"/></svg>Build my trainer</button><button class="btn btn-ghost" id="roleCancel">Cancel</button></div>
   </div>
 </div>
 
@@ -322,16 +363,17 @@ let xp=0, streak=0, qi=0, drillsUnlocked=false;
 const LTOKEN=document.querySelector('meta[name="lucid-token"]')?.content||"";
 const PALETTE=["#e07bf0","#46c8dc","#5e8df2","#46d27e","#e8b23c","#c64bd6","#7ce0ef","#ef5f5f"];
 const QKIND={scenario:"scenario",direct:"direct",edge_probe:"edge",followup:"direct"};
-let LIVE=false, apiCoverage=null, liveQ=null, gamesLoaded=false;
+let LIVE=false, apiCoverage=null, liveQ=null, gamesLoaded=false, GAMES_DATA=null, ROLE="";
+const esc=(s)=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 async function api(path,opts={}){ const h={"x-lucid-token":LTOKEN}; if(opts.body)h["content-type"]="application/json"; const r=await fetch(path,{...opts,headers:h}); const j=await r.json(); if(!r.ok||!j.ok)throw new Error("api "+r.status); return j.data; }
-function applyState(st){ LIVE=true; apiCoverage=st.coverage; DOMAINS.length=0; (st.domains||[]).forEach((d,i)=>DOMAINS.push({id:d.domain,color:PALETTE[i%PALETTE.length],cov:d.score})); liveQ=st.question?{kind:QKIND[st.question.kind]||"scenario",dom:st.question.domain,text:st.question.text}:liveQ; }
+function applyState(st){ LIVE=true; apiCoverage=st.coverage; DOMAINS.length=0; (st.domains||[]).forEach((d,i)=>DOMAINS.push({id:d.domain,color:PALETTE[i%PALETTE.length],cov:d.score})); liveQ=st.question?{kind:QKIND[st.question.kind]||"scenario",dom:st.question.domain,text:st.question.text}:liveQ; if(st.role){ ROLE=st.role.label; const rn=$("#roleName"); if(rn) rn.textContent=st.role.label; } }
 async function loadGames(){ if(!LIVE||gamesLoaded)return; try{ const {games}=await api("/api/trainer/games"); for(const g of games){
   if(g.id==="seq"&&Array.isArray(g.steps)&&g.steps.length){ DUE_DILIGENCE.length=0; DUE_DILIGENCE.push(...g.steps); }
   else if(g.id==="next"){ NEXTSTEP.prompt=g.prompt; NEXTSTEP.correct=g.correct; NEXTSTEP.decoys=g.decoys; NEXTSTEP.source=g.source; }
   else if(g.id==="exc"){ EXCEPTIONS.prompt=g.prompt; EXCEPTIONS.correct=g.correct; EXCEPTIONS.decoys=g.decoys; EXCEPTIONS.source=g.source; }
   else if(g.id==="why"&&g.chain){ FIVEWHYS.root=g.root; FIVEWHYS.chain=g.chain; FIVEWHYS.fix=g.fix; }
- } gamesLoaded=true; }catch(e){} }
-async function boot(){ try{ applyState(await api("/api/trainer")); }catch(e){ LIVE=false; } renderQuestion(); renderHUD(); addXP(0); }
+ } GAMES_DATA=games; const pip=$("#drillPip"); if(pip) pip.textContent=String(games.length); gamesLoaded=true; }catch(e){} }
+async function boot(){ try{ const st=await api("/api/trainer"); applyState(st); if(st.needsSetup) setTimeout(openRoleSetup,300); }catch(e){ LIVE=false; } renderQuestion(); renderHUD(); addXP(0); }
 const $=(s,r=document)=>r.querySelector(s), $$=(s,r=document)=>[...r.querySelectorAll(s)];
 const clamp=(n,a,b)=>Math.max(a,Math.min(b,n));
 
@@ -345,7 +387,7 @@ function renderHUD(){
   const box=$("#domains"); box.innerHTML="";
   for(const d of DOMAINS){
     const row=document.createElement("div"); row.className="dom-row";
-    row.innerHTML=`<span class="name" title="${d.id}">${d.id}</span><span class="lvl">${lvlLabel(d.cov)} · ${d.cov}%</span><div class="track"><div class="fill" style="width:${d.cov}%;background:${d.color};color:${d.color}"></div></div>`;
+    row.innerHTML=`<span class="name" title="${esc(d.id)}">${esc(d.id)}</span><span class="lvl">${lvlLabel(d.cov)} \u00b7 ${d.cov}%</span><div class="track"><div class="fill" style="width:${d.cov}%;background:${d.color};color:${d.color}"></div></div>`;
     box.appendChild(row);
   }
   const gap=[...DOMAINS].sort((a,b)=>a.cov-b.cov)[0];
@@ -429,9 +471,12 @@ function renderApproval(){
 }
 async function renderMenu(){
   await loadGames();
-  $("#flyoutSub").textContent=LIVE?"Mini-games built from your captured units":"Mini-games built from what you've captured";
-  let h=`<div class="lesson-tag"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19V5a2 2 0 0 1 2-2h9l5 5v11a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/></svg>Based on your captured WMO lessons</div>`;
-  for(const g of GAMES) h+=`<button class="game-card" data-g="${g.id}"><span class="ico" style="background:${g.grad}">${g.ico}</span><span class="meta"><b>${g.name}</b><small>${g.desc}</small></span><span class="go"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M9 6l6 6-6 6"/></svg></span></button>`;
+  $("#flyoutSub").textContent="Mini-games built from your captured lessons";
+  const ids=(LIVE&&GAMES_DATA)?GAMES_DATA.map(g=>g.id):GAMES.map(g=>g.id);
+  const avail=GAMES.filter(g=>ids.includes(g.id));
+  if(!avail.length){ $("#flyBody").innerHTML=`<div class="approve"><svg class="mascot" viewBox="0 0 24 24" fill="none" stroke="#e07bf0" stroke-width="1.5" style="width:62px;height:62px"><rect x="4" y="4" width="16" height="16" rx="4"/><path d="M8 10h8M8 14h5"/></svg><h3>No drills yet</h3><p>Answer a few interview questions to capture lessons for <b>${esc(ROLE||"this role")}</b>. Drills unlock as your coverage map fills.</p><div class="row"><button class="btn btn-ghost" id="drillsBack">Back to the interview</button></div></div>`; const b=$("#drillsBack"); if(b) b.onclick=closeFly; return; }
+  let h=`<div class="lesson-tag"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19V5a2 2 0 0 1 2-2h9l5 5v11a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/></svg>Based on your captured lessons</div>`;
+  for(const g of avail) h+=`<button class="game-card" data-g="${g.id}"><span class="ico" style="background:${g.grad}">${g.ico}</span><span class="meta"><b>${g.name}</b><small>${g.desc}</small></span><span class="go"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M9 6l6 6-6 6"/></svg></span></button>`;
   $("#flyBody").innerHTML=h;
   $$(".game-card").forEach(c=>c.onclick=()=>playGame(c.dataset.g));
 }
@@ -444,10 +489,10 @@ function playGame(id){ ({seq:gameSeq,next:gameChoice.bind(null,NEXTSTEP,"Next St
 function gameChoice(data,title){
   const opts=[data.correct,...data.decoys].map((t,i)=>({t,ok:i===0}));
   for(let i=opts.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[opts[i],opts[j]]=[opts[j],opts[i]];}
-  let h=`<div class="game-view"><h3>${title}</h3><div class="lesson-tag"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2 4 7v5c0 5 3.5 8 8 10 4.5-2 8-5 8-10V7z"/></svg>${data.source}</div><div class="prompt">${data.prompt}</div><div id="opts"></div></div>`+backBar();
+  let h=`<div class="game-view"><h3>${title}</h3><div class="lesson-tag"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2 4 7v5c0 5 3.5 8 8 10 4.5-2 8-5 8-10V7z"/></svg>${esc(data.source)}</div><div class="prompt">${esc(data.prompt)}</div><div id="opts"></div></div>`+backBar();
   $("#flyBody").innerHTML=h; wireBack();
   const box=$("#opts"); const keys="ABCD";
-  opts.forEach((o,i)=>{ const b=document.createElement("button"); b.className="opt"; b.innerHTML=`<span class="key">${keys[i]}</span><span>${o.t}</span>`;
+  opts.forEach((o,i)=>{ const b=document.createElement("button"); b.className="opt"; b.innerHTML=`<span class="key">${keys[i]}</span><span>${esc(o.t)}</span>`;
     b.onclick=()=>{ if(box.classList.contains("done"))return; box.classList.add("done");
       $$(".opt",box).forEach(x=>x.classList.add("locked"));
       if(o.ok){ b.classList.add("correct"); addXP(20); bumpStreak(true); confetti(20,true); setTimeout(()=>finishGame(title,true),700);}
@@ -457,11 +502,11 @@ function gameChoice(data,title){
 // sequence game (drag to order)
 function gameSeq(){
   const correct=DUE_DILIGENCE; const shuf=[...correct]; for(let i=shuf.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[shuf[i],shuf[j]]=[shuf[j],shuf[i]];}
-  let h=`<div class="game-view"><h3>Sequence the Steps</h3><div class="lesson-tag"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6 9 17l-5-5"/></svg>Compliance · due-diligence checklist (confirmed unit)</div><div class="prompt">Drag the steps into the order a firm should work them.</div><ul class="seq-list" id="seq"></ul><button class="btn btn-cyan" id="seqCheck" style="width:100%;justify-content:center;margin-top:4px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M5 13l4 4L19 7"/></svg>Check order</button></div>`+backBar();
+  let h=`<div class="game-view"><h3>Sequence the Steps</h3><div class="lesson-tag"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6 9 17l-5-5"/></svg>A captured procedure - put the steps in order</div><div class="prompt">Drag the steps into the order a firm should work them.</div><ul class="seq-list" id="seq"></ul><button class="btn btn-cyan" id="seqCheck" style="width:100%;justify-content:center;margin-top:4px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M5 13l4 4L19 7"/></svg>Check order</button></div>`+backBar();
   $("#flyBody").innerHTML=h; wireBack();
   const ul=$("#seq"); let dragEl=null;
   shuf.forEach(t=>{ const li=document.createElement("li"); li.className="seq-item"; li.draggable=true; li.dataset.t=t;
-    li.innerHTML=`<span class="grip"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 5h.01M9 12h.01M9 19h.01M15 5h.01M15 12h.01M15 19h.01"/></svg></span><span class="n"></span><span class="lbl">${t}</span>`;
+    li.innerHTML=`<span class="grip"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 5h.01M9 12h.01M9 19h.01M15 5h.01M15 12h.01M15 19h.01"/></svg></span><span class="n"></span><span class="lbl">${esc(t)}</span>`;
     li.addEventListener("dragstart",()=>{dragEl=li;li.classList.add("dragging");});
     li.addEventListener("dragend",()=>{dragEl=null;li.classList.remove("dragging");$$(".seq-item",ul).forEach(x=>x.classList.remove("over"));renumber();});
     li.addEventListener("dragover",e=>{e.preventDefault(); const a=[...ul.children]; const after=a.find(el=>el!==dragEl && e.clientY<=el.getBoundingClientRect().top+el.offsetHeight/2); $$(".seq-item",ul).forEach(x=>x.classList.remove("over")); if(after){after.classList.add("over"); ul.insertBefore(dragEl,after);} else ul.appendChild(dragEl);});
@@ -482,10 +527,10 @@ function gameWhy(){
     const node=FIVEWHYS.chain[step];
     const opts=[node.correct,...node.decoys].map((t,i)=>({t,ok:i===0}));
     for(let i=opts.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[opts[i],opts[j]]=[opts[j],opts[i]];}
-    let h=`<div class="game-view"><h3>Five Whys <span style="color:var(--txt-4);font-weight:500">· ${step+1}/${FIVEWHYS.chain.length}</span></h3><div class="lesson-tag"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v6M12 22v-6"/><circle cx="12" cy="12" r="3"/></svg>Money movement · deviation drill</div><div class="prompt"><b style="color:var(--amber)">${root}</b><br/><span style="color:var(--txt-2)">${node.q}</span></div><div id="opts"></div></div>`+backBar();
+    let h=`<div class="game-view"><h3>Five Whys <span style="color:var(--txt-4);font-weight:500">· ${step+1}/${FIVEWHYS.chain.length}</span></h3><div class="lesson-tag"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v6M12 22v-6"/><circle cx="12" cy="12" r="3"/></svg>Money movement · deviation drill</div><div class="prompt"><b style="color:var(--amber)">${esc(root)}</b><br/><span style="color:var(--txt-2)">${esc(node.q)}</span></div><div id="opts"></div></div>`+backBar();
     $("#flyBody").innerHTML=h; wireBack();
     const box=$("#opts"), keys="ABC";
-    opts.forEach((o,i)=>{ const b=document.createElement("button"); b.className="opt"; b.innerHTML=`<span class="key">${keys[i]}</span><span>${o.t}</span>`;
+    opts.forEach((o,i)=>{ const b=document.createElement("button"); b.className="opt"; b.innerHTML=`<span class="key">${keys[i]}</span><span>${esc(o.t)}</span>`;
       b.onclick=()=>{ if(box.classList.contains("done"))return; box.classList.add("done"); $$(".opt",box).forEach(x=>x.classList.add("locked"));
         if(o.ok){ b.classList.add("correct"); addXP(15); bumpStreak(true); confetti(16); root=o.t+" \u2014 why?"; step++; setTimeout(render,750); }
         else{ b.classList.add("wrong"); $$(".opt",box).find(x=>x.textContent.includes(node.correct))?.classList.add("correct"); bumpStreak(false); setTimeout(render,900); } };
@@ -499,6 +544,33 @@ function finishGame(title,win,detail,fix){
   if(win) confetti(24,true);
   $("#again").onclick=renderMenu;
 }
+
+// ---------- role setup (any role, from tasks and/or a Position Description) ----------
+function openRoleSetup(){ const sc=$("#roleScrim"); if(sc){ sc.hidden=false; const n=$("#roleNameIn"); if(n) n.focus(); } }
+function closeRoleSetup(){ const sc=$("#roleScrim"); if(sc) sc.hidden=true; }
+function roleErr(m){ const e=$("#roleErr"); if(e){ e.textContent=m||""; e.hidden=!m; } }
+async function buildRole(){
+  const role=($("#roleNameIn").value||"").trim();
+  const tasks=($("#roleTasksIn").value||"").split("\n").map(s=>s.trim()).filter(Boolean);
+  const pdText=($("#rolePdIn").value||"").trim();
+  if(!role) return roleErr("Give the role a name.");
+  if(!tasks.length && !pdText) return roleErr("Add a few tasks, or paste a Position Description.");
+  if(!LIVE) return roleErr("Building a role needs the LUCID app (the trainer service) \u2014 this standalone preview can't save one.");
+  roleErr("");
+  const btn=$("#roleBuild"); const orig=btn.innerHTML; btn.disabled=true; btn.textContent="Building\u2026";
+  try{
+    const res=await api("/api/trainer/role",{method:"POST",body:JSON.stringify({role,tasks,pdText})});
+    if(!res.ok){ roleErr(res.error||"Couldn't build the role."); return; }
+    applyState(res.state); gamesLoaded=false; GAMES_DATA=null; qi=0;
+    closeRoleSetup(); renderQuestion(); renderHUD(); confetti(26,true); toast("Trainer ready for "+role);
+  }catch(e){ roleErr("Couldn't reach the trainer service."); }
+  finally{ btn.disabled=false; btn.innerHTML=orig; }
+}
+if($("#roleChip")) $("#roleChip").onclick=openRoleSetup;
+if($("#roleClose")) $("#roleClose").onclick=closeRoleSetup;
+if($("#roleCancel")) $("#roleCancel").onclick=closeRoleSetup;
+if($("#roleBuild")) $("#roleBuild").onclick=buildRole;
+if($("#rolePdFile")) $("#rolePdFile").addEventListener("change",async e=>{ const f=e.target.files&&e.target.files[0]; if(f){ try{ $("#rolePdIn").value=await f.text(); }catch(_){} } });
 
 // ---------- boot ----------
 $("#submitBtn").onclick=submit;

@@ -67,7 +67,7 @@ import { cloneRepo, setWorkspace, workspaceInfo } from "./workspace.ts";
 import { egressAllowAllManaged, egressDecision, egressPosture } from "./egress_policy.ts"; // P-PREVIEW.3b + P-NETWL.5
 import { loadWhitelist, removeEntry, saveWhitelist, setPosture, upsertEntry, type WhitelistEntry } from "./network_whitelist.ts"; // P-NETWL.2/.5: whitelist CRUD + posture
 import { readPreviewFile, toFsPath } from "./preview_file.ts";
-import { getState as trainerState, submitAnswer as trainerAnswer, getGames as trainerGames } from "./trainer_session.ts"; // P-TRAINER.7 (ADR-0255) // P-PREVIEW.4: read a local file's content for the preview
+import { getState as trainerState, submitAnswer as trainerAnswer, getGames as trainerGames, setRole as trainerSetRole } from "./trainer_session.ts"; // P-TRAINER.7/.8 (ADR-0255) // P-PREVIEW.4: read a local file's content for the preview
 import { PREVIEW_FRAME_CSP } from "./preview_resolve.ts"; // P-PREVIEW.4b: per-frame CSP for the served preview doc
 import { parseImageDataUrl } from "./renderer/image_data_url.ts"; // P-IMG.1 (ADR-0208): strict image gate
 import { previewImageHtml } from "./renderer/chat_images.ts"; // P-IMG.1 (ADR-0208): image → preview wrapper
@@ -2114,6 +2114,15 @@ const server = Bun.serve({
       if (p === "/api/trainer") return json({ ok: true, data: await trainerState() });
       if (p === "/api/trainer/answer" && req.method === "POST") { const b = await readBody<{ text?: unknown }>(req); return json({ ok: true, data: await trainerAnswer(typeof b.text === "string" ? b.text : "") }); }
       if (p === "/api/trainer/games") return json({ ok: true, data: await trainerGames() });
+      // P-TRAINER.8: build + activate a coverage pack for ANY role from a name + tasks and/or a pasted
+      // Position Description (the PD is the user's own text, parsed as data, never executed).
+      if (p === "/api/trainer/role" && req.method === "POST") {
+        const b = await readBody<{ role?: unknown; tasks?: unknown; pdText?: unknown }>(req);
+        const role = typeof b.role === "string" ? b.role : "";
+        const tasks = Array.isArray(b.tasks) ? b.tasks.filter((t): t is string => typeof t === "string") : [];
+        const pdText = typeof b.pdText === "string" ? b.pdText : undefined;
+        return json({ ok: true, data: await trainerSetRole({ role, tasks, pdText }) });
+      }
       if (p === "/api/config") return json({ ok: true, data: await backend.getConfig() });
       // Manual "Refresh models": respawn omp so it re-reads the credential vault, then return the
       // fresh model list. Used after connecting a provider (OAuth or key) without relaunching.
