@@ -247,6 +247,7 @@ function buildShell(): void {
         <button class="rail-btn" data-rail="memory" data-tip="Memory & context|Context window, prompt-cache savings, semantic memory" data-tip-icon="savings">${icon("savings", 20)}</button>
         <button class="rail-btn" data-rail="knowledge" data-tip="Knowledge graph|Your private, encrypted personalization graph - nodes, edges, drill-down" data-tip-icon="graph">${icon("graph", 20)}</button>
         <button class="rail-btn" data-rail="preview" data-tip="Preview|Open a local app/page the agent built in a sandboxed in-app browser, and send a screenshot to chat" data-tip-icon="eye">${icon("eye", 20)}</button>
+        <button class="rail-btn" data-rail="trainer" data-tip="Trainer|Extract expert know-how into the coverage map, then drill it with lesson-based mini-games" data-tip-icon="brain">${icon("brain", 20)}</button>
         <button class="rail-btn" data-rail="agentBuilder" data-tip="Agent Builder|Design an AI agent on a visual workflow canvas - LUCID builds the gated code for you" data-tip-icon="spark">${icon("spark", 20)}</button>
         <button class="rail-btn" data-rail="skills" data-tip="Skills|Every agent skill - built-in, project, curated - in one directory: source, trust label, enable/disable, inspect & re-scan through the gate" data-tip-icon="bulb">${icon("bulb", 20)}</button>
         <button class="rail-btn" id="railMarket" data-tip="Plugin Marketplace|Curated integrations ordered by community popularity - Excalidraw, Git, Remotely Save & more" data-tip-icon="market">${icon("market", 20)}</button>
@@ -406,6 +407,13 @@ function buildShell(): void {
           <div class="empty preview-empty" id="prevEmpty"><span class="preview-empty-msg" id="prevEmptyMsg">Open a local HTML file to preview it here - paste its path above and press <b>Open</b>. (The agent driving this itself is coming next; remote URLs are egress-gated.)</span></div>
         </div>
       </aside>
+
+      <!-- P-TRAINER.7 (ADR-0255): the immersive Trainer stage - a self-contained experience (extraction
+           stage + coverage HUD + lesson-based mini-game flyout) in a sandboxed iframe. Lazy-loaded on
+           first open; covers the main area while the rail + titlebar stay live. -->
+      <section id="trainerPanel" class="trainer-panel" hidden>
+        <iframe id="trainerFrame" class="trainer-frame" title="Lucid Trainer" sandbox="allow-scripts" allow="autoplay" referrerpolicy="no-referrer"></iframe>
+      </section>
       ${agentBuilderPanelHtml()}
     </div>
 
@@ -4072,6 +4080,33 @@ function closePreview(): void {
   $("#preview")!.hidden = true;
   document.body.classList.remove("preview-open");
   $("#inspector")!.hidden = false;
+  $$(".rail-btn").forEach((b) => b.classList.remove("active"));
+  $('.rail-btn[data-rail="chat"]')?.classList.add("active");
+}
+
+// P-TRAINER.7 (ADR-0255): the immersive Trainer stage as an in-app panel. A sandboxed iframe renders the
+// self-contained trainer experience; mutually exclusive with the other right-edge surfaces. It covers the
+// main work area but leaves the left rail + titlebar live, so re-clicking the rail icon (or Esc) closes it.
+let trainerOpen = false;
+function onTrainerEsc(e: KeyboardEvent): void { if (e.key === "Escape" && trainerOpen) closeTrainer(); }
+function openTrainer(): void {
+  trainerOpen = true;
+  closeSettings(); closeKnowledge(); closePreview(); closeAgentBuilder(); closeSkills();
+  const p = $("#trainerPanel") as HTMLElement | null; if (!p) return;
+  const f = $("#trainerFrame") as HTMLIFrameElement | null;
+  if (f && !f.getAttribute("src")) f.setAttribute("src", "trainer.html"); // lazy-load on first open
+  const tb = document.querySelector(".titlebar") as HTMLElement | null;
+  p.style.top = (tb?.offsetHeight ?? 0) + "px";
+  p.style.left = railWidth() + "px";
+  p.hidden = false;
+  $$(".rail-btn").forEach((b) => b.classList.toggle("active", (b as HTMLElement).dataset.rail === "trainer"));
+  document.addEventListener("keydown", onTrainerEsc);
+}
+function closeTrainer(): void {
+  if (!trainerOpen) return;
+  trainerOpen = false;
+  document.removeEventListener("keydown", onTrainerEsc);
+  const p = $("#trainerPanel") as HTMLElement | null; if (p) p.hidden = true;
   $$(".rail-btn").forEach((b) => b.classList.remove("active"));
   $('.rail-btn[data-rail="chat"]')?.classList.add("active");
 }
@@ -10389,10 +10424,12 @@ function wire(): void {
     if (r === "agentBuilder" && abOpen) return closeAgentBuilder();
     if (r === "settings" && state.settingsOpen) return closeSettings();
     if (r === "skills" && skillsOpen) return closeSkills(); // P-SKILL.4
+    if (r === "trainer" && trainerOpen) return closeTrainer(); // P-TRAINER.7
     if (r !== "knowledge") closeKnowledge();
     if (r !== "preview") closePreview(); // P-PREVIEW.1: right-edge surfaces are mutually exclusive
     if (r !== "agentBuilder") closeAgentBuilder(); // P-AGENT.2b
     if (r !== "skills") closeSkills(); // P-SKILL.4
+    if (r !== "trainer") closeTrainer(); // P-TRAINER.7
     if (r === "security" || r === "memory") focusInspector(r);
     else if (r === "dev") { focusInspector("dev"); void loadDev(); } // ADR-0009 Phase D
     else if (r === "chat") { closeSettings(); $("#input")?.focus(); $$(".rail-btn").forEach((x) => x.classList.toggle("active", x === b)); }
@@ -10401,6 +10438,7 @@ function wire(): void {
     else if (r === "preview") openPreview();
     else if (r === "agentBuilder") openAgentBuilder(); // P-AGENT.2b
     else if (r === "skills") openSkills(); // P-SKILL.4
+    else if (r === "trainer") openTrainer(); // P-TRAINER.7
     else palette.show();
   }));
   // P-AGENT.2b: Agent Builder toolbar (add-node kinds · connect mode · validate · save).
