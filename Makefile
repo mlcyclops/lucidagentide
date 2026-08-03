@@ -319,6 +319,38 @@ demo-P-ROLE.1: ## P-ROLE.1 (ADR-0088): role-based onboarding — closed role set
 demo-P-ROLE.1b: ## P-ROLE.1b (ADR-0089): first-run guided walkthrough — tailored per-role coachmark tour (opens on composer, closes on closer, no dangling targets), Back/Next/Skip card, replay-guard
 	$(BUN) run desktop/scripts/demo_p_role_1b.ts
 
+.PHONY: demo-P-AVATAR.1
+demo-P-AVATAR.1: ## P-AVATAR.1 (ADR-0251): the LUCID Agent role + immersive stage - closed role set grows by one behavioral role, bespoke no-rail tour, animated glyph, and the stylesheet hides both rails + inspector under .immersive
+	$(BUN) run desktop/scripts/demo_p_avatar_1.ts
+
+.PHONY: demo-P-MASCOT.1
+demo-P-MASCOT.1: ## P-MASCOT.1 (ADR-0251 pivot): LUCID the ninja mascot - frame-grid integrity (dims + palette), state machine priorities (victory on landed work), working-activity rotation, and beat-timeline frame picks
+	$(BUN) run desktop/scripts/demo_p_mascot_1.ts
+
+.PHONY: demo-P-MASCOT.2
+demo-P-MASCOT.2: ## P-MASCOT.2: the prompt-bar parkour mini ninja - route order (run/climb/sneak/pause/drop/rest), lane geometry, the silent-drop clip contract, gravity easing, direction alternation
+	$(BUN) run desktop/scripts/demo_p_mascot_2.ts
+
+.PHONY: demo-P-AVATAR.4
+demo-P-AVATAR.4: ## P-AVATAR.4 (ADR-0251): the LUCID Agent enter flow - fast-model preference order (Terra > Sonnet 5 > Flash, no pointless switch), one-gap-at-a-time readiness (provider > tts > stt), the one-time KG offer, exit model restoration
+	$(BUN) run desktop/scripts/demo_p_avatar_4.ts
+
+.PHONY: demo-P-AVATAR.5
+demo-P-AVATAR.5: ## P-AVATAR.5 (ADR-0251): voice tool approval - keyword-strict grammar (sentences never match), danger class demands the literal word after a spoken repeat-back, widening grants unreachable by voice, deny always easy
+	$(BUN) run desktop/scripts/demo_p_avatar_5.ts
+
+.PHONY: demo-P-AVATAR.6
+demo-P-AVATAR.6: ## P-AVATAR.6 (ADR-0251): the boot cinematic - real-signal stage lines, min-beat + hard-cap done gate (config-gated; voice/models never hold boot), ninja sprint choreography
+	$(BUN) run desktop/scripts/demo_p_avatar_6.ts
+
+.PHONY: demo-P-REMOTE.12
+demo-P-REMOTE.12: ## P-REMOTE.12 (ADR-0251): PWA push-to-talk - fail-closed PromptAudio validator (shape/mime/size/base64, both ends), audio-only guest prompts, additive frame compatibility
+	$(BUN) run desktop/scripts/demo_p_remote_12.ts
+
+.PHONY: demo-P-REMOTE.13
+demo-P-REMOTE.13: ## P-REMOTE.13 (ADR-0251): the invisible hourly reconnect - grace-window presentation (young flap = Live, real outage surfaces, terminal never masked); the 60-min cap + hourly re-verify stay
+	$(BUN) run desktop/scripts/demo_p_remote_13.ts
+
 .PHONY: demo-P-GOVCUI.1
 demo-P-GOVCUI.1: ## P-GOVCUI.1: first-run Government/CUI step - asks once if the user is a Government/GovCon user handling CUI; a "yes" walks a novice into the CUI-safe posture (AskSage gov gateway in LOCKDOWN) with the CIV routing endpoint PREFILLED + step-by-step token instructions. Pure core: decideGovOnboarding (ask/skip/auto-enable, exactly once; org-forced routing auto-enables) + planGovSetup (with a key -> CIV persisted + lockdown ON; no key -> endpoint prefilled but lockdown NEVER flipped, since a keyless lockdown leaves no gov model and the backend fail-closes)
 	$(BUN) run harness/scripts/demo_pgovcui1.ts
@@ -817,3 +849,18 @@ demo-P-GPUFIX.1: ## P-GPUFIX.1 (ADR-0246): zombie-SID GPU-sandbox self-heal (ele
 .PHONY: demo-P-COLLAB.6
 demo-P-COLLAB.6: ## P-COLLAB.6 (ADR-0193): enterprise/MDM governance for the embedded relay - fail-closed + absolute allowlisting. Unmanaged = the user's call; a managed allowServe:false FORBIDS hosting (startRelayServer THROWS, no listener); under management a LAN/0.0.0.0 bind is REFUSED unless it's on the absolute host:port allowlist (localhost always ok); allowedRelays whitelists which relay endpoints a user may connect to (malformed fails closed). The 'be the relay' toggle UI reads this + managedLocks.collab
 	$(BUN) run harness/scripts/demo_pcollab6.ts
+.PHONY: demo-P-TRAINER.1
+demo-P-TRAINER.1: ## P-TRAINER.1 (ADR-0252/0255): the pure interview engine over the WMO coverage map - a scripted extraction session opens with a SCENARIO probe, asks ONE question at a time (a second nextQuestion re-issues the pending one), chases deviation cues with capped five-whys followups before returning to the map, never re-asks L3-confirmed ground, and past the session cap it closes with a visible-progress recap instead of asking on
+	$(BUN) run harness/scripts/demo_p_trainer_1.ts
+.PHONY: demo-P-TRAINER.2
+demo-P-TRAINER.2: ## P-TRAINER.2 (ADR-0253/0254): migration 0012 applies to kb_graph.duckdb and the trainer contract holds - the 13-objective WMO coverage map installs with stable ids (re-install is a no-op), knowledge units are APPEND-ONLY (a correction mints a successor + tombstones the original; the live set excludes it), and every trainer_* lifecycle event is in the frozen EventName contract while a typo'd one raises (invariant #8)
+	$(BUN) run harness/scripts/demo_p_trainer_2.ts
+.PHONY: demo-P-TRAINER.3
+demo-P-TRAINER.3: ## P-TRAINER.3 (ADR-0254): the distiller is fail-closed at EVERY gate - a clean answer becomes an untrusted unit carrying its content_artifacts provenance; PII is redacted to typed placeholders BEFORE the model or the artifact store see the span (a raw SSN never lands anywhere) and a hard hit stores the unit QUARANTINED; a poisoned span mints NO unit; a DEAD scanner blocks capture (invariant #3), never passes
+	$(BUN) run harness/scripts/demo_p_trainer_3.ts
+.PHONY: demo-P-TRAINER.4
+demo-P-TRAINER.4: ## P-TRAINER.4 (ADR-0254): teach-back confirmation IS the promotion approval - confirming a recited unit records the EXISTING promotion_approve approval_events action and promotes through promoteFactGated (keystone #2 untouched) with the fact keeping its artifact provenance, while a quarantined-source unit is REFUSED the one-click confirm and promotes nothing (the standard quarantine-release flow is the only path)
+	$(BUN) run harness/scripts/demo_p_trainer_4.ts
+.PHONY: demo-P-TRAINER.5
+demo-P-TRAINER.5: ## P-TRAINER.5/.6 (ADR-0253/0255): the CLOSED flywheel + the extraction pack - one sitting runs extract (planner scenario) -> distill (fail-closed capture) -> teach back (confirm = promote, coverage visibly moves) -> a trainee quiz generated ONLY from confirmed units with source-unit citations -> a trainee miss re-opens the objective as an extraction target; then the signed lkgpack manifest carrying the coverage_map verifies, and a tampered coverage_map breaks the signature (refused)
+	$(BUN) run harness/scripts/demo_p_trainer_5.ts

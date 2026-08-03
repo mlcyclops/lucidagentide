@@ -28,7 +28,8 @@ import type {
   HelloFrame,
   LucidCollabFrame,
 } from "./frames.ts";
-import { COLLAB_PROTOCOL_VERSION, isGuestFrame } from "./frames.ts";
+import { COLLAB_PROTOCOL_VERSION, isGuestFrame, validPromptAudio } from "./frames.ts";
+import type { PromptAudio } from "./frames.ts";
 import type { RelayControlMessage } from "@oh-my-pi/pi-wire";
 
 /** The slice of {@link CollabSocket} the host needs - so a mock transport can stand in for tests. */
@@ -56,7 +57,7 @@ export interface HostStartOpts {
   /** P-COLLAB.12: an EDIT guest sent a prompt to run in the host's session. The host wires this to its own
    *  prompt path, so the turn passes the SAME scan gate + exec/egress approvals as a local prompt.
    *  P-REMOTE.8: `images` (validated data URLs) ride along as vision input, staged into the host composer. */
-  onGuestPrompt?: (text: string, guest: CollabParticipant, images?: string[]) => void;
+  onGuestPrompt?: (text: string, guest: CollabParticipant, images?: string[], audio?: PromptAudio) => void;
   /** P-COLLAB.12: an EDIT guest asked to stop the in-flight turn. */
   onGuestAbort?: (guest: CollabParticipant) => void;
   /** P-COLLAB.14: the pickable model + already-used-folder allowlists offered to EDIT guests (unicast on
@@ -84,7 +85,7 @@ export class CollabHost {
   #writeTokenB64: string | null;
   #allowGuestWrite: boolean;
   #transcriptLimit: number;
-  #onGuestPrompt?: (text: string, guest: CollabParticipant, images?: string[]) => void;
+  #onGuestPrompt?: (text: string, guest: CollabParticipant, images?: string[], audio?: PromptAudio) => void;
   #onGuestAbort?: (guest: CollabParticipant) => void;
   #onParticipant?: (kind: "join" | "leave", guest: CollabParticipant) => void;
   #onGuestSetModel?: (value: string, guest: CollabParticipant) => void;
@@ -202,7 +203,10 @@ export class CollabHost {
         const text = (frame.text ?? "").toString();
         // P-REMOTE.8: pass through any attached image data URLs; the host re-validates them fail-closed.
         const images = Array.isArray(frame.images) ? frame.images.filter((s): s is string => typeof s === "string") : undefined;
-        if (text.trim() || (images && images.length)) this.#onGuestPrompt?.(text, guest, images);
+        // P-REMOTE.12: a push-to-talk clip - re-validated HOST-side fail-closed (shape/size/mime); an
+        // invalid clip is DROPPED, never trusted because the guest said so.
+        const audio = validPromptAudio(frame.audio) ? frame.audio : undefined;
+        if (text.trim() || (images && images.length) || audio) this.#onGuestPrompt?.(text, guest, images, audio);
         return;
       }
       case "abort":

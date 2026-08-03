@@ -48,11 +48,21 @@ const EXECUTIVE = `${SVG_OPEN.replace("{k}", "exec")}
   </g>
 </svg>`;
 
+// LUCID Agent (P-AVATAR.1, ADR-0251) - a digital head with three glyph-rain streams falling across it.
+const LUCID_AGENT = `${SVG_OPEN.replace("{k}", "agt")}
+  <path d="M14 3.6c4.6 0 7.6 3.2 7.6 7.4 0 2.4-.9 4.3-2.1 5.8l-.6 4.4c-.1.9-.8 1.5-1.7 1.5h-6.4c-.9 0-1.6-.6-1.7-1.5l-.6-4.4c-1.2-1.5-2.1-3.4-2.1-5.8 0-4.2 3-7.4 7.6-7.4z"/>
+  <path d="M11.2 24.7h5.6" opacity=".45"/>
+  <g class="ri-rain ri-rain1"><line x1="10" y1="7.5" x2="10" y2="9.3"/><line x1="10" y1="11.6" x2="10" y2="12.6"/></g>
+  <g class="ri-rain ri-rain2"><line x1="14" y1="6.2" x2="14" y2="8.8"/><line x1="14" y1="11.4" x2="14" y2="12.2"/></g>
+  <g class="ri-rain ri-rain3"><line x1="18" y1="7.5" x2="18" y2="9.3"/><line x1="18" y1="11.6" x2="18" y2="12.6"/></g>
+</svg>`;
+
 const ICONS: Record<UserRole, string> = {
   developer: DEVELOPER,
   security: SECURITY,
   manager: MANAGER,
   executive: EXECUTIVE,
+  "lucid-agent": LUCID_AGENT,
 };
 
 /** The premium animated role glyph for the onboarding splash card. */

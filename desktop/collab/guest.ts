@@ -25,7 +25,8 @@ import type {
   LucidCollabFrame,
   WelcomeFrame,
 } from "./frames.ts";
-import { COLLAB_PROTOCOL_VERSION, isHostFrame } from "./frames.ts";
+import { COLLAB_PROTOCOL_VERSION, isHostFrame, validPromptAudio } from "./frames.ts";
+import type { PromptAudio } from "./frames.ts";
 
 /** The slice of {@link CollabSocket} the guest needs - so a mock transport can stand in for tests. */
 export interface GuestTransport {
@@ -122,12 +123,15 @@ export class CollabGuest {
   /** P-COLLAB.12: drive the host's session (EDIT access only - the host still gates every tool call). Returns
    *  false without sending when read-only or ended. The prompt runs on the HOST through its fail-closed gate.
    *  P-REMOTE.8: `images` (validated image data URLs) ride along as vision input; an image-only message (empty
-   *  text) is allowed when at least one image is attached. */
-  sendPrompt(text: string, images?: string[]): boolean {
+   *  text) is allowed when at least one image is attached.
+   *  P-REMOTE.12: `audio` is a push-to-talk clip the HOST transcribes; an audio-only message is allowed.
+   *  Invalid/oversized audio is dropped HERE (fail-closed) - it never leaves the phone. */
+  sendPrompt(text: string, images?: string[], audio?: PromptAudio): boolean {
     if (this.#ended || this.#readOnly) return false;
     const imgs = Array.isArray(images) ? images.filter((s) => typeof s === "string" && s) : [];
-    if (!text.trim() && imgs.length === 0) return false;
-    this.#transport.send({ t: "prompt", text, ...(imgs.length ? { images: imgs } : {}) }, 0); // 0 = the host
+    const clip = validPromptAudio(audio) ? audio : undefined;
+    if (!text.trim() && imgs.length === 0 && !clip) return false;
+    this.#transport.send({ t: "prompt", text, ...(imgs.length ? { images: imgs } : {}), ...(clip ? { audio: clip } : {}) }, 0); // 0 = the host
     return true;
   }
 

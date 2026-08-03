@@ -26,11 +26,16 @@ export interface WhisperModel {
 
 const HF = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main";
 
+/** The tier used when the caller picks none: `tiny`. Smallest download (~78MB) + fastest load, so the
+ *  no-code paths (Install & start with no pick, the mic quick-start, the packaged-app autostart) are cheap
+ *  and near-instant. The hardware recommendation stays informational (the UI summary still names it). */
+export const DEFAULT_WHISPER_TIER: WhisperTier = "tiny";
+
 // English-optimized weights for the small tiers (smaller + faster; the default STT is English); the top tier
 // is large-v3-turbo (multilingual, fast). Edit `LUCID_WHISPER_URL_BASE` to mirror these behind an air-gap.
 export const WHISPER_MODELS: Record<WhisperTier, WhisperModel> = {
-  tiny: { tier: "tiny", label: "Tiny (fastest, least accurate)", fileName: "ggml-tiny.en.bin", url: `${HF}/ggml-tiny.en.bin`, approxMB: 78, multilingual: false },
-  base: { tier: "base", label: "Base - the mini default (fast, good)", fileName: "ggml-base.en.bin", url: `${HF}/ggml-base.en.bin`, approxMB: 148, multilingual: false },
+  tiny: { tier: "tiny", label: "Tiny - the default (fastest)", fileName: "ggml-tiny.en.bin", url: `${HF}/ggml-tiny.en.bin`, approxMB: 78, multilingual: false },
+  base: { tier: "base", label: "Base (fast, good)", fileName: "ggml-base.en.bin", url: `${HF}/ggml-base.en.bin`, approxMB: 148, multilingual: false },
   small: { tier: "small", label: "Small (accurate, still light)", fileName: "ggml-small.en.bin", url: `${HF}/ggml-small.en.bin`, approxMB: 488, multilingual: false },
   medium: { tier: "medium", label: "Medium (very accurate)", fileName: "ggml-medium.en.bin", url: `${HF}/ggml-medium.en.bin`, approxMB: 1533, multilingual: false },
   "large-turbo": { tier: "large-turbo", label: "Large v3 Turbo (best, multilingual)", fileName: "ggml-large-v3-turbo.bin", url: `${HF}/ggml-large-v3-turbo.bin`, approxMB: 1620, multilingual: true },
@@ -49,16 +54,16 @@ export interface InstallBlocked {
 
 /**
  * Decide what to install. Fail-closed: if the machine can't run the requested (or any) tier, returns
- * `{ ok:false }`. If `tier` is omitted, uses the capability recommendation. `presentModels` is the set of
- * model filenames already on disk (so a re-open shows "installed").
+ * `{ ok:false }`. If `tier` is omitted, uses DEFAULT_WHISPER_TIER (tiny - capable implies the smallest tier
+ * runs, since the RAM floors are monotonic). `presentModels` is the set of model filenames already on disk
+ * (so a re-open shows "installed").
  */
 export function planWhisperInstall(
   caps: WhisperCapability,
   opts: { tier?: WhisperTier; presentModels?: ReadonlySet<string> } = {},
 ): InstallPlan | InstallBlocked {
   if (!caps.capable) return { ok: false, reason: "This machine can't run on-device Whisper (needs ~2GB+ free RAM)." };
-  const tier = opts.tier ?? caps.recommended;
-  if (!tier) return { ok: false, reason: "No runnable Whisper model for this machine." };
+  const tier = opts.tier ?? DEFAULT_WHISPER_TIER;
   const cap = caps.tiers.find((t) => t.tier === tier);
   if (!cap || !cap.runnable) return { ok: false, reason: `The ${tier} model won't run here: ${cap?.reason ?? "insufficient resources"}.` };
   const model = WHISPER_MODELS[tier];
