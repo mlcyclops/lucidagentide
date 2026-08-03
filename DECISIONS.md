@@ -16708,3 +16708,60 @@ non-Windows/errors ⇒ refuse). Inv #4/#6/#7/#8 (untouched).
 
 ADR-0173 (P-SANDBOX.7 - the deny-network helper this extends), ADR-0172 (the seam that emits `--loopback-only`),
 ADR-0166 (the mediated proxy the exempted loopback reaches), ADR-0157 (the epic).
+## ADR-0246 -- zombie-SID GPU-sandbox self-heal: relaunch with --disable-gpu-sandbox on the boot brick (P-GPUFIX.1) (2026-07-18)
+
+**Status:** Accepted -- BUILT.
+
+### Context
+
+On 2026-07-18 the installed v1.11.9 bricked at launch on the dev machine: every sandboxed Chromium GPU
+child exited 0xC0000022 (STATUS_ACCESS_DENIED); after 9 retries Electron logged FATAL "GPU process isn't
+usable. Goodbye." and the app died before the window ever showed. Root cause is upstream
+electron/electron#51761: an unresolvable ("zombie") AppContainer SID inherited in the DACL of the install
+dir under AppData\Local makes the GPU child's sandbox init fail on some Windows machines. The manual fix
+(icacls grant `*S-1-15-2-2:(OI)(CI)(RX)` on the install dir) works, but an NSIS upgrade recreates the
+folder and re-inherits the zombie SID, so it regresses on every release. (Same host lesson as the
+zombie-SID note in project memory; previously worked around by hand.)
+
+A second, adjacent gap: `startDevServer` attached no "error" listener to the spawned engine child, so a
+spawn failure (missing/blocked bun exe) was silently swallowed - engine.log showed only the banner and
+the app waited out the 30s health timeout with nothing to diagnose.
+
+### Decision
+
+Self-heal in the main process, shapes verified against the installed Electron 33.4.11:
+
+- **Pure core** (`desktop/gpu_watchdog.ts`, unit-tested): `decideGpuAction` counts fatal GPU deaths
+  (`type === "GPU"`, reason in launch-failed / abnormal-exit / crashed; clean-exit / killed / non-GPU
+  children are ignored) and verdicts ignore / log / relaunch. Relaunch triggers on death #2 BEFORE the
+  first window renders (1 death could be a one-off crash; Electron's own FATAL is at 9). Two guards:
+  a post-render GPU crash is a recoverable driver hiccup, never the brick; and a sandbox-off instance
+  NEVER relaunches again (no relaunch loop).
+- **Wiring** (`desktop/main.ts`): `app.on("child-process-gone")` consults the core; on relaunch it
+  persists a flag file (`gpu-sandbox-off.flag` in userData, which SURVIVES the NSIS reinstall that
+  re-inherits the zombie SID), tees a self-diagnosing line into engine.log (unsigned-hex NTSTATUS so it
+  literally reads 0xC0000022 + the upstream issue number), and `app.relaunch` with the switch appended
+  to argv (so the mitigation applies even if the flag write failed) + `app.exit(0)`. At module load,
+  BEFORE Chromium spawns the GPU process, the flag file or argv switch applies
+  `app.commandLine.appendSwitch("disable-gpu-sandbox")`.
+- **Scope**: ONLY the GPU sandbox is dropped, and only after the brick is observed twice. The renderer
+  sandbox (`sandbox`/contextIsolation on the BrowserWindow) is untouched; `--no-sandbox` is never used.
+  Deleting the flag file re-enables the GPU sandbox.
+- **The silent spawn failure**: `dev.on("error", ...)` now tees `[engine] dev-server spawn failed: ...`
+  into engine.log + stderr, so the existing error dialog's pointer at engine.log actually explains a
+  never-started engine.
+
+### Alternatives rejected
+
+- **icacls at install time (NSIS hook)**: fixes only OUR install dir, needs elevation timing to be
+  right, and re-breaks if the OS re-inherits later; the watchdog heals any future recurrence.
+- **Always disabling the GPU sandbox**: needlessly weakens defense-in-depth on the healthy majority of
+  machines. The flag is opt-in-by-evidence, per machine.
+- **`app.disableHardwareAcceleration()` fallback**: heavier (loses GPU compositing entirely) and does
+  not address the sandbox-init failure class; the sandbox switch keeps GPU acceleration.
+
+### Relates to
+
+CLAUDE.md invariant #1 (extend, never fork - this is app-side healing of an upstream Electron bug),
+ADR-0177 (engine.log self-diagnosis), the v1.10.2/v1.11.0 packaged-boot bricks (packaged_boot.test.ts),
+electron/electron#51761.

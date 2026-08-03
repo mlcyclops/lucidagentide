@@ -810,6 +810,10 @@ demo-P-COLLAB.11: ## P-COLLAB.11 (ADR-0197): WebRTC signaling over the relay - t
 .PHONY: demo-P-COLLAB.9
 demo-P-COLLAB.9: ## P-COLLAB.9 (ADR-0195): the STANDALONE relay broker (tools/relay) - spawns `bun run tools/relay/serve.ts` as a separate process exactly like a jumpbox/systemd would, waits for /healthz, then connects a REAL host + REAL guest THROUGH the deployed process (hello->welcome->live event->bye), and confirms /healthz reflects the live room + peer counts (never content). Validates the deployable, not just the in-process library. Self-contained (no npm deps); deploy on an office server / Ubuntu 24 jumpbox / DGX Spark
 	$(BUN) run harness/scripts/demo_pcollab9.ts
+.PHONY: demo-P-GPUFIX.1
+demo-P-GPUFIX.1: ## P-GPUFIX.1 (ADR-0246): zombie-SID GPU-sandbox self-heal (electron/electron#51761) - on the 2nd fatal GPU child death BEFORE the first window renders, main.ts relaunches with --disable-gpu-sandbox (renderer sandbox intact) and persists a userData flag (survives the NSIS reinstall that re-inherits the zombie SID); a sandbox-off instance NEVER relaunches again (loop guard), post-render GPU crashes and normal lifecycle exits are ignored, the engine.log line self-diagnoses (0xC0000022 + the issue + the switch), and dev.on("error") tees a spawn failure into engine.log instead of swallowing it
+	$(BUN) run desktop/scripts/demo_p_gpufix_1.ts
+
 .PHONY: demo-P-COLLAB.6
 demo-P-COLLAB.6: ## P-COLLAB.6 (ADR-0193): enterprise/MDM governance for the embedded relay - fail-closed + absolute allowlisting. Unmanaged = the user's call; a managed allowServe:false FORBIDS hosting (startRelayServer THROWS, no listener); under management a LAN/0.0.0.0 bind is REFUSED unless it's on the absolute host:port allowlist (localhost always ok); allowedRelays whitelists which relay endpoints a user may connect to (malformed fails closed). The 'be the relay' toggle UI reads this + managedLocks.collab
 	$(BUN) run harness/scripts/demo_pcollab6.ts

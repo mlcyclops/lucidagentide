@@ -12,7 +12,7 @@
 
 import { app, BrowserWindow, dialog, ipcMain, Menu, safeStorage, shell } from "electron";
 import { spawn, type ChildProcess } from "node:child_process";
-import { createWriteStream, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, createWriteStream, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { initAutoUpdate } from "./updater.ts";
@@ -20,6 +20,7 @@ import { ensureRuntimes, findBun, needsBootstrap } from "./runtime.ts";
 import { createSplash, setSplashStatus } from "./splash.ts";
 import { deleteCredential, listCredentials, readCredential, rotateCredential, storeCredential, type SafeStorageLike, type VaultIo } from "./cred_vault.ts";
 import { materializeLocalProviders, registerLocalProviderEgress } from "./local_providers_runtime.ts";
+import { GPU_SANDBOX_FLAG_FILE, GPU_SANDBOX_SWITCH, decideGpuAction, gpuDeathLogLine, relaunchArgs } from "./gpu_watchdog.ts";
 import { listLocalProviders, embeddingsConfig } from "./settings_store.ts";
 import type { AuthKind } from "./network_whitelist.ts";
 
@@ -68,6 +69,35 @@ function openEngineLog(): ((d: unknown) => void) {
     return (d) => { try { s.write(d as Buffer); } catch { /* never block the engine */ } };
   } catch { return () => { }; }
 }
+const appendEngineLog = (line: string): void => { try { appendFileSync(engineLogPath(), line); } catch { /* best-effort */ } };
+
+// ADR-0246 (P-GPUFIX.1): zombie-SID GPU-sandbox self-heal (electron/electron#51761). On machines
+// where an unresolvable AppContainer SID in the install dir's DACL kills every sandboxed GPU child
+// with 0xC0000022, the app used to die (FATAL after 9 retries) before the window showed. The
+// watchdog (pure core: gpu_watchdog.ts) relaunches with --disable-gpu-sandbox on the 2nd
+// pre-render fatal GPU death and persists a flag file in userData (which survives the NSIS
+// reinstall that re-inherits the zombie SID). ONLY the GPU sandbox is dropped; the renderer
+// sandbox is untouched. The switch must be appended at module load, before Chromium spawns the
+// GPU process at the first window.
+const gpuFlagPath = (): string => join(app.getPath("userData"), GPU_SANDBOX_FLAG_FILE);
+let gpuSandboxOff = app.commandLine.hasSwitch(GPU_SANDBOX_SWITCH); // the relaunch carries it in argv
+try {
+  if (!gpuSandboxOff && existsSync(gpuFlagPath())) { app.commandLine.appendSwitch(GPU_SANDBOX_SWITCH); gpuSandboxOff = true; }
+} catch { /* unreadable flag: sandbox stays on; the watchdog below re-heals if it bricks */ }
+let gpuDeaths = 0;
+let firstWindowRendered = false; // set in createWindow's ready-to-show
+app.on("child-process-gone", (_e, details) => {
+  const r = decideGpuAction(details, { deathsBefore: gpuDeaths, windowRendered: firstWindowRendered, sandboxOff: gpuSandboxOff });
+  gpuDeaths = r.deaths;
+  if (r.action === "ignore") return;
+  appendEngineLog(gpuDeathLogLine(details, r.deaths, r.action, new Date().toISOString()));
+  if (r.action !== "relaunch") return;
+  try { writeFileSync(gpuFlagPath(), `GPU sandbox disabled ${new Date().toISOString()} after ${r.deaths} GPU child deaths (zombie-SID mitigation, electron/electron#51761). Delete this file to re-enable the GPU sandbox.\n`); }
+  catch { /* the relaunch argv still carries the switch for this recovery */ }
+  try { dev?.kill(); } catch { /* best-effort */ }
+  app.relaunch({ args: relaunchArgs(process.argv.slice(1)) });
+  app.exit(0);
+});
 
 function startDevServer(): void {
   // findBun() prefers the bundled runtime in packaged builds, falling back to the
@@ -101,6 +131,14 @@ function startDevServer(): void {
   const tee = openEngineLog();
   dev.stdout?.on("data", (d) => { process.stdout.write(d); tee(d); });
   dev.stderr?.on("data", (d) => { process.stderr.write(d); tee(d); });
+  // ADR-0246: a spawn failure (missing/blocked bun exe) used to vanish - no "error" listener, so
+  // engine.log showed only the banner and the app just waited out the 30s health timeout. Tee it,
+  // so the error dialog's pointer at engine.log actually explains WHY the engine never started.
+  dev.on("error", (err) => {
+    const line = `[engine] dev-server spawn failed: ${(err as Error)?.message ?? String(err)}\n`;
+    process.stderr.write(line);
+    tee(line);
+  });
 }
 // Returns true once the dev server answers /api/health, false if it never does within the window.
 // 30s headroom: the server's own init (DuckDB open + omp acp spawn) can outlast a slow first launch;
@@ -124,7 +162,7 @@ function createWindow(): void {
     ...(existsSync(iconPath) ? { icon: iconPath } : {}),
     webPreferences: { preload: preloadPath(), contextIsolation: true, nodeIntegration: false },
   });
-  win.once("ready-to-show", () => win!.show());
+  win.once("ready-to-show", () => { firstWindowRendered = true; win!.show(); }); // ADR-0246: past here a GPU death is not the boot brick
   // Spell-check suggestions: Electron's spellchecker underlines misspellings but the app must build the
   // correction menu itself. Only intercept when there's a misspelled word (so we don't fight Monaco's own
   // context menu elsewhere); offer the dictionary suggestions + "Add to dictionary".
