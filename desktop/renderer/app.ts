@@ -412,7 +412,7 @@ function buildShell(): void {
            stage + coverage HUD + lesson-based mini-game flyout) in a sandboxed iframe. Lazy-loaded on
            first open; covers the main area while the rail + titlebar stay live. -->
       <section id="trainerPanel" class="trainer-panel" hidden>
-        <iframe id="trainerFrame" class="trainer-frame" title="Lucid Trainer" sandbox="allow-scripts" allow="autoplay" referrerpolicy="no-referrer"></iframe>
+        <iframe id="trainerFrame" class="trainer-frame" title="Lucid Trainer" sandbox="allow-scripts allow-same-origin" allow="autoplay" referrerpolicy="no-referrer"></iframe>
       </section>
       ${agentBuilderPanelHtml()}
     </div>

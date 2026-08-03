@@ -66,7 +66,8 @@ import { providerAuth } from "./auth_status.ts";
 import { cloneRepo, setWorkspace, workspaceInfo } from "./workspace.ts";
 import { egressAllowAllManaged, egressDecision, egressPosture } from "./egress_policy.ts"; // P-PREVIEW.3b + P-NETWL.5
 import { loadWhitelist, removeEntry, saveWhitelist, setPosture, upsertEntry, type WhitelistEntry } from "./network_whitelist.ts"; // P-NETWL.2/.5: whitelist CRUD + posture
-import { readPreviewFile, toFsPath } from "./preview_file.ts"; // P-PREVIEW.4: read a local file's content for the preview
+import { readPreviewFile, toFsPath } from "./preview_file.ts";
+import { getState as trainerState, submitAnswer as trainerAnswer, getGames as trainerGames } from "./trainer_session.ts"; // P-TRAINER.7 (ADR-0255) // P-PREVIEW.4: read a local file's content for the preview
 import { PREVIEW_FRAME_CSP } from "./preview_resolve.ts"; // P-PREVIEW.4b: per-frame CSP for the served preview doc
 import { parseImageDataUrl } from "./renderer/image_data_url.ts"; // P-IMG.1 (ADR-0208): strict image gate
 import { previewImageHtml } from "./renderer/chat_images.ts"; // P-IMG.1 (ADR-0208): image → preview wrapper
@@ -2106,6 +2107,13 @@ const server = Bun.serve({
         backend.setPersona(wrapPersona(persona.id, persona.text)); // delimited, delivered in the user turn
         return json({ ok: true, data: { applied: true, scan } });
       }
+      // P-TRAINER.7 (ADR-0255): the in-app Trainer, driven by the real harness core over trainer.duckdb.
+      // State (coverage/domains/gap/question) + games are pure over confirmed units; the answer -> unit
+      // distiller is fail-closed on a model + the scanner sidecar (submitAnswer returns distilled:false when
+      // absent, never storing unscanned text).
+      if (p === "/api/trainer") return json({ ok: true, data: await trainerState() });
+      if (p === "/api/trainer/answer" && req.method === "POST") { const b = await readBody<{ text?: unknown }>(req); return json({ ok: true, data: await trainerAnswer(typeof b.text === "string" ? b.text : "") }); }
+      if (p === "/api/trainer/games") return json({ ok: true, data: await trainerGames() });
       if (p === "/api/config") return json({ ok: true, data: await backend.getConfig() });
       // Manual "Refresh models": respawn omp so it re-reads the credential vault, then return the
       // fresh model list. Used after connecting a provider (OAuth or key) without relaunching.
@@ -2762,8 +2770,10 @@ const server = Bun.serve({
       // ADR-0024: serve the HTML with the per-launch token injected as a meta tag. Same-origin
       // policy keeps a cross-origin page from reading this response body, so the token stays secret
       // to the real renderer; no-store so it's never cached across launches.
-      if (rel === "index.html") {
-        const html = (await Bun.file(join(ROOT, "index.html")).text())
+      // P-TRAINER.7: trainer.html is a same-origin iframe that calls the token-gated /api/trainer routes, so
+      // it needs the per-launch token meta injected exactly like index.html.
+      if (rel === "index.html" || rel === "trainer.html") {
+        const html = (await Bun.file(join(ROOT, rel)).text())
           .replace("</head>", `  <meta name="lucid-token" content="${TOKEN}">\n</head>`);
         return new Response(html, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
       }

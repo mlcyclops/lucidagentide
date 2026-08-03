@@ -316,6 +316,22 @@ const FIVEWHYS = {
 
 // ---------- state ----------
 let xp=0, streak=0, qi=0, drillsUnlocked=false;
+// ---------- live data: the REAL harness core via the token-gated /api/trainer routes ----------
+// When embedded in LUCID (same-origin iframe) these hydrate the stage/HUD/games from trainer.duckdb.
+// Standalone (file://, no server), every call throws and we fall back to the seeded content below.
+const LTOKEN=document.querySelector('meta[name="lucid-token"]')?.content||"";
+const PALETTE=["#e07bf0","#46c8dc","#5e8df2","#46d27e","#e8b23c","#c64bd6","#7ce0ef","#ef5f5f"];
+const QKIND={scenario:"scenario",direct:"direct",edge_probe:"edge",followup:"direct"};
+let LIVE=false, apiCoverage=null, liveQ=null, gamesLoaded=false;
+async function api(path,opts={}){ const h={"x-lucid-token":LTOKEN}; if(opts.body)h["content-type"]="application/json"; const r=await fetch(path,{...opts,headers:h}); const j=await r.json(); if(!r.ok||!j.ok)throw new Error("api "+r.status); return j.data; }
+function applyState(st){ LIVE=true; apiCoverage=st.coverage; DOMAINS.length=0; (st.domains||[]).forEach((d,i)=>DOMAINS.push({id:d.domain,color:PALETTE[i%PALETTE.length],cov:d.score})); liveQ=st.question?{kind:QKIND[st.question.kind]||"scenario",dom:st.question.domain,text:st.question.text}:liveQ; }
+async function loadGames(){ if(!LIVE||gamesLoaded)return; try{ const {games}=await api("/api/trainer/games"); for(const g of games){
+  if(g.id==="seq"&&Array.isArray(g.steps)&&g.steps.length){ DUE_DILIGENCE.length=0; DUE_DILIGENCE.push(...g.steps); }
+  else if(g.id==="next"){ NEXTSTEP.prompt=g.prompt; NEXTSTEP.correct=g.correct; NEXTSTEP.decoys=g.decoys; NEXTSTEP.source=g.source; }
+  else if(g.id==="exc"){ EXCEPTIONS.prompt=g.prompt; EXCEPTIONS.correct=g.correct; EXCEPTIONS.decoys=g.decoys; EXCEPTIONS.source=g.source; }
+  else if(g.id==="why"&&g.chain){ FIVEWHYS.root=g.root; FIVEWHYS.chain=g.chain; FIVEWHYS.fix=g.fix; }
+ } gamesLoaded=true; }catch(e){} }
+async function boot(){ try{ applyState(await api("/api/trainer")); }catch(e){ LIVE=false; } renderQuestion(); renderHUD(); addXP(0); }
 const $=(s,r=document)=>r.querySelector(s), $$=(s,r=document)=>[...r.querySelectorAll(s)];
 const clamp=(n,a,b)=>Math.max(a,Math.min(b,n));
 
@@ -323,7 +339,7 @@ function overallCoverage(){ return Math.round(DOMAINS.reduce((s,d)=>s+d.cov,0)/D
 function lvlLabel(c){ return c>=85?"L3":c>=60?"L2":c>=30?"L1":"L0"; }
 
 function renderHUD(){
-  const pct=overallCoverage();
+  const pct=(LIVE&&apiCoverage!=null)?apiCoverage:overallCoverage();
   $("#covPct").textContent=pct+"%";
   const C=2*Math.PI*50; $("#covArc").style.strokeDashoffset=C*(1-pct/100);
   const box=$("#domains"); box.innerHTML="";
@@ -336,27 +352,34 @@ function renderHUD(){
   $("#gapNext").textContent=gap.id+"  ("+lvlLabel(gap.cov)+")"; $("#gapNext").title=gap.id;
 }
 function renderQuestion(){
-  const q=QUESTIONS[qi%QUESTIONS.length];
+  const q=(LIVE&&liveQ)?liveQ:QUESTIONS[qi%QUESTIONS.length];
   const kindMap={scenario:["Scenario","scenario"],direct:["Direct probe","direct"],edge:["Edge probe","edge"]};
   const [label,cls]=kindMap[q.kind];
   const chip=$("#qKind"); chip.className="chip "+cls; $("#qKindTxt").textContent=label;
   $("#questionText").textContent=q.text;
   const d=DOMAINS.find(x=>x.id===q.dom)||DOMAINS[0];
   $("#domName").textContent=q.dom; $("#domName").title=q.dom; $("#domDot").style.color=d.color; $("#domDot").style.background=d.color;
-  $("#progressNote").textContent=`Probe ${(qi%QUESTIONS.length)+1} of ${QUESTIONS.length}`;
+  $("#progressNote").textContent=LIVE?"Live \u00b7 real coverage map":`Probe ${(qi%QUESTIONS.length)+1} of ${QUESTIONS.length}`;
   const card=$(".scenario-card"); card.style.animation="none"; void card.offsetWidth; card.style.animation="";
 }
 function addXP(n){ xp+=n; $("#xpN").textContent=xp; const C=2*Math.PI*15; $("#xpRing").style.strokeDashoffset=C*(1-(xp%100)/100); }
 function bumpStreak(ok){ streak=ok?streak+1:0; $("#streakN").textContent=streak; $("#streakPod").style.opacity=streak?1:.5; }
 
-function submit(){
+async function submit(){
   const val=$("#answer").value.trim();
   if(!val){ $("#answer").focus(); return; }
   const deviation=/\b(except|unless|but if|one time|edge case|however|gotcha|watch out)\b/i.test(val);
+  if(!drillsUnlocked && xp>=15){ drillsUnlocked=true; $("#drillTab").style.animation="pop .5s var(--spring)"; }
+  if(LIVE){ try{
+    const res=await api("/api/trainer/answer",{method:"POST",body:JSON.stringify({text:val})});
+    applyState(res.state); addXP(deviation?25:15); bumpStreak(true); confetti(deviation?26:14,deviation);
+    $("#answer").value=""; renderQuestion(); renderHUD();
+    toast(res.distilled?"Captured a confirmed lesson":(res.reason||"").slice(0,120));
+    return;
+  }catch(e){/* fall back to local */} }
   const q=QUESTIONS[qi%QUESTIONS.length];
   const d=DOMAINS.find(x=>x.id===q.dom); if(d) d.cov=clamp(d.cov+(deviation?14:9),0,100);
   addXP(deviation?25:15); bumpStreak(true);
-  if(!drillsUnlocked && xp>=15){ drillsUnlocked=true; $("#drillTab").style.animation="pop .5s var(--spring)"; }
   confetti(deviation?26:14, deviation);
   $("#answer").value=""; qi++; renderQuestion(); renderHUD();
   if(deviation) toast("Deviation cue caught \u2014 five-whys queued \u2192 try the drill");
@@ -383,7 +406,7 @@ let toastT; function toast(msg){ let el=$("#toast"); if(!el){ el=document.create
 
 // ---------- flyout + games ----------
 const scrim=$("#scrim"), flyout=$("#flyout");
-function openFly(){ scrim.classList.add("on"); flyout.classList.add("on"); flyout.setAttribute("aria-hidden","false"); renderApproval(); }
+function openFly(){ scrim.classList.add("on"); flyout.classList.add("on"); flyout.setAttribute("aria-hidden","false"); void loadGames(); renderApproval(); }
 function closeFly(){ scrim.classList.remove("on"); flyout.classList.remove("on"); flyout.setAttribute("aria-hidden","true"); }
 $("#drillTab").onclick=openFly; $("#flyClose").onclick=closeFly; scrim.onclick=closeFly;
 
@@ -404,8 +427,9 @@ function renderApproval(){
   $("#apYes").onclick=()=>{ drillsUnlocked=true; renderMenu(); };
   $("#apNo").onclick=closeFly;
 }
-function renderMenu(){
-  $("#flyoutSub").textContent="Mini-games built from what you've captured";
+async function renderMenu(){
+  await loadGames();
+  $("#flyoutSub").textContent=LIVE?"Mini-games built from your captured units":"Mini-games built from what you've captured";
   let h=`<div class="lesson-tag"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19V5a2 2 0 0 1 2-2h9l5 5v11a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/></svg>Based on your captured WMO lessons</div>`;
   for(const g of GAMES) h+=`<button class="game-card" data-g="${g.id}"><span class="ico" style="background:${g.grad}">${g.ico}</span><span class="meta"><b>${g.name}</b><small>${g.desc}</small></span><span class="go"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M9 6l6 6-6 6"/></svg></span></button>`;
   $("#flyBody").innerHTML=h;
@@ -481,7 +505,7 @@ $("#submitBtn").onclick=submit;
 $("#skipBtn").onclick=()=>{ qi++; renderQuestion(); };
 $("#answer").addEventListener("keydown",e=>{ if((e.ctrlKey||e.metaKey)&&e.key==="Enter") submit(); });
 $("#streakPod").style.opacity=.5;
-renderQuestion(); renderHUD(); addXP(0);
+void boot();
 </script>
 </body>
 </html>
