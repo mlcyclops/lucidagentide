@@ -1,0 +1,487 @@
+<!doctype html>
+<!-- Copyright (c) 2026 TechLead 187 LLC · SPDX-License-Identifier: BUSL-1.1 -->
+<!-- P-TRAINER.7 (ADR-0255): the trainer's immersive stage act - extraction stage + coverage HUD +
+     lesson-based mini-game flyout. Self-contained; seeded with the WMO wealth-management-ops pack. -->
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Lucid Trainer</title>
+<style>
+:root{
+  --bg-0:#08090d; --bg-1:#0f1117; --bg-2:#151823; --bg-3:#1b1f2b;
+  --line:#252a3a; --line-soft:#1a1e2a; --line-strong:#323a4f;
+  --txt:#edeff6; --txt-2:#aeb4c6; --txt-3:#727a90; --txt-4:#525a70;
+  --accent:#c64bd6; --accent-2:#e07bf0; --accent-dim:rgba(198,75,214,.14);
+  --cyan:#46c8dc; --cyan-dim:rgba(70,200,220,.14);
+  --green:#46d27e; --amber:#e8b23c; --red:#ef5f5f; --blue:#5e8df2;
+  --green-dim:rgba(70,210,126,.14); --red-dim:rgba(239,95,95,.14);
+  --r-lg:16px; --r-md:11px; --r-sm:7px;
+  --t:200ms; --spring:cubic-bezier(.34,1.56,.64,1); --ease:cubic-bezier(.16,1,.3,1);
+  --font:"Inter",ui-sans-serif,-apple-system,"Segoe UI",Roboto,system-ui,sans-serif;
+  --shadow:0 18px 50px -18px rgba(0,0,0,.7),0 2px 10px rgba(0,0,0,.4);
+  --emboss:inset 0 1px 0 rgba(255,255,255,.05);
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{
+  margin:0;font-family:var(--font);color:var(--txt);overflow:hidden;
+  background:
+    radial-gradient(90% 60% at 12% -8%,rgba(198,75,214,.16),transparent 60%),
+    radial-gradient(70% 55% at 108% 8%,rgba(70,200,220,.12),transparent 55%),
+    radial-gradient(120% 100% at 50% 120%,rgba(94,141,242,.08),transparent 60%),
+    var(--bg-0);
+}
+body::before{ /* faint grid */
+  content:"";position:fixed;inset:0;pointer-events:none;opacity:.35;
+  background-image:linear-gradient(rgba(255,255,255,.025) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.025) 1px,transparent 1px);
+  background-size:44px 44px;mask-image:radial-gradient(120% 100% at 50% 0%,#000,transparent 75%);
+}
+.wrap{position:relative;height:100vh;display:flex;flex-direction:column;padding:22px 26px 20px;gap:18px;max-width:1180px;margin:0 auto}
+
+/* ---- top bar ---- */
+.topbar{display:flex;align-items:center;gap:14px}
+.brand{display:flex;align-items:center;gap:11px;min-width:0}
+.brand .logo{width:38px;height:38px;flex:none;filter:drop-shadow(0 3px 10px rgba(198,75,214,.5))}
+.brand h1{font-size:17px;font-weight:700;letter-spacing:.2px;margin:0;white-space:nowrap}
+.brand h1 .sub{display:block;font-size:11px;font-weight:500;color:var(--txt-3);letter-spacing:.14em;text-transform:uppercase;margin-top:1px}
+.spacer{flex:1}
+.xp-pod{display:flex;align-items:center;gap:9px;background:linear-gradient(180deg,var(--bg-2),var(--bg-1));border:1px solid var(--line);border-radius:999px;padding:6px 14px 6px 8px;box-shadow:var(--emboss);white-space:nowrap}
+.xp-pod .ring{width:26px;height:26px;flex:none}
+.xp-pod b{font-size:14px;color:var(--accent-2)}
+.xp-pod span{font-size:11px;color:var(--txt-3);letter-spacing:.05em}
+.streak{display:flex;align-items:center;gap:5px;font-size:12px;color:var(--amber);font-weight:600;white-space:nowrap}
+.streak svg{width:15px;height:15px;flex:none}
+
+/* ---- main grid ---- */
+.main{flex:1;min-height:0;display:grid;grid-template-columns:1fr 300px;gap:18px}
+.panel{background:linear-gradient(180deg,rgba(21,24,35,.92),rgba(15,17,23,.92));border:1px solid var(--line);border-radius:var(--r-lg);box-shadow:var(--shadow),var(--emboss);backdrop-filter:blur(8px);position:relative;overflow:hidden}
+.panel::after{content:"";position:absolute;inset:0;border-radius:var(--r-lg);pointer-events:none;background:radial-gradient(80% 40% at 50% -10%,rgba(198,75,214,.08),transparent 60%)}
+
+/* ---- stage ---- */
+.stage{display:flex;flex-direction:column;padding:22px 24px;min-height:0}
+.stage-head{display:flex;align-items:center;gap:10px;margin-bottom:16px}
+.chip{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:600;letter-spacing:.04em;padding:4px 11px;border-radius:999px;white-space:nowrap;border:1px solid transparent}
+.chip.scenario{color:var(--cyan);background:var(--cyan-dim);border-color:rgba(70,200,220,.3)}
+.chip.direct{color:var(--accent-2);background:var(--accent-dim);border-color:rgba(198,75,214,.3)}
+.chip.edge{color:var(--amber);background:rgba(232,178,60,.14);border-color:rgba(232,178,60,.3)}
+.chip svg{width:13px;height:13px;flex:none}
+.dom-chip{display:inline-flex;align-items:center;gap:7px;font-size:12px;color:var(--txt-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:280px}
+.dom-chip .dot{width:9px;height:9px;border-radius:50%;flex:none;box-shadow:0 0 8px currentColor}
+.scenario-card{position:relative;background:linear-gradient(160deg,rgba(198,75,214,.10),rgba(70,200,220,.05));border:1px solid var(--line-strong);border-radius:var(--r-md);padding:20px 22px 20px 56px;margin-bottom:4px;box-shadow:var(--emboss);animation:cardIn .5s var(--ease) both}
+.scenario-card .qmark{position:absolute;left:18px;top:18px;width:26px;height:26px;color:var(--accent-2);opacity:.9}
+.scenario-card p{margin:0;font-size:17px;line-height:1.55;color:var(--txt)}
+.stage-note{font-size:12px;color:var(--txt-3);margin:14px 2px 8px;display:flex;align-items:center;gap:7px}
+.stage-note svg{width:14px;height:14px;flex:none;color:var(--accent)}
+.answer{flex:1;min-height:96px;width:100%;resize:none;background:var(--bg-0);border:1px solid var(--line);border-radius:var(--r-md);color:var(--txt);font-family:var(--font);font-size:14px;line-height:1.55;padding:14px 16px;transition:border-color var(--t),box-shadow var(--t)}
+.answer:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-dim)}
+.answer::placeholder{color:var(--txt-4)}
+.stage-actions{display:flex;align-items:center;gap:11px;margin-top:14px}
+
+/* ---- custom buttons ---- */
+.btn{display:inline-flex;align-items:center;gap:8px;font-family:var(--font);font-size:13.5px;font-weight:600;border:0;border-radius:var(--r-md);padding:11px 18px;cursor:pointer;white-space:nowrap;transition:transform var(--t) var(--spring),box-shadow var(--t),filter var(--t),background var(--t)}
+.btn svg{width:16px;height:16px;flex:none}
+.btn:active{transform:translateY(1px) scale(.98)}
+.btn-primary{color:#150018;background:linear-gradient(135deg,var(--accent-2),var(--accent));box-shadow:0 8px 22px -8px rgba(198,75,214,.8),var(--emboss)}
+.btn-primary:hover{transform:translateY(-2px);box-shadow:0 14px 30px -8px rgba(198,75,214,.9)}
+.btn-ghost{color:var(--txt-2);background:var(--bg-2);border:1px solid var(--line)}
+.btn-ghost:hover{color:var(--txt);border-color:var(--accent);background:var(--bg-3)}
+.btn-cyan{color:#00181c;background:linear-gradient(135deg,#7ce0ef,var(--cyan));box-shadow:0 8px 22px -8px rgba(70,200,220,.7),var(--emboss)}
+.btn-cyan:hover{transform:translateY(-2px)}
+.btn:disabled{opacity:.5;cursor:not-allowed;transform:none;filter:grayscale(.3)}
+
+/* ---- HUD (right column) ---- */
+.hud{display:flex;flex-direction:column;padding:18px;gap:16px;overflow:hidden}
+.hud-title{font-size:11px;font-weight:700;letter-spacing:.16em;text-transform:uppercase;color:var(--txt-3);display:flex;align-items:center;gap:7px}
+.hud-title svg{width:14px;height:14px;color:var(--accent)}
+.cov-wrap{display:flex;flex-direction:column;align-items:center;gap:4px}
+.cov-ring{position:relative;width:150px;height:150px}
+.cov-ring .pct{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center}
+.cov-ring .pct b{font-size:34px;font-weight:800;letter-spacing:-.02em;background:linear-gradient(135deg,var(--accent-2),var(--cyan));-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;line-height:1}
+.cov-ring .pct span{font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:var(--txt-3);margin-top:3px}
+.domains{display:flex;flex-direction:column;gap:9px;overflow-y:auto;padding-right:3px;flex:1;min-height:0}
+.domains::-webkit-scrollbar{width:7px}.domains::-webkit-scrollbar-thumb{background:var(--line-strong);border-radius:8px}.domains::-webkit-scrollbar-track{background:transparent}
+.dom-row{display:grid;grid-template-columns:1fr auto;gap:3px}
+.dom-row .name{font-size:12px;color:var(--txt-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;grid-column:1}
+.dom-row .lvl{font-size:10px;font-weight:700;color:var(--txt-3);grid-column:2;white-space:nowrap}
+.dom-row .track{grid-column:1/3;height:6px;border-radius:6px;background:var(--bg-0);overflow:hidden;border:1px solid var(--line-soft)}
+.dom-row .fill{height:100%;border-radius:6px;transition:width .8s var(--ease);box-shadow:0 0 8px currentColor}
+.gap-next{background:var(--bg-0);border:1px dashed var(--line-strong);border-radius:var(--r-md);padding:11px 13px}
+.gap-next .k{font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--txt-4);display:block;margin-bottom:3px}
+.gap-next .v{font-size:12.5px;color:var(--cyan);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block}
+
+/* ---- drills launcher (floating, right edge) ---- */
+.drill-tab{position:fixed;right:0;top:50%;transform:translateY(-50%);z-index:30;display:flex;flex-direction:column;align-items:center;gap:8px;background:linear-gradient(135deg,var(--accent),#8f2fa0);color:#fff;border:0;border-radius:14px 0 0 14px;padding:16px 12px;cursor:pointer;box-shadow:-8px 0 26px -10px rgba(198,75,214,.8);writing-mode:vertical-rl;text-orientation:mixed;font-family:var(--font);font-weight:700;font-size:13px;letter-spacing:.08em;transition:padding var(--t) var(--spring),box-shadow var(--t)}
+.drill-tab:hover{padding-right:18px;box-shadow:-12px 0 34px -10px rgba(198,75,214,1)}
+.drill-tab svg{width:20px;height:20px;transform:rotate(90deg)}
+.drill-tab .pip{writing-mode:horizontal-tb;background:var(--cyan);color:#00181c;font-size:10px;border-radius:999px;padding:1px 6px;font-weight:800}
+
+/* ---- flyout ---- */
+.scrim{position:fixed;inset:0;background:rgba(5,6,10,.55);backdrop-filter:blur(2px);z-index:40;opacity:0;pointer-events:none;transition:opacity var(--t)}
+.scrim.on{opacity:1;pointer-events:auto}
+.flyout{position:fixed;top:0;right:0;height:100vh;width:min(460px,92vw);z-index:50;background:linear-gradient(180deg,rgba(21,24,35,.98),rgba(11,12,17,.99));border-left:1px solid var(--line-strong);box-shadow:-24px 0 60px -20px rgba(0,0,0,.8);transform:translateX(102%);transition:transform .42s var(--spring);display:flex;flex-direction:column;padding:20px 20px 22px}
+.flyout.on{transform:translateX(0)}
+.flyout-head{display:flex;align-items:center;gap:10px;margin-bottom:4px}
+.flyout-head .t{font-size:16px;font-weight:700}
+.flyout-head .t small{display:block;font-size:11px;color:var(--txt-3);font-weight:500;letter-spacing:.06em;margin-top:2px}
+.iconbtn{margin-left:auto;width:34px;height:34px;flex:none;display:inline-flex;align-items:center;justify-content:center;background:var(--bg-2);border:1px solid var(--line);border-radius:9px;color:var(--txt-3);cursor:pointer;transition:all var(--t)}
+.iconbtn:hover{color:var(--txt);border-color:var(--accent);transform:rotate(90deg)}
+.iconbtn svg{width:16px;height:16px}
+.flyout-body{flex:1;min-height:0;overflow-y:auto;margin-top:14px;padding-right:4px}
+.flyout-body::-webkit-scrollbar{width:8px}.flyout-body::-webkit-scrollbar-thumb{background:var(--line-strong);border-radius:8px}
+
+/* approval gate */
+.approve{background:linear-gradient(160deg,rgba(198,75,214,.12),rgba(70,200,220,.06));border:1px solid var(--line-strong);border-radius:var(--r-md);padding:18px;text-align:center;animation:cardIn .4s var(--ease) both}
+.approve .mascot{width:76px;height:76px;margin:2px auto 10px;display:block;animation:bob 3s ease-in-out infinite}
+.approve h3{margin:0 0 6px;font-size:16px}
+.approve p{margin:0 0 16px;font-size:13px;color:var(--txt-2);line-height:1.55}
+.approve .row{display:flex;gap:10px;justify-content:center}
+
+/* game menu cards */
+.game-card{display:grid;grid-template-columns:46px 1fr auto;align-items:center;gap:13px;width:100%;text-align:left;background:var(--bg-1);border:1px solid var(--line);border-radius:var(--r-md);padding:14px;margin-bottom:11px;cursor:pointer;transition:transform var(--t) var(--spring),border-color var(--t),background var(--t)}
+.game-card:hover{transform:translateX(-4px);border-color:var(--accent);background:var(--bg-2)}
+.game-card .ico{width:46px;height:46px;border-radius:11px;display:flex;align-items:center;justify-content:center;flex:none}
+.game-card .ico svg{width:24px;height:24px}
+.game-card .meta{min-width:0}
+.game-card .meta b{display:block;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.game-card .meta small{display:block;font-size:11.5px;color:var(--txt-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px}
+.game-card .go{color:var(--txt-4);flex:none}
+.game-card:hover .go{color:var(--accent-2)}
+.lesson-tag{font-size:10px;color:var(--txt-4);letter-spacing:.1em;text-transform:uppercase;margin:6px 2px 10px;display:flex;align-items:center;gap:6px}
+.lesson-tag svg{width:12px;height:12px;color:var(--cyan)}
+
+/* game view */
+.game-view h3{margin:0 0 4px;font-size:16px}
+.game-view .prompt{background:var(--bg-0);border:1px solid var(--line);border-radius:var(--r-md);padding:14px 16px;font-size:14.5px;line-height:1.5;margin:12px 0 16px;color:var(--txt)}
+.opt{display:flex;align-items:center;gap:11px;width:100%;text-align:left;background:var(--bg-1);border:1px solid var(--line);border-radius:var(--r-sm);padding:13px 14px;margin-bottom:9px;cursor:pointer;font-family:var(--font);font-size:13.5px;color:var(--txt-2);line-height:1.45;transition:all var(--t)}
+.opt .key{width:24px;height:24px;flex:none;border-radius:6px;background:var(--bg-3);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:var(--txt-3)}
+.opt:hover:not(.locked){border-color:var(--accent);color:var(--txt);transform:translateX(-3px)}
+.opt.correct{border-color:var(--green);background:var(--green-dim);color:var(--txt)}
+.opt.correct .key{background:var(--green);color:#00180c}
+.opt.wrong{border-color:var(--red);background:var(--red-dim);animation:shake .4s}
+.opt.wrong .key{background:var(--red);color:#180000}
+.opt.locked{cursor:default}
+/* sequence game */
+.seq-list{list-style:none;margin:0;padding:0}
+.seq-item{display:flex;align-items:center;gap:11px;background:var(--bg-1);border:1px solid var(--line);border-radius:var(--r-sm);padding:11px 13px;margin-bottom:8px;cursor:grab;transition:border-color var(--t),background var(--t),transform var(--t)}
+.seq-item:hover{border-color:var(--accent-2)}
+.seq-item.dragging{opacity:.4;border-style:dashed}
+.seq-item.over{transform:translateY(2px);border-color:var(--cyan)}
+.seq-item .grip{color:var(--txt-4);flex:none}.seq-item .grip svg{width:16px;height:16px}
+.seq-item .n{width:22px;height:22px;flex:none;border-radius:50%;background:var(--accent-dim);color:var(--accent-2);font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center}
+.seq-item .lbl{font-size:13px;line-height:1.4;flex:1}
+.seq-item.ok{border-color:var(--green);background:var(--green-dim)}
+.seq-item.no{border-color:var(--red);background:var(--red-dim)}
+.result{text-align:center;padding:18px 6px;animation:cardIn .4s var(--ease) both}
+.result .big{font-size:40px;font-weight:800;letter-spacing:-.02em}
+.result .big.win{background:linear-gradient(135deg,var(--green),var(--cyan));-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
+.result p{color:var(--txt-2);font-size:13.5px;margin:6px 0 16px}
+.backline{display:flex;gap:10px;margin-top:16px}
+
+@keyframes cardIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+@keyframes bob{0%,100%{transform:translateY(0)}50%{transform:translateY(-7px)}}
+@keyframes shake{0%,100%{transform:translateX(0)}20%{transform:translateX(-7px)}40%{transform:translateX(6px)}60%{transform:translateX(-4px)}80%{transform:translateX(3px)}}
+@keyframes pop{0%{transform:scale(.6);opacity:0}70%{transform:scale(1.12)}100%{transform:scale(1);opacity:1}}
+canvas#fx{position:fixed;inset:0;pointer-events:none;z-index:60}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition-duration:.01ms!important}}
+</style>
+</head>
+<body>
+<canvas id="fx"></canvas>
+<div class="wrap">
+  <div class="topbar">
+    <div class="brand">
+      <svg class="logo" viewBox="0 0 48 48" fill="none"><defs><linearGradient id="lg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#e07bf0"/><stop offset="1" stop-color="#46c8dc"/></linearGradient></defs><rect x="5" y="5" width="38" height="38" rx="11" fill="url(#lg)" opacity="."/><rect x="5" y="5" width="38" height="38" rx="11" stroke="url(#lg)" stroke-width="2.4"/><path d="M17 15v13a5 5 0 0 0 5 5h9" stroke="url(#lg)" stroke-width="3.4" stroke-linecap="round"/></svg>
+      <h1>Lucid Trainer<span class="sub">Knowledge extraction · WMO pack</span></h1>
+    </div>
+    <div class="spacer"></div>
+    <div class="streak" id="streakPod" title="Answer streak"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M13 2 4 14h6l-1 8 9-12h-6z"/></svg><span id="streakN">0</span></div>
+    <div class="xp-pod">
+      <svg class="ring" viewBox="0 0 36 36"><circle cx="18" cy="18" r="15" fill="none" stroke="#252a3a" stroke-width="4"/><circle id="xpRing" cx="18" cy="18" r="15" fill="none" stroke="#e07bf0" stroke-width="4" stroke-linecap="round" stroke-dasharray="94.2" stroke-dashoffset="94.2" transform="rotate(-90 18 18)"/></svg>
+      <div><b id="xpN">0</b> <span>XP</span></div>
+    </div>
+  </div>
+
+  <div class="main">
+    <!-- STAGE -->
+    <div class="panel stage">
+      <div class="stage-head">
+        <span class="chip scenario" id="qKind"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 10h8M8 14h5"/><rect x="3" y="4" width="18" height="14" rx="3"/><path d="M8 18l-3 3v-3"/></svg><span id="qKindTxt">Scenario</span></span>
+        <span class="dom-chip"><span class="dot" id="domDot"></span><span id="domName">—</span></span>
+      </div>
+      <div class="scenario-card">
+        <svg class="qmark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M9.1 9a3 3 0 1 1 4.5 2.6c-.9.5-1.6 1.2-1.6 2.4"/><circle cx="12" cy="18" r="1"/></svg>
+        <p id="questionText">Loading the extraction map…</p>
+      </div>
+      <div class="stage-note"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 8v5l3 2"/></svg><span>Answer in your own words — the trainer distills it into confirmed lesson units.</span></div>
+      <textarea class="answer" id="answer" placeholder="Type the expert's answer…  (tip: mention an exception like &quot;except when…&quot; to trigger a five-whys drill)"></textarea>
+      <div class="stage-actions">
+        <button class="btn btn-primary" id="submitBtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M5 12h14M13 6l6 6-6 6"/></svg>Submit answer</button>
+        <button class="btn btn-ghost" id="skipBtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M5 4l10 8-10 8zM19 5v14"/></svg>Skip probe</button>
+        <span class="spacer"></span>
+        <span id="progressNote" style="font-size:12px;color:var(--txt-3)"></span>
+      </div>
+    </div>
+
+    <!-- HUD -->
+    <div class="panel hud">
+      <div class="hud-title"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 18 0 9 9 0 0 0-18 0z"/><path d="M12 7v5l3 2"/></svg>Coverage map</div>
+      <div class="cov-wrap">
+        <div class="cov-ring">
+          <svg viewBox="0 0 120 120"><defs><linearGradient id="cg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#e07bf0"/><stop offset="1" stop-color="#46c8dc"/></linearGradient><filter id="glow"><feGaussianBlur stdDeviation="2.5" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs>
+            <circle cx="60" cy="60" r="50" fill="none" stroke="#1b1f2b" stroke-width="11"/>
+            <circle id="covArc" cx="60" cy="60" r="50" fill="none" stroke="url(#cg)" stroke-width="11" stroke-linecap="round" stroke-dasharray="314.16" stroke-dashoffset="314.16" transform="rotate(-90 60 60)" filter="url(#glow)" style="transition:stroke-dashoffset 1s var(--ease)"/>
+          </svg>
+          <div class="pct"><b id="covPct">0%</b><span>extracted</span></div>
+        </div>
+      </div>
+      <div class="hud-title" style="letter-spacing:.14em">Domains</div>
+      <div class="domains" id="domains"></div>
+      <div class="gap-next"><span class="k">Next gap</span><span class="v" id="gapNext">—</span></div>
+    </div>
+  </div>
+</div>
+
+<!-- drills launcher -->
+<button class="drill-tab" id="drillTab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="7" width="20" height="12" rx="4"/><path d="M7 12v3M5.5 13.5h3M16 12.5h.01M19 15h.01"/></svg>DRILLS<span class="pip" id="drillPip">4</span></button>
+
+<!-- flyout -->
+<div class="scrim" id="scrim"></div>
+<aside class="flyout" id="flyout" aria-hidden="true">
+  <div class="flyout-head">
+    <div class="t">Lesson Drills<small id="flyoutSub">Mini-games built from what you've captured</small></div>
+    <button class="iconbtn" id="flyClose" aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+  </div>
+  <div class="flyout-body" id="flyBody"></div>
+</aside>
+
+<script>
+// ---------- lesson data (seeded from the WMO wealth-management-ops pack) ----------
+const DOMAINS = [
+  { id:"Client lifecycle",   color:"#e07bf0", cov:64 },
+  { id:"Money movement",     color:"#46c8dc", cov:80 },
+  { id:"Investment operations", color:"#5e8df2", cov:38 },
+  { id:"Billing and fees",   color:"#46d27e", cov:52 },
+  { id:"Tax coordination",   color:"#e8b23c", cov:24 },
+  { id:"Estate & insurance", color:"#c64bd6", cov:16 },
+  { id:"Compliance",         color:"#7ce0ef", cov:44 },
+  { id:"Adviser network",    color:"#ef5f5f", cov:10 },
+];
+const QUESTIONS = [
+  { kind:"scenario", dom:"Money movement", text:"A client calls Friday at 4pm needing a large wire sent before a holiday weekend, and the custodian cutoff has passed. Walk me through exactly what happens." },
+  { kind:"edge", dom:"Money movement", text:"Describe a disbursement request that turned out to be fraud, or nearly did. What tipped the team off?" },
+  { kind:"scenario", dom:"Client lifecycle", text:"A business owner is referred to the firm on a Tuesday. Walk me through everything between that referral and a signed agreement." },
+  { kind:"direct", dom:"Billing and fees", text:"It's the first week of a new quarter. Walk me through the billing run from data pull to fees hitting accounts." },
+  { kind:"scenario", dom:"Tax coordination", text:"It's early December. A client's CPA calls about realized gains before year-end. Walk me through what the firm produces and what happens next." },
+  { kind:"edge", dom:"Estate & insurance", text:"Where has a trust-funding follow-through fallen through the cracks, and what changed after?" },
+];
+// lesson-derived games (procedures = confirmed units; grounded in the WMO domains)
+const DUE_DILIGENCE = [
+  "Identify which legal entity signs the client agreement.",
+  "Identify which registered investment adviser is responsible for advice.",
+  "Confirm where client assets are held and who the qualified custodian is.",
+  "Enumerate total advisory, planning, investment, and third-party fees.",
+  "State whether the firm acts as a fiduciary for every service provided.",
+  "Review regulatory filings for disciplinary disclosures and conflicts.",
+];
+const WIRE_STEPS = [
+  "Client submits a disbursement request",
+  "Verify the client on a known callback number",
+  "Operations enters the wire in the custodian portal",
+  "A principal approves the wire",
+  "Custodian releases funds before the cutoff",
+];
+const NEXTSTEP = { // "given step, what's next?" from the wire procedure
+  prompt:"In the routine wire release, what is the correct next step after \u201cVerify the client on a known callback number\u201d?",
+  correct:"Operations enters the wire in the custodian portal",
+  decoys:["Custodian releases the funds immediately","Email the client to confirm receipt","Skip approval since the client is known"],
+  source:"Money movement · wmo-2.1 (Wires, ACH, and journals)"
+};
+const EXCEPTIONS = { // spot the edge-case among routine
+  prompt:"Three of these are routine steps. Which one is the EXCEPTION that must trigger a fresh callback?",
+  correct:"An emailed request changes wire instructions for a closing next week",
+  decoys:["A recurring monthly distribution on a standing instruction","A journal between two of the client's own accounts","A scheduled advisory fee debit"],
+  source:"Money movement · wmo-2.2 (Standing instructions & verification)"
+};
+const FIVEWHYS = {
+  root:"The Friday wire didn't go out before the holiday weekend.",
+  chain:[
+    { q:"Why didn't the wire go out?", correct:"The custodian cutoff had already passed", decoys:["The client cancelled it","The bank was closed all week"] },
+    { q:"Why was the cutoff missed?", correct:"The request arrived at 4pm, after the 2pm cutoff", decoys:["Operations forgot to send it","The principal was unavailable"] },
+    { q:"Why did the request arrive so late?", correct:"The client was waiting on a signed document from their attorney", decoys:["The adviser was on vacation","The portal was down"] },
+    { q:"Why wasn't the deadline flagged earlier?", correct:"No one owned a same-day cutoff watch on inbound requests", decoys:["The client never mentioned the date","Wires are always same-day"] },
+  ],
+  fix:"Root cause: no owner for a same-day cutoff watch. Fix captured \u2192 add a cutoff-watch step to the wire procedure."
+};
+
+// ---------- state ----------
+let xp=0, streak=0, qi=0, drillsUnlocked=false;
+const $=(s,r=document)=>r.querySelector(s), $$=(s,r=document)=>[...r.querySelectorAll(s)];
+const clamp=(n,a,b)=>Math.max(a,Math.min(b,n));
+
+function overallCoverage(){ return Math.round(DOMAINS.reduce((s,d)=>s+d.cov,0)/DOMAINS.length); }
+function lvlLabel(c){ return c>=85?"L3":c>=60?"L2":c>=30?"L1":"L0"; }
+
+function renderHUD(){
+  const pct=overallCoverage();
+  $("#covPct").textContent=pct+"%";
+  const C=2*Math.PI*50; $("#covArc").style.strokeDashoffset=C*(1-pct/100);
+  const box=$("#domains"); box.innerHTML="";
+  for(const d of DOMAINS){
+    const row=document.createElement("div"); row.className="dom-row";
+    row.innerHTML=`<span class="name" title="${d.id}">${d.id}</span><span class="lvl">${lvlLabel(d.cov)} · ${d.cov}%</span><div class="track"><div class="fill" style="width:${d.cov}%;background:${d.color};color:${d.color}"></div></div>`;
+    box.appendChild(row);
+  }
+  const gap=[...DOMAINS].sort((a,b)=>a.cov-b.cov)[0];
+  $("#gapNext").textContent=gap.id+"  ("+lvlLabel(gap.cov)+")"; $("#gapNext").title=gap.id;
+}
+function renderQuestion(){
+  const q=QUESTIONS[qi%QUESTIONS.length];
+  const kindMap={scenario:["Scenario","scenario"],direct:["Direct probe","direct"],edge:["Edge probe","edge"]};
+  const [label,cls]=kindMap[q.kind];
+  const chip=$("#qKind"); chip.className="chip "+cls; $("#qKindTxt").textContent=label;
+  $("#questionText").textContent=q.text;
+  const d=DOMAINS.find(x=>x.id===q.dom)||DOMAINS[0];
+  $("#domName").textContent=q.dom; $("#domName").title=q.dom; $("#domDot").style.color=d.color; $("#domDot").style.background=d.color;
+  $("#progressNote").textContent=`Probe ${(qi%QUESTIONS.length)+1} of ${QUESTIONS.length}`;
+  const card=$(".scenario-card"); card.style.animation="none"; void card.offsetWidth; card.style.animation="";
+}
+function addXP(n){ xp+=n; $("#xpN").textContent=xp; const C=2*Math.PI*15; $("#xpRing").style.strokeDashoffset=C*(1-(xp%100)/100); }
+function bumpStreak(ok){ streak=ok?streak+1:0; $("#streakN").textContent=streak; $("#streakPod").style.opacity=streak?1:.5; }
+
+function submit(){
+  const val=$("#answer").value.trim();
+  if(!val){ $("#answer").focus(); return; }
+  const deviation=/\b(except|unless|but if|one time|edge case|however|gotcha|watch out)\b/i.test(val);
+  const q=QUESTIONS[qi%QUESTIONS.length];
+  const d=DOMAINS.find(x=>x.id===q.dom); if(d) d.cov=clamp(d.cov+(deviation?14:9),0,100);
+  addXP(deviation?25:15); bumpStreak(true);
+  if(!drillsUnlocked && xp>=15){ drillsUnlocked=true; $("#drillTab").style.animation="pop .5s var(--spring)"; }
+  confetti(deviation?26:14, deviation);
+  $("#answer").value=""; qi++; renderQuestion(); renderHUD();
+  if(deviation) toast("Deviation cue caught \u2014 five-whys queued \u2192 try the drill");
+}
+
+// ---------- confetti + sound ----------
+const cv=$("#fx"), cx=cv.getContext("2d"); let parts=[];
+function fit(){ cv.width=innerWidth; cv.height=innerHeight; } fit(); addEventListener("resize",fit);
+function confetti(n=18, big=false, x=innerWidth*0.62, y=innerHeight*0.5){
+  const cols=["#e07bf0","#46c8dc","#46d27e","#e8b23c","#c64bd6"];
+  for(let i=0;i<n;i++) parts.push({x,y,vx:(Math.random()-.5)*(big?11:8),vy:-Math.random()*(big?13:9)-3,g:.4,life:60+Math.random()*30,c:cols[i%cols.length],s:3+Math.random()*4,r:Math.random()*6});
+  if(parts.length===n) requestAnimationFrame(tick);
+  chime(big);
+}
+function tick(){
+  cx.clearRect(0,0,cv.width,cv.height); let alive=false;
+  for(const p of parts){ if(p.life<=0)continue; alive=true; p.life--; p.vy+=p.g; p.x+=p.vx; p.y+=p.vy; p.r+=.2;
+    cx.save(); cx.globalAlpha=clamp(p.life/40,0,1); cx.translate(p.x,p.y); cx.rotate(p.r); cx.fillStyle=p.c; cx.fillRect(-p.s/2,-p.s/2,p.s,p.s*1.6); cx.restore(); }
+  parts=parts.filter(p=>p.life>0);
+  if(alive) requestAnimationFrame(tick); else cx.clearRect(0,0,cv.width,cv.height);
+}
+let actx; function chime(big){ try{ actx=actx||new (window.AudioContext||window.webkitAudioContext)(); const t=actx.currentTime; const notes=big?[523,659,784,1047]:[659,880]; notes.forEach((f,i)=>{ const o=actx.createOscillator(),g=actx.createGain(); o.type="triangle"; o.frequency.value=f; o.connect(g); g.connect(actx.destination); const s=t+i*0.07; g.gain.setValueAtTime(0,s); g.gain.linearRampToValueAtTime(.12,s+0.02); g.gain.exponentialRampToValueAtTime(.001,s+0.28); o.start(s); o.stop(s+0.3); }); }catch(e){} }
+let toastT; function toast(msg){ let el=$("#toast"); if(!el){ el=document.createElement("div"); el.id="toast"; el.style.cssText="position:fixed;left:50%;bottom:26px;transform:translateX(-50%) translateY(20px);background:linear-gradient(135deg,#1b1f2b,#151823);border:1px solid var(--accent);color:var(--txt);padding:11px 18px;border-radius:11px;font:600 13px var(--font);z-index:70;box-shadow:var(--shadow);opacity:0;transition:all .3s var(--spring)"; document.body.appendChild(el);} el.textContent=msg; requestAnimationFrame(()=>{el.style.opacity=1;el.style.transform="translateX(-50%) translateY(0)";}); clearTimeout(toastT); toastT=setTimeout(()=>{el.style.opacity=0;el.style.transform="translateX(-50%) translateY(20px)";},2600); }
+
+// ---------- flyout + games ----------
+const scrim=$("#scrim"), flyout=$("#flyout");
+function openFly(){ scrim.classList.add("on"); flyout.classList.add("on"); flyout.setAttribute("aria-hidden","false"); renderApproval(); }
+function closeFly(){ scrim.classList.remove("on"); flyout.classList.remove("on"); flyout.setAttribute("aria-hidden","true"); }
+$("#drillTab").onclick=openFly; $("#flyClose").onclick=closeFly; scrim.onclick=closeFly;
+
+const GAMES=[
+  { id:"seq", name:"Sequence the Steps", desc:"Order the due-diligence checklist", grad:"linear-gradient(135deg,#e07bf0,#c64bd6)", ico:'<svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2"><path d="M8 6h13M8 12h13M8 18h13"/><path d="M3 6h.01M3 12h.01M3 18h.01"/></svg>' },
+  { id:"next", name:"Next Step?", desc:"Pick what comes next in the wire flow", grad:"linear-gradient(135deg,#7ce0ef,#46c8dc)", ico:'<svg viewBox="0 0 24 24" fill="none" stroke="#00181c" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M10 8l4 4-4 4"/></svg>' },
+  { id:"why", name:"Five Whys", desc:"Drill a deviation to root cause", grad:"linear-gradient(135deg,#8fb4ff,#5e8df2)", ico:'<svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2"><path d="M12 3v4M12 21v-4M5 12H3M21 12h-2"/><circle cx="12" cy="12" r="4"/></svg>' },
+  { id:"exc", name:"Spot the Exception", desc:"Find the edge case in the routine", grad:"linear-gradient(135deg,#f6c65a,#e8b23c)", ico:'<svg viewBox="0 0 24 24" fill="none" stroke="#180f00" stroke-width="2"><path d="M12 3l9 16H3z"/><path d="M12 10v4M12 17h.01"/></svg>' },
+];
+function renderApproval(){
+  if(drillsUnlocked){ renderMenu(); return; }
+  $("#flyBody").innerHTML=`<div class="approve">
+    <svg class="mascot" viewBox="0 0 80 80" fill="none"><defs><linearGradient id="mg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#e07bf0"/><stop offset="1" stop-color="#46c8dc"/></linearGradient></defs><circle cx="40" cy="40" r="30" fill="url(#mg)" opacity=".18"/><rect x="22" y="30" width="36" height="26" rx="8" fill="url(#mg)"/><rect x="30" y="20" width="20" height="16" rx="7" fill="#0f1117" stroke="url(#mg)" stroke-width="2"/><circle cx="35" cy="40" r="3.2" fill="#0f1117"/><circle cx="45" cy="40" r="3.2" fill="#0f1117"/><path d="M34 48h12" stroke="#0f1117" stroke-width="2.4" stroke-linecap="round"/></svg>
+    <h3>Turn your lessons into drills?</h3>
+    <p>The trainer will build short mini-games from the process knowledge you've captured so far, so it sticks. Nothing leaves your machine.</p>
+    <div class="row"><button class="btn btn-primary" id="apYes"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M5 13l4 4L19 7"/></svg>Let's play</button><button class="btn btn-ghost" id="apNo">Not now</button></div>
+  </div>`;
+  $("#apYes").onclick=()=>{ drillsUnlocked=true; renderMenu(); };
+  $("#apNo").onclick=closeFly;
+}
+function renderMenu(){
+  $("#flyoutSub").textContent="Mini-games built from what you've captured";
+  let h=`<div class="lesson-tag"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19V5a2 2 0 0 1 2-2h9l5 5v11a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/></svg>Based on your captured WMO lessons</div>`;
+  for(const g of GAMES) h+=`<button class="game-card" data-g="${g.id}"><span class="ico" style="background:${g.grad}">${g.ico}</span><span class="meta"><b>${g.name}</b><small>${g.desc}</small></span><span class="go"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M9 6l6 6-6 6"/></svg></span></button>`;
+  $("#flyBody").innerHTML=h;
+  $$(".game-card").forEach(c=>c.onclick=()=>playGame(c.dataset.g));
+}
+function backBar(){ return `<div class="backline"><button class="btn btn-ghost" id="gBack"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M15 6l-6 6 6 6"/></svg>All drills</button></div>`; }
+function wireBack(){ const b=$("#gBack"); if(b) b.onclick=renderMenu; }
+
+function playGame(id){ ({seq:gameSeq,next:gameChoice.bind(null,NEXTSTEP,"Next Step?"),exc:gameChoice.bind(null,EXCEPTIONS,"Spot the Exception"),why:gameWhy})[id](); }
+
+// choice game (Next Step / Spot the Exception)
+function gameChoice(data,title){
+  const opts=[data.correct,...data.decoys].map((t,i)=>({t,ok:i===0}));
+  for(let i=opts.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[opts[i],opts[j]]=[opts[j],opts[i]];}
+  let h=`<div class="game-view"><h3>${title}</h3><div class="lesson-tag"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2 4 7v5c0 5 3.5 8 8 10 4.5-2 8-5 8-10V7z"/></svg>${data.source}</div><div class="prompt">${data.prompt}</div><div id="opts"></div></div>`+backBar();
+  $("#flyBody").innerHTML=h; wireBack();
+  const box=$("#opts"); const keys="ABCD";
+  opts.forEach((o,i)=>{ const b=document.createElement("button"); b.className="opt"; b.innerHTML=`<span class="key">${keys[i]}</span><span>${o.t}</span>`;
+    b.onclick=()=>{ if(box.classList.contains("done"))return; box.classList.add("done");
+      $$(".opt",box).forEach(x=>x.classList.add("locked"));
+      if(o.ok){ b.classList.add("correct"); addXP(20); bumpStreak(true); confetti(20,true); setTimeout(()=>finishGame(title,true),700);}
+      else{ b.classList.add("wrong"); $$(".opt",box).find(x=>x.textContent.includes(data.correct))?.classList.add("correct"); bumpStreak(false); setTimeout(()=>finishGame(title,false),900);} };
+    box.appendChild(b); });
+}
+// sequence game (drag to order)
+function gameSeq(){
+  const correct=DUE_DILIGENCE; const shuf=[...correct]; for(let i=shuf.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[shuf[i],shuf[j]]=[shuf[j],shuf[i]];}
+  let h=`<div class="game-view"><h3>Sequence the Steps</h3><div class="lesson-tag"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6 9 17l-5-5"/></svg>Compliance · due-diligence checklist (confirmed unit)</div><div class="prompt">Drag the steps into the order a firm should work them.</div><ul class="seq-list" id="seq"></ul><button class="btn btn-cyan" id="seqCheck" style="width:100%;justify-content:center;margin-top:4px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M5 13l4 4L19 7"/></svg>Check order</button></div>`+backBar();
+  $("#flyBody").innerHTML=h; wireBack();
+  const ul=$("#seq"); let dragEl=null;
+  shuf.forEach(t=>{ const li=document.createElement("li"); li.className="seq-item"; li.draggable=true; li.dataset.t=t;
+    li.innerHTML=`<span class="grip"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 5h.01M9 12h.01M9 19h.01M15 5h.01M15 12h.01M15 19h.01"/></svg></span><span class="n"></span><span class="lbl">${t}</span>`;
+    li.addEventListener("dragstart",()=>{dragEl=li;li.classList.add("dragging");});
+    li.addEventListener("dragend",()=>{dragEl=null;li.classList.remove("dragging");$$(".seq-item",ul).forEach(x=>x.classList.remove("over"));renumber();});
+    li.addEventListener("dragover",e=>{e.preventDefault(); const a=[...ul.children]; const after=a.find(el=>el!==dragEl && e.clientY<=el.getBoundingClientRect().top+el.offsetHeight/2); $$(".seq-item",ul).forEach(x=>x.classList.remove("over")); if(after){after.classList.add("over"); ul.insertBefore(dragEl,after);} else ul.appendChild(dragEl);});
+    ul.appendChild(li); });
+  function renumber(){ $$(".seq-item",ul).forEach((li,i)=>$(".n",li).textContent=i+1); }
+  renumber();
+  $("#seqCheck").onclick=()=>{ const order=[...ul.children].map(li=>li.dataset.t); let right=0;
+    order.forEach((t,i)=>{ const li=ul.children[i]; if(t===correct[i]){li.classList.add("ok");right++;} else li.classList.add("no"); });
+    const win=right===correct.length; addXP(right*6); bumpStreak(win); if(win)confetti(30,true); else confetti(right,false);
+    setTimeout(()=>finishGame("Sequence the Steps",win,`${right} / ${correct.length} in the right place`),1000);
+  };
+}
+// five-whys
+function gameWhy(){
+  let step=0, root=FIVEWHYS.root;
+  function render(){
+    if(step>=FIVEWHYS.chain.length){ finishGame("Five Whys",true,FIVEWHYS.fix,true); return; }
+    const node=FIVEWHYS.chain[step];
+    const opts=[node.correct,...node.decoys].map((t,i)=>({t,ok:i===0}));
+    for(let i=opts.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[opts[i],opts[j]]=[opts[j],opts[i]];}
+    let h=`<div class="game-view"><h3>Five Whys <span style="color:var(--txt-4);font-weight:500">· ${step+1}/${FIVEWHYS.chain.length}</span></h3><div class="lesson-tag"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v6M12 22v-6"/><circle cx="12" cy="12" r="3"/></svg>Money movement · deviation drill</div><div class="prompt"><b style="color:var(--amber)">${root}</b><br/><span style="color:var(--txt-2)">${node.q}</span></div><div id="opts"></div></div>`+backBar();
+    $("#flyBody").innerHTML=h; wireBack();
+    const box=$("#opts"), keys="ABC";
+    opts.forEach((o,i)=>{ const b=document.createElement("button"); b.className="opt"; b.innerHTML=`<span class="key">${keys[i]}</span><span>${o.t}</span>`;
+      b.onclick=()=>{ if(box.classList.contains("done"))return; box.classList.add("done"); $$(".opt",box).forEach(x=>x.classList.add("locked"));
+        if(o.ok){ b.classList.add("correct"); addXP(15); bumpStreak(true); confetti(16); root=o.t+" \u2014 why?"; step++; setTimeout(render,750); }
+        else{ b.classList.add("wrong"); $$(".opt",box).find(x=>x.textContent.includes(node.correct))?.classList.add("correct"); bumpStreak(false); setTimeout(render,900); } };
+      box.appendChild(b); });
+  }
+  render();
+}
+function finishGame(title,win,detail,fix){
+  const msg=fix?detail:(detail||(win?"Locked in. That lesson just got stronger.":"Close \u2014 the gap flows back to the interview."));
+  $("#flyBody").innerHTML=`<div class="game-view"><div class="result"><div class="big ${win?'win':''}">${win?'\u2713 Nailed it':'Keep drilling'}</div><p>${msg}</p><div style="font-size:12px;color:var(--txt-3)">${title} \u00b7 +${win?'XP earned':'try again'}</div></div>${fix?'<div class="prompt" style="border-color:var(--green);background:var(--green-dim)">'+detail+'</div>':''}<div class="backline"><button class="btn btn-primary" id="again"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M4 12a8 8 0 1 1 2.3 5.6M4 20v-4h4"/></svg>More drills</button></div></div>`;
+  if(win) confetti(24,true);
+  $("#again").onclick=renderMenu;
+}
+
+// ---------- boot ----------
+$("#submitBtn").onclick=submit;
+$("#skipBtn").onclick=()=>{ qi++; renderQuestion(); };
+$("#answer").addEventListener("keydown",e=>{ if((e.ctrlKey||e.metaKey)&&e.key==="Enter") submit(); });
+$("#streakPod").style.opacity=.5;
+renderQuestion(); renderHUD(); addXP(0);
+</script>
+</body>
+</html>
