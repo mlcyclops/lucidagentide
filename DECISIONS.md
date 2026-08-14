@@ -17394,3 +17394,163 @@ Planner property tests (one-question invariant, energy-following branch, five-wh
 cap, no repeat of confirmed units); rubric derivation fixtures; a full scripted WMO interview
 fixture driving extract -> distill -> teach-back -> quiz-generation round trip in demo form; HUD
 snapshot obeys invariant 11.
+
+## ADR-0256 -- P-FLEET: a Chief-of-Staff fleet - one LUCID orchestrating N gated LUCID workers across machines (SCOPE/PLAN)
+
+**Date:** 2026-08-14
+**Status:** Accepted -- SCOPE/PLAN (no code this ADR). Increments P-FLEET.1-.4 below are each their
+own session. Facts below verified against this tree (harness/mcp, harness/launcher, tools/remote-pwa).
+
+### Context
+
+Grok Bot popularized the always-on agent teammate: a chief-of-staff agent that owns the goal and
+farms work out to a standing team. LUCID already has every load-bearing piece of that pattern, built
+for other reasons and lying in a row:
+
+- **The Agent Firewall** (P-AGENTFW.1, ADR-0147; `harness/mcp/agent_firewall.ts` +
+  `harness/mcp/acp_client.ts`): a fail-closed stdio MCP proxy that scans OUTBOUND prompts before
+  they leave (the injection-relay block) and scans INBOUND replies, withholding a quarantined reply
+  and wrapping everything else in UNTRUSTED_CONTENT delimiters with a trust label that is never
+  `trusted`, delimiter literals neutralized (`neutralizeDelimiters`) so a hostile reply cannot break
+  the envelope. It is spawned per connection as `lucid agent-firewall --conn <id>`
+  (`remoteAgentMcpServers()` in `harness/mcp/registry.ts`), so each remote agent is its own gate
+  instance.
+- **The connection registry** (`harness/mcp/registry.ts`): `~/.omp/lucid-agents.json` at mode 0600
+  (dir 0700), each entry an ARBITRARY `command` + `args`, secrets kept out by the `--token-file`
+  pattern (ADR-0147 custody rule: the file stores how to reach an agent, never a credential).
+- **Every LUCID install is already a gated headless worker.** `lucid acp`
+  (`harness/launcher/lucid_acp.ts`, P-EXT.1/ADR-0038) is the sanctioned fail-closed ACP entrypoint:
+  it reproduces the exact gated omp command the desktop uses and refuses to start if the gate or
+  scanner sidecar is missing. An ungated worker session cannot exist.
+- **The management surface exists**: the Remote-agents Settings card + `GET/POST /api/agents`,
+  `/api/agents/remove`, `/api/agents/toggle` (P-AGENTFW.2, ADR-0149) already add/edit/enable
+  connections with no hand-edited JSON.
+- **The phone drives the orchestrator**: the P-REMOTE PWA (`tools/remote-pwa/`, ADR-0226/0227) can
+  watch and drive the HOST desktop session over the E2E relay. A phone driving the orchestrator that
+  drives the fleet is composition, not new code.
+
+The transport insight that makes this an ADR and not a project: because the registry stores an
+arbitrary command, `command: ssh, args: [<host>, lucid, acp]` IS a remote LUCID worker over
+stdio-over-SSH with ZERO new transport code, and N same-box workers are N plain `lucid acp`
+entries. The fleet is configuration.
+
+What is genuinely missing, and what this ADR decides to close, one increment each: the firewall's
+`prompt` tool is one synchronous round-trip (the orchestrator blocks per worker, so "fan out to
+five workers" serializes); nothing keeps a worker alive on a remote box or reports liveness; the
+Settings card and PWA show configuration, not fleet health; and workers cannot talk to each other
+at all.
+
+### Decision
+
+Build the fleet as configuration + four increments on existing surfaces, under these pinned
+security invariants:
+
+1. **Each connection is its own trust domain.** One firewall instance per connection (the existing
+   `--conn <id>` spawn), no shared parsing state, no cross-connection reply mixing.
+2. **Every inbound byte from a worker enters the orchestrator's model only inside UNTRUSTED_CONTENT
+   delimiters, after a scan, trust-labeled and never `trusted`** (invariant 5, exactly the ADR-0147
+   behavior, extended to every new reply path this ADR adds).
+3. **Scan unavailable = block** (invariant 3). A dead scanner means no dispatch, no result
+   delivery, no health-probe text reaching the model. Fail-closed is law on every new tool.
+4. **The firewall gate stays in-process** (invariant 4). Async job handles change WHEN a reply is
+   delivered, never WHERE the gating happens.
+5. **Secrets stay in token-files / the OS vault, never in the registry** (ADR-0147 precedent). SSH
+   credentials are the operator's keys and agent config, not registry fields.
+6. **No new EventName until the increment that logs it** (invariant 8): any fleet event names are
+   quarantined to their own contracts increment, exactly the P-TRAINER.2 / P-REMOTE.4 pattern.
+
+### Increments
+
+- **P-FLEET.1 - async job handles on the firewall.** Today `AgentFirewall.handlePrompt`
+  (`harness/mcp/agent_firewall.ts`) is ONE synchronous round-trip: outbound scan, send, inbound
+  scan, return; the orchestrator blocks per worker. Add three MCP tools beside `prompt`:
+  `dispatch` (outbound-scans and sends, returns a job id immediately), `status` (running / done /
+  failed, plus scanned partials), and `result` (the gated reply). Every reply and partial keeps the
+  EXACT inbound pipeline: scan, quarantine-withhold, UNTRUSTED_CONTENT wrap, trust label,
+  delimiter neutralization. Fail-closed law unchanged: dead scanner = no dispatch.
+- **P-FLEET.2 - worker keepalive + health.** A documented supervisor recipe (systemd unit /
+  Windows service wrapper) keeping `lucid acp` alive on a VPS, plus a lightweight health probe the
+  firewall can call (connection-level `ping`) so the orchestrator sees liveness before it
+  dispatches, not after a timeout.
+- **P-FLEET.3 - fleet visibility.** Extend the Remote-agents Settings card and add a PWA view with
+  per-connection health, running job count, and the last reply's trust label. All of this data
+  already flows through the firewall; this increment is surfacing, not new trust paths.
+- **P-FLEET.4 - agent-to-agent threads.** Worker-to-worker messages relayed THROUGH the
+  orchestrator's firewall so every hop is scanned and wrapped like any other inbound reply.
+  Explicitly NOT direct worker-to-worker links: a direct link would bypass the gate, and one
+  poisoned worker could then relay injection to the rest of the fleet unscanned.
+
+### Alternatives rejected
+
+- **A bespoke fleet RPC / daemon protocol.** Rejected: `lucid acp` over ssh (and the openclaw
+  wss-bridge precedent, `openclaw acp --url wss://gateway`, already a registry citizen per
+  ADR-0147) reuses the existing gated launcher and the existing transport patterns end to end.
+  Invariant 1 spirit: extend, never fork; a second protocol would be a fork of our own trust
+  perimeter.
+
+### Consequences
+
+- SSH key management is on the operator: provisioning keys, rotating them, and locking down the
+  worker account are deployment concerns this ADR deliberately does not absorb.
+- The synchronous `prompt` tool stays for single-shot use; `dispatch`/`status`/`result` are
+  additive, and P-FLEET.1 changes no frozen contract file (new MCP tools on the firewall's own
+  server, not new EventNames, not AGENT_MODES).
+- The PWA drives the fleet only THROUGH the orchestrator host. There is no direct phone-to-worker
+  path, deliberately: the orchestrator's firewall is the single choke point, and adding a second
+  entry would double the trust surface for zero capability.
+
+### Relates to
+
+ADR-0147 (P-AGENTFW.1: the firewall, registry, and launcher this fleet is made of), ADR-0149
+(P-AGENTFW.2/.3: the Settings card + `/api/agents*` endpoints P-FLEET.3 extends), ADR-0226/0227
+(P-REMOTE: the phone PWA that drives the orchestrator), ADR-0038 (P-EXT.1: `lucid acp`, the gated
+worker entrypoint), and CLAUDE.md invariants 1, 3, 4, 5, and 8.
+
+## ADR-0257 -- P-TRAINER.9: the trainer is role-generic by default; the WMO pack is an explicit sample (BUILT)
+
+**Date:** 2026-08-14
+**Status:** Accepted -- BUILT (this session).
+
+### Context
+
+The trainer core has been role-agnostic since P-TRAINER.8 (`rolepack.ts` builds a coverage pack for
+ANY role from a task list or a pasted Position Description), but the PRODUCT presented as a
+wealth-management tool: `desktop/trainer_session.ts` `activeRole()` silently fell back to the WMO
+demo role, `ensure()` unconditionally seeded `WMO_OBJECTIVES` plus the 8 authored reference units
+into every `trainer.duckdb`, and `trainer.html` booted with a hardcoded "Wealth-Management Ops"
+role chip. A fresh install therefore BECAME a wealth-management trainer before the user ever chose
+a role, and the WMO objectives leaked into stores that would only ever hold a custom role.
+
+### Decision
+
+No silent default role. The role choice is the trainer's first interaction:
+
+- `activeRole()` returns null when no role was ever chosen; `getState()` then returns a minimal
+  `needsRole: true` state (label "Choose a role", empty domains, no question) and does NOT create
+  or touch `trainer.duckdb`. `TrainerStateView` gains `needsRole` (not a frozen contract file).
+- WMO seeding moved out of `ensure()` into `seedDemoPack()`, called ONLY by the new exported
+  `useDemoPack()`, which activates the sample role (labeled "Wealth-Management Ops (sample)"),
+  seeds idempotently, and resets the planner onto it. `setRole` for user-built roles is unchanged
+  and never seeds WMO material.
+- `POST /api/trainer/role` accepts `demo: true` and routes to `useDemoPack()` (no new endpoint).
+- `trainer.html`: the chip defaults to "Choose a role"; live boot with `needsRole` opens the
+  role-setup modal, which now carries an explicitly-labeled "Try the sample role" button; the
+  OFFLINE standalone fallback keeps the embedded WMO sandbox data, labeled "(sample)", so the
+  self-contained page still demos without a backend.
+- `harness/trainer/wmo_pack.ts` and the `demo-P-TRAINER.1..5` scripts are untouched: the WMO pack
+  remains the authored fixture for demos, tests, and the sample role.
+
+### Consequences
+
+- A fresh install asks for the user's role instead of assuming wealth management; custom-role
+  stores carry zero WMO objectives (regression-tested: fresh-state, demo-activation idempotence,
+  and no-leak custom-role tests in `desktop/trainer_session.test.ts`).
+- `submitAnswer` with no active role advances nothing and stores nothing (`distilled: false`,
+  "choose a role first"); `getGames` returns empty. Fail-safe, not fail-open.
+- The Five Whys drill stays gated to the sample pack (it is authored WMO content); a generic
+  deviation-derived Five Whys generator is future work, not this increment.
+
+### Relates to
+
+ADR-0252..0255 (the trainer flywheel, data contract, trust pipeline, and interview mechanics this
+increment re-fronts), and CLAUDE.md invariants 3 and 5 (the distiller path is untouched).
