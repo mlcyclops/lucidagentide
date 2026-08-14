@@ -179,6 +179,20 @@ personalization internals are proprietary and intentionally undocumented here - 
 
 ---
 
+## <img src=".github/assets/icons/release-animated.svg" width="26" align="top" alt="" /> What's new in v1.12.1
+
+> **🧠 Teach it once. It trains everyone.** LUCID becomes a knowledge trainer: it interviews your expert, distills what they know into verified lesson units, and quizzes the team on it - for ANY role you give it.
+
+- **🧠 The LUCID Trainer (the headline)** - a new brain icon on the rail opens an immersive extraction stage: LUCID interviews your expert scenario-first ("walk me through the Friday-4pm wire..."), chases exceptions with capped five-whys followups, and never re-asks confirmed ground. Every answer runs the fail-closed pipeline before ANYTHING is stored: PII redacted to typed placeholders, scanned, distilled by your configured model inside untrusted delimiters, re-scanned, and born untrusted until the expert confirms the teach-back - confirmation IS the promotion. A live coverage HUD shows each domain filling L0 to L3, and drills (next-step, spot-the-exception, sequence) are generated ONLY from confirmed units, with a trainee miss re-opening extraction. *(P-TRAINER.1-.8, ADR-0252..0255)*
+- **🎯 Train ANY role** - the trainer is role-generic: paste a Position Description or a task list and it builds the coverage map for THAT job; a fresh install asks for your role instead of assuming one. The wealth-management-ops pack ships as a clearly-labeled sample you can try in one click. *(P-TRAINER.9, ADR-0257)*
+- **🥷 The LUCID Agent role** - an immersive agent persona with a talking mascot, cinematic boot, and hands-free flow, sharing the stage machinery the trainer runs on. *(ADR-0251)*
+- **🖼️ Preview panel: no more stale documents** - re-opening or re-editing a previewed file now always repaints; the panel used to pin the first served document forever (a same-URL iframe assignment never renavigates). *(fix)*
+- **🎨 Trainer stage readability** - WCAG AA contrast pass across the stage (dim labels, placeholders, drag grips, HUD chips) and design-token alignment with the app shell. *(fix)*
+- **🛡️ Sandbox hardening** - macOS Seatbelt now probes real sandbox_apply capability instead of mere presence, and the Windows AppContainer helper gains mediated loopback-only networking; plus the zombie-SID GPU-sandbox self-heal on Windows. *(P-SANDBOX.4/.7b, P-GPUFIX.1)*
+- **🚁 Groundwork: the agent fleet** - the Chief-of-Staff fleet design (one LUCID orchestrating N gated workers over `ssh <host> lucid acp`, every reply scanned) is now a documented plan. *(ADR-0256)*
+
+---
+
 ## <img src=".github/assets/icons/release-animated.svg" width="26" align="top" alt="" /> What's new in v1.12.0
 
 > **🗣️ Talk to it.** LUCID reads its replies aloud as it writes them, opens the mic when it finishes, and answers you the way a person would - short, spoken, hands-free.

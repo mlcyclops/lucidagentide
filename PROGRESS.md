@@ -4,6 +4,13 @@ Three lines per session: **shipped / stubbed / next** (CLAUDE.md session ritual)
 
 -----
 
+## Release cut: v1.12.1 - the LUCID Trainer + LUCID Agent role + preview/contrast fixes
+- **shipped:** version bump 1.12.0 -> 1.12.1 across the four release sites (desktop/package.json, version.ts APP_VERSION + the v1.12.0 changelog comment line, about.test.ts pins x2) + a README What's-new v1.12.1 section (Trainer flywheel P-TRAINER.1-.8, role-generic P-TRAINER.9, LUCID Agent role ADR-0251, preview stale-doc fix, trainer contrast pass, sandbox hardening P-SANDBOX.4/.7b + P-GPUFIX.1, fleet groundwork ADR-0256). Tagged v1.12.1; the tag push triggers the 3-OS installer matrix (publish_latest auto-update stays OFF, its manual opt-in gate untouched).
+- **verified:** about.test.ts 12/12 green on the new pins; no em dashes introduced (all 8 in-file matches pre-date this entry); trainer suites 69/69 + demos 1-5 + sidecar green earlier this session on the identical tree.
+- **next:** watch the tag build cut installers on the 3 runners; on-device pass of the Trainer role-first boot; publish to the rolling latest only via the manual workflow toggle when satisfied.
+
+-----
+
 ## P-TRAINER.9: role-generic by default - the WMO pack becomes an explicit, labeled sample (ADR-0257)
 - **shipped:** a fresh install no longer silently becomes a wealth-management trainer. `trainer_session.ts`: `activeRole()` returns null until a role is chosen (no DEMO_ROLE fallback), `getState()` then returns a minimal `needsRole: true` state WITHOUT creating trainer.duckdb, WMO seeding moved out of `ensure()` into `seedDemoPack()` called only by the new exported `useDemoPack()` (activates "Wealth-Management Ops (sample)", seeds idempotently, resets the planner); `submitAnswer`/`getGames` are fail-safe with no role (nothing stored, empty games). `POST /api/trainer/role` accepts `demo: true` (no new endpoint). `trainer.html`: chip defaults to "Choose a role", live boot on `needsRole` opens the role-setup modal which gained a labeled "Try the sample role: Wealth-Management Ops" button; the OFFLINE standalone sandbox keeps the embedded WMO data, relabeled "(sample)". `wmo_pack.ts` + `demo-P-TRAINER.1..5` untouched (the pack stays the authored fixture).
 - **verified:** 69 trainer-family tests green incl. the NEW `desktop/trainer_session.test.ts` (fresh-state needsRole + no WMO on disk; demo activation seeds idempotently; a custom role leaks zero WMO objectives); demo-P-TRAINER.1..5 all green; full `bun run typecheck` shows ONLY the pre-existing baseline (symbol_graph TS7 API mismatch + dev.ts:794 `finish(m[1])` TS2345); license headers clean.
