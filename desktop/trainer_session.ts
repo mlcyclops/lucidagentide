@@ -2,10 +2,11 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 // desktop/trainer_session.ts - P-TRAINER.7b/.8 (ADR-0255): the in-app Trainer, driven by the REAL harness
-// core over a persisted store, ROLE-AGNOSTIC. Coverage / domains / gap-queue / interview questions / games
-// are the pure core (coverage.ts, planner.ts, quizgen.ts) over the ACTIVE pack in trainer.duckdb - the
-// shipped WMO pack (seeded demo) OR any role the user builds from a task list / Position Description
-// (rolepack.ts). The answer -> unit leg is the security-load-bearing distiller (PII-redact + fail-closed
+// core over a persisted store, ROLE-AGNOSTIC BY DEFAULT. Coverage / domains / gap-queue / interview
+// questions / games are the pure core (coverage.ts, planner.ts, quizgen.ts) over the ACTIVE pack in
+// trainer.duckdb: any role the user builds from a task list / Position Description (rolepack.ts), or the
+// shipped WMO pack as an OPTIONAL sample that seeds only on explicit activation (useDemoPack). With no
+// active role, getState() returns a minimal needsRole state and stores NOTHING (not even the db file). The answer -> unit leg is the security-load-bearing distiller (PII-redact + fail-closed
 // scan + model + re-scan before any storage; ADR-0254): it only mints a unit when a model + the scanner
 // sidecar are present; otherwise the interview advances but NOTHING unscanned is ever stored (inv #3/#5).
 
@@ -20,16 +21,18 @@ import { buildRolePack, type RolePackInput } from "../harness/trainer/rolepack.t
 import { personalBaseDir } from "./settings_store.ts";
 
 interface ActiveRole { packId: string; label: string }
-const DEMO_ROLE: ActiveRole = { packId: WMO_PACK_ID, label: "Wealth-Management Ops (demo)" };
-function activeRole(): ActiveRole {
-  try { const j = JSON.parse(readFileSync(join(personalBaseDir(), "trainer-active.json"), "utf8")) as Partial<ActiveRole>; if (typeof j.packId === "string" && j.packId) return { packId: j.packId, label: typeof j.label === "string" ? j.label : j.packId }; } catch { /* none yet -> demo */ }
-  return DEMO_ROLE;
+// The WMO sample role: activated ONLY by an explicit useDemoPack() call, never as a silent fallback.
+const DEMO_ROLE: ActiveRole = { packId: WMO_PACK_ID, label: "Wealth-Management Ops (sample)" };
+function activeRole(): ActiveRole | null {
+  try { const j = JSON.parse(readFileSync(join(personalBaseDir(), "trainer-active.json"), "utf8")) as Partial<ActiveRole>; if (typeof j.packId === "string" && j.packId) return { packId: j.packId, label: typeof j.label === "string" ? j.label : j.packId }; } catch { /* none yet -> role selection */ }
+  return null;
 }
 function setActiveRole(r: ActiveRole): void { try { writeFileSync(join(personalBaseDir(), "trainer-active.json"), JSON.stringify(r)); } catch { /* best-effort */ } }
 
 interface SeedUnit { objectiveId: string; kind: AddUnitInput["kind"]; title: string; steps?: string[]; trigger?: string; resolution?: string }
-// Authored confirmed reference units for the WMO DEMO pack only, so its coverage + games have real material
-// offline. A user-built role starts empty and fills from the real (gated) interview.
+// Authored confirmed reference units for the WMO SAMPLE pack only, seeded exclusively by useDemoPack() so
+// its coverage + games have real material offline. A user-built role starts empty and fills from the real
+// (gated) interview; it never inherits any of this.
 const SEED: readonly SeedUnit[] = [
   { objectiveId: "wmo-2.1", kind: "procedure", title: "Routine wire release", steps: [
     "Client submits a disbursement request", "Verify the client on a known callback number",
@@ -62,7 +65,14 @@ let startedAt = 0;
 
 async function ensure(): Promise<TrainerStore> {
   if (store) return store;
-  const s = await TrainerStore.open(process.env.LUCID_TRAINER_DB_PATH || join(personalBaseDir(), "trainer.duckdb"));
+  store = await TrainerStore.open(process.env.LUCID_TRAINER_DB_PATH || join(personalBaseDir(), "trainer.duckdb"));
+  return store;
+}
+
+// Seed the WMO sample pack: objectives + confirmed reference units. Runs ONLY when the user explicitly
+// activates the sample (useDemoPack), never on store open and never while an unrelated pack is active.
+// Idempotent: re-activation adds nothing (addObjectives has stable ids; units are matched by title).
+async function seedDemoPack(s: TrainerStore): Promise<void> {
   await s.addObjectives(WMO_OBJECTIVES);
   for (const u of SEED) {
     const existing = await s.listLiveUnits(u.objectiveId);
@@ -72,8 +82,6 @@ async function ensure(): Promise<TrainerStore> {
     const id = await s.addUnit({ objectiveId: u.objectiveId, kind: u.kind, title: u.title, bodyMd, structure, trustLabel: "untrusted", completeness: u.steps ? 90 : 80, sourceSessionId: "seed" });
     await s.confirmUnit(id, "seed:reference");
   }
-  store = s;
-  return s;
 }
 
 const lvl = (n: number): string => (n >= 85 ? "L3" : n >= 60 ? "L2" : n >= 30 ? "L1" : "L0");
@@ -82,7 +90,7 @@ function steps(u: KnowledgeUnitRow): string[] {
 }
 
 export interface TrainerStateView {
-  pack: string; role: { id: string; label: string }; needsSetup: boolean; coverage: number;
+  pack: string; role: { id: string; label: string }; needsRole: boolean; needsSetup: boolean; coverage: number;
   domains: { domain: string; score: number; level: string }[];
   gap: { objectiveId: string; domain: string; title: string; level: string } | null;
   question: { kind: string; domain: string; objectiveId: string; text: string; whyDepth: number } | null;
@@ -90,8 +98,14 @@ export interface TrainerStateView {
 }
 
 export async function getState(): Promise<TrainerStateView> {
+  const active = activeRole();
+  if (!active) {
+    // No role chosen yet: a minimal "pick a role" state. Nothing is opened or seeded; trainer.duckdb is
+    // not even created until a role (user-built or the WMO sample) is explicitly activated.
+    return { pack: "", role: { id: "", label: "Choose a role" }, needsRole: true, needsSetup: true, coverage: 0, domains: [], gap: null, question: null, units: 0, confirmed: 0, closing: null };
+  }
   const s = await ensure();
-  const { packId, label } = activeRole();
+  const { packId, label } = active;
   const objs = await s.listObjectives(packId);
   const map = await s.coverageInputs(packId);
   const byId = new Map(objs.map((o) => [o.objectiveId, o]));
@@ -105,7 +119,7 @@ export async function getState(): Promise<TrainerStateView> {
   const q = nr.question ? { kind: nr.question.kind, domain: byId.get(nr.question.objectiveId)?.domain ?? "", objectiveId: nr.question.objectiveId, text: nr.question.text, whyDepth: nr.question.whyDepth } : null;
   let live = 0, confirmed = 0;
   for (const o of objs) { const us = await s.listLiveUnits(o.objectiveId); live += us.length; confirmed += us.filter((u) => u.confirmed_at != null).length; }
-  return { pack: packId, role: { id: packId, label }, needsSetup: objs.length === 0, coverage: coverageScore(objs, map), domains, gap, question: q, units: live, confirmed, closing: nr.closing ?? null };
+  return { pack: packId, role: { id: packId, label }, needsRole: false, needsSetup: objs.length === 0, coverage: coverageScore(objs, map), domains, gap, question: q, units: live, confirmed, closing: nr.closing ?? null };
 }
 
 /** Build + activate a coverage pack for ANY role from a name + tasks and/or a pasted Position Description
@@ -122,9 +136,22 @@ export async function setRole(input: RolePackInput): Promise<{ ok: boolean; erro
   return { ok: true, state: await getState() };
 }
 
-export async function submitAnswer(text: string): Promise<{ distilled: boolean; reason: string; state: TrainerStateView }> {
+/** Explicitly activate the shipped WMO pack as a SAMPLE role: seed its objectives + reference units
+ *  (idempotent), mark it active, and reset the interview onto it. This is the ONLY path that seeds WMO
+ *  content; a fresh install or a user-built role never touches it. */
+export async function useDemoPack(): Promise<TrainerStateView> {
   const s = await ensure();
-  const { packId } = activeRole();
+  await seedDemoPack(s);
+  setActiveRole(DEMO_ROLE);
+  planner = null; startedAt = 0; // fresh interview on the sample
+  return getState();
+}
+
+export async function submitAnswer(text: string): Promise<{ distilled: boolean; reason: string; state: TrainerStateView }> {
+  const active = activeRole();
+  if (!active) return { distilled: false, reason: "Choose a role first: build one from your tasks or a Position Description, or try the sample role.", state: await getState() };
+  const s = await ensure();
+  const { packId } = active;
   const map = await s.coverageInputs(packId);
   if (!planner || plannerPack !== packId) { planner = plannerStart(await s.listObjectives(packId), map); plannerPack = packId; startedAt = Date.now(); }
   planner = recordAnswer(planner, text); // advances the interview (queues five-whys on a deviation cue)
@@ -137,8 +164,10 @@ export async function submitAnswer(text: string): Promise<{ distilled: boolean; 
 
 export interface TrainerGame { id: string; title: string; source: string; [k: string]: unknown }
 export async function getGames(): Promise<{ games: TrainerGame[] }> {
+  const active = activeRole();
+  if (!active) return { games: [] }; // no role -> no lessons -> no drills
   const s = await ensure();
-  const { packId } = activeRole();
+  const { packId } = active;
   const objs = await s.listObjectives(packId);
   const byId = new Map(objs.map((o) => [o.objectiveId, o]));
   const src = (objectiveId: string): string => { const o = byId.get(objectiveId); return o ? `${o.domain} \u00b7 ${o.objectiveId} (${o.title})` : objectiveId; };

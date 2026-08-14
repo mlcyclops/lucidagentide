@@ -1,7 +1,9 @@
 <!doctype html>
 <!-- Copyright (c) 2026 TechLead 187 LLC · SPDX-License-Identifier: BUSL-1.1 -->
 <!-- P-TRAINER.7 (ADR-0255): the trainer's immersive stage act - extraction stage + coverage HUD +
-     lesson-based mini-game flyout. Self-contained; seeded with the WMO wealth-management-ops pack. -->
+     lesson-based mini-game flyout. Self-contained and ROLE-AGNOSTIC: in live mode the stage renders
+     whatever role pack is active (or asks you to choose one); the embedded WMO wealth-management-ops
+     data below is only the offline SAMPLE shown when the file is opened with no backend. -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -218,7 +220,7 @@ canvas#fx{position:fixed;inset:0;pointer-events:none;z-index:60}
       <svg class="logo" viewBox="0 0 48 48" fill="none"><defs><linearGradient id="lg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#e07bf0"/><stop offset="1" stop-color="#46c8dc"/></linearGradient></defs><rect x="5" y="5" width="38" height="38" rx="11" fill="url(#lg)" opacity="."/><rect x="5" y="5" width="38" height="38" rx="11" stroke="url(#lg)" stroke-width="2.4"/><path d="M17 15v13a5 5 0 0 0 5 5h9" stroke="url(#lg)" stroke-width="3.4" stroke-linecap="round"/></svg>
       <h1>Lucid Trainer<span class="sub" id="brandSub">Knowledge extraction</span></h1>
     </div>
-    <button class="role-chip" id="roleChip" data-tip="Switch role"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:15px;height:15px;flex:none"><path d="M16 7a4 4 0 1 1-8 0 4 4 0 0 1 8 0zM4 21v-1a6 6 0 0 1 12 0v1"/></svg><span id="roleName">Wealth-Management Ops</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" style="width:12px;height:12px;flex:none;opacity:.7"><path d="M6 9l6 6 6-6"/></svg></button>
+    <button class="role-chip" id="roleChip" data-tip="Switch role"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:15px;height:15px;flex:none"><path d="M16 7a4 4 0 1 1-8 0 4 4 0 0 1 8 0zM4 21v-1a6 6 0 0 1 12 0v1"/></svg><span id="roleName">Choose a role</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" style="width:12px;height:12px;flex:none;opacity:.7"><path d="M6 9l6 6 6-6"/></svg></button>
     <div class="spacer"></div>
     <div class="streak" id="streakPod" title="Answer streak"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M13 2 4 14h6l-1 8 9-12h-6z"/></svg><span id="streakN">0</span></div>
     <div class="xp-pod">
@@ -284,6 +286,8 @@ canvas#fx{position:fixed;inset:0;pointer-events:none;z-index:60}
     <div class="role-file"><input type="file" id="rolePdFile" accept=".txt,.md,.markdown,text/plain" /><span>or upload a .txt / .md</span></div>
     <div class="role-err" id="roleErr" hidden></div>
     <div class="role-actions"><button class="btn btn-primary" id="roleBuild"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M5 13l4 4L19 7"/></svg>Build my trainer</button><button class="btn btn-ghost" id="roleCancel">Cancel</button></div>
+    <label class="role-lbl">No role handy? <span>see the trainer in action on sample data first</span></label>
+    <button class="btn btn-cyan" id="roleSample" style="width:100%;justify-content:center"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M5 3l14 9-14 9z"/></svg>Try the sample role: Wealth-Management Ops</button>
   </div>
 </div>
 
@@ -301,7 +305,9 @@ canvas#fx{position:fixed;inset:0;pointer-events:none;z-index:60}
 </aside>
 
 <script>
-// ---------- lesson data (seeded from the WMO wealth-management-ops pack) ----------
+// ---------- lesson data: the offline SAMPLE (WMO wealth-management-ops). The stage itself is
+// role-agnostic; in live mode /api/trainer replaces ALL of this with the active role's real pack,
+// and this embedded data only renders when the file is opened standalone with no backend. ----------
 const DOMAINS = [
   { id:"Client lifecycle",   color:"#e07bf0", cov:64 },
   { id:"Money movement",     color:"#46c8dc", cov:80 },
@@ -367,21 +373,21 @@ let xp=0, streak=0, qi=0, drillsUnlocked=false;
 const LTOKEN=document.querySelector('meta[name="lucid-token"]')?.content||"";
 const PALETTE=["#e07bf0","#46c8dc","#5e8df2","#46d27e","#e8b23c","#c64bd6","#7ce0ef","#ef5f5f"];
 const QKIND={scenario:"scenario",direct:"direct",edge_probe:"edge",followup:"direct"};
-let LIVE=false, apiCoverage=null, liveQ=null, gamesLoaded=false, GAMES_DATA=null, ROLE="";
+let LIVE=false, NEEDS_ROLE=false, apiCoverage=null, liveQ=null, gamesLoaded=false, GAMES_DATA=null, ROLE="";
 const esc=(s)=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 async function api(path,opts={}){ const h={"x-lucid-token":LTOKEN}; if(opts.body)h["content-type"]="application/json"; const r=await fetch(path,{...opts,headers:h}); const j=await r.json(); if(!r.ok||!j.ok)throw new Error("api "+r.status); return j.data; }
-function applyState(st){ LIVE=true; apiCoverage=st.coverage; DOMAINS.length=0; (st.domains||[]).forEach((d,i)=>DOMAINS.push({id:d.domain,color:PALETTE[i%PALETTE.length],cov:d.score})); liveQ=st.question?{kind:QKIND[st.question.kind]||"scenario",dom:st.question.domain,text:st.question.text}:liveQ; if(st.role){ ROLE=st.role.label; const rn=$("#roleName"); if(rn) rn.textContent=st.role.label; } }
+function applyState(st){ LIVE=true; NEEDS_ROLE=!!st.needsRole; apiCoverage=st.coverage; DOMAINS.length=0; (st.domains||[]).forEach((d,i)=>DOMAINS.push({id:d.domain,color:PALETTE[i%PALETTE.length],cov:d.score})); liveQ=st.question?{kind:QKIND[st.question.kind]||"scenario",dom:st.question.domain,text:st.question.text}:(NEEDS_ROLE?null:liveQ); if(st.role){ ROLE=st.role.label; const rn=$("#roleName"); if(rn) rn.textContent=st.role.label; } }
 async function loadGames(){ if(!LIVE||gamesLoaded)return; try{ const {games}=await api("/api/trainer/games"); for(const g of games){
   if(g.id==="seq"&&Array.isArray(g.steps)&&g.steps.length){ DUE_DILIGENCE.length=0; DUE_DILIGENCE.push(...g.steps); }
   else if(g.id==="next"){ NEXTSTEP.prompt=g.prompt; NEXTSTEP.correct=g.correct; NEXTSTEP.decoys=g.decoys; NEXTSTEP.source=g.source; }
   else if(g.id==="exc"){ EXCEPTIONS.prompt=g.prompt; EXCEPTIONS.correct=g.correct; EXCEPTIONS.decoys=g.decoys; EXCEPTIONS.source=g.source; }
   else if(g.id==="why"&&g.chain){ FIVEWHYS.root=g.root; FIVEWHYS.chain=g.chain; FIVEWHYS.fix=g.fix; }
  } GAMES_DATA=games; const pip=$("#drillPip"); if(pip) pip.textContent=String(games.length); gamesLoaded=true; }catch(e){} }
-async function boot(){ try{ const st=await api("/api/trainer"); applyState(st); if(st.needsSetup) setTimeout(openRoleSetup,300); }catch(e){ LIVE=false; } renderQuestion(); renderHUD(); addXP(0); }
+async function boot(){ try{ const st=await api("/api/trainer"); applyState(st); if(st.needsRole) setTimeout(openRoleSetup,300); }catch(e){ LIVE=false; ROLE="Wealth-Management Ops (sample)"; const rn=$("#roleName"); if(rn) rn.textContent=ROLE; } renderQuestion(); renderHUD(); addXP(0); }
 const $=(s,r=document)=>r.querySelector(s), $$=(s,r=document)=>[...r.querySelectorAll(s)];
 const clamp=(n,a,b)=>Math.max(a,Math.min(b,n));
 
-function overallCoverage(){ return Math.round(DOMAINS.reduce((s,d)=>s+d.cov,0)/DOMAINS.length); }
+function overallCoverage(){ return DOMAINS.length?Math.round(DOMAINS.reduce((s,d)=>s+d.cov,0)/DOMAINS.length):0; }
 function lvlLabel(c){ return c>=85?"L3":c>=60?"L2":c>=30?"L1":"L0"; }
 
 function renderHUD(){
@@ -395,9 +401,16 @@ function renderHUD(){
     box.appendChild(row);
   }
   const gap=[...DOMAINS].sort((a,b)=>a.cov-b.cov)[0];
-  $("#gapNext").textContent=gap.id+"  ("+lvlLabel(gap.cov)+")"; $("#gapNext").title=gap.id;
+  $("#gapNext").textContent=gap?gap.id+"  ("+lvlLabel(gap.cov)+")":"-"; $("#gapNext").title=gap?gap.id:"";
 }
 function renderQuestion(){
+  if(LIVE&&(NEEDS_ROLE||!DOMAINS.length)){ // live but no usable role: point at the role modal, never sample content
+    const chip=$("#qKind"); chip.className="chip direct"; $("#qKindTxt").textContent="Setup";
+    $("#questionText").textContent="Choose a role to build your coverage map, or try the sample role.";
+    $("#domName").textContent="-"; $("#domName").title=""; $("#domDot").style.color="var(--txt-3)"; $("#domDot").style.background="var(--txt-3)";
+    $("#progressNote").textContent="Live \u00b7 no role active";
+    return;
+  }
   const q=(LIVE&&liveQ)?liveQ:QUESTIONS[qi%QUESTIONS.length];
   const kindMap={scenario:["Scenario","scenario"],direct:["Direct probe","direct"],edge:["Edge probe","edge"]};
   const [label,cls]=kindMap[q.kind];
@@ -412,6 +425,7 @@ function addXP(n){ xp+=n; $("#xpN").textContent=xp; const C=2*Math.PI*15; $("#xp
 function bumpStreak(ok){ streak=ok?streak+1:0; $("#streakN").textContent=streak; $("#streakPod").style.opacity=streak?1:.5; }
 
 async function submit(){
+  if(LIVE&&NEEDS_ROLE){ openRoleSetup(); return; } // nothing to answer until a role is active
   const val=$("#answer").value.trim();
   if(!val){ $("#answer").focus(); return; }
   const deviation=/\b(except|unless|but if|one time|edge case|however|gotcha|watch out)\b/i.test(val);
@@ -570,7 +584,20 @@ async function buildRole(){
   }catch(e){ roleErr("Couldn't reach the trainer service."); }
   finally{ btn.disabled=false; btn.innerHTML=orig; }
 }
+async function useSample(){ // the explicitly-labeled WMO sample: POST {demo:true} to the same role route
+  if(!LIVE){ closeRoleSetup(); toast("Standalone preview: already showing the sample data"); return; }
+  roleErr("");
+  const btn=$("#roleSample"); const orig=btn.innerHTML; btn.disabled=true; btn.textContent="Loading the sample\u2026";
+  try{
+    const res=await api("/api/trainer/role",{method:"POST",body:JSON.stringify({demo:true})});
+    if(!res.ok){ roleErr(res.error||"Couldn't load the sample role."); return; }
+    applyState(res.state); gamesLoaded=false; GAMES_DATA=null; qi=0;
+    closeRoleSetup(); renderQuestion(); renderHUD(); confetti(26,true); toast("Sample role loaded: Wealth-Management Ops");
+  }catch(e){ roleErr("Couldn't reach the trainer service."); }
+  finally{ btn.disabled=false; btn.innerHTML=orig; }
+}
 if($("#roleChip")) $("#roleChip").onclick=openRoleSetup;
+if($("#roleSample")) $("#roleSample").onclick=useSample;
 if($("#roleClose")) $("#roleClose").onclick=closeRoleSetup;
 if($("#roleCancel")) $("#roleCancel").onclick=closeRoleSetup;
 if($("#roleBuild")) $("#roleBuild").onclick=buildRole;
