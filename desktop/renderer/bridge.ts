@@ -1324,7 +1324,11 @@ export const bridge: LucidBridge = {
   capturePreview: (rect) => (shell?.capturePreview ? shell.capturePreview(rect) : Promise.resolve(null)), // P-PREVIEW.1
   previewEgressAllows: async (url) => { const d = await getData(`/api/preview/egress-check?url=${encodeURIComponent(url)}`); return !!(d as { allow?: boolean } | null)?.allow; }, // P-PREVIEW.3b
   previewFile: async (path) => { const d = await getData(`/api/preview/file?path=${encodeURIComponent(path)}`); const h = (d as { html?: unknown } | null)?.html; return typeof h === "string" ? h : null; }, // P-PREVIEW.4
-  previewServeUrl: (path) => `/api/preview/serve?path=${encodeURIComponent(path)}${TOKEN ? `&t=${encodeURIComponent(TOKEN)}` : ""}`, // P-PREVIEW.4b
+  // P-PREVIEW.4b. The `v` nonce makes every deliberate load a FRESH navigation: assigning an iframe src
+  // its current value does not renavigate in Chromium, so without it a re-open (or a re-edit of the same
+  // file) kept showing the previously served document forever, no matter what was on disk. The server
+  // ignores `v`; the response is already no-store, the nonce only defeats the same-URL no-op.
+  previewServeUrl: (path) => `/api/preview/serve?path=${encodeURIComponent(path)}${TOKEN ? `&t=${encodeURIComponent(TOKEN)}` : ""}&v=${Date.now().toString(36)}`,
   previewImage: (dataUrl) => post("/api/preview/image", { dataUrl }) as Promise<{ path: string } | null>, // P-IMG.1 (ADR-0208)
   cachePreviewShot: async (png) => { await post("/api/preview/shot-cache", { png }); }, // P-PREVIEW.3a-shot
   previewInspectNext: () => getData("/api/preview/inspect/next"), // P-PREVIEW.6b

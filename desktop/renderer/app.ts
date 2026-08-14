@@ -4116,7 +4116,10 @@ function closeTrainer(): void {
 function onPreviewAvailable(path: string): void {
   if (!path) return;
   state.lastPreviewablePath = path;
-  if (!previewOpen) { openPreview({ reveal: "agent" }); kickPreviewShotSoon(); return; } // first reveal shows the agent's work (nothing on Yours yet)
+  // A write JUST happened, so the agent lane's loaded document is stale by definition. Clear the lane's
+  // path before openPreview so its unchanged-path guard cannot skip the reload (that guard exists to keep
+  // a running previewed app alive across mere panel toggles, not across file changes).
+  if (!previewOpen) { prevPathByLane.agent = ""; openPreview({ reveal: "agent" }); kickPreviewShotSoon(); return; }
   loadPreview(path, "agent"); // already open → update the AGENT lane live; badges the tab if you're on Yours
   kickPreviewShotSoon(); // refresh the cached shot once the agent frame paints, so a following preview_screenshot has it
 }
