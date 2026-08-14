@@ -9,15 +9,17 @@
 <title>Lucid Trainer</title>
 <style>
 :root{
-  --bg-0:#08090d; --bg-1:#0f1117; --bg-2:#151823; --bg-3:#1b1f2b;
+  --bg-0:#0a0b0f; --bg-1:#0f1117; --bg-2:#151823; --bg-3:#1b1f2b;
   --line:#252a3a; --line-soft:#1a1e2a; --line-strong:#323a4f;
   --txt:#edeff6; --txt-2:#aeb4c6; --txt-3:#727a90; --txt-4:#525a70;
   --accent:#c64bd6; --accent-2:#e07bf0; --accent-dim:rgba(198,75,214,.14);
   --cyan:#46c8dc; --cyan-dim:rgba(70,200,220,.14);
   --green:#46d27e; --amber:#e8b23c; --red:#ef5f5f; --blue:#5e8df2;
   --green-dim:rgba(70,210,126,.14); --red-dim:rgba(239,95,95,.14);
-  --r-lg:16px; --r-md:11px; --r-sm:7px;
-  --t:200ms; --spring:cubic-bezier(.34,1.56,.64,1); --ease:cubic-bezier(.16,1,.3,1);
+  --r-lg:12px; --r-md:9px; --r-sm:6px;
+  --t:180ms; --spring:cubic-bezier(.34,1.56,.64,1); --ease:cubic-bezier(.2,.8,.2,1); --ease-out:cubic-bezier(.16,1,.3,1);
+  --btn-text-dark:#150018; --btn-text-cyan:#00181c;
+  --state-correct-text:#00180c; --state-wrong-text:#180000;
   --font:"Inter",ui-sans-serif,-apple-system,"Segoe UI",Roboto,system-ui,sans-serif;
   --shadow:0 18px 50px -18px rgba(0,0,0,.7),0 2px 10px rgba(0,0,0,.4);
   --emboss:inset 0 1px 0 rgba(255,255,255,.05);
@@ -68,25 +70,25 @@ body::before{ /* faint grid */
 .chip svg{width:13px;height:13px;flex:none}
 .dom-chip{display:inline-flex;align-items:center;gap:7px;font-size:12px;color:var(--txt-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:280px}
 .dom-chip .dot{width:9px;height:9px;border-radius:50%;flex:none;box-shadow:0 0 8px currentColor}
-.scenario-card{position:relative;background:linear-gradient(160deg,rgba(198,75,214,.10),rgba(70,200,220,.05));border:1px solid var(--line-strong);border-radius:var(--r-md);padding:20px 22px 20px 56px;margin-bottom:4px;box-shadow:var(--emboss);animation:cardIn .5s var(--ease) both}
+.scenario-card{position:relative;background:linear-gradient(160deg,rgba(198,75,214,.10),rgba(70,200,220,.05));border:1px solid var(--line-strong);border-radius:var(--r-md);padding:20px 22px 20px 56px;margin-bottom:4px;box-shadow:var(--emboss);animation:cardIn .5s var(--ease-out) both}
 .scenario-card .qmark{position:absolute;left:18px;top:18px;width:26px;height:26px;color:var(--accent-2);opacity:.9}
 .scenario-card p{margin:0;font-size:17px;line-height:1.55;color:var(--txt)}
 .stage-note{font-size:12px;color:var(--txt-3);margin:14px 2px 8px;display:flex;align-items:center;gap:7px}
 .stage-note svg{width:14px;height:14px;flex:none;color:var(--accent)}
 .answer{flex:1;min-height:96px;width:100%;resize:none;background:var(--bg-0);border:1px solid var(--line);border-radius:var(--r-md);color:var(--txt);font-family:var(--font);font-size:14px;line-height:1.55;padding:14px 16px;transition:border-color var(--t),box-shadow var(--t)}
 .answer:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-dim)}
-.answer::placeholder{color:var(--txt-4)}
+.answer::placeholder{color:var(--txt-3)}
 .stage-actions{display:flex;align-items:center;gap:11px;margin-top:14px}
 
 /* ---- custom buttons ---- */
 .btn{display:inline-flex;align-items:center;gap:8px;font-family:var(--font);font-size:13.5px;font-weight:600;border:0;border-radius:var(--r-md);padding:11px 18px;cursor:pointer;white-space:nowrap;transition:transform var(--t) var(--spring),box-shadow var(--t),filter var(--t),background var(--t)}
 .btn svg{width:16px;height:16px;flex:none}
 .btn:active{transform:translateY(1px) scale(.98)}
-.btn-primary{color:#150018;background:linear-gradient(135deg,var(--accent-2),var(--accent));box-shadow:0 8px 22px -8px rgba(198,75,214,.8),var(--emboss)}
+.btn-primary{color:var(--btn-text-dark);background:linear-gradient(135deg,var(--accent-2),var(--accent));box-shadow:0 8px 22px -8px rgba(198,75,214,.8),var(--emboss)}
 .btn-primary:hover{transform:translateY(-2px);box-shadow:0 14px 30px -8px rgba(198,75,214,.9)}
 .btn-ghost{color:var(--txt-2);background:var(--bg-2);border:1px solid var(--line)}
 .btn-ghost:hover{color:var(--txt);border-color:var(--accent);background:var(--bg-3)}
-.btn-cyan{color:#00181c;background:linear-gradient(135deg,#7ce0ef,var(--cyan));box-shadow:0 8px 22px -8px rgba(70,200,220,.7),var(--emboss)}
+.btn-cyan{color:var(--btn-text-cyan);background:linear-gradient(135deg,#7ce0ef,var(--cyan));box-shadow:0 8px 22px -8px rgba(70,200,220,.7),var(--emboss)}
 .btn-cyan:hover{transform:translateY(-2px)}
 .btn:disabled{opacity:.5;cursor:not-allowed;transform:none;filter:grayscale(.3)}
 
@@ -105,16 +107,16 @@ body::before{ /* faint grid */
 .dom-row .name{font-size:12px;color:var(--txt-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;grid-column:1}
 .dom-row .lvl{font-size:10px;font-weight:700;color:var(--txt-3);grid-column:2;white-space:nowrap}
 .dom-row .track{grid-column:1/3;height:6px;border-radius:6px;background:var(--bg-0);overflow:hidden;border:1px solid var(--line-soft)}
-.dom-row .fill{height:100%;border-radius:6px;transition:width .8s var(--ease);box-shadow:0 0 8px currentColor}
+.dom-row .fill{height:100%;border-radius:6px;transition:width .8s var(--ease-out);box-shadow:0 0 8px currentColor}
 .gap-next{background:var(--bg-0);border:1px dashed var(--line-strong);border-radius:var(--r-md);padding:11px 13px}
-.gap-next .k{font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--txt-4);display:block;margin-bottom:3px}
+.gap-next .k{font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--txt-3);display:block;margin-bottom:3px}
 .gap-next .v{font-size:12.5px;color:var(--cyan);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block}
 
 /* ---- drills launcher (floating, right edge) ---- */
 .drill-tab{position:fixed;right:0;top:50%;transform:translateY(-50%);z-index:30;display:flex;flex-direction:column;align-items:center;gap:8px;background:linear-gradient(135deg,var(--accent),#8f2fa0);color:#fff;border:0;border-radius:14px 0 0 14px;padding:16px 12px;cursor:pointer;box-shadow:-8px 0 26px -10px rgba(198,75,214,.8);writing-mode:vertical-rl;text-orientation:mixed;font-family:var(--font);font-weight:700;font-size:13px;letter-spacing:.08em;transition:padding var(--t) var(--spring),box-shadow var(--t)}
 .drill-tab:hover{padding-right:18px;box-shadow:-12px 0 34px -10px rgba(198,75,214,1)}
 .drill-tab svg{width:20px;height:20px;transform:rotate(90deg)}
-.drill-tab .pip{writing-mode:horizontal-tb;background:var(--cyan);color:#00181c;font-size:10px;border-radius:999px;padding:1px 6px;font-weight:800}
+.drill-tab .pip{writing-mode:horizontal-tb;background:var(--cyan);color:var(--btn-text-cyan);font-size:10px;border-radius:999px;padding:1px 6px;font-weight:800}
 
 /* ---- flyout ---- */
 .scrim{position:fixed;inset:0;background:rgba(5,6,10,.55);backdrop-filter:blur(2px);z-index:40;opacity:0;pointer-events:none;transition:opacity var(--t)}
@@ -131,7 +133,7 @@ body::before{ /* faint grid */
 .flyout-body::-webkit-scrollbar{width:8px}.flyout-body::-webkit-scrollbar-thumb{background:var(--line-strong);border-radius:8px}
 
 /* approval gate */
-.approve{background:linear-gradient(160deg,rgba(198,75,214,.12),rgba(70,200,220,.06));border:1px solid var(--line-strong);border-radius:var(--r-md);padding:18px;text-align:center;animation:cardIn .4s var(--ease) both}
+.approve{background:linear-gradient(160deg,rgba(198,75,214,.12),rgba(70,200,220,.06));border:1px solid var(--line-strong);border-radius:var(--r-md);padding:18px;text-align:center;animation:cardIn .4s var(--ease-out) both}
 .approve .mascot{width:76px;height:76px;margin:2px auto 10px;display:block;animation:bob 3s ease-in-out infinite}
 .approve h3{margin:0 0 6px;font-size:16px}
 .approve p{margin:0 0 16px;font-size:13px;color:var(--txt-2);line-height:1.55}
@@ -145,21 +147,22 @@ body::before{ /* faint grid */
 .game-card .meta{min-width:0}
 .game-card .meta b{display:block;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .game-card .meta small{display:block;font-size:11.5px;color:var(--txt-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px}
-.game-card .go{color:var(--txt-4);flex:none}
+.game-card .go{color:var(--txt-2);flex:none}
 .game-card:hover .go{color:var(--accent-2)}
-.lesson-tag{font-size:10px;color:var(--txt-4);letter-spacing:.1em;text-transform:uppercase;margin:6px 2px 10px;display:flex;align-items:center;gap:6px}
+.lesson-tag{font-size:10px;color:var(--txt-2);letter-spacing:.1em;text-transform:uppercase;margin:6px 2px 10px;display:flex;align-items:center;gap:6px}
 .lesson-tag svg{width:12px;height:12px;color:var(--cyan)}
 
 /* game view */
 .game-view h3{margin:0 0 4px;font-size:16px}
+.h3-sub{color:var(--txt-3);font-weight:500}
 .game-view .prompt{background:var(--bg-0);border:1px solid var(--line);border-radius:var(--r-md);padding:14px 16px;font-size:14.5px;line-height:1.5;margin:12px 0 16px;color:var(--txt)}
 .opt{display:flex;align-items:center;gap:11px;width:100%;text-align:left;background:var(--bg-1);border:1px solid var(--line);border-radius:var(--r-sm);padding:13px 14px;margin-bottom:9px;cursor:pointer;font-family:var(--font);font-size:13.5px;color:var(--txt-2);line-height:1.45;transition:all var(--t)}
 .opt .key{width:24px;height:24px;flex:none;border-radius:6px;background:var(--bg-3);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:var(--txt-3)}
 .opt:hover:not(.locked){border-color:var(--accent);color:var(--txt);transform:translateX(-3px)}
 .opt.correct{border-color:var(--green);background:var(--green-dim);color:var(--txt)}
-.opt.correct .key{background:var(--green);color:#00180c}
+.opt.correct .key{background:var(--green);color:var(--state-correct-text)}
 .opt.wrong{border-color:var(--red);background:var(--red-dim);animation:shake .4s}
-.opt.wrong .key{background:var(--red);color:#180000}
+.opt.wrong .key{background:var(--red);color:var(--state-wrong-text)}
 .opt.locked{cursor:default}
 /* sequence game */
 .seq-list{list-style:none;margin:0;padding:0}
@@ -167,15 +170,16 @@ body::before{ /* faint grid */
 .seq-item:hover{border-color:var(--accent-2)}
 .seq-item.dragging{opacity:.4;border-style:dashed}
 .seq-item.over{transform:translateY(2px);border-color:var(--cyan)}
-.seq-item .grip{color:var(--txt-4);flex:none}.seq-item .grip svg{width:16px;height:16px}
+.seq-item .grip{color:var(--txt-3);flex:none}.seq-item .grip svg{width:16px;height:16px}
 .seq-item .n{width:22px;height:22px;flex:none;border-radius:50%;background:var(--accent-dim);color:var(--accent-2);font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center}
 .seq-item .lbl{font-size:13px;line-height:1.4;flex:1}
 .seq-item.ok{border-color:var(--green);background:var(--green-dim)}
 .seq-item.no{border-color:var(--red);background:var(--red-dim)}
-.result{text-align:center;padding:18px 6px;animation:cardIn .4s var(--ease) both}
+.result{text-align:center;padding:18px 6px;animation:cardIn .4s var(--ease-out) both}
 .result .big{font-size:40px;font-weight:800;letter-spacing:-.02em}
 .result .big.win{background:linear-gradient(135deg,var(--green),var(--cyan));-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
 .result p{color:var(--txt-2);font-size:13.5px;margin:6px 0 16px}
+.result-meta{font-size:12px;color:var(--txt-3)}
 .backline{display:flex;gap:10px;margin-top:16px}
 
 @keyframes cardIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
@@ -187,7 +191,7 @@ canvas#fx{position:fixed;inset:0;pointer-events:none;z-index:60}
 .role-chip{-webkit-app-region:no-drag;display:inline-flex;align-items:center;gap:7px;background:linear-gradient(180deg,var(--bg-2),var(--bg-1));border:1px solid var(--line);border-radius:999px;padding:6px 12px;color:var(--txt-2);font:600 12.5px var(--font);cursor:pointer;white-space:nowrap;transition:border-color var(--t),color var(--t)}
 .role-chip:hover{border-color:var(--accent);color:var(--txt)}
 .role-chip #roleName{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:180px}
-.role-scrim{position:fixed;inset:0;z-index:80;background:rgba(5,6,10,.62);backdrop-filter:blur(3px);display:flex;align-items:center;justify-content:center;padding:24px;animation:cardIn .2s var(--ease) both}
+.role-scrim{position:fixed;inset:0;z-index:80;background:rgba(5,6,10,.62);backdrop-filter:blur(3px);display:flex;align-items:center;justify-content:center;padding:24px;animation:cardIn .2s var(--ease-out) both}
 .role-scrim[hidden]{display:none}
 .role-modal{width:min(560px,94vw);max-height:90vh;overflow-y:auto;background:linear-gradient(180deg,rgba(21,24,35,.99),rgba(11,12,17,.99));border:1px solid var(--line-strong);border-radius:var(--r-lg);box-shadow:var(--shadow);padding:22px}
 .role-modal-h{display:flex;align-items:center;gap:12px;margin-bottom:6px}
@@ -195,7 +199,7 @@ canvas#fx{position:fixed;inset:0;pointer-events:none;z-index:60}
 .role-modal-h b{font-size:17px;display:block}
 .role-modal-h small{font-size:12px;color:var(--txt-3)}
 .role-lbl{display:block;font-size:11px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--txt-3);margin:14px 2px 7px}
-.role-lbl span{font-weight:500;letter-spacing:.02em;text-transform:none;color:var(--txt-4);margin-left:6px}
+.role-lbl span{font-weight:500;letter-spacing:.02em;text-transform:none;color:var(--txt-3);margin-left:6px}
 .role-in,.role-ta{width:100%;background:var(--bg-0);border:1px solid var(--line);border-radius:var(--r-md);color:var(--txt);font:14px var(--font);padding:11px 13px;transition:border-color var(--t),box-shadow var(--t)}
 .role-in:focus,.role-ta:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-dim)}
 .role-ta{resize:vertical;min-height:76px;line-height:1.5}
@@ -228,13 +232,13 @@ canvas#fx{position:fixed;inset:0;pointer-events:none;z-index:60}
     <div class="panel stage">
       <div class="stage-head">
         <span class="chip scenario" id="qKind"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 10h8M8 14h5"/><rect x="3" y="4" width="18" height="14" rx="3"/><path d="M8 18l-3 3v-3"/></svg><span id="qKindTxt">Scenario</span></span>
-        <span class="dom-chip"><span class="dot" id="domDot"></span><span id="domName">—</span></span>
+        <span class="dom-chip"><span class="dot" id="domDot"></span><span id="domName">-</span></span>
       </div>
       <div class="scenario-card">
         <svg class="qmark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M9.1 9a3 3 0 1 1 4.5 2.6c-.9.5-1.6 1.2-1.6 2.4"/><circle cx="12" cy="18" r="1"/></svg>
         <p id="questionText">Loading the extraction map…</p>
       </div>
-      <div class="stage-note"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 8v5l3 2"/></svg><span>Answer in your own words — the trainer distills it into confirmed lesson units.</span></div>
+      <div class="stage-note"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 8v5l3 2"/></svg><span>Answer in your own words: the trainer distills it into confirmed lesson units.</span></div>
       <textarea class="answer" id="answer" placeholder="Type the expert's answer…  (tip: mention an exception like &quot;except when…&quot; to trigger a five-whys drill)"></textarea>
       <div class="stage-actions">
         <button class="btn btn-primary" id="submitBtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M5 12h14M13 6l6 6-6 6"/></svg>Submit answer</button>
@@ -251,14 +255,14 @@ canvas#fx{position:fixed;inset:0;pointer-events:none;z-index:60}
         <div class="cov-ring">
           <svg viewBox="0 0 120 120"><defs><linearGradient id="cg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#e07bf0"/><stop offset="1" stop-color="#46c8dc"/></linearGradient><filter id="glow"><feGaussianBlur stdDeviation="2.5" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs>
             <circle cx="60" cy="60" r="50" fill="none" stroke="#1b1f2b" stroke-width="11"/>
-            <circle id="covArc" cx="60" cy="60" r="50" fill="none" stroke="url(#cg)" stroke-width="11" stroke-linecap="round" stroke-dasharray="314.16" stroke-dashoffset="314.16" transform="rotate(-90 60 60)" filter="url(#glow)" style="transition:stroke-dashoffset 1s var(--ease)"/>
+            <circle id="covArc" cx="60" cy="60" r="50" fill="none" stroke="url(#cg)" stroke-width="11" stroke-linecap="round" stroke-dasharray="314.16" stroke-dashoffset="314.16" transform="rotate(-90 60 60)" filter="url(#glow)" style="transition:stroke-dashoffset 1s var(--ease-out)"/>
           </svg>
           <div class="pct"><b id="covPct">0%</b><span>extracted</span></div>
         </div>
       </div>
       <div class="hud-title" style="letter-spacing:.14em">Domains</div>
       <div class="domains" id="domains"></div>
-      <div class="gap-next"><span class="k">Next gap</span><span class="v" id="gapNext">—</span></div>
+      <div class="gap-next"><span class="k">Next gap</span><span class="v" id="gapNext">-</span></div>
     </div>
   </div>
 </div>
@@ -454,7 +458,7 @@ $("#drillTab").onclick=openFly; $("#flyClose").onclick=closeFly; scrim.onclick=c
 
 const GAMES=[
   { id:"seq", name:"Sequence the Steps", desc:"Order the due-diligence checklist", grad:"linear-gradient(135deg,#e07bf0,#c64bd6)", ico:'<svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2"><path d="M8 6h13M8 12h13M8 18h13"/><path d="M3 6h.01M3 12h.01M3 18h.01"/></svg>' },
-  { id:"next", name:"Next Step?", desc:"Pick what comes next in the wire flow", grad:"linear-gradient(135deg,#7ce0ef,#46c8dc)", ico:'<svg viewBox="0 0 24 24" fill="none" stroke="#00181c" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M10 8l4 4-4 4"/></svg>' },
+  { id:"next", name:"Next Step?", desc:"Pick what comes next in the wire flow", grad:"linear-gradient(135deg,#7ce0ef,#46c8dc)", ico:'<svg viewBox="0 0 24 24" fill="none" style="stroke:var(--btn-text-cyan)" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M10 8l4 4-4 4"/></svg>' },
   { id:"why", name:"Five Whys", desc:"Drill a deviation to root cause", grad:"linear-gradient(135deg,#8fb4ff,#5e8df2)", ico:'<svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2"><path d="M12 3v4M12 21v-4M5 12H3M21 12h-2"/><circle cx="12" cy="12" r="4"/></svg>' },
   { id:"exc", name:"Spot the Exception", desc:"Find the edge case in the routine", grad:"linear-gradient(135deg,#f6c65a,#e8b23c)", ico:'<svg viewBox="0 0 24 24" fill="none" stroke="#180f00" stroke-width="2"><path d="M12 3l9 16H3z"/><path d="M12 10v4M12 17h.01"/></svg>' },
 ];
@@ -527,7 +531,7 @@ function gameWhy(){
     const node=FIVEWHYS.chain[step];
     const opts=[node.correct,...node.decoys].map((t,i)=>({t,ok:i===0}));
     for(let i=opts.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[opts[i],opts[j]]=[opts[j],opts[i]];}
-    let h=`<div class="game-view"><h3>Five Whys <span style="color:var(--txt-4);font-weight:500">· ${step+1}/${FIVEWHYS.chain.length}</span></h3><div class="lesson-tag"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v6M12 22v-6"/><circle cx="12" cy="12" r="3"/></svg>Money movement · deviation drill</div><div class="prompt"><b style="color:var(--amber)">${esc(root)}</b><br/><span style="color:var(--txt-2)">${esc(node.q)}</span></div><div id="opts"></div></div>`+backBar();
+    let h=`<div class="game-view"><h3>Five Whys <span class="h3-sub">· ${step+1}/${FIVEWHYS.chain.length}</span></h3><div class="lesson-tag"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v6M12 22v-6"/><circle cx="12" cy="12" r="3"/></svg>Money movement · deviation drill</div><div class="prompt"><b style="color:var(--amber)">${esc(root)}</b><br/><span style="color:var(--txt-2)">${esc(node.q)}</span></div><div id="opts"></div></div>`+backBar();
     $("#flyBody").innerHTML=h; wireBack();
     const box=$("#opts"), keys="ABC";
     opts.forEach((o,i)=>{ const b=document.createElement("button"); b.className="opt"; b.innerHTML=`<span class="key">${keys[i]}</span><span>${esc(o.t)}</span>`;
@@ -540,7 +544,7 @@ function gameWhy(){
 }
 function finishGame(title,win,detail,fix){
   const msg=fix?detail:(detail||(win?"Locked in. That lesson just got stronger.":"Close \u2014 the gap flows back to the interview."));
-  $("#flyBody").innerHTML=`<div class="game-view"><div class="result"><div class="big ${win?'win':''}">${win?'\u2713 Nailed it':'Keep drilling'}</div><p>${msg}</p><div style="font-size:12px;color:var(--txt-3)">${title} \u00b7 +${win?'XP earned':'try again'}</div></div>${fix?'<div class="prompt" style="border-color:var(--green);background:var(--green-dim)">'+detail+'</div>':''}<div class="backline"><button class="btn btn-primary" id="again"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M4 12a8 8 0 1 1 2.3 5.6M4 20v-4h4"/></svg>More drills</button></div></div>`;
+  $("#flyBody").innerHTML=`<div class="game-view"><div class="result"><div class="big ${win?'win':''}">${win?'\u2713 Nailed it':'Keep drilling'}</div><p>${msg}</p><div class="result-meta">${title} \u00b7 +${win?'XP earned':'try again'}</div></div>${fix?'<div class="prompt" style="border-color:var(--green);background:var(--green-dim)">'+detail+'</div>':''}<div class="backline"><button class="btn btn-primary" id="again"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M4 12a8 8 0 1 1 2.3 5.6M4 20v-4h4"/></svg>More drills</button></div></div>`;
   if(win) confetti(24,true);
   $("#again").onclick=renderMenu;
 }
