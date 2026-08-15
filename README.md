@@ -762,8 +762,11 @@ needs **zero prerequisites**. Code-signing and notarization are supported when c
 
 ### Homebrew (macOS)
 
-Install the desktop app with Homebrew Cask straight from this repo - no manual unzip, and `brew upgrade`
-keeps the cask wiring current (the app itself also self-updates via electron-updater):
+Install the desktop app with Homebrew Cask straight from this repo - no manual unzip. The cask is
+pinned to the current tagged release with real SHA-256 checksums, and CI re-pins it on every release
+(the `update-cask` job), so `brew update && brew upgrade --cask lucidagentide` is the reliable way to
+update on macOS. (In-app auto-update cannot install on the unsigned macOS build until code-signing
+lands - ADR-0246 - so Homebrew IS the macOS update channel for now.)
 
 ```bash
 brew tap mlcyclops/lucid https://github.com/mlcyclops/lucidagentide

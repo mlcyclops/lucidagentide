@@ -17554,3 +17554,62 @@ No silent default role. The role choice is the trainer's first interaction:
 
 ADR-0252..0255 (the trainer flywheel, data contract, trust pipeline, and interview mechanics this
 increment re-fronts), and CLAUDE.md invariants 3 and 5 (the distiller path is untouched).
+
+## ADR-0258 -- P-RELEASE.3: Homebrew is the working macOS update channel - pin the cask per release + CI re-pin (2026-08-15)
+
+**Status:** Accepted -- BUILT.
+
+### Context
+
+Observed on a real machine: `brew upgrade --cask lucidagentide` after the v1.12.1 release reported
+"successfully installed", yet About still showed v1.12.0. Traced end to end:
+
+1. The cask was `version :latest` + `sha256 :no_check`, downloading
+   `releases/download/latest/LucidAgentIDE-mac-<arch>.pkg` - the rolling `latest` TAG release.
+2. That rolling release is refreshed ONLY by the manual `publish-latest` dispatch
+   (`build-desktop.yml`), never by tag builds. Last refresh: 2026-07-05, with v1.10.0-era assets.
+   Every release since (v1.11.x, v1.12.x) was cut by tag push, so brew kept serving the July build
+   byte-for-byte (361,395,667 bytes - matched the observed download exactly).
+3. Latent second break: the mac artifact was renamed `LucidAgentIDE-mac-*` to `LucidAgent-mac-*`
+   (ADR-0225 rename era), so even a refreshed rolling release would 404 the cask URL.
+4. The installed app stayed at 1.12.0 (not downgraded to the pkg's 1.10.0): macOS `installer(8)`
+   bundle-version semantics left the newer bundle in place while still reporting success, which is
+   what made the failure look like "the version label is wrong" instead of "the artifact is stale".
+5. This matters because in-app auto-update CANNOT rescue macOS: the build is unsigned and
+   Squirrel.Mac refuses unsigned updates after paying for the full zip download (ADR-0246, all four
+   defects confirmed live on this machine: minutes-long silent download, Restart-then-nothing).
+   Windows NSIS has no such signing gate, which is why Windows updates in seconds and mac never.
+
+Net: Homebrew is the ONLY working macOS update channel until P-RELEASE.2a (signing) ships, and it
+was silently serving six-week-old unverified bits. A security-first product distributing unsigned
+installers with `sha256 :no_check` was also simply wrong.
+
+### Decision
+
+1. **Pin the cask** (`Casks/lucidagentide.rb`): `version "X.Y.Z"` + per-arch `sha256`, URL on the
+   versioned release (`releases/download/v#{version}/LucidAgent-mac-#{arch}.pkg`), livecheck via
+   `:github_latest`. Every brew install is now checksum-verified against a tagged release.
+2. **CI re-pins on every release**: new `update-cask` job in `build-desktop.yml` (tag builds only,
+   after `build`) rewrites version + both sha256s from the tag's uploaded assets (API digest, with
+   download-and-hash fallback) and pushes to master. Fail-closed: missing asset, missing digest, or
+   a drifted cask format fails the job loudly; it can never half-pin.
+3. **README** Homebrew section now states the real contract: `brew update && brew upgrade --cask`
+   is the macOS update path; in-app auto-update is inert on mac until ADR-0246/P-RELEASE.2a.
+
+The rolling `latest` release is no longer load-bearing for brew. The ADR-0246 open question
+(P-RELEASE.2d, whether `publish-latest` should set `make_latest` at all) stands and is now easier:
+only the README download buttons still reference GitHub's Latest pointer.
+
+### Verification
+
+`brew style` clean (one pre-existing cosmetic cop, frozen_string_literal, same as the old file);
+`brew fetch --cask` against the pinned cask downloaded the real v1.12.1 arm64 pkg from the
+versioned release and the sha256 matched the actual bytes. Workflow YAML parse-verified; the job
+only takes effect for tags cut after this lands on master (a tag build runs the workflow frozen at
+the tagged commit).
+
+### Relates to
+
+ADR-0213 (tolerant tag-to-semver derivation, reused verbatim), ADR-0246 (P-RELEASE.2: mac
+auto-update inert; this ADR is the interim channel), ADR-0225 (the artifact rename that broke the
+old URL), `Casks/lucidagentide.rb`, `.github/workflows/build-desktop.yml`, README "Homebrew".

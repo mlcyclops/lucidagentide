@@ -206,6 +206,74 @@ jobs:
             desktop/release/*.blockmap
             desktop/release/latest*.yml
 
+  # Homebrew ships from THIS repo's Casks/lucidagentide.rb (the repo doubles as the tap:
+  # `brew tap mlcyclops/lucid https://github.com/mlcyclops/lucidagentide`). The cask is PINNED
+  # per release (version + per-arch sha256) because the in-app updater cannot install updates
+  # on the unsigned mac build (ADR-0246), which makes `brew upgrade` the working macOS update
+  # channel - so the pin must move with every release, automatically. This job rewrites the
+  # pin from the tag's uploaded release assets and pushes it to master, so `brew update` sees
+  # the new version the moment the release is live. Fail-closed: a missing asset or checksum
+  # fails the job loudly instead of leaving the cask silently stale (the pre-fix failure mode:
+  # the cask tracked the rolling "latest" release, which tag builds never refresh, so
+  # `brew install` served a weeks-old build - see ADR-0258).
+  update-cask:
+    name: Pin the Homebrew cask to this release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: master
+
+      - name: Rewrite Casks/lucidagentide.rb from the release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF#refs/tags/}"
+          # Same tolerant semver derivation as the version-stamp step (ADR-0213).
+          V="${TAG#v}"; V="${V#.}"
+          if [[ ! "$V" =~ ^[0-9]+\.[0-9]+\.[0-9]+ ]]; then
+            echo "::error::tag '${TAG}' is not a clean semver; refusing to pin the cask"; exit 1
+          fi
+          # sha256 of a release asset: prefer the API's server-computed digest, else
+          # download the asset and hash it. Empty result = hard failure (fail-closed).
+          sha() {
+            local d
+            d=$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}" \
+                  --jq ".assets[] | select(.name==\"$1\") | .digest" | sed 's/^sha256://')
+            if [ -z "$d" ]; then
+              gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern "$1" --output "/tmp/$1"
+              d=$(sha256sum "/tmp/$1" | cut -d' ' -f1)
+            fi
+            [ -n "$d" ] || { echo "::error::no sha256 for release asset $1"; exit 1; }
+            echo "$d"
+          }
+          ARM=$(sha "LucidAgent-mac-arm64.pkg")
+          X64=$(sha "LucidAgent-mac-x64.pkg")
+          sed -i -E \
+            -e "s|^  version \".*\"$|  version \"${V}\"|" \
+            -e "s|^  sha256 arm:   \".*\",$|  sha256 arm:   \"${ARM}\",|" \
+            -e "s|^         intel: \".*\"$|         intel: \"${X64}\"|" \
+            Casks/lucidagentide.rb
+          if git diff --exit-code --quiet Casks/lucidagentide.rb; then
+            echo "cask already pinned to ${V}"; exit 0
+          fi
+          # The sed must have landed all three fields; a drifted cask format must fail
+          # loudly, never half-pin (version bumped but checksums stale).
+          grep -q "version \"${V}\"" Casks/lucidagentide.rb
+          grep -q "${ARM}" Casks/lucidagentide.rb
+          grep -q "${X64}" Casks/lucidagentide.rb
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Casks/lucidagentide.rb
+          git commit -m "chore(brew): pin cask to ${TAG} (auto, update-cask job)"
+          git pull --rebase origin master
+          git push origin master
+
   # Rolling "latest" release — every successful build (both platforms) publishes the newest
   # installers to a single `latest`-tagged release, so the README download buttons
   # (releases/latest/download/...) always point at the most recent build. Tag pushes still
