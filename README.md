@@ -30,7 +30,7 @@
 <a href="https://github.com/mlcyclops/lucidagentide/actions/workflows/build-desktop.yml"><img src="https://img.shields.io/github/actions/workflow/status/mlcyclops/lucidagentide/build-desktop.yml?label=Windows%20Build&logo=windows&logoColor=white&style=flat-square" alt="Windows Build" /></a>
 <a href="https://github.com/mlcyclops/lucidagentide/actions/workflows/build-desktop.yml"><img src="https://img.shields.io/github/actions/workflow/status/mlcyclops/lucidagentide/build-desktop.yml?label=macOS%20Build&logo=apple&logoColor=white&style=flat-square" alt="macOS Build" /></a>
 <a href="https://github.com/mlcyclops/lucidagentide/actions/workflows/build-desktop.yml"><img src="https://img.shields.io/github/actions/workflow/status/mlcyclops/lucidagentide/build-desktop.yml?label=Linux%20Build&logo=linux&logoColor=white&style=flat-square" alt="Linux Build" /></a>
-<img src="https://img.shields.io/badge/tests-1695%20harness%20%2B%204018%20desktop%20%2B%2062%20sidecar-46d27e?style=flat-square" alt="tests" />
+<img src="https://img.shields.io/badge/tests-1041%20harness%20%2B%202036%20desktop%20%2B%2057%20sidecar-46d27e?style=flat-square" alt="tests" />
 <img src="https://img.shields.io/badge/gate-fail--closed-e07bf0?style=flat-square" alt="fail-closed gate" />
 
 <br/>
@@ -843,18 +843,26 @@ Obsidian-vault export), AI-authorship attribution, one-command import, a read-wr
 the **`/goal` loop** with full loop-engineering (after-action reports, a budget kill switch, and stall
 guards), a local **RAG knowledge spine** + the **compiled KB** with hybrid retrieval, the governed **skills
 directory** + **Skill Studio**, **local & hybrid providers**, the **Agent Builder**, the **agent firewall**,
-and the **runtime execution boundary** (OS-isolated exec + mediated egress). **Newest (v1.13.0):**
-🤖 the **Fleet Manager** - one Chief-of-Staff LUCID orchestrating N gated LUCID workers: async **job
-handles** through the Agent Firewall (dispatch / status / cancel over ONE fail-closed path - fan-out
-across connections, every reply scanned + trust-labeled), **local lanes** (concurrent headless agents
-under a 75% headroom guard, streaming into a movable fleet-grid dashboard with fail-closed approval
-glows), plus spoken **thinking snapshots** for hands-free work, an ingest that **cannot hang** (Stop
-always stops), real **OS folder dialogs** from the browser build, and **no turn clock** - long
-subagent fan-outs run to completion while the HUD names what the turn is waiting on
-*(ADR-0263..0272)*; **v1.12.2** brought the **Windows Program Files fix arc** - compiled engine, a
-strict CI boot gate from a real write-denied Program Files tree, per-machine installs re-enabled
-*(ADR-0259..0262)*; **v1.12.1** brought the **LUCID Trainer** + the **LUCID Agent** immersive role
-*(ADR-0252..0257)*; **v1.12.0** brought hands-free **Voice mode** *(ADR-0246/0247)*.
+and the **runtime execution boundary** (OS-isolated exec + mediated egress). **Newest (v1.13.1):**
+🚀 the **fleet grows with your machine** - the lane cap is gone: a lane is refused only when CPU or
+memory holds **90%+ for 30 unbroken seconds**, so a compile spike never blocks work, a blind sample
+never counts as load, and a refusal names the percent *and* how long it held; spawn a lane **straight
+from a repo remote** (GitHub, GitLab, **Azure DevOps**, self-hosted; `https`, `ssh://` or `git@`) with
+a **host-scoped token** in the OS-encrypted vault that rides an auth header, never the URL, never
+`.git/config`, never an error line; the lane folder opens the **real OS folder dialog**; and the
+minimized dock pill is a **truthful snapshot** - one colored dot per lane state, needs-approval first,
+hover naming the lanes - that no longer flickers *(ADR-0273)*. **v1.13.0** brought 🤖 the **Fleet
+Manager** - one Chief-of-Staff LUCID orchestrating N gated LUCID workers: async **job handles**
+through the Agent Firewall (dispatch / status / cancel over ONE fail-closed path - fan-out across
+connections, every reply scanned + trust-labeled), **local lanes** streaming into a movable
+fleet-grid dashboard with fail-closed approval glows, plus spoken **thinking snapshots** for
+hands-free work, an ingest that **cannot hang** (Stop always stops), real **OS folder dialogs** from
+the browser build, and **no turn clock** - long subagent fan-outs run to completion while the HUD
+names what the turn is waiting on *(ADR-0263..0272)*; **v1.12.2** brought the **Windows Program Files
+fix arc** - compiled engine, a strict CI boot gate from a real write-denied Program Files tree,
+per-machine installs re-enabled *(ADR-0259..0262)*; **v1.12.1** brought the **LUCID Trainer** + the
+**LUCID Agent** immersive role *(ADR-0252..0257)*; **v1.12.0** brought hands-free **Voice mode**
+*(ADR-0246/0247)*.
 **Earlier (v1.11.9):**
 **📱 LUCID Remote** - drive your running desktop LUCID from a **phone browser**: QR pairing, Google sign-in,
 an installable **guest PWA**, dual edit/view-only invites, and a self-host-or-hosted Cloud Run rendezvous with
@@ -865,14 +873,15 @@ reads ~1-8 s → ~0-2 ms, idle server CPU ~29% → ~8%); and the **Preview panel
 every model** with bring-your-own-embeddings, server-side **gov lockdown**, the KG-pack marketplace, and the
 overloaded-provider fallback; v1.11.0 brought E2E-encrypted **live collaboration**.)*
 
-**6,200+ tests** across the harness (1,876), desktop (4,326), and Python sidecar (62), green in CI, with
-`tsc --noEmit` clean on the shipping projects. The
+**3,100+ tests** across the harness (1,041, green in CI), the desktop shell (2,036), and the Python
+sidecar (57), with `tsc --noEmit` clean on the shipping projects. The
 table below is the recent slice; [`PROGRESS.md`](PROGRESS.md) has the full per-session log.
 
 ### Recent updates
 
 | Phase | Feature | ADR |
 |:--|:--|:--|
+| **v1.13.1 batch** | **🚀 Unlimited fleet lanes + lanes from a repo remote + a truthful minimized HUD** - the instantaneous 75% watermark and the `min(6, cores/2)` ceiling are **deleted**: admission is now **sustained pressure** over a rolling window (refuse only when CPU or memory has held **90%+ for 30 unbroken seconds**, measured by the manager's own 3s sampler), so a compile or an ingest burst never refuses a lane, a cool **or blind** reading resets the streak (no evidence fails open, ADR-0182), and every refusal reports the measured percent **and** duration ("system memory has been at 94% for 34s"); the HUD and the master agent read the policy out of the payload (`pressurePct`/`sustainMs`/`cpuHotMs`/`memHotMs`, a contract change with every consumer moved in the same increment). **Spawn a lane from a repo remote**: pure `git_url.ts` parses `https`, `ssh://` and `git@` for GitHub / GitLab / **Azure DevOps** / self-hosted (a scp-like form demands a dotted host so a Windows drive path can never reach `git clone`; embedded `user:password@` is discarded), `/api/fleet/spawn` clones through the existing redacting `cloneRepo` into the folder you picked and **reuses** an existing clone (idempotent), credentials are **per host** in the OS-encrypted vault (`git_pat_<host>`, so an unknown host never receives your generic PAT) and ride the HTTP Basic header, never the URL, never `.git/config`, never an error line; SSH remotes never ask for a token and fail fast under `BatchMode` instead of blocking on an invisible passphrase prompt. The lane folder now opens the **real Explorer / Finder / zenity dialog** (ADR-0265), and the **minimized dock pill** stops flickering (it is re-adopted on every status repaint, identical markup is never rewritten, and a connected node is never re-appended) while carrying one colored dot **per lane state** with counts, ordered needs-approval first, hovering to name the lanes | [ADR-0273](DECISIONS.md) |
 | **v1.13.0 batch** | **🤖 The Fleet Manager** - async **job handles** through the Agent Firewall (dispatch/job_status/cancel + bounded-wait prompt over ONE gated execution path: fan-out across worker connections, serialization within one, every reply scanned + UNTRUSTED-delimited, fail-closed per job, deadline cleanup, idempotent retries); **local lanes** (N concurrent gated headless LUCID agents under a 75% headroom guard, each streaming into an editable mini window in the movable fleet-grid dock with working/awaiting/needs-approval/done glows - approvals fail-closed) + **Fleet Profiles** scope (project-bound GUI instances, bat `F`); **P-VOICE.7** varied openers + active-listening restatement + spoken thinking snapshots; the chat-history **ingest cannot hang** (bounded ACP requests, pending drained on child death, Stop interrupts the in-flight model call, force-cancel releases single-flight); real **OS folder dialogs** in the browser build; frozen **prefix v10** (data-integration steer); Whisper housekeeping (offered set tiny/base/small, per-model Remove, tiny default); **no turn clock** + pending-task visibility; the stale **quota-toast fix** (expired windows never warn) | [ADR-0263-0272](DECISIONS.md) |
 | **v1.12.2 batch** | **🛠️ The Windows Program Files fix arc + no-cutoff turns** - the engine ships as a **compiled binary** (`bin/lucid-engine`: dev.ts embedded, native addons the only externals, renderer prebuilt) so a `C:\Program Files` install boots instead of bricking; a **strict CI boot gate** stages every Windows build into a real write-denied Program Files tree and requires `/api/health` + the prebuilt bundle before anything ships; **per-machine installs allowed again** (assisted installer, per-user default, the relax coupled to the gate so removing the gate turns a demo red); `bin/` kept tracked so fresh-checkout dists work under current Bun; and the **10-minute turn cutoff is gone** - long subagent fan-outs run to completion, a dead agent process rejects in-flight requests event-driven, and every slow notice names the open tool calls / spawned subagent tasks with elapsed time | [ADR-0259-0263](DECISIONS.md) |
 | **v1.12.1 batch** | **🧠 The LUCID Trainer + role-generic training + the LUCID Agent role** - the knowledge-trainer flywheel (scenario-first expert interviews, capped five-whys, fail-closed distillation: PII redacted to typed placeholders + scanned + distilled inside untrusted delimiters + re-scanned + born untrusted, teach-back confirmation IS the promotion, coverage HUD L0-L3, drills generated only from confirmed units, a trainee miss re-opens extraction); **role-generic packs** from a pasted Position Description with the wealth-management-ops pack as a labeled sample; the **LUCID Agent** immersive role (talking mascot, cinematic boot, hands-free flow); plus the **preview stale-document fix**, the trainer-stage **WCAG AA contrast pass**, sandbox hardening (Seatbelt capability probe, AppContainer mediated loopback, GPU-sandbox self-heal), and the **P-FLEET** Chief-of-Staff fleet scope | [ADR-0251-0257](DECISIONS.md) |

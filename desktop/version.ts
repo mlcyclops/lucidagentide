@@ -296,4 +296,9 @@
 //            the strict CI boot gate from a real write-denied Program Files tree, per-machine installs
 //            re-enabled, event-driven transport-death rejection + pending-task visibility
 //            (P-WINBOOT.2C/.3 + P-STALL.2, ADR-0259..0263).
-export const APP_VERSION = "1.13.0";
+// v1.13.0 = the Fleet Manager: async job handles through the Agent Firewall (dispatch/status/cancel
+//            over one fail-closed path), local lanes streaming into the movable fleet-grid dock with
+//            fail-closed approval glows, Fleet Profiles, spoken thinking snapshots, an ingest that
+//            cannot hang, real OS folder dialogs from the browser build, and no turn clock
+//            (P-FLEET.1/.L1/.P*, ADR-0264..0272).
+export const APP_VERSION = "1.13.1";
