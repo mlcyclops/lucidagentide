@@ -84,7 +84,7 @@ personalization internals are proprietary and intentionally undocumented here - 
 
 <p align="center"><b>Connect the account you already pay for</b> (OAuth subscription or an API key) and pick the model from the list - that's it. Each one carries a <b>cost + intelligence card</b> and a clear <b>U.S.-government data-privacy notice</b>, so you always know what a turn costs and where your chat history stands.</p>
 
-<p align="center"><sub><code>claude-opus-5</code> · <code>claude-fable-5</code> · <code>gpt-5.6-sol</code> · <code>gpt-5.6-luna</code> · <code>gpt-5.6-terra</code> · <code>google-gemini-3.1-pro</code> — plus every other model the runtime exposes, including the AskSage gov gateway and your own local endpoints.</sub></p>
+<p align="center"><sub><code>claude-opus-5</code> · <code>claude-fable-5</code> · <code>gpt-5.6-sol</code> · <code>gpt-5.6-luna</code> · <code>gpt-5.6-terra</code> · <code>google-gemini-3.1-pro</code> · plus every other model the runtime exposes, including the AskSage gov gateway and your own local endpoints.</sub></p>
 
 </td>
 </tr>
@@ -176,6 +176,49 @@ personalization internals are proprietary and intentionally undocumented here - 
 > are in this source-available core (managed-config + an audit-export interface); the policy templates and SIEM
 > connectors are a separately-licensed add-on. Metadata-only by construction - no code, prompts, or CUI
 > leave the host.
+
+---
+
+## <img src=".github/assets/icons/release-animated.svg" width="26" align="top" alt="" /> What's new in v1.13.1
+
+> **🚀 The fleet grows with your machine.** The lane cap is gone. A lane is refused only when the box has actually been busy for half a minute, and you can point one straight at a repo URL.
+
+- **🚀 Unlimited lanes, gated by sustained pressure (the headline)** - the instantaneous 75% watermark and the `min(6, cores/2)` lane ceiling are **deleted**. Admission now reads a **rolling pressure window**: a lane is refused only when CPU **or** memory has held **90%+ for 30 unbroken seconds**. So a compile, an AST ingest, or a browser opening forty tabs never blocks work, a cool **or blind** reading resets the streak (a failed sample can never be counted as load, and no evidence fails open), and every refusal names the measured percent **and** how long it held: *"system memory has been at 94% for 34s"*. The manager measures this itself with a cheap 3s sampler that retires when the fleet is idle, so "sustained" is measured, never guessed. *(P-FLEET.L2, ADR-0273)*
+- **🌐 Spawn a lane straight from a repo remote** - paste a **GitHub, GitLab, Azure DevOps** or self-hosted URL (`https://`, `ssh://` or `git@host:org/repo`) and LUCID clones it into the folder you picked and runs the lane there; an existing clone is **reused**, so re-spawning the same repo is idempotent. The form tells you what it recognized, where the clone will land, and which credential that remote actually takes. A local path can never be mistaken for a remote, and a pasted `user:password@` is discarded rather than echoed back at you. *(ADR-0273)*
+- **🔐 Private repos, with the token kept per host** - a personal access token is stored in the **OS-encrypted vault** under the host you typed it for (Keychain on macOS, DPAPI on Windows, libsecret on Linux). It wins over CI-style environment variables for that host, is **never** offered to a different host, and an unrecognized host never receives your general-purpose PAT. The token rides an **auth header**, never the URL, so it cannot persist into `.git/config`, and it is redacted out of every error line. SSH remotes are never asked for a token: they authenticate with your keys and now fail fast with a key-specific message instead of hanging on an invisible passphrase prompt. *(ADR-0273)*
+- **📂 The lane folder opens the real OS dialog** - Explorer on Windows, Finder on macOS, zenity/kdialog on Linux, with **create-new-folder** enabled, instead of hand-editing a path into a text box. Same dialog every other folder pick in the app already used. *(ADR-0265)*
+- **🔴 The minimized fleet pill is a truthful snapshot** - the lower-right pill used to **flicker** (the status bar rebuilds itself constantly and nobody re-adopted the fleet pill, so it vanished and came back on the next poll, worst of all while a lane was working). Fixed at the cause. It now carries **one colored dot per lane state with its count**, ordered so anything blocked on a human comes first, and hovering a dot names the lanes in that state. You keep working in the main window and still know, at a glance, that lane three wants approval. *(ADR-0273)*
+
+<!-- FLEET MODE SCREENSHOTS: uncomment this block once the three captures land in
+     .github/assets/screenshots/v1.13.1/ (see the README in that folder for what to shoot).
+     Kept commented so the published README never shows broken images.
+<table>
+  <tr>
+    <td width="50%"><img src=".github/assets/screenshots/v1.13.1/fleet-mode-grid.png" alt="LUCID Agent in Fleet Mode: several lanes streaming at once, each frame carrying its own status colour" /></td>
+    <td width="50%"><img src=".github/assets/screenshots/v1.13.1/fleet-mode-spawn.png" alt="The new-lane form: a repo remote pasted, the resolved clone path, and the per-host token field" /></td>
+  </tr>
+  <tr>
+    <td colspan="2"><img src=".github/assets/screenshots/v1.13.1/fleet-mode-pill.png" alt="The minimized fleet pill in the status bar: one colored dot per lane state with counts" /></td>
+  </tr>
+</table>
+-->
+
+> 📸 **Screenshots pending.** Captures of LUCID Agent in Fleet Mode (the multi-lane grid, the repo-remote spawn form, and the minimized per-state pill) drop into [`.github/assets/screenshots/v1.13.1/`](.github/assets/screenshots/v1.13.1/) - that folder's README lists exactly what to shoot, and the gallery above is one comment-marker away from live.
+
+---
+
+## <img src=".github/assets/icons/release-animated.svg" width="26" align="top" alt="" /> What's new in v1.13.0
+
+> **🤖 One LUCID running many.** A Chief-of-Staff session fans work out to N gated LUCID workers, and every reply comes back through the same fail-closed gate.
+
+- **🤖 The Fleet Manager (the headline)** - async **job handles** through the Agent Firewall: `dispatch` / `job_status` / `cancel` plus a bounded-wait `prompt`, all over **one** gated execution path. Work fans out across worker connections and stays serialized within one, every reply is **scanned and UNTRUSTED-delimited** before the orchestrator sees it, each job is fail-closed on its own, deadlines clean up after themselves, and a retry with the same key is idempotent. *(P-FLEET.1, ADR-0268/0270)*
+- **🗂️ Local lanes in a grid** - N concurrent gated headless LUCID agents on **this** machine, each on its own repo and its own model, streaming into editable mini windows inside one movable, resizable, minimizable dock. The card frame *is* the status: cyan pulse working, amber glow awaiting you, red glow needs approval (fail-closed: silence is a deny), green done. *(P-FLEET.L1, ADR-0271)*
+- **🏢 Fleet Profiles scoped** - the design for project-bound **full-GUI** instances (a second LUCID window bound to a second repo, rather than a headless lane), plus the control panel's `F` option as a working launcher-only prototype. *(ADR-0272)*
+- **⏳ The ingest cannot hang, and Stop always stops** - every ACP request in the chat-history import now carries a clock, pending work is drained when a child dies, Stop interrupts the in-flight model call, and a force-cancel releases the single-flight lock. *(P-KG-INGEST.5, ADR-0264)*
+- **🕰️ No turn clock** - the 10-minute cutoff is gone. A long subagent fan-out runs to completion while the HUD names what the turn is actually waiting on, with elapsed time per open tool call. *(P-STALL.2, ADR-0263)*
+- **🗣️ Spoken thinking snapshots** - conversation mode stops repeating one canned opener: it picks from twelve varied lines, restates a short ask faithfully, and once reasoning is streaming it speaks **snapshots of the live thinking** instead of filler. *(P-VOICE.7, ADR-0269)*
+- **📂 Real OS folder dialogs in the browser build** - the plain-browser launch path used to fall back to a cramped in-app file browser; it now opens Explorer / Finder / zenity through the local backend, which runs on the same machine. *(P-FS.2, ADR-0265)*
+- **🎙️ Whisper housekeeping + a quota-toast fix** - only the model tiers that actually fit are offered, each with a Remove button, and an expired provider quota window stops warning forever. *(P-STT.6, ADR-0267)*
 
 ---
 
