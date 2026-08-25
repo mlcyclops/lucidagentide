@@ -1,9 +1,9 @@
 cask "lucidagentide" do
   arch arm: "arm64", intel: "x64"
 
-  version "1.12.2"
-  sha256 arm:   "39369343a8b5e6a565d9bdcc5dd2f352ce50eed3e9f155edf4e4817c8bae0e82",
-         intel: "ae9e03d33f3e5de0f506b383cf5e774dfdcfea7b5e91b2e3346f68fc7a165333"
+  version "1.13.0"
+  sha256 arm:   "19f929f4a09756153c0e1badfd1776c533e85109ecdc5d4d953c33b90952f7f0",
+         intel: "37e31478281052610fa93107d2697095ba20441f7cc179d09b22f10daaf958d9"
 
   url "https://github.com/mlcyclops/lucidagentide/releases/download/v#{version}/LucidAgent-mac-#{arch}.pkg"
   name "LucidAgentIDE"
