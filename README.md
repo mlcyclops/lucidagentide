@@ -843,14 +843,19 @@ Obsidian-vault export), AI-authorship attribution, one-command import, a read-wr
 the **`/goal` loop** with full loop-engineering (after-action reports, a budget kill switch, and stall
 guards), a local **RAG knowledge spine** + the **compiled KB** with hybrid retrieval, the governed **skills
 directory** + **Skill Studio**, **local & hybrid providers**, the **Agent Builder**, the **agent firewall**,
-and the **runtime execution boundary** (OS-isolated exec + mediated egress). **Newest (v1.12.2):**
-🛠️ the **Windows Program Files fix arc** - the engine ships as a compiled binary (no more blank-box
-brick under `C:\Program Files`), a strict CI gate boots every build from a real write-denied Program
-Files tree before it can ship, per-machine installs are allowed again, and long agent turns are never
-killed by a clock - a dead agent process fails fast instead, and the HUD names the spawned subagent
-tasks a quiet turn is waiting on *(ADR-0259..0263)*; **v1.12.1** brought the **LUCID Trainer** + the
-**LUCID Agent** immersive role *(ADR-0252..0257)*; **v1.12.0** brought hands-free **Voice mode**
-*(ADR-0246/0247)*. **Earlier (v1.11.9):**
+and the **runtime execution boundary** (OS-isolated exec + mediated egress). **Newest (v1.13.0):**
+🤖 the **Fleet Manager** - one Chief-of-Staff LUCID orchestrating N gated LUCID workers: async **job
+handles** through the Agent Firewall (dispatch / status / cancel over ONE fail-closed path - fan-out
+across connections, every reply scanned + trust-labeled), **local lanes** (concurrent headless agents
+under a 75% headroom guard, streaming into a movable fleet-grid dashboard with fail-closed approval
+glows), plus spoken **thinking snapshots** for hands-free work, an ingest that **cannot hang** (Stop
+always stops), real **OS folder dialogs** from the browser build, and **no turn clock** - long
+subagent fan-outs run to completion while the HUD names what the turn is waiting on
+*(ADR-0263..0272)*; **v1.12.2** brought the **Windows Program Files fix arc** - compiled engine, a
+strict CI boot gate from a real write-denied Program Files tree, per-machine installs re-enabled
+*(ADR-0259..0262)*; **v1.12.1** brought the **LUCID Trainer** + the **LUCID Agent** immersive role
+*(ADR-0252..0257)*; **v1.12.0** brought hands-free **Voice mode** *(ADR-0246/0247)*.
+**Earlier (v1.11.9):**
 **📱 LUCID Remote** - drive your running desktop LUCID from a **phone browser**: QR pairing, Google sign-in,
 an installable **guest PWA**, dual edit/view-only invites, and a self-host-or-hosted Cloud Run rendezvous with
 claims-gated admission - all over the E2E-encrypted collab plane, with every remote prompt still running the
@@ -860,7 +865,7 @@ reads ~1-8 s → ~0-2 ms, idle server CPU ~29% → ~8%); and the **Preview panel
 every model** with bring-your-own-embeddings, server-side **gov lockdown**, the KG-pack marketplace, and the
 overloaded-provider fallback; v1.11.0 brought E2E-encrypted **live collaboration**.)*
 
-**5,700+ tests** across the harness (1,695), desktop (4,018), and Python sidecar (62), green in CI, with
+**6,200+ tests** across the harness (1,876), desktop (4,326), and Python sidecar (62), green in CI, with
 `tsc --noEmit` clean on the shipping projects. The
 table below is the recent slice; [`PROGRESS.md`](PROGRESS.md) has the full per-session log.
 
@@ -868,6 +873,7 @@ table below is the recent slice; [`PROGRESS.md`](PROGRESS.md) has the full per-s
 
 | Phase | Feature | ADR |
 |:--|:--|:--|
+| **v1.13.0 batch** | **🤖 The Fleet Manager** - async **job handles** through the Agent Firewall (dispatch/job_status/cancel + bounded-wait prompt over ONE gated execution path: fan-out across worker connections, serialization within one, every reply scanned + UNTRUSTED-delimited, fail-closed per job, deadline cleanup, idempotent retries); **local lanes** (N concurrent gated headless LUCID agents under a 75% headroom guard, each streaming into an editable mini window in the movable fleet-grid dock with working/awaiting/needs-approval/done glows - approvals fail-closed) + **Fleet Profiles** scope (project-bound GUI instances, bat `F`); **P-VOICE.7** varied openers + active-listening restatement + spoken thinking snapshots; the chat-history **ingest cannot hang** (bounded ACP requests, pending drained on child death, Stop interrupts the in-flight model call, force-cancel releases single-flight); real **OS folder dialogs** in the browser build; frozen **prefix v10** (data-integration steer); Whisper housekeeping (offered set tiny/base/small, per-model Remove, tiny default); **no turn clock** + pending-task visibility; the stale **quota-toast fix** (expired windows never warn) | [ADR-0263-0272](DECISIONS.md) |
 | **v1.12.2 batch** | **🛠️ The Windows Program Files fix arc + no-cutoff turns** - the engine ships as a **compiled binary** (`bin/lucid-engine`: dev.ts embedded, native addons the only externals, renderer prebuilt) so a `C:\Program Files` install boots instead of bricking; a **strict CI boot gate** stages every Windows build into a real write-denied Program Files tree and requires `/api/health` + the prebuilt bundle before anything ships; **per-machine installs allowed again** (assisted installer, per-user default, the relax coupled to the gate so removing the gate turns a demo red); `bin/` kept tracked so fresh-checkout dists work under current Bun; and the **10-minute turn cutoff is gone** - long subagent fan-outs run to completion, a dead agent process rejects in-flight requests event-driven, and every slow notice names the open tool calls / spawned subagent tasks with elapsed time | [ADR-0259-0263](DECISIONS.md) |
 | **v1.12.1 batch** | **🧠 The LUCID Trainer + role-generic training + the LUCID Agent role** - the knowledge-trainer flywheel (scenario-first expert interviews, capped five-whys, fail-closed distillation: PII redacted to typed placeholders + scanned + distilled inside untrusted delimiters + re-scanned + born untrusted, teach-back confirmation IS the promotion, coverage HUD L0-L3, drills generated only from confirmed units, a trainee miss re-opens extraction); **role-generic packs** from a pasted Position Description with the wealth-management-ops pack as a labeled sample; the **LUCID Agent** immersive role (talking mascot, cinematic boot, hands-free flow); plus the **preview stale-document fix**, the trainer-stage **WCAG AA contrast pass**, sandbox hardening (Seatbelt capability probe, AppContainer mediated loopback, GPU-sandbox self-heal), and the **P-FLEET** Chief-of-Staff fleet scope | [ADR-0251-0257](DECISIONS.md) |
 | **v1.12.0 batch** | **🗣️ Voice mode** - hands-free conversation (streaming read-aloud that starts after the first sentence, auto-mic on finish, silence sends the turn), answers shaped for the ear, the glowing pop-out equalizer, spoken thinking acknowledgements, and the per-engine voice picker that greys out engines you cannot use with the specific reason | [ADR-0246/0247](DECISIONS.md) |

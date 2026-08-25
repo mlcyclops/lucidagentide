@@ -292,4 +292,8 @@
 // v1.12.1 = the LUCID Trainer + role-generic training packs + the LUCID Agent immersive role
 //            (scenario-first expert interviews, fail-closed distillation, teach-back promotion,
 //            drills from confirmed knowledge; P-TRAINER.1-.9, ADR-0252..0257).
-export const APP_VERSION = "1.12.2";
+// v1.12.2 = the Windows Program Files fix arc + no-cutoff turns: compiled engine (bin/lucid-engine),
+//            the strict CI boot gate from a real write-denied Program Files tree, per-machine installs
+//            re-enabled, event-driven transport-death rejection + pending-task visibility
+//            (P-WINBOOT.2C/.3 + P-STALL.2, ADR-0259..0263).
+export const APP_VERSION = "1.13.0";
