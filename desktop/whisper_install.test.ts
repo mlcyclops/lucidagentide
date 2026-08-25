@@ -6,7 +6,7 @@
 
 import { describe, expect, it } from "bun:test";
 import { whisperCapability, type MachineSpecs } from "./whisper_capability.ts";
-import { looksLikeWhisperModel, planWhisperInstall, whisperServeUrl, whisperServerArgs, WHISPER_MODELS } from "./whisper_install.ts";
+import { looksLikeWhisperModel, offeredRecommendation, OFFERED_TIERS, planWhisperInstall, whisperServeUrl, whisperServerArgs, WHISPER_MODELS } from "./whisper_install.ts";
 
 const mac = (totalRamGB: number): MachineSpecs => ({ arch: "arm64", platform: "darwin", totalRamGB, cpuCores: 10, accel: "metal" });
 
@@ -22,9 +22,29 @@ describe("planWhisperInstall", () => {
     expect(p.ok && p.alreadyInstalled).toBe(true);
   });
 
-  it("honors an explicit runnable tier even if not comfortable (medium on 8GB)", () => {
+  it("honors an explicit runnable tier even if not comfortable (small on 4GB)", () => {
+    const p = planWhisperInstall(whisperCapability(mac(4)), { tier: "small" });
+    expect(p.ok && p.tier).toBe("small");
+  });
+
+  // P-STT.6 (ADR-0255): medium/large are no longer offered - slow + unstable through the local server.
+  it("refuses a no-longer-offered tier even when the hardware could run it (medium on 8GB)", () => {
     const p = planWhisperInstall(whisperCapability(mac(8)), { tier: "medium" });
-    expect(p.ok && p.tier).toBe("medium");
+    expect(p.ok).toBe(false);
+    if (!p.ok) expect(p.reason).toContain("no longer offered");
+  });
+
+  it("clamps the DEFAULT tier to the offered set on a workstation (512GB -> small, not large-turbo)", () => {
+    const p = planWhisperInstall(whisperCapability(mac(512)));
+    expect(p.ok && p.tier).toBe("small");
+  });
+
+  it("offeredRecommendation: nothing larger than small is ever recommended", () => {
+    expect(OFFERED_TIERS).toEqual(["tiny", "base", "small"]);
+    expect(offeredRecommendation(whisperCapability(mac(2)))).toBe("tiny");
+    expect(offeredRecommendation(whisperCapability(mac(8)))).toBe("small");
+    expect(offeredRecommendation(whisperCapability(mac(512)))).toBe("small");
+    expect(offeredRecommendation(whisperCapability(mac(1)))).toBeNull();
   });
 
   it("refuses a tier the machine can't run (large-turbo on 4GB)", () => {

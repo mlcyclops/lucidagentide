@@ -48,7 +48,7 @@ import { OpenAiCompatibleTtsBackend } from "../harness/brief/tts_backend.ts";
 import { ElevenLabsTtsBackend, ElevenLabsSttBackend, elevenLabsSpeak, listElevenVoices } from "../harness/voice/elevenlabs.ts";
 import { TTS_PROVIDERS, normalizeTtsProvider, resolveVoice, ttsEngineStatus, voicesForProvider, type TtsProviderInfo } from "../harness/voice/catalog.ts"; // P-VOICE.2 (ADR-0247)
 import { OpenAiCompatibleSttBackend, WhisperCppSttBackend, sttTransportFailed } from "../harness/voice/transcription.ts";
-import { installWhisper, startWhisper, stopWhisper, whisperStatus as whisperRuntimeStatus, type WhisperRuntimeDeps } from "./whisper_runtime.ts"; // P-STT.2b: managed offline Whisper
+import { installWhisper, removeWhisperModel, startWhisper, stopWhisper, whisperStatus as whisperRuntimeStatus, type WhisperRuntimeDeps } from "./whisper_runtime.ts"; // P-STT.2b: managed offline Whisper
 import { downloadWhisperModel, resolveWhisperBin } from "./whisper_manager.ts";
 import { whisperServeUrl, type WhisperTier } from "./whisper_install.ts";
 import { devSnapshot, securitySnapshot } from "../tools/web/data.ts";
@@ -60,10 +60,11 @@ import { ackArtifact, ackFindings, ackView } from "./security_ack.ts"; // P-SECA
 import { deleteSteps, readTurnSteps, syncStepTurns } from "./session_steps.ts"; // P-RESUME.1 (ADR-0171)
 import { probeRateLimits } from "./ratelimit_probe.ts";
 import { OBS_DB_PATH, codeActivity, memorySnapshot, rateLimits, sessionPathById, usageLedger } from "../tools/memory_data.ts";
-import { backend } from "./acp_backend.ts";
+import { backend, fleetLaneArgv } from "./acp_backend.ts";
+import { FleetLaneManager } from "./fleet_lanes.ts"; // P-FLEET.L1: local lanes + the fleet grid
 import { clearIngestSessions, deleteSession, listSessions, sessionMessages } from "./sessions.ts";
 import { providerAuth } from "./auth_status.ts";
-import { cloneRepo, setWorkspace, workspaceInfo } from "./workspace.ts";
+import { cloneRepo, removeRecentWorkspace, setWorkspace, workspaceInfo } from "./workspace.ts";
 import { egressAllowAllManaged, egressDecision, egressPosture } from "./egress_policy.ts"; // P-PREVIEW.3b + P-NETWL.5
 import { loadWhitelist, removeEntry, saveWhitelist, setPosture, upsertEntry, type WhitelistEntry } from "./network_whitelist.ts"; // P-NETWL.2/.5: whitelist CRUD + posture
 import { readPreviewFile, toFsPath } from "./preview_file.ts"; // P-PREVIEW.4: read a local file's content for the preview
@@ -79,7 +80,7 @@ import { engineDesktopDir } from "./engine_launch.ts"; // P-WINBOOT.2 (ADR-0251)
 import { listLocalProviders, upsertLocalProvider, removeLocalProvider, setLocalProviderEnabled } from "./settings_store.ts";
 import { providerModelsUrl, type LocalProviderDef } from "./local_providers.ts";
 import { listRemoteAgents, upsertRemoteAgent, removeRemoteAgent, setRemoteAgentEnabled } from "../harness/mcp/registry.ts";
-import { applyEnv, attribution, chinaModelsAcknowledged, govconCui, govconCuiChosen, listMcpServers, load as loadSettings, removeMcpServer, roleChosen, setAsksage, setAttributionSkip, setChinaModelsAcknowledged, setCodeGraphAgent, setDeveloperMode, setGovconCui, setKey, setMcpServerEnabled, setPersonalAiExtract, setProfile, setRateLimitProbe, setThirdPartyProvidersAcknowledged, setTourSeen, setUserRole, setVoiceSettings, thirdPartyProvidersAcknowledged, tourSeen, upsertMcpServer, USER_ROLES, userRole, voiceSettings, type UserRole } from "./settings_store.ts";
+import { applyEnv, attribution, chinaModelsAcknowledged, chosenModel, govconCui, govconCuiChosen, listMcpServers, load as loadSettings, removeMcpServer, roleChosen, setAsksage, setChosenModel, setAttributionSkip, setChinaModelsAcknowledged, setCodeGraphAgent, setDeveloperMode, setGovconCui, setKey, setMcpServerEnabled, setPersonalAiExtract, setProfile, setRateLimitProbe, setThirdPartyProvidersAcknowledged, setTourSeen, setUserRole, setVoiceSettings, thirdPartyProvidersAcknowledged, tourSeen, upsertMcpServer, USER_ROLES, userRole, voiceSettings, type UserRole } from "./settings_store.ts";
 
 // ADR-0088/0089: the /api/settings payload — profile + attribution + the cosmetic role/tour state.
 // `role` is null until the user has EXPLICITLY chosen one (so the renderer can fire the first-run role
@@ -123,6 +124,9 @@ function whisperDeps(): WhisperRuntimeDeps {
     health: async (port) => { try { const res = await fetch(`${whisperServeUrl(port)}/`, { signal: AbortSignal.timeout(2000) }); return res.ok || res.status === 404; } catch { return false; } },
     setSttUrl: (url) => { setVoiceSettings({ sttProvider: "whisper", sttUrl: url }); },
     sleep: (ms) => { const { promise, resolve } = Promise.withResolvers<void>(); setTimeout(resolve, ms); return promise; },
+    // P-STT.6 (ADR-0255): deletion + on-disk size for the installed-models list in the Voice card.
+    removeModel: (f) => { try { rmSync(join(dir, f)); return true; } catch { return false; } },
+    modelSizeMB: (f) => { try { return statSync(join(dir, f)).size / (1024 * 1024); } catch { return null; } },
     // P-STT.5: kill whatever LISTENs on the managed port (an orphan whisper-server from a previous run).
     // whisper.cpp binds SO_REUSEPORT, so a duplicate would otherwise co-bind and silently split requests
     // across two model loads. Best-effort: the caller re-probes health and adopts any survivor.
@@ -224,9 +228,11 @@ import { EXPLAIN_SYSTEM, explainCommand, explainUserPrompt } from "./explain_com
 import type { PersonalScope } from "../harness/personal/store.ts";
 import { readEditorFile, saveEditorFile } from "./editor.ts";
 import { cancelImport, importJobStatus, startImport } from "./import_job.ts";
+import type { CompleteFn } from "../harness/personal/distiller.ts";
 import { homedir } from "node:os";
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync, statSync } from "node:fs";
 import { listDir } from "./fs_browse.ts";
+import { pickFolderNative } from "./native_dialog.ts"; // P-FS.2 (ADR-0253): real OS folder dialog for the browser build
 import { DIAL_TYPES, type LoopDial } from "./exec_policy.ts";
 import { audit } from "./audit_export.ts";
 import { isRiskTier, managedWorkspaceRoots } from "./managed_config.ts";
@@ -475,6 +481,14 @@ const PORT = Number(process.env.PORT ?? 5319);
 // HTML (only a same-origin document can read it), and required on every sensitive /api call. A new
 // random value each launch means a token never outlives the process that issued it.
 const TOKEN = randomBytes(32).toString("hex");
+// P-FLEET.L1: the local lane manager - N gated headless LUCID agents on this machine, capped by the 75%
+// headroom guard. Lanes default to the MASTER session's current model unless the user picks another.
+const fleet = new FleetLaneManager({ argv: fleetLaneArgv, masterModel: () => backend.activeModelName() });
+// Lanes are child processes: an engine shutdown must never orphan a worker turn (deny open asks, cancel,
+// kill). "exit" is the last-resort sync path; SIGINT/SIGTERM cover a clean stop.
+process.on("exit", () => { try { fleet.stopAll(); } catch { /* dying anyway */ } });
+process.on("SIGINT", () => { try { fleet.stopAll(); } catch { /* dying */ } process.exit(0); });
+process.on("SIGTERM", () => { try { fleet.stopAll(); } catch { /* dying */ } process.exit(0); });
 // P-PREVIEW.3a-shot (ADR-0096): latest PNG of the rendered preview, pushed by the renderer after each render
 // (Electron capturePage → /api/preview/shot-cache) and read by the agent's preview_screenshot tool. In-memory.
 let latestPreviewShot: string | null = null;
@@ -809,7 +823,9 @@ const server = Bun.serve({
       // accept the per-launch token as a `?t=` query param — same token, still behind the H1/H2 gate above.
       // ADR-0220: /api/kb/retrieve is also called by the omp subprocess's `knowledge_search` tool (via the
       // token'd LUCID_KB_RETRIEVE_URL it inherits), which can't set a header — accept the `?t=` token for it too.
-      const queryTokenOk = p === "/api/preview/serve" || p === "/api/preview/shot" || p === "/api/preview/inspect" || p === "/api/preview/act" || p === "/api/kb/retrieve";
+      // P-FLEET.L1: /api/fleet/status is also fetched by the omp subprocess's fleet_status tool (via the
+      // token'd LUCID_FLEET_STATUS_URL it inherits), which can't set a header - accept the ?t= token too.
+      const queryTokenOk = p === "/api/preview/serve" || p === "/api/preview/shot" || p === "/api/preview/inspect" || p === "/api/preview/act" || p === "/api/kb/retrieve" || p === "/api/fleet/status";
       const tok = queryTokenOk ? (req.headers.get("x-lucid-token") ?? url.searchParams.get("t")) : req.headers.get("x-lucid-token");
       if (!tokenValid(tok, TOKEN)) return new Response("forbidden", { status: 403 });
     }
@@ -1643,6 +1659,13 @@ const server = Bun.serve({
         return json({ ok: rr.ok, data: rr, error: rr.reason });
       }
       if (p === "/api/whisper/stop" && req.method === "POST") { const rr = await stopWhisper(whisperDeps()); return json({ ok: rr.ok, data: rr }); }
+      // P-STT.6 (ADR-0255): delete a downloaded model's weights (reclaim disk; the only path for the
+      // no-longer-offered medium/large tiers). Fail-closed on the running tier - stop the server first.
+      if (p === "/api/whisper/remove" && req.method === "POST") {
+        const wb = await readBody<{ tier?: unknown }>(req);
+        const rr = removeWhisperModel(whisperDeps(), (typeof wb.tier === "string" ? wb.tier : "") as WhisperTier);
+        return json({ ok: rr.ok, data: rr, error: rr.reason });
+      }
       // P-VOICE.1 + P-VOICE.2: read arbitrary text aloud (assistant replies, an AAR summary), selected voice.
       if (p === "/api/tts/speak" && req.method === "POST") {
         const b = await readBody<{ text?: unknown; voiceId?: unknown; provider?: unknown }>(req);
@@ -1681,6 +1704,19 @@ const server = Bun.serve({
       // ADR-0022's still-intact transport gates — loopback bind (H1) + Origin/Host/CSRF + token (H2).
       if (p === "/api/fs/list") {
         return json({ ok: true, data: listDir(url.searchParams.get("path"), { allowedRoots: managedWorkspaceRoots() }) });
+      }
+      // P-FS.2 (ADR-0253): open the REAL OS folder dialog from the browser build. The GUI server runs on
+      // the same machine as the browser (loopback bind, H1), so it shows Explorer / Finder / zenity itself
+      // and returns the chosen path. `supported:false` = headless or no dialog binary; the renderer then
+      // falls back to the in-app browser (ADR-0103). A CANCEL is `supported:true, path:null` and the
+      // renderer must NOT re-prompt. POST: it blocks on user interaction and must never be cacheable.
+      if (p === "/api/fs/pickfolder" && req.method === "POST") {
+        const b = await readBody<{ title?: unknown; buttonLabel?: unknown }>(req);
+        const r = await pickFolderNative({
+          title: typeof b.title === "string" ? b.title : undefined,
+          buttonLabel: typeof b.buttonLabel === "string" ? b.buttonLabel : undefined,
+        });
+        return json({ ok: true, data: r });
       }
       // P-PREVIEW.3b (ADR-0096): may a remote URL load in the preview iframe? Reuses the egress allow-list /
       // managed ceiling (ADR-0062/0094) — a remote preview reaches the internet, so it only loads for a site
@@ -1851,6 +1887,12 @@ const server = Bun.serve({
       if (p === "/api/workspace") {
         if (req.method === "POST") { const b = await readBody<{ path?: unknown }>(req); setWorkspace(String(b.path ?? "")); backend.restart(); if (collabManager.active) collabManager.refreshOptions(); /* P-COLLAB.14: mirror the folder switch to edit guests */ }
         return json({ ok: true, data: workspaceInfo() });
+      }
+      // Drop a folder from the recents pills. Local list change only - the active workspace is untouched, so
+      // NO backend restart (unlike setWorkspace/clone). Returns the refreshed workspace info.
+      if (p === "/api/workspace/recent-remove" && req.method === "POST") {
+        const b = await readBody<{ path?: unknown }>(req);
+        return json({ ok: true, data: removeRecentWorkspace(typeof b.path === "string" ? b.path : "") });
       }
       if (p === "/api/workspace/clone" && req.method === "POST") {
         // `pat` (ADR-0216): an OPTIONAL, freshly-entered git token passed inline so a private clone works THIS
@@ -2060,6 +2102,12 @@ const server = Bun.serve({
         return json({ ok: true, data: { applied: true, scan } });
       }
       if (p === "/api/config") return json({ ok: true, data: await backend.getConfig() });
+      // P-MODELDEF: the user's explicitly-chosen model (sticky default across launches). GET reads it;
+      // POST {value} persists it ("" clears). The renderer sets it only on a genuine user pick.
+      if (p === "/api/model/chosen") {
+        if (req.method === "POST") { const b = await readBody<{ value?: unknown }>(req); setChosenModel(typeof b.value === "string" ? b.value : ""); }
+        return json({ ok: true, data: chosenModel() });
+      }
       // Manual "Refresh models": respawn omp so it re-reads the credential vault, then return the
       // fresh model list. Used after connecting a provider (OAuth or key) without relaunching.
       if (p === "/api/config/refresh" && req.method === "POST") { backend.restart(); return json({ ok: true, data: await backend.getConfig() }); }
@@ -2241,7 +2289,9 @@ const server = Bun.serve({
             const result = await ingestSourcesIntoKg({
               store: await kbStore(targetId),
               scanner: kbScanner(),
-              complete: (system: string, user: string) => backend.complete(system, user, model ? { model } : {}),
+              // The job's abort signal rides along, so Stop interrupts the in-flight compile call instead
+              // of waiting it out (same fix as the chat-history import, ADR-0252).
+              complete: (system: string, user: string) => backend.complete(system, user, { ...(model ? { model } : {}), signal }),
               docs: src.scan.docs,
               onProgress: onTick,
               signal,
@@ -2355,7 +2405,11 @@ const server = Bun.serve({
         // so the request never blocks the app for ~25 minutes. The renderer polls /status + can /cancel.
         const b = await readBody<{ model?: unknown; path?: unknown; vendor?: ImportVendor }>(req);
         const path = String(b.path ?? ""), vendor = b.vendor;
-        const complete = b.model ? (system: string, user: string) => backend.complete(system, user) : undefined;
+        // The extractor's signal is the JOB's abort signal, so Stop interrupts the in-flight model call
+        // instead of waiting for it (P-KG-INGEST.5, ADR-0252).
+        const complete: CompleteFn | undefined = b.model
+          ? (system, user, o) => backend.complete(system, user, { signal: o?.signal })
+          : undefined;
         const started = startImport({
           vendor: typeof vendor === "string" ? vendor : undefined,
           run: (onProgress, signal) => importChatExport(path, { vendorHint: vendor, complete, onProgress, signal }),
@@ -2439,6 +2493,36 @@ const server = Bun.serve({
       }
       // ADR-0009 Phase A: re-load the cross-session recall block for the fresh session (read-only).
       if (p === "/api/newSession" && req.method === "POST") { await backend.newSession(); await refreshRecall(); return json({ ok: true }); }
+      // P-FLEET.L1: the local lane fleet. Status is metadata (lanes + headroom); prompt streams the lane's
+      // turn as NDJSON exactly like /api/chat; answer resolves a pending approval (fail-closed on silence).
+      if (p === "/api/fleet/status") return json({ ok: true, data: await fleet.status() });
+      if (p === "/api/fleet/spawn" && req.method === "POST") {
+        const b = await readBody<{ cwd?: unknown; model?: unknown; name?: unknown }>(req);
+        const r = await fleet.spawn({ cwd: String(b.cwd ?? ""), model: typeof b.model === "string" && b.model ? b.model : undefined, name: typeof b.name === "string" && b.name ? b.name : undefined });
+        return json({ ok: true, data: r });
+      }
+      if (p === "/api/fleet/prompt" && req.method === "POST") {
+        const b = await readBody<{ laneId?: unknown; text?: unknown }>(req);
+        const laneId = String(b.laneId ?? "");
+        const text = String(b.text ?? "");
+        return ndjsonStream("fleet", (emit) => fleet.prompt(laneId, text, emit));
+      }
+      if (p === "/api/fleet/answer" && req.method === "POST") {
+        const b = await readBody<{ laneId?: unknown; allow?: unknown }>(req);
+        return json({ ok: true, data: fleet.answer(String(b.laneId ?? ""), b.allow === true) });
+      }
+      if (p === "/api/fleet/cancel" && req.method === "POST") {
+        const b = await readBody<{ laneId?: unknown }>(req);
+        return json({ ok: true, data: fleet.cancel(String(b.laneId ?? "")) });
+      }
+      if (p === "/api/fleet/stop" && req.method === "POST") {
+        const b = await readBody<{ laneId?: unknown }>(req);
+        return json({ ok: true, data: fleet.stop(String(b.laneId ?? "")) });
+      }
+      if (p === "/api/fleet/model" && req.method === "POST") {
+        const b = await readBody<{ laneId?: unknown; model?: unknown }>(req);
+        return json({ ok: true, data: await fleet.setModel(String(b.laneId ?? ""), String(b.model ?? "")) });
+      }
       if (p === "/api/chat" && req.method === "POST") {
         const { text, images, from, share } = await readBody<{ text?: unknown; images?: unknown; from?: unknown; share?: unknown }>(req);
         // P-VISION.1 (ADR-0136): pasted-image content blocks ride alongside the text (defensively filtered).
@@ -2750,6 +2834,9 @@ process.env.LUCID_PREVIEW_ACT_URL = `http://127.0.0.1:${server.port}/api/preview
 // ADR-0220: the `knowledge_search` tool (omp subprocess) POSTs the user's query here to ground on the local
 // compiled knowledge base. Token'd URL, same pattern as the preview tools; retrieval returns delimited untrusted DATA.
 process.env.LUCID_KB_RETRIEVE_URL = `http://127.0.0.1:${server.port}/api/kb/retrieve?t=${TOKEN}`;
+// P-FLEET.L1: the master agent's fleet_status tool (omp subprocess) GETs this to see local lane status -
+// metadata only (lane replies render in the fleet dashboard, never through this URL).
+process.env.LUCID_FLEET_STATUS_URL = `http://127.0.0.1:${server.port}/api/fleet/status?t=${TOKEN}`;
 
 // Build recall once at startup — the FIRST session is created lazily on the first /api/chat (never
 // via /api/newSession), so this is what carries prior-session facts into it. Best-effort; the omp

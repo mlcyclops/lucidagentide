@@ -191,13 +191,25 @@ personalization internals are proprietary and intentionally undocumented here - 
   write for **listening**: lead with the answer, two or three sentences, plain spoken prose, no headings,
   lists, tables, code blocks or file paths. You should never have to ask it to be brief. It constrains the
   answer's **shape**, never the work behind it. *(P-VOICE.5)*
+- **🗂️ A local fleet in a grid (NEW)** - spawn **multiple headless LUCID agents on this same
+  machine**, each on its **own repo (cwd)** and its **own model** (a dropdown per lane, defaulting to
+  whatever the master/orchestrator session is using), streaming live into **editable mini windows** in one
+  movable, resizable, minimizable **fleet dashboard** (auto-arranging grid). Each frame is a status light:
+  **cyan pulse** working, **amber glow** awaiting your input, **red glow** needs approval (fail-closed:
+  silence is a deny), **green** done. Admission is capped by a **75% system headroom guard** (CPU, memory,
+  and a core-derived lane ceiling) so the OS and your other apps keep breathing, and every refusal shows
+  the measured number. The master agent sees the lanes through its `fleet_status` tool - metadata only,
+  never lane text. *(P-FLEET.L1)*
 - **📻 A glowing equalizer** - a real spectrum analyser of the agent's actual voice: segmented LEDs with
   hanging peak caps, log-spaced bands and hi-fi ballistics. It lives as a **mini strip** in the prompt bar, or
   **pops out** as a **LUCID Agent [Voice]** panel you drag and anchor anywhere in the window - it snaps to the
   edges, resizes, minimizes, and remembers where you left it. *(P-VOICE.4)*
 - **⏳ It keeps you company while it thinks** - eyes-off, a long turn used to be dead air. Now you get short,
-  escalating spoken acknowledgements - *"Got it, thinking this through."* → *"Still working on it, give me a
-  few seconds."* - capped per turn, and never over the answer. *(P-VOICE.6)*
+  escalating spoken acknowledgements that actively LISTEN: the opener is picked from twelve varied lines and,
+  when your ask is short enough to restate faithfully, it restates it - *"Got it: fix the login redirect. On it
+  now."* Once reasoning is streaming, later cues speak **snapshots of the live thinking** - *"Quick update: the
+  timeout only fires on the retry path."* - and keep going at a slow cadence for as long as the thinking
+  genuinely moves forward. Capped per turn, and never over the answer. *(P-VOICE.6/.7)*
 - **🎛️ A voice picker that tells the truth** - engine + voice moved out of Settings and into the composer,
   with **every** engine's voices listed (ElevenLabs, ChatGPT/OpenAI, offline Kokoro), a remembered voice **per
   engine**, and any engine you can't actually use **greyed out with the specific reason** - including the one

@@ -2786,6 +2786,13 @@ body.preview-open .thread{font-size:.9em}
 .whisper-status{margin-left:auto}
 .whisper-bar{flex:1;height:6px;border-radius:3px;background:var(--bg-3);overflow:hidden}
 .whisper-bar i{display:block;height:100%;background:var(--accent);transition:width .3s ease}
+/* P-STT.6 (ADR-0255): installed Whisper models - one-line rows (invariant #11: the label is a SINGLE
+   nowrap-ellipsis element; chips + button never wrap), Remove per row. */
+.whisper-models{margin-top:9px;display:flex;flex-direction:column;gap:5px}
+.whisper-models-h{font-size:11px;color:var(--txt-3)}
+.whisper-model{display:flex;align-items:center;gap:8px}
+.whisper-model-name{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:12px}
+.whisper-model .abadge,.whisper-model .btn-mini{flex:none;white-space:nowrap}
 
 /* P-NORESP.1: "no response from provider" notice that replaces an empty assistant bubble. */
 .noresp-card{display:flex;flex-direction:column;gap:8px;border:1px solid var(--line);border-left:3px solid #e0a44a;border-radius:10px;padding:10px 12px;background:rgba(224,164,74,.06)}
@@ -2866,12 +2873,28 @@ body.preview-open .thread{font-size:.9em}
 .ws-name{display:flex;align-items:center;gap:8px;font-size:13.5px;font-weight:600;color:var(--txt)}
 .ws-name .ic{color:var(--accent-2)}
 .ws-path{font-family:var(--mono);font-size:11px;color:var(--txt-4);margin-top:5px;word-break:break-all}
-.ws-recent{display:flex;flex-wrap:wrap;gap:6px;margin-top:9px}
-.ws-recent-item{-webkit-app-region:no-drag;display:inline-flex;align-items:center;gap:6px;background:var(--bg-1);
-  border:1px solid var(--line);border-radius:8px;padding:5px 10px;color:var(--txt-2);font-size:11.5px;cursor:pointer;
+/* Recents pills: capped to ~2 rows; the rest scroll (older folders reachable without flooding the panel). */
+.ws-recent{display:flex;flex-wrap:wrap;gap:6px;margin-top:9px;align-content:flex-start;
+  max-height:66px;overflow-y:auto;overflow-x:hidden;padding-right:3px}
+.ws-recent::-webkit-scrollbar{width:8px}
+.ws-recent::-webkit-scrollbar-thumb{background:var(--line-strong);border-radius:8px}
+.ws-recent::-webkit-scrollbar-track{background:transparent}
+/* Pill = a select button + a remove button sharing one bordered shell (overflow:hidden clips to the radius). */
+.ws-recent-item{-webkit-app-region:no-drag;display:inline-flex;align-items:stretch;background:var(--bg-1);
+  border:1px solid var(--line);border-radius:8px;overflow:hidden;
   transition:background var(--t),border-color var(--t),color var(--t)}
-.ws-recent-item:hover{background:var(--bg-3);border-color:var(--accent);color:var(--txt)}
-.ws-recent-item .ic{color:var(--txt-3)}
+.ws-recent-item:hover{border-color:var(--accent)}
+.ws-recent-open{-webkit-app-region:no-drag;display:inline-flex;align-items:center;gap:6px;background:transparent;
+  border:0;padding:5px 4px 5px 10px;color:var(--txt-2);font-size:11.5px;cursor:pointer;
+  transition:background var(--t),color var(--t)}
+.ws-recent-open:hover{background:var(--bg-3);color:var(--txt)}
+.ws-recent-open .ic{color:var(--txt-3);flex:none}
+.ws-recent-name{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:180px}
+.ws-recent-rm{-webkit-app-region:no-drag;display:inline-flex;align-items:center;justify-content:center;flex:none;
+  background:transparent;border:0;border-left:1px solid var(--line);padding:0 7px;color:var(--txt-4);cursor:pointer;
+  transition:background var(--t),color var(--t)}
+.ws-recent-rm:hover{background:var(--red-dim);color:var(--red)}
+.ws-recent-rm .ic{flex:none}
 /* in-app folder browser (Workspace → Browse) */
 .fb-scrim{position:fixed;inset:0;z-index:110;/* above the IDE slide-out panel (z-index:90) so a Save-As / import browser is never hidden behind it */
   background:radial-gradient(120% 90% at 50% 0%,rgba(20,14,28,.46),rgba(5,6,10,.6));
@@ -3087,6 +3110,11 @@ pre:hover .code-copy-btn,pre:focus-within .code-copy-btn{opacity:1}
 .import-pill-fill{height:100%;width:0;background:var(--accent);border-radius:3px;transition:width .4s var(--ease-out)}
 .import-pill-row{display:flex;align-items:center;gap:10px}
 .import-pill-text{flex:1;min-width:0;font-size:11.5px;color:var(--txt-2)}
+/* P-KG-INGEST.5 (ADR-0252): the run has gone silent past STALL_MS. Say so loudly instead of showing a
+   healthy-looking bar that never moves. */
+.import-pill.stalled{border-color:var(--amber);background:var(--amber-dim)}
+.import-pill.stalled .import-pill-fill{background:var(--amber)}
+.import-pill.stalled .import-pill-text{color:var(--amber)}
 
 /* P-AGENT.2b (ADR-0129): the Agent Builder workflow canvas. Reuses .kg layout (aside + header + canvas). */
 .ab-panel .ab-tools{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
@@ -3559,3 +3587,94 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .dod-body p{margin:0 0 10px}
 .dod-body ul{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:7px}
 .dod-body li{color:var(--txt-2)}
+
+/* == P-FLEET.L1: fleet grid dashboard == */
+/* Multiple headless LUCID engine lanes as mini agent windows inside one movable dock (the share-dock frame
+   under the lucid.fleetDock.* keys). The card FRAME is the status surface: the LED + border take the lane
+   color, and ONLY the two states that need the user - awaiting-input (amber) and needs-approval (red) -
+   animate their glow (the sendReady/secPulse feel). Every persistent label is nowrap+ellipsis and the grid
+   tracks are minmax(280px,1fr), per the no-mid-word-wrap invariant. */
+.fleet-dock{min-width:320px}
+.fleet-body{padding:10px}
+.fleet-headroom{flex:none;display:flex;align-items:center;gap:5px;font-family:var(--mono);font-size:9.5px;color:var(--txt-3);white-space:nowrap}
+.fleet-hr-lbl{color:var(--txt-4)}
+.fleet-hr-bar{position:relative;width:44px;height:5px;border-radius:3px;background:var(--bg-0);flex:none}
+.fleet-hr-fill{position:absolute;top:0;bottom:0;left:0;border-radius:3px;max-width:100%;transition:width .4s var(--ease)}
+.fleet-hr-bar::after{content:"";position:absolute;top:-1px;bottom:-1px;left:var(--wm,75%);width:1px;background:var(--txt-2);opacity:.8}
+.fleet-hr-val{min-width:26px}
+.fleet-hr-lanes{color:var(--txt-2);border:1px solid var(--line);border-radius:5px;padding:0 4px;background:var(--bg-1)}
+.fleet-hr-off{color:var(--txt-4)}
+.fleet-add-btn{flex:none;white-space:nowrap}
+.fleet-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px;align-items:start}
+.fleet-card{--lane:var(--txt-4);--lane-dim:rgba(82,90,112,.25);display:flex;flex-direction:column;min-width:0;
+  background:var(--bg-2);border:1px solid var(--line);border-radius:10px;overflow:hidden;
+  transition:border-color .25s,box-shadow .25s,opacity .25s}
+.fleet-card-head{display:flex;align-items:center;gap:6px;padding:6px 7px;min-width:0;
+  border-bottom:1px solid var(--line-soft);background:var(--bg-3)}
+.fleet-led{width:8px;height:8px;border-radius:50%;flex:none;background:var(--lane);box-shadow:0 0 6px var(--lane-dim)}
+.fleet-lane-name{flex:1;min-width:0;font-size:11.5px;font-weight:700;color:var(--txt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.fleet-cwd-chip{flex:none;max-width:92px;font-family:var(--mono);font-size:9.5px;color:var(--txt-3);
+  background:var(--bg-1);border:1px solid var(--line);border-radius:5px;padding:1px 5px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.fleet-model{flex:none;max-width:110px;height:20px;font:inherit;font-size:10px;color:var(--txt-2);
+  background:var(--bg-1);border:1px solid var(--line);border-radius:6px;padding:0 2px;white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis;cursor:pointer}
+.fleet-model:focus{outline:none;border-color:var(--accent)}
+.fleet-card-btn{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;flex:none;
+  border-radius:6px;color:var(--txt-3);background:transparent;border:0;cursor:pointer}
+.fleet-card-btn:hover{background:var(--bg-0);color:var(--txt)}
+.fleet-card-main{display:flex;flex-direction:column;min-height:0}
+.fleet-out{min-height:64px;max-height:180px;overflow-y:auto;padding:7px 9px;display:flex;flex-direction:column;gap:4px;font-size:12px;line-height:1.5;color:var(--txt)}
+.fleet-out-empty{display:flex;align-items:center;min-width:0;color:var(--txt-4);font-size:11px}
+.fleet-out-empty span{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.fleet-turn-user{flex:none;color:var(--accent-2);font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.fleet-think{white-space:pre-wrap;word-break:break-word;color:var(--txt-4);font-size:11px;line-height:1.45;border-left:2px solid var(--line-strong);padding:1px 0 1px 7px}
+.fleet-tool{display:flex;align-items:center;gap:5px;min-width:0;font-size:10.5px;color:var(--txt-3);background:var(--bg-1);border:1px solid var(--line-soft);border-radius:6px;padding:2px 6px}
+.fleet-tool .ic{color:var(--accent-2);flex:none}
+.fleet-tool b{color:var(--txt-2);font-weight:600;flex:none;white-space:nowrap}
+.fleet-tool-detail{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fleet-text{white-space:pre-wrap;word-break:break-word}
+.fleet-md{word-break:break-word}
+.fleet-md p{margin:0 0 4px}
+.fleet-cursor{color:var(--cyan);animation:sharePulse 1s steps(2) infinite;margin-left:1px}
+.fleet-errline{display:flex;align-items:center;gap:5px;min-width:0;font-size:11px;color:var(--red)}
+.fleet-errline .ic{flex:none}
+.fleet-errline span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fleet-approve{display:flex;align-items:center;gap:7px;min-width:0;padding:6px 9px;background:var(--red-dim);border-top:1px solid rgba(239,95,95,.4)}
+.fleet-approve-txt{flex:1;min-width:0;font-size:11px;color:var(--txt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.fleet-approve-acts{display:flex;gap:5px;flex:none}
+.fleet-compose{display:flex;align-items:flex-end;gap:6px;padding:6px 7px;border-top:1px solid var(--line-soft)}
+.fleet-input{flex:1;min-width:0;resize:none;min-height:26px;max-height:64px;background:var(--bg-1);border:1px solid var(--line);border-radius:7px;color:var(--txt);font:inherit;font-size:11.5px;line-height:1.4;padding:5px 7px}
+.fleet-input:focus{outline:none;border-color:var(--accent)}
+.fleet-send{width:26px;height:26px;color:var(--accent-2)}
+.fleet-cancel{white-space:nowrap;flex:none}
+/* status frames: LED + border carry the lane color; ONLY the two action-needed states animate */
+.fleet-card.lane-starting{--lane:var(--txt-4)}
+.fleet-card.lane-working{--lane:var(--cyan);--lane-dim:rgba(70,200,220,.35);border-color:rgba(70,200,220,.5)}
+.fleet-card.lane-working .fleet-led{animation:hudpulse 2.2s ease-in-out infinite}
+.fleet-card.lane-awaiting-input{--lane:var(--amber);--lane-dim:rgba(232,178,60,.4);border-color:var(--amber);animation:fleetGlowAmber 2.6s ease-in-out infinite}
+.fleet-card.lane-needs-approval{--lane:var(--red);--lane-dim:rgba(239,95,95,.5);border-color:var(--red);animation:fleetGlowRed 1.6s ease-in-out infinite}
+.fleet-card.lane-needs-approval .fleet-card-head{background:rgba(239,95,95,.14);box-shadow:0 0 12px -2px rgba(239,95,95,.45) inset}
+.fleet-card.lane-done{--lane:var(--green);--lane-dim:rgba(70,210,126,.35);border-color:rgba(70,210,126,.55)}
+.fleet-card.lane-error{--lane:var(--red);--lane-dim:rgba(239,95,95,.4);border-color:var(--red)}
+.fleet-card.lane-stopped{--lane:var(--txt-4);opacity:.55}
+@keyframes fleetGlowAmber{0%,100%{box-shadow:0 0 0 0 rgba(232,178,60,0)}50%{box-shadow:0 0 14px 2px rgba(232,178,60,.4)}}
+@keyframes fleetGlowRed{0%,100%{box-shadow:0 0 2px 0 rgba(239,95,95,.3)}50%{box-shadow:0 0 18px 3px rgba(239,95,95,.6)}}
+/* the minimized status-bar pill inherits .share-dock-pill; attention states pulse it red */
+#fleetDockPill.attn{border-color:var(--red);animation:fleetGlowRed 1.6s ease-in-out infinite}
+/* the + Lane form and the empty state */
+.fleet-spawn{display:flex;flex-direction:column;gap:5px;padding:8px 9px}
+.fleet-spawn-lbl{font-size:10px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--txt-4);white-space:nowrap}
+.fleet-spawn-opt{font-weight:400;text-transform:none;letter-spacing:0;color:var(--txt-4)}
+.fleet-spawn-in{min-width:0;background:var(--bg-1);border:1px solid var(--line);border-radius:7px;color:var(--txt);font:inherit;font-size:11.5px;padding:5px 7px}
+.fleet-spawn-in:focus{outline:none;border-color:var(--accent)}
+.fleet-spawn-err{font-size:11px;line-height:1.45;color:var(--red);background:var(--red-dim);border:1px solid rgba(239,95,95,.4);border-radius:7px;padding:5px 8px;word-break:break-word}
+.fleet-spawn-acts{display:flex;justify-content:flex-end;gap:6px}
+.fleet-empty{grid-column:1/-1;display:flex;align-items:center;gap:7px;min-width:0;color:var(--txt-3);font-size:12px;padding:10px 4px}
+.fleet-empty .ic{color:var(--txt-4);flex:none}
+.fleet-empty span{min-width:0}
+/* without motion the states still read: border color + header tint stay; only the pulsing stops */
+@media (prefers-reduced-motion:reduce){
+  .fleet-card.lane-awaiting-input,.fleet-card.lane-needs-approval,#fleetDockPill.attn,
+  .fleet-card.lane-working .fleet-led,.fleet-cursor{animation:none}
+}

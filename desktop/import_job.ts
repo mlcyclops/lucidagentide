@@ -21,10 +21,16 @@ export interface ImportJobView {
   conversations: number; totalConversations: number;
   learned: number; blocked: number;
   startedAt: number; updatedAt: number;
+  cancelRequestedAt?: number; // Stop was pressed; the run is unwinding (UI shows "Stopping...")
   result?: ImportResult; // present on done/cancelled (cancelled still carries its partial counts)
   error?: string;        // present on failed
 }
-interface ImportJob extends ImportJobView { abort: AbortController }
+interface ImportJob extends ImportJobView { abort: AbortController; cancelTimer?: ReturnType<typeof setTimeout> }
+
+// P-KG-INGEST.5 (ADR-0252): how long Stop waits for the run to unwind before the job is declared
+// cancelled anyway. Without this the job stayed "running" forever whenever the run was wedged, and
+// single-flight then refused every retry until the app was restarted.
+export const CANCEL_GRACE_MS = 15_000;
 
 let active: ImportJob | null = null;
 
@@ -32,7 +38,7 @@ let active: ImportJob | null = null;
 export function importJobStatus(jobId?: string): ImportJobView | null {
   if (!active) return null;
   if (jobId && jobId !== active.jobId) return null;
-  const { abort: _abort, ...view } = active;
+  const { abort: _abort, cancelTimer: _timer, ...view } = active;
   return { ...view };
 }
 
@@ -58,23 +64,52 @@ export function startImport(opts: {
   };
   void opts.run(onTick, abort.signal).then(
     (result) => {
+      clearTimeout(job.cancelTimer);
       job.result = result;
-      job.state = (abort.signal.aborted || result.cancelled) ? "cancelled" : (result.ok ? "done" : "failed");
+      // A job already declared cancelled (grace elapsed) stays cancelled: it keeps its partial counts
+      // and must not flip back to done/failed after the UI moved on.
+      if (job.state === "running") job.state = (abort.signal.aborted || result.cancelled) ? "cancelled" : (result.ok ? "done" : "failed");
       if (!result.ok && !job.error) job.error = result.error;
       job.updatedAt = Date.now();
     },
-    (e) => { job.state = "failed"; job.error = String((e as Error)?.message ?? e); job.updatedAt = Date.now(); },
+    (e) => {
+      clearTimeout(job.cancelTimer);
+      if (job.state === "running") job.state = "failed";
+      job.error = String((e as Error)?.message ?? e);
+      job.updatedAt = Date.now();
+    },
   );
   return { ok: true, jobId: job.jobId };
 }
 
-/** Request cancellation of the running job (cancels at the next conversation boundary). */
+/** Request cancellation of the running job. The abort reaches the importer at the next MESSAGE (and
+ *  interrupts the in-flight model call), so a healthy run stops in seconds. A wedged run cannot be
+ *  awaited forever, so the job is force-cancelled after CANCEL_GRACE_MS regardless, and pressing
+ *  Stop while it is already stopping force-cancels immediately. Either way the UI settles and a new
+ *  import can start. */
 export function cancelImport(jobId?: string): { ok: boolean } {
   if (!active || active.state !== "running") return { ok: false };
   if (jobId && jobId !== active.jobId) return { ok: false };
-  active.abort.abort();
+  const job = active;
+  if (job.cancelRequestedAt) { forceCancel(job); return { ok: true }; } // pressed twice: give up on the unwind
+  job.cancelRequestedAt = Date.now();
+  job.updatedAt = Date.now();
+  job.abort.abort();
+  const timer = setTimeout(() => forceCancel(job), CANCEL_GRACE_MS);
+  timer.unref?.();
+  job.cancelTimer = timer;
   return { ok: true };
 }
 
+/** Declare the job cancelled even though its run has not settled. The orphaned run stops at its next
+ *  abort check and its own save() is a no-op or a partial-fact write, both safe. */
+function forceCancel(job: ImportJob): void {
+  clearTimeout(job.cancelTimer);
+  job.cancelTimer = undefined;
+  if (job.state !== "running") return;
+  job.state = "cancelled";
+  job.updatedAt = Date.now();
+}
+
 // Test-only: reset the singleton between cases.
-export function __resetImportJob(): void { active = null; }
+export function __resetImportJob(): void { clearTimeout(active?.cancelTimer); active = null; }

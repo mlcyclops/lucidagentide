@@ -57,6 +57,16 @@ export function setWorkspace(path: string): WorkspaceInfo {
   return workspaceInfo();
 }
 
+/** Drop one folder from the recents list. Never touches the current workspace (so no backend respawn is
+ *  needed - the active cwd is unchanged). Idempotent: removing an absent path is a no-op. */
+export function removeRecentWorkspace(path: string): WorkspaceInfo {
+  const s = load();
+  const prev = s.recentWorkspaces ?? [];
+  const next = prev.filter((p) => p !== path);
+  if (next.length !== prev.length) { s.recentWorkspaces = next; save(s); }
+  return workspaceInfo();
+}
+
 /** The on-disk folder name for a clone. Windows silently DROPS trailing dots/spaces from folder names, so
  *  a repo like `l.e.a.p.s..git` (→ raw name `l.e.a.p.s.`) would be created as `l.e.a.p.s`, desyncing the
  *  `.git` reuse check below and stranding failed clones. We strip leading/trailing dots+spaces so the name

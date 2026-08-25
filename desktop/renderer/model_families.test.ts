@@ -7,7 +7,7 @@
 // GPT) and the gateway-prefix robustness are the easy things to break, so they're pinned here.
 
 import { describe, expect, it } from "bun:test";
-import { ASKSAGE_FAMILY_ORDER, cmpModelsNewestFirst, familyOf, filterModels, groupByFamily, gptVersion, isAuxiliaryModel, isChinaModel, isDeprecatedModel, isGovModel, MODEL_FAMILIES, providerLabelOf, recommendFallbacks, sortGovFirstNewest, type ModelOption } from "./model_families.ts";
+import { ASKSAGE_FAMILY_ORDER, capabilityTier, cmpModelsByLevel, cmpModelsNewestFirst, familyOf, filterModels, groupByFamily, gptVersion, isAuxiliaryModel, isChinaModel, isDeprecatedModel, isGovModel, MODEL_FAMILIES, providerLabelOf, recommendFallbacks, sortGovFirstByLevel, topModel, type ModelOption } from "./model_families.ts";
 
 describe("familyOf", () => {
   it("classifies direct Anthropic models (incl. fable) as Claude", () => {
@@ -153,7 +153,7 @@ describe("P-IDE.1c - gov / auxiliary / china detection", () => {
   });
 });
 
-describe("P-IDE.1c - sortGovFirstNewest", () => {
+describe("sortGovFirstByLevel", () => {
   it("gov models first, each group newest→oldest", () => {
     const models: ModelOption[] = [
       { value: "openai-codex/gpt-5.4", name: "5.4" },
@@ -161,14 +161,55 @@ describe("P-IDE.1c - sortGovFirstNewest", () => {
       { value: "openai-codex/gpt-5.5", name: "5.5" },
       { value: "asksage-openai/gpt-5.4", name: "gov 5.4" },
     ];
-    expect(sortGovFirstNewest(models).map((m) => m.value)).toEqual([
+    expect(sortGovFirstByLevel(models).map((m) => m.value)).toEqual([
       "asksage-openai/gpt-5.5", "asksage-openai/gpt-5.4", // gov, newest first
       "openai-codex/gpt-5.5", "openai-codex/gpt-5.4",     // then direct, newest first
+    ]);
+  });
+  it("ranks capability BEFORE version - an older Pro outranks a newer Flash", () => {
+    const gem: ModelOption[] = [
+      { value: "google-antigravity/gemini-3.5-flash", name: "flash" },
+      { value: "google-antigravity/gemini-3.1-pro", name: "pro" },
+    ];
+    expect(sortGovFirstByLevel(gem).map((m) => m.value)).toEqual([
+      "google-antigravity/gemini-3.1-pro", "google-antigravity/gemini-3.5-flash",
     ]);
   });
   it("cmpModelsNewestFirst orders versions descending", () => {
     expect(cmpModelsNewestFirst("x/gpt-5.5", "x/gpt-5.4")).toBeLessThan(0);
     expect(cmpModelsNewestFirst("a/claude-opus-4-6", "a/claude-opus-4-8")).toBeGreaterThan(0);
+  });
+});
+
+describe("capabilityTier / cmpModelsByLevel / topModel (level ranking)", () => {
+  it("flagship=2, balanced=1, small=0; 'gemini' is not mis-read as small", () => {
+    expect(capabilityTier("anthropic/claude-fable-5")).toBe(2);
+    expect(capabilityTier("anthropic/claude-opus-4-8")).toBe(2);
+    expect(capabilityTier("asksage-openai/gpt-5.6-luna")).toBe(2);
+    expect(capabilityTier("google-antigravity/gemini-3.1-pro")).toBe(2);
+    expect(capabilityTier("anthropic/claude-haiku-4-5")).toBe(0);
+    expect(capabilityTier("google-antigravity/gemini-3.5-flash")).toBe(0);
+    expect(capabilityTier("asksage-openai/gpt-5-mini")).toBe(0);
+  });
+  it("cmpModelsByLevel: capability beats version, then newest within a tier", () => {
+    expect(cmpModelsByLevel("x/gemini-3.1-pro", "x/gemini-3.5-flash")).toBeLessThan(0); // Pro over newer Flash
+    expect(cmpModelsByLevel("x/gpt-5.6-luna", "x/gpt-5.5")).toBeLessThan(0);
+    expect(cmpModelsByLevel("a/claude-fable-5", "a/claude-opus-4-8")).toBeLessThan(0);
+  });
+  it("topModel: highest level within the pool; excludes auxiliary; honors an accept predicate", () => {
+    const claude: ModelOption[] = [
+      { value: "anthropic/claude-opus-4-8", name: "opus48" },
+      { value: "anthropic/claude-fable-5", name: "fable" },
+      { value: "anthropic/claude-haiku-4-5", name: "haiku" },
+    ];
+    expect(topModel(claude)?.value).toBe("anthropic/claude-fable-5");
+    const mixed: ModelOption[] = [
+      { value: "openai-codex/gpt-5.5", name: "5.5" },
+      { value: "asksage-openai/gpt-5.6-luna", name: "gov luna" },
+      { value: "openai-codex/codex-auto-review", name: "aux" },
+    ];
+    expect(topModel(mixed, isGovModel)?.value).toBe("asksage-openai/gpt-5.6-luna");
+    expect(topModel([{ value: "openai-codex/codex-auto-review", name: "aux" }])).toBeNull();
   });
 });
 
@@ -207,9 +248,9 @@ describe("recommendFallbacks (P-NORESP.1)", () => {
     { value: "claude-opus-4-8", name: "Claude 4.8 Opus (commercial)" },
   ];
 
-  it("recommends a LOWER version in the same family + a cross-provider equivalent (Claude)", () => {
+  it("recommends the HIGHEST-LEVEL sibling (another 5.6 tier, not 5.5) + a cross-provider equivalent (Claude)", () => {
     const r = recommendFallbacks("asksage-openai/gpt-5.6-luna", models);
-    expect(r.sameFamily?.value).toBe("asksage-openai/gpt-5.5");            // lower GPT version, not a 5.6 sibling
+    expect(r.sameFamily?.value).toBe("asksage-openai/gpt-5.6-sol");        // keep the 5.6 ceiling, don't drop to 5.5
     expect(r.otherProvider?.value).toBe("asksage-anthropic/google-claude-48-opus"); // Claude = different pool
   });
 

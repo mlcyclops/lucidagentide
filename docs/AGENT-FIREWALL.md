@@ -225,7 +225,43 @@ For a local no-auth dev gateway on the default port, `"args": ["acp"]` is enough
 
 ---
 
-## 5. Verifying a connection
+## 5. Running several workers (P-FLEET.1, ADR-0256)
+
+Every connection's firewall exposes FOUR tools over one gated execution path - the model reaches them as
+`mcp__agentfw-<id>_<tool>`:
+
+| Tool | What it does |
+|---|---|
+| `prompt({ prompt, wait_ms? })` | Send and wait inline up to `wait_ms` (default 25000ms - the MCP transport kills a tools/call at ~30s, `OMP_MCP_TIMEOUT_MS`). Finishes in time: the delimited reply, one call. Runs long: a `{ job_id }` handle, and the turn keeps running. |
+| `dispatch({ prompt, key? })` | Start a worker turn and return `{ job_id, state, queue_position }` immediately. The prompt is scanned BEFORE it is accepted - a blocked prompt creates no job. `key` makes retries idempotent: the same live key returns the same job. |
+| `job_status({ ids? })` | With ids: full records - a finished job's reply as UNTRUSTED_CONTENT (scanned whole, byte-identical to `prompt`'s). Without ids: a metadata-only table (states, ages, progress COUNTS, poll hints) - never a character of remote text. Unknown ids are an explicit error: a restarted firewall has an empty table, so treat the job as lost and re-dispatch. |
+| `cancel({ id })` | Queued: dropped before the remote is reached. Running: ACP `session/cancel`, then a force-stop if the turn does not settle within the grace window (a wedged turn must never wedge the queue). |
+
+**The fleet shape.** Jobs on ONE connection run one at a time (the ACP client holds one session; extras
+queue visibly, refusing past `maxQueue`, default 8). Parallelism comes from MANY connections: three VPS
+workers plus four local lanes are seven firewall processes with seven independent job tables, all in
+flight at once. A worker on another machine is just a registry entry like:
+
+```json
+{ "id": "vps1", "name": "vps1 refactorer", "kind": "acp",
+  "command": "ssh", "args": ["vps1", "lucid", "acp"],
+  "jobTimeoutMs": 1200000, "maxQueue": 4, "enabled": true }
+```
+
+`jobTimeoutMs` (default 600000 - ten minutes, ADR-0186) bounds one worker turn; past it the job lands
+`timeout`, the remote gets `session/cancel`, and the wedged child is stopped. Progress is COUNTS ONLY
+(text chars, tool lines, permission asks, idle time) by design: streaming partial worker text would let an
+adversarial worker split a hidden vector across chunks so each chunk scans clean - the reply arrives once,
+scanned whole. Every state but `queued`/`running` is terminal: `done | blocked | error | timeout |
+cancelled`, each non-done carrying only a redacted reason.
+
+```bash
+make demo-P-FLEET.1   # the fifteen ADR-0256 checks: non-blocking dispatch, two-connection fan-out,
+                      # byte-identical envelopes, per-job fail-closed, deadline cleanup, idempotent
+                      # retries, queue cap, metadata-only polling, shutdown ordering
+```
+
+## 6. Verifying a connection
 
 **Offline, deterministic (no remote needed)** — the firewall's security behavior against a faithful ACP
 stand-in, plus the fail-closed / quarantine / breakout proofs:
@@ -252,7 +288,7 @@ model being reachable.
 
 ---
 
-## 6. Troubleshooting
+## 7. Troubleshooting
 
 | Symptom | Cause / fix |
 |---|---|
@@ -266,7 +302,7 @@ model being reachable.
 
 ---
 
-## 7. References
+## 8. References
 
 - "ACP Editor Integration." *Hermes Agent Documentation*, NousResearch, 2026,
   github.com/NousResearch/hermes-agent. Accessed 4 July 2026. — Hermes's `hermes acp` server, the `[acp]`

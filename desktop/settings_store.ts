@@ -106,6 +106,10 @@ export interface GuiSettings {
   // P-LOC.1 (ADR-0031): the last model omp reported active, persisted so the AI-LOC gate can tag
   // edits with the authoring model from the very first edit of a fresh session (env at spawn).
   lastModel?: string;
+  // P-MODELDEF: the model the USER explicitly picked in the picker. DISTINCT from lastModel, which the
+  // backend also writes from omp's reported default "did the user deliberately choose a model?". Empty ⇒
+  // never chosen ⇒ the renderer boots to the highest-level available model for the active provider.
+  chosenModel?: string;
   // P-IDE.1c (ADR-0029): the user acknowledged the data-sovereignty warning for China-origin models
   // (DeepSeek/Kimi/MiniMax/GLM/…). Until set, those models are hidden from the picker. Off by default.
   chinaModelsAcknowledged?: boolean;
@@ -512,6 +516,15 @@ export function setLastModel(model: string): void {
   lastModelPending = m;
   const gen = ++lastModelGen;
   setTimeout(() => { if (gen === lastModelGen) flushPendingSettings(); }, 250);
+}
+/** P-MODELDEF: the user's explicitly-chosen model ("" if they've never picked one). Set ONLY on a genuine
+ *  user selection in the picker; never from a system switch (lockdown clamp, no-response
+ *  fallback, collab-guest mirror, boot default-select), so it cleanly signals an explicit preference. */
+export function chosenModel(): string { return load().chosenModel ?? ""; }
+export function setChosenModel(model: string): GuiSettings {
+  const s = load(); const m = (model ?? "").trim();
+  if (m) s.chosenModel = m; else delete s.chosenModel;
+  save(s); return s;
 }
 /** Whether the user has set the "AskSage only" model lock (the org-managed lock is OR'd in by callers). */
 export function asksageOnly(): boolean { return !!load().asksageOnly; }

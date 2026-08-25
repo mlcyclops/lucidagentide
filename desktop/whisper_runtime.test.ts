@@ -6,7 +6,7 @@
 // or network.
 
 import { afterEach, describe, expect, it } from "bun:test";
-import { installWhisper, startWhisper, stopWhisper, whisperStatus, whisperInstallState, type WhisperRuntimeDeps } from "./whisper_runtime.ts";
+import { installWhisper, removeWhisperModel, startWhisper, stopWhisper, whisperStatus, whisperInstallState, type WhisperRuntimeDeps } from "./whisper_runtime.ts";
 import type { MachineSpecs } from "./whisper_capability.ts";
 
 const MAC8: MachineSpecs = { arch: "arm64", platform: "darwin", totalRamGB: 8, cpuCores: 10, accel: "metal" };
@@ -41,6 +41,68 @@ describe("whisperStatus", () => {
     const s = whisperStatus(deps({ resolveBin: () => null }));
     expect(s.binAvailable).toBe(false);
     expect(s.binHint).toMatch(/LUCID_WHISPER_BIN|bundle/);
+  });
+
+  // P-STT.6 (ADR-0255): offered flags + gray-out reasons + on-disk sizes + the clamped recommendation.
+  it("marks tiny/base/small offered and medium/large remove-only", () => {
+    const s = whisperStatus(deps());
+    expect(s.tiers.filter((t) => t.offered).map((t) => t.tier)).toEqual(["tiny", "base", "small"]);
+    expect(s.tiers.find((t) => t.tier === "medium")!.offered).toBe(false);
+    expect(s.tiers.find((t) => t.tier === "large-turbo")!.offered).toBe(false);
+  });
+  it("carries a reason for a non-runnable tier so the UI can gray it out (not hide it)", () => {
+    const s = whisperStatus(deps({ specs: () => ({ ...MAC8, totalRamGB: 2 }) }));
+    const small = s.tiers.find((t) => t.tier === "small")!;
+    expect(small.runnable).toBe(false);
+    expect(small.reason).toContain("RAM");
+  });
+  it("reports the real on-disk size for installed models, null otherwise", () => {
+    const s = whisperStatus(deps({ listModels: () => ["ggml-small.en.bin"], modelSizeMB: (f) => (f === "ggml-small.en.bin" ? 466 : null) }));
+    expect(s.tiers.find((t) => t.tier === "small")!.diskMB).toBe(466);
+    expect(s.tiers.find((t) => t.tier === "base")!.diskMB).toBeNull();
+  });
+  it("clamps the recommendation (and the summary) to the offered set on a workstation", () => {
+    const s = whisperStatus(deps({ specs: () => ({ ...MAC8, totalRamGB: 512 }) }));
+    expect(s.recommended).toBe("small");
+    expect(s.summary).toContain("recommended model: small");
+    expect(s.summary).not.toContain("large-turbo");
+  });
+});
+
+// P-STT.6 (ADR-0255): weights removal - the only path for reclaiming a legacy medium/large install.
+describe("removeWhisperModel", () => {
+  it("deletes an installed model's file (any tier, offered or not)", () => {
+    const removed: string[] = [];
+    const d = deps({ listModels: () => ["ggml-medium.en.bin"], removeModel: (f) => { removed.push(f); return true; } });
+    const r = removeWhisperModel(d, "medium");
+    expect(r.ok).toBe(true);
+    expect(removed).toEqual(["ggml-medium.en.bin"]);
+  });
+  it("is idempotent when the file is already absent (never calls the remover)", () => {
+    let called = false;
+    const r = removeWhisperModel(deps({ listModels: () => [], removeModel: () => { called = true; return true; } }), "base");
+    expect(r.ok).toBe(true);
+    expect(called).toBe(false);
+  });
+  it("refuses the tier the RUNNING server has loaded, allows it after stop", async () => {
+    let spawned = false;
+    const d = deps({ listModels: () => ["ggml-base.en.bin"], spawn: () => { spawned = true; return { pid: 1, kill: () => {} }; }, health: async () => spawned, removeModel: () => true });
+    expect((await startWhisper(d, { tier: "base" })).ok).toBe(true);
+    const blocked = removeWhisperModel(d, "base");
+    expect(blocked.ok).toBe(false);
+    expect(blocked.reason).toContain("stop");
+    expect(removeWhisperModel(d, "tiny")).toEqual({ ok: true, tier: "tiny" }); // a DIFFERENT tier stays removable
+    await stopWhisper();
+    expect(removeWhisperModel(d, "base").ok).toBe(true);
+  });
+  it("reports a filesystem failure instead of pretending", () => {
+    const r = removeWhisperModel(deps({ listModels: () => ["ggml-tiny.en.bin"], removeModel: () => false }), "tiny");
+    expect(r.ok).toBe(false);
+    expect(r.reason).toContain("ggml-tiny.en.bin");
+  });
+  it("reports removal as unavailable when the build has no remover (fail-closed, not silent)", () => {
+    const r = removeWhisperModel(deps({ listModels: () => ["ggml-tiny.en.bin"] }), "tiny");
+    expect(r.ok).toBe(false);
   });
 });
 

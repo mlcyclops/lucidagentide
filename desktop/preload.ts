@@ -21,7 +21,7 @@ contextBridge.exposeInMainWorld("__LUCID_MARKET__", marketBootConfig());
 contextBridge.exposeInMainWorld("lucid", {
   isElectron: true,
   setZoom: (factor: number) => { try { webFrame.setZoomFactor(factor); } catch { /* ignore */ } },
-  pickFolder: (): Promise<string | null> => ipcRenderer.invoke("lucid:pickFolder"),
+  pickFolder: (opts?: { title?: string; defaultPath?: string; buttonLabel?: string }): Promise<string | null> => ipcRenderer.invoke("lucid:pickFolder", opts ?? {}),
   // P-NETWL.1 (ADR-0106): native FILE picker (auth config / token / PEM / API-key upload).
   pickFile: (opts?: { title?: string; filters?: { name: string; extensions: string[] }[] }): Promise<string | null> => ipcRenderer.invoke("lucid:pickFile", opts ?? {}),
   // P-NETWL.1 (ADR-0106): OS-encrypted credential vault (safeStorage). Store/list/delete only; a plaintext

@@ -16797,3 +16797,789 @@ an actual `Program Files` ACL location - that is Increment C.
   installer clamp (`allowElevation:false`, `allowToChangeInstallationDirectory:false`) can be relaxed once
   Increment C proves a protected-root boot; its own increment.
 - **Increment D:** the `LucidAgentIDE.bat` diagnostics fix (unchanged from ADR-0250).
+
+## ADR-0252 -- P-KG-INGEST.5: the ingest cannot hang, and Stop always stops
+
+**Date:** 2026-08-01
+**Status:** Accepted -- BUILT.
+
+### Problem
+
+A user's chat-history import sat at `0/500 messages - 0 facts` and never moved. Pressing Stop stuck on
+`Stopping...` forever, and no retry was possible: single-flight kept refusing a new import until the app
+was restarted. Nothing was actually being ingested.
+
+### Root cause
+
+`ACPClient.request()` had NO timeout and NEVER rejected when the omp child went away. `pending` was a Map
+keyed by request id that nothing drained: `spawn` had no `error` handler (an ENOENT emits `error` and no
+`exit`), and the `exit` handler only notified the owner. A spawned-but-mute or dead agent therefore left
+`initialize` / `session/new` pending forever.
+
+The AI import awaits exactly those calls BEFORE its first message: `complete()` -> `start()` ->
+`startUtil()` (second omp, `initialize`) -> `session/new` -> `session/prompt`. Only `session/prompt` was
+raced against an idle clock; everything upstream of it was unbounded. One wedge there froze the import at
+its initial 0/N tick, and `utilLock` chained every later extraction behind it.
+
+Stop could not rescue it. `importConversations` checked `signal.aborted` only at the OUTER conversation
+boundary, and the signal was never threaded into `distillTurn` / `modelExtractor` / `backend.complete`. In
+model mode one conversation is hundreds of slow completions, so the check was effectively unreachable.
+`cancelImport` only called `abort.abort()`; the job stayed `running` forever and blocked every retry.
+
+### Decision
+
+Bound every wait, observe cancel everywhere, and make the terminal state reachable.
+
+1. **The ACP request layer always settles.** `request(method, params, { timeoutMs?, signal? })`. A `die()`
+   path drains `pending` with a rejection on child exit AND on spawn error (notifying `onExit` exactly
+   once); `stop()` drains too; a request on a dead client rejects immediately (`isDead`).
+2. **Bounds on the lifecycle calls.** HANDSHAKE_MS (20s) on `initialize`, SESSION_MS (30s) on
+   `session/new` / `session/set_config_option` / `session/close`, COMPLETE_MS (180s) as the whole-attempt
+   ceiling in `complete()`. Prompts keep their own idle clock: a real turn may legitimately think for
+   minutes. A failed chat handshake clears `starting` so the next call respawns instead of inheriting a
+   permanently rejected promise, and a dead util connection is forgotten rather than reused.
+3. **Cancel is threaded end to end.** `Extractor` turns carry an optional `signal`; `CompleteFn` takes
+   `{ signal }`; `distillTurn` short-circuits when aborted (reported as cancelled, NOT as a gate block, so
+   the audit is not corrupted); the importer checks the signal per MESSAGE; `completeOn` /
+   `completeShared` pass it to every request and send ACP `session/cancel` on the way out. The KB
+   batch-ingest callsite passes its job signal the same way.
+4. **Stop is always terminal.** First press aborts and marks `cancelRequestedAt`; a wedged run is
+   force-cancelled after CANCEL_GRACE_MS (15s), and a second press forces it immediately. A late result
+   cannot resurrect a cancelled job but its partial counts are still reported. Single-flight releases, so
+   the user can retry without restarting.
+5. **The UI stops lying.** `formatImportLine` reports `stalled` when a running job has not ticked for
+   STALL_MS (90s) and renders `No response from the model for Ns`; the pill turns amber and the Stop
+   button stays LIVE as "Force stop" instead of disabling itself forever.
+
+### Also in this increment: the folder picker
+
+Every folder pick now goes through `pickFolderDialog()`, which uses the NATIVE OS dialog (Explorer /
+Finder) in Electron exactly as the workspace/git picker already did, falling back to the in-app browser only
+in a plain browser. `lucid:pickFolder` takes `{ title, defaultPath, buttonLabel }` (mirroring
+`lucid:pickFile`) so each caller labels its own dialog. The in-app dark browser was hard to navigate: no
+typing a path, no Quick access, no search. Directory-only is sufficient because `loadExportData` is
+folder-first and shard-aware (it finds `conversations-NNN.json`, `conversations.json`, `MyActivity.json`,
+or a `.zip` INSIDE the chosen folder); Electron on Windows cannot combine `openFile` + `openDirectory`
+anyway. Home confinement (ADR-0023) is unchanged, and its error now names the home path.
+
+### Alternatives rejected
+
+- **A blanket default timeout on every ACP request.** Would break `session/prompt`, where a long turn is
+  legitimate. Bounds are per call, and the exit-drain is the universal net.
+- **Killing the omp child on Stop.** Too blunt: the shared connection is the live chat. Cancel unwinds
+  cooperatively; only the JOB is forced.
+- **Polling the job for staleness server-side and self-cancelling.** Silently discarding a merely slow run
+  is worse than telling the user it went quiet and letting them decide.
+
+### Verification
+
+`bun run desktop/scripts/demo_p_kg_ingest_5.ts` (make demo-P-KG-INGEST.5) spawns a real MUTE child and a
+real DYING child and asserts the requests reject, aborts a real `importConversations` mid-conversation,
+force-cancels a wedged job and starts a fresh one, and renders the healthy / stalled / stopping lines. New
+`desktop/acp.test.ts` (8 tests) pins the request contract including the happy path. Cancellation tests
+added to importer / distiller / import_job / import_progress. Demos 1, 1b, 2, 3, 4 still pass; desktop
+`tsc --noEmit` clean; the renderer bundles. NOT verified here: an end-to-end run against a real wedged
+omp on the user's machine, which is what the bounds exist to make impossible.
+
+### Next
+
+- Thread the abort signal through `harness/kb/batch_ingest` -> `ingest` -> `compiler` so KB compile
+  cancels between DOCUMENTS as well as within a call; its own increment.
+- Surface `stalled` in the KB ingest pill too (it shares the pattern, not the formatter).
+
+## ADR-0253 -- P-FS.2: the browser build opens the REAL OS folder dialog
+
+**Date:** 2026-08-03
+**Status:** Accepted -- BUILT.
+
+### Problem
+
+ADR-0252 made every folder pick go through `pickFolderDialog()`, which opens the native Explorer/Finder
+dialog IN ELECTRON. But the default launch path (`LucidAgentIDE.bat` / `lucid.exe`) serves the GUI to a
+PLAIN BROWSER where no `window.lucid` preload exists, so every pick ("Choose a chat export or Obsidian
+markdown folder", KG pack import/export, save-to, workspace) fell back to the in-app dark browser: the
+cramped Up/Home dialog with no path typing, no Quick access, no search. Users asked for the native OS
+folder tool.
+
+### Decision
+
+The GUI server RUNS ON THE SAME MACHINE as that browser (loopback-only bind, ADR-0022 H1), so it can open
+the native dialog itself and hand the path back over the authenticated bridge.
+
+1. **`desktop/native_dialog.ts`** owns the per-platform dialog. win32: powershell (STA) compiles a small
+   C# COM interop and shows the MODERN `IFileOpenDialog` with `FOS_PICKFOLDERS` - the same Explorer picker
+   Electron shows - owned by the foreground window so it lands on top; NOT the legacy
+   `System.Windows.Forms.FolderBrowserDialog` tree. darwin: `osascript choose folder`. linux: zenity, then
+   kdialog (needs a display server). Caller text rides env vars (win32) or a single argv element
+   (darwin/linux): titles are never spliced into a shell-parsed string.
+2. **A three-state result contract** (`NativePickResult`): `supported:false` (headless, no dialog binary,
+   spawn failed, dialog already open) tells the renderer to fall back to the in-app browser (ADR-0103);
+   `supported:true, path:null` is a real user CANCEL and must NOT re-prompt; `supported:true, path` is the
+   pick. Stdout parsing is marker-anchored (`LUCID_PICKED::` / `LUCID_CANCELLED::`) so compiler noise can
+   never be read as a path. One dialog at a time; a 10 minute reaper kills a truly abandoned one.
+3. **`POST /api/fs/pickfolder`** (dev.ts, behind the existing loopback + token transport gates) exposes it;
+   `bridge.pickFolderNative()` calls it; `pickFolderDialog()` (app.ts) now tries Electron preload ->
+   backend native -> in-app browser, in that order. Every existing picker call site inherits the fix.
+
+No new confinement hole: the Electron `lucid:pickFolder` path already returned unconfined paths; workspace
+validation happens where the path is USED, unchanged.
+
+### Alternatives rejected
+
+- **`window.showDirectoryPicker()` in the browser.** Returns a sandboxed handle, not a filesystem path;
+  the backend needs the real path.
+- **`FolderBrowserDialog` via WinForms.** One-liner, but it IS the cramped legacy tree on Windows
+  PowerShell 5.1 / .NET Framework - the exact complaint, restated in native chrome.
+
+### Verification
+
+`make demo-P-FS.2` (bun test `desktop/native_dialog.test.ts`): modern-dialog contract pinned (CLSID +
+FOS_PICKFOLDERS present, `FolderBrowserDialog` absent, env-var text passing), marker-anchored stdout parse
+(picked/cancelled/garbage/noise/empty-path), AppleScript quote escaping, linux argv shape. The C# interop
+was compiled live on this Windows 10 machine via a compile-only probe (`Add-Type` + type load succeeded);
+`Show()` itself is interactive and was not exercised headlessly - first real click is the smoke test, and
+every failure path degrades to the in-app browser. `tsc --noEmit` clean.
+
+### Next
+
+- The `defaultPath` seam (open the dialog at the current workspace) exists in the Electron path; thread it
+  through the backend path when a caller wants it.
+
+## ADR-0254 -- P-DATA.1: the frozen data-integration steer (prefix v10)
+
+**Date:** 2026-08-03
+**Status:** Accepted -- BUILT.
+
+### Problem
+
+Untrained users wire datasets into the agent the wrong way: pasting huge exports, tables, logs, or "here
+is my database" text into the prompt, or asking the agent to keep a dataset "in the prompt". That rots the
+context (mid-prompt facts get ignored or hallucinated over), re-bills the same tokens every turn, and
+moves data outside whatever access controls its real store enforces. Nothing steered the chat agent to
+intercept this and teach the correct path.
+
+### Decision
+
+A new frozen layer-3 policy, `DATA_INTEGRATION_POLICY` (`<data-integration>`), added to the byte-stable
+prefix (PREFIX_VERSION 9 -> 10) and to the live omp chat's `--append-system-prompt` chain (acp_backend),
+like every prior layer-3 policy. It instructs the agent, when it sees prompt-stuffing, to briefly explain
+context rot and route the user, in order: (1) NATIVE ingest when LUCID already handles the source
+(workspace files, the Knowledge panel import); (2) an MCP server for live external datastores, with
+scoped read-only credentials by NAME in the vault; (3) a real RAG pipeline for document knowledge (clean +
+dedupe, semantic chunks with metadata, embed + index, top-K retrieval, retrieved text treated as untrusted
+DATA, re-index on change); (4) for GraphQL / cloud vendor sources, the vendor's OFFICIAL docs + a
+least-privilege token in the vault + exact-host egress, ideally behind MCP or an Agent Builder approval
+step. Declared fallback: users who decline these routes (or need an integration with no native/MCP path)
+are told to contact nicholas.chadwick.ctr@gmail.com and request a contract for their custom integration.
+
+### Alternatives rejected
+
+- **A tail-injected (volatile) hint.** The steer must be always-present and byte-stable; layer 3 is the
+  established home for standing behavioral policy, and the tail would re-bill it uncached.
+- **A hard input gate on large pastes.** Blocking is hostile and wrong (big pastes are sometimes
+  legitimate); teaching at the moment of misuse is the product's pattern.
+
+### Verification
+
+`harness/prompt/assembler.test.ts`: new test pins `<data-integration>`, the context-rot explanation, the
+MCP + top-K RAG guidance, and the contact fallback into `FROZEN_PREFIX`; the existing prefix-hash tests
+prove the prefix still changes ONLY with the version bump and stays byte-identical across volatile state.
+All 21 tests in the demo suite pass; `tsc --noEmit` clean.
+
+### Next
+
+- A `/connect-data` slash command that runs the same interview interactively and ends in the Agent
+  Builder with a drafted MCP-backed workflow; its own increment.
+
+## ADR-0255 -- P-STT.6: Whisper model housekeeping (offer small tiers only, gray out, remove)
+
+**Date:** 2026-08-03
+**Status:** Accepted -- BUILT.
+
+### Problem
+
+Field experience: the medium / large-turbo weights through the managed local `whisper-server` are slow to
+load and buggy - exactly the tiers a big-RAM machine got RECOMMENDED by the capability gate. Meanwhile the
+Voice card's model picker silently HID tiers the hardware could not run (filtered out, no explanation),
+and once a model was downloaded there was no way to delete it: a 1.5GB medium/large install from an
+earlier version squatted on disk forever.
+
+### Decision
+
+1. **Offered set** (`OFFERED_TIERS = tiny/base/small`, whisper_install.ts). `planWhisperInstall` refuses a
+   non-offered tier fail-closed - one choke point that gates BOTH install and start (start plans through
+   it). The default tier and the status recommendation/summary CLAMP to the offered set
+   (`offeredRecommendation`), so a workstation now defaults to `small`, never `large-turbo`.
+2. **Gray out, never hide** (whisper_runtime.ts + app.ts). `WhisperTierView` gains `offered`, `reason`,
+   `approxMB`, `diskMB`; the picker renders every OFFERED tier and disables a non-runnable one with the
+   capability gate's own reason in the label, so a constrained machine sees why a tier is unavailable.
+3. **Removal** (`removeWhisperModel` + `POST /api/whisper/remove` + a per-row Remove button). Every
+   downloaded model - offered or not - lists under the picker with its REAL on-disk size; Remove deletes
+   the weights. Fail-closed: the tier the running server has loaded is refused ("stop it first"), a
+   filesystem failure is reported not thrown, an absent file is idempotent-ok, and a build without the
+   injected remover says so. Legacy medium/large installs surface with a "not offered" badge; removal is
+   their ONLY offered action. The list renders even on an incapable machine (reclaiming disk is exactly
+   what such a machine wants).
+4. **TTS engine graying** (loadVoices, app.ts). The Settings Voice card's TTS engine select now mirrors
+   the composer voice menu's established "needs setup" treatment: an engine that cannot speak on this
+   machine right now (no Kokoro server answering, missing cloud key) is disabled with the reason on the
+   option, EXCEPT the currently selected engine - an in-progress setup is never locked out. LUCID
+   installs nothing for TTS (Kokoro is a self-hosted server), so there are no TTS weights to remove.
+
+### Alternatives rejected
+
+- **Dropping medium/large from the catalog entirely.** Would orphan existing installs invisibly - the
+  catalog entry is what lets the UI name, size, and DELETE the legacy file.
+- **Auto-deleting non-offered installs on upgrade.** Deleting user disk content without a click is
+  hostile; a labeled Remove button keeps the user in charge.
+- **Auto-stopping the server on Remove of the active tier.** Silently killing live dictation to service a
+  disk-cleanup click inverts priorities; the refusal names the fix.
+
+### Verification
+
+`make demo-P-STT.6` (whisper_install + whisper_runtime suites, 63 tests across the 5 whisper files):
+offered set pinned, explicit medium refused on capable hardware with a "no longer offered" reason, default
+and summary clamp on a 512GB spec, non-runnable tiers carry gray-out reasons, diskMB reported only when
+installed, remove deletes / is idempotent / refuses the running tier until stop / reports fs failure /
+fail-closes without a remover. demo-P-STT.2 still passes (capability gate untouched). `tsc --noEmit`
+clean. NOT exercised headlessly: the DOM click paths (Remove button, grayed options) - typechecked and
+rendered from the tested view model.
+
+### Next
+
+- Purge-all button ("remove every model not in use") if users accumulate several tiers.
+- Consider surfacing the whisper model dir path in the card for manual inspection.
+
+## ADR-0256 -- P-FLEET.1: async job handles through the Agent Firewall (the Chief-of-Staff fan-out) (SCOPE/PLAN)
+
+**Date:** 2026-08-14
+**Status:** Accepted -- SCOPE/PLAN. No code in this ADR. P-FLEET.1 is the next session's increment;
+P-FLEET.2 (worker supervisor + health), .3 (fleet panel + the fleet EventName contracts increment), and
+.4 (agent-to-agent threads) are each their own session.
+**Increment:** P-FLEET.1. A refinement of the P-AGENTFW.1 firewall's TOOL SURFACE (ADR-0147), not a new
+surface: no new process, no new transport, nothing new on disk.
+
+### Context
+
+The fleet shape the user asked for (a Chief-of-Staff LUCID that hands work to worker LUCIDs and reports
+back) needs almost no new machinery, because every LUCID install already IS a gated headless agent:
+`lucid acp` speaks ACP over stdio, and a firewall registry entry stores an arbitrary `command` + `args`
+(`RemoteAgentEntry`, registry.ts:29-46). So a worker on another machine is the entry
+`command: "ssh", args: ["vps1", "lucid", "acp"]`, and N specialist lanes on one box are N entries with
+different cwd/model args. Each enabled entry is spawned by omp as its own stdio MCP server named
+`agentfw-<id>` (registry.ts:124), so the CoS model reaches worker `vps1` as the tool
+`mcp__agentfw-vps1_prompt` (omp's verified naming rule: desktop/mcp_probe.ts:34-39). Every hop already
+crosses the fail-closed gate in both directions and every reply already arrives delimited and
+trust-labeled (ADR-0147), which is precisely what a Grok-style bot fleet does not have.
+
+One thing blocks the fan-out, and it is small: **the firewall exposes exactly one tool, and that tool is a
+blocking round-trip.**
+
+- `AgentFirewall.tools()` returns a single tool, `prompt` (agent_firewall.ts:61-64), whose handler awaits
+  `handlePrompt` end to end: outbound scan (agent_firewall.ts:82) -> `remote.prompt()`
+  (agent_firewall.ts:91) -> inbound scan of the whole turn (agent_firewall.ts:100-101) -> wrap
+  (agent_firewall.ts:111). The CoS's tool call IS the wait. Two workers means two sequential tool calls;
+  ten workers means ten. Nothing can be started and left running.
+- The worker turn is capped at two minutes and the registry cannot raise it: `promptTimeoutMs` defaults to
+  120_000 (acp_client.ts:99) and `runAgentFirewall` constructs the client without passing one
+  (agent_firewall.ts:156-159). A twelve-minute refactor on a VPS therefore cannot finish. P-STALL.1
+  (ADR-0186) already settled that a real turn deserves ten minutes of patience.
+- Concurrency inside one connection is not merely missing, it is currently **unsafe**: one
+  `AcpAgentClient` holds ONE `#sessionId` (acp_client.ts:87) memoized by `#ensureSession`
+  (acp_client.ts:141-160), and `prompt()` RESETS the per-turn collectors on entry (acp_client.ts:106-108).
+  Two overlapping prompts on one client would interleave into one remote session and one set of
+  collectors, so replies would cross between jobs.
+
+The increment: make dispatch return a handle instead of a reply, bound the worker turn honestly, and keep
+every byte that reaches the model on exactly the path it takes today.
+
+### Decision - the job handle
+
+The firewall keeps ONE execution path (today's `handlePrompt` body, moved into `#runJob`) and exposes four
+tools over it, per connection, so the CoS sees `mcp__agentfw-<id>_dispatch` and friends.
+
+1. **`dispatch({ prompt, key? })` -> a handle, immediately.** Scans outbound FIRST (same scan, same
+   policy), so an injection-relay block is still reported at the call that tried to send it and a poisoned
+   prompt never sits in a queue. On pass it mints `job-<8 hex>` (`randomUUID().slice(0, 8)`, the harness id
+   convention: registry.ts:86, harness/agent/spec.ts:146; re-rolled on collision, never reused), admits it,
+   and returns `{ job_id, state, queue_position }` as first-party text. Optional `key` makes dispatch
+   idempotent: while a job with that key is live the same `job_id` comes back and no second worker turn
+   starts, so a model retry cannot double-run a VPS.
+2. **`job_status({ ids? })`.** With ids: the per-job record, and for a terminal job the FULL post-gate
+   envelope, byte-identical to what `prompt` returns today (agent_firewall.ts:123-130). Without ids: a
+   compact table of every job on this connection, **metadata only** (state, age, elapsed, queue position,
+   progress counts, a "check again in about N seconds" hint), so harvesting ten workers costs one tool call
+   and does not re-bill ten envelopes.
+3. **`cancel({ id })`.** A queued job is dropped before the remote is ever reached; a running job goes
+   through `AcpAgentClient.cancel()` (acp_client.ts:129-131, the ACP `session/cancel` notification) and
+   lands `cancelled`. The SIGINT/SIGTERM handlers already in `runAgentFirewall`
+   (agent_firewall.ts:180-182) cancel every live job before `remote.stop()`, so shutdown never orphans a
+   worker turn (the P-STT.5 lesson: a process that "stops" without running its handlers leaves the child
+   alive).
+4. **`prompt({ prompt, wait_ms? })` stays**, re-implemented as `dispatch` plus a bounded inline wait ON the
+   job core (not a second implementation). Finishes in time -> today's envelope, one tool call, unchanged
+   bytes. Runs long -> returns the handle with a note to call `job_status`, and the job keeps running. That
+   is what stops a long worker turn from dying inside a tool call.
+
+### The states are a closed set, and "unknown" is an error
+
+`queued | running | done | blocked | error | timeout | cancelled`. Everything but the first two is
+terminal. Two rules make the set load-bearing:
+
+- **An unknown `job_id` is an explicit error result, never "running".** The job table lives in the firewall
+  process, so a restarted firewall has an empty table; answering "still running" for an id nobody owns
+  would park the CoS forever on a worker that no longer exists. "Unknown job" is the fail-closed answer
+  (invariant #3) and a distinct, testable outcome.
+- **Every non-`done` terminal state carries a redacted reason and no payload.** `blocked` is the gate's
+  verdict (outbound relay block or inbound quarantine), `error` is the remote's own failure, `timeout` is
+  the deadline. None of them ever carries remote text.
+
+### Why progress is metadata and never text (the load-bearing security decision)
+
+The obvious "stream the worker's output as it arrives" is refused on purpose. The inbound scan covers the
+WHOLE turn, once (agent_firewall.ts:100-101). Scanning per chunk would hand an adversarial worker a
+trivial evasion: split a bidi-control or zero-width sequence across two `session/update` notifications and
+each chunk scans clean while the model's context reassembles the vector. Therefore:
+
+- `job_status` returns counts and ages only: text chars produced, tool-activity lines, permission asks, ms
+  since last activity. Never a character of remote text.
+- The rule is enforced in the TYPE, not in a comment: the new `onProgress` hook on
+  `AcpAgentClientOptions` carries a counts-only struct with no text field, so no future caller can leak
+  partials through it.
+- Text arrives exactly once, atomically, after the whole-turn scan, in the existing envelope.
+
+That is still a live progress signal (is it working, is it stuck, how long since it last did anything),
+which is what the CoS needs in order to decide between waiting and cancelling.
+
+### Fan-out is across connections; inside one connection, jobs serialize
+
+Given acp_client's single session and per-turn collectors, P-FLEET.1 sets `maxInFlight = 1` per connection
+and QUEUES the rest visibly (`queued` + `queue_position`), with a queue cap (default 8) beyond which
+dispatch refuses rather than silently accumulating pending worker turns. Parallelism comes from having
+many connections, which is exactly the fleet shape: three VPS workers plus four local lanes are seven
+firewall processes with seven independent job tables, all in flight at once. Real per-connection
+concurrency needs a session POOL (a `#sessionId` per job, notification routing by `sessionId` into per-job
+collectors) and is deliberately a later increment, not smuggled in here.
+
+Deadline: a new optional `jobTimeoutMs` on `RemoteAgentEntry` (default 600_000, P-STALL.1's ten minutes)
+is plumbed into `AcpAgentClient` as `promptTimeoutMs` at agent_firewall.ts:156-159. Additive optional
+field, so existing registry files load unchanged (`isEntry` validates only id/command/args:
+registry.ts:131-134).
+
+### Custody: what a job record holds, and where it lives
+
+- **Post-gate only.** The record stores the wrapped, delimited, trust-labeled envelope, or a redacted
+  reason. The raw reply is scanned and then dropped; it is never a field. There is therefore no code path,
+  present or future, that can hand out unscanned worker output.
+- **In the firewall process, in memory.** Not DuckDB (invariant #10 untouched, no migration): a job is
+  ephemeral run state, and ADR-0043 already drew the line that tool I/O is provenance, not durable
+  knowledge. It also keeps an omp-spawned subprocess from becoming a second writer to the frozen schema.
+- **Not on disk at all.** The registry file keeps storing configuration only (registry.ts custody note,
+  mode 0600). Worker prompts and replies never land in `~/.omp/lucid-agents.json`.
+- **Durable audit is P-FLEET.3's job.** Today `FirewallEvent` is a process-local shield line on stderr
+  (agent_firewall.ts:37-43, 166-168). P-FLEET.1 adds `jobId` + state to it and stops there. contracts.ts
+  is NOT touched and no new `EventName` is added (invariant #8 stays an untouched frozen contract); the
+  fleet's real events, `fleet_job_dispatched` / `fleet_job_completed` / `fleet_job_blocked`, are NAMED here
+  and deferred to the P-FLEET.3 contracts increment, exactly as P-SANDBOX and P-KB.1 deferred theirs.
+
+### Invariants preserved
+
+- **#1 extend, never fork.** Four tools on our own first-party MCP server. omp is untouched.
+- **#3 fail-closed.** Every new outcome is a terminal state with no payload: dead scanner -> `blocked`
+  (`scanAndDecide` already blocks fail-closed), dead remote -> `error`, deadline -> `timeout`, unknown id
+  -> error result, firewall restart -> unknown id. No state means "we could not scan, so here it is."
+- **#4 the gate acts in-process.** Deferring DELIVERY does not move the gate: the firewall's own scan is
+  unchanged, and whatever `job_status` hands over crosses omp's in-process MCP result gate
+  (harness/omp/mcp_result_gate.ts, ADR-0152) at the moment it enters the model's context, because these
+  tools carry `mcp__` names like every other MCP tool.
+- **#5 delimited and late.** Same `#wrap` envelope, same UNTRUSTED_CONTENT delimiters, same
+  `neutralizeDelimiters` breakout defense, arriving in the tool-result tail as today.
+- **#6 the prefix is frozen.** Zero prefix bytes change. Fan-out guidance rides the per-connection tool
+  descriptions, which are volatile and travel in the MCP handshake.
+- **#7 trust labels.** Unchanged: `untrusted`, or `suspicious` when the scan demotes
+  (agent_firewall.ts:109). Never `trusted`.
+- **#9 stable ids.** One `job-<8 hex>` per logical job, minted once, never regenerated.
+
+### File-by-file (P-FLEET.1)
+
+- **`harness/mcp/jobs.ts` (new, pure).** The job table and its state machine: `admit()` (dedupe by key,
+  queue cap, position), `start()`, `finish()`, `fail()`, `expire()`, `cancel()`, `view()` / `viewAll()`.
+  No I/O, no timers of its own, clock injected. The closed state set and the unknown-id rule live here.
+- **`harness/mcp/agent_firewall.ts`.** `handlePrompt`'s body becomes `#runJob(jobId, promptText)`;
+  `tools()` returns the four tools; the class owns the job table; the SIGINT/SIGTERM path cancels live jobs
+  before `remote.stop()`; `FirewallEvent` gains `jobId?` and `state?`.
+- **`harness/mcp/acp_client.ts`.** Accept and use the entry's `promptTimeoutMs`; add the counts-only
+  `onProgress` hook, fired from the existing notification handler; `cancel()` becomes the running-job
+  cancel.
+- **`harness/mcp/registry.ts`.** `RemoteAgentEntry.jobTimeoutMs?` and `.maxQueue?` (optional, additive),
+  passed through by `runAgentFirewall`.
+- **`harness/mcp/jobs.test.ts` (new)** for the pure table; **`harness/mcp/agent_firewall.test.ts`**
+  extended for the tool surface. The existing nine firewall tests and six integration tests stay green
+  unchanged, since `prompt`'s successful path stays byte-identical.
+- **`harness/scripts/demo_pfleet1.ts`** plus a `demo-P-FLEET.1` target beside `demo-P-AGENTFW.1`
+  (Makefile:444-446).
+- **`docs/AGENT-FIREWALL.md`.** A "Running several workers" section: the four tools, the serialization
+  rule, and the `ssh` worker entry.
+
+### Verification plan (`make demo-P-FLEET.1`)
+
+Against the FakeRemote and fake-ACP-subprocess harnesses the firewall tests already use
+(agent_firewall.test.ts, agent_firewall.integration.test.ts):
+
+1. `dispatch` returns a `job_id` while a deliberately slow fake remote is still working (non-blocking).
+2. Two firewalls, two slow remotes: both jobs are `running` at the same instant. This is the fan-out
+   proof, and the thing that is impossible today.
+3. Job completes -> `job_status({ ids })` returns an envelope byte-identical to `prompt`'s on the same
+   reply (pins the ADR-0147 wrap).
+4. Poisoned reply -> `blocked`, and the stored record contains neither the poison nor any remote text.
+5. Outbound hidden vector -> `dispatch` refuses, NO job is created, and the fake remote saw nothing.
+6. Scanner killed mid-job -> terminal `blocked` with `failClosed`, never `done` (the invariant #3 kill
+   test, now per job).
+7. Unknown id -> error result; a fresh firewall reports a previously issued id as unknown, never
+   "running".
+8. Deadline exceeded -> `timeout`, `session/cancel` sent, remote stopped, no leaked child.
+9. `cancel` on a queued job: dropped, remote never reached. On a running job: `session/cancel` sent, state
+   `cancelled`.
+10. Two dispatches on ONE connection: the second is `queued`, the fake remote sees the prompts strictly
+    sequentially, and each envelope maps to its own job (no collector crossing).
+11. The same `key` twice while live -> one job, one remote turn, the same id returned twice.
+12. Dispatch past the queue cap -> error result, queue length unchanged.
+13. `job_status({})` on a mixed table returns metadata only: no envelope text for any job, including the
+    finished one.
+14. `prompt` with a fast remote returns the envelope inline; with a slow remote it returns the handle, and
+    the job is collectable afterwards.
+15. SIGTERM with a job running -> cancel, then stop, in that order.
+
+Plus: `demo-P-AGENTFW.1` stays green untouched, and `tsc --noEmit` clean.
+
+### Open questions
+
+- **omp's own MCP tool-call ceiling.** `prompt`'s inline wait must sit under whatever the pinned omp
+  bundle allows a `tools/call` before it gives up. Unmeasured. First task of the increment: measure it
+  against the pinned bundle, set the default `wait_ms` below it (proposal: 90s), and say the number in the
+  tool description.
+- **Deadline default.** 600s from P-STALL.1 for everyone, or per-entry from the start? Leaning per-entry
+  with a 600s default, since a local lane and a VPS refactor deserve different patience.
+- **VPS orphans.** A SIGKILLed firewall's local child dies with it, but `ssh vps1 lucid acp` can leave a
+  worker turn running on the far side. Keeping a remote worker honest is exactly P-FLEET.2 (supervisor +
+  health), not something a job table can fix.
+- **Cross-connection "wait for any".** A real scheduler would want it, and it implies a process above the
+  per-connection firewalls. Deliberately out of scope: N cheap `job_status` polls are the honest version
+  until P-FLEET.3 has a fleet view to hang it on.
+
+### Relates to
+
+- ADR-0147 (P-AGENTFW.1) - the firewall, the bidirectional gate, and the `prompt` tool this refines.
+- ADR-0149 (P-AGENTFW.2/.3) - the Remote-agents Settings surface and per-connection policy the new entry
+  fields extend.
+- ADR-0152 (P-MCP-GATE.1) - the in-process MCP result gate that re-scans every deferred hand-off.
+- ADR-0186 (P-STALL.1) - where the ten-minute patience number comes from.
+- ADR-0252 (P-KG-INGEST.5) - the same lesson on the desktop ACP client: bounded requests, pending calls
+  drained on death, cancel threaded end to end.
+- ADR-0076 (P-KG-INGEST.1) and `desktop/import_job.ts` - the house job pattern this mirrors (mint an id,
+  in-memory state, poll a view, soft-then-hard cancel, test-only reset seam).
+- ADR-0043 - tool I/O is provenance, not durable knowledge; why the job table is not a database.
+- P-FLEET.2 (worker supervisor + health endpoint), P-FLEET.3 (fleet panel on desktop + PWA, and the fleet
+  EventName contracts increment), P-FLEET.4 (agent-to-agent threads through the firewall, each hop
+  scanned) - the rest of the map.
+
+## ADR-0257 -- P-VOICE.7: varied openers, active-listening restatement, and spoken thinking snapshots
+
+**Status:** Accepted -- BUILT.
+
+### Context
+
+P-VOICE.6 (ADR-0249) fixed dead air in conversation mode, but every turn opened with the SAME canned line
+("Got it. Thinking this through."), which reads as a recording, not a listener. And past the third cue a
+genuinely long think went silent again - the cues said "working" without ever saying WHAT the agent was
+working on, even though the reasoning stream was right there in the renderer.
+
+### Decision
+
+Extend `nextThinkingCue()` (still pure - state in, cue out; the caller passes a per-turn `seed` so variety
+is deterministic and testable) with three behaviors:
+
+1. **Twelve seeded openers.** One seed per turn: a turn keeps one register, back-to-back turns vary.
+2. **Active listening.** New pure `distillTopic(prompt)` distills the ask into a short fragment (strips
+   code/links/greetings/"can you" wrappers); when it can be restated FAITHFULLY (8-72 chars, speakable),
+   the opener restates it via one of six colon/comma templates ("Got it: {topic}. On it now."). When it
+   cannot, it returns null and the plain opener is the honest fallback - a mangled echo is worse than none.
+3. **Thinking snapshots.** New pure `thinkingSnapshot(thinking, lastSnapshot)` lifts the newest complete,
+   speakable sentence (24-160 chars, no code/URLs/fragments; URLs are neutralized BEFORE sentence-splitting
+   so a severed URL tail can never slip past the filter) out of the reasoning stream. Cues 2-3 prefer a
+   fresh snapshot over canned filler; past the old cap of three, snapshot-only cues continue every
+   SNAPSHOT_GAP_MS (30s) for as long as the thinking genuinely moves forward, hard-capped at MAX_CUES (8).
+   A stalled think returns null (never re-speaks, never narrates backwards).
+
+Return type changed from `string | null` to `{ text, snapshot } | null` so the renderer records which
+snapshot was consumed without recomputation guessing. The renderer (`desktop/renderer/app.ts`) accumulates
+`thinkBuf` from `thinking` events, passes `distillTopic(text)` + a per-turn random seed, and stores
+`cue.snapshot` back as `lastSnapshot`.
+
+### Restraint rules unchanged
+
+Escalating gaps (2.6s/11s/22s), silence once the answer speaks, never queued behind playing audio, gap
+measured from the last thing SPOKEN. `thinking_cues.ts` is not a frozen contract file; its only consumer
+is the renderer, updated in the same increment.
+
+### Verified
+
+13 thinking_cues tests (twelve distinct openers; same seed = same line; restatement contains the topic and
+varies across six templates; distillTopic refuses thin/long/markup asks; snapshot beats filler and is
+echoed in `snapshot`; stalled think falls back then goes silent past cue 3; slow cadence enforced; code/
+URL/fragment sentences rejected; every cue markdown-free, sentence-final, bounded). 73 voice tests green;
+`tsc --noEmit` clean. Full-suite failures on the dev box predate this change (version-bump test, Windows
+path handling, vendored omp suites) - none in harness/voice or the renderer paths touched here.
+
+### Relates to
+
+- ADR-0249 (P-VOICE.6) - the cue engine and restraint rules this extends.
+- ADR-0247 (P-VOICE.2) - speakable() and the speech queue the cues ride on.
+
+## ADR-0258 -- P-FLEET.1 BUILT: job handles through the Agent Firewall, and the deltas from the plan
+
+**Date:** 2026-08-19
+**Status:** Accepted -- BUILT. Supersedes nothing; records the build of ADR-0256's plan and its four
+deltas. ADR-0256 remains the design of record.
+
+### What shipped (per ADR-0256's file-by-file, all delivered)
+
+- `harness/mcp/jobs.ts` (new, pure): the JobTable + closed state set (`queued | running | done | blocked |
+  error | timeout | cancelled`), sticky terminals (a cancelled job whose remote turn later settles can
+  NEVER become done), key dedupe, queue cap (default 8), unknown-id rule, metadata-only `viewAll()` whose
+  projection type has no envelope field. Clock and id minting injected; ids `job-<8 hex>`, re-rolled on
+  collision, never reused.
+- `harness/mcp/agent_firewall.ts`: `handlePrompt`'s body became `#runJob` (ONE execution path); `tools()`
+  returns `prompt` (FIRST - pinned by tests), `dispatch`, `job_status`, `cancel`; `#pump()` enforces
+  maxInFlight=1 per connection; `FirewallEvent` gained `jobId?` + `state?`; the SIGINT/SIGTERM `stop()`
+  cancels live jobs BEFORE `remote.stop()`. Every terminal outcome returns exactly the strings the
+  blocking path returned - check 3 pins the done envelope byte-identical.
+- `harness/mcp/acp_client.ts`: counts-only `onProgress` (`AcpProgress` has NO text field, enforcing the
+  anti-chunk-evasion rule in the type); `AcpTimeoutError` so the firewall can land `timeout`, not `error`.
+- `harness/mcp/registry.ts`: additive `jobTimeoutMs?` (default 600_000 via the firewall wiring) and
+  `maxQueue?`; `isEntry` untouched, so existing registry files load unchanged.
+- `harness/mcp/jobs.test.ts` (11 tests), 14 FLEET tests in `agent_firewall.test.ts`,
+  `harness/scripts/demo_pfleet1.ts` + `make demo-P-FLEET.1` (all fifteen ADR-0256 checks),
+  `docs/AGENT-FIREWALL.md` section 5 "Running several workers".
+
+### Delta 1 - the inline wait is 25s, not the proposed 90s (the measured ceiling)
+
+ADR-0256's open question is answered: the pinned omp bundle times out one MCP `tools/call` at
+`DEFAULT_MCP_TIMEOUT_MS = 30_000` (vendor mcp/timeout.ts; env `OMP_MCP_TIMEOUT_MS`; per-server `timeout`
+is not set by our registry's mcpServers entries). A 90s inline wait would die on the transport and hand
+the model an error instead of a handle. `DEFAULT_PROMPT_WAIT_MS = 25_000`, requested `wait_ms` is CLAMPED
+there, and both numbers are stated in the tool description (`OMP_TOOL_CALL_CEILING_MS = 30_000` is
+exported beside it with the measurement note).
+
+### Delta 2 - cancel/timeout of a running turn force-stops the remote after a grace window
+
+Not in the plan, but load-bearing: the pump starts the next queued job only when the current prompt
+promise SETTLES. A cancelled or timed-out turn whose remote ignores `session/cancel` would wedge the queue
+forever behind an un-settling promise - and pumping anyway would cross collectors (the exact unsafety
+ADR-0256 documents). So: cancel sends `session/cancel`, waits `cancelGraceMs` (default 5s, injectable),
+then `remote.stop()` if the turn has not settled - the child dies, the pending promise rejects, terminal
+stickiness swallows the late rejection, the queue pumps, and the next job gets a fresh session. The
+timeout path stops immediately (the deadline already waited). Demo checks 8b and 9 pin both.
+
+### Delta 3 - `handlePrompt(text, waitMs?)` kept as the public seam
+
+The plan said "prompt stays, re-implemented over the job core". Concretely: the existing public
+`handlePrompt` gained an optional `waitMs` (undefined = unbounded, the direct-call/test path; the MCP tool
+always passes a bounded wait). All nine pre-FLEET firewall tests and six integration tests pass unchanged,
+which is the byte-compat proof.
+
+### Delta 4 - the fake ACP agent gained a `hang` mode
+
+`harness/mcp/testing/fake_acp_agent.ts` now supports `FAKE_ACP_MODE=hang`: never answers
+`session/prompt`, answers `session/cancel` faithfully with stopReason "cancelled". Demo check 8a drives
+the REAL AcpAgentClient stdio transport into a genuine `AcpTimeoutError` with it.
+
+### Verified
+
+`make demo-P-FLEET.1` green (all fifteen ADR-0256 checks, including two firewalls with both jobs provably
+running at the same instant, and a scanner killed mid-job landing `blocked`+fail_closed and never `done`).
+`demo-P-AGENTFW.1` green untouched. 144 mcp+voice tests pass (11 jobs, 14 FLEET, all pre-existing green).
+`tsc --noEmit` clean. contracts.ts untouched; the fleet EventNames stay deferred to P-FLEET.3 as planned.
+
+### Relates to
+
+- ADR-0256 - the plan this builds; its open questions on the ceiling (answered: 30s) and the deadline
+  default (per-entry `jobTimeoutMs`, 600s default) are now settled in code.
+- ADR-0147 / ADR-0152 / ADR-0186 - unchanged foundations (gate, MCP result gate, patience number).
+- P-FLEET.2/.3/.4 - unchanged roadmap (supervisor, fleet panel + EventName contracts, agent threads).
+
+## ADR-0259 -- P-FLEET.L1: local lanes + the fleet grid dashboard
+
+**Date:** 2026-08-19
+**Status:** Accepted -- BUILT.
+**Increment:** P-FLEET.L1. Sits BESIDE the P-FLEET roadmap (ADR-0256): P-FLEET.2 (remote worker
+supervisor + health) and P-FLEET.3 (PWA fleet panel + the fleet EventName contracts increment) remain as
+mapped; this increment is the LOCAL flavor the user asked for first - concurrent lanes on one machine
+with a desktop dashboard.
+
+### Context
+
+P-FLEET.1 gave the master agent job handles to REMOTE workers through the agent-firewall. The user's next
+ask was local: run several LUCID agents on THIS machine, each on its own repo and model, visible as live,
+editable mini windows in a grid, capped so the machine stays usable, reporting to the orchestrator.
+
+### Decision - a lane is one more gated omp, not one more engine
+
+The engine backend already holds one ACPClient to a GATED omp subprocess. A lane reuses exactly that:
+`fleetLaneArgv()` (exported by acp_backend.ts, the ONE source of truth for the gate path so a lane can
+never spawn ungated by drift) builds `omp acp -e GATE -e MCP_RESULT_GATE -e ASKSAGE [--config acp_config]`
+WITHOUT the renderer-coupled extensions (preview/agent-builder/slash-command/fleet_status - no canvas, no
+recursion), and `FleetLaneManager` (desktop/fleet_lanes.ts) drives one ACPClient + one ACP session per
+lane (own cwd via session/new, own model via session/set_config_option - the same mechanism the master
+uses, defaulting to the master's current model).
+
+Key rules:
+- **75% headroom guard** (desktop/fleet_resources.ts): pure admission verdict over system_profile's
+  existing sample (P-SYSRES.1 - NOT re-implemented). Three gates: core-derived lane ceiling
+  (min(6, cores/2)), memory watermark 75%, CPU watermark 75%. Refusals carry the measured number. Fails
+  OPEN on missing evidence (UX guard doctrine, matching system_profile), but the ceiling always applies.
+- **One turn at a time per lane** (one session, per-turn collectors - the ADR-0256 crossing lesson);
+  parallelism is across lanes.
+- **Fail-closed approvals**: every session/request_permission surfaces as needs-approval in the lane's
+  mini window; silence (10 min) or a closed dashboard is a DENY. No standing allowlists in L1. The in-omp
+  security gate (-e GATE) still scans every tool call inside the lane regardless.
+- **ACP cancel semantics**: session/cancel RESOLVES the prompt with stopReason "cancelled" (it does not
+  reject) - a cancelled turn lands awaiting-input, never done and never error.
+- **Metadata-only reporting**: /api/fleet/status (and the master's `fleet_status` tool, registered by
+  harness/omp/fleet_extension.ts via the preview-extension pattern: token'd LUCID_FLEET_STATUS_URL env)
+  carries states, ages, counts - never lane reply text. Lane replies render in the mini windows only.
+- **Shutdown hygiene**: dev.ts exit/SIGINT/SIGTERM run fleet.stopAll() - deny open asks, cancel live
+  turns, kill every child. No orphaned lane.
+
+### The dashboard (desktop/renderer/fleet_grid.ts)
+
+A share-dock-framed panel (lucid.fleetDock.* keys, drag/resize/snap/minimize-to-pill like the join dock)
+holding a CSS grid (repeat(auto-fill, minmax(280px,1fr))) of lane cards: LED + name + cwd chip + model
+dropdown + collapse + stop in the header; streaming output (tokens live, thinking dimmed, tools as
+chips); an approval bar with Allow/Deny; a per-lane composer. The FRAME is the status surface: working =
+cyan pulse (LED), awaiting-input = amber glowing border, needs-approval = red glowing border + header
+tint, done = green steady, error = red steady, stopped = dimmed. ONLY the two action-needed states
+animate; the minimized pill pulses red when any lane needs the user; prefers-reduced-motion stops all
+pulsing while the colors still read. Invariant 11 held everywhere (nowrap+ellipsis labels, single-text-
+child flex rows, 280px minimum tracks). The + Lane form prefills the master's cwd and model; a spawn
+refusal shows the measured 75% reason. Headroom bars (CPU/MEM vs the watermark) live in the dock header.
+
+### Verified
+
+`make demo-P-FLEET.L1` green: two lanes running turns CONCURRENTLY with replies never crossing and the
+master-model default; watermark + ceiling refusals with measured numbers; needs-approval + deny
+fail-closed over a REAL subprocess stdio boundary; cancel -> awaiting-input; stopAll orphans nothing;
+status shapes leak no reply text. 12 new tests (fleet_resources pure verdict, fleet_lanes against the
+fake ACP subprocess). Root tsc clean; renderer project clean for every touched file (pre-existing
+symbol_graph/native_dialog/dev.ts:754 errors on this box predate the increment - untouched regions).
+Electron-shell smoke (open the dock, spawn a real lane, watch the glow) is the first on-device task of
+the next session - it needs the app window this environment cannot open.
+
+### Relates to
+
+- ADR-0256/0258 (P-FLEET.1) - the remote-worker job handles; the serialization lesson reused here.
+- ADR-0182 (P-SYSRES.1) - the system sample + fail-open guard doctrine the 75% verdict sits on.
+- ADR-0096/0153 (preview extension) - the token'd-env callback pattern fleet_status reuses.
+- ADR-0232/0242 (share/join docks) - the dock frame + pill conventions the fleet grid reuses.
+- P-FLEET.2/.3/.4 - unchanged roadmap; P-FLEET.3's PWA panel will subsume the remote view.
+
+## ADR-0260 -- P-FLEET.P1: Fleet Profiles - project-bound full-GUI instances and the lane-or-window spawn choice (SCOPE/PLAN)
+
+**Date:** 2026-08-21
+**Status:** Accepted -- SCOPE/PLAN. No harness/desktop code in this ADR. The one artifact shipped
+beside it is the control panel's new `F) Fleet GUI` option (LucidAgentIDE.bat), a launcher-only
+prototype that proves the profile seams end to end; the native feature is the P-FLEET.P* increments
+mapped below, each its own session.
+**Increment:** P-FLEET.P* family. Sits BESIDE the P-FLEET roadmap exactly as P-FLEET.L1 (ADR-0259)
+did: P-FLEET.2 (remote supervisor), .3 (PWA panel + fleet EventName contracts), .4 (agent threads)
+are unchanged.
+
+### Context
+
+LUCID-FEATURE-REQUEST-FLEET-MANAGEMENT.md documents a real four-repo workflow that ran four Lucid
+Electron instances via LUCID_PORT and hit workspace collision. The claims were verified against the
+code and are all true:
+
+- One shared `~/.omp/lucid-gui.json` holds `workspace`/`recentWorkspaces` for every instance
+  (settings_store.ts:25). `load()` memoizes by mtime+size with no lock and no watch
+  (settings_store.ts:420-462), so instance B's `setWorkspace()` (workspace.ts:42-50) is picked up by
+  instance A on its next `load()`: A's workspace silently flips.
+- The session sidebar filters the shared `~/.omp/agent/sessions` tree by
+  `norm(session.cwd) == norm(currentWorkspace())` (sessions.ts:72-84), so the flip makes A's history
+  "vanish" even though the JSONL is intact.
+- Electron identity is keyed on the PORT, not the project: a non-default LUCID_PORT suffixes
+  userData before the single-instance lock (main.ts:25-38, ADR-0206). Port drift changes identity.
+- No instance-identity endpoint exists; /api/health (dev.ts:1006) says only "something is alive".
+- Fleet lanes (ADR-0259) do not substitute: a lane is a headless gated omp child that inherits the
+  master's env (no per-lane GUI settings or Personal Knowledge), is ephemeral, and renders in a mini
+  window, not a full IDE.
+
+Two distinct fleet shapes fall out, and both are wanted: LANES (one window orchestrating N headless
+workers - shipped, P-FLEET.L1) and PROFILES (N full project-bound IDE windows - this ADR). The user's
+requested UX stitches them together: when the user picks a DIFFERENT cwd, ask whether the new agent
+should be a headless lane inside this window or a full GUI Lucid bound to that folder.
+
+### Decision (planned)
+
+1. **FleetProfile store.** `~/.omp/fleet/fleet.json` (schema-versioned) + per-profile dirs
+   `~/.omp/fleet/profiles/<id>/{gui.json, personal/, electron/}`. A profile = stable string id,
+   name, workspace path, `workspaceMode: "locked"`, timestamps. Port is RUNTIME state kept only as
+   `lastPort` for diagnostics; identity is never the port.
+2. **`LUCID_INSTANCE_ID`.** When set, Electron userData = `<base>/fleet/<profile-id>/electron`.
+   Backward compat chain: instance id > non-default LUCID_PORT (current behavior) > default.
+3. **Seam promotion is explicit.** `LUCID_GUI_SETTINGS_FILE` (settings_store.ts:24, today commented
+   "never set in production") and `LUCID_PERSONAL_DIR` (settings_store.ts:176-181) become supported
+   production surfaces; the comments and docs change with it. This is a deliberate contract change
+   recorded here, not an incidental one.
+4. **`GET /api/instance`.** Metadata only: instanceId, profileName, workspace, pid, port, version.
+   Live identity beats any stale registry for duplicate detection and crash reconciliation.
+5. **The spawn choice.** The fleet dock's + Lane form: when the chosen cwd differs from the master
+   workspace, offer `[ Headless lane (this window) ]` (default) or `[ Full GUI Lucid (new window,
+   project-bound) ]`. The workspace switcher gets the bind prompt: `[ New Fleet Instance ]`
+   (default) / `[ Rebind This Profile ]` / `[ Cancel ]`.
+6. **Duplicate protection.** One active profile per NORMALIZED workspace path; a second request
+   defaults to Focus Existing, with explicit override. Git worktrees at distinct paths are allowed.
+7. **Admission.** Full-GUI spawns go through the P-SYSRES.1 sample and the 75% watermarks like lanes
+   (fleet_resources.ts), with a stricter instance ceiling: an Electron instance weighs several lanes.
+8. **Knowledge policy v1: isolated only.** Concurrent writers on one encrypted store stay PROHIBITED
+   (fail-closed doctrine); shared read-only / brokered modes are a later increment.
+9. **Sessions untouched.** Canonical `~/.omp/agent/sessions` tree stays; a profile pins its
+   workspace so the cwd filter becomes stable. Optional additive `lucidProfileId` in session metadata
+   is a later increment. contracts.ts is NOT touched; the fleet EventNames stay deferred to P-FLEET.3.
+
+### Increment map
+
+- **P-FLEET.P1** - profile store + `LUCID_INSTANCE_ID` + `/api/instance` + seam promotion + demo.
+- **P-FLEET.P2** - the spawn choice UX, duplicate protection, detached lifecycle (start/stop/focus,
+  crash reconciliation), profile cards in the fleet dock (invariant 11 applies).
+- **P-FLEET.P3** - migration/adoption of legacy workspaces, `lucid fleet ...` CLI, worktree awareness.
+
+### Shipped beside this ADR (launcher-only, no increment)
+
+LucidAgentIDE.bat gained `F) Fleet GUI`: prompts for a profile name + workspace, creates
+`%LOCALAPPDATA%\LucidFleet\profiles\<NAME>\{lucid-gui.json, personal\}`, seeds the profile's own
+GUI settings with the bound workspace (never reseeded, so in-app workspace changes stick to the
+profile), prefers the profile's saved `port.txt` port (never 5319 - the default port carries the
+canonical Electron identity + OAuth deep-link, main.ts:30-38), warns "may ALREADY be running" when
+that port is busy before allowing a duplicate, and launches detached via `start` with LUCID_PORT +
+LUCID_GUI_SETTINGS_FILE + LUCID_PERSONAL_DIR (all three propagate into the engine child through
+main.ts:105's `...process.env` spread). Verified: the seeded JSON binds the workspace through the
+real `settings_store.load()` + `currentWorkspace()` (bun script, match:true); the menu F cancel path
+round-trips under a piped-stdin smoke; every cmd construct (quote-strip, tilde-slice, for /d block,
+port roll, JSON echo bytes) exercised in an isolated scratch bat. Interactive two-profile launch is
+the user's on-device test (this environment cannot open app windows).
+
+### Invariants preserved
+
+- #1 extend-not-fork: everything is env seams, new endpoints, and desktop UI; omp untouched.
+- #2 TS only; #3/#4 unaffected: every spawned instance runs its own in-process gate (same app).
+- #6 frozen prefix untouched; #7/#8 contracts.ts untouched (fleet EventNames remain P-FLEET.3).
+- #11 applies to the future profile cards and the bind prompt.
+
+### Relates to
+
+- LUCID-FEATURE-REQUEST-FLEET-MANAGEMENT.md - the request this scopes.
+- ADR-0259 (P-FLEET.L1) - lanes, the other fleet shape; the spawn choice bridges the two.
+- ADR-0256/0258 (P-FLEET.1) - job handles; a full-GUI member is also reachable as a firewall worker.
+- ADR-0206 - the single-instance lock this re-keys by profile.
+- ADR-0182 (P-SYSRES.1) - the admission sample the instance ceiling reuses.

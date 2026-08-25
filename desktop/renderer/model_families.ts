@@ -81,13 +81,44 @@ export function cmpModelsNewestFirst(a: string, b: string): number {
   }
   return a.localeCompare(b);
 }
+
+/** Capability tier from the model id (name heuristic): 2 = flagship/frontier, 1 = balanced, 0 = small/
+ *  fast. The SINGLE source of truth for "how capable" a model is: the renderer's inferModelInfo maps these
+ *  to the hover-card Intelligence (iq) stars, and the picker / default-select / fallback all rank by it —
+ *  so "highest level" means the same thing everywhere. `\bmini` (word boundary) so "ge·mini" is not
+ *  mis-read as a small model; "-mini" in gpt-5-mini etc. still matches. */
+export function capabilityTier(value: string): 0 | 1 | 2 {
+  const s = value.replace(/^[^/]*\//, "").toLowerCase();
+  if (/\bmini|nano|lite|flash|haiku|oss|-8b|-7b/.test(s)) return 0;
+  if (/opus|pro|max|fable|mythos|ultra|gpt-5|gpt-o/.test(s)) return 2;
+  return 1;
+}
+/** Compare two model ids by LEVEL — highest capability first, then newest version, then alpha. Unlike
+ *  cmpModelsNewestFirst (pure version), this ranks an older Pro ABOVE a newer Flash: "highest level for
+ *  that provider", not "highest version number". The version tiebreak is only meaningful WITHIN a family
+ *  (a GPT "5.6" and a Claude "fable-5" are different scales), so cross-family callers filter by family. */
+export function cmpModelsByLevel(a: string, b: string): number {
+  const d = capabilityTier(b) - capabilityTier(a);
+  if (d) return d;
+  return cmpModelsNewestFirst(a, b);
+}
+/** The single highest-LEVEL model in a list (capability, then newest), or null when empty. Auxiliary
+ *  (tab / auto-review) models are never eligible; pass `accept` to further restrict the pool (e.g. gov-only,
+ *  same-family, or "currently selectable"). Used to pick the default / best model for a provider. */
+export function topModel(models: ModelOption[], accept: (value: string) => boolean = () => true): ModelOption | null {
+  const pool = models.filter((m) => !isAuxiliaryModel(m.value) && accept(m.value));
+  if (!pool.length) return null;
+  return pool.slice().sort((a, b) => cmpModelsByLevel(a.value, b.value))[0]!;
+}
 /** Order a model list so that, WITHIN each family (groupByFamily preserves relative order), gov models
- *  come first and each group is newest→oldest. (ADR-0029 P-IDE.1c.) */
-export function sortGovFirstNewest(models: ModelOption[]): ModelOption[] {
+ *  come first and each group is highest-LEVEL first (capability tier, then newest). Renamed from
+ *  sortGovFirstNewest: the top row of each provider is now its most CAPABLE model, not merely its highest
+ *  version number (a newer Flash no longer outranks an older Pro). (ADR-0029 P-IDE.1c.) */
+export function sortGovFirstByLevel(models: ModelOption[]): ModelOption[] {
   return models.slice().sort((a, b) => {
     const ga = isGovModel(a.value), gb = isGovModel(b.value);
     if (ga !== gb) return ga ? -1 : 1;
-    return cmpModelsNewestFirst(a.value, b.value);
+    return cmpModelsByLevel(a.value, b.value);
   });
 }
 
@@ -138,32 +169,27 @@ export interface FallbackRecs { sameFamily: ModelOption | null; otherProvider: M
 
 /** When `failed` returned nothing (likely overloaded), recommend fallbacks from the user's ACCESSIBLE
  *  list, matching the failed model's gov-ness (so a lockdown session stays gov-routed):
- *   • sameFamily   — a LOWER version in the same family (GPT-5.6 → 5.5), else any sibling; non-deprecated first.
- *   • otherProvider— an equivalent from a DIFFERENT provider (Claude preferred: a separate GPU pool).
- *  Either may be null if nothing suitable is accessible. Pure + unit-tested. */
+ *   / sameFamily   / the HIGHEST-LEVEL sibling (capability tier, then newest), excluding the failed model.
+ *     A failing GPT-5.6 tier now prefers ANOTHER 5.6 tier over dropping to 5.5 (the "falls back to 5.5
+ *     instead of 5.6" complaint); it only reaches a lower version when no equal-or-higher sibling is left.
+ *   / otherProvider/ a DIFFERENT provider's best (Claude preferred: a separate GPU pool), highest-level.
+ *  Non-deprecated is always preferred. Either may be null if nothing suitable is accessible. Pure + tested. */
 export function recommendFallbacks(failed: string, models: ModelOption[]): FallbackRecs {
   const fam = familyOf(failed).id;
   const gov = isGovModel(failed);
-  const fv = gptVersion(failed);
   const pool = models.filter((m) => m.value !== failed && isGovModel(m.value) === gov && !isAuxiliaryModel(m.value));
   const pickPreferFresh = (list: ModelOption[]): ModelOption | null =>
     list.find((m) => !isDeprecatedModel(m.value)) ?? list[0] ?? null;
 
-  const sameFamAll = pool.filter((m) => familyOf(m.value).id === fam);
-  let sameFamily: ModelOption | null = null;
-  if (fv !== null) {
-    const lower = sameFamAll
-      .filter((m) => { const v = gptVersion(m.value); return v !== null && v < fv; })
-      .sort((a, b) => cmpModelsNewestFirst(a.value, b.value)); // highest lower version first
-    sameFamily = pickPreferFresh(lower);
-  }
-  if (!sameFamily) sameFamily = pickPreferFresh(sameFamAll.slice().sort((a, b) => cmpModelsNewestFirst(a.value, b.value)));
+  // Keep the ceiling: the most capable remaining sibling, not a deliberately lower version.
+  const sameFamAll = pool.filter((m) => familyOf(m.value).id === fam).sort((a, b) => cmpModelsByLevel(a.value, b.value));
+  const sameFamily = pickPreferFresh(sameFamAll);
 
   const cross = pool
     .filter((m) => familyOf(m.value).id !== fam)
     .sort((a, b) => {
       const ca = familyOf(a.value).id === "claude" ? 0 : 1, cb = familyOf(b.value).id === "claude" ? 0 : 1;
-      return ca - cb || cmpModelsNewestFirst(a.value, b.value); // Claude first (different pool), then newest
+      return ca - cb || cmpModelsByLevel(a.value, b.value); // Claude first (different pool), then highest level
     });
   const otherProvider = pickPreferFresh(cross);
   return { sameFamily, otherProvider };

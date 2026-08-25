@@ -15,7 +15,7 @@ import { pathWithin } from "./path_guard.ts";
 import { CUI_STORE_VERSION, PersonalStore, type PersonalGraph, type PersonalScope, type ScopeView } from "../harness/personal/store.ts";
 import { load, personalAuditPath, personalCuiArchiveDir, personalCuiStorePath, personalStorePath, personalVaultDir, setPersonalization, setPersonalScope } from "./settings_store.ts";
 import { buildRecall, buildRecallFromGraph } from "../harness/personal/recall.ts";
-import { distillTurn, heuristicExtractor, modelExtractor, type Extractor } from "../harness/personal/distiller.ts";
+import { distillTurn, heuristicExtractor, modelExtractor, type CompleteFn, type Extractor } from "../harness/personal/distiller.ts";
 import { isConversationShard, mergeConversationShards, parseExport, type ImportVendor } from "../harness/personal/import_adapters.ts";
 import { importConversations, type ImportProgressTick } from "../harness/personal/importer.ts";
 import { lockedVaultHint } from "./vault_hint.ts";
@@ -571,7 +571,7 @@ export async function estimateChatExport(pathArg: string): Promise<ImportEstimat
   const raw = String(pathArg ?? "").trim();
   if (!raw) return { ok: false, error: "Choose your exported folder, .json, or .zip." };
   const safe = confineToHome(raw);
-  if (!safe) return { ok: false, error: "Choose a file inside your home folder." };
+  if (!safe) return { ok: false, error: `Choose a folder inside ${homedir()}. Imports are confined to your home folder.` };
   const loaded = loadExportData(safe);
   if (!loaded.ok) return loaded;
   let parsed: ReturnType<typeof parseExport>;
@@ -589,14 +589,14 @@ export async function estimateChatExport(pathArg: string): Promise<ImportEstimat
  *  (model mode), the richer LLM extractor runs (capped); otherwise the offline heuristic. */
 export async function importChatExport(
   pathArg: string,
-  opts: { vendorHint?: ImportVendor; complete?: (system: string, user: string) => Promise<string>; onProgress?: (tick: ImportProgressTick) => void; signal?: AbortSignal } = {},
+  opts: { vendorHint?: ImportVendor; complete?: CompleteFn; onProgress?: (tick: ImportProgressTick) => void; signal?: AbortSignal } = {},
 ): Promise<ImportResult> {
   // Validate the untrusted source path up front (M2, ADR-0023): it must resolve inside home,
   // so an import can't be pointed at an arbitrary file (e.g. /etc/passwd) to read it in.
   const raw = String(pathArg ?? "").trim();
   if (!raw) return { ok: false, error: "Choose your exported folder, .json, or .zip." };
   const safe = confineToHome(raw);
-  if (!safe) return { ok: false, error: "Choose a file inside your home folder." };
+  if (!safe) return { ok: false, error: `Choose a folder inside ${homedir()}. Imports are confined to your home folder.` };
 
   const s = load();
   if (!s.personalizationEnabled) return { ok: false, error: "Personalization is off." };

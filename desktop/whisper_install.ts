@@ -36,6 +36,26 @@ export const WHISPER_MODELS: Record<WhisperTier, WhisperModel> = {
   "large-turbo": { tier: "large-turbo", label: "Large v3 Turbo (best, multilingual)", fileName: "ggml-large-v3-turbo.bin", url: `${HF}/ggml-large-v3-turbo.bin`, approxMB: 1620, multilingual: true },
 };
 
+// P-STT.6 (ADR-0255): tiers OFFERED for install/serve. The medium / large weights through the managed
+// local whisper-server proved SLOW to load and unstable in the field, so nothing larger than `small` is
+// offered any more. Larger weights ALREADY on disk from an earlier version stay visible as removable
+// installs (whisper_runtime marks them `offered:false`), but can no longer be installed or started.
+export const OFFERED_TIERS: readonly WhisperTier[] = ["tiny", "base", "small"];
+
+export function isOfferedTier(tier: WhisperTier): boolean {
+  return OFFERED_TIERS.includes(tier);
+}
+
+/** The capability recommendation CLAMPED to the offered set: the largest offered COMFORTABLE tier, else
+ *  the smallest offered runnable one, else null. A workstation's raw recommendation (large-turbo) would
+ *  otherwise point at a tier the picker no longer offers. */
+export function offeredRecommendation(caps: WhisperCapability): WhisperTier | null {
+  const offered = caps.tiers.filter((t) => isOfferedTier(t.tier));
+  const comfy = offered.filter((t) => t.comfortable);
+  if (comfy.length) return comfy[comfy.length - 1]!.tier;
+  return offered.find((t) => t.runnable)?.tier ?? null;
+}
+
 export interface InstallPlan {
   ok: true;
   tier: WhisperTier;
@@ -57,8 +77,11 @@ export function planWhisperInstall(
   opts: { tier?: WhisperTier; presentModels?: ReadonlySet<string> } = {},
 ): InstallPlan | InstallBlocked {
   if (!caps.capable) return { ok: false, reason: "This machine can't run on-device Whisper (needs ~2GB+ free RAM)." };
-  const tier = opts.tier ?? caps.recommended;
+  // Default to the OFFERED recommendation (never medium/large, which the raw capability may suggest).
+  const tier = opts.tier ?? offeredRecommendation(caps);
   if (!tier) return { ok: false, reason: "No runnable Whisper model for this machine." };
+  // P-STT.6: fail-closed on a no-longer-offered tier - it can be REMOVED but never installed or started.
+  if (!isOfferedTier(tier)) return { ok: false, reason: `The ${tier} model is no longer offered (slow and unstable through the local whisper server) - use tiny, base, or small.` };
   const cap = caps.tiers.find((t) => t.tier === tier);
   if (!cap || !cap.runnable) return { ok: false, reason: `The ${tier} model won't run here: ${cap?.reason ?? "insufficient resources"}.` };
   const model = WHISPER_MODELS[tier];

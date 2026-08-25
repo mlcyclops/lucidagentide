@@ -205,3 +205,38 @@ test("importConversations: an aborted signal stops early but KEEPS facts learned
   expect(sum.learned).toBeGreaterThan(0); // facts from the first conversation are kept...
   expect(store.graph({ scope: "combined" }).facts.length).toBe(sum.learned); // ...and persisted (no torn write)
 });
+
+// P-KG-INGEST.5 (ADR-0252): cancel WITHIN a conversation.
+// In model mode one conversation is hundreds of slow completions, so a conversation-boundary-only check
+// made Stop look dead. The signal must be observed per MESSAGE and reach the extractor itself.
+test("importConversations: an abort stops mid-conversation, not at the next conversation boundary", async () => {
+  const store = newStore();
+  // One conversation, three user messages: aborting during message 1 must skip 2 and 3.
+  const convos = [{ title: "Long chat", messages: [
+    { role: "user", text: "I prefer Rust" },
+    { role: "user", text: "I use vim" },
+    { role: "user", text: "I like Postgres" },
+  ] }] satisfies Parameters<typeof importConversations>[2];
+  const ac = new AbortController();
+  const seen: string[] = [];
+  const sum = await importConversations(store, cleanScanner, convos, {
+    vendor: "openai", scope: "work", signal: ac.signal, extractorKind: "model",
+    extract: ({ user }) => { seen.push(user); ac.abort(); return []; }, // the first message cancels the run
+  });
+  expect(seen.length).toBe(1);   // messages 2 and 3 were never extracted
+  expect(sum.messages).toBe(1);
+  expect(sum.cancelled).toBe(true);
+  expect(sum.blocked).toBe(0);   // a cancelled message is NOT a gate block (that would misreport security)
+});
+
+test("importConversations: the abort signal reaches the extractor so an in-flight model call can stop", async () => {
+  const store = newStore();
+  const convos = [{ title: "c", messages: [{ role: "user", text: "I prefer Rust" }] }] satisfies Parameters<typeof importConversations>[2];
+  const ac = new AbortController();
+  let sawSignal: AbortSignal | undefined;
+  await importConversations(store, cleanScanner, convos, {
+    vendor: "openai", scope: "work", signal: ac.signal,
+    extract: ({ signal }) => { sawSignal = signal; return []; },
+  });
+  expect(sawSignal).toBe(ac.signal);
+});

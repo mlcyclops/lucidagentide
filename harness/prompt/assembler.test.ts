@@ -54,6 +54,16 @@ test("the agent-builder guardrail is in the frozen prefix (P-AGENT.8.3)", () => 
   expect(FROZEN_PREFIX).toContain("NEVER ask for, accept, or embed a secret VALUE");
 });
 
+test("the data-integration steer is in the frozen prefix (P-DATA.1)", () => {
+  // Prompt-stuffed datasets must be intercepted and routed to MCP / RAG / secure vendor connections,
+  // with the custom-integration contract contact as the declared last resort.
+  expect(FROZEN_PREFIX).toContain("<data-integration>");
+  expect(FROZEN_PREFIX).toContain("CONTEXT ROT");
+  expect(FROZEN_PREFIX).toContain("MCP (Model");
+  expect(FROZEN_PREFIX).toContain("retrieve only the top-K relevant chunks");
+  expect(FROZEN_PREFIX).toContain("nicholas.chadwick.ctr@gmail.com");
+});
+
 test("untrusted retrieved content never appears before the breakpoint", () => {
   const marker = "IGNORE_ALL_PREVIOUS_INSTRUCTIONS_marker_42";
   const out = assemblePrompt({

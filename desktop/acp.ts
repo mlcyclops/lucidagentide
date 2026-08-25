@@ -11,13 +11,23 @@
 
 import { spawn, type ChildProcess } from "node:child_process";
 
-type Pending = { resolve: (v: any) => void; reject: (e: any) => void };
+type Pending = { resolve: (v: unknown) => void; reject: (e: unknown) => void; cleanup: () => void };
+
+/** Per-request bounds. Without at least one of these a request waits forever (P-KG-INGEST.5, ADR-0252). */
+export type RequestOpts = {
+  /** Reject after this many ms with no response. Omit only for calls already raced against another clock. */
+  timeoutMs?: number;
+  /** Reject as soon as the caller aborts. */
+  signal?: AbortSignal;
+};
 
 export class ACPClient {
   private proc: ChildProcess | null = null;
   private nextId = 1;
   private pending = new Map<number, Pending>();
   private buf = "";
+  /** Set once the child is gone (exit or spawn error). Every later request rejects with this reason. */
+  private dead: string | null = null;
 
   /** notifications from the agent (e.g. "session/update"). */
   onNotify: (method: string, params: any) => void = () => {};
@@ -37,8 +47,25 @@ export class ACPClient {
     this.proc = spawn(this.cmd, this.args, { cwd: this.cwd, stdio: ["pipe", "pipe", "pipe"], windowsHide: true, env: { ...process.env, ...this.env } });
     this.proc.stdout!.on("data", (d) => this.onData(String(d)));
     this.proc.stderr!.on("data", (d) => this.onStderr(String(d)));
-    this.proc.on("exit", (code) => this.onExit(code));
+    this.proc.stdin!.on("error", () => { /* EPIPE once the child is gone; the exit handler drains */ });
+    // A spawn failure (ENOENT, EACCES) emits "error" and NO "exit". Both must drain `pending`,
+    // otherwise every in-flight request stays unsettled forever (the import-hang bug).
+    this.proc.on("error", (e) => this.die(`acp: agent process failed to start: ${e.message}`, null));
+    this.proc.on("exit", (code) => this.die(`acp: agent process exited (code ${code ?? "null"})`, code));
   }
+
+  /** Child is gone: reject everything still waiting, then notify the owner exactly once. */
+  private die(reason: string, code: number | null): void {
+    if (this.dead) return;
+    this.dead = reason;
+    const waiting = [...this.pending.values()];
+    this.pending.clear();
+    for (const p of waiting) { p.cleanup(); p.reject(new Error(reason)); }
+    this.onExit(code);
+  }
+
+  /** True once the child has exited or failed to spawn: the connection can never answer again. */
+  get isDead(): boolean { return this.dead !== null; }
 
   private onData(s: string): void {
     this.buf += s;
@@ -57,7 +84,7 @@ export class ACPClient {
     // response to one of our requests
     if (msg.id !== undefined && (msg.result !== undefined || msg.error !== undefined)) {
       const p = this.pending.get(msg.id);
-      if (p) { this.pending.delete(msg.id); msg.error ? p.reject(msg.error) : p.resolve(msg.result); }
+      if (p) { this.pending.delete(msg.id); p.cleanup(); msg.error ? p.reject(msg.error) : p.resolve(msg.result); }
       return;
     }
     // request FROM the agent (needs a response)
@@ -70,11 +97,29 @@ export class ACPClient {
     if (msg.method) this.onNotify(msg.method, msg.params);
   }
 
-  request<T = any>(method: string, params?: any): Promise<T> {
+  request<T = any>(method: string, params?: any, opts: RequestOpts = {}): Promise<T> {
+    if (this.dead) return Promise.reject(new Error(this.dead));
+    if (!this.proc) return Promise.reject(new Error("acp: agent process not started"));
+    if (opts.signal?.aborted) return Promise.reject(new Error(`acp: ${method} cancelled`));
     const id = this.nextId++;
-    const pr = new Promise<T>((resolve, reject) => this.pending.set(id, { resolve, reject }));
-    this.write({ jsonrpc: "2.0", id, method, params });
-    return pr;
+    const { promise, resolve, reject } = Promise.withResolvers<T>();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const cleanup = () => {
+      clearTimeout(timer);
+      timer = undefined;
+      opts.signal?.removeEventListener("abort", onAbort);
+    };
+    const onAbort = () => { this.pending.delete(id); cleanup(); reject(new Error(`acp: ${method} cancelled`)); };
+    // The JSON-RPC result is untyped on the wire; the caller declares the shape it expects.
+    this.pending.set(id, { resolve: (v) => resolve(v as T), reject, cleanup });
+    if (opts.timeoutMs && opts.timeoutMs > 0) {
+      timer = setTimeout(() => { this.pending.delete(id); cleanup(); reject(new Error(`acp: ${method} timed out after ${opts.timeoutMs}ms`)); }, opts.timeoutMs);
+      timer.unref?.();
+    }
+    opts.signal?.addEventListener("abort", onAbort, { once: true });
+    try { this.write({ jsonrpc: "2.0", id, method, params }); }
+    catch (e) { this.pending.delete(id); cleanup(); reject(new Error(`acp: ${method} write failed: ${String(e)}`)); }
+    return promise;
   }
 
   /** Send a JSON-RPC NOTIFICATION (no id, no response) — e.g. ACP `session/cancel`. */
@@ -87,5 +132,9 @@ export class ACPClient {
     this.proc?.stdin!.write(JSON.stringify(o) + "\n");
   }
 
-  stop(): void { try { this.proc?.kill(); } catch { /* ignore */ } }
+  stop(): void {
+    try { this.proc?.kill(); } catch { /* ignore */ }
+    // kill() is async on every platform; drain now so callers awaiting a reply fail fast.
+    this.die("acp: agent connection stopped", null);
+  }
 }

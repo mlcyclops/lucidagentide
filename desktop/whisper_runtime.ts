@@ -8,7 +8,7 @@
 // real ones and holds the single running-process handle. Invariant #2: whisper.cpp is a native binary.
 
 import { whisperCapability, type MachineSpecs, type WhisperTier } from "./whisper_capability.ts";
-import { planWhisperInstall, WHISPER_MODELS, whisperModelFileNames, whisperServeUrl, whisperServerArgs, type WhisperModel } from "./whisper_install.ts";
+import { isOfferedTier, offeredRecommendation, planWhisperInstall, WHISPER_MODELS, whisperModelFileNames, whisperServeUrl, whisperServerArgs, type WhisperModel } from "./whisper_install.ts";
 import type { DownloadResult, ResolvedBin } from "./whisper_manager.ts";
 
 export interface WhisperProc { pid: number; kill: () => void }
@@ -28,9 +28,26 @@ export interface WhisperRuntimeDeps {
   /** P-STT.5: best-effort kill of whatever LISTENs on a port (an orphan from a previous run). Optional:
    *  when absent or unsuccessful, startWhisper adopts the survivor instead of double-spawning. */
   reapPort?: (port: number) => Promise<void>;
+  /** P-STT.6: delete a model file from `modelDir` (basename only). true = gone. Optional: without it,
+   *  removeWhisperModel reports removal as unavailable rather than pretending. */
+  removeModel?: (fileName: string) => boolean;
+  /** P-STT.6: on-disk size of a model file in MB, or null when unreadable (drives the installed list). */
+  modelSizeMB?: (fileName: string) => number | null;
 }
 
-export interface WhisperTierView { tier: WhisperTier; label: string; runnable: boolean; installed: boolean }
+// P-STT.6 (ADR-0255): `offered` = installable/startable through the picker (tiny/base/small; medium/large
+// proved slow + buggy via the local server and are remove-only now). `reason` explains a non-runnable tier
+// so the UI can GRAY IT OUT instead of hiding it. `diskMB` is the real on-disk size when installed.
+export interface WhisperTierView {
+  tier: WhisperTier;
+  label: string;
+  runnable: boolean;
+  installed: boolean;
+  offered: boolean;
+  reason: string;
+  approxMB: number;
+  diskMB: number | null;
+}
 // P-STT.2d: live install/start progress for the no-code Voice card (the renderer polls status while a
 // download runs and renders a real progress bar instead of a blind spinner).
 export type WhisperInstallPhase = "idle" | "downloading" | "starting" | "done" | "error";
@@ -70,16 +87,30 @@ export function whisperStatus(deps: WhisperRuntimeDeps): WhisperStatusView {
   const caps = whisperCapability(deps.specs());
   const present = new Set(deps.listModels());
   const bin = deps.resolveBin();
-  const tiers: WhisperTierView[] = caps.tiers.map((t) => ({
-    tier: t.tier,
-    label: WHISPER_MODELS[t.tier].label,
-    runnable: t.runnable,
-    installed: present.has(WHISPER_MODELS[t.tier].fileName),
-  }));
+  const tiers: WhisperTierView[] = caps.tiers.map((t) => {
+    const model = WHISPER_MODELS[t.tier];
+    const installed = present.has(model.fileName);
+    return {
+      tier: t.tier,
+      label: model.label,
+      runnable: t.runnable,
+      installed,
+      offered: isOfferedTier(t.tier),
+      reason: t.reason,
+      approxMB: model.approxMB,
+      diskMB: installed ? deps.modelSizeMB?.(model.fileName) ?? null : null,
+    };
+  });
+  // P-STT.6: recommend within the OFFERED set; the raw capability may suggest medium/large, which the
+  // picker no longer carries. Keep the summary naming the tier the picker actually defaults to.
+  const recommended = offeredRecommendation(caps);
+  const summary = caps.recommended && recommended && caps.recommended !== recommended
+    ? caps.summary.replace(`recommended model: ${caps.recommended}`, `recommended model: ${recommended}`)
+    : caps.summary;
   return {
     capable: caps.capable,
-    recommended: caps.recommended,
-    summary: caps.summary,
+    recommended,
+    summary,
     binAvailable: !!bin,
     binHint: bin ? `whisper-server (${bin.source})` : BIN_HINT,
     running: !!proc || adopted,
@@ -167,4 +198,19 @@ export async function stopWhisper(deps?: WhisperRuntimeDeps): Promise<WhisperAct
 /** Full model-file set (used by dev.ts to list which tiers are on disk). */
 export function whisperModelFiles(): string[] {
   return whisperModelFileNames();
+}
+
+/** P-STT.6 (ADR-0255): delete a downloaded model's weights. Fail-closed: never the tier the running
+ *  server has loaded (stop it first); a filesystem failure is reported, not thrown. Idempotent when the
+ *  file is already absent. Works for EVERY catalog tier, offered or not - reclaiming disk from a
+ *  no-longer-offered medium/large install is exactly the point. */
+export function removeWhisperModel(deps: WhisperRuntimeDeps, tier: WhisperTier): WhisperActionResult {
+  const model = WHISPER_MODELS[tier];
+  if (!model) return { ok: false, reason: `unknown model tier: ${String(tier)}` };
+  if ((proc || adopted) && running.tier === tier) return { ok: false, reason: `The ${tier} model is loaded by the running server - stop it first.` };
+  if (!deps.listModels().includes(model.fileName)) return { ok: true, tier }; // already gone
+  if (!deps.removeModel) return { ok: false, reason: "model removal is unavailable in this build" };
+  return deps.removeModel(model.fileName)
+    ? { ok: true, tier }
+    : { ok: false, reason: `couldn't delete ${model.fileName} from ${deps.modelDir}` };
 }
