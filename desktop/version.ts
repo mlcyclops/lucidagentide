@@ -289,4 +289,7 @@
 //            first sentence, auto-mic on finish, silence sends the turn), answers shaped for the ear,
 //            the glowing pop-out equalizer, spoken thinking acknowledgements, and the truth-telling
 //            per-engine voice picker (P-VOICE.2-.6, ADR-0246/0247).
-export const APP_VERSION = "1.12.1";
+// v1.12.1 = the LUCID Trainer + role-generic training packs + the LUCID Agent immersive role
+//            (scenario-first expert interviews, fail-closed distillation, teach-back promotion,
+//            drills from confirmed knowledge; P-TRAINER.1-.9, ADR-0252..0257).
+export const APP_VERSION = "1.12.2";
