@@ -102,7 +102,12 @@ export class ACPClient {
     if (!this.proc) return Promise.reject(new Error("acp: agent process not started"));
     if (opts.signal?.aborted) return Promise.reject(new Error(`acp: ${method} cancelled`));
     const id = this.nextId++;
-    const { promise, resolve, reject } = Promise.withResolvers<T>();
+    // Classic executor (not Promise.withResolvers): the VS Code extension typechecks this file under a
+    // pre-ES2024 lib, and the desktop tsconfig targets Node types - the executor form works on every
+    // surface this client compiles on.
+    let resolve!: (v: T) => void;
+    let reject!: (e: unknown) => void;
+    const promise = new Promise<T>((res, rej) => { resolve = res; reject = rej; });
     let timer: ReturnType<typeof setTimeout> | undefined;
     const cleanup = () => {
       clearTimeout(timer);
