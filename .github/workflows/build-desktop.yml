@@ -171,6 +171,22 @@ jobs:
         run: bun run build/airgap-smoke.ts
         working-directory: desktop
 
+      # Program Files boot gate (ADR-0261): the gap that shipped the v1.12.0 brick - nothing ever
+      # booted the app from an ACL-protected install tree (packaged_boot.test.ts boots from a writable
+      # temp dir). Stages the PACKAGED repo into C:\Program Files\..., denies the runner user write on
+      # the whole tree (runners are admins, so inherited Program Files ACLs alone would not constrain
+      # them the way they constrain a real standard user), proves the denial took, then requires the
+      # compiled bin/lucid-engine to answer /api/health + serve the prebuilt renderer from there.
+      # STRICT: a missing packaged engine or an unwritable Program Files fails the build - never a
+      # silent downgrade to a temp dir (that downgrade is how the gap survived). Windows-only: the
+      # brick class is a Windows ACL/loader behavior.
+      - name: Program Files boot smoke (engine boots from a protected install)
+        if: runner.os == 'Windows'
+        run: bun run build/pf-boot-smoke.ts
+        working-directory: desktop
+        env:
+          LUCID_PF_SMOKE_STRICT: "1"
+
       - name: Upload installers as artifacts
         uses: actions/upload-artifact@v7
         with:

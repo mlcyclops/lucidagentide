@@ -16797,3 +16797,87 @@ an actual `Program Files` ACL location - that is Increment C.
   installer clamp (`allowElevation:false`, `allowToChangeInstallationDirectory:false`) can be relaxed once
   Increment C proves a protected-root boot; its own increment.
 - **Increment D:** the `LucidAgentIDE.bat` diagnostics fix (unchanged from ADR-0250).
+
+## ADR-0261 -- P-WINBOOT.2C: the Program Files boot gate (Increment C of ADR-0250/0251)
+
+**Date:** 2026-08-25
+**Status:** Accepted -- BUILT. Numbered 0261 (not 0252): ADRs 0252-0260 are claimed by the parked
+sessions on `wip/adr-0252-0260-sessions`, and master independently used 0256-0258 - 0261 collides with
+neither.
+
+### Problem
+
+The v1.12.0 brick (ADR-0250) shipped because NOTHING ever booted the app from an ACL-protected install
+tree: `packaged_boot.test.ts` materializes the packaging filter but boots from a writable temp dir, and
+`demo_p_winboot_2.ts` boots the compiled engine from the writable repo. The compiled engine (ADR-0251)
+removes the root cause by construction, but without a gate that actually boots from a protected tree, a
+future change that reintroduces an install-dir write or on-disk load ships silently - again.
+
+### Constraints the design fell out of (both found by EXECUTING the gate, not by review)
+
+1. **CI runners are administrators.** Inherited `Program Files` ACLs allow admins full control, so
+   merely staging there constrains nothing. The standard-user posture must be reproduced with an
+   explicit DENY ACE for the current user (deny beats allow, even for admins).
+2. **Never deny generic `W`.** The first hardening denied `(W,DE,DC)` - and the engine could not even
+   SPAWN (`uv_spawn EPERM`), because icacls' generic write maps to FILE_GENERIC_WRITE, which includes
+   SYNCHRONIZE, and CreateProcess needs it. Real Program Files blocks a standard user by LACKING a
+   write allow, not by denying handle-open rights. The deny is therefore the SPECIFIC rights only:
+   `(WD,AD,WEA,WA,DE,DC)` - write data, append, write EA/attributes, delete, delete child - leaving
+   read+execute+synchronize intact. A `deny-probe` write inside the stage must FAIL before the boot is
+   attempted, so a hardening that silently did not take can never produce a green run.
+3. **Drain the pipes, kill before reading.** The first boot loop piped stdout/stderr undrained: the
+   engine filled the 64KB pipe buffer mid-console.log and never finished booting - then the smoke
+   awaited stderr EOF on the still-running process and deadlocked itself. The gate drains both pipes
+   from spawn and kills the process BEFORE awaiting the tails.
+
+### Decision
+
+`desktop/build/pf-boot-smoke.ts` (IO) over pure decisions in `desktop/engine_pf_smoke.ts`:
+
+1. **Stage.** Packaged mode: the `*-unpacked/resources/repo` tree (the exact bytes the installer lays
+   down) staged verbatim - robocopy on win32 (long-path-safe; exit codes 0-7 are success). Source mode
+   (a dev box with no fresh dist): compile the engine + renderer into a minimal skeleton plus every
+   native-addon package (`**/*.node` -> its top-level package dir, both node_modules trees).
+2. **Location.** `pickSmokeRoot`: strict (CI) REQUIRES the real `Program Files` tree and the packaged
+   layout - any fallback THROWS, because a silent downgrade to a temp dir is exactly how the original
+   gap survived. Non-strict falls back to a temp dir with the same deny hardening. The staged leaf
+   keeps a SPACE ("Lucid PF Smoke") so path-quoting bugs stay in scope.
+3. **Boot.** `resolveEngineSpawn({packaged:true, repoRoot: stage})` must pick the compiled binary (the
+   exact main.ts decision), spawned with cwd = stage and PORT like main.ts; `/api/health` must answer
+   `{ok:true}` within 30s and the prebuilt `/app.js` must serve >1MB from the protected tree.
+4. **Cleanup.** Remove the deny ACE, then delete (retrying - Windows briefly locks a just-killed exe).
+5. **CI.** `build-desktop.yml` runs it on the Windows runner right after the air-gap smoke, STRICT.
+
+### Alternatives rejected
+
+- **Rely on inherited Program Files ACLs.** Constrains nothing on an admin runner (constraint 1).
+- **Install via the real NSIS installer.** The ADR-0250 clamp deliberately prevents a Program Files
+  install, and the one-click installer ignores a target dir by design; staging the unpacked resources
+  verbatim exercises the same bytes without fighting the clamp.
+- **A .ts-load canary instead of a boot.** The brick class is broader than the one loader behavior
+  (any install-dir write also bricks); booting the real engine gates the whole class.
+
+### Verification
+
+`make demo-P-WINBOOT.2C`: the pure decisions (strict-never-downgrades, specific-rights deny, generic-W
+prohibition, restore, layout gate), the CI wiring (windows-gated, strict), then the REAL smoke end to
+end - on this Windows box: source skeleton (7 native-addon packages), write-denial PROVEN by a failed
+probe write, engine booted from the write-denied tree in ~2s, `/api/health` ok, 7.1MB prebuilt
+`/app.js` served, stage un-denied and deleted. 14 unit tests (`engine_pf_smoke.test.ts`); desktop tsc
+clean. NOT verified here: the strict path against a REAL `Program Files` root + the packaged tree -
+that is precisely what the CI step runs on the next installer build (this shell is non-elevated, and
+the local `win-unpacked` predates the compiled engine).
+
+### Limits (honest)
+
+The deny ACE reproduces the standard-user WRITE constraint; it cannot reproduce whatever exact
+machine-specific condition made Bun's loader EPERM on the v1.12.0 host (AV, CIG, mmap flags - never
+pinned). The gate's value is structural: the engine must boot + serve while the install tree refuses
+every write and delete, from the real Program Files path in CI.
+
+### Next
+
+- **Relax the ADR-0250 installer clamp** (re-enable per-machine installs) once this gate is green on a
+  real CI installer build; its own increment.
+- **Increment D:** the `LucidAgentIDE.bat` diagnostics fix (unchanged; the bat's shim-guard work is
+  parked on `wip/adr-0252-0260-sessions`).
