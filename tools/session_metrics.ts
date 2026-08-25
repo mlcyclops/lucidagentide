@@ -153,6 +153,27 @@ export interface Budget {
 // only change once per turn, so cache the result for a short TTL. omp still updates within the TTL.
 let _rlCache: { at: number; data: Budget[] | null } | null = null;
 const _RL_TTL_MS = 8_000;
+
+/** Fix (2026-08-25): make the last-seen figures HONEST before anyone renders or warns on them.
+ *  usage_history only grows when omp actually talks to a provider, so the newest row per label can be
+ *  arbitrarily old — the field bug: an OAuth account hit `exhausted` (used=1.0) in late July, its 7-day
+ *  window reset Aug 6, no newer row was ever written, and the GUI toasted "at 100%" on every launch
+ *  for weeks. A row whose window ALREADY RESET carries no current information: drop it. Also
+ *  normalizes omp's seconds-epoch `resets_at` to ms (the renderer compared it as ms — "resets now"),
+ *  and dedupes label ties (two rows can share max(recorded_at)). Pure, unit-tested. */
+export function liveBudgets(rows: Budget[], nowMs: number): Budget[] {
+  const out: Budget[] = [];
+  const seen = new Set<string>();
+  for (const r of rows) {
+    const resetsAt = r.resetsAt == null ? null : (r.resetsAt < 1e12 ? r.resetsAt * 1000 : r.resetsAt);
+    if (resetsAt !== null && resetsAt <= nowMs) continue; // the window ended - the figure is history, not status
+    if (seen.has(r.label)) continue; // ties on max(recorded_at); rows arrive used-desc, keep the hottest
+    seen.add(r.label);
+    out.push({ ...r, resetsAt });
+  }
+  return out;
+}
+
 export function rateLimits(): Budget[] | null {
   if (_rlCache && Date.now() - _rlCache.at < _RL_TTL_MS) return _rlCache.data;
   const stamp = (data: Budget[] | null): Budget[] | null => { _rlCache = { at: Date.now(), data }; return data; };
@@ -161,14 +182,15 @@ export function rateLimits(): Budget[] | null {
   try {
     const db = new Sqlite(p, { readonly: true });
     try {
-      return stamp(db
+      const rows = db
         .query(
           `select label, used_fraction as used, status, resets_at as resetsAt
            from usage_history u
            where recorded_at = (select max(recorded_at) from usage_history u2 where u2.label = u.label)
            order by used_fraction desc`,
         )
-        .all() as Budget[]);
+        .all() as Budget[];
+      return stamp(liveBudgets(rows, Date.now()));
     } finally {
       db.close();
     }

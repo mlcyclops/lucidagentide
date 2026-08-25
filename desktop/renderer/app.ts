@@ -6640,15 +6640,17 @@ async function refresh(): Promise<void> {
 
 // P10.3: warn BEFORE you hit the wall. The Claude 5-hour (oauth) limit has no header to
 // probe and probing would consume it, so we watch omp's reported figure and warn once per
-// window when it crosses 90% - turning the silent stall into an early heads-up.
+// window when it crosses 90%.
+// Fix (2026-08-25): warn ONLY on a VERIFIABLY LIVE window - rateLimits() already drops rows whose
+// window expired (the stale "always at 100%" bug), and a row with no reset timestamp cannot be
+// confirmed current over OAuth, so it renders in the Memory panel but never toasts.
 function checkBudgetWarning(budgets: NonNullable<MemorySnapshot["budgets"]> | null | undefined): void {
   for (const b of budgets ?? []) {
-    if (b.used >= 0.9 && !state.budgetWarned.has(b.label)) {
+    if (b.used >= 0.9 && b.resetsAt != null && b.resetsAt > Date.now() && !state.budgetWarned.has(b.label)) {
       state.budgetWarned.add(b.label);
       showToast({
-        title: `${b.label} almost spent`,
+        title: `${b.label} budget almost spent`,
         desc: `You're at ${Math.round(b.used * 100)}% of your ${b.label} budget. New turns may stall until it resets ${ageStr(b.resetsAt)}.`,
-        meta: "a stalled turn now ends with a clear message instead of hanging",
         actions: [{ label: "OK" }],
         timeout: 9000,
       });

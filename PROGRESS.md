@@ -4,6 +4,11 @@ Three lines per session: **shipped / stubbed / next** (CLAUDE.md session ritual)
 
 -----
 
+## Fix: the "7 days at 100%" quota toast lied - stale exhausted windows warned forever (OAuth)
+- **shipped:** the budget warning read usage_history's newest row per label, but that table only grows when omp talks to the provider - so an OAuth account that hit `exhausted` (used=1.0) in late July kept toasting "at 100%" weeks after its 7-day window reset (verified against the live agent.db: newest 7-days row exhausted, resets_at Aug 6, no row since). TWO bugs fixed at the source: new pure `liveBudgets()` in tools/session_metrics.ts DROPS any row whose window already reset (history, not status) and normalizes omp's SECONDS-epoch resets_at to ms (the renderer compared ms - why the toast said "resets now"), deduping max(recorded_at) label ties; and checkBudgetWarning now toasts ONLY on a verifiably LIVE window (resetsAt in the future) - a null-reset row still renders in the Memory panel but never warns (per the user call: no popup when accurate pulls aren't possible over OAuth). Also removed the leftover hardcoded toast meta line ("a stalled turn now ends with...").
+- **verified:** 5 new liveBudgets tests (stale-dropped, seconds->ms, null kept for display, tie dedupe, ms passthrough); root + desktop tsc clean.
+- **next:** integrate the parked fleet/voice branch (wip/adr-0252-0260-sessions) onto master, then the Fleet Manager release.
+
 ## Release cut: v1.12.2 - the Windows Program Files fix arc + no-cutoff turns
 - **shipped:** version bump 1.12.1 -> 1.12.2 across the four release sites (desktop/package.json, version.ts APP_VERSION + the v1.12.1 changelog comment line, about.test.ts pins, README Newest paragraph + v1.12.2 batch row). Payload: PR #338 squashed to master (`19dd169`) - compiled engine (ADR-0259/0260), the strict Program Files CI boot gate (ADR-0261, proven on run 32796994917 from a real write-denied `C:\Program Files` tree), installer clamp relaxed + coupled to the gate (ADR-0262), bin/.gitkeep fresh-checkout fix, and P-STALL.2 (ADR-0263): the 10-minute turn cutoff removed, transport death event-driven, pending tasks visible on every slow notice.
 - **verified:** about.test.ts green on the new pins; the tag build re-runs the air-gap gate AND the strict Program Files boot gate on the release bytes before anything is attached.
